@@ -139,6 +139,27 @@ it("follows the active tab and the checked rows", async () => {
   await expect.element(page.getByRole("button", { name: "Update 3" })).toBeVisible();
 });
 
+it("confirms only checked rows from both tabs in one run", async () => {
+  const { screen, onConfirm } = await renderDialog();
+  await using _screen = screen;
+
+  await userEvent.click(page.getByRole("checkbox", { name: /mac-studio/ }));
+  await userEvent.click(page.getByRole("tab", { name: /Runtimes/ }));
+  await userEvent.click(page.getByRole("checkbox", { name: /ci-server/ }));
+  await userEvent.click(page.getByRole("button", { name: "Update both (5)" }));
+
+  expect(onConfirm).toHaveBeenCalledWith({
+    tab: "both",
+    rows: [
+      expect.objectContaining({ id: "server:windows-mini" }),
+      expect.objectContaining({ id: "ssh-runtime:build" }),
+      expect.objectContaining({ id: "local" }),
+      expect.objectContaining({ id: "providers:this-mac" }),
+      expect.objectContaining({ id: "opencodex" }),
+    ],
+  });
+});
+
 it.each([
   ["light", 1280, "App & servers"],
   ["light", 360, "App & servers"],

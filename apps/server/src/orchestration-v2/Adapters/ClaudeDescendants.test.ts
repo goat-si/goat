@@ -120,3 +120,18 @@ it.effect("stops sampling when its layer closes", () =>
     assert.equal(state.reads, afterClose);
   }),
 );
+
+// regression (fix review P3-1): a read that fails forgets nothing, so the stop still finds the job.
+it.effect("a failed read between samples keeps what the last whole table showed", () =>
+  Effect.gen(function* () {
+    const { state, sampler } = fakeTable([row(100, 1, "A"), row(200, 100, "B")]);
+    const tracker = (yield* sampler).track(100);
+    yield* tracker.refresh;
+    state.rows = undefined;
+    yield* tracker.refresh;
+    // The CLI exited; its job was re-parented to launchd.
+    state.rows = [row(200, 1, "B")];
+    yield* tracker.stop;
+    assert.deepEqual(state.killed, [200]);
+  }),
+);

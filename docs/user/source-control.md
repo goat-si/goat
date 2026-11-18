@@ -368,7 +368,12 @@ review is terminal. An open or unsynced link keeps it active.
 GOAT automatically watches open pull requests that a thread creates or its agent links, unless you
 turn off automatic watching. Automatic watches can wake the agent without keeping the thread in
 **Working**. Ask the agent to watch, monitor, or babysit a pull request to make the watch explicit
-with `goat_call {path:"pull_request.watch"}` and keep the thread working between wakes.
+with `goat_call {path:"pull_request.watch"}`. An explicitly watched thread counts as working while
+the pull request still has checks running, including after the agent pushes a fix. Once every check
+has finished, including review bots that report as checks, the thread returns to your inbox: what
+happens next is up to a person. That includes a workflow waiting for a maintainer to approve it,
+which runs only once someone does. The watch stays on and still wakes the agent on new comments,
+failed checks or conflicts.
 
 The server checks every two minutes. On github.com, when GitHub offers your account pull request
 event streams, it also checks about 20 seconds after GitHub reports a push, review, state change,
@@ -392,8 +397,9 @@ only pauses watching. Unsettle the thread before starting a new watch. Watching 
 again does not repeat check or conflict news its last watch already reported; unlinking the pull
 request clears that. Subagents cannot watch pull requests; the thread that delegated to them does.
 
-An explicitly watched thread does not auto-settle. It appears in **Priority**, at the top of
-**Activity** on web and desktop and at the top of the thread list on mobile. **Mark all
+An explicitly watched thread does not auto-settle, even once its checks have finished. While they
+run it appears in **Priority**, at the top of **Activity** on web and desktop and at the top of the
+thread list on mobile. **Mark all
 as read** acknowledges unread completions without stopping a watch. Agents stop watching when they
 hand the work back to you.
 

@@ -35,7 +35,7 @@ export const legacyConnection = (node: HubNode): SavedConnection | undefined =>
               };
           }
         }),
-        ...(node.addedBy?.kind === "agent"
+        ...(node.addedBy?.kind === "agent" && !node.addedBy.pen
           ? { addedBy: { ...node.addedBy, kind: "agent" as const } }
           : {}),
       };

@@ -1,3 +1,4 @@
+import type { EnvironmentId } from "./baseSchemas.ts";
 import type { DesktopMicrophoneBridge } from "./desktopPermissions.ts";
 import type { DesktopPreviewSessionStackHost } from "./desktopPreviewSessionStack.ts";
 import type { DesktopTrayBridge } from "./desktopTray.ts";
@@ -14,10 +15,16 @@ export interface DesktopPrimaryPasteBridge {
   getPrimaryPasteEnabled?: () => boolean;
 }
 
+interface DesktopFileActionsBridge {
+  toLocalBackendPath?: (backendId: string, path: string) => Promise<string | null>;
+  startFileDrag?: (input: { environmentId: EnvironmentId; path: string }) => Promise<boolean>;
+}
+
 /** Desktop bridge methods that live in their own modules, so ipc.ts stays within its budget. */
 export type DesktopBridgeParts = DesktopPrimaryPasteBridge &
   DesktopWindowMaterialBridge &
   DesktopPreviewSessionStackHost &
   DesktopHeadlessServerBridge &
   DesktopTrayBridge &
-  DesktopMicrophoneBridge;
+  DesktopMicrophoneBridge &
+  DesktopFileActionsBridge;

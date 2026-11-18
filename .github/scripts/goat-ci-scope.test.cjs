@@ -25,6 +25,7 @@ const {
   webBrowserTests,
 } = require("./goat-ci-scope.cjs");
 const fs = require("node:fs");
+const { fakeGraph } = require("./goat-ci-scope.testkit.cjs");
 const { buildImportGraph, listWorkspaceFiles } = require("./goat-ci-imports.cjs");
 
 // The real workspace and import graphs, so these cases follow the code as it exists.
@@ -34,17 +35,6 @@ const graph = buildImportGraph(root);
 const weights = readServerWeights(root);
 const select = (...files) => selectTasks(files, workspace, { graph, weights });
 const tasksFor = (...files) => select(...files).tasks;
-
-/** A hand-made graph: files maps each file to its source text, edges lists [importer, imported]. */
-function fakeGraph(files, edges = []) {
-  const importers = new Map();
-  for (const [from, to] of edges) {
-    if (!importers.has(to)) importers.set(to, new Set());
-    importers.get(to).add(from);
-  }
-  const sources = new Map(Object.entries(files).filter(([file]) => /\.[cm]?[jt]sx?$/.test(file)));
-  return { files: new Set(Object.keys(files)), sources, importers, packageDirs: ["apps/server"] };
-}
 
 describe("selectTasks", () => {
   it("runs every package when the shared provider environment scrubber changes", () => {
@@ -757,11 +747,14 @@ describe("planRun", () => {
         await plan(pr(), labels([]), ["apps/server/src/memory/imports/MemoryImportReader.ts"])
       ).tasks.includes("test-windows"),
     );
-    for (const patch of [
+    for (const file of [
       "patches/node-pty@1.2.0-beta.15.patch",
       "patches/node-pty@1.2.0-beta.18.patch",
+      "apps/server/src/git/GitWorkflowService.test.ts",
+      "apps/server/src/vcs/VcsStatusBroadcaster.watch.test.ts",
     ]) {
-      assert.ok((await plan(pr(), labels([]), [patch])).tasks.includes("test-windows"), patch);
+      if (file.endsWith(".test.ts")) assert.ok(WINDOWS_SUITES.includes(file), file);
+      assert.ok((await plan(pr(), labels([]), [file])).tasks.includes("test-windows"), file);
     }
     assert.ok(!(await plan(pr(), labels([]))).tasks.includes("test-windows"));
     const labelled = await plan(pr(), labels([WINDOWS_LABEL]));
@@ -799,6 +792,14 @@ describe("planRun", () => {
     assert.ok(step);
     assert.match(step, /if: matrix\.task == 'smoke-linux-computer-use'/);
     assert.match(step, /computer-use-linux-smoke\.ts/);
+  });
+
+  it("runs the Windows archive installer suite when the installer changes", async () => {
+    const file = "scripts/install-windows.test.ts";
+    assert.ok(WINDOWS_SUITES.some((prefix) => file.startsWith(prefix)));
+    assert.ok(
+      (await plan(pr(), labels([]), ["scripts/install.ps1"])).tasks.includes("test-windows"),
+    );
   });
 
   it("filters the Windows job by suites that each still select a test file", () => {

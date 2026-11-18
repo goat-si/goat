@@ -7,7 +7,7 @@ import {
   GOAT_RUNTIME_SESSION_PATH,
   ORCHESTRATION_PROTOCOL_VERSION,
   RuntimeMode,
-  type RuntimeSessionRequest,
+  RuntimeSessionRequest,
   type SshHostResult,
 } from "@goat/contracts";
 import { GOAT_ACTIVITY_PATH, GOAT_ENVIRONMENT_PATH } from "@goat/contracts/legacyT3Names";
@@ -223,6 +223,7 @@ const APP_SERVER_PROBE_COMMAND = "goat-app-server-probe";
 
 const CLIENT_PROTOCOL_RANGES = ownRuntimeProtocolRanges(ORCHESTRATION_PROTOCOL_VERSION);
 const isGrantScope = Schema.is(AuthGrantScope);
+const isRuntimeSessionRequest = Schema.is(RuntimeSessionRequest);
 const isRuntimeMode = Schema.is(RuntimeMode);
 
 /**
@@ -460,6 +461,12 @@ export const issueExistingServerCredential = Effect.fn("ssh/appServer.issueCrede
   const body = marker === null ? result.stdout : result.stdout.slice(0, marker.index).trim();
   if (marker?.[1] !== "200")
     return yield* new SshPairingError({
+      ...(request.kind === "pen-member-session" &&
+      isRuntimeSessionRequest(request) &&
+      marker?.[1] === "400" &&
+      body.includes("Invalid runtime session request.")
+        ? { reason: "pen-member-unsupported" as const }
+        : {}),
       message: `The GOAT app server on ${target.alias} did not issue a credential (HTTP ${marker?.[1] ?? "no answer"}).`,
       stdout: body,
     });
@@ -482,18 +489,28 @@ export const issueAppServerCredential = (
  * when the CLI would refuse it too (a scope it cannot grant, an unknown runtime mode).
  */
 export const appServerSessionRequest = (input: {
-  readonly subject: string;
+  readonly subject?: string | undefined;
+  readonly penMember?: string | undefined;
   readonly scopes: ReadonlyArray<string>;
   readonly ttl: string;
   readonly label: string;
   readonly runtimeModeCeiling?: string | null;
   readonly childSetupPurpose?: ChildSetupPurpose;
-}): Option.Option<Extract<RuntimeSessionRequest, { kind: "session" }>> => {
+}): Option.Option<Extract<RuntimeSessionRequest, { kind: "session" | "pen-member-session" }>> => {
   const [first, ...rest] = input.scopes;
   if (first === undefined || !isGrantScope(first) || !rest.every(isGrantScope))
     return Option.none();
   const ceiling = input.runtimeModeCeiling ?? undefined;
   if (ceiling !== undefined && !isRuntimeMode(ceiling)) return Option.none();
+  if (input.penMember !== undefined)
+    return Option.some({
+      kind: "pen-member-session",
+      nodeId: input.penMember,
+      scopes: [first, ...rest],
+      ttl: input.ttl,
+      label: input.label,
+    });
+  if (input.subject === undefined) return Option.none();
   return Option.some({
     kind: "session",
     subject: input.subject,

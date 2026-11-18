@@ -15,7 +15,7 @@ import * as Layer from "effect/Layer";
 import * as Schema from "effect/Schema";
 import * as FileSystem from "effect/FileSystem";
 import * as Path from "effect/Path";
-import { HttpClient } from "effect/http";
+import { HttpClient, HttpClientResponse } from "effect/http";
 
 import * as BackgroundPolicy from "../background/BackgroundPolicy.ts";
 import * as ServerSettings from "../serverSettings.ts";
@@ -107,6 +107,143 @@ it.effect("keeps malformed source URLs encodable for config subscribers", () =>
 
 const NOW = Date.parse("2026-11-13T12:00:00.000Z");
 const at = (hours: number) => DateTime.formatIso(DateTime.makeUnsafe(NOW + hours * 3_600_000));
+it.effect("keeps a refused account's last reading within its hub and login", () => {
+  const sourceId = UsageLimitSourceId.make("hub");
+  const config = {
+    kind: "cliproxy",
+    url: "http://hub.test:8317/team-a",
+    managementKey: "management-secret",
+    enabled: true,
+  } as const;
+  let refused = true;
+  let workspace: string | undefined = "login-a";
+  let percent = 78;
+  const http = HttpClient.make((request) =>
+    Effect.sync(() => {
+      const path = new URL(request.url).pathname;
+      if (path.endsWith("/auth-files")) {
+        return HttpClientResponse.fromWeb(
+          request,
+          Response.json({
+            files: [
+              {
+                id: "first.json",
+                auth_index: "a",
+                provider: "codex",
+                ...(workspace
+                  ? { email: "first@example.com", id_token: { chatgpt_account_id: workspace } }
+                  : {}),
+              },
+            ],
+          }),
+        );
+      }
+      const body =
+        request.body._tag === "Uint8Array" ? new TextDecoder().decode(request.body.body) : "";
+      if (path.endsWith("/reset-quota")) {
+        return HttpClientResponse.fromWeb(request, Response.json({}));
+      }
+      if (body.includes("/consume")) {
+        refused = true;
+        return HttpClientResponse.fromWeb(
+          request,
+          Response.json({ status_code: 200, body: JSON.stringify({ code: "reset" }) }),
+        );
+      }
+      if (body.includes("/rate-limit-reset-credits")) {
+        return HttpClientResponse.fromWeb(request, Response.json({ status_code: 404, body: "{}" }));
+      }
+      const usage = {
+        plan_type: "pro",
+        rate_limit: {
+          secondary_window: {
+            used_percent: percent,
+            reset_at: 4070908800,
+            limit_window_seconds: 604800,
+          },
+        },
+      };
+      return HttpClientResponse.fromWeb(
+        request,
+        Response.json(
+          refused
+            ? { status_code: 429, body: "{}" }
+            : { status_code: 200, body: JSON.stringify(usage) },
+        ),
+      );
+    }),
+  );
+  const unreadable = { windows: [], unavailable: { reason: "probeFailed" } };
+  return Effect.gen(function* () {
+    yield* TestClock.setTime(NOW);
+    const sources = yield* UsageLimitSources.make;
+    const settings = yield* ServerSettings.ServerSettingsService;
+    const read = Effect.gen(function* () {
+      yield* sources.refresh;
+      return (yield* sources.current).find((source) => source.id === sourceId);
+    });
+
+    expect((yield* read)?.accounts[0]?.usageLimits).toMatchObject(unreadable);
+    refused = false;
+    expect((yield* read)?.accounts[0]?.usageLimits.windows[0]?.usedPercent).toBe(78);
+    percent = 100;
+    yield* TestClock.adjust("1 minute");
+    const latest = (yield* read)?.accounts[0]?.usageLimits;
+    yield* TestClock.adjust("1 minute");
+    refused = true;
+    const stale = yield* read;
+    expect(stale?.accounts[0]?.usageLimits).toEqual(latest);
+    expect(stale?.accounts[0]?.usageLimits.windows[0]?.usedPercent).toBe(100);
+    expect(stale?.error).toContain("The hub could not read this account's usage.");
+    if (stale) {
+      expect(
+        UsageLimitSources.hubPoolResetAt([stale], ProviderDriverKind.make("codex"), null, NOW),
+      ).toBeNull();
+    }
+    expect((yield* read)?.accounts[0]?.usageLimits).toEqual(latest);
+
+    // The same source ID and origin can point at another hub under a new path.
+    yield* settings.updateSettings({
+      usageLimitSources: {
+        [sourceId]: { ...config, url: "http://hub.test:8317/team-b" },
+      },
+    });
+    expect((yield* read)?.accounts[0]?.usageLimits).toMatchObject(unreadable);
+    refused = false;
+    yield* read;
+    refused = true;
+    workspace = "login-b";
+    expect((yield* read)?.accounts[0]?.usageLimits).toMatchObject(unreadable);
+
+    workspace = undefined;
+    refused = false;
+    yield* read;
+    refused = true;
+    expect((yield* read)?.accounts[0]?.usageLimits).toMatchObject(unreadable);
+
+    workspace = "login-b";
+    refused = false;
+    yield* read;
+    expect(
+      yield* sources.consumeResetCredit({ sourceId, accountId: "first.json", creditId: "credit" }),
+    ).toEqual({ outcome: "reset" });
+    expect((yield* sources.current)[0]?.accounts[0]?.usageLimits).toMatchObject(unreadable);
+    expect((yield* read)?.accounts[0]?.usageLimits).toMatchObject(unreadable);
+  }).pipe(
+    Effect.provide([
+      ServerSettings.layerTest({ usageLimitSources: { [sourceId]: config } }),
+      Layer.mock(BackgroundPolicy.BackgroundPolicy)({
+        shouldRunScopeWork: () => Effect.succeed(false),
+      }),
+      Layer.succeed(HttpClient.HttpClient, http),
+      NodeCrypto.layer,
+      Layer.succeed(FileSystem.FileSystem, FileSystem.makeNoop({})),
+      Path.layer,
+    ]),
+    Effect.scoped,
+  );
+});
+
 const spent = (id: string, hours: number): ServerProviderUsageWindow => ({
   id,
   kind: "weekly",

@@ -24,20 +24,16 @@ import {
 } from "@goat/client-runtime/state/thread-settled";
 import { childThreadRequestsTitle } from "@goat/client-runtime/state/shell";
 import { useKeyboardChatComposerInset, useKeyboardScrollToEnd } from "@legendapp/list/keyboard";
-import { resolveThreadProviderSkills } from "@goat/client-runtime/providerSkills";
+import { useThreadTranscriptSkills } from "./use-thread-transcript-skills";
 import type { LegendListRef } from "@legendapp/list/react-native";
 import { HeaderHeightContext } from "@react-navigation/elements";
 import { NativeLayoutObserver } from "../../native/NativeLayoutObserver";
-import { deriveBottomControlInsets, type NativeLayoutMetrics } from "../../lib/reserved-regions";
+import * as Regions from "../../lib/reserved-regions";
 import type { MessageId, RuntimeRequestId, UsageLimitsReport, RunId } from "@goat/contracts";
 import {
   appendCodexArtifactTemplateUsePrompt,
   type CodexArtifactTemplate,
 } from "@goat/shared/codexArtifactTemplates";
-import {
-  declinePendingApprovals,
-  sendApprovalFeedback,
-} from "@goat/client-runtime/state/thread-requests";
 import { useDeadlinePassed } from "../../lib/clock";
 import {
   BACKGROUND_WORK_STOP_RETRY_AFTER_MS,
@@ -164,6 +160,7 @@ import { useGlobalVoiceInput } from "../voice-input/VoiceInputProvider";
 import { useOfflineSnapshotAge } from "../connection/useOfflineSnapshotAge";
 import { threadVisitTracker } from "./threadVisitTracker";
 export type { ThreadDetailScreenProps } from "./ThreadDetailScreenProps";
+import { redirectDecline } from "./redirectDecline";
 import type { ThreadDetailScreenProps } from "./ThreadDetailScreenProps";
 import { useToolCallVisibility } from "../../state/toolCallVisibility";
 const USAGE_LIMITS_PANEL_GAP = 12;
@@ -278,11 +275,11 @@ function ThreadDetailBody(
   };
   const windowHeight = useWindowDimensions().height;
   const navigationHeaderHeight = useContext(HeaderHeightContext) ?? insets.top + 44;
-  const [screenMetrics, setScreenMetrics] = useState<NativeLayoutMetrics | null>(null);
+  const [screenMetrics, setScreenMetrics] = useState<Regions.NativeLayoutMetrics | null>(null);
   const columnMetrics = useNativeColumnLayoutMetrics();
   const windowMetrics = useNativeLayoutMetrics();
   const nativeMetrics = usesNativeWorkspaceColumns ? columnMetrics : screenMetrics;
-  const controlInsets = deriveBottomControlInsets(nativeMetrics);
+  const controlInsets = Regions.deriveBottomControlInsets(nativeMetrics);
   const agentLabel = `${props.selectedThread.modelSelection.instanceId} agent`;
   const selectedThreadKey = scopedThreadKey(props.environmentId, props.selectedThread.id);
   const childThreadInputs = useChildThreadInputs({
@@ -1001,14 +998,8 @@ function ThreadDetailBody(
         }
       : { width: "auto", right: controlInsets.right },
   );
-  const selectedInstanceId = props.selectedThread.modelSelection.instanceId;
   useAtomMount(threadStreamHaptics(props.selectedThreadDetailRef));
-  const selectedProviderSkills = resolveThreadProviderSkills(
-    props.serverConfig,
-    selectedInstanceId,
-    props.threadCwd ?? props.projectWorkspaceRoot,
-    props.selectedThread.projectId,
-  );
+  const selectedProviderSkills = useThreadTranscriptSkills(props, isProviderSubagent);
   const currentPendingApprovals = () =>
     props.selectedThreadDetailRef === null
       ? []
@@ -1028,39 +1019,13 @@ function ThreadDetailBody(
     // Runs only once the send path has validated the draft and is about to deliver it, so an
     // empty submit, a queued-message edit, or `/feedback` leaves approvals alone.
     const approvalsToDecline = props.activePendingApprovals;
-    const declineBeforeDispatch =
-      approvalsToDecline.length > 0 && props.activePendingUserInput === null
-        ? async (text: string, hasAttachmentsOrContext: boolean, saveMode = async () => true) => {
-            if (scope.aborted || stillSendable?.() === false || props.respondingApprovalId !== null)
-              return false;
-            const feedbackTarget = approvalsToDecline[0];
-            if (feedbackTarget?.supportsFeedback) {
-              if (hasAttachmentsOrContext) {
-                Dialog.alert(
-                  "Approval feedback",
-                  "Send approval feedback without attachments or added context.",
-                );
-                return false;
-              }
-              return (await sendApprovalFeedback(feedbackTarget, text, props.onRespondToApproval))
-                ? ("responded" as const)
-                : false;
-            }
-            return (
-              (await saveMode()) &&
-              (await declinePendingApprovals(approvalsToDecline, props.onRespondToApproval)) &&
-              !scope.aborted &&
-              // A draft edited or pasted into during the decline isn't what the user sent.
-              stillSendable?.() !== false &&
-              // An approval that arrived during the decline would block the redirect; the draft
-              // stays so the next send declines it too.
-              !currentPendingApprovals().some(
-                (approval) =>
-                  !approvalsToDecline.some((declined) => declined.requestId === approval.requestId),
-              )
-            );
-          }
-        : undefined;
+    const declineBeforeDispatch = redirectDecline(
+      props,
+      scope,
+      approvalsToDecline,
+      stillSendable,
+      currentPendingApprovals,
+    );
     let dismissingKeyboard = false;
     const messageId = await props.onSendMessage(followUp, declineBeforeDispatch, () => {
       if (
@@ -1262,7 +1227,7 @@ function ThreadDetailBody(
                 placeholderKeyboardLift={placeholderKeyboardLift}
                 contentMaxWidth={contentMaxWidth}
                 historyControls={props.historyControls}
-                contentSideInsets={nativeMetrics?.safeArea}
+                contentSideInsets={Regions.deriveContentSideInsets(nativeMetrics)}
                 layoutVariant={layoutVariant}
                 usesAutomaticContentInsets={props.usesAutomaticContentInsets}
                 onHeaderMaterialVisibilityChange={props.onHeaderMaterialVisibilityChange}

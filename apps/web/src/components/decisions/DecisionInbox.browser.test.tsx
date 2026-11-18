@@ -94,6 +94,7 @@ vi.mock("../../state/use-atom-command", () => ({
 vi.mock("../../state/entities", () => ({
   useThreadShell: (ref: ScopedThreadRef | null) =>
     ref === null ? null : { title: `Thread ${ref.threadId}` },
+  useProject: () => null,
 }));
 vi.mock("../../state/environments", () => ({
   useEnvironment: (id: EnvironmentId) => ({ label: `Environment ${id}` }),

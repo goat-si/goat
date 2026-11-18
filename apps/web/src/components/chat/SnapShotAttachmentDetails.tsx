@@ -1,11 +1,12 @@
 import type { SnapShotSource } from "@goat/contracts";
-import { ImageIcon, TextIcon } from "~/components/solar";
-import { Suspense } from "react";
+import { CopyIcon, ImageIcon, TextIcon } from "~/components/solar";
+import { Suspense, useRef } from "react";
 
 import { useRenderedAppearance } from "../../hooks/useTheme";
 import { cn } from "../../lib/utils";
 import { RenderErrorBoundary } from "../RenderErrorBoundary";
 import { Button } from "../ui/button";
+import { showAnchoredCopyErrorToast } from "../ui/anchoredCopyToast";
 import { Popover, PopoverPopup, PopoverTitle, PopoverTrigger } from "../ui/popover";
 import { Tooltip, TooltipPopup, TooltipTrigger } from "../ui/tooltip";
 import { HighlightedTokens } from "./HighlightedTokens";
@@ -71,11 +72,49 @@ function snapShotIncludesAccessibility(source: SnapShotSource): boolean {
   return Boolean(source.accessibility || source.accessibleText?.trim());
 }
 
+export function SnapShotCopyButton({
+  onCopy,
+  overlay = false,
+}: {
+  onCopy: () => Promise<void>;
+  overlay?: boolean;
+}) {
+  const button = useRef<HTMLButtonElement>(null);
+  return (
+    <Tooltip>
+      <TooltipTrigger
+        render={
+          <Button
+            ref={button}
+            aria-label="Copy snapshot"
+            size="icon-micro"
+            variant={overlay ? "overlay" : "ghost-muted"}
+            onClick={(event) => {
+              event.stopPropagation();
+              void onCopy().catch((error: unknown) =>
+                showAnchoredCopyErrorToast(
+                  button,
+                  error instanceof Error ? error : new Error(String(error)),
+                ),
+              );
+            }}
+          />
+        }
+      >
+        <CopyIcon className="size-3" aria-hidden="true" />
+      </TooltipTrigger>
+      <TooltipPopup side="top">Copy snapshot</TooltipPopup>
+    </Tooltip>
+  );
+}
+
 export function SnapShotContentsButton({
+  onCopySnapshot,
   source,
   className,
   side = "top",
 }: {
+  onCopySnapshot?: (() => Promise<void>) | undefined;
   source: SnapShotSource;
   className?: string;
   side?: "top" | "right" | "bottom" | "left";
@@ -111,7 +150,10 @@ export function SnapShotContentsButton({
       </Tooltip>
       <PopoverPopup side={side} align="center" width="md">
         <div className="max-h-[min(28rem,70vh)] space-y-2 overflow-y-auto">
-          <PopoverTitle>Accessibility data</PopoverTitle>
+          <div className="flex items-center justify-between gap-2">
+            <PopoverTitle>Accessibility data</PopoverTitle>
+            {onCopySnapshot && <SnapShotCopyButton onCopy={onCopySnapshot} />}
+          </div>
           {accessibilityDetails ? (
             <SnapShotAccessibilityData
               details={accessibilityDetails}
@@ -134,9 +176,11 @@ export function SnapShotContentsButton({
 }
 
 export function SnapShotAttachmentDetails({
+  onCopySnapshot,
   source,
   className,
 }: {
+  onCopySnapshot?: (() => Promise<void>) | undefined;
   source: SnapShotSource;
   className?: string;
 }) {
@@ -157,7 +201,11 @@ export function SnapShotAttachmentDetails({
       <div className="min-w-0 flex-1">
         <div className="flex min-w-0 items-center gap-1.5 text-2xs font-medium leading-3.5 text-white">
           <span className="truncate">{source.appName}</span>
-          <SnapShotContentsButton source={source} className="pointer-events-auto" />
+          <SnapShotContentsButton
+            source={source}
+            className="pointer-events-auto"
+            onCopySnapshot={onCopySnapshot}
+          />
         </div>
         <div className="truncate text-3xs leading-3.5 text-white/70">
           {source.windowTitle || "Captured window"}

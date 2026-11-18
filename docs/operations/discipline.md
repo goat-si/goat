@@ -77,6 +77,28 @@ is proven with captures, and CI owns the full suite.
   commands that will verify them.
 - Proof is a command and its output, or an artifact: a capture, a recording, a CI run link.
 
+## Filing issues
+
+Newcomers read the issue tracker to find work, so every issue should be one someone can pick up.
+File an issue during a task only when all of these hold:
+
+1. It is real on current `dev`: reproduced, or confirmed in the code with `path:line`.
+2. It affects users or blocks work.
+3. Someone can act on it: a title a newcomer understands, expected and actual behavior, and the
+   repro or evidence.
+4. A search found no existing issue. When one exists, comment there instead.
+5. It cannot reasonably be fixed inside the current change. Fix small in-scope problems instead of
+   filing them.
+
+Review nits, style points, speculative risks, internal follow-ups, plans, and per-lane notes do
+not get issues; put them in the pull request description or the lane record. A flaky test gets an
+issue when it has a failing run link, not for a single timeout with no pattern.
+
+Give each issue one type label (`bug`, `enhancement`, `flaky-test`, or `tracking`) and at least
+one area label (`area:server`, `area:web`, `area:desktop`, `area:mobile`, `area:goat-bot`,
+`goat-computer-use`, `area:pen`, `area:providers`, `area:ci`, `documentation`, or
+`area:memory`), and report the numbers you filed.
+
 ## Safety
 
 - Before removing or renaming an export, search every consumer in `apps/` and `packages/`,

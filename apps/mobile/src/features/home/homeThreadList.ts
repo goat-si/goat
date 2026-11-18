@@ -166,3 +166,15 @@ export function sortHomeProjectScopes(input: {
     ),
   );
 }
+
+export function homeProjectFilterOptions(
+  scopes: readonly HomeProjectScope[],
+  threads: readonly EnvironmentThreadShell[],
+) {
+  return sortHomeProjectScopes({
+    scopes: pickableProjectGroups(scopes),
+    threads,
+    pendingTasks: [],
+    projectSortOrder: "updated_at",
+  }).map(({ key, title }) => ({ key, label: title }));
+}

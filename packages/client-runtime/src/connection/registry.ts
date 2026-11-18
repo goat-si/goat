@@ -41,6 +41,7 @@ import * as ConnectionDriver from "./driver.ts";
 import * as ConnectionWakeups from "./wakeups.ts";
 import { makeKnownAddressCheck, unsupportedState } from "./registryPairing.ts";
 import { makeLeaseLock } from "./registryLeaseLock.ts";
+import { withRoutes } from "./registryRoutes.ts";
 import {
   PullRequestRoutingPermissions,
   pullRequestRoutingConnectionKey,
@@ -94,7 +95,7 @@ export class EnvironmentRegistry extends Context.Service<
     /** Platform-managed entries are unchanged; known addresses are checked under the lease. */
     readonly register: (
       registration: ConnectionRegistration,
-      options?: { readonly knownAddressOnly?: boolean },
+      options?: { readonly knownAddressOnly?: boolean; readonly unlessSameAddress?: boolean },
     ) => Effect.Effect<boolean, Persistence.ConnectionPersistenceError | ConnectionBlockedError>;
     readonly registerPlatform: (registration: PrimaryConnectionRegistration) => Effect.Effect<void>;
     readonly assertKnownAddress: (
@@ -465,24 +466,11 @@ export const make = Effect.gen(function* () {
   const persistedRoutes = (entry: ConnectionCatalogEntry) =>
     connectionRoutes(entry).map((route) => route.target as PersistedConnectionTarget);
 
-  /**
-   * Pull request routing trust and an unsupported verdict both belong to the saved addresses: a changed set may
-   * reach a different server, so both are dropped and the next connection decides.
-   */
-  const withRoutes = (previous: ConnectionCatalogEntry, routes: ReadonlyArray<ConnectionRoute>) => {
-    const next = entryWithRoutes(previous, routes);
-    if (pullRequestRoutingConnectionKey(previous) === pullRequestRoutingConnectionKey(next)) {
-      return { entry: next, addressesChanged: false };
-    }
-    const { unsupportedReason: _reason, serverUpdateRequired: _update, ...rest } = next;
-    return { entry: rest, addressesChanged: true };
-  };
-
   const assertKnownAddress = makeKnownAddressCheck(platformEnvironmentIds, entries);
 
   const register = Effect.fn("EnvironmentRegistry.register")(function* (
     registration: ConnectionRegistration,
-    options?: { readonly knownAddressOnly?: boolean },
+    options?: { readonly knownAddressOnly?: boolean; readonly unlessSameAddress?: boolean },
   ) {
     const registered = connectionRegistrationCatalogEntry(registration);
     const environmentId = registered.target.environmentId;
@@ -500,6 +488,16 @@ export const make = Effect.gen(function* () {
         let entry = registered;
         if (previous !== undefined) {
           const existing = connectionRoutes(previous);
+          if (
+            options?.unlessSameAddress &&
+            findRouteToSameAddress(
+              existing.filter(
+                (item) => connectionRouteId(item.target) !== connectionRouteId(route.target),
+              ),
+              route,
+            )
+          )
+            return false;
           const sameAddress = findRouteToSameAddress(existing, route);
           const routes = existing.filter(
             (existing) =>

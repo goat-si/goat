@@ -1,6 +1,8 @@
+import { previewWindowOpenAction } from "./PopupLifecycle.ts";
+import { isPreviewEditingShortcut } from "./previewEditingShortcut.ts";
 import { describe, expect, it, vi } from "vite-plus/test";
 
-import * as PreviewManager from "./Manager.ts";
+import { fitPictureInPictureContentSize } from "./pictureInPictureSize.ts";
 
 vi.mock("electron", () => ({
   BrowserWindow: vi.fn(),
@@ -13,8 +15,8 @@ vi.mock("electron", () => ({
 
 describe("fitPictureInPictureContentSize", () => {
   it("does not collapse toward the minimum size when orientation changes repeatedly", () => {
-    const portrait = PreviewManager.fitPictureInPictureContentSize([523, 294], 9 / 16);
-    const landscape = PreviewManager.fitPictureInPictureContentSize(portrait, 16 / 9);
+    const portrait = fitPictureInPictureContentSize([523, 294], 9 / 16);
+    const landscape = fitPictureInPictureContentSize(portrait, 16 / 9);
 
     expect(portrait).toEqual([294, 523]);
     expect(landscape).toEqual([523, 294]);
@@ -35,16 +37,16 @@ describe("isPreviewEditingShortcut", () => {
 
   it("recognizes macOS Paste and Match Style when Option changes the key to a symbol", () => {
     const pasteAndMatchStyle = input("darwin", "◊", { code: "KeyV", alt: true, shift: true });
-    expect(PreviewManager.isPreviewEditingShortcut(pasteAndMatchStyle, "darwin")).toBe(true);
+    expect(isPreviewEditingShortcut(pasteAndMatchStyle, "darwin")).toBe(true);
     for (const modifiers of [
       { code: "KeyC" },
       { alt: false },
       { shift: false },
       { control: true },
     ]) {
-      expect(
-        PreviewManager.isPreviewEditingShortcut({ ...pasteAndMatchStyle, ...modifiers }, "darwin"),
-      ).toBe(false);
+      expect(isPreviewEditingShortcut({ ...pasteAndMatchStyle, ...modifiers }, "darwin")).toBe(
+        false,
+      );
     }
   });
 });
@@ -60,17 +62,15 @@ describe("previewWindowOpenAction", () => {
   });
 
   it("opens a real window for scripted popups so the opener survives", () => {
-    expect(PreviewManager.previewWindowOpenAction(details({}))).toBe("popup");
-    expect(
-      PreviewManager.previewWindowOpenAction(details({ url: "http://localhost:5173/auth" })),
-    ).toBe("popup");
+    expect(previewWindowOpenAction(details({}))).toBe("popup");
+    expect(previewWindowOpenAction(details({ url: "http://localhost:5173/auth" }))).toBe("popup");
   });
 
   it("keeps a form POST in the original native child", () => {
     // Reopening the URL as a GET would drop the body and destroy the opener.
     const postBody = { data: [], contentType: "application/x-www-form-urlencoded" };
     expect(
-      PreviewManager.previewWindowOpenAction({
+      previewWindowOpenAction({
         ...details({ disposition: "foreground-tab" }),
         postBody,
       }),
@@ -84,14 +84,14 @@ describe("previewWindowOpenAction", () => {
       "vscode://vscode-remote/ssh-remote+box/tmp",
       "not a url",
     ]) {
-      expect(PreviewManager.previewWindowOpenAction(details({ url }))).toBe("deny");
+      expect(previewWindowOpenAction(details({ url }))).toBe("deny");
     }
   });
 
   it("keeps blank children alive for a later sign-in redirect", () => {
     for (const url of ["about:blank", ""]) {
       for (const disposition of ["new-window", "foreground-tab"] as const) {
-        expect(PreviewManager.previewWindowOpenAction(details({ url, disposition }))).toBe("popup");
+        expect(previewWindowOpenAction(details({ url, disposition }))).toBe("popup");
       }
     }
   });

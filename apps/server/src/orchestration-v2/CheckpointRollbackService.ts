@@ -22,6 +22,7 @@ import * as GitWorkflowService from "../git/GitWorkflowService.ts";
 import type * as ServerConfig from "../config.ts";
 import type * as ServerSettings from "../serverSettings.ts";
 import { makeIsManagedWorktreePath } from "../worktreesDirectory.ts";
+import { withCheckpointRestoreReservation } from "../workspace/checkpointRestoreReservation.ts";
 import { withWorkspaceLease } from "../workspace/workspaceLease.ts";
 import {
   isCheckpointRestoreIsolated,
@@ -36,6 +37,7 @@ import * as ProjectStore from "./ProjectStore.ts";
 import type * as ProviderAdapter from "@goat/provider-core/server/ProviderAdapter";
 import { ProviderSessionManagerV2 } from "./ProviderSessionManager.ts";
 import { RuntimePolicyV2 } from "./RuntimePolicy.ts";
+import { makeNoticeFolderReplaced } from "./goat/noticeFolderReplaced.ts";
 import { makeSetAsideFolder, setAsideSentence } from "./goat/setAsideFolder.ts";
 import * as ThreadCommandExecutor from "./ThreadCommandExecutor.ts";
 
@@ -148,6 +150,7 @@ export const layer: Layer.Layer<
     const threadCommands = yield* ThreadCommandExecutor.ThreadCommandExecutor;
     const isManagedWorktreePath = yield* makeIsManagedWorktreePath;
     const setAside = yield* makeSetAsideFolder;
+    const noticeFolderReplaced = yield* makeNoticeFolderReplaced;
 
     const execute = Effect.fn("orchestrationV2.checkpointRollback.execute")(function* (
       input: {
@@ -275,6 +278,7 @@ export const layer: Layer.Layer<
             } else {
               yield* recreate;
             }
+            yield* noticeFolderReplaced(worktreePath, setAsidePath);
           }
         }
       }
@@ -434,10 +438,17 @@ export const layer: Layer.Layer<
           // Storage cleanup removes worktrees under the same lease.
           const thread = yield* projections.getThread(input.threadId);
           const aside: { path: string | null } = { path: null };
-          yield* (
-            thread.worktreePath === null
+          const worktree = thread.worktreePath === null ? null : path.resolve(thread.worktreePath);
+          const rollback =
+            worktree === null
               ? execute(input, aside)
-              : withWorkspaceLease(path.resolve(thread.worktreePath), execute(input, aside))
+              : withWorkspaceLease(worktree, execute(input, aside));
+          // A file restore keeps turn starts out of every overlapping folder. A rewind takes no
+          // reservation, even when it recreates a missing worktree (under the folder lease only).
+          yield* (
+            worktree === null || input.restoreFiles === false
+              ? rollback
+              : withCheckpointRestoreReservation(fileSystem, path, worktree, rollback)
           ).pipe(
             // A failure after the folder was moved aside says where its files are.
             Effect.tapError(() =>

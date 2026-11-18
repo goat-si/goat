@@ -17,6 +17,7 @@ import { ensurePinnedRuntimeInstalled } from "./cloud/pinnedRuntime.ts";
 import { SERVICE_LAUNCHER_PROTOCOL, SERVICE_STATE_FILE } from "./cloud/serviceProtocol.ts";
 import * as ProcessRunner from "./processRunner.ts";
 import { Launcher, readServiceState, writeServiceState } from "./serviceLauncher.ts";
+import { readDatabaseLabel, seedDatabase } from "./serviceLauncher.testkit.ts";
 import { layerTestLoopback } from "@goat/shared/testing/loopbackHttpServer";
 
 const observed = vi.hoisted(() => ({
@@ -107,7 +108,7 @@ setInterval(() => {}, 1000);
         yield* Effect.promise(() => writeServiceState(statePath, initial));
         const dbPath = path.join(baseDir, "userdata", "statev2.sqlite");
         yield* fs.makeDirectory(path.dirname(dbPath), { recursive: true });
-        yield* fs.writeFileString(dbPath, "database before release");
+        seedDatabase(dbPath, "database before release");
         yield* Effect.gen(function* () {
           const server = yield* HttpServer.HttpServer;
           assert.isTrue("port" in server.address);
@@ -194,7 +195,14 @@ setInterval(() => {}, 1000);
               observed.onChild = undefined;
             }),
           );
-          const previous = yield* Effect.promise(() => previousActive.promise);
+          const previous = yield* Effect.promise(() =>
+            Promise.race([
+              previousActive.promise,
+              running.then((cause) => {
+                throw new Error("Launcher exited before the previous runtime started.", { cause });
+              }),
+            ]),
+          );
           assert.isNull(previous.exitCode);
           assert.isTrue(previous.connected);
           assert.equal(children.length, 2);
@@ -205,7 +213,7 @@ setInterval(() => {}, 1000);
             state.update?.status === "rolled-back" ? state.update.reason : undefined,
             scenario === "failed-start" ? "candidate-exited:23" : "smoke-failed:version",
           );
-          assert.equal(yield* fs.readFileString(dbPath), "database before release");
+          assert.equal(readDatabaseLabel(dbPath), "database before release");
           yield* Effect.promise(() => launcher.stop("SIGTERM"));
           assert.isUndefined(yield* Effect.promise(() => running));
         }).pipe(

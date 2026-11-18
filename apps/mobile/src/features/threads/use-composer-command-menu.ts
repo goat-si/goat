@@ -8,7 +8,10 @@ import type {
   ServerProvider,
   ServerSettings,
 } from "@goat/contracts";
-import { matchComposerThreadItems } from "@goat/client-runtime/composerThreadItems";
+import {
+  composerThreadSearchEnvironments,
+  matchComposerThreadItems,
+} from "@goat/client-runtime/composerThreadItems";
 import {
   composerThreadMayRunUnattended,
   matchComposerAppItems,
@@ -277,6 +280,7 @@ export function useComposerCommandMenu({
   onChangeDraftMessage,
   onUpdateInteractionMode,
   onUsageLimits,
+  onOpenModelPicker,
   modelOptions = [],
   modelProviders = [],
   onFork,
@@ -318,6 +322,7 @@ export function useComposerCommandMenu({
   readonly onChangeDraftMessage: (value: string) => void;
   readonly onUpdateInteractionMode?: (mode: ProviderInteractionMode) => void;
   readonly onUsageLimits?: () => void;
+  readonly onOpenModelPicker: () => void;
   readonly modelOptions?: ReadonlyArray<ModelOption>;
   readonly modelProviders?: ReadonlyArray<ServerProvider>;
   readonly onFork?: () => void;
@@ -407,9 +412,12 @@ export function useComposerCommandMenu({
     cwd: trigger?.kind === "path" ? projectCwd : null,
     query: trigger?.kind === "path" ? trigger.query : null,
   });
-  // Mounts older settled threads matching the mention, which shells may leave out.
+  // Older settled threads may be missing from the shells on any reachable host.
   useThreadSearch(
-    trigger?.kind === "path" && environmentId ? [environmentId] : [],
+    composerThreadSearchEnvironments(
+      trigger?.kind === "path" ? environmentId : null,
+      verifiedThreadHosts,
+    ),
     trigger?.kind === "path" ? trigger.query : "",
     { titlesOnly: true },
   );
@@ -717,15 +725,17 @@ export function useComposerCommandMenu({
       return;
     }
 
-    if (
-      item.type === "provider-slash-command" &&
-      item.command.name === USAGE_LIMITS_COMMAND.name &&
-      onUsageLimits
-    ) {
+    const builtInAction =
+      item.type === "slash-command" && item.command === "model"
+        ? onOpenModelPicker
+        : item.type === "provider-slash-command" && item.command.name === USAGE_LIMITS_COMMAND.name
+          ? onUsageLimits
+          : undefined;
+    if (builtInAction) {
       const cleared = replaceTextRange(draftMessage, trigger.rangeStart, trigger.rangeEnd, "");
       setSelection({ start: cleared.cursor, end: cleared.cursor });
       onChangeDraftMessage(cleared.text);
-      onUsageLimits();
+      builtInAction();
       return;
     }
 

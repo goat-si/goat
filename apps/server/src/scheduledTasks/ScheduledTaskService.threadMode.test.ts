@@ -42,6 +42,7 @@ const input = {
 interface Gate {
   readonly launching: Deferred.Deferred<void>;
   readonly proceed: Deferred.Deferred<void>;
+  readonly afterCommit?: boolean;
 }
 
 /**
@@ -60,12 +61,16 @@ const harness = (options: { readonly threadDeleted?: boolean } = {}) =>
           launch: (request) =>
             Effect.gen(function* () {
               const held = yield* Ref.get(gate);
-              if (held !== null) {
+              if (held !== null && !held.afterCommit) {
                 yield* Deferred.succeed(held.launching, undefined);
                 yield* Deferred.await(held.proceed);
               }
               const result = yield* launch(request);
               yield* Ref.update(launched, (all) => [...all, result.threadId]);
+              if (held?.afterCommit) {
+                yield* Deferred.succeed(held.launching, undefined);
+                yield* Deferred.await(held.proceed);
+              }
               return result;
             }).pipe(Effect.orDie),
         });
@@ -109,12 +114,148 @@ const storedMode = Effect.gen(function* () {
   return rows[0];
 });
 
-const holdLaunches = (gate: Ref.Ref<Gate | null>) =>
+const holdLaunches = (gate: Ref.Ref<Gate | null>, afterCommit = false) =>
   Effect.gen(function* () {
-    const held = { launching: yield* Deferred.make<void>(), proceed: yield* Deferred.make<void>() };
+    const held = {
+      launching: yield* Deferred.make<void>(),
+      proceed: yield* Deferred.make<void>(),
+      afterCommit,
+    };
     yield* Ref.set(gate, held);
     return held;
   });
+
+it.effect.each(["continue", "fresh_session"] as const)(
+  "a %s task keeps its first accepted thread across a restart before launch returns",
+  (mode) =>
+    Effect.gen(function* () {
+      const { gate, launched, sends, layer } = yield* harness();
+      yield* Effect.gen(function* () {
+        const sql = yield* SqlClient.SqlClient;
+        const service = yield* ScheduledTaskService.ScheduledTaskService;
+        yield* service.upsert({ ...input, threadMode: mode });
+        const held = yield* holdLaunches(gate, true);
+        const run = yield* Effect.forkChild(service.runNow({ id: input.id }));
+        yield* Deferred.await(held.launching);
+        const [first] = yield* Ref.get(launched);
+        if (first == null) return yield* Effect.die("The first run did not launch a thread.");
+        assert.equal((yield* service.list()).tasks[0]?.threadId, first);
+        assert.deepEqual(yield* sql`SELECT dispatch_bookkept_at FROM scheduled_task_runs`, [
+          { dispatch_bookkept_at: null },
+        ]);
+        yield* Ref.set(gate, null);
+        yield* TestClock.adjust("1 second");
+        yield* Effect.gen(function* () {
+          const restarted = yield* ScheduledTaskService.ScheduledTaskService;
+          assert.equal((yield* restarted.list()).tasks[0]?.threadId, first);
+          yield* restarted.runNow({ id: input.id });
+          assert.deepEqual(yield* Ref.get(launched), [first]);
+          assert.deepEqual(yield* Ref.get(sends), [
+            { threadId: first, freshContext: mode === "fresh_session" },
+          ]);
+        }).pipe(Effect.provide(Layer.fresh(layer)));
+        yield* Fiber.interrupt(run);
+      }).pipe(Effect.provide(layer));
+    }).pipe(Effect.provide(SqlitePersistence.layerMemory)),
+);
+
+it.effect.each(["archived_at", "deleted_at"] as const)(
+  "a first accepted run never binds a thread already marked %s",
+  (column) =>
+    Effect.gen(function* () {
+      const { launched, layer } = yield* harness();
+      yield* Effect.gen(function* () {
+        const sql = yield* SqlClient.SqlClient;
+        const service = yield* ScheduledTaskService.ScheduledTaskService;
+        yield* service.upsert({ ...input, threadMode: "continue" });
+        yield* sql`CREATE TRIGGER retire_thread_before_acceptance
+          AFTER INSERT ON orchestration_v2_projection_runs BEGIN
+            UPDATE orchestration_v2_projection_threads SET ${sql(column)} = '2026-11-18T00:00:00Z'
+            WHERE thread_id = NEW.thread_id;
+          END`;
+        const first = yield* service.runNow({ id: input.id });
+        assert.equal(first.task.lastRun?.dispatchStatus, "accepted");
+        assert.isNull(first.task.threadId);
+        yield* sql`DROP TRIGGER retire_thread_before_acceptance`;
+        yield* TestClock.adjust("1 second");
+        const next = yield* service.runNow({ id: input.id });
+        assert.deepEqual(yield* Ref.get(launched), [first.threadId, next.threadId]);
+        assert.notEqual(next.threadId, first.threadId);
+        assert.equal(next.task.threadId, next.threadId);
+      }).pipe(Effect.provide(layer));
+    }).pipe(Effect.provide(SqlitePersistence.layerMemory)),
+);
+
+it.effect("switching to one thread never recovers a previous new-thread firing", () =>
+  Effect.gen(function* () {
+    const { launched, layer } = yield* harness();
+    yield* Effect.gen(function* () {
+      const service = yield* ScheduledTaskService.ScheduledTaskService;
+      yield* service.upsert({ ...input, threadMode: "new_thread" });
+      yield* service.runNow({ id: input.id });
+      yield* TestClock.adjust("1 second");
+      yield* service.runNow({ id: input.id });
+      yield* service.upsert({ ...input, threadMode: "continue" });
+    }).pipe(Effect.provide(layer));
+    yield* TestClock.adjust("1 second");
+    yield* Effect.gen(function* () {
+      const service = yield* ScheduledTaskService.ScheduledTaskService;
+      assert.isNull((yield* service.list()).tasks[0]?.threadId);
+      const next = yield* service.runNow({ id: input.id });
+      assert.lengthOf(new Set(yield* Ref.get(launched)), 3);
+      assert.equal(next.task.threadId, next.threadId);
+    }).pipe(Effect.provide(Layer.fresh(layer)));
+  }).pipe(Effect.provide(SqlitePersistence.layerMemory)),
+);
+
+it.effect("a failed first bind rolls back the initial scheduled message and run", () =>
+  Effect.gen(function* () {
+    const { layer } = yield* harness();
+    yield* Effect.gen(function* () {
+      const sql = yield* SqlClient.SqlClient;
+      const service = yield* ScheduledTaskService.ScheduledTaskService;
+      yield* service.upsert({ ...input, threadMode: "continue" });
+      yield* sql`CREATE TRIGGER refuse_first_bind BEFORE UPDATE OF thread_id ON scheduled_tasks
+        WHEN NEW.thread_id IS NOT NULL BEGIN SELECT RAISE(ABORT, 'injected bind failure'); END`;
+      yield* Effect.exit(service.runNow({ id: input.id }));
+      const [task] = (yield* service.list()).tasks;
+      assert.isNull(task?.threadId);
+      assert.notEqual(task?.lastRun?.dispatchStatus, "accepted");
+      assert.deepEqual(yield* sql`SELECT run_id FROM orchestration_v2_projection_runs`, []);
+      assert.deepEqual(yield* sql`SELECT message_id FROM orchestration_v2_projection_messages`, []);
+    }).pipe(Effect.provide(layer));
+  }).pipe(Effect.provide(SqlitePersistence.layerMemory)),
+);
+
+it.effect.each(["mode", "project"] as const)(
+  "an in-flight first launch stays unbound when the %s changes away and back",
+  (destination) =>
+    Effect.gen(function* () {
+      const { gate, launched, layer } = yield* harness();
+      yield* Effect.gen(function* () {
+        const service = yield* ScheduledTaskService.ScheduledTaskService;
+        const task = { ...input, threadMode: "continue" } as const;
+        yield* service.upsert(task);
+        const held = yield* holdLaunches(gate);
+        const first = yield* Effect.forkChild(service.runNow({ id: input.id }));
+        yield* Deferred.await(held.launching);
+        yield* service.upsert(
+          destination === "mode"
+            ? { ...task, threadMode: "new_thread" }
+            : { ...task, projectId: ProjectId.make("project:moved") },
+        );
+        yield* service.upsert(task);
+        yield* Ref.set(gate, null);
+        yield* Deferred.succeed(held.proceed, undefined);
+        yield* Fiber.join(first);
+        assert.isNull((yield* service.list()).tasks[0]?.threadId);
+        yield* TestClock.adjust("1 second");
+        const next = yield* service.runNow({ id: input.id });
+        assert.lengthOf(new Set(yield* Ref.get(launched)), 2);
+        assert.equal(next.task.threadId, next.threadId);
+      }).pipe(Effect.provide(layer));
+    }).pipe(Effect.provide(SqlitePersistence.layerMemory)),
+);
 
 // Carried from upstream 4aab23cd72 (ScheduledTaskService.test.ts), on GOAT's durable launch.
 it.effect("a fresh-session task launches one thread, then starts each later run fresh in it", () =>
@@ -158,9 +299,9 @@ it.effect("a fresh-session task launches one thread, then starts each later run 
   }).pipe(Effect.provide(SqlitePersistence.layerMemory)),
 );
 
-it.effect("a first run whose thread was deleted before it bound removes the task", () =>
+it.effect("removes a task when its first thread is observed deleted after acceptance", () =>
   Effect.gen(function* () {
-    // Deleted before the binding landed, so its cleanup found no task to remove.
+    // The shell lookup after acceptance observes the thread as deleted.
     const { layer } = yield* harness({ threadDeleted: true });
     yield* Effect.gen(function* () {
       const service = yield* ScheduledTaskService.ScheduledTaskService;

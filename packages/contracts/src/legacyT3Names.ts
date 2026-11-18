@@ -211,7 +211,6 @@ export const GOAT_ORCHESTRATION_CHECKPOINT_REFS_PREFIX = "refs/goat/orchestratio
  * @public
  */
 export const LEGACY_PRE_REFRESH_REF = "refs/t3code/pre-refresh";
-export const GOAT_PRE_REFRESH_REF = "refs/goat/pre-refresh";
 /**
  * Legacy ref namespace in existing repositories, including checkpoints read by older runtimes.
  * @public

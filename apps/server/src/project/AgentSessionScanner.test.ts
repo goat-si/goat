@@ -1,3 +1,4 @@
+import { parseAgentSessionTranscript } from "./AgentSessionTranscriptParser.ts";
 // @effect-diagnostics nodeBuiltinImport:off - FIFO gates must be released with a synchronous
 // open on the main thread, because the Effect FileSystem queues behind the pinned libuv pool.
 import * as NodeServices from "@effect/platform-node/NodeServices";
@@ -46,29 +47,22 @@ const decodeImportSource = Schema.decodeUnknownSync(AgentSessionImportSource);
 
 const encodeTranscriptRecord = Schema.encodeUnknownSync(Schema.fromJsonString(Schema.Unknown));
 
-function makeRecordLimitTranscript(cwd: string, overflow: boolean): string {
-  const records =
-    [
-      encodeTranscriptRecord({
-        type: "session_meta",
-        payload: { id: "record-limit-session", cwd },
-      }),
-      encodeTranscriptRecord({
-        type: "event_msg",
-        payload: { type: "user_message", message: "First prompt" },
-      }),
-    ].join("\n") +
-    "\n" +
-    "{}\n".repeat(99_998);
-  return overflow
-    ? records +
-        "\n" +
-        encodeTranscriptRecord({
-          type: "event_msg",
-          payload: { type: "user_message", message: "Overflow prompt" },
-        }) +
-        "\n"
-    : records;
+// Pi retains every entry, keeping tool results as links outside the history budget.
+function makePiToolResultTranscript(sessionId: string, cwd: string, recordCount: number): string {
+  const entry = (id: number, message: { readonly role: string; readonly content: string }) =>
+    encodeTranscriptRecord({
+      type: "message",
+      id: `e${id}`,
+      parentId: id === 0 ? null : `e${id - 1}`,
+      message,
+    });
+  return [
+    encodeTranscriptRecord({ type: "session", version: 3, id: sessionId, cwd }),
+    entry(0, { role: "user", content: "Imported prompt" }),
+    ...Array.from({ length: recordCount - 2 }, (_, index) =>
+      entry(index + 1, { role: "toolResult", content: "Tool output" }),
+    ),
+  ].join("\n");
 }
 
 const makeFileIdentityFixture = Effect.fn("AgentSessionScanner.test.makeFileIdentityFixture")(
@@ -1375,6 +1369,144 @@ it.layer(NodeServices.layer)("AgentSessionScanner", (it) => {
       }),
     );
 
+    it.effect("ignores sessions without visible messages without spending the import budget", () =>
+      Effect.gen(function* () {
+        const path = yield* Path.Path;
+        const nowMs = Date.parse("2026-08-24T12:00:00.000Z");
+        yield* TestClock.setTime(nowMs);
+        const claudeHomePath = yield* makeTempDir("goat-claude-home-");
+        const codexHomePath = yield* makeTempDir("goat-codex-home-");
+        const workspace = yield* makeTempDir("goat-workspace-");
+        const codexRollout = (name: string) =>
+          path.join(codexHomePath, "sessions", "2026", "08", "24", `rollout-${name}.jsonl`);
+        // Newer empty sessions would exhaust the 100-transcript import budget before any real one.
+        const emptySessions = Array.from({ length: 100 }, (_, index) =>
+          index % 2 === 0
+            ? {
+                filePath: codexRollout(`empty-${index}`),
+                records: [
+                  {
+                    type: "session_meta",
+                    payload: { id: `codex-empty-${index}`, cwd: workspace, source: "vscode" },
+                  },
+                  {
+                    type: "event_msg",
+                    payload: {
+                      type: "thread_settings_applied",
+                      thread_settings: { cwd: workspace },
+                    },
+                  },
+                ],
+              }
+            : {
+                filePath: path.join(
+                  claudeHomePath,
+                  "projects",
+                  "-slug",
+                  `claude-empty-${index}.jsonl`,
+                ),
+                records: [
+                  { type: "system", subtype: "informational", content: "Status", cwd: workspace },
+                  {
+                    type: "user",
+                    isMeta: true,
+                    message: {
+                      role: "user",
+                      content: "<local-command-caveat>Caveat</local-command-caveat>",
+                    },
+                    cwd: workspace,
+                  },
+                ],
+              },
+        );
+        const transcripts = [
+          ...emptySessions,
+          {
+            // Without session_meta there is no resumable session ID.
+            filePath: codexRollout("unusable"),
+            records: [
+              { type: "turn_context", payload: { cwd: workspace } },
+              {
+                type: "event_msg",
+                payload: { type: "user_message", message: "Import this prompt" },
+              },
+            ],
+          },
+          {
+            filePath: codexRollout("real"),
+            records: [
+              { type: "session_meta", payload: { id: "real-session", cwd: workspace } },
+              {
+                type: "event_msg",
+                payload: { type: "user_message", message: "Import this prompt" },
+              },
+            ],
+          },
+        ];
+        for (const [index, { filePath, records }] of transcripts.entries()) {
+          yield* writeTranscript({
+            filePath,
+            contents: records.map((record) => encodeTranscriptRecord(record)).join("\n"),
+            mtimeMs: nowMs - index * 60_000,
+          });
+        }
+
+        const outcomes = yield* runRecentThreadOutcomes({
+          claudeHomePath,
+          codexHomePath,
+          workspaceRoot: workspace,
+        });
+
+        expect(
+          outcomes.map((outcome) =>
+            outcome._tag === "Importable" ? outcome.thread.providerSessionId : outcome._tag,
+          ),
+        ).toEqual(["Skipped", "real-session"]);
+      }),
+    );
+
+    it.effect("skips a rewound Codex rollout whose inherited history is unavailable", () =>
+      Effect.gen(function* () {
+        const path = yield* Path.Path;
+        const nowMs = Date.parse("2026-08-24T12:00:00.000Z");
+        yield* TestClock.setTime(nowMs);
+        const claudeHomePath = yield* makeTempDir("goat-claude-home-");
+        const codexHomePath = yield* makeTempDir("goat-codex-home-");
+        const workspace = yield* makeTempDir("goat-workspace-");
+        const threadId = "019a0000-0000-7000-8000-000000000001";
+        const rolloutId = "019a0000-0000-7000-8000-000000000002";
+        // The ancestor rollout is missing, and this rollout added no messages of its own.
+        yield* writeTranscript({
+          filePath: path.join(
+            codexHomePath,
+            "sessions",
+            "2026",
+            "08",
+            "24",
+            `rollout-2026-08-24T11-00-00-${threadId}_${rolloutId}.jsonl`,
+          ),
+          contents: encodeTranscriptRecord({
+            type: "session_meta",
+            payload: {
+              id: threadId,
+              cwd: workspace,
+              history_mode: "paginated",
+              history_base: { thread_id: threadId, end_ordinal_exclusive: 3, end_byte_offset: 512 },
+            },
+          }),
+          mtimeMs: nowMs,
+        });
+
+        const outcomes = yield* runRecentThreadOutcomes({
+          claudeHomePath,
+          codexHomePath,
+          workspaceRoot: workspace,
+        });
+
+        expect(outcomes).toEqual([{ _tag: "Skipped" }]);
+      }),
+    );
+
     it.effect("skips excessive records without blocking an older valid transcript", () =>
       Effect.gen(function* () {
         const path = yield* Path.Path;
@@ -1383,22 +1515,20 @@ it.layer(NodeServices.layer)("AgentSessionScanner", (it) => {
         const claudeHomePath = yield* makeTempDir("goat-record-budget-claude-");
         const codexHomePath = yield* makeTempDir("goat-record-budget-codex-");
         const workspace = yield* makeTempDir("goat-record-budget-workspace-");
-        const exactLimit = makeRecordLimitTranscript(workspace, false);
-        // The newer transcript has 100,001 records; the older one has exactly 100,000.
-        for (const [sessionId, contents, mtimeMs] of [
-          ["excessive", exactLimit.replace("record-limit-session", "excessive") + "{}\n", nowMs],
-          ["older", exactLimit, nowMs - 1_000],
+        // The newer transcript retains 100,001 records; the older one exactly 100,000.
+        for (const [sessionId, recordCount, mtimeMs] of [
+          ["excessive", 100_001, nowMs],
+          ["older", 100_000, nowMs - 1_000],
         ] as const) {
           yield* writeTranscript({
             filePath: path.join(
-              codexHomePath,
+              claudeHomePath,
+              "pi-agent",
               "sessions",
-              "2026",
-              "08",
-              "24",
-              `rollout-${sessionId}.jsonl`,
+              "--workspace--",
+              `${sessionId}.jsonl`,
             ),
-            contents,
+            contents: makePiToolResultTranscript(sessionId, workspace, recordCount),
             mtimeMs,
           });
         }
@@ -1408,9 +1538,7 @@ it.layer(NodeServices.layer)("AgentSessionScanner", (it) => {
           workspaceRoot: workspace,
         });
         expect(outcomes.map((outcome) => outcome._tag)).toEqual(["Skipped", "Importable"]);
-        expect(outcomes[1]).toMatchObject({
-          thread: { providerSessionId: "record-limit-session" },
-        });
+        expect(outcomes[1]).toMatchObject({ thread: { providerSessionId: "older" } });
       }),
     );
 
@@ -1427,26 +1555,13 @@ it.layer(NodeServices.layer)("AgentSessionScanner", (it) => {
         for (const [index, recordCount] of recordCounts.entries()) {
           yield* writeTranscript({
             filePath: path.join(
-              codexHomePath,
+              claudeHomePath,
+              "pi-agent",
               "sessions",
-              "2026",
-              "08",
-              "24",
-              `rollout-${index}.jsonl`,
+              "--workspace--",
+              `${index}.jsonl`,
             ),
-            contents:
-              [
-                encodeTranscriptRecord({
-                  type: "session_meta",
-                  payload: { id: `session-${index}`, cwd: workspace },
-                }),
-                encodeTranscriptRecord({
-                  type: "event_msg",
-                  payload: { type: "user_message", message: "Imported prompt" },
-                }),
-              ].join("\n") +
-              "\n" +
-              "{}\n".repeat(recordCount - 2),
+            contents: makePiToolResultTranscript(`session-${index}`, workspace, recordCount),
             mtimeMs: nowMs - index * 1_000,
           });
         }
@@ -1785,7 +1900,7 @@ it.layer(NodeServices.layer)("AgentSessionScanner", (it) => {
 
         expect(thread?.messages[0]).toMatchObject({ role: "assistant", text: "assistant 50" });
         expect(thread).toEqual(
-          AgentSessionScanner.parseAgentSessionTranscript({
+          parseAgentSessionTranscript({
             source: "claudeAgent",
             providerInstanceId: ProviderInstanceId.make("claudeAgent"),
             fallbackSessionId: "late-prompt",
@@ -2118,542 +2233,3 @@ describe.skipIf(HostProcess.Platform.defaultValue() === "win32")(
     );
   },
 );
-
-describe("parseAgentSessionTranscript", () => {
-  it.each([false, true])(
-    "handles the exact record limit and an interior blank overflow=%s",
-    (overflow) => {
-      const thread = AgentSessionScanner.parseAgentSessionTranscript({
-        contents: makeRecordLimitTranscript("/project", overflow),
-        source: "codex",
-        providerInstanceId: ProviderInstanceId.make("codex"),
-        fallbackSessionId: "unused",
-        lastActiveAtMs: Date.parse("2026-08-24T12:00:00.000Z"),
-      });
-      if (overflow) expect(thread).toBeNull();
-      else expect(thread?.messages.map((message) => message.text)).toEqual(["First prompt"]);
-    },
-  );
-
-  it.each([199, 200, 201, 205])(
-    "counts only omitted conversation messages for a %s-message Claude transcript",
-    (count) => {
-      const thread = AgentSessionScanner.parseAgentSessionTranscript({
-        contents: [
-          ...Array.from({ length: count }, (_, index) =>
-            encodeTranscriptRecord({
-              type: index === 0 ? "user" : "assistant",
-              sessionId: "claude-session",
-              message: { content: `Message ${index}` },
-            }),
-          ),
-          encodeTranscriptRecord({ type: "user", isMeta: true, message: { content: "Setup" } }),
-          encodeTranscriptRecord({
-            type: "user",
-            isCompactSummary: true,
-            message: { content: "Summary" },
-          }),
-          encodeTranscriptRecord({
-            type: "assistant",
-            isSidechain: true,
-            message: { content: "Sidechain" },
-          }),
-          encodeTranscriptRecord({
-            type: "assistant",
-            message: { content: [{ type: "tool_use" }] },
-          }),
-          "malformed",
-        ].join("\n"),
-        source: "claudeAgent",
-        providerInstanceId: ProviderInstanceId.make("claudeAgent"),
-        fallbackSessionId: "fallback",
-        lastActiveAtMs: Date.parse("2026-08-24T12:00:00.000Z"),
-      });
-
-      expect(thread?.omittedMessageCount).toBe(Math.max(0, count - 200));
-      expect(thread?.messages).toHaveLength(Math.min(200, count));
-      expect(thread?.messages[0]?.text).toBe("Message 0");
-      expect(thread?.messages.at(-1)?.text).toBe(`Message ${count - 1}`);
-    },
-  );
-
-  it("keeps Claude text and titles while dropping malformed and tool records", () => {
-    const thread = AgentSessionScanner.parseAgentSessionTranscript({
-      contents: [
-        "not valid json",
-        JSON.stringify({ type: "ai-title", aiTitle: "Fix authentication" }),
-        JSON.stringify({
-          type: "user",
-          sessionId: "claude-session",
-          isMeta: true,
-          message: { role: "user", content: "Injected skill instructions" },
-        }),
-        JSON.stringify({
-          type: "user",
-          sessionId: "claude-session",
-          isCompactSummary: true,
-          message: { role: "user", content: "Injected compaction summary" },
-        }),
-        JSON.stringify({
-          type: "user",
-          sessionId: "claude-session",
-          timestamp: "2026-08-24T10:00:00.000Z",
-          message: { role: "user", content: [{ type: "text", text: "Fix authentication" }] },
-        }),
-        JSON.stringify({
-          type: "user",
-          sessionId: "claude-session",
-          message: { role: "user", content: [{ type: "tool_result", text: "hidden" }] },
-        }),
-        JSON.stringify({
-          type: "assistant",
-          sessionId: "claude-session",
-          message: {
-            role: "assistant",
-            model: "claude-sonnet-5",
-            content: [{ type: "text", text: "Updated the login flow" }],
-          },
-        }),
-        JSON.stringify({
-          type: "assistant",
-          sessionId: "claude-session",
-          message: {
-            role: "assistant",
-            model: "<synthetic>",
-            content: [{ type: "text", text: "The provider request failed" }],
-          },
-        }),
-      ].join("\n"),
-      source: "claudeAgent",
-      providerInstanceId: ProviderInstanceId.make("claudeAgent"),
-      fallbackSessionId: "fallback",
-      lastActiveAtMs: Date.parse("2026-08-24T12:00:00.000Z"),
-    });
-
-    expect(thread).toMatchObject({
-      providerSessionId: "claude-session",
-      title: "Fix authentication",
-      model: "claude-sonnet-5",
-      messages: [
-        { role: "user", text: "Fix authentication" },
-        { role: "assistant", text: "Updated the login flow" },
-        { role: "assistant", text: "The provider request failed" },
-      ],
-    });
-  });
-
-  it.each([
-    { customTitles: ["Refactor auth module"], expected: "Refactor auth module" },
-    // Claude writes an empty customTitle when the user clears a rename.
-    { customTitles: ["Refactor auth module", ""], expected: "Generated title" },
-  ])("uses Claude custom titles $customTitles over the AI title", ({ customTitles, expected }) => {
-    const aiTitle = JSON.stringify({
-      type: "ai-title",
-      aiTitle: "Generated title",
-      sessionId: "claude-session",
-    });
-    const thread = AgentSessionScanner.parseAgentSessionTranscript({
-      contents: [
-        JSON.stringify({
-          type: "user",
-          sessionId: "claude-session",
-          timestamp: "2026-08-24T10:00:00.000Z",
-          message: { role: "user", content: "<command-name>/effort</command-name>" },
-        }),
-        // Claude rewrites both records on every metadata flush with ai-title
-        // last, so a later ai-title must not override the user's rename.
-        ...customTitles.flatMap((customTitle) => [
-          JSON.stringify({ type: "custom-title", customTitle, sessionId: "claude-session" }),
-          aiTitle,
-        ]),
-      ].join("\n"),
-      source: "claudeAgent",
-      providerInstanceId: ProviderInstanceId.make("claudeAgent"),
-      fallbackSessionId: "fallback",
-      lastActiveAtMs: Date.parse("2026-08-24T12:00:00.000Z"),
-    });
-
-    expect(thread?.title).toBe(expected);
-  });
-
-  it.each([199, 200])("keeps the canonical first prompt with %s later Codex messages", (count) => {
-    const canonicalPrompt = "\n  Keep the canonical prompt  \n";
-    const canonicalTimestamp = "2026-08-24T10:01:00.000Z";
-    const laterAssistantMessages = Array.from({ length: count }, (_, index) =>
-      encodeTranscriptRecord({
-        type: "response_item",
-        timestamp: `2026-08-24T11:${String(index % 60).padStart(2, "0")}:00.000Z`,
-        payload: {
-          type: "message",
-          role: "assistant",
-          content: [{ type: "output_text", text: `Assistant message ${index}` }],
-        },
-      }),
-    );
-    const thread = AgentSessionScanner.parseAgentSessionTranscript({
-      contents: [
-        encodeTranscriptRecord({ type: "session_meta", payload: { id: "codex-session" } }),
-        encodeTranscriptRecord({
-          type: "response_item",
-          timestamp: "2026-08-24T10:00:00.000Z",
-          payload: {
-            type: "message",
-            role: "user",
-            content: [{ type: "input_text", text: "Keep the canonical prompt" }],
-          },
-        }),
-        encodeTranscriptRecord({
-          type: "event_msg",
-          timestamp: canonicalTimestamp,
-          payload: { type: "user_message", message: canonicalPrompt },
-        }),
-        ...laterAssistantMessages,
-      ].join("\n"),
-      source: "codex",
-      providerInstanceId: ProviderInstanceId.make("codex"),
-      fallbackSessionId: "fallback",
-      lastActiveAtMs: Date.parse("2026-08-24T12:00:00.000Z"),
-    });
-
-    expect(thread?.omittedMessageCount).toBe(count - 199);
-    expect(thread?.messages).toHaveLength(200);
-    expect(thread?.messages[0]).toMatchObject({
-      role: "user",
-      text: canonicalPrompt,
-      createdAt: canonicalTimestamp,
-    });
-  });
-
-  it("restores the canonical first prompt when a later user message remains", () => {
-    const canonicalPrompt = "\n  Keep the canonical prompt  \n";
-    const canonicalTimestamp = "2026-08-24T10:01:00.000Z";
-    const assistantMessages = Array.from({ length: 198 }, (_, index) =>
-      encodeTranscriptRecord({
-        type: "response_item",
-        timestamp: `2026-08-24T11:${String(index % 60).padStart(2, "0")}:00.000Z`,
-        payload: {
-          type: "message",
-          role: "assistant",
-          content: [{ type: "output_text", text: `Assistant message ${index}` }],
-        },
-      }),
-    );
-    const thread = AgentSessionScanner.parseAgentSessionTranscript({
-      contents: [
-        encodeTranscriptRecord({ type: "session_meta", payload: { id: "codex-session" } }),
-        encodeTranscriptRecord({
-          type: "response_item",
-          timestamp: "2026-08-24T10:00:00.000Z",
-          payload: {
-            type: "message",
-            role: "user",
-            internal_chat_message_metadata_passthrough: { turn_id: "turn-1" },
-            content: [{ type: "input_text", text: "Keep the canonical prompt" }],
-          },
-        }),
-        encodeTranscriptRecord({
-          type: "event_msg",
-          timestamp: canonicalTimestamp,
-          payload: { type: "user_message", message: canonicalPrompt },
-        }),
-        ...assistantMessages,
-        encodeTranscriptRecord({
-          type: "event_msg",
-          timestamp: "2026-08-24T11:58:30.000Z",
-          payload: { type: "user_message", message: "Keep this later prompt" },
-        }),
-        encodeTranscriptRecord({
-          type: "response_item",
-          timestamp: "2026-08-24T11:59:00.000Z",
-          payload: {
-            type: "message",
-            role: "assistant",
-            content: [{ type: "output_text", text: "Keep this latest response" }],
-          },
-        }),
-      ].join("\n"),
-      source: "codex",
-      providerInstanceId: ProviderInstanceId.make("codex"),
-      fallbackSessionId: "fallback",
-      lastActiveAtMs: Date.parse("2026-08-24T12:00:00.000Z"),
-    });
-
-    expect(thread?.omittedMessageCount).toBe(1);
-    expect(thread?.messages).toHaveLength(200);
-    expect(thread?.messages[0]).toMatchObject({
-      role: "user",
-      text: canonicalPrompt,
-      createdAt: canonicalTimestamp,
-    });
-    expect(
-      thread?.messages.filter((message) => message.text.trim() === canonicalPrompt.trim()),
-    ).toHaveLength(1);
-    expect(thread?.messages.some((message) => message.text === "Keep this later prompt")).toBe(
-      true,
-    );
-    expect(thread?.messages.at(-1)?.text).toBe("Keep this latest response");
-  });
-
-  it("keeps mixed-format response users when turn IDs repeat after an assistant", () => {
-    const thread = AgentSessionScanner.parseAgentSessionTranscript({
-      contents: [
-        encodeTranscriptRecord({ type: "session_meta", payload: { id: "codex-session" } }),
-        encodeTranscriptRecord({
-          type: "response_item",
-          payload: {
-            type: "message",
-            role: "user",
-            internal_chat_message_metadata_passthrough: { turn_id: "turn-older" },
-            content: [{ type: "input_text", text: "Keep this older prompt" }],
-          },
-        }),
-        encodeTranscriptRecord({
-          type: "event_msg",
-          payload: { type: "user_message", message: "Keep this newer prompt" },
-        }),
-        encodeTranscriptRecord({
-          type: "response_item",
-          payload: {
-            type: "message",
-            role: "user",
-            internal_chat_message_metadata_passthrough: { turn_id: "turn-newer" },
-            content: [{ type: "input_text", text: "Keep this newer prompt" }],
-          },
-        }),
-        encodeTranscriptRecord({
-          type: "response_item",
-          payload: {
-            type: "message",
-            role: "assistant",
-            content: [{ type: "output_text", text: "Ask again when needed" }],
-          },
-        }),
-        encodeTranscriptRecord({
-          type: "response_item",
-          payload: {
-            type: "message",
-            role: "user",
-            internal_chat_message_metadata_passthrough: { turn_id: "turn-newer" },
-            content: [{ type: "input_text", text: "Keep this newer prompt" }],
-          },
-        }),
-      ].join("\n"),
-      source: "codex",
-      providerInstanceId: ProviderInstanceId.make("codex"),
-      fallbackSessionId: "fallback",
-      lastActiveAtMs: Date.parse("2026-08-24T12:00:00.000Z"),
-    });
-
-    expect(thread?.messages.map((message) => message.text)).toEqual([
-      "Keep this older prompt",
-      "Keep this newer prompt",
-      "Ask again when needed",
-      "Keep this newer prompt",
-    ]);
-  });
-
-  it("preserves response user text when Codex turn metadata is ambiguous", () => {
-    const thread = AgentSessionScanner.parseAgentSessionTranscript({
-      contents: [
-        encodeTranscriptRecord({ type: "session_meta", payload: { id: "codex-session" } }),
-        encodeTranscriptRecord({
-          type: "response_item",
-          payload: {
-            type: "message",
-            role: "user",
-            internal_chat_message_metadata_passthrough: ["unexpected"],
-            content: [{ type: "input_text", text: "Keep this legacy prompt" }],
-          },
-        }),
-        encodeTranscriptRecord({
-          type: "response_item",
-          payload: {
-            type: "message",
-            role: "user",
-            internal_chat_message_metadata_passthrough: { turn_id: "   " },
-            content: [{ type: "input_text", text: "Keep this prompt with a blank turn ID" }],
-          },
-        }),
-      ].join("\n"),
-      source: "codex",
-      providerInstanceId: ProviderInstanceId.make("codex"),
-      fallbackSessionId: "fallback",
-      lastActiveAtMs: Date.parse("2026-08-24T12:00:00.000Z"),
-    });
-
-    expect(thread?.messages.map((message) => message.text)).toEqual([
-      "Keep this legacy prompt",
-      "Keep this prompt with a blank turn ID",
-    ]);
-  });
-
-  it("uses the first valid Codex session ID when a fork copies ancestor metadata", () => {
-    const thread = AgentSessionScanner.parseAgentSessionTranscript({
-      contents: [
-        encodeTranscriptRecord({
-          type: "session_meta",
-          payload: { id: "fork-session", forked_from_id: "parent-session" },
-        }),
-        encodeTranscriptRecord({
-          type: "session_meta",
-          payload: { id: "parent-session" },
-        }),
-        encodeTranscriptRecord({
-          type: "event_msg",
-          payload: { type: "user_message", message: "Continue in the fork" },
-        }),
-      ].join("\n"),
-      source: "codex",
-      providerInstanceId: ProviderInstanceId.make("codex"),
-      fallbackSessionId: "fallback",
-      lastActiveAtMs: Date.parse("2026-08-24T12:00:00.000Z"),
-    });
-
-    expect(thread?.providerSessionId).toBe("fork-session");
-  });
-
-  it("skips Codex transcripts without a resumable session ID", () => {
-    const thread = AgentSessionScanner.parseAgentSessionTranscript({
-      contents: encodeTranscriptRecord({
-        type: "event_msg",
-        payload: { type: "user_message", message: "This transcript has no session metadata" },
-      }),
-      source: "codex",
-      providerInstanceId: ProviderInstanceId.make("codex"),
-      fallbackSessionId: "rollout-2026-08-24T12-00-00-not-a-session-id",
-      lastActiveAtMs: Date.parse("2026-08-24T12:00:00.000Z"),
-    });
-
-    expect(thread).toBeNull();
-  });
-
-  it("uses the canonical Codex event when its turn has generated response context", () => {
-    const thread = AgentSessionScanner.parseAgentSessionTranscript({
-      contents: [
-        encodeTranscriptRecord({ type: "session_meta", payload: { id: "codex-session" } }),
-        encodeTranscriptRecord({
-          type: "response_item",
-          payload: {
-            type: "message",
-            role: "user",
-            internal_chat_message_metadata_passthrough: { turn_id: "turn-1" },
-            content: [
-              {
-                type: "input_text",
-                text: "<environment_context>\n<cwd>/tmp/project</cwd>\n<shell>zsh</shell>\n</environment_context>",
-              },
-            ],
-          },
-        }),
-        encodeTranscriptRecord({
-          type: "response_item",
-          payload: {
-            type: "message",
-            role: "user",
-            internal_chat_message_metadata_passthrough: { turn_id: "turn-1" },
-            content: [
-              {
-                type: "input_text",
-                text: "# AGENTS.md instructions for /tmp/project\n\n<INSTRUCTIONS>\nPrivate project rules\n</INSTRUCTIONS>",
-              },
-            ],
-          },
-        }),
-        encodeTranscriptRecord({
-          type: "event_msg",
-          payload: {
-            type: "user_message",
-            message: "Do something here so it looks like a real project.",
-          },
-        }),
-        encodeTranscriptRecord({
-          type: "response_item",
-          payload: {
-            type: "message",
-            role: "user",
-            internal_chat_message_metadata_passthrough: { turn_id: "turn-1" },
-            content: [
-              {
-                type: "input_text",
-                text: "Do something here so it looks like a real project.",
-              },
-            ],
-          },
-        }),
-        encodeTranscriptRecord({
-          type: "response_item",
-          payload: {
-            type: "message",
-            role: "assistant",
-            content: [{ type: "output_text", text: "Created the project." }],
-          },
-        }),
-      ].join("\n"),
-      source: "codex",
-      providerInstanceId: ProviderInstanceId.make("codex"),
-      fallbackSessionId: "fallback",
-      lastActiveAtMs: Date.parse("2026-08-25T08:00:00.000Z"),
-    });
-
-    expect(thread?.title).toBe("Do something here so it looks like a real project.");
-    expect(thread?.messages.map((message) => message.text)).toEqual([
-      "Do something here so it looks like a real project.",
-      "Created the project.",
-    ]);
-  });
-
-  it("preserves context markup in response-only Codex messages", () => {
-    const context = "<environment_context>\n<cwd>/tmp/project</cwd>\n</environment_context>";
-    const thread = AgentSessionScanner.parseAgentSessionTranscript({
-      contents: [
-        encodeTranscriptRecord({ type: "session_meta", payload: { id: "codex-session" } }),
-        encodeTranscriptRecord({
-          type: "response_item",
-          payload: {
-            type: "message",
-            role: "user",
-            content: [
-              {
-                type: "input_text",
-                text: context,
-              },
-            ],
-          },
-        }),
-        encodeTranscriptRecord({
-          type: "response_item",
-          payload: {
-            type: "message",
-            role: "user",
-            content: [{ type: "input_text", text: "Initialize Git and add a README." }],
-          },
-        }),
-      ].join("\n"),
-      source: "codex",
-      providerInstanceId: ProviderInstanceId.make("codex"),
-      fallbackSessionId: "fallback",
-      lastActiveAtMs: Date.parse("2026-08-25T08:00:00.000Z"),
-    });
-
-    expect(thread?.title).toBe("Initialize Git and add a README.");
-    expect(thread?.messages.map((message) => message.text)).toEqual([
-      context,
-      "Initialize Git and add a README.",
-    ]);
-  });
-
-  it("skips sessions without a visible user message", () => {
-    const thread = AgentSessionScanner.parseAgentSessionTranscript({
-      contents: JSON.stringify({
-        type: "assistant",
-        message: { role: "assistant", content: "Done" },
-      }),
-      source: "claudeAgent",
-      providerInstanceId: ProviderInstanceId.make("claudeAgent"),
-      fallbackSessionId: "claude-session",
-      lastActiveAtMs: Date.parse("2026-08-24T12:00:00.000Z"),
-    });
-
-    expect(thread).toBeNull();
-  });
-});

@@ -4,6 +4,7 @@ import * as NodeFSP from "node:fs/promises";
 import * as NodeServices from "@effect/platform-node/NodeServices";
 import { describe, expect, it } from "@effect/vitest";
 import { vi } from "vite-plus/test";
+import * as EnvTrampoline from "@goat/shared/envTrampoline";
 import * as HostProcess from "@goat/shared/HostProcess";
 import * as Deferred from "effect/Deferred";
 import * as Effect from "effect/Effect";
@@ -13,10 +14,12 @@ import * as Layer from "effect/Layer";
 import * as Path from "effect/Path";
 import * as ChildProcess from "effect/process/ChildProcess";
 import * as ChildProcessSpawner from "effect/process/ChildProcessSpawner";
+import * as TestClock from "effect/testing/TestClock";
 
 import * as NonBlockingSpawner from "./NonBlockingSpawner.ts";
 
 vi.mock("node:fs/promises", { spy: true });
+vi.mock("@goat/shared/envTrampoline", { spy: true });
 
 const hostPath = process.env.PATH;
 
@@ -30,6 +33,61 @@ const outcome = (command: ChildProcess.Command) =>
       onFailure: (error) => ({ reason: error.reason._tag, message: error.message }),
     }),
   );
+
+it.effect("bounds hung path checks and admits fresh work after the mount answers", () =>
+  Effect.gen(function* () {
+    using _supports = vi.spyOn(EnvTrampoline, "supportsEnvChdir").mockResolvedValue(true);
+    const bothRunning = yield* Deferred.make<void>();
+    const inFlight: Array<() => Promise<void>> = [];
+    const attempted: string[] = [];
+    let released = false;
+    using _access = vi.spyOn(NodeFSP, "access").mockImplementation((path) => {
+      attempted.push(String(path));
+      const { promise, reject } = Promise.withResolvers<void>();
+      const missing = Object.assign(new Error("ENOENT"), { code: "ENOENT" });
+      if (released) reject(missing);
+      else {
+        inFlight.push(() => {
+          reject(missing);
+          return promise.catch(() => undefined);
+        });
+        if (inFlight.length === 2) Deferred.doneUnsafe(bothRunning, Effect.void);
+      }
+      return promise;
+    });
+    const linux = wrapped.pipe(Layer.provide(Layer.succeed(HostProcess.Platform, "linux")));
+    yield* Effect.gen(function* () {
+      const spawn = (cwd: string) =>
+        ChildProcessSpawner.ChildProcessSpawner.use((spawner) =>
+          spawner.exitCode(ChildProcess.make("true", [], { cwd })),
+        ).pipe(
+          Effect.match({ onSuccess: () => "spawned", onFailure: (error) => error.reason._tag }),
+        );
+      const a = "/goat-hung/a";
+      const b = "/goat-hung/b";
+      const probes = yield* Effect.forEach([a, b], (cwd) =>
+        spawn(cwd).pipe(Effect.forkChild({ startImmediately: true })),
+      );
+      yield* Deferred.await(bothRunning);
+      const waiting = yield* Effect.forEach(Array.from({ length: 33 }), () =>
+        spawn(a).pipe(Effect.forkChild({ startImmediately: true })),
+      );
+      yield* TestClock.adjust("5 seconds");
+      const retry = yield* spawn(a).pipe(Effect.forkChild({ startImmediately: true }));
+      released = true;
+      yield* Effect.promise(() => Promise.all(inFlight.splice(0).map((finish) => finish())));
+
+      expect(yield* Effect.forEach(probes, Fiber.join)).toEqual(["TimedOut", "TimedOut"]);
+      expect(yield* Effect.forEach(waiting, Fiber.join)).toEqual([
+        ...Array.from({ length: 32 }, () => "TimedOut"),
+        "Busy",
+      ]);
+      expect(yield* Fiber.join(retry)).toBe("TimedOut");
+      expect(yield* spawn(a)).toBe("NotFound");
+      expect(attempted).toEqual([a, b, a]);
+    }).pipe(Effect.provide(linux));
+  }),
+);
 
 describe.skipIf(HostProcess.Platform.defaultValue() !== "linux")("NonBlockingSpawner", () => {
   it.live("gives callers what the native spawner gives them", () =>
