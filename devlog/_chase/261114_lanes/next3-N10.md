@@ -473,23 +473,7 @@ NOT RUN: PR CI, repo-wide suites, live systemd or launchd recovery, paired-clien
 
 The initial whole-file gate had one failure in `serviceLauncher.selection.test.ts:113`. Its committed-probation fixture used `/nonexistent/state.sqlite` and omitted the snapshot. It now creates the backup with the launcher's backup function, simulates trial writes, and verifies the previous runtime sees the restored DB. It asserts rollback to 1.0.0, the previous runtime's start, and protocol-3 selection.
 
-### Recovery states
-
-The table applies when rollback is requested. R is `.restore-pending` and U is `.untracked-owner`. Any covers both intact and truncated live files wherever those states take the same branch.
-
-| R | U | Owner history | Snapshot | Live DB | Outcome and test |
-| --- | --- | --- | --- | --- | --- |
-| 0 | 0 | Any | No backup directory before trial | Any | Keep live files and start the previous runtime. Owner-poll matrix, no backup directory before a trial. |
-| 0 | 0 | Any | No backup directory during probation rollback | Any | Create the marker directory, set R and U, and require manual recovery. Owner-poll matrix, missing backup directory during probation rollback. |
-| 0 or 1 | Any except R=0/U=1 | Any | Directory exists, main snapshot missing | Any | Set R and U, keep live files and any remaining snapshot files, and require manual recovery. Owner-poll matrix, missing snapshot before restore and during a resumed restore. |
-| 0 | 1 | Any | Present or missing | Any | Keep live files and any snapshot, then start the previous runtime once ownership is free. `at the bound waits for a legacy owner and preserves its writes and the backup` and manual acknowledgement in the tracked-desktop and legacy-owner cases. |
-| 1 | 1 | Any | Present | Any | Require manual recovery and keep both copies. `requires explicit recovery after a legacy owner interrupted rollback recovery` and the tracked-desktop case's second launcher run. |
-| 1 | 0 | Foreign or unverifiable | Present | Any | Set U and block with both copies preserved. Owner-poll matrix, desktop write, truncated with foreign history, and lost generation log. |
-| 1 | 0 | Same update only | Present | Any | Complete the interrupted copy, select the previous runtime, and remove the snapshot. Owner-poll matrix, both same-update cases. |
-| 0 | 0 | Same update only | Present | Any | Restore and select the previous runtime. `keeps a rollback pending until the owner lock frees up` and the protocol-3 probation test. |
-| 0 | 0 | Foreign or unverifiable | Present | Any | Keep live files, select the previous runtime, and remove the ordinary snapshot. `keeps a database another server wrote between the backup and the rollback` and `recovers a finished restore without copying over a later server's writes` cover the keep path. |
-
-For rows that reach the ownership checks, a held generation lock defers rollback. A held legacy lock or a detected pre-lock owner also sets U before retry. See the owner-lock and legacy-owner cases above. A launcher-interrupted copy leaves R set. A user clearing R follows the guide's step to verify the complete live SQLite file set first.
+The round 5 recovery state table below supersedes the round 4 policy.
 
 ### Final verification and delivery
 
@@ -498,3 +482,38 @@ For rows that reach the ownership checks, a held generation lock defers rollback
 - The plain push advanced `chase/t3-261114-next3-n10-service-release` from `f0676b0c15` to `e86ebf93c6`. `git ls-remote` confirmed the exact head and the worktree was clean.
 
 NOT RUN: PR CI, repo-wide suites, real systemd or launchd recovery, paired-client update, release builds or publication, and a packaged Linux AppImage transition. The changed-files gate skipped the dependency patch check because no dependency files changed.
+
+## 2026-11-18 UTC — N10 review fix round 5
+
+Implementation head `5469a9cfa13cf4ae8fc8ac99ac1e20859bcc122c`, one code commit. The four initial tests in `apps/server/src/serviceLauncher.recovery.test.ts` all failed on `e86ebf93c6c10e2310e022dbf2c32a42e009b7b6` (exit 1). All four had started the previous runtime when the launcher should have required manual recovery. They exercised the colliding generation and tag in a recreated log, a SQLite-only owner that committed a row and exited, a missing backup directory with a surviving restore phase, and a truncated live database with foreign history before any restore marker.
+
+`apps/server/src/serviceLauncherDatabase.ts:141` reads the durable per-update phase in `runtime`, outside the snapshot tree. The launcher records a random witness in the owner log and keeps it, the original log file identity, and the expected snapshot file names in memory at snapshot time. `apps/server/src/serviceLauncherDatabase.ts:354` validates both ownership locks, the original log, and the SQLite file set before selecting a replacement runtime. A v0.1.0-style SQLite-only lock leaves no audit entry after release. A changed main database, WAL, or SHM therefore has unverifiable provenance. The auto-restore case selects the previous runtime with the already-matching live files, then removes the verified duplicate snapshot. No recovery path copies over live data automatically.
+
+### Recovery state table
+
+Apply the first matching row when startup encounters an unfinished update or rollback is requested. A busy lock during an eligible fresh or operator-acknowledged keep defers the decision while no child starts. A busy lock after the snapshot in the automatic path blocks recovery.
+
+| Condition | Outcome | Named test |
+| --- | --- | --- |
+| Operator acknowledged with `keep-live` and the live SQLite set is usable | Keep-and-start the previous version and retain any snapshot | `checks the live file set after manual acknowledgement and retains the snapshot` and `verified manual recovery during probation starts the selected protocol-3 runtime` |
+| Operator acknowledged but the live SQLite set is unusable | Block-for-manual-recovery | `checks the live file set after manual acknowledgement and retains the snapshot`, with a truncated WAL |
+| Startup finds trial or restore phase, legacy restore or rollback markers, unknown phase, or probation from an earlier launcher, regardless of snapshot, log, or live condition | Block-for-manual-recovery | `blocks %s even with two intact copies`, `blocks startup with an interrupted probation (expired: %s)`, and the two `blocks a missing backup directory` cases |
+| Fresh pretrial rollback without a required snapshot and with a usable live SQLite set | Keep-and-start the previous version | `keeps a verified database when the target is missing before any trial` and `fails with db-owner-busy after the bound once the live file set can be checked` |
+| Fresh pretrial rollback without a usable live SQLite set | Block-for-manual-recovery | `blocks an unusable database even when the target is missing before any trial` |
+| Same launcher after snapshot, with observed legacy ownership, foreign history, a lost or recreated log, or a held ownership lock | Block-for-manual-recovery | `at the bound blocks when a legacy owner is observed after the snapshot`, `blocks a foreign owner even without any writes`, `blocks a lost generation log`, `blocks a recreated generation log with the same generation and owner tag`, `blocks rollback while a foreign owner holds the generation lock`, and `blocks truncated live data with foreign history before any restore marker` |
+| Same launcher with a plausible log but missing, incomplete, incompatible, changed, or unusable files | Block-for-manual-recovery | `blocks a missing snapshot in the same launcher`, `blocks a SQLite-only legacy owner that wrote and exited before rollback`, `preserves both copies when a failed trial changed the linked WAL`, `does not roll back a tracked trial with truncated live data`, and `does not accept identical but unusable SQLite files as a safe restore` |
+| Same launcher, continuous witnessed log containing only the launcher and its trial, no observed legacy owner, and the complete live set is byte-identical to a usable snapshot | Auto-restore the prior selection and discard the verified duplicate | `rolls back an unchanged SQLite file set in the same launcher, with the database a %s`, `keeps writes the server left in the WAL beside the link's target`, and `keeps the snapshot after commit and rolls back a probation exit (legacy: %s)` |
+
+A healthy update finishing probation leaves its snapshot because the launcher cannot prove a safe cleanup while that child is active. `retains the snapshot at the deadline and leaves later exits to the service manager` covers that path. The guide at `docs/user/updating.md:199` describes verifying the complete SQLite file set, including the case where only a staging directory remains, and acknowledging manual recovery.
+
+### Verification and delivery
+
+The first changed-files run found a test timer diagnostic and the second reached two mock-release integration cases seeded with plain text. The timer instrumentation is scoped to the production timer registrations, and the archive fixture now supplies a real SQLite database and reports an early launcher exit. Its failed-start, wrong-smoke, and checksum-mismatch scenarios passed as a guarded whole file.
+
+
+- On `5469a9cfa13cf4ae8fc8ac99ac1e20859bcc122c`, `GOAT_TEST_TMP_GUARD=fail vp test run --reporter=default <all 17 changed server test files>` exited 0 with 204 passes and zero skips.
+- `vp run check:changed origin/chase/t3-261114-next3` exited 0 against merge base `6def29ca359f546e50dcd731a6364e3f0d575545`. The server stage passed 705 tests with one skip in 68 files. The remaining stage passed 2,356 tests with one skip and one skipped file across 34 files. Format, lint, both Knip passes, GraphQL, agent checks, and the 42-package typecheck passed.
+- An isolated `node apps/server/src/bin.ts __service-launcher` transcript on Node 24.22.1 and 26.12.1 confirmed the recovery link, absence of a child and preservation of both SQLite copies before acknowledgement, and startup of 1.0.0 with both copies retained after `keep-live`.
+- A plain push advanced `chase/t3-261114-next3-n10-service-release` from `e86ebf93c6` to `5469a9cfa1`. `git ls-remote` confirmed the full SHA. The worktree was clean and `git diff --check HEAD^ HEAD` exited 0.
+
+NOT RUN: PR CI, repo-wide suites, live systemd or launchd recovery, paired-client updates, release builds or publication, and a packaged Linux AppImage transition. The changed-files gate skipped the dependency patch check because no dependency files changed.
