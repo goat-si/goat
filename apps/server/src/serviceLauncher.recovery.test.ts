@@ -215,14 +215,23 @@ process.exit(1);
     }),
   );
 
-  it.effect("does not accept identical but unusable SQLite files as a safe restore", () =>
+  it.effect("blocks a fresh trial before it can open a truncated SQLite database", () =>
     Effect.gen(function* () {
-      const f = yield* fixture("process.exit(1);");
+      const f = yield* fixture(`
+writeFileSync(join(stateDir, "trial-started"), "");
+const db = new DatabaseSync(dbPath);
+db.prepare("SELECT * FROM messages").all();
+db.close();
+process.exit(1);
+`);
       yield* f.fs.truncate(f.dbPath, 1024);
       const truncated = yield* f.fs.readFile(f.dbPath);
       yield* expectBlocked(f);
+      assert.isFalse(yield* f.fs.exists(f.path.join(f.path.dirname(f.dbPath), "trial-started")));
+      assert.isFalse(yield* f.fs.exists(f.path.join(f.runtime, "db-update-recovery.phase")));
+      assert.isFalse(yield* f.fs.exists(f.backupDir));
+      assert.isFalse(yield* f.fs.exists(f.backupDir + ".staging"));
       assert.deepEqual(yield* f.fs.readFile(f.dbPath), truncated);
-      assert.deepEqual(yield* f.fs.readFile(f.path.join(f.backupDir, "database")), truncated);
     }),
   );
 

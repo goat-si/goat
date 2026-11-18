@@ -183,6 +183,10 @@ export async function backupDatabase(
         "This update already has database artifacts.",
       );
     }
+    const mainTarget = await restoreTarget(pending.dbPath);
+    if (!(await usableDatabase(mainTarget)))
+      throw new Error("The live SQLite file set is unusable.");
+    signal.throwIfAborted();
     const identity = NodeCrypto.randomUUID();
     const logFile = serverOwnerLogFileIdentity(stateDir);
     lock.writeSnapshotIdentity(identity);
@@ -192,7 +196,6 @@ export async function backupDatabase(
     const stagingDir = `${backupDir}.staging`;
     await NodeFSP.mkdir(stagingDir, { recursive: true, mode: 0o700 });
     const files = new Set<DatabaseSuffix>();
-    const mainTarget = await restoreTarget(pending.dbPath);
     for (const suffix of DB_FILE_SUFFIXES) {
       signal.throwIfAborted();
       const source = `${mainTarget}${suffix}`;
