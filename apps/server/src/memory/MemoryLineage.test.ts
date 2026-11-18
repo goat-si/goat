@@ -870,6 +870,9 @@ it.effect.each([
         );
       }
       yield* e.store.transact(e.store.learnHubFloor(space, at));
+      const accept = (suggestionId: M.MemoryId) =>
+        e.service.acceptSuggestion({ memorySpaceId: space, suggestionId }, Effect.void);
+      const outbox = (id: M.MemoryId) => e.sql`SELECT id FROM memory_outbox WHERE memory_id=${id}`;
       const readOriginal = Effect.gen(function* () {
         const [row] = yield* e.sql<{
           id: string;
@@ -901,42 +904,26 @@ it.effect.each([
           Effect.void,
         );
         if (!suggestion) throw new Error("Expected a pending suggestion");
-        assert.deepStrictEqual(
-          yield* e.service.acceptSuggestion(
-            { memorySpaceId: space, suggestionId: suggestion.suggestionId },
-            Effect.void,
-          ),
-          { status: "pending" },
-        );
-        const inFlight = yield* Effect.forkScoped(attempt);
-        yield* Deferred.await(entered);
-        const rows =
-          yield* e.sql`SELECT id FROM memory_outbox WHERE memory_id=${suggestion.suggestionId}`;
-        yield* Deferred.succeed(released, undefined);
-        assert.propertyVal(yield* Fiber.join(inFlight), "code", "hub_unavailable");
-        assert.lengthOf(rows, 1);
-      } else if (existing) {
+        assert.deepStrictEqual(yield* accept(suggestion.suggestionId), { status: "pending" });
+      }
+      if (existing) {
         const inFlight = yield* Effect.forkScoped(attempt);
         yield* Deferred.await(entered);
         const { op } = yield* readOriginal;
-        const address = { memorySpaceId: space, suggestionId: op.memoryId };
-        assert.deepStrictEqual(yield* e.service.acceptSuggestion(address, Effect.void), {
-          status: "pending",
-        });
-        const rows = yield* e.sql`SELECT id FROM memory_outbox WHERE memory_id=${op.memoryId}`;
+        if (!acceptFirst) assert.deepStrictEqual(yield* accept(op.memoryId), { status: "pending" });
+        const rows = yield* outbox(op.memoryId);
         yield* Deferred.succeed(released, undefined);
         assert.propertyVal(yield* Fiber.join(inFlight), "code", "hub_unavailable");
         assert.lengthOf(rows, 1);
       } else assert.propertyVal(yield* attempt, "code", "hub_unavailable");
       const { workId, op } = yield* readOriginal;
-      const address = { memorySpaceId: space, suggestionId: op.memoryId };
       const waiting = yield* e.service.listSuggestions({ memorySpaceId: space }, Effect.void);
       assert.lengthOf(waiting, 1);
       assert.include(waiting[0], { suggestionId: op.memoryId, state: "accepting" });
-      assert.deepStrictEqual(yield* e.service.acceptSuggestion(address, Effect.void), {
+      assert.deepStrictEqual(yield* accept(op.memoryId), {
         status: "pending",
       });
-      assert.lengthOf(yield* e.sql`SELECT id FROM memory_outbox WHERE memory_id=${op.memoryId}`, 1);
+      assert.lengthOf(yield* outbox(op.memoryId), 1);
       const receipt = yield* admit(op);
       yield* e.service.settleHubAcknowledgement({
         memorySpaceId: space,
@@ -951,6 +938,39 @@ it.effect.each([
       if (scenario === "lost ACK" || acceptFirst) {
         assert.propertyVal(receipt, "outcome", "accepted");
         assert.isEmpty(remaining);
+        if (acceptFirst) {
+          assert.isUndefined((yield* e.store.loadAggregate(space, op.memoryId)).identity);
+          submit = Effect.void;
+          const retried = yield* e.service
+            .remember(request, Effect.void, thread)
+            .pipe(Effect.result);
+          assert.lengthOf(yield* outbox(op.memoryId), 1);
+          if (retried._tag !== "Success") throw new Error("Expected the acknowledged acceptance");
+          assert.include(retried.success.receipt, {
+            operationId: op.operationId,
+            outcome: "accepted",
+            pendingSync: false,
+          });
+          const entry = {
+            kind: "operation" as const,
+            operation: op,
+            receipt,
+            hubSequence: receipt.hubSequence!,
+          };
+          const settled = yield* e.store.transact(
+            e.service.settleHubEntryTx({
+              memorySpaceId: space,
+              hubEnvironmentId: hubId,
+              localEnvironmentId: memberId,
+              entry,
+            }),
+          );
+          assert.isTrue(settled.incorporated);
+          assert.equal(
+            (yield* e.store.loadAggregate(space, op.memoryId)).heads[0],
+            op.revision.revisionId,
+          );
+        }
         assert.lengthOf(
           yield* hub.sql`SELECT 1 FROM memory_hub_operations WHERE operation_id=${op.operationId}`,
           1,
@@ -962,7 +982,7 @@ it.effect.each([
       assert.include(remaining[0], { state: "pending", reason: "hub_upgrade_required" });
       yield* hub.store.transact(hub.store.learnHubFloor(space, at));
       for (let attempt = 0; attempt < 2; attempt++)
-        assert.deepStrictEqual(yield* e.service.acceptSuggestion(address, Effect.void), {
+        assert.deepStrictEqual(yield* accept(op.memoryId), {
           status: "pending",
         });
       const attempts = yield* e.sql<{
