@@ -330,6 +330,14 @@ describe("PiAdapterV2", () => {
     layerTest,
   });
 
+  // Session release interrupts open tool calls, such as a worktree handoff's, only with this flag.
+  it.effect("declares that its tool calls end with its process", () =>
+    Effect.gen(function* () {
+      const { runtime } = yield* openRuntime(yield* makeFakePi);
+      assert.isTrue(runtime.backgroundTasksEndWithProcess);
+    }).pipe(Effect.scoped, Effect.provide(layerTest)),
+  );
+
   it.effect("keeps native image bytes and the saved path in the prompt", () =>
     Effect.gen(function* () {
       const host = yield* ProviderHost.ProviderHost;
