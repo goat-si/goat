@@ -201,6 +201,7 @@ const decodeUpsert = argumentsOf("memory_upsert", M.MemoryUpsertInput);
 const decodeRemember = argumentsOf("goat_memory_remember", M.MemoryRememberInput);
 const decodeForget = argumentsOf("memory_forget", M.McpMemoryForgetInput);
 const decodeExplicitForget = argumentsOf("memory_forget", M.MemoryForgetInput);
+const decodeSuggestions = argumentsOf("memory.suggestions", M.MemorySuggestionsInput);
 const decodeRevertResolution = argumentsOf(
   "memory_revert_resolution",
   M.MemoryRevertResolutionInput,
@@ -335,6 +336,15 @@ const handlers = {
           Effect.flatMap((stored) => receipt(stored.receipt)),
         );
     }).pipe(Effect.catch(memoryFailure("goat_memory_remember"))),
+  ),
+  goat_memory_suggestions: McpToolAccess.reads((input) =>
+    Effect.gen(function* () {
+      const service = yield* MemoryService.MemoryService;
+      return yield* service.suggestions.listMetadata(
+        yield* decodeSuggestions(yield* withCurrentSpace(input)),
+        yield* invocationPermit("read"),
+      );
+    }).pipe(Effect.catch(memoryFailure("goat_memory_suggestions"))),
   ),
   memory_forget: McpToolAccess.destructive(
     McpToolAccess.writesWithCapability((input) =>

@@ -201,6 +201,22 @@ export const memoryEntries = {
       openWorldHint: false,
     },
   }),
+  "memory.suggestions": entry({
+    resource: "memory",
+    verb: "suggestions",
+    name: "goat_memory_suggestions",
+    toolkit: "memory",
+    summary: "List pending memory save suggestions.",
+    description:
+      "List metadata for pending memory save suggestions. A person can review the text in Settings → Memory.",
+    guide: "Needs memory:read. Omit memorySpaceId to use this server's current memory space.",
+    effect: "read",
+    hostRoutable: false,
+    requires: "either",
+    dryRun: "unsupported",
+    humanSteps: [],
+    annotations: { idempotentHint: true, openWorldHint: false },
+  }),
   "memory.forget": entry({
     resource: "memory",
     verb: "forget",

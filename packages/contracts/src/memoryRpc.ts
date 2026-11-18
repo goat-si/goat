@@ -4,6 +4,7 @@ import * as RpcGroup from "effect/rpc/RpcGroup";
 
 import { EnvironmentAuthorizationError } from "./auth.ts";
 import * as Memory from "./memory.ts";
+import * as Suggestions from "./memorySuggestions.ts";
 import * as SiteNotes from "./siteNotes.ts";
 
 export const MEMORY_WS_METHODS = {
@@ -26,6 +27,9 @@ export const MEMORY_WS_METHODS = {
   memoryOwnerSourceReadPolicyUpdate: "memory.ownerSourceReadPolicy.update",
   memoryUpsert: "memory.upsert",
   memoryForget: "memory.forget",
+  memorySuggestionsList: "memory.suggestions.list",
+  memorySuggestionsAccept: "memory.suggestions.accept",
+  memorySuggestionsDismiss: "memory.suggestions.dismiss",
   memoryRevertResolution: "memory.revertResolution",
   memoryReadSource: "memory.readSource",
   memoryHubSettingsGet: "memory.hubSettings.get",
@@ -114,6 +118,21 @@ export const WsMemoryUpsertRpc = Rpc.make(MEMORY_WS_METHODS.memoryUpsert, {
   success: Memory.MemoryMutationReceipt,
   error: MemoryRpcErrors,
 });
+const WsMemorySuggestionsListRpc = Rpc.make(MEMORY_WS_METHODS.memorySuggestionsList, {
+  payload: Suggestions.MemorySuggestionsInput,
+  success: Suggestions.MemorySuggestionList,
+  error: MemoryRpcErrors,
+});
+const WsMemorySuggestionsAcceptRpc = Rpc.make(MEMORY_WS_METHODS.memorySuggestionsAccept, {
+  payload: Suggestions.MemorySuggestionActionInput,
+  success: Suggestions.MemorySuggestionAcceptResult,
+  error: MemoryRpcErrors,
+});
+const WsMemorySuggestionsDismissRpc = Rpc.make(MEMORY_WS_METHODS.memorySuggestionsDismiss, {
+  payload: Suggestions.MemorySuggestionActionInput,
+  success: Suggestions.MemorySuggestionDismissResult,
+  error: MemoryRpcErrors,
+});
 export const WsMemoryForgetRpc = Rpc.make(MEMORY_WS_METHODS.memoryForget, {
   payload: Memory.MemoryForgetInput,
   success: Memory.MemoryMutationReceipt,
@@ -195,6 +214,9 @@ export const MemoryCoreRpcs = RpcGroup.make(
   WsMemoryHubDiagnosticsRpc,
   WsMemoryUpsertRpc,
   WsMemoryForgetRpc,
+  WsMemorySuggestionsListRpc,
+  WsMemorySuggestionsAcceptRpc,
+  WsMemorySuggestionsDismissRpc,
   WsMemoryRevertResolutionRpc,
   WsMemoryReadSourceRpc,
   WsMemoryHubSettingsGetRpc,

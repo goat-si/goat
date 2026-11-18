@@ -800,14 +800,8 @@ it.effect("conversation filters apply before paging and bind cursors to both ori
     const search = { ...page, query: "synthetic", mode: "substring" as const };
     const firstList = yield* service.list(list, Effect.void);
     const firstSearch = yield* service.search(search, Effect.void);
-    assert.deepStrictEqual(
-      firstList.items.map((item) => item.memoryId),
-      [savedIds[1]],
-    );
-    assert.deepStrictEqual(
-      firstSearch.items.map((item) => item.memoryId),
-      [savedIds[1]],
-    );
+    expect(firstList.items.map((item) => item.memoryId)).toEqual([savedIds[1]]);
+    expect(firstSearch.items.map((item) => item.memoryId)).toEqual([savedIds[1]]);
     expect(firstList.nextCursor).not.toBeNull();
     expect(firstSearch.nextCursor).not.toBeNull();
     const nextList = { ...list, cursor: firstList.nextCursor! };
@@ -852,5 +846,93 @@ it.effect("refused new saves are kept once and a forget clears the space's sugge
     expect(yield* sql`SELECT id FROM memory_save_suggestions WHERE space=${Fixture.space}`).toEqual(
       [],
     );
+  }).pipe(Effect.provide(Fixture.layer)),
+);
+
+it.effect.each([true, false])(
+  "accepting a suggestion with complete lineage: %s preserves its known dependencies",
+  (complete) =>
+    Effect.gen(function* () {
+      yield* rememberSetup;
+      const service = yield* Service.MemoryService;
+      const sql = yield* SqlClient.SqlClient;
+      const sources = yield* Effect.forEach(
+        Array.from({ length: 101 }, (_, n) => 40500 + n),
+        (n) => seed(n),
+      );
+      const known = sources.map(({ revision }) => revision);
+      yield* appendLineage(ref(), Fixture.space, known);
+      if (!complete)
+        yield* sql`UPDATE memory_thread_lineages SET state='overflow' WHERE thread_id=${ref().threadId}`;
+      const text = "synthetic suggested wording";
+      expect((yield* remember(text)).body).toMatchObject({
+        code: complete ? "hub_upgrade_required" : "thread_lineage_incomplete",
+      });
+      const request = { memorySpaceId: Fixture.space };
+      const [suggestion] = yield* service.suggestions.list(request, Effect.void);
+      expect(suggestion).toMatchObject({ text, lineageComplete: complete, state: "pending" });
+      if (!suggestion) throw new Error("Expected a pending suggestion");
+      const metadata = yield* Fixture.call("goat_memory_suggestions", {}, caller());
+      expect(metadata.body).toEqual([
+        {
+          suggestionId: suggestion.suggestionId,
+          origin: ref(),
+          scope: { kind: "user" },
+          lineageComplete: complete,
+          expiresAt: suggestion.expiresAt,
+          reason: suggestion.reason,
+          state: "pending",
+        },
+      ]);
+      const accept = { ...request, suggestionId: suggestion.suggestionId };
+      expect(yield* service.suggestions.accept(accept, Effect.void)).toEqual({
+        status: "refused",
+        reason: "hub_upgrade_required",
+      });
+      yield* sql`INSERT INTO memory_space_features VALUES (${Fixture.space},1000,0)`;
+      const result = yield* service.suggestions.accept(accept, Effect.void);
+      expect(result).toEqual({ status: "pending" });
+      expect(yield* service.suggestions.accept(accept, Effect.void)).toEqual(result);
+      const saved = yield* service.read(
+        { ...request, memoryId: suggestion.suggestionId, includeMarks: true },
+        Effect.void,
+      );
+      expect(saved).toMatchObject({
+        status: "active",
+        payload: { text, derivedFromMemoryRevisions: known },
+        marks: complete
+          ? { originThreadId: ref().threadId }
+          : { provenance: "unverified", originThreadId: ref().threadId },
+      });
+      if (complete) expect(saved.marks?.provenance).toBeUndefined();
+      const first = sources[0];
+      if (!first) throw new Error("Expected a source memory");
+      yield* service.forget({ ...request, memoryId: first.input.memoryId }, Effect.void);
+      expect(yield* service.suggestions.list(request, Effect.void)).toEqual([]);
+      expect(yield* service.suggestions.accept(accept, Effect.void)).toEqual({
+        status: "refused",
+        reason: "source_invalidated",
+      });
+    }).pipe(Effect.provide(Fixture.layer)),
+);
+
+it.effect("dismiss removes a suggestion and refusals with secrets leave no suggestion", () =>
+  Effect.gen(function* () {
+    yield* prepareRefusedLineage;
+    const service = yield* Service.MemoryService;
+    const request = { memorySpaceId: Fixture.space };
+    yield* remember("synthetic suggestion to dismiss");
+    yield* remember("-----BEGIN PRIVATE KEY-----");
+    const rows = yield* service.suggestions.list(request, Effect.void);
+    expect(rows.map((row) => row.text)).toEqual(["synthetic suggestion to dismiss"]);
+    const [row] = rows;
+    if (!row) throw new Error("Expected a suggestion to dismiss");
+    expect(
+      yield* service.suggestions.dismiss(
+        { ...request, suggestionId: row.suggestionId },
+        Effect.void,
+      ),
+    ).toEqual({ ok: true });
+    expect(yield* service.suggestions.list(request, Effect.void)).toEqual([]);
   }).pipe(Effect.provide(Fixture.layer)),
 );

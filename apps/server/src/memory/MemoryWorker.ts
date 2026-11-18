@@ -1,3 +1,4 @@
+import { expireMemorySuggestions } from "./store/SaveSuggestions.ts";
 import * as M from "@goat/contracts";
 import { makeDrainableWorker, type DrainableWorker } from "@goat/shared/DrainableWorker";
 import * as NodeSqliteClient from "@goat/shared/nodeSqliteClient";
@@ -891,6 +892,7 @@ const make = Effect.gen(function* () {
       yield* AutomationHold.awaitRelease;
       yield* sweepStage("catch-up", catchUp());
       yield* sweepStage("deferred", deferred());
+      yield* sweepStage("due-work", expireMemorySuggestions(sql));
       const now = yield* Clock.currentTimeMillis;
       const snapshot = yield* sweepStage("due-work", settings.getSettings);
       const enabled = snapshot.memoryEnabled;

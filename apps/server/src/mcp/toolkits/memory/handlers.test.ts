@@ -29,7 +29,7 @@ const decodeHistory = Schema.decodeUnknownEffect(M.MemoryHistoryPage);
 const encodeError = Schema.encodeSync(M.MemoryRpcError);
 const decodeRefusal = Schema.decodeUnknownEffect(M.OrchestratorMcpFailure);
 
-it("registers all nine core tools", () => {
+it("registers all core memory tools", () => {
   expect(Object.keys(MemoryToolkit.tools).sort()).toEqual([...M.MEMORY_MCP_TOOLS].sort());
   for (const tool of Object.values(MemoryToolkit.tools))
     expect(Tool.getJsonSchema(tool).type).toBe("object");
@@ -195,7 +195,7 @@ it.effect.each(M.MEMORY_MCP_TOOLS.filter((name) => name !== "memory_read_source"
               ? { memorySpaceId: Fixture.space, includeQuarantined: false }
               : name === "memory_search" || name === "memory_recall"
                 ? { memorySpaceId: Fixture.space, query: "synthetic" }
-                : name === "memory_sync_status"
+                : name === "memory_sync_status" || name === "goat_memory_suggestions"
                   ? {}
                   : name === "memory_forget"
                     ? {
@@ -888,11 +888,27 @@ it.effect("remember saves text and a scope as a fact this conversation backs, on
 it.effect("forgets by ID from a callerless session and keeps the original receipt on retry", () =>
   Effect.gen(function* () {
     const service = yield* MemoryService.MemoryService;
-    yield* service.upsert(Fixture.upsert(), Effect.void);
+    const store = yield* Store.MemoryStore;
+    const created = yield* service.upsert(Fixture.upsert(), Effect.void);
+    const firstRevision = created.receipt.revisionId;
+    if (!firstRevision) throw new Error("Expected the original revision");
+    const edited = yield* service.upsert(
+      {
+        ...Fixture.upsert(4),
+        expectedHeads: [firstRevision],
+        payload: { text: "edited synthetic memory", evidence: [], derivedFromMemoryRevisions: [] },
+      },
+      Effect.void,
+    );
+    expect(edited.receipt.revisionId).not.toBe(firstRevision);
     const input = { memoryId: Fixture.memoryId };
     const first = yield* Fixture.call("memory_forget", input);
     expect(first.body).toMatchObject({ outcome: "deleted", memoryId: Fixture.memoryId });
     const original = yield* decodeReceipt(first.body);
+    expect(yield* store.readOperation(Fixture.space, original.operationId)).toMatchObject({
+      kind: "forget",
+      expectedHeads: [edited.receipt.revisionId],
+    });
     expect((yield* Fixture.call("memory_forget", input)).body).toMatchObject({
       outcome: "noop",
       operationId: original.operationId,

@@ -232,6 +232,7 @@ it.layer(Layer.mergeAll(NodeServices.layer, NodeCrypto.layer))("ServerEnvironmen
         retainedLocalSpace: true,
         provenanceProjection: true,
         originFilter: true,
+        saveSuggestions: true,
         generationHold: true,
         hubDiagnostics: true,
         siteNotes: true,
