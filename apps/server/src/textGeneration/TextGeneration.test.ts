@@ -8,7 +8,11 @@ import { describe, expect } from "vite-plus/test";
 import { ProviderInstanceId } from "@goat/contracts";
 import * as M from "@goat/contracts";
 import { createModelSelection } from "@goat/shared/model";
-import { resolveTextGenerationRoute } from "@goat/shared/serverSettings";
+import {
+  resolveMemoryModelSelection,
+  resolveReviewGuideModelSelection,
+  resolveTextGenerationRoute,
+} from "@goat/shared/serverSettings";
 import * as TestClock from "effect/testing/TestClock";
 
 import type { ProviderInstance } from "@goat/provider-core/server/driver";
@@ -331,7 +335,7 @@ const OMO = ProviderInstanceId.make("omo");
 
 const capableSelectionHarness = (
   snapshots: ReadonlyArray<M.ServerProvider>,
-  options: { readonly awaitingFirstCheck?: true } = {},
+  options: { readonly awaitingFirstCheck?: ProviderInstanceId } = {},
 ) => {
   const ran: Array<M.ModelSelection> = [];
   const instances = snapshots.map((snapshot) => ({
@@ -348,7 +352,9 @@ const capableSelectionHarness = (
     driverKind: snapshot.driver,
     snapshot: {
       getSnapshot: Effect.succeed(snapshot),
-      ...(options.awaitingFirstCheck ? { isAwaitingFirstCheck: Effect.succeed(true) } : {}),
+      ...(options.awaitingFirstCheck === snapshot.instanceId
+        ? { isAwaitingFirstCheck: Effect.succeed(true) }
+        : {}),
     } as unknown as ProviderInstance["snapshot"],
   }));
   const generation = TextGeneration.make.pipe(
@@ -580,11 +586,11 @@ it.effect.each([
     expected: claudeSelection,
   },
   {
-    dimension: "the saved provider has no snapshot or alternative",
-    providers: [readyCodex],
-    awaitingFirstCheck: true as const,
+    dimension: "the saved provider is cached as ready while awaiting its first check",
+    providers: [{ ...readyCodex, awaitingFirstCheck: true as const }, readyClaude()],
+    awaitingFirstCheck: CODEX,
     projectId: null,
-    expected: null,
+    expected: claudeSelection,
   },
 ])("branch generation agrees with the Settings route when $dimension", (row) =>
   Effect.gen(function* () {
@@ -608,7 +614,7 @@ it.effect.each([
     const settingsRoute = resolveTextGenerationRoute(
       settings,
       settings.textGenerationModelSelection,
-      row.awaitingFirstCheck ? [] : row.providers,
+      row.providers,
       row.projectId,
       now,
     );
@@ -621,6 +627,12 @@ it.effect.each([
       dispatched: row.expected === null ? [] : [row.expected],
       error: row.expected === null ? "route_unavailable" : null,
     });
+    if (row.awaitingFirstCheck !== undefined) {
+      expect(resolveMemoryModelSelection(settings, row.providers, now)).toEqual(row.expected);
+      expect(resolveReviewGuideModelSelection(settings, row.providers, null, now)).toEqual(
+        row.expected,
+      );
+    }
   }),
 );
 

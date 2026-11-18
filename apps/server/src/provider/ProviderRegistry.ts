@@ -37,6 +37,10 @@ import {
 export { upsertProviderWorkspaceSnapshot } from "./ProviderWorkspaceSnapshots.ts";
 import { makeModelCatalogRefresh } from "./ModelCatalogRefresh.ts";
 import { applyProviderCompatibility } from "./providerCompatibility.ts";
+import {
+  readProviderGenerationSnapshot,
+  streamProviderGenerationSnapshots,
+} from "./providerGenerationSnapshot.ts";
 import * as ServerConfig from "../config.ts";
 import * as ProviderInstanceRegistry from "./ProviderInstanceRegistry.ts";
 import {
@@ -177,9 +181,9 @@ const snapshotInstanceKey = (provider: ServerProvider): ProviderInstanceId => {
 const buildSnapshotSource = (instance: ProviderInstance): ProviderSnapshotSource => ({
   instanceId: instance.instanceId,
   driverKind: instance.driverKind,
-  getSnapshot: instance.snapshot.getSnapshot,
+  getSnapshot: readProviderGenerationSnapshot(instance),
   refresh: instance.snapshot.refresh,
-  streamChanges: instance.snapshot.streamChanges,
+  streamChanges: streamProviderGenerationSnapshots(instance),
 });
 
 export { mergeProviderSnapshot };
@@ -247,6 +251,7 @@ export const layer = Layer.effect(
     const persistProvider = Effect.fn("ProviderRegistry.persistProvider")(function* (
       provider: ServerProvider,
     ) {
+      if (provider.awaitingFirstCheck) return;
       const key = snapshotInstanceKey(provider);
       const filePath = yield* resolveProviderStatusCachePath({
         cacheDir: config.providerStatusCacheDir,

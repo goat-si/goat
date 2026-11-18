@@ -253,6 +253,7 @@ export function isTextGenerationEligible(
   }
   return (
     provider !== undefined &&
+    provider.awaitingFirstCheck !== true &&
     resolveProjectProviderInstanceEnabled(settings, scope.projectId, selection.instanceId) &&
     provider.enabled &&
     provider.installed &&

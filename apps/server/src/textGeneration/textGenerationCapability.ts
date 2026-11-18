@@ -8,9 +8,9 @@ import {
   type ServerProvider,
   type ServerSettings,
 } from "@goat/contracts";
-import type { ProviderInstance } from "@goat/provider-core/server/driver";
 import { resolveTextGenerationRoute } from "@goat/shared/serverSettings";
 
+import { readProviderGenerationSnapshot } from "../provider/providerGenerationSnapshot.ts";
 import type * as ProviderInstanceRegistry from "../provider/ProviderInstanceRegistry.ts";
 
 /** The project the text is for; a fallback skips providers that project turned off. */
@@ -18,15 +18,6 @@ export const TextGenerationProject = Context.Reference<ProjectId | null>(
   "goat/textGeneration/TextGenerationProject",
   { defaultValue: () => null },
 );
-
-const checkedSnapshot = Effect.fn("TextGeneration.checkedSnapshot")(function* (
-  instance: ProviderInstance,
-) {
-  if (instance.snapshot.isAwaitingFirstCheck !== undefined) {
-    if (yield* instance.snapshot.isAwaitingFirstCheck) return undefined;
-  }
-  return yield* instance.snapshot.getSnapshot;
-});
 
 const modelKey = (selection: ModelSelection) => `${selection.instanceId}/${selection.model}`;
 
@@ -55,16 +46,14 @@ export const makeTextGenerationCapableSelection = Effect.fn("TextGeneration.make
     ) {
       const instance = yield* registry.getInstance(selection.instanceId);
       const providers: Array<ServerProvider> = [];
-      const primary = instance === undefined ? undefined : yield* checkedSnapshot(instance);
-      if (primary !== undefined) providers.push(primary);
+      if (instance !== undefined) providers.push(yield* readProviderGenerationSnapshot(instance));
       const projectId = yield* TextGenerationProject;
       const now = DateTime.toEpochMillis(yield* DateTime.now);
       let route = resolveTextGenerationRoute(settings, selection, providers, projectId, now);
       if (route.reason === "no_fallback") {
         for (const other of yield* registry.listInstances) {
           if (other.instanceId === selection.instanceId) continue;
-          const snapshot = yield* checkedSnapshot(other);
-          if (snapshot !== undefined) providers.push(snapshot);
+          providers.push(yield* readProviderGenerationSnapshot(other));
         }
         route = resolveTextGenerationRoute(settings, selection, providers, projectId, now);
       }

@@ -963,6 +963,7 @@ it.layer(
                 ? retainedModels
                 : [customModel, ...cachedProvider.models];
               assert.deepStrictEqual((yield* registry.getProviders)[0]?.models, expectedModels);
+              expect((yield* registry.getProviders)[0]).toMatchObject({ awaitingFirstCheck: true });
               if (!restarted) {
                 const probeFields = ({ status, installed, auth, version }: ServerProvider) => ({
                   status,
@@ -970,7 +971,6 @@ it.layer(
                   auth,
                   version,
                 });
-                // Boot reads the probe state from the cache, not the pending snapshot, and never persists the pending one.
                 assert.deepStrictEqual(
                   probeFields((yield* registry.getProviders)[0]!),
                   probeFields(cachedProvider),
@@ -980,8 +980,8 @@ it.layer(
                   probeFields(cachedProvider),
                 );
               }
-
               yield* registry.refreshInstance(instance.instanceId);
+              expect((yield* registry.getProviders)[0]).not.toHaveProperty("awaitingFirstCheck");
               assert.deepStrictEqual(
                 (yield* readProviderStatusCache(filePath))?.models,
                 restarted ? retainedModels : refreshedProvider.models,

@@ -296,6 +296,7 @@ export const ServerProvider = Schema.Struct({
   // server. Null means unknown; absence keeps legacy snapshots on `version`.
   installedVersion: Schema.optionalKey(Schema.NullOr(TrimmedNonEmptyString)),
   status: ServerProviderState,
+  awaitingFirstCheck: Schema.optionalKey(Schema.Literal(true)),
   auth: ServerProviderAuth,
   checkedAt: IsoDateTime,
   message: Schema.optional(TrimmedNonEmptyString),
