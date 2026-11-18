@@ -1347,10 +1347,17 @@ it.layer(layerTest)("OrchestrationV2LayerLive", (it) => {
         assert.equal(native.runtimeRequests[0]?.responseCapability.type, "not_resumable");
         yield* recovery.reconcile("shutdown");
         yield* recovery.reconcile("startup");
-        assert.deepEqual(
-          (yield* orchestrator.getThreadProjection(threadId)).runtimeRequests,
-          recovered.runtimeRequests,
-        );
+        const rerecovered = yield* orchestrator.getThreadProjection(threadId);
+        assert.deepEqual(rerecovered.runtimeRequests, recovered.runtimeRequests);
+        const notices = rerecovered.turnItems.filter((item) => item.type === "system_notice");
+        assert.lengthOf(notices, scope === "run" ? 1 : 0);
+        if (scope === "run") {
+          assert.equal(
+            notices[0]?.title,
+            trigger === "startup" ? "Server restarted" : "Server shut down",
+          );
+          assert.equal(notices[0]?.runId, runId);
+        }
         yield* orchestrator.dispatch({
           type: "runtime-request.respond",
           commandId: CommandId.make(`recovery-answer-${trigger}-${scope}`),
