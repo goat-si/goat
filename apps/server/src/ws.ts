@@ -136,7 +136,6 @@ import { withWebSocketIdleTimeout } from "./wsIdleTimeout.ts";
 import * as AcpRegistryRuntimeCoordinator from "@goat/provider-acp-registry/server/AcpRegistryRuntimeCoordinator";
 import * as AcpRegistrySupport from "@goat/provider-acp-registry/server/AcpRegistrySupport";
 import * as RelayClient from "@goat/shared/relayClient";
-import { isTelemetryIdHash } from "@goat/shared/telemetryId";
 import { withUsageLimitsCommands } from "@goat/shared/usageLimits";
 import * as SqlClient from "effect/sql/SqlClient";
 import { issueAssetUrl } from "./assets/AssetAccess.ts";
@@ -307,7 +306,7 @@ import { storageRpcHandlers } from "./storage/storageRpc.ts";
 import { terminalWorkspaceRpcHandlers } from "./terminal/terminalWorkspaceRpc.ts";
 import { heldTurnRpcHandlers } from "./orchestration-v2/goat/HeldTurnRpc.ts";
 import * as AnalyticsService from "./telemetry/AnalyticsService.ts";
-import type { TelemetryOwner } from "./telemetry/Identify.ts";
+import { readClientOwners } from "./wsClientOwners.ts";
 import * as TerminalManager from "./terminal/Manager.ts";
 import { terminalOutputStream, withTerminalOutputWindow } from "./terminal/OutputProtocol.ts";
 import { terminalMetadataStream } from "./terminalMetadataStream.ts";
@@ -551,28 +550,6 @@ function readClientAnalyticsProps(request: HttpServerRequest.HttpServerRequest) 
     ...(hasDeviceModel ? { deviceModel, clientDeviceModel: deviceModel } : {}),
     ...(isClientConnectionMethod(connectionMethod) ? { connectionMethod } : {}),
   };
-}
-
-/**
- * Owners a connecting client reports: its hashed GOAT Connect account and its
- * hashed device id. Only hashes are accepted, so a raw id never reaches analytics.
- */
-function readClientOwners(
-  request: HttpServerRequest.HttpServerRequest,
-): ReadonlyArray<TelemetryOwner> {
-  const url = requestUrl(request);
-  if (Option.isNone(url)) {
-    return [];
-  }
-  const params = url.value.searchParams;
-  return (
-    [
-      ["connect", params.get("clientOwner")],
-      ["device", params.get("clientDevice")],
-    ] as const
-  ).flatMap(([source, ownerId]) =>
-    ownerId !== null && isTelemetryIdHash(ownerId) ? [{ source, ownerId }] : [],
-  );
 }
 
 const canReplayPersistedRange = Effect.fnUntraced(function* (

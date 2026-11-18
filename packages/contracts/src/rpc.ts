@@ -23,12 +23,11 @@ import {
   CuaHostStatus,
 } from "./cua.ts";
 import {
-  PreviewSessionControlInput,
-  PreviewSessionControlResult,
-  PreviewSessionFrameEvent,
-  PreviewSessionFramesInput,
-  PreviewSessionsSnapshot,
-} from "./previewSession.ts";
+  PREVIEW_SESSION_METHODS,
+  WsPreviewSessionsSubscribeRpc,
+  WsPreviewSessionsControlRpc,
+  WsPreviewSessionsFramesRpc,
+} from "./rpcPreviewSessions.ts";
 import {
   SshHostAddInput,
   SshPreflightInput,
@@ -652,9 +651,7 @@ export const WS_METHODS = {
   computerUseRemoveAllowedApp: "computerUse.removeAllowedApp",
   computerUseResume: "computerUse.resume",
   computerUseApps: "computerUse.apps",
-  previewSessionsSubscribe: "previewSessions.subscribe",
-  previewSessionsControl: "previewSessions.control",
-  previewSessionsFrames: "previewSessions.frames",
+  ...PREVIEW_SESSION_METHODS,
   serverGetConfig: "server.getConfig",
   serverRefreshProviders: "server.refreshProviders",
   serverUpdateProvider: "server.updateProvider",
@@ -832,28 +829,6 @@ const WsComputerUseResumeRpc = Rpc.make(WS_METHODS.computerUseResume, {
   payload: Schema.Struct({}),
   success: Schema.Struct({}),
   error: EnvironmentAuthorizationError,
-});
-
-/** Every browser and desktop preview session on this host, again whenever one changes. */
-const WsPreviewSessionsSubscribeRpc = Rpc.make(WS_METHODS.previewSessionsSubscribe, {
-  payload: Schema.Struct({}),
-  success: PreviewSessionsSnapshot,
-  error: EnvironmentAuthorizationError,
-  stream: true,
-});
-
-/** A person's takeover, hand back, stop or kill switch on a preview session. */
-const WsPreviewSessionsControlRpc = Rpc.make(WS_METHODS.previewSessionsControl, {
-  payload: PreviewSessionControlInput,
-  success: PreviewSessionControlResult,
-  error: Schema.Union([EnvironmentAuthorizationError, HandoffError]),
-});
-
-const WsPreviewSessionsFramesRpc = Rpc.make(WS_METHODS.previewSessionsFrames, {
-  payload: PreviewSessionFramesInput,
-  success: PreviewSessionFrameEvent,
-  error: EnvironmentAuthorizationError,
-  stream: true,
 });
 
 const WsServerGetConfigRpc = Rpc.make(WS_METHODS.serverGetConfig, {
