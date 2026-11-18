@@ -78,4 +78,39 @@ it.layer(layer)("pull request sweep cursor", (it) => {
       assert.equal(restarted.after, watchKey("watch-33"));
     }),
   );
+
+  it.effect("keeps a linked cursor write and its staging file in its own GOAT home", () =>
+    Effect.gen(function* () {
+      const fs = yield* FileSystem.FileSystem;
+      const path = yield* Path.Path;
+      const { stateDir } = yield* ServerConfig.ServerConfig;
+      const otherHome = yield* fs.makeTempDirectoryScoped({ prefix: "goat-watch-other-home-" });
+      const { stateDir: otherStateDir } = yield* ServerConfig.deriveServerPaths(
+        otherHome,
+        undefined,
+      );
+      const filePath = path.join(stateDir, "pull-request-watch-cursor");
+      const otherFilePath = path.join(otherStateDir, "pull-request-watch-cursor");
+      const stagingPath = `${filePath}.staging`;
+      const otherStagingPath = `${otherFilePath}.staging`;
+      yield* fs.makeDirectory(otherStateDir);
+      yield* fs.writeFileString(otherFilePath, watchKey("other-saved"));
+      yield* fs.writeFileString(otherStagingPath, watchKey("other-staged"));
+      yield* fs.symlink(otherFilePath, filePath);
+      yield* fs.writeFileString(stagingPath, watchKey("local-stale"));
+
+      const cursor = yield* makeWatchSweepCursor;
+      yield* cursor.complete(watchKey("local-next"));
+
+      assert.equal(yield* fs.readFileString(otherFilePath), watchKey("other-saved"));
+      assert.equal(yield* fs.readFileString(otherStagingPath), watchKey("other-staged"));
+      assert.isFalse(yield* fs.exists(stagingPath));
+      const restarted = yield* makeWatchSweepCursor;
+      assert.equal(restarted.after, watchKey("local-next"));
+    }).pipe(
+      Effect.provide(
+        ServerConfig.layerTest(process.cwd(), { prefix: "goat-watch-linked-cursor-" }),
+      ),
+    ),
+  );
 });

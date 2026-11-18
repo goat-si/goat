@@ -114,6 +114,7 @@ export const makeWatchSweepCursor = Effect.gen(function* () {
       filePath,
       contents: next ?? "",
       reuseStagingFile: true,
+      replaceSymlink: true,
     }).pipe(
       Effect.provideService(FileSystem.FileSystem, fs),
       Effect.provideService(Path.Path, path),
