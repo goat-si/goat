@@ -931,6 +931,7 @@ export const OrchestrationV2Subagent = Schema.Struct({
   // "settled_only" (the legacy default) requires no live run; wait-mode uses the blocking tool call.
   completionWake: Schema.optional(Schema.Literals(["always", "settled_only"])),
   completionDelivery: Schema.optional(OrchestrationV2DelegatedCompletionTaskDelivery),
+  cancelledRunId: Schema.optional(RunId),
   /**
    * Set when the user promoted the child thread to a top-level thread. The task no
    * longer owns it: stops and cancellations from this thread do not reach it.
