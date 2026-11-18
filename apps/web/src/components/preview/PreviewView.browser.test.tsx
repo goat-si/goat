@@ -17,6 +17,7 @@ import { act, render } from "../../../test/render";
 import type { PreviewableServer } from "./useDiscoveredLocalServers";
 
 const mocks = vi.hoisted(() => ({
+  zoomIn: vi.fn(async () => undefined),
   navigate: vi.fn(async (_tabId: string, _url: string): Promise<void> => undefined),
   rememberPreviewUrl: vi.fn(),
   readPreparedConnection: vi.fn(() => ({ httpBaseUrl: "http://172.25.85.75:3773" })),
@@ -70,7 +71,7 @@ vi.mock(import("./previewBridge"), async (original) => ({
     hardReload: vi.fn(async () => undefined),
     openDevTools: vi.fn(async () => undefined),
     setColorScheme: vi.fn(async () => undefined),
-    zoomIn: vi.fn(async () => undefined),
+    zoomIn: mocks.zoomIn,
     zoomOut: vi.fn(async () => undefined),
     resetZoom: vi.fn(async () => undefined),
     findInPage: vi.fn(async () => undefined),
@@ -372,6 +373,29 @@ describe("PreviewView", () => {
     await userEvent.click(page.getByRole("button", { name: "Preview menu" }));
     await userEvent.click(page.getByRole("menuitem", { name: "Find in page" }));
     await expect.element(page.getByRole("searchbox", { name: "Find in page" })).toHaveFocus();
+  });
+
+  it("zooms the active browser tab when its guest forwards Zoom in", async () => {
+    setup();
+    let forward: ((action: string) => void) | undefined;
+    using stack = new DisposableStack();
+    const previous = window.desktopBridge;
+    stack.defer(() => {
+      if (previous) window.desktopBridge = previous;
+      else delete window.desktopBridge;
+    });
+    window.desktopBridge = {
+      getWindowZoomFactor: () => 1,
+      onMenuAction: (listener) => {
+        forward = listener;
+        return () => undefined;
+      },
+    } as NonNullable<typeof window.desktopBridge>;
+    await using _screen = await render(view());
+    await act(() => {
+      forward?.("preview.zoomIn");
+    });
+    expect(mocks.zoomIn).toHaveBeenCalledOnce();
   });
 
   it("activates the existing scoped browser surface and refuses closed or replaced results", async () => {

@@ -41,6 +41,9 @@ import { toastManager } from "./ui/toast";
 
 const PREVIEW_FORWARDED_LAYOUT_COMMANDS = [
   "preview.focusUrl",
+  "preview.zoomIn",
+  "preview.zoomOut",
+  "preview.resetZoom",
   "workspace.focusNext",
   "workspace.focusPrevious",
   "sidebar.toggle",

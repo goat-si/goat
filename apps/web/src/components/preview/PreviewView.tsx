@@ -64,7 +64,7 @@ import { readEnvironmentScope, useEnvironmentScope } from "~/state/session";
 import { useRightPanelStore } from "~/rightPanelStore";
 
 import { previewBridge } from "./previewBridge";
-import { subscribePreviewAction } from "./previewActionBus";
+import { desktopPreviewAction, subscribePreviewAction } from "./previewActionBus";
 import { closePreviewSession } from "./closePreviewSession";
 import { openPreviewSession } from "./openPreviewSession";
 import { showPreviewPopup } from "./showPreviewPopup";
@@ -866,8 +866,8 @@ export function PreviewView({
     if (!visible) return;
     const unsubscribeAction = subscribePreviewAction((action) => onPreviewAction(action));
     const unsubscribeMenu = window.desktopBridge?.onMenuAction((action) => {
-      if (action === "preview.find") onPreviewAction("find");
-      if (action === "preview.focusUrl") onPreviewAction("focus-url");
+      const previewAction = desktopPreviewAction(action);
+      if (previewAction) onPreviewAction(previewAction);
     });
     return () => {
       unsubscribeAction();

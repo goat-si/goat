@@ -134,6 +134,9 @@ import {
 
 const pageFirstShortcuts: ReadonlySet<PreviewForwardedShortcut["command"]> = new Set([
   "preview.find",
+  "preview.zoomIn",
+  "preview.zoomOut",
+  "preview.resetZoom",
 ]);
 const decodePageShortcut = Schema.decodeUnknownOption(
   Schema.Struct({
