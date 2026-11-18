@@ -11,12 +11,14 @@ import { readEnvironmentScope, useEnvironmentScope } from "./state/session";
 export function useNativeFileDrag(
   environmentId: EnvironmentId | null | undefined,
   resolvePath: () => string | Promise<string>,
+  enabled = true,
 ) {
   const primaryEnvironmentId = usePrimaryEnvironmentId();
   const canOperate = useEnvironmentScope(environmentId ?? null, AuthOrchestrationOperateScope);
   const startFileDrag =
     typeof window === "undefined" ? undefined : window.desktopBridge?.startFileDrag;
   if (
+    !enabled ||
     typeof startFileDrag !== "function" ||
     !isMacPlatform(navigator.platform) ||
     environmentId == null ||

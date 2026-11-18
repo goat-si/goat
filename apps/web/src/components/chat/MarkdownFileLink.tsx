@@ -29,6 +29,7 @@ import { copyFilePath } from "../../filePathCopy";
 
 interface MarkdownFileLinkProps {
   environmentId: EnvironmentId | null;
+  fileActions?: boolean;
   href: string;
   targetPath: string;
   iconPath: string;
@@ -53,6 +54,7 @@ const MARKDOWN_FILE_LINK_CLASS_NAME = "chat-markdown-file-link";
 
 export const MarkdownFileLink = memo(function MarkdownFileLink({
   environmentId,
+  fileActions = true,
   href,
   targetPath,
   iconPath,
@@ -75,6 +77,7 @@ export const MarkdownFileLink = memo(function MarkdownFileLink({
   const nativeFileDrag = useNativeFileDrag(
     environmentId,
     async () => (await resolveCopyPaths()).fullPath,
+    fileActions,
   );
   const handleOpenInEditor = () => {
     if (!onOpen) {
@@ -422,6 +425,7 @@ function areMarkdownFileLinkPropsEqual(
     previous.targetPath === next.targetPath &&
     previous.iconPath === next.iconPath &&
     previous.environmentId === next.environmentId &&
+    previous.fileActions === next.fileActions &&
     previous.workspaceRelativePath === next.workspaceRelativePath &&
     previous.panelPath === next.panelPath &&
     previous.line === next.line &&

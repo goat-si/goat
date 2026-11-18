@@ -11,7 +11,7 @@ import { AsyncResult } from "effect/reactivity";
 import { expect, it, vi } from "vite-plus/test";
 import { userEvent } from "vite-plus/test/browser";
 
-import { act, render } from "../../test/render";
+import { act, render, stubGlobal } from "../../test/render";
 import { useRightPanelStore } from "../rightPanelStore";
 
 const state = vi.hoisted(() => ({
@@ -325,6 +325,10 @@ it.each(["link-to-thread", "unlink-from-thread"])(
 
 it("offers no host actions for markdown rendered with file actions off", async () => {
   using _setup = setup();
+  using _platform = vi.spyOn(navigator, "platform", "get").mockReturnValue("MacIntel");
+  state.primaryEnvironmentId = threadRef.environmentId;
+  const startFileDrag = vi.fn().mockResolvedValue(true);
+  using _bridge = stubGlobal("desktopBridge", { startFileDrag });
   await using screen = await render(
     <ChatMarkdown
       cwd={undefined}
@@ -333,6 +337,12 @@ it("offers no host actions for markdown rendered with file actions off", async (
       text="[Readme](/work/docs/readme.md)"
     />,
   );
+  const chip = screen.container.querySelector(".chat-markdown-file-link")!;
+  await act(async () => {
+    chip.dispatchEvent(new DragEvent("dragstart", { bubbles: true, cancelable: true }));
+  });
+  expect(startFileDrag).not.toHaveBeenCalled();
+  expect(chip.getAttribute("draggable")).toBeNull();
   await userEvent.click(screen.getByRole("button", { name: "File options for readme.md" }));
   await vi.waitFor(() => expect(state.choose).toHaveBeenCalled());
   expect(offeredActions()).toEqual(["copy-full"]);
