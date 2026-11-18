@@ -22,7 +22,6 @@ import {
   appOwnedTaskResultEvents,
   threadProvenanceCases,
 } from "../../../memory/threadProvenance.testkit.ts";
-
 const caller = (name = "r5-caller") => ({
   ...Fixture.scope(),
   thread: {
@@ -454,9 +453,10 @@ const appendLineage = (
   thread: M.ScopedThreadRef,
   space: M.MemorySpaceId,
   ids: ReadonlyArray<M.MemoryRevisionId>,
+  unknown = false,
 ) =>
   Effect.gen(function* () {
-    yield* (yield* Store.MemoryStore).appendThreadLineage(thread, space, ids);
+    yield* (yield* Store.MemoryStore).appendThreadLineage(thread, space, ids, unknown);
   });
 it.effect.each([
   {
@@ -551,7 +551,6 @@ it.effect("remember with 101 sources on the old floor asks for a hub upgrade", (
     expect(yield* counts).toEqual(before);
   }).pipe(Effect.provide(Fixture.layer)),
 );
-
 const decodeSavedReceipt = Schema.decodeUnknownSync(M.MemoryMutationReceipt);
 const applyAuthoritativeSave = Effect.fn("test.applyAuthoritativeSave")(function* (
   operationId: M.MemoryOperationId,
@@ -874,28 +873,36 @@ it.effect("conversation filters apply before paging and bind cursors to both ori
   }).pipe(Effect.provide(Fixture.layer)),
 );
 
-it.effect("refused new saves are kept once and a forget clears the space's suggestions", () =>
-  Effect.gen(function* () {
-    yield* rememberSetup;
-    const sql = yield* SqlClient.SqlClient;
-    const service = yield* Service.MemoryService;
-    const source = yield* seed(39200);
-    yield* appendLineage(ref(), Fixture.space, revisions(40000, 101));
-    for (const text of ["a suggestion to keep", "a suggestion to keep"]) {
-      expect((yield* remember(text)).body).toMatchObject({ code: "hub_upgrade_required" });
-    }
-    expect(
-      yield* sql`SELECT text, lineage_complete, json_array_length(derived_json) AS sources
-        FROM memory_save_suggestions WHERE space=${Fixture.space}`,
-    ).toEqual([{ text: "a suggestion to keep", lineage_complete: 1, sources: 101 }]);
-    yield* service.forget(
-      { memorySpaceId: Fixture.space, memoryId: source.input.memoryId },
-      Effect.void,
-    );
-    expect(yield* sql`SELECT id FROM memory_save_suggestions WHERE space=${Fixture.space}`).toEqual(
-      [],
-    );
-  }).pipe(Effect.provide(Fixture.layer)),
+it.effect.each([true, false])(
+  "fresh refusals with complete lineage %s exclude forgotten text",
+  (complete) =>
+    Effect.gen(function* () {
+      yield* rememberSetup;
+      const service = yield* Service.MemoryService;
+      const sources = yield* Effect.forEach(
+        Array.from({ length: complete ? 101 : 1 }, (_, n) => 39200 + n),
+        (n) => seed(n),
+      );
+      yield* appendLineage(
+        ref(),
+        Fixture.space,
+        sources.map(({ revision }) => revision),
+        !complete,
+      );
+      const reason = complete ? "hub_upgrade_required" : "thread_lineage_incomplete";
+      const request = { memorySpaceId: Fixture.space };
+      const text = "a suggestion to keep";
+      for (let attempt = 0; attempt < 2; attempt++)
+        expect((yield* remember(text)).body).toMatchObject({ code: reason });
+      expect(yield* service.listSuggestions(request, Effect.void)).toMatchObject([
+        { text, lineageComplete: complete },
+      ]);
+      yield* service.forget({ ...request, memoryId: sources[0]!.input.memoryId }, Effect.void);
+      expect((yield* remember("fresh suggestion from the forgotten source")).body).toMatchObject({
+        code: reason,
+      });
+      expect(yield* service.listSuggestions(request, Effect.void)).toEqual([]);
+    }).pipe(Effect.provide(Fixture.layer)),
 );
 
 it.effect.each([true, false])(
