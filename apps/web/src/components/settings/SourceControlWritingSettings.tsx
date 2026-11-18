@@ -161,17 +161,11 @@ export function SourceControlWritingSettingsSection() {
   );
   const usesReviewGuideModel = settings.reviewGuideModelSelection !== null;
   const nowMinute = useNowMinute();
-  const reviewGuideSelection = resolveAppModelSelectionState(
-    {
-      ...settings,
-      textGenerationModelSelection: resolveReviewGuideModelSelection(
-        settings,
-        textGenerationProviders,
-        target?.projectId ?? null,
-        Date.parse(`${nowMinute}Z`),
-      ),
-    },
+  const reviewGuideSelection = resolveReviewGuideModelSelection(
+    settings,
     textGenerationProviders,
+    target?.projectId ?? null,
+    Date.parse(`${nowMinute}Z`),
   );
   const reviewGuideModelOptionsByInstance = getTextGenerationModelOptionsByInstance(
     settings,

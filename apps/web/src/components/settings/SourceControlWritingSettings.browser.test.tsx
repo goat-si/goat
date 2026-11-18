@@ -1,17 +1,23 @@
 import { render } from "../../../test/render";
-import { DEFAULT_UNIFIED_SETTINGS } from "@goat/contracts/settings";
+import { EnvironmentId, ProviderInstanceId, type ServerProvider } from "@goat/contracts";
+import { DEFAULT_UNIFIED_SETTINGS, type UnifiedSettings } from "@goat/contracts/settings";
+import { createModelSelection } from "@goat/shared/model";
 import { StrictMode, type ReactNode } from "react";
 import { describe, expect, it, vi } from "vite-plus/test";
 import { page, userEvent } from "vite-plus/test/browser";
 
 import "../../index.css";
+import { provider } from "../../modelSelection.testkit";
 import type { ScopedSettingsPatch } from "./scopedSettings";
 
 type WritingStyle = typeof DEFAULT_UNIFIED_SETTINGS.sourceControlWritingStyle;
 const state = vi.hoisted(() => ({
   styles: [] as WritingStyle[],
+  reviewGuideSettings: null as UnifiedSettings | null,
+  providers: [] as ServerProvider[],
   updateSettings: vi.fn<(patch: ScopedSettingsPatch) => void>(),
 }));
+const environmentId = EnvironmentId.make("source-control-settings");
 
 vi.mock(import("@tanstack/react-router"), async (original) => ({
   ...(await original()),
@@ -19,10 +25,11 @@ vi.mock(import("@tanstack/react-router"), async (original) => ({
 }));
 vi.mock(import("./useScopedSettings"), async (original) => ({
   ...(await original()),
-  useScopedSettings: (() => ({
-    ...DEFAULT_UNIFIED_SETTINGS,
-    sourceControlWritingStyle: state.styles[0],
-  })) as never,
+  useScopedSettings: (() =>
+    state.reviewGuideSettings ?? {
+      ...DEFAULT_UNIFIED_SETTINGS,
+      sourceControlWritingStyle: state.styles[0],
+    }) as never,
   useScopedSettingsMixed: (keys) =>
     !keys.includes("reviewGuidesEnabled") &&
     JSON.stringify(state.styles[0]) !== JSON.stringify(state.styles[1]),
@@ -32,8 +39,8 @@ vi.mock(import("./SettingsScopeContext"), async (original) => ({
   ...(await original()),
   useSettingsScope: (() => ({
     scope: { kind: "all", environmentIds: [] },
-    environment: null,
-    connectedEnvironments: [],
+    environment: state.reviewGuideSettings ? { environmentId, serverConfig: {} } : null,
+    connectedEnvironments: state.reviewGuideSettings ? [{ environmentId }] : [],
     targets: state.styles.map((style) => ({
       settings: { ...DEFAULT_UNIFIED_SETTINGS, sourceControlWritingStyle: style },
     })),
@@ -42,7 +49,7 @@ vi.mock(import("./SettingsScopeContext"), async (original) => ({
 }));
 vi.mock(import("../../state/environments"), async (original) => ({
   ...(await original()),
-  useEnvironmentProviders: () => new Map(),
+  useEnvironmentProviders: () => new Map([[environmentId, state.providers]]),
 }));
 vi.mock(import("./settingsLayout"), async (original) => ({
   ...(await original()),
@@ -69,6 +76,8 @@ const content = () => (
 );
 
 async function setup() {
+  state.reviewGuideSettings = null;
+  state.providers = [];
   state.styles = [
     {
       ...DEFAULT_UNIFIED_SETTINGS.sourceControlWritingStyle,
@@ -112,3 +121,44 @@ describe("mixed source control instructions", () => {
     ).toEqual(initialInstructions);
   });
 });
+
+it.each(["API writer fallback", "saved text generation model"])(
+  "shows the review guide model from the %s even when it is hidden from the menu",
+  async (source) => {
+    const codex = provider({ instanceId: "codex", models: ["gpt-6-astra", "gpt-6-luna"] });
+    const api = createModelSelection(ProviderInstanceId.make("text-api"), "api-model");
+    state.styles = [];
+    state.providers = [codex];
+    state.reviewGuideSettings = {
+      ...DEFAULT_UNIFIED_SETTINGS,
+      reviewGuidesEnabled: true,
+      reviewGuideModelSelection: createModelSelection(
+        ProviderInstanceId.make("missing-instance"),
+        "removed-model",
+      ),
+      sourceControlWriterModelSelection: source === "API writer fallback" ? api : null,
+      textGenerationModelSelection: createModelSelection(
+        codex.instanceId,
+        source === "API writer fallback" ? "gpt-6-astra" : "gpt-6-luna",
+      ),
+      textGenerators: {
+        [api.instanceId]: {
+          kind: "openaiCompatible",
+          baseUrl: "https://model.example/v1",
+          apiKey: "",
+          enabled: true,
+        },
+      },
+      providerModelPreferences: {
+        [codex.instanceId]: { hiddenModels: ["gpt-6-luna"], modelOrder: [] },
+      },
+    };
+
+    await using _screen = await render(content());
+    const trigger = page.getByRole("button", { name: "Review guide model", exact: true });
+    await expect.element(trigger).toHaveTextContent("gpt-6-luna");
+    await trigger.click();
+    await expect.element(page.getByRole("option", { name: /astra/i })).toBeVisible();
+    await expect.element(page.getByRole("option", { name: /luna/i })).not.toBeInTheDocument();
+  },
+);
