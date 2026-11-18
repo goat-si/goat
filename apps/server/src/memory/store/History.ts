@@ -204,7 +204,7 @@ export const makeHistory = (
   ) {
     const rows = yield* stored(
       "history-revision-exact",
-      sql<HistoryRevisionRow>`SELECT r.*,CASE WHEN ${visible ? 1 : 0} THEN p.body_json ELSE NULL END AS body_json
+      sql<HistoryRevisionRow>`SELECT r.*,CASE WHEN ${visible ? 1 : 0} AND r.scope_move_held=0 THEN p.body_json ELSE NULL END AS body_json
       FROM memory_revisions r LEFT JOIN memory_payloads p ON p.space=r.space AND p.payload_ref=r.payload_ref
       WHERE r.space=${space} AND r.revision_id=${revisionId} AND r.memory_id=${id} LIMIT 1`,
     );
@@ -276,7 +276,7 @@ export const makeHistory = (
           if (category === 0) {
             const rows = yield* stored(
               "history-revision",
-              sql<HistoryRevisionRow>`SELECT r.*,CASE WHEN ${visible ? 1 : 0} THEN p.body_json ELSE NULL END AS body_json
+              sql<HistoryRevisionRow>`SELECT r.*,CASE WHEN ${visible ? 1 : 0} AND r.scope_move_held=0 THEN p.body_json ELSE NULL END AS body_json
             FROM memory_revisions r LEFT JOIN memory_payloads p ON p.space=r.space AND p.payload_ref=r.payload_ref
             WHERE r.rowid=${key} AND r.space=${space} AND r.memory_id=${id} LIMIT 1`,
             );

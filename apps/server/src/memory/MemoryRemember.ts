@@ -14,6 +14,11 @@ export class MemoryRememberScopeUnavailable extends Schema.TaggedError<MemoryRem
   { scope: Schema.Literals(["project", "thread"]) },
 ) {}
 
+export class MemoryRememberMoveRequiresNoText extends Schema.TaggedError<MemoryRememberMoveRequiresNoText>()(
+  "MemoryRememberMoveRequiresNoText",
+  {},
+) {}
+
 export class MemoryRefusedSaveHook extends Context.Service<
   MemoryRefusedSaveHook,
   {
@@ -63,6 +68,10 @@ export const makeRemember = (deps: {
     sourceThread?: M.ScopedThreadRef,
     remember?: { readonly allowUnverified: boolean },
   ) => Effect.Effect<Store.StoredReceipt, MemoryServiceError>;
+  readonly move: (
+    input: M.MemoryMoveInput,
+    permit: Effect.Effect<void, MemoryAccessError>,
+  ) => Effect.Effect<Store.StoredReceipt, MemoryServiceError>;
   readonly stableUuid: (text: string) => string;
 }) =>
   Effect.fn("MemoryService.remember")(function* (
@@ -100,6 +109,46 @@ export const makeRemember = (deps: {
       );
     const current = yield* store.loadAggregate(space, memoryId);
     const scope = current.identity?.scope ?? requested;
+    if (
+      input.memoryId &&
+      current.identity &&
+      requested &&
+      scopeKey(current.identity.scope) !== scopeKey(requested)
+    ) {
+      if (input.text !== undefined) return yield* new MemoryRememberMoveRequiresNoText({});
+      const fromScope = current.identity.scope;
+      if (fromScope.kind !== "user") {
+        const authorized = yield* scopeFor(fromScope.kind);
+        if (scopeKey(authorized) !== scopeKey(fromScope))
+          return yield* new Store.MemoryStoreConflict({ code: "not_found" });
+      }
+      let operationId = M.MemoryOperationId.make(
+        deps.stableUuid(
+          `remember-move:${space}:${memoryId}:${current.identity.scopeVersion ?? 0}:${current.heads.join(",")}:${scopeKey(requested)}`,
+        ),
+      );
+      for (let attempts = 0; attempts < M.MEMORY_WORK_MAX_PENDING_ITEMS; attempts++) {
+        const prior = yield* store.readWork(floorWriteId(space, operationId));
+        if (prior?.status !== "failed") break;
+        operationId = M.MemoryOperationId.make(
+          deps.stableUuid(`remember-move-retry:${operationId}`),
+        );
+      }
+      return yield* deps.move(
+        {
+          memorySpaceId: space,
+          memoryId,
+          operationId,
+          expectedHeads: current.heads,
+          expectedScopeVersion: current.identity.scopeVersion ?? 0,
+          fromScope,
+          toScope: requested,
+        },
+        permit,
+      );
+    }
+    if (input.text === undefined)
+      return yield* new Store.MemoryStoreConflict({ code: "unsupported_operation" });
     if (!scope || (input.memoryId !== undefined && !current.identity))
       return yield* new Store.MemoryStoreConflict({ code: "not_found" });
     const rows = sourceThread

@@ -145,7 +145,7 @@ export const makeAccounting = (
     );
     return yield* reservationForRevisions(op, [
       ...current.revisions,
-      ...(op.kind === "forget" ? [] : [{ revision: op.revision, payload: op.payload }]),
+      ...(M.isMemoryRevisionOperation(op) ? [{ revision: op.revision, payload: op.payload }] : []),
     ]);
   });
   const usage = Effect.fn("MemoryStore.usage")(function* (

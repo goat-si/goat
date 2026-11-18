@@ -27,6 +27,7 @@ export const MEMORY_WS_METHODS = {
   memoryOwnerSourceReadPolicyUpdate: "memory.ownerSourceReadPolicy.update",
   memoryUpsert: "memory.upsert",
   memoryForget: "memory.forget",
+  memoryMove: "memory.move",
   memorySuggestionsList: "memory.suggestions.list",
   memorySuggestionsAccept: "memory.suggestions.accept",
   memorySuggestionsDismiss: "memory.suggestions.dismiss",
@@ -133,6 +134,11 @@ const WsMemorySuggestionsDismissRpc = Rpc.make(MEMORY_WS_METHODS.memorySuggestio
   success: Suggestions.MemorySuggestionDismissResult,
   error: MemoryRpcErrors,
 });
+const WsMemoryMoveRpc = Rpc.make(MEMORY_WS_METHODS.memoryMove, {
+  payload: Memory.MemoryMoveInput,
+  success: Memory.MemoryMutationReceipt,
+  error: MemoryRpcErrors,
+});
 export const WsMemoryForgetRpc = Rpc.make(MEMORY_WS_METHODS.memoryForget, {
   payload: Memory.MemoryForgetInput,
   success: Memory.MemoryMutationReceipt,
@@ -214,6 +220,7 @@ export const MemoryCoreRpcs = RpcGroup.make(
   WsMemoryHubDiagnosticsRpc,
   WsMemoryUpsertRpc,
   WsMemoryForgetRpc,
+  WsMemoryMoveRpc,
   WsMemorySuggestionsListRpc,
   WsMemorySuggestionsAcceptRpc,
   WsMemorySuggestionsDismissRpc,

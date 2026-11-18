@@ -164,6 +164,7 @@ const make = Effect.gen(function* () {
               current.item.memorySpaceId !== view.space ||
               current.item.localAvailability.exposure !== "visible" ||
               encodeScope(current.item.scope) !== encodeScope(item.scope) ||
+              current.identity?.scopeVersion !== item.scopeVersion ||
               (Related.isRelated(item.scope, own) &&
                 (!keys.has(scopeKey(item.scope)) ||
                   keys.get(scopeKey(item.scope)) !== relatedBindings.get(scopeKey(item.scope))))
@@ -276,6 +277,7 @@ const make = Effect.gen(function* () {
         memoryId: M.MemoryId;
         revisionId: M.MemoryRevisionId;
         scopeKey: string;
+        scopeVersion?: number;
       }>;
     }
   >();
@@ -438,6 +440,7 @@ const make = Effect.gen(function* () {
           memoryId: item.memoryId,
           revisionId: item.revisionId,
           scopeKey: encodeScope(item.scope),
+          ...(item.scopeVersion === undefined ? {} : { scopeVersion: item.scopeVersion }),
         })),
       });
       cacheBytes += bytes;
@@ -495,7 +498,8 @@ const make = Effect.gen(function* () {
           return (
             item.memoryId !== original.memoryId ||
             item.revisionId !== original.revisionId ||
-            encodeScope(item.scope) !== original.scopeKey
+            encodeScope(item.scope) !== original.scopeKey ||
+            item.scopeVersion !== original.scopeVersion
           );
         })
       )
@@ -525,6 +529,7 @@ const make = Effect.gen(function* () {
             item.memoryId === original.memoryId &&
             item.revisionId === original.revisionId &&
             encodeScope(item.scope) === original.scopeKey &&
+            item.scopeVersion === original.scopeVersion &&
             (!Related.isRelated(item.scope, own) ||
               (relatedKeys.has(scopeKey(item.scope)) &&
                 relatedKeys.get(scopeKey(item.scope)) ===
@@ -573,6 +578,7 @@ const make = Effect.gen(function* () {
           memoryId: item.memoryId,
           revisionId: item.revisionId,
           scopeKey: encodeScope(item.scope),
+          ...(item.scopeVersion === undefined ? {} : { scopeVersion: item.scopeVersion }),
         })),
       });
       cacheBytes += bytes;

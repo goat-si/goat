@@ -87,10 +87,13 @@ export const Metadata = Schema.Struct({
   memorySpaceId: M.MemorySpaceId,
   memoryId: M.MemoryId,
   originEnvironmentId: M.EnvironmentId,
-  kind: Schema.Literals(["upsert", "forget", "resolve", "revert"]),
+  kind: Schema.Literals(["upsert", "forget", "resolve", "revert", "move"]),
   expectedHeads: Schema.Array(M.MemoryRevisionId),
   forgetFence: Schema.optionalKey(Schema.Int),
   authorityFirst: Schema.optionalKey(digest),
+  fromScope: Schema.optionalKey(M.MemoryScope),
+  toScope: Schema.optionalKey(M.MemoryScope),
+  expectedScopeVersion: Schema.optionalKey(Schema.Int),
   revision: Schema.optionalKey(M.MemoryRevision),
   tombstone: Schema.optionalKey(M.MemoryTombstone),
   resolution: Schema.optionalKey(M.MemoryResolution),
@@ -357,6 +360,7 @@ export type MemoryDecision = {
   readonly heads?: ReadonlyArray<M.MemoryRevisionId>;
   readonly conflict?: M.MemoryConflict;
   readonly identity?: M.MemoryIdentityRecord;
+  readonly movedIdentity?: M.MemoryIdentityRecord;
   readonly fence?: M.MemoryFenceRecord;
   readonly execution?: M.MemoryGenerationExecution;
   readonly work?: ReadonlyArray<MemoryWork>;

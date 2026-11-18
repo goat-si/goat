@@ -758,6 +758,7 @@ it.effect(
       const writes = [
         WS_METHODS.memoryUpsert,
         WS_METHODS.memoryForget,
+        WS_METHODS.memoryMove,
         WS_METHODS.memorySuggestionsAccept,
         WS_METHODS.memorySuggestionsDismiss,
         WS_METHODS.memoryRevertResolution,

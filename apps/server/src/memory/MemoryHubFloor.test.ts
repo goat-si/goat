@@ -344,6 +344,60 @@ describe("memory hub floor", () => {
       }).pipe(checkUsage, Effect.provide(live)),
   );
 
+  it.effect("refuses a move into a full scope without removing the source", () =>
+    Effect.gen(function* () {
+      yield* seed;
+      const hub = yield* Hub.MemoryHubService;
+      const store = yield* Store.MemoryStore;
+      yield* hub.pull(advertise, principal());
+      yield* hub.pull({ ...advertise, environmentId: otherEnv }, principal(otherEnv));
+      const scope = {
+        kind: "thread",
+        thread: { environmentId: hubEnv, threadId: M.ThreadId.make("full-scope") },
+      } as const;
+      const occupants = Array.from({ length: M.MEMORY_THREAD_MAX_EXPLICIT_ITEMS }, (_, index) => {
+        const op = newMemory(4300 + index);
+        return { ...op, revision: { ...op.revision, scope } };
+      });
+      const pushed = yield* hub.push({ ...pushInput(...occupants), features }, principal());
+      assert.isTrue(pushed.receipts.every((receipt) => receipt.outcome === "accepted"));
+      const op = newMemory(4200);
+      assert.include((yield* hub.push({ ...pushInput(op), features }, principal())).receipts[0], {
+        outcome: "accepted",
+      });
+      const move = decodeOperation({
+        protocolVersion: 1,
+        kind: "move",
+        operationId: id(4201),
+        memorySpaceId: space,
+        memoryId: op.memoryId,
+        originEnvironmentId: hubEnv,
+        expectedHeads: [op.revision.revisionId],
+        expectedScopeVersion: 0,
+        fromScope: op.revision.scope,
+        toScope: scope,
+      });
+      assert.deepInclude(
+        (yield* hub.push({ ...pushInput(move), features }, principal())).receipts[0],
+        {
+          outcome: "rejected",
+          failureCode: "capacity_exceeded",
+          capacity: {
+            code: "capacity_exceeded",
+            dimension: "thread_items",
+            current: M.MEMORY_THREAD_MAX_EXPLICIT_ITEMS + 1,
+            limit: M.MEMORY_THREAD_MAX_EXPLICIT_ITEMS,
+            reclaimable: 0,
+          },
+        },
+      );
+      assert.deepStrictEqual(
+        (yield* store.loadAggregate(space, op.memoryId)).identity?.scope,
+        op.revision.scope,
+      );
+    }).pipe(checkUsage, Effect.provide(live)),
+  );
+
   it.effect("a wide save stays invisible until ordered tail settlement", () =>
     Effect.gen(function* () {
       yield* seed;

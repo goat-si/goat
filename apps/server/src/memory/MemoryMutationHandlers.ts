@@ -3,6 +3,7 @@ import {
   MemoryMutationReceipt,
   type MemoryUpsertInput,
   type MemoryForgetInput,
+  type MemoryMoveInput,
   type MemorySuggestionActionInput,
   type MemorySuggestionsInput,
 } from "@goat/contracts";
@@ -33,6 +34,11 @@ export const makeMemoryMutationHandlers = (
   return {
     [WS_METHODS.memoryUpsert]: (input: MemoryUpsertInput) =>
       memory.upsert(input, write).pipe(
+        Effect.flatMap((stored) => decodeReceipt(stored.receipt)),
+        Effect.mapError(memoryError),
+      ),
+    [WS_METHODS.memoryMove]: (input: MemoryMoveInput) =>
+      memory.move(input, write).pipe(
         Effect.flatMap((stored) => decodeReceipt(stored.receipt)),
         Effect.mapError(memoryError),
       ),

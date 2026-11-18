@@ -156,11 +156,11 @@ export const memoryEntries = {
     toolkit: "memory",
     summary: "Save a memory from text and a scope.",
     description:
-      "Save one lasting fact, decision or preference for later conversations. Choose scope user for every project, project for this conversation's project, or thread for this conversation only. Pass memoryId to replace an existing memory instead of adding another. Do not save progress reports, tool output or execution summaries.",
+      "Save one lasting fact, decision or preference for later conversations. Choose scope user for every project, project for this conversation's project, or thread for this conversation only. Pass memoryId with text to edit a memory in place, or pass memoryId and a different scope without text to move it and keep its history. Do not save progress reports, tool output or execution summaries.",
     guide:
       "Needs memory:write and a session allowed to write. GOAT fills the memory space, ids, current revision, project key and this conversation as evidence.",
     parameters: {
-      text: "The memory, written to stand on its own.",
+      text: "The memory, written to stand on its own. Omit it when moving a memory.",
       scope:
         "user (every project), project (this conversation's project) or thread. Required unless memoryId is set.",
       memoryId: "Optional id from goat_memory_recall to replace that memory; it keeps its scope.",

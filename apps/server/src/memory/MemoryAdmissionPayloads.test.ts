@@ -300,7 +300,7 @@ describe("memory admission history reads", () => {
           op.kind === "forget"
             ? {}
             : { heads: true, revisionIds: op.kind === "revert" ? [op.restoredRevisionId] : [] },
-          op.kind === "forget"
+          !M.isMemoryRevisionOperation(op)
             ? {}
             : {
                 ...(op.kind === "revert" ? { resolutionId: op.revertsResolutionId } : {}),

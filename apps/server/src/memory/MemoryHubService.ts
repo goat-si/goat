@@ -1,3 +1,4 @@
+import { prepareJoinRetention } from "./MemoryJoinRetention.ts";
 import { MemoryHubSettingsSnapshot } from "./MemoryHubSettings.ts";
 // @effect-diagnostics-next-line nodeBuiltinImport:off -- server-owned checkpoint identifiers.
 import * as NodeCrypto from "node:crypto";
@@ -154,7 +155,7 @@ export const make = Effect.gen(function* () {
         Effect.gen(function* () {
           const hub = yield* authorize(principal, request.memorySpaceId, request.environmentId);
           yield* negotiate(principal, request.features);
-          const retention = yield* store.readHubRetentionTx(principal.memorySpaceId);
+          const retention = yield* prepareJoinRetention(store, principal, hub.hubEnvironmentId);
           if (!retention.checkpointId || !retention.causalBoundary)
             return yield* new M.MemoryHubError({ code: "bootstrap_required" });
           const handle = yield* store.prepareHubCheckpointTx({

@@ -118,5 +118,34 @@ export const runSelfWideSave = Effect.fn("test.runSelfWideSave")(function* (
   const after = yield* store.loadAggregate(space, input.memoryId);
   assert.include(after.item, { status: "blocked", failureCode: "source_invalidated" });
   assert.isTrue(after.revisions.every((pair) => pair.payload === null));
+  const next = sources[1];
+  if (!next) throw new Error("Expected a second source");
+  const scope = {
+    kind: "thread",
+    thread: {
+      environmentId: local,
+      threadId: M.ThreadId.make("synthetic-move-thread"),
+    },
+  } as const;
+  const move = yield* service.remember(
+    {
+      memorySpaceId: space,
+      memoryId: next.memoryId,
+      scope: "thread",
+    },
+    Effect.void,
+    scope.thread,
+  );
+  assert.include(move.receipt, { pendingSync: true, revisionId: null });
+  assert.deepStrictEqual(
+    (yield* store.loadAggregate(space, next.memoryId)).identity?.scope,
+    next.revision.scope,
+  );
+  yield* sync.syncOnce;
+  const moved = yield* store.loadAggregate(space, next.memoryId);
+  assert.deepStrictEqual(moved.identity?.scope, scope);
+  assert.deepStrictEqual(moved.revisions, [
+    { revision: { ...next.revision, scope }, payload: next.payload },
+  ]);
   yield* sync.shutdown;
 });

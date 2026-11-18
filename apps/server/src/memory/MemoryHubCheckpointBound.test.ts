@@ -627,7 +627,7 @@ it.effect("packs a maximal-body 1000-source save in a push, tail, and real check
     const revertDeadlineUtc = M.MemoryUtcTimestamp.make(
       DateTime.formatIso(DateTime.makeUnsafe(Date.parse(appliedAtUtc) + M.MEMORY_REVERT_WINDOW_MS)),
     );
-    const variants: Exclude<M.MemoryOperation, { kind: "forget" }>[] = [
+    const variants: M.MemoryRevisionOperation[] = [
       operation,
       {
         ...operation,
