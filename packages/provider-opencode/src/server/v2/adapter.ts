@@ -374,8 +374,10 @@ export const make = Effect.fn("OpenCode2Adapter.make")(function* (instanceId: Pr
       yield* emitProviderThread(state);
     });
 
-    const readGoal = Effect.fn("OpenCode2Adapter.readGoal")(function* (state: ThreadState) {
-      const revision = state.goalRevision;
+    const readGoal = Effect.fn("OpenCode2Adapter.readGoal")(function* (
+      state: ThreadState,
+      revision = state.goalRevision,
+    ) {
       const result = yield* client.rpc.call({
         rpcID: "opencode.goal",
         method: "get",
@@ -383,9 +385,11 @@ export const make = Effect.fn("OpenCode2Adapter.make")(function* (instanceId: Pr
         input: { sessionID: state.sessionId },
       });
       const goal = yield* decodeGoal(result.output);
-      yield* lock.withPermit(
+      return yield* lock.withPermit(
         Effect.gen(function* () {
-          if (state.goalRevision === revision) yield* updateGoal(state, goal);
+          if (state.goalRevision !== revision) return false;
+          yield* updateGoal(state, goal);
+          return true;
         }),
       );
     });
@@ -2035,7 +2039,11 @@ export const make = Effect.fn("OpenCode2Adapter.make")(function* (instanceId: Pr
       end: TurnTerminal,
     ) {
       if (end.status === "completed" && (turn.steers.size > 0 || goalHoldsTurn(state))) {
+        const checkGoal =
+          turn.heldEnd === undefined && goalHoldsTurn(state) && !state.goalRefreshing;
         turn.heldEnd = end;
+        // A different OpenCode process can silently pause the goal while this turn runs.
+        if (checkGoal) yield* refreshGoal(state);
         return;
       }
       yield* finishTurn(state, end);
@@ -2045,6 +2053,30 @@ export const make = Effect.fn("OpenCode2Adapter.make")(function* (instanceId: Pr
       turn.heldEnd !== undefined && turn.steers.size === 0 && !goalHoldsTurn(state)
         ? finishTurn(state, turn.heldEnd)
         : Effect.void;
+
+    const refreshGoal = Effect.fnUntraced(function* (state: ThreadState) {
+      state.goalFresh = false;
+      state.goalRefreshing = true;
+      const revision = ++state.goalRevision;
+      yield* Effect.forkIn(
+        readGoal(state, revision).pipe(
+          Effect.timeout(INVENTORY_TIMEOUT),
+          Effect.catch(() =>
+            Effect.logWarning("Could not refresh OpenCode goal state.").pipe(Effect.as(false)),
+          ),
+          Effect.flatMap((applied) =>
+            lock.withPermit(
+              Effect.gen(function* () {
+                if (state.goalRevision === revision) state.goalRefreshing = false;
+                else if (!applied) return;
+                if (state.active !== undefined) yield* endIfSettled(state, state.active);
+              }),
+            ),
+          ),
+        ),
+        sessionScope,
+      );
+    });
 
     const handleEvent = Effect.fnUntraced(function* (event: OpenCode2Client.OpenCode2StreamEvent) {
       if (shellJobs.isShellEvent(event)) return yield* shellJobs.onEvent(event);
@@ -2173,33 +2205,10 @@ export const make = Effect.fn("OpenCode2Adapter.make")(function* (instanceId: Pr
         if (!supportsNativeGoals()) return;
         const goal = yield* decodeGoal(event.data["goal"]).pipe(Effect.result);
         if (goal._tag === "Failure") {
-          state.goalFresh = false;
-          state.goalRefreshing = true;
-          state.goalRevision += 1;
-          const revision = state.goalRevision;
           yield* Effect.logWarning(
             "Could not decode an OpenCode goal update; refreshing its state.",
           );
-          yield* Effect.forkIn(
-            readGoal(state).pipe(
-              Effect.timeout(INVENTORY_TIMEOUT),
-              Effect.catch(() =>
-                Effect.logWarning(
-                  "Could not refresh OpenCode goal state after an unreadable update.",
-                ),
-              ),
-              Effect.ensuring(
-                lock.withPermit(
-                  Effect.gen(function* () {
-                    if (state.goalRevision === revision) state.goalRefreshing = false;
-                    if (state.active !== undefined) yield* endIfSettled(state, state.active);
-                  }),
-                ),
-              ),
-            ),
-            sessionScope,
-          );
-          return;
+          return yield* refreshGoal(state);
         }
         yield* updateGoal(state, goal.success);
         if (state.active !== undefined) yield* endIfSettled(state, state.active);
