@@ -85,7 +85,7 @@ export const makeCommitSummary = (deps: {
   ) => Effect.Effect<void, MemoryServiceError>;
   readonly stableUuid: (text: string) => string;
 }) => {
-  const { store, environmentId, apply } = deps;
+  const { store, environmentId, apply, sql } = deps;
   const now = Effect.map(Clock.currentTimeMillis, (millis) =>
     M.MemoryUtcTimestamp.make(DateTime.formatIso(DateTime.makeUnsafe(millis))),
   );

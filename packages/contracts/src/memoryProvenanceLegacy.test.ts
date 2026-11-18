@@ -1,0 +1,43 @@
+import { expect, it } from "vitest";
+import { MemoryFailureCode } from "./memory.ts";
+
+it("preserves the stored failure-code ordinals from memory protocol V1", () => {
+  expect(MemoryFailureCode.literals).toEqual([
+    "unavailable",
+    "source_unavailable",
+    "not_found",
+    "forgotten",
+    "revision_changed",
+    "operation_id_reused",
+    "missing_parent",
+    "conflict_changed",
+    "lease_expired",
+    "fenced",
+    "claim_busy",
+    "invalid_output",
+    "generation_failed",
+    "secret_detected",
+    "bootstrap_required",
+    "space_mismatch",
+    "unsupported_protocol",
+    "invalid_cursor",
+    "cursor_expired",
+    "hub_disabled",
+    "identity_mismatch",
+    "route_unavailable",
+    "lease_required",
+    "attempt_expired",
+    "unsupported_operation",
+    "payload_too_large",
+    "generation_input_too_large",
+    "storage_failed",
+    "source_invalidated",
+    "thread_lineage_incomplete",
+    "capacity_exceeded",
+    "base_compacted",
+    "revert_expired",
+    "scanner_pending",
+    "forget_pending",
+    "hub_upgrade_required",
+  ]);
+});
