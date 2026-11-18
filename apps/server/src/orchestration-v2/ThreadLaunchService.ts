@@ -39,6 +39,7 @@ import {
   type Project,
   type RunId,
   ThreadId,
+  TextGenerationError,
   describeWorktreesDirectoryUnavailable,
 } from "@goat/contracts";
 import * as Cause from "effect/Cause";
@@ -89,6 +90,8 @@ import {
   preparationRunStopped,
   watchPreparationInterruption,
 } from "./goat/PreparationInterruption.ts";
+
+const BRANCH_NAME_TIMEOUT = "20 seconds";
 
 export class ThreadLaunchService extends Context.Service<
   ThreadLaunchService,
@@ -392,6 +395,16 @@ const make = Effect.gen(function* () {
               modelSelection,
             })
             .pipe(
+              Effect.timeoutOrElse({
+                duration: BRANCH_NAME_TIMEOUT,
+                orElse: () =>
+                  Effect.fail(
+                    new TextGenerationError({
+                      operation: "generateBranchName",
+                      detail: `Timed out after ${BRANCH_NAME_TIMEOUT}.`,
+                    }),
+                  ),
+              }),
               Effect.map((result) => ({
                 branch: result.branch,
                 exactName: settings.branchNamingMode === "custom",
@@ -791,14 +804,17 @@ const make = Effect.gen(function* () {
             terminalId: setup.terminalId,
           },
         }));
-        if (setup.completion) {
+        const completionEffect = setup.completion;
+        if (completionEffect !== undefined) {
           const awaitCompletion = Effect.gen(function* () {
-            const completion = yield* setup.completion!;
+            const completion = yield* completionEffect;
             yield* note(`Setup script exited with ${completion.exitCode ?? "no exit code"}.`);
-            yield* setupTracker.stage(threadId, "setup-script", {
-              status: completion.exitCode === 0 ? "done" : "failed",
-              detail: `exited with ${completion.exitCode ?? "no exit code"}`,
-            });
+            yield* setupTracker.stageStatus(
+              threadId,
+              "setup-script",
+              completion.exitCode === 0 ? "done" : "failed",
+              `exited with ${completion.exitCode ?? "no exit code"}`,
+            );
             if (completion.exitCode !== 0 && !setup.async)
               return yield* mapError(
                 input,
@@ -807,14 +823,20 @@ const make = Effect.gen(function* () {
               )(`Setup script exited with ${completion.exitCode ?? "no exit code"}.`);
           });
           if (setup.async) {
-            awaitAsyncSetup = awaitCompletion.pipe(
+            const asyncSetup = yield* awaitCompletion.pipe(
               Effect.catchCause((cause) =>
-                setupTracker.stage(threadId, "setup-script", {
-                  status: "failed",
-                  detail: failureDetail(Cause.squash(cause)),
-                }),
+                Cause.hasInterruptsOnly(cause)
+                  ? Effect.interrupt
+                  : setupTracker.stageStatus(
+                      threadId,
+                      "setup-script",
+                      "failed",
+                      failureDetail(Cause.squash(cause)),
+                    ),
               ),
+              Effect.forkChild,
             );
+            awaitAsyncSetup = Fiber.join(asyncSetup);
           } else {
             yield* awaitCompletion;
           }
