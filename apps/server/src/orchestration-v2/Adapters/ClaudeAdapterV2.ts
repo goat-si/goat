@@ -10478,27 +10478,29 @@ export const makeClaudeAdapterV2 = Effect.fn("makeClaudeAdapterV2")(function* (
             task.workflowStop = stop;
             yield* liveQuery.query.stopTask(taskId).pipe(
               Effect.onExit((exit) =>
-                sdkMessageLock.withPermits(1)(
-                  Effect.gen(function* () {
-                    const current = (yield* Ref.get(sessionSubagentsByTaskId)).get(taskId);
-                    if (
-                      current?.workflowStop !== stop ||
-                      (yield* Ref.get(queryContext)) !== liveQuery
-                    )
-                      return;
-                    const accepted = Exit.isSuccess(exit);
-                    yield* settleClaudeStopDenials(stop, accepted);
-                    if (stop.members.size > 0 && current.task.workflow !== undefined)
-                      yield* projectClaudeWorkflowMembers({
-                        coordinator: current,
-                        workflow: workflowWithResolvedClaudeStop(current.task.workflow, stop),
-                      });
-                    if (!accepted) {
-                      if (previousStop === undefined) delete current.workflowStop;
-                      else current.workflowStop = previousStop;
-                    }
-                  }),
-                ),
+                sdkMessageLock
+                  .withPermits(1)(
+                    Effect.gen(function* () {
+                      const current = (yield* Ref.get(sessionSubagentsByTaskId)).get(taskId);
+                      if (
+                        current?.workflowStop !== stop ||
+                        (yield* Ref.get(queryContext)) !== liveQuery
+                      )
+                        return;
+                      const accepted = Exit.isSuccess(exit);
+                      yield* settleClaudeStopDenials(stop, accepted);
+                      if (stop.members.size > 0 && current.task.workflow !== undefined)
+                        yield* projectClaudeWorkflowMembers({
+                          coordinator: current,
+                          workflow: workflowWithResolvedClaudeStop(current.task.workflow, stop),
+                        });
+                      if (!accepted) {
+                        if (previousStop === undefined) delete current.workflowStop;
+                        else current.workflowStop = previousStop;
+                      }
+                    }),
+                  )
+                  .pipe(Effect.interruptible, Effect.forkIn(sessionScope), Effect.asVoid),
               ),
               Effect.mapError(
                 (cause) =>

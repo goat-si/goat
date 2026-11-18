@@ -14186,9 +14186,9 @@ describe("ClaudeAdapterV2 background wake turns", () => {
             );
             yield* Deferred.succeed(ack, undefined);
             yield* Fiber.join(stop);
-            assert.equal(
-              workflowMemberEvents(harness.events, 1).at(-1)?.subagent.status,
-              "cancelled",
+            yield* harness.awaitUntil(
+              () => workflowMemberEvents(harness.events, 1).at(-1)?.subagent.status === "cancelled",
+              "held workflow member cancellation",
             );
           }
           yield* harness.offerAndWait(
