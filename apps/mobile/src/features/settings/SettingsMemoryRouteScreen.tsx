@@ -38,7 +38,7 @@ import {
   MEMORY_FORGET_NOTICE,
 } from "@goat/client-runtime/memory-presentation";
 import { squashAtomCommandFailure } from "@goat/client-runtime/state/runtime";
-import { resolveMemoryModelSelection } from "@goat/shared/serverSettings";
+import { configuredMemoryModelSelection } from "@goat/shared/serverSettings";
 import {
   memoryBrowseInput,
   memorySearchInput,
@@ -394,7 +394,7 @@ function MemoryConnected({
   const memoryModel = config
     ? JSON.stringify([
         config.settings.memoryEnabled,
-        resolveMemoryModelSelection(config.settings, undefined),
+        configuredMemoryModelSelection(config.settings),
       ])
     : null;
   const seenModel = useRef(memoryModel);

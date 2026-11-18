@@ -1,72 +1,68 @@
+import * as Context from "effect/Context";
+import * as DateTime from "effect/DateTime";
 import * as Effect from "effect/Effect";
+import * as Ref from "effect/Ref";
 import {
-  isModelTextGenerationCapable,
-  isProviderAvailable,
-  isProviderTextGenerationCapable,
   type ModelSelection,
+  type ProjectId,
   type ServerProvider,
   type ServerSettings,
 } from "@goat/contracts";
-import type { ProviderInstance } from "@goat/provider-core/server/driver";
-import {
-  fallbackTextGenerationModelSelection,
-  textGenerationDefaultModel,
-} from "@goat/shared/serverSettings";
+import { resolveTextGenerationRoute } from "@goat/shared/serverSettings";
 
+import { readProviderRoutingSnapshot } from "../provider/providerGenerationSnapshot.ts";
 import type * as ProviderInstanceRegistry from "../provider/ProviderInstanceRegistry.ts";
 
-const checkedSnapshot = Effect.fn("TextGeneration.checkedSnapshot")(function* (
-  instance: ProviderInstance,
-) {
-  if (instance.snapshot.isAwaitingFirstCheck !== undefined) {
-    if (yield* instance.snapshot.isAwaitingFirstCheck) return undefined;
-  }
-  return yield* instance.snapshot.getSnapshot;
-});
+/** The project the text is for; a fallback skips providers that project turned off. */
+export const TextGenerationProject = Context.Reference<ProjectId | null>(
+  "goat/textGeneration/TextGenerationProject",
+  { defaultValue: () => null },
+);
+
+const modelKey = (selection: ModelSelection) => `${selection.instanceId}/${selection.model}`;
 
 /**
- * Moves off a model or provider the status marks unable to generate text (a Pi extension
- * model), as the Settings picker does, so the model Settings shows is the one that runs.
- * Before the first status check the saved model runs.
+ * Reads the registered snapshots for the shared Settings route. Logs each new fallback once.
  */
-export const resolveTextGenerationCapableSelection = Effect.fn(
-  "TextGeneration.resolveCapableSelection",
-)(function* (
-  registry: ProviderInstanceRegistry.ProviderInstanceRegistry["Service"],
-  settings: ServerSettings,
-  selection: ModelSelection,
-) {
-  if (Object.hasOwn(settings.textGenerators, selection.instanceId)) return selection;
-  const instance = yield* registry.getInstance(selection.instanceId);
-  const snapshot = instance === undefined ? undefined : yield* checkedSnapshot(instance);
-  if (snapshot === undefined) return selection;
-  const ownDefault = {
-    instanceId: selection.instanceId,
-    model: textGenerationDefaultModel(snapshot),
-  };
-  if (isProviderTextGenerationCapable(snapshot)) {
-    return isModelTextGenerationCapable(snapshot, selection.model) ? selection : ownDefault;
-  }
-  const others = new Map<string, ServerProvider>();
-  for (const other of yield* registry.listInstances) {
-    if (other.instanceId === selection.instanceId) continue;
-    const otherSnapshot = yield* checkedSnapshot(other);
-    if (otherSnapshot !== undefined) others.set(other.instanceId, otherSnapshot);
-  }
-  // The web picker takes the fallback instance's default model, never the thread's custom default.
-  const fallback = fallbackTextGenerationModelSelection(
-    settings.providerInstances,
-    (instanceId) => {
-      const candidate = others.get(instanceId);
-      return (
-        candidate?.enabled === true &&
-        isProviderAvailable(candidate) &&
-        isProviderTextGenerationCapable(candidate)
-      );
-    },
-  );
-  const fallbackSnapshot = fallback === null ? undefined : others.get(fallback.instanceId);
-  return fallback === null || fallbackSnapshot === undefined
-    ? ownDefault
-    : { instanceId: fallback.instanceId, model: textGenerationDefaultModel(fallbackSnapshot) };
-});
+export const makeTextGenerationCapableSelection = Effect.fn("TextGeneration.makeCapableSelection")(
+  function* (registry: ProviderInstanceRegistry.ProviderInstanceRegistry["Service"]) {
+    const lastLogged = yield* Ref.make<string | null>(null);
+    const logFallback = Effect.fnUntraced(function* (
+      from: ModelSelection,
+      to: ModelSelection,
+      reason: "model_unsupported" | "provider_unsupported",
+    ) {
+      const key = `${modelKey(from)}>${modelKey(to)}`;
+      if ((yield* Ref.getAndSet(lastLogged, key)) === key) return;
+      yield* Effect.logInfo("Text generation fell back", {
+        from: { instanceId: from.instanceId, model: from.model },
+        to: { instanceId: to.instanceId, model: to.model },
+        reason,
+      });
+    });
+    return Effect.fn("TextGeneration.resolveCapableSelection")(function* (
+      settings: ServerSettings,
+      selection: ModelSelection,
+    ) {
+      const instance = yield* registry.getInstance(selection.instanceId);
+      const providers: Array<ServerProvider> = [];
+      if (instance !== undefined) providers.push(yield* readProviderRoutingSnapshot(instance));
+      const projectId = yield* TextGenerationProject;
+      const now = DateTime.toEpochMillis(yield* DateTime.now);
+      let route = resolveTextGenerationRoute(settings, selection, providers, projectId, now);
+      if (route.reason === "no_fallback") {
+        for (const other of yield* registry.listInstances) {
+          if (other.instanceId === selection.instanceId) continue;
+          providers.push(yield* readProviderRoutingSnapshot(other));
+        }
+        route = resolveTextGenerationRoute(settings, selection, providers, projectId, now);
+      }
+      if (route.reason === "saved" || route.reason === "no_fallback") {
+        yield* Ref.set(lastLogged, null);
+      } else if (route.selection !== selection) {
+        yield* logFallback(selection, route.selection, route.reason);
+      }
+      return route.selection;
+    });
+  },
+);

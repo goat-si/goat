@@ -1,3 +1,4 @@
+import { fromRunner } from "@goat/provider-core/server/textGenerationOperations";
 import { codexHomeHintRegression } from "./CodexHomeHint.testkit.ts";
 import {
   mockHandle,
@@ -23,7 +24,6 @@ import { describe, it, assert, expect } from "@effect/vitest";
 
 import * as Deferred from "effect/Deferred";
 import * as Effect from "effect/Effect";
-
 import * as Exit from "effect/Exit";
 import * as Fiber from "effect/Fiber";
 import * as FileSystem from "effect/FileSystem";
@@ -774,7 +774,7 @@ it.layer(
                 applyUsageLimits: () => Effect.void,
               },
               orchestrationAdapter: {} as ProviderInstance["orchestrationAdapter"],
-              textGeneration: {} as ProviderInstance["textGeneration"],
+              textGeneration: fromRunner("fixture", () => Effect.die("Unexpected generation.")),
             } satisfies ProviderInstance;
             const layerInstanceRegistry = Layer.succeed(
               ProviderInstanceRegistry.ProviderInstanceRegistry,
@@ -911,7 +911,7 @@ it.layer(
               applyUsageLimits: () => Effect.void,
             },
             orchestrationAdapter: {} as ProviderInstance["orchestrationAdapter"],
-            textGeneration: {} as ProviderInstance["textGeneration"],
+            textGeneration: fromRunner("fixture", () => Effect.die("Unexpected generation.")),
           } satisfies ProviderInstance;
           const layerInstanceRegistry = Layer.succeed(
             ProviderInstanceRegistry.ProviderInstanceRegistry,
@@ -937,6 +937,7 @@ it.layer(
                 ? retainedModels
                 : [customModel, ...cachedProvider.models];
               assert.deepStrictEqual((yield* registry.getProviders)[0]?.models, expectedModels);
+              expect((yield* registry.getProviders)[0]).toMatchObject({ awaitingFirstCheck: true });
               if (!restarted) {
                 const probeFields = ({ status, installed, auth, version }: ServerProvider) => ({
                   status,
@@ -944,7 +945,6 @@ it.layer(
                   auth,
                   version,
                 });
-                // Boot reads the probe state from the cache, not the pending snapshot, and never persists the pending one.
                 assert.deepStrictEqual(
                   probeFields((yield* registry.getProviders)[0]!),
                   probeFields(cachedProvider),
@@ -954,8 +954,8 @@ it.layer(
                   probeFields(cachedProvider),
                 );
               }
-
               yield* registry.refreshInstance(instance.instanceId);
+              expect((yield* registry.getProviders)[0]).not.toHaveProperty("awaitingFirstCheck");
               assert.deepStrictEqual(
                 (yield* readProviderStatusCache(filePath))?.models,
                 restarted ? retainedModels : refreshedProvider.models,
@@ -1012,7 +1012,7 @@ it.layer(
               applyUsageLimits: () => Effect.void,
             },
             orchestrationAdapter: {} as ProviderInstance["orchestrationAdapter"],
-            textGeneration: {} as ProviderInstance["textGeneration"],
+            textGeneration: fromRunner("fixture", () => Effect.die("Unexpected generation.")),
           } satisfies ProviderInstance;
           const layerInstanceRegistry = Layer.succeed(
             ProviderInstanceRegistry.ProviderInstanceRegistry,
@@ -1297,7 +1297,7 @@ it.layer(
                 Effect.as(provider),
               ),
             orchestrationAdapter: {} as ProviderInstance["orchestrationAdapter"],
-            textGeneration: {} as ProviderInstance["textGeneration"],
+            textGeneration: fromRunner("fixture", () => Effect.die("Unexpected generation.")),
           };
           const layerInstanceRegistry = Layer.succeed(
             ProviderInstanceRegistry.ProviderInstanceRegistry,
@@ -1392,7 +1392,7 @@ it.layer(
           },
           snapshotForCwd: () => Ref.get(scanResult),
           orchestrationAdapter: {} as ProviderInstance["orchestrationAdapter"],
-          textGeneration: {} as ProviderInstance["textGeneration"],
+          textGeneration: fromRunner("fixture", () => Effect.die("Unexpected generation.")),
         };
         const layerInstanceRegistry = Layer.succeed(
           ProviderInstanceRegistry.ProviderInstanceRegistry,
@@ -1511,7 +1511,7 @@ it.layer(
               applyUsageLimits: () => Effect.void,
             },
             orchestrationAdapter: {} as ProviderInstance["orchestrationAdapter"],
-            textGeneration: {} as ProviderInstance["textGeneration"],
+            textGeneration: fromRunner("fixture", () => Effect.die("Unexpected generation.")),
           },
         ] satisfies ReadonlyArray<ProviderInstance>;
         const instanceRegistryLayer = Layer.succeed(
@@ -1620,7 +1620,7 @@ it.layer(
             applyUsageLimits: () => Effect.void,
           },
           orchestrationAdapter: {} as ProviderInstance["orchestrationAdapter"],
-          textGeneration: {} as ProviderInstance["textGeneration"],
+          textGeneration: fromRunner("fixture", () => Effect.die("Unexpected generation.")),
         });
         const instances = [
           makeInstance(
@@ -1749,7 +1749,7 @@ it.layer(
             applyUsageLimits: () => Effect.void,
           },
           orchestrationAdapter: {} as ProviderInstance["orchestrationAdapter"],
-          textGeneration: {} as ProviderInstance["textGeneration"],
+          textGeneration: fromRunner("fixture", () => Effect.die("Unexpected generation.")),
         } satisfies ProviderInstance;
         const instanceRegistryLayer = Layer.succeed(
           ProviderInstanceRegistry.ProviderInstanceRegistry,
@@ -1872,7 +1872,7 @@ it.layer(
             applyUsageLimits: () => Effect.void,
           },
           orchestrationAdapter: {} as ProviderInstance["orchestrationAdapter"],
-          textGeneration: {} as ProviderInstance["textGeneration"],
+          textGeneration: fromRunner("fixture", () => Effect.die("Unexpected generation.")),
         } satisfies ProviderInstance;
         const layerInstanceRegistry = Layer.succeed(
           ProviderInstanceRegistry.ProviderInstanceRegistry,
@@ -1972,7 +1972,7 @@ it.layer(
             applyUsageLimits: () => Effect.void,
           },
           orchestrationAdapter: {} as ProviderInstance["orchestrationAdapter"],
-          textGeneration: {} as ProviderInstance["textGeneration"],
+          textGeneration: fromRunner("fixture", () => Effect.die("Unexpected generation.")),
         } satisfies ProviderInstance;
         const layerInstanceRegistry = Layer.succeed(
           ProviderInstanceRegistry.ProviderInstanceRegistry,
@@ -2160,7 +2160,7 @@ it.layer(
               applyUsageLimits: () => Effect.void,
             },
             orchestrationAdapter: {} as ProviderInstance["orchestrationAdapter"],
-            textGeneration: {} as ProviderInstance["textGeneration"],
+            textGeneration: fromRunner("fixture", () => Effect.die("Unexpected generation.")),
           } satisfies ProviderInstance;
           const layerInstanceRegistry = Layer.succeed(
             ProviderInstanceRegistry.ProviderInstanceRegistry,
@@ -2263,7 +2263,7 @@ it.layer(
             applyUsageLimits: () => Effect.void,
           },
           orchestrationAdapter: {} as ProviderInstance["orchestrationAdapter"],
-          textGeneration: {} as ProviderInstance["textGeneration"],
+          textGeneration: fromRunner("fixture", () => Effect.die("Unexpected generation.")),
         } satisfies ProviderInstance;
         const layerInstanceRegistry = Layer.succeed(
           ProviderInstanceRegistry.ProviderInstanceRegistry,
@@ -2296,15 +2296,15 @@ it.layer(
         yield* Effect.gen(function* () {
           const registry = yield* ProviderRegistry.ProviderRegistry;
 
-          assert.deepStrictEqual(yield* registry.getProviders, [
-            withBundledCompatibility(cachedProvider),
-          ]);
-          assert.deepStrictEqual(yield* registry.refresh(codexDriver), [
-            withBundledCompatibility(cachedProvider),
-          ]);
-          assert.deepStrictEqual(yield* registry.refreshInstance(codexInstanceId), [
-            withBundledCompatibility(cachedProvider),
-          ]);
+          const expected = [
+            withBundledCompatibility({
+              ...cachedProvider,
+              memoryGeneration: { summary: false, conflict: false },
+            }),
+          ];
+          assert.deepStrictEqual(yield* registry.getProviders, expected);
+          assert.deepStrictEqual(yield* registry.refresh(codexDriver), expected);
+          assert.deepStrictEqual(yield* registry.refreshInstance(codexInstanceId), expected);
         }).pipe(Effect.provide(runtimeServices));
       }),
     );
@@ -2399,22 +2399,22 @@ it.layer(
             ),
             Stream.filter((provider): provider is ServerProvider => provider !== undefined),
           );
-          const firstError = yield* Stream.toPull(
-            codexSnapshots.pipe(Stream.filter((provider) => provider.status === "error")),
-          );
+          // A pending snapshot can publish immediately because it skips the cache write.
+          const observeNextCodex = (matches: (provider: ServerProvider) => boolean) =>
+            Stream.runCollect(codexSnapshots.pipe(Stream.filter(matches), Stream.take(1))).pipe(
+              Effect.forkScoped({ startImmediately: true }),
+            );
+          const firstError = yield* observeNextCodex((provider) => provider.status === "error");
           const currentCodex = (yield* registry.getProviders).find(
             (provider) => provider.instanceId === "codex",
           );
           const initialCodex =
-            currentCodex?.status === "error" ? currentCodex : (yield* firstError)[0];
-          assert.strictEqual(initialCodex?.status, "error");
-          assert.strictEqual(initialCodex?.installed, false);
+            currentCodex?.status === "error" ? currentCodex : (yield* Fiber.join(firstError))[0];
+          expect(initialCodex).toMatchObject({ status: "error", installed: false });
           assert.deepStrictEqual(spawnedCommands, [firstMissing]);
 
-          const pendingRebuild = yield* Stream.toPull(
-            codexSnapshots.pipe(
-              Stream.filter((provider) => provider.status === "warning" && !provider.installed),
-            ),
+          const pendingRebuild = yield* observeNextCodex(
+            (provider) => provider.status === "warning" && !provider.installed,
           );
           yield* serverSettings.updateSettings({
             providerInstances: {
@@ -2429,15 +2429,14 @@ it.layer(
           yield* Deferred.succeed(allowLazySettingsStream, undefined);
 
           yield* Deferred.await(secondProbeStarted);
-          yield* pendingRebuild;
-          const rebuiltError = yield* Stream.toPull(
-            codexSnapshots.pipe(Stream.filter((provider) => provider.status === "error")),
-          );
+          const [pendingCodex] = yield* Fiber.join(pendingRebuild);
+          assert.strictEqual(pendingCodex?.awaitingFirstCheck, true);
+          const rebuiltError = yield* observeNextCodex((provider) => provider.status === "error");
           yield* Deferred.succeed(releaseSecondProbe, undefined);
-          const [reprobedCodex] = yield* rebuiltError;
+          const [reprobedCodex] = yield* Fiber.join(rebuiltError);
           assert.deepStrictEqual(spawnedCommands, [firstMissing, secondMissing]);
-          assert.strictEqual(reprobedCodex?.status, "error");
-          assert.strictEqual(reprobedCodex?.installed, false);
+          expect(reprobedCodex).toMatchObject({ status: "error", installed: false });
+          assert.strictEqual(reprobedCodex?.awaitingFirstCheck, undefined);
         }).pipe(Effect.provide(runtimeServices));
       }),
     );

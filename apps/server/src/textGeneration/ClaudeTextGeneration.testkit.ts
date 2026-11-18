@@ -12,7 +12,7 @@ import { expect } from "vite-plus/test";
 import * as PlatformError from "effect/PlatformError";
 import * as ServerConfig from "../config.ts";
 import { SYNTHETIC_CLAUDE_MODEL_CATALOG } from "../provider/ClaudeModelCatalog.testFixtures.ts";
-import type * as TextGeneration from "./TextGeneration.ts";
+import type { ProviderTextGeneration } from "@goat/provider-core/server/textGeneration";
 import { makeClaudeTextGeneration } from "./ClaudeTextGeneration.ts";
 import { ClaudeMemoryRegistryQuery } from "./ClaudeMemoryIsolation.ts";
 import { writeFakeCli } from "@goat/provider-testing/fakeCli";
@@ -88,7 +88,7 @@ export function withFakeClaudeEnv<A, E, R>(
     cwdMustNotBe?: string;
     claudeConfig?: Partial<ClaudeSettings>;
   },
-  effectFn: (textGeneration: TextGeneration.TextGeneration["Service"]) => Effect.Effect<A, E, R>,
+  effectFn: (textGeneration: ProviderTextGeneration) => Effect.Effect<A, E, R>,
 ) {
   return Effect.gen(function* () {
     const fs = yield* FileSystem.FileSystem;

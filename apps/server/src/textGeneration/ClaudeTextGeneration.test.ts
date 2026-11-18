@@ -185,7 +185,6 @@ it.layer(layerClaudeTextGenerationTest)("ClaudeTextGeneration", (it) => {
           expect(result.failure.detail).toContain("Failed to collect process output");
       }),
   );
-
   it.effect.each(memoryOperations)(
     "records the resolved Claude alias and option suffix for %s",
     (operation) =>
@@ -211,6 +210,7 @@ it.layer(layerClaudeTextGenerationTest)("ClaudeTextGeneration", (it) => {
                 { id: "effort", value: "high" },
               ],
             });
+            expect(yield* generation.memoryCapabilities).toEqual({ summary: true, conflict: true });
             const generated =
               operation === "resolveMemoryConflict"
                 ? yield* generation.resolveMemoryConflict!({
@@ -272,10 +272,10 @@ it.layer(layerClaudeTextGenerationTest)("ClaudeTextGeneration", (it) => {
                 : generation.generateMemorySummary!(memorySummary),
             );
             expect(failure.cause).toMatchObject({ code: "unavailable" });
+            expect(Object.values(yield* generation.memoryCapabilities)).toEqual([false, false]);
           }),
       ),
   );
-
   it.effect.each(
     memoryOperations.flatMap((operation) =>
       [

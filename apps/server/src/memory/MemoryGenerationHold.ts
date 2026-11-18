@@ -11,6 +11,11 @@
  */
 import * as M from "@goat/contracts";
 import {
+  configuredMemoryModelSelection,
+  resolveMemoryModelSelection,
+  type MemoryGenerationOperation,
+} from "@goat/shared/serverSettings";
+import {
   classifyTextGenerationFailure,
   type TextGenerationFailureKind,
 } from "@goat/provider-core/server/textGenerationUtils";
@@ -120,6 +125,10 @@ export function deterministicFailure(error: unknown): MemoryGenerationHoldReason
 export class MemoryGenerationHold extends Context.Service<
   MemoryGenerationHold,
   {
+    readonly resolveModel: (
+      settings: M.ServerSettings,
+      operation?: MemoryGenerationOperation,
+    ) => Effect.Effect<M.ModelSelection | null>;
     /** The hold key: the model selection and its provider's version. */
     readonly keyFor: (selection: M.MemoryModelSelection) => Effect.Effect<string>;
     /** Whether a call for this key would be refused now. */
@@ -146,6 +155,19 @@ export const make = Effect.gen(function* () {
   const providers = yield* Effect.serviceOption(ProviderRegistry.ProviderRegistry);
   const holds = yield* Ref.make(new Map<string, HoldState>());
   const probing = yield* Ref.make(new Set<string>());
+
+  const resolveModel = Effect.fn("MemoryGenerationHold.resolveModel")(function* (
+    settings: M.ServerSettings,
+    operation?: MemoryGenerationOperation,
+  ) {
+    if (Option.isNone(providers)) return configuredMemoryModelSelection(settings);
+    return resolveMemoryModelSelection(
+      settings,
+      yield* providers.value.getProviders,
+      yield* Clock.currentTimeMillis,
+      operation,
+    );
+  });
 
   const keyFor = (selection: M.MemoryModelSelection) =>
     Effect.gen(function* () {
@@ -244,7 +266,7 @@ export const make = Effect.gen(function* () {
       }),
     );
 
-  return MemoryGenerationHold.of({ keyFor, isHeld, guard, release, status });
+  return MemoryGenerationHold.of({ resolveModel, keyFor, isHeld, guard, release, status });
 });
 
 const withoutKey = (current: Map<string, HoldState>, key: string) => {

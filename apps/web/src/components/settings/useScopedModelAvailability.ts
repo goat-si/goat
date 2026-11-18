@@ -1,4 +1,5 @@
 import type { ProviderInstanceId, UnifiedSettings } from "@goat/contracts";
+import { isTextGenerationEligible } from "@goat/shared/serverSettings";
 
 import { mergeEnvironmentSettings } from "../../hooks/useSettings";
 import {
@@ -17,11 +18,16 @@ export function useScopedModelDisabledReason(
   settings: UnifiedSettings,
   entries: readonly ProviderInstanceEntry[],
   textGeneration = false,
+  reviewGuideNow?: number,
 ) {
   const { targets } = useSettingsScope();
   const { environments } = useEnvironments();
   const providersByEnvironment = useEnvironmentProviders();
-  return (instanceId: ProviderInstanceId, model: string): string | null => {
+  return (
+    instanceId: ProviderInstanceId,
+    model: string,
+    { includeHidden = false }: { includeHidden?: boolean } = {},
+  ): string | null => {
     const sourceEntry = entries.find((entry) => entry.instanceId === instanceId);
     for (const candidate of targets) {
       const environment = environments.find(
@@ -37,15 +43,23 @@ export function useScopedModelDisabledReason(
       const optionsForInstance = textGeneration
         ? getTextGenerationModelOptionsByInstance
         : getCustomModelOptionsByInstance;
+      const merged = mergeEnvironmentSettings(candidate.settings, settings);
       const options = optionsForInstance(
-        mergeEnvironmentSettings(candidate.settings, settings),
+        includeHidden ? { ...merged, providerModelPreferences: {} } : merged,
         providers,
       ).get(instanceId);
       if (
         !entry?.enabled ||
         !entry.isAvailable ||
         entry.driverKind !== sourceEntry?.driverKind ||
-        !options?.some((option) => option.slug === model && !option.isUnavailable)
+        !options?.some((option) => option.slug === model && !option.isUnavailable) ||
+        (reviewGuideNow !== undefined &&
+          !isTextGenerationEligible(
+            merged,
+            { instanceId, model },
+            providers.find((provider) => provider.instanceId === instanceId),
+            { projectId: candidate.projectId, now: reviewGuideNow, purpose: "reviewGuide" },
+          ))
       ) {
         return `This model is unavailable on ${environment?.label ?? "a selected environment"}. Select that environment to choose its model separately.`;
       }
