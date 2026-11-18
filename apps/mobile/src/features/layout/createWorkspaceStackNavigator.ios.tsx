@@ -376,8 +376,10 @@ function WorkspaceColumns(
         if (inspector.visible) toggleAuxiliaryPane();
       }}
       columnMetrics={{
-        minimumPrimaryColumnWidth: 280,
-        maximumPrimaryColumnWidth: Math.max(380, primaryColumnWidth),
+        minimumPrimaryColumnWidth: layout.primarySidebarOverlaysContent ? primaryColumnWidth : 280,
+        maximumPrimaryColumnWidth: layout.primarySidebarOverlaysContent
+          ? primaryColumnWidth
+          : Math.max(380, primaryColumnWidth),
         preferredPrimaryColumnWidthOrFraction: primaryColumnWidth,
         minimumSecondaryColumnWidth: 320,
         // UIKit can retain its automatic width despite a new preference; constrain both edges.
