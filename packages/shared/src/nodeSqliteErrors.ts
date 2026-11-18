@@ -22,16 +22,51 @@ const isNoTransactionError = (error: SqlError) => {
   return /no transaction is active/i.test(message);
 };
 
-/**
- * A ROLLBACK that finds no transaction succeeds. Effect 4.1 turns a failed transaction cleanup into
- * a defect that typed catch no longer recovers, so the write's own SqlError would be lost.
- */
-export const toleratingFinishedRollback = (connection: Connection): Connection => ({
+const failedRollbacks = new WeakSet<Connection>();
+// Identify SqlClient's cleanup command separately from statements issued inside the transaction.
+const TRANSACTION_ROLLBACK = "ROLLBACK /* GOAT transaction cleanup */";
+
+const rollback = (connection: Connection) =>
+  connection
+    .executeUnprepared("ROLLBACK", [], undefined)
+    .pipe(Effect.catchIf(isNoTransactionError, () => Effect.succeed([])));
+
+/** The borrower or transaction acquirer must hold the connection lease. */
+const recoverConnection = (connection: Connection) =>
+  Effect.suspend(() =>
+    failedRollbacks.has(connection)
+      ? rollback(connection).pipe(
+          Effect.map(() => {
+            failedRollbacks.delete(connection);
+            return connection;
+          }),
+        )
+      : Effect.succeed(connection),
+  );
+
+const withRollbackCleanup = (connection: Connection): Connection => ({
   ...connection,
   executeUnprepared: (sql, params, rowTransform) =>
-    /^\s*ROLLBACK\s*$/i.test(sql)
-      ? connection
-          .executeUnprepared(sql, params, rowTransform)
-          .pipe(Effect.catchIf(isNoTransactionError, () => Effect.succeed([])))
+    sql === TRANSACTION_ROLLBACK
+      ? rollback(connection).pipe(
+          // Effect turns cleanup failure into a defect, masking the body's typed failure.
+          Effect.catch((cause) => {
+            failedRollbacks.add(connection);
+            return Effect.logWarning("SQLite rollback failed; connection requires cleanup", {
+              cause,
+            }).pipe(Effect.as([]));
+          }),
+        )
       : connection.executeUnprepared(sql, params, rowTransform),
 });
+
+const transactionControls = <R>(acquire: Effect.Effect<Connection, SqlError, R>) => {
+  const acquirer = Effect.flatMap(acquire, recoverConnection);
+  return {
+    acquirer,
+    transactionAcquirer: Effect.map(acquirer, withRollbackCleanup),
+    rollback: TRANSACTION_ROLLBACK,
+  };
+};
+
+export const sqliteRollback = { recoverConnection, transactionControls };
