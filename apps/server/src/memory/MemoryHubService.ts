@@ -1,3 +1,4 @@
+import { projectPushReceipt } from "./MemoryTailAdmission.ts";
 import { MemoryHubSettingsSnapshot } from "./MemoryHubSettings.ts";
 // @effect-diagnostics-next-line nodeBuiltinImport:off -- server-owned checkpoint identifiers.
 import * as NodeCrypto from "node:crypto";
@@ -193,7 +194,7 @@ export const make = Effect.gen(function* () {
           .admitHubOperation({ authority: authority(principal, request), operation })
           .pipe(Effect.tap(() => activity.notify)),
       );
-      return { receipts };
+      return { receipts: receipts.map((receipt) => projectPushReceipt(receipt, request.features)) };
     },
   );
   const pull: MemoryHubService["Service"]["pull"] = Effect.fn("MemoryHubService.pull")(
@@ -305,7 +306,10 @@ export const make = Effect.gen(function* () {
         operation: request.operation,
         resolutionRequest: request,
       })
-      .pipe(Effect.tap(() => activity.notify));
+      .pipe(
+        Effect.tap(() => activity.notify),
+        Effect.map((receipt) => projectPushReceipt(receipt, request.features)),
+      );
   });
   const requestSourceRead: MemoryHubService["Service"]["requestSourceRead"] = Effect.fn(
     "MemoryHubService.requestSourceRead",
@@ -993,5 +997,4 @@ export const makeAdministrator = Effect.gen(function* () {
   );
   return MemoryHubAdministrator.of({ update, pending, initializeDefaultHub });
 });
-
 export const administratorLayer = Layer.effect(MemoryHubAdministrator, makeAdministrator);
