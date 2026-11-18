@@ -309,3 +309,54 @@ On `4b4df3ba118c3f62c6f59845b842a7ea70c73fea`, `vp run check:changed origin/chas
 A plain fast-forward push updated `chase/t3-261114-next3-k8` from `dd6456ad38` to `4b4df3ba118c3f62c6f59845b842a7ea70c73fea`. The remote head was read back at the exact SHA.
 
 NOT RUN: lane hosted CI, real-client P1, live SSH to a Pen member and a real shared-home desktop update.
+
+## Fix round 2
+
+Review base `4b4df3ba118c3f62c6f59845b842a7ea70c73fea`.
+
+- **P2-1, C3.** The production preload decodes `AnnotationVoiceEvent` from the second payload argument. The original GOAT voice implementation (`d33086fbd6`, `apps/desktop/src/preload.ts`) paired that decoder with a sender that emitted the tab ID followed by the event. Exercise the guest event through the manager and preload in the existing guest-events suite. Main and preload keep their existing signature and schema.
+- **P2-2, C4.** Upstream `79daf43c1c` (`apps/desktop/src/backend/DesktopBackendPool.ts`) checks that the new process is ready before releasing its marker. GOAT's SSH waiter (`packages/ssh/src/sharedHomeUpdateWait.ts`) already stops waiting when the runtime record is newer than the marker or its 30-second deadline elapses. Keep the shared marker for that existing waiter and remove the tunnel marker at its current cleanup point. Older SSH clients ignore the shared file and newer SSH clients retain their existing behavior with older desktops, including when the file is absent, expired, or malformed. Shared marker retention applies only to the explicitly shared home. No RPC or stored row changes. Verify a failed install with backend recovery held by a Deferred, and separately verify the tunnel marker is already gone.
+- **P3, C2.** GOAT's preview menu already derives Find from `apps/web/src/components/preview/PreviewFindBar.tsx`, and `apps/web/src/shortcuts/dispatcher.ts` uses an explicit false to continue to the next scope. Use the same view eligibility for browser Find in the palette, view menus and route shortcuts, including a searchable read-only connection. Verify fallthrough and dispatch in the existing route shortcut browser suite.
+
+### Commits and failing-first proof
+
+All three commits are GOAT-authored, in `4b4df3ba11..59efd3bcf9`.
+
+| Finding | Commit | Failure before fix |
+|---|---|---|
+| P2-1 annotation voice | `692e6f3f629140c5b37b3c4f8a82272feb4c76f2` | The production preload listener received zero events after the manager sent a valid guest event. |
+| P2-2 failed desktop install | `beefe1b0b6b00a08855032945f380457264d5adb` | The shared-home marker was absent at the recovery-start barrier, where the tunnel marker was already cleared. |
+| P3 Find | `59efd3bcf939497e65fae372035204a7d4f6d8df` | The fallback scope received zero calls on unavailable Find. A searchable read-only route received zero Find actions after claiming the key. |
+
+Running `vp test run` on the three whole regression files before the fixes exited 1 with four expected failures and six passes. The red run used `apps/desktop/src/preview/Manager.guestEvents.test.ts`, `apps/desktop/src/updates/DesktopUpdates.sharedHome.test.ts` and `apps/web/src/shortcuts/chatRouteCommands.browser.test.ts`.
+
+### Focused verification
+
+`vp test run --reporter=default --reporter=json --outputFile=<receipt> <files below>` exited 0 with 109 passed in 10 whole files and zero skips.
+
+| File | Passed |
+|---|---:|
+| `apps/desktop/src/preview/AnnotationVoiceRelay.test.ts` | 1 |
+| `apps/desktop/src/preview/Manager.guestEvents.test.ts` | 5 |
+| `apps/desktop/src/updates/DesktopUpdates.sharedHome.test.ts` | 1 |
+| `apps/desktop/src/updates/DesktopUpdates.test.ts` | 35 |
+| `apps/web/src/components/ReopenClosedViewShortcut.browser.test.tsx` | 8 |
+| `apps/web/src/components/commandPaletteFindItems.test.tsx` | 1 |
+| `apps/web/src/components/preview/PreviewView.browser.test.tsx` | 19 |
+| `apps/web/src/shortcuts/chatRouteCommands.browser.test.ts` | 4 |
+| `apps/web/src/shortcuts/dispatcher.browser.test.ts` | 7 |
+| `packages/ssh/src/runtimeProbe.invocations.test.ts` | 28 |
+
+`git merge-tree --write-tree HEAD origin/chase/t3-261114-next3` exited 0 against `78bcbf193331327e4b88e65e522ceb318b67db14`. The existing integration merge base is `d4dfd457571834bb2c3c85984e64f5abd4af0e5d`. The lockfile did not change. `wc -l` measured 3611 lines for `Manager.ts` and 1485 for `DesktopUpdates.ts`, matching their budget entries.
+
+P1 for the coordinator covers dictation in an annotation, Find from the browser menu, palette and chord, and failed-install recovery with a reconnect to the same home.
+
+### READY receipt
+
+`vp run check:changed origin/chase/t3-261114-next3` exited 0 on `59efd3bcf939497e65fae372035204a7d4f6d8df`, comparing 112 files since `d4dfd4575718`. Format, lint, both Knip passes, GraphQL, agent surface audit, context budget and typecheck for 39 packages passed. The server batch passed 5,080 and skipped 12 in 369 files. The workspace batch passed 8,439 and skipped 14 in 399 files. Total 13,519 passed, 26 skipped and zero failures.
+
+From `apps/server`, `GOAT_TEST_TMP_GUARD=fail vp test run src/assets/NativeAppIconResolver.test.ts src/auth/RpcAuthorization.test.ts src/background/KeepAwake.test.ts src/preview/ServerBrowser.desktopSize.test.ts src/preview/ServerBrowser.stopLoading.test.ts src/preview/ServerBrowserStream.test.ts src/process/externalLauncher.test.ts` exited 0 with 111 passed in seven files and zero skips.
+
+After the gate, the latest fetched integration head `3d683c091e517f93c2fa6fefb487b9af60f28fce` was also conflict-free by `git merge-tree --write-tree HEAD origin/chase/t3-261114-next3` with exit 0 and the same merge base. A plain fast-forward push updated K8 from `4b4df3ba11` to `59efd3bcf939497e65fae372035204a7d4f6d8df`. `git ls-remote` verified the exact head.
+
+NOT RUN: hosted lane CI, integrated P1, a live shared-home installer/SSH reconnect, and dependency reinstall (lockfile unchanged).
