@@ -119,7 +119,7 @@ import { orchestrationEnvironment } from "../../state/orchestration";
 import { useDelayedStatus } from "../../lib/useDelayedStatus";
 import { PendingApprovalCard } from "./PendingApprovalCard";
 import { ComposerErrorNotice } from "./ComposerErrorNotice";
-import { ThreadWorkspaceBanner } from "./ThreadWorkspaceBanner";
+import { LiveThreadWorkspaceBanner } from "./LiveThreadWorkspaceBanner";
 import { ComposerFeedback } from "./ComposerFeedback";
 import { ComposerUsageLimits } from "./ComposerUsageLimits";
 import { PendingUserInputCard } from "./PendingUserInputCard";
@@ -1030,7 +1030,7 @@ function ThreadDetailBody(
     const approvalsToDecline = props.activePendingApprovals;
     const declineBeforeDispatch =
       approvalsToDecline.length > 0 && props.activePendingUserInput === null
-        ? async (text: string, hasAttachmentsOrContext: boolean) => {
+        ? async (text: string, hasAttachmentsOrContext: boolean, saveMode = async () => true) => {
             if (scope.aborted || stillSendable?.() === false || props.respondingApprovalId !== null)
               return false;
             const feedbackTarget = approvalsToDecline[0];
@@ -1047,7 +1047,7 @@ function ThreadDetailBody(
                 : false;
             }
             return (
-              props.respondingApprovalId === null &&
+              (await saveMode()) &&
               (await declinePendingApprovals(approvalsToDecline, props.onRespondToApproval)) &&
               !scope.aborted &&
               // A draft edited or pasted into during the decline isn't what the user sent.
@@ -1384,7 +1384,7 @@ function ThreadDetailBody(
                   <SideChatParentRow thread={props.selectedThread} />
                   {!props.draftMode &&
                   props.serverConfig?.environment.capabilities.worktreeRestore === true ? (
-                    <ThreadWorkspaceBanner
+                    <LiveThreadWorkspaceBanner
                       environmentId={props.environmentId}
                       threadId={props.selectedThread.id}
                     />

@@ -83,6 +83,29 @@ describe("mobile native names", () => {
     expect(exposedAndroid.size).toBeGreaterThan(0);
   });
 
+  it("lists every Android Expo module class in its module config", () => {
+    for (const name of moduleNames) {
+      const dir = NodePath.join(modulesDir, name);
+      const config = JSON.parse(
+        read(NodePath.join(dir, "expo-module.config.json")),
+      ) as ModuleConfig;
+      const listed = config.android?.modules ?? [];
+      const kotlin = allModuleFiles.filter(
+        (path) =>
+          path.startsWith(NodePath.join(dir, "android") + NodePath.sep) && path.endsWith(".kt"),
+      );
+      for (const path of kotlin) {
+        const source = read(path);
+        const pkg = /^package ([\w.]+)/m.exec(source)?.[1];
+        for (const match of source.matchAll(/\bclass (\w+)\s*:\s*Module\(\)/g)) {
+          expect(listed, `${name}: ${NodePath.relative(root, path)}`).toContain(
+            `${pkg}.${match[1]}`,
+          );
+        }
+      }
+    }
+  });
+
   it("requires only native names a module exposes", () => {
     const js = walk(NodePath.join(mobile, "src")).filter((path) => /\.tsx?$/.test(path));
     const wanted: Array<readonly [string, string]> = [];

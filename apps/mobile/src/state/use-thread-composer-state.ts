@@ -124,6 +124,7 @@ import {
 } from "./queued-run-edit";
 import { setPendingConnectionError } from "../state/use-remote-environment-registry";
 import { clearThreadComposerError, setThreadComposerError } from "./thread-composer-error";
+import { type RedirectBeforeDispatch, useSaveRuntimeModeBeforeRedirect } from "./redirectSettings";
 import {
   useSelectedThreadProjection,
   useSelectedThreadVisibleTurnItems,
@@ -154,6 +155,7 @@ function activeComposerDraftKey(thread: {
 
 export function useThreadComposerState() {
   const sideChatCommand = useSideChatCommand();
+  const saveModeBeforeRedirect = useSaveRuntimeModeBeforeRedirect();
   const {
     selectedThread: selectedThreadShell,
     selectedThreadCreation,
@@ -552,10 +554,7 @@ export function useThreadComposerState() {
 
   const onSendMessage = async (
     followUpOverride?: ActiveTurnComposerAction,
-    beforeDispatch?: (
-      text: string,
-      hasAttachmentsOrContext: boolean,
-    ) => Promise<boolean | "responded">,
+    beforeDispatch?: RedirectBeforeDispatch,
     onWillEnqueue?: () => void,
   ) => {
     if (
@@ -679,10 +678,16 @@ export function useThreadComposerState() {
       return null;
     }
 
+    const metadata = makeQueuedMessageMetadata();
     if (beforeDispatch !== undefined) {
       const response = await beforeDispatch(
         text,
         attachments.length > 0 || draft.context !== undefined,
+        async () => {
+          const refusal = await saveModeBeforeRedirect(thread, draft.runtimeMode, metadata);
+          if (refusal !== null) setThreadComposerError(threadKey, refusal);
+          return refusal === null;
+        },
       );
       if (!response) return null;
       // A context paste still landing, or any draft or settings change while approvals were
@@ -725,7 +730,6 @@ export function useThreadComposerState() {
           ? "queue"
           : "auto";
 
-    const metadata = makeQueuedMessageMetadata();
     // Only a send the notice announced compacts, since the notice's minute clock can trail the
     // exact deadline.
     const compactBeforeSend =

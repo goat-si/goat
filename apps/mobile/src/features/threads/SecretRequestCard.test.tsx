@@ -7,6 +7,7 @@ const state = vi.hoisted(() => ({ answer: vi.fn() }));
 vi.mock("@effect/atom-react", () => ({ useAtomValue: (atom: unknown) => atom }));
 vi.mock("react-native", () => ({
   View: ({ children }: { children?: ReactNode }) => <div>{children}</div>,
+  Pressable: ({ children }: { children?: ReactNode }) => <div>{children}</div>,
 }));
 vi.mock("../../components/ui/AppSymbol", () => ({ SymbolView: () => null }));
 vi.mock("../../components/ui/AppText", () => ({
