@@ -502,7 +502,13 @@ it.layer(layer)("OpenCode v2 memory generation", (it) => {
           }),
           Effect.provide(
             Layer.merge(
-              Layer.mock(OpenCodeRuntime.OpenCodeRuntime)({}),
+              Layer.mock(OpenCodeRuntime.OpenCodeRuntime)({
+                createOpenCodeSdkClient: () => {
+                  throw new Error("Unexpected OpenCode v1 SDK client.");
+                },
+                startOpenCodeServerProcess: () =>
+                  Effect.die("An uncertified memory server must never be started."),
+              }),
               Layer.succeed(OpenCode2Client, {
                 connect: () => Effect.die("An uncertified memory server must never be connected."),
               }),
