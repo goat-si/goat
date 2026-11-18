@@ -884,3 +884,43 @@ it.effect("remember saves text and a scope as a fact this conversation backs, on
     expect((yield* decodeRefusal(noProject.body)).message).toContain("no project memory");
   }).pipe(Effect.provide(Fixture.layer)),
 );
+
+it.effect("forgets by ID from a callerless session and keeps the original receipt on retry", () =>
+  Effect.gen(function* () {
+    const service = yield* MemoryService.MemoryService;
+    yield* service.upsert(Fixture.upsert(), Effect.void);
+    const input = { memoryId: Fixture.memoryId };
+    const first = yield* Fixture.call("memory_forget", input);
+    expect(first.body).toMatchObject({ outcome: "deleted", memoryId: Fixture.memoryId });
+    const original = yield* decodeReceipt(first.body);
+    expect((yield* Fixture.call("memory_forget", input)).body).toMatchObject({
+      outcome: "noop",
+      operationId: original.operationId,
+    });
+    expect(
+      yield* service.read({ ...input, memorySpaceId: Fixture.space }, Effect.void),
+    ).toMatchObject({ status: "forgotten" });
+  }).pipe(Effect.provide(Fixture.layer)),
+);
+
+it.effect("forget by ID refuses an unknown memory without making a tombstone", () =>
+  Effect.gen(function* () {
+    const store = yield* Store.MemoryStore;
+    expect(
+      (yield* Fixture.call("memory_forget", { memoryId: Fixture.memoryId })).body,
+    ).toMatchObject({ code: "not_found" });
+    expect((yield* store.loadAggregate(Fixture.space, Fixture.memoryId)).tombstone).toBeNull();
+  }).pipe(Effect.provide(Fixture.layer)),
+);
+
+it.effect("forget by ID still requires a memory write grant", () =>
+  Effect.gen(function* () {
+    const service = yield* MemoryService.MemoryService;
+    yield* service.upsert(Fixture.upsert(), Effect.void);
+    const input = { memoryId: Fixture.memoryId, memorySpaceId: Fixture.space };
+    expect(
+      (yield* Fixture.call("memory_forget", input, Fixture.scope(["memory:read"]))).result.isError,
+    ).toBe(true);
+    expect(yield* service.read(input, Effect.void)).toMatchObject({ status: "active" });
+  }).pipe(Effect.provide(Fixture.layer)),
+);
