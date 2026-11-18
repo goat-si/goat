@@ -3697,7 +3697,6 @@ describe("AcpAdapterV2", () => {
         .pipe(Effect.forkScoped);
       const permission = yield* Fiber.join(permissionFiber);
       assert.equal(permission.outcome.outcome, "selected");
-      assert.deepEqual(permission.outcome, { outcome: "selected", optionId: " opaque-choice " });
       if (runtimeInput?.onOutgoingResponse === undefined) {
         return yield* Effect.die("ACP runtime must expose native response acknowledgements");
       }
@@ -3719,6 +3718,7 @@ describe("AcpAdapterV2", () => {
         providerTurnId: pending.runtimeRequest.providerTurnId,
       });
       yield* Fiber.join(turnFiber);
+      assert.deepEqual(permission.outcome, { outcome: "selected", optionId: " opaque-choice " });
     }).pipe(Effect.provide(layerTest), Effect.scoped),
   );
 
