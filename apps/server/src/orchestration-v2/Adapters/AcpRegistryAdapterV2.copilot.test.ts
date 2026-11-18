@@ -78,6 +78,12 @@ describe("AcpRegistryAdapterV2 Copilot", () => {
             }),
             sessionEvent("assistant.idle"),
             marker("after foreground idle"),
+            sessionEvent("assistant.turn_start"),
+            update({
+              sessionUpdate: "agent_thought_chunk",
+              content: { type: "text", text: "Unclaimed wake thought." },
+            }),
+            sessionEvent("assistant.idle"),
             ...(ordinaryPrompt
               ? [
                   sessionEvent("assistant.turn_start"),
@@ -100,6 +106,12 @@ describe("AcpRegistryAdapterV2 Copilot", () => {
             }),
             // The background agent finishes; Copilot reads it and starts a new root turn.
             sessionEvent("assistant.turn_start"),
+            ...Array.from({ length: 300 }, (_, index) =>
+              update({
+                sessionUpdate: "agent_thought_chunk",
+                content: { type: "text", text: `<wake-thought-${index}>` },
+              }),
+            ),
             update({
               sessionUpdate: "tool_call",
               toolCallId: "read-agent-1",
@@ -147,6 +159,9 @@ describe("AcpRegistryAdapterV2 Copilot", () => {
         const continuation = yield* session.until((event) => event.type === "turn.terminal");
         assert.include(JSON.stringify(continuation), "Agent 1 finished");
         assert.notInclude(JSON.stringify(continuation), "Late text from the original prompt.");
+        assert.notInclude(JSON.stringify(continuation), "Unclaimed wake thought.");
+        assert.notInclude(JSON.stringify(continuation), "<wake-thought-0>");
+        assert.include(JSON.stringify(continuation), "<wake-thought-299>");
         assert.include(JSON.stringify(continuation.at(-1)), '"status":"completed"');
       }).pipe(Effect.provide(layerTest)),
   );
