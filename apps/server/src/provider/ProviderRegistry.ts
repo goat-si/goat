@@ -24,6 +24,7 @@ import * as Option from "effect/Option";
 import * as Path from "effect/Path";
 import * as PubSub from "effect/PubSub";
 import * as Ref from "effect/Ref";
+import * as Scheduler from "effect/Scheduler";
 import * as Stream from "effect/Stream";
 import * as Semaphore from "effect/Semaphore";
 import * as Scope from "effect/Scope";
@@ -45,6 +46,7 @@ import {
 } from "./providerGenerationSnapshot.ts";
 import * as ServerConfig from "../config.ts";
 import * as ProviderInstanceRegistry from "./ProviderInstanceRegistry.ts";
+import { makeProviderSnapshotWatchers } from "./ProviderSnapshotWatchers.ts";
 import {
   orderProviderSnapshots,
   resolveProviderStatusCachePath,
@@ -249,6 +251,11 @@ export const layer = Layer.effect(
       new Map(),
     );
     const syncSemaphore = yield* Semaphore.make(1);
+    const watchers = makeProviderSnapshotWatchers(serviceScope);
+    const isCurrentInstance = (instance: ProviderInstance) =>
+      instanceRegistry
+        .getInstance(instance.instanceId)
+        .pipe(Effect.map((current) => current === instance));
 
     const persistProvider = Effect.fn("ProviderRegistry.persistProvider")(function* (
       provider: ServerProvider,
@@ -293,6 +300,7 @@ export const layer = Layer.effect(
         readonly publish?: boolean;
         readonly persist?: boolean;
         readonly replace?: boolean;
+        readonly instance?: ProviderInstance;
       },
     ) {
       const manifest = yield* manifestService.current;
@@ -304,42 +312,47 @@ export const layer = Layer.effect(
           concurrency: "unbounded",
         },
       );
-      const [previousProviders, providers, providersToPersist] = yield* Ref.modify(
-        providersRef,
-        (previousProviders) => {
-          const mergedProviders = new Map(
-            previousProviders.map((provider) => [snapshotInstanceKey(provider), provider] as const),
+      const commit = Ref.modify(providersRef, (previousProviders) => {
+        const mergedProviders = new Map(
+          previousProviders.map((provider) => [snapshotInstanceKey(provider), provider] as const),
+        );
+        const updatedKeys = new Set<ProviderInstanceId>();
+
+        const instances = Ref.getUnsafe(liveSubsRef);
+        for (const snapshot of nextProvidersWithUpdateState) {
+          const key = snapshotInstanceKey(snapshot);
+          // The capability may have been revoked while this snapshot was being published.
+          const provider = applyProviderMemoryRevocation(snapshot, instances.get(key));
+          updatedKeys.add(key);
+          mergedProviders.set(
+            key,
+            options?.replace === true
+              ? provider
+              : mergeProviderSnapshot(mergedProviders.get(key), provider),
           );
-          const updatedKeys = new Set<ProviderInstanceId>();
+        }
 
-          const instances = Ref.getUnsafe(liveSubsRef);
-          for (const snapshot of nextProvidersWithUpdateState) {
-            const key = snapshotInstanceKey(snapshot);
-            // The capability may have been revoked while this snapshot was being published.
-            const provider = applyProviderMemoryRevocation(snapshot, instances.get(key));
-            updatedKeys.add(key);
-            mergedProviders.set(
-              key,
-              options?.replace === true
-                ? provider
-                : mergeProviderSnapshot(mergedProviders.get(key), provider),
-            );
-          }
-
-          const providers = orderProviderSnapshots(
-            [...mergedProviders.values()].map((provider) =>
-              GlobalSkillRegistry.mergeGlobalSkills(
-                classifyCompatibility(provider, manifest),
-                globals,
-              ),
+        const providers = orderProviderSnapshots(
+          [...mergedProviders.values()].map((provider) =>
+            GlobalSkillRegistry.mergeGlobalSkills(
+              classifyCompatibility(provider, manifest),
+              globals,
             ),
+          ),
+        );
+        const providersToPersist = providers.filter((provider) =>
+          updatedKeys.has(snapshotInstanceKey(provider)),
+        );
+        return [[previousProviders, providers, providersToPersist] as const, providers];
+      });
+      const committed = yield* options?.instance === undefined
+        ? commit
+        : isCurrentInstance(options.instance).pipe(
+            Effect.flatMap((current) => (current ? commit : Effect.undefined)),
+            Effect.provideService(Scheduler.PreventSchedulerYield, true),
           );
-          const providersToPersist = providers.filter((provider) =>
-            updatedKeys.has(snapshotInstanceKey(provider)),
-          );
-          return [[previousProviders, providers, providersToPersist] as const, providers];
-        },
-      );
+      if (committed === undefined) return yield* Ref.get(providersRef);
+      const [previousProviders, providers, providersToPersist] = committed;
 
       if (haveProvidersChanged(previousProviders, providers)) {
         if (options?.persist !== false) {
@@ -371,11 +384,10 @@ export const layer = Layer.effect(
       }
     });
     const syncProvider = Effect.fn("syncProvider")(function* (
+      instance: ProviderInstance,
       provider: ServerProvider,
-      options?: {
-        readonly publish?: boolean;
-      },
     ) {
+      if (!(yield* isCurrentInstance(instance))) return yield* Ref.get(providersRef);
       const previous = (yield* Ref.get(providersRef)).find(
         (candidate) => candidate.instanceId === provider.instanceId,
       );
@@ -394,7 +406,8 @@ export const layer = Layer.effect(
           return next;
         });
       }
-      const providers = yield* upsertProviders([provider], options);
+      const providers = yield* upsertProviders([provider], { instance });
+      if (!(yield* isCurrentInstance(instance))) return providers;
       yield* GlobalSkillRegistry.refreshDependentAuth(
         previous,
         provider,
@@ -438,17 +451,13 @@ export const layer = Layer.effect(
       },
     );
 
-    const isCurrentInstance = (instance: ProviderInstance) =>
-      instanceRegistry
-        .getInstance(instance.instanceId)
-        .pipe(Effect.map((current) => current === instance));
     const refreshOneSource = Effect.fn("refreshOneSource")(function* (instance: ProviderInstance) {
       const source = buildSnapshotSource(instance);
       const probe = yield* source.refresh.pipe(Effect.andThen(source.getSnapshot), Effect.exit);
       if (!(yield* isCurrentInstance(instance))) return yield* Ref.get(providersRef);
       const snapshot = yield* probe;
       return yield* correlateSnapshotWithSource(source, snapshot).pipe(
-        Effect.flatMap(syncProvider),
+        Effect.flatMap((provider) => syncProvider(instance, provider)),
       );
     });
 
@@ -642,26 +651,14 @@ export const layer = Layer.effect(
           knownInstanceIds.add(snapshotInstanceKey(provider));
         }
         const previousSubs = yield* Ref.get(liveSubsRef);
-
-        const carriedOver = new Map<ProviderInstanceId, ProviderInstance>();
-        for (const [instanceId, previousInstance] of previousSubs) {
-          const nextInstance = nextByInstance.get(instanceId);
-          if (nextInstance !== undefined && nextInstance === previousInstance) {
-            carriedOver.set(instanceId, previousInstance);
-          }
-        }
-
-        const newlyAdded: Array<readonly [ProviderInstanceId, ProviderInstance]> = [];
-        for (const [instanceId, instance] of nextByInstance) {
-          if (carriedOver.has(instanceId)) {
-            continue;
-          }
-          newlyAdded.push([instanceId, instance] as const);
-        }
+        yield* watchers.retire(nextByInstance);
+        const newlyAdded = instances.filter(
+          (instance) => previousSubs.get(instance.instanceId) !== instance,
+        );
 
         const rebuiltInstanceIds = new Set(
           newlyAdded
-            .map(([instanceId]) => instanceId)
+            .map((instance) => instance.instanceId)
             .filter((instanceId) => previousSubs.has(instanceId)),
         );
         if (rebuiltInstanceIds.size > 0) {
@@ -682,17 +679,22 @@ export const layer = Layer.effect(
         }
 
         // Subscribe before reading so a probe completing mid-sync is observed by at least one path.
-        for (const [, instance] of newlyAdded) {
+        for (const instance of newlyAdded) {
           const source = buildSnapshotSource(instance);
-          yield* Stream.runForEach(source.streamChanges, (provider) =>
-            correlateSnapshotWithSource(source, provider).pipe(Effect.flatMap(syncProvider)),
-          ).pipe(Effect.forkScoped);
+          yield* watchers.start(
+            instance,
+            Stream.runForEach(source.streamChanges, (provider) =>
+              correlateSnapshotWithSource(source, provider).pipe(
+                Effect.flatMap((snapshot) => syncProvider(instance, snapshot)),
+              ),
+            ),
+          );
         }
         yield* Effect.yieldNow;
 
         yield* Effect.forEach(
           newlyAdded,
-          ([, instance]) =>
+          (instance) =>
             Effect.gen(function* () {
               const source = buildSnapshotSource(instance);
               const provider = yield* source.getSnapshot;
@@ -704,7 +706,7 @@ export const layer = Layer.effect(
                 return yield* refreshCompatibility;
               }
               yield* correlateSnapshotWithSource(source, provider).pipe(
-                Effect.flatMap(syncProvider),
+                Effect.flatMap((snapshot) => syncProvider(instance, snapshot)),
               );
             }).pipe(Effect.ignoreCause({ log: true })),
           { concurrency: "unbounded", discard: true },
@@ -714,11 +716,7 @@ export const layer = Layer.effect(
           replace: true,
         });
 
-        const nextSubs = new Map(carriedOver);
-        for (const [instanceId, instance] of newlyAdded) {
-          nextSubs.set(instanceId, instance);
-        }
-        yield* Ref.set(liveSubsRef, nextSubs);
+        yield* Ref.set(liveSubsRef, nextByInstance);
 
         const [previousProviders, providers] = yield* Ref.modify(
           providersRef,
