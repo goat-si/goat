@@ -1,3 +1,5 @@
+import { makePullMemoryTail } from "./MemoryPullTail.ts";
+import { MemoryFloor2Enabled, memoryFloorAdvertisement } from "./MemoryFloor.ts";
 import { validateCheckpointClosureCapacity } from "./MemoryDependencies.ts";
 import { requireMemoryTailFit } from "./MemoryTailAdmission.ts";
 import { checkConflictDependencies } from "./MemoryConflictDependencies.ts";
@@ -427,8 +429,9 @@ const make = Effect.gen(function* () {
         return noteFailure(r.settings.memoryHubVersion, error);
       }),
     );
+  const selfFeatures = memoryFloorAdvertisement(yield* MemoryFloor2Enabled);
   const callPull = (r: Route, i: M.MemoryHubPullInput) =>
-    r.connection ? client.pull(r.connection, i) : hub.pull(i, r.principal!);
+    r.connection ? client.pull(r.connection, i) : hub.pull({ ...i, ...selfFeatures }, r.principal!);
   const release = (r: Route, ticket: M.MemoryResolutionLease) => {
     const input: M.MemoryHubReleaseInput = {
       protocolVersion: 1,
@@ -440,7 +443,9 @@ const make = Effect.gen(function* () {
       fencingToken: ticket.fencingToken,
     };
     return (
-      r.connection ? client.release(r.connection, input) : hub.release(input, r.principal!)
+      r.connection
+        ? client.release(r.connection, input)
+        : hub.release({ ...input, ...selfFeatures }, r.principal!)
     ).pipe(
       Effect.interruptible,
       Effect.timeout("15 seconds"),
@@ -549,7 +554,9 @@ const make = Effect.gen(function* () {
         fencingToken: current.fencingToken,
       };
       const renewed = yield* (
-        r.connection ? client.renew(r.connection, input) : hub.renew(input, r.principal!)
+        r.connection
+          ? client.renew(r.connection, input)
+          : hub.renew({ ...input, ...selfFeatures }, r.principal!)
       ).pipe(
         Effect.tapError(() =>
           Effect.sync(() => {
@@ -818,7 +825,7 @@ const make = Effect.gen(function* () {
       yield* ensureEpoch(r.settings.memoryHubVersion);
       const receipt = yield* r.connection
         ? client.applyResolution(r.connection, row.submission!)
-        : hub.applyResolution(row.submission!, r.principal!);
+        : hub.applyResolution({ ...row.submission!, ...selfFeatures }, r.principal!);
       if (receipt.outcome === "rejected" || receipt.hubSequence === null) {
         if (receipt.outcome !== "rejected")
           return yield* new M.MemoryHubError({ code: "invalid_output" });
@@ -1136,7 +1143,7 @@ const make = Effect.gen(function* () {
             yield* ensureEpoch(r.settings.memoryHubVersion);
             const ticket = yield* r.connection
               ? client.claim(r.connection, frozen.claim)
-              : hub.claim(frozen.claim, r.principal!);
+              : hub.claim({ ...frozen.claim, ...selfFeatures }, r.principal!);
             yield* ensureEpoch(r.settings.memoryHubVersion);
             if (
               ticket.memorySpaceId !== r.space ||
@@ -1236,48 +1243,7 @@ const make = Effect.gen(function* () {
     }),
   );
 
-  const pullTail = Effect.fnUntraced(function* (
-    r: Route,
-    budget: { pages: number; entries: number },
-  ) {
-    let highWatermark: number | undefined;
-    while (budget.pages < 10 && budget.entries < 1000) {
-      const after = yield* store.readCursor(r.space!, r.hubId);
-      const page = yield* callPull(r, {
-        protocolVersion: 1,
-        memorySpaceId: r.space!,
-        environmentId: local,
-        afterSequence: after,
-        limit: Math.min(100, 1000 - budget.entries),
-        ...(highWatermark === undefined ? {} : { highWatermark }),
-      }).pipe(
-        Effect.flatMap(decodePull),
-        Effect.mapError((e) =>
-          e._tag === "SchemaError" ? new M.MemoryHubError({ code: "invalid_output" }) : e,
-        ),
-      );
-      yield* ensureEpoch(r.settings.memoryHubVersion);
-      if (
-        page.checkpoint ||
-        (highWatermark !== undefined && page.highWatermark !== highWatermark) ||
-        page.throughSequence < after ||
-        (page.hasMore && page.throughSequence === after)
-      )
-        return yield* new M.MemoryHubError({ code: "invalid_output" });
-      highWatermark = page.highWatermark;
-      yield* service.receiveHubPage({
-        memorySpaceId: r.space!,
-        hubEnvironmentId: r.hubId,
-        localEnvironmentId: local,
-        expectedSequence: after,
-        page,
-        reauthorize: ensureEpoch(r.settings.memoryHubVersion),
-      });
-      budget.pages++;
-      budget.entries += page.entries.length;
-      if (!page.hasMore) break;
-    }
-  });
+  const pullTail = makePullMemoryTail({ store, service, callPull, ensureEpoch, local });
   const bootstrap = Effect.fnUntraced(function* (
     r: Route,
     budget: { pages: number; entries: number },
@@ -1297,7 +1263,7 @@ const make = Effect.gen(function* () {
       // The hub device is a replica too; use its active self authority without self HTTP.
       const join = yield* r.connection
         ? client.join(r.connection, input)
-        : hub.join(input, r.principal!);
+        : hub.join({ ...input, ...selfFeatures }, r.principal!);
       yield* ensureEpoch(r.settings.memoryHubVersion);
       state = {
         state: "staging",
@@ -1340,9 +1306,10 @@ const make = Effect.gen(function* () {
           yield* runtime.discardBootstrap(r.space, r.hubId, state.snapshotToken!);
         return yield* response.failure;
       }
-      const page = (yield* decodePull(response.success).pipe(
+      const decoded = yield* decodePull(response.success).pipe(
         Effect.mapError(() => new M.MemoryHubError({ code: "invalid_output" })),
-      )).checkpoint;
+      );
+      const page = decoded.checkpoint;
       if (
         !page ||
         page.pageOrdinal !== state.pageCount ||
@@ -1354,6 +1321,8 @@ const make = Effect.gen(function* () {
         .transact(
           Effect.gen(function* () {
             yield* ensureEpoch(r.settings.memoryHubVersion);
+            if (decoded.derivedCap)
+              yield* store.learnHubFloor(r.space!, yield* Clock.currentTimeMillis);
             const stage = {
               memorySpaceId: r.space!,
               hubEnvironmentId: r.hubId,
@@ -1477,7 +1446,7 @@ const make = Effect.gen(function* () {
             yield* ensureEpoch(r.settings.memoryHubVersion);
             const result = yield* r.connection
               ? client.respondSourceRead(r.connection, revoke)
-              : hub.respondSourceRead(revoke, r.principal!);
+              : hub.respondSourceRead({ ...revoke, ...selfFeatures }, r.principal!);
             yield* ensureEpoch(r.settings.memoryHubVersion);
             if (
               result.kind !== "revoke" ||
@@ -1508,7 +1477,7 @@ const make = Effect.gen(function* () {
           };
           const collected = yield* r.connection
             ? client.collectSourceReads(r.connection, input)
-            : hub.collectSourceReads(input, r.principal!);
+            : hub.collectSourceReads({ ...input, ...selfFeatures }, r.principal!);
           const previous = collected.requests.findIndex((q) => q.requestId === lastRelayRequest);
           const requests = [
             ...collected.requests.slice(previous + 1),
@@ -1636,7 +1605,9 @@ const make = Effect.gen(function* () {
                 r.connection
                   ? client.respondSourceRead(r.connection, response, prepareResponse)
                   : prepareResponse.pipe(
-                      Effect.flatMap((input) => hub.respondSourceRead(input, r.principal!)),
+                      Effect.flatMap((input) =>
+                        hub.respondSourceRead({ ...input, ...selfFeatures }, r.principal!),
+                      ),
                     )
               ).pipe(Effect.timeout("1 second"));
             }).pipe(
@@ -1691,7 +1662,7 @@ const make = Effect.gen(function* () {
           yield* ensureEpoch(r.settings.memoryHubVersion);
           const ack = yield* r.connection
             ? client.push(r.connection, input)
-            : hub.push(input, r.principal!);
+            : hub.push({ ...input, ...selfFeatures }, r.principal!);
           yield* ensureEpoch(r.settings.memoryHubVersion);
           const receipt = ack.receipts[0];
           if (
@@ -2359,7 +2330,7 @@ const make = Effect.gen(function* () {
           };
           const requested = yield* r.connection
             ? client.requestSourceRead(r.connection, submission)
-            : hub.requestSourceRead(submission, r.principal!);
+            : hub.requestSourceRead({ ...submission, ...selfFeatures }, r.principal!);
           yield* permit;
           if (
             !requested.request.stamp ||
@@ -2388,7 +2359,7 @@ const make = Effect.gen(function* () {
               };
               const result = yield* r.connection
                 ? client.resultSourceRead(r.connection, i)
-                : hub.resultSourceRead(i, r.principal!);
+                : hub.resultSourceRead({ ...i, ...selfFeatures }, r.principal!);
               yield* permit;
               yield* ensureEpoch(r.settings.memoryHubVersion);
               if ((yield* Clock.currentTimeMillis) >= deadline) break;

@@ -8,13 +8,12 @@ import * as Effect from "effect/Effect";
 import * as Layer from "effect/Layer";
 import * as Schema from "effect/Schema";
 import * as Option from "effect/Option";
-import * as PubSub from "effect/PubSub";
-import * as Scope from "effect/Scope";
-import * as Stream from "effect/Stream";
 import * as Environment from "../environment/ServerEnvironment.ts";
 import * as AutomationHold from "../automationHold.ts";
 import * as Secrets from "../auth/ServerSecretStore.ts";
 import { environmentIdFitsForgetRecords } from "./MemoryCheckpointBound.ts";
+import { MemoryHubActivity } from "./MemoryHubActivity.ts";
+import { MemoryFloor2Enabled } from "./MemoryFloor.ts";
 import * as Store from "./MemoryStore.ts";
 import * as Service from "./MemoryService.ts";
 import * as Quota from "./MemoryQuotaService.ts";
@@ -36,25 +35,7 @@ export class MemoryHubConfiguration extends Context.Service<
   }
 >()("goat/memory/MemoryHubService/MemoryHubConfiguration") {}
 
-/** Commit notifications include semantic refusals that do not change a memory item. */
-export class MemoryHubActivity extends Context.Service<
-  MemoryHubActivity,
-  {
-    readonly notify: Effect.Effect<void>;
-    readonly subscribe: Effect.Effect<Stream.Stream<void>, never, Scope.Scope>;
-  }
->()("goat/memory/MemoryHubService/MemoryHubActivity") {}
-
-export const activityLayer = Layer.effect(
-  MemoryHubActivity,
-  Effect.gen(function* () {
-    const events = yield* PubSub.dropping<void>(1);
-    return MemoryHubActivity.of({
-      notify: Effect.asVoid(PubSub.publish(events, undefined)),
-      subscribe: Effect.map(PubSub.subscribe(events), Stream.fromSubscription),
-    });
-  }),
-);
+export { MemoryHubActivity, activityLayer } from "./MemoryHubActivity.ts";
 
 export class MemoryHubService extends Context.Service<
   MemoryHubService,
@@ -130,7 +111,19 @@ export const make = Effect.gen(function* () {
       return yield* new M.MemoryHubError({ code: "space_mismatch" });
     return hub;
   });
-  const authority = (principal: M.MemoryHubPrincipal): Store.HubAuthority => ({
+  const floorEnabled = yield* MemoryFloor2Enabled;
+  const negotiate = (
+    principal: M.MemoryHubPrincipal,
+    features: readonly M.MemoryFloor2Feature[] | undefined,
+  ) =>
+    Effect.flatMap(Clock.currentTimeMillis, (now) =>
+      store.negotiateHubFloor(principal, features, floorEnabled, now),
+    );
+  const authority = (
+    principal: M.MemoryHubPrincipal,
+    request?: { features?: readonly M.MemoryFloor2Feature[] },
+  ): Store.HubAuthority => ({
+    ...(request ? { negotiateFloor: negotiate(principal, request.features) } : {}),
     principal,
     now: Clock.currentTimeMillis,
     reauthorize: Effect.gen(function* () {
@@ -160,6 +153,7 @@ export const make = Effect.gen(function* () {
       return yield* store.transact(
         Effect.gen(function* () {
           const hub = yield* authorize(principal, request.memorySpaceId, request.environmentId);
+          yield* negotiate(principal, request.features);
           const retention = yield* store.readHubRetentionTx(principal.memorySpaceId);
           if (!retention.checkpointId || !retention.causalBoundary)
             return yield* new M.MemoryHubError({ code: "bootstrap_required" });
@@ -186,10 +180,17 @@ export const make = Effect.gen(function* () {
     function* (input, principal) {
       const request = yield* decode(M.MemoryHubPushInput, input);
       yield* store.transact(authorize(principal, request.memorySpaceId, request.environmentId));
+      if (!request.operations.length)
+        yield* store.transact(
+          Effect.andThen(
+            authorize(principal, request.memorySpaceId, request.environmentId),
+            negotiate(principal, request.features),
+          ),
+        );
       const receipts = yield* Effect.forEach(request.operations, (operation) =>
         // This entry owns rollback and the separate null-sequence capacity-refusal read.
         service
-          .admitHubOperation({ authority: authority(principal), operation })
+          .admitHubOperation({ authority: authority(principal, request), operation })
           .pipe(Effect.tap(() => activity.notify)),
       );
       return { receipts };
@@ -201,6 +202,8 @@ export const make = Effect.gen(function* () {
       return yield* store.transact(
         Effect.gen(function* () {
           yield* authorize(principal, request.memorySpaceId, request.environmentId);
+          const active = yield* negotiate(principal, request.features);
+          const floor = active ? { derivedCap: 1000 as const } : {};
           if (request.snapshotToken !== undefined) {
             const page = yield* store.readHubCheckpointPageTx({
               authority: authority(principal),
@@ -213,15 +216,17 @@ export const make = Effect.gen(function* () {
               hasMore: !page.bootstrapComplete,
               entries: [],
               checkpoint: page,
+              ...floor,
             };
           }
-          return yield* store.readHubTailTx({
+          const tail = yield* store.readHubTailTx({
             memorySpaceId: request.memorySpaceId,
             afterSequence: request.afterSequence,
             highWatermark: request.highWatermark ?? null,
             limit: request.limit,
-            maxBytes: M.MEMORY_PAGE_MAX_UTF8_BYTES,
+            maxBytes: M.MEMORY_PAGE_MAX_UTF8_BYTES - (active ? 18 : 0),
           });
+          return { ...tail, ...floor };
         }),
       );
     },
@@ -234,6 +239,7 @@ export const make = Effect.gen(function* () {
     return yield* store.transact(
       Effect.gen(function* () {
         yield* authorize(principal, request.memorySpaceId, request.holderEnvironmentId);
+        yield* negotiate(principal, request.features);
         // The discriminated Store action retains the frozen request shape.
         if (kind === "claim")
           return yield* store.transitionHubLeaseTx({
@@ -287,7 +293,7 @@ export const make = Effect.gen(function* () {
     yield* store.transact(authorize(principal, request.memorySpaceId, request.holderEnvironmentId));
     return yield* service
       .admitHubOperation({
-        authority: authority(principal),
+        authority: authority(principal, request),
         operation: request.operation,
         resolutionRequest: request,
       })
@@ -300,6 +306,7 @@ export const make = Effect.gen(function* () {
     return yield* store.transact(
       Effect.gen(function* () {
         yield* authorize(principal, request.memorySpaceId);
+        yield* negotiate(principal, request.features);
         return yield* store.requestHubSourceReadTx(authority(principal), request);
       }),
     );
@@ -311,6 +318,7 @@ export const make = Effect.gen(function* () {
     return yield* store.transact(
       Effect.gen(function* () {
         yield* authorize(principal, request.memorySpaceId);
+        yield* negotiate(principal, request.features);
         return yield* store.collectHubSourceReadsTx(authority(principal), request);
       }),
     );
@@ -322,6 +330,7 @@ export const make = Effect.gen(function* () {
     return yield* store.transact(
       Effect.gen(function* () {
         yield* authorize(principal, request.memorySpaceId);
+        yield* negotiate(principal, request.features);
         return yield* store.respondHubSourceReadTx(authority(principal), request);
       }),
     );
@@ -333,6 +342,7 @@ export const make = Effect.gen(function* () {
     return yield* store.transact(
       Effect.gen(function* () {
         yield* authorize(principal, request.memorySpaceId);
+        yield* negotiate(principal, request.features);
         return yield* store.resultHubSourceReadTx(authority(principal), request);
       }),
     );

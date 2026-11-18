@@ -79,6 +79,7 @@ export const GOAT_MIGRATION_NAMES: ReadonlySet<string> = new Set([
   "DisposableMachineRequests",
   "DisposableMachineEnrollment",
   "MemoryThreadLineage",
+  "MemoryHubFloor",
 ]);
 
 type MigrationEntry<E> = readonly [

@@ -1,4 +1,5 @@
 import * as M from "@goat/contracts";
+import { MemoryFloor2Enabled, memoryFloorAdvertisement } from "./MemoryFloor.ts";
 import { GOAT_ENVIRONMENT_PATH } from "@goat/contracts/legacyT3Names";
 import * as Context from "effect/Context";
 import * as Effect from "effect/Effect";
@@ -105,6 +106,7 @@ export class MemoryHubClient extends Context.Service<
 
 const make = Effect.gen(function* () {
   const http = yield* HttpClient.HttpClient;
+  const floor = memoryFloorAdvertisement(yield* MemoryFloor2Enabled);
   const secrets = yield* Secrets.ServerSecretStore;
   const settings = yield* Settings.ServerSettingsService;
 
@@ -234,7 +236,7 @@ const make = Effect.gen(function* () {
     return (connection: HubConnection, input: I, prepare?: Effect.Effect<I, HubClientFailure>) =>
       bounded(
         Effect.gen(function* () {
-          yield* preflightOnce(connection);
+          const descriptor = yield* preflightOnce(connection);
           const credential = yield* secrets
             .get(connection.secretName)
             .pipe(Effect.mapError(() => new M.MemoryHubError({ code: "storage_failed" })));
@@ -245,9 +247,11 @@ const make = Effect.gen(function* () {
           yield* ensureEpoch(connection);
           // Descriptor/credential waits are complete. Revalidate source for each attempt.
           const prepared = prepare ? yield* prepare : input;
-          const body = yield* encode(prepared).pipe(
-            Effect.mapError(() => new M.MemoryHubError({ code: "invalid_output" })),
-          );
+          const body = yield* encode(
+            descriptor.capabilities.memory?.derivedCap === 1000
+              ? { ...prepared, ...floor }
+              : prepared,
+          ).pipe(Effect.mapError(() => new M.MemoryHubError({ code: "invalid_output" })));
           if (new TextEncoder().encode(body).length > RESPONSE_MAX_BYTES)
             return yield* new M.MemoryHubError({ code: "payload_too_large" });
           const raw = yield* execute(

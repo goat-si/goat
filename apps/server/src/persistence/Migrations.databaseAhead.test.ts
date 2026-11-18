@@ -57,7 +57,10 @@ describe("runMigrations database ahead of this build", () => {
 
   it.effect("the 157 build refuses a migrated 158 memory database", () =>
     Effect.gen(function* () {
-      assert.deepStrictEqual((yield* runMigrations()).at(-1), [158, "MemoryThreadLineage"]);
+      assert.deepStrictEqual((yield* runMigrations({ toMigrationInclusive: 158 })).at(-1), [
+        158,
+        "MemoryThreadLineage",
+      ]);
       const manifest157 = migrationEntries.filter(([id]) => id <= 157);
       const failure = yield* Effect.flip(assertMemoryMigrationsCompatible(manifest157));
       assert.strictEqual(failure._tag, "MigrationError");

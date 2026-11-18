@@ -128,6 +128,14 @@ export const makeHubWrite = (
       "hub-append-finalize",
       sql`UPDATE memory_hub_operations SET entry_json=${json},payload_ref=${op.kind === "forget" ? null : op.revision.payloadRef} WHERE hub_sequence=${hubSequence}`,
     );
+    if (op.kind === "forget" && input.outcome === "deleted")
+      yield* stored(
+        "hub-forget-watermark-advance",
+        sql`
+        INSERT INTO memory_space_counters(space,last_forget_sequence)
+        VALUES (${op.memorySpaceId},${hubSequence})
+        ON CONFLICT(space) DO UPDATE SET last_forget_sequence=max(last_forget_sequence,excluded.last_forget_sequence)`,
+      );
     const record: M.MemoryCompactReceipt = {
       memorySpaceId: op.memorySpaceId,
       originEnvironmentId: op.originEnvironmentId,

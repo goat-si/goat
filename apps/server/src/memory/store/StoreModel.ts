@@ -88,6 +88,7 @@ export const Metadata = Schema.Struct({
   originEnvironmentId: M.EnvironmentId,
   kind: Schema.Literals(["upsert", "forget", "resolve", "revert"]),
   expectedHeads: Schema.Array(M.MemoryRevisionId),
+  forgetFence: Schema.optionalKey(Schema.Int),
   revision: Schema.optionalKey(M.MemoryRevision),
   tombstone: Schema.optionalKey(M.MemoryTombstone),
   resolution: Schema.optionalKey(M.MemoryResolution),
@@ -377,6 +378,7 @@ export type HubMember = {
   joinedAt: number | null;
 };
 export type HubAuthority = {
+  negotiateFloor?: InTx<boolean, M.MemoryHubError | MemoryStorageError>;
   principal: M.MemoryHubPrincipal;
   now: InTx<number, MemoryStorageError>;
   reauthorize: InTx<

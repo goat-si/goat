@@ -45,3 +45,15 @@ export const recordMemoryOrigin = Effect.fn("MemoryService.recordMemoryOrigin")(
       ON CONFLICT(space,memory_id) DO NOTHING`,
   );
 });
+
+export const persistRevisionMarks = Effect.fn("MemoryStore.persistRevisionMarks")(function* (
+  revision: M.MemoryRevision,
+) {
+  const { memorySpaceId, memoryId, revisionId, provenance } = revision;
+  if (provenance.unverified) yield* markUnverified(memorySpaceId, revisionId);
+  if (provenance.originThreadId)
+    yield* recordMemoryOrigin(memorySpaceId, memoryId, {
+      environmentId: provenance.environmentId,
+      threadId: provenance.originThreadId,
+    });
+});

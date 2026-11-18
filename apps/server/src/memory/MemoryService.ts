@@ -2091,6 +2091,9 @@ const make = Effect.fnUntraced(function* (
       op.originEnvironmentId !== member.environmentId
     )
       return yield* new M.MemoryHubForbiddenError({});
+    const active = input.authority.negotiateFloor
+      ? yield* input.authority.negotiateFloor
+      : yield* store.hubFloorActive(op.memorySpaceId);
     const digest = memoryOperationDigest(op);
     const replay = yield* store.readHubReceiptTx(op.memorySpaceId, op.operationId);
     if (replay) {
@@ -2098,6 +2101,17 @@ const make = Effect.fnUntraced(function* (
         return yield* new Store.MemoryStoreConflict({ code: "operation_id_reused" });
       return replay.entry.receipt;
     }
+    if (M.requiresMemoryFloor2(op) && !active)
+      return {
+        operationId: op.operationId,
+        memoryId: op.memoryId,
+        operationDigest: digest,
+        outcome: "rejected",
+        hubSequence: null,
+        failureCode: "hub_upgrade_required",
+        upgradeRequiredMembers: yield* store.blockingMembers(op.memorySpaceId),
+      };
+    if (op.kind !== "forget") yield* requireMemoryTailFit(op);
     // Resolve recomputes lineage from its input payloads; the decider needs heads and restored.
     const current = yield* store.loadAggregate(
       op.memorySpaceId,
@@ -2125,6 +2139,11 @@ const make = Effect.fnUntraced(function* (
     );
     // Only the read-only semantic decision is caught; every subsequent write can fail the outer transaction.
     const prepared = yield* Effect.gen(function* () {
+      if (
+        op.kind !== "forget" &&
+        (op.forgetFence !== undefined || op.revision.provenance.unverified)
+      )
+        yield* store.checkForgetFence(op.memorySpaceId, op.forgetFence);
       yield* requireImportNotSuppressed(op);
       if (op.kind !== "forget" && current.pendingForget)
         return yield* new Store.MemoryStoreConflict({ code: "forget_pending" });
@@ -2320,6 +2339,7 @@ const make = Effect.fnUntraced(function* (
                 input.operation.originEnvironmentId !== member.environmentId
               )
                 return yield* new M.MemoryHubForbiddenError({});
+              if (input.authority.negotiateFloor) yield* input.authority.negotiateFloor;
               const digest = memoryOperationDigest(input.operation);
               const replay = yield* store.readHubReceiptTx(
                 input.operation.memorySpaceId,
@@ -2434,6 +2454,8 @@ const make = Effect.fnUntraced(function* (
     return yield* store.transact(
       Effect.gen(function* () {
         yield* input.reauthorize;
+        if (page.derivedCap)
+          yield* store.learnHubFloor(input.memorySpaceId, yield* Clock.currentTimeMillis);
         const current = yield* store.readCursor(input.memorySpaceId, input.hubEnvironmentId);
         if (current >= page.throughSequence) return [];
         return yield* store.withReceivedCursor(
