@@ -1568,3 +1568,24 @@ One point for K7's record: effect/testing/TestClock in a file whose existing cas
 
 K7's answer (read at 3f390d3028): ThreadTitleRegenerationService.test.ts has no it.live case (`rg -c 'it\.live'` finds none). Its existing cases are all it.effect, except one plain synchronous `it(` ("pins the first user message ahead of the retained tail once content stops …"), which uses no clock. Only the appended deadline case reads TestClock. Neither file has a vi.mock (`rg 'vi\.mock'` finds none in ThreadTitleRegenerationService.test.ts or assets.test.ts). effect/Fiber, effect/testing/TestClock and ../mediaSource.ts register or patch nothing when loaded.
 
+
+## Coordinator, 2026-11-18 02:06 UTC, II (K7 line) and III, verbatim
+
+II. K7: the second integration merge now takes f82d2df4b0 (K10, K5 and M3 in). My merge-tree of f82d2df4b0 and 3f390d3028 conflicts in devlog/_chase/010_fork_delta.md and oxlint-plugin-goat/code-budgets.json only. vp i after the merge. Still local, NO PUSH until its fix-delta review reports.
+
+III. A trap for every lane's shell, found by me twice today: in zsh, "$C:refs/heads/x" applies the :r modifier to $C and mangles the ref. Write "${C}:refs/heads/x" in every push and every REV:path.
+
+(K7 hit the same trap once, on the records push of 22:5x; every push since writes "${c}:refs/...".)
+
+## Second integration merge, PREPARED locally (not pushed)
+
+The merge was prepared three times as the integration head moved, each time on the local branch k7-merge2-prep cut from 3f390d3028. The lane branch stays 3f390d3028, locally and on origin.
+- First on c31dfe1c41 (01:4x UTC), then on ac238fcce3 (01:5x), whose gates were stopped by their own sessions (exit 130) when the head moved, and no process was left behind.
+- Final on f82d2df4b0 (02:0x): merge commit 3a2cae9983ee159e0dd3ec6bc5d546c7f9c08e06, parents 3f390d3028 and f82d2df4b0. git reported "CONFLICT (content): Merge conflict in devlog/_chase/010_fork_delta.md" and "CONFLICT (content): Merge conflict in oxlint-plugin-goat/code-budgets.json". git's rerere replayed the first resolution, which was then checked:
+  - 010_fork_delta.md keeps both sides. K10's thread-link-lookup sits between K7's thread-apply-defect-resume and title-regeneration-failure-text, in slug order. Check: the sorted set of "### " headings of both parents equals the merged file's (diff empty, 50 sections).
+  - code-budgets.json: every entry that differs between the two parents (22) equals countLines (wc -l) of the merged file, with 0 mismatches. The conflicted three are counted on this merge: apps/web/src/components/ChatMarkdown.tsx 1658, packages/contracts/src/orchestrationV2.ts 4382, packages/contracts/src/orchestratorMcp.ts 1073. The rest take the side that changed them, for example Manager.ts 3103, Sidebar.tsx 3321, state/server.ts 1564 and threads.ts 1079.
+- vp i after the merge (pnpm-lock.yaml changed with M3): exit 0, and the tree stayed clean.
+- ps check in its own step (idle), then the gate on 3a2cae9983: `vp run check:changed origin/chase/t3-261114-next3` (f82d2df4b0), exit 0. format, lint, knip 1/2 and 2/2, graphql, agent surface audit, agent context budget and typecheck (42 packages) pass; test (484 files) pass, 9696 tests.
+- Rule IV on 3a2cae9983, from apps/server with GOAT_TEST_TMP_GUARD=fail, on the six server test files the lane added or changed: exit 0, 6 files, 48 tests.
+- When the fix-delta review reports with no change asked, the lane branch fast-forwards to 3a2cae9983 and is pushed (plain push), unless the integration head has moved again, in which case the merge is redone. If the review asks for changes, they go on 3f390d3028 and the merge is redone after them.
+
