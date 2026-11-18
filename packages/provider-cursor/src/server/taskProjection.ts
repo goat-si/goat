@@ -44,6 +44,11 @@ function childToolId(subagent: ActiveCursorSubagent, callId: string): string {
   return `${subagent.callId}:child-tool:${callId}`;
 }
 
+interface TaskAssistantMatch {
+  readonly liveIndex: number;
+  readonly savedIndex: number;
+}
+
 function alignTaskAssistantSteps(live: ReadonlyArray<string>, saved: ReadonlyArray<string>) {
   if (live.length === 0 || saved.length === 0) return [];
   const prefixes = live.map((text) => text.trimStart());
@@ -85,7 +90,7 @@ function alignTaskAssistantSteps(live: ReadonlyArray<string>, saved: ReadonlyArr
     }
   }
 
-  const matches: Array<{ readonly liveIndex: number; readonly savedIndex: number }> = [];
+  const matches: TaskAssistantMatch[] = [];
   let liveIndex = 0;
   let savedIndex = 0;
   while (liveIndex < live.length && savedIndex < saved.length) {
@@ -101,6 +106,38 @@ function alignTaskAssistantSteps(live: ReadonlyArray<string>, saved: ReadonlyArr
     }
   }
   return matches;
+}
+
+function appendOverflowMatches(
+  live: ReadonlyArray<string>,
+  saved: ReadonlyArray<string>,
+  firstOverflowIndex: number,
+  matches: TaskAssistantMatch[],
+): string[] {
+  if (firstOverflowIndex === saved.length) return [];
+  let nextLiveIndex = (matches.at(-1)?.liveIndex ?? -1) + 1;
+  const prefixes = live.map((text) => text.trimStart());
+  const liveText = prefixes.map((text) => text.trimEnd());
+  const tail: string[] = [];
+  let savedIndex = firstOverflowIndex;
+  for (; savedIndex < saved.length && nextLiveIndex < live.length; savedIndex++) {
+    const part = saved[savedIndex];
+    if (part === undefined) continue;
+    const text = part.trimStart();
+    const trimmed = text.trimEnd();
+    const liveIndex = prefixes.findIndex(
+      (prefix, index) =>
+        index >= nextLiveIndex &&
+        (trimmed === liveText[index] || (prefix.length > 0 && text.startsWith(prefix))),
+    );
+    if (liveIndex === -1) {
+      tail.push(part);
+    } else {
+      matches.push({ liveIndex, savedIndex });
+      nextLiveIndex = liveIndex + 1;
+    }
+  }
+  return tail.concat(saved.slice(savedIndex));
 }
 
 export function makeCursorTaskProjection({
@@ -220,10 +257,9 @@ export function makeCursorTaskProjection({
     const state = subagent.projection;
     const target = childTarget(subagent);
     const saved = resultParts.slice(0, MAX_SAVED_TASK_TEXT_SEGMENTS);
-    const matches = alignTaskAssistantSteps(
-      state.assistantSegments.map((segment) => segment.text),
-      saved,
-    );
+    const live = state.assistantSegments.map((segment) => segment.text);
+    const matches = alignTaskAssistantSteps(live, saved);
+    const overflow = appendOverflowMatches(live, resultParts, saved.length, matches);
     const now = yield* DateTime.now;
     const emitSaved = (savedIndex: number, text: string, ordinal: number) =>
       emitAssistant(
@@ -239,15 +275,16 @@ export function makeCursorTaskProjection({
     let savedIndex = 0;
     for (const match of matches) {
       const segment = state.assistantSegments[match.liveIndex];
-      const text = saved[match.savedIndex];
+      const text = resultParts[match.savedIndex];
       if (segment === undefined || text === undefined) continue;
-      for (; savedIndex < match.savedIndex; savedIndex++) {
+      const gapEnd = Math.min(match.savedIndex, saved.length);
+      for (; savedIndex < gapEnd; savedIndex++) {
         const part = saved[savedIndex];
         if (part !== undefined) {
-          yield* emitSaved(savedIndex, part, segment.ordinal - (match.savedIndex - savedIndex));
+          yield* emitSaved(savedIndex, part, segment.ordinal - (gapEnd - savedIndex));
         }
       }
-      savedIndex++;
+      savedIndex = Math.min(match.savedIndex + 1, saved.length);
       if (segment.text === text) continue;
       segment.text = text;
       if (segment !== state.assistant.current) yield* emitAssistant(target, segment, true);
@@ -287,12 +324,8 @@ export function makeCursorTaskProjection({
       const part = saved[savedIndex];
       if (part !== undefined) yield* emitSaved(savedIndex, part, ++subagent.nextChildOrdinal);
     }
-    if (resultParts.length > saved.length) {
-      yield* emitSaved(
-        saved.length,
-        resultParts.slice(saved.length).join("\n"),
-        ++subagent.nextChildOrdinal,
-      );
+    if (overflow.length > 0) {
+      yield* emitSaved(saved.length, overflow.join("\n"), ++subagent.nextChildOrdinal);
     }
   });
 

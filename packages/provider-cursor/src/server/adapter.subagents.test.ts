@@ -633,6 +633,8 @@ it.effect(
     ),
 );
 
+const savedAlignmentWindow = Array.from({ length: 512 }, (_, index) => `Saved step ${index + 1}.`);
+
 it.effect.each([
   {
     name: "exact steps",
@@ -736,6 +738,17 @@ it.effect.each([
     final: [
       ["Build the image.", 0],
       ["Build the package.", null],
+    ],
+  },
+  {
+    name: "exact and partial matches beyond the 512-step alignment window",
+    live: ["Check status.", "Finish"],
+    saved: [...savedAlignmentWindow, "Check status.", "Finish review.", "Saved-only tail."],
+    final: [
+      ...savedAlignmentWindow.map((text) => [text, null]),
+      ["Check status.", 0],
+      ["Finish review.", 1],
+      ["Saved-only tail.", null],
     ],
   },
   {
