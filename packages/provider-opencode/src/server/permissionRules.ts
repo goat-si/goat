@@ -218,6 +218,7 @@ export function withOpenCodeSubagentDeny(
 }
 
 const OPENCODE_GOAT_PERMISSION_BASE_KEY = "goatPermissionBase";
+const PREVIOUS_PERMISSION_BASES_KEY = "goatPreviousPermissionBases";
 
 const RESTRICTED_PERMISSIONS = new Set<string>(OPENCODE_RESTRICTED_PERMISSIONS);
 const ALWAYS_ALLOWED_PERMISSIONS = new Set<string>(OPENCODE_ALWAYS_ALLOWED_PERMISSIONS);
@@ -252,12 +253,13 @@ export const openCodePermissionRulesEqual = (left: PermissionRuleset, right: Per
   return true;
 };
 
-const startsWithRules = (rules: PermissionRuleset, prefix: PermissionRuleset) =>
-  prefix.length <= rules.length &&
-  openCodePermissionRulesEqual(rules.slice(0, prefix.length), prefix);
+const startsWithRules = (rules: PermissionRuleset, prefix: PermissionRuleset, offset = 0) =>
+  prefix.every((rule, index) => {
+    const current = rules[offset + index];
+    return current !== undefined && permissionRuleEquals(current, rule);
+  });
 
-const storedPermissionBase = (metadata: { readonly [key: string]: unknown } | undefined) => {
-  const value = metadata?.[OPENCODE_GOAT_PERMISSION_BASE_KEY];
+const readPermissionBase = (value: unknown) => {
   if (!Array.isArray(value) || value.length === 0) return undefined;
   const rules: Array<PermissionRuleset[number]> = [];
   for (const entry of value) {
@@ -267,12 +269,70 @@ const storedPermissionBase = (metadata: { readonly [key: string]: unknown } | un
   return rules;
 };
 
-export function openCodeRecordedPermissionBase(
+export const openCodePreviousPermissionBases = (
+  metadata: { readonly [key: string]: unknown } | undefined,
+): ReadonlyArray<PermissionRuleset> => {
+  const history = metadata?.[PREVIOUS_PERMISSION_BASES_KEY];
+  return Array.isArray(history)
+    ? history.flatMap((entry) => {
+        const base = readPermissionBase(entry);
+        return base === undefined ? [] : [base];
+      })
+    : [];
+};
+
+const storedPermissionBase = (metadata: { readonly [key: string]: unknown } | undefined) =>
+  readPermissionBase(metadata?.[OPENCODE_GOAT_PERMISSION_BASE_KEY]);
+
+function readOpenCodeSessionPermission(
   session: Parameters<typeof mergeOpenCodeResumePermission>[0],
-): PermissionRuleset | undefined {
-  const base = storedPermissionBase(session.metadata);
-  return base !== undefined && startsWithRules(session.permission ?? [], base) ? base : undefined;
+) {
+  const permission = session.permission ?? [];
+  const bases = [...openCodePreviousPermissionBases(session.metadata)];
+  const current = storedPermissionBase(session.metadata);
+  if (current !== undefined) bases.push(current);
+  bases.sort((left, right) => right.length - left.length);
+  // Some OpenCode versions append session.update rules. The last verified base owns the effective suffix.
+  if (bases.length > 0) {
+    for (let offset = permission.length - 1; offset >= 0; offset--) {
+      const base = bases.find((candidate) => startsWithRules(permission, candidate, offset));
+      if (base !== undefined) return { base, permission: permission.slice(offset) };
+    }
+  }
+  return { base: undefined, permission };
 }
+
+export const openCodeRecordedPermissionBase = (
+  session: Parameters<typeof mergeOpenCodeResumePermission>[0],
+) => readOpenCodeSessionPermission(session).base;
+
+export const openCodeEffectivePermission = (
+  session: Parameters<typeof mergeOpenCodeResumePermission>[0],
+) => readOpenCodeSessionPermission(session).permission;
+
+export const openCodeParentPermissionBases = (
+  session: Parameters<typeof mergeOpenCodeResumePermission>[0],
+): ReadonlyArray<PermissionRuleset> => {
+  const previous = openCodePreviousPermissionBases(session.metadata);
+  const current = openCodeRecordedPermissionBase(session);
+  return current === undefined ? previous : [...previous, current];
+};
+
+export const openCodeRememberPermissionBases = (
+  merged: OpenCodeResumePermission,
+  previous: ReadonlyArray<PermissionRuleset>,
+): OpenCodeResumePermission => ({
+  ...merged,
+  metadata: { ...merged.metadata, [PREVIOUS_PERMISSION_BASES_KEY]: previous },
+});
+
+export const openCodeClearPreviousPermissionBases = (
+  metadata: { readonly [key: string]: unknown } | undefined,
+) => {
+  if (metadata === undefined || !(PREVIOUS_PERMISSION_BASES_KEY in metadata)) return undefined;
+  const { [PREVIOUS_PERMISSION_BASES_KEY]: _, ...remaining } = metadata;
+  return remaining;
+};
 
 const isWritableRootPattern = (pattern: string) =>
   pattern.endsWith("/*") && !pattern.slice(0, -2).includes("*");
@@ -352,27 +412,24 @@ export function openCodeInstalledChildPermission(
   runtimePolicy: ProviderAdapter.ProviderAdapterV2RuntimePolicy,
   subagentsOff: boolean,
   resumed: boolean,
-  previousParentBase?: PermissionRuleset,
+  previousParentBases: ReadonlyArray<PermissionRuleset> = [],
 ): OpenCodeResumePermission {
   const installed = openCodeInstalledPermission(runtimePolicy, session.metadata);
-  const previous = withOpenCodeSubagentDeny(
-    session.permission ?? [],
-    openCodeOwnsSubagentDeny(session),
-    false,
-  );
-  const recorded = openCodeRecordedPermissionBase(session);
+  const { base: recorded, permission } = readOpenCodeSessionPermission(session);
+  const previous = withOpenCodeSubagentDeny(permission, openCodeOwnsSubagentDeny(session), false);
   const full = { permission: "*", pattern: "*", action: "allow" } as const;
   const external = { ...full, permission: "external_directory" };
-  const inherited = previousParentBase === undefined ? [] : inheritedChildRules(previousParentBase);
+  const inheritedLength = previousParentBases.reduce((longest, parentBase) => {
+    const inherited = inheritedChildRules(parentBase);
+    return startsWithRules(previous, inherited) ? Math.max(longest, inherited.length) : longest;
+  }, 0);
   const baseLength =
     recorded?.length ??
     (resumed && startsWithRules(previous, [full, external])
       ? 2
       : resumed && startsWithRules(previous, [full])
         ? 1
-        : startsWithRules(previous, inherited)
-          ? inherited.length
-          : 0);
+        : inheritedLength);
   const allowsAllExternal =
     installed.permission.findLast(
       (rule) =>
@@ -380,12 +437,13 @@ export function openCodeInstalledChildPermission(
         (rule.permission === "*" || rule.permission === "external_directory"),
     )?.action === "allow";
   // Only the current base grants scoped directory access when inheritance is unknown.
-  const kept = previous
-    .slice(baseLength)
-    .filter(
-      (rule) =>
-        allowsAllExternal || rule.permission !== "external_directory" || rule.action !== "allow",
-    );
+  const nativeRules = previous.slice(baseLength);
+  const kept =
+    recorded !== undefined || inheritedLength > 0 || allowsAllExternal
+      ? nativeRules
+      : nativeRules.filter(
+          (rule) => rule.permission !== "external_directory" || rule.action !== "allow",
+        );
   return {
     permission:
       !resumed && baseLength === 0
@@ -405,10 +463,9 @@ export function mergeOpenCodeResumePermission(
   runtimePolicy: ProviderAdapter.ProviderAdapterV2RuntimePolicy,
   subagentsOff: boolean | undefined,
 ): OpenCodeResumePermission {
-  const permission = session.permission ?? [];
+  const { base: storedBase, permission } = readOpenCodeSessionPermission(session);
   const ownsDeny = openCodeOwnsSubagentDeny(session);
   const withoutDeny = ownsDeny ? permission.slice(0, -1) : permission;
-  const storedBase = storedPermissionBase(session.metadata);
   const nextBase = openCodePermissionRules(runtimePolicy);
   let kept = withoutDeny;
   if (storedBase !== undefined && startsWithRules(kept, storedBase)) {
@@ -440,7 +497,9 @@ export function openCodeResumePermissionDiffers(
   },
   merged: OpenCodeResumePermission,
 ): boolean {
-  if (!openCodePermissionRulesEqual(session.permission ?? [], merged.permission)) return true;
+  if (!openCodePermissionRulesEqual(openCodeEffectivePermission(session), merged.permission)) {
+    return true;
+  }
   const recorded = storedPermissionBase(session.metadata);
   const nextBase = storedPermissionBase(merged.metadata);
   if (

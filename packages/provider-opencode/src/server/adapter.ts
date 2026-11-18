@@ -40,12 +40,14 @@ import {
   openCodeInstalledPermission,
   openCodePermissionRules,
   openCodePermissionRulesEqual,
-  openCodeRecordedPermissionBase,
+  openCodeParentPermissionBases,
   openCodePermissionRequestKind,
 } from "./permissionRules.ts";
 import {
   installResumedOpenCodePermission,
   refreshOpenCodeChildPermissions,
+  retainOpenCodePreviousPermissionBase,
+  type OpenCodePermissionUpdate,
   syncOpenCodeSubagentDeny,
 } from "./permissionSync.ts";
 import { recordString, recordValue } from "./records.ts";
@@ -916,12 +918,16 @@ export const makeOpenCodeAdapterV2 = Effect.fn("makeOpenCodeAdapterV2")(function
               () => client.session.get({ sessionID: childSessionId }),
             );
             const nativeChildSession = unwrapData("session.get", childSessionResponse);
-            const installed = openCodeInstalledChildPermission(
+            const childPermission = openCodeInstalledChildPermission(
               nativeChildSession,
               turn.runtimePolicy,
               state.subagentsDenied,
               recordString(input, "task_id") === childSessionId || threads.has(childSessionId),
-              openCodeRecordedPermissionBase(state),
+              openCodeParentPermissionBases(state),
+            );
+            const installed = yield* retainOpenCodePreviousPermissionBase(
+              nativeChildSession,
+              childPermission,
             );
             yield* updatePermission(childSessionId, {
               permission: installed.permission,
@@ -2562,13 +2568,7 @@ export const makeOpenCodeAdapterV2 = Effect.fn("makeOpenCodeAdapterV2")(function
           };
         });
 
-        const updatePermission = (
-          sessionID: string,
-          body: {
-            readonly permission: PermissionRuleset;
-            readonly metadata?: { readonly [key: string]: unknown };
-          },
-        ) =>
+        const updatePermission = (sessionID: string, body: OpenCodePermissionUpdate) =>
           sdkCall("session.update", { sessionID, ...body }, (signal) =>
             client.session.update({ sessionID, ...body }, { signal }),
           );
@@ -2578,7 +2578,7 @@ export const makeOpenCodeAdapterV2 = Effect.fn("makeOpenCodeAdapterV2")(function
 
         const resumedChildPolicies = new WeakMap<
           OpenCodeThreadState,
-          { base: PermissionRuleset | undefined; subagentsOff?: boolean }
+          { base?: PermissionRuleset; subagentsOff?: boolean }
         >();
         const listNativeChildren = (id: string) =>
           sdkCall("session.children", { sessionID: id }, (signal) =>
@@ -2619,6 +2619,7 @@ export const makeOpenCodeAdapterV2 = Effect.fn("makeOpenCodeAdapterV2")(function
               runtimePolicy: runtimePolicy,
               subagentsOff,
               failure: "raise",
+              listNativeChildren,
               update: updatePermission,
             });
           }
@@ -2635,8 +2636,8 @@ export const makeOpenCodeAdapterV2 = Effect.fn("makeOpenCodeAdapterV2")(function
             children: threads.values(),
             policy: runtimePolicy,
             subagentsOff,
-            previousParentBase: previous?.base,
-            ...(scan ? { listNativeChildren } : {}),
+            scanNative: scan,
+            listNativeChildren,
             update: updatePermission,
           });
           if (scan) resumedChildPolicies.set(state, { base, subagentsOff });
@@ -2925,11 +2926,10 @@ export const makeOpenCodeAdapterV2 = Effect.fn("makeOpenCodeAdapterV2")(function
                 runtimePolicy: threadInput.runtimePolicy,
                 subagentsOff: mcp === undefined ? undefined : mcp.nativeSubagentLimit === 0,
                 failure: "pending",
+                listNativeChildren,
                 update: updatePermission,
               });
-              resumedChildPolicies.set(state, {
-                base: openCodeRecordedPermissionBase(nativeSession),
-              });
+              resumedChildPolicies.set(state, {});
               return providerThread;
             },
             (effect, threadInput) =>

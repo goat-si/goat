@@ -222,13 +222,15 @@ it.effect.each([
           }),
           update: async (input: {
             sessionID: string;
-            permission: PermissionRuleset;
+            permission?: PermissionRuleset;
             metadata?: Record<string, unknown>;
           }) => {
             if (input.sessionID === child) {
               if (previous === "refused") throw new Error("OpenCode refused child permissions");
-              childWrites++;
-              childSession.permission = input.permission;
+              if (input.permission !== undefined) {
+                childWrites++;
+                childSession.permission = input.permission;
+              }
               if (input.metadata !== undefined) childSession.metadata = input.metadata;
             }
             return { data: input.sessionID === child ? childSession : rootSession };
@@ -307,14 +309,18 @@ it.effect.each([
     ),
 );
 
-it.effect.each(["restart", "retry"] as const)(
-  "revokes an unrefreshed grandchild's old scoped directory access after %s",
-  (recovery) =>
+it.effect.each([
+  { recovery: "restart", policyKind: "approval-required" },
+  { recovery: "restart", policyKind: "workspace-write" },
+  { recovery: "retry", policyKind: "approval-required" },
+  { recovery: "retry", policyKind: "workspace-write" },
+] as const)(
+  "restores exact grandchild permissions after $recovery with $policyKind",
+  ({ recovery, policyKind }) =>
     Effect.gen(function* () {
       const root = "permission-root";
       const child = "permission-child";
       const grandchild = "permission-grandchild";
-      const oldPattern = "/old-root/*";
       const oldBase = openCodePermissionRules(
         runtimePolicy("full-access", {
           approvalPolicy: "never",
@@ -325,15 +331,22 @@ it.effect.each(["restart", "retry"] as const)(
           },
         }),
       );
-      const policy = runtimePolicy(
-        "approval-required",
-        recovery === "retry" ? { approvalPolicy: "never" } : {},
-      );
+      const approval = policyKind === "approval-required";
+      const policy = approval
+        ? runtimePolicy("approval-required")
+        : runtimePolicy("full-access", {
+            approvalPolicy: "never",
+            sandboxPolicy: {
+              type: "workspaceWrite",
+              writableRoots: ["/new-root"],
+              networkAccess: false,
+            },
+          });
       const nextBase = openCodePermissionRules(policy);
-      const parentBase = recovery === "restart" ? nextBase : oldBase;
       const nativeDenies: PermissionRuleset = [
         { permission: "todowrite", pattern: "*", action: "deny" },
         { permission: "task", pattern: "*", action: "deny" },
+        { permission: "read", pattern: "/workspace/private/*", action: "deny" },
       ];
       type NativeSession = {
         id: string;
@@ -344,17 +357,14 @@ it.effect.each(["restart", "retry"] as const)(
       };
       const time = { created: 1, updated: 1 };
       const sessions = new Map<string, NativeSession>([
-        [
-          root,
-          { id: root, permission: parentBase, metadata: { goatPermissionBase: parentBase }, time },
-        ],
+        [root, { id: root, permission: oldBase, metadata: { goatPermissionBase: oldBase }, time }],
         [
           child,
           {
             id: child,
             parentID: root,
-            permission: parentBase,
-            metadata: { goatPermissionBase: parentBase },
+            permission: oldBase,
+            metadata: { goatPermissionBase: oldBase },
             time,
           },
         ],
@@ -378,15 +388,18 @@ it.effect.each(["restart", "retry"] as const)(
         if (session === undefined) throw new Error(`Unexpected test session ${id}`);
         return session;
       };
-      const externalAction = (rules: PermissionRuleset) =>
+      const action = (rules: PermissionRuleset, permission: string, path: string) =>
         rules.findLast(
           (rule) =>
-            (rule.permission === "*" || rule.permission === "external_directory") &&
-            (rule.pattern === "*" || rule.pattern === oldPattern),
+            (rule.permission === "*" || rule.permission === permission) &&
+            (rule.pattern === "*" ||
+              rule.pattern === path ||
+              (rule.pattern.endsWith("/*") && path.startsWith(rule.pattern.slice(0, -1)))),
         )?.action;
       const submitted: PermissionRuleset[] = [];
-      let refuseChildListing = recovery === "retry";
-      const harness = yield* makeOpenCodeRuntimeHarness("grandchild-policy", root, {
+      let retainedAfterFailure: unknown[] = [];
+      let refuseChildListing = true;
+      const open = makeOpenCodeRuntimeHarness("grandchild-policy", root, {
         event: { subscribe: async () => ({ stream: asyncEventStream().stream }) },
         session: {
           create: async () => ({ data: stored(root) }),
@@ -402,12 +415,19 @@ it.effect.each(["restart", "retry"] as const)(
           },
           update: async (input: {
             sessionID: string;
-            permission: PermissionRuleset;
+            permission?: PermissionRuleset;
             metadata: Record<string, unknown>;
           }) => {
             const next = {
               ...stored(input.sessionID),
-              permission: input.permission,
+              ...(input.permission === undefined
+                ? {}
+                : {
+                    permission:
+                      recovery === "restart"
+                        ? [...stored(input.sessionID).permission, ...input.permission]
+                        : input.permission,
+                  }),
               metadata: input.metadata,
             };
             sessions.set(input.sessionID, next);
@@ -420,26 +440,57 @@ it.effect.each(["restart", "retry"] as const)(
           abort: async () => ({ data: true }),
         },
       });
-      const resumed = yield* harness.runtime.resumeThread({
-        providerThread: harness.providerThread,
-        threadId: harness.threadId,
-        runtimePolicy: policy,
+      const attach = Effect.gen(function* () {
+        const harness = yield* open;
+        const resumed = yield* harness.runtime.resumeThread({
+          providerThread: harness.providerThread,
+          threadId: harness.threadId,
+          runtimePolicy: policy,
+        });
+        return harness.startTurn("Resume the grandchild", resumed, policy);
       });
-      if (recovery === "retry") {
-        const first = yield* Effect.exit(
-          harness.startTurn("Resume after downgrade", resumed, policy),
-        );
-        assert.isTrue(Exit.isFailure(first));
+      const failScan = Effect.fnUntraced(function* (start: Effect.Success<typeof attach>) {
+        assert.isTrue(Exit.isFailure(yield* Effect.exit(start)));
         assert.isEmpty(submitted, "the incomplete refresh must block prompt admission");
+        assert.deepEqual(stored(root).metadata?.goatPermissionBase, nextBase);
+        assert.deepEqual(stored(child).metadata?.goatPermissionBase, nextBase);
+        retainedAfterFailure = [root, child].map(
+          (id) => stored(id).metadata?.goatPreviousPermissionBases,
+        );
+        assert.equal(
+          action(stored(grandchild).permission, "external_directory", "/old-root/file"),
+          "allow",
+        );
+      });
+      if (recovery === "restart") {
+        yield* attach.pipe(Effect.flatMap(failScan), Effect.scoped);
       }
-      assert.deepEqual(stored(child).metadata?.goatPermissionBase, nextBase);
-      assert.equal(externalAction(stored(grandchild).permission), "allow");
+      yield* Effect.gen(function* () {
+        const start = yield* attach;
+        if (recovery === "retry") yield* failScan(start);
+        yield* start;
+      }).pipe(Effect.scoped);
 
-      yield* harness.startTurn("Resume the grandchild", resumed, policy);
-      assert.lengthOf(submitted, 1);
-      const atPrompt = submitted[0] ?? [];
-      assert.oneOf(externalAction(atPrompt), ["ask", "deny"]);
-      assert.includeDeepMembers(atPrompt, nativeDenies);
+      // A later refresh must not turn recovered denies back into inherited policy.
+      yield* attach.pipe(Effect.flatten, Effect.scoped);
+      assert.lengthOf(submitted, 2);
+      for (const atPrompt of submitted) {
+        assert.equal(
+          action(atPrompt, "external_directory", "/old-root/file"),
+          approval ? "ask" : "deny",
+        );
+        assert.equal(
+          action(atPrompt, "external_directory", "/new-root/file"),
+          approval ? "ask" : "allow",
+        );
+        assert.equal(action(atPrompt, "read", "/workspace/file"), "allow");
+        assert.equal(action(atPrompt, "read", "/workspace/private/file"), "deny");
+        assert.equal(action(atPrompt, "task", "general"), "deny");
+        assert.includeDeepMembers(atPrompt, nativeDenies);
+      }
+      assert.deepEqual(retainedAfterFailure, [[oldBase], [oldBase]]);
+      assert.isUndefined(stored(root).metadata?.goatPreviousPermissionBases);
+      assert.isUndefined(stored(child).metadata?.goatPreviousPermissionBases);
     }).pipe(
       Effect.provide(Layer.merge(IdAllocator.layer, McpProviderSessions.layer)),
       Effect.scoped,
