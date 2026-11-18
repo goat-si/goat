@@ -1,7 +1,12 @@
-import { createVcsActionManager, createVcsEnvironmentAtoms } from "@goat/client-runtime/state/vcs";
+import {
+  createVcsActionManager,
+  createVcsEnvironmentAtoms,
+  createVcsStatusRevalidationAtomFamily,
+} from "@goat/client-runtime/state/vcs";
 import * as Equal from "effect/Equal";
 import { AsyncResult, Atom } from "effect/reactivity";
 
+import { subscribeDocumentReturn } from "../lib/documentActivity";
 import { connectionAtomRuntime } from "../connection/runtime";
 
 export const vcsEnvironment = createVcsEnvironmentAtoms(connectionAtomRuntime);
@@ -17,3 +22,9 @@ export const chatGitStatusAtom = Atom.family((status: ReturnType<typeof vcsEnvir
   }).pipe(Atom.withEquality(Equal.equals)),
 );
 export const NO_CHAT_GIT_STATUS_ATOM: ReturnType<typeof chatGitStatusAtom> = Atom.make(null);
+
+export const vcsBranchRevalidation = createVcsStatusRevalidationAtomFamily({
+  refreshStatus: vcsEnvironment.refreshBranch,
+  subscribeWake: subscribeDocumentReturn,
+  wakeDebounceMs: 250,
+});

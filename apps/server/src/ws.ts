@@ -1,3 +1,4 @@
+import { vcsStatusHandlers } from "./vcs/vcsStatusHandlers.ts";
 import { makeGlobalSkillsRpcLayer } from "./skills/GlobalSkillsRpcHandlers.ts";
 import * as AccessRpc from "./auth/AccessRpc.ts";
 import { makeOmittableShellReaders } from "./orchestration-v2/ThreadFamilyLookup.ts";
@@ -3042,14 +3043,12 @@ export const layerWsRpc = (
           }),
         [WS_METHODS.assetsPersistChatAttachments]: (input) =>
           persistChatAttachments(input).pipe(Effect.map((attachments) => ({ attachments }))),
-        [WS_METHODS.subscribeVcsStatus]: (input) => vcsStatusBroadcaster.streamStatus(input),
+        ...vcsStatusHandlers(vcsStatusBroadcaster),
         [WS_METHODS.subscribeWorktreeSetup]: (input) => worktreeSetupTracker.stream(input.threadId),
         [WS_METHODS.worktreeSetupCancel]: (input) =>
           worktreeSetupTracker
             .cancel(input.threadId)
             .pipe(Effect.map((cancelled) => ({ cancelled }))),
-        [WS_METHODS.vcsRefreshStatus]: (input) =>
-          vcsStatusBroadcaster.refreshStatus(input.cwd, { localOnly: input.localOnly ?? false }),
         [WS_METHODS.vcsPull]: (input) =>
           gitWorkflow.pullCurrentBranch(input.cwd).pipe(
             Effect.matchCauseEffect({

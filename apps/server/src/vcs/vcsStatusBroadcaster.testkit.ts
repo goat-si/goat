@@ -63,6 +63,8 @@ export function layerTestFor(state: {
   automaticFetchInterval?: Effect.Effect<Duration.Duration>;
   beforeRemoteStatus?: Effect.Effect<void>;
   beforeLocalStatus?: Effect.Effect<void>;
+  branchRead?: () => Effect.Effect<string | null>;
+  beforeInvalidate?: Effect.Effect<void>;
   fileSystem?: FileSystem.FileSystem;
   pullCurrentBranch?: GitWorkflowService.GitWorkflowService["Service"]["pullCurrentBranch"];
 }) {
@@ -88,7 +90,10 @@ export function layerTestFor(state: {
               Effect.as(state.currentLocalStatus),
             );
           }),
-        currentBranch: () => Effect.sync(() => state.currentLocalStatus.refName),
+        currentBranch: () =>
+          Effect.suspend(
+            () => state.branchRead?.() ?? Effect.succeed(state.currentLocalStatus.refName),
+          ),
         upstreamDivergence: () =>
           Effect.sync(() =>
             state.currentRemoteStatus?.hasUpstream && state.currentLocalStatus.refName !== null
@@ -117,7 +122,7 @@ export function layerTestFor(state: {
         invalidateLocalStatus: () =>
           Effect.sync(() => {
             state.localInvalidationCalls += 1;
-          }),
+          }).pipe(Effect.andThen(Effect.suspend(() => state.beforeInvalidate ?? Effect.void))),
         invalidateRemoteStatus: () =>
           Effect.sync(() => {
             state.remoteInvalidationCalls += 1;

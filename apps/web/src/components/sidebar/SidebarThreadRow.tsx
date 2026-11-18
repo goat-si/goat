@@ -1,3 +1,4 @@
+import { useSidebarBranch } from "./useSidebarBranch";
 import { JumpHintBadge } from "./SidebarJumpHintBadge";
 import { sidebarWorkingLabel } from "./sidebarWorkingLabel";
 import { ThreadHoverCard, ThreadHoverCardPopup } from "../ThreadHoverCard";
@@ -63,9 +64,6 @@ import { useRightPanelStore } from "../../rightPanelStore";
 import { useOpenPrLink } from "../../lib/openPullRequestLink";
 import { useUiStateStore } from "../../uiStateStore";
 import { useThreadSelectionStore } from "../../threadSelectionStore";
-
-import { vcsEnvironment } from "../../state/vcs";
-import { useEnvironmentQuery } from "../../state/query";
 import { readEnvironmentScope, useEnvironmentScope } from "../../state/session";
 
 import { RelativeTimeLabel } from "../RelativeTimeLabel";
@@ -97,7 +95,6 @@ import {
   type SidebarChildAttention,
   type SidebarSection,
   withSidebarChildRequest,
-  useRetainedValue,
   useSidebarRowSubscriptionLease,
   setFileDragActive,
 } from "../Sidebar.logic";
@@ -583,18 +580,7 @@ export const SidebarThreadRow = memo(function SidebarThreadRow(props: SidebarThr
     thread.pullRequests,
     thread.branchPullRequest,
   );
-  const gitStatus = useEnvironmentQuery(
-    leaseLiveStatus && (thread.branch != null || thread.worktreePath !== null) && gitCwd !== null
-      ? vcsEnvironment.status({
-          environmentId: thread.environmentId,
-          input: { cwd: gitCwd, includeRemote: false },
-        })
-      : null,
-  );
-  const visibleGitStatus = useRetainedValue(
-    JSON.stringify([thread.environmentId, gitCwd]),
-    gitStatus.data,
-  );
+  const visibleGitStatus = useSidebarBranch(thread, gitCwd, leaseLiveStatus);
   const pr = linkedPullRequestStatus?.pr ?? null;
   const supportsMultiplePullRequests = useSupportsMultiplePullRequests(thread.environmentId);
   const currentLinkedPr = supportsMultiplePullRequests
@@ -1530,18 +1516,7 @@ export const SidebarSearchResultRow = memo(function SidebarSearchResultRow(props
     props.isHighlighted || props.isRouteActive,
   );
   const gitCwd = thread.worktreePath ?? props.project?.workspaceRoot ?? null;
-  const gitStatus = useEnvironmentQuery(
-    leaseLiveStatus && (thread.branch != null || thread.worktreePath !== null) && gitCwd !== null
-      ? vcsEnvironment.status({
-          environmentId: thread.environmentId,
-          input: { cwd: gitCwd, includeRemote: false },
-        })
-      : null,
-  );
-  const visibleGitStatus = useRetainedValue(
-    JSON.stringify([thread.environmentId, gitCwd]),
-    gitStatus.data,
-  );
+  const visibleGitStatus = useSidebarBranch(thread, gitCwd, leaseLiveStatus);
   const branchMismatch = resolveLocalCheckoutBranchMismatch({
     effectiveEnvMode: thread.worktreePath === null ? "local" : "worktree",
     activeWorktreePath: thread.worktreePath,
