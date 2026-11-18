@@ -280,7 +280,7 @@ describe("CDP relay screencasts", () => {
     ]);
   });
 
-  it("acks a frame to the page only once every viewer has", async () => {
+  it("acks a delivered native frame immediately and only once", async () => {
     const { pages, command, send, frameTo } = await makeScreencastRelay(2);
     const [first, second] = pages as [string, string];
     await command("Page.startScreencast", first, small);
@@ -288,13 +288,30 @@ describe("CDP relay screencasts", () => {
     const acks = () => send.mock.calls.filter(([method]) => method === "Page.screencastFrameAck");
 
     expect(frameTo({ sessionId: 4, data: "x" })).toEqual([first, second]);
-    await command("Page.screencastFrameAck", first, { sessionId: 4 });
-    expect(acks()).toEqual([]);
-    await command("Page.screencastFrameAck", second, { sessionId: 4 });
     expect(acks()).toEqual([["Page.screencastFrameAck", { sessionId: 4 }, undefined]]);
-    // Chromium counts acks per screencast, so a surplus one would let frames outrun the viewers.
+    await command("Page.screencastFrameAck", first, { sessionId: 4 });
+    await command("Page.screencastFrameAck", second, { sessionId: 4 });
     await command("Page.screencastFrameAck", first, { sessionId: 4 });
     expect(acks()).toHaveLength(1);
+  });
+
+  it("streams past Chromium's three-frame credit limit when slow viewers never ACK", async () => {
+    const { pages, request, send, frameTo } = await makeScreencastRelay(4);
+    const [fast, ...slow] = pages;
+    if (!fast) throw new Error("Fast viewer missing");
+    await request("Page.startScreencast", fast, small);
+    const credits = () =>
+      send.mock.calls.filter(([method]) => method === "Page.screencastFrameAck").length;
+    let sent = 0;
+    while (sent < 6 && sent - credits() < 3) {
+      const joining = slow[sent];
+      if (joining) await request("Page.startScreencast", joining, small);
+      expect(frameTo({ sessionId: 4, data: String(sent) })).toContain(fast);
+      sent++;
+      await request("Page.screencastFrameAck", fast, { sessionId: 4 });
+    }
+    expect(sent).toBe(6);
+    expect(credits()).toBe(6);
   });
 
   it("keeps one latest skipped frame for a slow viewer without stalling a fast viewer", async () => {
@@ -339,16 +356,18 @@ describe("CDP relay screencasts", () => {
     ).toEqual({ sessionId: 4, data: "new" });
   });
 
-  it("releases the frames a viewer owed when it detaches without stopping", async () => {
+  it("drains skipped native credit when the last viewer detaches", async () => {
     const { pages, browser, command, send, screencast, frameTo } = await makeScreencastRelay(2);
     const [first, second] = pages as [string, string];
     await command("Page.startScreencast", first, small);
     await command("Page.startScreencast", second, small);
     frameTo({ sessionId: 4, data: "x" });
-    await command("Page.screencastFrameAck", first, { sessionId: 4 });
+    expect(frameTo({ sessionId: 4, data: "held" })).toEqual([]);
     await command("Target.detachFromTarget", browser, { sessionId: second });
-    expect(send).toHaveBeenCalledWith("Page.screencastFrameAck", { sessionId: 4 }, undefined);
     await command("Target.detachFromTarget", browser, { sessionId: first });
+    expect(send.mock.calls.filter(([method]) => method === "Page.screencastFrameAck")).toHaveLength(
+      2,
+    );
     expect(screencast().at(-1)).toEqual(["Page.stopScreencast", {}]);
   });
 
@@ -360,23 +379,28 @@ describe("CDP relay screencasts", () => {
     frameTo({ sessionId: 4, data: "old" });
     await command("Page.startScreencast", second, large);
     await command("Page.screencastFrameAck", first, { sessionId: 4 });
-    expect(acks()).toEqual([]);
+    expect(acks()).toEqual([["Page.screencastFrameAck", { sessionId: 4 }, undefined]]);
 
     expect(frameTo({ sessionId: 5, data: "new" })).toEqual([first, second]);
     await command("Page.screencastFrameAck", first, { sessionId: 5 });
     await command("Page.screencastFrameAck", second, { sessionId: 5 });
-    expect(acks()).toEqual([["Page.screencastFrameAck", { sessionId: 5 }, undefined]]);
+    expect(acks()).toEqual([
+      ["Page.screencastFrameAck", { sessionId: 4 }, undefined],
+      ["Page.screencastFrameAck", { sessionId: 5 }, undefined],
+    ]);
   });
 
-  it("releases the frame a viewer owed when it stops", async () => {
+  it("drains skipped native credit when the last viewer stops", async () => {
     const { pages, command, send, frameTo } = await makeScreencastRelay(2);
     const [first, second] = pages as [string, string];
     await command("Page.startScreencast", first, small);
     await command("Page.startScreencast", second, small);
     frameTo({ sessionId: 4, data: "x" });
-    await command("Page.screencastFrameAck", second, { sessionId: 4 });
+    expect(frameTo({ sessionId: 4, data: "held" })).toEqual([]);
     await command("Page.stopScreencast", first);
+    await command("Page.stopScreencast", second);
     expect(send.mock.calls.filter(([method]) => method === "Page.screencastFrameAck")).toEqual([
+      ["Page.screencastFrameAck", { sessionId: 4 }, undefined],
       ["Page.screencastFrameAck", { sessionId: 4 }, undefined],
     ]);
   });

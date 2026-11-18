@@ -3,8 +3,6 @@ type ScreencastParams = Record<string, unknown>;
 type ViewerRequest = { readonly params: ScreencastParams; readonly token: object };
 
 type FrameParams = ScreencastParams & { readonly sessionId: number };
-type NativeCredit = { readonly sessionId: number; remaining: number };
-type Delivery = { readonly sessionId: number; readonly credit?: NativeCredit };
 
 const MAX_HELD_NATIVE_FRAMES = 8;
 
@@ -49,7 +47,7 @@ export function createSharedScreencast(
   deliver: (viewer: string, frame: FrameParams) => void,
 ): SharedScreencast {
   const viewers = new Map<string, ViewerRequest>();
-  const outstanding = new Map<string, Delivery>();
+  const outstanding = new Map<string, number>();
   const skipped = new Map<string, FrameParams>();
   const heldNative: number[] = [];
   const clear = () => {
@@ -68,16 +66,9 @@ export function createSharedScreencast(
   const ackPage = (sessionId: number) =>
     void send("Page.screencastFrameAck", { sessionId }).catch(() => undefined);
 
-  const sendFrame = (viewer: string, frame: FrameParams, credit?: NativeCredit) => {
-    outstanding.set(viewer, { sessionId: frame.sessionId, ...(credit ? { credit } : {}) });
-    if (credit) credit.remaining++;
+  const sendFrame = (viewer: string, frame: FrameParams) => {
+    outstanding.set(viewer, frame.sessionId);
     deliver(viewer, frame);
-  };
-
-  const release = (viewer: string) => {
-    const credit = outstanding.get(viewer)?.credit;
-    outstanding.delete(viewer);
-    if (credit && --credit.remaining === 0) ackPage(credit.sessionId);
   };
 
   const releaseUnusedCredits = () => {
@@ -85,12 +76,10 @@ export function createSharedScreencast(
   };
 
   const remove = (viewer: string, retainDelivery = false) => {
-    const delivered = outstanding.get(viewer);
     const removed = viewers.delete(viewer);
     skipped.delete(viewer);
-    release(viewer);
     // A stop in one viewer can leave the shared native run and its frame IDs alive.
-    if (retainDelivery && delivered) outstanding.set(viewer, { sessionId: delivered.sessionId });
+    if (!retainDelivery) outstanding.delete(viewer);
     releaseUnusedCredits();
     return removed;
   };
@@ -170,12 +159,16 @@ export function createSharedScreencast(
         return;
       }
       const frame = { ...params, sessionId };
-      const credit = { sessionId, remaining: 0 };
+      let delivered = false;
       for (const viewer of viewers.keys()) {
         if (outstanding.has(viewer)) skipped.set(viewer, frame);
-        else sendFrame(viewer, frame, credit);
+        else {
+          sendFrame(viewer, frame);
+          delivered = true;
+        }
       }
-      if (credit.remaining === 0) {
+      if (delivered) ackPage(sessionId);
+      else {
         if (heldNative.length === MAX_HELD_NATIVE_FRAMES) {
           const oldest = heldNative.shift();
           if (oldest !== undefined) ackPage(oldest);
@@ -185,8 +178,8 @@ export function createSharedScreencast(
     },
     ack: (viewer, sessionId) => {
       const sent = outstanding.get(viewer);
-      if (!sent || sent.sessionId !== sessionId) return;
-      release(viewer);
+      if (sent === undefined || sent !== sessionId) return;
+      outstanding.delete(viewer);
       const latest = skipped.get(viewer);
       if (latest) {
         skipped.delete(viewer);

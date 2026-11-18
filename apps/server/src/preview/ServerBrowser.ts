@@ -160,6 +160,7 @@ const decodeLogsInput = Schema.decodeUnknownSync(PreviewAutomationLogsInput);
 const SERVER_HOST_CLIENT_ID = SERVER_BROWSER_AUTOMATION_CLIENT_ID;
 const RECORDING_SCREENCAST = { format: "jpeg", quality: 90, everyNthFrame: 1 } as const;
 const RENDER_SCALE = 2;
+// Native Chromium ACKs gate capture; Electron relay ACKs gate only this viewer's delivery slot.
 const SCREENCAST_ACK_PACE_MS = 100;
 const SCREENCAST_SETTLE_MS = 200;
 const SCREENCAST_MOTION_FRAMES = 4;
@@ -171,7 +172,6 @@ const DESKTOP_ATTACH_TIMEOUT = "10 seconds";
 const VIEWER_STILL_WAIT = "2 seconds";
 const VIEWER_OUTPUT_LIMIT = 64;
 
-// Chromium allows three unacked frames, so 100 ms pacing caps viewers near 30 fps.
 const decodeViewportSetting = Schema.decodeUnknownSync(PreviewViewportSettingSchema);
 const AGENT_CURSOR_MOVE_MS = 160;
 const AGENT_CURSOR_CLICK_LEAD_MS = 40;
