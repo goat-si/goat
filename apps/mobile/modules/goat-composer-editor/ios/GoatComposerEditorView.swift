@@ -1,7 +1,7 @@
 import ExpoModulesCore
 import UIKit
 
-private struct ComposerTokenPayload: Decodable {
+private struct ComposerTokenPayload: Decodable, Equatable {
   let type: String
   let source: String
   let label: String
@@ -9,8 +9,16 @@ private struct ComposerTokenPayload: Decodable {
   let accent: String?
   let tintsIcon: Bool?
   let detail: String?
-  let start: Int
-  let end: Int
+  var start: Int
+  var end: Int
+
+  func rendersLike(_ other: Self) -> Bool {
+    var atSameOffset = other
+    atSameOffset.start = start
+    atSameOffset.end = end
+    // Canonically equivalent sources can have different UTF-16 offsets.
+    return self == atSameOffset && source.utf16.elementsEqual(other.source.utf16)
+  }
 }
 
 private struct ComposerSelectionPayload: Decodable, Equatable {
@@ -661,7 +669,7 @@ public final class GoatComposerEditorView: ExpoView, UITextViewDelegate, UITextD
       // Typing before a chip only shifts its offsets, and UIKit already moved the attachment.
       // Rebuilding for that would reset the keyboard on every keystroke; a chip that was
       // inserted or removed still rebuilds through documentMatchesExpectedTokens.
-      if Self.chipPresentation(nextTokens) != Self.chipPresentation(tokens) {
+      if !nextTokens.elementsEqual(tokens, by: { $0.rendersLike($1) }) {
         tokensNeedRebuild = true
       }
       tokensJson = document.tokensJson
@@ -1245,13 +1253,6 @@ public final class GoatComposerEditorView: ExpoView, UITextViewDelegate, UITextD
       return nil
     }
     return requestedSelection
-  }
-
-  private static func chipPresentation(_ tokens: [ComposerTokenPayload]) -> [String] {
-    tokens.map {
-      [$0.type, $0.source, $0.label, $0.detail ?? "", $0.accent ?? "", $0.iconUri ?? "", $0.tintsIcon == true ? "1" : "0"]
-        .joined(separator: "\u{1F}")
-    }
   }
 
   private func restoreSelectionBeforeFocusingTap() {
