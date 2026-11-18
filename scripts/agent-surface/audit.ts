@@ -838,7 +838,7 @@ export function render(inventory: Inventory): string {
     "",
     "The server's " +
       code("/llms.txt") +
-      " lists every registry path with its summary. " +
+      " lists public registry paths with their summaries. " +
       code("goat_describe") +
       " serves input and output schemas from the registered tools, and examples for " +
       servedExamples.length +
@@ -897,7 +897,7 @@ function rankedFixes(
         a.unprompted.length +
         " tools appear in no doc or prompt. " +
         code("/llms.txt") +
-        " lists every path for the calling credential, and " +
+        " filters its public index for the calling credential, and " +
         code("goat_describe") +
         " already serves schemas from the registered tools and examples for " +
         n.servedExamples +

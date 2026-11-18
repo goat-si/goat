@@ -4,7 +4,7 @@ import { listedToolName } from "./surfaceEntries.ts";
 type Entry = (typeof agentSurfaceRegistry)[keyof typeof agentSurfaceRegistry];
 
 /**
- * Who asked. Anonymous gets every path; a credential sees what its kind can
+ * Who asked. Anonymous gets the public index; a credential sees what its kind can
  * reach. Permission profiles and capabilities are checked when the tool runs,
  * so a listed path can still be refused.
  */
@@ -17,6 +17,7 @@ const REQUIRES_FLAG = { thread: "thread only", client: "client only", either: nu
 
 /** Mirrors McpToolAccess: thread-only tools refuse clients, and read-only clients reach reads only. */
 const usableBy = (entry: Entry, caller: LlmsTxtCaller): boolean => {
+  if ("listing" in entry && entry.listing === "prompt") return false;
   switch (caller.kind) {
     case "anonymous":
       return true;
@@ -29,7 +30,7 @@ const usableBy = (entry: Entry, caller: LlmsTxtCaller): boolean => {
 
 const AUDIENCE = {
   anonymous:
-    "Unfiltered: every path in this GOAT version. Request this page with the bearer credential you use for /mcp to list only the paths that credential can reach.",
+    "Public index of GOAT paths. Request this page with the bearer credential you use for /mcp to filter it by credential kind.",
   thread: "Filtered for this GOAT thread's credential.",
   client: "Filtered for this MCP client credential.",
   readOnlyClient: "Filtered for this read-only MCP client credential: reads only.",

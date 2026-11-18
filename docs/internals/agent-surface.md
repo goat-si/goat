@@ -885,9 +885,9 @@ Composed runs add their `evalRunId` to each step. Spans are named
 **Now.** [agent-surface-audit.md](./agent-surface-audit.md) is generated from the
 registries, and goat-ci's check task runs `pnpm agent-surface:check`, so a change that
 moves the registry, a toolkit, or a cited line fails until `pnpm agent-surface:audit`
-regenerates the page. The server serves `/llms.txt`, one line per registry path
-([llms.ts](../../packages/contracts/src/agentSurface/llms.ts)). Without a credential it
-lists every path; with a credential `/mcp` accepts, it drops paths that credential's kind
+regenerates the page. The server serves `/llms.txt`, an index of registry paths
+that omits prompt-only entries ([llms.ts](../../packages/contracts/src/agentSurface/llms.ts)).
+With a credential `/mcp` accepts, it also drops paths that credential's kind
 cannot reach (thread-only, client-only, and writes for a read-only client). Permission
 profiles are still checked only when a tool runs. Tool reference prose is still
 hand-written in

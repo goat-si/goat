@@ -193,8 +193,8 @@ import {
 } from "../fleet/admission/PlacementKey.ts";
 
 /**
- * The registry index for agents. Without a credential it lists every path; a
- * credential that /mcp would accept filters it, and one /mcp would refuse gets
+ * The public registry index for agents. A credential that /mcp would accept
+ * filters it further, and one /mcp would refuse gets
  * the same 401.
  */
 export const layerLlmsTxtRoute = Layer.unwrap(

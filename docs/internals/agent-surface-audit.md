@@ -263,13 +263,13 @@ Every `goat ...` invocation in the docs names a real command and flags it accept
 
 Listed CLI commands no doc invokes: `goat auth pairing list`, `goat auth pairing revoke`, `goat project add`, `goat project remove`, `goat project rename`, `goat thread start`, `goat triage`.
 
-The server's `/llms.txt` lists every registry path with its summary. `goat_describe` serves input and output schemas from the registered tools, and examples for 68 of them.
+The server's `/llms.txt` lists public registry paths with their summaries. `goat_describe` serves input and output schemas from the registered tools, and examples for 68 of them.
 
 ## Fixes ranked by agent impact
 
 1. **One error envelope with a machine code and a next action.** 7 error families and two failure modes (263 `return`, 46 `error`) all arrive as JSON inside text. Return `structuredContent` shaped like `{code, message, retryable, field?, next?}` from every tool so an agent branches on data.
 2. **A single human handoff primitive.** Secrets, approvals, mode escalation, capability grants, and sign-in each surface differently (see "Where a human is required"). One handoff result with an id, what the user must do and where, plus one wait call, lets any agent pause and resume instead of failing.
-3. **Complete the on-demand tool reference.** 156 tools appear in no doc or prompt. `/llms.txt` lists every path for the calling credential, and `goat_describe` already serves schemas from the registered tools and examples for 68 of them. Add examples to the rest, and related paths, there without committed reference pages (decision D14 in agent-surface.md).
+3. **Complete the on-demand tool reference.** 156 tools appear in no doc or prompt. `/llms.txt` filters its public index for the calling credential, and `goat_describe` already serves schemas from the registered tools and examples for 68 of them. Add examples to the rest, and related paths, there without committed reference pages (decision D14 in agent-surface.md).
 4. **Describe every parameter.** 650 of 1200 parameters have no description, and 113 tools describe none. Extend the catalog test at apps/server/src/mcp/toolkits/agentSurface/discovery.test.ts `describes every argument of the paths goat_call lists`, which fails on an undescribed argument of a path with examples, to every tool.
 5. **Retry keys on every mutating tool.** 114 mutating tools take no `clientRequestId`, so a dropped response leaves an agent unable to retry safely. Start with destructive tools and thread launch.
 6. **Derive hints from enforcement.** Compute `readOnlyHint` from the handler's `McpToolAccess` declaration instead of annotating it separately. 1 tools disagree or under-declare today, which misleads clients that auto-approve reads.
