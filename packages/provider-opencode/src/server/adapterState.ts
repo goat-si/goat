@@ -93,6 +93,7 @@ export interface OpenCodeSubagentContext {
 export interface OpenCodeChildExecution {
   readonly resumed: boolean;
   awaitingStart: boolean;
+  startedAfterTerminal?: boolean;
   outcome?: TerminalTurnStatus | undefined;
 }
 

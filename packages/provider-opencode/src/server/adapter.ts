@@ -1075,8 +1075,8 @@ export const makeOpenCodeAdapterV2 = Effect.fn("makeOpenCodeAdapterV2")(function
             });
             context.childExecution = childOutcomes.claim(
               childSessionId,
-              subagentsByChildSessionId.has(childSessionId) ||
-                recordString(input, "task_id") === childSessionId,
+              subagentsByChildSessionId.get(childSessionId)?.childExecution,
+              recordString(input, "task_id") === childSessionId,
               busySessionIds.has(childSessionId),
             );
             subagentsByChildSessionId.set(childSessionId, context);

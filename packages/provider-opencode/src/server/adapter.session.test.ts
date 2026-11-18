@@ -218,6 +218,7 @@ it.effect.each([
   "stop",
   "error-before-launch",
   "resume",
+  "resume-busy-before-link",
   "outcome-capacity",
   "overflow",
   "large-output",
@@ -229,6 +230,7 @@ it.effect.each([
     const push = (event: unknown) => Effect.promise(() => nativeEvents.push(event));
     const root = "ses_root";
     const child = "ses_child";
+    const resumed = ending === "resume" || ending === "resume-busy-before-link";
     let promptId = "";
     const abortStarted = promiseGate<void>();
     const releaseAbort = promiseGate<void>();
@@ -329,18 +331,20 @@ it.effect.each([
         yield* push(childError("UnknownError", `unbound-${index}`));
       }
     } else {
-      yield* push(taskPart("running", child, ending === "resume" ? "foreground" : "detached"));
+      yield* push(taskPart("running", child, resumed ? "foreground" : "detached"));
       yield* push(created(child));
       if (ending === "error-before-launch") yield* push(childError("UnknownError"));
-      if (ending === "resume") {
+      if (resumed) {
         yield* push(status(child, "busy"));
         yield* push(status(child, "idle"));
         yield* push(taskPart("completed", child, "foreground"));
+        if (ending === "resume-busy-before-link") yield* push(status(child, "busy"));
         yield* push(taskPart("running", child, "resume"));
-        yield* push(status(child, "busy"));
+        if (ending === "resume") yield* push(status(child, "busy"));
       }
     }
-    yield* push(taskPart("completed", child, ending === "resume" ? "resume" : "detached"));
+    yield* push(taskPart("completed", child, resumed ? "resume" : "detached"));
+    if (ending === "resume-busy-before-link") yield* push(childError("UnknownError"));
     if (ending === "capacity" || ending === "capacity-error") {
       for (let index = 0; index < 128; index++) {
         const id = `ses_child_${index}`;
@@ -378,11 +382,19 @@ it.effect.each([
       );
       return;
     }
-    if (ending === "outcome-capacity" || ending === "resume") {
+    if (ending === "outcome-capacity" || resumed) {
       const projected = rootEvents.filter((event) => event.type === "subagent.updated");
       assert.deepEqual(
         projected.map((event) => event.subagent.status),
-        ending === "resume" ? ["running", "completed", "running", "running"] : ["idle"],
+        resumed
+          ? [
+              "running",
+              "completed",
+              "running",
+              "running",
+              ...(ending === "resume-busy-before-link" ? ["failed"] : []),
+            ]
+          : ["idle"],
       );
       if (ending === "outcome-capacity") {
         assert.equal(projected.at(-1)?.subagent.result, "Tracking lost. Outcome unknown.");
