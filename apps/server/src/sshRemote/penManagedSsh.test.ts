@@ -9,7 +9,7 @@ import { EnvironmentId } from "@goat/contracts";
 import * as Effect from "effect/Effect";
 import * as Layer from "effect/Layer";
 import * as FetchHttpClient from "effect/http/FetchHttpClient";
-import type { PenManagedRoutesShape } from "../hubNodes/PenManagedRoutes.ts";
+import { expectingPen, type PenManagedRoutesShape } from "../hubNodes/PenManagedRoutes.ts";
 import { guardPenManaged } from "./penManagedSsh.ts";
 // @effect-diagnostics-next-line nodeBuiltinImport:off -- source boundary test reads the repository tree.
 import * as NodeFS from "node:fs";
@@ -17,6 +17,7 @@ import * as NodeFS from "node:fs";
 import * as NodePath from "node:path";
 
 const target = { alias: "pen-member", hostname: "pen-member", username: null, port: null };
+const binding = { meshId: "m".repeat(26), nodeId: "a".repeat(26), noisePub: "a".repeat(43) };
 const testServices = Layer.mergeAll(
   NodeServices.layer,
   NodeCrypto.layer,
@@ -60,7 +61,7 @@ const fixture = () => {
   });
   const routes: PenManagedRoutesShape = {
     isManaged: () => state.managed,
-    binding: () => undefined,
+    binding: () => (state.managed ? binding : undefined),
     admit: () =>
       state.admitted
         ? Effect.succeed({ selfNodeId: "local" })
@@ -130,6 +131,32 @@ describe("guardPenManaged", () => {
           },
         },
       ]);
+    }).pipe(Effect.provide(testServices)),
+  );
+
+  it.effect("a hub route read while Pen held it never reaches plain SSH once Pen let it go", () =>
+    Effect.gen(function* () {
+      const { guarded, calls, state } = fixture();
+      // The hub proxy read the Pen route; the reconciler forgot the alias before SSH ran.
+      state.managed = false;
+      const ensured = yield* Effect.exit(
+        guarded.ensureEnvironment(target).pipe(expectingPen(binding)),
+      );
+      const issued = yield* Effect.exit(
+        guarded
+          .issueClientSession(target, { subject: "hub-proxy", label: "hub", ttl: "1h", scopes: [] })
+          .pipe(expectingPen(binding)),
+      );
+      expect([ensured._tag, issued._tag]).toEqual(["Failure", "Failure"]);
+      // Another key under the same alias is not the machine the hub listed either.
+      state.managed = true;
+      const rekeyed = yield* Effect.exit(
+        guarded
+          .ensureEnvironment(target)
+          .pipe(expectingPen({ ...binding, noisePub: "b".repeat(43) })),
+      );
+      expect(rekeyed._tag).toBe("Failure");
+      expect(calls).toEqual([]);
     }).pipe(Effect.provide(testServices)),
   );
 

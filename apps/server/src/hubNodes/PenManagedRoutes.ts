@@ -84,6 +84,20 @@ export class PenManagedRoutes extends Context.Reference<PenManagedRoutesShape>(
   { defaultValue: () => refuseEveryPenAlias },
 ) {}
 
+/**
+ * The Pen binding a caller read with the route it is about to use, such as the hub proxy. SSH
+ * operations under it run only while PenManagedRoutes still holds that alias for that key.
+ */
+export class ExpectedPenRoute extends Context.Reference<PenRouteBinding | undefined>(
+  "goat/hubNodes/ExpectedPenRoute",
+  { defaultValue: () => undefined },
+) {}
+
+export const expectingPen =
+  (binding: PenRouteBinding | undefined) =>
+  <A, E, R>(effect: Effect.Effect<A, E, R>) =>
+    binding === undefined ? effect : Effect.provideService(effect, ExpectedPenRoute, binding);
+
 export const make = Effect.fn("PenManagedRoutes.make")(function* (input: {
   readonly inspect: (alias: string) => Effect.Effect<PenAliasInspection, PenAliasUnreadable>;
   /** Pen registrations saved by an earlier run: managed before the first SSH operation. */

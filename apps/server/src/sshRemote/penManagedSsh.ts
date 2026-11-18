@@ -1,7 +1,11 @@
-import { SshLaunchError } from "@goat/ssh/errors";
+import { SshInvalidTargetError, SshLaunchError } from "@goat/ssh/errors";
 import { SshEnvironmentManager, type SshEnvironmentManagerShape } from "@goat/ssh/tunnel";
 import * as Effect from "effect/Effect";
-import { PenManagedRoutes, type PenManagedRoutesShape } from "../hubNodes/PenManagedRoutes.ts";
+import {
+  ExpectedPenRoute,
+  PenManagedRoutes,
+  type PenManagedRoutesShape,
+} from "../hubNodes/PenManagedRoutes.ts";
 
 const existingRuntimeRequired = () =>
   new SshLaunchError({
@@ -13,16 +17,34 @@ const existingRuntimeRequired = () =>
 /**
  * For an alias Pen manages, every operation that opens ssh is admitted first, runs existing-only,
  * and signs in as a Pen member; setup is refused. Other aliases pass through untouched. Read at
- * each call, so an alias becomes guarded the moment it is held.
+ * each call, so an alias becomes guarded the moment it is held. A caller that read a Pen binding
+ * with its route (ExpectedPenRoute) is refused unless that alias is still held for that key.
  */
 export const guardPenManaged = (
   manager: SshEnvironmentManagerShape,
   routes: PenManagedRoutesShape,
 ): SshEnvironmentManagerShape => {
+  const whenManaged = <A, E, R, A2, E2, R2>(
+    alias: string,
+    managed: Effect.Effect<A, E, R>,
+    plain: Effect.Effect<A2, E2, R2>,
+  ): Effect.Effect<A | A2, E | E2 | SshInvalidTargetError, R | R2> =>
+    Effect.gen(function* () {
+      const expected = yield* ExpectedPenRoute;
+      if (expected === undefined) return yield* routes.isManaged(alias) ? managed : plain;
+      const held = routes.isManaged(alias) ? routes.binding(alias) : undefined;
+      if (
+        held?.meshId !== expected.meshId ||
+        held.nodeId !== expected.nodeId ||
+        held.noisePub !== expected.noisePub
+      )
+        return yield* new SshInvalidTargetError({
+          message: `${alias} is no longer the Pen machine it was listed as.`,
+        });
+      return yield* managed;
+    });
   const admitted = <A, E, R>(alias: string, use: Effect.Effect<A, E, R>) =>
-    Effect.suspend(() =>
-      routes.isManaged(alias) ? routes.admit(alias).pipe(Effect.andThen(use)) : use,
-    );
+    whenManaged(alias, routes.admit(alias).pipe(Effect.andThen(use)), use);
   const {
     existingEnvironment,
     existingEnvironmentOther,
@@ -65,26 +87,27 @@ export const guardPenManaged = (
     runRemoteScript: (target, input) =>
       admitted(target.alias, manager.runRemoteScript(target, input)),
     ensureEnvironment: (target, options) =>
-      Effect.suspend(() => {
-        if (!routes.isManaged(target.alias)) return manager.ensureEnvironment(target, options);
-        return routes.admit(target.alias).pipe(
+      whenManaged(
+        target.alias,
+        routes.admit(target.alias).pipe(
           Effect.flatMap(() => {
             if (options?.refreshRuntime || options?.confirmReplacement || options?.forceReplace)
               return Effect.fail(existingRuntimeRequired());
             return manager.ensureEnvironment(target, { ...options, installation: "existing-only" });
           }),
-        );
-      }),
+        ),
+        Effect.suspend(() => manager.ensureEnvironment(target, options)),
+      ),
     beginSetupOperation: (target, operationId) =>
-      Effect.suspend(() =>
-        routes.isManaged(target.alias)
-          ? Effect.fail(existingRuntimeRequired())
-          : manager.beginSetupOperation(target, operationId),
+      whenManaged(
+        target.alias,
+        Effect.fail(existingRuntimeRequired()),
+        Effect.suspend(() => manager.beginSetupOperation(target, operationId)),
       ),
     issueClientSession: (target, options) =>
-      Effect.suspend(() => {
-        if (!routes.isManaged(target.alias)) return manager.issueClientSession(target, options);
-        return routes.admit(target.alias).pipe(
+      whenManaged(
+        target.alias,
+        routes.admit(target.alias).pipe(
           Effect.flatMap(({ selfNodeId }) => {
             const { subject: _subject, penMember: _penMember, ...rest } = options;
             return manager.issueClientSession(target, {
@@ -93,19 +116,21 @@ export const guardPenManaged = (
               installation: "existing-only",
             });
           }),
-        );
-      }),
+        ),
+        Effect.suspend(() => manager.issueClientSession(target, options)),
+      ),
     issueMcpClientSession: (target, options) =>
-      Effect.suspend(() => {
-        if (!routes.isManaged(target.alias)) return manager.issueMcpClientSession(target, options);
-        return routes
+      whenManaged(
+        target.alias,
+        routes
           .admit(target.alias)
           .pipe(
             Effect.flatMap(() =>
               manager.issueMcpClientSession(target, { ...options, installation: "existing-only" }),
             ),
-          );
-      }),
+          ),
+        Effect.suspend(() => manager.issueMcpClientSession(target, options)),
+      ),
   };
 };
 
