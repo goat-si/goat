@@ -336,7 +336,7 @@ it.layer(NodeServices.layer)("service state persistence", (it) => {
       }),
   );
 
-  it.effect.each(refusalCases)(
+  it.effect.each(refusalCases.filter(({ reason }) => reason === "database-ahead"))(
     "fails a pending update without restoring data when the active server refuses with $code",
     ({ code, reason, message }) =>
       Effect.gen(function* () {

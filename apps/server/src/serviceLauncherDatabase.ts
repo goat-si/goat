@@ -12,6 +12,7 @@ import { tryAcquireServerOwnerLock } from "./serverOwnerLockFile.ts";
 const DB_FILE_SUFFIXES = ["", "-wal", "-shm"] as const;
 const RESTORE_MARKER = ".restore-pending";
 const ROLLBACK_MARKER = ".rollback-pending";
+const TRIAL_MARKER = ".trial-started";
 const OWNER_GENERATION_FILE = "owner-generation";
 
 // Owner tags in the server-owner.lock generation log. Only these two may own
@@ -306,4 +307,13 @@ export async function discardDatabaseBackup(baseDir: string, updateId: string): 
   if (!(await pathExists(backupDir))) return;
   await NodeFSP.rm(backupDir, { recursive: true, force: true });
   await syncDirectory(NodePath.dirname(backupDir));
+}
+
+/** Written before a trial starts, so a later decision knows the target may have opened the data. */
+export async function markTrialStarted(baseDir: string, updateId: string): Promise<void> {
+  await writeMarker(databaseBackupDir(baseDir, updateId), TRIAL_MARKER);
+}
+
+export function trialMayHaveStarted(baseDir: string, updateId: string): Promise<boolean> {
+  return pathExists(NodePath.join(databaseBackupDir(baseDir, updateId), TRIAL_MARKER));
 }

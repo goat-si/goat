@@ -41,11 +41,14 @@ import {
   databaseRestorePending,
   discardDatabaseBackup,
   launcherOwner,
+  markTrialStarted,
   ownerLockDir,
   pathExists,
   restoreDatabaseBackup,
+  trialMayHaveStarted,
   type BackupSpaceProbe,
 } from "./serviceLauncherDatabase.ts";
+import { stateDirOwned } from "./serviceLauncherOwner.ts";
 import { smokeProbe } from "./serviceLauncherSmokeProbe.ts";
 import { boundServiceLog, SERVICE_LOG_CHECK_INTERVAL_MS, serviceLogPath } from "./serviceLog.ts";
 import {
@@ -66,6 +69,9 @@ const PREPARED_TIMEOUT_MS = 30 * 60_000;
 export const PROBATION_MS = 10 * 60_000;
 const TERMINATE_GRACE_MS = 5_000;
 const RESTORE_RETRY_MS = 5_000;
+const STATE_DIR_OWNER_POLL_MS = 30_000;
+// A pending update waits this long for another server to give up the home (ruling C20).
+const STATE_DIR_OWNER_BOUND_MS = 10 * 60_000;
 // Match SERVER_EXIT_CODE_STATE_DIR_OWNED and SERVER_EXIT_CODE_DATABASE_AHEAD
 // in contracts/desktopBootstrap. The standalone launcher must stay independent
 // of its Effect runtime; subprocess tests use the authoritative contract values.
@@ -227,6 +233,9 @@ export class Launcher {
   readonly #now: () => number;
   readonly #environment: Readonly<NodeJS.ProcessEnv>;
   readonly #serviceUnit: ServiceUnit | undefined;
+  readonly #stateDirOwnerPollMs: number;
+  #stateDirFreeProbes = 0;
+  #ownerBusySince: number | undefined;
 
   constructor(
     baseDir: string,
@@ -237,6 +246,7 @@ export class Launcher {
       readonly now?: () => number;
       readonly environment?: Readonly<NodeJS.ProcessEnv>;
       readonly serviceUnit?: ServiceUnit;
+      readonly stateDirOwnerPollMs?: number;
     } = {},
   ) {
     this.#baseDir = baseDir;
@@ -245,6 +255,7 @@ export class Launcher {
     this.#now = options.now ?? Date.now;
     this.#environment = { ...(options.environment ?? process.env) };
     this.#serviceUnit = options.serviceUnit;
+    this.#stateDirOwnerPollMs = options.stateDirOwnerPollMs ?? STATE_DIR_OWNER_POLL_MS;
     this.#statePath = NodePath.join(baseDir, "runtime", SERVICE_STATE_FILE);
     this.#state = state;
   }
@@ -465,6 +476,7 @@ export class Launcher {
     lock.release();
     if (this.#stopRequested) return;
     try {
+      await markTrialStarted(this.#baseDir, pending.id);
       await this.#startChild(pending.targetVersion, "trial", pending);
     } catch {
       await this.#returnToPrevious(pending, "failed", "candidate-start-failed");
@@ -775,15 +787,13 @@ export class Launcher {
     throw new Error(`Active child exited unexpectedly (${String(code ?? signal ?? "unknown")}).`);
   }
 
-  /**
-   * Exiting would make systemd or launchd start another refused server, so stay
-   * idle until stopped or restarted. A pending update fails without restoring
-   * its backup: another build may have written to the database since.
-   */
+  // Exiting would make systemd or launchd start another refused server, so stay idle. A home
+  // another server owns is probed until it frees; a database a newer build wrote fails a pending
+  // update at once, without restoring over that build's writes.
   async #idleWhileRefused(reason: "state-dir-owned" | "database-ahead"): Promise<void> {
     this.#clearTimer();
     const pending = this.#state.update;
-    if (pending?.status === "pending") {
+    if (pending?.status === "pending" && reason === "database-ahead") {
       const next: ServiceState = {
         ...this.#state,
         activeVersion: pending.fromVersion,
@@ -793,14 +803,70 @@ export class Launcher {
       await discardDatabaseBackup(this.#baseDir, pending.id).catch(() => undefined);
       await this.#repointServiceUnit(next.activeVersion);
     }
+    if (pending?.status === "pending" && reason === "state-dir-owned") {
+      this.#ownerBusySince ??= this.#now();
+    }
     await this.#resumeProbation();
-    // Signal listeners alone do not keep Node alive.
-    this.#timer = setInterval(() => {}, 2_147_483_647);
+    this.#stateDirFreeProbes = 0;
+    // The interval also keeps Node alive: signal listeners alone do not.
+    this.#timer =
+      reason === "state-dir-owned"
+        ? setInterval(() => this.#enqueue(() => this.#reclaimStateDir()), this.#stateDirOwnerPollMs)
+        : setInterval(() => {}, 2_147_483_647);
     process.stderr.write(
       reason === "database-ahead"
         ? "[service-launcher] This GOAT build is older than the data in this GOAT home. Update GOAT or install a newer service, then restart this service.\n"
         : "[service-launcher] Another GOAT server owns this GOAT home. Stop it, then restart this service.\n",
     );
+  }
+
+  async #reclaimStateDir(): Promise<void> {
+    if (this.#stopRequested || this.#timer === undefined || this.#child !== null) return;
+    const update = this.#state.update;
+    const pending = update?.status === "pending" ? update : undefined;
+    const owned = await stateDirOwned(this.#baseDir);
+    // A stop during the probe clears the timer.
+    if (this.#timer === undefined) return;
+    // A relaunching desktop app frees the home for a few seconds; leave it that gap.
+    this.#stateDirFreeProbes = owned ? 0 : this.#stateDirFreeProbes + 1;
+    if (owned) {
+      const since = this.#ownerBusySince;
+      if (pending === undefined || since === undefined) return;
+      if (this.#now() - since < STATE_DIR_OWNER_BOUND_MS) return;
+      this.#ownerBusySince = undefined;
+      const gaveUp =
+        "[service-launcher] The GOAT home stayed owned by another server for 10 minutes; the update failed (db-owner-busy).\n";
+      // A target that may have opened the database goes through the normal rollback.
+      if (await trialMayHaveStarted(this.#baseDir, pending.id)) {
+        process.stderr.write(gaveUp);
+        await this.#returnToPrevious(pending, "failed", "db-owner-busy");
+        return;
+      }
+      await discardDatabaseBackup(this.#baseDir, pending.id).catch(() => undefined);
+      await this.#selectState({
+        ...this.#state,
+        activeVersion: pending.fromVersion,
+        update: terminalUpdate({ pending, status: "failed", reason: "db-owner-busy" }),
+      });
+      await this.#repointServiceUnit(pending.fromVersion);
+      process.stderr.write(gaveUp);
+      return;
+    }
+    if (this.#stateDirFreeProbes < 2) return;
+    this.#clearTimer();
+    this.#ownerBusySince = undefined;
+    process.stderr.write("[service-launcher] The GOAT home is free again. Starting the server.\n");
+    if (pending === undefined) {
+      await this.#startChild(this.#state.activeVersion, "active", update);
+      return;
+    }
+    if (await trialMayHaveStarted(this.#baseDir, pending.id)) {
+      await this.#returnToPrevious(pending, "failed", "state-dir-owned");
+      return;
+    }
+    // The other server may have written since any backup; the trial takes a fresh one.
+    await discardDatabaseBackup(this.#baseDir, pending.id).catch(() => undefined);
+    await this.#startTrial(pending);
   }
 
   async #returnToPrevious(
