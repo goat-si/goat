@@ -907,7 +907,7 @@ export const make = Effect.fn("OpenCode2Adapter.make")(function* (instanceId: Pr
             : [],
         ),
       );
-      const allTasks = [...roster, ...imageTasks];
+      const allTasks = roster.concat(imageTasks);
       const current = state.providerThread.pendingBackgroundTasks ?? [];
       if (
         state.publishedBackgroundWork === hasBackground(state) &&
