@@ -620,6 +620,7 @@ it.effect("a member's new Noise key keeps its stored route and updates the pin i
       removeRoute: (_env, route) => Effect.sync(() => void removed.push(route)),
       reorderRoutes: unused,
       removeRelayEnvironments: unused,
+      setPenLive: unused,
       retryNow: unused,
       reconnect: unused,
       setEnabled: unused,
