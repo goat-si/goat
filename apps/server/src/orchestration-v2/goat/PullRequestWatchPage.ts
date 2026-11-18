@@ -1,11 +1,32 @@
+import * as NodeBuffer from "node:buffer";
 import { writeFileStringAtomically } from "@goat/shared/atomicWrite";
+import * as DateTime from "effect/DateTime";
 import * as Effect from "effect/Effect";
 import * as FileSystem from "effect/FileSystem";
+import * as Option from "effect/Option";
 import * as Path from "effect/Path";
 
 import * as ServerConfig from "../../config.ts";
 
 const WATCH_SWEEP_BUDGET = 64;
+const CURSOR_MAX_BYTES = 4_096;
+
+const isWatchSweepKey = (key: string) => {
+  if (/[\p{Cc}\p{Cs}]/u.test(key)) return false;
+  // Same fields as lifeKey: normalized host/repository#number, thread ID and ISO start time.
+  const match = /^([^/\s#]+)\/(.+?)#([1-9]\d*) (.+) (\S+)$/u.exec(key);
+  if (match === null) return false;
+  const [, host = "", repository = "", number, threadId = "", startedAt = ""] = match;
+  const time = DateTime.make(startedAt);
+  return (
+    host === host.toLowerCase() &&
+    repository === repository.trim().toLowerCase() &&
+    threadId === threadId.trim() &&
+    Number.isSafeInteger(Number(number)) &&
+    Option.isSome(time) &&
+    DateTime.formatIso(time.value) === startedAt
+  );
+};
 
 export const watchSweepPage = <Item extends { readonly key: string }>(
   work: ReadonlyArray<Item>,
@@ -32,20 +53,61 @@ export const makeWatchSweepCursor = Effect.gen(function* () {
   const fs = yield* FileSystem.FileSystem;
   const path = yield* Path.Path;
   const filePath = path.join(stateDir, "pull-request-watch-cursor");
-  let saved = yield* fs.readFileString(filePath).pipe(
+  const bytes = yield* Effect.scoped(
+    Effect.gen(function* () {
+      const file = yield* fs.open(filePath, { flag: "r" });
+      const buffer = new Uint8Array(CURSOR_MAX_BYTES + 1);
+      let length = 0;
+      while (length < buffer.length) {
+        const read = yield* file.read(buffer.subarray(length));
+        if (read === 0) break;
+        length += read;
+      }
+      return buffer.subarray(0, length);
+    }),
+  ).pipe(
     Effect.catch((cause) =>
       cause.reason._tag === "NotFound"
         ? Effect.void
         : Effect.logWarning("Failed to read pull request watch sweep cursor", { cause }),
     ),
-    Effect.map((key) => key || undefined),
   );
+  let saved =
+    bytes === undefined || bytes.length === 0
+      ? undefined
+      : yield* Effect.try(() => {
+          if (bytes.length > CURSOR_MAX_BYTES) {
+            throw new Error(`Cursor exceeds ${CURSOR_MAX_BYTES} bytes`);
+          }
+          const key = new TextDecoder("utf-8", { fatal: true, ignoreBOM: true }).decode(bytes);
+          if (!isWatchSweepKey(key)) throw new Error("Invalid watch key");
+          return key;
+        }).pipe(
+          Effect.catch((cause) =>
+            Effect.logWarning("Ignoring invalid pull request watch sweep cursor", { cause }).pipe(
+              Effect.as(undefined),
+            ),
+          ),
+        );
   let after = saved;
+  let warnedAboutInvalidWrite = false;
 
   const complete = Effect.fn("PullRequestWatchSweepCursor.complete")(function* (
     next: string | undefined,
   ) {
     after = next;
+    if (
+      next !== undefined &&
+      (NodeBuffer.Buffer.byteLength(next) > CURSOR_MAX_BYTES || !isWatchSweepKey(next))
+    ) {
+      if (!warnedAboutInvalidWrite) {
+        warnedAboutInvalidWrite = true;
+        yield* Effect.logWarning(
+          "Cannot persist pull request watch sweep cursor outside storage format",
+        );
+      }
+      next = undefined;
+    }
     if (next === saved) return;
     yield* writeFileStringAtomically({ filePath, contents: next ?? "" }).pipe(
       Effect.provideService(FileSystem.FileSystem, fs),
