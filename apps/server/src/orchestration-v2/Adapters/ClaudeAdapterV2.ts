@@ -2,9 +2,8 @@ import {
   beforeClaudeStopProjection,
   holdClaudeStopDenial,
   holdClaudeWorkflowMember,
-  makeClaudeWorkflowStop,
+  makeClaudeWorkflowStopCommand,
   reconcileClaudeWorkflowStop,
-  requestClaudeWorkflowStop,
   type ClaudeWorkflowMemberState,
   type ClaudeWorkflowStop,
 } from "./ClaudeWorkflowStop.ts";
@@ -4962,7 +4961,7 @@ export const makeClaudeAdapterV2 = Effect.fn("makeClaudeAdapterV2")(function* (
             const stop = subagent.workflowStop;
             if (
               input.nativeOutcome !== undefined &&
-              stop?.waitInterrupted === true &&
+              stop?.retryAt !== undefined &&
               (yield* Ref.get(queryContext))?.query === stop.owner
             )
               yield* reconcileClaudeWorkflowStop(subagent, stop, projectClaudeWorkflowMembers);
@@ -7151,7 +7150,7 @@ export const makeClaudeAdapterV2 = Effect.fn("makeClaudeAdapterV2")(function* (
                 subagentStopOutcomes.has(message.task_id) ||
                 (!hasBufferedStart &&
                   (registered?.task.workflow === undefined ||
-                    (stop?.owner === liveQuery.query && stop.waitInterrupted)));
+                    (stop?.owner === liveQuery.query && stop.retryAt !== undefined)));
               if (registered !== undefined && settled !== undefined && canApplyOutcome) {
                 yield* discardBufferedSubagentStarts(
                   liveQuery.nativeThreadId,
@@ -10450,69 +10449,14 @@ export const makeClaudeAdapterV2 = Effect.fn("makeClaudeAdapterV2")(function* (
                 providerThread.nativeThreadRef?.nativeId,
               ),
             ),
-          stopTask: Effect.fn("ClaudeAdapterV2.stopTask")(function* ({ providerThread, taskId }) {
-            const liveQuery = yield* Ref.get(queryContext);
-            const task = (yield* Ref.get(sessionSubagentsByTaskId)).get(taskId);
-            if (
-              liveQuery === null ||
-              liveQuery.stopping ||
-              liveQuery.nativeThreadId !== providerThread.nativeThreadRef?.nativeId ||
-              task === undefined ||
-              task.task.threadId !== providerThread.appThreadId ||
-              task.task.workflow === undefined ||
-              task.task.status !== "running" ||
-              task.workflowStop?.outcome === "pending" ||
-              liveQuery.subagentsFromEarlierProcesses.has(task)
-            ) {
-              return yield* new ProviderAdapter.ProviderAdapterProtocolError({
-                driver: CLAUDE_PROVIDER,
-                detail: "No running workflow task belongs to this provider thread",
-              });
-            }
-            const stop = makeClaudeWorkflowStop(
-              liveQuery.query,
-              DateTime.toEpochMillis(yield* DateTime.now),
-            );
-            const previousStop = task.workflowStop;
-            task.workflowStop = stop;
-            yield* requestClaudeWorkflowStop(
-              stop,
-              taskId,
-              liveQuery.closed,
-              sessionScope,
-              (confirmedOnly) =>
-                sdkMessageLock
-                  .withPermits(1)(
-                    Effect.gen(function* () {
-                      const current = (yield* Ref.get(sessionSubagentsByTaskId)).get(taskId);
-                      if (
-                        current?.workflowStop !== stop ||
-                        (yield* Ref.get(queryContext)) !== liveQuery ||
-                        (confirmedOnly && current.confirmedOutcome === undefined)
-                      )
-                        return;
-                      yield* reconcileClaudeWorkflowStop(
-                        current,
-                        stop,
-                        projectClaudeWorkflowMembers,
-                      );
-                      if (stop.outcome === "rejected") {
-                        if (previousStop === undefined) delete current.workflowStop;
-                        else current.workflowStop = previousStop;
-                      }
-                    }),
-                  )
-                  .pipe(Effect.forkIn(sessionScope, { uninterruptible: false }), Effect.asVoid),
-            ).pipe(
-              Effect.mapError(
-                (cause) =>
-                  new ProviderAdapter.ProviderAdapterProtocolError({
-                    driver: CLAUDE_PROVIDER,
-                    detail: "Workflow stop request failed",
-                    cause,
-                  }),
-              ),
-            );
+          stopTask: makeClaudeWorkflowStopCommand({
+            driver: CLAUDE_PROVIDER,
+            getQuery: Ref.get(queryContext),
+            getCoordinator: (taskId) =>
+              Ref.get(sessionSubagentsByTaskId).pipe(Effect.map((tasks) => tasks.get(taskId))),
+            lock: sdkMessageLock,
+            scope: sessionScope,
+            project: projectClaudeWorkflowMembers,
           }),
           awaitBackgroundTasks: Effect.fn("ClaudeAdapterV2.awaitBackgroundTasks")(
             function* ({ providerThread, taskIds, awaited }) {

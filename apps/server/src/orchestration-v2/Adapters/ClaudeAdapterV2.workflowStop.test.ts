@@ -253,3 +253,129 @@ it.effect.each(["stopped", "rejected", "EOF"] as const)(
       ]);
     }).pipe(Effect.scoped, Effect.provide(layerClaudeAdapterTest)),
 );
+
+type NativeReply = Deferred.Deferred<void, ClaudeAgentSdkQueryRunnerError>;
+
+const makeUnansweredWorkflow = Effect.fn("test.makeUnansweredWorkflow")(function* () {
+  const sent = yield* Queue.unbounded<NativeReply>();
+  const harness = yield* makeWorkflow(() =>
+    Effect.gen(function* () {
+      const reply = yield* Deferred.make<void, ClaudeAgentSdkQueryRunnerError>();
+      yield* Queue.offer(sent, reply);
+      yield* Deferred.await(reply);
+    }),
+  );
+  yield* TestClock.setTime(Date.parse("2026-10-17T06:00:00.000Z"));
+  const start = () =>
+    harness.stop.pipe(Effect.timeout("15 seconds"), Effect.result, Effect.forkChild);
+  const first = yield* start();
+  const firstReply = yield* Queue.take(sent);
+  yield* TestClock.adjust("15 seconds");
+  const result = yield* Fiber.join(first);
+  assert.equal(result._tag === "Failure" ? result.failure._tag : undefined, "TimeoutError");
+  return { ...harness, sent, start, firstReply };
+});
+
+it.effect("gives an in-grace Stop retry a clear refusal without sending it", () =>
+  Effect.gen(function* () {
+    const harness = yield* makeUnansweredWorkflow();
+    yield* TestClock.adjust("5 seconds");
+    const retry = yield* harness.stop.pipe(Effect.result);
+    assert.equal(
+      retry._tag === "Failure" ? retry.failure._tag : undefined,
+      "ProviderAdapterProtocolError",
+    );
+    if (retry._tag === "Failure")
+      assert.include(retry.failure.message, "previous workflow Stop is still awaiting a reply");
+    assert.equal(yield* Queue.size(harness.sent), 0);
+  }).pipe(Effect.scoped, Effect.provide(layerClaudeAdapterTest)),
+);
+
+it.effect.each(["unanswered", "late previous reply"] as const)(
+  "retries Stop after grace with the first request %s",
+  (scenario) =>
+    Effect.gen(function* () {
+      const fs = yield* FileSystem.FileSystem;
+      const harness = yield* makeUnansweredWorkflow();
+      yield* TestClock.adjust("5 minutes");
+      yield* harness.offerAndWait(
+        frames.workflowSnapshot({ uuid: "workflow-keeps-running", state: "start" }),
+      );
+      const retry = yield* harness.start();
+      // A refusal ends the RPC without enqueuing another native request.
+      const second = yield* Effect.raceFirst(
+        Queue.take(harness.sent).pipe(Effect.asSome),
+        Fiber.join(retry).pipe(Effect.andThen(Effect.succeedNone)),
+      );
+      assert.equal(second._tag, "Some");
+      if (second._tag === "None") return;
+
+      if (scenario === "late previous reply") {
+        const time = DateTime.formatIso(DateTime.add(yield* DateTime.now, { seconds: 1 }));
+        yield* fs.writeFileString(
+          harness.transcript,
+          `{"type":"user","uuid":"retry-denied","timestamp":"${time}","toolDenialKind":"user-rejected","message":{"role":"user","content":[{"type":"tool_result","tool_use_id":"tool_fixture","is_error":true,"content":"Rejected"}]}}\n`,
+          { flag: "a" },
+        );
+        yield* harness.offerAndWait(
+          frames.workflowSnapshot({ uuid: "retry-held-denial", state: "error" }),
+        );
+        yield* Deferred.succeed(harness.firstReply, undefined);
+        yield* TestClock.adjust(0);
+        yield* harness.awaitEventsRecorded;
+        assert.isUndefined(retry.pollUnsafe());
+        assert.deepEqual(heldToolOutcomes(harness), ["running"]);
+      }
+      yield* Deferred.succeed(second.value, undefined);
+      const accepted = yield* Fiber.join(retry);
+      assert.equal(accepted._tag, "Success");
+      if (scenario === "late previous reply") {
+        yield* harness.awaitUntil(
+          () => heldToolOutcomes(harness).length > 1,
+          "retry settled its own tool",
+        );
+        assert.deepEqual(heldToolOutcomes(harness), ["running", "interrupted"]);
+      }
+    }).pipe(Effect.scoped, Effect.provide(layerClaudeAdapterTest)),
+);
+
+it.effect(
+  "bounds unresolved native Stop requests for a query and reuses a slot after a reply",
+  () =>
+    Effect.gen(function* () {
+      const harness = yield* makeUnansweredWorkflow();
+      for (let sent = 1; sent < 8; sent++) {
+        yield* TestClock.adjust("5 minutes");
+        const request = yield* harness.start();
+        const reply = yield* Effect.raceFirst(
+          Queue.take(harness.sent).pipe(Effect.asSome),
+          Fiber.join(request).pipe(Effect.andThen(Effect.succeedNone)),
+        );
+        assert.equal(reply._tag, "Some");
+        yield* TestClock.adjust("15 seconds");
+        const timeout = yield* Fiber.join(request);
+        assert.equal(timeout._tag === "Failure" ? timeout.failure._tag : undefined, "TimeoutError");
+      }
+      yield* TestClock.adjust("5 minutes");
+      const capped = yield* harness.stop.pipe(Effect.result);
+      assert.equal(
+        capped._tag === "Failure" ? capped.failure._tag : undefined,
+        "ProviderAdapterProtocolError",
+      );
+      if (capped._tag === "Failure")
+        assert.include(capped.failure.message, "too many unanswered workflow Stop requests");
+      assert.equal(yield* Queue.size(harness.sent), 0);
+
+      yield* Deferred.succeed(harness.firstReply, undefined);
+      yield* TestClock.adjust(0);
+      const request = yield* harness.start();
+      const reply = yield* Effect.raceFirst(
+        Queue.take(harness.sent).pipe(Effect.asSome),
+        Fiber.join(request).pipe(Effect.andThen(Effect.succeedNone)),
+      );
+      assert.equal(reply._tag, "Some");
+      if (reply._tag === "None") return;
+      yield* Deferred.succeed(reply.value, undefined);
+      assert.equal((yield* Fiber.join(request))._tag, "Success");
+    }).pipe(Effect.scoped, Effect.provide(layerClaudeAdapterTest)),
+);
