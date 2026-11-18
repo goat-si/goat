@@ -1,4 +1,4 @@
-import { makeRunInputDelivery, fenceUntrackedInputDelivery } from "./RunInputDelivery.ts";
+import { makeRunInputDelivery, submitProviderInput } from "./RunInputDelivery.ts";
 import { providerTurnOperation } from "./RunExecutionTurnOperation.ts";
 import { captureRunBaseline, type RunBaselineInput } from "./RunExecutionBaseline.ts";
 import { backgroundCapableTurnItemTypes } from "./InheritedBackgroundTurnItems.ts";
@@ -1923,9 +1923,12 @@ export const layer: Layer.Layer<
         );
         yield* Effect.andThen(
           shouldStart,
-          fenceUntrackedInputDelivery(input.session, inputDelivery, startTurn).pipe(
-            Effect.tap(() =>
-              input.reattach === true || compact || inbox.throughId === null
+          submitProviderInput(input.session, inputDelivery, startTurn).pipe(
+            Effect.tap((submission) =>
+              submission === "skipped" ||
+              input.reattach === true ||
+              compact ||
+              inbox.throughId === null
                 ? Effect.void
                 : remoteReportInbox
                     .consume(input.run.threadId, inbox.throughId)
