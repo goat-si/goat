@@ -560,7 +560,7 @@ describe("ThreadTitleRegenerationService", () => {
   );
 
   it.effect(
-    "records the outcome of a regeneration: renamed, failed with its detail, unchanged",
+    "records the outcome of a regeneration: renamed, failed without the CLI's text, unchanged",
     () =>
       Effect.gen(function* () {
         const cases = [
@@ -604,9 +604,12 @@ describe("ThreadTitleRegenerationService", () => {
             assert.deepInclude(
               projection.thread.lastTitleRegeneration,
               testCase.name === "failed"
-                ? { requestId, status: "failed", message: "model unavailable" }
+                ? { requestId, status: "failed", message: "Title generation failed." }
                 : { requestId, status: testCase.name },
             );
+            // A CLI's raw output stays in the server log; the stored outcome carries none of it.
+            assert.notInclude(JSON.stringify(projection.thread), "model unavailable");
+            assert.notInclude(JSON.stringify(projection.thread), "Conversation text");
             assert.equal(
               projection.thread.title,
               testCase.name === "renamed" ? "Fresh title" : "Seed title",

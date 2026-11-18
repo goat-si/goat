@@ -8,7 +8,6 @@ import {
   type OrchestrationV2ConversationMessage,
   type RunId,
   type ServerSettingsError,
-  TextGenerationError,
   type ThreadId,
 } from "@goat/contracts";
 import * as Cause from "effect/Cause";
@@ -18,7 +17,6 @@ import * as FileSystem from "effect/FileSystem";
 import * as Layer from "effect/Layer";
 import * as Option from "effect/Option";
 import * as Schedule from "effect/Schedule";
-import * as Schema from "effect/Schema";
 
 import * as OwnedEffectDeadline from "./OwnedEffectDeadline.ts";
 import * as ServerSettings from "../serverSettings.ts";
@@ -55,23 +53,9 @@ type Outcome =
   | { readonly status: "unchanged" }
   | { readonly status: "failed"; readonly message: string };
 
-const MAX_FAILURE_MESSAGE_LENGTH = 300;
-const isTextGenerationError = Schema.is(TextGenerationError);
-
-function failureMessage(cause: Cause.Cause<unknown>): string {
-  const error = Cause.squash(cause);
-  const lines = isTextGenerationError(error)
-    ? error.detail
-        .split("\n")
-        .map((line) => line.trim())
-        .filter((line) => line.length > 0)
-    : [];
-  const detail = lines.at(-1);
-  if (detail === undefined) return "Title generation failed.";
-  return detail.length > MAX_FAILURE_MESSAGE_LENGTH
-    ? `${detail.slice(0, MAX_FAILURE_MESSAGE_LENGTH - 1)}…`
-    : detail;
-}
+// Only sentences the server wrote reach the thread: a provider CLI's raw output can hold
+// anything (request ids, key fragments, echoed conversation), so it stays in the server log.
+const GENERATION_FAILED_MESSAGE = "Title generation failed.";
 
 const make = Effect.gen(function* () {
   const threads = yield* ThreadManagementService.ThreadManagementService;
@@ -235,7 +219,7 @@ const make = Effect.gen(function* () {
               threadId: input.threadId,
               requestId: input.requestId,
               cause,
-            }).pipe(Effect.as({ status: "failed" as const, message: failureMessage(cause) })),
+            }).pipe(Effect.as({ status: "failed" as const, message: GENERATION_FAILED_MESSAGE })),
       ),
     );
 

@@ -307,6 +307,12 @@ G13 `goat-copy`, G14 `launch-watch`.
 - 경로: `packages/client-runtime/src/state/{threads,threadSubscriptionRecovery}.ts`
 - 정책: upstream de21fbcff3은 이벤트를 적용하다 defect가 나면 구독을 다시 연다. 하지만 커서(`lastSequence`)는 적용 전에 이미 앞으로 가 있어서, 다시 열 때 적용하지 못한 묶음을 건너뛴 채 이어 받는다. GOAT는 그 재시작 뒤 첫 구독에서 `afterSequence`를 빼서 새 스냅샷으로 상태를 바꾼다. 커서 쓰기를 적용 뒤로 옮기지 않은 이유: 그러면 같은 묶음을 다시 받아 같은 곳에서 또 깨진다. upstream이 이 복구를 바꾸면 받고 이 플래그를 다시 얹는다.
 
+### `title-regeneration-failure-text` 제목 다시 만들기 실패 문구
+
+- 커밋: #3700 (사이클 261114 next3, K7 수정 라운드)
+- 경로: `apps/server/src/orchestration-v2/ThreadTitleRegenerationService.ts`
+- 정책: upstream 1c9ea568a1은 실패 결과에 공급자 `TextGenerationError.detail`의 마지막 줄을 담는다. CLI라면 그 줄은 stderr나 stdout 원문이라 요청 id, 가린 키 조각, 되풀이된 대화 등 무엇이든 될 수 있고, GOAT에서는 저장된 이벤트, 셸, 토스트, MCP 스레드 상세까지 간다. 계획은 오늘 이상의 공급자 문구를 내보내지 않는다고 했다. 그래서 GOAT는 서버가 쓴 문장만 저장한다: 이미 있는 고정 문장(프로젝트 없음, 메시지 없음, 2분 초과)과, 그 밖의 실패에는 "Title generation failed.". 원문은 마스킹된 서버 로그에만 남는다. upstream이 이 실패 문구를 바꾸면 받고 이 규칙을 다시 얹는다.
+
 ## 깨끗하게 머지되고도 깨지는 것
 
 다음 세 가지는 텍스트 충돌이 없어도 확인한다. `scan.sh`가 모두 출력한다.
