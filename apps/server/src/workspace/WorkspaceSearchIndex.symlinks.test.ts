@@ -320,8 +320,9 @@ it.effect.each(["answers not-ok", "rejects"] as const)(
     ).pipe(Effect.provide(testLayer)),
 );
 
-// fff answers a subscription made on a finder destroyed meanwhile with not-ok and keeps no
-// handler (its watchAsync checks the handle after the native call); the index leaves it at that.
+// GOAT's side only: the fake finder plays fff, and the index must not retry or keep a handler.
+// What keeps a real destroyed finder from holding one is the patch's own check of the handle
+// after the native call in watchAsync (patches/@ff-labs__fff-node@0.11.0.patch).
 it.effect("an index closed while its watcher subscription is pending keeps no watcher", () =>
   Effect.gen(function* () {
     if ((yield* HostProcess.Platform) === "win32") return;
