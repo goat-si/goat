@@ -431,7 +431,7 @@ it("reports a provider's stop reason for a completed run without an assistant re
     completedAt: childCreatedAt,
     updatedAt: childCreatedAt,
     type: "system_notice",
-    level: "warning",
+    severity: "warning",
     message: "sessionStart hook (user): Plugin guard blocked this session.",
   } satisfies OrchestrationV2TurnItem;
   assert.equal(

@@ -185,7 +185,7 @@ export const terminalRunNoticeEvents = Effect.fn("RunExecution.terminalRunNotice
           completedAt: input.completedAt,
           updatedAt: input.completedAt,
           type: "system_notice",
-          level: "warning",
+          severity: "warning",
           message: completedStop,
         };
   return [

@@ -140,7 +140,6 @@ export function restartCancelledBackgroundWorkNote(work: ReadonlyArray<Work>): s
 
 type ProviderTurnState = Pick<
   OrchestrationV2ProviderTurn,
-  OrchestrationV2ThreadProjection,
   "runAttemptId" | "providerThreadId" | "status"
 >;
 
