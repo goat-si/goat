@@ -1,6 +1,7 @@
 import { MemoryGeneration, MemoryAgentAccess, useMemoryLifetime } from "./MemoryGenerationSettings";
 import {
   MobileMemoryOriginPicker,
+  MemoryProvenanceBadge,
   MobileMemorySuggestions,
   useMobileMemoryBatch,
 } from "./MemoryErgonomics";
@@ -931,10 +932,8 @@ function ScopedMemoryBrowser({
             <Text className="text-sm text-foreground-muted">
               {presentMemoryItem(item).label}
               {presentMemoryItem(item).syncLabel ? ` · ${presentMemoryItem(item).syncLabel}` : ""}
-              {presentMemoryItem(item).provenanceLabel
-                ? ` · ${presentMemoryItem(item).provenanceLabel}`
-                : ""}
             </Text>
+            <MemoryProvenanceBadge item={item} />
           </Pressable>
         )
       }
@@ -1119,13 +1118,11 @@ function MemoryDetails({
           <Copy>
             {presentMemoryItem(item).label}
             {presentMemoryItem(item).syncLabel ? ` · ${presentMemoryItem(item).syncLabel}` : ""}
-            {presentMemoryItem(item).provenanceLabel
-              ? ` · ${presentMemoryItem(item).provenanceLabel}`
-              : ""}
             {presentMemoryItem(item).cleanupLabel
               ? ` · ${presentMemoryItem(item).cleanupLabel}`
               : ""}
           </Copy>
+          <MemoryProvenanceBadge item={item} />
           {item.status === "active" ? (
             <>
               <Copy>{item.payload.text}</Copy>

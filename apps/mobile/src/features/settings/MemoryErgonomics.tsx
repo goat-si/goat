@@ -20,6 +20,8 @@ import * as Option from "effect/Option";
 import { useContext, useState } from "react";
 import { Menu } from "../../components/ui/Menu";
 import { Pressable, View } from "react-native";
+import { AppText } from "../../components/ui/AppText";
+import { presentMemoryItem } from "@goat/client-runtime/memory-presentation";
 import { useThreadShells } from "../../state/entities";
 import { memoryEnvironment as memory } from "../../state/memory";
 import { useAtomCommand } from "../../state/use-atom-command";
@@ -271,4 +273,13 @@ export function MobileMemorySuggestions({
       ))}
     </SettingsSection>
   );
+}
+
+export function MemoryProvenanceBadge({ item }: { item: MemoryItem }) {
+  const text = presentMemoryItem(item).provenanceLabel;
+  return text ? (
+    <AppText className="self-start rounded-md border border-border px-2 py-1 text-xs text-foreground-muted">
+      {text}
+    </AppText>
+  ) : null;
 }

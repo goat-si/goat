@@ -75,6 +75,7 @@ import { useEnvironmentQuery } from "../../state/query";
 import { useAtomCommand } from "../../state/use-atom-command";
 import { memoryEnvironment } from "../../state/memory";
 import { Button } from "../ui/button";
+import { Badge } from "../ui/badge";
 import { Input } from "../ui/input";
 import { Switch } from "../ui/switch";
 import { Select, SelectItem, SelectPopup, SelectTrigger, SelectValue } from "../ui/select";
@@ -769,11 +770,16 @@ function ScopedMemoryRecords({
                   )
                 }
                 description={
-                  item.status === "forgotten"
-                    ? `Forgotten ${formatTimestamp(item.tombstone.deletedAtUtc, "locale")}. Content has been removed.`
-                    : [presentMemoryItem(item).syncLabel, presentMemoryItem(item).provenanceLabel]
-                        .filter(Boolean)
-                        .join(" · ")
+                  item.status === "forgotten" ? (
+                    `Forgotten ${formatTimestamp(item.tombstone.deletedAtUtc, "locale")}. Content has been removed.`
+                  ) : (
+                    <>
+                      {presentMemoryItem(item).syncLabel}
+                      {presentMemoryItem(item).provenanceLabel ? (
+                        <Badge variant="secondary">{presentMemoryItem(item).provenanceLabel}</Badge>
+                      ) : null}
+                    </>
+                  )
                 }
                 control={
                   batch.selecting ? (
@@ -952,7 +958,7 @@ export function MemoryDetails({
           {item ? (
             <>
               {presentMemoryItem(item).provenanceLabel ? (
-                <p>{presentMemoryItem(item).provenanceLabel}</p>
+                <Badge variant="secondary">{presentMemoryItem(item).provenanceLabel}</Badge>
               ) : null}
               {item.status !== "active" ? (
                 <p>
