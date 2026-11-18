@@ -244,3 +244,53 @@ O25, what an installed versioned AppImage does with the new feed: electron-updat
 
 `gh release download v0.1.10-nightly.20261117.376 -p goat-0.1.10-nightly.20261117.376-linux-x64.tar.gz` then `tar -tvzf`: the archive holds the five faces under client/assets, 34,818,280 bytes (NotoSansJP 4,533,028; KR 4,644,748; SC 8,331,336; TC 5,683,368; NotoSerifSC 11,625,800), of 560,234,570 uncompressed bytes. OTF does not compress, so the archive grew by 33.2 MB (.371 168,871,544 -> .376 202,056,726). Installers carry the web client four times (five on Windows): +133.9 MB AppImage, +134.6 MB dmg, +163.5 MB exe, which matches 4 x and 4.7 x the faces. The C4 plan (what the SSH install sends, an older runtime, a browser paired straight to the remote host, a failed copy falling back to system fonts) follows with N10's READY. One constraint found already: bundled SSH archives are verified by a SHA-256 sidecar and remote installs record the release digest (packages/ssh/src/runtimeArchive.ts:46-60; docs/internals/server-updates.md "install-record"), so a trimmed archive cannot reuse the release archive's identity.
 
+
+
+## Rulings relayed after 00:40 UTC (verbatim where quoted)
+
+> Coordinator 00:45:31 UTC: "From now on for every lane: READY means the gate exited 0 on the pushed head, or the report names each failure with the same failure shown at the integration head."
+
+> Coordinator 01:14:39 UTC, IV: "STANDING RULE, every lane, from now: before READY, every apps/server test file the lane added or changed is run once from apps/server with GOAT_TEST_TMP_GUARD=fail (CI sets it, check:changed does not), and the READY report says so. The ps check in its own step first, as before."
+
+> Coordinator 01:17:54 UTC, II: "RULE 3, standing rule extended (beside the 00:35:17 rule), every lane: a VALUE import added to an existing import line of an existing test file needs no word from me when only appended cases or appended helpers use the new names and no existing title, body, setup value or expectation changes. The lane quotes the line before and after in its record; the fresh review lists it. An import that changes what an existing case runs against (a different module, a fake in place of a real service) still comes to me." V: "No git stash in any lane" stands; a lane that needs to set work aside commits it on its own branch locally.
+
+> Coordinator 01:20:03 UTC: "RULE 3, the 01:17 rule II covers a NEW import statement on the same terms as a name added to an existing line: only appended cases or appended helpers use what it imports, it imports a real module (no fake, no mock, no replacement of something an existing case reads), the import has no effect at load time that an existing case could see (no vi.mock beside it, no module that registers or patches something when loaded), and no existing title, body, setup value or expectation changes."
+
+> Coordinator 02:06 UTC, III: in zsh, a push refspec written as dollar-C-colon applies the :r modifier; write the variable in braces in every push and REV:path. (N10 already does.)
+
+> Lane coordinator 01:57 and 01:58:30 UTC: SF3 and N10 alternate one heavy job each after K10's nits round; a long run is announced in the record first.
+
+Time note: the lane coordinator's stash-incident message carried "about 02:00 UTC"; its real send time (between 00:55 and 01:16 UTC) is in the thread log. N10's report of it repeated that time.
+
+
+## Stash incident (closed by the coordinator)
+
+At N10's C12-1 fail-first, git stash pop -q applied SF3's "sf3-3b-failfirst" entry (CursorAgentSdk.ts), because worktrees share one refs/stash. N10's own entry was then popped by name (dropped stash 75693f1d9f), and serviceLauncher.ts was byte-identical to the saved copy. SF3's diff was saved to /tmp/n10-sf3-CursorAgentSdk-found-in-n10.patch and checked out of N10's tree. No N10 commit contains it. N10 uses no git stash; fail-first runs set code aside as patch files.
+
+## Rule 3 items in N10 so far (before and after)
+
+- serviceLauncher.test.ts:339 (authorised by ruling C20 for :340): before "it.effect.each(refusalCases)("; after "it.effect.each(refusalCases.filter(({ reason }) => reason === "database-ahead"))(". The state-dir-owned case of that test now has its new expectations in serviceLauncher.ownerPoll.test.ts: pending while owned, a trial once free, db-owner-busy at the bound in both D3 branches. Title, body and the database-ahead expectations are unchanged. The file's length stays 1568, its entry.
+- cli/update.test.ts:157 (IV extension, the fixture line upstream 7eca0ed885 changes the same way): before 'yield* fs.writeFileString(launcher, "");'; after 'yield* fs.writeFileString(launcher, "", { mode: 0o755 });'. resolveLauncherPath now skips files without an exec bit, as upstream's does. Its import stays on ./update.ts, which re-exports it.
+- packages/contracts/src/environment.test.ts: a new statement 'import { ForwardCompatibleOptional, TrimmedNonEmptyString } from "./baseSchemas.ts";', used only by the appended case (rule of 01:20:03).
+- apps/web/src/versionSkew.test.ts, apps/desktop/src/app/DesktopLinuxUrlHandler.test.ts, apps/server/src/cli/invocation.test.ts: appended cases only, no import change.
+- Possible later item, not changed: the refusal message for exit 78 ("Stop it, then restart this service.") stays as it is. Upstream changed it to "This service starts again once it stops.", but serviceLauncher.test.ts:297 asserts the exact line through refusalCases, so changing it goes to the coordinator first.
+
+## C20 notes
+
+- The pending update keeps its backup while it waits. GOAT's restore already refuses to restore over another server's writes (owner-generation check), so the backup stays safe to keep.
+- "May the new runtime have opened the database" (D3): the launcher writes .trial-started into the backup directory right before it spawns a trial. It cannot read the owner log while another server holds that lock.
+- #startTrial's own busy lock (the existing immediate db-owner-busy, test :857-890) is unchanged; changing it would move an existing expectation.
+- The probe is the launcher's own Node-only copy of acquireServerOwnership's checks (serviceLauncherOwner.ts). serverOwnership's exclusive open now waits 250 ms (busy_timeout), so a server starting during a probe is not refused (upstream 44ee2b9c34 does the same).
+- Timing in tests: the launcher has no Effect runtime, so its clock is injected (now) and its probe interval is an option. The tests await file events and launcher log lines, with no sleeps.
+
+## goat#3579 C4 plan draft (sent with N10's READY; its code is its own lane, ruling D4)
+
+Today: the desktop installer bundles three SSH runtime archives, each a full release archive with client/assets and the five faces (34,818,280 bytes). runtimeProvisioning tries the host's own download first, then the bundle, then the user cache, then HTTPS/gh (packages/ssh/src/runtimeProvisioning.ts:457-530). A bundled archive is checked against its SHA-256 sidecar (runtimeArchive.ts:46-60).
+Proposal: the bundled archives leave the five faces out (a build step, with their own sidecar), and the installer ships the faces once, beside its own web client. When a bundled archive is used, the desktop app sends the faces as a second, small archive and unpacks it into <versionDir>/client/assets before writing .install-complete.
+- What the SSH install sends: the trimmed runtime archive plus one fonts archive, both checked against sidecars. The host-download and HTTPS paths are unchanged and keep full archives.
+- Older runtime: an older bundled version is not bundled by a newer app, so the only mixed case is a host that already holds a full runtime of the same version. It is reused as it is (install record and executable SHA match).
+- A browser paired straight to the remote host: it is served that host's client/assets. If the faces were sent, previews are as today. If not, loadFace's request fails.
+- A failed copy: the install still completes, and the CJK preview falls back to the last-resort face instead of failing. That needs a web change in apps/web/src/components/files/office/fonts.ts (a rejected face load returns the fallback face), with a browser test.
+- Release: the 256 MiB cap check stays, and the release workflow's size report adds the font bytes.
+- Install record: a trimmed archive records its own digest. A later release-digest check on the host re-installs from the full release archive, which degrades to today's behaviour.
+
