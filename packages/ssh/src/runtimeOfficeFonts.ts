@@ -3,7 +3,9 @@ import * as HostProcess from "@goat/shared/HostProcess";
 import {
   isOfficeCjkFontAsset,
   MAX_OFFICE_CJK_FONT_ARCHIVE_BYTES,
+  MAX_OFFICE_CJK_FONT_MANIFEST_BYTES,
   OFFICE_CJK_FONT_MANIFEST_SUFFIX,
+  readOfficeCjkFile,
 } from "@goat/shared/officeCjkFontAssets";
 import * as Digest from "effect/crypto/Digest";
 import * as Effect from "effect/Effect";
@@ -22,10 +24,13 @@ export const readBundledOfficeFonts = Effect.fn("ssh.runtimeOfficeFonts.read")(
     const manifest = path.join(archiveDirectory, fileName + OFFICE_CJK_FONT_MANIFEST_SUFFIX);
     if (!(yield* fs.exists(manifest))) return undefined;
 
-    if (!assetDirectory || (yield* fs.stat(manifest)).size > 4096n) {
-      return yield* fontError("Missing desktop web assets or oversized SSH font manifest.");
-    }
-    const text = yield* fs.readFileString(manifest);
+    if (!assetDirectory) return yield* fontError("Missing desktop web assets.");
+    const manifestBytes = yield* readOfficeCjkFile(
+      archiveDirectory,
+      manifest,
+      MAX_OFFICE_CJK_FONT_MANIFEST_BYTES,
+    );
+    const text = new TextDecoder().decode(manifestBytes);
     const checksums = parseChecksums(text);
     const names = [...checksums.keys()];
     if (
@@ -38,19 +43,12 @@ export const readBundledOfficeFonts = Effect.fn("ssh.runtimeOfficeFonts.read")(
 
     const digest = yield* Digest.Digest;
     const work = yield* fs.makeTempDirectoryScoped({ prefix: "goat-ssh-font-upload-" });
-    let remaining = BigInt(MAX_OFFICE_CJK_FONT_ARCHIVE_BYTES);
+    let remaining = MAX_OFFICE_CJK_FONT_ARCHIVE_BYTES;
     for (const [name, checksum] of checksums) {
       const source = path.join(assetDirectory, name);
-      const stat = yield* fs.stat(source);
-      if (stat.type !== "File" || stat.size > remaining) {
-        return yield* fontError(`Invalid size or file type for shared SSH font ${name}.`);
-      }
-      const bytes = yield* fs.readFile(source);
-      remaining -= stat.size;
-      if (
-        BigInt(bytes.byteLength) !== stat.size ||
-        Hex.encode(yield* digest.digest(Digest.sha256, bytes)) !== checksum
-      ) {
+      const bytes = yield* readOfficeCjkFile(assetDirectory, source, remaining);
+      remaining -= bytes.byteLength;
+      if (Hex.encode(yield* digest.digest(Digest.sha256, bytes)) !== checksum) {
         return yield* fontError(`Checksum mismatch for shared SSH font ${name}.`);
       }
       yield* fs.writeFile(path.join(work, name), bytes);
@@ -66,13 +64,10 @@ export const readBundledOfficeFonts = Effect.fn("ssh.runtimeOfficeFonts.read")(
         stderr: "ignore",
       }),
     );
-    if (
-      Number(yield* child.exitCode) !== 0 ||
-      (yield* fs.stat(localArchive)).size > BigInt(MAX_OFFICE_CJK_FONT_ARCHIVE_BYTES)
-    ) {
+    if (Number(yield* child.exitCode) !== 0) {
       return yield* fontError("Cannot pack shared SSH fonts.");
     }
-    const bytes = yield* fs.readFile(localArchive);
+    const bytes = yield* readOfficeCjkFile(work, localArchive, MAX_OFFICE_CJK_FONT_ARCHIVE_BYTES);
     return { bytes, sha256: Hex.encode(yield* digest.digest(Digest.sha256, bytes)) };
   },
   Effect.scoped,

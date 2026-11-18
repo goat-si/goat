@@ -7,6 +7,7 @@ import * as Stream from "effect/Stream";
 import { ChildProcess, ChildProcessSpawner } from "effect/process";
 import * as HostProcess from "@goat/shared/HostProcess";
 import { cliArchiveTarCommand } from "@goat/shared/cliRelease";
+import { symlinksSupported } from "@goat/shared/testing/symlinks";
 
 import {
   createBuildConfig,
@@ -112,4 +113,68 @@ it.effect("strips only shared CJK assets and checksums the staged archive's own 
     const written = yield* decodeReleaseReport(yield* fs.readFileString(report));
     assert.deepEqual(written.sshRuntimeCjkFonts, sizes);
   }).pipe(Effect.provide(NodeServices.layer), Effect.scoped),
+);
+
+const desktopFontFixture = Effect.fn("test.desktopFontFixture")(function* () {
+  const fs = yield* FileSystem.FileSystem;
+  const path = yield* Path.Path;
+  const spawner = yield* ChildProcessSpawner.ChildProcessSpawner;
+  const tar = cliArchiveTarCommand(yield* HostProcess.Platform, process.env);
+  const root = yield* fs.makeTempDirectoryScoped({ prefix: "goat-ssh-font-verify-" });
+  const version = "9.8.7";
+  const platform = "linux-x64";
+  const stem = `goat-${version}-${platform}`;
+  const sourceDirectory = path.join(root, "source");
+  const destinationDirectory = path.join(root, "destination");
+  const clientAssetsDirectory = path.join(root, "desktop-assets");
+  const inputTree = path.join(root, "input");
+  const name = "NotoSansJP-Regular-abc_123.otf";
+  const contents = "fixture CJK font";
+  for (const [member, bytes] of [
+    ["goat", "executable"],
+    ["client/index.html", "index"],
+    [`client/assets/${name}`, contents],
+    [`resource-monitor/${platform}/goat-resource-monitor`, "monitor"],
+    ["screen-code/quickjs.wasm", "quickjs"],
+    ["node_modules/node-pty/build/Release/pty.node", "pty"],
+  ] as const) {
+    const file = path.join(inputTree, stem, member);
+    yield* fs.makeDirectory(path.dirname(file), { recursive: true });
+    yield* fs.writeFileString(file, bytes);
+  }
+  yield* fs.makeDirectory(sourceDirectory);
+  yield* fs.makeDirectory(clientAssetsDirectory);
+  const archive = `${stem}.tar.gz`;
+  const pack = yield* spawner.spawn(
+    ChildProcess.make(tar, ["-czf", path.join(sourceDirectory, archive), "-C", inputTree, stem]),
+  );
+  assert.equal(Number(yield* pack.exitCode), 0);
+  return {
+    fs,
+    path,
+    root,
+    archive,
+    name,
+    contents,
+    input: {
+      sourceDirectory,
+      destinationDirectory,
+      clientAssetsDirectory,
+      version,
+      requireAll: false,
+    },
+  };
+});
+
+it.effect.skipIf(!symlinksSupported)(
+  "refuses a linked desktop asset even when its bytes match",
+  () =>
+    Effect.gen(function* () {
+      const { fs, path, root, input, name, contents } = yield* desktopFontFixture();
+      const sibling = path.join(root, "sibling-font");
+      yield* fs.writeFileString(sibling, contents);
+      yield* fs.symlink(sibling, path.join(input.clientAssetsDirectory, name));
+      const outcome = yield* Effect.exit(stageSshRuntimeArchives(input));
+      assert.equal(outcome._tag, "Failure");
+    }).pipe(Effect.provide(NodeServices.layer), Effect.scoped),
 );

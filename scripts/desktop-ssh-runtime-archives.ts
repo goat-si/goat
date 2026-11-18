@@ -7,6 +7,7 @@ import {
   isOfficeCjkFontAsset,
   MAX_OFFICE_CJK_FONT_ARCHIVE_BYTES,
   OFFICE_CJK_FONT_MANIFEST_SUFFIX,
+  readOfficeCjkFile,
 } from "@goat/shared/officeCjkFontAssets";
 import * as Effect from "effect/Effect";
 import * as FileSystem from "effect/FileSystem";
@@ -226,29 +227,23 @@ const trimRuntimeFonts = Effect.fn("desktopArtifact.trimRuntimeFonts")(function*
   yield* runArchiveCommand(input.tar, ["-xzf", source, "-C", work, ...input.archive.fontMembers]);
 
   const fonts = new Map<string, { sha256: string; bytes: bigint }>();
-  let total = 0n;
+  let remaining = MAX_OFFICE_CJK_FONT_ARCHIVE_BYTES;
   for (const member of input.archive.fontMembers) {
     const name = path.basename(member);
-    const remote = path.join(work, member);
-    const local = path.join(input.clientAssetsDirectory, name);
-    const stat = yield* fs.stat(remote);
-    total += stat.size;
-    if (
-      stat.type !== "File" ||
-      total > BigInt(MAX_OFFICE_CJK_FONT_ARCHIVE_BYTES) ||
-      (yield* fs.stat(local)).size !== stat.size
-    ) {
-      return yield* new SshRuntimeArchiveValidationError({
-        message: `Bundled SSH font ${name} cannot be shared with the desktop web client`,
-      });
-    }
-    const sha256 = hash(yield* fs.readFile(remote));
-    if (sha256 !== hash(yield* fs.readFile(local))) {
+    const remote = yield* readOfficeCjkFile(work, path.join(work, member), remaining);
+    const local = yield* readOfficeCjkFile(
+      input.clientAssetsDirectory,
+      path.join(input.clientAssetsDirectory, name),
+      remote.byteLength,
+    );
+    const sha256 = hash(remote);
+    if (sha256 !== hash(local)) {
       return yield* new SshRuntimeArchiveValidationError({
         message: `Bundled SSH font ${name} differs from the desktop web client`,
       });
     }
-    fonts.set(name, { sha256, bytes: stat.size });
+    remaining -= remote.byteLength;
+    fonts.set(name, { sha256, bytes: BigInt(remote.byteLength) });
   }
 
   if (input.platform === "linux") {
