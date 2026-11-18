@@ -7,18 +7,34 @@ import { OrchestrationV2LastTitleRegenerationJson } from "./threadTitle.ts";
 const decodeCommand = Schema.decodeUnknownExit(OrchestrationV2Command);
 const decodeStored = Schema.decodeUnknownExit(OrchestrationV2LastTitleRegenerationJson);
 
-const completion = (message: string) => ({
+const legacyCompletion = {
   type: "thread.title.regeneration.complete",
   commandId: "command-1:title-complete",
   threadId: "thread-1",
   requestId: "command-1",
-  outcome: { status: "failed", message },
-});
+  title: "Generated title",
+};
 
 describe("title regeneration outcome messages", () => {
-  it("refuses a completion command whose message is longer than 300 characters", () => {
-    expect(decodeCommand(completion("x".repeat(300)))._tag).toBe("Success");
-    expect(decodeCommand(completion("x".repeat(301)))._tag).toBe("Failure");
+  it("preserves legacy public completions and discards an outcome supplied with them", () => {
+    const legacy = decodeCommand(legacyCompletion);
+    expect(legacy).toMatchObject({ _tag: "Success", value: legacyCompletion });
+    expect(
+      decodeCommand({
+        ...legacyCompletion,
+        outcome: { status: "failed", message: "Client-supplied text" },
+      }),
+    ).toEqual(legacy);
+  });
+
+  it("keeps the server's outcome-bearing completion off the public dispatch route", () => {
+    expect(
+      decodeCommand({
+        ...legacyCompletion,
+        type: "thread.title.regeneration.complete.internal",
+        outcome: { status: "failed", message: "Title generation failed." },
+      })._tag,
+    ).toBe("Failure");
   });
 
   it("still decodes a stored outcome of any length", () => {

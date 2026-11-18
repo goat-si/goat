@@ -72,19 +72,19 @@ const make = Effect.gen(function* () {
   }) =>
     threads
       .dispatch({
-        type: "thread.title.regeneration.complete",
         commandId: CommandId.make(`${input.requestId}:title-complete`),
         threadId: input.threadId,
         requestId: input.requestId,
         ...(input.outcome.status === "renamed" ? { title: input.outcome.title } : {}),
         ...(input.kind.type === "regenerate"
           ? {
+              type: "thread.title.regeneration.complete.internal",
               outcome: {
                 status: input.outcome.status,
                 ...(input.outcome.status === "failed" ? { message: input.outcome.message } : {}),
               },
             }
-          : {}),
+          : { type: "thread.title.regeneration.complete" }),
       })
       .pipe(Effect.asVoid);
 

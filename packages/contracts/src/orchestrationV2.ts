@@ -142,7 +142,8 @@ import { ThreadTokenUsageSnapshot } from "./providerRuntime.ts";
 import {
   OrchestrationV2LastTitleRegeneration,
   OrchestrationV2LastTitleRegenerationJson,
-  ThreadTitleRegenerationCommandOutcome,
+  ThreadTitleRegenerationCompleteCommand,
+  ThreadTitleRegenerationOutcome,
 } from "./threadTitle.ts";
 
 export * from "./providerReplay.ts";
@@ -3134,14 +3135,7 @@ export const OrchestrationV2Command = Schema.Union([
     branchPullRequest: Schema.NullOr(ThreadLinkedPullRequest),
     linkedPullRequest: Schema.optional(ThreadLinkedPullRequest),
   }),
-  Schema.Struct({
-    type: Schema.Literal("thread.title.regeneration.complete"),
-    commandId: CommandId,
-    threadId: ThreadId,
-    requestId: CommandId,
-    title: Schema.optional(TrimmedNonEmptyString),
-    outcome: Schema.optional(ThreadTitleRegenerationCommandOutcome),
-  }),
+  ThreadTitleRegenerationCompleteCommand,
   Schema.Struct({
     type: Schema.Literal("thread.runtime-mode.set"),
     commandId: CommandId,
@@ -3437,6 +3431,11 @@ export type OrchestrationV2Command = typeof OrchestrationV2Command.Type;
 // Excluded from dispatchCommand so only the server can send these.
 const OrchestrationV2InternalCommand = Schema.Union([
   OrchestrationV2ReviewContinueCommand,
+  Schema.Struct({
+    ...ThreadTitleRegenerationCompleteCommand.fields,
+    type: Schema.Literal("thread.title.regeneration.complete.internal"),
+    outcome: Schema.optional(ThreadTitleRegenerationOutcome),
+  }),
   // Guest share commands the server issues after checking GOAT Connect and the guest token.
   Schema.Struct({
     type: Schema.Literal("thread.guest-share.open"),

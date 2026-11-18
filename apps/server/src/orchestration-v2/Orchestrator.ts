@@ -2720,6 +2720,7 @@ const makeOrchestrator = Effect.fn("orchestrationV2.Orchestrator.layer")(functio
           | "thread.pull-request-watch.sync"
           | "thread.pull-request.sync"
           | "thread.title.regeneration.complete"
+          | "thread.title.regeneration.complete.internal"
           | "thread.runtime-mode.set"
           | "thread.interaction-mode.set"
           | "thread.model-selection.set"
@@ -3605,23 +3606,20 @@ const makeOrchestrator = Effect.fn("orchestrationV2.Orchestrator.layer")(functio
             updatedAt: thread.updatedAt,
           };
         case "thread.title.regeneration.complete":
-          return thread.titleRegeneration?.requestId === command.requestId
-            ? {
-                ...thread,
-                ...(command.title === undefined ? {} : { title: command.title }),
-                ...(command.outcome === undefined
-                  ? {}
-                  : {
-                      lastTitleRegeneration: {
-                        ...command.outcome,
-                        requestId: command.requestId,
-                        completedAt: now,
-                      },
-                    }),
-                titleRegeneration: null,
-                updatedAt: now,
-              }
-            : thread;
+        case "thread.title.regeneration.complete.internal": {
+          if (thread.titleRegeneration?.requestId !== command.requestId) return thread;
+          const outcome =
+            command.type === "thread.title.regeneration.complete.internal" ? command.outcome : null;
+          return {
+            ...thread,
+            ...(command.title === undefined ? {} : { title: command.title }),
+            ...(outcome && {
+              lastTitleRegeneration: { ...outcome, requestId: command.requestId, completedAt: now },
+            }),
+            titleRegeneration: null,
+            updatedAt: now,
+          };
+        }
         case "thread.runtime-mode.set":
           return { ...thread, runtimeMode: command.runtimeMode, updatedAt: now };
         case "thread.interaction-mode.set":
@@ -3685,6 +3683,7 @@ const makeOrchestrator = Effect.fn("orchestrationV2.Orchestrator.layer")(functio
           return "thread.marked-unread" as const;
         case "thread.metadata.update":
         case "thread.title.regeneration.complete":
+        case "thread.title.regeneration.complete.internal":
           return "thread.metadata-updated" as const;
         case "thread.pull-request.link":
         case "thread.pull-request.unlink":
@@ -12348,6 +12347,7 @@ const makeOrchestrator = Effect.fn("orchestrationV2.Orchestrator.layer")(functio
       case "thread.pull-request.link":
       case "thread.pull-request.sync":
       case "thread.title.regeneration.complete":
+      case "thread.title.regeneration.complete.internal":
       case "thread.runtime-mode.set":
       case "thread.interaction-mode.set":
       case "thread.model-selection.set":
