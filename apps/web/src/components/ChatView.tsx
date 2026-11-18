@@ -1,3 +1,5 @@
+import { threadHasStarted } from "../lib/chatThreadActions";
+import { useComposerDraftModelState } from "../composerModelState";
 import { isThreadEnvironmentLocked } from "./chat/threadEnvironmentLock";
 import { deriveThreadPendingBackgroundTasks } from "./chat/threadPendingBackgroundTasks";
 import { sourceControlClients } from "@goat/client-runtime/source-control-clients";
@@ -583,15 +585,6 @@ export default function ChatView(props: ChatViewProps) {
   const composerInteractionMode = useComposerDraftStore(
     (store) => store.getComposerDraft(composerDraftTarget)?.interactionMode ?? null,
   );
-  const composerActiveProvider = useComposerDraftStore(
-    (store) => store.getComposerDraft(composerDraftTarget)?.activeProvider ?? null,
-  );
-  const composerSelectedModelSelection = useComposerDraftStore((store) => {
-    const draft = store.getComposerDraft(composerDraftTarget);
-    return draft?.activeProvider
-      ? (draft.modelSelectionByProvider[draft.activeProvider] ?? null)
-      : null;
-  });
   const composerHasAttachments = useComposerDraftStore((store) => {
     const draft = store.getComposerDraft(composerDraftTarget);
     return (draft?.images.length ?? 0) > 0 || (draft?.files.length ?? 0) > 0;
@@ -790,6 +783,8 @@ export default function ChatView(props: ChatViewProps) {
     : undefined;
   const isServerThread = serverThread !== null;
   const activeThread = isServerThread ? serverThread : localDraftThread;
+  const { activeProvider: selectedProviderByThreadId, modelSelectionByProvider } =
+    useComposerDraftModelState(composerDraftTarget, threadHasStarted(activeThread));
   const globalAgentRef = useGlobalAgentStore((state) => state.ref);
   // The global agent lives in a machine's no-project folder, but it is shown as
   // one agent rather than a thread of that folder.
@@ -1252,7 +1247,6 @@ export default function ChatView(props: ChatViewProps) {
       : providersByEnvironment.get(providerEnvironmentId)) ?? EMPTY_PROVIDERS,
     gitCwd,
   );
-  const selectedProviderByThreadId = composerActiveProvider ?? null;
   const threadProvider =
     activeThread?.modelSelection.instanceId ??
     activeProjectDefaultModelSelection?.instanceId ??
@@ -2586,7 +2580,9 @@ export default function ChatView(props: ChatViewProps) {
       item.type === "user_message" &&
       (item.text.trim().toLowerCase() !== "/compact" || item.attachments.length > 0),
   );
-  const pendingHandoffSelection = composerSelectedModelSelection ?? activeThread?.modelSelection;
+  const pendingHandoffSelection =
+    (selectedProviderByThreadId ? modelSelectionByProvider[selectedProviderByThreadId] : null) ??
+    activeThread?.modelSelection;
   const pendingHandoffSelectionUsable = providerInstanceEntries.some(
     (entry) =>
       entry.instanceId === pendingHandoffSelection?.instanceId &&
@@ -3446,7 +3442,7 @@ export default function ChatView(props: ChatViewProps) {
           <ThreadFindCanvas
             findOptions={{
               skills: timelineSkills,
-              progressive: serverConfig?.threadFindProgressive === true,
+              serverConfig: serverConfig ?? undefined,
               thread: activeThreadRef,
               enabled: threadFindEnabled,
             }}

@@ -1,4 +1,4 @@
-import type { ContextMenuItem } from "@goat/contracts";
+import type { ContextMenuItem, ContextMenuSource } from "@goat/contracts";
 
 import { CONTEXT_MENU_ICONS } from "./components/solar/nodes";
 
@@ -77,6 +77,7 @@ export function dismissContextMenu(restoreFocus = true): void {
 export function showContextMenuFallback<T extends string>(
   items: readonly ContextMenuItem<T>[],
   position?: { x: number; y: number },
+  source?: ContextMenuSource,
 ): Promise<T | null> {
   dismissContextMenu();
   return new Promise<T | null>((resolve) => {
@@ -447,11 +448,14 @@ export function showContextMenuFallback<T extends string>(
     activeContextMenuDismiss = dismiss;
     // A keyboard-opened menu starts on its first action, a pointer-opened one on the menu itself.
     // Text fields always match :focus-visible, so they say nothing about how the menu opened.
-    const firstAction =
-      previouslyFocusedElement?.matches(":focus-visible") &&
-      !previouslyFocusedElement.matches('input, textarea, select, [contenteditable="true"]')
-        ? menuStack[0]?.querySelector<HTMLButtonElement>("button:not(:disabled)")
-        : null;
+    const keyboardOpened =
+      source === "keyboard" ||
+      (source === undefined &&
+        previouslyFocusedElement?.matches(":focus-visible") &&
+        !previouslyFocusedElement.matches('input, textarea, select, [contenteditable="true"]'));
+    const firstAction = keyboardOpened
+      ? menuStack[0]?.querySelector<HTMLButtonElement>("button:not(:disabled)")
+      : null;
     (firstAction ?? menuStack[0])?.focus({ preventScroll: true });
     document.addEventListener("focusin", onFocusIn);
     window.addEventListener("blur", onWindowBlur);

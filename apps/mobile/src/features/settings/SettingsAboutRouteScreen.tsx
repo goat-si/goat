@@ -1,5 +1,6 @@
 import * as Dialog from "../../components/ui/Dialog";
 import { ScreenScrollView as ScrollView } from "../../components/ui/ScreenScrollView";
+import * as Application from "expo-application";
 import Constants from "expo-constants";
 import { BRAND_CHANNEL_LABEL } from "@goat/shared/brandChannels";
 import { settlePromise } from "@goat/client-runtime/state/runtime";
@@ -55,7 +56,9 @@ function AppSettingsSection() {
   // Match app.config.ts's production fallback to avoid mislabeling builds as development.
   const variant = (Constants.expoConfig?.extra?.appVariant as string | undefined) ?? "production";
   const variantLabel = BRAND_CHANNEL_LABEL[resolveMobileBrandChannel(variant)];
-  const versionLabel = variantLabel ? `${version} · ${variantLabel}` : version;
+  const build = Application.nativeBuildVersion;
+  const installedVersion = build ? `${version} (${build})` : version;
+  const versionLabel = variantLabel ? `${installedVersion} · ${variantLabel}` : installedVersion;
   const updateCheckAvailable = isAppUpdateCheckAvailable();
   const busy =
     updateState === "checking" || updateState === "downloading" || updateState === "restarting";

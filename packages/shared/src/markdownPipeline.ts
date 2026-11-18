@@ -26,6 +26,10 @@ import { remarkGithubAlerts } from "./markdownGithubAlerts.ts";
 import { remarkNormalizeListItemIndentation } from "./markdownListIndentation.ts";
 import { remarkKeepOrderedListNumbers } from "./markdownOrderedListNumbers.ts";
 import {
+  remarkEnableLeadingWhitespace,
+  remarkKeepLeadingWhitespace,
+} from "./markdownLeadingWhitespace.ts";
+import {
   CODEX_ARTIFACT_TEMPLATE_HAST_PROPERTIES,
   remarkCodexDirectives,
 } from "./codexMarkdownDirectives.ts";
@@ -271,6 +275,7 @@ export const CHAT_MARKDOWN_REMARK_PLUGINS_WITH_BREAKS: PluggableList = [
   remarkCjkFriendly,
   remarkEndAutolinksAtCjkPunctuation,
   remarkKeepAutolinkSuffixes,
+  remarkKeepLeadingWhitespace,
   remarkLinkAbsoluteFilePaths,
   remarkKeepWindowsPaths,
   remarkGithubAlerts,
@@ -287,6 +292,7 @@ export const CHAT_MARKDOWN_REMARK_PLUGINS_WITH_BREAKS: PluggableList = [
 // Appended after the base list, this reconfigures its remark-gfm entry; ~~double~~ still strikes.
 export const CHAT_USER_MARKDOWN_REMARK_PLUGINS: PluggableList = [
   [remarkGfm, { singleTilde: false }],
+  remarkEnableLeadingWhitespace,
 ];
 
 // Start tags an HTML parser closes an open `<p>` for.

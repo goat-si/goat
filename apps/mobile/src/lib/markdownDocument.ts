@@ -3,6 +3,7 @@ import { unified, type Processor } from "unified";
 import remarkParse from "remark-parse";
 import remarkGfm from "remark-gfm";
 import { markdownWithCommonMarkCjkEmphasis } from "@goat/shared/markdownCjkEmphasis";
+import { markdownWithLeadingWhitespace } from "@goat/shared/markdownLeadingWhitespace";
 import { remarkKeepWindowsProsePaths } from "@goat/shared/markdownWindowsPaths";
 import { isWindowsAbsolutePath } from "@goat/shared/path";
 import { absoluteFilePathMatches, parseMarkdownFileLink } from "@goat/shared/markdownLinks";
@@ -496,8 +497,14 @@ export function parseMarkdownDocument(markdown: string): Root {
   return parser.parse(markdownForNativeParsing(markdown));
 }
 
-export function markdownForNativeRendering(markdown: string, fileLink: RegExp): string {
-  return transformNativeMarkdown(markdownForNativeParsing(markdown), fileLink, true);
+export function markdownForNativeRendering(
+  markdown: string,
+  fileLink: RegExp,
+  preserveLeadingWhitespace = false,
+): string {
+  const content = transformNativeMarkdown(markdownForNativeParsing(markdown), fileLink, true);
+  if (!preserveLeadingWhitespace) return content;
+  return markdownWithLeadingWhitespace(content, (text) => parser.parse(text));
 }
 
 /** Native media slots only cover standalone images; nested file embeds must become links. */

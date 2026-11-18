@@ -121,6 +121,19 @@ export function resolveNewThreadModelSelectionOverride(input: {
   );
 }
 
+export function threadHasStarted(
+  thread: Pick<EnvironmentThreadShell, "latestRun" | "itemCount" | "runtime"> | null | undefined,
+): boolean {
+  return Boolean(thread && (thread.latestRun !== null || thread.itemCount > 0 || thread.runtime));
+}
+
+export function draftModelSelectionApplies(
+  draft: Pick<ComposerThreadDraftState, "modelSelectionExplicit"> | null | undefined,
+  threadStarted: boolean,
+): boolean {
+  return !threadStarted || draft?.modelSelectionExplicit === true;
+}
+
 export function hasExplicitComposerModelSelection(
   draft: ComposerModelSelectionState | null | undefined,
 ): boolean {

@@ -116,9 +116,10 @@ import {
   type MarkdownFileLinkMeta,
 } from "../markdown-links";
 import { markdownFileEditorTarget, resolveMarkdownFileHostPath } from "../markdownFileHostPath";
+import { normalizeMarkdownLinkHrefKey } from "./chatMarkdownLinkHref";
 import { isMarkdownFileLinkLabel } from "@goat/shared/markdownLinks";
 import { isElectron } from "../env";
-import { readLocalApi } from "../localApi";
+import { contextMenuForEvent } from "../contextMenuSource";
 import { cn } from "../lib/utils";
 import { resolveRemoteOpenState, useRemoteOpenResolution } from "../remoteOpen";
 import { useRightPanelStore } from "../rightPanelStore";
@@ -247,15 +248,6 @@ export interface ChatMarkdownContextReference {
 }
 const EMPTY_MARKDOWN_SKILLS: ReadonlyArray<ServerProviderSkill> = [];
 const EMPTY_REMARK_PLUGINS: NonNullable<ReactMarkdownOptions["remarkPlugins"]> = [];
-const WINDOWS_DRIVE_PATH_REGEX = /^[A-Za-z]:[\\/]/;
-
-function normalizeMarkdownLinkHrefKey(href: string): string {
-  const normalizedHref = normalizeMarkdownLinkDestination(href);
-  const rewrittenHref = rewriteMarkdownFileUriHref(normalizedHref) ?? normalizedHref;
-  return WINDOWS_DRIVE_PATH_REGEX.test(rewrittenHref)
-    ? rewrittenHref.replaceAll("\\", "/")
-    : rewrittenHref;
-}
 
 // Heading ids are added after sanitizing, which would prefix them a second time.
 const CHAT_MARKDOWN_RENDER_REHYPE_PLUGINS = [
@@ -662,10 +654,10 @@ function useChatMarkdownState({
     const panelPath =
       fileLinkMeta.workspaceRelativePath ??
       (!canPreviewMedia && isHostPath(fileLinkMeta.filePath) ? fileLinkMeta.filePath : null);
-
     return (
       <MarkdownFileLink
         environmentId={environmentId}
+        fileActions={fileActions}
         href={fileLinkMeta.targetPath}
         targetPath={fileLinkMeta.targetPath}
         iconPath={fileLinkMeta.filePath}
@@ -1080,8 +1072,8 @@ const CHAT_MARKDOWN_COMPONENTS = {
             if (!href || !faviconHost) return;
             event.preventDefault();
             event.stopPropagation();
-            const api = readLocalApi();
-            if (!api) return;
+            const showContextMenu = contextMenuForEvent(event);
+            if (!showContextMenu) return;
             const threadLinkAction = !canOperateHost
               ? undefined
               : linkedThreadPullRequestFor(href) !== null
@@ -1094,7 +1086,7 @@ const CHAT_MARKDOWN_COMPONENTS = {
               canOpenInPreview,
               threadLinkAction,
               position: { x: event.clientX, y: event.clientY },
-              showContextMenu: (items, position) => api.contextMenu.show(items, position),
+              showContextMenu,
               openInPreview: async (target) => {
                 const result = await openExternalLinkInPreview(target);
                 if (result._tag === "Failure" && !isAtomCommandInterrupted(result)) {
@@ -1297,6 +1289,9 @@ const CHAT_MARKDOWN_COMPONENTS = {
                   _tag: "media-file" as const,
                   threadId: threadRef.threadId,
                   path: filePath,
+                  ...(imageSource._tag === "WorkspaceFile" && imageSource.relative
+                    ? { hostOnly: true as const }
+                    : {}),
                 },
                 onOpen: () => useRightPanelStore.getState().openFile(threadRef, filePath),
               }
@@ -1375,6 +1370,7 @@ const CHAT_MARKDOWN_COMPONENTS = {
             _tag: "media-file",
             threadId: threadRef.threadId,
             path: imageSource.path,
+            ...(imageSource.relative ? { hostOnly: true as const } : {}),
           }}
           alt={altText}
           kind={kind}

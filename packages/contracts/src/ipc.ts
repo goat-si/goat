@@ -47,9 +47,14 @@ import type {
 } from "./desktopAppActivation.ts";
 
 import type { ConfirmDialogOptions } from "./confirmDialog.ts";
-import type { ContextMenuItem } from "./contextMenu.ts";
-export { ContextMenuItemSchema } from "./contextMenu.ts";
-export type { ContextMenuItem, ContextMenuItemSchemaType } from "./contextMenu.ts";
+import type { ContextMenuShow } from "./contextMenu.ts";
+export { ContextMenuItemSchema, ContextMenuSourceSchema } from "./contextMenu.ts";
+export type {
+  ContextMenuItem,
+  ContextMenuItemSchemaType,
+  ContextMenuShow,
+  ContextMenuSource,
+} from "./contextMenu.ts";
 
 export type QuitShortcutHintEvent =
   | { readonly state: "down"; readonly mode: Exclude<QuitConfirmationMode, "direct"> }
@@ -1194,10 +1199,7 @@ export interface DesktopBridge extends DesktopBridgeParts {
   pickProjectFavicon?: (initialPath?: string) => Promise<string | null>;
   pickThemeFiles?: () => Promise<readonly PickedThemeFile[] | null>;
   setTheme: (theme: DesktopTheme) => Promise<void>;
-  showContextMenu: <T extends string>(
-    items: readonly ContextMenuItem<T>[],
-    position?: { x: number; y: number },
-  ) => Promise<T | null>;
+  showContextMenu: ContextMenuShow;
   receiveProviderAuthCallback?: (authorizationUrl: string) => Promise<string>;
   cancelProviderAuthCallback?: (authorizationUrl: string) => Promise<void>;
   openExternal: (url: string) => Promise<boolean>;
@@ -1334,10 +1336,7 @@ export interface LocalApi {
     openSystemSettings: (pane: SystemSettingsPane) => Promise<void>;
   };
   contextMenu: {
-    show: <T extends string>(
-      items: readonly ContextMenuItem<T>[],
-      position?: { x: number; y: number },
-    ) => Promise<T | null>;
+    show: ContextMenuShow;
     close: () => Promise<void>;
   };
   persistence: {

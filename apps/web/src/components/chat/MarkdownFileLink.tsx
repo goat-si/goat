@@ -5,9 +5,11 @@ import {
   squashAtomCommandFailure,
   type AtomCommandResult,
 } from "@goat/client-runtime/state/runtime";
-import type { EnvironmentId, ScopedThreadRef } from "@goat/contracts";
+import type { ContextMenuSource, EnvironmentId, ScopedThreadRef } from "@goat/contracts";
 import { memo, useState, type CSSProperties, type MouseEvent as ReactMouseEvent } from "react";
 
+import { contextMenuSourceOf } from "../../contextMenuSource";
+import { useNativeFileDrag } from "../../useNativeFileDrag";
 import { readLocalApi } from "../../localApi";
 import { cn } from "../../lib/utils";
 import { shouldOpenMarkdownFileLinkInEditor } from "../../markdown-links";
@@ -28,6 +30,7 @@ import { copyFilePath } from "../../filePathCopy";
 
 interface MarkdownFileLinkProps {
   environmentId: EnvironmentId | null;
+  fileActions?: boolean;
   href: string;
   targetPath: string;
   iconPath: string;
@@ -53,6 +56,7 @@ const MARKDOWN_FILE_LINK_CLASS_NAME = "chat-markdown-file-link";
 
 export const MarkdownFileLink = memo(function MarkdownFileLink({
   environmentId,
+  fileActions = true,
   href,
   targetPath,
   iconPath,
@@ -73,6 +77,11 @@ export const MarkdownFileLink = memo(function MarkdownFileLink({
   revealLabel,
   resolveCopyPaths,
 }: MarkdownFileLinkProps) {
+  const nativeFileDrag = useNativeFileDrag(
+    environmentId,
+    async () => (await resolveCopyPaths()).fullPath,
+    fileActions,
+  );
   const handleOpenInEditor = () => {
     if (!onOpen) {
       return;
@@ -257,7 +266,10 @@ export const MarkdownFileLink = memo(function MarkdownFileLink({
     );
   };
 
-  const showFileContextMenu = async (position: { x: number; y: number }) => {
+  const showFileContextMenu = async (
+    position: { x: number; y: number },
+    source: ContextMenuSource | undefined,
+  ) => {
     const api = readLocalApi();
     if (!api) return;
 
@@ -274,6 +286,7 @@ export const MarkdownFileLink = memo(function MarkdownFileLink({
           ...copyItems.map(({ id, label }) => ({ id, label })),
         ] as const,
         position,
+        source,
       );
 
       if (clicked === "preview-media") {
@@ -319,7 +332,7 @@ export const MarkdownFileLink = memo(function MarkdownFileLink({
             return { x: bounds.left, y: bounds.bottom };
           })()
         : { x: event.clientX, y: event.clientY };
-    void showFileContextMenu(position);
+    void showFileContextMenu(position, contextMenuSourceOf(event));
   };
 
   const canOpenInEditor = onOpen !== undefined;
@@ -346,6 +359,7 @@ export const MarkdownFileLink = memo(function MarkdownFileLink({
         render={
           hasPrimaryAction ? (
             <ContextChip
+              {...nativeFileDrag}
               kind="mention"
               dir="ltr"
               render={<a href={href} />}
@@ -381,6 +395,7 @@ export const MarkdownFileLink = memo(function MarkdownFileLink({
             </ContextChip>
           ) : (
             <ContextChip
+              {...nativeFileDrag}
               kind="mention"
               dir="ltr"
               render={<button type="button" />}
@@ -424,6 +439,7 @@ function areMarkdownFileLinkPropsEqual(
     previous.iconPath === next.iconPath &&
     previous.appIconPath === next.appIconPath &&
     previous.environmentId === next.environmentId &&
+    previous.fileActions === next.fileActions &&
     previous.workspaceRelativePath === next.workspaceRelativePath &&
     previous.panelPath === next.panelPath &&
     previous.line === next.line &&

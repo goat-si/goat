@@ -253,6 +253,7 @@ export function useChatTerminalActions(input: ChatTerminalActionsInput) {
         : { terminalId: reusableTerminalId }),
       location: { cwd: targetCwd, worktreePath: targetWorktreePath },
       stopOnSettle: script.stopOnSettle ?? false,
+      reportOpenFailure: false,
       ...(options?.env ? { extraEnv: options.env } : {}),
     });
     if (!launched) return;
