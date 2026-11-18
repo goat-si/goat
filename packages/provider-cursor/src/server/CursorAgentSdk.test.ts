@@ -611,6 +611,98 @@ describe("CursorAgentSdkRunner", () => {
       }).pipe(Effect.provide(layerTest)),
   );
 
+  it.effect("dispatches the last shell chunk before completion with an empty SDK result", () =>
+    Effect.gen(function* () {
+      const callId = "tool-shell";
+      const firstEntered = Promise.withResolvers<void>();
+      const releaseFirst = Promise.withResolvers<void>();
+      const publish = (data: string) =>
+        (Reflect.get(globalThis, Symbol.for("@cursor/sdk.shellStreamOutput")) as Function)({
+          conversationId: "agent-cursor-agent-sdk-test",
+          toolCallId: callId,
+          event: { case: "stdout", value: { data } },
+        });
+      const completed = {
+        type: "tool-call-completed",
+        modelCallId: "model-call",
+        callId,
+        toolCall: {
+          type: "shell",
+          args: { command: "echo tail" },
+          result: {
+            status: "success",
+            value: { exitCode: 0, signal: "", stdout: "", stderr: "", executionTime: 0 },
+          },
+        },
+      };
+      cursorSdkMock.send.mockImplementationOnce(async (_message, options) => ({
+        id: "run-cursor-agent-sdk-test",
+        agentId: "agent-cursor-agent-sdk-test",
+        cancel: cursorSdkMock.runCancel,
+        steer: cursorSdkMock.runSteer,
+        wait: vi.fn(async () => {
+          publish("first\n");
+          await firstEntered.promise;
+          const completion = options.onDelta?.({ update: completed });
+          publish("pending\n");
+          releaseFirst.resolve();
+          await completion;
+          return {
+            id: "run-cursor-agent-sdk-test",
+            requestId: "request-cursor-agent-sdk-test",
+            status: "finished",
+            result: "",
+            model: { id: "default" },
+            durationMs: 1,
+          };
+        }),
+      }));
+      const observed: Array<unknown> = [];
+      const runner = yield* CursorAgentSdk.CursorAgentSdkRunner;
+      const session = yield* runner.open({
+        operation: "create",
+        options: {},
+        threadId: ThreadId.make("thread-cursor-agent-sdk-shell-complete"),
+        providerSessionId: ProviderSessionId.make(
+          "provider-session-cursor-agent-sdk-shell-complete",
+        ),
+      });
+      const run = yield* session.send({
+        message: "run it",
+        onDelta: (update) =>
+          Effect.gen(function* () {
+            if (update.type === "shell-output-delta") {
+              const { value } = update.event;
+              if (
+                update.event.case !== "stdout" ||
+                typeof value !== "object" ||
+                value === null ||
+                !("data" in value)
+              ) {
+                return;
+              }
+              const { data } = value;
+              if (data === "first\n") {
+                firstEntered.resolve();
+                yield* Effect.promise(() => releaseFirst.promise);
+              }
+              if (data === "pending\n") publish("final-tail\n");
+              observed.push(data);
+            } else if (update.type === "tool-call-completed") {
+              observed.push(update.type);
+            }
+          }),
+      });
+      yield* run.wait;
+      assert.deepStrictEqual(observed, [
+        "first\n",
+        "pending\n",
+        "final-tail\n",
+        "tool-call-completed",
+      ]);
+    }).pipe(Effect.provide(layerTest)),
+  );
+
   it.effect("forwards Run.steer and reports a missing method as a follow-up", () =>
     Effect.gen(function* () {
       cursorSdkMock.runSteer.mockClear();

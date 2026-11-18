@@ -14,22 +14,34 @@ export interface ShellOutputDelta {
  * Keeps at most one shell output dispatch in flight per run. Output that arrives meanwhile merges
  * into one pending chunk per stream, so a loud command cannot queue a callback per chunk.
  */
-export function makeShellOutputCoalescer(dispatch: (delta: ShellOutputDelta) => Promise<void>) {
+export function makeShellOutputCoalescer(
+  dispatch: (take: () => Array<ShellOutputDelta>) => Promise<void>,
+) {
   let pending: Array<ShellOutputDelta> = [];
   let pendingChars = 0;
   let flight: Promise<void> | null = null;
   const size = (delta: ShellOutputDelta) =>
     typeof delta.event.value.data === "string" ? delta.event.value.data.length : 0;
-  const flush = (): void => {
-    if (flight !== null || pending.length === 0) return;
+  const takeAll = () => {
     const batch = pending;
     pending = [];
     pendingChars = 0;
-    let last = Promise.resolve();
-    for (const delta of batch) last = dispatch(delta);
-    flight = last.finally(() => {
+    return batch;
+  };
+  const takeForTool = (toolCallId: string): Array<ShellOutputDelta> => {
+    const batch: Array<ShellOutputDelta> = [];
+    pending = pending.filter((delta) => {
+      if (delta.toolCallId !== toolCallId) return true;
+      batch.push(delta);
+      pendingChars -= size(delta);
+      return false;
+    });
+    return batch;
+  };
+  const flush = (take: () => Array<ShellOutputDelta>): void => {
+    flight = dispatch(take).finally(() => {
       flight = null;
-      flush();
+      if (pending.length > 0) flush(takeAll);
     });
   };
   const push = (delta: ShellOutputDelta): void => {
@@ -63,11 +75,14 @@ export function makeShellOutputCoalescer(dispatch: (delta: ShellOutputDelta) => 
         pendingChars -= size(oldest);
       }
     }
-    flush();
+    if (flight === null && pending.length > 0) {
+      const first = takeAll();
+      flush(() => first);
+    }
   };
   /** Resolves once every pushed delta has been dispatched and handled. */
   const idle = async (): Promise<void> => {
     while (flight !== null) await flight;
   };
-  return { push, idle };
+  return { push, takeForTool, idle };
 }

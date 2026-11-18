@@ -23,7 +23,7 @@ import * as Ref from "effect/Ref";
 import * as Schema from "effect/Schema";
 
 import * as CursorSdk from "./CursorSdk.ts";
-import { makeShellOutputCoalescer } from "./shellOutputCoalescer.ts";
+import { makeShellOutputCoalescer, type ShellOutputDelta } from "./shellOutputCoalescer.ts";
 import * as ProviderEventLoggers from "@goat/provider-core/server/ProviderEventLoggers";
 
 export const CURSOR_AGENT_SDK_PROTOCOL = "cursor-agent-sdk.local" as const;
@@ -530,29 +530,49 @@ export const makeCursorAgentSdkRunner = Effect.fn("makeCursorAgentSdkRunner")(fu
           let callbackFailure: { readonly cause: unknown } | undefined;
           let callbackChain = Promise.resolve();
           let runId = "";
-          const dispatchUpdate = (update: InteractionUpdate): Promise<void> => {
+          const enqueueUpdates = (take: () => Iterable<InteractionUpdate>): Promise<void> => {
             callbackChain = callbackChain
-              .then(() => {
-                if (callbackFailure !== undefined) {
-                  return;
+              .then(async () => {
+                const updates = take();
+                if (callbackFailure !== undefined) return;
+                for (const update of updates) {
+                  await Effect.runPromiseWith(context)(
+                    log({
+                      direction: "incoming",
+                      stage: "decoded",
+                      payload: {
+                        type: "interaction.update",
+                        runId,
+                        update,
+                      },
+                    }).pipe(Effect.andThen(sendInput.onDelta?.(update) ?? Effect.void)),
+                  );
                 }
-                return Effect.runPromiseWith(context)(
-                  log({
-                    direction: "incoming",
-                    stage: "decoded",
-                    payload: {
-                      type: "interaction.update",
-                      runId,
-                      update,
-                    },
-                  }).pipe(Effect.andThen(sendInput.onDelta?.(update) ?? Effect.void)),
-                );
               })
               .catch((cause) => {
                 callbackFailure ??= { cause };
               });
             return callbackChain;
           };
+          const shellUpdate = (delta: ShellOutputDelta): InteractionUpdate => ({
+            type: "shell-output-delta",
+            event: { ...delta.event, toolCallId: delta.toolCallId },
+          });
+          const shellOutput = makeShellOutputCoalescer((take) =>
+            enqueueUpdates(() => take().map(shellUpdate)),
+          );
+          const dispatchUpdate = (update: InteractionUpdate): Promise<void> =>
+            enqueueUpdates(function* () {
+              if (update.type === "tool-call-completed" && update.toolCall.type === "shell") {
+                // The hook can still publish while a pending delta waits on the adapter queue.
+                let batch = shellOutput.takeForTool(update.callId);
+                while (batch.length > 0) {
+                  yield* batch.map(shellUpdate);
+                  batch = shellOutput.takeForTool(update.callId);
+                }
+              }
+              yield update;
+            });
 
           const startRun = (recovering = false) =>
             Effect.gen(function* () {
@@ -658,12 +678,6 @@ export const makeCursorAgentSdkRunner = Effect.fn("makeCursorAgentSdkRunner")(fu
             },
           });
           callbacksReady = true;
-          const shellOutput = makeShellOutputCoalescer((delta) =>
-            dispatchUpdate({
-              type: "shell-output-delta",
-              event: { ...delta.event, toolCallId: delta.toolCallId },
-            }),
-          );
           const unsubscribeShellOutput = subscribeShellStreamOutput((output) => {
             if (output.conversationId !== agent.agentId || typeof output.toolCallId !== "string") {
               return;
