@@ -156,6 +156,7 @@ export interface EventSinkV2Shape extends EventSinkBatch.Shape {
   /** Atomically checks the released owner and every background record being changed. */
   readonly writeIfReleasedSubagentUnchanged: (input: {
     readonly expected: OrchestrationV2Subagent;
+    readonly members: ReadonlyArray<OrchestrationV2Subagent>;
     readonly providerThreadId: ProviderThreadId;
     readonly providerSessionId: ProviderSessionId;
     readonly nodes: ReadonlyArray<OrchestrationV2ExecutionNode>;

@@ -1,5 +1,7 @@
 import {
   isOrchestrationV2WorkActive,
+  type NodeId,
+  type OrchestrationV2Subagent,
   type OrchestrationV2TurnItem,
   type ThreadId,
 } from "@goat/contracts";
@@ -21,6 +23,7 @@ const releasedToolCallTypes: ReadonlyArray<OrchestrationV2TurnItem["type"]> = [
   "command_execution",
   "dynamic_tool",
 ];
+const WORKFLOW_RELEASE_MEMBER_LIMIT = 128;
 const activeTurnItemStatuses: ReadonlyArray<OrchestrationV2TurnItem["status"]> = [
   "pending",
   "running",
@@ -72,6 +75,7 @@ export const makeReleasedBackgroundWork = ({
             providerSessionId,
             providerThreadId: providerThread.id,
             driver: providerThread.driver,
+            interruptedWorkflows: new Map<NodeId, number>(),
             taskIds: new Set(
               (providerThread.pendingBackgroundTasks ?? []).map((task) => task.taskId),
             ),
@@ -191,14 +195,24 @@ export const makeReleasedBackgroundWork = ({
   const writeReleasedSubagentEvents = Effect.fn(
     "ProviderSessionManager.writeReleasedSubagentEvents",
   )(function* (
-    { threadId, providerSessionId, providerThreadId, driver, taskIds }: ReleasedProviderThread,
+    {
+      threadId,
+      providerSessionId,
+      providerThreadId,
+      driver,
+      taskIds,
+      interruptedWorkflows,
+    }: ReleasedProviderThread,
     releasedAt: DateTime.Utc,
   ) {
     const readCutOff = Effect.gen(function* () {
       const projection = yield* projectionStore.getThreadRecords(
         threadId,
         ["subagents", "turnItems", "providerThreads"],
-        { omitSettledSubagents: true, turnItemTypes: ["subagent"] },
+        {
+          omitSettledSubagents: { except: [...interruptedWorkflows.keys()] },
+          turnItemTypes: ["subagent"],
+        },
       );
       const owner = projection.providerThreads.find(
         (thread) =>
@@ -210,13 +224,17 @@ export const makeReleasedBackgroundWork = ({
           item.type === "subagent" ? [[item.subagentId, item] as const] : [],
         ),
       );
+      const belongsToCutOff = (subagent: OrchestrationV2Subagent) =>
+        (isOrchestrationV2WorkActive(subagent.status) &&
+          DateTime.isLessThanOrEqualTo(subagent.updatedAt, releasedAt)) ||
+        (subagent.status === "interrupted" &&
+          interruptedWorkflows.get(subagent.id) === DateTime.toEpochMillis(subagent.updatedAt));
       const subagents = projection.subagents.filter((subagent) => {
         if (
           subagent.origin !== "provider_native" ||
           subagent.driver !== driver ||
           subagent.providerInstanceId !== owner.providerInstanceId ||
-          !isOrchestrationV2WorkActive(subagent.status) ||
-          DateTime.isGreaterThan(subagent.updatedAt, releasedAt)
+          !belongsToCutOff(subagent)
         )
           return false;
         const item = itemsBySubagent.get(subagent.id);
@@ -238,11 +256,49 @@ export const makeReleasedBackgroundWork = ({
       return { ...projection, subagents };
     });
 
+    const readChild = Effect.fn("ProviderSessionManager.readReleasedNativeChild")(function* (
+      childThreadId: ThreadId,
+      memberIds: ReadonlyArray<NodeId>,
+    ) {
+      return yield* projectionStore
+        .getThreadRecords(childThreadId, ["nodes", "providerTurns", "turnItems", "subagents"], {
+          turnItemRunIds: [null],
+          turnItemStatuses: activeTurnItemStatuses,
+          subagentIds: memberIds,
+        })
+        .pipe(Effect.catchTags({ ProjectionStoreThreadNotFoundError: () => Effect.succeed(null) }));
+    });
+    type ChildWork = NonNullable<Effect.Success<ReturnType<typeof readChild>>>;
+    const releaseRoot = (snapshot: ChildWork, task: OrchestrationV2Subagent) => {
+      const root = snapshot.nodes.find(
+        (node) =>
+          node.kind === "root_turn" &&
+          node.runId === null &&
+          node.nativeItemRef?.nativeId != null &&
+          node.nativeItemRef.nativeId === task.nativeTaskRef?.nativeId &&
+          (node.startedAt === null || DateTime.isLessThanOrEqualTo(node.startedAt, releasedAt)),
+      );
+      return {
+        root,
+        projection: {
+          nodes: root === undefined ? [] : [root],
+          providerTurns: snapshot.providerTurns.filter(
+            (turn) =>
+              turn.startedAt === null || DateTime.isLessThanOrEqualTo(turn.startedAt, releasedAt),
+          ),
+          turnItems: snapshot.turnItems.filter((item) =>
+            DateTime.isLessThanOrEqualTo(item.updatedAt, releasedAt),
+          ),
+        },
+      };
+    };
+
     let pending = yield* readCutOff;
     for (let pass = 0; pass < 3 && pending.subagents.length > 0; pass++) {
       const { nodes } = yield* projectionStore.getThreadRecords(threadId, ["nodes"], {
         nodeIds: pending.subagents.map(({ id }) => id),
       });
+      let attempted = false;
       for (const subagent of pending.subagents) {
         const now = yield* DateTime.now;
         const allocateEventId = () => idAllocator.allocate.event({ threadId, providerSessionId });
@@ -255,41 +311,89 @@ export const makeReleasedBackgroundWork = ({
           emitted: [],
           allocateEventId,
         });
-        const child =
-          subagent.childThreadId === null
-            ? null
-            : yield* projectionStore
-                .getThreadRecords(subagent.childThreadId, ["nodes", "providerTurns", "turnItems"], {
-                  turnItemRunIds: [null],
-                  turnItemStatuses: activeTurnItemStatuses,
-                })
-                .pipe(
-                  Effect.catchTags({
-                    ProjectionStoreThreadNotFoundError: () => Effect.succeed(null),
-                  }),
-                );
-        if (child !== null && subagent.childThreadId !== null) {
-          events.push(
-            ...(yield* endRunlessRootTurns({
-              threadId: subagent.childThreadId,
-              providerInstanceId: subagent.providerInstanceId,
-              projection: {
-                ...child,
-                nodes: child.nodes.filter(
-                  (node) =>
-                    node.nativeItemRef?.nativeId != null &&
-                    node.nativeItemRef.nativeId === subagent.nativeTaskRef?.nativeId &&
-                    (node.startedAt === null ||
-                      DateTime.isLessThanOrEqualTo(node.startedAt, releasedAt)),
-                ),
-              },
-              status: "interrupted",
-              now,
-              emitted: events,
-              allocateEventId,
-            })),
+        const members: OrchestrationV2Subagent[] = [];
+        const snapshots: ChildWork[] = [];
+        const coordinatorThread = subagent.childThreadId;
+        if (coordinatorThread !== null) {
+          const references = (subagent.workflow?.agents ?? [])
+            .slice(0, WORKFLOW_RELEASE_MEMBER_LIMIT)
+            .flatMap((member) => {
+              if (member.childThreadId === undefined) return [];
+              const nativeId = `${coordinatorThread}:agent:${member.index}`;
+              return [
+                {
+                  id: idAllocator.derive.nodeFromProviderItem({ driver, nativeItemId: nativeId }),
+                  nativeId,
+                  threadId: member.childThreadId,
+                },
+              ];
+            });
+          const child = yield* readChild(
+            coordinatorThread,
+            references.map(({ id }) => id),
           );
+          if (child !== null) {
+            snapshots.push(child);
+            const owned = releaseRoot(child, subagent);
+            const endChild = (
+              task: OrchestrationV2Subagent,
+              childThreadId: ThreadId,
+              root: ReturnType<typeof releaseRoot>,
+            ) =>
+              endRunlessRootTurns({
+                threadId: childThreadId,
+                providerInstanceId: task.providerInstanceId,
+                projection: root.projection,
+                status: "interrupted",
+                now,
+                emitted: events,
+                allocateEventId,
+              });
+            events.push(...(yield* endChild(subagent, coordinatorThread, owned)));
+            for (const reference of references) {
+              const member = child.subagents.find(({ id }) => id === reference.id);
+              if (
+                member === undefined ||
+                owned.root === undefined ||
+                member.parentNodeId !== owned.root.id ||
+                member.childThreadId !== reference.threadId ||
+                member.nativeTaskRef?.nativeId !== reference.nativeId ||
+                member.driver !== driver ||
+                member.providerInstanceId !== subagent.providerInstanceId ||
+                member.origin !== "provider_native" ||
+                member.runId !== null ||
+                member.providerThreadId !== null ||
+                !isOrchestrationV2WorkActive(member.status) ||
+                DateTime.isGreaterThan(member.updatedAt, releasedAt)
+              )
+                continue;
+              members.push(member);
+              events.push(
+                ...(yield* endOrphanedNativeSubagent({
+                  projection: { ...owned.projection, nodes: child.nodes, subagents: [member] },
+                  subagentId: member.id,
+                  status: "interrupted",
+                  now,
+                  emitted: events,
+                  allocateEventId,
+                })),
+              );
+              const memberChild = yield* readChild(reference.threadId, []);
+              if (memberChild !== null) {
+                snapshots.push(memberChild);
+                events.push(
+                  ...(yield* endChild(
+                    member,
+                    reference.threadId,
+                    releaseRoot(memberChild, member),
+                  )),
+                );
+              }
+            }
+          }
         }
+        if (events.length === 0) continue;
+        attempted = true;
         const nodeIds = new Set(
           events.flatMap((event) => (event.type === "node.updated" ? [event.payload.id] : [])),
         );
@@ -301,18 +405,32 @@ export const makeReleasedBackgroundWork = ({
         const itemIds = new Set(
           events.flatMap((event) => (event.type === "turn-item.updated" ? [event.payload.id] : [])),
         );
-        yield* eventSink.writeIfReleasedSubagentUnchanged({
+        const { committed } = yield* eventSink.writeIfReleasedSubagentUnchanged({
           expected: subagent,
+          members,
           providerThreadId,
           providerSessionId,
           events,
-          nodes: [...nodes, ...(child?.nodes ?? [])].filter(({ id }) => nodeIds.has(id)),
-          turns: (child?.providerTurns ?? []).filter(({ id }) => turnIds.has(id)),
-          items: [...pending.turnItems, ...(child?.turnItems ?? [])].filter(({ id }) =>
-            itemIds.has(id),
+          nodes: [...nodes, ...snapshots.flatMap(({ nodes }) => nodes)].filter(({ id }) =>
+            nodeIds.has(id),
+          ),
+          turns: snapshots
+            .flatMap(({ providerTurns }) => providerTurns)
+            .filter(({ id }) => turnIds.has(id)),
+          items: [...pending.turnItems, ...snapshots.flatMap(({ turnItems }) => turnItems)].filter(
+            ({ id }) => itemIds.has(id),
           ),
         });
+        if (
+          committed &&
+          subagent.workflow !== undefined &&
+          isOrchestrationV2WorkActive(subagent.status) &&
+          interruptedWorkflows.size < WORKFLOW_RELEASE_MEMBER_LIMIT
+        ) {
+          interruptedWorkflows.set(subagent.id, DateTime.toEpochMillis(now));
+        }
       }
+      if (!attempted) return;
       pending = yield* readCutOff;
     }
     if (pending.subagents.length > 0)

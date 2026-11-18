@@ -79,6 +79,13 @@ export function makeEventSinkComparePayloadWrites(
           AND p.provider_session_id = ${input.providerSessionId}
       `;
       if (owner[0]?.payload_json !== expected) return [];
+      for (const member of input.members) {
+        const rows = yield* sql<{ readonly payload_json: string }>`
+          SELECT payload_json FROM orchestration_v2_projection_subagents WHERE subagent_id = ${member.id}
+        `;
+        if (rows[0]?.payload_json !== (yield* ProjectionStore.encodeSubagentPayload(member)))
+          return [];
+      }
       for (const node of input.nodes) {
         const rows = yield* sql<{ readonly payload_json: string }>`
           SELECT payload_json FROM orchestration_v2_projection_nodes WHERE node_id = ${node.id}
