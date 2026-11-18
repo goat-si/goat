@@ -94,7 +94,7 @@ describe("memory hub floor", () => {
       yield* seed;
       const hub = yield* Hub.MemoryHubService;
       const local = yield* Service.MemoryService;
-      const blockers = [hubEnv, otherEnv];
+      const blockers = [otherEnv];
       assert.deepStrictEqual(
         Reflect.get(yield* hub.pull(advertise, principal()), "upgradeRequiredMembers"),
         blockers,
@@ -121,7 +121,7 @@ describe("memory hub floor", () => {
         .pipe(Effect.flip);
       assert.include(refusal, { code: "hub_upgrade_required" });
       assert.deepStrictEqual(Reflect.get(refusal, "upgradeRequiredMembers"), blockers);
-    }).pipe(checkUsage, Effect.provide(live)),
+    }).pipe(checkUsage, Effect.provide(live), enabled),
   );
 
   it.effect("a wide save stays invisible until ordered tail settlement", () =>

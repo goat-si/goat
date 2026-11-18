@@ -1,3 +1,5 @@
+import { runSelfWideSave } from "./testkit/SelfMemoryFloorScenario.ts";
+import { MemoryFloor2Enabled } from "./MemoryFloor.ts";
 import { watchedEvents } from "../testUtils/watchedEvents.testkit.ts";
 import { fencedReleaseAfterSync } from "./MemorySyncFencedRelease.testkit.ts";
 import {
@@ -5033,7 +5035,7 @@ it.effect.each(["stale-candidate", "ticket-write-failure"] as const)(
     }),
 );
 
-it.effect.each(["bootstrap", "exchange"] as const)(
+it.effect.each(["bootstrap", "exchange", "floor restart"] as const)(
   "automatic hub initialization bootstraps its own replica without HTTP: %s",
   (phase) =>
     Effect.scoped(
@@ -5075,9 +5077,11 @@ it.effect.each(["bootstrap", "exchange"] as const)(
               }),
             ),
           ),
+          Layer.provide(Layer.succeed(MemoryFloor2Enabled, phase === "floor restart")),
           Layer.provideMerge(selfCore),
         );
         const app = Sync.layer.pipe(
+          Layer.provide(Layer.succeed(MemoryFloor2Enabled, false)),
           Layer.provideMerge(
             Layer.mergeAll(
               selfHub,
@@ -5119,6 +5123,7 @@ it.effect.each(["bootstrap", "exchange"] as const)(
             memorySpaceId: allocated,
             bootstrap: "ready",
           });
+          if (phase === "floor restart") return yield* runSelfWideSave(allocated, local);
           if (phase === "bootstrap") {
             yield* sync.shutdown;
             return;
