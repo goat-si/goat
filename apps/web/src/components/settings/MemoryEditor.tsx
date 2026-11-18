@@ -53,7 +53,11 @@ export function useMemoryEditSession({
   );
   const [seen, setSeen] = useState<MemoryExposure | null>(null);
   if (item && seen !== exposure) setSeen(exposure);
-  const gap = item || seen === null ? null : memoryBodyGap(seen, exposure, memoryId);
+  const reply = useAtomValue(
+    memoryEnvironment.read.reply({ environmentId, input: { memorySpaceId, memoryId } }),
+  );
+  const found = item || seen === null ? null : memoryBodyGap(seen, exposure, memoryId);
+  const gap = found === "unchanged" && reply === null ? null : found;
   const [start, setStart] = useState<MemoryEditStart | null>(null);
   const [edited, setEdited] = useState<"no" | "differs" | "kept">("no");
   // The shared draft decides whether a change keeps the edit; the editor closes when it is gone.
@@ -70,12 +74,15 @@ export function useMemoryEditSession({
   // The person's own save, or a read this view asked for, until the next body arrives.
   const [own, setOwn] = useState<"save" | "pending" | null>(null);
   const [notice, setNotice] = useState<string | null>(null);
-  if ((item && own === "pending") || (!start && own === "save")) setOwn(null);
+  if ((reply !== null && own === "pending") || (!start && own === "save")) setOwn(null);
+  const changedRevision =
+    start !== null && item?.status === "active" && item.revision.revisionId !== start.revisionId;
   if (
     start &&
     (!canWrite ||
       (own !== "save" &&
         (draftLost ||
+          changedRevision ||
           gap === "forgotten" ||
           gap === "unavailable" ||
           (gap === "unchanged" && edited === "no"))))
@@ -83,7 +90,13 @@ export function useMemoryEditSession({
     setStart(null);
     setSeeded(false);
     // Only an edit the person changed loses anything; an untouched one closes quietly.
-    if (canWrite && draftLost && edited !== "no" && gap !== "forgotten" && gap !== "unavailable")
+    if (
+      canWrite &&
+      (draftLost || changedRevision) &&
+      edited !== "no" &&
+      gap !== "forgotten" &&
+      gap !== "unavailable"
+    )
       setNotice(
         "Edit closed because this memory is no longer the version you started from. Your unsaved text was not kept.",
       );
@@ -117,7 +130,8 @@ export function useMemoryEditSession({
     editorEvents: {
       edited: edited !== "no",
       // An untouched editor shows the body, so it is masked like the read-only view during a reread.
-      masked: own !== "save" && gap === "changed" && edited === "no",
+      masked:
+        own !== "save" && (gap === "changed" || (own === "pending" && !item)) && edited === "no",
       onTextChange: (text: string) =>
         setEdited((previous) =>
           previous === "kept" || item?.status !== "active"

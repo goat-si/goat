@@ -71,9 +71,11 @@ function notifyFixture() {
 function fixtureAtomValue(atom: { label: string }) {
   return atom.label === "syncChanges"
     ? state.exposure
-    : ["forget", "upsert", "projectBindingGet"].includes(atom.label)
-      ? state.write
-      : state.allowed;
+    : atom.label === "readReply"
+      ? (state.queries.get("read") ?? Option.none())
+      : ["forget", "upsert", "projectBindingGet"].includes(atom.label)
+        ? state.write
+        : state.allowed;
 }
 vi.mock("@effect/atom-react", async (original) => {
   const { useEffect } = await import("react");
@@ -156,7 +158,7 @@ vi.mock("../../state/memory", async () => {
         ].map((label) => [label, { label, permissionAtom: () => ({ label }) }]),
       ),
       ...Object.fromEntries(
-        ["list", "search", "read", "history", "readSource"].map((label) => [
+        ["list", "search", "history", "readSource"].map((label) => [
           label,
           (request: { input?: { resolutionInputsFor?: string } }) => {
             state.requests.push({ label, input: request.input });
@@ -168,6 +170,13 @@ vi.mock("../../state/memory", async () => {
             };
           },
         ]),
+      ),
+      read: Object.assign(
+        (request: { input: unknown }) => {
+          state.requests.push({ label: "read", input: request.input });
+          return { label: "read" };
+        },
+        { reply: () => ({ label: "readReply" }) },
       ),
       draftAtom: ({ draftId }: { draftId: string }) => drafts(draftId),
     },

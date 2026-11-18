@@ -303,12 +303,18 @@ it.each(["untouched", "typed back to the original"])(
     expect(screen.container.textContent).toContain(HIDDEN_LINE);
     expect(state.onForgotten).not.toHaveBeenCalled();
     expect(state.navigate).not.toHaveBeenCalled();
+    state.refresh.mockImplementation(() => {
+      state.readPending = true;
+    });
     await click(screen, "Show again");
     expect(state.refresh).toHaveBeenCalled();
     // A read this view asked for shows nothing new while it is pending.
     expect(screen.container.textContent).not.toContain(HIDDEN_LINE);
     expect(screen.container.textContent).not.toContain(UNAVAILABLE_LINE);
-    await update(() => state.queries.set("read", Option.some(original)));
+    await update(() => {
+      state.readPending = false;
+      state.queries.set("read", Option.some(original));
+    });
     expect(screen.container.textContent).toContain("Synthetic original");
     expect(memoryText(screen)).toBeNull();
   },

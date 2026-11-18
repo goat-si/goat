@@ -954,10 +954,7 @@ export function MemoryDetails({
                         item={item}
                         entry={entry}
                         history={value}
-                        onSettled={() => {
-                          read.refresh();
-                          history.refresh();
-                        }}
+                        onSettled={edit.showAgain}
                       />
                     ) : null}
                   </MemoryHistoryDisclosure>
