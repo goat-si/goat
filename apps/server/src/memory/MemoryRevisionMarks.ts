@@ -20,7 +20,7 @@ export const areAutomaticallyUsable = Effect.fn("MemoryService.areAutomaticallyU
   return rows.length === 0;
 });
 
-export const markUnverified = Effect.fn("MemoryService.markUnverified")(function* (
+const markUnverified = Effect.fn("MemoryService.markUnverified")(function* (
   space: M.MemorySpaceId,
   revisionId: M.MemoryRevisionId,
 ) {

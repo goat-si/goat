@@ -506,7 +506,9 @@ describe("memory hub floor", () => {
         hub.resultSourceRead({ ...base, requestId }, member),
       ];
       for (const call of calls)
-        assert.include(yield* call.pipe(Effect.flip), { code: "unsupported_protocol" });
+        assert.include(yield* call.pipe(Effect.asVoid, Effect.flip), {
+          code: "unsupported_protocol",
+        });
     }).pipe(checkUsage, Effect.provide(live)),
   );
 

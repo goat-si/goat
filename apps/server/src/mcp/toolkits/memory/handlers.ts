@@ -12,6 +12,7 @@ import { listedToolName, resolveAgentSurfaceEntry } from "@goat/contracts/agentS
 import { MemoryToolkit } from "./tools.ts";
 import { MemoryCapacityError, MemoryStoreConflict } from "../../../memory/store/StoreModel.ts";
 
+const isStoreConflict = Schema.is(MemoryStoreConflict);
 const isMemoryError = Schema.is(M.MemoryRpcError);
 const isCapacityDimension = Schema.is(M.MemoryCapacityDimension);
 const isCapacity = Schema.is(M.MemoryCapacityExceeded);
@@ -55,7 +56,7 @@ export const memoryError = (error: unknown): M.MemoryRpcError => {
   if ("code" in error && isFailureCode(error.code) && error.code !== "capacity_exceeded")
     return new M.MemoryRpcError({
       code: error.code,
-      ...(error instanceof MemoryStoreConflict && error.upgradeRequiredMembers
+      ...(isStoreConflict(error) && error.upgradeRequiredMembers
         ? { upgradeRequiredMembers: error.upgradeRequiredMembers }
         : {}),
       ...(error.code === "thread_lineage_incomplete"
