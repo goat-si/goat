@@ -28,7 +28,7 @@ import type {
   VcsStatusStreamEvent,
   VcsStatusSubscriptionInput,
 } from "@goat/contracts";
-import { DEFAULT_AUTOMATIC_GIT_FETCH_INTERVAL } from "@goat/contracts";
+import { DEFAULT_AUTOMATIC_GIT_FETCH_INTERVAL, GitManagerError } from "@goat/contracts";
 import { resolveServerBackgroundActivitySettings } from "@goat/shared/backgroundActivitySettings";
 import { mergeGitStatusParts } from "@goat/shared/git";
 import * as KeyedLock from "@goat/shared/KeyedLock";
@@ -42,6 +42,7 @@ import * as ServerSettings from "../serverSettings.ts";
 
 const VCS_STATUS_REFRESH_FAILURE_BASE_DELAY = Duration.seconds(30);
 const VCS_STATUS_REFRESH_FAILURE_MAX_DELAY = Duration.minutes(15);
+const MAX_STATUS_REFRESH_WORKERS = 16;
 interface CachedValue<T> {
   readonly fingerprint: string;
   readonly value: T;
@@ -556,6 +557,13 @@ export const make = Effect.gen(function* () {
         if (queued) {
           queued.followUp ??= requested;
           return yield* restore(Deferred.await(queued.followUp));
+        }
+        if (queuedRefreshes.size >= MAX_STATUS_REFRESH_WORKERS) {
+          return yield* new GitManagerError({
+            operation: "VcsStatusBroadcaster.refreshStatus",
+            cwd: rawCwd,
+            detail: "Too many Git status refreshes are running. Try again shortly.",
+          });
         }
         const queue: QueuedRefresh = { current: requested, followUp: null };
         queuedRefreshes.set(rawCwd, queue);

@@ -223,4 +223,56 @@ describe("VcsStatusBroadcaster full refresh", () => {
       }).pipe(Effect.provide(layerTestFor(state)));
     },
   );
+
+  it.effect("cancelled aliases cannot exceed the refresh worker limit", () => {
+    const state: Parameters<typeof layerTestFor>[0] = {
+      currentLocalStatus: baseLocalStatus,
+      currentRemoteStatus: baseRemoteStatus,
+      localStatusCalls: 0,
+      remoteStatusCalls: 0,
+      localInvalidationCalls: 0,
+      remoteInvalidationCalls: 0,
+      fileSystem: FileSystem.makeNoop({ realPath: () => Effect.succeed("/repo") }),
+    };
+
+    return Effect.gen(function* () {
+      const broadcaster = yield* VcsStatusBroadcaster.VcsStatusBroadcaster;
+      const started = yield* Deferred.make<void>();
+      const release = yield* Deferred.make<void>();
+      state.beforeRemoteStatus = Deferred.succeed(started, undefined).pipe(
+        Effect.andThen(Deferred.await(release)),
+      );
+      const running = yield* broadcaster.refreshStatus("/repo").pipe(Effect.forkScoped);
+      yield* Deferred.await(started);
+      yield* Effect.forEach(
+        Array.from({ length: 15 }, (_, index) => `/alias/${index}`),
+        (cwd) =>
+          broadcaster
+            .refreshStatus(cwd)
+            .pipe(Effect.forkScoped({ startImmediately: true }), Effect.flatMap(Fiber.interrupt)),
+        { discard: true },
+      );
+
+      const existing = yield* broadcaster
+        .refreshStatus("/repo")
+        .pipe(Effect.forkScoped({ startImmediately: true }));
+      const overflow = yield* broadcaster
+        .refreshStatus("/overflow")
+        .pipe(Effect.result, Effect.forkScoped({ startImmediately: true }));
+      const result = overflow.pollUnsafe();
+      assert.isTrue(
+        result?._tag === "Success" &&
+          result.value._tag === "Failure" &&
+          result.value.failure._tag === "GitManagerError",
+        "excess raw checkout must fail immediately with a GitManagerError",
+      );
+
+      yield* Deferred.succeed(release, undefined);
+      yield* Fiber.join(running);
+      yield* Fiber.join(existing);
+      assert.equal(state.remoteStatusCalls, 17);
+      yield* broadcaster.refreshStatus("/overflow");
+      assert.equal(state.remoteStatusCalls, 18);
+    }).pipe(Effect.provide(layerTestFor(state)));
+  });
 });
