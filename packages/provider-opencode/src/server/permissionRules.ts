@@ -219,6 +219,8 @@ export function withOpenCodeSubagentDeny(
 
 const OPENCODE_GOAT_PERMISSION_BASE_KEY = "goatPermissionBase";
 const PREVIOUS_PERMISSION_BASES_KEY = "goatPreviousPermissionBases";
+const PERMISSION_BASE_HISTORY_KEY = "goatPermissionBaseHistory";
+const MAX_PERMISSION_BASE_HISTORY = 16;
 
 const RESTRICTED_PERMISSIONS = new Set<string>(OPENCODE_RESTRICTED_PERMISSIONS);
 const ALWAYS_ALLOWED_PERMISSIONS = new Set<string>(OPENCODE_ALWAYS_ALLOWED_PERMISSIONS);
@@ -269,17 +271,37 @@ const readPermissionBase = (value: unknown) => {
   return rules;
 };
 
-export const openCodePreviousPermissionBases = (
+const readPermissionBases = (
   metadata: { readonly [key: string]: unknown } | undefined,
+  key: string,
 ): ReadonlyArray<PermissionRuleset> => {
-  const history = metadata?.[PREVIOUS_PERMISSION_BASES_KEY];
+  const history = metadata?.[key];
   return Array.isArray(history)
-    ? history.flatMap((entry) => {
+    ? history.slice(-MAX_PERMISSION_BASE_HISTORY).flatMap((entry) => {
         const base = readPermissionBase(entry);
         return base === undefined ? [] : [base];
       })
     : [];
 };
+
+export const openCodePreviousPermissionBases = (
+  metadata: { readonly [key: string]: unknown } | undefined,
+) => readPermissionBases(metadata, PREVIOUS_PERMISSION_BASES_KEY);
+
+function rememberPermissionBaseHistory(
+  metadata: { readonly [key: string]: unknown } | undefined,
+  next: ReadonlyArray<PermissionRuleset>,
+) {
+  const history: PermissionRuleset[] = [];
+  for (const base of [...readPermissionBases(metadata, PERMISSION_BASE_HISTORY_KEY), ...next]) {
+    const duplicate = history.findIndex((candidate) =>
+      openCodePermissionRulesEqual(candidate, base),
+    );
+    if (duplicate >= 0) history.splice(duplicate, 1);
+    history.push(base);
+  }
+  return history.slice(-MAX_PERMISSION_BASE_HISTORY);
+}
 
 const storedPermissionBase = (metadata: { readonly [key: string]: unknown } | undefined) =>
   readPermissionBase(metadata?.[OPENCODE_GOAT_PERMISSION_BASE_KEY]);
@@ -313,7 +335,10 @@ export const openCodeEffectivePermission = (
 export const openCodeParentPermissionBases = (
   session: Parameters<typeof mergeOpenCodeResumePermission>[0],
 ): ReadonlyArray<PermissionRuleset> => {
-  const previous = openCodePreviousPermissionBases(session.metadata);
+  const previous = rememberPermissionBaseHistory(
+    session.metadata,
+    openCodePreviousPermissionBases(session.metadata),
+  );
   const current = openCodeRecordedPermissionBase(session);
   return current === undefined ? previous : [...previous, current];
 };
@@ -323,7 +348,11 @@ export const openCodeRememberPermissionBases = (
   previous: ReadonlyArray<PermissionRuleset>,
 ): OpenCodeResumePermission => ({
   ...merged,
-  metadata: { ...merged.metadata, [PREVIOUS_PERMISSION_BASES_KEY]: previous },
+  metadata: {
+    ...merged.metadata,
+    [PREVIOUS_PERMISSION_BASES_KEY]: previous.slice(-MAX_PERMISSION_BASE_HISTORY),
+    [PERMISSION_BASE_HISTORY_KEY]: rememberPermissionBaseHistory(merged.metadata, previous),
+  },
 });
 
 export const openCodeClearPreviousPermissionBases = (
@@ -331,7 +360,13 @@ export const openCodeClearPreviousPermissionBases = (
 ) => {
   if (metadata === undefined || !(PREVIOUS_PERMISSION_BASES_KEY in metadata)) return undefined;
   const { [PREVIOUS_PERMISSION_BASES_KEY]: _, ...remaining } = metadata;
-  return remaining;
+  return {
+    ...remaining,
+    [PERMISSION_BASE_HISTORY_KEY]: rememberPermissionBaseHistory(
+      metadata,
+      openCodePreviousPermissionBases(metadata),
+    ),
+  };
 };
 
 const isWritableRootPattern = (pattern: string) =>
@@ -411,48 +446,36 @@ export function openCodeInstalledChildPermission(
   session: Parameters<typeof mergeOpenCodeResumePermission>[0],
   runtimePolicy: ProviderAdapter.ProviderAdapterV2RuntimePolicy,
   subagentsOff: boolean,
-  resumed: boolean,
   previousParentBases: ReadonlyArray<PermissionRuleset> = [],
-): OpenCodeResumePermission {
+): OpenCodeResumePermission & { readonly discardedAllows: number } {
   const installed = openCodeInstalledPermission(runtimePolicy, session.metadata);
   const { base: recorded, permission } = readOpenCodeSessionPermission(session);
   const previous = withOpenCodeSubagentDeny(permission, openCodeOwnsSubagentDeny(session), false);
-  const full = { permission: "*", pattern: "*", action: "allow" } as const;
-  const external = { ...full, permission: "external_directory" };
-  const inheritedLength = previousParentBases.reduce((longest, parentBase) => {
-    const inherited = inheritedChildRules(parentBase);
-    return startsWithRules(previous, inherited) ? Math.max(longest, inherited.length) : longest;
-  }, 0);
-  const baseLength =
-    recorded?.length ??
-    (resumed && startsWithRules(previous, [full, external])
-      ? 2
-      : resumed && startsWithRules(previous, [full])
-        ? 1
-        : inheritedLength);
-  const allowsAllExternal =
-    installed.permission.findLast(
-      (rule) =>
-        rule.pattern === "*" &&
-        (rule.permission === "*" || rule.permission === "external_directory"),
-    )?.action === "allow";
-  // Only the current base grants scoped directory access when inheritance is unknown.
-  const nativeRules = previous.slice(baseLength);
-  const kept =
-    recorded !== undefined || inheritedLength > 0 || allowsAllExternal
-      ? nativeRules
-      : nativeRules.filter(
-          (rule) => rule.permission !== "external_directory" || rule.action !== "allow",
-        );
+  const seen = new Set(previousParentBases.flatMap((base) => base.map(permissionRuleKey)));
+  const nativeDenies: PermissionRuleset = [];
+  let discardedAllows = 0;
+  // OpenCode can inherit rules from every appended parent base, even without GOAT metadata.
+  for (const rule of previous.slice(recorded?.length ?? 0)) {
+    const key = permissionRuleKey(rule);
+    if (seen.has(key) || isGoatShapedRule(rule)) continue;
+    seen.add(key);
+    if (rule.action === "deny") nativeDenies.push(rule);
+    if (rule.action === "allow") discardedAllows++;
+  }
   return {
-    permission:
-      !resumed && baseLength === 0
-        ? openCodeChildPermissionRules(runtimePolicy, kept, subagentsOff)
-        : withOpenCodeSubagentDeny([...installed.permission, ...kept], false, subagentsOff),
+    permission: withOpenCodeSubagentDeny(
+      [...installed.permission, ...nativeDenies],
+      false,
+      subagentsOff,
+    ),
     metadata: { ...installed.metadata, [OPENCODE_GOAT_SUBAGENT_DENY_KEY]: subagentsOff },
     subagentsDenied: subagentsOff,
+    discardedAllows,
   };
 }
+
+const permissionRuleKey = ({ permission, pattern, action }: PermissionRuleset[number]) =>
+  `${action}:${permission.length}:${permission}${pattern}`;
 
 /** Replace GOAT's base and trailing deny. Rules between them, native or user, stay. */
 export function mergeOpenCodeResumePermission(

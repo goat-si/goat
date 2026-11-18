@@ -578,6 +578,16 @@ it.effect.each(childPermissionRows)(
       ]
         .slice(0, bases)
         .map(openCodePermissionRules);
+      const exercisesHistoryLimit = bases === 3 && createdAfter === 2;
+      const earlierBases = exercisesHistoryLimit
+        ? Array.from({ length: 14 }, (_, index) =>
+            openCodePermissionRules(scopedDirectoryPolicy(`/retired-root-${index}`)),
+          )
+        : [];
+      if (exercisesHistoryLimit) {
+        // A previous GOAT build recorded a deny outside the current base's finite rule shapes.
+        history[0]!.push({ permission: "read", pattern: "/workspace/file", action: "deny" });
+      }
       const currentBase = openCodePermissionRules(policy);
       const latest = history.at(-1)!;
       const creationBase = history[createdAfter]!;
@@ -605,6 +615,9 @@ it.effect.each(childPermissionRows)(
       const parentMetadata = {
         goatPermissionBase: restored ? currentBase : latest,
         ...(restored && bases > 1 ? { goatPreviousPermissionBases: history } : {}),
+        ...(exercisesHistoryLimit
+          ? { goatPermissionBaseHistory: [...earlierBases, ...history.slice(0, -1)] }
+          : {}),
       };
       const sessions = new Map<string, Session>([
         [root, { id: root, time, permission: parentRules, metadata: parentMetadata }],
@@ -704,6 +717,12 @@ it.effect.each(childPermissionRows)(
         [directory, old, "allow", "deny"],
         "current directory, previous directory, workspace read, child-native deny",
       );
+      if (exercisesHistoryLimit) {
+        assert.deepEqual(
+          stored(parent).metadata?.goatPermissionBaseHistory,
+          [...earlierBases, ...history].slice(-16),
+        );
+      }
     }).pipe(
       Effect.provide(Layer.merge(IdAllocator.layer, McpProviderSessions.layer)),
       Effect.scoped,

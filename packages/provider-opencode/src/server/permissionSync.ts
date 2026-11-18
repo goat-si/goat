@@ -67,14 +67,23 @@ export const retainOpenCodePreviousPermissionBase = Effect.fn(
     );
     if (Option.isSome(children) && children.value.length === 0) return merged;
   }
-  if (history.length >= 32) {
-    return yield* new OpenCodeRuntimeError({
-      operation: "session.update",
-      detail: "OpenCode must refresh descendant permissions before another policy change.",
-    });
-  }
   return openCodeRememberPermissionBases(merged, [...history, previous]);
 });
+
+export const resolveOpenCodeChildPermission = Effect.fn("OpenCode.resolveChildPermission")(
+  function* (...input: Parameters<typeof openCodeInstalledChildPermission>) {
+    const { discardedAllows, ...permission } = openCodeInstalledChildPermission(...input);
+    if (discardedAllows > 0) {
+      yield* Effect.logWarning(
+        "Ignored OpenCode child permission allows outside the GOAT policy.",
+        {
+          count: discardedAllows,
+        },
+      );
+    }
+    return permission;
+  },
+);
 
 export const syncOpenCodeSubagentDeny = Effect.fn("OpenCodeAdapter.syncSubagentRules")(function* (
   state: OpenCodeDenyThread,
@@ -146,11 +155,10 @@ export const refreshOpenCodeChildPermissions = Effect.fn("OpenCode.refreshChildP
       const parent = child.parentSubagent?.parentState;
       if (parent === undefined || !isDescendant(child, input.root)) continue;
       known.set(child.nativeSessionId, child);
-      const merged = openCodeInstalledChildPermission(
+      const merged = yield* resolveOpenCodeChildPermission(
         child,
         input.policy,
         child.subagentsDenied,
-        true,
         openCodeParentPermissionBases(parent),
       );
       if (openCodeResumePermissionDiffers(child, merged)) {
@@ -184,11 +192,10 @@ export const refreshOpenCodeChildPermissions = Effect.fn("OpenCode.refreshChildP
         const tracked = known.get(child.id);
         pending.push({ id: child.id, bases: openCodeParentPermissionBases(tracked ?? child) });
         if (tracked !== undefined) continue;
-        const merged = openCodeInstalledChildPermission(
+        const merged = yield* resolveOpenCodeChildPermission(
           child,
           input.policy,
           input.subagentsOff,
-          true,
           parent.bases,
         );
         if (openCodeResumePermissionDiffers(child, merged)) {

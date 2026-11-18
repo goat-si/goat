@@ -35,7 +35,6 @@ import type {
 } from "@opencode-ai/sdk/v2";
 import * as HostProcess from "@goat/shared/HostProcess";
 import {
-  openCodeInstalledChildPermission,
   openCodeOwnsSubagentDeny,
   openCodeInstalledPermission,
   openCodePermissionRules,
@@ -46,6 +45,7 @@ import {
 import {
   installResumedOpenCodePermission,
   refreshOpenCodeChildPermissions,
+  resolveOpenCodeChildPermission,
   retainOpenCodePreviousPermissionBase,
   type OpenCodePermissionUpdate,
   syncOpenCodeSubagentDeny,
@@ -918,11 +918,10 @@ export const makeOpenCodeAdapterV2 = Effect.fn("makeOpenCodeAdapterV2")(function
               () => client.session.get({ sessionID: childSessionId }),
             );
             const nativeChildSession = unwrapData("session.get", childSessionResponse);
-            const childPermission = openCodeInstalledChildPermission(
+            const childPermission = yield* resolveOpenCodeChildPermission(
               nativeChildSession,
               turn.runtimePolicy,
               state.subagentsDenied,
-              recordString(input, "task_id") === childSessionId || threads.has(childSessionId),
               openCodeParentPermissionBases(state),
             );
             const installed = yield* retainOpenCodePreviousPermissionBase(
