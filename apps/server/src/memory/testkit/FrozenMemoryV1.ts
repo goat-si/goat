@@ -90,8 +90,7 @@ const failureCode = Schema.optionalKey(MemoryFailureCode);
 const options = { onExcessProperty: "error" } as const;
 
 export const decodeLegacyError = Schema.decodeUnknownSync(
-  Schema.Struct({
-    _tag: Schema.Literal("MemoryRpcError"),
+  Schema.TaggedStruct("MemoryRpcError", {
     code: MemoryFailureCode,
     memoryId: Schema.optionalKey(M.MemoryId),
     operationId: Schema.optionalKey(M.MemoryOperationId),

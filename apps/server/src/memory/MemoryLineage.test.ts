@@ -48,7 +48,7 @@ const input = (n: number, deps: readonly M.MemoryRevisionId[] = []): M.MemoryUps
 });
 const makeEnvironment = Effect.fnUntraced(function* (
   environmentId: M.EnvironmentId,
-  serviceLayer = Service.layer,
+  serviceLayer: typeof Service.layer = Service.layer,
 ) {
   const database = Layer.effectDiscard(
     migration.pipe(
@@ -758,7 +758,7 @@ it.effect(
         if (!acceptOp || acceptOp.kind !== "upsert")
           throw new Error("Expected a staged acceptance");
         for (const op of [rememberOp, acceptOp]) {
-          assert.sameMembers(op.payload.derivedFromMemoryRevisions, revisions);
+          assert.sameMembers([...op.payload.derivedFromMemoryRevisions], revisions);
           assert.propertyVal(yield* admit(op), "outcome", "accepted");
         }
         yield* service.forget(

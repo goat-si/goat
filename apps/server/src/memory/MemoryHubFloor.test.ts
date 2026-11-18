@@ -719,7 +719,7 @@ describe("memory hub floor", () => {
             execution,
             replace: true,
             project: null,
-            candidates: { user: { ...result, text: "Synthetic promotion" } },
+            candidates: { user: { ...result, text: "Synthetic promotion" }, project: null },
           },
         });
         const promotionId = M.MemoryId.make(
