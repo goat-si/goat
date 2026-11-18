@@ -36,6 +36,7 @@ import {
   driver,
   layerTest,
   seedParentWithTerminalTask,
+  seedBoundedDeliveryHistory,
 } from "./DelegatedCompletionDelivery.testkit.ts";
 import * as ThreadCommandExecutor from "./ThreadCommandExecutor.ts";
 
@@ -1242,46 +1243,7 @@ it.layer(Layer.merge(layerTest, ProviderContinuationRequests.layer))(
         const sink = yield* EventSink.EventSinkV2;
         const requests = yield* ProviderContinuationRequests.ProviderContinuationRequests;
         const now = yield* DateTime.now;
-        const threadId = ThreadId.make("thread:bounded-delivery-recovery");
-        const runId = RunId.make("run:bounded-delivery-recovery");
-        const taskId = NodeId.make("task:bounded-delivery-recovery");
-        yield* seedParentWithTerminalTask({
-          threadId,
-          runId,
-          taskId,
-          projectId: ProjectId.make("project:bounded-delivery-recovery"),
-          rootNodeId: NodeId.make("node:bounded-delivery-recovery"),
-          deliveryState: "claimed",
-          deliveryTaskIds: [taskId],
-          completionWake: "always",
-          now,
-        });
-        for (const suffix of ["first", "second"]) {
-          yield* sink.write({
-            events: [
-              {
-                id: EventId.make(`event:bounded-delivery-history:${suffix}`),
-                type: "message.updated",
-                threadId,
-                occurredAt: now,
-                payload: {
-                  id: MessageId.make(`message:bounded-delivery-history:${suffix}`),
-                  threadId,
-                  runId: null,
-                  nodeId: null,
-                  createdBy: "user",
-                  creationSource: "web",
-                  role: "user",
-                  text: "Unrelated historical input",
-                  attachments: [],
-                  streaming: false,
-                  createdAt: now,
-                  updatedAt: now,
-                },
-              },
-            ],
-          });
-        }
+        const runId = yield* seedBoundedDeliveryHistory(sink, now);
         const statements: string[] = [];
         const tracer = Tracer.make({
           span(options) {
