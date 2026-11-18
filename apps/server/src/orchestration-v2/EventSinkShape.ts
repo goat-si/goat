@@ -206,7 +206,7 @@ export interface EventSinkV2Shape extends EventSinkBatch.Shape {
     readonly threadId?: ThreadId;
     readonly afterSequence?: number;
     readonly eventType?: OrchestrationV2DomainEvent["type"];
-    /** Bound subscribers that can resume from the last delivered sequence after overflow. */
+    /** Bound RPC subscribers; internal workers must not drop their subscription under load. */
     readonly bounded?: boolean;
     /** Worker-only: runs after subscription and high-water acquisition, before replay. */
     readonly onSubscribed?: Effect.Effect<void>;

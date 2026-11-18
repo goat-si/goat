@@ -1,18 +1,11 @@
 import { assert, it } from "@effect/vitest";
 import { CommandId, EventId, MessageId, RunAttemptId } from "@goat/contracts";
 import * as DateTime from "effect/DateTime";
-import * as Deferred from "effect/Deferred";
 import * as Effect from "effect/Effect";
-import * as Logger from "effect/Logger";
-import * as TestClock from "effect/testing/TestClock";
 import * as Stream from "effect/Stream";
 import * as EffectWorker from "./EffectWorker.ts";
 import * as EventSink from "./EventSink.ts";
 import * as Orchestrator from "./Orchestrator.ts";
-import * as ProjectionStore from "./ProjectionStore.ts";
-import * as ThreadCommandExecutor from "./ThreadCommandExecutor.ts";
-import { runDeferredSteeringReactor } from "./goat/DeferredSteering.ts";
-import { LIVE_STREAM_MAX_ITEMS } from "./LiveStreamBudget.ts";
 import { nextTurnSelectionHarness, runSelection } from "./testkit/SteeringHarness.ts";
 
 it.effect.each([
@@ -350,95 +343,6 @@ it.effect.each(["completed", "interrupted", "replaced"] as const)(
               ["first", "Steer only the setup attempt"],
             );
           }
-        }).pipe(Effect.provide(layer));
-      }),
-    ),
-);
-
-it.effect(
-  "catches up from its last handled event when a stalled deferred-steer reactor overflows",
-  () =>
-    Effect.scoped(
-      Effect.gen(function* () {
-        const { layer, startFirstTurn } =
-          yield* nextTurnSelectionHarness("deferred-steer-overflow");
-        yield* Effect.gen(function* () {
-          const sink = yield* EventSink.EventSinkV2;
-          const projections = yield* ProjectionStore.ProjectionStoreV2;
-          const orchestrator = yield* Orchestrator.OrchestratorV2;
-          const locks = yield* ThreadCommandExecutor.ThreadCommandExecutor;
-          const threadId = yield* startFirstTurn;
-          const {
-            providerTurns: [turn],
-          } = yield* orchestrator.getThreadProjection(threadId);
-          if (turn === undefined) return yield* Effect.die("Missing provider turn");
-
-          const stalled = yield* Deferred.make<void>();
-          const release = yield* Deferred.make<void>();
-          const caughtUp = yield* Deferred.make<void>();
-          const overflow = yield* Deferred.make<void>();
-          const logger = Logger.make(({ message }) => {
-            if (JSON.stringify(message).includes("orchestration live event buffer is full"))
-              Deferred.doneUnsafe(overflow, Effect.void);
-          });
-          const cursors: number[] = [];
-          let bounded: boolean | undefined;
-          let handled = 0;
-          const initialCursor = yield* sink.latestSequence();
-          yield* runDeferredSteeringReactor(
-            initialCursor,
-            {
-              stream: (input) => {
-                cursors.push(input?.afterSequence ?? 0);
-                bounded = input?.bounded;
-                return sink.stream(input);
-              },
-            },
-            {
-              locks,
-              projections: {
-                getThreadRecords: (...args) =>
-                  projections.getThreadRecords(...args).pipe(
-                    Effect.tap(() => {
-                      handled++;
-                      if (handled === 1)
-                        return Deferred.succeed(stalled, undefined).pipe(
-                          Effect.andThen(Deferred.await(release)),
-                        );
-                      return Deferred.succeed(caughtUp, undefined);
-                    }),
-                  ),
-              },
-              dispatch: () => Effect.die("The fixture has no queued steers"),
-            },
-          ).pipe(
-            Effect.provide(Logger.layer([logger], { mergeWithExisting: false })),
-            Effect.forkScoped,
-          );
-          const now = yield* DateTime.now;
-          const event = (id: string, status: "running" | "pending") => ({
-            id: EventId.make(id),
-            type: "provider-turn.updated" as const,
-            threadId,
-            occurredAt: now,
-            payload: { ...turn, status },
-          });
-          const [first] = yield* sink.write({ events: [event("event:before-stall", "running")] });
-          yield* Deferred.await(stalled);
-          assert.isTrue(bounded, "The stalled reactor must use the live event budget");
-          const burst = yield* sink.write({
-            events: Array.from({ length: LIVE_STREAM_MAX_ITEMS + 1 }, (_, index) =>
-              event(`event:burst:${index}`, "pending"),
-            ),
-          });
-          assert.lengthOf(burst, LIVE_STREAM_MAX_ITEMS + 1);
-          yield* Deferred.await(overflow);
-          yield* sink.write({ events: [event("event:catch-up", "running")] });
-          yield* Deferred.succeed(release, undefined);
-          yield* TestClock.adjust("1 second");
-          yield* Deferred.await(caughtUp);
-          assert.deepEqual(cursors, [initialCursor, first?.sequence]);
-          assert.equal(handled, 2);
         }).pipe(Effect.provide(layer));
       }),
     ),
