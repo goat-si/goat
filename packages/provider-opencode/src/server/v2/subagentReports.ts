@@ -64,7 +64,11 @@ export function makeSubagentReports() {
       const lastMatch = Math.max(0, ...matches.map(({ call }) => call.run ?? 0));
       const firstRun =
         child.fresh && child.turns <= 1
-          ? open.filter((call) => call.run === (child.turns === 0 ? undefined : 1))
+          ? child.turns === 0
+            ? open.length === 1 && open[0]?.run === undefined
+              ? open
+              : []
+            : open.filter((call) => call.run === 1)
           : [];
       const state = stringField(payload.metadata, "state");
       const outcome =
@@ -73,7 +77,7 @@ export function makeSubagentReports() {
             ? "interrupted"
             : state
           : undefined;
-      // A freshly created session's first run is uniquely identified by its child ID.
+      // A new child ID identifies the first execution only when the call binding is unambiguous.
       const reportCalls =
         outcome !== undefined &&
         messageId === undefined &&

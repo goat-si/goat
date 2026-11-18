@@ -1039,13 +1039,14 @@ export const make = Effect.fn("OpenCode2Adapter.make")(function* (instanceId: Pr
         updatedAt: now,
       };
       const previous = threads.get(childId);
+      const prior = previous?.subagent;
       // A call to a running child steers that same run.
-      if (previous?.active !== undefined) call.run = previous.subagent?.turns;
+      if (previous?.active !== undefined) call.run = prior?.turns;
       const subagent = {
         call,
         appThread,
-        turns: previous?.subagent?.turns ?? 0,
-        fresh: previous?.subagent?.fresh ?? info !== undefined,
+        turns: prior?.turns ?? 0,
+        fresh: prior === undefined ? info !== undefined : prior.fresh && prior.turns > 0,
         prompt: call.prompt,
         queued: undefined,
       };
@@ -1108,7 +1109,9 @@ export const make = Effect.fn("OpenCode2Adapter.make")(function* (instanceId: Pr
       const subagent = child.subagent;
       if (subagent === undefined || child.active !== undefined) return;
       subagent.turns += 1;
-      for (const call of callsAttachedTo(child)) call.run ??= subagent.turns;
+      const unbound = callsAttachedTo(child).filter((call) => call.run === undefined);
+      const caller = unbound.length === 1 ? unbound[0] : undefined;
+      if (caller !== undefined) caller.run = subagent.turns;
       const startedAt = yield* DateTime.now;
       const nativeTurnId = `${child.sessionId}:turn:${subagent.turns}`;
       const rootNodeId = idAllocator.derive.nodeFromProviderItem({

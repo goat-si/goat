@@ -1014,6 +1014,50 @@ it.layer(McpProviderSessions.layer)("OpenCode2 adapter", (it) => {
     event("session.execution.started", { sessionID: CHILD }),
   ];
 
+  it.effect.each(["before-start", "after-start", "first-call-failed"] as const)(
+    "does not settle an unbound call from an ambiguous child report, order=%s",
+    (order) =>
+      Effect.gen(function* () {
+        const firstFailed = order === "first-call-failed";
+        const { runtime, thread } = yield* resumed([
+          ...backgroundLaunch(CHILD),
+          ...(!firstFailed ? [returnedRunning("call-background")] : []),
+          ...callAgain({ background: true }),
+          ...(order === "after-start"
+            ? [event("session.execution.started", { sessionID: CHILD })]
+            : []),
+          ...(firstFailed
+            ? [
+                event(
+                  "session.tool.failed",
+                  {
+                    sessionID: SESSION,
+                    assistantMessageID: "msg_assistant",
+                    id: "call-background",
+                    error: { type: "unknown", message: "The launch failed" },
+                    executed: false,
+                  },
+                  undefined,
+                  2,
+                ),
+              ]
+            : []),
+          childReport("msg_unbound_calls", "An ambiguous result"),
+          event("session.execution.succeeded", { sessionID: SESSION }),
+        ]);
+        const watch = yield* watchCalls(runtime, thread);
+        yield* runtime.startTurn(withLineage(thread));
+        yield* watch.until(() => watch.state.terminal === true);
+        assert.deepEqual(Object.fromEntries(watch.calls), {
+          Sleep: firstFailed
+            ? { status: "failed", result: "The launch failed" }
+            : { status: "running", result: null },
+          Again: { status: "running", result: null },
+        });
+        assert.lengthOf(watch.state.roster ?? [], firstFailed ? 1 : 2);
+      }).pipe(Effect.scoped),
+  );
+
   it.effect("settles every call that joined a running subagent with its one report", () =>
     Effect.gen(function* () {
       const { runtime, thread } = yield* resumed([
