@@ -4,6 +4,7 @@ import { makeHeadWatchers } from "./headWatchers.ts";
 import * as Cause from "effect/Cause";
 import { sshHostsRefusal } from "@goat/ssh/hostAccess";
 import * as Context from "effect/Context";
+import * as Deferred from "effect/Deferred";
 import * as Duration from "effect/Duration";
 import * as Effect from "effect/Effect";
 import * as Exit from "effect/Exit";
@@ -471,7 +472,7 @@ export const make = Effect.gen(function* () {
     );
   });
 
-  const refreshStatus: VcsStatusBroadcaster["Service"]["refreshStatus"] = Effect.fn(
+  const runStatusRefresh: VcsStatusBroadcaster["Service"]["refreshStatus"] = Effect.fn(
     "VcsStatusBroadcaster.refreshStatus",
   )(function* (rawCwd, options) {
     const cwd = yield* withFileSystem(normalizeCwd(rawCwd));
@@ -499,6 +500,50 @@ export const make = Effect.gen(function* () {
       }),
     );
   });
+
+  type RefreshReply = Deferred.Deferred<VcsStatusResult, GitManagerServiceError>;
+  // Raw paths can select different auto-pull policies. Null means running with no follow-up.
+  const queuedRefreshes = new Map<string, RefreshReply | null>();
+  const drainStatusRefreshes = Effect.fn("VcsStatusBroadcaster.drainStatusRefreshes")(
+    (rawCwd: string, first: RefreshReply) =>
+      Effect.uninterruptibleMask((restore) =>
+        Effect.gen(function* () {
+          let current: RefreshReply | null = first;
+          while (current !== null) {
+            const result = yield* restore(runStatusRefresh(rawCwd)).pipe(Effect.exit);
+            const followUp = queuedRefreshes.get(rawCwd) ?? null;
+            const interrupted = Exit.hasInterrupts(result);
+            if (interrupted || followUp === null) queuedRefreshes.delete(rawCwd);
+            else queuedRefreshes.set(rawCwd, null);
+            Deferred.doneUnsafe(current, result);
+            if (interrupted && followUp !== null) Deferred.doneUnsafe(followUp, result);
+            current = interrupted ? null : followUp;
+          }
+        }),
+      ),
+  );
+
+  const refreshStatus: VcsStatusBroadcaster["Service"]["refreshStatus"] = (rawCwd, options) => {
+    if (options?.localOnly) return runStatusRefresh(rawCwd, options);
+    return Effect.uninterruptibleMask((restore) =>
+      Effect.gen(function* () {
+        if (broadcasterScope.state._tag === "Closed") return yield* restore(Effect.interrupt);
+        const requested = yield* Deferred.make<VcsStatusResult, GitManagerServiceError>();
+        const queued = queuedRefreshes.get(rawCwd);
+        if (queued !== undefined) {
+          const followUp = queued ?? requested;
+          queuedRefreshes.set(rawCwd, followUp);
+          return yield* restore(Deferred.await(followUp));
+        }
+        queuedRefreshes.set(rawCwd, null);
+        // The worker belongs to the broadcaster so a caller can cancel its own wait.
+        yield* drainStatusRefreshes(rawCwd, requested).pipe(
+          Effect.forkIn(broadcasterScope, { startImmediately: true, uninterruptible: false }),
+        );
+        return yield* restore(Deferred.await(requested));
+      }),
+    );
+  };
 
   const refreshPullRequestStatus: VcsStatusBroadcaster["Service"]["refreshPullRequestStatus"] =
     Effect.fn("VcsStatusBroadcaster.refreshPullRequestStatus")(function* (rawCwd) {
