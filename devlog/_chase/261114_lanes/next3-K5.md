@@ -592,10 +592,10 @@ Lock hold time, for the fix-delta reviewer (open question): a holder holds the p
 
 ### Limits sentences for #3700 (the coordinator owns that body)
 
-- (g) On macOS, closing a Claude session now also stops background helpers the session started outside its process group, such as a dev server, a Gradle or adb daemon, or a compiler cache, as Linux under the systemd agent scope already does; a build in another session that was using one of those helpers fails and has to be run again, and the helper starts again on next use.
+- (g) On macOS, and on Linux without a systemd user manager, closing a Claude session now also stops background helpers the session started outside its process group, such as a dev server, a Gradle or adb daemon, or a compiler cache, as Linux under the systemd agent scope already does; a build in another session that was using one of those helpers fails and has to be run again, and the helper starts again on next use.
 - P3-5: Provider process records written under another hostname or state folder, or by a newer version, are never removed; each unclean exit of such a server leaves a few hundred bytes that every start reads.
 - P3-8: A Claude start that never finishes booting can show "working" for up to 13 minutes before the start-up message (two attempts of 5 minutes boot plus 90 seconds MCP registration), as upstream.
-- P3-6: When many Claude sessions close at once on macOS, each starts its own ps for the refresh before close and another after the CLI exits (about 30 to 50 ms CPU each at 3,000 processes); they are not shared.
+- P3-6: When many Claude sessions close at once on macOS, and on Linux without a systemd user manager, each starts its own ps for the refresh before close and another after the CLI exits (about 30 to 50 ms CPU each at 3,000 processes); they are not shared.
 - P3-1: The launch gate that keeps a Claude CLI from running before its record exists (ClaudeProcessSpawn.ts fd 4) has no test that fails without it; deleting the gate line leaves the tests green, because register runs synchronously right after spawn.
 - Fork delta: reaping a dead server's Claude CLI kills its process group when the CLI still leads the group it was recorded with (upstream kills the pid only).
 
@@ -674,3 +674,20 @@ Load-time check: ClaudeQueryRunnerErrors.ts imports only effect/Cause and effect
 
 Not merged into the lane (no ruling asks for it). Read-only check: git merge-tree --write-tree 50e90aaac3 c31dfe1c41 exits 0, tree 2b733e4d53, no conflict; the only file both sides change is oxlint-plugin-goat/code-budgets.json (different entries, auto-merged). CI read by the coordinator on 50e90aaac3: quick 44210428100 SUCCESS, server 44210433010 in progress at 01:40 UTC.
 
+
+## Merged; K5 nits follow-up
+
+Coordinator 2026-11-18 01:50 UTC, section I, verbatim:
+
+> I. K5: MERGED BY ME
+> The fix-delta review reported APPROVE WITH NITS at 50e90aaac349a2fe5f23124b3429327060d3b9d7, no P0 to P2, three P3 (saved whole: /Users/jun/handoff-in/chase/next3-K5-fix-review-50e90aaa.md, 11,853 bytes; three decisions recorded as accepted, and the nine outcomes of the first review). Its runs: the new case fails against the pre-fix file; the probe is 0.69 ms a sample and 0.1 MB after about 110,000 jobs (12.82 ms and 17.9 MB before); the group kill signals nothing the dead server did not start; each mutation fails its case; five files pass under GOAT_TEST_TMP_GUARD=fail.
+> READ BY ME: the report whole; goat-ci quick 44210428100 and server 44210433010 both SUCCESS on 50e90aaac3 (goat-ci-result success, no failed job; read 01:48 UTC); ClaudeAgentSdkQueryRunner.test.ts against 259883c788: 181 added, 0 removed, the one import statement (used at :717, an appended case), the six initializationResult mock lines of R1 exactly, the rest appended cases. NOT RUN by me: any test.
+> MERGED at 2026-11-18 01:49 UTC: merge commit ac238fcce3 (parents c31dfe1c41 and 50e90aaac3; tree 2b733e4d53 = git merge-tree, the same tree the K10 reviewer computed; no conflict), plain push. #3700's body updated. The merged tree has had no CI yet: #3700's pull request run on ac238fcce3 is its first, and I read it at my next wake.
+> RULED, K5's three P3 as ONE small follow-up (K5 lane, branch chase/t3-261114-next3-k5-nits cut from ac238fcce3, a commit per item, no fresh review: I read it and the final integration review covers it):
+>  - P3-1: the one case the report gives (refresh with A and B, a refresh whose read fails, stop with B reparented: killed equals [200]); the commit message shows it failing under "a failed read is an empty table".
+>  - P3-2: the Linux case's cleanup uses signalProcessGroup(leader.pid ?? 0, "SIGKILL") (it refuses pids of 1 or less), as ClaudeAgentSdkQueryRunner.test.ts:772 does. As written, a failed spawn would signal the test runner's own group.
+>  - P3-3: the existing warning (providerProcesses.ts:77-79) with its cause before the empty list at :134-136, and for the failed removals at :155 and :186.
+>  - On the records branch now, no code: the P3-6 and (g) Limits sentences say "on macOS, and on Linux without a systemd user manager".
+>  Then READY with the gate on the pushed head and every changed apps/server test file once under GOAT_TEST_TMP_GUARD=fail; quick and server by me (a Linux-only case changes). It holds no other lane.
+
+Done first, records only: the (g) and P3-6 Limits sentences above now say "on macOS, and on Linux without a systemd user manager". The fix-delta report file is not on pen-mac-studio and not on the records branch; the nits are worked from the ruling's wording.
