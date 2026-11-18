@@ -22,6 +22,7 @@ import {
 import { Atom } from "effect/reactivity";
 
 import { deadlineStore } from "./clock.ts";
+import { providerWorkspaceRefreshKey } from "./providerWorkspaceRefreshKey.ts";
 import { type AtomCommand, runAtomCommand } from "./state/runtime.ts";
 
 export type ProviderSkillSourceKind =
@@ -286,7 +287,7 @@ const WORKSPACE_SNAPSHOT_RETRY_COOLDOWN_MS = 10_000;
 const WORKSPACE_SNAPSHOT_MAX_ATTEMPTS = 3;
 
 export interface ProviderWorkspaceSnapshotRefreshState {
-  readonly catalogDigest: string | undefined;
+  readonly refreshKey: string | undefined;
   /**
    * When the last scan was requested. A request inside the TTL is not
    * repeated, so a client clock ahead of the server's cannot loop rescans.
@@ -302,7 +303,7 @@ export interface ProviderWorkspaceSnapshotRefreshState {
 }
 
 const initialProviderWorkspaceSnapshotRefreshState: ProviderWorkspaceSnapshotRefreshState = {
-  catalogDigest: undefined,
+  refreshKey: undefined,
   requestedAt: null,
   retryNotBefore: null,
   failedAttempts: 0,
@@ -317,6 +318,7 @@ const initialProviderWorkspaceSnapshotRefreshState: ProviderWorkspaceSnapshotRef
  */
 function planProviderWorkspaceSnapshotRefresh(
   previous: ProviderWorkspaceSnapshotRefreshState,
+  refreshKey: string | undefined,
   provider: ServerProvider | null | undefined,
   cwd: string,
   now: number,
@@ -328,13 +330,12 @@ function planProviderWorkspaceSnapshotRefresh(
   const hasSnapshot = hasCompleteProviderWorkspaceSnapshot(provider, cwd);
   const snapshot = provider && resolveProviderWorkspaceSnapshot(provider, cwd);
   const pending = Boolean(snapshot && isProviderWorkspaceSnapshotPending(snapshot));
-  const catalogDigest = provider?.catalogDigest;
-  const digestChanged = previous.catalogDigest !== catalogDigest;
+  const keyChanged = previous.refreshKey !== refreshKey;
   const lost = previous.hadSnapshot && !hasSnapshot;
-  const resetBudget = lost || digestChanged;
-  // A digest change can release an exhausted scan without duplicating an in-flight request.
+  const resetBudget = lost || keyChanged;
+  // A catalog or installation change can release an exhausted scan without duplicating an in-flight request.
   const requestedAt =
-    lost || (digestChanged && previous.failedAttempts >= WORKSPACE_SNAPSHOT_MAX_ATTEMPTS)
+    lost || (keyChanged && previous.failedAttempts >= WORKSPACE_SNAPSHOT_MAX_ATTEMPTS)
       ? null
       : previous.requestedAt;
   const retryNotBefore =
@@ -342,7 +343,7 @@ function planProviderWorkspaceSnapshotRefresh(
       ? null
       : previous.retryNotBefore;
   const state = {
-    catalogDigest,
+    refreshKey,
     requestedAt,
     retryNotBefore,
     failedAttempts:
@@ -364,14 +365,15 @@ function planProviderWorkspaceSnapshotRefresh(
   return {
     state,
     refresh: false,
-    recheckAt: !current && (pending || catalogDigest !== undefined) ? retryNotBefore : null,
+    recheckAt:
+      !current && (pending || provider?.catalogDigest !== undefined) ? retryNotBefore : null,
   };
 }
 
 /**
  * A scan that failed, or finished without a complete snapshot, cools down
  * before retrying. After the last attempt the request marker stays, so only
- * the TTL, a snapshot loss, or a digest change lets the next scan through.
+ * the TTL, a snapshot loss, or a refresh key change lets the next scan through.
  */
 function failProviderWorkspaceSnapshotRefresh(
   state: ProviderWorkspaceSnapshotRefreshState,
@@ -452,16 +454,16 @@ export function createProviderWorkspaceSnapshotRefreshAtomFamily(input: {
     const statusAtom = Atom.make((get) =>
       resolveWorkspaceSnapshotStatus(findProvider(get(input.providers(environmentId))), cwd),
     ).pipe(Atom.withLabel(`provider-workspace-snapshot-status:${key}`));
-    const digestAtom = Atom.make(
-      (get) => findProvider(get(input.providers(environmentId)))?.catalogDigest,
-    ).pipe(Atom.withLabel(`provider-workspace-snapshot-digest:${key}`));
+    const refreshKeyAtom = Atom.make((get) =>
+      providerWorkspaceRefreshKey(findProvider(get(input.providers(environmentId)))),
+    ).pipe(Atom.withLabel(`provider-workspace-snapshot-key:${key}`));
     type Update = (
       state: ProviderWorkspaceSnapshotRefreshState,
     ) => ProviderWorkspaceSnapshotRefreshState;
     const refreshAtom: Atom.Writable<ProviderWorkspaceSnapshotRefreshState, Update> = Atom.writable(
       (get): ProviderWorkspaceSnapshotRefreshState => {
         get(statusAtom);
-        get(digestAtom);
+        const refreshKey = get(refreshKeyAtom);
         // `once`: unrelated provider updates must not trigger a check.
         const provider = findProvider(get.once(input.providers(environmentId)));
         // @effect-diagnostics-next-line globalDate:off
@@ -469,6 +471,7 @@ export function createProviderWorkspaceSnapshotRefreshAtomFamily(input: {
         const previous = get.self<ProviderWorkspaceSnapshotRefreshState>();
         const plan = planProviderWorkspaceSnapshotRefresh(
           previous._tag === "Some" ? previous.value : initialProviderWorkspaceSnapshotRefreshState,
+          refreshKey,
           provider,
           cwd,
           now,

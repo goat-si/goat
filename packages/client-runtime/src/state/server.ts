@@ -1,3 +1,4 @@
+import { providerWorkspaceRefreshKey } from "../providerWorkspaceRefreshKey.ts";
 import { processResourceHistoryOptions } from "./serverResourceHistory.ts";
 import {
   type EnvironmentId,
@@ -255,17 +256,13 @@ type ServerProviderEntry = ServerConfig["providers"][number];
 function snapshotBasis(provider: ServerProviderEntry | undefined, reply?: ServerProviderEntry) {
   if (!provider) return undefined;
   // A cwd reply carries the observed installation but omits the machine models.
-  const installation = reply ?? provider;
-  const catalogDigest = reply?.catalogDigest ?? provider.catalogDigest;
   return {
     enabled: provider.enabled,
-    installed: installation.installed,
-    version: installation.version,
-    installedVersion: installation.installedVersion,
+    refreshKey: providerWorkspaceRefreshKey(provider, reply),
     models: provider.models,
-    ...(catalogDigest === undefined
+    ...(reply?.catalogDigest === undefined && provider.catalogDigest === undefined
       ? { slashCommands: provider.slashCommands, skills: provider.skills }
-      : { catalogDigest }),
+      : {}),
   };
 }
 

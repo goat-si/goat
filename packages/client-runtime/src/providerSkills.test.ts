@@ -440,6 +440,30 @@ describe("provider workspace snapshot refresh atom", () => {
     }
   });
 
+  it("restarts an exhausted cwd refresh after an installed CLI update with the same digest", async () => {
+    vi.useFakeTimers({ now: Date.parse("2026-01-01T00:01:01.000Z") });
+    const initial = {
+      ...provider,
+      installedVersion: "1.0.0",
+      catalogDigest: "A",
+      workspaceSnapshots: [],
+    };
+    const { registry, providersAtom, run, unmount } = setup([initial]);
+    try {
+      await vi.advanceTimersByTimeAsync(30_000);
+      expect(run).toHaveBeenCalledTimes(3);
+
+      registry.set(providersAtom, [{ ...initial, installedVersion: "1.1.0" }]);
+      await vi.advanceTimersByTimeAsync(0);
+      expect(run).toHaveBeenCalledTimes(4);
+      await vi.advanceTimersByTimeAsync(30_000);
+      expect(run).toHaveBeenCalledTimes(6);
+    } finally {
+      unmount();
+      registry.dispose();
+    }
+  });
+
   it("keeps the TTL guard for a newly scanned catalog when the client clock is ahead", async () => {
     vi.useFakeTimers({ now: Date.parse("2026-01-01T01:00:00.000Z") });
     const { registry, atom, run, unmount } = setup(withSnapshot("2026-01-01T00:00:00.000Z"), [
