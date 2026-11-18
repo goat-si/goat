@@ -41,7 +41,6 @@ export const makeOriginCatchup = ({
       FROM memory_origins o JOIN memory_identity_ledger i ON i.space=o.space AND i.memory_id=o.memory_id
       WHERE o.space=${space} AND o.origin_sequence>0 AND o.origin_sequence>${after}
         AND NOT EXISTS (SELECT 1 FROM memory_tombstones t WHERE t.space=o.space AND t.memory_id=o.memory_id)
-        AND NOT EXISTS (SELECT 1 FROM memory_pending_forget_intents f WHERE f.space=o.space AND f.memory_id=o.memory_id)
       ORDER BY o.origin_sequence LIMIT ${M.MEMORY_ORIGIN_UPDATE_MAX + 1}`,
     );
     let bytes = 0;
