@@ -342,7 +342,7 @@ export const runDeferredSteeringReactor = <E, R>(
     afterSequence,
     (afterSequence) =>
       eventSink
-        .stream({ afterSequence, eventType: "provider-turn.updated" })
+        .stream({ afterSequence, eventType: "provider-turn.updated", bounded: true })
         .pipe(
           Stream.filter(
             ({ event }) =>
