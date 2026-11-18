@@ -170,3 +170,40 @@ it.effect.each(["local", "inbound", "checkpoint"] as const)(
       ).toEqual([{ forget_generation: 1 }]);
     }).pipe(Effect.provide(Fixture.layer)),
 );
+
+it.effect("keeps an accepting suggestion when the pending queue reaches capacity", () =>
+  Effect.gen(function* () {
+    const service = yield* Service.MemoryService;
+    const sql = yield* SqlClient.SqlClient;
+    const store = yield* Store.MemoryStore;
+    const suggestions = makeMemorySaveSuggestions({
+      sql,
+      store,
+      requireSharing: () => Effect.void,
+      stableUuid: Service.memoryStableUuid,
+    });
+    const candidate = (n: number) => ({
+      input: { ...Fixture.upsert(n), memoryId: M.MemoryId.make(Fixture.id(n)) },
+      thread: origin,
+      knownRevisions: [],
+      lineageComplete: true,
+      forgetGeneration: 0,
+      reason: "capacity_exceeded" as const,
+    });
+    const first = candidate(500);
+    yield* suggestions.onRefusedSave(first, Effect.void);
+    const target = { memorySpaceId: space, suggestionId: first.input.memoryId };
+    expect(yield* service.suggestions.accept(target, Effect.void)).toEqual({ status: "pending" });
+    for (let offset = 1; offset <= M.MEMORY_SAVE_SUGGESTION_MAX_ITEMS; offset++) {
+      yield* suggestions.onRefusedSave(candidate(500 + offset), Effect.void);
+    }
+    const rows = yield* suggestions.listMetadata({ memorySpaceId: space }, Effect.void);
+    expect(rows).toHaveLength(M.MEMORY_SAVE_SUGGESTION_MAX_ITEMS);
+    expect(rows).toContainEqual(
+      expect.objectContaining({ suggestionId: target.suggestionId, state: "accepting" }),
+    );
+    expect(rows).not.toContainEqual(
+      expect.objectContaining({ suggestionId: candidate(501).input.memoryId }),
+    );
+  }).pipe(Effect.provide(Fixture.layer)),
+);
