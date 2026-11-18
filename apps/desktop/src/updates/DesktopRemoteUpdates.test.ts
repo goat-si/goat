@@ -512,7 +512,7 @@ describe("DesktopRemoteUpdates", () => {
 
         const backgroundCheck = yield* updates.check("poll").pipe(Effect.forkChild);
         yield* Deferred.await(backgroundCheckStarted);
-        assert.equal((yield* updates.getState).status, "checking");
+        assert.isTrue(yield* updates.isActionActive);
 
         yield* Queue.offer(commits, {
           version: 1,
