@@ -5,7 +5,7 @@ import type * as GitVcsDriver from "../vcs/GitVcsDriver.ts";
 
 /**
  * Brings an existing local PR branch, just checked out in a new worktree, to the pull request's
- * head when a fast-forward is possible. True when the checkout ends on the head; never fails.
+ * head when a fast-forward is possible. Returns the verified target commit or null.
  */
 export const makeRefreshNewPullRequestWorktree =
   <E>(deps: {
@@ -15,7 +15,7 @@ export const makeRefreshNewPullRequestWorktree =
     readonly headSha: string | undefined;
     readonly localBranch: string;
   }) =>
-  (cwd: string): Effect.Effect<boolean> => {
+  (cwd: string): Effect.Effect<string | null> => {
     const { gitCore, headSha } = deps;
     return Effect.gen(function* () {
       yield* deps.configureUpstream(cwd);
@@ -46,13 +46,13 @@ export const makeRefreshNewPullRequestWorktree =
       );
       return yield* gitCore
         .refreshCheckedOutBranch({ cwd, targetCommit: target.commitSha })
-        .pipe(Effect.map((result) => result.onTarget));
+        .pipe(Effect.map((result) => (result.onTarget ? target.commitSha : null)));
     }).pipe(
       Effect.catch((error) =>
         Effect.logWarning("GitManager.preparePullRequestThread existing branch refresh failed", {
           localBranch: deps.localBranch,
           cause: error,
-        }).pipe(Effect.as(false)),
+        }).pipe(Effect.as(null)),
       ),
     );
   };

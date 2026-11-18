@@ -2678,6 +2678,8 @@ export const make = Effect.gen(function* () {
         });
       }
 
+      const atHead = (path: string, head: string) =>
+        pullRequestWorktree.isAt(input.cwd, path, localPullRequestBranch, head);
       const createPullRequestWorktree = (
         onWorktreeClaimed?: (path: string) => Effect.Effect<void>,
       ) =>
@@ -2704,16 +2706,21 @@ export const make = Effect.gen(function* () {
           headSha: pullRequestSummary.headSha,
           localBranch: localPullRequestBranch,
         });
-        let isOnPullRequestHead = false;
+        const target = { head: null as string | null };
         const worktree = yield* createPullRequestWorktree((cwd) =>
           refresh(cwd).pipe(
-            Effect.map((onTarget) => {
-              isOnPullRequestHead = onTarget;
+            Effect.map((head) => {
+              target.head = head;
             }),
           ),
         );
-        yield* runPullRequestSetup(input, worktree.worktree.path);
-        yield* pullRequestWorktree.finish(input.cwd, worktree.worktree.path);
+        const worktreePath = worktree.worktree.path;
+        const expected = target.head ?? worktree.pinnedHead;
+        const beforeSetup = yield* atHead(worktreePath, expected);
+        if (beforeSetup) yield* runPullRequestSetup(input, worktreePath);
+        const isOnPullRequestHead =
+          target.head !== null && beforeSetup && (yield* atHead(worktreePath, target.head));
+        yield* pullRequestWorktree.finish(input.cwd, worktreePath);
         return {
           pullRequest,
           branch: worktree.worktree.refName,
@@ -2751,16 +2758,16 @@ export const make = Effect.gen(function* () {
       }
 
       const worktree = yield* createPullRequestWorktree();
-      yield* ensureExistingWorktreeUpstream(worktree.worktree.path);
-      yield* runPullRequestSetup(input, worktree.worktree.path);
-      yield* pullRequestWorktree.finish(input.cwd, worktree.worktree.path);
+      const worktreePath = worktree.worktree.path;
+      const beforeSetup = yield* atHead(worktreePath, worktree.pinnedHead);
+      if (beforeSetup) {
+        yield* ensureExistingWorktreeUpstream(worktreePath);
+        yield* runPullRequestSetup(input, worktreePath);
+      }
+      const isOnPullRequestHead = beforeSetup && (yield* atHead(worktreePath, worktree.pinnedHead));
+      yield* pullRequestWorktree.finish(input.cwd, worktreePath);
 
-      return {
-        pullRequest,
-        branch: worktree.worktree.refName,
-        worktreePath: worktree.worktree.path,
-        isOnPullRequestHead: true,
-      };
+      return { pullRequest, branch: worktree.worktree.refName, worktreePath, isOnPullRequestHead };
     }).pipe(
       Effect.tap((result) =>
         checkedOutPullRequest.write(input.cwd, result.branch, result.pullRequest.url),

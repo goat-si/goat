@@ -33,8 +33,11 @@ export const makePullRequestWorktreeLifecycle = Effect.fn(
     });
     if (head.stdout.trim() !== `refs/heads/${branch}`)
       return yield* failure(cwd, `The worktree at ${path} no longer uses branch ${branch}.`);
+    return (yield* git.resolveCommit({ cwd: path, revision: "HEAD" })).commitSha;
   });
   return {
+    isAt: (cwd: string, path: string, branch: string, expectedHead: string) =>
+      verify(cwd, path, branch).pipe(Effect.map((head) => head === expectedHead)),
     verifyReusable: Effect.fn("GitManager.verifyReusablePullRequestWorktree")(function* (
       cwd: string,
       path: string,
@@ -86,14 +89,18 @@ export const makePullRequestWorktreeLifecycle = Effect.fn(
                 progress: {
                   onWorktreeClaimed: (path) =>
                     verify(cwd, path, branch).pipe(
-                      Effect.andThen(options.onWorktreeClaimed?.(path) ?? Effect.void),
+                      Effect.flatMap((current) =>
+                        current === head.commitSha
+                          ? (options.onWorktreeClaimed?.(path) ?? Effect.void)
+                          : Effect.void,
+                      ),
                     ),
                 },
               }),
         },
       );
       yield* verify(cwd, created.worktree.path, branch);
-      return created;
+      return { ...created, pinnedHead: head.commitSha };
     }),
     finish: (cwd: string, path: string) =>
       pending
