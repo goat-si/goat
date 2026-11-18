@@ -75,8 +75,11 @@ export const make = Effect.fn("PenHubNodes.make")(function* (input: {
     // A Pen that is down says nothing about who left, but the setting off empties the list anyway.
     if (stored.value.penHubNodes && view.kind === "unavailable") return;
     const enabled = stored.value.penHubNodes && view.kind === "ready";
-    for (const [round, delay] of [undefined, ...RETRY_DELAYS].entries()) {
-      if (delay !== undefined) yield* Effect.sleep(delay);
+    // Looks again as long as something is unsettled, at most RETRY_DELAYS' last apart; a newer
+    // member list or setting ends this pass (switchMap) and starts a fresh one.
+    for (let round = 0; ; round++) {
+      if (round > 0)
+        yield* Effect.sleep(RETRY_DELAYS[Math.min(round, RETRY_DELAYS.length) - 1] ?? "10 minutes");
       const inspected = enabled
         ? yield* inspectAll(view, isCurrent)
         : { members: [], online: new Set<string>(), keep: new Set<string>(), unsettled: false };

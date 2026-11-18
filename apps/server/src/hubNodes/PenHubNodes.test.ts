@@ -2,6 +2,7 @@ import { describe, expect, it } from "@effect/vitest";
 import { EnvironmentId, ExecutionEnvironmentDescriptor, HubNodesError } from "@goat/contracts";
 import * as NodeSqliteClient from "@goat/shared/nodeSqliteClient";
 import type { PenMembershipView } from "@goat/ssh/penMembershipWatch";
+import * as Cause from "effect/Cause";
 import * as Deferred from "effect/Deferred";
 import * as Effect from "effect/Effect";
 import * as Fiber from "effect/Fiber";
@@ -377,9 +378,13 @@ const reconciler = (enabled = true) =>
     const show = (view: PenMembershipView) =>
       Effect.gen(function* () {
         const running = yield* pass(view).pipe(Effect.orDie, Effect.forkChild);
-        // Past every retry, so a pass that keeps looking (an unreadable alias) has finished too.
+        // Past the retries; a pass that keeps looking (an unreadable alias) is ended as a newer
+        // view would end it, and any other failure still fails the test.
         yield* TestClock.adjust("13 minutes");
-        yield* Fiber.join(running);
+        yield* Fiber.interrupt(running);
+        const exit = yield* Fiber.await(running);
+        if (exit._tag === "Failure" && !Cause.hasInterruptsOnly(exit.cause))
+          return yield* Effect.failCause(exit.cause);
       });
     return { ...f, show, pass, pinned, inspected, unreadable, settings };
   });
@@ -525,6 +530,22 @@ describe("PenHubNodes", () => {
         // No new member list or setting change arrives: the pass itself looks again.
         unreadable.delete(alias("a"));
         yield* TestClock.adjust("2 seconds");
+        yield* Fiber.join(running);
+        expect(yield* rows).toEqual([[`ssh:${alias("a")}`, "import", key("a")]]);
+      }),
+    ),
+  );
+
+  it.effect("an alias that can be read only after the last scheduled retry is still listed", () =>
+    reconcile(({ pinned, rows, pass, unreadable }) =>
+      Effect.gen(function* () {
+        pinned.set(alias("a"), key("a"));
+        unreadable.add(alias("a"));
+        const running = yield* pass(ready(["a", "a"])).pipe(Effect.orDie, Effect.forkChild);
+        yield* TestClock.adjust("13 minutes");
+        expect(yield* rows).toEqual([]);
+        unreadable.delete(alias("a"));
+        yield* TestClock.adjust("10 minutes");
         yield* Fiber.join(running);
         expect(yield* rows).toEqual([[`ssh:${alias("a")}`, "import", key("a")]]);
       }),
