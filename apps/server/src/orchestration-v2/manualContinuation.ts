@@ -9,21 +9,30 @@ export function unsentManualContinuationSource(
   if (sourceId === undefined) return undefined;
   const runs = new Map(projection.runs.map((source) => [source.id, source]));
   const acceptedAttempts = new Set(projection.providerTurns.map((turn) => turn.runAttemptId));
-  const acceptedRuns = new Set(
-    projection.attempts
-      .filter((attempt) => acceptedAttempts.has(attempt.id))
-      .map((attempt) => attempt.runId),
-  );
+  const acceptedOrdinalByRun = new Map<OrchestrationV2Run["id"], number>();
+  const steeringOrdinalByRun = new Map<OrchestrationV2Run["id"], number>();
+  for (const attempt of projection.attempts) {
+    if (acceptedAttempts.has(attempt.id))
+      acceptedOrdinalByRun.set(
+        attempt.runId,
+        Math.max(acceptedOrdinalByRun.get(attempt.runId) ?? 0, attempt.attemptOrdinal),
+      );
+    if (attempt.reason === "steering_restart")
+      steeringOrdinalByRun.set(
+        attempt.runId,
+        Math.max(steeringOrdinalByRun.get(attempt.runId) ?? 0, attempt.attemptOrdinal),
+      );
+  }
   const visited = new Set<OrchestrationV2Run["id"]>();
   while (sourceId !== undefined && !visited.has(sourceId)) {
     visited.add(sourceId);
     const source = runs.get(sourceId);
-    if (
-      source === undefined ||
-      acceptedRuns.has(sourceId) ||
-      (source.activeAttemptId !== null && acceptedAttempts.has(source.activeAttemptId))
-    )
-      return undefined;
+    if (source === undefined) return undefined;
+    const accepted =
+      acceptedOrdinalByRun.get(sourceId) ??
+      (source.activeAttemptId !== null && acceptedAttempts.has(source.activeAttemptId) ? 1 : 0);
+    if ((steeringOrdinalByRun.get(sourceId) ?? 0) > accepted) return source;
+    if (accepted > 0) return undefined;
     if (source.manualContinuationOfRunId === undefined) return source;
     sourceId = source.manualContinuationOfRunId;
   }

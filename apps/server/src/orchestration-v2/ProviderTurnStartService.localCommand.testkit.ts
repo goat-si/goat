@@ -68,7 +68,11 @@ export function makeLocalCommandHarness(input: {
   readonly fileSystem?: FileSystem.FileSystem;
   readonly previousNativeSession?: boolean;
   readonly previousMessages?: ReadonlyArray<string>;
-  readonly manualResume?: { readonly accepted: boolean; readonly supported: boolean };
+  readonly manualResume?: {
+    readonly accepted: boolean;
+    readonly supported: boolean;
+    readonly replacement?: boolean;
+  };
   readonly logoutFailure?: string;
   readonly createdBy?: "user" | "agent";
   readonly scheduledTaskId?: ScheduledTaskId;
@@ -292,6 +296,7 @@ export function makeLocalCommandHarness(input: {
   const previousTurnId = ProviderTurnId.make("previous-provider-turn");
   const previousRunId = RunId.make("previous-failed-run");
   if (input.previousTurn !== undefined) {
+    const { manualContinuationOfRunId: _resumeSource, ...earlierRun } = run;
     const previousAttemptId = RunAttemptId.make("previous-failed-attempt");
     const restartedAttemptId = RunAttemptId.make("previous-restarted-attempt");
     const previousRootId = NodeId.make("previous-root");
@@ -315,12 +320,25 @@ export function makeLocalCommandHarness(input: {
               startedAt: now,
               completedAt: now,
             },
+            {
+              id: restartedAttemptId,
+              runId: previousRunId,
+              attemptOrdinal: 2,
+              rootNodeId: NodeId.make("previous-steered-root"),
+              providerInstanceId: run.providerInstanceId,
+              providerThreadId: previousProviderThreadId,
+              providerTurnId: null,
+              reason: "steering_restart",
+              status: "interrupted",
+              startedAt: null,
+              completedAt: now,
+            },
             ...projection.attempts,
           ]
         : projection.attempts,
       runs: [
         {
-          ...run,
+          ...earlierRun,
           id: previousRunId,
           ordinal: 1,
           status: input.previousTurn.runStatus,
@@ -359,7 +377,18 @@ export function makeLocalCommandHarness(input: {
                 ...message,
                 id: MessageId.make("resume-source-message"),
                 runId: previousRunId,
-                text: "Original prompt",
+                text: input.manualResume.replacement ? "Replacement prompt" : "Original prompt",
+                attachments: input.manualResume.replacement
+                  ? [
+                      {
+                        type: "image",
+                        id: "replacement-image",
+                        name: "replacement.png",
+                        mimeType: "image/png",
+                        sizeBytes: 100,
+                      },
+                    ]
+                  : [],
               },
               ...projection.messages,
             ],

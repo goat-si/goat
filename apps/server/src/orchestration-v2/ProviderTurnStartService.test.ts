@@ -423,11 +423,27 @@ effectIt.effect.each(["native", "unsupported", "unaccepted"] as const)(
         ]);
         expect(harness.startRootRun).not.toHaveBeenCalled();
       } else {
+        expect(harness.projection().turnItems).toEqual([]);
         const started = harness.startRootRun.mock.calls.at(-1)?.[0];
         expect(started?.resume).toBe(scenario === "native");
         expect(started?.message.text).toBe(scenario === "native" ? "" : "Original prompt");
       }
     }),
+);
+
+effectIt.effect("manual Resume replays an unaccepted steering replacement and its image", () =>
+  Effect.gen(function* () {
+    const harness = makeLocalCommandHarness({
+      text: "Continue where you left off.",
+      manualResume: { accepted: true, supported: true, replacement: true },
+      previousTurn: { runStatus: "interrupted", turnStatus: "interrupted", supersededTurn: true },
+    });
+    yield* harness.start;
+    const started = harness.startRootRun.mock.calls.at(-1)?.[0];
+    expect(started?.resume).toBe(false);
+    expect(started?.message.text).toBe("Replacement prompt");
+    expect(started?.message.attachments.map((image) => image.id)).toEqual(["replacement-image"]);
+  }),
 );
 
 effectIt.effect("hands the run worker the reason its Stop recorded, read for that run only", () =>
