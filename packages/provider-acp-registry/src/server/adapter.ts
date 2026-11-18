@@ -222,6 +222,9 @@ export const makeAcpRegistryAdapterV2 = Effect.fn("makeAcpRegistryAdapterV2")(fu
     (options.settings.source === "local" &&
       /^kimi(\.exe|\.cmd)?$/i.test(options.settings.commandPath.split(/[\\/]/).pop() ?? ""));
   const watchKimiPromptOutcome = isKimi ? yield* makeKimiPromptOutcomeWatch() : undefined;
+  const isHermes =
+    options.settings.source === "local" &&
+    /^hermes(\.exe|\.cmd)?$/i.test(options.settings.commandPath.split(/[\\/]/).pop() ?? "");
   const isClaude =
     registryAgentId === "claude-acp" ||
     (options.settings.source === "local" &&
@@ -276,6 +279,11 @@ export const makeAcpRegistryAdapterV2 = Effect.fn("makeAcpRegistryAdapterV2")(fu
           isProvisionalSubagentTool: isClaudeProvisionalSubagentTool,
           extractSubagentSessionEvent: extractClaudeSubagentSessionEvent,
         }
+      : {}),
+    // Hermes replies on the root session when a background process it started exits; no
+    // prompt response follows, so the continuation ends on the deferred-finalize debounce.
+    ...(isHermes
+      ? { enablePostSettleContinuation: true, deferFinalizeForBackgroundWork: true }
       : {}),
     ...(isDevin
       ? {

@@ -127,7 +127,7 @@ export const openClaudeReplaySession = Effect.fn("openClaudeReplaySession")(func
   entries: ReadonlyArray<unknown>,
   replayGate?: ProviderReplayGate,
   continuationEnabled = true,
-  agentId = "claude-acp",
+  agentId: string | Record<string, unknown> = "claude-acp",
 ) {
   const fileSystem = yield* FileSystem.FileSystem;
   const path = yield* Path.Path;
@@ -169,7 +169,9 @@ export const openClaudeReplaySession = Effect.fn("openClaudeReplaySession")(func
   const adapterOptions = {
     selfInvocation: yield* resolveSelfInvocation(),
     instanceId,
-    settings: yield* decodeAcpRegistryAdapterSettings({ agentId }),
+    settings: yield* decodeAcpRegistryAdapterSettings(
+      typeof agentId === "string" ? { agentId } : agentId,
+    ),
     environment: {},
     ...(continuationEnabled ? { continuationRequests } : {}),
     makeRuntime: (runtimeInput: Parameters<typeof replayRuntime>[0]) => {
@@ -205,7 +207,7 @@ export const openClaudeReplaySession = Effect.fn("openClaudeReplaySession")(func
     runtimePolicy,
   });
   yield* Effect.addFinalizer(() => Effect.sync(() => replayGate?.releaseAll()));
-  if (continuationEnabled) {
+  if (continuationEnabled && agentId === "claude-acp") {
     assert.isDefined(
       runtime.hasPendingBackgroundWork,
       "Claude ACP v2 must report background work after foreground idle",
