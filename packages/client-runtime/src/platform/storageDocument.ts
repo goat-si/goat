@@ -17,6 +17,7 @@ import {
   PersistedConnectionTarget,
 } from "../connection/model.ts";
 import * as TokenStore from "../authorization/tokenStore.ts";
+import { isPenConnectionId, penProfilePin } from "../connection/penPin.ts";
 import { StoredPullRequestRoutingPermission } from "../connection/pullRequestRoutingPermissions.ts";
 
 export const StoredConnectionCredential = Schema.Struct({
@@ -281,20 +282,36 @@ export function putRemoteDpopTokenInCatalog(
 }
 
 // Each Pen record decodes on its own, so one this build cannot read is dropped instead of
-// failing the catalog. Its slot still counts when the records around it are placed.
-const penRecords = <A>(
-  decode: (value: unknown) => Option.Option<{ readonly index: number; readonly value: A }>,
-  field: unknown,
-) => (Array.isArray(field) ? field.flatMap((record) => Option.toArray(decode(record))) : []);
+// failing the catalog. A record with a readable index keeps its slot until all are placed.
+const decodePenRecord = Schema.decodeUnknownOption(
+  Schema.Struct({ index: Schema.Number, value: Schema.Unknown }),
+);
+const penRecords = <A>(decode: (value: unknown) => Option.Option<A>, field: unknown) =>
+  Array.isArray(field)
+    ? field.flatMap((record) =>
+        Option.toArray(
+          Option.map(decodePenRecord(record), ({ index, value }) => ({
+            index,
+            value: Option.getOrUndefined(decode(value)),
+          })),
+        ),
+      )
+    : [];
 // A field that is not a list hides how many slots it held, so nothing is out of range then.
 const penSlots = (field: unknown) =>
   Array.isArray(field) ? field.length : field === undefined ? 0 : Number.POSITIVE_INFINITY;
-const decodePenTarget = Schema.decodeUnknownOption(
-  Schema.Struct({ index: Schema.Number, value: PenConnectionTarget }),
-);
-const decodePenProfile = Schema.decodeUnknownOption(
-  Schema.Struct({ index: Schema.Number, value: PenConnectionProfile }),
-);
+// Only a record naming a Pen member is kept: the registry keeps the first route of an id, so a
+// Pen record with another route's id would hide that route.
+const decodePenTarget = (taken: ReadonlySet<string>) => (value: unknown) =>
+  Option.filter(
+    Schema.decodeUnknownOption(PenConnectionTarget)(value),
+    (target) => isPenConnectionId(target.connectionId) && !taken.has(target.connectionId),
+  );
+const decodePenProfile = (taken: ReadonlySet<string>) => (value: unknown) =>
+  Option.filter(
+    Schema.decodeUnknownOption(PenConnectionProfile)(value),
+    (profile) => penProfilePin(profile) !== undefined && !taken.has(profile.connectionId),
+  );
 const encodePenTarget = Schema.encodeSync(PenConnectionTarget);
 const encodePenProfile = Schema.encodeSync(PenConnectionProfile);
 // Keep legacy arrays readable by older clients: an unknown tagged route would make
@@ -328,7 +345,7 @@ const encodeStorageDocument = Schema.encodeEffect(ConnectionCatalogStorageJson);
 // decode instead would discard the pairing credentials stored beside it.
 function mergeExtensions<A>(
   legacy: ReadonlyArray<A>,
-  extensions: ReadonlyArray<{ readonly index: number; readonly value: A }>,
+  extensions: ReadonlyArray<{ readonly index: number; readonly value: A | undefined }>,
   dropped: number,
 ): ReadonlyArray<A> {
   // Slots of dropped records count, so a record written after one is still in range.
@@ -342,30 +359,37 @@ function mergeExtensions<A>(
       return true;
     })
     .sort((a, b) => a.index - b.index);
-  const result = [...legacy];
+  const result: Array<A | undefined> = [...legacy];
   for (const entry of placed) result.splice(entry.index, 0, entry.value);
-  return result;
+  // A record dropped for its value held its slot while the others were placed.
+  return result.filter((value): value is A => value !== undefined);
 }
 
 export const decodeConnectionCatalogStorage = (raw: string) =>
   decodeStorageDocument(raw).pipe(
     Effect.map((stored) => {
       const { hubProxyTargets, hubProxyProfiles, penTargets, penProfiles, ...document } = stored;
-      const targets = penRecords(decodePenTarget, penTargets);
-      const profiles = penRecords(decodePenProfile, penProfiles);
       // Hub records are placed among what an older client reads, then Pen records among all.
+      const baseTargets = mergeExtensions(document.targets, hubProxyTargets ?? [], 0);
+      const baseProfiles = mergeExtensions(document.profiles, hubProxyProfiles ?? [], 0);
+      const targets = penRecords(
+        decodePenTarget(
+          new Set(
+            baseTargets.flatMap((target) =>
+              "connectionId" in target ? [target.connectionId] : [],
+            ),
+          ),
+        ),
+        penTargets,
+      );
+      const profiles = penRecords(
+        decodePenProfile(new Set(baseProfiles.map((profile) => profile.connectionId))),
+        penProfiles,
+      );
       return {
         ...document,
-        targets: mergeExtensions(
-          mergeExtensions(document.targets, hubProxyTargets ?? [], 0),
-          targets,
-          penSlots(penTargets) - targets.length,
-        ),
-        profiles: mergeExtensions(
-          mergeExtensions(document.profiles, hubProxyProfiles ?? [], 0),
-          profiles,
-          penSlots(penProfiles) - profiles.length,
-        ),
+        targets: mergeExtensions(baseTargets, targets, penSlots(penTargets) - targets.length),
+        profiles: mergeExtensions(baseProfiles, profiles, penSlots(penProfiles) - profiles.length),
       } satisfies ConnectionCatalogDocument;
     }),
   );

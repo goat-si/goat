@@ -6,14 +6,14 @@ describe("Pen native discovery", () => {
     const state = {
       kind: "ready" as const,
       seq: 1,
-      meshId: "mesh",
+      meshId: "mmmmmmmmmmmmmmmmmmmmmmmmmm",
       selfNodeId: "self",
       members: [
         {
-          nodeId: "node",
+          nodeId: "nnnnnnnnnnnnnnnnnnnnnnnnnn",
           name: "Node",
           online: true,
-          noisePub: "key",
+          noisePub: "kkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkk",
           route: { kind: "refused" as const, reason: "not-pen-route" as const },
         },
         {
@@ -25,7 +25,9 @@ describe("Pen native discovery", () => {
         },
       ],
     };
-    expect(nativePenCandidates(state).map((member) => member.nodeId)).toEqual(["node"]);
+    expect(nativePenCandidates(state).map((member) => member.nodeId)).toEqual([
+      "nnnnnnnnnnnnnnnnnnnnnnnnnn",
+    ]);
   });
 });
 
@@ -53,13 +55,17 @@ import { makePenNativeDiscovery } from "./penNativeDiscovery.ts";
 it.effect("keeps routes during unavailable membership and closes only native routes on leave", () =>
   Effect.gen(function* () {
     const env = EnvironmentId.make("env");
-    const id = penConnectionId("mesh", "node");
-    const pin = { meshId: "mesh", nodeId: "node", noisePub: "key" };
+    const id = penConnectionId("mmmmmmmmmmmmmmmmmmmmmmmmmm", "nnnnnnnnnnnnnnnnnnnnnnnnnn");
+    const pin = {
+      meshId: "mmmmmmmmmmmmmmmmmmmmmmmmmm",
+      nodeId: "nnnnnnnnnnnnnnnnnnnnnnnnnn",
+      noisePub: "kkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkk",
+    };
     const target = new PenConnectionTarget({ environmentId: env, label: "Node", connectionId: id });
     const ssh = new SshConnectionTarget({
       environmentId: env,
       label: "Node",
-      connectionId: "ssh:pen:mesh:node",
+      connectionId: "ssh:pen:mmmmmmmmmmmmmmmmmmmmmmmmmm:nnnnnnnnnnnnnnnnnnnnnnnnnn",
     });
     const entry: ConnectionCatalogEntry = {
       enabled: true,
@@ -75,7 +81,12 @@ it.effect("keeps routes during unavailable membership and closes only native rou
               environmentId: env,
               label: "Node",
               connectionId: ssh.connectionId,
-              target: { alias: "node", hostname: "node", username: null, port: null },
+              target: {
+                alias: "nnnnnnnnnnnnnnnnnnnnnnnnnn",
+                hostname: "nnnnnnnnnnnnnnnnnnnnnnnnnn",
+                username: null,
+                port: null,
+              },
             }),
           ),
         },
@@ -183,16 +194,16 @@ it.effect("drops a descriptor arriving after leave or key rotation", () =>
       followStream: unusedStream,
     });
     const member = {
-      nodeId: "node",
+      nodeId: "nnnnnnnnnnnnnnnnnnnnnnnnnn",
       name: "Node",
       online: true,
-      noisePub: "key",
+      noisePub: "kkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkk",
       route: { kind: "refused" as const, reason: "not-pen-route" as const },
     };
     const ready = {
       kind: "ready" as const,
       seq: 1,
-      meshId: "mesh",
+      meshId: "mmmmmmmmmmmmmmmmmmmmmmmmmm",
       selfNodeId: "self",
       members: [member],
     };
@@ -256,8 +267,12 @@ it.effect(
   () =>
     Effect.gen(function* () {
       const stored = EnvironmentId.make("old");
-      const id = penConnectionId("mesh", "node");
-      const pin = { meshId: "mesh", nodeId: "node", noisePub: "key" };
+      const id = penConnectionId("mmmmmmmmmmmmmmmmmmmmmmmmmm", "nnnnnnnnnnnnnnnnnnnnnnnnnn");
+      const pin = {
+        meshId: "mmmmmmmmmmmmmmmmmmmmmmmmmm",
+        nodeId: "nnnnnnnnnnnnnnnnnnnnnnnnnn",
+        noisePub: "kkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkk",
+      };
       const entries = yield* SubscriptionRef.make<
         ReadonlyMap<EnvironmentId, ConnectionCatalogEntry>
       >(
@@ -286,14 +301,14 @@ it.effect(
       const ready = {
         kind: "ready" as const,
         seq: 1,
-        meshId: "mesh",
+        meshId: "mmmmmmmmmmmmmmmmmmmmmmmmmm",
         selfNodeId: "self",
         members: [
           {
-            nodeId: "node",
+            nodeId: "nnnnnnnnnnnnnnnnnnnnnnnnnn",
             name: "Node",
             online: true,
-            noisePub: "key",
+            noisePub: "kkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkk",
             route: { kind: "refused" as const, reason: "not-pen-route" as const },
           },
         ],
@@ -385,8 +400,12 @@ it.effect(
 it.effect("a closed viewer gate keeps a member's stored route and the environment it holds", () =>
   Effect.gen(function* () {
     const env = EnvironmentId.make("env");
-    const id = penConnectionId("mesh", "node");
-    const pin = { meshId: "mesh", nodeId: "node", noisePub: "key" };
+    const id = penConnectionId("mmmmmmmmmmmmmmmmmmmmmmmmmm", "nnnnnnnnnnnnnnnnnnnnnnnnnn");
+    const pin = {
+      meshId: "mmmmmmmmmmmmmmmmmmmmmmmmmm",
+      nodeId: "nnnnnnnnnnnnnnnnnnnnnnnnnn",
+      noisePub: "kkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkk",
+    };
     const target = new PenConnectionTarget({ environmentId: env, label: "Node", connectionId: id });
     // The Pen route is this environment's only one: removing it would delete the environment.
     const entries = yield* SubscriptionRef.make<ReadonlyMap<EnvironmentId, ConnectionCatalogEntry>>(
@@ -435,16 +454,16 @@ it.effect("a closed viewer gate keeps a member's stored route and the environmen
       followStream: unusedStream,
     });
     const member = {
-      nodeId: "node",
+      nodeId: "nnnnnnnnnnnnnnnnnnnnnnnnnn",
       name: "Node",
       online: true,
-      noisePub: "key",
+      noisePub: "kkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkk",
       route: { kind: "refused" as const, reason: "not-pen-route" as const },
     };
     const ready = {
       kind: "ready" as const,
       seq: 1,
-      meshId: "mesh",
+      meshId: "mmmmmmmmmmmmmmmmmmmmmmmmmm",
       selfNodeId: "self",
       members: [member],
     };
@@ -472,5 +491,84 @@ it.effect("a closed viewer gate keeps a member's stored route and the environmen
           HttpClient.make(() => Effect.die("unexpected HTTP")),
         ),
       );
+  }),
+);
+it.effect("an open gate leaves a stored route whose profile names no Pen member", () =>
+  Effect.gen(function* () {
+    const env = EnvironmentId.make("env");
+    const id = penConnectionId("mmmmmmmmmmmmmmmmmmmmmmmmmm", "nnnnnnnnnnnnnnnnnnnnnnnnnn");
+    const target = new PenConnectionTarget({ environmentId: env, label: "Node", connectionId: id });
+    // A damaged profile: no Noise key. Read as a pin it would look like a member that rotated away.
+    const profile = new PenConnectionProfile({
+      meshId: "mmmmmmmmmmmmmmmmmmmmmmmmmm",
+      nodeId: "nnnnnnnnnnnnnnnnnnnnnnnnnn",
+      noisePub: "",
+      environmentId: env,
+      label: "Node",
+      connectionId: id,
+    });
+    const entries = yield* SubscriptionRef.make<ReadonlyMap<EnvironmentId, ConnectionCatalogEntry>>(
+      new Map([
+        [env, { enabled: true, target, profile: Option.some(profile), alternateRoutes: [] }],
+      ]),
+    );
+    const removed: string[] = [];
+    const unused = () => Effect.die("unexpected registry call");
+    const unusedStream = () => Stream.die("unexpected registry stream");
+    const registry = EnvironmentRegistry.of({
+      entries,
+      networkStatus: yield* SubscriptionRef.make<"unknown" | "online" | "offline">("online"),
+      start: Effect.void,
+      register: unused,
+      registerPlatform: unused,
+      assertKnownAddress: unused,
+      reconcilePlatform: unused,
+      remove: unused,
+      removeRoute: (_env, route) => Effect.sync(() => void removed.push(route)),
+      reorderRoutes: unused,
+      removeRelayEnvironments: unused,
+      retryNow: unused,
+      reconnect: unused,
+      setEnabled: unused,
+      setCompatibility: unused,
+      state: unused,
+      stateChanges: unusedStream,
+      run: unused,
+      runStream: unusedStream,
+      followStream: unusedStream,
+    });
+    const ready = {
+      kind: "ready" as const,
+      seq: 1,
+      meshId: "mmmmmmmmmmmmmmmmmmmmmmmmmm",
+      selfNodeId: "self",
+      members: [
+        {
+          nodeId: "nnnnnnnnnnnnnnnnnnnnnnnnnn",
+          name: "Node",
+          online: false,
+          noisePub: "kkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkk",
+          route: { kind: "refused" as const, reason: "not-pen-route" as const },
+        },
+      ],
+    };
+    const latest = yield* SubscriptionRef.make<Option.Option<PenMembersInput>>(Option.some(ready));
+    yield* Effect.gen(function* () {
+      const discovery = yield* makePenNativeDiscovery();
+      yield* discovery.pass(ready);
+      expect(removed).toEqual([]);
+    }).pipe(
+      Effect.provideService(EnvironmentRegistry, registry),
+      Effect.provideService(PenMembership, { latest, admit: () => Effect.void }),
+      Effect.provideService(PenViewerPolicy, { enabled: true }),
+      Effect.provideService(
+        PenRouteGateway,
+        Option.some({ open: unused, close: () => Effect.void }),
+      ),
+      Effect.provideService(
+        HttpClient.HttpClient,
+        HttpClient.make(() => Effect.die("unexpected HTTP")),
+      ),
+    );
   }),
 );

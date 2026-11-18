@@ -14,6 +14,7 @@ import {
 import { PenConnectionProfile, PenConnectionRegistration } from "./catalog.ts";
 import { penConnectionId, PenConnectionTarget } from "./model.ts";
 import { PenMembership } from "./penMembership.ts";
+import { penRoutePin } from "./penPin.ts";
 import { penPinIsCurrent } from "./penRouteBroker.ts";
 import { EnvironmentRegistry } from "./registry.ts";
 import { connectionRoutes } from "./routes.ts";
@@ -35,15 +36,18 @@ export const makePenNativeDiscovery = Effect.fn("PenNativeDiscovery.make")(funct
   const pass = Effect.fn("PenNativeDiscovery.pass")(function* (state: PenMembersInput) {
     if (state.kind === "unavailable" && policy.enabled && Option.isSome(gateway)) return;
     const entries = yield* SubscriptionRef.get(registry.entries);
+    // Only a route whose target and profile name one member is acted on; another is left as is.
     const existing = [...entries.values()].flatMap(connectionRoutes).flatMap((route) => {
       const profile = Option.getOrUndefined(route.profile);
-      return route.target._tag === "PenConnectionTarget" && profile?._tag === "PenConnectionProfile"
-        ? [{ target: route.target, profile }]
+      const pin = penRoutePin(route.target, profile);
+      return pin &&
+        route.target._tag === "PenConnectionTarget" &&
+        profile?._tag === "PenConnectionProfile"
+        ? [{ target: route.target, profile, pin }]
         : [];
     });
     for (const route of existing) {
-      const { meshId, nodeId, noisePub } = route.profile;
-      const pin: DesktopPenPin = { meshId, nodeId, noisePub };
+      const { pin } = route;
       // Only a member Pen says left loses its route, and only where the viewer runs: removing an
       // environment's last route deletes it with its drafts. A closed gate, Pen machines turned
       // off or a client without the gateway leave the route stored and unusable.

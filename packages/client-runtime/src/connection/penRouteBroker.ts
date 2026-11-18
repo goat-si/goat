@@ -20,6 +20,7 @@ import {
   type PreparedConnection,
 } from "./model.ts";
 import { PenMembership } from "./penMembership.ts";
+import { penRoutePin } from "./penPin.ts";
 
 export const penPinIsCurrent = (state: PenMembersInput, pin: DesktopPenPin): boolean =>
   state.kind === "ready" &&
@@ -35,20 +36,12 @@ export const makePenRouteBroker = Effect.fn("PenRouteBroker.make")(function* () 
   return Effect.fn("PenRouteBroker.prepare")(function* (entry: ConnectionCatalogEntry) {
     const target = entry.target;
     const profile = Option.getOrUndefined(entry.profile);
-    if (
-      !policy.enabled ||
-      Option.isNone(gateway) ||
-      target._tag !== "PenConnectionTarget" ||
-      profile?._tag !== "PenConnectionProfile" ||
-      profile.connectionId !== target.connectionId ||
-      profile.environmentId !== target.environmentId ||
-      profile.connectionId !== penConnectionId(profile.meshId, profile.nodeId)
-    )
+    const pin = penRoutePin(target, profile);
+    if (!policy.enabled || Option.isNone(gateway) || pin === undefined)
       return yield* new ConnectionBlockedError({
         reason: "configuration",
         detail: "Pen route is unavailable or its profile does not match.",
       });
-    const pin = { meshId: profile.meshId, nodeId: profile.nodeId, noisePub: profile.noisePub };
     const latest = yield* SubscriptionRef.get(membership.latest);
     if (Option.isNone(latest) || latest.value.kind === "unavailable")
       return yield* new ConnectionTransientError({

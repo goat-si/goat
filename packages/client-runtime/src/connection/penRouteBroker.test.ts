@@ -2,18 +2,22 @@ import { describe, expect, it } from "@effect/vitest";
 import { penPinIsCurrent } from "./penRouteBroker.ts";
 
 describe("Pen native membership", () => {
-  const pin = { meshId: "mesh", nodeId: "node", noisePub: "key" };
+  const pin = {
+    meshId: "mmmmmmmmmmmmmmmmmmmmmmmmmm",
+    nodeId: "nnnnnnnnnnnnnnnnnnnnnnnnnn",
+    noisePub: "kkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkk",
+  };
   const ready = {
     kind: "ready" as const,
     seq: 1,
-    meshId: "mesh",
+    meshId: "mmmmmmmmmmmmmmmmmmmmmmmmmm",
     selfNodeId: "self",
     members: [
       {
-        nodeId: "node",
+        nodeId: "nnnnnnnnnnnnnnnnnnnnnnnnnn",
         name: "Node",
         online: true,
-        noisePub: "key",
+        noisePub: "kkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkk",
         route: { kind: "refused" as const, reason: "not-pen-route" as const },
       },
     ],
@@ -24,7 +28,9 @@ describe("Pen native membership", () => {
   it("rejects a departed or rotated pin and self", () => {
     expect(penPinIsCurrent({ ...ready, members: [] }, pin)).toBe(false);
     expect(penPinIsCurrent(ready, { ...pin, noisePub: "rotated" })).toBe(false);
-    expect(penPinIsCurrent({ ...ready, selfNodeId: "node" }, pin)).toBe(false);
+    expect(penPinIsCurrent({ ...ready, selfNodeId: "nnnnnnnnnnnnnnnnnnnnnnnnnn" }, pin)).toBe(
+      false,
+    );
     expect(penPinIsCurrent({ kind: "unavailable", seq: 2, reason: "stale" }, pin)).toBe(false);
   });
 });
@@ -53,7 +59,11 @@ it.effect(
     Effect.gen(function* () {
       let opens = 0;
       const environmentId = EnvironmentId.make("environment");
-      const pin = { meshId: "mesh", nodeId: "node", noisePub: "key" };
+      const pin = {
+        meshId: "mmmmmmmmmmmmmmmmmmmmmmmmmm",
+        nodeId: "nnnnnnnnnnnnnnnnnnnnnnnnnn",
+        noisePub: "kkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkk",
+      };
       const connectionId = penConnectionId(pin.meshId, pin.nodeId);
       const target = new PenConnectionTarget({ environmentId, connectionId, label: "Node" });
       const entry = {
@@ -67,14 +77,14 @@ it.effect(
         Option.some({
           kind: "ready",
           seq: 1,
-          meshId: "mesh",
+          meshId: "mmmmmmmmmmmmmmmmmmmmmmmmmm",
           selfNodeId: "self",
           members: [
             {
-              nodeId: "node",
+              nodeId: "nnnnnnnnnnnnnnnnnnnnnnnnnn",
               name: "Node",
               online: true,
-              noisePub: "key",
+              noisePub: "kkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkk",
               route: { kind: "refused", reason: "not-pen-route" },
             },
           ],
@@ -118,7 +128,11 @@ it.effect(
 it.effect("refuses a different environment behind a listed member", () =>
   Effect.gen(function* () {
     const environmentId = EnvironmentId.make("expected");
-    const pin = { meshId: "mesh", nodeId: "node", noisePub: "key" };
+    const pin = {
+      meshId: "mmmmmmmmmmmmmmmmmmmmmmmmmm",
+      nodeId: "nnnnnnnnnnnnnnnnnnnnnnnnnn",
+      noisePub: "kkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkk",
+    };
     const connectionId = penConnectionId(pin.meshId, pin.nodeId);
     const entry = {
       enabled: true,
@@ -131,14 +145,14 @@ it.effect("refuses a different environment behind a listed member", () =>
       Option.some({
         kind: "ready",
         seq: 1,
-        meshId: "mesh",
+        meshId: "mmmmmmmmmmmmmmmmmmmmmmmmmm",
         selfNodeId: "self",
         members: [
           {
-            nodeId: "node",
+            nodeId: "nnnnnnnnnnnnnnnnnnnnnnnnnn",
             name: "Node",
             online: true,
-            noisePub: "key",
+            noisePub: "kkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkk",
             route: { kind: "refused", reason: "not-pen-route" },
           },
         ],

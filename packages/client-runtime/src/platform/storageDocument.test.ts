@@ -514,6 +514,7 @@ describe("ConnectionCatalogDocument", () => {
 });
 
 describe("Pen storage compatibility", () => {
+  const PEN_ID = `pen:${"m".repeat(26)}:${"n".repeat(26)}`;
   const legacy = {
     ...EMPTY_CONNECTION_CATALOG_DOCUMENT,
     targets: [BEARER_TARGET],
@@ -524,16 +525,16 @@ describe("Pen storage compatibility", () => {
     _tag: "PenConnectionTarget",
     environmentId: ENVIRONMENT_ID,
     label: "Pen",
-    connectionId: "pen:m:n",
+    connectionId: PEN_ID,
   };
   const penProfile = {
     _tag: "PenConnectionProfile",
     environmentId: ENVIRONMENT_ID,
     label: "Pen",
-    connectionId: "pen:m:n",
-    meshId: "m",
-    nodeId: "n",
-    noisePub: "key",
+    connectionId: PEN_ID,
+    meshId: "m".repeat(26),
+    nodeId: "n".repeat(26),
+    noisePub: "k".repeat(43),
   };
   const hubTarget = {
     _tag: "HubProxyConnectionTarget",
@@ -620,7 +621,7 @@ describe("Pen storage compatibility", () => {
       const target = decoded.targets[0];
       expect(target?._tag).toBe("PenConnectionTarget");
       if (!target) throw new Error("Missing Pen target");
-      const profile = decoded.profiles.find((value) => value.connectionId === "pen:m:n");
+      const profile = decoded.profiles.find((value) => value.connectionId === PEN_ID);
       expect(
         usableRoutes({ target, profile: Option.fromNullishOr(profile), enabled: true }),
       ).toEqual([]);
@@ -701,6 +702,64 @@ describe("Pen storage compatibility", () => {
         "BearerConnectionProfile",
       ]);
       expect(decoded.credentials).toEqual(legacy.credentials);
+    }),
+  );
+  it.effect("a Pen record that names no Pen member is dropped and never hides another route", () =>
+    Effect.gen(function* () {
+      // The registry keeps the first route of an id: a Pen record with the bearer's would hide it.
+      const bad = JSON.parse(raw());
+      bad.penTargets[0].value = { ...penTarget, connectionId: BEARER_TARGET.connectionId };
+      const decoded = yield* decodeConnectionCatalogStorage(JSON.stringify(bad));
+      expect(
+        decoded.targets.map((value) => ("connectionId" in value ? value.connectionId : value._tag)),
+      ).toEqual([BEARER_TARGET.connectionId, "hub:x:n"]);
+      for (const profile of [
+        { ...penProfile, noisePub: "" },
+        { ...penProfile, meshId: "M".repeat(26) },
+        { ...penProfile, connectionId: `pen:${"m".repeat(26)}:${"p".repeat(26)}` },
+        { ...penProfile, connectionId: BEARER_PROFILE.connectionId },
+      ]) {
+        const stored = JSON.parse(raw());
+        stored.penProfiles[0].value = profile;
+        const read = yield* decodeConnectionCatalogStorage(JSON.stringify(stored));
+        expect(read.profiles.map((value) => value._tag)).toEqual([
+          "HubProxyConnectionProfile",
+          "BearerConnectionProfile",
+        ]);
+      }
+    }),
+  );
+  it.effect("a damaged Pen record keeps the place of the Pen records after it", () =>
+    Effect.gen(function* () {
+      const other = `pen:${"m".repeat(26)}:${"p".repeat(26)}`;
+      const decoded = yield* decodeConnectionCatalogStorage(
+        JSON.stringify({
+          ...legacy,
+          penTargets: [
+            { index: 0, value: { ...penTarget, connectionId: 7 } },
+            { index: 1, value: { ...penTarget, connectionId: other } },
+          ],
+          penProfiles: [
+            { index: 0, value: { ...penProfile, noisePub: null } },
+            {
+              index: 1,
+              value: { ...penProfile, connectionId: other, nodeId: "p".repeat(26) },
+            },
+          ],
+          hubProxyTargets: [{ index: 0, value: hubTarget }],
+          hubProxyProfiles: [{ index: 0, value: hubProfile }],
+        }),
+      );
+      expect(decoded.targets.map((value) => value._tag)).toEqual([
+        "PenConnectionTarget",
+        "HubProxyConnectionTarget",
+        "BearerConnectionTarget",
+      ]);
+      expect(decoded.profiles.map((value) => value._tag)).toEqual([
+        "PenConnectionProfile",
+        "HubProxyConnectionProfile",
+        "BearerConnectionProfile",
+      ]);
     }),
   );
 });
