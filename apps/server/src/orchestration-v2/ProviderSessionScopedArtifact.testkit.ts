@@ -29,7 +29,7 @@ export function registerSessionScopedArtifactCheck({
   layerTest: typeof Fixture.layerTest;
 }) {
   it.effect(
-    "ProviderSessionManagerV2 persists session-scoped requests and recovered commands without a run",
+    "ProviderSessionManagerV2 persists session-scoped requests and recovered activity without a run",
     () =>
       Effect.gen(function* () {
         const state = yield* Ref.make(emptyState);
@@ -151,12 +151,102 @@ export function registerSessionScopedArtifactCheck({
               sessionScoped: true,
             },
           ];
+          const recoveredNodeId = idAllocator.derive.nodeFromProviderItem({
+            driver: CODEX_DRIVER,
+            nativeItemId: "call_recovered",
+          });
+          const childNode = {
+            id: recoveredNodeId,
+            threadId,
+            runId: anchored.runId,
+            parentNodeId: null,
+            rootNodeId: recoveredNodeId,
+            kind: "subagent" as const,
+            status: "completed" as const,
+            countsForRun: false,
+            providerThreadId: providerThread.id,
+            providerTurnId: null,
+            nativeItemRef: null,
+            runtimeRequestId: null,
+            checkpointScopeId: null,
+            startedAt: now,
+            completedAt: now,
+          };
+          const child = {
+            id: recoveredNodeId,
+            threadId,
+            runId: anchored.runId,
+            parentNodeId: recoveredNodeId,
+            origin: "provider_native" as const,
+            createdBy: "agent" as const,
+            driver: CODEX_DRIVER,
+            providerInstanceId: modelSelection.instanceId,
+            providerThreadId: null,
+            childThreadId: null,
+            nativeTaskRef: null,
+            prompt: "Check the repository",
+            title: "Recovered child",
+            model: null,
+            status: "completed" as const,
+            result: "Confirmed result",
+            startedAt: now,
+            completedAt: now,
+            updatedAt: now,
+          };
+          const childItem = {
+            id: idAllocator.derive.turnItemFromProviderItem({
+              driver: CODEX_DRIVER,
+              nativeItemId: "call_recovered",
+            }),
+            threadId,
+            runId: anchored.runId,
+            nodeId: recoveredNodeId,
+            providerThreadId: providerThread.id,
+            providerTurnId: null,
+            nativeItemRef: null,
+            parentItemId: null,
+            ordinal: 1,
+            status: "completed" as const,
+            title: child.title,
+            startedAt: now,
+            completedAt: now,
+            updatedAt: now,
+            type: "subagent" as const,
+            subagentId: child.id,
+            origin: child.origin,
+            driver: CODEX_DRIVER,
+            providerInstanceId: modelSelection.instanceId,
+            childThreadId: null,
+            prompt: child.prompt,
+            result: child.result,
+          };
+          const childEvents = (owner: typeof threadId) => [
+            {
+              type: "node.updated" as const,
+              driver: CODEX_DRIVER,
+              node: { ...childNode, threadId: owner },
+              sessionScoped: true,
+            },
+            {
+              type: "subagent.updated" as const,
+              driver: CODEX_DRIVER,
+              subagent: { ...child, threadId: owner },
+              sessionScoped: true,
+            },
+            {
+              type: "turn_item.updated" as const,
+              driver: CODEX_DRIVER,
+              turnItem: { ...childItem, threadId: owner },
+              sessionScoped: true,
+            },
+          ];
           const afterSequence = yield* eventSink.latestSequence({ threadId });
           const persistedFiber = yield* eventSink.stream({ threadId, afterSequence }).pipe(
             Stream.filter(
               (stored) =>
                 stored.event.type === "runtime-request.updated" ||
-                stored.event.type === "node.updated" ||
+                (stored.event.type === "node.updated" &&
+                  stored.event.payload.id === pendingRequest.nodeId) ||
                 (stored.event.type === "turn-item.updated" &&
                   stored.event.payload.type === "approval_request"),
             ),
@@ -180,6 +270,8 @@ export function registerSessionScopedArtifactCheck({
               providerThread: { ...providerThread, appThreadId: otherThreadId },
               sessionScoped: true,
             },
+            ...childEvents(threadId),
+            ...childEvents(otherThreadId),
             ...pendingRequest.providerEvents,
           ]);
           const persisted = Array.from(yield* Fiber.join(persistedFiber));
@@ -213,9 +305,31 @@ export function registerSessionScopedArtifactCheck({
             projection.turnItems.find((item) => item.id === anchored.id),
             { runId: anchored.runId, output: "retained" },
           );
+          assert.deepInclude(
+            projection.nodes.find((item) => item.id === childNode.id),
+            {
+              status: "completed",
+            },
+          );
+          assert.deepInclude(
+            projection.subagents.find((item) => item.id === child.id),
+            {
+              status: "completed",
+              result: "Confirmed result",
+            },
+          );
+          assert.deepInclude(
+            projection.turnItems.find((item) => item.id === childItem.id),
+            {
+              status: "completed",
+              result: "Confirmed result",
+            },
+          );
           assert.isEmpty(projection.runs);
           const unrelated = yield* projectionStore.getThreadProjection(otherThreadId);
           assert.isEmpty(unrelated.turnItems);
+          assert.isEmpty(unrelated.subagents);
+          assert.isEmpty(unrelated.nodes);
           assert.isEmpty(unrelated.providerThreads);
           assert.equal(request?.status, "pending");
           assert.equal(request?.providerTurnId, null);

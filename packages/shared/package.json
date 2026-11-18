@@ -691,6 +691,10 @@
       "types": "./src/markdownListIndentation.ts",
       "import": "./src/markdownListIndentation.ts"
     },
+    "./markdownLeadingWhitespace": {
+      "types": "./src/markdownLeadingWhitespace.ts",
+      "import": "./src/markdownLeadingWhitespace.ts"
+    },
     "./proposedPlanText": {
       "types": "./src/proposedPlanText.ts",
       "import": "./src/proposedPlanText.ts"

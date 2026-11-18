@@ -148,17 +148,22 @@ export const applySnapshotToWorktree = Effect.fn("restoreSnapshot.applySnapshotT
         }
         // A sparse checkout flags paths outside its patterns skip-worktree, which hides their
         // deletion; before cleanup they were unflagged, so the deletion shows and verify stages it.
+        // Lowercase tags (s, h) add assume-unchanged, which git add skips as well.
         if (deletedNames.length) {
           const removed = new Set(deletedNames);
           const flagged = (await git(cwd, ["ls-files", "-v", "-z"]))
             .toString()
             .split("\0")
-            .filter((entry) => entry.startsWith("S ") && removed.has(entry.slice(2)))
-            .map((entry) => entry.slice(2));
-          if (flagged.length)
-            await git(cwd, ["update-index", "--no-skip-worktree", "-z", "--stdin"], {
-              input: Buffer.from(flagged.join("\0") + "\0"),
-            });
+            .filter((entry) => /^[Ssh] /.test(entry) && removed.has(entry.slice(2)));
+          const clear = async (flag: string, tags: string) => {
+            const names = flagged.filter((entry) => tags.includes(entry[0] ?? ""));
+            if (names.length)
+              await git(cwd, ["update-index", flag, "-z", "--stdin"], {
+                input: Buffer.from(names.map((entry) => entry.slice(2)).join("\0") + "\0"),
+              });
+          };
+          await clear("--no-skip-worktree", "Ss");
+          await clear("--no-assume-unchanged", "sh");
         }
         const changed = await git(cwd, [
           "diff",

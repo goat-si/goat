@@ -1,5 +1,9 @@
 import { loadBootProviderSnapshots } from "./ProviderRegistryBoot.ts";
-import { mergeProviderSnapshot } from "./ProviderSnapshotMerge.ts";
+import {
+  invalidateChangedWorkspaceCatalog,
+  mergeProviderSnapshot,
+  sameWorkspaceCatalogBasis,
+} from "./ProviderSnapshotMerge.ts";
 import * as GlobalSkillRegistry from "../skills/GlobalSkillsRegistry.ts";
 import * as ServerSettings from "../serverSettings.ts";
 import {
@@ -318,9 +322,10 @@ export const layer = Layer.effect(
         },
       );
       const commit = Ref.modify(providersRef, (previousProviders) => {
-        const mergedProviders = new Map(
+        const previousByKey = new Map(
           previousProviders.map((provider) => [snapshotInstanceKey(provider), provider] as const),
         );
+        const mergedProviders = new Map(previousByKey);
         const updatedKeys = new Set<ProviderInstanceId>();
 
         const instances = Ref.getUnsafe(liveSubsRef);
@@ -339,9 +344,12 @@ export const layer = Layer.effect(
 
         const providers = orderProviderSnapshots(
           [...mergedProviders.values()].map((provider) =>
-            GlobalSkillRegistry.mergeGlobalSkills(
-              classifyCompatibility(provider, manifest),
-              globals,
+            invalidateChangedWorkspaceCatalog(
+              previousByKey.get(snapshotInstanceKey(provider)),
+              GlobalSkillRegistry.mergeGlobalSkills(
+                classifyCompatibility(provider, manifest),
+                globals,
+              ),
             ),
           ),
         );
@@ -850,16 +858,14 @@ export const layer = Layer.effect(
             Effect.andThen(refreshInstance(input.instanceId)),
             Effect.andThen(getProviders),
             Effect.map((current) =>
-              workspaceSnapshotOf(
-                current.find((candidate) => candidate.instanceId === input.instanceId),
-              ),
+              current.find((candidate) => candidate.instanceId === input.instanceId),
             ),
           )
-        : Effect.succeed(scannedFrom);
+        : Effect.succeed(provider);
       const runScan = refreshMachineSnapshot.pipe(
         Effect.flatMap((scanBase) =>
           snapshotForCwd(input.scanCwd ?? input.cwd).pipe(
-            Effect.flatMap(globalSkills.workspace(provider)),
+            Effect.flatMap(globalSkills.workspace(scanBase ?? provider)),
             Effect.map((scopedSnapshot) => ({ scanBase, scopedSnapshot })),
           ),
         ),
@@ -875,7 +881,8 @@ export const layer = Layer.effect(
                 }
                 return currentProviders.map((candidate) =>
                   candidate.instanceId === input.instanceId &&
-                  Equal.equals(workspaceSnapshotOf(candidate), scanBase)
+                  sameWorkspaceCatalogBasis(scanBase, candidate) &&
+                  Equal.equals(workspaceSnapshotOf(candidate), workspaceSnapshotOf(scanBase))
                     ? upsertProviderWorkspaceSnapshot(candidate, input.cwd, {
                         ...scopedSnapshot,
                         checkedAt: scannedAt,

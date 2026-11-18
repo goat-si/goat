@@ -315,6 +315,10 @@ export const ServerProvider = Schema.Struct({
     Schema.withDecodingDefault(Effect.succeed([])),
   ),
   skills: Schema.Array(ServerProviderSkill).pipe(Schema.withDecodingDefault(Effect.succeed([]))),
+  /** Digest of the full machine command and skill lists for an on-demand catalog. */
+  catalogDigest: Schema.optionalKey(TrimmedNonEmptyString),
+  /** The digest whose lists this client has loaded. Stored in the client cache. */
+  loadedCatalogDigest: Schema.optionalKey(TrimmedNonEmptyString),
   workspaceSnapshots: Schema.optionalKey(Schema.Array(ServerProviderWorkspaceSnapshot)),
   usageLimits: Schema.optional(ServerProviderUsageLimits),
   versionAdvisory: Schema.optionalKey(ServerProviderVersionAdvisory),
@@ -860,6 +864,7 @@ export class ServerProviderUpdateError extends Schema.TaggedError<ServerProvider
 export const ServerSelfUpdateInput = Schema.Struct({
   /** Exact GOAT release version, never a channel, so server and client agree on the request. */
   targetVersion: TrimmedNonEmptyString,
+  stageOnly: Schema.optionalKey(Schema.Boolean),
   continueRunningThreads: Schema.optionalKey(Schema.Boolean),
   /** Omission preserves desktop app updates; boot-service activation requires idle.
       Continuation records recovery intent, not consent to interrupt running work. */

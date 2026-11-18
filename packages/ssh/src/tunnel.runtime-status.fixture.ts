@@ -87,6 +87,7 @@ export const fixture = (
   );
   const calls = { probes: 0, uploads: 0, launches: 0, forwards: 0, prompts: 0, strict: false };
   const probeScripts: Array<string> = [];
+  const launchScripts: Array<string> = [];
   const spawner = ChildProcessSpawner.make((command) =>
     Effect.gen(function* () {
       if (command._tag !== "StandardCommand") return yield* Effect.die("Unexpected command");
@@ -138,6 +139,7 @@ export const fixture = (
           };
         return makeSuccessfulProcess(typeof probe === "string" ? probe : JSON.stringify(probe));
       }
+      launchScripts.push(script);
       calls.launches++;
       yield* Deferred.succeed(launchStarted(calls.launches), undefined);
       if (launchDefect) return yield* Effect.die(new Error("launch defect"));
@@ -175,6 +177,7 @@ export const fixture = (
   return {
     calls,
     probeScripts,
+    launchScripts,
     setToolFixProbe: (value: string) => {
       toolFixProbe = value;
     },

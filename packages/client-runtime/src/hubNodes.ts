@@ -154,6 +154,12 @@ function hasUnknownRequestTag(error: unknown, tag: RegExp): boolean {
   return false;
 }
 
+/** An older server answers a method it does not have as an unknown request tag. */
+export function isUnknownRequestTagError(error: unknown, method: string): boolean {
+  const escaped = method.replace(/[.*+?^${}()|[\]\\]/gu, "\\$&");
+  return hasUnknownRequestTag(error, new RegExp(`^Unknown request tag: ${escaped}$`, "u"));
+}
+
 export function isHubNodesUnsupportedError(error: unknown): boolean {
   return hasUnknownRequestTag(error, /^Unknown request tag: hub\.nodes\.[a-z]+$/iu);
 }

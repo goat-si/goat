@@ -48,6 +48,15 @@ export class ThreadTitleRegenerationService extends Context.Service<
   }
 >()("goat/orchestration-v2/ThreadTitleRegenerationService") {}
 
+type Outcome =
+  | { readonly status: "renamed"; readonly title: string }
+  | { readonly status: "unchanged" }
+  | { readonly status: "failed"; readonly message: string };
+
+// Only sentences the server wrote reach the thread: a provider CLI's raw output can hold
+// anything (request ids, key fragments, echoed conversation), so it stays in the server log.
+const GENERATION_FAILED_MESSAGE = "Title generation failed.";
+
 const make = Effect.gen(function* () {
   const threads = yield* ThreadManagementService.ThreadManagementService;
   const projects = yield* ProjectStore.ProjectStoreV2;
@@ -58,15 +67,24 @@ const make = Effect.gen(function* () {
   const complete = (input: {
     readonly threadId: ThreadId;
     readonly requestId: CommandId;
-    readonly title?: string;
+    readonly kind: { readonly type: "initial" | "regenerate" };
+    readonly outcome: Outcome;
   }) =>
     threads
       .dispatch({
-        type: "thread.title.regeneration.complete",
         commandId: CommandId.make(`${input.requestId}:title-complete`),
         threadId: input.threadId,
         requestId: input.requestId,
-        ...(input.title === undefined ? {} : { title: input.title }),
+        ...(input.outcome.status === "renamed" ? { title: input.outcome.title } : {}),
+        ...(input.kind.type === "regenerate"
+          ? {
+              type: "thread.title.regeneration.complete.internal",
+              outcome: {
+                status: input.outcome.status,
+                ...(input.outcome.status === "failed" ? { message: input.outcome.message } : {}),
+              },
+            }
+          : { type: "thread.title.regeneration.complete" }),
       })
       .pipe(Effect.asVoid);
 
@@ -112,9 +130,7 @@ const make = Effect.gen(function* () {
   const execute: ThreadTitleRegenerationService["Service"]["execute"] = Effect.fn(
     "ThreadTitleRegenerationService.execute",
   )(function* (input) {
-    const outcome:
-      | { readonly type: "stale" }
-      | { readonly type: "complete"; readonly title?: string } = yield* Effect.gen(function* () {
+    const outcome: Outcome | { readonly status: "stale" } = yield* Effect.gen(function* () {
       const projection = yield* threads.getThreadRecords(
         input.threadId,
         ["messages"],
@@ -123,12 +139,12 @@ const make = Effect.gen(function* () {
           : { messageRoles: ["user", "assistant"] },
       );
       if (projection.thread.titleRegeneration?.requestId !== input.requestId) {
-        return { type: "stale" as const };
+        return { status: "stale" as const };
       }
 
       const project = yield* projects.get(projection.thread.projectId);
       if (Option.isNone(project)) {
-        return { type: "complete" as const };
+        return { status: "failed" as const, message: "This thread's project no longer exists." };
       }
 
       let context: {
@@ -153,7 +169,10 @@ const make = Effect.gen(function* () {
         );
       }
       if (context.message.length === 0 && context.attachments.length === 0) {
-        return { type: "complete" as const };
+        return {
+          status: "failed" as const,
+          message: "This thread has no messages to title yet.",
+        };
       }
 
       // A deleted source should not cost the fork its title.
@@ -183,15 +202,20 @@ const make = Effect.gen(function* () {
       const generatedTitle = result.title.trim();
       return generatedTitle === "New thread" ||
         (input.kind.type === "regenerate" && generatedTitle === projection.thread.title.trim())
-        ? { type: "complete" as const }
-        : { type: "complete" as const, title: result.title };
+        ? { status: "unchanged" as const }
+        : { status: "renamed" as const, title: result.title };
     }).pipe(
       Effect.retry({
         times: input.kind.type === "initial" ? 2 : 0,
         schedule: Schedule.exponential("2 seconds"),
       }),
       OwnedEffectDeadline.generateTitle,
-      Effect.map(Option.getOrElse(() => ({ type: "complete" as const }))),
+      Effect.map(
+        Option.getOrElse(() => ({
+          status: "failed" as const,
+          message: "Title generation took longer than two minutes.",
+        })),
+      ),
       Effect.catchCause((cause) =>
         Cause.hasInterruptsOnly(cause)
           ? Effect.interrupt
@@ -199,17 +223,14 @@ const make = Effect.gen(function* () {
               threadId: input.threadId,
               requestId: input.requestId,
               cause,
-            }).pipe(Effect.as({ type: "complete" as const })),
+            }).pipe(Effect.as({ status: "failed" as const, message: GENERATION_FAILED_MESSAGE })),
       ),
     );
 
-    if (outcome.type === "stale") {
+    if (outcome.status === "stale") {
       return;
     }
-    yield* complete({
-      ...input,
-      ...(outcome.title === undefined ? {} : { title: outcome.title }),
-    });
+    yield* complete({ ...input, outcome });
   });
 
   return ThreadTitleRegenerationService.of({ execute });

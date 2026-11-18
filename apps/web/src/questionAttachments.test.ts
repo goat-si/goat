@@ -257,3 +257,74 @@ it("moves a cancelled answer's images and files into the thread draft without re
   expect(store.getComposerDraft(fileQuestion)).toBeNull();
   expect(release).not.toHaveBeenCalled();
 });
+
+it("restores an expired question's unique images without releasing the thread draft's upload", () => {
+  const store = useComposerDraftStore.getState();
+  const target = { environmentId, threadId };
+  const request = RuntimeRequestId.make("expired");
+  const retained = {
+    type: "image" as const,
+    id: "retained",
+    name: "screen.png",
+    mimeType: "image/png",
+    sizeBytes: 5,
+    previewUrl: "blob:retained",
+    file: new File(["image"], "screen.png", { type: "image/png" }),
+  };
+  const duplicate = { ...retained, previewUrl: "blob:duplicate" };
+  const added = { ...retained, id: "added", name: "another.png", previewUrl: "blob:added" };
+  const question = questionAttachmentDraftId(environmentId, threadId, request, "first");
+  const other = questionAttachmentDraftId(environmentId, threadId, request, "second");
+  store.addImages(target, [retained]);
+  store.addImages(question, [retained]);
+  store.addImages(other, [duplicate, added]);
+
+  using revoke = vi.spyOn(URL, "revokeObjectURL");
+  makeThreadRequestsResolvedAnnouncer(
+    environmentId,
+    threadId,
+  )([{ id: request, status: "expired" }]);
+
+  expect(store.getComposerDraft(target)?.images.map(({ id }) => id)).toEqual(["retained", "added"]);
+  expect(store.getComposerDraft(question)).toBeNull();
+  expect(store.getComposerDraft(other)).toBeNull();
+  expect(release).not.toHaveBeenCalled();
+  expect(revoke).toHaveBeenCalledWith(duplicate.previewUrl);
+  expect(revoke).not.toHaveBeenCalledWith(retained.previewUrl);
+});
+
+it("returns distinct images with the same name, type and size when a question expires", async () => {
+  const store = useComposerDraftStore.getState();
+  const target = { environmentId, threadId };
+  const request = RuntimeRequestId.make("matching-image-metadata");
+  const question = questionAttachmentDraftId(environmentId, threadId, request, "first");
+  const existing = {
+    type: "image" as const,
+    id: "first-capture",
+    name: "screen.png",
+    mimeType: "image/png",
+    sizeBytes: 3,
+    previewUrl: "blob:first-capture",
+    file: new File(["one"], "screen.png", { type: "image/png" }),
+  };
+  const pending = {
+    ...existing,
+    id: "second-capture",
+    previewUrl: "blob:second-capture",
+    file: new File(["two"], "screen.png", { type: "image/png" }),
+  };
+  store.addImages(target, [existing]);
+  store.addImages(question, [pending]);
+
+  using revoke = vi.spyOn(URL, "revokeObjectURL");
+  makeThreadRequestsResolvedAnnouncer(
+    environmentId,
+    threadId,
+  )([{ id: request, status: "expired" }]);
+
+  const images = store.getComposerDraft(target)?.images ?? [];
+  expect(images.map(({ id }) => id)).toEqual([existing.id, pending.id]);
+  expect(await Promise.all(images.map(({ file }) => file?.text()))).toEqual(["one", "two"]);
+  expect(release).not.toHaveBeenCalled();
+  expect(revoke).not.toHaveBeenCalledWith(pending.previewUrl);
+});

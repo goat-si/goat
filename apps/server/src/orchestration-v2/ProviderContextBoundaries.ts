@@ -154,12 +154,20 @@ export function visibleDeltaRunOrdinals(
 }
 
 export function shouldPrepareLegacyImportHandoff(input: {
+  readonly providerThread?:
+    | Pick<OrchestrationV2ProviderThread, "driver" | "nativeThreadRef">
+    | undefined;
   readonly hasCompletedRun: boolean;
   readonly historyOrigin: OrchestrationV2AppThread["historyOrigin"];
   readonly legacyImportItemCount: number;
 }): boolean {
+  const provider = input.providerThread;
+  const hasNativeHistory = provider?.driver === "acpRegistry" && provider.nativeThreadRef !== null;
   return (
-    input.historyOrigin === "v1_import" && !input.hasCompletedRun && input.legacyImportItemCount > 0
+    input.historyOrigin === "v1_import" &&
+    !hasNativeHistory &&
+    !input.hasCompletedRun &&
+    input.legacyImportItemCount > 0
   );
 }
 

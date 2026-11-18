@@ -366,6 +366,24 @@ export const make = Effect.fn("cloud.server_self_update.make")(function* () {
     );
   });
 
+  const prepare: ServerSelfUpdate["Service"]["prepare"] = (targetVersion) =>
+    Effect.uninterruptibleMask((restore) =>
+      Effect.gen(function* () {
+        if (capability !== "boot-service" || !isExactServiceVersion(targetVersion)) {
+          return yield* failWith(
+            "Background preparation requires a launcher-managed server and an exact goat version.",
+          );
+        }
+        if (yield* Ref.getAndSet(inFlight, true)) {
+          return yield* failWith("A server update is already in progress.");
+        }
+        return yield* restore(prepareRuntime(targetVersion)).pipe(
+          Effect.asVoid,
+          Effect.ensuring(Ref.set(inFlight, false)),
+        );
+      }),
+    );
+
   const update: ServerSelfUpdate["Service"]["update"] = Effect.fn(
     "cloud.server_self_update.update",
   )(function* (
@@ -374,6 +392,12 @@ export const make = Effect.fn("cloud.server_self_update.make")(function* () {
     onHandoffAccepted = () => Effect.void,
     actor = { kind: "internal" },
   ) {
+    if (input.stageOnly === true) {
+      const targetVersion = input.targetVersion.trim();
+      yield* reportProgress("downloading");
+      yield* prepare(targetVersion);
+      return { targetVersion, method: "boot-service" as const };
+    }
     if (capability === "desktop-managed") {
       if (desktopAppUpdate.available) {
         return yield* desktopAppUpdate.run(reportProgress);
@@ -469,23 +493,7 @@ export const make = Effect.fn("cloud.server_self_update.make")(function* () {
   return ServerSelfUpdate.of({
     capability,
     isUpdating: Ref.get(inFlight),
-    prepare: (targetVersion) =>
-      Effect.uninterruptibleMask((restore) =>
-        Effect.gen(function* () {
-          if (capability !== "boot-service" || !isExactServiceVersion(targetVersion)) {
-            return yield* failWith(
-              "Background preparation requires a launcher-managed server and an exact goat version.",
-            );
-          }
-          if (yield* Ref.getAndSet(inFlight, true)) {
-            return yield* failWith("A server update is already in progress.");
-          }
-          return yield* restore(prepareRuntime(targetVersion)).pipe(
-            Effect.asVoid,
-            Effect.ensuring(Ref.set(inFlight, false)),
-          );
-        }),
-      ),
+    prepare,
     update,
     commitDesktopUpdate: Effect.fn("ServerSelfUpdate.commitDesktopUpdate")(
       function (requestId, onHandoffAccepted) {

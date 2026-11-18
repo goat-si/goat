@@ -10,6 +10,7 @@ import * as ServerSecretStore from "../auth/ServerSecretStore.ts";
 import * as BackgroundPolicy from "../background/BackgroundPolicy.ts";
 import * as ServerConfig from "../config.ts";
 import * as ServerEnvironment from "../environment/ServerEnvironment.ts";
+import { ServerActivation } from "../serverActivation.ts";
 import * as ServerSettings from "../serverSettings.ts";
 import * as DocumentText from "./DocumentText.ts";
 import * as ProviderCredentialStore from "./ProviderCredentialStore.ts";
@@ -25,7 +26,9 @@ export const layer = Layer.effect(
     const secrets = yield* ServerSecretStore.ServerSecretStore;
     const digest = yield* Digest.Digest;
     const fileSystem = yield* FileSystem.FileSystem;
+    const awaitServerReady = yield* ServerActivation;
     return ProviderHost.ProviderHost.of({
+      ...(awaitServerReady === undefined ? {} : { awaitServerReady }),
       environmentId,
       paths: {
         cwd: config.cwd,

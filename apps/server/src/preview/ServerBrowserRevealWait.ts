@@ -2,6 +2,7 @@
 
 // A revealed tab's client opens the panel and attaches its stream a few round trips later, remote ones included.
 const REVEAL_VIEWER_WAIT_MS = 1_000;
+const REVEAL_DESKTOP_WAIT_MS = 3_000;
 
 interface RevealedTab {
   readonly viewers: ReadonlySet<unknown>;
@@ -17,8 +18,14 @@ export const awaitRevealedViewer = async (
   tab: RevealedTab,
   reveal: boolean | undefined,
   deadlineMs: number,
+  waitForDesktop?: (remainingMs: number) => Promise<boolean>,
 ) => {
-  if (reveal !== true || tab.viewers.size > 0 || tab.desktop !== null) return;
+  if (reveal !== true || tab.viewers.size > 0) return;
+  if (tab.desktop !== null) {
+    const remainingMs = Math.min(REVEAL_DESKTOP_WAIT_MS, deadlineMs - performance.now());
+    if (remainingMs > 0) await waitForDesktop?.(remainingMs);
+    return;
+  }
   const attached = (tab.viewerAttached ??= Promise.withResolvers());
   let timer: ReturnType<typeof setTimeout> | undefined;
   await Promise.race([

@@ -19,6 +19,7 @@ import {
   readReleaseAsset,
   releaseAssetKey,
   releaseAssetVersion,
+  releaseAppImageName,
   releaseInputs,
   decodeReleaseReport,
   ReleaseVerificationError,
@@ -316,7 +317,10 @@ describe("release payload helpers", () => {
       ),
     ).toHaveLength(2);
     expect(
-      checkReleaseAssetSet([...names, `GOAT-${version}-x86_64.AppImage.blockmap`], version),
+      checkReleaseAssetSet(
+        [...names, `${releaseAppImageName(version, "x86_64")}.blockmap`],
+        version,
+      ),
     ).toEqual([]);
   });
   it("keys Linux x64 packages by electron-builder's distro arch names", () => {

@@ -19,7 +19,6 @@ import {
   settledCreationOutcomeKeysAtom,
   setQueuedMessageRetrying,
 } from "./threadOutboxDeliverySupport";
-import { sourceControlClients } from "@goat/client-runtime/source-control-clients";
 import * as Dialog from "../components/ui/Dialog";
 import {
   threadRuntimeIsActive,
@@ -306,6 +305,7 @@ export function createThreadOutboxDelivery(): {
           interactionMode: sendSettings.interactionMode,
           createdAt: queuedMessage.createdAt,
           dispatchMode: "queue",
+          resendAfterSocketLoss: false,
         },
       });
       if (AsyncResult.isFailure(compactionResult) && !hasAccess()) return true;
@@ -345,6 +345,7 @@ export function createThreadOutboxDelivery(): {
         interactionMode: sendSettings.interactionMode,
         createdAt: queuedMessage.createdAt,
         dispatchMode: queuedMessage.dispatchMode ?? "start",
+        resendAfterSocketLoss: false,
       },
     });
     if (AsyncResult.isFailure(deliveryResult) && !hasAccess()) return true;
@@ -465,13 +466,9 @@ export function createThreadOutboxDelivery(): {
         return restoreQueuedMessage(persistedMessage, failure.message);
       if (!AsyncResult.isSuccess(checkout)) return false;
       if (!checkout.value.worktreePath || !checkout.value.isOnPullRequestHead) {
-        const { shortLabel } = (
-          sourceControlClients.findByChangeRequestUrl(creation.pullRequestReference) ??
-          sourceControlClients.get(undefined)
-        ).changeRequest;
         return restoreQueuedMessage(
           persistedMessage,
-          `The ${shortLabel} worktree has local changes and could not update to the ${shortLabel} head. Resolve them before trying again.`,
+          "The PR worktree could not advance to the latest commit. Your message is back in the draft.",
         );
       }
       workspace = {

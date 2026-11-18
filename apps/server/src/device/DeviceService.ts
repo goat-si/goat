@@ -93,7 +93,7 @@ export class DeviceService extends Context.Service<
     readonly testHost: (
       config: SshDeviceHostConfig,
     ) => Effect.Effect<DeviceHostSummary, DeviceError>;
-    /** Who an Expo credential signs in as and which EAS projects it can run sessions under. */
+    /** Who an Expo credential signs in as and which Expo projects it can run sessions under. */
     readonly easAccount: (
       input: DeviceEasAccountInput,
     ) => Effect.Effect<DeviceEasAccount, DeviceEasAccountError>;
@@ -790,7 +790,7 @@ export const makeWithHosts = Effect.fn("DeviceService.makeWithHosts")(function* 
       easAccount: Effect.fn("DeviceService.easAccount")(function () {
         return Effect.fail(
           new DeviceEasAccountError({
-            reason: "EAS accounts are unavailable in this device service.",
+            reason: "Expo accounts are unavailable in this device service.",
           }),
         );
       }),
@@ -1063,7 +1063,7 @@ export const make = Effect.gen(function* () {
     );
   });
   const changes = yield* settings.subscribeChanges;
-  // Settings keep EAS hosts apart from SSH hosts; an id both lists use stays the SSH host's.
+  // Settings keep Expo hosts apart from SSH hosts; an id both lists use stays the SSH host's.
   const configuredHosts = (value: {
     readonly deviceHosts: ReadonlyArray<SshDeviceHostConfig>;
     readonly easDeviceHosts: ReadonlyArray<EasDeviceHostConfig>;

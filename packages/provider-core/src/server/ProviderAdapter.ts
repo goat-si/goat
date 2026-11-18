@@ -105,16 +105,19 @@ export const ProviderAdapterV2Event = Schema.Union([
     driver: ProviderDriverKind,
     threadId: Schema.optional(ThreadId),
     providerTurn: OrchestrationV2ProviderTurn,
+    retainedRuntimeRequestIds: Schema.optional(Schema.Array(RuntimeRequestId)),
   }),
   Schema.Struct({
     type: Schema.Literal("node.updated"),
     driver: ProviderDriverKind,
     node: OrchestrationV2ExecutionNode,
+    sessionScoped: Schema.optional(Schema.Boolean),
   }),
   Schema.Struct({
     type: Schema.Literal("subagent.updated"),
     driver: ProviderDriverKind,
     subagent: OrchestrationV2Subagent,
+    sessionScoped: Schema.optional(Schema.Boolean),
   }),
   Schema.Struct({
     type: Schema.Literal("message.updated"),
@@ -176,6 +179,7 @@ export const ProviderAdapterV2Event = Schema.Union([
     threadDisposition: Schema.Literals(["reusable", "broken"]),
     /** The full result a cloud task reported, when its saved summary is shortened. */
     resultText: Schema.optional(Schema.String),
+    retainedRuntimeRequestIds: Schema.optional(Schema.Array(RuntimeRequestId)),
   }),
   Schema.Struct({
     type: Schema.Literal("turn.terminal"),
@@ -191,6 +195,7 @@ export const ProviderAdapterV2Event = Schema.Union([
     threadDisposition: Schema.Literals(["reusable", "broken"]),
     /** Child turns outlive root failure and report their own terminals; otherwise open children settle. */
     childTurnsContinue: Schema.optional(Schema.Literal(true)),
+    retainedRuntimeRequestIds: Schema.optional(Schema.Array(RuntimeRequestId)),
   }),
 ]);
 export type ProviderAdapterV2Event = typeof ProviderAdapterV2Event.Type;
@@ -299,6 +304,7 @@ export class ProviderAdapterReadThreadSnapshotError extends Schema.TaggedError<P
   {
     driver: ProviderDriverKind,
     providerThreadId: ProviderThreadId,
+    historyLimitExceeded: Schema.optionalKey(Schema.Literal(true)),
     cause: Schema.optional(Schema.Defect()),
   },
 ) {
@@ -493,6 +499,7 @@ export interface ProviderAdapterV2OpenSessionInput {
   readonly runtimePolicy: ProviderAdapterV2RuntimePolicy;
   readonly resumeFromSession?: OrchestrationV2ProviderSession;
   readonly initialNativeThreadId?: string;
+  readonly historyImport?: true;
   readonly initialProviderItemIdentityVersion?: 2;
 }
 
@@ -583,6 +590,7 @@ export interface ProviderAdapterV2ThreadSnapshot {
   readonly providerThread: OrchestrationV2ProviderThread;
   readonly providerTurns: ReadonlyArray<OrchestrationV2ProviderTurn>;
   readonly messages: ReadonlyArray<OrchestrationV2ConversationMessage>;
+  readonly reasoningMessageIds?: ReadonlyArray<OrchestrationV2ConversationMessage["id"]>;
   readonly runtimeRequests: ReadonlyArray<OrchestrationV2RuntimeRequest>;
   readonly providerPayload?: unknown;
 }

@@ -21,17 +21,6 @@ query GoatExpoViewer {
   }
 }
 
-query GoatEasSimulatorAvailability($appId: String!, $filter: [String!]) {
-  app {
-    byId(appId: $appId) {
-      ownerAccount {
-        name
-        accountFeatureGates(filter: $filter)
-      }
-    }
-  }
-}
-
 mutation GoatCreateEasSimulatorSession($input: CreateDeviceRunSessionInput!) {
   deviceRunSession {
     createDeviceRunSession(deviceRunSessionInput: $input) {

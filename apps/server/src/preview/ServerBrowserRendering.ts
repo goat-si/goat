@@ -202,5 +202,6 @@ export const makeRendering = (runPromise: <A>(effect: Effect.Effect<A>) => Promi
     applySetting,
     applyRendering,
     applyOpenRendering,
+    applyZoom,
   };
 };

@@ -137,7 +137,11 @@ describe("lease proxy cross-process primitive gate", () => {
           inspect: (token: string) =>
             Effect.succeed(
               token === "fixture"
-                ? { threadId, recheckAt: DateTime.toEpochMillis(deadline) }
+                ? {
+                    threadId,
+                    recheckAt: DateTime.toEpochMillis(deadline),
+                    recheckAtMonotonicMs: Number.MAX_SAFE_INTEGER,
+                  }
                 : undefined,
             ),
           subscribeChanges: PubSub.subscribe(credentialChanges),

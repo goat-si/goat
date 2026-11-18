@@ -41,7 +41,6 @@ import * as Fiber from "effect/Fiber";
 import * as Layer from "effect/Layer";
 import * as Option from "effect/Option";
 import * as Ref from "effect/Ref";
-import * as Schema from "effect/Schema";
 import * as Scope from "effect/Scope";
 import {
   buildTemporaryWorktreeBranchName,
@@ -75,7 +74,13 @@ import {
   withPreparationLog,
 } from "./preparationLog.ts";
 import { confirmLaunchStep, type LaunchConfirm } from "./goat/LaunchConfirm.ts";
-import { classifyPreparationFailure } from "./goat/PreparationFailure.ts";
+import { checkedOutTo, submoduleProgress } from "./goat/worktreeSubmoduleProgress.ts";
+import {
+  failureDetail,
+  preparationFailureClass,
+  ThreadLaunchError,
+} from "./goat/ThreadLaunchError.ts";
+export { preparationFailureClass, ThreadLaunchError } from "./goat/ThreadLaunchError.ts";
 import { makeLaunchCommandSlots } from "./goat/launchCommandSlots.ts";
 import {
   preparationRunStopped,
@@ -165,32 +170,6 @@ export interface ThreadLaunchResult {
   readonly sequence?: number;
 }
 
-export class ThreadLaunchError extends Schema.TaggedError<ThreadLaunchError>()(
-  "ThreadLaunchError",
-  {
-    operation: Schema.Literals([
-      "resolve-project",
-      "read-receipt",
-      "generate-metadata",
-      "provision-worktree",
-      "run-setup-script",
-      "create-thread",
-      "update-thread",
-      "dispatch-message",
-      "release-run",
-      "fail-run",
-    ]),
-    commandId: CommandId,
-    projectId: ProjectId,
-    threadId: Schema.optional(ThreadId),
-    cause: Schema.Defect(),
-  },
-) {
-  override get message(): string {
-    return `Thread launch ${this.commandId} failed during ${this.operation}.`;
-  }
-}
-
 export { ThreadLaunchWorkspaceMissingError };
 
 export class ThreadLaunchService extends Context.Service<
@@ -230,20 +209,6 @@ export class ThreadLaunchService extends Context.Service<
     readonly prepareRun: (input: ThreadLaunchPreparationInput) => Effect.Effect<void>;
   }
 >()("goat/orchestration-v2/ThreadLaunchService") {}
-
-const isThreadLaunchError = Schema.is(ThreadLaunchError);
-
-function failureDetail(error: unknown): string {
-  if (isThreadLaunchError(error)) {
-    const cause = error.cause;
-    const detail = cause instanceof Error ? cause.message : String(cause);
-    return `Workspace preparation failed during ${error.operation.replaceAll("-", " ")}: ${detail}`;
-  }
-  return `Workspace preparation failed: ${error instanceof Error ? error.message : String(error)}`;
-}
-
-export const preparationFailureClass = (error: unknown) =>
-  classifyPreparationFailure(isThreadLaunchError(error) ? error.cause : error);
 
 const make = Effect.gen(function* () {
   const projects = yield* ProjectService.ProjectService;
@@ -405,7 +370,7 @@ const make = Effect.gen(function* () {
         threadId,
         branch: input.workspaceStrategy.branch ?? null,
         baseRef: input.workspaceStrategy.baseRef,
-        stages: ["fetch", "checkout", "setup-script", "agent"],
+        stages: ["fetch", "checkout", "submodules", "setup-script", "agent"],
         fiber: yield* Effect.fiber,
       });
     } else if (reused !== undefined) {
@@ -584,6 +549,7 @@ const make = Effect.gen(function* () {
                   Effect.sync(() => {
                     worktreesDirectoryNotice = `Used the default folder: ${configured} ${describeWorktreesDirectoryUnavailable(unavailable.reason)}`;
                   }),
+                ...submoduleProgress(setupTracker, threadId),
                 onCheckoutProgress: (progress) =>
                   setupTracker.stage(threadId, "checkout", { percent: progress.percent }),
                 onHookStarted: (hookName) =>
@@ -621,7 +587,7 @@ const make = Effect.gen(function* () {
         if (existingBranchNotice !== null) {
           yield* Effect.logInfo(existingBranchNotice, { threadId, worktreePath });
         }
-        yield* setupTracker.update(threadId, (snapshot) => ({ ...snapshot, worktreePath, branch }));
+        yield* setupTracker.update(threadId, checkedOutTo(worktreePath, branch));
         const checkoutWarning = worktreesDirectoryNotice ?? hookStallNotice;
         yield* checkoutWarning === null
           ? setupTracker.stageStatus(

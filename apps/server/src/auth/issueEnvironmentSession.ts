@@ -1,5 +1,11 @@
-import { AuthStandardClientScopes } from "@goat/contracts";
+import {
+  AuthStandardClientScopes,
+  type AuthEnvironmentScope,
+  type ChildSetupPurpose,
+  type RuntimeMode,
+} from "@goat/contracts";
 import * as DateTime from "effect/DateTime";
+import type * as Duration from "effect/Duration";
 import * as Effect from "effect/Effect";
 import * as HubConnectAccess from "./HubConnectAccess.ts";
 import * as PairingGrantStore from "./PairingGrantStore.ts";
@@ -10,10 +16,36 @@ import {
   ServerAuthSessionTokenIssueError,
 } from "./EnvironmentAuth.ts";
 
+export interface IssueSessionInput {
+  readonly ttl?: Duration.Duration;
+  readonly subject?: string;
+  /** Issues a Pen member's session, under its own subject and bounds: neither may be given. */
+  readonly penMemberNode?: string;
+  readonly scopes?: ReadonlyArray<AuthEnvironmentScope>;
+  readonly label?: string;
+  /** Caps the threads an `mcp-client` session may start or change; see `authenticateMcpClient`. */
+  readonly runtimeModeCeiling?: RuntimeMode;
+  readonly childSetupPurpose?: ChildSetupPurpose;
+}
+
 export const make = Effect.fn("IssuedEnvironmentSession.make")(function* (defaultSubject: string) {
   const sessions = yield* SessionStore.SessionStore;
-  const issueSession: EnvironmentAuth["Service"]["issueSession"] = (input) =>
-    input?.subject === PairingGrantStore.DESKTOP_BOOTSTRAP_SUBJECT
+  const issueSession: EnvironmentAuth["Service"]["issueSession"] = (input) => {
+    const member = input?.penMemberNode;
+    const subject =
+      member === undefined ? (input?.subject ?? defaultSubject) : `pen-member:${member}`;
+    if (
+      member !== undefined &&
+      (input?.subject !== undefined ||
+        input?.runtimeModeCeiling !== undefined ||
+        input?.childSetupPurpose !== undefined)
+    )
+      return Effect.fail(
+        new ServerAuthSessionTokenIssueError({
+          cause: "A Pen member session takes no other bounds",
+        }),
+      );
+    return input?.subject === PairingGrantStore.DESKTOP_BOOTSTRAP_SUBJECT
       ? Effect.fail(new PairingGrantStore.ReservedAuthSubjectError())
       : HubConnectAccess.isPrivilegedConnect({
             subject: input?.subject ?? "",
@@ -24,7 +56,7 @@ export const make = Effect.fn("IssuedEnvironmentSession.make")(function* (defaul
           )
         : sessions
             .issue({
-              subject: input?.subject ?? defaultSubject,
+              ...(member === undefined ? { subject } : { penMemberNode: member }),
               method: "bearer-access-token",
               scopes: input?.scopes ?? AuthStandardClientScopes,
               client: {
@@ -45,7 +77,7 @@ export const make = Effect.fn("IssuedEnvironmentSession.make")(function* (defaul
                     token: issued.token,
                     method: "bearer-access-token",
                     scopes: issued.scopes,
-                    subject: input?.subject ?? defaultSubject,
+                    subject,
                     client: issued.client,
                     expiresAt: DateTime.toUtc(issued.expiresAt),
                     ...(issued.childSetupPurpose
@@ -56,6 +88,7 @@ export const make = Effect.fn("IssuedEnvironmentSession.make")(function* (defaul
               Effect.mapError((cause) => new ServerAuthSessionTokenIssueError({ cause })),
               Effect.withSpan("EnvironmentAuth.issueSession"),
             );
+  };
 
   return issueSession;
 });

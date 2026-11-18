@@ -585,7 +585,7 @@ publish_selected_runner() {
   }
   check_retained_runner
 @@GOAT_RUNNER_INSTALL@@
-  sync_runner_alias || :
+  @@GOAT_SYNC_RUNNER_ALIAS@@
   RUNNER_PUBLISHED=1
 }
 pending_attachment_safe() {

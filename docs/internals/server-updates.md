@@ -4,8 +4,16 @@ A [stable launcher](../../apps/server/src/serviceLauncher.ts) owns the runtime
 selected by systemd or launchd. It is the only runtime writer of durable service
 state. Server children request updates over inherited IPC; they never rewrite
 their service definition or select their own replacement. Local service commands
-may replace the launcher and state while the service is stopped. Foreground CLI
-processes do not self-update.
+may replace the launcher and state, optionally deferring the restart. Foreground
+CLI processes do not self-update.
+
+Both writers serialize state and unit writes through
+[file leases](../../apps/server/src/cloud/serviceSelectionLock.ts). The installer
+takes the state lease before the unit lease; the launcher never holds both, so a
+unit failure cannot block a durable commit. Manager stop and start commands run
+outside both leases, since stopping a launcher that waits on a lease would deadlock.
+A running launcher refuses further updates once a local command changed its selection.
+A launcher from before the leases takes none, so a local command can still race its updates.
 
 This page covers one replacement. The policy above it (independent app and server
 updates, protocol ranges, who may update, and auditing) is in
@@ -14,12 +22,30 @@ updates, protocol ranges, who may update, and auditing) is in
 Exact-version installs keep restarts independent of npm cache eviction or a moving
 release tag. Installation and preflight happen in staging before publishing an
 immutable runtime. Preflight checks the launcher protocol because a target that
-needs new rollback guarantees cannot safely run under an older launcher. Upgrading
-that launcher requires a local service update.
+needs new rollback guarantees cannot safely run under an older launcher. A remote
+update replaces only the child, so upgrading the launcher requires a local service
+update with a restart.
+
+Durable state and the context a launcher gives its child stay at protocol 3, the
+value every shipped runtime accepts. A launcher with the leases and unit
+reconciliation says so in the context's optional `launcherProtocol` field, which
+older runtimes ignore. Otherwise a rollback to a runtime from before that launcher
+would refuse its context and never start.
+
+After a commit or rollback the launcher points the unit at the selected runtime and
+reloads the manager, so the next service start runs that version's launcher. Each
+start after a finished update retries this, because a previous reload may have
+failed, and leaves a unit naming a newer runtime or another GOAT home alone. Until a
+deferred local upgrade restarts, systemd (before daemon-reload) and launchd (before
+bootstrap) can respawn the old launcher.
 Each install records the verified archive digest and the executable's SHA-256 in
 `.install-record`. A server update, which runs the cached build unattended,
 reuses an install only while its executable still matches and otherwise installs again
 from the release with `SHA256SUMS`.
+
+A client can stage an exact boot-service release while it waits for idle. It must
+check the staging capability on the connection that sends the request, since
+an older server can ignore the optional flag and activate the update immediately.
 
 Boot-service updates without `confirmReplacement: true` refuse while the server is
 busy. This includes older clients that omit the field. Admission closes and idle is
@@ -99,14 +125,18 @@ generation. If any is not this update's launcher, its trial
 (`service-trial:<updateId>`), or the target restarted during its probation
 (`service-probation:<updateId>`), the snapshot is kept and the reason gains
 `;db-kept-for-other-server`, because restoring would erase that server's writes.
-A rollback that finds the lock busy stays pending and retries, across launcher
-restarts too. Servers older than the lock do not record themselves, so they stay
-invisible to this check.
+A rollback that finds the lock busy stays pending and retries across launcher
+restarts. Legacy owners do not appear in the generation log. The trial records
+a legacy refusal before exiting, and the launcher also keeps the snapshot if a
+trial exit reports ownership without identifying its source.
 
 Rollback stops the trial before restoring. A probation rollback first durably
 records its reason, so recovery still finishes that rollback if ownership stays
 busy beyond the probation deadline. A durable restore marker makes an interrupted
-restore finish before either version boots. Keep the snapshot until probation
+restore finish before either version boots. If rollback also observed a legacy
+owner, the launcher keeps both copies and requires
+[manual recovery](../user/updating.md#recover-an-interrupted-database-restore).
+Keep the snapshot until probation
 expires, or until both restoration and the terminal rollback state are durable.
 The owner-log rule also applies after launcher restarts. A target the launcher restarts
 while its update is on probation records `service-probation:<updateId>`, so a probation

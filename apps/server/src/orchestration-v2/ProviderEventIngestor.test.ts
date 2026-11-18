@@ -4,6 +4,7 @@ import {
   modelSelection,
   CODEX_DRIVER,
   threadCreatedEvent,
+  makeSharedWorktree,
 } from "./ProviderEventIngestor.fixtures.ts";
 export {
   modelSelection,
@@ -46,7 +47,6 @@ import * as Deferred from "effect/Deferred";
 import * as Fiber from "effect/Fiber";
 import * as Effect from "effect/Effect";
 import * as Exit from "effect/Exit";
-import * as FileSystem from "effect/FileSystem";
 import * as Layer from "effect/Layer";
 import * as SqlClient from "effect/sql/SqlClient";
 import * as SqlError from "effect/sql/SqlError";
@@ -160,29 +160,6 @@ const layerFailingWrites = (
     ).pipe(Layer.provide(layerTestEventSink)),
   );
 
-const makeSharedWorktree = Effect.gen(function* () {
-  const fs = yield* FileSystem.FileSystem;
-  const git = yield* GitVcsDriver.GitVcsDriver;
-  const directory = yield* fs.makeTempDirectoryScoped({ prefix: "ingestor-worktree-" });
-  const repo = `${directory}/repo`;
-  const worktreePath = `${directory}/shared`;
-  yield* fs.makeDirectory(repo);
-  const command = (cwd: string, args: string[]) =>
-    git.execute({ operation: "ingestor-test", cwd, args });
-  yield* command(repo, ["init", "-b", "main"]);
-  yield* command(repo, [
-    "-c",
-    "user.name=Test",
-    "-c",
-    "user.email=test@example.test",
-    "commit",
-    "--allow-empty",
-    "-m",
-    "initial",
-  ]);
-  yield* command(repo, ["worktree", "add", "-b", "t3/abcd1234", worktreePath]);
-  return { repo, worktreePath, command };
-});
 const layer = it.layer(layerTest);
 
 it.effect("takes a hub's reset for an unreset usage_limit, then refreshes the snapshot", () =>
@@ -1144,6 +1121,7 @@ layer("ProviderEventIngestorV2", (it) => {
           { key: "answered", responseCapability: { type: "live", providerSessionId } },
           { key: "other-turn", responseCapability: { type: "live", providerSessionId } },
           { key: "approval", responseCapability: { type: "live", providerSessionId } },
+          { key: "retained", responseCapability: { type: "live", providerSessionId } },
         ] as const;
         const fixtures = specs.map((spec, ordinal) => {
           const nodeId = NodeId.make(`${threadId}:${spec.key}`);
@@ -1218,6 +1196,7 @@ layer("ProviderEventIngestorV2", (it) => {
           }
         }
         yield* eventSink.write({ events: seedEvents });
+        const retainedRuntimeRequestIds = [RuntimeRequestId.make(`${threadId}:retained`)];
         const input = {
           providerSessionId,
           providerInstanceId: modelSelection.instanceId,
@@ -1226,6 +1205,7 @@ layer("ProviderEventIngestorV2", (it) => {
             terminal === "control"
               ? {
                   type: "turn.terminal" as const,
+                  retainedRuntimeRequestIds,
                   driver: CODEX_DRIVER,
                   providerThreadId,
                   providerTurnId,
@@ -1236,6 +1216,7 @@ layer("ProviderEventIngestorV2", (it) => {
                 }
               : {
                   type: "provider_turn.updated" as const,
+                  retainedRuntimeRequestIds,
                   driver: CODEX_DRIVER,
                   providerTurn: {
                     id: providerTurnId,
@@ -1276,9 +1257,12 @@ layer("ProviderEventIngestorV2", (it) => {
           stored.filter((entry) => entry.event.type === "runtime-request.updated").length,
           2,
         );
-        assert.isEmpty(
-          (yield* projectionStore.getPendingNativeUserInputs(threadId, providerTurnId))
-            .runtimeRequests,
+        assert.deepEqual(
+          (yield* projectionStore.getPendingNativeUserInputs(
+            threadId,
+            providerTurnId,
+          )).runtimeRequests.map((request) => request.id),
+          retainedRuntimeRequestIds,
         );
         const replayed = yield* eventStore.read({ threadId }).pipe(Stream.runCollect);
         assert.equal(
@@ -1941,7 +1925,7 @@ layer("ProviderEventIngestorV2", (it) => {
     "rechecks a pending native child's branch after the rename scan: %j",
     ({ parentMoved, failure, temporaryBranch }) =>
       Effect.gen(function* () {
-        const { worktreePath, command } = yield* makeSharedWorktree;
+        const { worktreePath, command } = yield* makeSharedWorktree("t3/abcd1234");
         if (temporaryBranch !== "t3/abcd1234")
           yield* command(worktreePath, ["branch", "-m", temporaryBranch]);
         const git = yield* GitVcsDriver.GitVcsDriver;
@@ -2072,7 +2056,7 @@ layer("ProviderEventIngestorV2", (it) => {
     "preserves a native child's branch when the checkout needs no correction: %s",
     (scenario) =>
       Effect.gen(function* () {
-        const { worktreePath, command } = yield* makeSharedWorktree;
+        const { worktreePath, command } = yield* makeSharedWorktree("t3/abcd1234");
         const git = yield* GitVcsDriver.GitVcsDriver;
         const branch = scenario === "explicit" ? "child-feature" : "t3/abcd1234";
         if (scenario === "explicit") yield* command(worktreePath, ["branch", "-m", branch]);

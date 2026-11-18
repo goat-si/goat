@@ -54,7 +54,7 @@ describe("goat pre-push workflow guard", () => {
     expect(f.hook(f.record(f.sha)).status).toBe(0);
   });
 
-  // A gate job runs on the pinned hosted image or the trusted-run lidge gate expression only.
+  // The gate jobs stay hosted, so they never queue behind the matrix on the lidge box.
   it.each([
     [
       "scope",
@@ -72,9 +72,7 @@ describe("goat pre-push workflow guard", () => {
     });
     const refused = f.hook(f.record(f.sha));
     expect(refused.status).toBe(1);
-    expect(refused.stderr).toContain(
-      `jobs.${name}.runs-on must be ubuntu-24.04 or the trusted-run lidge gate expression`,
-    );
+    expect(refused.stderr).toContain(`jobs.${name}.runs-on must be ubuntu-24.04`);
   });
 
   it.each([
