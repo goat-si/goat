@@ -1,5 +1,10 @@
 import * as Effect from "effect/Effect";
-import type { OpenCodeThreadState, TerminalTurnStatus } from "./adapterState.ts";
+import type {
+  OpenCodeChildExecution,
+  OpenCodeSubagentContext,
+  OpenCodeThreadState,
+  TerminalTurnStatus,
+} from "./adapterState.ts";
 
 const MAX_UNCORRELATED_OUTCOMES = 1024;
 
@@ -17,21 +22,35 @@ export function makeDetachedChildOutcomes(
 
   return {
     isStopping,
-    observe(sessionId: string, status: TerminalTurnStatus, finalized: boolean) {
+    claim(sessionId: string, resumed: boolean): OpenCodeChildExecution {
+      const outcome = resumed ? undefined : outcomes.get(sessionId);
+      outcomes.delete(sessionId);
+      return { awaitingStart: resumed, outcome };
+    },
+    start(execution: OpenCodeChildExecution | undefined) {
+      if (execution !== undefined) execution.awaitingStart = false;
+    },
+    observe(
+      sessionId: string,
+      status: TerminalTurnStatus,
+      execution?: OpenCodeChildExecution,
+      finalized = false,
+    ) {
+      if (execution?.awaitingStart && !finalized) return;
+      const prior = execution === undefined ? outcomes.get(sessionId) : execution.outcome;
       const outcome = finalized
         ? status
-        : (outcomes.get(sessionId) ?? (isStopping(sessionId) ? "interrupted" : status));
+        : (prior ?? (isStopping(sessionId) ? "interrupted" : status));
+      if (execution !== undefined) {
+        execution.outcome = outcome;
+        return outcome;
+      }
       if (!outcomes.has(sessionId) && outcomes.size >= MAX_UNCORRELATED_OUTCOMES) {
         const oldest = outcomes.keys().next();
         if (!oldest.done) outcomes.delete(oldest.value);
       }
       outcomes.set(sessionId, outcome);
       return outcome;
-    },
-    take(sessionId: string): TerminalTurnStatus | undefined {
-      const outcome = outcomes.get(sessionId);
-      outcomes.delete(sessionId);
-      return outcome ?? (isStopping(sessionId) ? "interrupted" : undefined);
     },
     withStop<A, E, R>(sessionId: string, stop: Effect.Effect<A, E, R>) {
       return Effect.acquireUseRelease(
@@ -46,4 +65,15 @@ export function makeDetachedChildOutcomes(
       );
     },
   };
+}
+
+export function isChildCallUnder(context: OpenCodeSubagentContext, sessionId: string): boolean {
+  for (
+    let owner: OpenCodeThreadState | undefined = context.parentState;
+    owner;
+    owner = owner.parentSubagent?.parentState
+  ) {
+    if (owner.nativeSessionId === sessionId) return true;
+  }
+  return false;
 }

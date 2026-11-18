@@ -217,6 +217,8 @@ it.effect.each([
   "idle",
   "stop",
   "error-before-launch",
+  "resume",
+  "outcome-capacity",
   "overflow",
   "large-output",
   "capacity",
@@ -264,12 +266,16 @@ it.effect.each([
       Effect.forkScoped,
     );
     const launchOutput = ending === "large-output" ? "🚀".repeat(2048) : "Background task started";
-    const taskPart = (status: "running" | "completed", childId = child) => ({
+    const taskPart = (
+      status: "running" | "completed",
+      childId = child,
+      mode: "detached" | "foreground" | "resume" = "detached",
+    ) => ({
       type: "message.part.updated",
       properties: {
         sessionID: root,
         part: {
-          id: `prt_task_${childId}`,
+          id: `prt_task_${childId}${mode === "resume" ? "_resumed" : ""}`,
           sessionID: root,
           messageID: "msg_root_assistant",
           type: "tool",
@@ -281,9 +287,14 @@ it.effect.each([
               description: "Background sleep task",
               prompt: "sleep",
               subagent_type: "general",
+              ...(mode === "resume" ? { task_id: childId } : {}),
             },
             title: "Background sleep task",
-            metadata: { parentSessionId: root, sessionId: childId, background: true },
+            metadata: {
+              parentSessionId: root,
+              sessionId: childId,
+              background: mode !== "foreground",
+            },
             time: { start: 3, ...(status === "completed" ? { end: 3 } : {}) },
             ...(status === "completed" ? { output: launchOutput } : {}),
           },
@@ -303,18 +314,32 @@ it.effect.each([
       },
     });
     yield* push(status(root, "busy"));
-    yield* push(taskPart("running"));
     const created = (id: string) => ({
       type: "session.created",
       properties: { sessionID: id, info: { id, parentID: root, time: { created: 2, updated: 2 } } },
     });
-    yield* push(created(child));
-    const childError = (name: string) => ({
+    const childError = (name: string, id = child) => ({
       type: "session.error",
-      properties: { sessionID: child, error: { name, data: { message: "Child failed" } } },
+      properties: { sessionID: id, error: { name, data: { message: "Child failed" } } },
     });
-    if (ending === "error-before-launch") yield* push(childError("UnknownError"));
-    yield* push(taskPart("completed"));
+    if (ending === "outcome-capacity") {
+      yield* push(childError("UnknownError"));
+      for (let index = 0; index < 1024; index++) {
+        yield* push(childError("UnknownError", `unbound-${index}`));
+      }
+    } else {
+      yield* push(taskPart("running", child, ending === "resume" ? "foreground" : "detached"));
+      yield* push(created(child));
+      if (ending === "error-before-launch") yield* push(childError("UnknownError"));
+      if (ending === "resume") {
+        yield* push(status(child, "busy"));
+        yield* push(status(child, "idle"));
+        yield* push(taskPart("completed", child, "foreground"));
+        yield* push(taskPart("running", child, "resume"));
+        yield* push(status(child, "busy"));
+      }
+    }
+    yield* push(taskPart("completed", child, ending === "resume" ? "resume" : "detached"));
     if (ending === "capacity") {
       for (let index = 0; index < 128; index++) {
         const id = `ses_child_${index}`;
@@ -333,6 +358,17 @@ it.effect.each([
         ),
       );
       assert.deepEqual([...projected.values()], ["interrupted", ...Array(128).fill("running")]);
+      return;
+    }
+    if (ending === "outcome-capacity" || ending === "resume") {
+      const projected = rootEvents.filter((event) => event.type === "subagent.updated");
+      assert.deepEqual(
+        projected.map((event) => event.subagent.status),
+        ending === "resume" ? ["running", "completed", "running", "running"] : ["idle"],
+      );
+      if (ending === "outcome-capacity") {
+        assert.equal(projected.at(-1)?.subagent.result, "Tracking lost. Outcome unknown.");
+      }
       return;
     }
     assert.deepEqual(

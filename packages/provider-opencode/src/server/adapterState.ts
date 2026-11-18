@@ -34,6 +34,7 @@ export interface ActiveOpenCodeTurn {
   promptOptions?: { readonly agent?: string; readonly variant?: string; readonly system: string };
   readonly usage: OpenCodeTurnTokenUsageAccumulator;
   readonly isRoot: boolean;
+  readonly childCall?: OpenCodeSubagentContext;
   readonly threadId: ThreadId;
   readonly runId: ProviderAdapter.ProviderAdapterV2TurnInput["runId"] | null;
   readonly rootNodeId: ProviderAdapter.ProviderAdapterV2TurnInput["rootNodeId"];
@@ -85,6 +86,12 @@ export interface OpenCodeSubagentContext {
   model: string | null;
   result: string | null;
   launchOutcome?: TerminalTurnStatus;
+  childExecution?: OpenCodeChildExecution;
+}
+
+export interface OpenCodeChildExecution {
+  awaitingStart: boolean;
+  outcome?: TerminalTurnStatus | undefined;
 }
 
 export interface OpenCodeThreadState {

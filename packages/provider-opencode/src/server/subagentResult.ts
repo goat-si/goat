@@ -1,3 +1,5 @@
+export const TRACKING_LOST = "Tracking lost. Outcome unknown.";
+
 const MAX_RESULT_BYTES = 4096;
 const ELLIPSIS = "…";
 

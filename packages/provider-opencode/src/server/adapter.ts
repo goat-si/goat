@@ -1,5 +1,5 @@
-import { subagentResultPreview } from "./subagentResult.ts";
-import { makeDetachedChildOutcomes } from "./detachedChildOutcomes.ts";
+import { subagentResultPreview, TRACKING_LOST } from "./subagentResult.ts";
+import { isChildCallUnder, makeDetachedChildOutcomes } from "./detachedChildOutcomes.ts";
 import {
   topLevelRequestOwner,
   type ActiveOpenCodeTurn,
@@ -603,7 +603,6 @@ export const makeOpenCodeAdapterV2 = Effect.fn("makeOpenCodeAdapterV2")(function
         const childOutcomes = makeDetachedChildOutcomes(
           (id) => subagentsByChildSessionId.get(id)?.parentState ?? relatedSessionOwners.get(id),
         );
-        // Busy children outlive parent settlement; keep their server open.
         const busySessionIds = new Set<string>();
         const unstartedSessionIds = new Set<string>();
         const launches = new Set<OpenCodeSubagentContext>();
@@ -1015,7 +1014,6 @@ export const makeOpenCodeAdapterV2 = Effect.fn("makeOpenCodeAdapterV2")(function
         ) {
           launches.delete(context);
           context.launchOutcome = outcome;
-          if (context.childSessionId !== null) childOutcomes.take(context.childSessionId);
           const now = yield* DateTime.now;
           yield* emitSubagentStatus(context, { node: outcome, item: outcome }, now, now);
         });
@@ -1064,6 +1062,11 @@ export const makeOpenCodeAdapterV2 = Effect.fn("makeOpenCodeAdapterV2")(function
               driver: OPENCODE_PROVIDER,
               nativeThreadId: childSessionId,
             });
+            context.childExecution = childOutcomes.claim(
+              childSessionId,
+              subagentsByChildSessionId.has(childSessionId) ||
+                recordString(input, "task_id") === childSessionId,
+            );
             subagentsByChildSessionId.set(childSessionId, context);
             relatedSessionOwners.set(childSessionId, state);
             const childModelSelection: ModelSelection = {
@@ -1172,9 +1175,7 @@ export const makeOpenCodeAdapterV2 = Effect.fn("makeOpenCodeAdapterV2")(function
               ? subagentResultPreview(part.state.output)
               : part.state.output;
           }
-          const outcome = detached
-            ? (context.launchOutcome ?? childOutcomes.take(childId))
-            : undefined;
+          const outcome = context.launchOutcome ?? context.childExecution?.outcome;
           const launched =
             detached &&
             outcome === undefined &&
@@ -1193,9 +1194,12 @@ export const makeOpenCodeAdapterV2 = Effect.fn("makeOpenCodeAdapterV2")(function
               now,
             );
           }
-          if (outcome !== undefined) return yield* settleLaunch(context, outcome);
+          if (detached && outcome !== undefined) return yield* settleLaunch(context, outcome);
           launches.delete(context);
-          if (detached) context.launchOutcome = "completed";
+          if (detached) {
+            context.result = TRACKING_LOST;
+            return yield* emitSubagentStatus(context, { node: "idle", item: "idle" }, null, now);
+          }
           yield* emitSubagentStatus(
             context,
             openCodeToolStatus(part),
@@ -1211,19 +1215,15 @@ export const makeOpenCodeAdapterV2 = Effect.fn("makeOpenCodeAdapterV2")(function
         ) {
           const candidates = descendants ? subagentsByNativeItemId.values() : launches;
           for (const context of candidates) {
-            let owner = context.parentState;
-            if (descendants) {
-              while (owner.parentSubagent !== null && owner.nativeSessionId !== sessionId) {
-                owner = owner.parentSubagent.parentState;
-              }
-            }
-            const matches = descendants
-              ? owner.nativeSessionId === sessionId
-              : context.childSessionId === sessionId;
-            if (!matches) continue;
+            if (
+              descendants
+                ? !isChildCallUnder(context, sessionId)
+                : context.childSessionId !== sessionId
+            )
+              continue;
             if (launches.has(context)) yield* settleLaunch(context, outcome);
             else if (context.launchOutcome === undefined && context.childSessionId !== null) {
-              childOutcomes.observe(context.childSessionId, outcome, false);
+              childOutcomes.observe(context.childSessionId, outcome, context.childExecution, true);
             }
           }
         });
@@ -1231,12 +1231,18 @@ export const makeOpenCodeAdapterV2 = Effect.fn("makeOpenCodeAdapterV2")(function
         const concludeChild = Effect.fnUntraced(function* (
           sessionId: string,
           status: TerminalTurnStatus,
-          finalized = false,
+          finalized?: OpenCodeSubagentContext,
         ) {
-          if (!finalized && subagentsByChildSessionId.get(sessionId)?.launchOutcome !== undefined)
-            return;
-          const outcome = childOutcomes.observe(sessionId, status, finalized);
-          yield* settleLaunchedSubagents(sessionId, outcome);
+          const context = finalized ?? subagentsByChildSessionId.get(sessionId);
+          if (context?.launchOutcome !== undefined) return;
+          const outcome = childOutcomes.observe(
+            sessionId,
+            status,
+            context?.childExecution,
+            finalized !== undefined,
+          );
+          if (outcome !== undefined && context !== undefined && launches.has(context))
+            yield* settleLaunch(context, outcome);
         });
 
         const emitToolPart = Effect.fnUntraced(function* (
@@ -1816,7 +1822,7 @@ export const makeOpenCodeAdapterV2 = Effect.fn("makeOpenCodeAdapterV2")(function
                 completedAt,
               },
             });
-            yield* concludeChild(state.nativeSessionId, status, true);
+            yield* concludeChild(state.nativeSessionId, status, turn.childCall);
             return;
           }
           const anotherTurnIsActive = Array.from(threads.values()).some(
@@ -1947,6 +1953,8 @@ export const makeOpenCodeAdapterV2 = Effect.fn("makeOpenCodeAdapterV2")(function
           message: Extract<OpenCodeMessage, { role: "user" }>,
         ) {
           if (state.appThread === null || state.parentSubagent === null) return null;
+          const childCall = state.parentSubagent;
+          childOutcomes.start(childCall.childExecution);
           const ordinal =
             state.nextChildTurnOrdinal ??
             (yield* storedUserMessagePosition(state.nativeSessionId, message.id));
@@ -1974,6 +1982,7 @@ export const makeOpenCodeAdapterV2 = Effect.fn("makeOpenCodeAdapterV2")(function
           };
           const turn: ActiveOpenCodeTurn = {
             isRoot: false,
+            childCall,
             threadId: state.appThread.id,
             runId: null,
             rootNodeId,
@@ -2379,6 +2388,7 @@ export const makeOpenCodeAdapterV2 = Effect.fn("makeOpenCodeAdapterV2")(function
               const { sessionID, status } = event.properties;
               if (status.type === "idle") return yield* onSessionIdle(sessionID);
               unstartedSessionIds.delete(sessionID);
+              childOutcomes.start(subagentsByChildSessionId.get(sessionID)?.childExecution);
               const state = threads.get(sessionID);
               if (state !== undefined || relatedSessionOwners.has(sessionID))
                 busySessionIds.add(sessionID);
