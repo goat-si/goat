@@ -851,6 +851,8 @@ export const WsServerRefreshProvidersRpc = Rpc.make(WS_METHODS.serverRefreshProv
      * refresh, at most one TTL later.
      */
     workspaceSnapshotsOnDemand: Schema.optional(Schema.Boolean),
+    /** With on-demand workspace snapshots, supply a pending catalog when a cwd scan is unavailable. */
+    providerCatalogsOnDemand: Schema.optional(Schema.Boolean),
     /** As on `subscribeServerConfig`: add /usage-limits to the replied snapshot. */
     usageLimitsCommand: Schema.optional(Schema.Boolean),
   }),
@@ -2196,6 +2198,8 @@ export const WsSubscribeServerConfigRpc = Rpc.make(WS_METHODS.subscribeServerCon
     usageLimitsCommand: Schema.optional(Schema.Boolean),
     /** Omit per-cwd provider snapshots; the client fetches its cwd through `server.refreshProviders`. */
     workspaceSnapshotsOnDemand: Schema.optional(Schema.Boolean),
+    /** With on-demand workspace snapshots, trim catalogs for providers that scan the cwd. */
+    providerCatalogsOnDemand: Schema.optional(Schema.Boolean),
     /** Send `providerStatusChanges` instead of resending every provider on each change. */
     providerStatusChanges: Schema.optional(Schema.Boolean),
   }),

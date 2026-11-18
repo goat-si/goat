@@ -91,7 +91,6 @@ import {
   type AcpRegistrySetProviderInput,
   type AuthEnvironmentScope,
   type DiscoveredLocalServerList,
-  type ServerProvider,
   type GitActionProgressEvent,
   type GitManagerServiceError,
   type MessageId,
@@ -335,11 +334,14 @@ import {
   withProviderStatusChanges,
 } from "./serverConfigUpdates.ts";
 import { requestUrl } from "./requestUrl.ts";
+import {
+  makeProviderConfigProjection,
+  type ProviderConfigProjection,
+  withoutWorkspaceSnapshots,
+  workspaceProviderReply,
+} from "./providerConfigCatalogs.ts";
 import { isNetworkPath } from "@goat/shared/path";
 const isProviderUploadFeedbackError = Schema.is(ProviderUploadFeedbackError);
-function withoutWorkspaceSnapshots(providers: ReadonlyArray<ServerProvider>): ServerProvider[] {
-  return providers.map(({ workspaceSnapshots: _workspaceSnapshots, ...provider }) => provider);
-}
 const persistChatAttachments = Effect.fn("ws.assets.persistChatAttachments")(function* (input: {
   readonly threadId: ThreadId;
   readonly messageId: MessageId;
@@ -1559,7 +1561,7 @@ export const layerWsRpc = (
       });
       const loadServerConfig = Effect.fn("ws.loadServerConfig")(function* (options: {
         readonly usageLimitsCommand: boolean;
-        readonly workspaceSnapshotsOnDemand: boolean;
+        readonly projectProviderConfig?: ProviderConfigProjection;
         readonly deferDirectEndpoints?: boolean;
       }) {
         const keybindingsConfig = yield* keybindings.loadConfigState;
@@ -1569,8 +1571,8 @@ export const layerWsRpc = (
         const commandProviders = options.usageLimitsCommand
           ? withUsageLimitsCommands(currentProviders, yield* usageLimitSources.current)
           : currentProviders;
-        const providers = options.workspaceSnapshotsOnDemand
-          ? withoutWorkspaceSnapshots(commandProviders)
+        const providers = options.projectProviderConfig
+          ? yield* options.projectProviderConfig(commandProviders)
           : commandProviders;
         const settings = ServerSettings.redactServerSettingsForClient(
           yield* serverSettings.getSettings,
@@ -2161,8 +2163,7 @@ export const layerWsRpc = (
           ),
         [WS_METHODS.serverProbe]: (_input) => Effect.succeed({}),
         ...(yield* PreviewSessions.makePreviewSessionRpcHandlers(currentSessionId)),
-        [WS_METHODS.serverGetConfig]: (_input) =>
-          loadServerConfig({ usageLimitsCommand: false, workspaceSnapshotsOnDemand: false }),
+        [WS_METHODS.serverGetConfig]: (_input) => loadServerConfig({ usageLimitsCommand: false }),
         [WS_METHODS.serverSearchAcpRegistry]: (input) =>
           acpRegistryCatalog
             .search(input)
@@ -2329,19 +2330,11 @@ export const layerWsRpc = (
             if (instanceId === undefined || cwd === undefined) {
               return { providers: withoutWorkspaceSnapshots(commandProviders) };
             }
+            const catalogOnDemand =
+              input.providerCatalogsOnDemand === true &&
+              (yield* providerInstances.getInstance(instanceId))?.snapshotForCwd !== undefined;
             return {
-              providers: commandProviders
-                .filter((provider) => provider.instanceId === instanceId)
-                .map((provider) => ({
-                  ...provider,
-                  // Callers read only the cwd snapshot; the config stream carries the rest.
-                  models: [],
-                  slashCommands: [],
-                  skills: [],
-                  workspaceSnapshots: (provider.workspaceSnapshots ?? []).filter(
-                    (snapshot) => snapshot.cwd === cwd,
-                  ),
-                })),
+              providers: workspaceProviderReply(commandProviders, instanceId, cwd, catalogOnDemand),
             };
           }),
         [WS_METHODS.mcpAppsCallTool]: (input) => mcpAppRequests.callTool(input),
@@ -3197,7 +3190,10 @@ export const layerWsRpc = (
           Stream.unwrap(
             Effect.gen(function* () {
               const usageLimitsCommand = input.usageLimitsCommand === true;
-              const workspaceSnapshotsOnDemand = input.workspaceSnapshotsOnDemand === true;
+              const projectProviderConfig = makeProviderConfigProjection(
+                input,
+                providerInstances.listInstances,
+              );
               // Buffer changes through discovery and the initial snapshot's RPC ACK wait.
               const keybindingsChanges = yield* keybindings.subscribeChanges;
               const settingsChanges = yield* serverSettings.subscribeChanges;
@@ -3210,7 +3206,7 @@ export const layerWsRpc = (
               );
               const config = yield* loadServerConfig({
                 usageLimitsCommand,
-                workspaceSnapshotsOnDemand,
+                projectProviderConfig,
                 deferDirectEndpoints: true,
               });
               const keybindingsUpdates = keybindingsChanges.pipe(
@@ -3230,16 +3226,10 @@ export const layerWsRpc = (
                   providerRegistry.streamChanges,
                 ),
                 usageLimitSources.streamChanges,
-                (providers, sources) => {
-                  const commandProviders = usageLimitsCommand
-                    ? withUsageLimitsCommands(providers, sources)
-                    : providers;
-                  // Stripped before the de-dupe below, so snapshot-only changes send nothing.
-                  return workspaceSnapshotsOnDemand
-                    ? withoutWorkspaceSnapshots(commandProviders)
-                    : commandProviders;
-                },
+                (providers, sources) =>
+                  usageLimitsCommand ? withUsageLimitsCommands(providers, sources) : providers,
               ).pipe(
+                Stream.mapEffect(projectProviderConfig),
                 Stream.mapEffect(usageLimitSources.projectProviders),
                 // Compare initial paired values with the snapshot; blindly dropping them loses changes between snapshot and subscription.
                 (updates) => Stream.concat(rpcInitialItems([config.providers]), updates),
