@@ -78,7 +78,7 @@ import * as GitVcsDriver from "./GitVcsDriver.ts";
 import { describeGitStall, type GitStallWatch, withGitStallTimeout } from "./gitStallTimeout.ts";
 import { removeEmptyDirectory } from "./removeEmptyDirectory.ts";
 import { unquoteGitPath } from "./gitQuotedPath.ts";
-import { tryWithWorkspaceSubtree } from "../workspace/workspaceLease.ts";
+import { tryWithWorkspaceLease, tryWithWorkspaceSubtree } from "../workspace/workspaceLease.ts";
 import {
   defaultCheckoutWorkers,
   makeHookRunProbe,
@@ -3823,14 +3823,35 @@ export const makeGitVcsDriverCore = Effect.fn("makeGitVcsDriverCore")(function* 
           return yield* conflict(`its worktree ${checkedOutAt} has uncommitted changes`);
         }
         if (matchesLegacy) worktreePath = targetPath = checkedOutAt;
-        if (existingTip !== startSha) {
-          yield* runGit("GitVcsDriver.createWorktree.fastForward", checkedOutAt, [
-            "merge",
-            "--ff-only",
-            "--quiet",
-            startSha,
-          ]);
-        }
+        const reused = yield* tryWithWorkspaceLease(
+          checkedOutAt,
+          Effect.gen(function* () {
+            const current = yield* inspectExistingBranch({
+              cwd: input.cwd,
+              branch: newBranch,
+              baseRef: input.refName,
+            });
+            if (
+              current?.worktreePath !== checkedOutAt ||
+              current.tip !== existingTip ||
+              current.dirty
+            )
+              return yield* conflict("changed while GOAT was checking its worktree");
+            if (existingTip !== startSha) {
+              yield* runGit("GitVcsDriver.createWorktree.fastForward", checkedOutAt, [
+                "merge",
+                "--ff-only",
+                "--quiet",
+                startSha,
+              ]);
+            }
+          }),
+        ).pipe(
+          Effect.catchTags({
+            WorkspaceLeaseUnavailableError: (error) => Effect.fail(conflict(error.message)),
+          }),
+        );
+        if (Option.isNone(reused)) return yield* conflict("has a worktree that is in use");
         existing = "reused";
       } else {
         if (existingTip !== startSha) {
@@ -3894,16 +3915,17 @@ export const makeGitVcsDriverCore = Effect.fn("makeGitVcsDriverCore")(function* 
             isSameWorktreePath(record.path, physicalPath, hostPlatform)),
       );
     });
+    const unlock = (ownedPath: string) =>
+      runGit("GitVcsDriver.createWorktree.unlock", input.cwd, [
+        "worktree",
+        "unlock",
+        "--",
+        ownedPath,
+      ]);
     const release = Effect.fn("GitVcsDriver.createWorktree.release")(
       function* () {
         const owned = yield* registration();
-        if (owned !== undefined)
-          yield* runGit("GitVcsDriver.createWorktree.unlock", input.cwd, [
-            "worktree",
-            "unlock",
-            "--",
-            owned.path,
-          ]);
+        if (owned !== undefined) yield* unlock(owned.path);
       },
       Effect.catchCause((cause) =>
         Effect.logWarning("could not unlock the created worktree", {
@@ -3952,14 +3974,10 @@ export const makeGitVcsDriverCore = Effect.fn("makeGitVcsDriverCore")(function* 
               ],
             );
             if (status !== "") return false;
-            yield* runGit("GitVcsDriver.createWorktree.rollbackWorktree", input.cwd, [
-              "worktree",
-              "remove",
-              "--force",
-              "--force",
-              "--",
-              owned.path,
-            ]);
+            const confirmed = yield* registration();
+            if (confirmed?.head !== expectedHead || confirmed.branch !== owned.branch) return false;
+            yield* unlock(confirmed.path);
+            yield* removeWorktree({ cwd: input.cwd, path: confirmed.path, force: true });
             if (pathExisted) yield* fileSystem.makeDirectory(targetPath, { recursive: true });
             if (newBranch !== undefined && existingTip === null && owned.branch !== undefined) {
               yield* runGit("GitVcsDriver.createWorktree.rollbackBranch", input.cwd, [
