@@ -30,6 +30,8 @@ import * as DateTime from "effect/DateTime";
 
 import { accountRefOfSourceId, quotaPoolAccountName } from "./quotaAccountName.ts";
 
+import { isPrivateNetworkHost, isTailnetHost, isWildcardHost } from "./hostClassification.ts";
+
 const MINUTE = 60_000;
 
 export const CHATGPT_USAGE_URL = "https://chatgpt.com/#settings/Usage";
@@ -195,6 +197,15 @@ function unionOrigins(left: readonly LimitOrigin[] = [], right: readonly LimitOr
   const seen = new Map(left.map((origin) => [originKey(origin), origin]));
   for (const origin of right) if (!seen.has(originKey(origin))) seen.set(originKey(origin), origin);
   return [...seen.values()];
+}
+
+function sharedHubEndpoint(source: UsageLimitSourceSnapshots[number]): string | undefined {
+  // Native URL polyfills can misparse IPv6; the server already canonicalized the endpoint.
+  const host = /^https?:\/\/(\[[\da-f:.]+\]|[\w.-]+)(?::\d+)?(?:\/[^?#]*)?$/.exec(
+    source.endpoint ?? "",
+  )?.[1];
+  if (source.kind !== "cliproxy" || !host || isWildcardHost(host)) return undefined;
+  return !isPrivateNetworkHost(host) || isTailnetHost(host) ? source.endpoint : undefined;
 }
 
 const hubAccountName = (account: { readonly id: string }) => account.id.replace(/\.json$/i, "");
@@ -374,8 +385,11 @@ export function collectLimitAccounts(presentations: LimitPresentations): readonl
         : source.label;
       for (const account of source.accounts) {
         if (limitsNotice(account.usageLimits) !== null) continue;
-        const key = `${source.id}:${account.id}${account.workspaceId ? `:${account.workspaceId}` : ""}`;
-        merge(resolveKey(account) ?? key, {
+        const resolved = resolveKey(account);
+        const localHub = source.kind === "opencodex" ? source.id : `${environmentId}:${source.id}`;
+        const hub = resolved === null ? (sharedHubEndpoint(source) ?? localHub) : localHub;
+        const key = `${hub}:${account.id}${account.workspaceId ? `:${account.workspaceId}` : ""}`;
+        merge(resolved ?? key, {
           key,
           driver: account.driver,
           displayName: account.label ?? (account.email ? null : hubAccountName(account)),
