@@ -302,3 +302,883 @@ NOT RUN: The 21 auto-selected web browser files below. The existing server-host 
 NOT RUN: Separate older client/server binaries and a downgrade rebuild. Local checks used legacy fixtures and both wire paths.
 
 NOT RUN: Lane CI, full CI, build and release smoke. CI stays on integration PR #3700.
+
+
+## K6 fix round 2
+
+Implementation branched from `105adb36a661916cbc16c290ad0265be34548f5c`. Pen-lidge used Node 26.12.1 and Git 2.43.0. The branch contains five round-2 commits. Integration PR #3700 owns CI.
+
+| Finding | Commit | Failing-first evidence and fix |
+| --- | --- | --- |
+| P2-1 | `b685e2bc0eff6ae0e65442293ef6c8ddd5dd3c66` | `DeferredSteering.integration.test.ts -t 'before the outbox delivers'` exited 1 with three failures. Completion started a second turn. Interruption and replacement left the queue row cancelled. The outbox now carries the original queue position and attempt identity. A missed steer moves the message and timeline item back to that held queue entry in the same command as the run, node and attempt restoration. The test proves an explicit Send now can start the restored message. |
+| P2-2 | `0b2415b003a1a05d5bcaf01ad8db71543a0d0f5d` | `ScheduledQueuedSelection.integration.test.ts -t 'declines its promotion'` exited 1 with one failure and one pass. The pinned schedule used `model-at-delivery` instead of `test-model`. The outbox now stores a pinned schedule's queued selection separately from provider steer options. Omission retains late binding for schedules that follow the thread picker. |
+| P2-3 | `a8b0e8fd57d83cfd4ed1376d87e46716b932547a` | The focused mobile composer and outbox cases exited 1 with three failures and two passes. A capable server received Queue, a legacy server still offered Steer, and a persisted setup Steer drained as Steer to a legacy server. The server descriptor case exited 1 because the capability was absent. Web and desktop check the destination capability in the composer and queued message actions. Mobile does the same, stores explicit setup Steer in the existing outbox format, and checks the destination capability again at delivery. The capability is optional on the wire. |
+| P2-4 | `13d9848accb12bbfc99fed7eaa0935fde027fe9b` | `DeferredSteering.integration.test.ts -t 'stalled deferred-steer reactor'` exited 1 without the bounded stream. The stalled subscriber now hits the real buffer cap and reopens at the last handled sequence. The test writes a running event after overflow and verifies it is handled after catch-up. |
+| P2-5 | `fe30ed5f48f3c2a687a7cca413e1a23ec79da987` | The shared workflow case title now matches upstream `b20bbc595d` exactly. The round-2 edit changes no existing assertion. |
+
+### Rule 3 before and after
+
+The unified diffs below quote the before and after hunks from the two previous round-1 ports and the round-2 title correction. The moved delegated review cases for `always` and `settled_only` retain their assertions. The added `cancelled` scenario asserts interruption, the cancellation run, and disposed delivery. The moved web suite retains the previous running-turn expectation for `sendQueuesBehindSetup: false` and expands that case to assert `turnDispatchMode: "steer"` and `shouldQueueBehindActiveRun: true` during setup. The expanded moved-web expectation requires a separate Rule 3 ruling. The delegated test's new scenario adds expectations only for that scenario. The shared workflow's changed expectation matches upstream and has the coordinator's approval.
+
+```diff
+diff --git a/apps/server/src/orchestration-v2/DelegatedCompletionDelivery.test.ts b/apps/server/src/orchestration-v2/DelegatedCompletionDelivery.test.ts
+index f640294949..ca7844832b 100644
+--- a/apps/server/src/orchestration-v2/DelegatedCompletionDelivery.test.ts
++++ b/apps/server/src/orchestration-v2/DelegatedCompletionDelivery.test.ts
+@@ -14,8 +14,6 @@ import {
+   type OrchestrationV2Run,
+   ProjectId,
+   ProviderThreadId,
+-  ProviderTurnId,
+-  RunAttemptId,
+   RunId,
+   RuntimeRequestId,
+   ThreadId,
+@@ -1570,231 +1568,6 @@ it.layer(Layer.merge(layerTest, ProviderContinuationRequests.layer))(
+       }),
+     );
+ 
+-    it.effect.each(["always", "settled_only"] as const)(
+-      "delivers a continued review round's result to its parent, wake %s",
+-      (wake) =>
+-        Effect.gen(function* () {
+-          const orchestrator = yield* Orchestrator.OrchestratorV2;
+-          const eventSink = yield* EventSink.EventSinkV2;
+-          const requests = yield* ProviderContinuationRequests.ProviderContinuationRequests;
+-          const now = yield* DateTime.now;
+-          const name = "continued-review-" + wake;
+-          const parentThreadId = ThreadId.make("thread:" + name);
+-          const parentRunId = RunId.make("run:" + name);
+-          const rootNodeId = NodeId.make("node:" + name);
+-          yield* seedParentWithTerminalTask({
+-            threadId: parentThreadId,
+-            projectId: ProjectId.make("project:" + name),
+-            runId: parentRunId,
+-            rootNodeId,
+-            taskId: NodeId.make("node:seed-" + name),
+-            deliveryState: "acknowledged",
+-            now,
+-          });
+-          const child = yield* seedRestartCancelledChild({
+-            parentThreadId,
+-            projectId: ProjectId.make("project:" + name),
+-            parentRunId,
+-            rootNodeId,
+-            name: name + "-child",
+-            completionWake: "always",
+-            continuationPending: false,
+-            runStatus: "completed",
+-            now,
+-          });
+-          yield* orchestrator.recoverDelegatedTasks;
+-          let firstWake = yield* requests.take;
+-          while (firstWake.threadId !== parentThreadId) firstWake = yield* requests.take;
+-          yield* orchestrator.dispatch({
+-            type: "delegated_task.completion-delivery.acknowledge",
+-            commandId: CommandId.make("command:ack-" + name),
+-            parentThreadId,
+-            taskId: child.taskId,
+-            observedByRunId: parentRunId,
+-          });
+-          // The seeded task becomes a finished review round whose brief completed on native-1.
+-          const seeded = (yield* orchestrator.getThreadProjection(parentThreadId)).subagents.find(
+-            (task) => task.id === child.taskId,
+-          )!;
+-          const childRun = (yield* orchestrator.getThreadProjection(child.childThreadId)).runs[0]!;
+-          const providerThreadId = ProviderThreadId.make("provider-thread:" + name);
+-          const attemptId = RunAttemptId.make("attempt:" + name);
+-          yield* eventSink.write({
+-            commandId: reconcileCommandId(name + "-round-1"),
+-            events: [
+-              {
+-                id: EventId.make("event:" + name + ":parent-root"),
+-                type: "node.updated",
+-                threadId: parentThreadId,
+-                runId: parentRunId,
+-                nodeId: rootNodeId,
+-                occurredAt: now,
+-                payload: {
+-                  id: rootNodeId,
+-                  threadId: parentThreadId,
+-                  runId: parentRunId,
+-                  parentNodeId: null,
+-                  rootNodeId,
+-                  kind: "root_turn",
+-                  status: "running",
+-                  countsForRun: true,
+-                  providerThreadId: null,
+-                  providerTurnId: null,
+-                  nativeItemRef: null,
+-                  runtimeRequestId: null,
+-                  checkpointScopeId: null,
+-                  startedAt: now,
+-                  completedAt: null,
+-                },
+-              },
+-              {
+-                id: EventId.make("event:" + name + ":review"),
+-                type: "subagent.updated",
+-                threadId: parentThreadId,
+-                runId: parentRunId,
+-                nodeId: child.taskId,
+-                occurredAt: now,
+-                payload: {
+-                  ...seeded,
+-                  role: "review",
+-                  model: modelSelection.model,
+-                  modelSelection,
+-                  status: "completed",
+-                  result: "Round 1 findings",
+-                  completedAt: now,
+-                },
+-              },
+-              {
+-                id: EventId.make("event:" + name + ":provider-thread"),
+-                type: "provider-thread.updated",
+-                threadId: child.childThreadId,
+-                occurredAt: now,
+-                payload: {
+-                  id: providerThreadId,
+-                  driver,
+-                  providerInstanceId: modelSelection.instanceId,
+-                  providerSessionId: null,
+-                  appThreadId: child.childThreadId,
+-                  ownerNodeId: null,
+-                  nativeThreadRef: { driver, nativeId: "native-1", strength: "strong" },
+-                  nativeConversationHeadRef: null,
+-                  status: "idle",
+-                  firstRunOrdinal: 1,
+-                  lastRunOrdinal: 1,
+-                  handoffIds: [],
+-                  forkedFrom: null,
+-                  pendingBackgroundTasks: [],
+-                  contextUsage: null,
+-                  nativeMetadata: null,
+-                  goal: null,
+-                  createdAt: now,
+-                  updatedAt: now,
+-                },
+-              },
+-              {
+-                id: EventId.make("event:" + name + ":attempt"),
+-                type: "run-attempt.updated",
+-                threadId: child.childThreadId,
+-                runId: childRun.id,
+-                occurredAt: now,
+-                payload: {
+-                  id: attemptId,
+-                  nativeThreadId: "native-1",
+-                  runId: childRun.id,
+-                  attemptOrdinal: 1,
+-                  rootNodeId: NodeId.make("node:" + name + ":child-root"),
+-                  providerInstanceId: modelSelection.instanceId,
+-                  providerThreadId,
+-                  providerTurnId: null,
+-                  reason: "initial",
+-                  status: "completed",
+-                  startedAt: now,
+-                  completedAt: now,
+-                },
+-              },
+-              {
+-                id: EventId.make("event:" + name + ":turn"),
+-                type: "provider-turn.updated",
+-                threadId: child.childThreadId,
+-                runId: childRun.id,
+-                occurredAt: now,
+-                payload: {
+-                  id: ProviderTurnId.make("turn:" + name),
+-                  providerThreadId,
+-                  nodeId: NodeId.make("node:" + name + ":child-root"),
+-                  runAttemptId: attemptId,
+-                  nativeTurnRef: null,
+-                  ordinal: 1,
+-                  status: "completed",
+-                  startedAt: now,
+-                  completedAt: now,
+-                },
+-              },
+-            ],
+-          });
+-          const commandId = CommandId.make("command:continue-" + name);
+-          yield* orchestrator.dispatch({
+-            type: "delegated_task.review-continue",
+-            commandId,
+-            threadId: parentThreadId,
+-            parentRunId,
+-            parentNodeId: rootNodeId,
+-            continueFrom: child.taskId,
+-            childThreadId: child.childThreadId,
+-            task: "Round 2: re-check the fix.",
+-            modelSelection,
+-            completionWake: wake,
+-            memoryGrantCeiling: "none",
+-            createdBy: "agent",
+-            creationSource: "mcp",
+-          });
+-          const taskId = derive.delegatedTaskNode({ commandId });
+-          const run = (yield* orchestrator.getThreadProjection(child.childThreadId)).runs.find(
+-            (row) => row.delegatedTaskId === taskId,
+-          )!;
+-          const parentRun = (yield* orchestrator.getThreadProjection(parentThreadId)).runs.find(
+-            (row) => row.id === parentRunId,
+-          )!;
+-          yield* eventSink.write({
+-            commandId: reconcileCommandId(name + "-finish"),
+-            events: [
+-              {
+-                id: EventId.make("event:" + name + ":parent-finished"),
+-                type: "run.updated",
+-                threadId: parentThreadId,
+-                runId: parentRunId,
+-                occurredAt: now,
+-                payload: { ...parentRun, status: "completed", completedAt: now },
+-              },
+-              {
+-                id: EventId.make("event:" + name + ":round-2-finished"),
+-                type: "run.updated",
+-                threadId: child.childThreadId,
+-                runId: run.id,
+-                occurredAt: now,
+-                payload: { ...run, status: "completed", startedAt: now, completedAt: now },
+-              },
+-            ],
+-          });
+-          yield* orchestrator.recoverDelegatedTasks;
+-          const finished = (yield* orchestrator.getThreadProjection(parentThreadId)).subagents;
+-          const round = finished.find((task) => task.id === taskId)!;
+-          assert.deepInclude(round, {
+-            role: "review",
+-            continuedFrom: child.taskId,
+-            status: "completed",
+-          });
+-          assert.equal(round.completionDelivery?.state, "claimed");
+-          let next = yield* requests.take;
+-          while (
+-            next.threadId !== parentThreadId ||
+-            next.delegatedCompletion?.messageId === firstWake.delegatedCompletion?.messageId
+-          )
+-            next = yield* requests.take;
+-          assert.equal(next.delegatedCompletion?.parentRunId, parentRunId);
+-        }),
+-    );
+-
+     const outcomes = [
+       "completed",
+       "failed",
+diff --git a/apps/server/src/orchestration-v2/DelegatedReviewCompletion.test.ts b/apps/server/src/orchestration-v2/DelegatedReviewCompletion.test.ts
+new file mode 100644
+index 0000000000..d5798256ca
+--- /dev/null
++++ b/apps/server/src/orchestration-v2/DelegatedReviewCompletion.test.ts
+@@ -0,0 +1,348 @@
++import { assert, it } from "@effect/vitest";
++import {
++  CommandId,
++  EventId,
++  MessageId,
++  NodeId,
++  ProjectId,
++  ProviderThreadId,
++  ProviderTurnId,
++  RunAttemptId,
++  RunId,
++  ThreadId,
++} from "@goat/contracts";
++import { derive } from "@goat/provider-core/server/IdAllocator";
++import * as ProviderContinuationRequests from "@goat/provider-core/server/ProviderContinuationRequests";
++import * as DateTime from "effect/DateTime";
++import * as Effect from "effect/Effect";
++import * as Layer from "effect/Layer";
++import {
++  driver,
++  layerTest,
++  modelSelection,
++  reconcileCommandId,
++  runEvent,
++  seedParentWithTerminalTask,
++  seedRestartCancelledChild,
++} from "./DelegatedCompletionDelivery.testkit.ts";
++import * as EventSink from "./EventSink.ts";
++import * as Orchestrator from "./Orchestrator.ts";
++import { DelegatedTaskCancellation } from "./goat/DelegatedTaskCancellation.ts";
++
++it.layer(Layer.merge(layerTest, ProviderContinuationRequests.layer))(
++  "delegated review completion",
++  (it) => {
++    it.effect.each(["always", "settled_only", "cancelled"] as const)(
++      "settles a continued review round with delivery %s",
++      (scenario) =>
++        Effect.gen(function* () {
++          const orchestrator = yield* Orchestrator.OrchestratorV2;
++          const eventSink = yield* EventSink.EventSinkV2;
++          const requests = yield* ProviderContinuationRequests.ProviderContinuationRequests;
++          const now = yield* DateTime.now;
++          const name = "continued-review-" + scenario;
++          const parentThreadId = ThreadId.make("thread:" + name);
++          const parentRunId = RunId.make("run:" + name);
++          const rootNodeId = NodeId.make("node:" + name);
++          yield* seedParentWithTerminalTask({
++            threadId: parentThreadId,
++            projectId: ProjectId.make("project:" + name),
++            runId: parentRunId,
++            rootNodeId,
++            taskId: NodeId.make("node:seed-" + name),
++            deliveryState: "acknowledged",
++            now,
++          });
++          const child = yield* seedRestartCancelledChild({
++            parentThreadId,
++            projectId: ProjectId.make("project:" + name),
++            parentRunId,
++            rootNodeId,
++            name: name + "-child",
++            completionWake: "always",
++            continuationPending: false,
++            runStatus: "completed",
++            now,
++          });
++          yield* orchestrator.recoverDelegatedTasks;
++          let firstWake = yield* requests.take;
++          while (firstWake.threadId !== parentThreadId) firstWake = yield* requests.take;
++          yield* orchestrator.dispatch({
++            type: "delegated_task.completion-delivery.acknowledge",
++            commandId: CommandId.make("command:ack-" + name),
++            parentThreadId,
++            taskId: child.taskId,
++            observedByRunId: parentRunId,
++          });
++          // The seeded task becomes a finished review round whose brief completed on native-1.
++          const seeded = (yield* orchestrator.getThreadProjection(parentThreadId)).subagents.find(
++            (task) => task.id === child.taskId,
++          )!;
++          const childRun = (yield* orchestrator.getThreadProjection(child.childThreadId)).runs[0]!;
++          const providerThreadId = ProviderThreadId.make("provider-thread:" + name);
++          const attemptId = RunAttemptId.make("attempt:" + name);
++          yield* eventSink.write({
++            commandId: reconcileCommandId(name + "-round-1"),
++            events: [
++              {
++                id: EventId.make("event:" + name + ":parent-root"),
++                type: "node.updated",
++                threadId: parentThreadId,
++                runId: parentRunId,
++                nodeId: rootNodeId,
++                occurredAt: now,
++                payload: {
++                  id: rootNodeId,
++                  threadId: parentThreadId,
++                  runId: parentRunId,
++                  parentNodeId: null,
++                  rootNodeId,
++                  kind: "root_turn",
++                  status: "running",
++                  countsForRun: true,
++                  providerThreadId: null,
++                  providerTurnId: null,
++                  nativeItemRef: null,
++                  runtimeRequestId: null,
++                  checkpointScopeId: null,
++                  startedAt: now,
++                  completedAt: null,
++                },
++              },
++              {
++                id: EventId.make("event:" + name + ":review"),
++                type: "subagent.updated",
++                threadId: parentThreadId,
++                runId: parentRunId,
++                nodeId: child.taskId,
++                occurredAt: now,
++                payload: {
++                  ...seeded,
++                  role: "review",
++                  model: modelSelection.model,
++                  modelSelection,
++                  status: "completed",
++                  result: "Round 1 findings",
++                  completedAt: now,
++                },
++              },
++              {
++                id: EventId.make("event:" + name + ":provider-thread"),
++                type: "provider-thread.updated",
++                threadId: child.childThreadId,
++                occurredAt: now,
++                payload: {
++                  id: providerThreadId,
++                  driver,
++                  providerInstanceId: modelSelection.instanceId,
++                  providerSessionId: null,
++                  appThreadId: child.childThreadId,
++                  ownerNodeId: null,
++                  nativeThreadRef: { driver, nativeId: "native-1", strength: "strong" },
++                  nativeConversationHeadRef: null,
++                  status: "idle",
++                  firstRunOrdinal: 1,
++                  lastRunOrdinal: 1,
++                  handoffIds: [],
++                  forkedFrom: null,
++                  pendingBackgroundTasks: [],
++                  contextUsage: null,
++                  nativeMetadata: null,
++                  goal: null,
++                  createdAt: now,
++                  updatedAt: now,
++                },
++              },
++              {
++                id: EventId.make("event:" + name + ":attempt"),
++                type: "run-attempt.updated",
++                threadId: child.childThreadId,
++                runId: childRun.id,
++                occurredAt: now,
++                payload: {
++                  id: attemptId,
++                  nativeThreadId: "native-1",
++                  runId: childRun.id,
++                  attemptOrdinal: 1,
++                  rootNodeId: NodeId.make("node:" + name + ":child-root"),
++                  providerInstanceId: modelSelection.instanceId,
++                  providerThreadId,
++                  providerTurnId: null,
++                  reason: "initial",
++                  status: "completed",
++                  startedAt: now,
++                  completedAt: now,
++                },
++              },
++              {
++                id: EventId.make("event:" + name + ":turn"),
++                type: "provider-turn.updated",
++                threadId: child.childThreadId,
++                runId: childRun.id,
++                occurredAt: now,
++                payload: {
++                  id: ProviderTurnId.make("turn:" + name),
++                  providerThreadId,
++                  nodeId: NodeId.make("node:" + name + ":child-root"),
++                  runAttemptId: attemptId,
++                  nativeTurnRef: null,
++                  ordinal: 1,
++                  status: "completed",
++                  startedAt: now,
++                  completedAt: now,
++                },
++              },
++            ],
++          });
++          const commandId = CommandId.make("command:continue-" + name);
++          yield* orchestrator.dispatch({
++            type: "delegated_task.review-continue",
++            commandId,
++            threadId: parentThreadId,
++            parentRunId,
++            parentNodeId: rootNodeId,
++            continueFrom: child.taskId,
++            childThreadId: child.childThreadId,
++            task: "Round 2: re-check the fix.",
++            modelSelection,
++            completionWake: scenario === "cancelled" ? "always" : scenario,
++            memoryGrantCeiling: "none",
++            createdBy: "agent",
++            creationSource: "mcp",
++          });
++          const taskId = derive.delegatedTaskNode({ commandId });
++          const run = (yield* orchestrator.getThreadProjection(child.childThreadId)).runs.find(
++            (row) => row.delegatedTaskId === taskId,
++          )!;
++          const parentRun = (yield* orchestrator.getThreadProjection(parentThreadId)).runs.find(
++            (row) => row.id === parentRunId,
++          )!;
++          yield* eventSink.write({
++            commandId: reconcileCommandId(name + "-finish"),
++            events: [
++              {
++                id: EventId.make("event:" + name + ":parent-finished"),
++                type: "run.updated",
++                threadId: parentThreadId,
++                runId: parentRunId,
++                occurredAt: now,
++                payload: { ...parentRun, status: "completed", completedAt: now },
++              },
++              {
++                id: EventId.make("event:" + name + ":round-2-finished"),
++                type: "run.updated",
++                threadId: child.childThreadId,
++                runId: run.id,
++                occurredAt: now,
++                payload: { ...run, status: "completed", startedAt: now, completedAt: now },
++              },
++            ],
++          });
++          if (scenario === "cancelled") {
++            const wakeId = RunId.make(`run:${name}:completion-wake`);
++            const wakeMessageId = MessageId.make(`message:${name}:completion-wake`);
++            const nativeId = NodeId.make(`node:${name}:native-subagent`);
++            const wakeRun = runEvent({
++              threadId: child.childThreadId,
++              runId: wakeId,
++              ordinal: run.ordinal + 1,
++              status: "completed",
++              now,
++            });
++            yield* eventSink.write({
++              events: [
++                { ...wakeRun, payload: { ...wakeRun.payload, userMessageId: wakeMessageId } },
++                {
++                  id: EventId.make(`event:${name}:wake-message`),
++                  type: "message.updated",
++                  threadId: child.childThreadId,
++                  runId: wakeId,
++                  occurredAt: now,
++                  payload: {
++                    id: wakeMessageId,
++                    threadId: child.childThreadId,
++                    runId: wakeId,
++                    nodeId: null,
++                    role: "user",
++                    text: "A delegated check finished.",
++                    attachments: [],
++                    streaming: false,
++                    createdBy: "agent",
++                    creationSource: "server",
++                    createdAt: now,
++                    updatedAt: now,
++                    delegatedCompletion: {
++                      parentRunId: run.id,
++                      generation: 1,
++                      taskIds: [NodeId.make(`node:${name}:delegated-check`)],
++                    },
++                  },
++                },
++                {
++                  id: EventId.make(`event:${name}:native-subagent`),
++                  type: "subagent.updated",
++                  threadId: child.childThreadId,
++                  runId: wakeId,
++                  nodeId: nativeId,
++                  occurredAt: now,
++                  payload: {
++                    ...seeded,
++                    id: nativeId,
++                    threadId: child.childThreadId,
++                    runId: wakeId,
++                    origin: "provider_native",
++                    childThreadId: null,
++                    status: "running",
++                    result: null,
++                    completedAt: null,
++                  },
++                },
++              ],
++            });
++            const commandId = CommandId.make(`command:${name}:stop`);
++            yield* orchestrator
++              .dispatch({
++                type: "thread.stop",
++                commandId,
++                threadId: child.childThreadId,
++                stopDelegatedTasks: false,
++              })
++              .pipe(
++                Effect.provideService(DelegatedTaskCancellation, {
++                  commandId,
++                  parentThreadId,
++                  taskId,
++                  stopDescendants: Effect.void,
++                }),
++              );
++            yield* orchestrator.recoverDelegatedTasks;
++            const parent = yield* orchestrator.getThreadProjection(parentThreadId);
++            const round = parent.subagents.find((task) => task.id === taskId);
++            assert.equal(round?.status, "interrupted");
++            assert.equal(round?.cancelledRunId, wakeId);
++            assert.deepEqual(round?.completionDelivery, {
++              state: "disposed",
++              observedByRunId: null,
++            });
++            return;
++          }
++          yield* orchestrator.recoverDelegatedTasks;
++          const finished = (yield* orchestrator.getThreadProjection(parentThreadId)).subagents;
++          const round = finished.find((task) => task.id === taskId)!;
++          assert.deepInclude(round, {
++            role: "review",
++            continuedFrom: child.taskId,
++            status: "completed",
++          });
++          assert.equal(round.completionDelivery?.state, "claimed");
++          let next = yield* requests.take;
++          while (
++            next.threadId !== parentThreadId ||
++            next.delegatedCompletion?.messageId === firstWake.delegatedCompletion?.messageId
++          )
++            next = yield* requests.take;
++          assert.equal(next.delegatedCompletion?.parentRunId, parentRunId);
++        }),
++    );
++  },
++);
+```
+
+```diff
+diff --git a/apps/web/src/components/ChatView.composerTurn.test.ts b/apps/web/src/components/ChatView.composerTurn.test.ts
+new file mode 100644
+index 0000000000..14fa4243cd
+--- /dev/null
++++ b/apps/web/src/components/ChatView.composerTurn.test.ts
+@@ -0,0 +1,79 @@
++import { describe, expect, it } from "vite-plus/test";
++import { planComposerTurn } from "./ChatView.logic";
++
++describe("planComposerTurn", () => {
++  const base = {
++    messageText: "hello",
++    sendQueuesBehindSetup: false,
++    isServerThread: false,
++    activeMessageCount: 0,
++    sendEnvMode: "worktree" as const,
++    worktreePath: null,
++    activeThreadBranch: "main",
++    resumeCompactionTokens: null,
++    keepFullHistory: false,
++    phase: "ready" as const,
++    dispatchMode: "auto" as const,
++  };
++
++  it("prepares a worktree from the selected branch on a new thread", () => {
++    expect(planComposerTurn(base)).toMatchObject({
++      missingWorktreeBaseBranch: false,
++      baseBranchForWorktree: "main",
++      shouldQueueBehindActiveRun: false,
++    });
++  });
++
++  it("never plans a local worktree for a cloud thread", () => {
++    expect(planComposerTurn({ ...base, isCloudThread: true })).toMatchObject({
++      missingWorktreeBaseBranch: false,
++      baseBranchForWorktree: null,
++    });
++  });
++
++  it("refuses a new worktree without a base branch", () => {
++    expect(planComposerTurn({ ...base, activeThreadBranch: null })).toMatchObject({
++      missingWorktreeBaseBranch: true,
++      baseBranchForWorktree: null,
++    });
++  });
++
++  it("queues behind a compaction of a stale session, except for /compact itself", () => {
++    const stale = { ...base, resumeCompactionTokens: 120_000 };
++    for (const messageText of ["hello", "/compactfoo"]) {
++      expect(planComposerTurn({ ...stale, messageText })).toMatchObject({
++        compactBeforeSend: true,
++        turnDispatchMode: "queue",
++        shouldQueueBehindActiveRun: true,
++      });
++    }
++    for (const messageText of ["/COMPACT", "/compact keep the API notes", "/compact\n  tests"]) {
++      expect(planComposerTurn({ ...stale, messageText })).toMatchObject({
++        compactBeforeSend: false,
++        turnDispatchMode: "auto",
++        shouldQueueBehindActiveRun: false,
++      });
++    }
++  });
++
++  it("queues behind a running turn only when asked to", () => {
++    const running = {
++      ...base,
++      isServerThread: true,
++      activeMessageCount: 3,
++      phase: "running" as const,
++    };
++    expect(planComposerTurn({ ...running, dispatchMode: "queue" }).shouldQueueBehindActiveRun).toBe(
++      true,
++    );
++    for (const sendQueuesBehindSetup of [false, true]) {
++      expect(
++        planComposerTurn({ ...running, sendQueuesBehindSetup, dispatchMode: "steer" }),
++      ).toMatchObject({
++        turnDispatchMode: "steer",
++        baseBranchForWorktree: null,
++        shouldQueueBehindActiveRun: sendQueuesBehindSetup,
++      });
++    }
++  });
++});
+diff --git a/apps/web/src/components/ChatView.logic.test.ts b/apps/web/src/components/ChatView.logic.test.ts
+index f73323b642..561fb8e919 100644
+--- a/apps/web/src/components/ChatView.logic.test.ts
++++ b/apps/web/src/components/ChatView.logic.test.ts
+@@ -24,7 +24,6 @@ import {
+   snapshotDraftContent,
+   isDraftContentUnchanged,
+   boundAttachmentIds,
+-  planComposerTurn,
+   restorePlanFollowUpComposer,
+   snapshotComposerSend,
+   withMessageContext,
+@@ -1214,78 +1213,6 @@ describe("snapshotComposerSend", () => {
+   });
+ });
+ 
+-describe("planComposerTurn", () => {
+-  const base = {
+-    messageText: "hello",
+-    sendQueuesBehindSetup: false,
+-    isServerThread: false,
+-    activeMessageCount: 0,
+-    sendEnvMode: "worktree" as const,
+-    worktreePath: null,
+-    activeThreadBranch: "main",
+-    resumeCompactionTokens: null,
+-    keepFullHistory: false,
+-    phase: "ready" as const,
+-    dispatchMode: "auto" as const,
+-  };
+-
+-  it("prepares a worktree from the selected branch on a new thread", () => {
+-    expect(planComposerTurn(base)).toMatchObject({
+-      missingWorktreeBaseBranch: false,
+-      baseBranchForWorktree: "main",
+-      shouldQueueBehindActiveRun: false,
+-    });
+-  });
+-
+-  it("never plans a local worktree for a cloud thread", () => {
+-    expect(planComposerTurn({ ...base, isCloudThread: true })).toMatchObject({
+-      missingWorktreeBaseBranch: false,
+-      baseBranchForWorktree: null,
+-    });
+-  });
+-
+-  it("refuses a new worktree without a base branch", () => {
+-    expect(planComposerTurn({ ...base, activeThreadBranch: null })).toMatchObject({
+-      missingWorktreeBaseBranch: true,
+-      baseBranchForWorktree: null,
+-    });
+-  });
+-
+-  it("queues behind a compaction of a stale session, except for /compact itself", () => {
+-    const stale = { ...base, resumeCompactionTokens: 120_000 };
+-    for (const messageText of ["hello", "/compactfoo"]) {
+-      expect(planComposerTurn({ ...stale, messageText })).toMatchObject({
+-        compactBeforeSend: true,
+-        turnDispatchMode: "queue",
+-        shouldQueueBehindActiveRun: true,
+-      });
+-    }
+-    for (const messageText of ["/COMPACT", "/compact keep the API notes", "/compact\n  tests"]) {
+-      expect(planComposerTurn({ ...stale, messageText })).toMatchObject({
+-        compactBeforeSend: false,
+-        turnDispatchMode: "auto",
+-        shouldQueueBehindActiveRun: false,
+-      });
+-    }
+-  });
+-
+-  it("queues behind a running turn only when asked to", () => {
+-    const running = {
+-      ...base,
+-      isServerThread: true,
+-      activeMessageCount: 3,
+-      phase: "running" as const,
+-    };
+-    expect(planComposerTurn({ ...running, dispatchMode: "queue" }).shouldQueueBehindActiveRun).toBe(
+-      true,
+-    );
+-    expect(planComposerTurn({ ...running, dispatchMode: "steer" })).toMatchObject({
+-      shouldQueueBehindActiveRun: false,
+-      baseBranchForWorktree: null,
+-    });
+-  });
+-});
+-
+ describe("restorePlanFollowUpComposer", () => {
+   // The draft is the failed follow-up's thread; the refs and cursor are whatever thread is on
+   // screen.
+diff --git a/packages/client-runtime/src/state/threadWorkflows.test.ts b/packages/client-runtime/src/state/threadWorkflows.test.ts
+index 15f997748b..52160f7cdc 100644
+--- a/packages/client-runtime/src/state/threadWorkflows.test.ts
++++ b/packages/client-runtime/src/state/threadWorkflows.test.ts
+@@ -316,7 +316,7 @@ describe("thread workflows", () => {
+   });
+ 
+   it.each(["preparing", "starting", "waiting"] as const)(
+-    "does not promote queued work into a %s run",
++    "offers Steer on preparing or starting work (%s)",
+     (status) => {
+       const state = deriveThreadQueueWorkflowState({
+         thread: { id: "thread", activeProviderThreadId: "provider-thread" },
+@@ -354,7 +354,7 @@ describe("thread workflows", () => {
+         ],
+       } as never);
+ 
+-      expect(state.canPromoteToSteer).toBe(false);
++      expect(state.canPromoteToSteer).toBe(status !== "waiting");
+     },
+   );
+ 
+```
+
+```diff
+diff --git a/packages/client-runtime/src/state/threadWorkflows.test.ts b/packages/client-runtime/src/state/threadWorkflows.test.ts
+index 52160f7cdc..1027218225 100644
+--- a/packages/client-runtime/src/state/threadWorkflows.test.ts
++++ b/packages/client-runtime/src/state/threadWorkflows.test.ts
+@@ -316,7 +316,7 @@ describe("thread workflows", () => {
+   });
+ 
+   it.each(["preparing", "starting", "waiting"] as const)(
+-    "offers Steer on preparing or starting work (%s)",
++    "defers steering during setup and blocks it while waiting (%s)",
+     (status) => {
+       const state = deriveThreadQueueWorkflowState({
+         thread: { id: "thread", activeProviderThreadId: "provider-thread" },
+```
+
+### Round 2 verification
+
+- `git diff --check origin/chase/t3-261114-next3...HEAD` and `git diff --exit-code 105adb36a661916cbc16c290ad0265be34548f5c HEAD -- pnpm-lock.yaml` both exited 0. The lane contains five commits and the upstream workflow title compares byte-for-byte.
+- `vp run --cache --parallel --concurrency-limit 3 --filter goat --filter @goat/mobile --filter @goat/web typecheck` exited 0 with all three packages passing.
+- From `apps/server`, `GOAT_TEST_TMP_GUARD=fail vp test run --maxWorkers=3` ran `ServerEnvironment.test.ts`, `DeferredSteering.integration.test.ts`, `ScheduledQueuedSelection.integration.test.ts`, `SteeringDeclined.integration.test.ts`, `ProviderTurnControlService.test.ts`, `EventSink.test.ts`, `backgroundSupervision.test.ts` and `DelegatedReviewCompletion.test.ts`. Exit 0 with 88 passed across eight files and zero failures or skips.
+- From `apps/mobile`, `GOAT_TEST_TMP_GUARD=fail vp test run --maxWorkers=2` ran `use-thread-composer-state.redirect.test.ts`, `threadOutboxDelivery.permissions.test.ts` and `composerSendPresentation.test.ts`. Exit 0 with 30 passed across three files and zero failures or skips.
+- From `packages/client-runtime`, `GOAT_TEST_TMP_GUARD=fail vp test run --maxWorkers=2` ran `threadWorkflows.test.ts` and `commands.test.ts`. Exit 0 with 50 passed across two files and zero failures or skips.
+- The exact integration head `6def29ca359f546e50dcd731a6364e3f0d575545` reproduced the Git 2.43.0 storage fixture mismatch under `GOAT_TEST_TMP_GUARD=fail vp test run --maxWorkers=1 src/storageCleanupShipping.test.ts` from `apps/server`. Exit 1 with 10 passed and one failed at line 211. The test expected “Couldn't refresh origin/main” and got “Default branch is unavailable.”
+- `GOAT_TEST_TMP_GUARD=fail node scripts/check-changed.ts origin/chase/t3-261114-next3` checked 69 changed files at `fe30ed5f48f3c2a687a7cca413e1a23ec79da987`. The only host adaptation was the existing server-only browser and render exclusion. Format, lint, GraphQL generation, both Knip passes, agent surface audit, agent context budget, and all 38 package typechecks passed. Vitest selected 760 files before exclusions and reported 733 passed, two skipped, and one failed across 736 files. It reported 12,881 passed, six skipped, and one failed across 12,888 tests. The gate exited 1. The sole failure at `storageCleanupShipping.test.ts:211` has the same expected and actual reason lines as the integration-head run.
+- The lane branch was pushed with an ordinary fast-forward. The remote lane head was verified at `fe30ed5f48f3c2a687a7cca413e1a23ec79da987`.
+
+### Round 2 NOT RUN
+
+NOT RUN: The 24 browser selectors below and the browser and render projects on the server-only host. The first two entries cover the round-2 setup Steer client changes.
+
+- `apps/mobile/src/features/threads/SendActionButton.setupSteering.browser.test.tsx`
+- `apps/web/src/components/chat/useComposerSend.redirect.browser.test.tsx`
+- `apps/web/src/components/ChatView.logic.browser.test.ts`
+- `apps/web/src/components/ChatView.browser.test.tsx`
+- `apps/web/src/components/ChatView.fork.browser.test.tsx`
+- `apps/web/src/components/ChatView.forkLegacyServer.browser.test.tsx`
+- `apps/web/src/components/ChatView.handoffCompaction.browser.test.tsx`
+- `apps/web/src/components/ChatView.modelPick.browser.test.tsx`
+- `apps/web/src/components/ChatView.ssh.browser.test.tsx`
+- `apps/web/src/components/ChatView.terminalFocus.browser.test.tsx`
+- `apps/web/src/components/chat/ChatComposer.previewTabMention.browser.test.tsx`
+- `apps/web/src/components/chat/ChatComposer.ssh.browser.test.tsx`
+- `apps/web/src/components/chat/ChatComposer.terminalAnswer.browser.test.tsx`
+- `apps/web/src/components/chat/QueuedRunsControl.browser.test.tsx`
+- `apps/web/src/components/chat/useComposerSend.question.browser.test.tsx`
+- `apps/web/src/components/ThreadRouteView.browser.test.tsx`
+- `apps/web/src/hooks/useRightPanelSurfaceClose.browser.test.tsx`
+- `apps/web/src/components/Sidebar.drag.browser.test.tsx`
+- `apps/web/src/components/Sidebar.shortcuts.browser.test.tsx`
+- `apps/web/src/components/Sidebar.shortcuts.noBrowser.browser.test.tsx`
+- `apps/web/src/components/ThreadRouteView.forkFamily.browser.test.tsx`
+- `apps/web/src/components/chat/useQueuedRunEdit.browser.test.tsx`
+- `apps/web/src/components/goatBot/GoatBotChatView.sync.browser.test.tsx`
+- `apps/web/src/components/sidebar/useBotThreadKeys.browser.test.tsx`
+
+NOT RUN: Real web, desktop, iOS and Android client passes, separate old client/server binaries, and an actual downgrade. Client compatibility used missing-capability fixtures.
+
+NOT RUN: GitHub CI, full repo suites, builds, and release smoke. CI remains on integration PR #3700.
