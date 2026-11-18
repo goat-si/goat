@@ -158,6 +158,12 @@ export function decidePenGatewayRequest<T extends GatewayRoute>(
     (input.method === "POST" && input.headers["content-length"] === undefined)
   )
     return refuse(411, cors);
+  // An upgrade is a WebSocket GET; checked before OPTIONS, so no upgrade is taken for a preflight.
+  if (
+    input.upgrade &&
+    (input.method !== "GET" || one(input.headers.upgrade)?.toLowerCase() !== "websocket")
+  )
+    return refuse(400, cors);
   if (input.method === "OPTIONS") {
     const requested = one(input.headers["access-control-request-headers"]) ?? "";
     const names = requested
@@ -177,11 +183,6 @@ export function decidePenGatewayRequest<T extends GatewayRoute>(
       },
     };
   }
-  if (
-    input.upgrade &&
-    (input.method !== "GET" || one(input.headers.upgrade)?.toLowerCase() !== "websocket")
-  )
-    return refuse(400, cors);
   const headers: Record<string, string> = {};
   const connectionFields = new Set(
     (one(input.headers.connection) ?? "").split(",").map((name) => name.trim().toLowerCase()),

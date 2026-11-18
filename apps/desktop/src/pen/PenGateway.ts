@@ -398,7 +398,11 @@ export function makePenGateway(deps: Dependencies) {
       upgrade: true,
     });
     const refuse = (status: number, headers: Record<string, string>) => {
-      const fields = Object.entries(headers)
+      const fields = Object.entries({
+        "referrer-policy": "no-referrer",
+        "cache-control": "no-store",
+        ...headers,
+      })
         .map(([name, value]) => `${name}: ${value}\r\n`)
         .join("");
       socket.end(

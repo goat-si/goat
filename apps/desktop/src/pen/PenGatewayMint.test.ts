@@ -158,6 +158,21 @@ describe("Pen gateway session mint", () => {
       });
       expect(answer.startsWith("HTTP/1.1 400 ")).toBe(true);
       expect(answer.toLowerCase()).toContain("cache-control: no-store");
+      // An upgrade that is no WebSocket GET is refused with the same headers.
+      const refused = await new Promise<string>((resolve, reject) => {
+        let received = "";
+        const socket = NodeNet.connect(Number(url.port), "127.0.0.1", () =>
+          socket.write(
+            `OPTIONS ${url.pathname}/ws HTTP/1.1\r\nHost: ${url.host}\r\nOrigin: goat://app\r\nConnection: Upgrade\r\nUpgrade: websocket\r\n\r\n`,
+          ),
+        );
+        socket.on("data", (bytes: Buffer) => (received += bytes.toString()));
+        socket.on("error", reject);
+        socket.on("close", () => resolve(received));
+      });
+      expect(refused.startsWith("HTTP/1.1 400 ")).toBe(true);
+      expect(refused.toLowerCase()).toContain("cache-control: no-store");
+      expect(refused.toLowerCase()).toContain("referrer-policy: no-referrer");
     } finally {
       await gateway.dispose();
     }
