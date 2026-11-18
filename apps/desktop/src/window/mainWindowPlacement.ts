@@ -119,13 +119,14 @@ export function normalBoundsOnWindowDisplay(
 
 function selectRecoveryDisplay(
   windowBounds: DesktopAppSettings.DesktopWindowBounds,
-  [first, ...remaining]: readonly [DisplayBounds, ...DisplayBounds[]],
+  first: DisplayBounds,
+  rest: readonly DisplayBounds[],
 ): DisplayBounds {
   let selected = first;
   let bestOverlapArea = getOverlapArea(windowBounds, selected);
   let bestDistanceSquared = getDisplayDistanceSquared(windowBounds, selected);
 
-  for (const candidate of remaining) {
+  for (const candidate of rest) {
     const overlapArea = getOverlapArea(windowBounds, candidate);
     const distanceSquared = getDisplayDistanceSquared(windowBounds, candidate);
     if (
@@ -146,7 +147,7 @@ export function resolveInitialMainWindowBounds(
   displays: readonly DisplayBounds[],
 ): DesktopAppSettings.DesktopWindowBounds | typeof DesktopAppSettings.DEFAULT_MAIN_WINDOW_SIZE {
   const validDisplays = displays.filter((display) => display.width > 0 && display.height > 0);
-  const [first, ...remaining] = validDisplays;
+  const [first, ...rest] = validDisplays;
   if (persistedBounds === null || first === undefined) {
     return DesktopAppSettings.DEFAULT_MAIN_WINDOW_SIZE;
   }
@@ -155,6 +156,6 @@ export function resolveInitialMainWindowBounds(
   }
   return clampWindowBoundsToDisplay(
     persistedBounds,
-    selectRecoveryDisplay(persistedBounds, [first, ...remaining]),
+    selectRecoveryDisplay(persistedBounds, first, rest),
   );
 }

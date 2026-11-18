@@ -1,3 +1,4 @@
+export * from "./orchestrationV2WorkflowFileErrors.ts";
 export { isOrchestrationV2WorkActive } from "./orchestrationV2WorkActive.ts";
 import { PiExtensionStatuses } from "./piExtensionStatus.ts";
 import {
@@ -117,8 +118,11 @@ import {
   ThreadPullRequestLinkSource,
   ThreadPullRequestSnapshot,
   ThreadPullRequestStack,
-  ThreadPullRequestWatch,
 } from "./threadPullRequest.ts";
+import {
+  ThreadPullRequestWatchChecksReopenCommand,
+  ThreadPullRequestWatchSyncCommand,
+} from "./pullRequestWatchSync.ts";
 import {
   ProviderApprovalDecision,
   ProviderApprovalFullAccessOverride,
@@ -139,6 +143,12 @@ import {
   ToolActivitySource,
 } from "./providerRuntime.ts";
 import { ThreadTokenUsageSnapshot } from "./providerRuntime.ts";
+import {
+  OrchestrationV2LastTitleRegeneration,
+  OrchestrationV2LastTitleRegenerationJson,
+  ThreadTitleRegenerationCompleteCommand,
+  ThreadTitleRegenerationOutcome,
+} from "./threadTitle.ts";
 
 export * from "./providerReplay.ts";
 const OrchestrationV2CreationFields = {
@@ -540,6 +550,7 @@ export const OrchestrationV2AppThread = Schema.Struct({
       }),
     ),
   ),
+  lastTitleRegeneration: Schema.optional(Schema.NullOr(OrchestrationV2LastTitleRegeneration)),
   rollbackRequestId: Schema.optional(CommandId),
   rollbackFailure: Schema.optional(
     Schema.NullOr(
@@ -552,6 +563,18 @@ export const OrchestrationV2AppThread = Schema.Struct({
   deletedAt: Schema.NullOr(Schema.DateTimeUtc),
 });
 export type OrchestrationV2AppThread = typeof OrchestrationV2AppThread.Type;
+
+const OrchestrationV2ThreadVisit = Schema.Struct({
+  lastVisitedAt: OrchestrationV2AppThread.fields.lastVisitedAt,
+  opens: OrchestrationV2AppThread.fields.opens,
+});
+
+export function applyOrchestrationV2ThreadVisit<Thread extends OrchestrationV2AppThread>(
+  thread: Thread,
+  visit: typeof OrchestrationV2ThreadVisit.Type,
+): Thread {
+  return { ...thread, ...visit };
+}
 
 /** Provider-native children cannot receive messages; GOAT delegate_task children can. */
 export function isProviderNativeSubagentThread(
@@ -580,36 +603,7 @@ export function isCompactionCommandMessage(message: CompactionMessageFields): bo
   );
 }
 
-export type OrchestrationV2GoalCommand =
-  | { readonly type: "show" }
-  | { readonly type: "clear" }
-  | { readonly type: "pause" }
-  | { readonly type: "resume" }
-  | { readonly type: "set"; readonly objective: string };
-
-/** Reads a `/goal` control message. Messages with attachments are ordinary prompts. */
-export function parseGoalCommand(message: {
-  readonly text: string;
-  readonly attachments?: ReadonlyArray<unknown> | undefined;
-}): OrchestrationV2GoalCommand | null {
-  if ((message.attachments?.length ?? 0) > 0) return null;
-  const match = /^\/goal(?:\s+([\s\S]*))?$/u.exec(message.text.trim());
-  if (match === null) return null;
-  const argument = (match[1] ?? "").trim();
-  switch (argument.toLowerCase()) {
-    case "":
-    case "edit":
-      return { type: "show" };
-    case "clear":
-      return { type: "clear" };
-    case "pause":
-      return { type: "pause" };
-    case "resume":
-      return { type: "resume" };
-    default:
-      return { type: "set", objective: argument };
-  }
-}
+export { parseGoalCommand, type OrchestrationV2GoalCommand } from "./goalCommand.ts";
 
 /** Why GOAT sent this `/compact` on its own, or undefined for one someone asked for. */
 export function idleCompactionOf(
@@ -918,6 +912,7 @@ export const OrchestrationV2Subagent = Schema.Struct({
   // "settled_only" (the legacy default) requires no live run; wait-mode uses the blocking tool call.
   completionWake: Schema.optional(Schema.Literals(["always", "settled_only"])),
   completionDelivery: Schema.optional(OrchestrationV2DelegatedCompletionTaskDelivery),
+  cancelledRunId: Schema.optional(RunId),
   /**
    * Set when the user promoted the child thread to a top-level thread. The task no
    * longer owns it: stops and cancellations from this thread do not reach it.
@@ -1216,6 +1211,8 @@ export const OrchestrationV2ConversationMessage = Schema.Struct({
   notification: Schema.optional(OrchestrationV2Notification),
   ...OrchestrationV2CreationFields,
   scheduledTaskId: Schema.optional(ScheduledTaskId),
+  /** A scheduled delivery that omitted an explicit model selection. */
+  followsThreadSelection: Schema.optional(Schema.Literal(true)),
   senderThreadId: Schema.optional(ThreadId),
   /** Kept so stored rows and older clients decode; the server no longer writes or reads it. */
   senderRunId: Schema.optional(RunId),
@@ -1882,6 +1879,11 @@ export const OrchestrationV2DomainEvent = Schema.Union([
   }),
   Schema.Struct({
     ...OrchestrationV2EventBase.fields,
+    type: Schema.Literal("thread.visit-recorded"),
+    payload: OrchestrationV2ThreadVisit,
+  }),
+  Schema.Struct({
+    ...OrchestrationV2EventBase.fields,
     type: Schema.Literal("run.created"),
     payload: OrchestrationV2Run,
   }),
@@ -2036,6 +2038,8 @@ export const OrchestrationV2PendingRuntimeRequestSummary = Schema.Struct({
   createdAt: Schema.DateTimeUtc,
   /** False for async questions the run keeps working past. Absent from older servers. */
   blocking: Schema.optional(Schema.Boolean),
+  /** Secret and handoff cards: only the user can answer them, never a coordinating agent. */
+  userOnly: Schema.optional(Schema.Boolean),
   /** Set when the request is a waiting human handoff; older servers omit it. */
   handoff: Schema.optionalKey(Schema.Struct({ kind: HandoffKind, title: Schema.String })),
 });
@@ -2155,6 +2159,7 @@ export const OrchestrationV2ThreadShell = Schema.Struct({
       }),
     ),
   ),
+  lastTitleRegeneration: Schema.optional(Schema.NullOr(OrchestrationV2LastTitleRegeneration)),
   deletedAt: Schema.NullOr(Schema.DateTimeUtc),
 });
 export type OrchestrationV2ThreadShell = typeof OrchestrationV2ThreadShell.Type;
@@ -2287,6 +2292,7 @@ export const OrchestrationV2AppThreadJson = OrchestrationV2AppThread.mapFields((
       }),
     ),
   ),
+  lastTitleRegeneration: Schema.optional(Schema.NullOr(OrchestrationV2LastTitleRegenerationJson)),
   deletedAt: Schema.NullOr(Schema.DateTimeUtcFromString),
 }));
 export type OrchestrationV2AppThreadJson = typeof OrchestrationV2AppThreadJson.Type;
@@ -2742,6 +2748,7 @@ export const OrchestrationV2ThreadShellJson = OrchestrationV2ThreadShell.mapFiel
       }),
     ),
   ),
+  lastTitleRegeneration: Schema.optional(Schema.NullOr(OrchestrationV2LastTitleRegenerationJson)),
   deletedAt: Schema.NullOr(Schema.DateTimeUtcFromString),
 }));
 export type OrchestrationV2ThreadShellJson = typeof OrchestrationV2ThreadShellJson.Type;
@@ -2805,6 +2812,14 @@ export const OrchestrationV2DomainEventJson = Schema.Union([
     ...OrchestrationV2JsonEventBaseFields,
     type: Schema.Literal("thread.pull-request-link-updated"),
     payload: ThreadPullRequestLink,
+  }),
+  Schema.Struct({
+    ...OrchestrationV2JsonEventBaseFields,
+    type: Schema.Literal("thread.visit-recorded"),
+    payload: Schema.Struct({
+      lastVisitedAt: OrchestrationV2AppThreadJson.fields.lastVisitedAt,
+      opens: OrchestrationV2AppThreadJson.fields.opens,
+    }),
   }),
   Schema.Struct({
     ...OrchestrationV2JsonEventBaseFields,
@@ -3152,13 +3167,7 @@ export const OrchestrationV2Command = Schema.Union([
     branchPullRequest: Schema.NullOr(ThreadLinkedPullRequest),
     linkedPullRequest: Schema.optional(ThreadLinkedPullRequest),
   }),
-  Schema.Struct({
-    type: Schema.Literal("thread.title.regeneration.complete"),
-    commandId: CommandId,
-    threadId: ThreadId,
-    requestId: CommandId,
-    title: Schema.optional(TrimmedNonEmptyString),
-  }),
+  ThreadTitleRegenerationCompleteCommand,
   Schema.Struct({
     type: Schema.Literal("thread.runtime-mode.set"),
     commandId: CommandId,
@@ -3454,6 +3463,11 @@ export type OrchestrationV2Command = typeof OrchestrationV2Command.Type;
 // Excluded from dispatchCommand so only the server can send these.
 const OrchestrationV2InternalCommand = Schema.Union([
   OrchestrationV2ReviewContinueCommand,
+  Schema.Struct({
+    ...ThreadTitleRegenerationCompleteCommand.fields,
+    type: Schema.Literal("thread.title.regeneration.complete.internal"),
+    outcome: Schema.optional(ThreadTitleRegenerationOutcome),
+  }),
   // Guest share commands the server issues after checking GOAT Connect and the guest token.
   Schema.Struct({
     type: Schema.Literal("thread.guest-share.open"),
@@ -3534,32 +3548,8 @@ const OrchestrationV2InternalCommand = Schema.Union([
     summary: Schema.String.check(Schema.isMaxLength(4_000)),
   }),
 
-  /**
-   * Records what a pull request watch saw, and wakes the agent in the same transaction when
-   * `wake` is set, or adds `note` to the timeline without starting a turn. Rejected once the
-   * watch started at `startedAt` has ended, and a wake is rejected on a settled or archived
-   * thread, so a read that raced either changes nothing.
-   */
-  Schema.Struct({
-    type: Schema.Literal("thread.pull-request-watch.sync"),
-    commandId: CommandId,
-    threadId: ThreadId,
-    ...ThreadPullRequestKey.fields,
-    startedAt: IsoDateTime,
-    watch: Schema.NullOr(ThreadPullRequestWatch),
-    /** With `watch: null`, the state the ended watch keeps instead of its last saved one. */
-    endedWatch: Schema.optional(ThreadPullRequestWatch),
-    /** The pull request merged or closed: wakes this watch queued and that have not started are dropped. */
-    dropQueuedWakes: Schema.optional(Schema.Literal(true)),
-    wake: Schema.optional(
-      Schema.Struct({
-        messageId: MessageId,
-        text: Schema.String,
-        notification: OrchestrationV2Notification,
-      }),
-    ),
-    note: Schema.optional(OrchestrationV2Notification),
-  }),
+  ThreadPullRequestWatchSyncCommand,
+  ThreadPullRequestWatchChecksReopenCommand,
   Schema.Struct({
     type: Schema.Literal("checkpoint.rollback.fail"),
     commandId: CommandId,
@@ -4185,39 +4175,6 @@ export class OrchestrationV2GetNativeChildWorkError extends Schema.TaggedError<O
   }
 }
 
-const WORKFLOW_FILE_ERROR_MESSAGES = {
-  "invalid-path": "Workflow files must be absolute paths with the expected extension.",
-  "root-unavailable": "Workflow file root unavailable.",
-  "not-found": "Workflow file not found.",
-  "outside-root": "Path is outside the workflow files root.",
-  "wrong-extension": "Resolved file has the wrong extension.",
-  "not-regular-file": "Workflow file is not a regular file.",
-  "changed-during-read": "Workflow file changed between resolution and open.",
-  "read-failed": "Workflow file read failed.",
-} as const;
-
-export class OrchestrationWorkflowFileError extends Schema.TaggedError<OrchestrationWorkflowFileError>()(
-  "OrchestrationWorkflowFileError",
-  {
-    reason: Schema.Literals([
-      "invalid-path",
-      "root-unavailable",
-      "not-found",
-      "outside-root",
-      "wrong-extension",
-      "not-regular-file",
-      "changed-during-read",
-      "read-failed",
-    ]),
-    path: Schema.String,
-    cause: Schema.optional(Schema.Defect()),
-  },
-) {
-  override get message(): string {
-    return WORKFLOW_FILE_ERROR_MESSAGES[this.reason];
-  }
-}
-
 export const OrchestrationV2GetTurnItemInput = Schema.Struct({
   threadId: ThreadId,
   itemId: TurnItemId,
@@ -4230,39 +4187,6 @@ export const OrchestrationV2GetTurnItemResult = Schema.Struct({
 });
 export type OrchestrationV2GetTurnItemResult = typeof OrchestrationV2GetTurnItemResult.Type;
 
-const WORKFLOW_SCRIPT_ERROR_MESSAGES = {
-  "invalid-path": "Workflow scripts must be absolute .js paths.",
-  "root-unavailable": "Script root unavailable.",
-  "not-found": "Script not found.",
-  "outside-root": "Script path is outside the workflow scripts root.",
-  "not-js": "Resolved script is not a .js file.",
-  "not-regular-file": "Script is not a regular file.",
-  "changed-during-read": "Script changed between resolution and open.",
-  "read-failed": "Script read failed.",
-} as const;
-
-export class OrchestrationGetWorkflowScriptError extends Schema.TaggedError<OrchestrationGetWorkflowScriptError>()(
-  "OrchestrationGetWorkflowScriptError",
-  {
-    reason: Schema.Literals([
-      "invalid-path",
-      "root-unavailable",
-      "not-found",
-      "outside-root",
-      "not-js",
-      "not-regular-file",
-      "changed-during-read",
-      "read-failed",
-    ]),
-    scriptPath: Schema.String,
-    cause: Schema.optional(Schema.Defect()),
-  },
-) {
-  override get message(): string {
-    return WORKFLOW_SCRIPT_ERROR_MESSAGES[this.reason];
-  }
-}
-
 export const OrchestrationV2SearchThreadInput = Schema.Struct({
   threadId: ThreadId,
   skills: Schema.optionalKey(
@@ -4273,7 +4197,7 @@ export const OrchestrationV2SearchThreadInput = Schema.Struct({
       }),
     ).check(Schema.isMaxLength(1_000)),
   ),
-  query: TrimmedNonEmptyString.check(Schema.isMaxLength(200)),
+  query: Schema.String.check(Schema.isPattern(/\S/), Schema.isMaxLength(200)),
   index: Schema.optionalKey(NonNegativeInt),
   offset: Schema.optionalKey(Schema.Int),
   start: Schema.optionalKey(

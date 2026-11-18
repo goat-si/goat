@@ -105,6 +105,14 @@ export function manualServerUpdateInstructions(
   targetVersion: string,
   installation?: ServerInstallation,
 ): string {
+  if (installation?.kind === "goat-launcher") {
+    const quote = (value: string) => `'${value.replaceAll("'", "'\\''")}'`;
+    const { baseDir } = installation;
+    // The CLI trims the flag before resolving it, which strips trailing whitespace without "/.".
+    const homeArgument = baseDir.trimEnd() === baseDir ? baseDir : `${baseDir}/.`;
+    // An inherited GOAT_HOME would otherwise send the update to a home the launcher is not in.
+    return `${quote(installation.launcher)} update --base-dir ${quote(homeArgument)} ${targetVersion}`;
+  }
   return installation
     ? `Install GOAT ${targetVersion} from https://github.com/goat-si/goat-releases/releases, then restart GOAT with your usual options.`
     : `goat update ${targetVersion}`;

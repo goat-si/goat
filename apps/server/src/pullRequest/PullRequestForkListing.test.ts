@@ -8,9 +8,11 @@ import {
   type ServerSettings,
 } from "@goat/contracts";
 import { DEFAULT_SERVER_SETTINGS } from "@goat/contracts/settings";
+import { makeSignedInMediaFetch } from "@goat/source-control-github/server/gitHubMediaFetch.testkit";
 import * as Effect from "effect/Effect";
 import * as Layer from "effect/Layer";
 import * as Option from "effect/Option";
+import { HttpClient, HttpClientResponse } from "effect/http";
 import * as KeyValueStore from "effect/persistence/KeyValueStore";
 import * as ServerSettingsService from "../serverSettings.ts";
 import * as ProjectService from "../project/ProjectService.ts";
@@ -18,9 +20,15 @@ import * as SqlitePersistence from "../persistence/Sqlite.ts";
 import * as PullRequestFilesViewed from "../persistence/PullRequestFilesViewed.ts";
 import * as RepositoryIdentityResolver from "../project/RepositoryIdentityResolver.ts";
 import * as SourceControlProviderRegistry from "../sourceControl/SourceControlProviderRegistry.ts";
+import * as BuiltInDrivers from "../sourceControl/builtInDrivers.ts";
+import { sourceControlDefinitions } from "../sourceControl/sourceControlDefinitions.ts";
+import { sourceControlMediaResponse } from "../assets/sourceControlMediaResponse.ts";
 import * as SourceControlRateLimit from "@goat/source-control-core/server/SourceControlRateLimit";
 import type { SourceControlProvider } from "@goat/source-control-core/server/SourceControlProvider";
-import { fakePullRequestProvider } from "@goat/source-control-testing/fakeSourceControlDriver";
+import {
+  fakePullRequestProvider,
+  fakeSourceControlDriverInstance,
+} from "@goat/source-control-testing/fakeSourceControlDriver";
 import type {
   ProviderChangeRequest,
   PullRequestProviderApi,
@@ -109,7 +117,9 @@ function makeService(input: {
   readonly settings?: ServerSettings;
   readonly projects: ReadonlyArray<OrchestrationProjectShell>;
   readonly providers: ReadonlyArray<PullRequestProviderApi>;
+  readonly onProjectRead?: () => void;
   readonly resolveHandle?: SourceControlProviderRegistry.SourceControlProviderRegistry["Service"]["resolveHandle"];
+  readonly resolveRemoteWebHost?: SourceControlProvider["Service"]["resolveRemoteWebHost"];
   readonly resolveRepositoryIdentity?: RepositoryIdentityResolver.RepositoryIdentityResolver["Service"]["resolve"];
 }) {
   // Build in the test scope; per-call Effect.provide would close the marks database on service acquisition.
@@ -127,13 +137,19 @@ function makeService(input: {
           resolveLink: () => undefined,
           resolveHandle:
             input.resolveHandle ?? (() => Effect.die("Unexpected provider refinement")),
-          get: () => Effect.succeed({} as SourceControlProvider["Service"]),
+          get: () =>
+            Effect.succeed({
+              resolveRemoteWebHost: input.resolveRemoteWebHost,
+            } as SourceControlProvider["Service"]),
         }),
         Layer.mock(ProjectService.ProjectService)({
           listShells: (options) =>
-            Effect.succeed(
-              input.projects.filter((project) => options?.projectIds?.includes(project.id) ?? true),
-            ),
+            Effect.sync(() => {
+              input.onProjectRead?.();
+              return input.projects.filter(
+                (project) => options?.projectIds?.includes(project.id) ?? true,
+              );
+            }),
           getShell: (projectId) =>
             Effect.succeed(Option.fromNullishOr(input.projects.find((p) => p.id === projectId))),
         }),
@@ -333,4 +349,144 @@ it.effect(
       projects.splice(1, 1);
       assert.strictEqual(yield* has("acme/web"), false);
     }),
+);
+
+it.effect(
+  "authorizes 30 project images without unrelated SSH probes and rechecks after removal",
+  () =>
+    Effect.gen(function* () {
+      const github = sourceControlDefinitions.find("github");
+      assert.isDefined(github);
+      const projects = [
+        project({ id: "p1", title: "media", workspaceRoot: "/media", repository: "sample/media" }),
+        project({
+          id: "p2",
+          title: "unresolved SSH",
+          workspaceRoot: "/ssh",
+          provider: "unknown",
+          host: "git.internal.example",
+          repository: "team/tool",
+          remoteUrl: "git@git.internal.example:team/tool.git",
+        }),
+        project({ id: "p3", title: "missing identity", workspaceRoot: "/missing" }),
+      ];
+      let reads = 0;
+      let probes = 0;
+      let identityReads = 0;
+      const service = yield* makeService({
+        projects,
+        providers: [fakePullRequestProvider(github.kind, {})],
+        onProjectRead: () => {
+          reads++;
+        },
+        resolveHandle: () =>
+          Effect.sync(() => {
+            probes++;
+            return { context: null, provider: {} as SourceControlProvider["Service"] };
+          }),
+        resolveRepositoryIdentity: () =>
+          Effect.sync(() => {
+            identityReads++;
+            return null;
+          }),
+      });
+      const authorizations: Array<string | undefined> = [];
+      const http = HttpClient.make((request) =>
+        Effect.sync(() => {
+          authorizations.push(request.headers.authorization);
+          return HttpClientResponse.fromWeb(
+            request,
+            new Response(null, {
+              status: request.headers.authorization === "Bearer fixture-token" ? 200 : 404,
+              headers: { "content-type": "image/png" },
+            }),
+          );
+        }),
+      );
+      const fetchMedia = yield* makeSignedInMediaFetch("fixture-token", http);
+      const fetchImage = (index: number) =>
+        sourceControlMediaResponse(
+          {
+            url: `https://raw.githubusercontent.com/sample/media/main/${index}.png`,
+            cwd: "/media",
+            repository: "sample/media",
+            expiresAt: 0,
+          },
+          {},
+        ).pipe(
+          Effect.provideService(PullRequestService.PullRequestService, service),
+          Effect.provideService(BuiltInDrivers.SourceControlDrivers, [
+            {
+              driver: { kind: github.kind, definition: github },
+              instance: fakeSourceControlDriverInstance(github.kind, {
+                pullRequests: null,
+                fetchMedia,
+              }),
+            },
+          ]),
+          Effect.provideService(
+            RepositoryIdentityResolver.RepositoryIdentityResolver,
+            RepositoryIdentityResolver.RepositoryIdentityResolver.of({
+              resolve: () => Effect.succeed(null),
+            }),
+          ),
+        );
+      const statuses = yield* Effect.forEach(
+        Array.from({ length: 30 }, (_, index) => index),
+        (index) => fetchImage(index).pipe(Effect.map((response) => response.status)),
+        { concurrency: 6 },
+      );
+      assert.deepStrictEqual(statuses, Array(30).fill(200));
+      assert.deepStrictEqual(
+        { reads, probes, identityReads },
+        { reads: 30, probes: 0, identityReads: 0 },
+      );
+      assert.deepStrictEqual(authorizations, Array(30).fill("Bearer fixture-token"));
+
+      projects.splice(0, 1);
+      assert.strictEqual((yield* fetchImage(30)).status, 404);
+      assert.strictEqual(reads, 31);
+      assert.strictEqual(probes, 0);
+      assert.isUndefined(authorizations[30]);
+    }),
+);
+
+it.effect("keeps host verification for an ambiguous SSH match", () =>
+  Effect.gen(function* () {
+    const host = "git.internal.example";
+    const remoteUrl = `git@${host}:sample/media.git`;
+    const github = SourceControlProviderKind.make("github");
+    const service = yield* makeService({
+      projects: [
+        project({
+          id: "p1",
+          title: "ambiguous SSH",
+          workspaceRoot: "/ssh",
+          provider: "unknown",
+          host,
+          remoteUrl,
+          repository: "sample/media",
+        }),
+      ],
+      providers: [fakePullRequestProvider(github, {})],
+      resolveHandle: () =>
+        Effect.succeed({
+          context: {
+            remoteName: "origin",
+            remoteUrl,
+            provider: { kind: github, name: "GitHub", baseUrl: `https://${host}` },
+          },
+          provider: {} as SourceControlProvider["Service"],
+        }),
+      resolveRemoteWebHost: () => Effect.succeed(host),
+    });
+    assert.strictEqual(
+      yield* service.hasProjectRepository({ host: "github.com", repository: "sample/media" }),
+      false,
+    );
+    assert.strictEqual(
+      yield* service.hasProjectRepository({ host, repository: "sample/media" }),
+      true,
+    );
+  }),
 );

@@ -1,6 +1,7 @@
 import { selectedNavigationTab, visibleNavigationTabs } from "./navigation-tab-order";
 import { requireNativeView } from "expo";
 import type { NativeSyntheticEvent, ViewProps } from "react-native";
+import { useAdaptiveWorkspaceLayout } from "../layout/AdaptiveWorkspaceLayout";
 import { useControlTheme } from "../../components/ui/useControlTheme";
 import { useNavigationTabOrder, useHiddenNavigationTabs } from "./navigation-tabs";
 import { useWorkspaceTabs } from "./WorkspaceTabsContext";
@@ -25,6 +26,7 @@ export function WorkspaceSidebarTabs(props: {
   readonly reserveComposeSpace?: boolean;
 }) {
   const workspace = useWorkspaceTabs()!;
+  const { layout } = useAdaptiveWorkspaceLayout();
   const order = useNavigationTabOrder();
   const hidden = useHiddenNavigationTabs();
   const tabs = [...visibleNavigationTabs(order, hidden), "settings" as const];
@@ -57,6 +59,7 @@ export function WorkspaceSidebarTabs(props: {
         position: "absolute",
         bottom: 0,
         left: props.compact ? 8 : 0,
+        maxWidth: layout.primarySidebarOverlaysContent && !props.compact ? 280 : undefined,
         // Keep the tab icons in place when Compose disappears on other destinations.
         right:
           (props.compact ? 12 : 0) +

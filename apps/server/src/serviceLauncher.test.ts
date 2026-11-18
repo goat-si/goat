@@ -1,5 +1,5 @@
 // @effect-diagnostics nodeBuiltinImport:off - observes the children the launcher spawns with Node built-ins.
-import { writeFakeRuntime } from "./serviceLauncher.testkit.ts";
+import { readDatabaseLabel, seedDatabase, writeFakeRuntime } from "./serviceLauncher.testkit.ts";
 import * as NodeServices from "@effect/platform-node/NodeServices";
 import { assert, it } from "@effect/vitest";
 import { SERVER_EXIT_CODE_DATABASE_AHEAD, SERVER_EXIT_CODE_STATE_DIR_OWNED } from "@goat/contracts";
@@ -98,19 +98,6 @@ ${trialSource}
     ),
   );
 
-/** Runs a launcher until its restarted active child exits, which ends these scenarios. */
-const runUntilActiveExits = (root: string, statePath: string) =>
-  Effect.gen(function* () {
-    const launcher = new Launcher(root, yield* Effect.promise(() => readServiceState(statePath)));
-    yield* Effect.promise(() =>
-      launcher.run().then(
-        () => Promise.reject(new Error("launcher unexpectedly completed")),
-        () => Promise.resolve(),
-      ),
-    );
-    return yield* Effect.promise(() => readServiceState(statePath));
-  });
-
 const refusalCases = [
   {
     code: SERVER_EXIT_CODE_STATE_DIR_OWNED,
@@ -201,6 +188,9 @@ it.layer(NodeServices.layer)("service state persistence", (it) => {
         'process.send("started"); process.on("message", () => {});',
       );
       const state = { protocol: SERVICE_LAUNCHER_PROTOCOL, activeVersion: "1.0.0" };
+      yield* Effect.promise(() =>
+        writeServiceState(path.join(root, "runtime", "service-state.json"), state),
+      );
       const started = Promise.withResolvers<"started">();
       const waiting = Promise.withResolvers<"waiting">();
       let free = 0;
@@ -325,7 +315,7 @@ it.layer(NodeServices.layer)("service state persistence", (it) => {
       }),
   );
 
-  it.effect.each(refusalCases)(
+  it.effect.each(refusalCases.filter(({ reason }) => reason === "database-ahead"))(
     "fails a pending update without restoring data when the active server refuses with $code",
     ({ code, reason, message }) =>
       Effect.gen(function* () {
@@ -343,20 +333,10 @@ it.layer(NodeServices.layer)("service state persistence", (it) => {
           path,
           path.join(root, "runtime", "goat", "versions", "1.0.0"),
           `
-import { mkdirSync, writeFileSync } from "node:fs";
-import { join } from "node:path";
-import { tryAcquireServerOwnerLock } from ${lockModuleUrl};
 const context = JSON.parse(process.env.GOAT_SERVICE_LAUNCHER_CONTEXT);
 if (context.update !== undefined) process.exit(0);
 process.on("message", message => {
-  if (message.type !== "update-accepted") return;
-  const backup = join(${JSON.stringify(root)}, "runtime", "db-backup", message.updateId);
-  mkdirSync(backup, { recursive: true });
-  writeFileSync(join(backup, "database"), "older snapshot");
-  const lock = tryAcquireServerOwnerLock(${JSON.stringify(path.dirname(dbPath))}, "service-launcher:" + message.updateId);
-  writeFileSync(join(backup, "owner-generation"), String(lock.generation));
-  lock.release();
-  process.exit(${code});
+  if (message.type === "update-accepted") process.exit(${code});
 });
 process.send({ type: "request-update", targetVersion: "1.1.0", dbPath: ${JSON.stringify(dbPath)} });
 `,
@@ -409,7 +389,7 @@ process.send({ type: "request-update", targetVersion: "1.1.0", dbPath: ${JSON.st
       const statePath = path.join(root, "runtime", "service-state.json");
       const databasePath = path.join(root, "userdata", "state.sqlite");
       yield* fs.makeDirectory(path.dirname(databasePath), { recursive: true });
-      yield* fs.writeFileString(databasePath, "before trial");
+      seedDatabase(databasePath, "before trial");
       const encodedDatabasePath = JSON.stringify(databasePath);
       const childSource = `
 const context = JSON.parse(process.env.GOAT_SERVICE_LAUNCHER_CONTEXT);
@@ -472,7 +452,7 @@ if (context.update?.status === "pending") {
       vi.stubEnv("GOAT_TEST_SERVICE_TOKEN", "inherited");
       yield* Effect.addFinalizer(() => Effect.sync(() => vi.unstubAllEnvs()));
       yield* fs.makeDirectory(path.dirname(databasePath), { recursive: true });
-      yield* fs.writeFileString(databasePath, "before trial");
+      seedDatabase(databasePath, "before trial");
       const encodedDatabasePath = JSON.stringify(databasePath);
       const childSource = `
 import { appendFileSync, writeFileSync } from "node:fs";
@@ -535,7 +515,7 @@ if (context.update?.status === "pending") {
   );
 
   it.effect.each(["file", "symlink", "dangling symlink"] as const)(
-    "restores the database when a migrating trial exits, with the database a %s",
+    "rolls back an unchanged SQLite file set in the same launcher, with the database a %s",
     (kind) =>
       Effect.gen(function* () {
         const fs = yield* FileSystem.FileSystem;
@@ -546,7 +526,7 @@ if (context.update?.status === "pending") {
         const databaseFile =
           kind === "file" ? databasePath : path.join(root, "data", "original.sqlite");
         const linkTarget = kind === "dangling symlink" ? "../original.sqlite" : databaseFile;
-        const original = "database before migration";
+        const original = "before trial";
         yield* fs.makeDirectory(path.dirname(databaseFile), { recursive: true });
         if (kind === "dangling symlink") {
           yield* fs.makeDirectory(path.join(root, "data", "sub"));
@@ -554,20 +534,15 @@ if (context.update?.status === "pending") {
         } else {
           yield* fs.makeDirectory(path.dirname(databasePath), { recursive: true });
         }
-        yield* fs.writeFileString(databaseFile, original);
+        seedDatabase(databaseFile, original);
         if (kind !== "file") yield* fs.symlink(linkTarget, databasePath);
         const encodedDatabasePath = JSON.stringify(databasePath);
         const childSource = `
-import { realpathSync, unlinkSync, writeFileSync } from "node:fs";
 import { dirname } from "node:path";
 import { tryAcquireServerOwnerLock } from ${lockModuleUrl};
 const context = JSON.parse(process.env.GOAT_SERVICE_LAUNCHER_CONTEXT);
 if (context.update?.status === "pending") {
   tryAcquireServerOwnerLock(dirname(context.update.dbPath), "service-trial:" + context.update.id);
-  writeFileSync(context.update.dbPath, "database after migration");
-  writeFileSync(context.update.dbPath + "-wal", "trial wal");
-  writeFileSync(context.update.dbPath + "-shm", "trial shm");
-  ${kind === "dangling symlink" ? "unlinkSync(realpathSync(context.update.dbPath));" : ""}
   process.exit(1);
 } else if (context.update === undefined) {
   process.send({ type: "request-update", targetVersion: "1.1.0", dbPath: ${encodedDatabasePath} });
@@ -605,7 +580,7 @@ if (context.update?.status === "pending") {
         const state = yield* Effect.promise(() => readServiceState(statePath));
         assert.equal(state.activeVersion, "1.0.0");
         assert.equal(state.update?.status, "rolled-back");
-        assert.equal(yield* fs.readFileString(databaseFile), original);
+        assert.equal(readDatabaseLabel(databaseFile), original);
         if (kind !== "file") assert.equal(yield* fs.readLink(databasePath), linkTarget);
         assert.isFalse(yield* fs.exists(path.join(root, "original.sqlite")));
         assert.isFalse(yield* fs.exists(`${databasePath}-wal`));
@@ -800,49 +775,6 @@ setInterval(() => {}, 1_000);
     }),
   );
 
-  it.effect("keeps a database another server wrote between the backup and the rollback", () =>
-    Effect.gen(function* () {
-      const fs = yield* FileSystem.FileSystem;
-      const path = yield* Path.Path;
-      const root = yield* fs.makeTempDirectoryScoped({ prefix: "goat-service-launcher-foreign-" });
-      const statePath = path.join(root, "runtime", "service-state.json");
-      const databasePath = path.join(root, "userdata", "state.sqlite");
-      yield* fs.makeDirectory(path.dirname(databasePath), { recursive: true });
-      yield* fs.writeFileString(databasePath, "before trial");
-      // The trial migrates, then a desktop server takes the data, writes and
-      // exits before the trial fails.
-      yield* writeUpdateRuntimes(
-        fs,
-        path,
-        root,
-        databasePath,
-        `
-  const lockDir = dirname(context.update.dbPath);
-  tryAcquireServerOwnerLock(lockDir, "service-trial:" + context.update.id).release();
-  writeFileSync(context.update.dbPath, "trial migration");
-  tryAcquireServerOwnerLock(lockDir, "desktop").release();
-  writeFileSync(context.update.dbPath, "desktop write");
-  process.exit(1);`,
-      );
-      yield* Effect.promise(() =>
-        writeServiceState(statePath, {
-          protocol: SERVICE_LAUNCHER_PROTOCOL,
-          activeVersion: "1.0.0",
-        }),
-      );
-
-      const state = yield* runUntilActiveExits(root, statePath);
-      assert.equal(state.activeVersion, "1.0.0");
-      assert.equal(state.update?.status, "rolled-back");
-      assert.equal(
-        state.update?.status === "rolled-back" ? state.update.reason : undefined,
-        "candidate-exited:1;db-kept-for-other-server",
-      );
-      assert.equal(yield* fs.readFileString(databasePath), "desktop write");
-      assert.isFalse(yield* fs.exists(path.join(root, "runtime", "db-backup", state.update!.id)));
-    }),
-  );
-
   it.effect("neither backs up nor starts a trial while another server owns the userdata", () =>
     Effect.gen(function* () {
       const fs = yield* FileSystem.FileSystem;
@@ -851,7 +783,7 @@ setInterval(() => {}, 1_000);
       const statePath = path.join(root, "runtime", "service-state.json");
       const databasePath = path.join(root, "userdata", "state.sqlite");
       yield* fs.makeDirectory(path.dirname(databasePath), { recursive: true });
-      yield* fs.writeFileString(databasePath, "desktop data");
+      seedDatabase(databasePath, "desktop data");
       yield* writeUpdateRuntimes(
         fs,
         path,
@@ -866,123 +798,53 @@ setInterval(() => {}, 1_000);
           activeVersion: "1.0.0",
         }),
       );
-      const desktop = yield* Effect.acquireRelease(
-        Effect.sync(() => tryAcquireServerOwnerLock(path.dirname(databasePath), "desktop")),
-        (lock) => Effect.sync(() => lock?.release()),
-      );
+      let desktop = tryAcquireServerOwnerLock(path.dirname(databasePath), "desktop");
       assert.isDefined(desktop);
+      yield* Effect.addFinalizer(() => Effect.sync(() => desktop?.release()));
 
-      const state = yield* runUntilActiveExits(root, statePath);
+      const retry = Promise.withResolvers<void>();
+      const handoff = Promise.withResolvers<void>();
+      const timers = vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
+      yield* Effect.addFinalizer(() => Effect.sync(() => vi.useRealTimers()));
+      const schedule = globalThis.setTimeout;
+      const spy = vi.spyOn(globalThis, "setTimeout").mockImplementation(((
+        callback: () => void,
+        delay: number,
+      ) => {
+        if (delay === 13) retry.resolve();
+        if (delay === 2000) handoff.resolve();
+        // @effect-diagnostics-next-line globalTimers:off -- Observe the launcher's own timer registration.
+        return schedule(callback, delay);
+      }) as typeof setTimeout);
+      yield* Effect.addFinalizer(() => Effect.sync(() => spy.mockRestore()));
+      const launcher = new Launcher(
+        root,
+        yield* Effect.promise(() => readServiceState(statePath)),
+        {
+          stateDirOwnerPollMs: 13,
+        },
+      );
+      yield* Effect.addFinalizer(() => Effect.promise(() => launcher.stop("SIGTERM")));
+      const running = launcher.run().catch(String);
+      // Advance the active child's accepted handoff when it requests the update.
+      yield* Effect.promise(() => handoff.promise);
+      yield* Effect.promise(() => timers.advanceTimersByTimeAsync(2000));
+      yield* Effect.promise(() => retry.promise);
+      desktop.release();
+      desktop = undefined;
+      yield* Effect.promise(() => timers.advanceTimersByTimeAsync(13));
+      assert.include(
+        String(yield* Effect.promise(() => running)),
+        "Active child exited unexpectedly",
+      );
+      const state = yield* Effect.promise(() => readServiceState(statePath));
       assert.equal(state.update?.status, "failed");
       assert.equal(
         state.update?.status === "failed" ? state.update.reason : undefined,
         "db-owner-busy",
       );
-      assert.equal(yield* fs.readFileString(databasePath), "desktop data");
+      assert.equal(readDatabaseLabel(databasePath), "desktop data");
       assert.isFalse(yield* fs.exists(path.join(root, "runtime", "db-backup", state.update!.id)));
-    }),
-  );
-
-  it.effect("keeps a rollback pending until the owner lock frees up", () =>
-    Effect.gen(function* () {
-      const fs = yield* FileSystem.FileSystem;
-      const path = yield* Path.Path;
-      const root = yield* fs.makeTempDirectoryScoped({ prefix: "goat-service-launcher-pending-" });
-      const statePath = path.join(root, "runtime", "service-state.json");
-      const databasePath = path.join(root, "userdata", "state.sqlite");
-      const lockDir = path.dirname(databasePath);
-      const backupDir = path.join(root, "runtime", "db-backup", "update-1");
-      yield* fs.makeDirectory(lockDir, { recursive: true });
-      yield* fs.makeDirectory(backupDir, { recursive: true });
-      yield* fs.writeFileString(databasePath, "trial migration");
-      yield* fs.writeFileString(path.join(backupDir, "database"), "before trial");
-      // The launcher had backed up at this generation and decided to roll back.
-      const backup = tryAcquireServerOwnerLock(lockDir, "service-launcher:update-1");
-      assert.isDefined(backup);
-      backup.release();
-      yield* fs.writeFileString(path.join(backupDir, "owner-generation"), `${backup.generation}\n`);
-      yield* fs.writeFileString(path.join(backupDir, ".rollback-pending"), "");
-      yield* writeUpdateRuntimes(fs, path, root, databasePath, "  process.exit(1);");
-      yield* Effect.promise(() =>
-        writeServiceState(statePath, {
-          protocol: SERVICE_LAUNCHER_PROTOCOL,
-          activeVersion: "1.0.0",
-          update: {
-            id: "update-1",
-            fromVersion: "1.0.0",
-            targetVersion: "1.1.0",
-            dbPath: databasePath,
-            status: "pending",
-          },
-        }),
-      );
-
-      // A trial process that has not let go yet still holds the lock.
-      const lingering = tryAcquireServerOwnerLock(lockDir, "service-trial:update-1");
-      assert.isDefined(lingering);
-      const launcher = new Launcher(root, yield* Effect.promise(() => readServiceState(statePath)));
-      const running = launcher.run();
-      yield* Effect.promise(() => launcher.stop("SIGTERM"));
-      yield* Effect.promise(() => running);
-      const waiting = yield* Effect.promise(() => readServiceState(statePath));
-      assert.equal(waiting.update?.status, "pending");
-      assert.equal(yield* fs.readFileString(databasePath), "trial migration");
-      assert.isTrue(yield* fs.exists(path.join(backupDir, ".rollback-pending")));
-
-      lingering.release();
-      const state = yield* runUntilActiveExits(root, statePath);
-      assert.equal(state.update?.status, "failed");
-      assert.equal(
-        state.update?.status === "failed" ? state.update.reason : undefined,
-        "rollback-interrupted",
-      );
-      assert.equal(yield* fs.readFileString(databasePath), "before trial");
-      assert.isFalse(yield* fs.exists(backupDir));
-    }),
-  );
-  it.effect("recovers a finished restore without copying over a later server's writes", () =>
-    Effect.gen(function* () {
-      const fs = yield* FileSystem.FileSystem;
-      const path = yield* Path.Path;
-      const root = yield* fs.makeTempDirectoryScoped({ prefix: "goat-service-launcher-recopy-" });
-      const statePath = path.join(root, "runtime", "service-state.json");
-      const databasePath = path.join(root, "userdata", "state.sqlite");
-      const lockDir = path.dirname(databasePath);
-      const backupDir = path.join(root, "runtime", "db-backup", "update-1");
-      yield* fs.makeDirectory(lockDir, { recursive: true });
-      yield* fs.makeDirectory(backupDir, { recursive: true });
-      yield* fs.writeFileString(path.join(backupDir, "database"), "before trial");
-      const backup = tryAcquireServerOwnerLock(lockDir, "service-launcher:update-1");
-      assert.isDefined(backup);
-      backup.release();
-      yield* fs.writeFileString(path.join(backupDir, "owner-generation"), `${backup.generation}\n`);
-      // The launcher finished the copy and crashed before recording it; a
-      // desktop server then took the data and wrote.
-      yield* fs.writeFileString(path.join(backupDir, ".rollback-pending"), "");
-      tryAcquireServerOwnerLock(lockDir, "service-launcher:update-1")?.release();
-      tryAcquireServerOwnerLock(lockDir, "desktop")?.release();
-      yield* fs.writeFileString(databasePath, "desktop write after restore");
-      yield* writeUpdateRuntimes(fs, path, root, databasePath, "  process.exit(1);");
-      yield* Effect.promise(() =>
-        writeServiceState(statePath, {
-          protocol: SERVICE_LAUNCHER_PROTOCOL,
-          activeVersion: "1.0.0",
-          update: {
-            id: "update-1",
-            fromVersion: "1.0.0",
-            targetVersion: "1.1.0",
-            dbPath: databasePath,
-            status: "pending",
-          },
-        }),
-      );
-
-      const state = yield* runUntilActiveExits(root, statePath);
-      assert.equal(
-        state.update?.status === "failed" ? state.update.reason : undefined,
-        "rollback-interrupted;db-kept-for-other-server",
-      );
-      assert.equal(yield* fs.readFileString(databasePath), "desktop write after restore");
     }),
   );
 });
@@ -1027,6 +889,7 @@ const healthFixture = (
     readonly hang?: boolean;
     readonly legacy?: boolean;
     readonly listenHost?: string;
+    readonly committedWrites?: boolean;
   } = {},
 ) =>
   Effect.gen(function* () {
@@ -1036,8 +899,7 @@ const healthFixture = (
     const statePath = path.join(root, "runtime", "service-state.json");
     const dbPath = path.join(root, "userdata", "statev2.sqlite");
     yield* fs.makeDirectory(path.dirname(dbPath), { recursive: true });
-    yield* fs.writeFileString(dbPath, "original database");
-    yield* fs.writeFileString(dbPath + "-wal", "original wal");
+    seedDatabase(dbPath, "original database");
     const pending = {
       id: "health-update",
       fromVersion: "1.0.0",
@@ -1057,7 +919,7 @@ const healthFixture = (
       path.join(root, "runtime", "goat", "versions", "1.1.0"),
       `
 import { createServer } from "node:http";
-import { writeFileSync } from "node:fs";
+import { DatabaseSync } from "node:sqlite";
 import { dirname } from "node:path";
 import { tryAcquireServerOwnerLock } from ${lockModuleUrl};
 const context = JSON.parse(process.env.GOAT_SERVICE_LAUNCHER_CONTEXT);
@@ -1068,16 +930,17 @@ process.on("message", message => {
   if (message.type === "test-signal") process.kill(process.pid, "SIGTERM");
   if (message.type === "test-release") { lock.release(); process.send({ type: "test-released" }); }
   if (message.type === "committed") {
-    writeFileSync(dbPath, "committed writes");
-    writeFileSync(dbPath + "-wal", "committed wal");
-    writeFileSync(dbPath + "-shm", "committed shm");
+    if (${input.committedWrites ?? false}) {
+      const db = new DatabaseSync(dbPath);
+      db.exec("UPDATE fixture SET label = 'committed writes'");
+      db.close();
+    }
     process.send({ type: "test-committed" });
   }
 });
 if (context.update.status === "committed") {
   process.send({ type: "test-restarted" });
 } else if (${input.failStart !== undefined}) {
-  writeFileSync(dbPath, "failed migration");
   process.exit(${input.failStart ?? 17});
 } else {
   const server = createServer((request, response) => {
@@ -1205,7 +1068,7 @@ it.layer(NodeServices.layer)("post-update health", (it) => {
         status: "rolled-back",
         reason,
       });
-      assert.equal(yield* f.fs.readFileString(f.dbPath), "original database");
+      assert.equal(readDatabaseLabel(f.dbPath), "original database");
     }),
   );
 
@@ -1234,7 +1097,7 @@ it.layer(NodeServices.layer)("post-update health", (it) => {
     "does not roll back a committed probation when the server refuses with $code",
     ({ code, message }) =>
       Effect.gen(function* () {
-        const f = yield* healthFixture();
+        const f = yield* healthFixture({ committedWrites: true });
         const { refused, lines } = yield* observeRefusal(message);
         const spawnCount = spawnedChildren.length;
         const { launcher, running } = yield* f.start({ now: () => 1000 });
@@ -1243,13 +1106,9 @@ it.layer(NodeServices.layer)("post-update health", (it) => {
         child.send({ type: "test-exit", code });
         assert.equal(yield* Effect.promise(() => Promise.race([refused, running])), "idle");
         assert.deepEqual(yield* Effect.promise(() => readServiceState(f.statePath)), committed);
-        assert.equal(yield* f.fs.readFileString(f.dbPath), "committed writes");
-        assert.equal(yield* f.fs.readFileString(f.dbPath + "-wal"), "committed wal");
-        assert.equal(yield* f.fs.readFileString(f.dbPath + "-shm"), "committed shm");
+        assert.equal(readDatabaseLabel(f.dbPath), "committed writes");
         assert.equal(
-          yield* f.fs.readFileString(
-            f.path.join(f.root, "runtime", "db-backup", f.pending.id, "database"),
-          ),
+          readDatabaseLabel(f.path.join(f.root, "runtime", "db-backup", f.pending.id, "database")),
           "original database",
         );
         assert.equal(spawnedChildren.length - spawnCount, 1);
@@ -1270,9 +1129,7 @@ it.layer(NodeServices.layer)("post-update health", (it) => {
         assert.equal(committed.update?.status, "committed");
         assert.equal(committed.probation?.deadline, 1000 + PROBATION_MS);
         assert.equal(
-          yield* f.fs.readFileString(
-            f.path.join(f.root, "runtime", "db-backup", f.pending.id, "database"),
-          ),
+          readDatabaseLabel(f.path.join(f.root, "runtime", "db-backup", f.pending.id, "database")),
           "original database",
         );
         child.send({ type: "test-exit" });
@@ -1284,17 +1141,16 @@ it.layer(NodeServices.layer)("post-update health", (it) => {
           "probation-exit:42",
         );
         assert.isUndefined(rolledBack.probation);
-        assert.equal(yield* f.fs.readFileString(f.dbPath), "original database");
-        assert.equal(yield* f.fs.readFileString(f.dbPath + "-wal"), "original wal");
+        assert.equal(readDatabaseLabel(f.dbPath), "original database");
         assert.isFalse(yield* f.fs.exists(f.dbPath + "-shm"));
       }),
   );
 
   it.effect(
-    "discards the snapshot at the deadline and leaves later exits to the service manager",
+    "retains the snapshot at the deadline and leaves later exits to the service manager",
     () =>
       Effect.gen(function* () {
-        const f = yield* healthFixture();
+        const f = yield* healthFixture({ committedWrites: true });
         let now = 1000;
         vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
         yield* Effect.addFinalizer(() => Effect.sync(() => vi.useRealTimers()));
@@ -1302,76 +1158,47 @@ it.layer(NodeServices.layer)("post-update health", (it) => {
         const child = yield* f.wait("test-committed");
         now += PROBATION_MS;
         yield* Effect.promise(() => vi.advanceTimersByTimeAsync(PROBATION_MS));
-        // The exit transition queues behind expiry and observes its durable state write.
         child.send({ type: "test-exit" });
-        const error = yield* Effect.promise(() => running);
-        assert.instanceOf(error, Error);
-        assert.match((error as Error).message, /Active child exited unexpectedly/);
+        assert.include(
+          String(yield* Effect.promise(() => running)),
+          "Active child exited unexpectedly",
+        );
         const state = yield* Effect.promise(() => readServiceState(f.statePath));
         assert.isUndefined(state.probation);
-        assert.isFalse(
-          yield* f.fs.exists(f.path.join(f.root, "runtime", "db-backup", f.pending.id)),
-        );
         assert.equal(state.update?.status, "committed");
-        assert.equal(yield* f.fs.readFileString(f.dbPath), "committed writes");
+        assert.equal(readDatabaseLabel(f.dbPath), "committed writes");
+        assert.equal(
+          readDatabaseLabel(f.path.join(f.root, "runtime", "db-backup", f.pending.id, "database")),
+          "original database",
+        );
       }),
   );
 
   it.effect.each([false, true])(
-    "recovers the persisted probation across a launcher restart (expired: %s)",
+    "blocks startup with an interrupted probation (expired: %s)",
     (expired) =>
       Effect.gen(function* () {
-        const f = yield* healthFixture();
+        const f = yield* healthFixture({ committedWrites: true });
         const first = yield* f.start({ now: () => 1000 });
         yield* f.wait("test-committed");
         yield* Effect.promise(() => first.launcher.stop("SIGTERM"));
         const state = yield* Effect.promise(() => readServiceState(f.statePath));
         assert.equal(state.update?.status, "committed");
         assert.isDefined(state.probation);
+        const started = spawnedChildren.length;
         const restarted = yield* f.start({ now: () => 1000 + (expired ? PROBATION_MS : 1234) });
-        const child = yield* f.wait("test-restarted");
-        child.send({ type: "test-exit" });
-        yield* Effect.promise(() => restarted.running);
-        const final = yield* Effect.promise(() => readServiceState(f.statePath));
-        assert.equal(final.update?.status, expired ? "committed" : "rolled-back");
-        // A target restarted during probation is still this update, so rollback restores the
-        // snapshot instead of leaving the old build on the migrated database.
-        if (!expired)
-          assert.equal(
-            final.update?.status === "rolled-back" ? final.update.reason : undefined,
-            "probation-exit:42",
-          );
-        assert.isFalse(
-          yield* f.fs.exists(f.path.join(f.root, "runtime", "db-backup", f.pending.id)),
+        assert.include(
+          String(yield* Effect.promise(() => restarted.running)),
+          "Database recovery required",
         );
+        assert.equal(spawnedChildren.length, started);
+        assert.deepEqual(yield* Effect.promise(() => readServiceState(f.statePath)), state);
+        assert.equal(readDatabaseLabel(f.dbPath), "committed writes");
         assert.equal(
-          yield* f.fs.readFileString(f.dbPath),
-          expired ? "committed writes" : "original database",
+          readDatabaseLabel(f.path.join(f.root, "runtime", "db-backup", f.pending.id, "database")),
+          "original database",
         );
       }),
-  );
-
-  it.effect("rolls back when the committed target cannot start after a launcher restart", () =>
-    Effect.gen(function* () {
-      const f = yield* healthFixture();
-      const first = yield* f.start({ now: () => 1000 });
-      yield* f.wait("test-committed");
-      yield* Effect.promise(() => first.launcher.stop("SIGTERM"));
-      // The committed build is no longer startable when the service comes back.
-      yield* f.fs.remove(
-        f.path.join(f.root, "runtime", "goat", "versions", "1.1.0", ".install-complete"),
-      );
-      const restarted = yield* f.start({ now: () => 1000 + 1234 });
-      yield* Effect.promise(() => restarted.running.catch(() => undefined));
-      const state = yield* Effect.promise(() => readServiceState(f.statePath));
-      assert.equal(state.activeVersion, "1.0.0");
-      assert.equal(
-        state.update?.status === "rolled-back" ? state.update.reason : undefined,
-        "probation-start-failed",
-      );
-      assert.isUndefined(state.probation);
-      assert.equal(yield* f.fs.readFileString(f.dbPath), "original database");
-    }),
   );
 });
 
@@ -1388,13 +1215,13 @@ it.layer(NodeServices.layer)("probation exit ownership", (it) => {
         state.update?.status === "rolled-back" ? state.update.reason : undefined,
         `probation-exit:${exit}`,
       );
-      assert.equal(yield* f.fs.readFileString(f.dbPath), "original database");
+      assert.equal(readDatabaseLabel(f.dbPath), "original database");
     }),
   );
 
   it.effect("honors a stop marker without rolling back committed writes", () =>
     Effect.gen(function* () {
-      const f = yield* healthFixture();
+      const f = yield* healthFixture({ committedWrites: true });
       const { running } = yield* f.start({ now: () => 1000 });
       const child = yield* f.wait("test-committed");
       yield* f.fs.writeFileString(f.path.join(f.root, "runtime", SERVICE_STOP_MARKER_FILE), "");
@@ -1403,64 +1230,31 @@ it.layer(NodeServices.layer)("probation exit ownership", (it) => {
       const state = yield* Effect.promise(() => readServiceState(f.statePath));
       assert.equal(state.update?.status, "committed");
       assert.isDefined(state.probation);
-      assert.equal(yield* f.fs.readFileString(f.dbPath), "committed writes");
+      assert.equal(readDatabaseLabel(f.dbPath), "committed writes");
     }),
   );
 
-  it.effect(
-    "keeps rollback intent across a busy owner, launcher restart and expired probation",
-    () =>
-      Effect.gen(function* () {
-        const f = yield* healthFixture();
-        let now = 1000;
-        let probationDeadline: (() => void) | undefined;
-        const retryScheduled = Promise.withResolvers<void>();
-        const realSetTimeout = globalThis.setTimeout;
-        const timerSpy = vi.spyOn(globalThis, "setTimeout").mockImplementation(((
-          callback: () => void,
-          ms: number,
-        ) => {
-          // @effect-diagnostics-next-line globalTimers:off - This observes rollback retry registration without sleeping.
-          const timer = realSetTimeout(callback, ms);
-          if (ms === 5000) retryScheduled.resolve();
-          if (ms === PROBATION_MS) probationDeadline = callback;
-          return timer;
-        }) as typeof setTimeout);
-        yield* Effect.addFinalizer(() => Effect.sync(() => timerSpy.mockRestore()));
-        const first = yield* f.start({ now: () => now });
-        const child = yield* f.wait("test-committed");
-        child.send({ type: "test-release" });
-        yield* f.wait("test-released");
-        let otherOwner = tryAcquireServerOwnerLock(
-          f.path.dirname(f.dbPath),
-          "desktop-other-server",
-        );
-        assert.isDefined(otherOwner);
-        yield* Effect.addFinalizer(() => Effect.sync(() => otherOwner?.release()));
-        yield* f.fs.writeFileString(f.dbPath, "other server writes");
-        child.send({ type: "test-exit" });
-        yield* Effect.promise(() => retryScheduled.promise);
-        now += PROBATION_MS + 1;
-        // Simulate an expiry callback that was already queued before the exit cancelled its timer.
-        assert.isDefined(probationDeadline);
-        probationDeadline!();
-        yield* Effect.promise(() => first.launcher.stop("SIGTERM"));
-        const interrupted = yield* Effect.promise(() => readServiceState(f.statePath));
-        assert.equal(interrupted.probation?.rollbackReason, "probation-exit:42");
-        assert.equal(interrupted.update?.status, "committed");
-        otherOwner!.release();
-        otherOwner = undefined;
-        const recovered = yield* f.start({ now: () => 1000 + PROBATION_MS + 1 });
-        yield* Effect.promise(() => recovered.running);
-        const state = yield* Effect.promise(() => readServiceState(f.statePath));
-        assert.equal(state.activeVersion, "1.0.0");
-        assert.equal(
-          state.update?.status === "rolled-back" ? state.update.reason : undefined,
-          "probation-exit:42;db-kept-for-other-server",
-        );
-        assert.isUndefined(state.probation);
-        assert.equal(yield* f.fs.readFileString(f.dbPath), "other server writes");
-      }),
+  it.effect("blocks rollback while a foreign owner holds the generation lock", () =>
+    Effect.gen(function* () {
+      const f = yield* healthFixture({ committedWrites: true });
+      const { running } = yield* f.start({ now: () => 1000 });
+      const child = yield* f.wait("test-committed");
+      child.send({ type: "test-release" });
+      yield* f.wait("test-released");
+      const otherOwner = tryAcquireServerOwnerLock(f.path.dirname(f.dbPath), "desktop");
+      assert.isDefined(otherOwner);
+      yield* Effect.addFinalizer(() => Effect.sync(() => otherOwner.release()));
+      child.send({ type: "test-exit" });
+      assert.include(String(yield* Effect.promise(() => running)), "Another process holds");
+      const state = yield* Effect.promise(() => readServiceState(f.statePath));
+      assert.equal(state.activeVersion, "1.1.0");
+      assert.isDefined(state.probation);
+      assert.equal(readDatabaseLabel(f.dbPath), "committed writes");
+      assert.equal(
+        readDatabaseLabel(f.path.join(f.root, "runtime", "db-backup", f.pending.id, "database")),
+        "original database",
+      );
+    }),
   );
 });
 
@@ -1514,7 +1308,7 @@ it("rejects invalid persisted probation and retains string-valued rollback reaso
 it.layer(NodeServices.layer)("probation state-dir ownership", (it) => {
   it.effect("idles without rollback when the active child reports another owner", () =>
     Effect.gen(function* () {
-      const f = yield* healthFixture();
+      const f = yield* healthFixture({ committedWrites: true });
       const { launcher, running } = yield* f.start({ now: () => 1000 });
       const child = yield* f.wait("test-committed");
       const exited = new Promise<void>((resolve) => child.once("exit", () => resolve()));
@@ -1526,7 +1320,7 @@ it.layer(NodeServices.layer)("probation state-dir ownership", (it) => {
       const state = yield* Effect.promise(() => readServiceState(f.statePath));
       assert.equal(state.update?.status, "committed");
       assert.isDefined(state.probation);
-      assert.equal(yield* f.fs.readFileString(f.dbPath), "committed writes");
+      assert.equal(readDatabaseLabel(f.dbPath), "committed writes");
     }),
   );
 });
@@ -1551,7 +1345,7 @@ it.layer(NodeServices.layer)("probation event deadline", (it) => {
           state.update?.status === "rolled-back" ? state.update.reason : undefined,
           "probation-exit:42",
         );
-        assert.equal(yield* f.fs.readFileString(f.dbPath), "original database");
+        assert.equal(readDatabaseLabel(f.dbPath), "original database");
       }),
   );
 });

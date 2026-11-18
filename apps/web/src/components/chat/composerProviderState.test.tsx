@@ -1,3 +1,10 @@
+import { DEFAULT_UNIFIED_SETTINGS } from "@goat/contracts/settings";
+import {
+  getAppModelOptionsForInstance,
+  resolveAppModelSelectionForInstance,
+} from "../../modelSelection";
+import { deriveProviderInstanceEntries } from "../../providerInstances";
+import { provider } from "../../modelSelection.testkit";
 import { describe, expect, it } from "vite-plus/test";
 import {
   ProviderDriverKind,
@@ -198,6 +205,60 @@ describe("getComposerProviderState", () => {
 
     expect(state.modelOptionsForDispatch).toEqual(selections(["effort", "low"]));
   });
+
+  it.each(["pi", "acpRegistry", "fx", "muse", "grok", "omo", "cursorCloud"])(
+    "keeps explicit %s traits when the selected model temporarily leaves the catalog",
+    (driver) => {
+      const explicit = selections(["effort", "high"]);
+      const model = "vendor/chosen-model";
+      const driverKind = ProviderDriverKind.make(driver);
+      const snapshot = provider({
+        provider: driverKind,
+        instanceId: "team",
+        models: ["vendor/other-model"],
+      });
+      const [entry] = deriveProviderInstanceEntries([snapshot]);
+      expect(getAppModelOptionsForInstance(DEFAULT_UNIFIED_SETTINGS, entry!, model)).toContainEqual(
+        expect.objectContaining({ slug: model, isUnavailable: true }),
+      );
+      const selected = resolveAppModelSelectionForInstance(
+        snapshot.instanceId,
+        DEFAULT_UNIFIED_SETTINGS,
+        [snapshot],
+        model,
+        { preserveUnavailableSelection: true },
+      );
+      expect(selected).toBe(model);
+      const state = getComposerProviderState({
+        provider: driverKind,
+        model: selected ?? "",
+        models: snapshot.models,
+        modelOptions: explicit,
+        planModeEnabled: false,
+      });
+      expect(state.modelOptionsForDispatch).toEqual(explicit);
+    },
+  );
+
+  it.each(["pi", "acpRegistry", "fx", "muse", "omo"])(
+    "does not use stale traits on the inherited %s default",
+    (driver) => {
+      const driverKind = ProviderDriverKind.make(driver);
+      const snapshot = provider({ provider: driverKind, instanceId: "team" });
+      const [entry] = deriveProviderInstanceEntries([snapshot]);
+      expect(getAppModelOptionsForInstance(DEFAULT_UNIFIED_SETTINGS, entry!, "default")).toEqual(
+        [],
+      );
+      const state = getComposerProviderState({
+        provider: driverKind,
+        model: "default",
+        models: [],
+        modelOptions: selections(["effort", "high"]),
+        planModeEnabled: false,
+      });
+      expect(state.modelOptionsForDispatch).toBeUndefined();
+    },
+  );
 
   it("defaults fastMode to false when the provider reports true but the user has not selected it", () => {
     const state = getComposerProviderState({

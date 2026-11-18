@@ -1,6 +1,9 @@
-import type {
-  OrchestrationV2ProviderThread,
-  OrchestrationV2ThreadProjection,
+import {
+  isCompactionCommandMessage,
+  parseGoalCommand,
+  type OrchestrationV2ProviderThread,
+  type OrchestrationV2Run,
+  type OrchestrationV2ThreadProjection,
 } from "@goat/contracts";
 /** A registered cloud task whose first run has not started: that run attaches, never submits. */
 export const isRegisteredAttach = (thread: OrchestrationV2ProviderThread | undefined) =>
@@ -36,4 +39,43 @@ export function hasNativeGoals(
     session.driver === "claudeAgent" ||
     session.providerSession.capabilities.turns.supportsNativeGoals === true
   );
+}
+
+/** Ready history handoffs a run starts with. */
+export function readyHandoffsForRun(
+  projection: Pick<
+    OrchestrationV2ThreadProjection,
+    "contextTransfers" | "contextHandoffs" | "runs" | "messages"
+  >,
+  run: Pick<OrchestrationV2Run, "id" | "providerThreadId">,
+) {
+  // Older versions also stored subagent replies as history handoffs. Their
+  // queued completion messages carry the results without a history budget.
+  const subagentResultTransfers = new Set(
+    projection.contextTransfers
+      .filter((transfer) => transfer.type === "subagent_result")
+      .map((transfer) => transfer.id),
+  );
+  const handoffs = projection.contextHandoffs.filter(
+    (handoff) =>
+      (handoff.transferId == null || !subagentResultTransfers.has(handoff.transferId)) &&
+      handoff.status === "ready" &&
+      (handoff.targetRunId === run.id ||
+        (handoff.toProviderThreadId === run.providerThreadId &&
+          projection.runs.some(
+            (source) =>
+              source.id === handoff.targetRunId &&
+              (source.status === "failed" ||
+                source.status === "interrupted" ||
+                (source.status === "completed" &&
+                  handoff.delivery === undefined &&
+                  // Compaction and /goal turns defer history to the next turn.
+                  projection.messages.some(
+                    (message) =>
+                      message.id === source.userMessageId &&
+                      (isCompactionCommandMessage(message) || parseGoalCommand(message) !== null),
+                  ))),
+          ))),
+  );
+  return handoffs;
 }

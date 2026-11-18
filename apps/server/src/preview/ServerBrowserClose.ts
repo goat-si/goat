@@ -1,7 +1,12 @@
 // @effect-diagnostics nodeBuiltinImport:off globalTimers:off - Playwright close callbacks run outside Effect.
 import * as NodeCrypto from "node:crypto";
+import type { PreviewSessionSnapshot } from "@goat/contracts";
+import * as Effect from "effect/Effect";
 import type { Dialog, Page } from "playwright-core";
 import { constVoid } from "effect/Function";
+
+import { tabKey } from "./ServerBrowserPointer.ts";
+import type { ServerTab } from "./ServerBrowserTab.ts";
 
 const PAGE_CLOSE_GRACE_MS = 5_000;
 
@@ -47,4 +52,44 @@ export const acceptClosingDialog = (closing: boolean, dialog: Dialog) => {
 export const unloadDesktopTab = async (tab: { closing: boolean; page: Page }) => {
   tab.closing = true;
   await unloadDesktopPage(tab.page);
+};
+
+export const makeBeforePreviewClose = (
+  tabs: ReadonlyMap<string, ServerTab>,
+  pendingTabs: ReadonlyMap<string, { readonly promise?: Promise<ServerTab> }>,
+  closedPendingTabs: Set<string>,
+) => {
+  const unloading = new WeakMap<ServerTab, Promise<void>>();
+  return Effect.fn("ServerBrowser.beforePreviewClose")(function* (
+    snapshots: ReadonlyArray<PreviewSessionSnapshot>,
+  ) {
+    yield* Effect.promise(() =>
+      Promise.all(
+        snapshots.map((snapshot) => {
+          const key = tabKey(snapshot.threadId, snapshot.tabId);
+          const tab = tabs.get(key);
+          if (tab) {
+            const existing = unloading.get(tab);
+            if (existing) return existing;
+            void tab.control.close().catch(constVoid);
+            if (!tab.desktop || tab.dialog !== null) return;
+            const pending = unloadDesktopTab(tab);
+            unloading.set(tab, pending);
+            return pending;
+          }
+          const opening = pendingTabs.get(key);
+          if (!opening) return;
+          closedPendingTabs.add(key);
+          if (!opening.promise) return;
+          const settled = Promise.withResolvers<void>();
+          const timer = setTimeout(settled.resolve, PAGE_CLOSE_GRACE_MS);
+          void opening.promise.then(
+            () => settled.resolve(),
+            () => settled.resolve(),
+          );
+          return settled.promise.finally(() => clearTimeout(timer));
+        }),
+      ),
+    );
+  });
 };

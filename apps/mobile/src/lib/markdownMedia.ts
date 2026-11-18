@@ -114,7 +114,15 @@ export function resolveMarkdownMediaPreview(
       }
       if (input.captured) return null;
       const resource = input.threadId
-        ? { _tag: "media-file" as const, threadId: input.threadId, path }
+        ? {
+            _tag: "media-file" as const,
+            threadId: input.threadId,
+            path,
+            // Written relative to the thread's workspace, so only that host's file is meant.
+            ...(classified._tag === "WorkspaceFile" && classified.relative
+              ? { hostOnly: true as const }
+              : {}),
+          }
         : input.workspaceRoot
           ? { _tag: "draft-workspace-file" as const, cwd: input.workspaceRoot, path }
           : null;

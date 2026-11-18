@@ -2,7 +2,7 @@ import { assert, describe, it } from "@effect/vitest";
 import * as DesktopAppSettings from "../settings/DesktopAppSettings.ts";
 import * as DesktopWindow from "./mainWindowPlacement.ts";
 
-describe("resolveInitialMainWindowBounds", () => {
+describe("main window placement", () => {
   it("restores bounds when the window fits within a display or spans contiguous displays", () => {
     const persistedBounds = { x: 2040, y: 80, width: 1320, height: 880 };
     const spanningHorizontalBounds = { x: 1400, y: 80, width: 1100, height: 780 };

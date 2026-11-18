@@ -2,6 +2,7 @@
 import * as NodeServices from "@effect/platform-node/NodeServices";
 import { assert, it } from "@effect/vitest";
 import type * as NodeChildProcess from "node:child_process";
+import * as NodeSqlite from "node:sqlite";
 import * as Effect from "effect/Effect";
 import * as FileSystem from "effect/FileSystem";
 import * as Path from "effect/Path";
@@ -35,7 +36,13 @@ const makeFixture = (pendingUpdate: boolean) =>
     const statePath = path.join(root, "runtime", "service-state.json");
     const targetDir = path.join(root, "runtime", "goat", "versions", "1.1.0");
     yield* fs.makeDirectory(path.dirname(dbPath), { recursive: true });
-    yield* fs.writeFileString(dbPath, "before trial");
+    yield* Effect.sync(() => {
+      using database = new NodeSqlite.DatabaseSync(dbPath);
+      database.exec(
+        "CREATE TABLE fixture (value TEXT); INSERT INTO fixture VALUES ('before trial')",
+      );
+    });
+    const original = yield* fs.readFile(dbPath);
     yield* writeFakeRuntime(
       fs,
       path,
@@ -111,7 +118,7 @@ process.send("candidate");
       yield* Effect.addFinalizer(() => Effect.promise(() => launcher.stop("SIGTERM")));
       return { launcher, running };
     });
-    return { fs, dbPath, statePath, targetDir, start, notice, notices };
+    return { fs, path, root, dbPath, original, statePath, targetDir, start, notice, notices };
   });
 
 it.layer(NodeServices.layer)("service update disk headroom", (it) => {
@@ -149,39 +156,85 @@ it.layer(NodeServices.layer)("service update disk headroom", (it) => {
       }),
   );
 
-  it.effect("recovers rollback after restarting a launcher parked for disk space", () =>
+  it.effect(
+    "preserves a failed trial and refuses to relaunch it after a restart during a disk hold",
+    () =>
+      Effect.gen(function* () {
+        const f = yield* makeFixture(true);
+        let free = headroom;
+        const parked = Promise.withResolvers<"disk-hold">();
+        const first = yield* f.start({
+          startupSpaceProbe: async () => free,
+          writeDiagnostic: () => parked.resolve("disk-hold"),
+        });
+        const candidate = yield* Effect.promise(() => f.notice("candidate").promise);
+        free = 0;
+        candidate.send("fail");
+        assert.equal(
+          yield* Effect.promise(() => Promise.race([parked.promise, first.running])),
+          "disk-hold",
+        );
+        const phase = f.path.join(f.root, "runtime", "db-update-disk-test.phase");
+        assert.equal((yield* f.fs.readFileString(phase)).trim(), "trial");
+        yield* Effect.promise(() => first.launcher.stop("SIGTERM"));
+        yield* Effect.promise(() => first.running);
+
+        f.notices.delete("candidate");
+        const recovered = yield* f.start({ startupSpaceProbe: async () => free });
+        const restarted = yield* Effect.promise(() =>
+          Promise.race([
+            f.notice("active").promise.then(() => "active"),
+            f.notice("candidate").promise.then(() => "candidate"),
+            recovered.running,
+          ]),
+        );
+        assert.instanceOf(restarted, Error);
+        assert.include((restarted as Error).message, "No continuous ownership proof");
+        assert.equal(yield* f.fs.readFileString(f.dbPath), "failed candidate");
+        const backup = f.path.join(f.root, "runtime", "db-backup", "disk-test", "database");
+        assert.deepEqual(yield* f.fs.readFile(backup), f.original);
+        const state = yield* Effect.promise(() => readServiceState(f.statePath));
+        assert.equal(state.activeVersion, "1.0.0");
+        assert.equal(state.update?.status, "pending");
+        assert.equal((yield* f.fs.readFileString(phase)).trim(), "trial");
+      }),
+  );
+
+  it.effect("selects the verified old runtime if disk space drops after taking the snapshot", () =>
     Effect.gen(function* () {
       const f = yield* makeFixture(true);
-      let free = headroom;
       const parked = Promise.withResolvers<"disk-hold">();
-      const first = yield* f.start({
-        startupSpaceProbe: async () => free,
+      let targetProbes = 0;
+      vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
+      yield* Effect.addFinalizer(() => Effect.sync(() => vi.useRealTimers()));
+      const { running } = yield* f.start({
+        startupSpaceProbe: async (directory) =>
+          directory === f.targetDir && ++targetProbes > 1 ? 0 : headroom,
         writeDiagnostic: () => parked.resolve("disk-hold"),
       });
-      const candidate = yield* Effect.promise(() => f.notice("candidate").promise);
-      free = 0;
-      candidate.send("fail");
       assert.equal(
-        yield* Effect.promise(() => Promise.race([parked.promise, first.running])),
+        yield* Effect.promise(() => Promise.race([parked.promise, running])),
         "disk-hold",
       );
-      yield* Effect.promise(() => first.launcher.stop("SIGTERM"));
-      yield* Effect.promise(() => first.running);
+      const phase = f.path.join(f.root, "runtime", "db-update-disk-test.phase");
+      assert.equal((yield* f.fs.readFileString(phase)).trim(), "trial");
 
-      f.notices.delete("candidate");
-      const recovered = yield* f.start({ startupSpaceProbe: async () => headroom });
-      const restarted = yield* Effect.promise(() =>
-        Promise.race([
-          f.notice("active").promise.then(() => "active"),
-          f.notice("candidate").promise.then(() => "candidate"),
-          recovered.running,
-        ]),
+      yield* Effect.promise(() => vi.advanceTimersByTimeAsync(30_000));
+      assert.equal(
+        yield* Effect.promise(() =>
+          Promise.race([
+            f.notice("active").promise.then(() => "active"),
+            f.notice("candidate").promise.then(() => "candidate"),
+            running,
+          ]),
+        ),
+        "active",
       );
-      assert.equal(restarted, "active");
-      assert.equal(yield* f.fs.readFileString(f.dbPath), "before trial");
-      const state = yield* Effect.promise(() => readServiceState(f.statePath));
-      assert.equal(state.activeVersion, "1.0.0");
-      assert.equal(state.update?.status, "failed");
+      assert.deepEqual(yield* f.fs.readFile(f.dbPath), f.original);
+      assert.equal(
+        (yield* Effect.promise(() => readServiceState(f.statePath))).update?.status,
+        "failed",
+      );
     }),
   );
 });
