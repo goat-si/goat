@@ -502,3 +502,64 @@ it.effect.each([
     expect(yield* counts).toEqual(before);
   }).pipe(Effect.provide(Fixture.layer)),
 );
+
+const rememberSetup = Effect.gen(function* () {
+  yield* setup;
+  const sql = yield* SqlClient.SqlClient;
+  yield* sql`ALTER TABLE orchestration_events ADD COLUMN event_id TEXT`;
+  yield* sql`ALTER TABLE orchestration_events ADD COLUMN sequence INTEGER`;
+  yield* sql`ALTER TABLE orchestration_v2_projection_messages ADD COLUMN thread_id TEXT`;
+});
+const remember = (text: string) =>
+  Fixture.call("goat_memory_remember", { scope: "user", text }, caller());
+
+it.effect("remember with 101 sources on the old floor asks for a hub upgrade", () =>
+  Effect.gen(function* () {
+    yield* rememberSetup;
+    yield* appendLineage(ref(), Fixture.space, revisions(31000, 101));
+    const before = yield* counts;
+    const result = yield* remember("synthetic candidate");
+    expect(result.result.isError).toBe(true);
+    expect(result.body).toMatchObject({ code: "hub_upgrade_required" });
+    expect(yield* counts).toEqual(before);
+  }).pipe(Effect.provide(Fixture.layer)),
+);
+
+it.effect("remember with 101 sources on the new floor persists every edge for forget", () =>
+  Effect.gen(function* () {
+    yield* rememberSetup;
+    const sql = yield* SqlClient.SqlClient;
+    const service = yield* Service.MemoryService;
+    const store = yield* Store.MemoryStore;
+    yield* sql`INSERT INTO memory_space_features VALUES (${Fixture.space},1000,0)`;
+    const sources = yield* Effect.forEach(
+      Array.from({ length: 101 }, (_, n) => 32000 + n),
+      (n) => seed(n),
+    );
+    yield* appendLineage(
+      ref(),
+      Fixture.space,
+      sources.map((source) => source.revision),
+    );
+    const saved = yield* remember("a wide synthetic memory");
+    expect(saved.result.isError).not.toBe(true);
+    const row = (yield* sql<{ memory_id: string }>`
+      SELECT p.memory_id FROM memory_payloads p WHERE json_extract(p.body_json,'$.text')='a wide synthetic memory'`)[0]!;
+    const memoryId = M.MemoryId.make(row.memory_id);
+    const before = yield* store.loadAggregate(Fixture.space, memoryId);
+    expect(before.revisions[0]?.payload?.derivedFromMemoryRevisions).toEqual(
+      sources.map((source) => source.revision),
+    );
+    const last = sources[100]!;
+    yield* service.forget(
+      {
+        memorySpaceId: Fixture.space,
+        memoryId: last.input.memoryId,
+        operationId: M.MemoryOperationId.make(Fixture.id(32999)),
+        expectedHeads: [last.revision],
+      },
+      Effect.void,
+    );
+    expect((yield* store.loadAggregate(Fixture.space, memoryId)).item?.status).toBe("forgotten");
+  }).pipe(Effect.provide(Fixture.layer)),
+);
