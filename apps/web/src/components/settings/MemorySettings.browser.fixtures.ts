@@ -91,6 +91,14 @@ export const retained = {
   nextCursor: null,
 } satisfies Pick<MemoryHistoryPage, "revisions" | "revertResults" | "nextCursor">;
 
+function moveBarrier() {
+  let release!: () => void;
+  const pending = new Promise<void>((resolve) => {
+    release = resolve;
+  });
+  return { pending, release };
+}
+
 export async function exerciseMemoryMove({
   state,
   success,
@@ -149,8 +157,8 @@ export async function exerciseMemoryMove({
     : [activeItem];
   state.queries.set("list", Option.some({ items, projectionWatermark: 1, nextCursor: null }));
   const attempts = new Map<string, string[]>();
-  const pending = Promise.withResolvers<void>();
-  const entered = Promise.withResolvers<void>();
+  const pending = moveBarrier();
+  const entered = moveBarrier();
   state.executors.set("move", async (target) => {
     const { input } = target as { input: MemoryMoveInput };
     const ids = attempts.get(input.memoryId) ?? [];
@@ -174,8 +182,8 @@ export async function exerciseMemoryMove({
         ),
       };
     if (typeof batch === "string" && input.memoryId === activeItem.memoryId && ids.length === 2) {
-      entered.resolve();
-      await pending.promise;
+      entered.release();
+      await pending.pending;
     }
     if ((!batch && ids.length === 2) || (input.memoryId === id(211) && ids.length === 1))
       return { _tag: "Failure", cause: Cause.die(new Error("Synthetic lost acknowledgement")) };
@@ -223,7 +231,7 @@ export async function exerciseMemoryMove({
       )
       .not.toContain("Synthetic move item 211");
     await submit();
-    await entered.promise;
+    await entered.pending;
     if (batch !== "expiry") invalidate(batch === "forget" ? "forget" : "invalidate", id(211));
     state.queries.set(
       "list",
@@ -237,7 +245,7 @@ export async function exerciseMemoryMove({
     );
     await render();
     expect.soft(container.outerHTML).not.toContain("Synthetic move item 211");
-    await settle(() => pending.resolve());
+    await settle(() => pending.release());
     expect.soft(attempts.get(id(211))).toHaveLength(1);
     expect(container.outerHTML).not.toContain("Synthetic move item 211");
     return;
