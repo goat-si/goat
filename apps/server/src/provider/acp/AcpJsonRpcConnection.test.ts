@@ -1,3 +1,4 @@
+import * as TestClock from "effect/testing/TestClock";
 import { assert } from "@effect/vitest";
 import * as HostProcess from "@goat/shared/HostProcess";
 import * as NodeServices from "@goat/shared/testing/nodeServicesWithCrypto";
@@ -864,6 +865,41 @@ describe("AcpSessionRuntime", () => {
       Effect.scoped,
       Effect.provide(NodeServices.layer),
     ),
+  );
+
+  it.effect.each([false, true])(
+    "only treats quiet replay as readiness when explicitly enabled (%s)",
+    (quietReadiness) =>
+      Effect.gen(function* () {
+        const replayReceived = yield* Deferred.make<void>();
+        const runtime = yield* AcpSessionRuntime.make({
+          ...mockRuntimeOptions,
+          spawn: { ...mockRuntimeOptions.spawn, env: { GOAT_ACP_WAIT_FOR_LOAD_RELEASE: "1" } },
+          resumeSessionId: "mock-session-1",
+          sessionLoadReplayIdleGap: "10 millis",
+          ...(quietReadiness ? { sessionLoadReplayIdleReadiness: true } : {}),
+        });
+        yield* runtime.handleSessionUpdate((event) =>
+          event.update.sessionUpdate === "user_message_chunk"
+            ? Deferred.succeed(replayReceived, undefined)
+            : Effect.void,
+        );
+        const start = yield* runtime.start().pipe(Effect.forkChild);
+        yield* Deferred.await(replayReceived);
+        yield* runtime.request("_test/environment", {});
+        yield* TestClock.adjust("50 millis");
+        if (quietReadiness) {
+          const result = yield* Fiber.join(start);
+          expect(result.sessionSetupResult._meta).toMatchObject({
+            goatSessionLoadReady: "replay_idle",
+          });
+          yield* runtime.request("_test/release-load", {});
+        } else {
+          expect(start.pollUnsafe()).toBeUndefined();
+          yield* runtime.request("_test/release-load", {});
+          expect((yield* Fiber.join(start)).sessionSetupResult.configOptions).toBeDefined();
+        }
+      }).pipe(Effect.scoped, Effect.provide(NodeServices.layer)),
   );
 
   it.effect("ignores session/update replay notifications during session/load", () =>

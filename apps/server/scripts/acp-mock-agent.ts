@@ -495,6 +495,7 @@ function modelState(): AcpCompat.SessionModelState {
 const program = Effect.gen(function* () {
   const agent = yield* EffectAcpAgent.AcpAgent;
   const resumeRelease = yield* Deferred.make<void>();
+  const loadRelease = yield* Deferred.make<void>();
   const nativeCancelRequested = yield* Deferred.make<void>();
   const nativeCancelRelease = yield* Deferred.make<void>();
   const publishAntigravityCommands = (targetSessionId: string, command?: string) =>
@@ -732,6 +733,9 @@ const program = Effect.gen(function* () {
         emitLoadReplayNotifications(requestedSessionId);
       }
       yield* agent.client.sessionUpdate({
+        ...(process.env.GOAT_ACP_WAIT_FOR_LOAD_RELEASE === "1"
+          ? { _meta: { isReplay: true } }
+          : {}),
         sessionId: requestedSessionId,
         update: {
           sessionUpdate: "user_message_chunk",
@@ -739,6 +743,9 @@ const program = Effect.gen(function* () {
           content: { type: "text", text: "replay" },
         },
       });
+      if (process.env.GOAT_ACP_WAIT_FOR_LOAD_RELEASE === "1") {
+        yield* Deferred.await(loadRelease);
+      }
       return {
         configOptions: configOptions(),
       };
@@ -2597,6 +2604,9 @@ const program = Effect.gen(function* () {
         inherited: process.env.GOAT_ACP_RUNTIME_AMBIENT === "sentinel",
         explicit: process.env.GOAT_ACP_RUNTIME_EXPLICIT === "kept",
       });
+    }
+    if (method === "_test/release-load") {
+      return Deferred.succeed(loadRelease, undefined).pipe(Effect.as({}));
     }
     if (method === "_test/release-resume") {
       return Deferred.succeed(resumeRelease, undefined).pipe(Effect.as({}));

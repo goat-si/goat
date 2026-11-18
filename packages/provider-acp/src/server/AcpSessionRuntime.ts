@@ -134,6 +134,7 @@ export interface AcpSessionRuntimeOptions {
   readonly requireSessionLoadResponse?: true;
   readonly sessionLoadTimeout?: Duration.Input;
   readonly sessionLoadReplayIdleGap?: Duration.Input;
+  readonly sessionLoadReplayIdleReadiness?: boolean;
   readonly interruptPromptOnCancel?: boolean;
   readonly cancelMeta?: EffectAcpSchema.CancelNotification["_meta"];
   readonly initializeMeta?: EffectAcpSchema.InitializeRequest["_meta"];
@@ -1597,9 +1598,9 @@ export const make = Effect.fn("AcpSessionRuntime.make")(function* (
           const loaded = yield* completeAcpSessionLoad(
             acp.agent.loadSession(loadPayload),
             sessionLoadTimeout,
-            options.requireSessionLoadResponse
-              ? undefined
-              : waitForSessionLoadReplayIdle({ gateRef: sessionLoadGateRef }),
+            options.sessionLoadReplayIdleReadiness === true && !options.requireSessionLoadResponse
+              ? waitForSessionLoadReplayIdle({ gateRef: sessionLoadGateRef })
+              : undefined,
           ).pipe(
             Effect.tap((result) =>
               logRequest({
