@@ -552,6 +552,21 @@ describe("PenHubNodes", () => {
     ),
   );
 
+  it.effect("a member whose ssh config or key shows up after the second look is still listed", () =>
+    reconcile(({ pinned, rows, pass }) =>
+      Effect.gen(function* () {
+        const running = yield* pass(ready(["a", "a"])).pipe(Effect.orDie, Effect.forkChild);
+        // The first look and the one 2 s later both find nothing in Pen's ssh config.
+        yield* TestClock.adjust("3 seconds");
+        expect(yield* rows).toEqual([]);
+        pinned.set(alias("a"), key("a"));
+        yield* TestClock.adjust("30 seconds");
+        yield* Fiber.join(running);
+        expect(yield* rows).toEqual([[`ssh:${alias("a")}`, "import", key("a")]]);
+      }),
+    ),
+  );
+
   it.effect("a member that was offline when listed is identified once it is online", () =>
     reconcile(({ show, pinned, service }) =>
       Effect.gen(function* () {
