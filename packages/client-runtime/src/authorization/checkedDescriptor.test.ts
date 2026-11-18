@@ -2,6 +2,7 @@ import { EnvironmentId } from "@goat/contracts";
 import { expect, it } from "@effect/vitest";
 import * as Effect from "effect/Effect";
 import * as Layer from "effect/Layer";
+import * as Option from "effect/Option";
 import * as TestClock from "effect/testing/TestClock";
 import * as ConnectionDriver from "../connection/driver.ts";
 import { BearerConnectionTarget } from "../connection/model.ts";
@@ -137,4 +138,39 @@ it.effect(
       expect(error._tag).toBe("ConnectionBlockedError");
       expect(h.descriptorReads()).toHaveLength(2);
     }),
+);
+
+it.effect("evicts the oldest checked address at the descriptor cache limit", () =>
+  Effect.gen(function* () {
+    const harness = yield* makeHarness({
+      responses: Array.from(
+        { length: 4 },
+        () => (init: RequestInit) =>
+          new Headers(init.headers).has("Authorization")
+            ? websocketTicket("authorized")
+            : Response.json(DESCRIPTOR),
+      ),
+    });
+    yield* Effect.gen(function* () {
+      const remote = yield* RemoteAuthorization.RemoteEnvironmentAuthorization;
+      const address = (index: number) => `https://checked-${index}.example.test`;
+      const authorize = (index: number) =>
+        remote.authorizeBearer({
+          expectedEnvironmentId: ENVIRONMENT_ID,
+          httpBaseUrl: address(index),
+          wsBaseUrl: address(index).replace(/^https/, "wss"),
+          connectionMethod: "direct",
+          bearerToken: "test-bearer",
+        });
+      for (let index = 0; index <= 64; index++) {
+        yield* remote.rememberCheckedDescriptor(address(index), Option.some(DESCRIPTOR), true);
+      }
+      yield* authorize(0);
+      yield* authorize(64);
+      const reads = harness.fetch.calls
+        .map(([url]) => new URL(String(url)))
+        .filter((url) => url.pathname.includes("/.well-known/"));
+      expect(reads.map((url) => url.origin)).toEqual([address(0)]);
+    }).pipe(Effect.provide(harness.layer));
+  }),
 );

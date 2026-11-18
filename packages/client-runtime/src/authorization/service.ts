@@ -118,6 +118,7 @@ const connectDisabled = () =>
 const CACHED_ENDPOINT_SOCKET_TIMEOUT_MS = 3_000;
 const BEARER_DESCRIPTOR_CACHE_TTL_MS = 10_000;
 
+const CHECKED_DESCRIPTOR_MAX_ENTRIES = 64;
 const CHECKED_DESCRIPTOR_TTL_NANOS = 5_000_000_000n;
 const DPOP_AUTHORIZATION_TIMEOUT_MS = 30_000;
 
@@ -675,6 +676,10 @@ export const make = Effect.gen(function* () {
       for (const [url, checked] of checkedDescriptors) {
         if (checkedAt - checked.checkedAt > CHECKED_DESCRIPTOR_TTL_NANOS)
           checkedDescriptors.delete(url);
+      }
+      if (checkedDescriptors.size >= CHECKED_DESCRIPTOR_MAX_ENTRIES) {
+        const oldest = checkedDescriptors.keys().next();
+        if (!oldest.done) checkedDescriptors.delete(oldest.value);
       }
       checkedDescriptors.set(httpBaseUrl, { descriptor: descriptor.value, checkedAt });
     }),
