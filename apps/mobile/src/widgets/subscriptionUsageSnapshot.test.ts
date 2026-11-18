@@ -64,6 +64,50 @@ describe("subscription widget snapshots", () => {
     expect(snapshot.url).toBe(deepLink);
     expect(JSON.stringify(snapshot)).not.toContain("private@example.com");
   });
+  it("splits a pooled window by account without exposing emails", () => {
+    const claude = (id: string, overrides: Partial<ServerProvider>) =>
+      provider({
+        instanceId: ProviderInstanceId.make(id),
+        driver: ProviderDriverKind.make("claudeAgent"),
+        auth: { status: "authenticated", email: `${id}@example.com` },
+        ...overrides,
+      });
+    const snapshot = buildSubscriptionUsageSnapshot(
+      presentations([
+        claude("smol", {
+          displayName: "smol",
+          accentColor: "#4c6ef5",
+          usageLimits: {
+            checkedAt,
+            windows: [{ ...window, usedPercent: 29, windowDurationMins: 300 }],
+          },
+        }),
+        claude("relay", {
+          displayName: "relay@example.com",
+          usageLimits: {
+            checkedAt,
+            windows: [{ ...window, id: "seven_day", kind: "weekly", label: "Weekly" }],
+          },
+        }),
+        claude("rex", {
+          usageLimits: {
+            checkedAt,
+            windows: [{ ...window, resetsAt: "2026-09-05T11:50:00.000Z" }],
+          },
+        }),
+      ]),
+      deepLink,
+      6,
+      true,
+    );
+    const session = snapshot.providers[0]?.windows.find((w) => w.kind === "session");
+    expect(session?.accounts).toStrictEqual([
+      { name: "RE", remaining: 60 },
+      { name: "smol", color: "#4c6ef5", remaining: 71 },
+      { name: "RE2" },
+    ]);
+    expect(JSON.stringify(snapshot)).not.toContain("example.com");
+  });
   it("uses upstream deduplication for a native account also present in a proxy hub", () => {
     const input = new Map([
       [

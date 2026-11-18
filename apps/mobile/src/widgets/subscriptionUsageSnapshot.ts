@@ -1,12 +1,20 @@
+import { normalizeProviderAccentColor } from "@goat/client-runtime/state/provider-instance-display";
 import {
   collectLimitAccounts,
   collectLimitPools,
+  remainingPercent,
   type LimitAccount,
   type LimitPoolWindow,
   type LimitPresentations,
 } from "@goat/shared/usageLimits";
 
 import type { WidgetTheme } from "./widgetTheme";
+
+interface WidgetLimitAccount {
+  name: string;
+  color?: string;
+  remaining?: number;
+}
 
 export interface SubscriptionUsageSnapshot {
   theme?: WidgetTheme;
@@ -15,7 +23,13 @@ export interface SubscriptionUsageSnapshot {
   providers: Array<{
     name: string;
     detail: string;
-    windows: Array<{ kind?: string; label: string; remaining: number; reset: string }>;
+    windows: Array<{
+      kind?: string;
+      label: string;
+      remaining: number;
+      reset: string;
+      accounts?: WidgetLimitAccount[];
+    }>;
     expiresAt: number;
     totalWindows: number;
   }>;
@@ -53,11 +67,34 @@ const observedAt = (account: LimitAccount) =>
 const isUpcoming = (reset: LimitPoolWindow["resets"][number]) =>
   reset.at > observedAt(reset.member.account);
 
+function widgetAccounts(window: LimitPoolWindow): WidgetLimitAccount[] {
+  const names = new Set<string>();
+  return window.columns.map(({ account, window: reading }) => {
+    const [local, domain] = (account.email ?? account.displayName ?? "").split("@");
+    const base =
+      account.displayName && !account.displayName.includes("@")
+        ? account.displayName
+        : domain
+          ? `${local?.[0] ?? ""}${domain[0]}`.toUpperCase()
+          : "Account";
+    let name = base;
+    for (let suffix = 2; names.has(name); suffix++) name = `${base}${suffix}`;
+    names.add(name);
+    const color = normalizeProviderAccentColor(account.accentColor);
+    return {
+      name,
+      ...(color ? { color } : {}),
+      ...(reading ? { remaining: remainingPercent(reading) } : {}),
+    };
+  });
+}
+
 function subscriptionUsageProps(
   accounts: readonly LimitAccount[],
   now: number,
   configuredDrivers: ReadonlySet<string>,
   maxWindowsPerProvider: number,
+  includeAccountBreakdown: boolean,
 ): SubscriptionUsageSnapshot {
   const pools = collectLimitPools(accounts, now);
   // Excluded accounts (paused, reauth, a routed login) never set freshness or expiry.
@@ -133,6 +170,11 @@ function subscriptionUsageProps(
                       minute: "2-digit",
                     })}`
                   : "Reset time unavailable",
+                ...(includeAccountBreakdown &&
+                window.columns.length > 1 &&
+                window.columns.length <= 5
+                  ? { accounts: widgetAccounts(window) }
+                  : {}),
               }))
             : [],
         };
@@ -144,6 +186,7 @@ export function buildSubscriptionUsageSnapshot(
   presentations: LimitPresentations,
   url: string,
   maxWindowsPerProvider = 6,
+  includeAccountBreakdown = false,
 ): SubscriptionUsageSnapshot {
   const configuredDrivers = new Set(
     [...presentations.values()].flatMap((presentation) =>
@@ -164,6 +207,7 @@ export function buildSubscriptionUsageSnapshot(
       0,
       configuredDrivers,
       maxWindowsPerProvider,
+      includeAccountBreakdown,
     ),
     url,
   };
