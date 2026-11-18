@@ -123,18 +123,30 @@ describe("EnvironmentThreads after a stream defect", () => {
     }),
   );
 
-  it.effect("backs off repeated defects up to 30 seconds and keeps one stream open", () =>
-    Effect.gen(function* () {
-      const harness = yield* makeHarness({ httpSnapshot: { _tag: "unavailable" } });
-      const streams = yield* instrument(harness);
-      // 250 ms doubling: the eighth retry would wait 32 s uncapped, the ninth 64 s.
-      for (let defect = 1; defect <= 9; defect += 1) {
+  it.effect(
+    "backs off repeated defects up to 30 seconds, keeps one stream open, and resets once items apply",
+    () =>
+      Effect.gen(function* () {
+        const harness = yield* makeHarness({ httpSnapshot: { _tag: "unavailable" } });
+        const streams = yield* instrument(harness);
+        // 250 ms doubling: the eighth retry would wait 32 s uncapped, the ninth 64 s.
+        for (let defect = 1; defect <= 9; defect += 1) {
+          yield* Queue.offer(harness.inputs, new Error(DEFECT_MARKER));
+          yield* awaitThreadState(harness.observed, (value) => Option.isSome(value.error));
+          yield* TestClock.adjust("30 seconds");
+          expect(yield* SubscriptionRef.get(streams.started)).toBe(defect + 1);
+          expect(yield* SubscriptionRef.get(streams.open)).toBe(1);
+        }
+        // Applied items reset the backoff: the next defect waits the base 250 ms again.
+        yield* Queue.offer(harness.inputs, snapshot(BASE_PROJECTION));
+        yield* awaitThreadState(
+          harness.observed,
+          (value) => Option.isSome(value.data) && Option.isNone(value.error),
+        );
         yield* Queue.offer(harness.inputs, new Error(DEFECT_MARKER));
         yield* awaitThreadState(harness.observed, (value) => Option.isSome(value.error));
-        yield* TestClock.adjust("30 seconds");
-        expect(yield* SubscriptionRef.get(streams.started)).toBe(defect + 1);
-        expect(yield* SubscriptionRef.get(streams.open)).toBe(1);
-      }
-    }),
+        yield* TestClock.adjust("250 millis");
+        expect(yield* SubscriptionRef.get(streams.started)).toBe(11);
+      }),
   );
 });
