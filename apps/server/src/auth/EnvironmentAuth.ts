@@ -207,16 +207,9 @@ export class EnvironmentAuth extends Context.Service<
       readonly excludeSubjects?: ReadonlyArray<string>;
     }) => Effect.Effect<ReadonlyArray<AuthPairingLink>, ServerAuthInternalError>;
     readonly revokePairingLink: (id: string) => Effect.Effect<boolean, ServerAuthInternalError>;
-    readonly issueSession: (input?: {
-      readonly ttl?: Duration.Duration;
-      readonly subject?: string;
-      readonly penMemberNode?: string;
-      readonly scopes?: ReadonlyArray<AuthEnvironmentScope>;
-      readonly label?: string;
-      /** Caps the threads an `mcp-client` session may start or change; see `authenticateMcpClient`. */
-      readonly runtimeModeCeiling?: RuntimeMode;
-      readonly childSetupPurpose?: ChildSetupPurpose;
-    }) => Effect.Effect<IssuedBearerSession, ServerAuthInternalError>;
+    readonly issueSession: (
+      input?: IssuedEnvironmentSession.IssueSessionInput,
+    ) => Effect.Effect<IssuedBearerSession, ServerAuthInternalError>;
     readonly listSessions: () => Effect.Effect<
       ReadonlyArray<AuthClientSession>,
       ServerAuthInternalError
@@ -1118,30 +1111,9 @@ export const make = Effect.gen(function* () {
     revokePairingLink,
     issueSession: Effect.fn("EnvironmentAuth.issueSession")((input) =>
       withdrawal.withPermit(
-        withdrawal.guard(input?.subject ?? DEFAULT_SESSION_SUBJECT).pipe(
-          Effect.andThen(
-            input?.penMemberNode === undefined
-              ? issueSession(input)
-              : sessions
-                  .issue({
-                    penMemberNode: input.penMemberNode,
-                    ...(input.subject === undefined ? {} : { subject: input.subject }),
-                    method: "bearer-access-token",
-                    scopes: input.scopes ?? AuthStandardClientScopes,
-                    client: { deviceType: "bot", ...(input.label ? { label: input.label } : {}) },
-                    ...(input.ttl ? { ttl: input.ttl } : {}),
-                  })
-                  .pipe(
-                    Effect.map((issued) => ({
-                      ...issued,
-                      method: "bearer-access-token" as const,
-                      subject: `pen-member:${input.penMemberNode}`,
-                      expiresAt: DateTime.toUtc(issued.expiresAt),
-                    })),
-                    Effect.mapError((cause) => new ServerAuthSessionTokenIssueError({ cause })),
-                  ),
-          ),
-        ),
+        withdrawal
+          .guard(input?.subject ?? DEFAULT_SESSION_SUBJECT)
+          .pipe(Effect.andThen(issueSession(input))),
       ),
     ),
     listSessions,

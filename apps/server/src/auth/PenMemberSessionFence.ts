@@ -1,9 +1,12 @@
-import { PenId, type AuthSessionId } from "@goat/contracts";
+import { PenId, type AuthClientSession, type AuthSessionId } from "@goat/contracts";
 import * as DateTime from "effect/DateTime";
 import * as Effect from "effect/Effect";
+import * as Option from "effect/Option";
+import * as PubSub from "effect/PubSub";
 import * as Schema from "effect/Schema";
 import * as Semaphore from "effect/Semaphore";
 import type * as AuthSessions from "../persistence/AuthSessions.ts";
+import type { SessionCredentialChange } from "./SessionStore.ts";
 import {
   InvalidSessionTokenPayloadError,
   SessionCredentialIssueError,
@@ -119,6 +122,18 @@ export const make = Effect.fn("PenMemberSessionFence.make")(function* (
         read = next;
       }).pipe(Effect.andThen(around(publish))),
     forget: (id: AuthSessionId) => lock.withPermit(Effect.sync(() => void rows.delete(id))),
+    /** The rows a session listing may show. */
+    visible: <A extends Row>(listed: ReadonlyArray<A>) =>
+      Effect.filter(listed, (row) => Effect.map(deniedRow(row), (no) => !no)),
+    /** Tracks a session just issued under `subject`. */
+    observeIssued: (
+      issued: {
+        readonly sessionId: AuthSessionId;
+        readonly subject: string;
+        readonly expiresAt: DateTime.DateTime;
+      },
+      input: { readonly penMemberNode?: string } | undefined,
+    ) => observe({ ...issued, penMemberNode: input?.penMemberNode ?? null }),
     /** The subject a session is issued under, refusing a malformed or untrackable member one. */
     issueSubject: Effect.fn("PenMemberSessionFence.issueSubject")(function* (
       input: { readonly subject?: string; readonly penMemberNode?: string } | undefined,
@@ -139,15 +154,61 @@ export const make = Effect.fn("PenMemberSessionFence.make")(function* (
       return `pen-member:${node}`;
     }),
     /** A member session is admitted by its stored marker, so its signed subject must be the row's. */
-    checkSubject: (signed: string, row: Row) =>
-      signed !== row.subject &&
-      (row.penMemberNode !== null ||
-        signed.startsWith("pen-member:") ||
-        row.subject.startsWith("pen-member:"))
-        ? Effect.fail(new InvalidSessionTokenPayloadError({ cause: "Session subject mismatch" }))
-        : Effect.void,
+    guardSigned: Effect.fn("PenMemberSessionFence.guardSigned")(function* (
+      signed: string,
+      row: Row,
+    ) {
+      if (
+        signed !== row.subject &&
+        (row.penMemberNode !== null ||
+          signed.startsWith("pen-member:") ||
+          row.subject.startsWith("pen-member:"))
+      )
+        return yield* new InvalidSessionTokenPayloadError({ cause: "Session subject mismatch" });
+      yield* guard(row);
+    }),
   };
 });
+
+/** The fence over a session store's change feed: a session it denies is never announced. */
+export const makeForStore = Effect.fn("PenMemberSessionFence.makeForStore")(function* <E>(
+  initial: ReadonlyArray<Row>,
+  changes: PubSub.PubSub<SessionCredentialChange>,
+  load: (id: AuthSessionId) => Effect.Effect<Option.Option<AuthClientSession>, E>,
+) {
+  const fence = yield* make(
+    initial,
+    (sessionId) =>
+      PubSub.publish(changes, { type: "clientRemoved", sessionId }).pipe(Effect.asVoid),
+    (sessionId): Effect.Effect<void> =>
+      load(sessionId).pipe(
+        Effect.flatMap((session) =>
+          Option.isSome(session) ? emitUpsert(session.value) : Effect.void,
+        ),
+        Effect.catchCause((cause) =>
+          Effect.logError("Failed to publish Pen session admission", { cause }),
+        ),
+      ),
+  );
+  const emitUpsert = (clientSession: AuthClientSession): Effect.Effect<void> =>
+    Effect.flatMap(fence.denied(clientSession.sessionId), (denied) =>
+      denied ? Effect.void : PubSub.publish(changes, { type: "clientUpserted", clientSession }),
+    ).pipe(Effect.asVoid);
+  return { fence, emitUpsert };
+});
+
+/** What SessionStore offers the Pen member reconciler. */
+export const forStore = (
+  fence: Effect.Success<ReturnType<typeof make>>,
+  authorityLock: Semaphore.Semaphore,
+  repository: AuthSessions.AuthSessionRepository["Service"],
+) => ({
+  /** Every member-session check reads `read` from now on; publishes what that changed. */
+  followPenMembers: (read: Effect.Effect<PenAdmission>) =>
+    fence.follow(read, (publish) => authorityLock.withPermit(publish)),
+  listPenMemberSessions: listMemberSessions(repository),
+});
+export type StorePenMembers = ReturnType<typeof forStore>;
 
 /** The unrevoked, unexpired member sessions stored here. */
 export const listMemberSessions = Effect.fn("PenMemberSessionFence.listMemberSessions")(function* (
