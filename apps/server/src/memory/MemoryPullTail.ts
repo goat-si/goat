@@ -62,7 +62,11 @@ export const makePullMemoryTail = <R extends TailRoute>(deps: {
             )
               return Effect.fail(error);
             catchUpOrigins = false;
-            return pull(r, ordinary);
+            return pull(r, ordinary).pipe(
+              Effect.tap(() =>
+                Effect.logWarning("Memory origin catch-up was refused by the hub", error.code),
+              ),
+            );
           },
         }),
         Effect.catchTags({
@@ -98,12 +102,13 @@ export const makePullMemoryTail = <R extends TailRoute>(deps: {
         hubEnvironmentId: r.hubId,
         localEnvironmentId: local,
         expectedSequence: after,
-        afterOriginSequence,
+        ...(catchUpOrigins ? { afterOriginSequence } : {}),
         page,
         reauthorize: ensureEpoch(r.settings.memoryHubVersion),
       });
       budget.pages++;
       budget.entries += page.entries.length;
+      if (!page.hasMore && !catchUpOrigins) break;
       if (!page.hasMore && !page.originCatchupPending) {
         if (!page.originPage?.hasMore) break;
         if ((yield* store.readOriginCursor(space, r.hubId)) === afterOriginSequence) break;
