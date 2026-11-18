@@ -5114,6 +5114,13 @@ export const makeGitVcsDriverCore = Effect.fn("makeGitVcsDriverCore")(function* 
       ),
     );
 
+  const invalidateRefs = Effect.fn("GitVcsDriver.invalidateRefs")(function* (cwd: string) {
+    const key = normalizeRepositoryPathsCacheKey(cwd);
+    yield* Cache.invalidate(repositoryPathsRefreshCache, key);
+    yield* Cache.invalidate(repositoryPathsCache, key);
+    yield* withListRefsInvalidation(cwd, Effect.void);
+  });
+
   // Forwarders retain the underlying Git operation spans.
   return GitVcsDriver.GitVcsDriver.of({
     execute,
@@ -5207,6 +5214,7 @@ export const makeGitVcsDriverCore = Effect.fn("makeGitVcsDriverCore")(function* 
       return yield* withListRefsInvalidation(input.cwd, switchRef(input));
     }),
     initRepo: initRepoWithListRefsInvalidation,
+    invalidateRefs,
     listLocalBranchNames,
     listWorktreePaths,
     branchWorktreePath,

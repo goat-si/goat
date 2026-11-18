@@ -373,7 +373,6 @@ export interface GitWorkspaceSnapshotResult {
   /** False when the snapshot omitted contents it could not read. */
   readonly complete: boolean;
 }
-
 export class GitVcsDriver extends Context.Service<
   GitVcsDriver,
   {
@@ -522,6 +521,7 @@ export class GitVcsDriver extends Context.Service<
     readonly switchRef: (
       input: VcsSwitchRefInput,
     ) => Effect.Effect<VcsSwitchRefResult, GitCommandError>;
+    readonly invalidateRefs: (cwd: string) => Effect.Effect<void>;
     readonly initRepo: (input: VcsInitInput) => Effect.Effect<void, GitCommandError>;
     readonly listLocalBranchNames: (cwd: string) => Effect.Effect<string[], GitCommandError>;
   } & import("./GitSharedConfig.ts").SharedConfigDriver

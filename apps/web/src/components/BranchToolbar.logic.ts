@@ -170,6 +170,12 @@ export function resolveBranchToolbarValue(input: {
   return currentGitBranch ?? activeThreadBranch;
 }
 
+export function resolveDefaultWorktreeBaseBranch(
+  refs: ReadonlyArray<Pick<VcsRef, "name" | "isDefault" | "current">>,
+): string | null {
+  return (refs.find((ref) => ref.isDefault) ?? refs.find((ref) => ref.current))?.name ?? null;
+}
+
 export function resolveBranchTriggerLabel(input: {
   activeWorktreePath: string | null;
   effectiveEnvMode: EnvMode;
