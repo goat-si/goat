@@ -1,3 +1,4 @@
+import { verifyRestoredWorktree, verifyWorktreeRegistration } from "./restoreSnapshot.ts";
 import {
   type CommandId,
   type OrchestrationV2Actor,
@@ -283,7 +284,7 @@ const make = Effect.gen(function* () {
             input,
             "uncommitted_unsupported",
             "The uncommitted changes could not be copied. Fork without them, or commit them first.",
-            { cause },
+            { retainedWorktreePath: worktreePath, cause },
           ),
         ),
       );
@@ -367,18 +368,21 @@ const make = Effect.gen(function* () {
         );
         const worktreePath = created.worktree.path;
         const createdBranch = created.worktree.refName;
-        const removeCreated = gitWorkflow
-          .removeWorktree({ cwd: project.workspaceRoot, path: worktreePath, force: true })
-          .pipe(
-            Effect.andThen(
-              gitWorkflow.deleteLocalBranch({
-                cwd: project.workspaceRoot,
-                refName: createdBranch,
-                force: true,
-              }),
-            ),
-            Effect.ignoreCause({ log: true }),
-          );
+        yield* verifyWorktreeRegistration({ projectCwd: project.workspaceRoot, worktreePath }).pipe(
+          Effect.andThen(
+            verifyRestoredWorktree({
+              cwd: worktreePath,
+              branch: createdBranch,
+              expectedHead: pin.baseCommit,
+            }),
+          ),
+          Effect.mapError((cause) =>
+            refuse(input, "worktree_failed", "The new fork checkout could not be verified.", {
+              retainedWorktreePath: worktreePath,
+              cause,
+            }),
+          ),
+        );
 
         if (pin.snapshot !== null) {
           yield* restore(
@@ -388,9 +392,6 @@ const make = Effect.gen(function* () {
               snapshotCommit: pin.snapshot,
             }),
           ).pipe(
-            Effect.tapCause((cause) =>
-              Cause.hasInterruptsOnly(cause) ? Effect.void : removeCreated,
-            ),
             Effect.mapError((cause) =>
               refuse(
                 input,
@@ -433,14 +434,13 @@ const make = Effect.gen(function* () {
                 (Option.isSome(stored) && stored.value.status === "rejected") ||
                 (receipt.read && Option.isNone(stored) && target.read && target.value === null);
               if (refused && !Cause.hasInterruptsOnly(cause)) {
-                yield* removeCreated;
                 return yield* refuse(
                   input,
                   "fork_failed",
                   Option.isSome(stored) && stored.value.error !== null
                     ? stored.value.error
                     : errorText(Cause.squash(cause)),
-                  { cause: Cause.squash(cause) },
+                  { retainedWorktreePath: worktreePath, cause: Cause.squash(cause) },
                 );
               }
               yield* Effect.logWarning("Kept a fork worktree after an unknown outcome", {
