@@ -1,3 +1,4 @@
+import { normalizeAcpJsonRpcError } from "./_internal/strictParser.ts";
 import { makeStrictNdJsonRpcParser, type AcpDecodedWireMessage } from "./_internal/strictParser.ts";
 import {
   makeRawNotificationBuffer,
@@ -191,31 +192,6 @@ export const RPC_REQUEST_ID_START = 2 ** 30;
 
 const isEffectRpcRequestId = (requestId: AcpError.AcpRequestId): boolean =>
   typeof requestId === "number" && Number.isSafeInteger(requestId);
-
-/**
- * Effect RPC's JSON-RPC codec treats a standard JSON-RPC error object as a
- * defect unless it carries Effect's private `_tag: "Cause"` envelope.
- */
-function normalizeAcpJsonRpcError(
-  message: RpcMessage.FromClientEncoded | RpcMessage.FromServerEncoded,
-): RpcMessage.FromClientEncoded | RpcMessage.FromServerEncoded {
-  if (message._tag !== "Exit" || message.exit._tag !== "Failure") return message;
-  const [failure] = message.exit.cause;
-  if (
-    message.exit.cause.length !== 1 ||
-    failure?._tag !== "Die" ||
-    !isProtocolError(failure.defect)
-  ) {
-    return message;
-  }
-  return {
-    ...message,
-    exit: {
-      _tag: "Failure",
-      cause: [{ _tag: "Fail", error: failure.defect }],
-    },
-  };
-}
 
 export const makeAcpPatchedProtocol = Effect.fn("makeAcpPatchedProtocol")(function* (
   options: AcpPatchedProtocolOptions,
@@ -999,5 +975,3 @@ export const makeAcpPatchedProtocol = Effect.fn("makeAcpPatchedProtocol")(functi
     notify: sendNotification,
   } satisfies AcpPatchedProtocol;
 });
-
-const isProtocolError = Schema.is(AcpSchema.Error);
