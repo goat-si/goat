@@ -164,6 +164,7 @@ such a machine **via Pen**.
 - GOAT keeps 16 Pen machines open at a time. In a larger mesh the rest read **Not open**; choose
   **Connect** on one to open it, and the machine you opened longest ago closes instead. A machine
   you also added yourself, over Tailscale or your own SSH host, does not count and stays open.
+  When you turn a machine off, a **Not open** one takes its place by itself.
 - **Remove from Pen...** on a machine's row removes it from the mesh, as `pen revoke` does. GOAT
   asks you to confirm in a system dialog that names the machine. Tick **This machine was lost or
   stolen** there to also remove every machine it admitted (`pen revoke --compromised`). If GOAT

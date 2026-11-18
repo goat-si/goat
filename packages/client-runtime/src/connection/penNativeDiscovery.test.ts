@@ -451,6 +451,7 @@ it.effect("a closed viewer gate keeps a member's stored route and the environmen
       removeRoute: (_env, route) => Effect.sync(() => void removed.push(route)),
       reorderRoutes: unused,
       removeRelayEnvironments: unused,
+      setPenLive: unused,
       retryNow: unused,
       reconnect: unused,
       setEnabled: unused,

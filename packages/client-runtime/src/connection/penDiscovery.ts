@@ -1,15 +1,22 @@
-import type { DesktopPenMember, EnvironmentId, PenRouteRefusal } from "@goat/contracts";
+import type {
+  DesktopPenMember,
+  DesktopSshEnvironmentTarget,
+  EnvironmentId,
+  PenRouteRefusal,
+} from "@goat/contracts";
 import * as Context from "effect/Context";
 import * as Effect from "effect/Effect";
+import * as Exit from "effect/Exit";
 import * as Layer from "effect/Layer";
 import * as Option from "effect/Option";
+import * as Scope from "effect/Scope";
 import * as Stream from "effect/Stream";
 import * as SubscriptionRef from "effect/SubscriptionRef";
-import type { PenMembersInput } from "../platform/capabilities.ts";
+import { SshEnvironmentGateway, type PenMembersInput } from "../platform/capabilities.ts";
 import type * as Persistence from "../platform/persistence.ts";
 import type { ConnectionCatalogEntry } from "./catalog.ts";
 import { ConnectionBlockedError, type ConnectionAttemptError } from "./model.ts";
-import { ConnectionOnboarding } from "./onboarding.ts";
+import { ConnectionOnboarding, type SshConnectionInput } from "./onboarding.ts";
 import { PenMembership, trustedPenMember } from "./penMembership.ts";
 import { PenLiveSet } from "./penLiveSet.ts";
 import { EnvironmentRegistry } from "./registry.ts";
@@ -100,6 +107,8 @@ export class PenDiscovery extends Context.Service<
       ConnectionAttemptError | Persistence.ConnectionPersistenceError
     >;
     readonly pass: (state: PenMembersInput) => Effect.Effect<void>;
+    /** A live or onboarding slot came free: machines waiting for one are tried again. */
+    readonly slotFreed: Effect.Effect<void>;
   }
 >()("@goat/client-runtime/connection/penDiscovery") {}
 
@@ -108,6 +117,8 @@ const make = Effect.gen(function* () {
   const onboarding = yield* ConnectionOnboarding;
   const membership = yield* PenMembership;
   const liveSet = yield* PenLiveSet;
+  const ssh = yield* SshEnvironmentGateway;
+  const scope = yield* Scope.Scope;
   const statuses = yield* SubscriptionRef.make<ReadonlyArray<PenMemberStatus>>([]);
   const availability = yield* SubscriptionRef.make<"pending" | PenMembersInput["kind"]>("pending");
   const attempts = new Map<
@@ -116,6 +127,33 @@ const make = Effect.gen(function* () {
   >();
   const attemptKey = (member: DesktopPenMember) => JSON.stringify([member.nodeId, member.noisePub]);
   const rerun = SubscriptionRef.update(membership.latest, (state) => state);
+  // The desktop prepares SSH and opens the tunnel before the machine is saved. A registration
+  // that fails or is cut off leaves both behind unless the tunnel is let go here; a saved route
+  // on the same alias still uses it. Disconnecting leaves the member's own GOAT running.
+  const releaseTunnel = Effect.fn("PenDiscovery.releaseTunnel")(function* (
+    target: DesktopSshEnvironmentTarget,
+  ) {
+    const entries = yield* SubscriptionRef.get(registry.entries);
+    const saved = [...entries.values()].some((entry) =>
+      connectionRoutes(entry).some((route) => {
+        const profile = Option.getOrUndefined(route.profile);
+        return profile?._tag === "SshConnectionProfile" && profile.target.alias === target.alias;
+      }),
+    );
+    if (saved) return;
+    yield* ssh.disconnect(target).pipe(
+      Effect.catch((error) =>
+        Effect.logWarning("Could not release a Pen machine's tunnel", { error }),
+      ),
+      Effect.forkIn(scope, { startImmediately: true }),
+    );
+  });
+  const register = (input: SshConnectionInput) =>
+    onboarding
+      .registerSsh(input)
+      .pipe(
+        Effect.onExit((exit) => (Exit.isSuccess(exit) ? Effect.void : releaseTunnel(input.target))),
+      );
   const confirm = Effect.fn("PenDiscovery.confirm")(function* (
     meshId: string,
     member: DesktopPenMember,
@@ -151,24 +189,25 @@ const make = Effect.gen(function* () {
     const sshTarget = member.route.target;
     const id = yield* Effect.acquireUseRelease(
       liveSet.admitOnboarding(nodeId, { force: true }),
-      (admitted) =>
-        admitted
-          ? onboarding
-              .registerSsh({
-                target: sshTarget,
-                label: member.name,
-                keyOnly: false,
-                pen: { meshId: state.meshId, nodeId },
-                confirm: confirm(state.meshId, member),
-              })
-              .pipe(Effect.tap((environmentId) => liveSet.open(environmentId)))
+      (admission) =>
+        admission === "admitted"
+          ? register({
+              target: sshTarget,
+              label: member.name,
+              keyOnly: false,
+              pen: { meshId: state.meshId, nodeId },
+              confirm: confirm(state.meshId, member),
+            }).pipe(Effect.tap((environmentId) => liveSet.open(environmentId)))
           : Effect.fail(
               new ConnectionBlockedError({
                 reason: "configuration",
-                detail: "This Pen member is already being set up.",
+                detail:
+                  admission === "duplicate"
+                    ? "This Pen member is already being set up."
+                    : "Every Pen slot is setting up a machine. Try again when one finishes.",
               }),
             ),
-      (admitted) => (admitted ? liveSet.releaseOnboarding(nodeId) : Effect.void),
+      (admission) => (admission === "admitted" ? liveSet.releaseOnboarding(nodeId) : Effect.void),
     );
     yield* rerun;
     return id;
@@ -182,7 +221,19 @@ const make = Effect.gen(function* () {
     forced.add(nodeId);
     yield* retry(nodeId);
   });
-  const pass = Effect.fn("PenDiscovery.pass")(function* (state: PenMembersInput) {
+  // Members refused a slot on the latest round. A slot that frees during a pass runs another
+  // round of it; one that frees between passes starts a pass.
+  const waitingNodes = new Set<string>();
+  let passing = 0;
+  let freed = false;
+  const slotFreed = Effect.suspend(() => {
+    freed = true;
+    return passing > 0 || waitingNodes.size === 0 ? Effect.void : rerun;
+  });
+  const runPass = Effect.fn("PenDiscovery.pass")(function* (
+    state: PenMembersInput,
+    finish: Effect.Effect<boolean>,
+  ) {
     yield* SubscriptionRef.set(availability, state.kind);
     // A Connect asked for without a usable list is dropped, not kept for some later list.
     if (state.kind !== "ready") forced.clear();
@@ -237,7 +288,7 @@ const make = Effect.gen(function* () {
     }
     yield* SubscriptionRef.set(statuses, rows);
     const candidates = [...result.candidates].sort((a, b) => Number(b.online) - Number(a.online));
-    yield* Effect.forEach(
+    const round = Effect.forEach(
       candidates,
       (member) =>
         Effect.gen(function* () {
@@ -264,8 +315,8 @@ const make = Effect.gen(function* () {
           const sshTarget = member.route.target;
           const attempt = yield* Effect.acquireUseRelease(
             liveSet.admitOnboarding(member.nodeId, { force: wasForced }),
-            (admitted) =>
-              admitted
+            (admission) =>
+              admission === "admitted"
                 ? Effect.gen(function* () {
                     attempts.set(key, {
                       nodeId: member.nodeId,
@@ -280,7 +331,7 @@ const make = Effect.gen(function* () {
                       ),
                     );
                     const result = yield* Effect.result(
-                      onboarding.registerSsh({
+                      register({
                         target: sshTarget,
                         keyOnly: true,
                         installation: "existing-only",
@@ -289,14 +340,17 @@ const make = Effect.gen(function* () {
                         confirm: confirm(state.meshId, member),
                       }),
                     );
-                    if (wasForced && result._tag === "Success") yield* liveSet.open(result.success);
+                    // Every machine opened here counts as just used, so the oldest one gives up a slot.
+                    if (result._tag === "Success") yield* liveSet.open(result.success);
                     return Option.some(result);
                   })
                 : Effect.succeed(Option.none<never>()),
-            (admitted) => (admitted ? liveSet.releaseOnboarding(member.nodeId) : Effect.void),
+            (admission) =>
+              admission === "admitted" ? liveSet.releaseOnboarding(member.nodeId) : Effect.void,
           );
           forced.delete(member.nodeId);
           if (Option.isNone(attempt)) {
+            waitingNodes.add(member.nodeId);
             yield* SubscriptionRef.update(statuses, (current) =>
               current.map((row) =>
                 row.nodeId === member.nodeId
@@ -349,18 +403,53 @@ const make = Effect.gen(function* () {
         }).pipe(Effect.onInterrupt(() => Effect.sync(() => attempts.delete(attemptKey(member))))),
       { concurrency: 2, discard: true },
     );
+    do {
+      freed = false;
+      waitingNodes.clear();
+      yield* round;
+    } while (yield* finish);
     // A Connect whose machine was not a candidate on this pass does not wait for a later one.
     forced.clear();
   });
-  return { statuses, availability, retry, connect, setUp, pass };
+  const pass = (state: PenMembersInput) =>
+    Effect.suspend(() => {
+      passing++;
+      let done = false;
+      // Deciding to stop and leaving the pass is one step, so a slot freed then is not missed.
+      const finish = Effect.sync(() => {
+        if (freed && waitingNodes.size > 0) return true;
+        done = true;
+        passing--;
+        return false;
+      });
+      return runPass(state, finish).pipe(
+        Effect.ensuring(
+          Effect.sync(() => {
+            if (!done) passing--;
+          }),
+        ),
+      );
+    });
+  return { statuses, availability, retry, connect, setUp, pass, slotFreed };
 });
 export const layer = Layer.effect(PenDiscovery, make);
 export const watchPenDiscovery = Effect.gen(function* () {
   const membership = yield* PenMembership;
   const discovery = yield* PenDiscovery;
-  yield* SubscriptionRef.changes(membership.latest).pipe(
-    Stream.filter(Option.isSome),
-    Stream.switchMap((state) => Stream.fromEffect(discovery.pass(state.value))),
-    Stream.runDrain,
+  const liveSet = yield* PenLiveSet;
+  yield* Effect.all(
+    [
+      SubscriptionRef.changes(membership.latest).pipe(
+        Stream.filter(Option.isSome),
+        Stream.switchMap((state) => Stream.fromEffect(discovery.pass(state.value))),
+        Stream.runDrain,
+      ),
+      SubscriptionRef.changes(liveSet.room).pipe(
+        Stream.changes,
+        Stream.filter((room) => room),
+        Stream.runForEach(() => discovery.slotFreed),
+      ),
+    ],
+    { concurrency: "unbounded", discard: true },
   );
 });

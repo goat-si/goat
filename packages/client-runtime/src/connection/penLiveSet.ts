@@ -59,15 +59,19 @@ export function decide(input: {
 }
 
 type Hold = PenHold;
+/** Why a machine could not start onboarding: it already is, or every slot is taken. */
+export type PenOnboardingAdmission = "admitted" | "duplicate" | "full";
 export class PenLiveSet extends Context.Service<
   PenLiveSet,
   {
     readonly held: SubscriptionRef.SubscriptionRef<ReadonlyMap<EnvironmentId, Hold>>;
+    /** Whether live machines and onboarding leave a slot free; discovery retries waiting ones. */
+    readonly room: SubscriptionRef.SubscriptionRef<boolean>;
     readonly open: (id: EnvironmentId) => Effect.Effect<void>;
     readonly admitOnboarding: (
       nodeId: string,
       options?: { force?: boolean },
-    ) => Effect.Effect<boolean>;
+    ) => Effect.Effect<PenOnboardingAdmission>;
     readonly releaseOnboarding: (nodeId: string) => Effect.Effect<void>;
     readonly recompute: Effect.Effect<void>;
   }
@@ -77,11 +81,17 @@ const make = Effect.gen(function* () {
   const membership = yield* PenMembership;
   const registry = yield* EnvironmentRegistry;
   const held = yield* SubscriptionRef.make<ReadonlyMap<EnvironmentId, Hold>>(new Map());
+  const room = yield* SubscriptionRef.make(true);
   const state = yield* Ref.make<{
     recency: ReadonlyArray<EnvironmentId>;
     onboarding: ReadonlySet<string>;
     live: ReadonlySet<EnvironmentId>;
   }>({ recency: [], onboarding: new Set(), live: new Set() });
+  const publishRoom = Ref.get(state).pipe(
+    Effect.flatMap((current) =>
+      SubscriptionRef.set(room, current.live.size + current.onboarding.size < PEN_LIVE_LIMIT),
+    ),
+  );
   // One pass at a time: two interleaved passes could hand the registry an older set last.
   const turn = yield* Semaphore.make(1);
   const pass = Effect.gen(function* () {
@@ -115,7 +125,10 @@ const make = Effect.gen(function* () {
         onboarding: current.onboarding,
         limit: PEN_LIVE_LIMIT,
       });
-      return [result, { ...current, live: result.live }] as const;
+      return [
+        result,
+        { ...current, live: result.live, recency: current.recency.filter((id) => entries.has(id)) },
+      ] as const;
     });
     yield* registry.setPenLive(next.live);
     yield* SubscriptionRef.set(
@@ -126,7 +139,7 @@ const make = Effect.gen(function* () {
       ]),
     );
   });
-  const recompute = turn.withPermits(1)(pass);
+  const recompute = turn.withPermits(1)(pass.pipe(Effect.andThen(publishRoom)));
   const open = Effect.fn("PenLiveSet.open")(function* (id: EnvironmentId) {
     yield* Ref.update(state, (current) => ({
       ...current,
@@ -136,15 +149,21 @@ const make = Effect.gen(function* () {
   });
   const admitOnboarding = (nodeId: string, options?: { force?: boolean }) =>
     Ref.modify(state, (current) => {
-      if (
-        current.onboarding.has(nodeId) ||
-        (!options?.force && current.live.size + current.onboarding.size >= PEN_LIVE_LIMIT)
-      )
-        return [false, current] as const;
-      return [true, { ...current, onboarding: new Set([...current.onboarding, nodeId]) }] as const;
+      const refuse = (admission: PenOnboardingAdmission) => [admission, current] as const;
+      if (current.onboarding.has(nodeId)) return refuse("duplicate");
+      // Live machines and onboarding share one budget. A forced slot is taken from the machine
+      // opened longest ago, so only onboarding itself can fill it.
+      const used = (options?.force ? 0 : current.live.size) + current.onboarding.size;
+      if (used >= PEN_LIVE_LIMIT) return refuse("full");
+      const admitted: PenOnboardingAdmission = "admitted";
+      return [
+        admitted,
+        { ...current, onboarding: new Set([...current.onboarding, nodeId]) as ReadonlySet<string> },
+      ] as const;
     }).pipe(
-      // A forced slot is taken from the machine opened longest ago.
-      Effect.tap((admitted) => (admitted && options?.force ? recompute : Effect.void)),
+      Effect.tap((admission) =>
+        admission !== "admitted" ? Effect.void : options?.force ? recompute : publishRoom,
+      ),
     );
   const releaseOnboarding = (nodeId: string) =>
     Ref.update(state, (current) => {
@@ -152,7 +171,7 @@ const make = Effect.gen(function* () {
       onboarding.delete(nodeId);
       return { ...current, onboarding };
     }).pipe(Effect.andThen(recompute));
-  return { held, open, admitOnboarding, releaseOnboarding, recompute };
+  return { held, room, open, admitOnboarding, releaseOnboarding, recompute };
 });
 export const layer = Layer.effect(PenLiveSet, make);
 export const watchPenLiveSet = Effect.gen(function* () {

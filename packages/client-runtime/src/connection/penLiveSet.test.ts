@@ -213,17 +213,41 @@ it.effect(
           [live.admitOnboarding("candidate-a"), live.admitOnboarding("candidate-b")],
           { concurrency: "unbounded" },
         );
-        expect(results.filter(Boolean)).toHaveLength(1);
-        const winner = results[0] ? "candidate-a" : "candidate-b";
-        expect(yield* live.admitOnboarding(winner)).toBe(false);
+        expect(results.filter((result) => result === "admitted")).toHaveLength(1);
+        const winner = results[0] === "admitted" ? "candidate-a" : "candidate-b";
+        expect(yield* live.admitOnboarding(winner)).toBe("duplicate");
         yield* live.releaseOnboarding(winner);
-        expect(yield* live.admitOnboarding("candidate-c")).toBe(true);
-        expect(yield* live.admitOnboarding("candidate-d", { force: true })).toBe(true);
+        expect(yield* live.admitOnboarding("candidate-c")).toBe("admitted");
+        expect(yield* live.admitOnboarding("candidate-d", { force: true })).toBe("admitted");
         expect((yield* SubscriptionRef.get(live.held)).get(entries[14]!.target.environmentId)).toBe(
           "waiting",
         );
       }).pipe(Effect.provide(h.combined));
     }),
+);
+
+it.effect("forced setups share the live budget: never more than 16 machines preparing", () =>
+  Effect.gen(function* () {
+    const h = yield* liveFixture(15);
+    yield* Effect.gen(function* () {
+      const registry = yield* EnvironmentRegistry;
+      const live = yield* PenLiveSet;
+      yield* registry.start;
+      yield* live.recompute;
+      // Each forced setup takes a slot from a live machine until onboarding fills every slot.
+      const admissions = yield* Effect.forEach(
+        Array.from({ length: 17 }, (_, n) => `setup-${n}`),
+        (nodeId) => live.admitOnboarding(nodeId, { force: true }),
+      );
+      expect(admissions.filter((admission) => admission === "admitted")).toHaveLength(16);
+      expect(admissions[16]).toBe("full");
+      const held = yield* SubscriptionRef.get(live.held);
+      expect(
+        entries.slice(0, 15).every((entry) => held.get(entry.target.environmentId) === "waiting"),
+      ).toBe(true);
+      expect(yield* SubscriptionRef.get(live.room)).toBe(false);
+    }).pipe(Effect.provide(h.combined));
+  }),
 );
 
 it("keeps an online unreadable route live and holds a trusted offline member", () => {
