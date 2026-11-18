@@ -3383,7 +3383,9 @@ export const make = Effect.fn("OpenCode2Adapter.make")(function* (instanceId: Pr
               .pipe(Effect.catchIf(isMissingGoal, () => Effect.void));
             return yield* finishControl;
           }
-          return yield* client.session.command({ sessionID, ...command }).pipe(Effect.asVoid);
+          return yield* client.session
+            .command({ sessionID, ...command })
+            .pipe(Effect.andThen(turnInput.inputDelivery?.submitted() ?? Effect.void));
         }
       }
       const mentions = skillMentions(text);
@@ -3410,7 +3412,7 @@ export const make = Effect.fn("OpenCode2Adapter.make")(function* (instanceId: Pr
             ? {}
             : { skills: skills.map((id) => ({ id: Skill.ID.make(id) })) }),
         })
-        .pipe(Effect.asVoid);
+        .pipe(Effect.andThen(turnInput.inputDelivery?.submitted() ?? Effect.void));
     });
 
     const runtime: ProviderAdapter.ProviderAdapterV2SessionRuntime = {
@@ -3682,7 +3684,9 @@ export const make = Effect.fn("OpenCode2Adapter.make")(function* (instanceId: Pr
           const { state, sessionId, turn } = started;
           yield* submit(sessionId, turnInput, state, turn).pipe(
             Effect.tap(() =>
-              turn.unsent ? Effect.void : (turnInput.inputDelivery?.accepted() ?? Effect.void),
+              turn.unsent
+                ? (turnInput.inputDelivery?.skipped() ?? Effect.void)
+                : (turnInput.inputDelivery?.accepted() ?? Effect.void),
             ),
             // Forget externally deleted sessions so the next turn recreates them with handoff.
             Effect.catchTags({

@@ -2839,14 +2839,17 @@ export const makeOpenCodeAdapterV2 = Effect.fn("makeOpenCodeAdapterV2")(function
                       .filter((part) => part !== undefined)
                       .join("\n\n"),
                   };
-            if (!(yield* sending())) return;
+            if (!(yield* sending())) return yield* delivery?.skipped() ?? Effect.void;
             return yield* sdkCall("session.promptAsync", prepared, (signal) =>
               client.session.promptAsync(prepared, {
                 signal: AbortSignal.any([signal, abortController.signal]),
               }),
-            ).pipe(Effect.andThen(delivery?.accepted() ?? Effect.void));
+            ).pipe(
+              Effect.andThen(delivery?.submitted() ?? Effect.void),
+              Effect.andThen(delivery?.accepted() ?? Effect.void),
+            );
           }
-          if (!(yield* sending())) return;
+          if (!(yield* sending())) return yield* delivery?.skipped() ?? Effect.void;
           const receipt = Deferred.makeUnsafe<void>();
           commandReceipts.set(payload.messageID, receipt);
           const controllers =
@@ -2908,6 +2911,7 @@ export const makeOpenCodeAdapterV2 = Effect.fn("makeOpenCodeAdapterV2")(function
               },
             }),
           );
+          yield* delivery?.submitted() ?? Effect.void;
           yield* delivery?.accepted() ?? Effect.void;
         });
 

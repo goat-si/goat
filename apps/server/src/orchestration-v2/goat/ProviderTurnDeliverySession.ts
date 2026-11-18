@@ -1,5 +1,6 @@
 import * as Effect from "effect/Effect";
 import type * as ProviderAdapter from "@goat/provider-core/server/ProviderAdapter";
+import { refusedBeforePrompt } from "../PromptRefusal.ts";
 
 export const makeDeliverySession = (
   session: ProviderAdapter.ProviderAdapterV2SessionRuntime,
@@ -35,3 +36,51 @@ export const makeDeliverySession = (
         }),
   };
 };
+
+export const submitWithContextHandoff = Effect.fn(
+  "ProviderTurnStartService.submitWithContextHandoff",
+)(function* (
+  start: ProviderAdapter.ProviderAdapterV2SessionRuntime["startTurn"],
+  input: ProviderAdapter.ProviderAdapterV2TurnInput,
+  delivery: {
+    readonly delivered: Effect.Effect<void, unknown>;
+    readonly unsent: Effect.Effect<void, unknown>;
+  },
+  context: string,
+) {
+  const text = input.message.text;
+  const prefix = context === "" ? "" : `${context}\n\nUser message:\n`;
+  const unsent = yield* Effect.cached(
+    delivery.unsent.pipe(
+      Effect.catchCause(() =>
+        Effect.logWarning("Failed to restore unsent context handoffs", { runId: input.runId }),
+      ),
+    ),
+  );
+  const delivered = yield* Effect.cached(
+    delivery.delivered.pipe(
+      Effect.catchCause(() =>
+        Effect.logWarning("Failed to record accepted context handoff delivery", {
+          runId: input.runId,
+        }),
+      ),
+    ),
+  );
+  const witness = input.inputDelivery;
+  yield* start({
+    ...input,
+    ...(witness === undefined
+      ? {}
+      : {
+          inputDelivery: {
+            ...witness,
+            begin: () =>
+              witness.begin().pipe(Effect.tap((began) => (began ? Effect.void : unsent))),
+            skipped: () => witness.skipped().pipe(Effect.andThen(unsent)),
+            submitted: () => witness.submitted().pipe(Effect.andThen(delivered)),
+          },
+        }),
+    message: { ...input.message, text: prefix + text },
+    ...(prefix === "" ? {} : { inlineContextLength: prefix.length }),
+  }).pipe(Effect.tapError((error) => (refusedBeforePrompt(error) ? unsent : Effect.void)));
+});

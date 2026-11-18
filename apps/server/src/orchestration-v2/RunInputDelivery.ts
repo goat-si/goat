@@ -2,7 +2,6 @@ import * as ProviderAdapter from "@goat/provider-core/server/ProviderAdapter";
 import type { IdAllocatorV2 } from "@goat/provider-core/server/IdAllocator";
 import * as DateTime from "effect/DateTime";
 import * as Effect from "effect/Effect";
-import * as Ref from "effect/Ref";
 import type { AttemptDeliveryUpdate } from "./AttemptInputDelivery.ts";
 import type { EventSinkV2 } from "./EventSink.ts";
 import type { RunExecutionServiceV2StartRootRunInput } from "./RunExecutionService.ts";
@@ -11,10 +10,12 @@ export const makeRunInputDelivery = Effect.fn("RunExecutionService.makeInputDeli
   eventSink: EventSinkV2["Service"],
   ids: IdAllocatorV2["Service"],
   { run, attempt, providerThread, reattach }: RunExecutionServiceV2StartRootRunInput,
+  onSubmit: Effect.Effect<void>,
 ) {
-  if (reattach === true || attempt.inputDelivery === undefined) return undefined;
+  if (reattach === true) return undefined;
   const write = Effect.fn("RunExecutionService.writeInputDelivery")(
     function* (delivery: AttemptDeliveryUpdate["delivery"], inherited = false) {
+      if (attempt.inputDelivery === undefined) return true;
       const { id: runId, threadId } = run;
       const result = yield* eventSink.writeIfRunCurrent({
         threadId,
@@ -59,18 +60,14 @@ export const makeRunInputDelivery = Effect.fn("RunExecutionService.makeInputDeli
     ),
   );
   const accepted = yield* Effect.cached(acknowledge(false));
-  const submitted = yield* Ref.make(false);
-  const begin = write("ambiguous").pipe(
-    Effect.tap((admitted) => (admitted ? Ref.set(submitted, true) : Effect.void)),
-  );
+  const submitted = yield* Effect.cached(onSubmit);
   return {
-    begin: () => begin,
+    begin: () => write("ambiguous"),
+    submitted: () => submitted,
+    skipped: () => Effect.void,
     accepted: () => accepted,
     inherited: () => acknowledge(true),
-    submitted: Ref.get(submitted),
-  } satisfies ProviderAdapter.ProviderInputDelivery & {
-    readonly submitted: Effect.Effect<boolean>;
-  };
+  } satisfies ProviderAdapter.ProviderInputDelivery;
 });
 
 export const submitProviderInput = Effect.fn("RunExecutionService.submitProviderInput")(function* <
@@ -82,11 +79,6 @@ export const submitProviderInput = Effect.fn("RunExecutionService.submitProvider
   operation: Effect.Effect<void, E, R>,
 ) {
   if (delivery !== undefined && runtime.tracksInputDelivery !== true && !(yield* delivery.begin()))
-    return "skipped" as const;
+    return;
   yield* operation;
-  return runtime.tracksInputDelivery === true &&
-    delivery !== undefined &&
-    !(yield* delivery.submitted)
-    ? ("skipped" as const)
-    : ("submitted" as const);
 });

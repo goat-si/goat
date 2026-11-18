@@ -3749,6 +3749,7 @@ it.effect.each([
   "compact",
   "untracked-fence",
   "tracked-fence",
+  "post-fence-stop",
 ] as const)("remote inbox survives %s correctly", (scenario) =>
   Effect.gen(function* () {
     const stoppedAtFence = scenario.endsWith("-fence");
@@ -3821,11 +3822,17 @@ it.effect.each([
             ),
             close: Deferred.succeed(closed, undefined),
           }),
-          tracksInputDelivery: scenario === "tracked-fence",
+          tracksInputDelivery: scenario === "tracked-fence" || scenario === "post-fence-stop",
           startTurn: (input: ProviderAdapter.ProviderAdapterV2TurnInput) =>
             Effect.gen(function* () {
-              if (scenario === "tracked-fence" && !(yield* input.inputDelivery!.begin())) return;
+              if (
+                (scenario === "tracked-fence" || scenario === "post-fence-stop") &&
+                !(yield* input.inputDelivery!.begin())
+              )
+                return;
+              if (scenario === "post-fence-stop") return yield* input.inputDelivery!.skipped();
               yield* accept(input.message.text);
+              yield* input.inputDelivery?.submitted() ?? Effect.void;
             }),
           compactThread: (input: ProviderAdapter.ProviderAdapterV2TurnInput) =>
             accept(input.message.text),
@@ -3844,7 +3851,7 @@ it.effect.each([
         attempt: {
           id: ids.attemptId,
           providerTurnId: ids.rootProviderTurnId,
-          ...(stoppedAtFence ? { inputDelivery: "unsent" } : {}),
+          ...(stoppedAtFence || scenario === "post-fence-stop" ? { inputDelivery: "unsent" } : {}),
         } as OrchestrationV2RunAttempt,
         attemptId: ids.attemptId,
         providerTurnOrdinal: 1,
@@ -3875,7 +3882,7 @@ it.effect.each([
       const inputs = yield* Ref.get(seen);
       assert.deepEqual(
         inputs,
-        scenario === "skipped" || stoppedAtFence
+        scenario === "skipped" || stoppedAtFence || scenario === "post-fence-stop"
           ? []
           : [
               scenario === "compact"

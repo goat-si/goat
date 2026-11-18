@@ -19,7 +19,10 @@ import {
 } from "./providerTurnStartHelpers.ts";
 import { withAgentOom } from "./agentOomFailure.ts";
 import { AgentScope } from "@goat/shared/AgentScope";
-import { makeDeliverySession } from "./goat/ProviderTurnDeliverySession.ts";
+import {
+  makeDeliverySession,
+  submitWithContextHandoff,
+} from "./goat/ProviderTurnDeliverySession.ts";
 import { makePrepareTurnWorkspace, workspaceRestoredItem } from "./goat/prepareTurnWorkspace.ts";
 import { reserveTurnStart } from "../workspace/checkpointRestoreReservation.ts";
 import { makeProviderTurnHandoffRecovery } from "./goat/ProviderTurnHandoffRecovery.ts";
@@ -59,7 +62,6 @@ import * as ContextHandoffService from "./ContextHandoffService.ts";
 import { deliverContextHandoffs } from "./ContextHandoffDelivery.ts";
 import { sideChatNote } from "./SideChatNote.ts";
 import { providerTextWithSkills } from "../skills/GoatSkillText.ts";
-import { refusedBeforePrompt } from "./PromptRefusal.ts";
 import * as ProviderAdapter from "@goat/provider-core/server/ProviderAdapter";
 import * as IdAllocator from "@goat/provider-core/server/IdAllocator";
 import * as ProjectionStore from "./ProjectionStore.ts";
@@ -1292,40 +1294,16 @@ export const layer: Layer.Layer<
               });
             }),
           });
-          if (!(yield* isCurrentAttemptInStatus("running"))) return;
-          const start = compact ? session.compactThread! : session.startTurn;
+          if (!(yield* isCurrentAttemptInStatus("running"))) return yield* delivery.unsent;
           const context = [delivery.context, restartNote]
             .filter((part) => part !== "")
             .join("\n\n");
           const { restartContinuationOfRunId: _resumedRunId, ...promptedInput } = turnInput;
-          const text =
-            context === "" || goalCommand ? userText : `${context}\n\nUser message:\n${userText}`;
-          yield* start({
-            ...(noteContinuation ? promptedInput : turnInput),
-            message: { ...turnInput.message, text },
-            ...(text === userText ? {} : { inlineContextLength: text.length - userText.length }),
-          }).pipe(
-            // Clear pending handoff markers for refused prompts so the next turn retains the native session.
-            Effect.tapError((error) =>
-              refusedBeforePrompt(error)
-                ? delivery.unsent.pipe(
-                    Effect.catchCause(() =>
-                      Effect.logWarning("Failed to restore unsent context handoffs", {
-                        runId: run.id,
-                      }),
-                    ),
-                  )
-                : Effect.void,
-            ),
-          );
-          // After provider acceptance, failed delivery bookkeeping must not stop live ingestion.
-          yield* delivery.delivered.pipe(
-            Effect.catchCause(() =>
-              Effect.logWarning("Failed to record accepted context handoff delivery", {
-                runId: run.id,
-                deliveryStatus: "pending",
-              }),
-            ),
+          yield* submitWithContextHandoff(
+            compact ? session.compactThread! : session.startTurn,
+            noteContinuation ? promptedInput : turnInput,
+            delivery,
+            goalCommand ? "" : context,
           );
         },
         Effect.mapError((cause) =>

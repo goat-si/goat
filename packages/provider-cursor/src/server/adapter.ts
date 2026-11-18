@@ -1823,13 +1823,12 @@ export const makeCursorAdapterV2 = Effect.fn("makeCursorAdapterV2")(function* (
               memoryClaim,
               previous,
             );
-            const compacted = prompt === undefined;
             const pendingUpdates: Array<InteractionUpdate> = [];
             let context: ActiveCursorTurn | null = null;
             const sdkRun = yield* agent.session
               .send({
                 message,
-                summarize: compacted,
+                summarize: prompt === undefined,
                 prepareMessage: () =>
                   Effect.gen(function* () {
                     const config = yield* mcpSessions.read(turnInput.threadId);
@@ -1865,7 +1864,8 @@ export const makeCursorAdapterV2 = Effect.fn("makeCursorAdapterV2")(function* (
                 },
               })
               .pipe(Effect.mapError(classifyCursorModelRejection(turnInput.modelSelection)));
-            if (!compacted) yield* Ref.set(interruptedPrompt, null);
+            if (prompt !== undefined) yield* turnInput.inputDelivery?.submitted() ?? Effect.void;
+            if (prompt !== undefined) yield* Ref.set(interruptedPrompt, null);
             const startedAt = yield* DateTime.now;
             const completed = yield* Deferred.make<void, never>();
             const providerTurnId = idAllocator.derive.providerTurn({
@@ -1933,7 +1933,7 @@ export const makeCursorAdapterV2 = Effect.fn("makeCursorAdapterV2")(function* (
                   if (
                     context !== null &&
                     context.assistant.nextSegment === 0 &&
-                    !compacted &&
+                    prompt !== undefined &&
                     // Text from a resume that made no progress is not the turn's answer.
                     !isResumeFailureAfterTurnEnded(context, result) &&
                     result.result !== undefined &&

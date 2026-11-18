@@ -9771,6 +9771,7 @@ export const makeClaudeAdapterV2 = Effect.fn("makeClaudeAdapterV2")(function* (
                     ),
                   ),
                 ),
+                Effect.andThen(turnInput.inputDelivery?.submitted() ?? Effect.void),
               );
             });
             if (userMessage !== null && !turnInput.resume) {

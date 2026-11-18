@@ -53,6 +53,7 @@ export function makeTestAdapter(input: {
   readonly failStartOnce?: Ref.Ref<boolean>;
   readonly refuseStarts?: Ref.Ref<number>;
   readonly refuseAfterSubmitFence?: boolean;
+  readonly skipAfterFenceOnOrdinal?: number;
   readonly refusalCause?: unknown;
   readonly failInjectionOnce?: Ref.Ref<boolean>;
   readonly nativeThreadGeneration?: Ref.Ref<number>;
@@ -230,6 +231,9 @@ export function makeTestAdapter(input: {
             });
           }
           if (turnInput.inputDelivery && !(yield* turnInput.inputDelivery.begin())) return;
+          if (input.skipAfterFenceOnOrdinal === turnInput.runOrdinal)
+            return yield* turnInput.inputDelivery?.skipped() ?? Effect.void;
+          yield* turnInput.inputDelivery?.submitted() ?? Effect.void;
           yield* turnInput.inputDelivery?.accepted() ?? Effect.void;
           yield* Effect.yieldNow;
           yield* Ref.update(input.capturedTurns, (turns) => [

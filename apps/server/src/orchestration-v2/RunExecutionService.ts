@@ -1,4 +1,5 @@
 import { makeRunInputDelivery, submitProviderInput } from "./RunInputDelivery.ts";
+import { hasNativeGoals } from "./providerTurnStartHelpers.ts";
 import { providerTurnOperation } from "./RunExecutionTurnOperation.ts";
 import { captureRunBaseline, type RunBaselineInput } from "./RunExecutionBaseline.ts";
 import { backgroundCapableTurnItemTypes } from "./InheritedBackgroundTurnItems.ts";
@@ -31,6 +32,7 @@ import * as SessionReceiptHold from "./goat/SessionReceiptHold.ts";
 import { resolveProjectSettings } from "@goat/shared/projectSettings";
 import {
   isOrchestrationV2WorkActive,
+  parseGoalCommand,
   isGoatBotSessionThreadId,
   CommandId,
   RunId,
@@ -1763,8 +1765,14 @@ export const layer: Layer.Layer<
           key: `mcp_app_${entry.itemId.replace(/[^\w.-]/g, "_")}`,
           text: entry.text,
         }));
+        const compact =
+          input.message.attachments.length === 0 &&
+          input.message.text.trim().toLowerCase() === "/compact";
         const inbox =
-          input.reattach === true || input.resume === true
+          input.reattach === true ||
+          input.resume === true ||
+          compact ||
+          (parseGoalCommand(input.message) !== null && hasNativeGoals(input.session))
             ? { texts: [], reports: [], throughId: null }
             : yield* remoteReportInbox
                 .pending(input.run.threadId)
@@ -1775,10 +1783,22 @@ export const layer: Layer.Layer<
                     ),
                   ),
                 );
-        const compact =
-          input.message.attachments.length === 0 &&
-          input.message.text.trim().toLowerCase() === "/compact";
-        const inputDelivery = yield* makeRunInputDelivery(eventSink, idAllocator, input);
+        const consumeReports =
+          inbox.throughId === null
+            ? Effect.void
+            : remoteReportInbox
+                .consume(input.run.threadId, inbox.throughId)
+                .pipe(
+                  Effect.catch((cause) =>
+                    Effect.logWarning("Failed to consume remote report inbox.", { cause }),
+                  ),
+                );
+        const inputDelivery = yield* makeRunInputDelivery(
+          eventSink,
+          idAllocator,
+          input,
+          consumeReports,
+        );
         const turnInput = {
           ...(inputDelivery === undefined ? {} : { inputDelivery }),
           ...(input.reattach === true || input.refreshMemoryContext === undefined
@@ -1923,22 +1943,7 @@ export const layer: Layer.Layer<
         );
         yield* Effect.andThen(
           shouldStart,
-          submitProviderInput(input.session, inputDelivery, startTurn).pipe(
-            Effect.tap((submission) =>
-              submission === "skipped" ||
-              input.reattach === true ||
-              compact ||
-              inbox.throughId === null
-                ? Effect.void
-                : remoteReportInbox
-                    .consume(input.run.threadId, inbox.throughId)
-                    .pipe(
-                      Effect.catch((cause) =>
-                        Effect.logWarning("Failed to consume remote report inbox.", { cause }),
-                      ),
-                    ),
-            ),
-          ),
+          submitProviderInput(input.session, inputDelivery, startTurn),
         ).pipe(
           // Wait for acceptance so abandoned startup cannot leave a refresher
           // on the already-detached ingestion fiber.

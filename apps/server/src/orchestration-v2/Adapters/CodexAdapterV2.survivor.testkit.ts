@@ -23,6 +23,8 @@ export function makeSurvivorInputEvidence() {
     inputDelivery: {
       begin: () => Effect.die("Survivor adoption must not submit input."),
       accepted: () => Effect.void,
+      skipped: () => Effect.void,
+      submitted: () => Effect.die("Survivor adoption must not send the new payload."),
       inherited: () =>
         Effect.sync(() => {
           inherited++;

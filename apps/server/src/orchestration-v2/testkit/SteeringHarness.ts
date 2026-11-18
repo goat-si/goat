@@ -90,6 +90,7 @@ export const nextTurnSelectionHarness = Effect.fn("nextTurnSelectionHarness")(fu
       ) {
         if (turn.inputDelivery && !(yield* turn.inputDelivery.begin())) return;
         started.push(turn);
+        yield* turn.inputDelivery?.submitted() ?? Effect.void;
         yield* turn.inputDelivery?.accepted() ?? Effect.void;
         yield* turnUpdated(turn, "running");
       });

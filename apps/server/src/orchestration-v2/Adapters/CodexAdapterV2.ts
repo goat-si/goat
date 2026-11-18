@@ -6719,6 +6719,7 @@ export const makeCodexAdapterV2 = Effect.fn("makeCodexAdapterV2")(function* (
                 ).pipe(turnTerminalizationPermit.withPermits(1)),
             });
             if (dispatched.type === "adopted") {
+              yield* turnInput.inputDelivery?.submitted() ?? Effect.void;
               yield* turnInput.inputDelivery?.accepted() ?? Effect.void;
               return void restartNotices.delete(threadId);
             }
@@ -6770,6 +6771,7 @@ export const makeCodexAdapterV2 = Effect.fn("makeCodexAdapterV2")(function* (
               )
               .pipe(Effect.tapError(() => Effect.sync(start.failed)));
             start.answered(started.turn.id);
+            yield* turnInput.inputDelivery?.submitted() ?? Effect.void;
             yield* turnInput.inputDelivery?.accepted() ?? Effect.void;
             restartNotices.delete(threadId);
             // A turn from another attempt routes events there, so it cannot be adopted here.

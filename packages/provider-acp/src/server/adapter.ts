@@ -211,7 +211,6 @@ function sendPromptWhenIdle<A>(
   turn: { readonly interrupted: boolean; readonly finalized: boolean },
   prompt: () => Effect.Effect<A, EffectAcpErrors.AcpError>,
 ): Effect.Effect<A, EffectAcpErrors.AcpError> {
-  // A Stop can land during the wait, so the flags are rechecked before each resend.
   const stopped = () => turn.interrupted || turn.finalized;
   return prompt().pipe(
     Effect.catchIf(
@@ -7525,6 +7524,7 @@ export const makeAcpAdapterV2 = Effect.fn("makeAcpAdapterV2")(function* (
                 { dispatched: context.promptDispatched, released: context.foregroundIdle },
               ),
             ).pipe(
+              Effect.tap(() => turnInput.inputDelivery?.submitted() ?? Effect.void),
               Effect.tap(() =>
                 Ref.update(promptInstructionStates, (current) => {
                   if (promptParts?.instructionState === undefined) return current;
