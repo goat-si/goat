@@ -306,6 +306,7 @@ export const PullRequestCapabilities = Schema.Struct({
    * reported rather than that the repository runs none. Absent means an empty list says nothing.
    */
   checksAlwaysReport: Schema.optional(Schema.Boolean),
+  withheldFileDiff: Schema.optional(Schema.Boolean),
 });
 export type PullRequestCapabilities = typeof PullRequestCapabilities.Type;
 
@@ -695,11 +696,16 @@ export const PullRequestDetailView = Schema.Struct({
 });
 export type PullRequestDetailView = typeof PullRequestDetailView.Type;
 
-/** GitHub refuses diffs past 300 files, so callers must page large changes. */
+const DiffRevision = Schema.Struct({
+  baseSha: TrimmedNonEmptyString,
+  headSha: TrimmedNonEmptyString,
+});
 export const PullRequestDiffInput = Schema.Struct({
   ...PullRequestRef.fields,
   cursor: Schema.optional(TrimmedNonEmptyString),
   commit: Schema.optional(TrimmedNonEmptyString),
+  path: Schema.optional(Schema.String.check(Schema.isMinLength(1), Schema.isMaxLength(4096))),
+  revision: Schema.optional(DiffRevision),
 });
 export type PullRequestDiffInput = typeof PullRequestDiffInput.Type;
 
@@ -712,10 +718,11 @@ export type PullRequestOmittedFileStat = typeof PullRequestOmittedFileStat.Type;
 
 export const PullRequestDiffResult = Schema.Struct({
   patch: Schema.String,
-  /** Content omitted within this slice; nextCursor separately indicates more slices. */
   truncated: Schema.Boolean,
   nextCursor: Schema.NullOr(TrimmedNonEmptyString),
   omittedFileStats: Schema.optional(Schema.Array(PullRequestOmittedFileStat)),
+  revision: Schema.optional(DiffRevision),
+  withheldFilesReadable: Schema.optional(Schema.Boolean),
 });
 export type PullRequestDiffResult = typeof PullRequestDiffResult.Type;
 
@@ -860,10 +867,7 @@ export const PullRequestReviewCommentDraft = Schema.Struct({
   /** GitLab needs both names for renamed-file comments; hosts using one path ignore this. */
   oldPath: Schema.optional(TrimmedNonEmptyString),
   position: PullRequestReviewPosition,
-  /**
-   * The first line of a comment on a range, which ends at `position`. Sent only to a host whose
-   * capabilities include `review.rangeComment`.
-   */
+  /** The start of a range, on hosts that support range comments. */
   startPosition: Schema.optional(PullRequestReviewPosition),
   body: CommentBody,
 });
@@ -874,6 +878,9 @@ export const PullRequestSubmitReviewInput = Schema.Struct({
   verdict: PullRequestReviewVerdict,
   body: Schema.String.check(Schema.isMaxLength(65_536)),
   comments: Schema.Array(PullRequestReviewCommentDraft),
+  revision: Schema.optional(
+    DiffRevision.mapFields((fields) => ({ ...fields, baseSha: Schema.optional(fields.baseSha) })),
+  ),
 });
 export type PullRequestSubmitReviewInput = typeof PullRequestSubmitReviewInput.Type;
 

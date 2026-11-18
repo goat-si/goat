@@ -1,33 +1,10 @@
-import { afterEach, assert, expect, it, vi } from "@effect/vitest";
+import { argsOfCall, layer, mockedExecute, output } from "./azureDevOpsPullRequestCli.testkit.ts";
+import { afterEach, assert, expect } from "@effect/vitest";
 import * as Effect from "effect/Effect";
-import * as Layer from "effect/Layer";
-import { ChildProcessSpawner } from "effect/process";
-
 import * as AzureDevOpsCli from "./AzureDevOpsCli.ts";
+
 import * as AzureDevOpsPullRequestCli from "./AzureDevOpsPullRequestCli.ts";
 import * as AzureDevOpsPullRequestProvider from "./AzureDevOpsPullRequestProvider.ts";
-
-const mockedExecute = vi.fn<AzureDevOpsCli.AzureDevOpsCli["Service"]["execute"]>();
-
-const layer = it.layer(
-  AzureDevOpsPullRequestCli.layer.pipe(
-    Layer.provide(
-      Layer.mock(AzureDevOpsCli.AzureDevOpsCli)({
-        execute: mockedExecute,
-      }),
-    ),
-  ),
-);
-
-function output(stdout: string) {
-  return {
-    exitCode: ChildProcessSpawner.ExitCode(0),
-    stdout,
-    stderr: "",
-    stdoutTruncated: false,
-    stderrTruncated: false,
-  };
-}
 
 const VCS_DEFAULT_MAX_OUTPUT_BYTES = 1_000_000;
 
@@ -79,12 +56,6 @@ function pullRequestRows(
 
 function pullRequests(count: number, firstNumber: number): string {
   return JSON.stringify(pullRequestRows(count, firstNumber));
-}
-
-function argsOfCall(index: number): ReadonlyArray<string> {
-  const call = mockedExecute.mock.calls[index];
-  assert.isDefined(call);
-  return call[0].args;
 }
 
 function changeEntries(count: number): ReadonlyArray<Record<string, unknown>> {
