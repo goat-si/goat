@@ -783,7 +783,8 @@ export const subscribeVcsBranch = (
               }),
           ),
           Effect.map((config) =>
-            config.environment.capabilities.vcsBranchStatus === true
+            config.environment.capabilities.vcsBranchStatus === true &&
+            session.vcsBranchTransportSupported !== false
               ? stream
               : session.client[WS_METHODS.subscribeVcsStatus]({
                   ...input,
@@ -811,7 +812,10 @@ export const refreshVcsBranch = Effect.fn("EnvironmentRpc.refreshVcsBranch")(fun
         }),
     ),
   );
-  if (config.environment.capabilities.vcsBranchStatus === true) {
+  if (
+    config.environment.capabilities.vcsBranchStatus === true &&
+    session.vcsBranchTransportSupported !== false
+  ) {
     return yield* requestInSession(session, WS_METHODS.vcsRefreshBranch, input);
   }
   // Older hosts retain their existing status stream without adding per-row wake scans.

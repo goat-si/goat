@@ -1,5 +1,9 @@
+import { environmentEndpointUrl } from "../environment/endpoint.ts";
 import { openHubProxySocket } from "./hubProxySocket.ts";
-import { ExecutionEnvironmentDescriptor as DescriptorSchema } from "@goat/contracts";
+import {
+  ExecutionEnvironmentDescriptor as DescriptorSchema,
+  HUB_PROXY_VCS_BRANCH_HEADER,
+} from "@goat/contracts";
 import { HubProxyAuthSource } from "./hubProxyAuthSource.ts";
 import { requestHubProxyJson } from "./hubProxyHttp.ts";
 import type {
@@ -352,11 +356,18 @@ export const make = Effect.gen(function* () {
         detail: "Hub proxy authorization is unavailable on this client.",
       });
     const auth = yield* hubAuth.value.resolve(profile);
-    const descriptor = yield* requestHubProxyJson(
+    const descriptorPath = "/.well-known/goat/environment";
+    const { descriptor, relaySupportUrl } = yield* requestHubProxyJson(
       auth,
       profile.nodeId,
-      "/.well-known/goat/environment",
-      decodeHubDescriptor,
+      descriptorPath,
+      (input, { headers, url }) =>
+        decodeHubDescriptor(input).pipe(
+          Effect.map((descriptor) => ({
+            descriptor,
+            relaySupportUrl: headers[HUB_PROXY_VCS_BRANCH_HEADER] === "1" ? url : undefined,
+          })),
+        ),
     );
     if (descriptor.environmentId !== entry.target.environmentId)
       return yield* environmentMismatchError({
@@ -370,6 +381,8 @@ export const make = Effect.gen(function* () {
         environmentId: entry.target.environmentId,
         label: entry.target.label,
         target: entry.target,
+        hubVcsBranchSupported:
+          relaySupportUrl === environmentEndpointUrl(socket.httpBaseUrl, descriptorPath),
         ...socket,
       } satisfies PreparedConnection,
     };

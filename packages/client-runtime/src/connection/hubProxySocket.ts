@@ -77,7 +77,7 @@ export const openHubProxySocket = Effect.fn("HubProxy.openSocket")(function* (
       auth,
       nodeId,
       "/api/auth/websocket-ticket",
-      decodeTicket,
+      (input) => decodeTicket(input),
       "POST",
     );
     const socket = new URL(environmentEndpointUrl(base, "/ws"));

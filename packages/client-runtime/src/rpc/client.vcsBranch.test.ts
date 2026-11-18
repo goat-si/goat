@@ -121,3 +121,45 @@ it.effect("renegotiates the branch stream after reconnecting to an older server"
     yield* Fiber.interrupt(subscription);
   }).pipe(Effect.scoped),
 );
+
+it.effect.each([false, true])(
+  "uses branch RPCs only when the Hub supports them (%s)",
+  (relaySupported) =>
+    Effect.gen(function* () {
+      const { activeSession, supervisor } = yield* makeHarness();
+      const branchCalls: unknown[] = [];
+      const legacyCalls: unknown[] = [];
+      const client = {
+        [WS_METHODS.subscribeVcsBranch]: (input: unknown) => {
+          branchCalls.push(input);
+          return Stream.make({ refName: "branch", isRepo: true });
+        },
+        [WS_METHODS.vcsRefreshBranch]: (input: unknown) =>
+          Effect.sync(() => {
+            branchCalls.push(input);
+          }),
+        [WS_METHODS.subscribeVcsStatus]: (input: unknown) => {
+          legacyCalls.push(input);
+          return Stream.make({ _tag: "localUpdated", local: { refName: "branch", isRepo: true } });
+        },
+      } as unknown as WsRpcProtocolClient;
+      const proxiedSession = {
+        ...session(client),
+        vcsBranchTransportSupported: relaySupported,
+        initialConfig: Effect.succeed({
+          environment: { capabilities: { vcsBranchStatus: true } },
+        } as ServerConfig),
+      };
+      yield* SubscriptionRef.set(activeSession, Option.some(proxiedSession));
+      const provide = Effect.provideService(
+        EnvironmentSupervisor.EnvironmentSupervisor,
+        supervisor,
+      );
+      expect(yield* Stream.runHead(subscribeVcsBranch({ cwd: "/repo" })).pipe(provide)).toEqual(
+        Option.some({ refName: "branch", isRepo: true }),
+      );
+      yield* refreshVcsBranch({ cwd: "/repo" }).pipe(provide);
+      expect(branchCalls).toEqual(relaySupported ? [{ cwd: "/repo" }, { cwd: "/repo" }] : []);
+      expect(legacyCalls).toEqual(relaySupported ? [] : [{ cwd: "/repo", includeRemote: false }]);
+    }).pipe(Effect.scoped),
+);

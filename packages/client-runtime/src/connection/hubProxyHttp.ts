@@ -72,7 +72,13 @@ export const requestHubProxyJson = Effect.fn("HubProxy.requestJson")(function* <
   auth: HubProxyAuthorization,
   nodeId: string,
   route: string,
-  decode: (input: unknown) => Effect.Effect<A, E>,
+  decode: (
+    input: unknown,
+    metadata: {
+      readonly headers: HttpClientResponse.HttpClientResponse["headers"];
+      readonly url: string;
+    },
+  ) => Effect.Effect<A, E>,
   method: "GET" | "POST" = "GET",
 ) {
   return yield* Effect.gen(function* () {
@@ -117,7 +123,10 @@ export const requestHubProxyJson = Effect.fn("HubProxy.requestJson")(function* <
             if (unavailable !== undefined) return unavailable;
           }
           const ok = yield* HttpClientResponse.filterStatusOk(response);
-          return { _tag: "Value", value: yield* decode(yield* ok.json) } as const;
+          return {
+            _tag: "Value",
+            value: yield* decode(yield* ok.json, { headers: ok.headers, url: actualUrl }),
+          } as const;
         }),
       ).pipe((request) =>
         selected.authorization === null

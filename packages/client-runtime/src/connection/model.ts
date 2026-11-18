@@ -219,6 +219,7 @@ export interface PreparedConnection {
   readonly label: string;
   readonly httpBaseUrl: string;
   readonly socketUrl: string;
+  readonly hubVcsBranchSupported?: boolean;
   readonly httpAuthorization: PreparedHttpAuthorization | null;
   readonly target: ConnectionTarget;
 }
