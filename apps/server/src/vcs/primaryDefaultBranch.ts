@@ -13,8 +13,24 @@ export function parseDefaultBranchFromRemoteHeadRef(
     return null;
   }
   const refName = trimmed.slice(prefix.length).trim();
-  return refName.length > 0 ? refName : null;
+  return refName.length > 0 && refName !== "HEAD" ? refName : null;
 }
+
+/** Unlike `symbolic-ref`, this fails when the remote deleted the branch its HEAD points at. */
+export const remoteHeadRefArgs = (remote: string) => [
+  "rev-parse",
+  "--verify",
+  "--quiet",
+  "--symbolic-full-name",
+  `refs/remotes/${remote}/HEAD`,
+];
+
+/** `<remote>/HEAD` is the remote's default-branch pointer, not a branch it can serve. */
+export const servedRemoteBranch = <T extends { remoteName: string; branchName: string }>(
+  remoteNames: ReadonlyArray<string>,
+  target: T,
+): T | null =>
+  remoteNames.includes(target.remoteName) && target.branchName !== "HEAD" ? target : null;
 
 export const resolvePrimaryDefaultBranch = Effect.fn("GitVcsDriver.resolvePrimaryDefaultBranch")(
   function* (
@@ -31,8 +47,10 @@ export const resolvePrimaryDefaultBranch = Effect.fn("GitVcsDriver.resolvePrimar
       run(
         "GitVcsDriver.resolveDefaultBranchName",
         cwd,
-        [...gitDirArgs, "symbolic-ref", `refs/remotes/${remote}/HEAD`],
-        { allowNonZeroExit: true },
+        [...gitDirArgs, ...remoteHeadRefArgs(remote)],
+        {
+          allowNonZeroExit: true,
+        },
       ).pipe(
         Effect.map((result) =>
           result.exitCode === 0 ? parseDefaultBranchFromRemoteHeadRef(result.stdout, remote) : null,
