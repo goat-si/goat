@@ -1,6 +1,5 @@
 import { expect, it } from "@effect/vitest";
 import {
-  BUILTIN_PERMISSION_PROFILES,
   EnvironmentAuthorizationError,
   EnvironmentId,
   ProviderInstanceId,
@@ -59,6 +58,16 @@ it.effect("points a live caller allowed to reach linked hosts to the host argume
       },
     };
     for (const allowed of [true, false]) {
+      const profile = {
+        enabled: true,
+        profile: {
+          id: "linked-host-test",
+          capabilities: allowed ? ["threads.remote"] : [],
+          runtimeModeCeiling: "full-access",
+          maxLanes: 1,
+        },
+        runtimeMode: "full-access",
+      } satisfies Profiles.EffectiveProfile;
       const error = yield* readThread(bareId).pipe(
         Effect.flip,
         Effect.provideService(McpInvocationContext.McpInvocationContext, scope),
@@ -68,19 +77,8 @@ it.effect("points a live caller allowed to reach linked hosts to the host argume
               getThreadShell: (id) => Effect.succeed(id === caller.id ? caller : null),
             }),
             Layer.mock(Profiles.PermissionProfiles)({
-              check: () =>
-                Effect.succeed(
-                  allowed
-                    ? {
-                        ok: true,
-                        effective: {
-                          enabled: false,
-                          profile: BUILTIN_PERMISSION_PROFILES.owner,
-                          runtimeMode: "full-access",
-                        },
-                      }
-                    : { ok: false, reason: "Remote work is denied." },
-                ),
+              check: (_scope, capability) =>
+                Effect.succeed(Profiles.checkProfile(profile, capability, {})),
             }),
           ),
         ),
