@@ -1629,3 +1629,14 @@ The title completion's public fields match `877920d3c3^` by direct comparison. T
 - Earlier receipts: the first gate reported TS2345 on the new resend fixture and was stopped through its own terminal session (exit 130). The resend commit now pins the fixture's phase literal. The next gate exited 1 with 483/484 files and 9,701/9,702 tests passing. Its sole failure was the existing effect-worker assertion for an initial title generation completion. The title commit now uses the legacy completion for initial generation and the internal outcome command for explicit regeneration. The guarded effect-worker suite and the final changed-files gate both passed.
 
 NOT RUN: hosted CI, fresh independent review of this delta, repo-wide suites, full builds and release smoke, integrated web/desktop/mobile UI and older-binary passes, live GOAT Connect relay, and the slow-link terminal attach measurement.
+
+
+## 2026-11-18 11:44:27 UTC — K7 review nits, READY
+
+K7 fast-forward pushed `chase/t3-261114-next3-k7-client-protocol` at `a06cde6d78c7c1efeddf464e34b2352bb86903ab`, two commits directly after `a8751d4e4560ff108f09b8c5fba5b853b0d2d340`. No integration merge was made in the lane.
+
+- P3-1 (`f50c4d9d78685a9ecdac901c8941f5ffe50cb11d`). Both resend deadline calculations in `dispatch.ts` use `Clock.monotonicTimeNanos`. The extended TestClock case rewinds wall time just before reconnect. It exited 1 on the base because the resend stayed pending at ten minutes. The whole `vp test run packages/client-runtime/src/operations/dispatch.socketLoss.test.ts` passed afterward (exit 0, one file, 11 tests).
+- P3-2 (`a06cde6d78c7c1efeddf464e34b2352bb86903ab`). The `orchestrationV2.ts` cap dropped from 4,382 to 4,381, verified against `countLines`.
+- `vp run check:changed origin/chase/t3-261114-next3` exited 0 on Node 26.12.1. Integration ref `6def29ca359f546e50dcd731a6364e3f0d575545`, merge base `2c0e0002a996ec5d46c708919be5a43f579176fa`. Rename, format, lint, both Knip passes, GraphQL, agent-surface audit, agent context budget, typecheck (42 packages), and Vitest (484 files, 9,702 tests, zero failures or skips) passed. The gate skipped the unused-patch check because no dependency files changed.
+
+NOT RUN: hosted CI, independent review of the nits, repo-wide suites, full builds and release smoke, real-client and older-binary runs.
