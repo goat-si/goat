@@ -12,13 +12,12 @@ import {
   getProviderOptionCurrentValue,
   getProviderOptionDescriptors,
   isClaudeUltrathinkPrompt,
-  normalizeModelSlug,
   withImplicitFastModeDefault,
 } from "@goat/shared/model";
 import type { ReactNode } from "react";
 
 import type { DraftId } from "../../composerDraftStore";
-import { getProviderModelCapabilities } from "../../providerModels";
+import { getProviderModelCapabilities, keepsUnavailableModelOptions } from "../../providerModels";
 import type { ComposerControlSize } from "./ComposerControl";
 import {
   getReasoningTraitStep,
@@ -94,20 +93,16 @@ export function getComposerProviderState(input: ComposerProviderStateInput): Com
     promptInjectionState = "none",
     planModeEnabled,
   } = input;
-  if (provider === "opencode" || provider === "cursor") {
-    const normalizedModel = normalizeModelSlug(model, provider);
-    const modelIsInCatalog = models.some((candidate) => candidate.slug === normalizedModel);
-    if (!modelIsInCatalog) {
-      const preservedOptions = modelOptions?.filter(
-        (option) => planModeEnabled || option.id !== "agent" || option.value !== "plan",
-      );
-      return {
-        provider,
-        promptEffort: null,
-        modelOptionsForDispatch:
-          preservedOptions && preservedOptions.length > 0 ? preservedOptions : undefined,
-      };
-    }
+  if (keepsUnavailableModelOptions(provider, model, models)) {
+    const preservedOptions = modelOptions?.filter(
+      (option) => planModeEnabled || option.id !== "agent" || option.value !== "plan",
+    );
+    return {
+      provider,
+      promptEffort: null,
+      modelOptionsForDispatch:
+        preservedOptions && preservedOptions.length > 0 ? preservedOptions : undefined,
+    };
   }
   const { caps, selections } = resolveComposerOptionSelections(
     models,

@@ -183,4 +183,11 @@ describe("thread link scan cache", () => {
     const short = "[a](goat-thread://v1/a) and [b](goat-thread://v1/b)";
     expect(threadLinkIds(short)).toBe(threadLinkIds(short));
   });
+
+  it("scans a message over the bound once while it stays the latest long one", () => {
+    const long = `[big](goat-thread://v1/big) ${"x".repeat(200_001)}`;
+    expect(threadLinkIds(long)).toEqual([ThreadId.make("big")]);
+    expect(threadLinkIds(long)).toBe(threadLinkIds(long));
+    expect(threadLinkIdsCacheCharacters()).toBeLessThanOrEqual(200_000);
+  });
 });
