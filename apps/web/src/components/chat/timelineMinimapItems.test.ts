@@ -122,3 +122,38 @@ it.each([
   expect(preview?.userText).toHaveLength(1_500);
   expect(preview?.userText).toBe(`${prefix}${text} Comment: ${comment}`.slice(0, 1_500));
 });
+
+it.each([
+  {
+    field: "quote",
+    text: `${"x".repeat(1_499)}😀`,
+    comment: undefined,
+    expected: "x".repeat(1_499),
+  },
+  {
+    field: "comment",
+    text: "x",
+    comment: `${"y".repeat(1_488)}😀`,
+    expected: `x Comment: ${"y".repeat(1_488)}`,
+  },
+])("keeps the citation $field cutoff out of a surrogate pair", ({ text, comment, expected }) => {
+  const quote = serializeAssistantCitation({
+    version: 1,
+    environmentId: EnvironmentId.make("env"),
+    threadId: ThreadId.make("thread"),
+    messageId: MessageId.make("message"),
+    text,
+    start: 0,
+    end: text.length,
+    prefix: "",
+    suffix: "",
+    ...(comment === undefined ? {} : { comment }),
+  });
+  const preview = resolveTimelineMinimapPreview({
+    id: "turn",
+    rowIndex: 0,
+    userText: quote,
+    assistantText: null,
+  });
+  expect(preview?.userText).toBe(expected);
+});

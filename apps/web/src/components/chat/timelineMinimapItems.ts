@@ -116,13 +116,18 @@ function markdownMinimapPreview(markdown: string | null) {
     : markdownPlainText(markdown.slice(0, MINIMAP_PREFIX_LENGTH)) || null;
 }
 
+function sliceCitationText(text: string, limit: number): string {
+  const lastCodePoint = text.codePointAt(limit - 1) ?? 0;
+  return text.slice(0, lastCodePoint > 0xffff ? limit - 1 : limit);
+}
+
 function citationPreviewLabel(citation: AssistantCitation, limit: number): string {
-  const quote = citation.text.slice(0, limit);
+  const quote = sliceCitationText(citation.text, limit);
   const commentPrefix = " Comment: ";
   const remaining = limit - quote.length - commentPrefix.length;
   return citation.comment === undefined || remaining <= 0
     ? quote
-    : quote + commentPrefix + citation.comment.slice(0, remaining);
+    : quote + commentPrefix + sliceCitationText(citation.comment, remaining);
 }
 
 function expandUserPreviewTokens(markdown: string) {
