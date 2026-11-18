@@ -957,12 +957,23 @@ it.effect.each(["new", "backfilled"] as const)(
         yield* receive(0, initial);
         const after = yield* store.readCursor(space, hubEnv);
         const tail = yield* pullForMember(after, 0);
+        const originPage = tail.originPage;
         assert.deepStrictEqual(
-          tail.originPage?.updates.map(({ memoryId }) => memoryId),
+          originPage?.updates.map(({ memoryId }) => memoryId),
           [exact.memoryId],
         );
-        assert.isFalse(tail.originPage?.hasMore);
+        assert.isFalse(originPage?.hasMore);
+        if (!originPage) throw new Error("Expected catch-up alongside the ordinary tail");
+        if (scenario === "backfilled") {
+          yield* receive(after, {
+            ...tail,
+            originPage: { ...originPage, throughSequence: originPage.throughSequence + 1 },
+          });
+          assert.equal(yield* store.readCursor(space, hubEnv), tail.throughSequence);
+          assert.equal(yield* store.readOriginCursor(space, hubEnv), 0);
+        }
         yield* receive(after, tail);
+        assert.equal(yield* store.readOriginCursor(space, hubEnv), originPage.throughSequence);
         assert.propertyVal(
           (yield* store.loadAggregate(space, victim.memoryId)).tombstone,
           "memoryId",
