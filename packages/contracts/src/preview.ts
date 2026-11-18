@@ -217,6 +217,7 @@ export const PreviewAdjustInput = Schema.Struct({
   tabId: PreviewTabId,
   colorScheme: Schema.optional(PreviewAppearancePreference),
   zoomFactor: Schema.optional(PreviewZoomFactor),
+  stopLoading: Schema.optionalKey(Schema.Literal(true)),
   hardReload: Schema.optional(Schema.Boolean),
   clear: Schema.optional(Schema.Literals(["cookies", "cache"])),
 });
@@ -383,9 +384,19 @@ export class PreviewClearProfileError extends Schema.TaggedError<PreviewClearPro
   }
 }
 
+export class PreviewStopLoadingError extends Schema.TaggedError<PreviewStopLoadingError>()(
+  "PreviewStopLoadingError",
+  { tabId: Schema.String, cause: Schema.Defect() },
+) {
+  override get message() {
+    return "The server browser could not stop the page from loading.";
+  }
+}
+
 export const PreviewError = Schema.Union([
   PreviewSessionLookupError,
   PreviewInvalidUrlError,
   PreviewControlRequiredError,
+  PreviewStopLoadingError,
 ]);
 export type PreviewError = typeof PreviewError.Type;

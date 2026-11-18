@@ -340,7 +340,7 @@ function CloudMachineRow({
       const target = await bridge.resolveSshHost(machine.alias);
       if (submission.current !== submissionId) return;
       const result = await connectSshEnvironment({
-        target,
+        target: { ...target, port: null },
         label: machine.label,
         onPreparationProgress: (progress) =>
           Effect.sync(() => {

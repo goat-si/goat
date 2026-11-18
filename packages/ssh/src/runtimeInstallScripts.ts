@@ -97,18 +97,23 @@ export function remoteUploadCommand(
   script: string,
   archive: Uint8Array,
   platform: "darwin" | "linux" | "win32",
+  stdinSuffix?: Uint8Array,
 ): {
   readonly remoteCommandArgs: ReadonlyArray<string>;
   readonly stdin: Uint8Array;
+  readonly stdinSuffix?: Uint8Array;
   readonly archiveOffset: number;
   readonly archiveLength: number;
 } {
+  const archiveLength = archive.byteLength + (stdinSuffix?.byteLength ?? 0);
+  const suffix = stdinSuffix === undefined ? {} : { stdinSuffix };
   if (platform !== "win32") {
     return {
       remoteCommandArgs: ["sh", "-c", shellSingleQuote(script)],
       stdin: archive,
       archiveOffset: 0,
-      archiveLength: archive.byteLength,
+      archiveLength,
+      ...suffix,
     };
   }
   const scriptBytes = new TextEncoder().encode(script);
@@ -120,7 +125,8 @@ export function remoteUploadCommand(
     remoteCommandArgs: ["sh", "-c", shellSingleQuote(bootstrap)],
     stdin,
     archiveOffset: scriptBytes.byteLength,
-    archiveLength: archive.byteLength,
+    archiveLength,
+    ...suffix,
   };
 }
 

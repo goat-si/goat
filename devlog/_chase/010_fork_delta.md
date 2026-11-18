@@ -218,6 +218,12 @@ G13 `goat-copy`, G14 `launch-watch`.
 - 경로: `apps/web/src/components/files/officeArchiveWorkbook.ts`, `apps/web/src/components/files/officeArchiveXml.ts`, `apps/web/src/components/files/AttachmentFilePreview.spreadsheet.browser.test.tsx`
 - 정책: upstream 코드를 그대로 옮긴 GOAT 파일이다. `officeArchive.ts`가 1211줄 예산에 닿아 `boundedWorksheet`·`boundWorkbook`(upstream c8e8b58ee6 이후 `engineStyles` 포함)은 `officeArchiveWorkbook.ts`로, 두 파일이 같이 쓰는 `xmlParser`·`officeXmlDecoder`·`officeXml`은 `officeArchiveXml.ts`로 옮겼다. 스프레드시트 미리보기 테스트 다섯 묶음은 `AttachmentFilePreview.spreadsheet.browser.test.tsx`에 있다. upstream이 `officeArchive.ts`의 스프레드시트 부분이나 XML 도우미를 바꾸면 그 hunk를 이 파일들에 옮겨 적용한다. Word 부분은 `officeArchive.ts`에 남아 그대로 머지된다. upstream `fcc25c8bb2`는 Office 테스트 전부를 `AttachmentFilePreview.office.browser.test.tsx`로 나눴지만 GOAT는 받지 않았다(#3176). 그 파일에 들어가는 스프레드시트 테스트 hunk는 GOAT의 spreadsheet 파일로, 나머지 Office 테스트 hunk는 `AttachmentFilePreview.browser.test.tsx`로 옮긴다.
 
+### `opencode-legacy-lifecycle` OpenCode 1.x 백그라운드 턴과 자식 권한
+
+- 커밋: #3700
+- 경로: `packages/provider-opencode/src/server/{adapter,backgroundTurns,permissionRules,permissionSync}.ts`, `apps/server/src/orchestration-v2/ProviderContinuationService.ts`
+- 정책: upstream #36887의 OpenCode 1.x SSE 재생은 GOAT의 `ProviderContinuationRequests`로 연결한다. 기존 실행을 이어받을 때 새 native prompt를 보내지 않으며 재생 시한이 지나도 이미 시작한 턴의 종료 이벤트는 발행한다. #35401의 전체 접근 규칙은 자식이 상속할 `external_directory` 허용을 명시한다. 자식 세션의 `goatPermissionBase`는 다음 prompt를 보내기 전에 현재 정책으로 교체하고 native deny는 보존한다. 재시작 후에도 자식 권한을 갱신한다. Stop에서 루트 abort가 실패한 경우와 자식 정리만 실패한 경우를 구분한다. 후자의 경우 U12가 추적하는 자식을 자체 종료 증거가 올 때까지 실행 중으로 둔다.
+
 ### `orchestrator-goat-modules` Orchestrator의 GOAT 명령 모듈
 
 - 커밋: #808 #809 #811 #813 #814 #815 #870 #874 #892

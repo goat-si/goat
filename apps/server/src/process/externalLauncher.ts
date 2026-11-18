@@ -1,3 +1,4 @@
+import { expandHomePath } from "@goat/provider-core/server/pathExpansion";
 import * as NodePath from "@effect/platform-node/NodePath";
 import {
   EDITORS,
@@ -533,16 +534,31 @@ const resolveEditorLaunch = Effect.fn("resolveEditorLaunch")(function* (
     return yield* new ExternalLauncherUnsupportedEditorError({ editor: input.editor });
   }
 
+  let target = expandHomePath(input.cwd, yield* HostProcess.HomeDirectory);
   if (input.reveal === true) {
-    return yield* resolveFileManagerRevealLaunch(input.cwd, platform, env, command);
+    return yield* resolveFileManagerRevealLaunch(target, platform, env, command);
+  }
+  if (platform === "darwin" && target.endsWith(".app")) {
+    const path = yield* Path.Path;
+    const fs = yield* FileSystem.FileSystem;
+    const invalid = new ExternalLauncherUnsupportedTargetError({
+      editor: editorDef.id,
+      reason: "invalid-app-bundle",
+    });
+    if (!path.isAbsolute(target)) return yield* invalid;
+    const canonical = yield* fs.realPath(target).pipe(Effect.mapError(() => invalid));
+    if (!path.isAbsolute(canonical) || !canonical.endsWith(".app")) return yield* invalid;
+    const stat = yield* fs.stat(canonical).pipe(Effect.mapError(() => invalid));
+    if (stat.type !== "Directory") return yield* invalid;
+    target = canonical;
   }
 
   if (platform === "win32") {
     // ShellExecute honours replacement folder handlers that explorer.exe bypasses.
     return {
       ...powerShellFileManagerLaunch(
-        input.cwd,
-        `Invoke-Item -LiteralPath ${escapePowerShellStringLiteral(normalizeWindowsFileManagerPath(input.cwd))}`,
+        target,
+        `Invoke-Item -LiteralPath ${escapePowerShellStringLiteral(normalizeWindowsFileManagerPath(target))}`,
         resolvePowerShellPath(env),
       ),
       detached: WINDOWS_POWERSHELL_DETACHED,
@@ -551,12 +567,12 @@ const resolveEditorLaunch = Effect.fn("resolveEditorLaunch")(function* (
 
   return {
     editor: editorDef.id,
-    target: input.cwd,
+    target,
     command,
     args:
       command === "explorer.exe" && env.WSL_DISTRO_NAME !== undefined
-        ? [resolveWslFileManagerPath(input.cwd, env.WSL_DISTRO_NAME)]
-        : [input.cwd],
+        ? [resolveWslFileManagerPath(target, env.WSL_DISTRO_NAME)]
+        : [target],
   };
 });
 

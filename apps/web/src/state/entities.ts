@@ -353,12 +353,12 @@ export function useEnvironmentSupportsServerBrowser(environmentId: EnvironmentId
   );
 }
 
-/** Server browser viewers can stop a loading page; older servers ignore the request. */
-export function useEnvironmentSupportsServerBrowserStop(environmentId: EnvironmentId): boolean {
-  return (
-    useServerConfigs().get(environmentId)?.environment.capabilities.serverBrowserStopLoading ===
-    true
-  );
+export function useEnvironmentSupportsServerBrowserStop(environmentId: EnvironmentId) {
+  const capabilities = useServerConfigs().get(environmentId)?.environment.capabilities;
+  return {
+    stream: capabilities?.serverBrowserStopLoading === true,
+    native: capabilities?.nativeServerBrowserStopLoading === true,
+  };
 }
 
 export function readEnvironmentSupportsServerBrowser(environmentId: EnvironmentId): boolean {
