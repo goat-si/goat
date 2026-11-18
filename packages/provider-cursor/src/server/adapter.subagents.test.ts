@@ -540,3 +540,50 @@ it.effect(
       ),
     ),
 );
+
+it.effect("extends a closed partial assistant step on the same child item and message", () =>
+  Effect.gen(function* () {
+    const { events, childThreadId } = yield* runCursorTaskTurn(
+      [
+        { type: "text-delta", text: "Saved ans" },
+        { type: "step-completed", stepId: 1, stepDurationMs: 1 },
+      ],
+      [{ assistantMessage: { text: "Saved answer." } }],
+    );
+    const items = events.flatMap((event) =>
+      event.type === "turn_item.updated" &&
+      event.turnItem.threadId === childThreadId &&
+      event.turnItem.type === "assistant_message"
+        ? [event.turnItem]
+        : [],
+    );
+    const live = items.find((item) => item.streaming);
+    assert.isDefined(live);
+    assert.deepEqual(
+      [...new Map(items.map((item) => [item.id, item])).values()].map((item) => [
+        item.id,
+        item.text,
+      ]),
+      [[live.id, "Saved answer."]],
+    );
+    const messages = events.flatMap((event) =>
+      event.type === "message.updated" &&
+      event.message.threadId === childThreadId &&
+      event.message.role === "assistant"
+        ? [event.message]
+        : [],
+    );
+    assert.deepEqual(
+      [...new Map(messages.map((message) => [message.id, message])).values()].map((message) => [
+        message.id,
+        message.text,
+      ]),
+      [[live.messageId, "Saved answer."]],
+    );
+  }).pipe(
+    Effect.scoped,
+    Effect.provide(
+      Layer.mergeAll(NodeServices.layer, IdAllocator.layer, McpProviderSessions.layer),
+    ),
+  ),
+);
