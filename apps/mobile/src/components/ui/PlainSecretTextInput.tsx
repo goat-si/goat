@@ -6,8 +6,10 @@ import type { SecretTextInputProps } from "./SecretTextInput.types";
 import { useSecretReveal } from "./useSecretReveal";
 
 /** Masked field for a value that must stay out of password managers and suggestions. */
-export function PlainSecretTextInput(props: SecretTextInputProps) {
-  const [revealed, toggleRevealed] = useSecretReveal(props.editable);
+export function PlainSecretTextInput(
+  props: SecretTextInputProps & { readonly maskOnWindowBlur?: boolean },
+) {
+  const [revealed, toggleRevealed] = useSecretReveal(props.editable, props.maskOnWindowBlur);
   return (
     <View className="justify-center">
       <AppTextInput

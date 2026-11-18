@@ -25,6 +25,7 @@ const reactTests = [
   "src/features/threads/ThreadWorkspaceBanner.refresh.test.tsx",
   "src/features/threads/SecretRequestCard.test.tsx",
   "src/features/threads/SecretRequestCard.reveal.test.tsx",
+  "src/features/threads/SecretRequestCard.android.test.tsx",
   "src/components/ui/SecretTextInput.android.test.tsx",
   "src/features/threads/work-shimmer-arbiter.test.tsx",
   "src/features/threads/ComposerSlot.test.tsx",

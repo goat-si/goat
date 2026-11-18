@@ -53,8 +53,8 @@ export function SecretTextInput(props: SecretTextInputProps) {
   const surface = theme["--color-input"];
   // Sizes in dp: scaled here as the plain field's text scales with the system font size.
   const { fontScale } = useWindowDimensions();
-  const [revealed, toggleRevealed] = useSecretReveal(props.editable);
-  if (NativeSecretInput === null) return <PlainSecretTextInput {...props} />;
+  const [revealed, toggleRevealed] = useSecretReveal(props.editable, true);
+  if (NativeSecretInput === null) return <PlainSecretTextInput {...props} maskOnWindowBlur />;
   return (
     <View className="min-h-13.5 flex-row items-center gap-1 rounded-2xl border border-input-border bg-input pr-1.5 pl-3.5">
       <NativeSecretInput

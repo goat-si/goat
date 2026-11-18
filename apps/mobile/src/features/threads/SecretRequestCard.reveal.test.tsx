@@ -162,17 +162,6 @@ it("masks a revealed secret when the app leaves the foreground", async () => {
   }
 });
 
-it("masks a revealed secret when the window loses focus to the app switcher", async () => {
-  // Android keeps the app resumed while its recents view shows it, so only blur arrives.
-  const { root, field } = await renderRevealed();
-  try {
-    await act(() => state.blur.forEach((listener) => listener()));
-    expect(field().type).toBe("password");
-  } finally {
-    act(() => root.unmount());
-  }
-});
-
 it("reveals and masks on iOS, which has no window focus events", async () => {
   const { root, field } = await renderRevealed("ios");
   try {
