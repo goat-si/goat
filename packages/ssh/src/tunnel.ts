@@ -1,3 +1,4 @@
+import { SHARED_HOME_UPDATE_WAIT } from "./sharedHomeUpdateWait.ts";
 import {
   EXACT_ARCHIVE_VERSION,
   SshInvalidArchiveVersionError,
@@ -29,7 +30,6 @@ import type {
   SshRuntimePhase,
 } from "@goat/contracts";
 import {
-  SshRuntimePendingReplacementSchema,
   ORCHESTRATION_PROTOCOL_VERSION,
   RUNTIME_DRAIN_DEFAULT_GRACE_SECONDS,
   RUNTIME_DRAIN_MAX_GRACE_SECONDS,
@@ -41,7 +41,6 @@ import { cliReleaseDownloadBaseUrl } from "@goat/shared/cliRelease";
 import * as KeyedLock from "@goat/shared/KeyedLock";
 import * as NetService from "@goat/shared/Net";
 import * as HostProcess from "@goat/shared/HostProcess";
-import { fromLenientJson } from "@goat/shared/schemaJson";
 import { compareRuntimeBuilds } from "@goat/shared/semver";
 import * as Option from "effect/Option";
 import * as Clock from "effect/Clock";
@@ -54,7 +53,6 @@ import * as Fiber from "effect/Fiber";
 import * as FileSystem from "effect/FileSystem";
 import * as Layer from "effect/Layer";
 import * as Path from "effect/Path";
-import * as Schema from "effect/Schema";
 import * as Scope from "effect/Scope";
 import * as Stream from "effect/Stream";
 import { HttpClient } from "effect/http";
@@ -111,6 +109,8 @@ import {
   type RemoteGoatRunnerOptions,
   type SshRuntimeProgressCallback,
 } from "./remoteRuntime.ts";
+import { buildRemoteContendedOutput, decodeRemoteLaunchOutput } from "./remoteLaunchResult.ts";
+import { remoteLoginLaunchArgs } from "./remoteLoginShell.ts";
 import { REMOTE_PROTOCOL_TOKEN_SCRIPT, REMOTE_RUNNER_HINT_SCRIPT } from "./runtimeFactsScripts.ts";
 import { buildRemoteStopScript } from "./remoteStopScript.ts";
 export { buildRemoteStopScript };
@@ -395,35 +395,9 @@ export interface SshEnvironmentManagerShape
   >;
 }
 
-const RemoteLaunchResult = Schema.Union([
-  Schema.Struct({
-    status: Schema.Literal("ready"),
-    remotePort: Schema.Int.check(Schema.isBetween({ minimum: 1, maximum: 65535 })),
-    serverKind: Schema.optionalKey(Schema.Literals(["external", "managed"])),
-    selectedVersion: Schema.String,
-    refresh: Schema.optionalKey(Schema.Literal("replaced")),
-    pending: Schema.optionalKey(SshRuntimePendingReplacementSchema),
-  }),
-  Schema.Struct({ status: Schema.Literal("pending"), pending: SshRuntimePendingReplacementSchema }),
-]);
-
-const decodeRemoteLaunchResult = Schema.decodeEffect(fromLenientJson(RemoteLaunchResult));
-
-const decodeRemoteLaunchOutput = (stdout: string) =>
-  decodeRemoteJsonOutput(stdout, decodeRemoteLaunchResult);
-
 function normalizeSshErrorMessage(stderr: string, fallbackMessage: string): string {
   const cleaned = stderr.trim();
   return cleaned.length > 0 ? cleaned : fallbackMessage;
-}
-
-function buildRemoteContendedOutput(
-  pending: Pick<SshRuntimePendingReplacement, "replacement" | "requestedVersion" | "liveVersion">,
-) {
-  const fields = JSON.stringify({ reason: "contended", ...pending }).slice(1, -1);
-  return `lock_pending_fields=${shellSingleQuote(fields)}
-if [ "$LOCK_DETAIL" = recovery-stale ]; then lock_pending_fields="$lock_pending_fields,"'"detail":"recovery-stale"'; fi
-printf '{"status":"pending","pending":{%s}}\\n' "$lock_pending_fields"`;
 }
 
 export { describeReadinessCause };
@@ -534,7 +508,7 @@ function probe() {
 `;
 
 const REMOTE_LAUNCH_SCRIPT = `set -eu
-cd "$HOME" 2>/dev/null || cd /
+@@GOAT_SHARED_HOME_UPDATE_WAIT@@cd "$HOME" 2>/dev/null || cd /
 @@GOAT_NODE_ENV_SCRIPT@@
 STATE_KEY="$1"
 STATE_DIR="$HOME/.goat/ssh-launch/$STATE_KEY"
@@ -788,7 +762,7 @@ while [ -z "$REMOTE_PORT" ]; do
     fi
     exit 1
   fi
-  recheck_selected_before_use
+@@GOAT_SHARED_HOME_UPDATE_RECHECK@@  recheck_selected_before_use
   if [ "$LIVE_STATUS" != none ]; then
     printf 'A server appeared before launch; reconnect without replacing it.\\n' >&2; exit 1
   fi
@@ -1025,8 +999,13 @@ export function buildRemoteLaunchScript(
   selection = requestedRuntime(input),
   reconnect = false,
   captureBaseline = false,
+  waitForDesktopUpdate = false,
 ): string {
   return applyScriptPlaceholders(REMOTE_LAUNCH_SCRIPT, {
+    GOAT_SHARED_HOME_UPDATE_WAIT: waitForDesktopUpdate
+      ? SHARED_HOME_UPDATE_WAIT + "goat_wait_shared_home_update\n"
+      : "",
+    GOAT_SHARED_HOME_UPDATE_RECHECK: waitForDesktopUpdate ? "  goat_wait_shared_home_update\n" : "",
     GOAT_ARCHIVE_MODE: isNodeScriptRunner(input) ? "0" : "1",
     GOAT_NODE_SCRIPT_PATH: shellSingleQuote(input?.nodeScriptPath?.trim() || ""),
     GOAT_OWNED_IDENTITY: REMOTE_OWNED_IDENTITY_SCRIPT,
@@ -1089,7 +1068,7 @@ export type {
 function buildReconnectProbeScript(selected: PreparedRemoteRuntime) {
   return `reconnect_probe() {
 sh -s -- "\${1:-}" <<'GOAT_RECONNECT_PROBE_SCRIPT'
-${buildRemoteRuntimeProbeScript(selected.requestedVersion ?? "", REMOTE_RUNTIME_STATE_KEY, false, true, selected.runner?.ownRuntimeVersion)}
+${buildRemoteRuntimeProbeScript(selected.requestedVersion ?? "", REMOTE_RUNTIME_STATE_KEY, false, true, selected.runner?.ownRuntimeVersion, false, true)}
 GOAT_RECONNECT_PROBE_SCRIPT
 }`;
 }
@@ -1154,7 +1133,7 @@ fi`
 }
 reconnect_launch() {
 sh -s -- "$1" "\${OWNER:-}" <<'GOAT_RECONNECT_LAUNCH_SCRIPT'
-${buildRemoteLaunchScript(selected.runner, expectedProbe === undefined ? selected : { ...selected, mayUpgradeOwnedServer: false }, expectedProbe !== undefined, expectedProbe === undefined)}
+${buildRemoteLaunchScript(selected.runner, expectedProbe === undefined ? selected : { ...selected, mayUpgradeOwnedServer: false }, expectedProbe !== undefined, expectedProbe === undefined, true)}
 GOAT_RECONNECT_LAUNCH_SCRIPT
 }
 ${
@@ -1162,7 +1141,7 @@ ${
     ? `if [ "$reconnect_successor" = 1 ]; then
 reconnect_launch() {
 sh -s -- "$1" "$OWNER" <<'GOAT_RECONNECT_SUCCESSOR_SCRIPT'
-${buildRemoteLaunchScript(successor.runner, successor, true)}
+${buildRemoteLaunchScript(successor.runner, successor, true, false, true)}
 GOAT_RECONNECT_SUCCESSOR_SCRIPT
 }
 fi`
@@ -1255,10 +1234,13 @@ export const launchOrReuseRemoteServer = Effect.fn("ssh/tunnel.launchOrReuseRemo
               }
             : selection;
           const command = runSshCommand(target, {
-            remoteCommandArgs: ["sh", "-l", "-s", "--", stateKey],
+            remoteCommandArgs:
+              selected.hostPlatform === "win32"
+                ? ["sh", "-l", "-s", "--", stateKey]
+                : remoteLoginLaunchArgs(stateKey),
             stdin:
               isNodeScriptRunner(selected.runner) || selected.hostPlatform === "win32"
-                ? buildRemoteLaunchScript(selected.runner, selected)
+                ? buildRemoteLaunchScript(selected.runner, selected, false, false, true)
                 : buildReconnectLaunchScript(selected, expectedProbe),
             timeoutStage: "runtime-launch",
             timeoutMs: isNodeScriptRunner(selected.runner)
@@ -3732,8 +3714,15 @@ const makeSshEnvironmentManager = Effect.fn("ssh/tunnel.SshEnvironmentManager.ma
     return yield* finishEnsureEnvironment(lease.value, ticket, requestOptions);
   });
 
-  const ensureEnvironment: SshEnvironmentManagerShape["ensureEnvironment"] = (...args) =>
-    withSshCost(Effect.scoped(ensureEnvironmentAttempt(...args)), "ssh.ensure.request.cost");
+  const ensureEnvironment: SshEnvironmentManagerShape["ensureEnvironment"] = (target, options) =>
+    withSshCost(
+      Effect.scoped(ensureEnvironmentAttempt(target, options)),
+      "ssh.ensure.request.cost",
+    ).pipe(
+      Effect.map((result) =>
+        "type" in result ? result : { ...result, target: { ...result.target, port: target.port } },
+      ),
+    );
 
   const revalidateTunnels = Effect.fn("ssh/tunnel.revalidateTunnels")(function* () {
     yield* Effect.forEach(

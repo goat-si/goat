@@ -29,6 +29,7 @@ const PREPARED_UPDATE_TTL = Duration.minutes(5);
 
 interface PreparedUpdate {
   readonly requestId: string;
+  readonly channel: DesktopUpdateState["channel"];
   readonly downloadedVersion: string;
   readonly status: "prepared" | "committing" | "failed";
   readonly failureReason?: string;
@@ -60,7 +61,11 @@ export const listen: Effect.Effect<
 
   const publishReport = (
     state: DesktopUpdateState,
-    terminal?: { readonly outcome: DesktopUpdateRemoteOutcome; readonly reason?: string },
+    terminal?: {
+      readonly outcome: DesktopUpdateRemoteOutcome;
+      readonly reason?: string;
+      readonly preparedRequestId?: string;
+    },
     explicitRequestId?: string,
   ): Effect.Effect<void> => {
     const reason = normalizeRemoteUpdateReason(terminal?.reason);
@@ -75,6 +80,9 @@ export const listen: Effect.Effect<
               ? { requestId: requestId.value }
               : {}),
           ...(terminal === undefined ? {} : { outcome: terminal.outcome }),
+          ...(terminal?.preparedRequestId === undefined
+            ? {}
+            : { preparedRequestId: terminal.preparedRequestId }),
           ...(reason ? { reason } : {}),
           state,
         }),
@@ -160,8 +168,21 @@ export const listen: Effect.Effect<
             : ([current, current] as const),
         );
         if (Option.isSome(prepared) && prepared.value.status !== "failed") {
+          const state = yield* updates.getState;
+          if (
+            prepared.value.status === "prepared" &&
+            prepared.value.channel === state.channel &&
+            state.downloadedVersion === prepared.value.downloadedVersion
+          ) {
+            yield* publishReport(
+              state,
+              { outcome: "ready-to-install", preparedRequestId: prepared.value.requestId },
+              request.requestId,
+            );
+            return;
+          }
           yield* publishReport(
-            yield* updates.getState,
+            state,
             {
               outcome: "failed",
               reason: "A prepared desktop update is already in progress.",
@@ -236,6 +257,7 @@ export const listen: Effect.Effect<
                 preparedUpdateRef,
                 Option.some({
                   requestId: request.requestId,
+                  channel: state.channel,
                   downloadedVersion: state.downloadedVersion,
                   status: "prepared",
                   expiresAt:

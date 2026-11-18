@@ -11,12 +11,14 @@ import { assert, it } from "@effect/vitest";
 import * as NodeServices from "@effect/platform-node/NodeServices";
 import { CheckpointId, ProviderInstanceId, ProviderSessionId, ThreadId } from "@goat/contracts";
 import * as Effect from "effect/Effect";
+import * as Exit from "effect/Exit";
 import * as Layer from "effect/Layer";
 import * as Schema from "effect/Schema";
 import * as TestProviderHost from "@goat/provider-testing/TestProviderHost";
 import * as OpenCodeRuntime from "./OpenCodeRuntime.ts";
 import * as IdAllocator from "@goat/provider-core/server/IdAllocator";
 import * as McpProviderSessions from "@goat/provider-core/server/McpProviderSessions";
+import * as Continuations from "@goat/provider-core/server/ProviderContinuationRequests";
 import { makeOpenCodeAdapterV2 } from "./adapter.ts";
 import {
   asyncEventStream,
@@ -216,6 +218,8 @@ it.live.each([true, false])("opens an authenticated OpenCode session (external=%
 it.effect.each([
   "idle",
   "stop",
+  "stop-abort-denied",
+  "stop-held-wake-abort-denied",
   "error-before-launch",
   "resume",
   "resume-busy-before-link",
@@ -243,6 +247,7 @@ it.effect.each([
     let promptId = "";
     const abortStarted = promiseGate<void>();
     const releaseAbort = promiseGate<void>();
+    const offers: Continuations.ProviderContinuationRequest[] = [];
     const harness = yield* makeOpenCodeRuntimeHarness("background-child", root, {
       event: { subscribe: async () => ({ stream: nativeEvents.stream }) },
       session: {
@@ -256,6 +261,12 @@ it.effect.each([
           return { data: true };
         },
         abort: async ({ sessionID }: { sessionID: string }) => {
+          if (
+            sessionID === child &&
+            (ending === "stop-abort-denied" || ending === "stop-held-wake-abort-denied")
+          ) {
+            throw new Error("OpenCode refused to abort the child");
+          }
           if (sessionID === child && ending === "stop") {
             abortStarted.resolve();
             await releaseAbort.promise;
@@ -266,7 +277,15 @@ it.effect.each([
           data: sessionID === root ? [{ id: child }] : [],
         }),
       },
-    });
+    }).pipe(
+      Effect.provideService(Continuations.ProviderContinuationRequests, {
+        offer: (request) =>
+          Effect.sync(() => {
+            offers.push(request);
+          }),
+        take: Effect.never,
+      }),
+    );
     const hasPendingBackgroundWork = harness.runtime.hasPendingBackgroundWork;
     if (hasPendingBackgroundWork === undefined) {
       return yield* Effect.die("OpenCode runtime must expose hasPendingBackgroundWork.");
@@ -457,6 +476,33 @@ it.effect.each([
       releaseAbort.resolve();
       yield* Fiber.join(stop);
     } else {
+      const heldWake = ending === "stop-held-wake-abort-denied";
+      if (heldWake) {
+        yield* push({
+          type: "message.updated",
+          properties: {
+            sessionID: root,
+            info: { id: "msg_held_wake", sessionID: root, role: "user", time: { created: 4 } },
+          },
+        });
+        yield* push(status(root, "busy"));
+        assert.lengthOf(offers, 1);
+      }
+      if ((ending === "stop-abort-denied" || heldWake) && rootTerminal !== undefined) {
+        const stopped = yield* Effect.exit(
+          harness.runtime.interruptTurn({
+            providerThread: harness.providerThread,
+            providerTurnId: rootTerminal.providerTurnId,
+            requestRuntimeRestart: true,
+          }),
+        );
+        assert.isTrue(Exit.isFailure(stopped));
+        assert.isTrue(yield* hasPendingBackgroundWork, "a refused abort leaves the child running");
+        if (heldWake) {
+          const current = yield* offers[0]!.dispatchIfCurrent!(Effect.void);
+          assert.isTrue(Option.isNone(current), "the acknowledged root abort discards the wake");
+        }
+      }
       if (ending === "overflow") {
         yield* push({
           type: "message.updated",

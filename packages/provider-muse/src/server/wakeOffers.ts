@@ -24,7 +24,9 @@ export const makeWakeOffers = Effect.fn("Muse.makeWakeOffers")(function* (
         yield* awaitSpace(request.threadId);
       } while (
         (yield* eventPermit.withPermit(
-          Effect.suspend(() => (isCurrent() ? requests.offer(request) : Effect.void)),
+          Effect.suspend((): Effect.Effect<void | "overflow"> =>
+            isCurrent() ? requests.offer(request) : Effect.void,
+          ),
         )) === "overflow"
       );
     }).pipe(Effect.interruptible, FiberMap.run(attempts, "wake"));

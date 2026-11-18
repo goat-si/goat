@@ -53,7 +53,7 @@ export function slideFonts(deck: PresentationHandle, fonts: FontFaceSet) {
 
     if (registered.has(key)) return;
 
-    const buffer = await loadFace(source).catch(() => undefined);
+    const buffer = await loadFace(source, "powerpoint").catch(() => undefined);
 
     if (!buffer) return;
 

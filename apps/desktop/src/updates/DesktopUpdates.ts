@@ -1,5 +1,5 @@
+import { makeUpdateRestartMarkers } from "./updateRestartMarkers.ts";
 import {
-  DESKTOP_UPDATE_RESTART_MARKER_FILE,
   DesktopUpdateChannelSchema,
   type DesktopUpdateActionResult,
   type DesktopUpdateChannel,
@@ -51,9 +51,14 @@ import {
 import {
   checkFailureMessage,
   DesktopUpdateCheckTimeoutError,
+  DesktopUpdateEventHandlingError,
+  DesktopUpdatePollerError,
+  DesktopUpdateUnexpectedActionError,
+  DesktopUpdaterReportedError,
   describeUpdateErrorCause,
   downloadFailureMessage,
   isAbandonedCheckFailure,
+  UPDATE_CHECK_SETTLE_WAIT,
   UPDATE_CHECK_TIMEOUT,
   UPDATE_CHECK_TIMEOUT_MINUTES,
 } from "./updateFailures.ts";
@@ -133,54 +138,6 @@ export class DesktopUpdateChannelPersistenceError extends Schema.TaggedError<Des
 ) {
   override get message(): string {
     return `Failed to persist the ${this.channel} desktop update channel.`;
-  }
-}
-
-export class DesktopUpdatePollerError extends Schema.TaggedError<DesktopUpdatePollerError>()(
-  "DesktopUpdatePollerError",
-  {
-    poller: Schema.Literals(["startup", "poll"]),
-    cause: Schema.Defect(),
-  },
-) {
-  override get message(): string {
-    return `Desktop update ${this.poller} poller failed.`;
-  }
-}
-
-export class DesktopUpdateEventHandlingError extends Schema.TaggedError<DesktopUpdateEventHandlingError>()(
-  "DesktopUpdateEventHandlingError",
-  {
-    event: Schema.Literals(["update-available", "download-progress", "update-downloaded"]),
-    cause: Schema.Defect(),
-  },
-) {
-  override get message(): string {
-    return `Failed to handle desktop update ${this.event} event.`;
-  }
-}
-
-export class DesktopUpdaterReportedError extends Schema.TaggedError<DesktopUpdaterReportedError>()(
-  "DesktopUpdaterReportedError",
-  {
-    operation: Schema.Literals(["check", "download", "install", "channel", "background"]),
-    cause: Schema.Defect(),
-  },
-) {
-  override get message(): string {
-    return `Desktop updater ${this.operation} operation reported an error.`;
-  }
-}
-
-export class DesktopUpdateUnexpectedActionError extends Schema.TaggedError<DesktopUpdateUnexpectedActionError>()(
-  "DesktopUpdateUnexpectedActionError",
-  {
-    action: Schema.Literals(["download", "install"]),
-    cause: Schema.Defect(),
-  },
-) {
-  override get message(): string {
-    return `Desktop update ${this.action} action failed unexpectedly.`;
   }
 }
 
@@ -413,6 +370,19 @@ export const make = Effect.gen(function* () {
       ),
     );
 
+  const admitAfterCheck = Effect.fn("desktop.updates.admitAfterCheck")(function* (
+    wait: Duration.Duration,
+    admit: Effect.Effect<"admitted" | "refused" | "wait-for-check">,
+  ) {
+    const completions = yield* PubSub.subscribe(finishedUpdateActions);
+    for (;;) {
+      const admission = yield* stateMutex.withPermits(1)(admit);
+      if (admission !== "wait-for-check") return admission;
+      const finished = yield* PubSub.take(completions).pipe(Effect.timeoutOption(wait));
+      if (Option.isNone(finished)) return "refused";
+    }
+  });
+
   const applyAutoUpdaterChannel = Effect.fn("desktop.updates.applyAutoUpdaterChannel")(function* (
     channel: DesktopUpdateChannel,
   ) {
@@ -478,14 +448,22 @@ export const make = Effect.gen(function* () {
           pendingRestartReason: null,
         }));
       }
-      const checkedAt = yield* currentIsoTimestamp;
-      yield* updateState((current) => ({
-        ...reduceDesktopUpdateStateOnCheckStart(current, checkedAt),
-        recoveryStatus:
-          current.pendingUpdate && !current.downloadedVersion && current.installPolicy !== "paused"
-            ? "restoring"
-            : current.recoveryStatus,
-      }));
+      const current = yield* Ref.get(updateStateRef);
+      if (
+        current.errorContext === "download" ||
+        (current.status !== "available" && current.status !== "downloaded")
+      ) {
+        const checkedAt = yield* currentIsoTimestamp;
+        yield* updateState((current) => ({
+          ...reduceDesktopUpdateStateOnCheckStart(current, checkedAt),
+          recoveryStatus:
+            current.pendingUpdate &&
+            !current.downloadedVersion &&
+            current.installPolicy !== "paused"
+              ? "restoring"
+              : current.recoveryStatus,
+        }));
+      }
       yield* logUpdaterInfo("checking for updates", { reason });
 
       const channel = (yield* Ref.get(updateStateRef)).channel;
@@ -550,42 +528,41 @@ export const make = Effect.gen(function* () {
   const downloadAvailableUpdate = Effect.fn("desktop.updates.downloadAvailableUpdate")(function* (
     automatic = false,
   ) {
-    const state = yield* Ref.get(updateStateRef);
-    if (!(yield* Ref.get(updaterConfiguredRef)) || state.status !== "available") {
-      return { accepted: false, completed: false };
-    }
-
-    const admitted = yield* stateMutex.withPermits(1)(
-      Effect.gen(function* () {
-        const current = yield* Ref.get(updateStateRef);
-        const settings = yield* desktopSettings.get;
-        if (
-          current.status !== "available" ||
-          current.availableVersion !== state.availableVersion ||
-          current.channel !== state.channel
-        )
-          return false;
-        if (
-          automatic &&
-          (settings.updateInstallPolicy === "paused" ||
-            current.installPolicy === "paused" ||
-            settings.updateChannel !== current.channel ||
-            (yield* Ref.get(desktopState.quitting)))
-        )
-          return false;
-        if (automatic) {
-          const generation = yield* Ref.get(availabilityGeneration);
-          if (generation === (yield* Ref.get(attemptedGeneration))) return false;
-          if (!(yield* tryStartUpdateAction("download"))) return false;
-        } else if (!(yield* tryStartUpdateAction("download"))) return false;
-        yield* Ref.set(attemptedGeneration, yield* Ref.get(availabilityGeneration));
-        return true;
-      }),
+    const admission = yield* Effect.scoped(
+      admitAfterCheck(
+        UPDATE_CHECK_SETTLE_WAIT,
+        Effect.gen(function* () {
+          const current = yield* Ref.get(updateStateRef);
+          const active = yield* Ref.get(activeUpdateActionRef);
+          if ((yield* Ref.get(desktopState.quitting)) || !(yield* Ref.get(updaterConfiguredRef))) {
+            return "refused" as const;
+          }
+          if (Option.isSome(active)) {
+            return !automatic && active.value === "check"
+              ? ("wait-for-check" as const)
+              : ("refused" as const);
+          }
+          if (current.status !== "available") return "refused" as const;
+          if (automatic) {
+            const settings = yield* desktopSettings.get;
+            if (
+              settings.updateInstallPolicy === "paused" ||
+              current.installPolicy === "paused" ||
+              settings.updateChannel !== current.channel ||
+              (yield* Ref.get(availabilityGeneration)) === (yield* Ref.get(attemptedGeneration))
+            ) {
+              return "refused" as const;
+            }
+          }
+          if (!(yield* tryStartUpdateAction("download"))) return "refused" as const;
+          yield* Ref.set(attemptedGeneration, yield* Ref.get(availabilityGeneration));
+          return "admitted" as const;
+        }),
+      ),
     );
-    if (!admitted) {
-      return { accepted: false, completed: false };
-    }
+    if (admission === "refused") return { accepted: false, completed: false };
 
+    const state = yield* Ref.get(updateStateRef);
     return yield* Effect.gen(function* () {
       yield* updateState((current) => reduceDesktopUpdateStateOnDownloadStart(current));
       yield* electronUpdater.setDisableDifferentialDownload(
@@ -641,24 +618,11 @@ export const make = Effect.gen(function* () {
     );
   });
 
-  const updateRestartMarkerDir = environment.path.join(environment.baseDir, "runtime");
-  const updateRestartMarkerPath = environment.path.join(
-    updateRestartMarkerDir,
-    DESKTOP_UPDATE_RESTART_MARKER_FILE,
-  );
-  const writeUpdateRestartMarker = fileSystem
-    .makeDirectory(updateRestartMarkerDir, { recursive: true })
-    .pipe(
-      Effect.andThen(fileSystem.writeFileString(updateRestartMarkerPath, "")),
-      Effect.catch((error) =>
-        logUpdaterWarning("Could not write the update restart marker.", { errorTag: error._tag }),
-      ),
-    );
-
-  // Failed or interrupted installs leave no replacement backend; later quits must release the tunnel.
-  const removeUpdateRestartMarker = fileSystem
-    .remove(updateRestartMarkerPath, { force: true })
-    .pipe(Effect.ignore);
+  const {
+    directory: updateRestartMarkerDir,
+    writeUpdateRestartMarker,
+    removeTunnelRestartMarker,
+  } = yield* makeUpdateRestartMarkers();
 
   const installRecordPath = environment.path.join(
     updateRestartMarkerDir,
@@ -708,7 +672,7 @@ export const make = Effect.gen(function* () {
       finishUpdateAction("install"),
       Ref.set(desktopState.quitting, false),
       Ref.set(installRunningBackendsRef, []),
-      removeUpdateRestartMarker,
+      removeTunnelRestartMarker,
       removeInstallRecord,
     ],
     { discard: true },
@@ -725,7 +689,7 @@ export const make = Effect.gen(function* () {
     if (!ownsRecovery) return;
 
     yield* Ref.set(desktopState.quitting, false);
-    yield* removeUpdateRestartMarker;
+    yield* removeTunnelRestartMarker;
     yield* removeInstallRecord;
     yield* Effect.gen(function* () {
       const runningInstances = yield* Ref.getAndSet(installRunningBackendsRef, []);
@@ -756,47 +720,36 @@ export const make = Effect.gen(function* () {
   ) =>
     Effect.scoped(
       Effect.gen(function* () {
-        const actionCompletions = yield* PubSub.subscribe(finishedUpdateActions);
-        let admission: "admitted" | "refused" | "wait-for-check" = "wait-for-check";
-        while (admission === "wait-for-check") {
-          admission = yield* stateMutex.withPermits(1)(
-            Effect.gen(function* () {
-              const state = yield* Ref.get(updateStateRef);
-              const activeAction = yield* Ref.get(activeUpdateActionRef);
-              const hasExpectedDownload =
-                state.downloadedVersion !== null &&
-                (expectedVersion === undefined || state.downloadedVersion === expectedVersion);
-              if (
-                (yield* Ref.get(desktopState.quitting)) ||
-                !(yield* Ref.get(updaterConfiguredRef)) ||
-                !hasExpectedDownload
-              )
-                return "refused" as const;
-              if (Option.isSome(activeAction)) {
-                return waitForCheck &&
-                  activeAction.value === "check" &&
-                  expectedVersion !== undefined
-                  ? ("wait-for-check" as const)
-                  : ("refused" as const);
-              }
-              const hasInstallableDownload =
-                state.status === "downloaded" ||
-                (state.status === "error" &&
-                  (state.errorContext === null || state.errorContext === "install"));
-              if (!hasInstallableDownload) return "refused" as const;
-              if (automaticAdmission && !(yield* automaticAdmission)) return "refused" as const;
-              return (yield* tryStartUpdateAction("install"))
-                ? ("admitted" as const)
+        const admission = yield* admitAfterCheck(
+          checkWait,
+          Effect.gen(function* () {
+            const state = yield* Ref.get(updateStateRef);
+            const activeAction = yield* Ref.get(activeUpdateActionRef);
+            const hasExpectedDownload =
+              state.downloadedVersion !== null &&
+              (expectedVersion === undefined || state.downloadedVersion === expectedVersion);
+            if (
+              (yield* Ref.get(desktopState.quitting)) ||
+              !(yield* Ref.get(updaterConfiguredRef)) ||
+              !hasExpectedDownload
+            )
+              return "refused" as const;
+            if (Option.isSome(activeAction)) {
+              return waitForCheck && activeAction.value === "check" && expectedVersion !== undefined
+                ? ("wait-for-check" as const)
                 : ("refused" as const);
-            }),
-          );
-          if (admission === "wait-for-check") {
-            const finishedAction = yield* PubSub.take(actionCompletions).pipe(
-              Effect.timeoutOption(checkWait),
-            );
-            if (Option.isNone(finishedAction)) admission = "refused";
-          }
-        }
+            }
+            const hasInstallableDownload =
+              state.status === "downloaded" ||
+              (state.status === "error" &&
+                (state.errorContext === null || state.errorContext === "install"));
+            if (!hasInstallableDownload) return "refused" as const;
+            if (automaticAdmission && !(yield* automaticAdmission)) return "refused" as const;
+            return (yield* tryStartUpdateAction("install"))
+              ? ("admitted" as const)
+              : ("refused" as const);
+          }),
+        );
         if (admission === "refused") return { accepted: false, completed: false, failed: false };
 
         yield* Ref.set(desktopState.quitting, true);
@@ -1063,6 +1016,12 @@ export const make = Effect.gen(function* () {
             yield* Ref.set(lastLoggedDownloadMilestoneRef, -1);
             return;
           }
+
+          if (
+            (state.status === "available" || state.status === "downloaded") &&
+            state.availableVersion === info.version
+          )
+            return;
 
           const checkedAt = yield* currentIsoTimestamp;
           const { releaseNotes, omittedReleaseCount } = normalizeDesktopUpdateReleaseNotes(

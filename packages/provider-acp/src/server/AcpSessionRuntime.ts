@@ -28,7 +28,7 @@ import * as Stream from "effect/Stream";
 import * as ChildProcess from "effect/process/ChildProcess";
 import * as ChildProcessSpawner from "effect/process/ChildProcessSpawner";
 import * as EffectAcpClient from "effect-acp/client";
-import { makeAcpRequestRunner } from "./AcpRequestDeadline.ts";
+import { completeAcpSessionLoad, makeAcpRequestRunner } from "./AcpRequestDeadline.ts";
 import * as EffectAcpErrors from "effect-acp/errors";
 import type * as EffectAcpSchema from "effect-acp/compat";
 import type * as EffectAcpProtocol from "effect-acp/protocol";
@@ -126,6 +126,7 @@ export interface AcpSessionRuntimeOptions {
   readonly cwd: string;
   readonly resumeSessionId?: string;
   readonly resumeMethod?: "load" | "resume";
+  readonly requireSessionLoadResponse?: true;
   readonly sessionLoadTimeout?: Duration.Input;
   readonly sessionLoadReplayIdleGap?: Duration.Input;
   readonly interruptPromptOnCancel?: boolean;
@@ -1563,7 +1564,7 @@ export const make = Effect.fn("AcpSessionRuntime.make")(function* (
     return nextState;
   });
 
-  const runLoadSessionWithReplayIdle = (
+  const runLoadSession = (
     loadPayload: EffectAcpSchema.LoadSessionRequest,
     initializeResult: EffectAcpSchema.InitializeResponse,
   ): Effect.Effect<EffectAcpSchema.LoadSessionResponse, EffectAcpErrors.AcpError> =>
@@ -1594,27 +1595,13 @@ export const make = Effect.fn("AcpSessionRuntime.make")(function* (
             status: "started",
           });
 
-          const idleFiber = yield* waitForSessionLoadReplayIdle({
-            gateRef: sessionLoadGateRef,
-          }).pipe(Effect.forkIn(runtimeScope));
-          const loaded = yield* Effect.raceFirst(
+          const loaded = yield* completeAcpSessionLoad(
             acp.agent.loadSession(loadPayload),
-            Fiber.join(idleFiber),
+            sessionLoadTimeout,
+            options.requireSessionLoadResponse
+              ? undefined
+              : waitForSessionLoadReplayIdle({ gateRef: sessionLoadGateRef }),
           ).pipe(
-            Effect.ensuring(Fiber.interrupt(idleFiber).pipe(Effect.ignore)),
-            Effect.timeoutOption(sessionLoadTimeout),
-            Effect.flatMap((result) =>
-              Effect.fromOption(
-                result,
-                () =>
-                  new EffectAcpErrors.AcpTransportError({
-                    operation: "call-rpc",
-                    method: "session/load",
-                    detail: "session/load timed out waiting for RPC response or replay idle gap",
-                    cause: undefined,
-                  }),
-              ),
-            ),
             Effect.tap((result) =>
               logRequest({
                 method: "session/load",
@@ -1832,7 +1819,7 @@ export const make = Effect.fn("AcpSessionRuntime.make")(function* (
             ...additionalDirectories,
             mcpServers: sessionMcpServers(initializeResult),
           } satisfies EffectAcpSchema.LoadSessionRequest;
-          sessionSetupResult = yield* runLoadSessionWithReplayIdle(loadPayload, initializeResult);
+          sessionSetupResult = yield* runLoadSession(loadPayload, initializeResult);
         } else if (initializeResult.agentCapabilities?.sessionCapabilities?.resume != null) {
           const resumePayload = {
             sessionId,
@@ -2076,7 +2063,7 @@ export const make = Effect.fn("AcpSessionRuntime.make")(function* (
             ...sessionSetupFields(started.initializeResult),
             mcpServers: sessionMcpServers(started.initializeResult, activationOptions),
           } satisfies EffectAcpSchema.LoadSessionRequest;
-          return runLoadSessionWithReplayIdle(requestPayload, started.initializeResult);
+          return runLoadSession(requestPayload, started.initializeResult);
         }),
         Effect.flatMap((response) => adoptSession(sessionId, response)),
       ),

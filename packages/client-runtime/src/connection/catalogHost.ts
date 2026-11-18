@@ -111,7 +111,7 @@ export const handleConnectionCatalogOperation = <E>(
         }
         const onboarding = yield* ConnectionOnboarding.ConnectionOnboarding;
         const environmentId = yield* onboarding.registerSsh({
-          target,
+          target: { ...target, port: null },
           keyOnly: true,
           addedBy: operation.addedBy,
           ...(operation.label === undefined ? {} : { label: operation.label }),

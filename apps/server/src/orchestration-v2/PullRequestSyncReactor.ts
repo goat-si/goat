@@ -1,5 +1,7 @@
 import {
   CommandId,
+  PullRequestOperationError,
+  PullRequestUnavailableError,
   isOrchestrationV2WorkActive,
   type OrchestrationV2DomainEvent,
   type OrchestrationV2StoredEvent,
@@ -47,6 +49,10 @@ import {
   isPullRequestSyncUnsettled as isUnsettled,
 } from "./pullRequestSyncFinal.ts";
 
+const isPullRequestUnavailable = Schema.is(PullRequestUnavailableError);
+const isPullRequestOperationError = Schema.is(PullRequestOperationError);
+
+const FAILED_READ_BACKOFF_MS = 60_000;
 const SLOW_SYNC_INTERVAL_MS = 15 * 60 * 1_000;
 // Every server polls every open linked pull request, and most of them sit untouched for days.
 // One nobody has updated for QUIET_AFTER_MS is read on the quiet cadence instead of each sweep;
@@ -377,12 +383,33 @@ export const make = Effect.gen(function* () {
   // linking dozens of pull requests) is read together and shares the summary batches.
   let requestedSweepQueued = false;
   const retryStacks = new Set<string>();
-  // Group keys the host answered not-found for; they are read on the slow cadence until found.
+  const failedReads = new Map<string, { retryAtMs: number; backoffMs: number }>();
+  // Missing or unavailable links use the slow cadence until the host answers.
   const missing = new Set<string>();
   // Pause per project and host because credentials are project-specific; leave paused PRs due until reset.
   const pausedUntil = new Map<string, number>();
 
+  const recordReadFailure = (key: string, error: unknown, nowMs: number) => {
+    if (
+      isPullRequestUnavailable(error) ||
+      (isPullRequestOperationError(error) && error.reason === "not-found")
+    ) {
+      missing.add(key);
+      lastSyncedAt.set(key, nowMs);
+      requested.delete(key);
+      failedReads.delete(key);
+      return;
+    }
+    const previous = failedReads.get(key);
+    const backoffMs =
+      previous === undefined
+        ? FAILED_READ_BACKOFF_MS
+        : Math.min(previous.backoffMs * 2, SLOW_SYNC_INTERVAL_MS);
+    failedReads.set(key, { retryAtMs: nowMs + backoffMs, backoffMs });
+  };
+
   const isDue = (key: string, entries: ReadonlyArray<LinkEntry>, nowMs: number): boolean => {
+    if ((failedReads.get(key)?.retryAtMs ?? 0) > nowMs) return false;
     if (requested.has(key)) return true;
     const active = entries.filter((entry) => isUnsettled(entry.thread));
     if (active.length === 0) return false;
@@ -428,12 +455,16 @@ export const make = Effect.gen(function* () {
 
     // A host-level refresh reaches every project, each retaining its own pending retry.
     for (const [key, entries] of groups) {
-      if (pendingRequests.has(threadPullRequestKeyOf(entries[0]!.link))) requested.add(key);
+      if (!pendingRequests.has(threadPullRequestKeyOf(entries[0]!.link))) continue;
+      requested.add(key);
+      const failed = failedReads.get(key);
+      if (failed !== undefined) failedReads.set(key, { ...failed, retryAtMs: nowMs });
     }
     pendingRequests.clear();
 
     for (const key of lastSyncedAt.keys()) if (!groups.has(key)) lastSyncedAt.delete(key);
     for (const key of retryStacks) if (!groups.has(key)) retryStacks.delete(key);
+    for (const key of failedReads.keys()) if (!groups.has(key)) failedReads.delete(key);
     for (const key of missing) if (!groups.has(key)) missing.delete(key);
     for (const key of requested.keys()) if (!groups.has(key)) requested.delete(key);
 
@@ -515,19 +546,9 @@ export const make = Effect.gen(function* () {
       // A stack retry reads past the cache, or it could get back the layer list it is retrying.
       const invalidated = refreshRequested || missingMergedAt || retryStacks.has(key);
       if (invalidated) yield* pullRequests.invalidate({ reference: ref });
-      const summary = yield* pullRequests.summary(ref, { recoverTransientFailure: false }).pipe(
-        Effect.tapError((error) =>
-          error.reason === "not-found"
-            ? Effect.sync(() => {
-                // Not-found is a host answer: it consumes the refresh and starts the backoff.
-                missing.add(key);
-                lastSyncedAt.set(key, nowMs);
-                requested.delete(key);
-              })
-            : Effect.void,
-        ),
-      );
+      const summary = yield* pullRequests.summary(ref, { recoverTransientFailure: false });
       missing.delete(key);
+      failedReads.delete(key);
       const fields = snapshotFieldsOf(summary);
       const needsStack =
         refreshRequested ||
@@ -626,6 +647,8 @@ export const make = Effect.gen(function* () {
           const retryAt = rateLimitRetryAt(cause);
           if (retryAt !== undefined) {
             pausedUntil.set(pauseKey, Math.max(retryAt, pausedUntil.get(pauseKey) ?? 0));
+          } else {
+            recordReadFailure(key, Cause.squash(cause), nowMs);
           }
           const reason = skipReason(cause);
           const skip = skips.get(reason);
@@ -694,12 +717,15 @@ export const make = Effect.gen(function* () {
               },
             );
           }),
-          Effect.catch((error) =>
-            Effect.logWarning("pull request provider resolution failed", {
+          Effect.catch((error) => {
+            for (const [key, entries] of hostGroups) {
+              if (isDue(key, entries, nowMs)) recordReadFailure(key, error, nowMs);
+            }
+            return Effect.logWarning("pull request provider resolution failed", {
               pauseKey,
               error: error._tag,
-            }),
-          ),
+            });
+          }),
         );
       },
       { concurrency: 16, discard: true },
@@ -734,21 +760,19 @@ export const make = Effect.gen(function* () {
       Effect.catchCause(logSkipped("pull request refresh after run skipped", { threadId })),
     );
 
-  // A thread's sibling syncs and relinks must not re-read a pull request its project's host
-  // could not find; the slow cadence and explicit refreshes still do.
+  // Sibling syncs and relinks leave failed reads to their retry cadence or an explicit refresh.
   const requestUnsyncedLinks = Effect.fnUntraced(
     function* (threadId: ThreadId, links: ReadonlyArray<ThreadPullRequestLink>) {
       const unsynced = links.filter((link) => link.snapshot === null);
       if (unsynced.length === 0) return;
       const [thread] =
-        missing.size === 0 ? [] : yield* projections.getThreadsWithPullRequests(threadId);
+        missing.size === 0 && failedReads.size === 0
+          ? []
+          : yield* projections.getThreadsWithPullRequests(threadId);
       for (const link of unsynced) {
-        if (
-          thread !== undefined &&
-          missing.has(`${thread.projectId}\0${threadPullRequestKeyOf(link)}`)
-        ) {
-          continue;
-        }
+        const key =
+          thread === undefined ? null : `${thread.projectId}\0${threadPullRequestKeyOf(link)}`;
+        if (key !== null && (missing.has(key) || failedReads.has(key))) continue;
         yield* requestSync(link);
       }
     },

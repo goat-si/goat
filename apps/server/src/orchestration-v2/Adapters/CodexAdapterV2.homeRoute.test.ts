@@ -159,7 +159,7 @@ describe("OpenCodex Home provider on native threads", () => {
               frame: {
                 id: 8,
                 method: "thread/fork",
-                params: { threadId: nativeThreadId, ...routed },
+                params: { threadId: nativeThreadId, excludeTurns: true, ...routed },
               },
             },
             {
