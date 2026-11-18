@@ -12,7 +12,6 @@ interface MarkdownPoint {
 interface MarkdownNode {
   readonly type: string;
   value?: string;
-  url?: string;
   position?: { readonly start: MarkdownPoint; readonly end: MarkdownPoint } | undefined;
   children?: MarkdownNode[];
   data?: object | undefined;
@@ -34,7 +33,7 @@ interface Cursor {
 interface Source {
   readonly text: string;
   readonly lineStarts: readonly number[];
-  readonly onIndentation?: (indentation: Indentation, content: MarkdownNode) => void;
+  readonly onIndentation?: (indentation: Indentation) => void;
 }
 
 interface Indentation {
@@ -47,6 +46,7 @@ const LINE_ENDING = /\r\n|\r|\n/g;
 const MAY_KEEP_WHITESPACE = /(?:^|[\r\n])[ \t]|>(?:\t|[ \t]{2})/;
 const LIST_MARKER = /[-*+]|\d{1,9}[.)]/y;
 const INLINE_CONTAINERS = new Set(["emphasis", "strong", "delete", "link", "linkReference"]);
+const NATIVE_NON_PROSE = /[\\<>[\]*_~&@|^=]|\/\/|www\./i;
 const nextTabStop = (column: number) => (Math.floor(column / 4) + 1) * 4;
 const isBlank = (character: string | undefined) => character === " " || character === "\t";
 
@@ -263,7 +263,12 @@ function restoreParagraph(
     (end === undefined || /[`$]|\\[()[\]]/.test(source.text.slice(start.offset, end)))
   )
     return;
-  const typed = (at: number) => typedWhitespace(source, at, start, chain);
+  const typed = (at: number) => {
+    const entry = typedWhitespace(source, at, start, chain);
+    if (!entry || !source.onIndentation) return entry;
+    const line = source.text.slice(entry.offset, source.lineStarts[at]);
+    return NATIVE_NON_PROSE.test(line) ? undefined : entry;
+  };
   const inserted = new Map<MarkdownNode, Indentation>();
   const indentation = (entry: Indentation) => {
     const node = whitespaceNode(entry.value);
@@ -310,7 +315,7 @@ function restoreParagraph(
           line = child.position?.end.line ?? line + 1;
           const whitespace = typed(line);
           if (whitespace) children.push(indentation(whitespace));
-        } else if (INLINE_CONTAINERS.has(child.type)) {
+        } else if (!source.onIndentation && INLINE_CONTAINERS.has(child.type)) {
           walk(child);
         }
       }
@@ -322,7 +327,7 @@ function restoreParagraph(
       const entry = child && inserted.get(child);
       if (entry) {
         const content = settle(children, index, true);
-        if (content) source.onIndentation?.(entry, content);
+        if (content) source.onIndentation?.(entry);
       }
     }
     parent.children = children;
@@ -333,7 +338,7 @@ function restoreParagraph(
   if (first) {
     paragraph.children.unshift(indentation(first));
     const content = settle(paragraph.children, 0, false);
-    if (content) source.onIndentation?.(first, content);
+    if (content) source.onIndentation?.(first);
   }
 }
 
@@ -392,46 +397,16 @@ function positionedSource(text: string): Source | undefined {
   return { text, lineStarts };
 }
 
-// GFM misses some URLs md4c accepts, including FTP and single-label hosts.
-const NATIVE_SCHEME_LINK =
-  /(?:https?|ftp):\/\/[a-z0-9_][^\s<>"'\[\]{}()]*(?:\([^\s()]*\)[^\s<>"'\[\]{}()]*)*/iy;
-
-function nativeLinkAt(markdown: string, offset: number, content: MarkdownNode) {
-  const end = content.position?.end.offset;
-  if (
-    content.type === "link" &&
-    content.url &&
-    content.position?.start.offset === offset &&
-    end !== undefined &&
-    markdown[offset] !== "[" &&
-    markdown[offset] !== "<"
-  ) {
-    const label = markdown.slice(offset, end);
-    if (content.url === label || content.url === `mailto:${label}`) {
-      return { end, text: `<${label}>` };
-    }
-    const escaped = label.replace(/[\\[\]`*_~.:@&]/g, (char) => `&#${char.charCodeAt(0)};`);
-    const href = content.url.replaceAll("&", "&amp;").replaceAll(">", "%3E");
-    return { end, text: `[${escaped}](<${href}>)` };
-  }
-  NATIVE_SCHEME_LINK.lastIndex = offset;
-  const url = NATIVE_SCHEME_LINK.exec(markdown)?.[0].replace(/[?!.,:;*]+$/, "");
-  return url ? { end: offset + url.length, text: `<${url}>` } : undefined;
-}
-
 export function markdownWithLeadingWhitespace(markdown: string, parse: (text: string) => Root) {
   const source = positionedSource(markdown);
   if (!source) return markdown;
-  const edits = new Map<number, { end: number; text: string }>();
-  // Native reparses the source. Entities preserve spaces and tabs without turning lines into code.
+  const edits = new Map<number, string>();
+  // Native reparses the source, so entities belong only on plain-prose lines.
   visit(
     {
       ...source,
-      onIndentation: ({ offset, value }, content) => {
-        const whitespace = value.replaceAll(" ", "&#32;").replaceAll("\t", "&#9;");
-        // An entity's semicolon prevents md4c from recognizing a following bare link.
-        const link = nativeLinkAt(markdown, offset, content);
-        edits.set(offset, { end: link?.end ?? offset, text: whitespace + (link?.text ?? "") });
+      onIndentation: ({ offset, value }) => {
+        edits.set(offset, value.replaceAll(" ", "&#32;").replaceAll("\t", "&#9;"));
       },
     },
     parse(markdown),
@@ -441,8 +416,8 @@ export function markdownWithLeadingWhitespace(markdown: string, parse: (text: st
   let start = 0;
   const parts: string[] = [];
   for (const [offset, edit] of [...edits].sort(([a], [b]) => a - b)) {
-    parts.push(markdown.slice(start, offset), edit.text);
-    start = edit.end;
+    parts.push(markdown.slice(start, offset), edit);
+    start = offset;
   }
   return parts.length ? parts.join("") + markdown.slice(start) : markdown;
 }

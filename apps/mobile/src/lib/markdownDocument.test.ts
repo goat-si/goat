@@ -131,7 +131,7 @@ it("renders a user's typed indentation as spaces and tabs without changing list 
   const user = await renderUser(true);
   const assistant = await renderUser(false);
   expect(inline(user)).toContain("   Plan");
-  expect(inline(user)).toContain("   <b>Step</b>");
+  expect(inline(user)).toContain("<b>Step</b>");
   expect(inline(user)).toContain("\tDetail");
   expect(inline(user)).toContain("  more");
   expect(user.children?.map((node) => node.type)).toEqual(
@@ -139,20 +139,6 @@ it("renders a user's typed indentation as spaces and tabs without changing list 
   );
   expect(inline(user.children![1]!)).toContain("code");
   expect(inline(assistant)).not.toContain("   Plan");
-});
-
-it.each([
-  ["https://example.com", "https://example.com"],
-  ["www.example.com", "http://www.example.com"],
-  ["person@example.com", "mailto:person@example.com"],
-])("keeps an indented native autolink to %s", async (label, href) => {
-  const markdown = markdownForNativeRendering(
-    `Plan\n ${label}.`,
-    ENRICHED_INLINE_FILE_LINK_REGEX,
-    true,
-  );
-  const document = await parseMarkdown(markdown, { ...MOBILE_FLAGS, hardSoftBreaks: true });
-  expect(inline(document)).toBe(`Plan <a ${href}>${label}</a>.`);
 });
 
 it.each([
@@ -169,17 +155,20 @@ it.each([
   expect(restored).toBe(baseline);
 });
 
-it.each(["ftp://example.com/path", "https://example.com/a?b=1&c=2"])(
-  "preserves one native link with the original destination %s",
-  async (destination) => {
-    const flags = { ...MOBILE_FLAGS, hardSoftBreaks: true };
-    const markdown = markdownForNativeRendering(
-      `Plan\n ${destination}.`,
-      ENRICHED_INLINE_FILE_LINK_REGEX,
-      true,
-    );
-    expect(inline(await parseMarkdown(markdown, flags))).toBe(
-      `Plan <a ${destination}>${destination}</a>.`,
-    );
-  },
-);
+it.each([
+  "Plan\n https://example.com.",
+  "Plan\n www.example.com.",
+  "Plan\n person@example.com.",
+  "Plan\n ftp://example.com/path.",
+  "Plan\n https://example.com/a?b=1&c=2.",
+  "Plan\n ftp://example.com/path(x(y))",
+  "Plan\n~~Continue at\n  ftp://example.com/path~~",
+  "Plan\n   **Step**",
+  "Plan\n   ~~Step~~",
+])("leaves native links and formatting unchanged: %s", async (source) => {
+  const flags = { ...MOBILE_FLAGS, hardSoftBreaks: true };
+  const baseline = markdownForNativeRendering(source, ENRICHED_INLINE_FILE_LINK_REGEX);
+  const restored = markdownForNativeRendering(source, ENRICHED_INLINE_FILE_LINK_REGEX, true);
+  expect(await parseMarkdown(restored, flags)).toEqual(await parseMarkdown(baseline, flags));
+  expect(restored).toBe(baseline);
+});
