@@ -708,7 +708,8 @@ exec -a node '${process.execPath.replaceAll("'", "'\\''")}' "$@"
       return Effect.die("Unexpected test transport command; real SSH is prohibited");
     }
     remoteCommands.push(command);
-    const args = command.args.slice(at + 1).filter((arg) => arg !== "-l");
+    const shellArgsStart = command.args[at + 1] === "-ec" ? at + 5 : at + 1;
+    const args = command.args.slice(shellArgsStart).filter((arg) => arg !== "-l");
     if (args.includes("-c")) uploads++;
     // Capture actual submitted bytes; inject races only at an observed command boundary.
     return Effect.gen(function* () {
