@@ -274,7 +274,9 @@ export const settleMemorySuggestion = Effect.fn("MemorySuggestions.settle")(func
   sql: SqlClient.SqlClient,
   space: M.MemorySpaceId,
   receipt: M.MemoryHubReceipt,
+  source: "acknowledgement" | "ordered",
 ) {
+  if (receipt.failureCode === "source_invalidated" && source === "acknowledgement") return;
   if (receipt.outcome !== "rejected" || receipt.failureCode === "source_invalidated") {
     yield* stored(
       "suggestion-settle",

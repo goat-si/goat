@@ -2330,7 +2330,12 @@ const make = Effect.fnUntraced(function* (
       work.metadata.operationId === entry.receipt.operationId
     )
       yield* store.acknowledgeOutbox(work.id, entry.receipt);
-    yield* settleMemorySuggestion(sql, input.memorySpaceId, entry.receipt);
+    yield* settleMemorySuggestion(
+      sql,
+      input.memorySpaceId,
+      entry.receipt,
+      input.workId === undefined ? "ordered" : "acknowledgement",
+    );
     return {
       receipt: entry.receipt,
       incorporated,
@@ -2384,7 +2389,8 @@ const make = Effect.fnUntraced(function* (
   const { reconcileResolutionSubmission, settleHubAcknowledgement } = makeHubAcknowledgement({
     store,
     settleHubEntryTx,
-    settleSuggestion: (space, receipt) => settleMemorySuggestion(sql, space, receipt),
+    settleSuggestion: (space, receipt) =>
+      settleMemorySuggestion(sql, space, receipt, "acknowledgement"),
   });
   return MemoryService.of({
     consumeReturned: (space, thread, pairs) =>
