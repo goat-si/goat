@@ -1,7 +1,4 @@
-import {
-  followupTaskForWake,
-  subagentFollowupArtifacts,
-} from "./goat/SubagentFollowupArtifacts.ts";
+import { subagentFollowupArtifacts } from "./goat/SubagentFollowupArtifacts.ts";
 import { retainedUserItemFailures } from "./goat/RetainedQueuedInput.ts";
 import { OrchestratorThreadAboveModeLimitError } from "./OrchestratorModeLimitError.ts";
 import { commandThreadId } from "./commandThreadId.ts";
@@ -7934,13 +7931,13 @@ const makeOrchestrator = Effect.fn("orchestrationV2.Orchestrator.layer")(functio
     if (run === undefined || run.delegatedTaskId !== undefined) return;
     const bufferedWake = isBufferedProviderNotification(message);
     const aboutRunId = command.notification?.aboutRunId;
-    const wakeTaskId = bufferedWake
-      ? followupTaskForWake(
-          (yield* projectionStore.getThreadRecords(command.threadId, ["runs"])).runs,
-          run.id,
-          aboutRunId,
-        )
-      : undefined;
+    const wakeTaskId =
+      !bufferedWake || aboutRunId === undefined
+        ? undefined
+        : (yield* projectionStore.getThreadRecords(command.threadId, ["runs"], {
+            runIds: [aboutRunId],
+          })).runs[0]?.delegatedTaskId;
+    if (bufferedWake && wakeTaskId === undefined) return;
     const originalTaskId = child.forkedFrom?.type === "node" ? child.forkedFrom.nodeId : undefined;
     const parent = yield* projectionStore
       .getThreadRecords(parentThreadId, ["runs", "subagents", "providerTurns", "attempts"], {
@@ -7961,8 +7958,8 @@ const makeOrchestrator = Effect.fn("orchestrationV2.Orchestrator.layer")(functio
       (task) =>
         task.id === wakeTaskId && task.childThreadId === child.id && task.origin === "app_owned",
     );
-    if (wakeTask !== undefined) {
-      if (wakeTask.result === null && wakeTask.status !== "cancelled") {
+    if (bufferedWake) {
+      if (wakeTask?.result === null && wakeTask.status !== "cancelled") {
         yield* emit(
           events,
           command,
@@ -7973,9 +7970,8 @@ const makeOrchestrator = Effect.fn("orchestrationV2.Orchestrator.layer")(functio
           occurredAt: message.createdAt,
           payload: { ...run, delegatedTaskId: wakeTask.id },
         });
-        return;
       }
-      if (aboutRunId !== undefined) return;
+      return;
     }
     const owner = followUpOwnerRun(parent.runs);
     if (owner === null || owner.rootNodeId === null) return;

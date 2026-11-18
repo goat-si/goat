@@ -118,3 +118,36 @@ it.effect("binds a terminal wake once and leaves its follow-up settled on a late
     );
   }).pipe(Effect.provide(testLayer)),
 );
+
+it.effect("keeps a mixed-owner provider wake in the child thread", () =>
+  Effect.gen(function* () {
+    const { orchestrator, childThreadId, threadId } = yield* finishFollowupWithAwaitedTask();
+    const { subagents } = yield* orchestrator.getThreadProjection(threadId);
+    const messageId = MessageId.make("message:followup-wake:mixed");
+    yield* orchestrator.dispatch({
+      type: "message.dispatch",
+      commandId: CommandId.make("command:followup-wake:mixed"),
+      threadId: childThreadId,
+      messageId,
+      text: "Two background tasks completed.",
+      attachments: [],
+      dispatchMode: { type: "queue_after_active" },
+      createdBy: "agent",
+      creationSource: "provider",
+      notification: {
+        source: { kind: "background_task" },
+        outcome: "completed",
+        summary: "Two tasks completed",
+      },
+    });
+    const child = yield* orchestrator.getThreadProjection(childThreadId);
+    const wake = child.runs.find((run) => run.userMessageId === messageId);
+    assert.isDefined(wake);
+    assert.isUndefined(wake.delegatedTaskId);
+    const parent = yield* orchestrator.getThreadProjection(threadId);
+    assert.sameMembers(
+      parent.subagents.map(({ id }) => id),
+      subagents.map(({ id }) => id),
+    );
+  }).pipe(Effect.provide(testLayer)),
+);
