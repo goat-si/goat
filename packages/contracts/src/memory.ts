@@ -809,7 +809,10 @@ export const MemoryCapacityExceeded = struct({
   reclaimable: NonNegativeInt,
 });
 export type MemoryCapacityExceeded = typeof MemoryCapacityExceeded.Type;
+export const MemoryHubUpgradeBlockers = distinct(EnvironmentId, MEMORY_HUB_MAX_MEMBERS);
+const upgradeBlockers = { upgradeRequiredMembers: Schema.optionalKey(MemoryHubUpgradeBlockers) };
 const safeErrorFields = {
+  ...upgradeBlockers,
   code: MemoryFailureCode,
   memoryId: Schema.optionalKey(MemoryId),
   operationId: Schema.optionalKey(MemoryOperationId),
@@ -2317,7 +2320,7 @@ export function validateMemoryResolutionApproval(
 }
 
 export const MemoryHubReceipt = struct({
-  upgradeRequiredMembers: Schema.optionalKey(distinct(EnvironmentId, MEMORY_HUB_MAX_MEMBERS)),
+  ...upgradeBlockers,
   resolutionApproval: Schema.optionalKey(MemoryResolutionApproval),
   forgetExpansion: Schema.optionalKey(MemoryForgetExpansion),
   forgetRetryOf: Schema.optionalKey(MemoryForgetRetry),
@@ -2662,6 +2665,7 @@ export type MemoryHubPullInput = typeof MemoryHubPullInput.Type;
 
 export const MemoryHubPullResult = bounded(
   struct({
+    ...upgradeBlockers,
     highWatermark: NonNegativeInt,
     throughSequence: NonNegativeInt,
     hasMore: Schema.Boolean,

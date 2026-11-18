@@ -10,7 +10,7 @@ import * as McpToolAccess from "../../McpToolAccess.ts";
 import { schemaIssueSummary } from "../../../memory/memoryDiagnostics.ts";
 import { listedToolName, resolveAgentSurfaceEntry } from "@goat/contracts/agentSurface/resolve";
 import { MemoryToolkit } from "./tools.ts";
-import { MemoryCapacityError } from "../../../memory/store/StoreModel.ts";
+import { MemoryCapacityError, MemoryStoreConflict } from "../../../memory/store/StoreModel.ts";
 
 const isMemoryError = Schema.is(M.MemoryRpcError);
 const isCapacityDimension = Schema.is(M.MemoryCapacityDimension);
@@ -55,6 +55,9 @@ export const memoryError = (error: unknown): M.MemoryRpcError => {
   if ("code" in error && isFailureCode(error.code) && error.code !== "capacity_exceeded")
     return new M.MemoryRpcError({
       code: error.code,
+      ...(error instanceof MemoryStoreConflict && error.upgradeRequiredMembers
+        ? { upgradeRequiredMembers: error.upgradeRequiredMembers }
+        : {}),
       ...(error.code === "thread_lineage_incomplete"
         ? { guidance: M.MEMORY_LINEAGE_GUIDANCE }
         : error.code === "hub_upgrade_required"

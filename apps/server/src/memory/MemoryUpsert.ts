@@ -72,6 +72,19 @@ export const makeUpsert = (deps: {
     stableUuid,
     hash,
   } = deps;
+  const requireUpgrade = Effect.fn("MemoryService.floorUpgradeRequired")(function* (
+    space: M.MemorySpaceId,
+  ) {
+    const hub = yield* readBoundMemoryHubId(space);
+    const blockers =
+      hub === environmentId
+        ? yield* store.blockingMembers(space)
+        : yield* store.readUpgradeBlockers(space, hub);
+    return yield* new Store.MemoryStoreConflict({
+      code: "hub_upgrade_required",
+      ...(blockers.length ? { upgradeRequiredMembers: blockers } : {}),
+    });
+  });
   const write = Effect.fn("MemoryService.stageUpsert")(function* (
     input: M.MemoryUpsertInput,
     permit: Permit,
@@ -156,6 +169,9 @@ export const makeUpsert = (deps: {
           if (terminal?.outcome === "rejected")
             return yield* new Store.MemoryStoreConflict({
               code: terminal.failureCode ?? "invalid_output",
+              ...(terminal.upgradeRequiredMembers
+                ? { upgradeRequiredMembers: terminal.upgradeRequiredMembers }
+                : {}),
             });
           if (staged.status === "cancelled")
             return yield* new Store.MemoryStoreConflict({ code: "source_invalidated" });
@@ -190,12 +206,11 @@ export const makeUpsert = (deps: {
         const supplied = value.payload.derivedFromMemoryRevisions;
         const known = new Set([...inherited, ...supplied, ...(lineage?.revisions ?? [])]);
         if (
-          remember &&
-          lineage?.state === "tracked" &&
+          (supplied.length > limit || (remember && lineage?.state === "tracked")) &&
           known.size > limit &&
           limit === M.MEMORY_DERIVED_REVISIONS_MAX_V1
         )
-          return yield* new Store.MemoryStoreConflict({ code: "hub_upgrade_required" });
+          return yield* requireUpgrade(space);
         const unverified = lineage !== undefined && lineage.state !== "tracked";
         if (unverified) {
           if (
@@ -205,8 +220,7 @@ export const makeUpsert = (deps: {
             !(yield* matchesActivePersonWords(sourceThread.threadId, value.payload.text))
           )
             return yield* new Store.MemoryStoreConflict({ code: "thread_lineage_incomplete" });
-          if (limit === M.MEMORY_DERIVED_REVISIONS_MAX_V1)
-            return yield* new Store.MemoryStoreConflict({ code: "hub_upgrade_required" });
+          if (limit === M.MEMORY_DERIVED_REVISIONS_MAX_V1) return yield* requireUpgrade(space);
         }
 
         yield* requireClosureCapacity(known.size, limit);
@@ -242,7 +256,7 @@ export const makeUpsert = (deps: {
             heads.map((head) => head.revision.revisionId),
           ));
         if ((marked || acceptance) && limit === M.MEMORY_DERIVED_REVISIONS_MAX_V1)
-          return yield* new Store.MemoryStoreConflict({ code: "hub_upgrade_required" });
+          return yield* requireUpgrade(space);
         const origin = current?.identity
           ? undefined
           : (acceptance?.origin ?? (remember ? sourceThread : undefined));

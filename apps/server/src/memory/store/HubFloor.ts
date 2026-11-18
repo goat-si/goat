@@ -1,13 +1,14 @@
 import * as M from "@goat/contracts";
 import * as Effect from "effect/Effect";
 import * as Schema from "effect/Schema";
-import { stored } from "./StoreCodecs.ts";
+import { codec, stored } from "./StoreCodecs.ts";
 import type { StoreKernel } from "./StoreKernel.ts";
 import { Transaction } from "./StoreModel.ts";
 
 const encodeFeatures = Schema.encodeSync(
   Schema.fromJsonString(Schema.Array(M.MemoryFloor2Feature)),
 );
+const upgradeBlockersCodec = codec(M.MemoryHubUpgradeBlockers);
 const fullAdvertisement = encodeFeatures(M.MEMORY_FLOOR_2);
 
 export const makeHubFloor = ({ sql }: Pick<StoreKernel, "sql">) => {
@@ -97,6 +98,44 @@ export const makeHubFloor = ({ sql }: Pick<StoreKernel, "sql">) => {
     if (fence > (watermarks?.current ?? 0))
       return yield* new M.MemoryHubError({ code: "invalid_output" });
   });
-  return { blockingMembers, learnHubFloor, hubFloorActive, negotiateHubFloor, checkForgetFence };
+  const rememberUpgradeBlockers = Effect.fn("MemoryStore.rememberUpgradeBlockers")(function* (
+    space: M.MemorySpaceId,
+    hub: M.EnvironmentId,
+    blockers: ReadonlyArray<M.EnvironmentId>,
+  ) {
+    yield* Transaction;
+    const json = yield* upgradeBlockersCodec.encode(blockers);
+    yield* stored(
+      "hub-floor-blocker-cache-write",
+      sql`
+      UPDATE memory_sync_cursors SET hub_upgrade_blockers_json=${json}
+      WHERE space=${space} AND hub_environment_id=${hub}
+        AND hub_upgrade_blockers_json IS NOT ${json}`,
+    );
+  });
+  const readUpgradeBlockers = Effect.fn("MemoryStore.readUpgradeBlockers")(function* (
+    space: M.MemorySpaceId,
+    hub: M.EnvironmentId,
+  ) {
+    yield* Transaction;
+    const [row] = yield* stored(
+      "hub-floor-blocker-cache-read",
+      sql<{ hub_upgrade_blockers_json: string | null }>`
+      SELECT hub_upgrade_blockers_json FROM memory_sync_cursors
+      WHERE space=${space} AND hub_environment_id=${hub}`,
+    );
+    return row?.hub_upgrade_blockers_json
+      ? yield* upgradeBlockersCodec.decode(row.hub_upgrade_blockers_json)
+      : [];
+  });
+  return {
+    blockingMembers,
+    learnHubFloor,
+    hubFloorActive,
+    negotiateHubFloor,
+    checkForgetFence,
+    rememberUpgradeBlockers,
+    readUpgradeBlockers,
+  };
 };
 export type HubFloorStore = ReturnType<typeof makeHubFloor>;

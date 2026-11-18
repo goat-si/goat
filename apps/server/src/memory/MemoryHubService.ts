@@ -226,6 +226,11 @@ export const make = Effect.gen(function* () {
             limit: request.limit,
             maxBytes: M.MEMORY_PAGE_MAX_UTF8_BYTES - (active ? 18 : 0),
           });
+          if (!active && request.features && tail.entries.length === 0)
+            return {
+              ...tail,
+              upgradeRequiredMembers: yield* store.blockingMembers(request.memorySpaceId),
+            };
           return { ...tail, ...floor };
         }),
       );

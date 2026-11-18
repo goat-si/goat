@@ -2522,6 +2522,12 @@ const make = Effect.fnUntraced(function* (
     return yield* store.transact(
       Effect.gen(function* () {
         yield* input.reauthorize;
+        if (page.upgradeRequiredMembers)
+          yield* store.rememberUpgradeBlockers(
+            input.memorySpaceId,
+            input.hubEnvironmentId,
+            page.upgradeRequiredMembers,
+          );
         if (page.derivedCap)
           yield* store.learnHubFloor(input.memorySpaceId, yield* Clock.currentTimeMillis);
         const current = yield* store.readCursor(input.memorySpaceId, input.hubEnvironmentId);

@@ -21,6 +21,7 @@ export class MemoryStoreConflict extends Schema.TaggedError<MemoryStoreConflict>
   "MemoryStoreConflict",
   {
     code: M.MemoryFailureCode,
+    upgradeRequiredMembers: Schema.optionalKey(M.MemoryHubUpgradeBlockers),
   },
 ) {
   override get message() {
