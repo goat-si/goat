@@ -208,35 +208,6 @@ describe("DesktopLinuxUrlHandler", () => {
     assert.include(entry, "Icon=/home/al ice/icons/T3\\\\x.png");
   });
 
-  it.each([
-    { from: "GOAT-0.1.10-x86_64.AppImage", to: "GOAT-x86_64.AppImage", restored: true },
-    {
-      from: "GOAT-0.1.10-nightly.20261117.376-arm64.AppImage",
-      to: "GOAT-Nightly-arm64.AppImage",
-      restored: true,
-    },
-    { from: "GOAT-0.1.10-x86_64.AppImage", to: "GOAT-0.1.11-x86_64.AppImage", restored: false },
-    { from: "goat.AppImage", to: "GOAT-x86_64.AppImage", restored: false },
-    { from: "GOAT-x86_64.AppImage", to: "GOAT-x86_64.AppImage", restored: false },
-    { from: "../GOAT-0.1.10-x86_64.AppImage", to: "GOAT-x86_64.AppImage", restored: false },
-  ])("finds the launch path an update from $from to $to removed", ({ from, to, restored }) => {
-    for (const dir of ["/home/alice/Applications", '/home/al ice/My "100%" $Apps\\x']) {
-      const previous = dir + "/" + from;
-      const previousEntry = DesktopLinuxUrlHandler.renderUrlHandlerDesktopEntry({
-        displayName: "GOAT",
-        execTarget: previous,
-        schemes: ["goat"],
-      });
-      assert.equal(
-        DesktopLinuxUrlHandler.replacedVersionedAppImagePath({
-          previousEntry,
-          appImagePath: dir + "/" + to,
-        }),
-        restored ? previous : null,
-      );
-    }
-  });
-
   it.effect(
     "writes the handler entry, refreshes the MIME cache, and claims the scheme default",
     () => {

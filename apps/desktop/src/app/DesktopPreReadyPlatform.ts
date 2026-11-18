@@ -9,12 +9,10 @@ import * as Layer from "effect/Layer";
 import * as Electron from "electron";
 import * as HostProcess from "@goat/shared/HostProcess";
 
+import { APPIMAGE_PREVIOUS_PATH_ENV, replacedVersionedAppImagePath } from "../appImageUpdate.ts";
 import * as DesktopEarlyElectronStartup from "./DesktopEarlyElectronStartup.ts";
 import { resolveDesktopAppBranding } from "./DesktopEnvironment.ts";
-import {
-  renderUrlHandlerDesktopEntry,
-  replacedVersionedAppImagePath,
-} from "./DesktopLinuxUrlHandler.ts";
+import { renderUrlHandlerDesktopEntry } from "./DesktopLinuxUrlHandler.ts";
 import * as ElectronProtocol from "../electron/ElectronProtocol.ts";
 
 export interface DesktopPreReadyCommandLineReader {
@@ -78,6 +76,22 @@ export const make = Effect.gen(function* () {
           NodeFS.writeFileSync(path, value, "utf8");
         },
       });
+      const previousAppImagePath = process.env[APPIMAGE_PREVIOUS_PATH_ENV];
+      delete process.env[APPIMAGE_PREVIOUS_PATH_ENV];
+      const appImagePath = process.env.APPIMAGE;
+      if (
+        appImagePath &&
+        !process.env.GOAT_DESKTOP_LAUNCHER_PATH?.trim() &&
+        process.env.APPIMAGE_SILENT_INSTALL === "true"
+      ) {
+        const replacedPath = replacedVersionedAppImagePath(previousAppImagePath, appImagePath);
+        if (replacedPath !== null) {
+          try {
+            // Use a relative target so both paths survive a moved folder.
+            NodeFS.symlinkSync(NodePath.posix.basename(appImagePath), replacedPath);
+          } catch {}
+        }
+      }
       // The portal also requires a valid desktop entry. An AppImage update may
       // have removed the executable referenced by the previous launch's entry.
       try {
@@ -111,24 +125,6 @@ export const make = Effect.gen(function* () {
           } catch {}
         }
         const desktopEntryPath = NodePath.posix.join(applicationsDir, linux.linuxDesktopEntryName);
-        const appImagePath = process.env.APPIMAGE?.trim();
-        // electron-updater sets APPIMAGE_SILENT_INSTALL on the AppImage it relaunches after an update.
-        if (
-          appImagePath &&
-          !process.env.GOAT_DESKTOP_LAUNCHER_PATH?.trim() &&
-          process.env.APPIMAGE_SILENT_INSTALL?.trim() === "true"
-        ) {
-          try {
-            const replacedPath = replacedVersionedAppImagePath({
-              previousEntry: NodeFS.readFileSync(desktopEntryPath, "utf8"),
-              appImagePath,
-            });
-            // Relative, so the pair survives a moved folder; symlink never overwrites a file.
-            if (replacedPath !== null) {
-              NodeFS.symlinkSync(NodePath.posix.basename(appImagePath), replacedPath);
-            }
-          } catch {}
-        }
         NodeFS.writeFileSync(
           desktopEntryPath,
           renderUrlHandlerDesktopEntry({
@@ -138,7 +134,7 @@ export const make = Effect.gen(function* () {
             }).displayName,
             execTarget:
               process.env.GOAT_DESKTOP_LAUNCHER_PATH?.trim() ||
-              process.env.APPIMAGE?.trim() ||
+              appImagePath?.trim() ||
               process.execPath,
             schemes: ElectronProtocol.getDesktopLinkSchemes(linux.isDevelopment),
             ...(iconPath === undefined ? {} : { iconPath }),
