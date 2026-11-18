@@ -592,3 +592,90 @@ MERGE STATE, git merge-tree by me on ac36255ec2: clean against the integration h
 - After a separate process check, `GOAT_TEST_TMP_GUARD=fail vp test run --reporter=default` from `apps/server` ran every test in the 21 changed files and the same 36 companion files listed in the prior READY entry. Exit 0, 57 files / 967 tests passed, no tempfile leak reported. `git diff --check 41ca8cee39..HEAD` exited 0.
 - Integration advanced from `2c0e0002a996ec5d46c708919be5a43f579176fa` to `6def29ca359f546e50dcd731a6364e3f0d575545` during the round. A fresh fetch confirmed the gate's merge base is still `f82d2df4b09`; the requested ref worked without the explicit-base fallback. The integration merge is deferred to the coordinator's instruction.
 - NOT RUN: PR #3700 CI and independent fix-delta review (coordinator), real GOAT clients, native Linux or Windows, older Git, or a 500,000-entry workspace.
+
+## 2026-11-18 — K4 fix round 4 (pen-macmini)
+
+- Base `dc70a277dfcac02d0e1ab95c9aa5b84cabada80d`. The three C4 commits are separate.
+- **P1** — `deada9fdefad18c343047d68c283c8845ff8f314`. In the spawn-gated PR worktree case, porcelain status was empty and the ignored `local.cfg` changed from `ignored user content` to `tracked PR content` (exit 1). With `merge --ff-only --no-overwrite-ignore`, that case passed and the worktree kept its original HEAD and file. The [Git 2.27 source](https://github.com/git/git/blob/v2.27.0/builtin/merge.c) already registers the overwrite option. No project-wide minimum Git version was found; the script's special sparse worktree path requires Git 2.36. An unknown option fails the merge and no caller retries without the protection.
+- **P2** — `86510a32e0aa52af50da15d6dfcbe50eb56d4340`. The sparse listing delivered over-cap stdout, then exited 128. The old fallback ran restore and the working copy became `initial` instead of `unstaged` (exit 1). The fix checks the observed size before forwarding the listing result. Both overflow cases and ordinary fallback passed, including the staged/unstaged assertions.
+- **P2b** — `81034cda0704ed4e828462076a0d9726df1642d4`. A spawn gate at the ancestry check allowed staging `README.md` after the clean status probe. The old reset put `rewritten` in the index instead of `staged user edit` (exit 1). The reused path now leaves diverged checkouts in place and returns `isOnPullRequestHead: false`. The guarded regression checks the original worktree, HEAD, index and file contents. The two spawn-gated cases and the two updated expectations passed (4/4, exit 0). This supersedes the earlier Limits item about the pre-refresh ref for PR worktree resets. The unused private GOAT ref-name constant was removed. Existing recovery refs stay in Git.
+
+### Rule 3 approval and quoted changes
+
+The coordinator approved the two existing test changes and their titles for the fast-forward-only P2b behavior. The diff below is from the P2b commit.
+
+```diff
+diff --git a/apps/server/src/git/GitManager.test.ts b/apps/server/src/git/GitManager.test.ts
+index 70df2862aa..035bafb30c 100644
+--- a/apps/server/src/git/GitManager.test.ts
++++ b/apps/server/src/git/GitManager.test.ts
+@@ -4388,5 +4388,5 @@ it.layer(layerGitManagerTest)("GitManager", (it) => {
+   );
+
+-  it.effect("resets a clean reused PR worktree onto a force-pushed pull request head", () =>
++  it.effect("keeps a clean reused PR worktree off a force-pushed pull request head", () =>
+     Effect.gen(function* () {
+       const repoDir = yield* makeTempDir("goat-git-manager-");
+@@ -4419,5 +4419,4 @@ it.layer(layerGitManagerTest)("GitManager", (it) => {
+         "author-rewrite:feature/pr-force-pushed",
+       ]);
+-      const rewrittenHead = (yield* runGit(repoDir, ["rev-parse", "author-rewrite"])).stdout.trim();
+       yield* runGit(repoDir, [
+         "update-ref",
+@@ -4449,8 +4448,6 @@ it.layer(layerGitManagerTest)("GitManager", (it) => {
+         NodeFS.realpathSync.native(worktreePath),
+       );
+-      expect(result.isOnPullRequestHead).toBe(true);
+-      expect((yield* runGit(worktreePath, ["rev-parse", "HEAD"])).stdout.trim()).toBe(
+-        rewrittenHead,
+-      );
++      expect(result.isOnPullRequestHead).toBe(false);
++      expect((yield* runGit(worktreePath, ["rev-parse", "HEAD"])).stdout.trim()).toBe(staleHead);
+       expect(
+         NodeFS.readFileSync(NodePath.join(worktreePath, "force-pushed.txt"), "utf8").replace(
+@@ -4458,5 +4455,5 @@ it.layer(layerGitManagerTest)("GitManager", (it) => {
+           "\n",
+         ),
+-      ).toBe("rewritten\n");
++      ).toBe("first\n");
+     }),
+   );
+diff --git a/apps/server/src/vcs/GitVcsDriverCore.test.ts b/apps/server/src/vcs/GitVcsDriverCore.test.ts
+index 6d70ad204e..3169633e33 100644
+--- a/apps/server/src/vcs/GitVcsDriverCore.test.ts
++++ b/apps/server/src/vcs/GitVcsDriverCore.test.ts
+@@ -6215,5 +6215,5 @@ it.effect("SSH workspace push propagates key-auth refusal", () =>
+ );
+
+-it.effect("preserves a rewritten checkout head under the GOAT pre-refresh ref", () =>
++it.effect("keeps a divergent checkout at its current head", () =>
+   Effect.gen(function* () {
+     const driver = yield* GitVcsDriver.GitVcsDriver;
+@@ -6228,9 +6228,7 @@ it.effect("preserves a rewritten checkout head under the GOAT pre-refresh ref",
+       cwd,
+       targetCommit: target,
+-      resetWhenHeadCommit: previous,
+     });
+-    assert.isTrue(result.moved);
+-    assert.equal(yield* git(cwd, ["rev-parse", "refs/goat/pre-refresh"]), previous);
+-    assert.equal(yield* git(cwd, ["rev-parse", "HEAD"]), target);
++    assert.deepEqual(result, { headCommit: previous, moved: false, onTarget: false });
++    assert.equal(yield* git(cwd, ["rev-parse", "HEAD"]), previous);
+   }).pipe(Effect.provide(layerTest)),
+ );
+```
+
+### Checkout result callers
+
+- `GitManager.ts` maps `onTarget` to `isOnPullRequestHead` in the local, new-worktree and reused-worktree paths. The reused path reruns setup only if `moved` is true. `GitWorkflowService.ts:469` and `ws.ts:3104` carry the result to the client as defined in `packages/contracts/src/git.ts:300`. A Node schema probe (exit 0) preserved explicit `false` on decode and encode and defaulted to `true` only when the key was absent.
+- Web's `PullRequestThreadDialog.tsx:163`, `pullRequest/usePullRequestActions.ts:410` and `pullRequest/PullRequestDetailPanel.tsx:869` use the off-head warning. Its text says local commits or uncommitted work keep a checkout where it is (`pullRequest/pullRequestCheckoutToast.ts:4`). Desktop loads the same web renderer (`apps/desktop/src/window/DesktopWindow.ts:351`, :765).
+- Mobile's `apps/mobile/src/state/threadOutboxDelivery.ts:467` reports that the PR worktree could not update and returns the queued message to the draft before dispatching a turn. The current text attributes this to local changes, including when the actual reason is a clean divergence after a force-push.
+- MCP's pull-request and worktree tool catalogs expose no PR checkout or prepare-thread tool and no handler calls this RPC. The checkout result is available on the WebSocket client surface; there is no corresponding MCP message.
+
+### READY
+
+- The initial gate reported a fixture type diagnostic (TS377120) and an unused export in Knip. The runner was stopped with exit 130 while its tests were still running. The fixture now uses `Effect.filterOrFail` and the unused private ref-name export is gone. Both corrections were folded into their corresponding local commits before push.
+- `vp run check:changed origin/chase/t3-261114-next3` on the final head exited 0 under Node 26.12.1 and Git 2.53.0. It found 71 changed files since merge base `f82d2df4b0960eb39bd36e4100b72b6f2758c7d2`, passed typechecking for 42 packages and all other gate steps, and ran 371 test files with 6,582 passed and 14 skipped (6,596 total). The existing `workspaceLease.ts:300` lint warning remains.
+- From `apps/server`, `GOAT_TEST_TMP_GUARD=fail vp test run --reporter=default <57 files>` exited 0. All 57 files and 970 tests passed with no skips or temporary-file leaks reported. The complete set included all 23 directly changed test files (474 tests), their imported test helpers, and the same companion files as round 3. No name filter was used.
+- `git diff --check dc70a277df..HEAD` exited 0. A plain fast-forward push updated `chase/t3-261114-next3-k4-checkpoints` from `dc70a277dfcac02d0e1ab95c9aa5b84cabada80d` to `81034cda0704ed4e828462076a0d9726df1642d4`. The integration branch was neither merged into the lane nor pushed.
+- NOT RUN: real web, desktop or mobile client interaction, PR #3700 CI, independent post-fix review, full CI, native Linux/Windows, and older Git binaries.
