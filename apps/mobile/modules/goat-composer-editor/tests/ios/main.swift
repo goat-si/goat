@@ -106,7 +106,7 @@ do {
   let view = makeEditor("hi " + source, tokensJson: mention("Readme", at: 3))
   view.editor.selectedRange = NSRange(location: 3, length: 1)
   view.editor.cut(nil)
-  check(view.onComposerChange.payloads.last?["trailingInlineSource"] == nil, "Cut still advertised the removed chip")
+  check(view.onComposerChange.payloads.last?["trailingInlineSource"] as? String == nil, "Cut still advertised the removed chip")
   view.apply("hi ", tokensJson: "[]", echo: true)
   view.editor.undoManager?.undo()
   check(view.onComposerChange.payloads.last?["trailingInlineSource"] as? String == source, "Undo did not report the restored trailing attachment")
@@ -115,7 +115,14 @@ do {
   check(view.chip(at: 3) === restored, "Echo rebuilt the trailing attachment")
   view.editor.undoManager?.redo()
   check(view.text == "hi ", "Redo did not remove the trailing attachment again")
-  print("Trailing attachment Undo evidence and Redo passed")
+  let redo = view.onComposerChange.payloads.last
+  view.editor.insertText(source)
+  let typed = view.onComposerChange.payloads.last
+  check(view.text == "hi " + source && view.chip(at: 3) == nil, "Raw input after Redo is not plain text")
+  check(typed?["trailingInlineSource"] is NSNull, "Raw input after Redo must explicitly report no trailing chip")
+  check(redo?["trailingInlineSource"] is NSNull, "Redo must explicitly report no trailing chip")
+  check((typed?["eventCount"] as? Int ?? 0) > (redo?["eventCount"] as? Int ?? 0), "Raw input must have a newer revision than Redo")
+  print("Trailing attachment Undo and batched Redo with raw input passed")
 }
 
 do {

@@ -2,7 +2,7 @@ export interface ComposerNativeEventSnapshot {
   readonly eventCount: number;
   readonly value: string;
   readonly selection: ComposerEditorSelection | null;
-  readonly trailingInlineSource?: string | undefined;
+  readonly trailingInlineSource?: string | null | undefined;
 }
 
 interface ComposerEditorSelection {

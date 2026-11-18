@@ -115,7 +115,10 @@ function basename(path: string): string {
   return separator >= 0 ? path.slice(separator + 1) : path;
 }
 
-function confirmedTrailingToken(value: string, source: string | undefined) {
+function confirmedTrailingToken(
+  value: string,
+  source: ComposerNativeEventSnapshot["trailingInlineSource"],
+) {
   if (!source || !value.endsWith(source)) return undefined;
   const [token] = collectComposerInlineTokens(source + " ");
   if (token?.source !== source) return undefined;
@@ -155,16 +158,18 @@ export function ComposerEditor({
   const [confirmedTokens, setConfirmedTokens] = useState<{
     readonly value: string;
     readonly tokens: ReadonlyArray<ComposerInlineToken>;
-    readonly trailingInlineSource?: string | undefined;
+    readonly trailingInlineSource?: ComposerNativeEventSnapshot["trailingInlineSource"];
   }>(() => ({ value: props.value, tokens: collectComposerInlineTokens(props.value) }));
   let tokens = confirmedTokens.tokens;
   if (
     confirmedTokens.value !== props.value ||
     confirmedTokens.trailingInlineSource !== trailingInlineSource
   ) {
+    // Older native builds omit the field and rely on the last confirmed tokens.
+    const preserveTrailingFrom = trailingInlineSource === null ? [] : tokens;
     const restored = confirmedTrailingToken(props.value, trailingInlineSource);
     tokens = collectComposerInlineTokens(props.value, {
-      preserveTrailingFrom: restored ? [...tokens, restored] : tokens,
+      preserveTrailingFrom: restored ? [...preserveTrailingFrom, restored] : preserveTrailingFrom,
     });
     setConfirmedTokens({ value: props.value, tokens, trailingInlineSource });
   }

@@ -1175,6 +1175,7 @@ public final class GoatComposerEditorView: ExpoView, UITextViewDelegate, UITextD
       "value": value,
       "selection": ["start": selection.start, "end": selection.end],
       "eventCount": nativeEventCount,
+      "trailingInlineSource": NSNull(),
     ]
     let storage = textView.textStorage
     if storage.length > 0,
