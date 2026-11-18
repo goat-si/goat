@@ -1256,3 +1256,14 @@ NOT RUN: Server-only gate exclusions and the restored redirect browser suite.
 NOT RUN: Browser and render projects, real web, desktop, and mobile clients, separate older binaries, and downgrade testing. The reverted mobile setup-Steer browser suite was removed with its feature.
 
 NOT RUN: Lane CI, full CI suites, builds, and release smoke.
+
+## K6 fix round 4
+
+Fix `58e3d308c0cf6994ec2781b938098860b73e248a` preserves the thread model binding when a provider declines a user-created schedule's promotion. The effect worker omits the promotion model on redispatch when the message has `followsThreadSelection` (`apps/server/src/orchestration-v2/EffectWorker.ts:298`). The existing regression now covers bound and pinned schedules for both user and agent provenance (`apps/server/src/orchestration-v2/ScheduledQueuedSelection.integration.test.ts:124`).
+
+- Before the fix, `GOAT_TEST_TMP_GUARD=fail vp test run apps/server/src/orchestration-v2/ScheduledQueuedSelection.integration.test.ts` had eight passes and one failure. Only the bound user case failed, delivering `model-at-promotion` instead of `model-at-delivery`.
+- With the fix, the guarded schedule, steering-decline, and steering-completion suites passed 48 tests in three files. From `apps/server`, `GOAT_TEST_TMP_GUARD=fail vp test run --maxWorkers=3` passed all 283 tests in the same 13 changed or restored server files listed in round 3.
+- `GOAT_TEST_TMP_GUARD=fail VITEST_MAX_WORKERS=6 node scripts/check-changed.ts origin/chase/t3-261114-next3` checked 42 changed files. Rename, format, lint, Knip, GraphQL generation, both audits, and all 38 package typechecks passed. With the same five browser selectors excluded as in round 3, Vitest reported 566 passing files and one failing file, with 7,065 passed tests, three skipped, and one failed. The gate exited 1 at `apps/server/src/storageCleanupShipping.test.ts:211`. The Git 2.43.0 reason lines match the `6def29ca35` integration-baseline failure exactly. The storage-cleanup files are identical to that baseline.
+- The K6 branch was pushed as a fast-forward and the remote head was verified at `58e3d308c0cf6994ec2781b938098860b73e248a`.
+
+NOT RUN: The five browser selectors listed in round 3, browser and render projects, real client passes, lane CI, full CI suites, builds, and release smoke.
