@@ -326,3 +326,9 @@ Every changed test file run whole, no -t, on c31dfe1c41 after the gate: web Mess
 Push: plain, 4fa174d23c..c31dfe1c41 on chase/t3-261114-next3-k10-web-timeline (ls-remote before 4fa174d23c, after c31dfe1c41). No merge of the integration head in this round (it is still 259883c788, which the head contains).
 
 NOT RUN: goat-ci (the coordinator dispatches it); any real client (P1, the review's list); the mutations after the fixup rebase (the fixups touched only a fixture field and the probe's undefined guard; the cases' assertions are unchanged); a live-server count of link lookup requests.
+
+## Coordinator rule, about 02:00 UTC (relayed): no git stash
+
+Rule: do not use git stash; a stash entry of your own is applied by its exact ref after checking its message names your branch, and said in the record; never drop entries that are not yours.
+K10: the fix round used no stash (fail-first runs copied the file to /tmp and back, or mutated and restored with git checkout of that one file). git stash list showed one entry naming this branch: 81c9cb3d8cdc63c3ce797ac8295003e92df017ae, "WIP on chase/t3-261114-next3-k10-web-timeline: c995c5427a ...", made 2026-11-18 06:41 KST in this worktree during goat#3689 (the nine translation catalogs only). Its nine files equal the lane's goat#3689 commit f8478a99ef byte for byte (git diff --stat stash@{0} f8478a99ef empty for de, en, es, fr, ja, ko, pt-BR, ru, zh), so nothing in it was unapplied. I dropped that one entry by exact ref after checking its sha, so no other lane can pop it. The lint-staged automatic backups in the list were not touched.
+
