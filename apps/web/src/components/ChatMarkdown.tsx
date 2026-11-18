@@ -1,3 +1,4 @@
+import { resolveWorkspaceFilePath } from "@goat/shared/path";
 import { GITHUB_ALERT_PRESENTATIONS } from "./chat/markdownAlertPresentations";
 import { orderedListGutterStyle } from "./chat/orderedListGutterStyle";
 import { buildFileLinkParentSuffixByPath, fileLinkLabel } from "@goat/shared/fileLinks";
@@ -460,7 +461,7 @@ function useChatMarkdownState({
       },
     );
   };
-  const { pullRequestsEnabled, availableEditors, revealInFileManagerLabel } = useAtomValue(
+  const { pullRequestsEnabled, availableEditors, revealInFileManagerLabel, isMacOS } = useAtomValue(
     markdownServerConfigFieldsAtom(environmentId),
   );
   const projects = useProjects();
@@ -642,6 +643,13 @@ function useChatMarkdownState({
         cwd,
         findWorkspaceMatch: () => findWorkspaceFileMatch(fileLinkMeta),
       });
+    const appBundle = isMacOS && fileLinkMeta.filePath.endsWith(".app");
+    const canOpenApp =
+      appBundle &&
+      canUseShellActions &&
+      environmentId !== null &&
+      remoteOpen.state.mode === "local-exec" &&
+      availableEditors.includes("file-manager");
     const mediaPath = mediaSource ?? fileLinkMeta.filePath;
     const canPreviewMedia =
       mediaMimeTypeFromExtension(
@@ -657,8 +665,15 @@ function useChatMarkdownState({
         href={fileLinkMeta.targetPath}
         targetPath={fileLinkMeta.targetPath}
         iconPath={fileLinkMeta.filePath}
+        appIconPath={
+          appBundle && cwd
+            ? resolveWorkspaceFilePath(fileLinkMeta.filePath, cwd)
+            : appBundle
+              ? fileLinkMeta.filePath
+              : undefined
+        }
         workspaceRelativePath={fileLinkMeta.workspaceRelativePath}
-        panelPath={panelPath}
+        panelPath={appBundle ? null : panelPath}
         line={fileLinkMeta.line}
         label={fileLinkLabel(
           { ...fileLinkMeta, path: fileLinkMeta.filePath },
@@ -668,12 +683,18 @@ function useChatMarkdownState({
         theme={resolvedTheme}
         threadRef={threadRef}
         onOpen={
-          canUseShellActions
+          canOpenApp
             ? async () =>
-                openInPreferredEditor(
-                  markdownFileEditorTarget(fileLinkMeta, await resolveHostPath()),
-                )
-            : undefined
+                openInEditor({
+                  environmentId,
+                  input: { cwd: (await resolveHostPath()).absolutePath, editor: "file-manager" },
+                })
+            : canUseShellActions && !appBundle
+              ? async () =>
+                  openInPreferredEditor(
+                    markdownFileEditorTarget(fileLinkMeta, await resolveHostPath()),
+                  )
+              : undefined
         }
         resolveCopyPaths={async () => {
           const hostPath = await resolveHostPath();
@@ -689,7 +710,7 @@ function useChatMarkdownState({
             ? () => openMarkdownMedia(mediaPath, fileLinkMeta.filePath)
             : undefined
         }
-        openInEditorMenuLabel={preferredEditorMenuLabel}
+        openInEditorMenuLabel={canOpenApp ? "Open app" : preferredEditorMenuLabel}
         onReveal={
           canUseShellActions && revealInFileManagerLabel !== undefined
             ? async () => revealFileInFileManager((await resolveHostPath()).absolutePath)

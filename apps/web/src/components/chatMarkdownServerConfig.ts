@@ -13,6 +13,7 @@ type MarkdownServerConfigFields = ReturnType<typeof markdownServerConfigFields>;
 
 function markdownServerConfigFields(config: ServerConfig | null) {
   return {
+    isMacOS: config?.environment.platform.os === "darwin",
     pullRequestsEnabled: config?.environment.capabilities.pullRequests === true,
     availableEditors: config?.availableEditors ?? NO_MARKDOWN_EDITORS,
     revealInFileManagerLabel:
@@ -29,6 +30,7 @@ function markdownServerConfigFieldsEqual(
   next: MarkdownServerConfigFields,
 ): boolean {
   return (
+    previous.isMacOS === next.isMacOS &&
     previous.pullRequestsEnabled === next.pullRequestsEnabled &&
     previous.revealInFileManagerLabel === next.revealInFileManagerLabel &&
     previous.availableEditors.length === next.availableEditors.length &&
