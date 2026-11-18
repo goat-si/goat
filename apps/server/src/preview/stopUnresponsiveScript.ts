@@ -7,7 +7,7 @@ export const stopUnresponsiveScript = async (
   canProbe: () => boolean,
   budgetMs = 1_000,
 ) => {
-  if (budgetMs <= 0 || !canProbe()) return;
+  if (budgetMs <= 0 || !canProbe()) return false;
   let timer: ReturnType<typeof setTimeout> | undefined;
   const answered = channel.send("Runtime.evaluate", { expression: "0" }).then(
     () => true,
@@ -19,4 +19,5 @@ export const stopUnresponsiveScript = async (
   const responsive = await Promise.race([answered, deadline]).finally(() => clearTimeout(timer));
   // Chromium can deliver termination while no navigation is pending, but need not answer it.
   if (!responsive && canProbe()) void channel.send("Runtime.terminateExecution").catch(constVoid);
+  return !responsive;
 };

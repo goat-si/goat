@@ -25,8 +25,9 @@ const navigateHistory = async (
   };
   const leave = async (channel: ActionChannel) => {
     const startedAt = performance.now();
-    await stopUnresponsiveScript(channel, canProbe, options.timeout / 2);
-    options.timeout = Math.max(1, options.timeout - (performance.now() - startedAt));
+    if (await stopUnresponsiveScript(channel, canProbe, options.timeout / 2)) {
+      options.timeout = Math.max(1, options.timeout - (performance.now() - startedAt));
+    }
     assertControl();
   };
   if (operation === "reload" && input.ignoreCache !== true) {
