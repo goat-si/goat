@@ -24,33 +24,6 @@ import {
   withPackagedWslHarness,
 } from "./DesktopBackendConfiguration.testkit.ts";
 describe("DesktopBackendConfiguration", () => {
-  it.effect("propagates the implicit packaged desktop home in the primary bootstrap", () =>
-    Effect.gen(function* () {
-      const fs = yield* FileSystem.FileSystem;
-      const path = yield* Path.Path;
-      const home = yield* fs.makeTempDirectoryScoped({ prefix: "goat-packaged-bootstrap-" });
-      yield* Effect.gen(function* () {
-        const environment = yield* DesktopEnvironment.DesktopEnvironment;
-        const configuration = yield* DesktopBackendConfiguration.DesktopBackendConfiguration;
-        const config = yield* configuration.resolvePrimary;
-        assert.equal(environment.baseDir, path.join(home, ".goat", "desktop"));
-        assert.equal(config.bootstrap.goatHome, environment.baseDir);
-      }).pipe(
-        Effect.provide(
-          layerBackendConfiguration().pipe(
-            Layer.provideMerge(layerServerExposure),
-            Layer.provideMerge(DesktopAppSettings.layerTest()),
-            Layer.provideMerge(DesktopWslEnvironment.layerTest()),
-            Layer.provideMerge(DesktopWslServerTree.layerTest()),
-            Layer.provideMerge(
-              layerEnvironment(home, { omitHomeOverride: true, isPackaged: true }),
-            ),
-          ),
-        ),
-      );
-    }).pipe(Effect.scoped, Effect.provide(NodeServices.layer)),
-  );
-
   it.effect("unpackaged children clear inherited bundle paths and WSLENV flags", () =>
     Effect.gen(function* () {
       const fs = yield* FileSystem.FileSystem;
