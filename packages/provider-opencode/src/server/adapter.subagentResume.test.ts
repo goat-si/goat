@@ -553,19 +553,56 @@ const childPermissionModes = [
   },
 ] as const;
 
-const childPermissionRows = childPermissionModes.flatMap((mode) =>
+const inheritedPolicyRows = childPermissionModes.flatMap((mode) =>
   [1, 2, 3].flatMap((bases) =>
     Array.from({ length: bases }, (_, createdAfter) =>
       (["none", "restart", "retry"] as const).flatMap((interruption) =>
-        [false, true].map((marked) => ({ ...mode, bases, createdAfter, interruption, marked })),
+        [false, true].map((marked) => ({
+          ...mode,
+          bases,
+          createdAfter,
+          interruption,
+          marked,
+          inheritedBlock: true,
+          nativeWildcardDenies: false,
+        })),
       ),
     ).flat(),
   ),
 );
 
+const overlappingNativeDenyRows = childPermissionModes.flatMap((mode) =>
+  (
+    [
+      { bases: 2, createdAfter: 1, marked: true, inheritedBlock: true },
+      { bases: 3, createdAfter: 2, marked: false, inheritedBlock: true },
+      { bases: 1, createdAfter: 0, marked: false, inheritedBlock: false },
+    ] as const
+  ).map((row) => ({
+    ...mode,
+    ...row,
+    directory: "deny",
+    old: "deny",
+    interruption: "restart" as const,
+    nativeWildcardDenies: true,
+  })),
+);
+
+const childPermissionRows = [...inheritedPolicyRows, ...overlappingNativeDenyRows];
+
 it.effect.each(childPermissionRows)(
-  "applies $mode after $bases parent bases, child born after $createdAfter appends, $interruption, marked=$marked",
-  ({ policy, directory, old, bases, createdAfter, interruption, marked }) =>
+  "applies $mode after $bases parent bases, child born after $createdAfter appends, $interruption, marked=$marked, native wildcard denies=$nativeWildcardDenies, inherited block=$inheritedBlock",
+  ({
+    policy,
+    directory,
+    old,
+    bases,
+    createdAfter,
+    interruption,
+    marked,
+    inheritedBlock,
+    nativeWildcardDenies,
+  }) =>
     Effect.gen(function* () {
       const root = "matrix-root";
       const parent = "matrix-parent";
@@ -592,13 +629,21 @@ it.effect.each(childPermissionRows)(
       const latest = history.at(-1)!;
       const creationBase = history[createdAfter]!;
       const nativeDenies: PermissionRuleset = [
+        ...(nativeWildcardDenies
+          ? ([
+              { permission: "bash", pattern: "*", action: "deny" },
+              { permission: "external_directory", pattern: "*", action: "deny" },
+            ] as const)
+          : []),
         { permission: "task", pattern: "*", action: "deny" },
         { permission: "read", pattern: "/workspace/private/*", action: "deny" },
       ];
-      const inherited = history
-        .slice(0, createdAfter + 1)
-        .flat()
-        .filter((rule) => rule.permission === "external_directory" || rule.action === "deny");
+      const inherited = inheritedBlock
+        ? history
+            .slice(0, createdAfter + 1)
+            .flat()
+            .filter((rule) => rule.permission === "external_directory" || rule.action === "deny")
+        : [];
 
       type Session = {
         id: string;
@@ -717,6 +762,7 @@ it.effect.each(childPermissionRows)(
         [directory, old, "allow", "deny"],
         "current directory, previous directory, workspace read, child-native deny",
       );
+      if (nativeWildcardDenies) assert.equal(action("bash", "pwd"), "deny");
       if (exercisesHistoryLimit) {
         assert.deepEqual(
           stored(parent).metadata?.goatPermissionBaseHistory,

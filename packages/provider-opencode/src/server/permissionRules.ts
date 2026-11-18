@@ -442,6 +442,57 @@ export function openCodeInstalledPermission(
   };
 }
 
+const legacyScopedInheritedPrefix = inheritedChildRules(
+  openCodePermissionRules({
+    runtimeMode: "approval-required",
+    approvalPolicy: "never",
+    interactionMode: "default",
+    cwd: null,
+  }),
+);
+
+const legacyInheritedBlocks = (["full-access", "approval-required"] as const).map((runtimeMode) =>
+  inheritedChildRules(
+    openCodePermissionRules({ runtimeMode, interactionMode: "default", cwd: null }),
+  ),
+);
+
+function inheritedPrefixLength(
+  rules: PermissionRuleset,
+  parentBases: ReadonlyArray<PermissionRuleset>,
+): number {
+  const blocks = [
+    ...legacyInheritedBlocks,
+    ...parentBases.flatMap((base) => [base, inheritedChildRules(base)]),
+  ];
+  let offset = 0;
+  while (offset < rules.length) {
+    let matched = 0;
+    for (const block of blocks) {
+      if (block.length > matched && startsWithRules(rules, block, offset)) matched = block.length;
+    }
+    // A complete legacy restricted block needs its directory grant to identify it as inherited.
+    if (startsWithRules(rules, legacyScopedInheritedPrefix, offset)) {
+      let end = offset + legacyScopedInheritedPrefix.length;
+      while (end < rules.length) {
+        const rule = rules[end];
+        if (
+          rule?.permission !== "external_directory" ||
+          rule.action !== "allow" ||
+          (rule.pattern !== "*" && !isWritableRootPattern(rule.pattern))
+        )
+          break;
+        end++;
+      }
+      if (end > offset + legacyScopedInheritedPrefix.length)
+        matched = Math.max(matched, end - offset);
+    }
+    if (matched === 0) break;
+    offset += matched;
+  }
+  return offset;
+}
+
 export function openCodeInstalledChildPermission(
   session: Parameters<typeof mergeOpenCodeResumePermission>[0],
   runtimePolicy: ProviderAdapter.ProviderAdapterV2RuntimePolicy,
@@ -451,16 +502,16 @@ export function openCodeInstalledChildPermission(
   const installed = openCodeInstalledPermission(runtimePolicy, session.metadata);
   const { base: recorded, permission } = readOpenCodeSessionPermission(session);
   const previous = withOpenCodeSubagentDeny(permission, openCodeOwnsSubagentDeny(session), false);
-  const seen = new Set(previousParentBases.flatMap((base) => base.map(permissionRuleKey)));
+  const nativeOffset = recorded?.length ?? inheritedPrefixLength(previous, previousParentBases);
+  const seen = new Set<string>();
   const nativeDenies: PermissionRuleset = [];
   let discardedAllows = 0;
-  // OpenCode can inherit rules from every appended parent base, even without GOAT metadata.
-  for (const rule of previous.slice(recorded?.length ?? 0)) {
+  for (const rule of previous.slice(nativeOffset)) {
     const key = permissionRuleKey(rule);
-    if (seen.has(key) || isGoatShapedRule(rule)) continue;
+    if (seen.has(key)) continue;
     seen.add(key);
     if (rule.action === "deny") nativeDenies.push(rule);
-    if (rule.action === "allow") discardedAllows++;
+    if (rule.action === "allow" && !isGoatShapedRule(rule)) discardedAllows++;
   }
   return {
     permission: withOpenCodeSubagentDeny(
