@@ -32,15 +32,15 @@ export const makeStrictNdJsonRpcParser = () => {
         if (fragment.length > 0) fragments.push(fragment);
         if (index < lines.length - 1) {
           const line = fragments.join("");
-          // Every message in a batch line is charged the whole line.
+          fragments = [];
+          pendingCharacters = 0;
+          if (line.trim() === "") continue;
           decoded.push(
             ...codec.decode(line).map((message) => ({
               message: message as RpcMessage.FromClientEncoded | RpcMessage.FromServerEncoded,
               lineLength: line.length,
             })),
           );
-          fragments = [];
-          pendingCharacters = 0;
         }
       }
       return decoded;
