@@ -1,11 +1,15 @@
 import { RegistryContext, useAtomValue } from "@effect/atom-react";
-import type { EnvironmentId, MemoryMoveInput, MemoryScope, MemorySpaceId } from "@goat/contracts";
+import type { EnvironmentId, MemoryScope, MemorySpaceId } from "@goat/contracts";
 import {
   memoryProjectScope,
-  sameMemoryScope,
+  canSubmitMemoryMove,
+  memoryMoveOutcomeMessage,
+  memoryMoveRows,
+  submitMemoryMoves,
+  type MemoryMoveAttempts,
   type MemoryMoveCandidate,
 } from "@goat/client-runtime/memory-browsing";
-import { useContext, useRef, useState } from "react";
+import { useContext, useState } from "react";
 import { Pressable } from "react-native";
 import { Menu } from "../../components/ui/Menu";
 import { useProjects, useThreadShells } from "../../state/entities";
@@ -29,7 +33,7 @@ export function MobileMemoryMoveControl({
   const allowed = useAtomValue(permission);
   const registry = useContext(RegistryContext);
   const live = useMemoryLifetime(environmentId);
-  const move = useAtomCommand(memory.move);
+  const move = useAtomCommand(memory.move, { reportFailure: false, reportDefect: false });
   const getProject = useAtomCommand(memory.projectBindingGet);
   const projects = useProjects().filter((item) => item.environmentId === environmentId);
   const threads = useThreadShells().filter((item) => item.environmentId === environmentId);
@@ -38,7 +42,7 @@ export function MobileMemoryMoveControl({
   );
   const [busy, setBusy] = useState(false);
   const [message, setMessage] = useState<string | null>(null);
-  const attempts = useRef<{ key: string; requests: readonly MemoryMoveInput[] } | null>(null);
+  const [attempts, setAttempts] = useState<MemoryMoveAttempts>(() => new Map());
   if (!allowed || !candidates.length) return null;
 
   const actions = [
@@ -82,46 +86,26 @@ export function MobileMemoryMoveControl({
     if (scope) setDestination({ scope, label: project.title });
     else setMessage("This project has no memory scope.");
   }
-  const eligible = destination
-    ? candidates.filter((item) => !sameMemoryScope(item.fromScope, destination.scope))
-    : [];
+  const rows = memoryMoveRows(environmentId, candidates, destination?.scope, attempts);
+  const eligible = rows.filter(canSubmitMemoryMove).length;
   async function submit() {
-    if (!destination || !eligible.length || busy || !live() || !registry.get(permission)) return;
-    const key = JSON.stringify([destination.scope, eligible]);
-    if (attempts.current?.key !== key)
-      attempts.current = {
-        key,
-        requests: eligible.map((input) => ({
-          ...input,
-          operationId: operationId(),
-          toScope: destination.scope,
-        })),
-      };
-    const { requests } = attempts.current;
+    const permitted = () => live() && registry.get(permission);
+    if (!eligible || busy || !permitted()) return;
     setBusy(true);
-    const failures: MemoryMoveInput[] = [];
-    for (const input of requests) {
-      if (!live() || !registry.get(permission)) return;
-      const result = await move({ environmentId, input });
-      if (
-        result._tag !== "Success" ||
-        result.value.outcome !== "accepted" ||
-        result.value.pendingSync
-      )
-        failures.push(input);
-    }
+    const result = await submitMemoryMoves(
+      rows,
+      operationId,
+      (input) => move({ environmentId, input }),
+      permitted,
+    );
     if (!live()) return;
     setBusy(false);
-    if (!registry.get(permission)) return;
-    attempts.current = failures.length ? { key, requests: failures } : null;
-    setMessage(
-      failures.length
-        ? `Could not confirm the move for ${failures.length} ${failures.length === 1 ? "memory" : "memories"}.`
-        : null,
-    );
-    if (!failures.length) setDestination(null);
-    if (failures.length < requests.length) onMoved(failures.length === 0);
+    setAttempts(result.attempts);
+    if (!permitted()) return;
+    if (result.allMoved) setDestination(null);
+    if (result.refresh) onMoved(result.allMoved);
   }
+
   return (
     <>
       <Menu actions={actions} onPressAction={({ nativeEvent }) => void choose(nativeEvent.event)}>
@@ -133,11 +117,20 @@ export function MobileMemoryMoveControl({
         <>
           <Copy>{`Destination: ${destination.label}`}</Copy>
           <Action
-            label={eligible.length > 1 ? `Move ${eligible.length} memories` : "Move memory"}
-            disabled={busy || !eligible.length}
+            label={eligible > 1 ? `Move ${eligible} memories` : "Move memory"}
+            disabled={busy || !eligible}
             onPress={() => void submit()}
           />
           <Action label="Cancel move" disabled={busy} onPress={() => setDestination(null)} />
+          {rows.map(
+            ({ input, label, outcome }) =>
+              outcome && (
+                <Copy key={input.memoryId}>
+                  {rows.length > 1 ? `${label} · ` : ""}
+                  {memoryMoveOutcomeMessage(outcome)}
+                </Copy>
+              ),
+          )}
         </>
       ) : null}
       {message ? <Copy>{message}</Copy> : null}

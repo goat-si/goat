@@ -1178,7 +1178,13 @@ function MemoryDetails({
               environmentId={params.environmentId}
               memorySpaceId={memorySpaceId}
               candidates={[move]}
-              onMoved={onMoved}
+              onMoved={(allMoved) => {
+                if (allMoved) onMoved();
+                else {
+                  registry.refresh(readAtom);
+                  registry.refresh(historyAtom);
+                }
+              }}
             />
           ) : null}
           {!retry ? (
