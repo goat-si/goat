@@ -1,29 +1,15 @@
-import * as Schema from "effect/Schema";
-import {
-  MemoryHubCheckpointPage,
-  memoryImportLineageRecordKey,
-  type MemoryId,
-  type MemoryOperationId,
-} from "./memory.ts";
-import { importScopeKey, same, sameSet } from "./memoryCodec.ts";
+import type { MemoryHubCheckpointPage, MemoryId, MemoryOperationId } from "./memory.ts";
+import { importScopeKey, memoryImportLineageRecordKey, same, sameSet } from "./memoryCodec.ts";
 
-const checkpointDecode = Schema.decodeUnknownSync(MemoryHubCheckpointPage, {
-  onExcessProperty: "error",
-});
 /**
  * Validate structural ledger links without stateful admission or quotas.
  * The server must separately verify report-key digests before installing the snapshot.
  */
-export function validateMemoryCheckpointRecords(
+export function validateCheckpointRecordsStructure(
   pages: readonly MemoryHubCheckpointPage[],
 ): boolean {
   const [first] = pages;
   if (!first) return false;
-  try {
-    pages.forEach((page) => checkpointDecode(page));
-  } catch {
-    return false;
-  }
   if (
     !pages.every(
       (p, i) =>

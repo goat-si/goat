@@ -41,7 +41,8 @@ import {
   unique,
   utf8,
 } from "./memoryCodec.ts";
-import { importScopeKey } from "./memoryCodec.ts";
+import { validateCheckpointRecordsStructure } from "./memoryCheckpointValidation.ts";
+export { memoryImportLineageRecordKey } from "./memoryCodec.ts";
 import { MemoryFloor2Feature } from "./memoryFloor.ts";
 export * from "./memoryLimits.ts";
 export * from "./memoryFloor.ts";
@@ -2582,16 +2583,6 @@ export const MemoryImportLineageRecord = Schema.Union([
 ]);
 export type MemoryImportLineageRecord = typeof MemoryImportLineageRecord.Type;
 
-export const memoryImportLineageRecordKey = (v: MemoryImportLineageRecord): string =>
-  JSON.stringify([
-    v.memorySpaceId,
-    v.memoryId,
-    v.kind,
-    v.kind === "sourceKey"
-      ? [v.sourceKey.environmentId, v.sourceKey.sourceId, v.sourceKey.sourceItemKey]
-      : [importScopeKey(v.content.scope), v.content.assertionKind, v.content.contentFingerprint],
-  ]);
-
 export const MemoryHubCheckpointPage = bounded(
   struct({
     memorySpaceId: MemorySpaceId,
@@ -2907,6 +2898,18 @@ export const MEMORY_HUB_PATHS = {
   sourceReadRespond: "/api/memory-hub/v1/source-read/respond",
   sourceReadResult: "/api/memory-hub/v1/source-read/result",
 } as const;
+const checkpointDecode = Schema.decodeUnknownSync(MemoryHubCheckpointPage, {
+  onExcessProperty: "error",
+});
+export function validateMemoryCheckpointRecords(pages: readonly MemoryHubCheckpointPage[]) {
+  try {
+    pages.forEach((page) => checkpointDecode(page));
+  } catch {
+    return false;
+  }
+  return validateCheckpointRecordsStructure(pages);
+}
+
 /** Source admission still belongs to the owner; this only checks returned locators. */
 export function validateMemorySourceReadOutcome(
   request: MemorySourceReadRequest,

@@ -1,4 +1,4 @@
-import type { MemoryProjectKey, MemoryScope } from "./memory.ts";
+import type { MemoryImportLineageRecord, MemoryProjectKey, MemoryScope } from "./memory.ts";
 import * as Schema from "effect/Schema";
 import * as SchemaParser from "effect/SchemaParser";
 import * as SchemaAST from "effect/SchemaAST";
@@ -79,3 +79,13 @@ export const importScopeKey = (v: MemoryScope) =>
           v.projectKey === undefined ? null : importProjectKey(v.projectKey),
         ];
 /** Shared canonical key for ledger union, duplicate validation and checkpoint pagination. */
+
+export const memoryImportLineageRecordKey = (v: MemoryImportLineageRecord): string =>
+  JSON.stringify([
+    v.memorySpaceId,
+    v.memoryId,
+    v.kind,
+    v.kind === "sourceKey"
+      ? [v.sourceKey.environmentId, v.sourceKey.sourceId, v.sourceKey.sourceItemKey]
+      : [importScopeKey(v.content.scope), v.content.assertionKind, v.content.contentFingerprint],
+  ]);
