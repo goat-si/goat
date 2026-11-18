@@ -563,7 +563,15 @@ it.effect.each([
         ...readyCodex,
         usageLimits: {
           checkedAt: readyCodex.checkedAt,
-          windows: [{ id: "weekly", kind: "weekly" as const, label: "Weekly", exhausted: true }],
+          windows: [
+            {
+              id: "weekly",
+              kind: "weekly" as const,
+              label: "Weekly",
+              usedPercent: 100,
+              exhausted: true,
+            },
+          ],
         },
       },
       readyClaude(),
