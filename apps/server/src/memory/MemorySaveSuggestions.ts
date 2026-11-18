@@ -126,9 +126,11 @@ export const makeMemorySaveSuggestions = ({
           INSERT INTO memory_save_suggestions
             (id, space, origin_environment_id, origin_thread_id, text, scope_json, derived_json,
               lineage_complete, reason, forget_generation, created_at, expires_at, state, accept_operation_id)
-          VALUES (${id},${space},${thread.environmentId},${thread.threadId},${text},${encodedScope},${derived},
+          SELECT ${id},${space},${thread.environmentId},${thread.threadId},${text},${encodedScope},${derived},
             ${Number(lineageComplete)},${reason},${forgetGeneration},${now},${now + M.MEMORY_SAVE_SUGGESTION_TTL_MS},
-            ${accepting ? "accepting" : "pending"},${accepting})
+            ${accepting ? "accepting" : "pending"},${accepting}
+          WHERE (SELECT count(*) FROM memory_save_suggestions WHERE space=${space} AND state='accepting')
+            < ${M.MEMORY_SAVE_SUGGESTION_MAX_ITEMS}
           ON CONFLICT(id) DO UPDATE SET state='accepting',accept_operation_id=excluded.accept_operation_id,
             derived_json=excluded.derived_json,lineage_complete=excluded.lineage_complete,reason=excluded.reason
           WHERE memory_save_suggestions.state='pending' AND excluded.state='accepting'`,
