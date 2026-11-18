@@ -38,6 +38,14 @@ function fileItem(relativePath: string): FileItem {
   };
 }
 
+const writeIndexedFixture = Effect.fn(function* (cwd: string, relativePath: string) {
+  const fs = yield* FileSystem.FileSystem;
+  const path = yield* Path.Path;
+  const file = path.join(cwd, relativePath);
+  yield* fs.makeDirectory(path.dirname(file), { recursive: true });
+  yield* fs.writeFileString(file, "");
+});
+
 it.effect("filters image searches before applying the result limit", () =>
   Effect.scoped(
     Effect.gen(function* () {
@@ -61,9 +69,9 @@ it.effect("filters image searches before applying the result limit", () =>
       } as unknown as FileFinder;
       vi.spyOn(FileFinder, "create").mockReturnValueOnce({ ok: true, value: finder });
 
-      const searchIndex = yield* WorkspaceSearchIndex.make(
-        yield* (yield* FileSystem.FileSystem).makeTempDirectoryScoped(),
-      );
+      const cwd = yield* (yield* FileSystem.FileSystem).makeTempDirectoryScoped();
+      yield* writeIndexedFixture(cwd, "public/icon.svg");
+      const searchIndex = yield* WorkspaceSearchIndex.make(cwd);
       const resultWithoutKind = yield* searchIndex.search("", 200, undefined, true);
       const resultWithDirectoryKind = yield* searchIndex.search("", 200, "directory", true);
 
@@ -86,6 +94,7 @@ it.effect("fetches past a first page of Git-ignored results", () =>
       yield* fs.writeFileString(path.join(cwd, ".git", "info", "exclude"), "hidden/\n");
       yield* fs.makeDirectory(path.join(cwd, "hidden"));
       yield* fs.writeFileString(path.join(cwd, "hidden", "a.ts"), "");
+      yield* writeIndexedFixture(cwd, "src/a.ts");
 
       const items = [
         fileItem("hidden/a.ts"),
@@ -132,9 +141,9 @@ it.effect("keeps a backslash in a POSIX folder name as part of the search result
       } as unknown as FileFinder;
       vi.spyOn(FileFinder, "create").mockReturnValueOnce({ ok: true, value: finder });
 
-      const searchIndex = yield* WorkspaceSearchIndex.make(
-        yield* (yield* FileSystem.FileSystem).makeTempDirectoryScoped(),
-      );
+      const cwd = yield* (yield* FileSystem.FileSystem).makeTempDirectoryScoped();
+      yield* writeIndexedFixture(cwd, "dir\\one/report.txt");
+      const searchIndex = yield* WorkspaceSearchIndex.make(cwd);
       const result = yield* searchIndex.search("report", 50, "file");
 
       expect(result.entries).toEqual([{ kind: "file", path: "dir\\one/report.txt" }]);
@@ -260,7 +269,9 @@ it.effect.each([
               stderrTruncated: false,
             }),
         });
-        const index = yield* WorkspaceSearchIndex.make("/workspace/project").pipe(
+        const cwd = yield* (yield* FileSystem.FileSystem).makeTempDirectoryScoped();
+        yield* writeIndexedFixture(cwd, visible);
+        const index = yield* WorkspaceSearchIndex.make(cwd).pipe(
           Effect.provideService(VcsProcess.VcsProcess, process),
         );
         const result = yield* index.search("report", 50, "file");

@@ -434,3 +434,34 @@ it.effect(
       }),
     ).pipe(Effect.provide(testLayer)),
 );
+
+it.effect("omits stale native descendants of a directory skipped within the scan budget", () =>
+  Effect.scoped(
+    Effect.gen(function* () {
+      if ((yield* HostProcess.Platform) === "win32") return;
+      const fs = yield* FileSystem.FileSystem;
+      const path = yield* Path.Path;
+      const cwd = yield* fs.makeTempDirectoryScoped();
+      const outside = yield* fs.makeTempDirectoryScoped();
+      yield* fs.writeFileString(path.join(outside, "stale.ts"), "");
+      yield* fs.symlink(outside, path.join(cwd, "alias"));
+      yield* fs.makeDirectory(path.join(cwd, "real"));
+      yield* fs.writeFileString(path.join(cwd, "real", "safe.ts"), "");
+      fakeSymlinkFinder(["alias", "real"], {
+        indexed: [
+          { path: "alias/stale.ts", kind: "file" },
+          { path: "real/safe.ts", kind: "file" },
+        ],
+      });
+      const index = yield* WorkspaceSearchIndex.make(cwd);
+      expect(yield* index.search("ts", 10, "file")).toEqual({
+        entries: [{ path: "real/safe.ts", kind: "file" }],
+        truncated: false,
+      });
+      expect((yield* index.list()).entries.map((entry) => entry.path)).toEqual([
+        "real",
+        "real/safe.ts",
+      ]);
+    }),
+  ).pipe(Effect.provide(testLayer)),
+);

@@ -466,16 +466,15 @@ export const makeSymlinkScan = Effect.fn("WorkspaceSearchIndex.makeSymlinkScan")
     entries: ReadonlyArray<ProjectEntry>,
     scan: Effect.Success<ReturnType<typeof listSymlinkEntries>>,
   ) {
-    if (!scan.truncated) return entries;
     return yield* Effect.filter(
       entries,
       (entry) => {
-        const parent = entry.path.slice(0, Math.max(entry.path.lastIndexOf("/"), 0));
-        if (scan.coveredDirectories.has(parent) || scan.linkPaths.has(entry.path))
-          return Effect.succeed(true);
         if (path.isAbsolute(entry.path) || entry.path.split("/").includes("..")) {
           return Effect.succeed(false);
         }
+        const parent = entry.path.slice(0, Math.max(entry.path.lastIndexOf("/"), 0));
+        if (scan.coveredDirectories.has(parent) || scan.linkPaths.has(entry.path))
+          return Effect.succeed(true);
         const absolutePath = path.join(root, entry.path);
         return fileSystem.realPath(absolutePath).pipe(
           Effect.map((resolved) => resolved === absolutePath),
