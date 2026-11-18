@@ -12,14 +12,13 @@ import {
   LEGACY_WSL_RUNTIME_SELECTED_MARKER,
 } from "@goat/contracts/legacyT3Names";
 
+import { buildWslRuntimeProbeScript, parseResolvedPath } from "./DesktopWslEnvironment.ts";
 import {
   buildWslRuntimeInstallScript,
   buildWslRuntimeInvalidateScript,
   buildWslRuntimePruneScript,
-  buildWslRuntimeProbeScript,
-  parseResolvedPath,
   parseWslRuntimeRoot,
-} from "./DesktopWslEnvironment.ts";
+} from "./wslRuntimeCache.ts";
 
 // The install script only fails the way this file cares about when a real shell
 // runs it, so find one that has the tools it needs: bash directly on Linux, and
