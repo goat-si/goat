@@ -11,7 +11,9 @@ import {
   SERVICE_LAUNCHER_PROTOCOL,
   type ServiceState,
 } from "./cloud/serviceProtocol.ts";
+import { tryAcquireServerOwnerLock } from "./serverOwnerLockFile.ts";
 import { Launcher, readServiceState, writeServiceState } from "./serviceLauncher.ts";
+import { backupDatabaseOnce, launcherOwner } from "./serviceLauncherDatabase.ts";
 import { repointServiceUnitContents, type ServiceUnit } from "./serviceUnitRepoint.ts";
 
 const update = { id: "update-1", fromVersion: "1.0.0", targetVersion: "1.1.0" } as const;
@@ -112,18 +114,44 @@ it.layer(NodeServices.layer)("launcher selection and unit", (it) => {
     () =>
       Effect.gen(function* () {
         // The service restarted during probation, so the unit already runs the new launcher.
-        const home = yield* makeHome({
+        const committed = {
           protocol: SERVICE_LAUNCHER_PROTOCOL,
           activeVersion: "1.1.0",
-          update: { ...update, status: "committed" },
-          probation: { dbPath: "/nonexistent/state.sqlite", deadline: 60_000 },
-        });
+          update: { ...update, status: "committed" as const },
+        };
+        const home = yield* makeHome(committed);
+        const stateDir = home.path.join(home.root, "userdata");
+        const dbPath = home.path.join(stateDir, "state.sqlite");
+        yield* home.fs.makeDirectory(stateDir);
+        yield* home.fs.writeFileString(dbPath, "before trial");
+        const lock = tryAcquireServerOwnerLock(stateDir, launcherOwner(update.id));
+        assert.isDefined(lock);
+        try {
+          yield* Effect.promise(() =>
+            backupDatabaseOnce(
+              home.root,
+              { ...update, status: "pending", dbPath },
+              lock.generation,
+              new AbortController().signal,
+            ),
+          );
+        } finally {
+          lock.release();
+        }
+        yield* home.fs.writeFileString(dbPath, "after trial");
+        yield* Effect.promise(() =>
+          writeServiceState(home.statePath, {
+            ...committed,
+            probation: { dbPath, deadline: 60_000 },
+          }),
+        );
         const marker = home.path.join(home.root, "protocol-3-runtime.txt");
         yield* home.runtime("1.0.0", shippedProtocol3Runtime(marker));
         yield* home.runtime("1.1.0", "process.exit(1);");
         const state = yield* runUntilActiveExits(home.root, home.statePath);
         assert.equal(state.activeVersion, "1.0.0");
         assert.equal(state.update?.status, "rolled-back");
+        assert.equal(yield* home.fs.readFileString(dbPath), "before trial");
         assert.equal(yield* home.fs.readFileString(marker), "started");
         // Durable state stays readable by a protocol-3 launcher.
         assert.equal(JSON.parse(yield* home.fs.readFileString(home.statePath)).protocol, 3);

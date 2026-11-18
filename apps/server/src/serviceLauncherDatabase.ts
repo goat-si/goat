@@ -17,7 +17,7 @@ const TRIAL_MARKER = ".trial-started";
 const UNTRACKED_OWNER_MARKER = ".untracked-owner";
 const OWNER_GENERATION_FILE = "owner-generation";
 
-// Owner tags in the server-owner.lock generation log. Only these two may own
+// Owner tags in the server-owner.lock generation log. Only these may own
 // the userdata between an update's backup and its restore.
 export const launcherOwner = (updateId: string) => `service-launcher:${updateId}`;
 const trialOwner = (updateId: string) => `service-trial:${updateId}`;
@@ -182,6 +182,7 @@ export async function backupDatabaseOnce(
     const generationPath = NodePath.join(stagingDir, OWNER_GENERATION_FILE);
     await NodeFSP.writeFile(generationPath, `${generation}\n`, { mode: 0o600 });
     await syncFile(generationPath);
+    await syncDirectory(stagingDir);
     await NodeFSP.rename(stagingDir, backupDir);
     await syncDirectory(NodePath.dirname(backupDir));
   } catch (cause) {
@@ -241,20 +242,42 @@ async function restoreTarget(path: string): Promise<string> {
   throw new Error(`Too many symbolic links resolving ${path}.`);
 }
 
-// Restores the backup under both ownership locks. `busy`: another server owns the home and the
-// rollback stays pending. `kept`: a server other than this update's launcher and trial owned the
-// data since the backup, so its writes win. If a legacy owner appeared during an interrupted
-// restore, neither automatic outcome is safe.
+function databaseRecoveryRequired(dbPath: string, backupDir: string, reason: string): Error {
+  return new Error(
+    `Database recovery required for ${dbPath}. ${reason} ` +
+      `The live files and any snapshot files at ${backupDir} were kept. ` +
+      "Follow the recovery steps at https://github.com/goat-si/goat/blob/dev/docs/user/updating.md#recover-an-interrupted-database-restore",
+  );
+}
+
+// An interrupted restore with uncertain ownership leaves both copies for manual recovery.
 export async function restoreDatabaseBackup(
   baseDir: string,
   pending: PendingServiceUpdate,
+  snapshotRequired = false,
 ): Promise<"restored" | "busy" | "kept"> {
   const backupDir = databaseBackupDir(baseDir, pending.id);
-  if (!(await pathExists(backupDir))) return "restored";
+  if (!(await pathExists(backupDir))) {
+    if (!snapshotRequired) return "restored";
+    await NodeFSP.mkdir(backupDir, { recursive: true, mode: 0o700 });
+    await syncDirectory(NodePath.dirname(backupDir));
+  }
   await writeMarker(backupDir, ROLLBACK_MARKER);
 
+  const restoreStarted = await pathExists(NodePath.join(backupDir, RESTORE_MARKER));
+  const untrackedOwner = await pathExists(NodePath.join(backupDir, UNTRACKED_OWNER_MARKER));
+  if (
+    !(untrackedOwner && !restoreStarted) &&
+    !(await pathExists(databaseBackupFile(backupDir, "")))
+  ) {
+    await writeMarker(backupDir, RESTORE_MARKER);
+    await writeMarker(backupDir, UNTRACKED_OWNER_MARKER);
+    throw databaseRecoveryRequired(pending.dbPath, backupDir, "The database snapshot is missing.");
+  }
+
   const stateDir = ownerLockDir(pending);
-  const lock = tryAcquireServerOwnerLock(stateDir, launcherOwner(pending.id));
+  const owner = launcherOwner(pending.id);
+  const lock = tryAcquireServerOwnerLock(stateDir, owner);
   if (lock === undefined) return "busy";
   let releaseLegacy: (() => void) | undefined;
   try {
@@ -263,38 +286,32 @@ export async function restoreDatabaseBackup(
       await markUntrackedDatabaseOwner(baseDir, pending.id);
       return "busy";
     }
-    const restoreStarted = await pathExists(NodePath.join(backupDir, RESTORE_MARKER));
-    if (await pathExists(NodePath.join(backupDir, UNTRACKED_OWNER_MARKER))) {
-      if (restoreStarted) {
-        throw new Error(
-          `Database recovery required for ${pending.dbPath}. Another server may have used the home during an interrupted restore. ` +
-            `The live files and snapshot at ${backupDir} were kept. ` +
-            "Follow the recovery steps at https://github.com/goat-si/goat/blob/dev/docs/user/updating.md#recover-an-interrupted-database-restore",
-        );
-      }
-      return "kept";
+    const recorded = await NodeFSP.readFile(
+      NodePath.join(backupDir, OWNER_GENERATION_FILE),
+      "utf8",
+    ).catch(() => "");
+    const generation = Number(recorded);
+    const owners =
+      Number.isSafeInteger(generation) && generation > 0 && generation < lock.generation
+        ? lock.ownersSince(generation - 1)
+        : [];
+    const ours = new Set([owner, trialOwner(pending.id), probationOwner(pending.id)]);
+    // The backup generation itself must be present even if the lock file was recreated.
+    if (
+      untrackedOwner ||
+      owners[0] !== owner ||
+      owners.length !== lock.generation - generation + 1 ||
+      owners.some((recordedOwner) => !ours.has(recordedOwner))
+    ) {
+      if (!restoreStarted) return "kept";
+      if (!untrackedOwner) await writeMarker(backupDir, UNTRACKED_OWNER_MARKER);
+      throw databaseRecoveryRequired(
+        pending.dbPath,
+        backupDir,
+        "Another server may have used the home during an interrupted restore.",
+      );
     }
-
-    if (!restoreStarted) {
-      const recorded = await NodeFSP.readFile(
-        NodePath.join(backupDir, OWNER_GENERATION_FILE),
-        "utf8",
-      ).catch(() => "");
-      const generation = Number.parseInt(recorded, 10);
-      const ours = new Set([
-        launcherOwner(pending.id),
-        trialOwner(pending.id),
-        probationOwner(pending.id),
-      ]);
-      // A backup without a recorded generation cannot prove nobody else wrote.
-      if (
-        !Number.isSafeInteger(generation) ||
-        lock.ownersSince(generation).some((owner) => !ours.has(owner))
-      ) {
-        return "kept";
-      }
-      await writeMarker(backupDir, RESTORE_MARKER);
-    }
+    if (!restoreStarted) await writeMarker(backupDir, RESTORE_MARKER);
     const directories = new Set([NodePath.dirname(pending.dbPath)]);
     // SQLite keeps -wal and -shm beside the resolved database file, not beside a symlink to it.
     const mainTarget = await restoreTarget(pending.dbPath);
@@ -304,7 +321,7 @@ export async function restoreDatabaseBackup(
         await NodeFSP.rm(`${pending.dbPath}${suffix}`, { force: true });
       }
       const source = databaseBackupFile(backupDir, suffix);
-      if (await pathExists(source)) {
+      if (suffix === "" || (await pathExists(source))) {
         // Restore through the link: cloning replaces its destination.
         const target = await restoreTarget(livePath);
         await copyDatabaseFile(source, target);

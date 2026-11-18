@@ -919,7 +919,11 @@ export class Launcher {
       this.#child = null;
       await terminateChild(child.process);
     }
-    const restore = await restoreDatabaseBackup(this.#baseDir, pending);
+    const restore = await restoreDatabaseBackup(
+      this.#baseDir,
+      pending,
+      this.#state.probation !== undefined,
+    );
     if (restore === "busy") {
       // Starting the previous version while the home is owned would skip the restore.
       if (this.#stopRequested) return;

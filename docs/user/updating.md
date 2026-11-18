@@ -199,15 +199,15 @@ directory and pair with the running server.
 ### Recover an interrupted database restore
 
 If the service log says **Database recovery required**, it gives the paths to
-the live database and the pre-update snapshot. Another server may have used the
-GOAT home during an interrupted restore, so the live files may be incomplete or
-contain newer writes.
+the live database and the pre-update snapshot directory. The live files may be
+incomplete or contain newer writes. If the snapshot is missing, use a verified
+copy of the live database or another verified backup.
 
 1. Stop every server using that home, including the background service. On
    Linux, run `systemctl --user stop goat.service`. On macOS, run
    `launchctl bootout "gui/$(id -u)/si.goat.service"`. Use the installed unit
    or agent name if it differs.
-2. Make separate copies of the snapshot directory and the live SQLite files
+2. Make separate copies of any remaining snapshot files and the live SQLite files
    (the database and any `-wal` and `-shm` files) before changing anything.
 3. Put a complete, verified SQLite file set that the previous GOAT release can
    open at the live path. To restore the pre-update snapshot, copy `database`
@@ -218,7 +218,7 @@ contain newer writes.
 4. Run `sync` after the live files are in place. Remove only the
    `.restore-pending` marker from the snapshot directory, then run
    `goat service restart` for that home. The service starts the previous
-   version and retains the snapshot.
+   version and retains any remaining snapshot files.
 
 ## Update providers
 

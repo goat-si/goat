@@ -11,6 +11,7 @@ import * as NodeSqlite from "node:sqlite";
 import * as NodeURL from "node:url";
 import { vi } from "vite-plus/test";
 import { SERVICE_LAUNCHER_PROTOCOL } from "./cloud/serviceProtocol.ts";
+import { tryAcquireServerOwnerLock } from "./serverOwnerLockFile.ts";
 import { Launcher, readServiceState, writeServiceState } from "./serviceLauncher.ts";
 import { restoreDatabaseBackup } from "./serviceLauncherDatabase.ts";
 
@@ -363,5 +364,144 @@ process.exit(0);`,
       using live = new NodeSqlite.DatabaseSync(dbPath, { readOnly: true });
       assert.equal(live.prepare("SELECT body FROM messages").get()?.body, "before trial");
     }),
+  );
+
+  it.effect.each([
+    ["a tracked desktop write", true, "foreign", true, "intact", true],
+    ["a truncated live database and foreign history", true, "foreign", true, "truncated", true],
+    ["a truncated live database and only update owners", true, "ours", true, "truncated", false],
+    ["an intact live database and only update owners", true, "ours", true, "intact", false],
+    ["a lost generation log", true, "lost", true, "truncated", true],
+    ["a missing snapshot during a resumed restore", true, "ours", false, "truncated", true],
+    ["a missing snapshot before restore starts", false, "ours", false, "intact", true],
+    [
+      "a missing backup directory during probation rollback",
+      false,
+      "probation",
+      false,
+      "truncated",
+      true,
+    ],
+    ["no backup directory before a trial", false, "pretrial", false, "intact", false],
+  ] as const)(
+    "recovers safely with %s",
+    ([_scenario, restoreStarted, history, hasSnapshot, liveState, blocked]) =>
+      Effect.gen(function* () {
+        const fs = yield* FileSystem.FileSystem;
+        const path = yield* Path.Path;
+        const root = yield* fs.makeTempDirectoryScoped({ prefix: "goat-service-resume-" });
+        const stateDir = path.join(root, "userdata");
+        const dbPath = path.join(stateDir, "statev2.sqlite");
+        const statePath = path.join(root, "runtime", "service-state.json");
+        const backupDir = path.join(root, "runtime", "db-backup", "trial");
+        const snapshot = path.join(backupDir, "database");
+        const restoreMarker = path.join(backupDir, ".restore-pending");
+        const conflictMarker = path.join(backupDir, ".untracked-owner");
+        const childStarted = path.join(root, "child-started");
+        yield* fs.makeDirectory(stateDir);
+        const hasBackupDirectory = history !== "probation" && history !== "pretrial";
+        if (hasBackupDirectory) yield* fs.makeDirectory(backupDir, { recursive: true });
+        if (hasSnapshot) {
+          using db = new NodeSqlite.DatabaseSync(snapshot);
+          db.exec(
+            "CREATE TABLE messages (body TEXT); INSERT INTO messages VALUES ('before trial');",
+          );
+        }
+        if (liveState === "intact") {
+          using db = new NodeSqlite.DatabaseSync(dbPath);
+          db.exec(
+            "CREATE TABLE messages (body TEXT); INSERT INTO messages VALUES ('before trial');",
+          );
+        } else {
+          yield* fs.writeFileString(dbPath, "truncated");
+        }
+        if (history === "lost") {
+          yield* fs.writeFileString(path.join(backupDir, "owner-generation"), "9");
+        } else if (hasBackupDirectory) {
+          const backup = tryAcquireServerOwnerLock(stateDir, "service-launcher:trial");
+          assert.isDefined(backup);
+          backup.release();
+          yield* fs.writeFileString(
+            path.join(backupDir, "owner-generation"),
+            String(backup.generation),
+          );
+        }
+        if (restoreStarted) yield* fs.writeFileString(restoreMarker, "");
+        if (hasBackupDirectory)
+          yield* fs.writeFileString(path.join(backupDir, ".rollback-pending"), "");
+        if (history === "foreign") {
+          const owner = tryAcquireServerOwnerLock(stateDir, "desktop");
+          assert.isDefined(owner);
+          const releaseLegacy = holdHome(root, "server-owner.sqlite");
+          try {
+            if (liveState === "intact") {
+              using db = new NodeSqlite.DatabaseSync(dbPath);
+              db.exec("INSERT INTO messages VALUES ('committed by desktop')");
+            }
+          } finally {
+            releaseLegacy();
+            owner.release();
+          }
+        }
+        yield* writeFakeRuntime(
+          fs,
+          path,
+          path.join(root, "runtime", "goat", "versions", "1.0.0"),
+          `import { writeFileSync } from "node:fs";
+writeFileSync(${JSON.stringify(childStarted)}, "");
+process.exit(0);`,
+        );
+        const update = { id: "trial", fromVersion: "1.0.0", targetVersion: "1.1.0" };
+        const state =
+          history === "probation"
+            ? {
+                protocol: SERVICE_LAUNCHER_PROTOCOL,
+                activeVersion: "1.1.0",
+                update: { ...update, status: "committed" as const },
+                probation: { dbPath, deadline: 1, rollbackReason: "probation-exit:42" },
+              }
+            : {
+                protocol: SERVICE_LAUNCHER_PROTOCOL,
+                activeVersion: "1.0.0",
+                update: { ...update, dbPath, status: "pending" as const },
+              };
+        yield* Effect.promise(() => writeServiceState(statePath, state));
+        const run = () =>
+          Effect.promise(async () => {
+            const launcher = new Launcher(root, await readServiceState(statePath));
+            return launcher.run().catch((error: unknown) => error);
+          });
+        const liveBefore = yield* fs.readFile(dbPath);
+        const backupBefore = hasSnapshot ? yield* fs.readFile(snapshot) : undefined;
+        const outcome = String(yield* run());
+        if (blocked) {
+          assert.include(outcome, "Database recovery required");
+          assert.isFalse(yield* fs.exists(childStarted));
+          assert.isTrue(yield* fs.exists(restoreMarker));
+          assert.isTrue(yield* fs.exists(conflictMarker));
+          assert.deepEqual(yield* fs.readFile(dbPath), liveBefore);
+          if (backupBefore !== undefined)
+            assert.deepEqual(yield* fs.readFile(snapshot), backupBefore);
+          assert.deepEqual(yield* Effect.promise(() => readServiceState(statePath)), state);
+
+          if (history === "foreign" && liveState === "intact") {
+            assert.include(String(yield* run()), "Database recovery required");
+            yield* fs.remove(restoreMarker);
+            assert.include(String(yield* run()), "Active child exited unexpectedly (0)");
+            using live = new NodeSqlite.DatabaseSync(dbPath, { readOnly: true });
+            assert.equal(
+              live.prepare("SELECT body FROM messages WHERE body = 'committed by desktop'").get()
+                ?.body,
+              "committed by desktop",
+            );
+            assert.isTrue(yield* fs.exists(snapshot));
+          }
+        } else {
+          assert.include(outcome, "Active child exited unexpectedly (0)");
+          assert.isTrue(yield* fs.exists(childStarted));
+          assert.isFalse(yield* fs.exists(backupDir));
+          assert.deepEqual(yield* fs.readFile(dbPath), backupBefore ?? liveBefore);
+        }
+      }),
   );
 });
