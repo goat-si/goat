@@ -415,3 +415,44 @@ describe("watched pull request checks", () => {
       }).pipe(Effect.scoped, Effect.provide(layerTest)),
   );
 });
+
+it.effect("delivers every wake once across passes when watches exceed the sweep budget", () =>
+  Effect.gen(function* () {
+    const numbers = Array.from({ length: 65 }, (_, index) => index + 1);
+    const { orchestrator, threadId, projectId } = yield* threadWatching("pr-batch-paged", numbers);
+    const reads: Array<number> = [];
+    const reactor = yield* PullRequestWatchReactor.make.pipe(
+      Effect.provide(
+        hostWithNewComments(projectId, {
+          onRead: (number) =>
+            Effect.sync(() => {
+              reads.push(number);
+            }),
+        }),
+      ),
+    );
+    const wakes = Effect.gen(function* () {
+      const { messages } = yield* orchestrator.getThreadRecords(threadId, ["messages"]);
+      return messages
+        .flatMap(({ text }) => Array.from(text.matchAll(/helper in #(\d+) \(round 0\)/g)))
+        .map((match) => Number(match[1]))
+        .sort((left, right) => left - right);
+    });
+
+    yield* reactor.sweep;
+    assert.lengthOf(yield* wakes, 64, "the first pass must leave one watch for its continuation");
+    assert.lengthOf(reads, 64);
+    const thread = yield* orchestrator.getThreadShell(threadId);
+    const deferred = thread?.pullRequests?.filter((link) => !reads.includes(link.number)) ?? [];
+    assert.lengthOf(deferred, 1);
+    assert.equal(deferred[0]?.watch?.awaitingBaseline, "all");
+    yield* reactor.sweep;
+    assert.deepEqual(yield* wakes, numbers);
+    assert.deepEqual(
+      reads.toSorted((left, right) => left - right),
+      numbers,
+    );
+    yield* reactor.sweep;
+    assert.deepEqual(yield* wakes, numbers, "a later sweep must not repeat a delivered wake");
+  }).pipe(Effect.scoped, Effect.provide(layerTest)),
+);
