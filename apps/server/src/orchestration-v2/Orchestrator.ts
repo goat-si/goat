@@ -1158,7 +1158,7 @@ const makeOrchestrator = Effect.fn("orchestrationV2.Orchestrator.layer")(functio
     OrchestratorProjectionError,
   });
 
-  const startNextQueuedRun = Effect.fn("Orchestrator.startNextQueuedRun")(
+  const startNextQueuedRunOnce = Effect.fn("Orchestrator.startNextQueuedRun")(
     function* (
       threadId: ThreadId,
       options?: {
@@ -1234,17 +1234,27 @@ const makeOrchestrator = Effect.fn("orchestrationV2.Orchestrator.layer")(functio
         projectOverride !== undefined
           ? !projectOverride
           : machineInstance !== undefined && !resolveProviderInstanceEnabled(machineInstance);
-      if (
-        worktreeMissing ||
-        instanceDisabledForProject ||
-        (failureClass !== undefined &&
-          failureClass !== "validation_error" &&
-          failedRun?.providerInstanceId === queuedRun.providerInstanceId)
-      ) {
+      const providerFailed =
+        failureClass !== undefined &&
+        failureClass !== "validation_error" &&
+        failedRun?.providerInstanceId === queuedRun.providerInstanceId;
+      if (worktreeMissing || instanceDisabledForProject || providerFailed) {
+        // A buffered wake replays output the provider already produced.
+        const wakeMessages = new Set(
+          worktreeMissing || instanceDisabledForProject
+            ? []
+            : projection.messages
+                .filter(isBufferedProviderNotification)
+                .map((message) => message.id),
+        );
+        const queued = projection.runs.filter((run) => run.status === "queued");
+        const wakes = queued.filter(
+          (run) => run.queueHeld !== true && wakeMessages.has(run.userMessageId),
+        );
         const now = yield* DateTime.now;
         yield* writeSystemEvents(
-          projection.runs
-            .filter((run) => run.status === "queued")
+          queued
+            .filter((run) => run.queueHeld !== true && !wakeMessages.has(run.userMessageId))
             .map((run) => ({
               type: "run.updated" as const,
               threadId,
@@ -1254,7 +1264,7 @@ const makeOrchestrator = Effect.fn("orchestrationV2.Orchestrator.layer")(functio
               payload: { ...run, queueHeld: true },
             })),
         );
-        return;
+        return wakes.length > 0;
       }
       // Move queued ordinals after runs that started while they waited to preserve transcript and checkpoint order.
       // Started runs have prompts; cancelled queued messages do not.
@@ -2010,6 +2020,15 @@ const makeOrchestrator = Effect.fn("orchestrationV2.Orchestrator.layer")(functio
         ),
       ),
   );
+
+  const startNextQueuedRun = (...args: Parameters<typeof startNextQueuedRunOnce>) =>
+    startNextQueuedRunOnce(...args).pipe(
+      Effect.flatMap((leftBufferedWake) =>
+        leftBufferedWake === true
+          ? startNextQueuedRunOnce(args[0]).pipe(Effect.asVoid)
+          : Effect.void,
+      ),
+    );
 
   // Under load a resumed provider can time out before taking the prompt; the restart still owes the turn.
   const retryContinuationStart = Effect.fn("Orchestrator.retryContinuationStart")(function* (

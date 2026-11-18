@@ -1,9 +1,13 @@
+import type * as Orchestrator from "./Orchestrator.ts";
 import * as DateTime from "effect/DateTime";
 import type * as EventSink from "./EventSink.ts";
 import * as NodeCrypto from "@effect/platform-node/NodeCrypto";
 import * as NodeServices from "@effect/platform-node/NodeServices";
 import {
   EventId,
+  CommandId,
+  type ThreadId,
+  type MessageId,
   type ModelSelection,
   type ProjectId,
   ProviderDriverKind,
@@ -315,3 +319,25 @@ export const writeProviderFailureForQueue = Effect.fn("writeProviderFailureForQu
     ],
   });
 });
+
+export const dispatchBufferedQueueWake = (
+  orchestrator: Orchestrator.OrchestratorV2["Service"],
+  threadId: ThreadId,
+  wakeMessageId: MessageId,
+) =>
+  orchestrator.dispatch({
+    type: "message.dispatch",
+    commandId: CommandId.make(`${threadId}:buffered-wake`),
+    threadId,
+    messageId: wakeMessageId,
+    text: "Background work completed.",
+    attachments: [],
+    createdBy: "agent",
+    creationSource: "provider",
+    dispatchMode: { type: "queue_after_active" },
+    notification: {
+      source: { kind: "background_task" },
+      outcome: "completed",
+      summary: "Work finished",
+    },
+  });

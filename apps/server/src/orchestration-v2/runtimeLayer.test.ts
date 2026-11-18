@@ -97,6 +97,7 @@ import {
   seedProject,
   watchedPullRequestDetail,
   writeProviderFailureForQueue,
+  dispatchBufferedQueueWake,
 } from "./runtimeLayer.testkit.ts";
 
 const prWatchDisabledProjectId = ProjectId.make("pr-watch-disabled-project");
@@ -5953,9 +5954,13 @@ it.layer(layerTest)("OrchestrationV2LayerLive lifecycle", (it) => {
     }),
   );
 
-  it.effect.each(["usage_limit", "provider_error"] as const)(
-    "handles a queued message after a %s failure",
-    (failureClass) =>
+  it.effect.each([
+    { failureClass: "usage_limit", bufferedWake: false },
+    { failureClass: "provider_error", bufferedWake: false },
+    { failureClass: "provider_error", bufferedWake: true },
+  ] as const)(
+    "handles a queued message after $failureClass (buffered wake $bufferedWake)",
+    ({ failureClass, bufferedWake }) =>
       Effect.gen(function* () {
         const orchestrator = yield* Orchestrator.OrchestratorV2;
         const eventSink = yield* EventSink.EventSinkV2;
@@ -5990,6 +5995,9 @@ it.layer(layerTest)("OrchestrationV2LayerLive lifecycle", (it) => {
           });
         }
 
+        const wakeMessageId = MessageId.make(`${threadId}:buffered-wake`);
+        if (bufferedWake) yield* dispatchBufferedQueueWake(orchestrator, threadId, wakeMessageId);
+
         const before = yield* orchestrator.getThreadProjection(threadId);
         const activeRun = before.runs.find((run) => run.status === "starting");
         const queuedRun = before.runs.find((run) => run.status === "queued");
@@ -6012,14 +6020,44 @@ it.layer(layerTest)("OrchestrationV2LayerLive lifecycle", (it) => {
           ),
           Effect.forkScoped,
         );
-        yield* Effect.yieldNow;
+        const wake = before.runs.find((run) => run.userMessageId === wakeMessageId);
+        if (bufferedWake) assert.isDefined(wake);
+        const wakeUpdate =
+          wake === undefined
+            ? undefined
+            : yield* eventSink
+                .stream({
+                  threadId,
+                  afterSequence,
+                  eventType: "run.updated",
+                })
+                .pipe(
+                  Stream.filter(
+                    ({ event }) => event.type === "run.updated" && event.payload.id === wake.id,
+                  ),
+                  Stream.runHead,
+                  Effect.forkScoped,
+                );
 
-        yield* writeProviderFailureForQueue(eventSink, activeRun, failureClass);
+        yield* writeProviderFailureForQueue(
+          eventSink,
+          { ...activeRun, rootNodeId: activeRun.rootNodeId },
+          failureClass,
+        );
 
         if (failureClass === "provider_error") {
           assert.equal(yield* Queue.take(heldRunIds), queuedRun.id);
           const held = yield* orchestrator.getThreadProjection(threadId);
           assert.equal(held.runs.find((run) => run.id === queuedRun.id)?.status, "queued");
+          if (wakeUpdate !== undefined) {
+            const update = yield* Fiber.join(wakeUpdate);
+            const event = Option.getOrUndefined(update)?.event;
+            assert.equal(
+              event?.type === "run.updated" ? event.payload.status : undefined,
+              "starting",
+            );
+            return;
+          }
           yield* orchestrator.dispatch({
             type: "queue.resume",
             commandId: CommandId.make(`${threadId}:resume`),
