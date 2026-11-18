@@ -112,6 +112,28 @@ function Picker(props: {
   );
 }
 
+function DisplayedModel({ thread }: { thread: EnvironmentThreadShell }) {
+  const { selectedModel } = useComposerProviderModel({
+    providerStatuses: providers,
+    settings: {
+      ...DEFAULT_UNIFIED_SETTINGS,
+      providerInstances: {
+        [cursor]: { driver: ProviderDriverKind.make("cursor"), enabled: true },
+      },
+    },
+    activeProjectId: null,
+    thread,
+    threadRef: scopeThreadRef(thread.environmentId, thread.id),
+    threadModelSelection: thread.modelSelection,
+    projectModelSelection: null,
+    promptInjectionState: "none",
+    candidateInstanceIds: [thread.modelSelection.instanceId],
+    lockedProvider: null,
+    lockedInstanceId: undefined,
+  });
+  return <output aria-label="Response model">{selectedModel}</output>;
+}
+
 it("keeps a Cursor thread's stored model and options when the user re-picks its unavailable row", async () => {
   setup();
   const thread = cursorThread("thread-cursor");
@@ -210,7 +232,12 @@ it("does not save an ignored seed when the user re-picks the started thread's di
 it("saves a pick of a seeded model the started thread does not show", async () => {
   const { setModelSelection } = setup();
   setModelSelection.mockResolvedValue(AsyncResult.success(undefined));
-  const thread = cursorThread("thread-cursor-seeded");
+  const thread = {
+    ...cursorThread("thread-cursor-seeded"),
+    latestRun: null,
+    itemCount: 1,
+    runtime: null,
+  };
   appAtomRegistry.set(shellAtom(thread.id), thread);
   useComposerDraftStore
     .getState()
@@ -218,12 +245,15 @@ it("saves a pick of a seeded model the started thread does not show", async () =
       scopeThreadRef(environmentId, thread.id),
       createModelSelection(cursor, "auto-smart"),
     );
-  await using _screen = await render(
+  await using screen = await render(
     <AppAtomRegistryProvider>
+      <DisplayedModel thread={thread} />
       <Picker thread={thread} runtime={null} model="auto-smart" />
     </AppAtomRegistryProvider>,
   );
-  await page.getByRole("button", { name: "Pick the model" }).click();
+  const model = screen.getByLabelText("Response model");
+  await expect.element(model).toHaveTextContent(stored.model);
+  await screen.getByRole("button", { name: "Pick the model" }).click();
 
   await vi.waitFor(() =>
     expect(setModelSelection).toHaveBeenCalledWith(
@@ -235,6 +265,8 @@ it("saves a pick of a seeded model the started thread does not show", async () =
       }),
     ),
   );
+  expect(appAtomRegistry.get(shellAtom(thread.id))).toMatchObject({ modelSelection: stored });
+  expect(model.element().textContent).toBe("auto-smart");
 });
 
 it("shows the stored model when a seeded thread starts, until the user makes an explicit pick", async () => {
@@ -248,32 +280,10 @@ it("shows the stored model when a seeded thread starts, until the user makes an 
   const seed = createModelSelection(cursor, "auto-smart");
   useComposerDraftStore.getState().setModelSelection(threadRef, seed);
 
-  function Model({ current }: { current: EnvironmentThreadShell }) {
-    const { selectedModel } = useComposerProviderModel({
-      providerStatuses: providers,
-      settings: {
-        ...DEFAULT_UNIFIED_SETTINGS,
-        providerInstances: {
-          [cursor]: { driver: ProviderDriverKind.make("cursor"), enabled: true },
-        },
-      },
-      activeProjectId: null,
-      thread: current,
-      threadRef,
-      threadModelSelection: current.modelSelection,
-      projectModelSelection: null,
-      promptInjectionState: "none",
-      candidateInstanceIds: [current.modelSelection.instanceId],
-      lockedProvider: null,
-      lockedInstanceId: undefined,
-    });
-    return <output aria-label="Response model">{selectedModel}</output>;
-  }
-
-  await using screen = await render(<Model current={thread} />);
+  await using screen = await render(<DisplayedModel thread={thread} />);
   const model = screen.getByLabelText("Response model");
   expect(model.element().textContent).toBe(seed.model);
-  await screen.rerender(<Model current={{ ...thread, itemCount: 1 }} />);
+  await screen.rerender(<DisplayedModel thread={{ ...thread, itemCount: 1 }} />);
   expect(model.element().textContent).toBe(stored.model);
   await act(() =>
     useComposerDraftStore.getState().setModelSelection(threadRef, seed, { explicit: true }),
