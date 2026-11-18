@@ -69,6 +69,10 @@ export function filterPenResponseHeaders(
     "trailer",
     "referrer-policy",
     "vary",
+    // The URL carries the capability, so nothing under it may be cached; no-store replaces these.
+    "cache-control",
+    "expires",
+    "pragma",
     ...connectionFields,
   ]);
   const headers = { ...local };
@@ -80,7 +84,7 @@ export function filterPenResponseHeaders(
 export function decidePenGatewayRequest<T extends GatewayRoute>(
   input: GatewayRequest<T>,
 ): GatewayDecision<T> {
-  const empty = { "referrer-policy": "no-referrer" };
+  const empty = { "referrer-policy": "no-referrer", "cache-control": "no-store" };
   const refuse = (status: number, headers: Record<string, string> = empty): GatewayDecision<T> => ({
     kind: "refuse",
     status,
@@ -97,7 +101,11 @@ export function decidePenGatewayRequest<T extends GatewayRoute>(
   });
   if (!route) return refuse(404);
   const origin = one(input.headers.origin);
-  const cors: Record<string, string> = { "referrer-policy": "no-referrer", vary: "Origin" };
+  const cors: Record<string, string> = {
+    "referrer-policy": "no-referrer",
+    "cache-control": "no-store",
+    vary: "Origin",
+  };
   if (origin && input.appOrigins.includes(origin)) {
     cors["access-control-allow-origin"] = origin;
     cors["access-control-allow-credentials"] = "true";

@@ -18,7 +18,11 @@ describe("Pen gateway request policy", () => {
   it("refuses wrong capability, host and origin before forwarding", () => {
     expect(
       decidePenGatewayRequest(request({ url: `/pen-route/${"b".repeat(43)}/api/projects` })),
-    ).toMatchObject({ kind: "refuse", status: 404, headers: { "referrer-policy": "no-referrer" } });
+    ).toMatchObject({
+      kind: "refuse",
+      status: 404,
+      headers: { "referrer-policy": "no-referrer", "cache-control": "no-store" },
+    });
     expect(
       decidePenGatewayRequest(request({ headers: { host: "evil:1234", origin: "goat://app" } }))
         .kind,

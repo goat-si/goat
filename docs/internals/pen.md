@@ -326,8 +326,9 @@ Before both gates open, one review checks at least:
 2. The listener in a packaged build on macOS, Windows and Linux: another user's connection,
    `Host` and `Origin`, credentialed CORS and the private-network preflight from the app's origin,
    limits under load.
-3. Capability containment in diagnostics bundles, crash reports and the clipboard, and whether to
-   bind it to an HttpOnly cookie main sets, so a copied URL alone is useless.
+3. Capability containment in diagnostics bundles, crash reports, the clipboard and Chromium's
+   caches and history (every gateway response is `no-store`; check a packaged build's disk), and
+   whether to bind it to an HttpOnly cookie main sets, so a copied URL alone is useless.
 4. Where `pen` comes from: a PATH lookup is discovery inside the user's boundary, not a trust root.
 5. Session lifetime: a leave, revoke or key rotation closes live sockets on the target and in main,
    including one that happens while this machine's member list is unreadable.

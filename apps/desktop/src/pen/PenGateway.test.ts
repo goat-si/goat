@@ -504,7 +504,7 @@ describe("Pen gateway", () => {
               })
             : "ok";
           stdout.end(
-            `HTTP/1.1 200 OK\r\nContent-Length: ${Buffer.byteLength(body)}\r\nSet-Cookie: bad=1\r\nAccess-Control-Allow-Origin: https://evil.example\r\nReferrer-Policy: unsafe-url\r\n\r\n${body}`,
+            `HTTP/1.1 200 OK\r\nContent-Length: ${Buffer.byteLength(body)}\r\nSet-Cookie: bad=1\r\nAccess-Control-Allow-Origin: https://evil.example\r\nReferrer-Policy: unsafe-url\r\nCache-Control: private, max-age=3600\r\nExpires: Wed, 01 Jan 2099 00:00:00 GMT\r\n\r\n${body}`,
           );
         }),
       randomBytes: () => Buffer.alloc(32, 1),
@@ -527,6 +527,9 @@ describe("Pen gateway", () => {
       expect(headers["set-cookie"]).toBeUndefined();
       expect(headers["access-control-allow-origin"]).toBe("goat://app");
       expect(headers["referrer-policy"]).toBe("no-referrer");
+      // The URL carries the capability: no response under it may land in a cache.
+      expect(headers["cache-control"]).toBe("no-store");
+      expect(headers.expires).toBeUndefined();
       expect(requests[1]).not.toContain("private=1");
     } finally {
       await gateway.dispose();
