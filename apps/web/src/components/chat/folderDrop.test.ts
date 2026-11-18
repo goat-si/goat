@@ -121,7 +121,10 @@ describe("insertDroppedComposerFolders", () => {
   });
 
   it("discards a conversion that completes after switching drafts", async () => {
-    const conversion = Promise.withResolvers<string>();
+    let resolveConversion!: (path: string) => void;
+    const conversion = new Promise<string>((resolve) => {
+      resolveConversion = resolve;
+    });
     const controller = new AbortController();
     const insert = vi.fn(() => true);
     const onUnavailable = vi.fn();
@@ -131,13 +134,13 @@ describe("insertDroppedComposerFolders", () => {
       signal: controller.signal,
       bridge: {
         getPathForFile: () => "C:\\Work",
-        toLocalBackendPath: () => conversion.promise,
+        toLocalBackendPath: () => conversion,
       },
       onUnavailable,
       insert,
     });
     controller.abort();
-    conversion.resolve("/mnt/c/Work");
+    resolveConversion("/mnt/c/Work");
     await insertion;
     expect(insert).not.toHaveBeenCalled();
     expect(onUnavailable).not.toHaveBeenCalled();
