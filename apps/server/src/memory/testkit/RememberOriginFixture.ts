@@ -125,6 +125,15 @@ export const runRememberOriginFixture = Effect.fn("test.runRememberOriginFixture
     yield* sync.syncOnce;
     for (const source of sources) yield* scanReplicaMemory(source.memoryId);
     yield* compactor.compact(principal());
+    const pinned = yield* hub.join(
+      {
+        protocolVersion: 1,
+        memorySpaceId: space,
+        environmentId: memberEnv,
+        ...negotiation(),
+      },
+      principal(memberEnv),
+    );
     offline = true;
     const zero = yield* remember("Synthetic offline save with no dependencies");
     yield* store.appendThreadLineage(
@@ -136,6 +145,20 @@ export const runRememberOriginFixture = Effect.fn("test.runRememberOriginFixture
     assert.lengthOf(hundred.payload.derivedFromMemoryRevisions, 100);
     offline = false;
     yield* sync.syncOnce;
+    const originalPage = yield* hub.pull(
+      {
+        ...pull(pinned.checkpointSequence, memberEnv),
+        ...negotiation(),
+        snapshotToken: pinned.snapshotToken,
+      },
+      principal(memberEnv),
+    );
+    assert.propertyVal(originalPage.checkpoint, "checkpointSequence", pinned.checkpointSequence);
+    assert.isFalse(
+      originalPage.checkpoint?.identities.some(
+        ({ memoryId }) => memoryId === zero.memoryId || memoryId === hundred.memoryId,
+      ),
+    );
     return [zero, hundred];
   }).pipe(Effect.provide(Layer.fresh(writer)));
 

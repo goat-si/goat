@@ -68,6 +68,7 @@ export const recordCanonicalMemoryOrigin = Effect.fn("MemoryStore.recordCanonica
       RETURNING memory_id`,
     );
     if (changed) yield* recordMemoryOrigin(space, memoryId, origin);
+    return changed !== undefined;
   },
 );
 

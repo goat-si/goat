@@ -1,4 +1,4 @@
-import { applyMemoryOriginUpdatesTx } from "./MemoryOriginReplication.ts";
+import { publishMemoryOriginUpdatesTx } from "./MemoryOriginReplication.ts";
 import { makeMoveMemory } from "./MemoryMove.ts";
 import { makeHubAcknowledgement } from "./MemoryHubAcknowledgement.ts";
 import { makeMemoryForget, type ForgetRequest } from "./MemoryForget.ts";
@@ -2480,7 +2480,7 @@ const make = Effect.fnUntraced(function* (
     readSource,
     prepareSourceRead,
     validateSourceOutcome,
-    applyOriginUpdatesTx: (input, updates) => applyMemoryOriginUpdatesTx(sql, input, updates),
+    applyOriginUpdatesTx: (input, updates) => publishMemoryOriginUpdatesTx(sql, input, updates),
     admitHubOperation,
     admitHubOperationTx,
     settleHubEntryTx,

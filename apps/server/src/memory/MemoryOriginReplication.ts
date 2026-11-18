@@ -21,27 +21,43 @@ const settledCreation = (
     AND json_extract(e.receipt_json,'$.hubSequence')>0 AND json_extract(e.receipt_json,'$.outcome')='accepted'
 )`;
 
-export const applyMemoryOriginUpdatesTx = Effect.fn("MemoryStore.applyOriginUpdatesTx")(function* (
+const applyMemoryOriginUpdatesTx = Effect.fn("MemoryStore.applyOriginUpdatesTx")(function* (
   sql: SqlClient.SqlClient,
   input: Pick<M.MemoryHubPushInput, "memorySpaceId" | "environmentId">,
   updates: readonly M.MemoryOriginUpdate[],
 ) {
   yield* Transaction;
   const { memorySpaceId: space, environmentId } = input;
+  let changed = false;
   for (const { memoryId, createOperationId, threadId } of updates) {
     const settled = yield* stored(
       "memory-origin-settled",
       sql`SELECT 1 WHERE ${settledCreation(sql, space, sql`${createOperationId}`)}`,
     );
-    if (settled.length)
-      yield* recordCanonicalMemoryOrigin(
-        space,
-        memoryId,
-        { environmentId, threadId },
-        createOperationId,
-      ).pipe(Effect.provideService(SqlClient.SqlClient, sql));
+    if (!settled.length) continue;
+    const recorded = yield* recordCanonicalMemoryOrigin(
+      space,
+      memoryId,
+      { environmentId, threadId },
+      createOperationId,
+    ).pipe(Effect.provideService(SqlClient.SqlClient, sql));
+    changed ||= recorded;
   }
+  return changed;
 });
+
+export const publishMemoryOriginUpdatesTx = Effect.fn("MemoryStore.publishOriginUpdatesTx")(
+  function* (...args: Parameters<typeof applyMemoryOriginUpdatesTx>) {
+    const [sql, { memorySpaceId }] = args;
+    if (yield* applyMemoryOriginUpdatesTx(...args))
+      // A new join needs the latest identity metadata. Existing handles keep their pinned pages.
+      yield* stored(
+        "memory-origin-stale-checkpoint",
+        sql`UPDATE memory_hub_retention SET checkpoint_id=NULL
+          WHERE space=${memorySpaceId} AND checkpoint_id IS NOT NULL`,
+      );
+  },
+);
 
 type Route = {
   readonly space: M.MemorySpaceId | null;
