@@ -353,9 +353,19 @@ process.send({ type: "request-update", targetVersion: "1.1.0", dbPath: ${JSON.st
             activeVersion: "1.0.0",
           }),
         );
-        // Hold the handoff timer so the accepted update's active exit drives the transition.
         vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
         yield* Effect.addFinalizer(() => Effect.sync(() => vi.useRealTimers()));
+        const approval = Promise.withResolvers<void>();
+        const schedule = globalThis.setTimeout;
+        const timer = vi.spyOn(globalThis, "setTimeout").mockImplementation(((
+          callback: () => void,
+          delay: number,
+        ) => {
+          if (delay === 2000) approval.resolve();
+          // @effect-diagnostics-next-line globalTimers:off -- Observe the launcher's timer registration.
+          return schedule(callback, delay);
+        }) as typeof setTimeout);
+        yield* Effect.addFinalizer(() => Effect.sync(() => timer.mockRestore()));
         const { refused, lines } = yield* observeRefusal(message);
         const launcher = new Launcher(
           root,
@@ -364,6 +374,9 @@ process.send({ type: "request-update", targetVersion: "1.1.0", dbPath: ${JSON.st
         yield* Effect.addFinalizer(() => Effect.promise(() => launcher.stop("SIGTERM")));
         const spawnCount = spawnedChildren.length;
         const running = launcher.run().catch((error: unknown) => error);
+        // Release the check before acknowledgement. The active child exits before the handoff timer.
+        yield* Effect.promise(() => approval.promise);
+        yield* Effect.promise(() => vi.advanceTimersByTimeAsync(2_000));
         assert.equal(yield* Effect.promise(() => Promise.race([refused, running])), "idle");
         const state = yield* Effect.promise(() => readServiceState(statePath));
         assert.equal(state.activeVersion, "1.0.0");
@@ -803,6 +816,8 @@ setInterval(() => {}, 1_000);
       yield* Effect.addFinalizer(() => Effect.sync(() => desktop?.release()));
 
       const retry = Promise.withResolvers<void>();
+      const approval = Promise.withResolvers<void>();
+      let approvalScheduled = false;
       const handoff = Promise.withResolvers<void>();
       const timers = vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
       yield* Effect.addFinalizer(() => Effect.sync(() => vi.useRealTimers()));
@@ -812,7 +827,13 @@ setInterval(() => {}, 1_000);
         delay: number,
       ) => {
         if (delay === 13) retry.resolve();
-        if (delay === 2000) handoff.resolve();
+        if (delay === 2000) {
+          if (approvalScheduled) handoff.resolve();
+          else {
+            approvalScheduled = true;
+            approval.resolve();
+          }
+        }
         // @effect-diagnostics-next-line globalTimers:off -- Observe the launcher's own timer registration.
         return schedule(callback, delay);
       }) as typeof setTimeout);
@@ -826,7 +847,8 @@ setInterval(() => {}, 1_000);
       );
       yield* Effect.addFinalizer(() => Effect.promise(() => launcher.stop("SIGTERM")));
       const running = launcher.run().catch(String);
-      // Advance the active child's accepted handoff when it requests the update.
+      yield* Effect.promise(() => approval.promise);
+      yield* Effect.promise(() => timers.advanceTimersByTimeAsync(2000));
       yield* Effect.promise(() => handoff.promise);
       yield* Effect.promise(() => timers.advanceTimersByTimeAsync(2000));
       yield* Effect.promise(() => retry.promise);

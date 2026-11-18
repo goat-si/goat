@@ -6,7 +6,6 @@ import * as NodeCrypto from "node:crypto";
 import * as NodeFS from "node:fs";
 import * as NodeFSP from "node:fs/promises";
 import * as NodePath from "node:path";
-import * as NodeUtil from "node:util";
 import { guardChild, type ErrorRoute } from "@goat/shared/errorGuards";
 
 import { adoptLegacyEnv, withLegacyEnvNames } from "@goat/contracts/legacyT3Names";
@@ -25,7 +24,6 @@ import {
   isExactServiceVersion,
   parseServiceState,
   parseLegacyServiceState,
-  SERVICE_ENV_FILE,
   SERVICE_LAUNCHER_CONTEXT_ENV,
   SERVICE_LAUNCHER_GUARANTEES,
   SERVICE_LAUNCHER_PROTOCOL,
@@ -54,15 +52,25 @@ import {
   runtimePaths,
   startupDiskBlocker,
 } from "./serviceLauncherRuntime.ts";
+import {
+  readServiceEnvironment,
+  readServiceState,
+  sameSelection,
+  writeServiceState,
+} from "./serviceLauncherState.ts";
 import { smokeProbe } from "./serviceLauncherSmokeProbe.ts";
 import { boundServiceLog, SERVICE_LOG_CHECK_INTERVAL_MS, serviceLogPath } from "./serviceLog.ts";
 import {
-  replaceFileDurably,
   repointServiceUnit,
   serviceUnitFromEnvironment,
   type ServiceUnit,
 } from "./serviceUnitRepoint.ts";
 
+export {
+  readServiceEnvironment,
+  readServiceState,
+  writeServiceState,
+} from "./serviceLauncherState.ts";
 export { databaseBackupBlocker, type BackupSpaceProbe } from "./serviceLauncherDatabase.ts";
 
 const HANDOFF_DELAY_MS = 2_000;
@@ -98,53 +106,6 @@ const runtimeSpawnArguments = (paths: ReturnType<typeof runtimePaths>) => ({
   command: paths.entryPath,
   args: ["serve"],
 });
-
-const MANAGED_SERVICE_ENV_NAMES = new Set([
-  "PATH",
-  "GOAT_HOME",
-  "GOAT_BOOT_SERVICE_UNIT",
-  SERVICE_LAUNCHER_CONTEXT_ENV,
-]);
-
-export async function readServiceEnvironment(
-  baseDir: string,
-  inherited: NodeJS.ProcessEnv = process.env,
-): Promise<NodeJS.ProcessEnv> {
-  const environment = { ...inherited };
-  let contents: string;
-  try {
-    contents = await NodeFSP.readFile(NodePath.join(baseDir, SERVICE_ENV_FILE), "utf8");
-  } catch (cause) {
-    if (cause instanceof Error && "code" in cause && cause.code === "ENOENT") return environment;
-    throw cause;
-  }
-  for (const [name, value] of Object.entries(NodeUtil.parseEnv(contents))) {
-    if (
-      /^[A-Za-z_][A-Za-z0-9_]*$/.test(name) &&
-      !MANAGED_SERVICE_ENV_NAMES.has(name.toUpperCase())
-    ) {
-      environment[name] = value;
-    }
-  }
-  return environment;
-}
-
-export async function readServiceState(filePath: string): Promise<ServiceState> {
-  const contents = await NodeFSP.readFile(filePath, "utf8");
-  const state = parseServiceState(contents) ?? parseLegacyServiceState(contents);
-  if (state === undefined) throw new Error("Service state is invalid or unsupported.");
-  return state;
-}
-
-export async function writeServiceState(filePath: string, state: ServiceState): Promise<void> {
-  await NodeFSP.mkdir(NodePath.dirname(filePath), { recursive: true, mode: 0o700 });
-  await replaceFileDurably(filePath, `${JSON.stringify(state, null, 2)}\n`);
-}
-
-const sameSelection = (left: ServiceState, right: ServiceState) =>
-  left.activeVersion === right.activeVersion &&
-  left.update?.id === right.update?.id &&
-  left.update?.status === right.update?.status;
 
 function terminalUpdate<S extends TerminalStatus>(input: {
   readonly pending: PendingServiceUpdate;
@@ -204,6 +165,7 @@ export class Launcher {
   #child: ManagedChild | null = null;
   #timer: NodeJS.Timeout | undefined;
   #probationTimer: NodeJS.Timeout | undefined;
+  #updateAwaitingHandoff = false;
   #transitions: Promise<void> = Promise.resolve();
   #stopRequested = false;
   readonly #stopSignal = new AbortController();
@@ -325,6 +287,7 @@ export class Launcher {
   }
 
   #clearTimer(): void {
+    this.#updateAwaitingHandoff = false;
     clearTimeout(this.#timer);
     this.#timer = undefined;
     clearTimeout(this.#probationTimer);
@@ -576,7 +539,7 @@ export class Launcher {
       await reject("The requesting server is not the selected active version.");
       return;
     }
-    if (this.#state.update?.status === "pending") {
+    if (this.#updateAwaitingHandoff || this.#state.update?.status === "pending") {
       await reject("Another server update is already pending.");
       return;
     }
@@ -632,6 +595,30 @@ export class Launcher {
       dbPath: message.dbPath,
       status: "pending",
     };
+    // Older children leave admission closed after acknowledgement.
+    this.#updateAwaitingHandoff = true;
+    this.#timer = setTimeout(
+      () => this.#enqueue(() => this.#acceptUpdate(child, pending)),
+      HANDOFF_DELAY_MS,
+    );
+  }
+
+  async #acceptUpdate(child: ManagedChild, pending: PendingServiceUpdate): Promise<void> {
+    if (!this.#updateAwaitingHandoff || this.#child !== child || this.#stopRequested) return;
+    this.#updateAwaitingHandoff = false;
+    this.#timer = undefined;
+    const blocker = await this.#startupDiskBlocker(pending.targetVersion, pending.dbPath);
+    if (!child.process.connected || this.#stopRequested) return;
+    if (blocker !== undefined) {
+      await sendMessage(child.process, {
+        type: "update-rejected",
+        reason: `${blocker} The server was not stopped.`,
+      });
+      return;
+    }
+
+    const reject = (reason: string) =>
+      sendMessage(child.process, { type: "update-rejected", reason });
     try {
       await this.#selectState({ ...this.#state, update: pending });
     } catch (error) {
@@ -639,6 +626,7 @@ export class Launcher {
       return;
     }
     await sendMessage(child.process, { type: "update-accepted", updateId: pending.id });
+    // Leave a bounded window for the server to publish the result before it exits.
     this.#timer = setTimeout(() => this.#enqueue(() => this.#beginTrial(child)), HANDOFF_DELAY_MS);
   }
 
@@ -648,12 +636,6 @@ export class Launcher {
       return;
     }
     this.#timer = undefined;
-    if (
-      await this.#deferForDiskSpace(pending.targetVersion, pending.dbPath, () =>
-        this.#beginTrial(child),
-      )
-    )
-      return;
     this.#child = null;
     await terminateChild(child.process);
     await this.#startTrial(pending);
