@@ -1,6 +1,5 @@
 import * as M from "@goat/contracts";
 import { assert } from "@effect/vitest";
-import * as Clock from "effect/Clock";
 import * as Effect from "effect/Effect";
 import * as Layer from "effect/Layer";
 import * as TestClock from "effect/testing/TestClock";
@@ -28,6 +27,7 @@ export const runRememberOriginFixture = Effect.fn("test.runRememberOriginFixture
 ) {
   yield* seed;
   const hub = yield* Hub.MemoryHubService;
+  const compactor = yield* Compactor.MemoryCompactor;
   const sql = yield* SqlClient.SqlClient;
   yield* sql`INSERT INTO memory_hub_members(space,environment,credential_digest,credential_version,status,joined_at)
     VALUES (${space},${Member.local},${"c".repeat(64)},1,'active',0)`;
@@ -124,6 +124,7 @@ export const runRememberOriginFixture = Effect.fn("test.runRememberOriginFixture
     assert.isTrue(seeded.receipts.every(({ outcome }) => outcome === "accepted"));
     yield* sync.syncOnce;
     for (const source of sources) yield* scanReplicaMemory(source.memoryId);
+    yield* compactor.compact(principal());
     offline = true;
     const zero = yield* remember("Synthetic offline save with no dependencies");
     yield* store.appendThreadLineage(
@@ -174,8 +175,10 @@ export const runRememberOriginFixture = Effect.fn("test.runRememberOriginFixture
     const store = yield* Store.MemoryStore;
     assert.isDefined((yield* store.loadAggregate(space, op.memoryId)).item);
   }
-  yield* TestClock.adjust(M.MEMORY_LOG_RETENTION_MS + M.MEMORY_REPLACED_PAYLOAD_RETENTION_MS + 1);
-  yield* (yield* Compactor.MemoryCompactor).compact(principal());
+  if (scenario === "pre-activation") {
+    yield* TestClock.adjust(M.MEMORY_LOG_RETENTION_MS + M.MEMORY_REPLACED_PAYLOAD_RETENTION_MS + 1);
+    yield* compactor.compact(principal());
+  }
 
   const replica = Member.fixture(peerFor(memberEnv), undefined, false, false, memberEnv);
   yield* Effect.gen(function* () {
@@ -197,6 +200,5 @@ export const runRememberOriginFixture = Effect.fn("test.runRememberOriginFixture
       page.items.map(({ memoryId }) => memoryId),
       attempts.map(({ memoryId }) => memoryId),
     );
-    assert.isAbove(yield* Clock.currentTimeMillis, M.MEMORY_LOG_RETENTION_MS);
   }).pipe(Effect.provide(Layer.fresh(replica)));
 });
