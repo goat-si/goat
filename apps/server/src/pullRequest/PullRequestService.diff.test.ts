@@ -66,3 +66,53 @@ it.effect("reads the fresh diff when detail or summary discovers a changed revis
     assert.strictEqual(diffCalls, 3);
   }),
 );
+
+it.effect("isolates withheld reads by path and revision, and refuses them on other hosts", () =>
+  Effect.gen(function* () {
+    const ref = { projectId: "p1" as ProjectId, repository: "acme/web", number: 10 };
+    const projects = [
+      project({ id: "p1", title: "web", workspaceRoot: "/a", repository: "acme/web" }),
+    ];
+    const answers: string[] = [];
+    const provider = fakePullRequestProvider(SourceControlProviderKind.make("github"), {
+      getDiff: (input) =>
+        Effect.sync(() => {
+          const patch =
+            input.path === undefined
+              ? "page"
+              : [input.commit, input.expectedHeadSha, input.path].filter(Boolean).join(":");
+          answers.push(patch);
+          return { patch, truncated: false, nextCursor: null };
+        }),
+    });
+    const service = yield* makeService({
+      projects,
+      providers: [
+        { ...provider, capabilities: { ...provider.capabilities, withheldFileDiff: true } },
+      ],
+    });
+    const path = { ...ref, path: "large.js" };
+    const firstHead = "a".repeat(40);
+    const nextHead = "b".repeat(40);
+    assert.strictEqual((yield* service.diff(ref)).patch, "page");
+    assert.strictEqual(
+      (yield* service.diff({ ...path, expectedHeadSha: firstHead })).patch,
+      firstHead + ":large.js",
+    );
+    assert.strictEqual(
+      (yield* service.diff({ ...path, expectedHeadSha: nextHead })).patch,
+      nextHead + ":large.js",
+    );
+    assert.strictEqual(
+      (yield* service.diff({ ...path, commit: firstHead, path: "old.js" })).patch,
+      firstHead + ":old.js",
+    );
+    assert.strictEqual((yield* service.diff(ref)).patch, "page");
+    assert.lengthOf(answers, 4);
+
+    const unsupported = yield* makeService({ projects, providers: [provider] });
+    const error = yield* Effect.flip(unsupported.diff(path));
+    assert.strictEqual(error._tag, "PullRequestOperationError");
+    assert.lengthOf(answers, 4);
+  }),
+);

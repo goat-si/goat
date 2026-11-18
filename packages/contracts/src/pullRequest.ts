@@ -306,6 +306,7 @@ export const PullRequestCapabilities = Schema.Struct({
    * reported rather than that the repository runs none. Absent means an empty list says nothing.
    */
   checksAlwaysReport: Schema.optional(Schema.Boolean),
+  withheldFileDiff: Schema.optional(Schema.Boolean),
 });
 export type PullRequestCapabilities = typeof PullRequestCapabilities.Type;
 
@@ -700,6 +701,10 @@ export const PullRequestDiffInput = Schema.Struct({
   ...PullRequestRef.fields,
   cursor: Schema.optional(TrimmedNonEmptyString),
   commit: Schema.optional(TrimmedNonEmptyString),
+  /** Read one withheld file by its exact displayed path, independently of paging. */
+  path: Schema.optional(Schema.String.check(Schema.isMinLength(1), Schema.isMaxLength(4096))),
+  /** The observed PR head for a withheld file load in the aggregate diff. */
+  expectedHeadSha: Schema.optional(TrimmedNonEmptyString),
 });
 export type PullRequestDiffInput = typeof PullRequestDiffInput.Type;
 
@@ -716,6 +721,8 @@ export const PullRequestDiffResult = Schema.Struct({
   truncated: Schema.Boolean,
   nextCursor: Schema.NullOr(TrimmedNonEmptyString),
   omittedFileStats: Schema.optional(Schema.Array(PullRequestOmittedFileStat)),
+  /** On the first page, one withheld file can be requested with a path. */
+  withheldFilesReadable: Schema.optional(Schema.Boolean),
 });
 export type PullRequestDiffResult = typeof PullRequestDiffResult.Type;
 

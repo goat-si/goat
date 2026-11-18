@@ -5,8 +5,8 @@ import {
   type PullRequestListEntry,
   type PullRequestSummary,
 } from "@goat/contracts";
-import { useAtomRefresh } from "@effect/atom-react";
-import { useCallback, useLayoutEffect, useMemo, useState } from "react";
+import { RegistryContext, useAtomRefresh, useAtomValue } from "@effect/atom-react";
+import { useContext, useCallback, useLayoutEffect, useMemo, useState } from "react";
 
 import { composerPullRequests } from "../../state/pull-requests";
 import { useEnvironmentQuery } from "../../state/query";
@@ -15,6 +15,8 @@ import {
   getCachedPullRequestDiffPages,
   retainPullRequestDiffPage,
   type PullRequestDiffPage,
+  withWithheldFiles,
+  type WithheldFileLoad,
 } from "./pullRequestDiffPages";
 
 export type PullRequestParams = {
@@ -40,6 +42,7 @@ export function pullRequestTarget(params: PullRequestParams) {
   };
 }
 
+const NO_PATHS: readonly string[] = [];
 const NO_PAGES: readonly PullRequestDiffPage[] = [];
 
 export function usePullRequestDiffEntry(navigation: {
@@ -85,6 +88,7 @@ export function usePullRequestDiffEntry(navigation: {
 export function usePullRequestDiff(
   params: PullRequestDiffParams,
   terminology: ChangeRequestTerminology,
+  observedHead?: string | undefined,
 ) {
   const reference = pullRequestTarget(params);
   const target = {
@@ -113,10 +117,51 @@ export function usePullRequestDiff(
   }, [cursor, key, query.data, state.key, state.pages]);
   if (state.key !== key || state.pages !== pages) setState({ key, cursor, pages });
 
-  const parsed = useMemo(
+  const paged = useMemo(
     () => getCachedPullRequestDiffPages(pages, key, terminology),
     [key, pages, terminology],
   );
+  const fileTarget =
+    params.commit || !observedHead
+      ? target
+      : { ...target, input: { ...target.input, expectedHeadSha: observedHead } };
+  const fileKey = JSON.stringify(fileTarget);
+  const [loads, setLoads] = useState({ key: fileKey, paths: NO_PATHS });
+  const paths = loads.key === fileKey ? loads.paths : NO_PATHS;
+  const readable =
+    pages[0]?.result.withheldFilesReadable === true && (!!params.commit || !!observedHead);
+  const registry = useContext(RegistryContext);
+  const answers = useAtomValue(
+    composerPullRequests.withheldDiffs(JSON.stringify({ target: fileTarget, paths })),
+  );
+  const refreshWithheldFile = (path: string) =>
+    registry.refresh(
+      composerPullRequests.withheldDiff({
+        ...fileTarget,
+        input: { ...fileTarget.input, path },
+      }),
+    );
+  const loadWithheldFile = (path: string) => {
+    if (!readable) return;
+    refreshWithheldFile(path);
+    if (!paths.includes(path)) setLoads({ key: fileKey, paths: [...paths, path] });
+  };
+  const withheldRefetching = answers.some((result) => result.waiting);
+  const parsed = useMemo(() => {
+    if (!paged) return paged;
+    const states = new Map<string, WithheldFileLoad>();
+    paths.forEach((path, index) => {
+      const answer = answers[index];
+      if (answer?._tag === "Success" && !answer.waiting) {
+        states.set(path, { status: "loaded", result: answer.value });
+      } else {
+        states.set(path, {
+          status: answer?._tag === "Failure" && !answer.waiting ? "error" : "loading",
+        });
+      }
+    });
+    return withWithheldFiles(paged, states, readable, fileKey);
+  }, [answers, fileKey, paged, paths, readable]);
   const patch = useMemo(() => pages.map((page) => page.result.patch).join("\n"), [pages]);
   const nextCursor = pages.at(-1)?.result.nextCursor ?? null;
   const canLoadMore =
@@ -132,16 +177,20 @@ export function usePullRequestDiff(
       return;
     }
     setState({ key, cursor: null, pages: NO_PAGES });
+    paths.forEach(refreshWithheldFile);
     refreshFirstPage();
-  }, [cursor, error, refreshPage, key, refreshFirstPage, setState]);
+  }, [cursor, error, refreshPage, key, paths, refreshWithheldFile, refreshFirstPage, setState]);
   const onPullRefresh = useCallback(() => {
     setState({ key, cursor: null, pages: NO_PAGES });
+    paths.forEach(refreshWithheldFile);
     onRefresh();
-  }, [key, onRefresh, setState]);
+  }, [key, onRefresh, paths, refreshWithheldFile, setState]);
   return {
     ...query,
     refresh,
     parsed,
+    loadWithheldFile,
+    withheldRefetching,
     patch,
     nextCursor,
     canLoadMore,

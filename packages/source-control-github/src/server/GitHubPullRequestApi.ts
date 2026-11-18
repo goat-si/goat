@@ -350,6 +350,7 @@ export interface GitHubPullRequestDiffSlice {
   readonly truncated: boolean;
   readonly nextCursor: string | null;
   readonly omittedFileStats?: ReadonlyArray<PullRequestOmittedFileStat>;
+  readonly withheldFilesReadable?: boolean;
 }
 
 export interface GitHubPullRequestFilesViewed {
@@ -495,6 +496,8 @@ export class GitHubPullRequestApi extends Context.Service<
       readonly number: number;
       readonly cursor?: string | undefined;
       readonly commit?: string | undefined;
+      readonly path?: string | undefined;
+      readonly expectedHeadSha?: string | undefined;
     }) => Effect.Effect<GitHubPullRequestDiffSlice, GitHubPullRequestApiError>;
 
     readonly getPullRequestDiffFileContents: (input: {

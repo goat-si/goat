@@ -446,6 +446,21 @@ export function createPullRequestEnvironmentAtoms<R, E>(
     return yield* loader.load(prepared.value, input);
   });
 
+  const withheldDiff = createEnvironmentQueryAtomFamily(runtime, {
+    label: "environment-data:pull-requests:withheld-diff",
+    staleTimeMs: 60_000,
+    execute: loadDiff,
+  });
+  const withheldDiffs = Atom.family((key: string) => {
+    const { target, paths } = JSON.parse(key) as {
+      readonly target: Parameters<typeof withheldDiff>[0];
+      readonly paths: readonly string[];
+    };
+    return Atom.make((get) =>
+      paths.map((path) => get(withheldDiff({ ...target, input: { ...target.input, path } }))),
+    );
+  });
+
   const runAction = Effect.fn("PullRequests.runAction")(function* (
     input: PullRequestActionInput & {
       readonly resolveMergeMethod?: (detail: PullRequestDetail) => PullRequestMergeMethod;
@@ -612,6 +627,8 @@ export function createPullRequestEnvironmentAtoms<R, E>(
       staleTimeMs: 60_000,
       execute: loadDiff,
     }),
+    withheldDiff,
+    withheldDiffs,
     diffFileContents: createEnvironmentRpcCommand(runtime, {
       label: "environment-data:pull-requests:diff-file-contents",
       tag: WS_METHODS.pullRequestsDiffFileContents,

@@ -1,3 +1,6 @@
+import { PullRequestRawDiffSlices } from "./PullRequestRawDiffSlices";
+import { useWithheldPullRequestFiles } from "./useWithheldPullRequestFiles";
+import { PullRequestWithheldFileNotice } from "./PullRequestWithheldFileNotice";
 import { PullRequestDiffCommitMenu } from "./PullRequestDiffCommitMenu";
 import { useWordWrap } from "~/hooks/useWordWrap";
 import { reviewThreadsByPath } from "./pullRequestThreadsByPath";
@@ -54,7 +57,6 @@ import {
   type PullRequestImagePreview,
 } from "./PullRequestImageAnnotation";
 import {
-  buildFileDiffRenderKey,
   fnv1a32,
   getDiffLineStat,
   resolveDiffThemeName,
@@ -127,6 +129,10 @@ interface ReviewAnnotationGroup {
   readonly pending: ReadonlyArray<PendingReviewComment>;
   readonly draft: boolean;
   readonly image?: PullRequestImagePreview;
+  readonly withheld?: {
+    readonly path: string;
+    readonly status: "idle" | "loading" | "error" | "empty";
+  };
 }
 
 type ReviewAnnotation = DiffLineAnnotation<ReviewAnnotationGroup>;
@@ -303,6 +309,7 @@ function PullRequestCodeTab({
         existing.patch === next.patch &&
         existing.truncated === next.truncated &&
         existing.nextCursor === next.nextCursor &&
+        existing.source.withheldFilesReadable === next.source.withheldFilesReadable &&
         existing.omittedFileStats.length === next.omittedFileStats.length &&
         existing.omittedFileStats.every((file, index) => {
           const refreshed = next.omittedFileStats[index];
@@ -357,6 +364,34 @@ function PullRequestCodeTab({
     isViewed: isFileViewed,
     isStale: isFileViewedStale,
   } = filesViewed;
+  const {
+    parsedSlices,
+    loadedFiles: pagedFiles,
+    sourceFileStats,
+  } = diffModel(
+    loadedSlices,
+    `pull-request:${scopeKey}:${resolvedTheme}:${ignoreWhitespace}`,
+    ignoreWhitespace,
+  );
+  const withheldReadable =
+    loadedSlices[0]?.source.withheldFilesReadable === true && (commit !== null || !!detail.headSha);
+  const withheld = useWithheldPullRequestFiles(
+    {
+      environmentId,
+      input: {
+        ...reference,
+        ...(commit === null
+          ? detail.headSha
+            ? { expectedHeadSha: detail.headSha }
+            : {}
+          : { commit }),
+      },
+    },
+    withheldReadable,
+    pagedFiles,
+  );
+  const { files: loadedFiles, fileKey: fileRenderKey } = withheld;
+  const refreshWithheld = useEffectEvent(withheld.refresh);
   const appliedRefreshToken = useRef(refreshToken);
   useEffect(() => {
     if (appliedRefreshToken.current === refreshToken) return;
@@ -366,6 +401,7 @@ function PullRequestCodeTab({
     // applied page is forgotten too.
     setAppliedPage(null);
     refreshFirstDiffPage();
+    refreshWithheld();
     refreshFilesViewed();
   }, [refreshToken, scopeKey, refreshFirstDiffPage, refreshFilesViewed]);
   const appliedBackgroundRefreshToken = useRef(backgroundRefreshToken);
@@ -375,6 +411,7 @@ function PullRequestCodeTab({
     // Keeping slices mounted preserves scroll; the page merge invalidates changed pages.
     setSliceState((previous) => ({ ...previous, cursor: null }));
     refreshFirstDiffPage();
+    refreshWithheld();
     refreshFilesViewed();
   }, [backgroundRefreshToken, refreshFirstDiffPage, refreshFilesViewed]);
 
@@ -401,11 +438,6 @@ function PullRequestCodeTab({
   // Agent context is local, so it does not require host comment permission.
   const canSelectLines =
     commit === null && (review.inlineComment || onAddToAgentSelection !== undefined);
-  const { parsedSlices, loadedFiles, sourceFileStats } = diffModel(
-    loadedSlices,
-    `pull-request:${scopeKey}:${resolvedTheme}:${ignoreWhitespace}`,
-    ignoreWhitespace,
-  );
   const testFileCount = loadedFiles.filter((file) =>
     isTestChangedFile(resolveFileDiffPath(file)),
   ).length;
@@ -442,7 +474,7 @@ function PullRequestCodeTab({
 
   const imagePreviewUrl = pullRequestImagePreviewUrl(detail, commit);
   const annotatedFiles = files.map((fileDiff) => {
-    const fileKey = buildFileDiffRenderKey(fileDiff);
+    const fileKey = fileRenderKey(fileDiff);
     const path = resolveFileDiffPath(fileDiff);
     const groups = new Map<string, MutableAnnotationGroup>();
     const groupAt = (side: PullRequestDiffSide, line: number) => {
@@ -488,6 +520,17 @@ function PullRequestCodeTab({
         lineNumber: 0,
         metadata: { threads: [], pending: [], draft: false, image: { url: imageUrl, path } },
       });
+    } else if (fileDiff.hunks.length === 0 && omittedFileStats.has(path)) {
+      annotations.push({
+        side: "additions",
+        lineNumber: 0,
+        metadata: {
+          threads: [],
+          pending: [],
+          draft: false,
+          withheld: { path, status: withheld.statuses.get(path) ?? "idle" },
+        },
+      });
     }
     return {
       fileKey,
@@ -499,7 +542,7 @@ function PullRequestCodeTab({
         annotations
           .map(
             ({ side, lineNumber, metadata }) =>
-              `${side}:${lineNumber}:${metadata.image?.url ?? ""}:${metadata.draft ? "d" : ""}:${metadata.pending
+              `${side}:${lineNumber}:${metadata.image?.url ?? metadata.withheld?.status ?? ""}:${metadata.draft ? "d" : ""}:${metadata.pending
                 .map((comment) => `${comment.id}:${comment.body}`)
                 .join(",")}:${metadata.threads
                 .map(
@@ -535,26 +578,10 @@ function PullRequestCodeTab({
       : [];
   const rawSlicesView =
     files.length === 0 && rawSlices.length > 0 ? (
-      <div className="space-y-4 px-4 py-5">
-        {rawSlices.map((slice) => (
-          <div key={`${slice.reason}:${slice.text.slice(0, 64)}`} className="space-y-2">
-            <p className="text-xs text-muted-foreground">{slice.reason}</p>
-            <pre className="whitespace-pre-wrap break-words font-mono text-xs">{slice.text}</pre>
-          </div>
-        ))}
-      </div>
+      <PullRequestRawDiffSlices slices={rawSlices} />
     ) : null;
   const unstructured =
-    rawSlices.length === 0 ? null : (
-      <div className="space-y-4 border-t border-border/60 px-4 py-5">
-        {rawSlices.map((slice) => (
-          <div key={`${slice.reason}:${slice.text.slice(0, 64)}`} className="space-y-2">
-            <p className="text-xs text-muted-foreground">{slice.reason}</p>
-            <pre className="whitespace-pre-wrap break-words font-mono text-xs">{slice.text}</pre>
-          </div>
-        ))}
-      </div>
-    );
+    rawSlices.length > 0 ? <PullRequestRawDiffSlices slices={rawSlices} separated /> : null;
 
   const items: CodeViewDiffItem<ReviewAnnotationGroup>[] = annotatedFiles.map(
     ({ fileKey, path, fileDiff, annotations, annotationsVersion }) => {
@@ -568,7 +595,9 @@ function PullRequestCodeTab({
         fileDiff,
         annotations,
         collapsed,
-        version: fnv1a32(`${collapsed ? "1" : "0"}:${viewedMark}:${annotationsVersion}`),
+        version: fnv1a32(
+          `${collapsed ? "1" : "0"}:${viewedMark}:${annotationsVersion}:${fileDiff.cacheKey}`,
+        ),
       };
     },
   );
@@ -645,10 +674,10 @@ function PullRequestCodeTab({
     range: SelectedLineRange | null,
     context: { item: CodeViewItem<ReviewAnnotationGroup> },
   ) => {
-    if (!range || !canSelectLines) return;
+    if (!range || !canSelectLines || withheld.waiting) return;
     const item = context.item;
     if (item.type !== "diff") return;
-    const file = files.find((candidate) => buildFileDiffRenderKey(candidate) === item.id);
+    const file = files.find((candidate) => fileRenderKey(candidate) === item.id);
     if (!file) return;
     // On a host without ranged comments a range collapses to its last line: one that silently
     // lost its first line there would be worse than one line.
@@ -675,7 +704,7 @@ function PullRequestCodeTab({
     text: string,
     onFinish: (comment: ReviewCommentContext) => void,
   ) => {
-    const file = files.find((candidate) => buildFileDiffRenderKey(candidate) === anchor.fileKey);
+    const file = files.find((candidate) => fileRenderKey(candidate) === anchor.fileKey);
     const comment =
       file === undefined
         ? null
@@ -766,7 +795,12 @@ function PullRequestCodeTab({
     preferredHighlighter: PREFERRED_HIGHLIGHTER,
     themeType: resolvedTheme,
     stickyHeaders: true,
-    loadDiffFiles,
+    loadDiffFiles: (file: Parameters<typeof loadDiffFiles>[0]) =>
+      withheld.cutFiles.has(file)
+        ? Promise.reject(
+            new Error("Unchanged lines are unavailable in a file with shortened lines."),
+          )
+        : loadDiffFiles(file),
     enableGutterUtility: canSelectLines && draft === null,
     enableLineSelection: canSelectLines && draft === null,
     onGutterUtilityClick: beginComment,
@@ -870,6 +904,13 @@ function PullRequestCodeTab({
           environmentId={environmentId}
           detail={detail}
           image={annotation.metadata.image}
+        />
+      ) : null}
+      {annotation.metadata.withheld ? (
+        <PullRequestWithheldFileNotice
+          status={annotation.metadata.withheld.status}
+          readable={withheldReadable}
+          load={() => withheld.load(annotation.metadata.withheld?.path)}
         />
       ) : null}
       {annotation.metadata.threads.map(renderThreadCard)}

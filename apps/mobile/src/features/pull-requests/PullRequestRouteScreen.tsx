@@ -858,7 +858,7 @@ function PullRequestFileRouteContent({ route }: PullRequestFileRouteProps) {
   const terminology = sourceControlClients.get(
     (detail.data ?? route.params.initialSummary)?.provider,
   ).changeRequest;
-  const result = usePullRequestDiff(route.params, terminology);
+  const result = usePullRequestDiff(route.params, terminology, detail.data?.headSha);
   const filter = usePullRequestFileFilter(
     result.parsed,
     route.params.focus ? route.params.path : undefined,
@@ -884,6 +884,7 @@ function PullRequestFileRouteContent({ route }: PullRequestFileRouteProps) {
     !staleDiff &&
     !detail.isPending &&
     !result.isPending &&
+    !result.withheldRefetching &&
     !result.error;
   const activity = useEnvironmentQuery(composerPullRequests.activity(requestTarget(route.params)));
   const baseData = useMemo(() => getCachedNativeReviewDiffData({ parsedDiff: parsed }), [parsed]);
@@ -1232,6 +1233,10 @@ function PullRequestFileRouteContent({ route }: PullRequestFileRouteProps) {
                     return next;
                   });
                 else void viewed.toggle(file.path);
+              }}
+              onPressNotice={(event) => {
+                const file = data.files.find((file) => file.id === event.nativeEvent.fileId);
+                if (file && !staleDiff) result.loadWithheldFile(file.path);
               }}
               onToggleComment={(event) => {
                 const id = event.nativeEvent.commentId;

@@ -17,3 +17,14 @@ export const diffCacheEvictions = (entries: Iterable<readonly [string, PullReque
   }
   return evictions;
 };
+
+export function decodeDiffCacheKey(key: string) {
+  return JSON.parse(key) as [
+    string,
+    string | null,
+    string | null,
+    string | null,
+    string | null,
+    string | null,
+  ];
+}

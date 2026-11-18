@@ -1,3 +1,8 @@
+import {
+  diffFileSection,
+  truncateLongDiffLines,
+} from "@goat/source-control-core/server/diffFileRevisions";
+import * as Option from "effect/Option";
 import * as Duration from "effect/Duration";
 import * as Effect from "effect/Effect";
 import type {
@@ -12,13 +17,20 @@ import {
   GitHubDiffCursorError,
 } from "./gitHubPullRequestReadErrors.ts";
 import type { GitHubRest } from "./GitHubRest.ts";
-import { diffCursorPage, isCommitSha, parseRepositorySelector } from "./gitHubPullRequestInput.ts";
+import {
+  decodeRevisionRefs,
+  diffCursorPage,
+  isCommitSha,
+  parseRepositorySelector,
+} from "./gitHubPullRequestInput.ts";
 import { decodeCommitFilesJson, decodePullRequestFilesJson } from "./gitHubPullRequestJson.ts";
 
 /** A large pull request can produce a multi-megabyte patch; past this it is truncated. */
 const DIFF_MAX_OUTPUT_BYTES = 8 * 1024 * 1024;
 export const DIFF_TIMEOUT = Duration.seconds(60);
 const DIFF_FILES_PAGE_SIZE = 100;
+const WITHHELD_FILE_RESPONSE_LIMIT = 32 * 1024 * 1024;
+const WITHHELD_FILE_LINE_LIMIT = 1_000;
 
 export function makeGitHubPullRequestDiff(
   api: GitHubRest["Service"],
@@ -78,48 +90,91 @@ export function makeGitHubPullRequestDiff(
       );
   };
 
-  return Effect.fn("GitHubPullRequestApi.getPullRequestDiff")(function (input) {
-    const filesPage = (page: number) =>
-      diffFilesPage({
-        cwd: input.cwd,
-        repository: input.repository,
-        host: input.host,
-        number: input.number,
-        page,
-        ...(input.commit === undefined ? {} : { commit: input.commit }),
-      });
+  return Effect.fn("GitHubPullRequestApi.getPullRequestDiff")(function* (input) {
+    const filesPage = (page: number) => diffFilesPage({ ...input, page });
+    const { owner, name } = parseRepositorySelector(input.repository);
     if (input.commit !== undefined && !isCommitSha(input.commit)) {
-      return Effect.fail(new GitHubDiffCommitError({ cwd: input.cwd }));
+      return yield* new GitHubDiffCommitError({ cwd: input.cwd });
     }
+    const operation = "getPullRequestDiff";
+    const requestPath =
+      input.commit === undefined
+        ? `repos/${owner}/${name}/pulls/${input.number}`
+        : `repos/${owner}/${name}/commits/${input.commit}`;
+    const fullDiff = (path: string, maxResponseBytes: number) =>
+      api.rest({
+        host: input.host,
+        operation,
+        path,
+        accept: "application/vnd.github.diff",
+        maxResponseBytes,
+        timeout: DIFF_TIMEOUT,
+      });
+
+    if (input.path !== undefined) {
+      let diffPath = requestPath;
+      if (input.commit === undefined && input.expectedHeadSha !== undefined) {
+        const current = yield* api.rest({ host: input.host, operation, path: requestPath });
+        const refs = Option.getOrUndefined(decodeRevisionRefs(current.body));
+        const base = refs?.base?.sha;
+        const head = refs?.head?.sha;
+        if (
+          current.truncated ||
+          base === undefined ||
+          head === undefined ||
+          !isCommitSha(base) ||
+          !isCommitSha(head) ||
+          head.toLowerCase() !== input.expectedHeadSha.toLowerCase()
+        ) {
+          return yield* readError(
+            input.cwd,
+            operation,
+            new Error("The pull request revision changed before the file could be loaded."),
+          );
+        }
+        diffPath = `repos/${owner}/${name}/compare/${base}...${head}`;
+      }
+      const response = yield* fullDiff(diffPath, WITHHELD_FILE_RESPONSE_LIMIT);
+      const section =
+        response.truncated || response.invalidUtf8
+          ? null
+          : diffFileSection(response.body, input.path);
+      const patch =
+        section === null ? null : truncateLongDiffLines(section, WITHHELD_FILE_LINE_LIMIT);
+      if (patch === null) {
+        return yield* readError(
+          input.cwd,
+          operation,
+          new Error("The requested file is missing or its diff is too large to load."),
+        );
+      }
+      return { patch, truncated: false, nextCursor: null };
+    }
+
     if (input.cursor !== undefined) {
       const page = diffCursorPage(input.cursor);
-      return page === null
+      return yield* page === null
         ? Effect.fail(new GitHubDiffCursorError({ cwd: input.cwd }))
         : filesPage(page);
     }
-    if (input.commit !== undefined) {
-      return filesPage(1);
-    }
-    const { owner, name } = parseRepositorySelector(input.repository);
-    return api
-      .rest({
-        host: input.host,
-        operation: "getPullRequestDiff",
-        path: `repos/${owner}/${name}/pulls/${input.number}`,
-        accept: "application/vnd.github.diff",
-        maxResponseBytes: DIFF_MAX_OUTPUT_BYTES,
-        timeout: DIFF_TIMEOUT,
-      })
-      .pipe(
-        Effect.flatMap((response) =>
-          response.truncated
-            ? filesPage(1)
-            : Effect.succeed({ patch: response.body, truncated: false, nextCursor: null }),
-        ),
-        // Above 300 changed files, GitHub returns 406; use the paged files API.
-        Effect.catchTags({
-          GitHubApiResponseError: (error) => filesPage(1).pipe(Effect.mapError(() => error)),
-        }),
+    const readableFirstPage = () =>
+      filesPage(1).pipe(
+        Effect.map((page): GitHubPullRequestDiffSlice => ({
+          ...page,
+          withheldFilesReadable: true,
+        })),
       );
+    if (input.commit !== undefined) return yield* readableFirstPage();
+    return yield* fullDiff(requestPath, DIFF_MAX_OUTPUT_BYTES).pipe(
+      Effect.flatMap((response) =>
+        response.truncated
+          ? readableFirstPage()
+          : Effect.succeed({ patch: response.body, truncated: false, nextCursor: null }),
+      ),
+      // GitHub's refusal also applies to single-file reads from the full diff.
+      Effect.catchTags({
+        GitHubApiResponseError: (error) => filesPage(1).pipe(Effect.mapError(() => error)),
+      }),
+    );
   });
 }

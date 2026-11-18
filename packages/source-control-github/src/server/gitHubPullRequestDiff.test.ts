@@ -103,4 +103,73 @@ layer("GitHub pull request diffs", (it) => {
       assert.strictEqual(mockedExecute.mock.calls.length, 2);
     }),
   );
+
+  it.effect("extracts only the named file and bounds long lines at the named commit", () =>
+    Effect.gen(function* () {
+      const cli = yield* GitHubPullRequestApi.GitHubPullRequestApi;
+      const ref = {
+        cwd: "/w",
+        repository: "acme/web",
+        host: "github.com",
+        number: 7,
+        commit: "b".repeat(40),
+      };
+      const header =
+        'diff --git "a/old.js" "b/new.js"\nsimilarity index 80%\nrename from old.js\nrename to new.js\n@@ -1 +1 @@\n';
+      const patch =
+        "diff --git a/other b/other\n@@ -1 +1 @@\n-old\n+new\n" +
+        header +
+        "-old\n+" +
+        "x".repeat(1200) +
+        "\n";
+      mockedExecute.mockReturnValueOnce(Effect.succeed(output(patch)));
+      assert.strictEqual(
+        (yield* cli.getPullRequestDiff({ ...ref, path: "new.js" })).patch,
+        header + "-old\n+" + "x".repeat(1000) + " …[200 more characters]\n",
+      );
+      assert.strictEqual(pathAt(0), "repos/acme/web/commits/" + ref.commit);
+
+      mockedExecute.mockReturnValueOnce(Effect.succeed(output(patch)));
+      const wrongPath = yield* Effect.flip(cli.getPullRequestDiff({ ...ref, path: "old.js" }));
+      assert.strictEqual(wrongPath._tag, "GitHubPullRequestReadError");
+
+      mockedExecute.mockReturnValueOnce(Effect.succeed(output(patch, true)));
+      const incomplete = yield* Effect.flip(cli.getPullRequestDiff({ ...ref, path: "new.js" }));
+      assert.strictEqual(incomplete._tag, "GitHubPullRequestReadError");
+    }),
+  );
+
+  it.effect(
+    "rejects a displaced PR head and reads matching refs through an immutable comparison",
+    () =>
+      Effect.gen(function* () {
+        const cli = yield* GitHubPullRequestApi.GitHubPullRequestApi;
+        const base = "a".repeat(40);
+        const head = "b".repeat(40);
+        const input = {
+          cwd: "/w",
+          repository: "acme/web",
+          host: "github.com",
+          number: 7,
+          path: "large.js",
+          expectedHeadSha: head,
+        };
+        mockedExecute.mockReturnValueOnce(
+          Effect.succeed(
+            output(JSON.stringify({ base: { sha: base }, head: { sha: "c".repeat(40) } })),
+          ),
+        );
+        const mismatch = yield* Effect.flip(cli.getPullRequestDiff(input));
+        assert.strictEqual(mismatch._tag, "GitHubPullRequestReadError");
+        assert.lengthOf(mockedExecute.mock.calls, 1);
+
+        const patch = "diff --git a/large.js b/large.js\n@@ -1 +1 @@\n-before\n+after\n";
+        mockedExecute.mockReturnValueOnce(
+          Effect.succeed(output(JSON.stringify({ base: { sha: base }, head: { sha: head } }))),
+        );
+        mockedExecute.mockReturnValueOnce(Effect.succeed(output(patch)));
+        assert.strictEqual((yield* cli.getPullRequestDiff(input)).patch, patch);
+        assert.strictEqual(pathAt(2), "repos/acme/web/compare/" + base + "..." + head);
+      }),
+  );
 });
