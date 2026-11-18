@@ -10,7 +10,9 @@ own `engines.node` stays wider because the desktop app runs it on Electron's Nod
 When `vp env current` reports `Mode system_first`, `vp` runs the `node` on `PATH` instead. If that is
 another major or older than the pin, `vp run dev` and `vp test` stop with a message naming the pinned release.
 Run `vp env on node` to let `vp` manage Node again, or prefix one command with
-`vp env exec --node <pinned version> --`. From the repository root:
+`vp env exec --node <pinned version> --package-manager <packageManager> --` (omit
+`--package-manager` before vite-plus 0.3.1; from 0.3.1 on it keeps a `system_first`
+package manager directory from shadowing the pinned Node). From the repository root:
 
 ```sh
 vp i
@@ -30,7 +32,9 @@ or an agent ran git. Setup installs dependencies, links the main checkout's env 
 web dependency cache, so the command returns with a ready worktree, usually within a minute.
 
 Setup needs the Node release pinned in root `package.json` (or a later release of the same major).
-With another Node, setup uses `vp env exec` to rerun under the pin only with vite-plus 0.2.2 or later.
+With another Node, setup uses `vp env exec` to rerun under the pin only with vite-plus 0.2.2 or later
+(passing `--package-manager` from 0.3.1 on, when vite-plus added package-manager shims and the flag,
+so a `system_first` package manager directory does not shadow the pinned Node).
 The [0.2.2 release notes](https://github.com/voidzero-dev/vite-plus/releases/tag/v0.2.2) describe
 verification of Node's clearsigned `SHASUMS256.txt.asc` against the bundled release keyring before
 checking the archive's SHA-256; unsigned sources such as some musl builds and custom mirrors fall

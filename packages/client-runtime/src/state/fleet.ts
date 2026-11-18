@@ -188,6 +188,12 @@ export function fleetThreadStates<
   return states;
 }
 
+// Pen's exact ssh alias for a member: this client reaches that machine through the Pen mesh.
+const PEN_ALIAS = /^pen-[a-z2-7]{26}$/u;
+const VIA_PEN = "via Pen";
+const reachedThroughPen = (environment: Pick<FleetEnvironment, "sshAliases">) =>
+  environment.sshAliases.some((alias) => PEN_ALIAS.test(alias));
+
 export interface FleetEnvironment {
   readonly environmentId: EnvironmentId;
   readonly label: string;
@@ -561,7 +567,7 @@ export function buildFleet(input: {
       machines.set(machineId(owner), {
         id: machineId(owner),
         label: ownerEnvironment.label,
-        subtitle: null,
+        subtitle: reachedThroughPen(ownerEnvironment) ? VIA_PEN : null,
         kind: "environment",
         os: ownerEnvironment.os ?? environment.os ?? null,
         machineKind: ownerEnvironment.machineKind ?? environment.machineKind ?? null,
@@ -576,6 +582,7 @@ export function buildFleet(input: {
         agents: new Map(),
       });
     } else {
+      if (reachedThroughPen(environment)) existing.subtitle ??= VIA_PEN;
       existing.answering ||= environment.connected !== false;
       existing.os ??= environment.os ?? null;
       existing.machineKind ??= environment.machineKind ?? null;

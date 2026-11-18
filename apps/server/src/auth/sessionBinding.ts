@@ -1,11 +1,11 @@
-import type { SessionPrincipalKind } from "@goat/contracts";
+import type { AuthSessionId, SessionPrincipalKind } from "@goat/contracts";
 import * as Duration from "effect/Duration";
 import * as Effect from "effect/Effect";
 
 import type { AuthSessionPenBinding } from "../persistence/AuthSessions.ts";
 import type { ConnectionContext } from "./connectionContext.ts";
 import { MCP_CLIENT_SUBJECT } from "./mcpClientSubject.ts";
-import { SessionBindingRefusedError } from "./sessionStoreErrors.ts";
+import { SessionBindingRefusedError, SessionCredentialIssueError } from "./sessionStoreErrors.ts";
 
 /** Subject of a member proxy session (mesh link design §5); never a person. */
 export const PEN_PROXY_SUBJECT = "pen-proxy";
@@ -16,7 +16,7 @@ export const defaultPrincipalKind = (subject: string): SessionPrincipalKind =>
   subject === MCP_CLIENT_SUBJECT ? "outside_client" : "person";
 
 /** Why a requested session shape is refused, or undefined when it is valid. */
-export const issueShapeRefusal = (
+const issueShapeRefusal = (
   subject: string,
   kind: SessionPrincipalKind,
   binding: AuthSessionPenBinding | undefined,
@@ -30,6 +30,46 @@ export const issueShapeRefusal = (
     return "A Pen-bound outside_client session is an mcp-client session.";
   return undefined;
 };
+
+type IssueInput =
+  | {
+      readonly principalKind?: SessionPrincipalKind;
+      readonly penBinding?: AuthSessionPenBinding;
+      readonly ttl?: Duration.Duration;
+    }
+  | undefined;
+
+/** The kind a new session is issued as; an invalid shape is refused. */
+export const issuePrincipalKind = (
+  subject: string,
+  input: IssueInput,
+  sessionId: AuthSessionId,
+) => {
+  const kind = input?.principalKind ?? defaultPrincipalKind(subject);
+  const refusal = issueShapeRefusal(subject, kind, input?.penBinding);
+  return refusal === undefined
+    ? Effect.succeed(kind)
+    : Effect.fail(new SessionCredentialIssueError({ sessionId, cause: refusal }));
+};
+
+/** The requested lifetime, which a Pen-bound session holds for at most PEN_SESSION_MAX_TTL. */
+export const issueTtlMs = (input: IssueInput, fallback: Duration.Duration) => {
+  const requested = Duration.toMillis(input?.ttl ?? fallback);
+  return input?.penBinding === undefined
+    ? requested
+    : Math.min(requested, Duration.toMillis(PEN_SESSION_MAX_TTL));
+};
+
+/** The reusable dev credential is a person's own and never Pen-bound. */
+export const refuseBoundDevCredential = (session: {
+  readonly sessionId: AuthSessionId;
+  readonly penBinding?: AuthSessionPenBinding;
+}) =>
+  session.penBinding === undefined
+    ? Effect.void
+    : Effect.fail(
+        new SessionBindingRefusedError({ sessionId: session.sessionId, reason: "wrong_listener" }),
+      );
 
 /**
  * The one binding check every verifier ends in (mesh link design §6). A Pen-bound session passes

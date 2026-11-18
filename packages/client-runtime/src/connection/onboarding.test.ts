@@ -170,6 +170,8 @@ function layerPairingHttp(
 function layerPairingOnboarding(
   options?: Parameters<typeof layerPairingHttp>[1],
   calls: Array<{ readonly url: string; readonly init: RequestInit }> = [],
+  sshGateway = Layer.mock(ClientCapabilities.SshEnvironmentGateway)({}),
+  credentialWrites: string[] = [],
 ) {
   const dependencies = Layer.mergeAll(
     layerClientPresentation,
@@ -179,7 +181,13 @@ function layerPairingOnboarding(
       listDisabled: Effect.succeed([]),
     }),
     Layer.mock(Persistence.ConnectionRegistrationStore)({
-      register: () => Effect.void,
+      register: (registration) =>
+        Effect.sync(() => {
+          if (registration._tag === "SshConnectionRegistration") {
+            credentialWrites.push(registration.target.connectionId);
+            expect(registration.credential.token).toBe("token");
+          }
+        }),
       setEnabled: () => Effect.void,
       setRoutes: () => Effect.void,
     }),
@@ -189,7 +197,7 @@ function layerPairingOnboarding(
       get: () => Effect.succeedNone,
       put: () => Effect.void,
     }),
-    Layer.mock(ClientCapabilities.SshEnvironmentGateway)({}),
+    sshGateway,
     Layer.succeed(
       Connectivity.Connectivity,
       Connectivity.Connectivity.of({ status: Effect.succeed("online"), changes: Stream.never }),
@@ -675,6 +683,64 @@ describe("connection onboarding", () => {
         credential: { token: "bearer-token" },
       });
     }),
+  );
+
+  it.effect.each([true, false] as const)(
+    "saves a managed SSH route only after confirmation: %s",
+    (confirm) =>
+      Effect.gen(function* () {
+        const target = { alias: "pen-node", hostname: "pen-node", username: "dev", port: 22 };
+        const writes: string[] = [];
+        const gateway = Layer.mock(ClientCapabilities.SshEnvironmentGateway)({
+          provision: (_target, _expected, options) => {
+            expect(options).toEqual({
+              installation: "existing-only",
+              penNodeId: "node",
+              connectionId: "ssh:pen:mesh:node",
+            });
+            return Effect.succeed({
+              environmentId: EnvironmentId.make("pen-env"),
+              label: "Pen",
+              bootstrap: {
+                target,
+                httpBaseUrl: "http://localhost:1234",
+                wsBaseUrl: "ws://localhost:1234",
+                pairingToken: null,
+              },
+              bearerToken: "token",
+            });
+          },
+        });
+        const layer = layerPairingOnboarding(undefined, [], gateway, writes);
+        yield* Effect.gen(function* () {
+          const onboarding = yield* Onboarding.ConnectionOnboarding;
+          const registry = yield* EnvironmentRegistry.EnvironmentRegistry;
+          const result = onboarding.registerSsh({
+            target,
+            installation: "existing-only",
+            pen: { meshId: "mesh", nodeId: "node" },
+            confirm: Effect.succeed(confirm),
+          });
+          if (!confirm) {
+            expect(yield* Effect.flip(result)).toMatchObject({
+              _tag: "ConnectionAttemptSuperseded",
+              reason: "superseded",
+            });
+            expect(yield* SubscriptionRef.get(registry.entries)).toEqual(new Map());
+            expect(writes).toEqual([]);
+          } else {
+            yield* result;
+            const entry = (yield* SubscriptionRef.get(registry.entries)).get(
+              EnvironmentId.make("pen-env"),
+            );
+            expect(entry?.target._tag).toBe("SshConnectionTarget");
+            if (entry?.target._tag !== "SshConnectionTarget") return;
+            expect(entry.target.connectionId).toBe("ssh:pen:mesh:node");
+            expect(Option.getOrUndefined(entry!.profile)?.connectionId).toBe("ssh:pen:mesh:node");
+            expect(writes).toEqual(["ssh:pen:mesh:node"]);
+          }
+        }).pipe(Effect.provide(layer));
+      }),
   );
 
   it.effect("prepares an SSH registration from the provisioned platform environment", () =>
