@@ -1267,3 +1267,21 @@ Fix `58e3d308c0cf6994ec2781b938098860b73e248a` preserves the thread model bindin
 - The K6 branch was pushed as a fast-forward and the remote head was verified at `58e3d308c0cf6994ec2781b938098860b73e248a`.
 
 NOT RUN: The five browser selectors listed in round 3, browser and render projects, real client passes, lane CI, full CI suites, builds, and release smoke.
+
+## K6 integration merge
+
+Lane head `14ca7e2d884210c3ce76c22f7ac3eb1d8bf09818` merges approved K6 head `58e3d308c0cf6994ec2781b938098860b73e248a` with integration head `a3255d1fd41b38f1d767a982e1c11b9361e1d842`, which includes K4. The incoming lockfile changed and `vp i` exited 0.
+
+- `apps/server/src/orchestration-v2/Orchestrator.ts` keeps compact visits and the integration pull-request watch flow. A stale visit and a checks reopen that has already been answered both permit an empty event receipt.
+- `apps/server/src/orchestration-v2/runtimeLayer.testkit.ts` keeps document extraction in the platform layer and the project enrichment and workspace mocks in the shared data-plane layer.
+- `packages/client-runtime/src/state/threads.ts` negotiates compact visits and retains subscription recovery. A delete event parks the subscription while a mounted 404 can retry with backoff.
+- The eight changed line-budget entries match `wc -l`. `Orchestrator.ts` is 13,464 lines, `threads.ts` is 1,080, and the 298-line testkit is below the default limit. `git diff --check` passed against both merge parents.
+
+### Verification on pen-lidge
+
+- `GOAT_TEST_TMP_GUARD=fail vp test run --maxWorkers=3 --reporter=default` ran all 96 server test files added or modified against either merge parent, plus the restored `ServerEnvironment.test.ts`, from `apps/server`. The selector list matched the reported files exactly. Exit 0 with 95 passing files, 1 platform-skipped file, 1,875 tests passed, and 11 skipped (8 Windows-only and 3 browser-backed HTML cases).
+- `GOAT_TEST_TMP_GUARD=fail VITEST_MAX_WORKERS=6 node scripts/check-changed.ts origin/chase/t3-261114-next3` checked 43 changed files with the existing server-only browser and render exclusions. Rename, format, lint, GraphQL, both Knip passes, both agent audits, and all 39 package typechecks passed. The server batch reported 536 passing and 2 failing files, with 6,639 tests passed, 3 skipped, and 2 failed. The workspace batch passed all 41 files and 490 tests, including the mounted-thread recovery cases. The gate exited 1.
+- The exact integration parent reproduced both gate failures. On Git 2.43.0, `storageCleanupShipping.test.ts:211` passed 10 cases and failed one with the same two reason lines. The fixture expected “Couldn't refresh origin/main” and received “Default branch is unavailable.” `ProviderSessionManager.lifecycle.test.ts:343` timed out at 120,000 ms in the gate and in an isolated run during the gate, then passed all six on a quiet merged-head rerun. On the integration parent, two of four guarded runs with the test processes pinned to the same CPU failed on the identical case, timeout and line. Five unpinned runs and two pinned runs passed all six.
+- The optional guarded `HtmlRender.test.ts` rerun with cached Chromium passed 14 and failed 3 on each revision. All three failures had matching AppArmor sandbox errors before launching Chromium, apart from per-run temporary paths.
+
+NOT RUN: Five selected web browser test files and the browser and render projects in the server-only gate. The changed-file pass skipped Windows-only external-launcher cases and Chromium-dependent HTML cases. Real-client passes, lane CI, full CI suites, builds and release smoke remain outside this server-host run.
