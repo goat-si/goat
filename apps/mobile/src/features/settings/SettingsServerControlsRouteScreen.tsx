@@ -364,6 +364,10 @@ function ServerSettingsDetail(props: {
     (target) =>
       target.environment.serverConfig.environment.capabilities.codexAppServerIsolation === true,
   );
+  const supportsKeepAwake = targets.every(
+    (target) =>
+      target.environment.serverConfig.environment.capabilities.keepAwakeWhileAgentsWork === true,
+  );
   const supportsAutomaticServerUpdates = targets.every(
     (target) =>
       target.environment.serverConfig.environment.capabilities.automaticServerUpdates === true,
@@ -883,6 +887,20 @@ function ServerSettingsDetail(props: {
                       ))}
                     </SettingsSection>
                   ) : null}
+                  <SettingsSection title="Power">
+                    <SettingsSwitchRow
+                      icon="bolt.circle"
+                      label="Keep awake while agents work"
+                      subtitle={
+                        supportsKeepAwake
+                          ? "Prevent idle sleep during active runs on the selected servers. Closing a laptop lid can still put it to sleep."
+                          : "One or more selected servers does not support this setting."
+                      }
+                      disabled={disabledFor("keepAwakeWhileAgentsWork") || !supportsKeepAwake}
+                      value={uniform("keepAwakeWhileAgentsWork")}
+                      onValueChange={(value) => write({ keepAwakeWhileAgentsWork: value })}
+                    />
+                  </SettingsSection>
                   <SettingsSection title="Updates">
                     <SettingsSwitchRow
                       icon="arrow.clockwise"

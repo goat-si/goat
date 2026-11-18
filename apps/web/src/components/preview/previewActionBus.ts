@@ -4,9 +4,20 @@ export type PreviewAction =
   | "back"
   | "forward"
   | "focus-url"
+  | "find"
   | "zoom-in"
   | "zoom-out"
   | "reset-zoom";
+
+const desktopActions = new Map<string, PreviewAction>([
+  ["preview.find", "find"],
+  ["preview.focusUrl", "focus-url"],
+  ["preview.zoomIn", "zoom-in"],
+  ["preview.zoomOut", "zoom-out"],
+  ["preview.resetZoom", "reset-zoom"],
+]);
+
+export const desktopPreviewAction = (action: string) => desktopActions.get(action);
 
 const EVENT_NAME = "goat:preview-action";
 

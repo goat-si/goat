@@ -445,7 +445,7 @@ describe.skipIf(HostProcess.Platform.defaultValue() === "win32")("fact helpers",
       const out = runIn(
         "bash",
         [
-          `exec 9>${quote(trace)}; BASH_XTRACEFD=9; PS4='+ '; set -x`,
+          `exec 2>${quote(trace)}; PS4='+ '; set -x`,
           `runner_key_hints ${quote(runner)}`,
           "set +x",
           'printf "%s|%s" "$RUNNER_NODE_DECLARED" "$RUNNER_ARCHIVE_VERSION"',
