@@ -2,6 +2,7 @@ import * as HostProcess from "@goat/shared/HostProcess";
 import { SshInvalidTargetError } from "@goat/ssh/errors";
 import { inspectPenExactAlias, type PenAliasUnreadable } from "@goat/ssh/penAlias";
 import { PEN_EXACT_ALIAS } from "@goat/ssh/penRoute";
+import type { SshEnvironmentEffectError } from "@goat/ssh/tunnel";
 import * as Context from "effect/Context";
 import * as Data from "effect/Data";
 import * as Effect from "effect/Effect";
@@ -20,7 +21,11 @@ export interface PenRouteBinding {
 }
 
 type PenAliasInspection = Effect.Success<ReturnType<typeof inspectPenExactAlias>>;
-export type PenRouteCleanup = (alias: string, binding: PenRouteBinding) => Effect.Effect<void>;
+/** Fails while what it closes is still open. */
+export type PenRouteCleanup = (
+  alias: string,
+  binding: PenRouteBinding,
+) => Effect.Effect<void, SshEnvironmentEffectError>;
 
 export class PenRouteCleanupError extends Data.TaggedError("PenRouteCleanupError")<{
   readonly alias: string;

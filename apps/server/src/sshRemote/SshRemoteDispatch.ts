@@ -483,6 +483,10 @@ const make = Effect.gen(function* () {
   // Cloud machines this server manages get a fresh address and pinned host key before an SSH
   // operation. Optional so test layers without it dial every alias as plain SSH.
   const cloudMachines = yield* Effect.serviceOption(CloudMachineService.CloudMachineService);
+  const disconnectAlias = (alias: string) =>
+    withRuntime(
+      manager.disconnectEnvironment({ alias, hostname: alias, username: null, port: null }),
+    );
   /** Forgets everything cached for an alias whose address or host key changed. */
   const invalidateAlias = (alias: string, disconnect = true) =>
     Effect.gen(function* () {
@@ -492,14 +496,14 @@ const make = Effect.gen(function* () {
       for (const key of launchArguments.keys())
         if (key.startsWith(prefix)) launchArguments.delete(key);
       connected.delete(alias);
-      if (disconnect)
-        yield* withRuntime(
-          manager.disconnectEnvironment({ alias, hostname: alias, username: null, port: null }),
-        ).pipe(Effect.ignore({ log: true }));
+      if (disconnect) yield* disconnectAlias(alias).pipe(Effect.ignore({ log: true }));
     });
   if (Option.isSome(cloudMachines))
     yield* cloudMachines.value.onAliasInvalidated((alias) => invalidateAlias(alias));
-  yield* penRoutes.registerCleanup((alias) => invalidateAlias(alias));
+  // A Pen route stays blocked until its tunnel has really closed.
+  yield* penRoutes.registerCleanup((alias) =>
+    invalidateAlias(alias, false).pipe(Effect.andThen(disconnectAlias(alias))),
+  );
 
   // Hosts linked over HTTPS. Optional so test layers without it dial every alias as plain SSH.
   const linkedHosts = yield* Effect.serviceOption(LinkedHosts.LinkedHosts);
