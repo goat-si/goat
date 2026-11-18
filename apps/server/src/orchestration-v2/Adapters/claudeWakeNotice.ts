@@ -1,3 +1,11 @@
+import type { SDKMessage, SDKResultMessage } from "@anthropic-ai/claude-agent-sdk";
+import * as DateTime from "effect/DateTime";
+import {
+  CLAUDE_SCHEDULED_WAKEUP_EARLY_FIRE_MARGIN_MS,
+  claudeToolResultBlocksFromUserMessage,
+  claudeToolUseBlocksFromAssistantMessage,
+  isClaudeTurnStartMessage,
+} from "./ClaudeToolFrames.ts";
 import type { RunId } from "@goat/contracts";
 import {
   type BackgroundWorkReport,
@@ -134,3 +142,82 @@ export const claudeWakeNotification = (
     return notification;
   return { ...notification, aboutRunId: runId };
 };
+
+export function isClaudeTaskNotificationOriginResult(
+  message: SDKMessage,
+): message is SDKResultMessage & {
+  readonly origin: Extract<
+    NonNullable<SDKResultMessage["origin"]>,
+    { readonly kind: "task-notification" }
+  >;
+} {
+  return message.type === "result" && message.origin?.kind === "task-notification";
+}
+
+export function claudeScheduledWakes(rootIsIdle: Effect.Effect<boolean>) {
+  // ScheduleWakeup reports no background task: its tool result is the only sign that Claude
+  // will start a turn by itself, and Claude keeps one pending wakeup per session. It stays
+  // out of pendingBackgroundTasksByNativeThread because a wakeup must not refuse a model or
+  // mode change; replacing the process cancels it, and that clears this record too.
+  const scheduleWakeupCalls = new Set<string>();
+  const scheduledWakeupsByNativeThread = new Map<string, number>();
+  // Native threads whose current turn Claude started by itself inside the early-fire margin.
+  const possibleEarlyWakeNativeThreads = new Set<string>();
+  const trackClaudeScheduledWakeup = Effect.fnUntraced(function* (
+    nativeThreadId: string,
+    message: SDKMessage,
+  ) {
+    if (isClaudeTurnStartMessage(message)) {
+      const scheduledFor = scheduledWakeupsByNativeThread.get(nativeThreadId);
+      if (scheduledFor === undefined) return;
+      const now = DateTime.toEpochMillis(yield* DateTime.now);
+      if (now >= scheduledFor) {
+        scheduledWakeupsByNativeThread.delete(nativeThreadId);
+      } else if (
+        (yield* rootIsIdle) &&
+        now >= scheduledFor - CLAUDE_SCHEDULED_WAKEUP_EARLY_FIRE_MARGIN_MS
+      ) {
+        possibleEarlyWakeNativeThreads.add(nativeThreadId);
+      }
+      return;
+    }
+    // A task notification also starts a turn by itself, so an early turn is the wake only
+    // when its result is not a task notification's.
+    if (message.type === "result") {
+      if (
+        possibleEarlyWakeNativeThreads.delete(nativeThreadId) &&
+        !isClaudeTaskNotificationOriginResult(message)
+      ) {
+        scheduledWakeupsByNativeThread.delete(nativeThreadId);
+      }
+      return;
+    }
+    for (const toolUse of claudeToolUseBlocksFromAssistantMessage(message)) {
+      if (toolUse.name === "ScheduleWakeup") scheduleWakeupCalls.add(toolUse.id);
+    }
+    if (message.type !== "user") return;
+    const returned = claudeToolResultBlocksFromUserMessage(message).filter((toolResult) =>
+      scheduleWakeupCalls.delete(toolResult.tool_use_id),
+    );
+    if (returned.length === 0) return;
+    const result = message.tool_use_result;
+    const scheduledFor =
+      returned.length === 1 && typeof result === "object" && result !== null
+        ? Reflect.get(result, "scheduledFor")
+        : undefined;
+    // stop:true reports scheduledFor 0. A failed call also clears: losing the hold early
+    // is recoverable, a hold that outlives its wakeup is not.
+    possibleEarlyWakeNativeThreads.delete(nativeThreadId);
+    if (typeof scheduledFor === "number" && scheduledFor > 0) {
+      scheduledWakeupsByNativeThread.set(nativeThreadId, scheduledFor);
+    } else {
+      scheduledWakeupsByNativeThread.delete(nativeThreadId);
+    }
+  });
+  const forgetScheduledWake = (nativeThreadId: string) => {
+    scheduledWakeupsByNativeThread.delete(nativeThreadId);
+    scheduleWakeupCalls.clear();
+    possibleEarlyWakeNativeThreads.delete(nativeThreadId);
+  };
+  return { scheduledWakeupsByNativeThread, trackClaudeScheduledWakeup, forgetScheduledWake };
+}
