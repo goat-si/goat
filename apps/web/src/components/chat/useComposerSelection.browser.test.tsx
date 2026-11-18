@@ -180,6 +180,33 @@ it("saves a re-picked model again when its first save failed", async () => {
   await vi.waitFor(() => expect(setModelSelection.mock.calls).toEqual([[autoSave], [autoSave]]));
 });
 
+it("does not save an ignored seed when the user re-picks the started thread's displayed model", async () => {
+  const { setModelSelection } = setup();
+  setModelSelection.mockResolvedValue(AsyncResult.success(undefined));
+  const thread = {
+    ...cursorThread("thread-cursor-repick-over-seed"),
+    latestRun: null,
+    itemCount: 1,
+    runtime: null,
+  };
+  appAtomRegistry.set(shellAtom(thread.id), thread);
+  useComposerDraftStore
+    .getState()
+    .setModelSelection(
+      scopeThreadRef(environmentId, thread.id),
+      createModelSelection(cursor, "auto-smart"),
+    );
+
+  await using screen = await render(
+    <AppAtomRegistryProvider>
+      <Picker thread={thread} runtime={null} model={stored.model} />
+    </AppAtomRegistryProvider>,
+  );
+  await screen.getByRole("button", { name: "Pick the model" }).click();
+
+  expect(setModelSelection).not.toHaveBeenCalled();
+});
+
 it("saves a pick of a seeded model the started thread does not show", async () => {
   const { setModelSelection } = setup();
   setModelSelection.mockResolvedValue(AsyncResult.success(undefined));
