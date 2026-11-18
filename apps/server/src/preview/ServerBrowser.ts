@@ -1,3 +1,4 @@
+import { stopUnresponsiveScript } from "./stopUnresponsiveScript.ts";
 import { SnapshotTiming } from "./snapshotTiming.ts";
 import { makeRecordingFrames } from "./RecordingFrames.ts";
 import { withinStatusDeadline } from "./statusDeadline.ts";
@@ -2151,6 +2152,8 @@ const make = Effect.gen(function* () {
     const message = ViewerInput.asRecord(raw);
     if (!message) return;
     const modifiers = ViewerInput.modifiersOf(message);
+    const stillControls = () => !tab.closing && tab.control.controller === viewer.id;
+    const leave = () => stopUnresponsiveScript(session, () => stillControls() && !tab.dialog);
     switch (message.type) {
       case "mouse": {
         const action = message.action;
@@ -2222,11 +2225,15 @@ const make = Effect.gen(function* () {
         if (typeof message.url === "string") {
           const url = normalizePreviewUrl(message.url);
           tab.pendingInitialRequestUrl = null;
-          tab.control.trackUntilHandoff(tab.page.goto(url, VIEWER_NAVIGATION_OPTIONS));
+          await leave();
+          if (stillControls())
+            tab.control.trackUntilHandoff(tab.page.goto(url, VIEWER_NAVIGATION_OPTIONS));
         }
         return;
       case "history":
         tab.pendingInitialRequestUrl = null;
+        await leave();
+        if (!stillControls()) return;
         tab.control.trackUntilHandoff(
           ViewerInput.num(message.delta) < 0
             ? tab.page.goBack(VIEWER_NAVIGATION_OPTIONS)
@@ -2239,6 +2246,8 @@ const make = Effect.gen(function* () {
           tab.control.trackUntilHandoff(tab.page.goto(tab.crash.url, VIEWER_NAVIGATION_OPTIONS));
           return;
         }
+        await leave();
+        if (!stillControls()) return;
         if (message.ignoreCache === true) {
           await session.send("Page.reload", { ignoreCache: true });
           return;

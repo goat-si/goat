@@ -1,3 +1,4 @@
+import { stopUnresponsiveScript } from "./stopUnresponsiveScript.ts";
 import type { PreviewAutomationReloadInput } from "@goat/contracts";
 import type { CDPSession, Page } from "playwright-core";
 
@@ -15,19 +16,29 @@ const navigateHistory = async (
   assertControl: () => void,
   assertDestination: (url?: string) => Promise<void>,
   channelFor: (destination?: string) => ActionChannel,
+  canProbe: () => boolean,
 ) => {
   const options = {
     timeout: input.timeoutMs ?? timeout,
     waitUntil:
       input.readiness === "domContentLoaded" ? ("domcontentloaded" as const) : ("load" as const),
   };
+  const leave = async (channel: ActionChannel) => {
+    const startedAt = performance.now();
+    await stopUnresponsiveScript(channel, canProbe, options.timeout / 2);
+    options.timeout = Math.max(1, options.timeout - (performance.now() - startedAt));
+    assertControl();
+  };
   if (operation === "reload" && input.ignoreCache !== true) {
     await assertDestination();
     assertControl();
     ServerBrowserPage.invalidateRefs(page);
-    await channelFor().call(() => page.reload(options));
+    const channel = channelFor();
+    await leave(channel);
+    await channel.call(() => page.reload(options));
     return;
   }
+  let destination: string | undefined;
   let dispatch = () => channelFor().send("Page.reload", { ignoreCache: true });
   if (operation !== "reload") {
     const history = await cdp.send("Page.getNavigationHistory");
@@ -39,6 +50,7 @@ const navigateHistory = async (
         `No ${operation} history entry exists for this browser tab.`,
       );
     }
+    destination = entry.url;
     const entryId = entry.id;
     dispatch = () => channelFor(entry.url).send("Page.navigateToHistoryEntry", { entryId });
     await assertDestination(entry.url);
@@ -46,6 +58,7 @@ const navigateHistory = async (
   await assertDestination();
   assertControl();
   ServerBrowserPage.invalidateRefs(page);
+  await leave(channelFor(destination));
   // Install the waiter before sending CDP: an acknowledgement alone does not
   // prove that Electron's guest page actually committed a navigation.
   const waiting = page.waitForNavigation(options);
@@ -67,6 +80,7 @@ export const guardedHistoryNavigation = async <
     readonly cdp: CDPSession;
     readonly control: SessionControl;
     pendingInitialRequestUrl?: string | null;
+    readonly dialog?: unknown;
     readonly crash?: { readonly url: string } | undefined;
   },
   Status,
@@ -114,6 +128,7 @@ export const guardedHistoryNavigation = async <
         assertControl,
         input.assertDestination,
         input.channelFor,
+        () => !tab.dialog,
       );
     });
     assertControl();

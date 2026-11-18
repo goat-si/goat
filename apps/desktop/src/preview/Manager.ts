@@ -1,3 +1,4 @@
+import { computeNavStatus, makeNavigationProbe } from "./previewNavigation.ts";
 import { confirmPreviewPaint } from "./confirmPreviewPaint.ts";
 import { isPreviewInputSignal } from "./previewInputSignal.ts";
 import {
@@ -826,12 +827,15 @@ const makeNativeOperations = Effect.fn("PreviewManager.makeOperations")(function
               yield* Queue.offer(consoleReleases, undefined);
             }
           });
+          const navigation = makeNavigationProbe(wcDebugger);
           const onMessage: BrowserControlSession["onMessage"] = (_event, method, params) => {
+            navigation.observe(method);
             runFork(handleDebuggerMessage(method, params));
           };
           const control: BrowserControlSession = {
             webContentsId: wc.id,
             debugger: wcDebugger,
+            navigation,
             semaphore,
             scope,
             onMessage,
@@ -841,6 +845,7 @@ const makeNativeOperations = Effect.fn("PreviewManager.makeOperations")(function
           // is replaced.
           let dropped = false;
           const onDetach = () => {
+            navigation.close();
             dropped = true;
             runFork(recoverDetachedControlSession(wc, control));
           };
@@ -850,6 +855,7 @@ const makeNativeOperations = Effect.fn("PreviewManager.makeOperations")(function
           yield* Scope.addFinalizer(
             scope,
             attempt({ operation: "detachControlSession", webContentsId: wc.id }, () => {
+              navigation.close();
               wcDebugger.off("message", onMessage);
               wcDebugger.off("detach", onDetach);
               if (!dropped && wcDebugger.isAttached()) wcDebugger.detach();
@@ -860,6 +866,7 @@ const makeNativeOperations = Effect.fn("PreviewManager.makeOperations")(function
               wcDebugger.on("message", onMessage);
               wcDebugger.on("detach", onDetach);
               wcDebugger.attach("1.3");
+              void wcDebugger.sendCommand("Page.enable").catch(() => undefined);
             });
             // Set an opaque base before first paint or background-less dark pages retain white-on-white text.
             yield* attemptPromise(
@@ -906,15 +913,6 @@ const makeNativeOperations = Effect.fn("PreviewManager.makeOperations")(function
       yield* Scope.close(managed.scope, Exit.void).pipe(Effect.ignore);
     }
   });
-
-  const computeNavStatus = (wc: Electron.WebContents): PreviewNavStatus => {
-    const url = wc.getURL();
-    const title = wc.getTitle();
-    if (url === "" || url === "about:blank") return { kind: "Idle" };
-    // isLoading() includes late iframes whose completion may never clear the tab's loading bar.
-    if (wc.isLoadingMainFrame()) return { kind: "Loading", url, title };
-    return { kind: "Success", url, title };
-  };
 
   const attachListeners = Effect.fn("PreviewManager.attachListeners")(function* (
     tabId: string,
@@ -1742,6 +1740,18 @@ const makeNativeOperations = Effect.fn("PreviewManager.makeOperations")(function
     );
   });
 
+  const leaveBusyPage = (wc: Electron.WebContents) =>
+    SynchronizedRef.get(controlSessionsRef).pipe(
+      Effect.flatMap(
+        (sessions) =>
+          sessions
+            .get(wc.id)
+            ?.navigation.beforeNavigation(
+              () => !wc.isDestroyed() && webContents.fromId(wc.id) === wc,
+            ) ?? Effect.void,
+      ),
+    );
+
   const navigate = Effect.fn("PreviewManager.navigate")(function* (tabId: string, rawUrl: string) {
     const url = yield* attempt({ operation: "navigate.normalizeUrl", tabId }, () =>
       normalizePreviewUrl(rawUrl),
@@ -1824,6 +1834,7 @@ const makeNativeOperations = Effect.fn("PreviewManager.makeOperations")(function
       );
       return;
     }
+    yield* leaveBusyPage(wc);
     if (wc.getURL() === url) {
       yield* attempt({ operation: "navigate.reload", tabId, webContentsId: wc.id }, () =>
         wc.reload(),
@@ -1841,6 +1852,7 @@ const makeNativeOperations = Effect.fn("PreviewManager.makeOperations")(function
     use: (wc: Electron.WebContents) => void,
   ) {
     const wc = yield* requireWebContents(tabId);
+    if (operation !== "stopLoading") yield* leaveBusyPage(wc);
     yield* attempt({ operation, tabId, webContentsId: wc.id }, () => use(wc));
   });
 
