@@ -442,3 +442,24 @@ A versioned bridge with the path handoff must be installed before the version-fr
 - The plain lane push advanced `64f72c91e4` to `9f3db70f58`. `git ls-remote` confirmed the remote SHA. The integration tip was already an ancestor at `6def29ca35`.
 
 NOT RUN: PR #3700 CI, full repository suites, real paired-client service updates, native systemd or launchd installs, release builds or publication, and a packaged Linux AppImage transition.
+
+## 2026-11-18 UTC — N10 review fix round 3
+
+| Finding | Fix commit and source | Failing-first evidence |
+| --- | --- | --- |
+| A | `15f02f31d2babe475898b4a87feda4ba40be6f4b`. `scripts/lib/desktop-release-channel.ts:6` sets `VERSION_FREE_APPIMAGES = false` for the bridge. | The Node assertion that the switch was false exited 1 with `true !== false` before the change and 0 afterward. The configured-mode build and release verification suites passed 31 tests across two files with the flag false. Round 2 already exercised both modes. |
+| P1 | `ee013370077b3de19811d4382642f34fded499c1`. `apps/server/src/cli/server.ts:160` records the legacy owner's refusal before returning exit 78. `apps/server/src/serviceLauncher.ts:742` conservatively retains the backup on an unattributed trial exit 78, even if the owner released before the first probe. | Guarded `vp test run src/cli/server.ownership.test.ts src/serviceLauncher.ownerPoll.test.ts -t 'records legacy ownership\|unattributed trial refusal'` exited 1 with both new tests failing. The CLI fixture lacked the marker after exit 78 and the launcher fixture returned no row after the legacy owner's committed insert. The two files subsequently passed all eight tests. |
+| P2 | `f0676b0c15c4401e52d045dd0c2096ac1f453849`. `apps/server/src/serviceLauncherDatabase.ts:266` halts rollback with both markers present. The log supplies both paths and links to the manual resolution at `docs/user/updating.md:199`. | Guarded `vp test run src/serviceLauncher.ownerPoll.test.ts -t 'requires explicit recovery'` exited 1 because the previous child started against the truncated live file. The passing case confirms both copies are preserved before manual recovery and that the previous runtime starts after recovery. An isolated `node apps/server/src/bin.ts __service-launcher` transcript also confirmed the recovery message and link, no child before recovery, and the previous child and retained snapshot afterward. |
+
+Release task — Enable version-free AppImages only after a versioned bridge release carrying the `APPIMAGE` path handoff has shipped. Clients that skip the bridge may lose their old launch path.
+
+Limits — Older targets ignore `trialOwnerRefusal` and can still hit the generic 30-minute prepared timeout under a new launcher.
+
+### Final verification and delivery
+
+- Checked head `f0676b0c15c4401e52d045dd0c2096ac1f453849` against integration base `6def29ca359f546e50dcd731a6364e3f0d575545`. The worktree was clean and `git diff --check` exited 0.
+- From `apps/server`, `GOAT_TEST_TMP_GUARD=fail vp test run --reporter=default <all 14 changed server test files>` exited 0. All 182 tests passed, with zero skips. An initial invocation supplied repo-relative filters from the package directory, selected zero tests and was corrected before the full run.
+- `vp run check:changed origin/chase/t3-261114-next3` exited 0. The server stage had 67 files, 689 passes and one skip. The remaining stage had 34 files, 2,356 passes and one skip, with one platform-skipped file. All lint, format, Knip, GraphQL, agent, and typecheck gates passed.
+- The plain push advanced `chase/t3-261114-next3-n10-service-release` from `9f3db70f58` to `f0676b0c15`. `git ls-remote` confirmed the exact head.
+
+NOT RUN: PR CI, repo-wide suites, live systemd or launchd recovery, paired-client updates, release builds or publication, and a packaged Linux AppImage transition. The changed-files gate skipped the dependency patch check because no dependency files changed.
