@@ -172,7 +172,8 @@ describe("V2 preview upgrade", () => {
         [155, "DisposableMachines"],
         [156, "DisposableMachineRequests"],
         [157, "DisposableMachineEnrollment"],
-        [158, "ScheduledTaskFirstBindIntent"],
+        [158, "AuthSessionPenMember"],
+        [159, "ScheduledTaskFirstBindIntent"],
       ]);
       assert.deepStrictEqual(yield* runMigrations(), []);
       assert.deepStrictEqual(yield* sql`SELECT * FROM orchestration_v2_legacy_imports`, imports);
@@ -355,7 +356,8 @@ describe("V2 preview upgrade", () => {
         [155, "DisposableMachines"],
         [156, "DisposableMachineRequests"],
         [157, "DisposableMachineEnrollment"],
-        [158, "ScheduledTaskFirstBindIntent"],
+        [158, "AuthSessionPenMember"],
+        [159, "ScheduledTaskFirstBindIntent"],
       ]);
     }).pipe(Effect.provide(NodeSqliteClient.layer({ filename: ":memory:" }))),
   );

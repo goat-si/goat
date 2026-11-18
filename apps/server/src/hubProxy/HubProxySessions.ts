@@ -32,6 +32,7 @@ import {
 } from "effect/http";
 
 import * as ServerSecretStore from "../auth/ServerSecretStore.ts";
+import { expectingPen } from "../hubNodes/PenManagedRoutes.ts";
 import { parseLinkTarget } from "../linkedHosts/LinkedHosts.ts";
 import { SshRemoteDispatch } from "../sshRemote/SshRemoteDispatch.ts";
 import { HubProxyNodes, routeKey, type HubProxyNode, type HubProxyRoute } from "./HubProxyNodes.ts";
@@ -320,13 +321,12 @@ export const make = Effect.gen(function* () {
     scopes: ReadonlyArray<AuthEnvironmentScope>,
     generation: number,
   ) {
-    const endpoint = yield* ssh
-      .proxyEndpoint(route.target)
-      .pipe(
-        Effect.mapError(
-          (error) => new HubProxyError({ reason: "unavailable", message: error.message }),
-        ),
-      );
+    const endpoint = yield* ssh.proxyEndpoint(route.target).pipe(
+      expectingPen(route.pen),
+      Effect.mapError(
+        (error) => new HubProxyError({ reason: "unavailable", message: error.message }),
+      ),
+    );
     const key = scopeKey(scopes);
     const now = yield* Clock.currentTimeMillis;
     const cached = state.sessions.get(key);
@@ -334,6 +334,7 @@ export const make = Effect.gen(function* () {
       cached !== undefined && cached.expiresAtMs - SESSION_REFRESH_MARGIN_MS > now
         ? cached
         : yield* ssh.issueProxySession(route.target, scopes).pipe(
+            expectingPen(route.pen),
             Effect.mapError(
               (error) => new HubProxyError({ reason: "unavailable", message: error.message }),
             ),
@@ -506,13 +507,12 @@ export const make = Effect.gen(function* () {
       const route = node.routes.find((candidate) => candidate.kind === "ssh");
       if (route === undefined || route.kind !== "ssh")
         return yield* fail("refused", "Only SSH nodes are set up from the hub.");
-      yield* ssh
-        .proxyEndpoint(route.target)
-        .pipe(
-          Effect.mapError(
-            (error) => new HubProxyError({ reason: "unavailable", message: error.message }),
-          ),
-        );
+      yield* ssh.proxyEndpoint(route.target).pipe(
+        expectingPen(route.pen),
+        Effect.mapError(
+          (error) => new HubProxyError({ reason: "unavailable", message: error.message }),
+        ),
+      );
       yield* nodes.refreshIdentity(nodeId);
     });
 

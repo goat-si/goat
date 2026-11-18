@@ -27,6 +27,7 @@ import * as ConnectionCredentialStore from "../connection/credentialStore.ts";
 import { BearerConnectionTarget } from "../connection/model.ts";
 import * as ConnectionProfileStore from "../connection/profileStore.ts";
 import * as ConnectionResolver from "../connection/resolver.ts";
+import * as PenMembership from "../connection/penMembership.ts";
 import * as RemoteEnvironmentAuthorization from "./service.ts";
 import * as TokenStore from "./tokenStore.ts";
 
@@ -69,6 +70,7 @@ const prepareDirectBearer = Effect.fn("TestRemoteAuthorization.prepareDirectBear
     Layer.provide(
       Layer.mergeAll(
         harness.layer,
+        PenMembership.layer,
         Layer.succeed(ConnectionProfileStore.ConnectionProfileStore, {
           get: unused,
           put: unused,

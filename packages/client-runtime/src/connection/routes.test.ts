@@ -15,7 +15,7 @@ import {
   type ConnectionRoute,
 } from "./catalog.ts";
 import { pullRequestRoutingConnectionKey } from "./pullRequestRoutingPermissions.ts";
-import { BearerConnectionTarget, RelayConnectionTarget } from "./model.ts";
+import { BearerConnectionTarget, RelayConnectionTarget, SshConnectionTarget } from "./model.ts";
 import {
   connectionRouteId,
   connectionRouteKind,
@@ -25,6 +25,8 @@ import {
   entryWithRoutes,
   mergeLearnedRoutes,
   pendingRouteOrder,
+  penRouteConnectionId,
+  penRouteOwner,
   removedWithRelay,
   routesAfterRemoving,
   sendsTokenInClear,
@@ -71,6 +73,32 @@ function learned(id: string, httpBaseUrl: string): ConnectionRoute {
 }
 
 describe("connection routes", () => {
+  it("recognizes only well-formed Pen route owners and labels their SSH routes", () => {
+    const meshId = "a".repeat(26);
+    const nodeId = "b".repeat(26);
+    const id = penRouteConnectionId(meshId, nodeId);
+    expect(id).toBe(`ssh:pen:${meshId}:${nodeId}`);
+    expect(penRouteOwner(id)).toEqual({ meshId, nodeId });
+    for (const invalid of [
+      `${id}:extra`,
+      `${id}\n`,
+      `ssh:pen:${meshId}:short`,
+      `ssh:pen:${meshId}:${"8".repeat(26)}`,
+      `SSH:pen:${meshId}:${nodeId}`,
+    ]) {
+      expect(penRouteOwner(invalid)).toBeNull();
+    }
+    expect(
+      connectionRouteLabel({
+        target: new SshConnectionTarget({
+          environmentId: ENVIRONMENT_ID,
+          label: "Desk",
+          connectionId: id,
+        }),
+        profile: Option.none(),
+      }),
+    ).toBe("Pen");
+  });
   it("classifies direct routes by address", () => {
     expect(connectionRouteKind(LAN)).toBe("lan");
     // Tailscale, Cloudflare WARP and Mesh, and other VPNs share 100.64.0.0/10.
