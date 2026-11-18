@@ -5,6 +5,7 @@ import {
   hasCloudTrackingFailure,
   workspaceLeaseBusy,
   boundExecution,
+  exhaustedEffectAttempts,
 } from "./goat/EffectExecution.ts";
 import { CommandId } from "@goat/contracts";
 import * as Cause from "effect/Cause";
@@ -281,7 +282,7 @@ export const layerExecutor: Layer.Layer<
                   Effect.gen(function* () {
                     if (
                       !isProviderTurnControlError(error) ||
-                      (!error.turnCompleted && !error.steerDeclined) ||
+                      (!error.missedBeforeSubmit && !error.steerDeclined) ||
                       effect.request.type !== "provider-turn.steer"
                     ) {
                       return yield* error;
@@ -885,7 +886,7 @@ export const layerWithOptions = (
                     ? yield* outbox
                         .succeed({ effectId: effect.id, workerId })
                         .pipe(Effect.onError((cause) => terminalizeClaim(effect, cause)))
-                    : effect.attemptCount >= maxAttempts
+                    : exhaustedEffectAttempts(effect, maxAttempts)
                       ? yield* outbox
                           .fail({ effectId: effect.id, workerId, error })
                           .pipe(Effect.onError((cause) => terminalizeClaim(effect, cause)))
