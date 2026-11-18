@@ -525,3 +525,76 @@ export const seedBoundedDeliveryHistory = Effect.fn("seedBoundedDeliveryHistory"
   }
   return runId;
 });
+
+export const seedUnheldFollowup = Effect.fn("seedUnheldFollowup")(function* () {
+  const orchestrator = yield* Orchestrator.OrchestratorV2;
+  const sink = yield* EventSink.EventSinkV2;
+  const now = yield* DateTime.now;
+  const threadId = ThreadId.make("thread:held-followup-parent");
+  const projectId = ProjectId.make("project:held-followup");
+  const runId = RunId.make("run:held-followup-parent");
+  const rootNodeId = NodeId.make("node:held-followup-parent");
+  yield* seedParentWithTerminalTask({
+    threadId,
+    projectId,
+    runId,
+    rootNodeId,
+    taskId: NodeId.make("node:held-followup-seed"),
+    deliveryState: "acknowledged",
+    now,
+  });
+  const child = yield* seedRestartCancelledChild({
+    parentThreadId: threadId,
+    projectId,
+    parentRunId: runId,
+    rootNodeId,
+    name: "held-followup-child",
+    completionWake: "always",
+    continuationPending: false,
+    now,
+  });
+  yield* orchestrator.recoverDelegatedTasks;
+  const parent = yield* orchestrator.getThreadProjection(threadId);
+  const original = parent.subagents.find((task) => task.id === child.taskId);
+  if (original === undefined) return yield* Effect.die("Original delegated task is missing");
+  const taskId = NodeId.make("node:held-followup");
+  const held = runEvent({
+    threadId: child.childThreadId,
+    runId: RunId.make("run:held-followup"),
+    ordinal: 2,
+    status: "queued",
+    now,
+  });
+  yield* sink.write({
+    commandId: reconcileCommandId("held-followup"),
+    events: [
+      {
+        ...held,
+        payload: {
+          ...held.payload,
+          delegatedTaskId: taskId,
+          startedAt: null,
+          completedAt: null,
+          queueHeld: false,
+        },
+      },
+      {
+        id: EventId.make("event:held-followup-task"),
+        type: "subagent.updated",
+        threadId,
+        runId,
+        nodeId: taskId,
+        occurredAt: now,
+        payload: {
+          ...original,
+          id: taskId,
+          status: "pending",
+          result: null,
+          completedAt: null,
+          completionDelivery: { state: "pending", observedByRunId: null },
+        },
+      },
+    ],
+  });
+  return { sink, orchestrator, threadId, taskId, childThreadId: child.childThreadId };
+});
