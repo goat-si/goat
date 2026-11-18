@@ -124,7 +124,11 @@ export const scanUsage = Effect.fn("scanUsage")(function* (
     sql<{ bytes: number }>`
       SELECT coalesce(sum(length(CAST(record_json AS BLOB))),0) AS bytes FROM memory_import_lineage WHERE space=${space}`,
   );
-  const [localProvenance] = yield* sql<{ space_bytes: number; environment_bytes: number }>`
+  const hasLineageAccounting =
+    (yield* sql`SELECT 1 FROM sqlite_schema
+    WHERE type='table' AND name='memory_origins'`).length > 0;
+  const [localProvenance] = hasLineageAccounting
+    ? yield* sql<{ space_bytes: number; environment_bytes: number }>`
     WITH charges(space, bytes) AS (
       SELECT space,32+length(CAST(environment_id AS BLOB))+length(CAST(thread_id AS BLOB))+length(CAST(space AS BLOB)) FROM memory_thread_lineages
       UNION ALL SELECT h.space,96+length(CAST(r.environment_id AS BLOB))+length(CAST(r.thread_id AS BLOB))+length(CAST(r.revision_id AS BLOB))
@@ -133,10 +137,13 @@ export const scanUsage = Effect.fn("scanUsage")(function* (
       UNION ALL SELECT space,64+length(CAST(space AS BLOB))+length(CAST(memory_id AS BLOB))+length(CAST(environment_id AS BLOB))+length(CAST(thread_id AS BLOB)) FROM memory_origins
     )
     SELECT coalesce(sum(bytes) FILTER (WHERE space=${space}),0) AS space_bytes,
-      coalesce(sum(bytes),0) AS environment_bytes FROM charges`;
-  const [dependency] = yield* sql<{ bytes: number }>`SELECT
+      coalesce(sum(bytes),0) AS environment_bytes FROM charges`
+    : [];
+  const [dependency] = hasLineageAccounting
+    ? yield* sql<{ bytes: number }>`SELECT
     coalesce(sum(length(CAST(dependencies_json AS BLOB))),0) AS bytes
-    FROM memory_payloads WHERE space=${space}`;
+    FROM memory_payloads WHERE space=${space}`
+    : [];
   const importUsage = yield* stored(
     "usage-import",
     sql<{
