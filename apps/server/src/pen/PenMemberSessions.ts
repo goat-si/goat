@@ -5,7 +5,7 @@ import * as Schedule from "effect/Schedule";
 import * as Stream from "effect/Stream";
 
 import { SessionStore } from "../auth/SessionStore.ts";
-import { PenMembershipWatch } from "./PenMembershipWatch.ts";
+import { PenMembershipWatch, type PenMembershipMarks } from "./PenMembershipWatch.ts";
 
 const RETRY = { schedule: Schedule.exponential("1 second"), times: 6 };
 
@@ -34,16 +34,29 @@ export const make = Effect.fn("PenMemberSessions.make")(function* () {
       if (!members.has(session.penMemberNode)) yield* sessions.revoke(session.sessionId);
   });
 
+  // What this follower has acted on. Starts at zero, so a departure before it started counts.
+  let handled: PenMembershipMarks = { closed: 0, left: 0 };
   const apply = Effect.fn("PenMemberSessions.apply")(function* (view: PenMembershipView) {
+    const marks = yield* watch.marks;
+    // An outage the newest view hides still closes what was open: announce closed, then reopen.
+    if (marks.closed !== handled.closed) yield* sessions.followPenMembers(Effect.succeed("closed"));
     // The fence first: a failed or slow cleanup never leaves a departed member admitted.
     yield* sessions.followPenMembers(admission);
-    if (view.kind === "unavailable") return;
-    yield* revokeUnless(membersOf(view)).pipe(
+    handled = { ...handled, closed: marks.closed };
+    // Leaving the mesh revokes what members held, even if this machine has joined again since.
+    const left = marks.left !== handled.left;
+    if (view.kind === "unavailable" && !left) return;
+    const revoked = yield* revokeUnless(left ? new Set<string>() : membersOf(view)).pipe(
       // A list that could not be read arrives as a defect; it is retried like any failure.
       Effect.sandbox,
       Effect.retry(RETRY),
-      Effect.catchCause((cause) => Effect.logWarning("pen.memberSessions.cleanup.failed", cause)),
+      Effect.as(true),
+      Effect.catchCause((cause) =>
+        Effect.logWarning("pen.memberSessions.cleanup.failed", cause).pipe(Effect.as(false)),
+      ),
     );
+    // Kept until done, so a later view (or an interrupted cleanup) revokes them again.
+    if (revoked) handled = { ...handled, left: marks.left };
   });
   return { apply };
 });

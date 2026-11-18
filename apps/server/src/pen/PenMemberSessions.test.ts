@@ -3,6 +3,7 @@ import * as NodeServices from "@effect/platform-node/NodeServices";
 import { expect, it } from "@effect/vitest";
 import type { PenMembershipView } from "@goat/ssh/penMembershipWatch";
 import * as Effect from "effect/Effect";
+import * as Fiber from "effect/Fiber";
 import * as Layer from "effect/Layer";
 import * as Stream from "effect/Stream";
 
@@ -52,6 +53,7 @@ it.effect(
         Effect.provideService(PenMembershipWatch, {
           current: Effect.sync(() => current),
           changes: Stream.never,
+          marks: Effect.succeed({ closed: 0, left: 0 }),
         }),
       );
       // The watch's current view moves first; its notification follows.
@@ -108,6 +110,7 @@ it.effect("a member's session stops working as soon as Pen's newest list drops i
       Effect.provideService(PenMembershipWatch, {
         current: Effect.sync(() => current),
         changes: Stream.never,
+        marks: Effect.succeed({ closed: 0, left: 0 }),
       }),
     );
     const a = yield* sessions.issue({ penMemberNode: id("a") });
@@ -120,5 +123,44 @@ it.effect("a member's session stops working as soon as Pen's newest list drops i
     // The watch moved on; the notification that would apply it has not run yet.
     current = { kind: "not-member" };
     expect(yield* works).toBe(false);
+  }).pipe(Effect.provide(layer)),
+);
+
+it.effect("an outage or a departure the newest view hides still ends what it ended", () =>
+  Effect.gen(function* () {
+    const marks = { closed: 0, left: 0 };
+    const sessions = yield* SessionStore;
+    const { apply } = yield* PenMemberSessions.make().pipe(
+      Effect.provideService(PenMembershipWatch, {
+        current: Effect.succeed(ready("a")),
+        changes: Stream.never,
+        marks: Effect.sync(() => ({ ...marks })),
+      }),
+    );
+    const a = yield* sessions.issue({ penMemberNode: id("a") });
+    const works = sessions.verify(a.token, MAIN_LISTENER).pipe(
+      Effect.as(true),
+      Effect.orElseSucceed(() => false),
+    );
+    yield* apply(ready("a"));
+    expect(yield* works).toBe(true);
+    // Pen went down and came back between two views this follower read: open sockets still close.
+    const removed = yield* sessions.streamChanges.pipe(
+      Stream.filter((change) => change.type === "clientRemoved"),
+      Stream.take(1),
+      Stream.runCollect,
+      Effect.forkChild({ startImmediately: true }),
+    );
+    marks.closed += 1;
+    yield* apply(ready("a"));
+    expect([...(yield* Fiber.join(removed))]).toEqual([
+      { type: "clientRemoved", sessionId: a.sessionId },
+    ]);
+    expect(yield* works).toBe(true);
+    // This machine left the mesh and joined again: what members held before is revoked for good.
+    marks.left += 1;
+    yield* apply(ready("a"));
+    expect(yield* works).toBe(false);
+    expect(yield* sessions.listPenMemberSessions).toEqual([]);
   }).pipe(Effect.provide(layer)),
 );

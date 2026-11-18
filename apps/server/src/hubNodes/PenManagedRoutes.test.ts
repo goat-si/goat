@@ -46,6 +46,7 @@ const harness = (start: PenMembershipView = ready(["a", "a"])) => {
         PenMembershipWatch.of({
           current: Effect.sync(() => state.view),
           changes: Stream.never,
+          marks: Effect.succeed({ closed: 0, left: 0 }),
         }),
       ),
     ),

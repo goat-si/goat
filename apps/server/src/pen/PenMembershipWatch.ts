@@ -25,17 +25,30 @@ export class PenMembershipWatch extends Context.Service<
     readonly current: Effect.Effect<PenMembershipView>;
     /** The latest view, then each later one. A slow reader sees only the newest. */
     readonly changes: Stream.Stream<PenMembershipView>;
+    /**
+     * How many views so far closed the member list (anything but ready) and said this machine
+     * left, so a reader that only saw the newest view still learns what the skipped ones ended.
+     */
+    readonly marks: Effect.Effect<PenMembershipMarks>;
   }
 >()("goat/pen/PenMembershipWatch") {}
 
+export interface PenMembershipMarks {
+  readonly closed: number;
+  readonly left: number;
+}
+
 export const make = Effect.fn("PenMembershipWatch.make")(function* (source: PenMembershipSource) {
   let current: PenMembershipView = { kind: "unavailable", reason: "stale" };
+  const marks = { closed: 0, left: 0 };
   // One view per reader, newest wins: a reader that falls behind never holds a backlog.
   const published = yield* PubSub.sliding<PenMembershipView>({ capacity: 1, replay: 1 });
   yield* PubSub.publish(published, current);
   yield* followPenMembership(
     source,
     (view) => {
+      if (view.kind !== "ready") marks.closed += 1;
+      if (view.kind === "not-member") marks.left += 1;
       current = view;
     },
     (view) => PubSub.publish(published, view).pipe(Effect.asVoid),
@@ -43,6 +56,7 @@ export const make = Effect.fn("PenMembershipWatch.make")(function* (source: PenM
   return PenMembershipWatch.of({
     current: Effect.sync(() => current),
     changes: Stream.fromPubSub(published),
+    marks: Effect.sync(() => ({ ...marks })),
   });
 });
 

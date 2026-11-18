@@ -82,6 +82,8 @@ describe("PenMembershipWatch", () => {
       h.watches[1]?.onStale("connect");
       yield* TestClock.adjust(0);
       assert.deepEqual(yield* h.watch.current, { kind: "not-member" });
+      // Recorded for readers that only see a later view.
+      assert.equal((yield* h.watch.marks).left, 1);
     }).pipe(Effect.scoped),
   );
 
