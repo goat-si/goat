@@ -4050,6 +4050,7 @@ export const makeGitVcsDriverCore = Effect.fn("makeGitVcsDriverCore")(function* 
       const canReplayHook =
         sparse !== null || (root.checkoutApart && (yield* supportsHookRun(input.cwd)));
       yield* Effect.gen(function* () {
+        if (options?.beforeAdd) yield* options.beforeAdd(targetPath);
         if (sparse === null && !root.checkoutApart) {
           yield* runCheckoutCommand("GitVcsDriver.createWorktree", input.cwd, [...args]);
           if (root.pin) yield* pinWorktreeRoot(executeGit, fileSystem, targetPath);

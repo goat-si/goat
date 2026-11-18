@@ -7,6 +7,7 @@ import { ServerConfig } from "../../config.ts";
 import * as Effect from "effect/Effect";
 import * as FileSystem from "effect/FileSystem";
 import * as Path from "effect/Path";
+import * as Option from "effect/Option";
 import * as Schema from "effect/Schema";
 
 const MARKER = "goat-restore-pending";
@@ -39,13 +40,20 @@ const encode = Schema.encodeEffect(jsonState);
 export const makeRestorePending = Effect.gen(function* () {
   const fs = yield* FileSystem.FileSystem;
   const path = yield* Path.Path;
-  const config = yield* ServerConfig;
+  const config = yield* Effect.serviceOption(ServerConfig);
   const markerName = (worktreePath: string) =>
     NodeCrypto.createHash("sha256")
       .update(normalizeProjectPathForComparison(worktreePath))
       .digest("hex") + ".json";
   const sidecar = (worktreePath: string) =>
-    path.join(config.stateDir, "worktree-restore-pending", markerName(path.resolve(worktreePath)));
+    Option.isSome(config)
+      ? path.join(
+          config.value.stateDir,
+          "worktree-restore-pending",
+          markerName(path.resolve(worktreePath)),
+        )
+      : null;
+
   const registration = (worktreePath: string) =>
     fs.readFileString(path.join(worktreePath, ".git")).pipe(
       Effect.map((pointer) =>
@@ -106,7 +114,8 @@ export const makeRestorePending = Effect.gen(function* () {
         return shared;
     }
     const marker = sidecar(worktreePath);
-    if (yield* fs.exists(marker).pipe(Effect.orElseSucceed(() => true))) return marker;
+    if (marker !== null && (yield* fs.exists(marker).pipe(Effect.orElseSucceed(() => true))))
+      return marker;
     return linked ? yield* legacyMarker(worktreePath) : null;
   });
   const marked = Effect.fn("RestorePending.marked")(function* (
@@ -153,7 +162,8 @@ export const makeRestorePending = Effect.gen(function* () {
       if (shared !== null) yield* fs.remove(shared, { force: true });
       const old = yield* legacyMarker(worktreePath);
       if (old !== null) yield* fs.remove(old, { force: true });
-      yield* fs.remove(sidecar(worktreePath), { force: true });
+      const privateMarker = sidecar(worktreePath);
+      if (privateMarker !== null) yield* fs.remove(privateMarker, { force: true });
     }),
   };
 });

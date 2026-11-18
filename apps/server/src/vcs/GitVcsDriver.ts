@@ -137,7 +137,7 @@ export interface ExecuteGitProgress {
 export interface CreateWorktreeProgress {
   /** Git refuses existing paths; claimed paths belong to this call and can be removed on cancel. */
   readonly onWorktreeOwnership?: (ownership: WorktreePreparationOwnership) => Effect.Effect<void>;
-  readonly onWorktreeClaimed?: (path: string) => Effect.Effect<void, never>;
+  readonly onWorktreeClaimed?: (path: string) => Effect.Effect<void, GitCommandError>;
   /**
    * Fires before checkout when the configured `worktreesDirectory` is
    * unavailable and the worktree goes to the default directory instead.
@@ -183,8 +183,8 @@ export interface CreateWorktreeProgress {
     readonly fastForwarded: boolean;
   }) => Effect.Effect<void, never>;
 }
-
 export interface CreateWorktreeOptions {
+  readonly beforeAdd?: (path: string) => Effect.Effect<void, GitCommandError>;
   readonly progress?: CreateWorktreeProgress;
   /** Null or omitted defers to the checkout's t3.json. */
   readonly submodules?: WorktreeSubmodules | null;

@@ -29,6 +29,40 @@ const findExistingPrWorktree = Effect.fn("findExistingPrWorktree")(function* (re
 });
 
 it.layer(layerGitManagerTest)("GitManager existing PR branches", (it) => {
+  it.effect("refuses a PR worktree path that now contains another repository", () =>
+    Effect.gen(function* () {
+      const repo = yield* makeTempDir("goat-pr-registered-");
+      yield* initRepo(repo);
+      const remote = yield* createBareRemote();
+      yield* runGit(repo, ["remote", "add", "origin", remote]);
+      yield* runGit(repo, ["branch", "feature/pr-replaced"]);
+      const worktree = NodePath.join(repo, "linked");
+      yield* runGit(repo, ["worktree", "add", worktree, "feature/pr-replaced"]);
+      NodeFS.renameSync(worktree, worktree + "-original");
+      yield* runGit(repo, ["clone", "--shared", "-b", "feature/pr-replaced", repo, worktree]);
+      const { manager } = yield* makeManager({
+        providerScenario: {
+          pullRequest: {
+            number: 84,
+            title: "Replaced PR",
+            url: "https://github.com/pingdotgg/codething-mvp/pull/84",
+            baseRefName: "main",
+            headRefName: "feature/pr-replaced",
+            state: "open",
+          },
+        },
+      });
+      const result = yield* preparePullRequestThread(manager, {
+        cwd: repo,
+        reference: "84",
+        mode: "worktree",
+      }).pipe(Effect.result);
+      expect(result._tag).toBe("Failure");
+      if (result._tag === "Failure")
+        expect(result.failure.message).toContain("worktree registration");
+    }),
+  );
+
   it.effect.each([
     { localBranch: "ahead", expectedHead: "local", isOnPullRequestHead: false },
     { localBranch: "behind", expectedHead: "pull request", isOnPullRequestHead: true },
