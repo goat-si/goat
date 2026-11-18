@@ -68,7 +68,7 @@ import {
   makeProviderFailure,
 } from "@goat/provider-core/server/failure";
 import * as RunExecutionService from "./RunExecutionService.ts";
-import { settledBeforeStartRun } from "./runTerminationCause.ts";
+import { makeSettleRunBeforeStart } from "./ProviderTurnStartSettlement.ts";
 import { abandonedTurnRepairEvents, endedRunsByAttempt } from "./goat/StoppedEarlierTurn.ts";
 import * as RuntimePolicy from "./RuntimePolicy.ts";
 import * as TurnItemPositionStore from "./TurnItemPositionStore.ts";
@@ -236,91 +236,15 @@ export const layer: Layer.Layer<
           cause: `Run ${runId} is missing its execution projection state.`,
         });
       }
-      const settleRunBeforeStart = Effect.fn("orchestrationV2.providerTurnStart.settleBeforeStart")(
-        function* (input: {
-          readonly signal: string;
-          readonly status: "completed" | "failed";
-          readonly now: DateTime.Utc;
-          readonly startedAt?: DateTime.Utc;
-          readonly providerInstanceId: OrchestrationV2Run["providerInstanceId"];
-          readonly itemProviderThreadId: OrchestrationV2ProviderThread["id"];
-          readonly item:
-            | Pick<
-                Extract<OrchestrationV2TurnItem, { type: "error" }>,
-                "type" | "title" | "failure"
-              >
-            | Pick<
-                Extract<OrchestrationV2TurnItem, { type: "command_execution" }>,
-                "type" | "title" | "input" | "output" | "exitCode"
-              >;
-          readonly providerThreadUpdate?: OrchestrationV2ProviderThread;
-        }) {
-          const { now, status } = input;
-          const started = input.startedAt === undefined ? {} : { startedAt: input.startedAt };
-          const item: OrchestrationV2TurnItem = {
-            id: idAllocator.derive.runSignalTurnItem({ runId, signal: input.signal }),
-            threadId: projection.thread.id,
-            runId,
-            nodeId: rootNode.id,
-            providerThreadId: input.itemProviderThreadId,
-            providerTurnId: null,
-            nativeItemRef: null,
-            parentItemId: null,
-            ordinal:
-              Math.max(
-                0,
-                ...projection.turnItems
-                  .filter((item) => item.runId === runId)
-                  .map((item) => item.ordinal),
-              ) + 1,
-            status,
-            startedAt: now,
-            completedAt: now,
-            updatedAt: now,
-            ...input.item,
-          };
-          const eventPayloads = [
-            { type: "turn-item.updated", payload: item },
-            { type: "run.updated", payload: settledBeforeStartRun(run, input, started) },
-            {
-              type: "run-attempt.updated",
-              payload: { ...attempt, status, ...started, completedAt: now },
-            },
-            {
-              type: "node.updated",
-              payload: { ...rootNode, status, ...started, completedAt: now },
-            },
-            ...(input.providerThreadUpdate === undefined
-              ? []
-              : [
-                  {
-                    type: "provider-thread.updated" as const,
-                    payload: input.providerThreadUpdate,
-                  },
-                ]),
-          ] as const;
-          const events = yield* Effect.forEach(eventPayloads, (event) =>
-            Effect.gen(function* () {
-              return {
-                ...event,
-                id: yield* idAllocator.allocate.event({ threadId: projection.thread.id }),
-                threadId: projection.thread.id,
-                runId,
-                nodeId: rootNode.id,
-                providerInstanceId: input.providerInstanceId,
-                occurredAt: now,
-              } satisfies OrchestrationV2DomainEvent;
-            }),
-          );
-          yield* eventSink.writeIfRunCurrent({
-            threadId: projection.thread.id,
-            runId,
-            activeAttemptId: attempt.id,
-            expectedStatus: expectedStartStatus,
-            events,
-          });
-        },
-      );
+      const settleRunBeforeStart = makeSettleRunBeforeStart({
+        eventSink,
+        idAllocator,
+        projection,
+        run,
+        rootNode,
+        attempt,
+        expectedStartStatus,
+      });
       if (message.attachments.length === 0 && message.text.trimStart().startsWith("/")) {
         const isEmptyCompaction =
           message.text.trim().toLowerCase() === "/compact" && !projection.hasConversation;
