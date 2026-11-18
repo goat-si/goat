@@ -848,6 +848,7 @@ export const make = Effect.fn("OpenCode2Adapter.make")(function* (instanceId: Pr
           (task, index) =>
             task.taskId === allTasks[index]?.taskId &&
             task.description === allTasks[index]?.description &&
+            task.awaited === allTasks[index]?.awaited &&
             (task.kind === "subagent" ? task.childThreadId : undefined) ===
               (allTasks[index]?.kind === "subagent" ? allTasks[index]?.childThreadId : undefined),
         )
@@ -2999,6 +3000,9 @@ export const make = Effect.fn("OpenCode2Adapter.make")(function* (instanceId: Pr
           computerUse: state.cua !== undefined,
         }),
         goatOrchestrationSystemPrompt(mcpAvailable, mcpSession?.browserToolsAvailable),
+        mcpAvailable
+          ? "To wait for a background shell you started, such as tests or a build, call `goat_background_wait` with its shell ID before ending your turn. Leave ongoing services and pull requests unmarked."
+          : undefined,
         availability.read || availability.write || availability.source
           ? `GOAT memory tools: read=${availability.read}, write=${availability.write}, source=${availability.source}. Unavailable or denied tools must not be claimed.`
           : undefined,
@@ -3823,6 +3827,10 @@ export const make = Effect.fn("OpenCode2Adapter.make")(function* (instanceId: Pr
             ),
           ),
       ),
+      awaitBackgroundTasks: ({ providerThread, taskIds, awaited }) => {
+        const id = providerThread.nativeThreadRef?.nativeId;
+        return shellJobs.awaitTasks(id == null ? undefined : threads.get(id), taskIds, awaited);
+      },
       stopTask: Effect.fn("OpenCode2Adapter.stopTask")(function* ({ providerThread, taskId }) {
         const nativeId = providerThread.nativeThreadRef?.nativeId;
         yield* shellJobs

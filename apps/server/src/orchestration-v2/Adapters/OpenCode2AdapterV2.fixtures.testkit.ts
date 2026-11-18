@@ -323,6 +323,7 @@ export const resumed = (
     readonly version?: "2.2.1" | "2.2.5" | "2.2.6";
     readonly shellRecovery?: ReadonlyArray<ProviderReplayEntry>;
     readonly lastRunOrdinal?: number;
+    readonly pendingBackgroundTasks?: OrchestrationV2ProviderThread["pendingBackgroundTasks"];
     readonly goal?: OrchestrationV2ProviderThread["goal"];
     readonly external?: boolean;
     readonly supervised?: boolean;
@@ -399,6 +400,9 @@ export const resumed = (
         ...(options?.lastRunOrdinal === undefined
           ? {}
           : { lastRunOrdinal: options.lastRunOrdinal }),
+        ...(options?.pendingBackgroundTasks === undefined
+          ? {}
+          : { pendingBackgroundTasks: options.pendingBackgroundTasks }),
         ...(options?.goal === undefined ? {} : { goal: options.goal }),
       },
       threadId,
