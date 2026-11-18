@@ -1,3 +1,5 @@
+import { draftModelSelectionApplies } from "./lib/chatThreadActions";
+import { useShallow } from "zustand/react/shallow";
 import {
   defaultInstanceIdForDriver,
   type ModelSelection,
@@ -6,11 +8,13 @@ import {
   type ServerProvider,
 } from "@goat/contracts";
 import type { UnifiedSettings } from "@goat/contracts/settings";
-import { normalizeModelSlug } from "@goat/shared/model";
+import { normalizeModelSlug, resolveSelectableModel } from "@goat/shared/model";
 
-import type {
-  ComposerThreadDraftState,
-  ProviderOptionSelectionsByProvider,
+import {
+  type ComposerThreadTarget,
+  type ComposerThreadDraftState,
+  type ProviderOptionSelectionsByProvider,
+  useComposerDraftStore,
 } from "./composerDraftStore";
 import {
   readInstanceCustomModels,
@@ -43,11 +47,36 @@ function modelSelectionByProviderToOptions(
   return Object.keys(result).length > 0 ? result : null;
 }
 
+// Catalog aliases and exact custom slugs are scoped to their provider instance.
+function composerModelIdentity(
+  input: {
+    providers: ReadonlyArray<ServerProvider>;
+    settings: UnifiedSettings;
+    selectedProvider: ProviderDriverKind;
+  },
+  instanceId: ProviderInstanceId,
+  model: string | undefined,
+): string | null {
+  const catalog =
+    input.providers.find((provider) => provider.instanceId === instanceId)?.models ?? [];
+  const custom = readInstanceCustomModels(input.settings, instanceId, input.selectedProvider);
+  if (model !== undefined && custom.some((entry) => entry.slug === model)) return model;
+  const resolved = resolveSelectableModel(input.selectedProvider, model, catalog) ?? model;
+  return resolved !== undefined &&
+    catalog.some((entry) => entry.slug === resolved && entry.isCustom)
+    ? resolved
+    : normalizeModelSlug(resolved, input.selectedProvider);
+}
+
 export function deriveEffectiveComposerModelState(input: {
   draft:
-    | Pick<ComposerThreadDraftState, "modelSelectionByProvider" | "activeProvider">
+    | Pick<
+        ComposerThreadDraftState,
+        "modelSelectionByProvider" | "activeProvider" | "modelSelectionExplicit"
+      >
     | null
     | undefined;
+  threadStarted?: boolean;
   providers: ReadonlyArray<ServerProvider>;
   selectedProvider: ProviderDriverKind;
   selectedInstanceId?: ProviderInstanceId | null | undefined;
@@ -57,8 +86,11 @@ export function deriveEffectiveComposerModelState(input: {
   projectModelSelection: ModelSelection | null | undefined;
   settings: UnifiedSettings;
 }): EffectiveComposerModelState {
-  const baseModelCandidate =
-    input.threadModelSelection?.model ?? input.projectModelSelection?.model ?? null;
+  const draft = draftModelSelectionApplies(input.draft, input.threadStarted ?? false)
+    ? input.draft
+    : null;
+  const baseSelection = input.threadModelSelection ?? input.projectModelSelection;
+  const baseModelCandidate = baseSelection?.model ?? null;
   const preserveThreadModel =
     input.selectedInstanceId !== null &&
     input.selectedInstanceId !== undefined &&
@@ -84,18 +116,17 @@ export function deriveEffectiveComposerModelState(input: {
     normalizeModelSlug(baseModelCandidate, input.selectedProvider) ??
     getDefaultServerModel(input.providers, input.selectedProvider);
   const instanceSelection = input.selectedInstanceId
-    ? input.draft?.modelSelectionByProvider?.[input.selectedInstanceId]
+    ? draft?.modelSelectionByProvider?.[input.selectedInstanceId]
     : undefined;
   // Legacy driver-keyed drafts belong to the default instance.
   const legacySelection =
     input.selectedInstanceId &&
     input.selectedInstanceId !== defaultInstanceIdForDriver(input.selectedProvider)
       ? undefined
-      : input.draft?.modelSelectionByProvider?.[ProviderInstanceId.make(input.selectedProvider)];
+      : draft?.modelSelectionByProvider?.[ProviderInstanceId.make(input.selectedProvider)];
   const activeSelection = instanceSelection ?? legacySelection;
-  const activeSelectionInstanceId = instanceSelection
-    ? (input.selectedInstanceId ?? ProviderInstanceId.make(input.selectedProvider))
-    : ProviderInstanceId.make(input.selectedProvider);
+  const activeSelectionInstanceId =
+    input.selectedInstanceId ?? defaultInstanceIdForDriver(input.selectedProvider);
   const selectedModel = activeSelection?.model
     ? (resolveAppModelSelectionForInstance(
         activeSelectionInstanceId,
@@ -112,13 +143,25 @@ export function deriveEffectiveComposerModelState(input: {
         activeSelection.model,
       ))
     : baseModel;
-  // Draft options win; otherwise an existing thread's options, even none, outrank the project's.
-  // Selections stay with them, so a fallback instance can check which model the options belong to.
+  const selectedIdentity = composerModelIdentity(input, activeSelectionInstanceId, selectedModel);
+  // With no draft pick, saved defaults follow the same capability validation as Settings.
+  const baseMatchesSelection =
+    !activeSelection ||
+    (baseSelection?.instanceId === activeSelectionInstanceId &&
+      composerModelIdentity(input, baseSelection.instanceId, baseSelection.model) ===
+        selectedIdentity);
+  const draftSelections = { ...draft?.modelSelectionByProvider };
+  if (
+    activeSelection &&
+    composerModelIdentity(input, activeSelectionInstanceId, activeSelection.model) !==
+      selectedIdentity
+  ) {
+    delete draftSelections[activeSelectionInstanceId];
+  }
   const optionSelections =
-    [
-      input.draft?.modelSelectionByProvider,
-      selectionsByInstance(input.threadModelSelection ?? input.projectModelSelection),
-    ].find((selections) => modelSelectionByProviderToOptions(selections) !== null) ?? null;
+    [draftSelections, baseMatchesSelection ? selectionsByInstance(baseSelection) : null].find(
+      (selections) => modelSelectionByProviderToOptions(selections) !== null,
+    ) ?? null;
   const modelOptions = modelSelectionByProviderToOptions(optionSelections);
 
   return {
@@ -162,23 +205,40 @@ function withFallbackInstanceOptions(input: {
     (provider) => provider.instanceId === requestedInstanceId,
   );
   const requestedModel = input.optionSelections?.[requestedInstanceId]?.model;
-  // Static aliases are shared across instances; exact custom slugs and catalog aliases are not.
-  const modelIdentity = (instanceId: ProviderInstanceId, model: string | undefined) => {
-    const isCustom =
-      input.providers
-        .find((provider) => provider.instanceId === instanceId)
-        ?.models.some((entry) => entry.slug === model && entry.isCustom) ||
-      readInstanceCustomModels(input.settings, instanceId, input.selectedProvider).some(
-        (entry) => entry.slug === model,
-      );
-    return isCustom ? model : normalizeModelSlug(model, input.selectedProvider);
-  };
   const sameModel =
-    requestedModel === input.selectedModel ||
-    modelIdentity(requestedInstanceId, requestedModel) ===
-      modelIdentity(selectedInstanceId, input.selectedModel);
+    composerModelIdentity(input, requestedInstanceId, requestedModel) ===
+    composerModelIdentity(input, selectedInstanceId, input.selectedModel);
   if (!requestedOptions || requestedProvider?.driver !== input.selectedProvider || !sameModel) {
     return modelOptions;
   }
   return { ...modelOptions, [selectedInstanceId]: requestedOptions };
+}
+
+interface ComposerDraftModelState {
+  activeProvider: ProviderInstanceId | null;
+  modelSelectionByProvider: Partial<Record<ProviderInstanceId, ModelSelection>>;
+  modelSelectionExplicit?: boolean;
+}
+
+const EMPTY_COMPOSER_DRAFT_MODEL_STATE = Object.freeze<ComposerDraftModelState>({
+  activeProvider: null,
+  modelSelectionByProvider: Object.freeze({}),
+});
+
+export function useComposerDraftModelState(
+  threadRef: ComposerThreadTarget,
+  threadStarted = false,
+): ComposerDraftModelState {
+  return useComposerDraftStore(
+    useShallow((state) => {
+      const draft = state.getComposerDraft(threadRef);
+      return draft && draftModelSelectionApplies(draft, threadStarted)
+        ? {
+            activeProvider: draft.activeProvider,
+            modelSelectionByProvider: draft.modelSelectionByProvider,
+            modelSelectionExplicit: draft.modelSelectionExplicit === true,
+          }
+        : EMPTY_COMPOSER_DRAFT_MODEL_STATE;
+    }),
+  );
 }

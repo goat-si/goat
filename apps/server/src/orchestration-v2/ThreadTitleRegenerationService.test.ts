@@ -10,13 +10,16 @@ import {
   ProviderInstanceId,
   ProviderThreadId,
   RunId,
+  TextGenerationError,
   ThreadId,
 } from "@goat/contracts";
 import * as DateTime from "effect/DateTime";
 import * as Effect from "effect/Effect";
+import * as Fiber from "effect/Fiber";
 import * as FileSystem from "effect/FileSystem";
 import * as Layer from "effect/Layer";
 import * as Option from "effect/Option";
+import * as TestClock from "effect/testing/TestClock";
 import { ATTACHMENT_ONLY_BOOTSTRAP_PROMPT } from "@goat/shared/composerContextReferences";
 
 import * as SqlitePersistence from "../persistence/Sqlite.ts";
@@ -552,6 +555,116 @@ describe("ThreadTitleRegenerationService", () => {
         const projection = yield* threads.getThreadProjection(threadId);
         assert.equal(projection.thread.title, "Seed title");
         assert.isNotOk(projection.thread.titleRegeneration);
+      }).pipe(Effect.provide(harness.layer));
+    }),
+  );
+
+  it.effect(
+    "records the outcome of a regeneration: renamed, failed without the CLI's text, unchanged",
+    () =>
+      Effect.gen(function* () {
+        const cases = [
+          { name: "renamed", generateTitle: () => Effect.succeed({ title: "Fresh title" }) },
+          {
+            name: "failed",
+            generateTitle: () =>
+              Effect.fail(
+                new TextGenerationError({
+                  operation: "generateThreadTitle",
+                  detail:
+                    "Codex CLI command failed: OpenAI Codex\nuser\nConversation text\nmodel unavailable\n",
+                }),
+              ),
+          },
+          { name: "unchanged", generateTitle: () => Effect.succeed({ title: "Seed title" }) },
+        ] as const;
+        for (const testCase of cases) {
+          const harness = makeHarness({ generateTitle: testCase.generateTitle });
+          yield* Effect.gen(function* () {
+            const threads = yield* ThreadManagement.ThreadManagementService;
+            const titleRegeneration = yield* ThreadTitleRegeneration.ThreadTitleRegenerationService;
+            const threadId = yield* createThread({
+              command: `command:title:outcome:${testCase.name}:create`,
+              thread: `thread:title:outcome:${testCase.name}`,
+            });
+            yield* dispatchUserMessage({
+              command: `command:title:outcome:${testCase.name}:message`,
+              threadId,
+              text: "Some conversation",
+            });
+            const requestId = yield* armRegeneration({
+              command: `command:title:outcome:${testCase.name}:1`,
+              threadId,
+            });
+
+            yield* titleRegeneration.execute({ threadId, requestId, kind: { type: "regenerate" } });
+
+            const projection = yield* threads.getThreadProjection(threadId);
+            assert.isNotOk(projection.thread.titleRegeneration);
+            assert.deepInclude(
+              projection.thread.lastTitleRegeneration,
+              testCase.name === "failed"
+                ? { requestId, status: "failed", message: "Title generation failed." }
+                : { requestId, status: testCase.name },
+            );
+            // A CLI's raw output stays in the server log; the stored outcome carries none of it.
+            assert.notInclude(JSON.stringify(projection.thread), "model unavailable");
+            assert.notInclude(JSON.stringify(projection.thread), "Conversation text");
+            assert.equal(
+              projection.thread.title,
+              testCase.name === "renamed" ? "Fresh title" : "Seed title",
+            );
+          }).pipe(Effect.provide(harness.layer));
+        }
+      }),
+  );
+
+  it.effect("records no outcome for a first-message title", () =>
+    Effect.gen(function* () {
+      const harness = makeHarness();
+      yield* Effect.gen(function* () {
+        const threads = yield* ThreadManagement.ThreadManagementService;
+        const service = yield* ThreadTitleRegeneration.ThreadTitleRegenerationService;
+        const threadId = yield* createThread({
+          command: "initial:create",
+          thread: "initial:thread",
+        });
+        yield* dispatchUserMessage({ command: "initial:message", threadId, text: "Fix the login" });
+        const requestId = yield* armRegeneration({ command: "initial:title", threadId });
+        const messageId = MessageId.make("initial:message:message");
+        yield* service.execute({ threadId, requestId, kind: { type: "initial", messageId } });
+        const projection = yield* threads.getThreadProjection(threadId);
+        assert.equal(projection.thread.title, "Generated title");
+        assert.isNotOk(projection.thread.lastTitleRegeneration);
+      }).pipe(Effect.provide(harness.layer));
+    }),
+  );
+
+  it.effect("records a failed outcome when generation outlives its two-minute deadline", () =>
+    Effect.gen(function* () {
+      const harness = makeHarness({ generateTitle: () => Effect.never });
+      yield* Effect.gen(function* () {
+        const threads = yield* ThreadManagement.ThreadManagementService;
+        const service = yield* ThreadTitleRegeneration.ThreadTitleRegenerationService;
+        const threadId = yield* createThread({ command: "slow:create", thread: "slow:thread" });
+        yield* dispatchUserMessage({
+          command: "slow:message",
+          threadId,
+          text: "Some conversation",
+        });
+        const requestId = yield* armRegeneration({ command: "slow:title", threadId });
+        const running = yield* service
+          .execute({ threadId, requestId, kind: { type: "regenerate" } })
+          .pipe(Effect.forkChild);
+        yield* TestClock.adjust("2 minutes");
+        yield* Fiber.join(running);
+        const projection = yield* threads.getThreadProjection(threadId);
+        assert.equal(projection.thread.title, "Seed title");
+        assert.deepInclude(projection.thread.lastTitleRegeneration, {
+          requestId,
+          status: "failed",
+          message: "Title generation took longer than two minutes.",
+        });
       }).pipe(Effect.provide(harness.layer));
     }),
   );

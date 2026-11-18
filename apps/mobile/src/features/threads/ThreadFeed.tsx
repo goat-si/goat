@@ -1,9 +1,6 @@
 import { HumanHandoffCard } from "./HumanHandoffCard";
-import {
-  AssistantMarkdownBlocks,
-  type MarkdownLinkHandlers,
-  type MarkdownStyleSet,
-} from "./AssistantMarkdownBlocks";
+import type { MarkdownLinkHandlers, MarkdownStyleSet } from "./AssistantMarkdownBlocks";
+import { AssistantMarkdownContent } from "./AssistantMarkdownContent";
 import { Button } from "../../components/ui/Button";
 import * as Dialog from "../../components/ui/Dialog";
 import { useOpenPullRequest } from "../../native/useOpenPullRequest";
@@ -704,37 +701,6 @@ interface MarkdownStyleSets {
   readonly user: MarkdownStyleSet;
   readonly assistant: MarkdownStyleSet;
 }
-
-const AssistantMarkdownContent = memo(function AssistantMarkdownContent(props: {
-  readonly markdown: string;
-  readonly environmentId: EnvironmentId;
-  readonly markdownStyles: MarkdownStyleSet;
-  readonly linkHandlers: MarkdownLinkHandlers;
-  readonly onUseArtifactTemplate?: ((template: CodexArtifactTemplate) => void) | undefined;
-  readonly renderImage: MarkdownImageRenderer;
-  readonly skills?: ReadonlyArray<SelectableMarkdownSkill> | undefined;
-}) {
-  const iconSubtleColor = useUniwindTheme()["--color-icon-subtle"];
-  const liveMarkdown = useLiveThreadLinkLabels(props.markdown, props.environmentId);
-  const threadIcons = useContextChipIcons(props.environmentId, liveMarkdown);
-  const linkHandlers: MarkdownLinkHandlers = {
-    ...props.linkHandlers,
-    linkCustomization: (href) =>
-      withChipIcon(props.linkHandlers.linkCustomization?.(href), threadIcons.get(href)),
-  };
-
-  return (
-    <AssistantMarkdownBlocks
-      markdown={liveMarkdown}
-      iconSubtleColor={iconSubtleColor}
-      markdownStyles={props.markdownStyles}
-      linkHandlers={linkHandlers}
-      onUseArtifactTemplate={props.onUseArtifactTemplate}
-      renderImage={props.renderImage}
-      skills={props.skills}
-    />
-  );
-});
 
 function useMarkdownStyles(): MarkdownStyleSets {
   const { appearance } = useAppearancePreferences();
@@ -1609,6 +1575,7 @@ function renderFeedEntry(
           <MarkdownImageAvailableWidthContext value={props.markdownContentWidth}>
             <AssistantMarkdownContent
               markdown={renderedText}
+              streaming={message.streaming}
               environmentId={props.environmentId}
               markdownStyles={styles}
               linkHandlers={props.markdownLinkHandlers}
@@ -1835,7 +1802,7 @@ function UserMessageMarkdownContent(props: UserMessageContentProps) {
         contextClipboardFragment={contextClipboardFragment}
         skills={props.skills}
         textStyle={props.markdownStyles.nativeTextStyle}
-        preserveSoftBreaks
+        preserveLeadingWhitespace
         {...props.linkHandlers}
         renderImage={props.renderImage}
       />
@@ -1867,7 +1834,7 @@ function UserMessageMarkdownContent(props: UserMessageContentProps) {
             contextClipboardFragment={contextClipboardFragment}
             skills={props.skills}
             textStyle={props.markdownStyles.nativeTextStyle}
-            preserveSoftBreaks
+            preserveLeadingWhitespace
             {...props.linkHandlers}
             renderImage={props.renderImage}
           />

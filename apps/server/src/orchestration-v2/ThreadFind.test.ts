@@ -1,210 +1,143 @@
 import { assert, it, describe } from "@effect/vitest";
 import { searchableMessageSegments } from "@goat/shared/threadFindText";
+import { layerTestLoopback } from "@goat/shared/testing/loopbackHttpServer";
 import {
   EventId,
   MessageId,
-  PlanId,
+  ORCHESTRATION_V2_WS_METHODS,
+  OrchestrationV2RpcSchemas,
+  OrchestrationV2SearchThreadError,
   RunId,
   RuntimeRequestId,
-  TurnItemId,
   type OrchestrationV2TurnItem,
-  type OrchestrationV2Run,
-  type OrchestrationV2ThreadHistoryPage,
-  ProjectId,
-  ProviderInstanceId,
   ThreadId,
   type OrchestrationV2DomainEvent,
 } from "@goat/contracts";
-import * as DateTime from "effect/DateTime";
+import * as Context from "effect/Context";
 import * as Effect from "effect/Effect";
 import * as Layer from "effect/Layer";
+import { FetchHttpClient, HttpRouter, HttpServer } from "effect/http";
+import { Rpc, RpcClient, RpcGroup, RpcSerialization, RpcServer } from "effect/rpc";
 import * as SqlClient from "effect/sql/SqlClient";
 import * as Stream from "effect/Stream";
 import * as TestClock from "effect/testing/TestClock";
+import * as Tracer from "effect/Tracer";
 import { vi } from "vite-plus/test";
 
-import * as SqlitePersistence from "../persistence/Sqlite.ts";
 import * as ProjectionStore from "./ProjectionStore.ts";
-import * as ProjectStore from "./ProjectStore.ts";
-import * as EventStore from "./EventStore.ts";
-import {
-  encodeThreadHistoryCursor,
-  selectHistoryPageFromCursor,
-  THREAD_HISTORY_PAGE_POLICY,
-} from "./threadHistoryPaging.ts";
+import { encodeThreadHistoryCursor } from "./threadHistoryPaging.ts";
 import { projectTurnItemForWire } from "./WireProjection.ts";
+
+import {
+  layerTest,
+  at,
+  createProject,
+  thread,
+  threadId,
+  projectId,
+  runId,
+  item,
+  run,
+  commit,
+  putItems,
+} from "./ThreadFind.testkit.ts";
 
 vi.mock("@goat/shared/threadFindText", { spy: true });
 
-const layerTest = Layer.mergeAll(EventStore.layer, ProjectionStore.layer, ProjectStore.layer).pipe(
-  Layer.provideMerge(SqlitePersistence.layerMemory),
-);
-
-const providerInstanceId = ProviderInstanceId.make("codex");
-const at = (minute: number) => DateTime.makeUnsafe(Date.UTC(2026, 8, 27, 0, minute));
-
-const createProject = (projectId: ProjectId) =>
-  Effect.flatMap(ProjectStore.ProjectStoreV2, (projects) =>
-    projects.apply({
-      sequence: 0,
-      eventId: EventId.make(`created:${projectId}`),
-      aggregateKind: "project",
-      aggregateId: projectId,
-      occurredAt: DateTime.formatIso(at(0)),
-      commandId: null,
-      causationEventId: null,
-      correlationId: null,
-      metadata: {},
-      type: "project.created",
-      payload: {
-        projectId,
-        title: projectId,
-        workspaceRoot: `/work/${projectId}`,
-        defaultModelSelection: null,
-        scripts: [],
-        createdAt: DateTime.formatIso(at(0)),
-        updatedAt: DateTime.formatIso(at(0)),
-      },
-    }),
-  );
-
-const thread = (
-  threadId: ThreadId,
-  projectId: ProjectId,
-  overrides: { readonly archivedAt?: DateTime.Utc; readonly deletedAt?: DateTime.Utc } = {},
-): OrchestrationV2DomainEvent => ({
-  id: EventId.make(`created:${threadId}`),
-  type: "thread.created",
-  threadId,
-  providerInstanceId,
-  occurredAt: at(0),
-  payload: {
-    createdBy: "user",
-    creationSource: "web",
-    id: threadId,
-    projectId,
-    title: threadId,
-    providerInstanceId,
-    modelSelection: { instanceId: providerInstanceId, model: "gpt-5" },
-    runtimeMode: "full-access",
-    interactionMode: "default",
-    branch: null,
-    worktreePath: null,
-    activeProviderThreadId: null,
-    lineage: { parentThreadId: null, relationshipToParent: null, rootThreadId: threadId },
-    forkedFrom: null,
-    createdAt: at(0),
-    updatedAt: at(0),
-    archivedAt: overrides.archivedAt ?? null,
-    settledOverride: null,
-    settledAt: null,
-    lastVisitedAt: null,
-    deletedAt: overrides.deletedAt ?? null,
-  },
-});
-
-const threadId = ThreadId.make("thread:find");
-const projectId = ProjectId.make("project:find");
-const runId = RunId.make("run:find");
-
-function item(
-  id: string,
-  ordinal: number,
-  text: string,
-  kind: "user_message" | "assistant_message" | "proposed_plan" = "assistant_message",
-  owner = threadId,
-): Extract<
-  OrchestrationV2TurnItem,
-  { type: "user_message" | "assistant_message" | "proposed_plan" }
-> {
-  const base = {
-    id: TurnItemId.make(id),
-    threadId: owner,
-    runId,
-    nodeId: null,
-    providerThreadId: null,
-    providerTurnId: null,
-    nativeItemRef: null,
-    parentItemId: null,
-    ordinal,
-    status: "completed" as const,
-    title: null,
-    startedAt: at(100 - ordinal),
-    completedAt: at(100 - ordinal),
-    updatedAt: at(1),
-  };
-  if (kind === "proposed_plan")
-    return { ...base, type: kind, planId: PlanId.make(id), markdown: text, streaming: false };
-  if (kind === "user_message")
-    return {
-      ...base,
-      type: kind,
-      messageId: MessageId.make(id),
-      text,
-      inputIntent: "turn_start",
-      attachments: [],
-      createdBy: "user",
-      creationSource: "web",
-    };
-  return { ...base, type: kind, messageId: MessageId.make(id), text, streaming: false };
-}
-
-function run(
-  owner = threadId,
-  id = runId,
-  ordinal = 1,
-  status: OrchestrationV2Run["status"] = "completed",
-): Extract<OrchestrationV2DomainEvent, { type: "run.created" }> {
-  return {
-    id: EventId.make(`run:${owner}:${id}:${status}`),
-    threadId: owner,
-    occurredAt: at(1),
-    type: "run.created",
-    payload: {
-      id,
-      threadId: owner,
-      ordinal,
-      providerInstanceId,
-      modelSelection: { instanceId: providerInstanceId, model: "gpt-6" },
-      providerThreadId: null,
-      userMessageId: MessageId.make("prompt"),
-      rootNodeId: null,
-      activeAttemptId: null,
-      status,
-      requestedAt: at(1),
-      startedAt: at(1),
-      completedAt: at(2),
-      checkpointId: null,
-      contextHandoffId: null,
-    },
-  };
-}
-
-const commit = Effect.fn("ThreadFindTest.commit")(function* (
-  events: readonly OrchestrationV2DomainEvent[],
-) {
-  const store = yield* EventStore.EventStoreV2;
-  const projection = yield* ProjectionStore.ProjectionStoreV2;
-  yield* store.append({ events });
-  yield* Effect.forEach(events, projection.apply, { discard: true });
-});
-const putItems = (items: readonly OrchestrationV2TurnItem[], version = "initial") =>
-  commit(
-    items.map((payload) => ({
-      id: EventId.make(`${payload.threadId}:${payload.id}:${version}`),
-      threadId: payload.threadId,
-      occurredAt: at(1),
-      type: "turn-item.updated" as const,
-      payload,
-    })),
-  );
 const setup = Effect.gen(function* () {
   yield* createProject(projectId);
   yield* commit([thread(threadId, projectId), run()]);
   return yield* ProjectionStore.ProjectionStoreV2;
 });
 
+const tracePayloadLoads = () => {
+  let batches = 0;
+  const tracer = Tracer.make({
+    span(options) {
+      if (options.name === "ThreadFind.load") batches++;
+      return new Tracer.NativeSpan(options);
+    },
+  });
+  return { tracer, batches: () => batches };
+};
+
 describe("V2 thread find", () => {
+  it.live("matches only the authored indentation through the Find RPC", () =>
+    Effect.gen(function* () {
+      const projection = yield* setup;
+      yield* putItems([item("prompt", 1, "Plan\nneedle\n   needle", "user_message")]);
+      const tag = ORCHESTRATION_V2_WS_METHODS.searchThread;
+      const schema = OrchestrationV2RpcSchemas.searchThread;
+      const group = RpcGroup.make(
+        Rpc.make(tag, {
+          payload: schema.input,
+          success: schema.output,
+          error: OrchestrationV2SearchThreadError,
+        }),
+      );
+      const routes = RpcServer.layerHttp({ group, path: "/find", protocol: "http" }).pipe(
+        Layer.provide(
+          group.toLayer({
+            [tag]: (input) =>
+              projection
+                .searchThread(input)
+                .pipe(Effect.mapError((cause) => new OrchestrationV2SearchThreadError({ cause }))),
+          }),
+        ),
+        Layer.provide(RpcSerialization.layerJson),
+      );
+      const services = yield* Layer.build(
+        HttpRouter.serve(routes, { disableListenLog: true }).pipe(
+          Layer.provideMerge(layerTestLoopback),
+        ),
+      );
+      const origin = HttpServer.formatAddress(Context.get(services, HttpServer.HttpServer).address);
+      const client = yield* RpcClient.make(group).pipe(
+        Effect.provide(
+          RpcClient.layerProtocolHttp({ url: `${origin}/find` }).pipe(
+            Layer.provide(RpcSerialization.layerJson),
+            Layer.provide(FetchHttpClient.layer),
+          ),
+        ),
+      );
+      const search = (query: string) => client[tag]({ threadId, query });
+      assert.equal((yield* search("   needle")).totalMatches, 1);
+      assert.equal((yield* search("    needle")).totalMatches, 0);
+      assert.equal((yield* search("needle")).totalMatches, 2);
+      assert.equal((yield* Effect.exit(search("   ")))._tag, "Failure");
+      assert.equal((yield* Effect.exit(search("x".repeat(201))))._tag, "Failure");
+    }).pipe(Effect.provide(layerTest)),
+  );
+
+  it.effect.each(["rendered text", "source text"] as const)(
+    "does not retain rendered snapshots over the %s budget",
+    (limit) =>
+      Effect.gen(function* () {
+        const projection = yield* setup;
+        yield* putItems(
+          Array.from({ length: 65 }, (_, i) =>
+            item(
+              `message:${i}`,
+              i,
+              limit === "rendered text"
+                ? "needle ".repeat(2500)
+                : `needle ![image](data:image/png;base64,${"a".repeat(35000)})`,
+            ),
+          ),
+        );
+        const loads = tracePayloadLoads();
+        const first = yield* projection
+          .searchThread({ threadId, query: "needle" })
+          .pipe(Effect.withTracer(loads.tracer));
+        const initialBatches = loads.batches();
+        const second = yield* projection
+          .searchThread({ threadId, query: "need" })
+          .pipe(Effect.withTracer(loads.tracer));
+        assert.equal(second.totalMatches, first.totalMatches);
+        assert.equal(loads.batches(), initialBatches * 2);
+      }).pipe(Effect.provide(layerTest)),
+  );
+
   it.effect("finishes one snapshot while later searches include newly inserted matches", () =>
     Effect.gen(function* () {
       const projection = yield* setup;
@@ -212,6 +145,7 @@ describe("V2 thread find", () => {
         item("selected", 1, "snapshot needle"),
         item("last", 2, "snapshot last needle"),
       ]);
+      yield* projection.searchThread({ threadId, query: "snapshot" });
       const frames = yield* projection.searchThreadStream({ threadId, query: "needle" }).pipe(
         Stream.tap((frame) =>
           frame.complete === false
@@ -391,6 +325,9 @@ describe("V2 thread find", () => {
       const result = yield* projection.searchThread({ threadId, query: "empty" });
       assert.equal(result.totalMatches, 1);
       assert.equal(result.match?.entryId, "shown");
+      const changed = yield* projection.searchThread({ threadId, query: "response" });
+      assert.equal(changed.totalMatches, 1);
+      assert.equal(changed.match?.entryId, "shown");
     }).pipe(Effect.provide(layerTest)),
   );
 
@@ -415,6 +352,28 @@ describe("V2 thread find", () => {
         1,
       );
       assert.equal((yield* projection.searchThread({ ...input, query: "App" })).totalMatches, 2);
+    }).pipe(Effect.provide(layerTest)),
+  );
+
+  it.effect("refreshes file labels when the project cwd changes without a thread event", () =>
+    Effect.gen(function* () {
+      const projection = yield* setup;
+      const sql = yield* SqlClient.SqlClient;
+      yield* putItems([item("paths", 1, "[local](src/main.ts) [other](/elsewhere/src/main.ts)")]);
+      assert.equal(
+        (yield* projection.searchThread({ threadId, query: "project:find/src" })).totalMatches,
+        1,
+      );
+      yield* sql`UPDATE projection_projects SET workspace_root = '/elsewhere'
+        WHERE project_id = ${projectId}`;
+      assert.equal(
+        (yield* projection.searchThread({ threadId, query: "project:find" })).totalMatches,
+        0,
+      );
+      assert.equal(
+        (yield* projection.searchThread({ threadId, query: "main.ts" })).totalMatches,
+        2,
+      );
     }).pipe(Effect.provide(layerTest)),
   );
 
@@ -479,7 +438,17 @@ describe("V2 thread find", () => {
         item(`message:${i}`, i + 1, i === 8 || i === 510 ? "sentinel" : "other message"),
       );
       yield* putItems(items);
-      const first = yield* projection.searchThread({ threadId, query: "sentinel" });
+      const loads = tracePayloadLoads();
+      const first = yield* projection
+        .searchThread({ threadId, query: "sentinel" })
+        .pipe(Effect.withTracer(loads.tracer));
+      assert.equal(loads.batches(), 5);
+      const changed = yield* projection
+        .searchThread({ threadId, query: "other message" })
+        .pipe(Effect.withTracer(loads.tracer));
+      assert.equal(changed.totalMatches, 518);
+      assert.equal(changed.match?.entryId, "message:0");
+      assert.equal(loads.batches(), 5);
       const last = yield* projection.searchThread({ threadId, query: "sentinel", index: 1 });
       assert.equal(first.totalMatches, 2);
       assert.equal(first.match?.entryId, "message:8");
@@ -530,6 +499,7 @@ describe("V2 thread find", () => {
       if (original.type !== "assistant_message") return;
       yield* putItems([{ ...original, text: "needle needle", streaming: true }], "streaming");
       assert.equal((yield* projection.searchThread({ threadId, query: "needle" })).totalMatches, 2);
+      assert.equal((yield* projection.searchThread({ threadId, query: "need" })).totalMatches, 2);
       const updated = run(threadId, runId, 1, "rolled_back");
       yield* commit([{ ...updated, type: "run.updated" }]);
       assert.equal((yield* projection.searchThread({ threadId, query: "needle" })).totalMatches, 0);
@@ -582,6 +552,9 @@ describe("V2 thread find", () => {
         const result = yield* projection.searchThread({ threadId, query: "needle" });
         assert.equal(result.totalMatches, 0);
         assert.isNull(result.match);
+        assert.equal((yield* projection.searchThread({ threadId, query: "need" })).totalMatches, 0);
+        yield* putItems([{ ...question, questionAnswer: undefined }], "unfolded");
+        assert.equal((yield* projection.searchThread({ threadId, query: "need" })).totalMatches, 1);
       }).pipe(Effect.provide(layerTest)),
   );
 
@@ -667,6 +640,7 @@ describe("V2 thread find", () => {
           (yield* projection.searchThread({ threadId, query: "needle", index: 1 })).match?.entryId,
           "local",
         );
+        assert.equal((yield* projection.searchThread({ threadId, query: "need" })).totalMatches, 2);
         const snapshot = yield* projection.getThreadSnapshot(threadId);
         const history = yield* projection.getThreadHistoryPage(
           threadId,
@@ -757,174 +731,6 @@ describe("V2 thread find", () => {
       const updated = yield* projection.searchThread({ threadId, query: "needle" });
       assert.equal(updated.totalMatches, 2);
       assert.equal(updated.match?.entryId, "inherited");
-    }).pipe(Effect.provide(layerTest)),
-  );
-});
-
-describe("V2 history materialization", () => {
-  it.effect(
-    "combines history pages through a match's message identity without skipping intervening turns",
-    () =>
-      Effect.gen(function* () {
-        const projection = yield* setup;
-        const items = Array.from({ length: 45 }, (_, turn) => [
-          item(`user:${turn}`, turn * 3, `turn ${turn}`, "user_message"),
-          {
-            ...item(`answer:${turn}`, turn * 3 + 1, `answer ${turn}`),
-            messageId: MessageId.make(`message:${turn}`),
-          },
-          {
-            ...item(`tool:${turn}`, turn * 3 + 2, ""),
-            type: "command_execution" as const,
-            input: "pwd",
-            output: "huge output".repeat(1000),
-            exitCode: 0,
-          },
-        ]).flat();
-        yield* putItems(items);
-        const snapshot = yield* projection.getThreadSnapshot(threadId);
-        const cursor = encodeThreadHistoryCursor({
-          snapshotSequence: snapshot.snapshotSequence,
-          sourceThreadId: threadId,
-          sourceItemId: "absent",
-          position: items.length,
-        });
-        const ordinary = yield* projection.getThreadHistoryPage(threadId, cursor);
-        assert.equal(ordinary.items[0]?.sourceItemId, "user:25");
-        const targeted = yield* projection.getThreadHistoryPage(threadId, cursor, "message:10");
-        assert.equal(targeted.items[0]?.sourceItemId, "user:10");
-        assert.deepEqual(
-          targeted.items.map((row) => row.sourceItemId),
-          items.slice(30).map((entry) => entry.id),
-        );
-        const conversation = yield* projection.getThreadHistoryPage(
-          threadId,
-          cursor,
-          "message:10",
-          true,
-        );
-        assert.equal(conversation.nextCursor, targeted.nextCursor);
-        assert.equal(conversation.hasMoreHistory, targeted.hasMoreHistory);
-        assert.deepEqual(
-          conversation.items.map((row) => row.sourceItemId),
-          targeted.items
-            .filter((row) => row.item.type !== "command_execution")
-            .map((row) => row.sourceItemId),
-        );
-        assert.equal(conversation.items.length, 70);
-        assert.equal(targeted.items.length, 105);
-        assert.isTrue(targeted.hasMoreHistory);
-        const earlier = yield* projection.getThreadHistoryPage(threadId, targeted.nextCursor!);
-        assert.deepEqual(
-          earlier.items.map((row) => row.sourceItemId),
-          items.slice(0, 30).map((entry) => entry.id),
-        );
-        assert.isFalse(earlier.hasMoreHistory);
-        const capped = yield* projection.getThreadHistoryPage(threadId, cursor, "message:0");
-        assert.equal(capped.items[0]?.sourceItemId, "user:5");
-        const absent = yield* projection.getThreadHistoryPage(
-          threadId,
-          cursor,
-          "another-thread-message",
-        );
-        assert.deepEqual(absent, ordinary);
-      }).pipe(Effect.provide(layerTest)),
-  );
-
-  it.effect("pages long turns without duplicating or skipping messages", () =>
-    Effect.gen(function* () {
-      const projection = yield* setup;
-      const items = Array.from({ length: 45 }, (_, turn) => [
-        item(`user:${turn}`, turn * 3, `turn ${turn}`, "user_message"),
-        {
-          ...item(`steer:${turn}`, turn * 3 + 1, "steer", "user_message"),
-          inputIntent: "steer" as const,
-        },
-        item(
-          `answer:${turn}`,
-          turn * 3 + 2,
-          turn === 40 ? "large ".repeat(200_000) : `answer ${turn}`,
-        ),
-      ]).flat();
-      yield* putItems(items);
-      const snapshot = yield* projection.getThreadSnapshot(threadId);
-      const rows = snapshot.projection.visibleTurnItems.map((row) => ({
-        ...row,
-        item: projectTurnItemForWire(row.item),
-      }));
-      let cursor: string | null = encodeThreadHistoryCursor({
-        snapshotSequence: snapshot.snapshotSequence,
-        sourceThreadId: threadId,
-        sourceItemId: "absent",
-        position: rows.length,
-      });
-      const collected: string[] = [];
-      while (cursor !== null) {
-        const page: OrchestrationV2ThreadHistoryPage = yield* projection.getThreadHistoryPage(
-          threadId,
-          cursor,
-        );
-        assert.deepEqual(page, {
-          snapshotSequence: snapshot.snapshotSequence,
-          ...selectHistoryPageFromCursor({
-            items: rows,
-            cursor,
-            snapshotSequence: snapshot.snapshotSequence,
-          }),
-        });
-        // A turn larger than the byte budget is split, but only a lone oversized item may exceed it.
-        assert.isTrue(
-          page.items.length === 1 ||
-            Buffer.byteLength(JSON.stringify(page.items), "utf8") <=
-              THREAD_HISTORY_PAGE_POLICY.maxEncodedBytes,
-        );
-        collected.unshift(...page.items.map((row) => String(row.sourceItemId)));
-        cursor = page.nextCursor;
-      }
-      assert.deepEqual(
-        collected,
-        items.map((entry) => String(entry.id)),
-      );
-    }).pipe(Effect.provide(layerTest)),
-  );
-
-  it.effect("enforces fallback item and byte limits and always admits an oversized row", () =>
-    Effect.gen(function* () {
-      const projection = yield* setup;
-      yield* putItems(
-        Array.from({ length: 80 }, (_, ordinal) =>
-          item(`row:${ordinal}`, ordinal, ordinal < 78 ? "small" : "large ".repeat(200_000)),
-        ),
-      );
-      const snapshot = yield* projection.getThreadSnapshot(threadId);
-      const rows = snapshot.projection.visibleTurnItems.map((row) => ({
-        ...row,
-        item: projectTurnItemForWire(row.item),
-      }));
-      let cursor: string | null = encodeThreadHistoryCursor({
-        snapshotSequence: snapshot.snapshotSequence,
-        sourceThreadId: threadId,
-        sourceItemId: "absent",
-        position: rows.length,
-      });
-      const sizes: number[] = [];
-      while (cursor !== null) {
-        const page: OrchestrationV2ThreadHistoryPage = yield* projection.getThreadHistoryPage(
-          threadId,
-          cursor,
-        );
-        assert.deepEqual(page, {
-          snapshotSequence: snapshot.snapshotSequence,
-          ...selectHistoryPageFromCursor({
-            items: rows,
-            cursor,
-            snapshotSequence: snapshot.snapshotSequence,
-          }),
-        });
-        sizes.push(page.items.length);
-        cursor = page.nextCursor;
-      }
-      assert.deepEqual(sizes, [1, 1, 75, 3]);
     }).pipe(Effect.provide(layerTest)),
   );
 });
