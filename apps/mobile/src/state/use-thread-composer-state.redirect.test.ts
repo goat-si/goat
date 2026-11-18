@@ -220,14 +220,23 @@ beforeEach(() => {
 
 // goat#3687: a message sent while an approval is pending redirects the agent by declining the
 // approval. When that message also changes the access mode, the phone saves the mode first, as
-// web does since goat#3558: a refusal declines nothing and keeps the draft.
+// web does since goat#3558: a refusal declines nothing and keeps the draft. The save runs only on
+// the decline path, so the screen calls it after its feedback branch and its early returns.
 describe("a redirect that changes the access mode", () => {
   const refusal = "The turn is running; changing its access mode would end it.";
+  // ThreadDetailScreen's decline path: save the mode, then decline.
+  const declineAfterSave = (onDecline: () => void = () => {}) =>
+    vi.fn(async (_text: string, _attached: boolean, saveMode: () => Promise<boolean>) => {
+      if (!(await saveMode())) return false;
+      onDecline();
+      return true as const;
+    });
 
   it("declines nothing and keeps the draft when the server refuses the mode change", async () => {
     state.draft = { ...state.draft, runtimeMode: "approval-required" } as typeof state.draft;
     state.setRuntimeMode.mockResolvedValue(AsyncResult.failure(Cause.fail(new Error(refusal))));
-    const decline = vi.fn(async () => true as const);
+    const declined = vi.fn();
+    const decline = declineAfterSave(declined);
     expect(await useThreadComposerState().onSendMessage(undefined, decline)).toBeNull();
     expect(state.setRuntimeMode).toHaveBeenCalledWith({
       environmentId: "secondary",
@@ -238,7 +247,7 @@ describe("a redirect that changes the access mode", () => {
         createdAt: "2026-09-05T00:00:00.000Z",
       },
     });
-    expect(decline).not.toHaveBeenCalled();
+    expect(declined).not.toHaveBeenCalled();
     expect(state.enqueue).not.toHaveBeenCalled();
     expect(state.clearDraft).not.toHaveBeenCalled();
     expect(state.composerError).toHaveBeenCalledWith("secondary:thread", refusal);
@@ -254,10 +263,7 @@ describe("a redirect that changes the access mode", () => {
     state.enqueue.mockImplementation(async () => {
       events.push("send");
     });
-    const decline = vi.fn(async () => {
-      events.push("decline");
-      return true as const;
-    });
+    const decline = declineAfterSave(() => events.push("decline"));
     expect(await useThreadComposerState().onSendMessage(undefined, decline)).toBe("message");
     expect(events).toEqual(["mode", "decline", "send"]);
     // The outbox's own settings step reuses this command id, so the server applies it once.
@@ -267,10 +273,22 @@ describe("a redirect that changes the access mode", () => {
   });
 
   it("declines and sends as before when the mode does not change", async () => {
-    const decline = vi.fn(async () => true as const);
+    const decline = declineAfterSave();
     expect(await useThreadComposerState().onSendMessage(undefined, decline)).toBe("message");
     expect(state.setRuntimeMode).not.toHaveBeenCalled();
     expect(decline).toHaveBeenCalledOnce();
     expect(state.enqueue).toHaveBeenCalledOnce();
+  });
+
+  it("sends approval feedback and saves nothing when the approval takes feedback", async () => {
+    // Claude takes a reply to most approvals as feedback; the screen sends it and declines nothing.
+    state.draft = { ...state.draft, runtimeMode: "approval-required" } as typeof state.draft;
+    const feedback = vi.fn(async () => "responded" as const);
+    expect(await useThreadComposerState().onSendMessage(undefined, feedback)).toBeNull();
+    expect(feedback).toHaveBeenCalledOnce();
+    expect(state.setRuntimeMode).not.toHaveBeenCalled();
+    expect(state.composerError).not.toHaveBeenCalled();
+    expect(state.enqueue).not.toHaveBeenCalled();
+    expect(state.clearDraft).toHaveBeenCalledOnce();
   });
 });
