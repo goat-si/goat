@@ -9,6 +9,8 @@ import * as SubscriptionRef from "effect/SubscriptionRef";
 
 import type { ConnectionCatalogEntry } from "./catalog.ts";
 import { ConnectionBlockedError, type ConnectionAttemptError } from "./model.ts";
+import { penRoutePin } from "./penPin.ts";
+import { PEN_VIEWER_ENABLED, type PenViewerPolicy } from "@goat/shared/penViewerGate";
 
 export const PullRequestRoutingPermission = Schema.Literals(["off", "read", "read-write"]);
 export type PullRequestRoutingPermission = typeof PullRequestRoutingPermission.Type;
@@ -22,15 +24,22 @@ export type StoredPullRequestRoutingPermission = typeof StoredPullRequestRouting
 /**
  * Trust belongs to the saved endpoints, never to an environment id advertised
  * by a server alone. With several routes the key covers all of them, sorted so
- * reordering keeps trust but adding or changing an address revokes it.
+ * reordering keeps trust but adding or changing an address revokes it. A Pen route the closed
+ * gate hides is no address yet; an open one is keyed by the member it pins.
  */
-export function pullRequestRoutingConnectionKey(entry: ConnectionCatalogEntry): string | null {
+export function pullRequestRoutingConnectionKey(
+  entry: ConnectionCatalogEntry,
+  policy: PenViewerPolicy = { enabled: PEN_VIEWER_ENABLED },
+): string | null {
   const routes = [
     { target: entry.target, profile: entry.profile },
     ...(entry.alternateRoutes ?? []),
   ].filter((route) => {
     const profile = Option.getOrNull(route.profile);
-    return !(profile?._tag === "BearerConnectionProfile" && profile.learned === true);
+    return (
+      !(profile?._tag === "BearerConnectionProfile" && profile.learned === true) &&
+      (route.target._tag !== "PenConnectionTarget" || policy.enabled)
+    );
   });
   if (routes.length === 1) return routeConnectionKey(routes[0]!.target, routes[0]!.profile);
   const keys = routes.map((route) => routeConnectionKey(route.target, route.profile));
@@ -45,6 +54,12 @@ function routeConnectionKey(
   if (target._tag === "RelayConnectionTarget")
     return JSON.stringify([target._tag, target.environmentId]);
   const profile = Option.getOrNull(entry.profile);
+  if (target._tag === "PenConnectionTarget") {
+    const pin = penRoutePin(target, profile ?? undefined);
+    return pin === undefined
+      ? null
+      : JSON.stringify([target._tag, target.environmentId, pin.meshId, pin.nodeId, pin.noisePub]);
+  }
   if (target._tag === "SshConnectionTarget") {
     if (profile?._tag !== "SshConnectionProfile") return null;
     const { alias, hostname, username, port } = profile.target;
