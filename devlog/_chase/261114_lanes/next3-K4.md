@@ -408,3 +408,11 @@ Checks for the local edits: PATH=$HOME/.nvm/versions/node/v26.12.1/bin:$PATH vp 
 "From now on for every lane: READY means the gate exited 0 on the pushed head, or the report names each failure with the same failure shown at the integration head."
 
 For K4: the READY of 197f92c954 meets it (vp run check:changed origin/chase/t3-261114-next3 exited 0 on that exact head, section READY). Any commit after it, including the local (b) and (c) edits if the review asks for them, gets a fresh check:changed run on the head pushed before a new READY.
+
+## 8n. No git stash (lane coordinator, about 02:00 UTC)
+
+Rule received: no git stash from now on. Fail-first runs save a patch outside the worktree, check out the file, and re-apply it with git apply, or use a local scratch branch.
+
+K4's use before the rule: one stash, for the fail-first run of (b) at 09:39 KST (00:39 UTC). It was pushed and popped in the same command: git stash push -m k4-fairness-probe -- apps/server/src/workspace/checkpointRestoreReservation.ts, then git stash pop, which reported "Dropped refs/stash@{0} (16d254b1f7abbd0e8dd8f249ea4fa528c7c6e67a)". The entry it popped was saved as "On chase/t3-261114-next3-k4-checkpoints: k4-fairness-probe", so it was mine. After the pop, git diff shows the three local files with the same content as before (141 insertions, 2 deletions), and they are now also saved at /tmp/k4-review-prep-197f92c954.patch, outside the worktree.
+
+git stash list on pen-macmini now (02:0x UTC) holds two entries, neither mine, both older than this lane: stash@{0} 1be29b5b44 (2026-11-15 14:55 +0900, "On chase/t3-261114-adapters-retry: L02 run3 b5b470542a WIP (Option 2)") and stash@{1} cd32fe2130 (2026-11-11 17:45 +0900, "lint-staged automatic backup (d5ed7f5a)"). Left untouched: not dropped, applied or cleared.
