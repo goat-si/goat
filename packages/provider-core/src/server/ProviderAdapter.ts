@@ -576,6 +576,8 @@ export interface ProviderAdapterV2InterruptInput {
   readonly providerThread: OrchestrationV2ProviderThread;
   readonly providerTurnId: ProviderTurnId;
   readonly requestRuntimeRestart?: boolean;
+  /** The root outcome is known and only bounded follow-up cleanup remains. */
+  readonly onRootStopResolved?: Effect.Effect<void>;
 }
 
 export interface ProviderAdapterV2RuntimeRequestResponseInput {
