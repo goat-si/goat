@@ -23,6 +23,37 @@ const chatter =
   ].join("\n") + "\n";
 
 describe("SSH verbose diagnostics", () => {
+  it.effect.each([
+    ["", "Check that the host key fingerprint matches"],
+    [
+      "WARNING: REMOTE HOST IDENTIFICATION HAS CHANGED!\n",
+      "Only remove the existing key if you expected it to change",
+    ],
+  ])("gives recovery guidance for a failed host key check (%s)", ([warning, guidance]) => {
+    const stderr = warning + "Host key verification failed.\n";
+    const spawner = ChildProcessSpawner.make(() =>
+      Effect.succeed({
+        ...makeSuccessfulProcess(""),
+        exitCode: Effect.succeed(ChildProcessSpawner.ExitCode(255)),
+        stderr: Stream.make(new TextEncoder().encode(stderr)),
+      }),
+    );
+    return Effect.gen(function* () {
+      const error = yield* runSshCommand({ ...uploadTarget, port: 2222 }).pipe(Effect.flip);
+      assert.instanceOf(error, SshCommandError);
+      assert.include(error.message, "ssh -p 2222 -- alex@devbox");
+      assert.include(error.message, guidance);
+      assert.include(error.message, stderr.trim());
+    }).pipe(
+      Effect.provide(
+        Layer.merge(
+          NodeServices.layer,
+          Layer.succeed(ChildProcessSpawner.ChildProcessSpawner, spawner),
+        ),
+      ),
+    );
+  });
+
   it.effect.each([0, 1, 255])(
     "does not expose summaries for a silent command exiting %s",
     (exitCode) => {

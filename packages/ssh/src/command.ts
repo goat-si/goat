@@ -367,6 +367,22 @@ function describeSshTarget(target: DesktopSshEnvironmentTarget): string {
 
 const UNREACHABLE_HINT = "Check the network or VPN connection to that host.";
 
+function describeHostKeyFailure(
+  target: DesktopSshEnvironmentTarget,
+  hostSpec: string,
+  stderr: string,
+): string | undefined {
+  if (!/^Host key verification failed\.?\r?$/imu.test(stderr)) return undefined;
+  const command = /^[a-z0-9_.@:-]+$/iu.test(hostSpec)
+    ? `Run \`ssh${target.port === null ? "" : ` -p ${target.port}`} -- ${hostSpec}\` in a terminal.`
+    : "Connect to this host with SSH in a terminal.";
+  const changed = /REMOTE HOST IDENTIFICATION HAS CHANGED/iu.test(stderr);
+  const reason = changed
+    ? "The SSH host key has changed. Only remove the existing key if you expected it to change."
+    : "SSH could not verify the host key.";
+  return `${reason} ${command} Check that the host key fingerprint matches the one you expect, then reconnect.\n\n${stderr.trim()}`;
+}
+
 /**
  * ssh exits 255 for its own failures. When the connection itself failed, the message leads
  * with the host and the address ssh dialed, so it reads as a network problem instead of a
@@ -630,7 +646,10 @@ const runSshCommandInScope = Effect.fn("ssh/command.runSshCommand.inScope")(func
       stdout: diagnosticStdout,
       stderr: diagnosticStderr,
       message:
-        (exitCode === 255 ? describeSshConnectionFailure(target, diagnosticStderr) : undefined) ??
+        (exitCode === 255
+          ? (describeSshConnectionFailure(target, diagnosticStderr) ??
+            describeHostKeyFailure(target, hostSpec, diagnosticStderr))
+          : undefined) ??
         normalizeSshErrorMessage({
           stdout: diagnosticStdout,
           stderr: diagnosticStderr,
