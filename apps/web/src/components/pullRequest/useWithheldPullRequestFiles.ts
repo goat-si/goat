@@ -1,6 +1,7 @@
 import { RegistryContext, useAtomValue } from "@effect/atom-react";
 import type { PullRequestDiffResult } from "@goat/contracts";
 import { hasCutLines } from "@goat/shared/diffCutLines";
+import { Atom } from "effect/reactivity";
 import type { FileDiffMetadata } from "@pierre/diffs";
 import { useContext, useState } from "react";
 import {
@@ -15,6 +16,7 @@ import { pullRequestEnvironment } from "~/state/pullRequests";
 type DiffTarget = Parameters<typeof pullRequestEnvironment.withheldDiff>[0];
 type LoadStatus = "idle" | "loading" | "error" | "empty";
 const NO_PATHS: readonly string[] = [];
+const NO_WITHHELD_ANSWERS = Atom.make(() => []);
 const parsedFiles = new WeakMap<PullRequestDiffResult, FileDiffMetadata | null>();
 
 function parseFile(result: PullRequestDiffResult, key: string) {
@@ -41,7 +43,9 @@ export function useWithheldPullRequestFiles(
   const paths = selection.scope === scope ? selection.paths : NO_PATHS;
   const registry = useContext(RegistryContext);
   const answers = useAtomValue(
-    pullRequestEnvironment.withheldDiffs(JSON.stringify({ target, paths })),
+    paths.length === 0
+      ? NO_WITHHELD_ANSWERS
+      : pullRequestEnvironment.withheldDiffs(JSON.stringify({ target, paths })),
   );
   const query = (path: string) =>
     pullRequestEnvironment.withheldDiff({ ...target, input: { ...target.input, path } });

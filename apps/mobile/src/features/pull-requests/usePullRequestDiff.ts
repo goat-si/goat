@@ -6,6 +6,7 @@ import {
   type PullRequestSummary,
 } from "@goat/contracts";
 import { RegistryContext, useAtomRefresh, useAtomValue } from "@effect/atom-react";
+import { Atom } from "effect/reactivity";
 import { useContext, useCallback, useLayoutEffect, useMemo, useState } from "react";
 
 import { composerPullRequests } from "../../state/pull-requests";
@@ -43,6 +44,7 @@ export function pullRequestTarget(params: PullRequestParams) {
 }
 
 const NO_PATHS: readonly string[] = [];
+const NO_WITHHELD_ANSWERS = Atom.make(() => []);
 const NO_PAGES: readonly PullRequestDiffPage[] = [];
 
 export function usePullRequestDiffEntry(navigation: {
@@ -127,7 +129,9 @@ export function usePullRequestDiff(
     pages[0]?.result.withheldFilesReadable === true && (!!params.commit || !!observedHead);
   const registry = useContext(RegistryContext);
   const answers = useAtomValue(
-    composerPullRequests.withheldDiffs(JSON.stringify({ target: fileTarget, paths })),
+    paths.length === 0
+      ? NO_WITHHELD_ANSWERS
+      : composerPullRequests.withheldDiffs(JSON.stringify({ target: fileTarget, paths })),
   );
   const refreshWithheldFile = (path: string) =>
     registry.refresh(
