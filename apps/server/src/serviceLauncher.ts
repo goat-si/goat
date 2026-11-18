@@ -331,23 +331,19 @@ export class Launcher {
     this.#probationTimer = undefined;
   }
 
-  #startupDiskBlocker(version: string, dbPath?: string): Promise<string | undefined> {
-    return startupDiskBlocker({
-      baseDir: this.#baseDir,
-      statePath: this.#statePath,
-      version,
-      dbPath: dbPath ?? NodePath.join(this.#baseDir, "userdata", "statev2.sqlite"),
-      readAvailableBytes: this.#startupSpaceProbe,
-    });
-  }
-
   async #deferForDiskSpace(
     version: string,
     dbPath: string | undefined,
     retry: () => Promise<void>,
   ): Promise<boolean> {
     if (this.#stopRequested) return true;
-    const reason = await this.#startupDiskBlocker(version, dbPath);
+    const reason = await startupDiskBlocker({
+      baseDir: this.#baseDir,
+      statePath: this.#statePath,
+      version,
+      dbPath: dbPath ?? NodePath.join(this.#baseDir, "userdata", "statev2.sqlite"),
+      readAvailableBytes: this.#startupSpaceProbe,
+    });
     if (this.#stopRequested) return true;
     if (reason === undefined) return false;
     logDiskWait(reason, this.#writeDiagnostic);
@@ -618,13 +614,6 @@ export class Launcher {
       return;
     }
 
-    const startupBlocker = await this.#startupDiskBlocker(message.targetVersion, message.dbPath);
-    if (!child.process.connected || this.#stopRequested) return;
-    if (startupBlocker !== undefined) {
-      await reject(`${startupBlocker} The server was not stopped.`);
-      return;
-    }
-
     const pending: PendingServiceUpdate = {
       id: NodeCrypto.randomUUID(),
       fromVersion: child.version,
@@ -648,12 +637,6 @@ export class Launcher {
       return;
     }
     this.#timer = undefined;
-    if (
-      await this.#deferForDiskSpace(pending.targetVersion, pending.dbPath, () =>
-        this.#beginTrial(child),
-      )
-    )
-      return;
     this.#child = null;
     await terminateChild(child.process);
     await this.#startTrial(pending);
