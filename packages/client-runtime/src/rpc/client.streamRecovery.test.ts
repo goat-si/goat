@@ -313,4 +313,49 @@ describe("durable subscriptions on a healthy session", () => {
       expect(yield* Ref.get(retryCount)).toBe(0);
     }),
   );
+  it.effect(
+    "a caller with onDefect owns a decode defect: one report and no same-session resubscribe",
+    () =>
+      Effect.gen(function* () {
+        const subscribed = yield* Deferred.make<void>();
+        let subscriptions = 0;
+        let defects = 0;
+        const client = {
+          [WS_METHODS.subscribeServerLifecycle]: () => {
+            subscriptions += 1;
+            return Stream.fromEffect(Deferred.succeed(subscribed, undefined)).pipe(
+              Stream.drain,
+              Stream.concat(
+                Stream.fromEffect(decodeNumber("not a number").pipe(Effect.orDie)).pipe(
+                  Stream.drain,
+                ),
+              ),
+            );
+          },
+        } as unknown as WsRpcProtocolClient;
+        const { activeSession, supervisor } = yield* makeHarness();
+        yield* SubscriptionRef.set(activeSession, Option.some(session(client)));
+
+        const fiber = yield* subscribe(
+          WS_METHODS.subscribeServerLifecycle,
+          {},
+          {
+            onDefect: () =>
+              Effect.sync(() => {
+                defects += 1;
+              }),
+          },
+        ).pipe(
+          Stream.runDrain,
+          Effect.provideService(EnvironmentSupervisor.EnvironmentSupervisor, supervisor),
+          Effect.forkChild,
+        );
+        yield* Deferred.await(subscribed);
+        yield* TestClock.adjust("2 minutes");
+
+        expect(subscriptions).toBe(1);
+        expect(defects).toBe(1);
+        yield* Fiber.interrupt(fiber);
+      }),
+  );
 });
