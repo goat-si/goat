@@ -1,3 +1,4 @@
+import { appendLoadedSnapshotMessage, emptySnapshotState } from "./AcpHistorySnapshot.ts";
 import { ACP_PROMPT_ACTIVITY_UPDATES } from "./capabilities.ts";
 import {
   acpSubagentStatusBlocksTurnSettlement,
@@ -662,24 +663,6 @@ type PendingRuntimeRequest = {
     }
 );
 
-interface SnapshotMessageState {
-  readonly order: Array<string>;
-  readonly messages: Map<string, OrchestrationV2ConversationMessage>;
-  readonly reasoningIds: ReadonlySet<OrchestrationV2ConversationMessage["id"]>;
-  loadingRole: "user" | "assistant" | "thought" | null;
-  loadingMessageId: string | null;
-  loadingIndex: number;
-}
-
-const emptySnapshotState = (): SnapshotMessageState => ({
-  order: [],
-  messages: new Map(),
-  reasoningIds: new Set(),
-  loadingRole: null,
-  loadingMessageId: null,
-  loadingIndex: 0,
-});
-
 /** How long a Stop waits for the agent to confirm before the user is offered Force stop. */
 const ACP_STOP_CONFIRM_TIMEOUT_MS = 10_000;
 const TOOL_UPDATE_PERSIST_EVERY = 10;
@@ -1018,7 +1001,7 @@ export const makeAcpAdapterV2 = Effect.fn("makeAcpAdapterV2")(function* (
           options.testHooks?.onNativeResponseLifecycle ?? (() => Effect.void);
         const nextElicitationOrdinal = yield* Ref.make(0);
         const providerTurns = yield* Ref.make(new Map<string, OrchestrationV2ProviderTurn>());
-        const snapshot = yield* Ref.make<SnapshotMessageState>(emptySnapshotState());
+        const snapshot = yield* Ref.make(emptySnapshotState());
 
         const awaitRuntimeTeardown = Effect.fnUntraced(function* () {
           const state = yield* Ref.get(runtimeTeardownState);
@@ -3569,61 +3552,24 @@ export const makeAcpAdapterV2 = Effect.fn("makeAcpAdapterV2")(function* (
           Effect.fnUntraced(function* (
             notification: EffectAcpSchema.SessionNotification,
             role: "user" | "assistant" | "thought",
-            text: string,
+            content: string | ReadonlyArray<EffectAcpSchema.ContentBlock>,
             replace = false,
           ) {
-            if (text.length === 0 && !replace) return;
+            if (content === "" && !replace) return;
             const now = yield* DateTime.now;
-            yield* Ref.update(snapshot, (current) => {
-              const update = notification.update;
-              const sourceMessageId =
-                (update.sessionUpdate === "user_message_chunk" ||
-                  update.sessionUpdate === "agent_message_chunk" ||
-                  update.sessionUpdate === "agent_thought_chunk" ||
-                  update.sessionUpdate === "user_message" ||
-                  update.sessionUpdate === "agent_message" ||
-                  update.sessionUpdate === "agent_thought") &&
-                update.messageId
-                  ? update.messageId
-                  : null;
-              const startsNew =
-                current.loadingRole !== role ||
-                (sourceMessageId !== null && current.loadingMessageId !== sourceMessageId);
-              const loadingIndex = startsNew ? current.loadingIndex + 1 : current.loadingIndex;
-              const nativeItemId =
-                sourceMessageId === null
-                  ? `${notification.sessionId}:history:${role}:${loadingIndex}`
-                  : `${notification.sessionId}:history:${role}:message:${sourceMessageId}`;
-              const messageId = providerMessageId(nativeItemId);
-              const key = String(messageId);
-              const previous = current.messages.get(key);
-              const messages = new Map(current.messages);
-              messages.set(key, {
-                createdBy: previous?.createdBy ?? (role === "user" ? "user" : "agent"),
-                creationSource: previous?.creationSource ?? "provider",
-                id: messageId,
-                threadId: input.threadId,
-                runId: null,
-                nodeId: null,
-                role: role === "user" ? "user" : "assistant",
-                text: replace ? text : `${previous?.text ?? ""}${text}`,
-                attachments: [],
-                streaming: false,
-                createdAt: previous?.createdAt ?? now,
-                updatedAt: now,
-              });
-              return {
-                order: current.order.includes(key) ? current.order : [...current.order, key],
-                messages,
-                reasoningIds:
-                  role === "thought" && !current.reasoningIds.has(messageId)
-                    ? new Set(current.reasoningIds).add(messageId)
-                    : current.reasoningIds,
-                loadingRole: role,
-                loadingMessageId: sourceMessageId ?? (startsNew ? null : current.loadingMessageId),
-                loadingIndex,
-              };
-            });
+            yield* Ref.update(snapshot, (current) =>
+              appendLoadedSnapshotMessage(
+                current,
+                notification,
+                role,
+                content,
+                replace,
+                input.threadId,
+                now,
+                providerMessageId,
+                input.historyImport === true,
+              ),
+            );
           });
 
         const offerContinuationRun = Effect.fnUntraced(function* (_sessionId: string) {
@@ -4307,12 +4253,6 @@ export const makeAcpAdapterV2 = Effect.fn("makeAcpAdapterV2")(function* (
               update.sessionUpdate === "agent_thought"
             ) {
               if (update.content === undefined) return;
-              const text = (update.content ?? [])
-                .flatMap((content) => {
-                  const display = acpContentBlockDisplayText(content);
-                  return display === undefined ? [] : [display];
-                })
-                .join("\n");
               yield* appendLoadedHistory(
                 notification,
                 update.sessionUpdate === "user_message"
@@ -4320,7 +4260,7 @@ export const makeAcpAdapterV2 = Effect.fn("makeAcpAdapterV2")(function* (
                   : update.sessionUpdate === "agent_thought"
                     ? "thought"
                     : "assistant",
-                text,
+                update.content ?? [],
                 true,
               );
             } else if (
@@ -8349,6 +8289,12 @@ export const makeAcpAdapterV2 = Effect.fn("makeAcpAdapterV2")(function* (
                     yield* Ref.set(activeInteractionMode, null);
                   }
                   const state = yield* Ref.get(snapshot);
+                  if (state.limitExceeded)
+                    return yield* new ProviderAdapter.ProviderAdapterReadThreadSnapshotError({
+                      driver,
+                      providerThreadId: snapshotInput.providerThread.id,
+                      historyLimitExceeded: true,
+                    });
                   const now = yield* DateTime.now;
                   return {
                     providerThread: {
@@ -8371,13 +8317,14 @@ export const makeAcpAdapterV2 = Effect.fn("makeAcpAdapterV2")(function* (
             },
             (effect, snapshotInput) =>
               effect.pipe(
-                Effect.mapError(
-                  (cause) =>
-                    new ProviderAdapter.ProviderAdapterReadThreadSnapshotError({
-                      driver,
-                      providerThreadId: snapshotInput.providerThread.id,
-                      cause,
-                    }),
+                Effect.mapError((cause) =>
+                  cause._tag === "ProviderAdapterReadThreadSnapshotError"
+                    ? cause
+                    : new ProviderAdapter.ProviderAdapterReadThreadSnapshotError({
+                        driver,
+                        providerThreadId: snapshotInput.providerThread.id,
+                        cause,
+                      }),
                 ),
               ),
           ),

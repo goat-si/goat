@@ -535,6 +535,7 @@ const make = Effect.gen(function* () {
             cwd: thread.worktreePath ?? input.workspaceRoot,
           },
           initialNativeThreadId: nativeId,
+          historyImport: true,
           ...(providerThread.nativeMetadata?.itemIdentityVersion === undefined
             ? {}
             : {

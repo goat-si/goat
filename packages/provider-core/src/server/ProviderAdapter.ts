@@ -299,6 +299,7 @@ export class ProviderAdapterReadThreadSnapshotError extends Schema.TaggedError<P
   {
     driver: ProviderDriverKind,
     providerThreadId: ProviderThreadId,
+    historyLimitExceeded: Schema.optionalKey(Schema.Literal(true)),
     cause: Schema.optional(Schema.Defect()),
   },
 ) {
@@ -493,6 +494,7 @@ export interface ProviderAdapterV2OpenSessionInput {
   readonly runtimePolicy: ProviderAdapterV2RuntimePolicy;
   readonly resumeFromSession?: OrchestrationV2ProviderSession;
   readonly initialNativeThreadId?: string;
+  readonly historyImport?: true;
   readonly initialProviderItemIdentityVersion?: 2;
 }
 

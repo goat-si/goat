@@ -12,12 +12,14 @@ import {
   type ProviderInstanceId,
 } from "@goat/contracts";
 import * as IdAllocator from "@goat/provider-core/server/IdAllocator";
+import { ProviderAdapterReadThreadSnapshotError } from "@goat/provider-core/server/ProviderAdapter";
 import * as AcpRegistryRuntimeCoordinator from "@goat/provider-acp-registry/server/AcpRegistryRuntimeCoordinator";
 import * as Context from "effect/Context";
 import * as SecureRandom from "effect/crypto/SecureRandom";
 import * as Effect from "effect/Effect";
 import * as Layer from "effect/Layer";
 import * as Result from "effect/Result";
+import * as Schema from "effect/Schema";
 import * as ThreadManagementService from "../orchestration-v2/ThreadManagementService.ts";
 import * as ThreadLaunchService from "../orchestration-v2/ThreadLaunchService.ts";
 import * as ProjectService from "../project/ProjectService.ts";
@@ -30,6 +32,13 @@ import {
   makeAcpSessionContinuations,
   type ContinuationPage,
 } from "./AcpSessionContinuations.ts";
+
+const isSnapshotReadError = Schema.is(ProviderAdapterReadThreadSnapshotError);
+const historyLimitExceeded = (cause: unknown) =>
+  isSnapshotReadError(cause) && cause.historyLimitExceeded === true;
+
+const historyLimitMessage =
+  "The ACP session history exceeds 32 MiB or 200 messages. Shorten it in the native agent before retrying, or continue the thread without importing its earlier history.";
 
 export class AcpSessionService extends Context.Service<
   AcpSessionService,
@@ -272,7 +281,9 @@ const make = Effect.gen(function* () {
                     (cause) =>
                       new AcpRegistryOperationError({
                         reason: "session_import_failed",
-                        message: "Could not import the ACP session history.",
+                        message: historyLimitExceeded(cause)
+                          ? historyLimitMessage
+                          : "Could not import the ACP session history.",
                         cause,
                       }),
                   ),
@@ -338,11 +349,19 @@ const make = Effect.gen(function* () {
         if (canLoadHistory)
           yield* importHistory.pipe(
             Effect.catch((cause) =>
-              Effect.logWarning("Could not import ACP session history", {
-                instanceId: input.instanceId,
-                sessionId: input.sessionId,
-                cause,
-              }),
+              historyLimitExceeded(cause)
+                ? Effect.fail(
+                    new AcpRegistryOperationError({
+                      reason: "session_import_failed",
+                      message: historyLimitMessage,
+                      cause,
+                    }),
+                  )
+                : Effect.logWarning("Could not import ACP session history", {
+                    instanceId: input.instanceId,
+                    sessionId: input.sessionId,
+                    cause,
+                  }),
             ),
           );
         return { threadId, imported: true } as const;
