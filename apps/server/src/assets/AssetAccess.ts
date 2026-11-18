@@ -26,7 +26,6 @@ import {
   isWorkspacePreviewEntryPath,
   mediaMimeTypeFromExtension,
   isWorkspaceVideoPreviewPath,
-  WORKSPACE_BROWSER_PREVIEW_EXTENSIONS,
 } from "@goat/shared/filePreview";
 import { GENERIC_MIME_TYPES } from "@goat/shared/image";
 import {
@@ -65,6 +64,8 @@ import { extractIcnsPng } from "./icns.ts";
 import { openMediaFile, readMediaFileHeader, type OpenMediaFile } from "./MediaFile.ts";
 import * as HostProcess from "@goat/shared/HostProcess";
 
+import { PREVIEW_ASSET_EXTENSIONS } from "./previewAssetExtensions.ts";
+
 export const ASSET_ROUTE_PREFIX = "/api/assets";
 
 const SIGNING_SECRET_NAME = "asset-access-signing-key";
@@ -87,38 +88,6 @@ const inlinePreviewMimeTypeForExtension = (extension: string) =>
   INLINE_PREVIEW_MIME_TYPES[extension] ??
   hostPreviewMimeTypeFromExtension(`.${extension}`) ??
   undefined;
-const PREVIEW_ASSET_EXTENSIONS = new Set([
-  ...WORKSPACE_BROWSER_PREVIEW_EXTENSIONS,
-  // Keep HTML dependency grants independent of newly supported file viewers.
-  ".avif",
-  ".gif",
-  ".ico",
-  ".jpeg",
-  ".jpg",
-  ".png",
-  ".svg",
-  ".webp",
-  ".m4v",
-  ".mp4",
-  ".ogv",
-  ".webm",
-  ".aac",
-  ".flac",
-  ".m4a",
-  ".mp3",
-  ".oga",
-  ".ogg",
-  ".opus",
-  ".wav",
-  ".css",
-  ".js",
-  ".mjs",
-  ".otf",
-  ".ttf",
-  ".woff",
-  ".woff2",
-]);
-
 const AssetClaimsSchema = Schema.Union([
   Schema.Struct({
     version: Schema.Literal(1),
