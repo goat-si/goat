@@ -19,6 +19,7 @@ import { vi } from "vite-plus/test";
 import * as Clock from "effect/Clock";
 import * as Deferred from "effect/Deferred";
 import * as Effect from "effect/Effect";
+import * as Exit from "effect/Exit";
 import * as Layer from "effect/Layer";
 import * as Option from "effect/Option";
 import * as Queue from "effect/Queue";
@@ -720,6 +721,74 @@ it.effect(
         yield* hold(blocked("secret_detected"));
         yield* waitFor(h.registry, h.edit, (text) => text === null);
         expect(h.registry.get(h.edit)).toBeNull();
+      }),
+    ),
+);
+
+it.effect(
+  "expires body, history and source replies on their own deadlines and re-reads after disposal",
+  () =>
+    Effect.scoped(
+      Effect.gen(function* () {
+        const h = yield* harness({ holdPages: true });
+        const read = h.memory.read(readTarget);
+        const body = h.memory.read.reply(readTarget);
+        const past = h.memory.history.reply({
+          ...readTarget,
+          input: { ...readTarget.input, limit: 10 },
+        });
+        const original = h.memory.readSource.reply({
+          ...readTarget,
+          input: {
+            ...readTarget.input,
+            sourceThread: sourcePage.sourceThread,
+            messageIds: [MessageId.make("m1")],
+            limit: 10,
+          },
+        });
+        const releaseBody = h.registry.mount(body);
+        h.registry.mount(past);
+        h.registry.mount(original);
+        yield* Deferred.succeed(yield* Queue.take(h.reads), item);
+        yield* waitFor(h.registry, body, (value) => value !== null && Option.isSome(value));
+        yield* TestClock.adjust("10 seconds");
+        yield* Deferred.succeed(yield* Queue.take(h.historyReplies), judged);
+        yield* waitFor(h.registry, past, (value) => value !== null && Option.isSome(value));
+        yield* TestClock.adjust("10 seconds");
+        yield* Deferred.succeed(yield* Queue.take(h.sourceReplies), sourcePage);
+        yield* waitFor(h.registry, original, (value) => value !== null && Option.isSome(value));
+
+        yield* TestClock.adjust("41 seconds");
+        expect(h.registry.get(body)).toEqual(Option.none());
+        expect(h.registry.get(past)).toEqual(Option.some(judged));
+        expect(h.registry.get(original)).toEqual(Option.some(sourcePage));
+        yield* TestClock.adjust("10 seconds");
+        expect(h.registry.get(past)).toEqual(Option.none());
+        expect(h.registry.get(original)).toEqual(Option.some(sourcePage));
+        yield* TestClock.adjust("10 seconds");
+        expect(h.registry.get(original)).toEqual(Option.none());
+
+        h.registry.refresh(read);
+        yield* Deferred.succeed(yield* Queue.take(h.reads), item);
+        yield* waitFor(h.registry, body, (value) => value !== null && Option.isSome(value));
+        const removed = yield* Deferred.make<void>();
+        h.registry.onNodeRemoved = (node) => {
+          if (node.atom === read)
+            h.registry.schedulerAsync.makeDispatcher().scheduleTask(() => {
+              Deferred.doneUnsafe(removed, Exit.succeed(undefined));
+            }, 0);
+        };
+        releaseBody();
+        yield* Deferred.await(removed);
+        h.registry.mount(body);
+        const fresh = yield* Queue.take(h.reads);
+        expect(h.registry.get(body)).toBeNull();
+        yield* Deferred.succeed(fresh, otherRevision);
+        yield* waitFor(
+          h.registry,
+          body,
+          (value) => Option.getOrNull(value ?? Option.none()) === otherRevision,
+        );
       }),
     ),
 );

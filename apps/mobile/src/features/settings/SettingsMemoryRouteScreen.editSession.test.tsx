@@ -1,6 +1,13 @@
 import { act } from "react";
 import { afterEach, expect, it, vi } from "vite-plus/test";
-import { WS_METHODS, MemoryItem, MemoryRpcError, type MemoryUpsertInput } from "@goat/contracts";
+import {
+  WS_METHODS,
+  MemoryItem,
+  MemoryHistoryPage,
+  MemorySourcePage,
+  MemoryRpcError,
+  type MemoryUpsertInput,
+} from "@goat/contracts";
 import * as Option from "effect/Option";
 import * as Schema from "effect/Schema";
 import {
@@ -25,6 +32,8 @@ afterEach(async () => {
 if (nativeItem.status !== "active") throw new Error("Expected active fixture");
 const startingRevision = nativeItem.revision.revisionId;
 const decodeItem = Schema.decodeUnknownSync(MemoryItem);
+const decodeHistory = Schema.decodeUnknownSync(MemoryHistoryPage);
+const decodeSource = Schema.decodeUnknownSync(MemorySourcePage);
 const savedElsewhere = decodeItem({
   ...nativeItem,
   revision: {
@@ -430,3 +439,127 @@ it.each([
     expect(field() !== null).toBe(!pendingSync);
   },
 );
+
+it("hides current, historical, judgment and source text at expiry and across reconnect and route re-entry", async () => {
+  vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
+  h = createNativeMemoryHarness();
+  await h.waitForAtom(h.memory.syncStatus.permissionAtom(nativeEnv), Boolean);
+  if (nativeItem.status !== "active" || savedElsewhere.status !== "active")
+    throw new Error("Active fixtures required");
+  const sourceThread = { environmentId: nativeEnv, threadId: "synthetic-source-thread" };
+  const watermark = { fromEventId: "e1", toEventId: "e2", throughSequence: 2 };
+  const body = decodeItem({
+    ...nativeItem,
+    payload: {
+      ...nativeItem.payload,
+      evidence: [{ origin: "thread", sourceThread, watermark, messageIds: ["source-1"] }],
+    },
+  });
+  const history = decodeHistory({
+    memoryId: nativeId,
+    revisions: [
+      {
+        revision: savedElsewhere.revision,
+        payload: { ...savedElsewhere.payload, text: "Retained history body" },
+      },
+    ],
+    resolutions: [
+      {
+        resolution: {
+          resolutionId: "00000000-0000-4000-8000-000000000022",
+          memorySpaceId: nativeSpace,
+          memoryId: nativeId,
+          inputRevisionIds: [startingRevision, savedElsewhere.revision.revisionId],
+          inputPayloadRefs: [nativeItem.revision.payloadRef, savedElsewhere.revision.payloadRef],
+          judgmentRef: "00000000-0000-4000-8000-000000000022",
+          requestedModelSelection: { instanceId: "codex", model: "synthetic", options: [] },
+          effectiveProvider: "codex",
+          effectiveModel: "synthetic",
+          resolvingEnvironmentId: nativeEnv,
+          fencingToken: 1,
+          resultRevisionId: savedElsewhere.revision.revisionId,
+          appliedAtUtc: "2026-10-14T00:00:00.000Z",
+          revertDeadlineUtc: "2026-11-13T00:00:00.000Z",
+        },
+        payload: {
+          resolutionId: "00000000-0000-4000-8000-000000000022",
+          judgment: "Retained judgment body",
+        },
+      },
+    ],
+    tombstone: null,
+    reports: [],
+    revertResults: [],
+    localAvailability: nativeItem.localAvailability,
+    nextCursor: null,
+  });
+  const source = decodeSource({
+    sourceThread,
+    watermark,
+    messages: [{ messageId: "source-1", text: "Original source body" }],
+    nextCursor: null,
+  });
+  const retained = h.deferred<MemoryHistoryPage>();
+  h.responses.set(WS_METHODS.memoryRead, () => body);
+  h.responses.set(WS_METHODS.memoryHistory, () => retained.response);
+  h.responses.set(WS_METHODS.memoryReadSource, () => source);
+  const linked = (
+    <SettingsMemoryRouteScreen
+      route={{
+        params: { environmentId: nativeEnv, memorySpaceId: nativeSpace, memoryId: nativeId },
+      }}
+    />
+  );
+  view = renderNative(h, linked);
+  await view.render();
+  await answered();
+  expect(text()).toContain("Close details");
+  await act(async () => {
+    await vi.advanceTimersByTimeAsync(10_000);
+    await retained.succeed(history);
+  });
+  await act(async () => vi.advanceTimersByTimeAsync(10_000));
+  await view.click("Read original on Test hub");
+  const oldTexts = [
+    "Synthetic memory body",
+    "Retained history body",
+    "Retained judgment body",
+    "Original source body",
+  ];
+  for (const line of oldTexts) expect(text()).toContain(line);
+
+  await act(async () => vi.advanceTimersByTimeAsync(41_000));
+  await h.waitForAtom(
+    h.memory.read.reply(target),
+    (reply) => reply !== null && Option.isNone(reply),
+  );
+  expect(text()).toContain("Memory text hidden after a minute.");
+  for (const line of oldTexts) expect(text()).not.toContain(line);
+
+  const fresh = h.deferred<MemoryItem>();
+  const freshHistory = h.deferred<MemoryHistoryPage>();
+  h.responses.set(WS_METHODS.memoryRead, () => fresh.response);
+  h.responses.set(WS_METHODS.memoryHistory, () => freshHistory.response);
+  const prepared = h.prepared(nativeEnv);
+  const connection = h.registry.get(prepared);
+  await act(() => h.registry.set(prepared, Option.none()));
+  await act(() =>
+    h.registry.set(
+      prepared,
+      Option.map(connection, (value) => ({ ...value })),
+    ),
+  );
+  await h.waitForCall(WS_METHODS.memoryRead, 2);
+  for (const line of oldTexts) expect(text()).not.toContain(line);
+
+  await view.rerender(<SettingsMemoryRouteScreen route={{ params: undefined }} />);
+  await view.rerender(linked);
+  await h.waitForCall(WS_METHODS.memoryRead, 3);
+  for (const line of oldTexts) expect(text()).not.toContain(line);
+  await act(async () => {
+    await fresh.succeed(savedElsewhere);
+  });
+  await answered();
+  expect(text()).toContain("Saved on another device");
+  for (const line of oldTexts) expect(text()).not.toContain(line);
+});

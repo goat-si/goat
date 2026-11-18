@@ -74,6 +74,7 @@ vi.mock("../../state/memory", async () => {
       revertResolution: command("revert"),
       resetReportAttempts: command("resetReportAttempts"),
       history: () => ({ label: "history" }),
+      readSource: () => ({ label: "readSource" }),
       upsert: command("upsert"),
       forget: command("forget"),
       draftAtom: ({ draftId }: { draftId: string }) => drafts(draftId),
@@ -774,4 +775,88 @@ it("keeps only row ids and sizes in a measured list page", () => {
     sizes: new Map([[saved.memoryId, 72]]),
   });
   expect(fresh).not.toBe(page);
+});
+
+it("hides newer historical, judgment and source text as soon as the current body expires", async () => {
+  const registry = setup();
+  if (original.status !== "active" || saved.status !== "active")
+    throw new Error("Active fixtures required");
+  state.queries.set(
+    "history",
+    Option.some({
+      revisions: [
+        {
+          revision: saved.revision,
+          payload: {
+            ...saved.payload,
+            text: "Retained version text",
+            evidence: [
+              {
+                origin: "thread",
+                sourceThread: { environmentId: "remote-owner", threadId: "synthetic-thread" },
+                messageIds: ["synthetic-message"],
+              },
+            ],
+          },
+        },
+      ],
+      resolutions: [
+        {
+          resolution: {
+            resolutionId: id(8),
+            memoryId: id(2),
+            memorySpaceId: id(1),
+            resultRevisionId: saved.revision.revisionId,
+            inputRevisionIds: [original.revision.revisionId],
+            requestedModelSelection: { instanceId: "codex", model: "synthetic", options: [] },
+            effectiveProvider: "codex",
+            effectiveModel: "synthetic",
+            resolvingEnvironmentId: "remote-owner",
+            appliedAtUtc: "2026-09-01T00:00:00.000Z",
+            revertDeadlineUtc: "2026-10-01T00:00:00.000Z",
+          },
+          payload: { judgment: "Retained judgment text" },
+        },
+      ],
+      nextCursor: null,
+      reports: [],
+      revertResults: [],
+    }),
+  );
+  state.queries.set(
+    "readSource",
+    Option.some({
+      messages: [{ messageId: "synthetic-message", text: "Later original source text" }],
+      nextCursor: null,
+    }),
+  );
+  await using screen = await renderDetails(registry);
+  await click(screen, "Open Version 1");
+  await click(screen, "Open Resolution");
+  await click(screen, "Read original");
+  const bodyText = [
+    "Synthetic original",
+    "Retained version text",
+    "Retained judgment text",
+    "Later original source text",
+  ];
+  for (const value of bodyText) expect(screen.container.textContent).toContain(value);
+
+  await update(() => state.queries.set("read", Option.none()));
+  expect(screen.container.textContent).toContain(HIDDEN_LINE);
+  for (const value of bodyText) expect(screen.container.textContent).not.toContain(value);
+
+  state.refresh.mockImplementation(() => {
+    state.readPending = true;
+    state.queries.delete("history");
+    state.queries.delete("readSource");
+  });
+  await click(screen, "Show again");
+  for (const value of bodyText) expect(screen.container.textContent).not.toContain(value);
+  await update(() => {
+    state.readPending = false;
+    state.queries.set("read", Option.some(saved));
+  });
+  expect(screen.container.textContent).toContain("Synthetic original, saved");
+  for (const value of bodyText.slice(1)) expect(screen.container.textContent).not.toContain(value);
 });
