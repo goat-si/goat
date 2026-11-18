@@ -39,3 +39,9 @@ Additional Rule 3 approval before commit:
 > Coordinator Rule 3: APPROVED. apps/server/src/mcp/agentSurface.test.ts:705 local forThreads filter gets the same listing === "prompt" exclusion as toolListing.test.ts (D3: the tool is not in the full listing); every old entry and assertion unchanged. Quote it in next3-K12.md with the others, then continue to READY.
 
 The only edit to that case is inserting `!("listing" in e && e.listing === "prompt") &&` after the existing client-scope exclusion. The first guarded run after approvals 1–4 showed 88 passes and this one failure, with only `goat_message_show` missing from the observed list.
+
+## Host Git and gate restart
+
+Committed row 94ba58b183f2d62839907ee1c946e8b6b6ade71e. `git merge --no-edit origin/chase/t3-261114-next3` reported already up to date against d4dfd457571834bb2c3c85984e64f5abd4af0e5d. The final guarded pre-commit run passed 89/89 in all six changed server test files: agentSurface, toolListing, message, goatMcpToolNames, ProjectionStore.midTurnMessage, and WireProjection.
+
+The first full gate passed every static step (typecheck 38 packages) and began 418 serial server test files, plus 96 workspace files queued behind them. SSH workspace sync ran 84 cases and failed 44 at a host setup issue: /bin/sh with the fixture's synthetic HOME found the user-local Git shim first. That shim searches under HOME for the bundled Git and returns 127. Changing just HOME in a version probe independently reproduced exit 127. I provided an executable in a temporary directory ahead of PATH that execs the same bundled Git 2.53.0 via its absolute path. The shim, system and repository configuration were untouched. With that PATH, `vp test run src/sshRemote/SshWorkspaceSync.test.ts --maxWorkers=1` from apps/server exited 0, 84/84. I stopped the invalid gate through its own tool session (exit 130) and restarted the same gate on the same commit with the scoped PATH. No tests or steps were skipped.
