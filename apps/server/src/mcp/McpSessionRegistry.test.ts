@@ -160,7 +160,11 @@ it.effect("a backward clock step does not extend or revive an MCP credential", (
     const token = yield* issue(threadId);
     yield* TestClock.setTime(1_000);
     yield* TestClock.adjust(50);
-    expect(yield* registry.inspect(token)).toEqual({ threadId, recheckAt: 1_101 });
+    expect(yield* registry.inspect(token)).toEqual({
+      threadId,
+      recheckAt: 1_101,
+      recheckAtMonotonicMs: 10_101,
+    });
     yield* TestClock.adjust(51);
     expect(yield* registry.resolve(token)).toBeUndefined();
     yield* TestClock.setTime(0);
@@ -595,7 +599,11 @@ it.effect("inspect judges a credential as resolve would, without renewing it", (
       }),
     );
     timestamp += 50;
-    expect(yield* registry.inspect(plain)).toEqual({ threadId: plainThread, recheckAt: 1_101 });
+    expect(yield* registry.inspect(plain)).toEqual({
+      threadId: plainThread,
+      recheckAt: 1_101,
+      recheckAtMonotonicMs: 1_101,
+    });
     // Inspecting is not use: the plain credential still expires a window after its issue.
     timestamp += 60;
     expect(yield* registry.inspect(plain)).toBeUndefined();
@@ -604,6 +612,7 @@ it.effect("inspect judges a credential as resolve would, without renewing it", (
     expect(yield* registry.inspect(held)).toEqual({
       threadId: attachedThread,
       recheckAt: 1_210,
+      recheckAtMonotonicMs: 1_210,
     });
     attached = false;
     expect(yield* registry.inspect(held)).toBeUndefined();

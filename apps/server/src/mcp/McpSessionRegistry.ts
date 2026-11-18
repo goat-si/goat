@@ -120,9 +120,14 @@ export interface McpSessionRegistryShape {
    * without counting the check as use: a stream that only watches a credential must not keep
    * it alive.
    */
-  readonly inspect: (
-    rawToken: string,
-  ) => Effect.Effect<{ readonly threadId: ThreadId; readonly recheckAt: number } | undefined>;
+  readonly inspect: (rawToken: string) => Effect.Effect<
+    | {
+        readonly threadId: ThreadId;
+        readonly recheckAt: number;
+        readonly recheckAtMonotonicMs: number;
+      }
+    | undefined
+  >;
 }
 
 export class McpSessionRegistry extends Context.Service<
@@ -617,11 +622,14 @@ const makeWithOptions = Effect.fn("McpSessionRegistry.make")(function* (
           return [pruned, pruned] as const;
         });
         const live = current.records.get(tokenHash);
-        if (live !== undefined && !isIdle(live, now))
+        if (live !== undefined && !isIdle(live, now)) {
+          const remaining = livenessWindowMs - idleMs(live.lastAlive, now) + 1;
           return {
             threadId: live.scope.thread.threadId,
-            recheckAt: now.wallMs + livenessWindowMs - idleMs(live.lastAlive, now) + 1,
+            recheckAt: now.wallMs + remaining,
+            recheckAtMonotonicMs: now.monotonicMs + remaining,
           };
+        }
         const tombstone = current.tombstones.get(tokenHash);
         // Idle, or expired for idleness: still valid while its session is attached, as resolve
         // would renew it then; ask again after another window.
@@ -636,7 +644,11 @@ const makeWithOptions = Effect.fn("McpSessionRegistry.make")(function* (
           if (live !== undefined) yield* expire(live, now);
           return undefined;
         }
-        return { threadId: record.scope.thread.threadId, recheckAt: now.wallMs + livenessWindowMs };
+        return {
+          threadId: record.scope.thread.threadId,
+          recheckAt: now.wallMs + livenessWindowMs,
+          recheckAtMonotonicMs: now.monotonicMs + livenessWindowMs,
+        };
       }
     },
   );
