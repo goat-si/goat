@@ -1,4 +1,13 @@
-import { DEFAULT_SERVER_SETTINGS, ProviderInstanceId, type ServerSettings } from "@goat/contracts";
+import {
+  DEFAULT_SERVER_SETTINGS,
+  ProviderDriverKind,
+  ProviderInstanceId,
+  type ServerSettings,
+} from "@goat/contracts";
+import {
+  resolveMemoryModelSelection,
+  resolveReviewGuideModelSelection,
+} from "@goat/shared/serverSettings";
 import { expect, it } from "vite-plus/test";
 import { redactServerSettingsForClient } from "./serverSettings.ts";
 import { it as effectIt, assert } from "@effect/vitest";
@@ -10,9 +19,45 @@ import * as Option from "effect/Option";
 import * as NodeCrypto from "@effect/platform-node/NodeCrypto";
 import * as NodeServices from "@effect/platform-node/NodeServices";
 import * as ServerSettingsModule from "./serverSettings.ts";
+import { layerServerSettings } from "./serverSettingsLayers.testkit.ts";
 import * as ServerSecretStore from "./auth/ServerSecretStore.ts";
 import * as SqlitePersistence from "./persistence/Sqlite.ts";
 import * as ServerConfig from "./config.ts";
+
+effectIt.effect.each([
+  ["an OmO-only setup normalizes memory generation to OmO's default", resolveMemoryModelSelection],
+  ["the review guide inherits the normalized OmO default", resolveReviewGuideModelSelection],
+] as const)("%s", ([, resolve]) =>
+  Effect.gen(function* () {
+    const service = yield* ServerSettingsModule.ServerSettingsService;
+    const omo = ProviderInstanceId.make("omo");
+    const settings = yield* service.updateSettings({
+      providerInstances: {
+        [ProviderInstanceId.make("codex")]: {
+          driver: ProviderDriverKind.make("codex"),
+          enabled: false,
+          config: {},
+        },
+        [ProviderInstanceId.make("claudeAgent")]: {
+          driver: ProviderDriverKind.make("claudeAgent"),
+          enabled: false,
+          config: {},
+        },
+        [omo]: { driver: ProviderDriverKind.make("omo"), enabled: true, config: {} },
+      },
+    });
+    assert.deepStrictEqual(resolve(settings, undefined, null), {
+      instanceId: omo,
+      model: "default",
+    });
+  }).pipe(
+    Effect.provide(
+      layerServerSettings().pipe(
+        Layer.provideMerge(Layer.mergeAll(NodeServices.layer, NodeCrypto.layer)),
+      ),
+    ),
+  ),
+);
 
 it("never exposes a text generator API key in client settings", () => {
   const settings = {
