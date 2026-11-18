@@ -96,6 +96,7 @@ import {
   moveProject,
   seedProject,
   watchedPullRequestDetail,
+  writeProviderFailureForQueue,
 } from "./runtimeLayer.testkit.ts";
 
 const prWatchDisabledProjectId = ProjectId.make("pr-watch-disabled-project");
@@ -6013,56 +6014,7 @@ it.layer(layerTest)("OrchestrationV2LayerLive lifecycle", (it) => {
         );
         yield* Effect.yieldNow;
 
-        const now = yield* DateTime.now;
-        yield* eventSink.write({
-          events: [
-            {
-              id: EventId.make(`${threadId}:error`),
-              type: "turn-item.updated",
-              threadId,
-              runId: activeRun.id,
-              nodeId: activeRun.rootNodeId,
-              providerInstanceId: activeRun.providerInstanceId,
-              occurredAt: now,
-              payload: {
-                id: TurnItemId.make(`${threadId}:error`),
-                type: "error",
-                threadId,
-                runId: activeRun.id,
-                nodeId: activeRun.rootNodeId,
-                providerThreadId: activeRun.providerThreadId,
-                providerTurnId: null,
-                nativeItemRef: null,
-                parentItemId: null,
-                ordinal: 2,
-                status: "failed",
-                title: "Provider failure",
-                startedAt: now,
-                completedAt: now,
-                updatedAt: now,
-                failure: {
-                  class: failureClass,
-                  message: "Provider failed.",
-                  code: "provider_failed",
-                  retryable: null,
-                  ...(failureClass === "usage_limit"
-                    ? { resetAt: DateTime.formatIso(DateTime.add(now, { hours: 1 })) }
-                    : {}),
-                },
-              },
-            },
-            {
-              id: EventId.make(`${threadId}:failed`),
-              type: "run.updated",
-              threadId,
-              runId: activeRun.id,
-              nodeId: activeRun.rootNodeId,
-              providerInstanceId: activeRun.providerInstanceId,
-              occurredAt: now,
-              payload: { ...activeRun, status: "failed", completedAt: now },
-            },
-          ],
-        });
+        yield* writeProviderFailureForQueue(eventSink, activeRun, failureClass);
 
         if (failureClass === "provider_error") {
           assert.equal(yield* Queue.take(heldRunIds), queuedRun.id);
