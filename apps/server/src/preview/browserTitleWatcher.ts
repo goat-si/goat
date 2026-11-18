@@ -50,23 +50,41 @@ export const makeBrowserTitleWatcher = (cdp: CDPSession, checkRead: () => boolea
     }
   };
   let active: { document: number; key: string; contextId?: number } | undefined;
+  let deferred: typeof active;
+  let retiring: Promise<void> | undefined;
   const stop = () => {
-    const previous = active;
+    const previous = active?.contextId === undefined ? deferred : active;
     active = undefined;
-    if (previous?.contextId === undefined || !canRead()) return;
-    void cdp
+    if (previous?.contextId === undefined) return;
+    if (!canRead()) {
+      deferred = previous;
+      return;
+    }
+    deferred = undefined;
+    const cleanup = cdp
       .send("Runtime.evaluate", {
         contextId: previous.contextId,
         expression: `globalThis[${JSON.stringify(previous.key)}]?.()`,
       })
-      .catch(constVoid);
+      .then(constVoid, constVoid);
+    retiring = cleanup;
+    void cleanup.then(() => {
+      if (retiring === cleanup) retiring = undefined;
+    });
   };
   const watch = async (document: number, title: string, onChanged: () => Promise<void>) => {
     if (active?.document === document || !canRead()) return;
     stop();
+    if (deferred) return;
     const token: NonNullable<typeof active> = { document, key: `goatPreviewTitle${++sequence}` };
     active = token;
     try {
+      await retiring;
+      if (active !== token) return;
+      if (!canRead()) {
+        active = undefined;
+        return;
+      }
       const { frameTree } = await cdp.send("Page.getFrameTree");
       if (active !== token) return;
       if (!canRead()) {
@@ -92,11 +110,13 @@ export const makeBrowserTitleWatcher = (cdp: CDPSession, checkRead: () => boolea
         })
         .then(
           ({ result, exceptionDetails }) => {
+            if (deferred === token) deferred = undefined;
             if (active !== token) return;
             active = undefined;
             if (!exceptionDetails && result.value === true && canRead()) return onChanged();
           },
           () => {
+            if (deferred === token) deferred = undefined;
             if (active === token) active = undefined;
           },
         )
