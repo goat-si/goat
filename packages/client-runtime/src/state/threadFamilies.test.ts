@@ -872,7 +872,11 @@ it.effect(
         const saved = yield* Deferred.make<void>();
         const releaseSave = yield* Deferred.make<void>();
         const secondSubscribed = yield* Deferred.make<void>();
-        const config = { shellThreadFamilies: true, shellResumeCompletionMarker: false } as never;
+        const config = {
+          environment: { instanceId: "family-server", serverVersion: "1.0.0" },
+          shellThreadFamilies: true,
+          shellResumeCompletionMarker: false,
+        } as never;
         const first = {
           ...h.session,
           initialConfig: Effect.succeed(config),
@@ -941,7 +945,11 @@ it.effect(
           Effect.provideService(Persistence.EnvironmentCacheStore, cache),
           Effect.provideService(ShellSnapshotLoader, {
             load: () =>
-              Effect.sync(() => (++loads === 1 ? Option.none() : Option.some(snapshot(20)))),
+              Effect.sync(() =>
+                ++loads === 1
+                  ? Option.none()
+                  : Option.some({ ...snapshot(20), instanceId: "family-server" }),
+              ),
           }),
         );
         yield* Deferred.await(subscribed);

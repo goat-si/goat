@@ -36,7 +36,7 @@ export const BOOTSTRAP: RelayEnvironmentConnectResponse = {
   expiresAt: "2026-06-06T01:00:00.000Z",
 };
 
-type RecordedResponse = Response | ((init: RequestInit) => Response);
+type RecordedResponse = Response | ((init: RequestInit) => Response | Promise<Response>);
 
 function recordedFetch(responses: ReadonlyArray<RecordedResponse>) {
   const calls: Array<readonly [RequestInfo | URL, RequestInit]> = [];
@@ -99,6 +99,7 @@ export const makeHarness = Effect.fn("TestRemoteAuthorization.makeHarness")(func
   readonly initialToken?: TokenStore.RemoteDpopAccessToken;
   readonly responses: ReadonlyArray<RecordedResponse>;
   readonly bootstrap?: RelayEnvironmentConnectResponse;
+  readonly beforeProof?: ManagedRelay.ManagedRelayDpopSigner["Service"]["createProof"];
   readonly beforeBootstrap?: Effect.Effect<void, ManagedRelay.ManagedRelayClientError>;
   readonly beforePut?: Effect.Effect<void>;
   readonly clerkToken?: ClientCapabilities.CloudSession["Service"]["clerkToken"];
@@ -153,10 +154,12 @@ export const makeHarness = Effect.fn("TestRemoteAuthorization.makeHarness")(func
   });
   const signer = ManagedRelay.ManagedRelayDpopSigner.of({
     thumbprint: Ref.get(thumbprint),
-    createProof: (proofInput) =>
-      Ref.update(proofInputs, (current) => [...current, proofInput]).pipe(
-        Effect.as(`proof:${proofInput.url}`),
-      ),
+    createProof:
+      input.beforeProof ??
+      ((proofInput) =>
+        Ref.update(proofInputs, (current) => [...current, proofInput]).pipe(
+          Effect.as(`proof:${proofInput.url}`),
+        )),
   });
   const unexpected = () => Effect.die("Unexpected relay request");
   const relay = makeManagedRelayTestClient({

@@ -1,6 +1,8 @@
 import { EnvironmentId } from "@goat/contracts";
 import { GOAT_CONNECT_COMING_SOON } from "@goat/shared/goatConnect";
 import { describe, expect, it } from "@effect/vitest";
+import { RemoteEnvironmentAuthorization } from "../authorization/service.ts";
+import * as Layer from "effect/Layer";
 import * as Effect from "effect/Effect";
 import * as Option from "effect/Option";
 import { vi } from "vite-plus/test";
@@ -77,6 +79,9 @@ function harness() {
     }),
   );
   const make = Driver.make.pipe(
+    Effect.provide(
+      Layer.mock(RemoteEnvironmentAuthorization)({ rememberCheckedDescriptor: () => Effect.void }),
+    ),
     Effect.provideService(ClientCapabilities.PrimaryEnvironmentAuth, {
       bearerToken: Effect.succeedNone,
     }),

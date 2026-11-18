@@ -38,6 +38,7 @@ import * as ServerSettings from "../serverSettings.ts";
 import * as OrchestrationEventStore from "../persistence/OrchestrationEventStore.ts";
 import { ProjectEnrichmentService } from "../project/ProjectEnrichmentService.ts";
 import * as OrchestrationHttp from "./http.ts";
+import * as RuntimeIdentity from "../runtimeIdentity.ts";
 import { EventSinkV2 } from "./EventSink.ts";
 import * as ProjectStore from "./ProjectStore.ts";
 import * as CommandReceiptStore from "./CommandReceiptStore.ts";
@@ -152,6 +153,9 @@ const serveOrchestrationHttp = (allowed: () => boolean) =>
     });
     const routes = HttpApiBuilder.layer(TranscriptTestApi).pipe(
       Layer.provide(OrchestrationHttp.layer),
+      Layer.provide(
+        Layer.succeed(RuntimeIdentity.RuntimeIdentity, { instanceId: "serving-instance" }),
+      ),
       Layer.provide(ShellSnapshotLoads.layer),
       Layer.provide(
         Layer.succeed(ServerEnvironment.ServerEnvironmentIdentity, {
@@ -385,4 +389,43 @@ it.effect("leaves older settled threads out of the HTTP shell only when asked", 
     );
     expect(cut.olderSettled?.counts).toEqual([{ projectId: thread.projectId, count: 1 }]);
   }),
+);
+
+it.effect(
+  "answers a replayable HTTP shell cursor without a snapshot and rejects unscoped requests",
+  () =>
+    Effect.gen(function* () {
+      let allowed = true;
+      const { handler } = yield* serveOrchestrationHttp(() => allowed);
+      const request = (query: string) =>
+        Effect.promise(() =>
+          handler(
+            new Request(`http://localhost/api/orchestration/shell${query}`, {
+              headers: { [ORCHESTRATION_PROTOCOL_HEADER]: ORCHESTRATION_PROTOCOL_VERSION_TEXT },
+            }),
+          ),
+        );
+      const full = yield* request("");
+      expect(full.status).toBe(200);
+      const snapshot = (yield* Effect.promise(() => full.json())) as {
+        readonly snapshotSequence: number;
+        readonly instanceId?: string;
+      };
+      expect(snapshot.instanceId).toBe("serving-instance");
+      const response = yield* request(`?resumeFrom=${snapshot.snapshotSequence}`);
+      expect(response.status).toBe(200);
+      const resume = yield* Effect.promise(() => response.json());
+      expect(resume).toEqual({ resumable: true, instanceId: "serving-instance" });
+
+      const ahead = yield* request(`?resumeFrom=${snapshot.snapshotSequence + 1}`);
+      expect(yield* Effect.promise(() => ahead.json())).toMatchObject({
+        snapshotSequence: snapshot.snapshotSequence,
+        instanceId: "serving-instance",
+        projectIdentities: expect.any(String),
+      });
+
+      allowed = false;
+      const denied = yield* request(`?resumeFrom=${snapshot.snapshotSequence}`);
+      expect(denied.status).toBe(403);
+    }),
 );
