@@ -44,7 +44,6 @@ import { memoryError } from "../mcp/toolkits/memory/handlers.ts";
 import * as Service from "./MemoryService.ts";
 import * as Hub from "./MemoryHubService.ts";
 import * as Compactor from "./MemoryCompactor.ts";
-
 describe("MemoryHubService", () => {
   it.effect("replays one sequence, rejects changed digest and refuses revoked replay", () =>
     Effect.gen(function* () {
@@ -202,7 +201,8 @@ describe("MemoryHubService", () => {
       yield* seed;
       const { hub, store, claim } = yield* conflict;
       const first = yield* hub.claim(claim, principal());
-      assert.deepStrictEqual(yield* hub.claim(claim, principal()), first);
+      const upgraded = { ...claim, features: ["derivedCap1000"] as const };
+      assert.deepStrictEqual(yield* hub.claim(upgraded, principal()), first);
       const other = {
         ...claim,
         holderEnvironmentId: otherEnv,
@@ -291,7 +291,6 @@ describe("MemoryHubService", () => {
     }).pipe(checkUsage, Effect.provide(live)),
   );
 });
-
 const thread: M.ScopedThreadRef = {
   environmentId: otherEnv,
   threadId: M.ThreadId.make("synthetic-thread"),
@@ -341,7 +340,6 @@ const outcome: M.MemorySourceReadOutcome = {
     nextCursor: null,
   },
 };
-
 describe("MemoryHubService source relay", () => {
   it.effect(
     "routes to the owner only and consumes the purgeable result without tail accumulation",
@@ -351,7 +349,8 @@ describe("MemoryHubService source relay", () => {
         const hub = yield* Hub.MemoryHubService;
         const first = yield* hub.requestSourceRead(sourceRequest, principal());
         yield* TestClock.adjust(1000);
-        assert.deepStrictEqual(yield* hub.requestSourceRead(sourceRequest, principal()), first);
+        const upgraded = { ...sourceRequest, features: ["derivedCap1000"] as const };
+        assert.deepStrictEqual(yield* hub.requestSourceRead(upgraded, principal()), first);
         const collect = { protocolVersion: 1 as const, memorySpaceId: space, limit: 32 };
         assert.strictEqual(
           (yield* hub.collectSourceReads(collect, principal())).requests.length,
@@ -374,6 +373,10 @@ describe("MemoryHubService source relay", () => {
           "MemoryHubError",
         );
         yield* hub.respondSourceRead(response, principal(otherEnv));
+        yield* hub.respondSourceRead(
+          { ...response, features: upgraded.features },
+          principal(otherEnv),
+        );
         const resultInput = {
           protocolVersion: 1 as const,
           memorySpaceId: space,
@@ -1485,7 +1488,6 @@ describe("MemoryHubAdministrator", () => {
     }).pipe(Effect.provide(adminDependencies)),
   );
 });
-
 const resolutionSubmission = Effect.gen(function* () {
   const { hub, store, claim } = yield* conflict;
   const lease = yield* hub.claim(claim, principal());
@@ -1526,7 +1528,6 @@ const resolutionSubmission = Effect.gen(function* () {
   };
   return { hub, store, claim, lease, op, request };
 });
-
 describe("MemoryHubService resolution approval", () => {
   it.effect(
     "uses post-lock hub time rather than operation timestamps and preserves approval on replay",
@@ -1649,7 +1650,6 @@ describe("MemoryHubService resolution approval", () => {
     }).pipe(checkUsage, Effect.provide(live)),
   );
 });
-
 const bootstrapDependencies = Layer.mergeAll(Store.layer, Settings.layer).pipe(
   Layer.provideMerge(Persistence.layerConfig),
   Layer.provideMerge(Secrets.layer),
