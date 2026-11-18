@@ -33,6 +33,7 @@ export {
   resolveReviewGuideModelSelection,
   resolveSourceControlWriterModelSelection,
   resolveTextGenerationFallback,
+  resolveTextGenerationModelSelection,
   resolveTextGenerationRoute,
   textGenerationDefaultModel,
 } from "./serverSettingsTextGeneration.ts";

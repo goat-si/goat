@@ -2,7 +2,6 @@ import { resolveModelShortName } from "@goat/client-runtime/model-short-name";
 import {
   ANTIGRAVITY_DEFAULT_MODEL,
   DEFAULT_TEXT_GENERATION_MODEL,
-  DEFAULT_TEXT_GENERATION_MODEL_BY_PROVIDER,
   defaultInstanceIdForDriver,
   type ModelSelection,
   type ProjectId,
@@ -428,36 +427,20 @@ export function resolveAppModelSelectionState(
     instanceId: DEFAULT_TEXT_GENERATION_INSTANCE_ID,
     model: DEFAULT_TEXT_GENERATION_MODEL,
   };
-  if (
-    Object.hasOwn(settings.textGenerators, selection.instanceId) &&
-    settings.textGenerators[selection.instanceId]?.enabled === true
-  )
-    return selection;
   const route = resolveTextGenerationRoute(settings, selection, providers, null, Date.now());
   if (route.reason === "no_fallback") return NO_PROVIDER_MODEL_SELECTION;
-  const { instanceId, options } = route.selection;
+  const { instanceId, model, options } = route.selection;
+  if (
+    Object.hasOwn(settings.textGenerators, instanceId) &&
+    settings.textGenerators[instanceId]?.enabled === true
+  ) {
+    return route.selection;
+  }
   const entry = deriveProviderInstanceEntries(providers).find(
     (candidate) => candidate.instanceId === instanceId,
   );
   if (!entry) return NO_PROVIDER_MODEL_SELECTION;
 
-  let model = route.selection.model;
-  if (route.reason === "saved") {
-    const catalog = getTextGenerationModelOptionsForInstance(
-      { ...settings, providerModelPreferences: {} },
-      entry,
-    );
-    model =
-      resolveSelectableModel(entry.driverKind, model, catalog) ??
-      resolveSelectableModel(
-        entry.driverKind,
-        DEFAULT_TEXT_GENERATION_MODEL_BY_PROVIDER[entry.driverKind],
-        catalog,
-      ) ??
-      catalog.find((option) => option.isDefault)?.slug ??
-      catalog[0]?.slug ??
-      model;
-  }
   if (!model) return createModelSelection(instanceId, "");
 
   const { modelOptionsForDispatch } = getComposerProviderState({

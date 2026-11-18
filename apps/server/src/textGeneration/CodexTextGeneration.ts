@@ -39,11 +39,8 @@ import {
   normalizeCliError,
   toStrictJsonSchemaObject,
 } from "@goat/provider-core/server/textGenerationUtils";
-import {
-  codexModelFamily,
-  getModelSelectionStringOptionValue,
-  readCustomModelEntries,
-} from "@goat/shared/model";
+import { getModelSelectionStringOptionValue } from "@goat/shared/model";
+import { resolveTextGenerationModelSelection } from "@goat/shared/serverSettings";
 import { getCodexServiceTierOptionValue } from "../codexModelOptions.ts";
 import * as HostProcess from "@goat/shared/HostProcess";
 import { MemoryGenerationRunnerError } from "@goat/provider-core/server/memoryGenerationRunner";
@@ -429,23 +426,13 @@ export const makeCodexTextGeneration = Effect.fn("makeCodexTextGeneration")(func
       const effectiveEnvironment =
         resolved?.environment ??
         (currentEnvironment ? yield* currentEnvironment : resolvedEnvironment);
-      const models = yield* getModels;
-      const requestedModel = modelSelection.model;
-      const listed = models.filter((candidate) => !candidate.isCustom);
-      const requestedFamily = codexModelFamily(requestedModel);
-      const matchedModel =
-        models.find((candidate) => candidate.slug === requestedModel)?.slug ??
-        readCustomModelEntries(effectiveConfig.customModels).find(
-          (entry) => entry.slug === requestedModel,
-        )?.slug ??
-        listed.find((candidate) => codexModelFamily(candidate.slug) === requestedFamily)?.slug;
-      const model =
-        matchedModel ??
-        listed.find((candidate) => candidate.isDefault)?.slug ??
-        listed.find((candidate) => !candidate.isLegacy)?.slug ??
-        listed[0]?.slug ??
-        requestedModel;
-      const fellBack = matchedModel === undefined && model !== requestedModel;
+      const { selection: effectiveSelection } = resolveTextGenerationModelSelection(
+        modelSelection,
+        CODEX_DRIVER,
+        yield* getModels,
+        effectiveConfig.customModels,
+      );
+      const { model } = effectiveSelection;
       const isChannelReception =
         operation === "generateChannelReception" ||
         TextGenerationOperations.isMemoryOperation(operation);
@@ -479,12 +466,9 @@ export const makeCodexTextGeneration = Effect.fn("makeCodexTextGeneration")(func
         : configuredHome;
       const launchArgs = resolveCodexLaunchArgs(effectiveConfig.launchArgs, effectiveEnvironment);
       const reasoningEffort =
-        (fellBack
-          ? undefined
-          : getModelSelectionStringOptionValue(modelSelection, "reasoningEffort")) ??
+        getModelSelectionStringOptionValue(effectiveSelection, "reasoningEffort") ??
         DEFAULT_TEXT_GENERATION_REASONING_EFFORT;
-      const serviceTier =
-        resolved || fellBack ? undefined : getCodexServiceTierOptionValue(modelSelection);
+      const serviceTier = resolved ? undefined : getCodexServiceTierOptionValue(effectiveSelection);
       const binary = effectiveConfig.binaryPath || "codex";
       const env = {
         ...effectiveEnvironment,

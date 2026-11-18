@@ -367,6 +367,23 @@ it.layer(layerCodexTextGenerationTest)("CodexTextGeneration", (it) => {
     ),
   );
 
+  it.effect("dispatches the text generation default for a removed model", () =>
+    withFakeCodexEnv(
+      {
+        output: JSON.stringify({ title: "Live title" }),
+        models: ["gpt-6-astra", "gpt-6-luna"],
+        defaultModel: "gpt-6-astra",
+        requireArg: "--model gpt-6-luna",
+      },
+      (textGeneration) =>
+        textGeneration.generateThreadTitle({
+          cwd: process.cwd(),
+          message: "Describe this change",
+          modelSelection: DEFAULT_TEST_MODEL_SELECTION,
+        }),
+    ),
+  );
+
   it.effect("sends a configured custom model the managed snapshot leaves out", () =>
     withFakeCodexEnv(
       {

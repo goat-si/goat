@@ -13,10 +13,16 @@ import {
   ProviderDriverKind,
   ProviderInstanceId,
   type ServerProvider,
+  type ServerProviderModel,
   type ProjectId,
   type ServerSettings,
 } from "@goat/contracts";
-import { readCustomModelEntries } from "./model.ts";
+import {
+  codexModelFamily,
+  normalizeModelSlug,
+  readCustomModelEntries,
+  resolveSelectableModel,
+} from "./model.ts";
 import { isTextGenerationFallbackCandidate } from "./textGenerationFallback.ts";
 
 // Settings from an older server, or partial test settings, may lack textGenerators.
@@ -53,6 +59,14 @@ const TEXT_GENERATION_FALLBACK_DRIVERS = [
   "antigravity",
 ].map((driver) => ProviderDriverKind.make(driver));
 
+function configuredTextGenerationDefault(driver: ProviderDriverKind): string {
+  return (
+    DEFAULT_TEXT_GENERATION_MODEL_BY_PROVIDER[driver] ??
+    DEFAULT_MODEL_BY_PROVIDER[driver] ??
+    DEFAULT_TEXT_GENERATION_MODEL
+  );
+}
+
 /** Configured instances come after every default instance, so they only win when no default qualifies. */
 export function fallbackTextGenerationModelSelection(
   providerInstances: ServerSettings["providerInstances"],
@@ -80,29 +94,98 @@ export function fallbackTextGenerationModelSelection(
   ) {
     return threadDefault;
   }
+  return { instanceId, model: configuredTextGenerationDefault(driver) };
+}
+
+function matchTextGenerationModel(
+  driver: ProviderDriverKind,
+  requested: string | undefined,
+  models: ReadonlyArray<ServerProviderModel>,
+): string | null {
+  const model = resolveSelectableModel(driver, requested, models);
+  if (model !== null || driver !== "codex") return model;
+  const normalized = normalizeModelSlug(requested, driver);
+  if (normalized === null) return null;
+  const family = codexModelFamily(normalized);
+  return models.find((candidate) => codexModelFamily(candidate.slug) === family)?.slug ?? null;
+}
+
+function textGenerationCatalogDefault(
+  driver: ProviderDriverKind,
+  models: ReadonlyArray<ServerProviderModel>,
+): string | undefined {
+  const capable = models.filter(
+    (model) => !model.isCustom && model.supportsTextGeneration !== false,
+  );
+  const preferred = DEFAULT_TEXT_GENERATION_MODEL_BY_PROVIDER[driver];
+  return (
+    matchTextGenerationModel(driver, preferred, capable) ??
+    (
+      capable.find((model) => model.isDefault === true) ??
+      (driver === "codex" ? capable.find((model) => !model.isLegacy) : undefined) ??
+      capable[0]
+    )?.slug
+  );
+}
+
+export function textGenerationDefaultModel(snapshot: ServerProvider): string {
+  return (
+    textGenerationCatalogDefault(snapshot.driver, snapshot.models) ??
+    configuredTextGenerationDefault(snapshot.driver)
+  );
+}
+
+export function resolveTextGenerationModelSelection(
+  selection: ModelSelection,
+  driver: ProviderDriverKind,
+  models: ReadonlyArray<ServerProviderModel>,
+  customModels: unknown,
+): {
+  readonly selection: ModelSelection;
+  readonly reason: "saved" | "model_unsupported";
+} {
+  const requested = selection.model;
+  // Snapshots can still carry a custom model after its settings entry is removed.
+  const builtIn = models.filter((model) => !model.isCustom);
+  const matched =
+    builtIn.find((model) => model.slug === requested)?.slug ??
+    readCustomModelEntries(customModels).find((model) => model.slug === requested)?.slug ??
+    matchTextGenerationModel(driver, requested, builtIn);
+  const listed = models.find((model) => model.slug === (matched ?? requested));
+  if (matched !== null && listed?.supportsTextGeneration !== false) {
+    return {
+      selection: matched === requested ? selection : { ...selection, model: matched },
+      reason: "saved",
+    };
+  }
+
+  const fallback = textGenerationCatalogDefault(driver, builtIn);
+  // A runtime may dispatch a saved model before discovery fills its catalog.
+  if (fallback === undefined && listed?.supportsTextGeneration !== false) {
+    return { selection, reason: "saved" };
+  }
   return {
-    instanceId,
-    model:
-      DEFAULT_TEXT_GENERATION_MODEL_BY_PROVIDER[driver] ??
-      DEFAULT_MODEL_BY_PROVIDER[driver] ??
-      DEFAULT_TEXT_GENERATION_MODEL,
+    selection: {
+      instanceId: selection.instanceId,
+      model: fallback ?? configuredTextGenerationDefault(driver),
+    },
+    reason: "model_unsupported",
   };
 }
 
-/**
- * The model text generation runs on an instance when its saved model cannot be used, as the
- * Settings picker resolves it: the driver's text generation default, else the status's default
- * or first model that can generate text (Pi and OmO list "default" first).
- */
-export function textGenerationDefaultModel(snapshot: ServerProvider): string {
-  const capable = snapshot.models.filter((model) => model.supportsTextGeneration !== false);
-  const preferred = DEFAULT_TEXT_GENERATION_MODEL_BY_PROVIDER[snapshot.driver];
-  return (
-    capable.find((model) => model.slug === preferred)?.slug ??
-    (capable.find((model) => model.isDefault === true) ?? capable[0])?.slug ??
-    preferred ??
-    DEFAULT_MODEL_BY_PROVIDER[snapshot.driver] ??
-    DEFAULT_TEXT_GENERATION_MODEL
+function resolveSnapshotModel(
+  settings: ServerSettings,
+  selection: ModelSelection,
+  provider: ServerProvider,
+) {
+  const config = settings.providerInstances[selection.instanceId]?.config as
+    | { customModels?: unknown }
+    | undefined;
+  return resolveTextGenerationModelSelection(
+    selection,
+    provider.driver,
+    provider.models,
+    config?.customModels,
   );
 }
 
@@ -216,9 +299,7 @@ export function resolveTextGenerationRoute(
     (projectId === null ||
       resolveProjectProviderInstanceEnabled(settings, projectId, provider.instanceId))
   ) {
-    return isModelTextGenerationCapable(provider, selection.model)
-      ? { selection, reason: "saved" }
-      : { selection: ownDefault(), reason: "model_unsupported" };
+    return resolveSnapshotModel(settings, selection, provider);
   }
   const fallback = resolveTextGenerationFallback(settings, providers, {
     projectId,
@@ -268,17 +349,17 @@ export function resolveReviewGuideModelSelection(
     resolveProjectProviderInstanceEnabled(settings, projectId, selection.instanceId)
   ) {
     const provider = providers?.find((candidate) => candidate.instanceId === selection.instanceId);
+    if (providers === undefined) return selection;
     if (
-      providers === undefined ||
-      (provider?.enabled === true &&
-        isProviderAvailable(provider) &&
-        isProviderTextGenerationCapable(provider) &&
-        isModelTextGenerationCapable(provider, selection.model))
+      provider?.enabled === true &&
+      isProviderAvailable(provider) &&
+      isProviderTextGenerationCapable(provider) &&
+      isModelTextGenerationCapable(provider, selection.model)
     ) {
-      return selection;
+      return resolveSnapshotModel(settings, selection, provider).selection;
     }
   }
-  return agentOnlySelection(
+  const inherited = agentOnlySelection(
     settings,
     providers,
     projectId,
@@ -286,4 +367,8 @@ export function resolveReviewGuideModelSelection(
     true,
     now,
   );
+  const provider = providers?.find((candidate) => candidate.instanceId === inherited.instanceId);
+  return provider === undefined
+    ? inherited
+    : resolveSnapshotModel(settings, inherited, provider).selection;
 }
