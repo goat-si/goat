@@ -1,3 +1,4 @@
+import { listClaudeDiscoveryDirectory } from "../../provider/claudeDiscoveryBudget.ts";
 import * as Effect from "effect/Effect";
 import type * as FileSystem from "effect/FileSystem";
 import type * as Path from "effect/Path";
@@ -8,6 +9,7 @@ import {
 } from "../workflowAgentTranscript.ts";
 
 const TRANSCRIPT_MAX_READS = 8;
+const MAX_PROJECT_PROBES = 128;
 const TRANSCRIPT_FLUSH_WINDOW = "500 millis";
 
 export const readClaudeSubagentEffort = Effect.fn("ClaudeSubagentEffort.read")(function* (input: {
@@ -22,9 +24,7 @@ export const readClaudeSubagentEffort = Effect.fn("ClaudeSubagentEffort.read")(f
   if (path.basename(nativeSessionId) !== nativeSessionId || !/^[A-Za-z0-9_-]{1,128}$/.test(taskId))
     return undefined;
   const projectsDir = path.join(configDir, "projects");
-  const projects = yield* fileSystem
-    .readDirectory(projectsDir)
-    .pipe(Effect.orElseSucceed((): ReadonlyArray<string> => []));
+  const projects = yield* listClaudeDiscoveryDirectory(projectsDir, MAX_PROJECT_PROBES);
   for (const project of projects) {
     const transcriptDir = path.join(projectsDir, project, nativeSessionId, "subagents");
     if (

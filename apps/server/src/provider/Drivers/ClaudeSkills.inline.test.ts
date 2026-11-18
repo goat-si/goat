@@ -20,6 +20,61 @@ const writeSkill = Effect.fn(function* (
 });
 
 it.layer(NodeServices.layer)("Claude inline plugin skills", (it) => {
+  it.effect("skips oversized inline manifests and skill files", () =>
+    Effect.gen(function* () {
+      const fs = yield* FileSystem.FileSystem;
+      const path = yield* Path.Path;
+      const root = yield* fs.makeTempDirectoryScoped();
+      const huge = "x".repeat(1_000_000);
+      const plugin = path.join(root, "plugin");
+      const oversized = path.join(root, "oversized-manifest");
+      const manifestDirectory = path.join(oversized, ".claude-plugin");
+      yield* fs.makeDirectory(manifestDirectory, { recursive: true });
+      yield* fs.writeFileString(
+        path.join(manifestDirectory, "plugin.json"),
+        JSON.stringify({ name: "oversized", description: huge }),
+      );
+      yield* writeSkill(path.join(oversized, "skills"), "unexpected", "# Unexpected");
+      yield* writeSkill(path.join(plugin, "skills"), "large", huge);
+      yield* writeSkill(path.join(plugin, "skills"), "small", "# Small");
+      const skills = yield* discoverClaudeSkills({ homePath: path.join(root, "home") }, root, {
+        CLAUDE_CODE_PLUGIN_DIRS: [oversized, plugin].join(";"),
+      });
+      assert.deepEqual(
+        skills.map((skill) => skill.name),
+        ["plugin:small"],
+      );
+    }).pipe(Effect.provideService(HostProcess.Platform, "win32")),
+  );
+
+  it.effect("bounds inline directory probes and the number of advertised skills", () =>
+    Effect.gen(function* () {
+      const fs = yield* FileSystem.FileSystem;
+      const path = yield* Path.Path;
+      const root = yield* fs.makeTempDirectoryScoped();
+      const bundle = path.join(root, "bundle");
+      const plugin = path.join(root, "plugin");
+      for (let i = 0; i < 300; i++) {
+        yield* fs.makeDirectory(path.join(bundle, `entry-${i}`), { recursive: true });
+        yield* writeSkill(path.join(plugin, "skills"), `skill-${i}`, "# Skill");
+      }
+      let bundleProbes = 0;
+      const skills = yield* discoverClaudeSkills({ homePath: path.join(root, "home") }, root, {
+        CLAUDE_CODE_PLUGIN_DIRS: [bundle, plugin].join(";"),
+      }).pipe(
+        Effect.provideService(FileSystem.FileSystem, {
+          ...fs,
+          exists: (file) => {
+            if (file.startsWith(bundle + path.sep) && file.endsWith("plugin.json")) bundleProbes++;
+            return fs.exists(file);
+          },
+        }),
+      );
+      assert.isAtMost(bundleProbes, 129);
+      assert.lengthOf(skills, 256);
+    }).pipe(Effect.provideService(HostProcess.Platform, "win32")),
+  );
+
   it.effect("discovers inline plugins from CLAUDE_CODE_PLUGIN_DIRS over installed namesakes", () =>
     Effect.gen(function* () {
       const fs = yield* FileSystem.FileSystem;
