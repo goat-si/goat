@@ -5,6 +5,7 @@ import {
   sessionGrantsScope,
   type SessionGrantInput,
 } from "@goat/contracts";
+import { scoreQueryMatch } from "@goat/shared/searchRanking";
 import { Atom } from "effect/reactivity";
 
 import type {
@@ -79,12 +80,36 @@ export function filterFilesystemBrowseEntries(
   const lowerQuery = query.toLowerCase();
   const lowerNormalizedQuery = normalizedQuery.toLowerCase();
   const showHidden = query.startsWith(".");
-  const visibleEntries = entries.filter(
-    (entry) =>
-      (entry.name.toLowerCase().startsWith(lowerQuery) ||
-        entry.name.normalize("NFC").toLowerCase().startsWith(lowerNormalizedQuery)) &&
-      (showHidden || !entry.name.startsWith(".")),
-  );
+  const candidates = entries.filter((entry) => showHidden || !entry.name.startsWith("."));
+  const ranking = {
+    exactBase: 0,
+    prefixBase: 1000,
+    boundaryBase: 2000,
+    includesBase: 3000,
+    fuzzyBase: 4000,
+    boundaryMarkers: [" ", "-", "_", "."],
+  };
+  const visibleEntries =
+    lowerQuery === ""
+      ? candidates
+      : candidates
+          .flatMap((entry) => {
+            const raw = entry.name.toLowerCase();
+            const normalized = entry.name.normalize("NFC").toLowerCase();
+            const rawScore = scoreQueryMatch({ ...ranking, value: raw, query: lowerQuery });
+            const normalizedScore =
+              raw === normalized && lowerQuery === lowerNormalizedQuery
+                ? rawScore
+                : scoreQueryMatch({
+                    ...ranking,
+                    value: normalized,
+                    query: lowerNormalizedQuery,
+                  });
+            const score = Math.min(rawScore ?? Infinity, normalizedScore ?? Infinity);
+            return score === Infinity ? [] : [{ entry, score }];
+          })
+          .sort((left, right) => left.score - right.score)
+          .map(({ entry }) => entry);
   const normalizedMatches = visibleEntries.filter(
     (entry) => entry.name.normalize("NFC") === normalizedQuery,
   );
