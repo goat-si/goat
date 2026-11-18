@@ -313,6 +313,9 @@ export const makeUpsert = (deps: {
           kind: "upsert",
           ...(forgetFence === undefined ? {} : { forgetFence }),
           ...(authorityFirst ? { closedLineage: true as const } : {}),
+          ...(current?.identity?.scopeVersion
+            ? { expectedScopeVersion: current.identity.scopeVersion }
+            : {}),
           memorySpaceId: value.memorySpaceId,
           memoryId: value.memoryId,
           operationId: value.operationId,

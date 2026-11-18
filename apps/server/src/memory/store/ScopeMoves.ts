@@ -1,10 +1,63 @@
 import * as M from "@goat/contracts";
 import * as Effect from "effect/Effect";
+import type * as SqlClient from "effect/sql/SqlClient";
 import type { CoreReads } from "./CoreReads.ts";
 import type { ItemWrites } from "./ItemWrites.ts";
 import type { StoreKernel } from "./StoreKernel.ts";
-import { handleCodec, identityCodec, scopeCodec, stored, stringArrayCodec } from "./StoreCodecs.ts";
+import {
+  handleCodec,
+  identityCodec,
+  keyCodec,
+  scopeCodec,
+  stored,
+  stringArrayCodec,
+} from "./StoreCodecs.ts";
 import { Transaction, hashText, sameHeadSet } from "./StoreModel.ts";
+
+type MoveProjectBinding = { readonly projectId: M.ProjectId; readonly version: number };
+type MoveOperation = Extract<M.MemoryOperation, { kind: "move" }>;
+
+export const findMoveBinding = Effect.fn("MemoryStore.findMoveBinding")(function* (
+  sql: SqlClient.SqlClient,
+  operation: MoveOperation,
+  scope: Extract<M.MemoryScope, { kind: "project" }>,
+  frozen?: MoveProjectBinding,
+) {
+  const key = yield* keyCodec.encode(scope.projectKey);
+  const filter = frozen
+    ? sql`AND b.project_id=${frozen.projectId} AND b.version=${frozen.version}`
+    : sql``;
+  const [binding] = yield* stored(
+    "move-project-binding",
+    sql<MoveProjectBinding>`SELECT b.project_id AS projectId,b.version
+      FROM memory_project_bindings b JOIN projection_projects p ON p.project_id=b.project_id
+      WHERE b.memory_space_id=${operation.memorySpaceId} AND b.environment_id=${operation.originEnvironmentId}
+        AND b.project_key_json=${key} AND p.deleted_at IS NULL ${filter} ORDER BY b.project_id LIMIT 1`,
+  );
+  return binding;
+});
+
+export const moveScopesCurrent = Effect.fn("MemoryStore.moveScopesCurrent")(function* (
+  sql: SqlClient.SqlClient,
+  operation: MoveOperation,
+  binding: MoveProjectBinding | undefined,
+) {
+  const { fromScope, toScope, originEnvironmentId } = operation;
+  if (fromScope.kind === "thread" && fromScope.thread.environmentId !== originEnvironmentId)
+    return false;
+  if (fromScope.kind === "project" && !(yield* findMoveBinding(sql, operation, fromScope)))
+    return false;
+  if (toScope.kind === "project")
+    return binding !== undefined && !!(yield* findMoveBinding(sql, operation, toScope, binding));
+  if (toScope.kind === "user") return true;
+  if (toScope.thread.environmentId !== originEnvironmentId) return false;
+  const rows = yield* stored(
+    "move-thread-target",
+    sql`SELECT 1 FROM orchestration_v2_projection_threads
+    WHERE thread_id=${toScope.thread.threadId} AND deleted_at IS NULL`,
+  );
+  return rows.length > 0;
+});
 
 export const rewriteMemoryScope = Effect.fn("MemoryStore.rewriteMemoryScope")(function* (
   {

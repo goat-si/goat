@@ -88,7 +88,10 @@ export const makeHubAcknowledgement = (deps: {
           return yield* new Store.MemoryStoreConflict({ code: "identity_mismatch" });
         const staged =
           stagedDigest !== undefined ||
-          (operation !== undefined && M.requiresMemoryFloor2(operation));
+          operation?.kind === "move" ||
+          (operation !== undefined &&
+            M.isMemoryRevisionOperation(operation) &&
+            M.requiresMemoryLineageFloor2(operation));
         if (staged || receipt.hubSequence === null) {
           yield* store.acknowledgeOutbox(input.workId, receipt);
           yield* settleSuggestion(input.memorySpaceId, receipt);

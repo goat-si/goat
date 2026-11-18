@@ -183,6 +183,9 @@ export const makeCommitSummary = (deps: {
           {
             protocolVersion: 1,
             kind: "upsert",
+            ...(current.identity?.scopeVersion
+              ? { expectedScopeVersion: current.identity.scopeVersion }
+              : {}),
             ...(dependencies.length > M.MEMORY_DERIVED_REVISIONS_MAX_V1
               ? { closedLineage: true as const }
               : {}),
@@ -327,6 +330,9 @@ export const makeCommitSummary = (deps: {
           {
             protocolVersion: 1,
             kind: "upsert",
+            ...(current.identity?.scopeVersion
+              ? { expectedScopeVersion: current.identity.scopeVersion }
+              : {}),
             ...(dependencies.length > M.MEMORY_DERIVED_REVISIONS_MAX_V1
               ? { closedLineage: true as const }
               : {}),

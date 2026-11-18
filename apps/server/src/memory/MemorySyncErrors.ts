@@ -1,4 +1,4 @@
-import type * as M from "@goat/contracts";
+import * as M from "@goat/contracts";
 import type * as Hub from "./MemoryHubService.ts";
 import type * as Store from "./MemoryStore.ts";
 
@@ -31,3 +31,8 @@ export const transient = (e: Error) =>
   e._tag === "MemoryStorageError" ||
   (e._tag === "MemoryHubError" &&
     ["unavailable", "storage_failed", "cursor_expired"].includes(e.code));
+
+export const refusedSync = (operation: M.MemoryOperation, code: M.MemoryFailureCode) =>
+  (operation.kind === "move" && code === "source_invalidated") ||
+  (M.requiresMemoryFloor2(operation) &&
+    (code === "unsupported_protocol" || code === "hub_upgrade_required"));

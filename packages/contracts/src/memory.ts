@@ -499,7 +499,10 @@ const moveFields = {
   expectedScopeVersion: NonNegativeInt,
 };
 
-const floorOperation = { forgetFence: Schema.optionalKey(NonNegativeInt) };
+const floorOperation = {
+  forgetFence: Schema.optionalKey(NonNegativeInt),
+  expectedScopeVersion: Schema.optionalKey(PositiveInt),
+};
 
 export const MemoryOperation = bounded(
   Schema.Union([
@@ -682,6 +685,9 @@ export function encodeMemoryOperation(operation: MemoryOperation): string {
         revision: value.revision,
         payload: value.payload,
         ...(value.forgetFence === undefined ? {} : { forgetFence: value.forgetFence }),
+        ...(value.expectedScopeVersion === undefined
+          ? {}
+          : { expectedScopeVersion: value.expectedScopeVersion }),
       });
     case "move":
       return encodeOperationJson({
@@ -700,6 +706,9 @@ export function encodeMemoryOperation(operation: MemoryOperation): string {
         revision: value.revision,
         payload: value.payload,
         ...(value.forgetFence === undefined ? {} : { forgetFence: value.forgetFence }),
+        ...(value.expectedScopeVersion === undefined
+          ? {}
+          : { expectedScopeVersion: value.expectedScopeVersion }),
         resolution: value.resolution,
         resolutionPayload: value.resolutionPayload,
         conflictId: value.conflictId,
@@ -712,6 +721,9 @@ export function encodeMemoryOperation(operation: MemoryOperation): string {
         revision: value.revision,
         payload: value.payload,
         ...(value.forgetFence === undefined ? {} : { forgetFence: value.forgetFence }),
+        ...(value.expectedScopeVersion === undefined
+          ? {}
+          : { expectedScopeVersion: value.expectedScopeVersion }),
         revertsResolutionId: value.revertsResolutionId,
         restoredRevisionId: value.restoredRevisionId,
       });
@@ -758,6 +770,9 @@ export function encodeMemoryEventMetadata(operation: MemoryOperation): string {
   const common = {
     ...operationEnvelope(operation),
     kind: operation.kind,
+    ...(operation.kind !== "forget" && operation.expectedScopeVersion !== undefined
+      ? { expectedScopeVersion: operation.expectedScopeVersion }
+      : {}),
     ...(operation.kind !== "forget" && operation.forgetFence !== undefined
       ? { forgetFence: operation.forgetFence }
       : {}),

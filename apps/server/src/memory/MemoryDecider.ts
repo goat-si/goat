@@ -136,6 +136,8 @@ export function decideMemoryOperation(
     fail("conflict_changed");
   if (current.identity && JSON.stringify(current.identity.scope) !== JSON.stringify(r.scope))
     fail("identity_mismatch");
+  if (!replica && (operation.expectedScopeVersion ?? 0) !== (current.identity?.scopeVersion ?? 0))
+    fail("revision_changed");
   const revisions = new Map(
     current.revisions.map((pair) => [pair.revision.revisionId, pair.revision]),
   );

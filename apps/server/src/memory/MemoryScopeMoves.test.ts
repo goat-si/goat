@@ -284,7 +284,8 @@ describe("negotiated memory scope moves", () => {
               `sync:${space}:${optimistic.receipt.operationId}`,
             );
             if (!queued) throw new Error("Expected the optimistic edit in the outbox");
-            assert.isFalse(M.requiresMemoryFloor2(queued));
+            assert.include(queued, { expectedScopeVersion: 1 });
+            assert.isTrue(M.requiresMemoryFloor2(queued));
           }).pipe(Effect.provide(Layer.fresh(core)));
         }
         const moveBack = decodeOperation({

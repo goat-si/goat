@@ -29,7 +29,7 @@ import {
   requireClosureCapacity,
   validateSummaryDependencies,
 } from "./MemoryDependencies.ts";
-import type { PromotionPrerequisite } from "./store/FloorWrites.ts";
+import type { FloorWriteMetadata } from "./store/FloorWrites.ts";
 import { Transaction as StoreTransaction } from "./store/StoreModel.ts";
 import * as Settings from "../serverSettings.ts";
 import {
@@ -618,7 +618,7 @@ const make = Effect.fnUntraced(function* (
     admission: Store.MemoryAdmissionContext,
     permit: Permit,
     approval?: M.MemoryHubReceipt,
-    promotion?: PromotionPrerequisite,
+    floorMetadata?: FloorWriteMetadata,
   ) {
     const digest =
       approval?.operationDigest ??
@@ -694,13 +694,13 @@ const make = Effect.fnUntraced(function* (
         if (
           admission.kind === "localIntent" &&
           (op.kind === "upsert" || op.kind === "move") &&
-          M.requiresMemoryFloor2(op)
+          (op.kind === "move" || M.requiresMemoryLineageFloor2(op))
         ) {
           if (!(yield* store.hubFloorActive(op.memorySpaceId)))
             return yield* new Store.MemoryStoreConflict({ code: "hub_upgrade_required" });
           return yield* quota.withAdmission(
             { operation: op, admission, environmentId, receipt: decision.receipt },
-            Effect.andThen(permit, store.stageFloorWrite(op, promotion)).pipe(
+            Effect.andThen(permit, store.stageFloorWrite(op, floorMetadata)).pipe(
               Effect.as({
                 operationDigest: digest,
                 receipt: { ...decision.receipt, revisionId: null, pendingSync: true },
@@ -1013,6 +1013,9 @@ const make = Effect.fnUntraced(function* (
               {
                 protocolVersion: 1,
                 kind: "upsert",
+                ...(current.identity?.scopeVersion
+                  ? { expectedScopeVersion: current.identity.scopeVersion }
+                  : {}),
                 ...(forgetFence === undefined ? {} : { forgetFence }),
                 memorySpaceId: batch.memorySpaceId,
                 memoryId: next.memoryId,
@@ -1291,7 +1294,7 @@ const make = Effect.fnUntraced(function* (
     store,
     sql,
     environmentId,
-    apply,
+    apply: (op, permit, metadata) => apply(op, Store.localIntent, permit, undefined, metadata),
     requireSharing,
     ...(submitFloorWrite ? { submitFloorWrite } : {}),
   });
@@ -1474,6 +1477,9 @@ const make = Effect.fnUntraced(function* (
           protocolVersion: 1 as const,
           ...(forgetFence === undefined ? {} : { forgetFence }),
           kind: "revert" as const,
+          ...(current.identity?.scopeVersion
+            ? { expectedScopeVersion: current.identity.scopeVersion }
+            : {}),
           memorySpaceId: value.memorySpaceId,
           memoryId: value.memoryId,
           operationId: value.operationId,
