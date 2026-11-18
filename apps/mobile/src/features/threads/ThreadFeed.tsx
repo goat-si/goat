@@ -1802,7 +1802,7 @@ function UserMessageMarkdownContent(props: UserMessageContentProps) {
         contextClipboardFragment={contextClipboardFragment}
         skills={props.skills}
         textStyle={props.markdownStyles.nativeTextStyle}
-        preserveSoftBreaks
+        preserveLeadingWhitespace
         {...props.linkHandlers}
         renderImage={props.renderImage}
       />
@@ -1834,7 +1834,7 @@ function UserMessageMarkdownContent(props: UserMessageContentProps) {
             contextClipboardFragment={contextClipboardFragment}
             skills={props.skills}
             textStyle={props.markdownStyles.nativeTextStyle}
-            preserveSoftBreaks
+            preserveLeadingWhitespace
             {...props.linkHandlers}
             renderImage={props.renderImage}
           />

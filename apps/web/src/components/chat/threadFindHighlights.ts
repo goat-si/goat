@@ -59,8 +59,11 @@ export function collectThreadFindRanges(container: HTMLElement, query: string): 
       if (block) flush();
       if (node.nodeType === 3) {
         const value = node.nodeValue ?? "";
-        const start = text.length;
-        text += inPre ? value : value.replace(/\r?\n/g, " ");
+        const skip = node.previousSibling?.nodeName === "BR" && value.startsWith("\n") ? 1 : 0;
+        if (skip === value.length) return;
+        const start = text.length - skip;
+        const content = value.slice(skip);
+        text += inPre ? content : content.replace(/\r?\n/g, " ");
         nodes.push({ node, start, end: text.length });
       }
       for (const child of node.childNodes) visit(child, inPre || tag === "pre");
