@@ -250,10 +250,11 @@ export function foldIntoQueuedNotice(
     queued.notification.aboutRunId !== command.notification.aboutRunId
   )
     return undefined;
-  const notices = foldNotice(parseNotices(queued.id, queued.text), {
-    id: command.messageId,
-    text: command.text,
-  });
+  // A pull request watch pass can send several notices as one digest; each folds on its own.
+  const notices = parseNotices(command.messageId, command.text).reduce(
+    (digest, notice) => foldNotice(digest, notice),
+    parseNotices(queued.id, queued.text),
+  );
   return {
     type: "message.updated",
     threadId: command.threadId,

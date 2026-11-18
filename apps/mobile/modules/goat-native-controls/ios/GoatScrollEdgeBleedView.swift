@@ -19,6 +19,8 @@ final class GoatScrollEdgeBleedView: ExpoView {
   /// React Native's clipping, saved while bleeding. React Native only rewrites it when the
   /// `overflow` style changes, so it stays off while bleeding.
   private var containerClipped: Bool?
+  private weak var observedWindow: UIWindow?
+  private var windowTraitRegistration: (any UITraitChangeRegistration)?
 
   required init(appContext: AppContext? = nil) {
     super.init(appContext: appContext)
@@ -37,7 +39,31 @@ final class GoatScrollEdgeBleedView: ExpoView {
 
   override func didMoveToWindow() {
     super.didMoveToWindow()
+    observeWindowTraits()
     if window == nil { detach() } else { setNeedsLayout() }
+  }
+
+  override func safeAreaInsetsDidChange() {
+    super.safeAreaInsetsDidChange()
+    setNeedsLayout()
+  }
+
+  private func observeWindowTraits() {
+    guard observedWindow !== window else { return }
+    if let observedWindow, let windowTraitRegistration {
+      observedWindow.unregisterForTraitChanges(windowTraitRegistration)
+    }
+    observedWindow = window
+    windowTraitRegistration = nil
+    #if canImport(UIKit, _version: 9127.0.85)
+    if #available(iOS 27.1, *), let window {
+      windowTraitRegistration = window.registerForTraitChanges(
+        UITraitCollection.systemTraitsAffectingVerticalBarEdge
+      ) { [weak self] (_: UIWindow, _: UITraitCollection) in
+        self?.setNeedsLayout()
+      }
+    }
+    #endif
   }
 
   override func didAddSubview(_ subview: UIView) {
@@ -96,7 +122,7 @@ final class GoatScrollEdgeBleedView: ExpoView {
     #if canImport(UIKit, _version: 9127.0.85)
     if #available(iOS 27.1, *) {
       let rtl = effectiveUserInterfaceLayoutDirection == .rightToLeft
-      switch traitCollection.verticalBarEdge {
+      switch (window?.traitCollection ?? traitCollection).verticalBarEdge {
       case .leading: return rtl ? .right : .left
       case .trailing: return rtl ? .left : .right
       default: return nil
@@ -132,11 +158,6 @@ final class GoatScrollEdgeBleedView: ExpoView {
       // The scroll view itself still clips its content.
       containerClipped = containerClipped ?? true
       container.layer.masksToBounds = false
-    }
-    var indicators = scrollView.verticalScrollIndicatorInsets
-    if indicators.right != bleed.right {
-      indicators.right = bleed.right
-      scrollView.verticalScrollIndicatorInsets = indicators
     }
     applied = bleeding
   }

@@ -274,10 +274,14 @@ export const makeSurface = <Tab extends ScreenTab>(
   ) => void,
   /** Draws a pointer outside the viewers: the desktop host and a recording. */
   drawPointer: (tab: Tab, pointer: AgentPointer) => void = () => {},
+  findControlTab: (
+    threadId: string,
+    tabId: string,
+  ) => Pick<ScreenTab, "threadId" | "tabId" | "control"> | undefined = findTab,
 ) => {
   const listeners = new Set<AuthorityListener>();
   const handoffListeners = new Set<(changed: HandoffChanged) => void>();
-  const watched = new WeakSet<Tab>();
+  const watched = new WeakSet<SessionControl>();
   const cursorByTab = new WeakMap<Tab, AgentCursorSnapshot>();
   /** Where the agent's pointer last was on each tab, and on which document. */
   const pointerByTab = new WeakMap<Tab, { x: number; y: number; document?: number }>();
@@ -357,23 +361,28 @@ export const makeSurface = <Tab extends ScreenTab>(
         showPointer(tab, last.x, last.y, "move");
       return sent;
     });
+  const watchHandoffs = (tab: Pick<ScreenTab, "threadId" | "tabId" | "control">) => {
+    if (!watched.has(tab.control)) {
+      watched.add(tab.control);
+      tab.control.onHandoffChange((change, requestId) => {
+        for (const listener of handoffListeners)
+          listener({ threadId: tab.threadId, tabId: tab.tabId, change, requestId });
+      });
+    }
+  };
   const requestHandoff: NonNullable<SurfaceService["requestHandoff"]> = (input) =>
     Effect.sync(() => {
-      const tab = findTab(input.threadId, input.tabId);
+      const tab = findControlTab(input.threadId, input.tabId);
       if (!tab || tab.control.agentId === null) return false;
-      if (!watched.has(tab)) {
-        watched.add(tab);
-        tab.control.onHandoffChange((change, requestId) => {
-          for (const listener of handoffListeners)
-            listener({ threadId: tab.threadId, tabId: tab.tabId, change, requestId });
-        });
-      }
+      watchHandoffs(tab);
       return tab.control.requestHandoff(input.reason, input.requestId);
     });
   const endHandoff: NonNullable<SurfaceService["endHandoff"]> = (input) =>
-    Effect.sync(() => findTab(input.threadId, input.tabId)?.control.endHandoff(null));
+    Effect.sync(() => findControlTab(input.threadId, input.tabId)?.control.endHandoff(null));
   const noteHandBack: NonNullable<SurfaceService["noteHandBack"]> = (input) =>
-    Effect.sync(() => findTab(input.threadId, input.tabId)?.control.noteHandBack(input.notice));
+    Effect.sync(() =>
+      findControlTab(input.threadId, input.tabId)?.control.noteHandBack(input.notice),
+    );
   const onHandoffChange = (listener: (changed: HandoffChanged) => void) => {
     handoffListeners.add(listener);
     return () => void handoffListeners.delete(listener);
@@ -383,6 +392,7 @@ export const makeSurface = <Tab extends ScreenTab>(
     showPointer,
     notePointer,
     framed,
+    watchHandoffs,
     service: {
       onAuthorityChange,
       cursorState,

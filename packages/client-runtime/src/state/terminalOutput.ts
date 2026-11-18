@@ -1,4 +1,5 @@
 import {
+  retainedTerminalHistory,
   TERMINAL_SEQUENCE_GROUND,
   terminalSequenceEnd,
   terminalSequenceStateAfter,
@@ -104,36 +105,6 @@ function splitStringByUtf8Bytes(data: string, maxBytes: number): ReadonlyArray<U
   }
 
   return chunks;
-}
-
-function trimBufferToBytes(buffer: string, maxBufferBytes: number): string {
-  if (maxBufferBytes <= 0) {
-    return "";
-  }
-
-  const encoded = textEncoder.encode(buffer);
-  if (encoded.byteLength <= maxBufferBytes) {
-    return buffer;
-  }
-
-  let start = encoded.byteLength - maxBufferBytes;
-  while (start < encoded.length) {
-    const byte = encoded[start];
-    if (byte === undefined || (byte & 0b1100_0000) !== 0b1000_0000) {
-      break;
-    }
-    start += 1;
-  }
-
-  const retained = textDecoder.decode(encoded.subarray(start));
-  // A cut inside a control sequence would replay the rest of it as text.
-  const state = terminalSequenceStateAfter(
-    TERMINAL_SEQUENCE_GROUND,
-    buffer,
-    0,
-    buffer.length - retained.length,
-  );
-  return retained.slice(terminalSequenceEnd(state, retained));
 }
 
 function splitOutputChunks(
@@ -286,7 +257,7 @@ function resetOutput(
   data: string,
   maxBufferBytes: number,
 ): TerminalOutputState {
-  const retained = trimBufferToBytes(data, maxBufferBytes);
+  const retained = retainedTerminalHistory(data, maxBufferBytes);
   const reset = splitOutputChunks(
     retained,
     0,

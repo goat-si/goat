@@ -956,18 +956,18 @@ const preWarmImpl = (
     }),
   ).pipe(Effect.timeoutOption(PRE_WARM_TIMEOUT), Effect.ignore);
 
-const windowsToWslPathImpl = (
+export const windowsToWslPathImpl = (
   distro: string | null,
   windowsPath: string,
 ): Effect.Effect<Option.Option<string>, never, ChildProcessSpawner.ChildProcessSpawner> => {
-  // wsl.exe interprets backslashes as escape chars; normalize to forward slashes.
+  // Normalize Windows separators and bypass the distro shell to keep the path literal.
   const normalized = windowsPath.replaceAll("\\", "/");
   return Effect.scoped(
     Effect.gen(function* () {
       const spawner = yield* ChildProcessSpawner.ChildProcessSpawner;
       const command = ChildProcess.make(
         "wsl.exe",
-        [...buildDistroArgs(distro), "--", "wslpath", "-u", normalized],
+        [...buildDistroArgs(distro), "--exec", "wslpath", "-u", normalized],
         {
           stdin: "ignore",
           stdout: "pipe",
