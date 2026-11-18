@@ -2,6 +2,7 @@ import type { InteractionUpdate, RunResult, SDKUserMessage, ToolCall } from "@cu
 import * as HostProcess from "@goat/shared/HostProcess";
 import { cursorToolFailed } from "./toolPresentation.ts";
 import { makeCursorTurnProjection } from "./turnProjection.ts";
+import { makeCursorTaskProjection, makeTaskProjectionState } from "./taskProjection.ts";
 import {
   isOrchestrationV2WorkActive,
   defaultInstanceIdForDriver,
@@ -319,12 +320,9 @@ export const makeCursorAdapterV2 = Effect.fn("makeCursorAdapterV2")(function* (
             return ordinal;
           });
 
-        const { emitAssistant, emitReasoning, emitToolArtifacts } = makeCursorTurnProjection(
-          idAllocator.derive,
-          path,
-          emitProviderEvent,
-          resolveItemOrdinal,
-        );
+        const projection = makeCursorTurnProjection(idAllocator.derive, path, emitProviderEvent);
+        const { emitAssistant, emitReasoning, emitToolArtifacts } = projection;
+        const { handleTaskUpdate, completeTaskWork } = makeCursorTaskProjection(projection);
 
         const resolvePlanId = Effect.fnUntraced(function* (
           context: ActiveCursorTurn,
@@ -364,9 +362,11 @@ export const makeCursorAdapterV2 = Effect.fn("makeCursorAdapterV2")(function* (
         }) {
           if (input.stream.current === null) {
             input.stream.nextSegment += 1;
+            const nativeItemId = `${input.kind}:${input.context.run.runId}:${input.stream.nextSegment}`;
             input.stream.current = {
-              nativeItemId: `${input.kind}:${input.context.run.runId}:${input.stream.nextSegment}`,
+              nativeItemId,
               startedAt: yield* DateTime.now,
+              ordinal: yield* resolveItemOrdinal(input.context, nativeItemId),
               text: "",
             };
           }
@@ -377,7 +377,7 @@ export const makeCursorAdapterV2 = Effect.fn("makeCursorAdapterV2")(function* (
           if (context.assistant.current === null) {
             return;
           }
-          yield* emitAssistant(context, true);
+          yield* emitAssistant(parentTarget(context), context.assistant.current, true);
           context.assistant.current = null;
         });
 
@@ -385,7 +385,7 @@ export const makeCursorAdapterV2 = Effect.fn("makeCursorAdapterV2")(function* (
           if (context.reasoning.current === null) {
             return;
           }
-          yield* emitReasoning(context, true);
+          yield* emitReasoning(parentTarget(context), context.reasoning.current, true);
           context.reasoning.current = null;
         });
 
@@ -609,12 +609,11 @@ export const makeCursorAdapterV2 = Effect.fn("makeCursorAdapterV2")(function* (
                 ? "failed"
                 : "completed"
               : "running");
-          const resultText = [
+          const resultParts = [
             ...assistantTextsFromConversationSteps(result?.conversationSteps ?? []),
             ...(result?.resultSuffix === undefined ? [] : [result.resultSuffix]),
-          ]
-            .filter((part) => part.trim().length > 0)
-            .join("\n");
+          ].filter((part) => part.trim().length > 0);
+          const resultText = resultParts.join("\n");
           const nativeItemId = input.callId;
           const nodeId =
             existing?.task.id ??
@@ -682,6 +681,7 @@ export const makeCursorAdapterV2 = Effect.fn("makeCursorAdapterV2")(function* (
             turnItemOrdinal:
               existing?.turnItemOrdinal ?? (yield* resolveItemOrdinal(input.context, nativeItemId)),
             nextChildOrdinal: existing?.nextChildOrdinal ?? 100,
+            projection: existing?.projection ?? makeTaskProjectionState(),
             resultProjected: existing?.resultProjected ?? false,
           };
           input.context.subagents.set(input.callId, subagent);
@@ -822,29 +822,13 @@ export const makeCursorAdapterV2 = Effect.fn("makeCursorAdapterV2")(function* (
           });
 
           if (input.completed && !subagent.resultProjected) {
-            for (const [index, nestedTool] of toolCallsFromConversationSteps(
-              result?.conversationSteps ?? [],
-            ).entries()) {
-              const callId = `${nativeItemId}:child-tool:${nestedTool.callId || index + 1}`;
-              const startedAt = task.startedAt ?? now;
-              const active: ActiveCursorToolCall = {
-                callId,
-                toolCall: nestedTool.toolCall,
-                target: {
-                  threadId: childThreadId,
-                  runId: null,
-                  rootNodeId: childRootNodeId,
-                  parentNodeId: childRootNodeId,
-                  providerThreadId: null,
-                  providerTurnId: null,
-                },
-                ordinal: ++subagent.nextChildOrdinal,
-                startedAt,
-                streamedOutput: "",
-              };
-              yield* emitToolArtifacts({ active, completed: true });
-            }
-            if (task.result !== null && task.result.length > 0) {
+            const unstreamedResult = yield* completeTaskWork(
+              subagent,
+              toolCallsFromConversationSteps(result?.conversationSteps ?? []),
+              task.status,
+              resultParts,
+            );
+            if (unstreamedResult.length > 0) {
               const resultNativeId = `${nativeItemId}:result`;
               const resultArtifacts = makeSubagentConversationArtifacts({
                 messageId: idAllocator.derive.messageFromProviderItem({
@@ -865,7 +849,7 @@ export const makeCursorAdapterV2 = Effect.fn("makeCursorAdapterV2")(function* (
                   strength: "weak",
                 },
                 role: "assistant",
-                text: task.result,
+                text: unstreamedResult,
                 ordinal: ++subagent.nextChildOrdinal,
                 now,
               });
@@ -981,7 +965,7 @@ export const makeCursorAdapterV2 = Effect.fn("makeCursorAdapterV2")(function* (
                 kind: "assistant",
                 text: update.text,
               });
-              yield* emitAssistant(context, false);
+              yield* emitAssistant(parentTarget(context), context.assistant.current, false);
               return;
             case "thinking-delta":
               yield* completeAssistant(context);
@@ -991,7 +975,7 @@ export const makeCursorAdapterV2 = Effect.fn("makeCursorAdapterV2")(function* (
                 kind: "reasoning",
                 text: update.text,
               });
-              yield* emitReasoning(context, false);
+              yield* emitReasoning(parentTarget(context), context.reasoning.current, false);
               return;
             case "thinking-completed":
               yield* completeReasoning(context);
@@ -1002,6 +986,9 @@ export const makeCursorAdapterV2 = Effect.fn("makeCursorAdapterV2")(function* (
               yield* completeAssistant(context);
               yield* completeReasoning(context);
               yield* handleToolUpdate(context, update);
+              return;
+            case "tool-call-delta":
+              yield* handleTaskUpdate(context, update);
               return;
             case "step-completed":
             case "turn-ended":

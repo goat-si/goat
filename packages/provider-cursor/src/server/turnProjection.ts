@@ -6,7 +6,11 @@ import * as DateTime from "effect/DateTime";
 import * as Effect from "effect/Effect";
 import type * as Path from "effect/Path";
 import { CURSOR_PROVIDER } from "./CursorAgentSdk.ts";
-import type { ActiveCursorToolCall, ActiveCursorTurn } from "./activeTurn.ts";
+import type {
+  ActiveCursorToolCall,
+  ActiveCursorTextSegment,
+  CursorProjectionTarget,
+} from "./activeTurn.ts";
 import { formatReadToolLabel, formatSearchToolLabel } from "@goat/shared/toolActivity";
 import { cursorToolOutput } from "./toolOutput.ts";
 import {
@@ -22,18 +26,16 @@ export function makeCursorTurnProjection(
   derive: IdAllocatorV2Derive,
   path: Path.Path,
   emitProviderEvent: (event: ProviderAdapterV2Event) => Effect.Effect<void>,
-  resolveItemOrdinal: (context: ActiveCursorTurn, nativeItemId: string) => Effect.Effect<number>,
 ) {
   const emitAssistant = Effect.fnUntraced(function* (
-    context: ActiveCursorTurn,
+    target: CursorProjectionTarget,
+    segment: ActiveCursorTextSegment | null,
     completed: boolean,
   ) {
-    const segment = context.assistant.current;
     if (segment === null || segment.text.length === 0) {
       return;
     }
     const now = yield* DateTime.now;
-    const ordinal = yield* resolveItemOrdinal(context, segment.nativeItemId);
     const nodeId = derive.nodeFromProviderItem({
       driver: CURSOR_PROVIDER,
       nativeItemId: segment.nativeItemId,
@@ -56,15 +58,15 @@ export function makeCursorTurnProjection(
       driver: CURSOR_PROVIDER,
       node: {
         id: nodeId,
-        threadId: context.input.threadId,
-        runId: context.input.runId,
-        parentNodeId: context.input.rootNodeId,
-        rootNodeId: context.input.rootNodeId,
+        threadId: target.threadId,
+        runId: target.runId,
+        parentNodeId: target.parentNodeId,
+        rootNodeId: target.rootNodeId,
         kind: "assistant_message",
         status: completed ? "completed" : "running",
         countsForRun: false,
-        providerThreadId: context.input.providerThread.id,
-        providerTurnId: context.providerTurnId,
+        providerThreadId: target.providerThreadId,
+        providerTurnId: target.providerTurnId,
         nativeItemRef,
         runtimeRequestId: null,
         checkpointScopeId: null,
@@ -79,8 +81,8 @@ export function makeCursorTurnProjection(
         createdBy: "agent",
         creationSource: "provider",
         id: messageId,
-        threadId: context.input.threadId,
-        runId: context.input.runId,
+        threadId: target.threadId,
+        runId: target.runId,
         nodeId,
         role: "assistant",
         text: segment.text,
@@ -95,14 +97,14 @@ export function makeCursorTurnProjection(
       driver: CURSOR_PROVIDER,
       turnItem: {
         id: turnItemId,
-        threadId: context.input.threadId,
-        runId: context.input.runId,
+        threadId: target.threadId,
+        runId: target.runId,
         nodeId,
-        providerThreadId: context.input.providerThread.id,
-        providerTurnId: context.providerTurnId,
+        providerThreadId: target.providerThreadId,
+        providerTurnId: target.providerTurnId,
         nativeItemRef,
         parentItemId: null,
-        ordinal,
+        ordinal: segment.ordinal,
         status: completed ? "completed" : "running",
         title: null,
         startedAt: segment.startedAt,
@@ -117,15 +119,14 @@ export function makeCursorTurnProjection(
   });
 
   const emitReasoning = Effect.fnUntraced(function* (
-    context: ActiveCursorTurn,
+    target: CursorProjectionTarget,
+    segment: ActiveCursorTextSegment | null,
     completed: boolean,
   ) {
-    const segment = context.reasoning.current;
     if (segment === null || segment.text.length === 0) {
       return;
     }
     const now = yield* DateTime.now;
-    const ordinal = yield* resolveItemOrdinal(context, segment.nativeItemId);
     const nodeId = derive.nodeFromProviderItem({
       driver: CURSOR_PROVIDER,
       nativeItemId: segment.nativeItemId,
@@ -144,15 +145,15 @@ export function makeCursorTurnProjection(
       driver: CURSOR_PROVIDER,
       node: {
         id: nodeId,
-        threadId: context.input.threadId,
-        runId: context.input.runId,
-        parentNodeId: context.input.rootNodeId,
-        rootNodeId: context.input.rootNodeId,
+        threadId: target.threadId,
+        runId: target.runId,
+        parentNodeId: target.parentNodeId,
+        rootNodeId: target.rootNodeId,
         kind: "reasoning",
         status: completed ? "completed" : "running",
         countsForRun: false,
-        providerThreadId: context.input.providerThread.id,
-        providerTurnId: context.providerTurnId,
+        providerThreadId: target.providerThreadId,
+        providerTurnId: target.providerTurnId,
         nativeItemRef,
         runtimeRequestId: null,
         checkpointScopeId: null,
@@ -165,14 +166,14 @@ export function makeCursorTurnProjection(
       driver: CURSOR_PROVIDER,
       turnItem: {
         id: turnItemId,
-        threadId: context.input.threadId,
-        runId: context.input.runId,
+        threadId: target.threadId,
+        runId: target.runId,
         nodeId,
-        providerThreadId: context.input.providerThread.id,
-        providerTurnId: context.providerTurnId,
+        providerThreadId: target.providerThreadId,
+        providerTurnId: target.providerTurnId,
         nativeItemRef,
         parentItemId: null,
-        ordinal,
+        ordinal: segment.ordinal,
         status: completed ? "completed" : "running",
         title: null,
         startedAt: segment.startedAt,
