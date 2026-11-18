@@ -19,6 +19,50 @@ export const dispatchError = (
     : new McpSchema.InternalError({ message: error.message });
 
 /**
+ * The client a nested call runs as. A stateful request carries its own `McpServerClient`. A
+ * 2026-07-28 request has no session, so Effect provides only `McpRequestContext`, yet
+ * `McpServer.callTool` still reads an `McpServerClient`; this one is built from the request and
+ * has no reverse channel, which no GOAT tool uses.
+ */
+const nestedCallClient = Effect.gen(function* () {
+  const client = yield* Effect.serviceOption(McpSchema.McpServerClient);
+  if (Option.isSome(client)) return client.value;
+  const request = yield* Effect.serviceOption(McpSchema.McpRequestContext);
+  if (Option.isNone(request)) {
+    return yield* Effect.die(new Error("Nested MCP tool call outside an MCP request"));
+  }
+  const { clientId, clientCapabilities, requestMetadata } = request.value;
+  // Effect types this field as a stateful version; the nested call keeps the request's own.
+  const protocolVersion = request.value
+    .protocolVersion as McpSchema.McpServerClient["Service"]["protocolVersion"];
+  const clientInfo = request.value.clientInfo ?? { name: "unknown", version: "unknown" };
+  return McpSchema.McpServerClient.of({
+    clientId,
+    protocolVersion,
+    clientCapabilities,
+    clientInfo,
+    initializePayload: { protocolVersion, capabilities: clientCapabilities, clientInfo },
+    requestMetadata,
+    getClient: Effect.die(new Error(`MCP ${protocolVersion} has no server-to-client channel`)),
+  });
+});
+
+/**
+ * Runs a nested `McpServer.callTool` as the request's own client, failing with the two errors
+ * dispatch callers handle.
+ */
+export const asNestedCall = <A>(
+  callTool: Effect.Effect<
+    A,
+    McpSchema.InvalidParams | McpSchema.InternalError | McpSchema.McpErrorBase,
+    McpSchema.McpServerClient
+  >,
+) =>
+  Effect.flatMap(nestedCallClient, (client) =>
+    Effect.provideService(callTool, McpSchema.McpServerClient, client),
+  ).pipe(Effect.mapError(dispatchError));
+
+/**
  * Calls registered tools by name through the same handle /mcp serves, so each
  * call keeps its own argument refusal and McpToolAccess checks. McpHttpServer
  * builds it, since only it may hold Effect's McpServer.
