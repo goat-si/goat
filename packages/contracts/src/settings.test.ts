@@ -41,15 +41,6 @@ const decodeMemoryHubSettings = Schema.decodeSync(MemoryHubSettings);
 const decodeUnknownMemoryHubSettings = Schema.decodeUnknownSync(MemoryHubSettings);
 const decodeMemoryHubSettingsUpdate = Schema.decodeSync(MemoryHubSettingsUpdateInput);
 
-it("showPenMachines defaults on and round-trips a disabled patch", () => {
-  expect(decodeClientSettings({}).showPenMachines).toBe(true);
-  expect(decodeClientSettings({ showPenMachines: false }).showPenMachines).toBe(false);
-  const patch = decodeClientSettingsPatch({ showPenMachines: false });
-  expect(patch.showPenMachines).toBe(false);
-  expect(
-    decodeClientSettings(encodeClientSettings(decodeClientSettings(patch))).showPenMachines,
-  ).toBe(false);
-});
 it("defaults blocked browser hosts to empty and normalizes valid writes", () => {
   expect(decodeServerSettings({}).blockedBrowserHosts).toEqual([]);
   expect(

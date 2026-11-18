@@ -37,3 +37,6 @@ export const layer = SshRemoteDispatch.layer.pipe(
   Layer.provide(LinkedHosts.layer.pipe(Layer.provide(DisposableRouteGuard.layer))),
   Layer.provide(layerPenRoutes),
 );
+
+/** Dispatch with the Pen aliases it guards, for HubNodes, which writes them. */
+export const layerWithPenRoutes = Layer.merge(layer, layerPenRoutes);

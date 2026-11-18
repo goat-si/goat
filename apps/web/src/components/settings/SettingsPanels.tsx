@@ -71,6 +71,7 @@ import { ScopedSwitch } from "./ScopedSwitch";
 import { stackedThreadToast, toastManager } from "../ui/toast";
 import {
   getChangedBrowserSettingLabels,
+  getChangedSettingLabels,
   getChangedTypographySettingLabels,
   hasChangedBackgroundActivitySettings,
   isProjectGroupingEnabled,
@@ -233,22 +234,14 @@ export function useSettingsRestore(onRestored?: () => void) {
       ? ["Composer context"]
       : []),
     ...getChangedTypographySettingLabels(settings),
-    ...(settings.diffFilesCollapsed !== DEFAULT_UNIFIED_SETTINGS.diffFilesCollapsed
-      ? ["Default diff file state"]
-      : []),
-    ...(settings.diffIgnoreWhitespace !== DEFAULT_UNIFIED_SETTINGS.diffIgnoreWhitespace
-      ? ["Diff whitespace changes"]
-      : []),
-    ...(settings.diffLayout !== DEFAULT_UNIFIED_SETTINGS.diffLayout ? ["Diff layout"] : []),
-    ...(settings.proactivePanelsEnabled !== DEFAULT_UNIFIED_SETTINGS.proactivePanelsEnabled
-      ? ["Open pull requests and changes panels proactively"]
-      : []),
-    ...(settings.showPenMachines !== DEFAULT_UNIFIED_SETTINGS.showPenMachines
-      ? ["Show my Pen machines"]
-      : []),
-    ...(settings.showSkillsInSlashMenu !== DEFAULT_UNIFIED_SETTINGS.showSkillsInSlashMenu
-      ? ["Show skills in slash menu"]
-      : []),
+    ...getChangedSettingLabels(settings, {
+      diffFilesCollapsed: "Default diff file state",
+      diffIgnoreWhitespace: "Diff whitespace changes",
+      diffLayout: "Diff layout",
+      proactivePanelsEnabled: "Open pull requests and changes panels proactively",
+      showPenMachines: "Show my Pen machines",
+      showSkillsInSlashMenu: "Show skills in slash menu",
+    }),
     ...(settings.composerCollapseOnScroll !== DEFAULT_UNIFIED_SETTINGS.composerCollapseOnScroll
       ? ["Collapse composer on scroll"]
       : []),

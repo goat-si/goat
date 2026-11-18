@@ -4,7 +4,7 @@ import { GoatSettingsFields, GoatSettingsPatchFields } from "./goatSettingsField
 import { StandingInstructions } from "./standingInstructions.ts";
 import { GoatBotSettingsFields, GoatBotSettingsPatchFields } from "./goatBotSessionRouting.ts";
 import { SpeechSettingsFields, SpeechSettingsPatchFields } from "./speech.ts";
-import { PenTrustRoot } from "./penSettings.ts";
+import { PenClientFields, PenClientPatchFields, PenTrustRoot } from "./penSettings.ts";
 import { FirstRunPrompts } from "./settingsFirstRun.ts";
 import {
   SidebarProjectSortOrder,
@@ -406,7 +406,7 @@ export const ClientSettingsSchema = Schema.Struct({
   persistComposerContextStrip: Schema.Boolean.pipe(
     Schema.withDecodingDefault(Effect.succeed(false)),
   ),
-  showPenMachines: Schema.Boolean.pipe(Schema.withDecodingDefault(Effect.succeed(true))),
+  ...PenClientFields,
 
   favorites: ModelFavorites.pipe(Schema.withDecodingDefault(Effect.succeed([]))),
   providerModelPreferences: ProviderModelPreferences.pipe(
@@ -886,11 +886,10 @@ export const ObservabilitySettings = Schema.Struct({
 export type ObservabilitySettings = typeof ObservabilitySettings.Type;
 
 /**
- * An outbound webhook that also receives launch watch reports (a launched thread's run ended, it
- * waits on a question, or its host stays unreachable), for agents outside GOAT. Delivery is opt in
- * per launch: a watch posts to `url` only when its launch passed `notifyWebhook: true` (or with
- * `allLaunches`/`externalLaunches`), and to one of `targets` only when its launch named it. A
- * secret signs each body (`x-goat-signature: sha256=<hex>`); the server keeps it in its secret store.
+ * An outbound webhook that also receives launch watch reports, for agents outside GOAT. A watch
+ * posts to `url` only when its launch passed `notifyWebhook: true` (or `allLaunches`/
+ * `externalLaunches`), and to one of `targets` only when its launch named it. A secret signs
+ * each body (`x-goat-signature: sha256=<hex>`); the server keeps it in its secret store.
  */
 export const CompletionWebhookTarget = Schema.Struct({
   url: TrimmedString.pipe(Schema.withDecodingDefault(Effect.succeed(""))),
@@ -1021,8 +1020,6 @@ export const BackgroundActivityProfile = Schema.Literals([
 ]);
 export type BackgroundActivityProfile = typeof BackgroundActivityProfile.Type;
 export const DEFAULT_BACKGROUND_ACTIVITY_PROFILE: BackgroundActivityProfile = "balanced";
-/** On: a server in a Pen mesh lists the other members; opening one still needs hub:proxy. */
-export const DEFAULT_PEN_HUB_NODES = true;
 
 export const BackgroundActivityProfileSelection = Schema.Literals([
   "balanced",
@@ -1226,11 +1223,10 @@ export function describeWorktreesDirectoryUnavailable(
 }
 
 /**
- * Which machine GOAT Bot runs on in a cluster of connected environments. Clients write the same
- * claim to every environment that supports it; a server whose claim names another environment
- * refuses the bot and keeps Slack closed. Claims only move forward: a server keeps the larger of
- * its claim and a written one under `compareGoatBotHomeClaims`, so a delayed resync cannot undo a
- * newer change. `claimedAt` is epoch milliseconds; `claimId` breaks ties.
+ * Which machine GOAT Bot runs on in a cluster of connected environments. A server whose claim
+ * names another environment refuses the bot and keeps Slack closed. Claims only move forward
+ * (`compareGoatBotHomeClaims`), so a delayed resync cannot undo a newer change. `claimedAt` is
+ * epoch milliseconds; `claimId` breaks ties.
  */
 export const GoatBotHomeClaim = Schema.Struct({
   environmentId: EnvironmentId,
@@ -1332,10 +1328,6 @@ export const ServerSettings = Schema.Struct({
   ),
   enableProviderUpdateChecks: Schema.Boolean.pipe(Schema.withDecodingDefault(Effect.succeed(true))),
   automaticServerUpdates: Schema.Boolean.pipe(Schema.withDecodingDefault(Effect.succeed(true))),
-  /** Keep one hub route per machine in this server's Pen mesh. It never installs GOAT anywhere. */
-  penHubNodes: Schema.Boolean.pipe(
-    Schema.withDecodingDefault(Effect.succeed(DEFAULT_PEN_HUB_NODES)),
-  ),
   ...Restart.RestartSettingsFields,
   ...Restart.CodexAppServerSettingsFields,
   ...BlockedBrowser.BlockedBrowserSettingsFields,
@@ -1789,7 +1781,6 @@ const ServerSettingsPatchFields = Schema.Struct({
   ...Restart.RestartSettingsPatchFields,
   ...Restart.CodexAppServerSettingsPatchFields,
   automaticServerUpdates: Schema.optionalKey(Schema.Boolean),
-  penHubNodes: Schema.optionalKey(Schema.Boolean),
   ...BlockedBrowser.BlockedBrowserSettingsPatchFields,
   projectAgentBrowserAccessOverrides: Schema.optionalKey(
     Schema.Record(ProjectId, Schema.NullOr(Schema.Boolean)),
@@ -2017,7 +2008,7 @@ export const ClientSettingsPatch = Schema.Struct({
   fontFamilyTerminal: Schema.optionalKey(FontFamilyPreference),
   fontSmoothing: Schema.optionalKey(Schema.Boolean),
   persistComposerContextStrip: Schema.optionalKey(Schema.Boolean),
-  showPenMachines: Schema.optionalKey(Schema.Boolean),
+  ...PenClientPatchFields,
   favorites: Schema.optionalKey(ModelFavorites),
   providerModelPreferences: Schema.optionalKey(ProviderModelPreferences),
   pullRequestMergeMethodOverrides: Schema.optionalKey(

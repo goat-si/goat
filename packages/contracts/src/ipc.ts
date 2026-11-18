@@ -16,11 +16,8 @@ import {
   DesktopSshEnvironmentTargetSchema,
   type DesktopSshEnvironmentTarget,
 } from "./desktopSshTarget.ts";
-import {
-  penEnsureOptionFields,
-  type DesktopPenBridge,
-  type DesktopPenEnsureOptions,
-} from "./penMembers.ts";
+import type * as PenMembers from "./penMembers.ts";
+import { penEnsureOptionFields } from "./penMembers.ts";
 import type { SystemSettingsPane } from "./desktopPermissions.ts";
 import {
   type SshHostResult,
@@ -1138,7 +1135,7 @@ export interface DesktopSystemWakeEvent {
   readonly asleepMs: number | null;
 }
 
-export interface DesktopBridge extends DesktopBridgeParts, DesktopPenBridge {
+export interface DesktopBridge extends DesktopBridgeParts, PenMembers.DesktopPenBridge {
   getAppBranding: () => DesktopAppBranding | null;
   getRelayTelemetryEnabled?: () => boolean;
   getPathForFile?: (file: File) => string;
@@ -1199,7 +1196,7 @@ export interface DesktopBridge extends DesktopBridgeParts, DesktopPenBridge {
   supportsSshPreparationPhases?: true;
   ensureSshEnvironment: (
     target: DesktopSshEnvironmentTarget,
-    options?: DesktopPenEnsureOptions & {
+    options?: PenMembers.DesktopPenEnsureOptions & {
       issuePairingToken?: boolean;
       keyOnly?: boolean;
       preparedAttachmentId?: string;

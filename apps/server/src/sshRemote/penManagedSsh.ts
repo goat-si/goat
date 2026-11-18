@@ -1,7 +1,7 @@
 import { SshLaunchError } from "@goat/ssh/errors";
-import type { SshEnvironmentManagerShape } from "@goat/ssh/tunnel";
+import { SshEnvironmentManager, type SshEnvironmentManagerShape } from "@goat/ssh/tunnel";
 import * as Effect from "effect/Effect";
-import type { PenManagedRoutesShape } from "../hubNodes/PenManagedRoutes.ts";
+import { PenManagedRoutes, type PenManagedRoutesShape } from "../hubNodes/PenManagedRoutes.ts";
 
 const existingRuntimeRequired = () =>
   new SshLaunchError({
@@ -108,3 +108,28 @@ export const guardPenManaged = (
       }),
   };
 };
+
+/**
+ * The SSH manager dispatch uses, guarded for the aliases Pen manages, and those routes. Dispatch
+ * registers a cleanup that fails while a Pen alias's tunnel is still open, so it stays blocked.
+ */
+export const guardedSshManager = Effect.gen(function* () {
+  const penRoutes = yield* PenManagedRoutes;
+  return { manager: guardPenManaged(yield* SshEnvironmentManager, penRoutes), penRoutes };
+});
+
+export const aliasOnlyTarget = (alias: string) => ({
+  alias,
+  hostname: alias,
+  username: null,
+  port: null,
+});
+
+/** A Pen alias's cleanup: forget it, then close its tunnel, failing while that stays open. */
+export const closeStrictly =
+  <E>(
+    forget: (alias: string, disconnect: false) => Effect.Effect<void>,
+    disconnect: (alias: string) => Effect.Effect<void, E>,
+  ) =>
+  (alias: string) =>
+    Effect.andThen(forget(alias, false), disconnect(alias));

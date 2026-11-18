@@ -33,8 +33,7 @@ import * as SshAuth from "@goat/ssh/auth";
 import { discoverSshHostAliases } from "./sshHostAliases.ts";
 import { SshPasswordPromptError } from "@goat/ssh/errors";
 import * as SshTunnel from "@goat/ssh/tunnel";
-import { PenManagedRoutes } from "../hubNodes/PenManagedRoutes.ts";
-import { guardPenManaged } from "./penManagedSsh.ts";
+import { aliasOnlyTarget, closeStrictly, guardedSshManager } from "./penManagedSsh.ts";
 import * as Clock from "effect/Clock";
 import * as Context from "effect/Context";
 import * as Effect from "effect/Effect";
@@ -327,11 +326,10 @@ export class SshRemoteDispatch extends Context.Service<
       beforeLaunch: Effect.Effect<void, E, R>,
     ) => Effect.Effect<SshLaunchResult, SshRemoteDispatchError | E, R>;
     /**
-     * Calls one of the remote's own MCP tools as an outside client whose
-     * ceiling is the caller's runtime mode. `authorize` reloads the caller and
-     * returns its current runtime mode; it runs before the session is chosen
-     * and again right before the tool request, so a caller whose modes
-     * changed meanwhile sends nothing.
+     * Calls one of the remote's own MCP tools as an outside client whose ceiling is the caller's
+     * runtime mode. `authorize` reloads the caller and returns its current runtime mode; it runs
+     * before the session is chosen and again right before the tool request, so a caller whose
+     * modes changed meanwhile sends nothing.
      */
     readonly callHostTool: <E, R>(
       call: SshHostToolCall,
@@ -459,8 +457,7 @@ const validateSshLaunchAttachments = Effect.fn("SshRemoteDispatch.validateSshLau
 
 const make = Effect.gen(function* () {
   const permissions = yield* Profiles.PermissionProfiles;
-  const penRoutes = yield* PenManagedRoutes;
-  const manager = guardPenManaged(yield* SshTunnel.SshEnvironmentManager, penRoutes);
+  const { manager, penRoutes } = yield* guardedSshManager;
   const runtime = yield* Effect.context<RuntimeServices>();
   const config = yield* ServerConfig.ServerConfig;
   const fileSystem = Context.get(runtime, FileSystem.FileSystem);
@@ -484,9 +481,7 @@ const make = Effect.gen(function* () {
   // operation. Optional so test layers without it dial every alias as plain SSH.
   const cloudMachines = yield* Effect.serviceOption(CloudMachineService.CloudMachineService);
   const disconnectAlias = (alias: string) =>
-    withRuntime(
-      manager.disconnectEnvironment({ alias, hostname: alias, username: null, port: null }),
-    );
+    withRuntime(manager.disconnectEnvironment(aliasOnlyTarget(alias)));
   /** Forgets everything cached for an alias whose address or host key changed. */
   const invalidateAlias = (alias: string, disconnect = true) =>
     Effect.gen(function* () {
@@ -500,10 +495,7 @@ const make = Effect.gen(function* () {
     });
   if (Option.isSome(cloudMachines))
     yield* cloudMachines.value.onAliasInvalidated((alias) => invalidateAlias(alias));
-  // A Pen route stays blocked until its tunnel has really closed.
-  yield* penRoutes.registerCleanup((alias) =>
-    invalidateAlias(alias, false).pipe(Effect.andThen(disconnectAlias(alias))),
-  );
+  yield* penRoutes.registerCleanup(closeStrictly(invalidateAlias, disconnectAlias));
 
   // Hosts linked over HTTPS. Optional so test layers without it dial every alias as plain SSH.
   const linkedHosts = yield* Effect.serviceOption(LinkedHosts.LinkedHosts);
