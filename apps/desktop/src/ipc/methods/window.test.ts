@@ -10,13 +10,15 @@ import { vi } from "vite-plus/test";
 
 import type { DesktopEnvironmentBootstrap } from "@goat/contracts";
 
-const { focusedWebContents, ownerWindow } = vi.hoisted(() => ({
+const { focusedWebContents, ownerWindow, popup } = vi.hoisted(() => ({
   focusedWebContents: vi.fn(),
   ownerWindow: vi.fn(),
+  popup: vi.fn(),
 }));
 vi.mock("electron", () => ({
   webContents: { getFocusedWebContents: focusedWebContents },
   BrowserWindow: { fromWebContents: ownerWindow },
+  Menu: { buildFromTemplate: () => ({ popup }) },
 }));
 
 import * as DesktopBackendConfiguration from "../../backend/DesktopBackendConfiguration.ts";
@@ -27,12 +29,14 @@ import * as DesktopAppSettings from "../../settings/DesktopAppSettings.ts";
 import * as DesktopWslEnvironment from "../../wsl/DesktopWslEnvironment.ts";
 import { toLocalBackendPath } from "./folderPaths.ts";
 import * as ElectronDialog from "../../electron/ElectronDialog.ts";
+import * as ElectronMenu from "../../electron/ElectronMenu.ts";
 import * as ElectronWindow from "../../electron/ElectronWindow.ts";
 import {
   getLocalEnvironmentBootstraps,
   getRelayTelemetryEnabled,
   pickProjectFavicon,
   probeRemoteEditors,
+  showContextMenu,
   syncHtmlFullscreen,
 } from "./window.ts";
 
@@ -247,6 +251,39 @@ describe("toLocalBackendPath", () => {
       assert.lengthOf(convert.mock.calls, 1);
     }),
   );
+});
+
+describe("showContextMenu", () => {
+  it.effect("passes keyboard origin to Electron and accepts requests from old preload", () => {
+    const window = { id: 7, webContents: { getZoomFactor: () => 2 } } as Electron.BrowserWindow;
+    return Effect.gen(function* () {
+      popup
+        .mockReset()
+        .mockImplementation((options: Electron.PopupOptions) => options.callback?.());
+      const items = [{ id: "copy", label: "Copy link" }];
+      yield* showContextMenu.handler({ items, source: "keyboard", position: { x: 5, y: 8 } });
+      assert.equal(popup.mock.lastCall?.[0].sourceType, "keyboard");
+      assert.equal(popup.mock.lastCall?.[0].x, 10);
+      assert.equal(popup.mock.lastCall?.[0].y, 16);
+
+      yield* showContextMenu.handler({ items });
+      assert.isUndefined(popup.mock.lastCall?.[0].sourceType);
+      const refused = yield* showContextMenu
+        .handler({ items, source: "unknown" })
+        .pipe(Effect.exit);
+      assert.equal(refused._tag, "Failure");
+      assert.lengthOf(popup.mock.calls, 2);
+    }).pipe(
+      Effect.provide(
+        Layer.mergeAll(
+          Layer.effect(ElectronMenu.ElectronMenu, ElectronMenu.make),
+          Layer.mock(ElectronWindow.ElectronWindow)({
+            focusedMainOrFirst: Effect.succeedSome(window),
+          }),
+        ),
+      ),
+    );
+  });
 });
 
 describe("getRelayTelemetryEnabled", () => {

@@ -112,6 +112,7 @@ vi.mock(import("./ui/toast"), async (original) => {
 });
 
 import ChatMarkdown from "./ChatMarkdown";
+import { MarkdownFileLink } from "./chat/MarkdownFileLink";
 
 const threadRef = {
   environmentId: EnvironmentId.make("selected"),
@@ -215,6 +216,25 @@ it.each([
   );
 });
 
+it.each(["[Docs](https://example.com/docs)", "[Readme](docs/readme.md)"])(
+  "tells the native menu for %s whether the keyboard opened it",
+  async (text) => {
+    using _setup = setup();
+    await using screen = await renderMarkdown(text);
+    // On macOS Shift+F10 does not generate Chromium's keyboard contextmenu.
+    await act(async () => {
+      screen
+        .anchor()
+        .dispatchEvent(
+          new PointerEvent("contextmenu", { bubbles: true, cancelable: true, button: -1 }),
+        );
+    });
+    expect(state.choose.mock.lastCall?.[2]).toBe("keyboard");
+    await userEvent.click(screen.anchor(), { button: "right" });
+    await vi.waitFor(() => expect(state.choose.mock.lastCall?.[2]).toBe("mouse"));
+  },
+);
+
 it("does not launch an editor after revocation during a native context menu", async () => {
   using _setup = setup();
   let choose: (action: string) => void = () => {
@@ -309,4 +329,33 @@ it("offers no host actions for markdown rendered with file actions off", async (
   await userEvent.click(screen.getByRole("button", { name: "File options for readme.md" }));
   await vi.waitFor(() => expect(state.choose).toHaveBeenCalled());
   expect(offeredActions()).toEqual(["copy-full"]);
+});
+
+it("preserves keyboard activation of a file-options button", async () => {
+  using _setup = setup();
+  await using screen = await render(
+    <MarkdownFileLink
+      environmentId={null}
+      href="readme.md"
+      targetPath="readme.md"
+      iconPath="readme.md"
+      workspaceRelativePath="readme.md"
+      panelPath={null}
+      label="Readme"
+      copyMarkdown="[Readme](readme.md)"
+      theme="dark"
+      onOpenInPanel={vi.fn()}
+      resolveCopyPaths={async () => ({ relativePath: "readme.md", fullPath: "/work/readme.md" })}
+      openInEditorMenuLabel="Open in editor"
+    />,
+  );
+  const button = screen.container.querySelector("button")!;
+  button.focus();
+  for (const key of ["{Enter}", " "]) {
+    await userEvent.keyboard(key);
+    await vi.waitFor(() => expect(state.choose.mock.lastCall?.[2]).toBe("keyboard"));
+    state.choose.mockClear();
+  }
+  await userEvent.click(button);
+  await vi.waitFor(() => expect(state.choose.mock.lastCall?.[2]).toBe("mouse"));
 });
