@@ -16,7 +16,6 @@ import type {
   SshRuntimePhase,
 } from "@goat/contracts";
 import {
-  SshRuntimePendingReplacementSchema,
   ORCHESTRATION_PROTOCOL_VERSION,
   RUNTIME_DRAIN_DEFAULT_GRACE_SECONDS,
   RUNTIME_DRAIN_MAX_GRACE_SECONDS,
@@ -28,7 +27,6 @@ import { cliReleaseDownloadBaseUrl } from "@goat/shared/cliRelease";
 import * as KeyedLock from "@goat/shared/KeyedLock";
 import * as NetService from "@goat/shared/Net";
 import * as HostProcess from "@goat/shared/HostProcess";
-import { fromLenientJson } from "@goat/shared/schemaJson";
 import { compareRuntimeBuilds } from "@goat/shared/semver";
 import * as Option from "effect/Option";
 import * as Clock from "effect/Clock";
@@ -98,6 +96,7 @@ import {
   type RemoteGoatRunnerOptions,
   type SshRuntimeProgressCallback,
 } from "./remoteRuntime.ts";
+import { buildRemoteContendedOutput, decodeRemoteLaunchOutput } from "./remoteLaunchResult.ts";
 import { REMOTE_PROTOCOL_TOKEN_SCRIPT, REMOTE_RUNNER_HINT_SCRIPT } from "./runtimeFactsScripts.ts";
 import { buildRemoteStopScript } from "./remoteStopScript.ts";
 export { buildRemoteStopScript };
@@ -381,35 +380,9 @@ export interface SshEnvironmentManagerShape
   >;
 }
 
-const RemoteLaunchResult = Schema.Union([
-  Schema.Struct({
-    status: Schema.Literal("ready"),
-    remotePort: Schema.Int.check(Schema.isBetween({ minimum: 1, maximum: 65535 })),
-    serverKind: Schema.optionalKey(Schema.Literals(["external", "managed"])),
-    selectedVersion: Schema.String,
-    refresh: Schema.optionalKey(Schema.Literal("replaced")),
-    pending: Schema.optionalKey(SshRuntimePendingReplacementSchema),
-  }),
-  Schema.Struct({ status: Schema.Literal("pending"), pending: SshRuntimePendingReplacementSchema }),
-]);
-
-const decodeRemoteLaunchResult = Schema.decodeEffect(fromLenientJson(RemoteLaunchResult));
-
-const decodeRemoteLaunchOutput = (stdout: string) =>
-  decodeRemoteJsonOutput(stdout, decodeRemoteLaunchResult);
-
 function normalizeSshErrorMessage(stderr: string, fallbackMessage: string): string {
   const cleaned = stderr.trim();
   return cleaned.length > 0 ? cleaned : fallbackMessage;
-}
-
-function buildRemoteContendedOutput(
-  pending: Pick<SshRuntimePendingReplacement, "replacement" | "requestedVersion" | "liveVersion">,
-) {
-  const fields = JSON.stringify({ reason: "contended", ...pending }).slice(1, -1);
-  return `lock_pending_fields=${shellSingleQuote(fields)}
-if [ "$LOCK_DETAIL" = recovery-stale ]; then lock_pending_fields="$lock_pending_fields,"'"detail":"recovery-stale"'; fi
-printf '{"status":"pending","pending":{%s}}\\n' "$lock_pending_fields"`;
 }
 
 export { describeReadinessCause };
