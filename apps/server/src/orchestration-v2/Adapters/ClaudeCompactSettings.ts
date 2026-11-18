@@ -1,10 +1,15 @@
 import { fromLenientJson } from "@goat/shared/schemaJson";
 import * as FileSystem from "effect/FileSystem";
 import * as Effect from "effect/Effect";
+import * as Option from "effect/Option";
 import * as Schema from "effect/Schema";
 
-const decodeSettings = Schema.decodeUnknownEffect(
+const decodeEnvSettings = Schema.decodeUnknownEffect(
   fromLenientJson(Schema.Record(Schema.String, Schema.Unknown)),
+);
+
+const decodeCompactSettings = Schema.decodeUnknownOption(
+  Schema.fromJsonString(Schema.Record(Schema.String, Schema.Unknown)),
 );
 
 const settingsField = (settings: unknown, key: string): unknown =>
@@ -54,12 +59,15 @@ export const resolveAutoCompactWindow = Effect.fn("ClaudeAdapterV2.resolveAutoCo
         [...environment.values()].every((value) => value !== undefined)
       )
         break;
-      const settings = yield* input.fileSystem.readFileString(file).pipe(
-        Effect.flatMap(decodeSettings),
-        Effect.orElseSucceed(() => undefined),
-      );
+      const text = yield* input.fileSystem
+        .readFileString(file)
+        .pipe(Effect.orElseSucceed(() => undefined));
+      if (text === undefined) continue;
+      const settings = Option.getOrUndefined(decodeCompactSettings(text));
+      const envSettings =
+        settings ?? (yield* decodeEnvSettings(text).pipe(Effect.orElseSucceed(() => undefined)));
       for (const [name, value] of environment) {
-        if (value === undefined) environment.set(name, settingsEnv(settings, name));
+        if (value === undefined) environment.set(name, settingsEnv(envSettings, name));
       }
       const fileEnabled = settings?.autoCompactEnabled;
       if (enabled === undefined && typeof fileEnabled === "boolean") enabled = fileEnabled;
@@ -83,7 +91,7 @@ export const resolveAutoCompactWindow = Effect.fn("ClaudeAdapterV2.resolveAutoCo
 
 export const readToolSearchSetting = (fileSystem: FileSystem.FileSystem, filePath: string) =>
   fileSystem.readFileString(filePath).pipe(
-    Effect.flatMap(decodeSettings),
+    Effect.flatMap(decodeEnvSettings),
     Effect.map((settings) => settingsEnv(settings, "ENABLE_TOOL_SEARCH")),
     Effect.orElseSucceed(() => undefined),
   );
