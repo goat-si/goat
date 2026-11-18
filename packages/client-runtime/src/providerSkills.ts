@@ -344,14 +344,20 @@ function planProviderWorkspaceSnapshotRefresh(
     hadSnapshot: hasSnapshot,
     snapshotPending: pending,
   };
+  const current = hasCurrentProviderWorkspaceSnapshot(provider, cwd, now);
   const refresh =
     (requestedAt === null || now - requestedAt >= PROVIDER_WORKSPACE_SNAPSHOT_TTL_MS) &&
-    !hasCurrentProviderWorkspaceSnapshot(provider, cwd, now) &&
+    !current &&
     retryNotBefore === null;
   if (refresh) {
     return { state: { ...state, requestedAt: now }, refresh: true, recheckAt: null };
   }
-  return { state, refresh: false, recheckAt: pending ? retryNotBefore : null };
+  return {
+    state,
+    refresh: false,
+    recheckAt:
+      !current && (pending || provider?.catalogDigest !== undefined) ? retryNotBefore : null,
+  };
 }
 
 /**
@@ -477,8 +483,16 @@ export function createProviderWorkspaceSnapshotRefreshAtomFamily(input: {
           { environmentId, input: { instanceId, cwd } },
           { reportFailure: false },
         ).then((result) => {
+          const node = registry.getNodes().get(refreshAtom);
+          if (node === undefined || node.canBeRemoved) return;
+          const currentProvider = findProvider(registry.get(input.providers(environmentId)));
           const refreshedProvider =
-            result._tag === "Success" ? findProvider(result.value.providers) : undefined;
+            result._tag !== "Success"
+              ? undefined
+              : provider?.catalogDigest !== undefined ||
+                  currentProvider?.catalogDigest !== undefined
+                ? currentProvider
+                : findProvider(result.value.providers);
           const snapshot =
             refreshedProvider && resolveProviderWorkspaceSnapshot(refreshedProvider, cwd);
           // A new server timestamp proves progress even when the client clock is ahead.

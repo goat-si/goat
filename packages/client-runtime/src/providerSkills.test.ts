@@ -368,6 +368,56 @@ describe("provider workspace snapshot refresh atom", () => {
     },
   );
 
+  it.each(["recovers", "stops after three discarded replies"])(
+    "%s when the initial cwd reply belongs to an older catalog digest",
+    async (expected) => {
+      vi.useFakeTimers({ now: Date.parse("2026-01-01T00:01:01.000Z") });
+      const initial = { ...provider, catalogDigest: "A", workspaceSnapshots: [] };
+      const current = { ...initial, catalogDigest: "B" };
+      const oldReply = { ...provider, catalogDigest: "A" };
+      const nextReply = { ...provider, catalogDigest: "B" };
+      const first = Promise.withResolvers<ReadonlyArray<ServerProvider>>();
+      const { registry, atom, providersAtom, run, unmount } = setup(
+        [initial],
+        [
+          () => first.promise,
+          () => {
+            if (expected === "recovers") {
+              registry.set(providersAtom, [nextReply]);
+              return [nextReply];
+            }
+            return [oldReply];
+          },
+          () => [oldReply],
+        ],
+      );
+      try {
+        registry.set(providersAtom, [current]);
+        first.resolve([oldReply]);
+        await vi.advanceTimersByTimeAsync(9_999);
+        expect(run).toHaveBeenCalledTimes(1);
+        expect(registry.get(providersAtom)?.[0]?.workspaceSnapshots).toEqual([]);
+
+        await vi.advanceTimersByTimeAsync(1);
+        expect(run).toHaveBeenCalledTimes(2);
+        if (expected === "recovers") {
+          expect(registry.get(providersAtom)?.[0]?.workspaceSnapshots).toEqual(
+            nextReply.workspaceSnapshots,
+          );
+          await vi.advanceTimersByTimeAsync(20_000);
+          expect(run).toHaveBeenCalledTimes(2);
+        } else {
+          await vi.advanceTimersByTimeAsync(30_000);
+          expect(run).toHaveBeenCalledTimes(3);
+          expect(isProviderWorkspaceSnapshotScanning(registry.get(atom))).toBe(false);
+        }
+      } finally {
+        unmount();
+        registry.dispose();
+      }
+    },
+  );
+
   it("keeps the TTL guard for a newly scanned catalog when the client clock is ahead", async () => {
     vi.useFakeTimers({ now: Date.parse("2026-01-01T01:00:00.000Z") });
     const { registry, atom, run, unmount } = setup(withSnapshot("2026-01-01T00:00:00.000Z"), [
