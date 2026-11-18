@@ -158,7 +158,11 @@ export function makeScheduledWorktreeGuard(
       .map((run) => run.userMessageId);
     if (cancelledMessageIds.length === 0) return;
 
-    const commandFields = { commandId: command.commandId, commandType: command.type };
+    const commandFields = {
+      commandId: command.commandId,
+      commandType: command.type,
+      refusal: "scheduled_worktree" as const,
+    };
     // The dispatch projection can omit older messages after compaction.
     const origins = yield* messages
       .getMessagesById(command.threadId, cancelledMessageIds)
@@ -169,7 +173,6 @@ export function makeScheduledWorktreeGuard(
           ...commandFields,
           cause:
             "The automation's worktree setup was cancelled. Attach a worktree to its thread or recreate the automation with a new worktree.",
-          refusal: "scheduled_worktree_missing",
         });
     }
   });

@@ -4,7 +4,7 @@ import { RunId } from "@goat/contracts";
 import * as Tracer from "effect/Tracer";
 import * as Schema from "effect/Schema";
 import { ScheduledTaskRun } from "@goat/contracts";
-import { assert, it } from "@effect/vitest";
+import { assert, it, vi } from "@effect/vitest";
 import * as McpProviderSessions from "@goat/provider-core/server/McpProviderSessions";
 import {
   ProviderAdapterOpenSessionError,
@@ -178,7 +178,7 @@ const worktreeAutomationHarness = () => {
       };
     }),
   ).pipe(Layer.provide(layerTestProviderInstanceRegistry));
-  const runtime = Layer.mergeAll(RuntimeLayer.layer, ProjectStore.layer).pipe(
+  const runtime = Layer.mergeAll(RuntimeLayer.layer, ProjectStore.layer, Projections.layer).pipe(
     Layer.provide(McpSessionRegistryTestkit.layer),
     Layer.provide(McpProviderSessions.layer),
     Layer.provideMerge(Sqlite.layerMemory),
@@ -317,9 +317,12 @@ it.effect("a restarted worktree automation never opens a provider in the project
   }).pipe(Effect.provide(layer));
 });
 
-it.effect(
-  "a refused relay webhook succeeds with the same delivery after a worktree is attached",
-  () => {
+it.effect.each([
+  { refusal: "a missing worktree", lookupFailure: undefined },
+  { refusal: "a failed message lookup", lookupFailure: "Transient candidate-message read failure" },
+])(
+  "a relay webhook refused due to $refusal succeeds with the same delivery after attachment",
+  ({ lookupFailure }) => {
     const { layer, tasksLayer, prepareInterruptedAutomation, threadId } =
       worktreeAutomationHarness();
     return Effect.gen(function* () {
@@ -336,6 +339,17 @@ it.effect(
           threadId,
           threadMode: "continue",
         });
+        const projections = yield* Projections.ProjectionStoreV2;
+        using _lookup =
+          lookupFailure === undefined
+            ? undefined
+            : vi
+                .spyOn(projections, "getMessagesById")
+                .mockImplementationOnce((threadId) =>
+                  Effect.fail(
+                    new Projections.ProjectionStoreReadError({ threadId, cause: lookupFailure }),
+                  ),
+                );
         const request = requestFor(task, { relayDeliveryId: "relay:worktree-refused" });
         const fire = waitForSpan(
           tasks.triggerWebhook(request),
@@ -345,7 +359,11 @@ it.effect(
         assert.equal(firstDelivery._tag, "accepted");
         const failed = (yield* tasks.list()).tasks.find(({ id }) => id === task.id);
         assert.equal(failed?.lastRun?.dispatchStatus, "failed");
-        assert.include(failed?.lastRunError ?? "", "Attach a worktree");
+        if (lookupFailure === undefined) {
+          assert.include(failed?.lastRunError ?? "", "Attach a worktree");
+        } else {
+          assert.equal(failed?.lastRunError, lookupFailure);
+        }
         const firingId = failed?.lastRun?.firingId;
         if (firingId === undefined) return yield* Effect.die("Missing refused firing.");
         const refusedReceipt = yield* threads.receiptStatus(firingId);

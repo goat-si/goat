@@ -322,7 +322,7 @@ export class OrchestratorDispatchError extends Schema.TaggedError<OrchestratorDi
     commandId: CommandId,
     commandType: Schema.String,
     cause: Schema.optional(Schema.Defect()),
-    refusal: Schema.optional(Schema.Literals(["active_turn", "scheduled_worktree_missing"])),
+    refusal: Schema.optional(Schema.Literals(["active_turn", "scheduled_worktree"])),
   },
 ) {
   override get message(): string {
