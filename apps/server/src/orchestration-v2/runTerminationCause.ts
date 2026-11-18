@@ -1,3 +1,4 @@
+import { PROVIDER_STOP_REASON_SIGNAL } from "@goat/provider-core/server/subagentProjection";
 import type {
   OrchestrationV2ExecutionNode,
   OrchestrationV2ProviderThread,
@@ -159,7 +160,34 @@ export function makeInterruptResultTurnItem(input: {
 export const terminalRunNoticeEvents = Effect.fn("RunExecution.terminalRunNoticeEvents")(function* (
   input: Parameters<typeof makeInterruptResultTurnItem>[0] & { readonly terminal: Terminal },
 ) {
-  if (input.terminal.status !== "interrupted") return [];
+  const terminal = input.terminal;
+  const completedStop = terminal.status === "completed" ? terminal.reason : undefined;
+  if (terminal.status !== "interrupted" && completedStop === undefined) return [];
+  const payload: OrchestrationV2TurnItem =
+    completedStop === undefined
+      ? makeInterruptResultTurnItem(input)
+      : {
+          id: input.idAllocator.derive.runSignalTurnItem({
+            runId: input.run.id,
+            signal: PROVIDER_STOP_REASON_SIGNAL,
+          }),
+          threadId: input.run.threadId,
+          runId: input.run.id,
+          nodeId: input.rootNode.id,
+          providerThreadId: input.providerThread.id,
+          providerTurnId: input.rootNode.providerTurnId,
+          nativeItemRef: null,
+          parentItemId: null,
+          ordinal: input.run.ordinal * 100 + 98,
+          status: "completed",
+          title: "Stopped by the provider",
+          startedAt: input.completedAt,
+          completedAt: input.completedAt,
+          updatedAt: input.completedAt,
+          type: "system_notice",
+          level: "warning",
+          message: completedStop,
+        };
   return [
     {
       id: yield* input.idAllocator.allocate.event({ threadId: input.run.threadId }),
@@ -169,7 +197,7 @@ export const terminalRunNoticeEvents = Effect.fn("RunExecution.terminalRunNotice
       nodeId: input.rootNode.id,
       providerInstanceId: input.run.providerInstanceId,
       occurredAt: input.completedAt,
-      payload: makeInterruptResultTurnItem(input),
+      payload,
     },
   ];
 });
