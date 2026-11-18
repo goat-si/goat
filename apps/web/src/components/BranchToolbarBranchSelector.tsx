@@ -553,19 +553,24 @@ export function BranchToolbarBranchSelector({
     ? null
     : resolveDefaultWorktreeBaseBranch(refs);
   const cloneDone = useProjectClone(activeProjectRef)?.phase === "done";
-  const refreshRefsAfterClone = useEffectEvent(
-    (branchCwd: string | null, environmentId: EnvironmentId) => {
-      if (branchCwd === null) return;
+  const statusBranch = branchStatusQuery.data?.refName ?? null;
+  const refreshStaleRefs = useEffectEvent(
+    (cwd: string | null, environment: EnvironmentId, cloneDone: boolean, branch: string | null) => {
+      if (
+        cwd === null ||
+        (!cloneDone && (branch === null || branchByName.get(branch)?.current === true))
+      )
+        return;
       void refreshLocalStatusForPicker({
-        environmentId,
-        input: { cwd: branchCwd, localOnly: true },
+        environmentId: environment,
+        input: { cwd, localOnly: true },
       });
     },
   );
-  // oxlint-disable-next-line goat/react-effect-budget -- refresh refs that were read during clone
+  // oxlint-disable-next-line goat/react-effect-budget -- refresh refs left stale by a clone or external checkout
   useEffect(() => {
-    if (cloneDone) refreshRefsAfterClone(branchCwd, environmentId);
-  }, [cloneDone, branchCwd, environmentId]);
+    refreshStaleRefs(branchCwd, environmentId, cloneDone, statusBranch);
+  }, [branchCwd, environmentId, cloneDone, statusBranch]);
 
   // The server sets started threads' branches; defaulting here would detach the agent from its worktree.
   const threadStarted = serverSession !== null;
