@@ -11,7 +11,10 @@ import * as HostProcess from "@goat/shared/HostProcess";
 
 import * as DesktopEarlyElectronStartup from "./DesktopEarlyElectronStartup.ts";
 import { resolveDesktopAppBranding } from "./DesktopEnvironment.ts";
-import { renderUrlHandlerDesktopEntry } from "./DesktopLinuxUrlHandler.ts";
+import {
+  renderUrlHandlerDesktopEntry,
+  replacedVersionedAppImagePath,
+} from "./DesktopLinuxUrlHandler.ts";
 import * as ElectronProtocol from "../electron/ElectronProtocol.ts";
 
 export interface DesktopPreReadyCommandLineReader {
@@ -107,8 +110,27 @@ export const make = Effect.gen(function* () {
             );
           } catch {}
         }
+        const desktopEntryPath = NodePath.posix.join(applicationsDir, linux.linuxDesktopEntryName);
+        const appImagePath = process.env.APPIMAGE?.trim();
+        // electron-updater sets APPIMAGE_SILENT_INSTALL on the AppImage it relaunches after an update.
+        if (
+          appImagePath &&
+          !process.env.GOAT_DESKTOP_LAUNCHER_PATH?.trim() &&
+          process.env.APPIMAGE_SILENT_INSTALL?.trim() === "true"
+        ) {
+          try {
+            const replacedPath = replacedVersionedAppImagePath({
+              previousEntry: NodeFS.readFileSync(desktopEntryPath, "utf8"),
+              appImagePath,
+            });
+            // Relative, so the pair survives a moved folder; symlink never overwrites a file.
+            if (replacedPath !== null) {
+              NodeFS.symlinkSync(NodePath.posix.basename(appImagePath), replacedPath);
+            }
+          } catch {}
+        }
         NodeFS.writeFileSync(
-          NodePath.posix.join(applicationsDir, linux.linuxDesktopEntryName),
+          desktopEntryPath,
           renderUrlHandlerDesktopEntry({
             displayName: resolveDesktopAppBranding({
               isDevelopment: linux.isDevelopment,

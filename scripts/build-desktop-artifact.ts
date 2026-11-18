@@ -2843,7 +2843,10 @@ export const resolveGitHubPublishConfig = Effect.fn("resolveGitHubPublishConfig"
   };
 });
 
-import { resolveDesktopUpdateChannel } from "./lib/desktop-release-channel.ts";
+import {
+  resolveDesktopUpdateChannel,
+  VERSION_FREE_APPIMAGES,
+} from "./lib/desktop-release-channel.ts";
 export { resolveDesktopUpdateChannel };
 
 export function isDesktopPreviewVersion(version: string): boolean {
@@ -2985,6 +2988,13 @@ export const createBuildConfig = Effect.fn("createBuildConfig")(function* (
       const publishConfig = yield* resolveGitHubPublishConfig(updateChannel);
       if (publishConfig) buildConfig.publish = [publishConfig];
     }
+  }
+  // electron-updater replaces an installed AppImage in place only when its name has no x.y.z version.
+  if (buildConfig.publish && VERSION_FREE_APPIMAGES) {
+    buildConfig.appImage = {
+      artifactName:
+        updateChannel === "nightly" ? "GOAT-Nightly-${arch}.${ext}" : "GOAT-${arch}.${ext}",
+    };
   }
 
   if (platform === "mac") {
