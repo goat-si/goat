@@ -23,6 +23,8 @@ import {
   connectionRoutes,
   isLearned,
   pendingRouteOrder,
+  routeOrderKeepingHidden,
+  shownRoutes,
 } from "@goat/client-runtime/connection";
 import { GripVerticalIcon, PlusIcon, XIcon } from "~/components/solar";
 import { useState } from "react";
@@ -44,7 +46,10 @@ export function EnvironmentRoutesList({
   readonly environment: EnvironmentPresentation;
   readonly onAddRoute: () => void;
 }) {
-  const saved = connectionRoutes(environment.entry);
+  const allIds = connectionRoutes(environment.entry).map((route) =>
+    connectionRouteId(route.target),
+  );
+  const saved = shownRoutes(environment.entry);
   const savedIds = saved.map((route) => connectionRouteId(route.target));
   const [pending, setPending] = useState<ReadonlyArray<string> | null>(null);
   const shownPending = pendingRouteOrder(pending, savedIds);
@@ -87,7 +92,10 @@ export function EnvironmentRoutesList({
       order.indexOf(String(event.over.id)),
     );
     setPending(next);
-    void reorder({ environmentId: environment.environmentId, routeIds: next }).then((result) => {
+    void reorder({
+      environmentId: environment.environmentId,
+      routeIds: routeOrderKeepingHidden(allIds, next),
+    }).then((result) => {
       if (result._tag === "Failure") setPending(null);
     });
   };

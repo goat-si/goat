@@ -497,6 +497,26 @@ export function pendingRouteOrder(
   return pending.some((id, index) => id !== savedIds[index]) ? pending : null;
 }
 
+/** The saved routes a route editor shows: a Pen route stays stored but hidden while closed. */
+export function shownRoutes(
+  entry: ConnectionCatalogEntry,
+  policy: PenViewerPolicy = { enabled: PEN_VIEWER_ENABLED },
+): ReadonlyArray<ConnectionRoute> {
+  return connectionRoutes(entry).filter(
+    (route) => route.target._tag !== "PenConnectionTarget" || policy.enabled,
+  );
+}
+
+/** A new order of the shown routes as a whole saved order, each hidden route in its place. */
+export function routeOrderKeepingHidden(
+  savedIds: ReadonlyArray<string>,
+  shownOrder: ReadonlyArray<string>,
+): ReadonlyArray<string> {
+  const shown = new Set(shownOrder);
+  let next = 0;
+  return savedIds.map((id) => (shown.has(id) ? (shownOrder[next++] ?? id) : id));
+}
+
 export function removedWithRelay(entry: ConnectionCatalogEntry): boolean {
   return routesAfterRemoving(connectionRoutes(entry), RELAY_ROUTE_ID).length === 0;
 }

@@ -15,7 +15,12 @@ import {
   type ConnectionRoute,
 } from "./catalog.ts";
 import { pullRequestRoutingConnectionKey } from "./pullRequestRoutingPermissions.ts";
-import { BearerConnectionTarget, RelayConnectionTarget, SshConnectionTarget } from "./model.ts";
+import {
+  BearerConnectionTarget,
+  PenConnectionTarget,
+  RelayConnectionTarget,
+  SshConnectionTarget,
+} from "./model.ts";
 import {
   connectionRouteId,
   connectionRouteKind,
@@ -28,8 +33,10 @@ import {
   penRouteConnectionId,
   penRouteOwner,
   removedWithRelay,
+  routeOrderKeepingHidden,
   routesAfterRemoving,
   sendsTokenInClear,
+  shownRoutes,
   upsertRoute,
   usableRoutes,
 } from "./routes.ts";
@@ -141,6 +148,30 @@ describe("connection routes", () => {
     expect(pendingRouteOrder(dragged, ["tailnet", "lan"])).toBeNull();
     expect(pendingRouteOrder(dragged, ["lan", "public"])).toBeNull();
     expect(pendingRouteOrder(dragged, ["lan", "tailnet", "public"])).toBeNull();
+  });
+
+  it("hides a Pen route while its gate is closed and keeps it in place when the others move", () => {
+    const pen: ConnectionRoute = {
+      target: new PenConnectionTarget({
+        environmentId: ENVIRONMENT_ID,
+        label: "Pen",
+        connectionId: "pen:m:n",
+      }),
+      profile: Option.none(),
+    };
+    const entry: ConnectionCatalogEntry = {
+      enabled: true,
+      target: LAN.target,
+      profile: LAN.profile,
+      alternateRoutes: [pen, TAILNET],
+    };
+    const ids = (routes: ReadonlyArray<ConnectionRoute>) =>
+      routes.map((route) => connectionRouteId(route.target));
+    const saved = ids([LAN, pen, TAILNET]);
+    expect(ids(shownRoutes(entry, { enabled: false }))).toEqual(ids([LAN, TAILNET]));
+    expect(ids(shownRoutes(entry, { enabled: true }))).toEqual(saved);
+    // Dragging tailnet first must still list the hidden Pen route, where it was.
+    expect(routeOrderKeepingHidden(saved, ids([TAILNET, LAN]))).toEqual(ids([TAILNET, pen, LAN]));
   });
 });
 
