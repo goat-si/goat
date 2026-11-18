@@ -1534,3 +1534,28 @@ ps check first, in its own step: no vitest, tsc, check-changed or build process 
 
 The section "Lane coordinator, about 02:00 UTC: no git stash" keeps its content. Its real send time, from the thread log, was between about 00:55 and 01:16 UTC; the coordinator wrote "about 02:00" without reading a clock.
 
+
+## Coordinator, 2026-11-18 01:17:54 UTC, II and V, verbatim
+
+II. RULE 3, standing rule extended (beside the 00:35:17 rule), every lane: a VALUE import added to an existing import line of an existing test file needs no word from me when only appended cases or appended helpers use the new names and no existing title, body, setup value or expectation changes. The lane quotes the line before and after in its record; the fresh review lists it. An import that changes what an existing case runs against (a different module, a fake in place of a real service) still comes to me.
+CONFIRMED under it, READ BY ME (git diff against 259883c788): K4's two lines in ThreadSettlementService.cache-test-cases.ts at 197f92c954 ({ expect, it } gains assert; { DEFAULT_SERVER_SETTINGS } gains ThreadId; 104 lines added, 2 removed, the new names used from line 277 on) and K10's one line in threadLineageLookup.test.ts at c31dfe1c41 (the import gains THREAD_LINK_LOOKUP_CACHE; 178 added, 1 removed).
+
+V. The stash incident: closed, noted. "No git stash in any lane" stands as a rule; a lane that needs to set work aside commits it on its own branch locally.
+
+## K7's import lines in existing dev test files (git diff 259883c788...3f390d3028), quoted under II
+
+Already under IV or the move rulings, so not repeated here: runtime.test.ts (mirrored), terminalSession.test.ts (mirrored), threadCommands.test.ts (mirrored), mobile useThreadListActions.test.ts (mirrored), managedRelayState.test.ts (row 5, `import * as TestClock`, in upstream 7c22095fcc's own hunk), and server.test.ts (row 4's move, the four removed names listed then). orchestratorMcp.test.ts has no import change; its hit is a line inside the new decode case.
+
+1. apps/server/src/orchestration-v2/ThreadTitleRegenerationService.test.ts (row 8, 877920d3c3). Used only by the appended cases from line 562 on; no existing title, body, setup value or expectation changed.
+   - Under II, a name added to an existing import line. Before:
+     `  RunId,` / `  ThreadId,` / `} from "@goat/contracts";`
+     After:
+     `  RunId,` / `  TextGenerationError,` / `  ThreadId,` / `} from "@goat/contracts";`
+   - Two NEW import statements (not names added to an existing line):
+     `import * as Fiber from "effect/Fiber";` (after `import * as Effect from "effect/Effect";`)
+     `import * as TestClock from "effect/testing/TestClock";` (after `import * as Option from "effect/Option";`)
+2. packages/client-runtime/src/state/assets.test.ts (row 6, 14c30eb96f). One NEW import statement, used only by the appended cases from line 184 on:
+   `import { resolveMediaSource } from "../mediaSource.ts";` (after `import * as EnvironmentSupervisor from "../connection/supervisor.ts";`)
+
+The three new import statements import real modules and replace no service any existing case reads. They are analogous to II but are not "added to an existing import line", so they go to the coordinator to confirm (needs_input of 01:2x UTC).
+
