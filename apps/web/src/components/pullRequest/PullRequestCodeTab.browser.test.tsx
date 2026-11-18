@@ -133,7 +133,7 @@ vi.mock(import("~/state/pullRequests"), async (original) => {
   };
 });
 
-import { render } from "../../../test/render";
+import { act, fakeTimers, render } from "../../../test/render";
 import PullRequestCodeTab from "./PullRequestCodeTab";
 
 const detail: PullRequestDetailView = {
@@ -282,10 +282,6 @@ async function expectFileHeaderShown(
 
 it("reveals a pending file across pages while a stale selected commit falls back to all commits", async () => {
   setup(true);
-  using _preferences = __setClientSettingsForTests({
-    ...DEFAULT_CLIENT_SETTINGS,
-    diffFilesCollapsed: false,
-  });
   const container = document.createElement("div");
   container.className = "flex h-[500px] w-[900px]";
   // The diff scope menu only renders for a pull request that still has commits.
@@ -417,6 +413,14 @@ it("keeps a revealed file open when its Viewed mark loads afterwards", async () 
   const container = document.createElement("div");
   container.className = "flex h-[700px] w-[900px]";
   await using screen = await render(tab(0, { path: "a.ts", nonce: 1 }), { container });
+  await using _poolCleanup = {
+    async [Symbol.asyncDispose]() {
+      // Dispose the shared diff pool before the next test mounts a fresh viewer.
+      using _timers = fakeTimers();
+      await screen.unmount();
+      await act(() => vi.runOnlyPendingTimersAsync());
+    },
+  };
   await expect.element(screen.getByText("three()", { exact: true })).toBeVisible();
 
   deliverViewedPaths(new Set(["a.ts"]));

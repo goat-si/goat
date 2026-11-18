@@ -3,10 +3,7 @@ import { setupSshComposer, state } from "~/test/sshComposerFixture";
 import { useLayoutEffect, useRef } from "react";
 import { expect, it, vi } from "vite-plus/test";
 
-const { changeLink } = vi.hoisted(() => ({ changeLink: vi.fn() }));
-vi.mock(import("../../hooks/usePullRequestLinking"), () => ({
-  usePullRequestLinking: () => ({ changeLink }) as never,
-}));
+vi.mock(import("../../hooks/usePullRequestLinking"), { spy: true });
 
 /**
  * A server thread with one pending command approval and a send that redirects the agent: the
@@ -375,7 +372,16 @@ it.each([
   const { environmentPresentations } = await import("~/state/presentation");
   const { makeThreadFixture } = await import("~/test-fixtures");
   const { deriveProviderInstanceEntries } = await import("~/providerInstances");
-  changeLink.mockReset().mockResolvedValue(undefined);
+  const { usePullRequestLinking } = await import("../../hooks/usePullRequestLinking");
+  const changeLink = vi.fn().mockResolvedValue(undefined);
+  const linking = vi.mocked(usePullRequestLinking);
+  linking.mockReturnValue({
+    mode: "multiple",
+    canLink: () => true,
+    isLinked: () => false,
+    changeLink,
+  });
+  using _linking = { [Symbol.dispose]: () => linking.mockRestore() };
   const environmentId = EnvironmentId.make("redirect-env");
   const projectId = ProjectId.make("project");
   const threadId = ThreadId.make("redirect-thread");
