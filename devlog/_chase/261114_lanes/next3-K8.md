@@ -245,3 +245,67 @@ Fixture recovery `dd6456ad38` passed 23 tests in two whole browser files on the 
 `chase/t3-261114-next3-k8` was fast-forwarded and read back at `dd6456ad3878645fb385713c0acfde5b8e2906a8`. The gate used merge base `593f1a546485e78216218641731d15918bc1e34c` and a clean tracked worktree. `vp run check:changed origin/chase/t3-261114-next3` exited 0. Format, lint, both Knip stages, GraphQL, both agent checks and 38-package typecheck passed. The server batch passed 5,035 tests with 12 skipped. The workspace batch passed 8,373 tests with 14 skipped. Total 13,408 passed, 26 skipped and zero failures across 756 selected files.
 
 NOT RUN: lane hosted CI, lane PR creation, P1 real-client and native capture, a real shared-home desktop update with SSH adoption, live native Windows PowerShell or OS sleep/wake, and live mixed-version pairs.
+
+## Integration re-merge
+
+Merged `d4dfd457571834bb2c3c85984e64f5abd4af0e5d`, which contains dev `a4392efb38b` (#3150), into `chase/t3-261114-next3-k8` at `4b4df3ba118c3f62c6f59845b842a7ea70c73fea`. The first parent is the prior lane head `dd6456ad3878645fb385713c0acfde5b8e2906a8`.
+
+The sole content conflict was `packages/ssh/src/tunnel.ensure-flight.fixture.ts`. The fixture retains K8's mutable config port, recording of forwarded SSH ports, and owning-launch guard probe. It also retains #3150's app-server probe and request counters, refusal response, and pending-replacement fixture. Whole-file tests cover the alias reconnect and the Pen existing-only path. Removed the unused tunnel schema import left by incoming extraction and kept the app-icon authorization assertion within the test file cap. All 18 line-budget entries for paths in the lane diff match `wc -l`. `pnpm-lock.yaml` changed and `vp i` exited 0.
+
+Incoming line-budget differences outside the lane diff remain at their integration values.
+
+- `apps/server/src/cloud/bootService.ts` records 1293 lines with 1283 measured.
+- `apps/server/src/git/GitManager.ts` records 3057 lines with 3048 measured.
+- `apps/server/src/mcp/OrchestratorMcpService.ts` records 3858 lines with 3833 measured.
+- `apps/server/src/vcs/GitVcsDriver.ts` records 1719 lines with 1717 measured.
+- `apps/server/src/vcs/GitVcsDriverCore.ts` records 5329 lines with 5314 measured.
+
+### Focused verification
+
+Whole changed SSH files, the fixture's direct consumers and the fix-round workspace focus ran together with exit 0. There were 543 passed and two skipped in 28 files. With `GOAT_TEST_TMP_GUARD=fail` from `apps/server`, the seven selected whole files exited 0 with 111 passed.
+
+| File | Passed | Skipped |
+|---|---:|---:|
+| `packages/ssh/src/command.diagnostics.test.ts` | 8 | 0 |
+| `packages/ssh/src/penAlias.test.ts` | 8 | 0 |
+| `packages/ssh/src/penConfigFile.test.ts` | 1 | 0 |
+| `packages/ssh/src/penRoute.test.ts` | 12 | 0 |
+| `packages/ssh/src/runtimeFactsScripts.test.ts` | 20 | 0 |
+| `packages/ssh/src/runtimeProbe.invocations.test.ts` | 28 | 0 |
+| `packages/ssh/src/runtimeWindows.test.ts` | 17 | 0 |
+| `packages/ssh/src/tunnel.client-session.test.ts` | 14 | 0 |
+| `packages/ssh/src/tunnel.core.test.ts` | 131 | 0 |
+| `packages/ssh/src/tunnel.ensure-flight.test.ts` | 10 | 0 |
+| `packages/ssh/src/tunnel.existing-only.test.ts` | 15 | 0 |
+| `packages/ssh/src/tunnel.failure-parity.test.ts` | 19 | 0 |
+| `packages/ssh/src/tunnel.launch-identity.test.ts` | 6 | 2 |
+| `packages/ssh/src/tunnel.managed-reuse.test.ts` | 2 | 0 |
+| `packages/client-runtime/src/connection/catalogHost.test.ts` | 16 | 0 |
+| `apps/web/src/remoteOpen.test.ts` | 21 | 0 |
+| `apps/web/src/components/commandPaletteFindItems.test.tsx` | 1 | 0 |
+| `apps/web/src/state/primaryEnvironment.test.ts` | 3 | 0 |
+| `apps/web/src/contextMenuFallback.keyboard.browser.test.ts` | 6 | 0 |
+| `apps/web/src/components/ChatMarkdown.browser.test.tsx` | 34 | 0 |
+| `apps/web/src/components/files/FileBrowserPanel.browser.test.tsx` | 17 | 0 |
+| `apps/web/src/components/preview/PreviewView.browser.test.tsx` | 19 | 0 |
+| `apps/web/src/components/settings/CloudMachinesSettings.browser.test.tsx` | 3 | 0 |
+| `apps/web/src/components/settings/ConnectionEnvironmentsSection.browser.test.tsx` | 25 | 0 |
+| `apps/desktop/src/preview/Manager.helpers.test.ts` | 6 | 0 |
+| `apps/desktop/src/preview/Manager.test.ts` | 65 | 0 |
+| `apps/desktop/src/updates/DesktopUpdates.sharedHome.test.ts` | 1 | 0 |
+| `apps/desktop/src/updates/DesktopUpdates.test.ts` | 35 | 0 |
+| `apps/server/src/assets/NativeAppIconResolver.test.ts` | 1 | 0 |
+| `apps/server/src/background/KeepAwake.test.ts` | 7 | 0 |
+| `apps/server/src/auth/RpcAuthorization.test.ts` | 48 | 0 |
+| `apps/server/src/process/externalLauncher.test.ts` | 33 | 0 |
+| `apps/server/src/preview/ServerBrowser.desktopSize.test.ts` | 4 | 0 |
+| `apps/server/src/preview/ServerBrowser.stopLoading.test.ts` | 7 | 0 |
+| `apps/server/src/preview/ServerBrowserStream.test.ts` | 11 | 0 |
+
+### READY receipt
+
+On `4b4df3ba118c3f62c6f59845b842a7ea70c73fea`, `vp run check:changed origin/chase/t3-261114-next3` exited 0, comparing 110 files against the merged integration parent. All static checks passed, including typecheck for 39 packages. The server batch passed 5,080 tests and skipped 12 in 369 files. The workspace batch passed 8,436 tests and skipped 14 in 399 files. Total 13,516 passed, 26 skipped and zero failures. The gate did not cache the result after detecting an input change. The tracked worktree was clean and the tested SHA was verified before the push.
+
+A plain fast-forward push updated `chase/t3-261114-next3-k8` from `dd6456ad38` to `4b4df3ba118c3f62c6f59845b842a7ea70c73fea`. The remote head was read back at the exact SHA.
+
+NOT RUN: lane hosted CI, real-client P1, live SSH to a Pen member and a real shared-home desktop update.
