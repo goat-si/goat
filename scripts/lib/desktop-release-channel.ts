@@ -3,4 +3,4 @@ export function resolveDesktopUpdateChannel(version: string): "latest" | "nightl
 }
 
 /** Published AppImages without a version, so electron-updater replaces them in place. False reverts O25. */
-export const VERSION_FREE_APPIMAGES = true;
+export const VERSION_FREE_APPIMAGES = false;
