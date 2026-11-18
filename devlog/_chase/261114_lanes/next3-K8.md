@@ -150,3 +150,14 @@ The one integration merge was `a5d411e3f5da626938e8e0722c9487f8f0d1a2f3`, with s
 
 
 **READY.** Pushed `chase/t3-261114-next3-k8` on a new branch and verified its remote head at `6c3f046c0046dfbfe1b02f4befbf2ac30272dde3`. The review diff is `2c0e0002a996ec5d46c708919be5a43f579176fa..6c3f046c0046dfbfe1b02f4befbf2ac30272dde3`.
+
+## Fix round 1 compatibility and prior art
+
+Reviewed head `6c3f046c0046dfbfe1b02f4befbf2ac30272dde3`.
+
+- P2-1. Upstream `22910ffdd2` keeps the requested port in the SSH result because OpenSSH resolves aliases on each connection. GOAT must retain caller intent at the Connections, cloud and catalog boundaries before the SSH manager sees it.
+- P2-2 and P2-3. Upstream `587deab7d3` bridges confirmed idle gaps with a grace interval. GOAT should stop the hold on uncertainty and disable, use the repository's bounded child shutdown pattern, and use the partial index in `RecoveryIndexes.ts` for its active snapshot.
+- P2-4. Upstream `a11ad7424d` uses a specific absolute app path for icon resolution. GOAT should use that path for launch and verify it on the destination before opening it. Existing launches and reveals continue using the existing request shape.
+- P3. Upstream `e93f6ea361` exposes Electron Find for tabs with the native find bridge. Share the rendering and bridge checks between the view, palette and keyboard path.
+- `79daf43c1c` C4. Write an expiring marker only when a desktop uses the managed SSH home. Older launchers ignore the marker and have their existing race during the handoff. A newer launcher with an older desktop proceeds when the marker is absent. Ignore malformed, stale and foreign-home markers. Bound the wait, preserve live-runtime adoption, and clear failed/cancelled installs' markers. One file, no RPC or database changes.
+- [GOAT #3683](https://github.com/goat-si/goat/issues/3683) C4. A server advertises native-tab Stop and applies its viewer-control policy before issuing CDP Stop and settling loading. Older clients keep their desktop IPC path. New clients use that path with older servers. Deny unauthorized or competing controllers and handle missing tabs without changing state. The capability and request are additive. There are no persisted rows.
