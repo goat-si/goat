@@ -16,6 +16,8 @@ import { live, now, seed } from "./MemoryWorker.testkit.ts";
 const codex = { instanceId: M.ProviderInstanceId.make("codex"), model: "gpt-6-luna" };
 const claude = { instanceId: M.ProviderInstanceId.make("claudeAgent"), model: "claude-haiku-5-5" };
 const api = M.ProviderInstanceId.make("memory-api-writer");
+const muse = { instanceId: M.ProviderInstanceId.make("muse"), model: "muse" };
+const pi = { instanceId: M.ProviderInstanceId.make("pi"), model: "demo/model" };
 const ready = (selection: M.ModelSelection): M.ServerProvider => ({
   instanceId: selection.instanceId,
   driver: M.ProviderDriverKind.make(selection.instanceId),
@@ -96,5 +98,43 @@ it.effect.each(["signed out", "exhausted", "signed out on a dedicated coding mod
         assert.deepStrictEqual(inputs, [claude, codex]);
         assert.deepStrictEqual((yield* status.get(Effect.void)).model.selection, codex);
       }).pipe(Effect.provide(withStatus));
+    }),
+);
+
+it.effect.each(["primary", "fallback"] as const)(
+  "uses a provider with the summary operation when Muse is the %s candidate",
+  (candidate) =>
+    Effect.gen(function* () {
+      const withoutMemory = {
+        ...ready(muse),
+        memoryGeneration: { summary: false, conflict: false },
+      };
+      const withMemory = { ...ready(pi), memoryGeneration: { summary: true, conflict: true } };
+      const registry = Layer.mock(ProviderRegistry)({
+        getProviders: Effect.succeed([withoutMemory, withMemory]),
+      });
+      const inputs: Array<M.MemoryModelSelection> = [];
+      yield* Effect.gen(function* () {
+        const settings = yield* Settings.ServerSettingsService;
+        yield* settings.updateSettings({
+          providerInstances: {
+            [muse.instanceId]: { driver: withoutMemory.driver, enabled: true },
+            [pi.instanceId]: { driver: withMemory.driver, enabled: true },
+          },
+          textGenerationModelSelection: candidate === "primary" ? pi : codex,
+          memoryModelSelection: candidate === "primary" ? muse : null,
+        });
+        yield* seed;
+        const worker = yield* Worker.MemoryWorker;
+        yield* worker.sweepDue();
+        assert.deepStrictEqual(inputs, [pi]);
+      }).pipe(
+        Effect.provide(
+          live(
+            () => undefined,
+            (input) => inputs.push(input.modelSelection),
+          ).pipe(Layer.provide(Hold.layer.pipe(Layer.provide(registry)))),
+        ),
+      );
     }),
 );

@@ -68,3 +68,22 @@ it("memory requires an eligible model and guides require an eligible driver", ()
   expect(resolveMemoryModelSelection(settings, capable, 0)).toEqual(extensionModel);
   expect(resolveReviewGuideModelSelection(settings, capable, null, 0)).toBeNull();
 });
+
+it("summary and conflict routes each require their own memory operation", () => {
+  const summaryOnly = {
+    ...piProvider({}),
+    memoryGeneration: { summary: true, conflict: false },
+  };
+  const codex = settings.textGenerationModelSelection;
+  const conflictOnly = {
+    ...piProvider({}),
+    instanceId: codex.instanceId,
+    driver: ProviderDriverKind.make("codex"),
+    models: [],
+    memoryGeneration: { summary: false, conflict: true },
+  };
+  const providers = [summaryOnly, conflictOnly];
+  expect(resolveMemoryModelSelection(settings, providers, 0)).toEqual(extensionModel);
+  expect(resolveMemoryModelSelection(settings, providers, 0, "conflict")).toEqual(codex);
+  expect(resolveMemoryModelSelection(settings, [summaryOnly], 0, "conflict")).toBeNull();
+});

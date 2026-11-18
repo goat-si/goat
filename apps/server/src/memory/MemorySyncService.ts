@@ -164,7 +164,7 @@ const make = Effect.gen(function* () {
   const generation = yield* Generation.TextGeneration;
   const hold = yield* Hold.shared;
   const memorySelection = (s: M.ServerSettings) =>
-    s.memoryEnabled ? hold.resolveModel(s) : Effect.succeed(null);
+    s.memoryEnabled ? hold.resolveModel(s, "conflict") : Effect.succeed(null);
   const identity = yield* Environment.ServerEnvironmentIdentity;
   const local = yield* identity.getEnvironmentId;
   const scope = yield* Scope.Scope;

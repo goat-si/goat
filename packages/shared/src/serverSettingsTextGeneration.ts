@@ -228,10 +228,20 @@ export function resolveSourceControlWriterModelSelection(
 export const isReviewGuideDriver = (driver: ProviderDriverKind): boolean =>
   driver === "codex" || driver === "claudeAgent";
 
+export type MemoryGenerationOperation = "summary" | "conflict";
+
+export function supportsMemoryGeneration(
+  provider: ServerProvider,
+  operation: MemoryGenerationOperation,
+): boolean {
+  // Older snapshots lack the operation flags. Muse has never implemented either operation.
+  return provider.memoryGeneration?.[operation] ?? provider.driver !== "muse";
+}
+
 type RoutingScope = {
   readonly projectId: ProjectId | null;
   readonly now: number;
-  readonly purpose?: "memory" | "reviewGuide";
+  readonly purpose?: MemoryGenerationOperation | "reviewGuide";
 };
 
 export function isTextGenerationEligible(
@@ -263,7 +273,10 @@ export function isTextGenerationEligible(
     isProviderTextGenerationCapable(provider) &&
     isModelTextGenerationCapable(provider, selection.model) &&
     !isTextGenerationQuotaExhausted(provider, selection.model, scope.now) &&
-    (scope.purpose !== "reviewGuide" || isReviewGuideDriver(provider.driver))
+    (scope.purpose === undefined ||
+      (scope.purpose === "reviewGuide"
+        ? isReviewGuideDriver(provider.driver)
+        : supportsMemoryGeneration(provider, scope.purpose)))
   );
 }
 
@@ -349,11 +362,12 @@ export function resolveMemoryModelSelection(
   settings: ServerSettings,
   providers: ReadonlyArray<ServerProvider>,
   now: number,
+  operation: MemoryGenerationOperation = "summary",
 ): ModelSelection | null {
   const primary = eligiblePrimary(settings, settings.memoryModelSelection, providers, {
     projectId: null,
     now,
-    purpose: "memory",
+    purpose: operation,
   });
   return (
     primary?.selection ??
@@ -363,7 +377,7 @@ export function resolveMemoryModelSelection(
       providers,
       null,
       now,
-      "memory",
+      operation,
     ).selection
   );
 }

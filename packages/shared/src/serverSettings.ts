@@ -32,12 +32,14 @@ export {
   isModelSelectionProviderEnabled,
   isReviewGuideDriver,
   isTextGenerationEligible,
+  type MemoryGenerationOperation,
   resolveMemoryModelSelection,
   resolveReviewGuideModelSelection,
   resolveSourceControlWriterModelSelection,
   resolveTextGenerationFallback,
   resolveTextGenerationModelSelection,
   resolveTextGenerationRoute,
+  supportsMemoryGeneration,
   textGenerationDefaultModel,
 } from "./serverSettingsTextGeneration.ts";
 

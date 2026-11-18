@@ -13,6 +13,7 @@ import * as M from "@goat/contracts";
 import {
   configuredMemoryModelSelection,
   resolveMemoryModelSelection,
+  type MemoryGenerationOperation,
 } from "@goat/shared/serverSettings";
 import {
   classifyTextGenerationFailure,
@@ -124,7 +125,10 @@ export function deterministicFailure(error: unknown): MemoryGenerationHoldReason
 export class MemoryGenerationHold extends Context.Service<
   MemoryGenerationHold,
   {
-    readonly resolveModel: (settings: M.ServerSettings) => Effect.Effect<M.ModelSelection | null>;
+    readonly resolveModel: (
+      settings: M.ServerSettings,
+      operation?: MemoryGenerationOperation,
+    ) => Effect.Effect<M.ModelSelection | null>;
     /** The hold key: the model selection and its provider's version. */
     readonly keyFor: (selection: M.MemoryModelSelection) => Effect.Effect<string>;
     /** Whether a call for this key would be refused now. */
@@ -154,12 +158,14 @@ export const make = Effect.gen(function* () {
 
   const resolveModel = Effect.fn("MemoryGenerationHold.resolveModel")(function* (
     settings: M.ServerSettings,
+    operation?: MemoryGenerationOperation,
   ) {
     if (Option.isNone(providers)) return configuredMemoryModelSelection(settings);
     return resolveMemoryModelSelection(
       settings,
       yield* providers.value.getProviders,
       yield* Clock.currentTimeMillis,
+      operation,
     );
   });
 

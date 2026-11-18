@@ -2322,15 +2322,15 @@ it.layer(
         yield* Effect.gen(function* () {
           const registry = yield* ProviderRegistry.ProviderRegistry;
 
-          assert.deepStrictEqual(yield* registry.getProviders, [
-            withBundledCompatibility(cachedProvider),
-          ]);
-          assert.deepStrictEqual(yield* registry.refresh(codexDriver), [
-            withBundledCompatibility(cachedProvider),
-          ]);
-          assert.deepStrictEqual(yield* registry.refreshInstance(codexInstanceId), [
-            withBundledCompatibility(cachedProvider),
-          ]);
+          const expected = [
+            withBundledCompatibility({
+              ...cachedProvider,
+              memoryGeneration: { summary: false, conflict: false },
+            }),
+          ];
+          assert.deepStrictEqual(yield* registry.getProviders, expected);
+          assert.deepStrictEqual(yield* registry.refresh(codexDriver), expected);
+          assert.deepStrictEqual(yield* registry.refreshInstance(codexInstanceId), expected);
         }).pipe(Effect.provide(runtimeServices));
       }),
     );

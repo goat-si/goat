@@ -257,7 +257,11 @@ export const layer = Layer.effect(
         cacheDir: config.providerStatusCacheDir,
         instanceId: key,
       }).pipe(Effect.provideService(Path.Path, path));
-      const { workspaceSnapshots: _workspaceSnapshots, ...machineProvider } = provider;
+      const {
+        workspaceSnapshots: _workspaceSnapshots,
+        memoryGeneration: _memoryGeneration,
+        ...machineProvider
+      } = provider;
       yield* writeProviderStatusCache({ filePath, provider: machineProvider }).pipe(
         Effect.provideService(FileSystem.FileSystem, fileSystem),
         Effect.provideService(Path.Path, path),

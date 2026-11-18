@@ -1,7 +1,7 @@
 import { RegistryContext, useAtomValue } from "@effect/atom-react";
 import type { EnvironmentId } from "@goat/contracts";
 import { createModelSelection } from "@goat/shared/model";
-import { resolveMemoryModelSelection } from "@goat/shared/serverSettings";
+import { resolveMemoryModelSelection, supportsMemoryGeneration } from "@goat/shared/serverSettings";
 import { useContext, useState } from "react";
 import { useNowMinute } from "../../hooks/useNowMinute";
 import { useEnvironmentSettings } from "../../hooks/useSettings";
@@ -36,7 +36,11 @@ export function MemoryGenerationSettings({
   const entries = sortProviderInstanceEntries(
     applyProviderInstanceSettings(
       deriveProviderInstanceEntries(
-        providers.filter((provider) => provider.supportsTextGeneration !== false),
+        providers.filter(
+          (provider) =>
+            provider.supportsTextGeneration !== false &&
+            supportsMemoryGeneration(provider, "summary"),
+        ),
       ),
       settings,
       null,

@@ -60,12 +60,12 @@ describe("text generation fallback candidates", () => {
       ready("cursor", { status: "error" }),
       ready("grok", { usageLimits: spent }),
       ready("muse"),
+      ready("omo"),
     ];
-    // Cursor, Grok and Muse are off until configured.
     const configured: ServerSettings = {
       ...settings,
       providerInstances: Object.fromEntries(
-        ["cursor", "grok", "muse"].map((driver) => [
+        ["cursor", "grok", "muse", "omo"].map((driver) => [
           ProviderInstanceId.make(driver),
           { driver: ProviderDriverKind.make(driver), enabled: true },
         ]),
@@ -73,7 +73,7 @@ describe("text generation fallback candidates", () => {
     };
 
     expect(resolveMemoryModelSelection(configured, providers, NOW)?.instanceId).toBe(
-      ProviderInstanceId.make("muse"),
+      ProviderInstanceId.make("omo"),
     );
   });
 

@@ -8,11 +8,26 @@ export const markAwaitingFirstCheck = (snapshot: ServerProvider): ServerProvider
   awaitingFirstCheck: true,
 });
 
+const withGenerationState = (
+  instance: ProviderInstance,
+  snapshot: ServerProvider,
+  awaiting: boolean,
+): ServerProvider => {
+  const annotated = {
+    ...snapshot,
+    memoryGeneration: {
+      summary: instance.textGeneration.generateMemorySummary !== undefined,
+      conflict: instance.textGeneration.resolveMemoryConflict !== undefined,
+    },
+  };
+  return awaiting ? markAwaitingFirstCheck(annotated) : annotated;
+};
+
 export const readProviderGenerationSnapshot = Effect.fn("Provider.readGenerationSnapshot")(
   function* (instance: ProviderInstance) {
     const awaiting = yield* instance.snapshot.isAwaitingFirstCheck ?? Effect.succeed(false);
     const snapshot = yield* instance.snapshot.getSnapshot;
-    return awaiting ? markAwaitingFirstCheck(snapshot) : snapshot;
+    return withGenerationState(instance, snapshot, awaiting);
   },
 );
 
@@ -20,7 +35,7 @@ export const streamProviderGenerationSnapshots = (instance: ProviderInstance) =>
   instance.snapshot.streamChanges.pipe(
     Stream.mapEffect((snapshot) =>
       (instance.snapshot.isAwaitingFirstCheck ?? Effect.succeed(false)).pipe(
-        Effect.map((awaiting) => (awaiting ? markAwaitingFirstCheck(snapshot) : snapshot)),
+        Effect.map((awaiting) => withGenerationState(instance, snapshot, awaiting)),
       ),
     ),
   );
