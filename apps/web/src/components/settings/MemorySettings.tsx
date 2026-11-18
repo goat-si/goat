@@ -55,6 +55,7 @@ import { useEnvironmentSettings } from "../../hooks/useSettings";
 import { useEnvironment, useEnvironments } from "../../state/environments";
 import { resolveMemoryModelSelection } from "@goat/shared/serverSettings";
 import { useProjects } from "../../state/entities";
+import { useEnvironmentShellStatus } from "../../state/shell";
 import { memorySaveMessage } from "@goat/client-runtime/state/memory";
 import {
   readEnvironmentScope,
@@ -226,7 +227,6 @@ function MemoryDestinationContent({
   const [syncError, setSyncError] = useState<string | null>(null);
   const [syncReload, setSyncReload] = useState(0);
   const refreshSync = () => {
-    setSync(null);
     setSyncError(null);
     setSyncReload((value) => value + 1);
   };
@@ -259,7 +259,10 @@ function MemoryDestinationContent({
     void getSync({ environmentId: syncRequest.environmentId, input: {} }).then((result) => {
       if (!current) return;
       if (result._tag === "Success") setSync(result.value);
-      else setSyncError("Could not load memory sharing status.");
+      else {
+        setSync(null);
+        setSyncError("Could not load memory sharing status.");
+      }
     });
     return () => {
       current = false;
@@ -397,6 +400,7 @@ function MemoryRecords({
   memoryEnabled: boolean;
 }) {
   const projects = useProjects().filter((project) => project.environmentId === environmentId);
+  const projectStatus = useEnvironmentShellStatus(environmentId);
   const navigate = useNavigate();
   const getBinding = useAtomCommand(memoryEnvironment.projectBindingGet, { reportFailure: false });
   const canGetBinding = useAtomValue(
@@ -405,7 +409,12 @@ function MemoryRecords({
   const [selection, setSelection] = useState<string | null>("user");
   const [scope, setScope] = useState<MemoryScope | null>({ kind: "user" });
   const selectedProject = projects.find((project) => `project:${project.id}` === selection);
-  const browseScope = selection?.startsWith("project:") && !selectedProject ? null : scope;
+  const [selectedTitle, setSelectedTitle] = useState<string | undefined>();
+  const projectMissing = selection?.startsWith("project:") && !selectedProject;
+  const projectSyncing = projectStatus === "synchronizing";
+  const projectRemoved = projectMissing && !projectSyncing;
+  const scopeTitle = selectedProject?.title ?? (projectSyncing ? selectedTitle : undefined);
+  const browseScope = projectRemoved ? null : scope;
   const [error, setError] = useState<string | null>(null);
   const generation = useRef(0);
   useEffect(
@@ -428,6 +437,7 @@ function MemoryRecords({
   async function choose(project: (typeof projects)[number] | null) {
     const attempt = ++generation.current;
     setSelection(project ? `project:${project.id}` : "user");
+    setSelectedTitle(project?.title);
     setError(null);
     setScope(project ? null : { kind: "user" });
     clearMemorySelection();
@@ -460,6 +470,8 @@ function MemoryRecords({
           description={
             error ? (
               <span role="alert">{error}</span>
+            ) : projectRemoved ? (
+              "The selected project is no longer available. Choose a memory scope."
             ) : !scope ? (
               "Loading project memory scope"
             ) : !canGetBinding && projects.length > 0 ? (
@@ -479,7 +491,7 @@ function MemoryRecords({
             >
               <SelectTrigger aria-label="Memory scope">
                 <SelectValue placeholder="Choose memory scope">
-                  {selection === "user" ? "User" : selectedProject?.title}
+                  {selection === "user" ? "User" : scopeTitle}
                 </SelectValue>
               </SelectTrigger>
               <SelectPopup>
@@ -505,7 +517,7 @@ function MemoryRecords({
           environmentId={environmentId}
           memorySpaceId={memorySpaceId}
           scope={browseScope}
-          scopeLabel={selectedProject?.title ?? memoryScopeLabel(browseScope)}
+          scopeLabel={scopeTitle ?? memoryScopeLabel(browseScope)}
         />
       ) : null}
     </>
