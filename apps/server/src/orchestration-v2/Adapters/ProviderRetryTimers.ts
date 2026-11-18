@@ -4,14 +4,14 @@ import * as Effect from "effect/Effect";
 import * as Fiber from "effect/Fiber";
 import type * as Scope from "effect/Scope";
 
-export function makeCodexRetryTimers(scope: Scope.Scope) {
+export function makeProviderRetryTimers(scope: Scope.Scope) {
   const timers = new Map<ProviderTurnId, Fiber.Fiber<void>>();
-  const cancel = Effect.fn("CodexRetryTimers.cancel")(function* (id: ProviderTurnId) {
+  const cancel = Effect.fn("ProviderRetryTimers.cancel")(function* (id: ProviderTurnId) {
     const timer = timers.get(id);
     timers.delete(id);
     if (timer !== undefined) yield* Fiber.interrupt(timer);
   });
-  const start = Effect.fn("CodexRetryTimers.start")(function* (
+  const start = Effect.fn("ProviderRetryTimers.start")(function* (
     id: ProviderTurnId,
     work: Effect.Effect<void, ProviderAdapter.ProviderAdapterProtocolError>,
   ) {

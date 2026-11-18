@@ -1,7 +1,7 @@
 import { parseCodexRetryProgress } from "./CodexRetryProgress.ts";
 import { makeCodexMcpStartup } from "./CodexMcpStartup.ts";
 import { makeCodexThreadClosings } from "./CodexThreadClosings.ts";
-import { makeCodexRetryTimers } from "./CodexRetryTimers.ts";
+import { makeProviderRetryTimers } from "./ProviderRetryTimers.ts";
 import {
   CodexProviderCapabilitiesV2,
   normalizeCodexThreadLoadModelSelection,
@@ -1396,7 +1396,7 @@ export const makeCodexAdapterV2 = Effect.fn("makeCodexAdapterV2")(function* (
         const providerRetries = yield* Ref.make(
           new Map<ProviderTurnId, ActiveCodexProviderRetry>(),
         );
-        const providerRetryTimers = makeCodexRetryTimers(scope);
+        const providerRetryTimers = makeProviderRetryTimers(scope);
         const threadClosings = makeCodexThreadClosings();
         const planIds = yield* Ref.make(new Map<string, OrchestrationV2PlanArtifact["id"]>());
         const pendingRuntimeRequests = yield* Ref.make(
