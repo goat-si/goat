@@ -67,6 +67,8 @@ export interface MarkdownLinkCustomization {
 
 export interface SelectableMarkdownTextProps {
   readonly markdown: string;
+  /** True while the message still streams: its open last fence then shows plain. */
+  readonly streaming?: boolean;
   readonly preserveMarkdownSource?: boolean;
   readonly onTaskListItemPress?: (event: {
     readonly index: number;

@@ -6,10 +6,13 @@ import (
 	"errors"
 	"io"
 	"net"
+	"net/http"
+	"net/http/httptest"
 	"os"
 	"path/filepath"
 	"strconv"
 	"strings"
+	"sync"
 	"testing"
 
 	"github.com/goat-si/goat/apps/pen/internal/daemon"
@@ -126,6 +129,28 @@ func TestPipeEndsWith255WhenTheRemoteIsRevoked(t *testing.T) {
 	}
 }
 
+type pipeTraceBuffer struct {
+	mu         sync.Mutex
+	out        bytes.Buffer
+	rejection  string
+	onRejected func()
+}
+
+func (b *pipeTraceBuffer) Write(p []byte) (int, error) {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	if strings.Contains(string(p), b.rejection) {
+		b.onRejected()
+	}
+	return b.out.Write(p)
+}
+
+func (b *pipeTraceBuffer) String() string {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	return b.out.String()
+}
+
 func TestPipeTraceOnPinnedRelaysNamesTheWinnerAndTheFirstByte(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
@@ -146,19 +171,22 @@ func TestPipeTraceOnPinnedRelaysNamesTheWinnerAndTheFirstByte(t *testing.T) {
 		io.Copy(io.Discard, c)
 		c.Close()
 	}()
-	dead, err := net.Listen("tcp", "127.0.0.1:0")
-	if err != nil {
-		t.Fatal(err)
-	}
-	deadURL := "http://" + dead.Addr().String()
-	dead.Close()
+	rejecting := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		w.WriteHeader(http.StatusServiceUnavailable)
+	}))
+	defer rejecting.Close()
+	deadURL := rejecting.URL
+	// Let the losing dial be traced before the real relay can finish its handshake.
+	release := rs.HoldForwarding()
+	defer release()
+	errOut := pipeTraceBuffer{rejection: "relay=" + deadURL + " failed", onRejected: release}
 
 	t.Setenv("PEN_HOME", b.Dir)
 	t.Setenv("PEN_TRACE", "1")
 	t.Setenv("PEN_RELAYS", deadURL+" "+rs.URL)
 	Stdin = strings.NewReader("")
 	defer func() { Stdin = os.Stdin }()
-	var out, errOut bytes.Buffer
+	var out bytes.Buffer
 	if code := RunPipe([]string{"a", strconv.Itoa(ln.Addr().(*net.TCPAddr).Port)}, &out, &errOut); code != 0 {
 		t.Fatalf("pipe exit %d: %s", code, errOut.String())
 	}
