@@ -9,9 +9,7 @@ export const messageEntries = {
     summary: "Show the user a mid-turn message",
     description:
       "Show Markdown in the calling thread before the turn ends. Use for text the user must read in full mid-turn. Put ordinary progress updates and final replies in assistant text.",
-    effect: "write",
-    capability: "none",
-    capabilityReason: "Returns text to render in the calling thread's own tool result.",
+    effect: "read",
     listing: "prompt",
     hostRoutable: false,
     requires: "thread",
