@@ -68,21 +68,22 @@ export function endedRunsByAttempt(
   run: Pick<OrchestrationV2Run, "ordinal" | "restartContinuationOfRunId">,
   providerThreadId: OrchestrationV2ProviderThread["id"],
 ) {
-  const ended = new Map(
-    runs
-      .filter(
-        (previous) =>
-          previous.ordinal < run.ordinal &&
-          ENDED_RUN_STATUSES.has(previous.status) &&
-          previous.id !== run.restartContinuationOfRunId,
-      )
-      .map((previous) => [previous.id, previous] as const),
-  );
-  const byAttempt = new Map(
-    Array.from(ended.values())
-      .filter((previous) => previous.providerThreadId === providerThreadId)
-      .map((previous) => [previous.activeAttemptId, previous] as const),
-  );
+  const ended = new Map<OrchestrationV2Run["id"], OrchestrationV2Run>();
+  const byAttempt = new Map<
+    NonNullable<OrchestrationV2Run["activeAttemptId"]>,
+    OrchestrationV2Run
+  >();
+  for (const previous of runs) {
+    if (
+      previous.ordinal >= run.ordinal ||
+      !ENDED_RUN_STATUSES.has(previous.status) ||
+      previous.id === run.restartContinuationOfRunId
+    )
+      continue;
+    ended.set(previous.id, previous);
+    if (previous.providerThreadId === providerThreadId && previous.activeAttemptId !== null)
+      byAttempt.set(previous.activeAttemptId, previous);
+  }
   for (const attempt of attempts) {
     const previous = ended.get(attempt.runId);
     if (previous !== undefined && attempt.providerThreadId === providerThreadId) {

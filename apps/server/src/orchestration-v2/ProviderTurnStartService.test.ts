@@ -497,6 +497,7 @@ effectIt.effect.each([
   { runStatus: "completed", turnStatus: "completed" },
   { runStatus: "failed", turnStatus: "running", differentThread: true },
   { runStatus: "failed", turnStatus: "running", liveSession: false },
+  { runStatus: "failed", turnStatus: "running", liveSession: false, unownedTurn: true },
   { runStatus: "failed", turnStatus: "interrupted", interruptFailure: true },
 ] as const)("continues without interrupting when recovery does not apply: %j", (previousTurn) =>
   Effect.gen(function* () {
@@ -505,6 +506,8 @@ effectIt.effect.each([
     yield* harness.start;
 
     expect(harness.interruptTurn).not.toHaveBeenCalled();
+    if ("unownedTurn" in previousTurn)
+      expect(harness.projection().providerTurns[0]?.status).toBe("running");
     expect(harness.projection().runs.at(-1)?.status).toBe("running");
   }),
 );

@@ -555,7 +555,7 @@ export const layer: Layer.Layer<
       );
       const endedRuns = endedRunsByAttempt(projection, run, providerThread.id);
       const abandonedTurns = projection.providerTurns.flatMap((turn) => {
-        const previous = endedRuns.get(turn.runAttemptId);
+        const previous = turn.runAttemptId === null ? undefined : endedRuns.get(turn.runAttemptId);
         return turn.providerThreadId === providerThread.id &&
           turn.status === "running" &&
           previous !== undefined

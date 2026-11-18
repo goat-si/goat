@@ -93,6 +93,7 @@ export function makeLocalCommandHarness(input: {
   readonly previousTurn?: {
     readonly runStatus: "failed" | "completed" | "interrupted" | "rolled_back";
     readonly supersededTurn?: boolean;
+    readonly unownedTurn?: boolean;
     readonly terminationCause?: "person_stop" | "agent_stop";
     readonly turnStatus: "running" | "completed" | "interrupted";
     readonly differentThread?: boolean;
@@ -351,9 +352,11 @@ export function makeLocalCommandHarness(input: {
           rootNodeId: input.previousTurn.supersededTurn
             ? NodeId.make("previous-steered-root")
             : previousRootId,
-          activeAttemptId: input.previousTurn.supersededTurn
-            ? restartedAttemptId
-            : previousAttemptId,
+          activeAttemptId: input.previousTurn.unownedTurn
+            ? null
+            : input.previousTurn.supersededTurn
+              ? restartedAttemptId
+              : previousAttemptId,
           providerThreadId: previousProviderThreadId,
           completedAt: now,
         },
@@ -400,7 +403,7 @@ export function makeLocalCommandHarness(input: {
                 id: previousTurnId,
                 providerThreadId: previousProviderThreadId,
                 nodeId: NodeId.make("previous-root"),
-                runAttemptId: previousAttemptId,
+                runAttemptId: input.previousTurn.unownedTurn ? null : previousAttemptId,
                 ordinal: 1,
                 nativeTurnRef: null,
                 status: input.previousTurn.turnStatus,
