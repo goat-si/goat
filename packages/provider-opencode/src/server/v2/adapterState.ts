@@ -74,6 +74,7 @@ export interface ActiveTurn {
   unsent: boolean;
   readonly steers: Set<string>;
   readonly settledInbox: Set<string>;
+  readonly takenPages: Set<string>;
   heldEnd: TurnTerminal | undefined;
   awaitingStart: boolean;
   /** Scope child tool IDs because model-generated IDs can repeat parent IDs. */

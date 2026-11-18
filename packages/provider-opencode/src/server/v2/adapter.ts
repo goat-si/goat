@@ -1,3 +1,4 @@
+import { makeNestedHtmlRenderEmitter } from "./nestedHtmlRenders.ts";
 import { makeSessionInventory } from "./sessionInventory.ts";
 import type {
   EventOf,
@@ -614,6 +615,14 @@ export const make = Effect.fn("OpenCode2Adapter.make")(function* (instanceId: Pr
       });
     });
 
+    const emitNestedHtmlRenders = makeNestedHtmlRenderEmitter({
+      driver,
+      mcpSessions,
+      mcpServerNameFor,
+      emit,
+      emitNode,
+      itemBase,
+    });
     const emitTool = Effect.fnUntraced(function* (
       state: ThreadState,
       turn: ActiveTurn,
@@ -671,28 +680,36 @@ export const make = Effect.fn("OpenCode2Adapter.make")(function* (instanceId: Pr
           ? "failed"
           : status;
       yield* emitNode(state, turn, nativeId, "tool_call", settled, startedAt, completedAt);
-      yield* emit({
-        type: "turn_item.updated",
-        driver,
-        turnItem: openCodeToolTurnItem(
-          {
-            ...itemBase(state, turn, nativeId, settled, startedAt, completedAt, updatedAt),
-            ...(result?.nativeTaskId === undefined
-              ? {}
-              : { nativeItemRef: ref(result.nativeTaskId) }),
-          },
-          {
-            name: tool.name,
-            input: tool.input,
-            output: result?.output,
-            fileUrls: result?.fileUrls,
-            completedMetadata:
-              status === "completed" || result?.nativeTaskId !== undefined
-                ? result?.metadata
-                : undefined,
-          },
-        ),
-      });
+      const item = openCodeToolTurnItem(
+        {
+          ...itemBase(state, turn, nativeId, settled, startedAt, completedAt, updatedAt),
+          ...(result?.nativeTaskId === undefined
+            ? {}
+            : { nativeItemRef: ref(result.nativeTaskId) }),
+        },
+        {
+          name: tool.name,
+          input: tool.input,
+          output: result?.output,
+          fileUrls: result?.fileUrls,
+          completedMetadata:
+            status === "completed" || result?.nativeTaskId !== undefined
+              ? result?.metadata
+              : undefined,
+        },
+      );
+      yield* emit({ type: "turn_item.updated", driver, turnItem: item });
+      if (settled !== "running") {
+        yield* emitNestedHtmlRenders(
+          state,
+          turn,
+          nativeId,
+          item,
+          result?.metadata,
+          startedAt,
+          updatedAt,
+        );
+      }
     });
 
     const { emitCompaction, emitRetry, updateRetry } = makeTurnStatusItems({
@@ -763,6 +780,7 @@ export const make = Effect.fn("OpenCode2Adapter.make")(function* (instanceId: Pr
       unsent: false,
       steers: new Set(),
       settledInbox: new Set(),
+      takenPages: new Set(),
       heldEnd: undefined,
       awaitingStart: options.awaitingStart,
       scope: options.scope,
