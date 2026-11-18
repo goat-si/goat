@@ -88,6 +88,7 @@ const setupWatcher = Effect.fn("test.setupKeepAwake")(function* (
   const events = yield* Queue.unbounded<OrchestrationV2StoredEvent>();
   const transitions = yield* Queue.unbounded<"held" | "released">();
   const cursorReads = yield* Ref.make(0);
+  const subscriptions = yield* Ref.make(0);
   const fakeSpawner = ChildProcessSpawner.make(() =>
     Effect.acquireRelease(Queue.offer(transitions, "held"), () =>
       Queue.offer(transitions, "released"),
@@ -118,7 +119,13 @@ const setupWatcher = Effect.fn("test.setupKeepAwake")(function* (
           Layer.succeed(HostProcess.Platform, "darwin"),
           Layer.mock(OrchestrationEventStore.OrchestrationEventStore)({
             latestApplicationSequence: Ref.update(cursorReads, (n) => n + 1).pipe(Effect.as(0)),
-            streamApplicationEvents: () => Stream.fromQueue(events),
+            streamApplicationEvents: () =>
+              Stream.unwrap(
+                Effect.acquireRelease(
+                  Ref.update(subscriptions, (n) => n + 1),
+                  () => Ref.update(subscriptions, (n) => n - 1),
+                ).pipe(Effect.as(Stream.fromQueue(events))),
+              ),
           }),
           Layer.mock(Settings.ServerSettingsService)({
             getSettings: Effect.succeed({
@@ -131,7 +138,7 @@ const setupWatcher = Effect.fn("test.setupKeepAwake")(function* (
       ),
     ),
   );
-  return { sql, transitions, settings, events, cursorReads };
+  return { sql, transitions, settings, events, cursorReads, subscriptions };
 });
 
 const sqlite = NodeSqliteClient.layer({ filename: ":memory:" });
@@ -222,5 +229,8 @@ it.effect("takes its first activity snapshot when keep-awake is enabled", () =>
     yield* Queue.offer(h.settings, DEFAULT_SERVER_SETTINGS);
     expect(yield* Queue.take(h.transitions)).toBe("held");
     expect(yield* Ref.get(h.cursorReads)).toBe(1);
+    yield* Queue.offer(h.settings, { ...DEFAULT_SERVER_SETTINGS, keepAwakeWhileAgentsWork: false });
+    expect(yield* Queue.take(h.transitions)).toBe("released");
+    expect(yield* Ref.get(h.subscriptions)).toBe(0);
   }).pipe(Effect.provide(sqlite)),
 );

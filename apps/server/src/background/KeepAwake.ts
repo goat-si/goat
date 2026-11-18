@@ -198,7 +198,9 @@ export const layer = Layer.effectDiscard(
       holdWhileWanted(
         enabled.pipe(
           Stream.changes,
-          Stream.switchMap((on) => (on ? active : Stream.succeed("disabled" as const))),
+          Stream.switchMap((on) =>
+            on ? active : Stream.succeed<boolean | "unknown" | "disabled">("disabled"),
+          ),
         ),
         hold,
       ).pipe(Effect.catchCause((cause) => Effect.logWarning("keep-awake stopped", { cause }))),
