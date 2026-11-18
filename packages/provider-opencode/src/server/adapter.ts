@@ -1,3 +1,4 @@
+import { subagentResultPreview } from "./subagentResult.ts";
 import { makeDetachedChildOutcomes } from "./detachedChildOutcomes.ts";
 import {
   topLevelRequestOwner,
@@ -139,6 +140,7 @@ import {
 export const OPENCODE_PROVIDER = ProviderDriverKind.make("opencode");
 export const OPENCODE_DEFAULT_INSTANCE_ID = defaultInstanceIdForDriver(OPENCODE_PROVIDER);
 export const OPENCODE_SDK_PROTOCOL = "opencode-sdk.sse" as const;
+const MAX_DETACHED_LAUNCHES = 128;
 const DEFAULT_OPENCODE_SETTINGS = Schema.decodeSync(OpenCodeSettings)({});
 
 const makeOpenCodeMessageId = Effect.fnUntraced(function* (
@@ -604,7 +606,7 @@ export const makeOpenCodeAdapterV2 = Effect.fn("makeOpenCodeAdapterV2")(function
         // Busy children outlive parent settlement; keep their server open.
         const busySessionIds = new Set<string>();
         const unstartedSessionIds = new Set<string>();
-        let unsettledLaunches = 0;
+        const launches = new Set<OpenCodeSubagentContext>();
         // Remember settled requests across routing retries to prevent resurrection; only recent IDs matter.
         const settledNativeRequestIds = new Set<string>();
         const pendingChildRequestRoutes = new Set<string>();
@@ -917,19 +919,114 @@ export const makeOpenCodeAdapterV2 = Effect.fn("makeOpenCodeAdapterV2")(function
           return (index === -1 ? userMessageIds.length : index) + 1;
         });
 
+        const emitSubagentStatus = Effect.fnUntraced(function* (
+          context: OpenCodeSubagentContext,
+          status: ReturnType<typeof openCodeToolStatus>,
+          completedAt: DateTime.Utc | null,
+          now: DateTime.Utc,
+        ) {
+          const { parentState: state, parentTurn: turn, nodeId, prompt, title } = context;
+          const nativeItemRef = providerRef(context.nativeItemId);
+          const turnItemId = idAllocator.derive.turnItemFromProviderItem({
+            driver: OPENCODE_PROVIDER,
+            nativeItemId: context.nativeItemId,
+          });
+          const subagentStatus: OrchestrationV2Subagent["status"] = status.item;
+          const subagent: OrchestrationV2Subagent = {
+            id: nodeId,
+            threadId: turn.threadId,
+            runId: turn.runId,
+            parentNodeId: turn.rootNodeId,
+            origin: "provider_native",
+            createdBy: "agent",
+            driver: OPENCODE_PROVIDER,
+            providerInstanceId: options.instanceId,
+            providerThreadId: context.childProviderThreadId,
+            childThreadId: context.childThreadId,
+            nativeTaskRef: nativeItemRef,
+            prompt,
+            title,
+            model: context.model,
+            status: subagentStatus,
+            result: context.result,
+            startedAt: context.startedAt,
+            completedAt,
+            updatedAt: now,
+          };
+          yield* emitProviderEvent({
+            type: "node.updated",
+            driver: OPENCODE_PROVIDER,
+            node: {
+              id: nodeId,
+              threadId: turn.threadId,
+              runId: turn.runId,
+              parentNodeId: turn.rootNodeId,
+              rootNodeId: turn.rootNodeId,
+              kind: "subagent",
+              status: status.node,
+              countsForRun: false,
+              providerThreadId: context.childProviderThreadId ?? state.providerThread.id,
+              providerTurnId: turn.providerTurnId,
+              nativeItemRef,
+              runtimeRequestId: null,
+              checkpointScopeId: null,
+              startedAt: context.startedAt,
+              completedAt,
+            },
+          });
+          yield* emitProviderEvent({
+            type: "subagent.updated",
+            driver: OPENCODE_PROVIDER,
+            subagent,
+          });
+          yield* emitProviderEvent({
+            type: "turn_item.updated",
+            driver: OPENCODE_PROVIDER,
+            turnItem: {
+              id: turnItemId,
+              threadId: turn.threadId,
+              runId: turn.runId,
+              nodeId,
+              providerThreadId: state.providerThread.id,
+              providerTurnId: turn.providerTurnId,
+              nativeItemRef,
+              parentItemId: null,
+              ordinal: itemOrdinal(turn, context.nativeItemId),
+              status: status.item,
+              title,
+              startedAt: context.startedAt,
+              completedAt,
+              updatedAt: now,
+              type: "subagent",
+              subagentId: nodeId,
+              origin: "provider_native",
+              driver: OPENCODE_PROVIDER,
+              providerInstanceId: options.instanceId,
+              childThreadId: context.childThreadId,
+              prompt,
+              result: context.result,
+            },
+          });
+        });
+
+        const settleLaunch = Effect.fnUntraced(function* (
+          context: OpenCodeSubagentContext,
+          outcome: TerminalTurnStatus,
+        ) {
+          launches.delete(context);
+          context.launchOutcome = outcome;
+          if (context.childSessionId !== null) childOutcomes.take(context.childSessionId);
+          const now = yield* DateTime.now;
+          yield* emitSubagentStatus(context, { node: outcome, item: outcome }, now, now);
+        });
+
         const emitSubagent = Effect.fnUntraced(function* (
           state: OpenCodeThreadState,
           turn: ActiveOpenCodeTurn,
           part: ToolPart,
-          childOutcome?: TerminalTurnStatus,
         ) {
           const now = yield* DateTime.now;
-          const nativeItemRef = providerRef(part.id);
           const nodeId = idAllocator.derive.nodeFromProviderItem({
-            driver: OPENCODE_PROVIDER,
-            nativeItemId: part.id,
-          });
-          const turnItemId = idAllocator.derive.turnItemFromProviderItem({
             driver: OPENCODE_PROVIDER,
             nativeItemId: part.id,
           });
@@ -952,7 +1049,6 @@ export const makeOpenCodeAdapterV2 = Effect.fn("makeOpenCodeAdapterV2")(function
               childProviderThreadId: null,
               model: null,
               result: null,
-              launch: null,
             };
             subagentsByNativeItemId.set(part.id, context);
           }
@@ -1064,110 +1160,48 @@ export const makeOpenCodeAdapterV2 = Effect.fn("makeOpenCodeAdapterV2")(function
               providerThread: childProviderThread,
             });
           }
-          const { output } = openCodeToolStateResult(part.state);
-          if (part.state.status === "completed" && output !== undefined) context.result = output;
           const childId = context.childSessionId;
           const detached =
             part.state.status === "completed" &&
-            recordValue(part.state.metadata, "background") === true &&
-            childId !== null;
+            childId !== null &&
+            recordValue(part.state.metadata, "background") === true;
+          context.prompt = detached ? subagentResultPreview(prompt) : prompt;
+          context.title = detached && title !== null ? subagentResultPreview(title) : title;
+          if (part.state.status === "completed") {
+            context.result = detached
+              ? subagentResultPreview(part.state.output)
+              : part.state.output;
+          }
           const outcome = detached
-            ? (context.launchOutcome ?? childOutcome ?? childOutcomes.take(childId))
-            : childOutcome;
-          if (detached && childOutcome !== undefined) childOutcomes.take(childId);
+            ? (context.launchOutcome ?? childOutcomes.take(childId))
+            : undefined;
           const launched =
-            outcome === undefined &&
             detached &&
+            outcome === undefined &&
             (busySessionIds.has(childId) || unstartedSessionIds.has(childId));
-          if ((context.launch !== null) !== launched) unsettledLaunches += launched ? 1 : -1;
-          context.launch = launched ? part : null;
-          if (detached && !launched) context.launchOutcome = outcome ?? "completed";
-          const status = launched
-            ? ({ node: "running", item: "running" } as const)
-            : outcome === undefined
-              ? openCodeToolStatus(part)
-              : { node: outcome, item: outcome };
-          const completedAt = launched
-            ? null
-            : outcome === undefined
-              ? toolCompletedAt(part, now)
-              : now;
-          const subagentStatus: OrchestrationV2Subagent["status"] = status.item;
-          const subagent: OrchestrationV2Subagent = {
-            id: nodeId,
-            threadId: turn.threadId,
-            runId: turn.runId,
-            parentNodeId: turn.rootNodeId,
-            origin: "provider_native",
-            createdBy: "agent",
-            driver: OPENCODE_PROVIDER,
-            providerInstanceId: options.instanceId,
-            providerThreadId: context.childProviderThreadId,
-            childThreadId: context.childThreadId,
-            nativeTaskRef: nativeItemRef,
-            prompt,
-            title,
-            model: context.model,
-            status: subagentStatus,
-            result: context.result,
-            startedAt: context.startedAt,
-            completedAt,
-            updatedAt: now,
-          };
-          yield* emitProviderEvent({
-            type: "node.updated",
-            driver: OPENCODE_PROVIDER,
-            node: {
-              id: nodeId,
-              threadId: turn.threadId,
-              runId: turn.runId,
-              parentNodeId: turn.rootNodeId,
-              rootNodeId: turn.rootNodeId,
-              kind: "subagent",
-              status: status.node,
-              countsForRun: false,
-              providerThreadId: context.childProviderThreadId ?? state.providerThread.id,
-              providerTurnId: turn.providerTurnId,
-              nativeItemRef,
-              runtimeRequestId: null,
-              checkpointScopeId: null,
-              startedAt: context.startedAt,
-              completedAt,
-            },
-          });
-          yield* emitProviderEvent({
-            type: "subagent.updated",
-            driver: OPENCODE_PROVIDER,
-            subagent,
-          });
-          yield* emitProviderEvent({
-            type: "turn_item.updated",
-            driver: OPENCODE_PROVIDER,
-            turnItem: {
-              id: turnItemId,
-              threadId: turn.threadId,
-              runId: turn.runId,
-              nodeId,
-              providerThreadId: state.providerThread.id,
-              providerTurnId: turn.providerTurnId,
-              nativeItemRef,
-              parentItemId: null,
-              ordinal: itemOrdinal(turn, part.id),
-              status: status.item,
-              title,
-              startedAt: context.startedAt,
-              completedAt,
-              updatedAt: now,
-              type: "subagent",
-              subagentId: nodeId,
-              origin: "provider_native",
-              driver: OPENCODE_PROVIDER,
-              providerInstanceId: options.instanceId,
-              childThreadId: context.childThreadId,
-              prompt,
-              result: context.result,
-            },
-          });
+          if (launched) {
+            // The native process can keep running when its outcome is no longer tracked locally.
+            if (!launches.has(context) && launches.size >= MAX_DETACHED_LAUNCHES) {
+              const oldest = launches.values().next();
+              if (!oldest.done) yield* settleLaunch(oldest.value, "interrupted");
+            }
+            launches.add(context);
+            return yield* emitSubagentStatus(
+              context,
+              { node: "running", item: "running" },
+              null,
+              now,
+            );
+          }
+          if (outcome !== undefined) return yield* settleLaunch(context, outcome);
+          launches.delete(context);
+          if (detached) context.launchOutcome = "completed";
+          yield* emitSubagentStatus(
+            context,
+            openCodeToolStatus(part),
+            toolCompletedAt(part, now),
+            now,
+          );
         });
 
         const settleLaunchedSubagents = Effect.fnUntraced(function* (
@@ -1175,10 +1209,8 @@ export const makeOpenCodeAdapterV2 = Effect.fn("makeOpenCodeAdapterV2")(function
           outcome: TerminalTurnStatus,
           descendants = false,
         ) {
-          if (unsettledLaunches === 0 && !descendants) return;
-          for (const context of subagentsByNativeItemId.values()) {
-            if (context.launch === null && (!descendants || context.launchOutcome !== undefined))
-              continue;
+          const candidates = descendants ? subagentsByNativeItemId.values() : launches;
+          for (const context of candidates) {
             let owner = context.parentState;
             if (descendants) {
               while (owner.parentSubagent !== null && owner.nativeSessionId !== sessionId) {
@@ -1189,9 +1221,8 @@ export const makeOpenCodeAdapterV2 = Effect.fn("makeOpenCodeAdapterV2")(function
               ? owner.nativeSessionId === sessionId
               : context.childSessionId === sessionId;
             if (!matches) continue;
-            if (context.launch !== null) {
-              yield* emitSubagent(context.parentState, context.parentTurn, context.launch, outcome);
-            } else if (context.childSessionId !== null) {
+            if (launches.has(context)) yield* settleLaunch(context, outcome);
+            else if (context.launchOutcome === undefined && context.childSessionId !== null) {
               childOutcomes.observe(context.childSessionId, outcome, false);
             }
           }
@@ -2888,9 +2919,7 @@ export const makeOpenCodeAdapterV2 = Effect.fn("makeOpenCodeAdapterV2")(function
           providerSessionId: input.providerSessionId,
           providerSession: sessionEntity,
           events: Stream.fromEffectRepeat(Queue.take(events)),
-          hasPendingBackgroundWork: Effect.sync(
-            () => busySessionIds.size > 0 || unsettledLaunches > 0,
-          ),
+          hasPendingBackgroundWork: Effect.sync(() => busySessionIds.size > 0 || launches.size > 0),
           holdsLiveWork: openCodeLiveWork(
             () => pendingRequests.size > 0,
             () => busySessionIds,

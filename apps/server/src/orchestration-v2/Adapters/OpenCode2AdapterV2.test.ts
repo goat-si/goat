@@ -1254,6 +1254,72 @@ it.layer(McpProviderSessions.layer)("OpenCode2 adapter", (it) => {
     }).pipe(Effect.scoped),
   );
 
+  const childAnswer = (text: string, run: number) =>
+    event("session.text.ended", {
+      sessionID: CHILD,
+      assistantMessageID: `msg_child_${run}`,
+      ordinal: 0,
+      text,
+    });
+
+  it.effect(
+    "matches separate long answers with the same preview and retains only the preview",
+    () =>
+      Effect.gen(function* () {
+        const prefix = "🚀".repeat(1024);
+        const { runtime, thread } = yield* resumed([
+          ...launchedAndRunning,
+          childAnswer(prefix + "first", 1),
+          event("session.execution.succeeded", { sessionID: CHILD }),
+          ...callAgain({ background: true }),
+          event("session.execution.started", { sessionID: CHILD }),
+          childAnswer(prefix + "second", 2),
+          event("session.execution.succeeded", { sessionID: CHILD }),
+          childReport("msg_large_report", prefix + "second"),
+          event("session.execution.succeeded", { sessionID: SESSION }),
+        ]);
+        const watch = yield* watchCalls(runtime, thread);
+        yield* runtime.startTurn(withLineage(thread));
+        yield* watch.until(() => watch.state.terminal === true);
+        const result = "🚀".repeat(1023) + "…";
+        assert.deepEqual(Object.fromEntries(watch.calls), {
+          Sleep: { status: "completed", result },
+          Again: { status: "completed", result },
+        });
+        assert.deepEqual(watch.state.roster, []);
+      }).pipe(Effect.scoped),
+  );
+
+  it.effect.each([false, true])(
+    "settles the oldest completed child run at backlog capacity, late report=%s",
+    (lateReport) =>
+      Effect.gen(function* () {
+        const { runtime, thread } = yield* resumed([
+          ...launchedAndRunning,
+          childAnswer("first answer", 0),
+          event("session.execution.succeeded", { sessionID: CHILD }),
+          ...Array.from({ length: 128 }, (_, index) => {
+            const id = `run-${index + 1}`;
+            return [
+              ...callAgain({ background: true, description: id }, { id, writesRules: index === 0 }),
+              event("session.execution.started", { sessionID: CHILD }),
+              childAnswer(id, index + 1),
+              event("session.execution.succeeded", { sessionID: CHILD }),
+            ];
+          }).flat(),
+          ...(lateReport ? [childReport("retired_report", "first answer")] : []),
+          event("session.execution.succeeded", { sessionID: SESSION }),
+        ]);
+        const watch = yield* watchCalls(runtime, thread);
+        yield* runtime.startTurn(withLineage(thread));
+        yield* watch.until(() => watch.state.terminal === true);
+        assert.deepEqual(watch.calls.get("Sleep"), { status: "completed", result: "first answer" });
+        assert.deepEqual(watch.calls.get("run-1"), { status: "running", result: null });
+        assert.deepEqual(watch.calls.get("run-128"), { status: "running", result: null });
+        assert.lengthOf(watch.state.roster ?? [], 128);
+      }).pipe(Effect.scoped),
+  );
+
   const MIDDLE = "ses_middle0000000000000000000";
   const DEEP = "ses_grandchild00000000000000";
   const toolOf = (session: string, id: string) => ({

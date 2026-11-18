@@ -76,15 +76,14 @@ export interface OpenCodeSubagentContext {
   readonly nodeId: OrchestrationV2Subagent["id"];
   readonly parentState: OpenCodeThreadState;
   readonly parentTurn: ActiveOpenCodeTurn;
-  readonly prompt: string;
-  readonly title: string | null;
+  prompt: string;
+  title: string | null;
   readonly startedAt: DateTime.Utc;
   childSessionId: string | null;
   childThreadId: ThreadId | null;
   childProviderThreadId: OrchestrationV2ProviderThread["id"] | null;
   model: string | null;
   result: string | null;
-  launch: ToolPart | null;
   launchOutcome?: TerminalTurnStatus;
 }
 

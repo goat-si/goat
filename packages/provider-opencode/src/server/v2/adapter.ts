@@ -1,3 +1,5 @@
+import { subagentResultPreview } from "../subagentResult.ts";
+import { makeSubagentReports, subagentAnswer } from "./subagentReports.ts";
 import { makeNestedHtmlRenderEmitter } from "./nestedHtmlRenders.ts";
 import { makeSessionInventory } from "./sessionInventory.ts";
 import type {
@@ -234,6 +236,7 @@ export const make = Effect.fn("OpenCode2Adapter.make")(function* (instanceId: Pr
     };
     const events = yield* Queue.unbounded<ProviderAdapter.ProviderAdapterV2Event, Cause.Done>();
     const threads = new Map<string, ThreadState>();
+    const subagentReports = makeSubagentReports();
     const childOwners = new Map<string, ThreadState>();
     const announced = new Map<string, EventOf<"session.created">["data"]>();
     const strays = new Map<string, ThreadState>();
@@ -498,7 +501,7 @@ export const make = Effect.fn("OpenCode2Adapter.make")(function* (instanceId: Pr
       else turn.texts.set(nativeId, entry);
       if (entry.text.length === 0) return;
       if (completed && kind === "text") {
-        turn.answer = entry.text;
+        if (state.subagent !== undefined) turn.answer = subagentAnswer(entry.text);
         turn.closingText = entry;
       }
       const status = completed ? "completed" : "running";
@@ -1076,7 +1079,8 @@ export const make = Effect.fn("OpenCode2Adapter.make")(function* (instanceId: Pr
       if (!isOrchestrationV2WorkActive(call.status)) return;
       call.status = status;
       call.completedAt = yield* DateTime.now;
-      if (result !== undefined) call.result = result;
+      if (result !== undefined) call.result = subagentResultPreview(result);
+      subagentReports.forget(call);
       call.state.calls.delete(call.toolId);
       const child = call.child;
       if (child?.subagent?.call === call) {
@@ -1223,6 +1227,7 @@ export const make = Effect.fn("OpenCode2Adapter.make")(function* (instanceId: Pr
       for (const open of turn.texts.values()) {
         yield* emitText(state, turn, open.block, open.kind, (text) => text, true);
       }
+      turn.closingText = undefined;
       for (const id of turn.tools.keys()) {
         if ([...state.imageJobs.values()].some((job) => job.turn === turn && job.toolId === id))
           continue;
@@ -1293,9 +1298,18 @@ export const make = Effect.fn("OpenCode2Adapter.make")(function* (instanceId: Pr
       // Subagent turns are runless; their calls own settlement.
       if (state.subagent !== undefined) {
         const { call, turns } = state.subagent;
-        for (const attached of callsAttachedTo(state)) {
-          if (attached.run === turns) attached.answer = turn.answer;
+        if (terminal.status !== "failed") {
+          for (const attached of callsAttachedTo(state)) {
+            if (attached.run !== turns || !isOrchestrationV2WorkActive(attached.status)) continue;
+            const evicted = subagentReports.remember({
+              call: attached,
+              answer: turn.answer,
+              status: terminal.status,
+            });
+            if (evicted) yield* settleCall(evicted.call, evicted.status, evicted.answer?.preview);
+          }
         }
+        turn.answer = undefined;
         if (!call.background && terminal.status !== "completed") {
           yield* settleCall(call, terminal.status);
         }
@@ -1672,7 +1686,6 @@ export const make = Effect.fn("OpenCode2Adapter.make")(function* (instanceId: Pr
         model: null,
         background: false,
         run: undefined,
-        answer: undefined,
         child: undefined,
         status: "running",
         result: null,
@@ -1982,19 +1995,8 @@ export const make = Effect.fn("OpenCode2Adapter.make")(function* (instanceId: Pr
       const childId = stringField(payload.metadata, "childID");
       if (stringField(payload.metadata, "source") !== "subagent" || childId === undefined) return;
       strays.delete(childId);
-      const open = [...state.calls.values()].filter(
-        (candidate) => candidate.child?.sessionId === childId,
-      );
       const output = subagentOutput(payload.text);
-      const started = open
-        .flatMap((call) => (call.run === undefined ? [] : [{ call, run: call.run }]))
-        .sort((a, b) => a.run - b.run);
-      // Reports arrive in order. Matching a later known answer proves earlier reports were skipped.
-      const next = started.find(({ call }) => call.answer === undefined || call.answer === output);
-      const matchedRun = next?.call.answer === output ? next?.run : undefined;
-      const call = matchedRun === undefined ? open[0] : next?.call;
-      const calls =
-        call?.run === undefined ? open.slice(0, 1) : open.filter((each) => each.run === call.run);
+      const { call, calls, skipped } = subagentReports.match(state.calls.values(), childId, output);
       const outcome = reportOutcome(stringField(payload.metadata, "state"));
       state.reports.set(inboxId, {
         inboxId,
@@ -2014,11 +2016,8 @@ export const make = Effect.fn("OpenCode2Adapter.make")(function* (instanceId: Pr
           : outcome === "cancelled"
             ? "cancelled"
             : "completed";
-      for (const earlier of started) {
-        if (matchedRun !== undefined && earlier.run < matchedRun) {
-          yield* settleCall(earlier.call, "completed", earlier.call.answer);
-        }
-      }
+      for (const earlier of skipped)
+        yield* settleCall(earlier.call, earlier.status, earlier.answer?.preview);
       for (const each of calls) yield* settleCall(each, status, output);
     });
 

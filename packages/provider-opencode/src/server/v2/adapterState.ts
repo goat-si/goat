@@ -1,3 +1,4 @@
+import type { SubagentAnswer } from "./subagentReports.ts";
 import type { OpenCodeEvent } from "@opencode/client/effect";
 import type {
   OrchestrationV2AppThread,
@@ -39,7 +40,7 @@ export interface ActiveTurn {
   readonly input: TurnOwner;
   providerTurn: OrchestrationV2ProviderTurn;
   readonly texts: Map<string, OpenBlock>;
-  answer: string | undefined;
+  answer: SubagentAnswer | undefined;
   closingText: OpenBlock | undefined;
   readonly tools: Map<string, { readonly name: string; input: Record<string, unknown> }>;
   readonly startedAt: Map<string, DateTime.Utc>;
@@ -95,7 +96,6 @@ export interface SubagentCall {
   model: string | null;
   background: boolean;
   run: number | undefined;
-  answer: string | undefined;
   child: ThreadState | undefined;
   status: OrchestrationV2Subagent["status"];
   result: string | null;
