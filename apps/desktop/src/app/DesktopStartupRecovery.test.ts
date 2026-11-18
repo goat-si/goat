@@ -304,16 +304,24 @@ effectIt.effect("keeps recovery closed once the main window exists", () =>
   }).pipe(Effect.provide(Path.layer)),
 );
 
-effectIt.effect.each([false, true])(
-  "waits for pending-update persistence before installing (persistence fails: %s)",
-  (persistenceFails) =>
+effectIt.effect.each([
+  { persistenceFails: false, newerOffer: false },
+  { persistenceFails: true, newerOffer: false },
+  { persistenceFails: false, newerOffer: true },
+])(
+  "waits for pending-update persistence before installing ($persistenceFails, newer offer $newerOffer)",
+  ({ persistenceFails, newerOffer }) =>
     Effect.gen(function* () {
       const persistenceStarted = yield* Deferred.make<void>();
       const releasePersistence = yield* Deferred.make<void>();
       const downloadReturned = yield* Deferred.make<void>();
       const installerReached = yield* Deferred.make<void>();
+      const downloadVersion = newerOffer ? "1.2.5" : "1.2.4";
       const updaterHarness = makeUpdatesHarness({
         installPolicy: "paused",
+        checkForUpdates: Effect.sync(() => {
+          if (newerOffer) updaterHarness.emit("update-available", { version: downloadVersion });
+        }),
         beforeSetPendingUpdate: Deferred.succeed(persistenceStarted, undefined).pipe(
           Effect.andThen(Deferred.await(releasePersistence)),
         ),
@@ -327,7 +335,7 @@ effectIt.effect.each([false, true])(
             }
           : {}),
         downloadUpdate: Effect.sync(() => {
-          updaterHarness.emit("update-downloaded", { version: "1.2.4" });
+          updaterHarness.emit("update-downloaded", { version: downloadVersion });
         }).pipe(Effect.andThen(Deferred.await(persistenceStarted))),
         quitAndInstall: Deferred.succeed(installerReached, undefined).pipe(Effect.asVoid),
       });
@@ -382,9 +390,21 @@ effectIt.effect.each([false, true])(
             assert.include(failurePage, "Retry the download.");
             assert.equal(updaterHarness.quitAndInstalls(), 0);
           } else {
-            yield* Deferred.await(installerReached);
+            if (newerOffer) {
+              const installed = yield* Effect.raceFirst(
+                Deferred.await(installerReached).pipe(Effect.as(true)),
+                Stream.fromQueue(harness.pages).pipe(
+                  Stream.filter((html) =>
+                    html.includes("GOAT could not prepare the downloaded update"),
+                  ),
+                  Stream.runHead,
+                  Effect.as(false),
+                ),
+              );
+              assert.isTrue(installed);
+            } else yield* Deferred.await(installerReached);
             assert.equal(updaterHarness.quitAndInstalls(), 1);
-            assert.equal(updaterHarness.settings().pendingUpdate?.version, "1.2.4");
+            assert.equal(updaterHarness.settings().pendingUpdate?.version, downloadVersion);
           }
           assert.equal(updaterHarness.downloadCount(), 1);
         }).pipe(Effect.provide(harness.layer));
