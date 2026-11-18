@@ -40,6 +40,36 @@ interface XmlNode {
   hasTextChoice?: boolean;
 }
 
+// ODF 1.3 Part 3 §6.1.2: paragraph character data turns TAB, CR and LF into spaces, collapses
+// space runs and trims the ends; only <text:s>, <text:tab> and <text:line-break> keep literal ones.
+function collapseOdfWhitespace(paragraph: XmlNode) {
+  let afterSpace = true;
+  let tail: { node: XmlNode; index: number; value: string } | undefined;
+  const visit = (node: XmlNode) => {
+    for (const [index, child] of node.children.entries()) {
+      if (typeof child !== "string") {
+        if (HIDDEN.has(child.name)) continue;
+        if (child.spaceCount === undefined && !["tab", "line-break", "p", "h"].includes(child.name))
+          visit(child);
+        else {
+          afterSpace = false;
+          tail = undefined;
+        }
+        continue;
+      }
+      let value = child.replaceAll(/[ \t\r\n]+/g, " ");
+      if (afterSpace && value.startsWith(" ")) value = value.slice(1);
+      if (value) {
+        afterSpace = value.endsWith(" ");
+        tail = { node, index, value };
+      }
+      node.children[index] = value;
+    }
+  };
+  visit(paragraph);
+  if (tail && afterSpace) tail.node.children[tail.index] = tail.value.slice(0, -1);
+}
+
 function xml(source: string, extension: string): XmlNode {
   const odf = [".odt", ".ods", ".odp"].includes(extension);
   const root: XmlNode = { name: "root", attrs: {}, children: [] };
@@ -67,6 +97,7 @@ function xml(source: string, extension: string): XmlNode {
     const node = stack.pop();
     const parent = stack.at(-1);
     if (node === undefined || parent === undefined) throw new Error("Invalid XML nesting");
+    if (odf && (node.name === "p" || node.name === "h")) collapseOdfWhitespace(node);
     if (extension === ".docx" && node.name === "del") {
       parent.children.pop();
       return;
@@ -132,10 +163,10 @@ function* xstringText(node: XmlNode): Generator<string, void> {
   yield node.children
     .filter((child) => typeof child === "string")
     .join("")
-    .replaceAll(
-      /_x005[Ff]_(x[\dA-Fa-f]{4}_)|_x([\dA-Fa-f]{4})_/g,
-      (_, literal?: string, hex?: string) =>
-        literal ? `_${literal}` : String.fromCharCode(Number.parseInt(hex!, 16)),
+    .replaceAll(/_x005[Ff]_x[\dA-Fa-f]{4}_|_x[\dA-Fa-f]{4}_/g, (match) =>
+      match.length > 7
+        ? match.slice(6)
+        : String.fromCharCode(Number.parseInt(match.slice(2, -1), 16)),
     );
 }
 function* paragraphs(node: XmlNode): Generator<TextPart, void> {
