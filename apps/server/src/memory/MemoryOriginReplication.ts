@@ -8,6 +8,7 @@ import type * as Store from "./MemoryStore.ts";
 import type * as Service from "./MemoryService.ts";
 import { recordCanonicalMemoryOrigin } from "./MemoryRevisionMarks.ts";
 import { stored } from "./store/StoreCodecs.ts";
+import { MEMORY_ORIGIN_PAGE_ROW_BYTES, memoryOriginRowBytes } from "./store/OriginCatchup.ts";
 import { Transaction } from "./store/StoreModel.ts";
 
 const settledCreation = (
@@ -22,55 +23,71 @@ const settledCreation = (
     AND json_extract(e.receipt_json,'$.hubSequence')>0 AND json_extract(e.receipt_json,'$.outcome')='accepted'
 )`;
 
-const applyMemoryOriginUpdatesTx = Effect.fn("MemoryStore.applyOriginUpdatesTx")(function* (
+const applyMemoryOriginUpdateTx = Effect.fn("MemoryStore.applyOriginUpdateTx")(function* (
   sql: SqlClient.SqlClient,
-  input: Pick<M.MemoryHubPushInput, "memorySpaceId" | "environmentId">,
-  updates: readonly M.MemoryOriginUpdate[],
+  {
+    memorySpaceId: space,
+    environmentId,
+  }: Pick<M.MemoryHubPushInput, "memorySpaceId" | "environmentId">,
+  { memoryId, createOperationId, threadId }: M.MemoryOriginUpdate,
 ) {
-  yield* Transaction;
-  const { memorySpaceId: space, environmentId } = input;
-  const changed: M.MemoryId[] = [];
-  for (const { memoryId, createOperationId, threadId } of updates) {
-    const settled = yield* stored(
-      "memory-origin-settled",
-      sql`SELECT 1 WHERE ${settledCreation(sql, space, sql`${createOperationId}`)}`,
-    );
-    if (!settled.length) continue;
-    const recorded = yield* recordCanonicalMemoryOrigin(
+  const settled = yield* stored(
+    "memory-origin-settled",
+    sql`SELECT 1 WHERE ${settledCreation(sql, space, sql`${createOperationId}`)}`,
+  );
+  return (
+    settled.length > 0 &&
+    (yield* recordCanonicalMemoryOrigin(
       space,
       memoryId,
       { environmentId, threadId },
       createOperationId,
-    ).pipe(Effect.provideService(SqlClient.SqlClient, sql));
-    if (recorded) changed.push(memoryId);
-  }
-  return changed;
+    ).pipe(Effect.provideService(SqlClient.SqlClient, sql)))
+  );
 });
 
 export const publishMemoryOriginUpdatesTx = Effect.fn("MemoryStore.publishOriginUpdatesTx")(
-  function* (...args: Parameters<typeof applyMemoryOriginUpdatesTx>) {
-    const [sql, { memorySpaceId }] = args;
-    const changed = yield* applyMemoryOriginUpdatesTx(...args);
-    if (changed.length === 0) return;
-    for (const memoryId of changed) {
-      yield* stored(
-        "memory-origin-next-sequence",
-        sql`INSERT INTO memory_space_counters(space,forget_generation,origin_update_sequence)
-          VALUES (${memorySpaceId},0,1)
-          ON CONFLICT(space) DO UPDATE SET origin_update_sequence=origin_update_sequence+1`,
-      );
+  function* (
+    sql: SqlClient.SqlClient,
+    input: Parameters<typeof applyMemoryOriginUpdateTx>[1],
+    updates: readonly M.MemoryOriginUpdate[],
+  ) {
+    yield* Transaction;
+    const { memorySpaceId: space, environmentId } = input;
+    const [row] = yield* stored(
+      "memory-origin-counter",
+      sql<{
+        sequence: number;
+      }>`SELECT origin_update_sequence AS sequence FROM memory_space_counters WHERE space=${space}`,
+    );
+    const previous = row?.sequence ?? 0;
+    let sequence = previous;
+    for (const update of updates) {
+      if (
+        memoryOriginRowBytes({ ...update, environmentId, sequence: sequence + 1 }) >
+        MEMORY_ORIGIN_PAGE_ROW_BYTES
+      )
+        continue;
+      if (!(yield* applyMemoryOriginUpdateTx(sql, input, update))) continue;
+      sequence++;
       yield* stored(
         "memory-origin-publish",
-        sql`UPDATE memory_origins SET origin_sequence=(
-          SELECT origin_update_sequence FROM memory_space_counters WHERE space=${memorySpaceId}
-        ) WHERE space=${memorySpaceId} AND memory_id=${memoryId}`,
+        sql`UPDATE memory_origins SET origin_sequence=${sequence}
+          WHERE space=${space} AND memory_id=${update.memoryId}`,
       );
     }
+    if (sequence === previous) return;
+    yield* stored(
+      "memory-origin-next-sequence",
+      sql`INSERT INTO memory_space_counters(space,forget_generation,origin_update_sequence)
+        VALUES (${space},0,${sequence})
+        ON CONFLICT(space) DO UPDATE SET origin_update_sequence=excluded.origin_update_sequence`,
+    );
     // A new join needs the latest identity metadata. Existing handles keep their pinned pages.
     yield* stored(
       "memory-origin-stale-checkpoint",
       sql`UPDATE memory_hub_retention SET checkpoint_id=NULL
-        WHERE space=${memorySpaceId} AND checkpoint_id IS NOT NULL`,
+        WHERE space=${space} AND checkpoint_id IS NOT NULL`,
     );
   },
 );
@@ -91,10 +108,16 @@ export const withOriginCatchupPage = Effect.fn("MemoryHubService.attachOriginPag
     return tail;
   // Origin updates can describe creations after a pinned log watermark.
   if (request.highWatermark === undefined) {
-    const originPage = yield* store.readOriginPageTx(
-      request.memorySpaceId,
-      request.afterOriginSequence,
-    );
+    const originPage = yield* store
+      .readOriginPageTx(request.memorySpaceId, request.afterOriginSequence)
+      .pipe(
+        Effect.catch((error) =>
+          Effect.logWarning("Memory origin catch-up could not be read", error._tag).pipe(
+            Effect.as(null),
+          ),
+        ),
+      );
+    if (!originPage) return tail;
     const combined = { ...tail, originPage };
     if (yield* Effect.isSuccess(encodePull(combined))) return combined;
   }
@@ -120,13 +143,14 @@ export const makeMemoryOriginReplication = (
   },
 ) => {
   const { store, local, hub, client, ensureEpoch } = options;
-  return Effect.fn("MemorySyncService.replicateOrigins")(function* (route: Route) {
-    const space = route.space;
-    if (space === null) return;
-    const creation = sql`json_extract(i.identity_json,'$.createOperationId')`;
-    const updates = yield* stored(
-      "memory-origin-backfill",
-      sql<M.MemoryOriginUpdate>`
+  return Effect.fn("MemorySyncService.replicateOrigins")(
+    function* (route: Route) {
+      const space = route.space;
+      if (space === null) return;
+      const creation = sql`json_extract(i.identity_json,'$.createOperationId')`;
+      const updates = yield* stored(
+        "memory-origin-backfill",
+        sql<M.MemoryOriginUpdate>`
         SELECT o.memory_id AS memoryId,o.thread_id AS threadId,${creation} AS createOperationId
         FROM memory_origins o JOIN memory_identity_ledger i ON i.space=o.space AND i.memory_id=o.memory_id
         WHERE o.space=${space} AND o.environment_id=${local}
@@ -136,33 +160,52 @@ export const makeMemoryOriginReplication = (
           AND NOT EXISTS (SELECT 1 FROM memory_tombstones t WHERE t.space=o.space AND t.memory_id=o.memory_id)
           AND NOT EXISTS (SELECT 1 FROM memory_pending_forget_intents f WHERE f.space=o.space AND f.memory_id=o.memory_id)
         ORDER BY o.memory_id LIMIT ${M.MEMORY_ORIGIN_UPDATE_MAX}`,
-    );
-    if (!updates.length) return;
-    const epoch = route.settings.memoryHubVersion;
-    const input = {
-      protocolVersion: 1 as const,
-      memorySpaceId: space,
-      environmentId: local,
-      operations: [],
-      originUpdates: updates,
-    };
-    yield* ensureEpoch(epoch);
-    const accepted = yield* (
-      route.connection
-        ? client.push(route.connection, input)
-        : route.principal
-          ? hub.push({ ...input, features: M.MEMORY_FLOOR_2 }, route.principal)
-          : Effect.fail(new M.MemoryHubError({ code: "bootstrap_required" }))
-    ).pipe(
-      Effect.as(true),
-      Effect.catchTags({
-        MemoryHubError: (error) =>
-          error.code === "hub_upgrade_required" ? Effect.succeed(false) : Effect.fail(error),
-      }),
-    );
-    if (accepted)
-      yield* store.transact(
-        ensureEpoch(epoch).pipe(Effect.andThen(applyMemoryOriginUpdatesTx(sql, input, updates))),
       );
-  });
+      let bytes = 0;
+      const page = [];
+      for (const update of updates) {
+        const size = memoryOriginRowBytes({ ...update, environmentId: local, sequence: 1 });
+        if (size > MEMORY_ORIGIN_PAGE_ROW_BYTES) continue;
+        if (bytes + size > MEMORY_ORIGIN_PAGE_ROW_BYTES) break;
+        page.push(update);
+        bytes += size;
+      }
+      if (!page.length) return;
+      const epoch = route.settings.memoryHubVersion;
+      const input = {
+        protocolVersion: 1 as const,
+        memorySpaceId: space,
+        environmentId: local,
+        operations: [],
+        originUpdates: page,
+      };
+      yield* ensureEpoch(epoch);
+      const accepted = yield* (
+        route.connection
+          ? client.push(route.connection, input)
+          : route.principal
+            ? hub.push({ ...input, features: M.MEMORY_FLOOR_2 }, route.principal)
+            : Effect.fail(new M.MemoryHubError({ code: "bootstrap_required" }))
+      ).pipe(
+        Effect.as(true),
+        Effect.catchTags({
+          MemoryHubError: (error) =>
+            error.code === "hub_upgrade_required" ? Effect.succeed(false) : Effect.fail(error),
+        }),
+      );
+      if (accepted)
+        yield* store.transact(
+          ensureEpoch(epoch).pipe(
+            Effect.andThen(
+              Effect.forEach(page, (update) => applyMemoryOriginUpdateTx(sql, input, update), {
+                discard: true,
+              }),
+            ),
+          ),
+        );
+    },
+    Effect.catch((error) =>
+      Effect.logWarning("Memory origin updates could not be pushed", error._tag),
+    ),
+  );
 };

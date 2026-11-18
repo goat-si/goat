@@ -1,6 +1,5 @@
 import * as M from "@goat/contracts";
 import * as Effect from "effect/Effect";
-import * as Schema from "effect/Schema";
 import * as SqlClient from "effect/sql/SqlClient";
 import { recordCanonicalMemoryOrigin } from "../MemoryRevisionMarks.ts";
 import { stored } from "./StoreCodecs.ts";
@@ -8,7 +7,10 @@ import type { StoreKernel } from "./StoreKernel.ts";
 import { MemoryStoreConflict, Transaction } from "./StoreModel.ts";
 
 const encoder = new TextEncoder();
-const encodeJson = Schema.encodeEffect(Schema.fromJsonString(Schema.Unknown));
+export const MEMORY_ORIGIN_PAGE_ROW_BYTES = M.MEMORY_PAGE_MAX_UTF8_BYTES - 512;
+
+export const memoryOriginRowBytes = (row: M.MemoryOriginPage["updates"][number]) =>
+  encoder.encode(JSON.stringify(row)).length + 1;
 
 export const makeOriginCatchup = ({
   sql,
@@ -41,21 +43,34 @@ export const makeOriginCatchup = ({
       FROM memory_origins o JOIN memory_identity_ledger i ON i.space=o.space AND i.memory_id=o.memory_id
       WHERE o.space=${space} AND o.origin_sequence>0 AND o.origin_sequence>${after}
         AND NOT EXISTS (SELECT 1 FROM memory_tombstones t WHERE t.space=o.space AND t.memory_id=o.memory_id)
+        AND length(CAST(json_object(
+          'sequence',o.origin_sequence,'memoryId',o.memory_id,
+          'environmentId',json_extract(i.identity_json,'$.origin.environmentId'),
+          'threadId',json_extract(i.identity_json,'$.origin.threadId'),
+          'createOperationId',json_extract(i.identity_json,'$.createOperationId')
+        ) AS BLOB))+1 <= ${MEMORY_ORIGIN_PAGE_ROW_BYTES}
       ORDER BY o.origin_sequence LIMIT ${M.MEMORY_ORIGIN_UPDATE_MAX + 1}`,
     );
     let bytes = 0;
     const updates: M.MemoryOriginPage["updates"][number][] = [];
-    for (const row of rows.slice(0, M.MEMORY_ORIGIN_UPDATE_MAX)) {
-      bytes += encoder.encode(yield* stored("memory-origin-encode", encodeJson(row))).length + 1;
-      if (bytes > M.MEMORY_PAGE_MAX_UTF8_BYTES - 512) break;
+    let hasMore = false;
+    for (const row of rows) {
+      const size = memoryOriginRowBytes(row);
+      if (size > MEMORY_ORIGIN_PAGE_ROW_BYTES) continue;
+      if (
+        updates.length === M.MEMORY_ORIGIN_UPDATE_MAX ||
+        bytes + size > MEMORY_ORIGIN_PAGE_ROW_BYTES
+      ) {
+        hasMore = true;
+        break;
+      }
+      bytes += size;
       updates.push(row);
     }
-    if (rows.length && !updates.length)
-      return yield* new MemoryStoreConflict({ code: "payload_too_large" });
     return {
       updates,
       throughSequence: updates.at(-1)?.sequence ?? after,
-      hasMore: rows.length > updates.length,
+      hasMore,
     };
   });
   const receiveOriginPageTx = Effect.fn("MemoryStore.receiveOriginPageTx")(function* (

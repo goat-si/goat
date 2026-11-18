@@ -86,7 +86,10 @@ export const makePullMemoryTail = <R extends TailRoute>(deps: {
       });
       budget.pages++;
       budget.entries += page.entries.length;
-      if (!page.hasMore && !page.originPage?.hasMore && !page.originCatchupPending) break;
+      if (!page.hasMore && !page.originCatchupPending) {
+        if (!page.originPage?.hasMore) break;
+        if ((yield* store.readOriginCursor(space, r.hubId)) === afterOriginSequence) break;
+      }
     }
   });
 };

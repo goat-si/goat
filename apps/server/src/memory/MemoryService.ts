@@ -2447,7 +2447,7 @@ const make = Effect.fnUntraced(function* (
     }
     if (previous !== page.throughSequence || page.throughSequence < input.expectedSequence)
       return yield* new Store.MemoryStoreConflict({ code: "invalid_cursor" });
-    return yield* store.transact(
+    const settled = yield* store.transact(
       Effect.gen(function* () {
         yield* input.reauthorize;
         if (page.upgradeRequiredMembers)
@@ -2459,31 +2459,42 @@ const make = Effect.fnUntraced(function* (
         if (page.derivedCap)
           yield* store.learnHubFloor(input.memorySpaceId, yield* Clock.currentTimeMillis);
         const current = yield* store.readCursor(input.memorySpaceId, input.hubEnvironmentId);
-        const settled =
-          current >= page.throughSequence
-            ? []
-            : yield* store.withReceivedCursor(
-                {
-                  memorySpaceId: input.memorySpaceId,
-                  hubEnvironmentId: input.hubEnvironmentId,
-                  expectedSequence: input.expectedSequence,
-                  afterSequence: page.throughSequence,
-                },
-                Effect.forEach(page.entries, (entry) => settleHubEntryTx({ ...input, entry })),
-              );
-        if (page.originPage) {
-          if (input.afterOriginSequence === undefined)
-            return yield* new Store.MemoryStoreConflict({ code: "invalid_cursor" });
-          yield* store.receiveOriginPageTx(
-            input.memorySpaceId,
-            input.hubEnvironmentId,
-            input.afterOriginSequence,
-            page.originPage,
-          );
-        }
-        return settled;
+        return current >= page.throughSequence
+          ? []
+          : yield* store.withReceivedCursor(
+              {
+                memorySpaceId: input.memorySpaceId,
+                hubEnvironmentId: input.hubEnvironmentId,
+                expectedSequence: input.expectedSequence,
+                afterSequence: page.throughSequence,
+              },
+              Effect.forEach(page.entries, (entry) => settleHubEntryTx({ ...input, entry })),
+            );
       }),
     );
+    if (page.originPage && input.afterOriginSequence !== undefined)
+      yield* store
+        .transact(
+          input.reauthorize.pipe(
+            Effect.andThen(
+              store.receiveOriginPageTx(
+                input.memorySpaceId,
+                input.hubEnvironmentId,
+                input.afterOriginSequence,
+                page.originPage,
+              ),
+            ),
+          ),
+        )
+        .pipe(
+          Effect.catchTags({
+            MemoryStoreConflict: (error) =>
+              Effect.logWarning("Memory origin catch-up was refused", error.code),
+            MemoryStorageError: (error) =>
+              Effect.logWarning("Memory origin catch-up could not be installed", error.stage),
+          }),
+        );
+    return settled;
   });
   const { reconcileResolutionSubmission, settleHubAcknowledgement } = makeHubAcknowledgement({
     store,
