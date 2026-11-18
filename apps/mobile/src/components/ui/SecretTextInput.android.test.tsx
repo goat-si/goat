@@ -11,6 +11,7 @@ vi.mock("expo", () => ({ requireNativeView: () => state.native }));
 vi.mock("react-native", () => ({
   View: ({ children }: { children?: ReactNode }) => <div>{children}</div>,
   processColor: () => 1,
+  useWindowDimensions: () => ({ fontScale: 1 }),
 }));
 vi.mock("../../lib/useUniwindTheme", () => ({ useUniwindTheme: () => ({}) }));
 vi.mock("../../lib/mobileTheme", () => ({ flattenThemeColor: () => "#000" }));

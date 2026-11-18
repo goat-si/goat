@@ -1,5 +1,11 @@
 import { requireNativeView } from "expo";
-import { processColor, View, type NativeSyntheticEvent, type ViewProps } from "react-native";
+import {
+  processColor,
+  useWindowDimensions,
+  View,
+  type NativeSyntheticEvent,
+  type ViewProps,
+} from "react-native";
 
 import { flattenThemeColor } from "../../lib/mobileTheme";
 import { useUniwindTheme } from "../../lib/useUniwindTheme";
@@ -45,6 +51,8 @@ function nativeColor(value: string) {
 export function SecretTextInput(props: SecretTextInputProps) {
   const theme = useUniwindTheme();
   const surface = theme["--color-input"];
+  // Sizes in dp: scaled here as the plain field's text scales with the system font size.
+  const { fontScale } = useWindowDimensions();
   const [revealed, toggleRevealed] = useSecretReveal(props.editable);
   if (NativeSecretInput === null) return <PlainSecretTextInput {...props} />;
   return (
@@ -56,13 +64,13 @@ export function SecretTextInput(props: SecretTextInputProps) {
         textColor={nativeColor(flattenThemeColor(theme["--color-foreground"], surface))}
         placeholderColor={nativeColor(flattenThemeColor(theme["--color-placeholder"], surface))}
         cursorColor={nativeColor(flattenThemeColor(theme["--color-focus"], surface))}
-        fontSize={FONT_SIZE}
+        fontSize={FONT_SIZE * fontScale}
         editable={props.editable}
         revealed={revealed}
         onChangeText={(event) => props.onChangeText(event.nativeEvent.value)}
         onSubmit={(event) => props.onSubmitEditing(event.nativeEvent.value)}
         onInputFocus={() => props.onFocus?.()}
-        style={{ flex: 1, height: LINE_HEIGHT }}
+        style={{ flex: 1, height: LINE_HEIGHT * fontScale }}
       />
       <SecretRevealButton revealed={revealed} disabled={!props.editable} onPress={toggleRevealed} />
     </View>
