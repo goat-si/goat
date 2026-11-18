@@ -14,7 +14,7 @@
 //
 // Uncommitted and untracked files count. Affected packages come from
 // .github/scripts/ci-changes.cjs, the same mapping CI uses to gate its jobs.
-// The steps run side by side; each prints its output when it finishes. A
+// The steps run side by side; tests stream progress and other checks print on completion. A
 // rerun on exactly the files of the last passing run prints that run's summary.
 import * as NodeChildProcess from "node:child_process";
 import * as NodeCrypto from "node:crypto";
@@ -269,11 +269,13 @@ const steps = [
   // From the repo root, the root vite.config.ts hands each file to its package's config.
   vitestTests.length > 0 && {
     name: `test (${vitestTests.length} files)`,
-    args: ["test", "run", "--passWithNoTests", ...vitestTests],
+    args: ["test", "run", "--reporter=default", "--passWithNoTests", ...vitestTests],
+    stream: true,
   },
   nodeTests.length > 0 && {
     name: `node --test (${nodeTests.length} files)`,
     args: ["exec", "node", "--test", ...nodeTests],
+    stream: true,
   },
 ].filter((step) => step !== false);
 
@@ -293,18 +295,24 @@ const results = await Promise.all(
         // In-process steps print their own output. The patch check is first and
         // takes about a second, so the commands start right after it.
         if ("run" in step) return finish(step.run());
+        const stream = "stream" in step && step.stream;
+        if (stream) console.log(`\n> vp ${step.name}  running`);
         const output: Array<Buffer> = [];
         const [command, args] = vitePlusCommand(step.args);
         let childFailed = false;
         const child = guardChild(
-          NodeChildProcess.spawn(command, args, { cwd: root, env }),
+          NodeChildProcess.spawn(command, args, {
+            cwd: root,
+            env,
+            stdio: stream ? "inherit" : ["ignore", "pipe", "pipe"],
+          }),
           (error) => {
             childFailed = true;
             output.push(Buffer.from(`${error.message}\n`));
           },
         );
-        child.stdout.on("data", (chunk: Buffer) => output.push(chunk));
-        child.stderr.on("data", (chunk: Buffer) => output.push(chunk));
+        child.stdout?.on("data", (chunk: Buffer) => output.push(chunk));
+        child.stderr?.on("data", (chunk: Buffer) => output.push(chunk));
         child.on("close", (status) => finish(status === 0 && !childFailed, Buffer.concat(output)));
       }),
   ),
