@@ -312,6 +312,17 @@ export const make = Effect.fn("effect-acp/AcpClient.make")(function* (
     | undefined;
   let negotiatedProtocolGeneration: 1 | 2 | undefined;
   let sessionDeleteSupported = false;
+  let advertisedClientCapabilities: AcpSchema.InitializeRequest["clientCapabilities"];
+  const validateElicitation = (request: AcpSchema.CreateElicitationRequest) =>
+    advertisedClientCapabilities !== undefined &&
+    (request.mode === "form" || request.mode === "url") &&
+    advertisedClientCapabilities.elicitation?.[request.mode] == null
+      ? Effect.fail(
+          AcpError.AcpRequestError.invalidParams(
+            `Elicitation mode '${request.mode}' was not advertised by the client.`,
+          ).toProtocolError(),
+        )
+      : Effect.succeed(request);
 
   const runNotificationHandlers = <A>(
     registration: BufferedNotificationHandler<A>,
@@ -468,24 +479,30 @@ export const make = Effect.fn("effect-acp/AcpClient.make")(function* (
           requestContext(requestId, CLIENT_METHODS.session_request_permission),
         ),
       [AcpRpcs.V1_CLIENT_METHODS.session_elicitation]: (payload, { requestId }) =>
-        runHandler(
-          coreHandlers.elicitation,
-          payload,
-          AcpRpcs.V1_CLIENT_METHODS.session_elicitation,
-          requestContext(requestId, AcpRpcs.V1_CLIENT_METHODS.session_elicitation),
-        ).pipe(
+        validateElicitation(payload).pipe(
+          Effect.flatMap((request) =>
+            runHandler(
+              coreHandlers.elicitation,
+              request,
+              AcpRpcs.V1_CLIENT_METHODS.session_elicitation,
+              requestContext(requestId, AcpRpcs.V1_CLIENT_METHODS.session_elicitation),
+            ),
+          ),
           Effect.map(({ _meta, ...action }) => ({
             action,
             ...(_meta === undefined ? {} : { _meta }),
           })),
         ),
       [AcpRpcs.V1_CLIENT_METHODS.unstable_session_elicitation]: (payload, { requestId }) =>
-        runHandler(
-          coreHandlers.elicitation,
-          payload,
-          AcpRpcs.V1_CLIENT_METHODS.unstable_session_elicitation,
-          requestContext(requestId, AcpRpcs.V1_CLIENT_METHODS.unstable_session_elicitation),
-        ).pipe(
+        validateElicitation(payload).pipe(
+          Effect.flatMap((request) =>
+            runHandler(
+              coreHandlers.elicitation,
+              request,
+              AcpRpcs.V1_CLIENT_METHODS.unstable_session_elicitation,
+              requestContext(requestId, AcpRpcs.V1_CLIENT_METHODS.unstable_session_elicitation),
+            ),
+          ),
           Effect.map(({ _meta, ...action }) => ({
             action,
             ...(_meta === undefined ? {} : { _meta }),
@@ -499,6 +516,7 @@ export const make = Effect.fn("effect-acp/AcpClient.make")(function* (
               cause,
             ).toProtocolError(),
           ),
+          Effect.flatMap(validateElicitation),
           Effect.flatMap((request) =>
             runHandler(
               coreHandlers.elicitation,
@@ -603,24 +621,27 @@ export const make = Effect.fn("effect-acp/AcpClient.make")(function* (
     },
     agent: {
       initialize: (payload) =>
-        callRpc(
-          AGENT_METHODS.initialize,
-          rpc[AGENT_METHODS.initialize](toNegotiatingInitializeRequest(payload)),
-        ).pipe(
-          Effect.map((response) => {
-            // ACP v1 protocolVersion values were not generation identifiers in
-            // every shipped agent. Antigravity, for example, reports version 2
-            // with the v1 agentInfo/agentCapabilities response shape.
-            const isV2 = isV2InitializeResponse(response);
-            negotiatedProtocolGeneration = isV2 ? 2 : 1;
-            const normalized = isV2
-              ? normalizeInitializeResponse(response)
-              : (response as AcpSchema.InitializeResponse);
-            sessionDeleteSupported =
-              normalized.agentCapabilities?.sessionCapabilities?.delete != null;
-            return normalized;
-          }),
-        ),
+        Effect.suspend(() => {
+          advertisedClientCapabilities = payload.clientCapabilities ?? {};
+          return callRpc(
+            AGENT_METHODS.initialize,
+            rpc[AGENT_METHODS.initialize](toNegotiatingInitializeRequest(payload)),
+          ).pipe(
+            Effect.map((response) => {
+              // ACP v1 protocolVersion values were not generation identifiers in
+              // every shipped agent. Antigravity, for example, reports version 2
+              // with the v1 agentInfo/agentCapabilities response shape.
+              const isV2 = isV2InitializeResponse(response);
+              negotiatedProtocolGeneration = isV2 ? 2 : 1;
+              const normalized = isV2
+                ? normalizeInitializeResponse(response)
+                : (response as AcpSchema.InitializeResponse);
+              sessionDeleteSupported =
+                normalized.agentCapabilities?.sessionCapabilities?.delete != null;
+              return normalized;
+            }),
+          );
+        }),
       authenticate: (payload) =>
         negotiatedProtocolGeneration === 1
           ? callRpc(

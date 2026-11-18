@@ -1,3 +1,5 @@
+import * as Fiber from "effect/Fiber";
+import * as Ref from "effect/Ref";
 import { assert, it } from "@effect/vitest";
 import * as Deferred from "effect/Deferred";
 import * as Effect from "effect/Effect";
@@ -5,7 +7,12 @@ import * as Queue from "effect/Queue";
 import * as Schema from "effect/Schema";
 import * as AcpClient from "./client.ts";
 import * as AcpSchema from "./_generated/schema.gen.ts";
-import { encodeJsonl, jsonRpcNotification, jsonRpcRequest } from "./_internal/shared.ts";
+import {
+  encodeJsonl,
+  jsonRpcNotification,
+  jsonRpcRequest,
+  jsonRpcResponse,
+} from "./_internal/shared.ts";
 import { makeInMemoryStdio } from "./_internal/stdio.ts";
 
 const elicitationForm = {
@@ -121,4 +128,57 @@ it.effect("returns method-not-found when SDK elicitation has no question handler
     const response = yield* decodeWireError(yield* Queue.take(output));
     assert.equal(response.error.code, -32601);
   }).pipe(Effect.scoped),
+);
+
+it.effect.each([
+  [1, "session/elicitation"],
+  [1, "_session/elicitation"],
+  [1, "elicitation/create"],
+  [2, "elicitation/create"],
+] as const)(
+  "rejects a URL elicitation the client did not advertise on wire v%s (%s)",
+  (wireVersion, method) =>
+    Effect.gen(function* () {
+      const { stdio, input, output } = yield* makeInMemoryStdio();
+      const acp = yield* AcpClient.make(stdio);
+      const init = yield* acp.agent
+        .initialize({ protocolVersion: 2, clientCapabilities: { elicitation: { form: {} } } })
+        .pipe(Effect.forkChild);
+      const initialize = yield* decodeWireResponse(yield* Queue.take(output));
+      yield* Queue.offer(
+        input,
+        yield* encodeJsonl(jsonRpcResponse(Schema.Unknown), {
+          jsonrpc: "2.0",
+          id: (initialize as { id: number }).id,
+          result:
+            wireVersion === 2
+              ? { protocolVersion: 2, info: { name: "fixture", version: "1" }, capabilities: {} }
+              : { protocolVersion: 1, agentCapabilities: {} },
+        }),
+      );
+      yield* Fiber.join(init);
+      const calls = yield* Ref.make(0);
+      yield* acp.handleElicitation(() =>
+        Ref.update(calls, (n) => n + 1).pipe(Effect.as({ action: "accept" as const })),
+      );
+      yield* Queue.offer(
+        input,
+        yield* encodeJsonl(jsonRpcRequest(method, Schema.Unknown), {
+          jsonrpc: "2.0",
+          id: 81,
+          headers: [],
+          method,
+          params: {
+            sessionId: "session-1",
+            mode: "url",
+            message: "Sign in",
+            url: "https://example.test/auth",
+            elicitationId: "auth-1",
+          },
+        }),
+      );
+      const response = yield* decodeWireError(yield* Queue.take(output));
+      assert.equal(response.error.code, -32602);
+      assert.equal(yield* Ref.get(calls), 0);
+    }).pipe(Effect.scoped),
 );
