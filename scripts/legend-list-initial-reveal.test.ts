@@ -246,3 +246,103 @@ describe.each(["react-native.js", "react-native.mjs"])(
     });
   },
 );
+
+describe.each(["react-native.js", "react-native.mjs"])("native row measurements (%s)", (bundle) => {
+  it.each([
+    { axis: "vertical", horizontal: false, width: 80, height: NaN },
+    { axis: "horizontal", horizontal: true, width: Infinity, height: 80 },
+  ])("keeps $axis offsets finite until native measurements recover", (invalid) => {
+    const source = NodeFS.readFileSync(
+      new URL(`../apps/mobile/node_modules/@legendapp/list/${bundle}`, import.meta.url),
+      "utf8",
+    );
+    const section = (start: string, end: string) => {
+      const from = source.indexOf(start);
+      const to = source.indexOf(end, from);
+      if (from < 0 || to < 0) throw new Error(`Missing native bundle section ${start}`);
+      return source.slice(from, to);
+    };
+    const values = new Map<string, unknown>([
+      ["containerItemKey0", "pending"],
+      ["containerItemKey1", "ready"],
+    ]);
+    const positions: number[] = [];
+    let pendingSize = invalid;
+    type MeasureCallback = (x: number, y: number, width: number, height: number) => void;
+    const ctx = {
+      values,
+      positionListeners: new Map(),
+      scrollAxisGap: 0,
+      viewRefs: new Map([
+        [
+          0,
+          {
+            current: {
+              measure: (read: MeasureCallback) => read(0, 0, pendingSize.width, pendingSize.height),
+            },
+          },
+        ],
+        [1, { current: { measure: (read: MeasureCallback) => read(0, 0, 40, 40) } }],
+      ]),
+      state: {
+        props: {
+          data: ["pending", "ready"],
+          estimatedItemSize: 20,
+          horizontal: invalid.horizontal,
+          keyExtractor: (key: string) => key,
+        },
+        positions,
+        idCache: [],
+        indexByKey: new Map(),
+        columns: [],
+        columnSpans: [],
+        sizes: new Map(),
+        sizesKnown: new Map(),
+        averageSizes: {},
+        dataChangeEpoch: 0,
+        containerItemMetadata: new Map(),
+        containerItemGenerations: [],
+        totalSize: 0,
+        didContainersLayout: true,
+        startBuffered: 0,
+        endBuffered: 1,
+      },
+    };
+    const list = NodeVM.runInNewContext(
+      [
+        section("// src/core/containerItemMetadata.ts", "// src/utils/devEnvironment.ts"),
+        section("// src/utils/getId.ts", "// src/core/calculateOffsetWithOffsetPosition.ts"),
+        section("// src/core/updateTotalSize.ts", "// src/core/viewability.ts"),
+        section("// src/core/updateAnchoredEndSpace.ts", "var PixelRatio ="),
+        section("// src/utils/layoutMeasurement.ts", "var typedForwardRef ="),
+        // The viewport has a single column with every row in view.
+        "function calculateItemsInView(ctx) { updateItemPositions(ctx, false); }",
+        "({ layout: updateItemPositions, measure: measureContainersInLayoutEffect, extent: getRawContentLength })",
+      ].join("\n"),
+      {
+        IS_DEV: false,
+        IsNewArchitecture: true,
+        Platform: { OS: "ios" },
+        PixelRatio: { get: () => 2 },
+        getScrollVelocity: () => 0,
+        peek$: (_ctx: unknown, key: string) => values.get(key),
+        set$: (_ctx: unknown, key: string, value: unknown) => values.set(key, value),
+      },
+    ) as {
+      layout: (context: typeof ctx, dataChanged: boolean) => void;
+      measure: (context: typeof ctx, containers?: number[]) => void;
+      extent: (context: typeof ctx) => number;
+    };
+
+    list.layout(ctx, true);
+    expect(list.extent(ctx)).toBe(40);
+    list.measure(ctx);
+    expect(positions).toEqual([0, 20]);
+    expect(list.extent(ctx)).toBe(60);
+
+    pendingSize = { ...invalid, width: 60, height: 60 };
+    list.measure(ctx, [0]);
+    expect(positions).toEqual([0, 60]);
+    expect(list.extent(ctx)).toBe(100);
+  });
+});
