@@ -130,6 +130,30 @@ index 4887034bf7e3e6b5d8d2c1ae25932f5a24f9435d..6eaf039a14820ddaf635a1538c2a9a64
      val layoutDirection = props.layoutDirection.value.toLayoutDirection()
  
      // Material3's `MaterialTheme` does not provide `LocalContentColor` — only `Surface` does — so
+diff --git a/android/src/main/java/expo/modules/ui/RNHostView.kt b/android/src/main/java/expo/modules/ui/RNHostView.kt
+--- a/android/src/main/java/expo/modules/ui/RNHostView.kt
++++ b/android/src/main/java/expo/modules/ui/RNHostView.kt
+@@ -707,7 +707,19 @@
+   override fun setNestedScrollingEnabled(enabled: Boolean) {
+     childHelper.isNestedScrollingEnabled = enabled
+   }
+-  override fun isNestedScrollingEnabled(): Boolean = childHelper.isNestedScrollingEnabled
++  // Relaying above only needs the helper's flag. Views that look for a scroll target, like
++  // Material's BottomSheetBehavior, read this one, so a host of buttons must not claim to scroll.
++  override fun isNestedScrollingEnabled(): Boolean =
++    childHelper.isNestedScrollingEnabled && hasNestedScrollingDescendant(this)
++
++  private fun hasNestedScrollingDescendant(group: ViewGroup): Boolean {
++    for (index in 0 until group.childCount) {
++      val child = group.getChildAt(index)
++      if (child.isNestedScrollingEnabled) return true
++      if (child is ViewGroup && hasNestedScrollingDescendant(child)) return true
++    }
++    return false
++  }
+   override fun startNestedScroll(axes: Int): Boolean = childHelper.startNestedScroll(axes)
+   override fun startNestedScroll(axes: Int, type: Int): Boolean = childHelper.startNestedScroll(axes, type)
+   override fun stopNestedScroll() = childHelper.stopNestedScroll()
 diff --git a/android/src/main/java/expo/modules/ui/TopAppBarView.kt b/android/src/main/java/expo/modules/ui/TopAppBarView.kt
 new file mode 100644
 index 0000000000000000000000000000000000000000..4ed0132d57fc7aff08ecb7ee84fb8fa48942931b

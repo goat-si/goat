@@ -90,6 +90,56 @@ export function hasThreadLinks(markdown: string): boolean {
   );
 }
 
+// Each unheld link of a message asks for its ids on every render. Keys are whole message texts,
+// and every streamed chunk is a new one, so the cache is bounded by the characters it holds.
+const THREAD_LINK_IDS_CACHE_CHARACTERS = 200_000;
+const threadLinkIdsCache = new Map<string, ReadonlyArray<ThreadId>>();
+let threadLinkIdsCachedCharacters = 0;
+// A text over the bound gets one slot of its own, so the latest long message is scanned once.
+let latestLongThreadLinkText: { readonly markdown: string; readonly ids: ReadonlyArray<ThreadId> } =
+  {
+    markdown: "",
+    ids: [],
+  };
+
+export function threadLinkIdsCacheCharacters(): number {
+  return threadLinkIdsCachedCharacters;
+}
+
+/** Every thread a message links, as written and percent-decoded, once each, outside code. */
+export function threadLinkIds(markdown: string): ReadonlyArray<ThreadId> {
+  if (!hasThreadLinks(markdown)) return [];
+  const cached = threadLinkIdsCache.get(markdown);
+  if (cached !== undefined) return cached;
+  if (latestLongThreadLinkText.markdown === markdown) return latestLongThreadLinkText.ids;
+  const ids = scanThreadLinkIds(markdown);
+  if (markdown.length > THREAD_LINK_IDS_CACHE_CHARACTERS) {
+    latestLongThreadLinkText = { markdown, ids };
+    return ids;
+  }
+  for (const oldest of threadLinkIdsCache.keys()) {
+    if (threadLinkIdsCachedCharacters + markdown.length <= THREAD_LINK_IDS_CACHE_CHARACTERS) break;
+    threadLinkIdsCache.delete(oldest);
+    threadLinkIdsCachedCharacters -= oldest.length;
+  }
+  threadLinkIdsCache.set(markdown, ids);
+  threadLinkIdsCachedCharacters += markdown.length;
+  return ids;
+}
+
+function scanThreadLinkIds(markdown: string): ReadonlyArray<ThreadId> {
+  const ids = new Set<ThreadId>();
+  for (const match of markdown.matchAll(THREAD_LINK_OUTSIDE_CODE)) {
+    const href = match.groups?.angleHref ?? match.groups?.href;
+    const written = href === undefined ? null : parseThreadLinkHref(href);
+    if (written === null) continue;
+    ids.add(written);
+    const decoded = percentDecodedThreadLinkId(written);
+    if (decoded !== null) ids.add(decoded);
+  }
+  return [...ids];
+}
+
 export function relabelThreadLinks(
   markdown: string,
   title: (threadId: ThreadId) => string | undefined,

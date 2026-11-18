@@ -17,6 +17,7 @@ import { SettingsSection } from "./components/SettingsSection";
 import { SettingsProjectOverridesSection } from "./components/SettingsProjectOverridesSection";
 import { SettingsSwitchRow } from "./components/SettingsSwitchRow";
 import { SettingsScreen } from "./components/SettingsScreen";
+import { ToolCallVisibilitySection } from "./ToolCallVisibilitySection";
 import {
   AndroidSettingsEnvironmentFilter,
   SettingsEnvironmentFilterHeader,
@@ -50,6 +51,7 @@ export function SettingsThreadsRouteScreen() {
           <ThreadListSettingsSection />
           <AutoSettleSettingsRows />
           <BetaSettingsSection />
+          <ToolCallVisibilitySection />
           <LegacySettingsSection />
         </ScrollView>
       </SettingsScreen>

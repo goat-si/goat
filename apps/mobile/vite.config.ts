@@ -22,7 +22,11 @@ const reactTests = [
   "src/features/workspace/WorkspaceToolbar.ios.test.tsx",
   "src/features/settings/WorktreeCleanupSection.test.tsx",
   "src/features/threads/ThreadWorkspaceBanner.test.tsx",
+  "src/features/threads/ThreadWorkspaceBanner.refresh.test.tsx",
   "src/features/threads/SecretRequestCard.test.tsx",
+  "src/features/threads/SecretRequestCard.reveal.test.tsx",
+  "src/features/threads/SecretRequestCard.android.test.tsx",
+  "src/components/ui/SecretTextInput.android.test.tsx",
   "src/features/threads/work-shimmer-arbiter.test.tsx",
   "src/features/threads/ComposerSlot.test.tsx",
   "src/features/review/ReviewCommentComposerSheet.test.tsx",
@@ -60,6 +64,7 @@ const reactTests = [
   "src/features/decisions/DecisionDurableCard.test.tsx",
   "src/features/decisions/useDecisionInbox.test.tsx",
   "src/features/decisions/useDecisionInboxAway.test.tsx",
+  "src/features/decisions/useDecisionInbox.unsent.test.tsx",
   "src/features/goat-bot/MobileBotProfileSheet.test.tsx",
   "src/features/goat-bot/GoatBotComposerAttachments.test.tsx",
   "src/features/goat-bot/MobileDeletedBotBanner.test.tsx",
@@ -177,6 +182,7 @@ const reactTests = [
   "src/state/use-selected-thread-git-state.test.tsx",
   "src/features/terminal/useTerminalExitNavigation.test.tsx",
   "src/features/workspace/useSearchScrollRestoration.test.tsx",
+  "src/state/entities.threadLinks.test.tsx",
 ];
 
 const sourceRoot = `${normalizePath(NodeURL.fileURLToPath(new URL("./src", import.meta.url)))}/`;
