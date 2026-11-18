@@ -20,7 +20,7 @@ export function redirectDecline(
   currentPendingApprovals: () => ReadonlyArray<Approval>,
 ) {
   return approvalsToDecline.length > 0 && props.activePendingUserInput === null
-    ? async (text: string, hasAttachmentsOrContext: boolean, saveMode = async () => true) => {
+    ? async (text: string, hasAttachmentsOrContext: boolean, saveMode: () => Promise<boolean>) => {
         if (scope.aborted || stillSendable?.() === false || props.respondingApprovalId !== null)
           return false;
         const feedbackTarget = approvalsToDecline[0];
