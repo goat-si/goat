@@ -626,31 +626,25 @@ const validateOperation = Schema.decodeUnknownSync(MemoryOperation, { onExcessPr
 const operationJson = Schema.fromJsonString(MemoryOperation);
 const encodeOperationJson = Schema.encodeSync(operationJson, { onExcessProperty: "error" });
 const decodeOperationJson = Schema.decodeUnknownSync(operationJson, { onExcessProperty: "error" });
+const operationEnvelope = (operation: MemoryOperation) => ({
+  protocolVersion: operation.protocolVersion,
+  operationId: operation.operationId,
+  memorySpaceId: operation.memorySpaceId,
+  originEnvironmentId: operation.originEnvironmentId,
+  memoryId: operation.memoryId,
+  expectedHeads: operation.expectedHeads,
+});
 /** Refuse unknown nested fields and construct only the selected transport arm. */
 export function encodeMemoryOperation(operation: MemoryOperation): string {
   const value = validateOperation(operation);
-  const {
-    protocolVersion,
-    operationId,
-    memorySpaceId,
-    originEnvironmentId,
-    memoryId,
-    expectedHeads,
-    kind,
-  } = value;
-  const common = {
-    protocolVersion,
-    operationId,
-    memorySpaceId,
-    originEnvironmentId,
-    memoryId,
-    expectedHeads,
-  };
+  const { kind } = value;
+  const common = operationEnvelope(value);
   switch (kind) {
     case "upsert":
       return encodeOperationJson({
         ...common,
         kind,
+        ...(value.closedLineage ? { closedLineage: value.closedLineage } : {}),
         revision: value.revision,
         payload: value.payload,
         ...(value.forgetFence === undefined ? {} : { forgetFence: value.forgetFence }),
@@ -689,6 +683,7 @@ const eventSchema = Schema.Union([
     ...envelope,
     ...floorOperation,
     kind: Schema.Literal("upsert"),
+    closedLineage: Schema.optionalKey(Schema.Literal(true)),
     revision: MemoryRevision,
   }),
   struct({ ...envelope, kind: Schema.Literal("forget"), tombstone: MemoryTombstone }),
@@ -716,23 +711,9 @@ const encodeEventMetadata = Schema.encodeSync(Schema.fromJsonString(eventSchema)
 const decodeEventMetadata = Schema.decodeUnknownSync(eventSchema, { onExcessProperty: "error" });
 export function encodeMemoryEventMetadata(operation: MemoryOperation): string {
   validateOperation(operation);
-  const {
-    protocolVersion,
-    operationId,
-    memorySpaceId,
-    originEnvironmentId,
-    memoryId,
-    expectedHeads,
-    kind,
-  } = operation;
   const common = {
-    protocolVersion,
-    operationId,
-    memorySpaceId,
-    originEnvironmentId,
-    memoryId,
-    expectedHeads,
-    kind,
+    ...operationEnvelope(operation),
+    kind: operation.kind,
     ...(operation.kind !== "forget" && operation.forgetFence !== undefined
       ? { forgetFence: operation.forgetFence }
       : {}),
@@ -755,7 +736,11 @@ export function encodeMemoryEventMetadata(operation: MemoryOperation): string {
               revertsResolutionId: operation.revertsResolutionId,
               restoredRevisionId: operation.restoredRevisionId,
             }
-          : { ...common, revision: operation.revision };
+          : {
+              ...common,
+              ...(operation.closedLineage ? { closedLineage: operation.closedLineage } : {}),
+              revision: operation.revision,
+            };
   return encodeEventMetadata(decodeEventMetadata(value));
 }
 

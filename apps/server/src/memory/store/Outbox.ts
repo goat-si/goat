@@ -77,7 +77,7 @@ export const makeOutbox = (
       const work = works[i]!;
       if (!("protocolVersion" in work.metadata)) continue;
       let operationDigest = rows[i]!.operation_digest;
-      if (!operationDigest) {
+      if (!operationDigest || work.metadata.closedLineage) {
         const op = yield* readWorkOperation(work.id);
         if (!op) continue;
         operationDigest = hashText(M.encodeMemoryOperation(op));

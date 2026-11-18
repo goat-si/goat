@@ -1,4 +1,5 @@
 import * as M from "@goat/contracts";
+import { legacyClosedLineageDigest } from "../MemoryDecider.ts";
 import * as Effect from "effect/Effect";
 import { promotionPrerequisiteReady } from "./FloorWrites.ts";
 import { acceptanceGenerationMatches } from "./SaveSuggestions.ts";
@@ -40,13 +41,16 @@ export const makeSyncHolds = (
       hashText(M.encodeMemoryOperation(op)) !== input.operationDigest
     )
       return null;
+    const legacyDigest = legacyClosedLineageDigest(op) ?? null;
     const rows = yield* stored(
       "sync-acquire",
       sql`
       UPDATE memory_outbox SET status='running', claimed_by=${input.owner}, claimed_until=${input.ownedUntil},
-        sync_version=sync_version+1, operation_digest=${input.operationDigest}, attempt=min(attempt+1,2147483647)
+        sync_version=sync_version+1, operation_digest=${input.operationDigest}, attempt=min(attempt+1,2147483647),
+        metadata_json=CASE WHEN json_extract(metadata_json,'$.authorityFirst')=${legacyDigest}
+          THEN json_set(metadata_json,'$.authorityFirst',${input.operationDigest}) ELSE metadata_json END
       WHERE id=${input.workId} AND kind IN ('sync','revert_intent') AND sync_version=${input.expectedVersion}
-        AND (operation_digest IS NULL OR operation_digest=${input.operationDigest}) AND next_attempt_at<=${input.now}
+        AND (operation_digest IS NULL OR operation_digest IN (${input.operationDigest},${legacyDigest})) AND next_attempt_at<=${input.now}
         AND ${acceptanceGenerationMatches(sql)} AND ${promotionPrerequisiteReady(sql, "memory_outbox")}
         AND (status IN ('pending','retry') OR (status='running' AND claimed_until<=${input.now})) RETURNING id`,
     );

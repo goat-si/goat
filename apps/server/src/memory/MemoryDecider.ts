@@ -12,6 +12,15 @@ import type { MemoryScanResult } from "./MemorySecretScanner.ts";
 
 export const memoryOperationDigest = (operation: M.MemoryOperation) =>
   NodeCrypto.createHash("sha256").update(M.encodeMemoryOperation(operation)).digest("hex");
+// Floor-2 work staged before the codec bound this flag already stored it in metadata.
+export function legacyClosedLineageDigest(operation: M.MemoryOperation): string | undefined {
+  if (operation.kind !== "upsert" || !operation.closedLineage) return undefined;
+  const { closedLineage: _flag, ...legacy } = operation;
+  return memoryOperationDigest(legacy);
+}
+export const matchesMemoryOperationDigest = (operation: M.MemoryOperation, digest: string) =>
+  memoryOperationDigest(operation) === digest || legacyClosedLineageDigest(operation) === digest;
+
 const sameSet = (a: readonly string[], b: readonly string[]) =>
   a.length === b.length && a.every((id) => b.includes(id));
 function fail(code: M.MemoryFailureCode): never {
@@ -41,7 +50,8 @@ export function decideMemoryOperation(
     (!approval ||
       approval.operationId !== operation.operationId ||
       approval.memoryId !== operation.memoryId ||
-      approval.operationDigest !== digest ||
+      (approval.operationDigest !== digest &&
+        legacyClosedLineageDigest(operation) !== approval.operationDigest) ||
       approval.hubSequence === null)
   )
     fail("identity_mismatch");
@@ -57,7 +67,7 @@ export function decideMemoryOperation(
     fail("unsupported_protocol");
   const base: MemoryDecision = {
     operation,
-    operationDigest: digest,
+    operationDigest: approval?.operationDigest ?? digest,
     admission,
     receipt: approval ?? {
       operationId: operation.operationId,

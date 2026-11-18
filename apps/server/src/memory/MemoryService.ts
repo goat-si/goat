@@ -41,7 +41,12 @@ import type {
 } from "./imports/MemoryImportTypes.ts";
 import * as Quota from "./MemoryQuotaService.ts";
 import { checkedHistoryPage, checkedPage } from "./memoryDiagnostics.ts";
-import { decideMemoryOperation, memoryOperationDigest } from "./MemoryDecider.ts";
+import {
+  decideMemoryOperation,
+  memoryOperationDigest,
+  matchesMemoryOperationDigest,
+  legacyClosedLineageDigest,
+} from "./MemoryDecider.ts";
 import { scanMemoryValue } from "./MemorySecretScanner.ts";
 import { makeCommitSummary, type SummaryCommit } from "./MemorySummaryCommit.ts";
 import { makeUpsert, type MemorySuggestionAcceptance } from "./MemoryUpsert.ts";
@@ -599,7 +604,9 @@ const make = Effect.fnUntraced(function* (
     approval?: M.MemoryHubReceipt,
     summaryPrerequisite?: M.MemoryRevisionId,
   ) {
-    const digest = yield* Effect.try({ try: () => memoryOperationDigest(op), catch: invalid });
+    const digest =
+      approval?.operationDigest ??
+      (yield* Effect.try({ try: () => memoryOperationDigest(op), catch: invalid }));
     return yield* store.transact(
       Effect.gen(function* () {
         yield* permit;
@@ -1986,7 +1993,16 @@ const make = Effect.fnUntraced(function* (
     const digest = memoryOperationDigest(op);
     const replay = yield* store.readHubReceiptTx(op.memorySpaceId, op.operationId);
     if (replay) {
-      if (replay.entry.receipt.operationDigest !== digest)
+      const retained = replay.entry.kind === "operation" ? replay.entry.operation : undefined;
+      if (
+        (retained?.kind === "upsert" &&
+          op.kind === "upsert" &&
+          retained.closedLineage !== op.closedLineage) ||
+        (replay.entry.receipt.operationDigest !== digest &&
+          (!retained ||
+            memoryOperationDigest(retained) !== digest ||
+            replay.entry.receipt.operationDigest !== legacyClosedLineageDigest(op)))
+      )
         return yield* new Store.MemoryStoreConflict({ code: "operation_id_reused" });
       return replay.entry.receipt;
     }
@@ -2294,7 +2310,7 @@ const make = Effect.fnUntraced(function* (
     if (
       entry.kind === "operation" &&
       (entry.operation.memorySpaceId !== input.memorySpaceId ||
-        memoryOperationDigest(entry.operation) !== entry.receipt.operationDigest)
+        !matchesMemoryOperationDigest(entry.operation, entry.receipt.operationDigest))
     )
       return yield* invalid();
     const old = yield* store.receipt(input.memorySpaceId, entry.receipt.operationId);

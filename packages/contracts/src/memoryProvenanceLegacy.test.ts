@@ -1,6 +1,6 @@
 import { expect, it } from "vite-plus/test";
 import * as Schema from "effect/Schema";
-import * as M from "./memory.ts";
+import * as M from "./index.ts";
 
 const id = () => "00000000-0000-4000-8000-000000000001";
 

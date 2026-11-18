@@ -32,7 +32,7 @@ import * as Service from "./MemoryService.ts";
 import * as Store from "./MemoryStore.ts";
 import * as Hold from "./MemoryGenerationHold.ts";
 import * as Quota from "./MemoryQuotaService.ts";
-import { memoryOperationDigest } from "./MemoryDecider.ts";
+import { legacyClosedLineageDigest, memoryOperationDigest } from "./MemoryDecider.ts";
 import { redacted, scanMemoryValue } from "./MemorySecretScanner.ts";
 import { failureCode, holdClass, transient } from "./MemorySyncErrors.ts";
 import * as OwnerSource from "./MemoryOwnerSourceReader.ts";
@@ -1697,7 +1697,8 @@ const make = Effect.gen(function* () {
             ack.receipts.length !== 1 ||
             !receipt ||
             receipt.operationId !== acquired.operationId ||
-            receipt.operationDigest !== acquired.operationDigest
+            (receipt.operationDigest !== acquired.operationDigest &&
+              receipt.operationDigest !== legacyClosedLineageDigest(operation))
           )
             return yield* new M.MemoryHubError({ code: "invalid_output" });
           yield* service.settleHubAcknowledgement({

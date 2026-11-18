@@ -1,7 +1,7 @@
 import * as M from "@goat/contracts";
 import * as Effect from "effect/Effect";
 import * as Schema from "effect/Schema";
-import { memoryOperationDigest } from "./MemoryDecider.ts";
+import { legacyClosedLineageDigest, memoryOperationDigest } from "./MemoryDecider.ts";
 import type { MemoryService } from "./MemoryService.ts";
 import * as Store from "./MemoryStore.ts";
 
@@ -68,14 +68,15 @@ export const makeHubAcknowledgement = (deps: {
           !("operationId" in work.metadata) ||
           work.metadata.operationId !== input.operation.operationId ||
           receipt.operationId !== input.operation.operationId ||
-          receipt.operationDigest !== input.operation.operationDigest ||
           work.memoryId !== receipt.memoryId
         )
           return yield* new Store.MemoryStoreConflict({ code: "identity_mismatch" });
         const stored = yield* store.receipt(input.memorySpaceId, input.operation.operationId);
         const operation = yield* store.readWorkOperation(input.workId);
         if (
-          (stored && stored.operationDigest !== input.operation.operationDigest) ||
+          (receipt.operationDigest !== input.operation.operationDigest &&
+            (!operation || legacyClosedLineageDigest(operation) !== receipt.operationDigest)) ||
+          (stored && stored.operationDigest !== receipt.operationDigest) ||
           (operation && memoryOperationDigest(operation) !== input.operation.operationDigest)
         )
           return yield* new Store.MemoryStoreConflict({ code: "operation_id_reused" });
