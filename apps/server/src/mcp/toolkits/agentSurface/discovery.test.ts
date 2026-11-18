@@ -21,19 +21,18 @@ import { type ListedTool, serveCatalogOverHttp, toolkits } from "../../agentSurf
 import type { McpInvocationScope } from "../../McpInvocationContext.ts";
 import { layerTestLoopback } from "@goat/shared/testing/loopbackHttpServer";
 
-const thread = {
+const thread: McpInvocationScope = {
   environmentId: EnvironmentId.make("environment"),
   requestNamespace: "provider:thread",
   thread: {
     threadId: ThreadId.make("thread"),
     providerSessionId: "provider:thread",
     providerInstanceId: ProviderInstanceId.make("codex"),
-    providerDriver: ProviderDriverKind.make("codex"),
   },
   client: undefined,
   capabilities: new Set(["orchestration", "worktree", "pull-requests", "preview"]),
   issuedAt: 0,
-} satisfies McpInvocationScope;
+};
 
 const serve = serveCatalogOverHttp(
   {
@@ -175,7 +174,22 @@ interface Described {
 
 it.effect("keeps prompt-only tools out of discovery for outside clients and Codex", () =>
   Effect.gen(function* () {
-    const http = yield* serve;
+    const http = yield* serveCatalogOverHttp(
+      {
+        thread: {
+          ...thread,
+          thread: { ...thread.thread!, providerDriver: ProviderDriverKind.make("codex") },
+        },
+        client: {
+          ...thread,
+          thread: undefined,
+          client: { sessionId: "discovery-client", label: "Discovery", access: "read-only" },
+          grantedScopes: ["diagnostics:read", "filesystem:read"],
+          reauthorize: () => Effect.void,
+        },
+      },
+      "full",
+    );
     for (const caller of ["client", "thread"]) {
       const discover = (args: object) => http.callTool(caller, "goat_describe", args);
       const inventory = structured<{ resources: ReadonlyArray<{ resource: string }> }>(
@@ -224,7 +238,7 @@ it.effect("lets a Claude thread discover message.show with a custom instance ID"
         claude: {
           ...thread,
           thread: {
-            ...thread.thread,
+            ...thread.thread!,
             providerDriver: ProviderDriverKind.make("claudeAgent"),
             providerInstanceId: ProviderInstanceId.make("writing-account"),
           },
