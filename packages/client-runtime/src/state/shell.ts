@@ -132,8 +132,11 @@ function shellIdentity(
 }
 
 function canReadShellEarly(prepared: PreparedConnection): boolean {
-  if (prepared.httpAuthorization === null) return false;
-  if (prepared.target._tag !== "HubProxyConnectionTarget") return true;
+  if (prepared.httpAuthorization === null) {
+    if (prepared.target._tag !== "PrimaryConnectionTarget") return false;
+  } else if (prepared.target._tag !== "HubProxyConnectionTarget") {
+    return true;
+  }
   try {
     const http = new URL(prepared.httpBaseUrl);
     const socket = new URL(prepared.socketUrl);

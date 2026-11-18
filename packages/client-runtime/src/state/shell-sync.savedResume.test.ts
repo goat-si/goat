@@ -282,3 +282,31 @@ it.effect(
       expect(Option.getOrThrow(live.snapshot).threads).toEqual(nextSnapshot.threads);
     }),
 );
+
+it.effect("starts the cookie-authenticated primary read before the socket opens", () =>
+  Effect.gen(function* () {
+    const cookie = {
+      ...authenticatedPrepared,
+      socketUrl: `${target.wsBaseUrl}/ws`,
+      httpAuthorization: null,
+    };
+    const h = yield* makeCachedShell(origin, cookie);
+    yield* TestClock.adjust("0 millis");
+    expect(yield* Ref.get(h.httpRequests)).toBe(1);
+    yield* h.connect;
+    expect((yield* Queue.take(h.subscriptions)).afterSequence).toBe(23);
+    expect(yield* Ref.get(h.httpRequests)).toBe(1);
+  }),
+);
+
+it.effect("does not start a cookie read when the primary socket points to another origin", () =>
+  Effect.gen(function* () {
+    const h = yield* makeCachedShell(origin, {
+      ...authenticatedPrepared,
+      socketUrl: "wss://different-host.example.test/ws",
+      httpAuthorization: null,
+    });
+    yield* TestClock.adjust("0 millis");
+    expect(yield* Ref.get(h.httpRequests)).toBe(0);
+  }),
+);
