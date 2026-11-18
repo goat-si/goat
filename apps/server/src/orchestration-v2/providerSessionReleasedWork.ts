@@ -14,7 +14,7 @@ import type * as ProviderAdapter from "@goat/provider-core/server/ProviderAdapte
 import * as DateTime from "effect/DateTime";
 import * as Effect from "effect/Effect";
 import type * as EventSink from "./EventSink.ts";
-import type * as ProjectionStore from "./ProjectionStore.ts";
+import * as ProjectionStore from "./ProjectionStore.ts";
 import type { ProviderSessionReleaseReason } from "./ProviderSessionManager.ts";
 import { releasedThreadIds } from "./providerSessionReleasedThreads.ts";
 
@@ -75,7 +75,10 @@ export const makeReleasedBackgroundWork = ({
             providerSessionId,
             providerThreadId: providerThread.id,
             driver: providerThread.driver,
-            interruptedWorkflows: new Map<NodeId, number>(),
+            interruptedWorkflows: new Map<
+              NodeId,
+              { readonly task: string; readonly card?: string }
+            >(),
             taskIds: new Set(
               (providerThread.pendingBackgroundTasks ?? []).map((task) => task.taskId),
             ),
@@ -218,42 +221,55 @@ export const makeReleasedBackgroundWork = ({
         (thread) =>
           thread.id === providerThreadId && thread.providerSessionId === providerSessionId,
       );
-      if (owner === undefined) return { ...projection, subagents: [] };
       const itemsBySubagent = new Map(
         projection.turnItems.flatMap((item) =>
           item.type === "subagent" ? [[item.subagentId, item] as const] : [],
         ),
       );
-      const belongsToCutOff = (subagent: OrchestrationV2Subagent) =>
-        (isOrchestrationV2WorkActive(subagent.status) &&
-          DateTime.isLessThanOrEqualTo(subagent.updatedAt, releasedAt)) ||
-        (subagent.status === "interrupted" &&
-          interruptedWorkflows.get(subagent.id) === DateTime.toEpochMillis(subagent.updatedAt));
-      const subagents = projection.subagents.filter((subagent) => {
-        if (
-          subagent.origin !== "provider_native" ||
-          subagent.driver !== driver ||
-          subagent.providerInstanceId !== owner.providerInstanceId ||
-          !belongsToCutOff(subagent)
-        )
-          return false;
-        const item = itemsBySubagent.get(subagent.id);
-        if (item?.providerThreadId != null) {
+      if (owner === undefined) return { ...projection, subagents: [], itemsBySubagent };
+      const subagents = yield* Effect.filter(projection.subagents, (subagent) =>
+        Effect.gen(function* () {
+          if (
+            subagent.origin !== "provider_native" ||
+            subagent.driver !== driver ||
+            subagent.providerInstanceId !== owner.providerInstanceId
+          )
+            return false;
+          const item = itemsBySubagent.get(subagent.id);
+          const interrupted = interruptedWorkflows.get(subagent.id);
+          if (subagent.status === "interrupted" && interrupted !== undefined) {
+            if (interrupted.task !== (yield* ProjectionStore.encodeSubagentPayload(subagent)))
+              return false;
+            if (item !== undefined) {
+              return (
+                item.providerThreadId === providerThreadId &&
+                interrupted.card === (yield* ProjectionStore.encodeTurnItemPayload(item))
+              );
+            }
+            return interrupted.card === undefined;
+          }
+          if (
+            !isOrchestrationV2WorkActive(subagent.status) ||
+            DateTime.isGreaterThan(subagent.updatedAt, releasedAt)
+          )
+            return false;
+          if (item?.providerThreadId != null) {
+            return (
+              item.providerThreadId === providerThreadId &&
+              DateTime.isLessThanOrEqualTo(item.updatedAt, releasedAt)
+            );
+          }
+          // Older rows can predate provider-thread attribution on the task card.
+          const nativeTaskId = subagent.nativeTaskRef?.nativeId;
           return (
-            item.providerThreadId === providerThreadId &&
-            DateTime.isLessThanOrEqualTo(item.updatedAt, releasedAt)
+            (nativeTaskId != null && taskIds.has(nativeTaskId)) ||
+            projection.providerThreads.filter(
+              (thread) => thread.providerInstanceId === owner.providerInstanceId,
+            ).length === 1
           );
-        }
-        // Older rows can predate provider-thread attribution on the task card.
-        const nativeTaskId = subagent.nativeTaskRef?.nativeId;
-        return (
-          (nativeTaskId != null && taskIds.has(nativeTaskId)) ||
-          projection.providerThreads.filter(
-            (thread) => thread.providerInstanceId === owner.providerInstanceId,
-          ).length === 1
-        );
-      });
-      return { ...projection, subagents };
+        }),
+      );
+      return { ...projection, subagents, itemsBySubagent };
     });
 
     const readChild = Effect.fn("ProviderSessionManager.readReleasedNativeChild")(function* (
@@ -405,7 +421,9 @@ export const makeReleasedBackgroundWork = ({
         const itemIds = new Set(
           events.flatMap((event) => (event.type === "turn-item.updated" ? [event.payload.id] : [])),
         );
-        const { committed } = yield* eventSink.writeIfReleasedSubagentUnchanged({
+        const card = pending.itemsBySubagent.get(subagent.id);
+        if (card !== undefined) itemIds.add(card.id);
+        const { committed, storedEvents } = yield* eventSink.writeIfReleasedSubagentUnchanged({
           expected: subagent,
           members,
           providerThreadId,
@@ -427,7 +445,22 @@ export const makeReleasedBackgroundWork = ({
           isOrchestrationV2WorkActive(subagent.status) &&
           interruptedWorkflows.size < WORKFLOW_RELEASE_MEMBER_LIMIT
         ) {
-          interruptedWorkflows.set(subagent.id, DateTime.toEpochMillis(now));
+          const writtenTask = storedEvents
+            .map(({ event }) => event)
+            .find((event) => event.type === "subagent.updated" && event.payload.id === subagent.id);
+          const writtenCard = storedEvents
+            .map(({ event }) => event)
+            .find((event) => event.type === "turn-item.updated" && event.payload.id === card?.id);
+          if (writtenTask?.type === "subagent.updated") {
+            const currentCard =
+              writtenCard?.type === "turn-item.updated" ? writtenCard.payload : card;
+            interruptedWorkflows.set(subagent.id, {
+              task: yield* ProjectionStore.encodeSubagentPayload(writtenTask.payload),
+              ...(currentCard === undefined
+                ? {}
+                : { card: yield* ProjectionStore.encodeTurnItemPayload(currentCard) }),
+            });
+          }
         }
       }
       if (!attempted) return;

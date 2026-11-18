@@ -1,3 +1,4 @@
+import * as TestClock from "effect/testing/TestClock";
 import { assert, it } from "@effect/vitest";
 import {
   type OrchestrationV2ProviderThread,
@@ -183,11 +184,12 @@ export function registerReleasedBackgroundWorkChecks({
       };
     });
 
-  it.effect(
-    "settles a released native child and leaves the replacement session's child active",
-    () =>
+  it.effect.each([false, true])(
+    "settles released workflow members without touching the replacement (during drain: %s)",
+    (duringDrain) =>
       Effect.gen(function* () {
         const state = yield* Ref.make(emptyState);
+        const beforeUnchangedWrite = yield* Ref.make<Effect.Effect<void>>(Effect.void);
         yield* Effect.gen(function* () {
           const manager = yield* ProviderSessionManager.ProviderSessionManagerV2;
           const eventSink = yield* EventSink.EventSinkV2;
@@ -298,50 +300,53 @@ export function registerReleasedBackgroundWorkChecks({
                 ],
               });
               const { workflow: _workflow, ...coordinator } = subagent;
-              yield* eventSink.write({
-                events: [
-                  yield* makeThreadCreatedEvent({ idAllocator, threadId: memberThreadId, now }),
-                  {
-                    id: yield* idAllocator.allocate.event({ threadId: childThreadId }),
-                    type: "subagent.updated",
-                    threadId: childThreadId,
-                    occurredAt: now,
-                    payload: {
-                      ...coordinator,
-                      id: memberId,
+              const writeMember = Effect.gen(function* () {
+                yield* eventSink.write({
+                  events: [
+                    yield* makeThreadCreatedEvent({ idAllocator, threadId: memberThreadId, now }),
+                    {
+                      id: yield* idAllocator.allocate.event({ threadId: childThreadId }),
+                      type: "subagent.updated",
                       threadId: childThreadId,
-                      runId: null,
-                      childThreadId: memberThreadId,
-                      parentNodeId: root,
-                      nativeTaskRef: memberRef,
+                      occurredAt: now,
+                      payload: {
+                        ...coordinator,
+                        id: memberId,
+                        threadId: childThreadId,
+                        runId: null,
+                        childThreadId: memberThreadId,
+                        parentNodeId: root,
+                        nativeTaskRef: memberRef,
+                      },
                     },
-                  },
-                  {
-                    id: yield* idAllocator.allocate.event({ threadId: memberThreadId }),
-                    type: "node.updated",
-                    threadId: memberThreadId,
-                    occurredAt: now,
-                    payload: {
-                      id: memberRoot,
+                    {
+                      id: yield* idAllocator.allocate.event({ threadId: memberThreadId }),
+                      type: "node.updated",
                       threadId: memberThreadId,
-                      rootNodeId: memberRoot,
-                      runId: null,
-                      parentNodeId: null,
-                      kind: "root_turn",
-                      status: "running",
-                      countsForRun: false,
-                      providerThreadId: null,
-                      providerTurnId: null,
-                      nativeItemRef: memberRef,
-                      runtimeRequestId: null,
-                      checkpointScopeId: null,
-                      startedAt: now,
-                      completedAt: null,
+                      occurredAt: now,
+                      payload: {
+                        id: memberRoot,
+                        threadId: memberThreadId,
+                        rootNodeId: memberRoot,
+                        runId: null,
+                        parentNodeId: null,
+                        kind: "root_turn",
+                        status: "running",
+                        countsForRun: false,
+                        providerThreadId: null,
+                        providerTurnId: null,
+                        nativeItemRef: memberRef,
+                        runtimeRequestId: null,
+                        checkpointScopeId: null,
+                        startedAt: now,
+                        completedAt: null,
+                      },
                     },
-                  },
-                ],
+                  ],
+                });
               });
-              return { id, root, childThreadId, memberId, memberRoot, memberThreadId };
+              if (!duringDrain || index !== 0) yield* writeMember;
+              return { id, root, childThreadId, memberId, memberRoot, memberThreadId, writeMember };
             }),
           );
           const replacementSessionId = providerThreads[1].providerSessionId;
@@ -353,7 +358,40 @@ export function registerReleasedBackgroundWorkChecks({
             modelSelection,
             runtimePolicy,
           });
-          yield* manager.close(providerSessionId);
+          if (duringDrain) {
+            const runtime = Option.getOrThrow(yield* manager.get(providerSessionId));
+            if (runtime.subscribeEvents === undefined) return assert.fail("no event subscription");
+            const subscription = yield* runtime.subscribeEvents;
+            const entered = yield* Deferred.make<void>();
+            const resume = yield* Deferred.make<void>();
+            const lateChild = children[0];
+            if (lateChild === undefined) return assert.fail("no workflow to drain");
+            const consumer = yield* subscription.events.pipe(
+              Stream.tap(() =>
+                Deferred.succeed(entered, undefined).pipe(
+                  Effect.andThen(Deferred.await(resume)),
+                  Effect.andThen(lateChild.writeMember),
+                ),
+              ),
+              Stream.runDrain,
+              Effect.exit,
+              Effect.forkScoped,
+            );
+            const queue = (yield* Ref.get(state)).eventQueues.get(String(providerSessionId));
+            if (queue === undefined) return assert.fail("no provider event queue");
+            yield* Queue.offer(queue, {
+              type: "provider_session.updated",
+              driver: CODEX_DRIVER,
+              providerSession: runtime.providerSession,
+            });
+            yield* Deferred.await(entered);
+            yield* Ref.set(beforeUnchangedWrite, TestClock.adjust("1 second"));
+            yield* manager.detach({ providerSessionId, threadId });
+            yield* Deferred.succeed(resume, undefined);
+            yield* Fiber.join(consumer);
+          } else {
+            yield* manager.close(providerSessionId);
+          }
           assert.isTrue(yield* manager.isLive(replacementSessionId));
           const parent = yield* projectionStore.getThreadProjection(threadId);
           const status = yield* Effect.forEach(children, ({ id, root, childThreadId }) =>
@@ -392,7 +430,12 @@ export function registerReleasedBackgroundWorkChecks({
           ]);
         }).pipe(
           Effect.provide(
-            layerTest({ state, idleTimeoutMs: 60_000, capabilities: ExclusiveCapabilities }),
+            layerTest({
+              state,
+              idleTimeoutMs: 60_000,
+              capabilities: ExclusiveCapabilities,
+              beforeUnchangedWrite,
+            }),
           ),
         );
       }),
