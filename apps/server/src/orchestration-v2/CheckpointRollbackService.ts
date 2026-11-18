@@ -255,6 +255,7 @@ export const layer: Layer.Layer<
 
       const { worktreePath, branch } = context.thread;
       let setAsidePath: string | null = null;
+      let verifyRecreation = Effect.void as Effect.Effect<void, GitCommandError>;
       let completeRecreation = Effect.void as Effect.Effect<
         void,
         import("./goat/restorePending.ts").RestorePendingError
@@ -272,8 +273,8 @@ export const layer: Layer.Layer<
           const project = yield* projects.get(context.thread.projectId);
           if (
             Option.isSome(project) &&
-            (yield* pendingRestore.read(worktreePath, project.value.workspaceRoot))?.applied ===
-              false
+            (yield* pendingRestore.readStrict(worktreePath, project.value.workspaceRoot))
+              ?.applied === false
           ) {
             return yield* new CheckpointRollbackExecutionError({
               reason: "unexpected-failure",
@@ -309,6 +310,13 @@ export const layer: Layer.Layer<
               };
               yield* pendingRestore.write(worktreePath, state, cwd);
               yield* gitWorkflow.createWorktree({ cwd, refName: branch, path: worktreePath });
+              verifyRecreation = gitWorkflow.verifyManagedCheckout({
+                projectCwd: cwd,
+                worktreePath: scope.cwd,
+                expectedPath: worktreePath,
+                branch,
+                expectedHead: headSha,
+              });
               completeRecreation = pendingRestore.write(
                 worktreePath,
                 { ...state, applied: true },
@@ -366,7 +374,10 @@ export const layer: Layer.Layer<
               target: rollbackTarget,
               providerThreadTurns,
             });
-      if (restoreFiles) yield* checkpoints.restore({ scope, checkpoint });
+      if (restoreFiles) {
+        yield* verifyRecreation;
+        yield* checkpoints.restore({ scope, checkpoint });
+      }
       yield* completeRecreation;
       if (staleCheckpoints.length > 0) {
         yield* checkpoints.deleteStaleRefs({ scope, checkpoints: staleCheckpoints });

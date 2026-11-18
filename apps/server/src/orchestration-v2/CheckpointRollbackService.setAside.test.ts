@@ -1,3 +1,4 @@
+import { verifyManagedCheckout } from "./goat/restoreSnapshot.ts";
 import { makeRestorePending } from "./goat/restorePending.ts";
 import { git as realGit } from "./goat/restoreSnapshot.ts";
 import { GitCommandError } from "@goat/contracts";
@@ -38,6 +39,8 @@ interface Row {
   readonly restoreFiles?: boolean;
   readonly createFails?: boolean;
   readonly lateCreateFails?: boolean;
+  readonly wrongBranchHook?: boolean;
+  readonly malformedMarker?: boolean;
   readonly shared?: boolean;
   readonly unmanaged?: boolean;
   readonly checkout?: boolean;
@@ -53,6 +56,8 @@ const rollBackOverLeftover = (row: Row) =>
       restoreFiles = true,
       createFails,
       lateCreateFails,
+      wrongBranchHook,
+      malformedMarker,
       shared,
       unmanaged,
       checkout,
@@ -80,7 +85,7 @@ const rollBackOverLeftover = (row: Row) =>
     const scopeId = CheckpointScopeId.make("rollback-aside-scope");
     const branch = "feature/rollback";
     yield* fileSystem.makeDirectory(path.join(workspaceRoot, ".git"), { recursive: true });
-    if (lateCreateFails) {
+    if (lateCreateFails || wrongBranchHook || malformedMarker) {
       yield* Effect.promise(async () => {
         await realGit(workspaceRoot, ["init", "-b", "main"]);
         await realGit(workspaceRoot, [
@@ -95,9 +100,28 @@ const rollBackOverLeftover = (row: Row) =>
         ]);
         await realGit(workspaceRoot, ["branch", branch]);
       });
-      const hook = path.join(workspaceRoot, ".git", "hooks", "post-checkout");
-      yield* fileSystem.writeFileString(hook, "#!/bin/sh\nprintf keep > late.txt\nexit 1\n");
-      yield* fileSystem.chmod(hook, 0o755);
+      if (malformedMarker) {
+        yield* fileSystem.remove(worktreePath, { recursive: true });
+        const admin = yield* Effect.promise(async () => {
+          await realGit(workspaceRoot, ["worktree", "add", worktreePath, branch]);
+          return (await realGit(worktreePath, ["rev-parse", "--absolute-git-dir"]))
+            .toString()
+            .trim();
+        });
+        yield* fileSystem.writeFileString(
+          path.join(admin, "goat-restore-pending"),
+          "{partial json",
+        );
+      } else {
+        const hook = path.join(workspaceRoot, ".git", "hooks", "post-checkout");
+        yield* fileSystem.writeFileString(
+          hook,
+          wrongBranchHook
+            ? "#!/bin/sh\ngit -c core.hooksPath=/dev/null switch -c other && printf keep > late.txt\n"
+            : "#!/bin/sh\nprintf keep > late.txt\nexit 1\n",
+        );
+        yield* fileSystem.chmod(hook, 0o755);
+      }
     }
     const calls: string[] = [];
     const written: OrchestrationV2DomainEvent[] = [];
@@ -137,9 +161,24 @@ const rollBackOverLeftover = (row: Row) =>
             get: () => Effect.succeedSome({ workspaceRoot } as never),
           }),
           Layer.mock(GitWorkflow.GitWorkflowService)({
+            verifyManagedCheckout: (input) =>
+              wrongBranchHook
+                ? verifyManagedCheckout(input).pipe(
+                    Effect.mapError(
+                      (cause) =>
+                        new GitCommandError({
+                          operation: "verifyManagedCheckout",
+                          command: "git worktree",
+                          cwd: input.projectCwd,
+                          detail: cause.detail,
+                          cause,
+                        }),
+                    ),
+                  )
+                : Effect.void,
             pruneWorktrees: () => Effect.sync(() => void calls.push("prune")),
             resolveCommit: ({ cwd, revision }) =>
-              lateCreateFails
+              lateCreateFails || wrongBranchHook
                 ? Effect.tryPromise({
                     try: async () => ({
                       commitSha: (await realGit(cwd, ["rev-parse", revision])).toString().trim(),
@@ -167,7 +206,7 @@ const rollBackOverLeftover = (row: Row) =>
                   .readDirectory(worktreePath)
                   .pipe(Effect.orElseSucceed((): ReadonlyArray<string> => []));
                 assert.deepEqual(entries, []);
-                if (lateCreateFails) {
+                if (lateCreateFails || wrongBranchHook) {
                   return yield* Effect.tryPromise({
                     try: async () =>
                       (await realGit(workspaceRoot, [
@@ -201,6 +240,11 @@ const rollBackOverLeftover = (row: Row) =>
           Layer.mock(CheckpointService.CheckpointServiceV2)({
             restore: () =>
               Effect.sync(() => void calls.push("files")).pipe(
+                Effect.andThen(
+                  wrongBranchHook
+                    ? fileSystem.remove(path.join(worktreePath, "late.txt")).pipe(Effect.orDie)
+                    : Effect.void,
+                ),
                 Effect.andThen(
                   filesFail
                     ? Effect.fail(new Error("the checkpoint is unreadable") as never)
@@ -264,6 +308,9 @@ const rollBackOverLeftover = (row: Row) =>
     );
     return {
       exit,
+      lateContents: yield* fileSystem
+        .readFileString(path.join(worktreePath, "late.txt"))
+        .pipe(Effect.orElseSucceed(() => null)),
       pending: yield* pending.marked(worktreePath, workspaceRoot),
       linked: yield* fileSystem.exists(path.join(worktreePath, ".git")),
       calls,
@@ -404,5 +451,24 @@ it.effect("Edit from here leaves a late hook failure marked after Git registers 
     assert.isTrue(result.pending);
     assert.equal(result.setAsideFiles, "keep");
     assert.deepEqual(result.calls, ["prune", "create"]);
+  }),
+);
+
+it.effect("Edit from here leaves files alone if the add hook switched to another branch", () =>
+  Effect.gen(function* () {
+    const result = yield* rollBackOverLeftover({ wrongBranchHook: true });
+    assert.equal(result.exit._tag, "Failure");
+    assert.notInclude(result.calls, "files");
+    assert.equal(result.lateContents, "keep");
+    assert.isTrue(result.pending);
+  }),
+);
+
+it.effect("Edit from here refuses a linked checkout with a malformed restore marker", () =>
+  Effect.gen(function* () {
+    const result = yield* rollBackOverLeftover({ malformedMarker: true });
+    assert.equal(result.exit._tag, "Failure");
+    assert.notInclude(result.calls, "files");
+    assert.isTrue(result.pending);
   }),
 );

@@ -1,3 +1,7 @@
+import {
+  verifyManagedCheckout,
+  type ManagedCheckoutIdentity,
+} from "../orchestration-v2/goat/restoreSnapshot.ts";
 import * as Context from "effect/Context";
 import * as Effect from "effect/Effect";
 import * as Layer from "effect/Layer";
@@ -51,6 +55,9 @@ export class GitWorkflowService extends Context.Service<
   GitWorkflowService,
   {
     readonly repositoryRoot: (cwd: string) => Effect.Effect<string | null, GitManagerServiceError>;
+    readonly verifyManagedCheckout: (
+      input: ManagedCheckoutIdentity,
+    ) => Effect.Effect<void, GitCommandError>;
     readonly resolveCommit: GitVcsDriver.GitVcsDriver["Service"]["resolveCommit"];
     readonly hasCommit: (input: {
       readonly cwd: string;
@@ -359,6 +366,19 @@ export const make = Effect.gen(function* () {
         ),
       );
     }),
+    verifyManagedCheckout: (input) =>
+      verifyManagedCheckout(input).pipe(
+        Effect.mapError(
+          (cause) =>
+            new GitCommandError({
+              operation: "GitWorkflowService.verifyManagedCheckout",
+              command: "git worktree",
+              cwd: input.projectCwd,
+              detail: `Could not verify the checkout at ${input.worktreePath}: ${cause.detail}.`,
+              cause,
+            }),
+        ),
+      ),
     resolveCommit: Effect.fn("GitWorkflowService.resolveCommit")(function (input) {
       return ensureGitCommand("GitWorkflowService.resolveCommit", input.cwd).pipe(
         Effect.andThen(git.resolveCommit(input)),

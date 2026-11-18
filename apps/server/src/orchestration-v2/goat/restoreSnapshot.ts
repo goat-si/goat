@@ -240,7 +240,7 @@ export const verifyRestoredWorktree = Effect.fn("restoreSnapshot.verifyRestoredW
     cwd: string;
     expectedPath?: string;
     branch: string;
-    expectedHead: string;
+    expectedHead?: string | undefined;
     snapshot?: string;
   }) =>
     Effect.tryPromise({
@@ -256,7 +256,8 @@ export const verifyRestoredWorktree = Effect.fn("restoreSnapshot.verifyRestoredW
           "toplevel",
         );
         check((await text(cwd, "symbolic-ref", "HEAD")) === `refs/heads/${input.branch}`, "branch");
-        check((await text(cwd, "rev-parse", "HEAD")) === input.expectedHead, "head");
+        if (input.expectedHead !== undefined)
+          check((await text(cwd, "rev-parse", "HEAD")) === input.expectedHead, "head");
         if (input.snapshot) {
           const snapshot = input.snapshot;
           // Capture adds files outside a sparse checkout's patterns too, so the check must as well.
@@ -280,4 +281,26 @@ export const verifyRestoredWorktree = Effect.fn("restoreSnapshot.verifyRestoredW
           ? cause
           : new RestoreSnapshotError({ detail: "verification", cause }),
     }),
+);
+
+export interface ManagedCheckoutIdentity {
+  readonly projectCwd: string;
+  readonly worktreePath: string;
+  readonly expectedPath?: string | undefined;
+  readonly branch: string;
+  readonly expectedHead?: string | undefined;
+}
+
+export const verifyManagedCheckout = Effect.fn("restoreSnapshot.verifyManagedCheckout")(
+  (input: ManagedCheckoutIdentity) =>
+    verifyWorktreeRegistration(input).pipe(
+      Effect.andThen(
+        verifyRestoredWorktree({
+          cwd: input.worktreePath,
+          expectedPath: input.expectedPath ?? input.worktreePath,
+          branch: input.branch,
+          expectedHead: input.expectedHead,
+        }),
+      ),
+    ),
 );

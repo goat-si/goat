@@ -248,6 +248,7 @@ it.effect.each([
                 calls.push("prune");
               }),
             resolveCommit: () => Effect.succeed({ commitSha: "fixture-head" }),
+            verifyManagedCheckout: () => Effect.void,
             createWorktree: (input) =>
               Effect.gen(function* () {
                 assert.deepEqual(input, {
@@ -813,6 +814,7 @@ it.effect.each([
                 calls.push("prune");
               }),
             resolveCommit: () => Effect.succeed({ commitSha: "fixture-head" }),
+            verifyManagedCheckout: () => Effect.void,
             createWorktree: (input) =>
               Effect.gen(function* () {
                 assert.deepEqual(input, {

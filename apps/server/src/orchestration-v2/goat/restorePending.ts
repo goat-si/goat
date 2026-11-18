@@ -125,6 +125,21 @@ export const makeRestorePending = Effect.gen(function* () {
     const marker = yield* markerPath(worktreePath, projectCwd);
     return marker !== null && (yield* fs.exists(marker).pipe(Effect.orElseSucceed(() => true)));
   });
+  const readStrict = Effect.fn("RestorePending.readStrict")(
+    function* (worktreePath: string, projectCwd?: string) {
+      const marker = yield* markerPath(worktreePath, projectCwd);
+      if (marker === null) return null;
+      const content = yield* fs.readFileString(marker).pipe(
+        Effect.catchIf(
+          (error) => error.reason._tag === "NotFound",
+          () => Effect.succeed(null),
+        ),
+      );
+      return content === null ? null : yield* decode(content);
+    },
+    (effect, worktreePath) =>
+      effect.pipe(Effect.mapError((cause) => new RestorePendingError({ worktreePath, cause }))),
+  );
   return {
     marked,
     /** Present and not waiting on an unfinished restore; an unreadable folder counts as present. */
@@ -132,14 +147,9 @@ export const makeRestorePending = Effect.gen(function* () {
       if (!(yield* fs.exists(worktreePath).pipe(Effect.orElseSucceed(() => true)))) return false;
       return !(yield* marked(worktreePath, projectCwd));
     }),
+    readStrict,
     read: (worktreePath: string, projectCwd?: string) =>
-      markerPath(worktreePath, projectCwd).pipe(
-        Effect.flatMap((marker) =>
-          marker === null ? Effect.succeed(null) : fs.readFileString(marker),
-        ),
-        Effect.flatMap((json) => (json === null ? Effect.succeed(null) : decode(json))),
-        Effect.orElseSucceed(() => null),
-      ),
+      readStrict(worktreePath, projectCwd).pipe(Effect.orElseSucceed(() => null)),
     write: Effect.fn("RestorePending.write")(
       function* (worktreePath: string, state: RestorePendingState, projectCwd?: string) {
         const marker =
