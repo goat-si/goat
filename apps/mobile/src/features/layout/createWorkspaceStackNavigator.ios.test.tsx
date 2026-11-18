@@ -1,7 +1,12 @@
 import { act, createContext, type ComponentProps, type ReactNode } from "react";
 import { createRoot } from "react-dom/client";
 import type { NativeStackView } from "@react-navigation/native-stack";
-import type { Split, Tabs } from "react-native-screens";
+import type {
+  Split,
+  Tabs,
+  TabSelectedEvent,
+  TabSelectionRejectedEvent,
+} from "react-native-screens";
 import { expect, it, vi } from "vite-plus/test";
 import type { NavigationTab } from "../workspace/navigation-tab-order";
 import { NativeWorkspaceInspectorContext } from "../../native/v5-workspace-context";
@@ -153,6 +158,7 @@ function setup() {
   harness.disabled = [];
   harness.dismissInspector.mockClear();
   harness.selectTab.mockClear();
+  harness.tabsHost = null;
   const frameJobs = new Map<number, FrameRequestCallback>();
   const idleJobs = new Map<number, IdleRequestCallback>();
   let nextJob = 0;
@@ -187,9 +193,45 @@ function setup() {
         </NativeWorkspaceInspectorContext>,
       ),
     );
+  const tabsHost = () => {
+    if (!harness.tabsHost) throw new Error("Workspace tabs are not mounted.");
+    return harness.tabsHost;
+  };
   return {
     render,
     slot: (key: string) => container.querySelector(`[data-slot="${key}"]`),
+    get request() {
+      return tabsHost().navStateRequest;
+    },
+    tapUnreadyTab(screenKey: string) {
+      const host = tabsHost();
+      act(() =>
+        host.onTabSelectionPrevented?.({
+          nativeEvent: {
+            selectedScreenKey: host.navStateRequest?.selectedScreenKey,
+            provenance: host.navStateRequest?.baseProvenance,
+            preventedScreenKey: screenKey,
+          },
+        } as never),
+      );
+    },
+    receiveSelection(
+      selectedScreenKey: string,
+      provenance: number,
+      actionOrigin: TabSelectedEvent["actionOrigin"],
+    ) {
+      const nativeEvent: TabSelectedEvent = {
+        selectedScreenKey,
+        provenance,
+        actionOrigin,
+        isRepeated: false,
+        hasTriggeredSpecialEffect: false,
+      };
+      act(() => tabsHost().onTabSelected?.({ nativeEvent } as never));
+    },
+    receiveRejection(nativeEvent: TabSelectionRejectedEvent) {
+      act(() => tabsHost().onTabSelectionRejected?.({ nativeEvent } as never));
+    },
     commitNativeFrame() {
       const pending = [...frameJobs.values()];
       frameJobs.clear();
@@ -225,4 +267,61 @@ it("keeps one live inspector when the other workspace tabs prewarm", () => {
   }
   act(() => screen.slot("first")?.querySelector("button")?.click());
   expect(harness.dismissInspector).toHaveBeenCalledOnce();
+});
+
+it("keeps the last requested tab when two unready tabs are tapped in succession", () => {
+  using screen = setup();
+  screen.render();
+  screen.commitNativeFrame();
+  screen.prewarmDuringIdle();
+
+  screen.tapUnreadyTab("second");
+  expect(screen.request?.selectedScreenKey).toBe("first");
+  screen.tapUnreadyTab("third");
+  expect(screen.request?.selectedScreenKey).toBe("first");
+
+  screen.commitNativeFrame();
+  expect(screen.request?.selectedScreenKey).toBe("third");
+  expect(harness.selectTab.mock.calls).toEqual([["pullRequests"], ["usage"]]);
+});
+
+it("keeps the active destination when disabling and re-enabling a tab reassigns its slot", () => {
+  using screen = setup();
+  screen.render();
+  screen.commitNativeFrame();
+  screen.tapUnreadyTab("third");
+  screen.commitNativeFrame();
+  expect(screen.request?.selectedScreenKey).toBe("third");
+
+  harness.disabled = ["pullRequests"];
+  screen.render();
+  screen.commitNativeFrame();
+  expect(screen.request?.selectedScreenKey).toBe("second");
+  expect(screen.slot("third")).toBeNull();
+
+  harness.disabled = [];
+  screen.render();
+  expect(screen.request?.selectedScreenKey).toBe("third");
+  expect(screen.slot("second")?.hasAttribute("data-prevent-selection")).toBe(true);
+});
+
+it("ignores stale native acknowledgements after a newer tab is selected", () => {
+  using screen = setup();
+  screen.render();
+  screen.commitNativeFrame();
+  screen.tapUnreadyTab("third");
+  screen.commitNativeFrame();
+  screen.receiveSelection("third", 5, "programmatic-js");
+
+  screen.receiveRejection({
+    selectedScreenKey: "second",
+    provenance: 3,
+    rejectionReason: "stale",
+    rejectedBaseProvenance: 2,
+    rejectedScreenKey: "first",
+  });
+  screen.receiveSelection("second", 4, "user");
+
+  expect(screen.request).toEqual({ selectedScreenKey: "third", baseProvenance: 5 });
+  expect(harness.selectTab.mock.calls).toEqual([["usage"]]);
 });

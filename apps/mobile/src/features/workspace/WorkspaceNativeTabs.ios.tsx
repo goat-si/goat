@@ -168,16 +168,19 @@ export function WorkspaceNativeTabs(props: {
       return next;
     });
   }, []);
-  const [shownScreenKey, setShownScreenKey] = useState(selectedScreenKey);
   const selectedController = slots.find(({ slot }) => slot === selectedScreenKey);
-  const shownSlot = slots.some(({ slot }) => slot === shownScreenKey);
-  const readyToSwitch = selectedController && readySlots.has(selectedController.identity);
-  const visibleScreenKey = readyToSwitch || !shownSlot ? selectedScreenKey : shownScreenKey;
-  if (visibleScreenKey !== shownScreenKey) setShownScreenKey(visibleScreenKey);
-  const request = useMemo(
-    () => ({ selectedScreenKey: visibleScreenKey, baseProvenance: provenance }),
-    [visibleScreenKey, provenance],
-  );
+  const [shownController, setShownController] = useState(selectedController);
+  // A native slot can be reused by a different destination when a tab is enabled or disabled.
+  const retainedController = slots.find(({ identity }) => identity === shownController?.identity);
+  const visibleController =
+    selectedController && readySlots.has(selectedController.identity)
+      ? selectedController
+      : (retainedController ?? selectedController);
+  if (visibleController?.identity !== shownController?.identity) {
+    setShownController(visibleController);
+  }
+  const visibleScreenKey = visibleController?.slot ?? selectedScreenKey;
+  const request = { selectedScreenKey: visibleScreenKey, baseProvenance: provenance };
   const [prewarm, setPrewarm] = useState(false);
   const canPrewarm = layout.usesSplitView && readySlots.size > 0;
   // oxlint-disable-next-line goat/react-effect-budget -- prewarms hidden column pages after the visible tab settles

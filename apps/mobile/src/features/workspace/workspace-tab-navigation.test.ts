@@ -2,7 +2,11 @@ import * as NodeModule from "node:module";
 import { describe, expect, it } from "vite-plus/test";
 
 import { restoreSettingsLinkState, settingsLinkAction } from "../settings/settings-navigation";
-import { workspaceSelectionsIn, workspaceTabNavigationState } from "./workspace-tab-navigation";
+import {
+  workspaceSelectionsIn,
+  workspaceTabNavigationState,
+  workspaceTabPage,
+} from "./workspace-tab-navigation";
 
 const home = { key: "home", name: "Home" };
 const thread = {
@@ -112,9 +116,10 @@ describe("opening a workspace tab", () => {
     const state = { routes: [home] };
     const selections = { threads: thread.params };
     const options = { columns: true, check: available };
-    const prewarmed = workspaceTabNavigationState(state, "threads", selections, options);
+    const prewarmed = workspaceTabPage(state, "threads", selections, options);
     const selected = workspaceTabNavigationState(state, "threads", selections, options);
-    expect(selected.routes.at(-1)?.key).toBe(prewarmed.routes.at(-1)?.key);
+    expect(prewarmed).toMatchObject({ name: "Thread", params: thread.params });
+    expect(selected.routes.at(-1)?.key).toBe(prewarmed?.key);
     const different = workspaceTabNavigationState(
       state,
       "threads",
@@ -123,7 +128,23 @@ describe("opening a workspace tab", () => {
       },
       options,
     );
-    expect(different.routes.at(-1)?.key).not.toBe(prewarmed.routes.at(-1)?.key);
+    expect(different.routes.at(-1)?.key).not.toBe(prewarmed?.key);
+  });
+
+  it.each([
+    ["pullRequests", "PullRequest"],
+    ["settings", "SettingsAppearance"],
+  ] as const)("prewarms %s under its selection route key", (tab, page) => {
+    const state = { routes: [home] };
+    const selections = {
+      pullRequests: pullRequest.params,
+      settings: "SettingsAppearance" as const,
+    };
+    const prewarmed = workspaceTabPage(state, tab, selections, columns);
+    expect(prewarmed?.name).toBe(page);
+    expect(workspaceTabNavigationState(state, tab, selections, columns).routes.at(-1)).toEqual(
+      prewarmed,
+    );
   });
 
   it("reopens a draft the tab showed after its last chat, until another chat opens", () => {
