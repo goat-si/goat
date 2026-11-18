@@ -23,7 +23,7 @@ import * as DateTime from "effect/DateTime";
 import * as Effect from "effect/Effect";
 import * as ContextHandoffService from "../ContextHandoffService.ts";
 import * as ProjectionStore from "../ProjectionStore.ts";
-import { missedTurnInputRuns } from "./MissedTurnInput.ts";
+import { missedTurnImages, missedTurnInputRuns } from "./MissedTurnInput.ts";
 
 export const makeProviderTurnHandoffRecovery = Effect.gen(function* () {
   const projectionStore = yield* ProjectionStore.ProjectionStoreV2;
@@ -40,6 +40,8 @@ export const makeProviderTurnHandoffRecovery = Effect.gen(function* () {
     restartNote,
     attachments,
     replayedRunId,
+    goalDriver,
+    carriesImages,
   }: {
     readonly threadId: ThreadId;
     readonly projection: Pick<
@@ -53,6 +55,8 @@ export const makeProviderTurnHandoffRecovery = Effect.gen(function* () {
     readonly userText: string;
     readonly restartNote: string;
     readonly replayedRunId?: RunId;
+    readonly goalDriver: boolean;
+    readonly carriesImages: boolean;
     readonly attachments: OrchestrationV2ThreadProjection["messages"][number]["attachments"];
   }) {
     const tokenCap = yield* handoffTokenCapConfig.pipe(
@@ -174,13 +178,9 @@ export const makeProviderTurnHandoffRecovery = Effect.gen(function* () {
         ...loadedProviderThread,
         contextUsage: handoffUsage,
       };
-      // The resume fallback summary already covers every earlier run in order. A
-      // retry copy after it would rank older missed requests as the newest history.
-      const missedRuns = resumeFellBack
-        ? []
-        : missedTurnInputRuns(projection, run, deliveredAttemptIds).filter(
-            (source) => source.id !== replayedRunId,
-          );
+      const missedRuns = missedTurnInputRuns(projection, run, deliveredAttemptIds).filter(
+        (source) => source.id !== replayedRunId,
+      );
       const missedRunIds = new Set(missedRuns.map((source) => source.id));
       return {
         sameNativeThread,
@@ -192,6 +192,7 @@ export const makeProviderTurnHandoffRecovery = Effect.gen(function* () {
         legacyInputRunIds,
         missedRuns,
         missedRunIds,
+        resumeFellBack,
         budget: Effect.gen(function* () {
           return handoffBudget({
             tokenCap,
@@ -209,17 +210,22 @@ export const makeProviderTurnHandoffRecovery = Effect.gen(function* () {
     };
     const prepareRetryHandoff = Effect.fn("ProviderTurnStartService.prepareRetryHandoff")(
       function* (context: ReturnType<typeof handoffContextForThread>) {
-        const { missedRunIds, coveredItemIds, missedRuns } = context;
-        const missedItems =
-          missedRunIds.size === 0
+        const { missedRunIds, coveredItemIds, missedRuns, acceptedAttempts, resumeFellBack } =
+          context;
+        const missedHistory =
+          missedRunIds.size === 0 || (resumeFellBack && !carriesImages)
             ? []
-            : (yield* projectionStore.getTurnStartHistory(threadId, [...missedRunIds])).filter(
-                (item) =>
-                  item.runId !== null &&
-                  missedRunIds.has(item.runId) &&
-                  !coveredItemIds.has(item.id) &&
-                  historicalMessage(item) !== null,
-              );
+            : yield* projectionStore.getTurnStartHistory(threadId, [...missedRunIds]);
+        // A fresh session's full recovery summary already includes the missed text.
+        const missedItems = resumeFellBack
+          ? []
+          : missedHistory.filter(
+              (item) =>
+                item.runId !== null &&
+                missedRunIds.has(item.runId) &&
+                !coveredItemIds.has(item.id) &&
+                historicalMessage(item) !== null,
+            );
         const firstMissedRun = missedRuns[0];
         const lastMissedRun = missedRuns.at(-1);
         const retryHandoff =
@@ -244,7 +250,18 @@ export const makeProviderTurnHandoffRecovery = Effect.gen(function* () {
                   createdAt: yield* DateTime.now,
                 }),
               ];
-        return retryHandoff;
+        const images = carriesImages
+          ? missedTurnImages({
+              projection,
+              history: missedHistory,
+              missedRuns,
+              acceptedAttempts,
+              run,
+              attachments,
+              goalDriver,
+            })
+          : [];
+        return { handoffs: retryHandoff, images };
       },
     );
     const prepareRecoveryHandoff = Effect.fn("ProviderTurnStartService.prepareRecoveryHandoff")(

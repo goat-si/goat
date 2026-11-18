@@ -23,7 +23,6 @@ import {
   CommandId,
   latestProviderTurnForAttempt,
   type OrchestrationV2DomainEvent,
-  type OrchestrationV2ContextHandoff,
   type OrchestrationV2ExecutionNode,
   type OrchestrationV2ProviderThread,
   type OrchestrationV2Run,
@@ -748,10 +747,13 @@ export const layer: Layer.Layer<
           userText,
           restartNote,
           attachments: providerMessage.attachments,
+          goalDriver,
+          carriesImages:
+            !nativeResume && !cloud && !goalCommand && !isCompactionCommandMessage(providerMessage),
           ...(replaySource === undefined ? {} : { replayedRunId: replaySource.id }),
         });
       let recoveryTurnItem: OrchestrationV2TurnItem | undefined;
-      let resumedRetryHandoff: ReadonlyArray<OrchestrationV2ContextHandoff> | undefined;
+      let resumedRetryHandoff: Effect.Success<ReturnType<typeof prepareRetryHandoff>> | undefined;
       let resumedHandoffContext: ReturnType<typeof handoffContextForThread> | undefined;
       const loadedProviderThread = yield* Effect.gen(function* () {
         if (observeOnly) return providerThread;
@@ -875,11 +877,13 @@ export const layer: Layer.Layer<
         if (resumed._tag === "Success") {
           if (cloud || nativeResume) return resumed.success;
           const context = handoffContextForThread(resumed.success);
-          context.budget = yield* Effect.cached(context.budget);
-          resumedHandoffContext = context;
           resumedRetryHandoff = yield* prepareRetryHandoff(context);
+          context.budget = yield* Effect.cached(
+            context.budgetForImages(resumedRetryHandoff.images),
+          );
+          resumedHandoffContext = context;
           const fits = yield* deliverContextHandoffs({
-            handoffs: [...handoffs, ...resumedRetryHandoff],
+            handoffs: [...handoffs, ...resumedRetryHandoff.handoffs],
             providerThread: { ...resumed.success, id: providerThread.id },
             budget: context.budget,
             deferInline: isCompactionCommandMessage(providerMessage) || goalCommand,
@@ -926,7 +930,7 @@ export const layer: Layer.Layer<
           }
         }
         resumedHandoffContext = undefined;
-        resumedRetryHandoff = [];
+        resumedRetryHandoff = undefined;
         if (!(yield* isCurrentAttemptInStatus(expectedStartStatus))) return undefined;
 
         if (
@@ -1074,7 +1078,7 @@ export const layer: Layer.Layer<
         budget,
       } = handoffContext;
       const retryHandoff = nativeResume
-        ? []
+        ? { handoffs: [], images: [] }
         : (resumedRetryHandoff ?? (yield* prepareRetryHandoff(handoffContext)));
       // Retain accepted ownership evidence until the provider commits its next acceptance.
       const acceptedCloudTask = providerThread.nativeThreadRef?.nativeId
@@ -1251,7 +1255,7 @@ export const layer: Layer.Layer<
       const startWithHandoffs = Effect.fn("ProviderTurnStartService.startWithHandoffs")(
         function* (turnInput: Parameters<typeof session.startTurn>[0], compact = false) {
           const delivery = yield* deliverContextHandoffs({
-            handoffs: [...effectiveHandoffs, ...retryHandoff],
+            handoffs: [...effectiveHandoffs, ...retryHandoff.handoffs],
             deferInline: compact || goalCommand,
             providerThread: runningProviderThread,
             budget,
@@ -1334,7 +1338,7 @@ export const layer: Layer.Layer<
       );
       const deliverySession =
         effectiveHandoffs.length === 0 &&
-        retryHandoff.length === 0 &&
+        retryHandoff.handoffs.length === 0 &&
         restartNote === "" &&
         !noteContinuation
           ? session
@@ -1397,7 +1401,7 @@ export const layer: Layer.Layer<
         message: {
           messageId: message.id,
           text: userText,
-          attachments: providerMessage.attachments,
+          attachments: [...retryHandoff.images, ...providerMessage.attachments],
           createdBy: message.createdBy,
           creationSource: message.creationSource,
           ...(message.scheduledTaskId === undefined

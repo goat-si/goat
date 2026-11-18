@@ -1253,11 +1253,13 @@ describe("orchestration v2 provider switching", () => {
 
   it.live.each(refusalCases)(
     "keeps the native session after turns refused for %s",
-    ([, refusalCause]) =>
+    ([, refusalCause, recovery]) =>
       Effect.scoped(
         Effect.gen(function* () {
           const cwd = yield* checkpointWorkspace("refused-start-keeps-native");
           const capturedTurns = yield* Ref.make<ReadonlyArray<CapturedTurn>>([]);
+          const failResumeOnce = yield* Ref.make(false);
+          const injectedHistory = yield* Ref.make<ReadonlyArray<unknown>>([]);
           const refuseStarts = yield* Ref.make(0);
           const generation = yield* Ref.make(0);
           const registry = ProviderAdapterRegistry.layerFromAdapters([
@@ -1270,12 +1272,22 @@ describe("orchestration v2 provider switching", () => {
               capturedTurns,
               refuseStarts,
               refusalCause,
+              failResumeOnce,
+              ...(recovery === "inject" ? { injectedHistory } : {}),
               nativeThreadGeneration: generation,
             }),
           ]);
           yield* Effect.gen(function* () {
             const orchestrator = yield* Orchestrator.OrchestratorV2;
             const worker = yield* EffectWorker.OrchestrationEffectWorkerV2;
+            const missedImage: ChatAttachment = {
+              type: "image",
+              id: "refused-start-image",
+              name: "screenshot.png",
+              mimeType: "image/png",
+              sizeBytes: 100_000,
+            };
+            const acceptedImage = { ...missedImage, id: "accepted-start-image" };
             const run = Effect.fn("run")(function* (ordinal: number) {
               yield* orchestrator.dispatch({
                 type: "message.dispatch",
@@ -1285,7 +1297,7 @@ describe("orchestration v2 provider switching", () => {
                 createdBy: "user",
                 creationSource: "web",
                 text: `Request ${ordinal}`,
-                attachments: [],
+                attachments: ordinal === 1 ? [acceptedImage] : ordinal === 2 ? [missedImage] : [],
                 modelSelection: CLAUDE_MODEL_SELECTION,
                 dispatchMode: { type: "start_immediately" },
               });
@@ -1319,14 +1331,33 @@ describe("orchestration v2 provider switching", () => {
             yield* Ref.set(refuseStarts, 2);
             assert.equal(yield* run(2), "failed");
             assert.equal(yield* run(3), "failed");
+            if (recovery === "lost") {
+              const sessionId = (yield* orchestrator.getThreadProjection(threadId))
+                .providerThreads[0]?.providerSessionId;
+              assert.isNotNull(sessionId);
+              assert.isDefined(sessionId);
+              yield* orchestrator.dispatch({
+                type: "provider-session.detach",
+                commandId: CommandId.make("refused-start:detach"),
+                threadId,
+                providerSessionId: sessionId!,
+              });
+              yield* worker.drain();
+              yield* Ref.set(failResumeOnce, true);
+            }
             assert.equal(yield* run(4), "completed");
 
             const turns = yield* Ref.get(capturedTurns);
             assert.equal(turns.length, 2);
-            assert.equal(yield* Ref.get(generation), 1);
-            assert.equal(turns[1]?.nativeThreadId, turns[0]?.nativeThreadId);
-            assert.include(turns[1]?.text, "Request 2");
-            assert.include(turns[1]?.text, "Request 3");
+            assert.equal(yield* Ref.get(generation), recovery === "lost" ? 2 : 1);
+            if (recovery !== "lost")
+              assert.equal(turns[1]?.nativeThreadId, turns[0]?.nativeThreadId);
+            const delivered = `${turns[1]?.text}${JSON.stringify(yield* Ref.get(injectedHistory))}`;
+            assert.include(delivered, "Request 2");
+            assert.include(delivered, "Request 3");
+            assert.deepEqual(turns[1]?.attachments, [missedImage]);
+            assert.equal(yield* run(5), "completed");
+            assert.deepEqual((yield* Ref.get(capturedTurns)).at(-1)?.attachments, []);
           }).pipe(
             Effect.provide(
               ProviderReplayHarness.layerWithRegistry(
