@@ -1,4 +1,4 @@
-import { createContext, useContext, useState } from "react";
+import { createContext, memo, useContext, useState } from "react";
 import { Pressable, ScrollView, Text } from "react-native";
 import type { MarkdownStyle } from "react-native-enriched-markdown";
 
@@ -40,8 +40,7 @@ const CODE_MENU_ACTIONS = [
   { id: "copy-markdown", title: "Copy as Markdown", image: "doc.text" },
 ];
 
-/** A fence in a language enriched-markdown cannot colour, drawn like its native block. */
-export function HighlightedCodeBlock(props: {
+type HighlightedCodeBlockProps = {
   readonly code: string;
   readonly fence: string;
   readonly language: string;
@@ -50,16 +49,26 @@ export function HighlightedCodeBlock(props: {
   readonly scheme: HighlightScheme;
   readonly textStyle: NativeMarkdownTextStyle;
   readonly codeStyle: NonNullable<MarkdownStyle["codeBlock"]>;
-}) {
+};
+
+/** A fence in a language enriched-markdown cannot colour, drawn like its native block. */
+export function HighlightedCodeBlock(props: HighlightedCodeBlockProps) {
+  // A fence still streaming, or too large to colour, shows plain until it is finished. The
+  // open fence changes on every chunk, so the body is memoized on the answer, not the context.
+  const highlightable = fenceHighlightable(props.code, useContext(OpenFenceCodeContext));
+  return <HighlightedCodeBlockBody {...props} highlightable={highlightable} />;
+}
+
+const HighlightedCodeBlockBody = memo(function HighlightedCodeBlockBody(
+  props: HighlightedCodeBlockProps & { readonly highlightable: boolean },
+) {
   const { code, codeStyle, textStyle } = props;
   const [wrapped, setWrapped] = useState(false);
-  // A fence still streaming, or too large to colour, shows plain until it is finished.
-  const highlightable = fenceHighlightable(code, useContext(OpenFenceCodeContext));
   const lines = useMarkdownCodeHighlight({
     code,
     language: props.language,
     theme: props.scheme,
-    enabled: props.complete && highlightable,
+    enabled: props.complete && props.highlightable,
   });
   const fence = props.fence.toLowerCase();
   let offset = 0;
@@ -142,4 +151,4 @@ export function HighlightedCodeBlock(props: {
       )}
     </CodeBlockFrame>
   );
-}
+});
