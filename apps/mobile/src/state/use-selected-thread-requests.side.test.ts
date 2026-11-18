@@ -216,7 +216,14 @@ beforeEach(() => {
   };
   state.thread = { ...state.thread, sideChatOf: null, lineage: { relationshipToParent: null } };
   vi.clearAllMocks();
-  state.sideChat.mockReset().mockResolvedValue(false);
+  state.sideChat
+    .mockReset()
+    .mockImplementation(
+      async (input: { readonly text: string; readonly onStarted?: () => void }) => {
+        input.onStarted?.();
+        return true;
+      },
+    );
   state.approve.mockResolvedValue(AsyncResult.success(undefined));
   state.answer.mockResolvedValue(AsyncResult.success(undefined));
   state.feedback.mockResolvedValue(AsyncResult.success({ feedbackId: "feedback" }));
@@ -244,6 +251,17 @@ describe("a side chat command typed as an answer", () => {
     await useSelectedThreadRequests().onSubmitUserInput();
     expect(state.answer).not.toHaveBeenCalled();
     expect(state.sideChat).toHaveBeenCalledWith(expect.objectContaining({ text: "/side why?" }));
+  });
+
+  it("keeps the typed answer when the side chat does not start", async () => {
+    // useSideChatCommand handles a refusal (not connected, a create failure) with an alert.
+    state.sideChat.mockReset().mockResolvedValue(true);
+    useSelectedThreadRequests().onChangeUserInputCustomAnswer(requestId, "language", "/side why?");
+    await useSelectedThreadRequests().onSubmitUserInput();
+    expect(state.answer).not.toHaveBeenCalled();
+    expect(useSelectedThreadRequests().activePendingUserInputAnswers).toEqual({
+      language: "/side why?",
+    });
   });
 
   it("stays an answer when the question holds attachments", async () => {

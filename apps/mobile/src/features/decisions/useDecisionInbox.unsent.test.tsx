@@ -126,6 +126,14 @@ it("treats /btw like /side", async () => {
   expect(fixture.open).toHaveBeenCalledWith(item.ref, "why?");
 });
 
+it("keeps the typed answer when the side chat does not start", async () => {
+  fixture.open.mockResolvedValue(false);
+  await typeAnswer("/side why?");
+  await act(async () => inbox().onSubmit());
+  expect(fixture.userInput).not.toHaveBeenCalled();
+  expect(inbox().drafts.q?.customAnswer).toBe("/side why?");
+});
+
 it("sends /side as the answer where no side chat can start", async () => {
   fixture.canStart = false;
   await typeAnswer("/side why?");
