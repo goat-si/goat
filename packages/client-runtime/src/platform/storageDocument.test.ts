@@ -618,4 +618,23 @@ describe("Pen storage compatibility", () => {
         }
       }),
   );
+  it.effect("a Pen record that does not decode is dropped and the rest of the catalog stays", () =>
+    Effect.gen(function* () {
+      const bad = JSON.parse(raw());
+      // A record a newer or broken writer left: the wrong shape for this build's Pen route.
+      bad.penTargets.push({ index: 1, value: { ...penTarget, connectionId: 7 } });
+      bad.penProfiles[0].value = { ...penProfile, noisePub: null };
+      const decoded = yield* decodeConnectionCatalogStorage(JSON.stringify(bad));
+      expect(decoded.targets.map((value) => value._tag)).toEqual([
+        "PenConnectionTarget",
+        "BearerConnectionTarget",
+        "HubProxyConnectionTarget",
+      ]);
+      expect(decoded.profiles.map((value) => value._tag)).toEqual([
+        "HubProxyConnectionProfile",
+        "BearerConnectionProfile",
+      ]);
+      expect(decoded.credentials).toEqual(legacy.credentials);
+    }),
+  );
 });

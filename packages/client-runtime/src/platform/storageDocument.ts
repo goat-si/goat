@@ -1,6 +1,7 @@
 import { EnvironmentId } from "@goat/contracts";
 import * as Effect from "effect/Effect";
 import * as Schema from "effect/Schema";
+import * as Option from "effect/Option";
 
 import {
   type ConnectionRegistration,
@@ -281,14 +282,26 @@ export function putRemoteDpopTokenInCatalog(
 
 // Keep legacy arrays readable by older clients: an unknown tagged route would make
 // them discard the entire catalog, including unrelated pairing credentials.
+const PenRecord = Schema.Struct({ index: Schema.Number, value: Schema.Unknown });
+const penRecords = <A>(
+  decode: (value: unknown) => Option.Option<A>,
+  records: ReadonlyArray<typeof PenRecord.Type>,
+) =>
+  records.flatMap(({ index, value }) =>
+    Option.match(decode(value), {
+      onNone: () => [],
+      onSome: (decoded) => [{ index, value: decoded }],
+    }),
+  );
+const decodePenTarget = Schema.decodeUnknownOption(PenConnectionTarget);
+const decodePenProfile = Schema.decodeUnknownOption(PenConnectionProfile);
+const encodePenTarget = Schema.encodeSync(PenConnectionTarget);
+const encodePenProfile = Schema.encodeSync(PenConnectionProfile);
 const ConnectionCatalogStorageDocument = Schema.Struct({
   ...ConnectionCatalogDocument.fields,
-  penTargets: Schema.optionalKey(
-    Schema.Array(Schema.Struct({ index: Schema.Number, value: PenConnectionTarget })),
-  ),
-  penProfiles: Schema.optionalKey(
-    Schema.Array(Schema.Struct({ index: Schema.Number, value: PenConnectionProfile })),
-  ),
+  // Each Pen record decodes on its own (penRecords): one this build cannot read is dropped.
+  penTargets: Schema.optionalKey(Schema.Array(PenRecord)),
+  penProfiles: Schema.optionalKey(Schema.Array(PenRecord)),
   hubProxyTargets: Schema.optionalKey(
     Schema.Array(
       Schema.Struct({
@@ -337,11 +350,11 @@ export const decodeConnectionCatalogStorage = (raw: string) =>
       const { hubProxyTargets, hubProxyProfiles, penTargets, penProfiles, ...document } = stored;
       const targets = mergeExtensions(document.targets, [
         ...(hubProxyTargets ?? []),
-        ...(penTargets ?? []),
+        ...penRecords(decodePenTarget, penTargets ?? []),
       ]);
       const profiles = mergeExtensions(document.profiles, [
         ...(hubProxyProfiles ?? []),
-        ...(penProfiles ?? []),
+        ...penRecords(decodePenProfile, penProfiles ?? []),
       ]);
       return { ...document, targets, profiles } satisfies ConnectionCatalogDocument;
     }),
@@ -365,10 +378,10 @@ export const encodeConnectionCatalogStorage = (document: ConnectionCatalogDocume
       value._tag === "HubProxyConnectionProfile" ? [{ index, value }] : [],
     ),
     penTargets: document.targets.flatMap((value, index) =>
-      value._tag === "PenConnectionTarget" ? [{ index, value }] : [],
+      value._tag === "PenConnectionTarget" ? [{ index, value: encodePenTarget(value) }] : [],
     ),
     penProfiles: document.profiles.flatMap((value, index) =>
-      value._tag === "PenConnectionProfile" ? [{ index, value }] : [],
+      value._tag === "PenConnectionProfile" ? [{ index, value: encodePenProfile(value) }] : [],
     ),
   });
 
