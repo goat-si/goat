@@ -238,7 +238,13 @@ export async function exerciseMemoryMove({
       batch === "expiry"
         ? Option.none()
         : Option.some({
-            items: items.filter(({ memoryId }) => memoryId !== id(211)),
+            items: items.flatMap((memory) =>
+              memory.memoryId !== id(211)
+                ? [memory]
+                : batch === "hold"
+                  ? [{ ...item, memoryId: memory.memoryId }]
+                  : [],
+            ),
             projectionWatermark: 2,
             nextCursor: null,
           }),

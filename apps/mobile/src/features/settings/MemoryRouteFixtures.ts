@@ -3,6 +3,7 @@ import { act } from "react";
 import { suggestionScenario } from "../../../../web/src/test/memorySuggestionsFixture";
 import {
   MemoryHistoryPage,
+  MemoryItem,
   MemoryMutationReceipt,
   MemoryRpcError,
   MemoryId,
@@ -297,8 +298,23 @@ export async function exerciseMemoryMove(
       if (batch === "expiry") {
         await act(() => vi.advanceTimersByTimeAsync(61_000));
       } else {
+        const held = MemoryItem.make({
+          memorySpaceId: nativeSpace,
+          memoryId: uncertainId,
+          status: "blocked",
+          scope: active.scope,
+          pendingSync: false,
+          failureCode: "secret_detected",
+          localAvailability: {
+            ...active.localAvailability,
+            exposure: "held",
+            reasons: ["secret_detected"],
+          },
+        });
         h.responses.set(WS_METHODS.memoryList, () => ({
-          items: items.filter(({ memoryId }) => memoryId !== uncertainId),
+          items: items.flatMap<MemoryItem>((memory) =>
+            memory.memoryId !== uncertainId ? [memory] : batch === "hold" ? [held] : [],
+          ),
           nextCursor: null,
           projectionWatermark: 2,
         }));
