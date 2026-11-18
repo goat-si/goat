@@ -65,6 +65,7 @@ const fakeExpo = (
   const previews: string[] = [];
   let previewFails = options.failPreview ?? false;
   let createFails = options.failCreate ?? false;
+  let orphanListed = !options.omitCreatedFromActive;
   let sessionGated = false;
   const http = HttpClient.make((request) =>
     Effect.gen(function* () {
@@ -155,9 +156,9 @@ const fakeExpo = (
                   byId: {
                     deviceRunSessionsPaginated: {
                       edges: [
-                        ...(options.omitCreatedFromActive
-                          ? []
-                          : [{ node: { id: "orphan", status: "NEW", name: createdName } }]),
+                        ...(orphanListed
+                          ? [{ node: { id: "orphan", status: "NEW", name: createdName } }]
+                          : []),
                         {
                           node: {
                             id: "someone-else",
@@ -214,7 +215,10 @@ const fakeExpo = (
   const allowCreate = () => {
     createFails = false;
   };
-  return { http, named, stopped, allowPreview, allowCreate, previews };
+  const revealOrphan = () => {
+    orphanListed = true;
+  };
+  return { http, named, stopped, allowPreview, allowCreate, revealOrphan, previews };
 };
 
 const layer = Layer.mergeAll(
@@ -502,6 +506,35 @@ describe("Expo Simulators host", () => {
       const failure = yield* ready.devices.boot(catalogDevice!).pipe(Effect.flip);
       expect(failure.message).toContain("Not allowed");
       expect(expo.stopped()).toEqual(["orphan"]);
+    }).pipe(Effect.scoped, Effect.provide(layer)),
+  );
+
+  it.effect("holds a 502 create's slot until a later listing can stop the named orphan", () =>
+    Effect.gen(function* () {
+      const expo = fakeExpo({ failCreate: true, omitCreatedFromActive: true });
+      const host = yield* makeHost(expo, config({ maxConcurrentSessions: 1 }), yield* Scope.make());
+      const ready = yield* host.ensureReady(() => Effect.void);
+      const [device] = (yield* ready.devices.list).devices;
+
+      const failure = yield* ready.devices.boot(device!).pipe(Effect.flip);
+      expect(failure.message).toContain("HTTP 502");
+      expect(expo.named("GoatActiveEasSimulatorSessions")).toHaveLength(1);
+      expect(expo.stopped()).toEqual([]);
+
+      expo.allowCreate();
+      yield* TestClock.adjust("1 second");
+      const pending = yield* ready.devices.boot(device!).pipe(Effect.flip);
+      expect(pending.message).toContain("still being cleaned up");
+      expect(expo.named("GoatCreateEasSimulatorSession")).toHaveLength(1);
+
+      // The fake lists the timed-out create under its submitted name beside another account session.
+      yield* TestClock.adjust("1 second");
+      expo.revealOrphan();
+      expect((yield* ready.devices.list).devices.every((device) => !device.booted)).toBe(true);
+      expect(expo.stopped()).toEqual(["orphan"]);
+
+      expect(yield* ready.devices.boot(device!)).toBe("session-1");
+      expect(expo.named("GoatCreateEasSimulatorSession")).toHaveLength(2);
     }).pipe(Effect.scoped, Effect.provide(layer)),
   );
 
