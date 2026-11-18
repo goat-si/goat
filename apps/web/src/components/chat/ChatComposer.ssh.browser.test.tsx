@@ -150,3 +150,46 @@ it.each([
   expect(attached?.source).toBeUndefined();
   expect(await attached?.file.arrayBuffer()).toEqual(await clipboard.files[0]?.arrayBuffer());
 });
+
+it("holds Send while the pasted PNG is being verified", async () => {
+  await using fixture = await setupComposer();
+  const { mount, container } = fixture;
+  await mount();
+  const editor = editorIn(container);
+  const { clipboard, record } = await snapshotClipboardFixture({ unrelatedPng: true });
+  const decodeStarted = deferred<void>();
+  const resumeDecode = deferred<void>();
+  const decode = window.createImageBitmap.bind(window);
+  using _decode = vi.spyOn(window, "createImageBitmap").mockImplementationOnce(async (source) => {
+    decodeStarted.resolve();
+    await resumeDecode.promise;
+    return decode(source);
+  });
+  const send = () => {
+    const button = container.querySelector<HTMLButtonElement>('button[type="submit"]');
+    if (!button) throw new Error("Send button is unavailable.");
+    button.click();
+  };
+
+  try {
+    await act(async () => {
+      editor.view.dom.dispatchEvent(
+        new ClipboardEvent("paste", { clipboardData: clipboard, cancelable: true, bubbles: true }),
+      );
+      await decodeStarted.promise;
+    });
+    await act(send);
+    expect(state.launch).not.toHaveBeenCalled();
+    expect(state.toast).toHaveBeenCalledWith(
+      expect.objectContaining({ title: "Still bringing attached context into this message." }),
+    );
+  } finally {
+    resumeDecode.resolve();
+  }
+
+  await vi.waitFor(() => {
+    expect(store().getComposerDraft(id)?.images[0]?.name).toBe(record.name);
+    expect(state.composer?.composerRef.current?.hasPendingAttachments()).toBe(false);
+  });
+  expect(state.launch).not.toHaveBeenCalled();
+});

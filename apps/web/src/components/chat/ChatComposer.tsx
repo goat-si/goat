@@ -2710,18 +2710,21 @@ export const ChatComposer = memo(function ChatComposer(props: ChatComposerProps)
           addComposerAttachments(files, { skipImageInlineChip: bypassAutoAttachment });
         if (importSnapshot && folders.length === 0) {
           const ownsDestination = () => attachmentTargetKeyRef.current === attachmentTargetKey;
-          void importSnapshot(ownsDestination).then((imported) => {
-            if (imported) return;
-            if (ownsDestination()) {
-              void addFiles();
-            } else {
-              toastManager.add({
-                type: "error",
-                title: "Paste interrupted",
-                description: "The attachment draft changed during paste. Paste the image again.",
-              });
-            }
-          });
+          pendingDraftWork.begin(attachmentTargetKey);
+          void importSnapshot(ownsDestination)
+            .then((imported) => {
+              if (imported) return;
+              if (ownsDestination()) {
+                void addFiles();
+              } else {
+                toastManager.add({
+                  type: "error",
+                  title: "Paste interrupted",
+                  description: "The attachment draft changed during paste. Paste the image again.",
+                });
+              }
+            })
+            .finally(() => pendingDraftWork.end(attachmentTargetKey));
         } else {
           void addFiles();
         }
