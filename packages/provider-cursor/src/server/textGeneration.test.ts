@@ -219,7 +219,7 @@ const mockSdkStartup = (phase: SdkStartupPhase, start: () => Promise<unknown>) =
 
 const sandboxUnsupported = () =>
   new Error(
-    "Local SDK sandboxing was requested, but sandboxing is not supported in this environment.",
+    "Local SDK sandboxing was requested, but sandboxing is not supported in this environment. Disable local.sandboxOptions.enabled or remove ~/.cursor/sandbox.json to run without sandboxing.",
   );
 
 const commitMessageRequest = {
@@ -362,9 +362,7 @@ describe("CursorTextGeneration", () => {
   it.effect("continues in the temp directory when the SDK cannot sandbox", () =>
     Effect.gen(function* () {
       cursorSdkMock.create.mockImplementationOnce(async () => {
-        throw new Error(
-          "Local SDK sandboxing was requested, but sandboxing is not supported in this environment. Disable local.sandboxOptions.enabled or remove ~/.cursor/sandbox.json to run without sandboxing.",
-        );
+        throw sandboxUnsupported();
       });
       const textGeneration = yield* makeCursorTextGeneration(cursorSettings, {
         CURSOR_API_KEY: "test-cursor-key",
@@ -448,6 +446,23 @@ describe("CursorTextGeneration", () => {
         expect(cursorSdkMock.create).toHaveBeenCalledOnce();
         expect(cursorSdkMock.close).toHaveBeenCalledTimes(phase === "send" ? 1 : 0);
       }).pipe(Effect.provide(layerTest)),
+  );
+
+  it.effect("does not retry a send refusal that only quotes the sandboxing diagnostic", () =>
+    Effect.gen(function* () {
+      mockSdkStartup("send", () =>
+        Promise.reject(
+          new Error(
+            'Remote policy refused the request and reported "sandboxing is not supported".',
+          ),
+        ),
+      );
+      const generation = yield* makeCursorTextGeneration(cursorSettings, { CURSOR_API_KEY: "key" });
+      const error = yield* generation.generateCommitMessage(commitMessageRequest).pipe(Effect.flip);
+      expect(error.detail).toBe("Cursor SDK text generation failed.");
+      expect(cursorSdkMock.create).toHaveBeenCalledOnce();
+      expect(cursorSdkMock.close).toHaveBeenCalledOnce();
+    }).pipe(Effect.provide(layerTest)),
   );
 
   it.effect.each(["create", "send"] as const)("times out without falling back during %s", (phase) =>
@@ -816,7 +831,7 @@ describe("CursorTextGeneration", () => {
     "memory requests refuse unsafe sandbox fallback: %s",
     (operation) =>
       Effect.gen(function* () {
-        cursorSdkMock.create.mockRejectedValue(new Error("sandboxing is not supported"));
+        cursorSdkMock.create.mockRejectedValue(sandboxUnsupported());
         const generation = yield* makeCursorTextGeneration(
           cursorSettings,
           { CURSOR_API_KEY: "synthetic-key" },

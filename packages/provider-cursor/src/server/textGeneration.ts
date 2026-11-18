@@ -26,6 +26,8 @@ import * as CursorSdk from "./CursorSdk.ts";
 import * as HostProcess from "@goat/shared/HostProcess";
 
 const CURSOR_TIMEOUT_MS = 180_000;
+const SDK_SANDBOX_UNSUPPORTED =
+  "Local SDK sandboxing was requested, but sandboxing is not supported in this environment. Disable local.sandboxOptions.enabled or remove ~/.cursor/sandbox.json to run without sandboxing.";
 
 const isTextGenerationError = Schema.is(TextGenerationError);
 
@@ -52,7 +54,7 @@ function cursorSandboxUnsupported(cause: unknown): boolean {
   let current = cause;
   while (typeof current === "object" && current !== null && !seen.has(current)) {
     seen.add(current);
-    if (current instanceof Error && current.message.includes("sandboxing is not supported")) {
+    if (current instanceof Error && current.message === SDK_SANDBOX_UNSUPPORTED) {
       return true;
     }
     current = Reflect.get(current, "cause");
