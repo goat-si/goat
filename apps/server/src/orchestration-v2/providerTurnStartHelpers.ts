@@ -5,6 +5,9 @@ import {
   type OrchestrationV2Run,
   type OrchestrationV2ThreadProjection,
 } from "@goat/contracts";
+export const providerThreadAfterSignOut = (thread: OrchestrationV2ProviderThread) =>
+  thread.status === "error" ? "error" : thread.nativeThreadRef === null ? "not_loaded" : "idle";
+
 /** A registered cloud task whose first run has not started: that run attaches, never submits. */
 export const isRegisteredAttach = (thread: OrchestrationV2ProviderThread | undefined) =>
   thread?.cloudTask?.attach === "registered" &&

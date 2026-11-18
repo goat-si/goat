@@ -108,6 +108,19 @@ function turnFailure(
       resetAt: resetAtFrom(text, now) ?? null,
     });
   }
+  if (
+    /\bmessages\.\d+\.content\.\d+(?:\.thinking\.signature: Field required|: Invalid `signature` in `thinking` block)/.test(
+      text,
+    )
+  ) {
+    return makeProviderFailure({
+      class: "provider_error",
+      message:
+        "Antigravity's saved conversation can no longer be sent to the model. The next message starts a fresh Antigravity session with this thread's context.",
+      code: "INVALID_THINKING_SIGNATURE",
+      retryable: true,
+    });
+  }
   if (apiError === null) {
     return makeProviderFailure({
       class: "provider_error",

@@ -129,6 +129,16 @@ describe("watchAntigravityPromptOutcome", () => {
           retryable: false,
         },
       );
+      for (const error of [
+        "messages.0.content.1.thinking.signature: Field required",
+        "messages.0.content.1: Invalid `signature` in `thinking` block",
+      ]) {
+        const outcome = yield* turn([
+          [USER_INPUT, input],
+          [ERROR_MESSAGE, errorPayload(error)],
+        ]);
+        assert.equal(outcome?.code, "INVALID_THINKING_SIGNATURE");
+      }
       // A completed tool keeps its usage, and the turn still fails.
       assert.equal(
         (yield* turn(
