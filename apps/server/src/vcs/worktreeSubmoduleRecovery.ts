@@ -1,3 +1,5 @@
+import * as HostProcess from "@goat/shared/HostProcess";
+import { isSameWorktreePath } from "./worktreePath.ts";
 import * as Effect from "effect/Effect";
 import type * as FileSystem from "effect/FileSystem";
 import type * as Path from "effect/Path";
@@ -16,6 +18,7 @@ export const captureEmptySubmodules = Effect.fn("GitVcsDriver.captureEmptySubmod
     ) => Effect.Effect<string, GitCommandError>;
   }) {
     const { cwd, fs, path, git } = input;
+    const platform = yield* HostProcess.Platform;
     const root = yield* fs.realPath(cwd);
     const config = yield* git("GitVcsDriver.listSubmodulePaths", cwd, [
       "config",
@@ -44,7 +47,10 @@ export const captureEmptySubmodules = Effect.fn("GitVcsDriver.captureEmptySubmod
         )
           return false;
         const realPath = yield* fs.realPath(fullPath);
-        return realPath === fullPath && (yield* fs.readDirectory(fullPath)).length === 0;
+        return (
+          isSameWorktreePath(realPath, fullPath, platform) &&
+          (yield* fs.readDirectory(fullPath)).length === 0
+        );
       }).pipe(Effect.orElseSucceed(() => false)),
     );
 
@@ -52,7 +58,7 @@ export const captureEmptySubmodules = Effect.fn("GitVcsDriver.captureEmptySubmod
     return Effect.filter(eligible, (relative) =>
       Effect.gen(function* () {
         const fullPath = path.resolve(root, relative);
-        if ((yield* fs.realPath(fullPath)) !== fullPath) return false;
+        if (!isSameWorktreePath(yield* fs.realPath(fullPath), fullPath, platform)) return false;
         const entries = yield* fs.readDirectory(fullPath);
         if (entries.length !== 1 || entries[0] !== ".git") return false;
         if ((yield* fs.stat(path.join(fullPath, ".git"))).type !== "File") return false;
@@ -60,7 +66,7 @@ export const captureEmptySubmodules = Effect.fn("GitVcsDriver.captureEmptySubmod
           "rev-parse",
           "--show-toplevel",
         ]);
-        if (topLevel.trimEnd() !== fullPath) return false;
+        if (!isSameWorktreePath(topLevel.trimEnd(), fullPath, platform)) return false;
         const index = yield* git("GitVcsDriver.submoduleIndex", fullPath, [
           "rev-parse",
           "--git-path",
