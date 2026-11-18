@@ -10,6 +10,7 @@ import (
 	"os"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/goat-si/goat/apps/pen/internal/daemon"
 )
@@ -195,5 +196,53 @@ func TestLsSnapshotAcceptsALineAtTheLimit(t *testing.T) {
 	got := <-result
 	if got.err != nil || code != 1 || len(out.lines) != 1 || out.lines[0] != line || !strings.Contains(stderr.String(), "the daemon closed the watch") {
 		t.Fatalf("exit %d, writes %d, daemon error %v, stderr %q", code, len(out.lines), got.err, stderr.String())
+	}
+}
+// stuckSnapshotWriter is a parent that stopped reading stdout: the first write never returns.
+type stuckSnapshotWriter struct{ entered, release chan struct{} }
+
+func (w stuckSnapshotWriter) Write(p []byte) (int, error) {
+	select {
+	case w.entered <- struct{}{}:
+	default:
+	}
+	<-w.release
+	return len(p), nil
+}
+
+func TestLsSnapshotStdinClosureEndsTheWatchWhileStdoutIsStuck(t *testing.T) {
+	result := snapshotDaemon(t, func(c net.Conn) error {
+		if _, err := io.WriteString(c, "first\n"); err != nil {
+			return err
+		}
+		_, err := io.Copy(io.Discard, c)
+		return err
+	})
+	stdin, input, err := os.Pipe()
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer stdin.Close()
+	defer input.Close()
+	old := Stdin
+	Stdin = stdin
+	defer func() { Stdin = old }()
+	out := stuckSnapshotWriter{entered: make(chan struct{}, 1), release: make(chan struct{})}
+	defer close(out.release)
+	var stderr bytes.Buffer
+	code := make(chan int, 1)
+	go func() { code <- RunLs([]string{"--watch", "--snapshot", "--until-stdin-closes"}, out, &stderr) }()
+	<-out.entered
+	input.Close()
+	select {
+	case got := <-code:
+		if got != 0 {
+			t.Fatalf("exit %d, stderr %q", got, stderr.String())
+		}
+	case <-time.After(10 * time.Second):
+		t.Fatal("pen ls kept running after stdin closed")
+	}
+	if got := <-result; got.err != nil {
+		t.Fatalf("daemon: %v", got.err)
 	}
 }

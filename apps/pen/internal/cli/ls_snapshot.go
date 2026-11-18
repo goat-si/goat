@@ -21,8 +21,10 @@ func runLsSnapshot(stdout, stderr io.Writer, untilStdinCloses bool) int {
 	if err := cl.Send(daemon.Request{Op: "watch.snapshot"}); err != nil {
 		return fail(stderr, err)
 	}
-	stdinDone := make(chan struct{})
+	// Without the flag stdinDone stays nil, so it never ends the watch.
+	var stdinDone chan struct{}
 	if untilStdinCloses {
+		stdinDone = make(chan struct{})
 		stdin := Stdin
 		go func() {
 			io.Copy(io.Discard, stdin)
@@ -30,26 +32,40 @@ func runLsSnapshot(stdout, stderr io.Writer, untilStdinCloses bool) int {
 			cl.Close()
 		}()
 	}
-	reader := bufio.NewReaderSize(cl.Rest(), 1<<20)
+	// The copy runs apart from this wait: a parent that stops reading stdout leaves a write
+	// blocked, and closing stdin must still end pen ls.
+	copied := make(chan error, 1)
+	go func() { copied <- copySnapshots(cl.Rest(), stdout) }()
+	select {
+	case err := <-copied:
+		select {
+		case <-stdinDone:
+			return 0
+		default:
+			return fail(stderr, err)
+		}
+	case <-stdinDone:
+		return 0
+	}
+}
+
+// copySnapshots copies whole lines until the watch or stdout fails; it always returns an error.
+func copySnapshots(rest io.Reader, stdout io.Writer) error {
+	reader := bufio.NewReaderSize(rest, 1<<20)
 	for {
 		line, err := reader.ReadSlice('\n')
 		if errors.Is(err, bufio.ErrBufferFull) {
-			return fail(stderr, errors.New("a snapshot line is longer than pen ls prints"))
+			return errors.New("a snapshot line is longer than pen ls prints")
 		}
 		if err != nil {
-			select {
-			case <-stdinDone:
-				return 0
-			default:
-				return fail(stderr, errors.New("the daemon closed the watch"))
-			}
+			return errors.New("the daemon closed the watch")
 		}
 		n, err := stdout.Write(line)
 		if err != nil {
-			return fail(stderr, err)
+			return err
 		}
 		if n != len(line) {
-			return fail(stderr, io.ErrShortWrite)
+			return io.ErrShortWrite
 		}
 	}
 }
