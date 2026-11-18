@@ -6,6 +6,7 @@ import * as NodeChildProcess from "node:child_process";
 import * as NodeCrypto from "node:crypto";
 import * as NodeFSP from "node:fs/promises";
 import * as NodePath from "node:path";
+import * as NodeUtil from "node:util";
 import { guardChild } from "@goat/shared/errorGuards";
 
 import {
@@ -14,7 +15,7 @@ import {
   SERVICE_UNIT_ENV,
 } from "./cloud/serviceProtocol.ts";
 import { acquireServiceSelectionLock } from "./cloud/serviceSelectionLock.ts";
-import { bootServiceBaseDirOf } from "./cloud/systemdValues.ts";
+import { bootServiceBaseDirOf, systemdUnitDirectoryOf } from "./cloud/systemdValues.ts";
 import { syncDirectory } from "./serviceLauncherDatabase.ts";
 
 export interface ServiceUnit {
@@ -23,9 +24,34 @@ export interface ServiceUnit {
   readonly reload: () => Promise<void>;
 }
 
-export function serviceUnitFromEnvironment(
+// The manager's environment can differ from the one it gives services (environment.d).
+async function readSystemdUnitDirectory(env: NodeJS.ProcessEnv): Promise<string | undefined> {
+  try {
+    const { stdout } = await NodeUtil.promisify(NodeChildProcess.execFile)(
+      "busctl",
+      [
+        "--user",
+        "--json=short",
+        "get-property",
+        "org.freedesktop.systemd1",
+        "/org/freedesktop/systemd1",
+        "org.freedesktop.systemd1.Manager",
+        "UnitPath",
+      ],
+      { timeout: 5_000, env },
+    );
+    const { data } = JSON.parse(stdout) as { readonly data?: unknown };
+    return Array.isArray(data) && data.every((entry) => typeof entry === "string")
+      ? systemdUnitDirectoryOf(data)
+      : undefined;
+  } catch {
+    return undefined;
+  }
+}
+
+export async function serviceUnitFromEnvironment(
   env: NodeJS.ProcessEnv = process.env,
-): ServiceUnit | undefined {
+): Promise<ServiceUnit | undefined> {
   const unitName = env[SERVICE_UNIT_ENV]?.trim();
   const home = env.HOME?.trim();
   if (!unitName || !home || unitName.includes("/")) return undefined;
@@ -35,14 +61,18 @@ export function serviceUnitFromEnvironment(
       reload: () => Promise.resolve(),
     };
   }
-  // The manager's own environment, which decides where it reads user units.
   const xdgConfigHome = env.XDG_CONFIG_HOME?.trim();
-  const configHome =
-    xdgConfigHome && NodePath.isAbsolute(xdgConfigHome)
-      ? xdgConfigHome
-      : NodePath.join(home, ".config");
+  const unitDir =
+    (await readSystemdUnitDirectory(env)) ??
+    NodePath.join(
+      xdgConfigHome && NodePath.isAbsolute(xdgConfigHome)
+        ? xdgConfigHome
+        : NodePath.join(home, ".config"),
+      "systemd",
+      "user",
+    );
   return {
-    path: NodePath.join(configHome, "systemd", "user", unitName),
+    path: NodePath.join(unitDir, unitName),
     reload: () =>
       new Promise((resolve, reject) => {
         guardChild(

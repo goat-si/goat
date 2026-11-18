@@ -870,7 +870,7 @@ export async function main(): Promise<void> {
   if (state === undefined) throw new Error("Service state is invalid or unsupported.");
   if (current === undefined && !(await runtimeExists(baseDir, state.activeVersion)))
     throw new Error(`Selected goat@${state.activeVersion} runtime is missing or incomplete.`);
-  const serviceUnit = serviceUnitFromEnvironment();
+  const serviceUnit = await serviceUnitFromEnvironment();
   await new Launcher(
     baseDir,
     state,
