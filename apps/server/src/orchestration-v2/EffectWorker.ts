@@ -18,7 +18,6 @@ import * as Layer from "effect/Layer";
 import * as Metric from "effect/Metric";
 import * as Option from "effect/Option";
 import * as Schema from "effect/Schema";
-
 import {
   increment,
   metricAttributes,
@@ -296,7 +295,12 @@ export const layerExecutor: Layer.Layer<
                     const message = projection.messages.find((item) => item.id === messageId);
                     const run = projection.runs.find((item) => item.id === message?.runId);
                     if (message === undefined || run === undefined) return yield* error;
-                    // Notifications must be queued messages.
+                    const modelSelection =
+                      effect.request.pinnedScheduleSelection ??
+                      (error.steerDeclined && message.followsThreadSelection !== true
+                        ? effect.request.modelSelection
+                        : undefined) ??
+                      (message.delegatedCompletion === undefined ? undefined : run.modelSelection);
                     const queued =
                       message.delegatedCompletion !== undefined ||
                       message.notification !== undefined ||
@@ -320,11 +324,7 @@ export const layerExecutor: Layer.Layer<
                         text: message.text,
                         ...(message.context ? { context: message.context } : {}),
                         attachments: message.attachments,
-                        ...(error.steerDeclined && effect.request.modelSelection !== undefined
-                          ? { modelSelection: effect.request.modelSelection }
-                          : message.delegatedCompletion === undefined
-                            ? {}
-                            : { modelSelection: run.modelSelection }),
+                        ...(modelSelection === undefined ? {} : { modelSelection }),
                         dispatchMode: {
                           type: queued ? "queue_after_active" : "start_immediately",
                         },

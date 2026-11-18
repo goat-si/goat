@@ -6652,7 +6652,7 @@ export const makeCodexAdapterV2 = Effect.fn("makeCodexAdapterV2")(function* (
               };
               // The unsubscribe can stop terminals even when the resume that follows fails.
               if (foreign) restartNotices.add(threadId);
-              yield* threadStatuses.reload(client, threadId, {
+              yield* threadStatuses.reload(client, threadId, threadClosings, resumeNativeThread, {
                 ...runtime.params,
                 ...(mcpSession || (applied === undefined && !foreign)
                   ? {}
@@ -7417,12 +7417,7 @@ export const makeCodexAdapterV2 = Effect.fn("makeCodexAdapterV2")(function* (
               if (unloadInput.archive === true) {
                 // Archive also unloads, inline and without thread/closed; a resume unarchives it.
                 yield* client.request("thread/archive", { threadId: nativeThreadId });
-              } else {
-                yield* threadClosings.begin(nativeThreadId);
-                yield* client
-                  .request("thread/unsubscribe", { threadId: nativeThreadId })
-                  .pipe(Effect.onError(() => threadClosings.close(nativeThreadId)));
-              }
+              } else yield* threadClosings.unsubscribe(client, nativeThreadId);
               // Only now has Codex let the thread go; until then it is held with its old config.
               credentialsByThread.delete(nativeThreadId);
               foreignConfigThreads.delete(nativeThreadId);

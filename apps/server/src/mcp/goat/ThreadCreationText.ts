@@ -1,4 +1,5 @@
-import { placeholderThreadTitle } from "../orchestration-v2/threadTitleGenerationEffect.ts";
+import { placeholderThreadTitle } from "../../orchestration-v2/threadTitleGenerationEffect.ts";
+import type { OrchestratorMcpDelegateTaskInput } from "@goat/contracts";
 
 export function threadTitle(input: {
   readonly parentTitle: string;
@@ -16,4 +17,10 @@ export function threadTitle(input: {
     end -= 1;
   }
   return `${detail.slice(0, end)}...`;
+}
+
+export function taskPrompt(input: OrchestratorMcpDelegateTaskInput): string {
+  return input.role === undefined || input.role === "general"
+    ? input.task
+    : `Act as the ${input.role} sub-agent for this task.\n\n${input.task}`;
 }

@@ -115,6 +115,7 @@ const CLIENT_THREAD_SUBSCRIPTION = {
   acceptCompactIds: true,
   acceptDedupedBodies: true,
   acceptTextAppends: true,
+  acceptCompactVisits: true,
 } satisfies Required<Omit<OrchestrationV2SubscribeThreadInput, "threadId" | "afterSequence">>;
 const CLIENT_SHELL_SUBSCRIPTION = {
   requestCompletionMarker: true,

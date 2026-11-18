@@ -1,7 +1,8 @@
 import ExpoModulesCore
 import UIKit
+import UniformTypeIdentifiers
 
-private struct ComposerTokenPayload: Decodable {
+private struct ComposerTokenPayload: Decodable, Equatable {
   let type: String
   let source: String
   let label: String
@@ -9,8 +10,16 @@ private struct ComposerTokenPayload: Decodable {
   let accent: String?
   let tintsIcon: Bool?
   let detail: String?
-  let start: Int
-  let end: Int
+  var start: Int
+  var end: Int
+
+  func rendersLike(_ other: Self) -> Bool {
+    var atSameOffset = other
+    atSameOffset.start = start
+    atSameOffset.end = end
+    // Canonically equivalent sources can have different UTF-16 offsets.
+    return self == atSameOffset && source.utf16.elementsEqual(other.source.utf16)
+  }
 }
 
 private struct ComposerSelectionPayload: Decodable, Equatable {
@@ -37,12 +46,12 @@ private enum ComposerEnterBehavior: String {
 }
 
 private final class ComposerTextAttachment: NSTextAttachment {
-  let source: String
-  let label: String
+  let token: ComposerTokenPayload
+  var source: String { token.source }
+  var label: String { token.label }
 
-  init(source: String, label: String, image: UIImage, size: CGSize, baselineOffset: CGFloat) {
-    self.source = source
-    self.label = label
+  init(token: ComposerTokenPayload, image: UIImage, size: CGSize, baselineOffset: CGFloat) {
+    self.token = token
     super.init(data: nil, ofType: nil)
     self.image = image
     bounds = CGRect(x: 0, y: baselineOffset, width: size.width, height: size.height)
@@ -79,7 +88,6 @@ private final class ComposerTextView: UITextView {
   var onPasteContext: (([String: String]) -> Void)?
   var onPasteText: ((String, NSRange) -> Void)?
   var clipboardFragment = ""
-  var onAttributedMutation: (() -> Void)?
   var onSubmit: ((Bool) -> Void)?
   var isReadOnly = false
   var textPasteThresholdBytes = 0
@@ -186,9 +194,7 @@ private final class ComposerTextView: UITextView {
     if action == #selector(paste(_:)) {
       let pasteboard = UIPasteboard.general
       if pasteboard.hasImages ||
-        pasteboard.itemProviders.contains(where: {
-          $0.canLoadObject(ofClass: UIImage.self)
-        }) {
+        pasteboard.itemProviders.contains(where: Self.canLoadImage) {
         return true
       }
     }
@@ -206,9 +212,7 @@ private final class ComposerTextView: UITextView {
       onPasteContext?(context)
       return
     }
-    let imageProviders = pasteboard.itemProviders.filter {
-      $0.canLoadObject(ofClass: UIImage.self)
-    }
+    let imageProviders = pasteboard.itemProviders.filter(Self.canLoadImage)
     if !imageProviders.isEmpty {
       loadImages(from: imageProviders)
       return
@@ -222,12 +226,20 @@ private final class ComposerTextView: UITextView {
         return
       }
     }
-    if !bypassTextPasteInterception,
-       let text = pasteboard.string, shouldInterceptTextPaste(text) {
-      onPasteText?(text, selectedRange)
-      return
+    if !interceptTextPaste(from: pasteboard) {
+      super.paste(sender)
     }
-    super.paste(sender)
+  }
+
+  func interceptTextPaste(from pasteboard: UIPasteboard) -> Bool {
+    // UIKit pastes all the items, while pasteboard.string covers only the first.
+    guard !bypassTextPasteInterception,
+          let text = pasteboard.strings?.joined(),
+          shouldInterceptTextPaste(text) else {
+      return false
+    }
+    onPasteText?(text, selectedRange)
+    return true
   }
 
   private func shouldInterceptTextPaste(_ text: String) -> Bool {
@@ -272,21 +284,36 @@ private final class ComposerTextView: UITextView {
     replace(textRange, withText: "")
   }
 
+  static func canLoadImage(_ provider: NSItemProvider) -> Bool {
+    provider.hasItemConformingToTypeIdentifier(UTType.gif.identifier) ||
+      provider.canLoadObject(ofClass: UIImage.self)
+  }
+
   func loadImages(from providers: [NSItemProvider]) {
     let group = DispatchGroup()
     let lock = NSLock()
-    var images = [UIImage?](repeating: nil, count: providers.count)
+    var images = [(data: Data, fileExtension: String)?](repeating: nil, count: providers.count)
 
     for (index, provider) in providers.enumerated() {
       group.enter()
-      provider.loadObject(ofClass: UIImage.self) { object, _ in
-        defer { group.leave() }
-        guard let image = object as? UIImage else {
-          return
-        }
+      let store = { (image: (data: Data, fileExtension: String)?) in
         lock.lock()
         images[index] = image
         lock.unlock()
+        group.leave()
+      }
+      let loadPNG = {
+        _ = provider.loadObject(ofClass: UIImage.self) { object, _ in
+          store((object as? UIImage)?.pngData().map { ($0, "png") })
+        }
+      }
+      // Decoding a GIF to UIImage keeps only its first frame, so pass its bytes through.
+      if provider.hasItemConformingToTypeIdentifier(UTType.gif.identifier) {
+        _ = provider.loadDataRepresentation(forTypeIdentifier: UTType.gif.identifier) { data, _ in
+          if let data { store((data, "gif")) } else { loadPNG() }
+        }
+      } else {
+        loadPNG()
       }
     }
 
@@ -294,7 +321,9 @@ private final class ComposerTextView: UITextView {
       guard let self, !self.isReadOnly else {
         return
       }
-      let urls = images.compactMap { $0 }.compactMap(Self.writeTemporaryImage)
+      let urls = images.compactMap { $0 }.compactMap {
+        Self.writeTemporaryImage($0.data, fileExtension: $0.fileExtension)
+      }
       if !urls.isEmpty {
         self.onPasteImages?(urls)
       }
@@ -316,9 +345,7 @@ private final class ComposerTextView: UITextView {
       return super.cut(sender)
     }
     copy(sender)
-    textStorage.replaceCharacters(in: selectedRange, with: "")
-    selectedRange = NSRange(location: selectedRange.location, length: 0)
-    onAttributedMutation?()
+    replaceDisplayRange(selectedRange)
   }
 
   func serializedText() -> String {
@@ -374,9 +401,10 @@ private final class ComposerTextView: UITextView {
   }
 
   private static func writeTemporaryImage(_ image: UIImage) -> String? {
-    guard let data = image.pngData() else {
-      return nil
-    }
+    image.pngData().flatMap { writeTemporaryImage($0, fileExtension: "png") }
+  }
+
+  private static func writeTemporaryImage(_ data: Data, fileExtension: String) -> String? {
     let directory = FileManager.default.temporaryDirectory
       .appendingPathComponent(pastedImageDirectoryName, isDirectory: true)
     do {
@@ -385,7 +413,7 @@ private final class ComposerTextView: UITextView {
         withIntermediateDirectories: true
       )
       removeStaleTemporaryImages(in: directory)
-      let url = directory.appendingPathComponent("\(UUID().uuidString).png")
+      let url = directory.appendingPathComponent("\(UUID().uuidString).\(fileExtension)")
       try data.write(to: url, options: .atomic)
       return url.absoluteString
     } catch {
@@ -444,7 +472,6 @@ public final class GoatComposerEditorView: ExpoView, UITextViewDelegate, UITextD
   private var lastContentSize = CGSize.zero
   private var iconImages: [String: UIImage] = [:]
   private var pendingIconUris = Set<String>()
-  private var tokensNeedRebuild = false
   private var chipsNeedMeasuredWidth = false
   private var hasDeferredChipRedraw = false
   private var hasDeferredForcedRebuild = false
@@ -482,27 +509,15 @@ public final class GoatComposerEditorView: ExpoView, UITextViewDelegate, UITextD
     }
     textView.onPasteContext = { [weak self] context in
       guard let self else { return }
-      let selection = self.sourceSelection()
-      self.nativeEventCount += 1
-      var payload: [String: Any] = context
-      payload["value"] = self.textView.serializedText()
-      payload["eventCount"] = self.nativeEventCount
-      payload["selection"] = ["start": selection.start, "end": selection.end]
-      self.onComposerPasteContext(payload)
+      let metadata: [String: Any] = context
+      let payload = self.nativeEditPayload(value: self.textView.serializedText())
+      self.onComposerPasteContext(metadata.merging(payload) { _, edit in edit })
     }
     textView.onPasteText = { [weak self] text, _ in
       guard let self else { return }
-      let selection = self.sourceSelection()
-      self.nativeEventCount += 1
-      self.onComposerPasteText([
-        "value": self.textView.serializedText(),
-        "eventCount": self.nativeEventCount,
-        "text": text,
-        "selection": ["start": selection.start, "end": selection.end],
-      ])
-    }
-    textView.onAttributedMutation = { [weak self] in
-      self?.emitTextChange()
+      var payload = self.nativeEditPayload(value: self.textView.serializedText())
+      payload["text"] = text
+      self.onComposerPasteText(payload)
     }
     textView.onSubmit = { [weak self] alternate in
       self?.onComposerSubmit(["alternate": alternate])
@@ -657,15 +672,8 @@ public final class GoatComposerEditorView: ExpoView, UITextViewDelegate, UITextD
       return
     }
     if tokensJson != document.tokensJson {
-      let nextTokens = decode([ComposerTokenPayload].self, from: document.tokensJson) ?? []
-      // Typing before a chip only shifts its offsets, and UIKit already moved the attachment.
-      // Rebuilding for that would reset the keyboard on every keystroke; a chip that was
-      // inserted or removed still rebuilds through documentMatchesExpectedTokens.
-      if Self.chipPresentation(nextTokens) != Self.chipPresentation(tokens) {
-        tokensNeedRebuild = true
-      }
       tokensJson = document.tokensJson
-      tokens = nextTokens
+      tokens = decode([ComposerTokenPayload].self, from: document.tokensJson) ?? []
     }
     let previousSelection = sourceSelection()
     value = document.value
@@ -674,12 +682,9 @@ public final class GoatComposerEditorView: ExpoView, UITextViewDelegate, UITextD
       requestedSelection = selection
       requestedSelectionValue = document.value
     }
-    applyControlledDocument(force: tokensNeedRebuild)
+    applyControlledDocument()
     applyRequestedSelection()
     cancelFocusingTapRestoreIfSelectionMoved(from: previousSelection)
-    if tokensMatchCurrentValue() {
-      tokensNeedRebuild = false
-    }
   }
 
   func setThemeJson(_ themeJson: String) {
@@ -693,6 +698,7 @@ public final class GoatComposerEditorView: ExpoView, UITextViewDelegate, UITextD
 
   func setPlaceholder(_ placeholder: String) {
     placeholderLabel.text = placeholder
+    textView.accessibilityLabel = placeholder
     setNeedsLayout()
   }
 
@@ -859,7 +865,7 @@ public final class GoatComposerEditorView: ExpoView, UITextViewDelegate, UITextD
   private func droppedImageProviders(in drop: UITextDropRequest) -> [NSItemProvider]? {
     let providers = drop.dropSession.items.map(\.itemProvider)
     guard !providers.isEmpty,
-          providers.allSatisfy({ $0.canLoadObject(ofClass: UIImage.self) }) else {
+          providers.allSatisfy(ComposerTextView.canLoadImage) else {
       return nil
     }
     return providers
@@ -986,8 +992,7 @@ public final class GoatComposerEditorView: ExpoView, UITextViewDelegate, UITextD
       style: ChipStyle(color: color, font: chipFont)
     )
     let attachment = ComposerTextAttachment(
-      source: token.source,
-      label: token.label,
+      token: token,
       image: image,
       size: image.size,
       baselineOffset: chipFont.ascender - image.size.height
@@ -1153,29 +1158,32 @@ public final class GoatComposerEditorView: ExpoView, UITextViewDelegate, UITextD
     }
     value = textView.serializedText()
     revealSelectionAfterLayout()
-    let selection = sourceSelection()
-    nativeEventCount += 1
-    onComposerChange([
-      "value": value,
-      "selection": ["start": selection.start, "end": selection.end],
-      "eventCount": nativeEventCount,
-    ])
+    onComposerChange(nativeEditPayload(value: value))
     updatePlaceholderVisibility()
     emitContentSizeIfNeeded()
   }
 
   private func emitSelection() {
-    // Caret moves advance the revision counter like text edits do: a
-    // controlled payload computed before this move is stale and must fail the
-    // revision guard instead of yanking the caret back mid-typing.
-    let currentValue = textView.serializedText()
+    // Caret moves advance the revision too, so a stale payload cannot move the caret back.
+    onComposerSelectionChange(nativeEditPayload(value: textView.serializedText()))
+  }
+
+  private func nativeEditPayload(value: String) -> [String: Any] {
     let selection = sourceSelection()
     nativeEventCount += 1
-    onComposerSelectionChange([
-      "value": currentValue,
+    var payload: [String: Any] = [
+      "value": value,
       "selection": ["start": selection.start, "end": selection.end],
       "eventCount": nativeEventCount,
-    ])
+      "trailingInlineSource": NSNull(),
+    ]
+    let storage = textView.textStorage
+    if storage.length > 0,
+       let attachment = storage.attribute(.attachment, at: storage.length - 1, effectiveRange: nil) as? ComposerTextAttachment,
+       attachment.token.type == "mention" || attachment.token.type == "skill" {
+      payload["trailingInlineSource"] = attachment.source
+    }
+    return payload
   }
 
   private func sourceSelection() -> ComposerSelectionPayload {
@@ -1247,13 +1255,6 @@ public final class GoatComposerEditorView: ExpoView, UITextViewDelegate, UITextD
     return requestedSelection
   }
 
-  private static func chipPresentation(_ tokens: [ComposerTokenPayload]) -> [String] {
-    tokens.map {
-      [$0.type, $0.source, $0.label, $0.detail ?? "", $0.accent ?? "", $0.iconUri ?? "", $0.tintsIcon == true ? "1" : "0"]
-        .joined(separator: "\u{1F}")
-    }
-  }
-
   private func restoreSelectionBeforeFocusingTap() {
     guard let snapshot = selectionBeforeFocusingTap else {
       return
@@ -1317,30 +1318,31 @@ public final class GoatComposerEditorView: ExpoView, UITextViewDelegate, UITextD
     return try? JSONDecoder().decode(type, from: data)
   }
 
-  private func tokensMatchCurrentValue() -> Bool {
-    let source = value as NSString
-    return tokens.allSatisfy {
-      $0.start >= 0 &&
-        $0.end > $0.start &&
-        $0.end <= source.length &&
-        source.substring(with: NSRange(location: $0.start, length: $0.end - $0.start)) == $0.source
-    }
-  }
-
   private func documentMatchesExpectedTokens() -> Bool {
-    // Offsets matter too: a token can move between identical strings while the rendered
-    // attachment stays where it was.
-    let expectedChips = renderedTokens().map { "\($0.start):\($0.source)" }
-    var renderedChips: [String] = []
-    textView.attributedText.enumerateAttribute(
+    let expected = renderedTokens()
+    var chipIndex = 0
+    var sourceOffset = 0
+    var matches = true
+    // Undo restores attachments directly. Comparing the displayed chips keeps UIKit's redo stack.
+    textView.textStorage.enumerateAttribute(
       .attachment,
-      in: NSRange(location: 0, length: textView.attributedText.length)
-    ) { value, range, _ in
-      if let attachment = value as? ComposerTextAttachment {
-        renderedChips.append("\(textView.sourceOffset(forDisplayOffset: range.location)):\(attachment.source)")
+      in: NSRange(location: 0, length: textView.textStorage.length)
+    ) { value, range, stop in
+      guard let attachment = value as? ComposerTextAttachment else {
+        sourceOffset += range.length
+        return
       }
+      guard chipIndex < expected.count,
+            expected[chipIndex].start == sourceOffset,
+            expected[chipIndex].rendersLike(attachment.token) else {
+        matches = false
+        stop.pointee = true
+        return
+      }
+      chipIndex += 1
+      sourceOffset += attachment.source.utf16.count
     }
-    return renderedChips == expectedChips
+    return matches && chipIndex == expected.count
   }
 }
 

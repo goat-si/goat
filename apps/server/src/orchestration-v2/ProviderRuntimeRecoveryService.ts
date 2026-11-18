@@ -31,7 +31,11 @@ import * as Effect from "effect/Effect";
 import * as Layer from "effect/Layer";
 
 import * as EffectOutbox from "./EffectOutbox.ts";
-import { cancelledItem, isBackgroundCapableTurnItemType } from "./ProviderRuntimeRecoveryItems.ts";
+import {
+  cancelledItem,
+  isBackgroundCapableTurnItemType,
+  recoveryNotice,
+} from "./ProviderRuntimeRecoveryItems.ts";
 import * as ProviderRuntimeShutdown from "./ProviderRuntimeShutdown.ts";
 import * as SurvivorRecoveryProjection from "./SurvivorRecoveryProjection.ts";
 import * as EventSink from "./EventSink.ts";
@@ -518,6 +522,18 @@ export const make = Effect.gen(function* () {
             occurredAt: now,
             payload: cancelledItem(item, now),
           });
+        }
+        if (run.status !== "queued" && !usageRecovery.unsentRunIds.has(run.id)) {
+          events.push(
+            recoveryNotice({
+              eventId: yield* allocateEventId(),
+              itemId: ids.derive.runSignalTurnItem({ runId: run.id, signal: "server-recovery" }),
+              run,
+              now,
+              trigger,
+              detail,
+            }),
+          );
         }
       }
       // Blocking waits die with their turn; let child results wake the parent continuation as async tasks.

@@ -1,6 +1,8 @@
 import type { MessageId, OrchestrationV2ThreadProjection, RunId } from "@goat/contracts";
 
-type RunInputDelivery = NonNullable<OrchestrationV2RunAttempt["inputDelivery"]>;
+type RunInputDelivery = NonNullable<
+  OrchestrationV2ThreadProjection["attempts"][number]["inputDelivery"]
+>;
 
 export function indexRunInputDelivery({
   attempts,

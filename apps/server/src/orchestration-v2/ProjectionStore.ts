@@ -5,6 +5,17 @@ import {
   type ForkHistoryPage,
 } from "./ForkHistoryPage.ts";
 import { preserveAttemptDeliveryJson } from "./AttemptInputDelivery.ts";
+import {
+  nullableStringField,
+  parseEncodedPayload,
+  stringField,
+} from "./ProjectionPayloadFields.ts";
+import {
+  decodeThreadPayload,
+  encodeThreadPayload,
+  encodeThreadUpdatedAt,
+} from "./ProjectionThreadPayload.ts";
+export { decodeThreadPayload } from "./ProjectionThreadPayload.ts";
 import { parentClosed } from "./goat/LimitRecoveryParent.ts";
 import * as ThreadNewestRun from "./goat/ThreadNewestRun.ts";
 import { replayActivityBlockers, selectThreadRecords } from "./goat/ProjectionStoreMemoryReads.ts";
@@ -56,7 +67,11 @@ import { makeServerActivityReads } from "./goat/ServerActivityReads.ts";
 import { gateThreadReads, ThreadArchiveGate } from "./ThreadArchiveGate.ts";
 import { turnStartMessageIds } from "./manualContinuation.ts";
 import { LEGACY_MCP_APP_OUTPUT_KEY } from "@goat/contracts/legacyT3Names";
-import { isProviderNativeSubagentThread, pendingGuestMessageCount } from "@goat/contracts";
+import {
+  applyOrchestrationV2ThreadVisit,
+  isProviderNativeSubagentThread,
+  pendingGuestMessageCount,
+} from "@goat/contracts";
 import { applyThreadPullRequestLinkUpdate } from "../sourceControl/threadPullRequests.ts";
 import { projectTurnItemForWire } from "./WireProjection.ts";
 import { readOnReader } from "./readerOverloadFallback.ts";
@@ -99,7 +114,6 @@ import type {
   RunAttemptId,
 } from "@goat/contracts";
 import {
-  OrchestrationV2AppThreadJson as OrchestrationV2AppThreadJsonSchema,
   OrchestrationV2CheckpointJson as OrchestrationV2CheckpointJsonSchema,
   OrchestrationV2CheckpointScopeJson as OrchestrationV2CheckpointScopeJsonSchema,
   OrchestrationV2ContextHandoffJson as OrchestrationV2ContextHandoffJsonSchema,
@@ -948,12 +962,6 @@ const encodeIdList = Schema.encodeSync(Schema.fromJsonString(Schema.Array(Schema
 const matchesNothing = (...filters: ReadonlyArray<ReadonlyArray<unknown> | undefined>) =>
   filters.some((values) => values?.length === 0);
 
-const encodeThreadPayload = Schema.encodeEffect(
-  Schema.fromJsonString(OrchestrationV2AppThreadJsonSchema),
-);
-const encodeThreadUpdatedAt = Schema.encodeEffect(
-  OrchestrationV2AppThreadJsonSchema.fields.updatedAt,
-);
 const encodeRunPayload = Schema.encodeEffect(Schema.fromJsonString(OrchestrationV2RunJsonSchema));
 const encodeRestartCancelledBackgroundWork = Schema.encodeEffect(
   Schema.fromJsonString(OrchestrationV2RunJsonSchema.fields.restartCancelledBackgroundWork),
@@ -1004,9 +1012,6 @@ const encodeContextTransferPayload = Schema.encodeEffect(
   Schema.fromJsonString(OrchestrationV2ContextTransferJsonSchema),
 );
 
-export const decodeThreadPayload = Schema.decodeUnknownEffect(
-  Schema.fromJsonString(OrchestrationV2AppThreadJsonSchema),
-);
 const decodeRunPayload = Schema.decodeUnknownEffect(
   Schema.fromJsonString(OrchestrationV2RunJsonSchema),
 );
@@ -1055,23 +1060,6 @@ const decodeContextTransferPayload = Schema.decodeUnknownEffect(
 
 const isProjectionStoreThreadNotFoundError = Schema.is(ProjectionStoreThreadNotFoundError);
 const isProjectionStoreReadError = Schema.is(ProjectionStoreReadError);
-
-function parseEncodedPayload(json: string): Record<string, unknown> {
-  return JSON.parse(json) as Record<string, unknown>;
-}
-
-function stringField(payload: Record<string, unknown>, field: string): string {
-  const value = payload[field];
-  return typeof value === "string" ? value : String(value);
-}
-
-function nullableStringField(payload: Record<string, unknown>, field: string): string | null {
-  const value = payload[field];
-  if (value === null || value === undefined) {
-    return null;
-  }
-  return typeof value === "string" ? value : String(value);
-}
 
 function booleanInt(value: boolean): 0 | 1 {
   return value ? 1 : 0;
@@ -1233,6 +1221,16 @@ export const layer: Layer.Layer<ProjectionStoreV2, never, SqlClient.SqlClient> =
               });
               break;
             }
+            case "thread.visit-recorded":
+              yield* apply({
+                ...event,
+                type: "thread.visited",
+                payload: applyOrchestrationV2ThreadVisit(
+                  yield* getThread(event.threadId),
+                  event.payload,
+                ),
+              });
+              break;
             case "thread.created":
             case "thread.archived":
             case "thread.unarchived":
@@ -2106,6 +2104,7 @@ export const layer: Layer.Layer<ProjectionStoreV2, never, SqlClient.SqlClient> =
             event.type !== "thread.unsnoozed" &&
             event.type !== "thread.auto-settle-set" &&
             event.type !== "thread.pinned" &&
+            event.type !== "thread.visit-recorded" &&
             event.type !== "thread.unpinned" &&
             event.type !== "thread.pin-reordered" &&
             event.type !== "thread.active-reordered" &&

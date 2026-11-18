@@ -55,7 +55,7 @@ vi.mock("../../../state/use-selected-thread-git-actions", () => ({
   useSelectedThreadGitActions: () => ({ canChangeThreadBranch: true }),
 }));
 vi.mock("../../../state/query", () => ({ useEnvironmentQuery: () => ({ data: null }) }));
-vi.mock("../../../state/vcs", () => ({ vcsEnvironment: { status: () => null } }));
+vi.mock("../../../state/vcs", () => ({ vcsEnvironment: { branch: () => null } }));
 
 import { GitBranchesSheet } from "./GitBranchesSheet";
 

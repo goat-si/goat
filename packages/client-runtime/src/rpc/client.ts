@@ -104,6 +104,7 @@ export type EnvironmentSubscriptionRpcTag =
   | typeof WS_METHODS.pullRequestsSubscribeRefreshes
   | typeof WS_METHODS.pullRequestsSubscribeLinkedThreadRefreshes
   | typeof WS_METHODS.subscribeVcsStatus
+  | typeof WS_METHODS.subscribeVcsBranch
   | typeof WS_METHODS.subscribeWorktreeSetup
   | typeof WS_METHODS.subscribeProjectClones
   | typeof WS_METHODS.terminalAttach
@@ -498,7 +499,10 @@ function subscribeDynamicMapped<TTag extends EnvironmentSubscriptionRpcTag, A>(
                         method: tag,
                         input,
                       });
-                      const stream = mapStream(session, method(input)).pipe(
+                      const stream = mapStream(
+                        session,
+                        Stream.suspend(() => method(input)),
+                      ).pipe(
                         Stream.onFirst(() =>
                           Effect.sync(() => {
                             expectedFailureRetries = 0;
@@ -759,6 +763,63 @@ export function subscribeOrUnavailable<TTag extends EnvironmentSubscriptionRpcTa
     () => ({ subscription, unavailable: true as const }),
   );
 }
+
+export const subscribeVcsBranch = (
+  input: EnvironmentRpcInput<typeof WS_METHODS.subscribeVcsBranch>,
+) =>
+  subscribeDynamicMapped(
+    WS_METHODS.subscribeVcsBranch,
+    () => Effect.succeed(input),
+    (session, stream) =>
+      Stream.unwrap(
+        session.initialConfig.pipe(
+          Effect.mapError(
+            (error) =>
+              new RpcClientError.RpcClientError({
+                reason: new RpcClientError.RpcClientDefect({
+                  message: error.message,
+                  cause: error,
+                }),
+              }),
+          ),
+          Effect.map((config) =>
+            config.environment.capabilities.vcsBranchStatus === true &&
+            session.vcsBranchTransportSupported !== false
+              ? stream
+              : session.client[WS_METHODS.subscribeVcsStatus]({
+                  ...input,
+                  includeRemote: false,
+                }).pipe(
+                  Stream.filter((event) => event._tag !== "remoteUpdated"),
+                  Stream.map(({ local }) => ({ refName: local.refName, isRepo: local.isRepo })),
+                ),
+          ),
+        ),
+      ),
+  );
+
+export const refreshVcsBranch = Effect.fn("EnvironmentRpc.refreshVcsBranch")(function* (
+  input: EnvironmentRpcInput<typeof WS_METHODS.vcsRefreshBranch>,
+) {
+  const supervisor = yield* EnvironmentSupervisor.EnvironmentSupervisor;
+  const session = yield* currentSession();
+  const config = yield* session.initialConfig.pipe(
+    Effect.mapError(
+      (error) =>
+        new EnvironmentRpcUnavailableError({
+          environmentId: supervisor.target.environmentId,
+          message: error.message,
+        }),
+    ),
+  );
+  if (
+    config.environment.capabilities.vcsBranchStatus === true &&
+    session.vcsBranchTransportSupported !== false
+  ) {
+    return yield* requestInSession(session, WS_METHODS.vcsRefreshBranch, input);
+  }
+  // Older hosts retain their existing status stream without adding per-row wake scans.
+});
 
 export const request = <TTag extends Exclude<EnvironmentUnaryRpcTag, ClientGuardedRpcTag>>(
   tag: TTag,

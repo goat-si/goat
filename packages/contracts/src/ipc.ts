@@ -1,7 +1,6 @@
 import * as Effect from "effect/Effect";
 import * as Schema from "effect/Schema";
 import type { PreviewCaptureFailureEncoded } from "./previewCapture.ts";
-
 import { SnapShotSource } from "./chatAttachment.ts";
 import { EnvironmentId, NonNegativeInt, TrimmedNonEmptyString } from "./baseSchemas.ts";
 import { BrowserProfileId } from "./browserProfile.ts";
@@ -13,6 +12,12 @@ import type {
 import { AuthAccessTokenResult, AuthSessionState } from "./auth.ts";
 import { AdvertisedEndpoint } from "./remoteAccess.ts";
 import type { DesktopBridgeParts } from "./desktopBridgeParts.ts";
+import {
+  DesktopSshEnvironmentTargetSchema,
+  type DesktopSshEnvironmentTarget,
+} from "./desktopSshTarget.ts";
+import type * as PenMembers from "./penMembers.ts";
+import { penEnsureOptionFields } from "./penMembers.ts";
 import type { SystemSettingsPane } from "./desktopPermissions.ts";
 import {
   type SshHostResult,
@@ -28,8 +33,10 @@ import type { PreviewForwardedShortcut } from "./keybindings.ts";
 import type { DesktopPreviewCaptureEvent, DesktopPreviewCursorEvent } from "./desktopBrowser.ts";
 import { DesktopPreviewTabIdSchema } from "./desktopBrowser.ts";
 import type { AnnotationVoiceBridge, AnnotationVoicePick } from "./previewAnnotationVoice.ts";
-export { DesktopPreviewTabIdSchema } from "./desktopBrowser.ts";
-
+export {
+  DesktopPreviewRegisterWebviewInputSchema,
+  DesktopPreviewTabIdSchema,
+} from "./desktopBrowser.ts";
 import type {
   DesktopAppActivationRequest,
   DesktopAppActivationResponse,
@@ -426,13 +433,7 @@ export const DesktopEnvironmentBootstrapSchema = Schema.Struct({
   accessTokenExpiresAt: Schema.optionalKey(Schema.String),
 });
 
-export const DesktopSshEnvironmentTargetSchema = Schema.Struct({
-  alias: Schema.String,
-  hostname: Schema.String,
-  username: Schema.NullOr(Schema.String),
-  port: Schema.NullOr(Schema.Number),
-});
-export type DesktopSshEnvironmentTarget = typeof DesktopSshEnvironmentTargetSchema.Type;
+export * from "./desktopSshTarget.ts";
 
 export const DesktopSshHostStatusInputSchema = Schema.Struct({
   target: DesktopSshEnvironmentTargetSchema,
@@ -566,6 +567,7 @@ export const DesktopSshAttemptContextSchema = Schema.Struct({
 export type DesktopSshAttemptContext = typeof DesktopSshAttemptContextSchema.Type;
 
 export const DesktopSshEnvironmentEnsureOptionsSchema = Schema.Struct({
+  ...penEnsureOptionFields,
   preparedAttachmentId: Schema.optionalKey(TrimmedNonEmptyString),
   issuePairingToken: Schema.optionalKey(Schema.Boolean),
   keyOnly: Schema.optionalKey(Schema.Boolean),
@@ -1075,11 +1077,6 @@ export interface DesktopPreviewTabDefaults {
   readonly serverTab?: { readonly threadId: string; readonly tabId: string } | undefined;
 }
 
-export const DesktopPreviewRegisterWebviewInputSchema = Schema.Struct({
-  tabId: DesktopPreviewTabIdSchema,
-  webContentsId: Schema.Int.check(Schema.isGreaterThan(0)),
-});
-
 export const DesktopPreviewNavigateInputSchema = Schema.Struct({
   tabId: DesktopPreviewTabIdSchema,
   url: Schema.String,
@@ -1141,7 +1138,7 @@ export interface DesktopSystemWakeEvent {
   readonly asleepMs: number | null;
 }
 
-export interface DesktopBridge extends DesktopBridgeParts {
+export interface DesktopBridge extends DesktopBridgeParts, PenMembers.DesktopPenBridge {
   getAppBranding: () => DesktopAppBranding | null;
   getRelayTelemetryEnabled?: () => boolean;
   getPathForFile?: (file: File) => string;
@@ -1202,7 +1199,7 @@ export interface DesktopBridge extends DesktopBridgeParts {
   supportsSshPreparationPhases?: true;
   ensureSshEnvironment: (
     target: DesktopSshEnvironmentTarget,
-    options?: {
+    options?: PenMembers.DesktopPenEnsureOptions & {
       issuePairingToken?: boolean;
       keyOnly?: boolean;
       preparedAttachmentId?: string;
@@ -1306,7 +1303,7 @@ export interface DesktopPreviewBridge extends AnnotationVoiceBridge {
   setForwardedShortcuts?: (shortcuts: ReadonlyArray<PreviewForwardedShortcut>) => Promise<void>;
   createTab: (tabId: string, defaults?: DesktopPreviewTabDefaults) => Promise<void>;
   closeTab: (tabId: string) => Promise<void>;
-  registerWebview: (tabId: string, webContentsId: number) => Promise<void>;
+  registerWebview: (tabId: string, guestId: number, reportDraw?: boolean) => Promise<void>;
   navigate: (tabId: string, url: string) => Promise<void>;
   goBack: (tabId: string) => Promise<void>;
   goForward: (tabId: string) => Promise<void>;
@@ -1322,6 +1319,7 @@ export interface DesktopPreviewBridge extends AnnotationVoiceBridge {
   setAudioMuted: (tabId: string, audioMuted: boolean) => Promise<void>;
   /** Tells the tab's server whether its webview is on screen. */
   setShown: (tabId: string, shown: boolean) => Promise<void>;
+  setCaptureDrawn?: (tabId: string, webContentsId: number, drawn: boolean) => Promise<void>;
   openDevTools: (tabId: string) => Promise<void>;
   clearCookies: (environmentId: EnvironmentId, profileId?: string) => Promise<void>;
   clearCache: (environmentId: EnvironmentId, profileId?: string) => Promise<void>;

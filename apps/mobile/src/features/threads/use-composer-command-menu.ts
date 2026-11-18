@@ -280,6 +280,7 @@ export function useComposerCommandMenu({
   onChangeDraftMessage,
   onUpdateInteractionMode,
   onUsageLimits,
+  onOpenModelPicker,
   modelOptions = [],
   modelProviders = [],
   onFork,
@@ -321,6 +322,7 @@ export function useComposerCommandMenu({
   readonly onChangeDraftMessage: (value: string) => void;
   readonly onUpdateInteractionMode?: (mode: ProviderInteractionMode) => void;
   readonly onUsageLimits?: () => void;
+  readonly onOpenModelPicker: () => void;
   readonly modelOptions?: ReadonlyArray<ModelOption>;
   readonly modelProviders?: ReadonlyArray<ServerProvider>;
   readonly onFork?: () => void;
@@ -723,15 +725,17 @@ export function useComposerCommandMenu({
       return;
     }
 
-    if (
-      item.type === "provider-slash-command" &&
-      item.command.name === USAGE_LIMITS_COMMAND.name &&
-      onUsageLimits
-    ) {
+    const builtInAction =
+      item.type === "slash-command" && item.command === "model"
+        ? onOpenModelPicker
+        : item.type === "provider-slash-command" && item.command.name === USAGE_LIMITS_COMMAND.name
+          ? onUsageLimits
+          : undefined;
+    if (builtInAction) {
       const cleared = replaceTextRange(draftMessage, trigger.rangeStart, trigger.rangeEnd, "");
       setSelection({ start: cleared.cursor, end: cleared.cursor });
       onChangeDraftMessage(cleared.text);
-      onUsageLimits();
+      builtInAction();
       return;
     }
 

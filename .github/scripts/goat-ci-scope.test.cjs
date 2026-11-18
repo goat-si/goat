@@ -747,11 +747,14 @@ describe("planRun", () => {
         await plan(pr(), labels([]), ["apps/server/src/memory/imports/MemoryImportReader.ts"])
       ).tasks.includes("test-windows"),
     );
-    for (const patch of [
+    for (const file of [
       "patches/node-pty@1.2.0-beta.15.patch",
       "patches/node-pty@1.2.0-beta.18.patch",
+      "apps/server/src/git/GitWorkflowService.test.ts",
+      "apps/server/src/vcs/VcsStatusBroadcaster.watch.test.ts",
     ]) {
-      assert.ok((await plan(pr(), labels([]), [patch])).tasks.includes("test-windows"), patch);
+      if (file.endsWith(".test.ts")) assert.ok(WINDOWS_SUITES.includes(file), file);
+      assert.ok((await plan(pr(), labels([]), [file])).tasks.includes("test-windows"), file);
     }
     assert.ok(!(await plan(pr(), labels([]))).tasks.includes("test-windows"));
     const labelled = await plan(pr(), labels([WINDOWS_LABEL]));

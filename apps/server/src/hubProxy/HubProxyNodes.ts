@@ -12,10 +12,16 @@ import * as Schedule from "effect/Schedule";
 import * as Stream from "effect/Stream";
 
 import { HubNodes } from "../hubNodes/HubNodes.ts";
+import type { PenRouteBinding } from "../hubNodes/PenManagedRoutes.ts";
 
 /** A way the hub can reach a node's GOAT server. Cloud machines are SSH aliases here. */
 export type HubProxyRoute =
-  | { readonly kind: "ssh"; readonly target: DesktopSshEnvironmentTarget }
+  | {
+      readonly kind: "ssh";
+      readonly target: DesktopSshEnvironmentTarget;
+      /** A Pen route's binding: SSH under it runs only while Pen still holds the alias for it. */
+      readonly pen?: PenRouteBinding;
+    }
   | { readonly kind: "linked"; readonly baseUrl: string };
 
 export interface HubProxyNode {
@@ -40,10 +46,10 @@ export class HubProxyNodes extends Context.Service<
 
 export const routeKey = (route: HubProxyRoute): string =>
   route.kind === "ssh"
-    ? `ssh:${route.target.alias}\u0000${route.target.hostname}\u0000${route.target.username ?? ""}\u0000${route.target.port ?? ""}`
+    ? `ssh:${route.target.alias}\u0000${route.target.hostname}\u0000${route.target.username ?? ""}\u0000${route.target.port ?? ""}\u0000${route.pen?.noisePub ?? ""}`
     : `linked:${route.baseUrl}`;
 
-const proxyRoute = (target: HubNodeRouteTarget): HubProxyRoute => {
+const proxyRoute = (target: HubNodeRouteTarget, pen?: PenRouteBinding): HubProxyRoute => {
   switch (target.kind) {
     case "ssh":
       return {
@@ -54,6 +60,7 @@ const proxyRoute = (target: HubNodeRouteTarget): HubProxyRoute => {
           username: target.username,
           port: target.port,
         },
+        ...(pen === undefined ? {} : { pen }),
       };
     // A Boat machine is an SSH alias the hub manages; dialing it never wakes it.
     case "cloud":
@@ -70,7 +77,7 @@ const toProxyNode = (node: HubNode): HubProxyNode => ({
   nodeId: node.nodeId,
   environmentId: node.environmentId,
   label: node.label,
-  routes: node.routes.map((route) => proxyRoute(route.target)),
+  routes: node.routes.map((route) => proxyRoute(route.target, route.pen)),
 });
 
 export const layerFromHubNodes = Layer.effect(
