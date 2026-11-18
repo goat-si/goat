@@ -92,8 +92,19 @@ it.effect(
           ["hubProxyProfiles", lostProfiles],
           ["penProfiles", lostProfiles],
         ] as const) {
-          for (const record of stored[field] ?? []) {
+          const records = stored[field] ?? [];
+          for (const record of records) {
             if (random() > 0.3) continue;
+            // Another record's index: both are valid, only their order is open.
+            const indexed = records.filter(
+              (other: { index?: unknown }) =>
+                other !== record && typeof other.index === "number" && other.index >= 0,
+            );
+            if (random() < 0.25 && indexed.length > 0) {
+              record.index = pick(indexed).index;
+              positionLost = true;
+              continue;
+            }
             lost.add(record.value.connectionId);
             const damage = pick(["no value", "wrong kind", "bad index", "no index"] as const);
             if (damage === "no value") record.value = null;

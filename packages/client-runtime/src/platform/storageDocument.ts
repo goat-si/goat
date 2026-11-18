@@ -384,19 +384,28 @@ function mergeExtensions<A>(
 ): ReadonlyArray<A | undefined> {
   // Slots of dropped records count, so a record written after one is still in range.
   const total = legacy.length + extensions.length + dropped;
-  const seen = new Set<number>();
-  // A record that decoded claims its index before a dropped one's placeholder can.
-  const placed = [...extensions]
-    .sort((a, b) => Number(a.value === undefined) - Number(b.value === undefined))
-    .filter(({ index }) => {
-      if (!Number.isSafeInteger(index) || index < 0 || index >= total || seen.has(index))
-        return false;
-      seen.add(index);
+  const usable = extensions
+    .map((entry, order) => ({ ...entry, order }))
+    .filter(({ index }) => Number.isSafeInteger(index) && index >= 0 && index < total);
+  // Records that decoded all stay, sharing an index in stored order as older builds place them; a
+  // dropped record's placeholder only takes an index no decoded record claims.
+  const claimed = new Set(
+    usable.flatMap((entry) => (entry.value === undefined ? [] : [entry.index])),
+  );
+  const placed = usable
+    .filter((entry) => {
+      if (entry.value !== undefined) return true;
+      if (claimed.has(entry.index)) return false;
+      claimed.add(entry.index);
       return true;
     })
-    .sort((a, b) => a.index - b.index);
+    .sort((a, b) => a.index - b.index || a.order - b.order);
   const result: Array<A | undefined> = [...legacy];
-  for (const entry of placed) result.splice(entry.index, 0, entry.value);
+  let shared = 0;
+  placed.forEach((entry, i) => {
+    if (i > 0 && placed[i - 1]?.index === entry.index) shared++;
+    result.splice(entry.index + shared, 0, entry.value);
+  });
   // Every slot stays until hub and Pen records are both placed: a dropped record holds its own, and
   // one whose position is unknown holds one at the end, so later absolute indexes stay in range.
   // A field that is not a list hides its slot count (Infinity); its records add no slots.

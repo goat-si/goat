@@ -869,4 +869,26 @@ describe("Pen storage compatibility", () => {
         }
       }),
   );
+  it.effect(
+    "two different records at one index both stay, in stored order, as older builds read them",
+    () =>
+      Effect.gen(function* () {
+        const decoded = yield* decodeConnectionCatalogStorage(
+          JSON.stringify({
+            ...legacy,
+            hubProxyTargets: [
+              { index: 1, value: hubTarget },
+              { index: 1, value: { ...hubTarget, connectionId: "hub:x:m" } },
+            ],
+          }),
+        );
+        expect(
+          decoded.targets.map((value) => ("connectionId" in value ? value.connectionId : "")),
+        ).toEqual([BEARER_TARGET.connectionId, "hub:x:n", "hub:x:m"]);
+        const reloaded = yield* decodeConnectionCatalogStorage(
+          yield* encodeConnectionCatalogStorage(decoded),
+        );
+        expect(reloaded).toEqual(decoded);
+      }),
+  );
 });
