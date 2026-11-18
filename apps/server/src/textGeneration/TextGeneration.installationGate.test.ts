@@ -1,5 +1,5 @@
 import { assert, it } from "@effect/vitest";
-import { ProviderInstanceId } from "@goat/contracts";
+import { ProviderDriverKind, ProviderInstanceId, type ServerProvider } from "@goat/contracts";
 import type { ProviderInstance } from "@goat/provider-core/server/driver";
 import * as Effect from "effect/Effect";
 import * as Layer from "effect/Layer";
@@ -16,9 +16,23 @@ const KNOWN = ProviderInstanceId.make("codex");
 it.effect("takes the installation gate only for a registered provider instance", () =>
   Effect.gen(function* () {
     const gated: Array<string> = [];
+    let registered = false;
+    const snapshot: ServerProvider = {
+      instanceId: KNOWN,
+      driver: ProviderDriverKind.make("codex"),
+      enabled: true,
+      installed: true,
+      status: "ready",
+      auth: { status: "authenticated" },
+      version: null,
+      checkedAt: "2026-11-18T00:00:00.000Z",
+      models: [],
+      slashCommands: [],
+      skills: [],
+    };
     const instance = {
       instanceId: KNOWN,
-      snapshot: { isAwaitingFirstCheck: Effect.succeed(true) },
+      snapshot: { getSnapshot: Effect.succeed(snapshot) },
       textGeneration: {
         generateBranchName: () => Effect.succeed({ branch: "feature/gate" }),
       },
@@ -27,7 +41,9 @@ it.effect("takes the installation gate only for a registered provider instance",
       Effect.provide(
         Layer.mergeAll(
           Layer.mock(ProviderInstanceRegistry.ProviderInstanceRegistry)({
-            getInstance: (id) => Effect.succeed(id === KNOWN ? instance : undefined),
+            getInstance: (id) =>
+              Effect.sync(() => (registered && id === KNOWN ? instance : undefined)),
+            listInstances: Effect.sync(() => (registered ? [instance] : [])),
           }),
           ServerSettings.layerTest(),
           Layer.mock(SourceControlProviderRegistry.SourceControlProviderRegistry)({
@@ -51,10 +67,14 @@ it.effect("takes the installation gate only for a registered provider instance",
         modelSelection: { instanceId, model: "gpt-5" },
       });
 
-    const unknown = yield* Effect.exit(generate(ProviderInstanceId.make("never-registered")));
-    assert.isTrue(unknown._tag === "Failure");
+    const unknown = ProviderInstanceId.make("never-registered");
+    assert.equal((yield* Effect.flip(generate(unknown))).detail, "route_unavailable");
     assert.deepEqual(gated, []);
+
+    registered = true;
     assert.deepEqual(yield* generate(KNOWN), { branch: "feature/gate" });
     assert.deepEqual(gated, [KNOWN]);
+    assert.deepEqual(yield* generate(unknown), { branch: "feature/gate" });
+    assert.deepEqual(gated, [KNOWN, KNOWN]);
   }),
 );

@@ -37,8 +37,9 @@ export function isModelSelectionProviderEnabled(
 ): boolean {
   const generator = textGenerator(settings, selection.instanceId);
   if (generator !== undefined) return generator.enabled;
-  const instanceConfig = Object.hasOwn(settings.providerInstances, selection.instanceId)
-    ? settings.providerInstances[selection.instanceId]
+  const instances = settings.providerInstances ?? {};
+  const instanceConfig = Object.hasOwn(instances, selection.instanceId)
+    ? instances[selection.instanceId]
     : undefined;
   if (instanceConfig !== undefined) {
     return resolveProviderInstanceEnabled(instanceConfig);
@@ -324,19 +325,20 @@ export function resolveTextGenerationRoute(
 
 /** The configured memory choice is also part of the Settings status refresh key. */
 export function configuredMemoryModelSelection(settings: ServerSettings): ModelSelection {
+  const providerInstances = settings.providerInstances ?? {};
   const configured = [settings.memoryModelSelection, settings.textGenerationModelSelection].find(
     (selection) =>
-      selection !== null &&
+      selection != null &&
       textGenerator(settings, selection.instanceId) === undefined &&
       isModelSelectionProviderEnabled(settings, selection),
   );
   return (
     configured ??
     fallbackTextGenerationModelSelection(
-      settings.providerInstances,
+      providerInstances,
       (instanceId) =>
         textGenerator(settings, instanceId) === undefined &&
-        resolveProjectProviderInstanceEnabled(settings, null, instanceId),
+        resolveProjectProviderInstanceEnabled({ ...settings, providerInstances }, null, instanceId),
     ) ??
     settings.textGenerationModelSelection
   );
