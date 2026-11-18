@@ -200,6 +200,8 @@ describe("CursorAgentSdkRunner", () => {
       const runner = yield* CursorAgentSdk.makeCursorAgentSdkRunner(() => undefined).pipe(
         Effect.provideService(CursorSdk.CursorSdk, {
           load: loaders.loadCursorSdk,
+          supportsLocalSandbox: Effect.succeed(false),
+          markLocalSandboxUnsupported: Effect.void,
           loadSqlite: loaders.loadCursorSqlite,
         }),
       );
@@ -227,6 +229,8 @@ describe("CursorAgentSdkRunner", () => {
       const runner = yield* CursorAgentSdk.makeCursorAgentSdkRunner(() => undefined).pipe(
         Effect.provideService(CursorSdk.CursorSdk, {
           load,
+          supportsLocalSandbox: Effect.succeed(false),
+          markLocalSandboxUnsupported: Effect.void,
           loadSqlite: () => {
             throw new Error("unused SQLite");
           },

@@ -169,7 +169,7 @@ export const makeManagedHomeCodexProvider = Effect.fn("makeManagedHomeCodexProvi
     ),
   );
   const textGeneration = yield* makeCodexTextGeneration(
-    config,
+    { ...config, enabled },
     undefined,
     snapshot.getSnapshot.pipe(Effect.map((value) => value.models)),
     resolveRuntime,

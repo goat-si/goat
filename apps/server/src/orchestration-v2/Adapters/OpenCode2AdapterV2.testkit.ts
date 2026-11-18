@@ -296,7 +296,7 @@ export const replayServer = (
     };
     const borrowers = options?.borrowers;
     return OpenCode2Server.OpenCode2Server.of({
-      supportsMemoryConnection: false,
+      supportsMemoryConnection: Effect.succeed(false),
       withMemoryConnection: () => Effect.die("Replay server has no isolated memory fixture."),
       withConnection: (use) =>
         borrowers === undefined

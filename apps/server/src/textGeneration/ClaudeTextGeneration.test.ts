@@ -404,10 +404,10 @@ it.layer(layerClaudeTextGenerationTest)("ClaudeTextGeneration", (it) => {
                 : generation.generateMemorySummary!(memorySummary),
             );
             expect(failure.cause).toMatchObject({ code: "unavailable" });
+            expect(Object.values(yield* generation.memoryCapabilities)).toEqual([false, false]);
           }),
       ),
   );
-
   it.effect.each(
     memoryOperations.flatMap((operation) =>
       [

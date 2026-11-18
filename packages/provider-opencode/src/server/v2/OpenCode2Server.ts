@@ -15,7 +15,11 @@ import * as HttpClientError from "effect/http/HttpClientError";
 import * as OpenCodeRuntime from "../OpenCodeRuntime.ts";
 import * as OpenCodeServerOwner from "../OpenCodeServerOwner.ts";
 import * as OpenCode2Client from "./OpenCode2Client.ts";
-import { prepareMemoryServer, requireOpenCodeMemoryIsolation } from "../memoryIsolation.ts";
+import {
+  canIsolateOpenCodeMemory,
+  prepareMemoryServer,
+  requireOpenCodeMemoryIsolation,
+} from "../memoryIsolation.ts";
 import { TextGenerationError } from "@goat/contracts";
 import {
   MemoryGenerationRunnerError,
@@ -35,7 +39,7 @@ export interface OpenCode2Connection extends OpenCode2Client.OpenCode2Api {
 export class OpenCode2Server extends Context.Service<
   OpenCode2Server,
   {
-    readonly supportsMemoryConnection: boolean;
+    readonly supportsMemoryConnection: Effect.Effect<boolean>;
     readonly withMemoryConnection: <A, E, R>(
       operation: MemoryOperationName,
       providerId: string,
@@ -166,16 +170,17 @@ export const make = Effect.fn("OpenCode2Server.make")(function* (input: {
       return connection.version;
     });
 
+  const currentEnvironment = input.currentEnvironment ?? Effect.succeed(input.environment);
   const serverUrl = input.serverUrl.trim();
   if (serverUrl.length > 0) {
-    const connect = (input.currentEnvironment ?? Effect.succeed(input.environment)).pipe(
+    const connect = currentEnvironment.pipe(
       Effect.flatMap((environment) =>
         connectTo(serverUrl, Redacted.make(input.serverPassword), true, environment),
       ),
       Effect.tap(remember),
     );
     return OpenCode2Server.of({
-      supportsMemoryConnection: false,
+      supportsMemoryConnection: Effect.succeed(false),
       withMemoryConnection: requireOpenCodeMemoryIsolation,
       // Every later session reuses this connection, so its version is what a new session gets.
       runningVersion: Effect.sync(() => latest?.version),
@@ -209,10 +214,15 @@ export const make = Effect.fn("OpenCode2Server.make")(function* (input: {
     },
   });
   return OpenCode2Server.of({
-    supportsMemoryConnection: true,
+    supportsMemoryConnection: currentEnvironment.pipe(
+      Effect.flatMap(canIsolateOpenCodeMemory),
+      Effect.provideService(FileSystem.FileSystem, fs),
+      Effect.provideService(Path.Path, path),
+      Effect.provideService(HostProcess.Platform, platform),
+    ),
     withMemoryConnection: (operation, providerId, use) =>
       Effect.gen(function* () {
-        const environment = yield* input.currentEnvironment ?? Effect.succeed(input.environment);
+        const environment = yield* currentEnvironment;
         const isolated = yield* prepareMemoryServer(operation, providerId, { ...environment }, 2);
         const password = yield* generatePassword;
         let connection: OpenCode2Connection | undefined;

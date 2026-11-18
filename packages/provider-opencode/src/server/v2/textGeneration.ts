@@ -16,6 +16,7 @@ import {
   withMemoryExecution,
   type MemoryGenerationRunnerContext,
 } from "@goat/provider-core/server/memoryGenerationRunner";
+import { requireOpenCodeMemoryIsolation } from "../memoryIsolation.ts";
 import { getModelSelectionStringOptionValue } from "@goat/shared/model";
 import * as NodeURL from "node:url";
 import * as FileSystem from "effect/FileSystem";
@@ -29,7 +30,6 @@ import { isProviderNativeImageAttachment } from "@goat/provider-core/server/atta
 import * as OpenCode2Server from "./OpenCode2Server.ts";
 import * as OpenCodeRuntime from "../OpenCodeRuntime.ts";
 import * as TextGenerationOperations from "@goat/provider-core/server/textGenerationOperations";
-import { requireOpenCodeMemoryIsolation } from "../memoryIsolation.ts";
 
 const isTextGenerationError = Schema.is(TextGenerationError);
 
@@ -302,15 +302,13 @@ export const make = Effect.fn("OpenCode2TextGeneration.make")(function* (
   const server = yield* OpenCode2Server.OpenCode2Server;
   const host = yield* ProviderHost.ProviderHost;
   const runSelected = <S extends Schema.Top>(input: TextGenerationOperations.Request<S>) =>
-    (TextGenerationOperations.isMemoryOperation(input.operation) && !server.supportsMemoryConnection
-      ? requireOpenCodeMemoryIsolation(input.operation)
-      : TextGenerationOperations.isMemoryOperation(input.operation)
-        ? server.withMemoryConnection(
-            input.operation,
-            input.modelSelection.model.split("/")[0] ?? "",
-            (connection) => runOnServer(connection, input),
-          )
-        : server.withConnection((connection) => runOnServer(connection, input))
+    (TextGenerationOperations.isMemoryOperation(input.operation)
+      ? server.withMemoryConnection(
+          input.operation,
+          input.modelSelection.model.split("/")[0] ?? "",
+          (connection) => runOnServer(connection, input),
+        )
+      : server.withConnection((connection) => runOnServer(connection, input))
     ).pipe(
       Effect.timeoutOrElse({
         duration: GENERATION_TIMEOUT,
@@ -354,7 +352,7 @@ export const make = Effect.fn("OpenCode2TextGeneration.make")(function* (
     {
       memory: {
         capabilities: memoryRunnerCapabilities("opencode", options.memoryRunnerContext, {
-          available: Effect.succeed(server.supportsMemoryConnection),
+          available: server.supportsMemoryConnection,
         }),
         run: withMemoryExecution(
           options.memoryRunnerContext,

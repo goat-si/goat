@@ -271,6 +271,7 @@ it.layer(layerCodexTextGenerationTest)("CodexTextGeneration", (it) => {
             : generation.generateMemorySummary!(memorySummary)
         ).pipe(Effect.flip);
         expect(error.detail).toContain("could not isolate");
+        expect(yield* generation.memoryCapabilities).toEqual({ summary: false, conflict: false });
         expect(spawns).toBe(0);
       }).pipe(Effect.scoped),
   );

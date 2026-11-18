@@ -16,6 +16,7 @@ import * as Latch from "effect/Latch";
 import * as Deferred from "effect/Deferred";
 import * as TestClock from "effect/testing/TestClock";
 import * as Effect from "effect/Effect";
+import * as FileSystem from "effect/FileSystem";
 import * as Layer from "effect/Layer";
 import * as Schema from "effect/Schema";
 import { createModelSelection } from "@goat/shared/model";
@@ -344,6 +345,36 @@ const memoryConflict = M.ResolveMemoryConflictInput.make({
   })),
   modelSelection: memorySelection,
 });
+
+it.effect(
+  "Grok declares neither memory operation when managed configuration blocks isolation",
+  () =>
+    Effect.gen(function* () {
+      const fs = yield* FileSystem.FileSystem;
+      const file = yield* fs.makeTempFileScoped();
+      yield* fs.writeFileString(file, "[hooks]\nunsafe = true");
+      const redirect = (name: string) => (name === "/etc/grok/managed_config.toml" ? file : name);
+      const generation = yield* makeGrokTextGeneration(
+        decodeGrokSettings({}),
+        {},
+        {
+          memoryRunnerContext: memoryContext,
+        },
+      ).pipe(
+        Effect.provideService(FileSystem.FileSystem, {
+          ...fs,
+          exists: (name) => fs.exists(redirect(name)),
+          stat: (name) => fs.stat(redirect(name)),
+          readFileString: (name) => fs.readFileString(redirect(name)),
+        }),
+      );
+      const summary = yield* generation.generateMemorySummary(memorySummary).pipe(Effect.flip);
+      const conflict = yield* generation.resolveMemoryConflict(memoryConflict).pipe(Effect.flip);
+      expect(summary.cause).toMatchObject({ code: "unavailable" });
+      expect(conflict.cause).toMatchObject({ code: "unavailable" });
+      expect(yield* generation.memoryCapabilities).toEqual({ summary: false, conflict: false });
+    }).pipe(Effect.scoped, Effect.provide(layerGrokTextGenerationTest)),
+);
 
 it.layer(layerGrokTextGenerationTest)("Grok memory generation", (it) => {
   const cases = (["resolveMemoryConflict", "generateMemorySummary"] as const).flatMap((operation) =>

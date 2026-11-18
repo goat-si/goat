@@ -118,6 +118,59 @@ export const makeCodexTextGeneration = Effect.fn("makeCodexTextGeneration")(func
   const commandSpawner = yield* ChildProcessSpawner.ChildProcessSpawner;
   const serverConfig = yield* Effect.service(ServerConfig.ServerConfig);
   const resolvedEnvironment = environment ?? process.env;
+  const homeDirectory = yield* HostProcess.HomeDirectory;
+  const configuredCodexHome = (config: CodexSettings) =>
+    config.homePath ? expandHomePath(config.homePath, homeDirectory) : undefined;
+  const defaultCodexHome = (environment: NodeJS.ProcessEnv) =>
+    environment.CODEX_HOME || path.join(homeDirectory, ".codex");
+
+  const findReceptionAuth = Effect.fn("CodexTextGeneration.findReceptionAuth")(function* (
+    config: CodexSettings,
+    userHome: string,
+  ) {
+    if (config.modelRoute === "opencodex" && usesAuthlessCodexHome(config)) return undefined;
+    const auth = path.join(userHome, "auth.json");
+    return (yield* fileSystem.exists(auth)) ? auth : undefined;
+  });
+  const linkReceptionAuth = (source: string, target: string) =>
+    fileSystem.symlink(source, target).pipe(Effect.isSuccess);
+  const requireMemorySettings = Effect.fn("CodexTextGeneration.requireMemorySettings")(function* (
+    operation: TextGenerationOperations.Operation,
+    config: CodexSettings,
+  ) {
+    if (!config.enabled)
+      return yield* new TextGenerationError({
+        operation,
+        detail: "Codex is disabled in GOAT settings.",
+      });
+    if (config.modelRoute === "opencodex" && Option.isNone(homeRoute))
+      return yield* new TextGenerationError({
+        operation,
+        detail: "Could not read OpenCodex status",
+      });
+  });
+  const memoryHomeFailure = (operation: TextGenerationOperations.Operation) =>
+    new TextGenerationError({
+      operation,
+      detail: "Codex memory generation could not isolate its authentication home.",
+      cause: new MemoryGenerationRunnerError({ code: "unavailable" }),
+    });
+  const canIsolateMemoryHome = Effect.gen(function* () {
+    yield* requireMemorySettings("generateMemorySummary", codexConfig);
+    const env = yield* currentEnvironment ?? Effect.succeed(resolvedEnvironment);
+    const auth = yield* findReceptionAuth(
+      codexConfig,
+      configuredCodexHome(codexConfig) ?? defaultCodexHome(env),
+    );
+    if (auth === undefined) return true;
+    const directory = yield* fileSystem.makeTempDirectoryScoped({
+      prefix: "goat-codex-memory-home-",
+    });
+    return yield* linkReceptionAuth(auth, path.join(directory, "auth.json"));
+  }).pipe(
+    Effect.scoped,
+    Effect.orElseSucceed(() => false),
+  );
 
   const readStreamAsString = Effect.fn("CodexTextGeneration.readOutput")(
     <E>(operation: string, stream: Stream.Stream<Uint8Array, E>) =>
@@ -217,25 +270,20 @@ export const makeCodexTextGeneration = Effect.fn("makeCodexTextGeneration")(func
             normalizeCliError("codex", operation, cause, "Failed to prepare reception Codex home"),
           ),
         );
-      if (usesAuthlessCodexHome(route.settings)) return receptionHome;
     }
-    const userAuth = path.join(userHome, "auth.json");
-    const receptionAuth = path.join(receptionHome, "auth.json");
-    if (!(yield* fileSystem.exists(userAuth).pipe(Effect.orElseSucceed(() => false)))) {
-      return receptionHome;
-    }
-    const linked = yield* fileSystem.symlink(userAuth, receptionAuth).pipe(
-      Effect.as(true),
-      Effect.orElseSucceed(() => false),
+    const userAuth = yield* findReceptionAuth(route.settings, userHome).pipe(
+      Effect.catch(() =>
+        TextGenerationOperations.isMemoryOperation(operation)
+          ? Effect.fail(memoryHomeFailure(operation))
+          : Effect.succeed(undefined),
+      ),
     );
+    if (userAuth === undefined) return receptionHome;
+    const receptionAuth = path.join(receptionHome, "auth.json");
+    const linked = yield* linkReceptionAuth(userAuth, receptionAuth);
     if (!linked) {
       if (TextGenerationOperations.isMemoryOperation(operation))
-        return yield* new TextGenerationError({
-          operation,
-          detail: "Codex memory generation could not isolate its authentication home.",
-          // Typed so memory pauses this model: this host cannot link the auth file.
-          cause: new MemoryGenerationRunnerError({ code: "unavailable" }),
-        });
+        return yield* memoryHomeFailure(operation);
       return userHome;
     }
     yield* Effect.addFinalizer(() =>
@@ -419,11 +467,8 @@ export const makeCodexTextGeneration = Effect.fn("makeCodexTextGeneration")(func
           )
         : undefined;
       const effectiveConfig = resolved?.config ?? codexConfig;
-      if (TextGenerationOperations.isMemoryOperation(operation) && !effectiveConfig.enabled)
-        return yield* new TextGenerationError({
-          operation,
-          detail: "Codex is disabled in GOAT settings.",
-        });
+      if (TextGenerationOperations.isMemoryOperation(operation))
+        yield* requireMemorySettings(operation, effectiveConfig);
       const effectiveEnvironment =
         resolved?.environment ??
         (currentEnvironment ? yield* currentEnvironment : resolvedEnvironment);
@@ -452,16 +497,11 @@ export const makeCodexTextGeneration = Effect.fn("makeCodexTextGeneration")(func
               ),
             )
         : cwd;
-      const homeDirectory = yield* HostProcess.HomeDirectory;
-      const configuredHome = effectiveConfig.homePath
-        ? expandHomePath(effectiveConfig.homePath, homeDirectory)
-        : undefined;
+      const configuredHome = configuredCodexHome(effectiveConfig);
       const codexHome = isChannelReception
         ? yield* makeReceptionCodexHome(
             operation,
-            // Codex treats an empty CODEX_HOME as unset.
-            configuredHome ??
-              (effectiveEnvironment.CODEX_HOME || path.join(homeDirectory, ".codex")),
+            configuredHome ?? defaultCodexHome(effectiveEnvironment),
             { settings: effectiveConfig, environment: effectiveEnvironment },
           )
         : configuredHome;
@@ -668,7 +708,7 @@ export const makeCodexTextGeneration = Effect.fn("makeCodexTextGeneration")(func
     {
       memory: {
         capabilities: memoryRunnerCapabilities("codex", memoryRunnerContext, {
-          available: Effect.succeed(codexConfig.enabled),
+          available: canIsolateMemoryHome,
         }),
         run: withMemoryExecution(memoryRunnerContext, CODEX_DRIVER, runCodexJson),
       },

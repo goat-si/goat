@@ -70,8 +70,12 @@ export const memoryRunnerCapabilities = (
 ) =>
   context?.environmentId === undefined
     ? noMemoryGeneration.memoryCapabilities
-    : Effect.map(options.available ?? Effect.succeed(true), (allowed) =>
-        allowed ? declareMemoryGeneration(driver, options.config) : NO_MEMORY_GENERATION,
+    : decodeContext(context, { onExcessProperty: "error" }).pipe(
+        Effect.andThen(options.available ?? Effect.succeed(true)),
+        Effect.map((allowed) =>
+          allowed ? declareMemoryGeneration(driver, options.config) : NO_MEMORY_GENERATION,
+        ),
+        Effect.orElseSucceed(() => NO_MEMORY_GENERATION),
       );
 
 /** The provider passes metadata from its successful selection, never from generated JSON. */

@@ -277,7 +277,7 @@ export const makeManagedCodexProvider = Effect.fn("makeManagedCodexProvider")(fu
     ),
   );
   const nativeGeneration = yield* makeCodexTextGeneration(
-    config,
+    { ...config, enabled, homePath: runtime.homePath },
     undefined,
     snapshot.getSnapshot.pipe(Effect.map((value) => value.models)),
     resolveRuntime,
