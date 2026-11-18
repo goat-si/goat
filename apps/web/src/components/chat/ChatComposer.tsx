@@ -2695,11 +2695,14 @@ export const ChatComposer = memo(function ChatComposer(props: ChatComposerProps)
     focus: focusComposer,
   });
 
-  const onComposerPaste = (event: React.ClipboardEvent<HTMLElement>) => {
+  const onComposerPaste = (
+    event: React.ClipboardEvent<HTMLElement>,
+    editorAcceptsSnapshot?: boolean,
+  ) => {
     const { files, folders } = splitTransferredFiles(event.clipboardData);
     const plainText = event.clipboardData.getData("text/plain");
     const bypassAutoAttachment = consumePasteAsTextShortcut(pasteAsTextShortcutUntilRef);
-    if (!isLiteralPendingAnswer && hasPastedSnapshot(event.clipboardData)) return;
+    if (editorAcceptsSnapshot && hasPastedSnapshot(event.clipboardData)) return;
     if (
       folders.length > 0 ||
       (activeThreadId &&

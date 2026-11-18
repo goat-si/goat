@@ -1,8 +1,15 @@
 import { state, setupSshComposer, id, store, result, deferred } from "~/test/sshComposerFixture";
+import { ComposerContextId, EnvironmentId } from "@goat/contracts";
+import {
+  COMPOSER_CONTEXT_CLIPBOARD_MIME,
+  encodeComposerContextFragment,
+} from "@goat/shared/composerContextClipboard";
+import { formatComposerContextReference } from "@goat/shared/composerContextReferences";
 import { act } from "../../../test/render";
 import { expect, it, vi } from "vite-plus/test";
 vi.mock("./MessagesTimeline", () => ({ MessagesTimeline: () => null }));
 import { ChatComposer } from "./ChatComposer";
+import { editorIn } from "../ComposerPromptEditorTiptap.input.test-support";
 const renderComposer = ChatComposer.type;
 // Records the real composer's props; the fixture restores this spy after each test.
 async function setupComposer() {
@@ -114,4 +121,59 @@ it.each(["attachment", "fanout", "absent model"])("keeps SSH %s blocked", async 
     );
   await act(async () => submitButton().click());
   expect(state.launch).not.toHaveBeenCalled();
+});
+
+it("attaches the native PNG when a snapshot is pasted inside a code fence", async () => {
+  await using fixture = await setupComposer();
+  const { mount, container } = fixture;
+  store().setPrompt(id, "```text\ninside\n```");
+  await mount();
+  const editor = editorIn(container);
+  await act(async () => {
+    editor.commands.setTextSelection(2);
+  });
+  expect(editor.state.selection.$from.parent.type.name).toBe("codeBlock");
+  const dataUrl = document.createElement("canvas").toDataURL("image/png");
+  const png = await (await fetch(dataUrl)).blob();
+  const record = {
+    version: 1 as const,
+    kind: "image" as const,
+    contextId: ComposerContextId.make("image_snapshot"),
+    label: "shot.png",
+    attachmentId: "snapshot",
+    name: "shot.png",
+    mimeType: "image/png",
+    sizeBytes: png.size,
+    source: {
+      kind: "snap-shot" as const,
+      capturedAt: "2026-01-01T00:00:00.000Z",
+      appName: "Finder",
+      windowTitle: "Downloads",
+    },
+  };
+  const fragment = encodeComposerContextFragment({
+    version: 1,
+    source: { environmentId: EnvironmentId.make("local") },
+    records: [record],
+  });
+  if (!fragment) throw new Error("Could not make snapshot clipboard fixture.");
+  const transfer = new DataTransfer();
+  transfer.items.add(new File([png], record.name, { type: png.type }));
+  transfer.setData("text/plain", formatComposerContextReference(record));
+  transfer.setData(COMPOSER_CONTEXT_CLIPBOARD_MIME, fragment);
+
+  await act(async () => {
+    editor.view.dom.dispatchEvent(
+      new ClipboardEvent("paste", { clipboardData: transfer, cancelable: true, bubbles: true }),
+    );
+  });
+
+  await vi.waitFor(() =>
+    expect(
+      store()
+        .getComposerDraft(id)
+        ?.images.map(({ name }) => name),
+    ).toEqual([record.name]),
+  );
+  expect(store().getComposerDraft(id)?.images[0]?.source).toBeUndefined();
 });

@@ -190,7 +190,7 @@ export interface ComposerPromptEditorProps {
   onCitationSubmitAndSend?: () => boolean;
   /** Saves unsaved citation text into replacedValue when a controlled rewrite replaces the document. */
   onCitationDraftSave?: (replacedValue: string, savedValue: string) => void;
-  onPaste: React.ClipboardEventHandler<HTMLElement>;
+  onPaste: (event: React.ClipboardEvent<HTMLElement>, editorAcceptsSnapshot?: boolean) => void;
   editorRef: React.RefObject<ComposerPromptEditorHandle | null>;
 }
 
@@ -1143,11 +1143,13 @@ function ComposerPromptEditorTiptapInner(
         handlePaste: (view, event) => {
           const clipboardData = event.clipboardData;
           const importFragment = !literalText && readCallbacks().importContextFragment;
-          const pastedText = clipboardData && readEditorPasteText(clipboardData, !!importFragment);
+          const codeBlock = isInCodeBlock(view);
+          const pastedText =
+            clipboardData && readEditorPasteText(clipboardData, !!importFragment && !codeBlock);
           if (!clipboardData || !pastedText) return false;
           event.preventDefault();
           // Paste verbatim inside fences; markdown parsing would split blocks and create unsupported chips.
-          if (isInCodeBlock(view)) {
+          if (codeBlock) {
             const { from, to } = view.state.selection;
             view.dispatch(
               markAsClipboardEdit(
@@ -1618,7 +1620,13 @@ function ComposerPromptEditorTiptapInner(
               }}
               onKeyUp={(event) => onPageScrollKeyUp?.(event.key)}
               onBlur={onPageScrollRelease}
-              onPasteCapture={onPaste}
+              onPasteCapture={(event) => {
+                const view = mountedEditorView(editor);
+                onPaste(
+                  event,
+                  !literalText && !!importContextFragment && view !== null && !isInCodeBlock(view),
+                );
+              }}
               onCopyCapture={(event) => handleCopyCut(event, false)}
               onCutCapture={(event) => handleCopyCut(event, true)}
             />
