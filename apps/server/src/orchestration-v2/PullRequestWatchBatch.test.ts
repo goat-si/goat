@@ -63,17 +63,20 @@ const layerTest = Layer.mergeAll(
 const threadWatching = Effect.fn("test.threadWatching")(function* (
   name: string,
   numbers: ReadonlyArray<number>,
+  sharedProjectId?: ProjectId,
 ) {
   const orchestrator = yield* Orchestrator.OrchestratorV2;
   const threadId = ThreadId.make(`${name}-thread`);
-  const projectId = ProjectId.make(`${name}-project`);
-  yield* seedProject({
-    projectId,
-    title: name,
-    workspaceRoot: `/workspace/${name}`,
-    defaultModelSelection: null,
-    createdAt: "2026-10-01T00:00:00.000Z",
-  });
+  const projectId = sharedProjectId ?? ProjectId.make(`${name}-project`);
+  if (sharedProjectId === undefined) {
+    yield* seedProject({
+      projectId,
+      title: name,
+      workspaceRoot: `/workspace/${name}`,
+      defaultModelSelection: null,
+      createdAt: "2026-10-01T00:00:00.000Z",
+    });
+  }
   yield* orchestrator.dispatch({
     type: "thread.create",
     createdBy: "user",
@@ -454,5 +457,62 @@ it.effect("delivers every wake once across passes when watches exceed the sweep 
     );
     yield* reactor.sweep;
     assert.deepEqual(yield* wakes, numbers, "a later sweep must not repeat a delivered wake");
+  }).pipe(Effect.scoped, Effect.provide(layerTest)),
+);
+
+it.effect("continues through a pull request group that grows and shrinks across 64 watches", () =>
+  Effect.gen(function* () {
+    const {
+      orchestrator,
+      projectId,
+      threadId: later,
+    } = yield* threadWatching("watch-churn-later", [22]);
+    const permanent = Array.from({ length: 64 }, (_, index) => String(index).padStart(2, "0"));
+    const watchers = yield* Effect.forEach(permanent, (id) =>
+      threadWatching(`watch-churn-peer-${id}`, [21], projectId),
+    );
+    const { threadId: temporary } = yield* threadWatching("watch-churn-first", [21], projectId);
+    const setTemporary = (watching: boolean, round: number) =>
+      orchestrator.dispatch({
+        type: "thread.pull-request.watch",
+        commandId: CommandId.make(`watch-churn-temporary-${watching}-${round}`),
+        threadId: temporary,
+        host: "github.com",
+        repository: "goat-si/goat",
+        number: 21,
+        watching,
+      });
+    const notices = (id: ThreadId) =>
+      orchestrator
+        .getThreadRecords(id, ["messages"])
+        .pipe(
+          Effect.map(({ messages }) =>
+            messages.flatMap(({ text }) => text.match(/helper in #\d+ \(round \d+\)/g) ?? []),
+          ),
+        );
+    const last = watchers[63]!.threadId;
+    const reads: Array<number> = [];
+    let round = 0;
+    const reactor = yield* PullRequestWatchReactor.make.pipe(
+      Effect.provide(
+        hostWithNewComments(projectId, {
+          round: () => round,
+          onRead: (number) => Effect.sync(() => void reads.push(number)),
+        }),
+      ),
+    );
+
+    for (round = 0; round < 2; round++) {
+      if (round > 0) yield* setTemporary(true, round);
+      reads.length = 0;
+      yield* reactor.sweep;
+      assert.deepEqual(reads, [21], "the first page shares one read across its 64 targets");
+      assert.lengthOf(yield* notices(last), round);
+      yield* setTemporary(false, round);
+      yield* reactor.sweep;
+      assert.include(yield* notices(last), `helper in #21 (round ${round})`);
+      assert.include(yield* notices(later), `helper in #22 (round ${round})`);
+      assert.deepEqual(reads.slice(1).sort(), [21, 22]);
+    }
   }).pipe(Effect.scoped, Effect.provide(layerTest)),
 );
