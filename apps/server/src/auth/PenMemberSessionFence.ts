@@ -29,6 +29,15 @@ type Row = {
 const MAX_TRACKED = AuthSessions.MAX_LIVE_PEN_MEMBER_SESSIONS;
 
 const relevant = (row: Row) => row.penMemberNode !== null || row.subject.startsWith("pen-member:");
+
+/**
+ * The stored sessions a server loads at start: every other session, and member sessions up to the
+ * limit. One past it is never tracked, so it must get no live scopes either.
+ */
+export const loadable = <A extends Row>(rows: ReadonlyArray<A>, maxTracked = MAX_TRACKED) => {
+  let members = 0;
+  return rows.filter((row) => !relevant(row) || ++members <= maxTracked);
+};
 const deniedBy = (row: Row, admitted: PenAdmission) =>
   row.penMemberNode === null
     ? row.subject.startsWith("pen-member:")
@@ -52,9 +61,8 @@ export const make = Effect.fn("PenMemberSessionFence.make")(function* (
   const lock = yield* Semaphore.make(1);
   // Rows past the limit stay untracked, and an untracked member session is denied.
   const rows = new Map(
-    initial
+    loadable(initial, maxTracked)
       .filter(relevant)
-      .slice(0, maxTracked)
       .map((row) => [row.sessionId, row]),
   );
   let read: Effect.Effect<PenAdmission> = Effect.succeed("closed");

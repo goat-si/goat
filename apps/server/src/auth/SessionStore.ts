@@ -322,7 +322,7 @@ export const make = Effect.gen(function* () {
   };
   const activeScopes = yield* Ref.make<ActiveScopeState>({
     records: new Map<AuthSessionId, ActiveScopeRecord>(
-      activeScopeRows.map((row) => [
+      PenMemberSessionFence.loadable(activeScopeRows).map((row) => [
         row.sessionId,
         { scopes: row.scopes, expiresAt: row.expiresAt },
       ]),
