@@ -168,15 +168,9 @@ import {
   inlineContextReferenceReplacement,
 } from "~/lib/composerContextReferences";
 import {
-  attachmentContextRecord,
-  uploadedAttachmentContextRecord,
-  previewAnnotationContextId,
-  previewAnnotationContextRecord,
   reviewCommentContextId,
   reviewCommentContextReference,
-  reviewCommentContextRecord,
   terminalContextReference,
-  terminalContextRecord,
   threadContextRecord,
   threadContextReference,
 } from "~/lib/composerContextRecords";
@@ -187,11 +181,10 @@ import {
   selectComposerPreviewTab,
 } from "./composerCapabilitySelection";
 import { useNavigate } from "@tanstack/react-router";
-import { rememberCopiedComposerAttachments } from "~/lib/copiedComposerAttachments";
+import { buildDraftContextClipboardFragment } from "./composerDraftContextClipboard";
 import { useThreadContextDrop, threadContextDropTargetProps } from "./threadContextDrag";
 import { readThreadShell } from "~/state/entities";
-import { encodeComposerContextFragment } from "@goat/shared/composerContextClipboard";
-import type { ComposerContextRecord, ThreadPullRequestLink } from "@goat/contracts";
+import type { ThreadPullRequestLink } from "@goat/contracts";
 import {
   type ComposerCommandItem,
   ComposerCommandMenu,
@@ -751,7 +744,7 @@ export const ChatComposer = memo(function ChatComposer(props: ChatComposerProps)
       openPrLink(event, url);
     },
   };
-  const composerContextRecords = composerContextRecordsFromDraft({
+  const composerContextDraft = {
     terminalContexts: composerTerminalContexts,
     reviewComments: composerReviewComments,
     previewAnnotations: composerPreviewAnnotations,
@@ -760,7 +753,8 @@ export const ChatComposer = memo(function ChatComposer(props: ChatComposerProps)
     images: composerImages,
     files: composerFiles,
     uploadsByImageId,
-  });
+  };
+  const composerContextRecords = composerContextRecordsFromDraft(composerContextDraft);
   const needsReattachFileCount = composerFiles.filter(composerFileNeedsReattach).length;
   const fileStagingLimit = fileAttachmentStagingLimit({
     attachmentUploadsCapabilityKnown,
@@ -1324,59 +1318,13 @@ export const ChatComposer = memo(function ChatComposer(props: ChatComposerProps)
   const addComposerDraftThreadContexts = useComposerDraftStore((store) => store.addThreadContexts);
   const addComposerDraftPreviewTabs = useComposerDraftStore((store) => store.addPreviewTabs);
   const setComposerDraftThreadContexts = useComposerDraftStore((store) => store.setThreadContexts);
-  const buildContextClipboardFragment = (contextIds: ReadonlyArray<string>): string | null => {
-    const wanted = new Set(contextIds);
-    const copiedFiles = new Map<string, File>();
-    for (const annotation of composerPreviewAnnotations) {
-      if (
-        wanted.has(previewAnnotationContextId(annotation.id)) &&
-        composerImages.some((image) => image.id === annotation.id)
-      ) {
-        wanted.add(toKindScopedComposerContextId("image", annotation.id));
-      }
-    }
-    const records: ComposerContextRecord[] = [
-      ...composerTerminalContexts
-        .filter((c) => wanted.has(terminalContextReference(c).contextId))
-        .map(terminalContextRecord),
-      ...composerThreadContexts.filter((record) => wanted.has(record.contextId)),
-      ...composerPreviewTabs.filter((record) => wanted.has(record.contextId)),
-      ...composerReviewComments
-        .filter((c) => wanted.has(reviewCommentContextId(c.id)))
-        .map(reviewCommentContextRecord),
-      ...composerPreviewAnnotations
-        .filter((a) => wanted.has(previewAnnotationContextId(a.id)))
-        .map((annotation) =>
-          previewAnnotationContextRecord(annotation, {
-            screenshotContextId: composerImages.some((image) => image.id === annotation.id)
-              ? annotation.id
-              : undefined,
-          }),
-        ),
-      ...[...composerImages, ...composerFiles]
-        .filter((attachment) =>
-          wanted.has(toKindScopedComposerContextId(attachment.type, attachment.id)),
-        )
-        .flatMap((attachment) => {
-          const record =
-            uploadedAttachmentContextRecord(attachment, uploadsByImageId[attachment.id]) ??
-            (attachment.file
-              ? attachmentContextRecord({ attachment, attachmentId: attachment.id })
-              : null);
-          if (!record) return [];
-          if (attachment.file) copiedFiles.set(record.attachmentId, attachment.file);
-          return [record];
-        }),
-    ];
-    if (records.length === 0) return null;
-    const fragment = encodeComposerContextFragment({
-      version: 1,
-      source: { environmentId, ...(activeThread ? { threadId: activeThread.id } : {}) },
-      records,
-    });
-    if (fragment) rememberCopiedComposerAttachments(environmentId, copiedFiles);
-    return fragment;
-  };
+  const buildContextClipboardFragment = (contextIds: ReadonlyArray<string>) =>
+    buildDraftContextClipboardFragment(
+      contextIds,
+      environmentId,
+      activeThread?.id,
+      composerContextDraft,
+    );
   const buildContextClipboardFragmentStable = useStableCallback(buildContextClipboardFragment);
   const {
     routeThreadContexts,
