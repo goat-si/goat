@@ -86,12 +86,18 @@ import {
 } from "./workEntryRowLabel";
 import type { HtmlRenderReference } from "@goat/shared/htmlRender";
 import type { McpAppReference } from "@goat/shared/mcpApp";
-import {
-  compactDynamicToolOutput,
-  htmlRenderFromToolItem,
-  mcpAppFromToolItem,
-} from "@goat/shared/toolOutput";
+import { htmlRenderFromToolItem, mcpAppFromToolItem } from "@goat/shared/toolOutput";
 import * as DateTime from "effect/DateTime";
+import { groupAdjacentActivities } from "./threadActivityGroups";
+import {
+  activityGroupForVisibility,
+  finalAnswerIds,
+  DEFAULT_THREAD_FEED_DISPLAY,
+  liveAnswerPreview,
+  type ThreadFeedDisplay,
+  zenAnswerMessageIds,
+} from "./threadActivity.toolCallVisibility";
+export type { ThreadFeedDisplay } from "./threadActivity.toolCallVisibility";
 import { IDLE_COMPACTION_TITLES, IDLE_COMPACTING_LABELS } from "@goat/client-runtime/user-message";
 
 export type { PendingUserInputDraftAnswer } from "@goat/client-runtime/state/user-input-draft";
@@ -162,7 +168,7 @@ export interface LocalThreadMessage {
   readonly updatedAt: string;
 }
 
-type RawThreadFeedEntry =
+export type RawThreadFeedEntry =
   | {
       readonly type: "message";
       readonly id: string;
@@ -257,7 +263,7 @@ export interface ThreadFeedLatestRun {
   readonly providerStartingLabel?: string;
 }
 
-type ThreadFeedActivityGroup = Extract<ThreadFeedEntry, { readonly type: "activity-group" }>;
+export type ThreadFeedActivityGroup = Extract<ThreadFeedEntry, { readonly type: "activity-group" }>;
 
 // Immutable source rows let retained history keep its identities while the active item streams.
 const projectedEntriesCache = new WeakMap<
@@ -271,7 +277,6 @@ const localMessageEntriesCache = new WeakMap<
   LocalThreadMessage,
   Extract<RawThreadFeedEntry, { readonly type: "message" }>
 >();
-const activityGroupsCache = new WeakMap<ThreadFeedActivity, ThreadFeedActivityGroup>();
 const failedActivityGroupsCache = new WeakMap<
   ThreadFeedActivityGroup,
   ReadonlyArray<ThreadFeedActivityGroup>
@@ -691,110 +696,6 @@ function singleToolCallLabel(activity: ThreadFeedActivity, expanded: boolean): s
   return command ? truncate(command, WORK_LOG_LABEL_MAX_LENGTH) : activity.summary;
 }
 
-function isEmptyMessage(entry: RawThreadFeedEntry): boolean {
-  return (
-    entry.type === "message" &&
-    entry.message.text.trim().length === 0 &&
-    entry.message.attachments.length === 0
-  );
-}
-
-/**
- * `onRestart` hears each entry after which no group is open, with the grouped
- * length so far: the entries before it group the same whatever follows.
- */
-function groupAdjacentActivities(
-  entries: ReadonlyArray<RawThreadFeedEntry>,
-  childrenByRun: ReadonlyMap<RunId, ReadonlySet<string>>,
-  onRestart?: (entryIndex: number, groupedLength: number) => void,
-): ThreadFeedEntry[] {
-  const grouped: ThreadFeedEntry[] = [];
-  let firstActivityEntry: Extract<RawThreadFeedEntry, { readonly type: "activity" }> | null = null;
-  let openGroupActivities: ThreadFeedActivity[] = [];
-  const flushGroup = () => {
-    if (firstActivityEntry === null) return;
-    const cached = activityGroupsCache.get(firstActivityEntry.activity);
-    if (
-      cached &&
-      cached.activities.length === openGroupActivities.length &&
-      cached.activities.every((activity, index) => activity === openGroupActivities[index])
-    ) {
-      grouped.push(cached);
-    } else {
-      const group: ThreadFeedActivityGroup = {
-        type: "activity-group",
-        id: firstActivityEntry.id,
-        createdAt: firstActivityEntry.createdAt,
-        runId: firstActivityEntry.runId,
-        activities: openGroupActivities,
-      };
-      activityGroupsCache.set(firstActivityEntry.activity, group);
-      grouped.push(group);
-    }
-    firstActivityEntry = null;
-    openGroupActivities = [];
-  };
-
-  for (let entryIndex = 0; entryIndex < entries.length; entryIndex += 1) {
-    const entry = entries[entryIndex]!;
-    if (entry.type === "activity") {
-      const item = entry.activity.projectedItem.item;
-      if (
-        item.type === "dynamic_tool" &&
-        item.runId !== null &&
-        (item.status === "running" || item.status === "completed") &&
-        resolveGoatMcpItemCall(item).definition?.summaryAction === "delegate" &&
-        !workEntryDisplayIndicatesToolFailure(entry.activity.workEntry)
-      ) {
-        const output = compactDynamicToolOutput(item.output);
-        if (
-          !output?.isError &&
-          output?.taskId !== undefined &&
-          childrenByRun.get(item.runId)?.has(output.taskId)
-        )
-          continue;
-      }
-    }
-    if (isEmptyMessage(entry)) {
-      continue;
-    }
-
-    if (entry.type !== "activity") {
-      flushGroup();
-      grouped.push(entry);
-      onRestart?.(entryIndex, grouped.length);
-      continue;
-    }
-
-    const isStandaloneActivity =
-      entry.activity.workEntry.questionAnswer !== undefined ||
-      entry.activity.projectedItem.item.type === "compaction" ||
-      entry.activity.projectedItem.item.type === "handoff" ||
-      entry.activity.projectedItem.item.type === "notification";
-    if (
-      isStandaloneActivity ||
-      entry.activity.prominent ||
-      (entry.activity.projectedItem.item.type === "subagent") !==
-        (firstActivityEntry?.activity.projectedItem.item.type === "subagent") ||
-      firstActivityEntry?.runId !== entry.runId ||
-      (entry.activity.projectedItem.item.type === "subagent" &&
-        firstActivityEntry?.activity.projectedItem.item.providerTurnId !==
-          entry.activity.projectedItem.item.providerTurnId) ||
-      (entry.activity.projectedItem.item.type !== "subagent" &&
-        firstActivityEntry?.activity.attemptId !== entry.activity.attemptId)
-    ) {
-      flushGroup();
-    }
-    firstActivityEntry ??= entry;
-    openGroupActivities.push(entry.activity);
-    if (isStandaloneActivity || entry.activity.prominent) {
-      flushGroup();
-    }
-  }
-  flushGroup();
-  return grouped;
-}
-
 function computeElapsedMs(startIso: string, endIso: string): number | null {
   const start = Date.parse(startIso);
   const end = Date.parse(endIso);
@@ -929,6 +830,7 @@ function deriveThreadFeedRunFolds(
   feedFailedRunIds: ReadonlySet<RunId>,
 ): ReadonlyMap<string, ThreadFeedRunFold> {
   const terminalAssistantMessageIdByRun = new Map<RunId, string>();
+  const retainedAnswerIds = finalAnswerIds(feed);
   const interruptedRunIds = new Set<RunId>();
   const failedRunIds = new Set(feedFailedRunIds);
   const promptIndexByRunId = new Map<RunId, number>();
@@ -1028,6 +930,7 @@ function deriveThreadFeedRunFolds(
         .filter(
           (entry) =>
             entry.id !== terminalAssistantId &&
+            !(entry.type === "message" && retainedAnswerIds.has(entry.message.id)) &&
             entry.type !== "html-render" &&
             entry.type !== "mcp-app" &&
             entry.id !== visibleCompactionId &&
@@ -1189,6 +1092,7 @@ interface ThreadFeedPresentationBuild {
   readonly expandedWorkGroupIds: ReadonlySet<string>;
   readonly activeWorkStartedAt: string | null;
   readonly runlessWorkActive: boolean;
+  readonly display: ThreadFeedDisplay;
   readonly rows: ReadonlyArray<ThreadFeedEntry>;
   /** Feed entry `entry` is a user message whose rows start at `rowsLength`. */
   readonly restarts: ReadonlyArray<{ readonly entry: number; readonly rowsLength: number }>;
@@ -1232,12 +1136,15 @@ function presentationRestart(
   expandedWorkGroupIds: ReadonlySet<string>,
   activeWorkStartedAt: string | null,
   runlessWorkActive: boolean,
+  display: ThreadFeedDisplay,
 ): { readonly entry: number; readonly rowsLength: number; readonly index: number } | null {
   if (
     previous === null ||
     !latestRunsEqual(previous.latestRun, latestRun) ||
     previous.activeWorkStartedAt !== activeWorkStartedAt ||
     previous.runlessWorkActive !== runlessWorkActive ||
+    previous.display.toolCallVisibility !== display.toolCallVisibility ||
+    previous.display.revealedMessageId !== display.revealedMessageId ||
     !setsEqual(previous.expandedRunIds, expandedRunIds) ||
     !setsEqual(previous.expandedWorkGroupIds, expandedWorkGroupIds)
   ) {
@@ -1264,6 +1171,7 @@ export function deriveThreadFeedPresentation(
   activeWorkStartedAt: string | null = null,
   runlessWorkActive = false,
   cache?: ThreadFeedCache,
+  display: ThreadFeedDisplay = DEFAULT_THREAD_FEED_DISPLAY,
 ): ThreadFeedEntry[] {
   const previous = cache?.presentation ?? null;
   const restart = presentationRestart(
@@ -1274,6 +1182,7 @@ export function deriveThreadFeedPresentation(
     expandedWorkGroupIds,
     activeWorkStartedAt,
     runlessWorkActive,
+    display,
   );
   const start = restart?.entry ?? 0;
   const result: ThreadFeedEntry[] =
@@ -1295,8 +1204,16 @@ export function deriveThreadFeedPresentation(
     >
   > = [];
   const retainedFeedIndices: number[] = [];
+  const { toolCallVisibility, revealedMessageId } = display;
+  const isWorking = activeWorkStartedAt !== null && latestRun?.status !== "preparing";
+  const activeRunId = unsettledRunId(latestRun);
+  const zen = toolCallVisibility === "zen";
+  const answering = isWorking && latestRun?.turnEnded !== true;
+  const zenAnswerIds = zen
+    ? zenAnswerMessageIds(feed, start, answering, answering ? activeRunId : null)
+    : null;
   for (let index = start; index < feed.length; index += 1) {
-    const entry = feed[index]!;
+    let entry = feed[index]!;
     if (
       entry.type === "run-fold" ||
       entry.type === "work-toggle" ||
@@ -1304,6 +1221,25 @@ export function deriveThreadFeedPresentation(
       entry.type === "viewed-images"
     )
       continue;
+    // Hidden entries still bound their runs, so a reused prefix never splits a run.
+    const runId = feedEntryRunId(entry);
+    if (runId !== null) {
+      if (!firstEntryByRun.has(runId)) firstEntryByRun.set(runId, index);
+      lastEntryByRun.set(runId, index);
+    }
+    if (entry.type === "activity-group" && toolCallVisibility !== "showAll") {
+      const shown = activityGroupForVisibility(entry, toolCallVisibility);
+      if (shown === null) continue;
+      entry = shown;
+    } else if (
+      zenAnswerIds !== null &&
+      entry.type === "message" &&
+      entry.message.role === "assistant" &&
+      entry.message.id !== revealedMessageId &&
+      !zenAnswerIds.has(entry.message.id)
+    ) {
+      continue;
+    }
     retainedFeed.push(entry);
     retainedFeedIndices.push(index);
   }
@@ -1312,7 +1248,6 @@ export function deriveThreadFeedPresentation(
   );
   const failedRunIds = failedFeedRunIds(sourceFeed, latestRun);
   const activeTailGroup = sourceFeed.at(-1);
-  const activeRunId = unsettledRunId(latestRun);
   // A bare `/compact` turn is the compaction itself: its compaction row stands in for the prompt
   // and the live activity row. An answered "compact before continuing?" question folds into the
   // compaction it asked for.
@@ -1333,13 +1268,9 @@ export function deriveThreadFeedPresentation(
       compactionItemRunIds.add(entry.runId);
     }
   }
-  const isWorking = activeWorkStartedAt !== null && latestRun?.status !== "preparing";
-  const foldsByAnchorId = deriveThreadFeedRunFolds(
-    sourceFeed,
-    latestRun,
-    isWorking && runlessWorkActive,
-    failedRunIds,
-  );
+  const foldsByAnchorId = zen
+    ? new Map<string, ThreadFeedRunFold>()
+    : deriveThreadFeedRunFolds(sourceFeed, latestRun, isWorking && runlessWorkActive, failedRunIds);
   const collapsedEntryIds = new Set<string>();
   for (const fold of foldsByAnchorId.values()) {
     if (!expandedRunIds.has(fold.runId)) {
@@ -1351,11 +1282,6 @@ export function deriveThreadFeedPresentation(
     const feedIndex = retainedFeedIndices[sourceIndex]!;
     if (isUserMessageEntry(entry)) {
       restarts.push({ entry: feedIndex, rowsLength: result.length });
-    }
-    const runId = feedEntryRunId(entry);
-    if (runId !== null) {
-      if (!firstEntryByRun.has(runId)) firstEntryByRun.set(runId, feedIndex);
-      lastEntryByRun.set(runId, feedIndex);
     }
     const isActiveTailGroup =
       isWorking &&
@@ -1448,7 +1374,10 @@ export function deriveThreadFeedPresentation(
           row.activities[0]?.projectedItem.item.status === "running"),
     )
   ) {
-    result.push(thinkingRow(activeWorkStartedAt, activeRunId, latestRun?.providerStartingLabel));
+    const preview = zen ? (liveAnswerPreview(feed) ?? undefined) : undefined;
+    result.push(
+      thinkingRow(activeWorkStartedAt, activeRunId, latestRun?.providerStartingLabel ?? preview),
+    );
   }
   const checkpointByRunId = new Map<RunId, ThreadCheckpointSummary>();
   for (const entry of sourceFeed) {
@@ -1522,6 +1451,7 @@ export function deriveThreadFeedPresentation(
       expandedWorkGroupIds,
       activeWorkStartedAt,
       runlessWorkActive,
+      display,
       rows: result,
       restarts: cleanRestarts,
       firstEntryByRun,

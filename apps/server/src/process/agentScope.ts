@@ -11,12 +11,14 @@ import {
 import * as HostProcess from "@goat/shared/HostProcess";
 import { resolveCommandPath } from "@goat/shared/shell";
 import * as Effect from "effect/Effect";
+import * as Fiber from "effect/Fiber";
 import * as FileSystem from "effect/FileSystem";
 import * as Layer from "effect/Layer";
 import * as Path from "effect/Path";
 
 import * as ServerConfig from "../config.ts";
 import * as ProcessRunner from "../processRunner.ts";
+import * as ProviderProcesses from "./providerProcesses.ts";
 import { makeDarwinAgentScope } from "./agentMemoryGuard.ts";
 
 const AGENT_SLICE = "app-goat-agents.slice";
@@ -100,6 +102,8 @@ const STOPPING_POLL_ATTEMPTS = 20;
 const CLEAR_FAILED_INTERVAL = "1 second";
 const CLEAR_FAILED_ATTEMPTS = 120;
 const MAX_TRACKED_THREADS = 500;
+// A hung user manager must not keep the server from starting.
+const STARTUP_PROBE_DEADLINE = "10 seconds";
 
 export const make = Effect.gen(function* () {
   const platform = yield* HostProcess.Platform;
@@ -111,6 +115,7 @@ export const make = Effect.gen(function* () {
   const path = yield* Path.Path;
   const hostEnvironment = yield* HostProcess.Environment;
   const { stateDir } = yield* ServerConfig.ServerConfig;
+  const { hasOtherLiveOwner } = yield* ProviderProcesses.ProviderProcesses;
   const ownedSlice = ownedAgentSlice(stateDir);
   const layerScope = yield* Effect.scope;
 
@@ -135,6 +140,7 @@ export const make = Effect.gen(function* () {
   const stopLeftoverAgents = Effect.fn("agentScope.stopLeftoverAgents")(function* (
     systemctl: string,
   ) {
+    if (hasOtherLiveOwner) return;
     const shown = yield* run(systemctl, [
       "--user",
       "show",
@@ -220,6 +226,15 @@ export const make = Effect.gen(function* () {
       };
     }),
   );
+
+  // Layer acquisition is the startup barrier: recovery must not terminalize or continue old runs
+  // while a previous server's providers can still execute.
+  const startupProbe = yield* systemd.pipe(Effect.forkIn(layerScope));
+  const probed = yield* Fiber.await(startupProbe).pipe(
+    Effect.timeoutOption(STARTUP_PROBE_DEADLINE),
+  );
+  if (probed._tag === "None")
+    yield* Effect.logWarning("Agent scopes are still starting; the server starts without them");
 
   // `shared` scopes serve other threads too: tracked only for OOM diagnosis on old systemd.
   const scopeByThread = new Map<string, { unit: string; oomKilled: boolean; shared: boolean }>();
@@ -434,4 +449,7 @@ export const make = Effect.gen(function* () {
   } satisfies AgentScopeShape;
 });
 
-export const layer = Layer.effect(AgentScope, make).pipe(Layer.provide(ProcessRunner.layer));
+export const layer = Layer.effect(AgentScope, make).pipe(
+  Layer.provide(ProcessRunner.layer),
+  Layer.provideMerge(ProviderProcesses.layer),
+);

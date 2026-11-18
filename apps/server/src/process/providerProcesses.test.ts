@@ -1,0 +1,316 @@
+// @effect-diagnostics nodeBuiltinImport:off -- real processes stand in for servers and CLIs.
+import * as NodeChildProcess from "node:child_process";
+import * as NodeCrypto from "node:crypto";
+import * as NodeFS from "node:fs";
+import * as NodeOS from "node:os";
+import * as NodePath from "node:path";
+
+import * as NodeServices from "@effect/platform-node/NodeServices";
+import { assert, describe, expect, it } from "@effect/vitest";
+import * as AcpSessionRuntime from "@goat/provider-acp/server/AcpSessionRuntime";
+import * as HostProcess from "@goat/shared/HostProcess";
+import * as Context from "effect/Context";
+import * as Deferred from "effect/Deferred";
+import * as Effect from "effect/Effect";
+import * as Fiber from "effect/Fiber";
+import * as Layer from "effect/Layer";
+import * as TestClock from "effect/testing/TestClock";
+
+import * as ServerConfig from "../config.ts";
+import * as ProviderProcesses from "./providerProcesses.ts";
+
+// Real child processes stand in for servers and CLIs; only PIDs captured at spawn are signalled.
+const ownedProcess = Effect.gen(function* () {
+  const ready = yield* Deferred.make<void>();
+  const exited = yield* Deferred.make<void>();
+  const child = yield* Effect.acquireRelease(
+    Effect.sync(() => {
+      const child = NodeChildProcess.spawn(
+        process.execPath,
+        ["-e", 'process.stdin.resume(); process.send("ready");'],
+        { stdio: ["pipe", "ignore", "ignore", "ipc"] },
+      );
+      child.once("message", () => Deferred.doneUnsafe(ready, Effect.void));
+      child.once("error", (error) => Deferred.doneUnsafe(ready, Effect.die(error)));
+      child.once("exit", () => Deferred.doneUnsafe(exited, Effect.void));
+      return child;
+    }),
+    (child) =>
+      Effect.sync(() => child.kill("SIGKILL")).pipe(Effect.andThen(Deferred.await(exited))),
+  );
+  yield* Deferred.await(ready);
+  const pid = child.pid;
+  assert(pid !== undefined);
+  const controller = AcpSessionRuntime.makePosixProcessTreeController("linux");
+  const identity = controller.identity(pid);
+  assert(identity !== undefined);
+  const boot = NodeFS.readFileSync("/proc/sys/kernel/random/boot_id", "utf8").trim();
+  return {
+    pid,
+    startTime: `${boot}:${identity.startTime}`,
+    pgid: 0,
+    running: () => {
+      const observed = controller.identity(pid);
+      return observed !== undefined && !AcpSessionRuntime.posixProcessIsZombie(observed);
+    },
+    stop: Effect.sync(() => child.kill("SIGKILL")).pipe(Effect.andThen(Deferred.await(exited))),
+  };
+});
+
+describe.runIf(HostProcess.Platform.defaultValue() === "linux")("ProviderProcesses", () => {
+  it.live("reaps only recorded CLIs of dead servers before startup completes", () =>
+    Effect.gen(function* () {
+      const config = yield* ServerConfig.ServerConfig;
+      const directory = NodePath.join(config.stateDir, "provider-processes");
+      NodeFS.mkdirSync(directory, { recursive: true });
+      type Identity = { readonly pid: number; readonly startTime: string };
+      const record = (owner: Identity, processes: ReadonlyArray<Identity>) => {
+        const instanceId = NodeCrypto.randomUUID();
+        NodeFS.writeFileSync(
+          NodePath.join(directory, `${instanceId}.json`),
+          JSON.stringify({
+            version: 1,
+            instanceId,
+            hostname: NodeOS.hostname(),
+            stateDir: config.stateDir,
+            owner: { pid: owner.pid, startTime: owner.startTime },
+            processes: processes.map(({ pid, startTime }) => ({ pid, startTime, pgid: 0 })),
+          }),
+        );
+      };
+      const reused = (identity: Identity) => ({
+        ...identity,
+        startTime: identity.startTime.replace(/:\d+$/, ":1"),
+      });
+      const deadOwner = yield* ownedProcess;
+      const liveOwner = yield* ownedProcess;
+      const reusedOwner = yield* ownedProcess;
+      const liveProvider = yield* ownedProcess;
+      const reusedProvider = yield* ownedProcess;
+      const orphan = yield* ownedProcess;
+      const orphanOfReusedOwner = yield* ownedProcess;
+      const unrecorded = yield* ownedProcess;
+      record(liveOwner, [liveProvider]);
+      record(deadOwner, [reused(reusedProvider)]);
+      record(deadOwner, [orphan]);
+      record(reused(reusedOwner), [orphanOfReusedOwner]);
+      yield* deadOwner.stop;
+
+      const context = yield* Layer.build(ProviderProcesses.layer);
+      expect(Context.get(context, ProviderProcesses.ProviderProcesses).hasOtherLiveOwner).toBe(
+        true,
+      );
+
+      expect({
+        orphan: orphan.running(),
+        orphanOfReusedOwner: orphanOfReusedOwner.running(),
+        liveProvider: liveProvider.running(),
+        reusedProvider: reusedProvider.running(),
+        reusedOwner: reusedOwner.running(),
+        unrecorded: unrecorded.running(),
+      }).toEqual({
+        orphan: false,
+        orphanOfReusedOwner: false,
+        liveProvider: true,
+        reusedProvider: true,
+        reusedOwner: true,
+        unrecorded: true,
+      });
+    }).pipe(
+      Effect.scoped,
+      Effect.provideService(HostProcess.Platform, "linux"),
+      Effect.provide(
+        ServerConfig.layerTest(process.cwd(), { prefix: "goat-restart-ownership-" }).pipe(
+          Layer.provideMerge(NodeServices.layer),
+        ),
+      ),
+    ),
+  );
+
+  it.live("takes the process group of a recorded CLI that still leads it", () =>
+    Effect.gen(function* () {
+      const config = yield* ServerConfig.ServerConfig;
+      const directory = NodePath.join(config.stateDir, "provider-processes");
+      NodeFS.mkdirSync(directory, { recursive: true });
+      const deadOwner = yield* ownedProcess;
+      // A group leader standing in for the CLI, and a child in its group standing in for an MCP server.
+      const leader = NodeChildProcess.spawn("/bin/sh", ["-c", 'sleep 600 & echo "$!"; wait'], {
+        detached: true,
+        stdio: ["ignore", "pipe", "ignore"],
+      });
+      const leaderExited = new Promise<void>((resolve) => leader.once("exit", () => resolve()));
+      yield* Effect.addFinalizer(() =>
+        Effect.sync(() => {
+          try {
+            process.kill(-(leader.pid ?? 0), "SIGKILL");
+          } catch {}
+        }),
+      );
+      const memberPid = Number(
+        yield* Effect.promise(
+          () =>
+            new Promise<string>((resolve) =>
+              leader.stdout.once("data", (chunk: Buffer) => resolve(chunk.toString())),
+            ),
+        ),
+      );
+      const leaderPid = leader.pid;
+      assert(leaderPid !== undefined);
+      const controller = AcpSessionRuntime.makePosixProcessTreeController("linux");
+      const boot = NodeFS.readFileSync("/proc/sys/kernel/random/boot_id", "utf8").trim();
+      const leaderIdentity = controller.identity(leaderPid);
+      assert(leaderIdentity !== undefined);
+      NodeFS.writeFileSync(
+        NodePath.join(directory, "group.json"),
+        JSON.stringify({
+          version: 1,
+          instanceId: "group",
+          hostname: NodeOS.hostname(),
+          stateDir: config.stateDir,
+          owner: { pid: deadOwner.pid, startTime: deadOwner.startTime },
+          processes: [
+            { pid: leaderPid, startTime: `${boot}:${leaderIdentity.startTime}`, pgid: leaderPid },
+          ],
+        }),
+      );
+      yield* deadOwner.stop;
+
+      yield* Layer.build(ProviderProcesses.layer);
+      yield* Effect.promise(() => leaderExited);
+      const member = controller.identity(memberPid);
+      expect(member === undefined || AcpSessionRuntime.posixProcessIsZombie(member)).toBe(true);
+    }).pipe(
+      Effect.scoped,
+      Effect.provideService(HostProcess.Platform, "linux"),
+      Effect.provide(
+        ServerConfig.layerTest(process.cwd(), { prefix: "goat-restart-ownership-" }).pipe(
+          Layer.provideMerge(NodeServices.layer),
+        ),
+      ),
+    ),
+  );
+
+  it.live("signals nothing for records it cannot trust and refuses a pid it did not spawn", () =>
+    Effect.gen(function* () {
+      const config = yield* ServerConfig.ServerConfig;
+      const directory = NodePath.join(config.stateDir, "provider-processes");
+      NodeFS.mkdirSync(directory, { recursive: true });
+      const deadOwner = yield* ownedProcess;
+      const orphans = [yield* ownedProcess, yield* ownedProcess, yield* ownedProcess];
+      const write = (name: string, fields: Record<string, unknown>, processIndex: number) => {
+        const orphan = orphans[processIndex]!;
+        NodeFS.writeFileSync(
+          NodePath.join(directory, name),
+          JSON.stringify({
+            version: 1,
+            instanceId: name,
+            hostname: NodeOS.hostname(),
+            stateDir: config.stateDir,
+            owner: { pid: deadOwner.pid, startTime: deadOwner.startTime },
+            processes: [{ pid: orphan.pid, startTime: orphan.startTime, pgid: 0 }],
+            ...fields,
+          }),
+        );
+      };
+      write("other-host.json", { hostname: "another-host" }, 0);
+      write("other-home.json", { stateDir: NodePath.join(config.stateDir, "elsewhere") }, 1);
+      write("unknown-version.json", { version: 2 }, 2);
+      NodeFS.writeFileSync(NodePath.join(directory, "partial.json"), '{"version":1,"owner":');
+      yield* deadOwner.stop;
+
+      const context = yield* Layer.build(ProviderProcesses.layer);
+      const service = Context.get(context, ProviderProcesses.ProviderProcesses);
+      expect(orphans.map((orphan) => orphan.running())).toEqual([true, true, true]);
+      expect(() => service.register?.(process.ppid)).toThrow("Cannot identify spawned provider");
+    }).pipe(
+      Effect.scoped,
+      Effect.provideService(HostProcess.Platform, "linux"),
+      Effect.provide(
+        ServerConfig.layerTest(process.cwd(), { prefix: "goat-restart-ownership-" }).pipe(
+          Layer.provideMerge(NodeServices.layer),
+        ),
+      ),
+    ),
+  );
+});
+
+it.effect("a Linux host without a boot id starts without reaping", () =>
+  Effect.gen(function* () {
+    const config = yield* ServerConfig.ServerConfig;
+    const service = yield* ProviderProcesses.make({
+      bootIdPath: NodePath.join(config.stateDir, "missing-boot-id"),
+    });
+    expect(service).toEqual({ hasOtherLiveOwner: false });
+    expect(NodeFS.existsSync(NodePath.join(config.stateDir, "provider-processes"))).toBe(false);
+  }).pipe(
+    Effect.scoped,
+    Effect.provideService(HostProcess.Platform, "linux"),
+    Effect.provide(
+      ServerConfig.layerTest(process.cwd(), { prefix: "goat-restart-ownership-" }).pipe(
+        Layer.provideMerge(NodeServices.layer),
+      ),
+    ),
+  ),
+);
+
+// regression (review P3-4): survivors that never die cost startup about a second in all,
+// signalled first and then awaited together.
+it.effect("unkillable survivors of two dead servers delay startup once, not once each", () =>
+  Effect.gen(function* () {
+    const config = yield* ServerConfig.ServerConfig;
+    const directory = NodePath.join(config.stateDir, "provider-processes");
+    NodeFS.mkdirSync(directory, { recursive: true });
+    const bootIdPath = NodePath.join(config.stateDir, "boot-id");
+    NodeFS.writeFileSync(bootIdPath, "boot\n");
+    const signalled: Array<number> = [];
+    // Every pid reads back with the same start time, so recorded survivors stay alive.
+    const controller: AcpSessionRuntime.AcpPosixProcessTreeController = {
+      childPidsOf: () => [],
+      childrenOf: () => [],
+      identity: (pid) => ({
+        executable: undefined,
+        pid,
+        ppid: 0,
+        pgid: 0,
+        sid: 0,
+        startTime: "alive",
+      }),
+      snapshot: () => [],
+      signalProcess: (pid) => void signalled.push(pid),
+    };
+    for (const [name, pid] of [
+      ["first", 5001],
+      ["second", 5002],
+    ] as const)
+      NodeFS.writeFileSync(
+        NodePath.join(directory, `${name}.json`),
+        JSON.stringify({
+          version: 1,
+          instanceId: name,
+          hostname: NodeOS.hostname(),
+          stateDir: config.stateDir,
+          owner: { pid: 4242, startTime: "boot:gone" },
+          processes: [{ pid, startTime: "boot:alive", pgid: 0 }],
+        }),
+      );
+    const starting = yield* ProviderProcesses.make({ bootIdPath, controller }).pipe(
+      Effect.forkChild,
+    );
+    yield* TestClock.adjust("1 second");
+    yield* Fiber.join(starting);
+    expect(signalled.toSorted()).toEqual([5001, 5002]);
+    expect(
+      NodeFS.readdirSync(directory)
+        .filter((file) => file.startsWith("first") || file.startsWith("second"))
+        .toSorted(),
+    ).toEqual(["first.json", "second.json"]);
+  }).pipe(
+    Effect.scoped,
+    Effect.provideService(HostProcess.Platform, "linux"),
+    Effect.provide(
+      ServerConfig.layerTest(process.cwd(), { prefix: "goat-restart-ownership-" }).pipe(
+        Layer.provideMerge(NodeServices.layer),
+      ),
+    ),
+  ),
+);

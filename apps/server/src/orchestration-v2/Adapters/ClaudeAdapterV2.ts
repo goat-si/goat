@@ -131,13 +131,18 @@ import {
 } from "./claudeWorkflowProgress.ts";
 import { isWorkspaceImagePreviewPath } from "@goat/shared/filePreview";
 import { mcpToolResultWithRawImages } from "@goat/shared/toolOutput";
+import {
+  canApplyClaudeSelectionLive,
+  applyClaudeSelectionLive,
+  applyClaudeSelectionToRunningQuery,
+  claudeSteerSelection,
+} from "./ClaudeLiveSelection.ts";
 import { normalizeClaudeTurnTokenUsage } from "../../provider/ClaudeTurnTokenUsage.ts";
 import { toMcpElicitationResponse } from "../../provider/CodexMcpElicitation.ts";
 import {
   type CanUseTool,
   type ElicitationRequest,
   type ElicitationResult,
-  type EffortLevel,
   type ForkSessionOptions,
   resolveSettings as resolveClaudeSettings,
   type Options as ClaudeQueryOptions,
@@ -302,7 +307,6 @@ import {
   isProviderAdapterRollbackThreadError,
   queryRunnerError,
   encodeClaudeJson,
-  type ClaudeFlagSettings,
   claudeProcessExitFailure,
 } from "./ClaudeAgentSdkQueryRunner.ts";
 export {
@@ -520,27 +524,6 @@ export const ClaudeProviderCapabilitiesV2 = {
     enforcement: "native",
   },
 } satisfies OrchestrationV2ProviderCapabilities;
-
-/** Thinking requires a new process. Clearing effort also requires one to reload user settings instead of model defaults. */
-function canApplyClaudeSelectionLive(
-  live: CompiledClaudeModelSelection,
-  next: CompiledClaudeModelSelection,
-): boolean {
-  return (
-    live.settings.alwaysThinkingEnabled === next.settings.alwaysThinkingEnabled &&
-    (next.effort !== undefined || live.effort === undefined)
-  );
-}
-
-function claudeLiveSelectionFlagSettings(
-  selection: CompiledClaudeModelSelection,
-): ClaudeFlagSettings {
-  return {
-    ...(selection.effort === undefined ? {} : { effortLevel: selection.effort as EffortLevel }),
-    fastMode: selection.settings.fastMode ?? null,
-    ultracode: selection.settings.ultracode ?? null,
-  };
-}
 
 // A delegated child is its own SDK session, so Claude Code gives it the main-conversation cache
 // TTL. When the user sets Claude's subagentPromptCacheTtl, the child follows it like a native
@@ -9247,26 +9230,7 @@ export const makeClaudeAdapterV2 = Effect.fn("makeClaudeAdapterV2")(function* (
             (existing.selection.apiModelId === compiledSelection.apiModelId ||
               existing.openedPermissionMode === queryPolicy.permissionMode)
           ) {
-            const live = existing;
-            // Preserve launcher-selected models unless the model changed or a failed update left it unknown.
-            yield* (
-              live.selection.queryIdentity === "" ||
-              live.selection.apiModelId !== compiledSelection.apiModelId
-                ? live.query.setModel(compiledSelection.apiModelId)
-                : Effect.void
-            ).pipe(
-              Effect.andThen(
-                live.query.applyFlagSettings(claudeLiveSelectionFlagSettings(compiledSelection)),
-              ),
-              Effect.tapError(() =>
-                Effect.sync(() => {
-                  live.selection = { ...live.selection, queryIdentity: "" };
-                }),
-              ),
-            );
-            if (live.selection.apiModelId !== compiledSelection.apiModelId)
-              live.reportedModel = undefined;
-            live.selection = compiledSelection;
+            yield* applyClaudeSelectionLive(existing, compiledSelection);
           }
           if (
             existing !== null &&
@@ -10159,11 +10123,20 @@ export const makeClaudeAdapterV2 = Effect.fn("makeClaudeAdapterV2")(function* (
                 }),
               persistAttachmentBudget(existing.nativeThreadId),
             );
+            const liveSteerSelection = claudeSteerSelection(
+              existing,
+              turnInput.modelSelection === undefined
+                ? undefined
+                : compileClaudeModelSelection(turnInput.modelSelection, modelCatalog),
+              currentTurn.queryPolicy.permissionMode,
+            );
             const userMessage = yield* makeClaudeUserMessageWithAttachments({
               text: applyClaudePromptEffortPrefix(
                 turnInput.message.text,
-                compileClaudeModelSelection(currentTurn.input.modelSelection, modelCatalog)
-                  .promptEffort,
+                (
+                  liveSteerSelection ??
+                  compileClaudeModelSelection(currentTurn.input.modelSelection, modelCatalog)
+                ).promptEffort,
               ),
               attachments: turnInput.message.attachments,
               priority: "now",
@@ -10177,9 +10150,11 @@ export const makeClaudeAdapterV2 = Effect.fn("makeClaudeAdapterV2")(function* (
               Effect.provideService(Path.Path, path),
             );
             yield* backgroundForegroundSubagents(existing, backgroundDeadline);
-            // The turn can end while the moves are answered. A steer offered
-            // then would start a new turn the orchestrator never asked for, so
-            // the steer fails and the orchestrator starts the follow-up turn.
+            if (liveSteerSelection !== undefined)
+              yield* applyClaudeSelectionLive(existing, liveSteerSelection);
+            // The turn can end while the moves or the selection change are answered.
+            // A steer offered then would start a new turn the orchestrator never
+            // asked for, so the steer fails and the orchestrator starts the follow-up turn.
             if (
               (yield* Ref.get(activeTurn))?.providerTurnId !== turnInput.providerTurnId ||
               (yield* Ref.get(queryContext)) !== existing ||
@@ -10509,6 +10484,14 @@ export const makeClaudeAdapterV2 = Effect.fn("makeClaudeAdapterV2")(function* (
               true,
             ),
           steerTurn,
+          applyModelSelection: ({ providerThread, modelSelection }) =>
+            Effect.flatMap(Ref.get(queryContext), (live) =>
+              applyClaudeSelectionToRunningQuery(
+                live,
+                compileClaudeModelSelection(modelSelection, modelCatalog),
+                providerThread.nativeThreadRef?.nativeId,
+              ),
+            ),
           stopTask: Effect.fn("ClaudeAdapterV2.stopTask")(function* ({ providerThread, taskId }) {
             const liveQuery = yield* Ref.get(queryContext);
             const task = (yield* Ref.get(sessionSubagentsByTaskId)).get(taskId);

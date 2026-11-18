@@ -76,7 +76,12 @@ import { CodexHomeSettingsFields, CodexModelRoute, ProviderHomeRouteFields } fro
 import { UsageLimitSourceId } from "./usageLimitSourceId.ts";
 import { UsageModelFilter } from "./usage.ts";
 import { EnvironmentMachineKind, ThreadEnvMode, WorktreeSubmodules } from "./environment.ts";
-import { KeybindingShortcut } from "./keybindings.ts";
+import {
+  DEFAULT_SNAP_SHOT_SHORTCUT,
+  DEFAULT_SNAP_SHOT_SOUND,
+  SnapShotShortcut,
+  SnapShotSound,
+} from "./snapShotShortcut.ts";
 import {
   CustomModelSetting,
   DEFAULT_TEXT_GENERATION_MODEL,
@@ -142,61 +147,9 @@ const DEFAULT_TIMESTAMP_FORMAT: TimestampFormat = "locale";
 export const DiffLayout = Schema.Literals(["stacked", "split"]);
 export type DiffLayout = typeof DiffLayout.Type;
 const DEFAULT_DIFF_LAYOUT: DiffLayout = "stacked";
-export const SnapShotKeyChord = KeybindingShortcut.check(
-  Schema.makeFilter(
-    (shortcut) =>
-      shortcut.metaKey ||
-      shortcut.ctrlKey ||
-      shortcut.shiftKey ||
-      shortcut.altKey ||
-      shortcut.modKey ||
-      "Snapshot shortcut requires a modifier.",
-  ),
-);
-export type SnapShotKeyChord = typeof SnapShotKeyChord.Type;
-export const SNAP_SHOT_MODIFIERS = ["shift", "meta", "control", "alt"] as const;
-export const SnapShotModifier = Schema.Literals(SNAP_SHOT_MODIFIERS);
-export type SnapShotModifier = typeof SnapShotModifier.Type;
-export const SnapShotShortcut = Schema.Union([
-  Schema.Struct({ kind: Schema.Literal("both-shift-keys") }),
-  Schema.Struct({ kind: Schema.Literal("modifier-pair"), modifier: SnapShotModifier }),
-  SnapShotKeyChord,
-]);
-export type SnapShotShortcut = typeof SnapShotShortcut.Type;
-export const SnapShotSound = Schema.Literals(["soft-pop", "camera-shutter"]);
-export type SnapShotSound = typeof SnapShotSound.Type;
-const DEFAULT_SNAP_SHOT_SOUND: SnapShotSound = "soft-pop";
-export type SnapShotModifierPairShortcut = Extract<SnapShotShortcut, { readonly kind: string }>;
-export function isModifierPairShortcut(
-  shortcut: SnapShotShortcut,
-): shortcut is SnapShotModifierPairShortcut {
-  return "kind" in shortcut;
-}
-export function snapShotShortcutModifierPair(
-  shortcut: SnapShotModifierPairShortcut,
-): SnapShotModifier {
-  return shortcut.kind === "both-shift-keys" ? "shift" : shortcut.modifier;
-}
-const APPLE_MODIFIER_LABELS: Record<SnapShotModifier, string> = {
-  shift: "Shift",
-  meta: "Command",
-  control: "Control",
-  alt: "Option",
-};
-const OTHER_MODIFIER_LABELS: Record<SnapShotModifier, string> = {
-  shift: "Shift",
-  meta: "Super",
-  control: "Ctrl",
-  alt: "Alt",
-};
-
-export function snapShotModifierPairLabel(modifier: SnapShotModifier, apple: boolean): string {
-  const label = (apple ? APPLE_MODIFIER_LABELS : OTHER_MODIFIER_LABELS)[modifier];
-  return `${label} + ${label}`;
-}
-const DEFAULT_SNAP_SHOT_SHORTCUT: SnapShotShortcut = {
-  kind: "both-shift-keys",
-};
+export * from "./snapShotShortcut.ts";
+export * from "./toolCallVisibility.ts";
+import { ToolCallVisibility, ToolCallVisibilitySetting } from "./toolCallVisibility.ts";
 
 export const NotificationMode = Schema.Literals([
   "off",
@@ -319,6 +272,7 @@ export const ClientSettingsSchema = Schema.Struct({
     Schema.withDecodingDefault(Effect.succeed("red-green" as const)),
   ),
   chatWidth: ChatWidth.pipe(Schema.withDecodingDefault(Effect.succeed("comfortable" as const))),
+  toolCallVisibility: ToolCallVisibilitySetting,
   loadBalancingEnabled: Schema.Boolean.pipe(Schema.withDecodingDefault(Effect.succeed(false))),
   loadBalancingWeights: LoadBalancingWeights.pipe(Schema.withDecodingDefault(Effect.succeed({}))),
   appearanceContrast: AppearanceContrast.pipe(
@@ -1973,6 +1927,7 @@ export const ClientSettingsPatch = Schema.Struct({
   inAppNotificationsEnabled: Schema.optionalKey(Schema.Boolean),
   diffColorScheme: Schema.optionalKey(DiffColorScheme),
   chatWidth: Schema.optionalKey(ChatWidth),
+  toolCallVisibility: Schema.optionalKey(ToolCallVisibility),
   loadBalancingEnabled: Schema.optionalKey(Schema.Boolean),
   loadBalancingWeights: Schema.optionalKey(LoadBalancingWeights),
   appearanceContrast: Schema.optionalKey(AppearanceContrast),

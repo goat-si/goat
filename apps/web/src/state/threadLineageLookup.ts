@@ -15,7 +15,7 @@ const lineageLookup = createThreadLineageLookup(
   connectionAtomRuntime,
   environmentShell.stateValueAtom,
 );
-const EMPTY: LineageResolution = { checked: new Set(), titles: {} };
+const EMPTY: LineageResolution = { checked: new Set(), titles: {}, projectIds: {} };
 const EMPTY_ATOM = Atom.make(EMPTY);
 
 export function useThreadLineageResolution(input: {
