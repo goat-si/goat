@@ -12,6 +12,7 @@ export const supportsMemoryFloor2 = (features: readonly MemoryFloor2Feature[] | 
 export const requiresMemoryFloor2 = (operation: MemoryOperation) =>
   operation.kind !== "forget" &&
   (operation.payload.derivedFromMemoryRevisions.length > MEMORY_DERIVED_REVISIONS_MAX_V1 ||
+    (operation.kind === "upsert" && operation.closedLineage === true) ||
     operation.revision.provenance.unverified === true ||
     operation.revision.provenance.originThreadId !== undefined ||
     operation.forgetFence !== undefined);

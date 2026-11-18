@@ -293,6 +293,7 @@ export const makeUpsert = (deps: {
           protocolVersion: 1,
           kind: "upsert",
           ...(forgetFence === undefined ? {} : { forgetFence }),
+          ...(wide || acceptance ? { closedLineage: true as const } : {}),
           memorySpaceId: value.memorySpaceId,
           memoryId: value.memoryId,
           operationId: value.operationId,

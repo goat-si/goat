@@ -2121,7 +2121,11 @@ const make = Effect.fnUntraced(function* (
         };
       } else if (input.resolutionRequest)
         return yield* new M.MemoryHubError({ code: "identity_mismatch" });
-      if (op.kind !== "forget") {
+      if (op.kind === "upsert" && op.closedLineage)
+        yield* validateSummaryDependencies(op.memorySpaceId, op.payload).pipe(
+          Effect.provideService(SqlClient.SqlClient, sql),
+        );
+      else if (op.kind !== "forget") {
         const normalized = yield* normalizeMemoryDependencies(
           op.memorySpaceId,
           op.payload,

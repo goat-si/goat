@@ -491,7 +491,6 @@ const envelope = {
   memoryId: MemoryId,
   expectedHeads: heads,
 };
-
 const floorOperation = { forgetFence: Schema.optionalKey(NonNegativeInt) };
 
 export const MemoryOperation = bounded(
@@ -500,6 +499,7 @@ export const MemoryOperation = bounded(
       ...envelope,
       ...floorOperation,
       kind: Schema.Literal("upsert"),
+      closedLineage: Schema.optionalKey(Schema.Literal(true)),
       revision: MemoryRevision,
       payload: MemoryPayload,
     }),

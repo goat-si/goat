@@ -175,6 +175,9 @@ export const makeCommitSummary = (deps: {
           {
             protocolVersion: 1,
             kind: "upsert",
+            ...(dependencies.length > M.MEMORY_DERIVED_REVISIONS_MAX_V1
+              ? { closedLineage: true as const }
+              : {}),
             memorySpaceId: space,
             memoryId,
             operationId,
@@ -310,6 +313,9 @@ export const makeCommitSummary = (deps: {
           {
             protocolVersion: 1,
             kind: "upsert",
+            ...(dependencies.length > M.MEMORY_DERIVED_REVISIONS_MAX_V1
+              ? { closedLineage: true as const }
+              : {}),
             memorySpaceId: space,
             memoryId,
             operationId: meta.operationId,

@@ -90,6 +90,7 @@ export const Metadata = Schema.Struct({
   kind: Schema.Literals(["upsert", "forget", "resolve", "revert"]),
   expectedHeads: Schema.Array(M.MemoryRevisionId),
   forgetFence: Schema.optionalKey(Schema.Int),
+  closedLineage: Schema.optionalKey(Schema.Literal(true)),
   authorityFirst: Schema.optionalKey(digest),
   acceptanceGeneration: Schema.optionalKey(Schema.Int),
   revision: Schema.optionalKey(M.MemoryRevision),
