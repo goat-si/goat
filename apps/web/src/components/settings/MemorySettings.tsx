@@ -1,3 +1,13 @@
+import {
+  MemoryOriginPicker,
+  useWebMemoryBatch,
+  WebMemorySuggestions,
+  MemoryStatusRows,
+  EMPTY_MEMORY_LIST,
+  type MemoryListLayout,
+  memoryListPageIdentity,
+  measureMemoryListRow,
+} from "./MemoryErgonomics";
 import { MemoryHubDiagnosticsSettings } from "./MemoryHubDiagnosticsSettings";
 import { MemoryImportSettings } from "./MemoryImportSettings";
 import { MemoryAgentAccessSettings } from "./MemoryAgentAccessSettings";
@@ -44,9 +54,7 @@ import {
   presentMemoryReport,
   presentMemorySync,
   presentMemoryCoverage,
-  presentMemoryStorage,
   memoryHoldRefreshDelayMs,
-  presentMemoryProcessing,
 } from "@goat/client-runtime/memory-presentation";
 import { useNavigate } from "@tanstack/react-router";
 import * as Option from "effect/Option";
@@ -80,6 +88,8 @@ import {
   validateMemorySettingsSearch,
   type MemorySettingsSearch,
 } from "./MemorySettings.logic";
+
+export { memoryListPageIdentity, measureMemoryListRow } from "./MemoryErgonomics";
 
 /** Navigation only. A missing space opens the explicit destination chooser. */
 export function MemorySettingsEntry({
@@ -524,43 +534,6 @@ function MemoryRecords({
   );
 }
 
-interface MemoryListPageIdentity {
-  readonly rowIds: ReadonlyArray<MemoryId>;
-}
-
-interface MemoryListLayout {
-  readonly page: MemoryListPageIdentity;
-  readonly height: number;
-  readonly sizes: ReadonlyMap<string, number>;
-}
-
-const EMPTY_MEMORY_LIST: ReadonlyArray<MemoryItem> = [];
-const memoryListPageIdentities = new WeakMap<ReadonlyArray<MemoryItem>, MemoryListPageIdentity>();
-
-export function memoryListPageIdentity(items: ReadonlyArray<MemoryItem>): MemoryListPageIdentity {
-  const current = memoryListPageIdentities.get(items);
-  if (current) return current;
-  const page = { rowIds: items.map((item) => item.memoryId) };
-  memoryListPageIdentities.set(items, page);
-  return page;
-}
-
-export function measureMemoryListRow(
-  previous: MemoryListLayout | null,
-  page: MemoryListPageIdentity,
-  itemKey: string,
-  size: number,
-): MemoryListLayout {
-  if (previous?.page === page && previous.sizes.get(itemKey) === size) return previous;
-  const sizes = new Map(previous?.page === page ? previous.sizes : []);
-  sizes.set(itemKey, size);
-  const height = Math.min(
-    320,
-    Math.ceil(page.rowIds.reduce((total, id) => total + (sizes.get(id) ?? 88), 0)),
-  );
-  return { page, height, sizes };
-}
-
 function ScopedMemoryRecords({
   target,
   environmentId,
@@ -576,6 +549,11 @@ function ScopedMemoryRecords({
   scope: MemoryScope;
   scopeLabel?: string;
 }) {
+  const capabilities = useEnvironment(environmentId)?.serverConfig?.environment.capabilities.memory;
+  const linkedOrigin = target.originThreadId
+    ? { environmentId, threadId: target.originThreadId }
+    : undefined;
+  const [origin, setOrigin] = useState<ScopedThreadRef | undefined>(linkedOrigin);
   const [queryInput, setQueryInput] = useState("");
   const [query, setQuery] = useState("");
   const [cursor, setCursor] = useState<string | undefined>();
@@ -590,6 +568,7 @@ function ScopedMemoryRecords({
     memorySpaceId,
     scope,
     limit: 40,
+    ...(capabilities?.originFilter && origin ? { origin } : {}),
     ...(cursor ? { cursor } : {}),
   });
   const page = useEnvironmentQuery(
@@ -605,6 +584,12 @@ function ScopedMemoryRecords({
   const coverage = value?.indexCoverage
     ? presentMemoryCoverage(value.indexCoverage, items.length)
     : null;
+  const batch = useWebMemoryBatch(
+    environmentId,
+    capabilities?.originFilter === true,
+    JSON.stringify([query, origin, cursor, quarantine]),
+    page.refresh,
+  );
   const listPage = memoryListPageIdentity(items);
   const [listLayout, setListLayout] = useState<MemoryListLayout | null>(null);
   function select(item: MemoryItem) {
@@ -613,6 +598,7 @@ function ScopedMemoryRecords({
       search: validateMemorySettingsSearch({
         environmentId,
         memorySpaceId,
+        originThreadId: target.originThreadId,
         memoryId: item.memoryId,
       }),
       hash: "",
@@ -620,6 +606,13 @@ function ScopedMemoryRecords({
   }
   return (
     <>
+      {capabilities?.saveSuggestions ? (
+        <WebMemorySuggestions
+          environmentId={environmentId}
+          memorySpaceId={memorySpaceId}
+          onSaved={page.refresh}
+        />
+      ) : null}
       <SettingsSection title="Memories" id="memory-records">
         <SettingsRow
           title="Save a memory"
@@ -693,6 +686,18 @@ function ScopedMemoryRecords({
             </form>
           }
         />
+        {capabilities?.originFilter ? (
+          <MemoryOriginPicker
+            environmentId={environmentId}
+            {...(origin ? { origin } : {})}
+            {...(linkedOrigin ? { fromLink: linkedOrigin } : {})}
+            onChange={(value) => {
+              setOrigin(value);
+              setCursor(undefined);
+            }}
+          />
+        ) : null}
+        {batch.controls}
         <SettingsRow
           title="Quarantined memories"
           description="Review memories that need attention."
@@ -766,12 +771,18 @@ function ScopedMemoryRecords({
                 description={
                   item.status === "forgotten"
                     ? `Forgotten ${formatTimestamp(item.tombstone.deletedAtUtc, "locale")}. Content has been removed.`
-                    : presentMemoryItem(item).syncLabel
+                    : [presentMemoryItem(item).syncLabel, presentMemoryItem(item).provenanceLabel]
+                        .filter(Boolean)
+                        .join(" · ")
                 }
                 control={
-                  <Button size="sm" variant="ghost" onClick={() => select(item)}>
-                    Open
-                  </Button>
+                  batch.selecting ? (
+                    batch.row(item)
+                  ) : (
+                    <Button size="sm" variant="ghost" onClick={() => select(item)}>
+                      Open
+                    </Button>
+                  )
                 }
               />
             )}
@@ -940,6 +951,9 @@ export function MemoryDetails({
           ) : null}
           {item ? (
             <>
+              {presentMemoryItem(item).provenanceLabel ? (
+                <p>{presentMemoryItem(item).provenanceLabel}</p>
+              ) : null}
               {item.status !== "active" ? (
                 <p>
                   {item.status === "forgotten"
@@ -1598,35 +1612,5 @@ function MemorySourcePage({
         Next original page
       </Button>
     </div>
-  );
-}
-
-/** Producer helpers keep raw storage fields and timestamps out of Settings. */
-function MemoryStatusRows({ sync }: { sync: MemorySyncStatus }) {
-  const storage = presentMemoryStorage(sync.storage);
-  const processing = presentMemoryProcessing(sync.processing, sync.generationHold);
-  const labels = [
-    processing.pausedLabel,
-    processing.checkingLabel,
-    processing.heldLabel,
-    processing.waitingLabel,
-    processing.cleanupLabel,
-    processing.receiveLabel,
-    processing.reportLabel,
-    processing.admissionLabel,
-  ].filter(Boolean);
-  return (
-    <SettingsSection title="Memory status">
-      <SettingsRow title="Hub" description={presentMemorySync(sync).label} />
-      <SettingsRow
-        title="Storage"
-        description={[storage.label, storage.searchLabel, ...storage.reasons].join(". ")}
-      />
-      <SettingsRow title="Coverage" description={processing.coverage.label} />
-      <SettingsRow
-        title="Processing"
-        description={labels.join(". ") || "No pending processing reported"}
-      />
-    </SettingsSection>
   );
 }
