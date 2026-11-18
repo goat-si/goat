@@ -19,15 +19,24 @@ export interface LineageResolution {
   readonly projectIds: Readonly<Record<string, ProjectId | null>>;
 }
 
+/**
+ * Link chips reuse an answer for a minute, so a message that scrolls back or a thread reopened
+ * soon after does not ask again; a removal still refreshes it at once.
+ */
+export const THREAD_LINK_LOOKUP_CACHE = { staleTimeMs: 60_000, idleTtlMs: 60_000 } as const;
+
 export function createThreadLineageLookup<R, E>(
   runtime: Atom.AtomRuntime<EnvironmentRegistry.EnvironmentRegistry | R, E>,
   shellState: (environmentId: EnvironmentId) => Atom.Atom<Pick<EnvironmentShellState, "removedAt">>,
+  cache: { readonly staleTimeMs: number; readonly idleTtlMs: number } = {
+    staleTimeMs: 0,
+    idleTtlMs: 0,
+  },
 ) {
   const query = createEnvironmentRpcQueryAtomFamily(runtime, {
     label: "environment-data:orchestration:lineage-titles",
     tag: ORCHESTRATION_V2_WS_METHODS.getThreadFamily,
-    staleTimeMs: 0,
-    idleTtlMs: 0,
+    ...cache,
     refreshTrigger: ({ environmentId, input }) =>
       Atom.make((get) => {
         const { removedAt } = get(shellState(environmentId));

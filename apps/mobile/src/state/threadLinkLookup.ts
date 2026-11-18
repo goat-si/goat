@@ -2,6 +2,7 @@ import { useAtomValue } from "@effect/atom-react";
 import {
   createThreadLineageLookup,
   MAX_LINEAGE_LOOKUP_IDS,
+  THREAD_LINK_LOOKUP_CACHE,
   type LineageResolution,
 } from "@goat/client-runtime/state/thread-lineage-lookup";
 import { AuthOrchestrationReadScope, type EnvironmentId } from "@goat/contracts";
@@ -13,7 +14,11 @@ import { useEnvironmentScope } from "./session";
 import { environmentShell } from "./shell";
 import { environmentThreadShells } from "./threads";
 
-const lookup = createThreadLineageLookup(connectionAtomRuntime, environmentShell.stateValueAtom);
+const lookup = createThreadLineageLookup(
+  connectionAtomRuntime,
+  environmentShell.stateValueAtom,
+  THREAD_LINK_LOOKUP_CACHE,
+);
 const EMPTY: LineageResolution = { checked: new Set(), titles: {}, projectIds: {} };
 const EMPTY_ATOM = Atom.make(EMPTY).pipe(Atom.withLabel("mobile-thread-link-lookup:empty"));
 const NO_REFS_ATOM = Atom.make<ReadonlyArray<{ readonly threadId: string }>>([]);
