@@ -125,7 +125,7 @@ import { markdownFileEditorTarget, resolveMarkdownFileHostPath } from "../markdo
 import { normalizeMarkdownLinkHrefKey } from "./chatMarkdownLinkHref";
 import { isMarkdownFileLinkLabel } from "@goat/shared/markdownLinks";
 import { isElectron } from "../env";
-import { readLocalApi } from "../localApi";
+import { contextMenuForEvent } from "../contextMenuSource";
 import { cn } from "../lib/utils";
 import { resolveRemoteOpenState, useRemoteOpenResolution } from "../remoteOpen";
 import { useRightPanelStore } from "../rightPanelStore";
@@ -687,10 +687,10 @@ function useChatMarkdownState({
     const panelPath =
       fileLinkMeta.workspaceRelativePath ??
       (!canPreviewMedia && isHostPath(fileLinkMeta.filePath) ? fileLinkMeta.filePath : null);
-
     return (
       <MarkdownFileLink
         environmentId={environmentId}
+        fileActions={fileActions}
         href={fileLinkMeta.targetPath}
         targetPath={fileLinkMeta.targetPath}
         iconPath={fileLinkMeta.filePath}
@@ -1098,8 +1098,8 @@ const CHAT_MARKDOWN_COMPONENTS = {
             if (!href || !faviconHost) return;
             event.preventDefault();
             event.stopPropagation();
-            const api = readLocalApi();
-            if (!api) return;
+            const showContextMenu = contextMenuForEvent(event);
+            if (!showContextMenu) return;
             const threadLinkAction = !canOperateHost
               ? undefined
               : linkedThreadPullRequestFor(href) !== null
@@ -1112,7 +1112,7 @@ const CHAT_MARKDOWN_COMPONENTS = {
               canOpenInPreview,
               threadLinkAction,
               position: { x: event.clientX, y: event.clientY },
-              showContextMenu: (items, position) => api.contextMenu.show(items, position),
+              showContextMenu,
               openInPreview: async (target) => {
                 const result = await openExternalLinkInPreview(target);
                 if (result._tag === "Failure" && !isAtomCommandInterrupted(result)) {
