@@ -10,6 +10,7 @@ import {
   OrchestrationV2ConversationMessageJson,
   OrchestrationV2TurnItemJson,
   ScheduledTaskSchedule,
+  scheduledTaskThreadMode,
   type ScheduledTask,
   type OrchestrationV2Run,
   type OrchestrationV2StoredEvent,
@@ -126,6 +127,7 @@ interface Row {
   readonly admitted_next_run_at: string | null;
   readonly admitted_schedule_digest: string;
   readonly admitted_enabled: number;
+  readonly first_bind_project_id: string | null;
   readonly webhook_delivery_id: string | null;
   readonly thread_id: string | null;
   readonly run_id: string | null;
@@ -346,7 +348,10 @@ export const make = Effect.fn("ScheduledTaskRuns.make")(function* (
             readonly next_run_at: string | null;
             readonly schedule_json: string;
             readonly enabled: number;
-          }>`SELECT created_at,next_run_at,schedule_json,enabled FROM scheduled_tasks WHERE task_id=${input.task.id}`;
+            readonly project_id: string;
+            readonly thread_id: string | null;
+            readonly thread_mode: string;
+          }>`SELECT created_at,next_run_at,schedule_json,enabled,project_id,thread_id,thread_mode FROM scheduled_tasks WHERE task_id=${input.task.id}`;
           const task = tasks[0];
           if (
             !task ||
@@ -410,14 +415,24 @@ export const make = Effect.fn("ScheduledTaskRuns.make")(function* (
             completedAt: null,
           };
           const json = yield* encode(snapshot);
+          const mode = scheduledTaskThreadMode(input.task);
+          const firstBindProject =
+            mode !== "new_thread" &&
+            (task.thread_mode === "continue" || task.thread_mode === "fresh_session") &&
+            task.thread_id === null &&
+            input.task.threadId === null &&
+            task.project_id === input.task.projectId &&
+            !input.messageId.startsWith(ROUTINE_MESSAGE_PREFIX)
+              ? task.project_id
+              : null;
           if (existing) {
             yield* sql`UPDATE scheduled_task_runs SET dispatch_status='dispatching',status='dispatching',thread_id=NULL,run_id=NULL,
           requested_at=${input.requestedAt},completed_at=NULL,dispatch_bookkept_at=NULL,last_sequence=0,snapshot_json=${json},attempt=attempt+1,
-          admitted_next_run_at=${task.next_run_at},admitted_schedule_digest=${task.schedule_json},admitted_enabled=${task.enabled}
+          admitted_next_run_at=${task.next_run_at},admitted_schedule_digest=${task.schedule_json},admitted_enabled=${task.enabled},first_bind_project_id=${firstBindProject}
           WHERE firing_id=${input.firingId}`;
           } else {
-            yield* sql`INSERT INTO scheduled_task_runs (firing_id,task_id,task_created_at,message_id,trigger_kind,admitted_next_run_at,admitted_schedule_digest,admitted_enabled,webhook_delivery_id,dispatch_status,status,requested_at,snapshot_json)
-          VALUES (${input.firingId},${input.task.id},${input.task.createdAt},${input.messageId},${input.triggerKind},${task.next_run_at},${task.schedule_json},${task.enabled},${input.webhookDeliveryId},'dispatching','dispatching',${input.requestedAt},${json})`;
+            yield* sql`INSERT INTO scheduled_task_runs (firing_id,task_id,task_created_at,message_id,trigger_kind,admitted_next_run_at,admitted_schedule_digest,admitted_enabled,webhook_delivery_id,dispatch_status,status,requested_at,snapshot_json,first_bind_project_id)
+          VALUES (${input.firingId},${input.task.id},${input.task.createdAt},${input.messageId},${input.triggerKind},${task.next_run_at},${task.schedule_json},${task.enabled},${input.webhookDeliveryId},'dispatching','dispatching',${input.requestedAt},${json},${firstBindProject})`;
           }
           yield* sql`UPDATE scheduled_tasks SET last_firing_id=${input.firingId},last_run_at=${input.requestedAt},last_run_status='running',last_run_error=NULL,
         last_run_webhook_delivery_id=${input.webhookDeliveryId},updated_at=${input.requestedAt},run_count=run_count+1 WHERE task_id=${input.task.id} AND created_at=${input.task.createdAt}`;
@@ -502,9 +517,33 @@ export const make = Effect.fn("ScheduledTaskRuns.make")(function* (
       const json = yield* encode(next);
       const changed = json !== row.snapshot_json;
       if (!changed && sequence <= row.last_sequence) continue;
+      if (
+        row.first_bind_project_id != null &&
+        before.dispatchStatus !== "accepted" &&
+        hasMessage === true &&
+        run?.userMessageId === row.message_id
+      ) {
+        // The launch's initial message and the binding commit together.
+        yield* sql`
+          UPDATE scheduled_tasks SET thread_id = ${run.threadId}
+          WHERE task_id = ${row.task_id} AND created_at = ${row.task_created_at}
+            AND last_firing_id = ${row.firing_id} AND thread_id IS NULL
+            AND project_id = ${row.first_bind_project_id} AND thread_mode IN ('continue','fresh_session')
+            AND EXISTS (
+              SELECT 1 FROM orchestration_v2_projection_threads
+              WHERE thread_id = ${run.threadId} AND project_id = scheduled_tasks.project_id
+                AND deleted_at IS NULL AND archived_at IS NULL
+            )
+        `;
+      }
+      const firstBindProject =
+        next.dispatchStatus === "accepted" || next.dispatchStatus === "failed"
+          ? null
+          : row.first_bind_project_id;
       const updated =
         yield* sql`UPDATE scheduled_task_runs SET thread_id=${next.threadId},run_id=${next.runId},dispatch_status=${next.dispatchStatus},
-        status=${next.status},completed_at=${next.completedAt},snapshot_json=${json},last_sequence=${Math.max(sequence, row.last_sequence)}
+        status=${next.status},completed_at=${next.completedAt},snapshot_json=${json},last_sequence=${Math.max(sequence, row.last_sequence)},
+        first_bind_project_id=${firstBindProject}
         WHERE firing_id=${row.firing_id} AND task_created_at=${row.task_created_at} AND last_sequence=${row.last_sequence}
         AND EXISTS (SELECT 1 FROM scheduled_tasks WHERE task_id=${row.task_id} AND created_at=${row.task_created_at}) RETURNING firing_id`;
       if (!updated.length)

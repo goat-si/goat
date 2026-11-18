@@ -1,3 +1,4 @@
+import { stubWorkerBadges } from "./headlessWorkerBadges.ts";
 // @effect-diagnostics nodeBuiltinImport:off globalTimers:off -- Owns Playwright resources and their idle timer outside the Effect runtime.
 import * as HostProcess from "@goat/shared/HostProcess";
 import { INCOGNITO_BROWSER_PROFILE_ID, type PreviewSessionStore } from "@goat/contracts";
@@ -178,6 +179,7 @@ export class ServerBrowserContexts {
       const launched = this.launchOptions().then(async (options) => {
         const { chromium } = loadPlaywright();
         const browser = await this.launch(options, () => chromium.launch(options));
+        stubWorkerBadges(browser);
         browser.on("disconnected", () => {
           if (this.browser === launched) this.browser = undefined;
         });
@@ -268,9 +270,11 @@ export class ServerBrowserContexts {
     const options = await this.launchOptions();
     const { chromium } = loadPlaywright();
     await NodeFSP.mkdir(directory, { recursive: true });
-    return this.launch(options, () =>
+    const context = await this.launch(options, () =>
       chromium.launchPersistentContext(directory, { ...options, ...contextOptions }),
     );
+    stubWorkerBadges(context);
+    return context;
   }
 
   private profileDirectory(profileId: string) {

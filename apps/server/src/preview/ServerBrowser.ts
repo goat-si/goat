@@ -1,6 +1,16 @@
+import { makeServerBrowserControls } from "./ServerBrowserControls.ts";
+import { BROWSER_TITLE_LIMIT, makeBrowserTitleWatcher } from "./browserTitleWatcher.ts";
+import { makeSaveDownload } from "./saveBrowserDownload.ts";
+import { stopUnresponsiveScript } from "./stopUnresponsiveScript.ts";
+import { SnapshotTiming } from "./snapshotTiming.ts";
 import { makeRecordingFrames } from "./RecordingFrames.ts";
 import { withinStatusDeadline } from "./statusDeadline.ts";
-import { acceptClosingDialog, closeServerPage, unloadDesktopTab } from "./ServerBrowserClose.ts";
+import {
+  acceptClosingDialog,
+  closeServerPage,
+  makeBeforePreviewClose,
+  unloadDesktopTab,
+} from "./ServerBrowserClose.ts";
 import { connectDesktopPage, withTabSetupCleanup } from "./TabSetupCleanup.ts";
 import { desktopReattachment } from "./DesktopReattachment.ts";
 import { timedShutdownPhase } from "@goat/shared/timedShutdownPhase";
@@ -61,9 +71,9 @@ import * as PubSub from "effect/PubSub";
 import * as Stream from "effect/Stream";
 import type * as ChildProcessSpawner from "effect/process/ChildProcessSpawner";
 import * as NodeCrypto from "node:crypto";
-import * as NodeFSP from "node:fs/promises";
 import * as NodePath from "node:path";
-import type { CDPSession, Download, FileChooser, Page } from "playwright-core";
+import * as NodeUtil from "node:util";
+import type { CDPSession, Page } from "playwright-core";
 
 import * as ServerConfig from "../config.ts";
 import * as ServerEnvironment from "../environment/ServerEnvironment.ts";
@@ -77,7 +87,7 @@ import * as ServerBrowserReadiness from "./serverBrowserReadiness.ts";
 import * as PreviewBrowserHost from "./PreviewBrowserHost.ts";
 import { presentAsChrome, ServerBrowserContexts } from "./ServerBrowserContexts.ts";
 import { ServerBrowserDiagnostics } from "./ServerBrowserDiagnostics.ts";
-import type { Recording, ServerDownload, ServerTab, ViewerState } from "./ServerBrowserTab.ts";
+import type { Recording, ServerTab, ViewerState } from "./ServerBrowserTab.ts";
 import * as ServerBrowserPage from "./ServerBrowserPage.ts";
 import { settleInitialOpen } from "./unloadedOpen.ts";
 import * as AgentTabState from "./agentTabState.ts";
@@ -104,7 +114,10 @@ import {
   tabOwner,
   type ServerBrowserSessionView,
 } from "./ServerBrowserSessions.ts";
-import { makeServerBrowserControls, type ServerBrowserControls } from "./ServerBrowserControls.ts";
+import {
+  makeNativePreviewAdjustment,
+  type NativePreviewAdjustment,
+} from "./ServerBrowserNativeStop.ts";
 import { pointBefore, sleepUntil, tabKey } from "./ServerBrowserPointer.ts";
 import * as ServerBrowserScreen from "./ServerBrowserScreen.ts";
 import * as LoadError from "./serverBrowserLoadError.ts";
@@ -119,7 +132,7 @@ import { makeRendering, UNATTACHED_FILL_VIEWPORT } from "./ServerBrowserRenderin
 import { inputFence } from "./PreviewInputFence.ts";
 import { PopupNavigationRequests } from "./PopupNavigationRequests.ts";
 import { recordCopies, recordFrameCopies, dispatchViewerKey } from "./ServerBrowserClipboard.ts";
-import * as PreviewUpload from "./PreviewUpload.ts";
+import { makeFileChoosers } from "./ServerBrowserFileChooser.ts";
 import { makeContextPreparer, startBrowserWatchers } from "./popupWatchers.ts";
 import { closePopupOnAbort, inspectPopup, type AdoptedPage } from "./popupAdmission.ts";
 import { closeUnadoptedPopup } from "./popupAdmission.ts";
@@ -127,7 +140,7 @@ import { pageRead } from "./pageRead.ts";
 import { attachNetworkTracker } from "./networkTracker.ts";
 import { FENCED_ALLOWED_OPERATIONS, READ_OPERATIONS } from "./readOperations.ts";
 import { inPageFetch, resolveFetchUrl } from "./inPageFetch.ts";
-import { artifactFileName, publishArtifact, publishFetchedBody } from "./browserArtifacts.ts";
+import { publishFetchedBody } from "./browserArtifacts.ts";
 import { collectWhileScrolling } from "./scrollCollector.ts";
 import { initialTabChannel, secretBlockedGate, tabActionGate } from "./tabActionGate.ts";
 import { makeOpenRunSignals } from "./openRunSignals.ts";
@@ -152,6 +165,7 @@ const decodeLogsInput = Schema.decodeUnknownSync(PreviewAutomationLogsInput);
 const SERVER_HOST_CLIENT_ID = SERVER_BROWSER_AUTOMATION_CLIENT_ID;
 const RECORDING_SCREENCAST = { format: "jpeg", quality: 90, everyNthFrame: 1 } as const;
 const RENDER_SCALE = 2;
+// Native Chromium ACKs gate capture; Electron relay ACKs gate only this viewer's delivery slot.
 const SCREENCAST_ACK_PACE_MS = 100;
 const SCREENCAST_SETTLE_MS = 200;
 const SCREENCAST_MOTION_FRAMES = 4;
@@ -163,7 +177,6 @@ const DESKTOP_ATTACH_TIMEOUT = "10 seconds";
 const VIEWER_STILL_WAIT = "2 seconds";
 const VIEWER_OUTPUT_LIMIT = 64;
 
-// Chromium allows three unacked frames, so 100 ms pacing caps viewers near 30 fps.
 const decodeViewportSetting = Schema.decodeUnknownSync(PreviewViewportSettingSchema);
 const AGENT_CURSOR_MOVE_MS = 160;
 const AGENT_CURSOR_CLICK_LEAD_MS = 40;
@@ -248,8 +261,14 @@ export class ServerBrowser extends Context.Service<
     readonly sessions: Effect.Effect<ReadonlyArray<ServerBrowserSessionView>>;
     /** Wakes after a tab opens, closes or changes owner, privacy or stop. */
     readonly sessionChanges: Stream.Stream<void>;
+    readonly stopAllAgents: Effect.Effect<void>;
+    readonly controlSession: (input: {
+      readonly threadId: string;
+      readonly tabId: string;
+      readonly control: "stop" | "handBack";
+    }) => Effect.Effect<boolean>;
   } & ServerBrowserScreen.SurfaceService &
-    ServerBrowserControls
+    NativePreviewAdjustment
 >()("goat/preview/ServerBrowser") {}
 
 const make = Effect.gen(function* () {
@@ -270,6 +289,7 @@ const make = Effect.gen(function* () {
     applyOpenRendering,
     applyRendering,
     applySetting,
+    applyZoom,
     broadcastViewport,
     desktopStatusViewport,
     measureDesktopViewport,
@@ -281,6 +301,28 @@ const make = Effect.gen(function* () {
   const readReadiness = yield* ServerBrowserReadiness.makeReadinessReader;
 
   const tabs = new Map<string, ServerTab>();
+  const {
+    answerFileChooser,
+    closeFileChooser,
+    isFileChooserCurrent,
+    offerFileChooser,
+    pushFileChooser,
+    uploadFiles,
+  } = makeFileChoosers(tabs);
+  const pendingTabs = new Map<
+    string,
+    {
+      readonly agentId: string | null;
+      promise?: Promise<ServerTab>;
+      readonly recovery?: {
+        readonly threadId: ThreadId;
+        readonly tabId: string;
+        readonly control: SessionControl;
+        readonly bindPage: (page: Page) => void;
+      };
+    }
+  >();
+  const browserControls = makeServerBrowserControls();
   const screen = ServerBrowserScreen.makeSurface<ServerTab>(
     (threadId, tabId) => tabs.get(tabKey(threadId, tabId)),
     (key, cursor) => runFork(desktopChannel.cursorState?.(key, cursor) ?? Effect.void),
@@ -295,13 +337,9 @@ const make = Effect.gen(function* () {
         )
         .catch(constVoid);
     },
+    browserControls.find,
   );
   const sessionChanges = yield* PubSub.sliding<void>(1);
-  const pendingTabs = new Map<
-    string,
-    { readonly agentId: string | null; promise?: Promise<ServerTab> }
-  >();
-
   const closedPendingTabs = new Set<string>();
   const adoptedPages = new Map<string, AdoptedPage>();
   const popupNavigation = new PopupNavigationRequests(
@@ -392,40 +430,57 @@ const make = Effect.gen(function* () {
     broadcastControl(tab);
   };
   const report = (tab: ServerTab, navStatus: PreviewNavStatus) => {
+    const document = tab.documentGeneration;
+    const loadError = tab.loadError;
     void tab.cdp
       .send("Page.getNavigationHistory")
       .catch(() => null)
       .then((history) => {
+        if (
+          tab.closing ||
+          tab.crash ||
+          (navStatus._tag === "Success" &&
+            (tab.documentGeneration !== document || tab.loadError !== loadError))
+        )
+          return;
         const index = history?.currentIndex ?? 0;
         const count = history?.entries.length ?? 0;
-        runFork(
-          manager
-            .reportStatus({
-              threadId: tab.threadId,
-              tabId: tab.tabId,
-              serverControlled: true,
-              navStatus,
-              canGoBack: index > 0,
-              canGoForward: index < count - 1,
-            })
-            .pipe(Effect.ignore),
-        );
+        const next = {
+          threadId: tab.threadId,
+          tabId: tab.tabId,
+          serverControlled: true,
+          navStatus,
+          canGoBack: index > 0,
+          canGoForward: index < count - 1,
+        };
+        if (NodeUtil.isDeepStrictEqual(tab.lastReport, next)) return;
+        tab.lastReport = next;
+        runFork(manager.reportStatus(next).pipe(Effect.ignore));
       });
   };
 
   const reportLoaded = async (tab: ServerTab) => {
     const url = tab.page.url();
     // Chromium's error page loads after `requestfailed` and must not clear LoadFailed.
-    if (url === "about:blank" || url.startsWith("chrome-error://")) return;
+    if (tab.closing || url === "about:blank" || url.startsWith("chrome-error://")) return;
     // A navigation that starts and fails during the title read leaves the URL unchanged.
-    const generation = tab.navigationGeneration;
-    const title = (await tab.page.title().catch(() => "")).slice(0, 512);
-    if (tab.navigationGeneration !== generation || tab.loading || tab.page.url() !== url) return;
+    const document = tab.documentGeneration;
+    const loadError = tab.loadError;
+    const title = (await tab.page.title().catch(() => "")).slice(0, BROWSER_TITLE_LIMIT);
+    if (
+      tab.closing ||
+      tab.documentGeneration !== document ||
+      tab.loadError !== loadError ||
+      tab.loading ||
+      tab.page.url() !== url
+    )
+      return;
     report(tab, {
       _tag: "Success",
       url: ServerBrowserPage.withoutDataPayload(url).slice(0, 2048),
       title,
     });
+    if (!loadError) await tab.titleWatcher.watch(document, title, () => reportLoaded(tab));
   };
 
   const reportLiveTabs = () => {
@@ -453,28 +508,100 @@ const make = Effect.gen(function* () {
 
   const sessionOpen = (tab: ServerTab) => !closedSessions.has(tabKey(tab.threadId, tab.tabId));
 
-  const dropTab = (tab: ServerTab, closeSession: boolean) => {
+  const dropTab = (tab: ServerTab, closeSession: boolean, replacingRenderer = false) => {
     const key = tabKey(tab.threadId, tab.tabId);
     if (tabs.get(key) !== tab) return;
+    const wasClosing = tab.closing;
     tab.closing = true;
     viewerArrived(tab);
-    blockedTabs.drop(tab.threadId, tab.tabId);
+    if (!replacingRenderer) blockedTabs.drop(tab.threadId, tab.tabId);
     screen.notify({ kind: "stop", reason: "tabClosed", threadId: tab.threadId, tabId: tab.tabId });
     tabs.delete(key);
-    if (tab.openerTabId) closedPopups.record(tab.threadId, tab.tabId, tab.openerTabId);
+    browserControls.detach(key, tab.control);
+    if (tab.openerTabId && !replacingRenderer)
+      closedPopups.record(tab.threadId, tab.tabId, tab.openerTabId);
+    tab.titleWatcher.stop();
     tab.diagnostics.dispose();
     clearAbortedNavigation(tab);
     // A desktop page outlives the connection unless its session closed with it.
-    const end = tab.desktop && !closeSession && sessionOpen(tab) ? "reconnect" : "gone";
+    const end =
+      (tab.desktop || replacingRenderer) && !closeSession && !wasClosing && sessionOpen(tab)
+        ? "reconnect"
+        : "gone";
     for (const viewer of tab.viewers) viewer.push({ _tag: end });
-    void tab.control.close().catch(constVoid);
+    void tab.control.close({ preserveHandoff: replacingRenderer }).catch(constVoid);
     if (tab.desktop) void tab.desktop.close().catch(constVoid);
-    else closeServerPage(tab.page, tab.isolatedContext, tab.dialog !== null);
+    else if (!replacingRenderer)
+      closeServerPage(tab.page, tab.isolatedContext, tab.dialog !== null);
     void tab.recording?.encoder.close().catch(constVoid);
     reportLiveTabs();
     if (closeSession) {
       runFork(manager.close({ threadId: tab.threadId, tabId: tab.tabId }).pipe(Effect.ignore));
     }
+  };
+
+  const recoverRenderer = (tab: ServerTab) => {
+    if (tab.desktop) return dropTab(tab, true);
+    const key = tabKey(tab.threadId, tab.tabId);
+    if (tabs.get(key) !== tab || tab.closing) return;
+    const url = tab.crash?.url ?? tab.page.url();
+    const crash = {
+      url: ServerBrowserPage.withoutDataPayload(url).slice(0, 2048),
+      code: -2,
+      description: "Page crashed",
+    };
+    tab.crash = { error: crash, url };
+    let page: Page | undefined;
+    const control = tab.control.replacement(() => {
+      if (page) ServerBrowserPage.invalidateRefs(page);
+    });
+    const recovery = {
+      threadId: tab.threadId,
+      tabId: tab.tabId,
+      control,
+      bindPage: (replacement: Page) => {
+        page = replacement;
+      },
+    };
+    screen.watchHandoffs(recovery);
+    browserControls.bind(key, control, { preserveStop: true });
+    const replacement = Promise.resolve()
+      .then(async () => {
+        await runPromise(
+          manager.reportStatus({
+            threadId: tab.threadId,
+            tabId: tab.tabId,
+            serverControlled: true,
+            navStatus: { _tag: "LoadFailed", title: "", ...crash },
+            canGoBack: false,
+            canGoForward: false,
+          }),
+        );
+        await tab.page.close().catch(constVoid);
+        const { sessions } = await runPromise(manager.list({ threadId: tab.threadId }));
+        const snapshot = sessions.find(
+          (session) => session.tabId === tab.tabId && session.runtime === "server",
+        );
+        if (!snapshot)
+          throw new ServerBrowserTabNotFoundError({ threadId: tab.threadId, tabId: tab.tabId });
+        return createTab(snapshot, tab);
+      })
+      .catch((cause: unknown) => {
+        browserControls.detach(key, control);
+        void control.close().catch(constVoid);
+        runFork(Effect.logWarning("server preview renderer could not recover", { cause }));
+        if (tab.isolatedContext) void tab.page.context().close().catch(constVoid);
+        throw cause;
+      })
+      .finally(() => {
+        if (pendingTabs.get(key)?.promise === replacement) {
+          pendingTabs.delete(key);
+          closedPendingTabs.delete(key);
+        }
+      });
+    pendingTabs.set(key, { agentId: control.agentId, promise: replacement, recovery });
+    dropTab(tab, false, true);
+    return replacement.then(constVoid, constVoid);
   };
 
   const desktopRenders = (snapshot: PreviewSessionSnapshot) =>
@@ -500,14 +627,15 @@ const make = Effect.gen(function* () {
       closeScope: (scope) => runPromise(Scope.close(scope, Exit.void)),
     });
 
-  const createTab = (snapshot: PreviewSessionSnapshot): Promise<ServerTab> =>
+  const createTab = (snapshot: PreviewSessionSnapshot, replaced?: ServerTab): Promise<ServerTab> =>
     withTabSetupCleanup(async (opened) => {
-      const adopted = adoptedPages.get(tabKey(snapshot.threadId, snapshot.tabId));
+      const key = tabKey(snapshot.threadId, snapshot.tabId);
+      const adopted = adoptedPages.get(key);
       const openSignal = adopted
         ? adopted.signal
         : openRuns.signal(snapshot.threadId, snapshot.automationOwner);
       openSignal?.throwIfAborted();
-      adoptedPages.delete(tabKey(snapshot.threadId, snapshot.tabId));
+      adoptedPages.delete(key);
       if (adopted) opened.push(() => adopted.close().catch(popupCloseFailure(adopted.page)));
       const desktop =
         adopted === undefined &&
@@ -529,13 +657,15 @@ const make = Effect.gen(function* () {
         );
       }
       const isolatedContext =
-        adopted === undefined &&
-        desktop === null &&
-        ((snapshot.automationOwner !== undefined && snapshot.profileId === undefined) ||
-          snapshot.profileId === INCOGNITO_BROWSER_PROFILE_ID);
+        replaced?.isolatedContext ??
+        (adopted === undefined &&
+          desktop === null &&
+          ((snapshot.automationOwner !== undefined && snapshot.profileId === undefined) ||
+            snapshot.profileId === INCOGNITO_BROWSER_PROFILE_ID));
       const context =
         adopted?.page.context() ??
         desktop?.page.context() ??
+        replaced?.page.context() ??
         (await contexts.contextFor(
           snapshot.profileId ?? "default",
           isolatedContext ? tabKey(snapshot.threadId, snapshot.tabId) : undefined,
@@ -562,9 +692,14 @@ const make = Effect.gen(function* () {
       openSignal?.throwIfAborted();
       page.setDefaultTimeout(NAVIGATION_TIMEOUT_MS);
       page.setDefaultNavigationTimeout(NAVIGATION_TIMEOUT_MS);
-      const control = new SessionControl(snapshot.automationOwner ?? null, () =>
-        ServerBrowserPage.invalidateRefs(page),
-      );
+      const recovery = replaced && pendingTabs.get(key)?.recovery;
+      recovery?.bindPage(page);
+      const control =
+        recovery?.control ??
+        new SessionControl(snapshot.automationOwner ?? null, () =>
+          ServerBrowserPage.invalidateRefs(page),
+        );
+      browserControls.restoreStop(key, control);
       opened.push(() => control.close());
       control.onDispatchCut(inputFence(cdp));
       const diagnostics = new ServerBrowserDiagnostics(
@@ -601,12 +736,13 @@ const make = Effect.gen(function* () {
         },
         isolatedContext,
         session:
+          replaced?.session ??
           (adopted && tabs.get(tabKey(snapshot.threadId, adopted.openerTabId))?.session) ??
           tabSession({ isolatedContext, profileId: snapshot.profileId, desktop }),
         desktop: desktop === null ? null : { close: desktop.close },
         profileId: snapshot.profileId,
-        openerTabId: adopted?.openerTabId,
-        downloads: [],
+        openerTabId: adopted?.openerTabId ?? replaced?.openerTabId,
+        downloads: replaced?.downloads ?? [],
         fileChooser: null,
         dialog: null,
         setting: snapshot.viewport ?? FILL_PREVIEW_VIEWPORT,
@@ -620,6 +756,12 @@ const make = Effect.gen(function* () {
         desktopResize: Promise.withResolvers<void>(),
         loading: false,
         loadError: undefined,
+        titleWatcher: makeBrowserTitleWatcher(cdp, () => {
+          const runId = blockedTabs.capture(tab.threadId)?.runId;
+          return !blockedTabs.isFenced(tab, runId) && !blockedTabs.blockedFrame(tab, runId);
+        }),
+        lastReport: undefined,
+        crash: replaced?.crash,
         closing: false,
         recording: null,
         recordingStart: null,
@@ -628,7 +770,7 @@ const make = Effect.gen(function* () {
         navigationGeneration: 0,
         stoppedGeneration: null,
         pendingInitialRequestUrl: null,
-        documentGeneration: 0,
+        documentGeneration: replaced ? replaced.documentGeneration + 1 : 0,
         abortedNavigation: null,
         captureLock: Promise.resolve(),
         capturing: 0,
@@ -673,9 +815,11 @@ const make = Effect.gen(function* () {
         const stoppedFirst = Stop.stoppedFirstRequest(tab, request.url());
         navigationGenerations.set(request, ++tab.navigationGeneration);
         tab.documentGeneration++;
+        tab.titleWatcher.stop();
         clearAbortedNavigation(tab);
         tab.loading = true;
         tab.loadError = undefined;
+        tab.crash = undefined;
         if (stoppedFirst) {
           tab.stoppedGeneration = tab.navigationGeneration;
           return stopLoading.settle(tab, tab.navigationGeneration);
@@ -697,7 +841,7 @@ const make = Effect.gen(function* () {
       page.on("load", () => {
         tab.pendingInitialRequestUrl = null;
         tab.loading = false;
-        void reportLoaded(tab);
+        return reportLoaded(tab);
       });
       let setupSignal = adopted?.signal;
       page.on("framenavigated", (frame) => {
@@ -763,13 +907,13 @@ const make = Effect.gen(function* () {
         .catch(constVoid);
       openSignal?.throwIfAborted();
       setupSignal = undefined;
-      // Playwright cannot reload a crashed page, so it must leave the tab list.
-      const key = tabKey(tab.threadId, tab.tabId);
-      if (closedPendingTabs.delete(key)) {
+      if (closedPendingTabs.has(key)) {
+        if (desktop && tab.dialog === null) await unloadDesktopTab(tab);
         throw new ServerBrowserTabNotFoundError({ threadId: tab.threadId, tabId: tab.tabId });
       }
-      page.on("close", () => dropTab(tab, true));
-      page.on("crash", () => dropTab(tab, true));
+      page.on("close", () => dropTab(tab, !tab.closing));
+      page.on("crash", () => recoverRenderer(tab));
+      browserControls.bind(key, control);
       tabs.set(key, tab);
       opened.length = 0;
       tab.control.onChange(ServerBrowserScreen.authorityReporter(tab, screen.notify));
@@ -843,180 +987,13 @@ const make = Effect.gen(function* () {
     });
   };
 
-  const saveDownload = async (tab: ServerTab, download: Download) => {
-    const id = NodeCrypto.randomUUID();
-    let path: string | undefined;
-    const navigation =
-      download.url() === tab.abortedNavigation?.url ? tab.abortedNavigation.generation : null;
-    if (navigation !== null) clearAbortedNavigation(tab);
-    let offered: { readonly id: string; readonly fileName: string } | undefined;
-    try {
-      if (await download.failure()) return;
-      // A saved download outlives its tab until storage cleanup, like a screenshot.
-      const suggestedName = download.suggestedFilename();
-      path = await publishArtifact(
-        config.browserArtifactsDir,
-        artifactFileName("download", download.url(), { suggestedName }),
-        (target) => download.saveAs(target),
-      );
-      const { size } = await NodeFSP.stat(path);
-      if (tab.closing || size > ServerBrowserLimits.DOWNLOAD_MAX_BYTES) {
-        await NodeFSP.rm(path, { force: true });
-        return;
-      }
-      const saved: ServerDownload = {
-        id,
-        fileName: suggestedName.slice(0, 255) || "download",
-        path,
-        sizeBytes: size,
-        url: ServerBrowserPage.withoutDataPayload(download.url()).slice(0, 2048),
-        completedAt: new Date().toISOString(),
-      };
-      tab.downloads.push(saved);
-      for (const evicted of tab.downloads.splice(
-        0,
-        tab.downloads.length - ServerBrowserLimits.DOWNLOAD_LIMIT,
-      )) {
-        await NodeFSP.rm(evicted.path, { force: true }).catch(constVoid);
-      }
-      offered = { id, fileName: saved.fileName };
-      const shownInTab =
-        navigation === tab.navigationGeneration && tab.page.url() === "about:blank";
-      if (shownInTab) return saved;
-      const controller = [...tab.viewers].find((viewer) => viewer.id === tab.control.controller);
-      controller?.push({
-        _tag: "download",
-        id,
-        fileName: saved.fileName,
-        sizeBytes: saved.sizeBytes,
-      });
-      return saved;
-    } catch (cause) {
-      if (path !== undefined) await NodeFSP.rm(path, { force: true }).catch(constVoid);
-      runFork(Effect.logWarning("server preview download failed", { cause }));
-    } finally {
-      if (navigation !== null && !tab.closing) {
-        settleAbortedNavigation(tab, navigation, download.url(), offered);
-      }
-      // saveAs copies the artifact; cached profile contexts otherwise retain the original.
-      await download.delete().catch(constVoid);
-    }
-  };
-
-  const fileChooserMessage = (tab: ServerTab): ServerBrowserViewerOutput | null =>
-    tab.fileChooser
-      ? {
-          _tag: "fileChooser",
-          id: tab.fileChooser.id,
-          multiple: tab.fileChooser.chooser.isMultiple(),
-          accept: tab.fileChooser.accept,
-        }
-      : null;
-
-  // Not isConnected: upload helpers often click an input never added to the page. The handle's
-  // context is destroyed with its document, so a replaced document rejects.
-  const isFileChooserCurrent = (chooser: FileChooser) =>
-    chooser
-      .element()
-      .evaluate(
-        (element) =>
-          element.ownerDocument === (globalThis as unknown as { document: unknown }).document,
-      )
-      .catch(() => false);
-
-  const offerFileChooser = async (tab: ServerTab, chooser: FileChooser) => {
-    const previous = tab.fileChooser;
-    const accept =
-      (await chooser
-        .element()
-        .getAttribute("accept")
-        .catch(() => null)) ?? "";
-    if (!(await isFileChooserCurrent(chooser))) return;
-    if (previous) closeFileChooser(tab);
-    tab.fileChooser = {
-      id: NodeCrypto.randomUUID(),
-      chooser,
-      accept: accept.slice(0, 1024),
-      offeredTo: null,
-    };
-    pushFileChooser(tab);
-  };
-
-  const pushFileChooser = (tab: ServerTab) => {
-    const open = tab.fileChooser;
-    const controller = [...tab.viewers].find((viewer) => viewer.id === tab.control.controller);
-    if (!open || !controller) return;
-    if (open.offeredTo !== controller.id) {
-      tab.fileChooser = { ...open, id: NodeCrypto.randomUUID(), offeredTo: controller.id };
-      if (open.offeredTo !== null)
-        for (const viewer of tab.viewers) viewer.push({ _tag: "fileChooserClosed", id: open.id });
-    }
-    const message = fileChooserMessage(tab);
-    if (message) controller.push(message);
-  };
-
-  const closeFileChooser = (tab: ServerTab) => {
-    const open = tab.fileChooser;
-    if (!open) return;
-    tab.fileChooser = null;
-    for (const viewer of tab.viewers) viewer.push({ _tag: "fileChooserClosed", id: open.id });
-  };
-
-  const setChooserFiles = async (
-    input: Parameters<ServerBrowser["Service"]["answerFileChooser"]>[0],
-  ) => {
-    const tab = tabs.get(tabKey(input.threadId, input.tabId));
-    const open = tab?.fileChooser;
-    if (
-      !tab ||
-      !open ||
-      open.id !== input.chooserId ||
-      open.offeredTo === null ||
-      open.offeredTo !== tab.control.controller
-    )
-      return false;
-    if (input.files.length > 0) {
-      await open.chooser.setFiles(
-        open.chooser.isMultiple() ? [...input.files] : input.files.slice(0, 1),
-      );
-    }
-    if (tab.fileChooser === open) closeFileChooser(tab);
-    return true;
-  };
-  const uploadFiles = async (
-    tab: ServerTab,
-    input: PreviewAutomationUploadInput,
-    gate: ServerBrowserPage.DispatchGate,
-  ) => {
-    await PreviewUpload.validatePaths(input.paths);
-    if (await PreviewUpload.setInputFiles(tab.page, tab.cdp, input, gate)) return undefined;
-    const open = tab.fileChooser;
-    if (!open)
-      throw new ServerBrowserPage.ServerBrowserOperationError(
-        "PreviewAutomationExecutionError",
-        "No file picker is open. Click the page's upload control first, or pass the file input's locator.",
-      );
-    if (input.paths.length > 1 && !open.chooser.isMultiple())
-      throw new ServerBrowserPage.ServerBrowserOperationError(
-        "PreviewAutomationExecutionError",
-        "This file picker accepts one file.",
-      );
-    if (input.paths.length > 0) {
-      const channel = gate.channel;
-      if (!channel) throw new Error("An action channel is required for upload.");
-      const element = await channel.call(() => open.chooser.element());
-      try {
-        await PreviewUpload.uploadInto(tab.cdp, element, input.paths, gate);
-      } finally {
-        if (!gate.signal?.aborted) void channel.dispose(element).catch(constVoid);
-      }
-    } else await gate();
-    if (tab.fileChooser === open) closeFileChooser(tab);
-    return undefined;
-  };
-
-  const answerFileChooser: ServerBrowser["Service"]["answerFileChooser"] = (input) =>
-    Effect.promise(() => setChooserFiles(input).catch(() => false));
+  const saveDownload = makeSaveDownload({
+    directory: config.browserArtifactsDir,
+    clearAbortedNavigation,
+    settleAbortedNavigation,
+    reportFailure: (cause) =>
+      runFork(Effect.logWarning("server preview download failed", { cause })),
+  });
 
   const openDownload: ServerBrowser["Service"]["openDownload"] = (input) =>
     Effect.sync(() => {
@@ -1052,6 +1029,7 @@ const make = Effect.gen(function* () {
         ...(/^https?:/i.test(url) ? { url } : {}),
         runtime: "server",
         ...(opener.profileId === undefined ? {} : { profileId: opener.profileId }),
+        colorScheme: opener.colorScheme,
         ...(opener.session.store === "server" ? { serverRendered: true as const } : {}),
         ...(agentId === null ? {} : { automationOwner: agentId, reveal: false }),
         beforePublish: (snapshot) =>
@@ -1081,11 +1059,12 @@ const make = Effect.gen(function* () {
     if (pending?.promise) return pending.promise;
     const existing = tabs.get(key);
     if (existing) return Promise.resolve(existing);
+    browserControls.reserve(key);
     const adopted = adoptedPages.get(key);
     const opening = createTab(snapshot)
       .catch(async (cause: unknown) => {
         adopted?.release();
-        if (adopted?.signal?.aborted) {
+        if (adopted?.signal?.aborted && !closedPendingTabs.has(key)) {
           adoptedPages.delete(key);
           await adopted.close().catch(popupCloseFailure(adopted.page));
           await runPromise(
@@ -1126,7 +1105,11 @@ const make = Effect.gen(function* () {
     pending: pendingTabs,
     isShown: (tab) => desktopChannel.isShown?.(tab) ?? true,
     isActive: activity.active,
-    drop: (tab) => dropTab(tab, true),
+    drop: (tab) =>
+      manager.close({ threadId: tab.threadId, tabId: tab.tabId }).pipe(
+        Effect.tap(() => Effect.sync(() => dropTab(tab, false))),
+        Effect.catch((cause) => Effect.logWarning("Idle preview tab could not close", { cause })),
+      ),
     now: () => Date.now(),
   });
   const assertTabCapacity = (agentSessionId: string) => {
@@ -1163,6 +1146,7 @@ const make = Effect.gen(function* () {
             beforePublish: (snapshot) => {
               pendingTabs.delete(key);
               key = tabKey(snapshot.threadId, snapshot.tabId);
+              if (snapshot.runtime === "server") browserControls.reserve(key);
               pendingTabs.set(key, reservation);
               input.beforePublish?.(snapshot);
             },
@@ -1436,6 +1420,7 @@ const make = Effect.gen(function* () {
     tab: ServerTab,
     capture: () => Promise<A>,
     deadlineMs?: number,
+    timeout?: () => Error,
   ): Promise<A> =>
     withCaptureLock(
       tab,
@@ -1462,6 +1447,7 @@ const make = Effect.gen(function* () {
         }
       },
       deadlineMs,
+      timeout,
     );
   const stopRecording = (tab: ServerTab) =>
     withCaptureLockHeld(tab, async (hold) => {
@@ -1545,14 +1531,19 @@ const make = Effect.gen(function* () {
     if (!FENCED_ALLOWED_OPERATIONS.has(request.operation)) runSignal?.throwIfAborted();
     const input = request.input;
     switch (request.operation) {
-      case "status":
+      case "status": {
+        const key =
+          request.tabId === undefined ? undefined : tabKey(request.threadId, request.tabId);
+        const pending =
+          key === undefined ? undefined : await pendingTabs.get(key)?.promise?.catch(constVoid);
         return ServerBrowserScreen.checkedAround(
           request.tabId === undefined
             ? latestThreadTab(request.threadId, request.agentSessionId)
-            : tabs.get(tabKey(request.threadId, request.tabId)),
+            : (pending ?? tabs.get(tabKey(request.threadId, request.tabId))),
           request,
           (tab) => statusWithTitle(tab, request.agentSessionId),
         );
+      }
       case "open": {
         SessionControl.requireAgentSession(request);
         const open = input as PreviewAutomationOpenInput;
@@ -1773,8 +1764,6 @@ const make = Effect.gen(function* () {
         );
       tab.control.assertNoHumanControl();
       ServerBrowserScreen.refusePrivateClose(tab);
-      void tab.control.close().catch(constVoid);
-      if (tab.desktop && tab.dialog === null) await unloadDesktopTab(tab);
       await runPromise(manager.close({ threadId: tab.threadId, tabId: tab.tabId }));
       dropTab(tab, false);
       return {};
@@ -1945,19 +1934,24 @@ const make = Effect.gen(function* () {
           actionGate().channel,
         ).then(ServerBrowserScreen.recheck(tab, request));
       case "snapshot": {
+        const timing = new SnapshotTiming();
         return withScreencastsPaused(
           tab,
           () =>
-            ServerBrowserPage.snapshot({
-              ...tab,
-              renderScale: tab.desktop ? "display" : RENDER_SCALE,
-              ...(input as PreviewAutomationSnapshotInput & { fullScreenshot?: boolean }),
-              agentSessionId: request.agentSessionId,
-              actionChannel: actionGate().channel,
-              captureImage: (input as { readonly captureImage?: boolean }).captureImage !== false,
-              timeoutMs: deadlineMs - performance.now(),
-            }),
+            ServerBrowserPage.snapshot(
+              {
+                ...tab,
+                renderScale: tab.desktop ? "display" : RENDER_SCALE,
+                ...(input as PreviewAutomationSnapshotInput & { fullScreenshot?: boolean }),
+                agentSessionId: request.agentSessionId,
+                actionChannel: actionGate().channel,
+                captureImage: (input as { readonly captureImage?: boolean }).captureImage !== false,
+                timeoutMs: deadlineMs - performance.now(),
+              },
+              timing,
+            ),
           deadlineMs,
+          () => timing.timeout(request.timeoutMs),
         )
           .then(ServerBrowserScreen.recheck(tab, request))
           .then((snapshot) => {
@@ -2135,21 +2129,25 @@ const make = Effect.gen(function* () {
     Effect.promise(async () => {
       if (event.type === "opened" && event.snapshot.runtime === "server") {
         const key = tabKey(event.snapshot.threadId, event.snapshot.tabId);
+        browserControls.reserve(key);
         if (event.snapshot.automationOwner === undefined || pendingTabs.has(key) || tabs.has(key))
           await ensureTab(event.snapshot).catch(constVoid);
         return;
       }
       const key = tabKey(event.threadId, event.tabId);
       const tab = tabs.get(key);
-      if (event.type === "closed" && !tab && pendingTabs.has(key)) closedPendingTabs.add(key);
-      if (!tab) return;
       if (event.type === "closed") {
+        browserControls.close(key);
+        if (!tab) {
+          if (pendingTabs.has(key)) closedPendingTabs.add(key);
+          return;
+        }
         closedSessions.add(key);
         dropTab(tab, false);
         closedSessions.delete(key);
         return;
       }
-      if (event.type === "resized") {
+      if (event.type === "resized" && tab) {
         // Desktop tabs only record the setting, so status need not wait behind an agent action.
         if (tab.desktop) tab.setting = event.snapshot.viewport ?? FILL_PREVIEW_VIEWPORT;
         await tab.control
@@ -2180,6 +2178,8 @@ const make = Effect.gen(function* () {
     const message = ViewerInput.asRecord(raw);
     if (!message) return;
     const modifiers = ViewerInput.modifiersOf(message);
+    const stillControls = () => !tab.closing && tab.control.controller === viewer.id;
+    const leave = () => stopUnresponsiveScript(session, () => stillControls() && !tab.dialog);
     switch (message.type) {
       case "mouse": {
         const action = message.action;
@@ -2234,6 +2234,7 @@ const make = Effect.gen(function* () {
         const current = tab.page.viewportSize();
         if (current?.width === width && current.height === height) return;
         await tab.page.setViewportSize({ width, height });
+        await applyZoom(tab);
         await broadcastViewport(tab);
         return;
       }
@@ -2250,11 +2251,15 @@ const make = Effect.gen(function* () {
         if (typeof message.url === "string") {
           const url = normalizePreviewUrl(message.url);
           tab.pendingInitialRequestUrl = null;
-          tab.control.trackUntilHandoff(tab.page.goto(url, VIEWER_NAVIGATION_OPTIONS));
+          await leave();
+          if (stillControls())
+            tab.control.trackUntilHandoff(tab.page.goto(url, VIEWER_NAVIGATION_OPTIONS));
         }
         return;
       case "history":
         tab.pendingInitialRequestUrl = null;
+        await leave();
+        if (!stillControls()) return;
         tab.control.trackUntilHandoff(
           ViewerInput.num(message.delta) < 0
             ? tab.page.goBack(VIEWER_NAVIGATION_OPTIONS)
@@ -2263,6 +2268,12 @@ const make = Effect.gen(function* () {
         return;
       case "reload":
         tab.pendingInitialRequestUrl = null;
+        if (tab.crash) {
+          tab.control.trackUntilHandoff(tab.page.goto(tab.crash.url, VIEWER_NAVIGATION_OPTIONS));
+          return;
+        }
+        await leave();
+        if (!stillControls()) return;
         if (message.ignoreCache === true) {
           await session.send("Page.reload", { ignoreCache: true });
           return;
@@ -2532,6 +2543,7 @@ const make = Effect.gen(function* () {
     } satisfies ServerBrowserViewer;
   });
 
+  yield* manager.registerBeforeClose(makeBeforePreviewClose(tabs, pendingTabs, closedPendingTabs));
   yield* manager.events.pipe(Stream.runForEach(mirrorManagerEvent), Effect.forkScoped);
   if (
     !PreviewBrowserHost.sandboxDisabled(yield* HostProcess.Environment) &&
@@ -2634,7 +2646,9 @@ const make = Effect.gen(function* () {
     sessions: Effect.promise(() => Promise.all([...tabs.values()].map(browserSessionView))),
     sessionChanges: Stream.fromPubSub(sessionChanges),
     ...screen.service,
-    ...makeServerBrowserControls(tabs, manager, stopLoading.stop),
+    stopAllAgents: browserControls.stopAllAgents,
+    controlSession: browserControls.controlSession,
+    adjustPreview: makeNativePreviewAdjustment(tabs, manager, stopLoading.stop),
   });
 });
 

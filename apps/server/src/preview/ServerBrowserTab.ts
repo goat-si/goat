@@ -1,8 +1,10 @@
+import type { makeBrowserTitleWatcher } from "./browserTitleWatcher.ts";
 import type {
   PreviewAppearancePreference,
   PreviewAutomationActionEvent,
   PreviewAutomationConsoleEntry,
   PreviewAutomationNetworkEntry,
+  PreviewReportStatusInput,
   PreviewTabSession,
   PreviewViewportSetting,
   ThreadId,
@@ -90,7 +92,12 @@ export interface ServerTab {
   /** Settles at the desktop page's next main-frame resize. */
   desktopResize: PromiseWithResolvers<void>;
   loading: boolean;
+  readonly titleWatcher: ReturnType<typeof makeBrowserTitleWatcher>;
+  lastReport: PreviewReportStatusInput | undefined;
   loadError: import("@goat/contracts").PreviewAutomationLoadError | undefined;
+  crash:
+    | { readonly error: import("@goat/contracts").PreviewAutomationLoadError; readonly url: string }
+    | undefined;
   closing: boolean;
   recording: Recording | null;
   initialNavigation: Promise<void> | null;

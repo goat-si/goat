@@ -628,10 +628,22 @@ export class SessionControl {
       await this.releaseOwner(viewerId, afterDrain ?? (async () => {}), false);
   }
 
-  async close() {
+  replacement(invalidate: () => void) {
+    const next = new SessionControl(this.agentId, invalidate);
+    next.epoch = this.epoch + 1;
+    next.authorityEpoch = this.authorityEpoch + 1;
+    next.agentStopped = this.agentStopped || (this.owner !== null && this.requested === null);
+    next.requested = this.requested;
+    next.requestId = this.requestId;
+    next.notice = this.notice;
+    return next;
+  }
+
+  async close({ preserveHandoff = false } = {}) {
     if (!this.closed) {
       this.closed = true;
-      this.clearRequest("ended");
+      if (preserveHandoff) this.agentStopped ||= this.owner !== null && this.requested === null;
+      else this.clearRequest("ended");
       this.changeOwner(null);
     }
     await this.tail;

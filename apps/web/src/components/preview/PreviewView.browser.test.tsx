@@ -35,6 +35,8 @@ const mocks = vi.hoisted(() => ({
   pictureInPicture: false,
   showEmptyState: false,
   idleServerTab: false,
+  idleDesktopTab: false,
+  idleDesktopOverlay: false,
   loading: false,
   nativeServerTab: false,
   serverTab: false,
@@ -138,6 +140,9 @@ vi.mock(import("~/previewStateStore"), async (original) => ({
     desktopByTabId: {
       "tab-1": {
         hasWebContents: true,
+        navStatus: mocks.idleDesktopOverlay
+          ? { _tag: "Idle" }
+          : { _tag: "Success", url: mocks.url, title: "Example" },
         canGoBack: false,
         canGoForward: false,
         loading: mocks.loading,
@@ -160,9 +165,10 @@ vi.mock(import("~/previewStateStore"), async (original) => ({
               mocks.idleServerTab || mocks.serverTab || mocks.nativeServerTab
                 ? "server"
                 : "desktop",
-            navStatus: mocks.idleServerTab
-              ? { _tag: "Idle" }
-              : { _tag: "Success", url: mocks.url, title: "Example" },
+            navStatus:
+              mocks.idleServerTab || mocks.idleDesktopTab
+                ? { _tag: "Idle" }
+                : { _tag: "Success", url: mocks.url, title: "Example" },
             canGoBack: false,
             canGoForward: false,
             updatedAt: "2026-07-13T00:00:00.000Z",
@@ -277,6 +283,8 @@ function setup() {
   mocks.pictureInPicture = false;
   mocks.showEmptyState = false;
   mocks.idleServerTab = false;
+  mocks.idleDesktopTab = false;
+  mocks.idleDesktopOverlay = false;
   mocks.loading = false;
   mocks.nativeServerTab = false;
   mocks.nativeServerStop = false;
@@ -296,6 +304,27 @@ function setup() {
 }
 
 describe("PreviewView", () => {
+  it("shows a desktop navigation before its backend status echo arrives", async () => {
+    setup();
+    mocks.idleDesktopTab = true;
+    await using _screen = await render(view());
+    await expect
+      .element(page.getByPlaceholder("Search or enter URL"))
+      .toHaveValue("http://example.com/");
+    await expect.element(page.getByText("No preview yet")).not.toBeInTheDocument();
+    await expect.element(page.getByRole("button", { name: "Annotate preview" })).toBeVisible();
+  });
+
+  it("keeps the server navigation while the new desktop tab is still idle", async () => {
+    setup();
+    mocks.idleDesktopOverlay = true;
+    await using _screen = await render(view());
+    await expect
+      .element(page.getByPlaceholder("Search or enter URL"))
+      .toHaveValue("http://example.com/");
+    await expect.element(page.getByText("No preview yet")).not.toBeInTheDocument();
+  });
+
   it("lets the pointer reach a local server card above an idle server-rendered tab", async () => {
     setup();
     mocks.idleServerTab = true;
