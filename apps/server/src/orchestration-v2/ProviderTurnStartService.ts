@@ -1,3 +1,4 @@
+import { isImportedNativeSession } from "./ProviderContextBoundaries.ts";
 import { makeCloudStartFailureHandler } from "./goat/CloudStartFailure.ts";
 import { makeFailedStartSettlement } from "./goat/FailedStartSettlement.ts";
 import { ensureSafeNativeFork } from "./goat/BusyForkSource.ts";
@@ -915,6 +916,7 @@ export const layer: Layer.Layer<
         const nativeSessionLacksKeptTurns =
           !session.providerSession.capabilities.checkpointing.providerCanRollbackConversation &&
           nativeSessionMissesKeptTurns(projection, providerThread, run);
+        const importedNativeSession = isImportedNativeSession(projection, providerThread);
         const resumed = yield* Effect.result(
           uncertainDelivery || nativeSessionLacksKeptTurns
             ? Effect.fail(
@@ -933,6 +935,7 @@ export const layer: Layer.Layer<
                 threadId: projection.thread.id,
                 modelSelection: run.modelSelection,
                 runtimePolicy: resolvedRuntimePolicy,
+                importedNativeSession,
               }),
         );
         if (resumed._tag === "Success") {
