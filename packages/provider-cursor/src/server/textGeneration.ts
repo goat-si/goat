@@ -8,6 +8,7 @@ import * as Stream from "effect/Stream";
 import * as FileSystem from "effect/FileSystem";
 
 import type { AgentOptions, RunResult } from "@cursor/sdk";
+import * as Data from "effect/Data";
 import * as Effect from "effect/Effect";
 import * as Option from "effect/Option";
 import * as Schema from "effect/Schema";
@@ -40,6 +41,10 @@ function cursorSdkResultDetail(result: RunResult): string {
       return "Cursor SDK returned empty output.";
   }
 }
+
+class CursorSandboxUnavailable extends Data.TaggedError("CursorSandboxUnavailable")<{
+  readonly cause: unknown;
+}> {}
 
 // Sandboxing fails without cursorsandbox or after a process-wide unsupported result.
 function cursorSandboxUnsupported(cause: unknown): boolean {
@@ -193,35 +198,30 @@ export const makeCursorTextGeneration = Effect.fn("makeCursorTextGeneration")(fu
         );
       });
 
-      const request = Effect.gen(function* () {
-        // Empty cwd and setting sources isolate the run from user projects even if sandboxing fails.
-        const agent = yield* Effect.acquireRelease(
-          createCursorAgent(true).pipe(
-            Effect.catchIf(cursorSandboxUnsupported, () =>
-              isMemory
-                ? Effect.fail(
-                    new TextGenerationError({
-                      operation,
-                      detail: "Cursor memory generation requires its isolated sandbox.",
-                      // Typed so memory pauses this model: the sandbox is missing on every try.
-                      cause: new MemoryGenerationRunnerError({ code: "unavailable" }),
-                    }),
-                  )
-                : createCursorAgent(false),
-            ),
-          ),
+      const runPrompt = Effect.fn("CursorTextGeneration.runPrompt")(function* (
+        sandboxEnabled: boolean,
+      ) {
+        const run = yield* Effect.acquireRelease(
+          createCursorAgent(sandboxEnabled),
           (agent) =>
             Effect.tryPromise(() => agent[Symbol.asyncDispose]()).pipe(
               Effect.timeout("5 seconds"),
               Effect.ignore({ log: true }),
             ),
           { interruptible: true },
-        );
-        const run = yield* Effect.tryPromise((signal) =>
-          agent.send(prompt).then((run) => {
-            if (signal.aborted) void run.cancel().catch(() => undefined);
-            return run;
-          }),
+        ).pipe(
+          Effect.flatMap((agent) =>
+            Effect.tryPromise((signal) =>
+              agent.send(prompt).then((run) => {
+                if (signal.aborted) void run.cancel().catch(() => undefined);
+                return run;
+              }),
+            ),
+          ),
+          Effect.catchIf(
+            (cause) => sandboxEnabled && cursorSandboxUnsupported(cause),
+            (cause) => Effect.fail(new CursorSandboxUnavailable({ cause })),
+          ),
         );
         yield* Effect.addFinalizer(() =>
           run.status === "running"
@@ -261,7 +261,22 @@ export const makeCursorTextGeneration = Effect.fn("makeCursorTextGeneration")(fu
         );
         const [result] = yield* Effect.all([wait, noTools], { concurrency: "unbounded" });
         return result;
-      }).pipe(Effect.scoped);
+      }, Effect.scoped);
+      // The SDK can check sandbox support at create or send. Retry only before it accepts a run.
+      const request = runPrompt(true).pipe(
+        Effect.catchTags({
+          CursorSandboxUnavailable: () =>
+            isMemory
+              ? Effect.fail(
+                  new TextGenerationError({
+                    operation,
+                    detail: "Cursor memory generation requires its isolated sandbox.",
+                    cause: new MemoryGenerationRunnerError({ code: "unavailable" }),
+                  }),
+                )
+              : runPrompt(false),
+        }),
+      );
       const promptResult = yield* request.pipe(
         Effect.timeoutOption(CURSOR_TIMEOUT_MS),
         Effect.flatMap(

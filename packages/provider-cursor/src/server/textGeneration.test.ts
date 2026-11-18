@@ -200,6 +200,36 @@ beforeEach(() => {
   });
 });
 
+type SdkStartupPhase = "create" | "send";
+
+const mockSdkStartup = (phase: SdkStartupPhase, start: () => Promise<unknown>) => {
+  if (phase === "create") {
+    cursorSdkMock.create.mockImplementationOnce(start);
+  } else {
+    cursorSdkMock.send.mockImplementationOnce(start);
+    cursorSdkMock.create.mockResolvedValueOnce({
+      close: cursorSdkMock.close,
+      [Symbol.asyncDispose]: async () => {
+        cursorSdkMock.close();
+      },
+      send: cursorSdkMock.send,
+    });
+  }
+};
+
+const sandboxUnsupported = () =>
+  new Error(
+    "Local SDK sandboxing was requested, but sandboxing is not supported in this environment.",
+  );
+
+const commitMessageRequest = {
+  cwd: "/fixture/project",
+  branch: "test",
+  stagedSummary: "M file",
+  stagedPatch: "diff",
+  modelSelection: createModelSelection(ProviderInstanceId.make("cursor"), "auto"),
+};
+
 describe("CursorTextGeneration", () => {
   it.effect("refuses text generation when the Cursor agent transport setting differs", () =>
     Effect.gen(function* () {
@@ -363,6 +393,104 @@ describe("CursorTextGeneration", () => {
           enableAgentRetries: true,
         },
       });
+    }).pipe(Effect.provide(layerTest)),
+  );
+
+  it.effect("disposes the sandboxed agent and retries once when send refuses sandboxing", () =>
+    Effect.gen(function* () {
+      const fallbackCreate = cursorSdkMock.create.getMockImplementation();
+      expect(fallbackCreate).toBeDefined();
+      if (fallbackCreate === undefined) return;
+      mockSdkStartup("send", () =>
+        Promise.reject(
+          new Error("SDK startup failed", {
+            cause: sandboxUnsupported(),
+          }),
+        ),
+      );
+      cursorSdkMock.create.mockImplementationOnce((options) => {
+        expect(cursorSdkMock.close).toHaveBeenCalledOnce();
+        return fallbackCreate(options);
+      });
+      const generation = yield* makeCursorTextGeneration(cursorSettings, { CURSOR_API_KEY: "key" });
+      const generated = yield* generation.generateCommitMessage(commitMessageRequest);
+      expect(generated.subject).toBe("Add generated commit message");
+      expect(cursorSdkMock.create).toHaveBeenCalledTimes(2);
+      expect(cursorSdkMock.create).toHaveBeenLastCalledWith(
+        expect.objectContaining({
+          mode: "plan",
+          local: expect.objectContaining({
+            cwd: "/isolated-text-generation",
+            sandboxOptions: { enabled: false },
+            settingSources: [],
+          }),
+        }),
+      );
+      expect(cursorSdkMock.close).toHaveBeenCalledTimes(2);
+      expect(cursorSdkMock.storeDispose).toHaveBeenCalledOnce();
+    }).pipe(Effect.provide(layerTest)),
+  );
+
+  it.effect.each(["create", "send"] as const)(
+    "does not retry a permission refusal at %s",
+    (phase) =>
+      Effect.gen(function* () {
+        mockSdkStartup(phase, () =>
+          Promise.reject(new Error("sandbox denied a workspace operation")),
+        );
+        const generation = yield* makeCursorTextGeneration(cursorSettings, {
+          CURSOR_API_KEY: "key",
+        });
+        const error = yield* generation
+          .generateCommitMessage(commitMessageRequest)
+          .pipe(Effect.flip);
+        expect(error.detail).toBe("Cursor SDK text generation failed.");
+        expect(cursorSdkMock.create).toHaveBeenCalledOnce();
+        expect(cursorSdkMock.close).toHaveBeenCalledTimes(phase === "send" ? 1 : 0);
+      }).pipe(Effect.provide(layerTest)),
+  );
+
+  it.effect.each(["create", "send"] as const)("times out without falling back during %s", (phase) =>
+    Effect.gen(function* () {
+      const entered = Promise.withResolvers<void>();
+      const late = Promise.withResolvers<unknown>();
+      const released = Promise.withResolvers<void>();
+      mockSdkStartup(phase, () => {
+        entered.resolve();
+        return late.promise;
+      });
+      const generation = yield* makeCursorTextGeneration(cursorSettings, { CURSOR_API_KEY: "key" });
+      const child = yield* generation
+        .generateCommitMessage(commitMessageRequest)
+        .pipe(Effect.flip, Effect.forkScoped);
+      yield* Effect.promise(() => entered.promise);
+      yield* TestClock.adjust("180 seconds");
+      const error = yield* Fiber.join(child);
+      expect(error.detail).toContain("timed out");
+      expect(cursorSdkMock.create).toHaveBeenCalledOnce();
+      expect(cursorSdkMock.storeDispose).toHaveBeenCalledOnce();
+      late.resolve(
+        phase === "create"
+          ? { close: () => released.resolve() }
+          : {
+              cancel: async () => {
+                released.resolve();
+              },
+            },
+      );
+      yield* Effect.promise(() => released.promise);
+      expect(cursorSdkMock.close).toHaveBeenCalledTimes(phase === "send" ? 1 : 0);
+    }).pipe(Effect.scoped, Effect.provide(layerTest)),
+  );
+
+  it.effect("does not retry sandbox failure after send accepts the run", () =>
+    Effect.gen(function* () {
+      cursorSdkMock.prompt.mockRejectedValueOnce(sandboxUnsupported());
+      const generation = yield* makeCursorTextGeneration(cursorSettings, { CURSOR_API_KEY: "key" });
+      const error = yield* generation.generateCommitMessage(commitMessageRequest).pipe(Effect.flip);
+      expect(error.detail).toBe("Cursor SDK text generation failed.");
+      expect(cursorSdkMock.create).toHaveBeenCalledOnce();
+      expect(cursorSdkMock.cancel).toHaveBeenCalledOnce();
     }).pipe(Effect.provide(layerTest)),
   );
 
@@ -709,6 +837,33 @@ describe("CursorTextGeneration", () => {
         );
         expect(cursorSdkMock.send).not.toHaveBeenCalled();
         expect(cursorSdkMock.resume).not.toHaveBeenCalled();
+      }).pipe(provideMemoryTest),
+  );
+
+  it.effect.each(memoryOperations)(
+    "reports sandbox unavailability on send without retrying %s",
+    (operation) =>
+      Effect.gen(function* () {
+        mockSdkStartup("send", () => Promise.reject(sandboxUnsupported()));
+        const generation = yield* makeCursorTextGeneration(
+          cursorSettings,
+          { CURSOR_API_KEY: "synthetic-key" },
+          undefined,
+          undefined,
+          memoryContext,
+        );
+        const error = yield* runMemory(generation, operation).pipe(Effect.flip);
+        expect(error.detail).toContain("requires its isolated sandbox");
+        expect(error.cause).toEqual(new MemoryGenerationRunnerError({ code: "unavailable" }));
+        expect(cursorSdkMock.create).toHaveBeenCalledOnce();
+        expect(cursorSdkMock.create).toHaveBeenCalledWith(
+          expect.objectContaining({
+            tools: [],
+            local: expect.objectContaining({ sandboxOptions: { enabled: true } }),
+          }),
+        );
+        expect(cursorSdkMock.send).toHaveBeenCalledOnce();
+        expect(cursorSdkMock.close).toHaveBeenCalledOnce();
       }).pipe(provideMemoryTest),
   );
 
