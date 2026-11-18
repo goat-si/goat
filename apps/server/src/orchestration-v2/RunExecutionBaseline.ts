@@ -18,7 +18,7 @@ export const captureRunBaseline = Effect.fn("RunExecutionService.captureBaseline
     .pipe(
       Effect.catchCause((cause) =>
         Cause.hasInterruptsOnly(cause)
-          ? Effect.failCause(cause)
+          ? Effect.interrupt
           : Effect.logWarning(
               "orchestration V2 checkpoint baseline capture failed; starting provider without a baseline",
               { runId: run.id },

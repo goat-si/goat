@@ -3575,8 +3575,6 @@ export const make = Effect.fn("OpenCode2Adapter.make")(function* (instanceId: Pr
                 ? cause
                 : new ProviderAdapter.ProviderAdapterResumeThreadError({
                     driver,
-                    resumeInterruptedTurn: (input) =>
-                      runtime.startTurn(ProviderAdapter.resumeTurnInput(input)),
                     providerSessionId: input.providerSessionId,
                     providerThreadId: threadInput.providerThread.id,
                     cause,
@@ -3584,6 +3582,7 @@ export const make = Effect.fn("OpenCode2Adapter.make")(function* (instanceId: Pr
             ),
           ),
       ),
+      resumeInterruptedTurn: (input) => runtime.startTurn(ProviderAdapter.resumeTurnInput(input)),
       compactThread: (turnInput) =>
         runtime.startTurn({ ...turnInput, message: { ...turnInput.message, text: "/compact" } }),
       startTurn: Effect.fn("OpenCode2Adapter.startTurn")(

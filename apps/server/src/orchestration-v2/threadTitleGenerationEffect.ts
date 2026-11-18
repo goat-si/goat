@@ -1,3 +1,4 @@
+import { isSideChatThread } from "@goat/contracts";
 import type { CommandId, MessageId, OrchestrationV2AppThread, ThreadId } from "@goat/contracts";
 
 import type { PendingOrchestrationEffectV2 } from "./EffectOutbox.ts";
@@ -24,7 +25,7 @@ export function hasTitleSetBeforeFirstMessage(thread: OrchestrationV2AppThread, 
   const title = thread.title.trim();
   return (
     thread.forkedFrom === null &&
-    thread.lineage.sideChat !== true &&
+    !isSideChatThread(thread) &&
     title.length > 0 &&
     title !== "New thread" &&
     !/ thread \d+$/u.test(title) &&

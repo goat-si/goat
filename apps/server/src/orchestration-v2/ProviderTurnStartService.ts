@@ -877,10 +877,8 @@ export const layer: Layer.Layer<
         if (resumed._tag === "Success") {
           if (cloud || nativeResume) return resumed.success;
           const context = handoffContextForThread(resumed.success);
+          context.budget = yield* Effect.cached(context.budget);
           resumedRetryHandoff = yield* prepareRetryHandoff(context);
-          context.budget = yield* Effect.cached(
-            context.budgetForImages(resumedRetryHandoff.images),
-          );
           resumedHandoffContext = context;
           const fits = yield* deliverContextHandoffs({
             handoffs: [...handoffs, ...resumedRetryHandoff.handoffs],
