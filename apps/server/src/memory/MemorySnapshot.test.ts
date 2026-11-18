@@ -712,3 +712,32 @@ it.effect("r3 a lineage writer failure cannot deliver a memory snapshot", () => 
     assert.lengthOf(yield* sql`SELECT 1 FROM memory_thread_lineages`, 0);
   }).pipe(Effect.provide(f.live));
 });
+
+it.effect("refuses a body that fits its payload codec but stalls the hub tail", () => {
+  const f = fixture();
+  return Effect.gen(function* () {
+    const service = yield* Service.MemoryService;
+    const store = yield* Store.MemoryStore;
+    const value = input(9800);
+    const payload = {
+      text: "w".repeat(M.MEMORY_BODY_MAX_UTF8_BYTES),
+      derivedFromMemoryRevisions: [],
+      evidence: [
+        {
+          origin: "user" as const,
+          messageIds: Array.from({ length: 60 }, (_, n) =>
+            M.MessageId.make(`synthetic-${n.toString().padStart(2, "0")}-${"q".repeat(787)}`),
+          ),
+        },
+      ],
+    };
+    const result = yield* service.upsert({ ...value, payload }, Effect.void).pipe(Effect.result);
+    assert.strictEqual(result._tag, "Failure");
+    if (result._tag === "Failure") {
+      assert.strictEqual(result.failure._tag, "MemoryCapacityError");
+      if (result.failure._tag === "MemoryCapacityError")
+        assert.strictEqual(result.failure.dimension, "payload_bytes");
+    }
+    assert.isUndefined((yield* store.loadAggregate(space, value.memoryId)).item);
+  }).pipe(Effect.provide(f.live));
+});
