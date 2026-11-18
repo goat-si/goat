@@ -178,7 +178,10 @@ export function makeUsageInstances(hostEnvironment: NodeJS.ProcessEnv) {
     > = Object.entries(settings.providerInstances)
       .filter(([, instance]) => instance.driver === driver.driverKind)
       .map(([id, instance]) => [ProviderInstanceId.make(id), instance, true] as const);
-    if (!Object.hasOwn(settings.providerInstances, driver.driverKind)) {
+    if (
+      driver.usage?.provider !== "cursor" ||
+      !Object.hasOwn(settings.providerInstances, driver.driverKind)
+    ) {
       entries.push([ProviderInstanceId.make(driver.driverKind), {}, false]);
     }
     const decodeConfig = Schema.decodeUnknownOption(driver.configSchema);
