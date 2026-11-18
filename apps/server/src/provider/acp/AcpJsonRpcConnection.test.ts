@@ -125,6 +125,58 @@ describe("AcpSessionRuntime", () => {
     }).pipe(Effect.scoped, Effect.provide(NodeServices.layer)),
   );
 
+  it.effect.each(["interrupt", "wait-for-prompt"] as const)(
+    "queues the native prompt before a soft cancel in %s mode",
+    (cancelBehavior) =>
+      Effect.gen(function* () {
+        const promptStarted = yield* Deferred.make<void>();
+        const releasePrompt = yield* Deferred.make<void>();
+        const promptSent = yield* Deferred.make<void>();
+        const cancelSent = yield* Deferred.make<void>();
+        const order: string[] = [];
+        const runtime = yield* AcpSessionRuntime.make({
+          ...mockRuntimeOptions,
+          spawn: {
+            ...mockRuntimeOptions.spawn,
+            env: { GOAT_ACP_COMPLETE_FIRST_PROMPT_ON_CANCEL: "1" },
+          },
+          cancelBehavior,
+          interruptPromptOnCancel: false,
+          requestLogger: (event) =>
+            event.method === "session/prompt" && event.status === "started"
+              ? Deferred.succeed(promptStarted, undefined).pipe(
+                  Effect.andThen(Deferred.await(releasePrompt)),
+                )
+              : Effect.void,
+          protocolLogging: {
+            logOutgoing: true,
+            logger: (event) =>
+              Effect.gen(function* () {
+                if (event.stage !== "raw" || typeof event.payload !== "string") return;
+                if (event.payload.includes('"method":"session/prompt"')) {
+                  order.push("prompt");
+                  yield* Deferred.succeed(promptSent, undefined);
+                }
+                if (event.payload.includes('"method":"session/cancel"')) {
+                  order.push("cancel");
+                  yield* Deferred.succeed(cancelSent, undefined);
+                }
+              }),
+          },
+        });
+        yield* runtime.start();
+        yield* runtime.prompt({ prompt: [{ type: "text", text: "first" }] }).pipe(Effect.forkChild);
+        yield* Deferred.await(promptStarted);
+        yield* runtime.cancel.pipe(Effect.forkChild({ startImmediately: true }));
+        yield* runtime.request("_test/environment", {});
+        yield* Deferred.succeed(releasePrompt, undefined);
+        yield* Deferred.await(promptSent);
+        yield* Deferred.await(cancelSent);
+        expect(order).toEqual(["prompt", "cancel"]);
+        yield* runtime.request("_test/finish-cancel", {});
+      }).pipe(Effect.scoped, Effect.provide(NodeServices.layer)),
+  );
+
   it.effect("waits for native cancellation and drains final updates before another prompt", () =>
     Effect.gen(function* () {
       const toolStarted = yield* Deferred.make<void>();

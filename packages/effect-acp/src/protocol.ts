@@ -1,3 +1,4 @@
+import * as Context from "effect/Context";
 import { normalizeAcpJsonRpcError } from "./_internal/strictParser.ts";
 import { makeStrictNdJsonRpcParser, type AcpDecodedWireMessage } from "./_internal/strictParser.ts";
 import {
@@ -116,6 +117,12 @@ export interface AcpPatchedProtocolOptions {
     }) => Effect.Effect<void>;
   };
 }
+
+/** The request has entered the writer queue. Its RPC reply may still be pending. */
+export const AcpOutgoingQueued = Context.Reference<Deferred.Deferred<void> | undefined>(
+  "effect-acp/protocol/AcpOutgoingQueued",
+  { defaultValue: () => undefined },
+);
 
 export interface AcpPatchedProtocol {
   readonly clientProtocol: RpcClient.Protocol["Service"];
@@ -320,6 +327,10 @@ export const makeAcpPatchedProtocol = Effect.fn("makeAcpPatchedProtocol")(functi
               }).pipe(Effect.andThen(Deferred.fail(acknowledgement, error)), Effect.asVoid),
         ),
       );
+      if (message._tag === "Request") {
+        const queued = yield* AcpOutgoingQueued;
+        if (queued !== undefined) yield* Deferred.succeed(queued, undefined);
+      }
       if (acknowledgement !== undefined) {
         yield* Deferred.await(acknowledgement);
       }
