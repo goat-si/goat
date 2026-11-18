@@ -14,7 +14,6 @@ import {
   type OrchestrationV2Subagent,
   type OrchestrationV2ThreadLaunchWorkspaceStrategy,
   type OrchestrationV2ThreadProjection,
-  type OrchestrationV2ThreadShell,
   OrchestratorMcpCapabilitiesResult,
   type OrchestratorMcpCreatedThread,
   type OrchestratorMcpThreadTimelineItem,
@@ -31,7 +30,6 @@ import {
   type OrchestratorMcpThreadSendDelivered,
   type OrchestratorMcpThreadWaitResult,
   type ProjectId,
-  type ProviderInstanceId,
   type ProviderInteractionMode,
   type ProviderOptionDescriptor,
   ProviderRequestKind,
@@ -134,6 +132,7 @@ import { makeContinueReviewTask } from "./reviewContinuation.ts";
 import { makeRemoteTaskTargets } from "./goat/RemoteTaskTargets.ts";
 import { runStop, STOP_TURN_ITEM_TYPES, statusFromShell, threadRun } from "./threadStatus.ts";
 import * as View from "./threadListView.ts";
+import { isLiveCallerShell, threadNotFound } from "./threadLookupFailure.ts";
 import { goatCallText } from "@goat/contracts/agentSurface/callText";
 import type { OrchestratorMcpServiceShape } from "./OrchestratorMcpServiceShape.ts";
 import { scheduledTaskSummary, updatedThreadMode } from "./scheduledTaskSummary.ts";
@@ -187,43 +186,6 @@ function failure(code: OrchestratorMcpFailure["code"], message: string): Orchest
   return new OrchestratorMcpFailure({ code, message });
 }
 
-/** Background subagents retain credentials until provider exit; archived threads and other instances cannot act. */
-export const isLiveCallerShell = (
-  shell: Pick<
-    OrchestrationV2ThreadShell,
-    "archivedAt" | "activeRunId" | "providerInstanceId" | "pendingBackgroundTasks"
-  > | null,
-  providerInstanceId: ProviderInstanceId | undefined,
-) =>
-  shell !== null &&
-  shell.archivedAt === null &&
-  shell.providerInstanceId === providerInstanceId &&
-  (shell.activeRunId !== null ||
-    (shell.pendingBackgroundTasks?.some(
-      (task) => task.kind === "subagent" && task.providerInstanceId === providerInstanceId,
-    ) ??
-      false));
-
-/**
- * Threads an agent starts over MCP are `mcp:<uuid>`, and agents often paste the
- * bare uuid. The id is never rewritten, so permission checks keyed on it still
- * hold; the miss only names a live thread the caller could read by its full id.
- */
-export const threadNotFound = Effect.fn("OrchestratorMcpService.threadNotFound")(function* (
-  threads: Pick<ThreadManagementService.ThreadManagementService["Service"], "getThreadShell">,
-  threadId: ThreadId,
-  message: string,
-) {
-  const prefixed = ThreadId.make(`mcp:${threadId}`);
-  const shell = yield* threads.getThreadShell(prefixed).pipe(Effect.orElseSucceed(() => null));
-  return yield* failure(
-    "thread_not_found",
-    shell === null || shell.deletedAt !== null
-      ? message
-      : `${message} Did you mean \`${prefixed}\`?`,
-  );
-});
-
 function threadManagementFailure(error: unknown): OrchestratorMcpFailure {
   if (!isThreadManagementError(error)) return failure("orchestration_error", errorMessage(error));
   switch (error._tag) {
@@ -233,10 +195,14 @@ function threadManagementFailure(error: unknown): OrchestratorMcpFailure {
       return failure("run_not_found", error.message);
     case "ThreadManagementReviewTaskFinishedError":
     case "ThreadManagementThreadArchivedError":
-    case "ThreadManagementNoSteerableRunError":
     case "ThreadManagementTargetStoppedError":
     case "ThreadManagementWorktreeUnrestorableError":
       return failure("thread_not_sendable", error.message);
+    case "ThreadManagementNoSteerableRunError":
+      return failure(
+        "thread_not_sendable",
+        `${error.message} Send with mode: "auto" or "queue" to start a new turn there.`,
+      );
     case "ThreadManagementThreadNotInterruptibleError":
       return failure("thread_not_interruptible", error.message);
     case "ThreadManagementProjectionLoadError":
@@ -781,13 +747,20 @@ const make = Effect.gen(function* () {
         : Effect.fail(failure("target_required", missingMessage));
 
   const targetShell = Effect.fn("OrchestratorMcpService.targetShell")(function* (
+    scope: McpInvocationScope,
     threadId: ThreadId,
   ) {
     const shell = yield* threadManagement
       .getThreadShell(threadId)
       .pipe(Effect.mapError(threadManagementFailure));
     if (shell === null || shell.deletedAt !== null) {
-      return yield* threadNotFound(threadManagement, threadId, `Thread ${threadId} was not found.`);
+      return yield* threadNotFound(
+        threadManagement,
+        scope,
+        threadId,
+        `Thread ${threadId} was not found.`,
+        permissions,
+      );
     }
     return shell;
   });
@@ -800,7 +773,7 @@ const make = Effect.gen(function* () {
     const target: Pick<OrchestrationV2ThreadProjection, "thread"> =
       caller.parent !== undefined && threadId === caller.parent.thread.id
         ? caller.parent
-        : yield* targetShell(threadId).pipe(
+        : yield* targetShell(scope, threadId).pipe(
             Effect.flatMap((shell) =>
               threadManagement
                 .getProjectThreadRecords({ projectId: shell.projectId, threadId }, [])
@@ -867,8 +840,10 @@ const make = Effect.gen(function* () {
     if (shell === null || shell.deletedAt !== null) {
       return yield* threadNotFound(
         threadManagement,
+        scope,
         threadId,
         `Thread ${threadId} is no longer available.`,
+        permissions,
       );
     }
     const input = { projectId: shell.projectId, threadId };

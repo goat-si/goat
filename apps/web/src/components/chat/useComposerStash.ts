@@ -1,3 +1,4 @@
+import { composerFileDedupKey, composerFileMatchesReattachMarker } from "./composerAttachmentFiles";
 import type { ChatComposerProps } from "./ChatComposer";
 import {
   type ComposerContextRecord,
@@ -10,8 +11,6 @@ import {
   type ComposerFileAttachment,
   type ComposerThreadDraftState,
   type PersistedComposerFileAttachment,
-  composerFileDedupKey,
-  composerFileMatchesReattachMarker,
   composerFileNeedsReattach,
   composerTargetKey,
   hydrateImagesFromPersisted,
