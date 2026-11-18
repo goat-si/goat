@@ -421,15 +421,6 @@ export interface OpenCodeProtocolLogEvent {
   readonly payload: unknown;
 }
 
-function formatOpenCodeProtocolLogPayload(event: OpenCodeProtocolLogEvent) {
-  return {
-    direction: event.direction,
-    messageKind: event.messageKind,
-    method: structuralProtocolMethod(event.method),
-    payload: summarizeNativeProtocolPayload(event.payload),
-  };
-}
-
 export function makeOpenCodeProtocolLogger(input: {
   readonly nativeEventLogger: ProviderEventLoggers.EventNdjsonLogger | undefined;
   readonly idAllocator: IdAllocator.IdAllocatorV2["Service"];
@@ -457,7 +448,12 @@ export function makeOpenCodeProtocolLogger(input: {
             providerSessionId: input.providerSessionId,
             createdAt: observedAt,
             threadId: input.threadId,
-            payload: formatOpenCodeProtocolLogPayload(event),
+            payload: {
+              direction: event.direction,
+              messageKind: event.messageKind,
+              method,
+              payload: summarizeNativeProtocolPayload(event.payload),
+            },
           },
         },
         input.threadId,

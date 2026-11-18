@@ -46,13 +46,8 @@ import * as Scope from "effect/Scope";
 import * as Semaphore from "effect/Semaphore";
 import * as Stream from "effect/Stream";
 
-import { normalizeModelMetricLabel } from "../observability/Attributes.ts";
-import {
-  providerSessionsTotal,
-  providerTurnDuration,
-  providerTurnsTotal,
-  withMetrics,
-} from "../observability/Metrics.ts";
+import { providerTurnMetrics } from "./ProviderTurnMetrics.ts";
+import { providerSessionsTotal, withMetrics } from "../observability/Metrics.ts";
 import { ProviderWorkspaceMissingError } from "../provider/Errors.ts";
 import * as ProviderInstallationGate from "../provider/ProviderInstallationGate.ts";
 import * as ProjectService from "../project/ProjectService.ts";
@@ -1954,16 +1949,6 @@ export const layerWithOptions = (
       ): ProviderAdapter.ProviderAdapterV2SessionRuntime => {
         const providerSessionId = runtime.providerSessionId;
         const subscribeEvents = makeEventSubscription(eventSubscribers);
-        const turnMetrics = (operation: string, model?: string) =>
-          withMetrics({
-            counter: providerTurnsTotal,
-            ...(operation === "send" ? { timer: providerTurnDuration } : {}),
-            attributes: {
-              provider: runtime.driver,
-              operation,
-              modelFamily: normalizeModelMetricLabel(model),
-            },
-          });
         const trackTurn = (
           input: Pick<
             ProviderAdapter.ProviderAdapterV2TurnInput,
@@ -2143,7 +2128,9 @@ export const layerWithOptions = (
           startTurn: (input) =>
             trackTurn(
               input,
-              runtime.startTurn(input).pipe(turnMetrics("send", input.modelSelection.model)),
+              runtime
+                .startTurn(input)
+                .pipe(providerTurnMetrics(runtime.driver, "send", input.modelSelection.model)),
             ),
           ...(runtime.resumeTurn === undefined
             ? {}
@@ -2152,7 +2139,9 @@ export const layerWithOptions = (
               }),
           steerTurn: (input) =>
             observeActivity(providerSessionId, touchActivity(providerSessionId)).pipe(
-              Effect.andThen(runtime.steerTurn(input).pipe(turnMetrics("steer"))),
+              Effect.andThen(
+                runtime.steerTurn(input).pipe(providerTurnMetrics(runtime.driver, "steer")),
+              ),
             ),
           // A provider starved of memory can stop answering, so no caller may wait on it unbounded.
           interruptTurn: (input) =>
@@ -2171,7 +2160,7 @@ export const layerWithOptions = (
                         }),
                       ),
                   }),
-                  turnMetrics("interrupt"),
+                  providerTurnMetrics(runtime.driver, "interrupt"),
                 ),
               ),
             ),
@@ -2180,7 +2169,7 @@ export const layerWithOptions = (
               Effect.andThen(
                 runtime
                   .respondToRuntimeRequest(input)
-                  .pipe(turnMetrics("runtime-request-response")),
+                  .pipe(providerTurnMetrics(runtime.driver, "runtime-request-response")),
               ),
             ),
         };

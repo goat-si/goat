@@ -176,3 +176,19 @@ export const executionEnd = (type: string) =>
   type === "session.execution.succeeded" ||
   type === "session.execution.failed" ||
   type === "session.execution.interrupted";
+
+export const availableSkillMentions = Effect.fn("OpenCode2Adapter.availableSkillMentions")(
+  function* <E, R>(
+    mentions: ReadonlyArray<string>,
+    listSkills: Effect.Effect<Set<string>>,
+    readModels: Effect.Effect<unknown, E, R>,
+  ) {
+    const known = yield* listSkills;
+    if (mentions.some((name) => !known.has(name))) {
+      // OpenCode answers model inventory after its directory scan completes.
+      yield* readModels;
+      for (const name of yield* listSkills) known.add(name);
+    }
+    return mentions.filter((name) => known.has(name));
+  },
+);

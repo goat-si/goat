@@ -39,6 +39,7 @@ import { makeExternalPrompts } from "./externalPrompts.ts";
 import {
   agentFor,
   skillMentions,
+  availableSkillMentions,
   formQuestions,
   formAnswer,
   approves,
@@ -3348,19 +3349,6 @@ export const make = Effect.fn("OpenCode2Adapter.make")(function* (instanceId: Pr
         Effect.orElseSucceed(() => new Set<string>()),
       );
 
-    // OpenCode answers model inventory after its directory scan completes.
-    const skillsMentioned = Effect.fnUntraced(function* (
-      location: { readonly directory: string },
-      mentions: ReadonlyArray<string>,
-    ) {
-      const known = yield* listSkills(location);
-      if (mentions.some((name) => !known.has(name))) {
-        yield* readModels(location.directory);
-        for (const name of yield* listSkills(location)) known.add(name);
-      }
-      return mentions.filter((name) => known.has(name));
-    });
-
     const submit = Effect.fnUntraced(function* (
       sessionId: string,
       turnInput: ProviderAdapter.ProviderAdapterV2TurnInput,
@@ -3416,7 +3404,14 @@ export const make = Effect.fn("OpenCode2Adapter.make")(function* (instanceId: Pr
         }
       }
       const mentions = skillMentions(text);
-      const skills = mentions.length === 0 ? [] : yield* skillsMentioned(location, mentions);
+      const skills =
+        mentions.length === 0
+          ? []
+          : yield* availableSkillMentions(
+              mentions,
+              listSkills(location),
+              readModels(location.directory),
+            );
       if (state.active !== turn || turn.interrupted) return;
       yield* prepareMemory(sessionId, state, turnInput);
       const files = yield* promptFiles(turnInput.message.attachments);
