@@ -7,17 +7,19 @@ export const confirmPreviewPaint = Effect.fn("PreviewManager.confirmPaint")(func
   debuggee: Pick<Electron.Debugger, "sendCommand"> | undefined,
 ) {
   if (!debuggee) return false;
-  const confirmed = yield* Effect.promise(async () => {
+  const confirmed = yield* Effect.promise(async (signal) => {
     try {
       const tree = (await debuggee.sendCommand("Page.getFrameTree")) as
         | { frameTree?: { frame?: { id?: unknown } } }
         | undefined;
+      signal.throwIfAborted();
       const frameId = tree?.frameTree?.frame?.id;
       if (typeof frameId !== "string") return false;
       const world = (await debuggee.sendCommand("Page.createIsolatedWorld", {
         frameId,
         worldName: "goat-preview-still-image",
       })) as { executionContextId?: unknown } | undefined;
+      signal.throwIfAborted();
       if (typeof world?.executionContextId !== "number") return false;
       const response = (await debuggee.sendCommand("Runtime.evaluate", {
         expression: `new Promise(resolve => { let frame; const timer = setTimeout(() => { cancelAnimationFrame(frame); resolve(false); }, ${PAINT_TIMEOUT_MS}); frame = requestAnimationFrame(() => { frame = requestAnimationFrame(() => { clearTimeout(timer); resolve(true); }); }); })`,
@@ -25,6 +27,7 @@ export const confirmPreviewPaint = Effect.fn("PreviewManager.confirmPaint")(func
         awaitPromise: true,
         returnByValue: true,
       })) as { result?: { value?: unknown }; exceptionDetails?: unknown } | undefined;
+      signal.throwIfAborted();
       return !response?.exceptionDetails && response?.result?.value === true;
     } catch {
       return false;
