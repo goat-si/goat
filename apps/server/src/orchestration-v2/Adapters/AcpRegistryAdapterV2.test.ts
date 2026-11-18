@@ -1,3 +1,4 @@
+import type { AcpRegistryLiveConfiguration } from "@goat/provider-acp-registry/testing";
 import {
   CLAUDE_ROOT_SESSION,
   claudeFrames,

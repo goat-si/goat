@@ -1,3 +1,4 @@
+import type { PendingOrchestrationEffectV2 } from "./EffectOutbox.ts";
 import * as ThreadCommandExecutor from "./ThreadCommandExecutor.ts";
 import { rootAppThread } from "./RunExecutionService.compactCases.ts";
 import { registerCompactUnsupportedCase } from "./RunExecutionService.compactCases.ts";
