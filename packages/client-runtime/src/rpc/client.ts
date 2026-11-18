@@ -17,6 +17,7 @@ import {
   MemoryRpcError,
 } from "@goat/contracts";
 import * as Cause from "effect/Cause";
+import * as Clock from "effect/Clock";
 import * as Context from "effect/Context";
 import * as Duration from "effect/Duration";
 import * as Effect from "effect/Effect";
@@ -144,6 +145,8 @@ const isEnvironmentAuthorizationError = Schema.is(EnvironmentAuthorizationError)
 
 const MAX_EXPECTED_FAILURE_RETRY_DELAY_MS = 30_000;
 const STREAM_FAILURE_RETRY_DELAY = Duration.seconds(1);
+// A stream that stayed up this long was healthy: its next failure starts the backoff over.
+const STREAM_HEALTHY_AFTER_MS = 60_000;
 
 export const subscriptionRetryDelay = (base: Duration.Input, retries: number) =>
   Duration.millis(
@@ -456,11 +459,13 @@ function subscribeDynamicMapped<TTag extends EnvironmentSubscriptionRpcTag, A>(
               let expectedFailureRetries = 0;
               // Not reset by a first value: a stream can emit before every chunk failure.
               let streamFailureRetries = 0;
+              let streamStartedAt = 0;
               const subscribeToSession = (): Stream.Stream<A, EnvironmentRpcStreamFailure<TTag>> =>
                 Stream.suspend(() =>
                   Stream.unwrap(
                     Effect.gen(function* () {
                       const input = yield* makeInput(session);
+                      streamStartedAt = yield* Clock.currentTimeMillis;
                       if (tag === WS_METHODS.memoryChanges) {
                         const config = yield* session.initialConfig.pipe(
                           Effect.mapError(
@@ -578,23 +583,30 @@ function subscribeDynamicMapped<TTag extends EnvironmentSubscriptionRpcTag, A>(
                         resubscribesOnSameSession &&
                         (isTransportFailure || isChunkDecodeDefect)
                       ) {
-                        return Stream.fromEffect(
-                          Effect.logWarning(
-                            "Durable RPC subscription stream ended; resubscribing.",
-                            {
-                              cause: Cause.pretty(cause),
-                              method: tag,
-                              environmentId: supervisor.target.environmentId,
-                            },
-                          ),
-                        ).pipe(
-                          Stream.drain,
-                          Stream.concat(
-                            retryAfter(
-                              options?.retryExpectedFailureAfter ?? STREAM_FAILURE_RETRY_DELAY,
-                              streamFailureRetries++,
-                            ),
-                          ),
+                        return Stream.unwrap(
+                          Effect.map(Clock.currentTimeMillis, (now) => {
+                            if (now - streamStartedAt >= STREAM_HEALTHY_AFTER_MS) {
+                              streamFailureRetries = 0;
+                            }
+                            return Stream.fromEffect(
+                              Effect.logWarning(
+                                "Durable RPC subscription stream ended; resubscribing.",
+                                {
+                                  cause: Cause.pretty(cause),
+                                  method: tag,
+                                  environmentId: supervisor.target.environmentId,
+                                },
+                              ),
+                            ).pipe(
+                              Stream.drain,
+                              Stream.concat(
+                                retryAfter(
+                                  options?.retryExpectedFailureAfter ?? STREAM_FAILURE_RETRY_DELAY,
+                                  streamFailureRetries++,
+                                ),
+                              ),
+                            );
+                          }),
                         );
                       }
                       if (hasOnlyExpectedFailures && options?.onExpectedFailure !== undefined) {

@@ -358,4 +358,55 @@ describe("durable subscriptions on a healthy session", () => {
         yield* Fiber.interrupt(fiber);
       }),
   );
+  it.effect("a stream that stayed up a minute retries its next failure after the base delay", () =>
+    Effect.gen(function* () {
+      const release = yield* Deferred.make<void>();
+      const subscriptionCount = yield* SubscriptionRef.make(0);
+      const decodeDefect = Stream.fromEffect(decodeNumber("not a number").pipe(Effect.orDie)).pipe(
+        Stream.drain,
+      );
+      const client = {
+        [WS_METHODS.subscribeServerLifecycle]: () =>
+          Stream.unwrap(
+            SubscriptionRef.updateAndGet(subscriptionCount, (count) => count + 1).pipe(
+              Effect.map((count) =>
+                count <= 5
+                  ? decodeDefect
+                  : count === 6
+                    ? Stream.fromEffect(Deferred.await(release)).pipe(
+                        Stream.drain,
+                        Stream.concat(decodeDefect),
+                      )
+                    : Stream.never,
+              ),
+            ),
+          ),
+      } as unknown as WsRpcProtocolClient;
+      const { activeSession, supervisor } = yield* makeHarness();
+      yield* SubscriptionRef.set(activeSession, Option.some(session(client)));
+      const reach = (count: number) =>
+        SubscriptionRef.changes(subscriptionCount).pipe(
+          Stream.filter((value) => value >= count),
+          Stream.runHead,
+        );
+
+      const fiber = yield* subscribe(WS_METHODS.subscribeServerLifecycle, {}).pipe(
+        Stream.runDrain,
+        Effect.provideService(EnvironmentSupervisor.EnvironmentSupervisor, supervisor),
+        Effect.forkChild,
+      );
+      // Five quick failures: 1, 2, 4, 8 and 16 s, so the next would wait the 30 s cap.
+      for (let count = 1; count <= 5; count += 1) {
+        yield* reach(count);
+        yield* TestClock.adjust("30 seconds");
+      }
+      yield* reach(6);
+      yield* TestClock.adjust("60 seconds");
+      yield* Deferred.succeed(release, undefined);
+      yield* TestClock.adjust("1 second");
+
+      expect(yield* SubscriptionRef.get(subscriptionCount)).toBe(7);
+      yield* Fiber.interrupt(fiber);
+    }),
+  );
 });
