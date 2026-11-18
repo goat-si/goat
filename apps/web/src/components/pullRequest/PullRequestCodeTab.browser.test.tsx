@@ -18,6 +18,7 @@ const {
   withheldFileAtom,
   withheldFilesAtom,
   withheldAdvertisementAtom,
+  revisionReviewAtom,
 } = await vi.hoisted(async () => {
   const { AsyncResult, Atom } = await import("effect/reactivity");
   const filePatch = (path: string) =>
@@ -124,6 +125,7 @@ const {
     withheldFileAtom,
     withheldFilesAtom,
     withheldAdvertisementAtom: Atom.family((fresh: boolean) => Atom.make(() => fresh)),
+    revisionReviewAtom: Atom.make(true),
     diffAtom: Atom.make(() => AsyncResult.success(firstPage)),
     imageDiffAtom: Atom.make(() => AsyncResult.success(imagePage)),
     pagedDiffAtom: Atom.family((cursor: string) =>
@@ -168,6 +170,7 @@ vi.mock(import("~/state/pullRequests"), async (original) => {
     pullRequestEnvironment: {
       ...actual.pullRequestEnvironment,
       withheldDiffs: withheldFilesAtom as never,
+      revisionReviewSupported: () => revisionReviewAtom,
       withheldDiffAdvertised: () => withheldAdvertisementAtom(mocks.freshWithheldAdvertisement),
       withheldDiff: (({ input }: { input: { path: string; revision: { headSha: string } } }) =>
         withheldFileAtom(
@@ -183,7 +186,9 @@ vi.mock(import("~/state/pullRequests"), async (original) => {
   };
 });
 
-import { render } from "../../../test/render";
+import { act, render } from "../../../test/render";
+import { RegistryContext } from "@effect/atom-react";
+import { AtomRegistry } from "effect/reactivity";
 import PullRequestCodeTab from "./PullRequestCodeTab";
 import { PullRequestReviewForm } from "./PullRequestReviewForm";
 import { pullRequestReviewKey, usePullRequestReviewStore } from "./pullRequestReviewStore";
@@ -688,4 +693,41 @@ it("requires moving a queued comment when the same head gets an inline diff with
       }),
     }),
   );
+});
+
+it("explains why a connection that only offers withheld reads cannot queue a line review", async () => {
+  setup();
+  mocks.withheld = true;
+  const registry = AtomRegistry.make();
+  using _registry = { [Symbol.dispose]: () => registry.dispose() };
+  using _capability = { [Symbol.dispose]: registry.mount(revisionReviewAtom) };
+  registry.set(revisionReviewAtom, false);
+  const pr = reviewableWithheldDetail();
+  const container = document.createElement("div");
+  container.className = "flex h-[700px] w-[900px]";
+  await using screen = await render(
+    <RegistryContext value={registry}>{codeWithReview(pr)}</RegistryContext>,
+    { container },
+  );
+  await userEvent.click(screen.getByRole("button", { name: "Expand diff" }));
+  await userEvent.click(screen.getByRole("button", { name: "Load file diff" }));
+  await expect.element(screen.getByText("beforePush()", { exact: true })).toBeVisible();
+  await openWithheldDraft(container);
+  const editor = screen.getByRole("textbox", { name: /Comment on lines/ });
+  await userEvent.fill(editor, "Keep this unsent");
+  const queue = screen.getByRole("button", { name: "Add to review" });
+  await expect.element(queue).toBeDisabled();
+  await expect
+    .element(
+      screen.getByText("This connection cannot submit review comments at a specific revision."),
+    )
+    .toBeVisible();
+  await userEvent.keyboard("{Control>}{Enter}{/Control}");
+  await expect.element(editor).toHaveValue("Keep this unsent");
+  await expect.element(screen.getByRole("button", { name: "Submit review" })).toBeDisabled();
+
+  await act(() => registry.set(revisionReviewAtom, true));
+  await expect.element(queue).toBeEnabled();
+  await userEvent.click(queue);
+  await expect.element(screen.getByRole("button", { name: "Submit review" })).toBeEnabled();
 });

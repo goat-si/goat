@@ -1,4 +1,7 @@
-import { submitRevisionBoundReview } from "./pullRequestRevisionReview.ts";
+import {
+  createRevisionReviewSupportedAtom,
+  submitRevisionBoundReview,
+} from "./pullRequestRevisionReview.ts";
 import { createPullRequestDiffQueries } from "./pullRequestDiffQueries.ts";
 import { isStalePullRequestReply } from "../pullRequestReply.ts";
 
@@ -61,6 +64,7 @@ export {
 export * as PullRequestDiffLoader from "./pullRequestDiffHttp.ts";
 /** @public Required to name the error in consumers' inferred pull request results. */
 export { EnvironmentHttpConnectionNotReadyError } from "./pullRequestDiffQueries.ts";
+export { REVISION_REVIEW_UNAVAILABLE } from "./pullRequestRevisionReview.ts";
 export { retainWithheldDiffPaths } from "./pullRequestDiffQueries.ts";
 
 const LINKED_PULL_REQUEST_IDLE_TTL_MS = 5_000;
@@ -698,6 +702,7 @@ export function createPullRequestEnvironmentAtoms<R, E>(
           ),
         ),
     }),
+    revisionReviewSupported: createRevisionReviewSupportedAtom(runtime),
     submitReview: createEnvironmentRpcCommand(runtime, {
       label: "environment-data:pull-requests:submit-review",
       tag: WS_METHODS.pullRequestsSubmitReview,

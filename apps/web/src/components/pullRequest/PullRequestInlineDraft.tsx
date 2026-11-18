@@ -1,3 +1,7 @@
+import { useAtomValue } from "@effect/atom-react";
+import { REVISION_REVIEW_UNAVAILABLE } from "@goat/client-runtime/state/pull-requests";
+import { Atom } from "effect/reactivity";
+import { pullRequestEnvironment } from "~/state/pullRequests";
 import type { EnvironmentId, PullRequestReviewPosition } from "@goat/contracts";
 import type { SelectedLineRange } from "@pierre/diffs";
 import { DiffCommentAnnotation } from "../diffs/DiffCommentAnnotation";
@@ -21,6 +25,8 @@ export interface DraftAnchor {
   readonly moving?: PendingReviewComment | undefined;
 }
 
+const UNBOUND_REVIEW = Atom.make(() => true);
+
 export function PullRequestInlineDraft({
   draft,
   text,
@@ -42,7 +48,13 @@ export function PullRequestInlineDraft({
   readonly onAddToAgent?: ((body: string) => void) | undefined;
   readonly onClose: () => void;
 }) {
+  const revisionReviewSupported = useAtomValue(
+    canComment && draft.sourceRevision !== undefined
+      ? pullRequestEnvironment.revisionReviewSupported(environmentId)
+      : UNBOUND_REVIEW,
+  );
   const queueComment = (body: string) => {
+    if (!revisionReviewSupported) return;
     if (!canComment) {
       onAddToAgent?.(body);
       return;
@@ -70,6 +82,7 @@ export function PullRequestInlineDraft({
       text={text}
       onTextChange={onTextChange}
       completionScope={canComment ? completionScope : null}
+      submitDisabledReason={revisionReviewSupported ? undefined : REVISION_REVIEW_UNAVAILABLE}
       submitLabel={
         canComment ? (draft.moving ? "Move comment here" : "Add to review") : "Add to agent"
       }

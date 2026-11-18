@@ -3,8 +3,10 @@ import { RpcPermissionGuard } from "../rpc/client.ts";
 import { retainWithheldDiffPaths } from "./pullRequestDiffQueries.ts";
 import { ProjectId, WS_METHODS } from "@goat/contracts";
 import { expect, it } from "@effect/vitest";
+import * as Deferred from "effect/Deferred";
 import * as Effect from "effect/Effect";
 import * as Option from "effect/Option";
+import * as Stream from "effect/Stream";
 import * as SubscriptionRef from "effect/SubscriptionRef";
 import { AtomRegistry } from "effect/reactivity";
 import type { WsRpcProtocolClient } from "../rpc/protocol.ts";
@@ -117,6 +119,44 @@ it.effect(
         );
         yield* submit;
         expect(calls).toEqual(["current"]);
+      }),
+    ),
+);
+
+it.effect(
+  "revokes the review capability as soon as a replacement session begins bootstrapping",
+  () =>
+    Effect.scoped(
+      Effect.gen(function* () {
+        const started = yield* Deferred.make<void>();
+        const complete = yield* Deferred.make<void>();
+        const config = (supported: boolean) => ({
+          environment: { capabilities: { revisionBoundPullRequestReviews: supported } },
+        });
+        const old = {
+          [WS_METHODS.serverGetConfig]: () => Effect.succeed(config(true)),
+        } as unknown as WsRpcProtocolClient;
+        const { atoms, registry, supervisor } = yield* makeTestRuntime(old);
+        const supported = atoms.revisionReviewSupported(TARGET.environmentId);
+        yield* AtomRegistry.mount(registry, supported);
+        yield* AtomRegistry.toStream(registry, supported).pipe(
+          Stream.filter((value) => value),
+          Stream.runHead,
+        );
+        expect(registry.get(supported)).toBe(true);
+
+        const rollback = {
+          [WS_METHODS.serverGetConfig]: () =>
+            Deferred.succeed(started, undefined).pipe(
+              Effect.andThen(Deferred.await(complete)),
+              Effect.as(config(false)),
+            ),
+        } as unknown as WsRpcProtocolClient;
+        yield* SubscriptionRef.set(supervisor.session, Option.some(session(rollback)));
+        yield* Deferred.await(started);
+        expect(registry.get(supported)).toBe(false);
+        yield* Deferred.succeed(complete, undefined);
+        expect(registry.get(supported)).toBe(false);
       }),
     ),
 );
