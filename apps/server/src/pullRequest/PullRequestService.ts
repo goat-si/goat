@@ -1600,9 +1600,7 @@ export const make = Effect.gen(function* () {
                 number: input.number,
                 ...(input.cursor === undefined ? {} : { cursor: input.cursor }),
                 ...(input.path === undefined ? {} : { path: input.path }),
-                ...(input.expectedHeadSha === undefined
-                  ? {}
-                  : { expectedHeadSha: input.expectedHeadSha }),
+                ...(input.revision === undefined ? {} : { revision: input.revision }),
                 ...(input.commit === undefined ? {} : { commit: input.commit }),
               })
               .pipe(Effect.mapError(toPullRequestError("diff")))
@@ -3116,11 +3114,11 @@ export const make = Effect.gen(function* () {
 
   const diffCache = yield* Cache.makeWith(
     (key: string) => {
-      const [reference, cursor, commit, , path, expectedHeadSha] = decodeDiffCacheKey(key);
+      const [reference, cursor, commit, , path, revision] = decodeDiffCacheKey(key);
       return diffUncached({
         ...refOfCacheKey(reference),
         ...(path === null ? {} : { path }),
-        ...(expectedHeadSha === null ? {} : { expectedHeadSha }),
+        ...(revision === null ? {} : { revision }),
         ...(cursor === null ? {} : { cursor }),
         ...(commit === null ? {} : { commit }),
       } as PullRequestDiffInput).pipe(
@@ -3176,7 +3174,7 @@ export const make = Effect.gen(function* () {
         ? (lastGoodSummary.peek(refCacheKey(input))?.updatedAt ?? null)
         : null,
       input.path ?? null,
-      input.path === undefined ? null : (input.expectedHeadSha ?? null),
+      input.path === undefined ? null : (input.revision ?? null),
     ]);
     const evictDiffs = Cache.entries(diffCache).pipe(
       Effect.flatMap((entries) =>

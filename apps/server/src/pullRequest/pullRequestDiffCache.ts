@@ -1,4 +1,4 @@
-import type { PullRequestDiffResult } from "@goat/contracts";
+import type { PullRequestDiffInput, PullRequestDiffResult } from "@goat/contracts";
 
 // Each holder stays within this UTF-16 patch budget as well as its entry-count bound.
 const DIFF_CACHE_PATCH_BUDGET_BYTES = 32 * 1024 * 1024;
@@ -25,6 +25,6 @@ export function decodeDiffCacheKey(key: string) {
     string | null,
     string | null,
     string | null,
-    string | null,
+    NonNullable<PullRequestDiffInput["revision"]> | null,
   ];
 }

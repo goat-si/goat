@@ -1,3 +1,4 @@
+import type { PullRequestDiffInput } from "@goat/contracts";
 import {
   decodeWith,
   readError,
@@ -351,6 +352,7 @@ export interface GitHubPullRequestDiffSlice {
   readonly nextCursor: string | null;
   readonly omittedFileStats?: ReadonlyArray<PullRequestOmittedFileStat>;
   readonly withheldFilesReadable?: boolean;
+  readonly revision?: PullRequestDiffInput["revision"];
 }
 
 export interface GitHubPullRequestFilesViewed {
@@ -497,7 +499,7 @@ export class GitHubPullRequestApi extends Context.Service<
       readonly cursor?: string | undefined;
       readonly commit?: string | undefined;
       readonly path?: string | undefined;
-      readonly expectedHeadSha?: string | undefined;
+      readonly revision?: PullRequestDiffInput["revision"];
     }) => Effect.Effect<GitHubPullRequestDiffSlice, GitHubPullRequestApiError>;
 
     readonly getPullRequestDiffFileContents: (input: {

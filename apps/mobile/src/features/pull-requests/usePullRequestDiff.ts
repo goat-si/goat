@@ -90,7 +90,6 @@ export function usePullRequestDiffEntry(navigation: {
 export function usePullRequestDiff(
   params: PullRequestDiffParams,
   terminology: ChangeRequestTerminology,
-  observedHead?: string | undefined,
 ) {
   const reference = pullRequestTarget(params);
   const target = {
@@ -118,15 +117,14 @@ export function usePullRequestDiff(
   if (state.key !== key || state.pages !== pages) setState({ key, cursor, pages });
 
   const paged = getCachedPullRequestDiffPages(pages, key, terminology);
-  const fileTarget =
-    params.commit || !observedHead
-      ? target
-      : { ...target, input: { ...target.input, expectedHeadSha: observedHead } };
+  const firstPage = pages[0]?.result;
+  const revision = firstPage?.revision;
+  const fileTarget = params.commit ? target : { ...target, input: { ...target.input, revision } };
   const fileKey = JSON.stringify(fileTarget);
   const [loads, setLoads] = useState({ key: fileKey, paths: NO_PATHS });
   const paths = loads.key === fileKey ? loads.paths : NO_PATHS;
   const readable =
-    pages[0]?.result.withheldFilesReadable === true && (!!params.commit || !!observedHead);
+    firstPage?.withheldFilesReadable === true && (!!params.commit || revision !== undefined);
   const registry = useContext(RegistryContext);
   const answers = useAtomValue(
     paths.length === 0

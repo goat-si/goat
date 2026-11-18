@@ -31,6 +31,8 @@ export const DIFF_TIMEOUT = Duration.seconds(60);
 const DIFF_FILES_PAGE_SIZE = 100;
 const WITHHELD_FILE_RESPONSE_LIMIT = 32 * 1024 * 1024;
 const WITHHELD_FILE_LINE_LIMIT = 1_000;
+const COMPARE_FILES_LIMIT = 300;
+const isImmutableSha = (value: string) => /^(?:[a-f0-9]{40}|[a-f0-9]{64})$/i.test(value);
 
 export function makeGitHubPullRequestDiff(
   api: GitHubRest["Service"],
@@ -111,20 +113,64 @@ export function makeGitHubPullRequestDiff(
         timeout: DIFF_TIMEOUT,
       });
 
+    const readRevision = () =>
+      api.rest({ host: input.host, operation, path: requestPath }).pipe(
+        Effect.map((response) => {
+          if (response.truncated) return undefined;
+          const refs = Option.getOrUndefined(decodeRevisionRefs(response.body));
+          const baseSha = refs?.base?.sha;
+          const headSha = refs?.head?.sha;
+          return baseSha && headSha && isImmutableSha(baseSha) && isImmutableSha(headSha)
+            ? { baseSha: baseSha.toLowerCase(), headSha: headSha.toLowerCase() }
+            : undefined;
+        }),
+      );
+    const comparePath = (revision: NonNullable<typeof input.revision>) =>
+      `repos/${owner}/${name}/compare/${revision.baseSha}...${revision.headSha}`;
+    const preferPinnedFiles = Effect.fn("GitHubPullRequestApi.pinDiffFiles")(function* (
+      page: GitHubPullRequestDiffSlice,
+    ) {
+      if (!page.omittedFileStats?.length) return page;
+      const revision = yield* readRevision();
+      if (revision === undefined) return page;
+      const response = yield* api.rest({
+        host: input.host,
+        operation,
+        // GitHub includes up to 300 files on the first compare page only.
+        path: comparePath(revision) + "?per_page=1",
+        maxResponseBytes: DIFF_MAX_OUTPUT_BYTES,
+        timeout: DIFF_TIMEOUT,
+      });
+      if (response.truncated) return page;
+      const files = yield* decodeWith(input.cwd, operation, decodeCommitFilesJson, response.body);
+      if (files.rawCount === 0 || files.rawCount >= COMPARE_FILES_LIMIT) return page;
+      return {
+        patch: files.patch,
+        truncated: files.truncated,
+        nextCursor: null,
+        revision,
+        ...(files.omittedFileStats.length > 0
+          ? { withheldFilesReadable: true, omittedFileStats: files.omittedFileStats }
+          : {}),
+      } satisfies GitHubPullRequestDiffSlice;
+    });
+
     if (input.path !== undefined) {
       let diffPath = requestPath;
-      if (input.commit === undefined && input.expectedHeadSha !== undefined) {
-        const current = yield* api.rest({ host: input.host, operation, path: requestPath });
-        const refs = Option.getOrUndefined(decodeRevisionRefs(current.body));
-        const base = refs?.base?.sha;
-        const head = refs?.head?.sha;
+      if (input.commit === undefined) {
+        const expected = input.revision;
+        if (!expected || !isImmutableSha(expected.baseSha) || !isImmutableSha(expected.headSha)) {
+          return yield* readError(
+            input.cwd,
+            operation,
+            new Error("An aggregate file read requires the page's base and head revisions."),
+          );
+        }
+        const current = yield* readRevision();
         if (
-          current.truncated ||
-          base === undefined ||
-          head === undefined ||
-          !isCommitSha(base) ||
-          !isCommitSha(head) ||
-          head.toLowerCase() !== input.expectedHeadSha.toLowerCase()
+          current === undefined ||
+          current.baseSha !== expected.baseSha.toLowerCase() ||
+          current.headSha !== expected.headSha.toLowerCase()
         ) {
           return yield* readError(
             input.cwd,
@@ -132,7 +178,7 @@ export function makeGitHubPullRequestDiff(
             new Error("The pull request revision changed before the file could be loaded."),
           );
         }
-        diffPath = `repos/${owner}/${name}/compare/${base}...${head}`;
+        diffPath = comparePath(current);
       }
       const response = yield* fullDiff(diffPath, WITHHELD_FILE_RESPONSE_LIMIT);
       const section =
@@ -157,18 +203,19 @@ export function makeGitHubPullRequestDiff(
         ? Effect.fail(new GitHubDiffCursorError({ cwd: input.cwd }))
         : filesPage(page);
     }
-    const readableFirstPage = () =>
-      filesPage(1).pipe(
-        Effect.map((page): GitHubPullRequestDiffSlice => ({
-          ...page,
-          withheldFilesReadable: true,
-        })),
+    if (input.commit !== undefined) {
+      return yield* filesPage(1).pipe(
+        Effect.map((page) => ({ ...page, withheldFilesReadable: true })),
       );
-    if (input.commit !== undefined) return yield* readableFirstPage();
+    }
     return yield* fullDiff(requestPath, DIFF_MAX_OUTPUT_BYTES).pipe(
       Effect.flatMap((response) =>
         response.truncated
-          ? readableFirstPage()
+          ? filesPage(1).pipe(
+              Effect.flatMap((page) =>
+                preferPinnedFiles(page).pipe(Effect.orElseSucceed(() => page)),
+              ),
+            )
           : Effect.succeed({ patch: response.body, truncated: false, nextCursor: null }),
       ),
       // GitHub's refusal also applies to single-file reads from the full diff.

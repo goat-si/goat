@@ -275,7 +275,11 @@ it("accepts labels from older servers and rejects invalid descriptions", () => {
 it("keeps legacy diff pages readable and preserves exact paths on file requests", () => {
   const request = { projectId: "project-1", repository: "goat-si/goat", number: 1 };
   expect(decodeDiffRequest(request)).toEqual(request);
-  const file = { ...request, path: "docs/spaced name ", expectedHeadSha: "a".repeat(40) };
+  const file = {
+    ...request,
+    path: "docs/spaced name ",
+    revision: { baseSha: "b".repeat(40), headSha: "a".repeat(40) },
+  };
   expect(decodeDiffRequest(file)).toEqual(file);
   expect(() => decodeDiffRequest({ ...request, path: "" })).toThrow();
   const page = { patch: "diff", truncated: true, nextCursor: "2" };

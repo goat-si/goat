@@ -696,15 +696,16 @@ export const PullRequestDetailView = Schema.Struct({
 });
 export type PullRequestDetailView = typeof PullRequestDetailView.Type;
 
-/** GitHub refuses diffs past 300 files, so callers must page large changes. */
+const DiffRevision = Schema.Struct({
+  baseSha: TrimmedNonEmptyString,
+  headSha: TrimmedNonEmptyString,
+});
 export const PullRequestDiffInput = Schema.Struct({
   ...PullRequestRef.fields,
   cursor: Schema.optional(TrimmedNonEmptyString),
   commit: Schema.optional(TrimmedNonEmptyString),
-  /** Read one withheld file by its exact displayed path, independently of paging. */
   path: Schema.optional(Schema.String.check(Schema.isMinLength(1), Schema.isMaxLength(4096))),
-  /** The observed PR head for a withheld file load in the aggregate diff. */
-  expectedHeadSha: Schema.optional(TrimmedNonEmptyString),
+  revision: Schema.optional(DiffRevision),
 });
 export type PullRequestDiffInput = typeof PullRequestDiffInput.Type;
 
@@ -717,11 +718,10 @@ export type PullRequestOmittedFileStat = typeof PullRequestOmittedFileStat.Type;
 
 export const PullRequestDiffResult = Schema.Struct({
   patch: Schema.String,
-  /** Content omitted within this slice; nextCursor separately indicates more slices. */
   truncated: Schema.Boolean,
   nextCursor: Schema.NullOr(TrimmedNonEmptyString),
   omittedFileStats: Schema.optional(Schema.Array(PullRequestOmittedFileStat)),
-  /** On the first page, one withheld file can be requested with a path. */
+  revision: Schema.optional(DiffRevision),
   withheldFilesReadable: Schema.optional(Schema.Boolean),
 });
 export type PullRequestDiffResult = typeof PullRequestDiffResult.Type;

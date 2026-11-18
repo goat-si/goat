@@ -76,19 +76,19 @@ const {
     withheldFilesReadable: true,
   };
   const withheldFileAtom = Atom.family((key: string) => {
-    const { path, expectedHeadSha } = JSON.parse(key) as { path: string; expectedHeadSha: string };
+    const { path, headSha } = JSON.parse(key) as { path: string; headSha: string };
     const patch =
       path === "large.js"
         ? omittedPatch +
           "@@ -1 +1 @@\n-original()\n+" +
-          (expectedHeadSha.startsWith("b") ? "afterPush()" : "beforePush()") +
+          (headSha.startsWith("b") ? "afterPush()" : "beforePush()") +
           "\n"
         : "";
     return Atom.make(() => AsyncResult.success({ patch, truncated: false, nextCursor: null }));
   });
   const withheldFilesAtom = Atom.family((key: string) => {
     const { target, paths } = JSON.parse(key) as {
-      target: { input: { expectedHeadSha: string } };
+      target: { input: { revision: { headSha: string } } };
       paths: string[];
     };
     return Atom.make((get) =>
@@ -97,7 +97,7 @@ const {
           withheldFileAtom(
             JSON.stringify({
               path,
-              expectedHeadSha: target.input.expectedHeadSha,
+              headSha: target.input.revision.headSha,
             }),
           ),
         ),
@@ -105,7 +105,12 @@ const {
     );
   });
   return {
-    withheldPageAtom: Atom.make(() => AsyncResult.success(withheldPage)),
+    withheldPageAtom: Atom.make(() =>
+      AsyncResult.success({
+        ...withheldPage,
+        revision: { baseSha: "c".repeat(40), headSha: mocks.withheldHeadSha },
+      }),
+    ),
     withheldFileAtom,
     withheldFilesAtom,
     diffAtom: Atom.make(() => AsyncResult.success(firstPage)),
@@ -120,6 +125,7 @@ const mocks = vi.hoisted(() => ({
   paged: false,
   image: false,
   withheld: false,
+  withheldHeadSha: "a".repeat(40),
   assetResources: [] as unknown[],
   diffCommits: [] as Array<string | undefined>,
 }));
@@ -146,9 +152,9 @@ vi.mock(import("~/state/pullRequests"), async (original) => {
     pullRequestEnvironment: {
       ...actual.pullRequestEnvironment,
       withheldDiffs: withheldFilesAtom as never,
-      withheldDiff: (({ input }: { input: { path: string; expectedHeadSha: string } }) =>
+      withheldDiff: (({ input }: { input: { path: string; revision: { headSha: string } } }) =>
         withheldFileAtom(
-          JSON.stringify({ path: input.path, expectedHeadSha: input.expectedHeadSha }),
+          JSON.stringify({ path: input.path, headSha: input.revision.headSha }),
         )) as never,
       diff: (({ input }: { input: { commit?: string; cursor?: string } }) => {
         mocks.diffCommits.push(input.commit);
@@ -219,6 +225,7 @@ function setup(paged = false, image = false) {
   mocks.paged = paged;
   mocks.image = image;
   mocks.withheld = false;
+  mocks.withheldHeadSha = "a".repeat(40);
   mocks.assetResources = [];
   mocks.diffCommits = [];
 }
@@ -378,6 +385,7 @@ it("drops a loaded withheld patch across a force-push and loads the current file
   await userEvent.click(load);
   await expect.element(screen.getByText("beforePush()", { exact: true })).toBeVisible();
 
+  mocks.withheldHeadSha = pushed.headSha;
   await screen.rerender(tab(1, null, null, pushed));
   await expect.element(screen.getByText("beforePush()", { exact: true })).not.toBeInTheDocument();
   await expect.element(load).toBeVisible();

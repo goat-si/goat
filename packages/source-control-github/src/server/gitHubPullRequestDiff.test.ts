@@ -152,7 +152,7 @@ layer("GitHub pull request diffs", (it) => {
           host: "github.com",
           number: 7,
           path: "large.js",
-          expectedHeadSha: head,
+          revision: { baseSha: base, headSha: head },
         };
         mockedExecute.mockReturnValueOnce(
           Effect.succeed(
@@ -171,5 +171,74 @@ layer("GitHub pull request diffs", (it) => {
         assert.strictEqual((yield* cli.getPullRequestDiff(input)).patch, patch);
         assert.strictEqual(pathAt(2), "repos/acme/web/compare/" + base + "..." + head);
       }),
+  );
+  it.effect("advertises an aggregate file only from the page's immutable comparison", () =>
+    Effect.gen(function* () {
+      const cli = yield* GitHubPullRequestApi.GitHubPullRequestApi;
+      const ref = { cwd: "/w", repository: "acme/web", host: "github.com", number: 7 };
+      const revision = { baseSha: "a".repeat(40), headSha: "b".repeat(40) };
+      const omitted = (filename: string) => [{ filename, status: "modified", additions: 2 }];
+      mockedExecute
+        .mockReturnValueOnce(Effect.succeed(output("partial", true)))
+        .mockReturnValueOnce(Effect.succeed(output(JSON.stringify(omitted("mutable.js")))))
+        .mockReturnValueOnce(
+          Effect.succeed(
+            output(
+              JSON.stringify({
+                base: { sha: revision.baseSha },
+                head: { sha: revision.headSha },
+              }),
+            ),
+          ),
+        )
+        .mockReturnValueOnce(
+          Effect.succeed(output(JSON.stringify({ files: omitted("pinned.js") }))),
+        );
+      const page = yield* cli.getPullRequestDiff(ref);
+      expect(page).toMatchObject({
+        revision,
+        withheldFilesReadable: true,
+        omittedFileStats: [{ path: "pinned.js" }],
+      });
+      expect(page.patch).not.toContain("mutable.js");
+      expect(pathAt(3)).toBe(
+        "repos/acme/web/compare/" + revision.baseSha + "..." + revision.headSha + "?per_page=1",
+      );
+    }),
+  );
+
+  it.effect("refuses aggregate file reads without a pair or after just the base moves", () =>
+    Effect.gen(function* () {
+      const cli = yield* GitHubPullRequestApi.GitHubPullRequestApi;
+      const ref = {
+        cwd: "/w",
+        repository: "acme/web",
+        host: "github.com",
+        number: 7,
+        path: "large.js",
+      };
+      const patch = "diff --git a/large.js b/large.js\n@@ -1 +1 @@\n-before\n+after\n";
+      mockedExecute.mockReturnValueOnce(Effect.succeed(output(patch)));
+      expect((yield* Effect.result(cli.getPullRequestDiff(ref)))._tag).toBe("Failure");
+      expect(mockedExecute).not.toHaveBeenCalled();
+      mockedExecute.mockReset();
+      const revision = { baseSha: "a".repeat(40), headSha: "b".repeat(40) };
+      mockedExecute
+        .mockReturnValueOnce(
+          Effect.succeed(
+            output(
+              JSON.stringify({
+                base: { sha: "c".repeat(40) },
+                head: { sha: revision.headSha },
+              }),
+            ),
+          ),
+        )
+        .mockReturnValueOnce(Effect.succeed(output(patch)));
+      expect((yield* Effect.result(cli.getPullRequestDiff({ ...ref, revision })))._tag).toBe(
+        "Failure",
+      );
+      expect(mockedExecute).toHaveBeenCalledTimes(1);
+    }),
   );
 });

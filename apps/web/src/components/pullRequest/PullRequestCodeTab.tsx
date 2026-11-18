@@ -310,6 +310,8 @@ function PullRequestCodeTab({
         existing.truncated === next.truncated &&
         existing.nextCursor === next.nextCursor &&
         existing.source.withheldFilesReadable === next.source.withheldFilesReadable &&
+        existing.source.revision?.baseSha === next.source.revision?.baseSha &&
+        existing.source.revision?.headSha === next.source.revision?.headSha &&
         existing.omittedFileStats.length === next.omittedFileStats.length &&
         existing.omittedFileStats.every((file, index) => {
           const refreshed = next.omittedFileStats[index];
@@ -373,20 +375,12 @@ function PullRequestCodeTab({
     `pull-request:${scopeKey}:${resolvedTheme}:${ignoreWhitespace}`,
     ignoreWhitespace,
   );
+  const firstPage = loadedSlices[0]?.source;
+  const revision = firstPage?.revision;
   const withheldReadable =
-    loadedSlices[0]?.source.withheldFilesReadable === true && (commit !== null || !!detail.headSha);
+    firstPage?.withheldFilesReadable === true && (commit !== null || revision !== undefined);
   const withheld = useWithheldPullRequestFiles(
-    {
-      environmentId,
-      input: {
-        ...reference,
-        ...(commit === null
-          ? detail.headSha
-            ? { expectedHeadSha: detail.headSha }
-            : {}
-          : { commit }),
-      },
-    },
+    { environmentId, input: { ...reference, ...(commit === null ? { revision } : { commit }) } },
     withheldReadable,
     pagedFiles,
   );

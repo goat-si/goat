@@ -80,7 +80,7 @@ it.effect("isolates withheld reads by path and revision, and refuses them on oth
           const patch =
             input.path === undefined
               ? "page"
-              : [input.commit, input.expectedHeadSha, input.path].filter(Boolean).join(":");
+              : [input.commit, input.revision?.headSha, input.path].filter(Boolean).join(":");
           answers.push(patch);
           return { patch, truncated: false, nextCursor: null };
         }),
@@ -96,11 +96,12 @@ it.effect("isolates withheld reads by path and revision, and refuses them on oth
     const nextHead = "b".repeat(40);
     assert.strictEqual((yield* service.diff(ref)).patch, "page");
     assert.strictEqual(
-      (yield* service.diff({ ...path, expectedHeadSha: firstHead })).patch,
+      (yield* service.diff({ ...path, revision: { baseSha: firstHead, headSha: firstHead } }))
+        .patch,
       firstHead + ":large.js",
     );
     assert.strictEqual(
-      (yield* service.diff({ ...path, expectedHeadSha: nextHead })).patch,
+      (yield* service.diff({ ...path, revision: { baseSha: firstHead, headSha: nextHead } })).patch,
       nextHead + ":large.js",
     );
     assert.strictEqual(
