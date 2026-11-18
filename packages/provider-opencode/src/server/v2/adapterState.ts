@@ -97,7 +97,7 @@ export interface SubagentCall {
   model: string | null;
   background: boolean;
   run: number | undefined;
-  unboundExecutionsLeft?: number;
+  ambiguousExecutions?: { remaining: number };
   child: ThreadState | undefined;
   status: OrchestrationV2Subagent["status"];
   result: string | null;

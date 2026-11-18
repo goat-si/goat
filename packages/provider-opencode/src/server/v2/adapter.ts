@@ -1082,7 +1082,8 @@ export const make = Effect.fn("OpenCode2Adapter.make")(function* (instanceId: Pr
       call: SubagentCall,
       status: OrchestrationV2Subagent["status"],
       result?: string,
-    ) => Effect.Effect<void> = Effect.fnUntraced(function* (call, status, result) {
+      unexecuted?: boolean,
+    ) => Effect.Effect<void> = Effect.fnUntraced(function* (call, status, result, unexecuted) {
       const recovering = subagentReports.isRecoverable(call);
       if (!recovering && !isOrchestrationV2WorkActive(call.status)) return;
       call.status = status;
@@ -1091,7 +1092,7 @@ export const make = Effect.fn("OpenCode2Adapter.make")(function* (instanceId: Pr
       subagentReports.forget(call);
       if (!recovering) call.state.calls.delete(call.toolId);
       const child = call.child;
-      if (!recovering && child?.subagent?.call === call) {
+      if (!recovering && !unexecuted && child?.subagent?.call === call) {
         for (const nested of Array.from(child.calls.values())) {
           if (nested.background && status !== "failed") continue;
           yield* settleCall(nested, status === "completed" ? "interrupted" : status);
@@ -1108,6 +1109,8 @@ export const make = Effect.fn("OpenCode2Adapter.make")(function* (instanceId: Pr
         yield* emitProviderThread(child);
       }
       yield* emitSubagent(call, recovering);
+      if (unexecuted && child !== undefined)
+        yield* subagentReports.rejectUnexecuted(call, callsAttachedTo(child), emitSubagent);
     });
 
     const startChildTurn = Effect.fnUntraced(function* (child: ThreadState) {
@@ -1781,6 +1784,8 @@ export const make = Effect.fn("OpenCode2Adapter.make")(function* (instanceId: Pr
               call,
               aborted ? "interrupted" : "failed",
               event.data.error.message,
+              event.data.executed === false &&
+                event.data.assistantMessageID === call.assistantMessageId,
             );
           }
           yield* emitTool(state, turn, event.data.id, aborted ? "interrupted" : "failed", {
@@ -2257,7 +2262,7 @@ export const make = Effect.fn("OpenCode2Adapter.make")(function* (instanceId: Pr
         }
         return yield* startChildTurn(state);
       }
-      const turn = state.active;
+      const turn = state.active ?? subagentReports.unexecutedCall(state, event)?.turn;
       if (turn === undefined) {
         if (started && state.subagent === undefined) return yield* onWake(state);
         return;

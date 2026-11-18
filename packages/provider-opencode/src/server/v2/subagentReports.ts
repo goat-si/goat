@@ -52,6 +52,21 @@ export function makeSubagentReports() {
     recoverable.add(call);
   };
 
+  const accountForExecution = Effect.fnUntraced(function* (
+    group: NonNullable<SubagentCall["ambiguousExecutions"]>,
+    attached: ReadonlyArray<SubagentCall>,
+    publish: (call: SubagentCall) => Effect.Effect<void>,
+  ) {
+    if (group.remaining === 0) return;
+    group.remaining -= 1;
+    if (group.remaining !== 0) return;
+    for (const call of attached) {
+      if (call.ambiguousExecutions !== group) continue;
+      loseTracking(call);
+      yield* publish(call);
+    }
+  });
+
   return {
     isRecoverable: (call: SubagentCall) => recoverable.has(call),
     forget(call: SubagentCall) {
@@ -61,11 +76,34 @@ export function makeSubagentReports() {
     bindStart(calls: ReadonlyArray<SubagentCall>, ordinal: number) {
       const unbound = calls.filter((call) => call.run === undefined);
       const sole = unbound.length === 1 ? unbound[0] : undefined;
-      if (sole !== undefined && sole.unboundExecutionsLeft === undefined) {
+      if (sole !== undefined && sole.ambiguousExecutions === undefined) {
         sole.run = ordinal;
       } else if (unbound.length > 1) {
-        for (const call of unbound) call.unboundExecutionsLeft ??= unbound.length;
+        const group = unbound.find((call) => call.ambiguousExecutions !== undefined)
+          ?.ambiguousExecutions ?? { remaining: 0 };
+        for (const call of unbound) {
+          if (call.ambiguousExecutions !== undefined) continue;
+          call.ambiguousExecutions = group;
+          group.remaining++;
+        }
       }
+    },
+    rejectUnexecuted(
+      call: SubagentCall,
+      attached: ReadonlyArray<SubagentCall>,
+      publish: (call: SubagentCall) => Effect.Effect<void>,
+    ) {
+      const group = call.ambiguousExecutions;
+      return group === undefined ? Effect.void : accountForExecution(group, attached, publish);
+    },
+    unexecutedCall(state: ThreadState, event: OpenCode2StreamEvent) {
+      if (event.type !== "session.tool.failed" || event.data.executed !== false) return;
+      const call = state.calls.get(event.data.id);
+      if (
+        call?.ambiguousExecutions !== undefined &&
+        call.assistantMessageId === event.data.assistantMessageID
+      )
+        return call;
     },
     recordNativeEnd: (turn: ActiveTurn) => nativeEnds.add(turn),
     finishChild: Effect.fnUntraced(function* (
@@ -81,13 +119,10 @@ export function makeSubagentReports() {
       publish: (call: SubagentCall) => Effect.Effect<void>,
     ) {
       if (nativeEnds.delete(turn)) {
-        for (const candidate of attached) {
-          if (candidate.unboundExecutionsLeft === undefined || candidate.run !== undefined)
-            continue;
-          if (--candidate.unboundExecutionsLeft !== 0) continue;
-          loseTracking(candidate);
-          yield* publish(candidate);
-        }
+        const group = attached.find(
+          (call) => call.ambiguousExecutions !== undefined,
+        )?.ambiguousExecutions;
+        if (group !== undefined) yield* accountForExecution(group, attached, publish);
       }
       if (terminal.status !== "failed") {
         for (const candidate of attached) {

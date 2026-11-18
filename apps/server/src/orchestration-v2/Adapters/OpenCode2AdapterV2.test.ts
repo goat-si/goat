@@ -1122,6 +1122,74 @@ it.layer(McpProviderSessions.layer)("OpenCode2 adapter", (it) => {
     }).pipe(Effect.scoped),
   );
 
+  it.effect.each(["before", "after"] as const)(
+    "accounts for a tool that did not execute when it fails %s the only native terminal",
+    (order) =>
+      Effect.gen(function* () {
+        const gate = makeProviderReplayGate(["exact_tool_result"]);
+        const failed = event(
+          "session.tool.failed",
+          {
+            sessionID: SESSION,
+            assistantMessageID: "msg_assistant",
+            id: "call-again",
+            error: { type: "unknown", message: "The launch was refused" },
+            executed: false,
+          },
+          undefined,
+          2,
+        );
+        const { runtime, thread } = yield* resumed(
+          [
+            ...backgroundLaunch(CHILD),
+            returnedRunning("call-background"),
+            ...callAgain({ background: true }).slice(0, -1),
+            event("session.execution.started", { sessionID: CHILD }),
+            ...(order === "before" ? [failed] : []),
+            childAnswer("The only native answer", 1),
+            event("session.execution.succeeded", { sessionID: CHILD }),
+            event("session.execution.succeeded", { sessionID: SESSION }),
+            ...(order === "after" ? [failed] : []),
+            event(
+              "session.tool.success",
+              {
+                sessionID: SESSION,
+                assistantMessageID: "msg_assistant",
+                id: "call-background",
+                content: [{ type: "text", text: "Confirmed result" }],
+                metadata: { sessionID: CHILD, status: "completed" },
+                executed: true,
+              },
+              "exact_tool_result",
+              2,
+            ),
+          ],
+          { replayGate: gate },
+        );
+        const watch = yield* watchCalls(runtime, thread);
+        yield* runtime.startTurn(withLineage(thread));
+        yield* watch.until(() => watch.state.terminal === true);
+        if (order === "after") {
+          yield* watch.until(
+            () => watch.calls.get("Sleep")?.status === "idle" && watch.state.roster?.length === 0,
+          );
+        }
+        assert.deepEqual(Object.fromEntries(watch.calls), {
+          Sleep: { status: "idle", result: "Tracking lost. Outcome unknown." },
+          Again: { status: "failed", result: "The launch was refused" },
+        });
+        assert.equal(watch.childTurns.get(`${CHILD}:turn:1`), "completed");
+        assert.deepEqual(watch.state.roster, []);
+        assert.isFalse(yield* runtime.hasPendingBackgroundWorkForThread!(thread));
+        gate.release("exact_tool_result");
+        yield* watch.until(() => watch.calls.get("Sleep")?.status === "completed");
+        assert.deepEqual(watch.calls.get("Sleep"), {
+          status: "completed",
+          result: "Confirmed result",
+        });
+      }).pipe(Effect.scoped),
+  );
+
   it.effect("settles every call that joined a running subagent with its one report", () =>
     Effect.gen(function* () {
       const { runtime, thread } = yield* resumed([
