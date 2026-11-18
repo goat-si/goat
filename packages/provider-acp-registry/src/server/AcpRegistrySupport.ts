@@ -1,3 +1,4 @@
+import { withPreferredPath } from "./managedCommandPath.ts";
 import { parseNpxPackageSpec, parseUvxPackageSpec } from "./registryPackageSpec.ts";
 import {
   normalizeRegistryCommandPath,
@@ -27,11 +28,7 @@ import type { AcpRegistryDistributionPreference } from "../settings.ts";
 import type { AcpRegistrySettings } from "../settings.ts";
 import { cliArchiveTarCommand } from "@goat/shared/cliRelease";
 import * as HostProcess from "@goat/shared/HostProcess";
-import {
-  mergePathEntries,
-  resolveSpawnCommand,
-  SpawnExecutableResolution,
-} from "@goat/shared/shell";
+import { resolveSpawnCommand, SpawnExecutableResolution } from "@goat/shared/shell";
 import * as Clock from "effect/Clock";
 import * as Context from "effect/Context";
 import * as Duration from "effect/Duration";
@@ -238,28 +235,6 @@ function packageCommandCandidates(
       ),
     ),
   );
-}
-
-function readEnvironmentPath(
-  environment: NodeJS.ProcessEnv,
-  platform: NodeJS.Platform,
-): string | undefined {
-  if (platform !== "win32") return environment.PATH;
-  return (
-    environment.PATH ??
-    Object.entries(environment).find(([key]) => key.toLowerCase() === "path")?.[1]
-  );
-}
-
-function withPreferredPath(
-  environment: NodeJS.ProcessEnv,
-  directory: string,
-  platform: NodeJS.Platform,
-): NodeJS.ProcessEnv {
-  return {
-    ...environment,
-    PATH: mergePathEntries(directory, readEnvironmentPath(environment, platform), platform),
-  };
 }
 
 export const acpRegistryManagedBinaryDirectories = Effect.fn("acpRegistryManagedBinaryDirectories")(
