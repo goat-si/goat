@@ -208,9 +208,8 @@ export const runSelfWideSave = Effect.fn("test.runSelfWideSave")(function* (
   assert.isUndefined((yield* store.loadAggregate(space, draft.memoryId)).item);
   const forgotten = yield* store.loadAggregate(space, unrelated.memoryId);
   assert.include(forgotten.item, { status: "forgotten" });
-  assert.include((yield* store.receipt(space, M.MemoryOperationId.make(id(9022))))?.receipt, {
-    outcome: "deleted",
-    pendingSync: false,
-  });
+  const deletion = (yield* store.receipt(space, M.MemoryOperationId.make(id(9022))))?.receipt;
+  assert.include(deletion, { outcome: "deleted" });
+  assert.isNumber(deletion && "hubSequence" in deletion && deletion.hubSequence);
   yield* heldSync.shutdown;
 });
