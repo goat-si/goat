@@ -64,7 +64,7 @@ const boundedOpaqueValue = (value: string, maximumLength: number): string | unde
 
 /**
  * The session's reasoning option with the levels a model advertises in `_meta`, in the
- * shape Grok uses. Null when the model has none, undefined when it says nothing.
+ * shape Grok uses. Null represents an explicit opt-out.
  */
 function advertisedReasoningEffort(
   option: EffectAcpSchema.SessionConfigOption | undefined,
@@ -87,12 +87,10 @@ function advertisedReasoningEffort(
       : [],
   );
   const currentValue = typeof meta.reasoningEffort === "string" ? meta.reasoningEffort : "";
-  return (
-    acpProviderOptionDescriptors({
-      configOptions: [{ ...option, options, currentValue }],
-      modeState: undefined,
-    })[0] ?? null
-  );
+  return acpProviderOptionDescriptors({
+    configOptions: [{ ...option, options, currentValue }],
+    modeState: undefined,
+  })[0];
 }
 
 export function normalizeAcpRegistryWebUrl(value: string): string | undefined {

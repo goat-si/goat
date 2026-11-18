@@ -405,6 +405,31 @@ describe("acpRegistrySnapshotReadiness", () => {
     ).toBeNull();
   });
 
+  it("omits reasoning metadata when every advertised level is unusable", () => {
+    const effort = {
+      id: "effort",
+      name: "Effort",
+      category: "thought_level",
+      type: "select" as const,
+      currentValue: "high",
+      options: [{ value: "high", name: "High" }],
+    };
+    const discovery = normalizeAcpRegistryLiveConfiguration([effort], undefined, {
+      currentModelId: "current",
+      availableModels: [
+        { modelId: "current", name: "Current" },
+        {
+          modelId: "other",
+          name: "Other",
+          _meta: { reasoningEfforts: [{ value: 123 }, { value: " invalid id " }] },
+        },
+      ],
+    });
+    const other = discovery.models.find((model) => model.id === "other");
+    expect(other).toBeDefined();
+    expect(other).not.toHaveProperty("reasoningEffort");
+  });
+
   it("projects discovery without claiming authentication when no login methods are advertised", () => {
     const snapshot = buildCheckedAcpRegistrySnapshot({
       ...identity,
