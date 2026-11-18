@@ -1,3 +1,4 @@
+import { nativeExistingWorktree } from "./nativeExistingWorktree.ts";
 import { makeWorktreePreflight, type WorktreePreflightError } from "./WorktreePreflight.ts";
 export {
   ThreadLaunchBaseRefError,
@@ -1028,24 +1029,6 @@ const make = Effect.gen(function* () {
     );
   });
 
-  /**
-   * Records an existing worktree in the server's own form, so a client's `C:/…`, shell `/c/…`
-   * or `..` path compares equal to the paths git and the server produce, even when the folder
-   * is gone and gets recreated later. The existence check below reports a missing one.
-   */
-  const nativeExistingWorktree = (strategy: ThreadLaunchWorkspaceStrategy) =>
-    strategy.type !== "existing_worktree" || Option.isNone(workspacePaths)
-      ? Effect.succeed(strategy)
-      : workspacePaths.value.normalizeWorkspaceRoot(strategy.worktreePath).pipe(
-          Effect.catchTags({
-            WorkspaceRootNotExistsError: (error) => Effect.succeed(error.normalizedWorkspaceRoot),
-            WorkspaceRootNotDirectoryError: (error) =>
-              Effect.succeed(error.normalizedWorkspaceRoot),
-          }),
-          Effect.map((worktreePath) => ({ ...strategy, worktreePath })),
-          Effect.orElseSucceed(() => strategy),
-        );
-
   /** Fails only when a folder is missing or not a directory; any other stat failure is left to the launch. */
   const assertWorkspaceExists = Effect.fn("ThreadLaunchService.assertWorkspaceExists")(function* (
     project: Project,
@@ -1195,7 +1178,7 @@ const make = Effect.gen(function* () {
               )
             : cloud
               ? input.workspaceStrategy
-              : yield* nativeExistingWorktree(input.workspaceStrategy);
+              : yield* nativeExistingWorktree(workspacePaths, input.workspaceStrategy);
         // Checked after a Scratch launch claims its folder, which recreates a
         // deleted Scratch folder. Only a first attempt is checked: a replay must
         // keep answering with the thread it made.
