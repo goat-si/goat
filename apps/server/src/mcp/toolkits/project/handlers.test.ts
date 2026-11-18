@@ -7,6 +7,7 @@ import {
   ProviderInstanceId,
   ThreadId,
   type ModelSelection,
+  type Project as ProjectRecord,
   type OrchestrationV2ThreadShell,
   type RuntimeMode,
 } from "@goat/contracts";
@@ -48,6 +49,17 @@ import {
   type Route,
 } from "./handlers.testkit.ts";
 import { ProjectToolkit } from "./tools.ts";
+
+const launchProject = (id: ProjectId, workspaceRoot: string): ProjectRecord => ({
+  id,
+  title: "Launch target",
+  workspaceRoot,
+  defaultModelSelection: null,
+  scripts: [],
+  createdAt: "2026-01-01T00:00:00.000Z",
+  updatedAt: "2026-01-01T00:00:00.000Z",
+  deletedAt: null,
+});
 
 /** Launches from a T3 thread caller over mocks; returns what the handler did. */
 const launchFromThread = (params: {
@@ -149,7 +161,9 @@ const launchFromThread = (params: {
           } as unknown as ThreadLaunch.ThreadLaunchResult);
         },
       }),
-      Layer.mock(Project.ProjectService)({ getById: () => Effect.succeed(Option.none()) }),
+      Layer.mock(Project.ProjectService)({
+        getById: () => Effect.succeedSome(launchProject(projectId, "/projects/client-target")),
+      }),
       Layer.mock(ManagedProjectFolders.ManagedProjectFolders)({ namedProjectsRoot: "/projects" }),
       Layer.mock(GitVcsDriver.GitVcsDriver)({}),
       Layer.mock(RemoteReportService.RemoteReportService)({}),
@@ -473,7 +487,9 @@ it.effect("launches a scratch thread into the Scratch project", () =>
           } as unknown as ThreadLaunch.ThreadLaunchResult);
         },
       }),
-      Layer.mock(Project.ProjectService)({}),
+      Layer.mock(Project.ProjectService)({
+        getById: () => Effect.succeedSome(launchProject(scratchProjectId, "/projects/scratch")),
+      }),
       Layer.mock(ManagedProjectFolders.ManagedProjectFolders)({
         namedProjectsRoot: "/projects",
         ensureScratchProject: Effect.succeed({ projectId: scratchProjectId }),
@@ -629,6 +645,34 @@ it.effect("starts a project from just a title when workspaceRoot is omitted", ()
       expect(rejected.at(-1)?.result).toMatchObject({ code: "invalid_request" });
     }
     expect(named).toEqual(["Pinball Stats"]);
+  }),
+);
+
+it.effect("launch into an unknown project gives an actionable refusal", () =>
+  Effect.gen(function* () {
+    const launched: Array<ThreadLaunch.ThreadLaunchInput> = [];
+    const { modelSelection, dependencies } = clientLaunchHarness({
+      runtimeModeCeiling: "auto",
+      launched,
+    });
+    const layer = withLaunchService(dependencies);
+    const toolkit = yield* ProjectToolkit.pipe(
+      Effect.provide(
+        McpToolAccess.HandlersLayer.layer(ProjectHandlers.layer).pipe(Layer.provide(layer)),
+      ),
+    );
+    const result = yield* toolkit
+      .handle("goat_thread_launch", {
+        title: "Launch",
+        projectId: ProjectId.make("missing"),
+        modelSelection,
+      })
+      .pipe(Stream.unwrap, Stream.runCollect, Effect.provide(layer));
+    expect(result.at(-1)?.result).toMatchObject({
+      code: "invalid_request",
+      message: "The project was not found.",
+    });
+    expect(launched).toEqual([]);
   }),
 );
 
