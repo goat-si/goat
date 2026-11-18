@@ -29,6 +29,32 @@ const carrySavedAntigravityAccount = (
   return { auth: previousProvider.auth, status };
 };
 
+export function sameWorkspaceCatalog(
+  previous: ServerProvider | undefined,
+  next: ServerProvider,
+): boolean {
+  return (
+    previous !== undefined &&
+    Equal.equals(previous.slashCommands, next.slashCommands) &&
+    Equal.equals(previous.skills, next.skills)
+  );
+}
+
+export function invalidateChangedWorkspaceCatalog(
+  previous: ServerProvider | undefined,
+  provider: ServerProvider,
+): ServerProvider {
+  if (
+    !previous ||
+    !provider.workspaceSnapshots?.length ||
+    sameWorkspaceCatalog(previous, provider)
+  ) {
+    return provider;
+  }
+  const { workspaceSnapshots: _stale, ...machine } = provider;
+  return machine;
+}
+
 export const mergeProviderSnapshot = (
   previousProvider: ServerProvider | undefined,
   nextProvider: ServerProvider,

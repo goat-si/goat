@@ -38,6 +38,7 @@ export function makeProviderCatalogRpc(options: {
   readonly scopes?: ReadonlyArray<AuthEnvironmentScope>;
   readonly recordRefresh?: () => void;
   readonly providerChanges?: Stream.Stream<ReadonlyArray<ServerProvider>>;
+  readonly refreshWorkspaceSnapshot?: ProviderRegistry.ProviderRegistry["Service"]["refreshWorkspaceSnapshot"];
   readonly projectProviders?: UsageLimitSources.UsageLimitSources["Service"]["projectProviders"];
 }) {
   const scopes = options.scopes ?? [AuthOrchestrationReadScope];
@@ -99,7 +100,7 @@ export function makeProviderCatalogRpc(options: {
                     options.recordRefresh?.();
                     return options.providers;
                   }),
-                refreshWorkspaceSnapshot: () => providers,
+                refreshWorkspaceSnapshot: options.refreshWorkspaceSnapshot ?? (() => providers),
               }),
               Layer.mock(ExternalLauncher.ExternalLauncher)({
                 resolveAvailableEditors: () => Effect.succeed([]),
