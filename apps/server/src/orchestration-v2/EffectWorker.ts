@@ -36,11 +36,12 @@ import * as ThreadTitleRegenerationService from "./ThreadTitleRegenerationServic
 import * as ThreadManagementService from "./ThreadManagementService.ts";
 import * as ServerSettings from "../serverSettings.ts";
 import { makeComputerUseStop } from "./goat/ComputerUseStop.ts";
-import { makeSteerEffect } from "./goat/SteerEffect.ts";
 import { makeCleanupEffects } from "./goat/CleanupEffects.ts";
 import { makeRestartContinuation } from "./RestartContinuation.ts";
 import * as AutomationHold from "../automationHold.ts";
 import { isNonRetryableProviderTurnControlFailure } from "./providerTurnControlFailure.ts";
+
+const isProviderTurnControlError = Schema.is(ProviderTurnControlService.ProviderTurnControlError);
 
 export interface OrchestrationEffectExecutorV2Shape {
   readonly execute: (
@@ -84,7 +85,6 @@ export const layerExecutor: Layer.Layer<
     const continueRestartedRun = yield* makeRestartContinuation(providerTurnStart);
     const stopComputerUse = yield* makeComputerUseStop;
     const runCleanup = yield* makeCleanupEffects;
-    const steer = makeSteerEffect(providerTurnControl, threads);
     return OrchestrationEffectExecutorV2.of({
       execute: Effect.fn("OrchestrationEffectExecutorV2.execute")(function (effect, options) {
         const willRetry = options?.willRetry ?? false;
@@ -248,7 +248,126 @@ export const layerExecutor: Layer.Layer<
               );
           }
           case "provider-turn.steer":
-            return steer(effect, effect.request);
+            return providerTurnControl
+              .steer({
+                threadId: effect.threadId,
+                providerSessionId: effect.request.providerSessionId,
+                providerThreadId: effect.request.providerThreadId,
+                providerTurnId: effect.request.providerTurnId,
+                messageId: effect.request.messageId,
+                modelSelection: effect.request.modelSelection,
+              })
+              .pipe(
+                Effect.tap(() =>
+                  Effect.gen(function* () {
+                    if (effect.request.type !== "provider-turn.steer") return;
+                    const messageId = effect.request.messageId;
+                    const projection = yield* threads.getThreadRecords(
+                      effect.threadId,
+                      ["messages", "runs"],
+                      { messageIds: [effect.request.messageId] },
+                    );
+                    const message = projection.messages.find((row) => row.id === messageId);
+                    if (message?.delegatedCompletion === undefined) return;
+                    yield* threads.dispatch({
+                      type: "notification.delivery.accept",
+                      commandId: CommandId.make(`command:mailbox-accepted:${effect.id}`),
+                      threadId: effect.threadId,
+                      messageId: message.id,
+                    });
+                  }),
+                ),
+                Effect.catch((error) =>
+                  Effect.gen(function* () {
+                    if (
+                      !isProviderTurnControlError(error) ||
+                      (!error.turnCompleted && !error.steerDeclined) ||
+                      effect.request.type !== "provider-turn.steer"
+                    ) {
+                      return yield* error;
+                    }
+                    const projection = yield* threads.getThreadRecords(
+                      effect.threadId,
+                      ["messages", "runs"],
+                      { messageIds: [effect.request.messageId] },
+                    );
+                    const messageId = effect.request.messageId;
+                    const message = projection.messages.find((item) => item.id === messageId);
+                    const run = projection.runs.find((item) => item.id === message?.runId);
+                    if (message === undefined || run === undefined) return yield* error;
+                    const modelSelection =
+                      effect.request.pinnedScheduleSelection ??
+                      (error.steerDeclined ? effect.request.modelSelection : undefined) ??
+                      (message.delegatedCompletion === undefined ? undefined : run.modelSelection);
+                    // Notifications must be queued messages.
+                    const queued =
+                      message.delegatedCompletion !== undefined ||
+                      message.notification !== undefined ||
+                      error.steerDeclined === true;
+                    // Reuse message ids and receipts so retries cannot duplicate messages or follow-ups.
+                    yield* threads
+                      .dispatch({
+                        type: "message.dispatch",
+                        commandId: CommandId.make(`command:steer-follow-up:${effect.id}`),
+                        threadId: effect.threadId,
+                        messageId: message.id,
+                        memoryGrantCeiling: run.memoryGrantCeiling ?? "none",
+                        ...(error.steerDeclined ? { steerFollowUpOfRunId: run.id } : {}),
+                        ...(error.steerDeclined &&
+                        effect.request.steerFollowUpAfterRunOrdinal !== undefined
+                          ? {
+                              steerFollowUpAfterRunOrdinal:
+                                effect.request.steerFollowUpAfterRunOrdinal,
+                            }
+                          : {}),
+                        text: message.text,
+                        ...(message.context ? { context: message.context } : {}),
+                        attachments: message.attachments,
+                        ...(modelSelection === undefined ? {} : { modelSelection }),
+                        dispatchMode: {
+                          type: queued ? "queue_after_active" : "start_immediately",
+                        },
+                        createdBy: message.createdBy,
+                        creationSource: message.creationSource,
+                        ...(message.delegatedCompletion === undefined
+                          ? {}
+                          : { delegatedCompletion: message.delegatedCompletion }),
+                        ...(message.notification === undefined
+                          ? {}
+                          : { notification: message.notification }),
+                        ...(message.scheduledTaskId === undefined
+                          ? {}
+                          : { scheduledTaskId: message.scheduledTaskId }),
+                        ...(message.senderThreadId === undefined
+                          ? {}
+                          : { senderThreadId: message.senderThreadId }),
+                      })
+                      .pipe(
+                        // A disabled instance cannot retry this completed turn; its result stands.
+                        Effect.catchTags({
+                          ThreadManagementProviderInstanceDisabledError: (disabledError) =>
+                            Effect.logInfo(
+                              "orchestration-v2.effect-worker.steer-follow-up-disabled",
+                              {
+                                threadId: effect.threadId,
+                                messageId: message.id,
+                                projectId: disabledError.projectId,
+                                instanceId: disabledError.instanceId,
+                              },
+                            ),
+                        }),
+                      );
+                  }),
+                ),
+                Effect.mapError(
+                  (cause) =>
+                    new OrchestrationEffectExecutionError({
+                      effectId: effect.id,
+                      effectType: effect.request.type,
+                      cause,
+                    }),
+                ),
+              );
           case "provider-turn.restart":
             return providerTurnControl
               .interruptAndAwaitTerminal({

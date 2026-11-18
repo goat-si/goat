@@ -53,14 +53,6 @@ export const OrchestrationEffectRequestV2 = Schema.Union([
     modelSelection: Schema.optional(ModelSelection),
     pinnedScheduleSelection: Schema.optional(ModelSelection),
     steerFollowUpAfterRunOrdinal: Schema.optional(NonNegativeInt),
-    deferredSteer: Schema.optional(
-      Schema.Struct({
-        queuedRunId: RunId,
-        targetRunId: RunId,
-        attemptId: RunAttemptId,
-        queuePosition: NonNegativeInt,
-      }),
-    ),
   }),
   Schema.Struct({
     type: Schema.Literal("provider-turn.restart"),

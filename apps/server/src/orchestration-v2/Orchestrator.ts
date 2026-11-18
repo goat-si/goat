@@ -2,8 +2,6 @@ import { makeGoalCommandPolicy } from "./goat/GoalCommandPolicy.ts";
 import {
   holdUndeliveredSteers,
   runDeferredSteeringReactor,
-  makeRestoreDeferredSteer,
-  deferredSteerTarget,
   makeReleaseUnattendedHolds,
   makeDeferSteerDuringSetup,
   steeringMessageRefusal,
@@ -4213,10 +4211,6 @@ const makeOrchestrator = Effect.fn("orchestrationV2.Orchestrator.layer")(functio
     readonly scheduledTaskId?: OrchestrationV2ConversationMessage["scheduledTaskId"];
     readonly followsThreadSelection?: true | undefined;
     readonly pinnedScheduleSelection?: ModelSelection | undefined;
-    readonly deferredSteer?: Extract<
-      PendingOrchestrationEffectV2["request"],
-      { type: "provider-turn.steer" }
-    >["deferredSteer"];
     readonly senderThreadId?: OrchestrationV2ConversationMessage["senderThreadId"];
     readonly idleCompaction?: OrchestrationV2ConversationMessage["idleCompaction"];
     readonly delegatedCompletion?: OrchestrationV2ConversationMessage["delegatedCompletion"];
@@ -4514,7 +4508,6 @@ const makeOrchestrator = Effect.fn("orchestrationV2.Orchestrator.layer")(functio
             ...(input.pinnedScheduleSelection === undefined
               ? {}
               : { pinnedScheduleSelection: input.pinnedScheduleSelection }),
-            ...(input.deferredSteer === undefined ? {} : { deferredSteer: input.deferredSteer }),
             steerFollowUpAfterRunOrdinal: Math.max(
               0,
               ...input.projection.runs.map((run) => run.ordinal),
@@ -8793,7 +8786,6 @@ const makeOrchestrator = Effect.fn("orchestrationV2.Orchestrator.layer")(functio
         queuedMessage.scheduledTaskId !== undefined && queuedMessage.followsThreadSelection !== true
           ? queuedRun.modelSelection
           : undefined,
-      deferredSteer: deferredSteerTarget(queuedRun, target),
       ...(queuedMessage.senderThreadId === undefined
         ? {}
         : { senderThreadId: queuedMessage.senderThreadId }),
@@ -12461,12 +12453,6 @@ const makeOrchestrator = Effect.fn("orchestrationV2.Orchestrator.layer")(functio
           effects,
         );
         break;
-      case "deferred-steer.restore":
-        yield* makeRestoreDeferredSteer({ projectionStore, emit, mapDispatchError })(
-          command,
-          events,
-        );
-        break;
       case "queued-run.start":
       case "queue.resume": {
         const projection = yield* loadProjectionForCommand(
@@ -12729,7 +12715,6 @@ const makeOrchestrator = Effect.fn("orchestrationV2.Orchestrator.layer")(functio
           command.type === "delegated_task.remote.result" ||
           command.type === "thread.background-work.settle" ||
           command.type === "thread.visit" ||
-          command.type === "deferred-steer.restore" ||
           command.type === "thread.interrupt.unresponsive" ||
           command.type === "thread.stop" ||
           command.type === "subagent.stop" ||
