@@ -1,23 +1,13 @@
 // @effect-diagnostics nodeBuiltinImport:off - observes launcher child IPC.
-import * as NodeCrypto from "@effect/platform-node/NodeCrypto";
 import * as NodeServices from "@effect/platform-node/NodeServices";
 import { assert, it } from "@effect/vitest";
 import type * as NodeChildProcess from "node:child_process";
-import * as NodeEvents from "node:events";
-import * as HostProcess from "@goat/shared/HostProcess";
 import * as NodeSqlite from "node:sqlite";
-import * as Cause from "effect/Cause";
 import * as Effect from "effect/Effect";
-import * as Exit from "effect/Exit";
 import * as FileSystem from "effect/FileSystem";
 import * as Path from "effect/Path";
 import { vi } from "vite-plus/test";
-import { makeHarness } from "./cloud/selfUpdate.testkit.ts";
-import * as ServiceLauncherClient from "./cloud/serviceLauncherClient.ts";
-import {
-  SERVICE_LAUNCHER_CONTEXT_ENV,
-  SERVICE_LAUNCHER_PROTOCOL,
-} from "./cloud/serviceProtocol.ts";
+import { SERVICE_LAUNCHER_PROTOCOL } from "./cloud/serviceProtocol.ts";
 import { Launcher, readServiceState, writeServiceState } from "./serviceLauncher.ts";
 import { writeFakeRuntime } from "./serviceLauncher.testkit.ts";
 
@@ -61,11 +51,8 @@ const makeFixture = (pendingUpdate: boolean) =>
 process.on("message", (message) => {
   if (message.type === "test-request") {
     process.send({ type: "request-update", targetVersion: "1.1.0", dbPath: ${JSON.stringify(dbPath)} });
-  } else if (message.type === "test-ipc") {
-    process.send(message.request);
   } else {
     process.send(message.type);
-    process.send({ reply: message });
   }
 });
 process.send("active");
@@ -134,45 +121,17 @@ process.send("candidate");
     return { fs, path, root, dbPath, original, statePath, targetDir, start, notice, notices };
   });
 
-const makeIpcClient = (child: NodeChildProcess.ChildProcess) =>
-  Effect.gen(function* () {
-    const replies = new NodeEvents.EventEmitter();
-    child.on("message", (message) => {
-      if (typeof message === "object" && message !== null && "reply" in message) {
-        replies.emit("message", message.reply);
-      }
-    });
-    child.on("disconnect", () => replies.emit("disconnect"));
-    return yield* ServiceLauncherClient.make({ currentVersion: "1.0.0" }).pipe(
-      Effect.provideService(ServiceLauncherClient.ServiceLauncherHostProcess, {
-        get connected() {
-          return child.connected;
-        },
-        send: (request, callback) => child.send({ type: "test-ipc", request }, callback),
-        on: (event, listener) => {
-          replies.on(event, listener);
-        },
-        off: (event, listener) => {
-          replies.off(event, listener);
-        },
-      }),
-      Effect.provideService(HostProcess.Environment, {
-        [SERVICE_LAUNCHER_CONTEXT_ENV]: JSON.stringify({
-          protocol: SERVICE_LAUNCHER_PROTOCOL,
-          childVersion: "1.0.0",
-        }),
-      }),
-    );
-  });
-
 it.layer(NodeServices.layer)("service update disk headroom", (it) => {
-  it.effect(
-    "rejects low startup headroom before accepting and keeps the active server running",
-    () =>
+  it.effect.each(["before acknowledgement", "at handoff"] as const)(
+    "keeps the active server running when disk space drops %s",
+    (when) =>
       Effect.gen(function* () {
         const f = yield* makeFixture(false);
+        let free = when === "at handoff" ? headroom : 0;
+        const held = Promise.withResolvers<"disk-hold">();
         const running = yield* f.start({
-          startupSpaceProbe: async (directory) => (directory === f.targetDir ? 0 : headroom),
+          startupSpaceProbe: async (directory) => (directory === f.targetDir ? free : headroom),
+          writeDiagnostic: () => held.resolve("disk-hold"),
         });
         const active = yield* Effect.promise(() => f.notice("active").promise);
         active.send({ type: "test-request" });
@@ -183,42 +142,18 @@ it.layer(NodeServices.layer)("service update disk headroom", (it) => {
             running.running,
           ]),
         );
-        assert.equal(response, "rejected");
+        assert.equal(response, when === "at handoff" ? "accepted" : "rejected");
+        if (when === "at handoff") {
+          free = 0;
+          assert.equal(
+            yield* Effect.promise(() => Promise.race([held.promise, running.running])),
+            "disk-hold",
+          );
+        }
         assert.isNull(active.exitCode);
         assert.isNull(active.signalCode);
         assert.isTrue(active.connected);
       }),
-  );
-
-  it.effect("rejects the delayed handoff over launcher IPC and reopens server admission", () =>
-    Effect.gen(function* () {
-      const f = yield* makeFixture(false);
-      let targetProbes = 0;
-      const activeLauncher = yield* f.start({
-        startupSpaceProbe: async (directory) =>
-          directory === f.targetDir && ++targetProbes > 1 ? 0 : headroom,
-      });
-      const active = yield* Effect.promise(() => f.notice("active").promise);
-      const client = yield* makeIpcClient(active);
-      const { selfUpdate, admission } = yield* makeHarness({
-        baseDir: f.root,
-        requestUpdate: client.requestUpdate,
-      }).pipe(Effect.provide(NodeCrypto.layer));
-      const outcome = yield* selfUpdate.update({ targetVersion: "1.1.0" }).pipe(Effect.exit);
-
-      assert.isTrue(active.connected);
-      assert.deepEqual(
-        yield* admission.admit(Effect.succeed("new work")).pipe(Effect.exit),
-        Exit.succeed("new work"),
-      );
-      assert.isTrue(Exit.isFailure(outcome));
-      if (Exit.isFailure(outcome)) {
-        assert.include(String(Cause.squash(outcome.cause)), "The server was not stopped");
-      }
-      assert.isFalse(yield* selfUpdate.isUpdating);
-      assert.isUndefined((yield* Effect.promise(() => readServiceState(f.statePath))).update);
-      yield* Effect.promise(() => activeLauncher.launcher.stop("SIGTERM"));
-    }),
   );
 
   it.effect(
