@@ -23,6 +23,12 @@ import {
 } from "../connection/pullRequestRoutingPermissions.ts";
 import type { ConnectionCatalogEntry } from "../connection/catalog.ts";
 import * as ConnectionProfileStore from "../connection/profileStore.ts";
+import {
+  connectionRoutes,
+  entryWithRoutes,
+  routeHttpBaseUrl,
+  shownRoutes,
+} from "../connection/routes.ts";
 import type { RpcSession } from "../rpc/session.ts";
 import {
   requestGuarded as request,
@@ -128,13 +134,9 @@ function shareMetadataRead<A, R>(
 }
 
 function isLocal(entry: ConnectionCatalogEntry): boolean {
-  const url =
-    entry.target._tag === "PrimaryConnectionTarget"
-      ? entry.target.httpBaseUrl
-      : Option.isSome(entry.profile) && entry.profile.value._tag === "BearerConnectionProfile"
-        ? entry.profile.value.httpBaseUrl
-        : undefined;
-  if (url === undefined) return false;
+  const route = shownRoutes(entry)[0];
+  const url = route === undefined ? null : routeHttpBaseUrl(route);
+  if (url === null) return false;
   try {
     return ["localhost", "127.0.0.1", "[::1]"].includes(new URL(url).hostname);
   } catch {
@@ -179,14 +181,20 @@ const routingAllowed = Effect.fn("PullRequestRouting.allowed")(function* (
     : source !== "off" && target !== "off";
   if (!allowed) return false;
   for (const entry of [origin, destination]) {
-    if (entry.target._tag !== "SshConnectionTarget") continue;
+    const routes = connectionRoutes(entry);
+    if (!routes.some((route) => route.target._tag === "SshConnectionTarget")) continue;
     const profiles = yield* Effect.serviceOption(ConnectionProfileStore.ConnectionProfileStore);
     if (Option.isNone(profiles)) return false;
-    const profile = yield* profiles.value
-      .get(entry.target.connectionId)
-      .pipe(Effect.orElseSucceed(() => Option.none()));
+    const current = yield* Effect.forEach(routes, (route) =>
+      route.target._tag === "SshConnectionTarget"
+        ? profiles.value.get(route.target.connectionId).pipe(
+            Effect.orElseSucceed(() => Option.none()),
+            Effect.map((profile) => ({ ...route, profile })),
+          )
+        : Effect.succeed(route),
+    );
     const key = pullRequestRoutingConnectionKey(entry);
-    if (key === null || key !== pullRequestRoutingConnectionKey({ ...entry, profile }))
+    if (key === null || key !== pullRequestRoutingConnectionKey(entryWithRoutes(entry, current)))
       return false;
   }
   return true;
