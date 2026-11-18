@@ -167,7 +167,6 @@ export const makeMemorySaveSuggestions = ({
       .transact(
         Effect.gen(function* () {
           yield* permit;
-          yield* permit;
           yield* requireSharing(space);
           const now = yield* Clock.currentTimeMillis;
           const [row] = yield* stored(
@@ -176,10 +175,20 @@ export const makeMemorySaveSuggestions = ({
         SELECT * FROM memory_save_suggestions WHERE space=${space} AND id=${id} AND expires_at>${now}`,
           );
           if (!row) {
-            const prior = yield* store.receipt(space, operationFor(0));
-            return prior && "hubSequence" in prior.receipt && prior.receipt.outcome === "accepted"
-              ? { status: "accepted" as const }
-              : { status: "refused" as const, reason: "source_invalidated" as const };
+            const current = yield* store.loadAggregate(space, id, {}, {});
+            if (
+              current.identity &&
+              current.item?.status === "active" &&
+              current.item.localAvailability.exposure === "visible" &&
+              !current.tombstone
+            ) {
+              const prior = yield* store.receipt(space, current.identity.createOperationId);
+              if (prior?.receipt.outcome === "accepted") {
+                const pending = "pendingSync" in prior.receipt && prior.receipt.pendingSync;
+                return { status: pending ? ("pending" as const) : ("accepted" as const) };
+              }
+            }
+            return { status: "refused" as const, reason: "source_invalidated" as const };
           }
           if ((yield* readGeneration(space)) !== row.forget_generation)
             return { status: "refused" as const, reason: "source_invalidated" as const };

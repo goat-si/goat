@@ -2785,7 +2785,9 @@ it("confirms a memory selection once and reports each result while the conversat
     },
   });
   await click("Select memories");
-  for (const input of container.querySelectorAll<HTMLInputElement>('input[type="checkbox"]'))
+  for (const input of container.querySelectorAll<HTMLInputElement>(
+    'input[aria-label^="Select memory"]',
+  ))
     await act(async () => input.click());
   await click("Forget 3");
   expect(state.calls.mock.calls.filter(([req]) => req?.input?.operationId)).toHaveLength(0);
@@ -2796,5 +2798,5 @@ it("confirms a memory selection once and reports each result while the conversat
   await act(async () => confirm.click());
   expect(container.textContent?.match(/· Forgotten/g)).toHaveLength(2);
   expect(container.textContent).toContain("· Failed · unavailable");
-  expect(container.querySelectorAll('input[type="checkbox"]:checked')).toHaveLength(1);
+  expect(container.querySelectorAll('input[aria-label^="Select memory"]:checked')).toHaveLength(1);
 });

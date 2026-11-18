@@ -9,7 +9,7 @@ import {
 import * as Schema from "effect/Schema";
 
 export const id = (n: number) => `00000000-0000-4000-8000-${String(n).padStart(12, "0")}`;
-export const item = Schema.decodeUnknownSync(MemoryItem)({
+export const item = Schema.decodeSync(MemoryItem)({
   memorySpaceId: id(1),
   memoryId: id(2),
   status: "blocked",
@@ -23,8 +23,8 @@ export const item = Schema.decodeUnknownSync(MemoryItem)({
     cleanupPending: false,
   },
 });
-const decodeRevision = Schema.decodeUnknownSync(MemoryRevision);
-export const decodeRevert = Schema.decodeUnknownSync(MemoryRevertResult);
+const decodeRevision = Schema.decodeSync(MemoryRevision);
+export const decodeRevert = Schema.decodeSync(MemoryRevertResult);
 export const revision = (n: number) =>
   decodeRevision({
     memorySpaceId: id(1),
@@ -43,7 +43,7 @@ export const payload = {
   evidence: [{ origin: "user" as const, messageIds: [] }],
   derivedFromMemoryRevisions: [],
 };
-export const activeItem = Schema.decodeUnknownSync(MemoryItem)({
+export const activeItem = Schema.decodeSync(MemoryItem)({
   memorySpaceId: item.memorySpaceId,
   memoryId: item.memoryId,
   scope: { kind: "user" },
@@ -53,7 +53,7 @@ export const activeItem = Schema.decodeUnknownSync(MemoryItem)({
   payload,
   localAvailability: { exposure: "visible", reasons: [], deferred: [], cleanupPending: false },
 });
-export const resolution = Schema.decodeUnknownSync(MemoryResolution)({
+export const resolution = Schema.decodeSync(MemoryResolution)({
   resolutionId: id(6),
   memorySpaceId: id(1),
   memoryId: id(2),
