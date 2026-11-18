@@ -17,17 +17,20 @@ export const makeOriginCatchup = ({
   emit,
   nextWatermark,
 }: Pick<StoreKernel, "sql" | "emit" | "nextWatermark">) => {
-  const readOriginCursor = Effect.fn("MemoryStore.readOriginCursor")(function* (
+  const readReadyOriginCursor = Effect.fn("MemoryStore.readReadyOriginCursor")(function* (
     space: M.MemorySpaceId,
     hub: M.EnvironmentId,
   ) {
     const [row] = yield* stored(
       "memory-origin-cursor",
       sql<{ after_origin_sequence: number }>`
-      SELECT after_origin_sequence FROM memory_sync_cursors WHERE space=${space} AND hub_environment_id=${hub}`,
+      SELECT after_origin_sequence FROM memory_sync_cursors
+        WHERE space=${space} AND hub_environment_id=${hub} AND bootstrap_state='ready'`,
     );
-    return row?.after_origin_sequence ?? 0;
+    return row?.after_origin_sequence;
   });
+  const readOriginCursor = (space: M.MemorySpaceId, hub: M.EnvironmentId) =>
+    readReadyOriginCursor(space, hub).pipe(Effect.map((sequence) => sequence ?? 0));
   const readOriginPageTx = Effect.fn("MemoryStore.readOriginPageTx")(function* (
     space: M.MemorySpaceId,
     after: number,
@@ -80,7 +83,8 @@ export const makeOriginCatchup = ({
     { updates, throughSequence, hasMore }: M.MemoryOriginPage,
   ) {
     yield* Transaction;
-    const current = yield* readOriginCursor(space, hub);
+    const current = yield* readReadyOriginCursor(space, hub);
+    if (current === undefined) return;
     if (throughSequence <= current && !hasMore) return;
     let previous = after;
     for (const update of updates) {
