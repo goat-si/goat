@@ -53,6 +53,7 @@ import {
   projectTurnItemForWire,
   threadStreamEventItem,
 } from "../orchestration-v2/WireProjection.ts";
+import * as DocumentText from "../provider/DocumentText.ts";
 import * as ProviderRegistry from "../provider/ProviderRegistry.ts";
 import * as ServerSettings from "../serverSettings.ts";
 import * as AnalyticsService from "../telemetry/AnalyticsService.ts";
@@ -214,6 +215,7 @@ const make = Effect.gen(function* () {
   const random = yield* SecureRandom.SecureRandom;
   const secretStore = yield* ServerSecretStore.ServerSecretStore;
   const analytics = yield* AnalyticsService.AnalyticsService;
+  const documents = yield* DocumentText.DocumentText;
   const signingKey = yield* Effect.cached(
     secretStore.getOrCreateRandom(SIGNING_SECRET_NAME, 32).pipe(Effect.orDie),
   );
@@ -372,7 +374,12 @@ const make = Effect.gen(function* () {
         const path = resolveAttachmentPath({ attachmentsDir, attachment });
         return path === null
           ? Effect.void
-          : fileSystem.remove(path, { force: true }).pipe(Effect.ignore);
+          : Effect.all(
+              [path, `${path}.txt`].map((file) =>
+                fileSystem.remove(file, { force: true }).pipe(Effect.ignore),
+              ),
+              { discard: true },
+            );
       },
       { discard: true },
     );
@@ -416,8 +423,9 @@ const make = Effect.gen(function* () {
           const path = resolveAttachmentPath({ attachmentsDir, attachment });
           if (path === null) return yield* uploadFailed;
           yield* fileSystem.makeDirectory(attachmentsDir, { recursive: true });
-          yield* fileSystem.copyFile(uploads[index]!.path, path);
           stored.push(attachment);
+          yield* fileSystem.copyFile(uploads[index]!.path, path);
+          yield* documents.ensure(path);
         }).pipe(Effect.mapError(() => uploadFailed)),
       { discard: true },
     ).pipe(Effect.onError(() => removeStored(stored)));
@@ -436,16 +444,23 @@ const make = Effect.gen(function* () {
     if (request.text === "" && uploads.length === 0) {
       return yield* new GuestShareAccessError({ reason: "empty" });
     }
-    const attachments = yield* storeUploads(thread.id, uploads);
-    yield* dispatchGuestCommand({
-      type: "thread.guest-message.submit",
-      commandId: yield* commandId("submit"),
-      threadId: thread.id,
-      shareId: share.id,
-      guestMessageId: GuestMessageId.make(yield* random.uuidV4()),
-      text: request.text,
-      ...(attachments.length === 0 ? {} : { attachments }),
-    }).pipe(Effect.onError(() => removeStored(attachments)));
+    const id = yield* commandId("submit");
+    const guestMessageId = GuestMessageId.make(yield* random.uuidV4());
+    const attachments = yield* Effect.uninterruptibleMask((restore) =>
+      Effect.gen(function* () {
+        const attachments = yield* restore(storeUploads(thread.id, uploads));
+        yield* dispatchGuestCommand({
+          type: "thread.guest-message.submit",
+          commandId: id,
+          threadId: thread.id,
+          shareId: share.id,
+          guestMessageId,
+          text: request.text,
+          ...(attachments.length === 0 ? {} : { attachments }),
+        }).pipe(Effect.onError(() => removeStored(attachments)));
+        return attachments;
+      }),
+    );
     yield* analytics.record("feature.used", {
       feature: "guest_message.submit",
       variant: attachments.length === 0 ? "text_only" : "with_files",

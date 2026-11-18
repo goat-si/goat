@@ -1,3 +1,4 @@
+import * as DocumentText from "../provider/DocumentText.ts";
 import * as NodeCrypto from "@effect/platform-node/NodeCrypto";
 import * as NodeServices from "@effect/platform-node/NodeServices";
 import { assert, it } from "@effect/vitest";
@@ -144,6 +145,7 @@ const layerTest = GuestShareService.layer.pipe(
   Layer.provide(layerConnect),
   Layer.provideMerge(layerAnalytics),
   Layer.provide(ServerSecretStore.layer),
+  Layer.provide(DocumentText.layer),
   Layer.provideMerge(layerConfig),
   Layer.provideMerge(Layer.mergeAll(NodeServices.layer, NodeCrypto.layer)),
 );
@@ -661,20 +663,38 @@ it.effect("refuses too many files, too many bytes, and images that are not what 
   }).pipe(Effect.scoped, Effect.provide(layerTest)),
 );
 
+const guestDocument = {
+  name: "notes.rtf",
+  contentType: "application/rtf",
+  bytes: new TextEncoder().encode(String.raw`{\rtf1 Available}`),
+};
+
+it.effect("extracts a guest document into a host-side attachment sidecar", () =>
+  Effect.gen(function* () {
+    const { guestShares, session, shareId } = yield* joinedGuest;
+    yield* guestShares.submit(session, { shareId, text: "" }, yield* uploadsOf([guestDocument]));
+    const [message] = yield* waitingMessages;
+    const { path } = yield* guestShares.attachment(session, message!.attachments![0]!.id);
+    assert.equal(yield* (yield* FileSystem.FileSystem).readFileString(`${path}.txt`), "Available");
+  }).pipe(Effect.scoped, Effect.provide(layerTest)),
+);
+
 it.effect("caps the bytes of files waiting in one share", () =>
   Effect.gen(function* () {
     const { guestShares, session, shareId } = yield* joinedGuest;
-    const submit = (sizeBytes: number) =>
+    const submit = (sizeBytes: number, ...more: (typeof guestDocument)[]) =>
       Effect.gen(function* () {
         return guestShares.submit(
           session,
           { shareId, text: "Look" },
-          yield* uploadsOf([png("big.png", sizeBytes)]),
+          yield* uploadsOf([png("big.png", sizeBytes), ...more]),
         );
       }).pipe(Effect.flatten);
     yield* submit(9 * MIB);
     yield* submit(9 * MIB);
-    const error = yield* Effect.flip(submit(9 * MIB));
+    const before = yield* storedFiles;
+    const error = yield* Effect.flip(submit(9 * MIB, guestDocument));
+    assert.deepEqual(yield* storedFiles, before);
     assert.equal(error.reason, "files_busy");
     // Text alone still goes through.
     yield* guestShares.submit(session, { shareId, text: "One more thing" }, []);
