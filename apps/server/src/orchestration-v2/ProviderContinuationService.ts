@@ -294,9 +294,11 @@ export const layer = Layer.effectDiscard(
       },
     );
 
-    const continuations = yield* KeyedLock.makeRunner<ThreadId>();
+    const continuations = yield* KeyedLock.makeRunner<ThreadId>(8);
     yield* AutomationHold.awaitRelease.pipe(
-      Effect.andThen(requests.take),
+      Effect.andThen(
+        requests.takeEligible?.(continuations.canAdmit, continuations.awaitChange) ?? requests.take,
+      ),
       Effect.flatMap((request) =>
         continuations.run(
           request.threadId,

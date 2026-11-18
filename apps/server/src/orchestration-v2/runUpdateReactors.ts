@@ -1,4 +1,3 @@
-import * as KeyedLock from "@goat/shared/KeyedLock";
 import {
   isOrchestrationV2WorkActive,
   type OrchestrationV2StoredEvent,
@@ -8,6 +7,7 @@ import {
 import { backgroundWorkHoldsCompletion } from "@goat/shared/orchestrationV2PendingBackgroundWork";
 import * as Effect from "effect/Effect";
 import * as Stream from "effect/Stream";
+import { makeKeyedCursorReactor } from "./keyedCursorReactor.ts";
 import { runResumableReactor } from "../backgroundSupervision.ts";
 
 type EventType = "run.updated" | "provider-thread.updated" | "subagent.updated";
@@ -53,48 +53,48 @@ export const runUpdateReactors = Effect.fn("Orchestrator.runUpdateReactors")(fun
   readonly stream: (options: {
     readonly afterSequence: number;
     readonly eventType: EventType;
+    readonly threadId?: ThreadId;
+    readonly throughSequence?: number;
   }) => Stream.Stream<OrchestrationV2StoredEvent, E, R>;
   readonly handleRun: (event: OrchestrationV2StoredEvent) => Effect.Effect<unknown, never, R2>;
   readonly handleChild: (
     event: OrchestrationV2StoredEvent,
   ) => Effect.Effect<unknown, never, R2> | undefined;
 }) {
-  const reactions = yield* KeyedLock.makeRunner<ThreadId>();
+  const relevant = ({ event, commandId }: OrchestrationV2StoredEvent) =>
+    event.type !== "run.updated" ||
+    ((!String(commandId).startsWith("command:runtime-reconcile:") ||
+      (event.payload.delegatedTaskId !== undefined &&
+        event.payload.status === "queued" &&
+        event.payload.queueHeld === true)) &&
+      ((event.payload.delegatedTaskId !== undefined &&
+        (event.payload.status === "queued" || event.payload.status === "starting")) ||
+        event.payload.status === "completed" ||
+        event.payload.status === "interrupted" ||
+        event.payload.status === "failed" ||
+        event.payload.status === "cancelled" ||
+        event.payload.status === "rolled_back"));
+  const react = (event: OrchestrationV2StoredEvent) =>
+    Effect.suspend(
+      () =>
+        (event.event.type === "run.updated" ? input.handleRun(event) : input.handleChild(event)) ??
+        Effect.void,
+    );
+  const reactions = yield* makeKeyedCursorReactor({
+    name: "Orchestrator.replayDeferredUpdates",
+    replay: (threadId: ThreadId, eventType: EventType, range) =>
+      input
+        .stream({ ...range, threadId, eventType })
+        .pipe(Stream.filter(relevant), Stream.runForEach(react)),
+  });
   yield* Effect.all(
     (["run.updated", "provider-thread.updated", "subagent.updated"] as const).map((eventType) =>
       runResumableReactor(
         `Orchestrator.${eventType}`,
         input.afterSequence,
-        (afterSequence) =>
-          input
-            .stream({ afterSequence, eventType })
-            .pipe(
-              Stream.filter(
-                (stored) =>
-                  eventType !== "run.updated" ||
-                  (stored.event.type === "run.updated" &&
-                    (!String(stored.commandId).startsWith("command:runtime-reconcile:") ||
-                      (stored.event.payload.delegatedTaskId !== undefined &&
-                        stored.event.payload.status === "queued" &&
-                        stored.event.payload.queueHeld === true)) &&
-                    ((stored.event.payload.delegatedTaskId !== undefined &&
-                      (stored.event.payload.status === "queued" ||
-                        stored.event.payload.status === "starting")) ||
-                      stored.event.payload.status === "completed" ||
-                      stored.event.payload.status === "interrupted" ||
-                      stored.event.payload.status === "failed" ||
-                      stored.event.payload.status === "cancelled" ||
-                      stored.event.payload.status === "rolled_back")),
-              ),
-            ),
-        (stored) => {
-          const reaction = (eventType === "run.updated" ? input.handleRun : input.handleChild)(
-            stored,
-          );
-          return reaction === undefined
-            ? Effect.void
-            : reactions.run(stored.event.threadId, reaction);
-        },
+        (afterSequence) => input.stream({ afterSequence, eventType }).pipe(Stream.filter(relevant)),
+        (stored) =>
+          reactions.enqueue(stored.event.threadId, eventType, stored.sequence, react(stored)),
       ),
     ),
     { concurrency: "unbounded", discard: true },

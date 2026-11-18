@@ -809,7 +809,6 @@ const layerBase: Layer.Layer<
         );
       return loop(input.afterSequence);
     };
-
     const stream = (input?: Parameters<EventSinkV2Shape["stream"]>[0]) => {
       const afterSequence = input?.afterSequence ?? 0;
       const matches = (stored: OrchestrationV2StoredEvent) =>
@@ -822,6 +821,7 @@ const layerBase: Layer.Layer<
           ...(input?.threadId === undefined ? {} : { threadId: input.threadId }),
           ...(input?.eventType === undefined ? {} : { eventType: input.eventType }),
         }).pipe(Stream.filter(matches));
+      if (input?.throughSequence !== undefined) return replay(input.throughSequence);
       return Stream.unwrap(
         Effect.gen(function* () {
           let pubsub = liveEvents;

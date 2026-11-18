@@ -133,6 +133,44 @@ it.effect("does not dispatch continuations while held and dispatches after relea
 );
 
 describe("ProviderContinuationService", () => {
+  it.effect(
+    "dispatches a healthy wake behind a saturated thread and preserves its queued peers",
+    () =>
+      Effect.gen(function* () {
+        const dispatched = yield* Queue.unbounded<unknown>();
+        const entered = yield* Deferred.make<void>();
+        const release = yield* Deferred.make<void>();
+        const otherThreadId = ThreadId.make("thread-saturation-healthy");
+        yield* Effect.gen(function* () {
+          const requests = yield* ProviderContinuationRequests.ProviderContinuationRequests;
+          yield* requests.offer(
+            request(
+              (effect) =>
+                Deferred.succeed(entered, undefined).pipe(
+                  Effect.andThen(Deferred.await(release)),
+                  Effect.andThen(effect),
+                  Effect.asSome,
+                ),
+              "First",
+            ),
+          );
+          yield* Deferred.await(entered);
+          const labels = Array.from({ length: 130 }, (_, index) => `Busy wake ${index}`);
+          for (const label of labels) yield* requests.offer(request(undefined, label));
+          yield* requests.offer({ ...request(), threadId: otherThreadId });
+          assert.containSubset(yield* Queue.take(dispatched), { threadId: otherThreadId });
+          yield* Deferred.succeed(release, undefined);
+          for (const label of ["First", ...labels])
+            assert.containSubset(yield* Queue.take(dispatched), { threadId, text: label });
+        }).pipe(
+          Effect.provide(
+            layerTest({ dispatched, getThreadRecords: () => Effect.succeed(projection) }),
+          ),
+          Effect.scoped,
+        );
+      }),
+  );
+
   it.effect("dispatches independent wakes while keeping one thread FIFO", () =>
     Effect.gen(function* () {
       const dispatched = yield* Queue.unbounded<unknown>();

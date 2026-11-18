@@ -29,6 +29,7 @@ import type * as Scope from "effect/Scope";
 import * as Schema from "effect/Schema";
 import * as Schedule from "effect/Schedule";
 import * as Stream from "effect/Stream";
+import { makeKeyedCursorReactor } from "./keyedCursorReactor.ts";
 import { forkParked } from "../serverActivation.ts";
 import { exceededDispatchModeLimit } from "./DispatchModeLimit.ts";
 import * as EventSink from "./EventSink.ts";
@@ -363,10 +364,30 @@ const make = Effect.gen(function* () {
   }).pipe(Effect.catchCause(logFailure("sweep", {})));
   const listenAndRecover = Effect.scoped(
     Effect.gen(function* () {
-      const workers = yield* KeyedLock.makeRunner<ThreadId>();
+      type QuestionEventType = "runtime-request.updated" | "turn-item.updated";
+      const workers = yield* makeKeyedCursorReactor({
+        name: "QuestionEscalation.replayDeferredUpdates",
+        replay: (coordinator: ThreadId, eventType: QuestionEventType, range) =>
+          sink.stream({ ...range, eventType }).pipe(
+            Stream.map(questionKey),
+            Stream.filter((key) => key !== undefined),
+            Stream.runForEach((pair) =>
+              coordinatorFor(pair.threadId).pipe(
+                Effect.flatMap((owner) =>
+                  owner === coordinator
+                    ? reconcileFor(pair.threadId, pair.requestId, coordinator)
+                    : Effect.void,
+                ),
+              ),
+            ),
+          ),
+      });
       const pending = new Map<string, { dirty: boolean }>();
       const enqueue = Effect.fn("QuestionEscalation.enqueue")(
-        function* (pair: QuestionKey) {
+        function* (
+          pair: QuestionKey,
+          cursor: { eventType: QuestionEventType; sequence: number } | undefined,
+        ) {
           const key = pairKey(pair);
           const existing = pending.get(key);
           if (existing !== undefined) {
@@ -382,17 +403,21 @@ const make = Effect.gen(function* () {
           }
           const job = { dirty: false };
           pending.set(key, job);
-          yield* workers.run(
-            coordinator,
-            Effect.gen(function* () {
-              do {
-                job.dirty = false;
-                yield* reconcileFor(pair.threadId, pair.requestId, coordinator);
-              } while (job.dirty);
-            }).pipe(Effect.ensuring(Effect.sync(() => pending.delete(key)))),
-          );
+          const reconcilePair = Effect.gen(function* () {
+            do {
+              job.dirty = false;
+              yield* reconcileFor(pair.threadId, pair.requestId, coordinator);
+            } while (job.dirty);
+          }).pipe(Effect.ensuring(Effect.sync(() => pending.delete(key))));
+          if (cursor === undefined) {
+            yield* workers.run(coordinator, reconcilePair);
+          } else if (
+            !(yield* workers.enqueue(coordinator, cursor.eventType, cursor.sequence, reconcilePair))
+          ) {
+            pending.delete(key);
+          }
         },
-        (effect, pair) => effect.pipe(Effect.catchCause(logFailure("route", pair))),
+        (effect, pair, _cursor) => effect.pipe(Effect.catchCause(logFailure("route", pair))),
       );
       const subscribeAndRecover = Effect.scoped(
         Effect.gen(function* () {
@@ -407,8 +432,14 @@ const make = Effect.gen(function* () {
                 onSubscribed: Deferred.succeed(requestsReady, undefined).pipe(Effect.asVoid),
               })
               .pipe(
-                Stream.map(questionKey),
-                Stream.filter((key) => key !== undefined),
+                Stream.map((stored) => ({
+                  pair: questionKey(stored),
+                  cursor: {
+                    eventType: "runtime-request.updated" as const,
+                    sequence: stored.sequence,
+                  },
+                })),
+                Stream.filter(({ pair }) => pair !== undefined),
               ),
             sink
               .stream({
@@ -417,11 +448,22 @@ const make = Effect.gen(function* () {
                 onSubscribed: Deferred.succeed(itemsReady, undefined).pipe(Effect.asVoid),
               })
               .pipe(
-                Stream.map(questionKey),
-                Stream.filter((key) => key !== undefined),
+                Stream.map((stored) => ({
+                  pair: questionKey(stored),
+                  cursor: {
+                    eventType: "turn-item.updated" as const,
+                    sequence: stored.sequence,
+                  },
+                })),
+                Stream.filter(({ pair }) => pair !== undefined),
               ),
           );
-          const listening = yield* events.pipe(Stream.runForEach(enqueue), Effect.forkScoped);
+          const listening = yield* events.pipe(
+            Stream.runForEach(({ pair, cursor }) =>
+              pair === undefined ? Effect.void : enqueue(pair, cursor),
+            ),
+            Effect.forkScoped,
+          );
           yield* Effect.raceFirst(
             Effect.all([Deferred.await(requestsReady), Deferred.await(itemsReady)]).pipe(
               Effect.asVoid,
@@ -430,7 +472,10 @@ const make = Effect.gen(function* () {
           );
           yield* Deferred.succeed(subscribed, undefined);
           const candidates = yield* projections.getQuestionEscalationCandidates({ limit: 500 });
-          yield* Effect.forEach(candidates, enqueue, { discard: true, concurrency: 16 });
+          yield* Effect.forEach(candidates, (pair) => enqueue(pair, undefined), {
+            discard: true,
+            concurrency: 16,
+          });
           yield* Fiber.join(listening);
         }),
       );

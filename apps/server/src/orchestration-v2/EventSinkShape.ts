@@ -205,6 +205,8 @@ export interface EventSinkV2Shape extends EventSinkBatch.Shape {
   readonly stream: (input?: {
     readonly threadId?: ThreadId;
     readonly afterSequence?: number;
+    /** Finite journal replay without a live subscription. */
+    readonly throughSequence?: number;
     readonly eventType?: OrchestrationV2DomainEvent["type"];
     /** Bound RPC subscribers; internal workers must not drop their subscription under load. */
     readonly bounded?: boolean;
