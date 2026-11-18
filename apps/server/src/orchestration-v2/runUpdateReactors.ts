@@ -1,6 +1,6 @@
 import type { OrchestrationV2StoredEvent } from "@goat/contracts";
 import * as Effect from "effect/Effect";
-import type * as Stream from "effect/Stream";
+import * as Stream from "effect/Stream";
 import { runResumableReactor } from "../backgroundSupervision.ts";
 
 type EventType = "run.updated" | "provider-thread.updated" | "subagent.updated";
@@ -24,7 +24,25 @@ export const runUpdateReactors = Effect.fn("Orchestrator.runUpdateReactors")(fun
       runResumableReactor(
         `Orchestrator.${eventType}`,
         input.afterSequence,
-        (afterSequence) => input.stream({ afterSequence, eventType }),
+        (afterSequence) =>
+          input
+            .stream({ afterSequence, eventType })
+            .pipe(
+              Stream.filter(
+                (stored) =>
+                  eventType !== "run.updated" ||
+                  (stored.event.type === "run.updated" &&
+                    !String(stored.commandId).startsWith("command:runtime-reconcile:") &&
+                    ((stored.event.payload.delegatedTaskId !== undefined &&
+                      (stored.event.payload.status === "queued" ||
+                        stored.event.payload.status === "starting")) ||
+                      stored.event.payload.status === "completed" ||
+                      stored.event.payload.status === "interrupted" ||
+                      stored.event.payload.status === "failed" ||
+                      stored.event.payload.status === "cancelled" ||
+                      stored.event.payload.status === "rolled_back")),
+              ),
+            ),
         eventType === "run.updated" ? input.handleRun : input.handleChild,
       ),
     ),

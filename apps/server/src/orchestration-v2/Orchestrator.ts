@@ -13052,26 +13052,7 @@ const makeOrchestrator = Effect.fn("orchestrationV2.Orchestrator.layer")(functio
   };
   yield* runUpdateReactors({
     afterSequence: terminalEventsAfterSequence,
-    // Filter run updates before buffering so blocked queue promotion does not retain unrelated tool bodies.
-    stream: (input) =>
-      eventSink
-        .stream(input)
-        .pipe(
-          Stream.filter(
-            (stored) =>
-              input.eventType !== "run.updated" ||
-              (stored.event.type === "run.updated" &&
-                !String(stored.commandId).startsWith("command:runtime-reconcile:") &&
-                ((stored.event.payload.delegatedTaskId !== undefined &&
-                  (stored.event.payload.status === "queued" ||
-                    stored.event.payload.status === "starting")) ||
-                  stored.event.payload.status === "completed" ||
-                  stored.event.payload.status === "interrupted" ||
-                  stored.event.payload.status === "failed" ||
-                  stored.event.payload.status === "cancelled" ||
-                  stored.event.payload.status === "rolled_back")),
-          ),
-        ),
+    stream: eventSink.stream,
     handleRun: handleRunUpdate,
     handleChild: (stored) => {
       if (!settlesChildWork(stored)) return Effect.void;
