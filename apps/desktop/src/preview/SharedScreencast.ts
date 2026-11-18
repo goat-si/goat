@@ -84,10 +84,13 @@ export function createSharedScreencast(
     if (skipped.size === 0) for (const id of heldNative.splice(0)) ackPage(id);
   };
 
-  const remove = (viewer: string) => {
+  const remove = (viewer: string, retainDelivery = false) => {
+    const delivered = outstanding.get(viewer);
     const removed = viewers.delete(viewer);
     skipped.delete(viewer);
     release(viewer);
+    // A stop in one viewer can leave the shared native run and its frame IDs alive.
+    if (retainDelivery && delivered) outstanding.set(viewer, { sessionId: delivered.sessionId });
     releaseUnusedCredits();
     return removed;
   };
@@ -154,7 +157,7 @@ export function createSharedScreencast(
       }
     },
     stop: (viewer) => {
-      remove(viewer);
+      remove(viewer, true);
       return sync();
     },
     leave,

@@ -321,6 +321,24 @@ describe("CDP relay screencasts", () => {
     );
   });
 
+  it("keeps a stopped viewer's late ACK from releasing a frame after same-run restart", async () => {
+    const { pages, command, frameTo, written } = await makeScreencastRelay(2);
+    const [viewer, other] = pages as [string, string];
+    await command("Page.startScreencast", viewer, small);
+    await command("Page.startScreencast", other, small);
+    frameTo({ sessionId: 4, data: "old" });
+    await command("Page.screencastFrameAck", other, { sessionId: 4 });
+    await command("Page.stopScreencast", viewer);
+    await command("Page.startScreencast", viewer, small);
+    expect(frameTo({ sessionId: 4, data: "new" })).toEqual([other]);
+    await command("Page.screencastFrameAck", viewer, { sessionId: 4 });
+    expect(
+      written.find(
+        (message) => message.method === "Page.screencastFrame" && message.sessionId === viewer,
+      )?.params,
+    ).toEqual({ sessionId: 4, data: "new" });
+  });
+
   it("releases the frames a viewer owed when it detaches without stopping", async () => {
     const { pages, browser, command, send, screencast, frameTo } = await makeScreencastRelay(2);
     const [first, second] = pages as [string, string];
