@@ -1,3 +1,4 @@
+import { makePullMemoryTail } from "./MemoryPullTail.ts";
 import { makeMemorySaveSuggestions } from "./MemorySaveSuggestions.ts";
 import { scanReplicaMemory } from "./testkit/ScanReplicaMemory.ts";
 import { assert, describe, it } from "@effect/vitest";
@@ -162,6 +163,7 @@ describe("memory hub floor", () => {
           (yield* hub.push({ ...pushInput(first), features }, principal())).receipts[0]?.outcome,
           "accepted",
         );
+        const beforeMove = yield* hub.pull(advertise, principal());
         yield* compactor.compact(principal());
         const joinInput = {
           protocolVersion: 1 as const,
@@ -188,7 +190,7 @@ describe("memory hub floor", () => {
         assert.include(one, { outcome: "accepted" });
         assert.deepStrictEqual((yield* push(move)).receipts[0], one);
         const aggregate = yield* store.loadAggregate(space, first.memoryId);
-        assert.deepStrictEqual(aggregate.item?.scope, scope);
+        assert.deepStrictEqual(aggregate.identity?.scope, scope);
         assert.deepStrictEqual(aggregate.revisions, [
           { revision: { ...first.revision, scope }, payload: first.payload },
         ]);
@@ -218,6 +220,114 @@ describe("memory hub floor", () => {
           checkpoint.checkpoint?.identities.find((item) => item.memoryId === first.memoryId)?.scope,
           scope,
         );
+        if (!checkpoint.checkpoint?.bootstrapComplete)
+          throw new Error("Expected one checkpoint page");
+        const checkpointPage = checkpoint.checkpoint;
+        const tail = yield* hub.pull(
+          { ...advertise, afterSequence: beforeMove.throughSequence },
+          principal(),
+        );
+        yield* compactor.compact(principal());
+        for (const method of ["tail", "checkpoint"] as const) {
+          yield* Effect.gen(function* () {
+            const replica = yield* Service.MemoryService;
+            const local = yield* Store.MemoryStore;
+            yield* replica.receiveHubPage({
+              memorySpaceId: space,
+              hubEnvironmentId: hubEnv,
+              localEnvironmentId: otherEnv,
+              expectedSequence: 0,
+              page: beforeMove,
+              reauthorize: Effect.void,
+            });
+            yield* scanReplicaMemory(first.memoryId);
+            const editId = M.MemoryOperationId.make(id(510));
+            yield* replica.upsert(
+              {
+                memorySpaceId: space,
+                memoryId: first.memoryId,
+                operationId: editId,
+                expectedHeads: [first.revision.revisionId],
+                scope: first.revision.scope,
+                assertionKind: "inference",
+                baseBoundary: null,
+                payload: { ...first.payload, text: "unaccepted local edit" },
+              },
+              Effect.void,
+            );
+            if (method === "tail") {
+              yield* replica.receiveHubPage({
+                memorySpaceId: space,
+                hubEnvironmentId: hubEnv,
+                localEnvironmentId: otherEnv,
+                expectedSequence: beforeMove.throughSequence,
+                page: tail,
+                reauthorize: Effect.void,
+              });
+            } else {
+              const pullTail = makePullMemoryTail({
+                store: local,
+                service: replica,
+                local: otherEnv,
+                callPull: (_route, request) =>
+                  hub.pull({ ...request, features }, principal(otherEnv)),
+                ensureEpoch: () => Effect.void,
+              });
+              assert.include(
+                yield* pullTail(
+                  {
+                    space,
+                    hubId: hubEnv,
+                    settings: { memoryHubVersion: 1 },
+                  },
+                  { pages: 0, entries: 0 },
+                ).pipe(Effect.flip),
+                { code: "cursor_expired" },
+              );
+              const stage = {
+                memorySpaceId: space,
+                hubEnvironmentId: hubEnv,
+                checkpointId: `hub:${next.snapshotToken}`,
+                expectedSnapshotToken: next.snapshotToken,
+                expectedCheckpointSequence: next.checkpointSequence,
+              };
+              assert.strictEqual((yield* local.readBootstrap(stage)).state, "unbound");
+              yield* local.transact(
+                local.advanceBootstrapTx({
+                  ...stage,
+                  expectedState: "unbound",
+                  nextState: "staging",
+                  snapshotToken: stage.expectedSnapshotToken,
+                  checkpointSequence: stage.expectedCheckpointSequence,
+                  nextCursor: null,
+                }),
+              );
+              yield* local.installCheckpointPage({ ...stage, page: checkpointPage });
+              yield* local.completeCheckpoint({ ...stage, pageCount: 1 });
+            }
+            yield* scanReplicaMemory(first.memoryId);
+            const moved = yield* local.loadAggregate(space, first.memoryId);
+            assert.deepStrictEqual(moved.identity?.scope, scope);
+            assert.strictEqual(moved.identity?.scopeVersion, 1);
+            assert.deepStrictEqual(moved.heads, [first.revision.revisionId]);
+            assert.deepStrictEqual(
+              (yield* local.readWorkOperation(`sync:${space}:${editId}`))?.kind,
+              "upsert",
+            );
+            assert.deepStrictEqual(
+              (yield* replica.list(
+                {
+                  memorySpaceId: space,
+                  scope: first.revision.scope,
+                  includeQuarantined: true,
+                  limit: 10,
+                },
+                Effect.void,
+              )).items,
+              [],
+            );
+          }).pipe(Effect.provide(Layer.fresh(core)));
+        }
         const moveBack = decodeOperation({
           ...move,
           operationId: id(503),
@@ -392,7 +502,8 @@ describe("memory hub floor", () => {
         );
         const workId = `sync:${space}:${wide.operationId}`;
         const queued = yield* store.readWorkOperation(workId);
-        if (!queued || queued.kind === "forget") throw new Error("expected a staged suggestion");
+        if (!queued || !M.isMemoryRevisionOperation(queued))
+          throw new Error("expected a staged suggestion");
         assert.strictEqual(queued.forgetFence, first.throughSequence);
         assert.isUndefined((yield* store.loadAggregate(space, wide.memoryId)).item);
         const push = { ...pushInput(queued), features };
