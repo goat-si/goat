@@ -56,12 +56,19 @@ const makeCachedShell = Effect.fn("test.makeCachedShell")(function* (
   savedOrigin: typeof origin,
   startPrepared?: PreparedConnection,
   httpReply: Effect.Effect<Option.Option<ShellSnapshotLoader.ShellHttpAnswer>> = Effect.succeedSome(
-    nextSnapshot,
+    {
+      ...nextSnapshot,
+      instanceId: origin.instanceId,
+    },
   ),
 ) {
   const subscriptions = yield* Queue.unbounded<ShellInput>();
   const events = yield* Queue.unbounded<OrchestrationV2ShellStreamItem>();
   const httpRequests = yield* Ref.make(0);
+  const saved = yield* Queue.unbounded<{
+    readonly cursor: number;
+    readonly instanceId: string | undefined;
+  }>();
   const client = {
     [ORCHESTRATION_V2_WS_METHODS.subscribeShell]: (input: ShellInput) =>
       Stream.unwrap(Queue.offer(subscriptions, input).pipe(Effect.as(Stream.fromQueue(events)))),
@@ -99,7 +106,8 @@ const makeCachedShell = Effect.fn("test.makeCachedShell")(function* (
   });
   const cache = Persistence.EnvironmentCacheStore.of({
     loadShell: () => Effect.succeedSome({ ...cachedSnapshot, origin: savedOrigin }),
-    saveShell: () => Effect.void,
+    saveShell: (_environmentId, snapshot, origin) =>
+      Queue.offer(saved, { cursor: snapshot.snapshotSequence, instanceId: origin?.instanceId }),
     loadShellMeta: () =>
       Effect.succeedSome({ capturedAt: "1970-01-01T00:00:00.000Z", snapshotSequence: 99 }),
     saveShellMeta: () => Effect.void,
@@ -126,6 +134,7 @@ const makeCachedShell = Effect.fn("test.makeCachedShell")(function* (
     subscriptions,
     events,
     httpRequests,
+    saved,
     connect: SubscriptionRef.set(sessions, Option.some(session)),
   };
 });
@@ -280,6 +289,46 @@ it.effect(
         Effect.map(Option.getOrThrow),
       );
       expect(Option.getOrThrow(live.snapshot).threads).toEqual(nextSnapshot.threads);
+    }),
+);
+
+it.effect.each([undefined, "different-process"])(
+  "falls back to the full socket shell when the HTTP serving instance is %s",
+  (instanceId) =>
+    Effect.gen(function* () {
+      for (const answer of [nextSnapshot, { resumable: true as const }]) {
+        yield* Effect.scoped(
+          Effect.gen(function* () {
+            const loaded = instanceId === undefined ? answer : { ...answer, instanceId };
+            const h = yield* makeCachedShell(
+              origin,
+              authenticatedPrepared,
+              Effect.succeedSome(loaded),
+            );
+            yield* h.connect;
+            const request = yield* Queue.take(h.subscriptions);
+            expect(request.afterSequence).toBeUndefined();
+            const beforeSocket = yield* SubscriptionRef.get(h.state);
+            expect(Option.getOrThrow(beforeSocket.snapshot).snapshotSequence).toBe(19);
+            expect(beforeSocket.authoritativeSession).toBeNull();
+            yield* TestClock.adjust("1 second");
+            expect(yield* Queue.size(h.saved)).toBe(0);
+            yield* Queue.offer(h.events, { kind: "snapshot", snapshot: nextSnapshot });
+            yield* Queue.offer(h.events, { kind: "synchronized" });
+            const live = yield* SubscriptionRef.changes(h.state).pipe(
+              Stream.filter((value) => value.status === "live"),
+              Stream.runHead,
+              Effect.map(Option.getOrThrow),
+            );
+            expect(Option.getOrThrow(live.snapshot).snapshotSequence).toBe(23);
+            yield* TestClock.adjust("1 second");
+            expect(yield* Queue.take(h.saved)).toEqual({
+              cursor: 23,
+              instanceId: origin.instanceId,
+            });
+          }),
+        );
+      }
     }),
 );
 

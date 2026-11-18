@@ -29,6 +29,7 @@ export interface ShellSnapshotOptions {
 
 /** `projectIdentities` names the repository identities the snapshot carried. */
 export interface ShellHttpSnapshot extends DeferredShellSnapshot {
+  readonly instanceId?: string;
   readonly projectIdentities?: string;
 }
 
@@ -91,14 +92,15 @@ const decodeShellSnapshotResponse = (
     return response.json.pipe(
       Effect.flatMap((json): Effect.Effect<ShellHttpAnswer, Schema.SchemaError> => {
         if (isShellResumable(json)) return Effect.succeed(json);
-        const projectIdentities =
-          Predicate.isObject(json) && typeof json.projectIdentities === "string"
-            ? json.projectIdentities
-            : undefined;
+        const fields = Predicate.isObject(json) ? json : {};
         return decodeShellSnapshotDeferringPullRequests(json).pipe(
-          Effect.map((snapshot) =>
-            projectIdentities === undefined ? snapshot : { ...snapshot, projectIdentities },
-          ),
+          Effect.map((snapshot) => ({
+            ...snapshot,
+            ...(typeof fields.instanceId === "string" ? { instanceId: fields.instanceId } : {}),
+            ...(typeof fields.projectIdentities === "string"
+              ? { projectIdentities: fields.projectIdentities }
+              : {}),
+          })),
         );
       }),
     );

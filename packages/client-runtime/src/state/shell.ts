@@ -689,10 +689,13 @@ export const makeEnvironmentShellState = Effect.fn("EnvironmentShellState.make")
             loaded = yield* readShell(prepared, omitIdleSubagents, omitOlderSettled, identity);
           }
         }
+        const answer = Option.getOrUndefined(loaded);
+        const unverifiedHttp =
+          answer !== undefined && (identity === null || answer.instanceId !== identity.instanceId);
         let appliedHttpSnapshot = false;
         let knownProjectIdentities: string | undefined;
-        if (Option.isSome(loaded) && !("resumable" in loaded.value)) {
-          const { projectIdentities, ...deferred } = loaded.value;
+        if (answer !== undefined && !unverifiedHttp && !("resumable" in answer)) {
+          const { instanceId: _instanceId, projectIdentities, ...deferred } = answer;
           yield* cancelActiveFill;
           const previous = yield* SubscriptionRef.get(state);
           const snapshot = reuseUnchangedThreadShells(
@@ -720,6 +723,11 @@ export const makeEnvironmentShellState = Effect.fn("EnvironmentShellState.make")
               ...(omitOlderSettled ? { omitOlderSettled: true as const } : {}),
               ...(supportsCompletionMarker ? { requestCompletionMarker: true as const } : {}),
             };
+            if (unverifiedHttp) {
+              yield* Ref.set(origin, undefined);
+              yield* Ref.set(lastAuthoritativeSession, null);
+              return options;
+            }
             const afterSequence = yield* heldShellCursor(identity, session);
             if (afterSequence === undefined) return options;
 

@@ -2161,11 +2161,15 @@ export type OrchestrationV2ShellSnapshot = typeof OrchestrationV2ShellSnapshot.T
 export const OrchestrationV2ShellHttpSnapshot = OrchestrationV2ShellSnapshot.mapFields(
   (fields) => ({
     ...fields,
+    instanceId: Schema.optionalKey(TrimmedNonEmptyString),
     projectIdentities: Schema.optionalKey(Schema.String),
   }),
 );
 export type OrchestrationV2ShellHttpSnapshot = typeof OrchestrationV2ShellHttpSnapshot.Type;
-export const OrchestrationV2ShellResumable = Schema.Struct({ resumable: Schema.Literal(true) });
+export const OrchestrationV2ShellResumable = Schema.Struct({
+  resumable: Schema.Literal(true),
+  instanceId: Schema.optionalKey(TrimmedNonEmptyString),
+});
 export type OrchestrationV2ShellResumable = typeof OrchestrationV2ShellResumable.Type;
 
 export const OrchestrationV2ShellStreamItem = Schema.Union([

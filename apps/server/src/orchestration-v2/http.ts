@@ -17,6 +17,7 @@ import {
   failEnvironmentNotFound,
   requireEnvironmentScope,
 } from "../auth/http.ts";
+import * as RuntimeIdentity from "../runtimeIdentity.ts";
 import * as ServerEnvironment from "../environment/ServerEnvironment.ts";
 import { traceLocalHandlerWork } from "../cloud/traceRelayRequest.ts";
 import * as ProjectEnrichmentService from "../project/ProjectEnrichmentService.ts";
@@ -57,6 +58,7 @@ export const layer = HttpApiBuilder.group(
   "orchestration",
   Effect.fnUntraced(function* (handlers) {
     const shellLoads = yield* ShellSnapshotLoads.ShellSnapshotLoads;
+    const { instanceId } = yield* RuntimeIdentity.RuntimeIdentity;
     const events = yield* OrchestrationEventStore.OrchestrationEventStore;
     const environment = yield* ServerEnvironment.ServerEnvironmentIdentity;
     const threadManagement = yield* ThreadManagementService.ThreadManagementService;
@@ -178,6 +180,7 @@ export const layer = HttpApiBuilder.group(
               omitOlderSettled: args.query.omitOlderSettled === "1",
             }),
           }).pipe(
+            Effect.map((answer) => ({ ...answer, instanceId })),
             traceLocalHandlerWork,
             Effect.catch((cause) =>
               failEnvironmentInternal("orchestration_snapshot_failed", cause),
