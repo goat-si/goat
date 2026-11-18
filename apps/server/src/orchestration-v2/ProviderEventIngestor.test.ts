@@ -3,6 +3,7 @@ import {
   modelSelection,
   CODEX_DRIVER,
   threadCreatedEvent,
+  makeSharedWorktree,
 } from "./ProviderEventIngestor.fixtures.ts";
 export {
   modelSelection,
@@ -45,7 +46,6 @@ import * as Deferred from "effect/Deferred";
 import * as Fiber from "effect/Fiber";
 import * as Effect from "effect/Effect";
 import * as Exit from "effect/Exit";
-import * as FileSystem from "effect/FileSystem";
 import * as Layer from "effect/Layer";
 import * as SqlClient from "effect/sql/SqlClient";
 import * as SqlError from "effect/sql/SqlError";
@@ -159,29 +159,6 @@ const layerFailingWrites = (
     ).pipe(Layer.provide(layerTestEventSink)),
   );
 
-const makeSharedWorktree = Effect.gen(function* () {
-  const fs = yield* FileSystem.FileSystem;
-  const git = yield* GitVcsDriver.GitVcsDriver;
-  const directory = yield* fs.makeTempDirectoryScoped({ prefix: "ingestor-worktree-" });
-  const repo = `${directory}/repo`;
-  const worktreePath = `${directory}/shared`;
-  yield* fs.makeDirectory(repo);
-  const command = (cwd: string, args: string[]) =>
-    git.execute({ operation: "ingestor-test", cwd, args });
-  yield* command(repo, ["init", "-b", "main"]);
-  yield* command(repo, [
-    "-c",
-    "user.name=Test",
-    "-c",
-    "user.email=test@example.test",
-    "commit",
-    "--allow-empty",
-    "-m",
-    "initial",
-  ]);
-  yield* command(repo, ["worktree", "add", "-b", "t3/abcd1234", worktreePath]);
-  return { repo, worktreePath, command };
-});
 const layer = it.layer(layerTest);
 
 it.effect("takes a hub's reset for an unreset usage_limit, then refreshes the snapshot", () =>
