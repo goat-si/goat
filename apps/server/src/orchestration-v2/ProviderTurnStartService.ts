@@ -33,6 +33,7 @@ import {
   hasNativeGoals,
   isRegisteredAttach,
   nativeForkTurns,
+  providerThreadAfterSignOut,
   readyHandoffsForRun,
 } from "./providerTurnStartHelpers.ts";
 import { withAgentOom } from "./agentOomFailure.ts";
@@ -395,7 +396,7 @@ export const layer: Layer.Layer<
                   },
             providerThreadUpdate: {
               ...providerThread,
-              status: providerThread.nativeThreadRef === null ? "not_loaded" : "idle",
+              status: providerThreadAfterSignOut(providerThread),
               updatedAt: now,
             },
           });
@@ -670,6 +671,9 @@ export const layer: Layer.Layer<
         projection.providerTurns,
         projection.attempts,
       );
+      const brokenNativeThread = providerThread.status === "error";
+      const opensFreshSession =
+        brokenNativeThread && Option.isNone(yield* providerSessions.get(providerSessionId));
       const sessionResult = yield* Effect.result(
         providerSessions.open({
           runId: run.id,
@@ -685,7 +689,7 @@ export const layer: Layer.Layer<
           ...(existingSessionProjection === undefined
             ? {}
             : { resumeFromSession: existingSessionProjection }),
-          ...(providerThread.nativeThreadRef?.nativeId == null
+          ...(providerThread.nativeThreadRef?.nativeId == null || brokenNativeThread
             ? {}
             : { initialNativeThreadId: providerThread.nativeThreadRef.nativeId }),
           ...(providerThread.nativeMetadata?.itemIdentityVersion === undefined
@@ -916,7 +920,7 @@ export const layer: Layer.Layer<
           !session.providerSession.capabilities.checkpointing.providerCanRollbackConversation &&
           nativeSessionMissesKeptTurns(projection, providerThread, run);
         const resumed = yield* Effect.result(
-          uncertainDelivery || nativeSessionLacksKeptTurns
+          brokenNativeThread || uncertainDelivery || nativeSessionLacksKeptTurns
             ? Effect.fail(
                 new ProviderAdapter.ProviderAdapterTurnStartError({
                   driver: session.driver,
@@ -1020,7 +1024,7 @@ export const layer: Layer.Layer<
             providerSessionId,
             // Clear the native ref to force a fresh session while preserving row identity.
             existingProviderThread: { ...providerThread, nativeThreadRef: null },
-            forceNewNativeThread: true,
+            ...(opensFreshSession ? {} : { forceNewNativeThread: true }),
           }),
         );
         if (replacement === undefined) return undefined;
