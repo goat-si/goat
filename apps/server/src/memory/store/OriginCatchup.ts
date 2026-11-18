@@ -90,7 +90,7 @@ export const makeOriginCatchup = ({
     }
     if (after !== current || previous !== throughSequence || (hasMore && !updates.length))
       return yield* new MemoryStoreConflict({ code: "invalid_cursor" });
-    let changed = false;
+
     for (const { memoryId, createOperationId, environmentId, threadId } of updates) {
       const recorded = yield* recordCanonicalMemoryOrigin(
         space,
@@ -98,19 +98,19 @@ export const makeOriginCatchup = ({
         { environmentId, threadId },
         createOperationId,
       ).pipe(Effect.provideService(SqlClient.SqlClient, sql));
-      changed ||= recorded;
+      if (recorded)
+        yield* emit({
+          kind: "invalidate",
+          memorySpaceId: space,
+          memoryId,
+          projectionWatermark: yield* nextWatermark(space),
+        });
     }
     yield* stored(
       "memory-origin-advance",
       sql`UPDATE memory_sync_cursors SET after_origin_sequence=${throughSequence}
         WHERE space=${space} AND hub_environment_id=${hub} AND bootstrap_state='ready'`,
     );
-    if (changed)
-      yield* emit({
-        kind: "reset",
-        memorySpaceId: space,
-        projectionWatermark: yield* nextWatermark(space),
-      });
   });
   return { readOriginCursor, readOriginPageTx, receiveOriginPageTx };
 };
