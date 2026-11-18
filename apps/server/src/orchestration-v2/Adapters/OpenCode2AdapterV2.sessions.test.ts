@@ -1,3 +1,4 @@
+import * as McpProviderSessions from "@goat/provider-core/server/McpProviderSessions";
 /**
  * Failures and settings a live OpenCode 2 server cannot produce on demand,
  * driven through the real adapter and `@opencode/client` against a replayed

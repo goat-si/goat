@@ -3158,7 +3158,7 @@ it.layer(McpProviderSessions.layer)("OpenCode2 adapter", (it) => {
     Effect.gen(function* () {
       const mcpSessions = yield* McpProviderSessions.McpProviderSessions;
       yield* Effect.addFinalizer(() => mcpSessions.clear(threadId));
-      const server = "goat-thread_opencode2-adapter";
+      const server = yield* goatMcpServerName(threadId).pipe(Effect.provide(NodeCrypto.layer));
       const pages = [
         { html: "<p>orbits</p>", title: "Orbits", height: 480 },
         { html: "<p>scale</p>", title: "Scale", height: 1490 },
@@ -3232,10 +3232,11 @@ it.layer(McpProviderSessions.layer)("OpenCode2 adapter", (it) => {
       yield* Effect.forEach(references, (reference) =>
         mcpSessions.recordHtmlRender(threadId, page, reference),
       );
+      const server = yield* goatMcpServerName(threadId).pipe(Effect.provide(NodeCrypto.layer));
       const metadata = {
         toolCalls: [
           {
-            tool: "goat-thread_opencode2-adapter.html_render",
+            tool: `${server}.html_render`,
             status: "completed",
             input: page,
           },
