@@ -179,6 +179,10 @@ export const make = Effect.gen(function* () {
   const detailedSubscribers = new Map<string, number>();
   const branchUpdates = yield* makeBranchUpdates;
   let branchObservation = 0;
+  const headDuringLocalRead = new Map<
+    string,
+    (VcsBranchStatus & { readonly observation: number }) | null
+  >();
   const publishBranch = branchUpdates.publish;
   const localRefreshLocks = yield* KeyedLock.make<string>();
   const cacheRef = yield* Ref.make(new Map<string, CachedVcsStatus>());
@@ -204,7 +208,15 @@ export const make = Effect.gen(function* () {
       options?: { publish?: boolean },
     ) {
       const nextLocal = { fingerprint: fingerprintStatusPart(local), value: local };
-      const [localChanged, remoteCleared] = yield* Ref.modify(cacheRef, (cache) => {
+      const changes = yield* Ref.modify(cacheRef, (cache) => {
+        const head = headDuringLocalRead.get(cwd);
+        if (
+          head &&
+          head.observation > observation &&
+          (head.refName !== local.refName || head.isRepo !== local.isRepo)
+        ) {
+          return [null, cache] as const;
+        }
         const previous = cache.get(cwd) ?? { local: null, remote: null };
         const remote =
           local.isRepo && previous.remote?.branch === local.refName ? previous.remote : null;
@@ -213,6 +225,8 @@ export const make = Effect.gen(function* () {
           new Map(cache).set(cwd, { local: nextLocal, remote }),
         ] as const;
       });
+      if (changes === null) return null;
+      const [localChanged, remoteCleared] = changes;
       yield* publishBranch(cwd, local, observation);
       if (options?.publish && remoteCleared) {
         yield* PubSub.publish(changesPubSub, {
@@ -251,14 +265,27 @@ export const make = Effect.gen(function* () {
     },
   );
 
-  const loadLocalStatus = Effect.fn("VcsStatusBroadcaster.loadLocalStatus")(function* (
-    cwd: string,
-    options?: { publish?: boolean },
-  ) {
-    const observation = ++branchObservation;
-    const local = yield* workflow.localStatus({ cwd });
-    return yield* updateCachedLocalStatus(cwd, local, observation, options);
-  });
+  const loadLocalStatus = Effect.fn("VcsStatusBroadcaster.loadLocalStatus")(
+    function* (cwd: string, options?: { publish?: boolean }) {
+      headDuringLocalRead.set(cwd, null);
+      while (true) {
+        const observation = ++branchObservation;
+        const local = yield* workflow.localStatus({ cwd });
+        const updated = yield* updateCachedLocalStatus(cwd, local, observation, options);
+        if (updated !== null) return updated;
+        // The Git driver's detailed cache can also contain the superseded read.
+        yield* workflow.invalidateLocalStatus(cwd);
+      }
+    },
+    (effect, cwd, _options?) =>
+      effect.pipe(
+        Effect.ensuring(
+          Effect.sync(() => {
+            headDuringLocalRead.delete(cwd);
+          }),
+        ),
+      ),
+  );
 
   const getOrLoadLocalStatusUnlocked = Effect.fn("VcsStatusBroadcaster.getOrLoadLocalStatus")(
     function* (cwd: string, revalidateHead: boolean) {
@@ -734,7 +761,12 @@ export const make = Effect.gen(function* () {
     const observation = ++branchObservation;
     const refName = yield* workflow.currentBranch(cwd);
     const isRepo = refName !== null || (yield* workflow.repositoryRoot(cwd)) !== null;
-    return { observation, refName, isRepo };
+    const head = { observation, refName, isRepo };
+    const previous = headDuringLocalRead.get(cwd);
+    if (previous !== undefined && (previous === null || previous.observation < observation)) {
+      headDuringLocalRead.set(cwd, head);
+    }
+    return head;
   });
 
   // Serialize cache invalidation with detailed reads and refreshes.
