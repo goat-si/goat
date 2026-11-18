@@ -45,6 +45,7 @@ function report(
   terminal?: {
     readonly outcome: DesktopUpdateStatusReport["outcome"];
     readonly reason?: string;
+    readonly preparedRequestId?: string;
   },
 ): DesktopUpdateStatusReport {
   return {
@@ -53,6 +54,9 @@ function report(
     requestId,
     ...(terminal?.outcome === undefined ? {} : { outcome: terminal.outcome }),
     ...(terminal?.reason === undefined ? {} : { reason: terminal.reason }),
+    ...(terminal?.preparedRequestId === undefined
+      ? {}
+      : { preparedRequestId: terminal.preparedRequestId }),
     state,
   };
 }
@@ -157,6 +161,28 @@ it.layer(Layer.mergeAll(NodeServices.layer, NodeCrypto.layer))("desktop app upda
       });
       const prepared = yield* service.run(() => Effect.void);
 
+      expect(
+        (yield* service.commit(prepared.desktopUpdateToken ?? "missing").pipe(Effect.flip)).reason,
+      ).toBe("installer refused");
+    }),
+  );
+
+  it.effect("commits the original preparation when a retry joins its downloaded update", () =>
+    Effect.gen(function* () {
+      const { service } = yield* makeHarness({
+        reports: (requestId) => [
+          report(requestId, makeState({ status: "downloaded", downloadedVersion: "1.2.4" }), {
+            outcome: "ready-to-install",
+            preparedRequestId: "original-preparation",
+          }),
+          report("original-preparation", makeState({ status: "downloaded" }), {
+            outcome: "failed",
+            reason: "installer refused",
+          }),
+        ],
+      });
+      const prepared = yield* service.run(() => Effect.void);
+      expect(prepared.desktopUpdateToken).toBe("original-preparation");
       expect(
         (yield* service.commit(prepared.desktopUpdateToken ?? "missing").pipe(Effect.flip)).reason,
       ).toBe("installer refused");

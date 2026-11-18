@@ -174,6 +174,29 @@ it("does not import with provider management alone", async () => {
   expect(commands.import).not.toHaveBeenCalled();
 });
 
+it("offers history repair immediately and clears it after a successful retry", async () => {
+  setup();
+  const threadId = ThreadId.make("thread-pending");
+  commands.import
+    .mockResolvedValueOnce({
+      _tag: "Success",
+      value: { threadId, imported: true, nativeHistoryPending: true },
+    })
+    .mockResolvedValueOnce({
+      _tag: "Success",
+      value: { threadId, imported: true },
+    });
+  await using screen = await renderSection();
+  await screen.click("List sessions");
+  await screen.click("Import");
+
+  expect(screen.button("Import history").disabled).toBe(false);
+  expect(commands.list).toHaveBeenCalledTimes(1);
+  await screen.click("Import history");
+  expect(screen.button("Imported").disabled).toBe(true);
+  expect(commands.list).toHaveBeenCalledTimes(1);
+});
+
 it("rechecks task access after confirming deletion", async () => {
   setup();
   await using screen = await renderSection();

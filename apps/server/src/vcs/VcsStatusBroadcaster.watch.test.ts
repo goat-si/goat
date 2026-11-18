@@ -68,13 +68,19 @@ describe("VCS HEAD watchers", () => {
         yield* broadcaster.getStatus({ cwd: "/repo" });
         const clientStates: Array<VcsStatusResult> = [];
         const subscribed = yield* Deferred.make<void>();
-        const checkedOut = yield* Deferred.make<void>();
+        const reconciled = yield* Deferred.make<void>();
         yield* Stream.runForEach(broadcaster.streamStatus({ cwd: "/repo" }), (event) =>
           Effect.gen(function* () {
             const next = applyGitStatusStreamEvent(clientStates.at(-1) ?? null, event);
             clientStates.push(next);
             yield* Deferred.succeed(subscribed, undefined);
-            if (next.refName === "repro") yield* Deferred.succeed(checkedOut, undefined);
+            if (
+              next.refName === "repro" &&
+              event._tag === "remoteUpdated" &&
+              event.remote !== null
+            ) {
+              yield* Deferred.succeed(reconciled, undefined);
+            }
           }),
         ).pipe(Effect.forkScoped);
         yield* Deferred.await(subscribed);
@@ -85,12 +91,11 @@ describe("VCS HEAD watchers", () => {
         const lockPath = path.join(gitDir, "HEAD.lock");
         yield* fs.writeFileString(lockPath, "ref: refs/heads/repro\n");
         yield* fs.rename(lockPath, headPath);
-        yield* Deferred.await(checkedOut);
+        yield* Deferred.await(reconciled);
 
-        assert.deepStrictEqual(
-          clientStates.filter((status) => status.refName === "repro").map((status) => status.pr),
-          [null],
-        );
+        for (const status of clientStates.filter((status) => status.refName === "repro")) {
+          assert.isNull(status.pr);
+        }
         // A checkout must not trigger a network fetch.
         assert.deepStrictEqual(state.remoteStatusRefreshUpstreamValues.slice(1), [false]);
       }).pipe(Effect.provide(layerTestFor(state)), Effect.scoped);

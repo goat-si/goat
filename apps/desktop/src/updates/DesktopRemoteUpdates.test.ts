@@ -130,6 +130,49 @@ describe("DesktopRemoteUpdates", () => {
     );
   });
 
+  it.effect("does not renew the preparation lease when a retry recovers its token", () => {
+    const harness = makeHarness();
+
+    return runRemoteUpdatesTest(harness, ({ reports, requests, commits }) =>
+      Effect.gen(function* () {
+        harness.emit("update-downloaded", { version: "1.2.4" });
+        yield* settle;
+        yield* Queue.offer(requests, request("req-original"));
+        yield* settle;
+
+        yield* TestClock.adjust(Duration.minutes(4));
+        harness.emit("update-available", { version: "1.2.4" });
+        yield* settle;
+        yield* Queue.offer(requests, request("req-retry"));
+        yield* settle;
+        assert.equal(terminalReports(reports)[1]?.preparedRequestId, "req-original");
+
+        yield* TestClock.adjust(Duration.minutes(1));
+        yield* Queue.offer(commits, {
+          version: 1,
+          type: "commitDesktopUpdate",
+          requestId: "req-original",
+        });
+        yield* settle;
+        assert.equal(
+          terminalReports(reports)[2]?.reason,
+          "This desktop update is no longer prepared.",
+        );
+        assert.equal(harness.quitAndInstalls(), 0);
+
+        yield* Queue.offer(requests, request("req-new"));
+        yield* settle;
+        yield* Queue.offer(commits, {
+          version: 1,
+          type: "commitDesktopUpdate",
+          requestId: "req-new",
+        });
+        yield* settle;
+        assert.equal(harness.quitAndInstalls(), 1);
+      }),
+    );
+  });
+
   it.effect("reports a failed outcome when quitAndInstall fails", () => {
     const harness = makeHarness({
       quitAndInstall: Effect.fail(
@@ -469,7 +512,7 @@ describe("DesktopRemoteUpdates", () => {
 
         const backgroundCheck = yield* updates.check("poll").pipe(Effect.forkChild);
         yield* Deferred.await(backgroundCheckStarted);
-        assert.equal((yield* updates.getState).status, "checking");
+        assert.isTrue(yield* updates.isActionActive);
 
         yield* Queue.offer(commits, {
           version: 1,

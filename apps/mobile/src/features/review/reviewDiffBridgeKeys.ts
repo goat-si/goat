@@ -18,6 +18,7 @@ export function buildNativeReviewTokensResetKey(input: {
   readonly sectionId: string | null;
   readonly scheme: HighlightScheme;
   readonly diff: string | null | undefined;
+  readonly overlayKey?: string | undefined;
   readonly fileCount: number;
   readonly rowCount: number;
 }): string {
@@ -28,5 +29,6 @@ export function buildNativeReviewTokensResetKey(input: {
     hashReviewDiffKey(input.diff),
     input.fileCount,
     input.rowCount,
+    ...(input.overlayKey === undefined ? [] : [input.overlayKey]),
   ].join(":");
 }

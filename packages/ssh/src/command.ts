@@ -130,6 +130,7 @@ export interface RunSshCommandOptions extends SshAuthOptions {
   readonly preHostArgs?: ReadonlyArray<string>;
   readonly remoteCommandArgs?: ReadonlyArray<string>;
   readonly stdin?: string | Uint8Array;
+  readonly stdinSuffix?: Uint8Array;
   readonly onStdinProgress?: (sentBytes: number) => void;
   readonly timeoutMs?: number;
   readonly timeoutStage?: "runtime-install" | "runtime-launch" | "pairing";
@@ -413,9 +414,11 @@ function sshTargetLogFields(target: DesktopSshEnvironmentTarget) {
 function stdinStream(
   input: string | Uint8Array | undefined,
   onProgress?: (sentBytes: number) => void,
+  suffix?: Uint8Array,
 ) {
   if (input === undefined) return Stream.empty;
   const bytes = typeof input === "string" ? encoder.encode(input) : input;
+  const totalBytes = bytes.byteLength + (suffix?.byteLength ?? 0);
   return Stream.unfold(0, (offset) =>
     Effect.sync(() => {
       // The stdin sink pulls again only after writing the preceding chunk and draining it.
@@ -426,9 +429,13 @@ function stdinStream(
           // A disposed progress observer must not interrupt an upload.
         }
       }
-      if (offset === bytes.byteLength) return undefined;
-      const end = Math.min(offset + SSH_STDIN_CHUNK_BYTES, bytes.byteLength);
-      return [bytes.subarray(offset, end), end] as const;
+      if (offset === totalBytes) return undefined;
+      const afterPrefix = offset >= bytes.byteLength;
+      const chunkOffset = afterPrefix ? offset - bytes.byteLength : offset;
+      const body = afterPrefix ? suffix : bytes;
+      if (!body) return undefined;
+      const chunk = body.subarray(chunkOffset, chunkOffset + SSH_STDIN_CHUNK_BYTES);
+      return [chunk, offset + chunk.byteLength] as const;
     }),
   );
 }
@@ -514,6 +521,7 @@ const runSshCommandInScope = Effect.fn("ssh/command.runSshCommand.inScope")(func
               ? withRemoteDeadline(input.stdin, input.timeoutMs ?? DEFAULT_SSH_COMMAND_TIMEOUT_MS)
               : input.stdin,
             input.onStdinProgress,
+            input.stdinSuffix,
           ),
           endOnDone: true,
         },
