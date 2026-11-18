@@ -23,7 +23,6 @@ import { GOAT_MIGRATION_NAMES, reconcileGoatMigrationIds } from "./reconcileGoat
 import {
   currentRow,
   fresh,
-  goatNames,
   laterGoatRows,
   shiftedGoatNames,
   history,
