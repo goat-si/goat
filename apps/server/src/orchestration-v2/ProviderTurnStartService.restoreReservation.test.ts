@@ -38,7 +38,8 @@ it.effect.each([
     const restore = yield* withCheckpointRestoreReservation(
       fileSystem,
       path,
-      inner ? worktreePath : project,
+      // A project-root thread works in its checkpoint scope's folder, which the harness fixes.
+      inner ? "/tmp/native-account-command/lane" : project,
       Deferred.succeed(entered, undefined).pipe(Effect.andThen(Deferred.await(release))),
     ).pipe(Effect.forkChild({ startImmediately: true }));
     yield* Deferred.await(entered);

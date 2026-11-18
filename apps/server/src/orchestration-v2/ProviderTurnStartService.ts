@@ -20,7 +20,7 @@ import { withAgentOom } from "./agentOomFailure.ts";
 import { AgentScope } from "@goat/shared/AgentScope";
 import { makeDeliverySession } from "./goat/ProviderTurnDeliverySession.ts";
 import { makePrepareTurnWorkspace, workspaceRestoredItem } from "./goat/prepareTurnWorkspace.ts";
-import { makeTurnStartReservation } from "./goat/turnStartReservation.ts";
+import { reserveTurnStart } from "../workspace/checkpointRestoreReservation.ts";
 import { makeProviderTurnHandoffRecovery } from "./goat/ProviderTurnHandoffRecovery.ts";
 import { refuseCodexAdmission } from "./goat/CodexTurnAdmission.ts";
 import { projectComposerContextForProvider } from "@goat/shared/composerContextReferences";
@@ -124,7 +124,8 @@ export const layer: Layer.Layer<
     const serverSettings = yield* ServerSettings.ServerSettingsService;
     const globalSkillsDir = (yield* ServerConfig.ServerConfig).globalSkillsDir;
     const prepareWorkspace = yield* makePrepareTurnWorkspace;
-    const reserveTurnStart = yield* makeTurnStartReservation;
+    const fileSystem = yield* FileSystem.FileSystem;
+    const path = yield* Path.Path;
     const projects = yield* ProjectService.ProjectService;
     const providerAuth = yield* ProviderAuthService.ProviderAuthService;
     const codexSurvivors = yield* Effect.serviceOption(CodexSurvivors.CodexSurvivors);
@@ -215,6 +216,10 @@ export const layer: Layer.Layer<
           cause: `Run ${runId} is missing its execution projection state.`,
         });
       }
+      // A file restore overlapping the folder the turn works in sends this start back to retry.
+      const turnFolder = projection.thread.worktreePath ?? checkpointScope?.cwd;
+      if (turnFolder != null && !(yield* reserveTurnStart(fileSystem, path, turnFolder)))
+        return yield* new ProviderTurnStartError({ runId, cause: new WorkspaceLeaseBusyError({}) });
       const settleRunBeforeStart = Effect.fn("orchestrationV2.providerTurnStart.settleBeforeStart")(
         function* (input: {
           readonly signal: string;
@@ -1427,9 +1432,9 @@ export const layer: Layer.Layer<
                 )?.activeAttemptId
               : undefined;
           let attaching = false;
-          // A file restore overlapping the folder sends this start back to retry.
+          // The scope holds the turn-start reservation until startup ends.
           const startup = start({ ...input, onAttach: () => void (attaching = true) });
-          return yield* reserveTurnStart(input, startup).pipe(
+          return yield* Effect.scoped(startup).pipe(
             // A start that ends before its turn registers must not keep holding the process.
             Effect.ensuring(providerSessions.settleTurnStart(input)),
             Effect.catch((cause) =>

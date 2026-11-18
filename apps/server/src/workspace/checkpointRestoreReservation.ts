@@ -3,6 +3,7 @@ import * as Effect from "effect/Effect";
 import type * as FileSystem from "effect/FileSystem";
 import * as Option from "effect/Option";
 import type * as Path from "effect/Path";
+import type * as Scope from "effect/Scope";
 
 // A restore rewrites files under its directory, so it must exclude provider startup in any
 // overlapping workspace: symlink aliases, parents, and children. Kept apart from the folder lease,
@@ -96,16 +97,27 @@ export const tryTurnStartReservation = <A, E, R>(
   cwd: string,
   effect: Effect.Effect<A, E, R>,
 ): Effect.Effect<Option.Option<A>, E, R> =>
+  Effect.scoped(
+    Effect.flatMap(reserveTurnStart(fileSystem, path, cwd), (reserved) =>
+      reserved ? Effect.asSome(effect) : Effect.succeed(Option.none<A>()),
+    ),
+  );
+
+/** The same reservation, held until the enclosing scope closes; false when a restore overlaps. */
+export const reserveTurnStart = (
+  fileSystem: FileSystem.FileSystem,
+  path: Path.Path,
+  cwd: string,
+): Effect.Effect<boolean, never, Scope.Scope> =>
   canonicalize(fileSystem, path, cwd).pipe(
     Effect.flatMap((canonical) => {
       const reservation: Reservation = { cwd: canonical, kind: "turn-start" };
-      return Effect.acquireUseRelease(
+      return Effect.acquireRelease(
         Effect.sync(() => {
           if (conflicting(path, reservation)) return false;
           reservations.add(reservation);
           return true;
         }),
-        (reserved) => (reserved ? Effect.asSome(effect) : Effect.succeed(Option.none<A>())),
         (reserved) => (reserved ? release(reservation) : Effect.void),
       );
     }),
