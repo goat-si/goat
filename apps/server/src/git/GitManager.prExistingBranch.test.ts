@@ -21,8 +21,8 @@ it.layer(layerGitManagerTest)("GitManager existing PR branches", (it) => {
   it.effect.each([
     { localBranch: "ahead", expectedHead: "local", isOnPullRequestHead: false },
     { localBranch: "behind", expectedHead: "pull request", isOnPullRequestHead: true },
-    { localBranch: "rewritten", expectedHead: "pull request", isOnPullRequestHead: true },
-    { localBranch: "rewritten-fetched", expectedHead: "pull request", isOnPullRequestHead: true },
+    { localBranch: "rewritten", expectedHead: "local", isOnPullRequestHead: false },
+    { localBranch: "rewritten-fetched", expectedHead: "local", isOnPullRequestHead: false },
     { localBranch: "wrong-ref", expectedHead: "pull request", isOnPullRequestHead: true },
     { localBranch: "stale-head", expectedHead: "local", isOnPullRequestHead: false },
     { localBranch: "checkout-race", expectedHead: "pull request", isOnPullRequestHead: true },
@@ -137,6 +137,71 @@ it.layer(layerGitManagerTest)("GitManager existing PR branches", (it) => {
         ).toBe(head);
         expect(result).toMatchObject({ branch: "feature/pr-existing", isOnPullRequestHead });
       }),
+  );
+
+  it.effect("preserves a staged edit racing the refresh of a divergent PR branch", () =>
+    Effect.gen(function* () {
+      const repoDir = yield* makeTempDir("goat-git-manager-");
+      yield* initRepo(repoDir);
+      const remoteDir = yield* createBareRemote();
+      yield* runGit(repoDir, ["remote", "add", "origin", remoteDir]);
+      yield* runGit(repoDir, ["push", "-u", "origin", "main"]);
+      yield* runGit(repoDir, ["checkout", "-b", "feature/pr-existing"]);
+      NodeFS.writeFileSync(NodePath.join(repoDir, "README.md"), "published\n");
+      yield* runGit(repoDir, ["commit", "-am", "Published PR head"]);
+      yield* runGit(repoDir, ["push", "-u", "origin", "feature/pr-existing"]);
+      const localHead = (yield* runGit(repoDir, ["rev-parse", "HEAD"])).stdout.trim();
+      yield* runGit(repoDir, ["checkout", "-b", "author-rewrite"]);
+      NodeFS.writeFileSync(NodePath.join(repoDir, "README.md"), "rewritten\n");
+      yield* runGit(repoDir, ["commit", "--amend", "-am", "Rewritten PR head"]);
+      const pullHead = (yield* runGit(repoDir, ["rev-parse", "HEAD"])).stdout.trim();
+      yield* runGit(repoDir, ["push", "--force", "origin", "HEAD:refs/heads/feature/pr-existing"]);
+      yield* runGit(repoDir, ["update-ref", "refs/remotes/origin/feature/pr-existing", localHead]);
+      yield* runGit(repoDir, ["checkout", "main"]);
+
+      const gate = {
+        matches: (args: ReadonlyArray<string>) =>
+          args.includes("--is-ancestor") && args.includes(localHead) && args.includes(pullHead),
+        reached: yield* Deferred.make<void>(),
+        release: yield* Deferred.make<void>(),
+      };
+      const { manager } = yield* makeManager({
+        gitSpawnGate: gate,
+        providerScenario: {
+          pullRequest: {
+            number: 88,
+            title: "Existing branch PR",
+            url: "https://github.com/pingdotgg/codething-mvp/pull/88",
+            baseRefName: "main",
+            headRefName: "feature/pr-existing",
+            state: "open",
+            headSha: pullHead,
+            isCrossRepository: false,
+          },
+        },
+      });
+      const preparing = yield* Effect.forkChild(
+        preparePullRequestThread(manager, { cwd: repoDir, reference: "88", mode: "worktree" }),
+      );
+      yield* Deferred.await(gate.reached);
+      const entries = (yield* runGit(repoDir, ["worktree", "list", "--porcelain"])).stdout;
+      const worktree = entries
+        .split("\n\n")
+        .find((entry) => entry.includes("branch refs/heads/feature/pr-existing"))
+        ?.split("\n")[0]
+        ?.slice("worktree ".length);
+      if (worktree === undefined) throw new Error("Expected the existing PR branch worktree");
+      const edited = NodePath.join(worktree, "README.md");
+      NodeFS.writeFileSync(edited, "staged user edit\n");
+      yield* runGit(worktree, ["add", "README.md"]);
+      yield* Deferred.succeed(gate.release, undefined);
+      const result = yield* Fiber.join(preparing);
+
+      expect((yield* runGit(worktree, ["show", ":README.md"])).stdout).toBe("staged user edit\n");
+      expect(NodeFS.readFileSync(edited, "utf8")).toBe("staged user edit\n");
+      expect((yield* runGit(worktree, ["rev-parse", "HEAD"])).stdout.trim()).toBe(localHead);
+      expect(result.isOnPullRequestHead).toBe(false);
+    }),
   );
 
   it.effect.each(["adds", "removes"] as const)(
