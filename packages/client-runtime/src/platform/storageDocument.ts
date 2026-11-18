@@ -378,10 +378,10 @@ const encodeStorageDocument = Schema.encodeEffect(ConnectionCatalogStorageJson);
 // Hub and Pen records are rediscovered, so one with an unusable position is dropped: failing the
 // decode instead would discard the pairing credentials stored beside it.
 function mergeExtensions<A>(
-  legacy: ReadonlyArray<A>,
+  legacy: ReadonlyArray<A | undefined>,
   extensions: ReadonlyArray<{ readonly index: number; readonly value: A | undefined }>,
   dropped: number,
-): ReadonlyArray<A> {
+): ReadonlyArray<A | undefined> {
   // Slots of dropped records count, so a record written after one is still in range.
   const total = legacy.length + extensions.length + dropped;
   const seen = new Set<number>();
@@ -397,9 +397,12 @@ function mergeExtensions<A>(
     .sort((a, b) => a.index - b.index);
   const result: Array<A | undefined> = [...legacy];
   for (const entry of placed) result.splice(entry.index, 0, entry.value);
-  // A record dropped for its value held its slot while the others were placed.
-  return result.filter((value): value is A => value !== undefined);
+  // A record dropped for its value keeps its slot until hub and Pen records are both placed.
+  return result;
 }
+
+const present = <A>(values: ReadonlyArray<A | undefined>) =>
+  values.filter((value): value is A => value !== undefined);
 
 const isPenRecord = (item: unknown) =>
   typeof item === "object" &&
@@ -453,7 +456,7 @@ export const decodeConnectionCatalogStorage = (raw: string) =>
       const targets = extensionRecords(
         decodePenTarget(
           new Set(
-            baseTargets.flatMap((target) =>
+            present(baseTargets).flatMap((target) =>
               "connectionId" in target ? [target.connectionId] : [],
             ),
           ),
@@ -461,16 +464,16 @@ export const decodeConnectionCatalogStorage = (raw: string) =>
         penTargets,
       );
       const profiles = extensionRecords(
-        decodePenProfile(new Set(baseProfiles.map((profile) => profile.connectionId))),
+        decodePenProfile(new Set(present(baseProfiles).map((profile) => profile.connectionId))),
         penProfiles,
       );
       return pairPenRoutes({
         ...document,
-        targets: mergeExtensions(baseTargets, targets, extensionSlots(penTargets) - targets.length),
-        profiles: mergeExtensions(
-          baseProfiles,
-          profiles,
-          extensionSlots(penProfiles) - profiles.length,
+        targets: present(
+          mergeExtensions(baseTargets, targets, extensionSlots(penTargets) - targets.length),
+        ),
+        profiles: present(
+          mergeExtensions(baseProfiles, profiles, extensionSlots(penProfiles) - profiles.length),
         ),
       } satisfies ConnectionCatalogDocument);
     }),

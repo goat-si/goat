@@ -839,4 +839,34 @@ describe("Pen storage compatibility", () => {
       expect(yield* decodeConnectionCatalogStorage(encoded)).toEqual(decoded);
     }),
   );
+  it.effect.each(["target", "profile"] as const)(
+    "a damaged hub %s keeps the Pen route stored after it through a save and reload",
+    (damaged) =>
+      Effect.gen(function* () {
+        const stored = {
+          ...legacy,
+          // [Hub, Bearer, Pen] in both lists; one hub record is not a hub record.
+          hubProxyTargets: [{ index: 0, value: damaged === "target" ? penTarget : hubTarget }],
+          hubProxyProfiles: [{ index: 0, value: damaged === "profile" ? null : hubProfile }],
+          penTargets: [{ index: 2, value: penTarget }],
+          penProfiles: [{ index: 2, value: penProfile }],
+        };
+        const decoded = yield* decodeConnectionCatalogStorage(JSON.stringify(stored));
+        const reloaded = yield* decodeConnectionCatalogStorage(
+          yield* encodeConnectionCatalogStorage(decoded),
+        );
+        for (const document of [decoded, reloaded]) {
+          expect(document.targets.map((value) => value._tag)).toEqual([
+            ...(damaged === "target" ? [] : ["HubProxyConnectionTarget"]),
+            "BearerConnectionTarget",
+            "PenConnectionTarget",
+          ]);
+          expect(document.profiles.map((value) => value._tag)).toEqual([
+            ...(damaged === "profile" ? [] : ["HubProxyConnectionProfile"]),
+            "BearerConnectionProfile",
+            "PenConnectionProfile",
+          ]);
+        }
+      }),
+  );
 });
