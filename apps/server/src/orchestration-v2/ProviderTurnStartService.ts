@@ -592,6 +592,10 @@ export const layer: Layer.Layer<
         if (!repaired.committed) return;
       }
       // The provider turn marks cancellation work delivered; restart continuations use their own text or resume natively.
+      const baseline = yield* runExecution.forkBaseline({
+        run,
+        checkpointScope: cloud ? null : (checkpointScope ?? null),
+      });
       const noteContinuation = isRestartNoteContinuation(
         run,
         projection.runs,
@@ -1304,7 +1308,8 @@ export const layer: Layer.Layer<
         session: cloud ? session : deliverySession,
         run: runningRun,
         rootNode: runningRootNode,
-        checkpointScope: cloud ? null : checkpointScope!,
+        checkpointScope: cloud ? null : (checkpointScope ?? null),
+        baseline,
         ...(cloudSource === undefined ? {} : { cloudSource: cloudSource.source }),
         ...(cloudSource?.launchSource === undefined
           ? {}

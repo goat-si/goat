@@ -164,7 +164,10 @@ export function makeWorktreeStartHarness(
         Layer.mock(ProviderAuthService.ProviderAuthService)({
           tryHandlePromptCommand: () => Effect.succeed(false),
         }),
-        Layer.mock(RunExecutionService.RunExecutionServiceV2)({ startRootRun }),
+        Layer.mock(RunExecutionService.RunExecutionServiceV2)({
+          startRootRun,
+          forkBaseline: () => Effect.succeed(Effect.void),
+        }),
         Layer.mock(RuntimePolicy.RuntimePolicyV2)({}),
       ),
     ),

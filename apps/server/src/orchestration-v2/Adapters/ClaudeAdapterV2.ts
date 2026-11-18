@@ -2,6 +2,7 @@ import {
   nextClaudeGoal,
   isClaudeGoalAcknowledgement,
   providerGoalsEqual,
+  textFromClaudeContent,
 } from "./ClaudeGoalProjection.ts";
 import { claudeQueryFlagEnvironment, parseClaudeInteger } from "./ClaudeQueryFlags.ts";
 import {
@@ -847,10 +848,6 @@ function providerSession(input: {
     updatedAt: input.now,
     lastError: null,
   };
-}
-
-function textFromClaudeContent(content: SDKAssistantMessage["message"]["content"]): string {
-  return content.flatMap((part) => (part.type === "text" ? [part.text] : [])).join("");
 }
 
 // Claude 5.1+ emits at most one pre-tool text block as thinking; treat only a second consecutive thinking block as text.
@@ -9112,9 +9109,9 @@ export const makeClaudeAdapterV2 = Effect.fn("makeClaudeAdapterV2")(function* (
         const openQuery = Effect.fnUntraced(function* (
           turnInput: ProviderAdapter.ProviderAdapterV2TurnInput,
           nativeThreadId: string,
+          queryPolicy: Effect.Success<ReturnType<typeof queryPolicyForTurn>>,
         ) {
           const launch = yield* resolveLaunch;
-          const queryPolicy = yield* queryPolicyForTurn(turnInput);
           const mcpSession = yield* readMcpSession(turnInput.threadId);
 
           const mcpOverrides = claudeMcpQueryOverrides({
@@ -9226,18 +9223,25 @@ export const makeClaudeAdapterV2 = Effect.fn("makeClaudeAdapterV2")(function* (
           }
 
           // Read before closing the live process so a bad path leaves it running.
-          const appendSystemPromptFileText = yield* readClaudeAppendSystemPromptFile({
+          const launchArgInput = {
             settings: adapterOptions.settings,
             cwd: turnInput.runtimePolicy.cwd,
             fileSystem,
             path,
-          });
-          const launchArgSettings = yield* readClaudeLaunchArgSettings({
-            settings: adapterOptions.settings,
-            cwd: turnInput.runtimePolicy.cwd,
-            fileSystem,
-            path,
-          });
+          };
+          const [appendResult, settingsResult] = yield* Effect.all(
+            [
+              Effect.result(readClaudeAppendSystemPromptFile(launchArgInput)),
+              Effect.result(readClaudeLaunchArgSettings(launchArgInput)),
+            ],
+            { concurrency: 2 },
+          );
+          const appendSystemPromptFileText = yield* Effect.fromResult(appendResult);
+          const launchArgSettings = yield* Effect.fromResult(settingsResult);
+          const toolSearchOverride = yield* resolveToolSearchOverride(
+            turnInput.runtimePolicy.cwd,
+            launchArgSettings,
+          );
           const closedExistingNativeThreadId = existing !== null ? existing.nativeThreadId : null;
           clearedNativeSessions.delete(nativeThreadId);
           if (existing !== null) {
@@ -9256,10 +9260,6 @@ export const makeClaudeAdapterV2 = Effect.fn("makeClaudeAdapterV2")(function* (
             turnInput.nativeThreadHasTurns ?? turnInput.providerTurnOrdinal > 1;
           const shouldResume =
             resumeSessionAt !== undefined || openedWithResume || hasPersistedProviderTurn;
-          const toolSearchOverride = yield* resolveToolSearchOverride(
-            turnInput.runtimePolicy.cwd,
-            launchArgSettings,
-          );
           // A capped process on a Claude Code that ignores the cap opens without Agent instead.
           const openedSubagentPolicy =
             subagentPolicy.key.startsWith("cap:") && !(yield* claudeSubagentCapSupported)
@@ -9559,6 +9559,15 @@ export const makeClaudeAdapterV2 = Effect.fn("makeClaudeAdapterV2")(function* (
               const used = turnInput.providerThread.nativeMetadata?.claudeAttachmentBudget;
               pdfBudgets.set(nativeThreadId, makeClaudeAttachmentBudget(used));
             }
+            const [skills, queryPolicy] = yield* Effect.all(
+              [
+                promptUuid === null
+                  ? Effect.undefined
+                  : userInvocableSkills(turnInput.runtimePolicy.cwd),
+                queryPolicyForTurn(turnInput),
+              ],
+              { concurrency: 2 },
+            );
             const pdfReservation = yield* reserveClaudePdfBudget(
               pdfBudgets.get(nativeThreadId)!,
               persistAttachmentBudget(nativeThreadId),
@@ -9581,13 +9590,13 @@ export const makeClaudeAdapterV2 = Effect.fn("makeClaudeAdapterV2")(function* (
                     attachmentsDir,
                     fileSystem,
                     pdfReservation,
-                    skills: yield* userInvocableSkills(turnInput.runtimePolicy.cwd),
+                    ...(skills === undefined ? {} : { skills }),
                     uuid: promptUuid,
                   }).pipe(
                     Effect.provideService(ChildProcessSpawner.ChildProcessSpawner, spawner),
                     Effect.provideService(Path.Path, path),
                   );
-            const querySession = yield* openQuery(turnInput, nativeThreadId);
+            const querySession = yield* openQuery(turnInput, nativeThreadId, queryPolicy);
             const context: ActiveClaudeTurnContext = {
               autoCompactWindow: yield* resolveAutoCompactWindow({
                 configured: adapterOptions.settings.autoCompactWindow,

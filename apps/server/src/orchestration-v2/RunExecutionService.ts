@@ -1,3 +1,4 @@
+import { captureRunBaseline, type RunBaselineInput } from "./RunExecutionBaseline.ts";
 import { backgroundCapableTurnItemTypes } from "./InheritedBackgroundTurnItems.ts";
 export { selectInheritedBackgroundTurnItems } from "./InheritedBackgroundTurnItems.ts";
 import { isTerminalProviderTurnStatus, isSettledTurnItemStatus } from "./providerTurnStatus.ts";
@@ -341,6 +342,7 @@ export interface RunExecutionServiceV2StartRootRunInput {
   readonly run: OrchestrationV2Run;
   readonly rootNode: OrchestrationV2ExecutionNode;
   readonly checkpointScope: OrchestrationV2CheckpointScope | null;
+  readonly baseline?: Effect.Effect<void>;
   readonly providerThread: OrchestrationV2ProviderThread;
   readonly attempt: OrchestrationV2RunAttempt;
   readonly attemptId: RunAttemptId;
@@ -363,6 +365,7 @@ export interface RunExecutionServiceV2StartRootRunInput {
 }
 
 export interface RunExecutionServiceV2Shape {
+  readonly forkBaseline: (input: RunBaselineInput) => Effect.Effect<Effect.Effect<void>>;
   readonly startRootRun: (
     input: RunExecutionServiceV2StartRootRunInput,
   ) => Effect.Effect<void, RunExecutionServiceV2Error>;
@@ -764,6 +767,11 @@ export const layer: Layer.Layer<
     );
 
     return RunExecutionServiceV2.of({
+      forkBaseline: (input) =>
+        captureRunBaseline(checkpointService, input).pipe(
+          Effect.forkChild({ startImmediately: true }),
+          Effect.map(Fiber.join),
+        ),
       startRootRun: Effect.fn("RunExecutionService.startRootRun")(function* (input) {
         const cloud =
           input.cloudSource !== undefined || input.providerThread.cloudTask !== undefined;
@@ -817,23 +825,7 @@ export const layer: Layer.Layer<
                   .responseStreamingMode,
             ),
           );
-          if (input.checkpointScope !== null) {
-            yield* checkpointService
-              .captureBaseline({
-                scope: input.checkpointScope,
-                ordinalWithinScope: Math.max(0, input.run.ordinal - 1),
-              })
-              .pipe(
-                Effect.catchCause((cause) =>
-                  Cause.hasInterruptsOnly(cause)
-                    ? Effect.failCause(cause)
-                    : Effect.logWarning(
-                        "orchestration V2 checkpoint baseline capture failed; starting provider without a baseline",
-                        { runId: input.run.id },
-                      ),
-                ),
-              );
-          }
+          yield* input.baseline ?? captureRunBaseline(checkpointService, input);
           if (
             input.shouldStartProviderTurn !== undefined &&
             !(yield* input.shouldStartProviderTurn())

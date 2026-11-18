@@ -2,7 +2,7 @@ import type { SDKAssistantMessage, SDKMessage } from "@anthropic-ai/claude-agent
 import { OrchestrationV2ProviderGoal } from "@goat/contracts";
 import * as Schema from "effect/Schema";
 
-function textFromClaudeContent(content: SDKAssistantMessage["message"]["content"]): string {
+export function textFromClaudeContent(content: SDKAssistantMessage["message"]["content"]): string {
   return content.flatMap((part) => (part.type === "text" ? [part.text] : [])).join("");
 }
 

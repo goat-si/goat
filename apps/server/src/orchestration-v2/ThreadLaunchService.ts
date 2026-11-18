@@ -1001,7 +1001,7 @@ const make = Effect.gen(function* () {
         return yield* prepare;
       }
       const afterSequence = yield* threads.getThreadEventSequence(threadId);
-      const projection = yield* threads.getThreadRecords(threadId, ["runs"]);
+      const projection = yield* threads.getThreadRecords(threadId, ["runs"], { runIds: [runId] });
       if (projection.runs.find((run) => run.id === runId)?.status !== "preparing") return;
       yield* Effect.raceFirst(
         prepare,
@@ -1313,49 +1313,39 @@ const make = Effect.gen(function* () {
           }
         }
 
+        const shouldCheckPreparation = runId !== null || Option.isNone(launchReceipt);
+        if (shouldCheckPreparation && (yield* reservePreparation(input.commandId))) {
+          yield* Effect.gen(function* () {
+            const current =
+              runId === null
+                ? null
+                : yield* threads
+                    .getThreadRecords(threadId, ["runs"], { runIds: [runId] })
+                    .pipe(Effect.mapError(mapError(input, "update-thread", threadId)));
+            if (current !== null && !current.runs.some((run) => run.status === "preparing")) {
+              return yield* releasePreparation(input.commandId);
+            }
+            const boundWorktreePath = current?.thread.worktreePath ?? null;
+            const preparationStrategy: ThreadLaunchWorkspaceStrategy =
+              Option.isSome(launchReceipt) &&
+              workspaceStrategy.type === "root" &&
+              boundWorktreePath !== null
+                ? {
+                    type: "existing_worktree",
+                    worktreePath: boundWorktreePath,
+                    branch: workspaceStrategy.branch,
+                  }
+                : workspaceStrategy;
+            yield* schedulePreparation(
+              { ...input, workspaceStrategy: preparationStrategy },
+              threadId,
+              runId,
+            );
+          }).pipe(Effect.onError(() => releasePreparation(input.commandId)));
+        }
         const projection = yield* threads
           .getThreadProjection(threadId)
           .pipe(Effect.mapError(mapError(input, "create-thread", threadId)));
-        const runIsPreparing =
-          runId !== null &&
-          projection.runs.some((run) => run.id === runId && run.status === "preparing");
-        const shouldSchedule = runId === null ? Option.isNone(launchReceipt) : runIsPreparing;
-        const boundWorktreePath = projection.thread.worktreePath;
-        const preparationStrategy: ThreadLaunchWorkspaceStrategy =
-          Option.isSome(launchReceipt) &&
-          workspaceStrategy.type === "root" &&
-          boundWorktreePath !== null
-            ? {
-                type: "existing_worktree",
-                worktreePath: boundWorktreePath,
-                branch: workspaceStrategy.branch,
-              }
-            : workspaceStrategy;
-        if (shouldSchedule) {
-          const ownsPreparation = yield* reservePreparation(input.commandId);
-          if (ownsPreparation) {
-            yield* Effect.gen(function* () {
-              const preparationStillRequired =
-                runId === null
-                  ? true
-                  : yield* threads.getThreadRecords(threadId, ["runs"], { runIds: [runId] }).pipe(
-                      Effect.map((current) =>
-                        current.runs.some((run) => run.id === runId && run.status === "preparing"),
-                      ),
-                      Effect.mapError(mapError(input, "update-thread", threadId)),
-                    );
-              if (preparationStillRequired) {
-                yield* schedulePreparation(
-                  { ...input, workspaceStrategy: preparationStrategy },
-                  threadId,
-                  runId,
-                );
-              } else {
-                yield* releasePreparation(input.commandId);
-              }
-            }).pipe(Effect.onError(() => releasePreparation(input.commandId)));
-          }
-        }
 
         return {
           threadId,

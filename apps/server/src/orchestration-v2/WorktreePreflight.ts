@@ -97,55 +97,62 @@ export function makeWorktreePreflight({
     "ThreadLaunchService.checkWorktreeBase",
   )(function* (input) {
     const strategy = input.workspaceStrategy;
-    if (strategy.type !== "worktree" || (yield* managedFolders.isScratchProject(input.projectId)))
-      return;
-    if (input.commandId !== undefined) {
-      const receipt = yield* receipts
-        .getByCommandId(input.commandId)
-        .pipe(Effect.orElseSucceed(() => Option.none()));
-      if (Option.isSome(receipt) && receipt.value.status === "accepted") return;
-    }
-    // Upstream lets a failed detection through to preparation; GOAT refuses a folder it could not check.
-    const repository = Option.getOrUndefined(
-      yield* projects.getById(input.projectId).pipe(Effect.orElseSucceed(() => Option.none())),
+    if (strategy.type !== "worktree") return;
+    const commandId = input.commandId;
+    const [scratch, receipt, projectOption] = yield* Effect.all(
+      [
+        managedFolders.isScratchProject(input.projectId),
+        commandId === undefined
+          ? Effect.succeedNone
+          : receipts.getByCommandId(commandId).pipe(Effect.orElseSucceed(() => Option.none())),
+        projects.getById(input.projectId).pipe(Effect.orElseSucceed(() => Option.none())),
+      ],
+      { concurrency: 3 },
     );
-    if (repository !== undefined) {
-      const root = yield* git.repositoryRoot(repository.workspaceRoot).pipe(Effect.result);
-      if (root._tag === "Failure" || root.success === null)
-        return yield* new ThreadLaunchNotRepositoryError({
-          projectId: repository.id,
-          projectTitle: repository.title,
-          workspaceRoot: repository.workspaceRoot,
-          ...(root._tag === "Failure"
-            ? { checkFailed: root.failure.message.split("\n")[0] ?? "" }
-            : {}),
-        });
-    }
-    const { branch } = strategy;
-    if (branch !== undefined && !isTemporaryWorktreeBranch(branch)) {
-      const project = Option.getOrUndefined(
-        yield* projects.getById(input.projectId).pipe(Effect.orElseSucceed(() => Option.none())),
+    if (scratch || Option.exists(receipt, (value) => value.status === "accepted")) return;
+    const project = Option.getOrUndefined(projectOption);
+    if (project === undefined) return;
+    const cwd = project.workspaceRoot;
+    const { branch, baseRef } = strategy;
+    const checksBranch = branch !== undefined && !isTemporaryWorktreeBranch(branch);
+    const [root, branches, localBase] = yield* Effect.all(
+      [
+        Effect.result(git.repositoryRoot(cwd)),
+        checksBranch
+          ? git.listLocalBranchNames(cwd).pipe(Effect.orElseSucceed((): string[] => []))
+          : Effect.succeed([]),
+        // Git reads `-` as the previous checkout and `:/text` as a commit search.
+        baseRef.startsWith(":")
+          ? Effect.succeed(true)
+          : git
+              .hasCommit({ cwd, refName: baseRef === "-" ? "@{-1}" : baseRef })
+              .pipe(Effect.orElseSucceed(() => true)),
+      ],
+      { concurrency: 3 },
+    );
+    if (root._tag === "Failure" || root.success === null)
+      return yield* new ThreadLaunchNotRepositoryError({
+        projectId: project.id,
+        projectTitle: project.title,
+        workspaceRoot: cwd,
+        ...(root._tag === "Failure"
+          ? { checkFailed: root.failure.message.split("\n")[0] ?? "" }
+          : {}),
+      });
+    if (checksBranch) {
+      const conflict = branches.find(
+        (existing) => existing.startsWith(`${branch}/`) || branch.startsWith(`${existing}/`),
       );
-      if (project !== undefined) {
-        const conflict = (yield* git
-          .listLocalBranchNames(project.workspaceRoot)
-          .pipe(Effect.orElseSucceed((): string[] => []))).find(
-          (existing) => existing.startsWith(`${branch}/`) || branch.startsWith(`${existing}/`),
-        );
-        if (conflict !== undefined)
-          return yield* new ThreadLaunchBranchConflictError({
-            projectId: project.id,
-            projectTitle: project.title,
-            branch,
-            conflictingBranch: conflict,
-          });
-      }
+      if (conflict !== undefined)
+        return yield* new ThreadLaunchBranchConflictError({
+          projectId: project.id,
+          projectTitle: project.title,
+          branch,
+          conflictingBranch: conflict,
+        });
     }
     if (branch !== undefined) {
       const taken = yield* Effect.gen(function* () {
-        const project = Option.getOrUndefined(yield* projects.getById(input.projectId));
-        if (project === undefined) return undefined;
-        const cwd = project.workspaceRoot;
         // A branch left by an earlier attempt is reused when that loses nothing; an
         // unresolvable base leaves the decision to provisioning, which fetches it first.
         const state = yield* git.inspectExistingBranch({ cwd, branch, baseRef: strategy.baseRef });
@@ -174,16 +181,8 @@ export function makeWorktreePreflight({
           problem: taken.problem,
         });
     }
-    // `:/text` is a commit search, which cannot be asked for a commit type.
-    if (strategy.baseRef.startsWith(":")) return;
-    const { baseRef } = strategy;
+    if (localBase) return;
     const unresolved = yield* Effect.gen(function* () {
-      const project = Option.getOrUndefined(yield* projects.getById(input.projectId));
-      if (project === undefined) return undefined;
-      const cwd = project.workspaceRoot;
-      // `git worktree add` reads `-` as the previous checkout.
-      if (yield* git.hasCommit({ cwd, refName: baseRef === "-" ? "@{-1}" : baseRef }))
-        return undefined;
       if (
         strategy.startFromOrigin === true &&
         (yield* git.resolveWorktreeBaseRemote({ cwd, refName: baseRef })) !== null
@@ -191,13 +190,13 @@ export function makeWorktreePreflight({
         return undefined;
       // git worktree add accepts remote-tracking branches; let Git decide when any matching ref exists.
       if (yield* git.hasRefNamed({ cwd, refName: baseRef })) return undefined;
-      return (yield* git.hasCommit({ cwd, refName: "HEAD" })) ? project : undefined;
+      return yield* git.hasCommit({ cwd, refName: "HEAD" });
     }).pipe(Effect.orElseSucceed(() => undefined));
     if (unresolved !== undefined)
       return yield* new ThreadLaunchBaseRefError({
-        projectId: unresolved.id,
-        projectTitle: unresolved.title,
-        workspaceRoot: unresolved.workspaceRoot,
+        projectId: project.id,
+        projectTitle: project.title,
+        workspaceRoot: cwd,
         baseRef,
       });
   });
