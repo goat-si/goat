@@ -69,7 +69,11 @@ const isUpcoming = (reset: LimitPoolWindow["resets"][number]) =>
 
 function widgetAccounts(window: LimitPoolWindow): WidgetLimitAccount[] {
   const names = new Set<string>();
-  return window.columns.map(({ account, window: reading }) => {
+  const rows: WidgetLimitAccount[] = [];
+  const byKey = window.columns
+    .map((column, displayIndex) => ({ ...column, displayIndex }))
+    .sort((left, right) => right.account.key.localeCompare(left.account.key));
+  for (const { account, window: reading, displayIndex } of byKey) {
     const [local, domain] = (account.email ?? account.displayName ?? "").split("@");
     const base =
       account.displayName && !account.displayName.includes("@")
@@ -81,12 +85,13 @@ function widgetAccounts(window: LimitPoolWindow): WidgetLimitAccount[] {
     for (let suffix = 2; names.has(name); suffix++) name = `${base}${suffix}`;
     names.add(name);
     const color = normalizeProviderAccentColor(account.accentColor);
-    return {
+    rows[displayIndex] = {
       name,
       ...(color ? { color } : {}),
       ...(reading ? { remaining: remainingPercent(reading) } : {}),
     };
-  });
+  }
+  return rows;
 }
 
 function subscriptionUsageProps(

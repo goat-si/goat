@@ -108,6 +108,32 @@ describe("subscription widget snapshots", () => {
     ]);
     expect(JSON.stringify(snapshot)).not.toContain("example.com");
   });
+  it("keeps colliding redacted names attached to the same accounts when reset order changes", () => {
+    const breakdown = (firstReset: string, secondReset: string) =>
+      buildSubscriptionUsageSnapshot(
+        presentations(
+          [
+            { id: "rex", usedPercent: 30, resetsAt: firstReset },
+            { id: "relay", usedPercent: 70, resetsAt: secondReset },
+          ].map(({ id, usedPercent, resetsAt }) =>
+            provider({
+              instanceId: ProviderInstanceId.make(id),
+              auth: { status: "authenticated", email: `${id}@example.com` },
+              usageLimits: { checkedAt, windows: [{ ...window, usedPercent, resetsAt }] },
+            }),
+          ),
+        ),
+        deepLink,
+        6,
+        true,
+      ).providers[0]?.windows[0]?.accounts;
+    const earlier = "2026-09-05T12:08:00.000Z";
+    const later = "2026-09-05T12:12:00.000Z";
+    const before = breakdown(earlier, later);
+    expect(before).toHaveLength(2);
+    expect(new Set(before?.map(({ name }) => name))).toEqual(new Set(["RE", "RE2"]));
+    expect(breakdown(later, earlier)).toEqual(before?.toReversed());
+  });
   it("uses upstream deduplication for a native account also present in a proxy hub", () => {
     const input = new Map([
       [
