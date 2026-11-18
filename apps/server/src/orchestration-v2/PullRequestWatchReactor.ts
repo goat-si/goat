@@ -49,7 +49,7 @@ import {
 } from "./pullRequestWatch.ts";
 import { pullRequestWakeMessageId } from "./goat/PullRequestWatchWakes.ts";
 import { EVENT_SETTLE, feedsToFollow } from "./goat/PullRequestEventFeeds.ts";
-import { watchSweepPage } from "./goat/PullRequestWatchPage.ts";
+import { makeWatchSweepCursor, watchSweepPage } from "./goat/PullRequestWatchPage.ts";
 import { goatCallText } from "@goat/contracts/agentSurface/callText";
 
 /** Checks take minutes; faster sweeps waste the account's shared host quota. */
@@ -290,7 +290,7 @@ export const make = Effect.gen(function* () {
   const readFailures = new Map<string, number>();
   const readRetryAt = new Map<string, number>();
   let feedCandidates: ReadonlyArray<readonly [string, PullRequestRef]> = [];
-  let sweepAfter: string | undefined;
+  const sweepCursor = yield* makeWatchSweepCursor;
   // A pass reads watches and records new ones, so passes must not overlap.
   const passes = Semaphore.makeUnsafe(1);
   const lastReads = new Map<string, LastRead>();
@@ -810,7 +810,7 @@ export const make = Effect.gen(function* () {
       }
       for (const key of readFailures.keys()) if (!present.has(key)) readFailures.delete(key);
     }
-    const page = watchSweepPage(work, changed === undefined ? sweepAfter : undefined);
+    const page = watchSweepPage(work, changed === undefined ? sweepCursor.after : undefined);
     const groups = new Map<string, [WatchTarget, ...Array<WatchTarget>]>();
     yield* Effect.forEach(
       page.items,
@@ -881,7 +881,7 @@ export const make = Effect.gen(function* () {
       { concurrency: 4, discard: true },
     );
     yield* sendHeld(held);
-    if (changed === undefined) sweepAfter = page.after;
+    if (changed === undefined) yield* sweepCursor.complete(page.after);
   }, passes.withPermit);
 
   const sweep = pass(undefined).pipe(

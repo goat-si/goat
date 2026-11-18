@@ -51,7 +51,7 @@ const layerTest = Layer.mergeAll(
   Layer.provide(McpProviderSessions.layer),
   Layer.provide(SqlitePersistence.layerMemory),
   Layer.provide(layerCheckpointStoreTest),
-  Layer.provide(layerServerConfig),
+  Layer.provideMerge(layerServerConfig),
   Layer.provide(ServerSettings.layerTest()),
   Layer.provide(layerTestProviderInstanceRegistry),
   Layer.provide(layerGitWorkflowTest),
@@ -514,5 +514,34 @@ it.effect("continues through a pull request group that grows and shrinks across 
       assert.include(yield* notices(later), `helper in #22 (round ${round})`);
       assert.deepEqual(reads.slice(1).sort(), [21, 22]);
     }
+  }).pipe(Effect.scoped, Effect.provide(layerTest)),
+);
+
+it.effect("resumes the last completed watch page after a restart and clears it at cycle end", () =>
+  Effect.gen(function* () {
+    const numbers = Array.from({ length: 65 }, (_, index) => index + 1);
+    const { projectId } = yield* threadWatching("pr-batch-restart", numbers);
+    const reads: Array<number> = [];
+    const host = hostWithNewComments(projectId, {
+      onRead: (number) => Effect.sync(() => void reads.push(number)),
+    });
+    const sweepFromNewReactor = Effect.gen(function* () {
+      const reactor = yield* PullRequestWatchReactor.make.pipe(Effect.provide(host));
+      yield* reactor.sweep;
+    });
+
+    yield* sweepFromNewReactor;
+    assert.lengthOf(reads, 64);
+    const firstPage = new Set(reads);
+    const remaining = numbers.filter((number) => !firstPage.has(number));
+    assert.lengthOf(remaining, 1);
+
+    reads.length = 0;
+    yield* sweepFromNewReactor;
+    assert.deepEqual(reads, remaining);
+
+    reads.length = 0;
+    yield* sweepFromNewReactor;
+    assert.deepEqual(new Set(reads), firstPage);
   }).pipe(Effect.scoped, Effect.provide(layerTest)),
 );
