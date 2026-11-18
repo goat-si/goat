@@ -99,7 +99,7 @@ function normalizeOutgoingFrame(frame: unknown): unknown {
   };
 }
 
-const isProtocolError = Schema.is(AcpSchema.Error);
+export const isProtocolError = Schema.is(AcpSchema.Error);
 
 /**
  * Effect RPC's JSON-RPC codec treats a standard JSON-RPC error object as a

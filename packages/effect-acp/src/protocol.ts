@@ -1,6 +1,10 @@
 import * as Context from "effect/Context";
-import { normalizeAcpJsonRpcError } from "./_internal/strictParser.ts";
-import { makeStrictNdJsonRpcParser, type AcpDecodedWireMessage } from "./_internal/strictParser.ts";
+import {
+  isProtocolError,
+  normalizeAcpJsonRpcError,
+  makeStrictNdJsonRpcParser,
+  type AcpDecodedWireMessage,
+} from "./_internal/strictParser.ts";
 import {
   makeRawNotificationBuffer,
   type AcpBufferedRawNotification,

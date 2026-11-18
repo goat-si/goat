@@ -313,7 +313,9 @@ export const make = Effect.fn("effect-acp/AcpClient.make")(function* (
   let negotiatedProtocolGeneration: 1 | 2 | undefined;
   let sessionDeleteSupported = false;
   let advertisedClientCapabilities: AcpSchema.InitializeRequest["clientCapabilities"];
-  const validateElicitation = (request: AcpSchema.CreateElicitationRequest) =>
+  const validateElicitation = (
+    request: AcpSchema.CreateElicitationRequest,
+  ): Effect.Effect<AcpSchema.CreateElicitationRequest, AcpSchemaV2.Error> =>
     advertisedClientCapabilities !== undefined &&
     (request.mode === "form" || request.mode === "url") &&
     advertisedClientCapabilities.elicitation?.[request.mode] == null
