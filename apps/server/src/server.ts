@@ -156,6 +156,7 @@ import * as McpOAuthHttp from "./auth/mcpOAuthHttp.ts";
 import * as ReplayMarkers from "./auth/replayMarkers.ts";
 import * as ServerSecretStore from "./auth/ServerSecretStore.ts";
 import * as BackgroundPolicy from "./background/BackgroundPolicy.ts";
+import * as KeepAwake from "./background/KeepAwake.ts";
 import * as HostPowerMonitor from "./background/HostPowerMonitor.ts";
 import * as ServerAutoUpdate from "./cloud/autoUpdate.ts";
 import * as CloudCliTokenManager from "./cloud/CliTokenManager.ts";
@@ -722,6 +723,7 @@ const layerRuntimeCoreDependenciesBase = Layer.mergeAll(
   ),
   HostPressureMonitor.layer,
   layerThreadPullRequestWorker,
+  KeepAwake.layer,
   DelegatedTaskAnalytics.layer,
   Layer.effectDiscard(
     Effect.gen(function* () {

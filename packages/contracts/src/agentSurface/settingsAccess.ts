@@ -49,6 +49,7 @@ export const SETTINGS_ACCESS = {
   channelAutoPlacement: agent,
   responseStreamingMode: agent,
   enableProviderUpdateChecks: agent,
+  keepAwakeWhileAgentsWork: person("A person controls whether this machine is allowed to sleep."),
   continueThreadsAfterServerUpdate: agent,
   codexTurnsSurviveServerStop: agent,
   codexAppServerIsolation: agent,
