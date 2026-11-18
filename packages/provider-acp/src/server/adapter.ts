@@ -5943,6 +5943,15 @@ export const makeAcpAdapterV2 = Effect.fn("makeAcpAdapterV2")(function* (
           const startup = Effect.gen(function* () {
             yield* spawnAcpRuntime(threadId, resumeSessionId);
             yield* wireAcpRuntimeHandlers(runtime, yield* Ref.get(runtimeCallbackGeneration));
+            if (
+              input.historyImport === true &&
+              (yield* runtime.initialize()).agentCapabilities?.loadSession !== true
+            ) {
+              return yield* new EffectAcpErrors.AcpRequestError({
+                code: -32601,
+                errorMessage: "ACP agent does not advertise session/load support",
+              });
+            }
             return yield* runtime.start();
           });
           return yield* flavor.withRuntimeStartup?.(startup) ?? startup;
@@ -6168,6 +6177,12 @@ export const makeAcpAdapterV2 = Effect.fn("makeAcpAdapterV2")(function* (
 
         // Read before the session exists: its own config updates replace what the client showed.
         const unsetOptionDefaults = yield* flavor.unsetOptionDefaults ?? Effect.succeed([]);
+        if (input.historyImport === true && !input.initialNativeThreadId) {
+          return yield* new ProviderAdapter.ProviderAdapterProtocolError({
+            driver,
+            detail: "Importing ACP history requires an existing native session ID.",
+          });
+        }
         const initialStart = yield* Effect.result(
           startAcpRuntime(input.threadId, input.initialNativeThreadId),
         );
@@ -6177,6 +6192,7 @@ export const makeAcpAdapterV2 = Effect.fn("makeAcpAdapterV2")(function* (
               const failedMethod =
                 "method" in initialStart.failure ? initialStart.failure.method : undefined;
               if (
+                input.historyImport === true ||
                 input.initialNativeThreadId === undefined ||
                 (failedMethod !== "session/load" && failedMethod !== "session/resume")
               ) {
@@ -8266,10 +8282,16 @@ export const makeAcpAdapterV2 = Effect.fn("makeAcpAdapterV2")(function* (
                   );
                   const sessionId = yield* nativeThreadId(driver, snapshotInput.providerThread);
                   if ((yield* Ref.get(activeSessionId)) !== sessionId) {
-                    if (!capabilities.threads.canReadThreadSnapshot) {
+                    if (
+                      input.historyImport === true ||
+                      !capabilities.threads.canReadThreadSnapshot
+                    ) {
                       return yield* new ProviderAdapter.ProviderAdapterProtocolError({
                         driver,
-                        detail: "ACP driver does not support session/load snapshots",
+                        detail:
+                          input.historyImport === true
+                            ? "ACP history import did not load the requested native session"
+                            : "ACP driver does not support session/load snapshots",
                       });
                     }
                     yield* Ref.set(snapshot, emptySnapshotState());

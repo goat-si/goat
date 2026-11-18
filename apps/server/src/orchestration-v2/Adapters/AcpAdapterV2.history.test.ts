@@ -65,6 +65,7 @@ const openReplay = Effect.fn(function* () {
     modelSelection,
     runtimePolicy,
     providerSessionId: ProviderSessionId.make("session-acp-history"),
+    initialNativeThreadId: "mock-session-1",
     historyImport: true,
   });
   const thread = yield* runtime.ensureThread({ threadId, modelSelection, runtimePolicy });
@@ -76,25 +77,76 @@ it.effect.each(["bytes", "messages"] as const)("refuses a replay exceeding the %
   Effect.gen(function* () {
     const { update, snapshot } = yield* openReplay();
     const text = limit === "bytes" ? "é".repeat(65_536) : "entry";
-    const count = limit === "bytes" ? 256 : 200;
     const send = (index: number) =>
       update({
         sessionId: "mock-session-1",
-        update: {
-          sessionUpdate:
-            limit === "messages" && index % 2 === 1 ? "user_message_chunk" : "agent_message_chunk",
-          content: { type: "text", text },
-        },
+        update:
+          limit === "bytes"
+            ? {
+                sessionUpdate: "user_message_chunk",
+                messageId: "mock-user-message",
+                content: { type: "text", text: index === 0 ? text.slice(3) : text },
+              }
+            : {
+                sessionUpdate: index % 2 === 1 ? "user_message_chunk" : "agent_message_chunk",
+                content: { type: "text", text },
+              },
       });
+    // The mock session/load already replayed a six-byte user message.
+    const count = limit === "bytes" ? 256 : 199;
     for (let index = 0; index < count; index++) yield* send(index);
     const atLimit = yield* snapshot;
-    assert.equal(atLimit.messages.length, limit === "bytes" ? 1 : count);
-    if (limit === "bytes") assert.equal(atLimit.messages[0]?.text.length, 16 * 1024 * 1024);
+    assert.equal(atLimit.messages.length, limit === "bytes" ? 1 : 200);
+    if (limit === "bytes") assert.equal(atLimit.messages[0]?.text.length, 16 * 1024 * 1024 + 3);
     yield* send(count);
     const result = yield* Effect.result(snapshot);
     assert.isTrue(Result.isFailure(result));
     if (Result.isFailure(result)) {
       assert.propertyVal(result.failure, "historyLimitExceeded", true);
+    }
+  }).pipe(Effect.provide(layerTest), Effect.scoped),
+);
+
+it.effect("a history-only open propagates failed load without creating a native session", () =>
+  Effect.gen(function* () {
+    const opened: Array<string | undefined> = [];
+    const instanceId = ProviderInstanceId.make("acp-history-failed-load");
+    const mockRuntime = makeMockRuntime({
+      childProcessSpawner: yield* ChildProcessSpawner.ChildProcessSpawner,
+      mockAgentPath: yield* bundledMockAgentPath,
+      environment: { GOAT_ACP_FAIL_LOAD_SESSION: "1" },
+    });
+    const adapter = yield* makeAcpAdapterV2({
+      instanceId,
+      selfInvocation: yield* resolveSelfInvocation(),
+      flavor: {
+        driver: ProviderDriverKind.make("acp-test"),
+        capabilities: AcpProviderCapabilitiesV2,
+        makeRuntime: (input) => {
+          opened.push(input.resumeSessionId);
+          return mockRuntime(input);
+        },
+      },
+    });
+    const result = yield* adapter
+      .openSession({
+        threadId: ThreadId.make("thread-acp-history-failed-load"),
+        providerSessionId: ProviderSessionId.make("session-acp-history-failed-load"),
+        modelSelection: { instanceId, model: "default" },
+        runtimePolicy: ProviderAdapter.ProviderAdapterV2RuntimePolicy.make({
+          runtimeMode: "approval-required",
+          interactionMode: "default",
+          cwd: process.cwd(),
+        }),
+        initialNativeThreadId: "mock-session-1",
+        historyImport: true,
+      })
+      .pipe(Effect.result);
+
+    assert.deepEqual(opened, ["mock-session-1"]);
+    assert.isTrue(Result.isFailure(result));
+    if (Result.isFailure(result)) {
+      assert.include(String(result.failure.cause), "Mock load session failure");
     }
   }).pipe(Effect.provide(layerTest), Effect.scoped),
 );
