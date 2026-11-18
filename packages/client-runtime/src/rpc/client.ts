@@ -300,6 +300,17 @@ export const requestGuarded = Effect.fn("EnvironmentRpc.request")(function* <
       ) as EnvironmentRpcInput<TTag>;
     }
     const memoryCapabilities = config.environment.capabilities.memory;
+    if (tag === WS_METHODS.memoryUpsert || tag === WS_METHODS.memoryForget) {
+      const { includeFailureDetails: _hint, ...legacyInput } = dispatchInput as object & {
+        readonly includeFailureDetails?: true;
+      };
+      dispatchInput = {
+        ...legacyInput,
+        ...(memoryCapabilities?.mutationFailureDetails === true
+          ? { includeFailureDetails: true as const }
+          : {}),
+      } as EnvironmentRpcInput<TTag>;
+    }
     if (
       tag === WS_METHODS.memoryList ||
       tag === WS_METHODS.memorySearch ||

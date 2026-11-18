@@ -269,6 +269,7 @@ export const make = Effect.gen(function* () {
         derivedCap: 1000,
         originFilter: true,
         saveSuggestions: true,
+        mutationFailureDetails: true,
         generationHold: true,
         hubDiagnostics: true,
         siteNotes: true,

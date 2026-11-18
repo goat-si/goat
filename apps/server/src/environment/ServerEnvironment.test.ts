@@ -234,6 +234,7 @@ it.layer(Layer.mergeAll(NodeServices.layer, NodeCrypto.layer))("ServerEnvironmen
         derivedCap: 1000,
         originFilter: true,
         saveSuggestions: true,
+        mutationFailureDetails: true,
         generationHold: true,
         hubDiagnostics: true,
         siteNotes: true,
