@@ -182,3 +182,29 @@ it.effect("keeps the last 256 KiB of streamed shell output when the result carri
     assert.equal(output, chunks.join("").slice(-256 * 1024));
   }).pipe(Effect.scoped, Effect.provide(layer)),
 );
+
+it.effect("Stop ends the turn while live output fills the gate and nothing reads the events", () =>
+  Effect.gen(function* () {
+    const chunk = "x".repeat(256 * 1024);
+    const { runtime, providerThread } = yield* startShellTurn([
+      started,
+      ...Array.from({ length: 20 }, () => stdout(chunk)),
+    ]);
+    const before = yield* runtime.events.pipe(
+      Stream.takeUntil((event) => event.type === "provider_turn.updated"),
+      Stream.runCollect,
+    );
+    const running = Array.from(before).at(-1);
+    if (running?.type !== "provider_turn.updated") return assert.fail("no running turn");
+    yield* runtime.interruptTurn({ providerThread, providerTurnId: running.providerTurn.id });
+    const after = Array.from(
+      yield* runtime.events.pipe(
+        Stream.takeUntil((event) => event.type === "turn.terminal"),
+        Stream.runCollect,
+      ),
+    );
+    const deltas = after.filter((event) => event.type === "command_output.delta");
+    assert.isBelow(deltas.length, 20);
+    assert.equal(after.at(-1)?.type, "turn.terminal");
+  }).pipe(Effect.scoped, Effect.provide(layer)),
+);

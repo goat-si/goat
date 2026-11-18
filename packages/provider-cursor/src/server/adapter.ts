@@ -87,6 +87,7 @@ import {
   type ActiveCursorTurn,
 } from "./activeTurn.ts";
 import { classifyCursorModelRejection } from "./modelRejection.ts";
+import { makeCommandOutputGate } from "./commandOutputGate.ts";
 import { cursorRunPrompt, type CursorRunPrompt } from "./steerPrompt.ts";
 import {
   assistantTextsFromConversationSteps,
@@ -286,6 +287,7 @@ export const makeCursorAdapterV2 = Effect.fn("makeCursorAdapterV2")(function* (
           now: createdAt,
         });
         const events = yield* Queue.unbounded<ProviderAdapter.ProviderAdapterV2Event>();
+        const outputGate = yield* makeCommandOutputGate();
         const liveAgent = yield* Ref.make<CursorLiveAgent | null>(null);
         // Cursor drops a cancelled run from the conversation, so the next message carries its prompt.
         const interruptedPrompt = yield* Ref.make<{
@@ -1364,16 +1366,21 @@ export const makeCursorAdapterV2 = Effect.fn("makeCursorAdapterV2")(function* (
                   -MAX_CURSOR_STREAMED_OUTPUT_CHARS,
                 );
               }
-              yield* emitProviderEvent({
-                type: "command_output.delta",
-                driver: CursorAgentSdk.CURSOR_PROVIDER,
-                threadId: shell.target.threadId,
-                itemId: idAllocator.derive.turnItemFromProviderItem({
+              yield* outputGate.offer(
+                events,
+                {
+                  type: "command_output.delta",
                   driver: CursorAgentSdk.CURSOR_PROVIDER,
-                  nativeItemId: shell.callId,
-                }),
+                  threadId: shell.target.threadId,
+                  itemId: idAllocator.derive.turnItemFromProviderItem({
+                    driver: CursorAgentSdk.CURSOR_PROVIDER,
+                    nativeItemId: shell.callId,
+                  }),
+                  chunk,
+                },
                 chunk,
-              });
+                () => context.interrupted || context.finalized,
+              );
               return;
             }
             default:
@@ -1433,6 +1440,7 @@ export const makeCursorAdapterV2 = Effect.fn("makeCursorAdapterV2")(function* (
             return;
           }
           input.context.finalized = true;
+          yield* outputGate.wakeAll;
           const completedAt = yield* DateTime.now;
           for (const tool of input.context.tools.values()) {
             yield* emitToolArtifacts({
@@ -2020,6 +2028,7 @@ export const makeCursorAdapterV2 = Effect.fn("makeCursorAdapterV2")(function* (
         );
 
         const closeSession = Effect.fnUntraced(function* () {
+          yield* outputGate.close;
           const existing = yield* Ref.get(liveAgent);
           if (existing !== null) {
             yield* existing.session.close.pipe(Effect.ignore);
@@ -2045,7 +2054,7 @@ export const makeCursorAdapterV2 = Effect.fn("makeCursorAdapterV2")(function* (
             selection.instanceId === adapterOptions.instanceId
               ? cursorContextWindowTokens(selection, adapterOptions.getModels?.(apiKey, env) ?? [])
               : undefined,
-          events: Stream.fromEffectRepeat(Queue.take(events)),
+          events: Stream.fromEffectRepeat(outputGate.take(events)),
           ensureThread: Effect.fn("CursorAdapterV2.ensureThread")(
             function* (threadInput: ProviderAdapter.ProviderAdapterV2EnsureThreadInput) {
               const opened = yield* openAgent({
@@ -2195,6 +2204,7 @@ export const makeCursorAdapterV2 = Effect.fn("makeCursorAdapterV2")(function* (
                 });
               }
               context.interrupted = true;
+              yield* outputGate.wakeAll;
               yield* context.run.cancel;
               const stopped = yield* Deferred.await(context.completed).pipe(
                 Effect.timeoutOption("10 seconds"),

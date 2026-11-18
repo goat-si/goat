@@ -23,6 +23,7 @@ import * as Ref from "effect/Ref";
 import * as Schema from "effect/Schema";
 
 import * as CursorSdk from "./CursorSdk.ts";
+import { makeShellOutputCoalescer } from "./shellOutputCoalescer.ts";
 import * as ProviderEventLoggers from "@goat/provider-core/server/ProviderEventLoggers";
 
 export const CURSOR_AGENT_SDK_PROTOCOL = "cursor-agent-sdk.local" as const;
@@ -657,14 +658,17 @@ export const makeCursorAgentSdkRunner = Effect.fn("makeCursorAgentSdkRunner")(fu
             },
           });
           callbacksReady = true;
+          const shellOutput = makeShellOutputCoalescer((delta) =>
+            dispatchUpdate({
+              type: "shell-output-delta",
+              event: { ...delta.event, toolCallId: delta.toolCallId },
+            }),
+          );
           const unsubscribeShellOutput = subscribeShellStreamOutput((output) => {
             if (output.conversationId !== agent.agentId || typeof output.toolCallId !== "string") {
               return;
             }
-            void dispatchUpdate({
-              type: "shell-output-delta",
-              event: { ...output.event, toolCallId: output.toolCallId },
-            });
+            shellOutput.push({ toolCallId: output.toolCallId, event: output.event });
           });
           for (const update of pendingUpdates) {
             yield* Effect.tryPromise({
@@ -679,6 +683,7 @@ export const makeCursorAgentSdkRunner = Effect.fn("makeCursorAgentSdkRunner")(fu
             wait: Effect.tryPromise({
               try: async () => {
                 const result = await run.wait();
+                await shellOutput.idle();
                 await callbackChain;
                 if (callbackFailure !== undefined) {
                   throw callbackFailure.cause;

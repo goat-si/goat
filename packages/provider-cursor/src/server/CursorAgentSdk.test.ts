@@ -550,6 +550,67 @@ describe("CursorAgentSdkRunner", () => {
     }).pipe(Effect.provide(layerTest)),
   );
 
+  it.effect(
+    "merges shell output that arrives during a dispatch into one chunk of its last 256 KiB",
+    () =>
+      Effect.gen(function* () {
+        const publish = (data: string) =>
+          (Reflect.get(globalThis, Symbol.for("@cursor/sdk.shellStreamOutput")) as Function)({
+            conversationId: "agent-cursor-agent-sdk-test",
+            toolCallId: "tool-shell",
+            event: { case: "stdout", value: { data } },
+          });
+        const release = Promise.withResolvers<void>();
+        const flood = Array.from(
+          { length: 3000 },
+          (_, index) => `${index}`.padEnd(255, ".") + "\n",
+        );
+        cursorSdkMock.runWait.mockImplementationOnce(async () => {
+          publish("first\n");
+          for (const chunk of flood) publish(chunk);
+          release.resolve();
+          return {
+            id: "run-cursor-agent-sdk-test",
+            requestId: "request-cursor-agent-sdk-test",
+            status: "finished",
+            result: "ok",
+            model: { id: "default" },
+            durationMs: 1,
+          };
+        });
+        const updates: Array<unknown> = [];
+        const runner = yield* CursorAgentSdk.CursorAgentSdkRunner;
+        const session = yield* runner.open({
+          operation: "create",
+          options: {},
+          threadId: ThreadId.make("thread-cursor-agent-sdk-flood"),
+          providerSessionId: ProviderSessionId.make("provider-session-cursor-agent-sdk-flood"),
+        });
+        const run = yield* session.send({
+          message: "run it",
+          // The first shell chunk holds the dispatch until the whole flood has arrived.
+          onDelta: (update) =>
+            (updates.some(
+              (seen) => (seen as { readonly type: string }).type === "shell-output-delta",
+            ) || (update as { readonly type: string }).type !== "shell-output-delta"
+              ? Effect.void
+              : Effect.promise(() => release.promise)
+            ).pipe(Effect.andThen(Effect.sync(() => updates.push(update)))),
+        });
+        yield* run.wait;
+
+        const data = updates.flatMap((update) =>
+          (update as { readonly type: string }).type === "shell-output-delta"
+            ? [
+                (update as { readonly event: { readonly value: { readonly data: string } } }).event
+                  .value.data,
+              ]
+            : [],
+        );
+        assert.deepStrictEqual(data, ["first\n", flood.join("").slice(-256 * 1024)]);
+      }).pipe(Effect.provide(layerTest)),
+  );
+
   it.effect("forwards Run.steer and reports a missing method as a follow-up", () =>
     Effect.gen(function* () {
       cursorSdkMock.runSteer.mockClear();
