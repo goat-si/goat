@@ -635,6 +635,10 @@ it.effect(
 
 const savedAlignmentWindow = Array.from({ length: 512 }, (_, index) => `Saved step ${index + 1}.`);
 
+const beforeWindowBoundary = savedAlignmentWindow.slice(0, 511);
+const secondWindowFill = Array.from({ length: 510 }, (_, index) => `Saved step ${index + 514}.`);
+const thirdWindowFill = Array.from({ length: 74 }, (_, index) => `Saved step ${index + 1026}.`);
+
 it.effect.each([
   {
     name: "exact steps",
@@ -749,6 +753,46 @@ it.effect.each([
       ["Check status.", 0],
       ["Finish review.", 1],
       ["Saved-only tail.", null],
+    ],
+  },
+  {
+    name: "a competing overflow prefix before an exact match",
+    live: ["Check status."],
+    saved: [...savedAlignmentWindow, "Check status. Open the dashboard first.", "Check status."],
+    final: [
+      ...savedAlignmentWindow.map((text) => [text, null]),
+      ["Check status.", 0],
+      ["Check status. Open the dashboard first.", null],
+    ],
+  },
+  {
+    name: "ordered matches across a 1,100-step saved transcript",
+    live: ["Build", "Review tests.", "Check status.", "Finish"],
+    saved: [
+      ...beforeWindowBoundary,
+      "Build the image.",
+      "Check status. Open the dashboard first.",
+      ...secondWindowFill,
+      "Check status.",
+      "Review tests.",
+      ...thirdWindowFill,
+      "Finish the review.",
+    ],
+    final: [
+      ...beforeWindowBoundary.map((text) => [text, null]),
+      ["Build the image.", 0],
+      ["Review tests.", 1],
+      ["Check status.", 2],
+      ["Finish the review.", 3],
+      [
+        [
+          "Check status. Open the dashboard first.",
+          ...secondWindowFill,
+          "Review tests.",
+          ...thirdWindowFill,
+        ].join("\n"),
+        null,
+      ],
     ],
   },
   {

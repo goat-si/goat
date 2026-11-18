@@ -15,9 +15,9 @@ import type { makeCursorTurnProjection } from "./turnProjection.ts";
 
 const MAX_LIVE_TASK_TOOLS = 512;
 const MAX_LIVE_TASK_TEXT_SEGMENTS = 512;
-const MAX_SAVED_TASK_TEXT_SEGMENTS = 512;
+const SAVED_TASK_ALIGNMENT_WINDOW_SIZE = 512;
 // Reserve room for all aligned backfill steps before any one live item.
-const TASK_LIVE_ORDINAL_STRIDE = MAX_SAVED_TASK_TEXT_SEGMENTS + 1;
+const TASK_LIVE_ORDINAL_STRIDE = SAVED_TASK_ALIGNMENT_WINDOW_SIZE + 1;
 
 export function makeTaskProjectionState(): CursorTaskProjectionState {
   return {
@@ -49,7 +49,7 @@ interface TaskAssistantMatch {
   readonly savedIndex: number;
 }
 
-function alignTaskAssistantSteps(live: ReadonlyArray<string>, saved: ReadonlyArray<string>) {
+function alignTaskAssistantWindow(live: ReadonlyArray<string>, saved: ReadonlyArray<string>) {
   if (live.length === 0 || saved.length === 0) return [];
   const prefixes = live.map((text) => text.trimStart());
   const liveText = prefixes.map((text) => text.trimEnd());
@@ -108,36 +108,31 @@ function alignTaskAssistantSteps(live: ReadonlyArray<string>, saved: ReadonlyArr
   return matches;
 }
 
-function appendOverflowMatches(
+function alignTaskAssistantSteps(
   live: ReadonlyArray<string>,
   saved: ReadonlyArray<string>,
-  firstOverflowIndex: number,
-  matches: TaskAssistantMatch[],
-): string[] {
-  if (firstOverflowIndex === saved.length) return [];
-  let nextLiveIndex = (matches.at(-1)?.liveIndex ?? -1) + 1;
-  const prefixes = live.map((text) => text.trimStart());
-  const liveText = prefixes.map((text) => text.trimEnd());
-  const tail: string[] = [];
-  let savedIndex = firstOverflowIndex;
-  for (; savedIndex < saved.length && nextLiveIndex < live.length; savedIndex++) {
-    const part = saved[savedIndex];
-    if (part === undefined) continue;
-    const text = part.trimStart();
-    const trimmed = text.trimEnd();
-    const liveIndex = prefixes.findIndex(
-      (prefix, index) =>
-        index >= nextLiveIndex &&
-        (trimmed === liveText[index] || (prefix.length > 0 && text.startsWith(prefix))),
+): TaskAssistantMatch[] {
+  const matches: TaskAssistantMatch[] = [];
+  let liveStart = 0;
+  for (
+    let savedStart = 0;
+    savedStart < saved.length && liveStart < live.length;
+    savedStart += SAVED_TASK_ALIGNMENT_WINDOW_SIZE
+  ) {
+    const window = alignTaskAssistantWindow(
+      live.slice(liveStart),
+      saved.slice(savedStart, savedStart + SAVED_TASK_ALIGNMENT_WINDOW_SIZE),
     );
-    if (liveIndex === -1) {
-      tail.push(part);
-    } else {
-      matches.push({ liveIndex, savedIndex });
-      nextLiveIndex = liveIndex + 1;
+    for (const match of window) {
+      matches.push({
+        liveIndex: liveStart + match.liveIndex,
+        savedIndex: savedStart + match.savedIndex,
+      });
     }
+    const last = window.at(-1);
+    if (last !== undefined) liveStart += last.liveIndex + 1;
   }
-  return tail.concat(saved.slice(savedIndex));
+  return matches;
 }
 
 export function makeCursorTaskProjection({
@@ -256,10 +251,9 @@ export function makeCursorTaskProjection({
   ) {
     const state = subagent.projection;
     const target = childTarget(subagent);
-    const saved = resultParts.slice(0, MAX_SAVED_TASK_TEXT_SEGMENTS);
+    const firstWindowEnd = Math.min(resultParts.length, SAVED_TASK_ALIGNMENT_WINDOW_SIZE);
     const live = state.assistantSegments.map((segment) => segment.text);
-    const matches = alignTaskAssistantSteps(live, saved);
-    const overflow = appendOverflowMatches(live, resultParts, saved.length, matches);
+    const matches = alignTaskAssistantSteps(live, resultParts);
     const now = yield* DateTime.now;
     const emitSaved = (savedIndex: number, text: string, ordinal: number) =>
       emitAssistant(
@@ -277,14 +271,14 @@ export function makeCursorTaskProjection({
       const segment = state.assistantSegments[match.liveIndex];
       const text = resultParts[match.savedIndex];
       if (segment === undefined || text === undefined) continue;
-      const gapEnd = Math.min(match.savedIndex, saved.length);
+      const gapEnd = Math.min(match.savedIndex, firstWindowEnd);
       for (; savedIndex < gapEnd; savedIndex++) {
-        const part = saved[savedIndex];
+        const part = resultParts[savedIndex];
         if (part !== undefined) {
           yield* emitSaved(savedIndex, part, segment.ordinal - (gapEnd - savedIndex));
         }
       }
-      savedIndex = Math.min(match.savedIndex + 1, saved.length);
+      savedIndex = Math.min(match.savedIndex + 1, firstWindowEnd);
       if (segment.text === text) continue;
       segment.text = text;
       if (segment !== state.assistant.current) yield* emitAssistant(target, segment, true);
@@ -320,12 +314,20 @@ export function makeCursorTaskProjection({
       );
       yield* emitToolArtifacts({ active, completed: true });
     }
-    for (; savedIndex < saved.length; savedIndex++) {
-      const part = saved[savedIndex];
+    for (; savedIndex < firstWindowEnd; savedIndex++) {
+      const part = resultParts[savedIndex];
       if (part !== undefined) yield* emitSaved(savedIndex, part, ++subagent.nextChildOrdinal);
     }
-    if (overflow.length > 0) {
-      yield* emitSaved(saved.length, overflow.join("\n"), ++subagent.nextChildOrdinal);
+    if (firstWindowEnd < resultParts.length) {
+      const matchedSteps = new Set(matches.map((match) => match.savedIndex));
+      const overflow: string[] = [];
+      for (let index = firstWindowEnd; index < resultParts.length; index++) {
+        const part = resultParts[index];
+        if (part !== undefined && !matchedSteps.has(index)) overflow.push(part);
+      }
+      if (overflow.length > 0) {
+        yield* emitSaved(firstWindowEnd, overflow.join("\n"), ++subagent.nextChildOrdinal);
+      }
     }
   });
 
