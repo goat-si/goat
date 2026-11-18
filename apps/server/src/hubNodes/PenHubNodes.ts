@@ -101,7 +101,9 @@ export const make = Effect.fn("PenHubNodes.make")(function* (input: {
           .check({ nodeId: `route:${route.routeId}` })
           .pipe(Effect.timeout(CHECK_TIMEOUT), Effect.ignore);
       }
-      if (!result.retry && !(inspected.unsettled && round === 0)) return;
+      // An alias that could not be read is looked at again on the retry schedule, like a failed close.
+      if (!result.retry && inspected.keep.size === 0 && !(inspected.unsettled && round === 0))
+        return;
     }
   });
   return { pass };

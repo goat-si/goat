@@ -377,7 +377,8 @@ const reconciler = (enabled = true) =>
     const show = (view: PenMembershipView) =>
       Effect.gen(function* () {
         const running = yield* pass(view).pipe(Effect.orDie, Effect.forkChild);
-        yield* TestClock.adjust("2 seconds");
+        // Past every retry, so a pass that keeps looking (an unreadable alias) has finished too.
+        yield* TestClock.adjust("13 minutes");
         yield* Fiber.join(running);
       });
     return { ...f, show, pass, pinned, inspected, unreadable, settings };
@@ -506,6 +507,23 @@ describe("PenHubNodes", () => {
         yield* TestClock.adjust(0);
         expect(yield* rows).toEqual([]);
         pinned.set(alias("a"), key("a"));
+        yield* TestClock.adjust("2 seconds");
+        yield* Fiber.join(running);
+        expect(yield* rows).toEqual([[`ssh:${alias("a")}`, "import", key("a")]]);
+      }),
+    ),
+  );
+
+  it.effect("a new member whose ssh settings could not be read is listed once they can be", () =>
+    reconcile(({ pinned, rows, pass, unreadable }) =>
+      Effect.gen(function* () {
+        pinned.set(alias("a"), key("a"));
+        unreadable.add(alias("a"));
+        const running = yield* pass(ready(["a", "a"])).pipe(Effect.orDie, Effect.forkChild);
+        yield* TestClock.adjust(0);
+        expect(yield* rows).toEqual([]);
+        // No new member list or setting change arrives: the pass itself looks again.
+        unreadable.delete(alias("a"));
         yield* TestClock.adjust("2 seconds");
         yield* Fiber.join(running);
         expect(yield* rows).toEqual([[`ssh:${alias("a")}`, "import", key("a")]]);
