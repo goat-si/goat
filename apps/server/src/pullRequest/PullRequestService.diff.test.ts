@@ -156,3 +156,45 @@ it.effect("rejects a previously read aggregate file when only the base moves", (
     );
   }),
 );
+
+it.effect.each(["github", "gitlab"] as const)(
+  "forwards a guarded review only to a host that enforces its revision (%s)",
+  (kind) =>
+    Effect.gen(function* () {
+      const providerKind = SourceControlProviderKind.make(kind);
+      const revision = { headSha: "b".repeat(40), baseSha: "a".repeat(40) };
+      const submitted: unknown[] = [];
+      const service = yield* makeService({
+        projects: [
+          project({
+            id: "p1",
+            title: "web",
+            workspaceRoot: "/a",
+            repository: "acme/web",
+            provider: providerKind,
+          }),
+        ],
+        providers: [
+          fakePullRequestProvider(providerKind, {
+            submitReview: (input) =>
+              Effect.sync(() => {
+                submitted.push(input.revision);
+              }),
+          }),
+        ],
+      });
+      const result = yield* Effect.result(
+        service.submitReview({
+          projectId: "p1" as ProjectId,
+          repository: "acme/web",
+          number: 10,
+          verdict: "comment",
+          body: "Review",
+          comments: [],
+          revision,
+        }),
+      );
+      assert.strictEqual(result._tag, kind === "github" ? "Success" : "Failure");
+      assert.deepStrictEqual(submitted, kind === "github" ? [revision] : []);
+    }),
+);

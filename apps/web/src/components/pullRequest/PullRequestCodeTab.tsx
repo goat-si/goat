@@ -5,14 +5,13 @@ import { PullRequestDiffCommitMenu } from "./PullRequestDiffCommitMenu";
 import { useWordWrap } from "~/hooks/useWordWrap";
 import { reviewThreadsByPath } from "./pullRequestThreadsByPath";
 import { capitalizeTerm, sourceControlClients } from "@goat/client-runtime/source-control-clients";
-import type { CodeViewItem, DiffLineAnnotation, SelectedLineRange } from "@pierre/diffs";
+import type { CodeViewItem, SelectedLineRange } from "@pierre/diffs";
 import type { CodeViewAnnotationArgs, CodeViewDiffItem } from "@pierre/diffs/react";
 import type {
   EnvironmentId,
   PullRequestDetailView,
   PullRequestDiffSide,
   PullRequestRef,
-  PullRequestReviewPosition,
   PullRequestReviewThread,
   PullRequestThreadCommentsResult,
 } from "@goat/contracts";
@@ -54,7 +53,6 @@ import { diffModel, NO_SLICES, type DiffSlice } from "./pullRequestDiffModel";
 import {
   PullRequestImageAnnotation,
   pullRequestImagePreviewUrl,
-  type PullRequestImagePreview,
 } from "./PullRequestImageAnnotation";
 import {
   fnv1a32,
@@ -78,7 +76,6 @@ import { useAtomCommand } from "~/state/use-atom-command";
 
 import { DIFF_SURFACE_TOOLBAR_CLASS, DiffPanelLoadingState } from "../DiffPanelShell";
 import { useDiffWorkerPool } from "../DiffWorkerPoolProvider";
-import { DiffCommentAnnotation } from "../diffs/DiffCommentAnnotation";
 import { DiffFileTree } from "../diffs/DiffFileTree";
 import { useCodeViewFileReveal } from "../diffs/useCodeViewFileReveal";
 import { useHideTestFiles } from "../diffs/useHideTestFiles";
@@ -117,54 +114,22 @@ import { PullRequestDiffUnavailableState } from "./PullRequestDiffUnavailableSta
 import { usePullRequestFilesViewed } from "./usePullRequestFilesViewed";
 import { FileViewedToggle, FileViewedToggleContext } from "./FileViewedToggle";
 import {
-  nextPendingReviewCommentId,
+  pendingReviewRevision,
   pullRequestReviewKey,
   usePendingReviewComments,
   usePullRequestReviewStore,
-  type PendingReviewComment,
 } from "./pullRequestReviewStore";
 
-interface ReviewAnnotationGroup {
-  readonly threads: ReadonlyArray<PullRequestReviewThread>;
-  readonly pending: ReadonlyArray<PendingReviewComment>;
-  readonly draft: boolean;
-  readonly image?: PullRequestImagePreview;
-  readonly withheld?: {
-    readonly path: string;
-    readonly status: "idle" | "loading" | "error" | "empty";
-    readonly readable: boolean;
-  };
-}
-
-type ReviewAnnotation = DiffLineAnnotation<ReviewAnnotationGroup>;
-
-const COMMIT_PAGE_SIZE = 10;
-
-const PULL_REQUEST_FILE_TREE_STORAGE_KEY = "goat.pullRequestFileTreeOpen";
-
-// Show host counts outside the shadow root; hunk totals are zero when hosts withhold hunks.
-const REPLACE_FILE_COUNTS_CSS = `
-[data-diffs-header] [data-additions-count],
-[data-diffs-header] [data-deletions-count] {
-  display: none !important;
-}`;
-
-interface MutableAnnotationGroup {
-  readonly side: PullRequestDiffSide;
-  readonly line: number;
-  readonly threads: PullRequestReviewThread[];
-  readonly pending: PendingReviewComment[];
-  draft: boolean;
-}
-
-interface DraftAnchor {
-  readonly fileKey: string;
-  readonly path: string;
-  readonly oldPath: string | null;
-  readonly position: PullRequestReviewPosition;
-  readonly startPosition?: PullRequestReviewPosition;
-  readonly range: SelectedLineRange;
-}
+import {
+  COMMIT_PAGE_SIZE,
+  PULL_REQUEST_FILE_TREE_STORAGE_KEY,
+  REPLACE_FILE_COUNTS_CSS,
+  type ReviewAnnotationGroup,
+  type ReviewAnnotation,
+  type MutableAnnotationGroup,
+} from "./pullRequestCodeAnnotations";
+import { PullRequestInlineDraft, type DraftAnchor } from "./PullRequestInlineDraft";
+import { PullRequestStaleReviewComments } from "./PullRequestStaleReviewComments";
 
 export interface PullRequestAgentSelectionInput {
   readonly comment: ReviewCommentContext;
@@ -234,6 +199,7 @@ function PullRequestCodeTab({
     range: SelectedLineRange;
   } | null>(null);
   const [draft, setDraft] = useState<DraftAnchor | null>(null);
+  const [movingCommentId, setMovingCommentId] = useState<string | null>(null);
   const [threadPending, setThreadPending] = useState(false);
   const [orphansOpen, setOrphansOpen] = useState(false);
   // Scope slices before reset to prevent using a previous pull request's data or cursor.
@@ -256,6 +222,7 @@ function PullRequestCodeTab({
   if (stateScopeKey !== scopeKey) {
     setStateScopeKey(scopeKey);
     setLastViewedFileKey(null);
+    setMovingCommentId(null);
     setDraft(null);
     setSelectedLines(null);
     setToggledFiles(new Set());
@@ -338,7 +305,6 @@ function PullRequestCodeTab({
   const refreshFirstDiffPage = useAtomRefresh(firstPageAtom);
   const reviewKey = referenceKey;
   const pendingComments = usePendingReviewComments(reference);
-  const addComment = usePullRequestReviewStore((store) => store.addComment);
   const removeComment = usePullRequestReviewStore((store) => store.removeComment);
   const replyToThread = useAtomCommand(pullRequestEnvironment.replyToThread, {
     reportFailure: false,
@@ -378,6 +344,9 @@ function PullRequestCodeTab({
   );
   const firstPage = loadedSlices[0]?.source ?? currentFirstPage;
   const revision = firstPage?.revision;
+  const { stale: staleComments } = pendingReviewRevision(pendingComments, detail.headSha, revision);
+  const staleCommentSet = new Set(staleComments);
+  const movingComment = staleComments.find((comment) => comment.id === movingCommentId);
   const staleRevision = revision !== undefined && revision.headSha !== detail.headSha;
   const withheldReadable =
     firstPage?.withheldFilesReadable === true &&
@@ -495,7 +464,7 @@ function PullRequestCodeTab({
     }
     if (commit === null) {
       for (const comment of pendingComments) {
-        if (comment.path !== path) continue;
+        if (comment.path !== path || staleCommentSet.has(comment)) continue;
         const anchor = getReviewPositionAnchor(comment.position);
         groupAt(anchor.side, anchor.line).pending.push(comment);
       }
@@ -690,8 +659,15 @@ function PullRequestCodeTab({
     const anchor =
       (sourceFile && resolveDiffReviewAnchor(sourceFile, range, rangeComments)) ??
       resolveDiffReviewAnchor(file, range, rangeComments);
-    if (anchor === null) return;
+    if (anchor === null || (movingComment && (!canCommentOnLines || !detail.headSha))) return;
+    const sourceRevision =
+      withheld.identities.has(file) || movingComment
+        ? (revision ?? (detail.headSha ? { headSha: detail.headSha } : undefined))
+        : undefined;
+    setMovingCommentId(null);
     setDraft({
+      sourceRevision,
+      moving: movingComment,
       fileKey: item.id,
       path,
       oldPath: previousPath === path ? null : previousPath,
@@ -923,45 +899,20 @@ function PullRequestCodeTab({
         />
       ))}
       {annotation.metadata.draft && draft && canSelectLines ? (
-        <DiffCommentAnnotation
+        <PullRequestInlineDraft
+          draft={draft}
           environmentId={environmentId}
-          kind="draft"
-          rangeLabel={`${draft.path}:${getReviewPositionAnchor(draft.position).line}`}
-          text=""
-          completionScope={canCommentOnLines ? completionScope : null}
-          submitLabel={canCommentOnLines ? "Add to review" : "Add to agent"}
-          {...(canCommentOnLines && onAddToAgentSelection
-            ? {
-                secondaryAction: {
-                  label: "Add to agent",
-                  onAction: (text: string) =>
-                    finishSelection(draft, text, (comment) =>
-                      onAddToAgentSelection({ comment, request: text }),
-                    ),
-                },
-              }
-            : {})}
-          onCancel={() => {
-            setDraft(null);
-            setSelectedLines(null);
-          }}
-          onComment={(body) => {
-            if (!canCommentOnLines) {
-              if (onAddToAgentSelection) {
-                finishSelection(draft, body, (comment) =>
-                  onAddToAgentSelection({ comment, request: body }),
-                );
-              }
-              return;
-            }
-            addComment(reviewKey, {
-              id: nextPendingReviewCommentId(),
-              path: draft.path,
-              ...(draft.oldPath === null ? {} : { oldPath: draft.oldPath }),
-              ...(draft.startPosition === undefined ? {} : { startPosition: draft.startPosition }),
-              position: draft.position,
-              body,
-            });
+          reviewKey={reviewKey}
+          completionScope={completionScope}
+          canComment={canCommentOnLines}
+          onAddToAgent={
+            onAddToAgentSelection &&
+            ((body) =>
+              finishSelection(draft, body, (comment) =>
+                onAddToAgentSelection({ comment, request: body }),
+              ))
+          }
+          onClose={() => {
             setDraft(null);
             setSelectedLines(null);
           }}
@@ -1277,9 +1228,19 @@ function PullRequestCodeTab({
     answerReveal();
     // oxlint-disable-next-line react/exhaustive-effect-dependencies -- Re-checked as pages load until the requested file arrives.
   }, [canLoadNextSlice, items, revealRequest]);
+  const reviewRecovery = (
+    <PullRequestStaleReviewComments
+      comments={staleComments}
+      moving={movingComment !== undefined}
+      canMove={canCommentOnLines && draft === null && !!detail.headSha}
+      onMove={(comment) => setMovingCommentId(comment.id)}
+      onCancel={() => setMovingCommentId(null)}
+    />
+  );
   const withToolbar = (body: ReactNode) => (
     <div className="flex h-full min-h-0 flex-col">
       {toolbar}
+      {reviewRecovery}
       <div ref={scrollerRef} className="min-h-0 flex-1 overflow-auto">
         {body}
       </div>
@@ -1325,6 +1286,7 @@ function PullRequestCodeTab({
   return (
     <div className="flex h-full min-h-0 flex-col">
       {toolbar}
+      {reviewRecovery}
       {orphanFiles.size > 0 ? (
         <div className="shrink-0 border-b border-border/60">
           <Collapsible open={orphansOpen} onOpenChange={setOrphansOpen}>

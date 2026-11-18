@@ -138,6 +138,7 @@ const mocks = vi.hoisted(() => ({
   withheldHeadSha: "a".repeat(40),
   assetResources: [] as unknown[],
   diffCommits: [] as Array<string | undefined>,
+  command: vi.fn(),
 }));
 
 vi.mock(import("~/assets/assetUrls"), async (original) => ({
@@ -153,7 +154,7 @@ vi.mock(import("~/assets/assetUrls"), async (original) => ({
 }));
 vi.mock(import("~/state/use-atom-command"), async (original) => ({
   ...(await original()),
-  useAtomCommand: (() => vi.fn()) as never,
+  useAtomCommand: (() => mocks.command) as never,
 }));
 vi.mock(import("~/state/pullRequests"), async (original) => {
   const actual = await original();
@@ -179,6 +180,8 @@ vi.mock(import("~/state/pullRequests"), async (original) => {
 
 import { render } from "../../../test/render";
 import PullRequestCodeTab from "./PullRequestCodeTab";
+import { PullRequestReviewForm } from "./PullRequestReviewForm";
+import { pullRequestReviewKey, usePullRequestReviewStore } from "./pullRequestReviewStore";
 
 const detail: PullRequestDetailView = {
   provider: SourceControlProviderKind.make("github"),
@@ -242,6 +245,8 @@ function setup(paged = false, image = false) {
   mocks.withheldHeadSha = "a".repeat(40);
   mocks.assetResources = [];
   mocks.diffCommits = [];
+  mocks.command.mockReset().mockResolvedValue({ _tag: "Success", value: undefined });
+  usePullRequestReviewStore.getState().clear(pullRequestReviewKey(detail));
 }
 
 const tab = (
@@ -494,4 +499,103 @@ it("stops review of withheld lines when detail advances before the diff page", a
   await userEvent.click(load);
   await expect.element(screen.getByText("afterPush()", { exact: true })).toBeVisible();
   await openDraft();
+});
+
+function reviewableWithheldDetail(headSha = mocks.withheldHeadSha) {
+  return {
+    ...detail,
+    headSha,
+    capabilities: {
+      ...detail.capabilities,
+      review: { ...detail.capabilities.review, inlineComment: true },
+    },
+    viewerPermissions: { ...detail.viewerPermissions, comment: true },
+  };
+}
+
+async function openWithheldDraft(container: HTMLElement) {
+  const control = (selector: string) =>
+    vi.waitFor(() => {
+      const found = container
+        .querySelector("diffs-container")
+        ?.shadowRoot?.querySelector<HTMLElement>(selector);
+      if (!found) throw new Error("Missing diff control: " + selector);
+      return found;
+    });
+  await userEvent.hover(await control("[data-column-number][data-line-type='change-addition']"));
+  await userEvent.click(await control("[data-utility-button]"));
+}
+
+function codeWithReview(pr: PullRequestDetailView, refreshToken = 0) {
+  return (
+    <div className="flex h-full w-full flex-col">
+      <div className="min-h-0 flex-1">{tab(refreshToken, null, null, pr)}</div>
+      <PullRequestReviewForm
+        environmentId={EnvironmentId.make("environment")}
+        reference={detail}
+        headSha={pr.headSha}
+        completionScope={null}
+        term="pull request"
+        verdicts={["comment"]}
+        requestChangesSummaryRequired={false}
+        textareaRef={{ current: null }}
+        pending={false}
+        onPendingChange={() => {}}
+        onSubmitted={() => {}}
+      />
+    </div>
+  );
+}
+
+it("blocks queued withheld-line review after a force-push", async () => {
+  setup();
+  mocks.withheld = true;
+  const original = reviewableWithheldDetail();
+  const pushed = reviewableWithheldDetail("b".repeat(40));
+  const container = document.createElement("div");
+  container.className = "flex h-[700px] w-[900px]";
+  await using screen = await render(codeWithReview(original), { container });
+  await userEvent.click(screen.getByRole("button", { name: "Expand diff" }));
+  await userEvent.click(screen.getByRole("button", { name: "Load file diff" }));
+  await expect.element(screen.getByText("beforePush()", { exact: true })).toBeVisible();
+  await openWithheldDraft(container);
+  await userEvent.fill(
+    screen.getByRole("textbox", { name: /Comment on lines/ }),
+    "Keep this review note",
+  );
+  await userEvent.click(screen.getByRole("button", { name: "Add to review" }));
+  const submit = screen.getByRole("button", { name: "Submit review" });
+  await expect.element(submit).toBeEnabled();
+
+  await screen.rerender(codeWithReview(pushed));
+  await expect.element(submit).toBeDisabled();
+  expect(mocks.command).not.toHaveBeenCalled();
+  await expect.element(screen.getByRole("button", { name: "Move comment" })).toBeDisabled();
+
+  mocks.withheldHeadSha = pushed.headSha;
+  await screen.rerender(codeWithReview(pushed, 1));
+  await userEvent.click(screen.getByRole("button", { name: "Move comment" }));
+  await userEvent.click(screen.getByRole("button", { name: "Load file diff" }));
+  await expect.element(screen.getByText("afterPush()", { exact: true })).toBeVisible();
+  await openWithheldDraft(container);
+  await expect
+    .element(screen.getByRole("textbox", { name: /Comment on lines/ }))
+    .toHaveValue("Keep this review note");
+  await userEvent.click(screen.getByRole("button", { name: "Move comment here" }));
+  await expect.element(submit).toBeEnabled();
+  await userEvent.click(submit);
+  expect(mocks.command).toHaveBeenCalledExactlyOnceWith(
+    expect.objectContaining({
+      input: expect.objectContaining({
+        revision: { headSha: pushed.headSha, baseSha: "c".repeat(40) },
+        comments: [
+          {
+            path: "large.js",
+            position: { kind: "added", newLine: 1 },
+            body: "Keep this review note",
+          },
+        ],
+      }),
+    }),
+  );
 });

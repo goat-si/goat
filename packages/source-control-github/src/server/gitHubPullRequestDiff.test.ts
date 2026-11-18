@@ -241,4 +241,37 @@ layer("GitHub pull request diffs", (it) => {
       expect(mockedExecute).toHaveBeenCalledTimes(1);
     }),
   );
+  it.effect("pins a revision-bound review to the checked head and refuses an advanced base", () =>
+    Effect.gen(function* () {
+      const cli = yield* GitHubPullRequestApi.GitHubPullRequestApi;
+      const revision = { baseSha: "a".repeat(40), headSha: "b".repeat(40) };
+      const input = {
+        cwd: "/w",
+        repository: "acme/web",
+        host: "github.com",
+        number: 7,
+        verdict: "comment" as const,
+        body: "",
+        revision,
+        comments: [
+          { body: "review", path: "large.js", position: { kind: "added" as const, newLine: 1 } },
+        ],
+      };
+      const answer = (baseSha: string) =>
+        output(JSON.stringify({ base: { sha: baseSha }, head: { sha: revision.headSha } }));
+      mockedExecute.mockReturnValueOnce(Effect.succeed(answer("c".repeat(40))));
+      expect((yield* Effect.result(cli.submitReview(input)))._tag).toBe("Failure");
+      expect(callAt(0)).toMatchObject({ kind: "rest", path: "repos/acme/web/pulls/7" });
+
+      mockedExecute.mockReturnValueOnce(Effect.succeed(answer(revision.baseSha)));
+      mockedExecute.mockReturnValueOnce(Effect.succeed(output("{}")));
+      yield* cli.submitReview(input);
+      expect(callAt(2)).toMatchObject({
+        kind: "rest",
+        method: "POST",
+        path: "repos/acme/web/pulls/7/reviews",
+        body: { commit_id: revision.headSha },
+      });
+    }),
+  );
 });

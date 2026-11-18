@@ -1,7 +1,41 @@
-import type { PullRequestRef, PullRequestReviewCommentDraft } from "@goat/contracts";
+import type {
+  PullRequestRef,
+  PullRequestReviewCommentDraft,
+  PullRequestSubmitReviewInput,
+  PullRequestDiffResult,
+} from "@goat/contracts";
 import { create } from "zustand";
 
-export type PendingReviewComment = PullRequestReviewCommentDraft & { readonly id: string };
+type ReviewRevision = NonNullable<PullRequestSubmitReviewInput["revision"]>;
+export type PendingReviewComment = PullRequestReviewCommentDraft & {
+  readonly id: string;
+  readonly sourceRevision?: ReviewRevision | undefined;
+};
+
+export function pendingReviewRevision(
+  comments: readonly PendingReviewComment[],
+  headSha: string | undefined,
+  pageRevision?: PullRequestDiffResult["revision"],
+) {
+  const revision =
+    comments.findLast(
+      (comment) =>
+        comment.sourceRevision?.headSha === headSha &&
+        comment.sourceRevision?.baseSha !== undefined,
+    )?.sourceRevision ??
+    comments.find((comment) => comment.sourceRevision !== undefined)?.sourceRevision;
+  const baseSha =
+    pageRevision?.headSha === headSha && pageRevision !== undefined
+      ? pageRevision.baseSha
+      : revision?.baseSha;
+  const stale = comments.filter(
+    ({ sourceRevision }) =>
+      sourceRevision !== undefined &&
+      (sourceRevision.headSha !== headSha ||
+        (sourceRevision.baseSha !== undefined && sourceRevision.baseSha !== baseSha)),
+  );
+  return { stale, revision };
+}
 
 // Content-derived ids can collide across comments; use a counter.
 let pendingCommentSequence = 0;
@@ -24,6 +58,7 @@ interface PullRequestReviewStoreState {
   readonly drafts: Readonly<Record<string, ReadonlyArray<PendingReviewComment>>>;
   readonly summaries: Readonly<Record<string, string>>;
   readonly addComment: (key: string, comment: PendingReviewComment) => void;
+  readonly replaceComment: (key: string, id: string, comment: PendingReviewComment) => void;
   readonly removeComment: (key: string, commentId: string) => void;
   readonly removeComments: (key: string, commentIds: ReadonlyArray<string>) => void;
   readonly clear: (key: string) => void;
@@ -39,6 +74,13 @@ export const usePullRequestReviewStore = create<PullRequestReviewStoreState>()((
   addComment: (key, comment) =>
     set((state) => ({
       drafts: { ...state.drafts, [key]: [...(state.drafts[key] ?? EMPTY), comment] },
+    })),
+  replaceComment: (key, id, comment) =>
+    set((state) => ({
+      drafts: {
+        ...state.drafts,
+        [key]: (state.drafts[key] ?? EMPTY).map((entry) => (entry.id === id ? comment : entry)),
+      },
     })),
   removeComment: (key, commentId) =>
     set((state) => {

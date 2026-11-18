@@ -2028,6 +2028,9 @@ export const make = Effect.gen(function* () {
         const review = project.api.capabilities.review;
         const refuse = (detail: string) =>
           Effect.fail(new PullRequestOperationError({ operation: "submitReview", detail }));
+        if (input.revision !== undefined && project.api.kind !== "github") {
+          return refuse("This host cannot submit a review at the selected revision.");
+        }
         if (!review.verdicts.includes(input.verdict)) {
           return refuse(`This host cannot ${VERDICT_LABELS[input.verdict]} a change request.`);
         }
@@ -2064,6 +2067,7 @@ export const make = Effect.gen(function* () {
                 verdict: input.verdict,
                 body: input.body,
                 comments: input.comments,
+                ...(input.revision === undefined ? {} : { revision: input.revision }),
               })
               .pipe(Effect.mapError(toPullRequestError("submitReview")));
           }),

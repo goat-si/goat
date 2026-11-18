@@ -1,5 +1,7 @@
+import { submitRevisionBoundReview } from "./pullRequestRevisionReview.ts";
+import { RpcPermissionGuard } from "../rpc/client.ts";
 import { retainWithheldDiffPaths } from "./pullRequestDiffQueries.ts";
-import { ProjectId } from "@goat/contracts";
+import { ProjectId, WS_METHODS } from "@goat/contracts";
 import { expect, it } from "@effect/vitest";
 import * as Effect from "effect/Effect";
 import * as Option from "effect/Option";
@@ -67,3 +69,54 @@ it("evicts the oldest withheld overlays at either row or byte limits", () => {
   const pending = Array.from({ length: 20 }, (_, index) => String(index));
   expect(retainWithheldDiffPaths(pending, () => undefined)).toEqual(pending.slice(-8));
 });
+
+it.effect(
+  "submits guarded reviews only through a source session that advertises revision checks",
+  () =>
+    Effect.scoped(
+      Effect.gen(function* () {
+        const calls: string[] = [];
+        const client = (name: string, supportsRevision: boolean) =>
+          ({
+            [WS_METHODS.serverGetConfig]: () =>
+              Effect.succeed({
+                environment: {
+                  capabilities: { revisionBoundPullRequestReviews: supportsRevision },
+                },
+              }),
+            [WS_METHODS.pullRequestsSubmitReview]: () =>
+              Effect.sync(() => {
+                calls.push(name);
+              }),
+          }) as unknown as WsRpcProtocolClient;
+        const { environmentRegistry, supervisor } = yield* makeTestRuntime(
+          client("old", false),
+          client("alternate", true),
+        );
+        const input = {
+          projectId: ProjectId.make("project"),
+          repository: "acme/web",
+          number: 1,
+          verdict: "comment" as const,
+          body: "review",
+          comments: [],
+          revision: { headSha: "a".repeat(40), baseSha: "b".repeat(40) },
+        };
+        const submit = environmentRegistry.run(
+          TARGET.environmentId,
+          submitRevisionBoundReview(input).pipe(
+            Effect.provideService(RpcPermissionGuard, { authorize: () => Effect.void }),
+          ),
+        );
+        expect(yield* Effect.flip(submit)).toMatchObject({ operation: "submitReview" });
+        expect(calls).toEqual([]);
+
+        yield* SubscriptionRef.set(
+          supervisor.session,
+          Option.some(session(client("current", true))),
+        );
+        yield* submit;
+        expect(calls).toEqual(["current"]);
+      }),
+    ),
+);

@@ -1,3 +1,4 @@
+import { submitRevisionBoundReview } from "./pullRequestRevisionReview.ts";
 import { createPullRequestDiffQueries } from "./pullRequestDiffQueries.ts";
 import { isStalePullRequestReply } from "../pullRequestReply.ts";
 
@@ -700,7 +701,10 @@ export function createPullRequestEnvironmentAtoms<R, E>(
     submitReview: createEnvironmentRpcCommand(runtime, {
       label: "environment-data:pull-requests:submit-review",
       tag: WS_METHODS.pullRequestsSubmitReview,
-      execute: (input) => routedRequest(WS_METHODS.pullRequestsSubmitReview, input),
+      execute: (input) =>
+        input.revision === undefined
+          ? routedRequest(WS_METHODS.pullRequestsSubmitReview, input)
+          : submitRevisionBoundReview(input),
       scheduler: commandScheduler,
       concurrency: serialPerEnvironment,
     }),

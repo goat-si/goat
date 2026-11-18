@@ -1,4 +1,4 @@
-import type { PullRequestDiffInput } from "@goat/contracts";
+import type { PullRequestDiffInput, PullRequestSubmitReviewInput } from "@goat/contracts";
 import {
   decodeWith,
   readError,
@@ -656,6 +656,7 @@ export class GitHubPullRequestApi extends Context.Service<
       readonly number: number;
       readonly verdict: PullRequestReviewVerdict;
       readonly body: string;
+      readonly revision?: PullRequestSubmitReviewInput["revision"];
       readonly comments: ReadonlyArray<PullRequestReviewCommentDraft>;
     }) => Effect.Effect<void, GitHubPullRequestApiError>;
 
@@ -2418,19 +2419,35 @@ export const make = Effect.gen(function* () {
       );
     }),
 
-    submitReview: Effect.fn("GitHubPullRequestApi.submitReview")(function (input) {
+    submitReview: Effect.fn("GitHubPullRequestApi.submitReview")(function* (input) {
       const { owner, name } = parseRepositorySelector(input.repository);
-      return api
+      const path = `repos/${owner}/${name}/pulls/${input.number}`;
+      const { revision } = input;
+      if (revision !== undefined) {
+        const response = yield* api.rest({ host: input.host, operation: "submitReview", path });
+        const current = Option.getOrUndefined(decodeRevisionRefs(response.body));
+        if (
+          response.truncated ||
+          current?.head?.sha !== revision.headSha ||
+          (revision.baseSha !== undefined && current.base?.sha !== revision.baseSha)
+        ) {
+          return yield* readError(
+            input.cwd,
+            "submitReview",
+            new Error("Move the affected line comments to the current diff before submitting."),
+          );
+        }
+      }
+      return yield* api
         .rest({
           host: input.host,
           operation: "submitReview",
           method: "POST",
-          path: `repos/${owner}/${name}/pulls/${input.number}/reviews`,
-          body: buildReviewSubmission({
-            verdict: input.verdict,
-            body: input.body,
-            comments: input.comments,
-          }),
+          path: path + "/reviews",
+          body: {
+            ...buildReviewSubmission(input),
+            ...(revision === undefined ? {} : { commit_id: revision.headSha }),
+          },
         })
         .pipe(Effect.asVoid);
     }),

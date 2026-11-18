@@ -867,10 +867,7 @@ export const PullRequestReviewCommentDraft = Schema.Struct({
   /** GitLab needs both names for renamed-file comments; hosts using one path ignore this. */
   oldPath: Schema.optional(TrimmedNonEmptyString),
   position: PullRequestReviewPosition,
-  /**
-   * The first line of a comment on a range, which ends at `position`. Sent only to a host whose
-   * capabilities include `review.rangeComment`.
-   */
+  /** The start of a range, on hosts that support range comments. */
   startPosition: Schema.optional(PullRequestReviewPosition),
   body: CommentBody,
 });
@@ -881,6 +878,9 @@ export const PullRequestSubmitReviewInput = Schema.Struct({
   verdict: PullRequestReviewVerdict,
   body: Schema.String.check(Schema.isMaxLength(65_536)),
   comments: Schema.Array(PullRequestReviewCommentDraft),
+  revision: Schema.optional(
+    DiffRevision.mapFields((fields) => ({ ...fields, baseSha: Schema.optional(fields.baseSha) })),
+  ),
 });
 export type PullRequestSubmitReviewInput = typeof PullRequestSubmitReviewInput.Type;
 
