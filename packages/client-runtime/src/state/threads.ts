@@ -959,7 +959,7 @@ export const makeEnvironmentThreadState = Effect.fn("EnvironmentThreadState.make
         }
 
         const sequence = yield* SubscriptionRef.get(lastSequence);
-        const canResume = Option.isSome(current.data);
+        const canResume = Option.isSome(current.data) && !(yield* recovery.takeFreshSnapshot);
         const acceptBoundedSnapshot = yield* Ref.get(acceptsBoundedSocketSnapshots);
         StreamDiagnostics.noteThreadStreamSubscribed(environmentId, threadId, {
           afterSequence: canResume ? sequence : null,

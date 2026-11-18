@@ -301,6 +301,12 @@ G13 `goat-copy`, G14 `launch-watch`.
 - 경로: `packages/contracts/src/terminal.ts`, `packages/client-runtime/src/state/terminalOutput.ts`, `apps/server/src/terminal/{retainedAttachHistory,Manager}.ts`
 - 정책: upstream c9f0caca1b의 `retainedTerminalHistory`는 바이트로만 자른다. GOAT의 같은 함수는 자른 자리가 제어 시퀀스 안이면 그 시퀀스의 나머지도 버린다. 클라이언트 `trimBufferToBytes`에 있던 GOAT 동작을 그대로 옮겼다. 서버가 upstream 방식으로 자르면 클라이언트는 시퀀스 중간에서 시작하는 기록을 받고, 그것을 알아챌 수 없어 나머지를 글자로 찍는다. upstream이 이 함수를 바꾸면 바이트 자르기만 받고 시퀀스 단계는 남긴다. `Manager.ts`에는 `attachOutputStream`의 두 listener를 `retainedAttachHistory.ts`로 감싸는 줄과 import 하나만 둔다.
 
+### `thread-apply-defect-resume` 적용하다 깨진 스레드 구독은 새 스냅샷으로
+
+- 커밋: #3700 (사이클 261114 next3, K7 수정 라운드)
+- 경로: `packages/client-runtime/src/state/{threads,threadSubscriptionRecovery}.ts`
+- 정책: upstream de21fbcff3은 이벤트를 적용하다 defect가 나면 구독을 다시 연다. 하지만 커서(`lastSequence`)는 적용 전에 이미 앞으로 가 있어서, 다시 열 때 적용하지 못한 묶음을 건너뛴 채 이어 받는다. GOAT는 그 재시작 뒤 첫 구독에서 `afterSequence`를 빼서 새 스냅샷으로 상태를 바꾼다. 커서 쓰기를 적용 뒤로 옮기지 않은 이유: 그러면 같은 묶음을 다시 받아 같은 곳에서 또 깨진다. upstream이 이 복구를 바꾸면 받고 이 플래그를 다시 얹는다.
+
 ## 깨끗하게 머지되고도 깨지는 것
 
 다음 세 가지는 텍스트 충돌이 없어도 확인한다. `scan.sh`가 모두 출력한다.
