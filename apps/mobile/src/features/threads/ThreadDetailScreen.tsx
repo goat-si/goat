@@ -28,7 +28,7 @@ import { resolveThreadProviderSkills } from "@goat/client-runtime/providerSkills
 import type { LegendListRef } from "@legendapp/list/react-native";
 import { HeaderHeightContext } from "@react-navigation/elements";
 import { NativeLayoutObserver } from "../../native/NativeLayoutObserver";
-import { deriveBottomControlInsets, type NativeLayoutMetrics } from "../../lib/reserved-regions";
+import * as Regions from "../../lib/reserved-regions";
 import type { MessageId, RuntimeRequestId, UsageLimitsReport, RunId } from "@goat/contracts";
 import {
   appendCodexArtifactTemplateUsePrompt,
@@ -278,11 +278,11 @@ function ThreadDetailBody(
   };
   const windowHeight = useWindowDimensions().height;
   const navigationHeaderHeight = useContext(HeaderHeightContext) ?? insets.top + 44;
-  const [screenMetrics, setScreenMetrics] = useState<NativeLayoutMetrics | null>(null);
+  const [screenMetrics, setScreenMetrics] = useState<Regions.NativeLayoutMetrics | null>(null);
   const columnMetrics = useNativeColumnLayoutMetrics();
   const windowMetrics = useNativeLayoutMetrics();
   const nativeMetrics = usesNativeWorkspaceColumns ? columnMetrics : screenMetrics;
-  const controlInsets = deriveBottomControlInsets(nativeMetrics);
+  const controlInsets = Regions.deriveBottomControlInsets(nativeMetrics);
   const agentLabel = `${props.selectedThread.modelSelection.instanceId} agent`;
   const selectedThreadKey = scopedThreadKey(props.environmentId, props.selectedThread.id);
   const childThreadInputs = useChildThreadInputs({
@@ -1262,7 +1262,7 @@ function ThreadDetailBody(
                 placeholderKeyboardLift={placeholderKeyboardLift}
                 contentMaxWidth={contentMaxWidth}
                 historyControls={props.historyControls}
-                contentSideInsets={nativeMetrics?.safeArea}
+                contentSideInsets={Regions.deriveContentSideInsets(nativeMetrics)}
                 layoutVariant={layoutVariant}
                 usesAutomaticContentInsets={props.usesAutomaticContentInsets}
                 onHeaderMaterialVisibilityChange={props.onHeaderMaterialVisibilityChange}

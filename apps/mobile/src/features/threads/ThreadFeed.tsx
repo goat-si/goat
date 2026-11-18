@@ -3129,6 +3129,7 @@ export const ThreadFeed = memo(function ThreadFeed({
         bottomInset={bottomContentInset}
         keyboardLift={props.placeholderKeyboardLift}
         horizontalPadding={horizontalPadding}
+        contentSideInsets={props.contentSideInsets}
       />
     );
   }
