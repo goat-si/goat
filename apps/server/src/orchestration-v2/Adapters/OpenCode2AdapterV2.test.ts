@@ -533,7 +533,8 @@ it.layer(McpProviderSessions.layer)("OpenCode2 adapter", (it) => {
       const retry = seen.find(
         (event) => event.type === "turn_item.updated" && event.turnItem.type === "error",
       );
-      assert.deepInclude(retry?.turnItem, {
+      if (retry?.type !== "turn_item.updated") return yield* Effect.die("The retry was not shown.");
+      assert.deepInclude(retry.turnItem, {
         status: "running",
         failure: { class: failureClass, code: error.type, message: error.message, retryable: true },
       });
@@ -3061,7 +3062,8 @@ it.layer(McpProviderSessions.layer)("OpenCode2 adapter", (it) => {
       yield* runtime.startTurn(withLineage(thread));
       const events = yield* Fiber.join(ended);
       const request = events.find((event) => event.type === "runtime_request.updated");
-      assert.equal(request?.runtimeRequest.nativeRequestRef?.nativeId, form.id);
+      if (request === undefined) return yield* Effect.die("The child question was not shown.");
+      assert.equal(request.runtimeRequest.nativeRequestRef?.nativeId, form.id);
       const terminals = events.filter(
         (event) =>
           event.type === "turn.terminal" ||
@@ -3071,7 +3073,7 @@ it.layer(McpProviderSessions.layer)("OpenCode2 adapter", (it) => {
       for (const event of terminals) {
         assert.deepEqual(
           "retainedRuntimeRequestIds" in event ? event.retainedRuntimeRequestIds : undefined,
-          [request?.runtimeRequest.id],
+          [request.runtimeRequest.id],
         );
       }
     }).pipe(Effect.scoped),
