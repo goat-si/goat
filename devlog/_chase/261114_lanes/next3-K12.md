@@ -21,3 +21,21 @@ C4 plan before code. Row aab388ddb1f739ff264ab956a62145ffb016cae6 (#36384), adap
 > 4. goatMcpToolNames.test.ts "still asks in Plan mode before every other GOAT tool, directly or through goat_call": add only goat_message_show to the existing exception set (D3: no prompt in Plan mode or read-only sandboxes); title, ask assertion and every old tool unchanged; your separate allow test (direct + goat_call) stays.
 
 Approved before the row commit. Before/after: `toHaveLength(308)` to `toHaveLength(309)`; insert `!("listing" in entry && entry.listing === "prompt") &&` between the screen-run exclusion and existing resource exclusions; add `import { MessageToolkit } from "./toolkits/message/tools.ts";` and `message: MessageToolkit,` in agentSurface.testkit; `if (tool === "goat_background_wait") continue;` to `if (tool === "goat_background_wait" || tool === "goat_message_show") continue;`.
+
+## Implementation evidence before the gate
+
+- GOAT adaptations are the `message.show` registry and caller-owned handler, prompt-only listing and Claude policy, input validation, precise result identity, scoped wire-output compaction, alias-aware deferred-result predicate, and replay fixture port. The Markdown row behavior and tool summary follow upstream. No clean cherry-pick.
+- `WireProjection.ts:213` keeps the result only for a matching completed successful call before ordinary compaction. Other tools retain their existing byte budget and cannot carry a compact `sentMessage` field. The absolute result parse cap for this one tool allows JSON escaping of a 4,000-unit message.
+- Move-outs: web rewind selectors to `sessionRevert.ts` with the existing exports, copy-state selector to `assistantMessageCopyState.ts` with the existing export, and mobile feed cache comparators to `threadFeedCacheEquality.ts` with the prior dense-array check made explicit instead of moving a non-null assertion. ProjectionStore stayed at 8,822 lines with only its predicate edited. ClaudeAdapterV2 was untouched.
+- Red evidence from guarded focused tests: wire projection lacked `output.sentMessage` and Claude returned `ask` for both routes. With the old ProjectionStore predicate, the new bounded-read test reported 154 deferred rows against the expected 153. The fixed predicate passes that test, including deferred-page reload and another path carrying the same result key.
+- `vp test run apps/web/src/sessionMidTurnMessage.test.ts apps/mobile/src/lib/threadFeedMidTurnMessage.test.ts scripts/agent-surface/eval/replay.test.ts --maxWorkers=1` exited 0, 3 files and 20 tests. Synthetic replay checks grade a draft before a question, final-only draft, progress-note control and final reply after bookkeeping in both listings. No model call.
+- The context budget check measured 6,138 Claude instruction bytes and 10,199 first-prompt bytes. Core remained 2 tools and 4,061 model-facing bytes. The cap remained 6,144 / 12,288 / 6,144 respectively.
+- The plan records push used the main checkout's current workflow guard after the lane's older guard refused the records branch's existing trusted-run gate expression. No guard was disabled. A non-fast-forward attempt was rebuilt on the latest records tip.
+- P1 web and desktop: before/after with a real Claude draft preceding a question card, including full multiline Markdown and the order after the turn folds/reopens. Pending. Replay cannot drive the Claude adapter.
+- P1 mobile iOS and Android: same draft/question before/after and settled history, with Markdown intact. Pending. No dev server or real provider started on this lane.
+
+Additional Rule 3 approval before commit:
+
+> Coordinator Rule 3: APPROVED. apps/server/src/mcp/agentSurface.test.ts:705 local forThreads filter gets the same listing === "prompt" exclusion as toolListing.test.ts (D3: the tool is not in the full listing); every old entry and assertion unchanged. Quote it in next3-K12.md with the others, then continue to READY.
+
+The only edit to that case is inserting `!("listing" in e && e.listing === "prompt") &&` after the existing client-scope exclusion. The first guarded run after approvals 1–4 showed 88 passes and this one failure, with only `goat_message_show` missing from the observed list.
