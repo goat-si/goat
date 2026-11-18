@@ -799,8 +799,13 @@ const make = Effect.gen(function* () {
         openSignal?.throwIfAborted();
         await cdp.send("Page.enable");
       }
-      const isMainNavigation = (request: { isNavigationRequest(): boolean; frame(): unknown }) =>
-        request.isNavigationRequest() && request.frame() === page.mainFrame();
+      const isMainNavigation = (request: { isNavigationRequest(): boolean; frame(): unknown }) => {
+        try {
+          return request.isNavigationRequest() && request.frame() === page.mainFrame();
+        } catch {
+          return false;
+        }
+      };
       const navigationGenerations = new WeakMap<object, number>();
       page.on("request", (request) => {
         if (request.isNavigationRequest()) {

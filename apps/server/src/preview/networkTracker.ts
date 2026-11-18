@@ -14,7 +14,13 @@ const makeTracker = (page: Page) => {
     for (const listener of listeners) listener();
   };
   const onRequest = (request: Request) => {
-    if (request.isNavigationRequest() && request.frame() === page.mainFrame()) {
+    let mainNavigation = false;
+    try {
+      mainNavigation = request.isNavigationRequest() && request.frame() === page.mainFrame();
+    } catch {
+      // Playwright can emit a navigation request before its frame exists.
+    }
+    if (mainNavigation) {
       previousRequests = new Set(requests);
       navigation = request;
     }
