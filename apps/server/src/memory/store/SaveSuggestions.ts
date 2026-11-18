@@ -38,7 +38,29 @@ export const acceptingSuggestionOperation = Effect.fn("MemorySuggestions.accepti
       FROM memory_save_suggestions WHERE space=${space} AND id=${memoryId} AND state='accepting'
         AND origin_environment_id=${origin.environmentId} AND origin_thread_id=${origin.threadId}`,
     );
-    return row?.accept_operation_id;
+    if (row) return row.accept_operation_id;
+
+    // A remote ACK settles the suggestion before the ordered tail installs its identity.
+    const [completed] = yield* stored(
+      "suggestion-acknowledged-operation",
+      sql<{
+        operation_id: M.MemoryOperationId;
+      }>`SELECT json_extract(completed_receipt_json,'$.operationId') AS operation_id
+      FROM memory_outbox o WHERE o.space=${space} AND o.memory_id=${memoryId}
+        AND o.kind='sync' AND o.status='completed'
+        AND json_extract(o.metadata_json,'$.kind')='upsert'
+        AND json_extract(o.metadata_json,'$.authorityFirst') IS NOT NULL
+        AND json_extract(o.metadata_json,'$.acceptanceGeneration') IS NOT NULL
+        AND json_extract(o.metadata_json,'$.originEnvironmentId')=${origin.environmentId}
+        AND json_extract(o.metadata_json,'$.revision.provenance.originThreadId')=${origin.threadId}
+        AND json_extract(o.completed_receipt_json,'$.outcome')='accepted'
+        AND json_extract(o.completed_receipt_json,'$.hubSequence')>0
+        AND NOT EXISTS (SELECT 1 FROM memory_identity_ledger i WHERE i.space=o.space AND i.memory_id=o.memory_id)
+        AND NOT EXISTS (SELECT 1 FROM memory_tombstones t WHERE t.space=o.space AND t.memory_id=o.memory_id)
+        AND NOT EXISTS (SELECT 1 FROM memory_pending_forget_intents f WHERE f.space=o.space AND f.memory_id=o.memory_id)
+      LIMIT 1`,
+    );
+    return completed?.operation_id;
   },
 );
 
