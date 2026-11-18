@@ -2051,6 +2051,8 @@ const makeOrchestrator = Effect.fn("orchestrationV2.Orchestrator.layer")(functio
   ) {
     const held = yield* projectionStore.getHeldQueuedRuns(threadId);
     if (held.length === 0) return;
+    const completedMessage = yield* projectionStore.getRunMessage(threadId, completedRunId);
+    if (completedMessage !== undefined && isBufferedProviderNotification(completedMessage)) return;
     const projection = yield* projectionStore.getThreadRecords(
       threadId,
       ["runs", "messages", "turnItems"],

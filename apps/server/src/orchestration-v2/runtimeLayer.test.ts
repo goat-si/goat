@@ -98,6 +98,8 @@ import {
   watchedPullRequestDetail,
   writeProviderFailureForQueue,
   dispatchBufferedQueueWake,
+  dispatchHeldAgentPrompt,
+  finishBufferedReplay,
 } from "./runtimeLayer.testkit.ts";
 
 const prWatchDisabledProjectId = ProjectId.make("pr-watch-disabled-project");
@@ -5996,7 +5998,10 @@ it.layer(layerTest)("OrchestrationV2LayerLive lifecycle", (it) => {
         }
 
         const wakeMessageId = MessageId.make(`${threadId}:buffered-wake`);
-        if (bufferedWake) yield* dispatchBufferedQueueWake(orchestrator, threadId, wakeMessageId);
+        if (bufferedWake) {
+          yield* dispatchHeldAgentPrompt(orchestrator, threadId);
+          yield* dispatchBufferedQueueWake(orchestrator, threadId, wakeMessageId);
+        }
 
         const before = yield* orchestrator.getThreadProjection(threadId);
         const activeRun = before.runs.find((run) => run.status === "starting");
@@ -6056,6 +6061,8 @@ it.layer(layerTest)("OrchestrationV2LayerLive lifecycle", (it) => {
               event?.type === "run.updated" ? event.payload.status : undefined,
               "starting",
             );
+            if (event?.type !== "run.updated") return;
+            yield* finishBufferedReplay(orchestrator, eventSink, event.payload, promotedRunIds);
             return;
           }
           yield* orchestrator.dispatch({

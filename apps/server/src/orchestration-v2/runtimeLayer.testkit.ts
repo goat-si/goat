@@ -1,3 +1,5 @@
+import { assert } from "@effect/vitest";
+import * as Queue from "effect/Queue";
 import type * as Orchestrator from "./Orchestrator.ts";
 import * as DateTime from "effect/DateTime";
 import type * as EventSink from "./EventSink.ts";
@@ -8,7 +10,7 @@ import {
   EventId,
   CommandId,
   type ThreadId,
-  type MessageId,
+  MessageId,
   type ModelSelection,
   type ProjectId,
   ProviderDriverKind,
@@ -328,7 +330,7 @@ export const dispatchBufferedQueueWake = (
 ) =>
   orchestrator.dispatch({
     type: "message.dispatch",
-    commandId: CommandId.make(`${threadId}:buffered-wake`),
+    commandId: CommandId.make(`command:${wakeMessageId}`),
     threadId,
     messageId: wakeMessageId,
     text: "Background work completed.",
@@ -342,3 +344,57 @@ export const dispatchBufferedQueueWake = (
       summary: "Work finished",
     },
   });
+
+export const dispatchHeldAgentPrompt = (
+  orchestrator: Orchestrator.OrchestratorV2["Service"],
+  threadId: ThreadId,
+) =>
+  orchestrator.dispatch({
+    type: "message.dispatch",
+    commandId: CommandId.make(`${threadId}:agent`),
+    threadId,
+    messageId: MessageId.make(`${threadId}:agent`),
+    text: "A queued agent prompt",
+    attachments: [],
+    dispatchMode: { type: "queue_after_active" },
+    createdBy: "agent",
+    creationSource: "server",
+  });
+
+export const finishBufferedReplay = Effect.fn("finishBufferedReplay")(function* (
+  orchestrator: Orchestrator.OrchestratorV2["Service"],
+  sink: EventSink.EventSinkV2["Service"],
+  wake: OrchestrationV2Run,
+  promotedRunIds: Queue.Queue<OrchestrationV2Run["id"]>,
+) {
+  assert.equal(yield* Queue.take(promotedRunIds), wake.id);
+  const { threadId } = wake;
+  const markerMessageId = MessageId.make(`${threadId}:second-replay`);
+  yield* dispatchBufferedQueueWake(orchestrator, threadId, markerMessageId);
+  const projection = yield* orchestrator.getThreadProjection(threadId);
+  const agent = projection.runs.find((run) => run.userMessageId === `${threadId}:agent`);
+  const marker = projection.runs.find((run) => run.userMessageId === markerMessageId);
+  if (marker === undefined || agent?.queueHeld !== true)
+    return yield* Effect.die("Missing held agent or replay marker");
+  const now = yield* DateTime.now;
+  yield* sink.write({
+    events: [
+      {
+        id: EventId.make(`${threadId}:replayed`),
+        type: "run.updated",
+        threadId,
+        runId: wake.id,
+        occurredAt: now,
+        payload: {
+          ...wake,
+          status: "completed",
+          startedAt: wake.startedAt ?? now,
+          completedAt: now,
+        },
+      },
+    ],
+  });
+  assert.equal(yield* Queue.take(promotedRunIds), marker.id);
+  const after = yield* orchestrator.getThreadProjection(threadId);
+  assert.isTrue(after.runs.find((run) => run.id === agent.id)?.queueHeld);
+});
