@@ -237,9 +237,13 @@ describe("toLocalBackendPath", () => {
         toLocalBackendPath
           .handler({ backendId, path })
           .pipe(
-            Effect.provide(bootstrapsLayer([defaultWslInstance, primary])),
-            Effect.provide(DesktopAppSettings.layerTest()),
-            Effect.provide(DesktopWslEnvironment.layerTest({ windowsToWslPath: convert })),
+            Effect.provide(
+              Layer.mergeAll(
+                bootstrapsLayer([defaultWslInstance, primary]),
+                DesktopAppSettings.layerTest(),
+                DesktopWslEnvironment.layerTest({ windowsToWslPath: convert }),
+              ),
+            ),
             Effect.provideService(HostProcess.Platform, "win32"),
           );
 

@@ -42,28 +42,26 @@ export function useNativeFileDrag(
         });
       }
       void (async () => {
-        try {
-          const { path } = splitFilePathPosition(await resolvePath());
-          if (
-            pending.signal.aborted ||
-            !chip.isConnected ||
-            readPrimaryEnvironmentId() !== environmentId ||
-            !readEnvironmentScope(environmentId, AuthOrchestrationOperateScope)
-          ) {
-            return;
-          }
-          const started = await startFileDrag({ environmentId, path });
-          if (!started) {
-            toastManager.add({ type: "error", title: "The file is unavailable on this Mac" });
-          }
-        } catch {
+        const { path } = splitFilePathPosition(await resolvePath());
+        if (
+          pending.signal.aborted ||
+          !chip.isConnected ||
+          readPrimaryEnvironmentId() !== environmentId ||
+          !readEnvironmentScope(environmentId, AuthOrchestrationOperateScope)
+        ) {
+          return;
+        }
+        const started = await startFileDrag({ environmentId, path });
+        if (!started) {
+          toastManager.add({ type: "error", title: "The file is unavailable on this Mac" });
+        }
+      })()
+        .catch(() => {
           if (!pending.signal.aborted) {
             toastManager.add({ type: "error", title: "Unable to drag file" });
           }
-        } finally {
-          pending.abort();
-        }
-      })();
+        })
+        .finally(() => pending.abort());
     },
   };
 }

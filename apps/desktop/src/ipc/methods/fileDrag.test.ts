@@ -1,5 +1,5 @@
 import * as NodeServices from "@effect/platform-node/NodeServices";
-import { assert, it } from "@effect/vitest";
+import { assert, expect, it } from "@effect/vitest";
 import * as HostProcess from "@goat/shared/HostProcess";
 import * as Effect from "effect/Effect";
 import * as FileSystem from "effect/FileSystem";
@@ -8,6 +8,7 @@ import * as Option from "effect/Option";
 import * as Path from "effect/Path";
 import { vi } from "vite-plus/test";
 
+import * as DesktopConfig from "../../app/DesktopConfig.ts";
 import * as DesktopEnvironment from "../../app/DesktopEnvironment.ts";
 import { PRIMARY_INSTANCE_ID } from "../../backend/DesktopBackendManager.ts";
 import * as DesktopBackendPool from "../../backend/DesktopBackendPool.ts";
@@ -24,7 +25,22 @@ const windowsHost = HostProcess.Platform.defaultValue() === "win32";
 const setup = Effect.fn("fileDrag.test.setup")(function* (platform: NodeJS.Platform = "darwin") {
   const fs = yield* FileSystem.FileSystem;
   const path = yield* Path.Path;
-  const stateDir = yield* fs.makeTempDirectoryScoped({ prefix: "goat-file-drag-" });
+  const baseDir = yield* fs.makeTempDirectoryScoped({ prefix: "goat-file-drag-" });
+  const environment = DesktopEnvironment.layer({
+    dirname: baseDir,
+    homeDirectory: baseDir,
+    platform,
+    processArch: "arm64",
+    appVersion: "0.0.0",
+    appPath: baseDir,
+    resourcesPath: baseDir,
+    isPackaged: true,
+    runningUnderArm64Translation: false,
+  }).pipe(Layer.provide(DesktopConfig.layerTest({ GOAT_HOME: baseDir })));
+  const { stateDir } = yield* DesktopEnvironment.DesktopEnvironment.pipe(
+    Effect.provide(environment),
+  );
+  yield* fs.makeDirectory(stateDir, { recursive: true });
   const file = path.join(stateDir, "readme.txt");
   yield* fs.writeFileString(path.join(stateDir, "environment-id"), "local-environment\n");
   yield* fs.writeFileString(file, "file contents");
@@ -65,7 +81,7 @@ const setup = Effect.fn("fileDrag.test.setup")(function* (platform: NodeJS.Platf
     .pipe(
       Effect.provide(
         Layer.mergeAll(
-          Layer.mock(DesktopEnvironment.DesktopEnvironment)({ path, platform, stateDir }),
+          environment,
           Layer.mock(ElectronWindow.ElectronWindow)({ main: Effect.succeedSome(window) }),
           DesktopBackendPool.layerTest([primary]),
           DesktopAppSettings.layerTest(),
@@ -107,11 +123,9 @@ it.effect(
       const foreignFrame = { sender: contents, senderFrame: { id: 2 } };
       const foreignWindow = { sender: { ...contents }, senderFrame: contents.mainFrame };
       for (const event of [foreignFrame, foreignWindow]) {
-        const rejected = yield* Effect.tryPromise({
-          try: () => invoke(file, "local-environment", event),
-          catch: (error) => error,
-        }).pipe(Effect.flip);
-        assert.match(String(rejected), /untrusted sender/);
+        yield* Effect.promise(() =>
+          expect(invoke(file, "local-environment", event)).rejects.toThrow(/untrusted sender/),
+        );
       }
       assert.lengthOf(getFileIcon.mock.calls, 0);
       assert.lengthOf(startDrag.mock.calls, 0);
