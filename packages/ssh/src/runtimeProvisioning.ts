@@ -223,6 +223,8 @@ sh -c ${shellSingleQuote(installer)} -- --version
                 runner?.keepExistingRunner ?? false,
                 false,
                 runner?.ownRuntimeVersion,
+                false,
+                owningLaunch,
               ),
             }).pipe(
               // Native Windows has no sh to start; it is prepared without one.

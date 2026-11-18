@@ -1,3 +1,4 @@
+import { SHARED_HOME_UPDATE_WAIT } from "./sharedHomeUpdateWait.ts";
 import {
   LEGACY_SSH_ARCHIVE_VERSION_KEY,
   LEGACY_SSH_NODE_SCRIPT_PATH_KEY,
@@ -670,6 +671,7 @@ exec "$GOAT_RUNTIME_DIR/goat" "$@"
 `;
 
 const REMOTE_LAUNCH_SCRIPT = `set -eu
+${SHARED_HOME_UPDATE_WAIT}goat_wait_shared_home_update
 cd "$HOME" 2>/dev/null || cd /
 @@GOAT_NODE_ENV_SCRIPT@@
 STATE_KEY="$1"
@@ -924,6 +926,7 @@ while [ -z "$REMOTE_PORT" ]; do
     fi
     exit 1
   fi
+  goat_wait_shared_home_update
   recheck_selected_before_use
   if [ "$LIVE_STATUS" != none ]; then
     printf 'A server appeared before launch; reconnect without replacing it.\\n' >&2; exit 1
@@ -1238,7 +1241,7 @@ export type {
 function buildReconnectProbeScript(selected: PreparedRemoteRuntime) {
   return `reconnect_probe() {
 sh -s -- "\${1:-}" <<'GOAT_RECONNECT_PROBE_SCRIPT'
-${buildRemoteRuntimeProbeScript(selected.requestedVersion ?? "", REMOTE_RUNTIME_STATE_KEY, false, true, selected.runner?.ownRuntimeVersion)}
+${buildRemoteRuntimeProbeScript(selected.requestedVersion ?? "", REMOTE_RUNTIME_STATE_KEY, false, true, selected.runner?.ownRuntimeVersion, false, true)}
 GOAT_RECONNECT_PROBE_SCRIPT
 }`;
 }

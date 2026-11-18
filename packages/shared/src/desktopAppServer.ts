@@ -27,3 +27,6 @@ export const desktopAppServerStateDirs = [
 export const desktopAppServerStateDirWords = desktopAppServerStateDirs
   .map((dir) => `"$HOME/${dir}"`)
   .join(" ");
+
+export const SHARED_HOME_DESKTOP_UPDATE_MARKER = "desktop-update-in-progress";
+export const SHARED_HOME_DESKTOP_UPDATE_TTL_SECONDS = 30;
