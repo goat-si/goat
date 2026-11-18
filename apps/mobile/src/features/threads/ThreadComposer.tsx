@@ -344,6 +344,7 @@ export const ThreadComposer = function ThreadComposer(props: ThreadComposerProps
     onFork: composerFork.startFork,
     hasCompactableConversation: props.hasCompactableConversation,
     onChangeDraftMessage: props.onChangeDraftMessage,
+    onOpenModelPicker: openSettings,
     onUpdateInteractionMode:
       selectedProviderStatus?.showInteractionModeToggle === false
         ? undefined
@@ -566,10 +567,10 @@ export const ThreadComposer = function ThreadComposer(props: ThreadComposerProps
     runtimeMode: currentRuntimeMode,
     onUpdateRuntimeMode: props.onUpdateRuntimeMode,
   } satisfies ExistingThreadSettingsRouteSession;
-  const openSettings = () => {
+  function openSettings() {
     settingsRoutePresentation.present(settingsRouteSession);
     settingsSheetPresentation.open();
-  };
+  }
 
   const { present: presentSettingsRoute } = settingsRoutePresentation;
   useEffect(() => {
