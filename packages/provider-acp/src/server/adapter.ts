@@ -5410,8 +5410,10 @@ export const makeAcpAdapterV2 = Effect.fn("makeAcpAdapterV2")(function* (
                       trackedTurn.tools.get(nativeParams.toolCall.toolCallId),
                     )
                   : nativeParams;
+              const options = flavor.answerablePermissionOptions?.(params);
+              const answerableParams = options === undefined ? params : { ...params, options };
               const transportRequestId = requestContext.requestId;
-              const permissionQuestion = flavor.extractPermissionQuestion?.(params);
+              const permissionQuestion = flavor.extractPermissionQuestion?.(answerableParams);
               if (permissionQuestion !== undefined) {
                 const userInput = yield* requestUserInputWithAdmission(
                   handlerGeneration,
@@ -5447,7 +5449,7 @@ export const makeAcpAdapterV2 = Effect.fn("makeAcpAdapterV2")(function* (
                     context?.input.runtimePolicy ?? latestRuntimePolicy,
                   );
                   if (disposition === "allow") {
-                    const optionId = selectAutoApprovedPermissionOption(params);
+                    const optionId = selectAutoApprovedPermissionOption(answerableParams);
                     return {
                       _tag: "Immediate" as const,
                       response:
@@ -5457,7 +5459,7 @@ export const makeAcpAdapterV2 = Effect.fn("makeAcpAdapterV2")(function* (
                     };
                   }
                   if (disposition === "deny") {
-                    const optionId = selectPermissionOptionId(params, "decline");
+                    const optionId = selectPermissionOptionId(answerableParams, "decline");
                     return {
                       _tag: "Immediate" as const,
                       response:
@@ -5518,22 +5520,25 @@ export const makeAcpAdapterV2 = Effect.fn("makeAcpAdapterV2")(function* (
                   ).pipe(Effect.asVoid),
                 ),
               );
-              if (decision === "accept" || decision === "acceptForSession") {
+              const response = (() => {
+                if (decision === "cancel") {
+                  return { outcome: { outcome: "cancelled" } } as const;
+                }
+                const optionId = selectPermissionOptionId(answerableParams, decision);
+                return optionId === undefined
+                  ? ({ outcome: { outcome: "cancelled" } } as const)
+                  : ({ outcome: { outcome: "selected", optionId } } as const);
+              })();
+              if (
+                response.outcome.outcome === "selected" &&
+                (decision === "accept" || decision === "acceptForSession")
+              ) {
                 clientPolicyGrants.recordApproval({
                   toolKind: parsedPermission.kind,
                   scope: decision === "acceptForSession" ? "session" : "turn",
                   turnKey: String(context.providerTurnId),
                 });
               }
-              const response = (() => {
-                if (decision === "cancel") {
-                  return { outcome: { outcome: "cancelled" } } as const;
-                }
-                const optionId = selectPermissionOptionId(params, decision);
-                return optionId === undefined
-                  ? ({ outcome: { outcome: "cancelled" } } as const)
-                  : ({ outcome: { outcome: "selected", optionId } } as const);
-              })();
               const checked = yield* runRuntimeCallbackAtGeneration(
                 handlerGeneration,
                 Effect.succeed(response),
