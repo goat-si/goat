@@ -69,9 +69,9 @@ export function fenceHighlightable(code: string, openCode: string | null): boole
   return code.length <= MAX_CHAT_HIGHLIGHT_CHARACTERS && openCode?.trimEnd() !== code.trimEnd();
 }
 
-/** Colours a message's fence once it is finished and small enough; until then it shows plain. */
-export function shouldHighlightFence(code: string, markdown: string): boolean {
-  return fenceHighlightable(code, openFenceCode(markdown));
+/** The open fence's code while the message streams; a finished message's unclosed fence is done. */
+export function streamingFenceCode(markdown: string, streaming: boolean): string | null {
+  return streaming ? openFenceCode(markdown) : null;
 }
 
 type CodeFenceRenderer =
