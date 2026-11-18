@@ -12,6 +12,7 @@ import * as NodeURL from "node:url";
 import { vi } from "vite-plus/test";
 import { SERVICE_LAUNCHER_PROTOCOL } from "./cloud/serviceProtocol.ts";
 import { Launcher, readServiceState, writeServiceState } from "./serviceLauncher.ts";
+import { restoreDatabaseBackup } from "./serviceLauncherDatabase.ts";
 
 const lockModuleUrl = JSON.stringify(
   NodeURL.pathToFileURL(NodeURL.fileURLToPath(new URL("./serverOwnerLockFile.ts", import.meta.url)))
@@ -294,6 +295,73 @@ process.exit(${SERVER_EXIT_CODE_STATE_DIR_OWNED});
         outcome?.status === "failed" ? outcome.reason : undefined,
         "state-dir-owned;db-kept-for-other-server",
       );
+    }),
+  );
+
+  it.effect("requires explicit recovery after a legacy owner interrupted rollback recovery", () =>
+    Effect.gen(function* () {
+      const fs = yield* FileSystem.FileSystem;
+      const path = yield* Path.Path;
+      const root = yield* fs.makeTempDirectoryScoped({ prefix: "goat-service-restore-conflict-" });
+      const statePath = path.join(root, "runtime", "service-state.json");
+      const dbPath = path.join(root, "userdata", "statev2.sqlite");
+      const backupDir = path.join(root, "runtime", "db-backup", "trial");
+      const snapshot = path.join(backupDir, "database");
+      const restoreMarker = path.join(backupDir, ".restore-pending");
+      const childStarted = path.join(root, "child-started");
+      yield* fs.makeDirectory(path.dirname(dbPath));
+      yield* fs.makeDirectory(backupDir, { recursive: true });
+      {
+        using db = new NodeSqlite.DatabaseSync(snapshot);
+        db.exec("CREATE TABLE messages (body TEXT); INSERT INTO messages VALUES ('before trial');");
+      }
+      yield* fs.writeFileString(dbPath, "truncated");
+      yield* fs.writeFileString(restoreMarker, "");
+      yield* writeFakeRuntime(
+        fs,
+        path,
+        path.join(root, "runtime", "goat", "versions", "1.0.0"),
+        `import { writeFileSync } from "node:fs";
+writeFileSync(${JSON.stringify(childStarted)}, "");
+process.exit(0);`,
+      );
+      const state = {
+        protocol: SERVICE_LAUNCHER_PROTOCOL,
+        activeVersion: "1.0.0",
+        update: {
+          id: "trial",
+          fromVersion: "1.0.0",
+          targetVersion: "1.1.0",
+          dbPath,
+          status: "pending" as const,
+        },
+      };
+      yield* Effect.promise(() => writeServiceState(statePath, state));
+      const busy = yield* Effect.acquireUseRelease(
+        Effect.sync(() => holdHome(root, "server-owner.sqlite")),
+        () => Effect.promise(() => restoreDatabaseBackup(root, state.update)),
+        (release) => Effect.sync(release),
+      );
+      assert.equal(busy, "busy");
+      const run = () =>
+        Effect.promise(async () => {
+          const launcher = new Launcher(root, await readServiceState(statePath));
+          return launcher.run().catch((error: unknown) => error);
+        });
+      assert.include(String(yield* run()), "Database recovery required");
+      assert.isFalse(yield* fs.exists(childStarted));
+      assert.equal(yield* fs.readFileString(dbPath), "truncated");
+      assert.isTrue(yield* fs.exists(restoreMarker));
+      assert.isTrue(yield* fs.exists(path.join(backupDir, ".untracked-owner")));
+      assert.deepEqual(yield* Effect.promise(() => readServiceState(statePath)), state);
+
+      yield* fs.copyFile(snapshot, dbPath);
+      yield* fs.remove(restoreMarker);
+      assert.include(String(yield* run()), "Active child exited unexpectedly (0)");
+      assert.isTrue(yield* fs.exists(childStarted));
+      assert.isTrue(yield* fs.exists(snapshot));
+      using live = new NodeSqlite.DatabaseSync(dbPath, { readOnly: true });
+      assert.equal(live.prepare("SELECT body FROM messages").get()?.body, "before trial");
     }),
   );
 });

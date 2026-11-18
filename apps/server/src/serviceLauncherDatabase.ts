@@ -243,8 +243,8 @@ async function restoreTarget(path: string): Promise<string> {
 
 // Restores the backup under both ownership locks. `busy`: another server owns the home and the
 // rollback stays pending. `kept`: a server other than this update's launcher and trial owned the
-// data since the backup, so its writes win. A started copy leaves the live files partial, so later
-// attempts finish it regardless; retryable after any crash while the backup remains.
+// data since the backup, so its writes win. If a legacy owner appeared during an interrupted
+// restore, neither automatic outcome is safe.
 export async function restoreDatabaseBackup(
   baseDir: string,
   pending: PendingServiceUpdate,
@@ -263,9 +263,19 @@ export async function restoreDatabaseBackup(
       await markUntrackedDatabaseOwner(baseDir, pending.id);
       return "busy";
     }
-    if (await pathExists(NodePath.join(backupDir, UNTRACKED_OWNER_MARKER))) return "kept";
+    const restoreStarted = await pathExists(NodePath.join(backupDir, RESTORE_MARKER));
+    if (await pathExists(NodePath.join(backupDir, UNTRACKED_OWNER_MARKER))) {
+      if (restoreStarted) {
+        throw new Error(
+          `Database recovery required for ${pending.dbPath}. Another server may have used the home during an interrupted restore. ` +
+            `The live files and snapshot at ${backupDir} were kept. ` +
+            "Follow the recovery steps at https://github.com/goat-si/goat/blob/dev/docs/user/updating.md#recover-an-interrupted-database-restore",
+        );
+      }
+      return "kept";
+    }
 
-    if (!(await pathExists(NodePath.join(backupDir, RESTORE_MARKER)))) {
+    if (!restoreStarted) {
       const recorded = await NodeFSP.readFile(
         NodePath.join(backupDir, OWNER_GENERATION_FILE),
         "utf8",

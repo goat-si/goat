@@ -121,14 +121,18 @@ generation. If any is not this update's launcher, its trial
 (`service-trial:<updateId>`), or the target restarted during its probation
 (`service-probation:<updateId>`), the snapshot is kept and the reason gains
 `;db-kept-for-other-server`, because restoring would erase that server's writes.
-A rollback that finds the lock busy stays pending and retries, across launcher
-restarts too. Servers older than the lock do not record themselves, so they stay
-invisible to this check.
+A rollback that finds the lock busy stays pending and retries across launcher
+restarts. Legacy owners do not appear in the generation log. The trial records
+a legacy refusal before exiting, and the launcher also keeps the snapshot if a
+trial exit reports ownership without identifying its source.
 
 Rollback stops the trial before restoring. A probation rollback first durably
 records its reason, so recovery still finishes that rollback if ownership stays
 busy beyond the probation deadline. A durable restore marker makes an interrupted
-restore finish before either version boots. Keep the snapshot until probation
+restore finish before either version boots. If rollback also observed a legacy
+owner, the launcher keeps both copies and requires
+[manual recovery](../user/updating.md#recover-an-interrupted-database-restore).
+Keep the snapshot until probation
 expires, or until both restoration and the terminal rollback state are durable.
 The owner-log rule also applies after launcher restarts. A target the launcher restarts
 while its update is on probation records `service-probation:<updateId>`, so a probation
