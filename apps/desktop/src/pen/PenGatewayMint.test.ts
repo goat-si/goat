@@ -173,6 +173,21 @@ describe("Pen gateway session mint", () => {
       expect(refused.startsWith("HTTP/1.1 400 ")).toBe(true);
       expect(refused.toLowerCase()).toContain("cache-control: no-store");
       expect(refused.toLowerCase()).toContain("referrer-policy: no-referrer");
+      // Node answers an Expect it does not support by itself, unless the gateway does.
+      const expectation = await new Promise<string>((resolve, reject) => {
+        let received = "";
+        const socket = NodeNet.connect(Number(url.port), "127.0.0.1", () =>
+          socket.write(
+            `GET ${url.pathname}/api/projects HTTP/1.1\r\nHost: ${url.host}\r\nOrigin: goat://app\r\nExpect: something\r\nConnection: close\r\n\r\n`,
+          ),
+        );
+        socket.on("data", (bytes: Buffer) => (received += bytes.toString()));
+        socket.on("error", reject);
+        socket.on("close", () => resolve(received));
+      });
+      expect(expectation.startsWith("HTTP/1.1 417 ")).toBe(true);
+      expect(expectation.toLowerCase()).toContain("cache-control: no-store");
+      expect(expectation.toLowerCase()).toContain("referrer-policy: no-referrer");
     } finally {
       await gateway.dispose();
     }
