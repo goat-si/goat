@@ -113,7 +113,7 @@ Your own Device panel is unaffected.
 The device stream goes through the environment server, so it works over the
 local network, Tailscale, and SSH. Live video needs a secure page
 (HTTPS or localhost); on a plain-HTTP remote origin iOS falls back to a slower
-still-image stream and Android cannot show video, except on EAS Simulator.
+still-image stream and Android cannot show video, except on Expo Simulators.
 
 ## SSH device hosts
 

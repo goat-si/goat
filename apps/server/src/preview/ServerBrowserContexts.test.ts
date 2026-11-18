@@ -1,5 +1,12 @@
+// @effect-diagnostics nodeBuiltinImport:off - Hands a real file on disk to a real desktop browser.
 import * as NodeEvents from "node:events";
+import * as NodeFS from "node:fs";
+import * as NodeHttp from "node:http";
+import * as NodeOS from "node:os";
+import * as NodePath from "node:path";
 
+import * as HostProcess from "@goat/shared/HostProcess";
+import { guardErrors } from "@goat/shared/errorGuards";
 import { INCOGNITO_BROWSER_PROFILE_ID } from "@goat/contracts";
 import {
   chromium,
@@ -18,6 +25,8 @@ const launches = vi.hoisted(() => ({
   mkdir: vi.fn().mockResolvedValue(undefined),
   rm: vi.fn().mockResolvedValue(undefined),
 }));
+const launchChromium = chromium.launch.bind(chromium);
+const launchPersistentChromium = chromium.launchPersistentContext.bind(chromium);
 vi.spyOn(chromium, "launch").mockImplementation(launches.launch);
 vi.spyOn(chromium, "launchPersistentContext").mockImplementation(launches.persistent);
 vi.mock("node:fs/promises", () => ({ mkdir: launches.mkdir, rm: launches.rm }));
@@ -503,4 +512,105 @@ describe("presentAsChrome", () => {
       });
     },
   );
+
+  it("uploads a file over 50 MB to a desktop tab, which shares the server's filesystem", async () => {
+    const directory = NodeFS.mkdtempSync(NodePath.join(NodeOS.tmpdir(), "goat-desktop-upload-"));
+    const userDataDir = NodePath.join(directory, "profile");
+    const pool = new ServerBrowserContexts(options());
+    try {
+      const desktop = await launchPersistentChromium(userDataDir, {
+        headless: true,
+        args: ["--remote-debugging-port=0"],
+      });
+      try {
+        const [port] = NodeFS.readFileSync(
+          NodePath.join(userDataDir, "DevToolsActivePort"),
+          "utf8",
+        ).split("\n");
+        const { browser, page } = await pool.connectDesktopPage(`http://127.0.0.1:${port}`);
+        try {
+          const file = NodePath.join(directory, "large.bin");
+          NodeFS.writeFileSync(file, "");
+          NodeFS.truncateSync(file, 51 * 1024 * 1024);
+          await page.setContent(`<input type="file">`);
+          await page.locator("input").setInputFiles(file);
+          expect(
+            await page.$eval("input", (input) =>
+              Array.from(
+                (input as unknown as { files: ArrayLike<{ name: string; size: number }> }).files,
+                ({ name, size }) => ({ name, size }),
+              ),
+            ),
+          ).toEqual([{ name: "large.bin", size: 51 * 1024 * 1024 }]);
+        } finally {
+          await browser.close();
+        }
+      } finally {
+        await pool.close();
+        await desktop.close();
+      }
+    } finally {
+      NodeFS.rmSync(directory, { recursive: true, force: true });
+    }
+  });
+});
+
+it("sends one Chrome user agent from the page and from a service worker request", async () => {
+  const listen = Promise.withResolvers<void>();
+  const server = guardErrors(
+    NodeHttp.createServer((request, response) => {
+      if (request.url === "/worker.js") {
+        response.writeHead(200, { "content-type": "text/javascript" }).end(`
+          addEventListener("message", event => {
+            event.waitUntil(fetch("/identity").then(response => response.text()).then(ua => event.ports[0].postMessage(ua)));
+          });
+        `);
+      } else if (request.url === "/identity") {
+        response.end(request.headers["user-agent"]);
+      } else {
+        response.writeHead(200, { "content-type": "text/html" }).end("<!doctype html>");
+      }
+    }),
+    listen.reject,
+  );
+  server.listen(0, "127.0.0.1", listen.resolve);
+  await listen.promise;
+  const address = server.address();
+  if (!address || typeof address === "string") throw new Error("Test server has no TCP address");
+  const probe = await launchChromium();
+  const version = probe.version();
+  await probe.close();
+  launches.launch.mockImplementation((options: Parameters<BrowserType["launch"]>[0] = {}) => {
+    const { executablePath: _path, ...bundled } = options;
+    return launchChromium(bundled);
+  });
+  const pool = new ServerBrowserContexts({
+    ...options(),
+    env: { GOAT_SERVER_BROWSER_SANDBOX: "0", GOAT_SERVER_BROWSER_GPU: "0" },
+    chromeVersion: version,
+  });
+  try {
+    const context = await pool.contextFor(INCOGNITO_BROWSER_PROFILE_ID);
+    const page = await context.newPage();
+    const platform = HostProcess.Platform.defaultValue();
+    await presentAsChrome(await context.newCDPSession(page), {
+      platform,
+      arch: HostProcess.Architecture.defaultValue(),
+    });
+    await page.goto(`http://127.0.0.1:${address.port}/`);
+    const [pageAgent, workerAgent] = (await page.evaluate(`(async () => {
+      await navigator.serviceWorker.register("/worker.js");
+      const active = (await navigator.serviceWorker.ready).active;
+      const channel = new MessageChannel();
+      const fromWorker = new Promise((resolve) => { channel.port1.onmessage = event => resolve(event.data); });
+      active.postMessage("identity", [channel.port2]);
+      return [await fetch("/identity").then(response => response.text()), await fromWorker];
+    })()`)) as [string, string];
+    expect(pageAgent).toContain(`Chrome/${version.split(".")[0]}.0.0.0`);
+    expect(workerAgent).toBe(pageAgent);
+  } finally {
+    await pool.close();
+    server.closeAllConnections();
+    await new Promise<void>((resolve) => server.close(() => resolve()));
+  }
 });

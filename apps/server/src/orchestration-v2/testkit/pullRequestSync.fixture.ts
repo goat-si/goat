@@ -5,6 +5,7 @@ import {
   ThreadId,
   type OrchestrationV2Command as OrchestrationCommand,
   type OrchestrationV2DomainEvent,
+  type OrchestrationV2InternalCommand,
   type OrchestrationProjectShell,
   type PullRequestRef,
   type PullRequestStack,
@@ -40,6 +41,10 @@ export type SyncCommand = Extract<
   { readonly type: "thread.pull-request-link.sync" }
 >;
 type LinkCommand = Extract<OrchestrationCommand, { readonly type: "thread.pull-request.link" }>;
+type ChecksReopenCommand = Extract<
+  OrchestrationV2InternalCommand,
+  { readonly type: "thread.pull-request-watch.checks-reopen" }
+>;
 
 const testCrypto = SecureRandom.make((size) => new Uint8Array(size).fill(1));
 
@@ -152,12 +157,14 @@ export function makeSummary(
 
 interface HarnessOptions {
   readonly batchesReads?: (input: PullRequestRef) => boolean;
-  readonly batchesReadsError?: (input: PullRequestRef) => PullRequestOperationError | undefined;
+  readonly batchesReadsError?: (
+    input: PullRequestRef,
+  ) => PullRequestService.PullRequestError | undefined;
   readonly invalidate?: PullRequestService.PullRequestService["Service"]["invalidate"];
   readonly snapshot: TestShellSnapshot;
   readonly summary?: (
     input: PullRequestRef,
-  ) => Effect.Effect<PullRequestSummary, PullRequestOperationError>;
+  ) => Effect.Effect<PullRequestSummary, PullRequestService.PullRequestError>;
   readonly stack?: (
     input: PullRequestRef,
   ) => Effect.Effect<PullRequestStack | null, PullRequestOperationError>;
@@ -177,6 +184,7 @@ export const makeHarness = Effect.fn("makePullRequestSyncHarness")(function* (
   const stackCalls = yield* Ref.make<ReadonlyArray<PullRequestRef>>([]);
   const domainEvents = yield* Queue.unbounded<OrchestrationV2DomainEvent>();
   const stateChanges = yield* Queue.unbounded<ThreadPullRequestKey>();
+  const reopenCommands = yield* Queue.unbounded<ChecksReopenCommand>();
 
   const summary: PullRequestService.PullRequestService["Service"]["summary"] = (
     input,
@@ -204,6 +212,11 @@ export const makeHarness = Effect.fn("makePullRequestSyncHarness")(function* (
     }
     if (command.type === "thread.pull-request.link") {
       return Ref.update(linkCommands, (recorded) => [...recorded, command]).pipe(
+        Effect.as({ sequence: 1, storedEvents: [] }),
+      );
+    }
+    if (command.type === "thread.pull-request-watch.checks-reopen") {
+      return Queue.offer(reopenCommands, command).pipe(
         Effect.as({ sequence: 1, storedEvents: [] }),
       );
     }
@@ -278,6 +291,7 @@ export const makeHarness = Effect.fn("makePullRequestSyncHarness")(function* (
     stackCalls,
     domainEvents,
     stateChanges,
+    reopenCommands,
     layer: PullRequestSyncReactor.layer.pipe(Layer.provide(layerDependencies)),
   };
 });

@@ -13,6 +13,7 @@ export const OrchestrationV2SubscribeThreadInput = Schema.Struct({
   acceptDedupedBodies: Schema.optionalKey(Schema.Boolean),
   acceptCompactIds: Schema.optionalKey(Schema.Boolean),
   /** The client decodes `text-append` items with `@goat/shared/threadTextAppend`. */
+  acceptCompactVisits: Schema.optionalKey(Schema.Boolean),
   acceptTextAppends: Schema.optionalKey(Schema.Boolean),
 });
 export type OrchestrationV2SubscribeThreadInput = typeof OrchestrationV2SubscribeThreadInput.Type;

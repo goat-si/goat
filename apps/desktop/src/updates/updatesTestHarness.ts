@@ -283,6 +283,7 @@ export function makeHarness(options: UpdatesHarnessOptions = {}) {
   } satisfies DesktopAppSettings.DesktopAppSettings["Service"]);
 
   const updateRestartMarkers = new Set<string>();
+  const markerContents = new Map<string, string>();
   const installRecords = new Map<string, string>();
   let previousInstallRecord = options.installRecord;
   const isInstallRecord = (path: string) =>
@@ -307,7 +308,8 @@ export function makeHarness(options: UpdatesHarnessOptions = {}) {
       const installRecord = isInstallRecord(path)
         ? (installRecords.get(path) ?? previousInstallRecord)
         : undefined;
-      if (installRecord !== undefined) return Effect.succeed(installRecord);
+      const contents = installRecord ?? markerContents.get(path);
+      if (contents !== undefined) return Effect.succeed(contents);
       return path === "/missing/resources/package-type" && options.packageType !== undefined
         ? Effect.succeed(options.packageType)
         : Effect.fail(
@@ -323,11 +325,23 @@ export function makeHarness(options: UpdatesHarnessOptions = {}) {
     writeFileString: (path, data) =>
       Effect.sync(() => {
         if (isInstallRecord(path)) installRecords.set(path, data);
-        else updateRestartMarkers.add(path);
+        else {
+          updateRestartMarkers.add(path);
+          markerContents.set(path, data);
+        }
+      }),
+    rename: (from, to) =>
+      Effect.sync(() => {
+        const value = markerContents.get(from);
+        if (value !== undefined) markerContents.set(to, value);
+        markerContents.delete(from);
+        updateRestartMarkers.delete(from);
+        updateRestartMarkers.add(to);
       }),
     remove: (path) =>
       Effect.sync(() => {
         updateRestartMarkers.delete(path);
+        markerContents.delete(path);
         installRecords.delete(path);
         if (isInstallRecord(path)) previousInstallRecord = undefined;
       }),

@@ -3,6 +3,8 @@ import { act } from "../../../test/render";
 import { expect, it, vi } from "vite-plus/test";
 vi.mock("./MessagesTimeline", () => ({ MessagesTimeline: () => null }));
 import { ChatComposer } from "./ChatComposer";
+import { editorIn } from "../ComposerPromptEditorTiptap.input.test-support";
+import { snapshotClipboardFixture } from "./snapshotClipboard.testkit";
 const renderComposer = ChatComposer.type;
 // Records the real composer's props; the fixture restores this spy after each test.
 async function setupComposer() {
@@ -113,5 +115,81 @@ it.each(["attachment", "fanout", "absent model"])("keeps SSH %s blocked", async 
         : "Choose one model before sending to SSH.",
     );
   await act(async () => submitButton().click());
+  expect(state.launch).not.toHaveBeenCalled();
+});
+
+it.each([
+  ["inside a code fence", true],
+  ["alongside unrelated snapshot context", false],
+] as const)("attaches the native PNG %s", async (_, fenced) => {
+  await using fixture = await setupComposer();
+  const { mount, container } = fixture;
+  store().setPrompt(id, fenced ? "```text\ninside\n```" : "before");
+  await mount();
+  const editor = editorIn(container);
+  await act(async () => {
+    editor.commands.setTextSelection(2);
+  });
+  expect(editor.state.selection.$from.parent.type.name).toBe(fenced ? "codeBlock" : "paragraph");
+  const { clipboard, record } = await snapshotClipboardFixture({ unrelatedPng: !fenced });
+
+  await act(async () => {
+    editor.view.dom.dispatchEvent(
+      new ClipboardEvent("paste", { clipboardData: clipboard, cancelable: true, bubbles: true }),
+    );
+  });
+
+  await vi.waitFor(() =>
+    expect(
+      store()
+        .getComposerDraft(id)
+        ?.images.map(({ name }) => name),
+    ).toEqual([record.name]),
+  );
+  const attached = store().getComposerDraft(id)?.images[0];
+  expect(attached?.source).toBeUndefined();
+  expect(await attached?.file.arrayBuffer()).toEqual(await clipboard.files[0]?.arrayBuffer());
+});
+
+it("holds Send while the pasted PNG is being verified", async () => {
+  await using fixture = await setupComposer();
+  const { mount, container } = fixture;
+  await mount();
+  const editor = editorIn(container);
+  const { clipboard, record } = await snapshotClipboardFixture({ unrelatedPng: true });
+  const decodeStarted = deferred<void>();
+  const resumeDecode = deferred<void>();
+  const decode = window.createImageBitmap.bind(window);
+  using _decode = vi.spyOn(window, "createImageBitmap").mockImplementationOnce(async (source) => {
+    decodeStarted.resolve();
+    await resumeDecode.promise;
+    return decode(source);
+  });
+  const send = () => {
+    const button = container.querySelector<HTMLButtonElement>('button[type="submit"]');
+    if (!button) throw new Error("Send button is unavailable.");
+    button.click();
+  };
+
+  try {
+    await act(async () => {
+      editor.view.dom.dispatchEvent(
+        new ClipboardEvent("paste", { clipboardData: clipboard, cancelable: true, bubbles: true }),
+      );
+      await decodeStarted.promise;
+    });
+    await act(send);
+    expect(state.launch).not.toHaveBeenCalled();
+    expect(state.toast).toHaveBeenCalledWith(
+      expect.objectContaining({ title: "Still bringing attached context into this message." }),
+    );
+  } finally {
+    resumeDecode.resolve();
+  }
+
+  await vi.waitFor(() => {
+    expect(store().getComposerDraft(id)?.images[0]?.name).toBe(record.name);
+    expect(state.composer?.composerRef.current?.hasPendingAttachments()).toBe(false);
+  });
   expect(state.launch).not.toHaveBeenCalled();
 });

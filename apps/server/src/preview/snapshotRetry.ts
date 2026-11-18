@@ -16,7 +16,8 @@ export const tooBusy = () =>
 /** A capture the page interrupted, which another try can get past; every other failure stands. */
 export const transientCapture = (cause: unknown) =>
   cause instanceof ServerBrowserOperationError &&
-  [PAGE_CHANGED, TOO_BUSY, SECRETS_PAGE_CHANGED].includes(cause.message);
+  (cause.tag === "PreviewAutomationTimeoutError" ||
+    [PAGE_CHANGED, SECRETS_PAGE_CHANGED].includes(cause.message));
 
 /** How a snapshot recovers from a capture the page interrupted, kept free of Playwright so it can be tested. */
 export interface SnapshotRetryInput<A> {
@@ -52,7 +53,15 @@ export const snapshotRetry = async <A>(input: SnapshotRetryInput<A>): Promise<A>
     } catch (cause) {
       if (!input.current() || !input.retryable(cause)) throw cause;
       const wait = input.deadline - input.now() - CAPTURE_RESERVE_MS;
-      if (attempt >= MAX_RETRIES || wait < MIN_WAIT_MS) throw input.tooBusy();
+      if (attempt >= MAX_RETRIES || wait < MIN_WAIT_MS) {
+        if (
+          cause instanceof ServerBrowserOperationError &&
+          cause.tag === "PreviewAutomationTimeoutError" &&
+          cause.detail !== undefined
+        )
+          throw cause;
+        throw input.tooBusy();
+      }
       await input.waitForLoad(wait).catch(() => undefined);
       await input.sleep(Math.min(SETTLE_MS, Math.max(0, input.deadline - input.now())));
       if (input.now() >= input.deadline || !input.current()) throw input.tooBusy();

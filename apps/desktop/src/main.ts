@@ -1,9 +1,9 @@
 import * as MacPermissions from "./permissions/MacPermissions.ts";
 import * as MediaPermissions from "./permissions/MediaPermissions.ts";
+import { handleStdioError } from "./app/stdioErrors.ts";
+
 for (const stream of [process.stdout, process.stderr]) {
-  stream.on("error", (err: NodeJS.ErrnoException) => {
-    if (err.code !== "EPIPE") throw err;
-  });
+  stream.on("error", handleStdioError);
 }
 
 import * as NodeHttpClient from "@effect/platform-node/NodeHttpClient";
@@ -69,6 +69,7 @@ import * as DesktopPreReadyFileSystem from "./app/DesktopPreReadyFileSystem.ts";
 import * as DesktopPreReadyPlatform from "./app/DesktopPreReadyPlatform.ts";
 import * as DesktopShellEnvironment from "./shell/DesktopShellEnvironment.ts";
 import * as DesktopSshEnvironment from "./ssh/DesktopSshEnvironment.ts";
+import * as DesktopPenMembers from "./pen/DesktopPenMembers.ts";
 import { DESKTOP_BUILD_COMMIT_TIME } from "./ssh/buildCommitTime.ts";
 import { resolveDesktopSshCliRunner } from "./ssh/desktopSshCliRunner.ts";
 import * as DesktopSshPasswordPrompts from "./ssh/DesktopSshPasswordPrompts.ts";
@@ -181,6 +182,10 @@ const layerDesktopSshEnvironment = Layer.unwrap(
             ),
             ...(environment.isPackaged
               ? {
+                  bundledFontAssetDirectory: environment.path.join(
+                    environment.clientAssetsDir,
+                    "assets",
+                  ),
                   bundledArchiveDirectory: environment.path.join(
                     environment.resourcesPath,
                     "ssh-runtime",
@@ -231,7 +236,7 @@ const layerDesktopFoundation = Layer.mergeAll(
   DesktopRendererHistory.layer,
 ).pipe(Layer.provideMerge(ElectronSafeStorage.layer), Layer.provideMerge(layerDesktopEnvironment));
 
-const layerDesktopSsh = layerDesktopSshEnvironment.pipe(
+const layerDesktopSsh = Layer.mergeAll(layerDesktopSshEnvironment, DesktopPenMembers.layer).pipe(
   Layer.provideMerge(DesktopSshPasswordPrompts.layer()),
 );
 

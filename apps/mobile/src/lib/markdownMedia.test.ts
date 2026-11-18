@@ -363,3 +363,14 @@ describe("resolveMarkdownMediaPreview", () => {
     );
   });
 });
+
+describe("relative Markdown media on mobile", () => {
+  it("keeps a relative image on the thread's host and lets an absolute one fall back", () => {
+    expect(resolveMarkdownMediaPreview("../shared/report.png", input)?.source).toMatchObject({
+      resource: { _tag: "media-file", path: "/repo/../shared/report.png", hostOnly: true },
+    });
+    const absolute = resolveMarkdownMediaPreview("/repo/shared/report.png", input)?.source;
+    expect(absolute).toMatchObject({ resource: { _tag: "media-file" } });
+    expect(absolute && "resource" in absolute && absolute.resource).not.toHaveProperty("hostOnly");
+  });
+});

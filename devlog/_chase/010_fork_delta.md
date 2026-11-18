@@ -152,6 +152,12 @@ G13 `goat-copy`, G14 `launch-watch`.
 - 경로: `apps/web/src/components`
 - 정책: upstream 우선, GOAT 동작만 다시 얹는다.
 
+### `message-resend-bound` 소켓을 잃은 메시지의 재전송 끝
+
+- 커밋: #3700 (사이클 261114 next3, K7 수정 라운드)
+- 경로: `packages/client-runtime/src/operations/dispatch.ts`
+- 정책: upstream 962eeefa03은 소켓을 잃은 메시지를 같은 commandId로 다시 보내되, 새 세션이 오거나 연결이 끝날 때까지 기한 없이 기다린다. GOAT는 두 가지를 더한다. 세션이 그대로이고 연결이 살아 있는 채로 5초가 지나면 같은 세션으로 다시 보낸다. 클라이언트가 읽지 못한 프레임은 대기 중 요청만 실패시키고 소켓은 열어 두므로, 그대로 두면 끝나지 않는다. 그리고 기다림 전체에 10분 상한을 둔다. 넘으면 보내기를 포기하고, 메시지가 가지 않았을 수 있다는 오류와 함께 초안을 되돌린다. 다시 보내는 횟수는 upstream과 같이 두 번까지다. upstream이 이 루프를 바꾸면 받고 두 갈래를 다시 얹는다.
+
 ### `mcp-auth-middleware` /mcp 인증 middleware는 GOAT 파일에
 
 - 커밋: #3519 (사이클 261114 다음 PR, lane N3)
@@ -199,13 +205,19 @@ G13 `goat-copy`, G14 `launch-watch`.
 - 커밋: #1587
 - 경로: `package.json`, `apps/server/package.json`, `packages/shared/src/nodeSqliteClient.ts`, `apps/server/vite.config.ts`, `scripts/dev-runtime-archive.ts`, `.github/workflows/{release-desktop,goat-nightly}.yml`
 - 정책: 루트 `engines.node`(정확한 `26.12.1`)가 개발·CI·SEA Node의 정본이다. upstream도 정확한 값을 쓰므로 버전 충돌은 GOAT가 정한 값을 둔다. 서버 `engines.node`와 `NODE_SQLITE_RUNTIME_RANGE`는 `^24.16.0 || >=26.1.0`으로 upstream `^22.16 || ^23.11 || >=24.10`과 다르다 (#1015, 데스크톱이 Electron 44의 Node 24.22.1에서 서버를 돌린다). upstream이 `nodeSqliteClient.ts`를 바꾸면 받고 이 범위 검사와 아래 rollback 훅만 다시 얹는다. upstream의 네이티브 SEA 빌드 guard는 받지 않는다 (`dev-runtime-archive`가 다른 SEA Node를 고른다). 고정 이전 커밋을 빌드하는 실행 파일 단계의 workflow revision fallback은 유지한다 ([10.011](./_fin/10/10.011_t3_chase_node_pin.md)).
-- Effect 4.1 (261114 N3, #3519): `nodeSqliteClient.ts`의 `transactionAcquirer: Effect.map(transactionAcquirer, toleratingFinishedRollback)` 한 줄(:1260)과 그 import도 GOAT 차이다. 헬퍼는 GOAT 파일 `nodeSqliteErrors.ts`에 있다. SQLite가 이미 transaction 전체를 rollback한 뒤 보낸 ROLLBACK의 "no transaction is active"만 무시해서, 쓰기의 원래 SqlError가 호출자에게 간다. Effect 4.1은 실패와 defect가 섞인 cause를 `catch`로 복구하지 않으므로, 이 훅이 없으면 그 쓰기가 defect로 끝나고 채널 전송이 두 번 갈 수 있다.
+- Effect 4.1 (261114 N3, #3519, #3640): `nodeSqliteErrors.ts`의 `sqliteRollback.transactionControls`를 SQL 클라이언트 생성 옵션으로 넘긴다. 트랜잭션 본문이나 COMMIT이 실패하면 같은 연결에서 롤백한다. SQLite가 이미 트랜잭션을 끝냈으면 정리된 상태로 본다. 롤백도 실패하면 이를 기록하고 연결을 격리해 원래 오류가 호출자에게 간다. 일반 문장의 `borrower`와 트랜잭션·예약 연결의 `acquirer`는 각각 lease를 잡은 뒤 `recoverConnection`으로 정리를 마쳐야 연결을 쓸 수 있다. upstream의 SQL 클라이언트 변경을 받을 때 트랜잭션 옵션과 두 lease 경로를 유지한다.
 
 ### `office-archive-split` Office 미리보기의 upstream 코드 옮김
 
 - 커밋: 사이클 261114 다음 PR의 lane N13a (PR 번호는 draft PR이 열리면 적는다)
 - 경로: `apps/web/src/components/files/officeArchiveWorkbook.ts`, `apps/web/src/components/files/officeArchiveXml.ts`, `apps/web/src/components/files/AttachmentFilePreview.spreadsheet.browser.test.tsx`
 - 정책: upstream 코드를 그대로 옮긴 GOAT 파일이다. `officeArchive.ts`가 1211줄 예산에 닿아 `boundedWorksheet`·`boundWorkbook`(upstream c8e8b58ee6 이후 `engineStyles` 포함)은 `officeArchiveWorkbook.ts`로, 두 파일이 같이 쓰는 `xmlParser`·`officeXmlDecoder`·`officeXml`은 `officeArchiveXml.ts`로 옮겼다. 스프레드시트 미리보기 테스트 다섯 묶음은 `AttachmentFilePreview.spreadsheet.browser.test.tsx`에 있다. upstream이 `officeArchive.ts`의 스프레드시트 부분이나 XML 도우미를 바꾸면 그 hunk를 이 파일들에 옮겨 적용한다. Word 부분은 `officeArchive.ts`에 남아 그대로 머지된다. upstream `fcc25c8bb2`는 Office 테스트 전부를 `AttachmentFilePreview.office.browser.test.tsx`로 나눴지만 GOAT는 받지 않았다(#3176). 그 파일에 들어가는 스프레드시트 테스트 hunk는 GOAT의 spreadsheet 파일로, 나머지 Office 테스트 hunk는 `AttachmentFilePreview.browser.test.tsx`로 옮긴다.
+
+### `opencode-legacy-lifecycle` OpenCode 1.x 백그라운드 턴과 자식 권한
+
+- 커밋: #3700
+- 경로: `packages/provider-opencode/src/server/{adapter,backgroundTurns,permissionRules,permissionSync}.ts`, `apps/server/src/orchestration-v2/ProviderContinuationService.ts`
+- 정책: upstream #36887의 OpenCode 1.x SSE 재생은 GOAT의 `ProviderContinuationRequests`로 연결한다. 기존 실행을 이어받을 때 새 native prompt를 보내지 않으며 재생 시한이 지나도 이미 시작한 턴의 종료 이벤트는 발행한다. #35401의 전체 접근 규칙은 자식이 상속할 `external_directory` 허용을 명시한다. 자식 세션의 `goatPermissionBase`는 다음 prompt를 보내기 전에 현재 정책으로 교체하고 native deny는 보존한다. 재시작 후에도 자식 권한을 갱신한다. Stop에서 루트 abort가 실패한 경우와 자식 정리만 실패한 경우를 구분한다. 후자의 경우 U12가 추적하는 자식을 자체 종료 증거가 올 때까지 실행 중으로 둔다.
 
 ### `orchestrator-goat-modules` Orchestrator의 GOAT 명령 모듈
 
@@ -236,6 +248,12 @@ G13 `goat-copy`, G14 `launch-watch`.
 - 커밋: #3519 (사이클 261114 다음 PR, lane N16)
 - 경로: `packages/source-control-github/src/server/gitHubPullRequestEvents.ts`, `apps/server/src/orchestration-v2/PullRequestWatchReactor.ts`, `apps/server/src/orchestration-v2/goat/PullRequestEventFeeds.ts`, `apps/server/src/pullRequest/PullRequestService.ts`
 - 정책: upstream `4e1be34436`·`e0d6aadb88`을 GitHub 앱 로그인(`0c80751701`, 받지 않음) 대신 GOAT 호스트 자격 증명으로 받았다. upstream이 `gitHubPullRequestEvents.ts`나 `PullRequestWatchReactor.ts`를 바꾸면 그 변경을 받은 뒤 다음을 다시 얹는다. 일시 정지는 자격 증명 지문(토큰의 해시)으로 묶는다. 구독 응답 표: 401·403·그 밖의 4xx는 그 자격 증명 1시간, 404는 그 PR 1시간, 422는 10분, 429와 5xx는 기존 경로. 스트림이 429가 아닌 4xx로 답하면 피드를 멈추고 그 PR을 1시간 정지한다. 정지 확인과 구독 POST는 한 permit 세마포어 안에서 돈다. `events_url`이 `https://api.github.com` 밖이거나 본문이 풀리지 않으면 id로 DELETE하고 정지한다. SSE는 `Sse.makeParser`로 읽어 `retry:`를 무시하고 10 MiB 상한을 지킨다. DELETE는 5초, 스트림 헤더는 45초 기한이다. 피드 상한 64, 20초 settle(`Stream.debounce`), 상한 선택은 GOAT 모듈 `goat/PullRequestEventFeeds.ts`에 있고 reactor에는 import 한 줄과 `follow`가 남는다. 상한은 이벤트 피드가 있는 공급자의 PR만 센다(`PullRequestService.followsChanges`, upstream `changes` 옆의 GOAT 메서드). 이유와 시험은 lane 기록 `devlog/_chase/261114_lanes/next-N16.md`에 있다.
+
+### `pr-watch-wakes` PR watch 깨우기와 thread 읽기의 watch 상태
+
+- 커밋: #3700 (사이클 261114 next3 통합 PR, lane K1)
+- 경로: `apps/server/src/orchestration-v2/goat/PullRequestWatchWakes.ts`, `apps/server/src/orchestration-v2/goat/PullRequestDigest.ts`, `apps/server/src/orchestration-v2/goat/PullRequestWatchSync.ts`, `apps/server/src/orchestration-v2/PullRequestWatchReactor.ts`, `packages/contracts/src/pullRequestWatchSync.ts`, `packages/contracts/src/orchestratorMcpThreadPullRequest.ts`
+- 정책: upstream `0af2d21647`·`1de3c3c68c`의 알림 source stamp(`pullRequest`, `otherPullRequests`, `section`)는 받지 않는다. GOAT는 깨우기 message id에 PR, check head, 끝난 watch 표시를 담아 바뀌는 순간 큐의 깨우기를 버리거나 고쳐 쓰고, 한 pass에서 바뀐 여러 PR은 내부 명령의 `others[]`로 묶어 PR별 notice가 든 digest 하나로 보낸다. upstream이 stamp 경로를 바꾸면 그 변경은 받지 않고 같은 규칙을 message id 경로에 얹는다. thread 읽기 PR 항목의 `watching`·`watchStartedAt`(upstream `1df9c91230`)은 upstream과 달리 optional이다. CLI(`apps/server/src/cli/thread.ts`)와 다른 호스트를 읽는 fleet health(`apps/server/src/fleet/health/Health.ts`)가 더 오래된 서버의 결과를 엄격한 schema로 풀기 때문이다. upstream `072254ddd3`의 baseline에서 check와 승인 알림은 따로 끝난다(`apps/server/src/orchestration-v2/pullRequestWatch.ts`). 승인 조회에 실패한 fork PR은 한 번의 조회에서 head SHA와 실제 check를 함께 읽을 때까지 check baseline을 유지한다. 첫 실제 check가 이미 실패했다면 기록만 한다. 이후 같은 head에서 새로 실패한 check는 깨우고, 승인 알림은 조회가 될 때까지 baseline에 남는다.
 
 ### `remote-reports` 원격 보고와 원격 위임
 
@@ -272,6 +290,18 @@ G13 `goat-copy`, G14 `launch-watch`.
 - 경로: `apps/server/src/persistence/Migrations*`, `ProjectionStore.ts`, `apps/server/src/http.ts`, `packages/contracts/src/environment*`
 - 정책: 아래 마이그레이션 규칙.
 
+### `server-update-tests` 서버 업데이트 테스트 파일
+
+- 커밋: #3700 (사이클 261114 next3, K7 행 4)
+- 경로: `packages/client-runtime/src/state/{server.updateResume.test.ts,serverUpdate.ts,server.test.ts}`
+- 정책: upstream `state/server.test.ts`의 서버 업데이트 묶음("accepted server update recovery", "launcher update resume")은 GOAT에서 `serverUpdate.ts` 옆 `server.updateResume.test.ts`에 있다. `server.ts`가 예산에 닿아 업데이트 도우미를 `serverUpdate.ts`로 옮겼고, 테스트가 모듈을 따라갔다. upstream이 이 두 묶음을 고치면 그 hunk를 이 파일에 적용한다. 나머지 `server.test.ts` 변경은 그대로 받는다.
+
+### `service-launcher-protocol` launcher protocol 4의 보장은 선택 필드로
+
+- 커밋: next3 N10 (upstream d0d0608b6b, e805ce3712)
+- 경로: `apps/server/src/cloud/serviceProtocol.ts`, `apps/server/src/serviceLauncher.ts`, `apps/server/src/serviceUnitRepoint.ts`
+- 정책: upstream은 protocol 4에서 durable state와 child context의 `protocol`을 4로 바꾼다. GOAT는 둘 다 3으로 두고, launcher의 보장(selection lease, unit repoint)은 context의 선택 필드 `launcherProtocol: 4`(`SERVICE_LAUNCHER_GUARANTEES`)로 알린다. 이유: 출시된 protocol-3 runtime(v0.1.10 `decodeServiceLauncherContext`)은 `protocol`이 3이 아니면 context를 거절하고 서버가 뜨지 않는다. 재시작된 새 launcher 아래에서 probation rollback이 protocol-3 runtime으로 돌아가면 그 기계는 시작하지 못한다(coordinator 판정 D1 B, `devlog/_chase/261114_lanes/next3-N10.md`). upstream의 protocol 상수, `isSupportedLauncherProtocol`, state의 protocol 4 정규화를 받을 때 이 형식을 유지하고, launcher 보장이 필요한 코드는 `launcherProtocol`을 읽는다.
+
 ### `session-ended-check` 쿠키 탭의 끝난 세션 판별
 
 - 커밋: #3592
@@ -289,11 +319,29 @@ G13 `goat-copy`, G14 `launch-watch`.
 - 경로: `packages/ssh/src/tunnel.ts`, `apps/server/src/sshRemote`, `apps/server/src/cli/{sshHelper,sshRuntimeHelperCommands,sshRuntimeProbes,sshRuntimeSupervisor}.ts`, `apps/server/src/mcp/toolkits/ssh`, `apps/desktop/src/ssh`
 - 정책: GOAT가 `tunnel.ts`를 크게 다시 썼다. upstream ssh 변경은 의도를 GOAT 코드에 손으로 옮긴다. 충돌 위험이 가장 높다. upstream의 설치 lock 수정(#20059, uutils mkdir)은 GOAT lock이 rename으로 게시해 해당 없으므로 받지 않았다 (사이클 261020). `__ssh-helper`의 GOAT 하위 명령은 `cli/sshRuntimeProbes.ts`(protocol, activity, compat, drain 등)와 `cli/sshRuntimeSupervisor.ts`(supervise)에 있고 `cli/sshRuntimeHelperCommands.ts`가 목록과 export를 모은다. `cli/sshHelper.ts`는 upstream에 import, 하위 명령 spread, re-export만 더한다(#827). re-export는 tunnel fixture가 `sshHelper.ts`를 URL로 불러오거나 묶기 때문에 남긴다. upstream이 `sshHelper.ts`를 바꾸면 upstream을 받고 이 세 줄을 다시 얹는다.
 
+### `terminal-retained-history` 터미널 attach 기록 자르기
+
+- 커밋: #3700 (사이클 261114 next3, K7 행 9)
+- 경로: `packages/contracts/src/terminal.ts`, `packages/client-runtime/src/state/terminalOutput.ts`, `apps/server/src/terminal/{retainedAttachHistory,Manager}.ts`
+- 정책: upstream c9f0caca1b의 `retainedTerminalHistory`는 바이트로만 자른다. GOAT의 같은 함수는 자른 자리가 제어 시퀀스 안이면 그 시퀀스의 나머지도 버린다. 클라이언트 `trimBufferToBytes`에 있던 GOAT 동작을 그대로 옮겼다. 서버가 upstream 방식으로 자르면 클라이언트는 시퀀스 중간에서 시작하는 기록을 받고, 그것을 알아챌 수 없어 나머지를 글자로 찍는다. upstream이 이 함수를 바꾸면 바이트 자르기만 받고 시퀀스 단계는 남긴다. `Manager.ts`에는 `attachOutputStream`의 두 listener를 `retainedAttachHistory.ts`로 감싸는 줄과 import 하나만 둔다.
+
+### `thread-apply-defect-resume` 적용하다 깨진 스레드 구독은 새 스냅샷으로
+
+- 커밋: #3700 (사이클 261114 next3, K7 수정 라운드)
+- 경로: `packages/client-runtime/src/state/{threads,threadSubscriptionRecovery}.ts`
+- 정책: upstream de21fbcff3은 이벤트를 적용하다 defect가 나면 구독을 다시 연다. 하지만 커서(`lastSequence`)는 적용 전에 이미 앞으로 가 있어서, 다시 열 때 적용하지 못한 묶음을 건너뛴 채 이어 받는다. GOAT는 그 재시작 뒤 첫 구독에서 `afterSequence`를 빼서 새 스냅샷으로 상태를 바꾼다. 커서 쓰기를 적용 뒤로 옮기지 않은 이유: 그러면 같은 묶음을 다시 받아 같은 곳에서 또 깨진다. upstream이 이 복구를 바꾸면 받고 이 플래그를 다시 얹는다.
+
 ### `thread-link-lookup` 불러오지 않은 스레드 링크의 제목과 프로젝트
 
 - 커밋: next3 K10 (upstream 23e3465ec6)
 - 경로: `packages/contracts/src/threadFamilyLookup.ts`, `apps/server/src/orchestration-v2/ThreadFamilyLookup.ts`, `packages/client-runtime/src/state/threadLineageLookup.ts`, `apps/web/src/state/threadLinkLookup.ts`, `apps/mobile/src/state/threadLinkLookup.ts`
 - 정책: upstream의 `orchestration.getThreadLinkMetadata` RPC와 `threadLinkMetadata` capability는 들이지 않는다. GOAT는 같은 답을 `getThreadFamily`의 lookupOnly 읽기(`lookupTitles` 옆 `lookupProjectIds`, 100개 한도)로 주고, 한 메시지의 링크를 한 번의 paged 읽기로 묻는다. 다음 사이클은 upstream의 그 메서드와 이를 쓰는 변경을 이 읽기로 대신한다고 표시하고 포트하지 않는다. upstream의 환경을 담은 링크와 그 도달 검사(1c3d5f7e82)는 GOAT 링크가 스레드 id만 담는 동안 해당 없다.
+
+### `title-regeneration-failure-text` 제목 다시 만들기 실패 문구
+
+- 커밋: #3700 (사이클 261114 next3, K7 수정 라운드)
+- 경로: `apps/server/src/orchestration-v2/ThreadTitleRegenerationService.ts`
+- 정책: upstream 1c9ea568a1은 실패 결과에 공급자 `TextGenerationError.detail`의 마지막 줄을 담는다. CLI라면 그 줄은 stderr나 stdout 원문이라 요청 id, 가린 키 조각, 되풀이된 대화 등 무엇이든 될 수 있고, GOAT에서는 저장된 이벤트, 셸, 토스트, MCP 스레드 상세까지 간다. 계획은 오늘 이상의 공급자 문구를 내보내지 않는다고 했다. 그래서 GOAT는 서버가 쓴 문장만 저장한다: 이미 있는 고정 문장(프로젝트 없음, 메시지 없음, 2분 초과)과, 그 밖의 실패에는 "Title generation failed.". 원문은 마스킹된 서버 로그에만 남는다. upstream이 이 실패 문구를 바꾸면 받고 이 규칙을 다시 얹는다.
 
 ## 깨끗하게 머지되고도 깨지는 것
 

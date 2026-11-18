@@ -12,11 +12,20 @@ export function sessionScopedArtifactThreadId(
     case "runtime_request.updated":
       return event.runtimeRequest.providerTurnId === null ? event.threadId : undefined;
     case "node.updated":
+      if (event.sessionScoped === true && event.node.kind === "subagent")
+        return event.node.threadId;
       return event.node.runId === null && event.node.runtimeRequestId !== null
         ? event.node.threadId
         : undefined;
+    case "subagent.updated":
+      return event.sessionScoped === true && event.subagent.origin === "provider_native"
+        ? event.subagent.threadId
+        : undefined;
     case "turn_item.updated":
-      if (event.turnItem.type === "command_execution")
+      if (
+        event.turnItem.type === "command_execution" ||
+        (event.turnItem.type === "subagent" && event.turnItem.origin === "provider_native")
+      )
         return event.sessionScoped === true ? event.turnItem.threadId : undefined;
       return event.turnItem.runId === null &&
         (event.turnItem.type === "approval_request" || event.turnItem.type === "user_input_request")
@@ -29,5 +38,4 @@ export function sessionScopedArtifactThreadId(
 
 /** Background snapshots persist only into threads still attached to the session. */
 export const needsAttached = (event: ProviderAdapter.ProviderAdapterV2Event) =>
-  event.type === "provider_thread.updated" ||
-  (event.type === "turn_item.updated" && event.turnItem.type === "command_execution");
+  "sessionScoped" in event && event.sessionScoped === true;

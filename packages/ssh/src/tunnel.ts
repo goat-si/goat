@@ -1,7 +1,21 @@
+import { SHARED_HOME_UPDATE_WAIT } from "./sharedHomeUpdateWait.ts";
 import {
-  LEGACY_SSH_ARCHIVE_VERSION_KEY,
-  LEGACY_SSH_NODE_SCRIPT_PATH_KEY,
-} from "@goat/contracts/legacyT3Names";
+  EXACT_ARCHIVE_VERSION,
+  SshInvalidArchiveVersionError,
+  SshMissingRunnerError,
+} from "./runnerErrors.ts";
+export { SshInvalidArchiveVersionError, SshMissingRunnerError } from "./runnerErrors.ts";
+import {
+  existingOnly,
+  refuseReplacement,
+  restrictSelection,
+  runnerFor,
+  selectionFor,
+  existingRunnerError,
+  launchFlags,
+  restrictedRunner,
+} from "./existingOnly.ts";
+import { LEGACY_SSH_ARCHIVE_VERSION_KEY } from "@goat/contracts/legacyT3Names";
 import type {
   DesktopSshEnvironmentReadyOrPending,
   DesktopSshPreparationProgress,
@@ -16,7 +30,6 @@ import type {
   SshRuntimePhase,
 } from "@goat/contracts";
 import {
-  SshRuntimePendingReplacementSchema,
   ORCHESTRATION_PROTOCOL_VERSION,
   RUNTIME_DRAIN_DEFAULT_GRACE_SECONDS,
   RUNTIME_DRAIN_MAX_GRACE_SECONDS,
@@ -28,7 +41,6 @@ import { cliReleaseDownloadBaseUrl } from "@goat/shared/cliRelease";
 import * as KeyedLock from "@goat/shared/KeyedLock";
 import * as NetService from "@goat/shared/Net";
 import * as HostProcess from "@goat/shared/HostProcess";
-import { fromLenientJson } from "@goat/shared/schemaJson";
 import { compareRuntimeBuilds } from "@goat/shared/semver";
 import * as Option from "effect/Option";
 import * as Clock from "effect/Clock";
@@ -41,7 +53,6 @@ import * as Fiber from "effect/Fiber";
 import * as FileSystem from "effect/FileSystem";
 import * as Layer from "effect/Layer";
 import * as Path from "effect/Path";
-import * as Schema from "effect/Schema";
 import * as Scope from "effect/Scope";
 import * as Stream from "effect/Stream";
 import { HttpClient } from "effect/http";
@@ -53,7 +64,7 @@ import {
   supersededPreparation,
   type PreparationAdmission,
 } from "./ensureFlight.ts";
-import { REMOTE_ARCHIVE_EXTRACT, REMOTE_ARCHIVE_FETCH } from "./remoteArchiveScripts.ts";
+import { REMOTE_RUNNER_SCRIPT } from "./remoteRunnerScript.ts";
 import { REMOTE_NODE_ENGINE_CHECK_SCRIPT } from "./remoteNodeEngineCheck.ts";
 import { waitForTunnelReady } from "./tunnelForwardReadiness.ts";
 import { ensureSshMaster } from "./master.ts";
@@ -98,10 +109,12 @@ import {
   type RemoteGoatRunnerOptions,
   type SshRuntimeProgressCallback,
 } from "./remoteRuntime.ts";
+import { buildRemoteContendedOutput, decodeRemoteLaunchOutput } from "./remoteLaunchResult.ts";
+import { remoteLoginLaunchArgs } from "./remoteLoginShell.ts";
 import { REMOTE_PROTOCOL_TOKEN_SCRIPT, REMOTE_RUNNER_HINT_SCRIPT } from "./runtimeFactsScripts.ts";
 import { buildRemoteStopScript } from "./remoteStopScript.ts";
 export { buildRemoteStopScript };
-import { REMOTE_RUNTIME_PUBLISH_SCRIPT, remoteUploadCommand } from "./runtimeInstallScripts.ts";
+import { remoteUploadCommand } from "./runtimeInstallScripts.ts";
 import { REMOTE_NODE_ENV_SCRIPT } from "./remoteNodeEnvScript.ts";
 import { runtimePreparationError } from "./runtimePreparationErrors.ts";
 import { buildRemoteRuntimeProbeScript, decodeRemoteRuntimeProbe } from "./runtimeProbe.ts";
@@ -272,6 +285,7 @@ interface SshAuthAttemptInput<T> extends SshAuthOperationInput<T> {
   readonly authSecret: string | null;
 }
 export interface SshEnvironmentEnsureOptions {
+  readonly installation?: "existing-only";
   readonly preparedAttachmentId?: string;
   readonly onPreparationProgress?: (progress: DesktopSshPreparationProgress) => void;
   readonly onPreparationAdmission?: (admission: PreparationAdmission) => void;
@@ -381,35 +395,9 @@ export interface SshEnvironmentManagerShape
   >;
 }
 
-const RemoteLaunchResult = Schema.Union([
-  Schema.Struct({
-    status: Schema.Literal("ready"),
-    remotePort: Schema.Int.check(Schema.isBetween({ minimum: 1, maximum: 65535 })),
-    serverKind: Schema.optionalKey(Schema.Literals(["external", "managed"])),
-    selectedVersion: Schema.String,
-    refresh: Schema.optionalKey(Schema.Literal("replaced")),
-    pending: Schema.optionalKey(SshRuntimePendingReplacementSchema),
-  }),
-  Schema.Struct({ status: Schema.Literal("pending"), pending: SshRuntimePendingReplacementSchema }),
-]);
-
-const decodeRemoteLaunchResult = Schema.decodeEffect(fromLenientJson(RemoteLaunchResult));
-
-const decodeRemoteLaunchOutput = (stdout: string) =>
-  decodeRemoteJsonOutput(stdout, decodeRemoteLaunchResult);
-
 function normalizeSshErrorMessage(stderr: string, fallbackMessage: string): string {
   const cleaned = stderr.trim();
   return cleaned.length > 0 ? cleaned : fallbackMessage;
-}
-
-function buildRemoteContendedOutput(
-  pending: Pick<SshRuntimePendingReplacement, "replacement" | "requestedVersion" | "liveVersion">,
-) {
-  const fields = JSON.stringify({ reason: "contended", ...pending }).slice(1, -1);
-  return `lock_pending_fields=${shellSingleQuote(fields)}
-if [ "$LOCK_DETAIL" = recovery-stale ]; then lock_pending_fields="$lock_pending_fields,"'"detail":"recovery-stale"'; fi
-printf '{"status":"pending","pending":{%s}}\\n' "$lock_pending_fields"`;
 }
 
 export { describeReadinessCause };
@@ -519,184 +507,8 @@ function probe() {
 })().catch(() => process.exit(1));
 `;
 
-const REMOTE_RUNNER_SCRIPT = `#!/bin/sh
-set -eu
-GOAT_NODE_SCRIPT_PATH=@@GOAT_NODE_SCRIPT_PATH@@
-# Older clients inspect these literal declarations without evaluating the runner.
-${LEGACY_SSH_NODE_SCRIPT_PATH_KEY}=@@GOAT_NODE_SCRIPT_PATH@@
-GOAT_ARCHIVE_VERSION=@@GOAT_ARCHIVE_VERSION@@
-${LEGACY_SSH_ARCHIVE_VERSION_KEY}=@@GOAT_ARCHIVE_VERSION@@
-# End of the declarations GOAT reads without running this runner.
-${REMOTE_RUNTIME_PUBLISH_SCRIPT}@@GOAT_NODE_ENV_SCRIPT@@
-if [ -n "$GOAT_NODE_SCRIPT_PATH" ]; then
-  # Dev mode: a source checkout on the remote. This is the only path that
-  # needs Node, so Node discovery runs here and nowhere else.
-  ensure_remote_node_path || true
-  if ! command -v node >/dev/null 2>&1; then
-    printf 'Remote host is missing node on PATH. Install Node or configure a supported version manager for non-interactive shells.\\n' >&2
-    exit 1
-  fi
-  exec node "$GOAT_NODE_SCRIPT_PATH" "$@"
-fi
-if [ -z "$GOAT_ARCHIVE_VERSION" ]; then
-  printf 'No GOAT release version was provided for the remote runtime.\\n' >&2
-  exit 1
-fi
-# Self-contained release archive: no Node, npm, or compiler on the remote.
-# Unpacked into the pinned-runtime layout so \`goat service install\` reuses it.
-GOAT_RELEASE_BASE_URL=@@GOAT_RELEASE_BASE_URL@@
-GOAT_RUNTIME_DIR="$HOME/.goat/runtime/goat/versions/$GOAT_ARCHIVE_VERSION"
-goat_runtime_ready() {
-  [ -x "$GOAT_RUNTIME_DIR/goat" ] && [ "$(cat "$GOAT_RUNTIME_DIR/.install-complete" 2>/dev/null)" = "$GOAT_ARCHIVE_VERSION" ]
-}
-if ! goat_runtime_ready; then
-  mkdir -p "$HOME/.goat/runtime/goat/versions"
-  # Cleanup takes this mutex exclusively; installs may still run concurrently.
-  if [ "$(uname -s)" = Linux ] && command -v flock >/dev/null 2>&1; then
-    GOAT_MAINTENANCE="$HOME/.goat/runtime/goat/versions/.maintenance.lock"
-    [ ! -L "$GOAT_MAINTENANCE" ] || exit 1
-    exec 9>"$GOAT_MAINTENANCE"
-    flock -w @@GOAT_ARCHIVE_LOCK_WAIT_SECONDS@@ -s 9
-  fi
-  GOAT_LOCK="$HOME/.goat/runtime/goat/versions/.$GOAT_ARCHIVE_VERSION.install.lock"
-  # Publish a nonempty directory with an immutable pid and unique token by
-  # same-filesystem rename. mv can nest it in an existing lock: only a token
-  # at the lock root proves acquisition; losers clean their candidate and
-  # retry. There is no mkdir-to-pid window at the shared lock path.
-  # Reclaimers cd into the generation BEFORE reading its pid, and delete
-  # only relative contents of that directory. The final rmdir cannot remove
-  # a newer generation because every published lock is already nonempty.
-  # A reclaim counts only once the lock is gone; a lock that cannot be
-  # entered or emptied waits like a live one, so the timeout still applies.
-  # Legacy pid-less locks retain their short grace period.
-  GOAT_LOCK_CANDIDATE=""
-  GOAT_LOCK_TOKEN=""
-  GOAT_STAGING=""
-  goat_remove_lock_contents() {
-    find . ! -name . -prune -exec rm -rf {} \\; 2>/dev/null || true
-    rmdir "$GOAT_LOCK" 2>/dev/null || [ ! -e "$GOAT_LOCK" ]
-  }
-  goat_lock_cleanup() {
-    (
-      cd "$GOAT_LOCK" 2>/dev/null || exit 0
-      [ -n "$GOAT_LOCK_TOKEN" ] && [ -f "./$GOAT_LOCK_TOKEN" ] || exit 0
-      goat_remove_lock_contents || true
-    ) || true
-    if [ -n "$GOAT_LOCK_CANDIDATE" ]; then
-      rm -rf "$GOAT_LOCK_CANDIDATE" "$GOAT_LOCK/\${GOAT_LOCK_CANDIDATE##*/}"
-    fi
-    if [ -n "$GOAT_STAGING" ]; then goat_runtime_fs rm -rf "$GOAT_STAGING" || :; fi
-  }
-  trap 'goat_exit=$?; goat_lock_cleanup || true; exit "$goat_exit"' 0
-  trap 'exit 1' 1 2 3 15
-  goat_reclaim_lock() (
-    if ! cd "$GOAT_LOCK" 2>/dev/null; then
-      if [ -e "$GOAT_LOCK" ]; then exit 3; fi
-      exit 0
-    fi
-    GOAT_LOCK_OWNER="$(cat pid 2>/dev/null || true)"
-    if [ -n "$GOAT_LOCK_OWNER" ]; then
-      if kill -0 "$GOAT_LOCK_OWNER" 2>/dev/null; then exit 2; fi
-    elif [ "$GOAT_LOCK_UNOWNED" -lt 4 ]; then
-      exit 1
-    fi
-    goat_remove_lock_contents || exit 3
-  )
-  GOAT_LOCK_WAITED=0
-  GOAT_LOCK_UNOWNED=0
-  while :; do
-    GOAT_LOCK_CANDIDATE="$(mktemp -d "$GOAT_LOCK.candidate-$$-XXXXXX")"
-    GOAT_LOCK_TOKEN="\${GOAT_LOCK_CANDIDATE##*/}"
-    if { printf '%s\\n' "$$" > "$GOAT_LOCK_CANDIDATE/pid" &&
-         : > "$GOAT_LOCK_CANDIDATE/$GOAT_LOCK_TOKEN"; } 2>/dev/null; then
-      mv "$GOAT_LOCK_CANDIDATE" "$GOAT_LOCK" 2>/dev/null || true
-      if [ -f "$GOAT_LOCK/$GOAT_LOCK_TOKEN" ]; then break; fi
-    fi
-    rm -rf "$GOAT_LOCK_CANDIDATE" "$GOAT_LOCK/$GOAT_LOCK_TOKEN"
-    GOAT_LOCK_CANDIDATE=""
-    if [ ! -e "$GOAT_LOCK" ]; then
-      # Publication failed with no competing lock; wait so a persistent
-      # failure reaches the timeout.
-      :
-    elif goat_reclaim_lock; then continue
-    else
-      GOAT_LOCK_STATUS=$?
-      case "$GOAT_LOCK_STATUS" in
-        1) GOAT_LOCK_UNOWNED=$((GOAT_LOCK_UNOWNED + 1)) ;;
-        2) GOAT_LOCK_UNOWNED=0 ;;
-      esac
-    fi
-    if [ "$GOAT_LOCK_WAITED" -ge @@GOAT_ARCHIVE_LOCK_WAIT_SECONDS@@ ]; then
-      printf 'Another GOAT %s installation has held %s for too long.\\n' "$GOAT_ARCHIVE_VERSION" "$GOAT_LOCK" >&2
-      exit 1
-    fi
-    sleep 1
-    GOAT_LOCK_WAITED=$((GOAT_LOCK_WAITED + 1))
-  done
-fi
-if ! goat_runtime_ready; then
-  # Keep aligned with CLI_ARCHIVE_PLATFORM_KEYS in packages/shared/src/cliRelease.ts.
-  case "$(uname -s) $(uname -m)" in
-    "Darwin arm64") GOAT_PLATFORM_KEY="darwin-arm64" ;;
-    "Linux arm64" | "Linux aarch64") GOAT_PLATFORM_KEY="linux-arm64" ;;
-    "Linux x86_64" | "Linux amd64") GOAT_PLATFORM_KEY="linux-x64" ;;
-    MINGW*" arm64" | MSYS*" arm64" | CYGWIN*" arm64" | MINGW*" aarch64" | MSYS*" aarch64" | CYGWIN*" aarch64") GOAT_PLATFORM_KEY="win32-arm64" ;;
-    MINGW*" x86_64" | MSYS*" x86_64" | CYGWIN*" x86_64") GOAT_PLATFORM_KEY="win32-x64" ;;
-    MINGW*" amd64" | MSYS*" amd64" | CYGWIN*" amd64") GOAT_PLATFORM_KEY="win32-x64" ;;
-    *) printf 'Remote host %s %s has no GOAT release archive.\n' "$(uname -s)" "$(uname -m)" >&2; exit 1 ;;
-  esac
-  GOAT_ARCHIVE="goat-$GOAT_ARCHIVE_VERSION-$GOAT_PLATFORM_KEY.tar.gz"
-  case "$GOAT_PLATFORM_KEY" in win32-*) GOAT_ARCHIVE="goat-$GOAT_ARCHIVE_VERSION-$GOAT_PLATFORM_KEY.zip" ;; esac
-  GOAT_STAGING="$(mktemp -d "$HOME/.goat/runtime/goat/versions/.staging-XXXXXX")"
-${REMOTE_ARCHIVE_FETCH}
-  goat_fetch "$GOAT_RELEASE_BASE_URL/v$GOAT_ARCHIVE_VERSION/SHA256SUMS" "$GOAT_STAGING/SHA256SUMS" @@GOAT_ARCHIVE_CHECKSUMS_SECONDS@@
-  goat_fetch "$GOAT_RELEASE_BASE_URL/v$GOAT_ARCHIVE_VERSION/$GOAT_ARCHIVE" "$GOAT_STAGING/$GOAT_ARCHIVE" @@GOAT_ARCHIVE_DOWNLOAD_SECONDS@@
-  GOAT_EXPECTED="$(grep " \\*\\{0,1\\}$GOAT_ARCHIVE$" "$GOAT_STAGING/SHA256SUMS" | cut -d' ' -f1)"
-  if command -v sha256sum >/dev/null 2>&1; then
-    GOAT_ACTUAL="$(sha256sum "$GOAT_STAGING/$GOAT_ARCHIVE" | cut -d' ' -f1)"
-  else
-    GOAT_ACTUAL="$(shasum -a 256 "$GOAT_STAGING/$GOAT_ARCHIVE" | cut -d' ' -f1)"
-  fi
-  if [ -z "$GOAT_EXPECTED" ] || [ "$GOAT_ACTUAL" != "$GOAT_EXPECTED" ]; then
-    printf 'Checksum mismatch for %s.\\n' "$GOAT_ARCHIVE" >&2; exit 1
-  fi
-${REMOTE_ARCHIVE_EXTRACT}
-  rm -f "$GOAT_STAGING/$GOAT_ARCHIVE" "$GOAT_STAGING/SHA256SUMS"
-  # Verify the executable and exact version before replacing a runtime,
-  # including a same-version directory whose completion marker is broken.
-  if ! GOAT_STAGED_VERSION_OUTPUT="$("$GOAT_STAGING/goat" --version)"; then
-    printf 'The goat %s executable does not run on this host.\\n' "$GOAT_ARCHIVE_VERSION" >&2; exit 1
-  fi
-  if [ "$GOAT_STAGED_VERSION_OUTPUT" != "goat v$GOAT_ARCHIVE_VERSION" ]; then
-    printf 'Cannot install goat %s: expected goat v%s, but the archive executable reported "%s". The existing runtime directory and completion marker have been left unchanged. Supply the correct requested archive in the local SSH runtime archive directory or release mirror, then retry.\\n' "$GOAT_ARCHIVE_VERSION" "$GOAT_ARCHIVE_VERSION" "$GOAT_STAGED_VERSION_OUTPUT" >&2
-    exit 1
-  fi
-  if command -v shasum >/dev/null 2>&1; then
-    GOAT_EXECUTABLE_SHA256="$(shasum -a 256 "$GOAT_STAGING/goat" | cut -d' ' -f1)"
-  else
-    GOAT_EXECUTABLE_SHA256="$(sha256sum "$GOAT_STAGING/goat" | cut -d' ' -f1)"
-  fi
-  # Publish provenance with the verified executable, never backfill legacy directories.
-  # The uploader names its source in the environment so run-t3.sh bytes stay source-free:
-  # retained-runner identity compares those bytes across launches.
-  case "\${GOAT_SSH_ARCHIVE_SOURCE:-}" in
-    bundle|cache|gh) GOAT_RECORD_SOURCE="$GOAT_SSH_ARCHIVE_SOURCE" ;;
-    *) GOAT_RECORD_SOURCE=@@GOAT_DOWNLOAD_SOURCE@@ ;;
-  esac
-  printf '%s %s %s %s\\n' "$GOAT_ARCHIVE_VERSION" "$GOAT_EXPECTED" "$GOAT_EXECUTABLE_SHA256" "$GOAT_RECORD_SOURCE" > "$GOAT_STAGING/.install-record"
-  printf '%s\\n' "$GOAT_ARCHIVE_VERSION" > "$GOAT_STAGING/.install-complete"
-  goat_runtime_publish "$GOAT_STAGING" "$GOAT_RUNTIME_DIR" "$GOAT_ARCHIVE_VERSION"
-fi
-if [ -n "\${GOAT_LOCK:-}" ]; then
-  goat_lock_cleanup
-  trap - 0 1 2 3 15
-fi
-exec 9>&-
-exec "$GOAT_RUNTIME_DIR/goat" "$@"
-`;
-
 const REMOTE_LAUNCH_SCRIPT = `set -eu
-cd "$HOME" 2>/dev/null || cd /
+@@GOAT_SHARED_HOME_UPDATE_WAIT@@cd "$HOME" 2>/dev/null || cd /
 @@GOAT_NODE_ENV_SCRIPT@@
 STATE_KEY="$1"
 STATE_DIR="$HOME/.goat/ssh-launch/$STATE_KEY"
@@ -950,7 +762,7 @@ while [ -z "$REMOTE_PORT" ]; do
     fi
     exit 1
   fi
-  recheck_selected_before_use
+@@GOAT_SHARED_HOME_UPDATE_RECHECK@@  recheck_selected_before_use
   if [ "$LIVE_STATUS" != none ]; then
     printf 'A server appeared before launch; reconnect without replacing it.\\n' >&2; exit 1
   fi
@@ -1037,27 +849,6 @@ fi
 @@GOAT_READY_BASELINE@@printf '{"status":"ready","remotePort":%s,"serverKind":"%s","selectedVersion":"%s"%s}\n' "$REMOTE_PORT" "\${REMOTE_MANAGED:-managed}" "$SELECTED_VERSION" "$refresh_fields"
 
 `;
-
-export class SshInvalidArchiveVersionError extends Schema.TaggedError<SshInvalidArchiveVersionError>()(
-  "SshInvalidArchiveVersionError",
-  { archiveVersion: Schema.String },
-) {
-  override get message(): string {
-    return `'${this.archiveVersion}' is not an exact GOAT version and cannot name a runtime directory.`;
-  }
-}
-
-// The version names a runtime directory, so it must be one exact SemVer segment.
-const EXACT_ARCHIVE_VERSION =
-  /^(?:0|[1-9]\d*)\.(?:0|[1-9]\d*)\.(?:0|[1-9]\d*)(?:-[0-9A-Za-z-]+(?:\.[0-9A-Za-z-]+)*)?$/u;
-export class SshMissingRunnerError extends Schema.TaggedError<SshMissingRunnerError>()(
-  "SshMissingRunnerError",
-  {},
-) {
-  override get message(): string {
-    return "A remote goat runner needs an archive version or a node script path.";
-  }
-}
 
 export function buildRemoteGoatRunnerScript(input?: RemoteGoatRunnerOptions): string {
   const nodeScriptPath = absoluteRemoteNodeScriptPath(input);
@@ -1152,18 +943,18 @@ capture_reconnect_baseline() {
     GOAT_EXPECTED_ARCHIVE_VERSION: shellSingleQuote(selection.version ?? ""),
     GOAT_SELECTED_VERSION: shellSingleQuote(selection.version ?? ""),
     GOAT_REQUESTED_VERSION: shellSingleQuote(selection.requestedVersion ?? ""),
-    GOAT_REQUIRE_INSTALLED: selection.requireInstalled ? "1" : "0",
+    GOAT_REQUIRE_INSTALLED: launchFlags(input, selection).requireInstalled ? "1" : "0",
     GOAT_PRESERVE_SELECTED_RUNNER: preserve ? "1" : "0",
     GOAT_ALLOW_OWNED_UPGRADE:
-      verifyOwnedBeforePublication && selection.mayUpgradeOwnedServer ? "1" : "0",
+      verifyOwnedBeforePublication && launchFlags(input, selection).upgrade ? "1" : "0",
     GOAT_ALLOW_LEGACY_ADOPTION:
-      verifyOwnedBeforePublication && selection.mayUpgradeOwnedServer && !isNodeScriptRunner(input)
+      verifyOwnedBeforePublication &&
+      launchFlags(input, selection).upgrade &&
+      !isNodeScriptRunner(input)
         ? "1"
         : "0",
     GOAT_REFRESH_IF_IDLE:
-      verifyOwnedBeforePublication && selection.mayUpgradeOwnedServer && selection.refreshIfIdle
-        ? "1"
-        : "0",
+      verifyOwnedBeforePublication && launchFlags(input, selection).refresh ? "1" : "0",
     GOAT_REFRESH_LIVE_VERSION: shellSingleQuote(selection.expectedLiveVersion ?? ""),
     GOAT_LIVE_RUNNER_SHA256: shellSingleQuote(selection.expectedLiveRunnerSha256 ?? ""),
     GOAT_CAPTURE_RUNNING_RUNNER: verifyOwnedBeforePublication
@@ -1191,7 +982,15 @@ capture_reconnect_baseline() {
     GOAT_VERIFY_OWNED_BEFORE_PUBLICATION: verifyOwnedBeforePublication
       ? VERIFY_OWNED_BEFORE_PUBLICATION + "\n"
       : "",
-    GOAT_RUNNER_INSTALL: preserve ? KEEP_EXISTING_RUNNER_INSTALL : REPLACE_RUNNER_INSTALL,
+    GOAT_RUNNER_INSTALL: existingOnly(input)
+      ? KEEP_EXISTING_RUNNER_INSTALL.replace(
+          "Selected retained runner changed before publication; reconnect.",
+          "GOAT_EXISTING_RUNNER_REQUIRED",
+        )
+      : preserve
+        ? KEEP_EXISTING_RUNNER_INSTALL
+        : REPLACE_RUNNER_INSTALL,
+    GOAT_SYNC_RUNNER_ALIAS: existingOnly(input) ? ":" : "sync_runner_alias || :",
   });
 }
 
@@ -1200,8 +999,13 @@ export function buildRemoteLaunchScript(
   selection = requestedRuntime(input),
   reconnect = false,
   captureBaseline = false,
+  waitForDesktopUpdate = false,
 ): string {
   return applyScriptPlaceholders(REMOTE_LAUNCH_SCRIPT, {
+    GOAT_SHARED_HOME_UPDATE_WAIT: waitForDesktopUpdate
+      ? SHARED_HOME_UPDATE_WAIT + "goat_wait_shared_home_update\n"
+      : "",
+    GOAT_SHARED_HOME_UPDATE_RECHECK: waitForDesktopUpdate ? "  goat_wait_shared_home_update\n" : "",
     GOAT_ARCHIVE_MODE: isNodeScriptRunner(input) ? "0" : "1",
     GOAT_NODE_SCRIPT_PATH: shellSingleQuote(input?.nodeScriptPath?.trim() || ""),
     GOAT_OWNED_IDENTITY: REMOTE_OWNED_IDENTITY_SCRIPT,
@@ -1264,7 +1068,7 @@ export type {
 function buildReconnectProbeScript(selected: PreparedRemoteRuntime) {
   return `reconnect_probe() {
 sh -s -- "\${1:-}" <<'GOAT_RECONNECT_PROBE_SCRIPT'
-${buildRemoteRuntimeProbeScript(selected.requestedVersion ?? "", REMOTE_RUNTIME_STATE_KEY, false, true, selected.runner?.ownRuntimeVersion)}
+${buildRemoteRuntimeProbeScript(selected.requestedVersion ?? "", REMOTE_RUNTIME_STATE_KEY, false, true, selected.runner?.ownRuntimeVersion, false, true)}
 GOAT_RECONNECT_PROBE_SCRIPT
 }`;
 }
@@ -1329,7 +1133,7 @@ fi`
 }
 reconnect_launch() {
 sh -s -- "$1" "\${OWNER:-}" <<'GOAT_RECONNECT_LAUNCH_SCRIPT'
-${buildRemoteLaunchScript(selected.runner, expectedProbe === undefined ? selected : { ...selected, mayUpgradeOwnedServer: false }, expectedProbe !== undefined, expectedProbe === undefined)}
+${buildRemoteLaunchScript(selected.runner, expectedProbe === undefined ? selected : { ...selected, mayUpgradeOwnedServer: false }, expectedProbe !== undefined, expectedProbe === undefined, true)}
 GOAT_RECONNECT_LAUNCH_SCRIPT
 }
 ${
@@ -1337,7 +1141,7 @@ ${
     ? `if [ "$reconnect_successor" = 1 ]; then
 reconnect_launch() {
 sh -s -- "$1" "$OWNER" <<'GOAT_RECONNECT_SUCCESSOR_SCRIPT'
-${buildRemoteLaunchScript(successor.runner, successor, true)}
+${buildRemoteLaunchScript(successor.runner, successor, true, false, true)}
 GOAT_RECONNECT_SUCCESSOR_SCRIPT
 }
 fi`
@@ -1416,17 +1220,27 @@ export const launchOrReuseRemoteServer = Effect.fn("ssh/tunnel.launchOrReuseRemo
           previousSelection.runner.archiveCommitTime === runner?.archiveCommitTime &&
           (previousSelection.runner.keepExistingRunner === true) ===
             (runner?.keepExistingRunner === true) &&
+          existingOnly(previousSelection.runner) === existingOnly(runner) &&
           previousSelection.upgradeFailure === undefined &&
           previousSelection.updateBlocked === undefined &&
           !isNodeScriptRunner(runner) &&
           runner?.refreshOwnedRuntimeOnFirstConnection !== true &&
           runner?.confirmReplacement !== true;
-        const launch = (selected: PreparedRemoteRuntime, expectedProbe?: string) => {
+        const launch = (selection: PreparedRemoteRuntime, expectedProbe?: string) => {
+          const selected = existingOnly(runner)
+            ? {
+                ...selection,
+                runner: restrictedRunner(selection.runner),
+              }
+            : selection;
           const command = runSshCommand(target, {
-            remoteCommandArgs: ["sh", "-l", "-s", "--", stateKey],
+            remoteCommandArgs:
+              selected.hostPlatform === "win32"
+                ? ["sh", "-l", "-s", "--", stateKey]
+                : remoteLoginLaunchArgs(stateKey),
             stdin:
               isNodeScriptRunner(selected.runner) || selected.hostPlatform === "win32"
-                ? buildRemoteLaunchScript(selected.runner, selected)
+                ? buildRemoteLaunchScript(selected.runner, selected, false, false, true)
                 : buildReconnectLaunchScript(selected, expectedProbe),
             timeoutStage: "runtime-launch",
             timeoutMs: isNodeScriptRunner(selected.runner)
@@ -1434,7 +1248,13 @@ export const launchOrReuseRemoteServer = Effect.fn("ssh/tunnel.launchOrReuseRemo
               : REMOTE_ARCHIVE_LAUNCH_TIMEOUT_MS,
             ...input,
           });
-          return onLaunched === undefined ? restore(command) : command;
+          return (onLaunched === undefined ? restore(command) : command).pipe(
+            Effect.mapError((error) =>
+              error._tag === "SshCommandError"
+                ? existingRunnerError(error, runner, target.alias)
+                : error,
+            ),
+          );
         };
         let folded = canFoldProbe
           ? yield* measureSshReconnectStep(
@@ -1458,7 +1278,14 @@ export const launchOrReuseRemoteServer = Effect.fn("ssh/tunnel.launchOrReuseRemo
         }
         const selected =
           folded !== undefined && previousSelection !== undefined
-            ? { ...previousSelection, uploaded: false, requireInstalled: true }
+            ? {
+                ...previousSelection,
+                runner: existingOnly(runner)
+                  ? restrictedRunner(previousSelection.runner)
+                  : previousSelection.runner,
+                uploaded: false,
+                requireInstalled: true,
+              }
             : yield* restore(
                 prepareRemoteRuntime(
                   target,
@@ -2228,6 +2055,7 @@ const makeSshEnvironmentManager = Effect.fn("ssh/tunnel.SshEnvironmentManager.ma
       runner?.archiveCommitTime,
       runner?.nodeScriptPath,
       runner?.keepExistingRunner === true,
+      runner?.installation,
     ]);
   const { enrichFailure } = makeFailureEnrichment({ managedDirectory, resolvedTargets });
   const setupTerminalFailure = (key: string) => {
@@ -2723,6 +2551,7 @@ const makeSshEnvironmentManager = Effect.fn("ssh/tunnel.SshEnvironmentManager.ma
               Effect.addFinalizer(() =>
                 Effect.gen(function* () {
                   if (
+                    existingOnly(input.runner) ||
                     launchTransferred ||
                     launch.status !== "ready" ||
                     launch.pending !== undefined ||
@@ -2751,12 +2580,16 @@ const makeSshEnvironmentManager = Effect.fn("ssh/tunnel.SshEnvironmentManager.ma
     ).pipe(
       Effect.catchTags({
         SshLaunchError: (error) => {
-          if (error.reason === "runtime-newer") pendingReplacements.delete(input.key);
+          if (!existingOnly(input.runner) && error.reason === "runtime-newer")
+            pendingReplacements.delete(input.key);
           return Effect.fail(error);
         },
         SshCommandError: (error) => {
           // A newer runtime appearing after preparation is refused by the pinned helper's shell guard.
-          if (error.stderr.includes("Remote runtime is newer than this app; update the app."))
+          if (
+            !existingOnly(input.runner) &&
+            error.stderr.includes("Remote runtime is newer than this app; update the app.")
+          )
             pendingReplacements.delete(input.key);
           return Effect.fail(error);
         },
@@ -2833,7 +2666,11 @@ const makeSshEnvironmentManager = Effect.fn("ssh/tunnel.SshEnvironmentManager.ma
     const archiveFailure =
       remoteLaunch.status === "ready" ? remoteLaunch.selectedRuntime.upgradeFailure : undefined;
     const needsArchiveRetry = archiveFailure?.reason === "archive_unavailable";
-    if ((remoteLaunch.pending !== undefined || needsArchiveRetry) && input.runner !== undefined) {
+    if (
+      !existingOnly(input.runner) &&
+      (remoteLaunch.pending !== undefined || needsArchiveRetry) &&
+      input.runner !== undefined
+    ) {
       const previousIntent = pendingReplacements.get(input.key);
       const sameIntent =
         previousIntent !== undefined &&
@@ -2882,10 +2719,12 @@ const makeSshEnvironmentManager = Effect.fn("ssh/tunnel.SshEnvironmentManager.ma
         pendingReplacements.set(input.key, { ...intent, archiveFailure });
       }
     }
-    if (setupTerminalFailure(input.key)) pendingReplacements.delete(input.key);
+    if (!existingOnly(input.runner) && setupTerminalFailure(input.key))
+      pendingReplacements.delete(input.key);
     // The host already runs the requested build (another client, a self-update or a person
     // replaced it), so an intent kept from the older server must not report or retry an update.
     if (
+      !existingOnly(input.runner) &&
       remoteLaunch.status === "ready" &&
       remoteLaunch.pending === undefined &&
       !needsArchiveRetry &&
@@ -2914,7 +2753,7 @@ const makeSshEnvironmentManager = Effect.fn("ssh/tunnel.SshEnvironmentManager.ma
       input.previous.remotePort === remoteLaunch.remotePort &&
       input.previous.selectedRuntime.version === remoteLaunch.selectedRuntime.version
     ) {
-      if (remoteLaunch.pending === undefined && !needsArchiveRetry)
+      if (!existingOnly(input.runner) && remoteLaunch.pending === undefined && !needsArchiveRetry)
         pendingReplacements.delete(input.key);
       // Keep the forward's identity for its finalizer while updating the latest selection.
       input.previous.selectedRuntime = remoteLaunch.selectedRuntime;
@@ -2997,7 +2836,7 @@ const makeSshEnvironmentManager = Effect.fn("ssh/tunnel.SshEnvironmentManager.ma
     yield* Effect.gen(function* () {
       tunnels.set(input.key, tunnelEntry);
       tunnelEntry.reconnectSelection = reconnectSelection;
-      if (remoteLaunch.pending === undefined && !needsArchiveRetry)
+      if (!existingOnly(input.runner) && remoteLaunch.pending === undefined && !needsArchiveRetry)
         pendingReplacements.delete(input.key);
       const spawnerService = yield* ChildProcessSpawner.ChildProcessSpawner;
       const randomService = yield* SecureRandom.SecureRandom;
@@ -3018,6 +2857,7 @@ const makeSshEnvironmentManager = Effect.fn("ssh/tunnel.SshEnvironmentManager.ma
             })
             .pipe(Effect.ignore);
           if (
+            existingOnly(tunnelEntry.selectedRuntime.runner) ||
             !stopRemote ||
             options.leaveRemoteServerRunning === true ||
             // GOAT never stops the app server it only attached to.
@@ -3200,7 +3040,7 @@ const makeSshEnvironmentManager = Effect.fn("ssh/tunnel.SshEnvironmentManager.ma
   > {
     const entry = tunnels.get(key);
     const retainedSelection = takeReconnectSelection(key);
-    const pendingSelection = takePendingReconnectSelection(key);
+    const pendingSelection = existingOnly(runner) ? undefined : takePendingReconnectSelection(key);
     const selection =
       entry?.reconnectSelection ?? retainedSelection ?? capturedSelection ?? pendingSelection;
     if (entry !== undefined) delete entry.reconnectSelection;
@@ -3275,7 +3115,7 @@ const makeSshEnvironmentManager = Effect.fn("ssh/tunnel.SshEnvironmentManager.ma
       const replace =
         entry.attachmentInvalidated === true ||
         entry.uncertainDrain === true ||
-        pendingReplacements.has(key) ||
+        (pendingReplacements.has(key) && !existingOnly(runner)) ||
         runner?.refreshOwnedRuntimeOnFirstConnection === true;
       if (!replace && (yield* keepAnsweringTunnel(key, entry, false, true))) {
         if (
@@ -3569,7 +3409,12 @@ const makeSshEnvironmentManager = Effect.fn("ssh/tunnel.SshEnvironmentManager.ma
               keyOnly: requestOptions?.keyOnly === true || managedAliases.has(entry.target.alias),
               target: entry.target,
               operation: (authOptions) =>
-                issueRemotePairingToken(entry.target, authOptions, runner, entry.selectedRuntime),
+                issueRemotePairingToken(
+                  entry.target,
+                  authOptions,
+                  runnerFor(requestOptions, runner),
+                  restrictSelection(requestOptions, entry.selectedRuntime),
+                ),
             }).pipe(
               // A desktop reconnecting after this lands on the managed server.
               Effect.tapError((error) =>
@@ -3632,13 +3477,16 @@ const makeSshEnvironmentManager = Effect.fn("ssh/tunnel.SshEnvironmentManager.ma
     SshEnvironmentEffectError,
     SshEnvironmentEffectContext | Scope.Scope
   > {
+    yield* refuseReplacement(target.alias, requestOptions);
     const ticket = yield* takeRequestTicket(target, "ensure");
     const requestKey = targetConnectionKey(target);
     const knownKey = targetConnectionKey(resolvedTargets.get(requestKey) ?? target);
     const requestGeneration = generations.get(knownKey) ?? 0;
     const knownEntry = tunnels.get(knownKey);
     const retainedSelection = takeReconnectSelection(knownKey);
-    const pendingSelection = takePendingReconnectSelection(knownKey);
+    const pendingSelection = existingOnly(requestOptions)
+      ? undefined
+      : takePendingReconnectSelection(knownKey);
     const reconnectSelection =
       knownEntry?.reconnectSelection ?? retainedSelection ?? pendingSelection;
     if (knownEntry !== undefined) delete knownEntry.reconnectSelection;
@@ -3652,7 +3500,7 @@ const makeSshEnvironmentManager = Effect.fn("ssh/tunnel.SshEnvironmentManager.ma
       (generations.get(knownKey) ?? 0) !== requestGeneration
     )
       return yield* supersededPreparation();
-    yield* startRetry;
+    if (requestOptions?.installation !== "existing-only") yield* startRetry;
     const baseResolved = yield* resolveSshTarget(target.alias || target.hostname, target).pipe(
       Effect.tapError((error) =>
         Effect.suspend(() =>
@@ -3719,6 +3567,9 @@ const makeSshEnvironmentManager = Effect.fn("ssh/tunnel.SshEnvironmentManager.ma
     }
     const managedPin = yield* readManagedPin(resolvedTarget);
     const preparationOptions = {
+      ...(requestOptions?.installation === undefined
+        ? {}
+        : { installation: requestOptions.installation }),
       keyOnly: requestOptions?.keyOnly === true || managedPin !== undefined,
       refreshRuntime: requestOptions?.refreshRuntime === true,
       confirmReplacement: requestOptions?.confirmReplacement === true,
@@ -3752,7 +3603,11 @@ const makeSshEnvironmentManager = Effect.fn("ssh/tunnel.SshEnvironmentManager.ma
           if (closed || (generations.get(key) ?? 0) !== admittedGeneration) return Effect.void;
           invalidateReconnectSelection(key);
           return publishFailure(key, resolvedTarget, runner, error).pipe(
-            Effect.andThen(retries.failed(key, generations.get(key), error, target)),
+            Effect.andThen(
+              existingOnly(preparationOptions)
+                ? Effect.void
+                : retries.failed(key, generations.get(key), error, target),
+            ),
           );
         }).pipe(Effect.provide(context)),
       prepare: (report) =>
@@ -3783,16 +3638,20 @@ const makeSshEnvironmentManager = Effect.fn("ssh/tunnel.SshEnvironmentManager.ma
             if (preparationOptions.refreshRuntime === true) acquisitionFailures.delete(key);
             const decisionKey = `${key}:${runner?.archiveVersion ?? runner?.nodeScriptPath ?? ""}`;
             const connectionRunner =
-              runner === undefined
+              runner === undefined && preparationOptions.installation === undefined
                 ? undefined
                 : {
                     ...runner,
+                    ...(preparationOptions.installation === undefined
+                      ? {}
+                      : { installation: preparationOptions.installation }),
                     refreshOwnedRuntimeOnFirstConnection:
-                      runner.keepExistingRunner !== true &&
+                      preparationOptions.installation !== "existing-only" &&
+                      runner?.keepExistingRunner !== true &&
                       (preparationOptions.refreshRuntime === true ||
                         (!firstConnectionDecisions.has(decisionKey) &&
                           !pendingReplacements.has(key))) &&
-                      runner.refreshOwnedRuntimeOnFirstConnection === true,
+                      runner?.refreshOwnedRuntimeOnFirstConnection === true,
                     confirmReplacement: preparationOptions.confirmReplacement === true,
                     forceReplace: preparationOptions.forceReplace,
                     ...(preparationOptions.refreshRuntime === true ? { manualRefresh: true } : {}),
@@ -3855,8 +3714,15 @@ const makeSshEnvironmentManager = Effect.fn("ssh/tunnel.SshEnvironmentManager.ma
     return yield* finishEnsureEnvironment(lease.value, ticket, requestOptions);
   });
 
-  const ensureEnvironment: SshEnvironmentManagerShape["ensureEnvironment"] = (...args) =>
-    withSshCost(Effect.scoped(ensureEnvironmentAttempt(...args)), "ssh.ensure.request.cost");
+  const ensureEnvironment: SshEnvironmentManagerShape["ensureEnvironment"] = (target, options) =>
+    withSshCost(
+      Effect.scoped(ensureEnvironmentAttempt(target, options)),
+      "ssh.ensure.request.cost",
+    ).pipe(
+      Effect.map((result) =>
+        "type" in result ? result : { ...result, target: { ...result.target, port: target.port } },
+      ),
+    );
 
   const revalidateTunnels = Effect.fn("ssh/tunnel.revalidateTunnels")(function* () {
     yield* Effect.forEach(
@@ -4359,7 +4225,6 @@ const makeSshEnvironmentManager = Effect.fn("ssh/tunnel.SshEnvironmentManager.ma
       }),
     );
   });
-
   /**
    * Issues a credential against the target's current attachment. When that is the GOAT app server
    * and it refuses, the target moves to the managed server on the same local port, so the caller's
@@ -4373,6 +4238,7 @@ const makeSshEnvironmentManager = Effect.fn("ssh/tunnel.SshEnvironmentManager.ma
     options: {
       /** Ready-only callers never change which server serves the host. */
       readonly reconnect: boolean;
+      readonly preserveApp?: boolean;
       readonly keyOnly: boolean;
     },
     issue: (selection: PreparedRemoteRuntime | undefined) => Effect.Effect<A, E, R>,
@@ -4384,7 +4250,8 @@ const makeSshEnvironmentManager = Effect.fn("ssh/tunnel.SshEnvironmentManager.ma
       !closed && !forgotten.has(key) && (generations.get(key) ?? 0) === generation;
     return issue(entry.selectedRuntime).pipe(
       Effect.catchIf(
-        (error): error is E & SshPairingError => error instanceof SshPairingError,
+        (error): error is E & SshPairingError =>
+          error instanceof SshPairingError && error.reason !== "pen-member-unsupported",
         (error) =>
           Effect.gen(function* () {
             yield* Effect.logWarning("ssh.appServer.credential.fallback", {
@@ -4392,6 +4259,7 @@ const makeSshEnvironmentManager = Effect.fn("ssh/tunnel.SshEnvironmentManager.ma
               cause: error.message,
               reconnect: options.reconnect,
             });
+            if (options.preserveApp) return yield* error;
             appServerRefusals.set(key, (yield* Clock.currentTimeMillis) + APP_SERVER_REFUSAL_MS);
             entry.attachmentInvalidated = true;
             // A disconnect or forget that arrived meanwhile wins; nothing is started for it.
@@ -4447,7 +4315,9 @@ const makeSshEnvironmentManager = Effect.fn("ssh/tunnel.SshEnvironmentManager.ma
         resolvedTarget,
         runner,
         {
-          reconnect: sessionOptions.requireReady !== true,
+          reconnect:
+            sessionOptions.requireReady !== true && sessionOptions.installation !== "existing-only",
+          preserveApp: existingOnly(sessionOptions),
           keyOnly: managedAliases.has(resolvedTarget.alias) || sessionOptions.requireReady === true,
         },
         (selection) =>
@@ -4461,8 +4331,8 @@ const makeSshEnvironmentManager = Effect.fn("ssh/tunnel.SshEnvironmentManager.ma
                 resolvedTarget,
                 sessionOptions,
                 authOptions,
-                runner,
-                selection,
+                runnerFor(sessionOptions, runner),
+                selectionFor(sessionOptions, selection),
               ),
           }),
       );
@@ -4512,7 +4382,11 @@ const makeSshEnvironmentManager = Effect.fn("ssh/tunnel.SshEnvironmentManager.ma
           key,
           resolvedTarget,
           runner,
-          { reconnect: true, keyOnly: managedAliases.has(resolvedTarget.alias) },
+          {
+            reconnect: sessionOptions.installation !== "existing-only",
+            preserveApp: existingOnly(sessionOptions),
+            keyOnly: managedAliases.has(resolvedTarget.alias),
+          },
           (selection) =>
             runWithSshAuth({
               key,
@@ -4523,8 +4397,8 @@ const makeSshEnvironmentManager = Effect.fn("ssh/tunnel.SshEnvironmentManager.ma
                   resolvedTarget,
                   sessionOptions,
                   authOptions,
-                  runner,
-                  selection,
+                  runnerFor(sessionOptions, runner),
+                  selectionFor(sessionOptions, selection),
                 ),
             }),
         ),

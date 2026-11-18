@@ -10,7 +10,7 @@ import * as NodeFSP from "node:fs/promises";
 import { vi } from "vite-plus/test";
 import { SERVICE_LAUNCHER_PROTOCOL } from "./cloud/serviceProtocol.ts";
 import { Launcher, main, readServiceState, writeServiceState } from "./serviceLauncher.ts";
-import { writeFakeRuntime } from "./serviceLauncher.testkit.ts";
+import { seedDatabase, writeFakeRuntime } from "./serviceLauncher.testkit.ts";
 
 const spawnedChildren = vi.hoisted((): Array<NodeChildProcess.ChildProcess> => []);
 vi.mock("node:child_process", async (importOriginal) => {
@@ -76,7 +76,7 @@ process.exit(0);`,
       );
       const dbPath = path.join(root, "userdata", "state.sqlite");
       yield* fs.makeDirectory(path.dirname(dbPath), { recursive: true });
-      yield* fs.writeFileString(dbPath, "database");
+      seedDatabase(dbPath, "before trial");
       const statePath = path.join(root, "runtime", "service-state.json");
       const pending = {
         protocol: SERVICE_LAUNCHER_PROTOCOL,
@@ -108,7 +108,11 @@ process.exit(0);`,
       yield* Effect.promise(() => running);
       assert.equal(spawnedChildren.length, count);
       assert.deepEqual(yield* Effect.promise(() => readServiceState(statePath)), pending);
-      assert.isFalse(yield* fs.exists(path.join(root, "runtime", "db-backup", "update-1.staging")));
+      assert.isTrue(yield* fs.exists(path.join(root, "runtime", "db-backup", "update-1.staging")));
+      assert.equal(
+        yield* fs.readFileString(path.join(root, "runtime", "db-update-update-1.phase")),
+        "trial\n",
+      );
     }),
   );
 
@@ -129,7 +133,7 @@ process.exit(0);`,
       }
       const dbPath = path.join(root, "userdata", "state.sqlite");
       yield* fs.makeDirectory(path.dirname(dbPath), { recursive: true });
-      yield* fs.writeFileString(dbPath, "database");
+      seedDatabase(dbPath, "before trial");
       const pending = {
         protocol: SERVICE_LAUNCHER_PROTOCOL,
         activeVersion: "1.0.0",

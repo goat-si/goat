@@ -11,11 +11,14 @@ import { AsyncResult } from "effect/reactivity";
 import { expect, it, vi } from "vite-plus/test";
 import { userEvent } from "vite-plus/test/browser";
 
-import { act, render } from "../../test/render";
+import { act, render, stubGlobal } from "../../test/render";
+import { dismissContextMenu } from "../contextMenuFallback";
+import { createLocalApi } from "../localApi";
 import { useRightPanelStore } from "../rightPanelStore";
 
 const state = vi.hoisted(() => ({
   allowed: true,
+  primaryEnvironmentId: null as EnvironmentId | null,
   listeners: new Set<() => void>(),
   openEditor: vi.fn(),
   updateMetadata: vi.fn(),
@@ -42,6 +45,11 @@ vi.mock(import("../state/use-atom-command"), async (original) => {
         : state.openEditor) as never,
   };
 });
+vi.mock(import("../state/environments"), async (original) => ({
+  ...(await original()),
+  usePrimaryEnvironmentId: () => state.primaryEnvironmentId,
+  readPrimaryEnvironmentId: () => state.primaryEnvironmentId,
+}));
 vi.mock(import("../state/session"), async (original) => {
   const { useSyncExternalStore } = await import("react");
   const readEnvironmentScope = (id: EnvironmentId | null, scope: AuthEnvironmentScope) =>
@@ -112,6 +120,7 @@ vi.mock(import("./ui/toast"), async (original) => {
 });
 
 import ChatMarkdown from "./ChatMarkdown";
+import { MarkdownFileLink } from "./chat/MarkdownFileLink";
 
 const threadRef = {
   environmentId: EnvironmentId.make("selected"),
@@ -133,6 +142,7 @@ const serverConfig = {
 function setup() {
   using stack = new DisposableStack();
   state.allowed = true;
+  state.primaryEnvironmentId = null;
   state.listeners.clear();
   state.linkedPullRequest = null;
   state.openEditor.mockReset().mockResolvedValue(AsyncResult.success(undefined));
@@ -214,6 +224,59 @@ it.each([
     expect.objectContaining({ type: "success", description: path }),
   );
 });
+
+it.each(["[Docs](https://example.com/docs)", "[Readme](docs/readme.md)"])(
+  "tells the native menu for %s whether the keyboard opened it",
+  async (text) => {
+    using _setup = setup();
+    using _bridge = stubGlobal("desktopBridge", {
+      showContextMenu: state.choose,
+      getLocalEnvironmentBootstraps: () => [],
+    });
+    await using screen = await renderMarkdown(text);
+    // On macOS Shift+F10 does not generate Chromium's keyboard contextmenu.
+    await act(async () => {
+      screen
+        .anchor()
+        .dispatchEvent(
+          new PointerEvent("contextmenu", { bubbles: true, cancelable: true, button: -1 }),
+        );
+    });
+    expect(state.choose.mock.lastCall?.[2]).toBe("keyboard");
+    await userEvent.click(screen.anchor(), { button: "right" });
+    await vi.waitFor(() => expect(state.choose.mock.lastCall?.[2]).toBe("mouse"));
+  },
+);
+
+it.each([
+  [0, "[Docs](https://example.com/docs)"],
+  [2, "[Docs](https://example.com/docs)"],
+  [0, "[Readme](docs/readme.md)"],
+  [2, "[Readme](docs/readme.md)"],
+])(
+  "focuses the first browser action for a keyboard context menu with button %i on %s",
+  async (button, text) => {
+    using _setup = setup();
+    using _bridge = stubGlobal("desktopBridge", undefined);
+    state.choose.mockImplementation(createLocalApi().contextMenu.show);
+    await using screen = await renderMarkdown(text);
+    using _menu = { [Symbol.dispose]: () => dismissContextMenu() };
+    await userEvent.keyboard("{Tab}");
+    const anchor = screen.anchor();
+    anchor.focus();
+    expect(anchor.matches(":focus-visible")).toBe(true);
+
+    await act(async () => {
+      anchor.dispatchEvent(
+        new MouseEvent("contextmenu", { bubbles: true, cancelable: true, button }),
+      );
+    });
+
+    const firstAction = document.querySelector('[role="menu"] button:not(:disabled)');
+    expect(firstAction).not.toBeNull();
+    expect(document.activeElement).toBe(firstAction);
+  },
+);
 
 it("does not launch an editor after revocation during a native context menu", async () => {
   using _setup = setup();
@@ -298,6 +361,10 @@ it.each(["link-to-thread", "unlink-from-thread"])(
 
 it("offers no host actions for markdown rendered with file actions off", async () => {
   using _setup = setup();
+  using _platform = vi.spyOn(navigator, "platform", "get").mockReturnValue("MacIntel");
+  state.primaryEnvironmentId = threadRef.environmentId;
+  const startFileDrag = vi.fn().mockResolvedValue(true);
+  using _bridge = stubGlobal("desktopBridge", { startFileDrag });
   await using screen = await render(
     <ChatMarkdown
       cwd={undefined}
@@ -306,7 +373,80 @@ it("offers no host actions for markdown rendered with file actions off", async (
       text="[Readme](/work/docs/readme.md)"
     />,
   );
+  const chip = screen.container.querySelector(".chat-markdown-file-link")!;
+  await act(async () => {
+    chip.dispatchEvent(new DragEvent("dragstart", { bubbles: true, cancelable: true }));
+  });
+  expect(startFileDrag).not.toHaveBeenCalled();
+  expect(chip.getAttribute("draggable")).toBeNull();
   await userEvent.click(screen.getByRole("button", { name: "File options for readme.md" }));
   await vi.waitFor(() => expect(state.choose).toHaveBeenCalled());
   expect(offeredActions()).toEqual(["copy-full"]);
 });
+
+it("preserves keyboard activation of a file-options button", async () => {
+  using _setup = setup();
+  await using screen = await render(
+    <MarkdownFileLink
+      environmentId={null}
+      href="readme.md"
+      targetPath="readme.md"
+      iconPath="readme.md"
+      workspaceRelativePath="readme.md"
+      panelPath={null}
+      label="Readme"
+      copyMarkdown="[Readme](readme.md)"
+      theme="dark"
+      onOpenInPanel={vi.fn()}
+      resolveCopyPaths={async () => ({ relativePath: "readme.md", fullPath: "/work/readme.md" })}
+      openInEditorMenuLabel="Open in editor"
+    />,
+  );
+  const button = screen.container.querySelector("button")!;
+  button.focus();
+  for (const key of ["{Enter}", " "]) {
+    await userEvent.keyboard(key);
+    await vi.waitFor(() => expect(state.choose.mock.lastCall?.[2]).toBe("keyboard"));
+    state.choose.mockClear();
+  }
+  await userEvent.click(button);
+  await vi.waitFor(() => expect(state.choose.mock.lastCall?.[2]).toBe("mouse"));
+});
+
+it.each([
+  ["a local file", true, true, true],
+  ["a remote file", false, true, true],
+  ["an old preload", true, false, true],
+  ["a revoked file action", true, true, false],
+] as const)(
+  "offers Finder drag only for authorized local chips (%s)",
+  async (_, local, modern, allowed) => {
+    using _setup = setup();
+    using _platform = vi.spyOn(navigator, "platform", "get").mockReturnValue("MacIntel");
+    using bridge = new DisposableStack();
+    state.primaryEnvironmentId = local
+      ? threadRef.environmentId
+      : EnvironmentId.make("another-host");
+    state.allowed = allowed;
+    const startFileDrag = vi.fn().mockResolvedValue(true);
+    vi.stubGlobal("desktopBridge", modern ? { startFileDrag } : {});
+    bridge.defer(() => vi.unstubAllGlobals());
+
+    await using screen = await renderMarkdown("[Readme](docs/readme.md)");
+    const chip = screen.container.querySelector(".chat-markdown-file-link")!;
+    const drag = new DragEvent("dragstart", { bubbles: true, cancelable: true });
+    await act(async () => chip.dispatchEvent(drag));
+    if (local && modern && allowed) {
+      expect(drag.defaultPrevented).toBe(true);
+      await vi.waitFor(() =>
+        expect(startFileDrag).toHaveBeenCalledWith({
+          environmentId: threadRef.environmentId,
+          path: "/work/docs/readme.md",
+        }),
+      );
+    } else {
+      expect(chip.getAttribute("draggable")).toBeNull();
+      expect(startFileDrag).not.toHaveBeenCalled();
+    }
+  },
+);

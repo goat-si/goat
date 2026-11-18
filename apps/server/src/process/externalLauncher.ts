@@ -1,3 +1,4 @@
+import { expandHomePath } from "@goat/provider-core/server/pathExpansion";
 import * as NodePath from "@effect/platform-node/NodePath";
 import {
   EDITORS,
@@ -32,6 +33,7 @@ import * as Stream from "effect/Stream";
 import * as ChildProcess from "effect/process/ChildProcess";
 import * as ChildProcessSpawner from "effect/process/ChildProcessSpawner";
 
+import { WindowsVerbatimSpawn } from "./windowsVerbatimSpawn.ts";
 import { makeStaleWhileRevalidate } from "../environment/staleWhileRevalidate.ts";
 export {
   ExternalLauncherError,
@@ -122,6 +124,11 @@ const CommandLookupEnvConfig = Config.all({
 const readBrowserLaunchEnv = BrowserLaunchEnvConfig.pipe(Effect.orElseSucceed(() => ({})));
 const readCommandLookupEnv = CommandLookupEnvConfig.pipe(Effect.orElseSucceed(() => ({})));
 
+// External Electron apps must start as applications even when GOAT's server runs in Electron's Node mode.
+const readExternalLaunchEnv = HostProcess.Environment.pipe(
+  Effect.map(({ ELECTRON_RUN_AS_NODE: _runAsNode, ...env }) => env),
+);
+
 function parseTargetPathAndPosition(target: string): Option.Option<TargetPathAndPosition> {
   const match = TARGET_WITH_POSITION_PATTERN.exec(target);
   if (!match?.[1] || !match[2]) {
@@ -181,11 +188,16 @@ function encodeUtf16LeBase64(input: string): string {
 }
 
 function escapePowerShellStringLiteral(input: string): string {
-  return `'${input.replaceAll("'", "''")}'`;
+  // PowerShell also recognises typographic apostrophes as single-quote delimiters.
+  return `'${input.replace(/['\u2018-\u201b]/g, "$&$&")}'`;
+}
+
+function resolveWindowsRoot(env: NodeJS.ProcessEnv): string {
+  return env.SYSTEMROOT || env.windir || String.raw`C:\Windows`;
 }
 
 function resolvePowerShellPath(env: NodeJS.ProcessEnv = {}): string {
-  return `${env.SYSTEMROOT || env.windir || String.raw`C:\Windows`}\\System32\\WindowsPowerShell\\v1.0\\powershell.exe`;
+  return `${resolveWindowsRoot(env)}\\System32\\WindowsPowerShell\\v1.0\\powershell.exe`;
 }
 
 function resolveWslPowerShellPath(): string {
@@ -522,30 +534,56 @@ const resolveEditorLaunch = Effect.fn("resolveEditorLaunch")(function* (
     return yield* new ExternalLauncherUnsupportedEditorError({ editor: input.editor });
   }
 
+  let target = expandHomePath(input.cwd, yield* HostProcess.HomeDirectory);
   if (input.reveal === true) {
-    return yield* resolveFileManagerRevealLaunch(input.cwd, platform, env, command);
+    return yield* resolveFileManagerRevealLaunch(target, platform, env, command);
+  }
+  if (platform === "darwin" && target.endsWith(".app")) {
+    const path = yield* Path.Path;
+    const fs = yield* FileSystem.FileSystem;
+    const invalid = new ExternalLauncherUnsupportedTargetError({
+      editor: editorDef.id,
+      reason: "invalid-app-bundle",
+    });
+    if (!path.isAbsolute(target)) return yield* invalid;
+    const canonical = yield* fs.realPath(target).pipe(Effect.mapError(() => invalid));
+    if (!path.isAbsolute(canonical) || !canonical.endsWith(".app")) return yield* invalid;
+    const stat = yield* fs.stat(canonical).pipe(Effect.mapError(() => invalid));
+    if (stat.type !== "Directory") return yield* invalid;
+    target = canonical;
+  }
+
+  if (platform === "win32") {
+    // ShellExecute honours replacement folder handlers that explorer.exe bypasses.
+    return {
+      ...powerShellFileManagerLaunch(
+        target,
+        `Invoke-Item -LiteralPath ${escapePowerShellStringLiteral(normalizeWindowsFileManagerPath(target))}`,
+        resolvePowerShellPath(env),
+      ),
+      detached: WINDOWS_POWERSHELL_DETACHED,
+    };
   }
 
   return {
     editor: editorDef.id,
-    target: input.cwd,
+    target,
     command,
     args:
       command === "explorer.exe" && env.WSL_DISTRO_NAME !== undefined
-        ? [resolveWslFileManagerPath(input.cwd, env.WSL_DISTRO_NAME)]
-        : platform === "win32"
-          ? // Explorer interprets / as a switch and silently opens a fallback folder.
-            [normalizeWindowsFileManagerPath(input.cwd)]
-          : [input.cwd],
+        ? [resolveWslFileManagerPath(target, env.WSL_DISTRO_NAME)]
+        : [target],
   };
 });
 
-// A replacement manager registers a default Directory shell verb; stock Windows
-// uses "none". Explorer needs its /select argument passed verbatim through
-// PowerShell because Node's argument quoting changes how Explorer parses it.
+// Replacement managers can register under Directory, Drive, or Folder. Explorer
+// needs its /select argument passed verbatim through PowerShell because Node's
+// argument quoting changes how Explorer parses it.
 function buildFileManagerRevealPowerShellSource(target: string, parent: string): string {
   const literal = escapePowerShellStringLiteral(target);
-  return `$ProgressPreference = 'SilentlyContinue'; $folderVerb = (Get-ItemProperty -LiteralPath 'Registry::HKEY_CLASSES_ROOT\\Directory\\shell' -ErrorAction SilentlyContinue).'(default)'; if ($folderVerb -and $folderVerb -ne 'none') { Invoke-Item -LiteralPath ${escapePowerShellStringLiteral(parent)} } else { Start-Process 'explorer.exe' -ArgumentList ('/select,"' + ${literal} + '"') }`;
+  const folderClass = windowsFolderClass(parent);
+  // Explorer's ordinary open/explore handlers may also be explicit defaults.
+  return String.raw`$ProgressPreference = 'SilentlyContinue'; $folderVerb = '${folderClass}', 'Folder' | ForEach-Object { $key = "Registry::HKEY_CLASSES_ROOT\$_\shell"; $verb = (Get-ItemProperty -LiteralPath $key -ErrorAction SilentlyContinue).'(default)'; if ($verb -and $verb -ne 'none') { $handler = Get-ItemProperty -LiteralPath "$key\$verb\command" -ErrorAction SilentlyContinue; if ($handler.DelegateExecute -ne '{11dbb47c-a525-400b-9e80-a54615a090c0}' -and $handler.'(default)' -notmatch '^\s*(?:"(?:[^"]*[\\/])?explorer\.exe"|(?:[^\s"]*[\\/])?explorer\.exe)(?:\s|$)') { $verb } } }; if ($folderVerb) { Invoke-Item -LiteralPath ${escapePowerShellStringLiteral(parent)} } else { Start-Process 'explorer.exe' -ArgumentList ('/select,"' + ${literal} + '"') }`;
 }
 
 function powerShellFileManagerLaunch(
@@ -581,13 +619,13 @@ const resolveFileManagerRevealLaunch = Effect.fn("resolveFileManagerRevealLaunch
 
   if (platform === "win32") {
     const path = yield* Path.Path.pipe(Effect.provide(NodePath.layerWin32));
-    const windowsTarget = normalizeWindowsFileManagerPath(target);
+    const windowsTarget = path.normalize(normalizeWindowsFileManagerPath(target));
+    const parent = path.dirname(windowsTarget);
+    const source = windowsTarget.includes('"')
+      ? `Invoke-Item -LiteralPath ${escapePowerShellStringLiteral(parent)}`
+      : buildFileManagerRevealPowerShellSource(windowsTarget, parent);
     return {
-      ...powerShellFileManagerLaunch(
-        target,
-        buildFileManagerRevealPowerShellSource(windowsTarget, path.dirname(windowsTarget)),
-        resolvePowerShellPath(env),
-      ),
+      ...powerShellFileManagerLaunch(target, source, resolvePowerShellPath(env)),
       detached: WINDOWS_POWERSHELL_DETACHED,
     };
   }
@@ -669,6 +707,78 @@ const tryRevealLinuxItem = Effect.fn("externalLauncher.tryRevealLinuxItem")(
   }),
 );
 
+function windowsFolderClass(parent: string): "Drive" | "Directory" {
+  return /^[a-z]:\\$/i.test(parent) ? "Drive" : "Directory";
+}
+
+// An unknown registry result must keep the shell-mediated reveal.
+const hasStockWindowsFolderVerb = Effect.fn("externalLauncher.hasStockWindowsFolderVerb")(
+  function* (windowsRoot: string, parent: string) {
+    const spawner = yield* ChildProcessSpawner.ChildProcessSpawner;
+    const stock = yield* Effect.forEach(
+      [windowsFolderClass(parent), "Folder"],
+      (folderClass) =>
+        Effect.gen(function* () {
+          const handle = yield* spawner.spawn(
+            ChildProcess.make(
+              `${windowsRoot}\\System32\\reg.exe`,
+              ["query", `HKCR\\${folderClass}\\shell`, "/ve"],
+              { stdin: "ignore", stderr: "ignore" },
+            ),
+          );
+          const [stdout, status] = yield* Effect.all(
+            [
+              handle.stdout.pipe(
+                Stream.decodeText(),
+                Stream.runFold(
+                  () => "",
+                  (text, chunk) =>
+                    text.length + chunk.length <= 4096 ? text + chunk : "\0".repeat(4096),
+                ),
+              ),
+              handle.exitCode,
+            ],
+            { concurrency: "unbounded" },
+          );
+          return status === 0 && /REG_SZ[^\S\r\n]+(?:none|\(value not set\))\s*$/im.test(stdout);
+        }),
+      { concurrency: 2 },
+    );
+    return stock.every(Boolean);
+  },
+  Effect.scoped,
+  Effect.timeout("2 seconds"),
+  Effect.orElseSucceed(() => false),
+);
+
+const tryRevealWindowsItem = Effect.fn("externalLauncher.tryRevealWindowsItem")(function* (
+  target: string,
+) {
+  const path = yield* Path.Path.pipe(Effect.provide(NodePath.layerWin32));
+  const normalized = path.normalize(normalizeWindowsFileManagerPath(target));
+  if (!/^[a-z]:\\/i.test(normalized) || WINDOWS_SHIM_UNSAFE_ARG_PATTERN.test(normalized)) {
+    return false;
+  }
+  const windowsRoot = resolveWindowsRoot(yield* readBrowserLaunchEnv);
+  if (!(yield* hasStockWindowsFolderVerb(windowsRoot, path.dirname(normalized)))) return false;
+
+  const command = `${windowsRoot}\\explorer.exe`;
+  const args = [`/select,"${normalized}"`];
+  yield* (yield* WindowsVerbatimSpawn)(command, args, yield* readExternalLaunchEnv).pipe(
+    Effect.mapError(
+      (cause) =>
+        new ExternalLauncherEditorSpawnError({
+          editor: "file-manager",
+          target,
+          command,
+          args,
+          cause,
+        }),
+    ),
+  );
+  return true;
+});
+
 const launchEditor = Effect.fn("externalLauncher.launchEditor")(function* (
   input: LaunchEditorInput,
 ) {
@@ -679,6 +789,14 @@ const launchEditor = Effect.fn("externalLauncher.launchEditor")(function* (
     launch.command === "xdg-open" &&
     (yield* HostProcess.Platform) === "linux" &&
     (yield* tryRevealLinuxItem(launch.target))
+  ) {
+    return;
+  }
+  if (
+    input.editor === "file-manager" &&
+    input.reveal === true &&
+    (yield* HostProcess.Platform) === "win32" &&
+    (yield* tryRevealWindowsItem(launch.target))
   ) {
     return;
   }
@@ -740,8 +858,7 @@ const launchAndUnref = Effect.fn("externalLauncher.launchAndUnref")(function* (
   onError: (cause: unknown) => ExternalLauncherError,
 ): Effect.fn.Return<void, ExternalLauncherError, ChildProcessSpawner.ChildProcessSpawner> {
   const spawner = yield* ChildProcessSpawner.ChildProcessSpawner;
-  // Inherited ELECTRON_RUN_AS_NODE would make Electron apps opened by this launcher run as Node and exit.
-  const { ELECTRON_RUN_AS_NODE: _runAsNode, ...env } = yield* HostProcess.Environment;
+  const env = yield* readExternalLaunchEnv;
   const command = ChildProcess.make(launch.command, launch.args, {
     ...launch.options,
     env: { ...env, ...launch.options.env },

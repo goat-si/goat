@@ -246,6 +246,15 @@ export function clientRpcRequiredScopes(
   input: unknown,
 ): readonly AuthEnvironmentScope[] {
   if (
+    (method === WS_METHODS.serverUpdateServer ||
+      method === WS_METHODS.serverUpdateServerWithProgress) &&
+    typeof input === "object" &&
+    input !== null &&
+    "stageOnly" in input &&
+    input.stageOnly === true
+  )
+    return [AuthEnvironmentMaintainScope];
+  if (
     method === WS_METHODS.serverRefreshProviders &&
     typeof input === "object" &&
     input !== null &&

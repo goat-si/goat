@@ -6,7 +6,6 @@ import * as NodeCrypto from "@effect/platform-node/NodeCrypto";
 import * as NodeServices from "@effect/platform-node/NodeServices";
 import type * as ProviderAdapter from "@goat/provider-core/server/ProviderAdapter";
 import * as Scheduler from "../scheduling/Scheduler.ts";
-import * as ProjectEnrichmentService from "../project/ProjectEnrichmentService.ts";
 import { SourceControlProviderKind } from "@goat/contracts";
 import { limitRecoveryCommand } from "./UsageLimitRecoveryWorker.ts";
 import * as UsageLimitRecoveryWorker from "./UsageLimitRecoveryWorker.ts";
@@ -15,7 +14,6 @@ import * as McpProviderSessions from "@goat/provider-core/server/McpProviderSess
 import { assert, it } from "@effect/vitest";
 import { vi } from "vite-plus/test";
 import {
-  type ApplicationStoredEvent,
   CheckpointId,
   CheckpointRef,
   CommandId,
@@ -52,9 +50,7 @@ import * as TestClock from "effect/testing/TestClock";
 import * as SqlClient from "effect/sql/SqlClient";
 
 import * as SqlitePersistence from "../persistence/Sqlite.ts";
-import * as OrchestrationEventStore from "../persistence/OrchestrationEventStore.ts";
 import * as ProjectService from "../project/ProjectService.ts";
-import * as WorkspacePaths from "../workspace/WorkspacePaths.ts";
 import * as ServerSettings from "../serverSettings.ts";
 import * as McpSessionRegistryTestkit from "../mcp/McpSessionRegistry.testkit.ts";
 import * as LegacyV1ThreadImporter from "./legacy/LegacyV1ThreadImporter.ts";
@@ -63,6 +59,7 @@ import { ROLLBACK_FAILED_MESSAGE } from "./CheckpointRollbackService.ts";
 import * as EffectWorker from "./EffectWorker.ts";
 import * as EffectOutbox from "./EffectOutbox.ts";
 import * as EventSink from "./EventSink.ts";
+import * as EventStore from "./EventStore.ts";
 import * as ProviderRuntimeRecoveryService from "./ProviderRuntimeRecoveryService.ts";
 import * as ProjectionMaintenance from "./ProjectionMaintenance.ts";
 import * as ProjectionStore from "./ProjectionStore.ts";
@@ -84,6 +81,7 @@ import * as ThreadCommandExecutor from "./ThreadCommandExecutor.ts";
 import {
   antigravityInstanceId,
   driver,
+  layerSharedApplicationDataPlaneTest,
   layerPlatformTest,
   layerServerConfig,
   modelSelection,
@@ -104,6 +102,7 @@ const prWatchDisabledProjectId = ProjectId.make("pr-watch-disabled-project");
 const layerTest = Layer.mergeAll(
   RuntimeLayer.layer,
   RuntimeLayer.layerEventSink,
+  EventStore.layer,
   ProjectStore.layer,
   ProjectionStore.layer,
   EffectOutbox.layer,
@@ -113,7 +112,7 @@ const layerTest = Layer.mergeAll(
   Layer.provide(McpProviderSessions.layer),
   Layer.provideMerge(SqlitePersistence.layerMemory),
   Layer.provide(layerCheckpointStoreTest),
-  Layer.provide(layerServerConfig),
+  Layer.provideMerge(layerServerConfig),
   Layer.provide(
     ServerSettings.layerTest({
       projectSettingsOverrides: {
@@ -124,48 +123,6 @@ const layerTest = Layer.mergeAll(
   Layer.provide(layerTestProviderInstanceRegistry),
   Layer.provide(layerGitWorkflowTest),
   Layer.provide(layerProjectServiceTest),
-  Layer.provide(layerPlatformTest),
-);
-
-const layerSharedApplicationDataPlaneTest = Layer.mergeAll(
-  RuntimeLayer.layer.pipe(Layer.provide(RuntimeLayer.layerProjectService)),
-  RuntimeLayer.layerProjectService,
-  RuntimeLayer.layerEventSink,
-  RuntimeLayer.layerEventInfrastructure,
-).pipe(
-  Layer.provide(
-    Layer.mock(WorkspacePaths.WorkspacePaths)({
-      normalizeWorkspaceRoot: (workspaceRoot) => Effect.succeed(workspaceRoot),
-    }),
-  ),
-  Layer.provide(
-    Layer.mock(ProjectEnrichmentService.ProjectEnrichmentService)({
-      peek: () =>
-        Effect.succeed({
-          repositoryIdentity: null,
-          faviconPath: null,
-          repositoryIdentityResolved: false,
-        }),
-      request: () => Effect.void,
-      getAvailable: () =>
-        Effect.succeed({
-          repositoryIdentity: null,
-          faviconPath: null,
-          repositoryIdentityResolved: false,
-        }),
-      awaitRepositoryIdentity: () => Effect.succeed(null),
-      invalidate: () => Effect.void,
-      subscribeChanges: Effect.never,
-    }),
-  ),
-  Layer.provide(McpSessionRegistryTestkit.layer),
-  Layer.provide(McpProviderSessions.layer),
-  Layer.provideMerge(SqlitePersistence.layerMemory),
-  Layer.provide(layerCheckpointStoreTest),
-  Layer.provide(layerServerConfig),
-  Layer.provide(ServerSettings.layerTest()),
-  Layer.provide(layerTestProviderInstanceRegistry),
-  Layer.provide(layerGitWorkflowTest),
   Layer.provide(layerPlatformTest),
 );
 
@@ -1290,10 +1247,25 @@ it.layer(layerTest)("OrchestrationV2LayerLive", (it) => {
         assert.equal(native.runtimeRequests[0]?.responseCapability.type, "not_resumable");
         yield* recovery.reconcile("shutdown");
         yield* recovery.reconcile("startup");
-        assert.deepEqual(
-          (yield* orchestrator.getThreadProjection(threadId)).runtimeRequests,
-          recovered.runtimeRequests,
+        const rerecovered = yield* orchestrator.getThreadProjection(threadId);
+        assert.deepEqual(rerecovered.runtimeRequests, recovered.runtimeRequests);
+        const store = yield* EventStore.EventStoreV2;
+        const notices = yield* store.read({ threadId, eventType: "turn-item.updated" }).pipe(
+          Stream.flatMap(({ event }) =>
+            event.type === "turn-item.updated" && event.payload.type === "system_notice"
+              ? Stream.make(event.payload)
+              : Stream.empty,
+          ),
+          Stream.runCollect,
         );
+        assert.lengthOf(notices, scope === "run" ? 1 : 0);
+        if (scope === "run") {
+          assert.equal(
+            notices[0]?.title,
+            trigger === "startup" ? "Server restarted" : "Server shut down",
+          );
+          assert.equal(notices[0]?.runId, runId);
+        }
         yield* orchestrator.dispatch({
           type: "runtime-request.respond",
           commandId: CommandId.make(`recovery-answer-${trigger}-${scope}`),
@@ -3889,7 +3861,7 @@ it.layer(layerTest)("OrchestrationV2LayerLive lifecycle", (it) => {
       }),
   );
 
-  it.effect("wakes once for a state it reported, across a restart and a new watch", () =>
+  it.effect("baselines a new watch across restarts and reports later changes", () =>
     Effect.gen(function* () {
       const orchestrator = yield* Orchestrator.OrchestratorV2;
       const threadId = ThreadId.make("runtime-pull-request-watch-told");
@@ -3967,23 +3939,27 @@ it.layer(layerTest)("OrchestrationV2LayerLive lifecycle", (it) => {
 
       const reactor = yield* PullRequestWatchReactor.make.pipe(Effect.provide(host));
       yield* reactor.sweep;
+      const baseline = (yield* orchestrator.getThreadShell(threadId))?.pullRequests?.[0]?.watch;
+      assert.equal(baseline?.headSha, headSha);
+      assert.isTrue(baseline?.passed);
+      assert.deepEqual(baseline?.passedChecks, ["lint", "test"]);
       yield* TestClock.adjust("10 minutes");
       yield* reactor.sweep;
-      assert.deepEqual(yield* summaries, ["#12: checks passed"]);
+      assert.deepEqual(yield* summaries, []);
 
       const restarted = yield* PullRequestWatchReactor.make.pipe(Effect.provide(host));
       yield* restarted.sweep;
-      assert.deepEqual(yield* summaries, ["#12: checks passed"]);
+      assert.deepEqual(yield* summaries, []);
 
       yield* watch(false, "stop");
       yield* watch(true, "again");
       yield* restarted.sweep;
-      assert.deepEqual(yield* summaries, ["#12: checks passed"]);
+      assert.deepEqual(yield* summaries, []);
 
       headSha = "bbbbbbbbbb";
       yield* TestClock.adjust("10 minutes");
       yield* restarted.sweep;
-      assert.deepEqual(yield* summaries, ["#12: checks passed", "#12: checks passed"]);
+      assert.deepEqual(yield* summaries, ["#12: checks passed"]);
       yield* watch(false, "end");
     }),
   );
@@ -4071,7 +4047,7 @@ it.layer(layerTest)("OrchestrationV2LayerLive lifecycle", (it) => {
       yield* TestClock.adjust("10 minutes");
       yield* reactor.sweep;
       yield* worker.drain();
-      assert.deepEqual(yield* summaries, ["#12: checks passed"]);
+      assert.deepEqual(yield* summaries, []);
 
       assert.deepEqual(
         (yield* orchestrator.getThreadShell(threadId))?.pullRequests?.[0]?.watch?.owedChecks,
@@ -4081,14 +4057,14 @@ it.layer(layerTest)("OrchestrationV2LayerLive lifecycle", (it) => {
       const restarted = yield* PullRequestWatchReactor.make.pipe(Effect.provide(host));
       yield* restarted.sweep;
       yield* worker.drain();
-      assert.deepEqual(yield* summaries, ["#12: checks passed"]);
+      assert.deepEqual(yield* summaries, []);
 
       // A new watch on the same pull request knows what the last one told.
       yield* watch(false, "stop");
       yield* watch(true, "again");
       yield* restarted.sweep;
       yield* worker.drain();
-      assert.deepEqual(yield* summaries, ["#12: checks passed"]);
+      assert.deepEqual(yield* summaries, []);
 
       assert.deepEqual(
         (yield* orchestrator.getThreadShell(threadId))?.pullRequests?.[0]?.watch?.owedChecks,
@@ -4098,11 +4074,11 @@ it.layer(layerTest)("OrchestrationV2LayerLive lifecycle", (it) => {
       yield* TestClock.adjust("10 minutes");
       yield* restarted.sweep;
       yield* worker.drain();
-      assert.deepEqual(yield* summaries, ["#12: checks passed", "#12: checks passed"]);
+      assert.deepEqual(yield* summaries, ["#12: checks passed"]);
       yield* TestClock.adjust("10 minutes");
       yield* restarted.sweep;
       yield* worker.drain();
-      assert.deepEqual(yield* summaries, ["#12: checks passed", "#12: checks passed"]);
+      assert.deepEqual(yield* summaries, ["#12: checks passed"]);
       assert.deepEqual(
         (yield* orchestrator.getThreadShell(threadId))?.pullRequests?.[0]?.watch?.owedChecks,
         [],
@@ -4721,15 +4697,14 @@ it.layer(layerTest)("OrchestrationV2LayerLive lifecycle", (it) => {
       yield* restarted.sweep;
       yield* worker.drain();
       const { messages } = yield* orchestrator.getThreadRecords(threadId, ["messages"]);
-      const told = messages.flatMap(
-        (message) => message.text.match(/removed from the merge queue[^\n]*/g) ?? [],
+      const removals = messages.filter(
+        (message) => message.notification?.summary === "#7: removed from merge queue",
       );
-      assert.deepEqual(
-        told,
-        Array(2).fill("removed from the merge queue without merging: Required checks failed."),
-      );
-      const digest = messages.find((message) => message.notification?.outcome === "failed");
-      assert.equal(digest?.notification?.summary, "2 notices · #7: removed from merge queue");
+      assert.lengthOf(removals, 2);
+      for (const message of removals) {
+        assert.equal(message.notification?.outcome, "failed");
+        assert.include(message.text, "Required checks failed");
+      }
       assert.equal(
         (yield* orchestrator.getThreadShell(threadId))?.pullRequests?.[0]?.watch
           ?.mergeQueueRemovalId,
@@ -4892,10 +4867,7 @@ it.layer(layerTest)("OrchestrationV2LayerLive lifecycle", (it) => {
         assert.deepEqual(held?.remarkIds, initialWatch?.remarkIds);
         assert.deepEqual(held?.failedChecks, ["lint"]);
         const { messages } = yield* orchestrator.getThreadRecords(threadId, ["messages"]);
-        assert.deepEqual(
-          messages.map((message) => message.notification?.summary),
-          ["#7: checks failed"],
-        );
+        assert.deepEqual(messages, []);
         yield* TestClock.adjust("1 millis");
         recovering = true;
       }
@@ -4909,9 +4881,7 @@ it.layer(layerTest)("OrchestrationV2LayerLive lifecycle", (it) => {
         messages.flatMap((message) =>
           message.notification === undefined ? [] : [message.notification.summary],
         ),
-        incomplete
-          ? ["#7: checks failed", "#7: new comments"]
-          : ["#7: checks failed, new comments"],
+        ["#7: new comments"],
       );
       if (mode !== "single page") {
         const wake = messages.at(-1);
@@ -4924,7 +4894,7 @@ it.layer(layerTest)("OrchestrationV2LayerLive lifecycle", (it) => {
       assert.deepEqual(watch?.remarkIds, [remark.id]);
       assert.deepEqual(
         { headSha: watch?.headSha, failedChecks: watch?.failedChecks, wakes: watch?.wakes },
-        { headSha: "abc1234def", failedChecks: ["lint"], wakes: incomplete ? 1 : 0 },
+        { headSha: "abc1234def", failedChecks: ["lint"], wakes: 1 },
       );
     }),
   );
@@ -7996,6 +7966,11 @@ it.layer(layerSharedApplicationDataPlaneTest)("visited projection", (it) => {
       const created = yield* orchestrator.getThreadProjection(threadId);
       assert.isNull(created.thread.lastVisitedAt);
       const createdUpdatedAt = created.thread.updatedAt;
+      const sql = yield* SqlClient.SqlClient;
+      const visitRows = (commandId: string) =>
+        sql<{ readonly event_type: string; readonly payload_json: string }>`
+          SELECT event_type, payload_json FROM orchestration_events WHERE command_id = ${commandId}
+        `;
 
       yield* TestClock.adjust("1 second");
       yield* orchestrator.dispatch({
@@ -8008,6 +7983,10 @@ it.layer(layerSharedApplicationDataPlaneTest)("visited projection", (it) => {
       assert.isNotNull(visited.thread.lastVisitedAt);
       assert.equal(DateTime.formatIso(visited.thread.lastVisitedAt!), visitedAt);
       assert.deepEqual(visited.thread.updatedAt, createdUpdatedAt);
+      const rows = yield* visitRows("runtime-layer-visited-thread-visit");
+      assert.lengthOf(rows, 1);
+      assert.equal(rows[0]?.event_type, "thread.visit-recorded");
+      assert.deepEqual(Object.keys(JSON.parse(rows[0]?.payload_json ?? "{}")), ["lastVisitedAt"]);
 
       yield* orchestrator.dispatch({
         type: "thread.visit",
@@ -8017,6 +7996,11 @@ it.layer(layerSharedApplicationDataPlaneTest)("visited projection", (it) => {
       });
       const afterStaleVisit = yield* orchestrator.getThreadProjection(threadId);
       assert.equal(DateTime.formatIso(afterStaleVisit.thread.lastVisitedAt!), visitedAt);
+      assert.deepEqual(yield* visitRows("runtime-layer-visited-thread-visit-stale"), []);
+
+      const maintenance = yield* ProjectionMaintenance.ProjectionMaintenanceV2;
+      assert.isTrue((yield* maintenance.rebuild).valid);
+      assert.deepEqual((yield* orchestrator.getThreadProjection(threadId)).thread, visited.thread);
 
       const shell = yield* orchestrator.getShellSnapshot();
       const thread = shell.threads.find((candidate) => candidate.id === threadId);
@@ -8033,7 +8017,6 @@ it.layer(layerSharedApplicationDataPlaneTest)("visited projection", (it) => {
         .pipe(Effect.flip);
       assert.instanceOf(markUnread, Orchestrator.OrchestratorDispatchError);
 
-      const sql = yield* SqlClient.SqlClient;
       yield* sql`INSERT INTO orchestration_v2_projection_turn_items (
         turn_item_id, thread_id, ordinal, type, status, updated_at, payload_json
       ) VALUES (
@@ -8390,7 +8373,7 @@ it.layer(Layer.fresh(layerSharedApplicationDataPlaneTest))("compact PR events", 
       const threadEvents = () => sql<{ event_type: string }>`
         SELECT event_type FROM orchestration_events
         WHERE stream_id = ${threadId}
-          AND event_type IN ('thread.metadata-updated', 'thread.visited')
+          AND event_type IN ('thread.metadata-updated', 'thread.visited', 'thread.visit-recorded')
         ORDER BY sequence
       `;
       yield* orchestrator.dispatch({
@@ -8399,15 +8382,23 @@ it.layer(Layer.fresh(layerSharedApplicationDataPlaneTest))("compact PR events", 
         threadId,
         title: "Renamed before visit",
       });
-      for (const [commandId, visitedAt] of [
+      const eventSink = yield* EventSink.EventSinkV2;
+      const { thread: renamed } = yield* orchestrator.getThreadRecords(threadId, []);
+      for (const [eventId, visitedAt] of [
         ["compact-pr-visit", "2026-10-13T14:00:00.000Z"],
         ["compact-pr-visit-again", "2026-10-13T15:00:00.000Z"],
       ] as const) {
-        yield* orchestrator.dispatch({
-          type: "thread.visit",
-          commandId: CommandId.make(commandId),
-          threadId,
-          visitedAt,
+        const visitTime = DateTime.makeUnsafe(visitedAt);
+        yield* eventSink.write({
+          events: [
+            {
+              id: EventId.make(eventId),
+              type: "thread.visited",
+              threadId,
+              occurredAt: visitTime,
+              payload: { ...renamed, lastVisitedAt: visitTime },
+            },
+          ],
         });
       }
       yield* maintenance.compactEventStore();
@@ -8415,6 +8406,33 @@ it.layer(Layer.fresh(layerSharedApplicationDataPlaneTest))("compact PR events", 
         (yield* threadEvents()).map((row) => row.event_type),
         ["thread.metadata-updated", "thread.visited"],
       );
+      assert.isTrue((yield* maintenance.rebuild).valid);
+      const legacyVisit = (yield* orchestrator.getThreadRecords(threadId, [])).thread;
+      assert.equal(legacyVisit.title, "Renamed before visit");
+      assert.deepEqual(legacyVisit.lastVisitedAt, DateTime.makeUnsafe("2026-10-13T15:00:00.000Z"));
+
+      for (const [commandId, visitedAt, opened] of [
+        ["compact-pr-visit-new", "2026-10-13T16:00:00.000Z", true],
+        ["compact-pr-visit-new-again", "2026-10-13T17:00:00.000Z", false],
+      ] as const) {
+        yield* orchestrator.dispatch({
+          type: "thread.visit",
+          commandId: CommandId.make(commandId),
+          threadId,
+          visitedAt,
+          opened,
+        });
+      }
+      const beforeCompact = (yield* orchestrator.getThreadRecords(threadId, [])).thread;
+      yield* maintenance.compactEventStore();
+      assert.deepEqual(
+        (yield* threadEvents()).map((row) => row.event_type),
+        ["thread.metadata-updated", "thread.visit-recorded"],
+      );
+      assert.isTrue((yield* maintenance.rebuild).valid);
+      const afterCompact = (yield* orchestrator.getThreadRecords(threadId, [])).thread;
+      assert.deepEqual(afterCompact.opens, beforeCompact.opens);
+      assert.deepEqual(afterCompact.lastVisitedAt, beforeCompact.lastVisitedAt);
       yield* orchestrator.dispatch({
         type: "thread.metadata.update",
         commandId: CommandId.make("compact-pr-rename-again"),
@@ -8426,81 +8444,6 @@ it.layer(Layer.fresh(layerSharedApplicationDataPlaneTest))("compact PR events", 
         (yield* threadEvents()).map((row) => row.event_type),
         ["thread.metadata-updated"],
       );
-    }),
-  );
-});
-
-it.layer(layerSharedApplicationDataPlaneTest)("shared application data plane", (it) => {
-  it.effect("orders retained project transactions and V2 thread transactions in one source", () =>
-    Effect.gen(function* () {
-      const projects = yield* ProjectService.ProjectService;
-      const applicationEvents = yield* OrchestrationEventStore.OrchestrationEventStore;
-      const orchestrator = yield* Orchestrator.OrchestratorV2;
-      const sql = yield* SqlClient.SqlClient;
-      const projectId = ProjectId.make("runtime-layer-shared-project");
-      const threadId = ThreadId.make("runtime-layer-shared-thread");
-      const projectInput = {
-        commandId: CommandId.make("runtime-layer-shared-project-create"),
-        projectId,
-        title: "Shared application source",
-        workspaceRoot: "/tmp/runtime-layer-shared-project",
-      };
-
-      const created = yield* projects.create(projectInput);
-      const retried = yield* projects.create(projectInput);
-      assert.deepEqual(retried, created);
-
-      const delivered = yield* Queue.unbounded<ApplicationStoredEvent>();
-      yield* applicationEvents.streamApplicationEvents().pipe(
-        Stream.take(2),
-        Stream.runForEach((event) => Queue.offer(delivered, event)),
-        Effect.forkScoped,
-      );
-
-      const projectEvent = yield* Queue.take(delivered);
-      assert.isTrue("aggregateKind" in projectEvent && projectEvent.aggregateId === projectId);
-
-      const threadResult = yield* orchestrator.dispatch({
-        type: "thread.create",
-        createdBy: "user",
-        creationSource: "web",
-        commandId: CommandId.make("runtime-layer-shared-thread-create"),
-        threadId,
-        projectId,
-        title: "Shared thread",
-        modelSelection,
-        runtimeMode: "full-access",
-        interactionMode: "default",
-        branch: null,
-        worktreePath: null,
-      });
-      const threadEvent = yield* Queue.take(delivered);
-
-      assert.equal(threadEvent.sequence, threadResult.sequence);
-      assert.isAbove(threadEvent.sequence, projectEvent.sequence);
-      assert.isTrue("aggregateKind" in projectEvent);
-      assert.isTrue("event" in threadEvent);
-      assert.equal((yield* projects.getById(projectId))._tag, "Some");
-
-      const retainedReceipts = yield* sql<{
-        readonly aggregate_kind: string;
-        readonly aggregate_id: string;
-      }>`
-        SELECT aggregate_kind, aggregate_id
-        FROM orchestration_command_receipts
-        ORDER BY result_sequence ASC
-      `;
-      assert.deepEqual(retainedReceipts, [
-        { aggregate_kind: "project", aggregate_id: projectId },
-        { aggregate_kind: "thread", aggregate_id: threadId },
-      ]);
-
-      const retiredWrites = yield* sql<{ readonly count: number }>`
-        SELECT
-          (SELECT COUNT(*) FROM orchestration_v2_events) +
-          (SELECT COUNT(*) FROM orchestration_v2_command_receipts) AS count
-      `;
-      assert.equal(retiredWrites[0]?.count, 0);
     }),
   );
 });

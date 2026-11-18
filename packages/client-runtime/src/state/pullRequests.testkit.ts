@@ -46,6 +46,7 @@ export const makeTestRuntime = Effect.fn("makeTestRuntime")(function* (
   client: WsRpcProtocolClient,
   localClient?: WsRpcProtocolClient,
   localOrigin = false,
+  loadDiff?: PullRequestDiffLoader.PullRequestDiffLoader["Service"]["load"],
 ) {
   const originTarget = localOrigin
     ? new PrimaryConnectionTarget({
@@ -66,7 +67,18 @@ export const makeTestRuntime = Effect.fn("makeTestRuntime")(function* (
     target: originTarget,
     state: yield* SubscriptionRef.make(connectionState),
     session: yield* SubscriptionRef.make(Option.some(session(client))),
-    prepared: yield* SubscriptionRef.make(Option.none<PreparedConnection>()),
+    prepared: yield* SubscriptionRef.make(
+      loadDiff === undefined
+        ? Option.none<PreparedConnection>()
+        : Option.some({
+            environmentId: originTarget.environmentId,
+            label: originTarget.label,
+            httpBaseUrl: originTarget.httpBaseUrl,
+            socketUrl: originTarget.wsBaseUrl,
+            httpAuthorization: null,
+            target: originTarget,
+          }),
+    ),
     connect: Effect.void,
     disconnect: Effect.void,
     retryNow: Effect.void,
@@ -115,7 +127,9 @@ export const makeTestRuntime = Effect.fn("makeTestRuntime")(function* (
       Layer.succeed(EnvironmentRegistry.EnvironmentRegistry, environmentRegistry),
       Layer.succeed(
         PullRequestDiffLoader.PullRequestDiffLoader,
-        PullRequestDiffLoader.PullRequestDiffLoader.of({ load: () => Effect.die("unused") }),
+        PullRequestDiffLoader.PullRequestDiffLoader.of({
+          load: loadDiff ?? (() => Effect.die("unused")),
+        }),
       ),
     ),
   );

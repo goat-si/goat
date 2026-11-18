@@ -13,6 +13,7 @@ import {
   DesktopWindowMaterialState,
   DesktopSshPreparationProgressEventSchema,
   DesktopPreviewSessionStackState,
+  DesktopPenMembersState,
 } from "@goat/contracts";
 import * as Schema from "effect/Schema";
 import * as Option from "effect/Option";
@@ -24,6 +25,7 @@ import { mergeLegacyLocalStorage } from "./legacyLocalStorageMerge.ts";
 
 const decodeWindowMaterialState = Schema.decodeUnknownOption(DesktopWindowMaterialState);
 const decodeAnnotationVoiceEvent = Schema.decodeUnknownOption(AnnotationVoiceEvent);
+const decodePenMembersState = Schema.decodeUnknownOption(DesktopPenMembersState);
 
 const SNAP_SHOT_EVENT_TYPES = new Set([
   "requested",
@@ -143,6 +145,12 @@ contextBridge.exposeInMainWorld("desktopBridge", {
   getRelayTelemetryEnabled: () =>
     ipcRenderer.sendSync(IpcChannels.GET_RELAY_TELEMETRY_ENABLED_CHANNEL) === true,
   getPathForFile: (file: File) => webUtils.getPathForFile(file),
+  ...(clientPlatform === "darwin"
+    ? {
+        startFileDrag: (input: Parameters<NonNullable<DesktopBridge["startFileDrag"]>>[0]) =>
+          ipcRenderer.invoke(IpcChannels.START_FILE_DRAG_CHANNEL, input),
+      }
+    : {}),
   getClientPlatform: () => clientPlatform,
   setNotificationBadge: (badge) =>
     ipcRenderer.invoke(IpcChannels.SET_NOTIFICATION_BADGE_CHANNEL, badge),
@@ -200,6 +208,7 @@ contextBridge.exposeInMainWorld("desktopBridge", {
   },
   getLocalEnvironmentBearerToken: () =>
     ipcRenderer.invoke(IpcChannels.GET_LOCAL_ENVIRONMENT_BEARER_TOKEN_CHANNEL),
+  getHostEnvironmentId: () => ipcRenderer.invoke(IpcChannels.GET_HOST_ENVIRONMENT_ID_CHANNEL),
   getLocalEnvironmentEnabled: () =>
     ipcRenderer.sendSync(IpcChannels.GET_LOCAL_ENVIRONMENT_ENABLED_CHANNEL) !== false,
   setLocalEnvironmentEnabled: (enabled) =>
@@ -236,6 +245,19 @@ contextBridge.exposeInMainWorld("desktopBridge", {
     ipcRenderer.invoke(IpcChannels.GET_CONNECTION_CATALOG_UNREADABLE_CHANNEL),
   clearConnectionCatalog: () => ipcRenderer.invoke(IpcChannels.CLEAR_CONNECTION_CATALOG_CHANNEL),
   discoverSshHosts: () => ipcRenderer.invoke(IpcChannels.DISCOVER_SSH_HOSTS_CHANNEL),
+  getPenMembers: () => ipcRenderer.invoke(IpcChannels.GET_PEN_MEMBERS_CHANNEL),
+  onPenMembersChanged: (listener) => {
+    const wrappedListener = (_event: Electron.IpcRendererEvent, raw: unknown) => {
+      const state = decodePenMembersState(raw);
+      if (state._tag === "Some") listener(state.value);
+    };
+    ipcRenderer.on(IpcChannels.PEN_MEMBERS_CHANGED_CHANNEL, wrappedListener);
+    return () => {
+      ipcRenderer.removeListener(IpcChannels.PEN_MEMBERS_CHANGED_CHANNEL, wrappedListener);
+    };
+  },
+  issuePenMemberSession: (target, penNodeId) =>
+    ipcRenderer.invoke(IpcChannels.ISSUE_PEN_MEMBER_SESSION_CHANNEL, { target, penNodeId }),
   resolveSshHost: (alias) => ipcRenderer.invoke(IpcChannels.RESOLVE_SSH_HOST_CHANNEL, alias),
   supportsSshEnvironmentProgress: true,
   supportsSshPreparationPhases: true,
@@ -337,14 +359,17 @@ contextBridge.exposeInMainWorld("desktopBridge", {
   setWslDistro: (distro) => ipcRenderer.invoke(IpcChannels.SET_WSL_DISTRO_CHANNEL, distro),
   setWslOnly: (enabled) => ipcRenderer.invoke(IpcChannels.SET_WSL_ONLY_CHANNEL, enabled),
   pickFolder: (options) => ipcRenderer.invoke(IpcChannels.PICK_FOLDER_CHANNEL, options),
+  toLocalBackendPath: (backendId, path) =>
+    ipcRenderer.invoke(IpcChannels.TO_LOCAL_BACKEND_PATH_CHANNEL, { backendId, path }),
   pickProjectFavicon: (initialPath) =>
     ipcRenderer.invoke(IpcChannels.PICK_PROJECT_FAVICON_CHANNEL, initialPath),
   pickThemeFiles: () => ipcRenderer.invoke(IpcChannels.PICK_THEME_FILES_CHANNEL, undefined),
   setTheme: (theme) => ipcRenderer.invoke(IpcChannels.SET_THEME_CHANNEL, theme),
-  showContextMenu: (items, position) =>
+  showContextMenu: (items, position, source) =>
     ipcRenderer.invoke(IpcChannels.CONTEXT_MENU_CHANNEL, {
       items,
       ...(position === undefined ? {} : { position }),
+      ...(source === undefined ? {} : { source }),
     }),
   receiveProviderAuthCallback: (url: string) =>
     ipcRenderer.invoke(IpcChannels.RECEIVE_PROVIDER_AUTH_CALLBACK_CHANNEL, url),
@@ -526,8 +551,12 @@ contextBridge.exposeInMainWorld("desktopBridge", {
         colorScheme: defaults?.colorScheme,
       }),
     closeTab: (tabId) => ipcRenderer.invoke(IpcChannels.PREVIEW_CLOSE_TAB_CHANNEL, { tabId }),
-    registerWebview: (tabId, webContentsId) =>
-      ipcRenderer.invoke(IpcChannels.PREVIEW_REGISTER_WEBVIEW_CHANNEL, { tabId, webContentsId }),
+    registerWebview: (tabId, webContentsId, reportCaptureDraw) =>
+      ipcRenderer.invoke(IpcChannels.PREVIEW_REGISTER_WEBVIEW_CHANNEL, {
+        tabId,
+        webContentsId,
+        ...(reportCaptureDraw === true ? { reportCaptureDraw } : {}),
+      }),
     navigate: (tabId, url) =>
       ipcRenderer.invoke(IpcChannels.PREVIEW_NAVIGATE_CHANNEL, { tabId, url }),
     goBack: (tabId) => ipcRenderer.invoke(IpcChannels.PREVIEW_GO_BACK_CHANNEL, { tabId }),
@@ -539,6 +568,14 @@ contextBridge.exposeInMainWorld("desktopBridge", {
     resetZoom: (tabId) => ipcRenderer.invoke(IpcChannels.PREVIEW_RESET_ZOOM_CHANNEL, { tabId }),
     setZoomFactor: (tabId, zoomFactor) =>
       ipcRenderer.invoke(IpcChannels.PREVIEW_SET_ZOOM_FACTOR_CHANNEL, { tabId, zoomFactor }),
+    findInPage: (input) => ipcRenderer.invoke(IpcChannels.PREVIEW_FIND_CHANNEL, input),
+    stopFindInPage: (tabId) => ipcRenderer.invoke(IpcChannels.PREVIEW_STOP_FIND_CHANNEL, { tabId }),
+    onFindResult: (listener) => {
+      const wrapped = (_event: Electron.IpcRendererEvent, result: Parameters<typeof listener>[0]) =>
+        listener(result);
+      ipcRenderer.on(IpcChannels.PREVIEW_FIND_RESULT_CHANNEL, wrapped);
+      return () => ipcRenderer.removeListener(IpcChannels.PREVIEW_FIND_RESULT_CHANNEL, wrapped);
+    },
     hardReload: (tabId) => ipcRenderer.invoke(IpcChannels.PREVIEW_HARD_RELOAD_CHANNEL, { tabId }),
     setColorScheme: (tabId, colorScheme) =>
       ipcRenderer.invoke(IpcChannels.PREVIEW_SET_COLOR_SCHEME_CHANNEL, { tabId, colorScheme }),
@@ -546,6 +583,12 @@ contextBridge.exposeInMainWorld("desktopBridge", {
       ipcRenderer.invoke(IpcChannels.PREVIEW_SET_AUDIO_MUTED_CHANNEL, { tabId, audioMuted }),
     setShown: (tabId, shown) =>
       ipcRenderer.invoke(IpcChannels.PREVIEW_SET_SHOWN_CHANNEL, { tabId, shown }),
+    setCaptureDrawn: (tabId, webContentsId, drawn) =>
+      ipcRenderer.invoke(IpcChannels.PREVIEW_SET_CAPTURE_DRAWN_CHANNEL, {
+        tabId,
+        webContentsId,
+        drawn,
+      }),
     openDevTools: (tabId) =>
       ipcRenderer.invoke(IpcChannels.PREVIEW_OPEN_DEVTOOLS_CHANNEL, { tabId }),
     listBrowserProfileOrigins: (environmentId, profileId) =>

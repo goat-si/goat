@@ -1,3 +1,4 @@
+import { existingOnly, existingOnlyError } from "./existingOnly.ts";
 import {
   AuthSessionId,
   type DesktopSshEnvironmentTarget,
@@ -134,7 +135,7 @@ const orNativeWindows =
       ),
     );
 
-const OPERATION_TIMEOUT_MS = { install: 900_000, launch: 80_000 } as const;
+const OPERATION_TIMEOUT_MS = { install: 900_000, launch: 110_000 } as const;
 
 /** One framed native operation over the same pinned SSH command path as every POSIX one. */
 const nativeWindowsCommand = Effect.fn("ssh.windows.command")(function* (
@@ -186,8 +187,13 @@ export const inspectWindowsRuntime = Effect.fn("ssh.windows.inspect")(function* 
   target: DesktopSshEnvironmentTarget,
   auth: Auth,
   version: string,
+  waitDesktopUpdate = false,
 ) {
-  const result = yield* nativeWindowsCommand(target, auth, { op: "inspect", version });
+  const result = yield* nativeWindowsCommand(target, auth, {
+    op: "inspect",
+    version,
+    ...(waitDesktopUpdate ? { waitDesktopUpdate } : {}),
+  });
   return yield* parseState(result.stdout);
 });
 
@@ -264,8 +270,9 @@ export const prepareWindowsRuntime = Effect.fn("ssh.windows.prepare")(function* 
       `GOAT cannot replace a runtime on native Windows yet. Stop it on ${target.alias} when its work is done, then reconnect.`,
     );
   notifyRuntimePhase(target, "checking", onPhase);
-  let state = yield* inspectWindowsRuntime(target, auth, version);
+  let state = yield* inspectWindowsRuntime(target, auth, version, true);
   if (state.selection === null) {
+    if (existingOnly(runner)) return yield* existingOnlyError(target.alias);
     if (runner?.keepExistingRunner === true)
       return yield* failure(`GOAT is not installed on ${target.alias}.`);
     // The same bundle, cache, HTTPS and gh sources as POSIX, with their integrity checks.

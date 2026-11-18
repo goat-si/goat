@@ -3,7 +3,11 @@ import { CONTEXT_LINK_PROTOCOLS } from "@goat/contracts/legacyT3Names";
 import { hasPendingThreadPick, type PendingThreadIdsAtom } from "./state/modelPickPending";
 import * as draftModels from "./lib/persistedModelSelections";
 import { stripInlineContextReferences } from "./lib/composerContextReferences";
-import { composerFileAttachmentMimeType } from "./components/chat/composerAttachmentFiles";
+import {
+  composerFileDedupKey,
+  composerFileMatchesReattachMarker,
+  composerImageDedupKey,
+} from "./components/chat/composerAttachmentFiles";
 import { elementContextToPreviewAnnotation } from "./lib/elementContext";
 import {
   ElementContextDetails,
@@ -61,7 +65,6 @@ import {
   DEFAULT_RUNTIME_MODE,
   type ChatFileAttachment,
   type ChatImageAttachment,
-  videoMimeType,
 } from "./types";
 import {
   type TerminalContextDraft,
@@ -100,7 +103,6 @@ import {
   createComposerPersistStorage,
   type ComposerPersistState,
 } from "./composerDraftPersistStorage";
-import { useShallow } from "zustand/react/shallow";
 import {
   replaceComposerContextReferences,
   toComposerContextId,
@@ -608,11 +610,6 @@ export interface ComposerDraftStoreState extends PreviewTabDraftActions {
   moveComposerPromptAndImages: (from: ComposerThreadTarget, to: ComposerThreadTarget) => void;
 }
 
-interface ComposerDraftModelState {
-  activeProvider: ProviderInstanceId | null;
-  modelSelectionByProvider: Partial<Record<ProviderInstanceId, ModelSelection>>;
-}
-
 function cloneModelSelection(selection: ModelSelection): DeepMutable<ModelSelection> {
   return {
     ...selection,
@@ -689,11 +686,6 @@ Object.freeze(EMPTY_REVIEW_COMMENTS);
 Object.freeze(EMPTY_THREAD_CONTEXTS);
 const EMPTY_MODEL_SELECTION_BY_PROVIDER: Partial<Record<ProviderDriverKind, ModelSelection>> =
   Object.freeze({});
-const EMPTY_COMPOSER_DRAFT_MODEL_STATE = Object.freeze<ComposerDraftModelState>({
-  activeProvider: null,
-  modelSelectionByProvider: EMPTY_MODEL_SELECTION_BY_PROVIDER,
-});
-
 const EMPTY_THREAD_DRAFT = Object.freeze<ComposerThreadDraftState>({
   prompt: "",
   images: EMPTY_IMAGES,
@@ -730,42 +722,6 @@ function createEmptyThreadDraft(): ComposerThreadDraftState {
     runtimeMode: null,
     interactionMode: null,
   };
-}
-
-function composerImageDedupKey(image: ComposerImageAttachment): string {
-  // Hydrated images get fresh lastModified values, so exclude it from dedupe.
-  return `${image.mimeType}\u0000${image.sizeBytes}\u0000${image.name}`;
-}
-
-export function composerFileDedupKey(
-  file: Pick<ComposerFileAttachment, "mimeType" | "sizeBytes" | "name">,
-): string {
-  return `${file.mimeType}\u0000${file.sizeBytes}\u0000${file.name}`;
-}
-
-export function composerFileMatchesReattachMarker(
-  marker: Pick<ComposerFileAttachment, "mimeType" | "sizeBytes" | "name">,
-  file: Pick<ComposerFileAttachment, "mimeType" | "sizeBytes" | "name">,
-): boolean {
-  if (marker.name !== file.name || marker.sizeBytes !== file.sizeBytes) return false;
-  if (marker.mimeType === file.mimeType) return true;
-  const normalizedMarkerMimeType = composerFileAttachmentMimeType({
-    name: marker.name,
-    type: marker.mimeType,
-  });
-  if (
-    normalizedMarkerMimeType === "image/x-adobe-dng" &&
-    normalizedMarkerMimeType ===
-      composerFileAttachmentMimeType({ name: file.name, type: file.mimeType })
-  ) {
-    return true;
-  }
-  const markerMimeType = marker.mimeType.toLowerCase();
-  return (
-    (markerMimeType === "" || markerMimeType === "application/octet-stream") &&
-    videoMimeType(marker) !== null &&
-    videoMimeType(file) !== null
-  );
 }
 
 function terminalContextDedupKey(context: TerminalContextDraft): string {
@@ -2966,10 +2922,9 @@ const composerDraftStore = create<ComposerDraftStoreState>()(
             return;
           }
           const instanceKey = options?.instanceId ?? defaultInstanceIdForDriver(normalizedProvider);
+          const shownModel = normalizeCustomModelSlug(options?.model);
           const fallbackModel =
-            normalizeCustomModelSlug(options?.model) ??
-            DEFAULT_MODEL_BY_PROVIDER[normalizedProvider] ??
-            DEFAULT_MODEL;
+            shownModel ?? DEFAULT_MODEL_BY_PROVIDER[normalizedProvider] ?? DEFAULT_MODEL;
           const providerOpts =
             nextProviderOptions && nextProviderOptions.length > 0 ? nextProviderOptions : undefined;
 
@@ -2981,7 +2936,7 @@ const composerDraftStore = create<ComposerDraftStoreState>()(
             const currentForProvider = nextMap[instanceKey];
             nextMap[instanceKey] = createModelSelection(
               instanceKey,
-              currentForProvider?.model ?? fallbackModel,
+              shownModel ?? currentForProvider?.model ?? fallbackModel,
               providerOpts,
             );
 
@@ -2994,32 +2949,27 @@ const composerDraftStore = create<ComposerDraftStoreState>()(
                 nextStickyMap[instanceKey] ??
                 base.modelSelectionByProvider[instanceKey] ??
                 createModelSelection(instanceKey, fallbackModel);
-              const rememberedModel = normalizeCustomModelSlug(options?.model) ?? stickyBase.model;
-              if (providerOpts) {
+              const rememberedModel = shownModel ?? stickyBase.model;
+              if (
+                rememberedModel === stickyBase.model &&
+                (providerOpts || stickyBase.options?.length)
+              ) {
                 nextStickyMap[instanceKey] = createModelSelection(
                   instanceKey,
                   stickyBase.model,
                   providerOpts,
                 );
-                nextOptionsByModel = {
-                  ...state.stickyOptionsByModelByProvider,
-                  [instanceKey]: {
-                    ...state.stickyOptionsByModelByProvider[instanceKey],
-                    [rememberedModel]: providerOpts,
-                  },
-                };
-              } else if ((stickyBase.options?.length ?? 0) > 0) {
-                const { options: _, ...rest } = stickyBase;
-                nextStickyMap[instanceKey] = rest as ModelSelection;
-                const rememberedByModel = {
-                  ...state.stickyOptionsByModelByProvider[instanceKey],
-                };
-                delete rememberedByModel[rememberedModel];
-                nextOptionsByModel = {
-                  ...state.stickyOptionsByModelByProvider,
-                  [instanceKey]: rememberedByModel,
-                };
               }
+              const rememberedByModel = { ...state.stickyOptionsByModelByProvider[instanceKey] };
+              if (providerOpts) {
+                rememberedByModel[rememberedModel] = providerOpts;
+              } else {
+                delete rememberedByModel[rememberedModel];
+              }
+              nextOptionsByModel = {
+                ...state.stickyOptionsByModelByProvider,
+                [instanceKey]: rememberedByModel,
+              };
               nextStickyActiveProvider = options.instanceId
                 ? instanceKey
                 : (base.activeProvider ?? instanceKey);
@@ -3988,7 +3938,10 @@ const composerDraftStore = create<ComposerDraftStoreState>()(
                 destination.images.length -
                 destination.files.length,
             );
-            const movedImages = source.images.slice(0, remainingAttachmentSlots);
+            const destinationImageIds = new Set(destination.images.map((image) => image.id));
+            const movedImages = source.images
+              .filter((image) => !destinationImageIds.has(image.id))
+              .slice(0, remainingAttachmentSlots);
             const movedImageIds = new Set(movedImages.map((image) => image.id));
             const retainedImages = source.images.filter((image) => !movedImageIds.has(image.id));
             const movedFiles = transferableFiles
@@ -4268,22 +4221,6 @@ export function useComposerThreadDraft(threadRef: ComposerThreadTarget): Compose
 export function useThreadHasUnsentDraft(threadRef: ScopedThreadRef): boolean {
   return useComposerDraftStore((state) =>
     composerDraftHasUserContent(getComposerDraftState(state, threadRef)),
-  );
-}
-
-export function useComposerDraftModelState(
-  threadRef: ComposerThreadTarget,
-): ComposerDraftModelState {
-  return useComposerDraftStore(
-    useShallow((state) => {
-      const draft = getComposerDraftState(state, threadRef);
-      return draft
-        ? {
-            activeProvider: draft.activeProvider,
-            modelSelectionByProvider: draft.modelSelectionByProvider,
-          }
-        : EMPTY_COMPOSER_DRAFT_MODEL_STATE;
-    }),
   );
 }
 

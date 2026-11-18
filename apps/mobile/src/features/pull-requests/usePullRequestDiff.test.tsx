@@ -7,8 +7,8 @@ import { act, useLayoutEffect, useState } from "react";
 import { createRoot } from "react-dom/client";
 import { expect, it, vi } from "vite-plus/test";
 
-const mocks = vi.hoisted(() => ({ diff: vi.fn() }));
-vi.mock("../../state/pull-requests", () => ({ composerPullRequests: { diff: mocks.diff } }));
+const mocks = vi.hoisted(() => ({ diff: vi.fn(), withheldDiffAdvertised: vi.fn() }));
+vi.mock("../../state/pull-requests", () => ({ composerPullRequests: mocks }));
 
 import { usePullRequestDiff, usePullRequestDiffEntry } from "./usePullRequestDiff";
 import * as reviewModel from "../review/reviewModel";
@@ -22,7 +22,12 @@ function patch(path: string, nextCursor: string | null = null): PullRequestDiffR
   };
 }
 
-function setup() {
+interface WithheldViewState {
+  readonly staleDiff?: boolean;
+  readonly headSha?: string;
+}
+
+function setup(initial: WithheldViewState = {}) {
   (globalThis as { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT = true;
   const registry = AtomRegistry.make();
   const requests: {
@@ -43,9 +48,11 @@ function setup() {
   mocks.diff.mockImplementation((target: { input: { cursor?: string } }) =>
     queries(target.input.cursor ?? null),
   );
+  const advertised = Atom.make(() => true);
+  mocks.withheldDiffAdvertised.mockReturnValue(advertised);
   const root = createRoot(document.createElement("div"));
   let current: ReturnType<typeof usePullRequestDiff>;
-  function Probe() {
+  function Probe(viewState: WithheldViewState) {
     const result = usePullRequestDiff(
       {
         environmentId: "environment",
@@ -54,6 +61,7 @@ function setup() {
         number: 1,
       },
       sourceControlClients.get("github").changeRequest,
+      viewState,
     );
     useLayoutEffect(() => {
       current = result;
@@ -63,12 +71,21 @@ function setup() {
   act(() =>
     root.render(
       <RegistryContext.Provider value={registry}>
-        <Probe />
+        <Probe {...initial} />
       </RegistryContext.Provider>,
     ),
   );
   return {
     requests,
+    update(viewState: WithheldViewState) {
+      act(() =>
+        root.render(
+          <RegistryContext.Provider value={registry}>
+            <Probe {...viewState} />
+          </RegistryContext.Provider>,
+        ),
+      );
+    },
     remount() {
       act(() =>
         root.render(
@@ -243,4 +260,34 @@ it("still refreshes from page one after successfully loading a continuation", as
   await screen.succeed(2, patch("refreshed.ts"));
   if (screen.current.parsed.kind !== "files") throw new Error("Expected files");
   expect(screen.current.parsed.files.map((file) => file.path)).toEqual(["refreshed.ts"]);
+});
+
+it("disables a withheld notice until the page catches up to the new head", async () => {
+  const oldHead = "a".repeat(40);
+  const newHead = "b".repeat(40);
+  const page = (headSha: string): PullRequestDiffResult => ({
+    patch: "diff --git a/large.js b/large.js\n--- a/large.js\n+++ b/large.js\n",
+    truncated: true,
+    nextCursor: null,
+    omittedFileStats: [{ path: "large.js", additions: 2, deletions: 0 }],
+    withheldFilesReadable: true,
+    revision: { baseSha: "c".repeat(40), headSha },
+  });
+  using screen = setup({ headSha: oldHead });
+  const canTap = () => {
+    const parsed = screen.current.parsed;
+    if (parsed.kind !== "files") throw new Error("Expected a withheld file");
+    return parsed.files[0]?.noticeActionable;
+  };
+  await screen.succeed(0, page(oldHead));
+  expect(canTap()).toBe(true);
+
+  screen.update({ headSha: newHead, staleDiff: true });
+  expect(canTap()).toBe(false);
+  screen.update({ headSha: newHead, staleDiff: false });
+  expect(canTap()).toBe(false);
+
+  act(() => screen.current.refresh());
+  await screen.succeed(1, page(newHead));
+  expect(canTap()).toBe(true);
 });

@@ -290,9 +290,12 @@ export class ExternalLauncherUnsupportedTargetError extends Schema.TaggedError<E
   "ExternalLauncherUnsupportedTargetError",
   {
     editor: EditorId,
+    reason: Schema.optionalKey(Schema.Literal("invalid-app-bundle")),
   },
 ) {
   override get message(): string {
+    if (this.reason === "invalid-app-bundle")
+      return "The path does not name an existing macOS app bundle directory.";
     return `${this.editor} cannot open a path containing line breaks or double quotes`;
   }
 }

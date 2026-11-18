@@ -6,7 +6,6 @@ import * as HostPressureMonitor from "./fleet/pressure/HostPressureMonitor.ts";
 import * as DecisionLayers from "./goatclaw/DecisionLayers.ts";
 import * as PermissionProfiles from "./goatclaw/PermissionProfiles.ts";
 // @effect-diagnostics nodeBuiltinImport:off - the closed import factory requires a synchronous UUID callback.
-import { isGoatConnectEnabled } from "@goat/shared/goatConnect";
 import { desiredLinkReconcileStartup } from "./cloud/DesiredLinkReconcile.ts";
 import * as NotesLayers from "./notes/NotesLayers.ts";
 import * as HomeRequests from "./provider/CodexHomeRequests.ts";
@@ -68,13 +67,12 @@ import { heartbeat, HeartbeatWebSocket } from "./wsHeartbeat.ts";
 import * as NodeHttpServer from "@effect/platform-node/NodeHttpServer";
 import * as NodeCrypto from "@effect/platform-node/NodeCrypto";
 import * as NodeServices from "@effect/platform-node/NodeServices";
-import { EnvironmentHttpApi, type RepositoryIdentity } from "@goat/contracts";
+import { EnvironmentHttpApi } from "@goat/contracts";
 import * as Deferred from "effect/Deferred";
 import * as Effect from "effect/Effect";
 import { FetchHttpClient, HttpRouter, HttpServer } from "effect/http";
 import * as HttpApiBuilder from "effect/http-api/HttpApiBuilder";
 import * as Layer from "effect/Layer";
-import * as Option from "effect/Option";
 
 import * as AcpRegistrySupport from "@goat/provider-acp-registry/server/AcpRegistrySupport";
 import * as McpProviderSessions from "@goat/provider-core/server/McpProviderSessions";
@@ -85,6 +83,7 @@ import * as CursorUsageAccounts from "@goat/provider-cursor/server/CursorUsageAc
 import * as OpenCodeRuntime from "@goat/provider-opencode/server/OpenCodeRuntime";
 import * as OpenCodeServerLedger from "@goat/provider-opencode/server/OpenCodeServerLedger";
 import * as NetService from "@goat/shared/Net";
+import * as HostProcess from "@goat/shared/HostProcess";
 import * as RelayClient from "@goat/shared/relayClient";
 import * as ProviderHostLive from "./provider/ProviderHostLive.ts";
 import * as DocumentText from "./provider/DocumentText.ts";
@@ -92,7 +91,7 @@ import * as CheckpointDiffQuery from "./checkpointing/CheckpointDiffQuery.ts";
 import * as NativeChildWorkQuery from "./orchestration-v2/NativeChildWorkQuery.ts";
 import * as CheckpointStore from "./checkpointing/CheckpointStore.ts";
 import * as SourceControlBuiltInDrivers from "./sourceControl/builtInDrivers.ts";
-import { BUILT_IN_SOURCE_CONTROL_DRIVER_LIST } from "./sourceControl/sourceControlDefinitions.ts";
+import { layerResolveRepositoryIdentity } from "./sourceControl/RepositoryIdentityLayer.ts";
 import * as TextGeneration from "./textGeneration/TextGeneration.ts";
 import * as AcpSessionService from "./provider/AcpSessionService.ts";
 import * as ProviderInstallationGate from "./provider/ProviderInstallationGate.ts";
@@ -132,7 +131,6 @@ import * as ProviderUsageLimitsIngestion from "./provider/ProviderUsageLimitsIng
 import * as UsageLimitSources from "./usage/UsageLimitSources.ts";
 import * as ProjectFaviconResolver from "./project/ProjectFaviconResolver.ts";
 import * as GoatProjectFileLoader from "./project/GoatProjectFileLoader.ts";
-import * as RepositoryIdentityResolver from "./project/RepositoryIdentityResolver.ts";
 import * as WorkspaceEntries from "./workspace/WorkspaceEntries.ts";
 import * as KnownWorkspaces from "./workspace/KnownWorkspaces.ts";
 import * as WorkspaceFileSystem from "./workspace/WorkspaceFileSystem.ts";
@@ -157,15 +155,11 @@ import * as McpOAuthHttp from "./auth/mcpOAuthHttp.ts";
 import * as ReplayMarkers from "./auth/replayMarkers.ts";
 import * as ServerSecretStore from "./auth/ServerSecretStore.ts";
 import * as BackgroundPolicy from "./background/BackgroundPolicy.ts";
+import * as KeepAwake from "./background/KeepAwake.ts";
 import * as HostPowerMonitor from "./background/HostPowerMonitor.ts";
 import * as ServerAutoUpdate from "./cloud/autoUpdate.ts";
 import * as CloudCliTokenManager from "./cloud/CliTokenManager.ts";
 import * as CloudLink from "./cloud/CloudLink.ts";
-import {
-  CLOUD_ENDPOINT_RUNTIME_CONFIG,
-  decodeRuntimeConfig,
-  RELAY_URL_SECRET,
-} from "./cloud/config.ts";
 import * as ConnectReachability from "./cloud/ConnectReachability.ts";
 import * as CloudHttp from "./cloud/http.ts";
 import * as CloudManagedEndpointRuntime from "./cloud/ManagedEndpointRuntime.ts";
@@ -228,6 +222,7 @@ import * as ThreadSearch from "./orchestration-v2/ThreadSearch.ts";
 import * as ThreadSettlementService from "./orchestration-v2/ThreadSettlementService.ts";
 import * as GuestHttp from "./guest/http.ts";
 import { fixPath } from "./os-jank.ts";
+import { resolveLauncherPath } from "./cloud/pinnedRuntime.ts";
 import * as PullRequestFilesViewed from "./persistence/PullRequestFilesViewed.ts";
 import * as PullRequestReviewGuides from "./persistence/PullRequestReviewGuides.ts";
 import * as SqlitePersistence from "./persistence/Sqlite.ts";
@@ -264,10 +259,7 @@ import * as ResourceAttribution from "./resourceTelemetry/ResourceAttribution.ts
 import * as ResourceMonitorBinary from "./resourceTelemetry/ResourceMonitorBinary.ts";
 import * as ResourceTelemetry from "./resourceTelemetry/ResourceTelemetry.ts";
 import * as RelayDeliveryProof from "./scheduledTasks/RelayDeliveryProof.ts";
-import {
-  relayHookBaseUrl,
-  ScheduledTaskWebhookOrigin,
-} from "./scheduledTasks/ScheduledTaskService.ts";
+import { layerScheduledTaskWebhookOrigin } from "./scheduledTasks/scheduledTaskWebhookOriginLayer.ts";
 import * as WebhookRoute from "./scheduledTasks/webhookRoute.ts";
 import * as AutomationHold from "./automationHold.ts";
 import * as ServerActivation from "./serverActivation.ts";
@@ -412,27 +404,10 @@ const layerSourceControlProviderRegistry = SourceControlProviderRegistry.layer.p
   Layer.provideMerge(layerVcsDriverRegistry),
 );
 
-export const layerRepositoryIdentityResolver = Layer.effect(
-  RepositoryIdentityResolver.RepositoryIdentityResolver,
-  Effect.gen(function* () {
-    const registry = yield* SourceControlProviderRegistry.SourceControlProviderRegistry;
-    return yield* RepositoryIdentityResolver.make({
-      refine: Effect.fn(function* (identity: RepositoryIdentity) {
-        for (const { kind } of BUILT_IN_SOURCE_CONTROL_DRIVER_LIST) {
-          const provider = yield* registry.get(kind);
-          if (provider.refineRepositoryIdentity === undefined) continue;
-          const refined = yield* provider.refineRepositoryIdentity({
-            identity,
-            resolveContext: (input) =>
-              registry.resolveHandle(input).pipe(Effect.map((handle) => handle.context)),
-          });
-          if (refined !== identity) return refined;
-        }
-        return identity;
-      }),
-    });
-  }),
-).pipe(Layer.provide(layerSourceControlProviderRegistry), Layer.provide(ProcessRunner.layer));
+export const layerRepositoryIdentityResolver = layerResolveRepositoryIdentity.pipe(
+  Layer.provide(layerSourceControlProviderRegistry),
+  Layer.provide(ProcessRunner.layer),
+);
 
 const layerPullRequestService = PullRequestService.layer.pipe(
   Layer.provide(PullRequestProviderRegistry.layer),
@@ -509,7 +484,7 @@ const layerVcs = Layer.empty.pipe(
 
 const layerCheckpointStore = CheckpointStore.layer.pipe(Layer.provide(layerVcsDriverRegistry));
 
-const layerPortScanner = PortScanner.layer.pipe(Layer.provide(ProcessRunner.layer));
+const layerPortScanner = PortScanner.layerForServer(layerBackground);
 
 const layerTerminal = TerminalManager.layer(
   ProviderInstanceRegistryHydration.deriveProviderInstanceConfigMap,
@@ -633,41 +608,6 @@ const layerCloudManagedEndpointRuntime = Layer.mergeAll(
   ),
 );
 
-const layerScheduledTaskWebhookOrigin = Layer.effect(
-  ScheduledTaskWebhookOrigin,
-  Effect.gen(function* () {
-    const secrets = yield* ServerSecretStore.ServerSecretStore;
-    return Effect.gen(function* () {
-      if (!isGoatConnectEnabled())
-        return { relayHookBaseUrl: null, unavailableReason: "relay_not_linked" as const };
-      const secretsRead = yield* Effect.all([
-        secrets.get(RELAY_URL_SECRET),
-        secrets.get(CLOUD_ENDPOINT_RUNTIME_CONFIG),
-      ]).pipe(Effect.option);
-      // A failed read says nothing about the link, so it reports no reason.
-      if (Option.isNone(secretsRead)) return { relayHookBaseUrl: null };
-      const [relayUrl, tunnelConfig] = secretsRead.value;
-      if (Option.isNone(relayUrl)) {
-        return { relayHookBaseUrl: null, unavailableReason: "relay_not_linked" as const };
-      }
-      if (Option.isNone(tunnelConfig)) {
-        return {
-          relayHookBaseUrl: null,
-          unavailableReason: "managed_tunnel_not_configured" as const,
-        };
-      }
-      const config = decodeRuntimeConfig(new TextDecoder().decode(tunnelConfig.value));
-      const base = relayHookBaseUrl({
-        relayUrl: new TextDecoder().decode(relayUrl.value),
-        tunnelName: Option.isSome(config) ? config.value.tunnelName : undefined,
-      });
-      return base === null
-        ? { relayHookBaseUrl: null, unavailableReason: "managed_tunnel_unrecognized" as const }
-        : { relayHookBaseUrl: base };
-    });
-  }),
-);
-
 const layerOrchestrationV2Runtime = RuntimeLayer.layerProduction.pipe(
   RuntimeLayer.provideHostPressure(HostPressureMonitor.layer),
   Layer.provide(UsageLimitSources.layerResetFallback),
@@ -740,6 +680,7 @@ const layerRuntimeCoreDependenciesBase = Layer.mergeAll(
   ),
   HostPressureMonitor.layer,
   layerThreadPullRequestWorker,
+  KeepAwake.layer,
   DelegatedTaskAnalytics.layer,
   Layer.effectDiscard(
     Effect.gen(function* () {
@@ -787,7 +728,7 @@ const layerRuntimeCoreDependenciesBase = Layer.mergeAll(
     HubNodes.layer.pipe(
       Layer.provide(HubNodeRepository.layer),
       Layer.provide(DisposableMachineStore.layer),
-      Layer.provide(SshRemoteDispatchLive.layer),
+      Layer.provide(SshRemoteDispatchLive.layerWithPenRoutes),
     ),
   ),
   // One cloud machine service for WS, MCP and both SshRemoteDispatch builds, so the
@@ -996,7 +937,7 @@ const layerMakeRoutes = Layer.mergeAll(
     ServerBrowserStream.routeLayer,
     ServerHttp.layerStaticAndDevRoute,
     Ws.layer.pipe(Layer.provide(PreviewSessions.layer), Layer.provide(layerDisposableAttach)),
-    PenServer.layer,
+    PenServer.layerWithMembership,
   ),
   Layer.mergeAll(
     McpHttpServer.layerWith(
@@ -1176,6 +1117,8 @@ const layerMakeServer = Layer.unwrap(
       ),
     );
 
+    // fixPath rewrites PATH, so pin the launcher the shell chose before it does.
+    const invokedAs = (yield* resolveLauncherPath) ?? (yield* HostProcess.InvokedAs);
     yield* fixPath({ shellEnvironmentPrepared: config.shellEnvironmentPrepared });
 
     const layerHttpListening = Layer.effectDiscard(
@@ -1273,6 +1216,7 @@ const layerMakeServer = Layer.unwrap(
       Layer.provideMerge(AgentScopeLive.layer.pipe(Layer.provide(layerServerSettings))),
       Layer.provideMerge(layerPlatformServices),
       Layer.provideMerge(PendingAttachmentSweep.layer),
+      Layer.provide(Layer.succeed(HostProcess.InvokedAs, invokedAs)),
     );
   }),
 ).pipe(Layer.provide(ProcessRunner.layer), Layer.provide(CodexRoutes.layerState));

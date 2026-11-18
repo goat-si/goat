@@ -6,6 +6,7 @@ import {
 } from "@goat/client-runtime/state/runtime";
 import { useContext } from "react";
 import { useStableCallback } from "../../hooks/useStableCallback";
+import { draftModelSelectionApplies, threadHasStarted } from "../../lib/chatThreadActions";
 import { type ComposerThreadTarget, useComposerDraftStore } from "../../composerDraftStore";
 import { environmentThreadShells, threadEnvironment } from "../../state/threads";
 import { useOrchestrationCommand } from "../../state/use-orchestration-command";
@@ -28,6 +29,7 @@ export function useApplyThreadModelPick() {
     if (
       !pick ||
       !thread ||
+      !draftModelSelectionApplies(draft, threadHasStarted(thread)) ||
       store.draftThreadsByThreadKey[key] ||
       pick.instanceId !== thread.modelSelection.instanceId
     )

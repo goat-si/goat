@@ -77,6 +77,7 @@ it.effect("a native fork starts the forked Codex thread in the target thread's c
             method: "thread/fork",
             params: {
               threadId: nativeThreadId,
+              excludeTurns: true,
               cwd: targetCwd,
               config: CodexAdapterV2.CODEX_THREAD_CONFIG,
             },

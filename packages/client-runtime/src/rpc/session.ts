@@ -60,6 +60,7 @@ const SOCKET_OPEN_TIMEOUT = "15 seconds";
 
 export interface RpcSession {
   readonly client: WsRpcProtocolClient;
+  readonly vcsBranchTransportSupported?: boolean;
   readonly initialConfig: Effect.Effect<ServerConfig, ConnectionAttemptError>;
   readonly subscribeServerConfig: (
     input?: ServerConfigSubscriptionInput,
@@ -75,6 +76,8 @@ export interface RpcSessionOptions {
   readonly environmentThemes?: boolean;
   readonly usageLimitSources?: boolean;
   readonly usageLimitsCommand?: boolean;
+  readonly providerCatalogsOnDemand?: boolean;
+  readonly providerCatalogDigests?: boolean;
 }
 
 export class RpcSessionFactory extends Context.Service<
@@ -194,6 +197,8 @@ export const make = Effect.fn("RpcSessionFactory.make")(function* (
     ...(options.environmentThemes === true ? { environmentThemes: true } : {}),
     ...(options.usageLimitSources === true ? { usageLimitSources: true } : {}),
     ...(options.usageLimitsCommand === true ? { usageLimitsCommand: true } : {}),
+    ...(options.providerCatalogsOnDemand === true ? { providerCatalogsOnDemand: true } : {}),
+    ...(options.providerCatalogDigests === true ? { providerCatalogDigests: true } : {}),
   };
   // Config state merges the snapshots it fetches back in, so no subscriber needs them broadcast.
   const onDemandSnapshots = (input: ServerConfigSubscriptionInput) => ({
@@ -471,6 +476,9 @@ export const make = Effect.fn("RpcSessionFactory.make")(function* (
 
     return {
       client: protocolClient,
+      vcsBranchTransportSupported:
+        connection.target._tag !== "HubProxyConnectionTarget" ||
+        connection.hubVcsBranchSupported === true,
       initialConfig,
       subscribeServerConfig,
       ready: Deferred.await(connected).pipe(

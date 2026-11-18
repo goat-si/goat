@@ -174,7 +174,8 @@ export const verifyReleaseDirectory = Effect.fn("verifyReleaseDirectory")(functi
   const path = yield* Path.Path;
   const inputs = yield* releaseInputs(options.dir);
   const keys = [...new Set(inputs.map((input) => releaseAssetKey(input.name)))];
-  const versions = [...new Set(inputs.map((input) => releaseAssetVersion(input.name)))];
+  // Version-free AppImages say nothing; the build's other assets carry its version.
+  const versions = [...new Set(inputs.flatMap((input) => releaseAssetVersion(input.name) ?? []))];
   const problems: string[] = [];
   const checks = ["payload-hashes"];
   if (options.mode === "mac" && options.requireSigning) checks.push("require-signing");

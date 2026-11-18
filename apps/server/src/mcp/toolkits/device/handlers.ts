@@ -46,7 +46,7 @@ export function agentDeviceQuickStart(
     )
     .join(" ");
   const platformNotes = cloud
-    ? "This is an EAS Simulator session in the cloud. It bills the Expo account per minute until it stops, so call goat_device_close with shutdown: true when you are done. It starts with no apps installed: install-from-source <url> installs a build from a URL (iOS needs a .tar.gz containing a .app), and install uploads one from this machine."
+    ? "This is an Expo Simulators session in the cloud. It bills the Expo account per minute until it stops, so call goat_device_close with shutdown: true when you are done. It starts with no apps installed: install-from-source <url> installs a build from a URL (iOS needs a .tar.gz containing a .app), and install uploads one from this machine."
     : device.platform === "ios"
       ? "First use builds an XCTest runner and can take a couple of minutes; later commands are fast."
       : "The Android snapshot helper installs itself on first use.";

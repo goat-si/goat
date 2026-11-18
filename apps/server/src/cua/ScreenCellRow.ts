@@ -114,10 +114,11 @@ export function appSubject(label: {
 
 /**
  * A one-line agent title with something to show: no line or paragraph separator of any kind.
- * Plain ECMA syntax, since providers check the advertised JSON Schema pattern themselves.
+ * Plain ECMA syntax, since providers check the advertised JSON Schema pattern themselves; the
+ * separators repeat beside \s because Go's \s omits them.
  */
 export const INPUT_TITLE =
-  /^[^\n\v\f\r\u0085\u2028\u2029]*[^\s\u0085][^\n\v\f\r\u0085\u2028\u2029]*$/u;
+  /^[^\n\v\f\r\u0085\u2028\u2029]*[^\s\v\u0085\u2028\u2029][^\n\v\f\r\u0085\u2028\u2029]*$/u;
 
 /** The title an agent gave a cell: one line, at most 80 characters, not only spaces. */
 export function inputTitle(value: unknown): string | undefined {

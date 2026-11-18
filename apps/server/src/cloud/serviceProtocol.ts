@@ -1,10 +1,18 @@
 import type { ServerSelfUpdateOutcome } from "@goat/contracts";
 
 // Bump for incompatible runtime layout changes; launchers survive self-updates. Protocol 3 requires standalone executables.
+// Durable state and the child context stay at 3 even from a launcher with protocol-4 guarantees:
+// a protocol-3 runtime refuses any other value, so a rollback to one would never start.
 export const SERVICE_LAUNCHER_PROTOCOL = 3 as const;
+/** What a launcher does beyond protocol 3 (selection leases, unit repointing), told to its
+    children in the context's optional launcherProtocol field, which protocol-3 decoders ignore. */
+export const SERVICE_LAUNCHER_GUARANTEES = 4 as const;
 export const SERVICE_LAUNCHER_CONTEXT_ENV = "GOAT_SERVICE_LAUNCHER_CONTEXT";
 export const SERVICE_ENV_FILE = "service.env";
 export const SERVICE_STATE_FILE = "service-state.json";
+/** Set by the unit or launch agent to its own file name, so the launcher can find the
+    definition that started it. */
+export const SERVICE_UNIT_ENV = "GOAT_BOOT_SERVICE_UNIT";
 /** Written before explicit stop to distinguish shutdown from update handoff. */
 export const SERVICE_STOP_MARKER_FILE = ".service-stopping";
 /** Marks a repointed unit whose service still runs the old version; launcher startup clears it. */
@@ -33,6 +41,10 @@ export interface ServiceState {
 
 export interface ServiceLauncherContext {
   readonly protocol: typeof SERVICE_LAUNCHER_PROTOCOL;
+  /** The supervising launcher's guarantees; absent from a protocol-3 launcher. */
+  readonly launcherProtocol?: number;
+  /** The launcher handles exit 78 during this trial, including the ownership wait bound. */
+  readonly trialOwnerRefusal?: true;
   readonly childVersion: string;
   readonly update?: ServiceUpdateRecord;
   /** Set for a committed target the launcher restarts while its update is on probation, so the
@@ -272,6 +284,12 @@ export function decodeServiceLauncherContext(value: string): ServiceLauncherCont
   }
   return {
     protocol: SERVICE_LAUNCHER_PROTOCOL,
+    ...(typeof parsed.launcherProtocol === "number" &&
+    Number.isSafeInteger(parsed.launcherProtocol) &&
+    parsed.launcherProtocol > SERVICE_LAUNCHER_PROTOCOL
+      ? { launcherProtocol: parsed.launcherProtocol }
+      : {}),
+    ...(parsed.trialOwnerRefusal === true ? { trialOwnerRefusal: true as const } : {}),
     childVersion: parsed.childVersion,
     ...(update === undefined ? {} : { update }),
     ...(parsed.probation === true && update?.status === "committed"

@@ -1,6 +1,8 @@
 import * as NodeCrypto from "@effect/platform-node/NodeCrypto";
 import * as NodeServices from "@effect/platform-node/NodeServices";
 import * as NetService from "@goat/shared/Net";
+import { servedRuntimeProtocolRanges } from "@goat/shared/sshRuntimeProtocol";
+import { ORCHESTRATION_PROTOCOL_VERSION } from "@goat/contracts";
 import * as ConfigProvider from "effect/ConfigProvider";
 import * as Deferred from "effect/Deferred";
 import * as Effect from "effect/Effect";
@@ -32,22 +34,30 @@ export const makeEnsureFlightFixture = Effect.gen(function* () {
   const pairingEntered = yield* Deferred.make<void>();
   const releasePairing = yield* Deferred.make<void>();
   const count = { acquisitions: 0, uploads: 0, launches: 0, pairings: 0, forwards: 0, kills: 0 };
+  const forwardedPorts: string[] = [];
+  const app = { probes: 0, requests: 0 };
   const state = {
     forwardAlive: true,
     pairingFails: false,
     launchFails: false,
+    sharedHomeWait: false,
     holdPairing: false,
     holdUpload: true,
+    configuredPort: uploadTarget.port as number,
+    appServer: false,
+    pendingReplacement: false,
   };
   const spawner = ChildProcessSpawner.make((command) =>
     Effect.gen(function* () {
       if (command._tag !== "StandardCommand") return yield* Effect.die("Unexpected command");
       if (command.args.includes("-G"))
         return makeSuccessfulProcess(
-          `hostname ${uploadTarget.hostname}\nuser ${uploadTarget.username}\nport ${uploadTarget.port}\n`,
+          `hostname ${uploadTarget.hostname}\nuser ${uploadTarget.username}\nport ${state.configuredPort}\n`,
         );
       if (command.args.includes("-N")) {
         count.forwards++;
+        const port = command.args[command.args.indexOf("-p") + 1];
+        if (port !== undefined) forwardedPorts.push(String(port));
         state.forwardAlive = true;
         return {
           ...makeRunningProcess(() => count.kills++),
@@ -55,6 +65,19 @@ export const makeEnsureFlightFixture = Effect.gen(function* () {
         };
       }
       if (command.args.includes("goat-runtime-cleanup")) return makeSuccessfulProcess("");
+      if (command.args.includes("goat-app-server-probe")) {
+        app.probes++;
+        if (!state.appServer) return makeSuccessfulProcess("GOAT_APP_SERVER=none\n");
+        const descriptor = {
+          serverVersion: ARCHIVE.archiveVersion,
+          protocol: servedRuntimeProtocolRanges(),
+          orchestrationProtocolVersion: ORCHESTRATION_PROTOCOL_VERSION,
+          capabilities: { runtimeSessions: true },
+        };
+        return makeSuccessfulProcess(
+          `GOAT_APP_SERVER=live 123 3773 .goat/desktop/userdata\n${JSON.stringify(descriptor)}\n`,
+        );
+      }
       const stdin = command.options.stdin;
       const script =
         stdin !== undefined &&
@@ -79,6 +102,10 @@ export const makeEnsureFlightFixture = Effect.gen(function* () {
           ),
         };
       }
+      if (state.appServer && script.includes("GOAT_HTTP_STATUS=")) {
+        app.requests++;
+        return makeSuccessfulProcess('{"message":"refused"}\nGOAT_HTTP_STATUS=403\n');
+      }
       if (script.includes("auth pairing create")) {
         count.pairings++;
         yield* Deferred.succeed(pairingEntered, undefined);
@@ -94,6 +121,7 @@ export const makeEnsureFlightFixture = Effect.gen(function* () {
       }
       if (isRemoteLaunch(command.args.map(String))) {
         count.launches++;
+        state.sharedHomeWait = script.includes("\ngoat_wait_shared_home_update\n");
         if (state.launchFails)
           return {
             ...makeSuccessfulProcess(""),
@@ -103,7 +131,17 @@ export const makeEnsureFlightFixture = Effect.gen(function* () {
           ...makeSuccessfulProcess(
             JSON.stringify({
               status: "ready",
-              selectedVersion: ARCHIVE.archiveVersion,
+              selectedVersion: state.pendingReplacement ? "1.2.2" : ARCHIVE.archiveVersion,
+              ...(state.pendingReplacement
+                ? {
+                    pending: {
+                      reason: "busy",
+                      replacement: "incompatible",
+                      requestedVersion: ARCHIVE.archiveVersion,
+                      liveVersion: "1.2.2",
+                    },
+                  }
+                : {}),
               remotePort: 3773,
               serverKind: "managed",
             }),
@@ -129,6 +167,7 @@ export const makeEnsureFlightFixture = Effect.gen(function* () {
     archiveDirectory: archive.directory,
     refreshOwnedRuntimeOnFirstConnection: true,
     publishedFallback: false,
+    attachAppServer: false,
   };
   const layer = Layer.mergeAll(
     NodeServices.layer,
@@ -146,8 +185,10 @@ export const makeEnsureFlightFixture = Effect.gen(function* () {
   );
   return {
     layer,
+    app,
     runner,
     count,
+    forwardedPorts,
     state,
     uploadEntered,
     releaseUpload,
