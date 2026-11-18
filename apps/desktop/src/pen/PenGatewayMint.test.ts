@@ -135,6 +135,39 @@ describe("Pen gateway session mint", () => {
     }
   });
 
+  it("answers an upgrade past the waiting limit with 503, as an ordinary request", async () => {
+    const gateway = makePenGateway({
+      membership: { requireMember: async () => "member", subscribe: () => () => {} },
+      resolvePenBinary: async () => "/pen",
+      // The member never answers the mint.
+      spawn: () => fakeChild(),
+      randomBytes: () => Buffer.alloc(32, 1),
+      appOrigins: ["goat://app"],
+    });
+    try {
+      const route = await gateway.open(pin);
+      if (route.kind !== "open") throw new Error("route refused");
+      const full = sendUntilRefused(route.httpBaseUrl, 33, 1);
+      expect(await full.refused).toEqual([503]);
+      const url = new URL(route.httpBaseUrl);
+      const answer = await new Promise<string>((resolve, reject) => {
+        let received = "";
+        const socket = NodeNet.connect(Number(url.port), "127.0.0.1", () =>
+          socket.write(
+            `GET ${url.pathname}/ws HTTP/1.1\r\nHost: ${url.host}\r\nOrigin: goat://app\r\nConnection: Upgrade\r\nUpgrade: websocket\r\nSec-WebSocket-Key: dGhlIHNhbXBsZSBub25jZQ==\r\nSec-WebSocket-Version: 13\r\n\r\n`,
+          ),
+        );
+        socket.on("data", (bytes: Buffer) => (received += bytes.toString()));
+        socket.on("error", reject);
+        socket.on("close", () => resolve(received));
+      });
+      expect(answer.startsWith("HTTP/1.1 503 ")).toBe(true);
+      full.agent.destroy();
+    } finally {
+      await gateway.dispose();
+    }
+  });
+
   it("refuses at once a route's request once every route together holds 256 waiting", async () => {
     const gateway = makePenGateway({
       membership: { requireMember: async () => "member", subscribe: () => () => {} },

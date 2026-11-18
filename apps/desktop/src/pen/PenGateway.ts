@@ -28,6 +28,15 @@ const EARLY_UPGRADE_BYTES = 64 * 1024;
 // Requests held while a session is minted, before any dial limit applies to them.
 const MINT_WAITERS = { route: 32, socket: 4, total: 256 } as const;
 
+/** A wait, a closed route or unconfirmed membership is a retry later (503); anything else is 502. */
+const failureStatus = (error: unknown) =>
+  error instanceof Error &&
+  (error.message === "busy" ||
+    error.message === "Pen membership unavailable" ||
+    error.message === "closed")
+    ? 503
+    : 502;
+
 type PenSession = { token: string; expiresAt: number };
 /** A request waiting for the route's session mint; it leaves the set when it is answered. */
 type MintWaiter = (outcome: { session: PenSession } | { error: Error }) => void;
@@ -368,15 +377,7 @@ export function makePenGateway(deps: Dependencies) {
     } catch (error) {
       if (res.headersSent) res.destroy();
       else {
-        res.writeHead(
-          error instanceof Error &&
-            (error.message === "busy" ||
-              error.message === "Pen membership unavailable" ||
-              error.message === "closed")
-            ? 503
-            : 502,
-          decision.responseHeaders,
-        );
+        res.writeHead(failureStatus(error), decision.responseHeaders);
         res.end();
       }
     }
@@ -505,9 +506,9 @@ export function makePenGateway(deps: Dependencies) {
       };
       NodeStream.pipeline(socket, stdin, done);
       NodeStream.pipeline(active.stdout, socket, done);
-    } catch {
+    } catch (error) {
       if (handshakeWritten) socket.destroy();
-      else refuse(502, decision.responseHeaders);
+      else refuse(failureStatus(error), decision.responseHeaders);
     } finally {
       if (abandon) socket.removeListener("close", abandon);
       if (pipe) await release(route, pipe);
