@@ -632,7 +632,12 @@ function UserTimelineRow({ row }: { row: Extract<TimelineRow, { kind: "message" 
                           alt={image.name}
                           decoding="async"
                           loading="lazy"
-                          className="block size-full object-cover"
+                          className={cn(
+                            "block size-full",
+                            regularImages.length === 1 && userVideos.length === 0
+                              ? "object-contain"
+                              : "object-cover",
+                          )}
                         />
                       </button>
                     ) : (
