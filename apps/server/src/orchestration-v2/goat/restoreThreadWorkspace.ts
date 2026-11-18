@@ -1,3 +1,4 @@
+import { removeEmptyDirectory } from "../../vcs/removeEmptyDirectory.ts";
 import {
   ThreadWorkspaceRestoreError,
   type ThreadId,
@@ -112,15 +113,23 @@ export const makeRestoreThreadWorkspace = Effect.gen(function* () {
       prefix: `${path.basename(input.worktreePath)}-set-aside-`,
     });
     const archived = path.join(folder, "checkout");
-    yield* Effect.tryPromise({
-      try: async () => {
-        await git(input.cwd, ["worktree", "move", "--", input.worktreePath, archived]);
-        aside.path = archived;
-        // Detach only the Git ref. Checkout would overwrite the preserved files.
-        await git(archived, ["update-ref", "--no-deref", "HEAD", state.headSha, state.headSha]);
-      },
-      catch: (cause) =>
-        new RestoreSnapshotError({ detail: "set aside the unfinished checkout", cause }),
+    yield* Effect.gen(function* () {
+      yield* Effect.tryPromise({
+        try: () => git(input.cwd, ["worktree", "move", "--", input.worktreePath, archived]),
+        catch: (cause) =>
+          new RestoreSnapshotError({
+            detail: `Git could not move the checkout at ${input.worktreePath}. Back up the checkout and each initialized submodule, including uncommitted files and local commits. Then remove the old worktree using GOAT and retry the restore.`,
+            cause,
+          }),
+      }).pipe(Effect.tapError(() => removeEmptyDirectory(folder).pipe(Effect.ignore)));
+      aside.path = archived;
+      // Detach only the Git ref. Checkout would overwrite the preserved files.
+      yield* Effect.tryPromise({
+        try: () =>
+          git(archived, ["update-ref", "--no-deref", "HEAD", state.headSha, state.headSha]),
+        catch: (cause) =>
+          new RestoreSnapshotError({ detail: "detach the preserved checkout", cause }),
+      });
     }).pipe(Effect.uninterruptible);
   });
 
@@ -159,7 +168,7 @@ export const makeRestoreThreadWorkspace = Effect.gen(function* () {
               Effect.mapError((error) =>
                 fail(
                   "git-failed",
-                  `Could not set aside the unfinished checkout at ${input.worktreePath}: ${error.message}`,
+                  `Could not set aside the unfinished checkout at ${input.worktreePath}: ${error.detail}`,
                 ),
               ),
             );

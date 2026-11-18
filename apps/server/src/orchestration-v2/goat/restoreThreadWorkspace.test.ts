@@ -351,3 +351,47 @@ it.effect("shares a pre-add recovery marker across server homes and checkout ali
     assert.isFalse(yield* second.ready(alias));
   }).pipe(Effect.provide(layerRealGit), Effect.scoped),
 );
+
+it.effect("leaves initialized submodules and explains how to recover an unmovable checkout", () =>
+  Effect.gen(function* () {
+    const { repo, worktreePath, git, snapshot } = yield* fixture;
+    const child = repo + "-module";
+    NodeFS.mkdirSync(child);
+    git(child, ["init", "-b", "main"]);
+    git(child, ["config", "user.name", "Test"]);
+    git(child, ["config", "user.email", "test@example.com"]);
+    NodeFS.writeFileSync(NodePath.join(child, "keep.txt"), "module contents");
+    git(child, ["add", "."]);
+    git(child, ["commit", "-m", "module"]);
+    git(repo, ["checkout", "feature"]);
+    git(repo, ["-c", "protocol.file.allow=always", "submodule", "add", child, "module"]);
+    git(repo, ["commit", "-am", "add module"]);
+    git(repo, ["checkout", "main"]);
+    git(repo, ["worktree", "add", worktreePath, "feature"]);
+    git(worktreePath, ["-c", "protocol.file.allow=always", "submodule", "update", "--init"]);
+    const pending = yield* makeRestorePending;
+    yield* pending.write(
+      worktreePath,
+      {
+        restoredFrom: "branch",
+        headSha: git(worktreePath, ["rev-parse", "HEAD"]),
+        snapshotSha: null,
+        snapshotRef: null,
+        applied: false,
+      },
+      repo,
+    );
+    const restore = yield* makeRestoreThreadWorkspace.pipe(
+      Effect.provide(services(snapshot, [], null)),
+    );
+    const failure = yield* Effect.flip(
+      restore({ threadId, cwd: repo, worktreePath, branch: "feature" }),
+    );
+    assert.include(failure.message, worktreePath);
+    assert.include(failure.message, "Back up the checkout and each initialized submodule");
+    assert.equal(
+      NodeFS.readFileSync(NodePath.join(worktreePath, "module", "keep.txt"), "utf8"),
+      "module contents",
+    );
+  }).pipe(Effect.provide(layerRealGit), Effect.scoped),
+);
