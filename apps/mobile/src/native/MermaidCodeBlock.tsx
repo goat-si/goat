@@ -7,8 +7,8 @@ import { parse, Svg, SvgXml } from "react-native-svg";
 
 import { MediaImagePreview } from "../components/MediaImagePreview";
 import { copyTextWithHaptic } from "../lib/copyTextWithHaptic";
-import { mermaidSvgForNative, withDiagramBackground } from "../lib/mermaidSvg";
-import { type Diagram, loadDiagram } from "./mermaidDiagrams";
+import { withDiagramBackground } from "../lib/mermaidSvg";
+import { type Diagram, loadDiagram, themedDiagramSvg } from "./mermaidDiagrams";
 import { themeColorWithAlpha } from "../lib/mobileTheme";
 import { CodeBlockFrame, CodeBlockHeaderButton } from "./CodeBlockFrame";
 import type { NativeMarkdownTextStyle } from "./SelectableMarkdownText.types";
@@ -64,7 +64,7 @@ function MermaidBlock(props: MermaidCodeBlockProps & { readonly diagram: Diagram
   const codeFontSize = textStyle.fontSize * 0.9;
   const svg =
     diagram?.status === "ready"
-      ? mermaidSvgForNative(diagram.svg, {
+      ? themedDiagramSvg(diagram, {
           "--pele-bg": textStyle.codeBlockBackgroundColor,
           "--pele-fg": textStyle.color,
           "--pele-muted": themeColorWithAlpha(textStyle.color, 0.65),

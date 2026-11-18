@@ -1,5 +1,7 @@
 import type { DiagramType } from "pele/lazy";
 
+import { mermaidSvgForNative } from "../lib/mermaidSvg";
+
 type Pele = typeof import("pele/lazy");
 export type Diagram =
   | {
@@ -18,18 +20,55 @@ const typeLoads = new Map<DiagramType, Promise<boolean>>();
 // reads without suspending, instead of flashing the source.
 const diagramLoads = new Map<string, Promise<Diagram>>();
 const DIAGRAM_CACHE_LIMIT = 64;
+// Pele bounds the source, not the drawing: a 49 KB flowchart can draw an 830 KB SVG, so the
+// cache also keeps the SVG text it holds under 8 MiB (two bytes a character).
+const DIAGRAM_CACHE_BYTES = 8 * 1024 * 1024;
+const diagramBytes = new Map<string, number>();
+let cachedBytes = 0;
+
+function forgetDiagram(source: string) {
+  diagramLoads.delete(source);
+  cachedBytes -= diagramBytes.get(source) ?? 0;
+  diagramBytes.delete(source);
+}
 
 export function loadDiagram(source: string): Promise<Diagram> {
   let load = diagramLoads.get(source);
   if (!load) {
     if (diagramLoads.size >= DIAGRAM_CACHE_LIMIT) {
       const oldest = diagramLoads.keys().next();
-      if (!oldest.done) diagramLoads.delete(oldest.value);
+      if (!oldest.done) forgetDiagram(oldest.value);
     }
-    load = renderDiagram(source);
-    diagramLoads.set(source, load);
+    const pending = renderDiagram(source);
+    load = pending;
+    diagramLoads.set(source, pending);
+    void pending.then((diagram) => {
+      if (diagramLoads.get(source) !== pending || diagram.status !== "ready") return;
+      diagramBytes.set(source, diagram.svg.length * 2);
+      cachedBytes += diagram.svg.length * 2;
+      for (const oldest of diagramLoads.keys()) {
+        if (cachedBytes <= DIAGRAM_CACHE_BYTES || oldest === source) break;
+        forgetDiagram(oldest);
+      }
+    });
   }
   return load;
+}
+
+type ReadyDiagram = Extract<Diagram, { readonly status: "ready" }>;
+const themedSvgs = new WeakMap<ReadyDiagram, { readonly key: string; readonly svg: string }>();
+
+/** A diagram's SVG with `theme` applied, rewritten once per diagram and theme, not per render. */
+export function themedDiagramSvg(
+  diagram: ReadyDiagram,
+  theme: Readonly<Record<string, string>>,
+): string {
+  const key = JSON.stringify(theme);
+  const cached = themedSvgs.get(diagram);
+  if (cached?.key === key) return cached.svg;
+  const svg = mermaidSvgForNative(diagram.svg, theme);
+  themedSvgs.set(diagram, { key, svg });
+  return svg;
 }
 
 async function renderDiagram(source: string): Promise<Diagram> {
