@@ -23,6 +23,8 @@ import {
   withoutEnvironmentThemes,
 } from "./serverConfigProjection.ts";
 
+import { type FetchedMachineCatalog, withFetchedMachineCatalogs } from "./serverProviderCatalog.ts";
+
 const cachedConfigSnapshotEvent = (config: ServerConfig): ServerConfigStreamEvent => ({
   version: 1,
   type: "snapshot",
@@ -34,6 +36,7 @@ export interface ServerConfigSubscriptionOptions {
   readonly usageLimitSources?: boolean;
   readonly usageLimitsCommand?: boolean;
   readonly providerCatalogsOnDemand?: boolean;
+  readonly providerCatalogDigests?: boolean;
 }
 
 // Configs are JSON-shaped. Missing and undefined object fields persist identically.
@@ -72,7 +75,10 @@ function sameCacheValue(previous: unknown, next: unknown): boolean {
 }
 
 export const makeEnvironmentServerConfigState = Effect.fn("EnvironmentServerConfigState.make")(
-  function* (subscription: ServerConfigSubscriptionOptions) {
+  function* (
+    subscription: ServerConfigSubscriptionOptions,
+    machineCatalogs: Stream.Stream<ReadonlyArray<FetchedMachineCatalog>> = Stream.empty,
+  ) {
     const supervisor = yield* EnvironmentSupervisor.EnvironmentSupervisor;
     const cache = yield* Persistence.EnvironmentCacheStore;
     const environmentId = supervisor.target.environmentId;
@@ -153,18 +159,39 @@ export const makeEnvironmentServerConfigState = Effect.fn("EnvironmentServerConf
 
     yield* runCachePersistence(persistence, persistPending).pipe(Effect.forkScoped);
 
-    yield* subscribe(WS_METHODS.subscribeServerConfig, {
+    type Update = (
+      current: Option.Option<ServerConfigProjection>,
+    ) => Option.Option<ServerConfigProjection>;
+    let fetchedCatalogs: ReadonlyArray<FetchedMachineCatalog> = [];
+    const configUpdates = subscribe(WS_METHODS.subscribeServerConfig, {
       ...(subscription.environmentThemes === true ? { environmentThemes: true } : {}),
       ...(subscription.usageLimitSources === true ? { usageLimitSources: true } : {}),
       ...(subscription.usageLimitsCommand === true ? { usageLimitsCommand: true } : {}),
       ...(subscription.providerCatalogsOnDemand === true ? { providerCatalogsOnDemand: true } : {}),
+      ...(subscription.providerCatalogDigests === true ? { providerCatalogDigests: true } : {}),
     }).pipe(
-      Stream.runForEach((event) =>
+      Stream.map(
+        (event): Update =>
+          (current) =>
+            Option.map(applyServerConfigProjection(current, event), (projection) =>
+              withFetchedMachineCatalogs(projection, fetchedCatalogs),
+            ),
+      ),
+    );
+    const catalogUpdates = machineCatalogs.pipe(
+      Stream.map((catalogs): Update => (current) => {
+        fetchedCatalogs = catalogs;
+        return Option.map(current, (projection) =>
+          withFetchedMachineCatalogs(projection, catalogs),
+        );
+      }),
+    );
+    yield* Stream.merge(configUpdates, catalogUpdates).pipe(
+      Stream.runForEach((update) =>
         Effect.gen(function* () {
-          const next = applyServerConfigProjection(yield* SubscriptionRef.get(state), event);
-          if (Option.isNone(next)) {
-            return;
-          }
+          const current = yield* SubscriptionRef.get(state);
+          const next = update(current);
+          if (Option.isNone(next) || next.value === Option.getOrUndefined(current)) return;
           yield* Ref.set(pendingPersistence, Option.some(next.value.config));
           yield* SubscriptionRef.set(state, next);
           yield* Queue.offer(persistence, next.value.config);
@@ -180,11 +207,12 @@ export const makeEnvironmentServerConfigState = Effect.fn("EnvironmentServerConf
 export function serverConfigStateChanges(
   environmentId: EnvironmentId,
   subscription: ServerConfigSubscriptionOptions,
+  machineCatalogs: Stream.Stream<ReadonlyArray<FetchedMachineCatalog>> = Stream.empty,
 ) {
   return followStreamInEnvironment(
     environmentId,
     Stream.unwrap(
-      makeEnvironmentServerConfigState(subscription).pipe(
+      makeEnvironmentServerConfigState(subscription, machineCatalogs).pipe(
         Effect.map((state) =>
           SubscriptionRef.changes(state).pipe(
             Stream.filterMap((projection) =>

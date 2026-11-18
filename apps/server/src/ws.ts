@@ -2334,7 +2334,13 @@ export const layerWsRpc = (
               input.providerCatalogsOnDemand === true &&
               (yield* providerInstances.getInstance(instanceId))?.snapshotForCwd !== undefined;
             return {
-              providers: workspaceProviderReply(commandProviders, instanceId, cwd, catalogOnDemand),
+              providers: workspaceProviderReply(
+                commandProviders,
+                instanceId,
+                cwd,
+                catalogOnDemand,
+                input.machineCatalog === true,
+              ),
             };
           }),
         [WS_METHODS.mcpAppsCallTool]: (input) => mcpAppRequests.callTool(input),

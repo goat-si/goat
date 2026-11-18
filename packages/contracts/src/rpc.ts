@@ -853,6 +853,8 @@ export const WsServerRefreshProvidersRpc = Rpc.make(WS_METHODS.serverRefreshProv
     workspaceSnapshotsOnDemand: Schema.optional(Schema.Boolean),
     /** With on-demand workspace snapshots, supply a pending catalog when a cwd scan is unavailable. */
     providerCatalogsOnDemand: Schema.optional(Schema.Boolean),
+    /** Include the machine catalog names and digest with the cwd snapshot. */
+    machineCatalog: Schema.optional(Schema.Boolean),
     /** As on `subscribeServerConfig`: add /usage-limits to the replied snapshot. */
     usageLimitsCommand: Schema.optional(Schema.Boolean),
   }),
@@ -2200,6 +2202,8 @@ export const WsSubscribeServerConfigRpc = Rpc.make(WS_METHODS.subscribeServerCon
     workspaceSnapshotsOnDemand: Schema.optional(Schema.Boolean),
     /** With on-demand workspace snapshots, trim catalogs for providers that scan the cwd. */
     providerCatalogsOnDemand: Schema.optional(Schema.Boolean),
+    /** Send a digest in place of each on-demand machine catalog. */
+    providerCatalogDigests: Schema.optional(Schema.Boolean),
     /** Send `providerStatusChanges` instead of resending every provider on each change. */
     providerStatusChanges: Schema.optional(Schema.Boolean),
   }),

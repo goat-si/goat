@@ -89,3 +89,40 @@ it.effect("a missing cwd scan returns the machine catalog as a pending workspace
     ]);
   }).pipe(Effect.scoped),
 );
+
+it.effect("digest subscribers get lists on demand and a matching digest on the cwd reply", () =>
+  Effect.gen(function* () {
+    const { local, registryAgent } = makeCatalogFixture();
+    const client = yield* makeProviderCatalogRpc({
+      providers: [local, registryAgent],
+      cwdProviders: new Set([local.instanceId]),
+    });
+    const first = yield* client[WS_METHODS.subscribeServerConfig]({
+      workspaceSnapshotsOnDemand: true,
+      providerStatusChanges: true,
+      providerCatalogsOnDemand: true,
+      providerCatalogDigests: true,
+    }).pipe(Stream.runHead);
+    if (first._tag !== "Some" || first.value.type !== "snapshot") {
+      return yield* Effect.die("Missing config snapshot");
+    }
+    const [digested, full] = first.value.config.providers;
+    assert.match(digested?.catalogDigest ?? "", /^[a-f0-9]{16}$/);
+    assert.deepEqual(digested?.slashCommands, []);
+    assert.deepEqual(digested?.skills, []);
+    assert.isUndefined(full?.catalogDigest);
+    assert.deepEqual(full?.skills, registryAgent.skills);
+
+    const reply = yield* client[WS_METHODS.serverRefreshProviders]({
+      instanceId: local.instanceId,
+      cwd: "/a",
+      workspaceSnapshotsOnDemand: true,
+      providerCatalogsOnDemand: true,
+      machineCatalog: true,
+    });
+    const [refreshed] = reply.providers;
+    assert.equal(refreshed?.catalogDigest, digested?.catalogDigest);
+    assert.deepEqual(refreshed?.slashCommands, [{ name: "machine-command" }]);
+    assert.deepEqual(refreshed?.workspaceSnapshots, [local.workspaceSnapshots[0]]);
+  }).pipe(Effect.scoped),
+);

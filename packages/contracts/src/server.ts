@@ -311,6 +311,10 @@ export const ServerProvider = Schema.Struct({
     Schema.withDecodingDefault(Effect.succeed([])),
   ),
   skills: Schema.Array(ServerProviderSkill).pipe(Schema.withDecodingDefault(Effect.succeed([]))),
+  /** Digest of the full machine command and skill lists for an on-demand catalog. */
+  catalogDigest: Schema.optionalKey(TrimmedNonEmptyString),
+  /** The digest whose lists this client has loaded. Stored in the client cache. */
+  loadedCatalogDigest: Schema.optionalKey(TrimmedNonEmptyString),
   workspaceSnapshots: Schema.optionalKey(Schema.Array(ServerProviderWorkspaceSnapshot)),
   usageLimits: Schema.optional(ServerProviderUsageLimits),
   versionAdvisory: Schema.optionalKey(ServerProviderVersionAdvisory),

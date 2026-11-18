@@ -65,6 +65,8 @@ import {
   type ServerConfigSubscriptionOptions,
 } from "./serverConfigState.ts";
 
+import type { FetchedMachineCatalog } from "./serverProviderCatalog.ts";
+
 export {
   makeEnvironmentServerConfigState,
   type ServerConfigSubscriptionOptions,
@@ -503,8 +505,9 @@ const snapshotBasis = (provider: ServerProviderEntry | undefined) =>
   provider && {
     enabled: provider.enabled,
     models: provider.models,
-    slashCommands: provider.slashCommands,
-    skills: provider.skills,
+    ...(provider.catalogDigest === undefined
+      ? { slashCommands: provider.slashCommands, skills: provider.skills }
+      : { catalogDigest: provider.catalogDigest }),
   };
 
 interface FetchedWorkspaceSnapshot {
@@ -597,9 +600,23 @@ export function createServerEnvironmentAtoms<R, E>(
     mode: "serial" as const,
     key: ({ environmentId }: { readonly environmentId: string }) => environmentId,
   };
+  const fetchedMachineCatalogsAtom = Atom.family((environmentId: EnvironmentId) =>
+    Atom.make<ReadonlyArray<FetchedMachineCatalog>>([]).pipe(
+      Atom.keepAlive,
+      Atom.withLabel(`environment-data:server:fetched-machine-catalogs:${environmentId}`),
+    ),
+  );
   const configProjectionFamily = Atom.family((environmentId: EnvironmentId) =>
     runtime
-      .atom(serverConfigStateChanges(environmentId, options))
+      .atom((get) =>
+        serverConfigStateChanges(
+          environmentId,
+          options,
+          options.providerCatalogDigests === true
+            ? AtomRegistry.toStream(get.registry, fetchedMachineCatalogsAtom(environmentId))
+            : Stream.empty,
+        ),
+      )
       .pipe(
         Atom.setIdleTTL(5 * 60_000),
         Atom.withLabel(`environment-data:server:config-projection:${environmentId}`),
@@ -1319,25 +1336,55 @@ export function createServerEnvironmentAtoms<R, E>(
     refreshProviders: createEnvironmentRpcCommand(runtime, {
       label: "environment-data:server:refresh-providers",
       tag: WS_METHODS.serverRefreshProviders,
-      execute: (input) =>
-        requestGuarded(WS_METHODS.serverRefreshProviders, {
+      onStart: ({ environmentId, input }, registry) =>
+        input.cwd === undefined
+          ? undefined
+          : registry
+              .get(configValueAtom(environmentId))
+              ?.providers.find((provider) => provider.instanceId === input.instanceId),
+      execute: (input, registry, environmentId) => {
+        const provider =
+          input.cwd === undefined
+            ? undefined
+            : registry
+                .get(configValueAtom(environmentId))
+                ?.providers.find((candidate) => candidate.instanceId === input.instanceId);
+        return requestGuarded(WS_METHODS.serverRefreshProviders, {
           ...input,
           workspaceSnapshotsOnDemand: true,
           ...(options.usageLimitsCommand === true ? { usageLimitsCommand: true } : {}),
           ...(options.providerCatalogsOnDemand === true ? { providerCatalogsOnDemand: true } : {}),
-        }),
-      onSuccess: ({ environmentId, input }, registry, result) =>
+          ...(provider?.catalogDigest !== undefined &&
+          provider.loadedCatalogDigest !== provider.catalogDigest
+            ? { machineCatalog: true }
+            : {}),
+        });
+      },
+      onSuccess: ({ environmentId, input }, registry, result, configProvider) =>
         Effect.sync(() => {
           const { instanceId, cwd } = input;
           if (instanceId === undefined || cwd === undefined) return;
+          const refreshed = result.providers.find((provider) => provider.instanceId === instanceId);
+          if (refreshed?.catalogDigest !== undefined) {
+            const catalog: FetchedMachineCatalog = {
+              instanceId,
+              digest: refreshed.catalogDigest,
+              slashCommands: refreshed.slashCommands,
+              skills: refreshed.skills,
+            };
+            registry.update(fetchedMachineCatalogsAtom(environmentId), (current) => [
+              ...current.filter((entry) => entry.instanceId !== instanceId),
+              catalog,
+            ]);
+          }
           registry.update(fetchedWorkspaceSnapshotsAtom(environmentId), (current) =>
             recordFetchedWorkspaceSnapshot(
               current,
               { instanceId, cwd, fresh: input.fresh === true },
               result.providers,
-              registry
-                .get(configValueAtom(environmentId))
-                ?.providers.find((provider) => provider.instanceId === instanceId),
+              configProvider && refreshed?.catalogDigest !== undefined
+                ? { ...configProvider, catalogDigest: refreshed.catalogDigest }
+                : configProvider,
             ),
           );
         }),
