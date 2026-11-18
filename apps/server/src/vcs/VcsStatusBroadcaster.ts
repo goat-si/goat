@@ -258,16 +258,24 @@ export const make = Effect.gen(function* () {
   });
 
   const getOrLoadLocalStatusUnlocked = Effect.fn("VcsStatusBroadcaster.getOrLoadLocalStatus")(
-    function* (cwd: string) {
+    function* (cwd: string, revalidateHead: boolean) {
       const cached = yield* getCachedStatus(cwd);
       if (cached?.local) {
-        return cached.local.value;
+        if (
+          !revalidateHead ||
+          (yield* workflow.currentBranch(cwd)) === cached.local.value.refName
+        ) {
+          return cached.local.value;
+        }
+        localRefreshResults.delete(cwd);
+        yield* workflow.invalidateLocalStatus(cwd);
+        return yield* loadLocalStatus(cwd, { publish: true });
       }
       return yield* loadLocalStatus(cwd);
     },
   );
-  const getOrLoadLocalStatus = (cwd: string) =>
-    localRefreshLocks.withLock(cwd, getOrLoadLocalStatusUnlocked(cwd));
+  const getOrLoadLocalStatus = (cwd: string, revalidateHead = false) =>
+    localRefreshLocks.withLock(cwd, getOrLoadLocalStatusUnlocked(cwd, revalidateHead));
 
   const getStatusParts = Effect.fn("VcsStatusBroadcaster.getStatusParts")(function* (cwd: string) {
     const cached = yield* getCachedStatus(cwd);
@@ -769,9 +777,11 @@ export const make = Effect.gen(function* () {
         );
         const subscription = yield* PubSub.subscribe(changesPubSub);
         yield* watchCheckout(cwd);
-        const initialLocal = yield* getOrLoadLocalStatus(cwd);
+        const initialLocal = yield* getOrLoadLocalStatus(cwd, true);
         const cachedStatus = yield* getCachedStatus(cwd);
-        const initialRemote = cachedStatus?.remote?.value ?? null;
+        const cachedRemote = cachedStatus?.remote;
+        const initialRemote =
+          cachedRemote && cachedRemote.branch === initialLocal.refName ? cachedRemote.value : null;
         if (input.includeRemote !== false) {
           yield* retainRemotePoller(
             cwd,

@@ -17,6 +17,36 @@ import {
   remoteStatusWithPr,
 } from "./vcsStatusBroadcaster.testkit.ts";
 
+it.effect("a passive subscriber reopens on the new branch without the old pull request", () => {
+  const state = { ...newState(), currentRemoteStatus: remoteStatusWithPr };
+  return Effect.gen(function* () {
+    const broadcaster = yield* VcsStatusBroadcaster.VcsStatusBroadcaster;
+    const input = { cwd: "/repo", includeRemote: false };
+    yield* broadcaster.getStatus(input);
+    const initial = yield* Stream.runHead(broadcaster.streamStatus(input));
+    assert.deepEqual(
+      initial,
+      Option.some({
+        _tag: "snapshot" as const,
+        local: baseLocalStatus,
+        remote: remoteStatusWithPr,
+      }),
+    );
+
+    state.currentLocalStatus = { ...baseLocalStatus, refName: "terminal-switch" };
+    assert.deepEqual(
+      yield* Stream.runHead(broadcaster.streamStatus(input)),
+      Option.some({
+        _tag: "snapshot" as const,
+        local: state.currentLocalStatus,
+        remote: null,
+      }),
+    );
+    assert.strictEqual(state.localStatusCalls, 2);
+    assert.strictEqual(state.remoteStatusCalls, 1);
+  }).pipe(Effect.provide(layerTestFor(state)));
+});
+
 describe("VcsStatusBroadcaster branch status", () => {
   it.effect("publishes a terminal branch switch without reading remote status", () => {
     const state = {
