@@ -1,3 +1,4 @@
+import * as NodeCrypto from "@effect/platform-node/NodeCrypto";
 import { describe, expect, it } from "@effect/vitest";
 import * as NodeServices from "@effect/platform-node/NodeServices";
 import * as NetService from "@goat/shared/Net";
@@ -18,6 +19,7 @@ import * as NodePath from "node:path";
 const target = { alias: "pen-member", hostname: "pen-member", username: null, port: null };
 const testServices = Layer.mergeAll(
   NodeServices.layer,
+  NodeCrypto.layer,
   NetService.layer,
   SshAuth.SshPasswordPrompt.disabledLayer,
   FetchHttpClient.layer,
@@ -33,6 +35,7 @@ const fixture = () => {
     beginSetupOperation: unused,
     publishSetupOutcome: unused,
     publishProviderDiagnosis: unused,
+    closeAllTunnels: Effect.void,
     forgetEnvironment: unused,
     disconnectEnvironment: () => Effect.void,
     revalidateTunnels: () => Effect.void,

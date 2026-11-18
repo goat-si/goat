@@ -1,3 +1,4 @@
+import * as NodeCrypto from "@effect/platform-node/NodeCrypto";
 import * as NodeServices from "@effect/platform-node/NodeServices";
 import { expect, it } from "@effect/vitest";
 import type { PenMembershipView } from "@goat/ssh/penMembershipWatch";
@@ -18,7 +19,7 @@ const layer = Auth.layer.pipe(
   Layer.provide(Secrets.layer),
   Layer.provide(Environment.layerIdentity),
   Layer.provide(Config.layerTest(process.cwd(), { prefix: "goat-pen-member-sessions-" })),
-  Layer.provide(NodeServices.layer),
+  Layer.provide(Layer.mergeAll(NodeServices.layer, NodeCrypto.layer)),
 );
 
 const id = (letter: string) => letter.repeat(26);

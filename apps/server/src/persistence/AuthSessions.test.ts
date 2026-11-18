@@ -109,12 +109,17 @@ it.effect("replacement, bulk revocation and Pen cleanup use the effective revoca
     expect(yield* repository.createReplacingActive({ session: input("new"), revokedAt })).toEqual([
       AuthSessionId.make("old"),
     ]);
+    expect(yield* repository.revoke({ sessionId: AuthSessionId.make("new"), revokedAt })).toBe(true);
+    // Revoke-others keeps Pen-bound rows, so the member session it revokes carries no binding.
+    const { penBinding: _unbound, ...member } = input("member");
+    yield* repository.create(member);
     expect(
       yield* repository.revokeAllExcept({
         currentSessionId: AuthSessionId.make("other"),
         revokedAt,
+        keep: { subject: "browser", method: "browser-session-cookie" },
       }),
-    ).toEqual([AuthSessionId.make("new")]);
+    ).toEqual({ revoked: [AuthSessionId.make("member")], kept: [] });
     const rows = yield* sql<{
       readonly revokedAt: string;
       readonly memberRevokedAt: string | null;

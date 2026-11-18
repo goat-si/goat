@@ -1,3 +1,4 @@
+import * as NodeCrypto from "@effect/platform-node/NodeCrypto";
 import { assert, describe, it } from "@effect/vitest";
 import { AuthStandardClientScopes, type DesktopPenMembersState } from "@goat/contracts";
 import { SshInvalidTargetError } from "@goat/ssh/errors";
@@ -47,7 +48,7 @@ const ssh = (issueClientSession: SshTunnel.SshEnvironmentManagerShape["issueClie
     ),
     Layer.provide(NetService.layer),
     Layer.provide(FetchHttpClient.layer),
-    Layer.provideMerge(NodeServices.layer),
+    Layer.provideMerge(Layer.mergeAll(NodeServices.layer, NodeCrypto.layer)),
   );
 
 describe("Pen member IPC", () => {

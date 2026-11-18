@@ -1,4 +1,6 @@
+import * as NodeCrypto from "@effect/platform-node/NodeCrypto";
 import * as NodeServices from "@effect/platform-node/NodeServices";
+import * as Layer from "effect/Layer";
 import { assert, describe, it } from "@effect/vitest";
 import * as Effect from "effect/Effect";
 import * as Deferred from "effect/Deferred";
@@ -26,6 +28,8 @@ import {
   shell,
   stateKey,
 } from "./tunnel.runnerSwitch.fixture.ts";
+
+const nodeLayer = Layer.mergeAll(NodeServices.layer, NodeCrypto.layer);
 
 describe.skipIf(HostProcess.Platform.defaultValue() === "win32")(
   "existing-only launch on a host",
@@ -63,7 +67,7 @@ describe.skipIf(HostProcess.Platform.defaultValue() === "win32")(
         assert.isTrue(yield* f.oldProcess!.isRunning);
         assert.isFalse((yield* f.events).some((event) => event.version === nextVersion));
         yield* f.cleanCandidates;
-      }).pipe(Effect.provide(NodeServices.layer), Effect.scoped),
+      }).pipe(Effect.provide(nodeLayer), Effect.scoped),
     );
     it.live("a running compatible GOAT is attached to without writing its wrapper or alias", () =>
       Effect.gen(function* () {
@@ -81,7 +85,7 @@ describe.skipIf(HostProcess.Platform.defaultValue() === "win32")(
         assert.isTrue(yield* f.oldProcess!.isRunning);
         assert.deepEqual(yield* lifecycle, lifecycleBefore);
         yield* f.cleanCandidates;
-      }).pipe(Effect.provide(NodeServices.layer), Effect.scoped),
+      }).pipe(Effect.provide(nodeLayer), Effect.scoped),
     );
   },
 );
@@ -104,7 +108,7 @@ describe("existing-only SSH preparation", () => {
           assert.equal(error.reason, "existing-runtime-required");
         assert.equal(f.count.uploads, 0);
       }).pipe(Effect.provide(f.layer), Effect.scoped);
-    }).pipe(Effect.provide(NodeServices.layer), Effect.scoped),
+    }).pipe(Effect.provide(nodeLayer), Effect.scoped),
   );
   it.effect("fails without acquiring when no compatible runtime exists", () =>
     Effect.gen(function* () {
@@ -122,7 +126,7 @@ describe("existing-only SSH preparation", () => {
         assert.equal(f.count.uploads, 0);
         assert.equal(f.count.launches, 0);
       }).pipe(Effect.provide(f.layer), Effect.scoped);
-    }).pipe(Effect.provide(NodeServices.layer), Effect.scoped),
+    }).pipe(Effect.provide(nodeLayer), Effect.scoped),
   );
   it.effect("reuses a compatible live runtime without uploading", () => {
     const version = "1.2.2";
@@ -218,7 +222,7 @@ describe("existing-only SSH preparation", () => {
       assert.equal(calls, 1);
     }).pipe(
       Effect.provideService(ChildProcessSpawner.ChildProcessSpawner, fake),
-      Effect.provide(NodeServices.layer),
+      Effect.provide(nodeLayer),
     );
   });
   it("forces installed-only launch flags even for an unrestricted selection", () => {
@@ -284,7 +288,7 @@ describe("existing-only SSH preparation", () => {
       assert.notInclude(scripts[0], "REFRESH_IF_IDLE=1");
     }).pipe(
       Effect.provideService(ChildProcessSpawner.ChildProcessSpawner, fake),
-      Effect.provide(NodeServices.layer),
+      Effect.provide(nodeLayer),
     );
   });
   it.effect("reports a changed existing wrapper as existing-runtime-required", () => {
@@ -305,7 +309,7 @@ describe("existing-only SSH preparation", () => {
       if (error._tag === "SshLaunchError") assert.equal(error.reason, "existing-runtime-required");
     }).pipe(
       Effect.provideService(ChildProcessSpawner.ChildProcessSpawner, fake),
-      Effect.provide(NodeServices.layer),
+      Effect.provide(nodeLayer),
       Effect.scoped,
     );
   });
@@ -336,7 +340,7 @@ describe("existing-only SSH preparation", () => {
         assert.equal((yield* Queue.take(admissions)).disposition, "leader");
         assert.equal(f.count.uploads, 1);
       }).pipe(Effect.provide(f.layer), Effect.scoped);
-    }).pipe(Effect.provide(NodeServices.layer), Effect.scoped),
+    }).pipe(Effect.provide(nodeLayer), Effect.scoped),
   );
   it.effect("restricted ensure leaves an earlier replacement pending", () =>
     Effect.gen(function* () {
@@ -356,7 +360,7 @@ describe("existing-only SSH preparation", () => {
         assert.deepEqual(second.pendingReplacement, first.pendingReplacement);
         assert.equal(f.count.launches, before);
       }).pipe(Effect.provide(f.layer), Effect.scoped);
-    }).pipe(Effect.provide(NodeServices.layer), Effect.scoped),
+    }).pipe(Effect.provide(nodeLayer), Effect.scoped),
   );
   it.effect("attaches to an app server and preserves it when session issuance is refused", () =>
     Effect.gen(function* () {
@@ -389,7 +393,7 @@ describe("existing-only SSH preparation", () => {
         if (!("type" in again)) assert.equal(again.remoteServerKind, "app");
         assert.equal(f.count.launches, 0);
       }).pipe(Effect.provide(f.layer), Effect.scoped);
-    }).pipe(Effect.provide(NodeServices.layer), Effect.scoped),
+    }).pipe(Effect.provide(nodeLayer), Effect.scoped),
   );
   it.effect("issuing a session without a runtime fails without acquisition", () =>
     Effect.gen(function* () {
@@ -412,6 +416,6 @@ describe("existing-only SSH preparation", () => {
         assert.equal(f.count.uploads, 0);
         assert.equal(f.count.acquisitions, 0);
       }).pipe(Effect.provide(f.layer), Effect.scoped);
-    }).pipe(Effect.provide(NodeServices.layer), Effect.scoped),
+    }).pipe(Effect.provide(nodeLayer), Effect.scoped),
   );
 });

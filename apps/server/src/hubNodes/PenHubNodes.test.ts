@@ -15,10 +15,11 @@ import { PenAliasUnreadable } from "@goat/ssh/penAlias";
 import * as CloudMachineService from "../cloudMachines/CloudMachineService.ts";
 import * as ServerEnvironment from "../environment/ServerEnvironment.ts";
 import * as LinkedHosts from "../linkedHosts/LinkedHosts.ts";
-import migration from "../persistence/Migrations/106_HubNodes.ts";
+import migration from "../persistence/Migrations/116_HubNodes.ts";
 import { ServerSettingsService } from "../serverSettings.ts";
 import * as SshRemoteDispatch from "../sshRemote/SshRemoteDispatch.ts";
 import * as DisposableMachineStore from "../hub/disposable/DisposableMachineStore.ts";
+import * as DisposableRouteGuard from "../hub/disposable/DisposableRouteGuard.ts";
 import * as HubNodeRepository from "./HubNodeRepository.ts";
 import * as HubNodes from "./HubNodes.ts";
 import * as PenHubNodes from "./PenHubNodes.ts";
@@ -116,6 +117,10 @@ const fixture = Effect.gen(function* () {
         commitForward: () => Effect.die("no disposable machine commits in Pen tests"),
       }),
     ),
+    Effect.provideService(DisposableRouteGuard.DisposableRouteGuard, {
+      claim: () => Effect.undefined,
+      refusal: () => Effect.undefined,
+    }),
     Effect.provideService(ServerEnvironment.ServerEnvironment, {
       getEnvironmentId: Effect.succeed(hub),
       getDescriptor: Effect.succeed(descriptor),
