@@ -209,7 +209,22 @@ interface RunBackendProcessOptions extends DesktopBackendStartConfig {
   readonly onOutputFailure?: (error: BackendProcessOutputError) => Effect.Effect<void>;
 }
 
+const LOOPBACK_HOSTNAMES = new Set(["127.0.0.1", "localhost", "[::1]"]);
+
 const waitForHttpReady = (
+  options: BackendProcessContext & { readonly timeout: Duration.Duration },
+): Effect.Effect<void, BackendReadinessTimeoutError, HttpClient.HttpClient> => {
+  const poll = pollHttpReady(options);
+  if (LOOPBACK_HOSTNAMES.has(options.httpBaseUrl.hostname)) return poll;
+  // A refused Windows-to-WSL connection can take a second to fail.
+  return Effect.raceAll(
+    Array.from({ length: 4 }, (_, index) =>
+      Effect.sleep(Duration.millis(250 * index)).pipe(Effect.andThen(poll)),
+    ),
+  );
+};
+
+const pollHttpReady = (
   options: BackendProcessContext & { readonly timeout: Duration.Duration },
 ): Effect.Effect<void, BackendReadinessTimeoutError, HttpClient.HttpClient> => {
   const readinessUrl = new URL(BACKEND_READINESS_PATH, options.httpBaseUrl);

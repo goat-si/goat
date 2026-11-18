@@ -264,7 +264,7 @@ describe.skipIf(posixShellRunner === null)("WSL runtime install script (executed
     };
   };
 
-  const probeFixture = (fixture: ReturnType<typeof createFixture>) =>
+  const probeFixture = () =>
     runShell(
       [
         `export HOME=${sh(`${fixture.work}/home`)}`,
@@ -278,7 +278,7 @@ describe.skipIf(posixShellRunner === null)("WSL runtime install script (executed
         "  }",
         '  eval "$2"',
         "); }",
-        buildWslRuntimeProbeScript(fixture.runtimeRoot),
+        buildWslRuntimeProbeScript(),
       ].join("\n"),
     );
 
@@ -296,7 +296,7 @@ describe.skipIf(posixShellRunner === null)("WSL runtime install script (executed
     );
     expect(setup.status, setup.stderr).toBe(0);
 
-    const probe = probeFixture(fixture);
+    const probe = probeFixture();
 
     expect(probe.status, probe.stderr).toBe(0);
     const resolvedPath = parseResolvedPath(probe.stdout);
@@ -313,7 +313,7 @@ describe.skipIf(posixShellRunner === null)("WSL runtime install script (executed
       [
         "bash() { return 127; }",
         'export PATH="/fixture/bin:/usr/bin:/bin"',
-        buildWslRuntimeProbeScript(fixture.runtimeRoot),
+        buildWslRuntimeProbeScript(),
       ].join("\n"),
     );
 
@@ -559,6 +559,10 @@ describe.skipIf(posixShellRunner === null)("WSL runtime install script (executed
       expect(result.status, `${result.stdout}\n${result.stderr}`).toBe(0);
     },
   );
+});
+
+it("resolves the WSL environment without re-running the staged CLI", () => {
+  expect(buildWslRuntimeProbeScript()).not.toContain(" --version >/dev/null 2>&1");
 });
 
 describe("parseResolvedPath", () => {
