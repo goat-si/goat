@@ -2569,8 +2569,8 @@ export const makeOpenCodeAdapterV2 = Effect.fn("makeOpenCodeAdapterV2")(function
             readonly metadata?: { readonly [key: string]: unknown };
           },
         ) =>
-          sdkCall("session.update", { sessionID, ...body }, () =>
-            client.session.update({ sessionID, ...body }),
+          sdkCall("session.update", { sessionID, ...body }, (signal) =>
+            client.session.update({ sessionID, ...body }, { signal }),
           );
 
         const syncSubagentRules = (state: OpenCodeThreadState, subagentsOff: boolean) =>
@@ -2641,7 +2641,7 @@ export const makeOpenCodeAdapterV2 = Effect.fn("makeOpenCodeAdapterV2")(function
           });
           if (scan) resumedChildPolicies.set(state, { base, subagentsOff });
           return subagentsOff;
-        });
+        }, Effect.timeout("10 seconds"));
 
         // Native commands await generation; user-message receipts admit their background requests.
         const submitPrompt = Effect.fn("OpenCode.submitPrompt")(function* (
