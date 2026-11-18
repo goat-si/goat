@@ -27,7 +27,7 @@ interface Options {
   readonly diagnose?: (executable: string, cause: unknown) => Promise<unknown>;
   readonly env?: NodeJS.ProcessEnv;
   readonly platform?: NodeJS.Platform;
-  readonly chromeVersion?: string;
+  readonly chromeVersion?: string | undefined;
   readonly idleBrowserMs?: number;
   readonly onContextClose?: (context: BrowserContext) => void;
 }

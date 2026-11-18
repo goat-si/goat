@@ -25,7 +25,7 @@ import { openZipArchive } from "../zipArchive.ts";
 // https://googlechromelabs.github.io/chrome-for-testing/known-good-versions-with-downloads.json
 // Never pin below 156.0.8078.70: the shell has no CRLSet and older SPKI blocklists trust
 // compromised eMudhra intermediates (crrev.com/c/8627687).
-export const VERSION = "157.0.8103.78";
+const VERSION = "157.0.8103.78";
 const CHROME_VERSION = "157.0.8103.78";
 export type PreviewBrowserVariant = "headless-shell" | "chrome";
 
@@ -179,6 +179,7 @@ export class PreviewBrowser extends Context.Service<
       PreviewBrowserInstallError | PreviewBrowserInstallingError | PreviewBrowserUnsupportedError
     >;
     readonly installed: Effect.Effect<Option.Option<string>>;
+    readonly managedReleaseVersion?: string | undefined;
     /** Reads where installation stands without starting or retrying one. */
     readonly installStatus: Effect.Effect<PreviewBrowserInstallStatus>;
   }
@@ -646,7 +647,12 @@ export const makePreviewBrowser = Effect.fn("PreviewBrowser.make")(function* (
     }
   });
 
-  return PreviewBrowser.of({ executable, installed, installStatus });
+  return PreviewBrowser.of({
+    executable,
+    installed,
+    installStatus,
+    managedReleaseVersion: customExecutablePath === undefined ? release?.version : undefined,
+  });
 });
 
 export const layer = Layer.effect(
