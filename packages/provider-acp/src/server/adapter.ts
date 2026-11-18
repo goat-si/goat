@@ -7132,6 +7132,7 @@ export const makeAcpAdapterV2 = Effect.fn("makeAcpAdapterV2")(function* (
                   wakeBufferLength: (yield* Ref.get(wakeBuffer)).length,
                 });
                 if (!isContinuationTurn && !isAppOwnedWakeTurn && !preserveBufferedContinuation) {
+                  rootForegroundAwakened = false;
                   yield* Ref.set(wakeBuffer, []);
                   yield* Ref.set(wakeReports, noWakeReports);
                 }
