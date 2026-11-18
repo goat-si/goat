@@ -1,9 +1,14 @@
 import { makeHarness } from "./bootService.testkit.ts";
 import * as NodeServices from "@effect/platform-node/NodeServices";
 import { expect, it } from "@effect/vitest";
+import * as Clock from "effect/Clock";
+import * as Deferred from "effect/Deferred";
+import * as Duration from "effect/Duration";
 import * as Effect from "effect/Effect";
+import * as Fiber from "effect/Fiber";
 import * as FileSystem from "effect/FileSystem";
 import * as Path from "effect/Path";
+import * as TestClock from "effect/testing/TestClock";
 import { SERVICE_LAUNCHER_PROTOCOL, SERVICE_RESTART_PENDING_FILE } from "./serviceProtocol.ts";
 
 const pendingState = JSON.stringify({
@@ -19,6 +24,75 @@ const pendingState = JSON.stringify({
 });
 
 it.layer(NodeServices.layer)("boot service selection", (it) => {
+  it.effect.each([
+    ["accepts the selected runtime on Linux", "linux", undefined],
+    ["accepts the selected runtime on macOS", "darwin", undefined],
+    ["rejects an endpoint reporting the wrong version", "linux", "1.2.4"],
+  ] as const)(
+    "restart from the newer CLI after rollback %s",
+    ([_scenario, platform, reportedVersion]) =>
+      Effect.gen(function* () {
+        const { makeService, fs, baseDir, statePath, commands, control } =
+          yield* makeHarness(platform);
+        const path = yield* Path.Path;
+        const newer = yield* makeService(undefined, "1.2.4");
+        const { unitPath } = yield* newer.install({ start: false });
+        const dbPath = path.join(baseDir, "userdata", "statev2.sqlite");
+        const update = { id: "u", fromVersion: "1.2.3", targetVersion: "1.2.4" };
+        yield* fs.writeFileString(
+          statePath,
+          JSON.stringify({
+            protocol: SERVICE_LAUNCHER_PROTOCOL,
+            activeVersion: "1.2.4",
+            update: { ...update, status: "committed" },
+            probation: { dbPath, deadline: 1, rollbackReason: "probation-exit:42" },
+          }),
+        );
+        control.stateOnActivate = JSON.stringify({
+          protocol: SERVICE_LAUNCHER_PROTOCOL,
+          activeVersion: "1.2.3",
+          update: { ...update, status: "rolled-back", reason: "probation-exit:42" },
+        });
+        if (reportedVersion !== undefined) control.reportedVersion = reportedVersion;
+        commands.length = 0;
+
+        const clock = yield* Clock.Clock;
+        const waitingOrDone = yield* Deferred.make<void>();
+        const restart = yield* newer.restart.pipe(
+          Effect.provideService(Clock.Clock, {
+            ...clock,
+            sleep: (duration) =>
+              Duration.toMillis(duration) === 200
+                ? Deferred.succeed(waitingOrDone, undefined).pipe(
+                    Effect.andThen(clock.sleep(Duration.seconds(61))),
+                  )
+                : clock.sleep(duration),
+          }),
+          Effect.ensuring(Deferred.succeed(waitingOrDone, undefined)),
+          Effect.result,
+          Effect.forkChild,
+        );
+        yield* Deferred.await(waitingOrDone);
+        yield* TestClock.adjust("61 seconds");
+        const result = yield* Fiber.join(restart);
+        const starts = commands.filter(
+          (command) =>
+            command === "systemctl --user restart goat.service" ||
+            command === `launchctl bootstrap gui/501 ${unitPath}`,
+        );
+        expect(control.readinessRequests).toBe(1);
+        if (reportedVersion === undefined) {
+          expect(result).toMatchObject({ _tag: "Success", success: "restarted" });
+          expect(starts).toHaveLength(1);
+        } else {
+          expect(result).toMatchObject({
+            _tag: "Failure",
+            failure: { step: "waiting for the service to answer" },
+          });
+        }
+      }),
+  );
+
   it.effect("a pending remote update whose unit is gone names the command that finishes it", () =>
     Effect.gen(function* () {
       const { service, fs, statePath, baseDir } = yield* makeHarness();

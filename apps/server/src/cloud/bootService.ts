@@ -717,8 +717,16 @@ export const make = Effect.fn("cloud.boot_service.make")(function* (input: {
       return "pending";
     });
 
-  /** Resolves once the new unit's server answers the environment descriptor. */
-  const awaitServiceAnswer = (manager: BootServiceManager, begunAt: number) =>
+  // The launcher can change the selection during startup to finish a rollback.
+  const selectedVersion = fs.readFileString(statePath).pipe(
+    Effect.map(serviceStateActiveVersion),
+    Effect.orElseSucceed(() => undefined),
+  );
+  const awaitServiceAnswer = (
+    manager: BootServiceManager,
+    begunAt: number,
+    expectedVersion: Effect.Effect<string | undefined> = Effect.succeed(input.cliVersion),
+  ) =>
     Effect.gen(function* () {
       const deadline = begunAt + Duration.toMillis(SERVICE_READY_TIMEOUT);
       const giveUp = new BootServiceCommandError({ step: "waiting for the service to answer" });
@@ -729,8 +737,9 @@ export const make = Effect.fn("cloud.boot_service.make")(function* (input: {
         if (
           Option.isSome(runtime) &&
           runtime.value.serviceManaged === true &&
-          runtime.value.serverVersion === input.cliVersion &&
-          Date.parse(runtime.value.startedAt) >= begunAt
+          Date.parse(runtime.value.startedAt) >= begunAt &&
+          runtime.value.serverVersion !== undefined &&
+          runtime.value.serverVersion === (yield* expectedVersion)
         ) {
           const requestUrl = yield* Effect.try({
             try: () => new URL(GOAT_ENVIRONMENT_PATH, runtime.value.origin).href,
@@ -745,7 +754,10 @@ export const make = Effect.fn("cloud.boot_service.make")(function* (input: {
                 Effect.timeout(Duration.seconds(1)),
                 Effect.option,
               );
-            if (Option.isSome(reported) && reported.value.serverVersion === input.cliVersion) {
+            if (
+              Option.isSome(reported) &&
+              reported.value.serverVersion === runtime.value.serverVersion
+            ) {
               return;
             }
           }
@@ -1074,7 +1086,7 @@ export const make = Effect.fn("cloud.boot_service.make")(function* (input: {
         yield* writeDurably(unitPath, migrateLegacyBootServiceUnit(legacy.value.contents));
         yield* retireLegacyUnit(legacy.value);
         yield* runSteps(manager.activate);
-        yield* awaitServiceAnswer(manager, begunAt);
+        yield* awaitServiceAnswer(manager, begunAt, selectedVersion);
       }).pipe(Effect.tapError(() => reinstateLegacyUnit(manager, legacy.value)));
       yield* fs.remove(restartPendingPath, { force: true });
       return "restarted" as const;
@@ -1097,7 +1109,7 @@ export const make = Effect.fn("cloud.boot_service.make")(function* (input: {
       : Effect.void;
     yield* retireLeftover.pipe(
       Effect.andThen(runSteps(manager.activate)),
-      Effect.andThen(awaitServiceAnswer(manager, begunAt)),
+      Effect.andThen(awaitServiceAnswer(manager, begunAt, selectedVersion)),
       Effect.tapError(() => runSteps(manager.restart).pipe(Effect.ignore)),
     );
     yield* fs.remove(restartPendingPath, { force: true });
