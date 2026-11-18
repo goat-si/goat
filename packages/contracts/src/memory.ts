@@ -254,6 +254,7 @@ export const MemoryFailureCode = Schema.Literals([
   "scanner_pending",
   "forget_pending",
   "hub_upgrade_required",
+  "hub_unavailable",
 ]);
 export type MemoryFailureCode = typeof MemoryFailureCode.Type;
 

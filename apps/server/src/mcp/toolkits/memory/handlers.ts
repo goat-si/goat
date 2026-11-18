@@ -71,6 +71,7 @@ export const memoryLegacyError = (error: unknown) => {
       code: "thread_lineage_incomplete",
       guidance: M.MEMORY_LEGACY_LINEAGE_GUIDANCE,
     });
+  if (mapped.code === "hub_unavailable") return new M.MemoryRpcError({ code: "unavailable" });
   if (mapped.capacity?.dimension === "dependencies")
     return new M.MemoryRpcError({ code: "invalid_output" });
   if (mapped.capacity?.dimension === "payload_bytes")

@@ -1660,9 +1660,30 @@ const make = Effect.gen(function* () {
       const result = yield* Effect.result(
         Effect.gen(function* () {
           yield* ensureEpoch(r.settings.memoryHubVersion);
-          const ack = yield* r.connection
-            ? client.push(r.connection, input)
-            : hub.push({ ...input, ...selfFeatures }, r.principal!);
+          const ack = yield* (
+            r.connection
+              ? client.push(r.connection, input)
+              : hub.push({ ...input, ...selfFeatures }, r.principal!)
+          ).pipe(
+            Effect.catchTags({
+              MemoryHubError: (error) =>
+                M.requiresMemoryFloor2(operation) &&
+                (error.code === "unsupported_protocol" || error.code === "hub_upgrade_required")
+                  ? Effect.succeed({
+                      receipts: [
+                        {
+                          operationId: operation.operationId,
+                          memoryId: operation.memoryId,
+                          operationDigest: acquired.operationDigest,
+                          outcome: "rejected" as const,
+                          hubSequence: null,
+                          failureCode: error.code,
+                        },
+                      ],
+                    })
+                  : Effect.fail(error),
+            }),
+          );
           yield* ensureEpoch(r.settings.memoryHubVersion);
           const receipt = ack.receipts[0];
           if (

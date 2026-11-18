@@ -12,7 +12,7 @@ export class MemoryHubActivity extends Context.Service<
     readonly notify: Effect.Effect<void>;
     readonly subscribe: Effect.Effect<Stream.Stream<void>, never, Scope.Scope>;
   }
->()("goat/memory/MemoryHubService/MemoryHubActivity") {}
+>()("goat/memory/MemoryHubActivity") {}
 
 export const activityLayer = Layer.effect(
   MemoryHubActivity,

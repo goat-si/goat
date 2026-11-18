@@ -22,11 +22,18 @@ import type { MemoryAccessError, MemoryServiceError } from "./MemoryService.ts";
 const strict = { onExcessProperty: "error" } as const;
 const decodeUpsert = Schema.decodeUnknownEffect(M.MemoryUpsertInput);
 const decodePayload = Schema.decodeEffect(M.MemoryPayload);
+export type MemorySuggestionAcceptance = {
+  readonly origin: M.ScopedThreadRef;
+  readonly unverified: boolean;
+};
 const encodeUpsertRequest = Schema.encodeEffect(
   Schema.fromJsonString(
     Schema.Struct({
       input: M.MemoryUpsertInput,
       caller: Schema.NullOr(M.ScopedThreadRef),
+      acceptance: Schema.optionalKey(
+        Schema.Struct({ origin: M.ScopedThreadRef, unverified: Schema.Boolean }),
+      ),
     }),
   ),
 );
@@ -37,6 +44,7 @@ type Permit = Effect.Effect<void, MemoryAccessError>;
 export const makeUpsert = (deps: {
   readonly sql: SqlClient.SqlClient;
   readonly store: Store.MemoryStore["Service"];
+  readonly submitFloorWrite?: Effect.Effect<void, MemoryServiceError>;
   readonly environmentId: M.EnvironmentId;
   readonly readBoundMemoryHubId: (
     space: M.MemorySpaceId,
@@ -64,11 +72,12 @@ export const makeUpsert = (deps: {
     stableUuid,
     hash,
   } = deps;
-  return Effect.fn("MemoryService.upsert")(function* (
+  const write = Effect.fn("MemoryService.stageUpsert")(function* (
     input: M.MemoryUpsertInput,
     permit: Permit,
     sourceThread?: M.ScopedThreadRef,
     remember?: { readonly allowUnverified: boolean },
+    acceptance?: MemorySuggestionAcceptance,
   ) {
     const value = yield* decode(decodeUpsert(input, strict));
     return yield* store.transact(
@@ -77,7 +86,13 @@ export const makeUpsert = (deps: {
         yield* requireSharing(value.memorySpaceId);
         yield* requireCaller(sourceThread);
         const requestDigest = hash(
-          yield* decode(encodeUpsertRequest({ input: value, caller: sourceThread ?? null })),
+          yield* decode(
+            encodeUpsertRequest({
+              input: value,
+              caller: sourceThread ?? null,
+              ...(acceptance ? { acceptance } : {}),
+            }),
+          ),
         );
         const prior = yield* store.receipt(value.memorySpaceId, value.operationId);
         if (prior) {
@@ -137,21 +152,19 @@ export const makeUpsert = (deps: {
           const terminal = row?.completed_receipt_json
             ? yield* hubReceiptCodec.decode(row.completed_receipt_json, strict)
             : undefined;
+          if (terminal?.capacity) return yield* new Store.MemoryCapacityError(terminal.capacity);
           if (terminal?.outcome === "rejected")
             return yield* new Store.MemoryStoreConflict({
               code: terminal.failureCode ?? "invalid_output",
             });
           if (staged.status === "cancelled")
             return yield* new Store.MemoryStoreConflict({ code: "source_invalidated" });
-          const pending = yield* store.readWorkOperation(workId);
           return {
-            operationDigest:
-              terminal?.operationDigest ??
-              (pending ? hash(M.encodeMemoryOperation(pending)) : requestDigest),
+            operationDigest: staged.metadata.authorityFirst,
             receipt: {
               operationId: value.operationId,
               memoryId: value.memoryId,
-              outcome: "accepted" as const,
+              outcome: terminal?.outcome ?? ("accepted" as const),
               revisionId: null,
               pendingSync: !terminal,
             },
@@ -223,17 +236,21 @@ export const makeUpsert = (deps: {
         }
         const marked =
           unverified ||
+          acceptance?.unverified ||
           !(yield* areAutomaticallyUsable(
             space,
             heads.map((head) => head.revision.revisionId),
           ));
-        if (marked && limit === M.MEMORY_DERIVED_REVISIONS_MAX_V1)
+        if ((marked || acceptance) && limit === M.MEMORY_DERIVED_REVISIONS_MAX_V1)
           return yield* new Store.MemoryStoreConflict({ code: "hub_upgrade_required" });
-        const origin = remember && !current?.identity ? sourceThread : undefined;
+        const origin = current?.identity
+          ? undefined
+          : (acceptance?.origin ?? (remember ? sourceThread : undefined));
         const wide = payload.derivedFromMemoryRevisions.length > M.MEMORY_DERIVED_REVISIONS_MAX_V1;
-        const forgetFence = marked
-          ? yield* store.readCursor(space, yield* readBoundMemoryHubId(space))
-          : undefined;
+        const forgetFence =
+          marked || acceptance
+            ? yield* store.readCursor(space, yield* readBoundMemoryHubId(space))
+            : undefined;
         const op: M.MemoryOperation = {
           protocolVersion: 1,
           kind: "upsert",
@@ -257,7 +274,9 @@ export const makeUpsert = (deps: {
               environmentId,
               upsertRequestDigest: requestDigest,
               ...(marked ? { unverified: true as const } : {}),
-              ...(origin && (marked || wide) ? { originThreadId: origin.threadId } : {}),
+              ...(origin && (marked || wide || acceptance)
+                ? { originThreadId: origin.threadId }
+                : {}),
             },
             createdAtUtc: M.MemoryUtcTimestamp.make(
               DateTime.formatIso(DateTime.makeUnsafe(yield* Clock.currentTimeMillis)),
@@ -272,4 +291,17 @@ export const makeUpsert = (deps: {
       }).pipe(Effect.provideService(SqlClient.SqlClient, sql)),
     );
   }, Quota.withStoreReclaim(environmentId));
+  return Effect.fn("MemoryService.upsert")(function* (...args: Parameters<typeof write>) {
+    const staged = yield* write(...args);
+    const waiting = (result: Store.StoredReceipt) =>
+      "pendingSync" in result.receipt &&
+      result.receipt.pendingSync &&
+      result.receipt.revisionId === null;
+    if (!deps.submitFloorWrite || !waiting(staged)) return staged;
+    yield* args[1];
+    yield* deps.submitFloorWrite;
+    const settled = yield* write(...args);
+    if (waiting(settled)) return yield* new Store.MemoryStoreConflict({ code: "hub_unavailable" });
+    return settled;
+  });
 };

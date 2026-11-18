@@ -67,6 +67,7 @@ export class MemorySourceReadBinding extends Context.Service<
   MemorySourceReadBinding,
   {
     readonly readSource: MemoryService.MemorySourceReadAuthority["readSource"];
+    readonly submitFloorWrite: Effect.Effect<void, MemoryService.MemoryServiceError>;
     readonly importSync: Pick<
       MemorySync.MemorySyncService["Service"],
       "readLocalReadiness" | "requireBootstrap" | "syncStatus"
@@ -107,6 +108,12 @@ export const makeMemoryApplicationLayers = (deps: {
     Effect.gen(function* () {
       const current = yield* Ref.make<MemorySync.MemorySyncService["Service"] | null>(null);
       return MemorySourceReadBinding.of({
+        submitFloorWrite: Ref.get(current).pipe(
+          Effect.flatMap(
+            (sync) => sync?.syncOnce ?? Effect.fail(new MemoryHubError({ code: "unavailable" })),
+          ),
+          Effect.mapError(() => new MemoryStore.MemoryStoreConflict({ code: "hub_unavailable" })),
+        ),
         readSource: (input, permit) =>
           Ref.get(current).pipe(
             Effect.flatMap((sync) =>
@@ -154,7 +161,10 @@ export const makeMemoryApplicationLayers = (deps: {
   const layerMemorySourceReadService = Layer.unwrap(
     Effect.gen(function* () {
       const binding = yield* MemorySourceReadBinding;
-      return MemoryService.layerWithSourceReadAuthority(binding.readSource);
+      return MemoryService.layerWithSourceReadAuthority(
+        binding.readSource,
+        binding.submitFloorWrite,
+      );
     }),
   ).pipe(Layer.provide(layerMemorySourceReadBinding));
   const layerMemoryService = layerMemorySourceReadService.pipe(

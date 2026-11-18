@@ -1,10 +1,14 @@
 import * as M from "@goat/contracts";
 import * as Effect from "effect/Effect";
+import * as Schema from "effect/Schema";
 import { stored } from "./StoreCodecs.ts";
 import type { StoreKernel } from "./StoreKernel.ts";
 import { Transaction } from "./StoreModel.ts";
 
-const fullAdvertisement = JSON.stringify(M.MEMORY_FLOOR_2);
+const encodeFeatures = Schema.encodeSync(
+  Schema.fromJsonString(Schema.Array(M.MemoryFloor2Feature)),
+);
+const fullAdvertisement = encodeFeatures(M.MEMORY_FLOOR_2);
 
 export const makeHubFloor = ({ sql }: Pick<StoreKernel, "sql">) => {
   const blockingMembers = Effect.fn("MemoryStore.hubFloorBlockingMembers")(function* (
@@ -61,7 +65,7 @@ export const makeHubFloor = ({ sql }: Pick<StoreKernel, "sql">) => {
     const advertised =
       features === undefined
         ? null
-        : JSON.stringify(M.MEMORY_FLOOR_2.filter((feature) => features.includes(feature)));
+        : encodeFeatures(M.MEMORY_FLOOR_2.filter((feature) => features.includes(feature)));
     yield* stored(
       "hub-floor-advertise",
       sql`

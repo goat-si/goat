@@ -75,10 +75,14 @@ export const makeHubAcknowledgement = (deps: {
           (operation && memoryOperationDigest(operation) !== input.operation.operationDigest)
         )
           return yield* new Store.MemoryStoreConflict({ code: "operation_id_reused" });
-        if (!stored && !operation)
+        const stagedDigest =
+          "authorityFirst" in work.metadata ? work.metadata.authorityFirst : undefined;
+        if (stagedDigest && stagedDigest !== input.operation.operationDigest)
+          return yield* new Store.MemoryStoreConflict({ code: "operation_id_reused" });
+        if (!stored && !operation && !stagedDigest)
           return yield* new Store.MemoryStoreConflict({ code: "identity_mismatch" });
         const staged =
-          work.metadata.authorityFirst === true ||
+          stagedDigest !== undefined ||
           (operation !== undefined && M.requiresMemoryFloor2(operation));
         if (staged || receipt.hubSequence === null) {
           yield* store.acknowledgeOutbox(input.workId, receipt);

@@ -1,3 +1,4 @@
+import { floorWriteId } from "./store/FloorWrites.ts";
 import * as M from "@goat/contracts";
 import * as Context from "effect/Context";
 import * as Effect from "effect/Effect";
@@ -22,6 +23,7 @@ export class MemoryRefusedSaveHook extends Context.Service<
       readonly reason:
         | "thread_lineage_incomplete"
         | "hub_upgrade_required"
+        | "hub_unavailable"
         | "capacity_exceeded"
         | "source_invalidated";
     }) => Effect.Effect<void, MemoryServiceError>;
@@ -118,11 +120,22 @@ export const makeRemember = (deps: {
       sourceThread && watermark
         ? [{ origin: "thread", sourceThread, watermark, messageIds: [] }]
         : [];
-    const operationId = M.MemoryOperationId.make(
+    let operationId = M.MemoryOperationId.make(
       deps.stableUuid(
         `remember-op:${space}:${memoryId}:${current.heads.join(",")}:${scopeKey(scope)}:${watermark?.throughSequence ?? ""}:${input.text}`,
       ),
     );
+    // Failed attempts are terminal. Pending attempts retain their first operation bytes.
+    for (let attempts = 0; attempts < M.MEMORY_WORK_MAX_PENDING_ITEMS; attempts++) {
+      const prior = yield* store.readWork(floorWriteId(space, operationId));
+      if (
+        prior?.status !== "failed" ||
+        !("authorityFirst" in prior.metadata) ||
+        !prior.metadata.authorityFirst
+      )
+        break;
+      operationId = M.MemoryOperationId.make(deps.stableUuid(`remember-retry:${operationId}`));
+    }
     const candidate: M.MemoryUpsertInput = {
       memorySpaceId: space,
       operationId,
@@ -153,12 +166,19 @@ export const makeRemember = (deps: {
             error._tag === "MemoryStoreConflict" &&
             (error.code === "thread_lineage_incomplete" ||
               error.code === "hub_upgrade_required" ||
+              error.code === "hub_unavailable" ||
               error.code === "source_invalidated")
           )
             return deps.onRefusedSave({
               input: candidate,
               thread: sourceThread,
               reason: error.code,
+            });
+          if (error._tag === "MemoryStoreConflict" && error.code === "unsupported_protocol")
+            return deps.onRefusedSave({
+              input: candidate,
+              thread: sourceThread,
+              reason: "hub_upgrade_required",
             });
           return Effect.void;
         }),

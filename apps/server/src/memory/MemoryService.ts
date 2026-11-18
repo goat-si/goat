@@ -38,7 +38,7 @@ import { checkedHistoryPage, checkedPage } from "./memoryDiagnostics.ts";
 import { decideMemoryOperation, memoryOperationDigest } from "./MemoryDecider.ts";
 import { scanMemoryValue } from "./MemorySecretScanner.ts";
 import { makeCommitSummary, type SummaryCommit } from "./MemorySummaryCommit.ts";
-import { makeUpsert } from "./MemoryUpsert.ts";
+import { makeUpsert, type MemorySuggestionAcceptance } from "./MemoryUpsert.ts";
 import {
   makeRemember,
   MemoryRefusedSaveHook,
@@ -204,6 +204,11 @@ export class MemoryService extends Context.Service<
       permit: Permit,
       sourceThread?: M.ScopedThreadRef,
     ) => Effect.Effect<Store.StoredReceipt, MemoryServiceError>;
+    readonly acceptSuggestionWrite: (
+      input: M.MemoryUpsertInput,
+      acceptance: MemorySuggestionAcceptance,
+      permit: Permit,
+    ) => Effect.Effect<Store.StoredReceipt, MemoryServiceError>;
     readonly remember: (
       input: M.MemoryRememberInput & { readonly memorySpaceId: M.MemorySpaceId },
       permit: Permit,
@@ -339,6 +344,7 @@ const decode = <A, E>(effect: Effect.Effect<A, E>) => effect.pipe(Effect.mapErro
 export { validateSummaryDependencies };
 const make = Effect.fnUntraced(function* (
   sourceReadAuthority?: MemorySourceReadAuthority["readSource"],
+  submitFloorWrite?: Effect.Effect<void, MemoryServiceError>,
 ) {
   const repositoryResolver = yield* RepositoryResolver.RepositoryIdentityResolver;
   const store = yield* Store.MemoryStore;
@@ -1217,6 +1223,7 @@ const make = Effect.fnUntraced(function* (
     sql,
     store,
     environmentId,
+    ...(submitFloorWrite ? { submitFloorWrite } : {}),
     requireSharing,
     readBoundMemoryHubId,
     requireCaller,
@@ -2181,6 +2188,23 @@ const make = Effect.fnUntraced(function* (
         (op.forgetFence !== undefined || op.revision.provenance.unverified)
       )
         yield* store.checkForgetFence(op.memorySpaceId, op.forgetFence);
+      if (
+        op.kind !== "forget" &&
+        op.revision.provenance.originThreadId &&
+        op.revision.provenance.environmentId !== op.originEnvironmentId
+      )
+        return yield* new M.MemoryHubError({ code: "identity_mismatch" });
+      if (
+        active &&
+        op.kind !== "forget" &&
+        op.kind !== "resolve" &&
+        !op.revision.provenance.unverified &&
+        !(yield* store.areAutomaticallyUsable(
+          op.memorySpaceId,
+          op.kind === "revert" ? [op.restoredRevisionId] : op.expectedHeads,
+        ))
+      )
+        return yield* new Store.MemoryStoreConflict({ code: "source_invalidated" });
       yield* requireImportNotSuppressed(op);
       if (op.kind !== "forget" && current.pendingForget)
         return yield* new Store.MemoryStoreConflict({ code: "forget_pending" });
@@ -2539,6 +2563,8 @@ const make = Effect.fnUntraced(function* (
     resolveProjectKey,
     changes,
     upsert,
+    acceptSuggestionWrite: (input, acceptance, permit) =>
+      upsert(input, permit, undefined, undefined, acceptance),
     remember,
     forget,
     retryForgetExpansion,
@@ -2578,5 +2604,7 @@ const make = Effect.fnUntraced(function* (
 });
 export const layer = Layer.effect(MemoryService, make());
 /** Bind an application-owned callback, without importing Sync or constructing a cyclic layer. */
-export const layerWithSourceReadAuthority = (authority: MemorySourceReadAuthority["readSource"]) =>
-  Layer.effect(MemoryService, make(authority));
+export const layerWithSourceReadAuthority = (
+  authority: MemorySourceReadAuthority["readSource"],
+  submitFloorWrite?: Effect.Effect<void, MemoryServiceError>,
+) => Layer.effect(MemoryService, make(authority, submitFloorWrite));

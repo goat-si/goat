@@ -39,5 +39,6 @@ it("preserves the stored failure-code ordinals from memory protocol V1", () => {
     "scanner_pending",
     "forget_pending",
     "hub_upgrade_required",
+    "hub_unavailable",
   ]);
 });
