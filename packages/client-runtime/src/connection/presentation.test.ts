@@ -4,6 +4,7 @@ import * as Option from "effect/Option";
 
 import {
   BearerConnectionProfile,
+  PenConnectionProfile,
   type ConnectionCatalogEntry,
   type ConnectionRoute,
 } from "./catalog.ts";
@@ -12,11 +13,13 @@ import {
   ConnectionTransientError,
   connectionProjectionPhase,
   HubProxyConnectionTarget,
+  PenConnectionTarget,
   RelayConnectionTarget,
   type SupervisorConnectionState,
   ConnectionBlockedError,
 } from "./model.ts";
 import {
+  connectionCatalogDisplayUrl,
   connectionProgressLabel,
   environmentMcpUrl,
   offlineSnapshotAgeLabel,
@@ -526,5 +529,40 @@ describe("shared SSH reconciliation", () => {
     }
     const state = snapshot({ stage: "opening" });
     expect(connectionProjectionPhase(state)).toBe("synchronizing");
+  });
+});
+describe("catalog display address", () => {
+  it("is the address of the route shown when a hidden Pen route is stored first", () => {
+    const environmentId = EnvironmentId.make("pen-first");
+    const penId = "pen:mmmmmmmmmmmmmmmmmmmmmmmmmm:nnnnnnnnnnnnnnnnnnnnnnnnnn";
+    const entry: ConnectionCatalogEntry = {
+      enabled: true,
+      target: new PenConnectionTarget({ environmentId, label: "Box", connectionId: penId }),
+      profile: Option.some(
+        new PenConnectionProfile({
+          environmentId,
+          label: "Box",
+          connectionId: penId,
+          meshId: "mmmmmmmmmmmmmmmmmmmmmmmmmm",
+          nodeId: "nnnnnnnnnnnnnnnnnnnnnnnnnn",
+          noisePub: "kkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkk",
+        }),
+      ),
+      alternateRoutes: [
+        {
+          target: new BearerConnectionTarget({ environmentId, label: "Box", connectionId: "lan" }),
+          profile: Option.some(
+            new BearerConnectionProfile({
+              environmentId,
+              label: "Box",
+              connectionId: "lan",
+              httpBaseUrl: "http://192.168.1.10:3773/",
+              wsBaseUrl: "ws://192.168.1.10:3773/",
+            }),
+          ),
+        },
+      ],
+    };
+    expect(connectionCatalogDisplayUrl(entry)).toBe("http://192.168.1.10:3773/");
   });
 });

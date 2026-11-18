@@ -12,7 +12,7 @@ import type {
   SupervisorConnectionState,
 } from "./model.ts";
 import { sshRuntimePhaseText } from "../state/sshRuntime.ts";
-import { connectionRouteId, connectionRoutes, routeHttpBaseUrl } from "./routes.ts";
+import { connectionRouteId, connectionRoutes, routeHttpBaseUrl, shownRoutes } from "./routes.ts";
 
 export type EnvironmentConnectionPhase =
   | "available"
@@ -380,6 +380,10 @@ function mcpUrlFromBase(httpBaseUrl: string): string | null {
 }
 
 export function connectionCatalogDisplayUrl(entry: ConnectionCatalogEntry): string | null {
+  // A stored Pen route the closed gate hides does not give the machine its address.
+  const shown = shownRoutes(entry)[0];
+  if (shown !== undefined && shown.target !== entry.target)
+    return connectionCatalogDisplayUrl({ ...entry, ...shown, alternateRoutes: [] });
   switch (entry.target._tag) {
     case "PrimaryConnectionTarget":
       return entry.target.httpBaseUrl;
