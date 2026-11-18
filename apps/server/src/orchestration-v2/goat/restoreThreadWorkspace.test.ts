@@ -1,3 +1,4 @@
+import { ServerConfig } from "../../config.ts";
 import { withWorkspaceLease } from "../../workspace/workspaceLease.ts";
 // @effect-diagnostics nodeBuiltinImport:off -- real Git fixtures run in temporary repositories.
 import { assert, it } from "@effect/vitest";
@@ -297,13 +298,17 @@ it.effect("rejects a replacement repository before its pending setup can write",
   Effect.gen(function* () {
     const { repo, worktreePath, git, snapshot } = yield* fixture;
     const pending = yield* makeRestorePending;
-    yield* pending.write(worktreePath, {
-      restoredFrom: "snapshot",
-      headSha: snapshot.headSha,
-      snapshotSha: snapshot.snapshotSha,
-      snapshotRef: snapshot.snapshotRef,
-      applied: true,
-    });
+    yield* pending.write(
+      worktreePath,
+      {
+        restoredFrom: "snapshot",
+        headSha: snapshot.headSha,
+        snapshotSha: snapshot.snapshotSha,
+        snapshotRef: snapshot.snapshotRef,
+        applied: true,
+      },
+      repo,
+    );
     git(repo, ["clone", "--shared", "-b", "feature", repo, worktreePath]);
     git(worktreePath, ["config", "user.name", "Test"]);
     git(worktreePath, ["config", "user.email", "test@example.com"]);
@@ -319,5 +324,30 @@ it.effect("rejects a replacement repository before its pending setup can write",
     );
     assert.equal(failure.reason, "verify-failed");
     assert.equal(NodeFS.readFileSync(file, "utf8"), "different repository");
+  }).pipe(Effect.provide(layerRealGit), Effect.scoped),
+);
+
+it.effect("shares a pre-add recovery marker across server homes and checkout aliases", () =>
+  Effect.gen(function* () {
+    const { repo, worktreePath, git, snapshot } = yield* fixture;
+    const pending = yield* makeRestorePending;
+    yield* pending.write(
+      worktreePath,
+      {
+        restoredFrom: "branch",
+        headSha: snapshot.headSha,
+        snapshotSha: null,
+        snapshotRef: null,
+      },
+      repo,
+    );
+    git(repo, ["worktree", "add", worktreePath, "feature"]);
+    const alias = worktreePath + "-alias";
+    NodeFS.symlinkSync(worktreePath, alias, "junction");
+    const second = yield* makeRestorePending.pipe(
+      Effect.provide(ServerConfig.layerTest(process.cwd(), { prefix: "other-server-restore-" })),
+    );
+    assert.isFalse(yield* second.ready(alias, repo));
+    assert.isFalse(yield* second.ready(alias));
   }).pipe(Effect.provide(layerRealGit), Effect.scoped),
 );

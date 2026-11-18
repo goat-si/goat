@@ -71,9 +71,9 @@ const make = Effect.gen(function* () {
   const setAside = yield* makeSetAsideFolder;
   const recreateScratchFolder = yield* makeRecreateScratchFolder;
   // Ready for a terminal: present, not mid-restore, not empty, not just a failed removal's leftovers.
-  const ready = (worktreePath: string) =>
+  const ready = (worktreePath: string, projectCwd: string) =>
     Effect.all([
-      restorePending.ready(worktreePath),
+      restorePending.ready(worktreePath, projectCwd),
       setAside.leftover(worktreePath),
       setAside.missing(worktreePath),
     ]).pipe(Effect.map(([present, leftover, missing]) => present && !leftover && !missing));
@@ -133,12 +133,12 @@ const make = Effect.gen(function* () {
   });
 
   // A folder left by a restore whose setup or check failed is not ready, though it exists.
-  const present = (worktreePath: string) =>
+  const present = (worktreePath: string, projectCwd: string) =>
     fs.exists(path.join(worktreePath, ".git")).pipe(
       Effect.orElseSucceed(() => false),
       Effect.flatMap((exists) =>
         exists
-          ? Effect.map(restorePending.marked(worktreePath), (marked) => !marked)
+          ? Effect.map(restorePending.marked(worktreePath, projectCwd), (marked) => !marked)
           : Effect.succeed(false),
       ),
     );
@@ -148,10 +148,10 @@ const make = Effect.gen(function* () {
     if (Option.isNone(loaded))
       return { threadId, state: "none", worktreePath: null, branch: null, snapshot: null } as const;
     const { project, worktreePath, branch } = loaded.value;
-    if (yield* present(worktreePath))
+    if (yield* present(worktreePath, project.workspaceRoot))
       return { threadId, state: "present", worktreePath, branch, snapshot: null } as const;
     // A stop during restore leaves the marker on a folder that may be fine; only setup is owed.
-    const interrupted = yield* restorePending.read(worktreePath);
+    const interrupted = yield* restorePending.read(worktreePath, project.workspaceRoot);
     const usable =
       interrupted !== null &&
       (yield* verifyInterruptedRestore({
@@ -199,7 +199,7 @@ const make = Effect.gen(function* () {
     const held = yield* tryWithWorkspaceLease(
       worktreePath,
       Effect.gen(function* () {
-        if (yield* present(worktreePath))
+        if (yield* present(worktreePath, project.workspaceRoot))
           return {
             restoredFrom: "present" as const,
             headSha: yield* headOf(worktreePath),
@@ -390,7 +390,7 @@ const make = Effect.gen(function* () {
     const { project, worktreePath, branch } = loaded.value;
     if (
       !isWithinRoot(path, path.resolve(input.cwd ?? worktreePath), worktreePath) ||
-      (yield* ready(worktreePath)) ||
+      (yield* ready(worktreePath, project.workspaceRoot)) ||
       !(yield* isManagedWorktreePath(worktreePath))
     )
       return;
@@ -398,7 +398,7 @@ const make = Effect.gen(function* () {
     const restored = yield* withWorkspaceLease(
       worktreePath,
       Effect.gen(function* () {
-        if (yield* ready(worktreePath)) return null;
+        if (yield* ready(worktreePath, project.workspaceRoot)) return null;
         return yield* restoreMissing({
           threadId,
           cwd: project.workspaceRoot,

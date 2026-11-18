@@ -131,8 +131,8 @@ export const makeRestoreThreadWorkspace = Effect.gen(function* () {
   ) {
     const fail = (reason: ThreadWorkspaceRestoreFailure, detail: string) =>
       new ThreadWorkspaceRestoreError({ threadId: input.threadId, reason, detail });
-    const saved = (yield* pending.marked(input.worktreePath))
-      ? yield* pending.read(input.worktreePath).pipe(
+    const saved = (yield* pending.marked(input.worktreePath, input.cwd))
+      ? yield* pending.read(input.worktreePath, input.cwd).pipe(
           Effect.filterOrFail(
             (state): state is RestorePendingState => state !== null,
             () => fail("verify-failed", "GOAT couldn't read where the earlier restore stopped."),
@@ -189,7 +189,8 @@ export const makeRestoreThreadWorkspace = Effect.gen(function* () {
             cwd: input.cwd,
             worktreePath: input.worktreePath,
             branch: input.branch,
-            beforeCreate: (created) => pending.write(input.worktreePath, marker(created, false)),
+            beforeCreate: (created) =>
+              pending.write(input.worktreePath, marker(created, false), input.cwd),
             ...(snapshot === null
               ? {}
               : { snapshot: { snapshotSha: snapshot.snapshotSha, headSha: snapshot.headSha } }),
@@ -205,7 +206,7 @@ export const makeRestoreThreadWorkspace = Effect.gen(function* () {
           );
           const applied = marker(restored, true);
           yield* pending
-            .write(input.worktreePath, applied)
+            .write(input.worktreePath, applied, input.cwd)
             .pipe(Effect.mapError((error) => fail("verify-failed", error.message)));
           return applied;
         });
@@ -263,7 +264,7 @@ export const makeRestoreThreadWorkspace = Effect.gen(function* () {
         Effect.mapError((error) => fail("verify-failed", error.detail)),
         Effect.andThen(
           pending
-            .clear(input.worktreePath)
+            .clear(input.worktreePath, input.cwd)
             .pipe(Effect.mapError((error) => fail("verify-failed", error.message))),
         ),
         Effect.uninterruptible,
@@ -274,7 +275,9 @@ export const makeRestoreThreadWorkspace = Effect.gen(function* () {
         lenient
           ? Effect.void
           : archiveIncomplete(input, state, archived).pipe(
-              Effect.andThen(pending.write(input.worktreePath, { ...state, applied: false })),
+              Effect.andThen(
+                pending.write(input.worktreePath, { ...state, applied: false }, input.cwd),
+              ),
               Effect.catch((error) =>
                 Effect.logWarning("kept the failed restore checkout", {
                   path: input.worktreePath,
