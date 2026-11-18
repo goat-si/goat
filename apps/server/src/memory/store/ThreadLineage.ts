@@ -59,15 +59,16 @@ export const makeThreadLineage = ({ sql, transact }: Pick<StoreKernel, "sql" | "
     );
     return unknown.length > 0;
   });
-  const taskResultSources = (threadId: M.ThreadId, after: number, pageSize: number) =>
-    stored(
+  const taskResultSources = (threadId: M.ThreadId, after: number | undefined, pageSize: number) => {
+    const lowerBound = after === undefined ? sql`` : sql`AND t.rowid>${after}`;
+    return stored(
       "thread-lineage-results",
       sql<{ cursor: number; source: string | null; linked: number }>`
       WITH page AS MATERIALIZED (
         SELECT t.rowid AS cursor, json_extract(t.payload_json,'$.sourceThreadId') AS source
         FROM orchestration_events t
         WHERE t.application_event_version=2 AND t.aggregate_kind='thread' AND t.stream_id=${threadId}
-        AND t.rowid>${after}
+        ${lowerBound}
         AND t.event_type IN ('context-transfer.created','context-transfer.updated')
         AND json_extract(t.payload_json,'$.type')='subagent_result'
         AND json_extract(t.payload_json,'$.targetThreadId')=${threadId}
@@ -90,6 +91,7 @@ export const makeThreadLineage = ({ sql, transact }: Pick<StoreKernel, "sql" | "
           AND d.stream_id=page.source AND d.event_type='thread.deleted')) AS linked
       FROM page ORDER BY cursor`,
     );
+  };
   const collect = Effect.fn("ThreadLineage.collect")(function* (
     thread: M.ScopedThreadRef,
     space: M.MemorySpaceId,
@@ -108,7 +110,7 @@ export const makeThreadLineage = ({ sql, transact }: Pick<StoreKernel, "sql" | "
     let remaining = TASK_RESULT_SCAN_BUDGET;
     for (let next = pending.shift(); next !== undefined; next = pending.shift()) {
       const seenResults = new Set<string | null>();
-      let cursor = 0;
+      let cursor: number | undefined;
       while (true) {
         const pageSize = Math.min(TASK_RESULT_PAGE_SIZE, remaining + 1);
         const rows = yield* taskResultSources(next, cursor, pageSize);
