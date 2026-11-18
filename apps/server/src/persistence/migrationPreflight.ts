@@ -21,13 +21,10 @@ interface MigrationSnapshot {
 }
 
 function databaseExists(databasePath: string): boolean {
-  try {
-    NodeFS.statSync(databasePath);
-    return true;
-  } catch (cause) {
-    if (cause instanceof Error && "code" in cause && cause.code === "ENOENT") return false;
-    throw cause;
-  }
+  const entry = NodeFS.lstatSync(databasePath, { throwIfNoEntry: false });
+  if (entry === undefined) return false;
+  if (entry.isSymbolicLink()) NodeFS.statSync(databasePath);
+  return true;
 }
 
 /** Uses the existing V2 database, or the V1 source startup would import. */

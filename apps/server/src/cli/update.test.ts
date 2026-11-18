@@ -549,6 +549,16 @@ it.layer(NodeServices.layer)("goat update runtime switch", (it) => {
       refused: false,
     },
     {
+      name: "keeps the previous launcher when the V2 database link is dangling",
+      response: "dangling-v2",
+      refused: true,
+    },
+    {
+      name: "probes the existing database through a working V2 link",
+      response: "linked-v2",
+      refused: false,
+    },
+    {
       name: "keeps the launcher for malformed preflight output",
       response: "malformed",
       refused: true,
@@ -565,6 +575,14 @@ it.layer(NodeServices.layer)("goat update runtime switch", (it) => {
         yield* fs.makeDirectory(path.dirname(legacyPath), { recursive: true });
         yield* fs.writeFileString(legacyPath, "unreadable V1 import source");
         if (response === "prefer-v2") yield* fs.writeFileString(databasePath, "");
+      }
+      const linkedDatabase = response === "dangling-v2" || response === "linked-v2";
+      const linkTarget = path.join(baseDir, "external.sqlite");
+      if (linkedDatabase) {
+        yield* fs.makeDirectory(path.dirname(legacyPath), { recursive: true });
+        yield* fs.writeFileString(legacyPath, "");
+        if (response === "linked-v2") yield* fs.writeFileString(linkTarget, "");
+        yield* fs.symlink(linkTarget, databasePath);
       }
       if (response === "legacy-unreadable") {
         yield* fs.makeDirectory(path.dirname(databasePath), { recursive: true });
@@ -591,7 +609,7 @@ it.layer(NodeServices.layer)("goat update runtime switch", (it) => {
           };
           const probedPath = args?.[args.indexOf("--database-path") + 1];
           const result =
-            corruptLegacy && probedPath !== undefined
+            (corruptLegacy || linkedDatabase) && probedPath !== undefined
               ? runServicePreflight({
                   databasePath: probedPath,
                   launcherProtocol: SERVICE_LAUNCHER_PROTOCOL,
@@ -657,17 +675,25 @@ it.layer(NodeServices.layer)("goat update runtime switch", (it) => {
         ),
         Effect.exit,
       );
-      assert.equal(Exit.isFailure(result), refused);
       assert.equal(yield* fs.readLink(launcher), refused ? old.entryPath : target.entryPath);
-      assert.deepEqual(probes, [
-        [
-          "__service-preflight",
-          "--database-path",
-          response === "corrupt-v1" ? legacyPath : databasePath,
-          "--launcher-protocol",
-          String(SERVICE_LAUNCHER_PROTOCOL),
-        ],
-      ]);
+      assert.equal(Exit.isFailure(result), refused);
+      if (response === "dangling-v2") {
+        assert.deepEqual(probes, []);
+        assert.isFalse(yield* fs.exists(linkTarget));
+      } else {
+        assert.deepEqual(probes, [
+          [
+            "__service-preflight",
+            "--database-path",
+            response === "corrupt-v1" ? legacyPath : databasePath,
+            "--launcher-protocol",
+            String(SERVICE_LAUNCHER_PROTOCOL),
+          ],
+        ]);
+      }
+      if (linkedDatabase) {
+        assert.equal(yield* fs.readLink(databasePath), linkTarget);
+      }
       if (corruptLegacy) {
         assert.equal(yield* fs.readFileString(legacyPath), "unreadable V1 import source");
         assert.equal(yield* fs.exists(databasePath), response === "prefer-v2");
