@@ -136,13 +136,6 @@ export function makeHarness(options: HarnessOptions = {}) {
     Layer.provide(layerReceipts),
   );
   const layerOutbox = EffectOutbox.layer.pipe(Layer.provide(layerDatabase));
-  const createWorktree = vi.fn(
-    options.createWorktree ??
-      ((input) =>
-        Effect.succeed({
-          worktree: { path: "/repo-worktrees/feature", refName: input.newRefName, headSha: "abc" },
-        } as never)),
-  );
   const renameBranch = vi.fn(
     options.renameBranch ?? ((input) => Effect.succeed({ branch: input.newBranch })),
   );
@@ -153,6 +146,33 @@ export function makeHarness(options: HarnessOptions = {}) {
   const deleteLocalBranch = vi.fn(
     (_input: Parameters<GitWorkflow.GitWorkflowService["Service"]["deleteLocalBranch"]>[0]) =>
       Effect.void,
+  );
+  const createWorktree = vi.fn<GitWorkflow.GitWorkflowService["Service"]["createWorktree"]>(
+    options.createWorktree ??
+      ((input, options) => {
+        const path = "/repo-worktrees/feature";
+        return (
+          options?.progress?.onWorktreeOwnership?.({
+            path,
+            release: Effect.void,
+            rollback: (branch) =>
+              removeWorktree({ cwd: input.cwd, path, force: true }).pipe(
+                Effect.andThen(
+                  branch === null
+                    ? Effect.void
+                    : deleteLocalBranch({
+                        cwd: input.cwd,
+                        refName: branch,
+                        force: true,
+                      }),
+                ),
+                Effect.as(true),
+              ),
+          }) ?? Effect.void
+        ).pipe(
+          Effect.as({ worktree: { path, refName: input.newRefName, headSha: "abc" } } as never),
+        );
+      }),
   );
   const runSetup = vi.fn(
     options.runSetup ?? (() => Effect.succeed({ status: "no-script" as const })),

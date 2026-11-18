@@ -1,3 +1,4 @@
+import type { WorktreePreparationOwnership } from "./worktreePreparationOwnership.ts";
 import * as NodeBuffer from "node:buffer";
 import * as Context from "effect/Context";
 import * as SecureRandom from "effect/crypto/SecureRandom";
@@ -135,6 +136,7 @@ export interface ExecuteGitProgress {
 
 export interface CreateWorktreeProgress {
   /** Git refuses existing paths; claimed paths belong to this call and can be removed on cancel. */
+  readonly onWorktreeOwnership?: (ownership: WorktreePreparationOwnership) => Effect.Effect<void>;
   readonly onWorktreeClaimed?: (path: string) => Effect.Effect<void, never>;
   /**
    * Fires before checkout when the configured `worktreesDirectory` is

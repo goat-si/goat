@@ -1,3 +1,4 @@
+import type { WorktreePreparationOwnership } from "../vcs/worktreePreparationOwnership.ts";
 import { savedWorktreeFallback } from "./savedWorktreeFallback.ts";
 import {
   ThreadLaunchWorkspaceMissingError,
@@ -297,9 +298,14 @@ const make = Effect.gen(function* () {
     }
     const reused = input.reusedWorktree;
     const tracked = input.workspaceStrategy.type === "worktree" || reused !== undefined;
-    let createdWorktreePath: string | null = null;
+    let ownership = null as WorktreePreparationOwnership | null;
+    const releaseOwnership = Effect.suspend(() => {
+      const release = ownership?.release ?? Effect.void;
+      ownership = null;
+      return release;
+    }).pipe(Effect.uninterruptible);
     // Only a branch this launch created is deleted on rollback; a reused one predates it.
-    let createdBranch: string | null = null;
+    let ownedBranch: string | null = null;
     let setupTerminalId: string | null = null;
     let workspaceRecorded = false;
     let runReleased = false;
@@ -511,10 +517,10 @@ const make = Effect.gen(function* () {
               // Only the prepared checkout can declare which setup the stage below will run.
               skipSetupHook: true,
               progress: {
-                onWorktreeClaimed: (path) =>
+                onWorktreeOwnership: (claimed) =>
                   Effect.sync(() => {
-                    createdWorktreePath = path;
-                    if (existingBranch === null) createdBranch = branch;
+                    ownership = claimed;
+                    ownedBranch = branch;
                   }),
                 onExistingBranch: (outcome) =>
                   Effect.sync(() => {
@@ -571,8 +577,6 @@ const make = Effect.gen(function* () {
         worktreePath = worktree.worktree.path;
         branch = worktree.worktree.refName;
         yield* note(`Worktree ready at ${worktreePath} on branch ${branch}.`);
-        if (existingBranch?.worktree !== "reused") createdWorktreePath = worktreePath;
-        if (existingBranch === null) createdBranch = branch;
         const existingBranchNotice =
           existingBranch === null
             ? null
@@ -627,7 +631,7 @@ const make = Effect.gen(function* () {
               .pipe(
                 Effect.tap((renamed) =>
                   Effect.sync(() => {
-                    if (createdBranch === oldBranch) createdBranch = renamed.branch;
+                    if (ownedBranch === oldBranch) ownedBranch = renamed.branch;
                   }),
                 ),
                 Effect.uninterruptible,
@@ -819,6 +823,7 @@ const make = Effect.gen(function* () {
             Effect.uninterruptible,
           );
       }
+      yield* releaseOwnership;
       yield* setupTracker.stageStatus(threadId, "agent", "done");
       yield* awaitAsyncSetup;
       yield* setupTracker.finish(threadId, "done");
@@ -838,61 +843,26 @@ const make = Effect.gen(function* () {
               .close({ threadId, terminalId: setupTerminalId, deleteHistory: true })
               .pipe(Effect.ignore);
           if (
-            tracked &&
-            createdWorktreePath &&
-            ((cancelled && !runReleased) || !workspaceRecorded)
-          ) {
-            if (branchRename !== null) yield* Fiber.interrupt(branchRename);
-            const removedPath = createdWorktreePath;
-            const removedBranch = createdBranch;
-            // The thread forgets the worktree only once it is gone; a failed
-            // removal leaves the directory for the user to clean up rather than
-            // reusing a checkout that may be half written.
-            yield* git
-              .removeWorktree({ cwd: project.workspaceRoot, path: removedPath, force: true })
-              .pipe(
-                Effect.andThen(
-                  removedBranch === null
-                    ? Effect.void
-                    : git
-                        .deleteLocalBranch({
-                          cwd: project.workspaceRoot,
-                          refName: removedBranch,
-                          force: true,
-                        })
-                        .pipe(
-                          Effect.catchCause((deleteCause) =>
-                            Effect.logWarning("Failed to delete an abandoned thread branch", {
-                              threadId,
-                              branch: removedBranch,
-                              cause: deleteCause,
-                            }),
-                          ),
-                        ),
-                ),
-                Effect.andThen(
-                  threads
-                    .dispatch({
-                      type: "thread.metadata.update",
-                      commandId: CommandId.make(`${input.commandId}:cancel-workspace`),
-                      threadId,
-                      worktreePath: null,
-                      branch: null,
-                    })
-                    .pipe(Effect.ignore),
-                ),
-                Effect.catchCause((removeCause) =>
-                  Effect.logWarning("Failed to remove an abandoned thread worktree", {
-                    commandId: input.commandId,
-                    threadId,
-                    path: removedPath,
-                    cause: removeCause,
-                  }),
-                ),
-              );
+            !tracked ||
+            ownership === null ||
+            !((cancelled && !runReleased) || !workspaceRecorded)
+          )
+            return;
+          if (branchRename !== null) yield* Fiber.interrupt(branchRename);
+          if (yield* ownership.rollback(ownedBranch)) {
+            yield* threads
+              .dispatch({
+                type: "thread.metadata.update",
+                commandId: CommandId.make(`${input.commandId}:cancel-workspace`),
+                threadId,
+                worktreePath: null,
+                branch: null,
+              })
+              .pipe(Effect.ignore);
           }
         }),
       ),
+      Effect.ensuring(releaseOwnership),
     );
   });
 

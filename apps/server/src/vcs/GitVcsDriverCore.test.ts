@@ -1,3 +1,4 @@
+import type { WorktreePreparationOwnership } from "./worktreePreparationOwnership.ts";
 // @effect-diagnostics nodeBuiltinImport:off - realpathSync.native resolves Windows 8.3 short names, which the Effect realPath does not.
 import { GOAT_PROJECT_FILE_NAME } from "@goat/contracts";
 import { LEGACY_PROJECT_FILE_NAME } from "@goat/contracts/legacyT3Names";
@@ -4725,6 +4726,77 @@ it.layer(layerTest)("GitVcsDriver core integration", (it) => {
         const noWorktree = yield* reuse("feature/unpicked", path.join(root, "unpicked"));
         assert.include(noWorktree.detail, "run git worktree add");
         assert.equal(yield* fs.exists(path.join(root, "unpicked")), false);
+      }),
+    );
+
+    it.effect("refuses to reuse a clean checkout until its preparation owner releases it", () =>
+      Effect.gen(function* () {
+        const cwd = yield* makeTmpDir();
+        const { initialBranch } = yield* initRepoWithCommit(cwd);
+        const path = yield* Path.Path;
+        const driver = yield* GitVcsDriver.GitVcsDriver;
+        const input = {
+          cwd,
+          path: path.join(yield* makeTmpDir("git-worktrees-"), "preparing"),
+          refName: initialBranch,
+          newRefName: "feature/preparing",
+        };
+        const owner = yield* Deferred.make<WorktreePreparationOwnership>();
+        yield* driver.createWorktree(input, {
+          progress: {
+            onWorktreeOwnership: (claim) => Deferred.succeed(owner, claim).pipe(Effect.asVoid),
+          },
+        });
+        const refused = yield* Effect.flip(
+          driver.createWorktree(input, { reuseExistingBranch: true }),
+        );
+        assert.include(refused.detail, "still being prepared");
+        yield* writeTextFile(input.path, "notes.txt", "keep");
+        const ownership = yield* Deferred.await(owner);
+        assert.isFalse(yield* ownership.rollback(input.newRefName));
+        const fs = yield* FileSystem.FileSystem;
+        const notes = path.join(input.path, "notes.txt");
+        assert.equal(yield* fs.readFileString(notes), "keep");
+        yield* ownership.release;
+        yield* fs.remove(notes);
+        const reused = yield* driver.createWorktree(input, { reuseExistingBranch: true });
+        assert.equal(reused.worktree.path, input.path);
+      }),
+    );
+
+    it.effect.each([
+      { name: "writes an untracked file", action: "printf keep > keep.txt" },
+      {
+        name: "advances the branch",
+        action: "git -c core.hooksPath=/dev/null commit --allow-empty -m keep",
+      },
+    ])("preserves a failed checkout whose hook $name", ({ action }) =>
+      Effect.gen(function* () {
+        const cwd = yield* makeTmpDir();
+        const { initialBranch } = yield* initRepoWithCommit(cwd);
+        const fs = yield* FileSystem.FileSystem;
+        const path = yield* Path.Path;
+        const driver = yield* GitVcsDriver.GitVcsDriver;
+        const destination = yield* makeTmpDir("git-worktrees-");
+        yield* writeTextFile(cwd, ".git/hooks/post-checkout", `#!/bin/sh\n${action}\nexit 1\n`);
+        yield* fs.chmod(path.join(cwd, ".git/hooks/post-checkout"), 0o755);
+        yield* Effect.flip(
+          driver.createWorktree({
+            cwd,
+            path: destination,
+            refName: initialBranch,
+            newRefName: "feature/preserve-hook",
+          }),
+        );
+        assert.include(
+          yield* git(cwd, ["worktree", "list", "--porcelain"]),
+          "refs/heads/feature/preserve-hook",
+        );
+        if (action.startsWith("printf")) {
+          assert.equal(yield* fs.readFileString(path.join(destination, "keep.txt")), "keep");
+        } else {
+          assert.equal(yield* git(destination, ["log", "-1", "--format=%s"]), "keep");
+        }
       }),
     );
 
