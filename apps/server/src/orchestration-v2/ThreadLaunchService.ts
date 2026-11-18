@@ -448,6 +448,7 @@ const make = Effect.gen(function* () {
               modelSelection,
             })
             .pipe(
+              Effect.provideService(TextGeneration.TextGenerationProject, input.projectId),
               Effect.map((result) => ({
                 branch: result.branch,
                 exactName: settings.branchNamingMode === "custom",

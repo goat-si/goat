@@ -20,7 +20,10 @@ import {
 } from "@goat/shared/model";
 import { getComposerProviderState } from "./components/chat/composerProviderState";
 import { type ClientSettings, UnifiedSettings } from "@goat/contracts/settings";
-import { resolveModelPreferences } from "@goat/shared/serverSettings";
+import {
+  resolveModelPreferences,
+  resolveTextGenerationFallback,
+} from "@goat/shared/serverSettings";
 import * as Arr from "effect/Array";
 import * as Equal from "effect/Equal";
 import * as Result from "effect/Result";
@@ -440,8 +443,16 @@ export function resolveAppModelSelectionState(
   const selectedEntry = entries.find(
     (entry) => entry.instanceId === selection.instanceId && entry.enabled && entry.isAvailable,
   );
+  // Settings has no project; the server also skips providers the thread's project turned off.
+  const fallback = selectedEntry
+    ? null
+    : resolveTextGenerationFallback(settings, supportedProviders, {
+        projectId: null,
+        excludeInstanceId: selection.instanceId,
+        now: Date.now(),
+      });
   const entry =
-    selectedEntry ?? entries.find((candidate) => candidate.enabled && candidate.isAvailable);
+    selectedEntry ?? entries.find((candidate) => candidate.instanceId === fallback?.instanceId);
   if (entry) {
     const selectedModel = selectedEntry ? selection.model : null;
     // Use the cheap generation default; the catalog default is the expensive chat flagship.

@@ -32,6 +32,7 @@ import * as Schema from "effect/Schema";
 import { deepMerge } from "./Struct.ts";
 import { fromLenientJson } from "./schemaJson.ts";
 import { createModelSelection, readCustomModelEntries } from "./model.ts";
+import { isTextGenerationFallbackCandidate } from "./textGenerationFallback.ts";
 import {
   getBackgroundActivityBaseProfile,
   normalizeBackgroundActivitySettings,
@@ -198,13 +199,45 @@ export function resolveSourceControlWriterModelSelection(
 export function resolveMemoryModelSelection(
   settings: ServerSettings,
   providers: ReadonlyArray<ServerProvider> | undefined,
+  now?: number,
 ): ModelSelection {
   const selection = resolveSourceControlWriterModelSelection(
     { ...settings, sourceControlWriterModelSelection: settings.memoryModelSelection },
     providers,
     null,
   );
-  return agentOnlySelection(settings, providers, null, selection, false);
+  return agentOnlySelection(settings, providers, null, selection, false, now);
+}
+
+/**
+ * The provider text generation falls back to, in the fallback driver order. Settings and the
+ * server both resolve through it, so Settings names the provider the server runs.
+ */
+export function resolveTextGenerationFallback(
+  settings: Pick<ServerSettings, "providerInstances" | "projectSettingsOverrides">,
+  providers: ReadonlyArray<ServerProvider> | undefined,
+  options: {
+    readonly projectId: ProjectId | null;
+    readonly excludeInstanceId: ProviderInstanceId;
+    readonly now?: number | undefined;
+    readonly accept?: (instanceId: ProviderInstanceId, driver: ProviderDriverKind) => boolean;
+  },
+): ModelSelection | null {
+  return fallbackTextGenerationModelSelection(settings.providerInstances, (id, driver) => {
+    if (id === options.excludeInstanceId || options.accept?.(id, driver) === false) return false;
+    if (providers === undefined) {
+      return resolveProjectProviderInstanceEnabled(settings, options.projectId, id);
+    }
+    const provider = providers.find((candidate) => candidate.instanceId === id);
+    return (
+      provider !== undefined &&
+      isTextGenerationFallbackCandidate(provider, textGenerationDefaultModel(provider), {
+        settings,
+        projectId: options.projectId,
+        now: options.now,
+      })
+    );
+  });
 }
 
 function agentOnlySelection(
@@ -213,22 +246,20 @@ function agentOnlySelection(
   projectId: ProjectId | null,
   selection: ModelSelection,
   investigate: boolean,
+  now: number | undefined,
 ): ModelSelection {
   const instanceId = selection?.instanceId;
   if (instanceId === undefined || textGenerator(settings, instanceId) === undefined)
     return selection;
   return (
-    fallbackTextGenerationModelSelection(settings.providerInstances, (id, driver) => {
-      if (textGenerator(settings, id) !== undefined) return false;
-      if (investigate && driver !== "codex" && driver !== "claudeAgent") return false;
-      if (!resolveProjectProviderInstanceEnabled(settings, projectId, id)) return false;
-      if (providers === undefined) return true;
-      const provider = providers.find((candidate) => candidate.instanceId === id);
-      return (
-        provider?.enabled === true &&
-        isProviderAvailable(provider) &&
-        isProviderTextGenerationCapable(provider)
-      );
+    resolveTextGenerationFallback(settings, providers, {
+      projectId,
+      excludeInstanceId: instanceId,
+      now,
+      // Review guides investigate the checkout read-only; the other drivers reject that request.
+      accept: (id, driver) =>
+        textGenerator(settings, id) === undefined &&
+        (!investigate || driver === "codex" || driver === "claudeAgent"),
     }) ?? selection
   );
 }
@@ -237,6 +268,7 @@ export function resolveReviewGuideModelSelection(
   settings: ServerSettings,
   providers: ReadonlyArray<ServerProvider> | undefined,
   projectId: ProjectId | null,
+  now?: number,
 ): ModelSelection {
   const selection = settings.reviewGuideModelSelection;
   if (
@@ -261,6 +293,7 @@ export function resolveReviewGuideModelSelection(
     projectId,
     resolveSourceControlWriterModelSelection(settings, providers, projectId),
     true,
+    now,
   );
 }
 

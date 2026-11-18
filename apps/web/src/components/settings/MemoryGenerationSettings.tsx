@@ -3,6 +3,7 @@ import type { EnvironmentId } from "@goat/contracts";
 import { createModelSelection } from "@goat/shared/model";
 import { resolveMemoryModelSelection } from "@goat/shared/serverSettings";
 import { useContext, useState } from "react";
+import { useNowMinute } from "../../hooks/useNowMinute";
 import { useEnvironmentSettings } from "../../hooks/useSettings";
 import { getCustomModelOptionsByInstance, selectsPlanAgent } from "../../modelSelection";
 import {
@@ -41,7 +42,8 @@ export function MemoryGenerationSettings({
       null,
     ),
   );
-  const selection = resolveMemoryModelSelection(settings, providers);
+  const nowMinute = useNowMinute();
+  const selection = resolveMemoryModelSelection(settings, providers, Date.parse(`${nowMinute}Z`));
   const activeEntry = entries.find((entry) => entry.instanceId === selection.instanceId);
   const separate = settings.memoryModelSelection !== null;
   const options = getCustomModelOptionsByInstance(

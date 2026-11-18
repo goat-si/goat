@@ -17,6 +17,7 @@ import {
   useScopedSettingsMixed,
   useUpdateScopedSettings,
 } from "./useScopedSettings";
+import { useNowMinute } from "../../hooks/useNowMinute";
 import { useScopedModelDisabledReason } from "./useScopedModelAvailability";
 import { useSettingsScope } from "./SettingsScopeContext";
 import {
@@ -159,6 +160,7 @@ export function SourceControlWritingSettingsSection() {
     (entry) => entry.instanceId === activeSelection.instanceId,
   );
   const usesReviewGuideModel = settings.reviewGuideModelSelection !== null;
+  const nowMinute = useNowMinute();
   const reviewGuideSelection = resolveAppModelSelectionState(
     {
       ...settings,
@@ -166,6 +168,7 @@ export function SourceControlWritingSettingsSection() {
         settings,
         textGenerationProviders,
         target?.projectId ?? null,
+        Date.parse(`${nowMinute}Z`),
       ),
     },
     textGenerationProviders,

@@ -403,6 +403,7 @@ const make = Effect.gen(function* () {
       projectSettings,
       providers,
       input.projectId,
+      DateTime.toEpochMillis(yield* DateTime.now),
     );
     const { generated, change } = yield* checkoutHead(
       workspaceRoot,

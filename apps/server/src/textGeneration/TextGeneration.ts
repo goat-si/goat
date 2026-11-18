@@ -12,7 +12,9 @@ import * as SourceControlProviderRegistry from "../sourceControl/SourceControlPr
 import * as ThreadTitleLinks from "./ThreadTitleLinks.ts";
 import * as ServerSettings from "../serverSettings.ts";
 import { apiTextGeneration } from "./TextGeneratorApi.ts";
-import { resolveTextGenerationCapableSelection } from "./textGenerationCapability.ts";
+import { makeTextGenerationCapableSelection } from "./textGenerationCapability.ts";
+
+export { TextGenerationProject } from "./textGenerationCapability.ts";
 
 export type {
   BranchNameGenerationInput,
@@ -76,11 +78,10 @@ export const make = Effect.gen(function* () {
   const sourceControl = yield* SourceControlProviderRegistry.SourceControlProviderRegistry;
   const settingsService = yield* ServerSettings.ServerSettingsService;
   const installationGate = yield* ProviderInstallationGate.current;
+  const resolveCapableSelection = yield* makeTextGenerationCapableSelection(registry);
   const capable = <I extends { readonly modelSelection: ModelSelection }>(input: I) =>
     settingsService.getSettings.pipe(
-      Effect.flatMap((settings) =>
-        resolveTextGenerationCapableSelection(registry, settings, input.modelSelection),
-      ),
+      Effect.flatMap((settings) => resolveCapableSelection(settings, input.modelSelection)),
       // resolveText reports an unreadable settings file.
       Effect.orElseSucceed(() => input.modelSelection),
       Effect.map((modelSelection) =>
