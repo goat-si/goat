@@ -1,4 +1,5 @@
-import type { ComposerContextId } from "@goat/contracts";
+import type { ComposerContextId, ServerConfig } from "@goat/contracts";
+import type { ComposerDispatchMode } from "@goat/client-runtime/state/composer-dispatch";
 import { setupSshComposer, state } from "~/test/sshComposerFixture";
 import { useLayoutEffect, useRef } from "react";
 import { expect, it, vi } from "vite-plus/test";
@@ -14,6 +15,7 @@ async function redirectSend(
     readonly refuse: boolean;
     readonly input?: Record<string, unknown>;
     readonly sendContext?: Record<string, unknown>;
+    readonly dispatchMode?: ComposerDispatchMode;
   },
 ) {
   const { EnvironmentId, ProjectId, RuntimeRequestId, ThreadId, ProviderInstanceId } =
@@ -153,7 +155,7 @@ async function redirectSend(
     } as unknown as Parameters<typeof useComposerSend>[0];
     const currentSend = useComposerSend(input).onSend;
     useLayoutEffect(() => {
-      send = () => currentSend();
+      send = () => currentSend(undefined, options.dispatchMode);
     });
     return null;
   }
@@ -164,6 +166,41 @@ async function redirectSend(
   );
   return { calls, errors, refusal, promptRef, send: () => send() };
 }
+
+it.each([
+  { setupSteering: true, expected: "steer" },
+  { setupSteering: undefined, expected: "queue" },
+] as const)(
+  "sends explicit setup Steer as $expected on the destination server",
+  async ({ setupSteering, expected }) => {
+    await using fixture = await setupSshComposer();
+    const { appAtomRegistry } = await import("~/rpc/atomRegistry");
+    const { environmentServerConfigsAtom } = await import("~/state/server");
+    const { EnvironmentId } = await import("@goat/contracts");
+    const config = {
+      environment: { capabilities: { setupSteering } },
+    } as unknown as ServerConfig;
+    const configs = new Map([[EnvironmentId.make("redirect-env"), config]]);
+    const get = vi.mocked(appAtomRegistry.get).getMockImplementation();
+    if (get === undefined) throw new Error("Missing browser fixture registry mock");
+    vi.mocked(appAtomRegistry.get).mockImplementation(((
+      atom: Parameters<typeof appAtomRegistry.get>[0],
+    ) =>
+      atom === environmentServerConfigsAtom ? configs : get(atom)) as typeof appAtomRegistry.get);
+    const composer = await redirectSend(fixture, {
+      composerMode: "full-access",
+      refuse: false,
+      dispatchMode: "steer",
+      input: { sendQueuesBehindSetup: true, phase: "connecting", pendingApprovals: [] },
+      sendContext: { shownPendingApprovalIds: [] },
+    });
+    await composer.send();
+    expect(state.normal).toHaveBeenCalledExactlyOnceWith({
+      environmentId: "redirect-env",
+      input: expect.objectContaining({ dispatchMode: expected }),
+    });
+  },
+);
 
 it("regression goat#3558: a refused mode change on a redirect declines nothing and keeps the draft", async () => {
   await using fixture = await setupSshComposer();

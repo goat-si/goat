@@ -382,7 +382,13 @@ export function useThreadComposerState() {
     run: selectedThreadProjection?.projection.runs.find((run) => run.id === activeRunId),
     messages: selectedThreadMessages,
   });
-  const canSteerActiveTurn = queueWorkflow?.canPromoteToSteer === true && !compactionBlocksSteer;
+  const setupRunning = [selectedThreadActivityRun?.status, selectedThreadRuntime?.status].some(
+    (status) => status === "preparing" || status === "starting",
+  );
+  const canSteerActiveTurn =
+    queueWorkflow?.canPromoteToSteer === true &&
+    !compactionBlocksSteer &&
+    (!setupRunning || serverConfig?.environment.capabilities.setupSteering === true);
   // A stop or a restart holds the queue, completion wakes included, until it
   // is resumed; the queue sheet lists only the user's own messages.
   const queueHeld = queueWorkflow?.isHeld === true;
@@ -710,8 +716,7 @@ export function useThreadComposerState() {
       }
     }
 
-    // Resolve at send time because outbox delivery may be delayed.
-    // Steering uses "auto" so an ended turn queues a run instead of restoring the draft.
+    // Outside setup, auto follows the current turn when the outbox drains.
     // An approval redirect must steer the waiting turn instead of queueing behind it.
     const activeTurnDefault = beforeDispatch !== undefined ? "steer" : followUpBehavior;
     const followUpAction = resolveComposerDispatchMode({
@@ -719,11 +724,10 @@ export function useThreadComposerState() {
       alternateModifier: followUpOverride !== undefined && followUpOverride !== activeTurnDefault,
       activeTurnDefault,
     });
-    const setupRunning = [selectedThreadActivityRun?.status, selectedThreadRuntime?.status].some(
-      (status) => status === "preparing" || status === "starting",
-    );
     const followUpDispatchMode = setupRunning
-      ? "queue"
+      ? followUpAction === "steer"
+        ? "steer"
+        : "queue"
       : followUpAction === "auto"
         ? null
         : followUpAction === "queue"

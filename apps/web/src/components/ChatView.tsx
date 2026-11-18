@@ -1240,11 +1240,10 @@ export default function ChatView(props: ChatViewProps) {
       isServerThread,
       canCheckoutPullRequestIntoThread,
     });
-  const serverConfig = activeThread
-    ? (activeEnvironment?.serverConfig ?? null)
-    : (primaryEnvironment?.serverConfig ?? null);
-  const providerEnvironmentId = (activeThread ? activeEnvironment : primaryEnvironment)
-    ?.environmentId;
+  const providerEnvironment = activeThread ? activeEnvironment : primaryEnvironment;
+  const serverConfig = providerEnvironment?.serverConfig ?? null;
+  const providerEnvironmentId = providerEnvironment?.environmentId;
+  const setupSteering = serverConfig?.environment.capabilities.setupSteering === true;
   const gitCwd = activeProject
     ? projectScriptCwd({
         project: { cwd: activeProject.workspaceRoot },
@@ -3152,24 +3151,23 @@ export default function ChatView(props: ChatViewProps) {
   }, [routeThreadKey, pendingGuestMessageKey, timelineLiveFollowEnabled, scrollToEnd]);
   const queuedRunsControl =
     isServerThread && activeThread ? (
-      <>
-        <QueuedRunsControl
-          ref={queuedRunsControlRef}
-          steerShortcutLabel={shortcutLabelForCommand(keybindings, "thread.steerQueuedMessage", {
-            context: { terminalFocus: false },
-          })}
-          editShortcutLabel={shortcutLabelForCommand(keybindings, "thread.editQueuedMessage", {
-            context: { composerFocus: true },
-          })}
-          environmentId={activeThread.environmentId}
-          threadId={activeThread.id}
-          optimisticMessages={optimisticUserMessages}
-          editingRunId={queuedRunEdit.editingRunId}
-          editBlockedReason={queuedRunEdit.editBlockedReason}
-          onEditQueuedRun={queuedRunEdit.beginEdit}
-          onCancelEdit={queuedRunEdit.cancelEdit}
-        />
-      </>
+      <QueuedRunsControl
+        ref={queuedRunsControlRef}
+        steerShortcutLabel={shortcutLabelForCommand(keybindings, "thread.steerQueuedMessage", {
+          context: { terminalFocus: false },
+        })}
+        editShortcutLabel={shortcutLabelForCommand(keybindings, "thread.editQueuedMessage", {
+          context: { composerFocus: true },
+        })}
+        environmentId={activeThread.environmentId}
+        threadId={activeThread.id}
+        setupSteering={setupSteering}
+        optimisticMessages={optimisticUserMessages}
+        editingRunId={queuedRunEdit.editingRunId}
+        editBlockedReason={queuedRunEdit.editBlockedReason}
+        onEditQueuedRun={queuedRunEdit.beginEdit}
+        onCancelEdit={queuedRunEdit.cancelEdit}
+      />
     ) : null;
   const resendAfterWorkLocally = () => {
     setWorkLocallyResendDraftId(null);
@@ -3777,7 +3775,7 @@ export default function ChatView(props: ChatViewProps) {
                                   isLocalDraftThread && activeProject === null
                                 }
                                 phase={phase}
-                                canSteer={canSteer}
+                                canSteer={canSteer && (!sendQueuesBehindSetup || setupSteering)}
                                 canInterrupt={canInterruptRunningThread}
                                 isConnecting={isConnecting}
                                 isSendBusy={

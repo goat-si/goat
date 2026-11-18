@@ -283,6 +283,7 @@ export const make = Effect.gen(function* () {
       linkedThreadRefreshes: true,
       inlineMessageContext: true,
       requiredWorktreeBootstrap: true,
+      setupSteering: true,
       threadSettlement: true,
       threadAutoSettlement: true,
       storageCleanup: true,

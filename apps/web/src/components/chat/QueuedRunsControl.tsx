@@ -1,5 +1,8 @@
 import { scopeThreadRef } from "@goat/client-runtime/environment";
-import { deriveThreadQueueWorkflowState } from "@goat/client-runtime/state/thread-workflows";
+import {
+  deriveThreadQueueWorkflowState,
+  threadQueueCanPromoteToSteer,
+} from "@goat/client-runtime/state/thread-workflows";
 import { resolveUserMessagePresentation } from "@goat/client-runtime/user-message";
 import { assistantCitationsToPlainText } from "@goat/shared/assistantCitations";
 import {
@@ -110,6 +113,7 @@ export function QueuedRunsControl({
   readonly editShortcutLabel?: string | null;
   readonly environmentId: EnvironmentId;
   readonly threadId: ThreadId;
+  readonly setupSteering?: boolean;
   readonly optimisticMessages: ReadonlyArray<
     Pick<ChatMessage, "id" | "inputIntent" | "text" | "attachments">
   >;
@@ -146,7 +150,8 @@ export function QueuedRunsControl({
   const queued = workflow?.queuedRuns ?? [];
   const activeRun = workflow?.activeRun ?? null;
   const canReorder = workflow?.canReorder === true;
-  const canSend = workflow?.canSendNow === true || workflow?.canPromoteToSteer === true;
+  const canSend =
+    workflow?.canSendNow === true || threadQueueCanPromoteToSteer(workflow, props.setupSteering);
   const queuedImageUrlById = new Map(
     queuedImageAttachmentUrls.flatMap((url, index) => {
       const resource = queuedImageAttachmentResources[index];
