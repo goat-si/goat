@@ -178,6 +178,39 @@ describe("AcpSessionRuntime", () => {
       }).pipe(Effect.scoped, Effect.provide(NodeServices.layer)),
   );
 
+  it.effect("bounds cancellation when the prompt never reaches the writer queue", () =>
+    Effect.gen(function* () {
+      const held = yield* Deferred.make<void>();
+      const cancelSent = yield* Deferred.make<void>();
+      const runtime = yield* AcpSessionRuntime.make({
+        ...mockRuntimeOptions,
+        cancelTimeout: "1 second",
+        interruptPromptOnCancel: false,
+        requestLogger: (event) =>
+          event.method === "session/prompt" && event.status === "started"
+            ? Deferred.succeed(held, undefined).pipe(Effect.andThen(Effect.never))
+            : Effect.void,
+        protocolLogging: {
+          logOutgoing: true,
+          logger: (event) =>
+            event.stage === "raw" &&
+            typeof event.payload === "string" &&
+            event.payload.includes('"method":"session/cancel"')
+              ? Deferred.succeed(cancelSent, undefined)
+              : Effect.void,
+        },
+      });
+      yield* runtime.start();
+      yield* runtime.prompt({ prompt: [] }).pipe(Effect.forkChild);
+      yield* Deferred.await(held);
+      const cancel = yield* runtime.cancel.pipe(Effect.forkChild({ startImmediately: true }));
+      expect(yield* Deferred.isDone(cancelSent)).toBe(false);
+      yield* TestClock.adjust("1 second");
+      yield* Fiber.join(cancel);
+      expect(yield* Deferred.isDone(cancelSent)).toBe(true);
+    }).pipe(Effect.scoped, Effect.provide(NodeServices.layer)),
+  );
+
   it.effect("waits for native cancellation and drains final updates before another prompt", () =>
     Effect.gen(function* () {
       const toolStarted = yield* Deferred.make<void>();
@@ -516,6 +549,34 @@ describe("AcpSessionRuntime", () => {
       Effect.provide(NodeServices.layer),
     );
   });
+
+  it.effect.each([false, true])("chooses HTTP MCP only when the agent advertises it (%s)", (http) =>
+    Effect.gen(function* () {
+      const sent = yield* Deferred.make<unknown>();
+      const stdio = { type: "stdio", name: "goat", command: "/goat/node" } as const;
+      const endpoint = {
+        type: "http",
+        name: "goat",
+        url: "http://127.0.0.1:1/mcp",
+        headers: [{ name: "Authorization", value: "Bearer fixture" }],
+      } as const;
+      const runtime = yield* AcpSessionRuntime.make({
+        ...mockRuntimeOptions,
+        spawn: {
+          ...mockRuntimeOptions.spawn,
+          env: http ? { GOAT_ACP_MCP_HTTP: "1" } : {},
+        },
+        mcpServers: [stdio],
+        httpMcpServers: [endpoint],
+        requestLogger: (event) =>
+          event.method === "session/new" && event.status === "started"
+            ? Deferred.succeed(sent, event.payload)
+            : Effect.void,
+      });
+      yield* runtime.start();
+      expect(yield* Deferred.await(sent)).toMatchObject({ mcpServers: [http ? endpoint : stdio] });
+    }).pipe(Effect.scoped, Effect.provide(NodeServices.layer)),
+  );
 
   it.effect("starts a session, prompts, and emits normalized events against the mock agent", () =>
     Effect.gen(function* () {
