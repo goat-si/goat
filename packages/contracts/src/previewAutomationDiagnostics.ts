@@ -18,3 +18,16 @@ export const PreviewAutomationOptionalRemoteDiagnosticFields = {
   ),
   cause: Schema.optional(Schema.Defect()),
 };
+
+const PreviewAutomationSnapshotStage = Schema.Literals([
+  "metrics",
+  "frames",
+  "page state",
+  "screenshot",
+  "accessibility tree",
+]);
+export type PreviewAutomationSnapshotStage = typeof PreviewAutomationSnapshotStage.Type;
+
+export const PreviewAutomationSnapshotStages = Schema.Array(PreviewAutomationSnapshotStage).check(
+  Schema.isMaxLength(5),
+);

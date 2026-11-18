@@ -1,3 +1,4 @@
+import { SnapshotTiming } from "./snapshotTiming.ts";
 import { makeRecordingFrames } from "./RecordingFrames.ts";
 import { withinStatusDeadline } from "./statusDeadline.ts";
 import { acceptClosingDialog, closeServerPage, unloadDesktopTab } from "./ServerBrowserClose.ts";
@@ -1394,6 +1395,7 @@ const make = Effect.gen(function* () {
     tab: ServerTab,
     capture: () => Promise<A>,
     deadlineMs?: number,
+    timeout?: () => Error,
   ): Promise<A> =>
     withCaptureLock(
       tab,
@@ -1420,6 +1422,7 @@ const make = Effect.gen(function* () {
         }
       },
       deadlineMs,
+      timeout,
     );
   const stopRecording = (tab: ServerTab) =>
     withCaptureLockHeld(tab, async (hold) => {
@@ -1908,19 +1911,24 @@ const make = Effect.gen(function* () {
           actionGate().channel,
         ).then(ServerBrowserScreen.recheck(tab, request));
       case "snapshot": {
+        const timing = new SnapshotTiming();
         return withScreencastsPaused(
           tab,
           () =>
-            ServerBrowserPage.snapshot({
-              ...tab,
-              renderScale: tab.desktop ? "display" : RENDER_SCALE,
-              ...(input as PreviewAutomationSnapshotInput & { fullScreenshot?: boolean }),
-              agentSessionId: request.agentSessionId,
-              actionChannel: actionGate().channel,
-              captureImage: (input as { readonly captureImage?: boolean }).captureImage !== false,
-              timeoutMs: deadlineMs - performance.now(),
-            }),
+            ServerBrowserPage.snapshot(
+              {
+                ...tab,
+                renderScale: tab.desktop ? "display" : RENDER_SCALE,
+                ...(input as PreviewAutomationSnapshotInput & { fullScreenshot?: boolean }),
+                agentSessionId: request.agentSessionId,
+                actionChannel: actionGate().channel,
+                captureImage: (input as { readonly captureImage?: boolean }).captureImage !== false,
+                timeoutMs: deadlineMs - performance.now(),
+              },
+              timing,
+            ),
           deadlineMs,
+          () => timing.timeout(request.timeoutMs),
         )
           .then(ServerBrowserScreen.recheck(tab, request))
           .then((snapshot) => {

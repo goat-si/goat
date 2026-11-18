@@ -1077,3 +1077,40 @@ it.effect("keeps each thread's current tab when threads share a provider session
     }),
   ),
 );
+
+it.effect.each([
+  { stages: ["screenshot"], expected: ["screenshot"] },
+  { stages: undefined, expected: undefined },
+  { stages: ["unknown"], expected: undefined },
+  { stages: Array.from({ length: 6 }, () => "screenshot"), expected: undefined },
+])("bounds timeout stages while accepting legacy detail: $stages", ({ stages, expected }) =>
+  Effect.scoped(
+    Effect.gen(function* () {
+      const broker = yield* makeBroker;
+      const connected = yield* Deferred.make<void>();
+      const requests = requestsFrom(yield* broker.connect(makeHost()), () => {
+        Deferred.doneUnsafe(connected, Effect.void);
+      });
+      yield* Stream.runForEach(requests, (request) =>
+        broker.respond({
+          clientId: "client-1",
+          connectionId: request.connectionId,
+          requestId: request.requestId,
+          ok: false,
+          error: {
+            _tag: "PreviewAutomationTimeoutError",
+            message: "Snapshot capture did not complete.",
+            detail: { timeoutMs: 10_000, pendingStages: stages },
+          },
+        }),
+      ).pipe(Effect.forkScoped);
+      yield* Deferred.await(connected);
+      const error = yield* broker
+        .invoke<void>({ scope, operation: "snapshot", input: {} })
+        .pipe(Effect.flip);
+      expect(error).toMatchObject({ timeoutMs: 10_000 });
+      expect(Reflect.get(error, "pendingStages")).toEqual(expected);
+      expect(error.message.includes("Waiting for: screenshot.")).toBe(expected !== undefined);
+    }),
+  ),
+);

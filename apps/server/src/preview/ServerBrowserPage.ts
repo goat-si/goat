@@ -1,3 +1,4 @@
+import { SnapshotTiming } from "./snapshotTiming.ts";
 import { actionabilityReason } from "./actionability.ts";
 // @effect-diagnostics nodeBuiltinImport:off globalDate:off globalTimers:off - Playwright callbacks run outside the Effect runtime.
 
@@ -47,7 +48,7 @@ import { aimClick, type ClickEffect, releaseAim, watchClick } from "./clickEffec
 import { aimClickPoint } from "./clickAim.ts";
 import { capturePaint, occludedRefs } from "./paintOcclusion.ts";
 import { resolvePageScope, scopeHidden } from "./pageScope.ts";
-import { pageChanged, runSnapshot, tooBusy, transientCapture } from "./snapshotRetry.ts";
+import { pageChanged, runSnapshot, transientCapture } from "./snapshotRetry.ts";
 import {
   resetSnapshotDiff,
   snapshotOptionsResult,
@@ -57,6 +58,7 @@ import { interactiveElementsOf, narrowTree } from "./snapshotInteractive.ts";
 import { readLayersHeader } from "./blockingLayers.ts";
 import {
   frameUrls,
+  FRAME_ANSWER_MS,
   maskSecrets,
   maskSnapshotRecords,
   maskTree,
@@ -490,17 +492,19 @@ type CapturedScreenshot = {
 const capture = async (
   input: SnapshotInput,
   deadline: number,
+  timing: SnapshotTiming,
 ): Promise<PreviewAutomationSnapshot> => {
-  const { renderScale, viewport } = await renderingOf(input);
+  const track = timing.track.bind(timing);
+  const { renderScale, viewport } = await track("metrics", () => renderingOf(input));
   // A late metrics reply must not begin a capture after viewers have resumed.
-  if (Date.now() >= deadline) throw tooBusy();
+  if (Date.now() >= deadline) throw timing.timeout(input.timeoutMs);
   const scale = Math.min(1, MAX_SCREENSHOT_WIDTH / (viewport.width * renderScale));
   const state = refsFor(input.page);
   const scoped = input.scope ? await resolvePageScope(input.page, input.scope) : undefined;
   invalidateRefs(input.page, true);
   const generation = state.generation;
-  const { readers, read } = await openReaders(input.page, input.cdp);
-  const before = await read();
+  const { readers, read } = await track("frames", () => openReaders(input.page, input.cdp));
+  const before = await track("frames", () => read());
   const captureImage = (): Promise<CapturedScreenshot | undefined> =>
     input.captureImage === false
       ? Promise.resolve(undefined)
@@ -520,11 +524,11 @@ const capture = async (
   // Taken between the reads, so a value that changes during either fails the comparison.
   // Awaited after the tree: a capture that fails has finished its tree before a retry starts.
   const pageAndScreenshot = Promise.all([
-    snapshotPageMetadata(input.page, scoped),
-    readLayersHeader(input.page),
-    input.annotate ? Promise.resolve(undefined) : captureImage(),
-    tabCookies(input.page),
-    capturePaint(input.cdp),
+    track("page state", () => snapshotPageMetadata(input.page, scoped)),
+    track("page state", () => readLayersHeader(input.page)),
+    input.annotate || input.captureImage === false ? undefined : track("screenshot", captureImage),
+    track("frames", () => tabCookies(input.page)),
+    track("page state", () => capturePaint(input.cdp)),
   ]);
   void pageAndScreenshot.catch(constVoid);
   let tree: string;
@@ -533,11 +537,13 @@ const capture = async (
   let dotted: ReturnType<typeof dottedPattern>;
   try {
     // Leaves time for the second read; a frame that never loads holds the tree until then.
-    tree = await (scoped ?? input.page).ariaSnapshot({
-      mode: "ai",
-      boxes: true,
-      timeout: Math.max(1, deadline - Date.now() - 2_000),
-    });
+    tree = await track("accessibility tree", () =>
+      (scoped ?? input.page).ariaSnapshot({
+        mode: "ai",
+        boxes: true,
+        timeout: Math.max(1, deadline - Date.now() - 2_000),
+      }),
+    );
     const image =
       input.annotate && input.captureImage !== false
         ? withRefAnnotations(
@@ -548,12 +554,12 @@ const capture = async (
               generation,
               refs: new Map(),
             }).accessibilityTree,
-            captureImage,
+            () => track("screenshot", captureImage),
             input.actionChannel,
           )
         : Promise.resolve(undefined);
     capturedScreenshot = await image;
-    const after = await read(before);
+    const after = await track("frames", () => read(before));
     // A value that changed meanwhile may be in the tree under neither reading.
     if (after.some((values, i) => values && JSON.stringify(values) !== JSON.stringify(before[i])))
       throw pageChanged();
@@ -563,11 +569,13 @@ const capture = async (
     unread = readers.flatMap((reader, i) => (after[i] ? [] : reader.frames));
     const filled = /^\s*- iframe (?:\[active\] )?\[ref=(\S+?)\].*:$/gm;
     for (const [, ref] of unread.length ? tree.matchAll(filled) : []) {
-      const iframe = await input.page.locator(`aria-ref=${ref}`).elementHandle({ timeout: 2_000 });
+      const iframe = await track("frames", () =>
+        input.page.locator(`aria-ref=${ref}`).elementHandle({ timeout: 2_000 }),
+      );
       if (!iframe) throw pageChanged();
-      const frame = await iframe.contentFrame();
+      const frame = await track("frames", () => iframe.contentFrame());
       void iframe.dispose().catch(constVoid);
-      if (frame && unread.includes(frame)) throw tooBusy();
+      if (frame && unread.includes(frame)) throw timing.unreadFrame(FRAME_ANSWER_MS);
     }
   } catch (cause) {
     await pageAndScreenshot.catch(constVoid);
@@ -629,13 +637,16 @@ const capture = async (
   );
 };
 
-export const snapshot = (input: SnapshotInput): Promise<PreviewAutomationSnapshot> =>
+export const snapshot = (
+  input: SnapshotInput,
+  timing = new SnapshotTiming(),
+): Promise<PreviewAutomationSnapshot> =>
   runSnapshot({
     page: input.page,
     timeoutMs: input.timeoutMs,
-    capture: (deadline) => capture(input, deadline),
+    capture: (deadline) => capture(input, deadline, timing),
     retryable: transientCapture,
-    tooBusy,
+    tooBusy: () => timing.timeout(input.timeoutMs),
   });
 
 /** Return when a dialog opens; waiting for the action to finish would block until dialog resolution. */

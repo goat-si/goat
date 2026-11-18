@@ -74,19 +74,24 @@ export const answerBy = <A>(
  * viewer's still until the broker cut the whole host off.
  */
 export const queueCaptureBy =
-  (deadlineMs = Number.POSITIVE_INFINITY) =>
+  (deadlineMs = Number.POSITIVE_INFINITY, timeout = notDrawnInTime) =>
   <A>(tab: CaptureLockHolder, operation: () => Promise<A>) => {
     let expired = false;
     const run = tab.captureLock.then(() => {
       if (tab.closing) throw new Error("The preview tab closed.");
       // Its turn can come before the timer that marks it expired has run.
-      if (expired || performance.now() >= deadlineMs) throw notDrawnInTime();
+      if (expired || performance.now() >= deadlineMs) throw timeout();
       return operation();
     });
     tab.captureLock = run.then(constVoid, constVoid);
-    const answer = answerBy(run, deadlineMs, () => {
-      expired = true;
-    });
+    const answer = answerBy(
+      run,
+      deadlineMs,
+      () => {
+        expired = true;
+      },
+      timeout,
+    );
     return { run, answer };
   };
 
@@ -94,7 +99,8 @@ export const withCaptureLock = <A>(
   tab: CaptureLockHolder,
   operation: () => Promise<A>,
   deadlineMs = Number.POSITIVE_INFINITY,
-): Promise<A> => queueCaptureBy(deadlineMs)(tab, operation).answer;
+  timeout?: () => Error,
+): Promise<A> => queueCaptureBy(deadlineMs, timeout)(tab, operation).answer;
 
 /** Like withCaptureLock, but the next capture also waits for each capture handed to `hold`. */
 export const withCaptureLockHeld = <A>(
