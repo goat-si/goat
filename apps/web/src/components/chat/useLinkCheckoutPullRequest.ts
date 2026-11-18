@@ -12,10 +12,12 @@ export function useLinkCheckoutPullRequest(environmentId: EnvironmentId) {
   const linking = usePullRequestLinking(environmentId);
   return {
     /** The pull request to link, read from the live draft; null when it does not apply. */
-    read: (draftId: DraftId | null) =>
-      draftId === null
-        ? null
-        : checkoutPullRequestUrlToLink(useComposerDraftStore.getState().getDraftSession(draftId)),
+    read: (draftId: DraftId | null, worktreeBase?: string) => {
+      if (draftId === null) return null;
+      const draft = useComposerDraftStore.getState().getDraftSession(draftId);
+      if (worktreeBase !== undefined && draft?.branch !== worktreeBase) return null;
+      return checkoutPullRequestUrlToLink(draft);
+    },
     /** Best effort: the thread already exists, so a failed link is only logged. */
     link: (threadRef: ScopedThreadRef, url: string | null) => {
       if (url === null) return;

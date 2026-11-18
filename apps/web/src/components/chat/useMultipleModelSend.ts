@@ -119,7 +119,7 @@ export function useMultipleModelSend(
     readonly isCurrentSend: () => boolean;
   }) => {
     const { attachments: attachmentsSnapshot, messageText } = sendSnapshot;
-    const checkoutPullRequestUrl = checkoutLink.read(draftId);
+    const checkoutPullRequestUrl = checkoutLink.read(draftId, branch);
     const failedSelections: ModelSelection[] = [];
     let clearedDraft = false;
     let releasedComposer = false;

@@ -1,9 +1,11 @@
 import { ThreadId, type ComposerContextId } from "@goat/contracts";
-import { setupSshComposer, state } from "~/test/sshComposerFixture";
+import type { AttachmentUploadCycleResult } from "@goat/client-runtime/state/attachments";
+import { deferred, setupSshComposer, state } from "~/test/sshComposerFixture";
 import { useLayoutEffect, useRef } from "react";
 import { expect, it, vi } from "vite-plus/test";
 
 vi.mock(import("../../hooks/usePullRequestLinking"), { spy: true });
+vi.mock(import("@goat/client-runtime/state/attachments"), { spy: true });
 
 /**
  * A server thread with one pending command approval and a send that redirects the agent: the
@@ -354,13 +356,21 @@ it.each([
     title: "links each acknowledged first-send model thread to the checkout pull request",
     checkoutBranch: "feature",
     links: true,
+    changesDuringUpload: false,
   },
   {
     title: "omits the checkout pull request when a multiple-model draft changed branches",
     checkoutBranch: "old-feature",
     links: false,
+    changesDuringUpload: false,
   },
-])("$title", async ({ checkoutBranch, links }) => {
+  {
+    title: "does not link a checkout on a new branch while the original model send uploads",
+    checkoutBranch: "feature",
+    links: false,
+    changesDuringUpload: true,
+  },
+])("$title", async ({ checkoutBranch, links, changesDuringUpload }) => {
   await using fixture = await setupSshComposer();
   const { EnvironmentId, ProjectId, ProviderDriverKind, ProviderInstanceId } =
     await import("@goat/contracts");
@@ -373,6 +383,7 @@ it.each([
   const { makeThreadFixture } = await import("~/test-fixtures");
   const { deriveProviderInstanceEntries } = await import("~/providerInstances");
   const { usePullRequestLinking } = await import("../../hooks/usePullRequestLinking");
+  const { runAttachmentUploadCycle } = await import("@goat/client-runtime/state/attachments");
   const changeLink = vi.fn().mockResolvedValue(undefined);
   const linking = vi.mocked(usePullRequestLinking);
   linking.mockReturnValue({
@@ -385,9 +396,27 @@ it.each([
   const environmentId = EnvironmentId.make("redirect-env");
   const projectId = ProjectId.make("project");
   const threadId = ThreadId.make("redirect-thread");
-  const draftId = DraftId.make("fanout-checkout");
+  const routeThreadKey = changesDuringUpload ? "checkout-upload" : checkoutBranch;
+  const draftId = DraftId.make(`fanout-${routeThreadKey}`);
   const url = "https://github.com/org/repo/pull/1";
   const branch = "feature";
+  const uploadStarted = deferred<void>();
+  const upload = deferred<AttachmentUploadCycleResult>();
+  const uploadCycle = vi.mocked(runAttachmentUploadCycle);
+  const file = new File(["image"], "picture.png", { type: "image/png" });
+  if (changesDuringUpload) {
+    uploadCycle.mockImplementation(() => {
+      uploadStarted.resolve();
+      return upload.promise;
+    });
+  }
+  using _upload = {
+    [Symbol.dispose]() {
+      if (!changesDuringUpload) return;
+      upload.resolve({ status: "cancelled", attachmentId: null });
+      uploadCycle.mockRestore();
+    },
+  };
   const store = useComposerDraftStore.getState();
   store.setProjectDraftThreadId(scopeProjectRef(environmentId, projectId), draftId, {
     threadId,
@@ -419,7 +448,11 @@ it.each([
           [
             environmentId,
             {
-              serverConfig: { environment: { capabilities: { requiredWorktreeBootstrap: true } } },
+              serverConfig: {
+                environment: {
+                  capabilities: { requiredWorktreeBootstrap: true, attachmentUploads: true },
+                },
+              },
             },
           ],
         ])
@@ -435,8 +468,8 @@ it.each([
       draftId,
       draftThread: store.getDraftSession(draftId),
       composerDraftTarget: draftId,
-      routeThreadKey: checkoutBranch,
-      currentRouteThreadKeyRef: { current: checkoutBranch },
+      routeThreadKey,
+      currentRouteThreadKeyRef: { current: routeThreadKey },
       activeThreadBranch: branch,
       activeMessageCount: 0,
       pendingApprovals: [],
@@ -444,7 +477,23 @@ it.each([
       isGitRepo: true,
       providerInstanceEntries,
     },
-    sendContext: { multipleModelSelections: selections, shownPendingApprovalIds: [] },
+    sendContext: {
+      multipleModelSelections: selections,
+      shownPendingApprovalIds: [],
+      images: changesDuringUpload
+        ? [
+            {
+              type: "image",
+              id: "checkout-upload",
+              name: file.name,
+              mimeType: file.type,
+              sizeBytes: file.size,
+              file,
+              previewUrl: "blob:checkout-upload",
+            },
+          ]
+        : [],
+    },
   });
   const started: ThreadId[] = [];
   state.normal.mockImplementation(
@@ -456,10 +505,27 @@ it.each([
     },
   );
 
-  await sender.send();
+  const sending = sender.send();
+  if (changesDuringUpload) {
+    await Promise.race([uploadStarted.promise, sending]);
+    expect(uploadCycle).toHaveBeenCalledOnce();
+    expect(state.normal).not.toHaveBeenCalled();
+    store.setDraftThreadContext(draftId, {
+      branch: "other-feature",
+      checkoutPullRequest: {
+        url: "https://github.com/org/repo/pull/2",
+        branch: "other-feature",
+      },
+    });
+    upload.resolve({ status: "uploaded", attachmentId: "uploaded-picture" });
+  }
+  await sending;
 
   expect(sender.errors.filter(Boolean)).toEqual([]);
   expect(state.normal).toHaveBeenCalledTimes(3);
+  for (const [request] of state.normal.mock.calls) {
+    expect(request.input.bootstrap.prepareWorktree.baseBranch).toBe(branch);
+  }
   expect(started).toHaveLength(2);
   expect(changeLink.mock.calls).toHaveLength(links ? started.length : 0);
   if (links) {
