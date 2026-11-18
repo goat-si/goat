@@ -134,6 +134,50 @@ const writeHeldDenial = (fs: FileSystem.FileSystem, path: string) =>
     { flag: "a" },
   );
 
+it.effect("sends and acknowledges the first workflow Stop during a blocked transcript read", () =>
+  Effect.gen(function* () {
+    const stopRequested = yield* Deferred.make<void>();
+    const readerEntered = yield* Deferred.make<void>();
+    const releaseReader = yield* Deferred.make<void>();
+    let blockRead = false;
+    yield* Effect.gen(function* () {
+      const harness = yield* makeWorkflow(() =>
+        Deferred.succeed(stopRequested, undefined).pipe(Effect.asVoid),
+      );
+      blockRead = true;
+      const projection = yield* harness
+        .offerAndWait(
+          frames.workflowSnapshot({ uuid: "transcript-already-blocked", state: "start" }),
+        )
+        .pipe(Effect.forkChild);
+      yield* Deferred.await(readerEntered);
+      const stop = yield* harness.stop.pipe(
+        Effect.timeout("15 seconds"),
+        Effect.result,
+        Effect.forkChild,
+      );
+      yield* TestClock.adjust("15 seconds");
+      const result = yield* Fiber.join(stop);
+      const sentWhileReading = yield* Deferred.isDone(stopRequested);
+      yield* Deferred.succeed(releaseReader, undefined);
+      yield* Fiber.join(projection);
+      assert.isTrue(
+        sentWhileReading,
+        "Claude received Stop while transcript projection was blocked",
+      );
+      assert.equal(result._tag, "Success");
+    }).pipe(
+      Effect.provideService(WorkflowAgentTranscriptReadObserver, () =>
+        blockRead
+          ? Deferred.succeed(readerEntered, undefined).pipe(
+              Effect.andThen(Deferred.await(releaseReader)),
+            )
+          : Effect.void,
+      ),
+    );
+  }).pipe(Effect.scoped, Effect.provide(layerClaudeAdapterTest)),
+);
+
 const heldToolOutcomes = (harness: Effect.Success<ReturnType<typeof makeWorkflow>>) =>
   harness.events.flatMap((event) =>
     event.type === "turn_item.updated" && event.turnItem.nativeItemRef?.nativeId === "tool_fixture"

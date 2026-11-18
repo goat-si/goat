@@ -2202,7 +2202,7 @@ interface ActiveClaudeToolCall {
 }
 
 interface ClaudeSubagentProjectionTarget {
-  readonly workflowStop?: ClaudeWorkflowStop;
+  readonly stopForDenial?: (timestamp: DateTime.Utc) => ClaudeWorkflowStop | undefined;
   observedWorkflowStop?: ClaudeWorkflowStop;
   readonly childThreadId: ThreadId;
   readonly childRootNodeId: OrchestrationV2ExecutionNode["id"];
@@ -4396,7 +4396,8 @@ export const makeClaudeAdapterV2 = Effect.fn("makeClaudeAdapterV2")(function* (
               childRootNodeId,
               nextOrdinal: () => ++nextItemOrdinal,
               toolCalls,
-              ...(stop === undefined ? {} : { workflowStop: stop }),
+              stopForDenial: (timestamp) =>
+                workflowStops.stopForDenial(input.coordinator, timestamp),
               ...(observedStop === undefined ? {} : { observedWorkflowStop: observedStop }),
             };
             const endOpenToolCalls = Effect.fnUntraced(function* () {
@@ -4571,9 +4572,8 @@ export const makeClaudeAdapterV2 = Effect.fn("makeClaudeAdapterV2")(function* (
 
         const workflowStops = makeClaudeWorkflowStops({
           driver: CLAUDE_PROVIDER,
-          getQuery: Ref.get(queryContext),
-          getCoordinator: (taskId) =>
-            Ref.get(sessionSubagentsByTaskId).pipe(Effect.map((tasks) => tasks.get(taskId))),
+          getQuery: () => Ref.getUnsafe(queryContext),
+          getCoordinator: (taskId) => Ref.getUnsafe(sessionSubagentsByTaskId).get(taskId),
           lock: sdkMessageLock,
           scope: sessionScope,
           project: projectClaudeWorkflowMembers,
@@ -4784,11 +4784,8 @@ export const makeClaudeAdapterV2 = Effect.fn("makeClaudeAdapterV2")(function* (
             completedAt: input.status === "running" ? null : (priorTask?.completedAt ?? now),
             updatedAt: now,
           } satisfies OrchestrationV2Subagent;
-          const subagent = {
+          const subagent: ActiveClaudeSubagent = {
             task,
-            ...(!isReopen && existingSubagent?.workflowStop !== undefined
-              ? { workflowStop: existingSubagent.workflowStop }
-              : {}),
             nativeTaskType: input.nativeTaskType ?? existingSubagent?.nativeTaskType,
             confirmedOutcome:
               input.nativeOutcome !== undefined || input.processExited === true
@@ -4813,7 +4810,7 @@ export const makeClaudeAdapterV2 = Effect.fn("makeClaudeAdapterV2")(function* (
               input.reopen === true ? null : (existingSubagent?.lastAssistantText ?? null),
             lastAssistantMessageId:
               input.reopen === true ? null : (existingSubagent?.lastAssistantMessageId ?? null),
-          } satisfies ActiveClaudeSubagent;
+          };
           // Ingestion can terminalize after lookup; reopen only that generation to preserve newer results.
           const accepted = yield* Ref.modify(sessionSubagentsByTaskId, (current) => {
             const registered = current.get(input.taskId);
@@ -4828,6 +4825,8 @@ export const makeClaudeAdapterV2 = Effect.fn("makeClaudeAdapterV2")(function* (
             ) {
               return [false, current] as const;
             }
+            if (!isReopen && registered?.workflowStop !== undefined)
+              subagent.workflowStop = registered.workflowStop;
             return [true, new Map(current).set(input.taskId, subagent)] as const;
           });
           if (!accepted) return;
@@ -5446,7 +5445,7 @@ export const makeClaudeAdapterV2 = Effect.fn("makeClaudeAdapterV2")(function* (
             });
           }
           for (const { toolResult, output } of claudeToolResultEntriesFromMessage(line)) {
-            const stop = target.workflowStop;
+            const stop = timestamp === undefined ? undefined : target.stopForDenial?.(timestamp);
             const heldKey = `${target.childThreadId}:${toolResult.tool_use_id}`;
             if (stop?.tools.has(heldKey)) continue;
             const toolCall =
@@ -5460,10 +5459,8 @@ export const makeClaudeAdapterV2 = Effect.fn("makeClaudeAdapterV2")(function* (
               }));
             const stopDenial =
               stop !== undefined &&
-              timestamp !== undefined &&
               isClaudeToolResultError(toolResult) &&
-              field(line, "toolDenialKind") === "user-rejected" &&
-              DateTime.toEpochMillis(timestamp) >= stop.requestedAt;
+              field(line, "toolDenialKind") === "user-rejected";
             const finish = (stoppedByWorkflow: boolean) =>
               settleToolCall({
                 context: null,
@@ -6416,15 +6413,15 @@ export const makeClaudeAdapterV2 = Effect.fn("makeClaudeAdapterV2")(function* (
             workflow: workflowWithThreads,
             updatedAt: now,
           } satisfies OrchestrationV2Subagent;
-          const coordinator = { ...registered, task };
-          const accepted = yield* Ref.modify(sessionSubagentsByTaskId, (current) => {
+          const coordinator = yield* Ref.modify(sessionSubagentsByTaskId, (current) => {
             const latest = current.get(taskId);
             if (latest !== registered || latest.task.status !== "running") {
-              return [false, current] as const;
+              return [undefined, current] as const;
             }
-            return [true, new Map(current).set(taskId, coordinator)] as const;
+            const coordinator = { ...latest, task };
+            return [coordinator, new Map(current).set(taskId, coordinator)] as const;
           });
-          if (!accepted) return;
+          if (coordinator === undefined) return;
           yield* emitProviderEvent({
             type: "subagent.updated",
             driver: CLAUDE_PROVIDER,

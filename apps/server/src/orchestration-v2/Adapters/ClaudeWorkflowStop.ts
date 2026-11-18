@@ -57,19 +57,17 @@ type ProjectWorkflow<C> = (input: {
 
 export function makeClaudeWorkflowStops<C extends StopCoordinator, Q extends StopQuery<C>>(input: {
   readonly driver: ProviderDriverKind;
-  readonly getQuery: Effect.Effect<Q | null>;
-  readonly getCoordinator: (taskId: string) => Effect.Effect<C | undefined>;
+  readonly getQuery: () => Q | null;
+  readonly getCoordinator: (taskId: string) => C | undefined;
   readonly lock: Semaphore.Semaphore;
   readonly scope: Scope.Scope;
   readonly project: ProjectWorkflow<C>;
 }) {
   const attemptsByQuery = new WeakMap<ClaudeAgentSdkQuerySession, Set<ClaudeWorkflowStop>>();
-  const coordinatorFor = Effect.fn("ClaudeWorkflowStop.coordinatorFor")(function* (
-    stop: ClaudeWorkflowStop,
-  ) {
-    const coordinator = yield* input.getCoordinator(stop.taskId);
+  const coordinatorFor = (stop: ClaudeWorkflowStop) => {
+    const coordinator = input.getCoordinator(stop.taskId);
     return coordinator?.workflowStop?.lineage === stop.lineage ? coordinator : undefined;
-  });
+  };
   const matchingAttempts = (stop: ClaudeWorkflowStop) =>
     (attemptsByQuery.get(stop.owner) ?? [])
       .values()
@@ -116,6 +114,22 @@ export function makeClaudeWorkflowStops<C extends StopCoordinator, Q extends Sto
     yield* reconcile(coordinator, stop);
   });
 
+  const stopForDenial = (coordinator: C, timestamp: DateTime.Utc) => {
+    const latest = coordinator.workflowStop;
+    if (latest === undefined) return;
+    const at = DateTime.toEpochMillis(timestamp);
+    if (latest.requestedAt <= at) return latest;
+    let match: ClaudeWorkflowStop | undefined;
+    for (const attempt of matchingAttempts(latest)) {
+      if (
+        attempt.requestedAt <= at &&
+        (match === undefined || match.requestedAt <= attempt.requestedAt)
+      )
+        match = attempt;
+    }
+    return match;
+  };
+
   const hasTimedOut = (coordinator: C | undefined, query: ClaudeAgentSdkQuerySession) => {
     const stop = coordinator?.workflowStop;
     if (stop === undefined || stop.owner !== query) return false;
@@ -136,7 +150,7 @@ export function makeClaudeWorkflowStops<C extends StopCoordinator, Q extends Sto
         const attempts = attemptsByQuery.get(query);
         if (attempts === undefined) return;
         for (const stop of attempts) {
-          yield* reconcile(yield* coordinatorFor(stop), stop, true);
+          yield* reconcile(coordinatorFor(stop), stop, true);
         }
         attemptsByQuery.delete(query);
       }),
@@ -156,74 +170,80 @@ export function makeClaudeWorkflowStops<C extends StopCoordinator, Q extends Sto
   }) {
     let endWait = Effect.void;
     const startRequest = Effect.gen(function* () {
-      const live = yield* input.getQuery;
-      const coordinator = yield* input.getCoordinator(taskId);
-      if (
-        live === null ||
-        live.stopping ||
-        live.nativeThreadId !== providerThread.nativeThreadRef?.nativeId ||
-        coordinator === undefined ||
-        coordinator.task.threadId !== providerThread.appThreadId ||
-        coordinator.task.workflow === undefined ||
-        coordinator.task.status !== "running" ||
-        live.subagentsFromEarlierProcesses.has(coordinator)
-      )
-        return yield* missing();
-
-      const previous =
-        coordinator.workflowStop?.owner === live.query ? coordinator.workflowStop : undefined;
       const now = yield* Clock.currentTimeMillis;
-      if (
-        previous?.outcome === "pending" &&
-        (previous.retryAt === undefined || now < previous.retryAt)
-      )
-        return yield* new ProviderAdapterProtocolError({
-          driver: input.driver,
-          detail:
-            "The previous workflow Stop is still awaiting a reply. Retry after its 30-second grace period",
-        });
-
-      const attempts = attemptsByQuery.get(live.query) ?? new Set<ClaudeWorkflowStop>();
-      if (attempts.size >= MAX_OUTSTANDING_WORKFLOW_STOPS)
-        return yield* new ProviderAdapterProtocolError({
-          driver: input.driver,
-          detail: "There are too many unanswered workflow Stop requests on this Claude session",
-        });
-
-      const stop: ClaudeWorkflowStop = {
-        owner: live.query,
-        requestedAt: now,
-        lineage: previous?.lineage ?? { accepted: false },
-        taskId,
-        reply: "pending",
-        retryAt: undefined,
-        tools: new Map(),
-        outcome: "pending",
-        members: new Map(),
-      };
       const noWaiter = yield* Deferred.make<void>();
-      const retireRequest = Deferred.await(noWaiter).pipe(
-        Effect.andThen(Deferred.await(live.closed)),
-        Effect.andThen(Effect.interrupt),
-      );
-      const reconcileInBackground = (confirmedOnly: boolean) =>
-        input.lock
-          .withPermits(1)(
-            Effect.gen(function* () {
-              if ((yield* input.getQuery) !== live) return;
-              const current = yield* coordinatorFor(stop);
-              if (confirmedOnly) {
-                if (current?.workflowStop === stop) yield* observeOutcome(current, live.query);
-              } else {
-                yield* reconcile(current, stop);
-                attempts.delete(stop);
-              }
-            }),
-          )
-          .pipe(Effect.forkIn(input.scope, { uninterruptible: false }), Effect.asVoid);
+      // Ownership and slot reservation share one synchronous step with no SDK projection lock.
+      return yield* Effect.suspend(() => {
+        const live = input.getQuery();
+        const coordinator = input.getCoordinator(taskId);
+        if (
+          live === null ||
+          live.stopping ||
+          live.nativeThreadId !== providerThread.nativeThreadRef?.nativeId ||
+          coordinator === undefined ||
+          coordinator.task.threadId !== providerThread.appThreadId ||
+          coordinator.task.workflow === undefined ||
+          coordinator.task.status !== "running" ||
+          live.subagentsFromEarlierProcesses.has(coordinator)
+        )
+          return Effect.fail(missing());
 
-      // A caller timeout releases its wait, while the SDK still owns the unanswered request.
-      return yield* Effect.gen(function* () {
+        const previous =
+          coordinator.workflowStop?.owner === live.query ? coordinator.workflowStop : undefined;
+        if (
+          previous?.outcome === "pending" &&
+          previous.reply === "pending" &&
+          (previous.retryAt === undefined || now < previous.retryAt)
+        )
+          return Effect.fail(
+            new ProviderAdapterProtocolError({
+              driver: input.driver,
+              detail:
+                "The previous workflow Stop is still awaiting a reply. Retry after its 30-second grace period",
+            }),
+          );
+
+        const attempts = attemptsByQuery.get(live.query) ?? new Set<ClaudeWorkflowStop>();
+        if (attempts.size >= MAX_OUTSTANDING_WORKFLOW_STOPS)
+          return Effect.fail(
+            new ProviderAdapterProtocolError({
+              driver: input.driver,
+              detail: "There are too many unanswered workflow Stop requests on this Claude session",
+            }),
+          );
+
+        const stop: ClaudeWorkflowStop = {
+          owner: live.query,
+          requestedAt: now,
+          lineage: previous?.lineage ?? { accepted: false },
+          taskId,
+          reply: "pending",
+          retryAt: undefined,
+          tools: new Map(),
+          outcome: "pending",
+          members: new Map(),
+        };
+        const retireRequest = Deferred.await(noWaiter).pipe(
+          Effect.andThen(Deferred.await(live.closed)),
+          Effect.andThen(Effect.interrupt),
+        );
+        const reconcileInBackground = (confirmedOnly: boolean) =>
+          input.lock
+            .withPermits(1)(
+              Effect.gen(function* () {
+                if (input.getQuery() !== live) return;
+                const current = coordinatorFor(stop);
+                if (confirmedOnly) {
+                  if (current?.workflowStop === stop) yield* observeOutcome(current, live.query);
+                } else {
+                  yield* reconcile(current, stop);
+                  attempts.delete(stop);
+                }
+              }),
+            )
+            .pipe(Effect.forkIn(input.scope, { uninterruptible: false }), Effect.asVoid);
+
+        // A caller timeout releases its wait, while the SDK still owns the unanswered request.
         coordinator.workflowStop = stop;
         attempts.add(stop);
         attemptsByQuery.set(live.query, attempts);
@@ -232,35 +252,43 @@ export function makeClaudeWorkflowStops<C extends StopCoordinator, Q extends Sto
           yield* Deferred.succeed(noWaiter, undefined);
           yield* reconcileInBackground(true);
         });
-        return yield* stop.owner.stopTask(taskId).pipe(
+        return Effect.gen(function* () {
+          const current = input.getCoordinator(taskId);
+          if (
+            input.getQuery() !== live ||
+            live.stopping ||
+            current?.workflowStop !== stop ||
+            current.task.status !== "running"
+          )
+            return yield* missing();
+          yield* stop.owner.stopTask(taskId);
+        }).pipe(
           Effect.raceFirst(retireRequest),
           Effect.onExit((exit) => {
             if (Exit.hasInterrupts(exit)) return Effect.void;
             stop.reply = Exit.isSuccess(exit) ? "accepted" : "rejected";
             return reconcileInBackground(false);
           }),
-          Effect.forkIn(input.scope, { uninterruptible: false }),
+          Effect.forkIn(input.scope, { uninterruptible: false, startImmediately: true }),
         );
-      }).pipe(Effect.uninterruptible);
-    });
+      });
+    }).pipe(Effect.uninterruptible);
 
-    yield* input.lock
-      .withPermits(1)(startRequest)
-      .pipe(
-        Effect.flatMap(Fiber.join),
-        Effect.onInterrupt(() => endWait),
-        Effect.catchTags({
-          ClaudeAgentSdkQueryRunnerError: (cause) =>
-            new ProviderAdapterProtocolError({
-              driver: input.driver,
-              detail: "Workflow stop request failed",
-              cause,
-            }),
-        }),
-      );
+    yield* startRequest.pipe(
+      Effect.flatMap(Fiber.join),
+      Effect.onInterrupt(() => endWait),
+      Effect.catchTags({
+        ClaudeAgentSdkQueryRunnerError: (cause) =>
+          new ProviderAdapterProtocolError({
+            driver: input.driver,
+            detail: "Workflow stop request failed",
+            cause,
+          }),
+      }),
+    );
   });
 
-  return { stopTask, settleClosed, observeOutcome, hasTimedOut };
+  return { stopTask, settleClosed, observeOutcome, hasTimedOut, stopForDenial };
 }
 
 export function holdClaudeStopDenial(
