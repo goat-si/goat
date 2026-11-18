@@ -364,8 +364,7 @@ function PullRequestCodeTab({
     (staleRevision ||
       draft.openedHeadSha !== detail.headSha ||
       (draft.sourceRevision?.baseSha !== undefined &&
-        revision !== undefined &&
-        draft.sourceRevision.baseSha !== revision.baseSha));
+        draft.sourceRevision.baseSha !== revision?.baseSha));
   if ((staleRevision || draftStale) && selectedLines !== null) setSelectedLines(null);
   if (draftStale && draftText.length === 0) closeDraft();
   const withheld = useWithheldPullRequestFiles(

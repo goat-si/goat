@@ -174,7 +174,8 @@ export function PullRequestReviewForm({
       {stale.length > 0 ? (
         <div className="mt-2 text-xs text-muted-foreground" role="status">
           <p>
-            These comments are on an older revision. Open Code to move them, or discard them here.
+            The current diff cannot verify these line comments. Open Code to move them, or discard
+            them here.
           </p>
           {stale.map((comment) => (
             <div key={comment.id} className="flex items-center justify-between gap-2">

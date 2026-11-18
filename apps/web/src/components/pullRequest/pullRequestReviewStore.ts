@@ -24,10 +24,7 @@ export function pendingReviewRevision(
         comment.sourceRevision?.baseSha !== undefined,
     )?.sourceRevision ??
     comments.find((comment) => comment.sourceRevision !== undefined)?.sourceRevision;
-  const baseSha =
-    pageRevision?.headSha === headSha && pageRevision !== undefined
-      ? pageRevision.baseSha
-      : revision?.baseSha;
+  const baseSha = pageRevision?.headSha === headSha ? pageRevision?.baseSha : undefined;
   const stale = comments.filter(
     ({ sourceRevision }) =>
       sourceRevision !== undefined &&

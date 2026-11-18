@@ -26,7 +26,7 @@ export function PullRequestStaleReviewComments({
         </div>
       ) : (
         <>
-          <p className="text-muted-foreground">Line comments on an older revision</p>
+          <p className="text-muted-foreground">Line comments that need a new anchor</p>
           {comments.map((comment) => (
             <div key={comment.id} className="flex items-center justify-between gap-2">
               <span className="min-w-0 whitespace-pre-wrap break-words">

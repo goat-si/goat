@@ -111,10 +111,14 @@ const {
   return {
     withheldPageAtom: Atom.family((_fixture: number) =>
       Atom.make(() =>
-        AsyncResult.success({
-          ...withheldPage,
-          revision: { baseSha: "c".repeat(40), headSha: mocks.withheldHeadSha },
-        }),
+        AsyncResult.success(
+          mocks.inlineWithheldPage
+            ? firstPage
+            : {
+                ...withheldPage,
+                revision: { baseSha: "c".repeat(40), headSha: mocks.withheldHeadSha },
+              },
+        ),
       ),
     ),
     withheldFileAtom,
@@ -132,6 +136,7 @@ const mocks = vi.hoisted(() => ({
   paged: false,
   image: false,
   withheld: false,
+  inlineWithheldPage: false,
   freshWithheldAdvertisement: true,
   withheldFileReads: 0,
   withheldFixture: 0,
@@ -239,6 +244,7 @@ function setup(paged = false, image = false) {
   mocks.paged = paged;
   mocks.image = image;
   mocks.withheld = false;
+  mocks.inlineWithheldPage = false;
   mocks.freshWithheldAdvertisement = true;
   mocks.withheldFileReads = 0;
   mocks.withheldFixture++;
@@ -636,4 +642,50 @@ it("preserves an open inline draft across a force-push until the reader re-ancho
   await openWithheldDraft(container);
   await expect.element(editor).toHaveValue("An unsent note on this line");
   await expect.element(parked).not.toBeInTheDocument();
+});
+
+it("requires moving a queued comment when the same head gets an inline diff without a verified base", async () => {
+  setup();
+  mocks.withheld = true;
+  const pr = reviewableWithheldDetail();
+  const container = document.createElement("div");
+  container.className = "flex h-[700px] w-[900px]";
+  await using screen = await render(codeWithReview(pr), { container });
+  await userEvent.click(screen.getByRole("button", { name: "Expand diff" }));
+  await userEvent.click(screen.getByRole("button", { name: "Load file diff" }));
+  await expect.element(screen.getByText("beforePush()", { exact: true })).toBeVisible();
+  await openWithheldDraft(container);
+  await userEvent.fill(
+    screen.getByRole("textbox", { name: /Comment on lines/ }),
+    "Check this base",
+  );
+  await userEvent.click(screen.getByRole("button", { name: "Add to review" }));
+  const submit = screen.getByRole("button", { name: "Submit review" });
+  await expect.element(submit).toBeEnabled();
+
+  mocks.inlineWithheldPage = true;
+  await screen.rerender(codeWithReview(pr, 1));
+  await expect.element(screen.getByText("a.ts", { exact: true })).toBeVisible();
+  await expect.element(submit).toBeDisabled();
+  expect(mocks.command).not.toHaveBeenCalled();
+  await userEvent.click(screen.getByRole("button", { name: "Move comment" }));
+  const expand = screen.getByRole("button", { name: "Expand diff" });
+  if (expand.query()) await userEvent.click(expand);
+  await expect.element(screen.getByText("after()", { exact: true })).toBeVisible();
+  await openWithheldDraft(container);
+  await expect
+    .element(screen.getByRole("textbox", { name: /Comment on lines/ }))
+    .toHaveValue("Check this base");
+  await userEvent.click(screen.getByRole("button", { name: "Move comment here" }));
+  await userEvent.click(submit);
+  expect(mocks.command).toHaveBeenCalledExactlyOnceWith(
+    expect.objectContaining({
+      input: expect.objectContaining({
+        revision: { headSha: pr.headSha },
+        comments: [
+          { path: "a.ts", position: { kind: "added", newLine: 1 }, body: "Check this base" },
+        ],
+      }),
+    }),
+  );
 });
