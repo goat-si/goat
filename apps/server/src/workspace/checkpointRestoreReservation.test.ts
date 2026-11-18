@@ -7,10 +7,8 @@ import * as Option from "effect/Option";
 import * as Path from "effect/Path";
 import * as PlatformError from "effect/PlatformError";
 
-import {
-  tryTurnStartReservation,
-  withCheckpointRestoreReservation,
-} from "./checkpointRestoreReservation.ts";
+import { withCheckpointRestoreReservation } from "./checkpointRestoreReservation.ts";
+import { tryTurnStartReservation } from "./testkit/turnStartReservation.ts";
 
 // realPath models a symlink alias and a worktree storage cleanup removed.
 const makeFileSystem = (realPaths: Record<string, string>, missing: ReadonlyArray<string> = []) =>

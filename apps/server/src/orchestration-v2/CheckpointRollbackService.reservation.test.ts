@@ -21,7 +21,7 @@ import * as Path from "effect/Path";
 import * as ServerConfig from "../config.ts";
 import * as GitWorkflow from "../git/GitWorkflowService.ts";
 import * as ServerSettings from "../serverSettings.ts";
-import { tryTurnStartReservation } from "../workspace/checkpointRestoreReservation.ts";
+import { tryTurnStartReservation } from "../workspace/testkit/turnStartReservation.ts";
 import * as CheckpointRollbackService from "./CheckpointRollbackService.ts";
 import * as CheckpointService from "./CheckpointService.ts";
 import * as EventSink from "./EventSink.ts";
