@@ -34,6 +34,10 @@ describe("Pen gateway", () => {
       ).toBe(200);
       expect(requests).toHaveLength(1);
       expect(requests[0]).not.toMatch(/authorization:/i);
+      // The renderer dials socketUrl as given, so it names the GOAT socket path, new or reused.
+      expect(route.socketUrl).toBe(route.httpBaseUrl.replace(/^http:/u, "ws:") + "/ws");
+      const reused = await gateway.open(pin);
+      expect(reused).toEqual(route);
     } finally {
       await gateway.dispose();
     }

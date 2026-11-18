@@ -539,7 +539,7 @@ export function makePenGateway(deps: Dependencies) {
         const current = routes.get(routeKey);
         if (current && !current.closed && !disposed) {
           const base = `127.0.0.1:${port}/pen-route/${current.capability}`;
-          return { kind: "open", httpBaseUrl: `http://${base}`, socketUrl: `ws://${base}` };
+          return { kind: "open", httpBaseUrl: `http://${base}`, socketUrl: `ws://${base}/ws` };
         }
         if (!(await deps.resolvePenBinary())) return { kind: "refused", reason: "no-pen-binary" };
         if (disposed) return { kind: "refused", reason: "unavailable" };
@@ -570,7 +570,7 @@ export function makePenGateway(deps: Dependencies) {
           routes.set(routeKey, route);
         }
         const base = `127.0.0.1:${boundPort}/pen-route/${route.capability}`;
-        return { kind: "open", httpBaseUrl: `http://${base}`, socketUrl: `ws://${base}` };
+        return { kind: "open", httpBaseUrl: `http://${base}`, socketUrl: `ws://${base}/ws` };
       })()
         .catch((): DesktopPenRouteResult => ({ kind: "refused", reason: "unavailable" }))
         .finally(() => {
