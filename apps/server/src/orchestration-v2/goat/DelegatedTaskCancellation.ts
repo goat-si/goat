@@ -15,6 +15,7 @@ import type { ThreadManagementServiceShape } from "../ThreadManagementService.ts
 import type { ProjectionStoreV2Shape } from "../ProjectionStore.ts";
 import {
   delegatedTaskAwaitsSubagents,
+  delegatedTaskResultRun,
   delegatedTaskRuns,
   runOutcome,
 } from "../RestartBackgroundNote.ts";
@@ -78,7 +79,7 @@ export const cancelDelegatedTaskWork = Effect.fn("Orchestrator.cancelDelegatedTa
   });
   const run =
     taskRuns.length > 0
-      ? taskRuns.findLast((run) => run.delegatedTaskId === task.id)
+      ? delegatedTaskResultRun(taskRuns)
       : child.thread.forkedFrom?.type === "node" && child.thread.forkedFrom.nodeId === task.id
         ? afterTurn.resultRun
         : undefined;

@@ -11640,11 +11640,13 @@ const makeOrchestrator = Effect.fn("orchestrationV2.Orchestrator.layer")(functio
       }
       const taskRuns = delegatedTaskRuns(childControls, options.task.id);
       const childRun =
-        taskRuns.length === 0
-          ? options.task.id === forkedFrom.nodeId
-            ? options.resultRun
-            : undefined
-          : delegatedTaskResultRun(taskRuns);
+        options.task.cancelledRunId !== undefined
+          ? options.resultRun
+          : taskRuns.length === 0
+            ? options.task.id === forkedFrom.nodeId
+              ? options.resultRun
+              : undefined
+            : delegatedTaskResultRun(taskRuns);
       if (childRun === undefined) return;
       const outcome = delegatedTaskRunOutcome(childRun, options.task);
       const terminalStatus = delegatedTaskTerminalStatus(outcome);
@@ -11708,11 +11710,12 @@ const makeOrchestrator = Effect.fn("orchestrationV2.Orchestrator.layer")(functio
       const cancelled = options.task.cancelledRunId === childRun.id;
       if (!cancelled && delegatedTaskAwaitsSubagents(taskRuns, childControls.subagents)) return;
       if (
-        yield* childAwaitsRestartContinuation(
+        !cancelled &&
+        (yield* childAwaitsRestartContinuation(
           taskRuns.length === 0 ? childControls.runs : taskRuns,
           childRun,
           options?.settledContinuationOf,
-        )
+        ))
       ) {
         return;
       }
