@@ -332,3 +332,17 @@ NOT RUN:
 - infra/relay PostgreSQL tests (no PostgreSQL on pen-lidge).
 - goat-ci (the coordinator dispatches lane=quick on this head).
 - the agentContextBudget.json and eval hunks of eb7e63a822 (files absent in GOAT).
+
+### storageCleanupShipping.test.ts at the integration head alone (for the reviewer, 2026-11-18)
+
+Package as vp resolves it: goat (apps/server; check:changed prints the case as "FAIL |goat| src/storageCleanupShipping.test.ts > automatic cleanup keeps unshipped commits > keeps every worktree of a repository whose default branch can't be refreshed").
+
+Command, run fresh with a clean worktree: git checkout -q 259883c788 (HEAD then 259883c788bb32d5601023932e07f879bde9af60, the integration head with none of K1's commits), then cd apps/server && vp test run src/storageCleanupShipping.test.ts, then git checkout -q chase/t3-261114-next3-k1-pr-watch (back at dddbf74933a02ad3990d6383fa6df52392359964).
+
+Output lines:
+     × keeps every worktree of a repository whose default branch can't be refreshed 81ms
+ FAIL  src/storageCleanupShipping.test.ts > automatic cleanup keeps unshipped commits > keeps every worktree of a repository whose default branch can't be refreshed
+ Test Files  1 failed (1)
+      Tests  1 failed | 10 passed (11)
+
+The assertion is the same one check:changed reported on 1bc4def8dd (storageCleanupShipping.test.ts:211): expected reason "Couldn't refresh origin/main, so GOAT can't confirm this worktree's commits were shipped", actual "Default branch is unavailable, so GOAT can't confirm this worktree's commits were shipped", for both worktrees. K1 touches no file under apps/server/src/storage* or the cleanup code.
