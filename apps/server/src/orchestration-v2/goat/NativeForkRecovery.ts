@@ -27,7 +27,7 @@ export const makeNativeForkRecovery = Effect.gen(function* () {
   const sink = yield* EventSink.EventSinkV2;
   const ids = yield* IdAllocator.IdAllocatorV2;
   const positions = yield* TurnItemPositionStore.TurnItemPositionStoreV2;
-  const { readInheritedItems, readOwnItems } = makeForkHistoryReader(store);
+  const { readForkHistory } = makeForkHistoryReader(store);
   return Effect.fn("ProviderTurnStartService.recoverNativeFork")(function* (input: {
     projection: Pick<OrchestrationV2ThreadProjection, "thread">;
     source: Pick<OrchestrationV2ThreadProjection, "thread" | "runs" | "attempts">;
@@ -42,10 +42,7 @@ export const makeNativeForkRecovery = Effect.gen(function* () {
     failure: Error;
   }) {
     const now = yield* DateTime.now;
-    const items = [
-      ...(yield* readInheritedItems(input.source.thread)),
-      ...(yield* readOwnItems(input.source, input.sourceRun.ordinal)),
-    ];
+    const items = yield* readForkHistory(input.source, input.sourceRun.ordinal);
     const handoff = yield* handoffs.prepareProviderHandoff({
       threadId: input.projection.thread.id,
       sourceThreadId: input.source.thread.id,

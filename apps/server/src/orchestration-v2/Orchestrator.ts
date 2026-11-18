@@ -823,8 +823,8 @@ const makeOrchestrator = Effect.fn("orchestrationV2.Orchestrator.layer")(functio
   const readHandoffItems = makeReadHandoffItems(projectionStore, mapHandoffReadError);
   const readSwitchItems = makeReadSwitchItems(
     projectionStore,
-    readHandoffItems,
     mapHandoffReadError,
+    idAllocator.derive.userTurnItem,
   );
 
   const getProjectionWithPendingEvents =

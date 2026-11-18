@@ -1,3 +1,9 @@
+import {
+  FORK_HISTORY_TYPES,
+  readForkHistoryPage,
+  selectMemoryHistory,
+  type ForkHistoryPage,
+} from "./ForkHistoryPage.ts";
 import { preserveAttemptDeliveryJson } from "./AttemptInputDelivery.ts";
 import { parentClosed } from "./goat/LimitRecoveryParent.ts";
 import * as ThreadNewestRun from "./goat/ThreadNewestRun.ts";
@@ -779,6 +785,7 @@ export interface ProjectionStoreV2Shape
   readonly getTurnStartHistory: (
     threadId: ThreadId,
     runIds?: ReadonlyArray<RunId>,
+    page?: ForkHistoryPage,
   ) => Effect.Effect<ReadonlyArray<OrchestrationV2TurnItem>, ProjectionStoreV2Error>;
   readonly getThreadProjection: (
     threadId: ThreadId,
@@ -4195,12 +4202,15 @@ export const layer: Layer.Layer<ProjectionStoreV2, never, SqlClient.SqlClient> =
     const getTurnStartHistory: ProjectionStoreV2Shape["getTurnStartHistory"] = Effect.fn(
       "ProjectionStore.getTurnStartHistory",
     )(
-      function* (threadId, runIds) {
+      function* (threadId, runIds, page) {
+        if (page !== undefined)
+          return yield* readForkHistoryPage(sql, threadId, runIds, page).pipe(
+            Effect.flatMap(decodeRows(decodeTurnItemPayload, threadId)),
+          );
         const rows = yield* sql<PayloadRow>`
           SELECT payload_json FROM orchestration_v2_projection_turn_items
           WHERE thread_id = ${threadId}
-            AND type IN ('user_message','assistant_message','command_execution','error',
-              'run_interrupt_result','file_change','proposed_plan')
+            AND type IN ${sql.in(FORK_HISTORY_TYPES)}
             AND ${runIds === undefined ? sql`1` : sql`run_id IN ${sql.in(runIds)}`}
           ORDER BY ordinal ASC, turn_item_id ASC
         `;
@@ -8674,26 +8684,10 @@ export const layerMemory: Layer.Layer<ProjectionStoreV2> = Layer.effect(
             turnItems: projection.turnItems.filter((item) => item.runId === runId),
           })),
         ),
-      getTurnStartHistory: (threadId, runIds) =>
+      getTurnStartHistory: (threadId, runIds, page) =>
         service
           .getThreadProjection(threadId)
-          .pipe(
-            Effect.map((projection) =>
-              projection.turnItems.filter(
-                (item) =>
-                  [
-                    "user_message",
-                    "assistant_message",
-                    "command_execution",
-                    "error",
-                    "run_interrupt_result",
-                    "file_change",
-                    "proposed_plan",
-                  ].includes(item.type) &&
-                  (runIds === undefined || (item.runId !== null && runIds.includes(item.runId))),
-              ),
-            ),
-          ),
+          .pipe(Effect.map((projection) => selectMemoryHistory(projection, runIds, page))),
       getRuntimeRecoveryProjection: (threadId) => service.getThreadProjection(threadId),
       getThreadSnapshot: (threadId) =>
         service.getThreadProjection(threadId).pipe(

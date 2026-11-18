@@ -1,80 +1,141 @@
-import type { IdAllocatorV2 } from "@goat/provider-core/server/IdAllocator";
-import { unsentManualContinuationSource } from "./manualContinuation.ts";
 import type {
   OrchestrationV2ThreadProjection,
   OrchestrationV2TurnItem,
-  RunId,
   OrchestrationV2Run,
+  RunId,
   ThreadId,
+  TurnItemId,
 } from "@goat/contracts";
-import { createOrchestrationV2TurnItemVisibility } from "@goat/shared/orchestrationV2Timeline";
+import type { IdAllocatorV2 } from "@goat/provider-core/server/IdAllocator";
 import * as Effect from "effect/Effect";
 import type { ProjectionStoreV2 } from "./ProjectionStore.ts";
+import { forkHistoryItemBytes, type ForkHistoryPage } from "./ForkHistoryPage.ts";
+import { unsentManualContinuationSource } from "./manualContinuation.ts";
+
+const HISTORY_BYTES = 256 * 1024;
+const HISTORY_ITEMS = 256;
+const PAGE_ITEMS = 16;
+const MAX_ANCESTORS = 64;
+
+type SourceThread = OrchestrationV2ThreadProjection["thread"];
+type HistoryBudget = { bytes: number; items: number };
+const historyBudget = (): HistoryBudget => ({ bytes: HISTORY_BYTES - 2, items: HISTORY_ITEMS });
+
+function retain(budget: HistoryBudget, items: ReadonlyArray<OrchestrationV2TurnItem>) {
+  const retained: OrchestrationV2TurnItem[] = [];
+  for (const item of items) {
+    if (budget.items <= 0 || budget.bytes <= 0) break;
+    const bytes = forkHistoryItemBytes(item);
+    if (bytes > budget.bytes) continue;
+    budget.bytes -= bytes;
+    budget.items--;
+    retained.push(item);
+  }
+  return retained;
+}
 
 export function makeForkHistoryReader(store: ProjectionStoreV2["Service"]) {
+  const read = Effect.fn("ForkHistoryReader.read")(function* (
+    threadId: ThreadId,
+    runIds: ReadonlyArray<RunId> | undefined,
+    scope: Omit<ForkHistoryPage, "before" | "maxBytes" | "limit">,
+    budget: HistoryBudget,
+  ) {
+    let before: ForkHistoryPage["before"];
+    const newestFirst: OrchestrationV2TurnItem[] = [];
+    for (let scanned = 0; scanned < HISTORY_ITEMS && budget.items > 0 && budget.bytes > 0;) {
+      const limit = Math.min(PAGE_ITEMS, budget.items);
+      const page = yield* store.getTurnStartHistory(threadId, runIds, {
+        ...scope,
+        before,
+        maxBytes: budget.bytes,
+        limit,
+      });
+      newestFirst.push(...retain(budget, page));
+      scanned += page.length;
+      const last = page.at(-1);
+      if (last === undefined || page.length < limit) break;
+      before = { ordinal: last.ordinal, id: last.id };
+    }
+    return newestFirst.reverse();
+  });
+
   const readOwnItems = (
-    source: Pick<OrchestrationV2ThreadProjection, "thread" | "runs" | "attempts">,
-    throughOrdinal: number,
+    source: Pick<OrchestrationV2ThreadProjection, "thread">,
+    throughRunOrdinal: number,
+    budget = historyBudget(),
   ) =>
-    store
-      .getThreadRecords(source.thread.id, ["turnItems"], {
-        turnItemRunIds: [
-          ...source.runs.filter((run) => run.ordinal <= throughOrdinal).map((run) => run.id),
-          ...(source.thread.historyOrigin === "v1_import" ? [null] : []),
-        ],
-      })
-      .pipe(
-        // Rewound runs and cancelled queued input are not part of the conversation.
-        Effect.map(({ turnItems }) =>
-          turnItems.filter(
-            createOrchestrationV2TurnItemVisibility({
-              runs: source.runs,
-              attempts: source.attempts,
-              items: turnItems,
-            }),
-          ),
+    read(
+      source.thread.id,
+      undefined,
+      {
+        throughRunOrdinal,
+        includeImported: source.thread.historyOrigin === "v1_import",
+        visibleOnly: true,
+      },
+      budget,
+    );
+
+  const readInheritedItems = Effect.fn("ForkHistoryReader.readInheritedItems")(function* (
+    thread: SourceThread,
+    budget: HistoryBudget,
+    excludeItemId?: TurnItemId,
+  ) {
+    const segments: Array<ReadonlyArray<OrchestrationV2TurnItem>> = [];
+    const seen = new Set<ThreadId>([thread.id]);
+    let parentPoint = thread.forkedFrom;
+    while (
+      parentPoint?.type === "run" &&
+      !seen.has(parentPoint.threadId) &&
+      seen.size <= MAX_ANCESTORS &&
+      budget.items > 0 &&
+      budget.bytes > 0
+    ) {
+      const { threadId, runId } = parentPoint;
+      seen.add(threadId);
+      const parent = yield* store
+        .getThread(threadId)
+        .pipe(Effect.catchTags({ ProjectionStoreThreadNotFoundError: () => Effect.succeed(null) }));
+      if (parent === null) break;
+      const run = yield* store.getRun(threadId, runId);
+      if (run === undefined) break;
+      segments.push(
+        yield* read(
+          threadId,
+          undefined,
+          {
+            throughRunOrdinal: run.ordinal,
+            includeImported: parent.historyOrigin === "v1_import",
+            visibleOnly: true,
+            excludeItemId,
+          },
+          budget,
         ),
       );
-  // The source's timeline starts with what it inherited from its own fork ancestors.
-  const readInheritedItems = Effect.fn("ProviderTurnStartService.readInheritedForkItems")(
-    function* (thread: OrchestrationV2ThreadProjection["thread"]) {
-      const segments: Array<ReadonlyArray<OrchestrationV2TurnItem>> = [];
-      const seen = new Set<ThreadId>([thread.id]);
-      let forkedFrom = thread.forkedFrom;
-      while (forkedFrom?.type === "run" && !seen.has(forkedFrom.threadId)) {
-        const { threadId, runId } = forkedFrom;
-        seen.add(threadId);
-        const parent = yield* store
-          .getThreadRecords(threadId, ["runs", "attempts"])
-          .pipe(
-            Effect.catchTags({ ProjectionStoreThreadNotFoundError: () => Effect.succeed(null) }),
-          );
-        const forkRun = parent?.runs.find((run) => run.id === runId);
-        if (parent === null || forkRun === undefined) break;
-        segments.unshift(yield* readOwnItems(parent, forkRun.ordinal));
-        forkedFrom = parent.thread.forkedFrom;
-      }
-      return segments.flat();
-    },
-  );
-  return { readInheritedItems, readOwnItems };
+      parentPoint = parent.forkedFrom;
+    }
+    return segments.reverse().flat();
+  });
+
+  const readForkHistory = Effect.fn("ForkHistoryReader.readForkHistory")(function* (
+    source: Pick<OrchestrationV2ThreadProjection, "thread">,
+    throughRunOrdinal: number,
+  ) {
+    const budget = historyBudget();
+    const own = yield* readOwnItems(source, throughRunOrdinal, budget);
+    return [...(yield* readInheritedItems(source.thread, budget)), ...own];
+  });
+  return { read, readInheritedItems, readOwnItems, readForkHistory };
 }
 
 export function makeReadSwitchItems<E>(
   store: ProjectionStoreV2["Service"],
-  readHandoffItems: (
-    threadId: ThreadId,
-    runIds: ReadonlyArray<RunId>,
-  ) => Effect.Effect<ReadonlyArray<OrchestrationV2TurnItem>, E>,
   mapError: (threadId: ThreadId, cause: unknown) => E,
   userTurnItem: IdAllocatorV2["Service"]["derive"]["userTurnItem"],
 ) {
-  const { readInheritedItems } = makeForkHistoryReader(store);
+  const { read, readInheritedItems } = makeForkHistoryReader(store);
   return Effect.fn("Orchestrator.readProviderSwitchItems")(function* (
-    projection: Pick<
-      OrchestrationV2ThreadProjection,
-      "thread" | "runs" | "attempts" | "providerTurns"
-    >,
+    projection: Pick<OrchestrationV2ThreadProjection, "thread" | "runs" | "attempts">,
     coveredRuns: ReadonlyArray<{ readonly id: RunId }>,
     includeInherited: boolean,
     legacyItems: ReadonlyArray<OrchestrationV2TurnItem>,
@@ -84,32 +145,38 @@ export function makeReadSwitchItems<E>(
     const replay = unsentManualContinuationSource(continuation, projection);
     const excluded =
       replay === undefined ? undefined : userTurnItem({ messageId: replay.userMessageId });
+    const budget = historyBudget();
+    const own = yield* read(
+      thread.id,
+      coveredRuns.map((run) => run.id),
+      {
+        includeImported: false,
+        excludeItemId: excluded,
+      },
+      budget,
+    ).pipe(Effect.mapError((cause) => mapError(thread.id, cause)));
+    const legacy = retain(budget, legacyItems);
     const inherited = includeInherited
-      ? yield* readInheritedItems(thread).pipe(
+      ? yield* readInheritedItems(thread, budget, excluded).pipe(
           Effect.mapError((cause) => mapError(thread.id, cause)),
         )
       : [];
-    return [
-      ...inherited,
-      ...legacyItems,
-      ...(yield* readHandoffItems(
-        thread.id,
-        coveredRuns.map((run) => run.id),
-      )),
-    ].filter((item) => item.id !== excluded);
+    return [...inherited, ...legacy, ...own];
   });
 }
 
-export const makeReadHandoffItems =
-  <E>(store: ProjectionStoreV2["Service"], mapError: (threadId: ThreadId, cause: unknown) => E) =>
-  (threadId: ThreadId, runIds?: ReadonlyArray<RunId | null>) =>
-    store
-      .getThreadRecords(
-        threadId,
-        ["turnItems"],
-        runIds === undefined ? undefined : { turnItemRunIds: runIds },
-      )
-      .pipe(
-        Effect.map((records) => records.turnItems),
-        Effect.mapError((cause) => mapError(threadId, cause)),
-      );
+export function makeReadHandoffItems<E>(
+  store: ProjectionStoreV2["Service"],
+  mapError: (threadId: ThreadId, cause: unknown) => E,
+) {
+  const { read } = makeForkHistoryReader(store);
+  return (threadId: ThreadId, runIds?: ReadonlyArray<RunId | null>) =>
+    read(
+      threadId,
+      runIds?.filter((id) => id !== null),
+      {
+        includeImported: runIds === undefined || runIds.includes(null),
+      },
+      historyBudget(),
+    ).pipe(Effect.mapError((cause) => mapError(threadId, cause)));
+}
