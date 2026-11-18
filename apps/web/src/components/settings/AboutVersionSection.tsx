@@ -9,6 +9,7 @@ import {
   getDesktopUpdateButtonTooltip,
   getDesktopUpdateIdleDescription,
   getDesktopUpdateInstallConfirmationMessage,
+  getDesktopUpdateInstallError,
   getDesktopUpdateStatusText,
   isDesktopUpdateButtonDisabled,
   resolveDesktopUpdateButtonAction,
@@ -97,6 +98,10 @@ export function AboutVersionSection() {
       }
       void bridge
         .installUpdate()
+        .then((result) => {
+          const message = getDesktopUpdateInstallError(result);
+          if (message) throw new Error(message);
+        })
         .catch((error: unknown) => {
           toastManager.add(
             stackedThreadToast({
