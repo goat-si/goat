@@ -1,3 +1,4 @@
+import { verifyWorktreeRegistration } from "./restoreSnapshot.ts";
 import {
   CommandId,
   describeThreadWorkspaceRestore,
@@ -277,10 +278,18 @@ const make = Effect.gen(function* () {
       : Option.isSome(pushed)
         ? ("remote-branch" as const)
         : ("base" as const);
+    const start = Option.isSome(pushed)
+      ? pushed.value
+      : yield* vcs
+          .resolveCommit({
+            cwd: project.workspaceRoot,
+            revision: "HEAD",
+          })
+          .pipe(Effect.mapError((error) => fail("git-failed", error.message)));
     const created = yield* git
       .createWorktree({
         cwd: project.workspaceRoot,
-        refName: Option.isSome(pushed) ? pushed.value.commitSha : "HEAD",
+        refName: start.commitSha,
         newRefName: `${branch}-fresh-${stamp}`,
         path: null,
       })
@@ -290,7 +299,17 @@ const make = Effect.gen(function* () {
     // Setup finishes under the new folder's lease before the thread points there, so no turn
     // can start in a half-prepared worktree, and the folder is checked after setup ran in it.
     const prepareAndRebind = Effect.gen(function* () {
-      const createdHead = yield* headOf(worktreePath);
+      const createdHead = start.commitSha;
+      yield* verifyWorktreeRegistration({ projectCwd: project.workspaceRoot, worktreePath }).pipe(
+        Effect.andThen(
+          verifyRestoredWorktree({
+            cwd: worktreePath,
+            branch: newBranch,
+            expectedHead: createdHead,
+          }),
+        ),
+        Effect.mapError((error) => fail("verify-failed", error.detail)),
+      );
       // Its terminal takes the new folder's lease, which this holds.
       const setup = yield* reuseHeldWorkspaceLease(
         setupScripts.runForThread({
@@ -353,11 +372,11 @@ const make = Effect.gen(function* () {
           onSome: Effect.succeed,
         }),
       ),
-      // Removed after the new folder's lease is released; removal holds the folder whole.
-      Effect.catchCause((cause) =>
-        git
-          .removeWorktree({ cwd: project.workspaceRoot, path: worktreePath, force: true })
-          .pipe(Effect.ignore, Effect.andThen(Effect.failCause(cause))),
+      Effect.mapError((error) =>
+        fail(
+          error._tag === "ThreadWorkspaceRestoreError" ? error.reason : "busy",
+          `${error._tag === "ThreadWorkspaceRestoreError" ? error.detail : error.message} The new worktree was kept at ${worktreePath}.`,
+        ),
       ),
     );
     return {

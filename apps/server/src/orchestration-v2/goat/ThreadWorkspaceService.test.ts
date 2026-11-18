@@ -302,13 +302,15 @@ it.effect("rebinds only if the thread still uses the worktree it replaced", () =
   }).pipe(Effect.scoped),
 );
 
-it.effect("removes the new worktree when another change won the rebinding", () =>
+it.effect("preserves the new worktree when another change won the rebinding", () =>
   Effect.gen(function* () {
     const { calls, layer, freshPath } = yield* harness(idle, { dispatchFails: true });
     const service = yield* ThreadWorkspace.ThreadWorkspaceService.pipe(Effect.provide(layer));
     const error = yield* Effect.flip(service.restore({ threadId, mode: "fresh" }));
     assert.equal(error.reason, "git-failed");
-    assert.deepEqual(calls.removed, [freshPath]);
+    assert.isEmpty(calls.removed);
+    assert.include(error.detail, freshPath);
+    assert.isTrue(NodeFS.existsSync(NodePath.join(freshPath, ".git")));
   }).pipe(Effect.scoped),
 );
 
@@ -321,7 +323,8 @@ it.effect("keeps the new worktree leased through setup, and a failed setup never
     // A turn trying the new folder during setup is turned away instead of starting there.
     assert.deepEqual(calls.newWorktreeFreeDuringSetup, [false]);
     assert.deepEqual(calls.dispatched, []);
-    assert.deepEqual(calls.removed, [freshPath]);
+    assert.isEmpty(calls.removed);
+    assert.include(error.detail, freshPath);
   }).pipe(Effect.scoped),
 );
 
@@ -335,6 +338,7 @@ it.effect("refuses a fresh worktree that setup moved off its branch", () =>
     const error = yield* Effect.flip(service.restore({ threadId, mode: "fresh" }));
     assert.equal(error.reason, "verify-failed");
     assert.deepEqual(calls.dispatched, []);
-    assert.deepEqual(calls.removed, [freshPath]);
+    assert.isEmpty(calls.removed);
+    assert.include(error.detail, freshPath);
   }).pipe(Effect.scoped),
 );
