@@ -61,17 +61,17 @@ const isChildRunLive = (
 /** Provider-native
     subagents ask on their parent, so they are skipped. */
 export function subagentRequest(thread: OrchestrationV2ThreadShell): PendingSubagentRequest | null {
-  const kind = thread.pendingRuntimeRequest?.kind;
+  const request = thread.pendingRuntimeRequest;
   if (
-    kind === undefined ||
-    kind === "auth_refresh" ||
+    request === null ||
+    request.kind === "auth_refresh" ||
     thread.lineage.relationshipToParent !== "subagent" ||
     isProviderNativeSubagentThread(thread) ||
-    !isChildRunLive(thread)
+    (request.userOnly !== true && !isChildRunLive(thread))
   ) {
     return null;
   }
-  return isPendingApprovalRequest(thread.pendingRuntimeRequest) ? "approval" : "user_input";
+  return isPendingApprovalRequest(request) ? "approval" : "user_input";
 }
 
 export function pendingSubagentRequestsByThread(
@@ -80,14 +80,7 @@ export function pendingSubagentRequestsByThread(
   const requests = new Map<ThreadId, PendingSubagentRequest>();
   let byId: ReadonlyMap<ThreadId, OrchestrationV2ThreadShell> | undefined;
   for (const child of threads) {
-    // A user-only card is pending by its own status, which the server decides, so it marks
-    // the parent whether or not the child's run is still live.
-    const request =
-      child.pendingRuntimeRequest?.userOnly === true &&
-      child.lineage.relationshipToParent === "subagent" &&
-      !isProviderNativeSubagentThread(child)
-        ? "user_input"
-        : subagentRequest(child);
+    const request = subagentRequest(child);
     // The coordinator answers child questions; approvals and user-only cards need the user.
     if (
       request === null ||
