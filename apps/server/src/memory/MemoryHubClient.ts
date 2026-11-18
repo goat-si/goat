@@ -63,6 +63,7 @@ export class MemoryHubClient extends Context.Service<
     readonly push: (
       connection: HubConnection,
       input: M.MemoryHubPushInput,
+      prepare?: Effect.Effect<M.MemoryHubPushInput, HubClientFailure>,
     ) => Effect.Effect<M.MemoryHubPushResult, HubClientFailure>;
     readonly pull: (
       connection: HubConnection,

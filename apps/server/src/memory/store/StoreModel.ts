@@ -91,6 +91,7 @@ export const Metadata = Schema.Struct({
   expectedHeads: Schema.Array(M.MemoryRevisionId),
   forgetFence: Schema.optionalKey(Schema.Int),
   authorityFirst: Schema.optionalKey(digest),
+  acceptanceGeneration: Schema.optionalKey(Schema.Int),
   revision: Schema.optionalKey(M.MemoryRevision),
   tombstone: Schema.optionalKey(M.MemoryTombstone),
   resolution: Schema.optionalKey(M.MemoryResolution),

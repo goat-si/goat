@@ -1,3 +1,4 @@
+import { checkAcceptanceDispatch } from "./store/SaveSuggestions.ts";
 import { makePullMemoryTail } from "./MemoryPullTail.ts";
 import { MemoryFloor2Enabled, memoryFloorAdvertisement } from "./MemoryFloor.ts";
 import { validateCheckpointClosureCapacity } from "./MemoryDependencies.ts";
@@ -1660,10 +1661,11 @@ const make = Effect.gen(function* () {
       const result = yield* Effect.result(
         Effect.gen(function* () {
           yield* ensureEpoch(r.settings.memoryHubVersion);
+          const prepare = checkAcceptanceDispatch(sql, acquired, input);
           const ack = yield* (
             r.connection
-              ? client.push(r.connection, input)
-              : hub.push({ ...input, ...selfFeatures }, r.principal!)
+              ? client.push(r.connection, input, prepare)
+              : Effect.andThen(prepare, hub.push({ ...input, ...selfFeatures }, r.principal!))
           ).pipe(
             Effect.catchTags({
               MemoryHubError: (error) =>

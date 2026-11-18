@@ -9,6 +9,7 @@ import { redactMemoryText, scanMemoryValue } from "./MemorySecretScanner.ts";
 import type { MemoryAccessError } from "./MemoryService.ts";
 import * as Store from "./MemoryStore.ts";
 import type { makeUpsert } from "./MemoryUpsert.ts";
+import { floorWriteId } from "./store/FloorWrites.ts";
 import { suggestionForgetGeneration } from "./store/SaveSuggestions.ts";
 import { scopeCodec, stored, codec } from "./store/StoreCodecs.ts";
 
@@ -242,6 +243,11 @@ export const makeMemorySaveSuggestions = ({
             yield* dismissRow(space, id);
             return { status: "accepted" as const };
           }
+          yield* stored(
+            "suggestion-outbox-fence",
+            sql`UPDATE memory_outbox SET metadata_json=json_set(metadata_json,'$.acceptanceGeneration',${row.forget_generation})
+                WHERE id=${floorWriteId(space, operationId)}`,
+          );
           yield* stored(
             "suggestion-accepting",
             sql`UPDATE memory_save_suggestions
