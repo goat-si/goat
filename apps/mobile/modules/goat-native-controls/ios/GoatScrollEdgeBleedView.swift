@@ -133,11 +133,6 @@ final class GoatScrollEdgeBleedView: ExpoView {
       containerClipped = containerClipped ?? true
       container.layer.masksToBounds = false
     }
-    var indicators = scrollView.verticalScrollIndicatorInsets
-    if indicators.right != bleed.right {
-      indicators.right = bleed.right
-      scrollView.verticalScrollIndicatorInsets = indicators
-    }
     applied = bleeding
   }
 
