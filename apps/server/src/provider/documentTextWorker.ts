@@ -112,9 +112,19 @@ function xml(source: string, extension: string): XmlNode {
       return;
     }
     if (
+      extension === ".docx" &&
+      node.name === "Fallback" &&
+      (node.hasText || hasInlineTab(node, false))
+    ) {
+      parent.children = parent.children.filter(
+        (child) =>
+          typeof child === "string" || child.name !== "Choice" || !hasInlineTab(child, true),
+      );
+    }
+    if (
       (!node.hasText && node.name !== "noBreakHyphen") ||
       HIDDEN.has(node.name) ||
-      ["tab", "cell", "br", "line-break", "cr"].includes(node.name) ||
+      ["tab", "ptab", "cell", "br", "line-break", "cr"].includes(node.name) ||
       node.spaceCount !== undefined
     )
       return;
@@ -135,6 +145,16 @@ function xml(source: string, extension: string): XmlNode {
 
 const children = (node: XmlNode | undefined) =>
   node?.children.filter((child): child is XmlNode => typeof child !== "string") ?? [];
+function hasInlineTab(node: XmlNode, positionalOnly: boolean): boolean {
+  return (
+    !HIDDEN.has(node.name) &&
+    (node.name === "ptab" ||
+      (!positionalOnly && node.name === "tab") ||
+      node.children.some(
+        (child) => typeof child !== "string" && hasInlineTab(child, positionalOnly),
+      ))
+  );
+}
 function* all(node: XmlNode, name: string | readonly string[]): Generator<XmlNode, void> {
   for (const child of children(node)) {
     if (typeof name === "string" ? child.name === name : name.includes(child.name)) yield child;
@@ -143,7 +163,7 @@ function* all(node: XmlNode, name: string | readonly string[]): Generator<XmlNod
 }
 function* text(node: XmlNode): Generator<string, void> {
   if (HIDDEN.has(node.name)) return;
-  if (["tab", "cell"].includes(node.name)) yield "\t";
+  if (["tab", "ptab", "cell"].includes(node.name)) yield "\t";
   else if (["br", "line-break", "cr"].includes(node.name)) yield "\n";
   else if (node.name === "noBreakHyphen") yield "\u2011";
   else if (node.spaceCount !== undefined) {

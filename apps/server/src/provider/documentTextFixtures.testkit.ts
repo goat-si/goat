@@ -73,4 +73,18 @@ export const documentLineBreakFixtures = [
     },
     expected: ["First\nSecond\nThird\u2011party\u2011End"],
   },
+  {
+    ext: "docx",
+    bounded: true,
+    parts: {
+      "word/document.xml": [
+        '<w:document xmlns:w="urn:w" xmlns:mc="urn:mc"><w:body>',
+        '<w:p><w:r><w:t>Invoice 104</w:t><w:ptab w:alignment="right"/><w:t>$700.00</w:t></w:r></w:p>',
+        '<w:p><w:r><w:t>Invoice 105</w:t><mc:AlternateContent><mc:Choice Requires="w"><w:ptab w:alignment="right"/></mc:Choice><mc:Fallback><w:tab/></mc:Fallback></mc:AlternateContent><w:t>$800.00</w:t></w:r></w:p>',
+        '<w:p><w:r><w:t>Invoice 106</w:t><mc:AlternateContent><mc:Choice Requires="w"><w:ptab w:alignment="right"/></mc:Choice><mc:Fallback><w:t xml:space="preserve"> total </w:t></mc:Fallback></mc:AlternateContent><w:t>$900.00</w:t></w:r></w:p>',
+        "</w:body></w:document>",
+      ].join(""),
+    },
+    expected: ["Invoice 104\t$700.00\nInvoice 105\t$800.00\nInvoice 106 total $900.00"],
+  },
 ] as const;
