@@ -792,7 +792,8 @@ it.effect("reports sustained pinned-reader admission pressure with frame counts 
       yield* Deferred.succeed(secondRetry, undefined);
       yield* TestClock.adjust("100 millis");
       const thirdRetry = yield* retries.nextRetry;
-      const warningsUnderPressure = notices.warnings.slice();
+      yield* Effect.logWarning("Unrelated warning while the WAL reader is pinned");
+      const warningsUnderPressure = notices.admissionWarnings.slice();
       assert.equal(notices.recoveries.length, 0);
       reader.exec("ROLLBACK");
       yield* notices.admissionRecovered;
@@ -802,7 +803,7 @@ it.effect("reports sustained pinned-reader admission pressure with frame counts 
       assert.equal(
         warningsUnderPressure.length,
         1,
-        "persistent refusals must report degradation once",
+        `persistent refusals must report degradation once: ${notices.warnings.map(String).join("\n")}`,
       );
       assert.match(String(warningsUnderPressure[0]), /walFrames.*3[0-9]{4}/);
       assert.match(String(warningsUnderPressure[0]), /checkpointedFrames/);

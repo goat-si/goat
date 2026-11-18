@@ -31,7 +31,7 @@ import {
   type MarkdownLinkOccurrence,
   type MarkdownStyle,
 } from "react-native-enriched-markdown";
-import { codeFenceRenderer, openFenceCode } from "./codeBlockMarkdown";
+import { codeFenceRenderer, streamingFenceCode } from "./codeBlockMarkdown";
 import { HighlightedCodeBlock, OpenFenceCodeContext } from "./HighlightedCodeBlock";
 import { MermaidCodeBlock } from "./MermaidCodeBlock";
 import type { SelectableMarkdownTextProps } from "./SelectableMarkdownText.types";
@@ -274,7 +274,8 @@ export function MobileEnrichedMarkdownText(props: SelectableMarkdownTextProps) {
         .find((key) => key !== null) ?? ""
     );
   }, [props.markdown, resolveImageSource]);
-  const openCode = useMemo(() => openFenceCode(markdown), [markdown]);
+  const streaming = props.streaming === true;
+  const openCode = useMemo(() => streamingFenceCode(markdown, streaming), [markdown, streaming]);
   const renderMarkdown = (openAndroidMenu?: () => void) => {
     const onLinkLongPress =
       Platform.OS === "android" && props.fileContextMenu
