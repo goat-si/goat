@@ -63,10 +63,7 @@ const resolveInstance = (
         : Effect.fail(
             new TextGenerationError({
               operation,
-              detail:
-                operation === "resolveMemoryConflict" || operation === "generateMemorySummary"
-                  ? "route_unavailable"
-                  : `No provider instance registered for id '${instanceId}'.`,
+              detail: "route_unavailable",
             }),
           ),
     ),
@@ -79,13 +76,25 @@ export const make = Effect.gen(function* () {
   const settingsService = yield* ServerSettings.ServerSettingsService;
   const installationGate = yield* ProviderInstallationGate.current;
   const resolveCapableSelection = yield* makeTextGenerationCapableSelection(registry);
-  const capable = <I extends { readonly modelSelection: ModelSelection }>(input: I) =>
+  const capable = <I extends { readonly modelSelection: ModelSelection }>(
+    operation: TextGenerationOp,
+    input: I,
+  ) =>
     settingsService.getSettings.pipe(
+      Effect.mapError(
+        () =>
+          new TextGenerationError({
+            operation,
+            detail: "Could not read text generation settings.",
+          }),
+      ),
       Effect.flatMap((settings) => resolveCapableSelection(settings, input.modelSelection)),
-      // resolveText reports an unreadable settings file.
-      Effect.orElseSucceed(() => input.modelSelection),
-      Effect.map((modelSelection) =>
-        modelSelection === input.modelSelection ? input : { ...input, modelSelection },
+      Effect.flatMap((modelSelection) =>
+        modelSelection === null
+          ? Effect.fail(new TextGenerationError({ operation, detail: "route_unavailable" }))
+          : Effect.succeed(
+              modelSelection === input.modelSelection ? input : { ...input, modelSelection },
+            ),
       ),
     );
   const resolveText = Effect.fn("TextGeneration.resolveText")(
@@ -234,15 +243,19 @@ export const make = Effect.gen(function* () {
     resolveMemoryConflict: gated(ungated.resolveMemoryConflict),
     generateMemorySummary: gated(ungated.generateMemorySummary),
     generateCommitMessage: (input) =>
-      capable(input).pipe(Effect.flatMap(gated(ungated.generateCommitMessage))),
+      capable("generateCommitMessage", input).pipe(
+        Effect.flatMap(gated(ungated.generateCommitMessage)),
+      ),
     generatePrContent: (input) =>
-      capable(input).pipe(Effect.flatMap(gated(ungated.generatePrContent))),
+      capable("generatePrContent", input).pipe(Effect.flatMap(gated(ungated.generatePrContent))),
     generateBranchName: (input) =>
-      capable(input).pipe(Effect.flatMap(gated(ungated.generateBranchName))),
+      capable("generateBranchName", input).pipe(Effect.flatMap(gated(ungated.generateBranchName))),
     generateChannelReception: gated(ungated.generateChannelReception),
     generateReviewGuide: gated(ungated.generateReviewGuide),
     generateThreadTitle: (input) =>
-      capable(input).pipe(Effect.flatMap(gated(ungated.generateThreadTitle))),
+      capable("generateThreadTitle", input).pipe(
+        Effect.flatMap(gated(ungated.generateThreadTitle)),
+      ),
   });
 });
 

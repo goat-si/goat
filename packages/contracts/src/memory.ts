@@ -231,7 +231,6 @@ export type MemoryImportSourceId = typeof MemoryImportSourceId.Type;
 
 export const MemorySourceReadRequestId = uuid.pipe(Schema.brand("MemorySourceReadRequestId"));
 export type MemorySourceReadRequestId = typeof MemorySourceReadRequestId.Type;
-
 export const MemoryModelSelection = struct({
   instanceId: canonical.pipe(Schema.brand("ProviderInstanceId")),
   model: canonical,
@@ -1836,6 +1835,7 @@ export const MemorySettingsView = struct({
   enabled: Schema.Boolean,
   hub: struct({ mode: Schema.Literals(["disabled", "hub", "member"]), version: NonNegativeInt }),
   model: struct({ selection: MemoryModelSelection, automatic: Schema.Boolean }),
+  modelAvailable: Schema.optionalKey(Schema.Literal(false)),
 });
 export type MemorySettingsView = typeof MemorySettingsView.Type;
 export const MemorySettingsUpdateInput = struct({

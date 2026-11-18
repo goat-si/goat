@@ -46,20 +46,25 @@ const piProvider = (model: Partial<ServerProviderModel>) =>
     skills: [],
   }) satisfies ServerProvider;
 
-it.each([
-  ["writer", resolveSourceControlWriterModelSelection],
-  ["review guide", resolveReviewGuideModelSelection],
-  [
-    "memory",
-    (input: typeof settings, providers: ReadonlyArray<ServerProvider>) =>
-      resolveMemoryModelSelection(input, providers),
-  ],
-] as const)(
-  "the %s selection skips a model its provider cannot use for text generation, and keeps it when an older server omits the flag",
-  (_label, resolve) => {
-    expect(resolve(settings, [piProvider({ supportsTextGeneration: false })], null)).toEqual(
-      settings.textGenerationModelSelection,
-    );
-    expect(resolve(settings, [piProvider({})], null)).toEqual(extensionModel);
-  },
-);
+it("the writer skips a session-only model and accepts an older snapshot without a capability flag", () => {
+  expect(
+    resolveSourceControlWriterModelSelection(
+      settings,
+      [piProvider({ supportsTextGeneration: false })],
+      null,
+    ),
+  ).toEqual(settings.textGenerationModelSelection);
+  expect(resolveSourceControlWriterModelSelection(settings, [piProvider({})], null)).toEqual(
+    extensionModel,
+  );
+});
+
+it("memory requires an eligible model and guides require an eligible driver", () => {
+  const unfit = [piProvider({ supportsTextGeneration: false })];
+  const capable = [piProvider({})];
+  expect(resolveMemoryModelSelection(settings, unfit, 0)).toEqual(
+    createModelSelection(pi, "default"),
+  );
+  expect(resolveMemoryModelSelection(settings, capable, 0)).toEqual(extensionModel);
+  expect(resolveReviewGuideModelSelection(settings, capable, null, 0)).toBeNull();
+});

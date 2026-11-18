@@ -1,5 +1,10 @@
 import { render } from "../../../test/render";
-import { EnvironmentId, ProviderInstanceId, type ServerProvider } from "@goat/contracts";
+import {
+  EnvironmentId,
+  ProviderDriverKind,
+  ProviderInstanceId,
+  type ServerProvider,
+} from "@goat/contracts";
 import { DEFAULT_UNIFIED_SETTINGS, type UnifiedSettings } from "@goat/contracts/settings";
 import { createModelSelection } from "@goat/shared/model";
 import { StrictMode, type ReactNode } from "react";
@@ -166,6 +171,35 @@ it.each(["API writer fallback", "saved text generation model"])(
     await expect.element(page.getByRole("option", { name: /luna/i })).not.toBeInTheDocument();
   },
 );
+
+it("shows the eligible guide route and excludes Pi from the guide picker", async () => {
+  const codex = provider({ instanceId: "codex", models: ["gpt-6-luna", "gpt-6-astra"] });
+  const pi = provider({
+    instanceId: "pi",
+    provider: ProviderDriverKind.make("pi"),
+    models: ["pi-only-model"],
+  });
+  state.styles = [];
+  state.providers = [pi, codex];
+  state.scopedSettings = {
+    ...DEFAULT_UNIFIED_SETTINGS,
+    providerInstances: { [pi.instanceId]: { driver: pi.driver, enabled: true } },
+    reviewGuidesEnabled: true,
+    reviewGuideModelSelection: createModelSelection(pi.instanceId, "pi-only-model"),
+    sourceControlWriterModelSelection: createModelSelection(pi.instanceId, "pi-only-model"),
+  };
+  await using _screen = await render(content());
+  const trigger = page.getByRole("button", { name: "Review guide model", exact: true });
+  await expect.element(trigger).toHaveTextContent("gpt-6-luna");
+  await trigger.click();
+  await expect.element(page.getByRole("option", { name: /astra/i })).toBeVisible();
+  await expect
+    .element(page.getByRole("option", { name: /pi-only-model/i }))
+    .not.toBeInTheDocument();
+  await expect
+    .element(page.getByRole("button", { name: "Pi", exact: true }))
+    .not.toBeInTheDocument();
+});
 
 it("copies the hidden Codex route when enabling a separate guide model with an API writer", async () => {
   const codex = provider({ instanceId: "codex", models: ["gpt-6-astra", "gpt-6-luna"] });

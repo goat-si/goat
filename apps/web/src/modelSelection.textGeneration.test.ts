@@ -80,7 +80,8 @@ it.each(
 
     expect({
       settings: resolveAppModelSelectionState(settings, providers).model,
-      dispatch: resolveTextGenerationRoute(settings, selection, providers, null, 0).selection.model,
+      dispatch: resolveTextGenerationRoute(settings, selection, providers, null, 0).selection
+        ?.model,
     }).toEqual({ settings: expected, dispatch: expected });
   },
 );
@@ -105,6 +106,7 @@ describe("instance-scoped model selection", () => {
       providerInstances: {
         [pi.instanceId]: {
           driver: ProviderDriverKind.make("pi"),
+          enabled: true,
           config: {
             customModels: [
               { slug: "demo/demo-model", name: "My extension model" },
@@ -156,7 +158,7 @@ describe("instance-scoped model selection", () => {
     const settings: UnifiedSettings = {
       ...DEFAULT_UNIFIED_SETTINGS,
       providerInstances: {
-        [omo.instanceId]: { driver: ProviderDriverKind.make("omo"), config: {} },
+        [omo.instanceId]: { driver: ProviderDriverKind.make("omo"), enabled: true, config: {} },
       },
       textGenerationModelSelection: createModelSelection(omo.instanceId, "demo/demo-model"),
     };

@@ -23,7 +23,7 @@ import {
   readCustomModelEntries,
   resolveSelectableModel,
 } from "./model.ts";
-import { isTextGenerationFallbackCandidate } from "./textGenerationFallback.ts";
+import { isTextGenerationQuotaExhausted } from "./textGenerationFallback.ts";
 
 // Settings from an older server, or partial test settings, may lack textGenerators.
 function textGenerator(settings: ServerSettings, instanceId: ModelSelection["instanceId"]) {
@@ -67,13 +67,9 @@ function configuredTextGenerationDefault(driver: ProviderDriverKind): string {
   );
 }
 
-/** Configured instances come after every default instance, so they only win when no default qualifies. */
-export function fallbackTextGenerationModelSelection(
-  providerInstances: ServerSettings["providerInstances"],
-  isEnabled: (instanceId: ProviderInstanceId, driver: ProviderDriverKind) => boolean,
-  options?: { readonly defaultModelSelection?: ModelSelection | null },
-): ModelSelection | null {
-  const candidates = [
+/** Configured instances come after every default instance. */
+function textGenerationFallbackCandidates(providerInstances: ServerSettings["providerInstances"]) {
+  return [
     ...TEXT_GENERATION_FALLBACK_DRIVERS.map(
       (driver) => [defaultInstanceIdForDriver(driver), driver] as const,
     ),
@@ -83,7 +79,16 @@ export function fallbackTextGenerationModelSelection(
         : [],
     ),
   ];
-  const match = candidates.find(([instanceId, driver]) => isEnabled(instanceId, driver));
+}
+
+export function fallbackTextGenerationModelSelection(
+  providerInstances: ServerSettings["providerInstances"],
+  isEnabled: (instanceId: ProviderInstanceId, driver: ProviderDriverKind) => boolean,
+  options?: { readonly defaultModelSelection?: ModelSelection | null },
+): ModelSelection | null {
+  const match = textGenerationFallbackCandidates(providerInstances).find(([instanceId, driver]) =>
+    isEnabled(instanceId, driver),
+  );
   if (match === undefined) return null;
   const [instanceId, driver] = match;
   const threadDefault = options?.defaultModelSelection;
@@ -219,60 +224,82 @@ export function resolveSourceControlWriterModelSelection(
     : settings.textGenerationModelSelection;
 }
 
-/**
- * The model memory generation runs on. Without a usable dedicated choice it follows the
- * text generation model, which the server already moves to a ready provider.
- */
-export function resolveMemoryModelSelection(
+export const isReviewGuideDriver = (driver: ProviderDriverKind): boolean =>
+  driver === "codex" || driver === "claudeAgent";
+
+type RoutingScope = {
+  readonly projectId: ProjectId | null;
+  readonly now: number;
+  readonly purpose?: "memory" | "reviewGuide";
+};
+
+export function isTextGenerationEligible(
   settings: ServerSettings,
-  providers: ReadonlyArray<ServerProvider> | undefined,
-  now?: number,
-): ModelSelection {
-  const selection = resolveSourceControlWriterModelSelection(
-    { ...settings, sourceControlWriterModelSelection: settings.memoryModelSelection },
-    providers,
-    null,
+  selection: ModelSelection,
+  provider: ServerProvider | undefined,
+  scope: RoutingScope,
+): boolean {
+  const generator = textGenerator(settings, selection.instanceId);
+  if (generator !== undefined) {
+    return (
+      scope.purpose === undefined &&
+      generator.enabled &&
+      settings.projectSettingsOverrides[scope.projectId ?? ""]?.providerInstances?.[
+        selection.instanceId
+      ]?.enabled !== false
+    );
+  }
+  return (
+    provider !== undefined &&
+    resolveProjectProviderInstanceEnabled(settings, scope.projectId, selection.instanceId) &&
+    provider.enabled &&
+    provider.installed &&
+    (provider.status === "ready" || provider.status === "warning") &&
+    provider.auth.status !== "unauthenticated" &&
+    isProviderAvailable(provider) &&
+    isProviderTextGenerationCapable(provider) &&
+    isModelTextGenerationCapable(provider, selection.model) &&
+    !isTextGenerationQuotaExhausted(provider, selection.model, scope.now) &&
+    (scope.purpose !== "reviewGuide" || isReviewGuideDriver(provider.driver))
   );
-  return agentOnlySelection(settings, providers, null, selection, false, now);
 }
 
-/**
- * The provider text generation falls back to, in the fallback driver order. Settings and the
- * server both resolve through it, so Settings names the provider the server runs.
- */
-export function resolveTextGenerationFallback(
-  settings: Pick<ServerSettings, "providerInstances" | "projectSettingsOverrides">,
-  providers: ReadonlyArray<ServerProvider> | undefined,
-  options: {
-    readonly projectId: ProjectId | null;
-    readonly excludeInstanceId: ProviderInstanceId;
-    readonly now?: number | undefined;
-    readonly accept?: (instanceId: ProviderInstanceId, driver: ProviderDriverKind) => boolean;
-  },
-): ModelSelection | null {
-  const fallback = fallbackTextGenerationModelSelection(
-    settings.providerInstances,
-    (id, driver) => {
-      if (id === options.excludeInstanceId || options.accept?.(id, driver) === false) return false;
-      if (providers === undefined) {
-        return resolveProjectProviderInstanceEnabled(settings, options.projectId, id);
-      }
-      const provider = providers.find((candidate) => candidate.instanceId === id);
-      return (
-        provider !== undefined &&
-        isTextGenerationFallbackCandidate(provider, textGenerationDefaultModel(provider), {
-          settings,
-          projectId: options.projectId,
-          now: options.now,
-        })
-      );
-    },
-  );
-  const snapshot = providers?.find((provider) => provider.instanceId === fallback?.instanceId);
-  return snapshot === undefined
-    ? fallback
-    : { instanceId: snapshot.instanceId, model: textGenerationDefaultModel(snapshot) };
+function eligiblePrimary(
+  settings: ServerSettings,
+  selection: ModelSelection | null,
+  providers: ReadonlyArray<ServerProvider>,
+  scope: RoutingScope,
+) {
+  if (selection === null) return null;
+  const provider = providers.find((candidate) => candidate.instanceId === selection.instanceId);
+  const resolved =
+    provider === undefined || textGenerator(settings, selection.instanceId) !== undefined
+      ? { selection, reason: "saved" as const }
+      : resolveSnapshotModel(settings, selection, provider);
+  return isTextGenerationEligible(settings, resolved.selection, provider, scope) ? resolved : null;
 }
+
+export function resolveTextGenerationFallback(
+  settings: ServerSettings,
+  providers: ReadonlyArray<ServerProvider>,
+  scope: RoutingScope & { readonly excludeInstanceId: ProviderInstanceId },
+): ModelSelection | null {
+  const candidates = new Map(providers.map((provider) => [provider.instanceId, provider]));
+  for (const [instanceId] of textGenerationFallbackCandidates(settings.providerInstances)) {
+    const provider = candidates.get(instanceId);
+    if (provider === undefined || instanceId === scope.excludeInstanceId) continue;
+    const selection = { instanceId, model: textGenerationDefaultModel(provider) };
+    if (isTextGenerationEligible(settings, selection, provider, scope)) return selection;
+  }
+  return null;
+}
+
+type TextGenerationRoute =
+  | {
+      readonly selection: ModelSelection;
+      readonly reason: "saved" | "model_unsupported" | "provider_unsupported";
+    }
+  | { readonly selection: null; readonly reason: "no_fallback" };
 
 export function resolveTextGenerationRoute(
   settings: ServerSettings,
@@ -280,95 +307,83 @@ export function resolveTextGenerationRoute(
   providers: ReadonlyArray<ServerProvider>,
   projectId: ProjectId | null,
   now: number,
-): {
-  readonly selection: ModelSelection;
-  readonly reason: "saved" | "model_unsupported" | "provider_unsupported" | "no_fallback";
-} {
-  if (textGenerator(settings, selection.instanceId)?.enabled === true) {
-    return { selection, reason: "saved" };
-  }
-  const provider = providers.find((candidate) => candidate.instanceId === selection.instanceId);
-  const ownDefault = () =>
-    provider === undefined
-      ? selection
-      : { instanceId: selection.instanceId, model: textGenerationDefaultModel(provider) };
-  if (
-    provider?.enabled === true &&
-    isProviderAvailable(provider) &&
-    isProviderTextGenerationCapable(provider) &&
-    (projectId === null ||
-      resolveProjectProviderInstanceEnabled(settings, projectId, provider.instanceId))
-  ) {
-    return resolveSnapshotModel(settings, selection, provider);
-  }
+  purpose?: RoutingScope["purpose"],
+): TextGenerationRoute {
+  const scope: RoutingScope = { projectId, now, ...(purpose === undefined ? {} : { purpose }) };
+  const primary = eligiblePrimary(settings, selection, providers, scope);
+  if (primary !== null) return primary;
   const fallback = resolveTextGenerationFallback(settings, providers, {
-    projectId,
+    ...scope,
     excludeInstanceId: selection.instanceId,
-    now,
-    accept: (id) => textGenerator(settings, id) === undefined,
   });
   return fallback === null
-    ? { selection: ownDefault(), reason: "no_fallback" }
+    ? { selection: null, reason: "no_fallback" }
     : { selection: fallback, reason: "provider_unsupported" };
 }
 
-function agentOnlySelection(
-  settings: ServerSettings,
-  providers: ReadonlyArray<ServerProvider> | undefined,
-  projectId: ProjectId | null,
-  selection: ModelSelection,
-  investigate: boolean,
-  now: number | undefined,
-): ModelSelection {
-  const instanceId = selection?.instanceId;
-  if (instanceId === undefined || textGenerator(settings, instanceId) === undefined)
-    return selection;
+/** The configured memory choice is also part of the Settings status refresh key. */
+export function configuredMemoryModelSelection(settings: ServerSettings): ModelSelection {
+  const configured = [settings.memoryModelSelection, settings.textGenerationModelSelection].find(
+    (selection) =>
+      selection !== null &&
+      textGenerator(settings, selection.instanceId) === undefined &&
+      isModelSelectionProviderEnabled(settings, selection),
+  );
   return (
-    resolveTextGenerationFallback(settings, providers, {
-      projectId,
-      excludeInstanceId: instanceId,
+    configured ??
+    fallbackTextGenerationModelSelection(
+      settings.providerInstances,
+      (instanceId) =>
+        textGenerator(settings, instanceId) === undefined &&
+        resolveProjectProviderInstanceEnabled(settings, null, instanceId),
+    ) ??
+    settings.textGenerationModelSelection
+  );
+}
+
+export function resolveMemoryModelSelection(
+  settings: ServerSettings,
+  providers: ReadonlyArray<ServerProvider>,
+  now: number,
+): ModelSelection | null {
+  const primary = eligiblePrimary(settings, settings.memoryModelSelection, providers, {
+    projectId: null,
+    now,
+    purpose: "memory",
+  });
+  return (
+    primary?.selection ??
+    resolveTextGenerationRoute(
+      settings,
+      settings.textGenerationModelSelection,
+      providers,
+      null,
       now,
-      // Review guides investigate the checkout read-only; the other drivers reject that request.
-      accept: (id, driver) =>
-        textGenerator(settings, id) === undefined &&
-        (!investigate || driver === "codex" || driver === "claudeAgent"),
-    }) ?? selection
+      "memory",
+    ).selection
   );
 }
 
 export function resolveReviewGuideModelSelection(
   settings: ServerSettings,
-  providers: ReadonlyArray<ServerProvider> | undefined,
+  providers: ReadonlyArray<ServerProvider>,
   projectId: ProjectId | null,
-  now?: number,
-): ModelSelection {
-  const selection = settings.reviewGuideModelSelection;
-  if (
-    selection &&
-    textGenerator(settings, selection.instanceId) === undefined &&
-    resolveProjectProviderInstanceEnabled(settings, projectId, selection.instanceId)
-  ) {
-    const provider = providers?.find((candidate) => candidate.instanceId === selection.instanceId);
-    if (providers === undefined) return selection;
-    if (
-      provider?.enabled === true &&
-      isProviderAvailable(provider) &&
-      isProviderTextGenerationCapable(provider) &&
-      isModelTextGenerationCapable(provider, selection.model)
-    ) {
-      return resolveSnapshotModel(settings, selection, provider).selection;
-    }
-  }
-  const inherited = agentOnlySelection(
+  now: number,
+): ModelSelection | null {
+  const scope = { projectId, now, purpose: "reviewGuide" } as const;
+  const primary = eligiblePrimary(settings, settings.reviewGuideModelSelection, providers, scope);
+  if (primary !== null) return primary.selection;
+  const writer = settings.sourceControlWriterModelSelection;
+  const inherited = eligiblePrimary(settings, writer, providers, scope);
+  if (inherited !== null) return inherited.selection;
+  return resolveTextGenerationRoute(
     settings,
+    writer !== null && textGenerator(settings, writer.instanceId)?.enabled === true
+      ? writer
+      : settings.textGenerationModelSelection,
     providers,
     projectId,
-    resolveSourceControlWriterModelSelection(settings, providers, projectId),
-    true,
     now,
-  );
-  const provider = providers?.find((candidate) => candidate.instanceId === inherited.instanceId);
-  return provider === undefined
-    ? inherited
-    : resolveSnapshotModel(settings, inherited, provider).selection;
+    "reviewGuide",
+  ).selection;
 }

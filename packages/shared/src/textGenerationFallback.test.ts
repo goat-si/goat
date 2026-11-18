@@ -72,7 +72,7 @@ describe("text generation fallback candidates", () => {
       ),
     };
 
-    expect(resolveMemoryModelSelection(configured, providers, NOW).instanceId).toBe(
+    expect(resolveMemoryModelSelection(configured, providers, NOW)?.instanceId).toBe(
       ProviderInstanceId.make("muse"),
     );
   });
@@ -85,7 +85,7 @@ describe("text generation fallback candidates", () => {
 
     expect(
       resolveMemoryModelSelection(settings, [ready("codex", { usageLimits: stale })], NOW)
-        .instanceId,
+        ?.instanceId,
     ).toBe(ProviderInstanceId.make("codex"));
   });
 
@@ -95,7 +95,7 @@ describe("text generation fallback candidates", () => {
       ready("claudeAgent"),
     ];
 
-    expect(resolveReviewGuideModelSelection(settings, providers, null).instanceId).toBe(
+    expect(resolveReviewGuideModelSelection(settings, providers, null, NOW)?.instanceId).toBe(
       ProviderInstanceId.make("claudeAgent"),
     );
   });
@@ -112,10 +112,10 @@ describe("text generation fallback candidates", () => {
     };
     const providers = [ready("codex"), ready("claudeAgent")];
 
-    expect(resolveReviewGuideModelSelection(withOverride, providers, project).instanceId).toBe(
-      ProviderInstanceId.make("claudeAgent"),
-    );
-    expect(resolveReviewGuideModelSelection(withOverride, providers, null).instanceId).toBe(
+    expect(
+      resolveReviewGuideModelSelection(withOverride, providers, project, NOW)?.instanceId,
+    ).toBe(ProviderInstanceId.make("claudeAgent"));
+    expect(resolveReviewGuideModelSelection(withOverride, providers, null, NOW)?.instanceId).toBe(
       ProviderInstanceId.make("codex"),
     );
   });
@@ -128,7 +128,7 @@ describe("OmO's text generation default", () => {
       ...settings,
       providerInstances: { [omo]: { driver: ProviderDriverKind.make("omo"), enabled: true } },
     };
-    expect(resolveMemoryModelSelection(withOmo, [ready("omo")])).toEqual(
+    expect(resolveMemoryModelSelection(withOmo, [ready("omo")], NOW)).toEqual(
       createModelSelection(ProviderInstanceId.make("omo"), "default"),
     );
   });

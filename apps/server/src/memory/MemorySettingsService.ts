@@ -2,6 +2,7 @@ import * as M from "@goat/contracts";
 import * as Context from "effect/Context";
 import * as Effect from "effect/Effect";
 import * as Layer from "effect/Layer";
+import { configuredMemoryModelSelection } from "@goat/shared/serverSettings";
 import * as Settings from "../serverSettings.ts";
 import * as MemoryService from "./MemoryService.ts";
 import * as Hold from "./MemoryGenerationHold.ts";
@@ -30,7 +31,11 @@ const make = Effect.gen(function* () {
         Effect.map((selection): M.MemorySettingsView => ({
           enabled: current.memoryEnabled,
           hub: { mode: current.memoryHub.mode, version: current.memoryHubVersion },
-          model: { selection, automatic: current.memoryModelSelection === null },
+          model: {
+            selection: selection ?? configuredMemoryModelSelection(current),
+            automatic: current.memoryModelSelection === null,
+          },
+          ...(selection === null ? { modelAvailable: false } : {}),
         })),
       ),
     ),

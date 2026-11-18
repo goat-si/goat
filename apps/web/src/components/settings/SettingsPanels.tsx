@@ -57,6 +57,7 @@ import {
 import {
   applyProviderInstanceSettings,
   deriveProviderInstanceEntries,
+  NO_PROVIDER_MODEL_SELECTION,
   sortProviderInstanceEntries,
 } from "../../providerInstances";
 import { ensureLocalApi, readLocalApi } from "../../localApi";
@@ -577,9 +578,11 @@ export function GeneralSettingsPanel() {
   const textGenerationProviders = serverProviders.filter(
     (provider) => provider.supportsTextGeneration !== false,
   );
+  const projectId = target?.projectId ?? null;
   const textGenerationModelSelection = resolveAppModelSelectionState(
     settings,
     textGenerationProviders,
+    projectId,
   );
   const textGenInstanceId = textGenerationModelSelection.instanceId;
   const textGenModel = textGenerationModelSelection.model;
@@ -608,6 +611,16 @@ export function GeneralSettingsPanel() {
     settings.textGenerationModelSelection ?? null,
     DEFAULT_UNIFIED_SETTINGS.textGenerationModelSelection ?? null,
   );
+  const saveTextGenerationModel = (selection: ReturnType<typeof createModelSelection>) => {
+    const effective = resolveAppModelSelectionState(
+      { ...settings, textGenerationModelSelection: selection },
+      textGenerationProviders,
+      projectId,
+    );
+    if (effective !== NO_PROVIDER_MODEL_SELECTION) {
+      updateSettings({ textGenerationModelSelection: effective });
+    }
+  };
   const textGenerationModelDisabledReason = useScopedModelDisabledReason(
     settings,
     textGenerationModelInstanceEntries,
@@ -1329,7 +1342,11 @@ export function GeneralSettingsPanel() {
                   instanceEntries={textGenerationModelInstanceEntries}
                   modelOptionsByInstance={textGenerationModelOptionsByInstance}
                   triggerClassName={SETTINGS_PICKER_TRIGGER_CLASSNAME}
-                  {...(mixedTextGenerationModel ? { triggerLabel: "Mixed" } : {})}
+                  {...(textGenerationModelSelection === NO_PROVIDER_MODEL_SELECTION
+                    ? { triggerLabel: "Unavailable" }
+                    : mixedTextGenerationModel
+                      ? { triggerLabel: "Mixed" }
+                      : {})}
                   getModelDisabledReason={textGenerationModelDisabledReason}
                   {...(environmentId
                     ? {
@@ -1351,15 +1368,7 @@ export function GeneralSettingsPanel() {
                       });
                       return;
                     }
-                    updateSettings({
-                      textGenerationModelSelection: resolveAppModelSelectionState(
-                        {
-                          ...settings,
-                          textGenerationModelSelection: createModelSelection(instanceId, model),
-                        },
-                        textGenerationProviders,
-                      ),
-                    });
+                    saveTextGenerationModel(createModelSelection(instanceId, model));
                   }}
                 />
                 {textGenInstanceEntry ? (
@@ -1373,21 +1382,11 @@ export function GeneralSettingsPanel() {
                       settings.planModeEnabled || selectsPlanAgent(textGenModelOptions)
                     }
                     triggerClassName={SETTINGS_PICKER_TRIGGER_CLASSNAME}
-                    onModelOptionsChange={(nextOptions) => {
-                      updateSettings({
-                        textGenerationModelSelection: resolveAppModelSelectionState(
-                          {
-                            ...settings,
-                            textGenerationModelSelection: createModelSelection(
-                              textGenInstanceId,
-                              textGenModel,
-                              nextOptions,
-                            ),
-                          },
-                          textGenerationProviders,
-                        ),
-                      });
-                    }}
+                    onModelOptionsChange={(nextOptions) =>
+                      saveTextGenerationModel(
+                        createModelSelection(textGenInstanceId, textGenModel, nextOptions),
+                      )
+                    }
                   />
                 ) : null}
               </div>

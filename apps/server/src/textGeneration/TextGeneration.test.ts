@@ -8,6 +8,8 @@ import { describe, expect } from "vite-plus/test";
 import { ProviderInstanceId } from "@goat/contracts";
 import * as M from "@goat/contracts";
 import { createModelSelection } from "@goat/shared/model";
+import { resolveTextGenerationRoute } from "@goat/shared/serverSettings";
+import * as TestClock from "effect/testing/TestClock";
 
 import type { ProviderInstance } from "@goat/provider-core/server/driver";
 import * as ProviderInstanceRegistry from "../provider/ProviderInstanceRegistry.ts";
@@ -378,7 +380,15 @@ describe("TextGeneration model Settings no longer offers", () => {
         ]),
       ]);
       yield* generateBranch(
-        yield* generation.pipe(Effect.provide(ServerSettings.layerTest())),
+        yield* generation.pipe(
+          Effect.provide(
+            ServerSettings.layerTest({
+              providerInstances: {
+                [PI]: { driver: M.ProviderDriverKind.make("pi"), enabled: true },
+              },
+            }),
+          ),
+        ),
         createModelSelection(PI, "demo/demo-model"),
       );
       expect(ran).toEqual([{ instanceId: PI, model: "default" }]);
@@ -399,25 +409,33 @@ describe("TextGeneration model Settings no longer offers", () => {
     }),
   );
 
-  it.effect("uses Pi's documented default when no other provider can generate text", () =>
-    Effect.gen(function* () {
-      const { ran, generation } = capableSelectionHarness([
-        textProvider(PI, "pi", [{ slug: "demo/demo-model", supportsTextGeneration: false }], false),
-      ]);
-      yield* generateBranch(
-        yield* generation.pipe(Effect.provide(ServerSettings.layerTest())),
-        createModelSelection(PI, "demo/demo-model"),
-      );
-      expect(ran).toEqual([{ instanceId: PI, model: "default" }]);
-    }),
+  it.effect(
+    "refuses Pi when its snapshot has no text generation support and there is no fallback",
+    () =>
+      Effect.gen(function* () {
+        const { ran, generation } = capableSelectionHarness([
+          textProvider(
+            PI,
+            "pi",
+            [{ slug: "demo/demo-model", supportsTextGeneration: false }],
+            false,
+          ),
+        ]);
+        const error = yield* Effect.flip(
+          generateBranch(
+            yield* generation.pipe(Effect.provide(ServerSettings.layerTest())),
+            createModelSelection(PI, "demo/demo-model"),
+          ),
+        );
+        expect(error.detail).toBe("route_unavailable");
+        expect(ran).toEqual([]);
+      }),
   );
 
-  // OmO's text generation default is "default", the model OmO itself is configured with.
   it.effect.each([
-    ["a flagged OmO model", OMO, false, false],
-    ["OmO flagged as a whole with no other provider", OMO, true, false],
-    ["Pi flagged as a whole with OmO the first capable fallback", PI, true, true],
-  ] as const)("runs OmO's own default for %s", ([, saved, wholeListing, withOmoFallback]) =>
+    ["a flagged OmO model", OMO, false],
+    ["Pi flagged as a whole with OmO the first capable fallback", PI, true],
+  ] as const)("runs OmO's own default for %s", ([, saved, withOmoFallback]) =>
     Effect.gen(function* () {
       const flagged = [
         { slug: "default" },
@@ -428,7 +446,7 @@ describe("TextGeneration model Settings no longer offers", () => {
           saved,
           saved === OMO ? "omo" : "pi",
           flagged,
-          wholeListing ? false : undefined,
+          withOmoFallback ? false : undefined,
         ),
         ...(withOmoFallback ? [textProvider(OMO, "omo", [{ slug: "default" }])] : []),
       ]);
@@ -448,50 +466,45 @@ describe("TextGeneration model Settings no longer offers", () => {
     }),
   );
 
-  it.effect("skips an OmO that is off at machine level and runs Pi's own default", () =>
+  it.effect("refuses an OmO that is off at machine level", () =>
     Effect.gen(function* () {
       const { ran, generation } = capableSelectionHarness([
         textProvider(PI, "pi", [{ slug: "default" }, { slug: "demo/demo-model" }], false),
         textProvider(OMO, "omo", [{ slug: "default" }]),
       ]);
-      yield* generateBranch(
-        yield* generation.pipe(Effect.provide(ServerSettings.layerTest())),
-        createModelSelection(PI, "demo/demo-model"),
+      const error = yield* Effect.flip(
+        generateBranch(
+          yield* generation.pipe(Effect.provide(ServerSettings.layerTest())),
+          createModelSelection(PI, "demo/demo-model"),
+        ),
       );
-      expect(ran).toEqual([{ instanceId: PI, model: "default" }]);
+      expect(error.detail).toBe("route_unavailable");
+      expect(ran).toEqual([]);
     }),
   );
 
-  it.effect("keeps the saved model when the status predates the flag or is not checked yet", () =>
+  it.effect("keeps the saved model when the ready snapshot predates the capability flag", () =>
     Effect.gen(function* () {
       const saved = createModelSelection(PI, "demo/demo-model");
-      const older = capableSelectionHarness([
-        textProvider(PI, "pi", [{ slug: "demo/demo-model" }]),
+      const { generation, ran } = capableSelectionHarness([
+        textProvider(PI, "pi", [{ slug: saved.model }]),
       ]);
       yield* generateBranch(
-        yield* older.generation.pipe(Effect.provide(ServerSettings.layerTest())),
-        saved,
-      );
-      const unchecked = capableSelectionHarness(
-        [
-          textProvider(
-            PI,
-            "pi",
-            [{ slug: "demo/demo-model", supportsTextGeneration: false }],
-            false,
+        yield* generation.pipe(
+          Effect.provide(
+            ServerSettings.layerTest({
+              providerInstances: {
+                [PI]: { driver: M.ProviderDriverKind.make("pi"), enabled: true },
+              },
+            }),
           ),
-        ],
-        { awaitingFirstCheck: true },
-      );
-      yield* generateBranch(
-        yield* unchecked.generation.pipe(Effect.provide(ServerSettings.layerTest())),
+        ),
         saved,
       );
-      expect([...older.ran, ...unchecked.ran]).toEqual([saved, saved]);
+      expect(ran).toEqual([saved]);
     }),
   );
 
-  // goat_environment_settings_update stores the model through updateSettings without checking the list.
   it.effect("falls back from a flagged model an agent saved through the settings service", () =>
     Effect.gen(function* () {
       const { ran, generation } = capableSelectionHarness([
@@ -525,6 +538,83 @@ const PROJECT = M.ProjectId.make("project-without-codex");
 const flaggedPi = () =>
   textProvider(PI, "pi", [{ slug: "demo/demo-model", supportsTextGeneration: false }], false);
 const readyClaude = () => textProvider(CLAUDE, "claudeAgent", [{ slug: "claude-haiku-5-5" }]);
+
+const codexSelection = createModelSelection(CODEX, M.DEFAULT_TEXT_GENERATION_MODEL);
+const claudeSelection = createModelSelection(CLAUDE, "claude-haiku-5-5");
+const readyCodex = textProvider(CODEX, "codex", [{ slug: codexSelection.model }]);
+
+it.effect.each([
+  {
+    dimension: "the only provider is disabled for the project",
+    providers: [readyCodex],
+    projectId: PROJECT,
+    expected: null,
+  },
+  {
+    dimension: "the saved provider is signed out",
+    providers: [{ ...readyCodex, auth: { status: "unauthenticated" as const } }, readyClaude()],
+    projectId: null,
+    expected: claudeSelection,
+  },
+  {
+    dimension: "the saved provider has exhausted its quota",
+    providers: [
+      {
+        ...readyCodex,
+        usageLimits: {
+          checkedAt: readyCodex.checkedAt,
+          windows: [{ id: "weekly", kind: "weekly" as const, label: "Weekly", exhausted: true }],
+        },
+      },
+      readyClaude(),
+    ],
+    projectId: null,
+    expected: claudeSelection,
+  },
+  {
+    dimension: "the saved provider has no snapshot or alternative",
+    providers: [readyCodex],
+    awaitingFirstCheck: true as const,
+    projectId: null,
+    expected: null,
+  },
+])("branch generation agrees with the Settings route when $dimension", (row) =>
+  Effect.gen(function* () {
+    const now = Date.parse(readyCodex.checkedAt);
+    yield* TestClock.setTime(now);
+    const layer = ServerSettings.layerTest({
+      textGenerationModelSelection: codexSelection,
+      projectSettingsOverrides: {
+        [PROJECT]: { providerInstances: { [CODEX]: { enabled: false } } },
+      },
+    });
+    const { ran, generation } = capableSelectionHarness(row.providers, row);
+    const settings = yield* Effect.service(ServerSettings.ServerSettingsService).pipe(
+      Effect.flatMap((service) => service.getSettings),
+      Effect.provide(layer),
+    );
+    const result = yield* generateBranch(
+      yield* generation.pipe(Effect.provide(layer)),
+      settings.textGenerationModelSelection,
+    ).pipe(Effect.provideService(TextGenerationProject, row.projectId), Effect.result);
+    const settingsRoute = resolveTextGenerationRoute(
+      settings,
+      settings.textGenerationModelSelection,
+      row.awaitingFirstCheck ? [] : row.providers,
+      row.projectId,
+      now,
+    );
+    expect({
+      shown: settingsRoute.reason === "no_fallback" ? null : settingsRoute.selection,
+      dispatched: ran,
+      error: Result.isFailure(result) ? result.failure.detail : null,
+    }).toEqual({
+      shown: row.expected,
+      dispatched: row.expected === null ? [] : [row.expected],
+      error: row.expected === null ? "route_unavailable" : null,
+    });
+  }),
+);
 
 describe("TextGeneration fallback provider", () => {
   it.effect("falls back past a signed-out provider to a ready one", () =>

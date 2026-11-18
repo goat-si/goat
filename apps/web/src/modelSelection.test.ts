@@ -912,6 +912,7 @@ describe("resolveAppModelSelectionState with the opencode plan agent", () => {
   const settings: UnifiedSettings = {
     ...DEFAULT_UNIFIED_SETTINGS,
     planModeEnabled: false,
+    providerInstances: { [instanceId]: { driver: opencode.driver, enabled: true } },
     textGenerationModelSelection: createModelSelection(instanceId, model, [
       { id: "agent", value: "plan" },
     ]),

@@ -422,12 +422,14 @@ export function selectsPlanAgent(options: ModelSelection["options"]): boolean {
 export function resolveAppModelSelectionState(
   settings: UnifiedSettings,
   providers: ReadonlyArray<ServerProvider>,
+  projectId: ProjectId | null = null,
+  now: number = Date.now(),
 ): ModelSelection {
   const selection = settings.textGenerationModelSelection ?? {
     instanceId: DEFAULT_TEXT_GENERATION_INSTANCE_ID,
     model: DEFAULT_TEXT_GENERATION_MODEL,
   };
-  const route = resolveTextGenerationRoute(settings, selection, providers, null, Date.now());
+  const route = resolveTextGenerationRoute(settings, selection, providers, projectId, now);
   if (route.reason === "no_fallback") return NO_PROVIDER_MODEL_SELECTION;
   const { instanceId, model, options } = route.selection;
   if (

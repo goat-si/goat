@@ -27,8 +27,11 @@ import {
 } from "./backgroundActivitySettings.ts";
 
 export {
+  configuredMemoryModelSelection,
   fallbackTextGenerationModelSelection,
   isModelSelectionProviderEnabled,
+  isReviewGuideDriver,
+  isTextGenerationEligible,
   resolveMemoryModelSelection,
   resolveReviewGuideModelSelection,
   resolveSourceControlWriterModelSelection,

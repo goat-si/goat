@@ -30,13 +30,13 @@ const ready = (selection: M.ModelSelection): M.ServerProvider => ({
   skills: [],
 });
 
-it.effect.each(["signed out", "exhausted"] as const)(
+it.effect.each(["signed out", "exhausted", "signed out on a dedicated coding model"] as const)(
   "admits and retries summaries using the ready fallback when Codex is %s",
   (unavailable) =>
     Effect.gen(function* () {
       yield* TestClock.setTime(Date.parse(now));
       const unavailableCodex: M.ServerProvider =
-        unavailable === "signed out"
+        unavailable !== "exhausted"
           ? { ...ready(codex), auth: { status: "unauthenticated" } }
           : {
               ...ready(codex),
@@ -71,7 +71,8 @@ it.effect.each(["signed out", "exhausted"] as const)(
       yield* Effect.gen(function* () {
         const settings = yield* Settings.ServerSettingsService;
         yield* settings.updateSettings({
-          memoryModelSelection: null,
+          memoryModelSelection:
+            unavailable === "signed out on a dedicated coding model" ? codex : null,
           textGenerationModelSelection: { instanceId: api, model: "writer" },
           textGenerators: {
             [api]: {

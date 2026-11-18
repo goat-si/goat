@@ -10,7 +10,10 @@
  * @module MemoryGenerationHold
  */
 import * as M from "@goat/contracts";
-import { resolveMemoryModelSelection } from "@goat/shared/serverSettings";
+import {
+  configuredMemoryModelSelection,
+  resolveMemoryModelSelection,
+} from "@goat/shared/serverSettings";
 import {
   classifyTextGenerationFailure,
   type TextGenerationFailureKind,
@@ -121,7 +124,7 @@ export function deterministicFailure(error: unknown): MemoryGenerationHoldReason
 export class MemoryGenerationHold extends Context.Service<
   MemoryGenerationHold,
   {
-    readonly resolveModel: (settings: M.ServerSettings) => Effect.Effect<M.ModelSelection>;
+    readonly resolveModel: (settings: M.ServerSettings) => Effect.Effect<M.ModelSelection | null>;
     /** The hold key: the model selection and its provider's version. */
     readonly keyFor: (selection: M.MemoryModelSelection) => Effect.Effect<string>;
     /** Whether a call for this key would be refused now. */
@@ -152,9 +155,10 @@ export const make = Effect.gen(function* () {
   const resolveModel = Effect.fn("MemoryGenerationHold.resolveModel")(function* (
     settings: M.ServerSettings,
   ) {
+    if (Option.isNone(providers)) return configuredMemoryModelSelection(settings);
     return resolveMemoryModelSelection(
       settings,
-      Option.isSome(providers) ? yield* providers.value.getProviders : undefined,
+      yield* providers.value.getProviders,
       yield* Clock.currentTimeMillis,
     );
   });

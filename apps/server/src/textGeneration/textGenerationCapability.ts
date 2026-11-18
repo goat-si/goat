@@ -31,9 +31,7 @@ const checkedSnapshot = Effect.fn("TextGeneration.checkedSnapshot")(function* (
 const modelKey = (selection: ModelSelection) => `${selection.instanceId}/${selection.model}`;
 
 /**
- * Moves off a model or provider the status marks unable to generate text (a Pi extension
- * model), as the Settings picker does, so the model Settings shows is the one that runs.
- * Before the first status check the saved model runs. Logs each new fallback once.
+ * Reads the registered snapshots for the shared Settings route. Logs each new fallback once.
  */
 export const makeTextGenerationCapableSelection = Effect.fn("TextGeneration.makeCapableSelection")(
   function* (registry: ProviderInstanceRegistry.ProviderInstanceRegistry["Service"]) {
@@ -41,7 +39,7 @@ export const makeTextGenerationCapableSelection = Effect.fn("TextGeneration.make
     const logFallback = Effect.fnUntraced(function* (
       from: ModelSelection,
       to: ModelSelection,
-      reason: "model_unsupported" | "provider_unsupported" | "no_fallback",
+      reason: "model_unsupported" | "provider_unsupported",
     ) {
       const key = `${modelKey(from)}>${modelKey(to)}`;
       if ((yield* Ref.getAndSet(lastLogged, key)) === key) return;
@@ -56,14 +54,9 @@ export const makeTextGenerationCapableSelection = Effect.fn("TextGeneration.make
       selection: ModelSelection,
     ) {
       const instance = yield* registry.getInstance(selection.instanceId);
-      if (
-        instance?.snapshot.isAwaitingFirstCheck !== undefined &&
-        (yield* instance.snapshot.isAwaitingFirstCheck)
-      ) {
-        return selection;
-      }
       const providers: Array<ServerProvider> = [];
-      if (instance !== undefined) providers.push(yield* instance.snapshot.getSnapshot);
+      const primary = instance === undefined ? undefined : yield* checkedSnapshot(instance);
+      if (primary !== undefined) providers.push(primary);
       const projectId = yield* TextGenerationProject;
       const now = DateTime.toEpochMillis(yield* DateTime.now);
       let route = resolveTextGenerationRoute(settings, selection, providers, projectId, now);
@@ -75,7 +68,7 @@ export const makeTextGenerationCapableSelection = Effect.fn("TextGeneration.make
         }
         route = resolveTextGenerationRoute(settings, selection, providers, projectId, now);
       }
-      if (route.reason === "saved") {
+      if (route.reason === "saved" || route.reason === "no_fallback") {
         yield* Ref.set(lastLogged, null);
       } else if (route.selection !== selection) {
         yield* logFallback(selection, route.selection, route.reason);

@@ -116,7 +116,11 @@ const make = Effect.gen(function* () {
       ? query(
           hold
             .resolveModel(snapshot)
-            .pipe(Effect.flatMap((model) => decodeSelection(model, strict))),
+            .pipe(
+              Effect.flatMap((model) =>
+                model === null ? Effect.succeed(null) : decodeSelection(model, strict),
+              ),
+            ),
         )
       : Effect.succeed(null);
   const readSource = Effect.fn("MemoryWorker.readSource")(function* (work: Store.MemoryWork) {
@@ -524,10 +528,8 @@ const make = Effect.gen(function* () {
       // Work keeps the model it was queued with. When that model changed, retry on the
       // current one so rows queued with an unusable model recover.
       const currentModel = yield* memoryModel(yield* query(settings.getSettings));
-      if (
-        currentModel !== null &&
-        encodeSelection(currentModel) !== encodeSelection(work.metadata.modelSelection)
-      ) {
+      if (currentModel === null) return yield* new MemoryWorkerError({ code: "route_unavailable" });
+      if (encodeSelection(currentModel) !== encodeSelection(work.metadata.modelSelection)) {
         const rebound = yield* query(store.rebindWorkModel(owned, currentModel));
         if (!rebound) return yield* new MemoryWorkerError({ code: "attempt_expired" });
         work = rebound;
@@ -894,7 +896,6 @@ const make = Effect.gen(function* () {
       yield* sweepStage("deferred", deferred());
       const now = yield* Clock.currentTimeMillis;
       const snapshot = yield* sweepStage("due-work", settings.getSettings);
-      const enabled = snapshot.memoryEnabled;
       const selection = yield* sweepStage("due-work", memoryModel(snapshot));
       const holdKey = selection === null ? undefined : yield* hold.keyFor(selection);
       // A new model or provider version starts clean, and work held under the old one is due now.
@@ -906,9 +907,8 @@ const make = Effect.gen(function* () {
         yield* sweepStage("due-work", store.rearmGenerationWork(now));
       lastHoldKey = holdKey;
       const held = () => (holdKey === undefined ? Effect.succeed(false) : hold.isHeld(holdKey));
-      // Off leaves queued summaries untouched so they resume when memory is turned back on; a
-      // held model leaves them unclaimed so they spend no attempts and fill no page.
-      const kinds = !enabled || (yield* held()) ? (["rebuild"] as const) : undefined;
+      // Leave summaries unclaimed until memory has a usable model.
+      const kinds = selection === null || (yield* held()) ? (["rebuild"] as const) : undefined;
       for (const candidate of yield* sweepStage("due-work", store.dueWork(now, 100, kinds))) {
         if (!["summary", "consolidate", "rebuild"].includes(candidate.kind)) continue;
         if (candidate.kind !== "rebuild" && (yield* held())) continue;
