@@ -4,7 +4,9 @@ import {
   codeFenceRenderer,
   fencedCodeMarkdown,
   MAX_CHAT_HIGHLIGHT_CHARACTERS,
-  shouldHighlightFence,
+  fenceHighlightable,
+  openFenceCode,
+  streamingFenceCode,
 } from "./codeBlockMarkdown";
 
 describe("fencedCodeMarkdown", () => {
@@ -34,20 +36,30 @@ describe("codeFenceRenderer", () => {
   });
 });
 
-describe("shouldHighlightFence", () => {
+describe("fenceHighlightable", () => {
   const fence = "~~~";
 
   it("waits while the message still leaves the fence open", () => {
     const code = "fun main() {\n  println(1)";
     const streaming = `Here:\n\n${fence}kotlin\n${code}`;
-    expect(shouldHighlightFence(code, streaming)).toBe(false);
-    expect(shouldHighlightFence(code, `${streaming}\n${fence}\n`)).toBe(true);
+    expect(fenceHighlightable(code, openFenceCode(streaming))).toBe(false);
+    expect(fenceHighlightable(code, openFenceCode(`${streaming}\n${fence}\n`))).toBe(true);
   });
 
   it("keeps a finished fence over the size bound plain", () => {
     const small = "val x = 1\n".repeat(10);
     const large = "val x = 1\n".repeat(MAX_CHAT_HIGHLIGHT_CHARACTERS / 10 + 1);
-    expect(shouldHighlightFence(small, `${fence}kotlin\n${small}${fence}`)).toBe(true);
-    expect(shouldHighlightFence(large, `${fence}kotlin\n${large}${fence}`)).toBe(false);
+    expect(fenceHighlightable(small, openFenceCode(`${fence}kotlin\n${small}${fence}`))).toBe(true);
+    expect(fenceHighlightable(large, openFenceCode(`${fence}kotlin\n${large}${fence}`))).toBe(
+      false,
+    );
+  });
+
+  it("colours a finished message's last fence even when the message never closed it", () => {
+    // A stopped or cut turn ends inside its fence; only a message still streaming waits.
+    const code = "fun main() {\n  println(1)";
+    const markdown = `Here:\n\n${fence}kotlin\n${code}`;
+    expect(fenceHighlightable(code, streamingFenceCode(markdown, true))).toBe(false);
+    expect(fenceHighlightable(code, streamingFenceCode(markdown, false))).toBe(true);
   });
 });
