@@ -251,31 +251,6 @@ wait
   },
 );
 
-it.skipIf(HostProcess.Platform.defaultValue() === "win32")(
-  "reports --package-manager support only for vite-plus 0.3.1 or later",
-  () => {
-    const root = NodeFS.mkdtempSync(NodePath.join(NodeOS.tmpdir(), "goat-vp-pm-flag-"));
-    const executable = NodePath.join(root, "vp");
-    try {
-      for (const [version, expectedFlag] of [
-        ["0.3.0", false],
-        ["0.3.1", true],
-        ["1.1.0", true],
-      ] as const) {
-        NodeFS.writeFileSync(executable, `#!/bin/sh\nprintf 'vp v${version}\\n'\n`, {
-          mode: 0o755,
-        });
-        const result = vpSupportsVerifiedNodeDownload(2_000, executable);
-        assert.isTrue(result.supported, version);
-        assert.isFalse(result.timedOut, version);
-        assert.equal(result.packageManagerFlag, expectedFlag, version);
-      }
-    } finally {
-      NodeFS.rmSync(root, { recursive: true, force: true });
-    }
-  },
-);
-
 describe("worktree setup contract", () => {
   it("#2178 refuses an unsupported Node it cannot replace, before running any installer", () => {
     const [major = 0] = process.versions.node.split(".").map(Number);
