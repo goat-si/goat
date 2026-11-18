@@ -2,6 +2,8 @@ import type { OrchestrationV2ProviderCapabilities } from "@goat/contracts";
 
 export const OpenCode2ProviderCapabilities = {
   sessions: {
+    // A session borrows the server. Releasing the borrow leaves its process running.
+    ownsProcess: false,
     supportsMultipleProviderThreadsPerSession: true,
     supportsModelSwitchInSession: true,
     supportsProviderSwitchingViaHandoff: true,

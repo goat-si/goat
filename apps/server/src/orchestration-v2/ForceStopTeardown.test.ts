@@ -9,10 +9,19 @@ import {
 } from "@goat/contracts";
 import { AgentScope } from "@goat/shared/AgentScope";
 import type { ProviderAdapterV2SessionRuntime } from "@goat/provider-core/server/ProviderAdapter";
+import * as McpProviderSessions from "@goat/provider-core/server/McpProviderSessions";
 import { expect, it } from "@effect/vitest";
 import * as Effect from "effect/Effect";
+import * as Fiber from "effect/Fiber";
 import * as Layer from "effect/Layer";
 import * as Option from "effect/Option";
+import { TestClock } from "effect/testing";
+import {
+  resumed,
+  providerTurnId,
+  stopTimedOut,
+  turnInput,
+} from "./Adapters/OpenCode2AdapterV2.fixtures.testkit.ts";
 
 import * as SqlitePersistence from "../persistence/Sqlite.ts";
 import * as ServerSettings from "../serverSettings.ts";
@@ -31,13 +40,18 @@ const harness = (input: {
   readonly newerRunAfterSettle?: boolean;
   readonly cancelledFollowUp?: boolean;
   readonly cloud?: boolean;
-  readonly openCode?: { readonly ownsProcess?: boolean; readonly live?: boolean };
+  readonly openCode?: {
+    readonly ownsProcess?: boolean;
+    readonly live?: boolean;
+    readonly runtime?: ProviderAdapterV2SessionRuntime;
+  };
 }) => {
   const calls: Array<string> = [];
+  const sessionId = input.openCode?.runtime?.providerSessionId ?? providerSessionId;
   const providerThread = {
     id: providerThreadId,
     appThreadId: threadId,
-    providerSessionId,
+    providerSessionId: sessionId,
     driver: ProviderDriverKind.make(input.openCode ? "opencode" : "codex"),
     ...(input.cloud ? { cloudTask: {} } : {}),
   };
@@ -80,11 +94,14 @@ const harness = (input: {
           Effect.succeed(
             input.openCode?.live === false
               ? Option.none()
-              : Option.some({
-                  providerSession: {
-                    capabilities: { sessions: { ownsProcess: input.openCode?.ownsProcess } },
-                  },
-                } as unknown as ProviderAdapterV2SessionRuntime),
+              : Option.some(
+                  input.openCode?.runtime ??
+                    ({
+                      providerSession: {
+                        capabilities: { sessions: { ownsProcess: input.openCode?.ownsProcess } },
+                      },
+                    } as unknown as ProviderAdapterV2SessionRuntime),
+                ),
           ),
         isLive: () => Effect.succeed(true),
         otherWorkingThreads: () => Effect.succeed(input.others.map((id) => ThreadId.make(id))),
@@ -201,4 +218,28 @@ it.effect("Force stop still settles a run on a GOAT-owned OpenCode session", () 
     expect(yield* forceStop).toEqual({ outcome: "released", sharedWithThreadIds: [] });
     expect(calls).toEqual(["kill", "thread.background-work.settle", "release:run-1"]);
   }),
+);
+
+it.effect("Force stop refuses a managed OpenCode 2 borrow after its native Stop times out", () =>
+  Effect.gen(function* () {
+    const borrowers = { current: 0 };
+    const { runtime, thread } = yield* resumed(stopTimedOut, { external: false, borrowers });
+    yield* runtime.startTurn(turnInput(thread));
+    const stopping = yield* runtime
+      .interruptTurn({ providerThread: thread, providerTurnId: yield* providerTurnId })
+      .pipe(Effect.result, Effect.forkScoped);
+    yield* TestClock.adjust("10 seconds");
+    expect(yield* Fiber.join(stopping)).toMatchObject({
+      _tag: "Failure",
+      failure: { _tag: "ProviderAdapterInterruptTimeoutError" },
+    });
+    const { calls, forceStop } = harness({ others: [], openCode: { runtime } });
+    expect(yield* Effect.result(forceStop)).toMatchObject({
+      _tag: "Failure",
+      failure: { _tag: "OrchestrationV2ForceStopThreadError" },
+    });
+    expect(calls).toEqual([]);
+    expect(borrowers.current).toBe(1);
+    expect(runtime.providerSession.capabilities.sessions.ownsProcess).toBe(false);
+  }).pipe(Effect.provide(McpProviderSessions.layer), Effect.scoped),
 );

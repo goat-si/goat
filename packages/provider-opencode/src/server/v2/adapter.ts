@@ -233,7 +233,6 @@ export const make = Effect.fn("OpenCode2Adapter.make")(function* (instanceId: Pr
       model: input.modelSelection.model,
       capabilities: {
         ...OpenCode2ProviderCapabilities,
-        sessions: { ...OpenCode2ProviderCapabilities.sessions, ownsProcess: !connection.external },
         turns: { ...OpenCode2ProviderCapabilities.turns, supportsNativeGoals: nativeGoals },
       },
       createdAt: now,

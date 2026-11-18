@@ -769,7 +769,7 @@
   "packages/provider-opencode/src/server/adapter.ts": { "lines": 3755, "nonNull": 6 },
   "packages/provider-opencode/src/server/memoryIsolation.ts": { "nonNull": 2 },
   "packages/provider-opencode/src/server/usage.ts": { "nonNull": 3 },
-  "packages/provider-opencode/src/server/v2/adapter.ts": { "lines": 4228, "nonNull": 2 },
+  "packages/provider-opencode/src/server/v2/adapter.ts": { "lines": 4227, "nonNull": 2 },
   "packages/provider-pi/src/server/adapter.test.ts": { "lines": 4582 },
   "packages/provider-pi/src/server/adapter.ts": { "lines": 3458 },
   "packages/provider-pi/src/server/mcpBridge.testkit.ts": { "nonNull": 1 },
