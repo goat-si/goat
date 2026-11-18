@@ -1,5 +1,8 @@
 import packageJson from "../../package.json" with { type: "json" };
-import { migrationLedgerProblem, readMigrationLedger } from "../persistence/migrationPreflight.ts";
+import {
+  migrationLedgerProblem,
+  readMigrationSnapshot,
+} from "../persistence/migrationPreflight.ts";
 import { SERVICE_LAUNCHER_PROTOCOL } from "./serviceProtocol.ts";
 
 export type ServicePreflightResult =
@@ -35,16 +38,15 @@ export function runServicePreflight(input: {
     };
   }
 
-  // Startup reconciles the ledger before checking it, so this checks what startup will see.
-  const ledger = readMigrationLedger(input.databasePath);
-  if (ledger === null) {
+  const snapshot = readMigrationSnapshot(input.databasePath);
+  if (snapshot === null) {
     return {
       status: "blocked",
       version,
       reason: `Could not read this database to confirm goat@${version} supports it.`,
     };
   }
-  const problem = migrationLedgerProblem(ledger, version);
+  const problem = migrationLedgerProblem(snapshot, version);
   if (problem !== undefined) return { status: "blocked", version, reason: problem };
 
   return { status: "ready", version, launcherProtocol: SERVICE_LAUNCHER_PROTOCOL };

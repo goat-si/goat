@@ -190,44 +190,53 @@ export const assertMemoryMigrationsCompatible = Effect.fn("assertMemoryMigration
           SELECT migration_id, name FROM effect_sql_migrations
         `
       : [];
-    const currentIds = new Map(entries.map(([id, name]) => [name, id]));
-    const memoryRows = history.filter((row) => row.name.startsWith("Memory"));
-    const goatOffsets = new Set(
-      history.flatMap((row) => {
-        const currentId = currentIds.get(row.name);
-        const goatRow = GOAT_MIGRATION_NAMES.has(row.name) || row.name.startsWith("Memory");
-        return goatRow && currentId !== undefined ? [row.migration_id - currentId] : [];
-      }),
+    const problem = memoryMigrationProblem(
+      entries,
+      history,
+      tables.some((table) => table.name.startsWith("memory_")),
     );
-    const recordedNames = new Set(history.map((row) => row.name));
-    const skipsEarlierGoat = memoryRows.some((row) => {
-      const memoryId = currentIds.get(row.name);
-      return (
-        memoryId !== undefined &&
-        entries.some(
-          ([id, name]) =>
-            GOAT_MIGRATION_NAMES.has(name) && id < memoryId && !recordedNames.has(name),
-        )
-      );
-    });
-    const incompatibleLedger =
-      memoryRows.length > 0 &&
-      (memoryRows.some((row) => !currentIds.has(row.name)) ||
-        goatOffsets.size > 1 ||
-        skipsEarlierGoat);
-    const unrecordedMemory =
-      tables.some((table) => table.name.startsWith("memory_")) &&
-      !history.some((row) => row.name === "Memory");
-    // Preserve the evidence of unreleased memory before any startup reconciliation writes.
-    if (incompatibleLedger || unrecordedMemory) {
-      return yield* new Migrator.MigrationError({
-        kind: "BadState",
-        message:
-          "Unreleased memory DB is incompatible; reset this sandbox's memory development state and restart.",
-      });
-    }
+    if (problem !== undefined) return yield* problem;
   },
 );
+
+export function memoryMigrationProblem<E>(
+  entries: ReadonlyArray<MigrationEntry<E>>,
+  history: ReadonlyArray<{ readonly migration_id: number; readonly name: string }>,
+  hasMemoryTables: boolean,
+): Migrator.MigrationError | undefined {
+  const currentIds = new Map(entries.map(([id, name]) => [name, id]));
+  const memoryRows = history.filter((row) => row.name.startsWith("Memory"));
+  const goatOffsets = new Set(
+    history.flatMap((row) => {
+      const currentId = currentIds.get(row.name);
+      const goatRow = GOAT_MIGRATION_NAMES.has(row.name) || row.name.startsWith("Memory");
+      return goatRow && currentId !== undefined ? [row.migration_id - currentId] : [];
+    }),
+  );
+  const recordedNames = new Set(history.map((row) => row.name));
+  const skipsEarlierGoat = memoryRows.some((row) => {
+    const memoryId = currentIds.get(row.name);
+    return (
+      memoryId !== undefined &&
+      entries.some(
+        ([id, name]) => GOAT_MIGRATION_NAMES.has(name) && id < memoryId && !recordedNames.has(name),
+      )
+    );
+  });
+  const incompatibleLedger =
+    memoryRows.length > 0 &&
+    (memoryRows.some((row) => !currentIds.has(row.name)) ||
+      goatOffsets.size > 1 ||
+      skipsEarlierGoat);
+  const unrecordedMemory = hasMemoryTables && !history.some((row) => row.name === "Memory");
+  if (incompatibleLedger || unrecordedMemory) {
+    return new Migrator.MigrationError({
+      kind: "BadState",
+      message:
+        "Unreleased memory DB is incompatible; reset this sandbox's memory development state and restart.",
+    });
+  }
+}
 
 const readHistory = Effect.gen(function* () {
   const sql = yield* SqlClient.SqlClient;

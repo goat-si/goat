@@ -6,33 +6,41 @@ import * as Migrator from "effect/sql/Migrator";
 import { migrationEntries } from "./Migrations.ts";
 import {
   displacedUpstreamMigrations,
+  memoryMigrationProblem,
   plannedGoatLedger,
   skippedV2Migrations,
 } from "./reconcileGoatMigrationIds.ts";
 import { reconciledV2PreviewHistory } from "./reconcileV2PreviewMigration.ts";
 
 type LedgerRow = { readonly migration_id: number; readonly name: string };
+interface MigrationSnapshot {
+  readonly history: ReadonlyArray<LedgerRow>;
+  readonly hasMemoryTables: boolean;
+}
 
-/** The recorded ledger; [] for a database or ledger that does not exist yet, null if unreadable. */
-export function readMigrationLedger(databasePath: string): ReadonlyArray<LedgerRow> | null {
-  if (!NodeFS.existsSync(databasePath)) return [];
+/** Reads startup's migration evidence without modifying the database. */
+export function readMigrationSnapshot(databasePath: string): MigrationSnapshot | null {
+  if (!NodeFS.existsSync(databasePath)) return { history: [], hasMemoryTables: false };
   let db: NodeSqlite.DatabaseSync | undefined;
   try {
     db = new NodeSqlite.DatabaseSync(databasePath, { readOnly: true });
-    const ledger = db
+    db.exec("BEGIN");
+    const tables = db
       .prepare(
-        "SELECT name FROM sqlite_master WHERE type = 'table' AND name = 'effect_sql_migrations'",
+        "SELECT name FROM sqlite_master WHERE type = 'table' AND (name = 'effect_sql_migrations' OR name GLOB 'memory_*')",
       )
-      .get();
-    if (ledger === undefined) return [];
-    return db
-      .prepare("SELECT migration_id, name FROM effect_sql_migrations")
-      .all()
-      .flatMap((row) =>
-        typeof row.migration_id === "number" && typeof row.name === "string"
-          ? [{ migration_id: row.migration_id, name: row.name }]
-          : [],
-      );
+      .all();
+    const history: LedgerRow[] = [];
+    if (tables.some((table) => table.name === "effect_sql_migrations")) {
+      for (const row of db.prepare("SELECT migration_id, name FROM effect_sql_migrations").all()) {
+        if (typeof row.migration_id !== "number" || typeof row.name !== "string") return null;
+        history.push({ migration_id: row.migration_id, name: row.name });
+      }
+    }
+    return {
+      history,
+      hasMemoryTables: tables.some((table) => String(table.name).startsWith("memory_")),
+    };
   } catch {
     return null;
   } finally {
@@ -45,7 +53,7 @@ export function readMigrationLedger(databasePath: string): ReadonlyArray<LedgerR
  * after the V2 preview reconciliation and GOAT's id move with the upstream migrations it runs.
  */
 export function migrationLedgerProblem(
-  history: ReadonlyArray<LedgerRow>,
+  { history, hasMemoryTables }: MigrationSnapshot,
   version: string,
 ): string | undefined {
   const entries = migrationEntries;
@@ -56,6 +64,8 @@ export function migrationLedgerProblem(
   }
   const incompatible = (detail: string) =>
     `This database has incompatible migration history: ${detail} Start the build that wrote it, or report this migration history so an upgrade path can be added.`;
+  const memory = memoryMigrationProblem(entries, history, hasMemoryTables);
+  if (memory !== undefined) return memory.message;
   const preview = reconciledV2PreviewHistory(
     history.map((row) => ({ id: row.migration_id, name: row.name })),
   );

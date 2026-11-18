@@ -1,12 +1,13 @@
 // @effect-diagnostics nodeBuiltinImport:off - fixtures are SQLite files the preflight opens read-only.
 import * as NodeServices from "@effect/platform-node/NodeServices";
 import { assert, it } from "@effect/vitest";
+import * as NodeSqliteClient from "@goat/shared/nodeSqliteClient";
 import * as Effect from "effect/Effect";
 import * as FileSystem from "effect/FileSystem";
 import * as Path from "effect/Path";
 import * as NodeSqlite from "node:sqlite";
 
-import { migrationManifest } from "../persistence/Migrations.ts";
+import { migrationManifest, runMigrations } from "../persistence/Migrations.ts";
 import { GOAT_MIGRATION_NAMES } from "../persistence/reconcileGoatMigrationIds.ts";
 import { runServicePreflight } from "./servicePreflight.ts";
 import { SERVICE_LAUNCHER_PROTOCOL } from "./serviceProtocol.ts";
@@ -93,6 +94,52 @@ it.layer(NodeServices.layer)("service preflight migration history", (it) => {
       const result = yield* preflight("garbage");
       assert.equal(result.status, "blocked");
       assert.include(reason(result), "Could not read this database");
+    }),
+  );
+
+  it.effect("blocks a mixed-offset memory ledger that startup also refuses", () =>
+    Effect.gen(function* () {
+      const fs = yield* FileSystem.FileSystem;
+      const path = yield* Path.Path;
+      const root = yield* fs.makeTempDirectoryScoped({ prefix: "goat-service-preflight-" });
+      const databasePath = path.join(root, "state.sqlite");
+      const misplacedId = Math.max(...migrationManifest.map(([id]) => id)) + 1;
+      writeLedger(
+        databasePath,
+        migrationManifest.map(([id, name]) => [name === "Memory" ? misplacedId : id, name]),
+      );
+      const startup = yield* runMigrations().pipe(
+        Effect.provide(NodeSqliteClient.layer({ filename: databasePath })),
+        Effect.flip,
+      );
+      assert.include(startup.message, "Unreleased memory DB is incompatible");
+      const result = runServicePreflight({
+        databasePath,
+        launcherProtocol: SERVICE_LAUNCHER_PROTOCOL,
+        version: "9.8.7",
+      });
+      assert.equal(result.status, "blocked");
+      assert.include(reason(result), "Unreleased memory DB is incompatible");
+    }),
+  );
+
+  it.effect("blocks unreleased memory tables when no migration ledger exists", () =>
+    Effect.gen(function* () {
+      const fs = yield* FileSystem.FileSystem;
+      const path = yield* Path.Path;
+      const root = yield* fs.makeTempDirectoryScoped({ prefix: "goat-service-preflight-" });
+      const databasePath = path.join(root, "state.sqlite");
+      {
+        using db = new NodeSqlite.DatabaseSync(databasePath);
+        db.exec("CREATE TABLE memory_spaces (id INTEGER PRIMARY KEY)");
+      }
+      const result = runServicePreflight({
+        databasePath,
+        launcherProtocol: SERVICE_LAUNCHER_PROTOCOL,
+        version: "9.8.7",
+      });
+      assert.equal(result.status, "blocked");
+      assert.include(reason(result), "Unreleased memory DB is incompatible");
     }),
   );
 });
