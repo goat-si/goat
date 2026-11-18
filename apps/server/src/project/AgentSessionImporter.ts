@@ -1,4 +1,3 @@
-import { sameTranscriptIdentity } from "./AgentSessionTranscriptIdentity.ts";
 import {
   DEFAULT_MODEL,
   DEFAULT_MODEL_BY_PROVIDER,
@@ -81,6 +80,24 @@ function dateTime(value: string): DateTime.Utc {
   return DateTime.makeUnsafe(value);
 }
 
+function matchesImportedMessages(
+  threadId: ThreadId,
+  stored: ReadonlyArray<OrchestrationV2ConversationMessage>,
+  incoming: ReadonlyArray<AgentSessionScanner.AgentSessionThreadMessage>,
+): boolean {
+  if (stored.length !== incoming.length) return false;
+  // Message IDs carry the import ordinal even when native timestamps are out of order.
+  const byId = new Map(stored.map((message) => [message.id, message]));
+  return incoming.every(({ role, text }, index) => {
+    const message = byId.get(importMessageId(threadId, index));
+    return message?.role === role && message.text === text;
+  });
+}
+
+function importMessageId(threadId: ThreadId, index: number): MessageId {
+  return MessageId.make(`${threadId}:${String(index).padStart(6, "0")}`);
+}
+
 function messageEvents(input: {
   readonly threadId: ThreadId;
   readonly index: number;
@@ -88,7 +105,7 @@ function messageEvents(input: {
 }): ReadonlyArray<OrchestrationV2DomainEvent> {
   const ordinal = input.index + 1;
   const suffix = String(input.index).padStart(6, "0");
-  const messageId = MessageId.make(`${input.threadId}:${suffix}`);
+  const messageId = importMessageId(input.threadId, input.index);
   const turnItemId = TurnItemId.make(
     `${IMPORT_EVENT_PREFIX}:turn-item:${input.threadId}:${suffix}`,
   );
@@ -228,7 +245,16 @@ const make = Effect.gen(function* () {
         }
         if (outcome._tag === "Duplicate") {
           if (importedThreadIds.has(threadId)) {
-            yield* runtimes.recordImportedTranscript({ threadId, source }).pipe(Effect.ignore);
+            const existing = yield* Effect.option(
+              orchestrator.getThreadRecords(threadId, ["messages"]),
+            );
+            if (
+              Option.isSome(existing) &&
+              existing.value.thread.projectId === input.projectId &&
+              matchesImportedMessages(threadId, existing.value.messages, outcome.messages)
+            ) {
+              yield* runtimes.recordImportedTranscript({ threadId, source }).pipe(Effect.ignore);
+            }
           }
           return;
         }
@@ -265,7 +291,9 @@ const make = Effect.gen(function* () {
             },
             { onConflict: "ignore" },
           );
-          const existing = yield* Effect.option(orchestrator.getThreadRecords(threadId, []));
+          const existing = yield* Effect.option(
+            orchestrator.getThreadRecords(threadId, ["messages"]),
+          );
           if (Option.isSome(existing)) {
             if (existing.value.thread.projectId !== input.projectId) {
               return yield* new AgentSessionThreadProjectConflictError({
@@ -277,16 +305,7 @@ const make = Effect.gen(function* () {
             if (existing.value.thread.historyOrigin !== "v1_import") {
               return yield* new AgentSessionThreadModifiedError({ threadId });
             }
-            // Other recorded transcripts mean this one changed after the import, and the
-            // thread does not hold its new messages, so it must stay unrecorded.
-            const recorded = Option.flatMap(yield* runtimes.getByThreadId({ threadId }), (row) =>
-              decodeImportedTranscriptPayload(row.runtimePayload),
-            ).pipe(Option.flatMapNullishOr((payload) => payload.importedTranscripts));
-            if (
-              Option.isSome(recorded) &&
-              recorded.value.length > 0 &&
-              !recorded.value.some((imported) => sameTranscriptIdentity(imported, source))
-            ) {
+            if (!matchesImportedMessages(threadId, existing.value.messages, thread.messages)) {
               return false;
             }
             yield* persistRuntime;

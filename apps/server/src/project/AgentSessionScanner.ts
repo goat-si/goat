@@ -133,7 +133,11 @@ export type AgentSessionRecentThread =
       readonly worktree: { readonly path: string; readonly branch: string | null } | null;
     }
   | { readonly _tag: "AlreadyImported"; readonly source: AgentSessionImportSource }
-  | { readonly _tag: "Duplicate"; readonly source: AgentSessionImportSource }
+  | {
+      readonly _tag: "Duplicate";
+      readonly source: AgentSessionImportSource;
+      readonly messages: AgentSessionThread["messages"];
+    }
   | { readonly _tag: "Skipped" };
 
 export class AgentSessionScanner extends Context.Service<
@@ -1084,17 +1088,22 @@ export const make = Effect.gen(function* () {
               candidate.providerInstanceId,
             );
             const sessionKey = `${source.providerInstanceId}\0${source.providerSessionId}`;
+            const thread = codexHistoryThread(
+              transcript.historyThread,
+              data,
+              candidate.providerInstanceId,
+            );
             if (importedSessions.has(sessionKey)) {
-              return Option.some<AgentSessionRecentThread>({ _tag: "Duplicate", source });
+              return Option.some<AgentSessionRecentThread>({
+                _tag: "Duplicate",
+                source,
+                messages: thread.messages,
+              });
             }
             importedSessions.add(sessionKey);
             return Option.some<AgentSessionRecentThread>({
               _tag: "Importable",
-              thread: codexHistoryThread(
-                transcript.historyThread,
-                data,
-                candidate.providerInstanceId,
-              ),
+              thread,
               source,
               // A history thread has no transcript cwd; its candidate passed the root check above.
               worktree: yield* rootWorktree(
@@ -1198,7 +1207,11 @@ export const make = Effect.gen(function* () {
           };
           const sessionKey = `${parsedThread.providerInstanceId}\0${parsedThread.providerSessionId}`;
           if (importedSessions.has(sessionKey)) {
-            return Option.some<AgentSessionRecentThread>({ _tag: "Duplicate", source });
+            return Option.some<AgentSessionRecentThread>({
+              _tag: "Duplicate",
+              source,
+              messages: parsedThread.messages,
+            });
           }
           importedSessions.add(sessionKey);
           return Option.some<AgentSessionRecentThread>({
