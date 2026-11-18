@@ -10,7 +10,7 @@ import * as Exit from "effect/Exit";
 import * as Queue from "effect/Queue";
 import { AsyncResult, Atom, AtomRegistry } from "effect/reactivity";
 import type * as RpcSession from "../rpc/session.ts";
-import { createThreadLineageLookup } from "./threadLineageLookup.ts";
+import { createThreadLineageLookup, THREAD_LINK_LOOKUP_CACHE } from "./threadLineageLookup.ts";
 import type { EnvironmentShellState } from "./shell.ts";
 import {
   makeEnvironmentQueryHarness,
@@ -161,6 +161,183 @@ it.effect("keeps rows unverified when an older server omits lookup results", () 
       yield* Deferred.succeed(yield* Queue.take(requests), { snapshotSequence: 1, threads: [] });
       yield* readEnvironmentQuery(registry, query);
       expect(registry.get(atom).checked.size).toBe(0);
+    }),
+  ),
+);
+
+it.effect("a link lookup takes projects only from answers that name them", () =>
+  Effect.scoped(
+    Effect.gen(function* () {
+      const requests = yield* Queue.bounded<Deferred.Deferred<OrchestrationV2ThreadFamily>>(3);
+      const harness = yield* makeEnvironmentQueryHarness(Effect.void, {
+        rpcSession: {
+          client: {
+            [ORCHESTRATION_V2_WS_METHODS.getThreadFamily]: () =>
+              Effect.gen(function* () {
+                const answer = yield* Deferred.make<OrchestrationV2ThreadFamily>();
+                yield* Queue.offer(requests, answer);
+                return yield* Deferred.await(answer);
+              }),
+          },
+        } as unknown as RpcSession.RpcSession,
+      });
+      const shell = Atom.make<Pick<EnvironmentShellState, "removedAt">>({ removedAt: new Map() });
+      const lookup = createThreadLineageLookup(harness.runtime, () => shell);
+      const registry = AtomRegistry.make();
+      yield* Effect.addFinalizer(() => Effect.sync(() => registry.dispose()));
+      const resolve = Effect.fn("test.resolveLinks")(function* (
+        id: string,
+        answer: OrchestrationV2ThreadFamily,
+      ) {
+        const atom = lookup.resolution(QUERY_ENVIRONMENT.environmentId, ThreadId.make(id), [
+          ThreadId.make(id),
+        ]);
+        const settled = yield* Deferred.make<void>();
+        const unsubscribe = registry.subscribe(
+          atom,
+          (result) => {
+            if (result.checked.size > 0) Deferred.doneUnsafe(settled, Exit.void);
+          },
+          { immediate: true },
+        );
+        yield* Deferred.succeed(yield* Queue.take(requests), answer);
+        if (answer.lookupTitles !== undefined) yield* Deferred.await(settled);
+        const result = registry.get(atom);
+        unsubscribe();
+        return result;
+      });
+
+      const current = yield* resolve("linked", {
+        snapshotSequence: 1,
+        threads: [],
+        lookupTitles: { [ThreadId.make("linked")]: "Linked" },
+        lookupProjectIds: { [ThreadId.make("linked")]: "project-1" as never },
+      });
+      expect(current.titles).toEqual({ linked: "Linked" });
+      expect(current.projectIds).toEqual({ linked: "project-1" });
+
+      // A server from before lookupProjectIds names titles only.
+      const titlesOnly = yield* resolve("titled", {
+        snapshotSequence: 1,
+        threads: [],
+        lookupTitles: { [ThreadId.make("titled")]: "Titled" },
+      });
+      expect(titlesOnly.titles).toEqual({ titled: "Titled" });
+      expect(titlesOnly.projectIds).toEqual({});
+
+      // A server from before lookupOnly answers with a whole family; none of it is link metadata.
+      const family = yield* resolve("family", {
+        snapshotSequence: 1,
+        threads: [
+          { id: ThreadId.make("family"), title: "Family", projectId: "project-2" } as never,
+        ],
+      });
+      expect(family.titles).toEqual({});
+      expect(family.projectIds).toEqual({});
+    }),
+  ),
+);
+
+it.effect("a remounted link chip reuses the answer, and a family read asks again", () =>
+  Effect.scoped(
+    Effect.gen(function* () {
+      const requests = yield* Queue.bounded<{
+        ids: ReadonlyArray<ThreadId>;
+        answer: Deferred.Deferred<OrchestrationV2ThreadFamily>;
+      }>(4);
+      const harness = yield* makeEnvironmentQueryHarness(Effect.void, {
+        rpcSession: {
+          client: {
+            [ORCHESTRATION_V2_WS_METHODS.getThreadFamily]: (input: {
+              lookupThreadIds: ReadonlyArray<ThreadId>;
+            }) =>
+              Effect.gen(function* () {
+                const answer = yield* Deferred.make<OrchestrationV2ThreadFamily>();
+                yield* Queue.offer(requests, { ids: input.lookupThreadIds, answer });
+                return yield* Deferred.await(answer);
+              }),
+          },
+        } as unknown as RpcSession.RpcSession,
+      });
+      const shell = Atom.make<Pick<EnvironmentShellState, "removedAt">>({ removedAt: new Map() });
+      // The registry drops an idle atom in a scheduled task; the case awaits those tasks.
+      let scheduled = 0;
+      let settledTasks: Array<() => void> = [];
+      const registry = AtomRegistry.make({
+        scheduleTask: (task) => {
+          let cancelled = false;
+          scheduled += 1;
+          queueMicrotask(() => {
+            if (!cancelled) task();
+            scheduled -= 1;
+            if (scheduled === 0) for (const done of settledTasks.splice(0)) done();
+          });
+          return () => {
+            cancelled = true;
+          };
+        },
+      });
+      const scheduledTasksRan = Effect.promise(
+        () =>
+          new Promise<void>((resolve) => {
+            if (scheduled === 0) resolve();
+            else settledTasks = [...settledTasks, resolve];
+          }),
+      );
+      yield* Effect.addFinalizer(() => Effect.sync(() => registry.dispose()));
+      const mountUntilChecked = Effect.fn("test.mountUntilChecked")(function* (
+        lookup: ReturnType<typeof createThreadLineageLookup>,
+        id: string,
+      ) {
+        const threadId = ThreadId.make(id);
+        const atom = lookup.resolution(QUERY_ENVIRONMENT.environmentId, threadId, [threadId]);
+        const checked = yield* Deferred.make<void>();
+        const unsubscribe = registry.subscribe(
+          atom,
+          (result) => {
+            if (result.checked.has(threadId)) Deferred.doneUnsafe(checked, Exit.void);
+          },
+          { immediate: true },
+        );
+        return { checked, unsubscribe, read: () => registry.get(atom) };
+      });
+      const answer = (id: string) => ({
+        snapshotSequence: 1,
+        threads: [],
+        lookupTitles: { [ThreadId.make(id)]: id },
+      });
+
+      const links = createThreadLineageLookup(
+        harness.runtime,
+        () => shell,
+        THREAD_LINK_LOOKUP_CACHE,
+      );
+      const first = yield* mountUntilChecked(links, "linked");
+      const asked = yield* Queue.take(requests);
+      expect(asked.ids).toEqual(["linked"]);
+      yield* Deferred.succeed(asked.answer, answer("linked"));
+      yield* Deferred.await(first.checked);
+      first.unsubscribe();
+      yield* scheduledTasksRan;
+      const remounted = yield* mountUntilChecked(links, "linked");
+      expect(remounted.read().titles).toEqual({ linked: "linked" });
+      remounted.unsubscribe();
+
+      const family = createThreadLineageLookup(harness.runtime, () => shell);
+      const familyFirst = yield* mountUntilChecked(family, "fork");
+      // The next request is the family read's: the remounted link asked nothing.
+      const familyAsked = yield* Queue.take(requests);
+      expect(familyAsked.ids).toEqual(["fork"]);
+      yield* Deferred.succeed(familyAsked.answer, answer("fork"));
+      yield* Deferred.await(familyFirst.checked);
+      familyFirst.unsubscribe();
+      yield* scheduledTasksRan;
+      const familyRemounted = yield* mountUntilChecked(family, "fork");
+      const familyAgain = yield* Queue.take(requests);
+      expect(familyAgain.ids).toEqual(["fork"]);
+      yield* Deferred.succeed(familyAgain.answer, answer("fork"));
+      yield* Deferred.await(familyRemounted.checked);
+      familyRemounted.unsubscribe();
     }),
   ),
 );

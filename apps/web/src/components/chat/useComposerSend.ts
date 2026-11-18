@@ -777,6 +777,7 @@ export function useComposerSend(input: ComposerSendInput) {
             reviewComments: followUpReviewComments,
             previewAnnotations: followUpPreviewAnnotations,
             threadContexts: followUpThreadContexts,
+            replyTo,
           },
           draftHasUserContent: composerDraftHasUserContent(
             useComposerDraftStore.getState().getComposerDraft(composerDraftTarget),
@@ -795,6 +796,8 @@ export function useComposerSend(input: ComposerSendInput) {
             setComposerDraftPreviewAnnotations(composerDraftTarget, [...annotations]),
           writeThreadContexts: (records) =>
             setComposerDraftThreadContexts(composerDraftTarget, [...records]),
+          writeReplyTo: (reply) =>
+            useComposerDraftStore.getState().setReplyTo(composerDraftTarget, reply),
           resetCursor: (options) => composerRef.current?.resetCursorState(options),
         });
       } else if (

@@ -18,6 +18,7 @@ import { Pressable, View, type ColorValue } from "react-native";
 
 import { SymbolView, type AppSymbolName } from "../../components/ui/AppSymbol";
 import { AppText as Text, AppTextInput as TextInput } from "../../components/ui/AppText";
+import { SecretTextInput } from "../../components/ui/SecretTextInput";
 import { serverEnvironment } from "../../state/server";
 import { useAtomCommand } from "../../state/use-atom-command";
 import { Button } from "../../components/ui/Button";
@@ -204,7 +205,7 @@ function PendingSecretRequestForm(props: {
           />
         ))
       ) : (
-        <TextInput
+        <SecretTextInput
           accessibilityLabel={login ? "Password" : item.label}
           placeholder={
             login
@@ -217,29 +218,21 @@ function PendingSecretRequestForm(props: {
           onChangeText={setSecret}
           editable={canAnswer && !submitting}
           onFocus={markOpened}
-          secureTextEntry
-          autoCorrect={false}
-          autoCapitalize="none"
-          autoComplete="off"
-          textContentType="none"
-          importantForAutofill="no"
-          spellCheck={false}
-          returnKeyType="done"
-          onSubmitEditing={() =>
+          onSubmitEditing={(value) =>
             void send(
               login
                 ? {
                     type: "save_login",
                     username,
-                    password: secret,
+                    password: value,
                     authenticatorSetupKey: setupKey,
                   }
                 : selectedProvider
                   ? {
                       type: "reference",
-                      reference: { provider: selectedProvider.id, reference: secret },
+                      reference: { provider: selectedProvider.id, reference: value },
                     }
-                  : { type: "save", secret },
+                  : { type: "save", secret: value },
             )
           }
         />

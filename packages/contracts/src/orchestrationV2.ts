@@ -6,7 +6,7 @@ import {
   OrchestrationV2ThreadHistoryOrigin,
 } from "./orchestrationV2Attribution.ts";
 export * from "./orchestrationV2Attribution.ts";
-import { OrchestrationV2GetThreadFamilyInput } from "./threadFamilyLookup.ts";
+import { OrchestrationV2GetThreadFamilyInput, ThreadLookupAnswer } from "./threadFamilyLookup.ts";
 export { OrchestrationV2GetThreadFamilyInput } from "./threadFamilyLookup.ts";
 import { OrchestrationV2RunStatus } from "./orchestrationV2RunStatus.ts";
 import { OrchestrationV2ProviderThreadNativeMetadata } from "./orchestrationV2NativeMetadata.ts";
@@ -380,57 +380,16 @@ export const OrchestrationV2StreamingCapabilities = Schema.Struct({
 });
 export type OrchestrationV2StreamingCapabilities = typeof OrchestrationV2StreamingCapabilities.Type;
 
-export const OrchestrationV2ToolCapabilities = Schema.Struct({
-  exposesToolItemIds: Schema.Boolean,
-  emitsToolStarted: Schema.Boolean,
-  emitsToolCompleted: Schema.Boolean,
-  emitsToolOutput: Schema.Boolean,
-  supportsMcpTools: Schema.Boolean,
-  supportsDynamicToolCallbacks: Schema.Boolean,
-});
-export type OrchestrationV2ToolCapabilities = typeof OrchestrationV2ToolCapabilities.Type;
-
-export const OrchestrationV2ApprovalCapabilities = Schema.Struct({
-  supportsCommandApproval: Schema.Boolean,
-  supportsFileReadApproval: Schema.Boolean,
-  supportsFileChangeApproval: Schema.Boolean,
-  supportsApplyPatchApproval: Schema.Boolean,
-  approvalsHaveNativeRequestIds: Schema.Boolean,
-  approvalCallbacksAreLiveOnly: Schema.Boolean,
-  approvalsCanOriginateFromSubagents: Schema.Boolean,
-});
-export type OrchestrationV2ApprovalCapabilities = typeof OrchestrationV2ApprovalCapabilities.Type;
-
-export const OrchestrationV2PlanningCapabilities = Schema.Struct({
-  emitsPlanUpdated: Schema.Boolean,
-  emitsTodoList: Schema.Boolean,
-  emitsProposedPlan: Schema.Boolean,
-  supportsStructuredQuestions: Schema.Boolean,
-  planDeltasHaveItemIds: Schema.Boolean,
-});
-export type OrchestrationV2PlanningCapabilities = typeof OrchestrationV2PlanningCapabilities.Type;
-
-export const OrchestrationV2SubagentCapabilities = Schema.Struct({
-  supportsSubagents: Schema.Boolean,
-  exposesSubagentThreadIds: Schema.Boolean,
-  emitsSubagentLifecycle: Schema.Boolean,
-  canWaitForSubagents: Schema.Boolean,
-  canCloseSubagents: Schema.Boolean,
-  canForkSubagentThread: Schema.Boolean,
-});
-export type OrchestrationV2SubagentCapabilities = typeof OrchestrationV2SubagentCapabilities.Type;
-
-export const OrchestrationV2ContextCapabilities = Schema.Struct({
-  acceptsSystemContext: Schema.Boolean,
-  acceptsDeveloperContext: Schema.Boolean,
-  acceptsSyntheticUserContext: Schema.Boolean,
-  canGenerateSummaries: Schema.Boolean,
-  canConsumeHandoffSummaries: Schema.Boolean,
-  supportsDeltaHandoff: Schema.Boolean,
-  supportsFullThreadHandoff: Schema.Boolean,
-  maxRecommendedHandoffChars: Schema.NullOr(PositiveInt),
-});
-export type OrchestrationV2ContextCapabilities = typeof OrchestrationV2ContextCapabilities.Type;
+export * from "./providerCapabilityParts.ts";
+export * from "./assistantMessagePhase.ts";
+import { AssistantMessagePhase } from "./assistantMessagePhase.ts";
+import {
+  OrchestrationV2ToolCapabilities,
+  OrchestrationV2ApprovalCapabilities,
+  OrchestrationV2PlanningCapabilities,
+  OrchestrationV2SubagentCapabilities,
+  OrchestrationV2ContextCapabilities,
+} from "./providerCapabilityParts.ts";
 
 export const OrchestrationV2CheckpointCapabilities = Schema.Struct({
   appCanCheckpointFilesystem: Schema.Boolean,
@@ -1621,6 +1580,7 @@ export const OrchestrationV2TurnItem = Schema.Union([
   Schema.Struct({
     ...OrchestrationV2TurnItemBaseFields,
     type: Schema.Literal("assistant_message"),
+    phase: ForwardCompatibleOptional(AssistantMessagePhase),
     messageId: MessageId,
     channel: ForwardCompatibleOptional(ChannelMessageMeta),
     text: Schema.String,
@@ -2500,6 +2460,7 @@ export const OrchestrationV2TurnItemJson = Schema.Union([
   Schema.Struct({
     ...OrchestrationV2TurnItemJsonBaseFields,
     type: Schema.Literal("assistant_message"),
+    phase: ForwardCompatibleOptional(AssistantMessagePhase),
     messageId: MessageId,
     channel: ForwardCompatibleOptional(ChannelMessageMeta),
     text: Schema.String,
@@ -3821,7 +3782,7 @@ export type OrchestrationV2SubscribeShellInput = typeof OrchestrationV2Subscribe
 export const OrchestrationV2ThreadFamily = Schema.Struct({
   snapshotSequence: NonNegativeInt,
   threads: Schema.Array(OrchestrationV2ThreadShell),
-  lookupTitles: Schema.optionalKey(Schema.Record(ThreadId, Schema.String)),
+  ...ThreadLookupAnswer,
 });
 export type OrchestrationV2ThreadFamily = typeof OrchestrationV2ThreadFamily.Type;
 

@@ -1,5 +1,6 @@
 import {
   ProviderDriverKind,
+  type AssistantMessagePhase,
   type OrchestrationV2ConversationMessage,
   type OrchestrationV2ExecutionNode,
   type OrchestrationV2TurnItem,
@@ -21,6 +22,7 @@ export function buildCodexAssistantArtifacts(
     rootNodeId: NodeId;
     providerThread: OrchestrationV2ProviderThread;
     providerTurnId: ProviderTurnId;
+    messagePhases: ReadonlyMap<string, AssistantMessagePhase>;
   },
   item: { id: string; text: string },
   completed: boolean,
@@ -88,6 +90,7 @@ export function buildCodexAssistantArtifacts(
     completedAt,
     updatedAt,
     type: "assistant_message",
+    ...(context.messagePhases.has(item.id) ? { phase: context.messagePhases.get(item.id) } : {}),
     messageId,
     text: item.text,
     streaming: !completed,

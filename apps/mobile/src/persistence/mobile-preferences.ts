@@ -15,6 +15,7 @@ import {
   PullRequestMergeMethod,
   type SidebarProjectGroupingMode,
 } from "@goat/contracts";
+import { ToolCallVisibility } from "@goat/contracts/settings";
 import type { ComposerEnterBehavior } from "../lib/composerEnterBehavior";
 import type { FollowUpBehavior } from "../lib/followUpBehavior";
 import { isMicrophoneKind, type MicrophoneEntry } from "../lib/microphonePriority";
@@ -120,6 +121,7 @@ export interface Preferences {
   readonly projectGroupingEnabled?: boolean;
   readonly projectGroupingMode?: SidebarProjectGroupingMode;
   readonly planModeEnabled?: boolean;
+  readonly toolCallVisibility?: ToolCallVisibility;
   readonly workingShelfEnabled?: boolean;
   /** Whether thread lists on this device show GOAT Bot's observation threads; off by default. */
   readonly showGoatBotThreads?: boolean;
@@ -180,6 +182,8 @@ export class MobilePreferencesStore extends Context.Service<
 
 const isPullRequestMergeMethod = Schema.is(PullRequestMergeMethod);
 
+const isToolCallVisibility = Schema.is(ToolCallVisibility);
+
 function sanitizePreferences(parsed: Preferences): Preferences {
   const preferences: {
     homeMode?: "thread" | "bot";
@@ -209,6 +213,7 @@ function sanitizePreferences(parsed: Preferences): Preferences {
     projectGroupingEnabled?: boolean;
     projectGroupingMode?: SidebarProjectGroupingMode;
     planModeEnabled?: boolean;
+    toolCallVisibility?: ToolCallVisibility;
     workingShelfEnabled?: boolean;
     showGoatBotThreads?: boolean;
     useLastProjectForNewThreads?: boolean;
@@ -339,6 +344,9 @@ function sanitizePreferences(parsed: Preferences): Preferences {
   }
   if (typeof parsed.planModeEnabled === "boolean") {
     preferences.planModeEnabled = parsed.planModeEnabled;
+  }
+  if (isToolCallVisibility(parsed.toolCallVisibility)) {
+    preferences.toolCallVisibility = parsed.toolCallVisibility;
   }
   if (typeof parsed.workingShelfEnabled === "boolean") {
     preferences.workingShelfEnabled = parsed.workingShelfEnabled;

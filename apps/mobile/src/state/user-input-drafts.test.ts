@@ -1,10 +1,11 @@
-import { EnvironmentId, RuntimeRequestId, ThreadId } from "@goat/contracts";
+import { ComposerContextId, EnvironmentId, RuntimeRequestId, ThreadId } from "@goat/contracts";
 import { userInputDraftKey } from "@goat/client-runtime/state/thread-requests";
+import { formatComposerContextReference } from "@goat/shared/composerContextReferences";
 import { describe, expect, it } from "vite-plus/test";
 
 import { scopedThreadKey } from "../lib/scopedEntities";
 import { questionAttachmentDraftKey } from "./question-attachments";
-import { returnUnsentAnswersToThreadDraft } from "./unsent-question-answers";
+import { returnUnsentAnswersToThreadDraft } from "./user-input-drafts";
 import type { ComposerDraft } from "./use-composer-drafts";
 
 const environmentId = EnvironmentId.make("environment-1");
@@ -112,5 +113,47 @@ describe("returnUnsentAnswersToThreadDraft", () => {
     });
 
     expect(next[threadKey]?.text).toBe("Draft\n\nYes\n\nYes\n\nYes");
+  });
+
+  // As web's threadContextsReferencedByAnswer: a question draft keeps deleted chips for undo,
+  // so only the chips the answer itself references come back (coordinator D1 (a)).
+  it("returns only the context chips the answer references", () => {
+    const terminal = (id: string) => ({
+      version: 1 as const,
+      kind: "terminal" as const,
+      contextId: ComposerContextId.make(id),
+      label: id,
+      terminalId: "main",
+      terminalLabel: "Terminal",
+      lineStart: 1,
+      lineEnd: 2,
+      text: "output",
+    });
+    const kept = terminal("kept");
+    const left = terminal("left");
+    const drafts: Record<string, ComposerDraft> = {
+      // The thread draft names "left" in its own text, but only the question holds the chip.
+      [threadKey]: { text: `See ${formatComposerContextReference(left)}`, attachments: [] },
+      [questionAttachmentDraftKey(environmentId, threadId, stopped, "first")]: {
+        text: "",
+        attachments: [],
+        context: { version: 1, records: [kept, left] },
+      },
+    };
+    const answers = {
+      [userInputDraftKey(environmentId, threadId, stopped)]: {
+        first: { customAnswer: `Use ${formatComposerContextReference(kept)}` },
+      },
+    };
+
+    const next = returnUnsentAnswersToThreadDraft({
+      drafts,
+      answers,
+      environmentId,
+      threadId,
+      unansweredRequestIds: [stopped],
+    });
+
+    expect(next[threadKey]?.context?.records.map((record) => record.contextId)).toEqual(["kept"]);
   });
 });
