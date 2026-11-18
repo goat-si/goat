@@ -645,65 +645,81 @@ it("a hold after a refused save discards the draft and closes the editor with th
   expect(state.navigate).not.toHaveBeenCalled();
 });
 
-it("keeps an untouched edit mounted while the refresh after a revert settles", async () => {
-  const registry = setup();
-  if (original.status !== "active" || saved.status !== "active")
-    throw new Error("Active fixtures required");
-  const resolution = {
-    resolutionId: id(8),
-    memoryId: id(2),
-    memorySpaceId: id(1),
-    resultRevisionId: original.revision.revisionId,
-    inputRevisionIds: [saved.revision.revisionId],
-    requestedModelSelection: { instanceId: "codex", model: "synthetic", options: [] },
-    effectiveProvider: "codex",
-    effectiveModel: "synthetic",
-    resolvingEnvironmentId: "remote-owner",
-    appliedAtUtc: "2026-09-01T00:00:00.000Z",
-    revertDeadlineUtc: "2099-10-01T00:00:00.000Z",
-  };
-  state.queries.set(
-    "history",
-    Option.some({
-      revisions: [{ revision: saved.revision, payload: saved.payload }],
-      resolutions: [{ resolution, payload: null }],
-      nextCursor: null,
-      reports: [],
-      revertResults: [],
-    }),
-  );
-  state.revert = {
-    _tag: "Success",
-    value: { operationId: id(9), memoryId: id(2), resolutionId: id(8), status: "pending" },
-  };
-  state.refresh.mockImplementation(() => {
-    state.readPending = true;
-    expire();
-    state.version += 1;
-    for (const listener of state.listeners) listener();
-  });
-  await using screen = await renderDetails(registry);
-  await click(screen, "Edit");
-  const editor = memoryText(screen);
-  await click(screen, "Open Resolution");
-  await act(() => screen.container.querySelector<HTMLInputElement>('input[type="radio"]')!.click());
-  await click(screen, "Revert resolution");
+it.each(["unchanged", "held", "empty"] as const)(
+  "keeps an untouched edit pending until the refresh after revert settles as %s",
+  async (settlement) => {
+    const registry = setup();
+    if (original.status !== "active" || saved.status !== "active")
+      throw new Error("Active fixtures required");
+    const resolution = {
+      resolutionId: id(8),
+      memoryId: id(2),
+      memorySpaceId: id(1),
+      resultRevisionId: original.revision.revisionId,
+      inputRevisionIds: [saved.revision.revisionId],
+      requestedModelSelection: { instanceId: "codex", model: "synthetic", options: [] },
+      effectiveProvider: "codex",
+      effectiveModel: "synthetic",
+      resolvingEnvironmentId: "remote-owner",
+      appliedAtUtc: "2026-09-01T00:00:00.000Z",
+      revertDeadlineUtc: "2099-10-01T00:00:00.000Z",
+    };
+    state.queries.set(
+      "history",
+      Option.some({
+        revisions: [{ revision: saved.revision, payload: saved.payload }],
+        resolutions: [{ resolution, payload: null }],
+        nextCursor: null,
+        reports: [],
+        revertResults: [],
+      }),
+    );
+    state.revert = {
+      _tag: "Success",
+      value: { operationId: id(9), memoryId: id(2), resolutionId: id(8), status: "pending" },
+    };
+    state.refresh.mockImplementation(() => {
+      state.readPending = true;
+      expire();
+      state.version += 1;
+      for (const listener of state.listeners) listener();
+    });
+    await using screen = await renderDetails(registry);
+    await click(screen, "Edit");
+    const editor = memoryText(screen);
+    await click(screen, "Open Resolution");
+    await act(() =>
+      screen.container.querySelector<HTMLInputElement>('input[type="radio"]')!.click(),
+    );
+    await click(screen, "Revert resolution");
 
-  expect(memoryText(screen)).toBe(editor);
-  expect(memoryText(screen)?.value).toBe("");
-  expect(screen.container.textContent).not.toContain(HIDDEN_LINE);
-  expect(state.onForgotten).not.toHaveBeenCalled();
+    expect(memoryText(screen)).toBe(editor);
+    expect(memoryText(screen)?.value).toBe("");
+    expect(screen.container.textContent).not.toContain(HIDDEN_LINE);
+    expect(state.onForgotten).not.toHaveBeenCalled();
 
-  await update(() => {
-    state.readPending = false;
-    state.queries.set("read", Option.some(original));
-  });
-  expect(memoryText(screen)).toBe(editor);
-  expect(memoryText(screen)?.value).toBe("Synthetic original");
-  await update(() => state.queries.set("read", Option.some(saved)));
-  expect(memoryText(screen)).toBeNull();
-  expect(screen.container.textContent).toContain("Synthetic original, saved");
-});
+    await update(() => {
+      state.readPending = false;
+      state.queries.set(
+        "read",
+        settlement === "empty"
+          ? Option.none()
+          : Option.some(settlement === "held" ? heldForSecret : original),
+      );
+    });
+    if (settlement !== "unchanged") {
+      expect(memoryText(screen)).toBeNull();
+      expect(screen.container.textContent).not.toContain("Synthetic original");
+      expect(screen.container.textContent).not.toContain(HIDDEN_LINE);
+      return;
+    }
+    expect(memoryText(screen)).toBe(editor);
+    expect(memoryText(screen)?.value).toBe("Synthetic original");
+    await update(() => state.queries.set("read", Option.some(saved)));
+    expect(memoryText(screen)).toBeNull();
+    expect(screen.container.textContent).toContain("Synthetic original, saved");
+  },
+);
 
 it.each(["rpc", "receipt"])("reviews a fresh revision after a stale save (%s)", async (kind) => {
   const registry = setup();
