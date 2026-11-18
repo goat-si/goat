@@ -250,3 +250,35 @@ it.effect("resumes held rows after the early HTTP grace and interrupts the late 
     expect(yield* Ref.get(h.httpRequests)).toBe(1);
   }),
 );
+
+it.effect(
+  "opens a full socket shell if hub hydration replaced the rows during the early read",
+  () =>
+    Effect.gen(function* () {
+      const started = yield* Deferred.make<void>();
+      const reply = yield* Deferred.make<Option.Option<ShellSnapshotLoader.ShellHttpAnswer>>();
+      const read = Deferred.succeed(started, undefined).pipe(Effect.andThen(Deferred.await(reply)));
+      const h = yield* makeCachedShell(origin, authenticatedPrepared, read);
+      yield* Deferred.await(started);
+      yield* h.connect;
+      yield* TestClock.adjust("0 millis");
+      expect(
+        yield* h.state.hydrateFromHub(
+          { ...cachedSnapshot, snapshotSequence: 20, threads: [] },
+          "1970-01-01T00:00:01.000Z",
+        ),
+      ).toBe(true);
+      const answer = { resumable: true as const, instanceId: origin.instanceId };
+      yield* Deferred.succeed(reply, Option.some(answer));
+      const request = yield* Queue.take(h.subscriptions);
+      expect(request.afterSequence).toBeUndefined();
+      yield* Queue.offer(h.events, { kind: "snapshot", snapshot: nextSnapshot });
+      yield* Queue.offer(h.events, { kind: "synchronized" });
+      const live = yield* SubscriptionRef.changes(h.state).pipe(
+        Stream.filter((state) => state.status === "live"),
+        Stream.runHead,
+        Effect.map(Option.getOrThrow),
+      );
+      expect(Option.getOrThrow(live.snapshot).threads).toEqual(nextSnapshot.threads);
+    }),
+);
