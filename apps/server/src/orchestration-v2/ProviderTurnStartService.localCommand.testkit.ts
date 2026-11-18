@@ -74,7 +74,7 @@ export function makeLocalCommandHarness(input: {
     readonly replacement?: boolean;
     readonly delivery?: "unsent" | "ambiguous";
     readonly legacy?: boolean;
-    readonly restart?: boolean;
+    readonly syntheticContinuation?: "restart" | "usage-limit";
   };
   readonly logoutFailure?: string;
   readonly createdBy?: "user" | "agent";
@@ -356,8 +356,11 @@ export function makeLocalCommandHarness(input: {
       runs: [
         {
           ...earlierRun,
-          ...(input.manualResume?.restart
+          ...(input.manualResume?.syntheticContinuation === "restart"
             ? { restartContinuationOfRunId: RunId.make("restart-ancestor") }
+            : {}),
+          ...(input.manualResume?.syntheticContinuation === "usage-limit"
+            ? { usageLimitContinuationOfRunId: RunId.make("usage-limit-ancestor") }
             : {}),
           id: previousRunId,
           ordinal: 1,

@@ -13,6 +13,7 @@ effectIt.effect.each([
   "ambiguous",
   "legacy",
   "restart-stub",
+  "usage-limit-stub",
 ] as const)("handles manual Resume with a %s source", (scenario) =>
   Effect.gen(function* () {
     const harness = makeLocalCommandHarness({
@@ -23,12 +24,22 @@ effectIt.effect.each([
         ...(scenario === "registered-unsent" ? { delivery: "unsent" } : {}),
         ...(scenario === "ambiguous" ? { delivery: "ambiguous" } : {}),
         ...(scenario === "legacy" ? { legacy: true } : {}),
-        ...(scenario === "restart-stub" ? { restart: true, delivery: "unsent" } : {}),
+        ...(scenario === "restart-stub"
+          ? { syntheticContinuation: "restart", delivery: "unsent" }
+          : {}),
+        ...(scenario === "usage-limit-stub"
+          ? { syntheticContinuation: "usage-limit", delivery: "unsent" }
+          : {}),
       },
       previousTurn: { runStatus: "interrupted", turnStatus: "interrupted" },
     });
     yield* harness.start;
-    if (scenario === "ambiguous" || scenario === "legacy" || scenario === "restart-stub") {
+    if (
+      scenario === "ambiguous" ||
+      scenario === "legacy" ||
+      scenario === "restart-stub" ||
+      scenario === "usage-limit-stub"
+    ) {
       expect(harness.projection().turnItems).toMatchObject([
         {
           type: "error",
@@ -63,7 +74,12 @@ effectIt.effect("manual Resume replays an unaccepted steering replacement and it
   Effect.gen(function* () {
     const harness = makeLocalCommandHarness({
       text: "Continue where you left off.",
-      manualResume: { accepted: true, supported: true, replacement: true },
+      manualResume: {
+        accepted: true,
+        supported: true,
+        replacement: true,
+        syntheticContinuation: "usage-limit",
+      },
       previousTurn: { runStatus: "interrupted", turnStatus: "interrupted", supersededTurn: true },
     });
     yield* harness.start;

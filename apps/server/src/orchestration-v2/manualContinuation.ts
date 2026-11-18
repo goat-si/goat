@@ -29,7 +29,12 @@ export function manualContinuationDelivery(
     if (source === undefined || input === undefined) break;
     if (input.delivery === "accepted") return { type: "native" };
     if (input.delivery !== "unsent") break;
-    if (!input.replaced && source.restartContinuationOfRunId !== undefined) break;
+    if (
+      !input.replaced &&
+      (source.restartContinuationOfRunId !== undefined ||
+        source.usageLimitContinuationOfRunId !== undefined)
+    )
+      break;
     if (input.replaced || source.manualContinuationOfRunId === undefined)
       return { type: "replay", source };
     sourceId = source.manualContinuationOfRunId;
