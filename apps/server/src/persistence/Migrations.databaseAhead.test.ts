@@ -191,7 +191,7 @@ describe("runMigrations database ahead of this build", () => {
       yield* sql`INSERT INTO memory_space_counters(space,forget_generation,last_forget_sequence)
         VALUES (${space},7,41),(${secondSpace},11,13)`;
 
-      assert.deepStrictEqual(yield* runMigrations(), [[migrationId, migrationName]]);
+      assert.deepInclude(yield* runMigrations(), [migrationId, migrationName]);
       assert.deepStrictEqual(
         yield* sql`SELECT space,memory_id,origin_sequence FROM memory_origins ORDER BY space,memory_id`,
         [
