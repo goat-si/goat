@@ -1,5 +1,6 @@
 import * as M from "@goat/contracts";
 import * as Effect from "effect/Effect";
+import { promotionPrerequisiteReady } from "./FloorWrites.ts";
 import { acceptanceGenerationMatches } from "./SaveSuggestions.ts";
 import type { CoreReads } from "./CoreReads.ts";
 import {
@@ -46,7 +47,7 @@ export const makeSyncHolds = (
         sync_version=sync_version+1, operation_digest=${input.operationDigest}, attempt=min(attempt+1,2147483647)
       WHERE id=${input.workId} AND kind IN ('sync','revert_intent') AND sync_version=${input.expectedVersion}
         AND (operation_digest IS NULL OR operation_digest=${input.operationDigest}) AND next_attempt_at<=${input.now}
-        AND ${acceptanceGenerationMatches(sql)}
+        AND ${acceptanceGenerationMatches(sql)} AND ${promotionPrerequisiteReady(sql, "memory_outbox")}
         AND (status IN ('pending','retry') OR (status='running' AND claimed_until<=${input.now})) RETURNING id`,
     );
     return rows.length

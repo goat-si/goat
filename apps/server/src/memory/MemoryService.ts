@@ -597,6 +597,7 @@ const make = Effect.fnUntraced(function* (
     admission: Store.MemoryAdmissionContext,
     permit: Permit,
     approval?: M.MemoryHubReceipt,
+    summaryPrerequisite?: M.MemoryRevisionId,
   ) {
     const digest = yield* Effect.try({ try: () => memoryOperationDigest(op), catch: invalid });
     return yield* store.transact(
@@ -670,7 +671,7 @@ const make = Effect.fnUntraced(function* (
             return yield* new Store.MemoryStoreConflict({ code: "hub_upgrade_required" });
           return yield* quota.withAdmission(
             { operation: op, admission, environmentId, receipt: decision.receipt },
-            Effect.andThen(permit, store.stageFloorWrite(op)).pipe(
+            Effect.andThen(permit, store.stageFloorWrite(op, summaryPrerequisite)).pipe(
               Effect.as({
                 operationDigest: digest,
                 receipt: { ...decision.receipt, revisionId: null, pendingSync: true },
@@ -1729,7 +1730,8 @@ const make = Effect.fnUntraced(function* (
     store,
     sql,
     environmentId,
-    apply,
+    apply: (operation, admission, permit, prerequisite) =>
+      apply(operation, admission, permit, undefined, prerequisite),
     validateDependencies: (space, payload) =>
       validateSummaryDependencies(space, payload).pipe(
         Effect.provideService(SqlClient.SqlClient, sql),

@@ -1661,7 +1661,12 @@ const make = Effect.gen(function* () {
       const result = yield* Effect.result(
         Effect.gen(function* () {
           yield* ensureEpoch(r.settings.memoryHubVersion);
-          const prepare = checkAcceptanceDispatch(sql, acquired, input);
+          const prepare = checkAcceptanceDispatch(
+            sql,
+            acquired,
+            input,
+            "summaryPrerequisite" in candidate.work.metadata,
+          );
           const ack = yield* (
             r.connection
               ? client.push(r.connection, input, prepare)

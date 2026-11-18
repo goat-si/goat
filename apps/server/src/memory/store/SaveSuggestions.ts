@@ -1,3 +1,5 @@
+import { validateSummaryDependencies } from "../MemoryDependencies.ts";
+import { promotionPrerequisiteReady } from "./FloorWrites.ts";
 import * as M from "@goat/contracts";
 import * as Clock from "effect/Clock";
 import * as Effect from "effect/Effect";
@@ -28,18 +30,31 @@ export const checkAcceptanceDispatch = Effect.fn("MemorySuggestions.checkDispatc
   sql: SqlClient.SqlClient,
   owner: SyncWorkOwner,
   input: M.MemoryHubPushInput,
+  promotion: boolean,
 ) {
   const operation = input.operations[0];
-  if (operation?.kind !== "upsert" || operation.forgetFence === undefined) return input;
+  if (operation?.kind !== "upsert" || (!promotion && operation.forgetFence === undefined))
+    return input;
   const now = yield* Clock.currentTimeMillis;
   const rows = yield* stored(
     "suggestion-dispatch",
     sql`SELECT 1 FROM memory_outbox WHERE id=${owner.workId} AND status='running'
       AND claimed_by=${owner.owner} AND sync_version=${owner.version}
       AND operation_digest=${owner.operationDigest} AND claimed_until=${owner.ownedUntil}
-      AND claimed_until>${now} AND ${acceptanceGenerationMatches(sql)}`,
+      AND claimed_until>${now} AND ${acceptanceGenerationMatches(sql)}
+      AND ${promotionPrerequisiteReady(sql, "memory_outbox")}`,
   ).pipe(Effect.mapError(() => new M.MemoryHubError({ code: "storage_failed" })));
   if (!rows.length) return yield* new M.MemoryHubError({ code: "source_invalidated" });
+  if (promotion)
+    yield* validateSummaryDependencies(operation.memorySpaceId, operation.payload).pipe(
+      Effect.provideService(SqlClient.SqlClient, sql),
+      Effect.mapError(
+        (error) =>
+          new M.MemoryHubError({
+            code: error._tag === "MemoryStorageError" ? "storage_failed" : "source_invalidated",
+          }),
+      ),
+    );
   return input;
 });
 
