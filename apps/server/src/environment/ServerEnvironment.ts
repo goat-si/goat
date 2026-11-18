@@ -282,6 +282,7 @@ export const make = Effect.gen(function* () {
       pullRequestChecks: true,
       linkedThreadRefreshes: true,
       revisionBoundPullRequestReviews: true,
+      vcsBranchStatus: true,
       inlineMessageContext: true,
       requiredWorktreeBootstrap: true,
       threadSettlement: true,

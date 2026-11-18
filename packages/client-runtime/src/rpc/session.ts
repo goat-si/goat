@@ -60,6 +60,7 @@ const SOCKET_OPEN_TIMEOUT = "15 seconds";
 
 export interface RpcSession {
   readonly client: WsRpcProtocolClient;
+  readonly vcsBranchTransportSupported?: boolean;
   readonly initialConfig: Effect.Effect<ServerConfig, ConnectionAttemptError>;
   readonly subscribeServerConfig: (
     input?: ServerConfigSubscriptionInput,
@@ -471,6 +472,9 @@ export const make = Effect.fn("RpcSessionFactory.make")(function* (
 
     return {
       client: protocolClient,
+      vcsBranchTransportSupported:
+        connection.target._tag !== "HubProxyConnectionTarget" ||
+        connection.hubVcsBranchSupported === true,
       initialConfig,
       subscribeServerConfig,
       ready: Deferred.await(connected).pipe(
