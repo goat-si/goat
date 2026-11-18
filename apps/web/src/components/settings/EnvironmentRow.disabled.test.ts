@@ -95,6 +95,8 @@ describe("saved Connect routes while disabled", () => {
       ],
     };
     expect(environmentTransportLabel(present(entry))).toBe("SSH me@box");
+    // A machine reached only through Pen reads as Pen, not as a generic remote link.
+    expect(environmentTransportLabel(present({ ...entry, alternateRoutes: [] }))).toBe("Pen");
   });
   it("retains relay-only entries with coming-soon labels and excludes them from onboarding", () => {
     const entry = { ...relay, enabled: true };

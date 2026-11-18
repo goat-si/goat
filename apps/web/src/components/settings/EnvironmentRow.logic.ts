@@ -73,6 +73,7 @@ export function environmentTransportLabel(
   // Already reads "via <hub>".
   if (target._tag === "HubProxyConnectionTarget" && routes[0] !== undefined)
     return connectionRouteLabel(routes[0]);
+  if (target._tag === "PenConnectionTarget") return connectionRouteLabel({ target, profile });
   if (isDesktopLocalConnectionTarget(target))
     return isWslConnectionTarget(target) ? "WSL" : "Local device";
   if (
