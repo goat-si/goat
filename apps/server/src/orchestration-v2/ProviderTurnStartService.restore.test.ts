@@ -1,3 +1,6 @@
+import { ThreadId } from "@goat/contracts";
+import * as PlatformError from "effect/PlatformError";
+import { makeRestoreThreadWorkspace } from "./goat/restoreThreadWorkspace.ts";
 import { it } from "@effect/vitest";
 import * as Effect from "effect/Effect";
 import * as FileSystem from "effect/FileSystem";
@@ -85,4 +88,46 @@ it.effect(
       expect(yield* pending.ready(worktreePath)).toBe(true);
       expect(turn.projection().runs.at(-1)?.status).toBe("running");
     }).pipe(Effect.scoped, Effect.provide(layerRealGit)),
+);
+
+it.effect("names the preserved files when a busy worktree cannot put its leftovers back", () =>
+  Effect.gen(function* () {
+    const { fileSystem: fs, git, workspaceRoot, worktreePath } = yield* setup;
+    const path = yield* Path.Path;
+    yield* fs.remove(worktreePath, { recursive: true });
+    yield* git(workspaceRoot, ["worktree", "prune"]);
+    const leftovers = path.join(worktreePath, "node_modules");
+    yield* fs.makeDirectory(leftovers, { recursive: true });
+    yield* fs.writeFileString(path.join(leftovers, "keep.txt"), "keep");
+    const busy = PlatformError.systemError({
+      _tag: "Busy",
+      module: "FileSystem",
+      method: "rename",
+    });
+    const restore = yield* makeRestoreThreadWorkspace.pipe(
+      Effect.provideService(FileSystem.FileSystem, {
+        ...fs,
+        rename: (from, to) =>
+          from === worktreePath || to === leftovers ? Effect.fail(busy) : fs.rename(from, to),
+      }),
+    );
+    const error = yield* Effect.flip(
+      restore({
+        threadId: ThreadId.make("busy-restore"),
+        cwd: path.join(workspaceRoot, "missing-repository"),
+        worktreePath,
+        branch: "feature/restore",
+      }),
+    );
+    const parent = path.dirname(worktreePath);
+    const aside = (yield* fs.readDirectory(parent)).find((name) =>
+      name.startsWith("restore-set-aside-"),
+    );
+    expect(aside).toBeDefined();
+    const setAsidePath = path.join(parent, aside ?? "");
+    expect(yield* fs.readFileString(path.join(setAsidePath, "node_modules", "keep.txt"))).toBe(
+      "keep",
+    );
+    expect(error.message).toContain(setAsidePath);
+  }).pipe(Effect.scoped, Effect.provide(layerRealGit)),
 );

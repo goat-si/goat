@@ -13,7 +13,7 @@ import { makeDiscardWorktree, makeRecreateMissingWorktree } from "./RecreateWork
 import { makeRestorePending, type RestorePendingState } from "./restorePending.ts";
 import { git, RestoreSnapshotError, verifyRestoredWorktree } from "./restoreSnapshot.ts";
 import { makeNoticeFolderReplaced } from "./noticeFolderReplaced.ts";
-import { makeSetAsideFolder } from "./setAsideFolder.ts";
+import { makeSetAsideFolder, setAsideSentence } from "./setAsideFolder.ts";
 
 export { makeRestorePending } from "./restorePending.ts";
 
@@ -219,6 +219,15 @@ export const makeRestoreThreadWorkspace = Effect.gen(function* () {
               }),
             ),
         }),
+        Effect.mapError((error) =>
+          aside.path === null
+            ? error
+            : new ThreadWorkspaceRestoreError({
+                threadId: error.threadId,
+                reason: error.reason,
+                detail: `${error.detail} ${setAsideSentence(aside.path)}`,
+              }),
+        ),
       );
     return { ...result, setAsidePath };
   });
