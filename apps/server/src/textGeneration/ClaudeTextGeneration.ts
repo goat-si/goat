@@ -1,3 +1,4 @@
+import { compileClaudeModelSelection } from "../claudeModelOptions.ts";
 import type { RouteClaudeModelCatalog } from "../provider/ClaudeCodeModelRoutes.ts";
 import { collectStreamAsString } from "@goat/provider-core/server/snapshotProbe";
 import { ProviderDriverKind } from "@goat/contracts";
@@ -25,7 +26,6 @@ import {
   toStrictJsonSchemaObject,
 } from "@goat/provider-core/server/textGenerationUtils";
 import {
-  getModelSelectionBooleanOptionValue,
   getModelSelectionStringOptionValue,
   getProviderOptionDescriptors,
 } from "@goat/shared/model";
@@ -283,13 +283,10 @@ export const makeClaudeTextGeneration = Effect.fn("makeClaudeTextGeneration")(fu
       resolvedModelSelection.model,
     );
     const ultracode = findDescriptor("ultracode")?.currentValue;
-    const thinkingDescriptor = findDescriptor("thinking");
     const fastModeDescriptor = findDescriptor("fastMode");
     // Only a chosen value; otherwise Claude Code's own default applies, as in chat turns.
-    const thinking =
-      thinkingDescriptor?.type === "boolean"
-        ? getModelSelectionBooleanOptionValue(resolvedModelSelection, "thinking")
-        : undefined;
+    const thinking = compileClaudeModelSelection(resolvedModelSelection, catalog).settings
+      .alwaysThinkingEnabled;
     const fastMode =
       fastModeDescriptor?.type === "boolean" ? fastModeDescriptor.currentValue : undefined;
     const { settings } = pinClaudeHomeSettings({

@@ -162,7 +162,7 @@ export function scopeClaudeModelCatalog(
   return { models: [...builtInModels, ...customCatalogModels] };
 }
 
-function resolveClaudeCatalogModel(
+export function resolveClaudeCatalogModel(
   catalog: ClaudeModelCatalog,
   slugOrAlias: string | null | undefined,
 ): ClaudeCatalogModel | undefined {
