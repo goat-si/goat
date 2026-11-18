@@ -257,3 +257,37 @@ it("moves a cancelled answer's images and files into the thread draft without re
   expect(store.getComposerDraft(fileQuestion)).toBeNull();
   expect(release).not.toHaveBeenCalled();
 });
+
+it("restores an expired question's unique images without releasing the thread draft's upload", () => {
+  const store = useComposerDraftStore.getState();
+  const target = { environmentId, threadId };
+  const request = RuntimeRequestId.make("expired");
+  const retained = {
+    type: "image" as const,
+    id: "retained",
+    name: "screen.png",
+    mimeType: "image/png",
+    sizeBytes: 5,
+    previewUrl: "blob:retained",
+    file: new File(["image"], "screen.png", { type: "image/png" }),
+  };
+  const duplicate = { ...retained, id: "duplicate", previewUrl: "blob:duplicate" };
+  const added = { ...retained, id: "added", name: "another.png", previewUrl: "blob:added" };
+  const question = questionAttachmentDraftId(environmentId, threadId, request, "first");
+  const other = questionAttachmentDraftId(environmentId, threadId, request, "second");
+  store.addImages(target, [retained]);
+  store.addImages(question, [retained]);
+  store.addImages(other, [duplicate, added]);
+
+  using revoke = vi.spyOn(URL, "revokeObjectURL");
+  makeThreadRequestsResolvedAnnouncer(
+    environmentId,
+    threadId,
+  )([{ id: request, status: "expired" }]);
+
+  expect(store.getComposerDraft(target)?.images.map(({ id }) => id)).toEqual(["retained", "added"]);
+  expect(store.getComposerDraft(question)).toBeNull();
+  expect(store.getComposerDraft(other)).toBeNull();
+  expect(release.mock.calls.flat(2).map(({ id }) => id)).toEqual(["duplicate"]);
+  expect(revoke).not.toHaveBeenCalledWith(retained.previewUrl);
+});

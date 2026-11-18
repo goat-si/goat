@@ -608,7 +608,11 @@ export interface ComposerDraftStoreState extends PreviewTabDraftActions {
   /** Clears text and attachments, preserving terminal/element contexts, preview annotations, and review comments. */
   clearComposerPromptAndImages: (threadRef: ComposerThreadTarget) => void;
   /** Keeps attachments over destination limits, other environments' uploads, terminal/element contexts, annotations, and review comments in source. */
-  moveComposerPromptAndImages: (from: ComposerThreadTarget, to: ComposerThreadTarget) => void;
+  moveComposerPromptAndImages: (
+    from: ComposerThreadTarget,
+    to: ComposerThreadTarget,
+    options?: { readonly deduplicateImages?: boolean },
+  ) => void;
 }
 
 interface ComposerDraftModelState {
@@ -3923,7 +3927,7 @@ const composerDraftStore = create<ComposerDraftStoreState>()(
             return { draftsByThreadKey: nextDraftsByThreadKey };
           });
         },
-        moveComposerPromptAndImages: (from, to) => {
+        moveComposerPromptAndImages: (from, to, options) => {
           const fromKey = resolveComposerDraftKey(get(), from) ?? "";
           const toKey = resolveComposerDraftKey(get(), to) ?? "";
           if (fromKey.length === 0 || toKey.length === 0 || fromKey === toKey) {
@@ -3955,7 +3959,17 @@ const composerDraftStore = create<ComposerDraftStoreState>()(
                 destination.images.length -
                 destination.files.length,
             );
-            const movedImages = source.images.slice(0, remainingAttachmentSlots);
+            const transferableImages = options?.deduplicateImages
+              ? source.images.filter(
+                  (image) =>
+                    !destination.images.some(
+                      (existing) =>
+                        existing.id === image.id ||
+                        composerImageDedupKey(existing) === composerImageDedupKey(image),
+                    ),
+                )
+              : source.images;
+            const movedImages = transferableImages.slice(0, remainingAttachmentSlots);
             const movedImageIds = new Set(movedImages.map((image) => image.id));
             const retainedImages = source.images.filter((image) => !movedImageIds.has(image.id));
             const movedFiles = transferableFiles
