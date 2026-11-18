@@ -9950,6 +9950,13 @@ export const makeClaudeAdapterV2 = Effect.fn("makeClaudeAdapterV2")(function* (
               Effect.provideService(ChildProcessSpawner.ChildProcessSpawner, spawner),
               Effect.provideService(Path.Path, path),
             );
+            const appContext = yield* appContextDelivery.prepare(
+              existing.nativeThreadId,
+              turnInput.message.text,
+              turnInput.appContext ?? [],
+              pdfReservation,
+              currentTurn.appContextOffered,
+            );
             yield* backgroundForegroundSubagents(existing, backgroundDeadline);
             if (liveSteerSelection !== undefined)
               yield* applyClaudeSelectionLive(existing, liveSteerSelection);
@@ -9966,7 +9973,10 @@ export const makeClaudeAdapterV2 = Effect.fn("makeClaudeAdapterV2")(function* (
                 detail: `Claude provider turn ${turnInput.providerTurnId} ended before the steer was sent.`,
               });
             }
-            const admitted = yield* withFreshMemory(userMessage, currentTurn.input);
+            const admitted = yield* withFreshMemory(
+              appContext?.apply(userMessage) ?? userMessage,
+              currentTurn.input,
+            );
             const marker = Symbol();
             yield* Ref.update(steeredTurns, (current) =>
               new Map(current).set(
@@ -10003,18 +10013,16 @@ export const makeClaudeAdapterV2 = Effect.fn("makeClaudeAdapterV2")(function* (
               liveQuery: existing,
             });
             yield* emitSteerStatus(currentTurn, messageId, "pending");
-            // The PDF budget is spent once the message is queued, even if the steer is later refused.
+            let committed = false;
+            const commitOffer = () => {
+              if (committed) return;
+              committed = true;
+              pdfReservation.commit();
+              if (appContext !== undefined) currentTurn.appContextOffered = appContext.snapshot;
+            };
             yield* Effect.uninterruptibleMask((restore) =>
-              restore(
-                existing.query.offer(admitted, () => {
-                  pdfReservation.commit();
-                }),
-              ).pipe(
-                Effect.tap(() =>
-                  Effect.sync(() => {
-                    pdfReservation.commit();
-                  }),
-                ),
+              restore(existing.query.offer(admitted, commitOffer)).pipe(
+                Effect.tap(() => Effect.sync(commitOffer)),
               ),
             ).pipe(
               Effect.tap(() => settleSteer(true)),

@@ -1,3 +1,4 @@
+import { sendCodexSteerContext } from "./CodexSteerAppContext.ts";
 import { providerSession } from "./CodexSessionProjection.ts";
 import {
   codexItemStatus,
@@ -7347,11 +7348,17 @@ export const makeCodexAdapterV2 = Effect.fn("makeCodexAdapterV2")(function* (
               yield* applyLiveTier(threadId, turnInput.modelSelection);
 
               const codexInput = yield* toCodexInput(turnInput);
-              yield* client.request("turn/steer", {
-                expectedTurnId: activeTurn.nativeTurnId,
-                input: codexInput,
+              yield* sendCodexSteerContext(
+                additionalContextByThread,
                 threadId,
-              });
+                turnInput.appContext ?? [],
+                (notes) =>
+                  client.request("turn/steer", {
+                    expectedTurnId: activeTurn.nativeTurnId,
+                    input: [...notes, ...codexInput],
+                    threadId,
+                  }),
+              );
             },
             (effect, turnInput) =>
               effect.pipe(

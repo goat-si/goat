@@ -674,6 +674,7 @@ it.effect.each(["running", "completed"] as const)(
         providerTurn: { id: providerTurnId, providerThreadId, status },
       } as unknown as ProjectionStore.ProjectionProviderControlContext;
       const layer = ProviderTurnControl.layer.pipe(
+        Layer.provide(McpAppModelContext.layerEmpty),
         Layer.provide(
           Layer.mergeAll(
             Layer.mock(EventSink.EventSinkV2)({}),
