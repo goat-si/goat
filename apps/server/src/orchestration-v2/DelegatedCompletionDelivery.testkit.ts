@@ -1,3 +1,4 @@
+import * as Tracer from "effect/Tracer";
 import * as ProviderContinuationRequests from "@goat/provider-core/server/ProviderContinuationRequests";
 import * as SourceControlProviderRegistry from "../sourceControl/SourceControlProviderRegistry.ts";
 import * as McpProviderSessions from "@goat/provider-core/server/McpProviderSessions";
@@ -722,3 +723,23 @@ export const finishFollowupWithAwaitedTask = Effect.fn("finishFollowupWithAwaite
     };
   },
 );
+
+export const captureDeliveryQueries = Effect.fn("captureDeliveryQueries")(function* <E, R>(
+  effect: Effect.Effect<unknown, E, R>,
+) {
+  const statements: string[] = [];
+  const tracer = Tracer.make({
+    span(options) {
+      const span = new Tracer.NativeSpan(options);
+      const end = span.end.bind(span);
+      span.end = (time, exit) => {
+        end(time, exit);
+        const query = span.attributes.get("db.query.text");
+        if (typeof query === "string") statements.push(query);
+      };
+      return span;
+    },
+  });
+  yield* effect.pipe(Effect.withTracer(tracer));
+  return statements;
+});

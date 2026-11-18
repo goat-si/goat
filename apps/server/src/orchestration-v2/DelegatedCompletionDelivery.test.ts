@@ -30,7 +30,6 @@ import * as Deferred from "effect/Deferred";
 import * as Fiber from "effect/Fiber";
 import * as Layer from "effect/Layer";
 import * as Stream from "effect/Stream";
-import * as Tracer from "effect/Tracer";
 import * as EventSink from "./EventSink.ts";
 import * as ProviderRuntimeRecovery from "./ProviderRuntimeRecoveryService.ts";
 import * as Orchestrator from "./Orchestrator.ts";
@@ -41,6 +40,7 @@ import {
   layerTest,
   seedParentWithTerminalTask,
   seedBoundedDeliveryHistory,
+  captureDeliveryQueries,
 } from "./DelegatedCompletionDelivery.testkit.ts";
 import * as ThreadCommandExecutor from "./ThreadCommandExecutor.ts";
 
@@ -1282,20 +1282,7 @@ it.layer(Layer.merge(layerTest, ProviderContinuationRequests.layer))(
         const requests = yield* ProviderContinuationRequests.ProviderContinuationRequests;
         const now = yield* DateTime.now;
         const runId = yield* seedBoundedDeliveryHistory(sink, now);
-        const statements: string[] = [];
-        const tracer = Tracer.make({
-          span(options) {
-            const span = new Tracer.NativeSpan(options);
-            const end = span.end.bind(span);
-            span.end = (time, exit) => {
-              end(time, exit);
-              const query = span.attributes.get("db.query.text");
-              if (typeof query === "string") statements.push(query);
-            };
-            return span;
-          },
-        });
-        yield* orchestrator.recoverDelegatedTasks.pipe(Effect.withTracer(tracer));
+        const statements = yield* captureDeliveryQueries(orchestrator.recoverDelegatedTasks);
         assert.isFalse(statements.some((query) => query.includes("MIN(ordinal)")));
         const messageReads = statements.filter((query) =>
           query.includes("FROM orchestration_v2_projection_messages"),
