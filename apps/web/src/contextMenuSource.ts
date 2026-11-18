@@ -4,9 +4,11 @@ import { readLocalApi } from "./localApi";
 
 type ContextMenuEvent = Pick<MouseEvent, "type" | "button" | "detail">;
 
-// Chromium uses no button for keyboard context menus and zero clicks for keyboard activation.
-export function contextMenuSourceOf(event: ContextMenuEvent): ContextMenuSource {
-  return (event.type === "click" ? event.detail === 0 : event.button === -1) ? "keyboard" : "mouse";
+export function contextMenuSourceOf(event: ContextMenuEvent): ContextMenuSource | undefined {
+  if (event.type === "click") return event.detail === 0 ? "keyboard" : "mouse";
+  if (event.button === -1) return "keyboard";
+  // Other browser engines can report a pointer button for a keyboard context menu.
+  return window.desktopBridge ? "mouse" : undefined;
 }
 
 export function contextMenuForEvent(event: ContextMenuEvent): ContextMenuShow | undefined {

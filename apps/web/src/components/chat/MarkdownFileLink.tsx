@@ -265,7 +265,7 @@ export const MarkdownFileLink = memo(function MarkdownFileLink({
 
   const showFileContextMenu = async (
     position: { x: number; y: number },
-    source: ContextMenuSource,
+    source: ContextMenuSource | undefined,
   ) => {
     const api = readLocalApi();
     if (!api) return;

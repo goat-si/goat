@@ -12,6 +12,8 @@ import { expect, it, vi } from "vite-plus/test";
 import { userEvent } from "vite-plus/test/browser";
 
 import { act, render, stubGlobal } from "../../test/render";
+import { dismissContextMenu } from "../contextMenuFallback";
+import { createLocalApi } from "../localApi";
 import { useRightPanelStore } from "../rightPanelStore";
 
 const state = vi.hoisted(() => ({
@@ -227,6 +229,7 @@ it.each(["[Docs](https://example.com/docs)", "[Readme](docs/readme.md)"])(
   "tells the native menu for %s whether the keyboard opened it",
   async (text) => {
     using _setup = setup();
+    using _bridge = stubGlobal("desktopBridge", { showContextMenu: state.choose });
     await using screen = await renderMarkdown(text);
     // On macOS Shift+F10 does not generate Chromium's keyboard contextmenu.
     await act(async () => {
@@ -239,6 +242,36 @@ it.each(["[Docs](https://example.com/docs)", "[Readme](docs/readme.md)"])(
     expect(state.choose.mock.lastCall?.[2]).toBe("keyboard");
     await userEvent.click(screen.anchor(), { button: "right" });
     await vi.waitFor(() => expect(state.choose.mock.lastCall?.[2]).toBe("mouse"));
+  },
+);
+
+it.each([
+  [0, "[Docs](https://example.com/docs)"],
+  [2, "[Docs](https://example.com/docs)"],
+  [0, "[Readme](docs/readme.md)"],
+  [2, "[Readme](docs/readme.md)"],
+])(
+  "focuses the first browser action for a keyboard context menu with button %i on %s",
+  async (button, text) => {
+    using _setup = setup();
+    using _bridge = stubGlobal("desktopBridge", undefined);
+    state.choose.mockImplementation(createLocalApi().contextMenu.show);
+    await using screen = await renderMarkdown(text);
+    using _menu = { [Symbol.dispose]: () => dismissContextMenu() };
+    await userEvent.keyboard("{Tab}");
+    const anchor = screen.anchor();
+    anchor.focus();
+    expect(anchor.matches(":focus-visible")).toBe(true);
+
+    await act(async () => {
+      anchor.dispatchEvent(
+        new MouseEvent("contextmenu", { bubbles: true, cancelable: true, button }),
+      );
+    });
+
+    const firstAction = document.querySelector('[role="menu"] button:not(:disabled)');
+    expect(firstAction).not.toBeNull();
+    expect(document.activeElement).toBe(firstAction);
   },
 );
 
