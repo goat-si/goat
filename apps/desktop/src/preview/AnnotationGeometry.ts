@@ -40,8 +40,10 @@ export function unionRects(
   };
 }
 
-export function visibleElementRect(element: Element): PreviewAnnotationRect {
-  const rect = element.getBoundingClientRect();
+export function visibleElementRect(
+  element: Element,
+  rect = element.getBoundingClientRect(),
+): PreviewAnnotationRect {
   let left = Math.max(0, rect.left);
   let top = Math.max(0, rect.top);
   let right = Math.min(document.documentElement.clientWidth, rect.right);

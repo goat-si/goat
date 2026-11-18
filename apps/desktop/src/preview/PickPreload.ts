@@ -155,6 +155,7 @@ interface SelectedElement {
   outline: HTMLDivElement;
   label: HTMLDivElement;
   baselineStyles: Map<string, string>;
+  rect: PreviewAnnotationRect;
 }
 
 interface AnnotationSession {
@@ -282,7 +283,9 @@ function updateSelectedVisual(target: SelectedElement): void {
     target.label.style.display = "none";
     return;
   }
-  const rect = visibleElementRect(target.element);
+  const bounds = target.element.getBoundingClientRect();
+  target.rect = rectFromDomRect(bounds);
+  const rect = visibleElementRect(target.element, bounds);
   positionBox(target.outline, rect);
   if (rect.width === 0 || rect.height === 0) {
     target.label.style.display = "none";
@@ -606,6 +609,7 @@ function startAnnotation(sendEnabled: boolean, voice?: AnnotationVoiceConfig): v
       outline: createBox(PRIMARY, PRIMARY_FILL),
       label: createLabel(),
       baselineStyles: new Map(),
+      rect: rectFromDomRect(element.getBoundingClientRect()),
     };
     selected.set(element, target);
     root.append(target.outline, target.label);
@@ -1032,6 +1036,13 @@ function startAnnotation(sendEnabled: boolean, voice?: AnnotationVoiceConfig): v
     for (const target of selected.values()) updateSelectedVisual(target);
     queueEditorLayout();
   };
+  const onScroll = (): void => {
+    // Scrolling invalidates the viewport position of a detached pick.
+    for (const target of selected.values()) {
+      if (!target.element.isConnected) target.rect = { x: 0, y: 0, width: 0, height: 0 };
+    }
+    repaint();
+  };
   // A scrollbar appearing narrows the viewport without a window resize.
   const rootResizeObserver = new ResizeObserver(repaint);
 
@@ -1259,7 +1270,7 @@ function startAnnotation(sendEnabled: boolean, voice?: AnnotationVoiceConfig): v
     window.removeEventListener("click", onClick, true);
     window.removeEventListener("blur", onWindowBlur);
     window.removeEventListener("keydown", onKeyDown, true);
-    window.removeEventListener("scroll", repaint, true);
+    window.removeEventListener("scroll", onScroll, true);
     window.removeEventListener("resize", repaint);
     dragHandle.removeEventListener("pointerdown", onEditorPointerDown);
     dragHandle.removeEventListener("pointermove", onEditorPointerMove);
@@ -1321,7 +1332,9 @@ function startAnnotation(sendEnabled: boolean, voice?: AnnotationVoiceConfig): v
         return {
           id: target.id,
           element,
-          rect: rectFromDomRect(target.element.getBoundingClientRect()),
+          rect: target.element.isConnected
+            ? rectFromDomRect(target.element.getBoundingClientRect())
+            : target.rect,
         };
       }),
     )
@@ -1380,7 +1393,7 @@ function startAnnotation(sendEnabled: boolean, voice?: AnnotationVoiceConfig): v
   window.addEventListener("click", onClick, { capture: true, passive: false });
   window.addEventListener("blur", onWindowBlur);
   window.addEventListener("keydown", onKeyDown, { capture: true });
-  window.addEventListener("scroll", repaint, { capture: true, passive: true });
+  window.addEventListener("scroll", onScroll, { capture: true, passive: true });
   window.addEventListener("resize", repaint, { passive: true });
   // Bubble phase, so the overlay's own handlers still see these events.
   for (const type of PAGE_ISOLATED_EVENTS)
