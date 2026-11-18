@@ -14,6 +14,42 @@ import { isVideoAttachment, videoMimeType } from "../../types";
 import { isSvgAttachment } from "@goat/shared/image";
 import { isWorkspaceImagePreviewPath } from "@goat/shared/mediaPreview";
 
+export function composerImageDedupKey(image: ComposerImageAttachment): string {
+  // Hydrated images get fresh lastModified values, so exclude it from dedupe.
+  return `${image.mimeType}\u0000${image.sizeBytes}\u0000${image.name}`;
+}
+
+export function composerFileDedupKey(
+  file: Pick<ComposerFileAttachment, "mimeType" | "sizeBytes" | "name">,
+): string {
+  return `${file.mimeType}\u0000${file.sizeBytes}\u0000${file.name}`;
+}
+
+export function composerFileMatchesReattachMarker(
+  marker: Pick<ComposerFileAttachment, "mimeType" | "sizeBytes" | "name">,
+  file: Pick<ComposerFileAttachment, "mimeType" | "sizeBytes" | "name">,
+): boolean {
+  if (marker.name !== file.name || marker.sizeBytes !== file.sizeBytes) return false;
+  if (marker.mimeType === file.mimeType) return true;
+  const normalizedMarkerMimeType = composerFileAttachmentMimeType({
+    name: marker.name,
+    type: marker.mimeType,
+  });
+  if (
+    normalizedMarkerMimeType === "image/x-adobe-dng" &&
+    normalizedMarkerMimeType ===
+      composerFileAttachmentMimeType({ name: file.name, type: file.mimeType })
+  ) {
+    return true;
+  }
+  const markerMimeType = marker.mimeType.toLowerCase();
+  return (
+    (markerMimeType === "" || markerMimeType === "application/octet-stream") &&
+    videoMimeType(marker) !== null &&
+    videoMimeType(file) !== null
+  );
+}
+
 type ComposerAttachmentFileKind = "image" | "file" | "unsupported-image";
 
 interface FileAttachmentCapabilityState {

@@ -744,7 +744,7 @@ const layerRuntimeCoreDependenciesBase = Layer.mergeAll(
     HubNodes.layer.pipe(
       Layer.provide(HubNodeRepository.layer),
       Layer.provide(DisposableMachineStore.layer),
-      Layer.provide(SshRemoteDispatchLive.layer),
+      Layer.provide(SshRemoteDispatchLive.layerWithPenRoutes),
     ),
   ),
   // One cloud machine service for WS, MCP and both SshRemoteDispatch builds, so the
@@ -953,7 +953,7 @@ const layerMakeRoutes = Layer.mergeAll(
     ServerBrowserStream.routeLayer,
     ServerHttp.layerStaticAndDevRoute,
     Ws.layer.pipe(Layer.provide(PreviewSessions.layer), Layer.provide(layerDisposableAttach)),
-    PenServer.layer,
+    PenServer.layerWithMembership,
   ),
   Layer.mergeAll(
     McpHttpServer.layerWith(

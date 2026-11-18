@@ -53,6 +53,7 @@ export const SETTINGS_ACCESS = {
   codexTurnsSurviveServerStop: agent,
   codexAppServerIsolation: agent,
   automaticServerUpdates: agent,
+  penHubNodes: person("It decides which machines this server reaches; a person decides."),
   enableAgentBrowserAccess: person(GRANTS_AGENTS),
   blockedBrowserHosts: person("It controls which browser hosts agents may use; a person decides."),
   projectAgentBrowserAccessOverrides: person(GRANTS_AGENTS),

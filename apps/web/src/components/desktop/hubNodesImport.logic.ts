@@ -1,5 +1,6 @@
 import {
   connectionRoutes,
+  penRouteOwner,
   isDesktopLocalConnectionTarget,
   type ConnectionCatalogEntry,
 } from "@goat/client-runtime/connection";
@@ -27,7 +28,10 @@ export function* eligibleHubNodeProfiles(
       const profile = Option.getOrNull(route.profile);
       if (
         profile?._tag !== "SshConnectionProfile" ||
-        hasCloudMachineAliasPrefix(profile.target.alias)
+        hasCloudMachineAliasPrefix(profile.target.alias) ||
+        // The hub follows Pen itself; a copy here would be an ordinary row that never leaves.
+        (route.target._tag === "SshConnectionTarget" &&
+          penRouteOwner(route.target.connectionId) !== null)
       )
         continue;
       yield {

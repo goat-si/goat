@@ -37,6 +37,7 @@ import * as DisposableMachineStore from "../hub/disposable/DisposableMachineStor
 import * as DisposableRouteGuard from "../hub/disposable/DisposableRouteGuard.ts";
 import * as HubNodeRepository from "./HubNodeRepository.ts";
 import { mergeHubNodes } from "./merge.ts";
+import { PenManagedRoutes, type PenRouteBinding } from "./PenManagedRoutes.ts";
 import * as Context from "effect/Context";
 import * as Effect from "effect/Effect";
 import * as Option from "effect/Option";
@@ -77,6 +78,22 @@ export class HubNodes extends Context.Service<
       id: HubNodeNotice["id"],
     ) => Effect.Effect<{ readonly dismissed: boolean }, HubNodesError>;
     /**
+     * Makes the Pen-owned registrations equal `members`, the trusted Pen members right now.
+     * Never a transport method: only the server's own Pen reconciler calls it. Rows a person or
+     * an agent added are never touched, whatever alias they use. `retry` says a departed
+     * member's row is still there because what was open to it could not be closed yet.
+     */
+    readonly reconcilePen: (input: {
+      readonly members: ReadonlyArray<PenRouteBinding & { readonly name: string }>;
+      /** Members that could not be inspected just now: their rows stay as they are. */
+      readonly keep?: ReadonlySet<string>;
+      /** False once the member list or the setting changed: nothing more is written. */
+      readonly isCurrent: () => boolean;
+    }) => Effect.Effect<
+      { readonly added: ReadonlyArray<string>; readonly retry: boolean },
+      HubNodesError
+    >;
+    /**
      * Why a kept-machine path may not add a route through this SSH alias: it is a disposable
      * machine's Pen alias (or Pen's pen-<name> for one), the GOAT it reaches is one, or the ED25519
      * sshd key it offers is one's pin. Undefined when it is kept or unknown.
@@ -107,6 +124,7 @@ export const make = Effect.gen(function* () {
   const cloud = yield* CloudMachineService.CloudMachineService;
   const ssh = yield* SshRemoteDispatch.SshRemoteDispatch;
   const environment = yield* ServerEnvironment.ServerEnvironment;
+  const penRoutes = yield* PenManagedRoutes;
   const http = yield* HttpClient.HttpClient;
   const disposableMachines = yield* DisposableMachineStore.DisposableMachineStore;
   const guard = yield* DisposableRouteGuard.DisposableRouteGuard;
@@ -248,6 +266,26 @@ export const make = Effect.gen(function* () {
     ),
   );
 
+  /**
+   * Runs a write that takes a Pen route away from Pen: closes what the route held, writes, then
+   * drops the guard. One uninterruptible step, and a write that fails puts the guard back, so the
+   * row is never left listed and unguarded.
+   */
+  const releasingPen = <A, E, R>(
+    alias: string,
+    binding: PenRouteBinding | undefined,
+    write: Effect.Effect<A, E, R>,
+  ) =>
+    binding === undefined
+      ? write
+      : penRoutes.release(alias).pipe(
+          Effect.mapError(
+            (error) => new HubNodesError({ reason: "host_unavailable", detail: error.message }),
+          ),
+          Effect.andThen(write.pipe(Effect.onError(() => penRoutes.hold(alias, binding)))),
+          Effect.tap(() => penRoutes.forget(alias)),
+          Effect.uninterruptible,
+        );
   const add: HubNodes["Service"]["add"] = Effect.fn("HubNodes.add")(function* (input, options) {
     const before = yield* snapshot;
     // Design section 6: a disposable machine is reached only through its own Pen route.
@@ -345,27 +383,36 @@ export const make = Effect.gen(function* () {
           (row) => row.routeId === routeId,
         );
         const at = yield* now;
-        yield* repository.transaction(
-          Effect.gen(function* () {
-            yield* options.beforeSave;
-            yield* repository.upsertRegistration({
-              routeId,
-              environmentId: identity,
-              label: input.label ?? previous?.label ?? null,
-              target: { kind: "ssh", ...target },
-              addedBy: previous?.addedBy ?? options.addedBy,
-              createdAt: previous?.createdAt ?? at,
-              updatedAt: at,
-            });
-            yield* repository.upsertRouteState({
-              routeId,
-              environmentId: identity,
-              status: "online",
-              checkedAt: at,
-              lastSeenAt: at,
-              lastError: null,
-            });
-          }),
+        const addedBy =
+          previous === undefined || previous.addedBy.pen !== undefined
+            ? options.addedBy
+            : previous.addedBy;
+        // A person taking over a Pen route owns it only once what Pen's route held is closed.
+        yield* releasingPen(
+          alias,
+          previous?.addedBy.pen,
+          repository.transaction(
+            Effect.gen(function* () {
+              yield* options.beforeSave;
+              yield* repository.upsertRegistration({
+                routeId,
+                environmentId: identity,
+                label: input.label ?? previous?.label ?? null,
+                target: { kind: "ssh", ...target },
+                addedBy,
+                createdAt: previous?.createdAt ?? at,
+                updatedAt: at,
+              });
+              yield* repository.upsertRouteState({
+                routeId,
+                environmentId: identity,
+                status: "online",
+                checkedAt: at,
+                lastSeenAt: at,
+                lastError: null,
+              });
+            }),
+          ),
         );
         yield* publish;
         const node = yield* requireNode(`route:${routeId}`);
@@ -399,12 +446,17 @@ export const make = Effect.gen(function* () {
         for (const route of routes) {
           if (route.target.kind === "linked")
             yield* linked.unlink(route.target.name).pipe(Effect.mapError(mapLinkedError));
-          yield* repository.transaction(
-            Effect.gen(function* () {
-              if (route.source === "registered")
-                yield* repository.deleteRegistration(route.routeId);
-              yield* repository.deleteRouteState(route.routeId);
-            }),
+          // The Pen reconciler adds the route again while the machine is still a trusted member.
+          yield* releasingPen(
+            route.target.kind === "ssh" ? route.target.alias : "",
+            route.target.kind === "ssh" ? route.pen : undefined,
+            repository.transaction(
+              Effect.gen(function* () {
+                if (route.source === "registered")
+                  yield* repository.deleteRegistration(route.routeId);
+                yield* repository.deleteRouteState(route.routeId);
+              }),
+            ),
           );
         }
         yield* publish;
@@ -620,6 +672,107 @@ export const make = Effect.gen(function* () {
       return { dismissed };
     },
   );
+  const reconcilePen: HubNodes["Service"]["reconcilePen"] = (input) =>
+    lock.withPermits(1)(
+      Effect.gen(function* () {
+        if (!active || !input.isCurrent()) return { added: [], retry: false };
+        const wanted = new Map(input.members.map((member) => [`ssh:pen-${member.nodeId}`, member]));
+        let retry = false;
+        let changed = false;
+        for (const row of yield* repository.listRegistrations) {
+          const held = row.addedBy.pen;
+          if (held === undefined || row.target.kind !== "ssh") continue;
+          if (input.keep?.has(held.nodeId)) {
+            yield* penRoutes.hold(row.target.alias, held);
+            continue;
+          }
+          const member = wanted.get(row.routeId);
+          if (
+            member !== undefined &&
+            member.meshId === held.meshId &&
+            member.nodeId === held.nodeId &&
+            member.noisePub === held.noisePub
+          ) {
+            // Every pass restores the guard of a row that is listed, whatever cut an earlier one.
+            yield* penRoutes.hold(row.target.alias, held);
+            continue;
+          }
+          // Close before forgetting: a route whose tunnel is still open stays listed and blocked.
+          const released = yield* penRoutes
+            .release(row.target.alias)
+            .pipe(
+              Effect.as(true),
+              Effect.catchTags({ PenRouteCleanupError: () => Effect.succeed(false) }),
+            );
+          if (!released) {
+            retry = true;
+            wanted.delete(row.routeId);
+            continue;
+          }
+          // Guarded until the delete is saved; a failed one leaves the row blocked and retried.
+          const deleted = yield* repository
+            .transaction(
+              Effect.gen(function* () {
+                yield* repository.deleteRegistration(row.routeId);
+                yield* repository.deleteRouteState(row.routeId);
+              }),
+            )
+            .pipe(
+              Effect.as(true),
+              Effect.catchTags({ HubNodesError: () => Effect.succeed(false) }),
+            );
+          if (!deleted) {
+            retry = true;
+            wanted.delete(row.routeId);
+            continue;
+          }
+          yield* penRoutes.forget(row.target.alias);
+          changed = true;
+        }
+        const existing = new Map(
+          (yield* repository.listRegistrations).map((row) => [row.routeId, row]),
+        );
+        const added: string[] = [];
+        const at = yield* now;
+        for (const [routeId, member] of wanted) {
+          const row = existing.get(routeId);
+          // Someone's own registration for this alias, or the Pen row already there.
+          if (row !== undefined && (row.addedBy.pen === undefined || row.label === member.name))
+            continue;
+          const alias = `pen-${member.nodeId}`;
+          const { name, ...binding } = member;
+          // Managed before it is listed, so no SSH operation ever sees the row unguarded.
+          yield* penRoutes.hold(alias, binding);
+          yield* repository.transaction(
+            Effect.gen(function* () {
+              yield* repository.upsertRegistration({
+                routeId,
+                environmentId: row?.environmentId ?? null,
+                label: name,
+                target: { kind: "ssh", alias, hostname: null, username: null, port: null },
+                addedBy: { kind: "import", pen: binding, at: row?.addedBy.at ?? at },
+                createdAt: row?.createdAt ?? at,
+                updatedAt: at,
+              });
+              if (row === undefined)
+                yield* repository.upsertRouteState({
+                  routeId,
+                  environmentId: null,
+                  status: "unknown",
+                  checkedAt: null,
+                  lastSeenAt: null,
+                  lastError: null,
+                });
+            }),
+          );
+          if (row === undefined) added.push(routeId);
+          changed = true;
+        }
+        if (changed) yield* publish;
+        return { added, retry };
+        // A pass cut off between closing a route and forgetting it would leave it unguarded.
+      }).pipe(Effect.uninterruptible),
+    );
   const disposableRoute: HubNodes["Service"]["disposableRoute"] = Effect.fn(
     "HubNodes.disposableRoute",
   )(function* ({ alias, identify, probeKey }) {
@@ -646,6 +799,7 @@ export const make = Effect.gen(function* () {
     check,
     importProfiles,
     dismissNotice,
+    reconcilePen,
     disposableRoute,
   });
 });

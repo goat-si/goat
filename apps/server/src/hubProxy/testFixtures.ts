@@ -41,6 +41,7 @@ import * as ServerEnvironment from "../environment/ServerEnvironment.ts";
 import * as SqlitePersistence from "../persistence/Sqlite.ts";
 import * as Settings from "../serverSettings.ts";
 import { SshRemoteDispatch } from "../sshRemote/SshRemoteDispatch.ts";
+import { ExpectedPenRoute, type PenRouteBinding } from "../hubNodes/PenManagedRoutes.ts";
 import { HubProxyNodes, type HubProxyNode } from "./HubProxyNodes.ts";
 import * as HubProxySessions from "./HubProxySessions.ts";
 import * as HubProxyHttp from "./http.ts";
@@ -147,6 +148,8 @@ export const makeSsh = (
   },
 ) => {
   const endpoints: Array<Parameters<SshRemoteDispatch["Service"]["proxyEndpoint"]>[0]> = [];
+  /** The Pen binding each SSH call ran under, in call order. */
+  const pens: Array<PenRouteBinding | undefined> = [];
   const issues: Array<ReadonlyArray<AuthEnvironmentScope>> = [];
   let forward = baseUrl;
   const unused = () => Effect.die("Unexpected SSH operation");
@@ -172,12 +175,14 @@ export const makeSsh = (
     revokeChildSetupSessions: unused,
     connectedHosts: Effect.succeed([]),
     proxyEndpoint: (target) =>
-      Effect.sync(() => {
+      Effect.gen(function* () {
+        pens.push(yield* ExpectedPenRoute);
         endpoints.push(target);
         return { httpBaseUrl: forward, wsBaseUrl: forward.replace(/^http/u, "ws") };
       }),
     issueProxySession: (_target, scopes) =>
       Effect.gen(function* () {
+        pens.push(yield* ExpectedPenRoute);
         issues.push([...scopes]);
         return {
           token: options?.uniqueTokens ? `${NODE_TOKEN}-${issues.length}` : NODE_TOKEN,
@@ -190,6 +195,7 @@ export const makeSsh = (
     service,
     endpoints,
     issues,
+    pens,
     /** A relaunched node's forward listens on a new local port. */
     moveForward: (url: string) => {
       forward = url;

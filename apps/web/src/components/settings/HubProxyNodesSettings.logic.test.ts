@@ -11,6 +11,7 @@ import {
   canShowHubProxySettings,
   hubProxyFailureMessage,
   hubProxyNodeActions,
+  hubProxyPenNotice,
 } from "./HubProxyNodesSettings.logic";
 
 const route = (target: HubNodeRoute["target"]): HubNodeRoute => ({
@@ -43,6 +44,14 @@ const node = (routes: readonly HubNodeRoute[], known = false): HubNode => ({
 });
 
 describe("hub proxy settings", () => {
+  it("never offers setup for a machine listed only because Pen lists it", () => {
+    const pen = { meshId: "m".repeat(26), nodeId: "a".repeat(26), noisePub: "A".repeat(43) };
+    const member = node([{ ...ssh, pen }]);
+    expect(hubProxyNodeActions(member).setup).toBe(false);
+    expect(hubProxyPenNotice(member)).toContain("GOAT not set up");
+    expect(hubProxyPenNotice(node([{ ...ssh, pen }], true))).toBeNull();
+    expect(hubProxyPenNotice(node([ssh]))).toBeNull();
+  });
   it("offers setup only while an SSH node's identity is unknown", () => {
     expect(hubProxyNodeActions(node([ssh]))).toEqual({
       setup: true,
