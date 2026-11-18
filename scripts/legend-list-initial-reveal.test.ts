@@ -246,3 +246,53 @@ describe.each(["react-native.js", "react-native.mjs"])(
     });
   },
 );
+
+describe.each(["react-native.js", "react-native.mjs"])("native row measurements (%s)", (bundle) => {
+  it.each([
+    { horizontal: false, width: 80, height: NaN },
+    { horizontal: true, width: Infinity, height: 80 },
+  ])("keeps an invalid scroll-axis measurement out of the row sizes (%j)", (measurement) => {
+    const source = NodeFS.readFileSync(
+      new URL(`../apps/mobile/node_modules/@legendapp/list/${bundle}`, import.meta.url),
+      "utf8",
+    );
+    const sizeUpdates = source.slice(
+      source.indexOf("// src/core/updateItemSizes.ts"),
+      source.indexOf("// src/core/measureContainersInLayoutEffect.native.ts"),
+    );
+    const sizesKnown = new Map<string, number>();
+    const ctx = {
+      state: {
+        props: { data: ["pending", "ready"], horizontal: measurement.horizontal },
+        indexByKey: new Map([
+          ["pending", 0],
+          ["ready", 1],
+        ]),
+        sizesKnown,
+        averageSizes: {},
+        didContainersLayout: true,
+        startBuffered: 0,
+        endBuffered: 1,
+      },
+    };
+    type RowMeasurement = { itemKey: string; size: { width: number; height: number } };
+    const updateSizeBatch = NodeVM.runInNewContext(`${sizeUpdates}\nupdateItemSizesBatch`, {
+      Platform: { OS: "ios" },
+      roundSize: Math.round,
+      getItemSize: (_ctx: unknown, key: string) => sizesKnown.get(key) ?? 20,
+      isNativeLayoutNoise: (delta: number) => Math.abs(delta) < 1,
+      setSize: () => {},
+      calculateItemsInView: () => {},
+      maybeUpdateAnchoredEndSpace: () => {},
+    }) as (context: typeof ctx, measurements: RowMeasurement[]) => void;
+
+    updateSizeBatch(ctx, [
+      { itemKey: "pending", size: measurement },
+      { itemKey: "ready", size: { width: 40, height: 40 } },
+    ]);
+    expect(sizesKnown).toEqual(new Map([["ready", 40]]));
+
+    updateSizeBatch(ctx, [{ itemKey: "pending", size: { width: 60, height: 60 } }]);
+    expect(sizesKnown.get("pending")).toBe(60);
+  });
+});
