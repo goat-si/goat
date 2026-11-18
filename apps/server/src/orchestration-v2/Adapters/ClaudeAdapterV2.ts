@@ -1,3 +1,4 @@
+import { readClaudeSubagentEffort } from "./ClaudeSubagentEffort.ts";
 import type { RouteClaudeModelCatalog } from "../../provider/ClaudeCodeModelRoutes.ts";
 import { providerFailureFromResult, terminalStatusFromResult } from "./ClaudeResultFailure.ts";
 import { claudeLocalSettingsDirectory } from "../../provider/Drivers/ClaudeHome.ts";
@@ -4707,8 +4708,22 @@ export const makeClaudeAdapterV2 = Effect.fn("makeClaudeAdapterV2")(function* (
             workflow === undefined
               ? undefined
               : withWorkflowMemberThreadIds(workflow, childThreadId);
-          // Unstated effort stays unknown: a custom agent definition may override the owner's.
-          const effort = existingSubagent === undefined ? input.effort : existingSubagent.effort;
+          const effort =
+            existingSubagent?.effort ??
+            input.effort ??
+            (lifecycleChanged &&
+            input.status !== "running" &&
+            existingSubagent?.task.modelSelection !== undefined &&
+            (input.nativeTaskType ?? existingSubagent.nativeTaskType) !== CLAUDE_WORKFLOW_TASK_TYPE
+              ? yield* readClaudeSubagentEffort({
+                  configDir: homePath,
+                  nativeSessionId: input.context.nativeThreadId,
+                  taskId: input.taskId,
+                  completed: input.status === "completed",
+                  fileSystem,
+                  path,
+                })
+              : undefined);
           const model = input.model ?? priorTask?.model ?? null;
           const task = {
             ...(priorTask ?? {

@@ -11246,6 +11246,65 @@ describe("ClaudeAdapterV2 background wake turns", () => {
     ),
   );
 
+  it.effect("records transcript effort on a native child before publishing its completion", () =>
+    Effect.gen(function* () {
+      const fs = yield* FileSystem.FileSystem;
+      const path = yield* Path.Path;
+      const configDir = yield* fs.makeTempDirectoryScoped();
+      const taskId = "agent-effort-fixture";
+      const toolUseId = "toolu-effort-fixture";
+      const transcript = path.join(
+        configDir,
+        "projects",
+        "resolved-worktree",
+        WAKE_NATIVE_SESSION,
+        "subagents",
+      );
+      yield* fs.makeDirectory(transcript, { recursive: true });
+      yield* fs.writeFileString(
+        path.join(transcript, `agent-${taskId}.jsonl`),
+        '{"type":"assistant","uuid":"child-effort-line","effort":"low","message":{"id":"fixture-message","role":"assistant","content":[{"type":"text","text":"Done."}]}}\n',
+      );
+      const harness = yield* makeWakeHarnessWithOptions({
+        environment: { CLAUDE_CONFIG_DIR: configDir },
+      });
+      yield* harness.runtime.startTurn(
+        makeClaudeTestTurnInput({
+          threadId: harness.threadId,
+          providerThread: harness.providerThread,
+          now: yield* DateTime.now,
+          attemptId: RunAttemptId.make("attempt-transcript-effort"),
+          text: "Use a native child.",
+          attachments: [],
+        }),
+      );
+      yield* Queue.offerAll(harness.sdkMessages, [
+        makeSubagentTaskStartedFrame({ taskId, toolUseId, uuid: "native-effort-started" }),
+        makeSubagentNotificationFrame({
+          taskId,
+          toolUseId,
+          summary: "Done.",
+          uuid: "native-effort-done",
+        }),
+        makeResultFrame({ uuid: "native-effort-result", result: "Done." }),
+      ]);
+      yield* Queue.take(harness.terminalReceipts);
+      yield* harness.awaitEventsRecorded;
+      const settled = harness.events.find(
+        (event) =>
+          event.type === "subagent.updated" &&
+          event.subagent.status === "completed" &&
+          event.subagent.nativeTaskRef?.nativeId === taskId,
+      );
+      assert.equal(
+        settled?.type === "subagent.updated"
+          ? getModelSelectionStringOptionValue(settled.subagent.modelSelection, "effort")
+          : null,
+        "low",
+      );
+    }).pipe(Effect.scoped, Effect.provide(layerAdapterTest)),
+  );
+
   it.effect("records only explicit effort for nested subagents", () =>
     Effect.scoped(
       Effect.gen(function* () {
