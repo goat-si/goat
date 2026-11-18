@@ -92,6 +92,7 @@ export function MemoryGenerationSettings({
                     environmentId={environmentId}
                     activeInstanceId={selection.instanceId}
                     model={selection.model}
+                    preserveSelectedModel
                     lockedProvider={null}
                     instanceEntries={entries}
                     modelOptionsByInstance={options}

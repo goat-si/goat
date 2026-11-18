@@ -1,10 +1,10 @@
 import * as M from "@goat/contracts";
-import { resolveMemoryModelSelection } from "@goat/shared/serverSettings";
 import * as Context from "effect/Context";
 import * as Effect from "effect/Effect";
 import * as Layer from "effect/Layer";
 import * as Settings from "../serverSettings.ts";
 import * as MemoryService from "./MemoryService.ts";
+import * as Hold from "./MemoryGenerationHold.ts";
 import * as Sync from "./MemorySyncService.ts";
 
 type Permit = Effect.Effect<void, MemoryService.MemoryAccessError>;
@@ -23,15 +23,17 @@ export class MemorySettingsService extends Context.Service<
 const make = Effect.gen(function* () {
   const settings = yield* Settings.ServerSettingsService;
   const sync = yield* Sync.MemorySyncService;
+  const hold = yield* Hold.shared;
   const view = settings.getSettings.pipe(
-    Effect.map((current): M.MemorySettingsView => ({
-      enabled: current.memoryEnabled,
-      hub: { mode: current.memoryHub.mode, version: current.memoryHubVersion },
-      model: {
-        selection: resolveMemoryModelSelection(current, undefined),
-        automatic: current.memoryModelSelection === null,
-      },
-    })),
+    Effect.flatMap((current) =>
+      hold.resolveModel(current).pipe(
+        Effect.map((selection): M.MemorySettingsView => ({
+          enabled: current.memoryEnabled,
+          hub: { mode: current.memoryHub.mode, version: current.memoryHubVersion },
+          model: { selection, automatic: current.memoryModelSelection === null },
+        })),
+      ),
+    ),
   );
   return MemorySettingsService.of({
     get: (permit) => permit.pipe(Effect.andThen(view)),

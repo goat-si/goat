@@ -10,6 +10,7 @@
  * @module MemoryGenerationHold
  */
 import * as M from "@goat/contracts";
+import { resolveMemoryModelSelection } from "@goat/shared/serverSettings";
 import {
   classifyTextGenerationFailure,
   type TextGenerationFailureKind,
@@ -120,6 +121,7 @@ export function deterministicFailure(error: unknown): MemoryGenerationHoldReason
 export class MemoryGenerationHold extends Context.Service<
   MemoryGenerationHold,
   {
+    readonly resolveModel: (settings: M.ServerSettings) => Effect.Effect<M.ModelSelection>;
     /** The hold key: the model selection and its provider's version. */
     readonly keyFor: (selection: M.MemoryModelSelection) => Effect.Effect<string>;
     /** Whether a call for this key would be refused now. */
@@ -146,6 +148,16 @@ export const make = Effect.gen(function* () {
   const providers = yield* Effect.serviceOption(ProviderRegistry.ProviderRegistry);
   const holds = yield* Ref.make(new Map<string, HoldState>());
   const probing = yield* Ref.make(new Set<string>());
+
+  const resolveModel = Effect.fn("MemoryGenerationHold.resolveModel")(function* (
+    settings: M.ServerSettings,
+  ) {
+    return resolveMemoryModelSelection(
+      settings,
+      Option.isSome(providers) ? yield* providers.value.getProviders : undefined,
+      yield* Clock.currentTimeMillis,
+    );
+  });
 
   const keyFor = (selection: M.MemoryModelSelection) =>
     Effect.gen(function* () {
@@ -244,7 +256,7 @@ export const make = Effect.gen(function* () {
       }),
     );
 
-  return MemoryGenerationHold.of({ keyFor, isHeld, guard, release, status });
+  return MemoryGenerationHold.of({ resolveModel, keyFor, isHeld, guard, release, status });
 });
 
 const withoutKey = (current: Map<string, HoldState>, key: string) => {

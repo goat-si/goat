@@ -17,7 +17,6 @@ import * as SqlClient from "effect/sql/SqlClient";
 import * as Environment from "../environment/ServerEnvironment.ts";
 import * as RuntimeIdentity from "../runtimeIdentity.ts";
 import { forkParked } from "../serverActivation.ts";
-import { resolveMemoryModelSelection } from "@goat/shared/serverSettings";
 import * as Settings from "../serverSettings.ts";
 import * as Generation from "../textGeneration/TextGeneration.ts";
 import * as Events from "../orchestration-v2/EventSink.ts";
@@ -114,7 +113,11 @@ const make = Effect.gen(function* () {
   // Memory runs on its own cheap model; the new-thread default may be unsupported here.
   const memoryModel = (snapshot: M.ServerSettings) =>
     snapshot.memoryEnabled
-      ? query(decodeSelection(resolveMemoryModelSelection(snapshot, undefined), strict))
+      ? query(
+          hold
+            .resolveModel(snapshot)
+            .pipe(Effect.flatMap((model) => decodeSelection(model, strict))),
+        )
       : Effect.succeed(null);
   const readSource = Effect.fn("MemoryWorker.readSource")(function* (work: Store.MemoryWork) {
     if (
