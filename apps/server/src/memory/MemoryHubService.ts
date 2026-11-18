@@ -237,14 +237,17 @@ export const make = Effect.gen(function* () {
     },
   );
   const lease = Effect.fnUntraced(function* (
-    request: M.MemoryHubClaimInput | M.MemoryHubRenewInput | M.MemoryHubReleaseInput,
+    {
+      features,
+      ...request
+    }: M.MemoryHubClaimInput | M.MemoryHubRenewInput | M.MemoryHubReleaseInput,
     principal: M.MemoryHubPrincipal,
     kind: "claim" | "renew" | "release",
   ) {
     return yield* store.transact(
       Effect.gen(function* () {
         yield* authorize(principal, request.memorySpaceId, request.holderEnvironmentId);
-        yield* negotiate(principal, request.features);
+        yield* negotiate(principal, features);
         // The discriminated Store action retains the frozen request shape.
         if (kind === "claim")
           return yield* store.transitionHubLeaseTx({
@@ -307,11 +310,11 @@ export const make = Effect.gen(function* () {
   const requestSourceRead: MemoryHubService["Service"]["requestSourceRead"] = Effect.fn(
     "MemoryHubService.requestSourceRead",
   )(function* (input, principal) {
-    const request = yield* decode(M.MemoryHubSourceReadRequestInput, input);
+    const { features, ...request } = yield* decode(M.MemoryHubSourceReadRequestInput, input);
     return yield* store.transact(
       Effect.gen(function* () {
         yield* authorize(principal, request.memorySpaceId);
-        yield* negotiate(principal, request.features);
+        yield* negotiate(principal, features);
         return yield* store.requestHubSourceReadTx(authority(principal), request);
       }),
     );
@@ -319,11 +322,11 @@ export const make = Effect.gen(function* () {
   const collectSourceReads: MemoryHubService["Service"]["collectSourceReads"] = Effect.fn(
     "MemoryHubService.collectSourceReads",
   )(function* (input, principal) {
-    const request = yield* decode(M.MemoryHubSourceReadCollectInput, input);
+    const { features, ...request } = yield* decode(M.MemoryHubSourceReadCollectInput, input);
     return yield* store.transact(
       Effect.gen(function* () {
         yield* authorize(principal, request.memorySpaceId);
-        yield* negotiate(principal, request.features);
+        yield* negotiate(principal, features);
         return yield* store.collectHubSourceReadsTx(authority(principal), request);
       }),
     );
@@ -331,11 +334,11 @@ export const make = Effect.gen(function* () {
   const respondSourceRead: MemoryHubService["Service"]["respondSourceRead"] = Effect.fn(
     "MemoryHubService.respondSourceRead",
   )(function* (input, principal) {
-    const request = yield* decode(M.MemoryHubSourceReadRespondInput, input);
+    const { features, ...request } = yield* decode(M.MemoryHubSourceReadRespondInput, input);
     return yield* store.transact(
       Effect.gen(function* () {
         yield* authorize(principal, request.memorySpaceId);
-        yield* negotiate(principal, request.features);
+        yield* negotiate(principal, features);
         return yield* store.respondHubSourceReadTx(authority(principal), request);
       }),
     );
@@ -343,11 +346,11 @@ export const make = Effect.gen(function* () {
   const resultSourceRead: MemoryHubService["Service"]["resultSourceRead"] = Effect.fn(
     "MemoryHubService.resultSourceRead",
   )(function* (input, principal) {
-    const request = yield* decode(M.MemoryHubSourceReadResultInput, input);
+    const { features, ...request } = yield* decode(M.MemoryHubSourceReadResultInput, input);
     return yield* store.transact(
       Effect.gen(function* () {
         yield* authorize(principal, request.memorySpaceId);
-        yield* negotiate(principal, request.features);
+        yield* negotiate(principal, features);
         return yield* store.resultHubSourceReadTx(authority(principal), request);
       }),
     );

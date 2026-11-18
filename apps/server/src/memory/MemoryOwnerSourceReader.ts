@@ -52,8 +52,11 @@ export const sourceReadInput = (
   ...(request.cursor === undefined ? {} : { cursor: request.cursor }),
   authorizedScopes: request.authorizedScopes,
 });
-export const sourceReadLocatorDigest = (input: M.MemoryHubSourceReadRequestInput) =>
-  NodeCrypto.createHash("sha256").update(encodeInput(input)).digest("hex");
+export const sourceReadLocatorDigest = ({
+  features: _features,
+  ...locator
+}: M.MemoryHubSourceReadRequestInput) =>
+  NodeCrypto.createHash("sha256").update(encodeInput(locator)).digest("hex");
 const denied = Effect.fail(new Service.MemoryAccessError({ code: "route_unavailable" }));
 const strict = { onExcessProperty: "error" } as const;
 const decodeRequest = Schema.decodeUnknownEffect(M.MemorySourceReadRequest);
