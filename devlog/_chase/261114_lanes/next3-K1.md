@@ -518,3 +518,19 @@ Each red case ran alone with `GOAT_TEST_TMP_GUARD=fail vp test run` from `apps/s
 - READY at `fe48834afead48b650e783da2fb821d4d357f2eb`. `git diff --check a2ef20764c HEAD` exited 0. The plain lane push exited 0 and `git ls-remote` confirmed the head.
 
 NOT RUN: Browser tests, real-client passes and captures, live GitHub/GitLab watch reads, the integration-wide changed-test gate, full builds and CI. CI runs on PR #3700.
+
+## Fix round 4, 2026-11-18 UTC (pen-lidge)
+
+Round 4 applied two GOAT-authored fixes on `fe48834afead48b650e783da2fb821d4d357f2eb`.
+
+- **P2** `5c185db6837e47155bb6e6216862c4bce611eff8` bounds the watch cursor at 4 KiB. The reader uses a 4,097-byte buffer to detect excess bytes before decoding, and validates UTF-8 and the persisted watch key fields. Invalid files start the sweep on page one and warn once on load. Oversized keys still advance the in-memory sweep. Persistence resets to page one. The guarded `PullRequestWatchPage.test.ts` run failed first with exit 1 and four failures. A NUL-suffixed key skipped 12 targets, a missing timestamp skipped 11, a 1 MiB file was accepted, and a 4,148-byte multibyte key was persisted.
+- **P3** `b6393484af66cf67ec8ffb5c59b102da25e4e820` opts the cursor into reusing the resolved destination's `.staging` sibling. The existing state-directory lock and serialized sweeps provide exclusive access. The guarded staging test failed first with exit 1 because the stale staging file survived a successful cursor write. It now verifies that a restart sees the committed cursor before the next save and the new cursor afterward, with the staging file removed.
+
+Worktree process checks preceded the gates. Node was 26.12.1 and Git was 2.43.0. `git diff --check fe48834afead48b650e783da2fb821d4d357f2eb HEAD` exited 0.
+
+- `GOAT_TEST_TMP_GUARD=fail vp run check:changed a2ef20764c287c1612f916fa34d7b2af918e72b8` exited 0. Naming, formatting, lint with two existing warnings, both Knip checks, GraphQL, both agent-surface checks, and 42 package typechecks passed. The 12 selected files passed 393 tests with zero failures or skips.
+- `GOAT_TEST_TMP_GUARD=fail vp test run` on the 13 changed server test files relative to `f82d2df4b0` plus `packages/shared/src/atomicWrite.test.ts` exited 0. All 345 tests in 14 files passed with zero failures or skips.
+- `vp test run --passWithNoTests --project='!*browser*' --project='!*renders*'` on the four known failing files exited 1 on both K1 and the integration head `6def29ca359f546e50dcd731a6364e3f0d575545`. Both runs had 38 passed, 25 failed and zero skips. All 25 case names and diagnostics matched after normalizing generated fixture paths and PIDs. The failures were 23 SSH fixture trust failures, one Grok driver failure and one storage-cleanup failure. The worktree returned to the lane.
+- READY at `b6393484af66cf67ec8ffb5c59b102da25e4e820`. The plain lane push exited 0 and `git ls-remote` confirmed the same head for integration into PR #3700.
+
+NOT RUN: Browser and native client tests or passes, captures, live GitHub/GitLab watch reads, the integration-wide changed-test gate, full builds and CI. CI runs on PR #3700.
