@@ -208,3 +208,39 @@ ff-only merge before the first commit: `git merge --ff-only origin/chase/t3-2611
 - (4) scripts/build-desktop-artifact.ts :1169-1253, InvalidMacPasskeyRpDomainReason..isMacPasskeySigningConfigurationError (85 lines: the Mac passkey error schemas and their union; they depend only on Schema) -> scripts/lib/mac-passkey-signing-errors.ts. build-desktop-artifact.ts imports the four classes it throws and re-exports the block's exports for build-desktop-artifact.test.ts and release-desktop-runtime.test.ts. This replaces the earlier "about :1236-1338": that range would have moved functions using the local DESKTOP_APP_ID (:114).
 - (5) apps/server/src/server.ts :636-669, layerScheduledTaskWebhookOrigin (34 lines; it uses only imported names: ScheduledTaskWebhookOrigin, ServerSecretStore, isGoatConnectEnabled, RELAY_URL_SECRET, CLOUD_ENDPOINT_RUNTIME_CONFIG, decodeRuntimeConfig, relayHookBaseUrl) -> apps/server/src/scheduledTasks/scheduledTaskWebhookOriginLayer.ts (GOAT-owned), imported back by server.ts.
 
+
+
+> Coordinator, 2026-11-18 00:35:17 UTC (relayed by the lane coordinator 00:40 UTC), standing rule 3 extension beside IV, verbatim:
+> "Standing rule from now, so this needs no round trip again: a type-only import added to an existing test file, and a layer provided to an existing case because the code under test gained a dependency, need no word from me when the commit changes no title, body, setup value or expectation of that case; the lane quotes the before and after in its record and the fresh review lists them. A provide that replaces or fakes a service the case's assertions read still comes to me."
+
+> Lane coordinator, 00:20 UTC: the heavy-job token on pen-mac-studio passes K5 (until its fix head is pushed and its check:changed ends), then K10 (same), then SF3 and N10 one heavy job at a time, each after a ps check in its own step.
+
+## Work log (code, local commits on the lane branch, nothing pushed)
+
+| commit | row | fail first | after |
+| --- | --- | --- | --- |
+| 0d00aa1a33 | move-out (1) serviceLauncher.ts :80-106/:138-402 -> serviceLauncherDatabase.ts (exports added; restoreDatabaseBackup's 8-line doc comment rewrapped to 4 lines, goat/no-low-value-comments applies to the new file) | - | serviceLauncher*.test.ts + CloudLink.lifecycle.test.ts whole: 5 files, 71 passed; goat typecheck exit 0 |
+| fa570fcc4d | C17 rollback half (034f3ba918) | serviceLauncher.linkedDatabase.test.ts:109 "expected true to be false" (trial WAL left beside the real file) | linkedDatabase + serviceLauncher.test.ts: 49 passed |
+| 36854f1447 | D2 backup side (GOAT-own; upstream main's backupDatabaseOnce has the same defect, serviceLauncher.ts:552-556 at 7b4478895d) | "keeps writes the server left in the WAL beside the link's target": payloads lacked "served" | the five launcher files: 58 passed |
+| 092d31afe5 | move-out (2) bootService.ts :388-487 -> bootServiceErrors.ts (BootServiceProblem gains export; export * re-export) | - | test run owed before push (token) |
+| 538b8df027 | move-out (5) server.ts :636-669 -> scheduledTasks/scheduledTaskWebhookOriginLayer.ts | - | owed |
+| 0c2e2907d0 | move-out (4) build-desktop-artifact.ts :1169-1253 -> scripts/lib/mac-passkey-signing-errors.ts | - | owed |
+
+Written, not yet committed (waiting for the token to run their fail-first and whole files): C12-1 (serviceSelectionLock.ts from upstream with one line changed to drop a non-null assertion; serviceUnitRepoint.ts; launcher #selectState and unit repoint; installer leases and recovery command; D1 B in serviceProtocol.ts; fork-delta block service-launcher-protocol; docs), C12-5 (migrationPreflight.ts, plannedGoatLedger extracted from moveGoatLedger without behaviour change, upstream reconcileV2PreviewMigration.ts), C19, O25.
+
+e805ce3712 under D1 B: the context and durable state stay protocol 3, so a new runtime runs under a protocol-3 launcher with no acceptance change, and the preflight keeps receiving --launcher-protocol 3 from every child. The port reduces to the launcherProtocol field; no preflight or selfUpdate change is needed. Recorded here so the review reads it as a decision, not an omission.
+
+D1 proof against the shipped decoder (transcript): git show v0.1.10:apps/server/src/cloud/serviceProtocol.ts (tag commit 6f872e6b2d, sha256 ca21c52b7b851df31652d95a150e60f23cccd1b224f7a58264cb46e21387fce1), run with node --experimental-strip-types:
+```
+context with launcherProtocol:4 -> {"protocol":3,"childVersion":"1.0.0","update":{"id":"u1","fromVersion":"1.0.0","targetVersion":"1.1.0","status":"rolled-back","reason":"probation-exit:1"}}
+context with protocol:4 (upstream) -> undefined
+state protocol:3 -> {"protocol":3,"activeVersion":"1.0.0"}
+state protocol:4 (upstream) -> undefined
+```
+
+O25, what an installed versioned AppImage does with the new feed: electron-updater 6.8.9 AppImageUpdater.doInstall (node_modules/.pnpm/electron-updater@6.8.9_supports-color@8.1.1/node_modules/electron-updater/out/AppImageUpdater.js:81-112) unlinks the running AppImage; because its name has an x.y.z version and the feed's does not, it moves the update to dirname/<feed name> and relaunches it with APPIMAGE_SILENT_INSTALL=true. The relaunched build leaves a relative symlink from the old name (DesktopPreReadyPlatform.appImage.test.ts). Later updates replace the version-free file in place. The one-line revert of O25: delete the buildConfig.appImage block in createBuildConfig (the verifier change goes with it).
+
+## goat#3579 measurement (D4: N10 records it and sends the C4 plan; the code is its own lane after N10's READY)
+
+`gh release download v0.1.10-nightly.20261117.376 -p goat-0.1.10-nightly.20261117.376-linux-x64.tar.gz` then `tar -tvzf`: the archive holds the five faces under client/assets, 34,818,280 bytes (NotoSansJP 4,533,028; KR 4,644,748; SC 8,331,336; TC 5,683,368; NotoSerifSC 11,625,800), of 560,234,570 uncompressed bytes. OTF does not compress, so the archive grew by 33.2 MB (.371 168,871,544 -> .376 202,056,726). Installers carry the web client four times (five on Windows): +133.9 MB AppImage, +134.6 MB dmg, +163.5 MB exe, which matches 4 x and 4.7 x the faces. The C4 plan (what the SSH install sends, an older runtime, a browser paired straight to the remote host, a failed copy falling back to system fonts) follows with N10's READY. One constraint found already: bundled SSH archives are verified by a SHA-256 sidecar and remote installs record the release digest (packages/ssh/src/runtimeArchive.ts:46-60; docs/internals/server-updates.md "install-record"), so a trimmed archive cannot reuse the release archive's identity.
+
