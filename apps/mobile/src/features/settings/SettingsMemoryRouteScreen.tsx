@@ -676,11 +676,15 @@ function ScopedMemoryBrowser({
   const exposure = useAtomValue(
     memory.exposureAtom({ environmentId: params.environmentId, input: { memorySpaceId } }),
   );
-  const [forgetGeneration, setForgetGeneration] = useState(exposure.forgetGeneration);
-  if (forgetGeneration !== exposure.forgetGeneration) {
-    setForgetGeneration(exposure.forgetGeneration);
-    setSelected(undefined);
-    setCreating(false);
+  const generation = exposure.ready ? exposure.forgetGeneration : null;
+  const [forgetGeneration, setForgetGeneration] = useState(generation);
+  if (forgetGeneration !== generation) {
+    setForgetGeneration(generation);
+    // The first ready exposure establishes the fence for a direct link.
+    if (forgetGeneration !== null) {
+      setSelected(undefined);
+      setCreating(false);
+    }
   }
   const [wasEnabled, setWasEnabled] = useState(memoryEnabled);
   if (wasEnabled !== memoryEnabled) {
