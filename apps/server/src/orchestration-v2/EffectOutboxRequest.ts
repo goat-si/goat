@@ -51,6 +51,7 @@ export const OrchestrationEffectRequestV2 = Schema.Union([
     messageId: MessageId,
     // A declined steer's follow-up runs with the selection the user steered with.
     modelSelection: Schema.optional(ModelSelection),
+    pinnedScheduleSelection: Schema.optional(ModelSelection),
     steerFollowUpAfterRunOrdinal: Schema.optional(NonNegativeInt),
     deferredSteer: Schema.optional(
       Schema.Struct({

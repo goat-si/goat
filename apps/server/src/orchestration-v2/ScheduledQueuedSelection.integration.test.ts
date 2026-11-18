@@ -3,6 +3,7 @@ import { CommandId, EventId, MessageId, ScheduledTaskId } from "@goat/contracts"
 import * as DateTime from "effect/DateTime";
 import * as Effect from "effect/Effect";
 import * as Stream from "effect/Stream";
+import { ProviderAdapterSteerDeclinedError } from "@goat/provider-core/server/ProviderAdapter";
 import * as EffectWorker from "./EffectWorker.ts";
 import * as EventSink from "./EventSink.ts";
 import * as Orchestrator from "./Orchestrator.ts";
@@ -114,6 +115,126 @@ it.effect.each(["bound", "pinned", "legacy", "fresh_session", "promoted"] as con
           assert.deepEqual(
             started[1]?.modelSelection,
             scenario === "pinned" || scenario === "legacy" ? runSelection : latestSelection,
+          );
+        }).pipe(Effect.provide(layer));
+      }),
+    ),
+);
+
+it.effect.each(["pinned", "bound"] as const)(
+  "retains a %s schedule's model binding when the provider declines its promotion",
+  (binding) =>
+    Effect.scoped(
+      Effect.gen(function* () {
+        const { started, layer, startFirstTurn } = yield* nextTurnSelectionHarness(
+          `scheduled-declined-${binding}`,
+          false,
+          Effect.void,
+          false,
+          undefined,
+          true,
+          {},
+          undefined,
+          (turn) =>
+            Effect.fail(
+              new ProviderAdapterSteerDeclinedError({
+                driver: turn.providerThread.driver,
+                providerThreadId: turn.providerThread.id,
+                providerTurnId: turn.providerTurnId,
+              }),
+            ),
+        );
+        yield* Effect.gen(function* () {
+          const orchestrator = yield* Orchestrator.OrchestratorV2;
+          const eventSink = yield* EventSink.EventSinkV2;
+          const worker = yield* EffectWorker.OrchestrationEffectWorkerV2;
+          const threadId = yield* startFirstTurn;
+          const messageId = MessageId.make("message:declined-schedule");
+          yield* orchestrator.dispatch({
+            type: "message.dispatch",
+            commandId: CommandId.make("command:declined-schedule"),
+            threadId,
+            messageId,
+            text: "Scheduled follow-up",
+            attachments: [],
+            ...(binding === "pinned" ? { modelSelection: runSelection } : {}),
+            dispatchMode: { type: "queue_after_active" },
+            scheduledTaskId: ScheduledTaskId.make("schedule:declined"),
+            createdBy: "agent",
+            creationSource: "server",
+          });
+          const before = yield* orchestrator.getThreadProjection(threadId);
+          const active = before.runs.find((run) => run.status === "running");
+          const queued = before.runs.find((run) => run.userMessageId === messageId);
+          if (active === undefined || queued === undefined)
+            return yield* Effect.die("Missing scheduled run");
+          const now = yield* DateTime.now;
+          const pick = (model: string) =>
+            eventSink.write({
+              events: [
+                {
+                  id: EventId.make(`event:${model}`),
+                  type: "thread.model-selection-updated",
+                  threadId,
+                  occurredAt: now,
+                  payload: {
+                    ...before.thread,
+                    modelSelection: { ...runSelection, model },
+                    updatedAt: now,
+                  },
+                },
+              ],
+            });
+          yield* pick("model-at-promotion");
+          yield* orchestrator.dispatch({
+            type: "queued-message.promote-to-steer",
+            commandId: CommandId.make("command:promote-declined-schedule"),
+            threadId,
+            queuedRunId: queued.id,
+            targetRunId: active.id,
+          });
+          yield* worker.drain();
+          const after = yield* orchestrator.getThreadProjection(threadId);
+          const requeued = after.runs.find(
+            (run) => run.status === "queued" && run.userMessageId === messageId,
+          );
+          if (requeued === undefined)
+            return yield* Effect.die("Declined promotion was not requeued");
+          yield* pick("model-at-delivery");
+          const afterSequence = yield* eventSink.latestSequence({ threadId });
+          yield* eventSink.write({
+            events: [
+              {
+                id: EventId.make("event:active-completed"),
+                type: "run.updated",
+                threadId,
+                runId: active.id,
+                occurredAt: now,
+                payload: { ...active, status: "completed", completedAt: now },
+              },
+            ],
+          });
+          yield* eventSink.stream({ threadId, afterSequence, eventType: "run.updated" }).pipe(
+            Stream.filter(
+              ({ event }) =>
+                event.type === "run.updated" &&
+                event.payload.id === requeued.id &&
+                event.payload.status === "starting",
+            ),
+            Stream.take(1),
+            Stream.runDrain,
+          );
+          yield* worker.drain();
+          assert.deepEqual(
+            started.map((turn) => turn.modelSelection),
+            [
+              runSelection,
+              binding === "pinned" ? runSelection : { ...runSelection, model: "model-at-delivery" },
+            ],
+          );
+          assert.equal(
+            after.messages.find((row) => row.id === messageId)?.followsThreadSelection,
+            binding === "bound" ? true : undefined,
           );
         }).pipe(Effect.provide(layer));
       }),

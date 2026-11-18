@@ -4212,6 +4212,7 @@ const makeOrchestrator = Effect.fn("orchestrationV2.Orchestrator.layer")(functio
     readonly creationSource: OrchestrationV2ConversationMessage["creationSource"];
     readonly scheduledTaskId?: OrchestrationV2ConversationMessage["scheduledTaskId"];
     readonly followsThreadSelection?: true | undefined;
+    readonly pinnedScheduleSelection?: ModelSelection | undefined;
     readonly deferredSteer?: Extract<
       PendingOrchestrationEffectV2["request"],
       { type: "provider-turn.steer" }
@@ -4510,6 +4511,9 @@ const makeOrchestrator = Effect.fn("orchestrationV2.Orchestrator.layer")(functio
             providerTurnId: providerTurn.id,
             messageId: input.messageId,
             ...(steerCarriesSelection ? { modelSelection: input.modelSelection } : {}),
+            ...(input.pinnedScheduleSelection === undefined
+              ? {}
+              : { pinnedScheduleSelection: input.pinnedScheduleSelection }),
             ...(input.deferredSteer === undefined ? {} : { deferredSteer: input.deferredSteer }),
             steerFollowUpAfterRunOrdinal: Math.max(
               0,
@@ -8785,6 +8789,10 @@ const makeOrchestrator = Effect.fn("orchestrationV2.Orchestrator.layer")(functio
         ? {}
         : { scheduledTaskId: queuedMessage.scheduledTaskId }),
       followsThreadSelection: queuedMessage.followsThreadSelection,
+      pinnedScheduleSelection:
+        queuedMessage.scheduledTaskId !== undefined && queuedMessage.followsThreadSelection !== true
+          ? queuedRun.modelSelection
+          : undefined,
       deferredSteer: deferredSteerTarget(queuedRun, target),
       ...(queuedMessage.senderThreadId === undefined
         ? {}
