@@ -364,3 +364,74 @@ The assertion is the same one check:changed reported on 1bc4def8dd (storageClean
 (e) correction, checked after writing it: the CLI's plain output prints status and title only, but its JSON modes print the whole decoded value: goat thread list --json (apps/server/src/cli/thread.ts:742, printJson(threads)) and the thread read JSON output (:905, printJson({ thread, messages })). A person or script reading that JSON now sees at most five open pull requests per thread plus pullRequestCount and openPullRequestCount, where it saw every link before. Fleet health uses only the status it derives from the read (fleet/health/Health.ts:88-92, statusFromRead). No GOAT code path reads merged pull requests from a thread read.
 
 Stash, after the 02:00 UTC rule: K1 used git stash six times on pen-lidge before the rule (fail-first and integration-head runs: the 36254ab82e work-in-progress around R6 and the merge-queue check, the 072254ddd3 and 36254ab82e carry-over fail-first run on PullRequestAutoWatch.ts, the 1df9c91230-era check at 36cb30c92b, the k1-fix stash around the storageCleanupShipping run at 259883c788). Each push was popped in the same command, and each pop restored exactly K1's own diff (checked by git diff --stat after the pop). git stash list on this machine is empty now (checked after the rule): no K1 entry is left, and none of another lane's was touched. From now on K1 saves a diff to /tmp and uses git apply, or a local scratch branch, instead.
+
+## Coordinator, 2026-11-18 01:14:39 UTC, section II (K1), the review and the fix round, verbatim
+
+II. K1 (head dddbf74933a02ad3990d6383fa6df52392359964)
+The review is BLOCK on two P2, with three P3. Saved whole: /Users/jun/handoff-in/chase/next3-K1-review-dddbf749.md (19,851 bytes). All five recorded as accepted. Everything else matched the record: move-outs, budgets, every rule 3 line, paging, the push reopen, both stored fields; 18 server files 244 of 244, runtimeLayer.test.ts 176 of 176, twelve mutations caught except M6. READ BY ME: the report whole. NOT RUN by me: any test. Runs on this head: quick 44209641471 SUCCESS; all 44209832475 in progress (server shards running, nothing failed, read 01:14 UTC).
+RULED, the fix round on top of dddbf74933, one commit per finding, the failing case first for each P2:
+1. P2-1 (a re-watch drops a queued closed or unreadable ending notice whole, with the kept remarks only it carried; D1's condition): resumedWakeText returns undefined only when the text has no "Also kept as context" tail; with a tail it keeps the tail and adds the watching closing line. The closed variant of the case at PullRequestWatchWakes.test.ts:459 carries a held remark and asserts it reaches the agent; add the unreadable variant if it is a row in the same table. That file is at 977 lines: a new file if it would pass 1000.
+2. P2-2 (no case pins the refusal for others[] entries): one case in PullRequestWatchBatch.test.ts where #22's watch restarts (unwatch, then watch) or its merge is recorded during #22's read; #21 wakes alone, #22's old news is absent. In the record: the reviewer's M6 (only the first entry checked) and M6b (the mute check skipped for the others) each fail it.
+3. P3-1 (a fork pull request whose approval lookup fails on every read never ends its check baseline, so a check failing on the same head never wakes the agent; before this lane GOAT reported it): TAKEN. Only the approval part of the baseline waits for the lookup; the check baseline ends at the first read that has a head SHA and real checks. RULE 3 AUTHORISED for upstream's case "keeps the check baseline through a read whose approval lookup failed": quote it before the commit, keep what it says about the approval part, change only the check half. The reviewer's probe becomes the failing-first case (fork read: FIRST [] then a failure on the same head reports checks-failed). A fork delta line. THE WAY OUT: if the change can wake the agent for a check that had already failed before the watch started (what the baseline exists to prevent), do not take it: a Limits sentence and an issue draft instead, and say which.
+4. P3-2: the comment at packages/shared/src/orchestrationV2PendingBackgroundWork.ts:254-255 states the new rule.
+5. P3-3: text only, no new wire field: the description of watching in the thread list and read results and the pull_request.watch guide say that watching is also true for a watch GOAT started by itself, that such a watch does not hold the thread while checks run, and that an agent asked to follow a pull request still calls pull_request.watch. Regenerate the agent surface doc (audit --check exit 0).
+6. The (e) correction (the goat CLI's --json output shows at most five open pull requests per thread): a Limits sentence for #3700; a sentence in docs/user only if a guide describes that output today.
+Then READY under the 00:45:31 rule and item IV. I dispatch lane=all on the final head (K1 merges only on "all" green on its final head) and start ONE fix-delta review.
+CLOSED: storageCleanupShipping.test.ts:180. It passes on this Mac at K1's head (the reviewer RAN it, 11 of 11) and in goat-ci on Linux (K4's server run contains 259883c788 and failed only on K4's own file; shards 1 to 3 green; INFERRED from the job results, the passing file is not named in the log). It fails on pen-lidge under git 2.43.0 with another reason sentence, the worktrees still kept. It is the host's git, not K1 and not the integration head; an issue draft is mine. K1 names it in its gate report as the one known host failure and nothing else.
+
+IV. STANDING RULE, every lane, from now: before READY, every apps/server test file the lane added or changed is run once from apps/server with GOAT_TEST_TMP_GUARD=fail (CI sets it, check:changed does not), and the READY report says so. The ps check in its own step first, as before.
+
+## Coordinator, 2026-11-18 01:17:54 UTC (II, V) and 01:20:03 UTC, verbatim
+
+II. RULE 3, standing rule extended (beside the 00:35:17 rule), every lane: a VALUE import added to an existing import line of an existing test file needs no word from me when only appended cases or appended helpers use the new names and no existing title, body, setup value or expectation changes. The lane quotes the line before and after in its record; the fresh review lists it. An import that changes what an existing case runs against (a different module, a fake in place of a real service) still comes to me.
+V. The stash incident: closed, noted. "No git stash in any lane" stands as a rule; a lane that needs to set work aside commits it on its own branch locally.
+01:20:03: RULE 3, the 01:17 rule II covers a NEW import statement on the same terms as a name added to an existing line: only appended cases or appended helpers use what it imports, it imports a real module (no fake, no mock, no replacement of something an existing case reads), the import has no effect at load time that an existing case could see (no vi.mock beside it, no module that registers or patches something when loaded), and no existing title, body, setup value or expectation changes. The lane quotes the added statements in its record; the fresh review lists them. Whether the name sits on an existing line or a new one makes no difference.
+
+Time correction (lane coordinator, 01:17 UTC): the "02:00 UTC" no-stash rule quoted above in this record was really sent between about 00:55 and 01:16 UTC, per the thread log; the content stands.
+
+## Fix round on dddbf74933
+
+- 40f3d3917663e4e86109600ca5cb0b047c93e979 fix(server) P2-1. The re-watch case (PullRequestWatchWakes.test.ts, my lane's own case, not on dev) gains a held tail ("Also kept as context without waking you: #7: 1 comment from bob") on the closed row and a third row, unreadable, built the same way; both failed first (iteration run with -t: 2 failed). resumedWakeText keeps the tail and adds the watching closing line, undefined only without a tail; the tail prefix is one constant shared with withHeldContext. File 983 lines (under 1000). Whole before the commit: PullRequestWatch*, pullRequestWatch*, TurnDigest, Orchestrator.noticeDigest, src/remoteReports, runtimeLayer.test.ts: 559/559 in 36 files (package goat).
+- e0f087c830d10d52893960e99b59ef601394ca49 test(server) P2-2. New case "a merge recorded during one pull request's read leaves the other's wake to go alone" (PullRequestWatchBatch.test.ts): #22's merge is recorded during #22's read (thread.pull-request-link.sync, merged snapshot; the link keeps its watch, so only the mute check can refuse it). Passes on the code (5/5 in the file). Mutation runs, guard at goat/PullRequestWatchSync.ts:126-130, each reverted by copying the saved file back (diff empty after): M6 entries.slice(0, 1).some(...): the new case fails (1 failed | 4 passed); M6b the mute check only for index 0: the new case fails (1 failed | 4 passed). The existing "a watch that ends during the read" case did not catch M6 because an unwatched entry has no stored watch and the loop skips it.
+- P3-1, before its commit. Failing first: new case "a fork whose approval lookup always fails reports a check that starts failing after the baseline" (pullRequestWatch.baseline.test.ts): read 1 [placeholder only] then the same head with a failing check: expected checks-failed, got [] on the parent (1 failed | 12 passed). The same case pins THE WAY OUT: a check already failing at the first read is recorded then and stays silent on the next read; so the change is TAKEN (no Limits sentence, no issue draft). Code: approvalBaseline (a kept baseline, head not moved) for approval announcements and for keeping "checks"; checksBaseline = approvalBaseline and (awaitingBaseline "all" or no head known yet), so a "checks" baseline kept after a read that showed a head no longer swallows check results. No new stored value (awaitingBaseline still "all" | "checks"). Fork delta: a sentence added to pr-watch-wakes.
+  Rule 3 (authorised 01:14:39), pullRequestWatch.baseline.test.ts, the port of upstream's case. BEFORE:
+```
+  it("keeps the check baseline through a read whose approval lookup failed", () => {
+    const bot = check("bot", "success");
+    const unavailable = { ...check("Workflow approval status", "pending"), placeholder: true };
+    const partial = evaluate(
+      watch({ awaitingBaseline: "all" }),
+      detail({ checks: [bot, unavailable] }),
+      noRemarks,
+    );
+    assert.deepEqual(partial.changes, []);
+    assert.equal(partial.next.awaitingBaseline, "checks");
+    const approval = { ...check("CI", "action-required"), url: run(1) };
+    for (const checks of [[bot], [bot, approval]]) {
+      assert.deepEqual(evaluate(partial.next, detail({ checks }), noRemarks).changes, []);
+    }
+  });
+```
+  AFTER (the approval half unchanged: partial still baselines, keeps "checks", and the approval read stays []; the check half: the [bot] read now reports checks-passed, because the read showed a head and checks are known from then on; the title says approval baseline, since the check baseline no longer holds there; the title change is mine and is flagged here for your review):
+```
+  it("keeps the approval baseline through a read whose approval lookup failed", () => {
+    const bot = check("bot", "success");
+    const unavailable = { ...check("Workflow approval status", "pending"), placeholder: true };
+    const partial = evaluate(
+      watch({ awaitingBaseline: "all" }),
+      detail({ checks: [bot, unavailable] }),
+      noRemarks,
+    );
+    assert.deepEqual(partial.changes, []);
+    assert.equal(partial.next.awaitingBaseline, "checks");
+    const approval = { ...check("CI", "action-required"), url: run(1) };
+    // The read showed a head, so the checks are known from here on; only approvals still wait.
+    assert.deepEqual(evaluate(partial.next, detail({ checks: [bot] }), noRemarks).changes, [
+      { kind: "checks-passed", count: 1, required: false },
+    ]);
+    assert.deepEqual(
+      evaluate(partial.next, detail({ checks: [bot, approval] }), noRemarks).changes,
+      [],
+    );
+  });
+```
