@@ -426,4 +426,71 @@ describe("secure SSH pairing grants", () => {
   it("does not offer a persistence path on older desktop shells", () => {
     expect(desktopSshPairingGrantStore({} as DesktopBridge)).toBeUndefined();
   });
+
+  it.effect("invalidating a grant keeps the hub and Pen routes of other machines", () =>
+    Effect.gen(function* () {
+      const f = fixture();
+      yield* f.register;
+      const other = "pen-machine";
+      const penId = `pen:mmmmmmmmmmmmmmmmmmmmmmmmmm:nnnnnnnnnnnnnnnnnnnnnnnnnn`;
+      const before = yield* Effect.promise(() => f.bridge.getConnectionCatalog!());
+      const stored = JSON.parse(before!);
+      const extended = JSON.stringify({
+        ...stored,
+        penTargets: [
+          {
+            index: stored.targets.length,
+            value: {
+              _tag: "PenConnectionTarget",
+              environmentId: other,
+              label: "Pen",
+              connectionId: penId,
+            },
+          },
+        ],
+        penProfiles: [
+          {
+            index: stored.profiles.length,
+            value: {
+              _tag: "PenConnectionProfile",
+              environmentId: other,
+              label: "Pen",
+              connectionId: penId,
+              meshId: "mmmmmmmmmmmmmmmmmmmmmmmmmm",
+              nodeId: "nnnnnnnnnnnnnnnnnnnnnnnnnn",
+              noisePub: "kkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkk",
+            },
+          },
+        ],
+        hubProxyTargets: [
+          {
+            index: stored.targets.length,
+            value: {
+              _tag: "HubProxyConnectionTarget",
+              environmentId: "hub-node",
+              label: "Hub",
+              connectionId: "hub:x:n",
+            },
+          },
+        ],
+      });
+      yield* Effect.promise(() => f.bridge.setConnectionCatalog!(extended, before));
+      const grant = f.credential()!.sshPairingGrant!;
+      const loaded = yield* desktopSshPairingGrantStore(f.bridge)!.load(
+        f.connectionId(),
+        f.token(),
+        `${grant.key}-other`,
+      );
+      expect(loaded.grant).toBeUndefined();
+      const after = JSON.parse((yield* Effect.promise(() => f.bridge.getConnectionCatalog!()))!);
+      expect(after.credentials[0].credential.sshPairingGrant).toBeUndefined();
+      expect(
+        after.penTargets?.map(
+          (record: { value: { connectionId: string } }) => record.value.connectionId,
+        ),
+      ).toEqual([penId]);
+      expect(after.penProfiles).toHaveLength(1);
+      expect(after.hubProxyTargets).toHaveLength(1);
+    }),
+  );
 });

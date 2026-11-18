@@ -409,8 +409,35 @@ function mergeExtensions<A>(
   return result.filter((value): value is A => value !== undefined);
 }
 
+const isPenRecord = (item: unknown) =>
+  typeof item === "object" &&
+  item !== null &&
+  "_tag" in item &&
+  typeof item._tag === "string" &&
+  item._tag.startsWith("PenConnection");
+
+// This build stores Pen records only in their own fields. One in the shared lists, from a broken
+// or newer writer, is dropped there: the strict lists would otherwise fail the whole catalog.
+function withoutSharedPenRecords(raw: string): string {
+  let value: unknown;
+  try {
+    value = JSON.parse(raw);
+  } catch {
+    return raw;
+  }
+  if (typeof value !== "object" || value === null || Array.isArray(value)) return raw;
+  const lists = value as { targets?: unknown; profiles?: unknown };
+  const strip = (field: unknown) =>
+    Array.isArray(field) ? field.filter((item) => !isPenRecord(item)) : field;
+  return JSON.stringify({
+    ...lists,
+    targets: strip(lists.targets),
+    profiles: strip(lists.profiles),
+  });
+}
+
 export const decodeConnectionCatalogStorage = (raw: string) =>
-  decodeStorageDocument(raw).pipe(
+  decodeStorageDocument(withoutSharedPenRecords(raw)).pipe(
     Effect.map((stored) => {
       const { hubProxyTargets, hubProxyProfiles, penTargets, penProfiles, ...document } = stored;
       // Hub records are placed among what an older client reads, then Pen records among all.

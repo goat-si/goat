@@ -3,18 +3,18 @@ import {
   ConnectionTransientError,
 } from "@goat/client-runtime/connection";
 import {
-  ConnectionCatalogDocument,
+  decodeConnectionCatalogStorage,
   EMPTY_CONNECTION_CATALOG_DOCUMENT,
+  encodeConnectionCatalogStorage,
 } from "@goat/client-runtime/platform";
 import * as Effect from "effect/Effect";
-import * as Schema from "effect/Schema";
 import type { DesktopBridge } from "@goat/contracts";
 
 import { makeDesktopCatalogBackend } from "./storage";
 
-const json = Schema.fromJsonString(ConnectionCatalogDocument);
-const decode = Schema.decodeUnknownEffect(json);
-const encode = Schema.encodeEffect(json);
+// The catalog's storage codec: a rewrite here must keep the hub and Pen records it carries.
+const decode = decodeConnectionCatalogStorage;
+const encode = encodeConnectionCatalogStorage;
 const storeError = () =>
   new ConnectionTransientError({
     reason: "remote-unavailable",
