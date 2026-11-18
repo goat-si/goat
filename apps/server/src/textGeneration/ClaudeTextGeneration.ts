@@ -180,7 +180,7 @@ export const makeClaudeTextGeneration = Effect.fn("makeClaudeTextGeneration")(fu
   const path = yield* Path.Path;
   const platform = yield* HostProcess.Platform;
   const home = yield* HostProcess.HomeDirectory;
-  const sweepSettings = makeClaudePrivateSettingsSweep(path, yield* HostProcess.UserId);
+  const sweepSettings = yield* makeClaudePrivateSettingsSweep(path, yield* HostProcess.UserId);
   const resolveClaudeEnvironment = (
     Effect.isEffect(environment) ? environment : Effect.succeed(environment)
   ).pipe(
