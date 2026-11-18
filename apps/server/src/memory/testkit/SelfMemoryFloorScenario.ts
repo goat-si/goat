@@ -139,6 +139,10 @@ export const runSelfWideSave = Effect.fn("test.runSelfWideSave")(function* (
       threadId: M.ThreadId.make("synthetic-move-thread"),
     },
   } as const;
+
+  yield* sql`INSERT INTO orchestration_v2_projection_threads
+    (thread_id,project_id,title,default_provider,runtime_mode,interaction_mode,created_at,updated_at,payload_json)
+    VALUES (${scope.thread.threadId},'synthetic-project','Synthetic thread','codex','local','default','1970-01-01','1970-01-01','{}')`;
   const move = yield* service.remember(
     {
       memorySpaceId: space,
@@ -160,6 +164,83 @@ export const runSelfWideSave = Effect.fn("test.runSelfWideSave")(function* (
     { revision: { ...next.revision, scope }, payload: next.payload },
   ]);
   yield* sync.shutdown;
+
+  for (const [index, kind] of (["thread", "project"] as const).entries()) {
+    const source = sources[2 + index];
+    if (!source) throw new Error("Expected a move source");
+    const entered = yield* Deferred.make<void>();
+    const release = yield* Deferred.make<void>();
+    const project = { environmentId: local, projectId: M.ProjectId.make("synthetic-move-project") };
+    const binding = {
+      memorySpaceId: space,
+      project,
+      projectKey: {
+        kind: "explicit" as const,
+        sharedProjectId: "move-old-key",
+      },
+      repositoryKey: null,
+      version: 1,
+    };
+    const toScope =
+      kind === "thread" ? scope : { kind: "project" as const, projectKey: binding.projectKey };
+    if (kind === "project") {
+      yield* sql`INSERT INTO projection_projects(project_id,title,workspace_root,scripts_json,created_at,updated_at)
+        VALUES (${project.projectId},'Synthetic project','/synthetic','[]','1970-01-01','1970-01-01')`;
+      yield* store.putProjectBinding(binding, null, 0);
+    }
+    const input = {
+      memorySpaceId: space,
+      memoryId: source.memoryId,
+      operationId: M.MemoryOperationId.make(id(9040 + index)),
+      expectedHeads: [source.revision.revisionId],
+      expectedScopeVersion: 0,
+      fromScope: source.revision.scope,
+      toScope,
+    };
+    assert.include((yield* service.move(input, Effect.void)).receipt, { pendingSync: true });
+    const held = Hub.MemoryHubService.of({
+      ...hub,
+      push: Effect.fn("TestMemory.holdMoveAdmission")(function* (...args) {
+        if (args[0].operations.some((op) => op.operationId === input.operationId)) {
+          yield* Deferred.succeed(entered, undefined);
+          yield* Deferred.await(release);
+        }
+        return yield* hub.push(...args);
+      }),
+    });
+    const context = yield* Layer.build(
+      Layer.fresh(Sync.layer).pipe(Layer.provide(Layer.succeed(Hub.MemoryHubService, held))),
+    );
+    const heldSync = Context.get(context, Sync.MemorySyncService);
+    const inFlight = yield* Effect.forkScoped(heldSync.syncOnce);
+    yield* Deferred.await(entered);
+    if (kind === "thread")
+      yield* sql`UPDATE orchestration_v2_projection_threads SET deleted_at='deleted' WHERE thread_id=${scope.thread.threadId}`;
+    else yield* store.putProjectBinding({ ...binding, projectKey: null, version: 2 }, 1, 0);
+    yield* Deferred.succeed(release, undefined);
+    yield* Fiber.join(inFlight);
+    assert.deepStrictEqual(
+      (yield* store.loadAggregate(space, source.memoryId)).identity?.scope,
+      source.revision.scope,
+      kind,
+    );
+    assert.isEmpty(
+      yield* sql`SELECT 1 FROM memory_hub_operations WHERE space=${space} AND operation_id=${input.operationId}`,
+    );
+    assert.propertyVal(
+      yield* service.move(input, Effect.void).pipe(Effect.flip),
+      "code",
+      "source_invalidated",
+    );
+    assert.propertyVal(
+      yield* service
+        .move({ ...input, operationId: M.MemoryOperationId.make(id(9050 + index)) }, Effect.void)
+        .pipe(Effect.flip),
+      "code",
+      "not_found",
+    );
+    yield* heldSync.shutdown;
+  }
 
   const draft = {
     ...input,
