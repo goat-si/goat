@@ -696,8 +696,10 @@ export const make = Effect.gen(function* () {
         ...(input?.penMemberNode === undefined ? {} : { penMemberNode: input.penMemberNode }),
         ...(input?.penBinding === undefined ? {} : { penBinding: input.penBinding }),
       } satisfies AuthSessions.CreateAuthSessionInput;
-      const replacedSessionIds = yield* (
-        input?.replaceSessionId !== undefined || input?.replaceActiveForSubjectAndMethod
+      const replacedSessionIds = yield* penFence.issuing(
+        { sessionId, subject, expiresAt },
+        input,
+        (input?.replaceSessionId !== undefined || input?.replaceActiveForSubjectAndMethod
           ? authSessions.createReplacingActive({
               session: sessionRecord,
               revokedAt: issuedAt,
@@ -706,7 +708,8 @@ export const make = Effect.gen(function* () {
                 : {}),
             })
           : authSessions.create(sessionRecord).pipe(Effect.as([] as ReadonlyArray<AuthSessionId>))
-      ).pipe(Effect.mapError((cause) => new SessionCredentialIssueError({ sessionId, cause })));
+        ).pipe(Effect.mapError((cause) => new SessionCredentialIssueError({ sessionId, cause }))),
+      );
       if (replacedSessionIds.length > 0) {
         yield* Ref.update(connectedSessionsRef, (current) => {
           const next = new Map(current);
@@ -727,7 +730,6 @@ export const make = Effect.gen(function* () {
           expiresAt,
         }),
       }));
-      yield* penFence.observeIssued({ sessionId, subject, expiresAt }, input);
       yield* emitUpsert(
         toAuthClientSession({
           sessionId,

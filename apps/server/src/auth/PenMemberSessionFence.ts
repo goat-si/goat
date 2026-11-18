@@ -5,7 +5,7 @@ import * as Option from "effect/Option";
 import * as PubSub from "effect/PubSub";
 import * as Schema from "effect/Schema";
 import * as Semaphore from "effect/Semaphore";
-import type * as AuthSessions from "../persistence/AuthSessions.ts";
+import * as AuthSessions from "../persistence/AuthSessions.ts";
 import type { SessionCredentialChange } from "./SessionStore.ts";
 import {
   InvalidSessionTokenPayloadError,
@@ -25,8 +25,8 @@ type Row = {
   readonly expiresAt?: DateTime.DateTime | undefined;
 };
 
-/** Live member sessions held at once. Past it a new one is refused, never left unfenced. */
-const MAX_TRACKED = 4096;
+/** Past the limit a new member session is refused, never left unfenced. */
+const MAX_TRACKED = AuthSessions.MAX_LIVE_PEN_MEMBER_SESSIONS;
 
 const relevant = (row: Row) => row.penMemberNode !== null || row.subject.startsWith("pen-member:");
 const deniedBy = (row: Row, admitted: PenAdmission) =>
@@ -50,7 +50,13 @@ export const make = Effect.fn("PenMemberSessionFence.make")(function* (
 ) {
   const maxTracked = options?.maxTracked ?? MAX_TRACKED;
   const lock = yield* Semaphore.make(1);
-  const rows = new Map(initial.filter(relevant).map((row) => [row.sessionId, row]));
+  // Rows past the limit stay untracked, and an untracked member session is denied.
+  const rows = new Map(
+    initial
+      .filter(relevant)
+      .slice(0, maxTracked)
+      .map((row) => [row.sessionId, row]),
+  );
   let read: Effect.Effect<PenAdmission> = Effect.succeed("closed");
   let published: PenAdmission = "closed";
   const prune = Effect.fn("PenMemberSessionFence.prune")(function* () {
@@ -91,6 +97,7 @@ export const make = Effect.fn("PenMemberSessionFence.make")(function* (
     if (yield* deniedRow(row))
       return yield* new UnknownSessionTokenError({ sessionId: row.sessionId });
   });
+  const forget = (id: AuthSessionId) => lock.withPermit(Effect.sync(() => void rows.delete(id)));
   /** Publishes which sessions the newest admission opened or closed. */
   const publish = lock.withPermit(
     Effect.gen(function* () {
@@ -121,19 +128,33 @@ export const make = Effect.fn("PenMemberSessionFence.make")(function* (
       Effect.sync(() => {
         read = next;
       }).pipe(Effect.andThen(around(publish))),
-    forget: (id: AuthSessionId) => lock.withPermit(Effect.sync(() => void rows.delete(id))),
+    forget,
     /** The rows a session listing may show. */
     visible: <A extends Row>(listed: ReadonlyArray<A>) =>
       Effect.filter(listed, (row) => Effect.map(deniedRow(row), (no) => !no)),
-    /** Tracks a session just issued under `subject`. */
-    observeIssued: (
+    /**
+     * Runs `write`, which stores a session issued under `subject`, with the session tracked
+     * first: a member session there is no room for is refused before it exists, and a failed
+     * write gives its place back.
+     */
+    issuing: <A, E, R>(
       issued: {
         readonly sessionId: AuthSessionId;
         readonly subject: string;
         readonly expiresAt: DateTime.DateTime;
       },
       input: { readonly penMemberNode?: string } | undefined,
-    ) => observe({ ...issued, penMemberNode: input?.penMemberNode ?? null }),
+      write: Effect.Effect<A, E, R>,
+    ): Effect.Effect<A, E | SessionCredentialIssueError, R> =>
+      Effect.gen(function* () {
+        const tracked = yield* observe({ ...issued, penMemberNode: input?.penMemberNode ?? null });
+        if (tracked === false)
+          return yield* new SessionCredentialIssueError({
+            sessionId: issued.sessionId,
+            cause: "Too many Pen member sessions",
+          });
+        return yield* write.pipe(Effect.tapError(() => forget(issued.sessionId)));
+      }),
     /** The subject a session is issued under, refusing a malformed or untrackable member one. */
     issueSubject: Effect.fn("PenMemberSessionFence.issueSubject")(function* (
       input: { readonly subject?: string; readonly penMemberNode?: string } | undefined,

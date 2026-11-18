@@ -126,3 +126,44 @@ it.effect("drops expired member sessions, and refuses a new one past the limit",
     expect(yield* fence.denied(AuthSessionId.make("third"))).toBe(false);
   }),
 );
+
+it.effect(
+  "loads at most the limit at start, and a member session with no place is refused before it is written",
+  () =>
+    Effect.gen(function* () {
+      const node = "a".repeat(26);
+      const row = (name: string) => ({
+        sessionId: AuthSessionId.make(name),
+        subject: `pen-member:${node}`,
+        penMemberNode: node,
+      });
+      const fence = yield* Fence.make(
+        [row("a"), row("b"), row("c")],
+        () => Effect.void,
+        () => Effect.void,
+        {
+          maxTracked: 2,
+        },
+      );
+      yield* fence.follow(Effect.succeed(new Set([node])));
+      expect(fence.tracked()).toBe(2);
+      // Past the limit at start: untracked, so denied.
+      expect(yield* Effect.exit(fence.guard(row("c")))).toMatchObject({ _tag: "Failure" });
+      const now = yield* DateTime.now;
+      const writes: Array<string> = [];
+      const issued = { ...row("d"), expiresAt: DateTime.add(now, { hours: 1 }) };
+      const refused = yield* Effect.exit(
+        fence.issuing(
+          issued,
+          { penMemberNode: node },
+          Effect.sync(() => writes.push("d")),
+        ),
+      );
+      expect(refused._tag).toBe("Failure");
+      expect(writes).toEqual([]);
+      // A failed write gives its place back.
+      yield* fence.forget(AuthSessionId.make("b"));
+      yield* Effect.exit(fence.issuing(issued, { penMemberNode: node }, Effect.fail("disk full")));
+      expect(fence.tracked()).toBe(1);
+    }),
+);

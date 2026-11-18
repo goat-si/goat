@@ -61,6 +61,9 @@ export const AuthSessionRecord = Schema.Struct({
 });
 export type AuthSessionRecord = typeof AuthSessionRecord.Type;
 
+/** Live Pen member sessions one server holds at most; its fence tracks the same number. */
+export const MAX_LIVE_PEN_MEMBER_SESSIONS = 4096;
+
 export const CreateAuthSessionInput = Schema.Struct({
   sessionId: AuthSessionId,
   subject: Schema.String,
@@ -298,13 +301,15 @@ function toPersistenceSqlOrDecodeError(
   correlation?: PersistenceErrorCorrelation,
 ) {
   return (cause: unknown): AuthSessionRepositoryError =>
-    Schema.isSchemaError(cause)
-      ? PersistenceDecodeError.fromSchemaError(decodeOperation, cause, correlation)
-      : new PersistenceSqlError({
-          operation: sqlOperation,
-          ...(correlation === undefined ? {} : { correlation }),
-          cause,
-        });
+    cause instanceof PersistenceSqlError
+      ? cause
+      : Schema.isSchemaError(cause)
+        ? PersistenceDecodeError.fromSchemaError(decodeOperation, cause, correlation)
+        : new PersistenceSqlError({
+            operation: sqlOperation,
+            ...(correlation === undefined ? {} : { correlation }),
+            cause,
+          });
 }
 
 /** @public */
@@ -312,9 +317,17 @@ export const make = Effect.gen(function* () {
   const sql = yield* SqlClient.SqlClient;
   const effectiveRevocation = sql`CASE WHEN pen_member_node IS NOT NULL THEN pen_member_revoked_at ELSE revoked_at END`;
 
+  // A member session is written only while fewer than the limit are live, in the same statement,
+  // so concurrent issuers (the server and the CLI) cannot pass it together.
+  const memberRoom = (input: typeof CreateAuthSessionInput.Encoded) =>
+    input.penMemberNode === undefined
+      ? sql`1`
+      : sql`(SELECT COUNT(*) FROM auth_sessions WHERE pen_member_node IS NOT NULL
+          AND pen_member_revoked_at IS NULL AND expires_at > ${input.issuedAt}) < ${MAX_LIVE_PEN_MEMBER_SESSIONS}`;
   const insertSessionRow = (ignoreExisting: boolean) =>
-    SqlSchema.void({
+    SqlSchema.findAll({
       Request: CreateAuthSessionInput,
+      Result: Schema.Struct({ sessionId: AuthSessionId }),
       execute: (input) =>
         sql`
         INSERT INTO auth_sessions (
@@ -339,7 +352,7 @@ export const make = Effect.gen(function* () {
           pen_noise_pub,
           pen_member_node
         )
-        VALUES (
+        SELECT
           ${input.sessionId},
           ${input.subject},
           ${input.connectAccessGeneration ?? null},
@@ -360,11 +373,25 @@ export const make = Effect.gen(function* () {
           ${input.penBinding?.signPub ?? null},
           ${input.penBinding?.noisePub ?? null},
           ${input.penMemberNode ?? null}
-        )
+        WHERE ${memberRoom(input)}
         ${ignoreExisting ? sql`ON CONFLICT(session_id) DO NOTHING` : sql``}
+        RETURNING session_id AS "sessionId"
       `,
     });
-  const createSessionRow = insertSessionRow(false);
+  const insertCreated = insertSessionRow(false);
+  const createSessionRow = (input: CreateAuthSessionInput) =>
+    insertCreated(input).pipe(
+      Effect.flatMap((rows) =>
+        rows.length > 0
+          ? Effect.void
+          : Effect.fail(
+              new PersistenceSqlError({
+                operation: "AuthSessionRepository.create:penMemberLimit",
+                detail: `At most ${MAX_LIVE_PEN_MEMBER_SESSIONS} Pen member sessions may be live at once.`,
+              }),
+            ),
+      ),
+    );
   const createSessionRowIfAbsent = insertSessionRow(true);
 
   const getSessionRowById = SqlSchema.findOneOption({
@@ -644,6 +671,7 @@ export const make = Effect.gen(function* () {
 
   const createIfAbsent: AuthSessionRepository["Service"]["createIfAbsent"] = (input) =>
     createSessionRowIfAbsent(input).pipe(
+      Effect.asVoid,
       Effect.mapError(
         toPersistenceSqlOrDecodeError(
           "AuthSessionRepository.createIfAbsent:query",

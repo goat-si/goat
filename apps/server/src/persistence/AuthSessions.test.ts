@@ -132,3 +132,44 @@ it.effect("replacement, bulk revocation and Pen cleanup use the effective revoca
     expect(yield* repository.deleteInactivePenBound({ now: revokedAt })).toBe(2);
   }).pipe(Effect.provide(NodeSqliteClient.layer({ filename: ":memory:" }))),
 );
+
+it.effect("a member session past the live limit is never written, whoever issues it", () =>
+  Effect.gen(function* () {
+    yield* runMigrations();
+    const repository = yield* AuthSessions.make;
+    const issuedAt = DateTime.makeUnsafe("2026-01-01T00:00:00.000Z");
+    const expiresAt = DateTime.makeUnsafe("2027-01-01T00:00:00.000Z");
+    const session = (id: string, member: boolean) => ({
+      sessionId: AuthSessionId.make(id),
+      subject: member ? `pen-member:${"a".repeat(26)}` : "browser",
+      ...(member ? { penMemberNode: "a".repeat(26) } : {}),
+      scopes: ["orchestration:read"] as const,
+      method: "bearer-access-token" as const,
+      client: {
+        label: null,
+        ipAddress: null,
+        userAgent: null,
+        deviceType: "bot" as const,
+        os: null,
+        browser: null,
+      },
+      issuedAt,
+      expiresAt,
+      principalKind: "outside_client" as const,
+    });
+    yield* Effect.forEach(
+      Array.from({ length: AuthSessions.MAX_LIVE_PEN_MEMBER_SESSIONS }, (_, index) => `m${index}`),
+      (id) => repository.create(session(id, true)),
+      { discard: true },
+    );
+    const refused = yield* Effect.flip(repository.create(session("over", true)));
+    expect(refused.operation).toBe("AuthSessionRepository.create:penMemberLimit");
+    expect(
+      Option.isNone(yield* repository.getById({ sessionId: AuthSessionId.make("over") })),
+    ).toBe(true);
+    // Other sessions are not counted, and a revoked member session frees its place.
+    yield* repository.create(session("person", false));
+    yield* repository.revoke({ sessionId: AuthSessionId.make("m0"), revokedAt: issuedAt });
+    yield* repository.create(session("over", true));
+  }).pipe(Effect.provide(NodeSqliteClient.layer({ filename: ":memory:" }))),
+);
