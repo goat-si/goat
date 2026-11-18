@@ -154,3 +154,17 @@ it.each([
   const document = await parseMarkdown(markdown, { ...MOBILE_FLAGS, hardSoftBreaks: true });
   expect(inline(document)).toBe(`Plan <a ${href}>${label}</a>.`);
 });
+
+it.each([
+  ["Plan\n $x +\n    y$", "x + y"],
+  ["Plan \\(\n$x +\n    y$", "x + y"],
+  ["Plan\n $x \\(a\\) +\n    y$", "x \\(a\\) + y"],
+])("passes the original multiline TeX to the native math node: %s", async (source, tex) => {
+  const markdown = markdownForNativeRendering(source, ENRICHED_INLINE_FILE_LINK_REGEX, true, true);
+  const flags = { ...MOBILE_FLAGS, hardSoftBreaks: true };
+  const math = (node: NativeNode) =>
+    node.children?.[0]?.children?.find((child) => child.type === "LatexMathInline");
+  const original = math(await parseMarkdown(source, flags));
+  expect(original?.children?.[0]?.content).toBe(tex);
+  expect(math(await parseMarkdown(markdown, flags))).toEqual(original);
+});

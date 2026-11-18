@@ -2,6 +2,7 @@ import type { Root } from "mdast";
 import type { Transformer } from "unified";
 
 import { GITHUB_ALERT_MARKER } from "./markdownGithubAlerts.ts";
+import { nativeMathSpans } from "./markdownCjkEmphasis.ts";
 
 interface MarkdownPoint {
   readonly line: number;
@@ -34,6 +35,7 @@ interface Cursor {
 interface Source {
   readonly text: string;
   readonly lineStarts: readonly number[];
+  readonly nativeMath?: boolean;
   readonly onIndentation?: (indentation: Indentation, content: MarkdownNode) => void;
 }
 
@@ -256,7 +258,15 @@ function restoreParagraph(
 ): void {
   const start = paragraph.position?.start;
   if (start?.offset === undefined || !paragraph.children) return;
-  const typed = (at: number) => typedWhitespace(source, at, start, chain);
+  const end = paragraph.position?.end.offset;
+  const math =
+    source.nativeMath && end !== undefined ? nativeMathSpans(source.text, start.offset, end) : [];
+  const typed = (at: number) => {
+    const entry = typedWhitespace(source, at, start, chain);
+    return entry && !math.some(([from, to]) => entry.offset > from && entry.offset < to)
+      ? entry
+      : undefined;
+  };
   const inserted = new Map<MarkdownNode, Indentation>();
   const indentation = (entry: Indentation) => {
     const node = whitespaceNode(entry.value);
@@ -385,7 +395,11 @@ function positionedSource(text: string): Source | undefined {
   return { text, lineStarts };
 }
 
-export function markdownWithLeadingWhitespace(markdown: string, parse: (text: string) => Root) {
+export function markdownWithLeadingWhitespace(
+  markdown: string,
+  parse: (text: string) => Root,
+  nativeMath = false,
+) {
   const source = positionedSource(markdown);
   if (!source) return markdown;
   const edits = new Map<number, { end: number; text: string }>();
@@ -393,6 +407,7 @@ export function markdownWithLeadingWhitespace(markdown: string, parse: (text: st
   visit(
     {
       ...source,
+      nativeMath,
       onIndentation: ({ offset, value }, content) => {
         const whitespace = value.replaceAll(" ", "&#32;").replaceAll("\t", "&#9;");
         const end = content.position?.end.offset;

@@ -501,11 +501,11 @@ export function markdownForNativeRendering(
   markdown: string,
   fileLink: RegExp,
   preserveLeadingWhitespace = false,
+  mathRenderingEnabled = false,
 ): string {
   const content = transformNativeMarkdown(markdownForNativeParsing(markdown), fileLink, true);
-  return preserveLeadingWhitespace
-    ? markdownWithLeadingWhitespace(content, (text) => parser.parse(text))
-    : content;
+  if (!preserveLeadingWhitespace) return content;
+  return markdownWithLeadingWhitespace(content, (text) => parser.parse(text), mathRenderingEnabled);
 }
 
 /** Native media slots only cover standalone images; nested file embeds must become links. */

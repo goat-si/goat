@@ -111,6 +111,7 @@ export function MobileEnrichedMarkdownText(props: SelectableMarkdownTextProps) {
           props.markdown,
           ENRICHED_INLINE_FILE_LINK_REGEX,
           props.preserveLeadingWhitespace,
+          mathRenderingEnabled,
         ),
         fileHrefs: new Set<string>(),
       };
@@ -125,6 +126,7 @@ export function MobileEnrichedMarkdownText(props: SelectableMarkdownTextProps) {
     props.markdown,
     props.preserveMarkdownSource,
     props.preserveLeadingWhitespace,
+    mathRenderingEnabled,
     fileEmbedLabel,
   ]);
   const [parsedLinkUrls, setParsedLinkUrls] = useState<ReadonlyArray<string>>([]);

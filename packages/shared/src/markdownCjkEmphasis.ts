@@ -51,6 +51,41 @@ function isEscaped(text: string, index: number): boolean {
   return backslashes % 2 === 1;
 }
 
+export function nativeMathSpans(text: string, start: number, end: number) {
+  const delimiters = [...text.slice(start, end).matchAll(/\\[\\$()[\]]|\$+/g)];
+  const lastBracketCloser = new Map<string, number>();
+  for (const match of delimiters) {
+    if (match[0] === "\\)" || match[0] === "\\]") lastBracketCloser.set(match[0], match.index);
+  }
+  const spans: Array<readonly [number, number]> = [];
+  let dollar: { offset: number; delimiter: string } | undefined;
+  let bracket: { offset: number; closer: string } | undefined;
+  for (const match of delimiters) {
+    const delimiter = match[0];
+    const offset = start + match.index;
+    const next = offset + delimiter.length;
+    if (bracket) {
+      if (delimiter === bracket.closer) {
+        spans.push([bracket.offset, next]);
+        bracket = undefined;
+      }
+      continue;
+    }
+    if (delimiter === "\\(" || delimiter === "\\[") {
+      const closer = delimiter === "\\(" ? "\\)" : "\\]";
+      if ((lastBracketCloser.get(closer) ?? -1) > match.index) bracket = { offset, closer };
+    } else if (delimiter === "$" || delimiter === "$$") {
+      if (dollar?.delimiter === delimiter && classify(charAt(text, next)) !== "other") {
+        spans.push([dollar.offset, next]);
+        dollar = undefined;
+      } else if (offset === start || classify(charBefore(text, offset)) !== "other") {
+        dollar = { offset, delimiter };
+      }
+    }
+  }
+  return spans;
+}
+
 /** A superset of the native parser's math spans: any "$" run to the last later run of its length. */
 function dollarSpans(text: string, start: number, end: number): Array<[number, number]> {
   const runs: Array<[number, number]> = [];
