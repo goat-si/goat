@@ -920,4 +920,29 @@ describe("Pen storage compatibility", () => {
           ]);
       }),
   );
+  it.effect.each(["hubProxyTargets", "hubProxyProfiles"] as const)(
+    "a %s field that is not a list keeps the Pen route stored after it",
+    (field) =>
+      Effect.gen(function* () {
+        const stored = {
+          ...legacy,
+          // [Bearer, Hub, Pen] in both lists.
+          hubProxyTargets: [{ index: 1, value: hubTarget }],
+          hubProxyProfiles: [{ index: 1, value: hubProfile }],
+          penTargets: [{ index: 2, value: penTarget }],
+          penProfiles: [{ index: 2, value: penProfile }],
+          [field]: { 1: "not a list" },
+        };
+        const decoded = yield* decodeConnectionCatalogStorage(JSON.stringify(stored));
+        const reloaded = yield* decodeConnectionCatalogStorage(
+          yield* encodeConnectionCatalogStorage(decoded),
+        );
+        for (const document of [decoded, reloaded]) {
+          expect(document.targets.some((value) => value._tag === "PenConnectionTarget")).toBe(true);
+          expect(document.profiles.some((value) => value._tag === "PenConnectionProfile")).toBe(
+            true,
+          );
+        }
+      }),
+  );
 });

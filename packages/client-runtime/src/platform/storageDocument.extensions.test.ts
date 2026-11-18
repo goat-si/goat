@@ -122,6 +122,18 @@ it.effect(
             }
           }
         }
+        // A whole extension field that is not a list: its records are gone, the rest stay.
+        for (const [field, lost] of [
+          ["hubProxyTargets", lostTargets],
+          ["penTargets", lostTargets],
+          ["hubProxyProfiles", lostProfiles],
+          ["penProfiles", lostProfiles],
+        ] as const) {
+          if (random() > 0.05) continue;
+          for (const record of stored[field] ?? []) lost.add(record.connectionId);
+          stored[field] = { broken: true };
+          positionLost = true;
+        }
         // A broken Pen record in place of a shared record: that record is gone, the rest stay.
         for (const [field, lost] of [
           ["targets", lostTargets],

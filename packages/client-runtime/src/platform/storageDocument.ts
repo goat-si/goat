@@ -500,13 +500,24 @@ export const decodeConnectionCatalogStorage = (raw: string) => {
         decodePenProfile(new Set(present(baseProfiles).map((profile) => profile.connectionId))),
         penProfiles,
       );
+      // A hub field that is not a list hides how many slots it held, so no Pen index is too high.
+      const unknownHub = (field: unknown) =>
+        Number.isFinite(extensionSlots(field)) ? 0 : Infinity;
       return pairPenRoutes({
         ...document,
         targets: present(
-          mergeExtensions(baseTargets, targets, extensionSlots(penTargets) - targets.length),
+          mergeExtensions(
+            baseTargets,
+            targets,
+            extensionSlots(penTargets) - targets.length + unknownHub(hubProxyTargets),
+          ),
         ),
         profiles: present(
-          mergeExtensions(baseProfiles, profiles, extensionSlots(penProfiles) - profiles.length),
+          mergeExtensions(
+            baseProfiles,
+            profiles,
+            extensionSlots(penProfiles) - profiles.length + unknownHub(hubProxyProfiles),
+          ),
         ),
       } satisfies ConnectionCatalogDocument);
     }),
