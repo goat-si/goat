@@ -374,10 +374,9 @@ const make = Effect.gen(function* () {
         const path = resolveAttachmentPath({ attachmentsDir, attachment });
         return path === null
           ? Effect.void
-          : Effect.all(
-              [path, `${path}.txt`].map((file) =>
-                fileSystem.remove(file, { force: true }).pipe(Effect.ignore),
-              ),
+          : Effect.forEach(
+              [path, `${path}.txt`],
+              (file) => fileSystem.remove(file, { force: true }).pipe(Effect.ignore),
               { discard: true },
             );
       },
