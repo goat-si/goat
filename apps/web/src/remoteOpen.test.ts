@@ -1,4 +1,5 @@
 import {
+  BearerConnectionTarget,
   PrimaryConnectionTarget,
   RelayConnectionTarget,
   SshConnectionTarget,
@@ -24,6 +25,32 @@ const TAILSCALE_TARGETS = [
 ] as const;
 
 describe("resolveRemoteOpenState", () => {
+  it("allows local Open in for the desktop's shared-home loopback service", () => {
+    const target = new BearerConnectionTarget({
+      environmentId,
+      connectionId: "service",
+      label: "Shared-home service",
+    });
+    const request = {
+      target,
+      sshTarget: null,
+      isDesktopRenderer: true,
+      hostEnvironmentId: environmentId,
+      bearerHttpBaseUrl: "http://127.0.0.1:3773",
+      remoteOpenTargets: TAILSCALE_TARGETS,
+    };
+    expect(resolveRemoteOpenState(request)).toMatchObject({ mode: "local-exec" });
+    expect(resolveRemoteOpenState({ ...request, isDesktopRenderer: false }).mode).toBe(
+      "remote-links",
+    );
+    expect(resolveRemoteOpenState({ ...request, hostEnvironmentId: "other-home" }).mode).toBe(
+      "remote-links",
+    );
+    expect(
+      resolveRemoteOpenState({ ...request, bearerHttpBaseUrl: "https://remote.example" }).mode,
+    ).toBe("remote-links");
+  });
+
   it("keeps exec behavior for a loopback primary target", () => {
     expect(
       resolveRemoteOpenState({

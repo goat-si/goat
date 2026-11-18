@@ -34,13 +34,16 @@ export const makeEnsureFlightFixture = Effect.gen(function* () {
   const pairingEntered = yield* Deferred.make<void>();
   const releasePairing = yield* Deferred.make<void>();
   const count = { acquisitions: 0, uploads: 0, launches: 0, pairings: 0, forwards: 0, kills: 0 };
+  const forwardedPorts: string[] = [];
   const app = { probes: 0, requests: 0 };
   const state = {
     forwardAlive: true,
     pairingFails: false,
     launchFails: false,
+    sharedHomeWait: false,
     holdPairing: false,
     holdUpload: true,
+    configuredPort: uploadTarget.port as number,
     appServer: false,
     pendingReplacement: false,
   };
@@ -49,10 +52,12 @@ export const makeEnsureFlightFixture = Effect.gen(function* () {
       if (command._tag !== "StandardCommand") return yield* Effect.die("Unexpected command");
       if (command.args.includes("-G"))
         return makeSuccessfulProcess(
-          `hostname ${uploadTarget.hostname}\nuser ${uploadTarget.username}\nport ${uploadTarget.port}\n`,
+          `hostname ${uploadTarget.hostname}\nuser ${uploadTarget.username}\nport ${state.configuredPort}\n`,
         );
       if (command.args.includes("-N")) {
         count.forwards++;
+        const port = command.args[command.args.indexOf("-p") + 1];
+        if (port !== undefined) forwardedPorts.push(String(port));
         state.forwardAlive = true;
         return {
           ...makeRunningProcess(() => count.kills++),
@@ -116,6 +121,7 @@ export const makeEnsureFlightFixture = Effect.gen(function* () {
       }
       if (isRemoteLaunch(command.args.map(String))) {
         count.launches++;
+        state.sharedHomeWait = script.includes("\ngoat_wait_shared_home_update\n");
         if (state.launchFails)
           return {
             ...makeSuccessfulProcess(""),
@@ -182,6 +188,7 @@ export const makeEnsureFlightFixture = Effect.gen(function* () {
     app,
     runner,
     count,
+    forwardedPorts,
     state,
     uploadEntered,
     releaseUpload,

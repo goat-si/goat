@@ -541,6 +541,18 @@ export class SessionControl {
     return this.action(() => this.owner === viewerId, run);
   }
 
+  nativeViewer<A>(run: () => Promise<A>) {
+    return this.action(
+      () =>
+        this.owner === null &&
+        this.agentId === null &&
+        !this.hasAgentWork &&
+        this.requested === null &&
+        !this.privateMode,
+      run,
+    );
+  }
+
   /**
    * Merge into only adjacent waiting work with the same key; the running action and
    * intervening actions keep their order. Work sharing a key must share its input type.

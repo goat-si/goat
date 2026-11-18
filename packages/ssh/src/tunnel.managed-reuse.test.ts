@@ -108,7 +108,10 @@ else {
       if (command._tag !== "StandardCommand") return Effect.succeed(makeSuccessfulProcess(""));
       const args = command.args.map(String);
       if (args.includes("-c")) uploads++;
-      const remoteArgs = args.slice(args.indexOf("sh") + 1).filter((arg) => arg !== "-l");
+      const shellAt = args.indexOf("sh");
+      const remoteArgs = args
+        .slice(shellAt + (args[shellAt + 1] === "-ec" ? 5 : 1))
+        .filter((arg) => arg !== "-l");
       const stdin = isRemoteLaunch(args)
         ? Stream.make(encoder.encode(scripts.launch))
         : args.includes("-l")

@@ -1960,9 +1960,9 @@ console.log("goat v" + (count === 0 ? version : "9.9.9"));`,
             return yield* realSpawner.spawn(
               ChildProcess.make(
                 remoteShell,
-                command.args.map(String).includes("-c")
+                args.includes("-c")
                   ? ["-c", [remoteShellCommand, ...args.slice(1)].join(" ")]
-                  : args.slice(1).filter((arg) => arg !== "-l"),
+                  : args.slice(args[1] === "-ec" ? 5 : 1).filter((arg) => arg !== "-l"),
                 {
                   env: {
                     HOME: f.home,

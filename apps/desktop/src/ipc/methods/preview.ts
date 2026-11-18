@@ -4,6 +4,7 @@ import {
   DesktopPreviewAnnotationSendEnabledInputSchema,
   DesktopPreviewAnnotationThemeInputSchema,
   DesktopPreviewArtifactInputSchema,
+  DesktopPreviewFindInput,
   DesktopPreviewConfigInputSchema,
   DesktopPreviewNavigateInputSchema,
   DesktopPreviewRecordingArtifactSchema,
@@ -174,6 +175,17 @@ const stopLoading = tabMethod(
   IpcChannels.PREVIEW_STOP_LOADING_CHANNEL,
   "desktop.ipc.preview.stopLoading",
   (manager, tabId) => manager.stopLoading(tabId),
+);
+const findInPage = DesktopIpc.makeIpcMethod({
+  channel: IpcChannels.PREVIEW_FIND_CHANNEL,
+  payload: DesktopPreviewFindInput,
+  result: Schema.Void,
+  handler: (input) => PreviewManager.PreviewManager.use((manager) => manager.findInPage(input)),
+});
+const stopFindInPage = tabMethod(
+  IpcChannels.PREVIEW_STOP_FIND_CHANNEL,
+  "desktop.ipc.preview.stopFindInPage",
+  (manager, tabId) => manager.stopFindInPage(tabId),
 );
 const zoomIn = tabMethod(
   IpcChannels.PREVIEW_ZOOM_IN_CHANNEL,
@@ -510,6 +522,8 @@ export const methods = [
   goForward,
   refresh,
   stopLoading,
+  findInPage,
+  stopFindInPage,
   zoomIn,
   zoomOut,
   resetZoom,
