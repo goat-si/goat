@@ -1,3 +1,5 @@
+import * as Fiber from "effect/Fiber";
+import * as TestClock from "effect/testing/TestClock";
 import type { PendingOrchestrationEffectV2 } from "./EffectOutbox.ts";
 import * as ThreadCommandExecutor from "./ThreadCommandExecutor.ts";
 import { rootAppThread } from "./RunExecutionService.compactCases.ts";
@@ -1229,6 +1231,42 @@ it.effect("drains queued child output after the root loses provider-thread owner
       },
     );
     assert.deepEqual(childEvents, ["running", "GRANDCHILD_OK", "completed"]);
+  }),
+);
+
+it.effect("expires a stale child work snapshot after root ownership is lost", () =>
+  Effect.gen(function* () {
+    const consumed = yield* Deferred.make<void>();
+    const snapshot = (
+      id: ProviderThreadId,
+      appThreadId: ThreadId,
+      pendingBackgroundWork: boolean,
+    ) => ({
+      type: "provider_thread.updated" as const,
+      driver,
+      providerThread: { id, appThreadId, status: "idle" } as OrchestrationV2ProviderThread,
+      pendingBackgroundWork,
+    });
+    const scenario = yield* runBackgroundItemScenario(
+      "stale-child-snapshot",
+      (ids) => [
+        childThreadCreatedEvent(ids),
+        snapshot(ProviderThreadId.make("provider-thread:stale-child"), ids.childThreadId, true),
+        rootTerminalEvent(ids, "completed"),
+        snapshot(ids.providerThreadId, ids.threadId, false),
+      ],
+      {
+        keepEventStreamOpen: true,
+        providerThreadOwnerLost: true,
+        onEventsConsumed: Deferred.succeed(consumed, undefined).pipe(Effect.asVoid),
+        closeDeadline: "10 seconds",
+      },
+    ).pipe(Effect.forkChild);
+    yield* Deferred.await(consumed);
+    yield* TestClock.adjust("4 seconds");
+    assert.isUndefined(scenario.pollUnsafe(), "give pending native output time to arrive");
+    yield* TestClock.adjust("6 seconds");
+    yield* Fiber.join(scenario);
   }),
 );
 
@@ -2952,6 +2990,7 @@ function runBackgroundItemScenario(
   makeEvents: (ids: BackgroundScenarioIds) => ReadonlyArray<ProviderAdapter.ProviderAdapterV2Event>,
   options?: {
     readonly keepEventStreamOpen?: boolean;
+    readonly closeDeadline?: string;
     readonly hasPendingBackgroundWorkForThread?: (
       providerThread: OrchestrationV2ProviderThread,
     ) => Effect.Effect<boolean>;
@@ -3112,7 +3151,9 @@ function runBackgroundItemScenario(
       });
     }).pipe(Effect.provide(layerTest));
 
-    const closed = yield* Deferred.await(ingestionDone).pipe(Effect.timeoutOption("2 seconds"));
+    const closed = yield* Deferred.await(ingestionDone).pipe(
+      Effect.timeoutOption(options?.closeDeadline ?? "2 seconds"),
+    );
     assert.isTrue(Option.isSome(closed), "event ingestion fiber did not finish");
     return yield* Ref.get(observed);
   });

@@ -32,7 +32,11 @@ export { runMemoryPrepareInput };
 import * as RemoteReportInbox from "../remoteReports/RemoteReportInbox.ts";
 import { turnText } from "./TurnDigest.ts";
 import { makeAssistantStreamingFilter } from "./assistantStreaming.ts";
-import { makeAssistantIdleWake, makePendingSnapshotHold } from "./assistantIdleWake.ts";
+import {
+  makeAssistantIdleWake,
+  makePendingSnapshotHold,
+  PENDING_SNAPSHOT_RECHECK_MS,
+} from "./assistantIdleWake.ts";
 import * as SessionReceiptHold from "./goat/SessionReceiptHold.ts";
 import { resolveProjectSettings } from "@goat/shared/projectSettings";
 import {
@@ -113,6 +117,8 @@ function isSettledSubagentStatus(status: OrchestrationV2Subagent["status"]): boo
 }
 
 /** A provider-native subagent's turns arrive on its parent's run, but the parent agent started them. */
+const MAX_PENDING_CHILD_SNAPSHOTS = 256;
+
 const NATIVE_SUBAGENT_TURN_ORIGIN: ProviderEventIngestor.ProviderTurnOrigin = {
   createdBy: "agent",
   creationSource: "provider",
@@ -1051,7 +1057,7 @@ export const layer: Layer.Layer<
         });
         // The last stored root snapshot's pendingBackgroundWork; adapters that omit it leave it false.
         let rootSnapshotPendingWork = false;
-        const childSnapshotPendingWork = new Set<ProviderThreadId>();
+        const childSnapshotDeadlines = new Map<ProviderThreadId, number>();
         const pendingSnapshotHold = makePendingSnapshotHold((at) => idleWake.schedule(at));
         const shouldStopProviderEventIngestion = Effect.gen(function* () {
           if (!(yield* agentTurnsSettled)) {
@@ -1070,8 +1076,19 @@ export const layer: Layer.Layer<
           // while these sets are non-empty: turn_item.updated writes are not ownership-gated, so
           // late completions still land.
           const backgroundItems = yield* Ref.get(activeBackgroundTurnItems);
-          if (backgroundItems.size > 0 || childSnapshotPendingWork.size > 0) {
-            return false;
+          if (backgroundItems.size > 0) return false;
+          if (childSnapshotDeadlines.size > 0) {
+            if (pendingSnapshotHold.hasUnprocessedEvents()) return false;
+            const now = DateTime.toEpochMillis(yield* DateTime.now);
+            let deadline = now;
+            for (const [id, expiresAt] of childSnapshotDeadlines) {
+              if (expiresAt <= now) childSnapshotDeadlines.delete(id);
+              else deadline = Math.max(deadline, expiresAt);
+            }
+            if (deadline > now) {
+              yield* idleWake.schedule(deadline);
+              return false;
+            }
           }
           if (yield* Ref.get(providerThreadOwnerLost)) {
             return true;
@@ -1183,8 +1200,8 @@ export const layer: Layer.Layer<
                 pendingBackgroundProviderTurns.delete(id);
               }
             }
-            for (const id of childSnapshotPendingWork) {
-              if (!routing.ownedProviderThreadIds.has(id)) childSnapshotPendingWork.delete(id);
+            for (const id of childSnapshotDeadlines.keys()) {
+              if (!routing.ownedProviderThreadIds.has(id)) childSnapshotDeadlines.delete(id);
             }
             yield* Ref.update(
               activeBackgroundTurnItems,
@@ -1348,10 +1365,18 @@ export const layer: Layer.Layer<
               yield* Ref.set(latestProviderThread, event.providerThread);
               rootSnapshotPendingWork = event.pendingBackgroundWork === true;
             } else if (event.providerThread.id !== input.providerThread.id) {
-              if (event.pendingBackgroundWork === true)
-                childSnapshotPendingWork.add(event.providerThread.id);
-              else if (event.pendingBackgroundWork === false)
-                childSnapshotPendingWork.delete(event.providerThread.id);
+              if (event.pendingBackgroundWork === true) {
+                const id = event.providerThread.id;
+                childSnapshotDeadlines.delete(id);
+                const now = DateTime.toEpochMillis(yield* DateTime.now);
+                childSnapshotDeadlines.set(id, now + PENDING_SNAPSHOT_RECHECK_MS);
+                if (childSnapshotDeadlines.size > MAX_PENDING_CHILD_SNAPSHOTS) {
+                  const oldest = childSnapshotDeadlines.keys().next();
+                  if (!oldest.done) childSnapshotDeadlines.delete(oldest.value);
+                }
+              } else if (event.pendingBackgroundWork === false) {
+                childSnapshotDeadlines.delete(event.providerThread.id);
+              }
             }
           }
           if (
