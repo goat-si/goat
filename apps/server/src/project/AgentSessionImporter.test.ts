@@ -3,6 +3,7 @@ import {
   AgentSessionImportSource,
   type AgentSessionSource,
   EventId,
+  MessageId,
   ProjectId,
   ProviderDriverKind,
   ProviderInstanceId,
@@ -11,6 +12,7 @@ import {
   type OrchestrationV2AppThread,
   type OrchestrationV2ProviderThread,
 } from "@goat/contracts";
+import * as ProviderAdapter from "@goat/provider-core/server/ProviderAdapter";
 import * as IdAllocator from "@goat/provider-core/server/IdAllocator";
 import * as Context from "effect/Context";
 import * as DateTime from "effect/DateTime";
@@ -33,6 +35,8 @@ import {
 } from "../orchestration-v2/testkit/fixtures/shared.ts";
 import * as ProviderSessionRuntime from "../persistence/ProviderSessionRuntime.ts";
 import * as SqlitePersistence from "../persistence/Sqlite.ts";
+import * as ProviderAdapterRegistry from "../orchestration-v2/ProviderAdapterRegistry.ts";
+import * as ThreadCommandExecutor from "../orchestration-v2/ThreadCommandExecutor.ts";
 import * as AgentSessionImporter from "./AgentSessionImporter.ts";
 import * as AgentSessionScanner from "./AgentSessionScanner.ts";
 import * as ProjectService from "./ProjectService.ts";
@@ -106,13 +110,13 @@ function importId(source: ReturnType<typeof candidate>) {
 const seedOwner = Effect.fn(function* (
   source: ReturnType<typeof candidate>,
   lifecycle: "active" | "archived" | "deleted" = "active",
+  driver = ProviderDriverKind.make(source.source.provider),
 ) {
   const sink = yield* EventSink.EventSinkV2;
   const ids = yield* IdAllocator.IdAllocatorV2;
-  const { providerInstanceId, providerSessionId, provider } = source.source;
+  const { providerInstanceId, providerSessionId } = source.source;
   const nativeThreadId = nativeId(source);
   const threadId = ThreadId.make(`owner:${providerInstanceId}:${providerSessionId}`);
-  const driver = ProviderDriverKind.make(provider);
   const providerThread: OrchestrationV2ProviderThread = {
     id: ids.derive.providerThread({ driver, nativeThreadId }),
     driver,
@@ -177,6 +181,7 @@ const seedOwner = Effect.fn(function* (
 const makeImporter = Effect.fn(function* (
   candidates: ReadonlyArray<ReturnType<typeof candidate>>,
   beforeTransaction: Effect.Effect<void> = Effect.void,
+  getAdapter?: ProviderAdapterRegistry.ProviderAdapterRegistryV2Shape["get"],
 ) {
   const sql = yield* SqlClient.SqlClient;
   const events = yield* EventStore.EventStoreV2;
@@ -211,6 +216,10 @@ const makeImporter = Effect.fn(function* (
     AgentSessionImporter.layer.pipe(
       Layer.provide(
         Layer.mergeAll(
+          Layer.mock(ProviderAdapterRegistry.ProviderAdapterRegistryV2)(
+            getAdapter ? { get: getAdapter } : {},
+          ),
+          ThreadCommandExecutor.layer,
           sinkLayer,
           Layer.succeed(IdAllocator.IdAllocatorV2, yield* IdAllocator.IdAllocatorV2),
           Layer.succeed(
@@ -248,7 +257,11 @@ const makeImporter = Effect.fn(function* (
     ),
   );
   const importer = Context.get(context, AgentSessionImporter.AgentSessionImporter);
-  return { run: importer.importRecentAgentThreads({ projectId, includePi: true }), published };
+  return {
+    run: importer.importRecentAgentThreads({ projectId, includePi: true }),
+    published,
+    importer,
+  };
 });
 
 it.effect(
@@ -468,5 +481,89 @@ it.effect("does not record a changed transcript as imported without its new mess
       recordsChangedTranscript: recorded?.some((source) => source.size === 200) ?? false,
       showsNewMessages: texts.includes("Continued"),
     }).not.toEqual({ recordsChangedTranscript: true, showsNewMessages: false });
+  }).pipe(Effect.scoped, Effect.provide(persistence)),
+);
+
+it.effect("imports ACP text and reasoning once after a failed history read", () =>
+  Effect.gen(function* () {
+    const projections = yield* ProjectionStore.ProjectionStoreV2;
+    const source = candidate(
+      { instanceId: ProviderInstanceId.make("acp-fixture"), model: "default" },
+      "native-history",
+    );
+    const threadId = yield* seedOwner(source, "active", ProviderDriverKind.make("acpRegistry"));
+    let failed = false;
+    const thoughtId = MessageId.make("thought");
+    const adapter = {
+      openSession: () =>
+        Effect.succeed({
+          readThreadSnapshot: ({
+            providerThread,
+          }: {
+            providerThread: OrchestrationV2ProviderThread;
+          }) =>
+            Effect.suspend(() => {
+              if (!failed) {
+                failed = true;
+                return Effect.fail(
+                  new ProviderAdapter.ProviderAdapterReadThreadSnapshotError({
+                    driver: ProviderDriverKind.make("acpRegistry"),
+                    providerThreadId: providerThread.id,
+                    cause: "native read failed",
+                  }),
+                );
+              }
+              return Effect.succeed({
+                providerThread,
+                providerTurns: [],
+                runtimeRequests: [],
+                reasoningMessageIds: [thoughtId],
+                messages: [
+                  {
+                    id: MessageId.make("prompt"),
+                    role: "user",
+                    text: "Earlier question",
+                    createdAt: now,
+                  },
+                  { id: thoughtId, role: "assistant", text: "Earlier reasoning", createdAt: now },
+                  {
+                    id: MessageId.make("answer"),
+                    role: "assistant",
+                    text: "Earlier answer",
+                    createdAt: now,
+                  },
+                ],
+              });
+            }),
+        }),
+    } as unknown as ProviderAdapter.ProviderAdapterV2["Service"];
+    const { importer } = yield* makeImporter([], Effect.void, () => Effect.succeed(adapter));
+    const read = importer.importNativeHistory({
+      threadId,
+      projectId,
+      workspaceRoot: "/workspace/project",
+    });
+    expect((yield* Effect.flip(read))._tag).toBe("ProviderAdapterReadThreadSnapshotError");
+    expect((yield* projections.getThreadRecords(threadId, ["messages"])).messages).toEqual([]);
+    expect(yield* read).toBe(true);
+    expect(yield* read).toBe(false);
+
+    const stored = yield* projections.getThreadRecords(threadId, ["messages", "runs"]);
+    expect(stored.thread.historyOrigin).toBe("v1_import");
+    expect(stored.runs).toEqual([]);
+    expect(stored.messages.map((message) => message.text)).toEqual([
+      "Earlier question",
+      "Earlier answer",
+    ]);
+    const page = yield* projections.getTimelinePage(threadId, { view: "activity", limit: 10 });
+    expect(page.items).toContainEqual(
+      expect.objectContaining({
+        item: expect.objectContaining({
+          type: "reasoning",
+          text: "Earlier reasoning",
+          runId: null,
+        }),
+      }),
+    );
   }).pipe(Effect.scoped, Effect.provide(persistence)),
 );

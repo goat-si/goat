@@ -13,6 +13,7 @@ import * as TestClock from "effect/testing/TestClock";
 import * as ThreadLaunchService from "../orchestration-v2/ThreadLaunchService.ts";
 import * as ThreadManagementService from "../orchestration-v2/ThreadManagementService.ts";
 import * as ProjectService from "../project/ProjectService.ts";
+import * as AgentSessionImporter from "../project/AgentSessionImporter.ts";
 import * as ServerRuntimeStartup from "../serverRuntimeStartup.ts";
 import * as ProviderInstanceRegistry from "./ProviderInstanceRegistry.ts";
 import * as ProviderRegistry from "./ProviderRegistry.ts";
@@ -26,6 +27,7 @@ it.effect("preserves incomplete listings, imports once, and protects imported se
       "thread:provider:acpRegistry:provider-instance:acp-fixture:native-thread:native-1",
     );
     const imported = yield* Ref.make<ThreadId | null>(null);
+    const copiedHistory = yield* Ref.make(false);
     const deleted = yield* Ref.make<ReadonlyArray<string>>([]);
     const launches = yield* Ref.make<ReadonlyArray<ThreadLaunchService.ThreadLaunchInput>>([]);
     const mutationActive = yield* Ref.make(false);
@@ -89,7 +91,21 @@ it.effect("preserves incomplete listings, imports once, and protects imported se
       Layer.mock(ProviderRegistry.ProviderRegistry)({ getProviders: Effect.succeed([]) }),
       Layer.mock(ThreadManagementService.ThreadManagementService)({
         getThreadShell: (id) =>
-          Ref.get(imported).pipe(Effect.map((current) => (current === id ? ({} as never) : null))),
+          Effect.all([Ref.get(imported), Ref.get(copiedHistory)]).pipe(
+            Effect.map(([current, copied]) =>
+              current === id
+                ? ({
+                    projectId,
+                    latestRunId: null,
+                    historyOrigin: copied ? "v1_import" : undefined,
+                  } as never)
+                : null,
+            ),
+          ),
+      }),
+      Layer.mock(AgentSessionImporter.AgentSessionImporter)({
+        importNativeHistory: () =>
+          requireMutation.pipe(Effect.andThen(Ref.set(copiedHistory, true)), Effect.as(true)),
       }),
       Layer.mock(ThreadLaunchService.ThreadLaunchService)({
         launch: (input) =>
@@ -119,6 +135,7 @@ it.effect("preserves incomplete listings, imports once, and protects imported se
       expect(initial.sessions[0]).toMatchObject({ sessionId: "native-1", importedThreadId: null });
       const first = yield* service.import({ instanceId, projectId, sessionId: "native-1" });
       expect(first).toEqual({ threadId: expectedThreadId, imported: true });
+      expect(yield* Ref.get(copiedHistory)).toBe(true);
       const second = yield* service.import({ instanceId, projectId, sessionId: "native-1" });
       expect(second).toEqual({ threadId: expectedThreadId, imported: false });
       expect(yield* Ref.get(launches)).toHaveLength(1);
@@ -144,6 +161,19 @@ it.effect("preserves incomplete listings, imports once, and protects imported se
       expect(yield* Ref.get(deleted)).toEqual(["native-2"]);
       expect(yield* Ref.get(mutations)).toBe(4);
       expect(yield* Ref.get(mutationActive)).toBe(false);
+
+      yield* Ref.set(copiedHistory, false);
+      const pending = yield* service.list({ instanceId, projectId });
+      expect(pending.sessions[0]).toMatchObject({
+        importedThreadId: expectedThreadId,
+        nativeHistoryPending: true,
+      });
+      expect(yield* service.import({ instanceId, projectId, sessionId: "native-1" })).toEqual({
+        threadId: expectedThreadId,
+        imported: true,
+      });
+      expect(yield* Ref.get(copiedHistory)).toBe(true);
+      expect(yield* Ref.get(launches)).toHaveLength(1);
     }).pipe(Effect.provide(AcpSessionService.layer.pipe(Layer.provide(dependencies))));
   }),
 );
@@ -221,6 +251,9 @@ const provideHeldSessions = (
         Layer.mock(ProviderRegistry.ProviderRegistry)({ getProviders: Effect.succeed([]) }),
         Layer.mock(ThreadManagementService.ThreadManagementService)({
           getThreadShell: () => Effect.succeed(null),
+        }),
+        Layer.mock(AgentSessionImporter.AgentSessionImporter)({
+          importNativeHistory: () => Effect.die("unused history read"),
         }),
         Layer.mock(ThreadLaunchService.ThreadLaunchService)({
           launch: () => Effect.die("unused launch"),

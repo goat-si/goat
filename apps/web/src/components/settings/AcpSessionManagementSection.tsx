@@ -259,7 +259,7 @@ function InstanceSessionManagement(
       setSessions((current) =>
         current.map((candidate) =>
           candidate.sessionId === session.sessionId
-            ? { ...candidate, importedThreadId: result.value.threadId }
+            ? { ...candidate, importedThreadId: result.value.threadId, nativeHistoryPending: false }
             : candidate,
         ),
       );
@@ -517,16 +517,19 @@ function InstanceSessionManagement(
                         disabled={
                           !canOperate ||
                           !canImport ||
-                          session.importedThreadId !== null ||
+                          (session.importedThreadId !== null &&
+                            session.nativeHistoryPending !== true) ||
                           importingSessionId !== null
                         }
                         onClick={() => void importNativeSession(session)}
                       >
-                        {session.importedThreadId !== null
-                          ? "Imported"
-                          : importingSessionId === session.sessionId
-                            ? "Importing"
-                            : "Import"}
+                        {importingSessionId === session.sessionId
+                          ? "Importing"
+                          : session.nativeHistoryPending
+                            ? "Import history"
+                            : session.importedThreadId === null
+                              ? "Import"
+                              : "Imported"}
                       </Button>
                       {canDelete ? (
                         <Button

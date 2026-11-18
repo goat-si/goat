@@ -149,6 +149,7 @@ export const AcpRegistrySession = Schema.Struct({
   title: Schema.NullOr(Schema.String.check(Schema.isMaxLength(1_024))),
   updatedAt: Schema.NullOr(Schema.String.check(Schema.isMaxLength(128))),
   importedThreadId: Schema.NullOr(ThreadId),
+  nativeHistoryPending: Schema.optionalKey(Schema.Boolean),
 });
 export type AcpRegistrySession = typeof AcpRegistrySession.Type;
 

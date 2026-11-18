@@ -21,6 +21,7 @@ import * as Result from "effect/Result";
 import * as ThreadManagementService from "../orchestration-v2/ThreadManagementService.ts";
 import * as ThreadLaunchService from "../orchestration-v2/ThreadLaunchService.ts";
 import * as ProjectService from "../project/ProjectService.ts";
+import * as AgentSessionImporter from "../project/AgentSessionImporter.ts";
 import * as ServerRuntimeStartup from "../serverRuntimeStartup.ts";
 import * as ProviderInstanceRegistry from "./ProviderInstanceRegistry.ts";
 import * as ProviderRegistry from "./ProviderRegistry.ts";
@@ -51,6 +52,7 @@ const make = Effect.gen(function* () {
   const providerRegistry = yield* ProviderRegistry.ProviderRegistry;
   const threadManagement = yield* ThreadManagementService.ThreadManagementService;
   const threadLaunch = yield* ThreadLaunchService.ThreadLaunchService;
+  const historyImporter = yield* AgentSessionImporter.AgentSessionImporter;
   const acpRegistryRuntimeCoordinator =
     yield* AcpRegistryRuntimeCoordinator.AcpRegistryRuntimeCoordinator;
   const startup = yield* ServerRuntimeStartup.ServerRuntimeStartup;
@@ -117,10 +119,11 @@ const make = Effect.gen(function* () {
   const annotateSessions = (
     instanceDriver: ProviderDriverKind,
     instanceId: ProviderInstanceId,
-    sessions: ContinuationPage["sessions"],
+    projectId: ProjectId,
+    page: ContinuationPage,
   ) =>
     Effect.forEach(
-      sessions,
+      page.sessions,
       (session) => {
         const threadId = importedAcpThreadId({
           driver: instanceDriver,
@@ -131,6 +134,15 @@ const make = Effect.gen(function* () {
           Effect.map((thread) => ({
             ...session,
             importedThreadId: thread === null ? null : threadId,
+            ...(page.canLoad &&
+            thread !== null &&
+            thread.projectId === projectId &&
+            AgentSessionImporter.isNativeHistoryPending({
+              historyOrigin: thread.historyOrigin,
+              hasRun: thread.latestRunId !== null,
+            })
+              ? { nativeHistoryPending: true }
+              : {}),
           })),
           Effect.mapError(
             (cause) =>
@@ -148,9 +160,10 @@ const make = Effect.gen(function* () {
   const finishList = (
     instanceDriver: ProviderDriverKind,
     instanceId: ProviderInstanceId,
+    projectId: ProjectId,
     page: ContinuationPage,
   ) =>
-    annotateSessions(instanceDriver, instanceId, page.sessions).pipe(
+    annotateSessions(instanceDriver, instanceId, projectId, page).pipe(
       Effect.map((sessions) => ({
         sessions,
         nextCursor: page.nextCursor,
@@ -192,7 +205,7 @@ const make = Effect.gen(function* () {
         (started) =>
           started._tag === "Fetch" ? continuations.abort(key, started.generation) : Effect.void,
       );
-      return yield* finishList(instance.driverKind, input.instanceId, page);
+      return yield* finishList(instance.driverKind, input.instanceId, input.projectId, page);
     }
     const committed = yield* Effect.acquireUseRelease(
       continuations.claim(key),
@@ -205,7 +218,7 @@ const make = Effect.gen(function* () {
           .pipe(Effect.flatMap((listed) => continuations.commit(key, generation, listed))),
       (generation) => continuations.abort(key, generation),
     );
-    return yield* finishList(instance.driverKind, input.instanceId, committed);
+    return yield* finishList(instance.driverKind, input.instanceId, input.projectId, committed);
   });
 
   const importAcpRegistrySession = Effect.fn("ws.acpRegistry.importSession")(function* (
@@ -213,7 +226,7 @@ const make = Effect.gen(function* () {
   ) {
     return yield* acpRegistryRuntimeCoordinator.withSessionMutation(
       Effect.gen(function* () {
-        yield* acpRegistryProject(input.projectId);
+        const { workspaceRoot } = yield* acpRegistryProject(input.projectId);
         const { instance } = yield* acpSessionManager(input.instanceId);
         const providerSnapshot = yield* instance.snapshot.getSnapshot;
         if (
@@ -240,7 +253,33 @@ const make = Effect.gen(function* () {
               }),
           ),
         );
-        if (existing !== null) return { threadId, imported: false } as const;
+        const importHistory = historyImporter.importNativeHistory({
+          threadId,
+          projectId: input.projectId,
+          workspaceRoot,
+        });
+        const canLoadHistory = providerSnapshot.nativeSessions?.canLoad === true;
+        if (existing !== null) {
+          const imported =
+            canLoadHistory &&
+            existing.projectId === input.projectId &&
+            AgentSessionImporter.isNativeHistoryPending({
+              historyOrigin: existing.historyOrigin,
+              hasRun: existing.latestRunId !== null,
+            })
+              ? yield* importHistory.pipe(
+                  Effect.mapError(
+                    (cause) =>
+                      new AcpRegistryOperationError({
+                        reason: "session_import_failed",
+                        message: "Could not import the ACP session history.",
+                        cause,
+                      }),
+                  ),
+                )
+              : false;
+          return { threadId, imported };
+        }
 
         const provider = (yield* providerRegistry.getProviders).find(
           (candidate) => candidate.instanceId === input.instanceId,
@@ -296,6 +335,16 @@ const make = Effect.gen(function* () {
             cause: launched.failure,
           });
         }
+        if (canLoadHistory)
+          yield* importHistory.pipe(
+            Effect.catch((cause) =>
+              Effect.logWarning("Could not import ACP session history", {
+                instanceId: input.instanceId,
+                sessionId: input.sessionId,
+                cause,
+              }),
+            ),
+          );
         return { threadId, imported: true } as const;
       }),
     );
