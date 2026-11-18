@@ -13,7 +13,7 @@ import * as HttpClient from "effect/http/HttpClient";
 import * as HttpClientRequest from "effect/http/HttpClientRequest";
 import * as HttpClientResponse from "effect/http/HttpClientResponse";
 import * as Secrets from "../auth/ServerSecretStore.ts";
-import { matchesMemoryOperationDigest } from "./MemoryDecider.ts";
+import { matchesMemoryOperationDigest, memoryOperationDigest } from "./MemoryDecider.ts";
 import { sourceReadInput, sourceReadLocatorDigest } from "./MemoryOwnerSourceReader.ts";
 import * as Settings from "../serverSettings.ts";
 
