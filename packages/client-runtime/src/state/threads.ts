@@ -985,6 +985,7 @@ export const makeEnvironmentThreadState = Effect.fn("EnvironmentThreadState.make
                 acceptCompactIds: true as const,
               }
             : {}),
+          acceptCompactVisits: true as const,
           acceptDedupedBodies: true as const,
         };
       }),

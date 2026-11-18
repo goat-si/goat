@@ -1,3 +1,4 @@
+import { applyOrchestrationV2ThreadVisit } from "@goat/contracts";
 import { applyThreadPullRequestLinkUpdate } from "../threadPullRequests.ts";
 import type {
   OrchestrationV2DomainEvent,
@@ -317,6 +318,11 @@ export function applyOrchestrationV2ProjectionEvent(
     case "thread.guest-share-updated":
       return { ...base, thread: event.payload };
     // Visited tracking is read state, not activity: skip the updatedAt bump.
+    case "thread.visit-recorded":
+      return {
+        ...projection,
+        thread: applyOrchestrationV2ThreadVisit(projection.thread, event.payload),
+      };
     case "thread.visited":
     case "thread.marked-unread":
       return { ...projection, thread: event.payload };

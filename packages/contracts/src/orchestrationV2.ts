@@ -1,3 +1,4 @@
+export * from "./orchestrationV2WorkflowFileErrors.ts";
 export { isOrchestrationV2WorkActive } from "./orchestrationV2WorkActive.ts";
 import { PiExtensionStatuses } from "./piExtensionStatus.ts";
 import {
@@ -563,6 +564,18 @@ export const OrchestrationV2AppThread = Schema.Struct({
 });
 export type OrchestrationV2AppThread = typeof OrchestrationV2AppThread.Type;
 
+const OrchestrationV2ThreadVisit = Schema.Struct({
+  lastVisitedAt: OrchestrationV2AppThread.fields.lastVisitedAt,
+  opens: OrchestrationV2AppThread.fields.opens,
+});
+
+export function applyOrchestrationV2ThreadVisit<Thread extends OrchestrationV2AppThread>(
+  thread: Thread,
+  visit: typeof OrchestrationV2ThreadVisit.Type,
+): Thread {
+  return { ...thread, ...visit };
+}
+
 /** Provider-native children cannot receive messages; GOAT delegate_task children can. */
 export function isProviderNativeSubagentThread(
   thread: Pick<OrchestrationV2AppThread, "lineage" | "creationSource">,
@@ -899,6 +912,7 @@ export const OrchestrationV2Subagent = Schema.Struct({
   // "settled_only" (the legacy default) requires no live run; wait-mode uses the blocking tool call.
   completionWake: Schema.optional(Schema.Literals(["always", "settled_only"])),
   completionDelivery: Schema.optional(OrchestrationV2DelegatedCompletionTaskDelivery),
+  cancelledRunId: Schema.optional(RunId),
   /**
    * Set when the user promoted the child thread to a top-level thread. The task no
    * longer owns it: stops and cancellations from this thread do not reach it.
@@ -1197,6 +1211,8 @@ export const OrchestrationV2ConversationMessage = Schema.Struct({
   notification: Schema.optional(OrchestrationV2Notification),
   ...OrchestrationV2CreationFields,
   scheduledTaskId: Schema.optional(ScheduledTaskId),
+  /** A scheduled delivery that omitted an explicit model selection. */
+  followsThreadSelection: Schema.optional(Schema.Literal(true)),
   senderThreadId: Schema.optional(ThreadId),
   /** Kept so stored rows and older clients decode; the server no longer writes or reads it. */
   senderRunId: Schema.optional(RunId),
@@ -1860,6 +1876,11 @@ export const OrchestrationV2DomainEvent = Schema.Union([
     ...OrchestrationV2EventBase.fields,
     type: Schema.Literal("thread.pull-request-link-updated"),
     payload: ThreadPullRequestLink,
+  }),
+  Schema.Struct({
+    ...OrchestrationV2EventBase.fields,
+    type: Schema.Literal("thread.visit-recorded"),
+    payload: OrchestrationV2ThreadVisit,
   }),
   Schema.Struct({
     ...OrchestrationV2EventBase.fields,
@@ -2791,6 +2812,14 @@ export const OrchestrationV2DomainEventJson = Schema.Union([
     ...OrchestrationV2JsonEventBaseFields,
     type: Schema.Literal("thread.pull-request-link-updated"),
     payload: ThreadPullRequestLink,
+  }),
+  Schema.Struct({
+    ...OrchestrationV2JsonEventBaseFields,
+    type: Schema.Literal("thread.visit-recorded"),
+    payload: Schema.Struct({
+      lastVisitedAt: OrchestrationV2AppThreadJson.fields.lastVisitedAt,
+      opens: OrchestrationV2AppThreadJson.fields.opens,
+    }),
   }),
   Schema.Struct({
     ...OrchestrationV2JsonEventBaseFields,
@@ -4146,39 +4175,6 @@ export class OrchestrationV2GetNativeChildWorkError extends Schema.TaggedError<O
   }
 }
 
-const WORKFLOW_FILE_ERROR_MESSAGES = {
-  "invalid-path": "Workflow files must be absolute paths with the expected extension.",
-  "root-unavailable": "Workflow file root unavailable.",
-  "not-found": "Workflow file not found.",
-  "outside-root": "Path is outside the workflow files root.",
-  "wrong-extension": "Resolved file has the wrong extension.",
-  "not-regular-file": "Workflow file is not a regular file.",
-  "changed-during-read": "Workflow file changed between resolution and open.",
-  "read-failed": "Workflow file read failed.",
-} as const;
-
-export class OrchestrationWorkflowFileError extends Schema.TaggedError<OrchestrationWorkflowFileError>()(
-  "OrchestrationWorkflowFileError",
-  {
-    reason: Schema.Literals([
-      "invalid-path",
-      "root-unavailable",
-      "not-found",
-      "outside-root",
-      "wrong-extension",
-      "not-regular-file",
-      "changed-during-read",
-      "read-failed",
-    ]),
-    path: Schema.String,
-    cause: Schema.optional(Schema.Defect()),
-  },
-) {
-  override get message(): string {
-    return WORKFLOW_FILE_ERROR_MESSAGES[this.reason];
-  }
-}
-
 export const OrchestrationV2GetTurnItemInput = Schema.Struct({
   threadId: ThreadId,
   itemId: TurnItemId,
@@ -4190,39 +4186,6 @@ export const OrchestrationV2GetTurnItemResult = Schema.Struct({
   item: Schema.NullOr(OrchestrationV2TurnItem),
 });
 export type OrchestrationV2GetTurnItemResult = typeof OrchestrationV2GetTurnItemResult.Type;
-
-const WORKFLOW_SCRIPT_ERROR_MESSAGES = {
-  "invalid-path": "Workflow scripts must be absolute .js paths.",
-  "root-unavailable": "Script root unavailable.",
-  "not-found": "Script not found.",
-  "outside-root": "Script path is outside the workflow scripts root.",
-  "not-js": "Resolved script is not a .js file.",
-  "not-regular-file": "Script is not a regular file.",
-  "changed-during-read": "Script changed between resolution and open.",
-  "read-failed": "Script read failed.",
-} as const;
-
-export class OrchestrationGetWorkflowScriptError extends Schema.TaggedError<OrchestrationGetWorkflowScriptError>()(
-  "OrchestrationGetWorkflowScriptError",
-  {
-    reason: Schema.Literals([
-      "invalid-path",
-      "root-unavailable",
-      "not-found",
-      "outside-root",
-      "not-js",
-      "not-regular-file",
-      "changed-during-read",
-      "read-failed",
-    ]),
-    scriptPath: Schema.String,
-    cause: Schema.optional(Schema.Defect()),
-  },
-) {
-  override get message(): string {
-    return WORKFLOW_SCRIPT_ERROR_MESSAGES[this.reason];
-  }
-}
 
 export const OrchestrationV2SearchThreadInput = Schema.Struct({
   threadId: ThreadId,
