@@ -215,10 +215,19 @@ describe("ProviderContinuationService", () => {
           );
           yield* Deferred.await(entered);
           const labels = Array.from({ length: 130 }, (_, index) => `Busy wake ${index}`);
-          for (const label of labels) yield* requests.offer(request(undefined, label));
+          const staged = yield* Effect.forEach(
+            labels,
+            (label) =>
+              ProviderContinuationRequests.offerWithBackpressure(
+                requests,
+                request(undefined, label),
+              ),
+            { discard: true },
+          ).pipe(Effect.forkScoped({ startImmediately: true }));
           yield* requests.offer({ ...request(), threadId: otherThreadId });
           assert.containSubset(yield* Queue.take(dispatched), { threadId: otherThreadId });
           yield* Deferred.succeed(release, undefined);
+          yield* Fiber.join(staged);
           for (const label of ["First", ...labels])
             assert.containSubset(yield* Queue.take(dispatched), { threadId, text: label });
         }).pipe(

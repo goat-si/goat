@@ -6,6 +6,7 @@ import * as Duration from "effect/Duration";
 import * as Effect from "effect/Effect";
 import * as FileSystem from "effect/FileSystem";
 import * as Layer from "effect/Layer";
+import * as Path from "effect/Path";
 import * as Stream from "effect/Stream";
 import type { BackgroundScope, VcsStatusLocalResult, VcsStatusRemoteResult } from "@goat/contracts";
 import { GitManagerError } from "@goat/contracts";
@@ -63,13 +64,19 @@ export function layerTestFor(state: {
   automaticFetchInterval?: Effect.Effect<Duration.Duration>;
   beforeRemoteStatus?: Effect.Effect<void>;
   beforeLocalStatus?: Effect.Effect<void>;
+  branchRead?: () => Effect.Effect<string | null>;
+  headPath?: string;
+  headPathCalls?: number;
+  failLocalStatus?: boolean;
+  onLocalStatusFailure?: Effect.Effect<void>;
+  beforeInvalidate?: Effect.Effect<void>;
   fileSystem?: FileSystem.FileSystem;
   pullCurrentBranch?: GitWorkflowService.GitWorkflowService["Service"]["pullCurrentBranch"];
 }) {
   return VcsStatusBroadcaster.layer.pipe(
     Layer.provideMerge(
       state.fileSystem
-        ? Layer.succeed(FileSystem.FileSystem, state.fileSystem)
+        ? Layer.merge(Layer.succeed(FileSystem.FileSystem, state.fileSystem), Path.layer)
         : Layer.mergeAll(NodeServices.layer, NodeCrypto.layer),
     ),
     Layer.provide(layerBackgroundPolicy(() => state.backgroundWorkEnabled !== false)),
@@ -81,14 +88,36 @@ export function layerTestFor(state: {
     ),
     Layer.provide(
       Layer.mock(GitWorkflowService.GitWorkflowService)({
+        repositoryRoot: (cwd) => Effect.succeed(state.currentLocalStatus.isRepo ? cwd : null),
+        headPath: () =>
+          Effect.sync(() => {
+            state.headPathCalls = (state.headPathCalls ?? 0) + 1;
+            return state.headPath ?? null;
+          }),
         localStatus: () =>
           Effect.suspend(() => {
             state.localStatusCalls += 1;
+            if (state.failLocalStatus) {
+              return (state.onLocalStatusFailure ?? Effect.void).pipe(
+                Effect.andThen(
+                  Effect.fail(
+                    new GitManagerError({
+                      operation: "VcsStatusBroadcaster.test",
+                      cwd: "/repo",
+                      detail: "index.lock is held",
+                    }),
+                  ),
+                ),
+              );
+            }
             return (state.beforeLocalStatus ?? Effect.void).pipe(
               Effect.as(state.currentLocalStatus),
             );
           }),
-        currentBranch: () => Effect.sync(() => state.currentLocalStatus.refName),
+        currentBranch: () =>
+          Effect.suspend(
+            () => state.branchRead?.() ?? Effect.succeed(state.currentLocalStatus.refName),
+          ),
         upstreamDivergence: () =>
           Effect.sync(() =>
             state.currentRemoteStatus?.hasUpstream && state.currentLocalStatus.refName !== null
@@ -117,7 +146,7 @@ export function layerTestFor(state: {
         invalidateLocalStatus: () =>
           Effect.sync(() => {
             state.localInvalidationCalls += 1;
-          }),
+          }).pipe(Effect.andThen(Effect.suspend(() => state.beforeInvalidate ?? Effect.void))),
         invalidateRemoteStatus: () =>
           Effect.sync(() => {
             state.remoteInvalidationCalls += 1;

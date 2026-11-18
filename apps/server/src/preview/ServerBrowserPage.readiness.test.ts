@@ -74,6 +74,34 @@ it("types into the focused field once it stops being read-only", () =>
     expect(await page.inputValue("#f")).toBe("hello");
   }));
 
+it.each([
+  '<input id="f" aria-disabled="true">',
+  '<div aria-disabled="true"><input id="f"></div>',
+  '<input id="f" aria-readonly="true">',
+])("refuses implicit typing into an ARIA-blocked field (%s)", (html) =>
+  fixture(async (page) => {
+    await page.setContent(html);
+    await page.focus("#f");
+    await expect(
+      ServerBrowserPage.type(page, { text: "blocked", timeoutMs: 300 }),
+    ).rejects.toMatchObject({ tag: "PreviewAutomationTargetNotEditableError" });
+    expect(await page.inputValue("#f")).toBe("");
+  }),
+);
+
+it("rechecks ARIA editability after the pinned field passed readiness", () =>
+  fixture(async (page) => {
+    await page.setContent('<input id="f">');
+    await page.focus("#f");
+    const gate = async () => {
+      await page.evaluate('document.querySelector("#f").setAttribute("aria-disabled", "true")');
+    };
+    await expect(ServerBrowserPage.type(page, { text: "blocked" }, gate)).rejects.toMatchObject({
+      tag: "PreviewAutomationTargetNotEditableError",
+    });
+    expect(await page.inputValue("#f")).toBe("");
+  }));
+
 it("names a field that stayed disabled and never types into it later", () =>
   fixture(async (page) => {
     await page.setContent('<input id="f" disabled>');

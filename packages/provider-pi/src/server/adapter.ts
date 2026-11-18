@@ -35,6 +35,7 @@ import * as Duration from "effect/Duration";
 import * as Effect from "effect/Effect";
 import * as FileSystem from "effect/FileSystem";
 import * as Fiber from "effect/Fiber";
+import * as FiberMap from "effect/FiberMap";
 import * as Queue from "effect/Queue";
 import * as Schema from "effect/Schema";
 import * as Semaphore from "effect/Semaphore";
@@ -94,11 +95,7 @@ export interface PiAdapterV2Options {
   readonly settings: PiSettings;
   readonly environment: NodeJS.ProcessEnv;
   readonly currentEnvironment?: Effect.Effect<NodeJS.ProcessEnv>;
-  readonly continuationRequests?: {
-    readonly offer: (
-      request: ProviderContinuationRequests.ProviderContinuationRequest,
-    ) => Effect.Effect<void>;
-  };
+  readonly continuationRequests?: ProviderContinuationRequests.ProviderContinuationOffer;
 }
 const PI_THINKING_LEVELS = new Set(["off", "minimal", "low", "medium", "high", "xhigh", "max"]);
 interface PiStreamItemState {
@@ -350,6 +347,7 @@ export const makePiAdapterV2 = Effect.fn("makePiAdapterV2")(function* (
       let unsolicitedActivityDetected = false;
       // Turn failures can leave Pi alive; pump termination retires the runtime.
       let runtimeRetired = false;
+      const deferredWake = yield* FiberMap.make<"wake">();
       let pendingWake: PiWake | null = null;
       let extensionStatusReset: {
         previous: NonNullable<OrchestrationV2ProviderSession["extensionStatuses"]>;
@@ -1748,27 +1746,30 @@ export const makePiAdapterV2 = Effect.fn("makePiAdapterV2")(function* (
                 return;
               }
               yield* updateProviderSession("running", null);
-              yield* continuationRequests
-                .offer({
-                  threadId: state.providerThread.appThreadId,
-                  providerThreadId: state.providerThread.id,
-                  driver,
-                  detail: null,
-                  delivery: "adapter_buffered",
-                  dispatchIfCurrent: (dispatch) =>
-                    sessionEventPermit.withPermits(1)(
-                      Effect.suspend(() =>
-                        pendingWake === wake && threadState === state && !closed
-                          ? dispatch.pipe(
-                              Effect.asSome,
-                              Effect.tapError(() => stopPendingWake(wake)),
-                            )
-                          : Effect.succeedNone,
-                      ),
+              const request = {
+                threadId: state.providerThread.appThreadId,
+                providerThreadId: state.providerThread.id,
+                driver,
+                detail: null,
+                delivery: "adapter_buffered",
+                dispatchIfCurrent: (dispatch) =>
+                  sessionEventPermit.withPermits(1)(
+                    Effect.suspend(() =>
+                      pendingWake === wake && threadState === state && !closed
+                        ? dispatch.pipe(
+                            Effect.asSome,
+                            Effect.tapError(() => stopPendingWake(wake)),
+                          )
+                        : Effect.succeedNone,
                     ),
-                  clearIfCurrent: () => sessionEventPermit.withPermits(1)(stopPendingWake(wake)),
-                })
-                .pipe(Effect.tapError(() => stopPendingWake(wake)));
+                  ),
+                clearIfCurrent: () => sessionEventPermit.withPermits(1)(stopPendingWake(wake)),
+              } satisfies ProviderContinuationRequests.ProviderContinuationRequest;
+              if ((yield* continuationRequests.offer(request)) === "overflow")
+                yield* ProviderContinuationRequests.offerWithBackpressure(
+                  continuationRequests,
+                  request,
+                ).pipe(FiberMap.run(deferredWake, "wake"));
               return;
             }
             if (turn === null) {
@@ -3460,5 +3461,4 @@ export const makePiAdapterV2Driver = (
       ),
   ),
 });
-
 export const PiAdapterV2Driver = makePiAdapterV2Driver(PI_PROFILE, PiSettings);

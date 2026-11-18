@@ -12,6 +12,7 @@ import {
   makeFakeMuse,
   makeHarness,
   turnInput,
+  captureWakeOffer,
   startConversation,
 } from "./test/adapterHelpers.ts";
 
@@ -92,7 +93,7 @@ describe("MuseAdapterV2 compaction and stop recovery", () => {
         undefined,
         undefined,
         runtimePolicy,
-        { continuationRequests: { offer: (request) => Deferred.succeed(offered, request) } },
+        { continuationRequests: captureWakeOffer(offered) },
       );
       const previous = yield* startConversation(harness, fake);
       yield* fake.emit("turn/completed", { turnId: previous.nativeId, terminal: "completed" });
@@ -130,7 +131,7 @@ describe("MuseAdapterV2 compaction and stop recovery", () => {
         undefined,
         undefined,
         runtimePolicy,
-        { continuationRequests: { offer: (request) => Deferred.succeed(offered, request) } },
+        { continuationRequests: captureWakeOffer(offered) },
       );
       const previous = yield* startConversation(harness, fake);
       yield* fake.emit("turn/completed", { turnId: previous.nativeId, terminal: "completed" });
@@ -165,7 +166,7 @@ describe("MuseAdapterV2 compaction and stop recovery", () => {
         undefined,
         undefined,
         runtimePolicy,
-        { continuationRequests: { offer: (request) => Deferred.succeed(offered, request) } },
+        { continuationRequests: captureWakeOffer(offered) },
       );
       const previous = yield* startConversation(harness, fake);
       yield* fake.emit("turn/completed", { turnId: previous.nativeId, terminal: "completed" });

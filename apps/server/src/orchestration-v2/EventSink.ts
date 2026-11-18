@@ -795,6 +795,7 @@ const layerBase: Layer.Layer<
       if (input?.journal === true)
         return journal.stream({
           afterSequence,
+          eventType: input.eventType,
           latestSequence: eventStore.latestSequence(),
           onSubscribed: input.onSubscribed,
           replay: replayRange,

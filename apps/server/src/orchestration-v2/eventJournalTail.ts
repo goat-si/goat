@@ -8,19 +8,31 @@ import * as Effect from "effect/Effect";
 import * as PubSub from "effect/PubSub";
 import * as Stream from "effect/Stream";
 
-export const makeEventJournalTail = Effect.gen(function* () {
-  const committed = yield* PubSub.sliding<number>(1);
-  let published = 0;
+export const makeEventJournalTail = Effect.sync(() => {
+  type EventType = OrchestrationV2DomainEvent["type"];
+  const makeFeed = PubSub.sliding<number>(1).pipe(
+    Effect.map((signals) => ({ signals, published: 0 })),
+  );
+  const feeds = new Map<
+    EventType | undefined,
+    { signals: PubSub.PubSub<number>; published: number }
+  >();
   return {
-    publish: (events: ReadonlyArray<OrchestrationV2StoredEvent>) =>
-      Effect.suspend(() => {
-        const last = events.at(-1);
-        if (last === undefined || last.sequence <= published) return Effect.void;
-        published = last.sequence;
-        return PubSub.publish(committed, published);
-      }),
+    // One call per commit, under the event sink's tracing boundary.
+    publish: Effect.fnUntraced(function* (events: ReadonlyArray<OrchestrationV2StoredEvent>) {
+      for (const [eventType, feed] of feeds) {
+        const last =
+          eventType === undefined
+            ? events.at(-1)
+            : events.findLast(({ event }) => event.type === eventType);
+        if (last === undefined || last.sequence <= feed.published) continue;
+        feed.published = last.sequence;
+        yield* PubSub.publish(feed.signals, feed.published);
+      }
+    }),
     stream: <E>(input: {
       readonly afterSequence: number;
+      readonly eventType: EventType | undefined;
       readonly latestSequence: Effect.Effect<number, E>;
       readonly onSubscribed: Effect.Effect<void> | undefined;
       readonly replay: (
@@ -30,14 +42,17 @@ export const makeEventJournalTail = Effect.gen(function* () {
     }) =>
       Stream.unwrap(
         Effect.gen(function* () {
-          const subscription = yield* PubSub.subscribe(committed);
+          let feed = feeds.get(input.eventType);
+          if (feed === undefined) {
+            const candidate = yield* makeFeed;
+            feed = feeds.get(input.eventType) ?? candidate;
+            feeds.set(input.eventType, feed);
+          }
+          const subscription = yield* PubSub.subscribe(feed.signals);
           const highWater = yield* input.latestSequence;
           if (input.onSubscribed !== undefined) yield* input.onSubscribed;
-          let cursor = input.afterSequence;
-          return Stream.concat(
-            Stream.succeed(highWater),
-            Stream.fromSubscription(subscription),
-          ).pipe(
+          let cursor = Math.max(input.afterSequence, highWater);
+          const live = Stream.fromSubscription(subscription).pipe(
             Stream.flatMap((through) => {
               if (through <= cursor) return Stream.empty;
               const after = cursor;
@@ -45,6 +60,7 @@ export const makeEventJournalTail = Effect.gen(function* () {
               return input.replay(after, through);
             }),
           );
+          return Stream.concat(input.replay(input.afterSequence, highWater), live);
         }),
       ),
   };
