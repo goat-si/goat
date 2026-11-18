@@ -1,8 +1,10 @@
+import createRecoveryIndexes from "../persistence/Migrations/OrchestrationV2/RecoveryIndexes.ts";
 import * as NodeServices from "@effect/platform-node/NodeServices";
 import { DEFAULT_SERVER_SETTINGS, type OrchestrationV2StoredEvent } from "@goat/contracts";
 import * as HostProcess from "@goat/shared/HostProcess";
 import * as NodeSqliteClient from "@goat/shared/nodeSqliteClient";
 import * as Deferred from "effect/Deferred";
+import * as Ref from "effect/Ref";
 import * as Layer from "effect/Layer";
 import * as Sink from "effect/Sink";
 import * as SqlClient from "effect/sql/SqlClient";
@@ -85,6 +87,7 @@ const setupWatcher = Effect.fn("test.setupKeepAwake")(function* (
   const settings = yield* Queue.unbounded<typeof DEFAULT_SERVER_SETTINGS>();
   const events = yield* Queue.unbounded<OrchestrationV2StoredEvent>();
   const transitions = yield* Queue.unbounded<"held" | "released">();
+  const cursorReads = yield* Ref.make(0);
   const fakeSpawner = ChildProcessSpawner.make(() =>
     Effect.acquireRelease(Queue.offer(transitions, "held"), () =>
       Queue.offer(transitions, "released"),
@@ -114,7 +117,7 @@ const setupWatcher = Effect.fn("test.setupKeepAwake")(function* (
           Layer.succeed(SqlClient.SqlClient, sql),
           Layer.succeed(HostProcess.Platform, "darwin"),
           Layer.mock(OrchestrationEventStore.OrchestrationEventStore)({
-            latestApplicationSequence: Effect.succeed(0),
+            latestApplicationSequence: Ref.update(cursorReads, (n) => n + 1).pipe(Effect.as(0)),
             streamApplicationEvents: () => Stream.fromQueue(events),
           }),
           Layer.mock(Settings.ServerSettingsService)({
@@ -128,7 +131,7 @@ const setupWatcher = Effect.fn("test.setupKeepAwake")(function* (
       ),
     ),
   );
-  return { sql, transitions, settings, events };
+  return { sql, transitions, settings, events, cursorReads };
 });
 
 const sqlite = NodeSqliteClient.layer({ filename: ":memory:" });
@@ -188,4 +191,36 @@ it.live.skipIf(HostProcess.Platform.defaultValue() === "win32")(
       );
       expect(yield* child.isRunning).toBe(false);
     }).pipe(Effect.provide(Layer.mergeAll(sqlite, NodeServices.layer))),
+);
+
+it.effect("seeks the recovery partial index for the active-run snapshot", () =>
+  Effect.gen(function* () {
+    const sql = yield* SqlClient.SqlClient;
+    yield* sql`CREATE TABLE orchestration_events(stream_id TEXT, application_event_version INT, aggregate_kind TEXT, event_type TEXT)`;
+    yield* sql`CREATE TABLE orchestration_v2_projection_runs(status TEXT, thread_id TEXT)`;
+    yield* sql`CREATE TABLE orchestration_v2_projection_runtime_requests(thread_id TEXT, status TEXT)`;
+    yield* sql`CREATE TABLE orchestration_v2_projection_turn_items(thread_id TEXT, type TEXT, status TEXT)`;
+    yield* createRecoveryIndexes;
+    const plan = yield* sql.unsafe<{ detail: string }>(
+      "EXPLAIN QUERY PLAN " + KeepAwake.ACTIVE_RUN_SNAPSHOT_SQL,
+    );
+    expect(plan.map((row) => row.detail)).toEqual(
+      expect.arrayContaining([
+        expect.stringMatching(
+          /SEARCH .* USING COVERING INDEX orchestration_v2_projection_runs_recovery_idx/,
+        ),
+      ]),
+    );
+  }).pipe(Effect.provide(sqlite)),
+);
+
+it.effect("takes its first activity snapshot when keep-awake is enabled", () =>
+  Effect.gen(function* () {
+    const h = yield* setupWatcher(false);
+    yield* TestClock.adjust("1 second");
+    expect(yield* Ref.get(h.cursorReads)).toBe(0);
+    yield* Queue.offer(h.settings, DEFAULT_SERVER_SETTINGS);
+    expect(yield* Queue.take(h.transitions)).toBe("held");
+    expect(yield* Ref.get(h.cursorReads)).toBe(1);
+  }).pipe(Effect.provide(sqlite)),
 );

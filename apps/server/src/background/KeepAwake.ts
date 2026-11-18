@@ -98,6 +98,13 @@ class KeepAwakeInhibitorExited extends Schema.TaggedError<KeepAwakeInhibitorExit
   { exitCode: Schema.Number },
 ) {}
 
+// Include the recovery index predicate verbatim so SQLite can seek the active statuses.
+export const ACTIVE_RUN_SNAPSHOT_SQL = `SELECT EXISTS (
+        SELECT 1 FROM orchestration_v2_projection_runs
+        WHERE status IN ('preparing', 'starting', 'running')
+          AND status IN ('queued', 'preparing', 'starting', 'running', 'waiting')
+      ) AS active`;
+
 export const layer = Layer.effectDiscard(
   Effect.gen(function* () {
     const command = inhibitorCommand(yield* HostProcess.Platform, process.pid);
@@ -107,12 +114,7 @@ export const layer = Layer.effectDiscard(
     const sql = yield* SqlClient.SqlClient;
     const spawner = yield* ChildProcessSpawner.ChildProcessSpawner;
 
-    const hasActiveRun = sql<{ readonly active: number }>`
-      SELECT EXISTS (
-        SELECT 1 FROM orchestration_v2_projection_runs
-        WHERE status IN ('preparing', 'starting', 'running')
-      ) AS active
-    `.pipe(
+    const hasActiveRun = sql.unsafe<{ readonly active: number }>(ACTIVE_RUN_SNAPSHOT_SQL).pipe(
       Effect.map((rows) => rows[0]?.active === 1),
       Effect.timeout("5 seconds"),
     );
@@ -194,7 +196,10 @@ export const layer = Layer.effectDiscard(
 
     yield* forkParked(
       holdWhileWanted(
-        Stream.zipLatestWith(enabled, active, (on, busy) => (on ? busy : ("disabled" as const))),
+        enabled.pipe(
+          Stream.changes,
+          Stream.switchMap((on) => (on ? active : Stream.succeed("disabled" as const))),
+        ),
         hold,
       ).pipe(Effect.catchCause((cause) => Effect.logWarning("keep-awake stopped", { cause }))),
     );
