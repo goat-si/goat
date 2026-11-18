@@ -3484,6 +3484,16 @@ export type OrchestrationV2Command = typeof OrchestrationV2Command.Type;
 // Excluded from dispatchCommand so only the server can send these.
 const OrchestrationV2InternalCommand = Schema.Union([
   OrchestrationV2ReviewContinueCommand,
+  Schema.Struct({
+    type: Schema.Literal("deferred-steer.restore"),
+    commandId: CommandId,
+    threadId: ThreadId,
+    messageId: MessageId,
+    queuedRunId: RunId,
+    targetRunId: RunId,
+    attemptId: RunAttemptId,
+    queuePosition: NonNegativeInt,
+  }),
   // Guest share commands the server issues after checking GOAT Connect and the guest token.
   Schema.Struct({
     type: Schema.Literal("thread.guest-share.open"),

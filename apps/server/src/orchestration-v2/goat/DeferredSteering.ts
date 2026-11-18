@@ -8,18 +8,20 @@ import {
   type OrchestrationV2ServerCommand,
   type OrchestrationV2StoredEvent,
   type OrchestrationV2ProviderTurn,
+  type OrchestrationV2ThreadProjection,
   type RunId,
   type ThreadId,
 } from "@goat/contracts";
 import * as DateTime from "effect/DateTime";
 import * as Effect from "effect/Effect";
+import type * as Ref from "effect/Ref";
 import * as Stream from "effect/Stream";
 import { runResumableReactor } from "../../backgroundSupervision.ts";
 import type { EventSinkV2Shape } from "../EventSinkShape.ts";
 import type { ProjectionStoreV2Shape } from "../ProjectionStore.ts";
 import type { ThreadCommandExecutor } from "../ThreadCommandExecutor.ts";
 import { isNativeMaintenanceCommand, type CommandPolicyV2 } from "../CommandPolicy.ts";
-import type { OrchestratorDispatchError } from "../Orchestrator.ts";
+import type { OrchestratorDispatchError, OrchestratorV2Error } from "../Orchestrator.ts";
 import type { ProviderAdapterRegistryV2 } from "../ProviderAdapterRegistry.ts";
 import { latestExecutedRun } from "@goat/shared/orchestrationV2ThreadError";
 import { worktreeSetupPending } from "./OrchestratorRunState.ts";
@@ -126,6 +128,136 @@ export const holdUndeliveredSteers = Effect.fn("Orchestrator.holdUndeliveredStee
     }),
   );
 });
+
+export function deferredSteerTarget(queued: OrchestrationV2Run, target?: OrchestrationV2Run) {
+  const attemptId = queued.steerWhenReadyAttemptId;
+  if (queued.queueHeld === true || attemptId === undefined || target?.activeAttemptId !== attemptId)
+    return;
+  return {
+    queuedRunId: queued.id,
+    targetRunId: target.id,
+    attemptId,
+    queuePosition: queued.queuePosition ?? queued.ordinal,
+  };
+}
+
+type RestoreDeferredSteer = Extract<
+  OrchestrationV2ServerCommand,
+  { type: "deferred-steer.restore" }
+>;
+
+export const makeRestoreDeferredSteer = (deps: {
+  readonly projectionStore: Pick<ProjectionStoreV2Shape, "getThreadRecords">;
+  readonly emit: (
+    events: Ref.Ref<Array<OrchestrationV2DomainEvent>>,
+    command: OrchestrationV2ServerCommand,
+  ) => <Event extends OrchestrationV2DomainEvent>(
+    event: Omit<Event, "id">,
+  ) => Effect.Effect<Event, OrchestratorV2Error>;
+  readonly mapDispatchError: (
+    command: OrchestrationV2ServerCommand,
+  ) => <A, E, R>(effect: Effect.Effect<A, E, R>) => Effect.Effect<A, OrchestratorDispatchError, R>;
+}) =>
+  Effect.fn("Orchestrator.restoreDeferredSteer")(function* (
+    command: RestoreDeferredSteer,
+    events: Ref.Ref<Array<OrchestrationV2DomainEvent>>,
+  ) {
+    const mapError = deps.mapDispatchError(command);
+    const projection = yield* deps.projectionStore
+      .getThreadRecords(command.threadId, ["runs", "attempts", "nodes", "messages", "turnItems"], {
+        runIds: [command.queuedRunId],
+        ancestryRunIds: [command.queuedRunId],
+        messageIds: [command.messageId],
+        turnItemRunId: command.targetRunId,
+        turnItemTypes: ["user_message"],
+      })
+      .pipe(mapError);
+    const restored = yield* restoredDeferredSteerEvents(command, projection).pipe(mapError);
+    for (const event of restored) yield* deps.emit(events, command)(event);
+  });
+
+const restoredDeferredSteerEvents = Effect.fn("Orchestrator.restoredDeferredSteerEvents")(
+  function* (
+    command: RestoreDeferredSteer,
+    projection: Pick<
+      OrchestrationV2ThreadProjection,
+      "thread" | "runs" | "attempts" | "nodes" | "messages" | "turnItems"
+    >,
+  ) {
+    const run = projection.runs.find((row) => row.id === command.queuedRunId);
+    const message = projection.messages.find((row) => row.id === command.messageId);
+    if (
+      projection.thread.deletedAt !== null ||
+      run?.terminationCause?.kind !== "queued_replaced" ||
+      run.status !== "cancelled" ||
+      run.userMessageId !== message?.id ||
+      message.runId !== command.targetRunId
+    )
+      return [];
+    const attempt = projection.attempts.find((row) => row.id === run.activeAttemptId);
+    const node = projection.nodes.find((row) => row.id === run.rootNodeId);
+    const item = projection.turnItems.find(
+      (row) => row.type === "user_message" && row.messageId === message.id,
+    );
+    if (attempt === undefined || node === undefined || item?.type !== "user_message") {
+      return yield* Effect.fail("Promoted setup steer is missing its queue or turn records");
+    }
+    const now = yield* DateTime.now;
+    const envelope = {
+      threadId: run.threadId,
+      runId: run.id,
+      nodeId: node.id,
+      providerInstanceId: run.providerInstanceId,
+      occurredAt: now,
+    };
+    return [
+      {
+        ...envelope,
+        type: "run.updated",
+        payload: {
+          ...run,
+          status: "queued",
+          terminationCause: undefined,
+          queuePosition: command.queuePosition,
+          queueHeld: true,
+          steerWhenReadyAttemptId: command.attemptId,
+          completedAt: null,
+        },
+      },
+      {
+        ...envelope,
+        type: "run-attempt.updated",
+        payload: { ...attempt, status: "pending", completedAt: null },
+      },
+      {
+        ...envelope,
+        type: "node.updated",
+        payload: { ...node, status: "pending", completedAt: null },
+      },
+      {
+        ...envelope,
+        type: "message.updated",
+        payload: { ...message, runId: run.id, nodeId: node.id, updatedAt: now },
+      },
+      {
+        ...envelope,
+        type: "turn-item.updated",
+        payload: {
+          ...item,
+          runId: run.id,
+          nodeId: node.id,
+          providerThreadId: run.providerThreadId,
+          providerTurnId: null,
+          inputIntent: "queued_turn",
+          status: "pending",
+          startedAt: null,
+          completedAt: null,
+          updatedAt: now,
+        },
+      },
+    ] as const;
+  },
+);
 
 const makeDeliverDeferredSteers = <E, R>(input: {
   readonly projections: Pick<ProjectionStoreV2Shape, "getThreadRecords">;

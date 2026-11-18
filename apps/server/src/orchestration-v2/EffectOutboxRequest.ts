@@ -52,6 +52,14 @@ export const OrchestrationEffectRequestV2 = Schema.Union([
     // A declined steer's follow-up runs with the selection the user steered with.
     modelSelection: Schema.optional(ModelSelection),
     steerFollowUpAfterRunOrdinal: Schema.optional(NonNegativeInt),
+    deferredSteer: Schema.optional(
+      Schema.Struct({
+        queuedRunId: RunId,
+        targetRunId: RunId,
+        attemptId: RunAttemptId,
+        queuePosition: NonNegativeInt,
+      }),
+    ),
   }),
   Schema.Struct({
     type: Schema.Literal("provider-turn.restart"),

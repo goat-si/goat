@@ -32,6 +32,7 @@ export class ProviderTurnControlError extends Schema.TaggedError<ProviderTurnCon
     operation: Schema.Literals(["interrupt", "restart", "steer"]),
     providerTurnId: ProviderTurnId,
     turnCompleted: Schema.optional(Schema.Boolean),
+    deferredSteerMissed: Schema.optional(Schema.Boolean),
     reason: Schema.optional(Schema.Literal("tracking-unavailable")),
     steerDeclined: Schema.optional(Schema.Boolean),
     /** The provider never confirmed the stop; Force stop is the way out. */
@@ -41,6 +42,20 @@ export class ProviderTurnControlError extends Schema.TaggedError<ProviderTurnCon
 ) {}
 
 const isProviderTurnControlError = Schema.is(ProviderTurnControlError);
+
+function missedDeferredSteer(
+  context: ProjectionStore.ProjectionProviderControlContext,
+  attemptId: RunAttemptId | undefined,
+): boolean {
+  return (
+    attemptId !== undefined &&
+    (context.providerTurn?.runAttemptId !== attemptId ||
+      context.providerTurn.status !== "running" ||
+      context.providerTurn.survivingRestart !== undefined ||
+      context.run?.activeAttemptId !== attemptId ||
+      (context.run.status !== "running" && context.run.status !== "waiting"))
+  );
+}
 
 export interface ProviderTurnControlServiceV2Shape {
   readonly interrupt: (input: {
@@ -64,6 +79,7 @@ export interface ProviderTurnControlServiceV2Shape {
     readonly providerTurnId: ProviderTurnId;
     readonly messageId: MessageId;
     readonly modelSelection?: ModelSelection | undefined;
+    readonly deferredAttemptId?: RunAttemptId;
   }) => Effect.Effect<void, ProviderTurnControlError>;
   readonly interruptAndAwaitTerminal: (input: {
     readonly threadId: ThreadId;
@@ -108,9 +124,19 @@ export const layer: Layer.Layer<
       readonly providerTurnId: ProviderTurnId;
       readonly operation: "interrupt" | "restart" | "steer";
       readonly messageId?: MessageId;
+      readonly deferredAttemptId?: RunAttemptId;
     }) {
       const context = yield* projections.getProviderControlContext(input.threadId, input);
       const { providerThread, providerTurn } = context;
+      if (missedDeferredSteer(context, input.deferredAttemptId)) {
+        return yield* new ProviderTurnControlError({
+          threadId: input.threadId,
+          operation: input.operation,
+          providerTurnId: input.providerTurnId,
+          deferredSteerMissed: true,
+          cause: "The setup attempt ended before the steering message was delivered.",
+        });
+      }
       const targetsRecordedSession = providerThread?.providerSessionId === input.providerSessionId;
       const targetsCommittedReplacement =
         input.operation === "restart" &&
@@ -126,6 +152,7 @@ export const layer: Layer.Layer<
           threadId: input.threadId,
           operation: input.operation,
           providerTurnId: input.providerTurnId,
+          ...(input.deferredAttemptId === undefined ? {} : { deferredSteerMissed: true }),
           cause: "The recorded provider execution target is no longer valid.",
         });
       }
@@ -200,6 +227,7 @@ export const layer: Layer.Layer<
           threadId: input.threadId,
           operation: input.operation,
           providerTurnId: input.providerTurnId,
+          ...(input.deferredAttemptId === undefined ? {} : { deferredSteerMissed: true }),
           cause: `Provider session ${input.providerSessionId} is not active.`,
         });
       }
@@ -521,6 +549,9 @@ export const layer: Layer.Layer<
                     operation: "steer",
                     providerTurnId: input.providerTurnId,
                     turnCompleted: status === "completed",
+                    ...(missedDeferredSteer(current, input.deferredAttemptId)
+                      ? { deferredSteerMissed: true }
+                      : {}),
                     cause,
                   });
                 }),

@@ -202,3 +202,148 @@ it.effect.each([
     }),
   ),
 );
+
+it.effect.each(["completed", "interrupted", "replaced"] as const)(
+  "holds a promoted setup steer when its attempt is %s before the outbox delivers it",
+  (outcome) =>
+    Effect.scoped(
+      Effect.gen(function* () {
+        const { started, steered, layer, startFirstTurn } = yield* nextTurnSelectionHarness(
+          `deferred-steer-outbox-${outcome}`,
+        );
+        yield* Effect.gen(function* () {
+          const orchestrator = yield* Orchestrator.OrchestratorV2;
+          const eventSink = yield* EventSink.EventSinkV2;
+          const worker = yield* EffectWorker.OrchestrationEffectWorkerV2;
+          const threadId = yield* startFirstTurn;
+          const {
+            runs: [run],
+            providerTurns: [turn],
+          } = yield* orchestrator.getThreadProjection(threadId);
+          if (!run || !turn || turn.runAttemptId === null)
+            return yield* Effect.die("Missing running turn");
+          const now = yield* DateTime.now;
+          yield* eventSink.write({
+            events: [
+              {
+                id: EventId.make("event:setup-run"),
+                type: "run.updated",
+                threadId,
+                runId: run.id,
+                occurredAt: now,
+                payload: { ...run, status: "starting" },
+              },
+            ],
+          });
+          const messageId = MessageId.make("message:deferred-outbox");
+          yield* orchestrator.dispatch({
+            type: "message.dispatch",
+            commandId: CommandId.make("command:deferred-outbox"),
+            threadId,
+            messageId,
+            text: "Steer only the setup attempt",
+            attachments: [],
+            dispatchMode: { type: "steer_active", targetRunId: run.id },
+            createdBy: "user",
+            creationSource: "web",
+          });
+          const queued = (yield* orchestrator.getThreadProjection(threadId)).runs.find(
+            (row) => row.userMessageId === messageId,
+          );
+          if (!queued) return yield* Effect.die("Missing deferred run");
+          const afterSequence = yield* eventSink.latestSequence({ threadId });
+          yield* eventSink.write({
+            events: [
+              {
+                id: EventId.make("event:ready-run"),
+                type: "run.updated",
+                threadId,
+                runId: run.id,
+                occurredAt: now,
+                payload: run,
+              },
+              {
+                id: EventId.make("event:ready-turn"),
+                type: "provider-turn.updated",
+                threadId,
+                runId: run.id,
+                occurredAt: now,
+                payload: turn,
+              },
+            ],
+          });
+          yield* eventSink.stream({ threadId, afterSequence, eventType: "message.updated" }).pipe(
+            Stream.filter(
+              ({ event }) =>
+                event.type === "message.updated" &&
+                event.payload.id === messageId &&
+                event.payload.runId === run.id,
+            ),
+            Stream.take(1),
+            Stream.runDrain,
+          );
+          yield* eventSink.write({
+            events: [
+              {
+                id: EventId.make("event:lost-run"),
+                type: "run.updated",
+                threadId,
+                runId: run.id,
+                occurredAt: now,
+                payload:
+                  outcome === "replaced"
+                    ? { ...run, activeAttemptId: RunAttemptId.make("attempt:replacement") }
+                    : { ...run, status: outcome, completedAt: now },
+              },
+              ...(outcome === "replaced"
+                ? []
+                : [
+                    {
+                      id: EventId.make("event:lost-turn"),
+                      type: "provider-turn.updated" as const,
+                      threadId,
+                      runId: run.id,
+                      occurredAt: now,
+                      payload: { ...turn, status: outcome, completedAt: now },
+                    },
+                  ]),
+            ],
+          });
+          yield* worker.drain();
+          assert.deepEqual(
+            started.map((input) => input.message.text),
+            ["first"],
+          );
+          assert.deepEqual(steered, []);
+          const held = yield* orchestrator.getThreadProjection(threadId);
+          assert.include(
+            held.runs.find((row) => row.id === queued.id),
+            {
+              status: "queued",
+              queueHeld: true,
+              steerWhenReadyAttemptId: turn.runAttemptId,
+            },
+          );
+          assert.equal(held.messages.find((row) => row.id === messageId)?.runId, queued.id);
+          const item = held.turnItems.find(
+            (row) => row.type === "user_message" && row.messageId === messageId,
+          );
+          assert.include(item, { runId: queued.id, inputIntent: "queued_turn", status: "pending" });
+
+          if (outcome !== "replaced") {
+            yield* orchestrator.dispatch({
+              type: "queued-run.start",
+              commandId: CommandId.make("command:send-restored"),
+              threadId,
+              runId: queued.id,
+            });
+            yield* worker.drain();
+            assert.deepEqual(
+              started.map((input) => input.message.text),
+              ["first", "Steer only the setup attempt"],
+            );
+          }
+        }).pipe(Effect.provide(layer));
+      }),
+    ),
+);

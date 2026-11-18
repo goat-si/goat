@@ -47,6 +47,7 @@ export function commandThreadId(command: OrchestrationV2ServerCommand): ThreadId
     case "subagent.stop":
     case "run.interrupt":
     case "queued-message.promote-to-steer":
+    case "deferred-steer.restore":
     case "queued-run.start":
     case "queue.resume":
     case "queued-run.reorder":
