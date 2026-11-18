@@ -43,6 +43,7 @@ import {
   ownerLockDir,
   pathExists,
   restoreDatabaseBackup,
+  restoreTarget,
   syncDirectory,
   type BackupSpaceProbe,
 } from "./serviceLauncherDatabase.ts";
@@ -58,6 +59,8 @@ const PREPARED_TIMEOUT_MS = 30 * 60_000;
 export const PROBATION_MS = 10 * 60_000;
 const TERMINATE_GRACE_MS = 5_000;
 const RESTORE_RETRY_MS = 5_000;
+const DISK_SPACE_RETRY_MS = 30_000;
+const MIN_START_FREE_BYTES = 64 * 1024 ** 2;
 // Match SERVER_EXIT_CODE_STATE_DIR_OWNED and SERVER_EXIT_CODE_DATABASE_AHEAD
 // in contracts/desktopBootstrap. The standalone launcher must stay independent
 // of its Effect runtime; subprocess tests use the authoritative contract values.
@@ -213,6 +216,27 @@ const stopMarkerPath = (baseDir: string) =>
 const restartPendingPath = (baseDir: string) =>
   NodePath.join(baseDir, "runtime", SERVICE_RESTART_PENDING_FILE);
 
+async function readAvailableBytes(directory: string): Promise<number> {
+  for (;;) {
+    try {
+      const stats = await NodeFSP.statfs(directory);
+      return stats.bavail * stats.bsize;
+    } catch (cause) {
+      const parent = NodePath.dirname(directory);
+      if ((cause as NodeJS.ErrnoException).code !== "ENOENT" || parent === directory) throw cause;
+      directory = parent;
+    }
+  }
+}
+
+function logDiskWait(reason: string, write: (line: string) => void): void {
+  try {
+    write(`[service-launcher] ${reason} Waiting for free space before retrying.\n`);
+  } catch {
+    // The diagnostic destination may be on the full volume.
+  }
+}
+
 export class Launcher {
   readonly #baseDir: string;
   readonly #statePath: string;
@@ -226,6 +250,8 @@ export class Launcher {
   #stopping = false;
   #done = false;
   readonly #completion = Promise.withResolvers<void>();
+  readonly #startupSpaceProbe: (directory: string) => Promise<number>;
+  readonly #writeDiagnostic: (line: string) => void;
   readonly #backupSpaceProbe: Partial<BackupSpaceProbe> | undefined;
   readonly #probationMs: number;
   readonly #now: () => number;
@@ -235,6 +261,8 @@ export class Launcher {
     baseDir: string,
     state: ServiceState,
     options: {
+      readonly startupSpaceProbe?: (directory: string) => Promise<number>;
+      readonly writeDiagnostic?: (line: string) => void;
       readonly backupSpaceProbe?: Partial<BackupSpaceProbe>;
       readonly probationMs?: number;
       readonly now?: () => number;
@@ -242,6 +270,12 @@ export class Launcher {
     } = {},
   ) {
     this.#baseDir = baseDir;
+    this.#startupSpaceProbe = options.startupSpaceProbe ?? readAvailableBytes;
+    this.#writeDiagnostic =
+      options.writeDiagnostic ??
+      ((line) => {
+        NodeFS.writeSync(2, line);
+      });
     this.#backupSpaceProbe = options.backupSpaceProbe;
     this.#probationMs = options.probationMs ?? PROBATION_MS;
     this.#now = options.now ?? Date.now;
@@ -316,6 +350,40 @@ export class Launcher {
     this.#probationTimer = undefined;
   }
 
+  async #deferForDiskSpace(
+    version: string,
+    dbPath: string | undefined,
+    retry: () => Promise<void>,
+  ): Promise<boolean> {
+    if (this.#stopRequested) return true;
+    let reason: string | undefined;
+    try {
+      const database = await restoreTarget(
+        dbPath ?? NodePath.join(this.#baseDir, "userdata", "statev2.sqlite"),
+      );
+      const directories = new Set([
+        NodePath.dirname(this.#statePath),
+        NodePath.dirname(database),
+        runtimePaths(this.#baseDir, version).versionDir,
+      ]);
+      for (const directory of directories) {
+        const free = await this.#startupSpaceProbe(directory);
+        if (free < MIN_START_FREE_BYTES) {
+          reason = `GOAT needs ${MIN_START_FREE_BYTES} bytes free on ${directory}; ${free} bytes available.`;
+          break;
+        }
+      }
+    } catch (cause) {
+      reason = `Could not check disk capacity: ${cause instanceof Error ? cause.message : String(cause)}.`;
+    }
+    if (this.#stopRequested) return true;
+    if (reason === undefined) return false;
+    logDiskWait(reason, this.#writeDiagnostic);
+    clearTimeout(this.#timer);
+    this.#timer = setTimeout(() => this.#enqueue(retry), DISK_SPACE_RETRY_MS);
+    return true;
+  }
+
   async #recover(): Promise<void> {
     // Clear old stop markers to preserve future tunnels; clear restart-pending only for the awaited version to avoid CLI races.
     await NodeFSP.rm(stopMarkerPath(this.#baseDir), { force: true }).catch(() => undefined);
@@ -341,6 +409,13 @@ export class Launcher {
             "rolled-back",
             probation.rollbackReason ?? "rollback-interrupted",
           );
+          return;
+        }
+        if (
+          await this.#deferForDiskSpace(this.#state.activeVersion, probation.dbPath, () =>
+            this.#recover(),
+          )
+        ) {
           return;
         }
         await this.#resumeProbation();
@@ -377,6 +452,12 @@ export class Launcher {
   }
 
   async #startTrial(pending: PendingServiceUpdate): Promise<void> {
+    if (
+      await this.#deferForDiskSpace(pending.targetVersion, pending.dbPath, () =>
+        this.#startTrial(pending),
+      )
+    )
+      return;
     // The previous child is dead here. Holding server-owner.lock keeps every
     // other server out while the three SQLite files are copied.
     let lock: ReturnType<typeof tryAcquireServerOwnerLock>;
@@ -413,6 +494,16 @@ export class Launcher {
       throw new Error(`Selected goat@${version} runtime is missing or incomplete.`);
     }
     if (this.#stopping) return;
+    if (
+      await this.#deferForDiskSpace(
+        version,
+        update?.status === "pending" ? update.dbPath : this.#state.probation?.dbPath,
+        role === "trial" && update?.status === "pending"
+          ? () => this.#startTrial(update)
+          : () => this.#startChild(version, role, update),
+      )
+    )
+      return;
     const paths = runtimePaths(this.#baseDir, version);
     const context: ServiceLauncherContext = {
       protocol: SERVICE_LAUNCHER_PROTOCOL,
@@ -705,6 +796,12 @@ export class Launcher {
       }
       await this.#finishProbation();
     }
+    if (
+      await this.#deferForDiskSpace(child.version, undefined, () =>
+        this.#startChild(child.version, "active", this.#state.update),
+      )
+    )
+      return;
     throw new Error(`Active child exited unexpectedly (${String(code ?? signal ?? "unknown")}).`);
   }
 
@@ -756,6 +853,12 @@ export class Launcher {
       this.#child = null;
       await terminateChild(child.process);
     }
+    if (
+      await this.#deferForDiskSpace(pending.fromVersion, pending.dbPath, () =>
+        this.#returnToPrevious(pending, status, reason),
+      )
+    )
+      return;
     const restore = await restoreDatabaseBackup(this.#baseDir, pending);
     if (restore === "busy") {
       // Another server owns the userdata. Starting the previous version would
