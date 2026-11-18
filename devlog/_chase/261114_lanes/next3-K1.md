@@ -234,6 +234,14 @@ FOR EVERY LANE (relay it): before a push, every changed test file runs whole, wi
 
 Lane coordinator (relayed): from now on, before each commit that changes watch or settlement behaviour, run the touched test files WHOLE (runtimeLayer.test.ts included, not filtered by -t), and say so with the counts in the record; a -t filter is for iterating only.
 
+## Coordinator rules after 22:45, verbatim
+
+Run 1836: "EVERY LANE: a typecheck or test claim names the package as vp resolves it (apps/server is "goat"), and a filter that matches nothing is not a pass."
+
+2026-11-17 23:58 UTC: "(Also from the 23:58 message, for every lane: IV (vi) covers a top-level it.layer block moved whole, on the same terms as a describe: byte-identical body, the case counts add up, TEST_TITLES updated in the same commit.)"
+
+2026-11-18 00:35:17 UTC, beside IV: "Standing rule from now, so this needs no round trip again: a type-only import added to an existing test file, and a layer provided to an existing case because the code under test gained a dependency, need no word from me when the commit changes no title, body, setup value or expectation of that case; the lane quotes the before and after in its record and the fresh review lists them. A provide that replaces or fakes a service the case's assertions read still comes to me."
+
 ## Build log
 
 - 2026-11-18: git merge --ff-only origin/chase/t3-261114-next3: fast-forward a608046c51 to c995c5427accaaa92dadac50ec756c35f4b92034 (git reported "Fast-forward", files incl. apps/server/src/terminal/terminalProbes.ts and apps/web/src/components/chat/useComposerSend.ssh.ts created).
@@ -302,3 +310,25 @@ Row 072254ddd3 status: code and new tests ready, uncommitted. New pullRequestWat
   - New handlers.test.ts cases, upstream's verbatim: "pages a large list once through, with each page's stacks whole" and "filters by state before paging, counting a PR with no known state as open". On HEAD the paging case does not fail by assertion: nextCursor is undefined there, so its loop never ends and the worker dies of memory (SIGABRT); the activity case fails on HEAD by assertion.
   - Not ported: apps/server/src/provider/agentContextBudget.json and evals/mcp-tool-use/run.ts (absent in GOAT), upstream's rewording of link_many and unlink_many descriptions. The page's last-position read uses page.at(-1)?.position ?? null instead of upstream's non-null assertion (handlers.ts keeps its nonNull budget). Agent surface: the pull_request.list guide (pull_request.ts:115) explains paging and states; its signature line (surfaceEntries.ts:43) is "(pull_request.list :threadId? :states?[] :cursor?)".
   - Whole files before the commit: contracts 995/995 (agentSurface 49/49 inside it); shared 2296 (+2 skipped) in 179 files; src/mcp/toolkits/pullRequests, src/mcp/OrchestratorMcpService*, HostThreads*, src/cli/thread*, src/fleet/health 426/426 in 34 files; contracts, shared and server typechecks clean. orchestratorMcp.ts 1074 -> 1076 (entry follows; dev's entry 1083).
+- 8e77822af101b02d5fb2e305ca712b7ef60786ef fix(server): eb7e63a822 committed on the terms quoted above (orchestratorMcp.ts entry 1074 -> 1076).
+- Merge of the integration head, once: git fetch origin chase/t3-261114-next3; git merge --no-edit origin/chase/t3-261114-next3. Lane head before 8e77822af101b02d5fb2e305ca712b7ef60786ef, integration head 259883c788bb32d5601023932e07f879bde9af60, merge 1bc4def8dda3abf5d38b9689f56a31e7d4e6a48c. git reported "Auto-merging oxlint-plugin-goat/code-budgets.json", "Merge made by the 'ort' strategy.", 3 files changed (ThreadWorkspaceService.setupLockOrder.test.ts +3, terminal/Manager.leaseOrder.test.ts +115, code-budgets.json 1 line: T1c's Manager.ts entry); no conflict.
+- Lane gate: vp run check:changed origin/chase/t3-261114-next3 on 1bc4def8dd (pen-lidge, one job, 5045 s for its tests). goat-rename pass, format pass, graphql (goat) pass, lint pass (warnings only), agent context budget pass, knip pass, typecheck 42 packages pass; agent surface audit FAIL (docs/internals/agent-surface-audit.md stale after this lane's registry text); test: 2736 files, 6 failed | 33846 passed | 24 skipped. The six: (1) goat src/mcp/toolkits/agentSurface/discovery.test.ts "describes every argument of the paths goat_call lists..." - mine (pull_request.list states and cursor undescribed); (2) goat src/storageCleanupShipping.test.ts "keeps every worktree of a repository whose default branch can't be refreshed" - not mine: fails identically at 259883c788 alone (1 failed | 10 passed, run just now with the lane's work checked out away); (3)-(6) root infra/relay ApnsDeliveries (1), FcmDeliveries (2), EnvironmentLinks (1) - host environment: "Relay PostgreSQL tests require initdb, postgres, pg_ctl and psql" (no PostgreSQL on pen-lidge). The gate also ran web browser tests (Playwright chromium-headless), which this server-only host was not meant to run; check:changed chose them from the changed shared files.
+- dddbf74933a02ad3990d6383fa6df52392359964 fix(server): states and cursor described in the pull_request.list tool schema; agent surface audit regenerated (node scripts/agent-surface/audit.ts; --check exit 0). After it: goat src/mcp/toolkits/agentSurface/discovery.test.ts and src/mcp/toolkits/pullRequests whole 57/57 in 4 files; context budget check pass; goat typecheck clean; fmt/lint pass (pre-commit).
+- Pushed: chase/t3-261114-next3-k1-pr-watch = dddbf74933a02ad3990d6383fa6df52392359964 (plain fast-forward from a1a54d9db7).
+
+## READY (2026-11-18)
+
+Head on origin: chase/t3-261114-next3-k1-pr-watch = dddbf74933a02ad3990d6383fa6df52392359964, carrying 220adea5a2 (0af2d21647 gap), 42b22fc9f3 (m1), 035770858d (m2), 36cb30c92b (1de3c3c68c), 5ec7251ae0 (072254ddd3), 95333c3dce (R6), a1a54d9db7 (36254ab82e), cde54732a1 (m3), d35f16edb6 (m4), dfe64715dc (1df9c91230), 8e77822af1 (eb7e63a822), merge 1bc4def8dd of 259883c788, dddbf74933 (descriptions + audit). Rows: 0af2d21647 ticked against GOAT's mapping plus the re-watch gap fixed; the other five ported.
+
+At-entry files against dev's entries at 8c59f73519: Orchestrator.ts 13486 (13528), orchestrationV2.ts 4417 (4438), orchestratorMcp.ts 1076 (1083), OrchestratorMcpService.ts 3860 (3871), runtimeLayer.test.ts 9981 (9983); every entry at countLines. New files all under 1000 lines (PullRequestWatchReactor.ts 935, pullRequestWatch.test.ts 995).
+
+P1 rows owed: web, desktop and mobile capture of a thread whose explicitly watched PR's checks have all finished leaving Working and Priority (36254ab82e, D2); an older client (built before checksPending) against this server keeps it in Working, nothing else.
+
+NOT RUN:
+- web, desktop, mobile captures (server-only host; the P1 row above).
+- a real GitHub or GitLab host read (fake hosts in every test).
+- two actual builds of different versions against each other (covered by schema decode cases both ways: the MCP entry contract case, optional fields on the watch).
+- check:changed again after dddbf74933 (that commit touches tools.ts and a generated doc; its affected checks ran, listed above).
+- infra/relay PostgreSQL tests (no PostgreSQL on pen-lidge).
+- goat-ci (the coordinator dispatches lane=quick on this head).
+- the agentContextBudget.json and eval hunks of eb7e63a822 (files absent in GOAT).
