@@ -399,3 +399,34 @@ it.effect.each(["second completion", "missing second completion"] as const)(
       }).pipe(Effect.provide(harness.layer), Effect.scoped);
     }),
 );
+
+it.effect("publishes a retryable install refresh timeout and keeps the downloaded payload", () =>
+  Effect.gen(function* () {
+    const refreshStarted = yield* Deferred.make<void>();
+    const harness = makeHarness({
+      checkForUpdates: Deferred.succeed(refreshStarted, undefined).pipe(
+        Effect.andThen(Effect.never),
+      ),
+    });
+    yield* Effect.gen(function* () {
+      const updates = yield* DesktopUpdates.DesktopUpdates;
+      yield* updates.configure;
+      harness.emit("update-downloaded", { version: "1.2.4" });
+      yield* flushCallbacks;
+      const install = yield* updates.install.pipe(Effect.forkScoped);
+      yield* Deferred.await(refreshStarted);
+      yield* TestClock.adjust("2 minutes");
+      const result = yield* Fiber.join(install);
+      assert.isFalse(result.completed);
+      assert.equal(result.state.errorContext, "install");
+      assert.include(result.state.message, "did not finish within 2 minutes");
+      assert.isTrue(result.state.canRetry);
+      assert.equal(result.state.downloadedVersion, "1.2.4");
+      assert.equal(harness.sentStates.at(-1)?.message, result.state.message);
+      assert.isFalse(yield* updates.isActionActive);
+      assert.equal(harness.quitAndInstalls(), 0);
+      assert.equal(harness.installRecords.size, 0);
+      assert.isTrue((yield* updates.installPrepared("1.2.4")).accepted);
+    }).pipe(Effect.provide(harness.layer), Effect.scoped);
+  }),
+);

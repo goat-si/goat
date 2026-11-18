@@ -1057,9 +1057,12 @@ export const make = Effect.gen(function* () {
       .pipe(Effect.result);
     if (result._tag === "Failure") {
       yield* logUpdaterWarning(result.failure.message, { errorTag: result.failure._tag });
-      if (reason === "download" && result.failure._tag === "DesktopUpdateCheckTimeoutError")
-        yield* recordDownloadFailure(result.failure.message, "error");
-      return result.failure._tag === "ElectronUpdaterCheckForUpdatesError";
+      if (result.failure._tag === "ElectronUpdaterCheckForUpdatesError") return true;
+      const message = result.failure.message;
+      if (reason === "download") yield* recordDownloadFailure(message, "error");
+      else
+        yield* updateState((current) => reduceDesktopUpdateStateOnInstallFailure(current, message));
+      return false;
     }
     const offer = result.success;
     if (offer === "unavailable") yield* handleUpdateNotAvailable;
