@@ -1,3 +1,4 @@
+import { worktreeCreationHolder, worktreeCreationReason } from "./worktreeCreationLock.ts";
 import { isSameWorktreePath } from "./worktreePath.ts";
 export { isSameWorktreePath } from "./worktreePath.ts";
 import { captureEmptySubmodules } from "./worktreeSubmoduleRecovery.ts";
@@ -3622,13 +3623,42 @@ export const makeGitVcsDriverCore = Effect.fn("makeGitVcsDriverCore")(function* 
         input.cwd,
       )).find((record) => record.branch === `refs/heads/${input.branch}`);
       if (checkout?.lockReason?.startsWith("goat-create-")) {
-        return yield* new GitCommandError({
-          operation: "GitVcsDriver.inspectExistingBranch",
-          command: "git worktree list",
-          cwd: input.cwd,
-          reason: "branch_already_exists",
-          detail: `Branch ${input.branch} has a worktree that is still being prepared.`,
-        });
+        const originalReason = checkout.lockReason;
+        const holderState = yield* Effect.sync(() => worktreeCreationHolder(originalReason));
+        const recovered =
+          holderState === "dead"
+            ? yield* tryWithWorkspaceSubtree(
+                checkout.path,
+                Effect.gen(function* () {
+                  const current = (yield* readWorktreeRecords(
+                    "GitVcsDriver.recheckCreationLock",
+                    input.cwd,
+                  )).find((record) => isSameWorktreePath(record.path, checkout.path, hostPlatform));
+                  if (current?.lockReason !== originalReason || current.branch !== checkout.branch)
+                    return false;
+                  yield* runGit("GitVcsDriver.recoverCreationLock", input.cwd, [
+                    "worktree",
+                    "unlock",
+                    "--",
+                    current.path,
+                  ]);
+                  return true;
+                }),
+              ).pipe(Effect.orElseSucceed(() => Option.none()))
+            : Option.none();
+        if (!Option.getOrElse(recovered, () => false)) {
+          const recovery =
+            holderState === "live"
+              ? "It is still being prepared."
+              : 'GOAT cannot tell if it is still being prepared. After confirming no GOAT setup is using it, run git worktree unlock -- "<checkout path>" from the project, then retry.';
+          return yield* new GitCommandError({
+            operation: "GitVcsDriver.inspectExistingBranch",
+            command: "git worktree list",
+            cwd: input.cwd,
+            reason: "branch_already_exists",
+            detail: `Branch ${input.branch} has a reserved checkout at ${checkout.path}. ${recovery}`,
+          });
+        }
       }
       const worktreePath = checkout?.path ?? null;
       const uniqueCommits = Number(
@@ -3878,7 +3908,8 @@ export const makeGitVcsDriverCore = Effect.fn("makeGitVcsDriverCore")(function* 
           );
     const lockOnAdd =
       addHelp !== null && `${addHelp.stdout}\n${addHelp.stderr}`.includes("--reason");
-    const lockReason = existing === "reused" ? null : `goat-create-${yield* random.uuidV4()}`;
+    const lockReason =
+      existing === "reused" ? null : worktreeCreationReason(yield* random.uuidV4());
     const args = [
       "worktree",
       "add",
