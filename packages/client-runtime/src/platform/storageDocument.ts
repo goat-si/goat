@@ -280,11 +280,8 @@ export function putRemoteDpopTokenInCatalog(
   };
 }
 
-// Keep legacy arrays readable by older clients: an unknown tagged route would make
-// them discard the entire catalog, including unrelated pairing credentials.
-// A Pen field is read as anything and each record on its own: a field or record this build
-// cannot read is dropped instead of failing the catalog. Its slot still counts when the
-// records around it are placed (penSlots).
+// Each Pen record decodes on its own, so one this build cannot read is dropped instead of
+// failing the catalog. Its slot still counts when the records around it are placed.
 const penRecords = <A>(
   decode: (value: unknown) => Option.Option<{ readonly index: number; readonly value: A }>,
   field: unknown,
@@ -300,6 +297,8 @@ const decodePenProfile = Schema.decodeUnknownOption(
 );
 const encodePenTarget = Schema.encodeSync(PenConnectionTarget);
 const encodePenProfile = Schema.encodeSync(PenConnectionProfile);
+// Keep legacy arrays readable by older clients: an unknown tagged route would make
+// them discard the entire catalog, including unrelated pairing credentials.
 const ConnectionCatalogStorageDocument = Schema.Struct({
   ...ConnectionCatalogDocument.fields,
   penTargets: Schema.optionalKey(Schema.Unknown),
