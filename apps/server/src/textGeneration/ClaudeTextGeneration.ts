@@ -26,6 +26,7 @@ import {
   toStrictJsonSchemaObject,
 } from "@goat/provider-core/server/textGenerationUtils";
 import {
+  getModelSelectionBooleanOptionValue,
   getModelSelectionStringOptionValue,
   getProviderOptionDescriptors,
 } from "@goat/shared/model";
@@ -288,14 +289,19 @@ export const makeClaudeTextGeneration = Effect.fn("makeClaudeTextGeneration")(fu
     const thinking = compileClaudeModelSelection(resolvedModelSelection, catalog).settings
       .alwaysThinkingEnabled;
     const fastMode =
-      fastModeDescriptor?.type === "boolean" ? fastModeDescriptor.currentValue : undefined;
+      fastModeDescriptor?.type === "boolean"
+        ? (getModelSelectionBooleanOptionValue(resolvedModelSelection, "fastMode") ??
+          (launchSettings?.fastMode === undefined && fastModeDescriptor.currentValue === true
+            ? true
+            : undefined))
+        : undefined;
     const { settings } = pinClaudeHomeSettings({
       env: claudeEnvironment,
       settings: {
         ...launchSettings,
         disableAllHooks: true,
         ...(typeof thinking === "boolean" ? { alwaysThinkingEnabled: thinking } : {}),
-        ...(fastMode ? { fastMode: true } : {}),
+        ...(typeof fastMode === "boolean" ? { fastMode } : {}),
         ...(typeof ultracode === "boolean" ? { ultracode } : {}),
       },
     });

@@ -798,6 +798,28 @@ it.layer(layerClaudeTextGenerationTest)("ClaudeTextGeneration", (it) => {
       ),
   );
 
+  it.effect.each([true, false, undefined])(
+    "honors the requested Claude Fast Mode value %s",
+    (fastMode) =>
+      withFakeClaudeEnv(
+        {
+          output: JSON.stringify({ structured_output: { title: "Fixture title" } }),
+          claudeConfig: { launchArgs: `--settings '{"fastMode":true}'` },
+          settingsMustContain: `"fastMode":${fastMode ?? true}`,
+        },
+        (generation) =>
+          generation.generateThreadTitle({
+            cwd: process.cwd(),
+            message: "Synthetic request",
+            modelSelection: {
+              instanceId: ProviderInstanceId.make("claudeCode"),
+              model: SYNTHETIC_CLAUDE_CAPABLE_MODEL,
+              ...(fastMode === undefined ? {} : { options: [{ id: "fastMode", value: fastMode }] }),
+            },
+          }),
+      ),
+  );
+
   it.effect(
     "keeps canonical built-in capabilities when a custom model collides with its alias",
     () =>
