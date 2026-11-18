@@ -1,3 +1,4 @@
+import { readPreviewFindAvailable } from "../components/preview/findAvailability";
 import { AuthPreviewOperateScope, type EnvironmentId } from "@goat/contracts";
 import { readPreviewShown } from "../lib/previewShown";
 import type { AnyRouter } from "@tanstack/react-router";
@@ -74,8 +75,9 @@ export function installChatRouteCommands(router: AnyRouter): () => void {
   const previewCommand =
     (action: PreviewAction): CommandHandler =>
     (event) => {
-      claim(event);
       const threadRef = readRouteThreadRef();
+      if (action === "find" && (!threadRef || !readPreviewFindAvailable(threadRef))) return;
+      claim(event);
       if (threadRef && canOperatePreview(threadRef.environmentId)) dispatchPreviewAction(action);
     };
 

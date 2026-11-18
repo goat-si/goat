@@ -1,3 +1,5 @@
+import type { PreviewSessionSnapshot } from "@goat/contracts";
+import { canFindPreviewTab } from "./findAvailability";
 import { useEffect, useRef, useState } from "react";
 import { Button } from "~/components/ui/button";
 import { InputGroup, InputGroupAddon, InputGroupInput } from "~/components/ui/input-group";
@@ -103,19 +105,20 @@ function PreviewFindBar({
   );
 }
 
-export function usePreviewFind(tabId: string | null) {
+export function usePreviewFind(
+  runtimeTabId: string | null,
+  snapshot: Pick<PreviewSessionSnapshot, "runtime"> | null,
+  nativeServerTab: boolean,
+) {
+  const tabId = canFindPreviewTab(snapshot, nativeServerTab) ? runtimeTabId : null;
   const [request, setRequest] = useState<{ tabId: string; count: number } | null>(null);
-  const available = Boolean(
-    previewBridge?.findInPage && previewBridge.stopFindInPage && previewBridge.onFindResult,
-  );
   if (request && request.tabId !== tabId) setRequest(null);
   return {
-    open:
-      tabId && available
-        ? () => setRequest((previous) => ({ tabId, count: (previous?.count ?? 0) + 1 }))
-        : undefined,
+    open: tabId
+      ? () => setRequest((previous) => ({ tabId, count: (previous?.count ?? 0) + 1 }))
+      : undefined,
     bar:
-      tabId && available && request?.tabId === tabId ? (
+      tabId && request?.tabId === tabId ? (
         <PreviewFindBar
           key={tabId}
           tabId={tabId}

@@ -1,4 +1,5 @@
 import { dispatchPreviewAction } from "./preview/previewActionBus";
+import { hasPreviewFindBridge } from "./preview/findAvailability";
 import { previewBridge } from "./preview/previewBridge";
 import { TextSearchIcon } from "./solar";
 import { openThreadFind } from "./chat/threadFindStore";
@@ -12,7 +13,7 @@ export function appendFindItems(
   actionItems: Array<CommandPaletteActionItem | CommandPaletteSubmenuItem>,
   activeThreadKey: string | null,
   activeThreadCanFind: boolean,
-  previewOpen: boolean,
+  previewFindAvailable: boolean,
 ) {
   if (activeThreadKey !== null && activeThreadCanFind) {
     actionItems.push({
@@ -28,7 +29,7 @@ export function appendFindItems(
     });
   }
 
-  if (previewOpen && previewBridge?.findInPage) {
+  if (previewFindAvailable && hasPreviewFindBridge(previewBridge)) {
     actionItems.push({
       kind: "action",
       value: "find-in-browser-page",

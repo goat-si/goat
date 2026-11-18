@@ -88,6 +88,7 @@ import {
   UserPlusIcon,
 } from "~/components/solar";
 import { requestSshThreadHandoff } from "./chat/sshThreadHandoffActionBus";
+import { usePreviewFindAvailable } from "./preview/findAvailability";
 import { appendFindItems } from "./commandPaletteFindItems";
 import { openThreadFind } from "./chat/threadFindStore";
 import {
@@ -417,7 +418,6 @@ export function CommandPalette({ children }: { children: ReactNode }) {
         <CommandPaletteDialog mode={state.mode} setOpen={setOpen}>
           <OpenCommandPaletteDialog
             open={state.open}
-            previewOpen={previewOpen}
             openIntent={state.openIntent}
             setOpen={setOpen}
             openChildSearch={openChildSearch}
@@ -432,7 +432,6 @@ export function CommandPalette({ children }: { children: ReactNode }) {
 
 function OpenCommandPaletteDialog(props: {
   readonly open: boolean;
-  readonly previewOpen: boolean;
   readonly openIntent: CommandPaletteOpenIntent | null;
   readonly setOpen: (open: boolean) => void;
   readonly openChildSearch: (
@@ -1280,7 +1279,12 @@ function OpenCommandPaletteDialog(props: {
     });
   }
 
-  appendFindItems(actionItems, activeThreadKey, supportsThreadFind, props.previewOpen);
+  appendFindItems(
+    actionItems,
+    activeThreadKey,
+    supportsThreadFind,
+    usePreviewFindAvailable(routeThreadRef),
+  );
 
   const promptLinkTarget = paletteRouteTarget
     ? paletteRouteTarget.kind === "server"
