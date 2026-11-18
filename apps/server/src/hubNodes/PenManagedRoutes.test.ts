@@ -99,6 +99,9 @@ describe("PenManagedRoutes", () => {
       assert.equal((yield* Effect.flip(routes.admit(alias)))._tag, "SshInvalidTargetError");
       fail = false;
       yield* routes.release(alias);
+      // Still blocked until the caller has saved the row's removal.
+      assert.isTrue(routes.isManaged(alias));
+      yield* routes.forget(alias);
       assert.isFalse(routes.isManaged(alias));
       assert.deepEqual(closed, [alias, alias]);
     }),

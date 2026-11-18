@@ -67,6 +67,7 @@ const fixture = () => {
         : Effect.fail(new SshInvalidTargetError({ message: "refused" })),
     hold: () => Effect.void,
     release: () => Effect.void,
+    forget: () => Effect.void,
     registerCleanup: () => Effect.void,
   };
   return { guarded: guardPenManaged(manager, routes), calls, state };
@@ -192,6 +193,7 @@ describe("guardPenManaged", () => {
               : Effect.fail(new SshInvalidTargetError({ message: "refused" })),
           hold: () => Effect.void,
           release: () => Effect.void,
+          forget: () => Effect.void,
           registerCleanup: () => Effect.void,
         };
         const withExisting = guardPenManaged(

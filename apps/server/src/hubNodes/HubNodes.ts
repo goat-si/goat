@@ -267,9 +267,9 @@ export const make = Effect.gen(function* () {
   );
 
   /**
-   * Runs a write that takes a Pen route away from Pen: closes what the route held, then writes.
-   * One uninterruptible step, and a write that fails puts the guard back, so the row is never
-   * left listed and unguarded.
+   * Runs a write that takes a Pen route away from Pen: closes what the route held, writes, then
+   * drops the guard. One uninterruptible step, and a write that fails puts the guard back, so the
+   * row is never left listed and unguarded.
    */
   const releasingPen = <A, E, R>(
     alias: string,
@@ -283,6 +283,7 @@ export const make = Effect.gen(function* () {
             (error) => new HubNodesError({ reason: "host_unavailable", detail: error.message }),
           ),
           Effect.andThen(write.pipe(Effect.onError(() => penRoutes.hold(alias, binding)))),
+          Effect.tap(() => penRoutes.forget(alias)),
           Effect.uninterruptible,
         );
   const add: HubNodes["Service"]["add"] = Effect.fn("HubNodes.add")(function* (input, options) {
@@ -708,12 +709,24 @@ export const make = Effect.gen(function* () {
             wanted.delete(row.routeId);
             continue;
           }
-          yield* repository.transaction(
-            Effect.gen(function* () {
-              yield* repository.deleteRegistration(row.routeId);
-              yield* repository.deleteRouteState(row.routeId);
-            }),
-          );
+          // Guarded until the delete is saved; a failed one leaves the row blocked and retried.
+          const deleted = yield* repository
+            .transaction(
+              Effect.gen(function* () {
+                yield* repository.deleteRegistration(row.routeId);
+                yield* repository.deleteRouteState(row.routeId);
+              }),
+            )
+            .pipe(
+              Effect.as(true),
+              Effect.catchTags({ HubNodesError: () => Effect.succeed(false) }),
+            );
+          if (!deleted) {
+            retry = true;
+            wanted.delete(row.routeId);
+            continue;
+          }
+          yield* penRoutes.forget(row.target.alias);
           changed = true;
         }
         const existing = new Map(

@@ -43,10 +43,12 @@ export interface PenManagedRoutesShape {
   ) => Effect.Effect<{ readonly selfNodeId: string }, SshInvalidTargetError>;
   readonly hold: (alias: string, binding: PenRouteBinding) => Effect.Effect<void>;
   /**
-   * Runs every registered cleanup, then drops the alias. A failed cleanup leaves the alias
-   * managed and unusable, and fails, so the caller retries.
+   * Runs every registered cleanup. The alias stays managed and unusable until `forget`, which
+   * the caller runs once the row's removal is saved; a failed cleanup fails, so the caller retries.
    */
   readonly release: (alias: string) => Effect.Effect<void, PenRouteCleanupError>;
+  /** Drops an alias `release` closed; one held again since then stays. */
+  readonly forget: (alias: string) => Effect.Effect<void>;
   /** Sessions, relays and tunnels opened for a managed alias register how to close them. */
   readonly registerCleanup: (cleanup: PenRouteCleanup) => Effect.Effect<void>;
 }
@@ -68,6 +70,7 @@ const refuseEveryPenAlias: PenManagedRoutesShape = {
   admit: (alias) => Effect.fail(notWired(alias)),
   hold: () => Effect.die("PenManagedRoutes is not wired; no Pen route may be added"),
   release: () => Effect.void,
+  forget: () => Effect.void,
   registerCleanup: () => Effect.void,
 };
 
@@ -152,8 +155,11 @@ export const make = Effect.fn("PenManagedRoutes.make")(function* (input: {
           ),
         );
       if (failed) return yield* new PenRouteCleanupError({ alias });
-      if (held.get(alias) === entry) held.delete(alias);
     }),
+    forget: (alias) =>
+      Effect.sync(() => {
+        if (held.get(alias)?.releasing === true) held.delete(alias);
+      }),
     registerCleanup: (cleanup) => Effect.sync(() => void cleanups.push(cleanup)),
   } satisfies PenManagedRoutesShape;
 });

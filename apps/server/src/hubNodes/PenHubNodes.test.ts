@@ -1,5 +1,5 @@
 import { describe, expect, it } from "@effect/vitest";
-import { EnvironmentId, ExecutionEnvironmentDescriptor } from "@goat/contracts";
+import { EnvironmentId, ExecutionEnvironmentDescriptor, HubNodesError } from "@goat/contracts";
 import * as NodeSqliteClient from "@goat/shared/nodeSqliteClient";
 import type { PenMembershipView } from "@goat/ssh/penMembershipWatch";
 import * as Deferred from "effect/Deferred";
@@ -60,6 +60,7 @@ const fixture = Effect.gen(function* () {
     events: [] as string[],
     held: new Map<string, PenRouteBinding>(),
     releaseFails: false,
+    deleteFails: false,
     identity: remote as EnvironmentId | null,
     identify: Effect.void as Effect.Effect<void>,
   };
@@ -76,9 +77,9 @@ const fixture = Effect.gen(function* () {
       Effect.suspend(() => {
         state.events.push(`release ${name}`);
         if (state.releaseFails) return Effect.fail(new PenRouteCleanupError({ alias: name }));
-        state.held.delete(name);
         return Effect.void;
       }),
+    forget: (name) => Effect.sync(() => void state.held.delete(name)),
     registerCleanup: () => Effect.void,
   };
   const ssh = SshRemoteDispatch.SshRemoteDispatch.of({
@@ -89,7 +90,13 @@ const fixture = Effect.gen(function* () {
       }),
   } as unknown as SshRemoteDispatch.SshRemoteDispatch["Service"]);
   const service = yield* HubNodes.make.pipe(
-    Effect.provideService(HubNodeRepository.HubNodeRepository, repository),
+    Effect.provideService(HubNodeRepository.HubNodeRepository, {
+      ...repository,
+      deleteRegistration: (routeId) =>
+        state.deleteFails
+          ? Effect.fail(new HubNodesError({ reason: "storage_failed", detail: "disk full" }))
+          : repository.deleteRegistration(routeId),
+    }),
     Effect.provideService(PenManagedRoutes, routes),
     Effect.provideService(
       LinkedHosts.LinkedHosts,
@@ -182,6 +189,25 @@ describe("HubNodes Pen registrations", () => {
         state.releaseFails = false;
         expect((yield* service.reconcilePen({ members: [], ...current })).retry).toBe(false);
         expect(yield* rows).toEqual([]);
+      }),
+    ),
+  );
+
+  it.effect("a departed member's route stays guarded until its removal is saved", () =>
+    run(({ service, state, rows }) =>
+      Effect.gen(function* () {
+        yield* service.reconcilePen({ members: [member("a")], ...current });
+        state.deleteFails = true;
+        expect(yield* service.reconcilePen({ members: [], ...current })).toEqual({
+          added: [],
+          retry: true,
+        });
+        expect(yield* rows).toEqual([[`ssh:${alias("a")}`, "import", key("a")]]);
+        expect(state.held.has(alias("a"))).toBe(true);
+        state.deleteFails = false;
+        yield* service.reconcilePen({ members: [], ...current });
+        expect(yield* rows).toEqual([]);
+        expect(state.held.size).toBe(0);
       }),
     ),
   );
