@@ -1,5 +1,9 @@
 import { assert, describe, it } from "@effect/vitest";
-import { PullRequestOperationError, type PullRequestRef } from "@goat/contracts";
+import {
+  PullRequestOperationError,
+  PullRequestUnavailableError,
+  type PullRequestRef,
+} from "@goat/contracts";
 import * as Deferred from "effect/Deferred";
 import * as Effect from "effect/Effect";
 import * as Queue from "effect/Queue";
@@ -16,6 +20,7 @@ import {
   makeSummary,
   makeThread,
   startAndSweep,
+  sweepAgain,
 } from "./testkit/pullRequestSync.fixture.ts";
 
 const stackLayer = (number: number) => ({
@@ -160,6 +165,82 @@ describe("PullRequestSyncReactor batching", () => {
             ),
           ),
         );
+      }),
+    ),
+  );
+
+  it.effect.each(["resolution", "summary"] as const)(
+    "reads an unavailable host on the slow cadence when %s fails",
+    (stage) =>
+      Effect.scoped(
+        Effect.gen(function* () {
+          yield* TestClock.setTime(Date.parse(NOW));
+          const unavailable = new PullRequestUnavailableError({ reason: "provider-unsupported" });
+          const link = makeLink(1);
+          let resolutions = 0;
+          const fixture = yield* makeHarness({
+            snapshot: makeSnapshot([makeThread("unavailable", { pullRequests: [link] })]),
+            batchesReadsError: () => {
+              resolutions++;
+              return stage === "resolution" ? unavailable : undefined;
+            },
+            summary: () => Effect.fail(unavailable),
+          });
+          yield* Effect.gen(function* () {
+            const reactor = yield* startAndSweep(fixture);
+            for (let minute = 1; minute < 15; minute++) yield* sweepAgain(fixture, reactor);
+            if (stage === "summary") {
+              assert.strictEqual((yield* Ref.get(fixture.summaryCalls)).length, 1);
+            } else {
+              assert.strictEqual(resolutions, 1);
+            }
+            yield* reactor.requestSync(link);
+            yield* Queue.take(fixture.snapshotReads);
+            yield* reactor.drain;
+            if (stage === "summary") {
+              assert.strictEqual((yield* Ref.get(fixture.summaryCalls)).length, 2);
+            } else {
+              assert.strictEqual(resolutions, 2);
+            }
+          }).pipe(Effect.provide(fixture.layer));
+        }),
+      ),
+  );
+
+  it.effect("lengthens failed summary retries and resets after a successful read", () =>
+    Effect.scoped(
+      Effect.gen(function* () {
+        yield* TestClock.setTime(Date.parse(NOW));
+        const failed = yield* Ref.make(true);
+        const link = makeLink(1, null);
+        const fixture = yield* makeHarness({
+          snapshot: makeSnapshot([makeThread("failing", { pullRequests: [link] })]),
+          summary: (input) =>
+            Ref.get(failed).pipe(
+              Effect.flatMap((fails) =>
+                fails
+                  ? Effect.fail(
+                      new PullRequestOperationError({
+                        operation: "summary",
+                        detail: "host offline",
+                      }),
+                    )
+                  : Effect.succeed(makeSummary(input)),
+              ),
+            ),
+        });
+        yield* Effect.gen(function* () {
+          const reactor = yield* startAndSweep(fixture);
+          const readAt = [0];
+          for (let minute = 1; minute <= 10; minute++) {
+            if (minute === 7) yield* Ref.set(failed, false);
+            if (minute === 8) yield* Ref.set(failed, true);
+            const before = (yield* Ref.get(fixture.summaryCalls)).length;
+            yield* sweepAgain(fixture, reactor);
+            if ((yield* Ref.get(fixture.summaryCalls)).length > before) readAt.push(minute);
+          }
+          assert.deepStrictEqual(readAt, [0, 1, 3, 7, 8, 9]);
+        }).pipe(Effect.provide(fixture.layer));
       }),
     ),
   );

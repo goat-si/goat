@@ -2,7 +2,16 @@ import { View } from "react-native";
 
 import { Button } from "../../components/ui/Button";
 import { AppText as Text } from "../../components/ui/AppText";
-import type { ThreadFeedHistoryControls } from "./ThreadFeed";
+
+export interface ThreadFeedHistoryControls {
+  readonly hasMoreHistory: boolean;
+  readonly loading: boolean;
+  readonly error: string | null;
+  readonly onLoadEarlier: () => void;
+  /** Loads earlier history down to the entry, in one request. */
+  /** Resolves whether that load brought history in; a failure ends a message jump. */
+  readonly onLoadThrough: (entryId: string) => Promise<boolean>;
+}
 
 export function ThreadFeedLoadEarlierControl(props: ThreadFeedHistoryControls) {
   if (!props.hasMoreHistory && props.error === null) {
