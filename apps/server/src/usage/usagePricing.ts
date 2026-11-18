@@ -306,7 +306,7 @@ export function lookupRate(table: RateTable, model: string): ModelRate | null {
   let rate = resolved.get(model);
   if (rate === undefined) {
     rate = resolveRate(table, model);
-    resolved.set(model, rate);
+    if (resolved.size < 4096) resolved.set(model, rate);
   }
   return rate;
 }
@@ -323,9 +323,23 @@ export type PricedRecord = Pick<
   "model" | "rateModel" | "totals" | "cacheCreation1hTokens" | "speed" | "reportedCostUsd"
 >;
 
-function recordRate(table: RateTable, record: PricedRecord): ModelRate | null {
+function recordRate(
+  table: RateTable,
+  record: Pick<PricedRecord, "model" | "rateModel">,
+): ModelRate | null {
   const rate = record.rateModel === undefined ? null : lookupRate(table, record.rateModel);
   return rate ?? lookupRate(table, record.model);
+}
+
+export function unlistedUsageRateModel(
+  table: RateTable,
+  record: Pick<PricedRecord, "model" | "rateModel">,
+  overrides: RateTable,
+): string | undefined {
+  if (overrides.has(record.model.trim()) || recordRate(table, record) !== null) return undefined;
+  const model = record.rateModel ?? record.model;
+  const bareName = bareModelName(stripVariantSuffix(normalizeRateKey(model)));
+  return bareName.length > 0 && !UNPRICEABLE_MODELS.has(bareName) ? model : undefined;
 }
 
 export interface PricedUsage {

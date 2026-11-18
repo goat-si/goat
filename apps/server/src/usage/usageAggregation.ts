@@ -76,6 +76,16 @@ export interface AggregateOptions {
   readonly untilTimeMs?: number;
 }
 
+export function mapUsageModel(
+  record: UsageRecord,
+  options: Pick<AggregateOptions, "modelAliases">,
+): UsageRecord {
+  const model = options.modelAliases?.get(record.model);
+  if (model === undefined) return record;
+  const { rateModel: _rateModel, ...rest } = record;
+  return { ...rest, model };
+}
+
 export function resolveModelAliases(
   aliases: Readonly<Record<string, string>>,
 ): ReadonlyMap<string, string> {
@@ -93,7 +103,10 @@ export function resolveModelAliases(
 }
 
 /** Matches original IDs, so an alias cannot pull excluded usage into a kept model. */
-function keepsUsageRecord(filter: UsageModelFilter | undefined, record: UsageRecord): boolean {
+export function keepsUsageRecord(
+  filter: UsageModelFilter | undefined,
+  record: UsageRecord,
+): boolean {
   if (filter === undefined) return true;
   const model = record.model.trim();
   const matches = (selector: UsageModelSelector) =>
@@ -212,7 +225,7 @@ export class UsageAggregator {
 
   add(input: UsageRecord, sourcePath?: string): boolean {
     if (!keepsUsageRecord(this.#options.modelFilter, input)) return false;
-    const record = this.#mapModel(input);
+    const record = mapUsageModel(input, this.#options);
     if (record.dedupeKey !== null) {
       const held = this.#seen.get(record.dedupeKey);
       if (held !== undefined) {
@@ -299,14 +312,6 @@ export class UsageAggregator {
         record.totals.outputTokens;
     }
     if (priced.costSource === "providerReported") bucket.providerReportedRecords += 1;
-  }
-
-  // Aliases use the target's rate, replacing provider-specific rateModel.
-  #mapModel(record: UsageRecord): UsageRecord {
-    const model = this.#options.modelAliases?.get(record.model);
-    if (model === undefined) return record;
-    const { rateModel: _rateModel, ...rest } = record;
-    return { ...rest, model };
   }
 
   // Time-ordered records usually reuse the previous bucket; avoid rebuilding its key.

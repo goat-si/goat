@@ -29,8 +29,19 @@ import * as ServerConfig from "../config.ts";
 import * as ServerSettings from "../serverSettings.ts";
 import type { BuiltInUsageReadersEnv } from "../provider/builtInDrivers.ts";
 import type { UsageRecord } from "@goat/provider-core/server/usage";
-import { canonicalModelFilter, resolveModelAliases, UsageAggregator } from "./usageAggregation.ts";
-import { createOverrideRateTable, parseRateTable, type RateTable } from "./usagePricing.ts";
+import {
+  canonicalModelFilter,
+  keepsUsageRecord,
+  mapUsageModel,
+  resolveModelAliases,
+  UsageAggregator,
+} from "./usageAggregation.ts";
+import {
+  createOverrideRateTable,
+  parseRateTable,
+  unlistedUsageRateModel,
+  type RateTable,
+} from "./usagePricing.ts";
 import {
   DESKTOP_HOST_SCOPE_ENV,
   listTranscriptFiles,
@@ -72,6 +83,7 @@ const LITELLM_RATES_URL =
 const LITELLM_RATES_API_URL =
   "https://api.github.com/repos/BerriAI/litellm/contents/model_prices_and_context_window.json?ref=main";
 
+const MAX_CHECKED_RATE_MODELS = 512;
 const RATES_TTL_MS = 24 * 60 * 60 * 1000;
 
 const RATES_REFRESH_FLOOR_MS = 60 * 1000;
@@ -141,6 +153,7 @@ export const make = Effect.gen(function* () {
   let ratesLastFailedAtMs: number | null = null;
   let ratesStatus: UsagePricing["status"] = "unavailable";
   const ratesLock = yield* Semaphore.make(1);
+  const checkedRateModels = new Set<string>();
 
   const pricing = (): UsagePricing => ({
     status: ratesStatus,
@@ -194,6 +207,7 @@ export const make = Effect.gen(function* () {
       return;
     }
 
+    checkedRateModels.clear();
     rates = fetched.parsed;
     ratesFetchedAtMs = now;
     ratesLastFailedAtMs = null;
@@ -206,6 +220,27 @@ export const make = Effect.gen(function* () {
   });
 
   const ensureRates = (force: boolean) => ratesLock.withPermit(loadRates(force));
+
+  const refreshForUnlistedModels = Effect.fn("UsageService.refreshForUnlistedModels")(function* (
+    models: ReadonlySet<string>,
+  ) {
+    if (models.size === 0) return;
+    yield* ratesLock.withPermit(
+      Effect.gen(function* () {
+        if (![...models].some((model) => !checkedRateModels.has(model))) return;
+        yield* loadRates(true);
+        const now = yield* Clock.currentTimeMillis;
+        if (ratesFetchedAtMs === null || now - ratesFetchedAtMs >= RATES_REFRESH_FLOOR_MS) return;
+        for (const model of models) {
+          const oldest = checkedRateModels.values().next().value;
+          if (checkedRateModels.size >= MAX_CHECKED_RATE_MODELS && oldest !== undefined) {
+            checkedRateModels.delete(oldest);
+          }
+          checkedRateModels.add(model);
+        }
+      }),
+    );
+  });
 
   const refreshRates = ensureRates(true).pipe(
     Effect.map(pricing),
@@ -569,19 +604,8 @@ export const make = Effect.gen(function* () {
       { concurrency: 2 },
     );
 
-    const summaryPricing = pricing();
-    const aggregator = new UsageAggregator({
-      timeZone: input.timeZone,
-      sinceDay: input.sinceDay,
-      untilDay: input.untilDay,
-      resolution: input.resolution ?? "day",
-      ...hourlyWindow,
-      rates,
-      priceOverrides: createOverrideRateTable(settings.usagePriceOverrides),
-      modelAliases: resolveModelAliases(settings.usageModelAliases),
-      ...(input.modelFilter === undefined ? {} : { modelFilter: input.modelFilter }),
-    });
-
+    const priceOverrides = createOverrideRateTable(settings.usagePriceOverrides);
+    const modelAliases = resolveModelAliases(settings.usageModelAliases);
     const sources: UsageSource[] = [];
 
     // Deleted transcripts' saved usage still aggregates and deduplicates normally.
@@ -654,6 +678,44 @@ export const make = Effect.gen(function* () {
     const windowEndMs =
       hourlyWindow?.untilTimeMs ??
       Date.parse(`${input.untilDay}T00:00:00Z`) + 86400000 + MTIME_SLACK_MS;
+    if (!fromMemory) {
+      const unlisted = new Set<string>();
+      scanModels: for (const files of filesByDir) {
+        for (const file of files) {
+          for (const record of file.records) {
+            if (
+              record.timestampMs < windowStartMs ||
+              record.timestampMs >= windowEndMs ||
+              !keepsUsageRecord(input.modelFilter, record)
+            )
+              continue;
+            const model = unlistedUsageRateModel(
+              rates,
+              mapUsageModel(record, { modelAliases }),
+              priceOverrides,
+            );
+            if (model === undefined || checkedRateModels.has(model)) continue;
+            unlisted.add(model);
+            if (unlisted.size >= MAX_CHECKED_RATE_MODELS) break scanModels;
+          }
+        }
+      }
+      yield* refreshForUnlistedModels(unlisted);
+    }
+
+    const summaryPricing = pricing();
+    const aggregator = new UsageAggregator({
+      timeZone: input.timeZone,
+      sinceDay: input.sinceDay,
+      untilDay: input.untilDay,
+      resolution: input.resolution ?? "day",
+      ...hourlyWindow,
+      rates,
+      priceOverrides,
+      modelAliases,
+      ...(input.modelFilter === undefined ? {} : { modelFilter: input.modelFilter }),
+    });
+
     let resolvedAny = false;
     for (const { reader } of transcriptReaders) {
       if (reader.resolveServiceTiers === undefined || fromMemory) continue;
