@@ -275,3 +275,37 @@ Exact upstream files touched by the five supplied commits have 52 newer commits 
 - 42057b82d0 feat: agents can restyle T3 Code with theme colors and CSS (#35247)
 - 88d4d06ea3 perf(desktop): provider checks no longer compete with server startup (#35712)
 - 2d80cb6bc7 fix(clients): live working timers count on the host's clock (#36420)
+
+## K7b-2 READY
+
+Published head `77764a6428b484da2b2d938116cbd11dde8f3580` on `chase/t3-261114-next3-k7b`. The single incoming integration merge uses `554c3c4092a8b29a2f853eb0a2e10d390d2ef424`. Its conflict resolution keeps both the integration server-update move and this lane's config-state move. The unpublished merge was amended for exact-optional types and typed snapshot fixtures flagged by the first gate. Node is 26.12.1. The coordinator owns the review and integration into PR #3700.
+
+| Row | Commit | Port |
+| --- | --- | --- |
+| R4 | `0b80b0bc2fae3a6719c09ac4cf92af4e61535f5d` | Adapted `2917f28465`'s deferred on-demand catalog. Initial config and updates share a projection that reads current instance capability. Keeps GOAT's usage/provider projection order. Failed cwd scans carry the original machine catalog as pending. Fail-first on the baseline handler was 2 failures (command description retained and no pending snapshot). |
+| R5 | `aa794d55096dd563664cbc2c576f8a232bd36154` | Adapted `8b2763f638`'s digests and machine catalog reply. GOAT keeps `providerStatusChanges`. The client applies those changes to the wire lists before restoring held lists. This also clears held lists when an instance loses cwd support. Cwd snapshots key their basis by digest so a changed catalog retires them. A late machine catalog reply applies under its own digest only. Fail-first had 3 failures (missing digest, lost stale marker and lists retained after losing cwd support). |
+| R6 | `25d45da82c8a5d9bb5f88cf74cb5822defedf188` | Adapted `8b2763f638`'s refresh-reply portion. The mobile usage widget opts in per call. The client command distinguishes that request for single-flight matching. A machine refresh still runs its provider and usage work. One with instance and cwd still returns the workspace. Fail-first returned providers for an opted-in machine refresh. The green RPC authorization case runs through the actual scope middleware and records zero refreshes on denial. |
+
+Supporting moves `ecd3844ee656add746930d7b43425a2b399da0af` (claims 10 and 11) and `ef5cb89a8b492cdb0f090903e6b71d590577337d` (config-state claim in records `befa016356`). Against the merged integration head, ws.ts is 3506 → 3485 lines, rpc.ts 2788 → 2773 and state/server.ts 1564 → 1429. R4–R6 used adaptations, with no full clean cherry-picks. The upstream delta event and its helpers are covered by GOAT's existing provider changes stream. No new upstream rows from the range above are included.
+
+Rule 3: Existing expectations stayed in place. The mobile widget's `expect(fixture.refresh).toHaveBeenCalledTimes(1)` gained a separate call assertion immediately afterward: `expect(fixture.refresh).toHaveBeenCalledWith({ environmentId: "remote", input: { omitProviders: true } })`. The three other changed test files are new.
+
+### Launch config on the seeded copy
+
+`vp run migrate-dev-db --base-dir "$PWD/.goat/k7b-seed" --projects 5 --threads-per-project 10` exited 0. It used the live database only as a read-only migration source and produced a 347,222,016-byte isolated copy with five projects and 35,883 events. The in-process production `subscribeServerConfig` handler read settings and provider history against that seeded SQLite copy. The fixture supplied 13 copied machine provider cache entries, eight with cwd-capable drivers, and fixed the unrelated discovery and usage inputs. It opened no listener. Each row measures the first config snapshot encoded by `Schema.toCodecJson(ServerConfigStreamEvent)`, counted as UTF-8 JSON bytes. The same handler ran the legacy mobile request and both opt-in requests on the same inputs.
+
+| Mobile request | First snapshot, bytes | Providers, bytes |
+| --- | ---: | ---: |
+| Before, legacy flags | 120,798 | 90,881 |
+| R4, names and labels | 82,501 | 52,584 |
+| R5, digests | 63,971 | 34,054 |
+
+Total reduction 31.7% with R4 and 47.0% with R5. The seeded copy and the copied catalogs were removed after measurement.
+
+### Verification and P1
+
+- `GOAT_TEST_TMP_GUARD=fail vp run check:changed origin/chase/t3-261114-next3` exited 0 on the published head. Format, lint, two knip passes, server GraphQL, agent surface and context budget audits, typecheck of 38 packages, and tests passed. 71 server tests across 14 files plus 3,024 across 133 files, or 3,095 across 147 files. One existing low-value-comment warning in contracts server.ts.
+- From apps/server, `GOAT_TEST_TMP_GUARD=fail vp test run src/ws.providerCatalog.test.ts` exited 0, 5 passed. From root, `vp test run apps/mobile/src/widgets/useSubscriptionUsage.test.tsx packages/client-runtime/src/state/serverConfigProjection.catalogs.test.ts packages/contracts/src/providerCatalogCompatibility.test.ts` exited 0, 7 passed.
+- Older schemas strip the new flags. Older clients still get full payloads by default and older-server full lists are authoritative. Catalog cases cover same and changed digests, late replies, cwd capability loss, and the client-only digest marker never appearing in a refresh request. Scoped refreshes retain their replies and the negative read-scope case performs no refresh.
+- P1 rows owed: R4/R5 mobile cold launch and reconnect, then open the composer and verify cwd-specific slash commands and skill links, including after the machine catalog changes. R6 mobile provider usage widget resume and refresh.
+- NOT RUN: P1 live client, native mobile, older binary pairs, live GOAT Connect, slow-link timing, GitHub CI, full repository suites, release builds and smoke. Independent C4 review remains with the coordinator. K7b-1 is pending its cut after the coordinator integrates K7b-2, in the ruled order R2 `9557ab46c5`, R1 `dc3fdc6a3e`, R3 `2482b03a01`.
