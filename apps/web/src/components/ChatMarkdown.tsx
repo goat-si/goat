@@ -30,9 +30,7 @@ import {
 import {
   AssetWorkspaceAssetNotFoundError,
   AuthPreviewOperateScope,
-  type EditorId,
   type EnvironmentId,
-  type ServerConfig,
   type ScopedThreadRef,
   type ServerProviderSkill,
   type ThreadPullRequestKey,
@@ -49,9 +47,8 @@ import {
 import { mediaKindFromPath, mediaMimeTypeFromExtension } from "@goat/shared/mediaPreview";
 import { InlineAudioPreview } from "./files/InlineAudioPreview";
 import * as Cause from "effect/Cause";
-import * as Option from "effect/Option";
 import * as Schema from "effect/Schema";
-import { AsyncResult, Atom } from "effect/reactivity";
+import { AsyncResult } from "effect/reactivity";
 import React, {
   Suspense,
   type ComponentProps,
@@ -94,10 +91,6 @@ import { ExpandedImageDialog } from "./chat/ExpandedImageDialog";
 import { markdownImageGallery } from "./chat/markdownImageGallery";
 import { resolveProtocolRelativeMediaUrl } from "./media/mediaContent";
 import {
-  revealInFileExplorerLabelForKind,
-  revealInFileExplorerLabelForOs,
-} from "./preview/fileExplorerLabel";
-import {
   resolveExternalWebLinkHost,
   showExternalLinkContextMenu,
 } from "./chat/externalLinkContextMenu";
@@ -129,7 +122,7 @@ import { cn } from "../lib/utils";
 import { resolveRemoteOpenState, useRemoteOpenResolution } from "../remoteOpen";
 import { useRightPanelStore } from "../rightPanelStore";
 import { readThreadShell, useProjects } from "../state/entities";
-import { serverEnvironment } from "../state/server";
+import { markdownServerConfigFieldsAtom } from "./chatMarkdownServerConfig";
 import { shellEnvironment } from "../state/shell";
 import { assetEnvironment } from "../state/assets";
 import {
@@ -282,44 +275,6 @@ function markdownUrlTransform(href: string) {
   if (isWindowsDrivePathHref(href)) return href;
   return rewriteMarkdownFileUriHref(href) ?? defaultUrlTransform(href);
 }
-
-const NO_MARKDOWN_EDITORS: ReadonlyArray<EditorId> = [];
-
-type MarkdownServerConfigFields = ReturnType<typeof markdownServerConfigFields>;
-
-function markdownServerConfigFields(config: ServerConfig | null) {
-  return {
-    pullRequestsEnabled: config?.environment.capabilities.pullRequests === true,
-    availableEditors: config?.availableEditors ?? NO_MARKDOWN_EDITORS,
-    revealInFileManagerLabel:
-      config?.shellRevealInFileManager === true && config.availableEditors.includes("file-manager")
-        ? config.shellRevealInFileManagerKind === undefined
-          ? revealInFileExplorerLabelForOs(config.environment.platform.os)
-          : revealInFileExplorerLabelForKind(config.shellRevealInFileManagerKind)
-        : undefined,
-  };
-}
-
-function markdownServerConfigFieldsEqual(
-  previous: MarkdownServerConfigFields,
-  next: MarkdownServerConfigFields,
-): boolean {
-  return (
-    previous.pullRequestsEnabled === next.pullRequestsEnabled &&
-    previous.revealInFileManagerLabel === next.revealInFileManagerLabel &&
-    previous.availableEditors.length === next.availableEditors.length &&
-    previous.availableEditors.every((editor, index) => editor === next.availableEditors[index])
-  );
-}
-
-// Compare only markdown config fields to avoid rerendering replies on every provider status push.
-const markdownServerConfigFieldsAtom = Atom.family((environmentId: EnvironmentId | null) =>
-  Atom.make((get) => {
-    const next = markdownServerConfigFields(get(serverEnvironment.configValueAtom(environmentId)));
-    const previous = Option.getOrNull(get.self<MarkdownServerConfigFields>());
-    return previous !== null && markdownServerConfigFieldsEqual(previous, next) ? previous : next;
-  }).pipe(Atom.withLabel("markdown-server-config-fields")),
-);
 
 function fileLinkSourcesKey(
   text: string,
