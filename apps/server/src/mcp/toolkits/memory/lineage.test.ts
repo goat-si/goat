@@ -778,3 +778,55 @@ it.effect("memory projections expose marks only when requested", () =>
     expect(history.revisions[0]).toMatchObject({ marks });
   }).pipe(Effect.provide(Fixture.layer)),
 );
+
+it.effect("conversation filters apply before paging and bind cursors to both origin IDs", () =>
+  Effect.gen(function* () {
+    const service = yield* Service.MemoryService;
+    const sql = yield* SqlClient.SqlClient;
+    const threadId = M.ThreadId.make("same-thread-id");
+    const otherEnvironment = M.EnvironmentId.make("foreign-fixture");
+    const environmentId = Fixture.scope().environmentId;
+    const space = Fixture.space;
+    const origin = { environmentId, threadId };
+    const savedIds = [6, 7, 8, 9].map((n) => M.MemoryId.make(Fixture.id(n)));
+    for (const [offset, savedId] of savedIds.entries()) {
+      yield* service.upsert({ ...Fixture.upsert(11 + offset), memoryId: savedId }, Effect.void);
+      if (offset > 0)
+        yield* sql`INSERT INTO memory_origins (space,memory_id,environment_id,thread_id)
+          VALUES (${space},${savedId},${offset === 2 ? otherEnvironment : environmentId},${threadId})`;
+    }
+    const page = { memorySpaceId: space, limit: 1, origin };
+    const list = { ...page, includeQuarantined: false };
+    const search = { ...page, query: "synthetic", mode: "substring" as const };
+    const firstList = yield* service.list(list, Effect.void);
+    const firstSearch = yield* service.search(search, Effect.void);
+    assert.deepStrictEqual(
+      firstList.items.map((item) => item.memoryId),
+      [savedIds[1]],
+    );
+    assert.deepStrictEqual(
+      firstSearch.items.map((item) => item.memoryId),
+      [savedIds[1]],
+    );
+    expect(firstList.nextCursor).not.toBeNull();
+    expect(firstSearch.nextCursor).not.toBeNull();
+    const nextList = { ...list, cursor: firstList.nextCursor! };
+    const nextSearch = { ...search, cursor: firstSearch.nextCursor! };
+    expect((yield* service.list(nextList, Effect.void)).items.map((item) => item.memoryId)).toEqual(
+      [savedIds[3]],
+    );
+    expect(
+      (yield* service.search(nextSearch, Effect.void)).items.map((item) => item.memoryId),
+    ).toEqual([savedIds[3]]);
+    for (const changedOrigin of [
+      { ...origin, environmentId: otherEnvironment },
+      { ...origin, threadId: M.ThreadId.make("different-thread-id") },
+    ]) {
+      for (const failure of yield* Effect.all([
+        service.list({ ...nextList, origin: changedOrigin }, Effect.void).pipe(Effect.flip),
+        service.search({ ...nextSearch, origin: changedOrigin }, Effect.void).pipe(Effect.flip),
+      ]))
+        expect(failure).toMatchObject({ code: "invalid_cursor" });
+    }
+  }).pipe(Effect.provide(Fixture.layer)),
+);
