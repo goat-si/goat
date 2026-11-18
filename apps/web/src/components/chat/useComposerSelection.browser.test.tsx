@@ -35,11 +35,12 @@ vi.mock(import("../../state/threads"), async (original) => {
   };
 });
 
-import { render } from "../../../test/render";
+import { act, render } from "../../../test/render";
 import { useComposerDraftStore } from "../../composerDraftStore";
 import { deriveEffectiveComposerModelState } from "../../composerModelState";
 import { AppAtomRegistryProvider, appAtomRegistry } from "../../rpc/atomRegistry";
 import { useComposerSelection } from "./useComposerSelection";
+import { useComposerProviderModel } from "./useComposerProviderModel";
 
 // Kept alive so a shell set before the hook mounts is still there when it saves a pick.
 const shellAtom = Atom.family((_threadId: string) => Atom.make<unknown>(null).pipe(Atom.keepAlive));
@@ -111,6 +112,28 @@ function Picker(props: {
   );
 }
 
+function DisplayedModel({ thread }: { thread: EnvironmentThreadShell }) {
+  const { selectedModel } = useComposerProviderModel({
+    providerStatuses: providers,
+    settings: {
+      ...DEFAULT_UNIFIED_SETTINGS,
+      providerInstances: {
+        [cursor]: { driver: ProviderDriverKind.make("cursor"), enabled: true },
+      },
+    },
+    activeProjectId: null,
+    thread,
+    threadRef: scopeThreadRef(thread.environmentId, thread.id),
+    threadModelSelection: thread.modelSelection,
+    projectModelSelection: null,
+    promptInjectionState: "none",
+    candidateInstanceIds: [thread.modelSelection.instanceId],
+    lockedProvider: null,
+    lockedInstanceId: undefined,
+  });
+  return <output aria-label="Response model">{selectedModel}</output>;
+}
+
 it("keeps a Cursor thread's stored model and options when the user re-picks its unavailable row", async () => {
   setup();
   const thread = cursorThread("thread-cursor");
@@ -177,4 +200,93 @@ it("saves a re-picked model again when its first save failed", async () => {
     },
   });
   await vi.waitFor(() => expect(setModelSelection.mock.calls).toEqual([[autoSave], [autoSave]]));
+});
+
+it("does not save an ignored seed when the user re-picks the started thread's displayed model", async () => {
+  const { setModelSelection } = setup();
+  setModelSelection.mockResolvedValue(AsyncResult.success(undefined));
+  const thread = {
+    ...cursorThread("thread-cursor-repick-over-seed"),
+    latestRun: null,
+    itemCount: 1,
+    runtime: null,
+  };
+  appAtomRegistry.set(shellAtom(thread.id), thread);
+  useComposerDraftStore
+    .getState()
+    .setModelSelection(
+      scopeThreadRef(environmentId, thread.id),
+      createModelSelection(cursor, "auto-smart"),
+    );
+
+  await using screen = await render(
+    <AppAtomRegistryProvider>
+      <Picker thread={thread} runtime={null} model={stored.model} />
+    </AppAtomRegistryProvider>,
+  );
+  await screen.getByRole("button", { name: "Pick the model" }).click();
+
+  expect(setModelSelection).not.toHaveBeenCalled();
+});
+
+it("saves a pick of a seeded model the started thread does not show", async () => {
+  const { setModelSelection } = setup();
+  setModelSelection.mockResolvedValue(AsyncResult.success(undefined));
+  const thread = {
+    ...cursorThread("thread-cursor-seeded"),
+    latestRun: null,
+    itemCount: 1,
+    runtime: null,
+  };
+  appAtomRegistry.set(shellAtom(thread.id), thread);
+  useComposerDraftStore
+    .getState()
+    .setModelSelection(
+      scopeThreadRef(environmentId, thread.id),
+      createModelSelection(cursor, "auto-smart"),
+    );
+  await using screen = await render(
+    <AppAtomRegistryProvider>
+      <DisplayedModel thread={thread} />
+      <Picker thread={thread} runtime={null} model="auto-smart" />
+    </AppAtomRegistryProvider>,
+  );
+  const model = screen.getByLabelText("Response model");
+  await expect.element(model).toHaveTextContent(stored.model);
+  await screen.getByRole("button", { name: "Pick the model" }).click();
+
+  await vi.waitFor(() =>
+    expect(setModelSelection).toHaveBeenCalledWith(
+      expect.objectContaining({
+        input: {
+          threadId: thread.id,
+          modelSelection: expect.objectContaining({ instanceId: cursor, model: "auto-smart" }),
+        },
+      }),
+    ),
+  );
+  expect(appAtomRegistry.get(shellAtom(thread.id))).toMatchObject({ modelSelection: stored });
+  expect(model.element().textContent).toBe("auto-smart");
+});
+
+it("shows the stored model when a seeded thread starts, until the user makes an explicit pick", async () => {
+  const thread = {
+    ...cursorThread("thread-model-seed-start"),
+    latestRun: null,
+    itemCount: 0,
+    runtime: null,
+  };
+  const threadRef = scopeThreadRef(environmentId, thread.id);
+  const seed = createModelSelection(cursor, "auto-smart");
+  useComposerDraftStore.getState().setModelSelection(threadRef, seed);
+
+  await using screen = await render(<DisplayedModel thread={thread} />);
+  const model = screen.getByLabelText("Response model");
+  expect(model.element().textContent).toBe(seed.model);
+  await screen.rerender(<DisplayedModel thread={{ ...thread, itemCount: 1 }} />);
+  expect(model.element().textContent).toBe(stored.model);
+  await act(() =>
+    useComposerDraftStore.getState().setModelSelection(threadRef, seed, { explicit: true }),
+  );
+  expect(model.element().textContent).toBe(seed.model);
 });

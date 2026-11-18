@@ -323,6 +323,7 @@ export const resumed = (
     readonly version?: "2.2.1" | "2.2.5" | "2.2.6";
     readonly shellRecovery?: ReadonlyArray<ProviderReplayEntry>;
     readonly lastRunOrdinal?: number;
+    readonly pendingBackgroundTasks?: OrchestrationV2ProviderThread["pendingBackgroundTasks"];
     readonly goal?: OrchestrationV2ProviderThread["goal"];
     readonly external?: boolean;
     readonly supervised?: boolean;
@@ -399,6 +400,9 @@ export const resumed = (
         ...(options?.lastRunOrdinal === undefined
           ? {}
           : { lastRunOrdinal: options.lastRunOrdinal }),
+        ...(options?.pendingBackgroundTasks === undefined
+          ? {}
+          : { pendingBackgroundTasks: options.pendingBackgroundTasks }),
         ...(options?.goal === undefined ? {} : { goal: options.goal }),
       },
       threadId,
@@ -479,7 +483,10 @@ export const childCreated = (child: string) => ({
   agent: "general",
   model: { id: "big-pickle", providerID: "opencode", variant: "default" },
 });
-export const backgroundLaunch = (child: string): ReadonlyArray<ProviderReplayEntry> => {
+export const backgroundLaunch = (
+  child: string,
+  background = true,
+): ReadonlyArray<ProviderReplayEntry> => {
   const call = "call-background";
   const tool = { sessionID: SESSION, assistantMessageID: "msg_assistant", id: call };
   return [
@@ -490,7 +497,7 @@ export const backgroundLaunch = (child: string): ReadonlyArray<ProviderReplayEnt
     event("session.tool.called", {
       ...tool,
       name: "subagent",
-      input: { description: "Sleep", prompt: "sleep", background: true },
+      input: { description: "Sleep", prompt: "sleep", background },
       executed: false,
     }),
     event("session.created", childCreated(child)),

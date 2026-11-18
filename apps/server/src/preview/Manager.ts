@@ -64,6 +64,9 @@ export class PreviewManager extends Context.Service<
     ) => Effect.Effect<PreviewSessionSnapshot, PreviewError>;
     readonly refresh: (input: PreviewRefreshInput) => Effect.Effect<void, PreviewError>;
     readonly close: (input: PreviewCloseInput) => Effect.Effect<void, PreviewError>;
+    readonly registerBeforeClose: (
+      handler: (snapshots: ReadonlyArray<PreviewSessionSnapshot>) => Effect.Effect<void>,
+    ) => Effect.Effect<void, never, Scope.Scope>;
     readonly list: (input: PreviewListInput) => Effect.Effect<PreviewListResult>;
     readonly events: Stream.Stream<PreviewEvent>;
     readonly subscribeEvents: Effect.Effect<PubSub.Subscription<PreviewEvent>, never, Scope.Scope>;
@@ -132,6 +135,13 @@ export const make = Effect.gen(function* PreviewManagerMake() {
   const stateRef = yield* SynchronizedRef.make<ManagerState>(initialState);
   const eventsPubSub = yield* PubSub.unbounded<PreviewEvent>();
   const events: Stream.Stream<PreviewEvent> = Stream.fromPubSub(eventsPubSub);
+
+  const beforeClose = new Set<Parameters<PreviewManager["Service"]["registerBeforeClose"]>[0]>();
+  const registerBeforeClose: PreviewManager["Service"]["registerBeforeClose"] = (handler) =>
+    Effect.acquireRelease(
+      Effect.sync(() => beforeClose.add(handler)),
+      () => Effect.sync(() => beforeClose.delete(handler)),
+    ).pipe(Effect.asVoid);
 
   /** Publish inside the lock to preserve state-transition order. */
   const mutateExistingSession = <R, E>(
@@ -420,42 +430,47 @@ export const make = Effect.gen(function* PreviewManagerMake() {
     },
   );
 
-  const close: PreviewManager["Service"]["close"] = Effect.fn("PreviewManager.close")(
-    function* (input) {
-      const createdAt = yield* currentIsoTimestamp;
-      yield* SynchronizedRef.modifyEffect(stateRef, (state) => {
-        const eventsToEmit: PreviewEvent[] = [];
-        const sessions = new Map(state.sessions);
-        const targets = input.tabId
-          ? [state.sessions.get(compositeKey(input.threadId, input.tabId))].filter(
-              (entry): entry is PreviewSessionState => entry !== undefined,
-            )
-          : sessionsForThread(state, input.threadId);
-        let revision = state.revision;
-        for (const target of targets) {
-          revision += 1;
-          sessions.delete(compositeKey(target.threadId, target.tabId));
-          eventsToEmit.push({
-            type: "closed",
-            threadId: target.threadId,
-            tabId: target.tabId,
-            createdAt,
-            serverEpoch,
-            revision,
-          });
-        }
-        if (eventsToEmit.length === 0) {
-          return Effect.succeed([undefined, state] as const);
-        }
-        return Effect.as(
-          Effect.forEach(eventsToEmit, (event) => PubSub.publish(eventsPubSub, event), {
-            discard: true,
-          }),
-          [undefined, { sessions, revision }] as const,
-        );
-      });
-    },
-  );
+  const close: PreviewManager["Service"]["close"] = Effect.fn("PreviewManager.close")(function* (
+    input,
+  ) {
+    // Unload runs outside the state lock while the guest still has its mounted surface.
+    const current = yield* SynchronizedRef.get(stateRef);
+    const targets = input.tabId
+      ? [current.sessions.get(compositeKey(input.threadId, input.tabId))].filter(
+          (entry): entry is PreviewSessionState => entry !== undefined,
+        )
+      : sessionsForThread(current, input.threadId);
+    if (targets.length === 0) return;
+    const snapshots = targets.map((target) => target.snapshot);
+    yield* Effect.forEach([...beforeClose], (handler) => handler(snapshots), { discard: true });
+    const createdAt = yield* currentIsoTimestamp;
+    yield* SynchronizedRef.modifyEffect(stateRef, (state) => {
+      const eventsToEmit: PreviewEvent[] = [];
+      const sessions = new Map(state.sessions);
+      let revision = state.revision;
+      for (const target of targets) {
+        if (!sessions.delete(compositeKey(target.threadId, target.tabId))) continue;
+        revision += 1;
+        eventsToEmit.push({
+          type: "closed",
+          threadId: target.threadId,
+          tabId: target.tabId,
+          createdAt,
+          serverEpoch,
+          revision,
+        });
+      }
+      if (eventsToEmit.length === 0) {
+        return Effect.succeed([undefined, state] as const);
+      }
+      return Effect.as(
+        Effect.forEach(eventsToEmit, (event) => PubSub.publish(eventsPubSub, event), {
+          discard: true,
+        }),
+        [undefined, { sessions, revision }] as const,
+      );
+    });
+  }, Effect.uninterruptible);
 
   const list: PreviewManager["Service"]["list"] = Effect.fn("PreviewManager.list")(
     function* (input) {
@@ -512,6 +527,7 @@ export const make = Effect.gen(function* PreviewManagerMake() {
     adjust,
     refresh,
     close,
+    registerBeforeClose,
     list,
     events,
     subscribeEvents: PubSub.subscribe(eventsPubSub),

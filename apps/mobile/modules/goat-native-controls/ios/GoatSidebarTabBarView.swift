@@ -49,6 +49,7 @@ final class GoatSidebarTabBarView: ExpoView, UITabBarDelegate {
       composeButton.isHidden = !showsCompose
       tabBarTrailing.constant = showsCompose ? (compact ? -64 : -76) : 0
       setNeedsLayout()
+      tabBar.setNeedsLayout()
     }
   }
   var appearance = "light" {

@@ -72,7 +72,7 @@ it.layer(McpProviderSessions.layer)("OpenCode2 adapter", (it) => {
     });
 
   const retrying = {
-    class: "provider_error",
+    class: "usage_limit",
     message: rateLimited.message,
     code: rateLimited.type,
     retryable: true,
@@ -409,7 +409,7 @@ it.layer(McpProviderSessions.layer)("OpenCode2 adapter", (it) => {
         ],
         gate,
       );
-      const failed = { ...retrying, class: "usage_limit" as const, retryable: null };
+      const failed = { ...retrying, retryable: null };
       const lastRetry = { attempt: 2, maxAttempts: null, retryDelayMs: 4_000 };
       const rows = errorRows(seen);
       assert.deepEqual(

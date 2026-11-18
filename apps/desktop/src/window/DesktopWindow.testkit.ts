@@ -121,6 +121,7 @@ export function layerTest(input: {
   readonly previewZoomReapplies?: number[];
   readonly onReveal?: (window: Electron.BrowserWindow) => void;
   readonly focusedWindow?: Electron.BrowserWindow;
+  readonly fallbackWindow?: Electron.BrowserWindow;
   readonly primaryPasteEnabled?: boolean;
   readonly previewPasskeyBridgeEnabled?: boolean;
   readonly materialWindowOptions?: { readonly transparent?: true };
@@ -175,7 +176,9 @@ export function layerTest(input: {
         Effect.as(input.window),
       ),
     main: Ref.get(input.mainWindow),
-    currentMainOrFirst: Ref.get(input.mainWindow),
+    currentMainOrFirst: Ref.get(input.mainWindow).pipe(
+      Effect.map(Option.orElse(() => Option.fromUndefinedOr(input.fallbackWindow))),
+    ),
     focusedMainOrFirst:
       input.focusedWindow === undefined
         ? Ref.get(input.mainWindow)

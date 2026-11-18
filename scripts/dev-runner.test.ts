@@ -232,6 +232,19 @@ it.layer(NodeServices.layer)("dev-runner", (it) => {
   });
 
   describe("cli", () => {
+    it("can select a server run without source watching", () => {
+      const result = NodeChildProcess.spawnSync(
+        process.execPath,
+        ["scripts/dev-runner.ts", "dev:server", "--no-watch", "--dry-run"],
+        {
+          cwd: NodePath.resolve(import.meta.dirname, ".."),
+          encoding: "utf8",
+        },
+      );
+      assert.equal(result.status, 0, result.stdout + result.stderr);
+      assert.match(result.stdout, /\bwatch=off\b/);
+    });
+
     it("ignores the parent GOAT server's GOAT_PORT and GOAT_HOST", () => {
       const result = NodeChildProcess.spawnSync(
         process.execPath,
