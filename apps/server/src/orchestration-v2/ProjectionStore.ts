@@ -1,3 +1,4 @@
+import { preserveAttemptDeliveryJson } from "./AttemptInputDelivery.ts";
 import { parentClosed } from "./goat/LimitRecoveryParent.ts";
 import * as ThreadNewestRun from "./goat/ThreadNewestRun.ts";
 import { replayActivityBlockers, selectThreadRecords } from "./goat/ProjectionStoreMemoryReads.ts";
@@ -1413,7 +1414,7 @@ export const layer: Layer.Layer<ProjectionStoreV2, never, SqlClient.SqlClient> =
                 provider_thread_id = excluded.provider_thread_id,
                 provider_turn_id = excluded.provider_turn_id,
                 status = excluded.status,
-                payload_json = excluded.payload_json
+                payload_json = ${preserveAttemptDeliveryJson(sql)}
             `;
               break;
             }
@@ -4145,7 +4146,7 @@ export const layer: Layer.Layer<ProjectionStoreV2, never, SqlClient.SqlClient> =
             `.pipe(Effect.flatMap(decodeRows(decodeProviderSessionPayload, threadId)));
             const memoryMessageIds = turnStartMessageIds(
               runs.find((run) => run.id === runId),
-              { runs, attempts, providerTurns },
+              { runs, attempts },
             );
             const messages = yield* sql<PayloadRow>`
               SELECT payload_json FROM orchestration_v2_projection_messages

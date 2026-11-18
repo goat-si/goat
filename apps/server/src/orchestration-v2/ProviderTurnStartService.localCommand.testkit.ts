@@ -72,6 +72,8 @@ export function makeLocalCommandHarness(input: {
     readonly accepted: boolean;
     readonly supported: boolean;
     readonly replacement?: boolean;
+    readonly delivery?: "unsent" | "ambiguous";
+    readonly legacy?: boolean;
   };
   readonly logoutFailure?: string;
   readonly createdBy?: "user" | "agent";
@@ -306,37 +308,50 @@ export function makeLocalCommandHarness(input: {
       : providerThreadId;
     projection = {
       ...projection,
-      attempts: input.previousTurn.supersededTurn
-        ? [
-            {
-              id: previousAttemptId,
-              runId: previousRunId,
-              attemptOrdinal: 1,
-              rootNodeId: previousRootId,
-              providerInstanceId: run.providerInstanceId,
-              providerThreadId: previousProviderThreadId,
-              providerTurnId: previousTurnId,
-              reason: "initial",
-              status: "superseded",
-              startedAt: now,
-              completedAt: now,
-            },
-            {
-              id: restartedAttemptId,
-              runId: previousRunId,
-              attemptOrdinal: 2,
-              rootNodeId: NodeId.make("previous-steered-root"),
-              providerInstanceId: run.providerInstanceId,
-              providerThreadId: previousProviderThreadId,
-              providerTurnId: null,
-              reason: "steering_restart",
-              status: "interrupted",
-              startedAt: null,
-              completedAt: now,
-            },
-            ...projection.attempts,
-          ]
-        : projection.attempts,
+      attempts:
+        input.previousTurn.supersededTurn || input.manualResume !== undefined
+          ? [
+              {
+                id: previousAttemptId,
+                runId: previousRunId,
+                attemptOrdinal: 1,
+                rootNodeId: previousRootId,
+                providerInstanceId: run.providerInstanceId,
+                providerThreadId: previousProviderThreadId,
+                providerTurnId: previousTurnId,
+                reason: "initial",
+                status: input.previousTurn.supersededTurn ? "superseded" : "interrupted",
+                ...(input.manualResume === undefined || input.manualResume.legacy
+                  ? {}
+                  : {
+                      inputDelivery:
+                        input.manualResume.delivery ??
+                        (input.manualResume.accepted ? "accepted" : "unsent"),
+                    }),
+                startedAt: now,
+                completedAt: now,
+              },
+              ...(input.previousTurn.supersededTurn
+                ? [
+                    {
+                      id: restartedAttemptId,
+                      runId: previousRunId,
+                      attemptOrdinal: 2,
+                      rootNodeId: NodeId.make("previous-steered-root"),
+                      providerInstanceId: run.providerInstanceId,
+                      providerThreadId: previousProviderThreadId,
+                      providerTurnId: null,
+                      reason: "steering_restart" as const,
+                      status: "interrupted" as const,
+                      inputDelivery: "unsent" as const,
+                      startedAt: null,
+                      completedAt: now,
+                    },
+                  ]
+                : []),
+              ...projection.attempts,
+            ]
+          : projection.attempts,
       runs: [
         {
           ...earlierRun,

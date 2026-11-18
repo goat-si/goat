@@ -1,3 +1,4 @@
+import { makeRunInputDelivery, fenceUntrackedInputDelivery } from "./RunInputDelivery.ts";
 import { providerTurnOperation } from "./RunExecutionTurnOperation.ts";
 import { captureRunBaseline, type RunBaselineInput } from "./RunExecutionBaseline.ts";
 import { backgroundCapableTurnItemTypes } from "./InheritedBackgroundTurnItems.ts";
@@ -1777,7 +1778,9 @@ export const layer: Layer.Layer<
         const compact =
           input.message.attachments.length === 0 &&
           input.message.text.trim().toLowerCase() === "/compact";
+        const inputDelivery = yield* makeRunInputDelivery(eventSink, idAllocator, input);
         const turnInput = {
+          ...(inputDelivery === undefined ? {} : { inputDelivery }),
           ...(input.reattach === true || input.refreshMemoryContext === undefined
             ? {}
             : { refreshMemoryContext: input.refreshMemoryContext }),
@@ -1920,7 +1923,7 @@ export const layer: Layer.Layer<
         );
         yield* Effect.andThen(
           shouldStart,
-          startTurn.pipe(
+          fenceUntrackedInputDelivery(input.session, inputDelivery, startTurn).pipe(
             Effect.tap(() =>
               input.reattach === true || compact || inbox.throughId === null
                 ? Effect.void

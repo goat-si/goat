@@ -1,3 +1,4 @@
+import { preserveAttemptDelivery } from "./AttemptInputDelivery.ts";
 import * as LatestAnswer from "./ProjectionLatestAnswer.ts";
 import * as RunNotification from "./ProjectionRunNotification.ts";
 import { applyThreadPullRequestLinkUpdate } from "../sourceControl/threadPullRequests.ts";
@@ -231,7 +232,7 @@ function applyToProjectionEvent(
     case "run-attempt.updated":
       return withLocalVisibleTurnItems({
         ...base,
-        attempts: upsertById(base.attempts, event.payload),
+        attempts: upsertById(base.attempts, preserveAttemptDelivery(base.attempts, event.payload)),
       });
     case "node.updated":
       return {

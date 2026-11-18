@@ -318,7 +318,9 @@ to a steer, or remove it.
 If you stop the agent or the server restarts, queued messages keep their order and are held.
 Press **Resume** in an empty composer to continue. When the provider supports native Resume,
 it continues the stopped or limited run without adding a message. GOAT can resend a request
-the provider never accepted. If Resume asks for a new message, send one to continue.
+the provider never accepted. If GOAT cannot confirm delivery, Resume reports that
+uncertainty so you can decide what to send next. If Resume asks for a new message,
+send one to continue.
 Sending a new message also resumes the queue, unless it steers a turn that is already running.
 You can edit, reorder, or remove held messages without starting them.
 

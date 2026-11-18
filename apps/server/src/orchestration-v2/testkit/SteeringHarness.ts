@@ -88,10 +88,13 @@ export const nextTurnSelectionHarness = Effect.fn("nextTurnSelectionHarness")(fu
       const startTurn = Effect.fn("SteeringHarness.startTurn")(function* (
         turn: ProviderAdapter.ProviderAdapterV2TurnInput,
       ) {
+        if (turn.inputDelivery && !(yield* turn.inputDelivery.begin())) return;
         started.push(turn);
+        yield* turn.inputDelivery?.accepted() ?? Effect.void;
         yield* turnUpdated(turn, "running");
       });
       return {
+        tracksInputDelivery: true as const,
         instanceId,
         driver,
         providerSessionId: input.providerSessionId,

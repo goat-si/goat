@@ -1,5 +1,6 @@
+import { INVENTORY_TIMEOUT } from "./connectionConstants.ts";
 import { SKILL_MENTION_PATTERN } from "@goat/shared/composerInlineTokens";
-import type { OpenCodeEvent } from "@opencode/client/effect";
+import type { OpenCodeClient, OpenCodeEvent } from "@opencode/client/effect";
 import type {
   OrchestrationV2UserInputQuestion,
   OrchestrationV2ProviderThread,
@@ -192,3 +193,13 @@ export const availableSkillMentions = Effect.fn("OpenCode2Adapter.availableSkill
     return mentions.filter((name) => known.has(name));
   },
 );
+
+export const listDirectorySkills = (
+  client: OpenCodeClient,
+  location: { readonly directory: string },
+) =>
+  client.skill.list({ location }).pipe(
+    Effect.timeout(INVENTORY_TIMEOUT),
+    Effect.map((list) => new Set<string>(list.data.map((skill) => skill.id))),
+    Effect.orElseSucceed(() => new Set<string>()),
+  );

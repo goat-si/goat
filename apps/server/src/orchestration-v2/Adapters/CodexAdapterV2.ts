@@ -6701,6 +6701,7 @@ export const makeCodexAdapterV2 = Effect.fn("makeCodexAdapterV2")(function* (
               return next;
             });
             if (validatedMemory) yield* retainMemory(threadId, memoryContext!, turnInput);
+            if (turnInput.inputDelivery && !(yield* turnInput.inputDelivery.begin())) return;
             const dispatched = yield* turnStartGuard.dispatch({
               threadId,
               codexInput,
@@ -6717,7 +6718,10 @@ export const makeCodexAdapterV2 = Effect.fn("makeCodexAdapterV2")(function* (
                   }),
                 ).pipe(turnTerminalizationPermit.withPermits(1)),
             });
-            if (dispatched.type === "adopted") return void restartNotices.delete(threadId);
+            if (dispatched.type === "adopted") {
+              yield* turnInput.inputDelivery?.accepted() ?? Effect.void;
+              return void restartNotices.delete(threadId);
+            }
             const start = dispatched.reservation;
             // Claimed only after admission: a turn Codex starts while this one prepares is not its own.
             yield* Ref.update(pendingRootTurns, (current) =>
@@ -6766,6 +6770,7 @@ export const makeCodexAdapterV2 = Effect.fn("makeCodexAdapterV2")(function* (
               )
               .pipe(Effect.tapError(() => Effect.sync(start.failed)));
             start.answered(started.turn.id);
+            yield* turnInput.inputDelivery?.accepted() ?? Effect.void;
             restartNotices.delete(threadId);
             // A turn from another attempt routes events there, so it cannot be adopted here.
             const owner =
@@ -7182,11 +7187,13 @@ export const makeCodexAdapterV2 = Effect.fn("makeCodexAdapterV2")(function* (
                 new Map(current).set(threadId, context),
               );
               if (fresh && validated) yield* retainMemory(threadId, fresh, turnInput);
+              if (turnInput.inputDelivery && !(yield* turnInput.inputDelivery.begin())) return;
               yield* Ref.update(pendingRootTurns, (current) =>
                 new Map(current).set(threadId, withoutMemoryBody(turnInput)),
               );
               // Clear on interruption; a late turn/started must not be adopted after an interrupted start.
               yield* client.request("thread/compact/start", { threadId }).pipe(
+                Effect.tap(() => turnInput.inputDelivery?.accepted() ?? Effect.void),
                 Effect.onError(() =>
                   clearMemoryDelivery(threadId, turnInput.threadId).pipe(
                     Effect.andThen(
@@ -7246,6 +7253,7 @@ export const makeCodexAdapterV2 = Effect.fn("makeCodexAdapterV2")(function* (
                 }),
             ),
           ),
+          tracksInputDelivery: true,
           resumeInterruptedTurn: (input) =>
             runtime.startTurn(ProviderAdapter.resumeTurnInput(input)),
           startTurn: (turnInput) =>
@@ -7266,7 +7274,13 @@ export const makeCodexAdapterV2 = Effect.fn("makeCodexAdapterV2")(function* (
                     !turnInput.resume && turnInput.restartContinuationOfRunId === undefined
                       ? parseGoalCommand(turnInput.message)
                       : null;
-                  if (goalCommand !== null) return runGoalCommand(turnInput, goalCommand);
+                  if (goalCommand !== null)
+                    return Effect.gen(function* () {
+                      if (turnInput.inputDelivery && !(yield* turnInput.inputDelivery.begin()))
+                        return;
+                      yield* runGoalCommand(turnInput, goalCommand);
+                      yield* turnInput.inputDelivery?.accepted() ?? Effect.void;
+                    });
                   return Effect.gen(function* () {
                     if (
                       yield* Survivor.adoptSurvivor({

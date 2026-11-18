@@ -8424,6 +8424,7 @@ export const makeClaudeAdapterV2 = Effect.fn("makeClaudeAdapterV2")(function* (
             message.type === "stream_event" &&
             message.event.type === "message_start"
           ) {
+            if (context.input.resume) yield* context.input.inputDelivery?.accepted() ?? Effect.void;
             yield* completeProviderRetry(context, yield* DateTime.now);
           }
           if (
@@ -8467,6 +8468,7 @@ export const makeClaudeAdapterV2 = Effect.fn("makeClaudeAdapterV2")(function* (
             return;
           }
           if (claudeEchoedPromptUuids(message).includes(context.promptUuid)) {
+            yield* context.input.inputDelivery?.accepted() ?? Effect.void;
             if (
               liveQuery.promptEchoMode === "unknown" ||
               liveQuery.promptEchoMode === "acknowledged"
@@ -8487,6 +8489,7 @@ export const makeClaudeAdapterV2 = Effect.fn("makeClaudeAdapterV2")(function* (
             }
             if (lifecycle.state === "started") {
               context.promptStarted = true;
+              yield* context.input.inputDelivery?.accepted() ?? Effect.void;
             }
             // Previously recorded prompt uuids complete without starting a turn.
             if (lifecycle.state === "completed" && !context.promptStarted) {
@@ -9609,6 +9612,12 @@ export const makeClaudeAdapterV2 = Effect.fn("makeClaudeAdapterV2")(function* (
                       Effect.provideService(ChildProcessSpawner.ChildProcessSpawner, spawner),
                       Effect.provideService(Path.Path, path),
                     );
+            if (
+              turnInput.resume &&
+              turnInput.inputDelivery &&
+              !(yield* turnInput.inputDelivery.begin())
+            )
+              return;
             const querySession = yield* openQuery(turnInput, nativeThreadId, queryPolicy);
             const context: ActiveClaudeTurnContext = {
               autoCompactWindow: yield* resolveAutoCompactWindow({
@@ -9744,8 +9753,9 @@ export const makeClaudeAdapterV2 = Effect.fn("makeClaudeAdapterV2")(function* (
                 }),
               });
             });
-            const offerUserMessage = (message: SDKUserMessage) =>
-              startUserTurnForWakeReports(nativeThreadId).pipe(
+            const offerUserMessage = Effect.fnUntraced(function* (message: SDKUserMessage) {
+              if (turnInput.inputDelivery && !(yield* turnInput.inputDelivery.begin())) return;
+              yield* startUserTurnForWakeReports(nativeThreadId).pipe(
                 Effect.andThen(
                   Effect.uninterruptibleMask((restore) =>
                     restore(
@@ -9762,6 +9772,7 @@ export const makeClaudeAdapterV2 = Effect.fn("makeClaudeAdapterV2")(function* (
                   ),
                 ),
               );
+            });
             if (userMessage !== null && !turnInput.resume) {
               const admittedMessage = nativeControl
                 ? userMessage
@@ -10454,6 +10465,7 @@ export const makeClaudeAdapterV2 = Effect.fn("makeClaudeAdapterV2")(function* (
               ),
           ),
           startTurn,
+          tracksInputDelivery: true,
           resumeInterruptedTurn: (input) => startTurn(ProviderAdapter.resumeTurnInput(input), true),
           compactThread: (turnInput) =>
             startTurn(

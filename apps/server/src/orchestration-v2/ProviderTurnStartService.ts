@@ -1,4 +1,4 @@
-import { unsentManualContinuationSource } from "./manualContinuation.ts";
+import { AMBIGUOUS_RESUME_MESSAGE, manualContinuationDelivery } from "./manualContinuation.ts";
 import { makeMemoryRefreshFactory } from "./goat/MemoryRefreshFactory.ts";
 import { makeNativeForkRecovery } from "./goat/NativeForkRecovery.ts";
 import { ProviderTurnStartError } from "./ProviderTurnStartTypes.ts";
@@ -238,9 +238,8 @@ export const layer: Layer.Layer<
       }
       const manualResume =
         run.manualContinuationOfRunId !== undefined && attempt.reason !== "steering_restart";
-      const replaySource = manualResume
-        ? unsentManualContinuationSource(run, projection)
-        : undefined;
+      const resumeDelivery = manualResume ? manualContinuationDelivery(run, projection) : undefined;
+      const replaySource = resumeDelivery?.type === "replay" ? resumeDelivery.source : undefined;
       const providerMessage =
         replaySource === undefined
           ? message
@@ -258,7 +257,7 @@ export const layer: Layer.Layer<
               threadId: replaySource.threadId,
               runOrdinal: replaySource.ordinal,
             };
-      const nativeResume = manualResume && replaySource === undefined;
+      const nativeResume = resumeDelivery?.type === "native";
       const settleRunBeforeStart = makeSettleRunBeforeStart({
         eventSink,
         idAllocator,
@@ -454,6 +453,15 @@ export const layer: Layer.Layer<
           });
         },
       );
+      if (resumeDelivery?.type === "ambiguous") {
+        yield* settleStartFailure({
+          signal: "resume-delivery-uncertain",
+          title: "Message delivery could not be confirmed",
+          error: new Error(AMBIGUOUS_RESUME_MESSAGE),
+        });
+        return;
+      }
+
       if (
         yield* refuseCodexAdmission({
           survivors: codexSurvivors,

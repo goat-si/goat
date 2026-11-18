@@ -527,7 +527,13 @@ export type ProviderAdapterV2CloudTaskMetadata = Pick<
   "url" | "title" | "progress"
 >;
 
+export interface ProviderInputDelivery {
+  readonly begin: () => Effect.Effect<boolean, ProviderAdapterTurnStartError>;
+  readonly accepted: () => Effect.Effect<void, ProviderAdapterTurnStartError>;
+}
+
 export interface ProviderAdapterV2TurnInput {
+  readonly inputDelivery?: ProviderInputDelivery;
   readonly memoryContext?: MemoryContextSnapshot;
   /** Process-local admission callback; never persisted or sent to a provider. */
   readonly refreshMemoryContext?: () => Effect.Effect<
@@ -700,6 +706,7 @@ export type ProviderAdapterV2SubagentOutcome = {
 export type ProviderModelStatus = "ready" | "predated" | "missing" | "unconfirmed" | "outdated";
 
 export interface ProviderAdapterV2SessionRuntime {
+  readonly tracksInputDelivery?: true;
   readonly instanceId: ProviderInstanceId;
   readonly driver: ProviderDriverKind;
   readonly providerSessionId: ProviderSessionId;

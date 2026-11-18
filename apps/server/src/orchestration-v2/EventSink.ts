@@ -1,3 +1,4 @@
+import { initializeAttemptDelivery, withAttemptDeliveryEvent } from "./AttemptInputDelivery.ts";
 import { makeCommandEventAppender } from "./AtomicLaunchReceipt.ts";
 import { makeDelegatedCompletionUpdater } from "./goat/DelegatedCompletionMerge.ts";
 import { makeScheduledTaskAppender as makeTaskAppender } from "./ScheduledTaskCompletionBatch.ts";
@@ -196,7 +197,7 @@ const layerBase: Layer.Layer<
                         : runOrdinals.get(event.payload.runId),
                     )
                     .pipe(Effect.map((payload) => ({ ...event, payload })))
-                : Effect.succeed(event),
+                : Effect.succeed(initializeAttemptDelivery(event)),
             { concurrency: 1 },
           ),
         ),
@@ -443,7 +444,7 @@ const layerBase: Layer.Layer<
             const normalized = yield* normalizeEvents(
               input.guardPendingUserInputCancellations === true
                 ? yield* guardUserInputCancellations(input.events)
-                : input.events,
+                : yield* withAttemptDeliveryEvent(sql, input),
             );
             const storedEvents = yield* appendStagedEvents({
               ...(input.commandId === undefined ? {} : { commandId: input.commandId }),

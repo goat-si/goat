@@ -1,3 +1,5 @@
+import { openCodeBoundaryAfterProviderTurn, sdkResponseForRawLog } from "./adapterReadUtils.ts";
+export { openCodeBoundaryAfterProviderTurn } from "./adapterReadUtils.ts";
 import { makeCurrentLaunchEnvironment } from "./launchEnvironment.ts";
 import { settingsSecretLiteral } from "@goat/contracts";
 import type {
@@ -489,27 +491,6 @@ function nativeThreadId(providerThread: OrchestrationV2ProviderThread): string {
     throw protocolError(`Provider thread ${providerThread.id} has no OpenCode session id`);
   }
   return nativeId;
-}
-
-function sdkResponseForRawLog(value: unknown): unknown {
-  if (typeof value !== "object" || value === null) return value;
-  if ("data" in value) return { data: (value as { readonly data?: unknown }).data ?? null };
-  if ("stream" in value) return { subscribed: true };
-  return value;
-}
-
-/** Boundaries are exclusive: use the next user message, or omit at head to retain the selected turn. */
-export function openCodeBoundaryAfterProviderTurn(
-  providerTurns: ReadonlyArray<OrchestrationV2ProviderTurn>,
-  selectedProviderTurnId: OrchestrationV2ProviderTurn["id"],
-): string | undefined {
-  const selected = providerTurns.find((turn) => turn.id === selectedProviderTurnId);
-  if (selected === undefined) return undefined;
-  return providerTurns
-    .filter((turn) => turn.ordinal > selected.ordinal)
-    .toSorted((left, right) => left.ordinal - right.ordinal)
-    .map((turn) => turn.nativeTurnRef?.nativeId)
-    .find((nativeId): nativeId is string => nativeId !== null && nativeId !== undefined);
 }
 
 function makeProviderThread(input: {
@@ -2750,6 +2731,12 @@ export const makeOpenCodeAdapterV2 = Effect.fn("makeOpenCodeAdapterV2")(function
           abortController: AbortController,
           memoryInput?: ProviderAdapter.ProviderAdapterV2TurnInput,
         ) {
+          const delivery = memoryInput?.inputDelivery;
+          const sending = Effect.fnUntraced(function* () {
+            if (abortController.signal.aborted || turn.finalized) return false;
+            if (delivery !== undefined && !(yield* delivery.begin())) return false;
+            return !abortController.signal.aborted && !turn.finalized;
+          });
           const { variant, ...payloadWithoutVariant } = inputPayload;
           const selectedVariant = yield* resolveOpenCodeVariant(
             client,
@@ -2867,12 +2854,14 @@ export const makeOpenCodeAdapterV2 = Effect.fn("makeOpenCodeAdapterV2")(function
                       .filter((part) => part !== undefined)
                       .join("\n\n"),
                   };
+            if (!(yield* sending())) return;
             return yield* sdkCall("session.promptAsync", prepared, (signal) =>
               client.session.promptAsync(prepared, {
                 signal: AbortSignal.any([signal, abortController.signal]),
               }),
-            ).pipe(Effect.asVoid);
+            ).pipe(Effect.andThen(delivery?.accepted() ?? Effect.void));
           }
+          if (!(yield* sending())) return;
           const receipt = Deferred.makeUnsafe<void>();
           commandReceipts.set(payload.messageID, receipt);
           const controllers =
@@ -2934,9 +2923,11 @@ export const makeOpenCodeAdapterV2 = Effect.fn("makeOpenCodeAdapterV2")(function
               },
             }),
           );
+          yield* delivery?.accepted() ?? Effect.void;
         });
 
         const runtimeSession: ProviderAdapter.ProviderAdapterV2SessionRuntime = {
+          tracksInputDelivery: true,
           instanceId: options.instanceId,
           driver: OPENCODE_PROVIDER,
           providerSessionId: input.providerSessionId,
@@ -3164,6 +3155,10 @@ export const makeOpenCodeAdapterV2 = Effect.fn("makeOpenCodeAdapterV2")(function
               });
               yield* updateProviderSession("running", null);
               if (isCompaction) {
+                if (turnInput.inputDelivery && !(yield* turnInput.inputDelivery.begin())) {
+                  yield* Deferred.succeed(admissionSettled, undefined);
+                  return;
+                }
                 yield* sdkCall(
                   "session.summarize",
                   { sessionID: sessionId, ...parsedModel, auto: false },
@@ -3173,6 +3168,7 @@ export const makeOpenCodeAdapterV2 = Effect.fn("makeOpenCodeAdapterV2")(function
                       { signal: AbortSignal.any([signal, admissionAbortController!.signal]) },
                     ),
                 ).pipe(
+                  Effect.tap(() => turnInput.inputDelivery?.accepted() ?? Effect.void),
                   Effect.tap(() =>
                     turn.interrupted ||
                     turn.finalized ||
