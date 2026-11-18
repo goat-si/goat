@@ -150,6 +150,8 @@ import * as DocsHandlers from "./toolkits/docs/handlers.ts";
 import { DocsToolkit } from "./toolkits/docs/tools.ts";
 import * as UserDocs from "../userDocs/UserDocs.ts";
 import * as HtmlHandlers from "./toolkits/html/handlers.ts";
+import * as MessageHandlers from "./toolkits/message/handlers.ts";
+import { MessageToolkit } from "./toolkits/message/tools.ts";
 import { HtmlPreviewTool, HtmlPreviewToolkit, HtmlRenderToolkit } from "./toolkits/html/tools.ts";
 import * as OrchestratorHandlers from "./toolkits/orchestrator/handlers.ts";
 import { OrchestratorToolkit } from "./toolkits/orchestrator/tools.ts";
@@ -718,6 +720,7 @@ export const catalogRegistrations = {
   ),
   decision: toolkitRegistration(DecisionToolkit, DecisionHandlers.layer),
   htmlRender: toolkitRegistration(HtmlRenderToolkit, HtmlHandlers.layerRender),
+  message: toolkitRegistration(MessageToolkit, MessageHandlers.layer),
   htmlPreview: imageToolRegistration(registerHtmlPreview(), HtmlHandlers.layerPreview),
   browserClaims: toolkitRegistration(BrowserClaimToolkit, BrowserClaimHandlers.layer),
   previewStandard: toolkitRegistration(PreviewStandardToolkit, PreviewHandlers.layerStandard),
@@ -1006,6 +1009,7 @@ const layerRegistrations = Layer.mergeAll(
   layerPullRequestsToolkit,
   layerDeviceToolkit,
   layerHtmlToolkit,
+  catalogRegistrations.message,
   layerSshToolkitRegistration,
   layerConnectionToolkit,
   layerRemoteReportRegistration,

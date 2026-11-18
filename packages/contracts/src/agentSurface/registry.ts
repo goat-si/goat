@@ -18,6 +18,7 @@ import { htmlEntries } from "./entries/html.ts";
 import { hubEntries } from "./entries/hub.ts";
 import { lifecycleEntries } from "./entries/lifecycle.ts";
 import { memoryEntries } from "./entries/memory.ts";
+import { messageEntries } from "./entries/message.ts";
 import { noteEntries } from "./entries/note.ts";
 import { operationEntries } from "./entries/operation.ts";
 import { originEntries } from "./entries/origin.ts";
@@ -76,6 +77,7 @@ export const agentSurfaceRegistry = {
   ...fallbackChainEntries,
   ...htmlEntries,
   ...memoryEntries,
+  ...messageEntries,
   ...providerEntries,
   ...taskEntries,
   ...reviewFindingsEntries,

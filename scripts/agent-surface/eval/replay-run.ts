@@ -34,6 +34,7 @@ try {
     )) as {
       readonly goatOrchestrationSystemPrompt: (hasGoatMcp: boolean) => string;
       readonly GOAT_BROWSER_TOOL_INSTRUCTIONS: string;
+      readonly GOAT_CLAUDE_BACKGROUND_WAIT_INSTRUCTIONS: string;
     };
     console.log(
       JSON.stringify(
@@ -42,9 +43,13 @@ try {
           caseId: testCase.id,
           listing,
           role: testCase.role,
+          ...(testCase.harness === undefined ? {} : { harness: testCase.harness }),
           instructions:
             instructions.goatOrchestrationSystemPrompt(true) +
-            instructions.GOAT_BROWSER_TOOL_INSTRUCTIONS,
+            instructions.GOAT_BROWSER_TOOL_INSTRUCTIONS +
+            (testCase.harness === "claude"
+              ? instructions.GOAT_CLAUDE_BACKGROUND_WAIT_INSTRUCTIONS
+              : ""),
           tools,
           priorTurns: testCase.priorTurns,
           prompt: testCase.prompt,

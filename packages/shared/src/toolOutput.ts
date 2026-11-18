@@ -13,6 +13,10 @@ import {
 import { MCP_APP_OUTPUT_KEY, readMcpAppReference, type McpAppReference } from "./mcpApp.ts";
 import { resolveGoatMcpItemCall, resolveGoatMcpShippedToolId } from "./goatMcpToolPresentation.ts";
 
+export const SENT_MESSAGE_MAX_LENGTH = 4_000;
+// JSON can escape each UTF-16 unit as six bytes. Leave room for the result envelope.
+const MAX_SENT_MESSAGE_RESULT_BYTES = SENT_MESSAGE_MAX_LENGTH * 6 + 2_048;
+
 const MAX_PARSED_BYTES = 16_384;
 const MAX_METADATA_BYTES = 8_192;
 const MAX_ID_LENGTH = 256;
@@ -298,6 +302,34 @@ export function htmlRenderFromToolItem(item: {
   }
   const output = compactDynamicToolOutput(item.output);
   return output?.isError ? undefined : output?.htmlRender;
+}
+
+export function sentMessageFromToolItem(item: {
+  readonly status: string;
+  readonly toolName: string | null | undefined;
+  readonly input?: unknown;
+  readonly output?: unknown;
+}): string | undefined {
+  if (item.status !== "completed") return undefined;
+  const id = resolveGoatMcpShippedToolId(item.toolName);
+  const target =
+    id === "goat_call" ? resolveGoatMcpShippedToolId(resolveGoatMcpItemCall(item).toolName) : id;
+  if (target !== "goat_message_show") return undefined;
+  const budget = {
+    remainingBytes: MAX_SENT_MESSAGE_RESULT_BYTES,
+    remainingNodes: MAX_ENVELOPE_NODES,
+    exceeded: false,
+  };
+  const { data, failed } = readResult(item.output, budget);
+  if (budget.exceeded || failed || data?.status === "error" || data?.status === "needs_human") {
+    return undefined;
+  }
+  const message = data?.sentMessage;
+  return typeof message === "string" &&
+    message.length <= SENT_MESSAGE_MAX_LENGTH &&
+    message.trim().length > 0
+    ? message
+    : undefined;
 }
 
 /** Accept app references only when server and tool match the item, so tools cannot impersonate another app source. */

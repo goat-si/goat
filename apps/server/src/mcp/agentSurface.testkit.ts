@@ -122,6 +122,7 @@ import * as HostHealthMonitor from "../fleet/health/HostHealthMonitor.ts";
 import * as FleetHostStates from "../fleet/health/FleetHostStates.ts";
 import * as Rescheduler from "../fleet/health/Rescheduler.ts";
 import { HtmlToolkit } from "./toolkits/html/tools.ts";
+import { MessageToolkit } from "./toolkits/message/tools.ts";
 import { MemoryToolkit } from "./toolkits/memory/tools.ts";
 import { MemoryAdministrationToolkit } from "./toolkits/memoryAdministration/tools.ts";
 import { OrchestratorToolkit } from "./toolkits/orchestrator/tools.ts";
@@ -167,6 +168,7 @@ export const toolkits = {
   docs: DocsToolkit,
   fleetHealth: FleetHealthToolkit,
   html: HtmlToolkit,
+  message: MessageToolkit,
   memory: MemoryToolkit,
   memoryAdministration: MemoryAdministrationToolkit,
   orchestrator: OrchestratorToolkit,

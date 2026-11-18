@@ -1077,10 +1077,10 @@ export const layer: Layer.Layer<ProjectionStoreV2, never, SqlClient.SqlClient> =
     const archiveGate = yield* ThreadArchiveGate;
     // Rendered output and delegated tasks stay inline when a long work group is deferred.
     const inlineWorkOutput = sql`item.type = 'dynamic_tool' AND (
-      item.payload_json LIKE '%htmlRender%' OR item.payload_json LIKE ${`%${MCP_APP_OUTPUT_KEY}%`}
-      OR item.payload_json LIKE ${`%${LEGACY_MCP_APP_OUTPUT_KEY}%`}
-      OR item.payload_json LIKE '%"viewedImagePath"%'
-      OR item.payload_json LIKE '%"toolName":"%delegate_task"%')`;
+      item.payload_json LIKE '%htmlRender%' OR item.payload_json LIKE ${`%${MCP_APP_OUTPUT_KEY}%`} OR item.payload_json LIKE ${`%${LEGACY_MCP_APP_OUTPUT_KEY}%`}
+      OR item.payload_json LIKE '%"viewedImagePath"%' OR item.payload_json LIKE '%"toolName":"%delegate_task"%'
+      OR (item.status = 'completed' AND item.payload_json LIKE '%sentMessage%' AND (item.payload_json LIKE '%"toolName":"%goat_message_show"%'
+        OR (item.payload_json LIKE '%"toolName":"%goat_call"%' AND COALESCE(json_extract(item.payload_json, '$.input.path'), json_extract(item.payload_json, '$.input.name'), json_extract(item.payload_json, '$.input.tool'), json_extract(item.payload_json, '$.input.resource') || '.' || json_extract(item.payload_json, '$.input.verb')) IN ('message.show', 'goat_message_show')))))`;
     // Background work cannot outlive this process: provider processes exit with the server. Past
     // that, work that showed no sign of life for STALE_BACKGROUND_WORK_MS was left open by a
     // provider that never closed it, so it no longer holds runtime updates.
