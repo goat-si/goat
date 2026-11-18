@@ -496,6 +496,8 @@ Apply the first matching row when startup encounters an unfinished update or rol
 | Condition | Outcome | Named test |
 | --- | --- | --- |
 | An eligible fresh trial or rollback cannot open a damaged ownership log, including after `keep-live` | Block and retain the log. With every owner stopped, move it aside and keep the original. A verified `keep-live` restart creates a new log. | `keeps a damaged ownership log until it is moved aside offline` |
+| An eligible fresh trial or rollback cannot open a corrupt legacy SQLite ownership lock, including after `keep-live` | Block and report the exact `server-owner.sqlite` path and SQLite error. With every owner stopped, move the corrupt lock and any sidecars aside. A verified `keep-live` restart recreates the lock and starts the previous version while retaining the original bytes. | `keeps a damaged legacy lock until it is moved aside offline` |
+| Fresh trial or operator-acknowledged recovery has a structurally readable SQLite file with a stale index page | Block before either version opens the database and retain the live bytes. The full integrity check detects the missing index entry. | `blocks a stale index page during %s even though quick_check passes` (fresh trial and acknowledged recovery) |
 | Operator acknowledged with `keep-live`, but a full-length WAL fails header or frame validation | Block before either runtime opens the database and preserve the live set | `blocks a full-length WAL with a bad %s after manual acknowledgement` (header checksum, frame salt, committed-frame checksum) |
 | Fresh pending update with the target installed, no existing database artifacts, and an unusable live SQLite set | Block under both ownership locks before recording the trial, taking a snapshot, or starting the target | `blocks a fresh trial before it can open a truncated SQLite database` |
 | Operator acknowledged with `keep-live` and the live SQLite set is usable | Keep-and-start the previous version and retain any snapshot | `checks the live file set after manual acknowledgement and retains the snapshot` and `verified manual recovery during probation starts the selected protocol-3 runtime` |
@@ -542,3 +544,21 @@ The first whole-file guarded run timed out in the blocked-copy fixture because i
 - A plain push advanced `chase/t3-261114-next3-n10-service-release` from `5469a9cfa1` to `7c1f6186e9`. `git ls-remote` confirmed the full SHA and `git diff --check` passed.
 
 NOT RUN: PR CI, full repository suites, live systemd or launchd recovery, paired-client update, release builds or publication, and a packaged Linux AppImage transition. The changed-files gate skipped the dependency patch check because no dependency files changed.
+
+## 2026-11-18 UTC — N10 review fix round 7
+
+Implementation head `e10ad52aba4745e7e618dfb662b610e147945a57`.
+
+| Finding | Fix commit and source | Failing-first evidence |
+| --- | --- | --- |
+| P2-1 | `f6faccc2da17a99b4f2577ae215f1418d830c623`. `apps/server/src/serviceLauncherDatabase.ts:398` uses SQLite `integrity_check(1)` for both validation paths and notes the cost on large databases. [SQLite integrity check](https://www.sqlite.org/pragma.html#pragma_integrity_check) | A real SQLite fixture copies an older index page over the corresponding page after an indexed row changes. `quick_check(1)` returns `ok` and `integrity_check(1)` reports a missing index row. Before the fix, both launcher cases ran the previous version. After the fix, both block, the fresh trial leaves no snapshot, and the mixed database stays byte-identical. |
+| P2-2 | `e10ad52aba4745e7e618dfb662b610e147945a57`. `apps/server/src/serviceLauncherOwner.ts:34` reports the exact legacy lock path and SQLite error. `docs/user/updating.md:225` gives its offline recovery procedure. | A real truncated SQLite lock blocked with no lock path before the fix. The regression now checks the diagnostic before and after `keep-live`, then moves the file aside offline. The previous runtime opens the replacement lock and reads the live database. The corrupt original, live database and snapshot remain byte-identical. |
+
+### Verification and delivery
+
+- `GOAT_TEST_TMP_GUARD=fail vp test run --reporter=default <all 17 changed server test files>` from `apps/server` exited 0 with 211 passes and zero skips.
+- `vp run check:changed origin/chase/t3-261114-next3` exited 0 against merge base `6def29ca359f546e50dcd731a6364e3f0d575545`. The server stage passed 712 tests with one skip across 68 files. The workspace stage passed 2,356 tests with one skip across 34 files. Format, lint, both Knip checks, GraphQL, agent checks, and the 42-package typecheck passed.
+- An isolated `node apps/server/src/bin.ts __service-launcher` run rejected the mixed index with no child started. It then reported the exact corrupt legacy lock path and SQLite error. After the offline move, the previous 1.0.0 runtime acquired the replacement lock and read the live row. The corrupt original, live database, and snapshot were byte-identical.
+- A plain push advanced `chase/t3-261114-next3-n10-service-release` from `7c1f6186e9` to `e10ad52aba`. The worktree was clean and `git diff --check` passed.
+
+NOT RUN: PR CI, full repository suites, live systemd or launchd recovery, paired-client update, and packaged release verification.
