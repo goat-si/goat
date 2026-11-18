@@ -118,6 +118,34 @@ does not ask the SSH server for them instead, since another account on the machi
 keys stay as they were.</p>
 <p>To reach another port, <code>pen forward 8080 &lt;member&gt;:8080</code> listens on this machine’s port 8080 and
 connects each connection to port 8080 on the member.</p>
+<h3 id="see-every-pen-machine-in-goat">See every Pen machine in GOAT</h3>
+<p>Once <code>pen ssh-config --install</code> has run on a computer, the GOAT desktop app there shows every
+other machine in the mesh that already runs GOAT, in the sidebar and in <strong>Settings → Connections →
+Pen machines</strong>, with its threads, follow-ups, stop and approvals. This works the same on every
+member: there is no machine you have to open first. A machine that joins appears on its own, and a
+machine that leaves or is revoked disappears together with the sign-in GOAT held for it. Fleet marks
+such a machine <strong>via Pen</strong>.</p>
+<ul>
+<li>GOAT only attaches to a GOAT that is already on the machine. It never installs or updates GOAT
+there by itself. A member without GOAT reads <strong>Pen member, GOAT not set up</strong>; choose <strong>Set up</strong>
+to install it.</li>
+<li>A member whose GOAT is too old to sign this computer in asks you to update GOAT on that machine.</li>
+<li>A machine you had already added yourself stays as you added it.</li>
+<li>While Pen is not running on this computer, machines already listed stay listed, but nothing new
+is added and no new sign-in is made until Pen is back. The same holds on the other side: a
+machine accepts this computer’s sign-in only while its own Pen is running and lists it.</li>
+<li>Turn it off with <strong>Show my Pen machines</strong>. The machines you added yourself stay.</li>
+</ul>
+<p>The machines need the same ssh access as <code>ssh pen-&lt;name&gt;</code>: an sshd on the member and a key it
+accepts. GOAT reaches each one through its <code>pen-&lt;nodeId&gt;</code> host, so reusing a name for another
+machine never points GOAT at the wrong one.</p>
+<p>Every GOAT server that is a Pen member, including the one inside the desktop app and a
+<code>goat serve</code> without a screen, lists the other members under
+<a href="/goat/docs/user/remote-access/#hub-devices">Hub devices</a> the same way, so a phone paired with any member’s
+server sees them. A phone still needs <strong>Hub access</strong> to open them. A member without GOAT is listed
+but never set up from there: install GOAT on it, or add it to the hub as an SSH host and set that
+up. Turn this off under <strong>Settings → Hub → List Pen machines as hub devices</strong>.</p>
+<p><strong>Update everything</strong> leaves Pen machines alone; update GOAT on each machine itself.</p>
 <h3 id="use-a-member-as-an-opencodex-child">Use a member as an OpenCodex Child</h3>
 <p>A member can join the hub’s OpenCodex Home as a Remote Link Child through its <code>pen-&lt;name&gt;</code> alias,
 so its agents use the hub’s accounts without a sign-in there. On the hub:</p>

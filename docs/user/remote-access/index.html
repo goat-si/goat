@@ -514,6 +514,9 @@ in the mobile app. Each device also shows whether it is linked to the hub’s
 host by its alias from this machine’s <code>~/.ssh/config</code>, or add another GOAT server
 with a pairing URL from <code>goat pair</code>. A machine reached two ways, for example
 over SSH and as a linked server, is one device with two routes.</p>
+<p>A hub that is in a <a href="/goat/docs/user/pen/#see-every-pen-machine-in-goat">Pen</a> mesh also lists the
+other members by itself and removes them when they leave. Those routes only attach
+to a GOAT the machine already has.</p>
 <p><strong>Check</strong> asks each route whether it answers. It never starts or extends a cloud
 machine: a stopped one shows as offline. Cloud machines are removed from
 <strong>Settings → Connections → <a href="#cloud-machines">Cloud machines</a></strong>, not from this list. Removing a saved connection in the
