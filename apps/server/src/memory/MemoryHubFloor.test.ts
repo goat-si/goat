@@ -235,12 +235,40 @@ describe("memory hub floor", () => {
       assert.include(result.receipt, { pendingSync: true, revisionId: null });
       const queued = yield* store.readWorkOperation(`sync:${space}:${wide.operationId}`);
       assert.strictEqual(queued?.kind, "upsert");
-      if (!queued) throw new Error("expected a staged write");
+      if (queued?.kind !== "upsert") throw new Error("expected a staged write");
       assert.include(
         (yield* hub.push({ ...pushInput(queued), features: M.MEMORY_FLOOR_2 }, principal()))
           .receipts[0],
         { outcome: "accepted" },
       );
+      const editId = M.MemoryOperationId.make(id(2001));
+      const editInput = {
+        memorySpaceId: space,
+        operationId: editId,
+        memoryId: wide.memoryId,
+        expectedHeads: [queued.revision.revisionId],
+        scope: queued.revision.scope,
+        assertionKind: queued.revision.assertionKind,
+        baseBoundary: null,
+        payload: { ...wide.payload, text: "Synthetic wide edit retry" },
+      };
+      const stagedEdit = yield* service.upsert(editInput, Effect.void);
+      assert.include(stagedEdit.receipt, {
+        operationId: editId,
+        pendingSync: true,
+        revisionId: null,
+      });
+      assert.deepStrictEqual(yield* service.upsert(editInput, Effect.void), stagedEdit);
+      const edit = yield* store.readWorkOperation(`sync:${space}:${editId}`);
+      if (edit?.kind !== "upsert") throw new Error("Expected a staged wide edit");
+      assert.lengthOf(edit.payload.derivedFromMemoryRevisions, 101);
+      const publish = hub.push({ ...pushInput(edit), features }, principal());
+      const first = (yield* publish).receipts[0];
+      assert.include(first, { outcome: "accepted" });
+      assert.deepStrictEqual((yield* publish).receipts[0], first);
+      const updated = yield* store.loadAggregate(space, wide.memoryId);
+      assert.deepStrictEqual(updated.heads, [edit.revision.revisionId]);
+      assert.lengthOf(updated.revisions, 2);
       const source = sources[100]!;
       const widePage = yield* hub.pull(
         { ...peerPull, afterSequence: firstPage.throughSequence },

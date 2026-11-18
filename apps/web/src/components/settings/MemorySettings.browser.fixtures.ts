@@ -174,7 +174,13 @@ export async function exerciseMemoryMove({
         "list",
         Option.some({ items: [], projectionWatermark: 2, nextCursor: null }),
       );
-    return success({ outcome: "accepted", pendingSync: false });
+    return success({
+      operationId: input.operationId,
+      memoryId: input.memoryId,
+      revisionId: null,
+      outcome: "accepted",
+      pendingSync: false,
+    });
   });
   const { render } = await supportedScreen(!batch, false, false, {
     protocolVersion: 1,

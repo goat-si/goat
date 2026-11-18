@@ -467,21 +467,25 @@ describe("native Memory with shared factory", () => {
   it.each(["lost reply", "hub_unavailable"] as const)(
     "preserves one save intent after an uncertain response and retries the same payload: %s",
     async (failure) => {
-      await mount();
+      await mount(undefined, undefined, { protocolVersion: 1, mutationFailureDetails: true });
       h.responses.set(WS_METHODS.memoryUpsert, () =>
         failure === "hub_unavailable"
           ? Effect.fail(new MemoryRpcError({ code: failure }))
           : Effect.die(new Error("Synthetic lost response")),
       );
-      await view.click("Remember something");
+      await view.click("Open memory: Synthetic memory body");
+      await view.click("Edit");
       await view.type("Memory text", "Synthetic retry fact");
       await view.click("Save memory");
       expect(view.container.textContent).toContain("Retry uses the same request");
       h.responses.set(WS_METHODS.memoryUpsert, () => ({ outcome: "accepted", pendingSync: true }));
       await view.click("Retry save request");
       const writes = h.calls.filter((call) => call.method === WS_METHODS.memoryUpsert);
-      expect(writes).toHaveLength(2);
-      expect(writes[0]!.input).toEqual(writes[1]!.input);
+      expect(writes.map(({ input }) => input)).toEqual([writes[0]?.input, writes[0]?.input]);
+      expect(writes[0]?.input).toMatchObject({
+        includeFailureDetails: true,
+        expectedHeads: [nativeItem.status === "active" ? nativeItem.revision.revisionId : null],
+      });
     },
   );
   it("keeps reading available on a read-only connection without allowing a write", async () => {

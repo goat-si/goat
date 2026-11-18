@@ -6,6 +6,7 @@ import {
   MemoryMutationReceipt,
   MemoryRpcError,
   MemoryId,
+  MemoryRevisionId,
   type MemoryMoveInput,
   WS_METHODS,
   type MemoryForgetInput,
@@ -192,16 +193,19 @@ export async function exerciseMemoryMove(
   mounted: () => { h: NativeMemoryHarness; view: ReturnType<typeof renderNative> },
   batch: boolean,
 ) {
-  if (nativeItem.status !== "active") throw new Error("Expected active fixture");
+  const active = nativeItem;
+  if (active.status !== "active") throw new Error("Expected active fixture");
   const others = [211, 212].map((n) => {
     const memoryId = MemoryId.make(`00000000-0000-4000-8000-000000000${n}`);
+    const revisionId = MemoryRevisionId.make(`00000000-0000-4000-8000-000000000${n + 10}`);
     return {
-      ...nativeItem,
+      ...active,
       memoryId,
-      payload: { ...nativeItem.payload, text: `Synthetic move item ${n}` },
+      revision: { ...active.revision, memoryId, revisionId, payloadRef: revisionId },
+      payload: { ...active.payload, text: `Synthetic move item ${n}` },
     };
   });
-  const items = batch ? [nativeItem, ...others] : [nativeItem];
+  const items = batch ? [active, ...others] : [active];
   const uncertainId = others[0]?.memoryId;
   const completedId = others[1]?.memoryId;
   const attempts = new Map<string, string[]>();
@@ -252,7 +256,12 @@ export async function exerciseMemoryMove(
             nextCursor: null,
             projectionWatermark: 2,
           }));
-        return { ...receipt(input), outcome: "accepted", pendingSync: false };
+        return {
+          ...receipt(input),
+          memoryId: input.memoryId,
+          outcome: "accepted",
+          pendingSync: false,
+        };
       });
     },
     { protocolVersion: 1, scopeMoves: true },
