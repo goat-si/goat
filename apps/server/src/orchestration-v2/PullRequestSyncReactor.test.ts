@@ -3,7 +3,6 @@ import * as NodeV8 from "node:v8";
 import { SourceControlProviderKind } from "@goat/contracts";
 import {
   EventId,
-  MessageId,
   ProjectId,
   ProviderInstanceId,
   PullRequestOperationError,
@@ -11,7 +10,6 @@ import {
   ThreadId,
   TurnItemId,
   type OrchestrationV2DomainEvent,
-  type OrchestrationV2Run,
   type PullRequestRef,
   type PullRequestStack,
   type PullRequestSummary,
@@ -39,44 +37,13 @@ import {
   makeSnapshot,
   makeSummary,
   makeHarness,
+  runUpdated,
   startAndSweep,
   sweepAgain,
   type SyncCommand,
   type TestShellSnapshot,
   type Harness,
 } from "./testkit/pullRequestSync.fixture.ts";
-
-function runUpdated(
-  threadId: ThreadId,
-  status: OrchestrationV2Run["status"],
-): OrchestrationV2DomainEvent {
-  const runId = RunId.make(`run:${threadId}:1`);
-  const at = DateTime.makeUnsafe(NOW);
-  return {
-    type: "run.updated",
-    id: EventId.make(`event:${threadId}:${status}`),
-    threadId,
-    runId,
-    occurredAt: at,
-    payload: {
-      id: runId,
-      threadId,
-      ordinal: 1,
-      providerInstanceId: ProviderInstanceId.make("codex"),
-      modelSelection: { instanceId: ProviderInstanceId.make("codex"), model: "gpt-5" },
-      providerThreadId: null,
-      userMessageId: MessageId.make(`message:${threadId}:1`),
-      rootNodeId: null,
-      activeAttemptId: null,
-      status,
-      requestedAt: at,
-      startedAt: at,
-      completedAt: at,
-      checkpointId: null,
-      contextHandoffId: null,
-    },
-  };
-}
 
 function commandRan(
   threadId: ThreadId,
@@ -1472,50 +1439,60 @@ describe("PullRequestSyncReactor", () => {
     ),
   );
 
-  it.effect("reads open links again when the run ends, after `merge --auto` left them open", () =>
-    Effect.scoped(
-      Effect.gen(function* () {
-        yield* TestClock.setTime(Date.parse(NOW));
-        const state = yield* Ref.make<PullRequestSummary["state"]>("open");
-        const fixture = yield* makeHarness({
-          snapshot: makeSnapshot([
-            makeThread("agent", { pullRequests: [makeLink(7, { state: "open" })] }),
-          ]),
-          summary: (input) =>
-            Ref.get(state).pipe(
-              Effect.map((current) =>
-                makeSummary(input, current === "merged" ? { state: current, mergedAt: NOW } : {}),
-              ),
-            ),
-        });
-
-        yield* Effect.gen(function* () {
-          const reactor = yield* startAndSweep(fixture);
-          yield* Queue.offer(
-            fixture.domainEvents,
-            commandRan(ThreadId.make("agent"), "gh pr merge 7 --auto"),
-          );
-          yield* Queue.take(fixture.snapshotReads);
-          yield* Queue.take(fixture.snapshotReads);
-          yield* reactor.drain;
-          yield* Ref.set(state, "merged");
-          yield* Ref.set(fixture.syncCommands, []);
-
-          yield* Queue.offer(fixture.domainEvents, runUpdated(ThreadId.make("agent"), "completed"));
-          yield* Queue.take(fixture.snapshotReads);
-          yield* Queue.take(fixture.snapshotReads);
-          yield* reactor.drain;
-
-          assert.deepStrictEqual(
-            (yield* Ref.get(fixture.syncCommands)).map((command) => [
-              command.number,
-              command.snapshot.state,
+  it.effect.each(["completed", "running"] as const)(
+    "reads open links when a run ends after a %s merge frame",
+    (status) =>
+      Effect.scoped(
+        Effect.gen(function* () {
+          yield* TestClock.setTime(Date.parse(NOW));
+          const state = yield* Ref.make<PullRequestSummary["state"]>("open");
+          const fixture = yield* makeHarness({
+            snapshot: makeSnapshot([
+              makeThread("agent", { pullRequests: [makeLink(7, { state: "open" })] }),
             ]),
-            [[7, "merged"]],
-          );
-        }).pipe(Effect.provide(fixture.layer));
-      }),
-    ),
+            summary: (input) =>
+              Ref.get(state).pipe(
+                Effect.map((current) =>
+                  makeSummary(input, current === "merged" ? { state: current, mergedAt: NOW } : {}),
+                ),
+              ),
+          });
+
+          yield* Effect.gen(function* () {
+            const reactor = yield* startAndSweep(fixture);
+            const command = commandRan(ThreadId.make("agent"), "gh pr merge 7 --auto");
+            if (command.type !== "turn-item.updated")
+              return yield* Effect.die("Missing command frame");
+            yield* Queue.offer(fixture.domainEvents, {
+              ...command,
+              payload: { ...command.payload, status },
+            });
+            if (status === "completed") {
+              yield* Queue.take(fixture.snapshotReads);
+              yield* Queue.take(fixture.snapshotReads);
+              yield* reactor.drain;
+            }
+            yield* Ref.set(state, "merged");
+            yield* Ref.set(fixture.syncCommands, []);
+
+            yield* Queue.offer(
+              fixture.domainEvents,
+              runUpdated(ThreadId.make("agent"), "completed"),
+            );
+            yield* Queue.take(fixture.snapshotReads);
+            yield* Queue.take(fixture.snapshotReads);
+            yield* reactor.drain;
+
+            assert.deepStrictEqual(
+              (yield* Ref.get(fixture.syncCommands)).map((command) => [
+                command.number,
+                command.snapshot.state,
+              ]),
+              [[7, "merged"]],
+            );
+          }).pipe(Effect.provide(fixture.layer));
+        }),
+      ),
   );
 
   it.effect("reads open links fresh as soon as a merge command ends, before its run ends", () =>

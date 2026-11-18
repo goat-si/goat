@@ -1,5 +1,9 @@
 import {
   SourceControlProviderKind,
+  type OrchestrationV2Run,
+  RunId,
+  MessageId,
+  EventId,
   ProjectId,
   ProviderInstanceId,
   ThreadId,
@@ -313,3 +317,35 @@ export const sweepAgain = Effect.fn("sweepPullRequestSyncHarness")(function* (
   yield* Queue.take(fixture.snapshotReads);
   yield* reactor.drain;
 });
+
+export function runUpdated(
+  threadId: ThreadId,
+  status: OrchestrationV2Run["status"],
+): OrchestrationV2DomainEvent {
+  const runId = RunId.make(`run:${threadId}:1`);
+  const at = DateTime.makeUnsafe(NOW);
+  return {
+    type: "run.updated",
+    id: EventId.make(`event:${threadId}:${status}`),
+    threadId,
+    runId,
+    occurredAt: at,
+    payload: {
+      id: runId,
+      threadId,
+      ordinal: 1,
+      providerInstanceId: ProviderInstanceId.make("codex"),
+      modelSelection: { instanceId: ProviderInstanceId.make("codex"), model: "gpt-5" },
+      providerThreadId: null,
+      userMessageId: MessageId.make(`message:${threadId}:1`),
+      rootNodeId: null,
+      activeAttemptId: null,
+      status,
+      requestedAt: at,
+      startedAt: at,
+      completedAt: at,
+      checkpointId: null,
+      contextHandoffId: null,
+    },
+  };
+}

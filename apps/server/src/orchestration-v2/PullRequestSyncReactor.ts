@@ -843,17 +843,18 @@ export const make = Effect.gen(function* () {
           // ends. Read again when the run ends, since `merge --auto` returns before it merges.
           case "turn-item.updated": {
             const item = event.payload;
-            if (item.type !== "command_execution" || isOrchestrationV2WorkActive(item.status))
-              return Effect.void;
+            if (item.type !== "command_execution") return Effect.void;
+            const ended = isChangeRequestCloseCommand(item.input)
+              ? (closeCommands.get(event.threadId) ?? new Set<string>())
+              : undefined;
+            if (ended !== undefined) closeCommands.set(event.threadId, ended);
+            if (isOrchestrationV2WorkActive(item.status)) return Effect.void;
             const linked = Effect.andThen(
               linkCreatedChangeRequests(event.threadId, item),
               reopenWatchedChecks(event.threadId, item),
             );
-            if (!isChangeRequestCloseCommand(item.input))
+            if (ended === undefined || ended.has(item.id))
               return inThreadOrder(event.threadId, linked);
-            const ended = closeCommands.get(event.threadId) ?? new Set<string>();
-            closeCommands.set(event.threadId, ended);
-            if (ended.has(item.id)) return inThreadOrder(event.threadId, linked);
             ended.add(item.id);
             return inThreadOrder(
               event.threadId,
