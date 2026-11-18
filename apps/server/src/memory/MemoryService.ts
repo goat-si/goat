@@ -1652,12 +1652,16 @@ const make = Effect.fnUntraced(function* (
             : `explicit:${scope.projectKey.sharedProjectId}`;
     const normalizedQuery = "query" in input ? input.query.normalize("NFC").trim() : undefined;
     const binding =
-      "query" in input
+      "query" in input || input.origin
         ? {
             memorySpaceId: input.memorySpaceId,
-            queryDigest: NodeCrypto.createHash("sha256").update(normalizedQuery!).digest("hex"),
-            mode: input.mode,
-            scopeKey: NodeCrypto.createHash("sha256").update(scopeKey).digest("hex"),
+            queryDigest: hash(normalizedQuery ?? ""),
+            mode: "mode" in input ? input.mode : ("fts" as const),
+            scopeKey: hash(
+              input.origin
+                ? JSON.stringify([scopeKey, input.origin.environmentId, input.origin.threadId])
+                : scopeKey,
+            ),
           }
         : undefined;
     const cursor = input.cursor
@@ -1709,6 +1713,7 @@ const make = Effect.fnUntraced(function* (
           scope,
           limit: input.limit,
           ...(cursor ? { afterMemoryId: cursor } : {}),
+          ...(input.origin ? { origin: input.origin } : {}),
         };
         const coverage = "query" in input ? yield* store.searchCoverage(filter) : undefined;
         const searched =
@@ -1718,14 +1723,17 @@ const make = Effect.fnUntraced(function* (
         if ("query" in input && input.mode === "substring" && !coverage?.ready)
           return yield* new Store.MemoryStoreConflict({ code: "unavailable" });
         let items = "query" in input ? (searched?.items ?? []) : yield* store.list(filter);
-        let nextCursor =
+        const encodeCursor = (id: M.MemoryId) =>
+          binding ? M.encodeMemorySearchCursor(binding, id) : id;
+        const continuation =
           "query" in input
-            ? searched && !searched.exhausted && searched.examinedAfterMemoryId
-              ? M.encodeMemorySearchCursor(binding!, searched.examinedAfterMemoryId)
+            ? searched && !searched.exhausted
+              ? searched.examinedAfterMemoryId
               : null
             : items.length === input.limit
-              ? (items.at(-1)?.memoryId ?? null)
+              ? items.at(-1)?.memoryId
               : null;
+        let nextCursor = continuation ? encodeCursor(continuation) : null;
         let visible = yield* Effect.forEach(items, (item) =>
           viewProjection.item(item, input.includeMarks),
         );
@@ -1737,7 +1745,7 @@ const make = Effect.fnUntraced(function* (
             if (bytes + size > M.MEMORY_PAGE_MAX_UTF8_BYTES) {
               const last = visible[index - 1]?.memoryId;
               if (!last) return yield* new Store.MemoryStoreConflict({ code: "payload_too_large" });
-              nextCursor = binding ? M.encodeMemorySearchCursor(binding, last) : last;
+              nextCursor = encodeCursor(last);
               items = items.slice(0, index);
               visible = visible.slice(0, index);
               break;

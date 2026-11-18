@@ -266,6 +266,7 @@ export const make = Effect.gen(function* () {
         resolutionInputs: true,
         retainedLocalSpace: true,
         provenanceProjection: true,
+        originFilter: true,
         generationHold: true,
         hubDiagnostics: true,
         siteNotes: true,
