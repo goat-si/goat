@@ -1,5 +1,4 @@
 import { requireNativeView } from "expo";
-import { useState } from "react";
 import { processColor, View, type NativeSyntheticEvent, type ViewProps } from "react-native";
 
 import { flattenThemeColor } from "../../lib/mobileTheme";
@@ -7,6 +6,7 @@ import { useUniwindTheme } from "../../lib/useUniwindTheme";
 import { PlainSecretTextInput } from "./PlainSecretTextInput";
 import { SecretRevealButton } from "./SecretRevealButton";
 import type { SecretTextInputProps } from "./SecretTextInput.types";
+import { useSecretReveal } from "./useSecretReveal";
 
 interface NativeSecretInputProps extends ViewProps {
   readonly inputLabel: string;
@@ -45,7 +45,7 @@ function nativeColor(value: string) {
 export function SecretTextInput(props: SecretTextInputProps) {
   const theme = useUniwindTheme();
   const surface = theme["--color-input"];
-  const [revealed, setRevealed] = useState(false);
+  const [revealed, toggleRevealed] = useSecretReveal(props.editable);
   if (NativeSecretInput === null) return <PlainSecretTextInput {...props} />;
   return (
     <View className="min-h-13.5 flex-row items-center gap-1 rounded-2xl border border-input-border bg-input pr-1.5 pl-3.5">
@@ -64,7 +64,7 @@ export function SecretTextInput(props: SecretTextInputProps) {
         onInputFocus={() => props.onFocus?.()}
         style={{ flex: 1, height: LINE_HEIGHT }}
       />
-      <SecretRevealButton revealed={revealed} onPress={() => setRevealed(!revealed)} />
+      <SecretRevealButton revealed={revealed} disabled={!props.editable} onPress={toggleRevealed} />
     </View>
   );
 }

@@ -1,13 +1,13 @@
-import { useState } from "react";
 import { View } from "react-native";
 
 import { AppTextInput } from "./AppText";
 import { SecretRevealButton } from "./SecretRevealButton";
 import type { SecretTextInputProps } from "./SecretTextInput.types";
+import { useSecretReveal } from "./useSecretReveal";
 
 /** Masked field for a value that must stay out of password managers and suggestions. */
 export function PlainSecretTextInput(props: SecretTextInputProps) {
-  const [revealed, setRevealed] = useState(false);
+  const [revealed, toggleRevealed] = useSecretReveal(props.editable);
   return (
     <View className="justify-center">
       <AppTextInput
@@ -29,7 +29,11 @@ export function PlainSecretTextInput(props: SecretTextInputProps) {
         onSubmitEditing={(event) => props.onSubmitEditing(event.nativeEvent.text)}
       />
       <View className="absolute right-1.5">
-        <SecretRevealButton revealed={revealed} onPress={() => setRevealed(!revealed)} />
+        <SecretRevealButton
+          revealed={revealed}
+          disabled={!props.editable}
+          onPress={toggleRevealed}
+        />
       </View>
     </View>
   );
