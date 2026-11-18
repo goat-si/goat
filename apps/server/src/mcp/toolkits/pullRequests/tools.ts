@@ -340,8 +340,17 @@ const ListThreadPullRequestsTool = Tool.make(agentSurfaceRegistry["pull_request.
   description: agentSurfaceRegistry["pull_request.list"].description,
   parameters: Schema.Struct({
     threadId: Schema.optional(ThreadId.annotate({ description: "Thread. Default: this thread." })),
-    states: Schema.optional(Schema.Array(PullRequestState)),
-    cursor: Schema.optional(Schema.String),
+    states: Schema.optional(
+      Schema.Array(PullRequestState).annotate({
+        description:
+          "Only pull requests whose last known state is listed; one not read yet is open.",
+      }),
+    ),
+    cursor: Schema.optional(
+      Schema.String.annotate({
+        description: "nextCursor from the previous page. Default: the first page.",
+      }),
+    ),
   }),
   success: ListThreadPullRequestsResult,
   failure: PullRequestToolError,
