@@ -74,6 +74,12 @@ export const preserveAttemptDeliveryJson = (sql: SqlClient.SqlClient) => sql`
   CASE
     WHEN json_extract(excluded.payload_json, '$.inputDelivery') = 'accepted'
       THEN excluded.payload_json
+    WHEN json_extract(payload_json, '$.inputDelivery') = 'unsent'
+      AND json_extract(excluded.payload_json, '$.inputDelivery') IS NULL
+      AND (excluded.status <> 'pending'
+        OR json_extract(excluded.payload_json, '$.startedAt') IS NOT NULL
+        OR excluded.provider_turn_id IS NOT NULL)
+      THEN json_set(excluded.payload_json, '$.inputDelivery', 'ambiguous')
     WHEN json_extract(payload_json, '$.inputDelivery') IN ('accepted', 'ambiguous')
       OR (json_extract(payload_json, '$.inputDelivery') IS NOT NULL
         AND json_extract(excluded.payload_json, '$.inputDelivery') IS NULL)
@@ -87,6 +93,13 @@ export function preserveAttemptDelivery(
   next: OrchestrationV2RunAttempt,
 ) {
   const current = attempts.find(({ id }) => id === next.id)?.inputDelivery;
+  // An older server can execute a new attempt without recording a submit fence.
+  if (
+    current === "unsent" &&
+    next.inputDelivery === undefined &&
+    (next.status !== "pending" || next.startedAt !== null || next.providerTurnId !== null)
+  )
+    return { ...next, inputDelivery: "ambiguous" as const };
   return current !== undefined &&
     next.inputDelivery !== "accepted" &&
     (current !== "unsent" || next.inputDelivery === undefined)

@@ -1,3 +1,12 @@
+import {
+  EventId,
+  NodeId,
+  ProviderThreadId,
+  RunAttemptId,
+  RunId,
+  type OrchestrationV2RunAttempt,
+} from "@goat/contracts";
+import { createD10Thread, providerInstanceId } from "./ProjectionStore.testkit.ts";
 import * as NodeServices from "@effect/platform-node/NodeServices";
 import { assert, it } from "@effect/vitest";
 import * as DateTime from "effect/DateTime";
@@ -23,7 +32,7 @@ const idleDays = (thread: number) => (thread < 20 ? 30 - thread : 1 + 1 / 12);
 const outputBytes = 32_000;
 
 const layer = ProjectionMaintenance.layer.pipe(
-  Layer.provide(Layer.merge(EventStore.layer, ProjectionStore.layer)),
+  Layer.provideMerge(Layer.merge(EventStore.layer, ProjectionStore.layer)),
   Layer.provideMerge(SqlitePersistence.layerMemory),
   Layer.provide(NodeServices.layer),
 );
@@ -379,4 +388,75 @@ it.effect(
         assert.isTrue(trimmedThreads.has(thread), `${thread}`);
       assert.isFalse(trimmedThreads.has(23));
     }).pipe(Effect.provide(layer)),
+);
+
+it.effect("rebuild does not restore stale unsent evidence after execution on an older server", () =>
+  Effect.gen(function* () {
+    const store = yield* ProjectionStore.ProjectionStoreV2;
+    const events = yield* EventStore.EventStoreV2;
+    const maintenance = yield* ProjectionMaintenance.ProjectionMaintenanceV2;
+    const sql = yield* SqlClient.SqlClient;
+    const threadId = yield* createD10Thread("downgraded-input-delivery");
+    const thread = yield* store.getThread(threadId);
+    const at = yield* DateTime.now;
+    const pending: OrchestrationV2RunAttempt = {
+      id: RunAttemptId.make("attempt:downgraded-input-delivery"),
+      runId: RunId.make("run:downgraded-input-delivery"),
+      attemptOrdinal: 1,
+      rootNodeId: NodeId.make("root:downgraded-input-delivery"),
+      providerInstanceId,
+      providerThreadId: ProviderThreadId.make("provider-thread:downgraded-input-delivery"),
+      providerTurnId: null,
+      reason: "initial",
+      status: "pending",
+      startedAt: null,
+      completedAt: null,
+    };
+    const created = {
+      id: EventId.make("event:new-server-attempt"),
+      type: "run-attempt.created" as const,
+      threadId,
+      occurredAt: at,
+      payload: { ...pending, inputDelivery: "unsent" as const },
+    };
+    yield* events.append({
+      events: [
+        {
+          id: EventId.make("event:new-server-thread"),
+          type: "thread.created",
+          threadId,
+          occurredAt: at,
+          payload: thread,
+        },
+        created,
+      ],
+    });
+    yield* store.apply(created);
+    assert.equal((yield* store.getThreadProjection(threadId)).attempts[0]?.inputDelivery, "unsent");
+
+    const update = {
+      id: EventId.make("event:old-server-execution"),
+      type: "run-attempt.updated" as const,
+      threadId,
+      occurredAt: at,
+      payload: { ...pending, status: "running" as const, startedAt: at },
+    };
+    yield* events.append({
+      events: [
+        update,
+        {
+          ...update,
+          id: EventId.make("event:old-server-stop"),
+          payload: { ...update.payload, status: "interrupted", completedAt: at },
+        },
+      ],
+    });
+    yield* sql`UPDATE orchestration_v2_projection_run_attempts
+      SET status = 'interrupted', payload_json = json_remove(payload_json, '$.inputDelivery')
+      WHERE attempt_id = ${pending.id}`;
+    yield* maintenance.rebuild;
+    const rebuilt = (yield* store.getThreadProjection(threadId)).attempts[0];
+    assert.equal(rebuilt?.status, "interrupted");
+    assert.equal(rebuilt?.inputDelivery, "ambiguous");
+  }).pipe(Effect.provide(layer)),
 );
