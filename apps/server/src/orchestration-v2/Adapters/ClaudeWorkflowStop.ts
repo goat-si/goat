@@ -82,18 +82,24 @@ function workflowWithResolvedClaudeStop(
 }
 
 export const reconcileClaudeWorkflowStop = Effect.fn("ClaudeWorkflowStop.reconcile")(function* <
-  C extends { task: OrchestrationV2Subagent; workflowStop?: ClaudeWorkflowStop },
+  C extends {
+    task: OrchestrationV2Subagent;
+    workflowStop?: ClaudeWorkflowStop;
+    confirmedOutcome: { readonly status: OrchestrationV2Subagent["status"] } | undefined;
+  },
 >(
   coordinator: C,
   stop: ClaudeWorkflowStop,
-  accepted: boolean,
   project: (input: {
     coordinator: C;
     workflow: OrchestrationV2SubagentWorkflow;
   }) => Effect.Effect<void>,
 ) {
   if (coordinator.workflowStop !== stop || stop.outcome !== "pending") return;
-  yield* settleClaudeStopDenials(stop, accepted);
+  yield* settleClaudeStopDenials(
+    stop,
+    stop.acknowledged || coordinator.confirmedOutcome?.status === "cancelled",
+  );
   if (stop.members.size > 0 && coordinator.task.workflow !== undefined) {
     yield* project({
       coordinator,

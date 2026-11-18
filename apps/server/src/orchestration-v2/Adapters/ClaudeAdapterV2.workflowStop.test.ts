@@ -126,9 +126,9 @@ it.effect(
     }).pipe(Effect.scoped, Effect.provide(layerClaudeAdapterTest)),
 );
 
-it.effect(
-  "settles held Stop evidence when a stopped workflow's query exits before acknowledgement",
-  () =>
+it.effect.each([false, true])(
+  "settles held evidence for a confirmed workflow Stop (timeout before EOF: %s)",
+  (timeoutBeforeEof) =>
     Effect.gen(function* () {
       const fs = yield* FileSystem.FileSystem;
       const requested = yield* Deferred.make<void>();
@@ -137,7 +137,10 @@ it.effect(
         Deferred.succeed(requested, undefined).pipe(Effect.andThen(Deferred.await(ack))),
       );
       yield* TestClock.setTime(Date.parse("2026-10-17T06:00:00.000Z"));
-      const stopping = yield* harness.stop.pipe(Effect.forkChild);
+      const request = timeoutBeforeEof
+        ? harness.stop.pipe(Effect.timeout("15 seconds"))
+        : harness.stop;
+      const stopping = yield* request.pipe(Effect.exit, Effect.forkChild);
       yield* Deferred.await(requested);
       yield* fs.writeFileString(
         harness.transcript,
@@ -150,9 +153,6 @@ it.effect(
       );
       assert.isUndefined(stopping.pollUnsafe());
       assert.equal(workflowCoordinatorEvents(harness.events).at(-1)?.subagent.status, "cancelled");
-      yield* Queue.shutdown(harness.sdkMessages);
-      yield* harness.awaitQueryExit(harness.sdkMessages);
-
       const toolOutcomes = () =>
         harness.events.flatMap((event) =>
           event.type === "turn_item.updated" &&
@@ -160,6 +160,20 @@ it.effect(
             ? [event.turnItem.status]
             : [],
         );
+      if (timeoutBeforeEof) {
+        yield* TestClock.adjust("15 seconds");
+        assert.isTrue(Exit.isFailure(yield* Fiber.join(stopping)));
+        yield* harness.awaitUntil(() => toolOutcomes().length > 1, "held tool settled before EOF");
+        assert.deepEqual(toolOutcomes(), ["running", "interrupted"]);
+        yield* harness.awaitUntil(
+          () =>
+            workflowCoordinatorEvents(harness.events).at(-1)?.subagent.workflow?.agents[0]
+              ?.outcome === "cancelled",
+          "confirmed cancellation projected before EOF",
+        );
+      }
+      yield* Queue.shutdown(harness.sdkMessages);
+      yield* harness.awaitQueryExit(harness.sdkMessages);
       assert.deepEqual(toolOutcomes(), ["running", "interrupted"]);
       assert.equal(workflowMemberEvents(harness.events, 1).at(-1)?.subagent.status, "cancelled");
       assert.equal(
@@ -167,8 +181,10 @@ it.effect(
         "cancelled",
       );
 
-      yield* Deferred.succeed(ack, undefined);
-      yield* Fiber.join(stopping);
+      if (!timeoutBeforeEof) {
+        yield* Deferred.succeed(ack, undefined);
+        assert.isTrue(Exit.isSuccess(yield* Fiber.join(stopping)));
+      }
       yield* harness.awaitEventsRecorded;
       assert.deepEqual(toolOutcomes(), ["running", "interrupted"]);
     }).pipe(Effect.scoped, Effect.provide(layerClaudeAdapterTest)),

@@ -6231,7 +6231,6 @@ export const makeClaudeAdapterV2 = Effect.fn("makeClaudeAdapterV2")(function* (
                   yield* reconcileClaudeWorkflowStop(
                     coordinator,
                     stop,
-                    stop.acknowledged || coordinator.confirmedOutcome?.status === "cancelled",
                     projectClaudeWorkflowMembers,
                   );
                 }
@@ -10481,10 +10480,9 @@ export const makeClaudeAdapterV2 = Effect.fn("makeClaudeAdapterV2")(function* (
                       yield* reconcileClaudeWorkflowStop(
                         current,
                         stop,
-                        stop.acknowledged,
                         projectClaudeWorkflowMembers,
                       );
-                      if (!stop.acknowledged) {
+                      if (stop.outcome === "rejected") {
                         if (previousStop === undefined) delete current.workflowStop;
                         else current.workflowStop = previousStop;
                       }
