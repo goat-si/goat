@@ -28,6 +28,7 @@ import {
   space,
 } from "./MemoryHubService.testkit.ts";
 
+const decodeOperation = Schema.decodeUnknownSync(M.MemoryOperation);
 const decodeResolution = Schema.decodeUnknownSync(M.MemoryHubApplyResolutionInput);
 const enabled = Effect.provideService(MemoryFloor2Enabled, true);
 const features = M.MEMORY_FLOOR_2;
@@ -123,6 +124,114 @@ describe("memory hub floor", () => {
       assert.include(refusal, { code: "hub_upgrade_required" });
       assert.deepStrictEqual(Reflect.get(refusal, "upgradeRequiredMembers"), blockers);
     }).pipe(checkUsage, Effect.provide(live), enabled),
+  );
+
+  it.effect("an old member prevents automatic floor activation", () =>
+    Effect.gen(function* () {
+      yield* seed;
+      const hub = yield* Hub.MemoryHubService;
+      const old = yield* hub.pull({ ...pullInput, environmentId: otherEnv }, principal(otherEnv));
+      assert.isUndefined(old.derivedCap);
+      const updated = yield* hub.pull(advertise, principal());
+      assert.isUndefined(updated.derivedCap);
+      assert.deepStrictEqual(updated.upgradeRequiredMembers, [otherEnv]);
+      const upgraded = yield* hub.pull(
+        { ...advertise, environmentId: otherEnv },
+        principal(otherEnv),
+      );
+      assert.strictEqual(upgraded.derivedCap, 1000);
+    }).pipe(checkUsage, Effect.provide(live)),
+  );
+
+  it.effect(
+    "moves the same memory and its history, fences stale moves and retires old handles",
+    () =>
+      Effect.gen(function* () {
+        yield* seed;
+        const hub = yield* Hub.MemoryHubService;
+        const store = yield* Store.MemoryStore;
+        const compactor = yield* Compactor.MemoryCompactor;
+        yield* hub.pull(advertise, principal());
+        yield* hub.pull({ ...advertise, environmentId: otherEnv }, principal(otherEnv));
+        const first = newMemory(501);
+        const scope = {
+          kind: "thread",
+          thread: { environmentId: hubEnv, threadId: M.ThreadId.make("move-target") },
+        } as const;
+        assert.strictEqual(
+          (yield* hub.push({ ...pushInput(first), features }, principal())).receipts[0]?.outcome,
+          "accepted",
+        );
+        yield* compactor.compact(principal());
+        const joinInput = {
+          protocolVersion: 1 as const,
+          environmentId: otherEnv,
+          memorySpaceId: space,
+          features,
+        };
+        const old = yield* hub.join(joinInput, principal(otherEnv));
+        const move = decodeOperation({
+          protocolVersion: 1,
+          kind: "move",
+          operationId: id(502),
+          memoryId: first.memoryId,
+          memorySpaceId: space,
+          originEnvironmentId: hubEnv,
+          expectedHeads: [first.revision.revisionId],
+          expectedScopeVersion: 0,
+          fromScope: first.revision.scope,
+          toScope: scope,
+        });
+        const push = (op: M.MemoryOperation) =>
+          hub.push({ ...pushInput(op), features }, principal());
+        const one = (yield* push(move)).receipts[0];
+        assert.include(one, { outcome: "accepted" });
+        assert.deepStrictEqual((yield* push(move)).receipts[0], one);
+        const aggregate = yield* store.loadAggregate(space, first.memoryId);
+        assert.deepStrictEqual(aggregate.item?.scope, scope);
+        assert.deepStrictEqual(aggregate.revisions, [
+          { revision: { ...first.revision, scope }, payload: first.payload },
+        ]);
+        const staleHandle = yield* hub
+          .pull(
+            {
+              ...advertise,
+              environmentId: otherEnv,
+              snapshotToken: old.snapshotToken,
+              afterSequence: old.checkpointSequence,
+            },
+            principal(otherEnv),
+          )
+          .pipe(Effect.flip);
+        assert.property(staleHandle, "code");
+        const next = yield* hub.join(joinInput, principal(otherEnv));
+        const checkpoint = yield* hub.pull(
+          {
+            ...advertise,
+            environmentId: otherEnv,
+            snapshotToken: next.snapshotToken,
+            afterSequence: next.checkpointSequence,
+          },
+          principal(otherEnv),
+        );
+        assert.deepStrictEqual(
+          checkpoint.checkpoint?.identities.find((item) => item.memoryId === first.memoryId)?.scope,
+          scope,
+        );
+        const moveBack = decodeOperation({
+          ...move,
+          operationId: id(503),
+          expectedScopeVersion: 1,
+          fromScope: scope,
+          toScope: first.revision.scope,
+        });
+        assert.include((yield* push(moveBack)).receipts[0], { outcome: "accepted" });
+        const stale = decodeOperation({ ...move, operationId: id(504) });
+        assert.include((yield* push(stale)).receipts[0], {
+          outcome: "rejected",
+          failureCode: "revision_changed",
+        });
+      }).pipe(checkUsage, Effect.provide(live)),
   );
 
   it.effect("a wide save stays invisible until ordered tail settlement", () =>

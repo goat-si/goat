@@ -3,7 +3,6 @@ import { assert } from "@effect/vitest";
 import * as Effect from "effect/Effect";
 import * as Layer from "effect/Layer";
 import * as Context from "effect/Context";
-import { MemoryFloor2Enabled } from "../MemoryFloor.ts";
 import * as Hub from "../MemoryHubService.ts";
 import * as Store from "../MemoryStore.ts";
 import * as Service from "../MemoryService.ts";
@@ -16,9 +15,7 @@ export const runSelfWideSave = Effect.fn("test.runSelfWideSave")(function* (
   local: M.EnvironmentId,
 ) {
   yield* (yield* Sync.MemorySyncService).shutdown;
-  const restarted = yield* Layer.build(Layer.fresh(Sync.layer)).pipe(
-    Effect.provideService(MemoryFloor2Enabled, true),
-  );
+  const restarted = yield* Layer.build(Layer.fresh(Sync.layer));
   const sync = Context.get(restarted, Sync.MemorySyncService);
   const store = yield* Store.MemoryStore;
   const service = yield* Service.MemoryService;
