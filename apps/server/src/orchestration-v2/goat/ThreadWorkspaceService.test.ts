@@ -159,10 +159,10 @@ const harness = Effect.fn("ThreadWorkspaceTest.harness")(function* (
     ServerSettings.ServerSettingsService.layerTest({
       worktreesDirectory: NodePath.join(root, "managed"),
     }),
-    ServerConfig.layerTest(process.cwd(), { prefix: "thread-workspace-test-" }),
+    ServerConfig.layerTest(process.cwd(), NodePath.join(root, "config")),
   );
   const layer = ThreadWorkspace.layer.pipe(
-    Layer.provide(fakes),
+    Layer.provideMerge(fakes),
     Layer.provideMerge(Layer.mergeAll(NodeServices.layer, NodeCrypto.layer)),
   );
   return { calls, layer, freshPath, git, repo, root };

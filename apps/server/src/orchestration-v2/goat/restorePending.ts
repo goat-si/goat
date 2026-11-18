@@ -1,3 +1,7 @@
+// @effect-diagnostics nodeBuiltinImport:off -- Workspace paths are hashed into private recovery filenames.
+import * as NodeCrypto from "node:crypto";
+import { normalizeProjectPathForComparison } from "@goat/shared/path";
+import { ServerConfig } from "../../config.ts";
 import * as Effect from "effect/Effect";
 import * as FileSystem from "effect/FileSystem";
 import * as Path from "effect/Path";
@@ -25,17 +29,24 @@ export class RestorePendingError extends Schema.TaggedError<RestorePendingError>
   }
 }
 
-const decode = Schema.decodeUnknownEffect(Schema.fromJsonString(RestorePendingState));
+const jsonState = Schema.fromJsonString(RestorePendingState);
+const decode = Schema.decodeUnknownEffect(jsonState);
+const encode = Schema.encodeEffect(jsonState);
 
-/**
- * A restored worktree stays marked until setup and verification succeed. The marker lives in the
- * linked worktree's Git admin folder, so it survives a restart and a rollback that could not
- * delete the folder, and leaves with the folder when removal works.
- */
+/** Records recovery before Git can register the checkout. Older linked markers remain readable. */
 export const makeRestorePending = Effect.gen(function* () {
   const fs = yield* FileSystem.FileSystem;
   const path = yield* Path.Path;
-  const markerPath = (worktreePath: string) =>
+  const config = yield* ServerConfig;
+  const directory = path.join(config.stateDir, "worktree-restore-pending");
+  const sidecar = (worktreePath: string) =>
+    path.join(
+      directory,
+      NodeCrypto.createHash("sha256")
+        .update(normalizeProjectPathForComparison(path.resolve(worktreePath)))
+        .digest("hex") + ".json",
+    );
+  const legacyMarker = (worktreePath: string) =>
     fs.readFileString(path.join(worktreePath, ".git")).pipe(
       Effect.map((pointer) =>
         pointer.startsWith("gitdir:")
@@ -44,13 +55,14 @@ export const makeRestorePending = Effect.gen(function* () {
       ),
       Effect.orElseSucceed(() => null),
     );
+  const markerPath = Effect.fn("RestorePending.markerPath")(function* (worktreePath: string) {
+    const marker = sidecar(worktreePath);
+    if (yield* fs.exists(marker).pipe(Effect.orElseSucceed(() => true))) return marker;
+    return yield* legacyMarker(worktreePath);
+  });
   const marked = Effect.fn("RestorePending.marked")(function* (worktreePath: string) {
-    const linked = yield* fs
-      .exists(path.join(worktreePath, ".git"))
-      .pipe(Effect.orElseSucceed(() => false));
-    const marker = linked ? yield* markerPath(worktreePath) : null;
-    if (marker === null) return false;
-    return yield* fs.exists(marker).pipe(Effect.orElseSucceed(() => false));
+    const marker = yield* markerPath(worktreePath);
+    return marker !== null && (yield* fs.exists(marker).pipe(Effect.orElseSucceed(() => true)));
   });
   return {
     marked,
@@ -67,21 +79,23 @@ export const makeRestorePending = Effect.gen(function* () {
         Effect.flatMap((json) => (json === null ? Effect.succeed(null) : decode(json))),
         Effect.orElseSucceed(() => null),
       ),
-    write: (worktreePath: string, state: RestorePendingState) =>
-      markerPath(worktreePath).pipe(
-        Effect.flatMap((marker) =>
-          marker === null
-            ? Effect.fail(new RestorePendingError({ worktreePath }))
-            : fs
-                .writeFileString(marker, JSON.stringify(state))
-                .pipe(Effect.mapError((cause) => new RestorePendingError({ worktreePath, cause }))),
+    write: Effect.fn("RestorePending.write")(
+      function* (worktreePath: string, state: RestorePendingState) {
+        yield* fs.makeDirectory(directory, { recursive: true });
+        const draft = yield* fs.makeTempFileScoped({ directory, prefix: ".goat-restore-" });
+        yield* fs.writeFileString(draft, yield* encode(state));
+        yield* fs.rename(draft, sidecar(worktreePath));
+      },
+      (effect, worktreePath) =>
+        effect.pipe(
+          Effect.scoped,
+          Effect.mapError((cause) => new RestorePendingError({ worktreePath, cause })),
         ),
-      ),
-    clear: (worktreePath: string) =>
-      markerPath(worktreePath).pipe(
-        Effect.flatMap((marker) =>
-          marker === null ? Effect.void : fs.remove(marker, { force: true }),
-        ),
-      ),
+    ),
+    clear: Effect.fn("RestorePending.clear")(function* (worktreePath: string) {
+      const old = yield* legacyMarker(worktreePath);
+      if (old !== null) yield* fs.remove(old, { force: true });
+      yield* fs.remove(sidecar(worktreePath), { force: true });
+    }),
   };
 });

@@ -1,3 +1,4 @@
+import { withWorkspaceLease } from "../../workspace/workspaceLease.ts";
 // @effect-diagnostics nodeBuiltinImport:off -- real Git fixtures run in temporary repositories.
 import { assert, it } from "@effect/vitest";
 import * as NodeChildProcess from "node:child_process";
@@ -258,4 +259,36 @@ it.effect(
       assert.equal(NodeFS.readFileSync(NodePath.join(worktreePath, "since"), "utf8"), "kept");
       assert.equal(NodeFS.readFileSync(NodePath.join(worktreePath, "untracked"), "utf8"), "new");
     }).pipe(Effect.provide(layerRealGit), Effect.scoped),
+);
+
+it.effect("retries the snapshot and setup after a failed add left a linked checkout", () =>
+  Effect.gen(function* () {
+    const { repo, worktreePath, snapshot } = yield* fixture;
+    const kept = NodePath.join(worktreePath, "keep.txt");
+    const hook = NodePath.join(repo, ".git", "hooks", "post-checkout");
+    NodeFS.writeFileSync(hook, "#!/bin/sh\nprintf keep > keep.txt\nexit 1\n", { mode: 0o755 });
+    const restored: string[] = [];
+    const setups: string[] = [];
+    const restore = yield* makeRestoreThreadWorkspace.pipe(
+      Effect.provide(services(snapshot, restored, 0, (path) => void setups.push(path))),
+    );
+    const input = { threadId, cwd: repo, worktreePath, branch: "feature" };
+    const error = yield* withWorkspaceLease(worktreePath, Effect.flip(restore(input)));
+    assert.equal(error.reason, "git-failed");
+    assert.isTrue(NodeFS.existsSync(NodePath.join(worktreePath, ".git")));
+    assert.equal(NodeFS.readFileSync(kept, "utf8"), "keep");
+    const pending = yield* makeRestorePending;
+    assert.isFalse(yield* pending.ready(worktreePath));
+    NodeFS.unlinkSync(hook);
+    const retried = yield* withWorkspaceLease(worktreePath, restore(input));
+    assert.equal(NodeFS.readFileSync(NodePath.join(worktreePath, "tracked"), "utf8"), "changed");
+    assert.deepEqual(setups, [worktreePath]);
+    assert.deepEqual(restored, [snapshot.snapshotRef]);
+    assert.isTrue(yield* pending.ready(worktreePath));
+    assert.isDefined(retried.setAsidePath);
+    assert.equal(
+      NodeFS.readFileSync(NodePath.join(retried.setAsidePath ?? "", "keep.txt"), "utf8"),
+      "keep",
+    );
+  }).pipe(Effect.provide(layerRealGit), Effect.scoped),
 );

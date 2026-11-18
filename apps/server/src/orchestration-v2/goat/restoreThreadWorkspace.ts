@@ -4,12 +4,14 @@ import {
   type ThreadWorkspaceRestoreFailure,
 } from "@goat/contracts";
 import * as Effect from "effect/Effect";
+import * as FileSystem from "effect/FileSystem";
+import * as Path from "effect/Path";
 import * as Option from "effect/Option";
 
 import * as ProjectSetupScriptRunner from "../../project/ProjectSetupScriptRunner.ts";
 import { reuseHeldWorkspaceLease } from "../../workspace/workspaceLease.ts";
 import { WorktreeSnapshotStore } from "../../worktreeSnapshots/WorktreeSnapshotStore.ts";
-import { makeDiscardWorktree, makeRecreateMissingWorktree } from "./RecreateWorktree.ts";
+import { makeRecreateMissingWorktree } from "./RecreateWorktree.ts";
 import { makeRestorePending, type RestorePendingState } from "./restorePending.ts";
 import { git, RestoreSnapshotError, verifyRestoredWorktree } from "./restoreSnapshot.ts";
 import { makeNoticeFolderReplaced } from "./noticeFolderReplaced.ts";
@@ -76,7 +78,8 @@ interface RestoreInput {
  */
 export const makeRestoreThreadWorkspace = Effect.gen(function* () {
   const recreate = yield* makeRecreateMissingWorktree;
-  const discardWorktree = yield* makeDiscardWorktree;
+  const fs = yield* FileSystem.FileSystem;
+  const path = yield* Path.Path;
   const pending = yield* makeRestorePending;
   const setAside = yield* makeSetAsideFolder;
   // Optional so turn-start harnesses without the ledger or setup runner keep plain recreation.
@@ -85,37 +88,91 @@ export const makeRestoreThreadWorkspace = Effect.gen(function* () {
     ProjectSetupScriptRunner.ProjectSetupScriptRunner,
   );
   const noticeFolderReplaced = yield* makeNoticeFolderReplaced;
+  const archiveIncomplete = Effect.fn("ThreadWorkspace.archiveIncomplete")(function* (
+    input: RestoreInput,
+    state: RestorePendingState,
+    aside: { path: string | null },
+  ) {
+    if (!(yield* fs.exists(path.join(input.worktreePath, ".git")))) return;
+    yield* verifyRestoredWorktree({
+      cwd: input.worktreePath,
+      branch: input.branch,
+      expectedHead: state.headSha,
+    });
+    const folder = yield* fs.makeTempDirectory({
+      directory: path.dirname(input.worktreePath),
+      prefix: `${path.basename(input.worktreePath)}-set-aside-`,
+    });
+    const archived = path.join(folder, "checkout");
+    yield* Effect.tryPromise({
+      try: async () => {
+        await git(input.cwd, ["worktree", "move", "--", input.worktreePath, archived]);
+        aside.path = archived;
+        // Detach only the Git ref. Checkout would overwrite the preserved files.
+        await git(archived, ["update-ref", "--no-deref", "HEAD", state.headSha, state.headSha]);
+      },
+      catch: (cause) =>
+        new RestoreSnapshotError({ detail: "set aside the unfinished checkout", cause }),
+    }).pipe(Effect.uninterruptible);
+  });
+
   const restore = Effect.fn("ThreadWorkspace.restoreFolder")(function* (
     input: RestoreInput,
-    aside?: { path: string | null },
+    aside: { path: string | null },
   ) {
     const fail = (reason: ThreadWorkspaceRestoreFailure, detail: string) =>
       new ThreadWorkspaceRestoreError({ threadId: input.threadId, reason, detail });
-    // A rollback that could not delete the folder keeps the marker, so this repeats until it passes.
-    const discard = discardWorktree({ cwd: input.cwd, worktreePath: input.worktreePath });
-    const resumed = yield* pending.marked(input.worktreePath);
-    const state: RestorePendingState = resumed
+    const saved = (yield* pending.marked(input.worktreePath))
       ? yield* pending.read(input.worktreePath).pipe(
           Effect.filterOrFail(
-            (resumed): resumed is RestorePendingState => resumed !== null,
+            (state): state is RestorePendingState => state !== null,
             () => fail("verify-failed", "GOAT couldn't read where the earlier restore stopped."),
           ),
         )
+      : null;
+    const lenient =
+      saved !== null &&
+      (yield* fs.exists(path.join(input.worktreePath, ".git"))) &&
+      (saved.applied === true || (saved.applied === undefined && saved.snapshotSha === null));
+    const state: RestorePendingState = lenient
+      ? saved
       : yield* Effect.gen(function* () {
-          const snapshot = Option.isSome(snapshots)
-            ? yield* snapshots.value.latestForThread(input.threadId)
-            : null;
-          const marker = (created: Pick<RestorePendingState, "restoredFrom" | "headSha">) => ({
+          if (saved !== null) {
+            yield* archiveIncomplete(input, saved, aside).pipe(
+              Effect.mapError((error) =>
+                fail(
+                  "git-failed",
+                  `Could not set aside the unfinished checkout at ${input.worktreePath}: ${error.message}`,
+                ),
+              ),
+            );
+          }
+          const snapshot =
+            saved !== null
+              ? saved.snapshotSha === null
+                ? null
+                : {
+                    snapshotSha: saved.snapshotSha,
+                    headSha: saved.headSha,
+                    snapshotRef: saved.snapshotRef,
+                  }
+              : Option.isSome(snapshots)
+                ? yield* snapshots.value.latestForThread(input.threadId)
+                : null;
+          const marker = (
+            created: Pick<RestorePendingState, "restoredFrom" | "headSha">,
+            applied: boolean,
+          ) => ({
             ...created,
             snapshotSha: snapshot?.snapshotSha ?? null,
             snapshotRef: snapshot?.snapshotRef ?? null,
+            applied,
           });
-          // Marked before the snapshot is applied, so a rollback that fails cannot pass for done.
           const restored = yield* recreate({
             cwd: input.cwd,
             worktreePath: input.worktreePath,
             branch: input.branch,
-            onCreated: (created) => pending.write(input.worktreePath, marker(created)),
+            beforeCreate: (created) => pending.write(input.worktreePath, marker(created, false)),
             ...(snapshot === null
               ? {}
               : { snapshot: { snapshotSha: snapshot.snapshotSha, headSha: snapshot.headSha } }),
@@ -129,17 +186,14 @@ export const makeRestoreThreadWorkspace = Effect.gen(function* () {
                 : fail("git-failed", error.message),
             ),
           );
-          if (snapshot === null) return marker(restored);
-          const applied = { ...marker(restored), applied: true };
+          const applied = marker(restored, true);
           yield* pending
             .write(input.worktreePath, applied)
             .pipe(Effect.mapError((error) => fail("verify-failed", error.message)));
           return applied;
         });
-    // A folder an earlier restore finished filling may hold work since; this attempt never removes it.
-    const lenient = resumed && (state.snapshotSha === null || state.applied === true);
     // Before setup, so only shells that predate the new folder are told.
-    yield* noticeFolderReplaced(input.worktreePath, aside?.path);
+    yield* noticeFolderReplaced(input.worktreePath, aside.path);
     const setup = yield* Effect.gen(function* () {
       const setup = Option.isNone(setupScripts)
         ? ({ status: "no-script" } as const)
@@ -191,7 +245,21 @@ export const makeRestoreThreadWorkspace = Effect.gen(function* () {
         Effect.uninterruptible,
       );
       return setup;
-    }).pipe(Effect.tapError(() => (lenient ? Effect.void : discard)));
+    }).pipe(
+      Effect.tapError(() =>
+        lenient
+          ? Effect.void
+          : archiveIncomplete(input, state, aside).pipe(
+              Effect.andThen(pending.write(input.worktreePath, { ...state, applied: false })),
+              Effect.catch((error) =>
+                Effect.logWarning("kept the failed restore checkout", {
+                  path: input.worktreePath,
+                  cause: error,
+                }),
+              ),
+            ),
+      ),
+    );
     if (state.snapshotRef !== null && Option.isSome(snapshots))
       yield* snapshots.value.markRestored(state.snapshotRef);
     return {
@@ -203,32 +271,35 @@ export const makeRestoreThreadWorkspace = Effect.gen(function* () {
   return Effect.fn("ThreadWorkspace.restoreMissing")(function* (
     input: RestoreInput,
   ): Effect.fn.Return<RestoredThreadWorkspace, ThreadWorkspaceRestoreError> {
-    // Git refuses a folder that is not empty; a failed restore moves the leftovers back.
-    if (!(yield* setAside.leftover(input.worktreePath))) return yield* restore(input);
     const aside: { path: string | null } = { path: null };
-    const { result, setAsidePath } = yield* setAside
-      .around(input.worktreePath, restore(input, aside), aside)
-      .pipe(
-        Effect.catchTags({
-          PlatformError: (error) =>
-            Effect.fail(
-              new ThreadWorkspaceRestoreError({
-                threadId: input.threadId,
-                reason: "git-failed",
-                detail: `GOAT couldn't move the leftover folder at ${input.worktreePath} aside: ${error.message}`,
-              }),
-            ),
-        }),
-        Effect.mapError((error) =>
-          aside.path === null
-            ? error
-            : new ThreadWorkspaceRestoreError({
-                threadId: error.threadId,
-                reason: error.reason,
-                detail: `${error.detail} ${setAsideSentence(aside.path)}`,
-              }),
-        ),
-      );
-    return { ...result, setAsidePath };
+    const restoring = restore(input, aside);
+    const result = yield* (
+      (yield* setAside.leftover(input.worktreePath))
+        ? setAside
+            .around(input.worktreePath, restoring, aside)
+            .pipe(Effect.map(({ result }) => result))
+        : restoring
+    ).pipe(
+      Effect.catchTags({
+        PlatformError: (error) =>
+          Effect.fail(
+            new ThreadWorkspaceRestoreError({
+              threadId: input.threadId,
+              reason: "git-failed",
+              detail: `GOAT couldn't move the leftover folder at ${input.worktreePath} aside: ${error.message}`,
+            }),
+          ),
+      }),
+      Effect.mapError((error) =>
+        aside.path === null
+          ? error
+          : new ThreadWorkspaceRestoreError({
+              threadId: error.threadId,
+              reason: error.reason,
+              detail: `${error.detail} ${setAsideSentence(aside.path)}`,
+            }),
+      ),
+    );
+    return aside.path === null ? result : { ...result, setAsidePath: aside.path };
   });
 });
