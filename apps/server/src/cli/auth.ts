@@ -216,10 +216,16 @@ const sessionIssueCommand = Command.make("issue", {
           flags,
           (environmentAuth) =>
             Effect.gen(function* () {
-              if (Option.isSome(flags.subject) && Option.isSome(flags.penMember))
+              if (
+                Option.isSome(flags.penMember) &&
+                (Option.isSome(flags.subject) ||
+                  Option.isSome(flags.runtimeModeCeiling) ||
+                  Option.isSome(flags.childSetupPurpose))
+              )
                 return yield* new CliError.UserError({
                   cause: "conflicting flags",
-                  userMessage: "--subject and --pen-member are mutually exclusive",
+                  userMessage:
+                    "--pen-member cannot be combined with --subject, --runtime-mode-ceiling or --child-setup-purpose",
                 });
               const issued = yield* environmentAuth.issueSession({
                 ...(Option.isSome(flags.penMember) ? { penMemberNode: flags.penMember.value } : {}),

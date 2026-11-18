@@ -134,6 +134,19 @@ describe("credential-minting commands", () => {
         "invalid",
       ]).pipe(Effect.result);
       expect(malformed._tag).toBe("Failure");
+      // A member session carries neither bound, so asking for one is refused rather than dropped.
+      const ceiling = yield* runCli([
+        "auth",
+        "session",
+        "issue",
+        "--base-dir",
+        baseDir,
+        "--pen-member",
+        node,
+        "--runtime-mode-ceiling",
+        "approval-required",
+      ]).pipe(Effect.result);
+      expect(ceiling._tag).toBe("Failure");
     }).pipe(Effect.scoped, Effect.provide(TestConsole.layer)),
   );
   it.effect.each(
