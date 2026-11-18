@@ -1,3 +1,4 @@
+import { makeRequestTurn } from "./requestRouting.ts";
 import { subagentResultPreview } from "../subagentResult.ts";
 import { makeSubagentReports, subagentAnswer } from "./subagentReports.ts";
 import { makeNestedHtmlRenderEmitter } from "./nestedHtmlRenders.ts";
@@ -319,17 +320,13 @@ export const make = Effect.fn("OpenCode2Adapter.make")(function* (instanceId: Pr
       return calls;
     };
 
-    const requestTurn = (sessionId: string) => {
-      const state = ownerOf(sessionId);
-      if (state === undefined) return undefined;
-      const background = callsAbove(sessionId).findLast((call) => call.background);
-      if (background !== undefined) {
-        return isOrchestrationV2WorkActive(background.status)
-          ? { state, turn: background.turn }
-          : undefined;
-      }
-      return state.active === undefined ? undefined : { state, turn: state.active };
-    };
+    const requestTurn = makeRequestTurn({
+      ownerOf,
+      callsAbove,
+      callsAttachedTo,
+      isExecuting: (sessionId) =>
+        busy.has(sessionId) || threads.get(sessionId)?.active !== undefined,
+    });
 
     const owesWork = (state: ThreadState) =>
       shellJobs.owes(state) ||

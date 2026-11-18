@@ -1190,6 +1190,100 @@ it.layer(McpProviderSessions.layer)("OpenCode2 adapter", (it) => {
       }).pipe(Effect.scoped),
   );
 
+  it.effect.each(["background owner", "parent turn"] as const)(
+    "routes a live child's approval and question through the %s after an unexecuted call fails",
+    (route) =>
+      Effect.gen(function* () {
+        const background = route === "background owner";
+        const form = { ...colorForm, sessionID: CHILD };
+        const { runtime, thread } = yield* resumed([
+          ...backgroundLaunch(CHILD, background),
+          ...(background ? [returnedRunning("call-background")] : []),
+          ...callAgain({ background: true }).slice(0, -1),
+          event("session.execution.started", { sessionID: CHILD }),
+          event(
+            "session.tool.failed",
+            {
+              sessionID: SESSION,
+              assistantMessageID: "msg_assistant",
+              id: "call-again",
+              error: { type: "unknown", message: "The launch was refused" },
+              executed: false,
+            },
+            undefined,
+            2,
+          ),
+          ...(background ? [event("session.execution.succeeded", { sessionID: SESSION })] : []),
+          event("permission.asked", { ...shellAsk.data, sessionID: CHILD }),
+          event("form.created", { form }),
+          childAnswer("Child request frames delivered", 1),
+          out("permission.reply", {
+            sessionID: CHILD,
+            requestID: shellAsk.data.id,
+            decision: "once",
+          }),
+          reply("permission.reply", null),
+          out("session.form.reply", { sessionID: CHILD, formID: form.id, answer: { q0: "Red" } }),
+          reply("session.form.reply", null),
+          event("session.execution.succeeded", { sessionID: CHILD }),
+          ...(!background ? [event("session.execution.succeeded", { sessionID: SESSION })] : []),
+        ]);
+        const requests = yield* runtime.events.pipe(
+          Stream.takeUntil(
+            (event) =>
+              event.type === "turn_item.updated" &&
+              event.turnItem.type === "assistant_message" &&
+              event.turnItem.text === "Child request frames delivered",
+          ),
+          Stream.runCollect,
+          Effect.forkScoped,
+        );
+        yield* runtime.startTurn(withLineage(thread));
+        const events = yield* Fiber.join(requests);
+        const parentTurn = events.find(
+          (event) =>
+            event.type === "provider_turn.updated" && event.providerTurn.runAttemptId !== null,
+        );
+        const asked = events.filter((event) => event.type === "runtime_request.updated");
+        assert.deepEqual(
+          asked.map(({ runtimeRequest }) => runtimeRequest.nativeRequestRef?.nativeId),
+          [shellAsk.data.id, form.id],
+        );
+        const [permission, question] = asked;
+        if (
+          permission === undefined ||
+          question === undefined ||
+          parentTurn?.type !== "provider_turn.updated"
+        ) {
+          return yield* Effect.die("The parent did not receive both child requests.");
+        }
+        const finished = yield* runtime.events.pipe(
+          Stream.filter((event) =>
+            background
+              ? event.type === "provider_turn.updated" &&
+                event.providerTurn.nativeTurnRef?.nativeId === `${CHILD}:turn:1` &&
+                event.providerTurn.status === "completed"
+              : event.type === "turn.terminal",
+          ),
+          Stream.runHead,
+          Effect.forkScoped,
+        );
+        for (const entry of asked) {
+          assert.equal(entry.threadId, threadId);
+          assert.equal(entry.runtimeRequest.providerTurnId, parentTurn.providerTurn.id);
+        }
+        yield* runtime.respondToRuntimeRequest({
+          requestId: permission.runtimeRequest.id,
+          decision: "accept",
+        });
+        yield* runtime.respondToRuntimeRequest({
+          requestId: question.runtimeRequest.id,
+          answers: { q0: "Red" },
+        });
+        assert.isTrue(Option.isSome(yield* Fiber.join(finished)));
+      }).pipe(Effect.scoped),
+  );
+
   it.effect("settles every call that joined a running subagent with its one report", () =>
     Effect.gen(function* () {
       const { runtime, thread } = yield* resumed([
