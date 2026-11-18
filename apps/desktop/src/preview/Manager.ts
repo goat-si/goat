@@ -13,10 +13,7 @@ import { isPreviewEditingShortcut } from "./previewEditingShortcut.ts";
 import { isPreviewRefreshShortcut } from "./previewRefresh.ts";
 import { admitAgentPointer, pointerEvent, type AgentPointer } from "./CursorStateOrdering.ts";
 import * as PreviewDownloadCopy from "./downloadCopy.ts";
-import {
-  DesktopPreviewRecordingInputSchema,
-  DESKTOP_PREVIEW_RECORDING_CAPTURE_TRIGGER,
-} from "@goat/contracts";
+import { DesktopPreviewRecordingInputSchema } from "@goat/contracts";
 import type {
   AnnotationVoiceConfig,
   AnnotationVoiceState,
@@ -79,6 +76,10 @@ import { makeAnnotationVoiceRelay } from "./AnnotationVoiceRelay.ts";
 import { cropAnnotationScreenshot, normalizeCaptureRect } from "./AnnotationCapture.ts";
 import { forwardPreviewCommand } from "./workspaceFocus.ts";
 import * as DesktopBrowserHost from "./DesktopBrowserHost.ts";
+import {
+  recordingFileExtension,
+  requestRecordingCaptureExpression,
+} from "./recordingCaptureDetails.ts";
 import { makeTabVisibility } from "./TabVisibility.ts";
 import { artifactSiteSlug } from "./artifactSiteSlug.ts";
 import * as PreviewPasskeys from "./Passkeys.ts";
@@ -149,15 +150,6 @@ const PICTURE_IN_PICTURE_JPEG_QUALITY = 80;
 const CAPTURE_PAGE_RETRY_ATTEMPTS = 3;
 const CAPTURE_PAGE_RETRY_DELAY_MS = 120;
 const CAPTURE_PAGE_ATTEMPT_TIMEOUT_MS = 1_000;
-const requestRecordingCaptureExpression = (tabId: string): string =>
-  `globalThis[${JSON.stringify(DESKTOP_PREVIEW_RECORDING_CAPTURE_TRIGGER)}]?.(${JSON.stringify(tabId)}) === true`;
-
-const recordingFileExtension = (mimeType: string): string => {
-  const subtype = mimeType.split(";", 1)[0]?.trim().toLowerCase().split("/")[1] ?? "";
-  const extension = subtype.replace(/^x-/, "").replace(/[^a-z0-9]/g, "");
-  return extension || "video";
-};
-
 export const PreviewAutomationSelectorKind = Schema.Literals([
   "focused-element",
   "selector",
