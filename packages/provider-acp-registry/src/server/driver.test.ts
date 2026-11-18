@@ -399,6 +399,10 @@ describe("acpRegistrySnapshotReadiness", () => {
       null,
       undefined,
     ]);
+    const withoutLiveEffort = normalizeAcpRegistryLiveConfiguration([], undefined, modelState);
+    expect(
+      withoutLiveEffort.models.find((model) => model.id === "unsupported")?.reasoningEffort,
+    ).toBeNull();
   });
 
   it("projects discovery without claiming authentication when no login methods are advertised", () => {

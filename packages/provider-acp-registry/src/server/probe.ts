@@ -70,9 +70,9 @@ function advertisedReasoningEffort(
   option: EffectAcpSchema.SessionConfigOption | undefined,
   meta: Readonly<Record<string, unknown>> | null | undefined,
 ): AcpRegistryProbeModel["reasoningEffort"] {
-  if (option?.type !== "select" || meta == null) return undefined;
+  if (meta == null) return undefined;
   if (meta.supportsReasoningEffort === false) return null;
-  if (!Array.isArray(meta.reasoningEfforts)) return undefined;
+  if (option?.type !== "select" || !Array.isArray(meta.reasoningEfforts)) return undefined;
   const options = meta.reasoningEfforts.flatMap((level: unknown) =>
     typeof level === "object" &&
     level !== null &&
