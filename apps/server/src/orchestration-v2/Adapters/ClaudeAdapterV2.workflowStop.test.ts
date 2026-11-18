@@ -7,12 +7,17 @@ import * as Exit from "effect/Exit";
 import * as Fiber from "effect/Fiber";
 import * as FileSystem from "effect/FileSystem";
 import * as Path from "effect/Path";
-import type * as Queue from "effect/Queue";
+import * as Queue from "effect/Queue";
 import { vi } from "vite-plus/test";
 import { CaptureEventQueue } from "./ClaudeAdapterV2.observations.testkit.ts";
 import * as TestClock from "effect/testing/TestClock";
 import { WorkflowAgentTranscriptReadObserver } from "../workflowAgentTranscript.ts";
-import { claudeWorkflowFrames, WORKFLOW_TASK_ID } from "./ClaudeAdapterV2.workflow.testkit.ts";
+import {
+  claudeWorkflowFrames,
+  workflowCoordinatorEvents,
+  workflowMemberEvents,
+  WORKFLOW_TASK_ID,
+} from "./ClaudeAdapterV2.workflow.testkit.ts";
 import { layerClaudeAdapterTest } from "./ClaudeAdapterTestLayer.testkit.ts";
 import { makeClaudeTestTurnInput } from "./ClaudeTestInput.testkit.ts";
 import { claudeSdkFrame, WAKE_NATIVE_SESSION } from "./ClaudeWakeFrames.testkit.ts";
@@ -118,5 +123,53 @@ it.effect(
             : Effect.void,
         ),
       );
+    }).pipe(Effect.scoped, Effect.provide(layerClaudeAdapterTest)),
+);
+
+it.effect(
+  "settles held Stop evidence when a stopped workflow's query exits before acknowledgement",
+  () =>
+    Effect.gen(function* () {
+      const fs = yield* FileSystem.FileSystem;
+      const requested = yield* Deferred.make<void>();
+      const ack = yield* Deferred.make<void>();
+      const harness = yield* makeWorkflow(() =>
+        Deferred.succeed(requested, undefined).pipe(Effect.andThen(Deferred.await(ack))),
+      );
+      yield* TestClock.setTime(Date.parse("2026-10-17T06:00:00.000Z"));
+      const stopping = yield* harness.stop.pipe(Effect.forkChild);
+      yield* Deferred.await(requested);
+      yield* fs.writeFileString(
+        harness.transcript,
+        '{"type":"user","uuid":"tool-denied","timestamp":"2026-10-17T06:00:01.000Z","toolDenialKind":"user-rejected","message":{"role":"user","content":[{"type":"tool_result","tool_use_id":"tool_fixture","is_error":true,"content":"Rejected"}]}}\n',
+        { flag: "a" },
+      );
+      yield* harness.offerAndWait(frames.workflowSnapshot({ uuid: "held-member", state: "error" }));
+      yield* harness.offerAndWait(
+        frames.workflowNotification({ uuid: "workflow-stopped", status: "stopped" }),
+      );
+      assert.isUndefined(stopping.pollUnsafe());
+      assert.equal(workflowCoordinatorEvents(harness.events).at(-1)?.subagent.status, "cancelled");
+      yield* Queue.shutdown(harness.sdkMessages);
+      yield* harness.awaitQueryExit(harness.sdkMessages);
+
+      const toolOutcomes = () =>
+        harness.events.flatMap((event) =>
+          event.type === "turn_item.updated" &&
+          event.turnItem.nativeItemRef?.nativeId === "tool_fixture"
+            ? [event.turnItem.status]
+            : [],
+        );
+      assert.deepEqual(toolOutcomes(), ["running", "interrupted"]);
+      assert.equal(workflowMemberEvents(harness.events, 1).at(-1)?.subagent.status, "cancelled");
+      assert.equal(
+        workflowCoordinatorEvents(harness.events).at(-1)?.subagent.workflow?.agents[0]?.outcome,
+        "cancelled",
+      );
+
+      yield* Deferred.succeed(ack, undefined);
+      yield* Fiber.join(stopping);
+      yield* harness.awaitEventsRecorded;
+      assert.deepEqual(toolOutcomes(), ["running", "interrupted"]);
     }).pipe(Effect.scoped, Effect.provide(layerClaudeAdapterTest)),
 );

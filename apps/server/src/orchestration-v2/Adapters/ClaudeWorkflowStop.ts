@@ -8,18 +8,32 @@ import * as Effect from "effect/Effect";
 import type { WorkflowAgentMetadata } from "../workflowAgentAnswers.ts";
 import type { WorkflowAgentTranscriptCursor } from "../workflowAgentTranscript.ts";
 
+import type { ClaudeAgentSdkQuerySession } from "./ClaudeAgentSdkQueryRunner.ts";
+
 const MAX_HELD_DENIALS = 64;
 type SettleDenial = (stopped: boolean) => Effect.Effect<void>;
 
 export interface ClaudeWorkflowStop {
   readonly requestedAt: number;
+  readonly owner: ClaudeAgentSdkQuerySession;
+  acknowledged: boolean;
   readonly tools: Map<string, SettleDenial>;
   outcome: "pending" | "accepted" | "rejected";
   readonly members: Map<number, OrchestrationV2WorkflowAgent>;
 }
 
-export function makeClaudeWorkflowStop(requestedAt: number): ClaudeWorkflowStop {
-  return { requestedAt, tools: new Map(), outcome: "pending", members: new Map() };
+export function makeClaudeWorkflowStop(
+  owner: ClaudeAgentSdkQuerySession,
+  requestedAt: number,
+): ClaudeWorkflowStop {
+  return {
+    owner,
+    requestedAt,
+    acknowledged: false,
+    tools: new Map(),
+    outcome: "pending",
+    members: new Map(),
+  };
 }
 
 export function holdClaudeStopDenial(
@@ -32,7 +46,7 @@ export function holdClaudeStopDenial(
   return true;
 }
 
-export const settleClaudeStopDenials = Effect.fn("ClaudeWorkflowStop.settleDenials")(function* (
+const settleClaudeStopDenials = Effect.fn("ClaudeWorkflowStop.settleDenials")(function* (
   stop: ClaudeWorkflowStop,
   accepted: boolean,
 ) {
@@ -51,7 +65,7 @@ export function holdClaudeWorkflowMember(
   return { ...active, state: previousStatus === "pending" ? "queued" : "running" };
 }
 
-export function workflowWithResolvedClaudeStop(
+function workflowWithResolvedClaudeStop(
   workflow: OrchestrationV2SubagentWorkflow,
   stop: ClaudeWorkflowStop,
 ): OrchestrationV2SubagentWorkflow {
@@ -66,6 +80,27 @@ export function workflowWithResolvedClaudeStop(
   stop.members.clear();
   return { ...workflow, agents };
 }
+
+export const reconcileClaudeWorkflowStop = Effect.fn("ClaudeWorkflowStop.reconcile")(function* <
+  C extends { task: OrchestrationV2Subagent; workflowStop?: ClaudeWorkflowStop },
+>(
+  coordinator: C,
+  stop: ClaudeWorkflowStop,
+  accepted: boolean,
+  project: (input: {
+    coordinator: C;
+    workflow: OrchestrationV2SubagentWorkflow;
+  }) => Effect.Effect<void>,
+) {
+  if (coordinator.workflowStop !== stop || stop.outcome !== "pending") return;
+  yield* settleClaudeStopDenials(stop, accepted);
+  if (stop.members.size > 0 && coordinator.task.workflow !== undefined) {
+    yield* project({
+      coordinator,
+      workflow: workflowWithResolvedClaudeStop(coordinator.task.workflow, stop),
+    });
+  }
+});
 
 export function beforeClaudeStopProjection(
   task: OrchestrationV2Subagent,

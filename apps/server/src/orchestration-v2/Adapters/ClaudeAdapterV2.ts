@@ -4,8 +4,7 @@ import {
   holdClaudeStopDenial,
   holdClaudeWorkflowMember,
   makeClaudeWorkflowStop,
-  settleClaudeStopDenials,
-  workflowWithResolvedClaudeStop,
+  reconcileClaudeWorkflowStop,
   type ClaudeWorkflowMemberState,
   type ClaudeWorkflowStop,
 } from "./ClaudeWorkflowStop.ts";
@@ -14,7 +13,12 @@ import { readClaudeSubagentEffort } from "./ClaudeSubagentEffort.ts";
 import type { RouteClaudeModelCatalog } from "../../provider/ClaudeCodeModelRoutes.ts";
 import { providerFailureFromResult, terminalStatusFromResult } from "./ClaudeResultFailure.ts";
 import { claudeLocalSettingsDirectory } from "../../provider/Drivers/ClaudeHome.ts";
-import { claudeQueryFlagEnvironment, parseClaudeInteger } from "./ClaudeQueryFlags.ts";
+import {
+  claudeQueryEnvironment,
+  claudeQueryFlagEnvironment,
+  claudeToolSearchOverride,
+} from "./ClaudeQueryFlags.ts";
+export { claudeQueryEnvironment, claudeToolSearchOverride } from "./ClaudeQueryFlags.ts";
 import {
   classifyClaudeNativeTool,
   CLAUDE_GOAL_DEFERRING_TASK_TYPES,
@@ -540,48 +544,6 @@ export const ClaudeProviderCapabilitiesV2 = {
   },
 } satisfies OrchestrationV2ProviderCapabilities;
 
-// A delegated child is its own SDK session, so Claude Code gives it the main-conversation cache
-// TTL. When the user sets Claude's subagentPromptCacheTtl, the child follows it like a native
-// subagent would. A resumed session's first request otherwise goes out before its MCP servers
-// connect, and Claude Code tells the agent they disconnected. Explicit instance values still win.
-export function claudeQueryEnvironment(
-  environment: NodeJS.ProcessEnv,
-  appThread: Pick<OrchestrationV2AppThread, "lineage">,
-  subagentPromptCacheTtl: "5m" | "1h" | undefined,
-  resume = false,
-): NodeJS.ProcessEnv {
-  const promptCacheTtl =
-    appThread.lineage.relationshipToParent === "subagent" &&
-    subagentPromptCacheTtl !== undefined &&
-    environment.CLAUDE_CODE_PROMPT_CACHE_TTL === undefined
-      ? subagentPromptCacheTtl
-      : undefined;
-  const blockingMcpConnect = resume && environment.MCP_CONNECTION_NONBLOCKING === undefined;
-  if (promptCacheTtl === undefined && !blockingMcpConnect) {
-    return environment;
-  }
-  return {
-    ...environment,
-    ...(promptCacheTtl === undefined ? {} : { CLAUDE_CODE_PROMPT_CACHE_TTL: promptCacheTtl }),
-    ...(blockingMcpConnect ? { MCP_CONNECTION_NONBLOCKING: "0" } : {}),
-  };
-}
-
-// Claude Code's auto tool search sends every MCP schema in full while they fit under a share of the
-// context window, which GOAT's tools do on 1M models. auto:0 already means on and auto:100 off.
-export function claudeToolSearchOverride(value: string | undefined): "true" | undefined {
-  if (value === undefined) return undefined;
-  if (value === "auto") return "true";
-  if (!value.startsWith("auto:")) return undefined;
-  const percent = parseClaudeInteger(value.slice("auto:".length));
-  // Claude Code treats an unparsable auto:N as auto, and clamps N to 0..100.
-  if (Number.isNaN(percent)) return "true";
-  const clamped = Math.min(100, Math.max(0, percent));
-  return clamped > 0 && clamped < 100 ? "true" : undefined;
-}
-
-// Claude Code 2.1.310's integer parsing for auto:N. Scientific notation counts only when it is an
-// integer, grouped digits (1_000, 1,000, or 1 000) are joined, and anything else uses parseInt.
 export function makeClaudeQueryOptions(input: {
   readonly modelSelection: ModelSelection;
   readonly modelCatalog?: ClaudeModelCatalog;
@@ -6255,6 +6217,29 @@ export const makeClaudeAdapterV2 = Effect.fn("makeClaudeAdapterV2")(function* (
           return startedAt;
         });
 
+        const settleClosedWorkflowStops = Effect.fn("ClaudeAdapterV2.settleClosedWorkflowStops")(
+          function* (closedQuery: ClaudeLiveQueryContext) {
+            const pending = ([, coordinator]: readonly [string, ActiveClaudeSubagent]) =>
+              coordinator.workflowStop?.owner === closedQuery.query &&
+              coordinator.workflowStop.outcome === "pending";
+            if (!Array.from(yield* Ref.get(sessionSubagentsByTaskId)).some(pending)) return;
+            yield* sdkMessageLock.withPermits(1)(
+              Effect.gen(function* () {
+                for (const coordinator of (yield* Ref.get(sessionSubagentsByTaskId)).values()) {
+                  const stop = coordinator.workflowStop;
+                  if (stop?.owner !== closedQuery.query) continue;
+                  yield* reconcileClaudeWorkflowStop(
+                    coordinator,
+                    stop,
+                    stop.acknowledged || coordinator.confirmedOutcome?.status === "cancelled",
+                    projectClaudeWorkflowMembers,
+                  );
+                }
+              }),
+            );
+          },
+        );
+
         const endSubagentsOfClosedQuery = Effect.fnUntraced(function* (input: {
           readonly closedQuery: ClaudeLiveQueryContext;
           readonly context: ActiveClaudeTurnContext;
@@ -6303,6 +6288,7 @@ export const makeClaudeAdapterV2 = Effect.fn("makeClaudeAdapterV2")(function* (
         const endSubagentsOfReplacedQuery = Effect.fnUntraced(function* (
           closedQuery: ClaudeLiveQueryContext,
         ) {
+          yield* settleClosedWorkflowStops(closedQuery);
           const context = closedQuery.lastTurn;
           if (context === null) return;
           yield* endSubagentsOfClosedQuery({
@@ -6322,6 +6308,7 @@ export const makeClaudeAdapterV2 = Effect.fn("makeClaudeAdapterV2")(function* (
           closedQuery: ClaudeLiveQueryContext,
           cause?: Cause.Cause<ClaudeAgentSdkQueryRunnerError>,
         ) {
+          yield* settleClosedWorkflowStops(closedQuery);
           const current = yield* Ref.get(activeTurn);
           // A replacement query can reuse the native thread id; only this query's turn is ours.
           const context = closedQuery.lastTurn;
@@ -10473,12 +10460,16 @@ export const makeClaudeAdapterV2 = Effect.fn("makeClaudeAdapterV2")(function* (
                 detail: "No running workflow task belongs to this provider thread",
               });
             }
-            const stop = makeClaudeWorkflowStop(DateTime.toEpochMillis(yield* DateTime.now));
+            const stop = makeClaudeWorkflowStop(
+              liveQuery.query,
+              DateTime.toEpochMillis(yield* DateTime.now),
+            );
             const previousStop = task.workflowStop;
             task.workflowStop = stop;
             yield* liveQuery.query.stopTask(taskId).pipe(
-              Effect.onExit((exit) =>
-                sdkMessageLock
+              Effect.onExit((exit) => {
+                stop.acknowledged = Exit.isSuccess(exit);
+                return sdkMessageLock
                   .withPermits(1)(
                     Effect.gen(function* () {
                       const current = (yield* Ref.get(sessionSubagentsByTaskId)).get(taskId);
@@ -10487,21 +10478,20 @@ export const makeClaudeAdapterV2 = Effect.fn("makeClaudeAdapterV2")(function* (
                         (yield* Ref.get(queryContext)) !== liveQuery
                       )
                         return;
-                      const accepted = Exit.isSuccess(exit);
-                      yield* settleClaudeStopDenials(stop, accepted);
-                      if (stop.members.size > 0 && current.task.workflow !== undefined)
-                        yield* projectClaudeWorkflowMembers({
-                          coordinator: current,
-                          workflow: workflowWithResolvedClaudeStop(current.task.workflow, stop),
-                        });
-                      if (!accepted) {
+                      yield* reconcileClaudeWorkflowStop(
+                        current,
+                        stop,
+                        stop.acknowledged,
+                        projectClaudeWorkflowMembers,
+                      );
+                      if (!stop.acknowledged) {
                         if (previousStop === undefined) delete current.workflowStop;
                         else current.workflowStop = previousStop;
                       }
                     }),
                   )
-                  .pipe(Effect.interruptible, Effect.forkIn(sessionScope), Effect.asVoid),
-              ),
+                  .pipe(Effect.interruptible, Effect.forkIn(sessionScope), Effect.asVoid);
+              }),
               Effect.mapError(
                 (cause) =>
                   new ProviderAdapter.ProviderAdapterProtocolError({
