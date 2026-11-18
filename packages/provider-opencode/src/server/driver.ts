@@ -631,7 +631,13 @@ export const OpenCodeDriver: ProviderDriver<
             connection.usageLimits(host.paths.cwd),
           );
           if (limits === undefined) unsupportedUsageVersion = runtime.version;
-          return limits === undefined ? yield* legacyUsageLimits : withGoatUsageScopes(limits);
+          if (limits !== undefined && limits.unavailable?.reason !== "unsupported") {
+            return withGoatUsageScopes(limits);
+          }
+          const legacy = yield* legacyUsageLimits;
+          return limits !== undefined && legacy.unavailable?.reason === "unsupported"
+            ? withGoatUsageScopes(limits)
+            : legacy;
         }).pipe(Effect.provideService(LaunchEnvironment, environment)),
       ),
       Effect.timeout("10 seconds"),
