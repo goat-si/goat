@@ -449,7 +449,10 @@ export const make = Effect.gen(function* () {
         }));
       }
       const current = yield* Ref.get(updateStateRef);
-      if (current.status !== "available" && current.status !== "downloaded") {
+      if (
+        current.errorContext === "download" ||
+        (current.status !== "available" && current.status !== "downloaded")
+      ) {
         const checkedAt = yield* currentIsoTimestamp;
         yield* updateState((current) => ({
           ...reduceDesktopUpdateStateOnCheckStart(current, checkedAt),
