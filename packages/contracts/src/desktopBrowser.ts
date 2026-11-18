@@ -11,6 +11,18 @@ export const DesktopPreviewSetShownInputSchema = Schema.Struct({
   shown: Schema.Boolean,
 });
 
+export const DesktopPreviewRegisterWebviewInputSchema = Schema.Struct({
+  tabId: DesktopPreviewTabIdSchema,
+  webContentsId: Schema.Int.check(Schema.isGreaterThan(0)),
+  reportCaptureDraw: Schema.optional(Schema.Boolean),
+});
+
+export const DesktopPreviewSetCaptureDrawnInputSchema = Schema.Struct({
+  tabId: DesktopPreviewTabIdSchema,
+  webContentsId: Schema.Int.check(Schema.isGreaterThan(0)),
+  drawn: Schema.Boolean,
+});
+
 const TabKey = {
   threadId: TrimmedNonEmptyString,
   tabId: TrimmedNonEmptyString,

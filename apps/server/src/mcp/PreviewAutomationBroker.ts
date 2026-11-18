@@ -59,6 +59,7 @@ export interface PreviewAutomationInvokeInput {
   /** Code-mode new-tab creation cannot select an older host without the exact expectation gate. */
   readonly serverHostOnly?: boolean;
   readonly timeoutMs?: number;
+  readonly measureSnapshotFrame?: boolean;
   /** Background metadata reads must not change the agent's current tab. */
   readonly updateCurrentTab?: boolean;
   readonly onTargetTab?: (tabId: PreviewTabId | undefined) => void;
@@ -810,6 +811,9 @@ export const make = Effect.gen(function* PreviewAutomationBrokerMake() {
             ...(runId === undefined ? {} : { runId }),
             operation: input.operation,
             input: input.input,
+            ...(connection.inProcess && input.operation === "snapshot" && input.measureSnapshotFrame
+              ? { measureSnapshotFrame: true }
+              : {}),
             timeoutMs,
           },
         }).pipe(Effect.map((offered) => [offered, current] as const));
