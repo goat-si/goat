@@ -1,3 +1,8 @@
+import * as DateTime from "effect/DateTime";
+import type { ServerProvider } from "@goat/contracts";
+import * as BackgroundPolicy from "../background/BackgroundPolicy.ts";
+import * as ModelManifest from "./ModelManifest.ts";
+import { applyProviderCompatibility } from "./providerCompatibility.ts";
 import {
   DEFAULT_SERVER_SETTINGS,
   ServerSettings,
@@ -124,3 +129,40 @@ export function makeMutableServerSettingsService(
     } satisfies ServerSettingsModule.ServerSettingsService["Service"];
   });
 }
+
+const TEST_EPOCH = DateTime.makeUnsafe("1970-01-01T00:00:00.000Z");
+export const withBundledCompatibility = (snapshot: ServerProvider) =>
+  applyProviderCompatibility(
+    snapshot,
+    undefined,
+    ModelManifest.BUNDLED_MODEL_MANIFEST.compatibility,
+  );
+
+export const layerBackgroundPolicyAlwaysRun = Layer.mock(BackgroundPolicy.BackgroundPolicy)({
+  reportClientActivity: () => Effect.void,
+  removeRpcClient: () => Effect.void,
+  reportHostPowerState: () => Effect.void,
+  snapshot: Effect.succeed({
+    hostPower: {
+      source: "unknown",
+      idle: "unknown",
+      idleSeconds: null,
+      locked: "unknown",
+      suspended: false,
+      onBattery: "unknown",
+      lowPowerMode: "unknown",
+      thermalState: "unknown",
+      stale: true,
+      updatedAt: TEST_EPOCH,
+    },
+    leases: [],
+    activeForegroundLeaseCount: 0,
+    activeScopeKeys: [],
+    shouldRunOpportunisticWork: true,
+    updatedAt: TEST_EPOCH,
+  }),
+  streamChanges: Stream.empty,
+  hasDemand: () => Effect.succeed(true),
+  shouldRunScopeWork: () => Effect.succeed(true),
+  shouldRunOpportunisticWork: Effect.succeed(true),
+});

@@ -71,6 +71,7 @@ function Fixture(props: {
             ? {
                 audio: {
                   hasWebContents: true,
+                  navStatus: { _tag: "Success", url: "about:blank", title: "Browser" },
                   canGoBack: false,
                   canGoForward: false,
                   loading: false,

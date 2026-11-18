@@ -81,35 +81,34 @@ export function makeOpenCodeBackgroundTurns<State extends BackgroundOwner, E>(op
     yield* Deferred.succeed(wake.settled, undefined);
   });
 
-  const cancel = Effect.fn("OpenCode.cancelBackgroundTurn")(function* (
-    state: State,
-    wake: BackgroundTurn,
-  ) {
-    if (options.isClosed() || held.get(state) !== wake) return;
-    wake.cancelling = true;
-    const admitted = yield* Deferred.await(wake.admission).pipe(
-      Effect.timeoutOption(NATIVE_ADMISSION_TIMEOUT),
-    );
-    yield* options
-      .abort(
-        state,
-        Option.getOrElse(admitted, () => true),
-      )
-      .pipe(
-        Effect.tapError(() =>
-          Deferred.isDone(wake.settled).pipe(
-            Effect.flatMap((settled) =>
-              settled
-                ? Effect.void
-                : options.breakSession(
-                    "OpenCode background cancellation failed before native idle. Reconnect the provider session.",
-                  ),
+  const cancel = Effect.fn("OpenCode.cancelBackgroundTurn")(
+    function* (state: State, wake: BackgroundTurn) {
+      if (options.isClosed() || held.get(state) !== wake) return;
+      wake.cancelling = true;
+      const admitted = yield* Deferred.await(wake.admission).pipe(
+        Effect.timeoutOption(NATIVE_ADMISSION_TIMEOUT),
+      );
+      yield* options
+        .abort(
+          state,
+          Option.getOrElse(admitted, () => true),
+        )
+        .pipe(
+          Effect.tapError(() =>
+            Deferred.isDone(wake.settled).pipe(
+              Effect.flatMap((settled) =>
+                settled
+                  ? Effect.void
+                  : options.breakSession(
+                      "OpenCode background cancellation failed before native idle. Reconnect the provider session.",
+                    ),
+              ),
             ),
           ),
-        ),
-        Effect.ensuring(discard(state, wake)),
-      );
-  });
+        );
+    },
+    (effect, state, wake) => effect.pipe(Effect.ensuring(discard(state, wake))),
+  );
 
   const offer = (
     state: State,

@@ -237,7 +237,16 @@ describe("tool-call visibility", () => {
           attachmentsByQuestionId: {},
         },
       },
+      {
+        ...base("asking", "2026-06-20T00:00:03.000Z", 3),
+        status: "pending",
+        completedAt: null,
+        type: "user_input_request",
+        requestId: RuntimeRequestId.make("asking"),
+        questions: [],
+      },
       { ...base("error", "2026-06-20T00:00:04.000Z", 4), status: "failed", type: "error", failure },
+      { ...base("settled-error", "2026-06-20T00:00:04.000Z", 4), type: "error", failure },
       {
         ...base("plan", "2026-06-20T00:00:05.000Z", 5),
         type: "proposed_plan",
@@ -266,14 +275,28 @@ describe("tool-call visibility", () => {
             ? [String(row.message.id)]
             : [row.type],
       );
-    const needed = ["message-user", "approval", "answered", "error", "plan", "message-assistant"];
+    const needed = [
+      "message-user",
+      "approval",
+      "answered",
+      "asking",
+      "error",
+      "settled-error",
+      "plan",
+      "message-assistant",
+    ];
     expect(shownIds()).toEqual(expect.arrayContaining(needed));
     for (const toolCallVisibility of ["hideSuccessful", "hideAll", "zen"] as const) {
       const shown = shownIds({ toolCallVisibility });
-      // As upstream's zen keep list: zen leaves the open approval to PendingApprovalCard, which
-      // sits above the composer whatever this setting says.
-      const kept = toolCallVisibility === "zen" ? needed.filter((id) => id !== "approval") : needed;
+      // As upstream's zen keep list: zen leaves the open approval to PendingApprovalCard and the
+      // open question to PendingUserInputCard above the composer, and drops a settled error.
+      const zenLeavesOut = new Set(["approval", "asking", "settled-error"]);
+      const kept =
+        toolCallVisibility === "zen" ? needed.filter((id) => !zenLeavesOut.has(id)) : needed;
       expect(shown, toolCallVisibility).toEqual(expect.arrayContaining(kept));
+      if (toolCallVisibility === "zen") {
+        for (const id of zenLeavesOut) expect(shown, id).not.toContain(id);
+      }
       expect(shown, toolCallVisibility).not.toContain("passed");
     }
 

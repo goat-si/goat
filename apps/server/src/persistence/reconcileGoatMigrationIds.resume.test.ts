@@ -232,7 +232,7 @@ describe.each(databases)("the GOAT id shift on a %s database", (_kind, database)
     return Effect.gen(function* () {
       yield* seedOldGoatLedger(147);
       const before = yield* history;
-      yield* killWhenRecording(goatNames.at(-1) ?? "");
+      yield* killWhenRecording("DisposableMachineEnrollment");
       assert.isTrue((yield* Effect.exit(runMigrations()))._tag === "Failure");
       assert.deepStrictEqual(yield* history, before);
       yield* reviveAfterKill;
@@ -249,12 +249,18 @@ describe.each(databases)("the GOAT id shift on a %s database", (_kind, database)
       const data = yield* userData;
       yield* killWhenRecording("ProjectionMessageSearchText");
       assert.isTrue((yield* Effect.exit(runMigrations()))._tag === "Failure");
-      assert.deepStrictEqual(yield* goatRows, goatNames.map(currentRow));
+      assert.deepStrictEqual(
+        yield* goatRows,
+        goatNames.map(currentRow).filter(([id]) => id !== 158),
+      );
       assert.deepStrictEqual(yield* recordedUpstream80s, UPSTREAM_80S.slice(0, 1));
       assert.isTrue(yield* hasPendingMigrations());
       yield* reviveAfterKill;
       yield* previousBuildRefuses;
-      assert.deepStrictEqual(yield* onRestart(reopen, runMigrations()), UPSTREAM_80S.slice(1));
+      assert.deepStrictEqual(yield* onRestart(reopen, runMigrations()), [
+        ...UPSTREAM_80S.slice(1),
+        [158, "ScheduledTaskFirstBindIntent"],
+      ]);
       assert.deepStrictEqual(yield* onRestart(reopen, snapshot), yield* fresh);
       assert.deepStrictEqual(yield* onRestart(reopen, userData), data);
       assert.isFalse(yield* onRestart(reopen, hasPendingMigrations()));
@@ -271,7 +277,10 @@ describe.each(databases)("the GOAT id shift on a %s database", (_kind, database)
       assert.isTrue(yield* hasPendingMigrations());
       yield* reviveAfterKill;
       yield* previousBuildRefuses;
-      assert.deepStrictEqual(yield* onRestart(reopen, runMigrations()), UPSTREAM_80S.slice(3));
+      assert.deepStrictEqual(yield* onRestart(reopen, runMigrations()), [
+        ...UPSTREAM_80S.slice(3),
+        [158, "ScheduledTaskFirstBindIntent"],
+      ]);
       assert.deepStrictEqual(yield* onRestart(reopen, snapshot), yield* fresh);
     }).pipe(provide);
   });
@@ -292,7 +301,10 @@ describe.each(databases)("the GOAT id shift on a %s database", (_kind, database)
       assert.isTrue(yield* hasPendingMigrations());
       yield* reviveAfterKill;
       yield* previousBuildRefuses;
-      assert.deepStrictEqual(yield* onRestart(reopen, runMigrations()), UPSTREAM_80S.slice(5));
+      assert.deepStrictEqual(yield* onRestart(reopen, runMigrations()), [
+        ...UPSTREAM_80S.slice(5),
+        [158, "ScheduledTaskFirstBindIntent"],
+      ]);
       assert.deepStrictEqual(yield* onRestart(reopen, snapshot), yield* fresh);
     }).pipe(provide);
   });
@@ -358,12 +370,18 @@ describe.each(databases)("the GOAT id shift on a %s database", (_kind, database)
       yield* sql`DELETE FROM effect_sql_migrations WHERE migration_id = 30`;
       yield* killWhenRecording("ProjectionMessageSearchText");
       assert.isTrue((yield* Effect.exit(runMigrations()))._tag === "Failure");
-      assert.deepStrictEqual(yield* goatRows, goatNames.map(currentRow));
+      assert.deepStrictEqual(
+        yield* goatRows,
+        goatNames.map(currentRow).filter(([id]) => id !== 158),
+      );
       assert.deepStrictEqual(yield* recordedUpstream80s, UPSTREAM_80S.slice(0, 1));
       assert.isFalse((yield* history).some(([recordedId]) => recordedId === 30));
       yield* reviveAfterKill;
       yield* previousBuildRefuses;
-      assert.deepStrictEqual(yield* onRestart(reopen, runMigrations()), UPSTREAM_80S.slice(1));
+      assert.deepStrictEqual(yield* onRestart(reopen, runMigrations()), [
+        ...UPSTREAM_80S.slice(1),
+        [158, "ScheduledTaskFirstBindIntent"],
+      ]);
       const expected = yield* fresh;
       assert.deepStrictEqual(yield* onRestart(reopen, snapshot), {
         ...expected,
@@ -378,7 +396,7 @@ describe.each(databases)("the GOAT id shift on a %s database", (_kind, database)
       Effect.asVoid(runMigrations()),
       [61, 61],
       "61_PullRequestReviewGuides",
-      157,
+      158,
     ],
     [
       "a ledger from before the shift that lost row 72",

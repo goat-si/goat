@@ -1,3 +1,4 @@
+import { providerUsageLimit } from "./adapterUtilities.ts";
 import type {
   OrchestrationV2ProviderFailure,
   OrchestrationV2TurnItem,
@@ -111,7 +112,7 @@ export const makeTurnStatusItems = (deps: {
       failure: makeProviderFailure({
         message: readableProviderErrorMessage(error.message, error.status, error.response?.body),
         code: error.type,
-        class: "provider_error",
+        class: providerUsageLimit(error) === undefined ? "provider_error" : "usage_limit",
         retryable: true,
       }),
       startedAt: turn.retry?.startedAt ?? (yield* DateTime.now),
