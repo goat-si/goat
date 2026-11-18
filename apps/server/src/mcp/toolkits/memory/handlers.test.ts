@@ -909,7 +909,7 @@ it.effect("forget by ID refuses an unknown memory without making a tombstone", (
     expect(
       (yield* Fixture.call("memory_forget", { memoryId: Fixture.memoryId })).body,
     ).toMatchObject({ code: "not_found" });
-    expect((yield* store.loadAggregate(Fixture.space, Fixture.memoryId)).tombstone).toBeNull();
+    expect((yield* store.loadAggregate(Fixture.space, Fixture.memoryId)).tombstone).toBeUndefined();
   }).pipe(Effect.provide(Fixture.layer)),
 );
 

@@ -179,7 +179,7 @@ const UpsertTool = Tool.dynamic(agentSurfaceRegistry["memory.upsert"].name, {
 
 const ForgetTool = Tool.dynamic(agentSurfaceRegistry["memory.forget"].name, {
   description: agentSurfaceRegistry["memory.forget"].description,
-  parameters: memoryInputSchema(M.MemoryForgetInput),
+  parameters: memoryInputSchema(M.McpMemoryForgetInput),
   success: M.MemoryMutationReceipt,
   failure,
   failureMode: "return",

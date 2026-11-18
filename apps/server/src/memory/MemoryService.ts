@@ -63,6 +63,7 @@ export type MemoryServiceError =
   | Store.MemoryStoreConflict
   | Store.MemoryCapacityError;
 type Permit = Effect.Effect<void, MemoryAccessError>;
+type ForgetRequest = M.MemoryForgetInput | Pick<M.MemoryForgetInput, "memorySpaceId" | "memoryId">;
 export type IntentBinding = {
   memorySpaceId: M.MemorySpaceId | null;
   coordinatorEpoch: number;
@@ -212,7 +213,7 @@ export class MemoryService extends Context.Service<
       intent: Store.PendingForgetIntent,
     ) => Effect.Effect<void, MemoryServiceError>;
     readonly forget: (
-      input: M.MemoryForgetInput,
+      input: ForgetRequest,
       permit: Permit,
     ) => Effect.Effect<Store.StoredReceipt, MemoryServiceError>;
     readonly revertResolution: (
@@ -1204,24 +1205,44 @@ const make = Effect.fnUntraced(function* (
     stableUuid: memoryStableUuid,
   });
   const forget = Effect.fn("MemoryService.forget")(function* (
-    input: M.MemoryForgetInput,
+    input: ForgetRequest,
     permit: Permit,
   ) {
-    const value = yield* decode(decodeForget(input, strict));
+    const explicit =
+      "operationId" in input ? yield* decode(decodeForget(input, strict)) : undefined;
+    let intent: M.MemoryForgetInput | undefined;
     return yield* store
       .transact(
         Effect.gen(function* () {
           yield* permit;
-          yield* requireSharing(value.memorySpaceId);
+          yield* requireSharing(input.memorySpaceId);
           const current = yield* store.loadAggregate(
-            value.memorySpaceId,
-            value.memoryId,
+            input.memorySpaceId,
+            input.memoryId,
             {
               when: Store.hasSourceEvidence,
             },
             {},
           );
           if (current.identity) yield* requireScope(current.identity.scope);
+          if (!explicit && !current.identity && !current.tombstone)
+            return yield* new Store.MemoryStoreConflict({ code: "not_found" });
+          const value = explicit ?? {
+            memorySpaceId: input.memorySpaceId,
+            memoryId: input.memoryId,
+            operationId: M.MemoryOperationId.make(
+              memoryStableUuid(
+                JSON.stringify([
+                  "forget-by-id",
+                  input.memorySpaceId,
+                  input.memoryId,
+                  hash(encodeHeads(current.heads)),
+                ]),
+              ),
+            ),
+            expectedHeads: current.heads,
+          };
+          intent = value;
           const old = yield* store.readOperation(value.memorySpaceId, value.operationId);
           if (
             old &&
@@ -1230,17 +1251,27 @@ const make = Effect.fnUntraced(function* (
               encodeHeads(old.expectedHeads) !== encodeHeads(value.expectedHeads))
           )
             return yield* new Store.MemoryStoreConflict({ code: "operation_id_reused" });
-          if (current.tombstone && !old)
+          if (current.tombstone && !old) {
+            const original = explicit
+              ? undefined
+              : yield* store.receipt(value.memorySpaceId, current.tombstone.deleteOperationId);
             return {
-              operationDigest: "0".repeat(64),
+              operationDigest: original?.operationDigest ?? "0".repeat(64),
               receipt: {
                 operationId: current.tombstone.deleteOperationId,
                 memoryId: value.memoryId,
                 outcome: "noop" as const,
                 revisionId: null,
-                pendingSync: false,
+                pendingSync:
+                  original !== undefined &&
+                  "pendingSync" in original.receipt &&
+                  original.receipt.pendingSync,
+                ...(original?.receipt.forgetExpansion
+                  ? { forgetExpansion: original.receipt.forgetExpansion }
+                  : {}),
               },
             };
+          }
           // Lifetime evidence survives compaction and is captured before base deletion purges payloads.
           const lineage = yield* store.readImportLineage(value.memorySpaceId, value.memoryId);
           const suppressedSourceKeys = lineage.flatMap((r) =>
@@ -1372,8 +1403,10 @@ const make = Effect.fnUntraced(function* (
       )
       .pipe(
         Effect.catchTags({
-          MemoryCapacityError: (error) =>
-            store
+          MemoryCapacityError: (error) => {
+            const value = intent;
+            if (!value) return Effect.fail(error);
+            return store
               .transact(
                 Effect.gen(function* () {
                   yield* permit;
@@ -1391,7 +1424,8 @@ const make = Effect.fnUntraced(function* (
                   });
                 }),
               )
-              .pipe(Effect.andThen(Effect.fail(error))),
+              .pipe(Effect.andThen(Effect.fail(error)));
+          },
         }),
       );
   });

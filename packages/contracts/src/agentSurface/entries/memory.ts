@@ -207,8 +207,15 @@ export const memoryEntries = {
     name: "memory_forget",
     toolkit: "memory",
     summary: "Forget memory.",
-    description: "Forget a memory item.",
-    guide: "Needs memory:write and a session allowed to write.",
+    description: "Forget a memory item by its memoryId.",
+    guide:
+      "Needs memory:write and a session allowed to write. Omit memorySpaceId to use this server's current memory space.",
+    parameters: {
+      memoryId: "The memory to forget.",
+      memorySpaceId: "Optional memory space. Defaults to the current space.",
+      operationId: "Optional explicit operation ID. Supply expectedHeads with it.",
+      expectedHeads: "Expected heads for an explicit operation ID.",
+    },
     effect: "destructive",
     capability: "threads.launch",
     hostRoutable: false,
