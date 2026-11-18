@@ -14,6 +14,7 @@ import { BUILD_COMMIT_TIME } from "../buildCommitTime.ts";
  */
 export const resolveSshCliRunner = Effect.fn("SshRemoteDispatch.resolveSshCliRunner")(function* (
   baseDir: string,
+  staticDir?: string | undefined,
 ) {
   const archiveDirectory = yield* Config.String("GOAT_SSH_RUNTIME_ARCHIVE_DIR").pipe(
     Config.withDefault(baseDir + "/runtime/archives"),
@@ -38,6 +39,9 @@ export const resolveSshCliRunner = Effect.fn("SshRemoteDispatch.resolveSshCliRun
     ...(BUILD_COMMIT_TIME === undefined ? {} : { archiveCommitTime: BUILD_COMMIT_TIME }),
     archiveDirectory,
     ...(bundledArchiveDirectory === undefined ? {} : { bundledArchiveDirectory }),
+    ...(bundledArchiveDirectory && staticDir
+      ? { bundledFontAssetDirectory: staticDir + "/assets" }
+      : {}),
     ...(releaseBaseUrl === undefined ? {} : { releaseBaseUrl }),
     hostDownload: true,
     publishedFallback: true,

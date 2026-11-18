@@ -1,9 +1,11 @@
+import type { ReactNode } from "react";
 import type { EnvironmentId } from "@goat/contracts";
 import { ContextChipLabel } from "../ContextChip";
 import { WorkspaceEntryIcon } from "./WorkspaceEntryIcon";
 
 export function FileTagChipContent(props: {
   path: string;
+  icon?: ReactNode;
   label: string;
   theme: "light" | "dark";
   environmentId?: EnvironmentId | null | undefined;
@@ -11,12 +13,14 @@ export function FileTagChipContent(props: {
 }) {
   return (
     <>
-      <WorkspaceEntryIcon
-        path={props.path}
-        environmentId={props.environmentId}
-        cwd={props.cwd}
-        theme={props.theme}
-      />
+      {props.icon ?? (
+        <WorkspaceEntryIcon
+          path={props.path}
+          environmentId={props.environmentId}
+          cwd={props.cwd}
+          theme={props.theme}
+        />
+      )}
       <ContextChipLabel>{props.label}</ContextChipLabel>
     </>
   );

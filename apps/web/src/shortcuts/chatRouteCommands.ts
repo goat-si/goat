@@ -1,3 +1,4 @@
+import { readPreviewFindAvailable } from "../components/preview/findAvailability";
 import { AuthPreviewOperateScope, type EnvironmentId } from "@goat/contracts";
 import { readPreviewShown } from "../lib/previewShown";
 import type { AnyRouter } from "@tanstack/react-router";
@@ -74,8 +75,14 @@ export function installChatRouteCommands(router: AnyRouter): () => void {
   const previewCommand =
     (action: PreviewAction): CommandHandler =>
     (event) => {
-      claim(event);
       const threadRef = readRouteThreadRef();
+      if (action === "find") {
+        if (!threadRef || !readPreviewFindAvailable(threadRef)) return false;
+        claim(event);
+        dispatchPreviewAction("find");
+        return;
+      }
+      claim(event);
       if (threadRef && canOperatePreview(threadRef.environmentId)) dispatchPreviewAction(action);
     };
 
@@ -114,6 +121,7 @@ export function installChatRouteCommands(router: AnyRouter): () => void {
         dispatchPreviewAction("toggle-panel");
       },
       "preview.refresh": previewCommand("refresh"),
+      "preview.find": previewCommand("find"),
       "preview.focusUrl": previewCommand("focus-url"),
       "preview.zoomIn": previewCommand("zoom-in"),
       "preview.zoomOut": previewCommand("zoom-out"),

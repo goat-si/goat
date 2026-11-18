@@ -14,6 +14,7 @@ import * as Effect from "effect/Effect";
 import * as Path from "effect/Path";
 import * as SshAuth from "./auth.ts";
 import { readLocalRuntimeArchive } from "./runtimeArchive.ts";
+import { readBundledOfficeFonts, runtimeArchiveUploadScript } from "./runtimeOfficeFonts.ts";
 import { downloadRuntimeArchiveWithGh } from "./runtimeArchiveGh.ts";
 import { downloadRuntimeArchiveWithHttps } from "./runtimeArchiveHttp.ts";
 import { findPublishedRuntime, type PublishedRuntimeMiss } from "./runtimePublished.ts";
@@ -26,7 +27,6 @@ import {
   notifyRuntimePhase,
   REMOTE_ARCHIVE_LAUNCH_TIMEOUT_MS,
   requestedRuntime,
-  shellSingleQuote,
   sshTargetLogFields,
   type PreparedRemoteRuntime,
   type RemoteGoatRunnerOptions,
@@ -101,20 +101,14 @@ export function makeRuntimeProvisioning(
     );
   }
 
-  function buildRemoteUploadScript(input: RemoteGoatRunnerOptions, sha256: string): string {
+  function buildRemoteUploadScript(
+    input: RemoteGoatRunnerOptions,
+    sha256: string,
+    fonts?: { readonly archiveBytes: number; readonly sha256: string },
+  ): string {
     const { archiveSource, ...runner } = input;
     const installer = buildRemoteGoatUploadInstallerScript(runner, sha256);
-    return `set -eu
-umask 077
-mkdir -p "$HOME/.goat/runtime/goat/versions"
-upload_dir="$(mktemp -d "$HOME/.goat/runtime/goat/versions/.upload-XXXXXX")"
-trap 'rm -rf "$upload_dir"' EXIT
-trap 'exit 1' HUP INT TERM
-cat > "$upload_dir/archive.tar.gz"
-export GOAT_SSH_UPLOADED_ARCHIVE="$upload_dir/archive.tar.gz"
-export GOAT_SSH_ARCHIVE_SOURCE=${shellSingleQuote(archiveSource ?? "cache")}
-sh -c ${shellSingleQuote(installer)} -- --version
-`;
+    return runtimeArchiveUploadScript(installer, archiveSource, fonts);
   }
 
   /**
@@ -203,6 +197,8 @@ sh -c ${shellSingleQuote(installer)} -- --version
                 runner?.keepExistingRunner ?? false,
                 false,
                 runner?.ownRuntimeVersion,
+                false,
+                owningLaunch,
               ),
             }).pipe(
               // Native Windows has no sh to start; it is prepared without one.
@@ -567,6 +563,14 @@ sh -c ${shellSingleQuote(installer)} -- --version
             "goat.runtime.upload.sha256": archive.sha256,
             "goat.runtime.upload.installComplete": false,
           });
+          const fonts =
+            bundledArchive === null
+              ? undefined
+              : yield* readBundledOfficeFonts(
+                  bundleDirectory,
+                  archive.fileName,
+                  runner?.bundledFontAssetDirectory,
+                );
           const script = yield* Effect.try({
             try: () =>
               buildRemoteUploadScript(
@@ -583,6 +587,7 @@ sh -c ${shellSingleQuote(installer)} -- --version
                           : "https",
                 },
                 archive.sha256,
+                fonts && { archiveBytes: archive.bytes.byteLength, sha256: fonts.sha256 },
               ),
             catch: runtimePreparationError,
           });
@@ -590,6 +595,7 @@ sh -c ${shellSingleQuote(installer)} -- --version
             script,
             archive.bytes,
             probe.platform,
+            fonts?.bytes,
           );
           notifyRuntimePhase(target, "uploading", onPhase, {
             sentBytes: 0,

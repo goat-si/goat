@@ -88,6 +88,8 @@ import {
   UserPlusIcon,
 } from "~/components/solar";
 import { requestSshThreadHandoff } from "./chat/sshThreadHandoffActionBus";
+import { usePreviewFindAvailable } from "./preview/findAvailability";
+import { appendFindItems } from "./commandPaletteFindItems";
 import { openThreadFind } from "./chat/threadFindStore";
 import {
   useDeferredValue,
@@ -1277,19 +1279,12 @@ function OpenCommandPaletteDialog(props: {
     });
   }
 
-  if (activeThreadKey !== null && supportsThreadFind) {
-    actionItems.push({
-      kind: "action",
-      value: "find-current-thread",
-      title: "Find in current thread",
-      searchTerms: ["find", "search", "messages", "plans"],
-      icon: <TextSearchIcon className={ITEM_ICON_CLASS} />,
-      shortcutCommand: "chat.find",
-      run: async () => {
-        openThreadFind(activeThreadKey);
-      },
-    });
-  }
+  appendFindItems(
+    actionItems,
+    activeThreadKey,
+    supportsThreadFind,
+    usePreviewFindAvailable(routeThreadRef),
+  );
 
   const promptLinkTarget = paletteRouteTarget
     ? paletteRouteTarget.kind === "server"

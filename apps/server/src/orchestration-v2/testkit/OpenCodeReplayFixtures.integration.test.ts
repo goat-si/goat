@@ -1,5 +1,5 @@
 import { describe, it } from "@effect/vitest";
-import type { ProviderReplayEntry } from "@goat/contracts";
+import { ProviderDriverKind, type ProviderReplayEntry } from "@goat/contracts";
 import * as Effect from "effect/Effect";
 
 import { OpenCodeOrchestratorReplayHarness } from "../Adapters/OpenCodeAdapterV2.testkit.ts";
@@ -14,6 +14,9 @@ import {
   runReplayFixture,
   type ReplayFixtureCase,
 } from "./ProviderReplayFixtures.ts";
+import { openCodeBackgroundWakeInput } from "./fixtures/opencode_background_wake/input.ts";
+import { assertOpenCodeBackgroundWakeOutput } from "./fixtures/opencode_background_wake/output.ts";
+import { OPENCODE_MODEL_SELECTION } from "./fixtures/shared.ts";
 
 // OpenCode fixtures are recorded against either the v1 or the v2 HTTP protocol.
 function runOpenCodeReplayFixture(input: ReplayFixtureCase) {
@@ -28,6 +31,23 @@ function runOpenCodeReplayFixture(input: ReplayFixtureCase) {
 
 describe("OpenCode replay fixtures", () => {
   itRunsReplayFixtures("opencode", runOpenCodeReplayFixture);
+
+  it.effect("projects a late OpenCode 1.x reply in its own continuation run", () =>
+    runOpenCodeReplayFixture({
+      fixtureName: "opencode_background_wake",
+      buildInput: openCodeBackgroundWakeInput,
+      driver: {
+        driver: ProviderDriverKind.make("opencode"),
+        transcriptFile: new URL(
+          "./fixtures/opencode_background_wake/opencode_transcript.ndjson",
+          import.meta.url,
+        ),
+        modelSelection: OPENCODE_MODEL_SELECTION,
+        runContinuationWorker: true,
+        assertOutput: assertOpenCodeBackgroundWakeOutput,
+      },
+    }),
+  );
 
   it.effect.each(
     (

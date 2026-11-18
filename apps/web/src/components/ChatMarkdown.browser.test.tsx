@@ -9,6 +9,7 @@ import { page, userEvent } from "vite-plus/test/browser";
 import { act, render } from "../../test/render";
 import "../index.css";
 
+import { shellEnvironment } from "../state/shell";
 import { filesystemEnvironment } from "../state/filesystem";
 import {
   selectActiveRightPanelSurface,
@@ -25,6 +26,20 @@ const { workspaceSearch, filesystemMetadata } = vi.hoisted(() => ({
   workspaceSearch: vi.fn(),
   filesystemMetadata: vi.fn(),
 }));
+const bundleFixture = vi.hoisted(() => ({ enabled: false, open: vi.fn() }));
+vi.mock(import("../state/use-atom-command"), async (original) => {
+  const actual = await original();
+  return {
+    ...actual,
+    useAtomCommand: ((
+      command: Parameters<typeof actual.useAtomCommand>[0],
+      options: Parameters<typeof actual.useAtomCommand>[1],
+    ) =>
+      command === shellEnvironment.openInEditor
+        ? bundleFixture.open
+        : actual.useAtomCommand(command, options)) as typeof actual.useAtomCommand,
+  };
+});
 const parsedSources = vi.hoisted(() => [] as string[]);
 vi.mock(import("mdast-util-from-markdown"), async (original) => {
   const actual = await original();
@@ -48,9 +63,16 @@ vi.mock(import("../state/server"), async (original) => {
   const actual = await original();
   const { Atom } = await import("effect/reactivity");
   const noConfig = Atom.make(null);
+  const macConfig = Atom.make({
+    environment: { platform: { os: "darwin" }, capabilities: {} },
+    availableEditors: ["file-manager"],
+  });
   return {
     ...actual,
-    serverEnvironment: { ...actual.serverEnvironment, configValueAtom: (() => noConfig) as never },
+    serverEnvironment: {
+      ...actual.serverEnvironment,
+      configValueAtom: (() => (bundleFixture.enabled ? macConfig : noConfig)) as never,
+    },
   };
 });
 vi.mock(import("../state/session"), async (original) => {
@@ -811,4 +833,33 @@ describe("ChatMarkdown code block actions", () => {
     // The toolbar remounts for the source view; focus must follow so the actions stay revealed.
     await expect.element(screen.getByRole("button", { name: "Show diagram" })).toHaveFocus();
   });
+});
+
+it("opens the same literal app path used for the bundle icon without searching duplicate basenames", async () => {
+  setup();
+  using restore = new DisposableStack();
+  restore.defer(() => {
+    bundleFixture.enabled = false;
+    bundleFixture.open.mockReset();
+  });
+  bundleFixture.enabled = true;
+  bundleFixture.open.mockResolvedValue(AsyncResult.success(undefined));
+  workspaceSearch.mockResolvedValue(
+    AsyncResult.success({ entries: [{ path: "other/Demo.app", kind: "file" }] }),
+  );
+  const environmentId = EnvironmentId.make("bundle-mac");
+  await using screen = await renderText("[Demo.app](Demo.app)", { environmentId });
+  const link = screen.getByRole("link", { name: "Demo.app" });
+  await act(async () => {
+    link
+      .element()
+      .dispatchEvent(
+        new MouseEvent("click", { bubbles: true, metaKey: true, ctrlKey: true, cancelable: true }),
+      );
+  });
+  expect(bundleFixture.open).toHaveBeenCalledWith({
+    environmentId,
+    input: { cwd: "/tmp/project/Demo.app", editor: "file-manager" },
+  });
+  expect(workspaceSearch).not.toHaveBeenCalled();
 });

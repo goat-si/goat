@@ -1,5 +1,5 @@
+import { makeUpdateRestartMarkers } from "./updateRestartMarkers.ts";
 import {
-  DESKTOP_UPDATE_RESTART_MARKER_FILE,
   DesktopUpdateChannelSchema,
   type DesktopUpdateActionResult,
   type DesktopUpdateChannel,
@@ -618,24 +618,11 @@ export const make = Effect.gen(function* () {
     );
   });
 
-  const updateRestartMarkerDir = environment.path.join(environment.baseDir, "runtime");
-  const updateRestartMarkerPath = environment.path.join(
-    updateRestartMarkerDir,
-    DESKTOP_UPDATE_RESTART_MARKER_FILE,
-  );
-  const writeUpdateRestartMarker = fileSystem
-    .makeDirectory(updateRestartMarkerDir, { recursive: true })
-    .pipe(
-      Effect.andThen(fileSystem.writeFileString(updateRestartMarkerPath, "")),
-      Effect.catch((error) =>
-        logUpdaterWarning("Could not write the update restart marker.", { errorTag: error._tag }),
-      ),
-    );
-
-  // Failed or interrupted installs leave no replacement backend; later quits must release the tunnel.
-  const removeUpdateRestartMarker = fileSystem
-    .remove(updateRestartMarkerPath, { force: true })
-    .pipe(Effect.ignore);
+  const {
+    directory: updateRestartMarkerDir,
+    writeUpdateRestartMarker,
+    removeTunnelRestartMarker,
+  } = yield* makeUpdateRestartMarkers();
 
   const installRecordPath = environment.path.join(
     updateRestartMarkerDir,
@@ -685,7 +672,7 @@ export const make = Effect.gen(function* () {
       finishUpdateAction("install"),
       Ref.set(desktopState.quitting, false),
       Ref.set(installRunningBackendsRef, []),
-      removeUpdateRestartMarker,
+      removeTunnelRestartMarker,
       removeInstallRecord,
     ],
     { discard: true },
@@ -702,7 +689,7 @@ export const make = Effect.gen(function* () {
     if (!ownsRecovery) return;
 
     yield* Ref.set(desktopState.quitting, false);
-    yield* removeUpdateRestartMarker;
+    yield* removeTunnelRestartMarker;
     yield* removeInstallRecord;
     yield* Effect.gen(function* () {
       const runningInstances = yield* Ref.getAndSet(installRunningBackendsRef, []);
