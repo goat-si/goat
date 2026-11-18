@@ -14,6 +14,7 @@ import * as ChildProcessSpawner from "effect/process/ChildProcessSpawner";
 import * as EffectAcpErrors from "effect-acp/errors";
 import type * as EffectAcpSchema from "effect-acp/compat";
 import * as NodeBuffer from "node:buffer";
+import * as HostProcess from "@goat/shared/HostProcess";
 import { toolPriorityLaunch, toolPriorityShellLaunch } from "@goat/shared/toolPriority";
 
 const MAX_LIVE_TERMINALS = 16;
@@ -161,11 +162,25 @@ function acpTerminalCommand(input: {
   });
 }
 
+function mergeEnvironments(
+  isWindows: boolean,
+  layers: ReadonlyArray<Iterable<readonly [string, string | undefined]>>,
+) {
+  const variables = new Map<string, readonly [string, string | undefined]>();
+  for (const layer of layers) {
+    for (const [name, value] of layer) {
+      variables.set(isWindows ? name.toUpperCase() : name, [name, value]);
+    }
+  }
+  return Object.fromEntries(variables.values());
+}
+
 export const makeAcpClientTerminals = Effect.fn("makeAcpClientTerminals")(function* (
   options: AcpClientTerminalsOptions,
 ): Effect.fn.Return<AcpClientTerminals, never, ChildProcessSpawner.ChildProcessSpawner> {
   const spawner = yield* ChildProcessSpawner.ChildProcessSpawner;
   const forceKillAfter = options.forceKillAfter ?? "5 seconds";
+  const isWindows = yield* HostProcess.isWindows;
   const creationPermit = yield* Semaphore.make(1);
   const terminals = new Map<string, ManagedAcpTerminal>();
   let nextTerminalNumber = 1;
@@ -228,22 +243,26 @@ export const makeAcpClientTerminals = Effect.fn("makeAcpClientTerminals")(functi
               `ACP terminal/create exceeded the limit of ${MAX_LIVE_TERMINALS} concurrent terminals.`,
             );
           }
-          const requestEnvironment = Object.fromEntries(
-            (request.env ?? []).map((variable) => [variable.name, variable.value] as const),
+          const inheritedEnvironment = Object.fromEntries(
+            Object.entries(options.environment ?? (yield* HostProcess.Environment)).filter(
+              ([name]) => {
+                const key = name.toUpperCase();
+                return (
+                  !key.startsWith("GOAT_ACP_MCP_") &&
+                  !key.startsWith("T3_ACP_MCP_") &&
+                  key !== "GOAT_THREAD_ID" &&
+                  key !== "T3CODE_THREAD_ID"
+                );
+              },
+            ),
           );
           const sessionEnvironment = options.environmentForSession?.(request.sessionId);
-          const environment =
-            options.environment === undefined &&
-            sessionEnvironment === undefined &&
-            (request.env?.length ?? 0) === 0
-              ? undefined
-              : {
-                  ...McpProviderSession.mergeThreadEnvironment(
-                    options.environment,
-                    sessionEnvironment,
-                  ),
-                  ...requestEnvironment,
-                };
+          const environment = mergeEnvironments(isWindows, [
+            Object.entries(
+              McpProviderSession.mergeThreadEnvironment(inheritedEnvironment, sessionEnvironment),
+            ),
+            (request.env ?? []).map((variable) => [variable.name, variable.value] as const),
+          ]);
           const terminalScope = yield* Scope.make();
           const child = yield* restore(
             spawner
