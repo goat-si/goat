@@ -128,74 +128,81 @@ const fakeExpo = (
         yield* Deferred.succeed(sessionGate.requested, undefined);
         yield* Deferred.await(sessionGate.release);
       }
-      const data =
-        operation === "GoatEasSimulatorAvailability"
-          ? {
+      // Expo admits some callers even when this account-level gate is off.
+      if (operation === "GoatEasSimulatorAvailability") {
+        return HttpClientResponse.fromWeb(
+          request,
+          Response.json({
+            data: {
               app: {
                 byId: {
                   ownerAccount: {
                     name: "pingdotgg",
-                    accountFeatureGates: { "device-run-sessions": true },
+                    accountFeatureGates: { "device-run-sessions": false },
                   },
                 },
               },
-            }
-          : operation === "GoatCreateEasSimulatorSession"
-            ? { deviceRunSession: { createDeviceRunSession: { id: `session-${++created}` } } }
-            : operation === "GoatActiveEasSimulatorSessions"
-              ? {
-                  app: {
-                    byId: {
-                      deviceRunSessionsPaginated: {
-                        edges: [
-                          ...(options.omitCreatedFromActive
-                            ? []
-                            : [{ node: { id: "orphan", status: "NEW", name: createdName } }]),
-                          {
-                            node: {
-                              id: "someone-else",
-                              status: "IN_PROGRESS",
-                              name: "GOAT · Expo Simulators · 000000",
-                            },
+            },
+          }),
+        );
+      }
+      const data =
+        operation === "GoatCreateEasSimulatorSession"
+          ? { deviceRunSession: { createDeviceRunSession: { id: `session-${++created}` } } }
+          : operation === "GoatActiveEasSimulatorSessions"
+            ? {
+                app: {
+                  byId: {
+                    deviceRunSessionsPaginated: {
+                      edges: [
+                        ...(options.omitCreatedFromActive
+                          ? []
+                          : [{ node: { id: "orphan", status: "NEW", name: createdName } }]),
+                        {
+                          node: {
+                            id: "someone-else",
+                            status: "IN_PROGRESS",
+                            name: "GOAT · Expo Simulators · 000000",
                           },
-                          ...(options.active ?? []).map((node) => ({ node })),
-                          ...(options.activeIncludesCreated && created > 0
-                            ? [
-                                {
-                                  node: {
-                                    id: `session-${created}`,
-                                    status: "STARTING",
-                                    name: createdName,
-                                  },
+                        },
+                        ...(options.active ?? []).map((node) => ({ node })),
+                        ...(options.activeIncludesCreated && created > 0
+                          ? [
+                              {
+                                node: {
+                                  id: `session-${created}`,
+                                  status: "STARTING",
+                                  name: createdName,
                                 },
-                              ]
-                            : []),
-                        ],
+                              },
+                            ]
+                          : []),
+                      ],
+                    },
+                  },
+                },
+              }
+            : operation === "GoatEasSimulatorSession"
+              ? {
+                  deviceRunSessions: {
+                    byId: {
+                      id: body.variables.id,
+                      status: options.status?.() ?? "IN_PROGRESS",
+                      remoteConfig: {
+                        __typename: "AgentDeviceRunSessionRemoteConfig",
+                        agentDeviceRemoteSessionUrl: "https://agent.test",
+                        agentDeviceRemoteSessionToken: "agent-token",
+                        webPreviewToken: "preview-token",
+                        previewApiUrl: "https://preview.test?token=preview-token",
                       },
                     },
                   },
                 }
-              : operation === "GoatEasSimulatorSession"
-                ? {
-                    deviceRunSessions: {
-                      byId: {
-                        id: body.variables.id,
-                        status: options.status?.() ?? "IN_PROGRESS",
-                        remoteConfig: {
-                          __typename: "AgentDeviceRunSessionRemoteConfig",
-                          agentDeviceRemoteSessionUrl: "https://agent.test",
-                          agentDeviceRemoteSessionToken: "agent-token",
-                          webPreviewToken: "preview-token",
-                          previewApiUrl: "https://preview.test?token=preview-token",
-                        },
-                      },
-                    },
-                  }
-                : {
-                    deviceRunSession: {
-                      ensureDeviceRunSessionStopped: { id: body.variables.id, status: "STOPPED" },
-                    },
-                  };
+              : {
+                  deviceRunSession: {
+                    ensureDeviceRunSessionStopped: { id: body.variables.id, status: "STOPPED" },
+                  },
+                };
       return HttpClientResponse.fromWeb(request, Response.json({ data }));
     }),
   );
@@ -471,6 +478,18 @@ describe("Expo Simulators host", () => {
         yield* Fiber.join(listing);
         expect(expo.stopped()).toEqual(["session-1"]);
       }).pipe(Effect.scoped, Effect.provide(layer)),
+  );
+
+  it.effect("leaves admission to Expo's create although the account gate is off", () =>
+    Effect.gen(function* () {
+      const expo = fakeExpo();
+      const host = yield* makeHost(expo, config(), yield* Scope.make());
+      const ready = yield* host.ensureReady(() => Effect.void);
+      const [catalogDevice] = (yield* ready.devices.list).devices;
+      expect(yield* ready.devices.boot(catalogDevice!)).toBe("session-1");
+      expect(expo.named("GoatEasSimulatorAvailability")).toHaveLength(0);
+      expect(expo.named("GoatCreateEasSimulatorSession")).toHaveLength(1);
+    }).pipe(Effect.scoped, Effect.provide(layer)),
   );
 
   it.effect("stops the session a refused create made anyway", () =>
