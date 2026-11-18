@@ -53,6 +53,7 @@ import { restoreCheckpointFiles } from "./checkpointSkipWorktreeRestore.ts";
 import * as CheckpointTurnStart from "./checkpointTurnStart.ts";
 import { chunkPathsForGitCheckIgnore } from "./gitCheckIgnoreChunks.ts";
 import { parseGitRemoteVerboseOutput } from "./gitRemoteParsing.ts";
+import { WORKSPACE_FILES_MAX_OUTPUT_BYTES } from "./gitStdoutPaths.ts";
 
 export interface ExecuteGitInput {
   readonly operation: string;
@@ -530,7 +531,6 @@ export class GitVcsDriver extends Context.Service<
   } & import("./GitSharedConfig.ts").SharedConfigDriver
 >()("goat/vcs/GitVcsDriver") {}
 
-const WORKSPACE_FILES_MAX_OUTPUT_BYTES = 16 * 1024 * 1024;
 const FLAGGED_INDEX_ENTRIES_MAX_BYTES = 1024 * 1024;
 const CHECKPOINT_RECOVERY_MAX_CANDIDATES = 64;
 const CHECKPOINT_RECOVERY_TIMEOUT = "5 seconds";

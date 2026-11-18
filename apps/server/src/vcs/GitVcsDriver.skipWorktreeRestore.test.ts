@@ -6,6 +6,7 @@ import * as FileSystem from "effect/FileSystem";
 import * as Layer from "effect/Layer";
 import * as Path from "effect/Path";
 import * as ServerConfig from "../config.ts";
+import { restoreCheckpointFiles } from "./checkpointSkipWorktreeRestore.ts";
 import * as GitVcsDriver from "./GitVcsDriver.ts";
 import * as VcsProcess from "./VcsProcess.ts";
 
@@ -210,5 +211,48 @@ it.effect.each([
     );
 
     assert.strictEqual(yield* fileSystem.readFileString(flagged), "committed\n");
+  }).pipe(Effect.scoped, Effect.provide(layerGitContract)),
+);
+
+it.effect("refuses an oversized sparse index path list before changing the worktree or index", () =>
+  Effect.gen(function* () {
+    const fs = yield* FileSystem.FileSystem;
+    const path = yield* Path.Path;
+    const driver = yield* GitVcsDriver.makeVcsDriverShape();
+    const process = yield* VcsProcess.VcsProcess;
+    const cwd = yield* fs.makeTempDirectoryScoped({ prefix: "t3-sparse-restore-" });
+    const { git } = yield* makeRepo(driver, cwd);
+    const commitOid = (yield* git(["rev-parse", "HEAD"])).stdout.trim();
+    yield* git(["sparse-checkout", "set", "--cone", "in"]);
+    const file = path.join(cwd, "file.txt");
+    yield* fs.writeFileString(file, "staged\n");
+    yield* git(["add", "file.txt"]);
+    yield* fs.writeFileString(file, "unstaged\n");
+
+    const result = yield* restoreCheckpointFiles({
+      execute: driver.execute,
+      vcsProcess: {
+        run: (input) =>
+          process.run({
+            ...input,
+            onStdoutChunk: (chunk) => {
+              input.onStdoutChunk?.(chunk);
+              input.onStdoutChunk?.(Buffer.from("S in/first\0s in/"));
+              input.onStdoutChunk?.(Buffer.from("x".repeat(40) + "\0"));
+            },
+          }),
+      },
+      operation: "checkpoint-test",
+      cwd,
+      commitOid,
+      longPaths: [],
+      maxPathBytes: 48,
+    }).pipe(Effect.result);
+
+    assert.strictEqual(yield* fs.readFileString(file), "unstaged\n");
+    assert.strictEqual((yield* git(["show", ":file.txt"])).stdout, "staged\n");
+    assert.strictEqual(result._tag, "Failure");
+    if (result._tag === "Failure")
+      assert.strictEqual(result.failure._tag, "VcsProcessOutputLimitError");
   }).pipe(Effect.scoped, Effect.provide(layerGitContract)),
 );
