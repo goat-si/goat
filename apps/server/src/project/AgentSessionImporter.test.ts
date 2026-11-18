@@ -1,3 +1,13 @@
+import * as NodeCrypto from "@effect/platform-node/NodeCrypto";
+import { AcpProviderCapabilitiesV2, makeAcpAdapterV2 } from "@goat/provider-acp/server/adapter";
+import * as McpProviderSessions from "@goat/provider-core/server/McpProviderSessions";
+import * as TestProviderHost from "@goat/provider-testing/TestProviderHost";
+import { resolveSelfInvocation } from "@goat/shared/nodeRuntime";
+import * as ChildProcessSpawner from "effect/process/ChildProcessSpawner";
+import {
+  bundledMockAgentPath,
+  makeMockRuntime,
+} from "../orchestration-v2/Adapters/AcpMockRuntime.testkit.ts";
 import * as NodeServices from "@effect/platform-node/NodeServices";
 import * as FileSystem from "effect/FileSystem";
 import * as Path from "effect/Path";
@@ -765,4 +775,89 @@ it.effect("imports ACP text and reasoning once after a failed history read", () 
       }),
     );
   }).pipe(Effect.scoped, Effect.provide(persistence)),
+);
+
+const acpImportHost = Layer.mergeAll(NodeServices.layer, NodeCrypto.layer);
+const acpImportTest = Layer.mergeAll(
+  persistence,
+  acpImportHost,
+  McpProviderSessions.layer,
+  TestProviderHost.layer().pipe(Layer.provide(acpImportHost)),
+);
+
+it.effect("keeps ACP history pending after replay pauses without a load response", () =>
+  Effect.gen(function* () {
+    const projections = yield* ProjectionStore.ProjectionStoreV2;
+    const instanceId = ProviderInstanceId.make("acp-held-history");
+    const driver = ProviderDriverKind.make("acpRegistry");
+    const source = candidate({ instanceId, model: "default" }, "mock-session-1");
+    const threadId = yield* seedOwner(source, "active", driver);
+    const replayedFragment = yield* Deferred.make<void>();
+    const adapter = yield* makeAcpAdapterV2({
+      instanceId,
+      selfInvocation: yield* resolveSelfInvocation(),
+      flavor: {
+        driver,
+        capabilities: AcpProviderCapabilitiesV2,
+        makeRuntime: makeMockRuntime({
+          childProcessSpawner: yield* ChildProcessSpawner.ChildProcessSpawner,
+          mockAgentPath: yield* bundledMockAgentPath,
+          environment: (attempt): Readonly<Record<string, string>> =>
+            attempt === 1
+              ? {
+                  GOAT_ACP_HANG_LOAD_SESSION_AFTER_REPLAY: "1",
+                  GOAT_ACP_LOAD_SESSION_DELAY_MS: "3600000",
+                }
+              : {},
+          wrapRuntime: (runtime) => ({
+            ...runtime,
+            handleSessionUpdate: (handler) =>
+              runtime.handleSessionUpdate((notification) => {
+                const { update } = notification;
+                return handler(notification).pipe(
+                  Effect.tap(() =>
+                    update.sessionUpdate === "user_message_chunk" &&
+                    update.content.type === "text" &&
+                    update.content.text === "replay-tail"
+                      ? Deferred.succeed(replayedFragment, undefined)
+                      : Effect.void,
+                  ),
+                );
+              }),
+          }),
+        }),
+      },
+    });
+    const { importer } = yield* makeImporter([], Effect.void, () => Effect.succeed(adapter));
+    const importHistory = importer.importNativeHistory({
+      threadId,
+      projectId,
+      workspaceRoot: process.cwd(),
+    });
+    const read = yield* importHistory.pipe(Effect.result, Effect.forkScoped);
+    const stored = projections.getThreadRecords(threadId, ["messages"]);
+    yield* Deferred.await(replayedFragment);
+    yield* TestClock.adjust("3 seconds");
+    expect((yield* stored).messages).toEqual([]);
+    yield* TestClock.adjust("90 seconds");
+    const result = yield* Fiber.join(read);
+    const records = yield* stored;
+    expect(records.thread.historyOrigin).not.toBe("v1_import");
+    expect(records.messages).toEqual([]);
+    expect(result).toMatchObject({
+      _tag: "Failure",
+      failure: {
+        _tag: "ProviderAdapterOpenSessionError",
+        cause: {
+          method: "session/load",
+          detail: "session/load timed out waiting for RPC response",
+        },
+      },
+    });
+
+    expect(yield* importHistory).toBe(true);
+    const repaired = yield* stored;
+    expect(repaired.thread.historyOrigin).toBe("v1_import");
+    expect(repaired.messages.map(({ text }) => text)).toEqual(["replay"]);
+  }).pipe(Effect.scoped, Effect.provide(acpImportTest)),
 );
