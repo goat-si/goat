@@ -1,0 +1,49 @@
+import { EventId, TurnItemId } from "@goat/contracts";
+import { describe, expect, it } from "@effect/vitest";
+import { vi } from "vite-plus/test";
+import * as Effect from "effect/Effect";
+import * as Option from "effect/Option";
+import * as Queue from "effect/Queue";
+import * as Ref from "effect/Ref";
+import * as Stream from "effect/Stream";
+import * as SubscriptionRef from "effect/SubscriptionRef";
+import * as TestClock from "effect/testing/TestClock";
+import { awaitThreadState, snapshot } from "./threadsSyncFixtures.ts";
+import { BASE_PROJECTION, CACHED_SNAPSHOT_SEQUENCE, THREAD_ID, makeHarness } from "./threadsSync.testkit.ts";
+
+const boom = { armed: false };
+vi.mock("./orchestrationV2Projection.ts", async (importOriginal) => {
+  const real = await importOriginal<typeof import("./orchestrationV2Projection.ts")>();
+  return {
+    ...real,
+    applyOrchestrationV2ProjectionEvent: ((projection: any, event: any, partial: any) => {
+      if (boom.armed && event.id === "event-boom") throw new Error("reducer defect");
+      return real.applyOrchestrationV2ProjectionEvent(projection, event, partial);
+    }) as typeof real.applyOrchestrationV2ProjectionEvent,
+  };
+});
+
+describe("review probe", () => {
+  it.effect("PROBE a defect while folding events resubscribes with afterSequence past the lost batch", () =>
+    Effect.gen(function* () {
+      const harness = yield* makeHarness({ httpSnapshot: { _tag: "unavailable" } });
+      yield* SubscriptionRef.changes(harness.subscriptionCount).pipe(Stream.filter((n) => n >= 1), Stream.runHead);
+      yield* Queue.offer(harness.inputs, snapshot(BASE_PROJECTION, CACHED_SNAPSHOT_SEQUENCE));
+      yield* awaitThreadState(harness.observed, (v) => Option.isSome(v.data));
+      boom.armed = true;
+      yield* Queue.offer(harness.inputs, {
+        kind: "event",
+        sequence: CACHED_SNAPSHOT_SEQUENCE + 1,
+        event: { id: EventId.make("event-boom"), type: "thread.meta-updated", threadId: THREAD_ID, occurredAt: "2026-01-01T00:00:00.000Z", payload: { title: "Lost title" } },
+      } as never);
+      yield* awaitThreadState(harness.observed, (v) => Option.isSome(v.error));
+      yield* TestClock.adjust("1 second");
+      yield* SubscriptionRef.changes(harness.subscriptionCount).pipe(Stream.filter((n) => n >= 2), Stream.runHead);
+      const after = yield* Ref.get(harness.lastSubscribeAfterSequence);
+      const state = yield* SubscriptionRef.get(harness.threadState);
+      console.log("PROBE3 resubscribe afterSequence:", after, "state title:", Option.getOrThrow(state.data).thread.title, "subscriptions:", yield* SubscriptionRef.get(harness.subscriptionCount));
+      expect(after).toBe(CACHED_SNAPSHOT_SEQUENCE + 1);
+      void TurnItemId;
+    }));
+});
+
