@@ -1,4 +1,10 @@
-import { makePullMemoryTail } from "./MemoryPullTail.ts";
+import * as Context from "effect/Context";
+import { suggestionForgetGeneration } from "./store/SaveSuggestions.ts";
+import * as Deferred from "effect/Deferred";
+import * as Fiber from "effect/Fiber";
+import * as Sync from "./MemorySyncService.ts";
+import * as Member from "./MemorySyncService.testkit.ts";
+import { decodeLegacyPushResult, decodeLegacyUpsert } from "./testkit/FrozenMemoryV1.ts";
 import { makeMemorySaveSuggestions } from "./MemorySaveSuggestions.ts";
 import { scanReplicaMemory } from "./testkit/ScanReplicaMemory.ts";
 import { assert, describe, it } from "@effect/vitest";
@@ -29,7 +35,6 @@ import {
   space,
 } from "./MemoryHubService.testkit.ts";
 
-const decodeOperation = Schema.decodeUnknownSync(M.MemoryOperation);
 const decodeResolution = Schema.decodeUnknownSync(M.MemoryHubApplyResolutionInput);
 const enabled = Effect.provideService(MemoryFloor2Enabled, true);
 const features = M.MEMORY_FLOOR_2;
@@ -127,294 +132,52 @@ describe("memory hub floor", () => {
     }).pipe(checkUsage, Effect.provide(live), enabled),
   );
 
-  it.effect("an old member prevents automatic floor activation", () =>
+  it.effect("returns a terminal V1 receipt for a payload that exceeds the new tail envelope", () =>
     Effect.gen(function* () {
       yield* seed;
       const hub = yield* Hub.MemoryHubService;
-      const old = yield* hub.pull({ ...pullInput, environmentId: otherEnv }, principal(otherEnv));
-      assert.isUndefined(old.derivedCap);
-      const updated = yield* hub.pull(advertise, principal());
-      assert.isUndefined(updated.derivedCap);
-      assert.deepStrictEqual(updated.upgradeRequiredMembers, [otherEnv]);
-      const upgraded = yield* hub.pull(
-        { ...advertise, environmentId: otherEnv },
-        principal(otherEnv),
-      );
-      assert.strictEqual(upgraded.derivedCap, 1000);
-    }).pipe(checkUsage, Effect.provide(live)),
-  );
-
-  it.effect(
-    "moves the same memory and its history, fences stale moves and retires old handles",
-    () =>
-      Effect.gen(function* () {
-        yield* seed;
-        const hub = yield* Hub.MemoryHubService;
-        const store = yield* Store.MemoryStore;
-        const compactor = yield* Compactor.MemoryCompactor;
-        yield* hub.pull(advertise, principal());
-        yield* hub.pull({ ...advertise, environmentId: otherEnv }, principal(otherEnv));
-        const first = newMemory(501);
-        const scope = {
-          kind: "thread",
-          thread: { environmentId: hubEnv, threadId: M.ThreadId.make("move-target") },
-        } as const;
-        assert.strictEqual(
-          (yield* hub.push({ ...pushInput(first), features }, principal())).receipts[0]?.outcome,
-          "accepted",
-        );
-        const beforeMove = yield* hub.pull(advertise, principal());
-        yield* compactor.compact(principal());
-        const joinInput = {
-          protocolVersion: 1 as const,
-          environmentId: otherEnv,
-          memorySpaceId: space,
-          features,
-        };
-        const old = yield* hub.join(joinInput, principal(otherEnv));
-        const move = decodeOperation({
-          protocolVersion: 1,
-          kind: "move",
-          operationId: id(502),
-          memoryId: first.memoryId,
-          memorySpaceId: space,
-          originEnvironmentId: hubEnv,
-          expectedHeads: [first.revision.revisionId],
-          expectedScopeVersion: 0,
-          fromScope: first.revision.scope,
-          toScope: scope,
-        });
-        const push = (op: M.MemoryOperation) =>
-          hub.push({ ...pushInput(op), features }, principal());
-        const one = (yield* push(move)).receipts[0];
-        assert.include(one, { outcome: "accepted" });
-        assert.deepStrictEqual((yield* push(move)).receipts[0], one);
-        const aggregate = yield* store.loadAggregate(space, first.memoryId);
-        assert.deepStrictEqual(aggregate.identity?.scope, scope);
-        assert.deepStrictEqual(aggregate.revisions, [
-          { revision: { ...first.revision, scope }, payload: first.payload },
-        ]);
-        const staleHandle = yield* hub
-          .pull(
-            {
-              ...advertise,
-              environmentId: otherEnv,
-              snapshotToken: old.snapshotToken,
-              afterSequence: old.checkpointSequence,
-            },
-            principal(otherEnv),
-          )
-          .pipe(Effect.flip);
-        assert.property(staleHandle, "code");
-        const next = yield* hub.join(joinInput, principal(otherEnv));
-        const checkpoint = yield* hub.pull(
-          {
-            ...advertise,
-            environmentId: otherEnv,
-            snapshotToken: next.snapshotToken,
-            afterSequence: next.checkpointSequence,
-          },
-          principal(otherEnv),
-        );
-        assert.deepStrictEqual(
-          checkpoint.checkpoint?.identities.find((item) => item.memoryId === first.memoryId)?.scope,
-          scope,
-        );
-        if (!checkpoint.checkpoint?.bootstrapComplete)
-          throw new Error("Expected one checkpoint page");
-        const checkpointPage = checkpoint.checkpoint;
-        const tail = yield* hub.pull(
-          { ...advertise, afterSequence: beforeMove.throughSequence },
-          principal(),
-        );
-        yield* compactor.compact(principal());
-        for (const method of ["tail", "checkpoint"] as const) {
-          yield* Effect.gen(function* () {
-            const replica = yield* Service.MemoryService;
-            const local = yield* Store.MemoryStore;
-            yield* replica.receiveHubPage({
-              memorySpaceId: space,
-              hubEnvironmentId: hubEnv,
-              localEnvironmentId: otherEnv,
-              expectedSequence: 0,
-              page: beforeMove,
-              reauthorize: Effect.void,
-            });
-            yield* scanReplicaMemory(first.memoryId);
-            const editId = M.MemoryOperationId.make(id(510));
-            yield* replica.upsert(
-              {
-                memorySpaceId: space,
-                memoryId: first.memoryId,
-                operationId: editId,
-                expectedHeads: [first.revision.revisionId],
-                scope: first.revision.scope,
-                assertionKind: "inference",
-                baseBoundary: null,
-                payload: { ...first.payload, text: "unaccepted local edit" },
-              },
-              Effect.void,
-            );
-            if (method === "tail") {
-              yield* replica.receiveHubPage({
-                memorySpaceId: space,
-                hubEnvironmentId: hubEnv,
-                localEnvironmentId: otherEnv,
-                expectedSequence: beforeMove.throughSequence,
-                page: tail,
-                reauthorize: Effect.void,
-              });
-            } else {
-              const pullTail = makePullMemoryTail({
-                store: local,
-                service: replica,
-                local: otherEnv,
-                callPull: (_route, request) =>
-                  hub.pull({ ...request, features }, principal(otherEnv)),
-                ensureEpoch: () => Effect.void,
-              });
-              assert.include(
-                yield* pullTail(
-                  {
-                    space,
-                    hubId: hubEnv,
-                    settings: { memoryHubVersion: 1 },
-                  },
-                  { pages: 0, entries: 0 },
-                ).pipe(Effect.flip),
-                { code: "cursor_expired" },
-              );
-              const stage = {
-                memorySpaceId: space,
-                hubEnvironmentId: hubEnv,
-                checkpointId: `hub:${next.snapshotToken}`,
-                expectedSnapshotToken: next.snapshotToken,
-                expectedCheckpointSequence: next.checkpointSequence,
-              };
-              assert.strictEqual((yield* local.readBootstrap(stage)).state, "unbound");
-              yield* local.transact(
-                local.advanceBootstrapTx({
-                  ...stage,
-                  expectedState: "unbound",
-                  nextState: "staging",
-                  snapshotToken: stage.expectedSnapshotToken,
-                  checkpointSequence: stage.expectedCheckpointSequence,
-                  nextCursor: null,
-                }),
-              );
-              yield* local.installCheckpointPage({ ...stage, page: checkpointPage });
-              yield* local.completeCheckpoint({ ...stage, pageCount: 1 });
-            }
-            yield* scanReplicaMemory(first.memoryId);
-            const moved = yield* local.loadAggregate(space, first.memoryId);
-            assert.deepStrictEqual(moved.identity?.scope, scope);
-            assert.strictEqual(moved.identity?.scopeVersion, 1);
-            assert.deepStrictEqual(moved.heads, [first.revision.revisionId]);
-            const pendingEdit = yield* local.readWorkOperation(`sync:${space}:${editId}`);
-            if (pendingEdit?.kind !== "upsert") throw new Error("Expected the pending edit");
-            assert.deepStrictEqual(pendingEdit.revision.scope, first.revision.scope);
-            assert.include((yield* push(pendingEdit)).receipts[0], {
-              outcome: "rejected",
-              failureCode: "identity_mismatch",
-            });
-            const history = yield* replica.history(
-              {
-                memorySpaceId: space,
-                memoryId: first.memoryId,
-                limit: 10,
-              },
-              Effect.void,
-            );
-            const original = history.revisions.find(
-              ({ revision }) => revision.revisionId === first.revision.revisionId,
-            );
-            const unaccepted = history.revisions.find(
-              ({ revision }) => revision.revisionId === pendingEdit.revision.revisionId,
-            );
-            assert.deepStrictEqual(original?.payload, first.payload);
-            assert.isNull(unaccepted?.payload);
-            assert.deepStrictEqual(
-              (yield* replica.list(
-                {
-                  memorySpaceId: space,
-                  scope: first.revision.scope,
-                  includeQuarantined: true,
-                  limit: 10,
-                },
-                Effect.void,
-              )).items,
-              [],
-            );
-          }).pipe(Effect.provide(Layer.fresh(core)));
-        }
-        const moveBack = decodeOperation({
-          ...move,
-          operationId: id(503),
-          expectedScopeVersion: 1,
-          fromScope: scope,
-          toScope: first.revision.scope,
-        });
-        assert.include((yield* push(moveBack)).receipts[0], { outcome: "accepted" });
-        const stale = decodeOperation({ ...move, operationId: id(504) });
-        assert.include((yield* push(stale)).receipts[0], {
-          outcome: "rejected",
-          failureCode: "revision_changed",
-        });
-      }).pipe(checkUsage, Effect.provide(live)),
-  );
-
-  it.effect("refuses a move into a full scope without removing the source", () =>
-    Effect.gen(function* () {
-      yield* seed;
-      const hub = yield* Hub.MemoryHubService;
-      const store = yield* Store.MemoryStore;
-      yield* hub.pull(advertise, principal());
-      yield* hub.pull({ ...advertise, environmentId: otherEnv }, principal(otherEnv));
-      const scope = {
-        kind: "thread",
-        thread: { environmentId: hubEnv, threadId: M.ThreadId.make("full-scope") },
-      } as const;
-      const occupants = Array.from({ length: M.MEMORY_THREAD_MAX_EXPLICIT_ITEMS }, (_, index) => {
-        const op = newMemory(4300 + index);
-        return { ...op, revision: { ...op.revision, scope } };
-      });
-      const pushed = yield* hub.push({ ...pushInput(...occupants), features }, principal());
-      assert.isTrue(pushed.receipts.every((receipt) => receipt.outcome === "accepted"));
-      const op = newMemory(4200);
-      assert.include((yield* hub.push({ ...pushInput(op), features }, principal())).receipts[0], {
-        outcome: "accepted",
-      });
-      const move = decodeOperation({
-        protocolVersion: 1,
-        kind: "move",
-        operationId: id(4201),
+      const op = newMemory(94);
+      const { payload } = decodeLegacyUpsert({
         memorySpaceId: space,
         memoryId: op.memoryId,
-        originEnvironmentId: hubEnv,
-        expectedHeads: [op.revision.revisionId],
-        expectedScopeVersion: 0,
-        fromScope: op.revision.scope,
-        toScope: scope,
-      });
-      assert.deepInclude(
-        (yield* hub.push({ ...pushInput(move), features }, principal())).receipts[0],
-        {
-          outcome: "rejected",
-          failureCode: "capacity_exceeded",
-          capacity: {
-            code: "capacity_exceeded",
-            dimension: "thread_items",
-            current: M.MEMORY_THREAD_MAX_EXPLICIT_ITEMS + 1,
-            limit: M.MEMORY_THREAD_MAX_EXPLICIT_ITEMS,
-            reclaimable: 0,
-          },
+        operationId: op.operationId,
+        expectedHeads: [],
+        scope: op.revision.scope,
+        assertionKind: op.revision.assertionKind,
+        baseBoundary: null,
+        payload: {
+          ...op.payload,
+          evidence: [
+            {
+              origin: "thread",
+              sourceThread: {
+                environmentId: hubEnv,
+                threadId: M.ThreadId.make("synthetic-thread"),
+              },
+              watermark: {
+                fromEventId: M.EventId.make("e".repeat(63000)),
+                toEventId: M.EventId.make("end"),
+                throughSequence: 1,
+              },
+              messageIds: [],
+            },
+          ],
         },
-      );
-      assert.deepStrictEqual(
-        (yield* store.loadAggregate(space, op.memoryId)).identity?.scope,
-        op.revision.scope,
-      );
-    }).pipe(checkUsage, Effect.provide(live)),
+      });
+      const request = pushInput({ ...op, payload });
+      const legacy = yield* hub.push(request, principal());
+      assert.include(decodeLegacyPushResult(legacy).receipts[0], {
+        outcome: "rejected",
+        hubSequence: null,
+        failureCode: "payload_too_large",
+      });
+      const updated = yield* hub.push({ ...request, features }, principal());
+      assert.include(updated.receipts[0], {
+        outcome: "rejected",
+        failureCode: "capacity_exceeded",
+      });
+      assert.propertyVal(updated.receipts[0]?.capacity, "dimension", "payload_bytes");
+    }).pipe(checkUsage, Effect.provide(live), enabled),
   );
 
   it.effect("a wide save stays invisible until ordered tail settlement", () =>
@@ -736,6 +499,284 @@ describe("memory hub floor", () => {
             reason: "source_invalidated",
           });
         }).pipe(Effect.provide(Layer.fresh(core)));
+      }).pipe(checkUsage, Effect.provide(live), enabled),
+  );
+
+  it.effect("a local forget after push discovery removes an unsent incomplete acceptance", () =>
+    Effect.gen(function* () {
+      yield* seed;
+      const hub = yield* Hub.MemoryHubService;
+      const sql = yield* SqlClient.SqlClient;
+      const member = principal(Member.local);
+      yield* sql`UPDATE memory_hub_members SET environment=${Member.local} WHERE environment=${otherEnv}`;
+      yield* hub.pull(advertise, principal());
+      const source = newMemory(91);
+      yield* hub.push({ ...pushInput(source), features }, principal());
+      yield* (yield* Compactor.MemoryCompactor).compact(principal());
+      const pushed: M.MemoryOperation[] = [];
+      const client = Member.peer({
+        join: (_connection, input) => hub.join({ ...input, features }, member).pipe(Effect.orDie),
+        pull: (_connection, input) => hub.pull({ ...input, features }, member).pipe(Effect.orDie),
+        push: (_connection, input) => {
+          pushed.push(...input.operations);
+          return hub.push({ ...input, features }, member).pipe(Effect.orDie);
+        },
+      });
+      const found = yield* Deferred.make<void>();
+      const resume = yield* Deferred.make<void>();
+      const draft = newMemory(92);
+      const wrapStore = (store: Store.MemoryStore["Service"]) => ({
+        ...store,
+        readEligibleOutbox: (...args: Parameters<typeof store.readEligibleOutbox>) =>
+          store
+            .readEligibleOutbox(...args)
+            .pipe(
+              Effect.tap((rows) =>
+                rows.some((row) => row.work.memoryId === draft.memoryId)
+                  ? Deferred.succeed(found, undefined).pipe(Effect.andThen(Deferred.await(resume)))
+                  : Effect.void,
+              ),
+            ),
+      });
+      const memberContext = yield* Layer.build(
+        Layer.fresh(
+          Member.fixture(client, undefined, undefined, undefined, undefined, undefined, wrapStore),
+        ),
+      );
+      yield* Effect.gen(function* () {
+        const store = Context.get(memberContext, Store.MemoryStore);
+        const service = Context.get(memberContext, Service.MemoryService);
+        const memberSql = Context.get(memberContext, SqlClient.SqlClient);
+        const sync = Context.get(memberContext, Sync.MemorySyncService);
+        yield* sync.syncOnce;
+        assert.include(yield* sync.readLocalReadiness(), { bootstrap: "ready" });
+        assert.isUndefined((yield* store.loadAggregate(space, draft.memoryId)).identity);
+        const suggestions = makeMemorySaveSuggestions({
+          sql: memberSql,
+          store,
+          requireSharing: () => Effect.void,
+          stableUuid: Service.memoryStableUuid,
+        });
+        yield* suggestions.onRefusedSave(
+          {
+            input: {
+              memorySpaceId: space,
+              memoryId: draft.memoryId,
+              operationId: draft.operationId,
+              expectedHeads: [],
+              scope: draft.revision.scope,
+              assertionKind: "inference",
+              baseBoundary: null,
+              payload: draft.payload,
+            },
+            thread: { environmentId: Member.local, threadId: M.ThreadId.make("synthetic-origin") },
+            reason: "thread_lineage_incomplete",
+            knownRevisions: [],
+            lineageComplete: false,
+            forgetGeneration: yield* suggestionForgetGeneration(space).pipe(
+              Effect.provideService(SqlClient.SqlClient, memberSql),
+            ),
+          },
+          Effect.void,
+        );
+        assert.lengthOf(yield* suggestions.listMetadata({ memorySpaceId: space }, Effect.void), 1);
+        assert.deepStrictEqual(
+          yield* service.acceptSuggestion(
+            { memorySpaceId: space, suggestionId: draft.memoryId },
+            Effect.void,
+          ),
+          { status: "pending" },
+        );
+        const inFlight = yield* Effect.forkScoped(sync.syncOnce);
+        yield* Deferred.await(found);
+        yield* service.forget(
+          {
+            memorySpaceId: space,
+            memoryId: source.memoryId,
+            operationId: M.MemoryOperationId.make(id(19000)),
+            expectedHeads: [source.revision.revisionId],
+          },
+          Effect.void,
+        );
+        yield* Deferred.succeed(resume, undefined);
+        yield* Fiber.join(inFlight);
+        assert.isFalse(pushed.some((op) => op.memoryId === draft.memoryId));
+        assert.deepStrictEqual(
+          yield* memberSql`SELECT 1 FROM memory_payloads WHERE space=${space} AND memory_id=${draft.memoryId}`,
+          [],
+        );
+        yield* sync.syncOnce;
+        assert.isTrue(pushed.some((op) => op.kind === "forget" && op.memoryId === source.memoryId));
+        yield* sync.shutdown;
+      });
+      const store = yield* Store.MemoryStore;
+      assert.isUndefined((yield* store.loadAggregate(space, newMemory(92).memoryId)).item);
+    }).pipe(checkUsage, Effect.provide(live), enabled),
+  );
+
+  it.effect.each([101, 1000])(
+    "a %s-source summary keeps a promotion only if its ordered closure fits",
+    (size) =>
+      Effect.gen(function* () {
+        yield* seed;
+        const hub = yield* Hub.MemoryHubService;
+        const service = yield* Service.MemoryService;
+        const store = yield* Store.MemoryStore;
+        const sql = yield* SqlClient.SqlClient;
+        yield* sql`CREATE TABLE orchestration_events(application_event_version INTEGER,aggregate_kind TEXT,stream_id TEXT,event_type TEXT,payload_json TEXT)`;
+        yield* hub.pull(advertise, principal());
+        yield* hub.pull({ ...advertise, environmentId: otherEnv }, principal(otherEnv));
+        const toInput = (op: ReturnType<typeof newMemory>): M.MemoryUpsertInput => ({
+          memorySpaceId: space,
+          memoryId: op.memoryId,
+          operationId: op.operationId,
+          scope: op.revision.scope,
+          assertionKind: op.revision.assertionKind,
+          expectedHeads: [],
+          payload: op.payload,
+          baseBoundary: null,
+        });
+        const sources = yield* Effect.forEach(
+          Array.from({ length: size }, (_, n) => newMemory(38000 + n)),
+          (source) => service.upsert(toInput(source), Effect.void),
+        );
+        const revisionIds = sources.flatMap(({ receipt }) =>
+          "revisionId" in receipt && receipt.revisionId ? [receipt.revisionId] : [],
+        );
+        assert.lengthOf(revisionIds, size);
+        const first = newMemory(38000);
+        const firstOp = yield* store.readWorkOperation(`sync:${space}:${first.operationId}`);
+        if (!firstOp || firstOp.kind !== "upsert") throw new Error("Expected a source operation");
+        yield* sql`UPDATE memory_outbox SET status='completed' WHERE space=${space} AND kind='sync'`;
+        const thread = {
+          environmentId: hubEnv,
+          threadId: M.ThreadId.make("synthetic-promoted-thread"),
+        };
+        yield* store.appendThreadLineage(thread, space, revisionIds);
+        const summary = newMemory(902);
+        const eventId = M.EventId.make(id(22000));
+        const sourceWatermark = { fromEventId: eventId, toEventId: eventId, throughSequence: 1 };
+        const selection = { instanceId: M.ProviderInstanceId.make("fixture"), model: "fixture" };
+        const messageId = M.MessageId.make("synthetic-evidence");
+        const input: M.GenerateMemorySummaryInput = {
+          cwd: "/synthetic",
+          sourceThread: thread,
+          sourceWatermark,
+          modelSelection: selection,
+          messages: [{ messageId, text: "Synthetic source words.", completed: true }],
+        };
+        const execution = {
+          requestedModelSelection: selection,
+          providerInstanceId: selection.instanceId,
+          environmentId: hubEnv,
+          effectiveProvider: M.ProviderDriverKind.make("codex"),
+          effectiveModel: selection.model,
+        };
+        const result = {
+          text: "A synthetic summary",
+          assertionKind: "fact" as const,
+          evidence: [
+            {
+              origin: "thread" as const,
+              sourceThread: thread,
+              watermark: sourceWatermark,
+              messageIds: [messageId],
+            },
+          ],
+        };
+        const work: Store.MemoryWork = {
+          id: "synthetic-summary-promotion",
+          space,
+          memoryId: summary.memoryId,
+          kind: "consolidate",
+          status: "pending",
+          claimedBy: null,
+          claimedUntil: null,
+          attempt: 0,
+          nextAttemptAt: 0,
+          payloadRef: null,
+          metadata: {
+            kind: "summary",
+            sourceThread: thread,
+            sourceWatermark,
+            memoryId: summary.memoryId,
+            operationId: summary.operationId,
+            revisionId: summary.revision.revisionId,
+            modelSelection: selection,
+          },
+        };
+        yield* service.queueSummary(work);
+        assert.isTrue(yield* store.claimWork(work.id, "synthetic-worker", 0, 10000));
+        const claimed = yield* store.readWork(work.id);
+        if (!claimed) throw new Error("Expected a claimed summary");
+        yield* service.commitSummary({
+          work: claimed,
+          input,
+          expectedHeads: [],
+          recheckSource: Effect.void,
+          generated: { execution, result },
+          promotions: {
+            input,
+            execution,
+            replace: true,
+            project: null,
+            candidates: { user: { ...result, text: "Synthetic promotion" }, project: null },
+          },
+        });
+        const promotionId = M.MemoryId.make(
+          Service.memoryStableUuid(`${thread.environmentId}:${thread.threadId}:promotion:user`),
+        );
+        const eligible = store.readEligibleOutbox(space, 0, 100);
+        assert.isUndefined((yield* store.loadAggregate(space, summary.memoryId)).item);
+        assert.isUndefined((yield* store.loadAggregate(space, promotionId)).item);
+        assert.isFalse((yield* eligible).some((row) => row.work.memoryId === promotionId));
+        const summaryOp = yield* store.readWorkOperation(`sync:${space}:${summary.operationId}`);
+        if (!summaryOp) throw new Error("Expected a staged summary");
+        assert.propertyVal(
+          (yield* hub.push({ ...pushInput(summaryOp), features }, principal())).receipts[0],
+          "outcome",
+          "accepted",
+        );
+        assert.propertyVal(
+          (yield* store.loadAggregate(space, summary.memoryId)).item,
+          "status",
+          "active",
+        );
+        assert.isUndefined((yield* store.loadAggregate(space, promotionId)).item);
+        const candidate = (yield* eligible).find((row) => row.work.memoryId === promotionId);
+        if (size === 1000) {
+          assert.isUndefined(candidate);
+          return;
+        }
+        assert.isDefined(candidate);
+        const promotion = candidate ? yield* store.readWorkOperation(candidate.work.id) : undefined;
+        if (!promotion || promotion.kind !== "upsert")
+          throw new Error("Expected a staged promotion");
+        assert.lengthOf(promotion.payload.derivedFromMemoryRevisions, 102);
+        assert.propertyVal(
+          (yield* hub.push({ ...pushInput(promotion), features }, principal())).receipts[0],
+          "outcome",
+          "accepted",
+        );
+        assert.propertyVal(
+          (yield* store.loadAggregate(space, promotionId)).item,
+          "status",
+          "active",
+        );
+        assert.propertyVal(
+          (yield* hub.push(
+            { ...pushInput(forget(firstOp)), features, environmentId: otherEnv },
+            principal(otherEnv),
+          )).receipts[0],
+          "outcome",
+          "deleted",
+        );
+        for (const memoryId of [summary.memoryId, promotionId])
+          assert.propertyVal(
+            (yield* store.loadAggregate(space, memoryId)).item,
+            "status",
+            "blocked",
+          );
       }).pipe(checkUsage, Effect.provide(live), enabled),
   );
 

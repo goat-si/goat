@@ -606,6 +606,7 @@ const make = Effect.fnUntraced(function* (
     admission: Store.MemoryAdmissionContext,
     permit: Permit,
     approval?: M.MemoryHubReceipt,
+    summaryPrerequisite?: M.MemoryRevisionId,
   ) {
     const digest = yield* Effect.try({ try: () => memoryOperationDigest(op), catch: invalid });
     return yield* store.transact(
@@ -685,7 +686,7 @@ const make = Effect.fnUntraced(function* (
             return yield* new Store.MemoryStoreConflict({ code: "hub_upgrade_required" });
           return yield* quota.withAdmission(
             { operation: op, admission, environmentId, receipt: decision.receipt },
-            Effect.andThen(permit, store.stageFloorWrite(op)).pipe(
+            Effect.andThen(permit, store.stageFloorWrite(op, summaryPrerequisite)).pipe(
               Effect.as({
                 operationDigest: digest,
                 receipt: { ...decision.receipt, revisionId: null, pendingSync: true },
@@ -1757,7 +1758,8 @@ const make = Effect.fnUntraced(function* (
     store,
     sql,
     environmentId,
-    apply,
+    apply: (operation, admission, permit, prerequisite) =>
+      apply(operation, admission, permit, undefined, prerequisite),
     validateDependencies: (space, payload) =>
       validateSummaryDependencies(space, payload).pipe(
         Effect.provideService(SqlClient.SqlClient, sql),
@@ -2067,7 +2069,10 @@ const make = Effect.fnUntraced(function* (
       if (
         M.isMemoryRevisionOperation(op) &&
         op.revision.provenance.originThreadId &&
-        op.revision.provenance.environmentId !== op.originEnvironmentId
+        (op.revision.provenance.environmentId !== op.originEnvironmentId ||
+          (current.identity && current.identity.creatingEnvironmentId !== op.originEnvironmentId) ||
+          (current.identity?.origin &&
+            current.identity.origin.threadId !== op.revision.provenance.originThreadId))
       )
         return yield* new M.MemoryHubError({ code: "identity_mismatch" });
       if (
@@ -2162,7 +2167,11 @@ const make = Effect.fnUntraced(function* (
         };
       } else if (input.resolutionRequest)
         return yield* new M.MemoryHubError({ code: "identity_mismatch" });
-      if (M.isMemoryRevisionOperation(op)) {
+      if (op.kind === "upsert" && op.closedLineage)
+        yield* validateSummaryDependencies(op.memorySpaceId, op.payload).pipe(
+          Effect.provideService(SqlClient.SqlClient, sql),
+        );
+      else if (M.isMemoryRevisionOperation(op)) {
         const normalized = yield* normalizeMemoryDependencies(
           op.memorySpaceId,
           op.payload,

@@ -308,6 +308,7 @@ export const fixture = (
   changing = false,
   environmentId = local,
   quotaLayer = quota,
+  wrapStore?: (store: Store.MemoryStore["Service"]) => Store.MemoryStore["Service"],
 ) => {
   const environmentIdentity =
     environmentId === local
@@ -341,7 +342,12 @@ export const fixture = (
     environmentIdentity,
     generation,
   ).pipe(Layer.provideMerge(Layer.merge(sharedSettings, committed)));
-  return Sync.layer.pipe(Layer.provideMerge(client.pipe(Layer.provideMerge(shared))));
+  const sync = wrapStore
+    ? Sync.layer.pipe(
+        Layer.provide(Layer.effect(Store.MemoryStore, Effect.map(Store.MemoryStore, wrapStore))),
+      )
+    : Sync.layer;
+  return sync.pipe(Layer.provideMerge(client.pipe(Layer.provideMerge(shared))));
 };
 export const ready = Effect.gen(function* () {
   const sql = yield* SqlClient.SqlClient;

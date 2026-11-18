@@ -175,9 +175,7 @@ export function useMemoryEditSession({
     },
     editorEvents: {
       edited: edited !== "no",
-      // An untouched editor shows the body, so it is masked like the read-only view during a reread.
-      masked:
-        own !== "save" && (gap === "changed" || (own === "pending" && !item)) && edited === "no",
+      masked: gap === "changed" || (own === "pending" && !item && edited === "no"),
       onTextChange: (text: string) =>
         setEdited((previous) =>
           previous === "kept" || item?.status !== "active"
@@ -253,7 +251,7 @@ export function MemoryEditor({
   scopeLabel?: string;
   /** An existing memory can be saved only once the draft differs from it. */
   edited?: boolean;
-  /** Hides the text while a reread decides whether an untouched edit still stands. */
+  /** Hides and disables the draft during a reread. */
   masked?: boolean;
   onTextChange?: (text: string) => void;
   onSaveStart?: () => void;
@@ -310,12 +308,13 @@ export function MemoryEditor({
       className="space-y-3"
       onSubmit={async (event) => {
         event.preventDefault();
+        const current = registry.get(draft);
         if (
           busy ||
           needsReview ||
           masked ||
           !edited ||
-          !text?.trim() ||
+          !current?.trim() ||
           !registry.get(memoryEnvironment.upsert.permissionAtom(environmentId))
         )
           return;
@@ -334,7 +333,7 @@ export function MemoryEditor({
             scope: start?.scope ?? scope,
             assertionKind: start?.assertionKind ?? "fact",
             payload: {
-              text,
+              text: current,
               evidence: start?.evidence ?? [{ origin: "user", messageIds: [] }],
               derivedFromMemoryRevisions: start?.derivedFromMemoryRevisions ?? [],
             },

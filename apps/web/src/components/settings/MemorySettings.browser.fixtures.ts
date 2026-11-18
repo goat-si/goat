@@ -108,7 +108,7 @@ export async function exerciseMemoryMove({
     withDetails: boolean,
     followNavigation: boolean,
     originFilter: boolean,
-    scopeMoves: boolean,
+    capabilities: { protocolVersion: 1; scopeMoves: true },
   ) => Promise<{ render: () => Promise<void> }>;
   click: (label: string) => Promise<void>;
   chooseOption: (label: string, value: string, section?: string) => Promise<void>;
@@ -125,7 +125,10 @@ export async function exerciseMemoryMove({
     state.queries.set("list", Option.some({ items: [], projectionWatermark: 2, nextCursor: null }));
     return success({ outcome: "accepted", pendingSync: false });
   });
-  const { render } = await supportedScreen(true, false, false, true);
+  const { render } = await supportedScreen(true, false, false, {
+    protocolVersion: 1,
+    scopeMoves: true,
+  });
   expect(
     [...container.querySelectorAll("button")].some((button) => button.textContent === "Open"),
   ).toBe(true);

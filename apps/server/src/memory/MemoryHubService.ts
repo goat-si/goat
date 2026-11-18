@@ -1,4 +1,5 @@
 import { prepareJoinRetention } from "./MemoryJoinRetention.ts";
+import { projectPushReceipt } from "./MemoryTailAdmission.ts";
 import { MemoryHubSettingsSnapshot } from "./MemoryHubSettings.ts";
 // @effect-diagnostics-next-line nodeBuiltinImport:off -- server-owned checkpoint identifiers.
 import * as NodeCrypto from "node:crypto";
@@ -18,13 +19,11 @@ import { MemoryFloor2Enabled } from "./MemoryFloor.ts";
 import * as Store from "./MemoryStore.ts";
 import * as Service from "./MemoryService.ts";
 import * as Quota from "./MemoryQuotaService.ts";
-
 export type MemoryHubServiceError =
   | Service.MemoryServiceError
   | M.MemoryHubError
   | M.MemoryHubUnauthorizedError
   | M.MemoryHubForbiddenError;
-
 /** The settings owner supplies a live read; it is repeated after the SQL lock. */
 export class MemoryHubConfiguration extends Context.Service<
   MemoryHubConfiguration,
@@ -194,7 +193,7 @@ export const make = Effect.gen(function* () {
           .admitHubOperation({ authority: authority(principal, request), operation })
           .pipe(Effect.tap(() => activity.notify)),
       );
-      return { receipts };
+      return { receipts: receipts.map((receipt) => projectPushReceipt(receipt, request.features)) };
     },
   );
   const pull: MemoryHubService["Service"]["pull"] = Effect.fn("MemoryHubService.pull")(
@@ -306,7 +305,10 @@ export const make = Effect.gen(function* () {
         operation: request.operation,
         resolutionRequest: request,
       })
-      .pipe(Effect.tap(() => activity.notify));
+      .pipe(
+        Effect.tap(() => activity.notify),
+        Effect.map((receipt) => projectPushReceipt(receipt, request.features)),
+      );
   });
   const requestSourceRead: MemoryHubService["Service"]["requestSourceRead"] = Effect.fn(
     "MemoryHubService.requestSourceRead",
@@ -994,5 +996,4 @@ export const makeAdministrator = Effect.gen(function* () {
   );
   return MemoryHubAdministrator.of({ update, pending, initializeDefaultHub });
 });
-
 export const administratorLayer = Layer.effect(MemoryHubAdministrator, makeAdministrator);

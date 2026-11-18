@@ -69,6 +69,19 @@ const held = (reason: "scanner_pending" | "secret_detected") =>
       cleanupPending: false,
     },
   });
+const heldForForget = decodeItem({
+  memorySpaceId: nativeSpace,
+  memoryId: nativeId,
+  status: "blocked",
+  scope: nativeItem.scope,
+  failureCode: "forget_pending",
+  pendingSync: false,
+  localAvailability: {
+    ...nativeItem.localAvailability,
+    exposure: "held",
+    reasons: ["forget_pending"],
+  },
+});
 const savedByThisPhone = decodeItem({
   ...nativeItem,
   revision: {
@@ -105,6 +118,10 @@ async function openEditor(typed?: string) {
 const field = () =>
   view.container.querySelector<HTMLInputElement>('input[aria-label="Memory text"]');
 const text = () => view.container.textContent ?? "";
+const saveButton = () =>
+  Array.from(view.container.querySelectorAll("button")).find(
+    (button) => button.textContent === "Save memory",
+  );
 const target = {
   environmentId: nativeEnv,
   input: { memorySpaceId: nativeSpace, memoryId: nativeId },
@@ -215,7 +232,7 @@ it("an untouched edit closes without a line when the hub re-scans its version (#
   expect(text()).not.toContain(CLOSED_LINE);
 });
 
-it("while a reread is pending an untouched edit hides its text and an edited one keeps it visible (#3601)", async () => {
+it("masks both untouched and edited text until the same visible revision is confirmed (#3601)", async () => {
   await openEditor();
   const reread = await changeSignal();
   expect(field()?.value).toBe("");
@@ -226,9 +243,34 @@ it("while a reread is pending an untouched edit hides its text and an edited one
   });
   await answered();
   expect(field()?.value).toBe("Synthetic memory body");
-  await view.type("Memory text", "Typed before the next change");
-  await changeSignal();
-  expect(field()?.value).toBe("Typed before the next change");
+
+  await view.type("Memory text", "Synthetic memory body!");
+  const dirtyReread = await changeSignal("invalidate");
+  expect(field()?.value).toBe("");
+  expect(field()?.disabled).toBe(true);
+  expect(saveButton()?.disabled).toBe(true);
+  await act(async () => {
+    await dirtyReread.succeed(nativeItem);
+  });
+  await answered();
+  expect(field()?.value).toBe("Synthetic memory body!");
+  expect(saveButton()?.disabled).toBe(false);
+});
+
+it("masks and then discards an edited copy when a pending forget holds the memory", async () => {
+  await openEditor("Synthetic memory body!");
+  const reread = await changeSignal("invalidate");
+  expect(field()?.value).toBe("");
+  expect(field()?.disabled).toBe(true);
+  expect(saveButton()?.disabled).toBe(true);
+  expect(text()).not.toContain("Synthetic memory body");
+  await act(async () => {
+    await reread.succeed(heldForForget);
+  });
+  await answered();
+  expect(field()).toBeNull();
+  expect(text()).not.toContain("Synthetic memory body");
+  expect(text()).toContain(CLOSED_LINE);
 });
 
 it.each([
@@ -327,12 +369,12 @@ it.each([
   ["refused", true],
   ["failed", true],
 ] as const)(
-  "guard: a hold during a save shows the typing only until its reread settles, then the %s reply closes the editor (#3601)",
+  "guard: a hold during a save hides the typing immediately, then the %s reply closes the editor (#3601)",
   async (outcome, closedLine) => {
     await openEditor("Typed before the hold");
     const { save, input } = await saveHeld();
     const reread = await changeSignal("invalidate");
-    expect(field()?.value).toBe("Typed before the hold");
+    expect(field()?.value).toBe("");
     expect(field()?.disabled).toBe(true);
     await act(async () => {
       await reread.succeed(held("secret_detected"));
@@ -378,7 +420,7 @@ it.each(["refused", "failed"] as const)(
     });
     expect(field()?.value).toBe("Typed before the save was turned down");
     const reread = await changeSignal("invalidate");
-    expect(field()?.value).toBe("Typed before the save was turned down");
+    expect(field()?.value).toBe("");
     await act(async () => {
       await reread.succeed(held("secret_detected"));
     });

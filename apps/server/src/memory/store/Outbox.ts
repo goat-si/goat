@@ -1,3 +1,4 @@
+import { discardFloorPromotions, promotionPrerequisiteReady } from "./FloorWrites.ts";
 import * as M from "@goat/contracts";
 import * as NodeSqliteClient from "@goat/shared/nodeSqliteClient";
 import * as Effect from "effect/Effect";
@@ -56,6 +57,7 @@ export const makeOutbox = (
       SELECT o.* FROM memory_outbox o LEFT JOIN memory_events e ON e.memory_space_id=o.space AND e.operation_id=json_extract(o.metadata_json,'$.operationId')
       WHERE o.space=${space} AND o.kind IN ('sync','revert_intent')
       AND (o.status IN ('pending','retry') OR (o.status='running' AND o.claimed_until<=${now})) AND o.next_attempt_at<=${now}
+      AND ${promotionPrerequisiteReady(sql, "o")}
       AND NOT EXISTS (
         SELECT 1 FROM memory_payloads p CROSS JOIN json_each(p.dependencies_json) dep
         CROSS JOIN memory_revisions r ON r.space=o.space AND r.revision_id=dep.value
@@ -191,6 +193,13 @@ export const makeOutbox = (
             result,
             work.metadata.revision?.revisionId ?? null,
           );
+        if (
+          result.outcome === "rejected" &&
+          "authorityFirst" in work.metadata &&
+          work.metadata.authorityFirst &&
+          work.metadata.revision
+        )
+          yield* discardFloorPromotions(sql, work.space, work.metadata.revision.revisionId);
         yield* finishWork(id, result.outcome === "rejected" ? "failed" : "completed", result);
         if (
           result.outcome === "rejected" &&

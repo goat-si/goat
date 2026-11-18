@@ -420,7 +420,6 @@ export const MemoryRevision = struct({
   ),
 );
 export type MemoryRevision = typeof MemoryRevision.Type;
-
 export const MemoryTombstone = struct({
   memorySpaceId: MemorySpaceId,
   memoryId: MemoryId,
@@ -508,6 +507,7 @@ export const MemoryOperation = bounded(
       ...envelope,
       ...floorOperation,
       kind: Schema.Literal("upsert"),
+      closedLineage: Schema.optionalKey(Schema.Literal(true)),
       revision: MemoryRevision,
       payload: MemoryPayload,
     }),
@@ -1695,27 +1695,30 @@ export const MemorySyncStatusInput = Schema.Union([
   }),
 ]);
 export type MemorySyncStatusInput = typeof MemorySyncStatusInput.Type;
-
-export const MemoryUpsertInput = struct({
+const mutation = {
   ...space,
   operationId: MemoryOperationId,
   memoryId: MemoryId,
   expectedHeads: heads,
+};
+const detailedFailure = { includeFailureDetails: Schema.optionalKey(Schema.Literal(true)) };
+const upsertInput = {
+  ...mutation,
   scope: MemoryScope,
   assertionKind: MemoryAssertionKind,
   payload: MemoryPayload,
   baseBoundary: Schema.NullOr(MemoryCausalBoundary),
-}).check(Schema.makeFilter((v) => assertionValid(v.assertionKind, v.payload.evidence)));
+};
+export const MemoryUpsertInput = struct(upsertInput).check(
+  Schema.makeFilter((v) => assertionValid(v.assertionKind, v.payload.evidence)),
+);
 export type MemoryUpsertInput = typeof MemoryUpsertInput.Type;
-
-export const MemoryForgetInput = struct({
-  ...space,
-  operationId: MemoryOperationId,
-  memoryId: MemoryId,
-  expectedHeads: heads,
-});
+export const MemoryForgetInput = struct(mutation);
 export type MemoryForgetInput = typeof MemoryForgetInput.Type;
-
+export const MemoryUpsertRpcInput = struct({ ...upsertInput, ...detailedFailure }).check(
+  Schema.makeFilter((v) => assertionValid(v.assertionKind, v.payload.evidence)),
+);
+export const MemoryForgetRpcInput = struct({ ...mutation, ...detailedFailure });
 export const MemoryRevertResolutionInput = struct({
   ...space,
   operationId: MemoryOperationId,
@@ -1725,7 +1728,6 @@ export const MemoryRevertResolutionInput = struct({
   expectedHeads: heads.check(Schema.makeFilter((vs) => vs.length === 1)),
 });
 export type MemoryRevertResolutionInput = typeof MemoryRevertResolutionInput.Type;
-
 export const MemoryReadSourceInput = struct({
   ...space,
   ...paging,
@@ -1992,7 +1994,6 @@ export type MemoryProjectBinding = typeof MemoryProjectBinding.Type;
 
 export const MemoryProjectBindingGetInput = struct({ ...space, project: ScopedProjectRef });
 export type MemoryProjectBindingGetInput = typeof MemoryProjectBindingGetInput.Type;
-
 export const MemoryProjectBindingUpdateInput = Schema.Union([
   struct({
     ...space,
@@ -2464,7 +2465,6 @@ export const MemoryCompactReceipt = struct({
 export type MemoryCompactReceipt = typeof MemoryCompactReceipt.Type;
 
 const encodeHubReceiptIntegrity = Schema.encodeSync(Schema.fromJsonString(MemoryHubReceipt));
-
 export const MemoryHubEntry = Schema.Union([
   struct({
     kind: Schema.Literal("operation"),
@@ -2522,9 +2522,13 @@ export const MemoryIdentityRecord = struct({
   creatingEnvironmentId: EnvironmentId,
   createOperationId: MemoryOperationId,
   createdAtUtc: MemoryUtcTimestamp,
-});
+  origin: Schema.optionalKey(ScopedThreadRef),
+}).check(
+  Schema.makeFilter(
+    (v) => v.origin === undefined || v.origin.environmentId === v.creatingEnvironmentId,
+  ),
+);
 export type MemoryIdentityRecord = typeof MemoryIdentityRecord.Type;
-
 export const MemoryFenceRecord = struct({
   memorySpaceId: MemorySpaceId,
   memoryId: MemoryId,
@@ -2540,7 +2544,6 @@ export const MemoryFenceRecord = struct({
   ),
 );
 export type MemoryFenceRecord = typeof MemoryFenceRecord.Type;
-
 export const MemorySuppressionRecord = Schema.Union([
   struct({
     memorySpaceId: MemorySpaceId,

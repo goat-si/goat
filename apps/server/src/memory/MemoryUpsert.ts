@@ -16,7 +16,11 @@ import {
   requireClosureCapacity,
   validateSummaryDependencies,
 } from "./MemoryDependencies.ts";
-import { areAutomaticallyUsable, recordMemoryOrigin } from "./MemoryRevisionMarks.ts";
+import {
+  areAutomaticallyUsable,
+  readMemoryOrigin,
+  recordMemoryOrigin,
+} from "./MemoryRevisionMarks.ts";
 import { matchesActivePersonWords } from "./MemoryPersonWords.ts";
 import { redactMemoryText } from "./MemorySecretScanner.ts";
 import type { MemoryAccessError, MemoryServiceError } from "./MemoryService.ts";
@@ -282,7 +286,11 @@ export const makeUpsert = (deps: {
         if ((marked || acceptance) && limit === M.MEMORY_DERIVED_REVISIONS_MAX_V1)
           return yield* requireUpgrade(space);
         const origin = current?.identity
-          ? undefined
+          ? limit === M.MEMORY_DERIVED_REVISIONS_MAX &&
+            current.identity.creatingEnvironmentId === environmentId &&
+            !current.identity.origin
+            ? yield* readMemoryOrigin(space, value.memoryId)
+            : undefined
           : (acceptance?.origin ?? (remember ? sourceThread : undefined));
         const wide = payload.derivedFromMemoryRevisions.length > M.MEMORY_DERIVED_REVISIONS_MAX_V1;
         const forgetFence =
@@ -293,6 +301,7 @@ export const makeUpsert = (deps: {
           protocolVersion: 1,
           kind: "upsert",
           ...(forgetFence === undefined ? {} : { forgetFence }),
+          ...(wide || acceptance ? { closedLineage: true as const } : {}),
           memorySpaceId: value.memorySpaceId,
           memoryId: value.memoryId,
           operationId: value.operationId,
@@ -312,7 +321,7 @@ export const makeUpsert = (deps: {
               environmentId,
               upsertRequestDigest: requestDigest,
               ...(marked ? { unverified: true as const } : {}),
-              ...(origin && (marked || wide || acceptance)
+              ...(origin && limit === M.MEMORY_DERIVED_REVISIONS_MAX
                 ? { originThreadId: origin.threadId }
                 : {}),
             },
@@ -344,9 +353,11 @@ export const makeUpsert = (deps: {
       "pendingSync" in result.receipt &&
       result.receipt.pendingSync &&
       result.receipt.revisionId === null;
+    let stagedOperationId: M.MemoryOperationId | undefined;
     return yield* Effect.gen(function* () {
       const staged = yield* stage;
       if (!deps.submitFloorWrite || !waiting(staged)) return staged;
+      stagedOperationId = input.operationId;
       yield* permit;
       yield* deps.submitFloorWrite;
       const settled = yield* stage;
@@ -366,7 +377,14 @@ export const makeUpsert = (deps: {
             code === "hub_unavailable" ||
             code === "source_invalidated"
           )
-            return deps.onRefusedSave({ ...candidate, reason: code }, permit);
+            return deps.onRefusedSave(
+              {
+                ...candidate,
+                reason: code,
+                ...(code === "hub_unavailable" && stagedOperationId ? { stagedOperationId } : {}),
+              },
+              permit,
+            );
         }
         return Effect.void;
       }),

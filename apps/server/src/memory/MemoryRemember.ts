@@ -35,6 +35,7 @@ export class MemoryRefusedSaveHook extends Context.Service<
         readonly knownRevisions: ReadonlyArray<M.MemoryRevisionId>;
         readonly lineageComplete: boolean;
         readonly forgetGeneration: number;
+        readonly stagedOperationId?: M.MemoryOperationId;
       },
       permit: Effect.Effect<void, MemoryAccessError>,
     ) => Effect.Effect<void, MemoryServiceError>;

@@ -292,9 +292,7 @@ export function WebMemorySuggestions({
       else if (result.value.status === "refused")
         setNotice(result.value.reason.replaceAll("_", " "));
       else {
-        setNotice(
-          result.value.status === "pending" ? "Waiting for the memory hub" : "Memory saved",
-        );
+        if (result.value.status === "accepted") setNotice("Memory saved");
         onSaved();
       }
     } else if ((await dismiss(target))._tag !== "Success")

@@ -686,7 +686,12 @@ export const makeCoreReads = (kernel: Pick<StoreKernel, "sql" | "transact">) => 
     );
     const work = (yield* workRows(rows))[0];
     if (!work || !("protocolVersion" in work.metadata)) return undefined;
-    const { authorityFirst: _authorityFirst, ...metadata } = work.metadata;
+    const {
+      authorityFirst: _authority,
+      acceptanceGeneration: _acceptance,
+      summaryPrerequisite: _summary,
+      ...metadata
+    } = work.metadata;
     return yield* operationFromMetadata(metadata);
   });
   return {

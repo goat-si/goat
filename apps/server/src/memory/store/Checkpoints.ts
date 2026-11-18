@@ -1,5 +1,5 @@
 import { rewriteMemoryScope } from "./ScopeMoves.ts";
-import { persistRevisionMarks } from "../MemoryRevisionMarks.ts";
+import { persistRevisionMarks, recordMemoryOrigin } from "../MemoryRevisionMarks.ts";
 import * as SqlClient from "effect/sql/SqlClient";
 import * as M from "@goat/contracts";
 import * as Effect from "effect/Effect";
@@ -190,6 +190,12 @@ export const makeCheckpoints = (
         const stale = new Set<M.MemoryId>();
         for (const page of pages)
           for (const identity of page.identities) {
+            if (identity.origin)
+              yield* recordMemoryOrigin(
+                input.memorySpaceId,
+                identity.memoryId,
+                identity.origin,
+              ).pipe(Effect.provideService(SqlClient.SqlClient, sql));
             const [previous] = yield* stored(
               "checkpoint-scope-version",
               sql<{ scope_version: number; identity_json: string }>`

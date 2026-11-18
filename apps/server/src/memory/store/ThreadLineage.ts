@@ -10,8 +10,9 @@ export interface ThreadLineage {
   readonly revisions: readonly M.MemoryRevisionId[];
 }
 
-// Bounds the walk over app-owned task results.
 const MAX_TASK_RESULT_SOURCES = 100;
+const TASK_RESULT_PAGE_SIZE = 32;
+const TASK_RESULT_SCAN_BUDGET = 256;
 const limit = M.MEMORY_THREAD_LINEAGE_MAX;
 const encodeRevisions = Schema.encodeSync(Schema.fromJsonString(Schema.Array(M.MemoryRevisionId)));
 
@@ -58,31 +59,39 @@ export const makeThreadLineage = ({ sql, transact }: Pick<StoreKernel, "sql" | "
     );
     return unknown.length > 0;
   });
-  const taskResultSources = (threadId: M.ThreadId) =>
-    stored(
+  const taskResultSources = (threadId: M.ThreadId, after: number | undefined, pageSize: number) => {
+    const lowerBound = after === undefined ? sql`` : sql`AND t.rowid>${after}`;
+    return stored(
       "thread-lineage-results",
-      sql<{ source: string | null; linked: number }>`
-      SELECT DISTINCT json_extract(t.payload_json,'$.sourceThreadId') AS source,
+      sql<{ cursor: number; source: string | null; linked: number }>`
+      WITH page AS MATERIALIZED (
+        SELECT t.rowid AS cursor, json_extract(t.payload_json,'$.sourceThreadId') AS source
+        FROM orchestration_events t
+        WHERE t.application_event_version=2 AND t.aggregate_kind='thread' AND t.stream_id=${threadId}
+        ${lowerBound}
+        AND t.event_type IN ('context-transfer.created','context-transfer.updated')
+        AND json_extract(t.payload_json,'$.type')='subagent_result'
+        AND json_extract(t.payload_json,'$.targetThreadId')=${threadId}
+        AND json_extract(t.payload_json,'$.sourceThreadId') IS NOT ${threadId}
+        ORDER BY t.rowid LIMIT ${pageSize}
+      )
+      SELECT cursor,source,
         (EXISTS(SELECT 1 FROM orchestration_events s
           WHERE s.application_event_version=2 AND s.aggregate_kind='thread' AND s.stream_id=${threadId}
           AND s.event_type='subagent.updated' AND json_extract(s.payload_json,'$.origin')='app_owned'
-          AND json_extract(s.payload_json,'$.childThreadId')=json_extract(t.payload_json,'$.sourceThreadId'))
+          AND json_extract(s.payload_json,'$.childThreadId')=page.source)
         AND EXISTS(SELECT 1 FROM orchestration_events c
           WHERE c.application_event_version=2 AND c.aggregate_kind='thread'
-          AND c.stream_id=json_extract(t.payload_json,'$.sourceThreadId') AND c.event_type='thread.created'
+          AND c.stream_id=page.source AND c.event_type='thread.created'
           AND json_extract(c.payload_json,'$.lineage.parentThreadId')=${threadId}
           AND json_extract(c.payload_json,'$.lineage.relationshipToParent')='subagent'
           AND json_extract(c.payload_json,'$.creationSource') IS NOT 'provider')
         AND NOT EXISTS(SELECT 1 FROM orchestration_events d
           WHERE d.application_event_version=2 AND d.aggregate_kind='thread'
-          AND d.stream_id=json_extract(t.payload_json,'$.sourceThreadId') AND d.event_type='thread.deleted')) AS linked
-      FROM orchestration_events t
-      WHERE t.application_event_version=2 AND t.aggregate_kind='thread' AND t.stream_id=${threadId}
-      AND t.event_type IN ('context-transfer.created','context-transfer.updated')
-      AND json_extract(t.payload_json,'$.type')='subagent_result'
-      AND json_extract(t.payload_json,'$.targetThreadId')=${threadId}
-      AND json_extract(t.payload_json,'$.sourceThreadId') IS NOT ${threadId}`,
+          AND d.stream_id=page.source AND d.event_type='thread.deleted')) AS linked
+      FROM page ORDER BY cursor`,
     );
+  };
   const collect = Effect.fn("ThreadLineage.collect")(function* (
     thread: M.ScopedThreadRef,
     space: M.MemorySpaceId,
@@ -98,26 +107,40 @@ export const makeThreadLineage = ({ sql, transact }: Pick<StoreKernel, "sql" | "
     let state: ThreadLineage["state"] = (yield* hasUnknownOrigin(thread)) ? "unknown" : own.state;
     const visited = new Set<string>([thread.threadId]);
     const pending = [thread.threadId];
+    let remaining = TASK_RESULT_SCAN_BUDGET;
     for (let next = pending.shift(); next !== undefined; next = pending.shift()) {
-      for (const { source, linked } of yield* taskResultSources(next)) {
-        if (!source || !linked || visited.has(source)) {
-          state = "unknown";
-          continue;
+      const seenResults = new Set<string | null>();
+      let cursor: number | undefined;
+      while (true) {
+        const pageSize = Math.min(TASK_RESULT_PAGE_SIZE, remaining + 1);
+        const rows = yield* taskResultSources(next, cursor, pageSize);
+        for (const row of rows) {
+          if (remaining === 0) return result(state === "unknown" ? state : "overflow");
+          remaining--;
+          cursor = row.cursor;
+          const { source, linked } = row;
+          if (seenResults.has(source)) continue;
+          seenResults.add(source);
+          if (!source || !linked || visited.has(source)) {
+            state = "unknown";
+            continue;
+          }
+          visited.add(source);
+          if (visited.size > MAX_TASK_RESULT_SOURCES + 1)
+            return result(state === "unknown" ? state : "overflow");
+          const child = { ...thread, threadId: M.ThreadId.make(source) };
+          const lineage = yield* readOwnLineage(child);
+          if (lineage.space !== undefined && lineage.space !== space) {
+            state = "unknown";
+            continue;
+          }
+          for (const revision of lineage.revisions) revisions.add(revision);
+          if (revisions.size > limit) return result(state === "unknown" ? state : "overflow");
+          if ((yield* hasUnknownOrigin(child)) || lineage.state === "unknown") state = "unknown";
+          else if (state === "tracked" && lineage.state === "overflow") state = "overflow";
+          pending.push(child.threadId);
         }
-        visited.add(source);
-        if (visited.size > MAX_TASK_RESULT_SOURCES + 1)
-          return result(state === "unknown" ? state : "overflow");
-        const child = { ...thread, threadId: M.ThreadId.make(source) };
-        const lineage = yield* readOwnLineage(child);
-        if (lineage.space !== undefined && lineage.space !== space) {
-          state = "unknown";
-          continue;
-        }
-        for (const revision of lineage.revisions) revisions.add(revision);
-        if (revisions.size > limit) return result(state === "unknown" ? state : "overflow");
-        if ((yield* hasUnknownOrigin(child)) || lineage.state === "unknown") state = "unknown";
-        else if (state === "tracked" && lineage.state === "overflow") state = "overflow";
-        pending.push(child.threadId);
+        if (rows.length < pageSize) break;
       }
     }
     return result(state);
