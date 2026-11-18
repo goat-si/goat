@@ -192,7 +192,7 @@ export function makeWorktreePreflight({
       if (yield* git.hasRefNamed({ cwd, refName: baseRef })) return undefined;
       return yield* git.hasCommit({ cwd, refName: "HEAD" });
     }).pipe(Effect.orElseSucceed(() => undefined));
-    if (unresolved !== undefined)
+    if (unresolved === true)
       return yield* new ThreadLaunchBaseRefError({
         projectId: project.id,
         projectTitle: project.title,

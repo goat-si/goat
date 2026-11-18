@@ -108,3 +108,19 @@ it.effect("leaves a new branch name to the launch", () =>
     }).pipe(Effect.provide(harness.layer));
   }),
 );
+
+it.effect("allows worktree preparation when the repository has an unborn HEAD", () =>
+  Effect.gen(function* () {
+    const harness = makeHarness({
+      hasCommit: () => Effect.succeed(false),
+      git: { hasRefNamed: () => Effect.succeed(false) },
+    });
+    yield* Effect.gen(function* () {
+      const launches = yield* ThreadLaunch.ThreadLaunchService;
+      yield* launches.checkWorktreeBase({
+        projectId,
+        workspaceStrategy: { type: "worktree", baseRef: "HEAD" },
+      });
+    }).pipe(Effect.provide(harness.layer));
+  }),
+);
