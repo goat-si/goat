@@ -16,6 +16,7 @@ import * as McpProviderSessions from "@goat/provider-core/server/McpProviderSess
 import * as ProviderAdapter from "@goat/provider-core/server/ProviderAdapter";
 import * as TestProviderHost from "@goat/provider-testing/TestProviderHost";
 import * as DateTime from "effect/DateTime";
+import * as Deferred from "effect/Deferred";
 import * as Effect from "effect/Effect";
 import * as FileSystem from "effect/FileSystem";
 import * as Fiber from "effect/Fiber";
@@ -41,7 +42,10 @@ const stdout = (data: string): InteractionUpdate => ({
 });
 
 /** Opens a Cursor session whose run emits the updates on its own fiber, as the SDK does. */
-const startShellTurn = (updates: ReadonlyArray<InteractionUpdate>) =>
+const startShellTurn = (
+  updates: ReadonlyArray<InteractionUpdate>,
+  blockedOffer?: { readonly index: number; readonly reached: Deferred.Deferred<boolean> },
+) =>
   Effect.gen(function* () {
     const fileSystem = yield* FileSystem.FileSystem;
     const workspace = yield* fileSystem.makeTempDirectoryScoped({ prefix: "cursor-output-gate-" });
@@ -70,7 +74,18 @@ const startShellTurn = (updates: ReadonlyArray<InteractionUpdate>) =>
               Effect.gen(function* () {
                 const emitting = yield* Effect.forEach(
                   updates,
-                  (update) => input.onDelta?.(update).pipe(Effect.orDie) ?? Effect.void,
+                  (update, index) => {
+                    const emit = input.onDelta?.(update).pipe(Effect.orDie) ?? Effect.void;
+                    if (index !== blockedOffer?.index) return emit;
+                    return Effect.gen(function* () {
+                      const offer = yield* emit.pipe(Effect.forkChild({ startImmediately: true }));
+                      yield* Deferred.succeed(
+                        blockedOffer.reached,
+                        offer.pollUnsafe() === undefined,
+                      );
+                      yield* Fiber.join(offer);
+                    });
+                  },
                   { discard: true },
                 ).pipe(Effect.forkDetach);
                 return {
@@ -186,16 +201,18 @@ it.effect("keeps the last 256 KiB of streamed shell output when the result carri
 it.effect("Stop ends the turn while live output fills the gate and nothing reads the events", () =>
   Effect.gen(function* () {
     const chunk = "x".repeat(256 * 1024);
-    const { runtime, providerThread } = yield* startShellTurn([
-      started,
-      ...Array.from({ length: 20 }, () => stdout(chunk)),
-    ]);
+    const reached = yield* Deferred.make<boolean>();
+    const { runtime, providerThread } = yield* startShellTurn(
+      [started, ...Array.from({ length: 20 }, () => stdout(chunk))],
+      { index: 17, reached },
+    );
     const before = yield* runtime.events.pipe(
       Stream.takeUntil((event) => event.type === "provider_turn.updated"),
       Stream.runCollect,
     );
     const running = Array.from(before).at(-1);
     if (running?.type !== "provider_turn.updated") return assert.fail("no running turn");
+    assert.isTrue(yield* Deferred.await(reached), "the next output delta must be blocked");
     yield* runtime.interruptTurn({ providerThread, providerTurnId: running.providerTurn.id });
     const after = Array.from(
       yield* runtime.events.pipe(
@@ -204,7 +221,7 @@ it.effect("Stop ends the turn while live output fills the gate and nothing reads
       ),
     );
     const deltas = after.filter((event) => event.type === "command_output.delta");
-    assert.isBelow(deltas.length, 20);
+    assert.equal(deltas.length, 16);
     assert.equal(after.at(-1)?.type, "turn.terminal");
   }).pipe(Effect.scoped, Effect.provide(layer)),
 );
