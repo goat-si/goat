@@ -44,6 +44,7 @@ const state = vi.hoisted(() => ({
   navigate: vi.fn(),
   responses: new Map<string, unknown>(),
   executors: new Map<string, (input: unknown) => Promise<unknown>>(),
+  shellStatus: "live",
   projects: [] as { id: string; environmentId: string; title: string; repositoryIdentity?: null }[],
   threads: [] as { id: string; environmentId: string; title: string }[],
   threadReads: vi.fn(),
@@ -182,6 +183,10 @@ vi.mock("../../state/memory", async () => {
     },
   };
 });
+vi.mock("../../state/shell", async (original) => ({
+  ...(await original<typeof import("../../state/shell")>()),
+  useEnvironmentShellStatus: () => (useFixtureVersion(), state.shellStatus),
+}));
 vi.mock("../../state/entities", () => ({
   useProjects: () => {
     useFixtureVersion();
@@ -417,7 +422,7 @@ beforeEach(() => {
   window.localStorage.clear();
   state.navigate.mockReset();
   state.threadReads.mockClear();
-  state.projects = [];
+  state.shellStatus = "live";
   state.threads = [];
   state.agentAccess = true;
   state.memoryEnabled = true;
@@ -701,6 +706,12 @@ async function click(label: string) {
   );
   expect(button).toBeDefined();
   await act(async () => button!.click());
+}
+async function enterText(field: HTMLInputElement | HTMLTextAreaElement, value: string) {
+  await act(() => {
+    Object.getOwnPropertyDescriptor(Object.getPrototypeOf(field), "value")!.set!.call(field, value);
+    field.dispatchEvent(new Event("input", { bubbles: true }));
+  });
 }
 // Settings renders the import and browse scope pickers under one name, so callers pass the section.
 function namedSelect(name: string, section = "") {
@@ -1630,12 +1641,22 @@ it.each([false, true])(
   },
 );
 
-it("keeps saved memories readable while memory is off and blocks saving and editing", async () => {
-  const { render } = await supportedScreen();
+it("keeps editing during Sharing refresh and closes when memory is disabled", async () => {
+  await supportedScreen();
   await click("Edit");
-  state.responses.set("syncStatus", success({ state: "disabled", memorySpaceId: null }));
-  await act(async () => window.dispatchEvent(new Event("focus")));
-  await render();
+  const editor = container.querySelector("textarea")!;
+  await enterText(editor, "Typed during Sharing refresh");
+  const pending = await deferredResult();
+  state.responses.set("syncStatus", pending.promise);
+  state.responses.set(
+    "hubSettingsUpdate",
+    success({ view: { version: 3, settings: { mode: "disabled" } }, credential: null }),
+  );
+  await click("Turn sharing off");
+  await click("Stop sharing");
+  expect(container.querySelector("textarea")).toBe(editor);
+  expect(editor.value).toBe("Typed during Sharing refresh");
+  await act(() => pending.resolve(success({ state: "disabled", memorySpaceId: null })));
   expect(container.textContent).toContain(
     "Saved memories stay. Turn on memory to save new memories.",
   );
@@ -1791,13 +1812,7 @@ it("browses, searches and creates in an explicitly bound project, then returns t
   });
   expect(state.requests.at(-1)).toMatchObject({ label: "list", input: { scope } });
   const search = container.querySelector<HTMLInputElement>('[aria-label="Search memories"]')!;
-  await act(async () => {
-    Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, "value")!.set!.call(
-      search,
-      "missing",
-    );
-    search.dispatchEvent(new Event("input", { bubbles: true }));
-  });
+  await enterText(search, "missing");
   state.queries.set(
     "search",
     Option.some({ items: [], nextCursor: "more", projectionWatermark: 1 }),
@@ -1813,13 +1828,16 @@ it("browses, searches and creates in an explicitly bound project, then returns t
   expect(container.textContent?.match(/Save to:/g)).toHaveLength(1);
   expect(container.textContent).not.toContain("New memory · Project");
   const textarea = container.querySelector<HTMLTextAreaElement>('[aria-label="Memory text"]')!;
-  await act(async () => {
-    Object.getOwnPropertyDescriptor(HTMLTextAreaElement.prototype, "value")!.set!.call(
-      textarea,
-      "Synthetic project memory",
-    );
-    textarea.dispatchEvent(new Event("input", { bubbles: true }));
-  });
+  await enterText(textarea, "Synthetic project memory");
+  const [project] = state.projects;
+  state.shellStatus = "synchronizing";
+  state.projects = [];
+  await render();
+  expect(container.querySelector("textarea")).toBe(textarea);
+  expect(textarea.value).toBe("Synthetic project memory");
+  state.projects = [project!];
+  state.shellStatus = "live";
+  await render();
   state.responses.set("upsert", success({ outcome: "accepted" }));
   await act(async () =>
     textarea
@@ -1831,8 +1849,10 @@ it("browses, searches and creates in an explicitly bound project, then returns t
     scope,
     payload: { text: "Synthetic project memory" },
   });
+  await click("Remember something");
   state.projects = [];
   await render();
+  expect(container.querySelector("textarea")).toBeNull();
   expect(container.querySelector('[aria-label="Search memories"]')).toBeNull();
   await selectMemoryScope("user");
   expect(state.requests.at(-1)).toMatchObject({
@@ -1942,13 +1962,7 @@ it.each([{ items: [] }, { items: [activeItem] }])(
   async ({ items }) => {
     await supportedScreen(false);
     const input = container.querySelector<HTMLInputElement>('[aria-label="Search memories"]')!;
-    await act(async () => {
-      Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, "value")!.set!.call(
-        input,
-        "pending",
-      );
-      input.dispatchEvent(new Event("input", { bubbles: true }));
-    });
+    await enterText(input, "pending");
     state.queries.set(
       "search",
       Option.some({
@@ -2402,13 +2416,7 @@ it.each(["available", "partial"] as const)(
 );
 async function searchRecords() {
   const input = container.querySelector<HTMLInputElement>('[aria-label="Search memories"]')!;
-  await act(async () => {
-    Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, "value")!.set!.call(
-      input,
-      "synthetic",
-    );
-    input.dispatchEvent(new Event("input", { bubbles: true }));
-  });
+  await enterText(input, "synthetic");
   await click("Search");
 }
 it("preserves the recovery handle while disconnected and checks it on reconnect", async () => {
