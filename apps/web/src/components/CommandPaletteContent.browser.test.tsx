@@ -111,6 +111,12 @@ it.each(["@legendapp/list/react", "@legendapp/list/react-native"])(
     expect(row.getBoundingClientRect().height).toBe(64);
     onItemSizeChanged.mockClear();
     row.style.height = "40.625px";
-    await vi.waitFor(() => expect(projectSizes()).toEqual([40.625]));
+    const nextRow = screen.getByText("Project B").element();
+    await vi.waitFor(() => {
+      expect(projectSizes()).toEqual([40.625]);
+      const offset = nextRow.getBoundingClientRect().top - row.getBoundingClientRect().top;
+      // Web row positions use whole layout pixels.
+      expect(offset / 0.8).toBeCloseTo(41);
+    });
   },
 );
