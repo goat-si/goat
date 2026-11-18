@@ -41,20 +41,6 @@ export interface ThreadQueueWorkflowState {
   readonly canSendNow: boolean;
 }
 
-export function threadQueueCanPromoteToSteer(
-  workflow: {
-    readonly activeRun: Pick<Run, "status"> | null;
-    readonly canPromoteToSteer: boolean;
-  } | null,
-  setupSteering: boolean | undefined,
-): boolean {
-  const status = workflow?.activeRun?.status;
-  return (
-    workflow?.canPromoteToSteer === true &&
-    (setupSteering === true || (status !== "preparing" && status !== "starting"))
-  );
-}
-
 export function resolveActiveThreadRun(projection: Pick<Projection, "runs">): Run | null {
   return projection.runs.findLast((run) => ACTIVE_RUN_STATUSES.has(run.status)) ?? null;
 }

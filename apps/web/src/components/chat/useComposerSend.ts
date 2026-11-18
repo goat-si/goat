@@ -907,7 +907,9 @@ export function useComposerSend(input: ComposerSendInput) {
       setThreadError(threadIdForSend, "Select a base branch before sending in New worktree mode.");
       return;
     }
-    // Context uses local IDs in optimistic rows and upload IDs on the wire when available.
+    // Records bind attachments by the id each side knows: the local id for the optimistic
+    // row, the upload id (or local id on the data-URL path) on the wire; the server
+    // rebinds them to the persisted id.
     const buildOutgoingMessageContext = (attachmentIds: ReadonlyArray<string>) =>
       buildMessageContext({
         terminalContexts: composerTerminalContextsSnapshot,
@@ -1359,9 +1361,6 @@ export function useComposerSend(input: ComposerSendInput) {
           ? scopeThreadRef(environmentId, threadIdForSend)
           : null;
       if (backgroundThreadRef) beginBackgroundDraftSubmissionByRef(backgroundThreadRef);
-      // The upload and persistence awaits can span a server reconnect.
-      const capabilities = appAtomRegistry.get(environmentServerConfigsAtom).get(environmentId)
-        ?.environment.capabilities;
       const startPromise = startThreadTurn({
         environmentId,
         input: {
@@ -1375,17 +1374,18 @@ export function useComposerSend(input: ComposerSendInput) {
               context: buildOutgoingMessageContext(
                 boundAttachmentIds(turnAttachmentsResult.value, composerAttachmentsSnapshot),
               ),
-              supportsInlineMessageContext: capabilities?.inlineMessageContext === true,
+              // Read at dispatch time: the upload and persistence awaits above can
+              // span a server reconnect that changes it.
+              supportsInlineMessageContext:
+                appAtomRegistry.get(environmentServerConfigsAtom).get(environmentId)?.environment
+                  .capabilities.inlineMessageContext === true,
             }),
           },
           modelSelection: ctxSelectedModelSelection,
           titleSeed: title,
           runtimeMode,
           interactionMode: sendInteractionMode,
-          dispatchMode:
-            sendQueuesBehindSetup && capabilities?.setupSteering !== true
-              ? "queue"
-              : turnDispatchMode,
+          dispatchMode: turnDispatchMode,
           ...(bootstrap ? { bootstrap } : {}),
           createdAt: messageCreatedAt,
         },

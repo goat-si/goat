@@ -344,11 +344,7 @@ export function createThreadOutboxDelivery(): {
         runtimeMode: sendSettings.runtimeMode,
         interactionMode: sendSettings.interactionMode,
         createdAt: queuedMessage.createdAt,
-        dispatchMode:
-          queuedMessage.dispatchMode === "steer" &&
-          currentConfig.environment.capabilities.setupSteering !== true
-            ? "queue"
-            : (queuedMessage.dispatchMode ?? "start"),
+        dispatchMode: queuedMessage.dispatchMode ?? "start",
       },
     });
     if (AsyncResult.isFailure(deliveryResult) && !hasAccess()) return true;

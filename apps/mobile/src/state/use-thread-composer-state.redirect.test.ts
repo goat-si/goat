@@ -1,7 +1,5 @@
 import {
   AuthOrchestrationOperateScope,
-  ProviderInstanceId,
-  RunId,
   RuntimeRequestId,
   type ModelSelection,
   type OrchestrationV2ThreadProjection,
@@ -9,7 +7,6 @@ import {
 } from "@goat/contracts";
 import type { DraftComposerImageAttachment } from "../lib/composerImages";
 import type { PendingThreadRequests } from "@goat/client-runtime/state/thread-requests";
-import type { EnvironmentThreadShell } from "@goat/client-runtime/state/shell";
 import { AsyncResult, type Atom } from "effect/reactivity";
 import * as Cause from "effect/Cause";
 import { beforeEach, describe, expect, it, vi } from "vite-plus/test";
@@ -23,7 +20,6 @@ const state = vi.hoisted(() => ({
     modelSelection: undefined as ModelSelection | undefined,
   },
   serverConfig: null as ServerConfig | null,
-  setupSteeringAvailable: false,
   projection: null as OrchestrationV2ThreadProjection | null,
   pendingRequests: { approvals: [], userInputs: [] } as PendingThreadRequests,
   enqueue: vi.fn(async () => undefined),
@@ -51,7 +47,7 @@ const state = vi.hoisted(() => ({
     modelSelection: { instanceId: "codex", model: "gpt-5.4" },
     runtimeMode: "full-access",
     interactionMode: "default",
-    runtime: null as EnvironmentThreadShell["runtime"],
+    runtime: null,
     latestRun: null,
   },
 }));
@@ -120,8 +116,7 @@ vi.mock("./threads", async () => {
   const { Atom } = await import("effect/reactivity");
   return {
     environmentThreadDetails: {
-      queueWorkflowAtom: () =>
-        Atom.make(state.setupSteeringAvailable ? { canPromoteToSteer: true, isHeld: false } : null),
+      queueWorkflowAtom: () => Atom.make(null),
       checkpointSummariesAtom: () => Atom.make([]),
       sequenceAtom: () => Atom.make(0),
       pendingRequestsAtom: () => Atom.make(state.pendingRequests),
@@ -199,8 +194,6 @@ beforeEach(() => {
   state.compactModel = null;
   state.compactDueAt = "";
   state.projection = null;
-  state.thread.runtime = null;
-  state.setupSteeringAvailable = false;
   state.serverConfig = {
     providers: [{ instanceId: "codex", driver: "codex", enabled: true }],
     environment: { capabilities: {} },
@@ -224,34 +217,6 @@ beforeEach(() => {
   state.setRuntimeMode.mockResolvedValue(AsyncResult.success(undefined));
   state.grantedEnvironments.add("secondary");
 });
-
-it.each([
-  { capability: true, requested: "steer", expected: "steer" },
-  { capability: true, requested: "queue", expected: "queue" },
-  { capability: undefined, requested: "steer", expected: "queue" },
-] as const)(
-  "sends $requested during setup with capability $capability as $expected",
-  async ({ capability, requested, expected }) => {
-    state.setupSteeringAvailable = true;
-    state.thread.runtime = {
-      status: "preparing",
-      activeRunId: RunId.make("preparing-run"),
-      providerInstanceId: ProviderInstanceId.make("codex"),
-      providerName: null,
-      lastError: null,
-      updatedAt: "2026-09-05T00:00:00.000Z",
-    };
-    state.pendingRequests = { approvals: [], userInputs: [] };
-    state.serverConfig = {
-      providers: [{ instanceId: "codex", driver: "codex", enabled: true }],
-      environment: { capabilities: { setupSteering: capability } },
-    } as unknown as ServerConfig;
-    const composer = useThreadComposerState();
-    expect(await composer.onSendMessage(requested)).toBe("message");
-    expect(state.enqueue).toHaveBeenCalledWith(expect.objectContaining({ dispatchMode: expected }));
-    expect(composer.canSteerActiveTurn).toBe(capability === true);
-  },
-);
 
 // goat#3687: a message sent while an approval is pending redirects the agent by declining the
 // approval. When that message also changes the access mode, the phone saves the mode first, as

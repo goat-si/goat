@@ -10,11 +10,7 @@ import {
 import * as Cause from "effect/Cause";
 import { AsyncResult, type Atom } from "effect/reactivity";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vite-plus/test";
-import {
-  decodeQueuedThreadMessage,
-  encodeQueuedThreadMessage,
-  type QueuedThreadMessage,
-} from "./thread-outbox-model";
+import type { QueuedThreadMessage } from "./thread-outbox-model";
 
 const state = vi.hoisted(() => ({
   draftText: "Keep this draft separate",
@@ -46,7 +42,7 @@ const state = vi.hoisted(() => ({
   config: {
     shellThreadFamilies: false,
     providers: [{ instanceId: "codex", driver: "codex", models: [] }],
-    environment: { capabilities: {} as { setupSteering?: true } },
+    environment: { capabilities: {} },
   },
 }));
 vi.mock("react-native", () => ({ Alert: { alert: vi.fn() } }));
@@ -215,7 +211,6 @@ beforeEach(() => {
   setOperateGrant("secondary", false);
   state.draftText = "Keep this draft separate";
   state.config.shellThreadFamilies = false;
-  delete state.config.environment.capabilities.setupSteering;
   state.modelUnavailable.mockReset().mockReturnValue(false);
   state.familyMount.mockReset().mockReturnValue(() => {});
   appAtomRegistry.set(state.threadShells, [state.thread]);
@@ -546,25 +541,6 @@ describe("queued task operation access", () => {
     },
   );
 });
-it.each([
-  { setupSteering: true, expected: "steer" },
-  { setupSteering: undefined, expected: "queue" },
-] as const)(
-  "drains a stored setup Steer as $expected on the destination server",
-  async ({ setupSteering, expected }) => {
-    setOperateGrant("secondary", true);
-    if (setupSteering) state.config.environment.capabilities.setupSteering = true;
-    const stored = encodeQueuedThreadMessage(message({ dispatchMode: "steer" }));
-    await state.manager.enqueue(decodeQueuedThreadMessage(stored));
-    await runDrain();
-    expect(state.start).toHaveBeenCalledExactlyOnceWith({
-      environmentId: "secondary",
-      input: expect.objectContaining({ commandId: "command", dispatchMode: expected }),
-    });
-    expect(remaining()).toEqual([]);
-  },
-);
-
 describe("compaction before a queued send", () => {
   const compactTurn = {
     commandId: "command:compact",

@@ -4,7 +4,6 @@ import {
   queuedRunEditBlockedReason,
 } from "@goat/client-runtime/queued-run-edit";
 import { useAtomValue } from "@effect/atom-react";
-import { threadQueueCanPromoteToSteer } from "@goat/client-runtime/state/thread-workflows";
 import { scopeThreadRef } from "@goat/client-runtime/environment";
 import {
   isAtomCommandInterrupted,
@@ -36,7 +35,7 @@ import { scopedThreadKey } from "../../lib/scopedEntities";
 import { useUniwindTheme } from "../../lib/useUniwindTheme";
 import { NativeStackScreenOptions, nativeHeaderScrollEdgeEffects } from "../../native/StackHeader";
 import { useAssetUrl } from "../../state/assets";
-import { useEnvironmentServerConfig, useQuietThreadShell } from "../../state/entities";
+import { useQuietThreadShell } from "../../state/entities";
 import { useEnvironmentQuery } from "../../state/query";
 import { serverEnvironment } from "../../state/server";
 import { assetImageSource } from "../../lib/assetImageSource";
@@ -123,11 +122,6 @@ export function ThreadQueueSheet({ route }: StaticScreenProps<QueueTarget>) {
   const insets = useSafeAreaInsets();
   const theme = useUniwindTheme();
   const workflow = useThreadQueueWorkflow(target);
-  const config = useEnvironmentServerConfig(target.environmentId);
-  const canPromoteToSteer = threadQueueCanPromoteToSteer(
-    workflow,
-    config?.environment.capabilities.setupSteering,
-  );
   const threadKey = scopedThreadKey(target.environmentId, target.threadId);
   const editing = useQueuedRunEdit(threadKey);
   const pendingRequests = useAtomValue(environmentThreadDetails.pendingRequestsAtom(target));
@@ -246,7 +240,7 @@ export function ThreadQueueSheet({ route }: StaticScreenProps<QueueTarget>) {
       await cancel(buildCancelQueuedRunCommand({ ...target, runId }));
     } else if (workflow?.canSendNow) {
       await resume({ ...target, input: { threadId: target.threadId, runId } });
-    } else if (workflow?.activeRun && canPromoteToSteer) {
+    } else if (workflow?.activeRun && workflow.canPromoteToSteer) {
       await promote({
         ...target,
         input: {
@@ -334,7 +328,7 @@ export function ThreadQueueSheet({ route }: StaticScreenProps<QueueTarget>) {
             : 0;
         const controls = resolveThreadQueueRowControls({
           busy: busyRunId !== null || draggedRunId !== null,
-          canPromoteToSteer,
+          canPromoteToSteer: workflow?.canPromoteToSteer ?? false,
           canSendNow: workflow?.canSendNow ?? false,
           canReorder: workflow?.canReorder ?? false,
           editBlocked: editBlockedReason !== null,
@@ -444,7 +438,7 @@ export function ThreadQueueSheet({ route }: StaticScreenProps<QueueTarget>) {
                     shouldOpenOnLongPress
                     style={{ flex: 1 }}
                     actions={[
-                      ...(canPromoteToSteer || workflow?.canSendNow
+                      ...(workflow?.canPromoteToSteer || workflow?.canSendNow
                         ? [
                             {
                               id: "steer",
@@ -517,7 +511,7 @@ export function ThreadQueueSheet({ route }: StaticScreenProps<QueueTarget>) {
                       ) : null}
                     </Pressable>
                   </Menu>
-                  {canPromoteToSteer || workflow?.canSendNow ? (
+                  {workflow?.canPromoteToSteer || workflow?.canSendNow ? (
                     // Outside the edit row and full row height, so a near miss never opens the editor.
                     <Pressable
                       accessibilityRole="button"
