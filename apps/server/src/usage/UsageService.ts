@@ -68,6 +68,7 @@ import {
   makeFileRecordReader,
   makeSupersededCacheRemover,
   makeUsageInstances,
+  providerRateModel,
   resolveUsageHostId,
   type ScannedDir,
   scanReaders,
@@ -680,6 +681,7 @@ export const make = Effect.gen(function* () {
       Date.parse(`${input.untilDay}T00:00:00Z`) + 86400000 + MTIME_SLACK_MS;
     if (!fromMemory) {
       const unlisted = new Set<string>();
+      const mapping = { rates, modelAliases, rateModel: providerRateModel };
       scanModels: for (const files of filesByDir) {
         for (const file of files) {
           for (const record of file.records) {
@@ -691,7 +693,7 @@ export const make = Effect.gen(function* () {
               continue;
             const model = unlistedUsageRateModel(
               rates,
-              mapUsageModel(record, { modelAliases }),
+              mapUsageModel(record, mapping),
               priceOverrides,
             );
             if (model === undefined || checkedRateModels.has(model)) continue;
@@ -713,6 +715,7 @@ export const make = Effect.gen(function* () {
       rates,
       priceOverrides,
       modelAliases,
+      rateModel: providerRateModel,
       ...(input.modelFilter === undefined ? {} : { modelFilter: input.modelFilter }),
     });
 

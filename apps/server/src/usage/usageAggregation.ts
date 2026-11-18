@@ -10,7 +10,7 @@ import type {
 } from "@goat/contracts";
 
 import { EMPTY_TOTALS, type UsageRecord } from "@goat/provider-core/server/usage";
-import { cacheSavingsUsd, priceUsage, type RateTable } from "./usagePricing.ts";
+import { cacheSavingsUsd, lookupRate, priceUsage, type RateTable } from "./usagePricing.ts";
 
 // en-CA gives ISO-ordered parts in the requested zone; Date getters are host-local.
 function makeDayFormatter(timeZone: string): (timestampMs: number) => string {
@@ -70,6 +70,7 @@ export interface AggregateOptions {
   readonly rates: RateTable;
   readonly priceOverrides?: RateTable;
   readonly modelAliases?: ReadonlyMap<string, string>;
+  readonly rateModel?: (provider: UsageRecord["provider"], model: string) => string | undefined;
   readonly modelFilter?: UsageModelFilter;
   readonly resolution?: UsageResolution;
   readonly sinceTimeMs?: number;
@@ -78,12 +79,18 @@ export interface AggregateOptions {
 
 export function mapUsageModel(
   record: UsageRecord,
-  options: Pick<AggregateOptions, "modelAliases">,
+  options: Pick<AggregateOptions, "modelAliases" | "rateModel" | "rates">,
 ): UsageRecord {
   const model = options.modelAliases?.get(record.model);
   if (model === undefined) return record;
   const { rateModel: _rateModel, ...rest } = record;
-  return { ...rest, model };
+  const rateModel =
+    lookupRate(options.rates, model) === null
+      ? options.rateModel?.(record.provider, model)
+      : undefined;
+  return rateModel === undefined || rateModel === model
+    ? { ...rest, model }
+    : { ...rest, model, rateModel };
 }
 
 export function resolveModelAliases(

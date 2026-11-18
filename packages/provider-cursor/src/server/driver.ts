@@ -1,3 +1,4 @@
+import { cursorRateModel } from "./accountUsage.ts";
 import { ProviderDriverKind, ProviderSetupError, type ServerProviderModel } from "@goat/contracts";
 import { CursorSettings } from "../settings.ts";
 import * as HostProcess from "@goat/shared/HostProcess";
@@ -80,6 +81,7 @@ export const CursorDriver: ProviderDriver<
   usage: {
     kind: "scan",
     provider: "cursor",
+    rateModel: cursorRateModel,
     scan: ({ instances, settings, windowStartMs, retentionCutoffMs, awaitRefresh }) =>
       CursorUsageAccounts.CursorUsageAccounts.pipe(
         Effect.flatMap((accounts) =>

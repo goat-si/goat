@@ -45,6 +45,15 @@ export const transcriptFormats = new Map(
   transcriptReaders.map(({ reader }) => [reader.provider, reader.format] as const),
 );
 
+const rateModelResolvers = new Map(
+  [...transcriptReaders, ...scanReaders].flatMap(({ reader }) =>
+    reader.rateModel === undefined ? [] : [[reader.provider, reader.rateModel] as const],
+  ),
+);
+
+export const providerRateModel = (provider: UsageProviderKind, model: string) =>
+  rateModelResolvers.get(provider)?.(model);
+
 export interface TranscriptSource {
   readonly provider: UsageProviderKind;
   readonly format: TranscriptUsageFormat<unknown>;
