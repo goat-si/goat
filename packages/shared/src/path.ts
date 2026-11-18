@@ -114,14 +114,44 @@ export function isWindowsReservedFileName(name: string): boolean {
   return WINDOWS_RESERVED_NAME.test(name.split(".")[0]!.trimEnd().toLowerCase());
 }
 
+// Latin letters NFKD leaves whole (ł, ø, ß) or splits with a spacing mark (Ŀ, ŉ).
+const LATIN_FOLDS: Record<string, string> = {
+  Ŀ: "L",
+  ŀ: "l",
+  ŉ: "'n",
+  Đ: "D",
+  đ: "d",
+  Ð: "D",
+  ð: "d",
+  ß: "ss",
+  ẞ: "SS",
+  Ł: "L",
+  ł: "l",
+  Ø: "O",
+  ø: "o",
+  Æ: "AE",
+  æ: "ae",
+  Œ: "OE",
+  œ: "oe",
+  Þ: "TH",
+  þ: "th",
+  Ħ: "H",
+  ħ: "h",
+  ı: "i",
+  ĸ: "q",
+  Ŋ: "N",
+  ŋ: "n",
+  Ŧ: "T",
+  ŧ: "t",
+};
+const LATIN_FOLD_PATTERN = new RegExp(`[${Object.keys(LATIN_FOLDS).join("")}]`, "g");
+
+/** Folds accented Latin letters to ASCII ("tìm" -> "tim"); other scripts pass through. */
 export function foldLatinDiacritics(text: string): string {
   return text
+    .replace(LATIN_FOLD_PATTERN, (letter) => LATIN_FOLDS[letter] ?? letter)
     .normalize("NFKD")
-    .replace(/[̀-ͯ]/g, "")
-    .replace(/đ/g, "d")
-    .replace(/Đ/g, "D")
-    .replace(/ß/g, "ss")
-    .replace(/ẞ/g, "SS");
+    .replace(/[\u0300-\u036f]/g, "");
 }
 
 export function newProjectFolderName(name: string): string {
