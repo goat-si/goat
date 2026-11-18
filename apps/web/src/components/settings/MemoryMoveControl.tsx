@@ -19,11 +19,13 @@ export function MemoryMoveControl({
   environmentId,
   memorySpaceId,
   candidates,
+  isCurrent,
   onMoved,
 }: {
   environmentId: EnvironmentId;
   memorySpaceId: MemorySpaceId;
   candidates: readonly MemoryMoveCandidate[];
+  isCurrent?: (candidate: MemoryMoveCandidate) => boolean;
   onMoved: (allMoved: boolean) => void;
 }) {
   const registry = useContext(RegistryContext);
@@ -45,7 +47,7 @@ export function MemoryMoveControl({
       rows,
       () => MemoryOperationId.make(randomUUID()),
       (input) => move({ environmentId, input }),
-      permitted,
+      (candidate) => permitted() && (isCurrent?.(candidate) ?? true),
     );
     setBusy(false);
     setAttempts(result.attempts);

@@ -90,9 +90,7 @@ export function memoryForgetRequest(
   };
 }
 
-export type MemoryMoveCandidate = Omit<MemoryMoveInput, "operationId" | "toScope"> & {
-  readonly label: string;
-};
+export type MemoryMoveCandidate = Omit<MemoryMoveInput, "operationId" | "toScope">;
 
 export function memoryMoveCandidate(
   item: import("@goat/contracts").MemoryItem,
@@ -110,7 +108,6 @@ export function memoryMoveCandidate(
     expectedHeads: [item.revision.revisionId],
     expectedScopeVersion: item.scopeVersion ?? 0,
     fromScope: item.scope,
-    label: item.payload.text.slice(0, 80),
   };
 }
 
@@ -128,6 +125,22 @@ function sameMemoryScope(left: MemoryScope, right: MemoryScope): boolean {
   return a.kind === "explicit"
     ? b.kind === "explicit" && a.sharedProjectId === b.sharedProjectId
     : b.kind === "repository" && a.groupingKey === b.groupingKey;
+}
+
+export function memoryMoveCandidateCurrent(
+  candidate: MemoryMoveCandidate,
+  items: readonly import("@goat/contracts").MemoryItem[],
+) {
+  const item = items.find(({ memoryId }) => memoryId === candidate.memoryId);
+  const current = item && memoryMoveCandidate(item);
+  return (
+    current !== null &&
+    current !== undefined &&
+    current.memorySpaceId === candidate.memorySpaceId &&
+    current.expectedHeads[0] === candidate.expectedHeads[0] &&
+    current.expectedScopeVersion === candidate.expectedScopeVersion &&
+    sameMemoryScope(current.fromScope, candidate.fromScope)
+  );
 }
 
 type MemoryMoveOutcome =
@@ -151,11 +164,11 @@ export function memoryMoveRows(
   if (!destination) return [];
   return candidates
     .filter(({ fromScope }) => !sameMemoryScope(fromScope, destination))
-    .map(({ label, ...input }) => {
+    .map((input) => {
       const key = JSON.stringify([environmentId, destination, input]);
       const prior = attempts.get(input.memoryId);
       return {
-        label,
+        label: `Memory ${input.memoryId.slice(-8)}`,
         input: { ...input, toScope: destination },
         key,
         outcome: prior?.key === key ? prior.outcome : undefined,
@@ -196,13 +209,13 @@ export async function submitMemoryMoves(
   call: (
     input: MemoryMoveInput,
   ) => Promise<AsyncResult.AsyncResult<MemoryMutationReceipt, unknown>>,
-  allowed: () => boolean,
+  allowed: (candidate: MemoryMoveCandidate) => boolean,
 ) {
   const attempts = new Map<MemoryId, MemoryMoveAttempt>();
   let refresh = false;
   for (const { input, key, outcome: prior } of rows) {
     if (prior) attempts.set(input.memoryId, { key, outcome: prior });
-    if (!allowed() || prior?.status === "moved" || prior?.status === "stale") continue;
+    if (!allowed(input) || prior?.status === "moved" || prior?.status === "stale") continue;
     const operationId = prior?.status === "uncertain" ? prior.operationId : createOperationId();
     const outcome = moveOutcome(await call({ ...input, operationId }), operationId);
     attempts.set(input.memoryId, { key, outcome });

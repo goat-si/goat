@@ -22,11 +22,13 @@ export function MobileMemoryMoveControl({
   environmentId,
   memorySpaceId,
   candidates,
+  isCurrent,
   onMoved,
 }: {
   environmentId: EnvironmentId;
   memorySpaceId: MemorySpaceId;
   candidates: readonly MemoryMoveCandidate[];
+  isCurrent?: (candidate: MemoryMoveCandidate) => boolean;
   onMoved: (allMoved: boolean) => void;
 }) {
   const permission = memory.move.permissionAtom(environmentId);
@@ -96,7 +98,7 @@ export function MobileMemoryMoveControl({
       rows,
       operationId,
       (input) => move({ environmentId, input }),
-      permitted,
+      (candidate) => permitted() && (isCurrent?.(candidate) ?? true),
     );
     if (!live()) return;
     setBusy(false);

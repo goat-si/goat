@@ -11,8 +11,8 @@ import type {
 import {
   memoryForgetRequest,
   memoryMoveCandidate,
+  memoryMoveCandidateCurrent,
   type MemoryMoveCandidate,
-  memoryPreview,
   MEMORY_FORGET_SELECTION_LIMIT,
 } from "@goat/client-runtime/memory-browsing";
 import {
@@ -106,6 +106,8 @@ export function useMobileMemoryBatch(
   memorySpaceId: MemorySpaceId,
   filterKey: string,
   refresh: () => void,
+  items: readonly MemoryItem[],
+  readItems: () => readonly MemoryItem[],
 ) {
   const permitted = useAtomValue(memory.forget.permissionAtom(environmentId));
   const allowed = enabled && permitted;
@@ -154,11 +156,7 @@ export function useMobileMemoryBatch(
     row: (item: MemoryItem) =>
       item.status !== "forgotten" && !item.localAvailability.reasons.includes("forget_pending") ? (
         <SettingsSwitchRow
-          label={
-            item.status === "active"
-              ? `Select ${memoryPreview(item.payload.text)}`
-              : `Select memory ${item.memoryId}`
-          }
+          label={`Select memory ${item.memoryId.slice(-8)}`}
           disabled={state.busy}
           value={state.selected.has(item.memoryId)}
           onValueChange={() => toggle(item)}
@@ -177,7 +175,10 @@ export function useMobileMemoryBatch(
           <MobileMemoryMoveControl
             environmentId={environmentId}
             memorySpaceId={memorySpaceId}
-            candidates={[...state.selected.values()].flatMap(({ move }) => (move ? [move] : []))}
+            candidates={[...state.selected.values()].flatMap(({ move }) =>
+              move && memoryMoveCandidateCurrent(move, items) ? [move] : [],
+            )}
+            isCurrent={(candidate) => memoryMoveCandidateCurrent(candidate, readItems())}
             onMoved={(allMoved) => {
               if (allMoved) set(emptyBatch(key));
               refresh();

@@ -574,14 +574,14 @@ function ScopedMemoryRecords({
     ...(capabilities?.scopeMoves ? { includeScopeVersion: true } : {}),
     ...(cursor ? { cursor } : {}),
   });
-  const page = useEnvironmentQuery(
-    query
-      ? memoryEnvironment.search({ environmentId, input: memorySearchInput(input, query) })
-      : memoryEnvironment.list({
-          environmentId,
-          input: { ...input, includeQuarantined: quarantine },
-        }),
-  );
+  const atom = query
+    ? memoryEnvironment.search({ environmentId, input: memorySearchInput(input, query) })
+    : memoryEnvironment.list({
+        environmentId,
+        input: { ...input, includeQuarantined: quarantine },
+      });
+  const registry = useContext(RegistryContext);
+  const page = useEnvironmentQuery(atom);
   const value = page.data ? Option.getOrNull(page.data) : null;
   const items = value?.items ?? EMPTY_MEMORY_LIST;
   const coverage = value?.indexCoverage
@@ -594,6 +594,13 @@ function ScopedMemoryRecords({
     memorySpaceId,
     JSON.stringify([scope, query, origin, cursor, quarantine]),
     page.refresh,
+    items,
+    () => {
+      const current = registry.get(atom);
+      return current._tag === "Success"
+        ? (Option.getOrNull(current.value)?.items ?? EMPTY_MEMORY_LIST)
+        : EMPTY_MEMORY_LIST;
+    },
   );
   const listPage = memoryListPageIdentity(items);
   const [listLayout, setListLayout] = useState<MemoryListLayout | null>(null);

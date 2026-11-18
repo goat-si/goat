@@ -700,6 +700,8 @@ function ScopedMemoryBrowser({
         environmentId: params.environmentId,
         input: { ...input, includeQuarantined: quarantine },
       });
+  const result = useAtomValue(atom);
+  const page = AsyncResult.isSuccess(result) ? Option.getOrNull(result.value) : null;
   const batch = useMobileMemoryBatch(
     params.environmentId,
     capabilities?.originFilter === true || capabilities?.scopeMoves === true,
@@ -707,9 +709,12 @@ function ScopedMemoryBrowser({
     memorySpaceId,
     JSON.stringify([scope, search, origin, cursor, quarantine]),
     () => registry.refresh(atom),
+    page?.items ?? [],
+    () => {
+      const current = registry.get(atom);
+      return AsyncResult.isSuccess(current) ? (Option.getOrNull(current.value)?.items ?? []) : [];
+    },
   );
-  const result = useAtomValue(atom);
-  const page = AsyncResult.isSuccess(result) ? Option.getOrNull(result.value) : null;
   if (selected)
     return (
       <MemoryDetails

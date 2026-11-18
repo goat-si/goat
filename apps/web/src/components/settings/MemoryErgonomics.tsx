@@ -18,6 +18,7 @@ import {
 import {
   memoryForgetRequest,
   memoryMoveCandidate,
+  memoryMoveCandidateCurrent,
   type MemoryMoveCandidate,
   MEMORY_FORGET_SELECTION_LIMIT,
 } from "@goat/client-runtime/memory-browsing";
@@ -120,6 +121,8 @@ export function useWebMemoryBatch(
   memorySpaceId: MemorySpaceId,
   filterKey: string,
   refresh: () => void,
+  items: readonly MemoryItem[],
+  readItems: () => readonly MemoryItem[],
 ) {
   const registry = useContext(RegistryContext);
   const permitted = useAtomValue(memoryEnvironment.forget.permissionAtom(environmentId));
@@ -172,11 +175,7 @@ export function useWebMemoryBatch(
             type="checkbox"
             checked={state.selected.has(item.memoryId)}
             disabled={state.busy}
-            aria-label={
-              item.status === "active"
-                ? `Select ${item.payload.text.slice(0, 120)}`
-                : `Select memory ${item.memoryId}`
-            }
+            aria-label={`Select memory ${item.memoryId.slice(-8)}`}
             onChange={() => toggle(item)}
           />
           Select
@@ -201,8 +200,9 @@ export function useWebMemoryBatch(
                   environmentId={environmentId}
                   memorySpaceId={memorySpaceId}
                   candidates={[...state.selected.values()].flatMap(({ move }) =>
-                    move ? [move] : [],
+                    move && memoryMoveCandidateCurrent(move, items) ? [move] : [],
                   )}
+                  isCurrent={(candidate) => memoryMoveCandidateCurrent(candidate, readItems())}
                   onMoved={(allMoved) => {
                     if (allMoved) set(emptyBulk(key));
                     refresh();

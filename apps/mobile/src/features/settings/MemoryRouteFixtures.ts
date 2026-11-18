@@ -276,9 +276,9 @@ export async function exerciseMemoryMove(
     const { h, view } = mounted();
     if (batch) {
       await view.click("Select memories");
-      await view.click("Select Synthetic memory body");
-      await view.click("Select Synthetic move item 211");
-      await view.click("Select Synthetic move item 212");
+      await view.click("Select memory 00000002");
+      await view.click("Select memory 00000211");
+      await view.click("Select memory 00000212");
     } else await view.click("Open memory: Synthetic memory body");
     await view.click("Move to…");
     await view.click("Move project");
