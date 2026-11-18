@@ -49,7 +49,9 @@ function setPresented(next: PresentedDialog | null) {
 }
 
 function submitRequest(dialog: DialogRequest) {
+  const replaced = presented;
   setPresented({ ...dialog, id: ++nextPresentationId });
+  if (replaced?.kind === "alert") replaced.request.options?.onDismiss?.();
 }
 
 /** Closes the dialog only if it is still the one the action came from. */

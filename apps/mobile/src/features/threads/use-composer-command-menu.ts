@@ -8,7 +8,10 @@ import type {
   ServerProvider,
   ServerSettings,
 } from "@goat/contracts";
-import { matchComposerThreadItems } from "@goat/client-runtime/composerThreadItems";
+import {
+  composerThreadSearchEnvironments,
+  matchComposerThreadItems,
+} from "@goat/client-runtime/composerThreadItems";
 import {
   composerThreadMayRunUnattended,
   matchComposerAppItems,
@@ -409,9 +412,12 @@ export function useComposerCommandMenu({
     cwd: trigger?.kind === "path" ? projectCwd : null,
     query: trigger?.kind === "path" ? trigger.query : null,
   });
-  // Mounts older settled threads matching the mention, which shells may leave out.
+  // Older settled threads may be missing from the shells on any reachable host.
   useThreadSearch(
-    trigger?.kind === "path" && environmentId ? [environmentId] : [],
+    composerThreadSearchEnvironments(
+      trigger?.kind === "path" ? environmentId : null,
+      verifiedThreadHosts,
+    ),
     trigger?.kind === "path" ? trigger.query : "",
     { titlesOnly: true },
   );

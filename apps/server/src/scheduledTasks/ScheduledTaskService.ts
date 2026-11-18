@@ -548,22 +548,13 @@ export const layer = Layer.effect(
           ),
         );
 
-    // The run already started the thread, so a failed write only costs the binding.
-    // A thread deleted before the binding landed already ran its task cleanup, so apply that
-    // cleanup here; a later deletion finds the binding. An unconfirmed lookup keeps the binding.
-    const bindThread = Effect.fn("ScheduledTaskService.bindThread")(
-      function* (task: ScheduledTask, threadId: ThreadId) {
-        yield* sql`
-          UPDATE scheduled_tasks SET thread_id = ${threadId}
-          WHERE task_id = ${task.id} AND created_at = ${task.createdAt}
-            AND project_id = ${task.projectId}
-            AND thread_id IS NULL AND thread_mode != 'new_thread'
-        `;
+    const cleanUpDeletedLaunch = Effect.fn("ScheduledTaskService.cleanUpDeletedLaunch")(
+      function* (threadId: ThreadId) {
         const shell = yield* threadManagement.getThreadShell(threadId);
         if (shell === null || shell.deletedAt != null) yield* deleteForThread(threadId);
       },
       Effect.catchCause((cause) =>
-        Effect.logWarning("Could not bind a scheduled task to its first thread.", cause),
+        Effect.logWarning("Could not check the scheduled task's launched thread.", cause),
       ),
     );
 
@@ -757,7 +748,7 @@ export const layer = Layer.effect(
                     Effect.tap((launched) =>
                       threadMode === "new_thread"
                         ? Effect.void
-                        : bindThread(active, launched.threadId),
+                        : cleanUpDeletedLaunch(launched.threadId),
                     ),
                     Effect.map((launched) => ({
                       threadId: launched.threadId,

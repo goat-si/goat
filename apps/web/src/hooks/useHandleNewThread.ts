@@ -37,7 +37,9 @@ import {
   useQuietThreadShell,
 } from "../state/entities";
 import {
+  draftModelSelectionApplies,
   hasExplicitComposerModelSelection,
+  threadHasStarted,
   resolveNewDraftStartFromOrigin,
   resolveNewThreadEnvModeWithLastWork,
   resolveNewThreadModelSelectionOverride,
@@ -189,7 +191,12 @@ export function createNewThreadHandler(router: AnyRouter) {
             : currentRouteTarget.draftId,
         )
       : null;
-    const composerActiveProvider = carrySourceComposer?.activeProvider ?? null;
+    const composerActiveProvider = draftModelSelectionApplies(
+      carrySourceComposer,
+      threadHasStarted(carrySourceShell),
+    )
+      ? carrySourceComposer?.activeProvider
+      : null;
     const composerModelSelection = composerActiveProvider
       ? (carrySourceComposer?.modelSelectionByProvider[composerActiveProvider] ?? null)
       : null;

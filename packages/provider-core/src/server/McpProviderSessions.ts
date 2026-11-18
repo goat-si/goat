@@ -96,7 +96,10 @@ const matchingPageIndex = (kept: ReadonlyArray<KeptHtmlRender>, input: PageInput
       ? [index]
       : [],
   );
-  return matches.length === 1 ? matches[0]! : -1;
+  // Identical inline pages are interchangeable, so consume them in publish order.
+  return matches.length === 1 || matches.every((index) => kept[index]?.htmlHash === htmlHash)
+    ? (matches[0] ?? -1)
+    : -1;
 };
 
 const make = Effect.gen(function* () {

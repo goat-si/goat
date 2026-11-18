@@ -41,6 +41,24 @@ const pendingAttachments = (share: ThreadGuestShare | null) =>
     message.status === "pending" ? (message.attachments ?? []) : [],
   ) ?? [];
 
+export function guestSubmissionQuotaFailure(
+  share: ThreadGuestShare,
+  attachments: ReadonlyArray<{ readonly sizeBytes: number }>,
+) {
+  if (
+    share.messages.filter((message) => message.status === "pending").length >=
+    GUEST_PENDING_MESSAGE_LIMIT
+  ) {
+    return GUEST_FAILURE.busy;
+  }
+  if (attachments.length === 0) return;
+  const pendingBytes = [...pendingAttachments(share), ...attachments].reduce(
+    (total, attachment) => total + attachment.sizeBytes,
+    0,
+  );
+  if (pendingBytes > GUEST_PENDING_ATTACHMENT_BYTES_LIMIT) return GUEST_FAILURE.filesBusy;
+}
+
 /**
  * Stored files a share change leaves behind: those of waiting messages that were dismissed or
  * dropped with the share. A sent message keeps its files, which its thread message now holds.
@@ -140,20 +158,9 @@ export function decideGuestShareCommand(input: {
       ) {
         return Result.fail(GUEST_FAILURE.inactive);
       }
-      if (
-        share.messages.filter((message) => message.status === "pending").length >=
-        GUEST_PENDING_MESSAGE_LIMIT
-      ) {
-        return Result.fail(GUEST_FAILURE.busy);
-      }
       const attachments = command.attachments ?? [];
-      const pendingBytes = [...pendingAttachments(share), ...attachments].reduce(
-        (total, attachment) => total + attachment.sizeBytes,
-        0,
-      );
-      if (attachments.length > 0 && pendingBytes > GUEST_PENDING_ATTACHMENT_BYTES_LIMIT) {
-        return Result.fail(GUEST_FAILURE.filesBusy);
-      }
+      const quotaFailure = guestSubmissionQuotaFailure(share, attachments);
+      if (quotaFailure !== undefined) return Result.fail(quotaFailure);
       const guestShare: ThreadGuestShare = {
         ...share,
         messages: trimResolved([

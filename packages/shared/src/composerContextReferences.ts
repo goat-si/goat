@@ -20,6 +20,7 @@ import { goatCallText } from "@goat/contracts/agentSurface/callText";
 
 import { capabilityRecordApp } from "./appContextId.ts";
 import { expandAssistantCitationsForProvider } from "./assistantCitations.ts";
+import { markdownLinksStartingBefore } from "./markdownLinkPrefix.ts";
 
 /**
  * Canonical inline reference: `[label](goat-context://v1/<kind>/<contextId>)`, or the image
@@ -121,12 +122,18 @@ export interface ComposerContextReferenceOccurrence {
 
 export function collectComposerContextReferences(
   text: string,
+  limit?: number,
 ): ComposerContextReferenceOccurrence[] {
   const occurrences: ComposerContextReferenceOccurrence[] = [];
   // No link can match without the protocol prefix; skip the scan entirely on
   // plain prose so long messages never pay for a regex walk per `[`.
-  if (!CONTEXT_HREF_PREFIXES.some((prefix) => text.includes(`](${prefix}`))) return occurrences;
-  for (const match of text.matchAll(CONTEXT_LINK)) {
+  if (limit === undefined && !CONTEXT_HREF_PREFIXES.some((prefix) => text.includes(`](${prefix}`)))
+    return occurrences;
+  const matches =
+    limit === undefined
+      ? text.matchAll(CONTEXT_LINK)
+      : markdownLinksStartingBefore(text, CONTEXT_LINK, limit);
+  for (const match of matches) {
     const parsed = parseComposerContextHref(match[3]!);
     if (!parsed) continue;
     occurrences.push({

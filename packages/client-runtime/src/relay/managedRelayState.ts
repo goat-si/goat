@@ -21,6 +21,11 @@ import { relayProtectedErrorMessage } from "./errorPresentation.ts";
 const DEFAULT_STALE_TIME_MS = 15_000;
 const DEFAULT_IDLE_TTL_MS = 5 * 60_000;
 const CLERK_TOKEN_EXPIRY_SKEW_MS = 5_000;
+// Clerk retries a failed token request itself, but waits 3 s before the first
+// retry and longer before each next one. A fresh request usually answers at
+// once, so a slow read is replaced instead of waited out.
+const CLERK_TOKEN_READ_TIMEOUT_MS = 4_000;
+const CLERK_TOKEN_READ_ATTEMPTS = 3;
 const isManagedRelayRequestFailedError = Schema.is(ManagedRelay.ManagedRelayRequestFailedError);
 
 export interface ManagedRelaySession {
@@ -75,7 +80,10 @@ const managedRelaySessionControls = new WeakMap<ManagedRelaySession, ManagedRela
 
 export function createManagedRelaySession(input: ManagedRelaySessionInput): ManagedRelaySession {
   let cachedToken: { readonly token: string; readonly expiresAtMillis: number } | null = null;
-  let pendingToken: Promise<string | null> | null = null;
+  let pendingToken: {
+    readonly operation: Promise<string | null>;
+    readonly startedAtMillis: number;
+  } | null = null;
   let readClerkToken = input.readClerkToken;
   let tokenProviderGeneration = 0;
 
@@ -83,8 +91,10 @@ export function createManagedRelaySession(input: ManagedRelaySessionInput): Mana
     if (cachedToken && cachedToken.expiresAtMillis > nowMillis + CLERK_TOKEN_EXPIRY_SKEW_MS) {
       return cachedToken.token;
     }
-    if (pendingToken) {
-      return await pendingToken;
+    // A read that outlived its timeout is left running, since it still fills
+    // the cache, but later readers start a fresh one instead of joining it.
+    if (pendingToken && nowMillis - pendingToken.startedAtMillis < CLERK_TOKEN_READ_TIMEOUT_MS) {
+      return await pendingToken.operation;
     }
 
     const operationGeneration = tokenProviderGeneration;
@@ -107,11 +117,12 @@ export function createManagedRelaySession(input: ManagedRelaySessionInput): Mana
       }
       return token;
     });
-    pendingToken = operation;
+    const pending = { operation, startedAtMillis: nowMillis };
+    pendingToken = pending;
     try {
       return await operation;
     } finally {
-      if (pendingToken === operation) {
+      if (pendingToken === pending) {
         pendingToken = null;
       }
     }
@@ -120,14 +131,20 @@ export function createManagedRelaySession(input: ManagedRelaySessionInput): Mana
   const session: ManagedRelaySession = {
     accountId: input.accountId,
     readClerkToken: Effect.fn("clientRuntime.managedRelaySession.readClerkToken")(function* () {
-      const nowMillis = yield* Clock.currentTimeMillis;
-      return yield* Effect.tryPromise({
-        try: () => readCachedClerkToken(nowMillis),
-        catch: (cause) =>
-          new ManagedRelaySessionError({
-            message: "Could not obtain the GOAT Connect session token.",
-            cause,
-          }),
+      for (let attempt = 0; attempt < CLERK_TOKEN_READ_ATTEMPTS; attempt += 1) {
+        const nowMillis = yield* Clock.currentTimeMillis;
+        const token = yield* Effect.tryPromise({
+          try: () => readCachedClerkToken(nowMillis),
+          catch: (cause) =>
+            new ManagedRelaySessionError({
+              message: "Could not obtain the GOAT Connect session token.",
+              cause,
+            }),
+        }).pipe(Effect.timeoutOption(CLERK_TOKEN_READ_TIMEOUT_MS));
+        if (Option.isSome(token)) return token.value;
+      }
+      return yield* new ManagedRelaySessionError({
+        message: "Timed out obtaining the GOAT Connect session token.",
       });
     }),
   };

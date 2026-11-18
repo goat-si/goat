@@ -66,27 +66,28 @@ export const answerBy = <A>(
 };
 
 /**
- * One capture at a time per tab. The lock follows the capture itself, which CDP cannot cancel,
- * so the next capture never overlaps one still in flight. A deadline bounds only how long the
- * caller waits: `answer` settles by then, while `run` is the capture itself, for state that must
- * follow it. A capture whose turn comes after its deadline never runs. A desktop guest that is
- * not drawing answers no screenshot (#1084), and without this an agent's snapshot waited behind a
- * viewer's still until the broker cut the whole host off.
+ * The lock follows the CDP capture, which cannot be cancelled. The deadline bounds the caller's
+ * answer, and a queued capture whose deadline has already passed never starts.
  */
 export const queueCaptureBy =
-  (deadlineMs = Number.POSITIVE_INFINITY) =>
+  (deadlineMs = Number.POSITIVE_INFINITY, timeout: () => Error = notDrawnInTime) =>
   <A>(tab: CaptureLockHolder, operation: () => Promise<A>) => {
     let expired = false;
     const run = tab.captureLock.then(() => {
       if (tab.closing) throw new Error("The preview tab closed.");
       // Its turn can come before the timer that marks it expired has run.
-      if (expired || performance.now() >= deadlineMs) throw notDrawnInTime();
+      if (expired || performance.now() >= deadlineMs) throw timeout();
       return operation();
     });
     tab.captureLock = run.then(constVoid, constVoid);
-    const answer = answerBy(run, deadlineMs, () => {
-      expired = true;
-    });
+    const answer = answerBy(
+      run,
+      deadlineMs,
+      () => {
+        expired = true;
+      },
+      timeout,
+    );
     return { run, answer };
   };
 
@@ -94,7 +95,8 @@ export const withCaptureLock = <A>(
   tab: CaptureLockHolder,
   operation: () => Promise<A>,
   deadlineMs = Number.POSITIVE_INFINITY,
-): Promise<A> => queueCaptureBy(deadlineMs)(tab, operation).answer;
+  timeout?: () => Error,
+): Promise<A> => queueCaptureBy(deadlineMs, timeout)(tab, operation).answer;
 
 /** Like withCaptureLock, but the next capture also waits for each capture handed to `hold`. */
 export const withCaptureLockHeld = <A>(
