@@ -5,6 +5,7 @@ import {
   ProviderInstanceId,
   type ServerProvider,
   type ServerProviderModel,
+  type ServerSettings,
 } from "@goat/contracts";
 import { createModelSelection } from "./model.ts";
 import {
@@ -56,13 +57,14 @@ it("memory fallback from a standalone generator picks OmO's default instead of g
     providerInstances: { [omo]: { driver, enabled: true, config: {} } },
     textGenerators: {
       [standalone]: {
-        kind: "openaiCompatible" as const,
+        kind: "openaiCompatible",
         baseUrl: "https://model.example/v1",
+        apiKey: "",
         enabled: true,
       },
     },
     textGenerationModelSelection: selection,
-  };
+  } satisfies ServerSettings;
   const providers = [
     { ...piProvider({ slug: "default", name: "OmO default" }), instanceId: omo, driver },
   ];
