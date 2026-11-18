@@ -6,6 +6,7 @@ import {
   MAX_CHAT_HIGHLIGHT_CHARACTERS,
   fenceHighlightable,
   openFenceCode,
+  streamingFenceCode,
 } from "./codeBlockMarkdown";
 
 describe("fencedCodeMarkdown", () => {
@@ -52,5 +53,13 @@ describe("fenceHighlightable", () => {
     expect(fenceHighlightable(large, openFenceCode(`${fence}kotlin\n${large}${fence}`))).toBe(
       false,
     );
+  });
+
+  it("colours a finished message's last fence even when the message never closed it", () => {
+    // A stopped or cut turn ends inside its fence; only a message still streaming waits.
+    const code = "fun main() {\n  println(1)";
+    const markdown = `Here:\n\n${fence}kotlin\n${code}`;
+    expect(fenceHighlightable(code, streamingFenceCode(markdown, true))).toBe(false);
+    expect(fenceHighlightable(code, streamingFenceCode(markdown, false))).toBe(true);
   });
 });
