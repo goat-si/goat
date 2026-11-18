@@ -901,6 +901,50 @@ it.layer(layerTest, { excludeTestServices: true })("WorkspaceEntries", (it) => {
     );
   });
 
+  it.effect("keeps the finder when the first content scan times out", () =>
+    Effect.gen(function* () {
+      const cwd = yield* makeTempDir();
+      yield* writeTextFile(cwd, "src/notes.ts", "const needle = 1;\n");
+      const createFinder = FileFinder.create.bind(FileFinder);
+      let scanning = true;
+      let settle = (): Promise<unknown> => Promise.resolve();
+      const create = vi.spyOn(FileFinder, "create").mockImplementation((options) => {
+        const result = createFinder(options);
+        if (result.ok) {
+          const finder = result.value;
+          const wait = finder.waitForIndexReady.bind(finder);
+          settle = () => wait(15_000);
+          finder.waitForIndexReady = (timeout) =>
+            scanning ? Promise.resolve({ ok: true, value: false }) : wait(timeout);
+          const progress = finder.getScanProgressAsync.bind(finder);
+          finder.getScanProgressAsync = async () => {
+            const result = await progress();
+            return scanning && result.ok
+              ? { ok: true, value: { ...result.value, isScanning: true, isWarmupComplete: false } }
+              : result;
+          };
+        }
+        return result;
+      });
+      const workspaceEntries = yield* WorkspaceEntries.WorkspaceEntries;
+      const search = workspaceEntries.searchContents({
+        cwd,
+        query: "needle",
+        limit: 100,
+        caseSensitive: true,
+        wholeWord: false,
+        useRegex: false,
+      });
+      const first = yield* search.pipe(Effect.flip);
+      expect(first._tag).toBe("WorkspaceSearchIndexScanTimedOut");
+      scanning = false;
+      yield* Effect.promise(settle);
+      const result = yield* search;
+      expect(result.matches.map((match) => match.path)).toEqual(["src/notes.ts"]);
+      expect(create).toHaveBeenCalledTimes(1);
+    }),
+  );
+
   describe("browse", () => {
     it.effect("shows dot directories in directory mode and hidden-prefix mode", () =>
       Effect.gen(function* () {

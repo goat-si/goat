@@ -120,7 +120,10 @@ export class WorkspaceSearchIndex extends Context.Service<
     ) => Effect.Effect<ProjectSearchEntriesResult, WorkspaceSearchIndexSearchFailed>;
     readonly searchContents: (
       input: Omit<ProjectSearchContentsInput, "cwd">,
-    ) => Effect.Effect<ProjectSearchContentsResult, WorkspaceSearchIndexSearchFailed>;
+    ) => Effect.Effect<
+      ProjectSearchContentsResult,
+      WorkspaceSearchIndexScanTimedOut | WorkspaceSearchIndexSearchFailed
+    >;
     readonly refresh: () => Effect.Effect<void, WorkspaceSearchIndexRefreshFailed>;
   }
 >()("goat/workspace/WorkspaceSearchIndex") {}
@@ -453,12 +456,10 @@ export const make = Effect.fn("WorkspaceSearchIndex.make")(function* (
       }),
   ).pipe(
     Effect.catchTags({
-      WorkspaceSearchIndexScanTimedOut: (error) =>
-        variant === "paths"
-          ? Effect.sync(() => {
-              initialScanTimedOut = true;
-            })
-          : Effect.fail(error),
+      WorkspaceSearchIndexScanTimedOut: () =>
+        Effect.sync(() => {
+          initialScanTimedOut = true;
+        }),
     }),
   );
 
@@ -476,7 +477,7 @@ export const make = Effect.fn("WorkspaceSearchIndex.make")(function* (
   const runSearch = Effect.fn("WorkspaceSearchIndex.runSearch")(function* <A>(
     query: string,
     pageSize: number,
-    operation: "directorySearch" | "fileSearch" | "grep" | "mixedSearch",
+    operation: "directorySearch" | "fileSearch" | "getScanProgress" | "grep" | "mixedSearch",
     execute: () => Promise<Result<A>>,
   ): Effect.fn.Return<A, WorkspaceSearchIndexSearchFailed> {
     // fff's searches wait on its picker lock, which its watcher can hold for minutes.
@@ -666,6 +667,18 @@ export const make = Effect.fn("WorkspaceSearchIndex.make")(function* (
   const searchContents: WorkspaceSearchIndex["Service"]["searchContents"] = Effect.fn(
     "WorkspaceSearchIndex.searchContents",
   )(function* (input) {
+    if (initialScanTimedOut) {
+      const progress = yield* runSearch(input.query, input.limit, "getScanProgress", () =>
+        finder.getScanProgressAsync(),
+      );
+      if (progress.isScanning || !progress.isWarmupComplete) {
+        return yield* new WorkspaceSearchIndexScanTimedOut({
+          cwd,
+          timeout: WORKSPACE_INDEX_SCAN_TIMEOUT,
+        });
+      }
+      initialScanTimedOut = false;
+    }
     let { searchQuery, regexMode } = buildContentSearchQuery(input);
     const deadline = performance.now() + CONTENT_SEARCH_TIME_BUDGET_MS;
     // Grep cursors advance per file; whole-word filtering needs enough raw candidates before advancing.
