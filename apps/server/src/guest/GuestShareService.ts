@@ -31,6 +31,7 @@ import * as Layer from "effect/Layer";
 import * as Option from "effect/Option";
 import * as Schedule from "effect/Schedule";
 import * as Schema from "effect/Schema";
+import type * as Scope from "effect/Scope";
 import * as Semaphore from "effect/Semaphore";
 import * as Stream from "effect/Stream";
 
@@ -162,9 +163,7 @@ export class GuestShareService extends Context.Service<
     /** Succeeds while the session can still open its share. */
     readonly check: (session: string) => Effect.Effect<void, GuestShareAccessError>;
     /** Holds the host's guest upload slot until staging and cleanup finish. */
-    readonly withUploadSlot: <A, E, R>(
-      upload: Effect.Effect<A, E, R>,
-    ) => Effect.Effect<A, E | GuestShareAccessError, R>;
+    readonly acquireUploadSlot: Effect.Effect<void, GuestShareAccessError, Scope.Scope>;
     /** Stores the guest's files as the thread's attachments and records the message with them. */
     readonly submit: (
       session: string,
@@ -377,13 +376,15 @@ const make = Effect.gen(function* () {
     yield* authorize(session, "session");
   });
 
-  const withUploadSlot = Effect.fn("GuestShareService.withUploadSlot")(function* <A, E, R>(
-    upload: Effect.Effect<A, E, R>,
-  ) {
-    const result = yield* uploadSlot.withPermitsIfAvailable(1)(upload);
-    if (Option.isNone(result)) return yield* new GuestShareAccessError({ reason: "files_busy" });
-    return result.value;
-  });
+  const acquireUploadSlot = Effect.acquireRelease(
+    uploadSlot.takeIfAvailable(1).pipe(
+      Effect.filterOrFail(
+        (acquired) => acquired,
+        () => new GuestShareAccessError({ reason: "files_busy" }),
+      ),
+    ),
+    () => uploadSlot.release(1),
+  ).pipe(Effect.asVoid);
 
   const uploadFailed = new GuestShareAccessError({ reason: "rejected" });
   const removeStored = (attachments: ReadonlyArray<ChatAttachment>) =>
@@ -677,7 +678,7 @@ const make = Effect.gen(function* () {
     create,
     redeem,
     check,
-    withUploadSlot,
+    acquireUploadSlot,
     submit,
     stream,
     render,

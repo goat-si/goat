@@ -1,6 +1,6 @@
 import * as ServerConfig from "../config.ts";
 import { NodeHttpPlatform } from "@effect/platform-node";
-import { guestSessionCookieName } from "@goat/contracts";
+import { guestSessionCookieName, ThreadId } from "@goat/contracts";
 import * as Deferred from "effect/Deferred";
 import * as Fiber from "effect/Fiber";
 import * as FileSystem from "effect/FileSystem";
@@ -8,7 +8,7 @@ import * as Layer from "effect/Layer";
 import * as Schema from "effect/Schema";
 import * as DocumentText from "../provider/DocumentText.ts";
 import * as GuestShareService from "./GuestShareService.ts";
-import { joinedGuest, makeLayerTest } from "./GuestShareService.testkit.ts";
+import { joinedGuest, makeLayerTest, shareThreadFor } from "./GuestShareService.testkit.ts";
 import * as NodeServices from "@effect/platform-node/NodeServices";
 import { assert, it } from "@effect/vitest";
 import * as Effect from "effect/Effect";
@@ -35,7 +35,7 @@ it.effect("keeps a JSON file a guest attaches as a file, not a form field", () =
         body: form,
       }),
     );
-    const submission = yield* readSubmission.pipe(
+    const submission = yield* readSubmission(Effect.void).pipe(
       Effect.provideService(HttpServerRequest.HttpServerRequest, request),
     );
     assert.deepEqual(
@@ -68,20 +68,32 @@ it.effect("refuses overlapping guest uploads before staging the second multipart
     );
     yield* Effect.gen(function* () {
       const { session, shareId } = yield* joinedGuest;
+      const other = yield* shareThreadFor(ThreadId.make("thread:other-guest-upload"));
+      const otherGuest = yield* other.guestShares.redeem({
+        credential: other.credential,
+        name: "Other guest",
+      });
       const fs = yield* FileSystem.FileSystem;
       const handler = yield* HttpRouter.toHttpEffect(layer);
-      const submit = (text: string, upload: boolean) =>
+      const submit = (
+        text: string,
+        mode: "file" | "multipart" | "json",
+        guest = { token: session, shareId },
+      ) =>
         Effect.suspend(() => {
           const form = new FormData();
+          const { shareId, token } = guest;
           form.append("shareId", shareId);
           form.append("text", text);
-          form.append("file", new File(["Notes"], "notes.rtf", { type: "application/rtf" }));
+          if (mode === "file") {
+            form.append("file", new File(["Notes"], "notes.rtf", { type: "application/rtf" }));
+          }
           const request = new Request(`http://localhost/api/guest/messages?share=${shareId}`, {
             method: "POST",
-            body: upload ? form : JSON.stringify({ shareId, text }),
+            body: mode === "json" ? JSON.stringify({ shareId, text }) : form,
             headers: {
-              cookie: `${guestSessionCookieName(shareId)}=${session}`,
-              ...(upload ? {} : { "content-type": "application/json" }),
+              cookie: `${guestSessionCookieName(shareId)}=${token}`,
+              ...(mode === "json" ? { "content-type": "application/json" } : {}),
             },
           });
           return handler.pipe(
@@ -101,7 +113,7 @@ it.effect("refuses overlapping guest uploads before staging the second multipart
           }),
         );
 
-      const first = yield* submit("First", true).pipe(Effect.forkChild);
+      const first = yield* submit("First", "file").pipe(Effect.forkChild);
       yield* Effect.raceFirst(
         Deferred.await(extracting),
         Fiber.join(first).pipe(
@@ -110,13 +122,17 @@ it.effect("refuses overlapping guest uploads before staging the second multipart
           ),
         ),
       );
-      const second = yield* submit("Second", true);
+      const second = yield* submit("Second", "file");
       assert.equal(second.status, 409);
       assert.equal(yield* failureReason(second), "files_busy");
+      assert.equal(
+        (yield* submit("Text from an open guest page", "multipart", otherGuest)).status,
+        204,
+      );
       assert.equal(staged, 1);
 
       for (const text of ["One", "Two", "Three"]) {
-        assert.equal((yield* submit(text, false)).status, 204);
+        assert.equal((yield* submit(text, "json")).status, 204);
       }
       yield* Deferred.succeed(release, undefined);
       const firstResponse = yield* Fiber.join(first);
@@ -125,7 +141,7 @@ it.effect("refuses overlapping guest uploads before staging the second multipart
       const attachmentsDir = (yield* ServerConfig.ServerConfig).attachmentsDir;
       assert.deepEqual(yield* fs.readDirectory(attachmentsDir), []);
 
-      const retry = yield* submit("Retry", true);
+      const retry = yield* submit("Retry", "file");
       assert.equal(retry.status, 409);
       assert.equal(yield* failureReason(retry), "busy");
       assert.equal(staged, 2);
