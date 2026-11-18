@@ -40,7 +40,6 @@ import {
   type VcsStatusRemoteResult,
   VcsStatusResult,
   ModelSelection,
-  type OrchestrationV2TurnItem,
   type ProjectId,
   SourceControlProviderError,
   type SourceControlWritingStyleSettings,
@@ -71,6 +70,7 @@ import {
   selectHistory,
 } from "@goat/provider-core/server/handoffBudget";
 import * as TextGeneration from "../textGeneration/TextGeneration.ts";
+import { limitCommandOutput, limitContext } from "./promptContextLimits.ts";
 import {
   conventionalCommitsTextGenerationPolicy,
   customTextGenerationPolicy,
@@ -184,7 +184,6 @@ const PR_LOOKUP_FAILURE_BASE_TTL = Duration.seconds(20);
 const PR_LOOKUP_FAILURE_MAX_TTL = Duration.minutes(15);
 const PR_LOOKUP_CACHE_CAPACITY = 2_048;
 const PR_THREAD_CONTEXT_BYTES = 16_000;
-const PR_THREAD_COMMAND_OUTPUT_CHARS = 2_000;
 const isSourceControlProviderError = Schema.is(SourceControlProviderError);
 
 /**
@@ -421,18 +420,6 @@ function toPullRequestInfo(summary: ChangeRequest): PullRequestInfo {
       ? { headRepositoryOwnerLogin: summary.headRepositoryOwnerLogin }
       : {}),
   };
-}
-
-function limitContext(value: string, maxChars: number): string {
-  if (value.length <= maxChars) return value;
-  return `${value.slice(0, maxChars)}\n\n[truncated]`;
-}
-
-// Preserve command evidence when selectHistory drops oversized items; test verdicts are at the tail.
-function limitCommandOutput(item: OrchestrationV2TurnItem): OrchestrationV2TurnItem {
-  if (item.type !== "command_execution" || item.output === undefined) return item;
-  if (item.output.length <= PR_THREAD_COMMAND_OUTPUT_CHARS) return item;
-  return { ...item, output: `[truncated]\n${item.output.slice(-PR_THREAD_COMMAND_OUTPUT_CHARS)}` };
 }
 
 function headBranchProbe(
