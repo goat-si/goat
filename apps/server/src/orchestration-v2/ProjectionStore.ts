@@ -1,3 +1,14 @@
+import {
+  nullableStringField,
+  parseEncodedPayload,
+  stringField,
+} from "./ProjectionPayloadFields.ts";
+import {
+  decodeThreadPayload,
+  encodeThreadPayload,
+  encodeThreadUpdatedAt,
+} from "./ProjectionThreadPayload.ts";
+export { decodeThreadPayload } from "./ProjectionThreadPayload.ts";
 import { parentClosed } from "./goat/LimitRecoveryParent.ts";
 import * as ThreadNewestRun from "./goat/ThreadNewestRun.ts";
 import { replayActivityBlockers, selectThreadRecords } from "./goat/ProjectionStoreMemoryReads.ts";
@@ -92,7 +103,6 @@ import type {
   RunAttemptId,
 } from "@goat/contracts";
 import {
-  OrchestrationV2AppThreadJson as OrchestrationV2AppThreadJsonSchema,
   OrchestrationV2CheckpointJson as OrchestrationV2CheckpointJsonSchema,
   OrchestrationV2CheckpointScopeJson as OrchestrationV2CheckpointScopeJsonSchema,
   OrchestrationV2ContextHandoffJson as OrchestrationV2ContextHandoffJsonSchema,
@@ -940,12 +950,6 @@ const encodeIdList = Schema.encodeSync(Schema.fromJsonString(Schema.Array(Schema
 const matchesNothing = (...filters: ReadonlyArray<ReadonlyArray<unknown> | undefined>) =>
   filters.some((values) => values?.length === 0);
 
-const encodeThreadPayload = Schema.encodeEffect(
-  Schema.fromJsonString(OrchestrationV2AppThreadJsonSchema),
-);
-const encodeThreadUpdatedAt = Schema.encodeEffect(
-  OrchestrationV2AppThreadJsonSchema.fields.updatedAt,
-);
 const encodeRunPayload = Schema.encodeEffect(Schema.fromJsonString(OrchestrationV2RunJsonSchema));
 const encodeRestartCancelledBackgroundWork = Schema.encodeEffect(
   Schema.fromJsonString(OrchestrationV2RunJsonSchema.fields.restartCancelledBackgroundWork),
@@ -996,9 +1000,6 @@ const encodeContextTransferPayload = Schema.encodeEffect(
   Schema.fromJsonString(OrchestrationV2ContextTransferJsonSchema),
 );
 
-export const decodeThreadPayload = Schema.decodeUnknownEffect(
-  Schema.fromJsonString(OrchestrationV2AppThreadJsonSchema),
-);
 const decodeRunPayload = Schema.decodeUnknownEffect(
   Schema.fromJsonString(OrchestrationV2RunJsonSchema),
 );
@@ -1047,23 +1048,6 @@ const decodeContextTransferPayload = Schema.decodeUnknownEffect(
 
 const isProjectionStoreThreadNotFoundError = Schema.is(ProjectionStoreThreadNotFoundError);
 const isProjectionStoreReadError = Schema.is(ProjectionStoreReadError);
-
-function parseEncodedPayload(json: string): Record<string, unknown> {
-  return JSON.parse(json) as Record<string, unknown>;
-}
-
-function stringField(payload: Record<string, unknown>, field: string): string {
-  const value = payload[field];
-  return typeof value === "string" ? value : String(value);
-}
-
-function nullableStringField(payload: Record<string, unknown>, field: string): string | null {
-  const value = payload[field];
-  if (value === null || value === undefined) {
-    return null;
-  }
-  return typeof value === "string" ? value : String(value);
-}
 
 function booleanInt(value: boolean): 0 | 1 {
   return value ? 1 : 0;

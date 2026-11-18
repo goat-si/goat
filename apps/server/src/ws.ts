@@ -1,3 +1,4 @@
+import { enrichProjectShells } from "./project/enrichProjectShells.ts";
 import { makeGlobalSkillsRpcLayer } from "./skills/GlobalSkillsRpcHandlers.ts";
 import * as AccessRpc from "./auth/AccessRpc.ts";
 import { makeOmittableShellReaders } from "./orchestration-v2/ThreadFamilyLookup.ts";
@@ -96,7 +97,6 @@ import {
   type GitManagerServiceError,
   type MessageId,
   type OrchestrationClientOrigin,
-  type OrchestrationProjectShell,
   type OrchestrationV2Command,
   type OrchestrationV2ShellSnapshot,
   type ApplicationStoredEvent,
@@ -602,33 +602,6 @@ const canReplayPersistedRange = Effect.fnUntraced(function* (
   }
   return true;
 });
-
-const enrichProjectShells = Effect.fn("ws.orchestrationV2.enrichProjectShells")(
-  (projects: ReadonlyArray<OrchestrationProjectShell>) =>
-    Effect.flatMap(ProjectEnrichmentService.ProjectEnrichmentService, (projectEnrichment) =>
-      Effect.forEach(
-        projects,
-        (project) =>
-          projectEnrichment.getAvailable(project.workspaceRoot).pipe(
-            Effect.map((enrichment) => ({
-              project: {
-                ...project,
-                repositoryIdentity: enrichment.repositoryIdentity,
-              },
-              repositoryIdentityResolved: enrichment.repositoryIdentityResolved,
-            })),
-          ),
-        { concurrency: 16 },
-      ).pipe(
-        Effect.map((enriched) => ({
-          projects: enriched.map((entry) => entry.project),
-          resolvedRepositoryIdentityRoots: enriched
-            .filter((entry) => entry.repositoryIdentityResolved)
-            .map((entry) => entry.project.workspaceRoot),
-        })),
-      ),
-    ),
-);
 
 export const subscribeOrchestrationV2Thread = Effect.fn("ws.orchestrationV2.subscribeThread")(
   function* (input: {
