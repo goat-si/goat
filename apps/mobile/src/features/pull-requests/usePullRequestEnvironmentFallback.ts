@@ -1,6 +1,7 @@
-import { useNavigation } from "@react-navigation/native";
-import { useEffect, useMemo } from "react";
+import { useIsFocused, useNavigation } from "@react-navigation/native";
+import { use, useEffect, useMemo } from "react";
 
+import { NativeWorkspaceTabActivityContext } from "../../native/v5-workspace-context";
 import { useProjects } from "../../state/entities";
 import { useConnectionsReady, useWorkspaceEnvironments } from "../../state/workspace";
 import {
@@ -10,6 +11,8 @@ import {
 
 export function usePullRequestEnvironmentFallback(params: PullRequestEnvironmentTarget) {
   const navigation = useNavigation();
+  const focused = useIsFocused();
+  const tabActive = use(NativeWorkspaceTabActivityContext)?.active ?? true;
   const projects = useProjects();
   const isReady = useConnectionsReady();
   const environments = useWorkspaceEnvironments();
@@ -18,6 +21,6 @@ export function usePullRequestEnvironmentFallback(params: PullRequestEnvironment
     [params, projects, environments, isReady],
   );
   useEffect(() => {
-    if (fallback) navigation.setParams(fallback);
-  }, [fallback, navigation]);
+    if (tabActive && focused && fallback) navigation.setParams(fallback);
+  }, [fallback, focused, navigation, tabActive]);
 }
