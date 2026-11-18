@@ -300,7 +300,7 @@
   "apps/server/src/orchestration-v2/ProjectionMaintenance.ts": { "nonNull": 5 },
   "apps/server/src/orchestration-v2/ProjectionRecovery.test.ts": { "lines": 1360 },
   "apps/server/src/orchestration-v2/ProjectionStore.test.ts": { "lines": 7602 },
-  "apps/server/src/orchestration-v2/ProjectionStore.ts": { "lines": 8822, "nonNull": 6 },
+  "apps/server/src/orchestration-v2/ProjectionStore.ts": { "lines": 8820, "nonNull": 6 },
   "apps/server/src/orchestration-v2/ProviderEventIngestor.test.ts": { "lines": 2475 },
   "apps/server/src/orchestration-v2/ProviderRuntimeRecoveryService.test.ts": { "lines": 1363 },
   "apps/server/src/orchestration-v2/ProviderSessionManager.test.ts": { "lines": 5903 },

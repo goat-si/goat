@@ -75,6 +75,23 @@ it.layer(layerTest)("mid-turn message projection", (it) => {
         attachments: [],
       });
       const lastOrdinal = THREAD_HISTORY_INLINE_WORK_ITEM_LIMIT + 5;
+      const rejected = [
+        {
+          toolName: "mcp__foreign__goat_message_show",
+          input: {},
+          output: { sentMessage: "This tool is not GOAT." },
+        },
+        {
+          toolName: "mcp__goat__goat_call",
+          input: { path: "message.show", name: "thread.read" },
+          output: { status: "ok", value: { sentMessage: "The aliases conflict." } },
+        },
+        {
+          toolName: "mcp__goat__goat_message_show",
+          input: { sentMessage: "This is input, not a result." },
+          output: { isError: true },
+        },
+      ];
       for (let ordinal = 2; ordinal <= lastOrdinal; ordinal++) {
         const target = ordinal === 3 ? { path: "message.show" } : { path: "thread.read" };
         yield* saveD10Item({
@@ -85,6 +102,7 @@ it.layer(layerTest)("mid-turn message projection", (it) => {
           toolName: "mcp__goat__goat_call",
           input: target,
           output: ordinal <= 4 ? { status: "ok", value: { sentMessage: "**Draft**" } } : {},
+          ...rejected[ordinal - 5],
         });
       }
       const window = yield* store.getThreadSnapshotWindow(threadId, {
@@ -100,6 +118,7 @@ it.layer(layerTest)("mid-turn message projection", (it) => {
         output: { status: "ok", value: { sentMessage: "**Draft**" } },
       });
       expect(rows.some((row) => row.item.ordinal === 4)).toBe(false);
+      expect(rows.filter((row) => row.item.ordinal >= 5 && row.item.ordinal <= 7)).toEqual([]);
 
       const cursor = encodeThreadHistoryCursor({
         snapshotSequence: window.snapshotSequence,
@@ -117,6 +136,9 @@ it.layer(layerTest)("mid-turn message projection", (it) => {
       expect(page.items.find((row) => row.item.ordinal === 3)?.item.deferredWork).toBeUndefined();
       expect(page.items.some((row) => row.item.ordinal === 3)).toBe(true);
       expect(page.items.some((row) => row.item.ordinal === 4)).toBe(false);
+      expect(page.items.filter((row) => row.item.ordinal >= 5 && row.item.ordinal <= 7)).toEqual(
+        [],
+      );
     }),
   );
 });
