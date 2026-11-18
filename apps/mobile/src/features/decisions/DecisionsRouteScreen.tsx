@@ -17,6 +17,7 @@ import { HumanHandoffCard } from "../threads/HumanHandoffCard";
 import { PendingUserInputBody } from "../threads/PendingUserInputBody";
 import { Button } from "../../components/ui/Button";
 import { DecisionDurableCard } from "./DecisionDurableCard";
+import { useDecisionInboxSideChat } from "./decisionInboxSideChat";
 import { useDecisionInbox, useDecisionInboxSessionState } from "./useDecisionInbox";
 
 export function DecisionsRouteScreen() {
@@ -61,7 +62,7 @@ function FocusedDecisionsContent(props: {
     decisionDraft,
     onSelectOption,
     onChangeCustomAnswer,
-  } = useDecisionInbox(props.session, props.isFocused);
+  } = useDecisionInbox(props.session, props.isFocused, useDecisionInboxSideChat());
   const navigation = useNavigation();
   const selectDetail = useSelectWorkspaceDetail();
   const thread = useThreadShell(current?.ref ?? null);
