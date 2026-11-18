@@ -121,3 +121,21 @@ Status **READY**. The clean lane head `712a7c8848958f54a5fded97d55eb5c147cd53fa`
 The lane branch was plain-pushed from `94ba58b183f2d62839907ee1c946e8b6b6ade71e`, and `git ls-remote` confirmed the tested head. `ThreadStop.test.ts` passed all 43 cases on the tested lane, inside the final gate, and on detached integration in the attribution runs. Final gate also passed `SshWorkspaceSync.test.ts` 84, `McpToolAccess.capabilities.test.ts` 20, and `harnessListing.test.ts` 7.
 
 NOT RUN: lane CI, the three optional HTML browser tests, the Windows-only update test, live Claude and model evaluation, and integrated real-client and mixed-version P1 captures.
+
+## K12 review round 3
+
+Review r2 blocked `712a7c8848958f54a5fded97d55eb5c147cd53fa` on the public agent index and the shared discovery fixture. Integration remained `12553a304d7ebdc84f79a7e61fb2e2b30ff68763`.
+
+### Coordinator Rule 3 approval
+
+> Rule 3 PRE-APPROVED by coordinator: in apps/server/src/mcp/McpHttpServer.test.ts (~:1239) the existing anonymous /llms.txt inventory assertion may exclude prompt-only entries from its expected set, the same prompt-tier exclusion already approved for toolListing/agentSurface/harnessListing; title and every other entry/assertion unchanged. Record this ruling verbatim in next3-K12.md.
+
+- P2, `39f9aae75833d726e419b96563be95acdc5a6937`. The shared /llms.txt renderer filters prompt-only entries for every caller before applying its existing credential-kind filters. Explicit goat_call dispatch still uses the same resolution and admission. Before the fix the guarded whole `McpHttpServer.test.ts` exited 1 with 26 passed and one failed. Both the anonymous and Codex thread assertions found `message.show`. After the fix the whole file passed 27/27. Its existing test title, credential checks and other assertions are intact. The inventory count excludes the prompt tier.
+- P3, `1b419cde1954bd1bc4a169685ace4312a4d446e5`. Compared the shared thread fixture and serve setup to integration byte-for-byte. Provider drivers are supplied only by the new provider-specific discovery cases. The whole `discovery.test.ts` passed all seven cases.
+- Guarded whole server run from `apps/server` with Node 26.12.1 and `GOAT_TEST_TMP_GUARD=fail` exited 0 with 173 passed across 10 files: `McpHttpServer.test.ts` 27, `agentSurface.test.ts` 23, `harnessListing.test.ts` 7, `toolListing.test.ts` 16, `discovery.test.ts` 7, `message.test.ts` 3, `goatMcpToolNames.test.ts` 10, `ProjectionStore.midTurnMessage.test.ts` 1, `WireProjection.test.ts` 36, and `ThreadStop.test.ts` 43. The latter passed 43/43 on detached integration in the earlier attribution run at 3d683c091e and b95bc9ddbd.
+- `vp run agent-surface:context-budget-check` exited 0. Claude measured 6,138 instruction bytes and 10,199 first-prompt bytes. The core listing remained two tools and 4,061 model-facing bytes.
+- The focused workspace run exited 0 with 22 passed across four files: mobile mid-turn feed 1, mobile dependency graph 2, web mid-turn session 1 and synthetic replay 18.
+- `vp run check:changed origin/chase/t3-261114-next3` exited 0 on `1b419cde1954bd1bc4a169685ace4312a4d446e5` against merge base `12553a304d7ebdc84f79a7e61fb2e2b30ff68763`. All static checks and typecheck across 39 packages passed. Server: 482 files, 6,621 tests passed and four skipped. Workspace: 97 files, 5,037 tests passed. Total: 579 files, 11,658 tests passed, zero failed and four skipped. The skipped cases were three opt-in HTML browser tests and one Windows-only update test.
+- **READY.** Plain fast-forward push from `712a7c8848958f54a5fded97d55eb5c147cd53fa` to the tested head on `chase/t3-261114-next3-k12`. Verified the remote lane head.
+
+NOT RUN: lane CI, the four gate-skipped cases, live Claude and model evaluation, and integrated real-client and mixed-version P1 captures.
