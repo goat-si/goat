@@ -77,6 +77,7 @@ describe("orchestration v2 provider switching", () => {
     "imported-prior-images-fallback",
     "prior-images-telemetry-native",
     "prior-images-unsent-native",
+    "prior-images-unsent-tight-native",
     "prior-images-legacy-replacement-native",
     "delivery-write-failure",
   ] as const)("preserves handoffs through %s", (scenario) =>
@@ -170,7 +171,11 @@ describe("orchestration v2 provider switching", () => {
                 : scenario === "large-current-input" || priorImages || exhaustedTarget
                   ? {
                       getModelContextWindow: () =>
-                        scenario.includes("target-tight") ? 25_121 : 32_000,
+                        scenario.includes("target-tight")
+                          ? 25_121
+                          : scenario === "prior-images-unsent-native"
+                            ? 48_000
+                            : 32_000,
                     }
                   : {}),
             ...(scenario.endsWith("-native") || scenario === "large-current-input"
@@ -592,7 +597,7 @@ describe("orchestration v2 provider switching", () => {
               turnUsageScenario ||
               scenario.startsWith("imported") ||
               scenario.includes("telemetry") ||
-              scenario.includes("unsent") ||
+              (scenario.includes("unsent") && !scenario.includes("unsent-tight")) ||
               replaceNative;
             const sourceText =
               `${replaceNative ? "Another" : "New"} source constraint ` + "q".repeat(9_000);
@@ -616,7 +621,16 @@ describe("orchestration v2 provider switching", () => {
               );
             } else {
               assert.notInclude(context, "q".repeat(9_000));
-              assert.isAbove(handoff.delivery!.omittedItemIds!.length, 0);
+              if (scenario.includes("unsent-tight")) {
+                assert.include(
+                  projection.contextHandoffs.flatMap(
+                    (record) => record.delivery?.omittedItemIds ?? [],
+                  ),
+                  sourceItem.id,
+                );
+              } else {
+                assert.isAbove(handoff.delivery!.omittedItemIds!.length, 0);
+              }
             }
             const latestRun = projection.runs.at(-1)!;
             const latestAttempt = projection.attempts.find(
@@ -631,6 +645,9 @@ describe("orchestration v2 provider switching", () => {
               else
                 assert.deepEqual(target.contextUsage, { usedTokens: 37_321, maxTokens: 258_400 });
               assert.lengthOf((yield* Ref.get(capturedTurns)).at(-1)!.attachments, 2);
+            }
+            if (scenario.includes("unsent")) {
+              assert.deepEqual((yield* Ref.get(capturedTurns)).at(-1)?.attachments, [screenshot]);
             }
             if (replaceNative) assert.equal(yield* Ref.get(generation), 2);
             return;

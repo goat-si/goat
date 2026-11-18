@@ -886,14 +886,13 @@ export const layer: Layer.Layer<
         if (resumed._tag === "Success") {
           if (cloud || nativeResume) return resumed.success;
           const context = handoffContextForThread(resumed.success);
-          context.budget = yield* Effect.cached(context.budget);
           resumedRetryHandoff = yield* prepareRetryHandoff(context);
           resumedHandoffContext = context;
           const fits = yield* deliverContextHandoffs({
             replayedInput,
             handoffs: [...handoffs, ...resumedRetryHandoff.handoffs],
             providerThread: { ...resumed.success, id: providerThread.id },
-            budget: context.budget,
+            budget: resumedRetryHandoff.budget,
             deferInline: isCompactionCommandMessage(providerMessage) || goalCommand,
             alreadyDeliveredItemIds: context.deliveredItemIds,
             persist: () => Effect.void,
@@ -903,13 +902,14 @@ export const layer: Layer.Layer<
           );
           if (fits) return resumed.success;
           const freshThread = { ...resumed.success, nativeThreadRef: null };
-          const freshContext = handoffContextForThread(freshThread);
+          const freshContext = handoffContextForThread(freshThread, true);
+          const freshRetry = yield* prepareRetryHandoff(freshContext);
           const { handoff } = yield* recoveryHandoff;
           const fitsFresh = yield* deliverContextHandoffs({
             replayedInput,
             handoffs: withRecoveryHandoff(handoff, effectiveHandoffs),
             providerThread: freshThread,
-            budget: freshContext.budget,
+            budget: freshRetry.budget,
             alreadyDeliveredItemIds: freshContext.deliveredItemIds,
             persist: () => Effect.void,
           }).pipe(
@@ -1084,10 +1084,9 @@ export const layer: Layer.Layer<
         acceptedAttempts,
         nativeInputRunIds,
         legacyInputRunIds,
-        budget,
       } = handoffContext;
       const retryHandoff = nativeResume
-        ? { handoffs: [], images: [] }
+        ? { handoffs: [], attachments: providerMessage.attachments, budget: Effect.succeed(0) }
         : (resumedRetryHandoff ?? (yield* prepareRetryHandoff(handoffContext)));
       // Retain accepted ownership evidence until the provider commits its next acceptance.
       const acceptedCloudTask = providerThread.nativeThreadRef?.nativeId
@@ -1268,7 +1267,7 @@ export const layer: Layer.Layer<
             handoffs: [...effectiveHandoffs, ...retryHandoff.handoffs],
             deferInline: compact || goalCommand,
             providerThread: runningProviderThread,
-            budget,
+            budget: retryHandoff.budget,
             alreadyDeliveredItemIds: deliveredItemIds,
             ...(session.injectHistory === undefined
               ? {}
@@ -1411,7 +1410,7 @@ export const layer: Layer.Layer<
         message: {
           messageId: message.id,
           text: userText,
-          attachments: [...retryHandoff.images, ...providerMessage.attachments],
+          attachments: retryHandoff.attachments,
           createdBy: message.createdBy,
           creationSource: message.creationSource,
           ...(message.scheduledTaskId === undefined

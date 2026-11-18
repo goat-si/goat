@@ -196,12 +196,14 @@ export const makeProviderTurnHandoffRecovery = Effect.gen(function* () {
         missedRuns,
         missedRunIds,
         resumeFellBack,
-        budget: Effect.gen(function* () {
+        budget: Effect.fn("ProviderTurnStartService.handoffBudget")(function* (
+          promptAttachments: typeof attachments,
+        ) {
           return handoffBudget({
             tokenCap,
             modelContextWindow,
             userText: restartNote === "" ? userText : `${restartNote}\n\n${userText}`,
-            attachments,
+            attachments: promptAttachments,
             providerThread: budgetProviderThread,
             nativeContextEstimate:
               budgetProviderThread.contextUsage?.usedTokens === undefined
@@ -264,7 +266,12 @@ export const makeProviderTurnHandoffRecovery = Effect.gen(function* () {
               goalDriver,
             })
           : [];
-        return { handoffs: retryHandoff, images };
+        const promptAttachments = [...images, ...attachments];
+        return {
+          handoffs: retryHandoff,
+          attachments: promptAttachments,
+          budget: yield* Effect.cached(context.budget(promptAttachments)),
+        };
       },
     );
     const prepareRecoveryHandoff = Effect.fn("ProviderTurnStartService.prepareRecoveryHandoff")(
