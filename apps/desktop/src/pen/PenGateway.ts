@@ -551,7 +551,7 @@ export function makePenGateway(deps: Dependencies) {
       });
       instance.on("clientError", (_error, socket) => {
         socket.end(
-          "HTTP/1.1 400 Bad Request\r\nReferrer-Policy: no-referrer\r\nConnection: close\r\nContent-Length: 0\r\n\r\n",
+          "HTTP/1.1 400 Bad Request\r\nReferrer-Policy: no-referrer\r\nCache-Control: no-store\r\nConnection: close\r\nContent-Length: 0\r\n\r\n",
         );
       });
       instance.listen(0, "127.0.0.1", () => {

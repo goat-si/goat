@@ -135,6 +135,34 @@ describe("Pen gateway session mint", () => {
     }
   });
 
+  it("answers a request it cannot parse without letting it be cached", async () => {
+    const gateway = makePenGateway({
+      membership: { requireMember: async () => "member", subscribe: () => () => {} },
+      resolvePenBinary: async () => "/pen",
+      spawn: () => fakeChild(),
+      randomBytes: () => Buffer.alloc(32, 1),
+      appOrigins: ["goat://app"],
+    });
+    try {
+      const route = await gateway.open(pin);
+      if (route.kind !== "open") throw new Error("route refused");
+      const url = new URL(route.httpBaseUrl);
+      const answer = await new Promise<string>((resolve, reject) => {
+        let received = "";
+        const socket = NodeNet.connect(Number(url.port), "127.0.0.1", () =>
+          socket.write("NOT HTTP\r\n\r\n"),
+        );
+        socket.on("data", (bytes: Buffer) => (received += bytes.toString()));
+        socket.on("error", reject);
+        socket.on("close", () => resolve(received));
+      });
+      expect(answer.startsWith("HTTP/1.1 400 ")).toBe(true);
+      expect(answer.toLowerCase()).toContain("cache-control: no-store");
+    } finally {
+      await gateway.dispose();
+    }
+  });
+
   it("answers an upgrade past the waiting limit with 503, as an ordinary request", async () => {
     const gateway = makePenGateway({
       membership: { requireMember: async () => "member", subscribe: () => () => {} },
