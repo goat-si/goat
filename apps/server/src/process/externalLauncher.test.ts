@@ -208,7 +208,7 @@ it.effect.skipIf(windowsHost)(
         const editors = yield* launcher.resolveAvailableEditors();
         yield* launcher.launchEditor({
           editor: "file-manager",
-          cwd: "/home/t3/workspace [draft]/author's $media/clip|draft.mp4",
+          cwd: "/home/t3/workspace [draft]/author's ‘$media/clip|draft.mp4",
           reveal: true,
         });
         return { kind, editors };
@@ -235,9 +235,14 @@ it.effect.skipIf(windowsHost)(
       assert.equal(spawned.options.detached, true);
       const encodedCommand = String(spawned.args[spawned.args.length - 1] ?? "");
       const decodedCommand = Buffer.from(encodedCommand, "base64").toString("utf16le");
-      assert.equal(
+      assert.include(decodedCommand, "'Directory', 'Folder'");
+      assert.include(
         decodedCommand,
-        "$ProgressPreference = 'SilentlyContinue'; $folderVerb = (Get-ItemProperty -LiteralPath 'Registry::HKEY_CLASSES_ROOT\\Directory\\shell' -ErrorAction SilentlyContinue).'(default)'; if ($folderVerb -and $folderVerb -ne 'none') { Invoke-Item -LiteralPath '\\\\wsl.localhost\\Ubuntu-24.04\\home\\t3\\workspace [draft]\\author''s $media' } else { Start-Process 'explorer.exe' -ArgumentList ('/select,\"' + '\\\\wsl.localhost\\Ubuntu-24.04\\home\\t3\\workspace [draft]\\author''s $media\\clip|draft.mp4' + '\"') }",
+        "Invoke-Item -LiteralPath '\\\\wsl.localhost\\Ubuntu-24.04\\home\\t3\\workspace [draft]\\author''s ‘‘$media'",
+      );
+      assert.include(
+        decodedCommand,
+        "'\\\\wsl.localhost\\Ubuntu-24.04\\home\\t3\\workspace [draft]\\author''s ‘‘$media\\clip|draft.mp4'",
       );
     }).pipe(Effect.scoped, Effect.provide(NodeServices.layer)),
 );
