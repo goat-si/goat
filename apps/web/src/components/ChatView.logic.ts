@@ -1,3 +1,4 @@
+import { threadHasStarted } from "../lib/chatThreadActions";
 import type { MessagesTimeline } from "./chat/MessagesTimeline";
 import { type OrchestrationV2ProviderTurn, type RunAttemptId } from "@goat/contracts";
 import {
@@ -905,10 +906,6 @@ export function recallCheckoutIsRepo(
   return cwd === null
     ? undefined
     : sessionCheckoutIsRepo.get(checkoutIsRepoKey(environmentId, cwd));
-}
-
-export function threadHasStarted(thread: Thread | null | undefined): boolean {
-  return Boolean(thread && (thread.latestRun !== null || thread.itemCount > 0 || thread.runtime));
 }
 
 // Imported history lacks a session until its first prompt; resolve its instance before locking the driver.
