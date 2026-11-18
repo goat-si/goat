@@ -204,6 +204,7 @@ import * as CommandOutputHub from "./orchestration-v2/CommandOutputHub.ts";
 import { bufferLiveStream } from "./orchestration-v2/LiveStreamBudget.ts";
 import * as ProjectStore from "./orchestration-v2/ProjectStore.ts";
 import { ORCHESTRATION_V2_PROJECTION_SCHEMA_VERSION } from "./orchestration-v2/ProjectionStore.ts";
+import * as ThreadFind from "./orchestration-v2/ThreadFind.ts";
 import * as ProviderSessionManager from "./orchestration-v2/ProviderSessionManager.ts";
 import * as PullRequestSyncReactor from "./orchestration-v2/PullRequestSyncReactor.ts";
 import * as DocumentText from "./provider/DocumentText.ts";
@@ -1656,8 +1657,7 @@ export const layerWsRpc = (
           shellOlderSettled: true,
           threadResumeCompletionMarker: true,
           threadSnapshotPagination: true,
-          threadFind: true,
-          threadFindProgressive: true,
+          ...ThreadFind.serverCapabilities,
           secretProviderSettings: true,
           secretReferences: true,
           secretRequestReferences: true,

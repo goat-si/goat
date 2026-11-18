@@ -4273,7 +4273,7 @@ export const OrchestrationV2SearchThreadInput = Schema.Struct({
       }),
     ).check(Schema.isMaxLength(1_000)),
   ),
-  query: TrimmedNonEmptyString.check(Schema.isMaxLength(200)),
+  query: Schema.String.check(Schema.isPattern(/\S/), Schema.isMaxLength(200)),
   index: Schema.optionalKey(NonNegativeInt),
   offset: Schema.optionalKey(Schema.Int),
   start: Schema.optionalKey(

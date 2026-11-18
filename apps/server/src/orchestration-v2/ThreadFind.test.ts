@@ -1,8 +1,12 @@
 import { assert, it, describe } from "@effect/vitest";
 import { searchableMessageSegments } from "@goat/shared/threadFindText";
+import { layerTestLoopback } from "@goat/shared/testing/loopbackHttpServer";
 import {
   EventId,
   MessageId,
+  ORCHESTRATION_V2_WS_METHODS,
+  OrchestrationV2RpcSchemas,
+  OrchestrationV2SearchThreadError,
   PlanId,
   RunId,
   RuntimeRequestId,
@@ -15,9 +19,12 @@ import {
   ThreadId,
   type OrchestrationV2DomainEvent,
 } from "@goat/contracts";
+import * as Context from "effect/Context";
 import * as DateTime from "effect/DateTime";
 import * as Effect from "effect/Effect";
 import * as Layer from "effect/Layer";
+import { FetchHttpClient, HttpRouter, HttpServer } from "effect/http";
+import { Rpc, RpcClient, RpcGroup, RpcSerialization, RpcServer } from "effect/rpc";
 import * as SqlClient from "effect/sql/SqlClient";
 import * as Stream from "effect/Stream";
 import * as TestClock from "effect/testing/TestClock";
@@ -205,6 +212,53 @@ const setup = Effect.gen(function* () {
 });
 
 describe("V2 thread find", () => {
+  it.live("matches only the authored indentation through the Find RPC", () =>
+    Effect.gen(function* () {
+      const projection = yield* setup;
+      yield* putItems([item("prompt", 1, "Plan\nneedle\n   needle", "user_message")]);
+      const tag = ORCHESTRATION_V2_WS_METHODS.searchThread;
+      const schema = OrchestrationV2RpcSchemas.searchThread;
+      const group = RpcGroup.make(
+        Rpc.make(tag, {
+          payload: schema.input,
+          success: schema.output,
+          error: OrchestrationV2SearchThreadError,
+        }),
+      );
+      const routes = RpcServer.layerHttp({ group, path: "/find", protocol: "http" }).pipe(
+        Layer.provide(
+          group.toLayer({
+            [tag]: (input) =>
+              projection
+                .searchThread(input)
+                .pipe(Effect.mapError((cause) => new OrchestrationV2SearchThreadError({ cause }))),
+          }),
+        ),
+        Layer.provide(RpcSerialization.layerJson),
+      );
+      const services = yield* Layer.build(
+        HttpRouter.serve(routes, { disableListenLog: true }).pipe(
+          Layer.provideMerge(layerTestLoopback),
+        ),
+      );
+      const origin = HttpServer.formatAddress(Context.get(services, HttpServer.HttpServer).address);
+      const client = yield* RpcClient.make(group).pipe(
+        Effect.provide(
+          RpcClient.layerProtocolHttp({ url: `${origin}/find` }).pipe(
+            Layer.provide(RpcSerialization.layerJson),
+            Layer.provide(FetchHttpClient.layer),
+          ),
+        ),
+      );
+      const search = (query: string) => client[tag]({ threadId, query });
+      assert.equal((yield* search("   needle")).totalMatches, 1);
+      assert.equal((yield* search("    needle")).totalMatches, 0);
+      assert.equal((yield* search("needle")).totalMatches, 2);
+      assert.equal((yield* Effect.exit(search("   ")))._tag, "Failure");
+      assert.equal((yield* Effect.exit(search("x".repeat(201))))._tag, "Failure");
+    }).pipe(Effect.provide(layerTest)),
+  );
+
   it.effect("finishes one snapshot while later searches include newly inserted matches", () =>
     Effect.gen(function* () {
       const projection = yield* setup;
