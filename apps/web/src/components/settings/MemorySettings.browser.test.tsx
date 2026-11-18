@@ -2701,8 +2701,18 @@ it("confirms a memory selection once and reports each result while the conversat
   expect(container.querySelectorAll('input[aria-label^="Select memory"]:checked')).toHaveLength(1);
 });
 
-it("moves a memory from its details and refreshes the old scope", () =>
-  exerciseMemoryMove({ state, success, supportedScreen, click, chooseOption, container }));
+it.each([false, true])("retries refused and uncertain moves independently (batch %s)", (batch) =>
+  exerciseMemoryMove({
+    state,
+    success,
+    supportedScreen,
+    click,
+    chooseOption,
+    container,
+    batch,
+    select: async (checkbox) => act(async () => checkbox.click()),
+  }),
+);
 it("shows a refused save as pending through acceptance and marks only the published memory", async () => {
   const { refused, accept, accepting, unpublished, settled, published } = suggestionScenario;
   state.queries.set("list", Option.some(unpublished));

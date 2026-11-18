@@ -2232,5 +2232,6 @@ it("does not render or request suggestions from the legacy memory destination", 
   expect(h.calls.some(({ method }) => method.startsWith("memory.suggestions."))).toBe(false);
 });
 
-it("moves a memory from its details and refreshes the old scope", () =>
-  exerciseMemoryMove(mount, () => ({ h, view })));
+it.each([false, true])("retries refused and uncertain moves independently (batch %s)", (batch) =>
+  exerciseMemoryMove(mount, () => ({ h, view }), batch),
+);
