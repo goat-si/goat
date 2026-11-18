@@ -10,7 +10,14 @@ import { page, userEvent } from "vite-plus/test/browser";
 
 import "~/index.css";
 
-const { diffAtom, pagedDiffAtom, imageDiffAtom } = await vi.hoisted(async () => {
+const {
+  diffAtom,
+  pagedDiffAtom,
+  imageDiffAtom,
+  withheldPageAtom,
+  withheldFileAtom,
+  withheldFilesAtom,
+} = await vi.hoisted(async () => {
   const { AsyncResult, Atom } = await import("effect/reactivity");
   const filePatch = (path: string) =>
     [
@@ -55,7 +62,52 @@ const { diffAtom, pagedDiffAtom, imageDiffAtom } = await vi.hoisted(async () => 
     truncated: false,
     nextCursor: null,
   };
+  const omittedPatch = [
+    "diff --git a/large.js b/large.js",
+    "--- a/large.js",
+    "+++ b/large.js",
+    "",
+  ].join("\n");
+  const withheldPage: PullRequestDiffResult = {
+    patch: omittedPatch,
+    truncated: true,
+    nextCursor: null,
+    omittedFileStats: [{ path: "large.js", additions: 1, deletions: 1 }],
+    withheldFilesReadable: true,
+  };
+  const withheldFileAtom = Atom.family((key: string) => {
+    const { path, expectedHeadSha } = JSON.parse(key) as { path: string; expectedHeadSha: string };
+    const patch =
+      path === "large.js"
+        ? omittedPatch +
+          "@@ -1 +1 @@\n-original()\n+" +
+          (expectedHeadSha.startsWith("b") ? "afterPush()" : "beforePush()") +
+          "\n"
+        : "";
+    return Atom.make(() => AsyncResult.success({ patch, truncated: false, nextCursor: null }));
+  });
+  const withheldFilesAtom = Atom.family((key: string) => {
+    const { target, paths } = JSON.parse(key) as {
+      target: { input: { expectedHeadSha: string } };
+      paths: string[];
+    };
+    return Atom.make((get) =>
+      paths.map((path) =>
+        get(
+          withheldFileAtom(
+            JSON.stringify({
+              path,
+              expectedHeadSha: target.input.expectedHeadSha,
+            }),
+          ),
+        ),
+      ),
+    );
+  });
   return {
+    withheldPageAtom: Atom.make(() => AsyncResult.success(withheldPage)),
+    withheldFileAtom,
+    withheldFilesAtom,
     diffAtom: Atom.make(() => AsyncResult.success(firstPage)),
     imageDiffAtom: Atom.make(() => AsyncResult.success(imagePage)),
     pagedDiffAtom: Atom.family((cursor: string) =>
@@ -67,6 +119,7 @@ const { diffAtom, pagedDiffAtom, imageDiffAtom } = await vi.hoisted(async () => 
 const mocks = vi.hoisted(() => ({
   paged: false,
   image: false,
+  withheld: false,
   assetResources: [] as unknown[],
   diffCommits: [] as Array<string | undefined>,
 }));
@@ -92,9 +145,15 @@ vi.mock(import("~/state/pullRequests"), async (original) => {
     ...actual,
     pullRequestEnvironment: {
       ...actual.pullRequestEnvironment,
+      withheldDiffs: withheldFilesAtom as never,
+      withheldDiff: (({ input }: { input: { path: string; expectedHeadSha: string } }) =>
+        withheldFileAtom(
+          JSON.stringify({ path: input.path, expectedHeadSha: input.expectedHeadSha }),
+        )) as never,
       diff: (({ input }: { input: { commit?: string; cursor?: string } }) => {
         mocks.diffCommits.push(input.commit);
         if (mocks.image) return imageDiffAtom;
+        if (mocks.withheld) return withheldPageAtom;
         return mocks.paged ? pagedDiffAtom(input.cursor ?? "first") : diffAtom;
       }) as never,
     },
@@ -159,6 +218,7 @@ const detail: PullRequestDetailView = {
 function setup(paged = false, image = false) {
   mocks.paged = paged;
   mocks.image = image;
+  mocks.withheld = false;
   mocks.assetResources = [];
   mocks.diffCommits = [];
 }
@@ -302,4 +362,26 @@ it("previews an image the host sent no patch for at the pull request's head", as
     url: `https://github.com/owner/repo/raw/${headSha}/docs/shot.png`,
     repository: "owner/repo",
   });
+});
+
+it("drops a loaded withheld patch across a force-push and loads the current file on demand", async () => {
+  setup();
+  mocks.withheld = true;
+  const container = document.createElement("div");
+  container.className = "flex h-[700px] w-[900px]";
+  const original = { ...detail, headSha: "a".repeat(40) };
+  const pushed = { ...detail, headSha: "b".repeat(40) };
+  await using screen = await render(tab(0, null, null, original), { container });
+  await userEvent.click(screen.getByRole("button", { name: "Expand diff" }));
+  const load = screen.getByRole("button", { name: "Load file diff" });
+  await expect.element(load).toBeVisible();
+  await userEvent.click(load);
+  await expect.element(screen.getByText("beforePush()", { exact: true })).toBeVisible();
+
+  await screen.rerender(tab(1, null, null, pushed));
+  await expect.element(screen.getByText("beforePush()", { exact: true })).not.toBeInTheDocument();
+  await expect.element(load).toBeVisible();
+  await userEvent.click(load);
+  await expect.element(screen.getByText("afterPush()", { exact: true })).toBeVisible();
+  await expect.element(screen.getByText("1 file", { exact: true })).toBeVisible();
 });

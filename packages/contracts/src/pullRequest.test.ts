@@ -5,6 +5,8 @@ import { describe, expect, it } from "vite-plus/test";
 import {
   PullRequestActionInput,
   PullRequestDetail,
+  PullRequestDiffInput,
+  PullRequestDiffResult,
   PullRequestLabel,
   PullRequestListResult,
   PullRequestFilterOptions,
@@ -14,6 +16,12 @@ import {
 
 const decodeDetail = Schema.decodeUnknownSync(Schema.toCodecJson(PullRequestDetail));
 const decodeFilterOptions = Schema.decodeUnknownSync(Schema.toCodecJson(PullRequestFilterOptions));
+const decodeDiffRequest = Schema.decodeUnknownSync(Schema.toCodecJson(PullRequestDiffInput));
+const decodeDiffResult = Schema.decodeUnknownSync(PullRequestDiffResult);
+const { patch, truncated, nextCursor } = PullRequestDiffResult.fields;
+const decodeLegacyDiffResult = Schema.decodeUnknownSync(
+  Schema.Struct({ patch, truncated, nextCursor }),
+);
 
 const LIST_RESULT: PullRequestListResult = {
   viewers: { "github.com": "bilal", "gitlab.com": "bilal.hassan" },
@@ -262,4 +270,15 @@ it("accepts labels from older servers and rejects invalid descriptions", () => {
   const decode = Schema.decodeUnknownSync(PullRequestLabel);
   expect(decode({ name: "bug", color: null })).toEqual({ name: "bug", color: null });
   expect(() => decode({ name: "bug", color: null, description: 42 })).toThrow();
+});
+
+it("keeps legacy diff pages readable and preserves exact paths on file requests", () => {
+  const request = { projectId: "project-1", repository: "goat-si/goat", number: 1 };
+  expect(decodeDiffRequest(request)).toEqual(request);
+  const file = { ...request, path: "docs/spaced name ", expectedHeadSha: "a".repeat(40) };
+  expect(decodeDiffRequest(file)).toEqual(file);
+  expect(() => decodeDiffRequest({ ...request, path: "" })).toThrow();
+  const page = { patch: "diff", truncated: true, nextCursor: "2" };
+  expect(decodeDiffResult(page)).toEqual(page);
+  expect(decodeLegacyDiffResult({ ...page, withheldFilesReadable: true })).toEqual(page);
 });
