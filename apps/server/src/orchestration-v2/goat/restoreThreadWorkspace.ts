@@ -13,7 +13,12 @@ import { reuseHeldWorkspaceLease } from "../../workspace/workspaceLease.ts";
 import { WorktreeSnapshotStore } from "../../worktreeSnapshots/WorktreeSnapshotStore.ts";
 import { makeRecreateMissingWorktree } from "./RecreateWorktree.ts";
 import { makeRestorePending, type RestorePendingState } from "./restorePending.ts";
-import { git, RestoreSnapshotError, verifyRestoredWorktree } from "./restoreSnapshot.ts";
+import {
+  git,
+  RestoreSnapshotError,
+  verifyRestoredWorktree,
+  verifyWorktreeRegistration,
+} from "./restoreSnapshot.ts";
 import { makeNoticeFolderReplaced } from "./noticeFolderReplaced.ts";
 import { makeSetAsideFolder, setAsideSentence } from "./setAsideFolder.ts";
 
@@ -33,12 +38,14 @@ export interface RestoredThreadWorkspace {
  */
 export const verifyInterruptedRestore = Effect.fn("ThreadWorkspace.verifyInterruptedRestore")(
   function* (input: {
+    readonly projectCwd: string;
     readonly worktreePath: string;
     readonly branch: string;
     readonly state: RestorePendingState;
   }) {
     if (input.state.snapshotSha !== null && input.state.applied !== true)
       return yield* new RestoreSnapshotError({ detail: "snapshot" });
+    yield* verifyWorktreeRegistration(input);
     const head = yield* Effect.tryPromise({
       try: async () => {
         // Status asks this too; a hung Git must not hold up the thread view for minutes.
@@ -94,6 +101,7 @@ export const makeRestoreThreadWorkspace = Effect.gen(function* () {
     aside: { path: string | null },
   ) {
     if (!(yield* fs.exists(path.join(input.worktreePath, ".git")))) return;
+    yield* verifyWorktreeRegistration({ projectCwd: input.cwd, worktreePath: input.worktreePath });
     yield* verifyRestoredWorktree({
       cwd: input.worktreePath,
       branch: input.branch,
@@ -135,6 +143,14 @@ export const makeRestoreThreadWorkspace = Effect.gen(function* () {
       saved !== null &&
       (yield* fs.exists(path.join(input.worktreePath, ".git"))) &&
       (saved.applied === true || (saved.applied === undefined && saved.snapshotSha === null));
+    if (lenient) {
+      yield* verifyInterruptedRestore({
+        projectCwd: input.cwd,
+        worktreePath: input.worktreePath,
+        branch: input.branch,
+        state: saved,
+      }).pipe(Effect.mapError((error) => fail("verify-failed", error.detail)));
+    }
     const state: RestorePendingState = lenient
       ? saved
       : yield* Effect.gen(function* () {
@@ -193,6 +209,12 @@ export const makeRestoreThreadWorkspace = Effect.gen(function* () {
             .pipe(Effect.mapError((error) => fail("verify-failed", error.message)));
           return applied;
         });
+    if (!lenient) {
+      yield* verifyWorktreeRegistration({
+        projectCwd: input.cwd,
+        worktreePath: input.worktreePath,
+      }).pipe(Effect.mapError((error) => fail("verify-failed", error.detail)));
+    }
     // Before setup, so only shells that predate the new folder are told.
     yield* noticeFolderReplaced(input.worktreePath, archived.path ?? aside.path);
     const setup = yield* Effect.gen(function* () {
@@ -225,6 +247,7 @@ export const makeRestoreThreadWorkspace = Effect.gen(function* () {
       yield* (
         lenient
           ? verifyInterruptedRestore({
+              projectCwd: input.cwd,
               worktreePath: input.worktreePath,
               branch: input.branch,
               state,

@@ -147,16 +147,19 @@ const make = Effect.gen(function* () {
     const loaded = yield* load(threadId).pipe(Effect.option);
     if (Option.isNone(loaded))
       return { threadId, state: "none", worktreePath: null, branch: null, snapshot: null } as const;
-    const { worktreePath, branch } = loaded.value;
+    const { project, worktreePath, branch } = loaded.value;
     if (yield* present(worktreePath))
       return { threadId, state: "present", worktreePath, branch, snapshot: null } as const;
     // A stop during restore leaves the marker on a folder that may be fine; only setup is owed.
     const interrupted = yield* restorePending.read(worktreePath);
     const usable =
       interrupted !== null &&
-      (yield* verifyInterruptedRestore({ worktreePath, branch, state: interrupted }).pipe(
-        Effect.result,
-      ))._tag === "Success";
+      (yield* verifyInterruptedRestore({
+        projectCwd: project.workspaceRoot,
+        worktreePath,
+        branch,
+        state: interrupted,
+      }).pipe(Effect.result))._tag === "Success";
     if (usable)
       return {
         threadId,

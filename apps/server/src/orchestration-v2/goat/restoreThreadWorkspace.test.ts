@@ -292,3 +292,32 @@ it.effect("retries the snapshot and setup after a failed add left a linked check
     );
   }).pipe(Effect.provide(layerRealGit), Effect.scoped),
 );
+
+it.effect("rejects a replacement repository before its pending setup can write", () =>
+  Effect.gen(function* () {
+    const { repo, worktreePath, git, snapshot } = yield* fixture;
+    const pending = yield* makeRestorePending;
+    yield* pending.write(worktreePath, {
+      restoredFrom: "snapshot",
+      headSha: snapshot.headSha,
+      snapshotSha: snapshot.snapshotSha,
+      snapshotRef: snapshot.snapshotRef,
+      applied: true,
+    });
+    git(repo, ["clone", "--shared", "-b", "feature", repo, worktreePath]);
+    git(worktreePath, ["config", "user.name", "Test"]);
+    git(worktreePath, ["config", "user.email", "test@example.com"]);
+    const file = NodePath.join(worktreePath, "tracked");
+    NodeFS.writeFileSync(file, "different repository");
+    git(worktreePath, ["add", "."]);
+    git(worktreePath, ["commit", "-m", "replacement"]);
+    const restore = yield* makeRestoreThreadWorkspace.pipe(
+      Effect.provide(services(snapshot, [], 0, () => NodeFS.writeFileSync(file, "setup write"))),
+    );
+    const failure = yield* Effect.flip(
+      restore({ threadId, cwd: repo, worktreePath, branch: "feature" }),
+    );
+    assert.equal(failure.reason, "verify-failed");
+    assert.equal(NodeFS.readFileSync(file, "utf8"), "different repository");
+  }).pipe(Effect.provide(layerRealGit), Effect.scoped),
+);

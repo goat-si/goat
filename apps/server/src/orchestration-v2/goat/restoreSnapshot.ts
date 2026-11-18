@@ -206,6 +206,35 @@ export const applySnapshotToWorktree = Effect.fn("restoreSnapshot.applySnapshotT
 
 const isRestoreSnapshotError = Schema.is(RestoreSnapshotError);
 
+export const verifyWorktreeRegistration = Effect.fn("restoreSnapshot.verifyWorktreeRegistration")(
+  (input: { projectCwd: string; worktreePath: string }) =>
+    Effect.tryPromise({
+      try: async () => {
+        const { projectCwd, worktreePath } = input;
+        const common = (cwd: string) =>
+          text(cwd, "rev-parse", "--git-common-dir").then((dir) =>
+            NodeFSP.realpath(NodePath.resolve(cwd, dir)),
+          );
+        const projectGit = await common(projectCwd);
+        const checkoutGit = await common(worktreePath);
+        const admin = await NodeFSP.realpath(
+          await text(worktreePath, "rev-parse", "--absolute-git-dir"),
+        );
+        const registrations = NodePath.join(projectGit, "worktrees");
+        if (checkoutGit !== projectGit || NodePath.dirname(admin) !== registrations)
+          throw new RestoreSnapshotError({ detail: "repository or worktree registration" });
+        const pointer = await NodeFSP.readFile(NodePath.join(admin, "gitdir"), "utf8");
+        const backlink = await NodeFSP.realpath(NodePath.resolve(admin, pointer.trim()));
+        if (backlink !== (await NodeFSP.realpath(NodePath.join(worktreePath, ".git"))))
+          throw new RestoreSnapshotError({ detail: "worktree registration" });
+      },
+      catch: (cause) =>
+        isRestoreSnapshotError(cause)
+          ? cause
+          : new RestoreSnapshotError({ detail: "worktree registration", cause }),
+    }),
+);
+
 export const verifyRestoredWorktree = Effect.fn("restoreSnapshot.verifyRestoredWorktree")(
   (input: {
     cwd: string;
