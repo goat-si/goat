@@ -19,6 +19,7 @@ import { ChildProcessSpawner } from "effect/process";
 import { TestClock } from "effect/testing";
 import * as BootService from "../cloud/bootService.ts";
 import { pinnedRuntimePaths } from "../cloud/pinnedRuntime.ts";
+import { runServicePreflight } from "../cloud/servicePreflight.ts";
 import { SERVICE_LAUNCHER_PROTOCOL } from "../cloud/serviceProtocol.ts";
 import * as ProcessRunner from "../processRunner.ts";
 import {
@@ -538,6 +539,16 @@ it.layer(NodeServices.layer)("goat update runtime switch", (it) => {
       refused: true,
     },
     {
+      name: "keeps the previous launcher when the V1-only import source is corrupt",
+      response: "corrupt-v1",
+      refused: true,
+    },
+    {
+      name: "probes the V2 database in preference to a corrupt V1 source",
+      response: "prefer-v2",
+      refused: false,
+    },
+    {
       name: "keeps the launcher for malformed preflight output",
       response: "malformed",
       refused: true,
@@ -548,6 +559,13 @@ it.layer(NodeServices.layer)("goat update runtime switch", (it) => {
       const path = yield* Path.Path;
       const baseDir = yield* fs.makeTempDirectoryScoped({ prefix: "goat-update-" });
       const databasePath = path.join(baseDir, "userdata", "statev2.sqlite");
+      const legacyPath = path.join(baseDir, "userdata", "state.sqlite");
+      const corruptLegacy = response === "corrupt-v1" || response === "prefer-v2";
+      if (corruptLegacy) {
+        yield* fs.makeDirectory(path.dirname(legacyPath), { recursive: true });
+        yield* fs.writeFileString(legacyPath, "unreadable V1 import source");
+        if (response === "prefer-v2") yield* fs.writeFileString(databasePath, "");
+      }
       if (response === "legacy-unreadable") {
         yield* fs.makeDirectory(path.dirname(databasePath), { recursive: true });
         yield* fs.writeFileString(databasePath, "unreadable ledger");
@@ -571,14 +589,21 @@ it.layer(NodeServices.layer)("goat update runtime switch", (it) => {
             launcherProtocol: SERVICE_LAUNCHER_PROTOCOL,
             ...(response.startsWith("legacy") ? {} : { databaseChecked: true }),
           };
+          const probedPath = args?.[args.indexOf("--database-path") + 1];
           const result =
-            response === "blocked"
-              ? {
-                  status: "blocked",
+            corruptLegacy && probedPath !== undefined
+              ? runServicePreflight({
+                  databasePath: probedPath,
+                  launcherProtocol: SERVICE_LAUNCHER_PROTOCOL,
                   version: targetVersion,
-                  reason: "Database contains a newer migration.",
-                }
-              : ready;
+                })
+              : response === "blocked"
+                ? {
+                    status: "blocked",
+                    version: targetVersion,
+                    reason: "Database contains a newer migration.",
+                  }
+                : ready;
           return Effect.succeed({
             stdout: args?.includes("--version")
               ? `goat v${targetVersion}\n`
@@ -638,11 +663,15 @@ it.layer(NodeServices.layer)("goat update runtime switch", (it) => {
         [
           "__service-preflight",
           "--database-path",
-          databasePath,
+          response === "corrupt-v1" ? legacyPath : databasePath,
           "--launcher-protocol",
           String(SERVICE_LAUNCHER_PROTOCOL),
         ],
       ]);
+      if (corruptLegacy) {
+        assert.equal(yield* fs.readFileString(legacyPath), "unreadable V1 import source");
+        assert.equal(yield* fs.exists(databasePath), response === "prefer-v2");
+      }
       if (response === "blocked") {
         assert.equal(
           Option.getOrUndefined(Exit.findErrorOption(result))?.message,

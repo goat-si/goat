@@ -5,6 +5,8 @@ import * as FileSystem from "effect/FileSystem";
 import * as Path from "effect/Path";
 import * as Schema from "effect/Schema";
 
+export const V1_DATABASE_FILENAME = "state.sqlite";
+
 export class V2DatabaseImportError extends Schema.TaggedError<V2DatabaseImportError>()(
   "V2DatabaseImportError",
   { sourcePath: Schema.String, destinationPath: Schema.String, cause: Schema.Defect() },
@@ -48,7 +50,7 @@ export const initializeV2Database = Effect.fn("initializeV2Database")(function* 
   const fs = yield* FileSystem.FileSystem;
   const path = yield* Path.Path;
   const directory = path.dirname(destinationPath);
-  const sourcePath = path.join(directory, "state.sqlite");
+  const sourcePath = path.join(directory, V1_DATABASE_FILENAME);
   yield* removeAbandonedCopies(directory).pipe(Effect.ignore({ log: true }));
   yield* Effect.gen(function* () {
     if (yield* fs.exists(destinationPath)) return;

@@ -6,6 +6,7 @@ import packageJson from "../../package.json" with { type: "json" };
 import {
   migrationLedgerProblem,
   readMigrationSnapshot,
+  resolveMigrationSnapshotPath,
 } from "../persistence/migrationPreflight.ts";
 import type * as ProcessRunner from "../processRunner.ts";
 import {
@@ -33,6 +34,9 @@ export type ServicePreflightResult =
       readonly reason: string;
     };
 
+const unreadableDatabaseReason = (version: string) =>
+  `Could not read this database to confirm goat@${version} supports it.`;
+
 export function runServicePreflight(input: {
   readonly databasePath: string;
   readonly launcherProtocol: number;
@@ -59,7 +63,7 @@ export function runServicePreflight(input: {
     return {
       status: "blocked",
       version,
-      reason: `Could not read this database to confirm goat@${version} supports it.`,
+      reason: unreadableDatabaseReason(version),
     };
   }
   const problem = migrationLedgerProblem(snapshot, version);
@@ -108,6 +112,13 @@ export const runStagedServicePreflight = Effect.fn("cloud.service_preflight.run_
     readonly databasePath: string;
     readonly requireDatabaseCheck?: boolean;
   }) {
+    const selectedPath = resolveMigrationSnapshotPath(input.databasePath);
+    if (selectedPath === null) {
+      return yield* new PinnedRuntimePreflightBlockedError({
+        version: input.targetVersion,
+        reason: unreadableDatabaseReason(input.targetVersion),
+      });
+    }
     const step = "running the staged service preflight";
     const command = pinnedRuntimeCommand(input.runtime);
     const result = yield* input.runner
@@ -117,7 +128,7 @@ export const runStagedServicePreflight = Effect.fn("cloud.service_preflight.run_
           ...command.args,
           "__service-preflight",
           "--database-path",
-          input.databasePath,
+          selectedPath ?? input.databasePath,
           "--launcher-protocol",
           String(SERVICE_LAUNCHER_PROTOCOL),
         ],

@@ -1,8 +1,10 @@
 // @effect-diagnostics nodeBuiltinImport:off - the update preflight reads the ledger once, read-only.
 import * as NodeFS from "node:fs";
+import * as NodePath from "node:path";
 import * as NodeSqlite from "node:sqlite";
 import * as Migrator from "effect/sql/Migrator";
 
+import { V1_DATABASE_FILENAME } from "./initializeV2Database.ts";
 import { migrationEntries } from "./Migrations.ts";
 import {
   displacedUpstreamMigrations,
@@ -18,12 +20,36 @@ interface MigrationSnapshot {
   readonly hasMemoryTables: boolean;
 }
 
+function databaseExists(databasePath: string): boolean {
+  try {
+    NodeFS.statSync(databasePath);
+    return true;
+  } catch (cause) {
+    if (cause instanceof Error && "code" in cause && cause.code === "ENOENT") return false;
+    throw cause;
+  }
+}
+
+/** Uses the existing V2 database, or the V1 source startup would import. */
+export function resolveMigrationSnapshotPath(databasePath: string): string | undefined | null {
+  try {
+    if (databaseExists(databasePath)) return databasePath;
+    const sourcePath = NodePath.join(NodePath.dirname(databasePath), V1_DATABASE_FILENAME);
+    if (sourcePath !== databasePath && databaseExists(sourcePath)) return sourcePath;
+    return undefined;
+  } catch {
+    return null;
+  }
+}
+
 /** Reads startup's migration evidence without modifying the database. */
 export function readMigrationSnapshot(databasePath: string): MigrationSnapshot | null {
-  if (!NodeFS.existsSync(databasePath)) return { history: [], hasMemoryTables: false };
+  const selectedPath = resolveMigrationSnapshotPath(databasePath);
+  if (selectedPath === null) return null;
+  if (selectedPath === undefined) return { history: [], hasMemoryTables: false };
   let db: NodeSqlite.DatabaseSync | undefined;
   try {
-    db = new NodeSqlite.DatabaseSync(databasePath, { readOnly: true });
+    db = new NodeSqlite.DatabaseSync(selectedPath, { readOnly: true });
     db.exec("BEGIN");
     const tables = db
       .prepare(
