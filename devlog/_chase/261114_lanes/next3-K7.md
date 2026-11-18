@@ -1529,3 +1529,8 @@ IV. STANDING RULE, every lane, from now: before READY, every apps/server test fi
 
 ps check first, in its own step: no vitest, tsc, check-changed or build process running; load 2.79. Then, from apps/server: `GOAT_TEST_TMP_GUARD=fail vp test run` on every apps/server test file the lane added or changed (`git diff --name-only --diff-filter=AM c995c5427a...HEAD`): orchestration-v2/Orchestrator.messageReceiptReplay.test.ts, ProjectionPendingRequest.test.ts, ShellStream.test.ts, ThreadTitleRegenerationService.test.ts, relay/AgentAwarenessRelay.userWait.test.ts and terminal/Manager.retainedHistory.test.ts. Exit 0: 6 files, 48 tests passed. The next READY (after the second integration merge) runs it again.
 
+
+## Time correction (lane coordinator, 01:17 UTC)
+
+The section "Lane coordinator, about 02:00 UTC: no git stash" keeps its content. Its real send time, from the thread log, was between about 00:55 and 01:16 UTC; the coordinator wrote "about 02:00" without reading a clock.
+
