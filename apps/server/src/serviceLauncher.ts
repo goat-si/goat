@@ -350,13 +350,10 @@ export class Launcher {
     this.#probationTimer = undefined;
   }
 
-  async #deferForDiskSpace(
+  async #startupDiskBlocker(
     version: string,
     dbPath: string | undefined,
-    retry: () => Promise<void>,
-  ): Promise<boolean> {
-    if (this.#stopRequested) return true;
-    let reason: string | undefined;
+  ): Promise<string | undefined> {
     try {
       const database = await restoreTarget(
         dbPath ?? NodePath.join(this.#baseDir, "userdata", "statev2.sqlite"),
@@ -369,13 +366,21 @@ export class Launcher {
       for (const directory of directories) {
         const free = await this.#startupSpaceProbe(directory);
         if (free < MIN_START_FREE_BYTES) {
-          reason = `GOAT needs ${MIN_START_FREE_BYTES} bytes free on ${directory}; ${free} bytes available.`;
-          break;
+          return `GOAT needs ${MIN_START_FREE_BYTES} bytes free on ${directory}; ${free} bytes available.`;
         }
       }
     } catch (cause) {
-      reason = `Could not check disk capacity: ${cause instanceof Error ? cause.message : String(cause)}.`;
+      return `Could not check disk capacity: ${cause instanceof Error ? cause.message : String(cause)}.`;
     }
+  }
+
+  async #deferForDiskSpace(
+    version: string,
+    dbPath: string | undefined,
+    retry: () => Promise<void>,
+  ): Promise<boolean> {
+    if (this.#stopRequested) return true;
+    const reason = await this.#startupDiskBlocker(version, dbPath);
     if (this.#stopRequested) return true;
     if (reason === undefined) return false;
     logDiskWait(reason, this.#writeDiagnostic);
@@ -625,6 +630,13 @@ export class Launcher {
       return;
     }
 
+    const startupBlocker = await this.#startupDiskBlocker(message.targetVersion, message.dbPath);
+    if (!child.process.connected || this.#stopRequested) return;
+    if (startupBlocker !== undefined) {
+      await reject(`${startupBlocker} The server was not stopped.`);
+      return;
+    }
+
     const pending: PendingServiceUpdate = {
       id: NodeCrypto.randomUUID(),
       fromVersion: child.version,
@@ -645,6 +657,12 @@ export class Launcher {
       return;
     }
     this.#timer = undefined;
+    if (
+      await this.#deferForDiskSpace(pending.targetVersion, pending.dbPath, () =>
+        this.#beginTrial(child),
+      )
+    )
+      return;
     this.#child = null;
     await terminateChild(child.process);
     await this.#startTrial(pending);
