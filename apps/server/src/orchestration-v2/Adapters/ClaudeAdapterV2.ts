@@ -2165,6 +2165,7 @@ interface ActiveClaudeProviderRetry {
 }
 
 interface ActiveClaudeSubagent {
+  workflowStop?: { readonly requestedAt: number };
   task: OrchestrationV2Subagent;
   readonly nativeTaskType: string | undefined;
   readonly confirmedOutcome: ProviderAdapter.ProviderAdapterV2SubagentOutcome | undefined;
@@ -2231,6 +2232,7 @@ interface ActiveClaudeToolCall {
 }
 
 interface ClaudeSubagentProjectionTarget {
+  readonly workflowStopRequestedAt?: number;
   readonly childThreadId: ThreadId;
   readonly childRootNodeId: OrchestrationV2ExecutionNode["id"];
   readonly nextOrdinal: () => number;
@@ -4255,13 +4257,18 @@ export const makeClaudeAdapterV2 = Effect.fn("makeClaudeAdapterV2")(function* (
               return;
             const memberKey = `${input.coordinator.childThreadId}:agent:${member.index}`;
             const previous = seen.get(memberKey);
+            const stopRequestedAt = input.coordinator.workflowStop?.requestedAt;
             const status =
               (member.state === "queued" || member.state === "running") &&
               input.coordinator.task.status !== "running"
                 ? input.coordinator.task.status
                 : member.state === "queued"
                   ? "pending"
-                  : member.state;
+                  : member.state === "failed" &&
+                      stopRequestedAt !== undefined &&
+                      previous?.status !== "failed"
+                    ? "cancelled"
+                    : member.state;
             const settled = status !== "pending" && status !== "running";
             const prompt = member.prompt ?? member.label;
             const model = member.model ?? parentThread.modelSelection.model;
@@ -4425,6 +4432,9 @@ export const makeClaudeAdapterV2 = Effect.fn("makeClaudeAdapterV2")(function* (
               childRootNodeId,
               nextOrdinal: () => ++nextItemOrdinal,
               toolCalls,
+              ...(stopRequestedAt === undefined
+                ? {}
+                : { workflowStopRequestedAt: stopRequestedAt }),
             };
             const endOpenToolCalls = Effect.fnUntraced(function* () {
               if (toolCalls.size === 0) return;
@@ -4779,6 +4789,9 @@ export const makeClaudeAdapterV2 = Effect.fn("makeClaudeAdapterV2")(function* (
           } satisfies OrchestrationV2Subagent;
           const subagent = {
             task,
+            ...(!isReopen && existingSubagent?.workflowStop !== undefined
+              ? { workflowStop: existingSubagent.workflowStop }
+              : {}),
             nativeTaskType: input.nativeTaskType ?? existingSubagent?.nativeTaskType,
             confirmedOutcome:
               input.nativeOutcome !== undefined || input.processExited === true
@@ -5323,12 +5336,18 @@ export const makeClaudeAdapterV2 = Effect.fn("makeClaudeAdapterV2")(function* (
           readonly toolResult: ClaudeToolResultContentBlock;
           readonly output: ClaudeNativeToolOutput;
           readonly completedAt: DateTime.Utc;
+          readonly stoppedByWorkflow?: boolean;
         }) {
           const { toolCall } = input;
           const toolNonExecutionKind = claudeToolNonExecutionKind(
             input.message,
             input.toolResult.tool_use_id,
           );
+          const stopped =
+            input.stoppedByWorkflow === true ||
+            (toolNonExecutionKind === "user-rejected" &&
+              input.context !== null &&
+              (yield* Ref.get(interruptedTurns)).has(input.context.providerTurnId));
           yield* stopTaskOutputTail(toolCall.nativeItemId);
           yield* emitToolCallArtifacts(
             buildToolCallArtifacts({
@@ -5347,7 +5366,9 @@ export const makeClaudeAdapterV2 = Effect.fn("makeClaudeAdapterV2")(function* (
                 toolNonExecutionKind === "cancelled" || toolNonExecutionKind === "interrupted"
                   ? toolNonExecutionKind
                   : isClaudeToolResultError(input.toolResult)
-                    ? "failed"
+                    ? stopped
+                      ? "interrupted"
+                      : "failed"
                     : "completed",
               ...(toolNonExecutionKind === undefined ? {} : { toolNonExecutionKind }),
               startedAt: toolCall.startedAt,
@@ -5406,9 +5427,10 @@ export const makeClaudeAdapterV2 = Effect.fn("makeClaudeAdapterV2")(function* (
           line: unknown,
         ) {
           if (!isClaudeTranscriptConversationLine(line)) return false;
-          const at =
-            Option.getOrUndefined(DateTime.make(text(field(line, "timestamp")) ?? "")) ??
-            (yield* DateTime.now);
+          const timestamp = Option.getOrUndefined(
+            DateTime.make(text(field(line, "timestamp")) ?? ""),
+          );
+          const at = timestamp ?? (yield* DateTime.now);
           const presentations = claudeToolPresentationsFromAssistantMessage(line);
           for (const toolUse of claudeToolUseBlocksFromAssistantMessage(line)) {
             if (target.toolCalls.has(toolUse.id)) continue;
@@ -5442,6 +5464,11 @@ export const makeClaudeAdapterV2 = Effect.fn("makeClaudeAdapterV2")(function* (
               toolResult,
               output,
               completedAt: at,
+              stoppedByWorkflow:
+                timestamp !== undefined &&
+                target.workflowStopRequestedAt !== undefined &&
+                field(line, "toolDenialKind") === "user-rejected" &&
+                DateTime.toEpochMillis(timestamp) >= target.workflowStopRequestedAt,
             });
           }
           if (line.type !== "assistant") return false;
@@ -10420,7 +10447,20 @@ export const makeClaudeAdapterV2 = Effect.fn("makeClaudeAdapterV2")(function* (
                 detail: "No running workflow task belongs to this provider thread",
               });
             }
+            const stop = { requestedAt: DateTime.toEpochMillis(yield* DateTime.now) };
+            const previousStop = task.workflowStop;
+            task.workflowStop = stop;
             yield* liveQuery.query.stopTask(taskId).pipe(
+              Effect.onError(() =>
+                Ref.get(sessionSubagentsByTaskId).pipe(
+                  Effect.map((tasks) => {
+                    const current = tasks.get(taskId);
+                    if (current?.workflowStop !== stop) return;
+                    if (previousStop === undefined) delete current.workflowStop;
+                    else current.workflowStop = previousStop;
+                  }),
+                ),
+              ),
               Effect.mapError(
                 (cause) =>
                   new ProviderAdapter.ProviderAdapterProtocolError({
