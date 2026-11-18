@@ -169,6 +169,7 @@ import Migration0154 from "./Migrations/154_ChannelBotTaskHistory.ts";
 import Migration0155 from "./Migrations/155_DisposableMachines.ts";
 import Migration0156 from "./Migrations/156_DisposableMachineRequests.ts";
 import Migration0157 from "./Migrations/157_DisposableMachineEnrollment.ts";
+import Migration0158 from "./Migrations/158_MemoryThreadLineage.ts";
 import Migration0131 from "./Migrations/131_NotificationCursorRepair.ts";
 import Migration0133 from "./Migrations/133_McpEvalJournal.ts";
 import Migration0134 from "./Migrations/134_DecisionRoutes.ts";
@@ -336,6 +337,7 @@ export const migrationEntries = [
   [155, "DisposableMachines", Migration0155],
   [156, "DisposableMachineRequests", Migration0156],
   [157, "DisposableMachineEnrollment", Migration0157],
+  [158, "MemoryThreadLineage", Migration0158],
 ] as const;
 
 export const migrationManifest = migrationEntries.map(([id, name]) => [id, name] as const);

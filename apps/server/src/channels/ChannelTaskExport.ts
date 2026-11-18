@@ -108,7 +108,13 @@ const make = Effect.gen(function* () {
         { environmentId: worker.environmentId, threadId: worker.threadId },
         binding.memorySpaceId,
       );
-      return { state: lineage.state, revisions: lineage.revisions };
+      return {
+        state:
+          lineage.state === "tracked" && lineage.revisions.length > 100
+            ? "overflow"
+            : lineage.state,
+        revisions: lineage.revisions.slice(0, 100),
+      };
     },
     Effect.catch(() => Effect.succeed(unknownMemory)),
   );

@@ -291,7 +291,7 @@ it.effect.each(["memory_read", "memory_list", "memory_search", "memory_history"]
         new Set([a.revision, b.revision]),
       );
       const sql = yield* SqlClient.SqlClient;
-      expect(yield* sql`SELECT 1 FROM memory_outbox WHERE space='_worker'`).toHaveLength(1);
+      expect(yield* sql`SELECT 1 FROM memory_thread_lineages`).toHaveLength(1);
     }).pipe(Effect.provide(Fixture.layer)),
 );
 
@@ -302,7 +302,7 @@ it.effect("r5 read recording fails closed and metadata-only reads leave no linea
     const store = yield* Store.MemoryStore;
     const service = yield* Service.MemoryService;
     const a = yield* seed(20000);
-    yield* sql`CREATE TRIGGER fail_lineage BEFORE INSERT ON memory_outbox WHEN NEW.space='_worker' BEGIN SELECT RAISE(ABORT,'synthetic failure'); END`;
+    yield* sql`CREATE TRIGGER fail_lineage BEFORE INSERT ON memory_thread_lineage_revisions BEGIN SELECT RAISE(ABORT,'synthetic failure'); END`;
     const failed = yield* Fixture.call(
       "memory_read",
       { memorySpaceId: Fixture.space, memoryId: a.input.memoryId },
@@ -327,7 +327,7 @@ it.effect("r5 read recording fails closed and metadata-only reads leave no linea
         caller(),
       )).result.isError,
     ).not.toBe(true);
-    expect(yield* sql`SELECT 1 FROM memory_outbox WHERE space='_worker'`).toHaveLength(0);
+    expect(yield* sql`SELECT 1 FROM memory_thread_lineages`).toHaveLength(0);
     expect((yield* store.readThreadLineage(ref(), Fixture.space)).revisions).toEqual([]);
   }).pipe(Effect.provide(Fixture.layer)),
 );
@@ -457,11 +457,11 @@ const appendLineage = (
   });
 it.effect.each([
   {
-    name: "own and child lineage past 100 revisions",
+    name: "own and child lineage past 1000 revisions",
     state: "overflow",
     arrange: Effect.all([
-      appendLineage(ref(), Fixture.space, revisions(26000, 60)),
-      appendLineage(taskChild, Fixture.space, revisions(26100, 50)),
+      appendLineage(ref(), Fixture.space, revisions(26000, 600)),
+      appendLineage(taskChild, Fixture.space, revisions(27000, 500)),
       linkTask(ref().threadId, taskChild.threadId),
     ]),
   },
@@ -469,7 +469,7 @@ it.effect.each([
     name: "an overflowed child",
     state: "overflow",
     arrange: Effect.all([
-      appendLineage(taskChild, Fixture.space, revisions(26200, 101)),
+      appendLineage(taskChild, Fixture.space, revisions(26200, 1001)),
       linkTask(ref().threadId, taskChild.threadId),
     ]),
   },

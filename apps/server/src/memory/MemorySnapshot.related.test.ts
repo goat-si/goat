@@ -62,10 +62,7 @@ it.effect.each([{ withMemory: false }, { withMemory: true }])(
         [],
       );
       const sql = yield* SqlClient.SqlClient;
-      assert.lengthOf(
-        yield* sql`SELECT 1 FROM memory_outbox WHERE json_extract(metadata_json,'$.kind')='threadLineage'`,
-        0,
-      );
+      assert.lengthOf(yield* sql`SELECT 1 FROM memory_thread_lineages`, 0);
     }).pipe(Effect.provide(f.live));
   },
 );

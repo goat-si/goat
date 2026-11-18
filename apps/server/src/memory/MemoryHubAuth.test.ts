@@ -15,7 +15,7 @@ import * as Hex from "effect/encoding/Hex";
 import * as Layer from "effect/Layer";
 import * as SqlClient from "effect/sql/SqlClient";
 import migration from "../persistence/Migrations/098_Memory.ts";
-import hubMigration from "../persistence/Migrations/099_MemoryHubSync.ts";
+import hubMigration from "./testkit/MemoryHubTestMigration.ts";
 import * as Store from "./MemoryStore.ts";
 import * as Auth from "./MemoryHubAuth.ts";
 

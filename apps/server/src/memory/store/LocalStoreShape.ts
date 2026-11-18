@@ -1,3 +1,4 @@
+import type { ThreadLineage } from "./ThreadLineage.ts";
 import type * as M from "@goat/contracts";
 import type { MemoryRevertSlot } from "../MemoryRevertSlot.ts";
 import type { ImportStorePorts } from "../imports/MemoryImportTypes.ts";
@@ -29,7 +30,6 @@ import type {
   MemoryUsage,
   ResolutionSnapshot,
   SyncWorkCandidate,
-  ThreadLineage,
 } from "./StoreModel.ts";
 
 export interface LocalStoreShape {
@@ -45,6 +45,7 @@ export interface LocalStoreShape {
     thread: M.ScopedThreadRef,
     space: M.MemorySpaceId,
     revisions: ReadonlyArray<M.MemoryRevisionId>,
+    markUnknown?: boolean,
   ) => Effect.Effect<boolean, MemoryStorageError>;
   readonly deleteThreadLineage: (
     thread: M.ScopedThreadRef,

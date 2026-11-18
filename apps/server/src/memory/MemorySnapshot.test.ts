@@ -647,7 +647,7 @@ it.effect("keeps the first 1000 distinct revisions and only overflows on a new r
 });
 
 it.effect(
-  "r3 cumulative admission uses one row and at most one changed write, fences derivatives on overflow and cleans on deletion",
+  "delivery writes one lineage header per change and deletion releases the revision pins",
   () => {
     const f = fixture();
     return Effect.gen(function* () {
@@ -655,56 +655,32 @@ it.effect(
       const sql = yield* SqlClient.SqlClient;
       const service = yield* Service.MemoryService;
       const store = yield* Store.MemoryStore;
-      const snapshot = yield* Snapshot.MemorySnapshot;
+      const snapshots = yield* Snapshot.MemorySnapshot;
+      const thread = { environmentId, threadId };
       yield* sql`CREATE TABLE lineage_writes (n INTEGER)`;
-      yield* sql`CREATE TRIGGER lineage_insert AFTER INSERT ON memory_outbox WHEN json_extract(NEW.metadata_json,'$.kind')='threadLineage' BEGIN INSERT INTO lineage_writes VALUES (1); END`;
-      yield* sql`CREATE TRIGGER lineage_update AFTER UPDATE ON memory_outbox WHEN json_extract(NEW.metadata_json,'$.kind')='threadLineage' BEGIN INSERT INTO lineage_writes VALUES (1); END`;
+      yield* sql`CREATE TRIGGER lineage_insert AFTER INSERT ON memory_thread_lineages
+      BEGIN INSERT INTO lineage_writes VALUES (1); END`;
+      yield* sql`CREATE TRIGGER lineage_update AFTER UPDATE ON memory_thread_lineages
+      BEGIN INSERT INTO lineage_writes VALUES (1); END`;
       yield* service.upsert(input(9500), Effect.void);
-      const first = yield* snapshot.forThread(threadId, f.policy(), f.currentPolicy);
+      const first = yield* snapshots.forThread(threadId, f.policy(), f.currentPolicy);
       assert.isDefined(first);
-      const restored = yield* snapshot.revalidate(first!, { threadId, runId }, f.currentPolicy);
+      const restored = yield* snapshots.revalidate(first!, { threadId, runId }, f.currentPolicy);
       assert.isDefined(restored);
       assert.lengthOf(yield* sql`SELECT 1 FROM lineage_writes`, 1);
-      assert.lengthOf(
-        yield* sql`SELECT 1 FROM memory_outbox WHERE json_extract(metadata_json,'$.kind')='threadLineage'`,
-        1,
+      const revisions = Array.from({ length: 999 }, (_, n) =>
+        M.MemoryRevisionId.make(id(10000 + n)),
       );
-      const a = (yield* store.readThreadLineage({ environmentId, threadId }, space)).revisions;
-      const hundred = [...a];
-      for (let n = 9600; n < 9699; n++) {
-        const value = input(n, {
-          kind: "thread",
-          thread: { environmentId, threadId: M.ThreadId.make("other") },
-        });
-        yield* service.upsert(value, Effect.void);
-        hundred.push((yield* store.loadAggregate(space, value.memoryId)).heads[0]!);
-      }
-      assert.isTrue(yield* store.appendThreadLineage({ environmentId, threadId }, space, hundred));
+      assert.isTrue(yield* store.appendThreadLineage(thread, space, revisions));
       assert.lengthOf(yield* sql`SELECT 1 FROM lineage_writes`, 2);
-      assert.lengthOf(
-        (yield* store.readThreadLineage({ environmentId, threadId }, space)).revisions,
-        100,
-      );
-      // The 101st ID fences derivatives, while injection remains available.
       yield* service.upsert(input(9501), Effect.void);
-      let sent = 0;
-      const rejected = yield* snapshot.forThread(threadId, f.policy(), f.currentPolicy);
-      if (rejected) sent++;
-      assert.strictEqual(sent, 1);
-      const overflow = yield* store.readThreadLineage({ environmentId, threadId }, space);
+      const delivered = yield* snapshots.forThread(threadId, f.policy(), f.currentPolicy);
+      assert.isDefined(delivered);
+      const overflow = yield* store.readThreadLineage(thread, space);
       assert.strictEqual(overflow.state, "overflow");
-      assert.lengthOf(overflow.revisions, 100);
+      assert.lengthOf(overflow.revisions, 1000);
       assert.lengthOf(yield* sql`SELECT 1 FROM lineage_writes`, 3);
-      assert.lengthOf(
-        yield* sql`SELECT 1 FROM memory_outbox WHERE json_extract(metadata_json,'$.kind')='threadLineage'`,
-        1,
-      );
-      const encoded = (yield* sql<{
-        bytes: number;
-      }>`SELECT length(CAST(metadata_json AS BLOB)) AS bytes FROM memory_outbox WHERE json_extract(metadata_json,'$.kind')='threadLineage'`)[0]!
-        .bytes;
-      assert.isBelow(encoded, 4300);
-      // A new context is clean; deleting the source releases its one row and identity pins.
+      assert.lengthOf(yield* sql`SELECT 1 FROM memory_thread_lineages`, 1);
       assert.deepStrictEqual(
         (yield* store.readThreadLineage(
           { environmentId, threadId: M.ThreadId.make("fresh") },
@@ -712,11 +688,9 @@ it.effect(
         )).revisions,
         [],
       );
-      yield* store.deleteThreadLineage({ environmentId, threadId });
-      assert.lengthOf(
-        yield* sql`SELECT 1 FROM memory_outbox WHERE json_extract(metadata_json,'$.kind')='threadLineage'`,
-        0,
-      );
+      yield* store.deleteThreadLineage(thread);
+      assert.lengthOf(yield* sql`SELECT 1 FROM memory_thread_lineages`, 0);
+      assert.lengthOf(yield* sql`SELECT 1 FROM memory_thread_lineage_revisions`, 0);
     }).pipe(Effect.provide(f.live));
   },
 );
@@ -728,16 +702,13 @@ it.effect("r3 a lineage writer failure cannot deliver a memory snapshot", () => 
     const service = yield* Service.MemoryService;
     const snapshot = yield* Snapshot.MemorySnapshot;
     yield* service.upsert(input(9700), Effect.void);
-    yield* sql`CREATE TRIGGER lineage_write_failure BEFORE INSERT ON memory_outbox WHEN json_extract(NEW.metadata_json,'$.kind')='threadLineage' BEGIN SELECT RAISE(ABORT,'synthetic lineage failure'); END`;
+    yield* sql`CREATE TRIGGER lineage_write_failure BEFORE INSERT ON memory_thread_lineage_revisions BEGIN SELECT RAISE(ABORT,'synthetic lineage failure'); END`;
     let sent = 0;
     const value = yield* snapshot
       .forThread(threadId, f.policy(), f.currentPolicy)
       .pipe(Effect.catch(() => Effect.succeed(undefined)));
     if (value) sent++;
     assert.strictEqual(sent, 0);
-    assert.lengthOf(
-      yield* sql`SELECT 1 FROM memory_outbox WHERE json_extract(metadata_json,'$.kind')='threadLineage'`,
-      0,
-    );
+    assert.lengthOf(yield* sql`SELECT 1 FROM memory_thread_lineages`, 0);
   }).pipe(Effect.provide(f.live));
 });

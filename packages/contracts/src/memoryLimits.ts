@@ -1,0 +1,1 @@
+export const MEMORY_THREAD_LINEAGE_MAX = 1000;

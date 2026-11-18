@@ -1,3 +1,4 @@
+import { makeThreadLineage } from "./store/ThreadLineage.ts";
 import * as Context from "effect/Context";
 import * as Effect from "effect/Effect";
 import * as Layer from "effect/Layer";
@@ -160,12 +161,10 @@ const make = Effect.gen(function* () {
   const recallStore = makeRecallStore(kernel);
   const searchModule = makeSearch(kernel, coreReads);
   const { readCursor, withReceivedCursor, list, searchCoverage, search } = searchModule;
+  const lineage = makeThreadLineage(kernel);
   const workQueue = makeWorkQueue(kernel, itemWrites);
   const {
     readWork,
-    readThreadLineage,
-    appendThreadLineage,
-    deleteThreadLineage,
     retryWork,
     rearmGenerationWork,
     renewWork,
@@ -502,9 +501,7 @@ const make = Effect.gen(function* () {
     rebindWorkModel,
     readThreadHookWatermark,
     cancelThreadWork,
-    readThreadLineage,
-    appendThreadLineage,
-    deleteThreadLineage,
+    ...lineage,
     commitThreadHook,
     readParked,
     enqueueWork,

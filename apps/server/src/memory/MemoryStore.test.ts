@@ -21,7 +21,7 @@ import * as NodeServices from "@effect/platform-node/NodeServices";
 import * as FileSystem from "effect/FileSystem";
 import migration from "../persistence/Migrations/098_Memory.ts";
 import { runMigrations } from "../persistence/Migrations.ts";
-import hubMigration from "../persistence/Migrations/099_MemoryHubSync.ts";
+import hubMigration from "./testkit/MemoryHubTestMigration.ts";
 import searchMigration from "../persistence/Migrations/100_MemorySearchCounters.ts";
 import lineageMigration from "../persistence/Migrations/102_MemoryImportLineage.ts";
 import checkpointMigration from "../persistence/Migrations/103_MemoryCheckpointAccounting.ts";

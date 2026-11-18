@@ -696,7 +696,7 @@ export const makeHubLedger = (
       AND NOT EXISTS (SELECT 1 FROM memory_inbox_pending b WHERE b.space=r.space AND b.payload_ref=r.payload_ref)
       AND r.revision_id NOT IN (SELECT revision_id FROM snapshot_revisions WHERE revision_id IS NOT NULL)
       AND (r.present_payload IS NOT NULL OR (NOT EXISTS (SELECT 1 FROM memory_payloads d, json_each(d.dependencies_json) dep WHERE d.space=r.space AND dep.value=r.revision_id)
-        AND NOT EXISTS (SELECT 1 FROM memory_outbox o,json_each(o.metadata_json,'$.revisions') dep WHERE o.space='_worker' AND json_extract(o.metadata_json,'$.kind')='threadLineage' AND json_extract(o.metadata_json,'$.memorySpaceId')=r.space AND dep.value=r.revision_id)))
+        AND NOT EXISTS (SELECT 1 FROM memory_thread_lineage_revisions dep JOIN memory_thread_lineages h USING(environment_id,thread_id) WHERE h.space=r.space AND dep.revision_id=r.revision_id)))
       ORDER BY coalesce(r.purge_eligible_after,r.created_at),r.revision_id LIMIT ${Math.max(0, limit - removedRows)}`,
     );
     for (const revision of revisions) {
@@ -713,7 +713,7 @@ export const makeHubLedger = (
       const retained = yield* stored(
         "hub-compact-lineage-reference",
         sql`SELECT 1 FROM memory_payloads p, json_each(p.dependencies_json) d WHERE p.space=${input.memorySpaceId} AND d.value=${revision.revision_id}
-          UNION ALL SELECT 1 FROM memory_outbox o,json_each(o.metadata_json,'$.revisions') d WHERE o.space='_worker' AND json_extract(o.metadata_json,'$.kind')='threadLineage' AND json_extract(o.metadata_json,'$.memorySpaceId')=${input.memorySpaceId} AND d.value=${revision.revision_id} LIMIT 1`,
+          UNION ALL SELECT 1 FROM memory_thread_lineage_revisions d JOIN memory_thread_lineages h USING(environment_id,thread_id) WHERE h.space=${input.memorySpaceId} AND d.revision_id=${revision.revision_id} LIMIT 1`,
       );
       if (retained.length) {
         removedRows++;

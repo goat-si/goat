@@ -1205,7 +1205,7 @@ it.effect.each([false, true, "multi"] as const)(
       yield* sql`INSERT INTO orchestration_events VALUES (5,${id(9302)},${threadId},'thread.deleted','{}',${now},2,'thread')`;
       yield* worker.sweepDue();
       assert.lengthOf(
-        yield* sql`SELECT 1 FROM memory_outbox WHERE json_extract(metadata_json,'$.kind')='threadLineage' AND json_extract(metadata_json,'$.sourceThread.threadId')=${threadId}`,
+        yield* sql`SELECT 1 FROM memory_thread_lineages WHERE thread_id=${threadId}`,
         0,
       );
       assert.deepStrictEqual(
