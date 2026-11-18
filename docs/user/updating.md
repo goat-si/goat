@@ -176,6 +176,10 @@ asks before restarting the background service; if you decline, run
 stop it and start it again afterwards with your usual options such as `--host`
 or `--tailscale-serve`.
 
+If you decline the restart for a background service installed by an older
+release, the service can stay down after a crash or reboot until you run
+`goat service restart`.
+
 If `goat` is not installed on the host, [install GOAT](./install.md) from its
 release archive first. Then run `goat update <client-version>` and restart
 with the same subcommand and options.

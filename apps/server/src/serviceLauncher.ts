@@ -27,11 +27,13 @@ import {
   parseLegacyServiceState,
   SERVICE_ENV_FILE,
   SERVICE_LAUNCHER_CONTEXT_ENV,
+  SERVICE_LAUNCHER_GUARANTEES,
   SERVICE_LAUNCHER_PROTOCOL,
   SERVICE_RESTART_PENDING_FILE,
   SERVICE_STATE_FILE,
   SERVICE_STOP_MARKER_FILE,
 } from "./cloud/serviceProtocol.ts";
+import { acquireServiceSelectionLock } from "./cloud/serviceSelectionLock.ts";
 import { tryAcquireServerOwnerLock } from "./serverOwnerLockFile.ts";
 import {
   backupDatabaseOnce,
@@ -42,10 +44,15 @@ import {
   ownerLockDir,
   pathExists,
   restoreDatabaseBackup,
-  syncDirectory,
   type BackupSpaceProbe,
 } from "./serviceLauncherDatabase.ts";
 import { smokeProbe } from "./serviceLauncherSmokeProbe.ts";
+import {
+  replaceFileDurably,
+  repointServiceUnit,
+  serviceUnitFromEnvironment,
+  type ServiceUnit,
+} from "./serviceUnitRepoint.ts";
 
 export { databaseBackupBlocker, type BackupSpaceProbe } from "./serviceLauncherDatabase.ts";
 
@@ -128,26 +135,14 @@ export async function readServiceState(filePath: string): Promise<ServiceState> 
 }
 
 export async function writeServiceState(filePath: string, state: ServiceState): Promise<void> {
-  const directory = NodePath.dirname(filePath);
-  await NodeFSP.mkdir(directory, { recursive: true, mode: 0o700 });
-  const tempPath = NodePath.join(
-    directory,
-    `.${NodePath.basename(filePath)}.${process.pid}.${NodeCrypto.randomUUID()}`,
-  );
-  let handle: NodeFSP.FileHandle | undefined;
-  try {
-    handle = await NodeFSP.open(tempPath, "wx", 0o600);
-    await handle.writeFile(`${JSON.stringify(state, null, 2)}\n`, "utf8");
-    await handle.sync();
-    await handle.close();
-    handle = undefined;
-    await NodeFSP.rename(tempPath, filePath);
-    await syncDirectory(directory);
-  } finally {
-    await handle?.close().catch(() => undefined);
-    await NodeFSP.rm(tempPath, { force: true }).catch(() => undefined);
-  }
+  await NodeFSP.mkdir(NodePath.dirname(filePath), { recursive: true, mode: 0o700 });
+  await replaceFileDurably(filePath, `${JSON.stringify(state, null, 2)}\n`);
 }
+
+const sameSelection = (left: ServiceState, right: ServiceState) =>
+  left.activeVersion === right.activeVersion &&
+  left.update?.id === right.update?.id &&
+  left.update?.status === right.update?.status;
 
 async function runtimeExists(baseDir: string, version: string): Promise<boolean> {
   const paths = runtimePaths(baseDir, version);
@@ -230,6 +225,7 @@ export class Launcher {
   readonly #probationMs: number;
   readonly #now: () => number;
   readonly #environment: Readonly<NodeJS.ProcessEnv>;
+  readonly #serviceUnit: ServiceUnit | undefined;
 
   constructor(
     baseDir: string,
@@ -239,6 +235,7 @@ export class Launcher {
       readonly probationMs?: number;
       readonly now?: () => number;
       readonly environment?: Readonly<NodeJS.ProcessEnv>;
+      readonly serviceUnit?: ServiceUnit;
     } = {},
   ) {
     this.#baseDir = baseDir;
@@ -246,6 +243,7 @@ export class Launcher {
     this.#probationMs = options.probationMs ?? PROBATION_MS;
     this.#now = options.now ?? Date.now;
     this.#environment = { ...(options.environment ?? process.env) };
+    this.#serviceUnit = options.serviceUnit;
     this.#statePath = NodePath.join(baseDir, "runtime", SERVICE_STATE_FILE);
     this.#state = state;
   }
@@ -316,14 +314,36 @@ export class Launcher {
     this.#probationTimer = undefined;
   }
 
+  // Local installs replace the selection and clear its update record; an old launcher must not
+  // write its own selection back over theirs.
+  async #selectState(next: ServiceState): Promise<void> {
+    const release = await acquireServiceSelectionLock(this.#statePath);
+    try {
+      if (!sameSelection(await readServiceState(this.#statePath), this.#state)) {
+        throw new Error("Service selection changed. Restart the service before updating.");
+      }
+      await writeServiceState(this.#statePath, next);
+      this.#state = next;
+    } finally {
+      release();
+    }
+  }
+
+  #repointServiceUnit(version: string): Promise<void> {
+    return repointServiceUnit({
+      unit: this.#serviceUnit,
+      baseDir: this.#baseDir,
+      version,
+      // The installer writes state before the unit under this lease; reading state needs no lease.
+      selectionUnchanged: async () =>
+        sameSelection(await readServiceState(this.#statePath), this.#state),
+    });
+  }
+
   async #recover(): Promise<void> {
     // Clear old stop markers to preserve future tunnels; clear restart-pending only for the awaited version to avoid CLI races.
     await NodeFSP.rm(stopMarkerPath(this.#baseDir), { force: true }).catch(() => undefined);
-    const restartPending = restartPendingPath(this.#baseDir);
-    const awaitedVersion = await NodeFSP.readFile(restartPending, "utf8").catch(() => undefined);
-    if (awaitedVersion?.trim() === this.#state.activeVersion) {
-      await NodeFSP.rm(restartPending, { force: true }).catch(() => undefined);
-    }
+    await this.#clearRestartPending();
     const update = this.#state.update;
     if (update?.status !== "pending") {
       const probation = this.#state.probation;
@@ -362,7 +382,12 @@ export class Launcher {
       } else if (update !== undefined) {
         await discardDatabaseBackup(this.#baseDir, update.id).catch(() => undefined);
       }
-      await this.#startChild(this.#state.activeVersion, "active", update);
+      try {
+        await this.#startChild(this.#state.activeVersion, "active", update);
+      } finally {
+        // Each start after a finished update retries: an earlier repoint or reload may have failed.
+        if (update !== undefined) await this.#repointServiceUnit(this.#state.activeVersion);
+      }
       return;
     }
     if (await databaseRestorePending(this.#baseDir, update)) {
@@ -374,6 +399,32 @@ export class Launcher {
       return;
     }
     await this.#startTrial(update);
+  }
+
+  async #clearRestartPending(): Promise<void> {
+    const restartPending = restartPendingPath(this.#baseDir);
+    try {
+      const release = await acquireServiceSelectionLock(this.#statePath);
+      try {
+        const awaited = (
+          await NodeFSP.readFile(restartPending, "utf8").catch(() => undefined)
+        )?.trim();
+        if (
+          sameSelection(await readServiceState(this.#statePath), this.#state) &&
+          awaited !== undefined &&
+          isExactServiceVersion(awaited) &&
+          compareExactServiceVersions(awaited, this.#state.activeVersion) <= 0
+        ) {
+          await NodeFSP.rm(restartPending, { force: true });
+        }
+      } finally {
+        release();
+      }
+    } catch (error) {
+      process.stderr.write(
+        `[service-launcher] Could not clear ${restartPending}: ${error instanceof Error ? error.message : String(error)}\n`,
+      );
+    }
   }
 
   async #startTrial(pending: PendingServiceUpdate): Promise<void> {
@@ -416,6 +467,7 @@ export class Launcher {
     const paths = runtimePaths(this.#baseDir, version);
     const context: ServiceLauncherContext = {
       protocol: SERVICE_LAUNCHER_PROTOCOL,
+      launcherProtocol: SERVICE_LAUNCHER_GUARANTEES,
       childVersion: version,
       ...(update === undefined ? {} : { update }),
       ...(role === "active" && update?.status === "committed" && this.#state.probation !== undefined
@@ -541,9 +593,12 @@ export class Launcher {
       dbPath: message.dbPath,
       status: "pending",
     };
-    const next: ServiceState = { ...this.#state, update: pending };
-    await writeServiceState(this.#statePath, next);
-    this.#state = next;
+    try {
+      await this.#selectState({ ...this.#state, update: pending });
+    } catch (error) {
+      await reject(error instanceof Error ? error.message : String(error));
+      return;
+    }
     await sendMessage(child.process, { type: "update-accepted", updateId: pending.id });
     this.#timer = setTimeout(() => this.#enqueue(() => this.#beginTrial(child)), HANDOFF_DELAY_MS);
   }
@@ -595,8 +650,7 @@ export class Launcher {
       update: committed,
       probation: { dbPath: pending.dbPath, deadline: this.#now() + this.#probationMs },
     };
-    await writeServiceState(this.#statePath, next);
-    this.#state = next;
+    await this.#selectState(next);
     child.role = "active";
     await this.#resumeProbation();
     try {
@@ -609,6 +663,7 @@ export class Launcher {
         "[service-launcher] Commit acknowledgement failed; awaiting child exit.\n",
       );
     }
+    await this.#repointServiceUnit(committed.targetVersion);
   }
 
   async #resumeProbation(): Promise<void> {
@@ -634,8 +689,7 @@ export class Launcher {
     if (probation === undefined || probation.rollbackReason !== undefined) return;
     // The exit transition may still be queued behind a durable write at the deadline.
     if (this.#child?.exitedAt !== undefined && this.#child.exitedAt < probation.deadline) return;
-    await writeServiceState(this.#statePath, next);
-    this.#state = next;
+    await this.#selectState(next);
     if (next.update !== undefined) {
       await discardDatabaseBackup(this.#baseDir, next.update.id).catch(() => undefined);
     }
@@ -722,9 +776,9 @@ export class Launcher {
         activeVersion: pending.fromVersion,
         update: terminalUpdate({ pending, status: "failed", reason }),
       };
-      await writeServiceState(this.#statePath, next);
-      this.#state = next;
+      await this.#selectState(next);
       await discardDatabaseBackup(this.#baseDir, pending.id).catch(() => undefined);
+      await this.#repointServiceUnit(next.activeVersion);
     }
     await this.#resumeProbation();
     // Signal listeners alone do not keep Node alive.
@@ -749,8 +803,7 @@ export class Launcher {
         ...this.#state,
         probation: { ...this.#state.probation, rollbackReason: reason },
       };
-      await writeServiceState(this.#statePath, next);
-      this.#state = next;
+      await this.#selectState(next);
     }
     if (child !== undefined) {
       this.#child = null;
@@ -778,10 +831,13 @@ export class Launcher {
       activeVersion: pending.fromVersion,
       update: outcome,
     };
-    await writeServiceState(this.#statePath, next);
-    this.#state = next;
+    await this.#selectState(next);
     await discardDatabaseBackup(this.#baseDir, pending.id).catch(() => undefined);
-    await this.#startChild(next.activeVersion, "active", outcome);
+    try {
+      await this.#startChild(next.activeVersion, "active", outcome);
+    } finally {
+      await this.#repointServiceUnit(next.activeVersion);
+    }
   }
 }
 
@@ -801,5 +857,10 @@ export async function main(): Promise<void> {
   if (state === undefined) throw new Error("Service state is invalid or unsupported.");
   if (current === undefined && !(await runtimeExists(baseDir, state.activeVersion)))
     throw new Error(`Selected goat@${state.activeVersion} runtime is missing or incomplete.`);
-  await new Launcher(baseDir, state, { environment }).run();
+  const serviceUnit = serviceUnitFromEnvironment();
+  await new Launcher(
+    baseDir,
+    state,
+    serviceUnit === undefined ? { environment } : { environment, serviceUnit },
+  ).run();
 }

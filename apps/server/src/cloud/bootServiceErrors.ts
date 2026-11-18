@@ -75,9 +75,12 @@ export class BootServicePrerequisiteError extends Schema.TaggedError<BootService
 
 export class BootServiceUpdatePendingError extends Schema.TaggedError<BootServiceUpdatePendingError>()(
   "BootServiceUpdatePendingError",
-  {},
+  { recoveryCommand: Schema.optional(Schema.String) },
 ) {
   override get message(): string {
+    if (this.recoveryCommand !== undefined) {
+      return `A remote server update is still pending, but its service definition is missing. With the service stopped, run this on the server machine: ${this.recoveryCommand}\nWait for the update to finish or roll back, stop the foreground launcher with Ctrl-C, then retry the install.`;
+    }
     return "A remote server update is still pending. Wait for it to finish, then retry.";
   }
 }
