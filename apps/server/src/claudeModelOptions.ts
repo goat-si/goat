@@ -50,7 +50,7 @@ export function compileClaudeModelSelection(
     resolveClaudeCatalogModel(catalog, selection.model.replace(/\[1m\]$/i, ""));
   const thinking =
     thinkingModel === undefined ||
-    thinkingModel.model.capabilities?.optionDescriptors.some(
+    thinkingModel.model.capabilities?.optionDescriptors?.some(
       (descriptor) => descriptor.id === "thinking" && descriptor.type === "boolean",
     )
       ? getModelSelectionBooleanOptionValue(selection, "thinking")

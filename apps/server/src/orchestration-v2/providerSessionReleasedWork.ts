@@ -227,8 +227,9 @@ export const makeReleasedBackgroundWork = ({
           );
         }
         // Older rows can predate provider-thread attribution on the task card.
+        const nativeTaskId = subagent.nativeTaskRef?.nativeId;
         return (
-          (subagent.nativeTaskRef !== null && taskIds.has(subagent.nativeTaskRef.nativeId)) ||
+          (nativeTaskId != null && taskIds.has(nativeTaskId)) ||
           projection.providerThreads.filter(
             (thread) => thread.providerInstanceId === owner.providerInstanceId,
           ).length === 1

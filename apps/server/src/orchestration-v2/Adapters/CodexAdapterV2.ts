@@ -6035,6 +6035,7 @@ export const makeCodexAdapterV2 = Effect.fn("makeCodexAdapterV2")(function* (
                   const state: ActiveCodexProviderRetry = {
                     nativeMessage: input.failureMessage ?? terminal.failure.message,
                     nativeCode: terminal.failure.code,
+                    httpStatus: codexHttpStatus(input.failureErrorInfo),
                     failure: terminal.failure,
                     retry,
                     startedAt: yield* DateTime.now,

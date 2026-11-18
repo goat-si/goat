@@ -34,13 +34,15 @@ const ClaudeModelSettings = Schema.Struct({
 });
 const decodeClaudeModelSettings = Schema.decodeUnknownEffect(fromLenientJson(ClaudeModelSettings));
 
+const encodeSettingsKey = Schema.encodeSync(Schema.fromJsonString(Schema.Unknown));
+
 function claudeModelSettingsKey(
   settings: typeof ClaudeModelSettings.Type,
   environment?: NodeJS.ProcessEnv,
 ): string {
   const sortedEntries = (record: Readonly<Record<string, unknown>> | undefined) =>
     Object.entries(record ?? {}).toSorted(([a], [b]) => a.localeCompare(b));
-  return JSON.stringify([
+  return encodeSettingsKey([
     settings.availableModels ?? null,
     sortedEntries(settings.modelOverrides),
     sortedEntries({ ...environment, ...settings.env }).filter(([name]) =>
@@ -100,7 +102,7 @@ export const resolveClaudeModelSettingsKey = Effect.fn("resolveClaudeModelSettin
   );
   return Option.isNone(userSettings)
     ? undefined
-    : JSON.stringify([effective, settingsPath, claudeModelSettingsKey(userSettings.value)]);
+    : encodeSettingsKey([effective, settingsPath, claudeModelSettingsKey(userSettings.value)]);
 });
 
 export type RouteClaudeModelCatalog = (

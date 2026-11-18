@@ -1,17 +1,30 @@
 import type { OrchestrationV2DomainEvent } from "@goat/contracts";
 import * as Effect from "effect/Effect";
+import type * as Schema from "effect/Schema";
+import type * as SqlError from "effect/sql/SqlError";
 import type * as SqlClient from "effect/sql/SqlClient";
 import * as ProjectionStore from "./ProjectionStore.ts";
 import { EventSinkWriteError, type EventSinkV2Shape } from "./EventSinkShape.ts";
 
-export function makeEventSinkComparePayloadWrites<A, E>(
-  sql: SqlClient.SqlClient["Service"],
-  writeIfStoredPayloadMatches: <ReadError>(
-    read: Effect.Effect<ReadonlyArray<{ readonly payload_json: string }>, ReadError>,
+type ComparePayloadWrites = Pick<
+  EventSinkV2Shape,
+  "writeIfProviderThreadUnchanged" | "writeIfTurnItemUnchanged" | "writeIfReleasedSubagentUnchanged"
+>;
+type CompareResult = Effect.Success<
+  ReturnType<ComparePayloadWrites["writeIfProviderThreadUnchanged"]>
+>;
+
+export function makeEventSinkComparePayloadWrites(
+  sql: SqlClient.SqlClient,
+  writeIfStoredPayloadMatches: (
+    read: Effect.Effect<
+      ReadonlyArray<{ readonly payload_json: string }>,
+      SqlError.SqlError | Schema.SchemaError
+    >,
     expected: string,
     events: ReadonlyArray<OrchestrationV2DomainEvent>,
-  ) => Effect.Effect<A, E | ReadError>,
-) {
+  ) => Effect.Effect<CompareResult, EventSinkWriteError>,
+): ComparePayloadWrites {
   const writeIfProviderThreadUnchangedEffect = Effect.fn(
     "orchestrationV2.EventSink.writeIfProviderThreadUnchanged",
   )(function* (input: Parameters<EventSinkV2Shape["writeIfProviderThreadUnchanged"]>[0]) {
@@ -92,26 +105,16 @@ export function makeEventSinkComparePayloadWrites<A, E>(
     return yield* writeIfStoredPayloadMatches(matches, expected, input.events);
   });
 
+  const mapWriteError = (eventCount: number) =>
+    Effect.mapError((cause: EventSinkWriteError | Schema.SchemaError) =>
+      cause._tag === "EventSinkWriteError" ? cause : new EventSinkWriteError({ eventCount, cause }),
+    );
   return {
     writeIfProviderThreadUnchanged: (input) =>
-      writeIfProviderThreadUnchangedEffect(input).pipe(
-        Effect.mapError(
-          (cause) => new EventSinkWriteError({ eventCount: input.events.length, cause }),
-        ),
-      ),
+      writeIfProviderThreadUnchangedEffect(input).pipe(mapWriteError(input.events.length)),
     writeIfTurnItemUnchanged: (input) =>
-      writeIfTurnItemUnchangedEffect(input).pipe(
-        Effect.mapError(
-          (cause) => new EventSinkWriteError({ eventCount: input.events.length, cause }),
-        ),
-      ),
-    writeIfReleasedSubagentUnchanged: (
-      input: Parameters<EventSinkV2Shape["writeIfReleasedSubagentUnchanged"]>[0],
-    ) =>
-      writeIfReleasedSubagentUnchanged(input).pipe(
-        Effect.mapError(
-          (cause) => new EventSinkWriteError({ eventCount: input.events.length, cause }),
-        ),
-      ),
+      writeIfTurnItemUnchangedEffect(input).pipe(mapWriteError(input.events.length)),
+    writeIfReleasedSubagentUnchanged: (input) =>
+      writeIfReleasedSubagentUnchanged(input).pipe(mapWriteError(input.events.length)),
   };
 }

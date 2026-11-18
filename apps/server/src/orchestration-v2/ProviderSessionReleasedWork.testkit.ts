@@ -302,7 +302,11 @@ export function registerReleasedBackgroundWorkChecks({
             ["interrupted", "interrupted"],
             ["running", "running"],
           ]);
-        }).pipe(Effect.provide(layerTest({ state, capabilities: ExclusiveCapabilities })));
+        }).pipe(
+          Effect.provide(
+            layerTest({ state, idleTimeoutMs: 60_000, capabilities: ExclusiveCapabilities }),
+          ),
+        );
       }),
   );
 

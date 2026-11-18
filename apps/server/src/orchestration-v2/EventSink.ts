@@ -550,9 +550,10 @@ const layerBase: Layer.Layer<
             : Effect.void,
       );
 
-    const comparePayloadWrites = makeEventSinkComparePayloadWrites(
-      sql,
-      writeIfStoredPayloadMatches,
+    const comparePayloadWrites = makeEventSinkComparePayloadWrites(sql, (read, expected, events) =>
+      writeIfStoredPayloadMatches(read, expected, events).pipe(
+        Effect.mapError((cause) => new EventSinkWriteError({ eventCount: events.length, cause })),
+      ),
     );
 
     const existingCommandResult =

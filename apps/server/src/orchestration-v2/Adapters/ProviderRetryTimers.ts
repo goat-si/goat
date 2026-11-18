@@ -11,9 +11,9 @@ export function makeProviderRetryTimers(scope: Scope.Scope) {
     timers.delete(id);
     if (timer !== undefined) yield* Fiber.interrupt(timer);
   });
-  const start = Effect.fn("ProviderRetryTimers.start")(function* (
+  const start = Effect.fn("ProviderRetryTimers.start")(function* <E>(
     id: ProviderTurnId,
-    work: Effect.Effect<void, unknown>,
+    work: Effect.Effect<void, E>,
   ) {
     yield* cancel(id);
     // Cancel runs outside the terminalization permit, so it may interrupt only the sleep; due work gets its own fiber.
