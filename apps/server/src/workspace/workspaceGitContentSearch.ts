@@ -1,3 +1,7 @@
+// @effect-diagnostics nodeBuiltinImport:off -- lstat must reject symlinks when admitting widened paths.
+import * as NodeFSP from "node:fs/promises";
+import * as NodePath from "node:path";
+
 import type { ProjectSearchContentsInput, ProjectSearchContentsResult } from "@goat/contracts";
 import * as Effect from "effect/Effect";
 import * as Option from "effect/Option";
@@ -113,6 +117,7 @@ const searchGitPaths = Effect.fn("WorkspaceSearchIndex.searchGitPaths")(function
   paths: readonly string[],
   seen: ReadonlySet<string>,
 ): Effect.fn.Return<ProjectSearchContentsResult | undefined> {
+  const exactPaths = new Set(paths);
   let regexMode = input.useRegex;
   let regexFallbackError: string | undefined;
   let result = yield* runGitGrep(vcsProcess, cwd, input, regexMode, paths);
@@ -126,6 +131,11 @@ const searchGitPaths = Effect.fn("WorkspaceSearchIndex.searchGitPaths")(function
     result = yield* runGitGrep(vcsProcess, cwd, input, regexMode, paths);
   }
   if (!result || result.exitCode > 1 || result.stdoutInvalidUtf8) return undefined;
+  if (exactPaths.size > 0) {
+    for (const [relativePath] of grepRecords(result.stdout, 3)) {
+      if (!relativePath || !exactPaths.has(relativePath)) return undefined;
+    }
+  }
 
   const regexMatches = new Map<string, RegexLineMatches>();
   let rangesTruncated = false;
@@ -144,6 +154,7 @@ const searchGitPaths = Effect.fn("WorkspaceSearchIndex.searchGitPaths")(function
         start < 1
       )
         continue;
+      if (exactPaths.size > 0 && !exactPaths.has(relativePath)) return undefined;
       const key = matchKey(relativePath, lineNumber);
       const existing = regexMatches.get(key);
       if (existing) existing.texts.push(text);
@@ -235,6 +246,18 @@ export const searchContentsWithGit = Effect.fn("WorkspaceSearchIndex.searchConte
     if (!normal || normal.truncated || reincludedPaths.length === 0) return normal;
 
     // Only widen Git's walk to individual files explicitly re-included by .ignore.
+    const regularFiles = yield* Effect.forEach(
+      reincludedPaths,
+      (path) =>
+        Effect.promise(() =>
+          NodeFSP.lstat(NodePath.join(cwd, path)).then(
+            (stat) => stat.isFile(),
+            () => false,
+          ),
+        ),
+      { concurrency: 8 },
+    );
+    if (!regularFiles.every(Boolean)) return undefined;
     const seen = new Set(normal.matches.map((match) => matchKey(match.path, match.lineNumber)));
     const extra = yield* searchGitPaths(
       vcsProcess,

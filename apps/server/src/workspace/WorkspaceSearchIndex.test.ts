@@ -702,3 +702,66 @@ it.live.each(["grep.column", "grep.fullName"])(
       }
     }).pipe(Effect.scoped, Effect.provide(testLayer)),
 );
+
+it.live.each(["before grep", "during grep"])(
+  "keeps descendants out when a re-included file becomes a directory %s",
+  (when) =>
+    Effect.gen(function* () {
+      const fs = yield* FileSystem.FileSystem;
+      const path = yield* Path.Path;
+      const git = yield* VcsProcess.VcsProcess;
+      const cwd = yield* fs.makeTempDirectoryScoped();
+      const generated = path.join(cwd, "generated");
+      yield* git.run({ operation: "test.gitInit", command: "git", args: ["init"], cwd });
+      yield* fs.writeFileString(path.join(cwd, ".gitignore"), "generated\n");
+      yield* fs.writeFileString(path.join(cwd, ".ignore"), "!generated\n");
+      yield* fs.writeFileString(generated, "needle\n");
+
+      const replaceFile = Effect.gen(function* () {
+        yield* fs.remove(generated);
+        yield* fs.makeDirectory(generated);
+        yield* fs.writeFileString(path.join(generated, ".gitignore"), "[[:digit:]].txt\n");
+        yield* fs.writeFileString(path.join(generated, "1.txt"), "needle\n");
+      });
+      let replaceOnWiden = false;
+      const process = VcsProcess.VcsProcess.of({
+        run: (input) => {
+          if (!replaceOnWiden || !input.args.includes("--no-exclude-standard")) {
+            return git.run(input);
+          }
+          replaceOnWiden = false;
+          return replaceFile.pipe(Effect.orDie, Effect.andThen(git.run(input)));
+        },
+      });
+
+      const finder = {
+        destroy: vi.fn(),
+        destroyAsync: vi.fn(async () => {}),
+        getScanProgressAsync: async () => ({
+          ok: true as const,
+          value: { isScanning: true, isWarmupComplete: false },
+        }),
+        waitForIndexReady: async () => ({ ok: true, value: true }),
+        grepAsync: async () => ({
+          ok: true as const,
+          value: { items: [], nextCursor: null },
+        }),
+      } as unknown as FileFinder;
+      vi.spyOn(FileFinder, "create").mockReturnValueOnce({ ok: true, value: finder });
+      const index = yield* WorkspaceSearchIndex.make(cwd, "content").pipe(
+        Effect.provideService(VcsProcess.VcsProcess, process),
+      );
+      const search = index.searchContents({
+        query: "needle",
+        limit: 10,
+        caseSensitive: true,
+        wholeWord: false,
+        useRegex: false,
+      });
+      expect((yield* search).matches.map((match) => match.path)).toEqual(["generated"]);
+
+      if (when === "before grep") yield* replaceFile;
+      else replaceOnWiden = true;
+      expect(yield* search).toEqual({ matches: [], truncated: false });
+    }).pipe(Effect.scoped, Effect.provide(testLayer)),
+);
