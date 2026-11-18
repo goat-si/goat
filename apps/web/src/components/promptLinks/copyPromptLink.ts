@@ -1,7 +1,7 @@
 import { draftModelSelectionApplies, threadHasStarted } from "~/lib/chatThreadActions";
 import { isAttachmentOnlyBootstrapPrompt } from "@goat/shared/composerContextReferences";
-import type { EnvironmentProject } from "@goat/client-runtime/state/shell";
-import { type ModelSelection, repositoryGroupingKeyOf, type ServerProvider } from "@goat/contracts";
+import type { EnvironmentProject, EnvironmentThreadShell } from "@goat/client-runtime/state/shell";
+import { repositoryGroupingKeyOf, type ServerProvider } from "@goat/contracts";
 import {
   buildNewThreadLink,
   parsePromptLinkRepository,
@@ -46,7 +46,8 @@ export function composerPromptLink(input: {
   readonly project: EnvironmentProject | undefined;
   readonly providers: ReadonlyArray<ServerProvider>;
   readonly thread:
-    | (NonNullable<Parameters<typeof threadHasStarted>[0]> & { modelSelection: ModelSelection })
+    | Pick<EnvironmentThreadShell, "latestRun" | "itemCount" | "runtime" | "modelSelection">
+    | null
     | undefined;
   readonly withContext: boolean;
 }): string | null {

@@ -46,7 +46,7 @@ export function useComposerProviderModel(
     settings,
     activeProjectId,
     threadRef,
-    threadStarted,
+    thread,
     threadModelSelection,
     projectModelSelection,
     promptInjectionState,
@@ -54,6 +54,7 @@ export function useComposerProviderModel(
     lockedProvider,
     lockedInstanceId,
   } = input;
+  const threadStarted = threadHasStarted(thread);
   const draftModelState = useComposerDraftModelState(threadRef, threadStarted);
   const providerInstanceEntries: ReadonlyArray<ProviderInstanceEntry> = sortProviderInstanceEntries(
     applyProviderInstanceSettings(
