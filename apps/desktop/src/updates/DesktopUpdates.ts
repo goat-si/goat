@@ -2,6 +2,7 @@ import { makeUpdateInstallRecord } from "./updateInstallRecord.ts";
 export { DESKTOP_UPDATE_INSTALL_RECORD_FILE } from "./updateInstallRecord.ts";
 import {
   checkDesktopUpdateFeed,
+  hasDownloadOffer,
   isPersistedDownload,
   makeUpdateFeedCapture,
   waitForPersistedDownload,
@@ -494,9 +495,10 @@ export const make = Effect.gen(function* () {
         );
   });
 
-  const recordDownloadFailure = (message: string) =>
+  const recordDownloadFailure = (message: string, status?: "error") =>
     updateState((current) => ({
       ...reduceDesktopUpdateStateOnDownloadFailure(current, message),
+      ...(status && { status }),
       recoveryStatus: null,
     }));
 
@@ -567,7 +569,7 @@ export const make = Effect.gen(function* () {
               ? ("wait-for-check" as const)
               : ("refused" as const);
           }
-          if (current.status !== "available") return "refused" as const;
+          if (!hasDownloadOffer(current)) return "refused" as const;
           if (automatic) {
             const settings = yield* desktopSettings.get;
             if (
@@ -591,7 +593,7 @@ export const make = Effect.gen(function* () {
       const refreshed = automatic || (yield* refreshUpdateOffer("download"));
       const current = yield* Ref.get(updateStateRef);
       const result =
-        refreshed && current.status === "available" && !(yield* Ref.get(desktopState.quitting))
+        refreshed && hasDownloadOffer(current) && !(yield* Ref.get(desktopState.quitting))
           ? yield* downloadUnderReservation()
           : { accepted: true, completed: false };
       return { ...result, state: yield* Ref.get(updateStateRef) };
@@ -1084,6 +1086,8 @@ export const make = Effect.gen(function* () {
       .pipe(Effect.result);
     if (result._tag === "Failure") {
       yield* logUpdaterWarning(result.failure.message, { errorTag: result.failure._tag });
+      if (reason === "download" && result.failure._tag === "DesktopUpdateCheckTimeoutError")
+        yield* recordDownloadFailure(result.failure.message, "error");
       return result.failure._tag === "ElectronUpdaterCheckForUpdatesError";
     }
     const offer = result.success;

@@ -46,6 +46,11 @@ export function makeUpdateFeedCapture() {
   };
 }
 
+export const hasDownloadOffer = (state: DesktopUpdateState) =>
+  state.availableVersion !== null &&
+  (state.status === "available" ||
+    (state.status === "error" && state.errorContext === "download" && state.canRetry));
+
 export const isPersistedDownload = (
   state: DesktopUpdateState,
   channel: DesktopUpdateChannel,

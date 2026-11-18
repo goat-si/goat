@@ -408,6 +408,47 @@ describe("DesktopRemoteUpdates", () => {
     );
   });
 
+  it.effect("reports a retryable feed timeout without starting a remote download", () => {
+    const refreshStarted = Deferred.makeUnsafe<void>();
+    let stall = true;
+    const harness = makeHarness({
+      checkForUpdates: Effect.suspend(() =>
+        stall
+          ? Deferred.succeed(refreshStarted, undefined).pipe(Effect.andThen(Effect.never))
+          : Effect.sync(() => harness.emit("update-not-available")),
+      ),
+    });
+    return runRemoteUpdatesTest(harness, ({ reports, requests }) =>
+      Effect.gen(function* () {
+        const updates = yield* DesktopUpdates.DesktopUpdates;
+        harness.emit("update-available", { version: "1.2.4" });
+        yield* settle;
+        yield* Queue.offer(requests, request("feed-timeout"));
+        yield* Deferred.await(refreshStarted);
+        yield* TestClock.adjust("2 minutes");
+        yield* settle;
+
+        const state = yield* updates.getState;
+        assert.equal(state.errorContext, "download");
+        assert.include(state.message, "did not finish within 2 minutes");
+        assert.isTrue(state.canRetry);
+        assert.isFalse(yield* updates.isActionActive);
+        assert.equal(harness.downloadCount(), 0);
+        const report = terminalReports(reports).find(
+          (report) => report.requestId === "feed-timeout",
+        );
+        assert.equal(report?.outcome, "failed");
+        assert.equal(report?.reason, state.message);
+
+        stall = false;
+        const retry = yield* updates.download;
+        assert.isTrue(retry.accepted);
+        assert.equal(retry.state.status, "up-to-date");
+        assert.equal(harness.downloadCount(), 0);
+      }),
+    );
+  });
+
   it.effect("waits for the download reservation before reporting prepared", () => {
     const releaseDownload = Deferred.makeUnsafe<void>();
     const harness = makeHarness({ downloadUpdate: Deferred.await(releaseDownload) });
