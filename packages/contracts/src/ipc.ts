@@ -7,6 +7,8 @@ import {
   DesktopCaptureConfigPreview,
 } from "./desktopCaptureConfig.ts";
 export * from "./desktopCaptureConfig.ts";
+import type { DesktopPreviewFindBridge } from "./desktopPreviewFind.ts";
+export * from "./desktopPreviewFind.ts";
 import * as Effect from "effect/Effect";
 import * as Schema from "effect/Schema";
 import type { PreviewCaptureFailureEncoded } from "./previewCapture.ts";
@@ -1251,7 +1253,7 @@ export interface DesktopBridge extends DesktopBridgeParts {
 
 /** Renderer callback invoked by Electron with a fresh user gesture before display-media capture. */
 export const DESKTOP_PREVIEW_RECORDING_CAPTURE_TRIGGER = "__t3DesktopPreviewRecordingCapture";
-export interface DesktopPreviewBridge extends AnnotationVoiceBridge {
+export interface DesktopPreviewBridge extends AnnotationVoiceBridge, DesktopPreviewFindBridge {
   setForwardedShortcuts?: (shortcuts: ReadonlyArray<PreviewForwardedShortcut>) => Promise<void>;
   createTab: (tabId: string, defaults?: DesktopPreviewTabDefaults) => Promise<void>;
   closeTab: (tabId: string) => Promise<void>;

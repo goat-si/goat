@@ -4,6 +4,7 @@ export type PreviewAction =
   | "back"
   | "forward"
   | "focus-url"
+  | "find"
   | "zoom-in"
   | "zoom-out"
   | "reset-zoom";

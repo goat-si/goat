@@ -40,6 +40,7 @@ import type {
   DesktopPreviewAnnotationTheme,
   DesktopPreviewColorScheme,
   DesktopPreviewFavicon,
+  DesktopPreviewFindInput,
   DesktopPreviewOpenLinkEvent,
   DesktopPreviewCursorEvent,
   PreviewAnnotationSubmissionResult,
@@ -90,6 +91,7 @@ import * as DesktopEnvironment from "../app/DesktopEnvironment.ts";
 import * as DesktopRendererHistory from "../telemetry/DesktopRendererHistory.ts";
 import {
   PREVIEW_ANNOTATION_VOICE_EVENT_CHANNEL,
+  PREVIEW_FIND_RESULT_CHANNEL,
   PREVIEW_PICTURE_IN_PICTURE_FRAME_CHANNEL,
 } from "../ipc/channels.ts";
 import { makeAnnotationVoiceRelay } from "./AnnotationVoiceRelay.ts";
@@ -107,6 +109,7 @@ import {
   CANCEL_PICK_CHANNEL,
   ELEMENT_PICKED_CHANNEL,
   HUMAN_INPUT_CHANNEL,
+  PAGE_UNHANDLED_SHORTCUT_CHANNEL,
   RECORDING_CURSOR_CHANNEL,
   RECORDING_INPUT_CHANNEL,
   RECORDING_CONTROLLER_CHANNEL,
@@ -128,6 +131,20 @@ import {
   nextZoomLevel,
   ZOOM_EPSILON,
 } from "./previewZoom.ts";
+
+const pageFirstShortcuts: ReadonlySet<PreviewForwardedShortcut["command"]> = new Set([
+  "preview.find",
+]);
+const decodePageShortcut = Schema.decodeUnknownOption(
+  Schema.Struct({
+    key: Schema.String,
+    code: Schema.String,
+    ctrlKey: Schema.Boolean,
+    metaKey: Schema.Boolean,
+    altKey: Schema.Boolean,
+    shiftKey: Schema.Boolean,
+  }),
+);
 
 export type PreviewNavStatus =
   | { kind: "Idle" }
@@ -361,6 +378,7 @@ const makeNativeOperations = Effect.fn("PreviewManager.makeOperations")(function
   const runPromise = Effect.runPromiseWith(context);
   const resolvedArtifactDirectory = path.resolve(artifactDirectory);
 
+  const findRequests = new WeakMap<Electron.WebContents, number>();
   let forwardedShortcuts: ReadonlyArray<PreviewForwardedShortcut> = [];
   const annotationThemeRef = yield* Ref.make(DEFAULT_ANNOTATION_THEME);
   const annotationSendEnabled = new Map<string, boolean>();
@@ -1333,6 +1351,20 @@ const makeNativeOperations = Effect.fn("PreviewManager.makeOperations")(function
         !isPreviewEditingShortcut(input, hostPlatform) || !holdsKeyboardFocus(contents),
       );
     };
+    const findForwardedShortcut = (keys: Parameters<typeof matchesKeybindingShortcut>[0]) =>
+      !(
+        hostPlatform !== "darwin" &&
+        keys.ctrlKey &&
+        keys.altKey &&
+        /^(?:[^a-zA-Z0-9]|Dead)$/u.test(keys.key)
+      ) &&
+      forwardedShortcuts.find(({ shortcut }) =>
+        matchesKeybindingShortcut(
+          keys,
+          shortcut,
+          hostPlatform === "darwin" ? "MacIntel" : hostPlatform,
+        ),
+      );
     const beforeInput = (event: Electron.Event, input: Electron.Input): void => {
       syncMenuShortcuts(wc, input);
       const host = wc.hostWebContents;
@@ -1342,27 +1374,16 @@ const makeNativeOperations = Effect.fn("PreviewManager.makeOperations")(function
         host &&
         !host.isDestroyed() &&
         holdsKeyboardFocus(wc) &&
-        !(
-          hostPlatform !== "darwin" &&
-          input.control &&
-          input.alt &&
-          /^(?:[^a-zA-Z0-9]|Dead)$/u.test(input.key)
-        ) &&
-        forwardedShortcuts.find(({ shortcut }) =>
-          matchesKeybindingShortcut(
-            {
-              key: input.key,
-              code: input.code,
-              metaKey: input.meta,
-              ctrlKey: input.control,
-              shiftKey: input.shift,
-              altKey: input.alt,
-            },
-            shortcut,
-            hostPlatform === "darwin" ? "MacIntel" : hostPlatform,
-          ),
-        );
+        findForwardedShortcut({
+          key: input.key,
+          code: input.code,
+          metaKey: input.meta,
+          ctrlKey: input.control,
+          shiftKey: input.shift,
+          altKey: input.alt,
+        });
       if (forwarded && host) {
+        if (pageFirstShortcuts.has(forwarded.command)) return;
         event.preventDefault();
         if (!input.isAutoRepeat) forwardPreviewCommand(host, forwarded.command);
         return;
@@ -1376,6 +1397,30 @@ const makeNativeOperations = Effect.fn("PreviewManager.makeOperations")(function
         );
         return;
       }
+    };
+    const unhandledShortcut = (event: Electron.IpcMainEvent, input: unknown) => {
+      const host = wc.hostWebContents;
+      if (
+        event.senderFrame !== wc.mainFrame ||
+        !host ||
+        host.isDestroyed() ||
+        !holdsKeyboardFocus(wc)
+      )
+        return;
+      const keys = decodePageShortcut(input);
+      if (Option.isNone(keys)) return;
+      const forwarded = findForwardedShortcut(keys.value);
+      if (forwarded && pageFirstShortcuts.has(forwarded.command))
+        forwardPreviewCommand(host, forwarded.command);
+    };
+    const foundInPage = (_event: Electron.Event, result: Electron.Result) => {
+      const host = wc.hostWebContents;
+      if (!host || host.isDestroyed() || findRequests.get(wc) !== result.requestId) return;
+      host.send(PREVIEW_FIND_RESULT_CHANNEL, {
+        tabId,
+        matches: result.matches,
+        activeMatchOrdinal: result.activeMatchOrdinal,
+      });
     };
     yield* Scope.addFinalizer(
       scope,
@@ -1392,6 +1437,9 @@ const makeNativeOperations = Effect.fn("PreviewManager.makeOperations")(function
         wc.off("dom-ready", restoreRecordingCursor);
         wc.off("did-fail-load", failed as never);
         wc.off("audio-state-changed", audioStateChanged);
+        wc.off("found-in-page", foundInPage);
+        wc.ipc.off(PAGE_UNHANDLED_SHORTCUT_CHANNEL, unhandledShortcut);
+        findRequests.delete(wc);
         wc.off("before-input-event", beforeInput);
         wc.off("before-mouse-event", beforeMouse);
         wc.ipc.off(HUMAN_INPUT_CHANNEL, humanInput);
@@ -1414,6 +1462,8 @@ const makeNativeOperations = Effect.fn("PreviewManager.makeOperations")(function
         wc.on("dom-ready", restoreRecordingCursor);
         wc.on("did-fail-load", failed as never);
         wc.on("audio-state-changed", audioStateChanged);
+        wc.on("found-in-page", foundInPage);
+        wc.ipc.on(PAGE_UNHANDLED_SHORTCUT_CHANNEL, unhandledShortcut);
         wc.ipc.on(HUMAN_INPUT_CHANNEL, humanInput);
         wc.ipc.on(RECORDING_INPUT_CHANNEL, recordingInput);
         detachPasskeys = passkeys.attachGuest(wc);
@@ -1906,6 +1956,16 @@ const makeNativeOperations = Effect.fn("PreviewManager.makeOperations")(function
     yield* attempt({ operation, tabId, webContentsId: wc.id }, () => use(wc));
   });
 
+  const findInPage = ({ tabId, text, forward, newSession }: DesktopPreviewFindInput) =>
+    withWebContents("findInPage", tabId, (wc) => {
+      findRequests.set(wc, wc.findInPage(text, { forward, findNext: newSession }));
+    });
+  const stopFindInPage = (tabId: string) =>
+    withWebContents("stopFindInPage", tabId, (wc) => {
+      findRequests.delete(wc);
+      wc.stopFindInPage("clearSelection");
+    });
+
   const goBack = (tabId: string) =>
     withWebContents("goBack", tabId, (wc) => {
       if (wc.navigationHistory.canGoBack()) wc.navigationHistory.goBack();
@@ -2001,6 +2061,7 @@ const makeNativeOperations = Effect.fn("PreviewManager.makeOperations")(function
                 try {
                   window.value.webContents.send(
                     PREVIEW_ANNOTATION_VOICE_EVENT_CHANNEL,
+                    PREVIEW_FIND_RESULT_CHANNEL,
                     tabId,
                     event,
                   );
@@ -3266,6 +3327,8 @@ const makeNativeOperations = Effect.fn("PreviewManager.makeOperations")(function
     refresh,
     stopLoading,
     registerWebview,
+    findInPage,
+    stopFindInPage,
     resetZoom: (tabId: string) => applyZoom(tabId, () => DEFAULT_ZOOM_FACTOR),
     setZoomFactor: (tabId: string, zoomFactor: number) =>
       applyZoom(tabId, () => normalizeZoomFactor(zoomFactor)),
@@ -3327,6 +3390,10 @@ export class PreviewManager extends Context.Service<
     readonly stopLoading: (tabId: string) => Effect.Effect<void, PreviewManagerError>;
     readonly zoomIn: (tabId: string) => Effect.Effect<void, PreviewManagerError>;
     readonly zoomOut: (tabId: string) => Effect.Effect<void, PreviewManagerError>;
+    readonly findInPage: (
+      input: DesktopPreviewFindInput,
+    ) => Effect.Effect<void, PreviewManagerError>;
+    readonly stopFindInPage: (tabId: string) => Effect.Effect<void, PreviewManagerError>;
     readonly resetZoom: (tabId: string) => Effect.Effect<void, PreviewManagerError>;
     readonly reapplyZoom: () => Effect.Effect<void>;
     readonly hardReload: (tabId: string) => Effect.Effect<void, PreviewManagerError>;
@@ -3482,6 +3549,8 @@ export const make = Effect.gen(function* PreviewManagerMake() {
     zoomIn: operations.zoomIn,
     zoomOut: operations.zoomOut,
     resetZoom: operations.resetZoom,
+    findInPage: operations.findInPage,
+    stopFindInPage: operations.stopFindInPage,
     reapplyZoom: operations.reapplyZoom,
     hardReload: operations.hardReload,
     setColorScheme: operations.setColorScheme,

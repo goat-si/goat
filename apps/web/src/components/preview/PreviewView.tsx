@@ -102,6 +102,7 @@ import { stackedThreadToast, toastManager } from "~/components/ui/toast";
 import { Tooltip, TooltipPopup, TooltipTrigger } from "~/components/ui/tooltip";
 import { observeResize } from "~/lib/observeResize";
 import { focusPreviewWebview } from "./focusPreviewWebview";
+import { usePreviewFind } from "./PreviewFindBar";
 import { activatePreviewAddressTab } from "./activatePreviewAddressTab";
 import type { PreviewViewProps } from "./previewViewProps";
 
@@ -167,6 +168,7 @@ export function PreviewView({
   const snapshot = tabId ? (previewState.sessions[tabId] ?? null) : null;
   const nativeServerTab = useRendersServerTabNatively(threadRef.environmentId, snapshot);
   const isServerTab = snapshot?.runtime === "server" && !nativeServerTab;
+  const find = usePreviewFind(visible && !isServerTab ? runtimeTabId : null);
   const serverOwnsRendering = snapshot?.runtime === "server";
   const serverSurfaceRef = useRef<ServerBrowserHandle | null>(null);
   const [serverAspectRatioLocked, setServerAspectRatioLocked] = useState(false);
@@ -419,6 +421,7 @@ export function PreviewView({
         zoomIn: handleZoomIn,
         zoomOut: handleZoomOut,
         resetZoom: handleResetZoom,
+        ...(find.open ? { find: find.open } : {}),
         clearCookies: () => void adjustServerTab({ clear: "cookies" }),
         clearCache: () => void adjustServerTab({ clear: "cache" }),
         ...(nativeServerTab && previewBridge
@@ -438,6 +441,7 @@ export function PreviewView({
           zoomIn: handleZoomIn,
           zoomOut: handleZoomOut,
           resetZoom: handleResetZoom,
+          ...(find.open ? { find: find.open } : {}),
           clearCookies: () =>
             void previewBridge
               ?.clearCookies(threadRef.environmentId, activeProfileId)
@@ -838,6 +842,9 @@ export function PreviewView({
         case "forward":
           (action === "back" ? handleBack : handleForward)();
           return;
+        case "find":
+          find.open?.();
+          return;
         case "focus-url":
           setFocusUrlNonce((value) => (value ?? 0) + 1);
           return;
@@ -859,6 +866,7 @@ export function PreviewView({
     if (!visible) return;
     const unsubscribeAction = subscribePreviewAction((action) => onPreviewAction(action));
     const unsubscribeMenu = window.desktopBridge?.onMenuAction((action) => {
+      if (action === "preview.find") onPreviewAction("find");
       if (action === "preview.focusUrl") onPreviewAction("focus-url");
     });
     return () => {
@@ -966,6 +974,7 @@ export function PreviewView({
       />
 
       <div ref={serverBodyRef} className="relative min-h-0 flex-1 overflow-hidden">
+        {find.bar}
         {runtimeTabId && snapshot && isServerTab ? (
           <>
             {viewport._tag !== "fill" && !showEmptyState && !isUnreachable ? (

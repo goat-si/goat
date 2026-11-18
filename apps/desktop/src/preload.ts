@@ -539,6 +539,14 @@ contextBridge.exposeInMainWorld("desktopBridge", {
     resetZoom: (tabId) => ipcRenderer.invoke(IpcChannels.PREVIEW_RESET_ZOOM_CHANNEL, { tabId }),
     setZoomFactor: (tabId, zoomFactor) =>
       ipcRenderer.invoke(IpcChannels.PREVIEW_SET_ZOOM_FACTOR_CHANNEL, { tabId, zoomFactor }),
+    findInPage: (input) => ipcRenderer.invoke(IpcChannels.PREVIEW_FIND_CHANNEL, input),
+    stopFindInPage: (tabId) => ipcRenderer.invoke(IpcChannels.PREVIEW_STOP_FIND_CHANNEL, { tabId }),
+    onFindResult: (listener) => {
+      const wrapped = (_event: Electron.IpcRendererEvent, result: Parameters<typeof listener>[0]) =>
+        listener(result);
+      ipcRenderer.on(IpcChannels.PREVIEW_FIND_RESULT_CHANNEL, wrapped);
+      return () => ipcRenderer.removeListener(IpcChannels.PREVIEW_FIND_RESULT_CHANNEL, wrapped);
+    },
     hardReload: (tabId) => ipcRenderer.invoke(IpcChannels.PREVIEW_HARD_RELOAD_CHANNEL, { tabId }),
     setColorScheme: (tabId, colorScheme) =>
       ipcRenderer.invoke(IpcChannels.PREVIEW_SET_COLOR_SCHEME_CHANNEL, { tabId, colorScheme }),

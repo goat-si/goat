@@ -46,6 +46,7 @@ import {
   CANCEL_PICK_CHANNEL,
   ELEMENT_PICKED_CHANNEL,
   HUMAN_INPUT_CHANNEL,
+  PAGE_UNHANDLED_SHORTCUT_CHANNEL,
   POINTER_DOWN_HOST_CHANNEL,
   RECORDING_CURSOR_CHANNEL,
   RECORDING_POINTER_CHANNEL,
@@ -180,6 +181,33 @@ const isolateOverlayKey = (event: KeyboardEvent): void => {
 
 for (const type of ["keydown", "keypress", "keyup"] as const)
   window.addEventListener(type, isolateOverlayKey, true);
+
+window.addEventListener(
+  "keydown",
+  (event) => {
+    if (
+      !event.isTrusted ||
+      event.repeat ||
+      event.isComposing ||
+      !(event.metaKey || event.ctrlKey || event.altKey || /^F\d{1,2}$/u.test(event.key))
+    )
+      return;
+    // Let the guest handle the chord before deciding whether to forward it.
+    setTimeout(() => {
+      if (event.defaultPrevented) return;
+      const { key, code, ctrlKey, metaKey, altKey, shiftKey } = event;
+      ipcRenderer.send(PAGE_UNHANDLED_SHORTCUT_CHANNEL, {
+        key,
+        code,
+        ctrlKey,
+        metaKey,
+        altKey,
+        shiftKey,
+      });
+    }, 0);
+  },
+  true,
+);
 
 let replayedThumbPress: { readonly x: number; readonly y: number } | null = null;
 ipcRenderer.on(

@@ -114,6 +114,7 @@ export function installChatRouteCommands(router: AnyRouter): () => void {
         dispatchPreviewAction("toggle-panel");
       },
       "preview.refresh": previewCommand("refresh"),
+      "preview.find": previewCommand("find"),
       "preview.focusUrl": previewCommand("focus-url"),
       "preview.zoomIn": previewCommand("zoom-in"),
       "preview.zoomOut": previewCommand("zoom-out"),

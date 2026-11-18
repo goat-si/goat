@@ -73,6 +73,9 @@ vi.mock(import("./previewBridge"), async (original) => ({
     zoomIn: vi.fn(async () => undefined),
     zoomOut: vi.fn(async () => undefined),
     resetZoom: vi.fn(async () => undefined),
+    findInPage: vi.fn(async () => undefined),
+    stopFindInPage: vi.fn(async () => undefined),
+    onFindResult: vi.fn(() => () => undefined),
     clearCookies: vi.fn(async () => undefined),
     clearCache: vi.fn(async () => undefined),
     pictureInPicture: {
@@ -361,6 +364,14 @@ describe("PreviewView", () => {
       _tag: "freeform",
       ...resolveResponsiveBrowserViewportSize(rect, 1),
     });
+  });
+
+  it("opens Find in page from the browser menu and focuses its search field", async () => {
+    setup();
+    await using _screen = await render(view());
+    await userEvent.click(page.getByRole("button", { name: "Preview menu" }));
+    await userEvent.click(page.getByRole("menuitem", { name: "Find in page" }));
+    await expect.element(page.getByRole("searchbox", { name: "Find in page" })).toHaveFocus();
   });
 
   it("activates the existing scoped browser surface and refuses closed or replaced results", async () => {
