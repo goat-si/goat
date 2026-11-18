@@ -48,10 +48,16 @@ import * as RuntimePolicy from "./RuntimePolicy.ts";
 const isDomainEvent = Schema.is(OrchestrationV2DomainEvent);
 
 const managedWorktreesDir = "/tmp/provider-turn-start-worktrees";
-export const layerWorktreeLocation = (worktreesDir = managedWorktreesDir) =>
+export const layerWorktreeLocation = (
+  worktreesDir = managedWorktreesDir,
+  stateDir = worktreesDir,
+) =>
   Layer.mergeAll(
     Path.layer,
-    Layer.mock(ServerConfig.ServerConfig)({ worktreesDir } as ServerConfig.ServerConfig["Service"]),
+    Layer.mock(ServerConfig.ServerConfig)({
+      worktreesDir,
+      stateDir,
+    } as ServerConfig.ServerConfig["Service"]),
     ServerSettings.layerTest(),
   );
 
@@ -63,6 +69,8 @@ export function makeLocalCommandHarness(input: {
   /** Where the thread points by the time the start takes its workspace lease. */
   readonly reboundWorktreePath?: string;
   readonly worktreesDir?: string;
+  readonly stateDir?: string;
+  readonly headSha?: string;
   readonly workspaceRoot?: string;
   readonly gitWorkflow?: GitWorkflow.GitWorkflowService["Service"];
   readonly fileSystem?: FileSystem.FileSystem;
@@ -577,14 +585,17 @@ export function makeLocalCommandHarness(input: {
         input.providerCliGate ?? Layer.empty,
         IdAllocator.layer,
         Layer.mock(TurnItemPositionStore.TurnItemPositionStoreV2)({}),
-        layerWorktreeLocation(input.worktreesDir),
+        layerWorktreeLocation(input.worktreesDir, input.stateDir),
         input.fileSystem === undefined
-          ? FileSystem.layerNoop({ exists: () => Effect.succeed(true) })
+          ? FileSystem.layerNoop({
+              exists: (path) => Effect.succeed(!path.includes("worktree-restore-pending")),
+            })
           : Layer.succeed(FileSystem.FileSystem, input.fileSystem),
         input.gitWorkflow === undefined
           ? Layer.mock(GitWorkflow.GitWorkflowService)({
               pruneWorktrees: () => Effect.void,
               listLocalBranchNames: () => Effect.succeed(["feature/restore"]),
+              resolveCommit: () => Effect.succeed({ commitSha: input.headSha ?? "fixture-head" }),
               createWorktree,
             })
           : Layer.succeed(GitWorkflow.GitWorkflowService, input.gitWorkflow),

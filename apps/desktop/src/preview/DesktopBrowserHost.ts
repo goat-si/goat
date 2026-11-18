@@ -32,6 +32,7 @@ const AGENT_INPUT_WINDOW_MS = 5_000;
 /** A viewer's pointer travelling over the stream activates nothing on the page. */
 const POINTER_TRAVEL = new Set<unknown>(["mouseMoved", "mouseWheel"]);
 const FOCUS_IDLE = "5 seconds";
+const CAPTURE_DRAW_WAIT = "1 second";
 /** Well inside the server's 10 s DESKTOP_ATTACH_TIMEOUT, for a first page that never reports it is up. */
 const FIRST_PAGE_TIMEOUT = "5 seconds";
 const ERR_ABORTED = -3;
@@ -90,6 +91,7 @@ interface AttachedTab {
     sessionId: string,
   ) => void;
   readonly onNewDocument: () => void;
+  readonly onGuestCrash: () => void;
   /** Stops waiting for the first page; set until the tab is announced. */
   stopWaiting: (() => void) | null;
   /** A failure reported before the tab was announced; the server keeps one only for an attached tab. */
@@ -104,6 +106,7 @@ export class DesktopBrowserHost extends Context.Service<
     readonly attach: (key: DesktopBrowserTabKey, debuggee: DesktopBrowserTabDebugger) => void;
     readonly detach: (key: DesktopBrowserTabKey) => void;
     readonly loadFailed: (key: DesktopBrowserTabKey, failure: PreviewAutomationLoadError) => void;
+    readonly setCaptureDrawn: (guest: Electron.WebContents, drawn: boolean) => void;
     readonly setShown: (key: DesktopBrowserTabKey, shown: boolean | undefined) => void;
     readonly humanStartedDownload: (source: Electron.WebContents) => boolean;
     /** Whether what the page does now follows the agent's input, not a viewer's. */
@@ -136,6 +139,14 @@ export const make = Effect.gen(function* () {
   }>();
   const runFork = Effect.runForkWith(yield* Effect.context<never>());
   const tabs = new Map<string, AttachedTab>();
+  const runPromise = Effect.runPromiseWith(yield* Effect.context<never>());
+  const captureDraw = new WeakMap<
+    Electron.WebContents,
+    {
+      drawn: boolean;
+      wake?: (() => void) | undefined;
+    }
+  >();
   /** Threads whose agent turn runs, by the server's account. */
   const agentTurns = new Set<string>();
   // Kept apart from attachment: the renderer can show a webview before its debugger attaches,
@@ -269,12 +280,35 @@ export const make = Effect.gen(function* () {
     });
   };
 
+  const waitForCaptureDraw = (guest: Electron.WebContents) => {
+    const state = captureDraw.get(guest);
+    if (!state || state.drawn) return;
+    const done = Promise.withResolvers<void>();
+    state.wake = done.resolve;
+    return runPromise(
+      Effect.promise(() => done.promise).pipe(Effect.timeoutOption(CAPTURE_DRAW_WAIT)),
+    ).finally(() => {
+      if (state.wake === done.resolve) state.wake = undefined;
+      done.resolve();
+    });
+  };
+
+  const setCaptureDrawn = (guest: Electron.WebContents, drawn: boolean) => {
+    const state = captureDraw.get(guest);
+    if (!state) captureDraw.set(guest, { drawn });
+    else {
+      state.drawn = drawn;
+      if (drawn) state.wake?.();
+    }
+  };
+
   /** Chromium answers a capture, and frees its wake lock, only once the guest paints a frame. */
   const paintUntilAnswered = <A>(tab: AttachedTab, send: () => Promise<A>) => {
     const sent = {};
     tab.capturing.add(sent);
     syncPainting(tab);
-    return send().finally(() => {
+    const drawn = waitForCaptureDraw(tab.debuggee.webContents);
+    return (drawn === undefined ? send() : drawn.then(send)).finally(() => {
       tab.capturing.delete(sent);
       syncPainting(tab);
     });
@@ -298,6 +332,7 @@ export const make = Effect.gen(function* () {
   const dropRelay = (tab: AttachedTab) => {
     tab.relay?.close();
     tab.relay = null;
+    captureDraw.get(tab.debuggee.webContents)?.wake?.();
     const release = (method: string, params: Record<string, unknown>) =>
       void tab.debuggee.debugger.sendCommand(method, params).catch(() => undefined);
     if (tab.screencasts.size > 0) release("Page.stopScreencast", {});
@@ -395,12 +430,15 @@ export const make = Effect.gen(function* () {
           // Waits for focus emulation; insertText and other non-CDP input would not queue behind it.
           const forward = (current?: () => boolean) => {
             const change = tab.focusChange;
-            const run = () =>
-              tab.relay !== relay || (current !== undefined && !current())
+            const stale = () => tab.relay !== relay || (current !== undefined && !current());
+            const sendIfCurrent = () =>
+              stale()
                 ? Promise.reject(new Error("The page this screenshot was for has moved on."))
-                : current === undefined
-                  ? send(method, params, sessionId)
-                  : paintUntilAnswered(tab, () => send(method, params, sessionId));
+                : send(method, params, sessionId);
+            const run = () =>
+              current === undefined || stale()
+                ? sendIfCurrent()
+                : paintUntilAnswered(tab, sendIfCurrent);
             return change === null ? run() : change.then(run);
           };
           return method === "Page.captureScreenshot"
@@ -488,6 +526,8 @@ export const make = Effect.gen(function* () {
     tab.relay = null;
     tab.debuggee.debugger.off("message", tab.onMessage);
     tab.debuggee.webContents.off("did-navigate", tab.onNewDocument);
+    tab.debuggee.webContents.off("render-process-gone", tab.onGuestCrash);
+    captureDraw.get(tab.debuggee.webContents)?.wake?.();
     syncPainting(tab);
     if (announced) emit({ type: "detached", ...key });
   };
@@ -524,7 +564,12 @@ export const make = Effect.gen(function* () {
       },
       // A screenshot pending when the page loads a new document, a reload included, can
       // stay unanswered. A crashed page lands here once it reloads, well after its renderer died.
+      onGuestCrash: () => {
+        detach(key);
+        captureDraw.delete(debuggee.webContents);
+      },
       onNewDocument: () => {
+        captureDraw.get(debuggee.webContents)?.wake?.();
         // A failure held for the previous document no longer describes the page.
         tab.heldFailure = null;
         // Before the next screenshot starts, so its own holds survive.
@@ -538,6 +583,7 @@ export const make = Effect.gen(function* () {
     tabs.set(id, tab);
     debuggee.debugger.on("message", tab.onMessage);
     debuggee.webContents.on("did-navigate", tab.onNewDocument);
+    debuggee.webContents.on("render-process-gone", tab.onGuestCrash);
     const announce = () => {
       emit({ type: "attached", ...key });
       const shown = shownTabs.get(id);
@@ -692,6 +738,7 @@ export const make = Effect.gen(function* () {
     detach,
     loadFailed,
     setShown,
+    setCaptureDrawn,
     placeDownload,
     humanStartedDownload,
     agentLedPage,

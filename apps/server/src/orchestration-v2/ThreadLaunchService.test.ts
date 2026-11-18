@@ -1711,7 +1711,8 @@ it.effect("stops an in-flight branch rename when tracked setup is cancelled", ()
         "the cancelled setup's branch rename kept running",
       );
       assert.equal(harness.renameBranch.mock.calls.length, 0);
-      assert.isNull((yield* threads.getThreadProjection(launched.threadId)).thread.worktreePath);
+      const { thread } = yield* threads.getThreadProjection(launched.threadId);
+      assert.equal(thread.worktreePath, "/repo-worktrees/feature");
     }).pipe(Effect.provide(harness.layer));
   }),
 );

@@ -142,7 +142,7 @@ export const makeRecreateMissingWorktree = Effect.gen(function* () {
       const target = restoredFrom === "branch" ? `refs/heads/${branch}` : refName;
       const headSha =
         snapshot?.headSha ??
-        (yield* runGit(["rev-parse", "--verify", "--end-of-options", `${target}^{commit}`]));
+        (yield* gitWorkflow.resolveCommit({ cwd, revision: target })).commitSha;
       if (beforeCreate) yield* beforeCreate({ restoredFrom, headSha });
       yield* gitWorkflow.createWorktree({
         cwd,

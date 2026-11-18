@@ -58,6 +58,8 @@ export const makeRestorePending = Effect.gen(function* () {
   const markerPath = Effect.fn("RestorePending.markerPath")(function* (worktreePath: string) {
     const marker = sidecar(worktreePath);
     if (yield* fs.exists(marker).pipe(Effect.orElseSucceed(() => true))) return marker;
+    if (!(yield* fs.exists(path.join(worktreePath, ".git")).pipe(Effect.orElseSucceed(() => true))))
+      return null;
     return yield* legacyMarker(worktreePath);
   });
   const marked = Effect.fn("RestorePending.marked")(function* (worktreePath: string) {

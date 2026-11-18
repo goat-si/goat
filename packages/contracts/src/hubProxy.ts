@@ -17,6 +17,7 @@ import { OrchestrationV2ShellSnapshot } from "./orchestrationV2.ts";
  * forwards only what the policy below admits, so node credentials never reach the client.
  */
 export const HUB_PROXY_ROUTE_PREFIX = "/hub/nodes";
+export const HUB_PROXY_VCS_BRANCH_HEADER = "x-goat-hub-vcs-branch";
 
 export const hubProxyNodePath = (nodeId: string): string =>
   `${HUB_PROXY_ROUTE_PREFIX}/${encodeURIComponent(nodeId)}`;

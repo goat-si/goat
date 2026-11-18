@@ -1,3 +1,4 @@
+import { IMAGE_DIMENSIONS_HEADER_BYTES, readImageDimensions } from "@goat/shared/imageDimensions";
 import type { CDPSession } from "playwright-core";
 
 // Runs in the page's own isolated world, as the server has no image library.
@@ -81,3 +82,16 @@ export const shrinkJpegWithin = (
     [jpeg, bounds.maxWidth, bounds.maxHeight, quality],
     "The preview still could not be resized.",
   );
+
+export const cappedJpegSize = (data: string, scale: number) => {
+  const prefix = Buffer.from(
+    data.slice(0, Math.ceil(IMAGE_DIMENSIONS_HEADER_BYTES / 3) * 4),
+    "base64",
+  );
+  const size = readImageDimensions(prefix);
+  if (size === null) throw new Error("Invalid JPEG screenshot.");
+  return {
+    width: Math.max(1, Math.round(size.width * scale)),
+    height: Math.max(1, Math.round(size.height * scale)),
+  };
+};

@@ -1,3 +1,4 @@
+import { ServerConfig } from "../config.ts";
 import { ThreadId } from "@goat/contracts";
 import * as PlatformError from "effect/PlatformError";
 import { makeRestoreThreadWorkspace } from "./goat/restoreThreadWorkspace.ts";
@@ -17,6 +18,7 @@ const setup = Effect.gen(function* () {
   const fileSystem = yield* FileSystem.FileSystem;
   const path = yield* Path.Path;
   const gitWorkflow = yield* GitWorkflow.GitWorkflowService;
+  const { stateDir } = yield* ServerConfig;
   const driver = yield* GitVcsDriver.GitVcsDriver;
   const root = yield* fileSystem.makeTempDirectoryScoped({ prefix: "goat-turn-restore-" });
   const workspaceRoot = path.join(root, "project");
@@ -39,6 +41,7 @@ const setup = Effect.gen(function* () {
       workspaceRoot,
       worktreePath,
       worktreesDir,
+      stateDir,
       fileSystem,
       gitWorkflow,
       failReadsAfterRunning: true,

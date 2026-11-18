@@ -119,6 +119,7 @@ export const makeRestoreThreadWorkspace = Effect.gen(function* () {
   const restore = Effect.fn("ThreadWorkspace.restoreFolder")(function* (
     input: RestoreInput,
     aside: { path: string | null },
+    archived: { path: string | null },
   ) {
     const fail = (reason: ThreadWorkspaceRestoreFailure, detail: string) =>
       new ThreadWorkspaceRestoreError({ threadId: input.threadId, reason, detail });
@@ -138,7 +139,7 @@ export const makeRestoreThreadWorkspace = Effect.gen(function* () {
       ? saved
       : yield* Effect.gen(function* () {
           if (saved !== null) {
-            yield* archiveIncomplete(input, saved, aside).pipe(
+            yield* archiveIncomplete(input, saved, archived).pipe(
               Effect.mapError((error) =>
                 fail(
                   "git-failed",
@@ -193,7 +194,7 @@ export const makeRestoreThreadWorkspace = Effect.gen(function* () {
           return applied;
         });
     // Before setup, so only shells that predate the new folder are told.
-    yield* noticeFolderReplaced(input.worktreePath, aside.path);
+    yield* noticeFolderReplaced(input.worktreePath, archived.path ?? aside.path);
     const setup = yield* Effect.gen(function* () {
       const setup = Option.isNone(setupScripts)
         ? ({ status: "no-script" } as const)
@@ -249,7 +250,7 @@ export const makeRestoreThreadWorkspace = Effect.gen(function* () {
       Effect.tapError(() =>
         lenient
           ? Effect.void
-          : archiveIncomplete(input, state, aside).pipe(
+          : archiveIncomplete(input, state, archived).pipe(
               Effect.andThen(pending.write(input.worktreePath, { ...state, applied: false })),
               Effect.catch((error) =>
                 Effect.logWarning("kept the failed restore checkout", {
@@ -272,7 +273,8 @@ export const makeRestoreThreadWorkspace = Effect.gen(function* () {
     input: RestoreInput,
   ): Effect.fn.Return<RestoredThreadWorkspace, ThreadWorkspaceRestoreError> {
     const aside: { path: string | null } = { path: null };
-    const restoring = restore(input, aside);
+    const archived: { path: string | null } = { path: null };
+    const restoring = restore(input, aside, archived);
     const result = yield* (
       (yield* setAside.leftover(input.worktreePath))
         ? setAside
@@ -290,16 +292,20 @@ export const makeRestoreThreadWorkspace = Effect.gen(function* () {
             }),
           ),
       }),
-      Effect.mapError((error) =>
-        aside.path === null
+      Effect.mapError((error) => {
+        const locations = [aside.path, archived.path].flatMap((path) =>
+          path === null ? [] : [setAsideSentence(path)],
+        );
+        return locations.length === 0
           ? error
           : new ThreadWorkspaceRestoreError({
               threadId: error.threadId,
               reason: error.reason,
-              detail: `${error.detail} ${setAsideSentence(aside.path)}`,
-            }),
-      ),
+              detail: [error.detail, ...locations].join(" "),
+            });
+      }),
     );
-    return aside.path === null ? result : { ...result, setAsidePath: aside.path };
+    const setAsidePath = archived.path ?? aside.path;
+    return setAsidePath === null ? result : { ...result, setAsidePath };
   });
 });

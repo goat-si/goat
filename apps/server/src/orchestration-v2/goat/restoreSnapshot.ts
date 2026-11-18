@@ -252,13 +252,3 @@ export const verifyRestoredWorktree = Effect.fn("restoreSnapshot.verifyRestoredW
           : new RestoreSnapshotError({ detail: "verification", cause }),
     }),
 );
-
-export const pathExists = async (path: string) => {
-  try {
-    await NodeFSP.lstat(path);
-    return true;
-  } catch (error) {
-    if ((error as NodeJS.ErrnoException).code === "ENOENT") return false;
-    throw error;
-  }
-};

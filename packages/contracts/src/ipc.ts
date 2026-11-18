@@ -33,7 +33,10 @@ import type { PreviewForwardedShortcut } from "./keybindings.ts";
 import type { DesktopPreviewCaptureEvent, DesktopPreviewCursorEvent } from "./desktopBrowser.ts";
 import { DesktopPreviewTabIdSchema } from "./desktopBrowser.ts";
 import type { AnnotationVoiceBridge, AnnotationVoicePick } from "./previewAnnotationVoice.ts";
-export { DesktopPreviewTabIdSchema } from "./desktopBrowser.ts";
+export {
+  DesktopPreviewRegisterWebviewInputSchema,
+  DesktopPreviewTabIdSchema,
+} from "./desktopBrowser.ts";
 import type {
   DesktopAppActivationRequest,
   DesktopAppActivationResponse,
@@ -1074,11 +1077,6 @@ export interface DesktopPreviewTabDefaults {
   readonly serverTab?: { readonly threadId: string; readonly tabId: string } | undefined;
 }
 
-export const DesktopPreviewRegisterWebviewInputSchema = Schema.Struct({
-  tabId: DesktopPreviewTabIdSchema,
-  webContentsId: Schema.Int.check(Schema.isGreaterThan(0)),
-});
-
 export const DesktopPreviewNavigateInputSchema = Schema.Struct({
   tabId: DesktopPreviewTabIdSchema,
   url: Schema.String,
@@ -1305,7 +1303,7 @@ export interface DesktopPreviewBridge extends AnnotationVoiceBridge {
   setForwardedShortcuts?: (shortcuts: ReadonlyArray<PreviewForwardedShortcut>) => Promise<void>;
   createTab: (tabId: string, defaults?: DesktopPreviewTabDefaults) => Promise<void>;
   closeTab: (tabId: string) => Promise<void>;
-  registerWebview: (tabId: string, webContentsId: number) => Promise<void>;
+  registerWebview: (tabId: string, guestId: number, reportDraw?: boolean) => Promise<void>;
   navigate: (tabId: string, url: string) => Promise<void>;
   goBack: (tabId: string) => Promise<void>;
   goForward: (tabId: string) => Promise<void>;
@@ -1321,6 +1319,7 @@ export interface DesktopPreviewBridge extends AnnotationVoiceBridge {
   setAudioMuted: (tabId: string, audioMuted: boolean) => Promise<void>;
   /** Tells the tab's server whether its webview is on screen. */
   setShown: (tabId: string, shown: boolean) => Promise<void>;
+  setCaptureDrawn?: (tabId: string, webContentsId: number, drawn: boolean) => Promise<void>;
   openDevTools: (tabId: string) => Promise<void>;
   clearCookies: (environmentId: EnvironmentId, profileId?: string) => Promise<void>;
   clearCache: (environmentId: EnvironmentId, profileId?: string) => Promise<void>;
