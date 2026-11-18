@@ -142,7 +142,7 @@ import { ThreadTokenUsageSnapshot } from "./providerRuntime.ts";
 import {
   OrchestrationV2LastTitleRegeneration,
   OrchestrationV2LastTitleRegenerationJson,
-  ThreadTitleRegenerationOutcome,
+  ThreadTitleRegenerationCommandOutcome,
 } from "./threadTitle.ts";
 
 export * from "./providerReplay.ts";
@@ -3179,7 +3179,7 @@ export const OrchestrationV2Command = Schema.Union([
     threadId: ThreadId,
     requestId: CommandId,
     title: Schema.optional(TrimmedNonEmptyString),
-    outcome: Schema.optional(ThreadTitleRegenerationOutcome),
+    outcome: Schema.optional(ThreadTitleRegenerationCommandOutcome),
   }),
   Schema.Struct({
     type: Schema.Literal("thread.runtime-mode.set"),

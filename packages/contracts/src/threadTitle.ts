@@ -17,6 +17,12 @@ export const ThreadTitleRegenerationOutcome = Schema.Struct({
 });
 export type ThreadTitleRegenerationOutcome = typeof ThreadTitleRegenerationOutcome.Type;
 
+/** The completion command's outcome is public input, so its message is bounded; stored ones are not. */
+export const ThreadTitleRegenerationCommandOutcome = Schema.Struct({
+  status: ThreadTitleRegenerationStatus,
+  message: Schema.optional(Schema.String.check(Schema.isMaxLength(300))),
+});
+
 export const LastThreadTitleRegeneration = Schema.Struct({
   ...ThreadTitleRegenerationOutcome.fields,
   requestId: CommandId,
