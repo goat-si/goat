@@ -1,6 +1,11 @@
 import { describe, expect, it } from "vite-plus/test";
 
-import { codeFenceRenderer, fencedCodeMarkdown } from "./codeBlockMarkdown";
+import {
+  codeFenceRenderer,
+  fencedCodeMarkdown,
+  MAX_CHAT_HIGHLIGHT_CHARACTERS,
+  shouldHighlightFence,
+} from "./codeBlockMarkdown";
 
 describe("fencedCodeMarkdown", () => {
   it.each([
@@ -26,5 +31,23 @@ describe("codeFenceRenderer", () => {
     ["text", true, { kind: "native" }],
   ])("draws %j with math rendering %s as %j", (fence, mathRenderingEnabled, expected) => {
     expect(codeFenceRenderer(fence, mathRenderingEnabled)).toEqual(expected);
+  });
+});
+
+describe("shouldHighlightFence", () => {
+  const fence = "~~~";
+
+  it("waits while the message still leaves the fence open", () => {
+    const code = "fun main() {\n  println(1)";
+    const streaming = `Here:\n\n${fence}kotlin\n${code}`;
+    expect(shouldHighlightFence(code, streaming)).toBe(false);
+    expect(shouldHighlightFence(code, `${streaming}\n${fence}\n`)).toBe(true);
+  });
+
+  it("keeps a finished fence over the size bound plain", () => {
+    const small = "val x = 1\n".repeat(10);
+    const large = "val x = 1\n".repeat(MAX_CHAT_HIGHLIGHT_CHARACTERS / 10 + 1);
+    expect(shouldHighlightFence(small, `${fence}kotlin\n${small}${fence}`)).toBe(true);
+    expect(shouldHighlightFence(large, `${fence}kotlin\n${large}${fence}`)).toBe(false);
   });
 });
