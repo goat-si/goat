@@ -2324,11 +2324,8 @@ export const makeOpenCodeAdapterV2 = Effect.fn("makeOpenCodeAdapterV2")(function
               nativeItemId: `${sessionId}:background:${promptId}`,
             }),
           offer: continuationRequests.offer,
-          abort: (state, root) =>
-            cleanupSessionWork(
-              state.nativeSessionId,
-              root ? abortRoot(state.nativeSessionId) : Effect.void,
-            ),
+          abortRoot: (state) => abortRoot(state.nativeSessionId),
+          cleanup: (state, root) => cleanupSessionWork(state.nativeSessionId, root),
           breakSession,
         });
 

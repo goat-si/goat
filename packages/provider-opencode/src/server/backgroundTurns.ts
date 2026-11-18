@@ -58,12 +58,20 @@ export function openCodeBufferedContinuation(message: {
   return message.createdBy === "agent" && message.creationSource === "provider";
 }
 
-export function makeOpenCodeBackgroundTurns<State extends BackgroundOwner, E>(options: {
+export function makeOpenCodeBackgroundTurns<
+  State extends BackgroundOwner,
+  RootError,
+  CleanupError,
+>(options: {
   readonly ownerOf: (nativeSessionId: string) => State | undefined;
   readonly isClosed: () => boolean;
   readonly makeMessageId: (nativeSessionId: string, promptId: string) => MessageId;
   readonly offer: (request: ProviderContinuationRequest) => Effect.Effect<void>;
-  readonly abort: (state: State, abortRoot: boolean) => Effect.Effect<void, E>;
+  readonly abortRoot: (state: State) => Effect.Effect<unknown, RootError>;
+  readonly cleanup: (
+    state: State,
+    rootAbort: Effect.Effect<unknown, RootError>,
+  ) => Effect.Effect<void, CleanupError>;
   readonly breakSession: (detail: string) => Effect.Effect<void>;
 }) {
   const events = Semaphore.makeUnsafe(1);
@@ -88,24 +96,27 @@ export function makeOpenCodeBackgroundTurns<State extends BackgroundOwner, E>(op
       const admitted = yield* Deferred.await(wake.admission).pipe(
         Effect.timeoutOption(NATIVE_ADMISSION_TIMEOUT),
       );
-      yield* options
-        .abort(
-          state,
-          Option.getOrElse(admitted, () => true),
-        )
-        .pipe(
-          Effect.tapError(() =>
-            Deferred.isDone(wake.settled).pipe(
-              Effect.flatMap((settled) =>
-                settled
-                  ? Effect.void
-                  : options.breakSession(
-                      "OpenCode background cancellation failed before native idle. Reconnect the provider session.",
-                    ),
-              ),
+      let rootAbortFailed = false;
+      const rootAbort = Option.getOrElse(admitted, () => true)
+        ? options.abortRoot(state).pipe(
+            Effect.tapError(() =>
+              Effect.sync(() => {
+                rootAbortFailed = true;
+              }),
             ),
-          ),
-        );
+          )
+        : Effect.void;
+      yield* options.cleanup(state, rootAbort).pipe(
+        Effect.tapError(() =>
+          Effect.gen(function* () {
+            if (rootAbortFailed && !(yield* Deferred.isDone(wake.settled))) {
+              yield* options.breakSession(
+                "OpenCode background cancellation failed before native idle. Reconnect the provider session.",
+              );
+            }
+          }),
+        ),
+      );
     },
     (effect, state, wake) => effect.pipe(Effect.ensuring(discard(state, wake))),
   );
@@ -209,7 +220,7 @@ export function makeOpenCodeBackgroundTurns<State extends BackgroundOwner, E>(op
       yield* options.breakSession(
         "OpenCode's buffered background output exceeded the session limit. Reconnect the provider session.",
       );
-      yield* options.abort(state, true).pipe(Effect.ignore({ log: true }));
+      yield* options.cleanup(state, options.abortRoot(state)).pipe(Effect.ignore({ log: true }));
       return true;
     }
     wake.events.push(event);
@@ -250,7 +261,7 @@ export function makeOpenCodeBackgroundTurns<State extends BackgroundOwner, E>(op
     close: () => Effect.forEach(held, ([state, wake]) => discard(state, wake), { discard: true }),
     stop: Effect.fn("OpenCode.stopBackgroundTurn")(function* (state: State) {
       const wake = held.get(state);
-      yield* wake === undefined ? options.abort(state, false) : cancel(state, wake);
+      yield* wake === undefined ? options.cleanup(state, Effect.void) : cancel(state, wake);
     }),
     stopIfCurrent: (state: State, messageId: MessageId) =>
       lifecycle.withPermit(
