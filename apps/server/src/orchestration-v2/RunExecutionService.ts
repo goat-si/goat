@@ -1051,6 +1051,7 @@ export const layer: Layer.Layer<
         });
         // The last stored root snapshot's pendingBackgroundWork; adapters that omit it leave it false.
         let rootSnapshotPendingWork = false;
+        const childSnapshotPendingWork = new Set<ProviderThreadId>();
         const pendingSnapshotHold = makePendingSnapshotHold((at) => idleWake.schedule(at));
         const shouldStopProviderEventIngestion = Effect.gen(function* () {
           if (!(yield* agentTurnsSettled)) {
@@ -1069,7 +1070,7 @@ export const layer: Layer.Layer<
           // while these sets are non-empty: turn_item.updated writes are not ownership-gated, so
           // late completions still land.
           const backgroundItems = yield* Ref.get(activeBackgroundTurnItems);
-          if (backgroundItems.size > 0) {
+          if (backgroundItems.size > 0 || childSnapshotPendingWork.size > 0) {
             return false;
           }
           if (yield* Ref.get(providerThreadOwnerLost)) {
@@ -1181,6 +1182,9 @@ export const layer: Layer.Layer<
               if (!routing.ownedProviderTurns.has(id)) {
                 pendingBackgroundProviderTurns.delete(id);
               }
+            }
+            for (const id of childSnapshotPendingWork) {
+              if (!routing.ownedProviderThreadIds.has(id)) childSnapshotPendingWork.delete(id);
             }
             yield* Ref.update(
               activeBackgroundTurnItems,
@@ -1333,6 +1337,11 @@ export const layer: Layer.Layer<
             if (event.providerThread.id === input.providerThread.id && storedEventCount > 0) {
               yield* Ref.set(latestProviderThread, event.providerThread);
               rootSnapshotPendingWork = event.pendingBackgroundWork === true;
+            } else if (event.providerThread.id !== input.providerThread.id) {
+              if (event.pendingBackgroundWork === true)
+                childSnapshotPendingWork.add(event.providerThread.id);
+              else if (event.pendingBackgroundWork === false)
+                childSnapshotPendingWork.delete(event.providerThread.id);
             }
           }
           if (
