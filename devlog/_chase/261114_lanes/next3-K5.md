@@ -669,3 +669,8 @@ K5's imports in test files that exist on dev (git diff 8c59f73519 HEAD):
 
 Load-time check: ClaudeQueryRunnerErrors.ts imports only effect/Cause and effect/Schema and declares classes, guards and two functions; nothing registers or patches on load, and no vi.mock was added beside the import (the file's one vi.mock, of @anthropic-ai/claude-agent-sdk, is on dev). The import stays as is.
 
+
+### Integration head moved to c31dfe1c41 (K10 merged, lane coordinator 01:42:48 UTC)
+
+Not merged into the lane (no ruling asks for it). Read-only check: git merge-tree --write-tree 50e90aaac3 c31dfe1c41 exits 0, tree 2b733e4d53, no conflict; the only file both sides change is oxlint-plugin-goat/code-budgets.json (different entries, auto-merged). CI read by the coordinator on 50e90aaac3: quick 44210428100 SUCCESS, server 44210433010 in progress at 01:40 UTC.
+
