@@ -24,7 +24,7 @@ export const item = Schema.decodeSync(MemoryItem)({
   },
 });
 const decodeRevision = Schema.decodeSync(MemoryRevision);
-export const decodeRevert = Schema.decodeSync(MemoryRevertResult);
+export const decodeRevert = Schema.decodeUnknownSync(MemoryRevertResult);
 export const revision = (n: number) =>
   decodeRevision({
     memorySpaceId: id(1),
