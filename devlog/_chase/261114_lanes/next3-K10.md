@@ -389,3 +389,25 @@ The fix-delta review report (next3-K10-fix-review-c31dfe1c.md) is not on pen-mac
 
 K10's nits round is ACTIVE on pen-mac-studio: branch chase/t3-261114-next3-k10-nits (cut from c31dfe1c41, kept there as the 01:50 ruling allows). P3-A committed (0ffafd6205); P3-B's failing run, P3-C's run and the gate wait for the token. Order as I read it: K5's nits job (running now from its worktree), then K10's heavy jobs; SF3 and N10 start nothing new meanwhile.
 
+
+## Coordinator, 2026-11-18 02:06 UTC, section III, verbatim (relayed)
+
+III. A trap for every lane's shell, found by me twice today: in zsh, "$C:refs/heads/x" applies the :r modifier to $C and mangles the ref. Write "${C}:refs/heads/x" in every push and every REV:path.
+
+## K10 nits round: done (01:41 ruling, one commit per item)
+
+Branch chase/t3-261114-next3-k10-nits, cut from c31dfe1c41 (allowed by the 01:50 ruling; check:changed diffs from the merge-base, so no rebase and no vp i).
+| Item | Commit | What and proof |
+| --- | --- | --- |
+| P3-A | 0ffafd6205bdce20c59b07bf6f580c5dc33af79f | THREAD_LINK_LOOKUP_CACHE = { idleTtlMs: 60_000 } only; the query keeps staleTimeMs 0 for every instance; the comment reads "An answer is reused until no chip has read it for a minute; a removal the client sees refreshes it." The existing remount case still covers the idle time (threadLineageLookup.test.ts 5 passed). The record correction and the Limit went in first (records 812d37f6ce). |
+| P3-B | c1076a172f70fa2a861bbec636a59acc3c312613 | One slot (latestLongThreadLinkText) holds the latest text over 200,000 characters and its ids, outside the bounded cache. New case in threadLinks.test.ts: a 200,029-character text is scanned once (same array twice) and leaves the held characters at or under 200,000. Fail first, before the fix: "AssertionError: expected [ 'big' ] to be [ 'big' ] // Object.is equality" (1 failed, 16 passed); after: 17 passed. |
+| P3-C | ff1d16b4a128e9f7188ee1de8cbfc650fbd7e10a | Web case gains a pending user_input_request ("asking"); mobile case gains it and a completed error ("settled-error"). hideSuccessful and hideAll keep them; zen leaves them out, as upstream's lists do. The comments name where the person answers: ComposerPendingUserInputPanel on web, PendingUserInputCard on mobile. Mobile also asserts zen leaves out each of approval, asking and settled-error. Both files 2 passed. |
+
+Token: SF3's gate (pid 16081) ended, then ps showed none; the round ran as one short sequence: P3-B fail-first, its fix, P3-C, the gate, the whole-file runs.
+Gate on ff1d16b4a128e9f7188ee1de8cbfc650fbd7e10a (the pushed head), vp run check:changed origin/chase/t3-261114-next3 (f82d2df4b0): EXIT 0. format, lint, agent context budget, agent surface audit, test (6 files, 43 tests), knip 1/2 and 2/2, typecheck (37 packages) pass.
+Changed test files and the test file beside the changed source, run whole, no -t, on ff1d16b4a1: shared threadLinks.test.ts 17 passed; client-runtime threadLineageLookup.test.ts 5 passed; web MessagesTimeline.toolCallVisibility.test.ts 2 passed; mobile threadActivity.toolCallVisibility.test.ts 2 passed.
+Rule IV (GOAT_TEST_TMP_GUARD=fail): not applicable, no apps/server file in the round.
+Push: plain, new branch chase/t3-261114-next3-k10-nits = ff1d16b4a1 (ls-remote before: absent; after: ff1d16b4a1).
+NOT RUN: goat-ci (the coordinator's); any real client (P1); the fix-delta review report (not on this machine).
+The heavy-job token is free from K10: N10 next, as the 01:58:30 order says.
+
