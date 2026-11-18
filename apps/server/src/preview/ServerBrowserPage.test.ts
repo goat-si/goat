@@ -9,7 +9,16 @@ import {
   type Dialog,
   type Page,
 } from "playwright-core";
-import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it } from "vite-plus/test";
+import {
+  afterAll,
+  afterEach,
+  beforeAll,
+  beforeEach,
+  describe,
+  expect,
+  it,
+  vi,
+} from "vite-plus/test";
 import { chromiumInstalled } from "./chromiumInstalled.testkit.ts";
 import { inputFence } from "./PreviewInputFence.ts";
 import * as PreviewUpload from "./PreviewUpload.ts";
@@ -67,6 +76,35 @@ describe.skipIf(!chromiumInstalled)("server browser element refs", () => {
     await page.evaluate("document.getElementById('b').disabled = false");
     await expect(clicking).rejects.toThrow("stopped");
     expect(await page.evaluate("window.clicked === true")).toBe(false);
+  });
+
+  it("types once into a focused shadow-root field without the utility world", async () => {
+    await page.setContent(`
+      <div id="host"></div>
+      <script>
+        const root = document.getElementById("host").attachShadow({ mode: "open" });
+        root.innerHTML = '<input value="initial">';
+        const field = root.querySelector("input");
+        field.focus();
+        window.edits = 0;
+        field.addEventListener("input", () => ++window.edits);
+      </script>`);
+    const locator = page.locator.bind(page);
+    using _utilityUnavailable = vi
+      .spyOn(page, "locator")
+      .mockImplementation((selector, options) => {
+        if (selector === "*:focus") throw new Error("Playwright utility world is unavailable");
+        return locator(selector, options);
+      });
+
+    await ServerBrowserPage.type(page, { text: "written", clear: true });
+
+    expect(
+      await page.evaluate(
+        'document.querySelector("#host").shadowRoot.querySelector("input").value',
+      ),
+    ).toBe("written");
+    expect(await page.evaluate("window.edits")).toBe(1);
   });
 
   it("clears and types only into the target, never into another focused field", async () => {
