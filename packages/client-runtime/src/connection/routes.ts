@@ -517,6 +517,15 @@ export function routeOrderKeepingHidden(
   return savedIds.map((id) => (shown.has(id) ? (shownOrder[next++] ?? id) : id));
 }
 
+/** The relay is the machine's one route; a Pen route the closed gate hides is none. */
+export function relayIsOnlyRoute(
+  entry: ConnectionCatalogEntry,
+  policy: PenViewerPolicy = { enabled: PEN_VIEWER_ENABLED },
+): boolean {
+  const routes = shownRoutes(entry, policy);
+  return routes.length === 1 && routes[0]?.target._tag === "RelayConnectionTarget";
+}
+
 export function removedWithRelay(entry: ConnectionCatalogEntry): boolean {
   return routesAfterRemoving(connectionRoutes(entry), RELAY_ROUTE_ID).length === 0;
 }

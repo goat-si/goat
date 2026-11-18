@@ -32,6 +32,7 @@ import {
   mergeLearnedRoutes,
   pendingRouteOrder,
   penRouteConnectionId,
+  relayIsOnlyRoute,
   penRouteOwner,
   removedWithRelay,
   routeOrderKeepingHidden,
@@ -536,5 +537,15 @@ describe("pull request routing trust beside a Pen route", () => {
     const open = pullRequestRoutingConnectionKey(withPen, { enabled: true });
     expect(open).not.toBeNull();
     expect(open).not.toBe(pullRequestRoutingConnectionKey(lanOnly, { enabled: true }));
+  });
+
+  it("leaves a relay the only route while the gate hides the Pen route beside it", () => {
+    const relayOnly: ConnectionCatalogEntry = { enabled: true, ...RELAY };
+    expect(relayIsOnlyRoute(relayOnly)).toBe(true);
+    expect(relayIsOnlyRoute({ ...relayOnly, alternateRoutes: [pen] })).toBe(true);
+    expect(relayIsOnlyRoute({ ...relayOnly, alternateRoutes: [pen] }, { enabled: true })).toBe(
+      false,
+    );
+    expect(relayIsOnlyRoute({ ...relayOnly, alternateRoutes: [LAN] })).toBe(false);
   });
 });
