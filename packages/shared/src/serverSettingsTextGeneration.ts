@@ -230,12 +230,20 @@ export const isReviewGuideDriver = (driver: ProviderDriverKind): boolean =>
 
 export type MemoryGenerationOperation = "summary" | "conflict";
 
+const LEGACY_MEMORY_DRIVERS: ReadonlySet<string> = new Set([
+  "antigravity",
+  "claudeAgent",
+  "codex",
+  "cursor",
+  "grok",
+  "opencode",
+]);
+
 export function supportsMemoryGeneration(
   provider: ServerProvider,
   operation: MemoryGenerationOperation,
 ): boolean {
-  // Older snapshots lack the operation flags. Muse has never implemented either operation.
-  return provider.memoryGeneration?.[operation] ?? provider.driver !== "muse";
+  return provider.memoryGeneration?.[operation] ?? LEGACY_MEMORY_DRIVERS.has(provider.driver);
 }
 
 type RoutingScope = {

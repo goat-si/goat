@@ -18,6 +18,11 @@ const claude = { instanceId: M.ProviderInstanceId.make("claudeAgent"), model: "c
 const api = M.ProviderInstanceId.make("memory-api-writer");
 const muse = { instanceId: M.ProviderInstanceId.make("muse"), model: "muse" };
 const pi = { instanceId: M.ProviderInstanceId.make("pi"), model: "demo/model" };
+const omo = { instanceId: M.ProviderInstanceId.make("omo"), model: "default" };
+const openCode = {
+  instanceId: M.ProviderInstanceId.make("opencode"),
+  model: "opencode/big-pickle",
+};
 const ready = (selection: M.ModelSelection): M.ServerProvider => ({
   instanceId: selection.instanceId,
   driver: M.ProviderDriverKind.make(selection.instanceId),
@@ -101,15 +106,25 @@ it.effect.each(["signed out", "exhausted", "signed out on a dedicated coding mod
     }),
 );
 
-it.effect.each(["primary", "fallback"] as const)(
-  "uses a provider with the summary operation when Muse is the %s candidate",
-  (candidate) =>
+it.effect.each([
+  { unsupported: muse, flags: { summary: false, conflict: false }, candidate: "primary" },
+  { unsupported: muse, flags: { summary: false, conflict: false }, candidate: "fallback" },
+  { unsupported: pi, candidate: "primary" },
+  { unsupported: pi, candidate: "fallback" },
+  { unsupported: omo, candidate: "primary" },
+  { unsupported: omo, candidate: "fallback" },
+] as const)(
+  "uses a memory-capable provider when $unsupported.instanceId is the $candidate candidate",
+  ({ unsupported, candidate, ...snapshot }) =>
     Effect.gen(function* () {
       const withoutMemory = {
-        ...ready(muse),
-        memoryGeneration: { summary: false, conflict: false },
+        ...ready(unsupported),
+        ...("flags" in snapshot ? { memoryGeneration: snapshot.flags } : {}),
       };
-      const withMemory = { ...ready(pi), memoryGeneration: { summary: true, conflict: true } };
+      const withMemory = {
+        ...ready(openCode),
+        memoryGeneration: { summary: true, conflict: true },
+      };
       const registry = Layer.mock(ProviderRegistry)({
         getProviders: Effect.succeed([withoutMemory, withMemory]),
       });
@@ -118,16 +133,16 @@ it.effect.each(["primary", "fallback"] as const)(
         const settings = yield* Settings.ServerSettingsService;
         yield* settings.updateSettings({
           providerInstances: {
-            [muse.instanceId]: { driver: withoutMemory.driver, enabled: true },
-            [pi.instanceId]: { driver: withMemory.driver, enabled: true },
+            [unsupported.instanceId]: { driver: withoutMemory.driver, enabled: true },
+            [openCode.instanceId]: { driver: withMemory.driver, enabled: true },
           },
-          textGenerationModelSelection: candidate === "primary" ? pi : codex,
-          memoryModelSelection: candidate === "primary" ? muse : null,
+          textGenerationModelSelection: candidate === "primary" ? openCode : codex,
+          memoryModelSelection: candidate === "primary" ? unsupported : null,
         });
         yield* seed;
         const worker = yield* Worker.MemoryWorker;
         yield* worker.sweepDue();
-        assert.deepStrictEqual(inputs, [pi]);
+        assert.deepStrictEqual(inputs, [openCode]);
       }).pipe(
         Effect.provide(
           live(

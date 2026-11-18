@@ -284,19 +284,11 @@ describe("memory shared operations", () => {
           expect((yield* generate(prose(content))).result?.text).toBe(content);
       }),
   );
-  it.effect("absent memoryRunner never invokes the legacy runner", () =>
-    Effect.gen(function* () {
-      let calls = 0;
-      const run: Runner = (request) => {
-        calls++;
-        return legacy(request);
-      };
-      const provider = fromRunner("fixture", run);
-      expect((yield* Effect.exit(provider.resolveMemoryConflict!(conflict)))._tag).toBe("Failure");
-      expect((yield* Effect.exit(provider.generateMemorySummary!(summary)))._tag).toBe("Failure");
-      expect(calls).toBe(0);
-    }),
-  );
+  it("advertises neither memory operation without a memory runner", () => {
+    const provider = fromRunner("fixture", legacy);
+    expect(provider.resolveMemoryConflict).toBeUndefined();
+    expect(provider.generateMemorySummary).toBeUndefined();
+  });
   it.effect("keeps existing generation results compatible", () =>
     Effect.gen(function* () {
       const provider = fromRunner("fixture", legacy);

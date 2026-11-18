@@ -25,7 +25,7 @@ import {
   MemoryPromotingModelAnswer,
   type MemorySummaryModelOutput,
 } from "./memoryGenerationPrompts.ts";
-import { unsupportedMemoryRunner, type MemoryRunner } from "./memoryGenerationRunner.ts";
+import type { MemoryRunner } from "./memoryGenerationRunner.ts";
 export type { MemoryRunner } from "./memoryGenerationRunner.ts";
 import type { ProviderTextGeneration } from "./textGeneration.ts";
 import {
@@ -139,12 +139,7 @@ export interface FromRunnerOptions {
   readonly channelReception?: boolean;
 }
 
-export function fromRunner(
-  name: string,
-  run: Runner,
-  options: FromRunnerOptions = {},
-): ProviderTextGeneration {
-  const runMemory = options.memoryRunner ?? unsupportedMemoryRunner;
+function memoryOperations(name: string, runMemory: MemoryRunner) {
   const resolveMemoryConflict: NonNullable<ProviderTextGeneration["resolveMemoryConflict"]> =
     Effect.fn(`${name}.resolveMemoryConflict`)(function* (input) {
       const request = yield* buildMemoryConflictPrompt(input);
@@ -242,6 +237,14 @@ export function fromRunner(
         });
       return result;
     });
+  return { resolveMemoryConflict, generateMemorySummary };
+}
+
+export function fromRunner(
+  name: string,
+  run: Runner,
+  options: FromRunnerOptions = {},
+): ProviderTextGeneration {
   const generateCommitMessage: ProviderTextGeneration["generateCommitMessage"] = Effect.fn(
     `${name}.generateCommitMessage`,
   )(function* (input) {
@@ -359,8 +362,7 @@ export function fromRunner(
   });
 
   return {
-    resolveMemoryConflict,
-    generateMemorySummary,
+    ...(options.memoryRunner === undefined ? {} : memoryOperations(name, options.memoryRunner)),
     generateCommitMessage,
     generatePrContent,
     generateBranchName,

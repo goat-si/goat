@@ -2,6 +2,7 @@ import * as Context from "effect/Context";
 import * as Effect from "effect/Effect";
 import * as Layer from "effect/Layer";
 import type { ModelSelection, ProviderInstanceId } from "@goat/contracts";
+import { unsupportedMemoryOperation } from "@goat/provider-core/server/memoryGenerationRunner";
 import type { ProviderTextGeneration } from "@goat/provider-core/server/textGeneration";
 import { TextGenerationError } from "@goat/contracts";
 
@@ -148,28 +149,18 @@ export const make = Effect.gen(function* () {
   const ungated = {
     resolveMemoryConflict: (input) =>
       resolveAgent("resolveMemoryConflict", input.modelSelection.instanceId).pipe(
-        Effect.flatMap((textGeneration) =>
-          textGeneration.resolveMemoryConflict === undefined
-            ? Effect.fail(
-                new TextGenerationError({
-                  operation: "resolveMemoryConflict",
-                  detail: "unsupported_operation",
-                }),
-              )
-            : textGeneration.resolveMemoryConflict(input),
+        Effect.flatMap(
+          (textGeneration) =>
+            textGeneration.resolveMemoryConflict?.(input) ??
+            unsupportedMemoryOperation("resolveMemoryConflict"),
         ),
       ),
     generateMemorySummary: (input) =>
       resolveAgent("generateMemorySummary", input.modelSelection.instanceId).pipe(
-        Effect.flatMap((textGeneration) =>
-          textGeneration.generateMemorySummary === undefined
-            ? Effect.fail(
-                new TextGenerationError({
-                  operation: "generateMemorySummary",
-                  detail: "unsupported_operation",
-                }),
-              )
-            : textGeneration.generateMemorySummary(input),
+        Effect.flatMap(
+          (textGeneration) =>
+            textGeneration.generateMemorySummary?.(input) ??
+            unsupportedMemoryOperation("generateMemorySummary"),
         ),
       ),
     generateCommitMessage: Effect.fn("TextGeneration.generateCommitMessage")(function (input) {

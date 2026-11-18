@@ -59,19 +59,19 @@ it("the writer skips a session-only model and accepts an older snapshot without 
   );
 });
 
-it("memory requires an eligible model and guides require an eligible driver", () => {
-  const unfit = [piProvider({ supportsTextGeneration: false })];
+it("legacy Pi snapshots are ineligible for memory and guides", () => {
   const capable = [piProvider({})];
-  expect(resolveMemoryModelSelection(settings, unfit, 0)).toEqual(
-    createModelSelection(pi, "default"),
-  );
-  expect(resolveMemoryModelSelection(settings, capable, 0)).toEqual(extensionModel);
+  expect(resolveMemoryModelSelection(settings, capable, 0)).toBeNull();
   expect(resolveReviewGuideModelSelection(settings, capable, null, 0)).toBeNull();
 });
 
 it("summary and conflict routes each require their own memory operation", () => {
+  const claude = createModelSelection(ProviderInstanceId.make("claudeAgent"), "claude-haiku-5-5");
   const summaryOnly = {
     ...piProvider({}),
+    instanceId: claude.instanceId,
+    driver: ProviderDriverKind.make("claudeAgent"),
+    models: [],
     memoryGeneration: { summary: true, conflict: false },
   };
   const codex = settings.textGenerationModelSelection;
@@ -83,7 +83,7 @@ it("summary and conflict routes each require their own memory operation", () => 
     memoryGeneration: { summary: false, conflict: true },
   };
   const providers = [summaryOnly, conflictOnly];
-  expect(resolveMemoryModelSelection(settings, providers, 0)).toEqual(extensionModel);
+  expect(resolveMemoryModelSelection(settings, providers, 0)).toEqual(claude);
   expect(resolveMemoryModelSelection(settings, providers, 0, "conflict")).toEqual(codex);
   expect(resolveMemoryModelSelection(settings, [summaryOnly], 0, "conflict")).toBeNull();
 });

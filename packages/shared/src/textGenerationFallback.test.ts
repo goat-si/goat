@@ -61,11 +61,12 @@ describe("text generation fallback candidates", () => {
       ready("grok", { usageLimits: spent }),
       ready("muse"),
       ready("omo"),
+      ready("opencode"),
     ];
     const configured: ServerSettings = {
       ...settings,
       providerInstances: Object.fromEntries(
-        ["cursor", "grok", "muse", "omo"].map((driver) => [
+        ["cursor", "grok", "muse", "omo", "opencode"].map((driver) => [
           ProviderInstanceId.make(driver),
           { driver: ProviderDriverKind.make(driver), enabled: true },
         ]),
@@ -73,7 +74,7 @@ describe("text generation fallback candidates", () => {
     };
 
     expect(resolveMemoryModelSelection(configured, providers, NOW)?.instanceId).toBe(
-      ProviderInstanceId.make("omo"),
+      ProviderInstanceId.make("opencode"),
     );
   });
 
@@ -122,15 +123,13 @@ describe("text generation fallback candidates", () => {
 });
 
 describe("OmO's text generation default", () => {
-  it("runs memory on OmO's default model", () => {
+  it("excludes OmO from memory even when it is the only enabled provider", () => {
     const omo = ProviderInstanceId.make("omo");
     const withOmo: ServerSettings = {
       ...settings,
       providerInstances: { [omo]: { driver: ProviderDriverKind.make("omo"), enabled: true } },
     };
-    expect(resolveMemoryModelSelection(withOmo, [ready("omo")], NOW)).toEqual(
-      createModelSelection(ProviderInstanceId.make("omo"), "default"),
-    );
+    expect(resolveMemoryModelSelection(withOmo, [ready("omo")], NOW)).toBeNull();
   });
 
   it("settings normalization picks OmO's default model", () => {
