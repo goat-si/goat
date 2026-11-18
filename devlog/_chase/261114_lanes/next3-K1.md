@@ -534,3 +534,14 @@ Worktree process checks preceded the gates. Node was 26.12.1 and Git was 2.43.0.
 - READY at `b6393484af66cf67ec8ffb5c59b102da25e4e820`. The plain lane push exited 0 and `git ls-remote` confirmed the same head for integration into PR #3700.
 
 NOT RUN: Browser and native client tests or passes, captures, live GitHub/GitLab watch reads, the integration-wide changed-test gate, full builds and CI. CI runs on PR #3700.
+
+## Nits after round 4, 2026-11-18 UTC (pen-lidge)
+
+The P3 follow-up is `0e07e2961d92c50845307d63ce498775678afd27`, with parent `b6393484af66cf67ec8ffb5c59b102da25e4e820`. The cursor opts into replacement at its configured path in `apps/server/src/orchestration-v2/goat/PullRequestWatchPage.ts:113`. `packages/shared/src/atomicWrite.ts:22` keeps the default symlink behavior for existing callers. The cursor uses its local fixed staging file, and a successful save replaces a link at the configured path with the committed cursor. Windows rename retries inspect the link entry for this opt-in.
+
+- Before the fix, the whole `PullRequestWatchPage.test.ts` file exited 1 with 5 passed and 1 failed under `GOAT_TEST_TMP_GUARD=fail vp test run` from `apps/server`. The new two-home regression observed the first home's new key in the second home's cursor. It now also checks both homes' staging paths and reloads the local cursor.
+- `GOAT_TEST_TMP_GUARD=fail vp test run` on the 16 changed test files plus `packages/shared/src/atomicWrite.test.ts` exited 0. All 413 tests in 17 files passed with zero failures or skips. `git diff --check HEAD^ HEAD` exited 0.
+- With the same browser and render exclusions as before, `GOAT_TEST_TMP_GUARD=fail vp run check:changed origin/chase/t3-261114-next3` exited 0 against integration head `061fd0fee904c2abaada9efb5cfdb9ea58b18919` and merge base `b6393484af66cf67ec8ffb5c59b102da25e4e820`. All static stages passed, including 37 package typechecks. The three selected files passed 102 tests with zero failures or skips. The selection had zero browser files. The initial run against the previous remote tip was interrupted with exit 130 after the integration merge was published. The lane was kept on its specified parent.
+- READY at `0e07e2961d92c50845307d63ce498775678afd27`. The plain fast-forward lane push exited 0 and `git ls-remote` confirmed the same head.
+
+NOT RUN: Browser and native client checks, a native Windows run, live watch reads, full builds and CI.
