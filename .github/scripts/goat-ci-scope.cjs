@@ -79,6 +79,7 @@ const WINDOWS_SUITES = [
   "scripts/lib/changed-tests",
   "scripts/build-computer-use-helper",
   "scripts/build-desktop-artifact.selfcheck",
+  "scripts/install-windows",
 ];
 /** Sources whose changes also select test-windows, without filtering in their POSIX-only suites. */
 const WINDOWS_TRIGGERS = [
@@ -86,6 +87,7 @@ const WINDOWS_TRIGGERS = [
   "apps/server/src/memory/imports/MemoryImportReader",
   "apps/server/src/memory/imports/gitSupport",
   "patches/node-pty@",
+  "scripts/install.ps1",
 ];
 const WINDOWS_TASK = "test-windows";
 /** Every workspace package suite no other task owns, listed by packageSuites. */

@@ -531,8 +531,11 @@ func newScriptedRelay(t *testing.T, ctx context.Context) *scriptedRelay {
 				if err != nil {
 					return
 				}
-				if typ != websocket.MessageBinary {
-					continue // the node's pings and acks
+				if typ == websocket.MessageText {
+					if string(p) == "ping" && ws.Write(ctx, websocket.MessageText, []byte("pong")) != nil {
+						return
+					}
+					continue
 				}
 				if f, err := wire.DecodeFrame(p); err == nil {
 					select {
@@ -560,12 +563,19 @@ func newScriptedRelay(t *testing.T, ctx context.Context) *scriptedRelay {
 }
 
 func TestAnUplinkRefusesAnOpenPastItsSessionCap4429AndTakesOneAgainWhenASessionEnds(t *testing.T) {
-	ctx, cancel := context.WithCancel(context.Background())
+	ctx, cancel := context.WithTimeout(context.Background(), 20*time.Second)
 	rs := newScriptedRelay(t, ctx)
 	t.Cleanup(cancel) // before the relay's Close, which waits for its handler
 	u := relay.NewUplink(rs.url, newID(t))
 	go u.Run(ctx)
-	open := func(sid uint32) { rs.send <- wire.Frame{Type: wire.FrameOpen, SID: sid} }
+	open := func(sid uint32) {
+		t.Helper()
+		select {
+		case rs.send <- wire.Frame{Type: wire.FrameOpen, SID: sid}:
+		case <-ctx.Done():
+			t.Fatalf("sending OPEN %d: %v", sid, ctx.Err())
+		}
+	}
 	var conns []relay.Conn
 	for sid := uint32(1); sid <= relay.MaxSessions; sid++ {
 		open(sid)
@@ -590,12 +600,23 @@ func TestAnUplinkRefusesAnOpenPastItsSessionCap4429AndTakesOneAgainWhenASessionE
 		}
 	case <-accepted:
 		t.Fatal("the uplink took a session past its cap")
+	case <-ctx.Done():
+		t.Fatalf("waiting for CLOSE 4429: %v", ctx.Err())
 	}
 
 	conns[0].Close(wire.CodeNormal)
-	if f := <-rs.recv; f.Type != wire.FrameClose || f.SID != 1 {
-		t.Fatalf("got %+v, want the CLOSE of session 1", f)
+	select {
+	case f := <-rs.recv:
+		if f.Type != wire.FrameClose || f.SID != 1 {
+			t.Fatalf("got %+v, want the CLOSE of session 1", f)
+		}
+	case <-ctx.Done():
+		t.Fatalf("waiting for CLOSE of session 1: %v", ctx.Err())
 	}
 	open(relay.MaxSessions + 2)
-	<-accepted
+	select {
+	case <-accepted:
+	case <-ctx.Done():
+		t.Fatalf("waiting for next session after CLOSE: %v", ctx.Err())
+	}
 }
