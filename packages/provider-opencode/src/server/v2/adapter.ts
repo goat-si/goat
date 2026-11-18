@@ -210,7 +210,8 @@ export const make = Effect.fn("OpenCode2Adapter.make")(function* (instanceId: Pr
   ) {
     let connection = initial.connection;
     const supportsNativeGoals = () => compareSemverVersions(connection.version, "2.2.5") >= 0;
-    nativeGoalSupport = supportsNativeGoals();
+    const nativeGoals = supportsNativeGoals();
+    nativeGoalSupport = nativeGoals;
     const goalHoldsTurn = (state: ThreadState) =>
       supportsNativeGoals() &&
       (state.goalRefreshing || (state.goalFresh && state.providerThread.goal?.status === "active"));
@@ -226,10 +227,8 @@ export const make = Effect.fn("OpenCode2Adapter.make")(function* (instanceId: Pr
       model: input.modelSelection.model,
       capabilities: {
         ...OpenCode2ProviderCapabilities,
-        turns: {
-          ...OpenCode2ProviderCapabilities.turns,
-          supportsNativeGoals: supportsNativeGoals(),
-        },
+        sessions: { ...OpenCode2ProviderCapabilities.sessions, ownsProcess: !connection.external },
+        turns: { ...OpenCode2ProviderCapabilities.turns, supportsNativeGoals: nativeGoals },
       },
       createdAt: now,
       updatedAt: now,

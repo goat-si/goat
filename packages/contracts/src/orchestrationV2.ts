@@ -317,35 +317,6 @@ export const OrchestrationV2ContextTransfer = Schema.Struct({
 });
 export type OrchestrationV2ContextTransfer = typeof OrchestrationV2ContextTransfer.Type;
 
-export const OrchestrationV2CloudSourceRestriction = Schema.Literals([
-  "published-ref",
-  "clean-pushed-sha",
-  "project-folder",
-]);
-export type OrchestrationV2CloudSourceRestriction =
-  typeof OrchestrationV2CloudSourceRestriction.Type;
-
-export const OrchestrationV2SessionCapabilities = Schema.Struct({
-  sourceRestriction: Schema.optional(OrchestrationV2CloudSourceRestriction).pipe(
-    Schema.withDecodingDefault(Effect.succeed("published-ref" as const)),
-  ),
-  executionLocation: Schema.optional(Schema.Literals(["local", "cloud"])).pipe(
-    Schema.withDecodingDefault(Effect.succeed("local" as const)),
-  ),
-  followUp: Schema.optional(
-    Schema.Struct({
-      supported: Schema.Boolean,
-      reason: Schema.optional(Schema.String),
-    }),
-  ).pipe(Schema.withDecodingDefault(Effect.succeed({ supported: true }))),
-  supportsMultipleProviderThreadsPerSession: Schema.Boolean,
-  supportsModelSwitchInSession: Schema.Boolean,
-  supportsProviderSwitchingViaHandoff: Schema.Boolean,
-  supportsRuntimeModeSwitchInSession: Schema.Boolean,
-  pendingRequestsSurviveRestart: Schema.Boolean,
-});
-export type OrchestrationV2SessionCapabilities = typeof OrchestrationV2SessionCapabilities.Type;
-
 export const OrchestrationV2ThreadCapabilities = Schema.Struct({
   canCreateEmptyThread: Schema.Boolean,
   canReadThreadSnapshot: Schema.Boolean,
@@ -391,6 +362,7 @@ export * from "./providerCapabilityParts.ts";
 export * from "./assistantMessagePhase.ts";
 import { AssistantMessagePhase } from "./assistantMessagePhase.ts";
 import {
+  OrchestrationV2SessionCapabilities,
   OrchestrationV2ToolCapabilities,
   OrchestrationV2ApprovalCapabilities,
   OrchestrationV2PlanningCapabilities,

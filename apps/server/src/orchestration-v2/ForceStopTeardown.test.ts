@@ -1,15 +1,18 @@
 import {
   type OrchestrationV2ServerCommand,
   type OrchestrationV2ThreadProjection,
+  ProviderDriverKind,
   ProviderSessionId,
   ProviderThreadId,
   RunId,
   ThreadId,
 } from "@goat/contracts";
 import { AgentScope } from "@goat/shared/AgentScope";
+import type { ProviderAdapterV2SessionRuntime } from "@goat/provider-core/server/ProviderAdapter";
 import { expect, it } from "@effect/vitest";
 import * as Effect from "effect/Effect";
 import * as Layer from "effect/Layer";
+import * as Option from "effect/Option";
 
 import * as SqlitePersistence from "../persistence/Sqlite.ts";
 import * as ServerSettings from "../serverSettings.ts";
@@ -28,15 +31,23 @@ const harness = (input: {
   readonly newerRunAfterSettle?: boolean;
   readonly cancelledFollowUp?: boolean;
   readonly cloud?: boolean;
+  readonly openCode?: { readonly ownsProcess?: boolean; readonly live?: boolean };
 }) => {
   const calls: Array<string> = [];
   const providerThread = {
     id: providerThreadId,
     appThreadId: threadId,
     providerSessionId,
+    driver: ProviderDriverKind.make(input.openCode ? "opencode" : "codex"),
     ...(input.cloud ? { cloudTask: {} } : {}),
   };
-  const stopped = { id: stoppedRunId, ordinal: 1, startedAt: "t", activeAttemptId: "attempt" };
+  const stopped = {
+    id: stoppedRunId,
+    ordinal: 1,
+    startedAt: "t",
+    activeAttemptId: "attempt",
+    providerThreadId,
+  };
   // A follow-up queued behind the stopped run and cancelled before it ever started.
   const cancelled = {
     id: RunId.make("run:cancelled"),
@@ -65,6 +76,16 @@ const harness = (input: {
   const layer = ThreadManagementService.layer.pipe(
     Layer.provide(
       Layer.mock(ProviderSessionManager.ProviderSessionManagerV2)({
+        get: () =>
+          Effect.succeed(
+            input.openCode?.live === false
+              ? Option.none()
+              : Option.some({
+                  providerSession: {
+                    capabilities: { sessions: { ownsProcess: input.openCode?.ownsProcess } },
+                  },
+                } as unknown as ProviderAdapterV2SessionRuntime),
+          ),
         isLive: () => Effect.succeed(true),
         otherWorkingThreads: () => Effect.succeed(input.others.map((id) => ThreadId.make(id))),
         releaseUnlessBusy: (release) =>
@@ -156,5 +177,28 @@ it.effect("Force stop refuses a cloud agent and leaves its session and tracking 
     expect(error).toMatchObject({ _tag: "OrchestrationV2ForceStopThreadError", reason: "cloud" });
     expect(error.message).toBe("Cloud agents stop through their provider, not Force stop.");
     expect(calls).toEqual([]);
+  }),
+);
+
+it.effect.each([
+  { name: "external", openCode: { ownsProcess: false } },
+  { name: "legacy with unknown ownership", openCode: {} },
+  { name: "no longer live", openCode: { ownsProcess: true, live: false } },
+])("Force stop refuses an OpenCode session that is $name before touching the run", ({ openCode }) =>
+  Effect.gen(function* () {
+    const { calls, forceStop } = harness({ others: [], openCode });
+    expect(yield* Effect.result(forceStop)).toMatchObject({
+      _tag: "Failure",
+      failure: { _tag: "OrchestrationV2ForceStopThreadError" },
+    });
+    expect(calls).toEqual([]);
+  }),
+);
+
+it.effect("Force stop still settles a run on a GOAT-owned OpenCode session", () =>
+  Effect.gen(function* () {
+    const { calls, forceStop } = harness({ others: [], openCode: { ownsProcess: true } });
+    expect(yield* forceStop).toEqual({ outcome: "released", sharedWithThreadIds: [] });
+    expect(calls).toEqual(["kill", "thread.background-work.settle", "release:run-1"]);
   }),
 );

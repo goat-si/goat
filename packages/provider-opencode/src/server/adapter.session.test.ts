@@ -216,6 +216,37 @@ it.live.each([true, false])("opens an authenticated OpenCode session (external=%
   ),
 );
 
+it.effect.each([true, false])(
+  "reports process ownership from the OpenCode 1.x connection (external=%s)",
+  (external) =>
+    Effect.gen(function* () {
+      const root = { id: "root", time: { created: 1, updated: 1 } };
+      const events = asyncEventStream();
+      const { runtime } = yield* makeOpenCodeRuntimeHarness(
+        "stop-ownership",
+        root.id,
+        {
+          event: {
+            subscribe: async (_: unknown, { signal }: { signal: AbortSignal }) => {
+              signal.addEventListener("abort", () => events.close(), { once: true });
+              return { stream: events.stream };
+            },
+          },
+          session: {
+            create: async () => ({ data: root }),
+            abort: async () => ({ data: true }),
+            children: async () => ({ data: [] }),
+          },
+        },
+        { external },
+      );
+      assert.deepInclude(runtime.providerSession.capabilities.sessions, { ownsProcess: !external });
+    }).pipe(
+      Effect.provide(Layer.merge(IdAllocator.layer, McpProviderSessions.layer)),
+      Effect.scoped,
+    ),
+);
+
 it.effect.each(["root-running", "root-settled", "child-timeout"] as const)(
   "classifies an unanswered root abort when %s",
   (scenario) =>

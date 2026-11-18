@@ -383,7 +383,13 @@ export const makeOpenCodeAdapterV2 = Effect.fn("makeOpenCodeAdapterV2")(function
           status: "ready",
           cwd,
           model: input.modelSelection.model,
-          capabilities: OpenCodeProviderCapabilitiesV2,
+          capabilities: {
+            ...OpenCodeProviderCapabilitiesV2,
+            sessions: {
+              ...OpenCodeProviderCapabilitiesV2.sessions,
+              ownsProcess: !connection.external,
+            },
+          },
           createdAt: now,
           updatedAt: now,
           lastError: null,

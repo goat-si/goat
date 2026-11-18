@@ -555,6 +555,33 @@ describe("presentRunStop", () => {
       }),
     ).toMatchObject({ state: "unresponsive", cloud: true });
   });
+
+  it.each([false, undefined, true])(
+    "keeps OpenCode Stop visible with process ownership %s",
+    (ownsProcess) => {
+      const providerThreadId = ProviderThreadId.make("provider-thread-opencode");
+      const providerSessionId = ProviderSessionId.make("provider-session-opencode");
+      const driver = ProviderDriverKind.make("opencode");
+      const projection = {
+        runs: [{ ...running, providerThreadId }],
+        turnItems: [{ ...request, unresponsiveAt: now }],
+        providerThreads: [
+          { id: providerThreadId, driver, providerSessionId },
+        ] as unknown as typeof v2Projection.providerThreads,
+        providerSessions: [
+          {
+            id: providerSessionId,
+            status: "running",
+            capabilities: { sessions: { ownsProcess } },
+          },
+        ] as unknown as typeof v2Projection.providerSessions,
+      };
+      expect(presentRunStop(projection)).toMatchObject({
+        state: "unresponsive",
+        forceStopSupported: ownsProcess === true,
+      });
+    },
+  );
 });
 
 describe("deriveRunlessWorkStartedAt", () => {

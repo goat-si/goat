@@ -446,7 +446,7 @@ export function createEnvironmentThreadDetailAtoms<E>(
   const runStopAtomFamily = Atom.family((key: string) => {
     let previous: Pick<
       OrchestrationV2ThreadProjection,
-      "runs" | "turnItems" | "providerThreads"
+      "runs" | "turnItems" | "providerThreads" | "providerSessions"
     > | null = null;
     let stop: RunStopPresentation | null = null;
     return Atom.make((get) => {
@@ -457,17 +457,19 @@ export function createEnvironmentThreadDetailAtoms<E>(
       } else if (
         projection.runs !== previous?.runs ||
         projection.turnItems !== previous?.turnItems ||
-        projection.providerThreads !== previous?.providerThreads
+        projection.providerThreads !== previous?.providerThreads ||
+        projection.providerSessions !== previous?.providerSessions
       ) {
-        const { runs, turnItems, providerThreads } = projection;
-        previous = { runs, turnItems, providerThreads };
+        const { runs, turnItems, providerThreads, providerSessions } = projection;
+        previous = { runs, turnItems, providerThreads, providerSessions };
         const next = presentRunStop(previous);
         if (
           next?.state !== stop?.state ||
           next?.runId !== stop?.runId ||
           next?.requestedAt !== stop?.requestedAt ||
           next?.background !== stop?.background ||
-          next?.cloud !== stop?.cloud
+          next?.cloud !== stop?.cloud ||
+          next?.forceStopSupported !== stop?.forceStopSupported
         )
           stop = next;
       }

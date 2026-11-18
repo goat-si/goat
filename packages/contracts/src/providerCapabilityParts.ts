@@ -1,6 +1,38 @@
+import * as Effect from "effect/Effect";
 import * as Schema from "effect/Schema";
 
 import { PositiveInt } from "./baseSchemas.ts";
+
+export const OrchestrationV2CloudSourceRestriction = Schema.Literals([
+  "published-ref",
+  "clean-pushed-sha",
+  "project-folder",
+]);
+export type OrchestrationV2CloudSourceRestriction =
+  typeof OrchestrationV2CloudSourceRestriction.Type;
+
+export const OrchestrationV2SessionCapabilities = Schema.Struct({
+  sourceRestriction: Schema.optional(OrchestrationV2CloudSourceRestriction).pipe(
+    Schema.withDecodingDefault(Effect.succeed("published-ref" as const)),
+  ),
+  executionLocation: Schema.optional(Schema.Literals(["local", "cloud"])).pipe(
+    Schema.withDecodingDefault(Effect.succeed("local" as const)),
+  ),
+  followUp: Schema.optional(
+    Schema.Struct({
+      supported: Schema.Boolean,
+      reason: Schema.optional(Schema.String),
+    }),
+  ).pipe(Schema.withDecodingDefault(Effect.succeed({ supported: true }))),
+  /** Whether GOAT started and owns the connected provider process. */
+  ownsProcess: Schema.optionalKey(Schema.Boolean),
+  supportsMultipleProviderThreadsPerSession: Schema.Boolean,
+  supportsModelSwitchInSession: Schema.Boolean,
+  supportsProviderSwitchingViaHandoff: Schema.Boolean,
+  supportsRuntimeModeSwitchInSession: Schema.Boolean,
+  pendingRequestsSurviveRestart: Schema.Boolean,
+});
+export type OrchestrationV2SessionCapabilities = typeof OrchestrationV2SessionCapabilities.Type;
 
 export const OrchestrationV2ToolCapabilities = Schema.Struct({
   exposesToolItemIds: Schema.Boolean,
