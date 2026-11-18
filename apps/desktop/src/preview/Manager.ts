@@ -255,7 +255,7 @@ const makeNativeOperations = Effect.fn("PreviewManager.makeOperations")(function
   const annotationSendEnabled = new Map<string, boolean>();
   const mainWindowRef = yield* Ref.make<Option.Option<BrowserWindow>>(Option.none());
   const tabsRef = yield* SynchronizedRef.make<ReadonlyMap<string, PreviewTabState>>(new Map());
-  const { setShown, hideDestroyedGuest } = makeTabVisibility(tabsRef, browserHost);
+  const visibility = makeTabVisibility(tabsRef, browserHost, webContents.fromId);
   const attachedRef = yield* Ref.make<ReadonlyMap<number, ManagedListeners>>(new Map());
   const listenersRef = yield* Ref.make<ReadonlySet<Listener>>(new Set());
   const pointerEventListenersRef = yield* Ref.make<ReadonlySet<PointerEventListener>>(new Set());
@@ -1543,6 +1543,7 @@ const makeNativeOperations = Effect.fn("PreviewManager.makeOperations")(function
     tabId: string,
     webContentsId: number,
     expectedGeneration: number | undefined,
+    reportCaptureDraw: boolean,
   ) {
     const tab = (yield* SynchronizedRef.get(tabsRef)).get(tabId);
     if (
@@ -1662,6 +1663,8 @@ const makeNativeOperations = Effect.fn("PreviewManager.makeOperations")(function
       });
       return yield* new PreviewTabNotFoundError({ tabId });
     }
+    if (reportCaptureDraw && tab.serverTab && tab.webContentsId !== webContentsId)
+      browserHost.setCaptureDrawn(wc, false);
     const { state: registered, pendingUrl } = registration.value;
     // Concurrent actions targeted the previous guest; reconcile this one with committed zoom and mute.
     yield* assertTabZoom(tabId);
@@ -1692,11 +1695,12 @@ const makeNativeOperations = Effect.fn("PreviewManager.makeOperations")(function
   const registerWebview = Effect.fn("PreviewManager.registerWebview")(function* (
     tabId: string,
     webContentsId: number,
+    reportCaptureDraw = false,
   ) {
     const expectedGeneration = tabLifecycleGenerations.get(tabId);
     return yield* withTabLifecycleLock(
       tabId,
-      registerWebviewUnlocked(tabId, webContentsId, expectedGeneration),
+      registerWebviewUnlocked(tabId, webContentsId, expectedGeneration, reportCaptureDraw),
     );
   });
 
@@ -1719,7 +1723,7 @@ const makeNativeOperations = Effect.fn("PreviewManager.makeOperations")(function
     });
     wc.once("destroyed", () => {
       guestLoadFailures.delete(webContentsId);
-      runFork(hideDestroyedGuest(webContentsId));
+      runFork(visibility.hideDestroyedGuest(webContentsId));
       runFork(detachControlSession(webContentsId));
     });
     yield* ensureControlSession(wc).pipe(
@@ -3237,7 +3241,8 @@ const makeNativeOperations = Effect.fn("PreviewManager.makeOperations")(function
     setAnnotationTheme,
     setAnnotationSendEnabled,
     setAudioMuted,
-    setShown,
+    setShown: visibility.setShown,
+    setCaptureDrawn: visibility.setCaptureDrawn,
     setColorScheme,
     setMainWindow,
     setForwardedShortcuts: (shortcuts: ReadonlyArray<PreviewForwardedShortcut>) =>
@@ -3422,6 +3427,7 @@ export class PreviewManager extends Context.Service<
     readonly registerWebview: (
       tabId: string,
       webContentsId: number,
+      reportCaptureDraw?: boolean,
     ) => Effect.Effect<void, PreviewManagerError>;
     readonly prepareWebview: (webContents: Electron.WebContents) => Effect.Effect<void>;
     readonly navigate: (tabId: string, url: string) => Effect.Effect<void, PreviewManagerError>;
@@ -3446,6 +3452,7 @@ export class PreviewManager extends Context.Service<
       tabId: string,
       audioMuted: boolean,
     ) => Effect.Effect<void, PreviewManagerError>;
+    readonly setCaptureDrawn: ReturnType<typeof makeTabVisibility>["setCaptureDrawn"];
     readonly setShown: (tabId: string, shown: boolean) => Effect.Effect<void>;
     readonly openDevTools: (tabId: string) => Effect.Effect<void, PreviewManagerError>;
     readonly clearCookies: (
@@ -3592,6 +3599,7 @@ export const make = Effect.gen(function* PreviewManagerMake() {
     setZoomFactor: operations.setZoomFactor,
     setAudioMuted: operations.setAudioMuted,
     setShown: operations.setShown,
+    setCaptureDrawn: operations.setCaptureDrawn,
     openDevTools: operations.openDevTools,
     clearCookies: Effect.fn("PreviewManager.clearCookies")(function* (partitions) {
       yield* browserSession

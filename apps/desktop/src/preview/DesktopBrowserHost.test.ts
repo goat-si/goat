@@ -67,6 +67,62 @@ const watchPainting = (host: DesktopBrowserHost.DesktopBrowserHost["Service"]) =
   });
 
 describe("DesktopBrowserHost", () => {
+  it.effect("waits for the current guest to draw before sending a screenshot", () =>
+    Effect.gen(function* () {
+      const host = yield* DesktopBrowserHost.make;
+      const debuggee = makeDebuggee();
+      const replaced = makeDebuggee();
+      host.attach(key, debuggee.tab);
+      host.setCaptureDrawn?.(debuggee.tab.webContents, false);
+      const captures = yield* Queue.unbounded<boolean>();
+      yield* host.painting.pipe(
+        Stream.runForEach(({ active }) => Queue.offer(captures, active)),
+        Effect.forkScoped({ startImmediately: true }),
+      );
+      yield* command(host, 38, "DOM.enable");
+      yield* command(host, 39, "Page.captureScreenshot");
+      expect(yield* Queue.take(captures)).toBe(true);
+      host.setCaptureDrawn?.(replaced.tab.webContents, true);
+      expect(debuggee.sent).toEqual([38]);
+      const sent = debuggee.nextSend();
+      host.setCaptureDrawn?.(debuggee.tab.webContents, true);
+      yield* Effect.promise(() => sent);
+      expect(debuggee.sent).toEqual([38, 39]);
+      debuggee.release();
+      expect(yield* Queue.take(captures)).toBe(false);
+    }).pipe(Effect.scoped),
+  );
+
+  it.effect.each(["timeout", "crash"] as const)(
+    "ends an unacknowledged drawing wait on %s",
+    (end) =>
+      Effect.gen(function* () {
+        const host = yield* DesktopBrowserHost.make;
+        const debuggee = makeDebuggee();
+        host.attach(key, debuggee.tab);
+        host.setCaptureDrawn(debuggee.tab.webContents, false);
+        const painting = yield* Queue.unbounded<boolean>();
+        yield* host.painting.pipe(
+          Stream.runForEach(({ active }) => Queue.offer(painting, active)),
+          Effect.forkScoped({ startImmediately: true }),
+        );
+        yield* command(host, 38, "DOM.enable");
+        yield* command(host, 39, "Page.captureScreenshot");
+        expect(yield* Queue.take(painting)).toBe(true);
+        expect(debuggee.sent).toEqual([38]);
+        if (end === "crash") {
+          debuggee.webContents.emit("render-process-gone");
+        } else {
+          const sent = debuggee.nextSend();
+          yield* TestClock.adjust("1 second");
+          yield* Effect.promise(() => sent);
+          debuggee.release();
+        }
+        expect(yield* Queue.take(painting)).toBe(false);
+        expect(debuggee.sent).toEqual(end === "crash" ? [38] : [38, 39]);
+      }).pipe(Effect.scoped),
+  );
+
   it.effect("holds a guest's painting from a relayed screenshot until Chromium answers it", () =>
     Effect.gen(function* () {
       const host = yield* DesktopBrowserHost.make;
