@@ -501,3 +501,20 @@ A separate process check preceded each final gate. Node was 26.12.1 and Git was 
 - READY at `a2ef20764c287c1612f916fa34d7b2af918e72b8`. `git diff --check e8aeeb1b42 HEAD` exited 0. The plain lane push exited 0 and `git ls-remote` confirmed the same head.
 
 NOT RUN: Browser tests, real-client passes and captures, live GitHub/GitLab reads, the full integration-wide changed-test selection, and CI. CI runs on PR #3700.
+
+## Fix round 3, 2026-11-18 UTC (pen-lidge)
+
+Round 3 applied three GOAT-authored fixes on `a2ef20764c287c1612f916fa34d7b2af918e72b8`. The integration merge parent remains `f82d2df4b0960eb39bd36e4100b72b6f2758c7d2`.
+
+- **P2** `25e639dc1e43ec30ab35b2d8bada933d54a98482` pages by stable watch identity before grouping the selected targets by project and pull request. Read and retry bookkeeping follows individual watches within their projects, so membership churn does not invalidate the surviving watches' bookkeeping. The 64-target cap and four concurrent group reads still apply. The `PullRequestWatchBatch.test.ts` churn case failed first (exit 1) because permanent watch #64 received no round-zero notice when the temporary watch ended. The regression covers two cycles across the boundary and checks both the permanent watch and the later PR.
+- **P3-1** `873f358837bc95f8978e4ae175e5636a4c6203fd` atomically records the last completed page's continuation in `pull-request-watch-cursor` under the existing server state directory. No database migration. The `PullRequestWatchBatch.test.ts` restart case failed first (exit 1) because a fresh reactor reread all 64 first-page targets instead of reading only PR #9. It also verifies that completing the last page clears the continuation.
+- **P3-2** `fe48834afead48b650e783da2fb821d4d357f2eb` keeps the fork check baseline through a pending check plus placeholder without a SHA, followed by a SHA with a placeholder alone. The `pullRequestWatch.baseline.test.ts` case failed first (exit 1) with `checks-failed` on the initial failing check. The test also verifies that a subsequent new failure wakes while the first readable approval is still baselined, and that a new approval run can wake afterward.
+
+Each red case ran alone with `GOAT_TEST_TMP_GUARD=fail vp test run` from `apps/server` before changing its implementation. A worktree process check preceded each final gate. Node was 26.12.1 and Git was 2.43.0.
+
+- `GOAT_TEST_TMP_GUARD=fail vp run check:changed a2ef20764c287c1612f916fa34d7b2af918e72b8` exited 0. Naming, formatting, lint with two existing warnings, both Knip checks, GraphQL, both agent-surface checks, and 42 package typechecks passed. All 292 tests in the nine selected server files passed with zero skips. The selection included zero browser files.
+- From `apps/server`, `GOAT_TEST_TMP_GUARD=fail vp test run` on the 12 changed server test files relative to `f82d2df4b0` exited 0 with 329 passed and zero skips.
+- The four known host-failure files ran with `vp test run --passWithNoTests --project='!*browser*' --project='!*renders*'` on the lane and integration head `6def29ca359f546e50dcd731a6364e3f0d575545`. Both runs exited 1 with 38 passed, 25 failed and zero skips. All 25 failing case names and diagnostics matched after normalizing fixture paths and PIDs. These were 23 SSH fixture trust failures, one Grok driver failure and one storage-cleanup failure. The worktree returned to the lane after comparison.
+- READY at `fe48834afead48b650e783da2fb821d4d357f2eb`. `git diff --check a2ef20764c HEAD` exited 0. The plain lane push exited 0 and `git ls-remote` confirmed the head.
+
+NOT RUN: Browser tests, real-client passes and captures, live GitHub/GitLab watch reads, the integration-wide changed-test gate, full builds and CI. CI runs on PR #3700.
