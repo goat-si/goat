@@ -35,6 +35,7 @@ export const runRememberOriginFixture = Effect.fn("test.runRememberOriginFixture
   let active = false;
   let offline = false;
   let holdOrigin = scenario === "already ready";
+  let refuseOriginPull = false;
   const negotiation = () => (active ? { features: M.MEMORY_FLOOR_2 } : {});
   const ensureOnline = Effect.suspend(() =>
     offline ? Effect.fail(new M.MemoryHubError({ code: "unavailable" })) : Effect.void,
@@ -55,6 +56,8 @@ export const runRememberOriginFixture = Effect.fn("test.runRememberOriginFixture
             Effect.orDie,
           ),
       pull: (_connection, input) => {
+        if (refuseOriginPull && member === memberEnv && input.afterOriginSequence !== undefined)
+          return Effect.fail(new M.MemoryHubError({ code: "payload_too_large" }));
         const { afterOriginSequence: _held, ...ordered } = input;
         const request = holdOrigin && member === memberEnv ? ordered : input;
         return ensureOnline.pipe(
@@ -232,6 +235,7 @@ export const runRememberOriginFixture = Effect.fn("test.runRememberOriginFixture
   const checkReplica = Effect.gen(function* () {
     const sync = yield* Sync.MemorySyncService;
     const service = yield* Service.MemoryService;
+    refuseOriginPull = scenario === "already ready";
     yield* sync.syncOnce;
     assert.propertyVal(yield* sync.readLocalReadiness(), "bootstrap", "ready");
     for (const op of attempts) yield* scanReplicaMemory(op.memoryId);
@@ -244,6 +248,7 @@ export const runRememberOriginFixture = Effect.fn("test.runRememberOriginFixture
       const store = yield* Store.MemoryStore;
       const changes = yield* Stream.toPull(yield* store.changes(space));
       assert.propertyVal((yield* changes)[0], "kind", "reset");
+      refuseOriginPull = false;
       holdOrigin = false;
       yield* sync.syncOnce;
       assert.include((yield* changes)[0], { kind: "invalidate", memoryId: attempts[0]?.memoryId });
