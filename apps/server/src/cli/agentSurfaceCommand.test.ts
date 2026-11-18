@@ -221,6 +221,20 @@ describe("arguments", () => {
 });
 
 describe("routing", () => {
+  it("omits prompt-only resources from generated CLI help", () => {
+    expect(invoke("message", "--help")).toBeUndefined();
+  });
+
+  it("omits prompt-only verb help while accepting an explicit goat call", () => {
+    expect(invoke("message", "show", "--help")).toBeUndefined();
+    expect(invoke("call", "message.show", '{"message":"Draft"}')).toMatchObject({
+      kind: "call",
+      path: "message.show",
+      entryPath: "message.show",
+      args: { message: "Draft" },
+    });
+  });
+
   it("generates PR comment help with the required key and uncertain outcome guidance", () => {
     expect(invoke("pull-request", "comment", "--help")).toMatchObject({
       kind: "help",

@@ -3,6 +3,7 @@ import {
   type AgentSurfaceEntry,
   agentSurfaceRegistry,
   type AgentSurfaceRegistryEntry,
+  isDiscoverableOutsidePrompt,
 } from "@goat/contracts/agentSurface";
 import {
   canonicalToolName,
@@ -49,9 +50,7 @@ const catalogOf = (entries: ReadonlyArray<AgentSurfaceRegistryEntry>) => ({
   surfaceVersion: surfaceVersionOf(entries),
 });
 const claudeCatalog = catalogOf(Object.values(agentSurfaceRegistry));
-const defaultCatalog = catalogOf(
-  claudeCatalog.entries.filter((entry) => !("listing" in entry && entry.listing === "prompt")),
-);
+const defaultCatalog = catalogOf(claudeCatalog.entries.filter(isDiscoverableOutsidePrompt));
 
 const DEFAULT_LIMIT = 10;
 const SEARCHED_FIELDS = ["path", "name", "summary", "description", "guide"] as const;

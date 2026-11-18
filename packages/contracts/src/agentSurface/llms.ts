@@ -1,4 +1,4 @@
-import { agentSurfaceRegistry } from "./registry.ts";
+import { agentSurfaceRegistry, isDiscoverableOutsidePrompt } from "./registry.ts";
 import { listedToolName } from "./surfaceEntries.ts";
 
 type Entry = (typeof agentSurfaceRegistry)[keyof typeof agentSurfaceRegistry];
@@ -17,7 +17,7 @@ const REQUIRES_FLAG = { thread: "thread only", client: "client only", either: nu
 
 /** Mirrors McpToolAccess: thread-only tools refuse clients, and read-only clients reach reads only. */
 const usableBy = (entry: Entry, caller: LlmsTxtCaller): boolean => {
-  if ("listing" in entry && entry.listing === "prompt") return false;
+  if (!isDiscoverableOutsidePrompt(entry)) return false;
   switch (caller.kind) {
     case "anonymous":
       return true;

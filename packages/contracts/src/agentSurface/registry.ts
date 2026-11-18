@@ -46,6 +46,7 @@ import { workflowEntries } from "./entries/workflow.ts";
 import { worktreeEntries } from "./entries/worktree.ts";
 import { workspaceEntries } from "./entries/workspace.ts";
 import { terminalEntries } from "./entries/terminal.ts";
+import type { AgentSurfaceEntry } from "./types.ts";
 
 export type {
   AgentSurfaceCapability,
@@ -108,6 +109,9 @@ export const agentSurfaceRegistry = {
 
 export type AgentSurfacePath = keyof typeof agentSurfaceRegistry;
 export type AgentSurfaceRegistryEntry = (typeof agentSurfaceRegistry)[AgentSurfacePath];
+
+export const isDiscoverableOutsidePrompt = (entry: Pick<AgentSurfaceEntry, "name" | "listing">) =>
+  entry.listing !== "prompt";
 
 export {
   SETTINGS_ACCESS,

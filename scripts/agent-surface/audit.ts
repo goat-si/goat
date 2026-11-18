@@ -320,7 +320,7 @@ export function render(inventory: Inventory): string {
       code("pnpm agent-surface:audit") +
       ". -->",
     "",
-    "This page measures what an agent meets when it drives GOAT today: the tools mounted on " +
+    "This page measures the discoverable tools mounted on " +
       code("/mcp") +
       " and the " +
       code("goat") +
@@ -331,7 +331,7 @@ export function render(inventory: Inventory): string {
     "",
     "Run " +
       code("node scripts/agent-surface/inventory.ts") +
-      " for the full JSON inventory, including per-tool schemas, hints, enforced access, and the rendered " +
+      " for the JSON inventory, including per-tool schemas, hints, enforced access, and the rendered " +
       code("--help") +
       " of every command.",
     "",
@@ -340,7 +340,7 @@ export function render(inventory: Inventory): string {
     table(
       ["Measure", "Value"],
       [
-        ["MCP tools mounted on /mcp", tools.length],
+        ["Discoverable MCP tools mounted on /mcp", tools.length],
         [
           "Toolkits",
           toolkits.size +

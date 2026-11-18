@@ -942,8 +942,8 @@ Windows ([DesktopCliCommand.ts](../../apps/desktop/src/app/DesktopCliCommand.ts)
 [install guide](../user/install.md#the-goat-command)). Bare `goat` runs the
 server; the subcommands are operator tools.
 
-**Now.** `goat describe`, `goat call`, and a `goat <resource> <verb>` command for every
-registry path run before the operator CLI loads
+**Now.** `goat describe`, `goat call`, and generated `goat <resource> <verb>` commands
+run before the operator CLI loads. Prompt-only paths remain available through explicit `goat call`
 ([agentSurfaceCommand.ts](../../apps/server/src/cli/agentSurfaceCommand.ts)). Each sends one
 `goat_call` to the origin's `/mcp`, so a call through the CLI gets the same argument refusal,
 access checks, goatclaw gate, and host routing as a direct one; `--host` is only the call's
