@@ -1,5 +1,6 @@
 #!/usr/bin/env node
 // @effect-diagnostics nodeBuiltinImport:off
+import { makeLoadReplayEmitter } from "./acp-mock-load-replay.ts";
 import * as NodeChildProcess from "node:child_process";
 import * as NodeFS from "node:fs";
 import * as Effect from "effect/Effect";
@@ -676,28 +677,7 @@ const program = Effect.gen(function* () {
     }),
   );
 
-  const emitLoadReplayNotifications = (requestedSessionId: string) => {
-    writeJsonRpcNotification("session/update", {
-      _meta: { isReplay: true },
-      sessionId: requestedSessionId,
-      update: {
-        sessionUpdate: "tool_call_update",
-        toolCallId: "replay-tool-1",
-        title: "Replay tool",
-        kind: "search",
-        status: "completed",
-      },
-    });
-    writeJsonRpcNotification("session/update", {
-      _meta: { isReplay: true },
-      sessionId: requestedSessionId,
-      update: {
-        sessionUpdate: "agent_message_chunk",
-        messageId: "mock-agent-message",
-        content: { type: "text", text: "replayed assistant text" },
-      },
-    });
-  };
+  const emitLoadReplayNotifications = makeLoadReplayEmitter(writeJsonRpcNotification);
 
   yield* agent.handleLoadSession((request) =>
     Effect.gen(function* () {
