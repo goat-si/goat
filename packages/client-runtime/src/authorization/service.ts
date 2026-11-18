@@ -88,6 +88,10 @@ export class RemoteEnvironmentAuthorization extends Context.Service<
        */
       readonly directEndpoint?: { readonly httpBaseUrl: string; readonly wsBaseUrl: string };
     }) => Effect.Effect<AuthorizedRemoteEnvironment, ConnectionAttemptError>;
+    readonly rememberCheckedDescriptor: (
+      httpBaseUrl: string,
+      descriptor: Option.Option<ExecutionEnvironmentDescriptor>,
+    ) => Effect.Effect<void>;
     readonly authorizeDpopHttp: (input: {
       readonly expectedEnvironmentId: EnvironmentId;
       readonly rejectedAccessToken?: string;
@@ -105,6 +109,7 @@ const connectDisabled = () =>
 const CACHED_ENDPOINT_SOCKET_TIMEOUT_MS = 3_000;
 const BEARER_DESCRIPTOR_CACHE_TTL_MS = 10_000;
 
+const CHECKED_DESCRIPTOR_TTL_NANOS = 5_000_000_000n;
 const DPOP_AUTHORIZATION_TIMEOUT_MS = 30_000;
 
 function mapDpopSocketError(error: RemoteEnvironmentAuthError | ConnectionAttemptError) {
@@ -148,6 +153,10 @@ export const make = Effect.gen(function* () {
       readonly token: Effect.Effect<TokenStore.RemoteDpopAccessToken, ConnectionAttemptError>;
     }
   >();
+  const checkedDescriptors = new Map<
+    string,
+    { readonly descriptor: ExecutionEnvironmentDescriptor; readonly checkedAt: bigint }
+  >();
   const bearerDescriptors = yield* Ref.make<
     ReadonlyMap<
       EnvironmentId,
@@ -173,6 +182,17 @@ export const make = Effect.gen(function* () {
       const canReuseDescriptor =
         cachedDescriptor?.httpBaseUrl === input.httpBaseUrl &&
         cachedDescriptor.validatedAtEpochMs + BEARER_DESCRIPTOR_CACHE_TTL_MS > now;
+      if (!canReuseDescriptor) {
+        const checked = checkedDescriptors.get(input.httpBaseUrl);
+        checkedDescriptors.delete(input.httpBaseUrl);
+        if (
+          checked !== undefined &&
+          checked.descriptor.environmentId === input.expectedEnvironmentId &&
+          (yield* Clock.monotonicTimeNanos) - checked.checkedAt <= CHECKED_DESCRIPTOR_TTL_NANOS
+        ) {
+          return { descriptor: checked.descriptor, fresh: true };
+        }
+      }
       const descriptor = canReuseDescriptor
         ? cachedDescriptor.descriptor
         : yield* fetchDescriptor(input.httpBaseUrl, input.connectionMethod).pipe(
@@ -603,6 +623,17 @@ export const make = Effect.gen(function* () {
 
   return RemoteEnvironmentAuthorization.of({
     authorizeBearer,
+    // Untraced because route and host checks run on every health probe.
+    rememberCheckedDescriptor: Effect.fnUntraced(function* (httpBaseUrl, descriptor) {
+      checkedDescriptors.delete(httpBaseUrl);
+      if (Option.isNone(descriptor) || !httpBaseUrl.startsWith("https:")) return;
+      const checkedAt = yield* Clock.monotonicTimeNanos;
+      for (const [url, checked] of checkedDescriptors) {
+        if (checkedAt - checked.checkedAt > CHECKED_DESCRIPTOR_TTL_NANOS)
+          checkedDescriptors.delete(url);
+      }
+      checkedDescriptors.set(httpBaseUrl, { descriptor: descriptor.value, checkedAt });
+    }),
     authorizeDpop: Effect.fn("environment.authorization")(function (input) {
       return authorizeDpop(input);
     }),

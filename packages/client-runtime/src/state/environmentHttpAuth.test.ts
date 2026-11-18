@@ -133,6 +133,7 @@ function makeHarness(reply: (requestNumber: number) => Response | Promise<Respon
   const remoteAuthorization = RemoteEnvironmentAuthorization.RemoteEnvironmentAuthorization.of({
     authorizeBearer: () => Effect.die("Unexpected bearer connection preparation."),
     authorizeDpop: () => Effect.die("HTTP requests must not prepare a WebSocket connection."),
+    rememberCheckedDescriptor: () => Effect.void,
     authorizeDpopHttp: (input) =>
       Effect.sync(() => {
         authorizations.push(input);
@@ -647,6 +648,7 @@ describe("authenticated environment HTTP requests", () => {
       });
       const remoteAuthorization = RemoteEnvironmentAuthorization.RemoteEnvironmentAuthorization.of({
         ...harness.remoteAuthorization,
+        rememberCheckedDescriptor: () => Effect.void,
         authorizeDpopHttp: () => Effect.fail(failure),
       });
       const error = yield* fetchEnvironmentSessionState({

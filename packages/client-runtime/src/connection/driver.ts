@@ -1,3 +1,5 @@
+import * as RemoteAuthorization from "../authorization/service.ts";
+import * as Option from "effect/Option";
 import type { DesktopSshPreparationProgress } from "@goat/contracts";
 import { GOAT_CONNECT_COMING_SOON } from "@goat/shared/goatConnect";
 import * as Context from "effect/Context";
@@ -198,6 +200,7 @@ export const make = Effect.gen(function* () {
   const resolver = yield* ConnectionResolver.ConnectionResolver;
   const sessions = yield* RpcSession.RpcSessionFactory;
   const httpClient = yield* HttpClient.HttpClient;
+  const remote = yield* RemoteAuthorization.RemoteEnvironmentAuthorization;
   const primaryAuth = yield* ClientCapabilities.PrimaryEnvironmentAuth;
 
   // The descriptor is public, so this sends no credential to whatever
@@ -207,10 +210,13 @@ export const make = Effect.gen(function* () {
       httpBaseUrl,
       timeoutMs: ROUTE_CHECK_TIMEOUT_MS,
     }).pipe(
+      Effect.option,
+      Effect.tap((descriptor) => remote.rememberCheckedDescriptor(httpBaseUrl, descriptor)),
       Effect.map((descriptor): RouteCheck =>
-        descriptor.environmentId === environmentId ? "answered" : "silent",
+        Option.exists(descriptor, (value) => value.environmentId === environmentId)
+          ? "answered"
+          : "silent",
       ),
-      Effect.orElseSucceed((): RouteCheck => "silent"),
       // A cached descriptor would answer for a host that cannot be reached.
       Effect.provideService(FetchHttpClient.RequestInit, {
         cache: "no-store",
