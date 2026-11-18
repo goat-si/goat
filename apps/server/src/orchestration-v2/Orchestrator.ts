@@ -1,3 +1,4 @@
+import { contextHandoffTurnItem } from "./ContextHandoffTurnItem.ts";
 import { retainedUserItemFailures } from "./goat/RetainedQueuedInput.ts";
 import { commandThreadId } from "./commandThreadId.ts";
 import { guardArchiveDelegates } from "./goat/ArchiveDelegatedGuard.ts";
@@ -1746,47 +1747,22 @@ const makeOrchestrator = Effect.fn("orchestrationV2.Orchestrator.layer")(functio
         updatedAt: now,
         ...(activeHandoff === null ? modelSwitchSince(projection, queuedRun.modelSelection) : {}),
       };
-      const handoffTurnItem: OrchestrationV2TurnItem | null =
+      const handoffTurnItem =
         activeHandoff === null
           ? null
-          : {
-              id: idAllocator.derive.runSignalTurnItem({
-                runId: queuedRun.id,
-                signal: `context-handoff:${activeHandoff.id}`,
-              }),
+          : contextHandoffTurnItem({
+              idAllocator,
+              handoff: activeHandoff,
               threadId,
               runId: queuedRun.id,
-              nodeId: rootNodeId,
+              rootNodeId,
               providerThreadId: queuedProviderThread.id,
-              providerTurnId: null,
-              nativeItemRef: null,
-              parentItemId: null,
+              selection: queuedRun.modelSelection,
+              sourceRuns: coveredRuns,
               ordinal: ordinal * 100 - 1,
-              status: "completed",
+              now,
               title: handoff === null ? "Imported context" : "Provider handoff",
-              startedAt: now,
-              completedAt: now,
-              updatedAt: now,
-              type: "handoff",
-              contextHandoffId: activeHandoff.id,
-              fromProviderThreadIds: activeHandoff.fromProviderThreadIds,
-              toProviderThreadId: activeHandoff.toProviderThreadId,
-              fromProviderInstanceIds: Array.from(
-                new Set(coveredRuns.map((run) => run.providerInstanceId)),
-              ),
-              toProviderInstanceId: queuedRun.providerInstanceId,
-              fromModelSelections: Array.from(
-                new Map(
-                  coveredRuns.map((run) => [
-                    `${run.modelSelection.instanceId}\0${run.modelSelection.model}`,
-                    run.modelSelection,
-                  ]),
-                ).values(),
-              ),
-              toModel: queuedRun.modelSelection.model,
-              strategy: activeHandoff.strategy,
-              summary: activeHandoff.summaryText,
-            };
+            });
       const executionIdentityEvents: ReadonlyArray<Omit<OrchestrationV2DomainEvent, "id">> =
         (checkpointScope !== null && storedCheckpointScope === undefined) ||
         storedProviderThread.id !== queuedProviderThread.id ||
@@ -7234,53 +7210,27 @@ const makeOrchestrator = Effect.fn("orchestrationV2.Orchestrator.layer")(functio
             ? []
             : [mergeBackSourceRun]
           : providerSwitchCoveredRuns;
-    const handoffFromModelSelections = Array.from(
-      new Map(
-        handoffSourceRuns.map((run) => [
-          `${run.modelSelection.instanceId}\0${run.modelSelection.model}`,
-          run.modelSelection,
-        ]),
-      ).values(),
-    );
-    const handoffTurnItem: OrchestrationV2TurnItem | null =
+    const handoffTurnItem =
       activeHandoff === null
         ? null
-        : {
-            id: idAllocator.derive.runSignalTurnItem({
-              runId,
-              signal: `context-handoff:${activeHandoff.id}`,
-            }),
+        : contextHandoffTurnItem({
+            idAllocator,
+            handoff: activeHandoff,
             threadId: command.threadId,
             runId,
-            nodeId: rootNodeId,
+            rootNodeId,
             providerThreadId: providerThread.id,
-            providerTurnId: null,
-            nativeItemRef: null,
-            parentItemId: null,
+            selection: modelSelection,
+            sourceRuns: handoffSourceRuns,
             ordinal: ordinal * 100 - 1,
-            status: "completed",
+            now,
             title:
               portableForkHandoff !== null
                 ? "Fork context"
                 : providerSwitchHandoff !== null
                   ? "Provider handoff"
                   : "Merge-back context",
-            startedAt: now,
-            completedAt: now,
-            updatedAt: now,
-            type: "handoff",
-            contextHandoffId: activeHandoff.id,
-            fromProviderThreadIds: activeHandoff.fromProviderThreadIds,
-            toProviderThreadId: activeHandoff.toProviderThreadId,
-            fromProviderInstanceIds: Array.from(
-              new Set(handoffSourceRuns.map((run) => run.providerInstanceId)),
-            ),
-            toProviderInstanceId: modelSelection.instanceId,
-            fromModelSelections: handoffFromModelSelections,
-            toModel: modelSelection.model,
-            strategy: activeHandoff.strategy,
-            summary: activeHandoff.summaryText,
-          };
+          });
     const nativeForkResolution: OrchestrationV2ContextTransferResolution | null =
       !canResolveForkNatively || providerThread.nativeThreadRef === null
         ? null
