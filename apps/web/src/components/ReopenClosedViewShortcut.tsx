@@ -37,6 +37,7 @@ import {
   buildThreadRouteParams,
   resolveThreadRouteTarget,
 } from "../threadRoutes";
+import { usePreviewFindAvailable } from "./preview/findAvailability";
 import { toastManager } from "./ui/toast";
 
 const PREVIEW_FORWARDED_LAYOUT_COMMANDS = [
@@ -75,6 +76,7 @@ export function ReopenClosedViewShortcut() {
   const previewOpen = useRightPanelStore(
     (state) => selectActiveRightPanel(state.byThreadKey, threadRef) === "preview",
   );
+  const previewFindAvailable = usePreviewFindAvailable(threadRef);
   const keybindings = useAtomValue(primaryServerKeybindingsAtom);
   const hasHistory = useClosedViewStore((state) => state.entries.length > 0);
   const openPreview = useAtomCommand(previewEnvironment.open);
@@ -200,7 +202,7 @@ export function ReopenClosedViewShortcut() {
     const commands = [
       ...(hasHistory ? (["view.reopenClosed"] as const) : []),
       ...PREVIEW_FORWARDED_LAYOUT_COMMANDS,
-      ...(preview.findInPage ? (["preview.find"] as const) : []),
+      ...(previewFindAvailable ? (["preview.find"] as const) : []),
     ];
     void preview
       .setForwardedShortcuts(
@@ -215,7 +217,7 @@ export function ReopenClosedViewShortcut() {
     return () => {
       void preview.setForwardedShortcuts?.([]).catch(() => undefined);
     };
-  }, [hasHistory, keybindings, terminalOpen]);
+  }, [hasHistory, keybindings, previewFindAvailable, terminalOpen]);
 
   return null;
 }

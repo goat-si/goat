@@ -1,6 +1,4 @@
 import { dispatchPreviewAction } from "./preview/previewActionBus";
-import { hasPreviewFindBridge } from "./preview/findAvailability";
-import { previewBridge } from "./preview/previewBridge";
 import { TextSearchIcon } from "./solar";
 import { openThreadFind } from "./chat/threadFindStore";
 import {
@@ -29,7 +27,7 @@ export function appendFindItems(
     });
   }
 
-  if (previewFindAvailable && hasPreviewFindBridge(previewBridge)) {
+  if (previewFindAvailable) {
     actionItems.push({
       kind: "action",
       value: "find-in-browser-page",

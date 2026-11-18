@@ -1,10 +1,5 @@
 import { useAtomValue } from "@effect/atom-react";
-import type {
-  DesktopPreviewBridge,
-  EnvironmentId,
-  PreviewSessionSnapshot,
-  ScopedThreadRef,
-} from "@goat/contracts";
+import type { EnvironmentId, PreviewSessionSnapshot, ScopedThreadRef } from "@goat/contracts";
 import { rendersServerTabNatively } from "~/browser/previewRuntime";
 import { readThreadPreviewState, useThreadPreviewState } from "~/previewStateStore";
 import { selectActiveRightPanelSurface, useRightPanelStore } from "~/rightPanelStore";
@@ -12,21 +7,15 @@ import { appAtomRegistry } from "~/rpc/atomRegistry";
 import { primaryEnvironmentIdAtom } from "~/state/primaryEnvironment";
 import { previewBridge } from "./previewBridge";
 
-export function hasPreviewFindBridge(
-  bridge:
-    | Pick<DesktopPreviewBridge, "findInPage" | "stopFindInPage" | "onFindResult">
-    | null
-    | undefined,
-): boolean {
-  return Boolean(bridge?.findInPage && bridge.stopFindInPage && bridge.onFindResult);
-}
-
 export function canFindPreviewTab(
   snapshot: Pick<PreviewSessionSnapshot, "runtime"> | null | undefined,
   nativeServerTab: boolean,
 ): boolean {
-  return (
-    (snapshot?.runtime === "desktop" || nativeServerTab) && hasPreviewFindBridge(previewBridge)
+  return Boolean(
+    (snapshot?.runtime === "desktop" || nativeServerTab) &&
+    previewBridge?.findInPage &&
+    previewBridge.stopFindInPage &&
+    previewBridge.onFindResult,
   );
 }
 

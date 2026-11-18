@@ -76,7 +76,12 @@ export function installChatRouteCommands(router: AnyRouter): () => void {
     (action: PreviewAction): CommandHandler =>
     (event) => {
       const threadRef = readRouteThreadRef();
-      if (action === "find" && (!threadRef || !readPreviewFindAvailable(threadRef))) return;
+      if (action === "find") {
+        if (!threadRef || !readPreviewFindAvailable(threadRef)) return false;
+        claim(event);
+        dispatchPreviewAction("find");
+        return;
+      }
       claim(event);
       if (threadRef && canOperatePreview(threadRef.environmentId)) dispatchPreviewAction(action);
     };
