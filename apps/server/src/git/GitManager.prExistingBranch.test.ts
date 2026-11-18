@@ -179,7 +179,7 @@ it.layer(layerGitManagerTest)("GitManager existing PR branches", (it) => {
       }),
   );
 
-  it.effect("preserves a staged edit racing the refresh of a divergent PR branch", () =>
+  const assertDivergentRefreshPreservesEdit = (reuseWorktree: boolean) =>
     Effect.gen(function* () {
       const repoDir = yield* makeTempDir("goat-git-manager-");
       yield* initRepo(repoDir);
@@ -198,6 +198,10 @@ it.layer(layerGitManagerTest)("GitManager existing PR branches", (it) => {
       yield* runGit(repoDir, ["push", "--force", "origin", "HEAD:refs/heads/feature/pr-existing"]);
       yield* runGit(repoDir, ["update-ref", "refs/remotes/origin/feature/pr-existing", localHead]);
       yield* runGit(repoDir, ["checkout", "main"]);
+      const reusedPath = reuseWorktree ? yield* makeTempDir("goat-git-manager-") : null;
+      if (reusedPath !== null) {
+        yield* runGit(repoDir, ["worktree", "add", reusedPath, "feature/pr-existing"]);
+      }
 
       const gate = {
         matches: (args: ReadonlyArray<string>) =>
@@ -235,7 +239,19 @@ it.layer(layerGitManagerTest)("GitManager existing PR branches", (it) => {
       expect(NodeFS.readFileSync(edited, "utf8")).toBe("staged user edit\n");
       expect((yield* runGit(worktree, ["rev-parse", "HEAD"])).stdout.trim()).toBe(localHead);
       expect(result.isOnPullRequestHead).toBe(false);
-    }),
+      if (reusedPath !== null) {
+        expect(result.worktreePath && NodeFS.realpathSync.native(result.worktreePath)).toBe(
+          NodeFS.realpathSync.native(reusedPath),
+        );
+      }
+    });
+
+  it.effect("preserves a staged edit racing the refresh of a divergent PR branch", () =>
+    assertDivergentRefreshPreservesEdit(false),
+  );
+
+  it.effect("preserves a staged edit racing the refresh of a reused divergent PR worktree", () =>
+    assertDivergentRefreshPreservesEdit(true),
   );
 
   it.effect.each(["adds", "removes"] as const)(

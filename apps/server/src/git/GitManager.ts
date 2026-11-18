@@ -2566,14 +2566,6 @@ export const make = Effect.gen(function* () {
           };
         }
 
-        // Capture upstream before its forced fetch so rewritten heads remain distinguishable from local commits.
-        const upstreamCommitBeforeFetch = yield* gitCore
-          .resolveCommit({ cwd: worktreePath, revision: "@{upstream}" })
-          .pipe(
-            Effect.map((resolved) => resolved.commitSha),
-            Effect.orElseSucceed(() => null),
-          );
-
         yield* ensureExistingWorktreeUpstream(worktreePath);
 
         // The pull request's own ref, because it is the only thing that certainly names its
@@ -2608,7 +2600,6 @@ export const make = Effect.gen(function* () {
             gitCore.refreshCheckedOutBranch({
               cwd: worktreePath,
               targetCommit: target.commitSha,
-              resetWhenHeadCommit: upstreamCommitBeforeFetch,
             }),
           ),
           Effect.catch((error) =>

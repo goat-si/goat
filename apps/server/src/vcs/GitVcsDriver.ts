@@ -284,8 +284,6 @@ export interface GitResolveCommitResult {
 export interface GitRefreshCheckedOutBranchInput {
   cwd: string;
   targetCommit: string;
-  /** Pre-fetch upstream commit; resetting away is safe only if HEAD stayed here. */
-  resetWhenHeadCommit?: string | null | undefined;
 }
 
 export interface GitRefreshCheckedOutBranchResult {

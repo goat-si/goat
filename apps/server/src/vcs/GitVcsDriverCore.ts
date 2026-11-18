@@ -28,7 +28,6 @@ import {
   rangeStatArgs,
   rangePatchArgs,
 } from "./gitGeneratedContextArgs.ts";
-import { GOAT_PRE_REFRESH_REF } from "@goat/contracts/legacyT3Names";
 import * as Cache from "effect/Cache";
 import * as Cause from "effect/Cause";
 import * as Clock from "effect/Clock";
@@ -4501,28 +4500,14 @@ export const makeGitVcsDriverCore = Effect.fn("makeGitVcsDriverCore")(function* 
         ["merge-base", "--is-ancestor", headCommit, input.targetCommit],
         { allowNonZeroExit: true },
       ).pipe(Effect.map((result) => result.exitCode === 0));
-      // Rewritten heads require reset; allow only clean checkouts still at the pre-fetch upstream commit.
-      if (!isAncestor && headCommit !== input.resetWhenHeadCommit) {
-        return { headCommit, moved: false, onTarget: false };
-      }
-
       if (!isAncestor) {
-        // Retain the reset-away commit; rewritten remote heads no longer provide a path back.
-        yield* executeGit(
-          "GitVcsDriver.refreshCheckedOutBranch.keepPrevious",
-          input.cwd,
-          ["update-ref", GOAT_PRE_REFRESH_REF, headCommit],
-          { fallbackErrorDetail: "git failed to record the previous checkout commit" },
-        );
+        return { headCommit, moved: false, onTarget: false };
       }
 
       yield* executeGit(
         "GitVcsDriver.refreshCheckedOutBranch.move",
         input.cwd,
-        // reset --merge refuses tracked edits racing our cleanliness check, preserving work like --ff-only does.
-        isAncestor
-          ? ["merge", "--ff-only", "--no-overwrite-ignore", input.targetCommit]
-          : ["reset", "--merge", input.targetCommit],
+        ["merge", "--ff-only", "--no-overwrite-ignore", input.targetCommit],
         {
           // Killing a slow checkout partway through strands a half-updated working tree.
           timeoutMs: null,
