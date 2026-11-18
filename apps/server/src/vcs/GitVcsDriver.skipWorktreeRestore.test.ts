@@ -1,9 +1,10 @@
 import * as NodeServices from "@goat/shared/testing/nodeServicesWithCrypto";
 import { assert, it } from "@effect/vitest";
-import { CheckpointRef } from "@goat/contracts";
+import { CheckpointRef, VcsProcessExitError } from "@goat/contracts";
 import * as Effect from "effect/Effect";
 import * as FileSystem from "effect/FileSystem";
 import * as Layer from "effect/Layer";
+import * as Logger from "effect/Logger";
 import * as Path from "effect/Path";
 import * as ServerConfig from "../config.ts";
 import { restoreCheckpointFiles } from "./checkpointSkipWorktreeRestore.ts";
@@ -254,5 +255,52 @@ it.effect("refuses an oversized sparse index path list before changing the workt
     assert.strictEqual(result._tag, "Failure");
     if (result._tag === "Failure")
       assert.strictEqual(result.failure._tag, "VcsProcessOutputLimitError");
+  }).pipe(Effect.scoped, Effect.provide(layerGitContract)),
+);
+
+it.effect("logs the typed Git failure when sparse restore falls back", () =>
+  Effect.gen(function* () {
+    const fs = yield* FileSystem.FileSystem;
+    const path = yield* Path.Path;
+    const live = yield* VcsProcess.VcsProcess;
+    const driver = yield* GitVcsDriver.makeVcsDriverShape().pipe(
+      Effect.provideService(VcsProcess.VcsProcess, {
+        run: (input) =>
+          input.args.includes("--sparse") && input.args.includes("ls-files")
+            ? Effect.fail(
+                new VcsProcessExitError({
+                  operation: input.operation,
+                  cwd: input.cwd,
+                  command: input.command,
+                  exitCode: 129,
+                  detail: "private stderr text",
+                }),
+              )
+            : live.run(input),
+      }),
+    );
+    const cwd = yield* fs.makeTempDirectoryScoped({ prefix: "t3-sparse-restore-" });
+    const { git, checkpointRef } = yield* makeRepo(driver, cwd);
+    yield* git(["update-ref", checkpointRef, "HEAD"]);
+    yield* git(["sparse-checkout", "set", "--cone", "in"]);
+    const file = path.join(cwd, "file.txt");
+    yield* fs.writeFileString(file, "later\n");
+    const warnings: unknown[] = [];
+    const logger = Logger.make(({ message }) => {
+      warnings.push(message);
+    });
+
+    assert.isTrue(
+      yield* driver.checkpoints
+        .restoreCheckpoint({ cwd, checkpointRef, fallbackToHead: false })
+        .pipe(Effect.provide(Logger.layer([logger], { mergeWithExisting: false }))),
+    );
+    assert.strictEqual(yield* fs.readFileString(file), "initial\n");
+    assert.includeDeepMembers(warnings, [
+      [
+        "Checkpoint restore left hand-flagged sparse files as they were",
+        { cwd, step: "ls-files --sparse", errorTag: "VcsProcessExitError", exitCode: 129 },
+      ],
+    ]);
   }).pipe(Effect.scoped, Effect.provide(layerGitContract)),
 );

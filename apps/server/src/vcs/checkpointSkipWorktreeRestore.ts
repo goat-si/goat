@@ -104,10 +104,12 @@ export const restoreCheckpointFiles = Effect.fn("GitVcsDriver.checkpoints.restor
           // A Git without ls-files --sparse or check-rules keeps the plain restore's result.
           Effect.catchIf(
             (error) => error._tag !== "VcsProcessOutputLimitError",
-            () =>
+            (error) =>
               Effect.logWarning("Checkpoint restore left hand-flagged sparse files as they were", {
                 cwd,
                 step,
+                errorTag: error._tag,
+                exitCode: error._tag === "VcsProcessExitError" ? error.exitCode : undefined,
               }).pipe(Effect.as<string[]>([])),
           ),
         );
