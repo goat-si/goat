@@ -1,11 +1,16 @@
-import * as NodeServices from "@effect/platform-node/NodeServices";
+import * as HostProcess from "@goat/shared/HostProcess";
+import * as NodeServices from "@goat/shared/testing/nodeServicesWithCrypto";
 import { assert, it } from "@effect/vitest";
 import * as Effect from "effect/Effect";
 import * as FileSystem from "effect/FileSystem";
 import * as Path from "effect/Path";
+import * as Sink from "effect/Sink";
+import * as Stream from "effect/Stream";
+import { HttpClient } from "effect/http";
+import { ChildProcessSpawner, type CommandLine } from "effect/process";
 
 import { prebuildAndroid } from "./lib/mobile-native-prebuild.ts";
-import { NativeClientError } from "./mobile-native-client.ts";
+import { installIntoSession, NativeClientError } from "./mobile-native-client.ts";
 
 const caches = [".gradle/history", "app/.cxx/object"];
 
@@ -62,3 +67,71 @@ it.layer(NodeServices.layer)("prebuildAndroid", (it) => {
     }),
   );
 });
+
+it.effect("opens GOAT Dev against Metro with the same pooled target used to install", () =>
+  Effect.gen(function* () {
+    const fs = yield* FileSystem.FileSystem;
+    const path = yield* Path.Path;
+    const home = yield* fs.makeTempDirectoryScoped({ prefix: "goat-native-client-session-" });
+    const fingerprint = "a".repeat(40);
+    const cache = path.join(
+      home,
+      ".cache/goat/native-clients/artifacts/ios/development",
+      fingerprint,
+    );
+    yield* fs.makeDirectory(cache, { recursive: true });
+    const artifact = path.join(cache, "GOATDev.app");
+    yield* fs.writeFileString(artifact, "synthetic artifact");
+    const commands: ReadonlyArray<CommandLine.Word>[] = [];
+    const spawner = ChildProcessSpawner.make((child) => {
+      if (child._tag !== "StandardCommand") return Effect.die("Expected a single command");
+      const isFingerprint = child.args[0] === "--eval";
+      if (!isFingerprint) commands.push(child.args.slice(1));
+      return Effect.succeed(
+        ChildProcessSpawner.makeHandle({
+          pid: ChildProcessSpawner.ProcessId(1),
+          exitCode: Effect.succeed(ChildProcessSpawner.ExitCode(0)),
+          isRunning: Effect.succeed(false),
+          kill: () => Effect.void,
+          unref: Effect.succeed(Effect.void),
+          stdin: Sink.drain,
+          stdout: isFingerprint
+            ? Stream.make(new TextEncoder().encode(`GOAT_NATIVE_FINGERPRINT=${fingerprint}`))
+            : Stream.empty,
+          stderr: Stream.empty,
+          all: Stream.empty,
+          getInputFd: () => Sink.drain,
+          getOutputFd: () => Stream.empty,
+        }),
+      );
+    });
+    const config = path.join(home, "gateway.json");
+    yield* installIntoSession(
+      home,
+      "ios",
+      "lease-9",
+      "x86_64",
+      "http://metro.test:8081",
+      config,
+    ).pipe(
+      Effect.provideService(ChildProcessSpawner.ChildProcessSpawner, spawner),
+      Effect.provideService(HostProcess.Environment, { GOAT_NATIVE_CLIENT_CACHE: "off" }),
+      Effect.provideService(
+        HttpClient.HttpClient,
+        HttpClient.make(() => Effect.die("Unexpected HTTP request")),
+      ),
+    );
+    assert.deepStrictEqual(commands, [
+      ["install", "si.goat.mobile.dev", artifact, "--session", "lease-9", "--config", config],
+      [
+        "open",
+        "si.goat.mobile.dev",
+        "goat-dev://expo-development-client/?url=http%3A%2F%2Fmetro.test%3A8081&disableOnboarding=1&disableFab=1&disableAutoLaunch=1",
+        "--session",
+        "lease-9",
+        "--config",
+        config,
+      ],
+    ]);
+  }).pipe(Effect.scoped, Effect.provide(NodeServices.layer)),
+);
