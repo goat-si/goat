@@ -28,7 +28,7 @@ import * as CursorAgentSdk from "./CursorAgentSdk.ts";
 
 const decodeCursorSettings = Schema.decodeEffect(CursorSettings);
 
-const shellOutputByCommand = (updates: ReadonlyArray<InteractionUpdate>) =>
+const runShellTurn = (updates: ReadonlyArray<InteractionUpdate>) =>
   Effect.gen(function* () {
     const fileSystem = yield* FileSystem.FileSystem;
     const workspace = yield* fileSystem.makeTempDirectoryScoped({ prefix: "cursor-shell-output-" });
@@ -126,30 +126,35 @@ const shellOutputByCommand = (updates: ReadonlyArray<InteractionUpdate>) =>
         attachments: [],
       },
     });
-    const events = Array.from(
+    return Array.from(
       yield* runtime.events.pipe(
         Stream.takeUntil((event) => event.type === "turn.terminal"),
         Stream.runCollect,
       ),
-    );
-
-    const shellItemIds = new Map(
-      events.flatMap((event) =>
-        event.type === "turn_item.updated" && event.turnItem.type === "command_execution"
-          ? [[event.turnItem.id, event.turnItem.input] as const]
-          : [],
-      ),
-    );
-    return events.flatMap((event) =>
-      event.type === "command_output.delta"
-        ? [{ command: shellItemIds.get(event.itemId), chunk: event.chunk }]
-        : [],
     );
   }).pipe(
     Effect.scoped,
     Effect.provide(
       Layer.mergeAll(NodeServices.layer, IdAllocator.layer, McpProviderSessions.layer),
     ),
+  );
+
+const shellOutputByCommand = (updates: ReadonlyArray<InteractionUpdate>) =>
+  runShellTurn(updates).pipe(
+    Effect.map((events) => {
+      const shellItemIds = new Map(
+        events.flatMap((event) =>
+          event.type === "turn_item.updated" && event.turnItem.type === "command_execution"
+            ? [[event.turnItem.id, event.turnItem.input] as const]
+            : [],
+        ),
+      );
+      return events.flatMap((event) =>
+        event.type === "command_output.delta"
+          ? [{ command: shellItemIds.get(event.itemId), chunk: event.chunk }]
+          : [],
+      );
+    }),
   );
 
 const startedShells: ReadonlyArray<InteractionUpdate> = ["slow-shell", "fast-shell"].map(
@@ -186,5 +191,40 @@ it.effect("older SDK output without a toolCallId still reaches the latest shell"
       { type: "shell-output-delta", event: { case: "stdout", value: { data: 42 } } },
     ]);
     assert.deepEqual(deltas, [{ command: "fast-shell", chunk: "warn\n" }]);
+  }),
+);
+
+it.effect("records nonzero shell exits as failed and preserves stdout and stderr", () =>
+  Effect.gen(function* () {
+    const events = yield* runShellTurn([
+      {
+        type: "tool-call-completed",
+        modelCallId: "native-model-call",
+        callId: "shell-exit-1",
+        toolCall: {
+          type: "shell",
+          args: { command: "vp test" },
+          result: {
+            status: "success",
+            value: {
+              exitCode: 1,
+              signal: "",
+              stdout: "test output",
+              stderr: "1 failed",
+              executionTime: 1,
+            },
+          },
+        },
+      },
+    ]);
+    const node = events.findLast(
+      (event) => event.type === "node.updated" && event.node.kind === "tool_call",
+    );
+    const item = events.findLast(
+      (event) => event.type === "turn_item.updated" && event.turnItem.type === "command_execution",
+    );
+    assert.equal(node?.type === "node.updated" ? node.node.status : undefined, "failed");
+    assert.equal(item?.type === "turn_item.updated" ? item.turnItem.status : undefined, "failed");
+    assert.nestedPropertyVal(item, "turnItem.output", "test output\n1 failed");
   }),
 );

@@ -1,3 +1,4 @@
+import { attributePendingBackgroundTasks } from "./projectionProviderThread.ts";
 import { applyOrchestrationV2ThreadVisit } from "@goat/contracts";
 import * as LatestAnswer from "./ProjectionLatestAnswer.ts";
 import * as RunNotification from "./ProjectionRunNotification.ts";
@@ -279,7 +280,14 @@ function applyToProjectionEvent(
                 activeProviderThreadId: event.payload.id,
               }
             : base.thread,
-        providerThreads: upsertById(base.providerThreads, event.payload),
+        providerThreads: upsertById(
+          base.providerThreads,
+          attributePendingBackgroundTasks(
+            event.payload,
+            base.providerThreads.find((thread) => thread.id === event.payload.id),
+            event.runId,
+          ),
+        ),
       };
     case "provider-turn.updated":
       return {

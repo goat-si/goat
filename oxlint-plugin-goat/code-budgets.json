@@ -804,7 +804,7 @@
   "packages/shared/src/terminalOutput.ts": { "nonNull": 15 },
   "packages/shared/src/themePalettes.ts": { "nonNull": 2 },
   "packages/shared/src/themePreview.ts": { "nonNull": 4 },
-  "packages/shared/src/usageLimits.test.ts": { "lines": 1332 },
+  "packages/shared/src/usageLimits.test.ts": { "lines": 1341 },
   "packages/shared/src/usageLimits.ts": { "nonNull": 2 },
   "packages/source-control-bitbucket/src/server/BitbucketApi.ts": { "lines": 1230 },
   "packages/source-control-core/src/server/mergeMessage.ts": { "nonNull": 2 },
