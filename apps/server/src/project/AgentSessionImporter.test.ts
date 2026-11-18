@@ -1,3 +1,8 @@
+import * as NodeServices from "@effect/platform-node/NodeServices";
+import * as FileSystem from "effect/FileSystem";
+import * as Path from "effect/Path";
+import * as TestClock from "effect/testing/TestClock";
+import { layerScannerTest } from "./AgentSessionScanner.testkit.ts";
 import { expect, it } from "@effect/vitest";
 import {
   AgentSessionImportSource,
@@ -177,6 +182,7 @@ const seedOwner = Effect.fn(function* (
 const makeImporter = Effect.fn(function* (
   candidates: ReadonlyArray<ReturnType<typeof candidate>>,
   beforeTransaction: Effect.Effect<void> = Effect.void,
+  realScan?: { workspaceRoot: string; scanner: AgentSessionScanner.AgentSessionScanner["Service"] },
 ) {
   const sql = yield* SqlClient.SqlClient;
   const events = yield* EventStore.EventStoreV2;
@@ -217,15 +223,17 @@ const makeImporter = Effect.fn(function* (
             ProviderSessionRuntime.ProviderSessionRuntimeRepository,
             yield* ProviderSessionRuntime.ProviderSessionRuntimeRepository,
           ),
-          Layer.mock(AgentSessionScanner.AgentSessionScanner)({
-            recentThreads: () => Stream.fromIterable(candidates),
-          }),
+          realScan === undefined
+            ? Layer.mock(AgentSessionScanner.AgentSessionScanner)({
+                recentThreads: () => Stream.fromIterable(candidates),
+              })
+            : Layer.succeed(AgentSessionScanner.AgentSessionScanner, realScan.scanner),
           Layer.mock(ProjectService.ProjectService)({
             getById: () =>
               Effect.succeedSome({
                 id: projectId,
                 title: "Project",
-                workspaceRoot: "/workspace/project",
+                workspaceRoot: realScan?.workspaceRoot ?? "/workspace/project",
                 defaultModelSelection: null,
                 scripts: [],
                 createdAt: timestamp,
@@ -501,5 +509,104 @@ it.effect("does not record a changed transcript as imported without its new mess
       recordsChangedTranscript: recorded?.some((source) => source.size === 200) ?? false,
       showsNewMessages: texts.includes("Continued"),
     }).not.toEqual({ recordsChangedTranscript: true, showsNewMessages: false });
+  }).pipe(Effect.scoped, Effect.provide(persistence)),
+);
+
+it.effect("repeated imports reach linked-worktree sessions behind the scan budget", () =>
+  Effect.gen(function* () {
+    const fs = yield* FileSystem.FileSystem;
+    const path = yield* Path.Path;
+    const root = yield* fs.makeTempDirectoryScoped({ prefix: "goat-import-worktree-budget-" });
+    const repo = path.join(root, "repo");
+    const worktree = path.join(root, "feature");
+    const worktreeGitDir = path.join(repo, ".git", "worktrees", "feature");
+    yield* fs.makeDirectory(worktreeGitDir, { recursive: true });
+    yield* fs.makeDirectory(worktree);
+    yield* fs.writeFileString(path.join(repo, ".git", "config"), "[core]\n");
+    yield* fs.writeFileString(path.join(worktreeGitDir, "commondir"), "../..\n");
+    yield* fs.writeFileString(path.join(worktreeGitDir, "HEAD"), "ref: refs/heads/feature\n");
+    yield* fs.writeFileString(path.join(worktree, ".git"), `gitdir: ${worktreeGitDir}\n`);
+
+    const claudeHome = path.join(root, "claude");
+    const codexHome = path.join(root, "codex");
+    const sessions = path.join(codexHome, "sessions", "2026", "09", "01");
+    yield* fs.makeDirectory(sessions, { recursive: true });
+    const nowMs = DateTime.toEpochMillis(now);
+    yield* TestClock.setTime(nowMs);
+    // One more session than the 100-transcript scan budget, all run in the linked worktree.
+    for (let index = 0; index < 101; index++) {
+      const file = path.join(sessions, `rollout-${String(index).padStart(3, "0")}.jsonl`);
+      const records = [
+        { type: "session_meta", payload: { id: `session-${index}`, cwd: worktree } },
+        { type: "event_msg", payload: { type: "user_message", message: `Request ${index}` } },
+        {
+          type: "response_item",
+          payload: {
+            type: "message",
+            role: "assistant",
+            content: [{ type: "output_text", text: "Done" }],
+          },
+        },
+      ];
+      yield* fs.writeFileString(
+        file,
+        records.map((record) => JSON.stringify(record) + "\n").join(""),
+      );
+      const modifiedAtSeconds = nowMs / 1000 - (index + 1);
+      yield* fs.utimes(file, modifiedAtSeconds, modifiedAtSeconds);
+    }
+
+    const scannerContext = yield* Layer.build(
+      layerScannerTest({ claudeHomePath: claudeHome, codexHomePath: codexHome }),
+    );
+    const importer = yield* makeImporter([], Effect.void, {
+      workspaceRoot: repo,
+      scanner: Context.get(scannerContext, AgentSessionScanner.AgentSessionScanner),
+    });
+
+    expect(yield* importer.run).toEqual({ importedCount: 100, skippedCount: 1 });
+    expect(yield* importer.run).toEqual({ importedCount: 101, skippedCount: 0 });
+    const oldest = yield* ProjectionStore.ProjectionStoreV2.pipe(
+      Effect.flatMap((projections) =>
+        projections.getThread(ThreadId.make("import:codex:session-100")),
+      ),
+    );
+    expect(oldest.worktreePath).toBe(worktree);
+  }).pipe(Effect.scoped, Effect.provide(Layer.merge(persistence, NodeServices.layer))),
+);
+it.effect("tolerates a missing transcript owner but propagates failed ownership reads", () =>
+  Effect.gen(function* () {
+    const sql = yield* SqlClient.SqlClient;
+    const runtimes = yield* ProviderSessionRuntime.ProviderSessionRuntimeRepository;
+    const source = candidate(CODEX_MODEL_SELECTION, "ownership-read");
+    const threadId = importId(source);
+    yield* runtimes.upsert({
+      threadId: ThreadId.make("missing-owner"),
+      providerName: "codex",
+      providerInstanceId: source.source.providerInstanceId,
+      adapterKey: "codex",
+      runtimeMode: "full-access",
+      status: "stopped",
+      lastSeenAt: timestamp,
+      resumeCursor: null,
+      runtimePayload: { importedTranscripts: [source.source] },
+    });
+    yield* runtimes.recordImportedTranscript({
+      threadId: ThreadId.make("missing-owner"),
+      source: source.source,
+    });
+    const importer = yield* makeImporter([source]);
+    expect(yield* importer.run).toEqual({ importedCount: 1, skippedCount: 0 });
+
+    yield* sql`UPDATE orchestration_v2_projection_threads SET payload_json = '{}' WHERE thread_id = ${threadId}`;
+    expect(yield* Effect.flip(importer.run)).toMatchObject({
+      _tag: "AgentSessionScanError",
+      operation: "read-projects",
+      cause: {
+        _tag: "OrchestratorProjectionError",
+        threadId,
+        cause: { _tag: "ProjectionStoreReadError" },
+      },
+    });
   }).pipe(Effect.scoped, Effect.provide(persistence)),
 );

@@ -33,10 +33,13 @@ import * as Stream from "effect/Stream";
 import * as EventSink from "../orchestration-v2/EventSink.ts";
 import * as IdAllocator from "@goat/provider-core/server/IdAllocator";
 import * as Orchestrator from "../orchestration-v2/Orchestrator.ts";
+import * as ProjectionStore from "../orchestration-v2/ProjectionStore.ts";
 import * as ProviderSessionRuntime from "../persistence/ProviderSessionRuntime.ts";
 import * as AgentSessionScanner from "./AgentSessionScanner.ts";
 import { decodeImportedTranscriptPayload } from "./AgentSessionImportedTranscripts.ts";
 import * as ProjectService from "./ProjectService.ts";
+
+const isThreadNotFound = Schema.is(ProjectionStore.ProjectionStoreThreadNotFoundError);
 
 const IMPORT_EVENT_PREFIX = "agent-session-import:v2";
 const CLAUDE_SESSION_ID_PATTERN =
@@ -211,18 +214,20 @@ const make = Effect.gen(function* () {
           (cause) => new AgentSessionScanError({ operation: "read-projects", cause }),
         ),
       );
-    const completedSources = runtimeRows.flatMap((runtime) => {
-      const payload = decodeImportedTranscriptPayload(runtime.runtimePayload);
-      if (
-        Option.isNone(payload) ||
-        payload.value.cwd === undefined ||
-        normalizeProjectPathForComparison(payload.value.cwd) !==
-          normalizeProjectPathForComparison(project.workspaceRoot)
-      ) {
-        return [];
-      }
-      return payload.value.importedTranscripts ?? [];
-    });
+    const completedSources = (yield* Effect.forEach(runtimeRows, (runtime) => {
+      const imported = decodeImportedTranscriptPayload(runtime.runtimePayload).pipe(
+        Option.flatMapNullishOr((payload) => payload.importedTranscripts),
+      );
+      if (Option.isNone(imported) || imported.value.length === 0) return Effect.succeed([]);
+      return orchestrator.getThreadRecords(runtime.threadId, []).pipe(
+        Effect.map(({ thread }) => (thread.projectId === input.projectId ? imported.value : [])),
+        Effect.catch((cause) =>
+          isThreadNotFound(cause.cause)
+            ? Effect.succeed([])
+            : Effect.fail(new AgentSessionScanError({ operation: "read-projects", cause })),
+        ),
+      );
+    })).flat();
     const outcomes = scanner.recentThreads(project.workspaceRoot, completedSources, input);
     const importedThreadIds = new Set<ThreadId>();
     let importedCount = 0;
