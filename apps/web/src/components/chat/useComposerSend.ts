@@ -725,7 +725,6 @@ export function useComposerSend(input: ComposerSendInput) {
       }).finally(() => {
         feedbackUploadsInFlightRef.current.delete(routeThreadKey);
       });
-
       return;
     }
     if (
@@ -898,6 +897,7 @@ export function useComposerSend(input: ComposerSendInput) {
       sendEnvMode,
       worktreePath: activeThread.worktreePath,
       activeThreadBranch,
+      isScratchProject: input.activeProjectIsScratch === true,
       resumeCompactionTokens,
       keepFullHistory,
       phase,

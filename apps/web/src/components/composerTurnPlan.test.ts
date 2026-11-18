@@ -38,6 +38,15 @@ describe("planComposerTurn", () => {
     });
   });
 
+  it("allows No project to send in worktree mode without a Git base", () => {
+    expect(
+      planComposerTurn({ ...base, activeThreadBranch: null, isScratchProject: true }),
+    ).toMatchObject({
+      missingWorktreeBaseBranch: false,
+      baseBranchForWorktree: null,
+    });
+  });
+
   it("queues behind a compaction of a stale session, except for /compact itself", () => {
     const stale = { ...base, resumeCompactionTokens: 120_000 };
     for (const messageText of ["hello", "/compactfoo"]) {

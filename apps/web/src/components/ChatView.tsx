@@ -2033,7 +2033,6 @@ export default function ChatView(props: ChatViewProps) {
   };
   const sendAppMessageStable = useStableCallback(sendAppMessage);
   const queuedRunsControlRef = useRef<QueuedRunsControlHandle>(null);
-
   const {
     activatePanelTerminalStable,
     addTerminalContextToDraftStable,
@@ -3035,6 +3034,7 @@ export default function ChatView(props: ChatViewProps) {
     activeThreadKey,
     activeThreadBranch,
     activeProject,
+    activeProjectIsScratch,
     activeProjectDefaultModelSelection,
     activeProposedPlan,
     activeMessageCount,
