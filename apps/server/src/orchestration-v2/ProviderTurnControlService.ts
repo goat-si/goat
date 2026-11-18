@@ -1,6 +1,7 @@
 import * as ServerConfig from "../config.ts";
 import {
   MessageId,
+  type ModelSelection,
   type NodeId,
   ProviderSessionId,
   ProviderThreadId,
@@ -62,6 +63,7 @@ export interface ProviderTurnControlServiceV2Shape {
     readonly providerThreadId: ProviderThreadId;
     readonly providerTurnId: ProviderTurnId;
     readonly messageId: MessageId;
+    readonly modelSelection?: ModelSelection | undefined;
   }) => Effect.Effect<void, ProviderTurnControlError>;
   readonly interruptAndAwaitTerminal: (input: {
     readonly threadId: ThreadId;
@@ -469,6 +471,9 @@ export const layer: Layer.Layer<
               runId: run.id,
               providerThread: loaded.providerThread,
               providerTurnId: loaded.providerTurn.id,
+              ...(input.modelSelection === undefined
+                ? {}
+                : { modelSelection: input.modelSelection }),
               message: {
                 messageId: message.id,
                 text: yield* providerTextWithSkills(settings, {
