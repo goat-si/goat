@@ -82,3 +82,49 @@ it("joins missing glyphs only across runs styled alike, with clusters into the j
   expect(joined?.glyphs.map((glyph) => glyph.cluster)).toEqual([0, 3]);
   expect(outlined).toMatchObject({ text: "ษ", textOutline: true });
 });
+
+it("paints readable Japanese when the missing CJK asset returns the app shell", async () => {
+  const text = "日本語";
+  const zip = await JSZip.loadAsync(await document_());
+  zip.file(
+    "word/document.xml",
+    `<w:document ${ns}><w:body><w:p><w:r><w:rPr><w:rFonts w:ascii="MS Gothic" w:hAnsi="MS Gothic" w:eastAsia="MS Gothic"/><w:lang w:eastAsia="ja-JP"/><w:sz w:val="48"/><w:color w:val="B03A22"/></w:rPr><w:t>${text}</w:t></w:r></w:p><w:sectPr><w:pgSz w:w="12240" w:h="15840"/><w:pgMar w:top="1440" w:right="1440" w:bottom="1440" w:left="1440"/></w:sectPr></w:body></w:document>`,
+  );
+  const fetchAsset = globalThis.fetch;
+  const missing: string[] = [];
+  using _fetch = vi.spyOn(globalThis, "fetch").mockImplementation((input, init) => {
+    const url = String(input);
+    if (!/Noto(?:Sans|Serif).*\.otf$/u.test(url)) return fetchAsset(input, init);
+    missing.push(url);
+    // The packaged static route serves index.html for missing assets.
+    return Promise.resolve(
+      new Response('<!doctype html><html><title>GOAT</title><div id="root"></div></html>', {
+        status: 200,
+        headers: { "Content-Type": "text/html; charset=utf-8" },
+      }),
+    );
+  });
+  const opened = await openWordDocument(
+    await zip.generateAsync({ type: "uint8array" }),
+    document.fonts,
+  );
+  using fillText = vi.spyOn(OffscreenCanvasRenderingContext2D.prototype, "fillText");
+  const page = await opened.paint(0, 1, 1, new AbortController().signal);
+
+  expect(missing.some((url) => url.includes("NotoSansJP-Regular"))).toBe(true);
+  if (!page) throw new Error("Word preview did not produce a page");
+  try {
+    const { bitmap } = page;
+    const context = new OffscreenCanvas(bitmap.width, bitmap.height).getContext("2d")!;
+    context.drawImage(bitmap, 0, 0);
+    const pixels = context.getImageData(0, 0, bitmap.width, bitmap.height).data;
+    const hasTextInk = pixels.some(
+      (red, index) =>
+        index % 4 === 0 && red > (pixels[index + 1] ?? 0) + 60 && (pixels[index + 3] ?? 0) > 200,
+    );
+    expect(hasTextInk).toBe(true);
+    expect(fillText.mock.calls.map(([painted]) => painted).join("")).toContain(text);
+  } finally {
+    page.bitmap.close();
+  }
+});
