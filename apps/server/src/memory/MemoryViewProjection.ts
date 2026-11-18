@@ -8,6 +8,11 @@ const legacyPayload = (payload: M.MemoryPayload) =>
     ? { ...payload, derivedFromMemoryRevisions: [] }
     : payload;
 
+const clientRevision = (revision: M.MemoryRevision) => {
+  const { unverified, originThreadId, ...provenance } = revision.provenance;
+  return unverified || originThreadId ? { ...revision, provenance } : revision;
+};
+
 export const makeMemoryViewProjection = (sql: SqlClient.SqlClient) => {
   const marksFor = Effect.fn("MemoryService.readProjectedMarks")(function* (
     space: M.MemorySpaceId,
@@ -29,31 +34,32 @@ export const makeMemoryViewProjection = (sql: SqlClient.SqlClient) => {
     item: M.MemoryItem,
     includeMarks?: true,
   ) {
-    const active = item.status === "active";
-    if (includeMarks) {
-      const marks = yield* marksFor(
-        item.memorySpaceId,
-        item.memoryId,
-        active ? item.revision.revisionId : undefined,
-      );
-      return { ...item, marks };
-    }
-    if (active) {
-      const payload = legacyPayload(item.payload);
-      if (payload !== item.payload) return { ...item, payload };
-    }
-    return item;
+    const projected =
+      item.status === "active"
+        ? {
+            ...item,
+            revision: clientRevision(item.revision),
+            payload: includeMarks ? item.payload : legacyPayload(item.payload),
+          }
+        : item;
+    if (!includeMarks) return projected;
+    const marks = yield* marksFor(
+      item.memorySpaceId,
+      item.memoryId,
+      item.status === "active" ? item.revision.revisionId : undefined,
+    );
+    return { ...projected, marks };
   });
   const revision = Effect.fn("MemoryService.projectHistoryRevision")(function* (
     pair: { revision: M.MemoryRevision; payload: M.MemoryPayload | null },
     includeMarks?: true,
   ) {
     const { memorySpaceId, memoryId, revisionId } = pair.revision;
-    return includeMarks
-      ? { ...pair, marks: yield* marksFor(memorySpaceId, memoryId, revisionId) }
-      : pair.payload === null
-        ? pair
-        : { ...pair, payload: legacyPayload(pair.payload) };
+    return {
+      revision: clientRevision(pair.revision),
+      payload: includeMarks || pair.payload === null ? pair.payload : legacyPayload(pair.payload),
+      ...(includeMarks ? { marks: yield* marksFor(memorySpaceId, memoryId, revisionId) } : {}),
+    };
   });
   return { item, revision };
 };
