@@ -285,3 +285,55 @@ Quote it in next3-K4.md.
 - f666b33b84 0c4b1d8f27 (D3): workspace/checkpointRestoreReservation.ts and goat/turnStartReservation.ts; CheckpointRollbackService reserves only for file restores. Fail first: ProviderTurnStartService.restoreReservation.test.ts (both cases reached the provider path) and CheckpointRollbackService.reservation.test.ts with restoreFiles true ("expected false to be true"). Module tests: 8 pass. Entry 1558 -> 1557. Cross-server issue filed: goat#3703.
 
 Waiting: 18aeb0fb91 (claim 3 cannot be cut as claimed: failureDetail and preparationFailureClass need ThreadLaunchError, which is declared in ThreadLaunchService.ts, so moving them alone would create an import cycle); 76d0fff5fd then 0813f4978e; goat#3690.
+
+## 8h. Whole test files before a push, verbatim (2026-11-17 22:45:36 UTC)
+
+FOR EVERY LANE (relay it): before a push, every changed test file runs whole, with no -t filter; and for a row that changes when or whether something wakes, notifies or holds a thread, the test files of that subsystem run whole as well. A -t run is for iteration and is named as such in the record.
+
+Quote it in next3-K4.md.
+
+## 8i. Package names in typecheck and test claims, verbatim (run 1836)
+
+EVERY LANE: a typecheck or test claim names the package as vp resolves it (apps/server is "goat"), and a filter that matches nothing is not a pass.
+
+Quote it in your record. (Also for your information: K5 and K10 are READY and under fresh review; the review cap of two is full, so the next READY gets its goat-ci at once and its review when one of these reports, in READY order.)
+
+Lane note: the typecheck runs in this record were vp run --filter ./apps/server typecheck, which resolved to package "goat" (its output runs tsc --noEmit in ~/apps/server; a filter that matched nothing would print no package). The lane gate's own typecheck covered 42 packages.
+
+## 8j. IV (vi) extended, verbatim (2026-11-17 23:58 UTC)
+
+(Also from the 23:58 message, for every lane: IV (vi) covers a top-level it.layer block moved whole, on the same terms as a describe: byte-identical body, the case counts add up, TEST_TITLES updated in the same commit.)
+
+### Code log, part 3 (after f666b33b84)
+
+- 543bc2309e move-out claim 3a (coordinator correction: :167-191): ThreadLaunchError, failureDetail and preparationFailureClass -> goat/ThreadLaunchError.ts. Entry 1461 -> 1426. A first version imported only failureDetail and ThreadLaunchError, so preparationFailureClass was unbound in ThreadLaunchService.ts (a re-export does not bind locally). The -t iteration run "shows the fetch diagnosis when preparing a worktree from origin fails" hung to its 120 s timeout; fixed before the commit. ThreadLaunchService.test.ts and src/mcp/ThreadLaunchMcpService run whole: 91 pass.
+- e4446d0581 typecheck findings in earlier K4 rows, found by vp run --filter ./apps/server typecheck (package "goat"); none had been caught by the per-row test runs. CheckpointStore.test.ts gets one type import (rule 3: an import line). turnStartReservation.ts handles a null thread shell; pullRequestWorktreeRefresh.ts has a typed error channel; Effect.asSome; enterHeld folds the unmarked case into the lookup. 11 files run whole: 103 pass.
+- c6399c1170 move-out claim 3b: GitVcsDriverCore.ts :371-449 at c995c5427a (:373-451 after a1ea0e117b) -> vcs/gitFailureClassification.ts. Entry 5400 -> 5321. GitVcsDriverCore.test.ts and VcsProcess.test.ts whole: 257 pass.
+- da7c276f41 18aeb0fb91: goat/worktreeSubmoduleProgress.ts, --progress with truncation kept, linear PERCENT, web max-w-1/2. Fail first: ThreadLaunchService.submodules.test.ts (upstream's case "expected 'running' to equal 'done'", plus a "none" case), GitVcsDriverCore.submoduleProgress.test.ts ("expected false to be true": no Receiving objects line), and a new ProjectCloneTracker.test.ts case (U+2028 read as a later counter). The new tests are siblings, so GitVcsDriverCore.test.ts and ThreadLaunchService.test.ts are unchanged. Entries: ThreadLaunchService.ts 1428, GitVcsDriverCore.ts 5329. 7 files run whole: 319 pass. P1 row: web capture of a new worktree with a submodule; the mobile setup sheet, if it shows the step.
+- 7055191b69 76d0fff5fd: workspace/workspaceSymlinkScan.ts (WorkspaceSearchIndex.ts stays at 770 lines); IgnorePatterns.ts and its test are upstream's, with in-bounds slots read by ?? "" (GOAT refuses new non-null assertions). Async directory listing and getScanProgressAsync as GOAT already has; synchronous watch until the next commit. Tests: WorkspaceSearchIndex.symlinks.test.ts (upstream's 5 cases) and WorkspaceEntries.symlinks.test.ts (upstream's 4); all 9 failed first against da7c276f41's WorkspaceSearchIndex.ts. Rule 3: one provide line, Effect.provide(NodeServices.layer), added to the GOAT case "matches ignored paths using host separators", because make now needs FileSystem and Path; no expectation changed. src/workspace run whole: 13 files, 153 pass.
+- 0fcf93d99f 0813f4978e whole (ruling A). Patch hash: HEAD:patches/@ff-labs__fff-node@0.11.0.patch = 8e4cb2179d4c1a80a34a0f95081c806d47db3ffa = 0813f4978e's blob (was 198ac430e0d18356a1d522f0976c5780181e502a). pnpm-lock.yaml: exactly the three patch_hash lines changed, to 93f62a76399b435a76588b2bef237db0a1e85880c1ac0d0759c416e9cc579252. vp i ran on pen-macmini ("Done in 9.7s", node_modules/.pnpm/@ff-labs+fff-node@0.11.0_patch_hash=93f62a76…). GOAT deviation: Effect.tryPromise, so a watchAsync that throws synchronously counts as a failed subscription (GOAT's existing search fakes have no watcher). The symlink fake is byte for byte upstream's at 0813f4978e. Negative cases: "a watcher subscription that answers not-ok / rejects falls back to the short reuse and is retried" (both failed first against 7055191b69's scan: "expected [] to deeply equal [ 'answers not-ok', 'ok' ]") and "an index closed while its watcher subscription is pending keeps no watcher" (the guarantee is the patch's handle check after the native call, which the review reads). Against the old code that last case hung on a subscription that was never asked for; that run's output was not captured (NOT RUN as evidence). src/workspace run whole: 13 files, 156 pass.
+- Latency on GOAT's own checkout, after 0fcf93d99f: this lane's worktree (sparse, without .repos/; 37,447 tracked files; the index holds 16,555 entries; one symlink). Throwaway probe, not committed; 2 runs each. Before (WorkspaceSearchIndex.ts at da7c276f41): ready 43 ms, first search 3 ms, next 10 searches 1-2 ms each, list 129-131 ms. After: ready 44 ms, first search 31 ms (the first full symlink scan), next 10 searches 2 ms each, list 128-129 ms, 16,556 entries listed (the link). Cost: about 28 ms once per index.
+- b12ed5e945 move-out claim 5: Manager.ts :498-514 -> terminal/processEventQueue.ts. Entry 3118 at the cut -> 3099. Manager.test.ts, Manager.leaseOrder.test.ts and Manager.history.test.ts run whole: 104 pass.
+- 8cea68a230 goat#3690 (D5): noticeFolderReplaced on TerminalManager; goat/noticeFolderReplaced.ts used by restoreThreadWorkspace (before setup) and by CheckpointRollbackService (after a recreate or a set-aside). The notice uses the form of TERMINAL_HISTORY_COMPACTION_NOTICE (terminalHistoryFile.ts:58: "\r\n[GOAT] …\r\n") and goes through enqueueProcessEvent and drainProcessEvents, the normal output path (history and agents' reads). Fail first: Manager.folderReplaced.test.ts (method absent) and restoreThreadWorkspace.terminalNotice.test.ts ("expected +0 to equal 1"). Whole runs: src/terminal, src/orchestration-v2/goat, CheckpointRollbackService and the sparse snapshot tests, 45 files, 373 pass. Entry 3109.
+- 46ff34b21f merge of the integration head 259883c788 (one merge). git reported "CONFLICT (content): Merge conflict in oxlint-plugin-goat/code-budgets.json", Manager.ts entry 3109 (ours) vs 3116 (theirs); settled by countLines of the merged file, 3109.
+- 3dc6f36590 goat-rename keep rule for HEAD_MARK_TRAILER = "T3-Head-Moved-At" (D1), scoped to checkpointTurnStart.ts; found by check:changed. goat-rename --check: 0 lines; scripts/lib/goat-rename tests: 12 files, 355 pass.
+- 6c33bd5556 isThreadLaunchError is module-private again (knip, from check:changed).
+
+### Prior art for goat#3690 and goat#3681
+
+In section 2 of this record (Java ReentrantLock for #3681; shell cwd by inode, VS Code's terminal guidance and git-worktree for #3690), written before the fixes.
+
+### Rule 3 items in this lane
+
+D4's four (authorised); one provide line in WorkspaceSearchIndex.test.ts (an existing GOAT case); one type import in CheckpointStore.test.ts. No other existing test file changed: every other test is a new case or a new sibling file. Upstream's own edits to existing tests (GitVcsDriverCore.test.ts, ThreadLaunchService.test.ts, GitManager.test.ts, WorkspaceSearchIndex.test.ts fakes) were not mirrored; their cases went to siblings instead.
+
+- 197f92c954 the turn-start reservation moves inside the start (above). The first check:changed run (log kept outside the repo) failed only on that: "Test Files 1 failed | 332 passed (333)", "Tests 15 failed | 5990 passed (6005)", every failure "UnimplementedError: goat/project/ProjectService: Unimplemented method getById" in ProviderSessionManager.test.ts. An intermediate attempt that read getTurnStartContext a second time broke "reads the turn-start context once and no full thread records" and was dropped before any commit.
+
+### READY
+
+- Head on origin: 197f92c9546d62f8479df1d7ed005ad7c778d4df (chase/t3-261114-next3-k4-checkpoints). Started from c995c5427accaaa92dadac50ec756c35f4b92034 (fast-forward); one merge of the integration head 259883c788bb32d5601023932e07f879bde9af60 at 46ff34b21f (git: "CONFLICT (content): Merge conflict in oxlint-plugin-goat/code-budgets.json", settled by countLines).
+- Lane gate: vp run check:changed origin/chase/t3-261114-next3 on 197f92c954: goat-rename, unused patches, format, lint, graphql, agent context budget, agent surface audit, knip 1/2 and 2/2, typecheck (42 packages) all pass; tests "Test Files 333 passed (333)", "Tests 6005 passed (6005)", EXIT=0.
+- vp i: required for every lane after merging an integration head that contains 0fcf93d99f (fff patch hash 93f62a76…).
+- Limits for the PR body: D1, an older server misreads one turn's authored paths after a branch switch; D3, restore reservations are process-local (goat#3703); D5, a restore by another GOAT server does not notify this server's terminals.
+- P1 rows: 18aeb0fb91, a web capture of a new worktree with a submodule, and the mobile setup sheet if it shows the step; goat#3690, the notice in a web and a mobile terminal after a restore; D4, restoring a worktree whose project has a setup script, on a real client.
+- NOT RUN: Windows paths for 0c4b1d8f27, 76d0fff5fd and the goat#3690 folder match (no Windows host); Git older than 2.37 for the sparse checks (no older binary on pen-macmini); the client pass (P1); goat-ci (dispatched by the coordinator); the hang of "an index closed while its watcher subscription is pending" against the old code was observed but its output was not captured.
