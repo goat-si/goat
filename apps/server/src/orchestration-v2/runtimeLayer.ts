@@ -225,6 +225,7 @@ const layerProviderTurnControlServiceProvided = ProviderTurnControlService.layer
   Layer.provide(
     Layer.mergeAll(
       ProjectionStore.layer,
+      McpAppModelContext.layer,
       layerProviderSessionManagerProvided,
       layerEventSinkProvided,
     ),

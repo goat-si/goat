@@ -4,10 +4,8 @@ import {
   type CodexDynamicToolItem,
   type CodexDynamicToolProjection,
 } from "./CodexDynamicToolProjection.ts";
-export type {
-  CodexDynamicToolItem,
-  CodexDynamicToolProjection,
-} from "./CodexDynamicToolProjection.ts";
+export type { CodexDynamicToolItem } from "./CodexDynamicToolProjection.ts";
+export type { CodexDynamicToolProjection } from "./CodexDynamicToolProjection.ts";
 import { toProtocolError } from "./CodexProtocolError.ts";
 import { codexTimestamp, codexSkillMentionText } from "./CodexTextHelpers.ts";
 export { codexTimestamp } from "./CodexTextHelpers.ts";
@@ -16,6 +14,7 @@ import {
   decodeCodexBackgroundTerminalsListResponse,
   type CodexBackgroundTerminalsListPage,
 } from "./CodexBackgroundTerminalSchemas.ts";
+import { sendCodexSteerContext } from "./CodexSteerAppContext.ts";
 import { providerSession } from "./CodexSessionProjection.ts";
 import {
   codexItemStatus,
@@ -7346,13 +7345,18 @@ export const makeCodexAdapterV2 = Effect.fn("makeCodexAdapterV2")(function* (
               }
               yield* turnStartGuard.awaitSteerable(activeTurn);
               yield* applyLiveTier(threadId, turnInput.modelSelection);
-
               const codexInput = yield* toCodexInput(turnInput);
-              yield* client.request("turn/steer", {
-                expectedTurnId: activeTurn.nativeTurnId,
-                input: codexInput,
+              yield* sendCodexSteerContext(
+                additionalContextByThread,
                 threadId,
-              });
+                turnInput.appContext ?? [],
+                (notes) =>
+                  client.request("turn/steer", {
+                    expectedTurnId: activeTurn.nativeTurnId,
+                    input: [...notes, ...codexInput],
+                    threadId,
+                  }),
+              );
             },
             (effect, turnInput) =>
               effect.pipe(

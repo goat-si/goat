@@ -1,3 +1,4 @@
+import * as McpAppModelContext from "../mcpApps/McpAppModelContext.ts";
 import * as ServerConfig from "../config.ts";
 import {
   isChannelWorkerThreadId,
@@ -98,12 +99,14 @@ export const layer: Layer.Layer<
   | ProjectionStore.ProjectionStoreV2
   | ProviderSessionManager.ProviderSessionManagerV2
   | EventSink.EventSinkV2
+  | McpAppModelContext.McpAppModelContext
 > = Layer.effect(
   ProviderTurnControlServiceV2,
   Effect.gen(function* () {
     const projections = yield* ProjectionStore.ProjectionStoreV2;
     const sessions = yield* ProviderSessionManager.ProviderSessionManagerV2;
     const eventSink = yield* EventSink.EventSinkV2;
+    const mcpAppModelContext = yield* McpAppModelContext.McpAppModelContext;
     const computerUse = yield* Effect.serviceOption(ComputerUseLeases.ComputerUseLeases);
     // Optional so test assemblies without settings still build; then no built-in skill is sent.
     const settings = yield* Effect.serviceOption(ServerSettings.ServerSettingsService);
@@ -524,12 +527,17 @@ export const layer: Layer.Layer<
               });
             }
           }
+          const appContext = yield* McpAppModelContext.forProvider(
+            mcpAppModelContext,
+            input.threadId,
+          );
           yield* loaded.session.value
             .steerTurn({
               threadId: input.threadId,
               runId: run.id,
               providerThread: loaded.providerThread,
               providerTurnId: loaded.providerTurn.id,
+              ...(appContext.length === 0 ? {} : { appContext }),
               ...(input.modelSelection === undefined
                 ? {}
                 : { modelSelection: input.modelSelection }),

@@ -1,3 +1,4 @@
+import * as McpAppModelContext from "../mcpApps/McpAppModelContext.ts";
 import { assert, it } from "@effect/vitest";
 import {
   DEFAULT_SERVER_SETTINGS,
@@ -321,6 +322,7 @@ it.effect(
         }),
       );
       const layerControl = ProviderTurnControlService.layer.pipe(
+        Layer.provide(McpAppModelContext.layerEmpty),
         Layer.provide(
           Layer.mergeAll(
             layerProjection,
@@ -439,15 +441,28 @@ it.effect(
         updatedAt: now,
       };
       const steered: Array<string> = [];
+      const contexts: Array<ProviderAdapter.ProviderAdapterV2SteerInput["appContext"]> = [];
       const runtime = {
         instanceId: providerInstanceId,
         driver,
         providerSessionId,
         steerTurn: (input: ProviderAdapter.ProviderAdapterV2SteerInput) =>
-          Effect.sync(() => void steered.push(input.message.text)),
+          Effect.sync(() => {
+            steered.push(input.message.text);
+            contexts.push(input.appContext);
+          }),
       } as unknown as ProviderAdapter.ProviderAdapterV2SessionRuntime;
       const layerControl = (projectSwitch: boolean | undefined) =>
         ProviderTurnControlService.layer.pipe(
+          Layer.provide(
+            Layer.succeed(McpAppModelContext.McpAppModelContext, {
+              set: () => Effect.void,
+              forThread: () =>
+                Effect.succeed([
+                  { itemId: "item-1", server: "srv", tool: "tool", text: "app note" },
+                ]),
+            }),
+          ),
           Layer.provide(
             Layer.mergeAll(
               Layer.mock(ProjectionStore.ProjectionStoreV2)({
@@ -504,6 +519,10 @@ it.effect(
         [true, false, true],
       );
       assert.isTrue(steered.every((text) => text.endsWith(message.text)));
+      assert.deepEqual(
+        contexts,
+        Array.from({ length: 3 }, () => [{ key: "mcp_app_item-1", text: "app note" }]),
+      );
     }),
 );
 
@@ -581,6 +600,7 @@ const restartWaitFixture = Effect.fn("test.restartWaitFixture")(function* (
     forkThread: () => Effect.die("unused"),
   };
   const layer = ProviderTurnControlService.layer.pipe(
+    Layer.provide(McpAppModelContext.layerEmpty),
     Layer.provide(
       Layer.mergeAll(
         Layer.mock(ProviderSessionManager.ProviderSessionManagerV2)({
