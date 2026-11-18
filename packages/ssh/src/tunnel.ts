@@ -97,6 +97,7 @@ import {
   type SshRuntimeProgressCallback,
 } from "./remoteRuntime.ts";
 import { buildRemoteContendedOutput, decodeRemoteLaunchOutput } from "./remoteLaunchResult.ts";
+import { remoteLoginLaunchArgs } from "./remoteLoginShell.ts";
 import { REMOTE_PROTOCOL_TOKEN_SCRIPT, REMOTE_RUNNER_HINT_SCRIPT } from "./runtimeFactsScripts.ts";
 import { buildRemoteStopScript } from "./remoteStopScript.ts";
 export { buildRemoteStopScript };
@@ -1396,7 +1397,10 @@ export const launchOrReuseRemoteServer = Effect.fn("ssh/tunnel.launchOrReuseRemo
           runner?.confirmReplacement !== true;
         const launch = (selected: PreparedRemoteRuntime, expectedProbe?: string) => {
           const command = runSshCommand(target, {
-            remoteCommandArgs: ["sh", "-l", "-s", "--", stateKey],
+            remoteCommandArgs:
+              selected.hostPlatform === "win32"
+                ? ["sh", "-l", "-s", "--", stateKey]
+                : remoteLoginLaunchArgs(stateKey),
             stdin:
               isNodeScriptRunner(selected.runner) || selected.hostPlatform === "win32"
                 ? buildRemoteLaunchScript(selected.runner, selected)
