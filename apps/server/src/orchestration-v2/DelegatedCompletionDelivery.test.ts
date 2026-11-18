@@ -4,6 +4,7 @@ import {
   seedRestartCancelledChild,
   seedUnheldFollowup,
   finishFollowupWithAwaitedTask,
+  followupRosterSettlement,
   recoverChildWithIndependentParentWake,
 } from "./DelegatedCompletionDelivery.testkit.ts";
 import { derive } from "@goat/provider-core/server/IdAllocator";
@@ -1247,7 +1248,19 @@ it.layer(Layer.merge(layerTest, ProviderContinuationRequests.layer))(
         assert.isTrue(yield* pending);
       }),
     );
-
+    it.effect(
+      "settles a follow-up when its task exits a roster that still holds unrelated work",
+      () =>
+        Effect.gen(function* () {
+          const { otherOwner, owned, unattributed, result, tasks, replayTasks } =
+            yield* followupRosterSettlement();
+          assert.equal(owned, "run:held-followup");
+          assert.equal(otherOwner, "run:unrelated-followup");
+          assert.isUndefined(unattributed);
+          assert.deepEqual(replayTasks, tasks);
+          assert.isString(result);
+        }),
+    );
     it.effect("idles the parent task when runtime recovery holds its queued follow-up", () =>
       Effect.gen(function* () {
         const { sink, orchestrator, threadId, taskId, childThreadId } = yield* seedUnheldFollowup();

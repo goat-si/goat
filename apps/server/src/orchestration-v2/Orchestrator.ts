@@ -142,7 +142,6 @@ import { modelSelectionsEqual } from "@goat/shared/model";
 import { recordThreadOpen } from "@goat/shared/paletteSearch";
 import { modelSwitchSince } from "./modelSwitch.ts";
 import {
-  backgroundWorkHoldsCompletion,
   derivePendingBackgroundWork,
   pendingBackgroundTurnItems,
 } from "@goat/shared/orchestrationV2PendingBackgroundWork";
@@ -13022,28 +13021,12 @@ const makeOrchestrator = Effect.fn("orchestrationV2.Orchestrator.layer")(functio
 
   // Projections already contain historical terminals; replaying them delays startup queue promotion with database size.
   const terminalEventsAfterSequence = yield* eventSink.latestSequence().pipe(Effect.orDie);
-  // A child whose run ends while its background tasks or its own subagents still run has no
-  // result yet. When that work settles there is no run update to finalize it, so these events
-  // do it. A background roster counts once it stops holding after it was seen holding.
-  const providerThreadsWithBackgroundWork = new Set<string>();
-  const settlesChildWork = (stored: OrchestrationV2StoredEvent) => {
-    const { event } = stored;
-    if (event.type === "subagent.updated")
-      return !isOrchestrationV2WorkActive(event.payload.status);
-    if (event.type !== "provider-thread.updated") return false;
-    if (backgroundWorkHoldsCompletion(event.payload.pendingBackgroundTasks ?? [])) {
-      providerThreadsWithBackgroundWork.add(event.payload.id);
-      return false;
-    }
-    return providerThreadsWithBackgroundWork.delete(event.payload.id);
-  };
   yield* runUpdateReactors({
     afterSequence: terminalEventsAfterSequence,
     stream: eventSink.stream,
     handleRun: handleRunUpdate,
-    handleChild: (stored) => {
-      if (!settlesChildWork(stored)) return Effect.void;
-      return Effect.gen(function* () {
+    handleChild: (stored) =>
+      Effect.gen(function* () {
         const childThreadId = stored.event.threadId;
         const parentThreadId = yield* appOwnedSubagentParentThreadId(childThreadId);
         if (parentThreadId === undefined) return;
@@ -13056,8 +13039,7 @@ const makeOrchestrator = Effect.fn("orchestrationV2.Orchestrator.layer")(functio
             cause,
           }),
         ),
-      );
-    },
+      ),
   }).pipe(Effect.forkScoped);
 
   const recoverDelegatedTasks = Effect.gen(function* () {
