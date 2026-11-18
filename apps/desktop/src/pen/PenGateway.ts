@@ -28,6 +28,9 @@ const EARLY_UPGRADE_BYTES = 64 * 1024;
 // Requests held while a session is minted, before any dial limit applies to them.
 const MINT_WAITERS = { route: 32, socket: 4, total: 256 } as const;
 
+type PenSession = { token: string; expiresAt: number };
+/** A request waiting for the route's session mint; it leaves the set when it is answered. */
+type MintWaiter = (outcome: { session: PenSession } | { error: Error }) => void;
 interface Route {
   readonly pin: DesktopPenPin;
   readonly capability: string;
@@ -39,9 +42,9 @@ interface Route {
   readonly waiting: Array<{ resolve: () => void; reject: (error: Error) => void }>;
   closed: boolean;
   active: number;
-  minting: number;
-  token?: { token: string; expiresAt: number } | undefined;
-  flight?: Promise<{ token: string; expiresAt: number }> | undefined;
+  readonly minting: Set<MintWaiter>;
+  token?: PenSession | undefined;
+  flight?: Promise<PenSession> | undefined;
 }
 interface Dependencies {
   readonly membership: {
@@ -73,6 +76,7 @@ export function makePenGateway(deps: Dependencies) {
     for (const controller of route.dialing) controller.abort();
     for (const socket of route.sockets.keys()) socket.destroy();
     for (const waiter of route.waiting.splice(0)) waiter.reject(new Error("closed"));
+    for (const waiter of [...route.minting]) waiter({ error: new Error("closed") });
     await Promise.all(route.settling);
     await Promise.all([...route.children].map((pipe) => release(route, pipe)));
     await Promise.all(route.releasing.values());
@@ -101,15 +105,6 @@ export function makePenGateway(deps: Dependencies) {
   // A session mint is not held behind live forwards: sixteen open sockets must not starve it.
   const saturated = (route: Route, mint: boolean) =>
     (!mint && route.active >= 16) || route.dialing.size >= 6 || children >= 128;
-  const untilAborted = <A>(start: () => Promise<A>, signal: AbortSignal) =>
-    new Promise<A>((resolve, reject) => {
-      const abort = () => reject(new Error("closed"));
-      if (signal.aborted) return abort();
-      signal.addEventListener("abort", abort, { once: true });
-      start()
-        .then(resolve, reject)
-        .finally(() => signal.removeEventListener("abort", abort));
-    });
   const dial = async (route: Route, signal?: AbortSignal, mint = false) => {
     while (!route.closed && saturated(route, mint)) {
       if (route.waiting.length >= 8) throw new Error("busy");
@@ -187,10 +182,10 @@ export function makePenGateway(deps: Dependencies) {
     route.token && route.token.expiresAt > (deps.now ?? Date.now)() + 60_000
       ? route.token
       : undefined;
-  const token = async (route: Route) => {
-    const cached = cachedToken(route);
-    if (cached) return cached;
-    route.flight ??= (async () => {
+  /** One mint per route at a time, answered to its waiters by a single handler. */
+  const startMint = (route: Route) => {
+    if (route.flight) return;
+    const flight = (async () => {
       // One deadline for the whole mint, so requests waiting on it are answered.
       const deadline = new AbortController();
       const timer = setTimeout(() => deadline.abort(), MINT_DEADLINE_MS);
@@ -211,10 +206,16 @@ export function makePenGateway(deps: Dependencies) {
         deadline.signal.removeEventListener("abort", expire);
         if (pipe) await release(route, pipe);
       }
-    })().finally(() => {
-      route.flight = undefined;
-    });
-    return route.flight;
+    })();
+    route.flight = flight;
+    const answer = (outcome: Parameters<MintWaiter>[0]) => {
+      if (route.flight === flight) route.flight = undefined;
+      for (const waiter of [...route.minting]) waiter(outcome);
+    };
+    flight.then(
+      (session) => answer({ session }),
+      (error: unknown) => answer({ error: error instanceof Error ? error : new Error("mint") }),
+    );
   };
   let mintWaiters = 0;
   const mintWaitersBySocket = new WeakMap<NodeStream.Duplex, number>();
@@ -222,23 +223,31 @@ export function makePenGateway(deps: Dependencies) {
   const awaitToken = async (route: Route, socket: NodeStream.Duplex, signal: AbortSignal) => {
     const cached = cachedToken(route);
     if (cached) return cached;
+    if (route.closed || signal.aborted) throw new Error("closed");
     const held = mintWaitersBySocket.get(socket) ?? 0;
     if (
-      route.minting >= MINT_WAITERS.route ||
+      route.minting.size >= MINT_WAITERS.route ||
       held >= MINT_WAITERS.socket ||
       mintWaiters >= MINT_WAITERS.total
     )
       throw new Error("busy");
-    route.minting++;
     mintWaiters++;
     mintWaitersBySocket.set(socket, held + 1);
-    try {
-      return await untilAborted(() => token(route), signal);
-    } finally {
-      route.minting--;
-      mintWaiters--;
-      mintWaitersBySocket.set(socket, (mintWaitersBySocket.get(socket) ?? 1) - 1);
-    }
+    // A waiter that leaves (abort, route end) is removed at once, so nothing it held outlives it.
+    return new Promise<PenSession>((resolve, reject) => {
+      const waiter: MintWaiter = (outcome) => {
+        if (!route.minting.delete(waiter)) return;
+        signal.removeEventListener("abort", abort);
+        mintWaiters--;
+        mintWaitersBySocket.set(socket, (mintWaitersBySocket.get(socket) ?? 1) - 1);
+        if ("session" in outcome) resolve(outcome.session);
+        else reject(outcome.error);
+      };
+      const abort = () => waiter({ error: new Error("closed") });
+      route.minting.add(waiter);
+      signal.addEventListener("abort", abort, { once: true });
+      startMint(route);
+    });
   };
   const handle = async (req: NodeHttp.IncomingMessage, res: NodeHttp.ServerResponse) => {
     const decision = decidePenGatewayRequest({
@@ -597,7 +606,7 @@ export function makePenGateway(deps: Dependencies) {
             waiting: [],
             closed: false,
             active: 0,
-            minting: 0,
+            minting: new Set(),
           };
           routes.set(routeKey, route);
         }
