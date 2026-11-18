@@ -448,6 +448,11 @@ it.effect("counts only new threads when re-importing cached and recovered transc
       "claudeAgent",
     );
     const recovered = candidate(CODEX_MODEL_SELECTION, "recovered");
+    recovered.thread.messages = recovered.thread.messages.map((message) =>
+      message.role === "assistant"
+        ? { ...message, createdAt: "2026-09-01T09:59:00.000Z" }
+        : message,
+    );
     const initial = yield* makeImporter([cached, recovered]);
     expect(yield* initial.run).toEqual({ importedCount: 2, skippedCount: 0 });
     const before = yield* events.read({ threadId: importId(recovered) }).pipe(Stream.runCollect);
