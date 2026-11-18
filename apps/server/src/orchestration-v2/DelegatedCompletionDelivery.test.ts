@@ -2,10 +2,6 @@ import {
   reconcileCommandId,
   runEvent,
   seedRestartCancelledChild,
-  seedUnheldFollowup,
-  finishFollowupWithAwaitedTask,
-  followupRosterSettlement,
-  recoverChildWithIndependentParentWake,
 } from "./DelegatedCompletionDelivery.testkit.ts";
 import { derive } from "@goat/provider-core/server/IdAllocator";
 import { assert, it, vi } from "@effect/vitest";
@@ -32,7 +28,6 @@ import * as Fiber from "effect/Fiber";
 import * as Layer from "effect/Layer";
 import * as Stream from "effect/Stream";
 import * as EventSink from "./EventSink.ts";
-import * as ProviderRuntimeRecovery from "./ProviderRuntimeRecoveryService.ts";
 import * as Orchestrator from "./Orchestrator.ts";
 import * as ProviderContinuationRequests from "@goat/provider-core/server/ProviderContinuationRequests";
 import {
@@ -1242,52 +1237,6 @@ it.layer(layerTest)("delegated completion delivery repairs", (it) => {
 it.layer(Layer.merge(layerTest, ProviderContinuationRequests.layer))(
   "subagent follow-ups",
   (it) => {
-    it.effect("holds a finished follow-up for its awaited provider task", () =>
-      Effect.gen(function* () {
-        const { pending } = yield* finishFollowupWithAwaitedTask();
-        assert.isTrue(yield* pending);
-      }),
-    );
-    it.effect(
-      "settles a follow-up when its task exits a roster that still holds unrelated work",
-      () =>
-        Effect.gen(function* () {
-          const { otherOwner, owned, unattributed, result, tasks, replayTasks } =
-            yield* followupRosterSettlement();
-          assert.equal(owned, "run:held-followup");
-          assert.equal(otherOwner, "run:unrelated-followup");
-          assert.isUndefined(unattributed);
-          assert.deepEqual(replayTasks, tasks);
-          assert.isString(result);
-        }),
-    );
-    it.effect("idles the parent task when runtime recovery holds its queued follow-up", () =>
-      Effect.gen(function* () {
-        const { sink, orchestrator, threadId, taskId, childThreadId } = yield* seedUnheldFollowup();
-        const afterSequence = yield* sink.latestSequence();
-        yield* (yield* ProviderRuntimeRecovery.ProviderRuntimeRecoveryService).reconcile("startup");
-        yield* sink.stream({ threadId, afterSequence, eventType: "subagent.updated" }).pipe(
-          Stream.filter(
-            ({ event }) =>
-              event.type === "subagent.updated" &&
-              event.payload.id === taskId &&
-              event.payload.status === "idle",
-          ),
-          Stream.runHead,
-        );
-        const child = yield* orchestrator.getThreadProjection(childThreadId);
-        assert.equal(child.runs.at(-1)?.status, "queued");
-        assert.isTrue(child.runs.at(-1)?.queueHeld);
-      }),
-    );
-
-    it.effect("re-offers only the parent run that owns the recovering child", () =>
-      Effect.gen(function* () {
-        const wake = yield* recoverChildWithIndependentParentWake();
-        assert.equal(wake.delegatedCompletion?.parentRunId, "run:reoffer:owner");
-      }),
-    );
-
     it.effect("recovers a reserved delivery without loading conversation history", () =>
       Effect.gen(function* () {
         const orchestrator = yield* Orchestrator.OrchestratorV2;

@@ -5962,7 +5962,9 @@ it.layer(layerTest)("OrchestrationV2LayerLive lifecycle", (it) => {
       Effect.gen(function* () {
         const orchestrator = yield* Orchestrator.OrchestratorV2;
         const eventSink = yield* EventSink.EventSinkV2;
-        const threadId = ThreadId.make(`runtime-layer-failed-queue-${failureClass}`);
+        const threadId = ThreadId.make(
+          `runtime-layer-failed-queue-${failureClass}${bufferedWake ? "-wake" : ""}`,
+        );
 
         yield* orchestrator.dispatch({
           type: "thread.create",
