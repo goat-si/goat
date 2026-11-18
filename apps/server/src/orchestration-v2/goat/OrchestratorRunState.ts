@@ -7,6 +7,7 @@ import type {
 import { latestExecutedRun } from "@goat/shared/orchestrationV2ThreadError";
 import type * as DateTime from "effect/DateTime";
 import * as Effect from "effect/Effect";
+import type { OrchestratorDispatchError } from "../Orchestrator.ts";
 import { cancelledBeforeStart } from "../RestartBackgroundNote.ts";
 
 /** Stop ended this task, so its result is not delivered to the parent agent. */
@@ -140,7 +141,8 @@ export function worktreeSetupPending(
 export function guardScheduledWorktreeSend(
   command: Extract<OrchestrationV2Command, { readonly type: "message.dispatch" }>,
   projection: Pick<OrchestrationV2ThreadProjection, "thread" | "runs">,
-): Effect.Effect<void, string> {
+  DispatchError: typeof OrchestratorDispatchError,
+): Effect.Effect<void, OrchestratorDispatchError> {
   return command.scheduledTaskId !== undefined &&
     command.dispatchMode.type !== "defer_start" &&
     projection.thread.worktreePath === null &&
@@ -148,7 +150,13 @@ export function guardScheduledWorktreeSend(
       (run) => run.workspacePreparation?.type === "worktree" && cancelledBeforeStart(run),
     )
     ? Effect.fail(
-        "The automation's worktree setup was cancelled. Attach a worktree to its thread or recreate the automation with a new worktree.",
+        new DispatchError({
+          commandId: command.commandId,
+          commandType: command.type,
+          cause:
+            "The automation's worktree setup was cancelled. Attach a worktree to its thread or recreate the automation with a new worktree.",
+          refusal: "scheduled_worktree_missing",
+        }),
       )
     : Effect.void;
 }

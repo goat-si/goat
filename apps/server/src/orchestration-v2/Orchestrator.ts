@@ -278,7 +278,7 @@ import { makeHumanHandoffs } from "./goat/HumanHandoffs.ts";
 import { makeThreadRecordDispatches } from "./goat/ThreadRecordDispatches.ts";
 import { makeStaleQuestionWakes } from "./goat/StaleQuestionWake.ts";
 import { releaseStopHolds } from "./goat/StopHoldRelease.ts";
-import { activeTurnRefusal, endsTurn, isActiveTurnRefusal } from "./goat/ActiveTurnRefusals.ts";
+import { activeTurnRefusal, endsTurn, isRetryableRefusal } from "./goat/ActiveTurnRefusals.ts";
 import {
   makeEndNativeSubagentTrees,
   nativeSubagentRef,
@@ -322,7 +322,7 @@ export class OrchestratorDispatchError extends Schema.TaggedError<OrchestratorDi
     commandId: CommandId,
     commandType: Schema.String,
     cause: Schema.optional(Schema.Defect()),
-    refusal: Schema.optional(Schema.Literal("active_turn")),
+    refusal: Schema.optional(Schema.Literals(["active_turn", "scheduled_worktree_missing"])),
   },
 ) {
   override get message(): string {
@@ -5088,7 +5088,7 @@ const makeOrchestrator = Effect.fn("orchestrationV2.Orchestrator.layer")(functio
           }
         : undefined,
     );
-    yield* guardScheduledWorktreeSend(command, projection).pipe(mapDispatchError(command));
+    yield* guardScheduledWorktreeSend(command, projection, OrchestratorDispatchError);
     let steerFollowUpAfterStop = false;
     if (command.steerFollowUpOfRunId !== undefined) {
       const source = projection.runs.find((run) => run.id === command.steerFollowUpOfRunId);
@@ -12738,7 +12738,7 @@ const makeOrchestrator = Effect.fn("orchestrationV2.Orchestrator.layer")(functio
       ),
       Effect.catch((cause) =>
         Effect.gen(function* () {
-          if (cause._tag === "OrchestratorThreadAboveModeLimitError" || isActiveTurnRefusal(cause))
+          if (cause._tag === "OrchestratorThreadAboveModeLimitError" || isRetryableRefusal(cause))
             return yield* cause;
           const rejectedAt = yield* DateTime.now;
           const receipt = yield* eventSink

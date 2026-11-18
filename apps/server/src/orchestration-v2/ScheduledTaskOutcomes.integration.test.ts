@@ -40,7 +40,12 @@ import * as Secrets from "../secrets/SecretRequests.ts";
 import * as ServerSettings from "../serverSettings.ts";
 import * as Tasks from "../scheduledTasks/ScheduledTaskService.ts";
 import * as Runs from "../scheduledTasks/ScheduledTaskRuns.ts";
-import { layerSink, syntheticLaunch } from "../scheduledTasks/ScheduledRunFixture.testkit.ts";
+import {
+  layerSink,
+  requestFor,
+  syntheticLaunch,
+  waitForSpan,
+} from "../scheduledTasks/ScheduledRunFixture.testkit.ts";
 import { projectId, modelSelection } from "./testkit/threadLaunchInput.ts";
 import * as Launch from "./ThreadLaunchService.ts";
 import * as Threads from "./ThreadManagementService.ts";
@@ -97,7 +102,7 @@ const harness = () => {
   );
 };
 const create = Effect.fn("ScheduledOutcomesTest.create")(function* (
-  overrides: Partial<Pick<ScheduledTaskUpsertInput, "threadMode" | "workspaceStrategy">> = {},
+  overrides: Partial<ScheduledTaskUpsertInput> = {},
 ) {
   const tasks = yield* Tasks.ScheduledTaskService;
   return (yield* tasks.upsert({
@@ -142,7 +147,7 @@ const update = Effect.fn("ScheduledOutcomesTest.update")(function* (
   });
 });
 
-it.effect("a restarted worktree automation never opens a provider in the project checkout", () => {
+const worktreeAutomationHarness = () => {
   const providerCwds: Array<string | null> = [];
   const threadId = ThreadId.make("automation-preparation-interrupted");
   const providers = Layer.effect(
@@ -243,10 +248,11 @@ it.effect("a restarted worktree automation never opens a provider in the project
       ),
     ),
   );
-  return Effect.gen(function* () {
+  const prepareInterruptedAutomation = Effect.fn(
+    "ScheduledOutcomesTest.prepareInterruptedAutomation",
+  )(function* () {
     const orchestrator = yield* Orchestrator.OrchestratorV2;
     const recovery = yield* Recovery.ProviderRuntimeRecoveryService;
-    const worker = yield* EffectWorker.OrchestrationEffectWorkerV2;
     const fs = yield* FileSystem.FileSystem;
     const projectCheckout = yield* fs.makeTempDirectoryScoped({ prefix: "automation-project-" });
     yield* seedProject({
@@ -278,7 +284,24 @@ it.effect("a restarted worktree automation never opens a provider in the project
       terminationCause: { kind: "server_restart" },
       workspacePreparation: { type: "worktree", baseRef: "main" },
     });
+    return taskId;
+  });
+  return {
+    layer: Layer.merge(runtime, NodeServices.layer),
+    tasksLayer,
+    prepareInterruptedAutomation,
+    threadId,
+    providerCwds,
+  };
+};
 
+it.effect("a restarted worktree automation never opens a provider in the project checkout", () => {
+  const { layer, tasksLayer, prepareInterruptedAutomation, threadId, providerCwds } =
+    worktreeAutomationHarness();
+  return Effect.gen(function* () {
+    const orchestrator = yield* Orchestrator.OrchestratorV2;
+    const worker = yield* EffectWorker.OrchestrationEffectWorkerV2;
+    const taskId = yield* prepareInterruptedAutomation();
     yield* TestClock.adjust("1 second");
     const second = yield* Effect.gen(function* () {
       const tasks = yield* Tasks.ScheduledTaskService;
@@ -291,8 +314,68 @@ it.effect("a restarted worktree automation never opens a provider in the project
     assert.equal(second.task.lastRun?.dispatchStatus, "failed");
     assert.include(second.task.lastRunError, "Attach a worktree");
     assert.lengthOf((yield* orchestrator.getThreadProjection(threadId)).runs, 1);
-  }).pipe(Effect.provide(Layer.merge(runtime, NodeServices.layer)));
+  }).pipe(Effect.provide(layer));
 });
+
+it.effect(
+  "a refused relay webhook succeeds with the same delivery after a worktree is attached",
+  () => {
+    const { layer, tasksLayer, prepareInterruptedAutomation, threadId } =
+      worktreeAutomationHarness();
+    return Effect.gen(function* () {
+      yield* prepareInterruptedAutomation();
+      const orchestrator = yield* Orchestrator.OrchestratorV2;
+      const threads = yield* Threads.ThreadManagementService;
+      const fs = yield* FileSystem.FileSystem;
+      const worktreePath = yield* fs.makeTempDirectoryScoped({ prefix: "automation-worktree-" });
+      yield* Effect.gen(function* () {
+        const tasks = yield* Tasks.ScheduledTaskService;
+        const task = yield* create({
+          enabled: true,
+          schedule: { type: "webhook" },
+          threadId,
+          threadMode: "continue",
+        });
+        const request = requestFor(task, { relayDeliveryId: "relay:worktree-refused" });
+        const fire = waitForSpan(
+          tasks.triggerWebhook(request),
+          "ScheduledTaskService.runWebhookDelivery",
+        );
+        const firstDelivery = yield* fire;
+        assert.equal(firstDelivery._tag, "accepted");
+        const failed = (yield* tasks.list()).tasks.find(({ id }) => id === task.id);
+        assert.equal(failed?.lastRun?.dispatchStatus, "failed");
+        assert.include(failed?.lastRunError ?? "", "Attach a worktree");
+        const firingId = failed?.lastRun?.firingId;
+        if (firingId === undefined) return yield* Effect.die("Missing refused firing.");
+        const refusedReceipt = yield* threads.receiptStatus(firingId);
+
+        yield* orchestrator.dispatch({
+          type: "thread.metadata.update",
+          commandId: CommandId.make("attach-automation-worktree"),
+          threadId,
+          worktreePath,
+          expectedWorktreePath: null,
+        });
+        const retried = yield* fire;
+        assert.deepEqual(retried, firstDelivery);
+        const accepted = (yield* tasks.list()).tasks.find(({ id }) => id === task.id);
+        assert.equal(accepted?.lastRun?.dispatchStatus, "accepted");
+        assert.equal(accepted?.lastRun?.firingId, firingId);
+        assert.isNull(refusedReceipt);
+        assert.isNull(accepted?.lastRunError);
+        const runs = (yield* orchestrator.getThreadProjection(threadId)).runs;
+        assert.lengthOf(runs, 2);
+
+        const duplicate = yield* tasks.triggerWebhook(request);
+        assert.deepEqual(duplicate, { ...retried, outcome: "duplicate" });
+        const after = (yield* tasks.list()).tasks.find(({ id }) => id === task.id);
+        assert.equal(after?.runCount, accepted?.runCount);
+        assert.deepEqual((yield* orchestrator.getThreadProjection(threadId)).runs, runs);
+      }).pipe(Effect.provide(Layer.fresh(tasksLayer)));
+    }).pipe(Effect.provide(layer));
+  },
+);
 it.effect.each(["completed", "failed", "interrupted", "cancelled", "rolled_back"] as const)(
   "commits %s with the exact firing and publishes it through the shared task subscription",
   (status) =>
