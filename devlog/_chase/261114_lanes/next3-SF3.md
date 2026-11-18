@@ -430,3 +430,108 @@ The matrix instantiates each blocked wrapper through the registry and checks its
 - The focused provider, routing and operations batch passed 372 tests in 12 files. The two new Grok success rows passed with the explicit Node path. The guarded dispatch and frozen-claim batch passed 238 tests in six files. On the final head, `GOAT_TEST_TMP_GUARD=fail vp test run` passed 46 tests across the registered-provider matrix, Home guard, installation gate, dispatch and worker routing. The web Chromium and mobile React Memory Settings suites passed 182 tests in four files. `git diff --check origin/chase/t3-261114-next3...HEAD` passed.
 - `vp run check:changed origin/chase/t3-261114-next3` on `20a1f84f5e6539cb79c75be6ed3101fa3fbb4f81` checked 129 changed files from merge base `2c0e0002a996` with integration ref `a3255d1fd41b38f1d767a982e1c11b9361e1d842`. Format, lint, both Knip checks, GraphQL, agent context and surface checks, unused patches, and typecheck for 42 packages passed. The command exited 1 with 416 test files passing, one failing and one skipped, and 9,372 tests passing, 16 failing and one skipped. All 16 failing titles and eight `exec: node: not found` diagnostics match the established `GrokTextGeneration.test.ts` baseline. [Grok baseline #3425](https://github.com/goat-si/goat/issues/3425)
 - NOT RUN: installed-client walkthrough, live provider turns, older-client pairing, integration PR CI, and repo-wide suites.
+
+## 2026-11-18 UTC — independent review fix round 9
+
+SF3 on pen-mac-studio advanced `chase/t3-261114-next3-sf3-providers` from `20a1f84f5e6539cb79c75be6ed3101fa3fbb4f81` to `e9fc3617dbf17916a8ba286ed3f5c928f0caebdc`.
+
+The declaration is per provider instance and per operation. Both memory operations use the same instance preflight. Calls recheck the applicable policy before starting the helper. The live declaration reaches full and streamed provider snapshots through `apps/server/src/provider/providerGenerationSnapshot.ts:21`. Web and desktop use it for Memory Settings and server routing. Mobile uses the effective server route. Legacy snapshots use the stored driver configuration and have no host-policy or SDK-probe data. The wire fields and settings schema are unchanged.
+
+Before the fix, the focused `vp test run` selection failed in all 17 cases across Claude, Cursor, Codex, Grok and OpenCode v1. All 17 then passed. Additional checks cover the five-second, single-flight Cursor probe, a late SDK refusal that clears both flags, and real OpenCode v2 wrapper admission against managed policy and an external endpoint.
+
+| Driver | Refusal predicate | Summary | Conflict | Shared check or dispatch evidence |
+| --- | --- | --- | --- | --- |
+| All local runners | Bound environment ID absent | No | No | Declaration short-circuits and execution returns `unavailable`. `packages/provider-core/src/server/memoryGenerationRunner.ts:63` |
+| All local runners | Bound instance or environment identity fails schema validation | No | No | Both decode the same bound context with excess properties rejected. `packages/provider-core/src/server/memoryGenerationRunner.ts:27` |
+| Codex | Instance disabled | No | No | `requireMemorySettings` checks captured and effective configuration. `apps/server/src/textGeneration/CodexTextGeneration.ts:137` |
+| Codex | Configured Home route has no route service | No | No | `requireMemorySettings` checks the configured route and service. `apps/server/src/textGeneration/CodexTextGeneration.ts:137` |
+| Codex | Auth source cannot be inspected | No | No | `findReceptionAuth` propagates inspection failure to both paths. A missing auth file and Home with None remain valid isolation configurations. `apps/server/src/textGeneration/CodexTextGeneration.ts:128` |
+| Codex | Auth file cannot be symlinked into a scoped home | No | No | Both use `linkReceptionAuth`. The declaration disposes its empty probe directory. Dispatch preserves the original symlink guard and token rotation cleanup. Managed ChatGPT probes its effective home. `apps/server/src/textGeneration/CodexTextGeneration.test.ts:239` |
+| Claude Code | Instance disabled | No | No | `requireClaudeMemory` checks enabled before inspecting managed policy. `apps/server/src/textGeneration/ClaudeTextGeneration.ts:184` |
+| Claude Code | Managed file or drop-in contains hooks, including SessionStart or UserPromptSubmit | No | No | Both call `verifyClaudeMemoryHooks`. Both refusals were red before the fix. `apps/server/src/textGeneration/ClaudeTextGeneration.test.ts:368` |
+| Claude Code | Managed policy file or drop-in cannot be read or listed | No | No | Inspection failure makes the shared preflight fail closed. `apps/server/src/textGeneration/ClaudeMemoryIsolation.ts:149` |
+| Claude Code | Managed policy file or drop-in is invalid JSON | No | No | The shared preflight decodes each settings document. `apps/server/src/textGeneration/ClaudeTextGeneration.test.ts:377` |
+| Claude Code | Managed policy sets `policyHelper` | No | No | Shared managed-policy predicate. `apps/server/src/textGeneration/ClaudeMemoryIsolation.ts:106` |
+| Claude Code | Managed policy sets `enabledPlugins` | No | No | Shared managed-policy predicate. `apps/server/src/textGeneration/ClaudeMemoryIsolation.ts:106` |
+| Claude Code | Managed policy sets `extraKnownMarketplaces` | No | No | Shared managed-policy predicate. `apps/server/src/textGeneration/ClaudeMemoryIsolation.ts:106` |
+| Claude Code | Managed policy sets `forceLoginGatewayUrl` | No | No | Shared managed-policy predicate. `apps/server/src/textGeneration/ClaudeMemoryIsolation.ts:106` |
+| Claude Code | Managed policy sets `env` | No | No | Shared managed-policy predicate. `apps/server/src/textGeneration/ClaudeMemoryIsolation.ts:106` |
+| Claude Code | Managed policy sets `apiKeyHelper` | No | No | Shared managed-policy predicate. `apps/server/src/textGeneration/ClaudeMemoryIsolation.ts:106` |
+| Claude Code | macOS managed preference is present | No | No | Shared preflight checks system, user and per-user managed preference paths. `apps/server/src/textGeneration/ClaudeMemoryIsolation.ts:162` |
+| Claude Code | Applicable Windows or WSL registry query cannot certify the key/value | No | No | Shared registry check covers native and WSL hosts. `apps/server/src/textGeneration/ClaudeTextGeneration.test.ts:513` |
+| Claude Code | Applicable Windows or WSL registry document is malformed or has unsafe settings | No | No | Same strict envelope, value type, JSON and managed-policy checks. `apps/server/src/textGeneration/ClaudeMemoryIsolation.ts:175` |
+| Claude Code | Windows managed file or drop-in is visible from WSL | No | No | Shared preflight checks the mounted Windows paths. `apps/server/src/textGeneration/ClaudeTextGeneration.test.ts:483` |
+| Cursor | Instance disabled | No | No | Both call `preflight` and its enabled check. `packages/provider-cursor/src/server/textGeneration.ts:76` |
+| Cursor | No usable key for the selected backend, including absent, expired or unreadable stored credentials | No | No | Both call the same credential resolver. `packages/provider-cursor/src/server/textGeneration.ts:83`, `packages/provider-cursor/src/server/auth.ts:117` |
+| Cursor | Sign-in or sign-out is in progress | No | No | The same credential resolver refuses while the operation is active. `packages/provider-cursor/src/server/auth.ts:151` |
+| Cursor | Instance backend differs from the loaded SDK | No | No | `verifyBackend` runs in preflight and again immediately before agent creation. `packages/provider-cursor/src/server/textGeneration.ts:96` |
+| Cursor | CLI transport selection differs from the process-wide transport | No | No | Both call `agentTransportRefusal` inside `preflight`. `packages/provider-cursor/src/server/CursorSdk.ts:183` |
+| Cursor | CLI transport settings cannot be read or decoded | No | No | Same transport refusal check. `packages/provider-cursor/src/server/CursorSdk.ts:66` |
+| Cursor | User sandbox policy exists or cannot be checked | No | No | Same `sandbox.json` check before SDK work. `packages/provider-cursor/src/server/textGeneration.test.ts:848` |
+| Cursor | SDK workspace prewarm fails or exceeds five seconds | No | No | One lazy, cached probe per SDK layer, with an empty workspace, no setting sources and no API key. Both operations refuse before creating an agent. `packages/provider-cursor/src/server/textGeneration.test.ts:700` and `:721` |
+| Cursor | SDK later rejects sandboxing during agent creation | No after refusal | No after refusal | The execution guard records the process-wide refusal for subsequent capability reads. Memory never retries without isolation. `packages/provider-cursor/src/server/textGeneration.test.ts:757` |
+| Grok | A managed system policy is not a regular file | No | No | Both use `checkGrokMemoryIsolation`. `packages/provider-grok/src/server/acpSupport.ts:56` |
+| Grok | A managed system policy exceeds 64,000 bytes | No | No | Same size guard on all applicable managed policy paths. `packages/provider-grok/src/server/acpSupport.ts:56` |
+| Grok | A managed system policy is nonempty | No | No | Declaration and both operations refuse before ACP starts. `apps/server/src/textGeneration/GrokTextGeneration.test.ts:349` |
+| Grok | A managed system policy cannot be inspected | No | No | Policy I/O errors fail the shared check. `packages/provider-grok/src/server/acpSupport.ts:48` |
+| Grok | Discovered auth file is non-regular | No | No | Same credential-source check runs before copying. `packages/provider-grok/src/server/acpSupport.ts:71` |
+| Grok | Discovered auth file is unreadable or cannot be checked | No | No | Same readability check runs before copying. `packages/provider-grok/src/server/acpSupport.ts:71` |
+| OpenCode v1/v2 | User-specified external server | No | No | v1 and selection wrapper share the normalized route classification, and v2 assigns both methods from one external-server branch. `apps/server/src/provider/providerMemoryCapabilities.test.ts:132`, `apps/server/src/textGeneration/OpenCode2TextGeneration.test.ts:486` |
+| OpenCode | OpenCodex Home | No | No | `ProviderHomeGuard` uses the same `refuseMemory` for declarations and both operations. `apps/server/src/provider/ProviderHomeGuard.ts:105` |
+| OpenCode v1/v2 | System OpenCode configuration directory exists | No | No | Both use `prepareMemoryDirectory` to certify isolation before any server starts. `packages/provider-opencode/src/server/textGeneration.test.ts:720`, `apps/server/src/textGeneration/OpenCode2TextGeneration.test.ts:486` |
+| OpenCode v1/v2 | macOS managed OpenCode preference exists | No | No | Same scoped helper checks system and per-user MDM paths. `packages/provider-opencode/src/server/memoryIsolation.ts:78` |
+| OpenCode v1/v2 | Helper ancestry contains OpenCode, Claude or agent configuration | No | No | Same helper resolves the actual temp directory and walks its parents. `packages/provider-opencode/src/server/memoryIsolation.ts:87` |
+| OpenCode v1/v2 | Scoped workspace or policy inspection fails | No | No | Same helper must create and resolve its scoped temp root and successfully inspect policy paths. `packages/provider-opencode/src/server/memoryIsolation.ts:36` |
+| Antigravity | Global hooks configured | No | No | Existing `isAntigravityTextGenerationAvailable` gates declaration and helper creation. `apps/server/src/textGeneration/AntigravityTextGeneration.test.ts:884` |
+| Antigravity | Global MCP servers configured | No | No | Same profile check. Both memory operations refuse before runtime creation. `apps/server/src/textGeneration/AntigravityTextGeneration.test.ts:599` |
+| Antigravity | Global hooks or MCP path is non-regular or oversized | No | No | Same profile file stat and size checks. `apps/server/src/textGeneration/AntigravityTextGeneration.ts:86` |
+| Antigravity | Global hooks or MCP configuration cannot be read or decoded | No | No | Same profile inspection. `apps/server/src/textGeneration/AntigravityTextGeneration.ts:90` |
+| Pi | No memory implementation | No | No | Registered wrapper exposes `noMemoryGeneration`. `apps/server/src/provider/providerMemoryCapabilities.test.ts:37` |
+| OmO | No memory implementation | No | No | Registered wrapper exposes `noMemoryGeneration`. `apps/server/src/provider/providerMemoryCapabilities.test.ts:38` |
+| Muse Code | No memory implementation | No | No | Registered wrapper exposes `noMemoryGeneration`. `apps/server/src/provider/providerMemoryCapabilities.test.ts:39` |
+| fx | No memory implementation | No | No | Registered wrapper exposes `noMemoryGeneration`. `apps/server/src/provider/providerMemoryCapabilities.test.ts:40` |
+| ACP Registry | No memory implementation | No | No | Registered wrapper exposes `noMemoryGeneration`. `apps/server/src/provider/providerMemoryCapabilities.test.ts:41` |
+| Devin Cloud | No memory implementation | No | No | Registered wrapper exposes `noMemoryGeneration`. `apps/server/src/provider/providerMemoryCapabilities.test.ts:42` |
+| Claude Cloud | No memory implementation | No | No | Registered wrapper exposes `noMemoryGeneration`. `apps/server/src/provider/providerMemoryCapabilities.test.ts:43` |
+| Cursor Cloud | No memory implementation | No | No | Registered wrapper exposes `noMemoryGeneration`. `apps/server/src/provider/providerMemoryCapabilities.test.ts:44` |
+
+The following refusals depend on a specific request, lease, or live helper. The instance flags describe whether the instance supports these operations. Model eligibility and provider readiness also apply at routing, and the dispatch checks below use the selected request and live state.
+
+| Driver | Early dispatch refusal | Evidence |
+| --- | --- | --- |
+| All | Requested model selection fails schema validation | `packages/provider-core/src/server/memoryGenerationRunner.ts:100` |
+| All | Requested instance differs from the bound instance | `packages/provider-core/src/server/memoryGenerationRunner.ts:103` |
+| All | Memory request supplies investigation or attachments | `packages/provider-core/src/server/memoryGenerationRunner.ts:105` |
+| All | Settings read fails | `apps/server/src/textGeneration/TextGeneration.ts:126` |
+| All | Requested instance is no longer registered | `apps/server/src/textGeneration/TextGeneration.ts:55` |
+| Model API | Pinned selection resolves to a system-model API generator | `apps/server/src/textGeneration/TextGeneration.ts:137` |
+| Codex | Pending/replaced route, settings read failure, or changed route key at lease acquisition | `apps/server/src/textGeneration/CodexTextGeneration.ts:192` |
+| Codex | Managed install or auth runtime cannot be acquired | `apps/server/src/textGeneration/CodexTextGeneration.ts:460`, `apps/server/src/provider/CodexManagedRuntime.ts:157` |
+| Codex | OpenCodex catalog pointer or launch route cannot be read | `apps/server/src/textGeneration/CodexTextGeneration.ts:245` |
+| Codex | Effective Home endpoint cannot be verified for the actual invocation | `apps/server/src/textGeneration/CodexTextGeneration.ts:519` |
+| Claude Code on Home | Model absent from Home exports | `apps/server/src/provider/ProviderHomeGuard.ts:80` |
+| Claude Code on Home | Runtime generation replaced or route lease refused | `apps/server/src/provider/ProviderHomeGuard.ts:83` |
+| Cursor | Auth lease cannot be acquired at execution | `packages/provider-cursor/src/server/textGeneration.ts:317` |
+| Cursor | SDK loading, isolated temp/store creation or the request's no-tool agent policy fails | `packages/provider-cursor/src/server/textGeneration.ts:150`, `:175`, `packages/provider-cursor/src/server/textGeneration.test.ts:786` |
+| Grok | Isolated workspace creation, credential copy or permissions write fails | `packages/provider-grok/src/server/acpSupport.ts:80` |
+| Grok | ACP setup omits the current model or the requested model is absent | `packages/provider-grok/src/server/textGeneration.ts:160` |
+| Grok | ACP model or reasoning selection fails | `packages/provider-grok/src/server/textGeneration.ts:175` |
+| OpenCode v1/v2 | Requested model has no provider/model shape | `packages/provider-opencode/src/server/textGeneration.ts:222`, `packages/provider-opencode/src/server/v2/textGeneration.ts:55` |
+| OpenCode v1 | The requested provider's auth record cannot be decoded or copied safely | `packages/provider-opencode/src/server/memoryIsolation.ts:177` |
+| OpenCode v2 | The requested non-OpenCode provider has no supported API key | `packages/provider-opencode/src/server/memoryIsolation.ts:133` |
+| OpenCode v1/v2 | Runtime probe or isolated server startup/verification fails | `packages/provider-opencode/src/server/runtimeTextGeneration.ts:56`, `packages/provider-opencode/src/server/v2/OpenCode2Server.ts:228` |
+| OpenCode v1/v2 | Isolated server configuration cannot be verified | `packages/provider-opencode/src/server/textGeneration.ts:276`, `packages/provider-opencode/src/server/v2/textGeneration.ts:67` |
+| OpenCode v1/v2 | A configured MCP server can activate | `packages/provider-opencode/src/server/textGeneration.ts:282`, `packages/provider-opencode/src/server/v2/textGeneration.ts:81` |
+| OpenCode v1/v2 | MCP status cannot be verified or an MCP server is connected | `packages/provider-opencode/src/server/textGeneration.ts:296`, `packages/provider-opencode/src/server/v2/textGeneration.ts:92` |
+| OpenCode v1/v2 | Runtime selects a model different from the requested one | `packages/provider-opencode/src/server/textGeneration.ts:545`, `packages/provider-opencode/src/server/v2/textGeneration.ts:162` |
+| Antigravity | Helper runtime, sign-in or ACP session setup fails | `apps/server/src/textGeneration/AntigravityTextGeneration.ts:174`, `:355` |
+| Antigravity | ACP session ID is invalid | `apps/server/src/textGeneration/AntigravityTextGeneration.ts:250` |
+| Antigravity | Requested model cannot be selected | `apps/server/src/textGeneration/AntigravityTextGeneration.ts:258` |
+| Antigravity | Effective memory model is undisclosed | `apps/server/src/textGeneration/AntigravityTextGeneration.ts:271` |
+
+- `GOAT_TEST_TMP_GUARD=fail vp test run` passed all 324 tests in 12 focused provider, isolation and registered-routing suites. The final OpenCode v2 fixture passed both selected tests. The selected Grok test run passed three declaration and successful execution cases. A standalone probe against the real installed Cursor SDK returned `{"supported":true,"concurrentReads":2}` without credentials or an agent run.
+- `vp test run` passed all 182 tests in the four web Chromium and mobile Memory Settings suites. `git diff --check origin/chase/t3-261114-next3...HEAD` passed.
+- `vp run check:changed origin/chase/t3-261114-next3` on `e9fc3617dbf17916a8ba286ed3f5c928f0caebdc` checked 133 files from merge base `2c0e0002a996` with integration ref `cf1e3679e3aed1c45d8bdc28d310937ca9712846`. The integration ref advanced during the run and retained the same merge base. Format, lint, both Knip checks, GraphQL, the agent context and surface checks, unused patches and all 42 package typechecks passed. The command exited 1 with 419 test files passing, one failing and one skipped, and 9,411 tests passing, 16 failing and one skipped. All 16 failing titles and all eight `exec: node: not found` diagnostics match round 8 in `GrokTextGeneration.test.ts`. [Grok baseline #3425](https://github.com/goat-si/goat/issues/3425)
+- NOT RUN: installed-client walkthrough, live provider turns, older-client pairing, integration PR CI, and repo-wide suites.
+
+SF3 READY at `e9fc3617dbf17916a8ba286ed3f5c928f0caebdc`, verified on the remote lane branch after a normal fast-forward push.
