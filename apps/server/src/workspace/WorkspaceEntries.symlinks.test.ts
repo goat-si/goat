@@ -1,11 +1,15 @@
 // @effect-diagnostics nodeBuiltinImport:off
 import * as NodeServices from "@effect/platform-node/NodeServices";
+import { FileFinder } from "@ff-labs/fff-node";
 import { it, describe, expect } from "@effect/vitest";
+import * as Deferred from "effect/Deferred";
 import * as Effect from "effect/Effect";
+import * as Fiber from "effect/Fiber";
 import * as FileSystem from "effect/FileSystem";
 import * as Layer from "effect/Layer";
 import * as Path from "effect/Path";
 import * as PlatformError from "effect/PlatformError";
+import { vi } from "vite-plus/test";
 
 import * as ServerConfig from "../config.ts";
 import * as HostProcess from "@goat/shared/HostProcess";
@@ -77,7 +81,97 @@ const searchWorkspaceEntries = (input: {
 
 // Symlink cases of WorkspaceEntries.test.ts, here because that file is near its line cap.
 it.layer(layerTest, { excludeTestServices: true })("WorkspaceEntries symlinks", (it) => {
+  it.effect("evicts the oldest idle finder and refuses overflow while all slots are borrowed", () =>
+    Effect.gen(function* () {
+      const fs = yield* FileSystem.FileSystem;
+      const path = yield* Path.Path;
+      const cwd = yield* makeTempDir();
+      const roots = Array.from({ length: 17 }, (_, index) => path.join(cwd, `repo-${index}`));
+      const created = new Set<string>();
+      const destroyed: string[] = [];
+      const allBorrowed = yield* Deferred.make<void>();
+      const release = Promise.withResolvers<void>();
+      let held = 0;
+      const empty = { ok: true as const, value: { items: [], totalMatched: 0 } };
+      using _create = vi.spyOn(FileFinder, "create").mockImplementation(({ basePath }) => {
+        created.add(basePath);
+        return {
+          ok: true,
+          value: {
+            destroyAsync: async () => {
+              destroyed.push(basePath);
+            },
+            waitForIndexReady: async () => ({ ok: true, value: true }),
+            getScanProgressAsync: async () => ({ ok: true, value: { isScanning: false } }),
+            watchAsync: async () => ({ ok: true, value: () => {} }),
+            directorySearchAsync: async () => empty,
+            fileSearchAsync: async (query: string) => {
+              if (query === "hold") {
+                held += 1;
+                if (held === 16) Deferred.doneUnsafe(allBorrowed, Effect.void);
+                await release.promise;
+              }
+              return empty;
+            },
+          } as unknown as FileFinder,
+        };
+      });
+      const search = (cwd: string, query = "probe") =>
+        searchWorkspaceEntries({ cwd, query, kind: "file", limit: 10 });
+      for (const root of roots) yield* fs.makeDirectory(root);
+      for (const root of roots.slice(0, 16)) yield* search(root);
+      const first = path.join(cwd, "repo-0");
+      const second = path.join(cwd, "repo-1");
+      yield* search(first);
+      yield* search(path.join(cwd, "repo-16"));
+      expect(destroyed).toEqual([second]);
+      expect(created.size).toBe(17);
+
+      const retained = roots.filter((root) => root !== second);
+      const readers = yield* Effect.forEach(retained, (root) => search(root, "hold"), {
+        concurrency: "unbounded",
+      }).pipe(Effect.forkChild);
+      try {
+        yield* Deferred.await(allBorrowed);
+        const overflow = yield* search(second).pipe(Effect.flip);
+        expect(overflow._tag).toBe("WorkspaceSearchIndexCreateFailed");
+        expect(destroyed).toEqual([second]);
+      } finally {
+        release.resolve();
+      }
+      yield* Fiber.join(readers);
+    }),
+  );
+
   describe("search", () => {
+    it.effect("checks canonical containment for exact matches in a newline-named worktree", () =>
+      Effect.gen(function* () {
+        if ((yield* HostProcess.Platform) === "win32") return;
+        const cwd = yield* makeTempDir({ git: true });
+        const outside = yield* makeTempDir();
+        const fs = yield* FileSystem.FileSystem;
+        const path = yield* Path.Path;
+        yield* writeTextFile(cwd, ".gitignore", ".worktrees/\n");
+        yield* git(cwd, ["add", ".gitignore"]);
+        yield* git(cwd, ["-c", "user.name=t", "-c", "user.email=t@t", "commit", "-m", "init"]);
+        const worktree = ".worktrees/line\nname";
+        yield* git(cwd, ["worktree", "add", "--detach", worktree]);
+        yield* writeTextFile(outside, "outside.txt");
+        yield* writeTextFile(cwd, "fixtures/inside.txt");
+        yield* fs.symlink(outside, path.join(cwd, worktree, "external"));
+        yield* fs.symlink(path.join(cwd, "fixtures"), path.join(cwd, worktree, "internal"));
+        const search = (query: string) => searchWorkspaceEntries({ cwd, query, limit: 25 });
+
+        expect((yield* search("external/outside.txt")).entries).not.toContainEqual({
+          kind: "file",
+          path: `${worktree}/external/outside.txt`,
+        });
+        expect((yield* search("internal/inside.txt")).entries).toContainEqual({
+          kind: "file",
+          path: `${worktree}/internal/inside.txt`,
+        });
+      }),
+    );
     it.effect("indexes symlinked files and directories inside the workspace", () =>
       Effect.gen(function* () {
         if ((yield* HostProcess.Platform) === "win32") return;
@@ -150,7 +244,7 @@ it.layer(layerTest, { excludeTestServices: true })("WorkspaceEntries symlinks", 
         }
       }),
     );
-    it.effect("lets the nearest .ignore rule decide a symlink, and git's rules still hide it", () =>
+    it.effect("lets the nearest .ignore rule decide a symlink, ahead of git's rules", () =>
       Effect.gen(function* () {
         if ((yield* HostProcess.Platform) === "win32") return;
         const cwd = yield* makeTempDir({ prefix: "goat-workspace-symlinks-", git: true });
@@ -171,12 +265,12 @@ it.layer(layerTest, { excludeTestServices: true })("WorkspaceEntries symlinks", 
         for (const entries of [searched.entries, listed.entries]) {
           const paths = entries.map((entry) => entry.path);
           expect(paths).toContain("sub/hide-link.ts");
-          expect(paths).not.toContain("keep-link.ts");
+          expect(paths).toContain("keep-link.ts");
         }
         // The real files are shown or hidden by the same rules.
         const listedPaths = listed.entries.map((entry) => entry.path);
         expect(listedPaths).toContain("sub/hide-real.ts");
-        expect(listedPaths).not.toContain("keep-real.ts");
+        expect(listedPaths).toContain("keep-real.ts");
       }),
     );
     it.effect("matches .ignore rules against whole names and treats folder links as links", () =>

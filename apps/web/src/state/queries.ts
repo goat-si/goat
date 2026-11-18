@@ -13,6 +13,7 @@ import {
   type ThreadSearchScope,
 } from "@goat/client-runtime/state/thread-search";
 import {
+  ProjectSearchContentsError,
   PROJECT_SEARCH_CONTENTS_QUERY_MAX_LENGTH,
   THREAD_SEARCH_QUERY_MAX_LENGTH,
 } from "@goat/contracts";
@@ -31,6 +32,7 @@ import type {
 } from "@goat/contracts";
 import * as Cause from "effect/Cause";
 import * as Option from "effect/Option";
+import * as Schema from "effect/Schema";
 import { AsyncResult, Atom } from "effect/reactivity";
 import { useEffect, useState } from "react";
 
@@ -47,6 +49,8 @@ const PROJECT_PATH_SEARCH_DEBOUNCE_MS = 120;
 const COMPOSER_PATH_SEARCH_LIMIT = 80;
 const PROJECT_CONTENT_SEARCH_DEBOUNCE_MS = 120;
 const PROJECT_CONTENT_SEARCH_LIMIT = 500;
+const PROJECT_CONTENT_SEARCH_SCAN_RETRY_MS = 30_000;
+const isProjectSearchContentsError = Schema.is(ProjectSearchContentsError);
 const THREAD_SEARCH_DEBOUNCE_MS = 120;
 const VCS_REF_LIST_LIMIT = 100;
 const EMPTY_REFS: ReadonlyArray<VcsRef> = [];
@@ -389,6 +393,21 @@ export function useProjectContentSearch(target: ProjectContentSearchTarget) {
         })
       : null,
   );
+
+  const { refresh } = result;
+  const scanTimeout =
+    !result.isPending &&
+    query === debouncedQuery &&
+    isProjectSearchContentsError(result.failure) &&
+    result.failure.failure === "search_index_scan_timed_out"
+      ? result.failure
+      : null;
+  // oxlint-disable-next-line goat/react-effect-budget -- retry a settled scan timeout after the server has had time to finish
+  useEffect(() => {
+    if (scanTimeout === null) return;
+    const timer = window.setTimeout(refresh, PROJECT_CONTENT_SEARCH_SCAN_RETRY_MS);
+    return () => window.clearTimeout(timer);
+  }, [refresh, scanTimeout]);
 
   return {
     canReadFiles,

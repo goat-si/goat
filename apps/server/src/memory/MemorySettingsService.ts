@@ -1,10 +1,11 @@
 import * as M from "@goat/contracts";
-import { resolveMemoryModelSelection } from "@goat/shared/serverSettings";
 import * as Context from "effect/Context";
 import * as Effect from "effect/Effect";
 import * as Layer from "effect/Layer";
+import { configuredMemoryModelSelection } from "@goat/shared/serverSettings";
 import * as Settings from "../serverSettings.ts";
 import * as MemoryService from "./MemoryService.ts";
+import * as Hold from "./MemoryGenerationHold.ts";
 import * as Sync from "./MemorySyncService.ts";
 
 type Permit = Effect.Effect<void, MemoryService.MemoryAccessError>;
@@ -12,7 +13,10 @@ type Permit = Effect.Effect<void, MemoryService.MemoryAccessError>;
 export class MemorySettingsService extends Context.Service<
   MemorySettingsService,
   {
-    readonly get: (permit: Permit) => Effect.Effect<M.MemorySettingsView, Error>;
+    readonly get: (
+      permit: Permit,
+      includeModelAvailability?: boolean,
+    ) => Effect.Effect<M.MemorySettingsViewWithAvailability, Error>;
     readonly update: (
       input: M.MemorySettingsUpdateInput,
       permit: Permit,
@@ -23,18 +27,26 @@ export class MemorySettingsService extends Context.Service<
 const make = Effect.gen(function* () {
   const settings = yield* Settings.ServerSettingsService;
   const sync = yield* Sync.MemorySyncService;
-  const view = settings.getSettings.pipe(
-    Effect.map((current): M.MemorySettingsView => ({
-      enabled: current.memoryEnabled,
-      hub: { mode: current.memoryHub.mode, version: current.memoryHubVersion },
-      model: {
-        selection: resolveMemoryModelSelection(current, undefined),
-        automatic: current.memoryModelSelection === null,
-      },
-    })),
-  );
+  const hold = yield* Hold.shared;
+  const view = (includeModelAvailability = false) =>
+    settings.getSettings.pipe(
+      Effect.flatMap((current) =>
+        hold.resolveModel(current).pipe(
+          Effect.map((selection): M.MemorySettingsViewWithAvailability => ({
+            enabled: current.memoryEnabled,
+            hub: { mode: current.memoryHub.mode, version: current.memoryHubVersion },
+            model: {
+              selection: selection ?? configuredMemoryModelSelection(current),
+              automatic: current.memoryModelSelection === null,
+            },
+            ...(includeModelAvailability ? { modelAvailable: selection !== null } : {}),
+          })),
+        ),
+      ),
+    );
   return MemorySettingsService.of({
-    get: (permit) => permit.pipe(Effect.andThen(view)),
+    get: (permit, includeModelAvailability) =>
+      permit.pipe(Effect.andThen(view(includeModelAvailability))),
     update: (input, permit) =>
       Effect.gen(function* () {
         yield* permit;
@@ -66,7 +78,7 @@ const make = Effect.gen(function* () {
               ? {}
               : { memoryModelSelection: input.modelSelection }),
           });
-        return yield* view;
+        return yield* view();
       }),
   });
 });

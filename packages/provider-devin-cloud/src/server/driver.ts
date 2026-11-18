@@ -1,3 +1,4 @@
+import { noMemoryGeneration } from "@goat/provider-core/server/memoryGenerationRunner";
 import {
   ProviderDriverKind,
   ProviderInstanceId,
@@ -186,6 +187,7 @@ export const DevinCloudDriver: ProviderDriver<DevinCloudSettings, DevinCloudDriv
         }),
       );
     const textGeneration: ProviderTextGeneration = {
+      ...noMemoryGeneration,
       generateCommitMessage: () => unsupported("generateCommitMessage"),
       generatePrContent: () => unsupported("generatePrContent"),
       generateBranchName: () => unsupported("generateBranchName"),
