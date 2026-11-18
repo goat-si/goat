@@ -306,3 +306,142 @@ it.effect.each([
       Effect.scoped,
     ),
 );
+
+it.effect.each(["restart", "retry"] as const)(
+  "revokes an unrefreshed grandchild's old scoped directory access after %s",
+  (recovery) =>
+    Effect.gen(function* () {
+      const root = "permission-root";
+      const child = "permission-child";
+      const grandchild = "permission-grandchild";
+      const oldPattern = "/old-root/*";
+      const oldBase = openCodePermissionRules(
+        runtimePolicy("full-access", {
+          approvalPolicy: "never",
+          sandboxPolicy: {
+            type: "workspaceWrite",
+            writableRoots: ["/old-root"],
+            networkAccess: false,
+          },
+        }),
+      );
+      const policy = runtimePolicy(
+        "approval-required",
+        recovery === "retry" ? { approvalPolicy: "never" } : {},
+      );
+      const nextBase = openCodePermissionRules(policy);
+      const parentBase = recovery === "restart" ? nextBase : oldBase;
+      const nativeDenies: PermissionRuleset = [
+        { permission: "todowrite", pattern: "*", action: "deny" },
+        { permission: "task", pattern: "*", action: "deny" },
+      ];
+      type NativeSession = {
+        id: string;
+        parentID?: string;
+        permission: PermissionRuleset;
+        metadata?: Record<string, unknown>;
+        time: { created: number; updated: number };
+      };
+      const time = { created: 1, updated: 1 };
+      const sessions = new Map<string, NativeSession>([
+        [
+          root,
+          { id: root, permission: parentBase, metadata: { goatPermissionBase: parentBase }, time },
+        ],
+        [
+          child,
+          {
+            id: child,
+            parentID: root,
+            permission: parentBase,
+            metadata: { goatPermissionBase: parentBase },
+            time,
+          },
+        ],
+        [
+          grandchild,
+          {
+            id: grandchild,
+            parentID: child,
+            permission: [
+              ...oldBase.filter(
+                (rule) => rule.permission === "external_directory" || rule.action === "deny",
+              ),
+              ...nativeDenies,
+            ],
+            time,
+          },
+        ],
+      ]);
+      const stored = (id: string) => {
+        const session = sessions.get(id);
+        if (session === undefined) throw new Error(`Unexpected test session ${id}`);
+        return session;
+      };
+      const externalAction = (rules: PermissionRuleset) =>
+        rules.findLast(
+          (rule) =>
+            (rule.permission === "*" || rule.permission === "external_directory") &&
+            (rule.pattern === "*" || rule.pattern === oldPattern),
+        )?.action;
+      const submitted: PermissionRuleset[] = [];
+      let refuseChildListing = recovery === "retry";
+      const harness = yield* makeOpenCodeRuntimeHarness("grandchild-policy", root, {
+        event: { subscribe: async () => ({ stream: asyncEventStream().stream }) },
+        session: {
+          create: async () => ({ data: stored(root) }),
+          get: async ({ sessionID }: { sessionID: string }) => ({ data: stored(sessionID) }),
+          children: async ({ sessionID }: { sessionID: string }) => {
+            if (sessionID === child && refuseChildListing) {
+              refuseChildListing = false;
+              throw new Error("OpenCode could not list the grandchildren");
+            }
+            return {
+              data: [...sessions.values()].filter((session) => session.parentID === sessionID),
+            };
+          },
+          update: async (input: {
+            sessionID: string;
+            permission: PermissionRuleset;
+            metadata: Record<string, unknown>;
+          }) => {
+            const next = {
+              ...stored(input.sessionID),
+              permission: input.permission,
+              metadata: input.metadata,
+            };
+            sessions.set(input.sessionID, next);
+            return { data: next };
+          },
+          promptAsync: async () => {
+            submitted.push(stored(grandchild).permission);
+            return { data: true };
+          },
+          abort: async () => ({ data: true }),
+        },
+      });
+      const resumed = yield* harness.runtime.resumeThread({
+        providerThread: harness.providerThread,
+        threadId: harness.threadId,
+        runtimePolicy: policy,
+      });
+      if (recovery === "retry") {
+        const first = yield* Effect.exit(
+          harness.startTurn("Resume after downgrade", resumed, policy),
+        );
+        assert.isTrue(Exit.isFailure(first));
+        assert.isEmpty(submitted, "the incomplete refresh must block prompt admission");
+      }
+      assert.deepEqual(stored(child).metadata?.goatPermissionBase, nextBase);
+      assert.equal(externalAction(stored(grandchild).permission), "allow");
+
+      yield* harness.startTurn("Resume the grandchild", resumed, policy);
+      assert.lengthOf(submitted, 1);
+      const atPrompt = submitted[0] ?? [];
+      assert.oneOf(externalAction(atPrompt), ["ask", "deny"]);
+      assert.includeDeepMembers(atPrompt, nativeDenies);
+    }).pipe(
+      Effect.provide(Layer.merge(IdAllocator.layer, McpProviderSessions.layer)),
+      Effect.scoped,
+    ),
+);

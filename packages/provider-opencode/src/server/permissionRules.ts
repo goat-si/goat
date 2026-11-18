@@ -373,16 +373,19 @@ export function openCodeInstalledChildPermission(
         : startsWithRules(previous, inherited)
           ? inherited.length
           : 0);
-  const allowsExternal =
+  const allowsAllExternal =
     installed.permission.findLast(
       (rule) =>
         rule.pattern === "*" &&
         (rule.permission === "*" || rule.permission === "external_directory"),
     )?.action === "allow";
-  // A child can persist the inherited allow before its first GOAT update.
+  // Only the current base grants scoped directory access when inheritance is unknown.
   const kept = previous
     .slice(baseLength)
-    .filter((rule) => allowsExternal || !permissionRuleEquals(rule, external));
+    .filter(
+      (rule) =>
+        allowsAllExternal || rule.permission !== "external_directory" || rule.action !== "allow",
+    );
   return {
     permission:
       !resumed && baseLength === 0
