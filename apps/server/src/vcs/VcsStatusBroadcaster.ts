@@ -1,3 +1,5 @@
+import { remoteRefreshFailureDiagnostics } from "./vcsStatusDiagnostics.ts";
+import { makeHeadWatchers } from "./headWatchers.ts";
 import * as Cause from "effect/Cause";
 import { sshHostsRefusal } from "@goat/ssh/hostAccess";
 import * as Context from "effect/Context";
@@ -37,97 +39,6 @@ import * as ServerSettings from "../serverSettings.ts";
 
 const VCS_STATUS_REFRESH_FAILURE_BASE_DELAY = Duration.seconds(30);
 const VCS_STATUS_REFRESH_FAILURE_MAX_DELAY = Duration.minutes(15);
-const MAX_FAILURE_DIAGNOSTIC_VALUES = 8;
-const MAX_FAILURE_DIAGNOSTIC_VALUE_LENGTH = 128;
-
-function boundedDiagnosticValue(value: string): string {
-  return value.slice(0, MAX_FAILURE_DIAGNOSTIC_VALUE_LENGTH);
-}
-
-function diagnosticValueTag(value: unknown): string {
-  try {
-    if (
-      typeof value === "object" &&
-      value !== null &&
-      "_tag" in value &&
-      typeof value._tag === "string"
-    ) {
-      return boundedDiagnosticValue(value._tag);
-    }
-    if (value instanceof Error) {
-      return boundedDiagnosticValue(value.name);
-    }
-    return typeof value;
-  } catch {
-    return "Uninspectable";
-  }
-}
-
-function diagnosticFailureOperation(value: unknown): string | undefined {
-  try {
-    if (
-      typeof value === "object" &&
-      value !== null &&
-      "operation" in value &&
-      typeof value.operation === "string"
-    ) {
-      return boundedDiagnosticValue(value.operation);
-    }
-  } catch {
-    return undefined;
-  }
-  return undefined;
-}
-
-function addUniqueDiagnosticValue(values: Array<string>, value: string | undefined): void {
-  if (
-    value !== undefined &&
-    values.length < MAX_FAILURE_DIAGNOSTIC_VALUES &&
-    !values.includes(value)
-  ) {
-    values.push(value);
-  }
-}
-
-function remoteRefreshFailureDiagnostics(cause: Cause.Cause<unknown>) {
-  const failureTags: Array<string> = [];
-  const failureOperations: Array<string> = [];
-  const defectTags: Array<string> = [];
-  let failureCount = 0;
-  let defectCount = 0;
-  let interruptionCount = 0;
-
-  for (const reason of cause.reasons) {
-    if (Cause.isFailReason(reason)) {
-      failureCount += 1;
-      addUniqueDiagnosticValue(failureTags, diagnosticValueTag(reason.error));
-      addUniqueDiagnosticValue(failureOperations, diagnosticFailureOperation(reason.error));
-      continue;
-    }
-    if (Cause.isDieReason(reason)) {
-      defectCount += 1;
-      addUniqueDiagnosticValue(defectTags, diagnosticValueTag(reason.defect));
-      continue;
-    }
-    interruptionCount += 1;
-  }
-
-  return {
-    reasonCount: cause.reasons.length,
-    failureCount,
-    failureTags,
-    failureOperations,
-    defectCount,
-    defectTags,
-    interruptionCount,
-  };
-}
-
-interface VcsStatusChange {
-  readonly cwd: string;
-  readonly event: VcsStatusStreamEvent;
-}
-
 interface CachedValue<T> {
   readonly fingerprint: string;
   readonly value: T;
@@ -135,6 +46,11 @@ interface CachedValue<T> {
 
 interface CachedRemoteStatus extends CachedValue<VcsStatusRemoteResult | null> {
   readonly branch: string | null;
+}
+
+interface VcsStatusChange {
+  readonly cwd: string;
+  readonly event: VcsStatusStreamEvent;
 }
 
 interface CachedVcsStatus {
@@ -801,6 +717,26 @@ export const make = Effect.gen(function* () {
       ),
   );
 
+  // A checkout outside GOAT, such as `git switch` in the terminal, calls no refresh RPC.
+  // Rereading remote too, without a fetch, sends the new branch with its own PR and counts.
+  const refreshCheckedOutRef = Effect.fn("VcsStatusBroadcaster.refreshCheckedOutRef")(function* (
+    cwd: string,
+  ) {
+    if (!detailedSubscribers.has(cwd)) {
+      yield* refreshBranchStatusCore(cwd);
+    } else if ((yield* getCachedStatus(cwd))?.remote) {
+      yield* refreshRemoteStatus(cwd, { refreshUpstream: false });
+    } else {
+      yield* refreshLocalStatusCore(cwd);
+    }
+  });
+
+  const watchCheckout = yield* makeHeadWatchers(
+    broadcasterScope,
+    workflow.headPath,
+    refreshCheckedOutRef,
+  );
+
   const streamStatus: VcsStatusBroadcaster["Service"]["streamStatus"] = (input) =>
     Stream.unwrap(
       Effect.gen(function* () {
@@ -818,6 +754,7 @@ export const make = Effect.gen(function* () {
             }),
         );
         const subscription = yield* PubSub.subscribe(changesPubSub);
+        yield* watchCheckout(cwd);
         const initialLocal = yield* getOrLoadLocalStatus(cwd);
         const cachedStatus = yield* getCachedStatus(cwd);
         const initialRemote = cachedStatus?.remote?.value ?? null;
@@ -861,6 +798,7 @@ export const make = Effect.gen(function* () {
       Effect.gen(function* () {
         const cwd = yield* withFileSystem(normalizeCwd(input.cwd));
         const subscription = yield* PubSub.subscribe(branchChangesPubSub);
+        yield* watchCheckout(cwd);
         const branch = yield* refreshBranchStatusCore(cwd);
         return Stream.concat(
           Stream.make({ refName: branch.refName }),

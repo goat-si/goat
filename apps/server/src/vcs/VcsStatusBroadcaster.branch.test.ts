@@ -9,9 +9,60 @@ import * as Queue from "effect/Queue";
 import * as Scope from "effect/Scope";
 import * as Stream from "effect/Stream";
 import * as VcsStatusBroadcaster from "./VcsStatusBroadcaster.ts";
-import { baseLocalStatus, layerTestFor } from "./vcsStatusBroadcaster.testkit.ts";
+import { baseLocalStatus, baseRemoteStatus, layerTestFor } from "./vcsStatusBroadcaster.testkit.ts";
 
 describe("VcsStatusBroadcaster branch status", () => {
+  it.effect("publishes a terminal branch switch without reading remote status", () => {
+    const state = {
+      currentLocalStatus: baseLocalStatus,
+      currentRemoteStatus: remoteStatusWithPr,
+      localStatusCalls: 0,
+      remoteStatusCalls: 0,
+      localInvalidationCalls: 0,
+      remoteInvalidationCalls: 0,
+    };
+
+    return Effect.gen(function* () {
+      const broadcaster = yield* VcsStatusBroadcaster.VcsStatusBroadcaster;
+      yield* broadcaster.getStatus({ cwd: "/repo" });
+      const subscribed = yield* Deferred.make<void>();
+      const events = yield* broadcaster.streamStatus({ cwd: "/repo", includeRemote: false }).pipe(
+        Stream.tap((event) =>
+          event._tag === "snapshot" ? Deferred.succeed(subscribed, undefined) : Effect.void,
+        ),
+        Stream.take(3),
+        Stream.runCollect,
+        Effect.forkScoped,
+      );
+      yield* Deferred.await(subscribed);
+
+      state.currentLocalStatus = { ...baseLocalStatus, refName: "main" };
+      state.currentRemoteStatus = baseRemoteStatus;
+      const refreshed = yield* broadcaster.refreshStatus("/repo", { localOnly: true });
+      assert.equal(refreshed.refName, "main");
+      assert.isNull(refreshed.pr);
+      assert.equal(state.localInvalidationCalls, 1);
+      assert.equal(state.remoteStatusCalls, 1);
+      assert.equal(state.remoteInvalidationCalls, 1);
+      assert.deepStrictEqual((yield* Fiber.join(events)).slice(1), [
+        { _tag: "remoteUpdated", remote: null },
+        { _tag: "localUpdated", local: state.currentLocalStatus },
+      ]);
+      assert.isNull((yield* broadcaster.getStatus({ cwd: "/repo" })).pr);
+      assert.equal(state.remoteStatusCalls, 2);
+      state.currentLocalStatus = { ...state.currentLocalStatus, hasWorkingTreeChanges: true };
+      yield* broadcaster.refreshLocalStatus("/repo");
+      const snapshot = yield* broadcaster
+        .streamStatus({ cwd: "/repo", includeRemote: false })
+        .pipe(Stream.take(1), Stream.runCollect);
+      assert.deepStrictEqual(snapshot[0], {
+        _tag: "snapshot",
+        local: state.currentLocalStatus,
+        remote: baseRemoteStatus,
+      });
+    }).pipe(Effect.provide(layerTestFor(state)));
+  });
+
   it.effect(
     "streams fresh branch-only reads, detached HEAD, non-repositories, and detailed demand without mixing results",
     () => {
