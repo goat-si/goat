@@ -282,11 +282,14 @@ const make = Effect.gen(function* () {
     projections
       .getThread(threadId)
       .pipe(Effect.catchTags({ ProjectionStoreThreadNotFoundError: () => Effect.void }));
-  const coordinatorFor = (threadId: ThreadId) =>
-    lookupAskingThread(threadId).pipe(
-      Effect.flatMap((asking) => (asking === undefined ? Effect.void : launcherOf(asking))),
-      Effect.map((launcherId) => (launcherId === threadId ? undefined : launcherId)),
-    );
+  const coordinatorFor = Effect.fn("QuestionEscalation.coordinatorFor")(function* (
+    threadId: ThreadId,
+  ) {
+    const asking = yield* lookupAskingThread(threadId);
+    if (asking === undefined) return;
+    const coordinator = yield* launcherOf(asking);
+    return coordinator === threadId ? undefined : coordinator;
+  });
   const reconcileOnce = (threadId: ThreadId, requestId: RuntimeRequestId, coordinator: ThreadId) =>
     Effect.gen(function* () {
       const asking = yield* lookupAskingThread(threadId);

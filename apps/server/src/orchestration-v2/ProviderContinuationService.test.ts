@@ -144,7 +144,7 @@ describe("ProviderContinuationService", () => {
           Deferred.succeed(entered, undefined).pipe(
             Effect.andThen(Deferred.await(release)),
             Effect.andThen(effect),
-            Effect.map(Option.some),
+            Effect.asSome,
           ),
         "First wake",
       );
