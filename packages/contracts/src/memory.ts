@@ -2,11 +2,11 @@ import * as Effect from "effect/Effect";
 import * as Option from "effect/Option";
 import * as DateTime from "effect/DateTime";
 import * as Schema from "effect/Schema";
-import * as SchemaParser from "effect/SchemaParser";
-import * as SchemaAST from "effect/SchemaAST";
+import type * as SchemaAST from "effect/SchemaAST";
 import * as SchemaTransformation from "effect/SchemaTransformation";
 import { EnvironmentId, EventId, MessageId, NonNegativeInt, PositiveInt } from "./baseSchemas.ts";
 import { ScopedThreadRef, ScopedProjectRef } from "./environment.ts";
+import { strictSchema } from "./memoryStrictSchema.ts";
 import { ProviderDriverKind } from "./providerInstance.ts";
 
 const utf8 = (s: string) => new TextEncoder().encode(s).length;
@@ -28,22 +28,6 @@ const array = <S extends Schema.Top>(schema: S, max = 100, min = 0) =>
   );
 const distinct = <S extends Schema.Top>(schema: S, max = 100, min = 0) =>
   array(schema, max, min).check(Schema.makeFilter(unique));
-// Effect 4 annotations cannot set parse options. A declaration keeps strict parsing
-// at the schema boundary, including flipped (encode) and type-only (.make) codecs.
-const strictSchema = <S extends Schema.Constraint>(schema: S) =>
-  Schema.declareConstructor<S["Type"], S["Encoded"]>()(
-    [schema],
-    ([codec]) => {
-      const decode = SchemaParser.decodeUnknownEffect(codec);
-      return (input, _ast, options) => decode(input, { ...options, onExcessProperty: "error" });
-    },
-    {
-      toCodec: ([codec]) => new SchemaAST.Link(codec.ast, SchemaTransformation.passthrough()),
-      // All memory Encoded values already use JSON. Do not insert a permissive
-      // struct parser ahead of this declaration when RPC derives its JSON codec.
-      toCodecJson: () => undefined,
-    },
-  );
 const struct = <F extends Schema.Struct.Fields>(fields: F) => {
   const schema = Schema.Struct(fields);
   // Effect's empty struct parser only rejects nullish values and preserves all others.
@@ -1829,15 +1813,24 @@ export const MemoryHubDisableInput = struct({
   expectedVersion: NonNegativeInt,
 });
 export type MemoryHubDisableInput = typeof MemoryHubDisableInput.Type;
-export const MemorySettingsGetInput = struct({});
+export const MemorySettingsGetInput = struct({
+  includeModelAvailability: Schema.optionalKey(Schema.Boolean).annotate({
+    description: "Include modelAvailable in the response.",
+  }),
+});
 export type MemorySettingsGetInput = typeof MemorySettingsGetInput.Type;
-export const MemorySettingsView = struct({
+const memorySettingsViewFields = {
   enabled: Schema.Boolean,
   hub: struct({ mode: Schema.Literals(["disabled", "hub", "member"]), version: NonNegativeInt }),
   model: struct({ selection: MemoryModelSelection, automatic: Schema.Boolean }),
-  modelAvailable: Schema.optionalKey(Schema.Literal(false)),
-});
+};
+export const MemorySettingsView = struct(memorySettingsViewFields);
 export type MemorySettingsView = typeof MemorySettingsView.Type;
+export const MemorySettingsViewWithAvailability = struct({
+  ...memorySettingsViewFields,
+  modelAvailable: Schema.optionalKey(Schema.Boolean),
+});
+export type MemorySettingsViewWithAvailability = typeof MemorySettingsViewWithAvailability.Type;
 export const MemorySettingsUpdateInput = struct({
   requestId: MemoryOperationId,
   enabled: Schema.optionalKey(Schema.Boolean),
