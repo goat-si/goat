@@ -43,6 +43,8 @@ import {
   hasLiveRun,
   isTerminalDelegatedTaskStatus,
   delegatedTaskTerminalStatus,
+  guardScheduledWorktreeSend,
+  latestFailedWorktreeRun,
   worktreeSetupPending,
 } from "./goat/OrchestratorRunState.ts";
 import type { ProjectionAwarenessReader } from "./ProjectionAwareness.ts";
@@ -5086,6 +5088,7 @@ const makeOrchestrator = Effect.fn("orchestrationV2.Orchestrator.layer")(functio
           }
         : undefined,
     );
+    yield* guardScheduledWorktreeSend(command, projection).pipe(mapDispatchError(command));
     let steerFollowUpAfterStop = false;
     if (command.steerFollowUpOfRunId !== undefined) {
       const source = projection.runs.find((run) => run.id === command.steerFollowUpOfRunId);
@@ -5754,14 +5757,10 @@ const makeOrchestrator = Effect.fn("orchestrationV2.Orchestrator.layer")(functio
     // A message queued during worktree setup can arrive after that setup failed
     // without a worktree. It waits, held, like the messages queued before the
     // failure, instead of starting in the project checkout.
-    const latestRun = latestExecutedRun(projection.runs);
     const worktreeMissingRun =
       activeRun === undefined &&
-      (dispatchMode.type === "queue_after_active" || dispatchMode.type === "start_immediately") &&
-      (latestRun?.status === "failed" || latestRun?.status === "interrupted") &&
-      latestRun.workspacePreparation?.type === "worktree" &&
-      projection.thread.worktreePath === null
-        ? latestRun
+      (dispatchMode.type === "queue_after_active" || dispatchMode.type === "start_immediately")
+        ? latestFailedWorktreeRun(projection)
         : undefined;
     const queueBehindRun =
       activeRun && survivorQueued.has(activeRun.id)

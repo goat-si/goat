@@ -6,6 +6,8 @@ import type {
 } from "@goat/contracts";
 import { latestExecutedRun } from "@goat/shared/orchestrationV2ThreadError";
 import type * as DateTime from "effect/DateTime";
+import * as Effect from "effect/Effect";
+import { cancelledBeforeStart } from "../RestartBackgroundNote.ts";
 
 /** Stop ended this task, so its result is not delivered to the parent agent. */
 export function cancelledAppOwnedTask(
@@ -113,16 +115,40 @@ export function delegatedTaskTerminalStatus(
   }
 }
 
+function failedWorktreePreparation(run: OrchestrationV2Run): boolean {
+  return (
+    (run.status === "failed" || run.status === "interrupted") &&
+    run.workspacePreparation?.type === "worktree"
+  );
+}
+
+export function latestFailedWorktreeRun(
+  projection: Pick<OrchestrationV2ThreadProjection, "thread" | "runs">,
+): OrchestrationV2Run | undefined {
+  if (projection.thread.worktreePath !== null) return undefined;
+  const latest = latestExecutedRun(projection.runs);
+  return latest !== null && failedWorktreePreparation(latest) ? latest : undefined;
+}
+
 /** Failed worktree setup keeps the queue held so queued messages cannot start in the project checkout. */
 export function worktreeSetupPending(
   projection: Pick<OrchestrationV2ThreadProjection, "thread" | "runs">,
 ): boolean {
-  return (
+  return projection.thread.worktreePath === null && projection.runs.some(failedWorktreePreparation);
+}
+
+export function guardScheduledWorktreeSend(
+  command: Extract<OrchestrationV2Command, { readonly type: "message.dispatch" }>,
+  projection: Pick<OrchestrationV2ThreadProjection, "thread" | "runs">,
+): Effect.Effect<void, string> {
+  return command.scheduledTaskId !== undefined &&
+    command.dispatchMode.type !== "defer_start" &&
     projection.thread.worktreePath === null &&
     projection.runs.some(
-      (run) =>
-        (run.status === "failed" || run.status === "interrupted") &&
-        run.workspacePreparation?.type === "worktree",
+      (run) => run.workspacePreparation?.type === "worktree" && cancelledBeforeStart(run),
     )
-  );
+    ? Effect.fail(
+        "The automation's worktree setup was cancelled. Attach a worktree to its thread or recreate the automation with a new worktree.",
+      )
+    : Effect.void;
 }
