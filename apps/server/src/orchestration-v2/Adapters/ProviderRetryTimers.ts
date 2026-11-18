@@ -1,5 +1,5 @@
 import type { ProviderTurnId } from "@goat/contracts";
-import type * as ProviderAdapter from "@goat/provider-core/server/ProviderAdapter";
+import { PROVIDER_RETRY_BUDGET_MS } from "@goat/provider-core/server/failure";
 import * as Effect from "effect/Effect";
 import * as Fiber from "effect/Fiber";
 import type * as Scope from "effect/Scope";
@@ -13,11 +13,11 @@ export function makeProviderRetryTimers(scope: Scope.Scope) {
   });
   const start = Effect.fn("ProviderRetryTimers.start")(function* (
     id: ProviderTurnId,
-    work: Effect.Effect<void, ProviderAdapter.ProviderAdapterProtocolError>,
+    work: Effect.Effect<void, unknown>,
   ) {
     yield* cancel(id);
     // Cancel runs outside the terminalization permit, so it may interrupt only the sleep; due work gets its own fiber.
-    const timer = yield* Effect.sleep("10 minutes").pipe(
+    const timer = yield* Effect.sleep(PROVIDER_RETRY_BUDGET_MS).pipe(
       Effect.andThen(Effect.forkIn(work, scope)),
       Effect.asVoid,
       Effect.ensuring(

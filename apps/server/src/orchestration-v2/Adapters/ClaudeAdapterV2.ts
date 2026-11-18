@@ -1,3 +1,4 @@
+import { makeProviderRetryTimers } from "./ProviderRetryTimers.ts";
 import { readClaudeSubagentEffort } from "./ClaudeSubagentEffort.ts";
 import type { RouteClaudeModelCatalog } from "../../provider/ClaudeCodeModelRoutes.ts";
 import { providerFailureFromResult, terminalStatusFromResult } from "./ClaudeResultFailure.ts";
@@ -2059,6 +2060,7 @@ const withoutMemoryBody = (input: ProviderAdapter.ProviderAdapterV2TurnInput) =>
 };
 
 interface ActiveClaudeTurnContext {
+  retryBudgetFailure?: OrchestrationV2ProviderFailure;
   readonly autoCompactWindow: string;
   readonly queryPolicy: ClaudeRuntimeQueryPolicy;
   input: ProviderAdapter.ProviderAdapterV2TurnInput;
@@ -2807,6 +2809,7 @@ export const makeClaudeAdapterV2 = Effect.fn("makeClaudeAdapterV2")(function* (
     openSession: Effect.fn("ClaudeAdapterV2.openSession")(
       function* (input: ProviderAdapter.ProviderAdapterV2OpenSessionInput) {
         const sessionScope = yield* Effect.scope;
+        const providerRetryTimers = makeProviderRetryTimers(sessionScope);
         const now = yield* DateTime.now;
         const session = providerSession({
           providerSessionId: input.providerSessionId,
@@ -3320,6 +3323,7 @@ export const makeClaudeAdapterV2 = Effect.fn("makeClaudeAdapterV2")(function* (
           context: ActiveClaudeTurnContext,
           updatedAt: DateTime.Utc,
         ) {
+          if (context.retryBudgetFailure !== undefined) return;
           const providerRetry = yield* Ref.modify(providerRetries, (current) => {
             const retry = current.get(context.providerTurnId);
             if (retry === undefined) {
@@ -3329,9 +3333,8 @@ export const makeClaudeAdapterV2 = Effect.fn("makeClaudeAdapterV2")(function* (
             updated.delete(context.providerTurnId);
             return [retry, updated] as const;
           });
-          if (providerRetry === undefined) {
-            return;
-          }
+          if (providerRetry === undefined) return;
+          yield* providerRetryTimers.cancel(context.providerTurnId);
           yield* emitProviderEvent({
             type: "turn_item.updated",
             driver: CLAUDE_PROVIDER,
@@ -5744,7 +5747,7 @@ export const makeClaudeAdapterV2 = Effect.fn("makeClaudeAdapterV2")(function* (
           }
         });
 
-        const finalizeActiveTurn = Effect.fnUntraced(function* (input: {
+        const finalizeActiveTurn = Effect.fnUntraced(function* (requested: {
           readonly context: ActiveClaudeTurnContext;
           readonly status: Extract<
             OrchestrationV2ProviderTurn["status"],
@@ -5755,6 +5758,12 @@ export const makeClaudeAdapterV2 = Effect.fn("makeClaudeAdapterV2")(function* (
           readonly threadDisposition?: "reusable" | "broken";
           readonly result?: SDKResultMessage;
         }) {
+          const retryFailure = requested.context.retryBudgetFailure;
+          const input =
+            retryFailure !== undefined && requested.status === "interrupted"
+              ? { ...requested, status: "failed" as const, failure: retryFailure }
+              : requested;
+          yield* providerRetryTimers.cancel(input.context.providerTurnId);
           if (input.context.memoryRelease) yield* input.context.memoryRelease;
           input.context.steersClosed = true;
           yield* reasoningDeltas.flushTurn(input.context.nativeTurnId);
@@ -6298,6 +6307,44 @@ export const makeClaudeAdapterV2 = Effect.fn("makeClaudeAdapterV2")(function* (
             });
           }
         });
+
+        const failExpiredProviderRetry = Effect.fn("ClaudeAdapterV2.failExpiredProviderRetry")(
+          function* (context: ActiveClaudeTurnContext, startedAt: DateTime.Utc) {
+            const live = yield* Ref.get(queryContext);
+            const retry = (yield* Ref.get(providerRetries)).get(context.providerTurnId);
+            if (
+              live === null ||
+              live.lastTurn !== context ||
+              retry?.startedAt !== startedAt ||
+              (yield* Ref.get(activeTurn)) !== context ||
+              (yield* Ref.get(interruptedTurns)).has(context.providerTurnId)
+            )
+              return;
+            context.retryBudgetFailure = { ...retry.failure, retryable: false };
+            yield* interruptTurn({
+              providerThread: context.input.providerThread,
+              providerTurnId: context.providerTurnId,
+            }).pipe(
+              Effect.timeoutOption(CLAUDE_STOP_CONFIRM_TIMEOUT_MS),
+              Effect.catch((cause) =>
+                Effect.logWarning("orchestration-v2.claude-retry-budget-stop-failed", { cause }),
+              ),
+            );
+            if ((yield* Ref.get(activeTurn)) !== context) return;
+            const ownsQuery = yield* Ref.modify(queryContext, (current) =>
+              current === live ? [true, null] : [false, current],
+            );
+            if (!ownsQuery) return;
+            live.stopping = true;
+            yield* live.query.close.pipe(
+              Effect.timeoutOption(CLAUDE_STOP_CONFIRM_TIMEOUT_MS),
+              Effect.ignore,
+            );
+            yield* finalizeActiveTurnAfterQueryExit(live);
+            yield* endSubagentCallsOfClosedQuery(live.nativeThreadId, "interrupted");
+            yield* Deferred.succeed(live.closed, undefined);
+          },
+        );
 
         const applyWorkflowProgressWithoutTurn = Effect.fnUntraced(function* (message: SDKMessage) {
           if (message.type !== "system" || message.subtype !== "task_progress") return;
@@ -7442,6 +7489,11 @@ export const makeClaudeAdapterV2 = Effect.fn("makeClaudeAdapterV2")(function* (
               updated.set(context.providerTurnId, state);
               return updated;
             });
+            if (previous === undefined)
+              yield* providerRetryTimers.start(
+                context.providerTurnId,
+                failExpiredProviderRetry(context, state.startedAt),
+              );
             yield* emitProviderEvent({
               type: "turn_item.updated",
               driver: CLAUDE_PROVIDER,
@@ -7464,8 +7516,12 @@ export const makeClaudeAdapterV2 = Effect.fn("makeClaudeAdapterV2")(function* (
           }
 
           if (message.type === "assistant" && input.replayed !== true) {
-            const now = yield* DateTime.now;
-            yield* completeProviderRetry(context, now);
+            if (
+              message.parent_tool_use_id == null &&
+              message.message.model !== "<synthetic>" &&
+              message.error === undefined
+            )
+              yield* completeProviderRetry(context, yield* DateTime.now);
             // CLI-generated <synthetic> frames report zero usage, not context usage.
             if (
               message.parent_tool_use_id === null &&
@@ -8311,7 +8367,9 @@ export const makeClaudeAdapterV2 = Effect.fn("makeClaudeAdapterV2")(function* (
             context !== null &&
             liveQuery?.query === input.query &&
             message.type === "stream_event" &&
-            message.event.type === "message_start"
+            message.parent_tool_use_id == null &&
+            message.event.type === "message_start" &&
+            message.event.message.model !== "<synthetic>"
           ) {
             yield* completeProviderRetry(context, yield* DateTime.now);
           }

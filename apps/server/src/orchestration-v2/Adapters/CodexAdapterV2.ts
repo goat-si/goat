@@ -207,6 +207,7 @@ import { codexFileChangeLineCounts } from "../fileChangeLineCounts.ts";
 import { codexFileChangePatch } from "../fileChangePatch.ts";
 import {
   codexExhaustionHttpStatus,
+  codexHttpStatus,
   codexFailureClassification,
   codexRetryFailureClass,
   settledCodexFailure,
@@ -595,6 +596,7 @@ export interface ActiveCodexTurnContext {
 interface ActiveCodexProviderRetry {
   readonly nativeMessage: string;
   readonly nativeCode: string | null;
+  readonly httpStatus: number | null;
   readonly retry: OrchestrationV2ProviderRetry;
   readonly failure: OrchestrationV2ProviderFailure;
   readonly startedAt: DateTime.Utc;
@@ -4407,6 +4409,7 @@ export const makeCodexAdapterV2 = Effect.fn("makeCodexAdapterV2")(function* (
             const state: ActiveCodexProviderRetry = {
               nativeMessage: payload.error.message,
               nativeCode: code,
+              httpStatus: codexHttpStatus(payload.error.codexErrorInfo),
               retry,
               failure,
               startedAt: previous?.startedAt ?? updatedAt,
@@ -4417,10 +4420,11 @@ export const makeCodexAdapterV2 = Effect.fn("makeCodexAdapterV2")(function* (
               updated.set(context.providerTurnId, state);
               return updated;
             });
-            yield* providerRetryTimers.start(
-              context.providerTurnId,
-              failStalledProviderRetry(context, state, payload.error.codexErrorInfo),
-            );
+            if (previous === undefined)
+              yield* providerRetryTimers.start(
+                context.providerTurnId,
+                failStalledProviderRetry(context, state.startedAt),
+              );
             yield* emitProviderEvent({
               type: "turn_item.updated",
               driver: CODEX_PROVIDER,
@@ -5921,8 +5925,7 @@ export const makeCodexAdapterV2 = Effect.fn("makeCodexAdapterV2")(function* (
           readonly completedAt: DateTime.Utc;
           readonly failureMessage?: string;
           readonly failureErrorInfo?: CodexErrorInfo;
-          readonly stalledRetry?: ActiveCodexProviderRetry;
-          readonly stalledRateLimited?: boolean;
+          readonly stalledRetryStartedAt?: DateTime.Utc;
         }): Effect.Effect<boolean> =>
           turnTerminalizationPermit.withPermits(1)(
             Effect.gen(function* () {
@@ -5930,12 +5933,12 @@ export const makeCodexAdapterV2 = Effect.fn("makeCodexAdapterV2")(function* (
               if (current !== input.context) {
                 return false;
               }
-              if (input.stalledRetry === undefined)
+              if (input.stalledRetryStartedAt === undefined)
                 yield* providerRetryTimers.cancel(input.context.providerTurnId);
-              if (input.stalledRetry !== undefined) {
+              if (input.stalledRetryStartedAt !== undefined) {
                 const retry = (yield* Ref.get(providerRetries)).get(input.context.providerTurnId);
                 if (
-                  retry !== input.stalledRetry ||
+                  retry?.startedAt !== input.stalledRetryStartedAt ||
                   (yield* Ref.get(interruptingNativeTurns)).has(input.nativeTurnId)
                 )
                   return false;
@@ -5945,7 +5948,7 @@ export const makeCodexAdapterV2 = Effect.fn("makeCodexAdapterV2")(function* (
                   failure: {
                     ...retry.failure,
                     retryable: false,
-                    ...(input.stalledRateLimited ? { class: "usage_limit" as const } : {}),
+                    ...(retry.httpStatus === 429 ? { class: "usage_limit" as const } : {}),
                   },
                 };
               }
@@ -6355,29 +6358,13 @@ export const makeCodexAdapterV2 = Effect.fn("makeCodexAdapterV2")(function* (
             }),
           );
         const failStalledProviderRetry = Effect.fn("CodexAdapterV2.failStalledProviderRetry")(
-          function* (
-            context: ActiveCodexTurnContext,
-            state: ActiveCodexProviderRetry,
-            errorInfo: CodexErrorInfo | null | undefined,
-          ) {
-            const detail =
-              typeof errorInfo === "object" && errorInfo !== null
-                ? Object.values(errorInfo)[0]
-                : undefined;
-            const rateLimited =
-              typeof detail === "object" &&
-              detail !== null &&
-              "httpStatusCode" in detail &&
-              detail.httpStatusCode === 429;
-            // Retain the original identity for the race check while applying its classified failure.
+          function* (context: ActiveCodexTurnContext, startedAt: DateTime.Utc) {
             const finalized = yield* finalizeCodexTurn({
               context,
               nativeTurnId: context.nativeTurnId,
               status: "failed",
               completedAt: yield* DateTime.now,
-              stalledRetry: state,
-              stalledRateLimited: rateLimited,
-              ...(errorInfo == null ? {} : { failureErrorInfo: errorInfo }),
+              stalledRetryStartedAt: startedAt,
             });
             if (!finalized) return;
             const nativeThreadId = yield* getNativeThreadId(context.providerThread);

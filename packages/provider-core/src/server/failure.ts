@@ -17,6 +17,9 @@ import * as IdAllocator from "./IdAllocator.ts";
 import type { ProviderAdapterFailureReason } from "./ProviderAdapter.ts";
 import * as Schema from "effect/Schema";
 
+/** Upper bound on one uninterrupted series of provider-native retries. */
+export const PROVIDER_RETRY_BUDGET_MS = 10 * 60 * 1000;
+
 export class ContextHandoffBudgetError extends Schema.TaggedError<ContextHandoffBudgetError>()(
   "ContextHandoffBudgetError",
   {},

@@ -6313,6 +6313,65 @@ describe("ClaudeAdapterV2 background wake turns", () => {
     }).pipe(Effect.scoped, Effect.provide(layerAdapterTest)),
   );
 
+  it.effect("fails unanswered Claude retries ten minutes after the first notice", () =>
+    Effect.gen(function* () {
+      const harness = yield* makeWakeHarnessWithOptions({
+        interrupt: Effect.never,
+        close: Queue.shutdown,
+      });
+      yield* harness.runtime.startTurn(
+        makeClaudeTestTurnInput({
+          threadId: harness.threadId,
+          providerThread: harness.providerThread,
+          now: yield* DateTime.now,
+          attemptId: RunAttemptId.make("attempt-unanswered-retry"),
+          text: "Continue.",
+          attachments: [],
+        }),
+      );
+      const retry = (attempt: number) =>
+        claudeSdkFrame({
+          type: "system",
+          subtype: "api_retry",
+          attempt,
+          max_retries: 10,
+          retry_delay_ms: 1500,
+          error_status: 529,
+          error: "overloaded",
+          uuid: `unanswered-retry-${attempt}`,
+          session_id: WAKE_NATIVE_SESSION,
+        });
+      yield* harness.offerAndWait(retry(1));
+      yield* TestClock.adjust("9 minutes");
+      yield* harness.offerAndWait(retry(2));
+      yield* harness.offerAndWait(
+        claudeSdkFrame({
+          type: "assistant",
+          uuid: "retry-not-a-reply",
+          session_id: WAKE_NATIVE_SESSION,
+          parent_tool_use_id: null,
+          error: "server_error",
+          message: {
+            type: "message",
+            role: "assistant",
+            id: "retry-not-a-reply",
+            model: "<synthetic>",
+            content: [{ type: "text", text: "Retrying." }],
+          },
+        }),
+      );
+      assert.isEmpty(harness.terminalEvents());
+      yield* TestClock.adjust("1 minute");
+      yield* TestClock.adjust("20 seconds");
+      const terminal = harness.terminalEvents().at(-1);
+      assert.equal(terminal?.status, "failed");
+      if (terminal?.status !== "failed") return;
+      assert.equal(terminal.failure.code, "api_error_529");
+      assert.isFalse(terminal.failure.retryable);
+      assert.equal(terminal.retry?.attempt, 2);
+    }).pipe(Effect.scoped, Effect.provide(layerAdapterTest)),
+  );
+
   it.effect("resolves API retries on resumed assistant activity", () =>
     Effect.scoped(
       Effect.gen(function* () {
