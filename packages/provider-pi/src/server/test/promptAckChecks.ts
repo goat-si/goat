@@ -6,6 +6,9 @@ import * as Exit from "effect/Exit";
 import * as Fiber from "effect/Fiber";
 import * as Schema from "effect/Schema";
 import * as Scope from "effect/Scope";
+import * as TestClock from "effect/testing/TestClock";
+
+import { PROMPT_ACKNOWLEDGMENT_TIMEOUT_DETAIL } from "../promptAcknowledgment.ts";
 
 import type * as Fixture from "../adapter.test.ts";
 import type * as FakePiModule from "./fakePi.ts";
@@ -324,6 +327,81 @@ export function registerPiPromptAckChecks({
           secondTerminal.type === "turn.terminal" && secondTerminal.status === "completed",
         );
       }).pipe(Effect.scoped, Effect.provide(layerTest)),
+  );
+
+  const settleFirstTurnOwingAnAck = Effect.fn("settleFirstTurnOwingAnAck")(function* (
+    fake: Effect.Success<typeof makeFakePi>,
+    opened: Effect.Success<ReturnType<typeof openRuntime>>,
+  ) {
+    const { runtime, takeEvent } = opened;
+    const providerThread = yield* runtime.ensureThread({
+      threadId: THREAD_ID,
+      modelSelection: modelSelection("default"),
+      runtimePolicy,
+    });
+    fake.deferNextLifecycle("prompt");
+    yield* startTurn(runtime, providerThread);
+    const oldPrompt = yield* fake.takeRequest("prompt");
+    const running = yield* takeEvent((event) => event.type === "provider_turn.updated");
+    if (running.type !== "provider_turn.updated") return assert.fail("no running turn");
+    yield* runtime.interruptTurn({ providerThread, providerTurnId: running.providerTurn.id });
+    yield* fake.emit({ type: "agent_settled" });
+    yield* takeEvent((event) => event.type === "turn.terminal");
+    const next = yield* startTurn(
+      runtime,
+      providerThread,
+      "default",
+      [],
+      "Second turn",
+      undefined,
+      2,
+    ).pipe(Effect.result, Effect.forkScoped({ startImmediately: true }));
+    return { oldPrompt, next };
+  });
+
+  it.effect(
+    "fails a start held 2 minutes for an earlier prompt's acknowledgment, with the reason",
+    () =>
+      Effect.gen(function* () {
+        const fake = yield* makeFakePi;
+        const { next } = yield* settleFirstTurnOwingAnAck(fake, yield* openRuntime(fake));
+        yield* TestClock.adjust("2 minutes");
+        const exit = next.pollUnsafe();
+        assert.isTrue(exit !== undefined && Exit.isSuccess(exit) && exit.value._tag === "Failure");
+        if (exit === undefined || !Exit.isSuccess(exit) || exit.value._tag !== "Failure") return;
+        const cause = exit.value.failure.cause;
+        assert.isTrue(isProviderProtocolError(cause));
+        assert.equal(
+          isProviderProtocolError(cause) ? cause.detail : "",
+          PROMPT_ACKNOWLEDGMENT_TIMEOUT_DETAIL,
+        );
+        assert.lengthOf(
+          fake.allRequests().filter((request) => request["type"] === "prompt"),
+          1,
+        );
+      }).pipe(Effect.scoped, Effect.provide(layerTest)),
+  );
+
+  it.effect("keeps a held start waiting past 2 minutes while a Pi dialog is open", () =>
+    Effect.gen(function* () {
+      const fake = yield* makeFakePi;
+      const opened = yield* openRuntime(fake);
+      const { oldPrompt, next } = yield* settleFirstTurnOwingAnAck(fake, opened);
+      yield* fake.emit({
+        type: "extension_ui_request",
+        id: "input-handler-dialog",
+        method: "confirm",
+        title: "Pending ACK",
+      });
+      yield* opened.takeEvent(
+        (event) =>
+          event.type === "runtime_request.updated" && event.runtimeRequest.status === "pending",
+      );
+      yield* TestClock.adjust("2 minutes");
+      assert.isUndefined(next.pollUnsafe());
+      yield* fake.emit({ type: "response", id: oldPrompt["id"], command: "prompt", success: true });
+      assert.equal((yield* Fiber.join(next))._tag, "Success");
+    }).pipe(Effect.scoped, Effect.provide(layerTest)),
   );
 
   it.effect.each([

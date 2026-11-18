@@ -1,16 +1,19 @@
 import type { DesktopRuntimeInfo, DesktopUpdateChannel, DesktopUpdateState } from "@goat/contracts";
 import * as Effect from "effect/Effect";
+import * as FileSystem from "effect/FileSystem";
+import * as Ref from "effect/Ref";
 import * as Option from "effect/Option";
 import * as Schema from "effect/Schema";
-import type * as DesktopEnvironment from "../app/DesktopEnvironment.ts";
+import * as DesktopConfig from "../app/DesktopConfig.ts";
+import * as DesktopEnvironment from "../app/DesktopEnvironment.ts";
 import { createInitialDesktopUpdateState } from "./updateMachine.ts";
 
 const AppUpdateYmlConfig = Schema.Record(Schema.String, Schema.String);
-export type AppUpdateYmlConfig = typeof AppUpdateYmlConfig.Type;
+type AppUpdateYmlConfig = typeof AppUpdateYmlConfig.Type;
 
 const decodeAppUpdateYmlConfig = Schema.decodeUnknownEffect(AppUpdateYmlConfig);
 
-export function parseAppUpdateYml(raw: string): Effect.Effect<Option.Option<AppUpdateYmlConfig>> {
+function parseAppUpdateYml(raw: string): Effect.Effect<Option.Option<AppUpdateYmlConfig>> {
   const entries: Record<string, string> = {};
   for (const line of raw.split("\n")) {
     const match = line.match(/^(\w+):\s*(.+)$/);
@@ -43,7 +46,7 @@ export function getCanRetryFromState(state: DesktopUpdateState): boolean {
   return state.availableVersion !== null || state.downloadedVersion !== null;
 }
 
-export function getAutoUpdateDisabledReason(args: {
+function getAutoUpdateDisabledReason(args: {
   isDevelopment: boolean;
   isPackaged: boolean;
   platform: NodeJS.Platform;
@@ -70,3 +73,55 @@ export function getAutoUpdateDisabledReason(args: {
 export function isArm64HostRunningIntelBuild(runtimeInfo: DesktopRuntimeInfo): boolean {
   return runtimeInfo.hostArch === "arm64" && runtimeInfo.appArch === "x64";
 }
+
+export const makeDesktopUpdateAvailability = Effect.fn("desktop.updates.makeAvailability")(
+  function* (blockedInstallationReason: string | null) {
+    const config = yield* DesktopConfig.DesktopConfig;
+    const environment = yield* DesktopEnvironment.DesktopEnvironment;
+    const fileSystem = yield* FileSystem.FileSystem;
+    const appUpdateYmlConfigRef = yield* Ref.make<Option.Option<AppUpdateYmlConfig>>(Option.none());
+
+    const loadFeed = fileSystem.readFileString(environment.appUpdateYmlPath, "utf-8").pipe(
+      Effect.option,
+      Effect.flatMap(
+        Option.match({
+          onNone: () => Effect.succeed(Option.none<AppUpdateYmlConfig>()),
+          onSome: parseAppUpdateYml,
+        }),
+      ),
+      Effect.flatMap((feed) => Ref.set(appUpdateYmlConfigRef, feed)),
+    );
+
+    // electron-updater uses this marker to install .deb updates with dpkg.
+    const isDebPackage =
+      environment.platform === "linux" && environment.isPackaged
+        ? yield* fileSystem
+            .readFileString(environment.path.join(environment.resourcesPath, "package-type"))
+            .pipe(
+              Effect.map((packageType) => packageType.trim() === "deb"),
+              Effect.orElseSucceed(() => false),
+            )
+        : false;
+
+    const hasUpdateFeedConfig = Ref.get(appUpdateYmlConfigRef).pipe(
+      Effect.map((appUpdateYmlConfig) => Option.isSome(appUpdateYmlConfig) || config.mockUpdates),
+    );
+
+    const resolveDisabledReason = Effect.gen(function* () {
+      const hasFeedConfig = yield* hasUpdateFeedConfig;
+      return Option.fromNullishOr(
+        getAutoUpdateDisabledReason({
+          isDevelopment: environment.isDevelopment,
+          isPackaged: environment.isPackaged,
+          platform: environment.platform,
+          appImage: Option.getOrUndefined(config.appImagePath),
+          isDebPackage,
+          disabledByEnv: config.disableAutoUpdate,
+          hasUpdateFeedConfig: hasFeedConfig,
+        }) ?? blockedInstallationReason,
+      );
+    });
+
+    return { loadFeed, resolveDisabledReason };
+  },
+);

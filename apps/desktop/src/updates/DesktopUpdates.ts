@@ -22,7 +22,6 @@ import * as DateTime from "effect/DateTime";
 import * as Duration from "effect/Duration";
 import * as Effect from "effect/Effect";
 import * as Exit from "effect/Exit";
-import * as FileSystem from "effect/FileSystem";
 import * as Layer from "effect/Layer";
 import * as Option from "effect/Option";
 import * as PubSub from "effect/PubSub";
@@ -50,12 +49,10 @@ import {
   releaseNotesOfOfferedVersion,
 } from "./releaseNotes.ts";
 import {
-  type AppUpdateYmlConfig,
   createBaseUpdateState,
-  getAutoUpdateDisabledReason,
   getCanRetryFromState,
   isArm64HostRunningIntelBuild,
-  parseAppUpdateYml,
+  makeDesktopUpdateAvailability,
 } from "./updateStateHelpers.ts";
 import {
   checkFailureMessage,
@@ -201,7 +198,6 @@ export const make = Effect.gen(function* () {
   const electronUpdater = yield* ElectronUpdater.ElectronUpdater;
   const electronWindow = yield* ElectronWindow.ElectronWindow;
   const environment = yield* DesktopEnvironment.DesktopEnvironment;
-  const fileSystem = yield* FileSystem.FileSystem;
   const desktopSettings = yield* DesktopAppSettings.DesktopAppSettings;
 
   const installationReason = yield* inspectDesktopUpdateInstallation;
@@ -209,7 +205,6 @@ export const make = Effect.gen(function* () {
     ? getDesktopUpdateInstallationMessage(installationReason)
     : null;
 
-  const appUpdateYmlConfigRef = yield* Ref.make<Option.Option<AppUpdateYmlConfig>>(Option.none());
   const activeUpdateActionRef = yield* Ref.make<Option.Option<UpdateAction>>(Option.none());
   const installRunningBackendsRef = yield* Ref.make<
     ReadonlyArray<DesktopBackendPool.DesktopBackendInstance>
@@ -277,45 +272,9 @@ export const make = Effect.gen(function* () {
   const setState = (state: DesktopUpdateState): Effect.Effect<void> =>
     updateState(() => state).pipe(Effect.asVoid);
 
-  const readAppUpdateYml = fileSystem.readFileString(environment.appUpdateYmlPath, "utf-8").pipe(
-    Effect.option,
-    Effect.flatMap(
-      Option.match({
-        onNone: () => Effect.succeed(Option.none<AppUpdateYmlConfig>()),
-        onSome: parseAppUpdateYml,
-      }),
-    ),
+  const { loadFeed, resolveDisabledReason } = yield* makeDesktopUpdateAvailability(
+    installationReason === "needs-admin" ? null : installationMessage,
   );
-
-  // electron-updater uses this marker to install .deb updates with dpkg.
-  const isDebPackage =
-    environment.platform === "linux" && environment.isPackaged
-      ? yield* fileSystem
-          .readFileString(environment.path.join(environment.resourcesPath, "package-type"))
-          .pipe(
-            Effect.map((packageType) => packageType.trim() === "deb"),
-            Effect.orElseSucceed(() => false),
-          )
-      : false;
-
-  const hasUpdateFeedConfig = Ref.get(appUpdateYmlConfigRef).pipe(
-    Effect.map((appUpdateYmlConfig) => Option.isSome(appUpdateYmlConfig) || config.mockUpdates),
-  );
-
-  const resolveDisabledReason = Effect.gen(function* () {
-    const hasFeedConfig = yield* hasUpdateFeedConfig;
-    return Option.fromNullishOr(
-      getAutoUpdateDisabledReason({
-        isDevelopment: environment.isDevelopment,
-        isPackaged: environment.isPackaged,
-        platform: environment.platform,
-        appImage: Option.getOrUndefined(config.appImagePath),
-        isDebPackage,
-        disabledByEnv: config.disableAutoUpdate,
-        hasUpdateFeedConfig: hasFeedConfig,
-      }) ?? (installationReason !== "needs-admin" ? installationMessage : null),
-    );
-  });
 
   const activeUpdateAction = Ref.get(activeUpdateActionRef);
   const feedCapture = makeUpdateFeedCapture();
@@ -1275,8 +1234,7 @@ export const make = Effect.gen(function* () {
         void Effect.runPromiseWith(context)(effect);
       };
 
-      const appUpdateYmlConfig = yield* readAppUpdateYml;
-      yield* Ref.set(appUpdateYmlConfigRef, appUpdateYmlConfig);
+      yield* loadFeed;
 
       const notAppliedVersion = yield* readNotAppliedInstallVersion;
       yield* Ref.set(notAppliedVersionRef, notAppliedVersion);

@@ -16,6 +16,7 @@ import * as Latch from "effect/Latch";
 import * as Deferred from "effect/Deferred";
 import * as TestClock from "effect/testing/TestClock";
 import * as Effect from "effect/Effect";
+import * as FileSystem from "effect/FileSystem";
 import * as Layer from "effect/Layer";
 import * as Schema from "effect/Schema";
 import { createModelSelection } from "@goat/shared/model";
@@ -26,7 +27,7 @@ import type { MemoryGenerationRunnerContext } from "@goat/provider-core/server/m
 import { GrokSettings } from "@goat/provider-grok/settings";
 
 import * as ServerConfig from "../config.ts";
-import * as TextGeneration from "./TextGeneration.ts";
+import type { ProviderTextGeneration } from "@goat/provider-core/server/textGeneration";
 import { makeGrokTextGeneration } from "@goat/provider-grok/testing";
 import { execScriptSource, writeFakeCli } from "@goat/provider-testing/fakeCli";
 const decodeGrokSettings = Schema.decodeSync(GrokSettings);
@@ -90,11 +91,12 @@ const sessionId = "grok-text-session";`,
 function withFakeAcpGrok<A, E, R>(
   env: Record<string, string>,
   effectFn: (
-    textGeneration: TextGeneration.TextGeneration["Service"],
+    textGeneration: ProviderTextGeneration,
     tempDir: string,
     feed: RequestFeed,
   ) => Effect.Effect<A, E, R>,
   memoryRunnerContext?: MemoryGenerationRunnerContext,
+  runtimePath?: string,
 ) {
   return Effect.gen(function* () {
     const tempDir = yield* Effect.acquireRelease(
@@ -118,7 +120,11 @@ function withFakeAcpGrok<A, E, R>(
     const config = decodeGrokSettings({ binaryPath });
     const textGeneration = yield* makeGrokTextGeneration(
       config,
-      { HOME: tempDir, GROK_HOME: NodePath.join(tempDir, "profile") },
+      {
+        HOME: tempDir,
+        GROK_HOME: NodePath.join(tempDir, "profile"),
+        ...(runtimePath === undefined ? {} : { PATH: runtimePath }),
+      },
       memoryRunnerContext === undefined ? {} : { memoryRunnerContext },
     );
     return yield* effectFn(textGeneration, tempDir, feed);
@@ -340,6 +346,36 @@ const memoryConflict = M.ResolveMemoryConflictInput.make({
   modelSelection: memorySelection,
 });
 
+it.effect(
+  "Grok declares neither memory operation when managed configuration blocks isolation",
+  () =>
+    Effect.gen(function* () {
+      const fs = yield* FileSystem.FileSystem;
+      const file = yield* fs.makeTempFileScoped();
+      yield* fs.writeFileString(file, "[hooks]\nunsafe = true");
+      const redirect = (name: string) => (name === "/etc/grok/managed_config.toml" ? file : name);
+      const generation = yield* makeGrokTextGeneration(
+        decodeGrokSettings({}),
+        {},
+        {
+          memoryRunnerContext: memoryContext,
+        },
+      ).pipe(
+        Effect.provideService(FileSystem.FileSystem, {
+          ...fs,
+          exists: (name) => fs.exists(redirect(name)),
+          stat: (name) => fs.stat(redirect(name)),
+          readFileString: (name) => fs.readFileString(redirect(name)),
+        }),
+      );
+      const summary = yield* generation.generateMemorySummary(memorySummary).pipe(Effect.flip);
+      const conflict = yield* generation.resolveMemoryConflict(memoryConflict).pipe(Effect.flip);
+      expect(summary.cause).toMatchObject({ code: "unavailable" });
+      expect(conflict.cause).toMatchObject({ code: "unavailable" });
+      expect(yield* generation.memoryCapabilities).toEqual({ summary: false, conflict: false });
+    }).pipe(Effect.scoped, Effect.provide(layerGrokTextGenerationTest)),
+);
+
 it.layer(layerGrokTextGenerationTest)("Grok memory generation", (it) => {
   const cases = (["resolveMemoryConflict", "generateMemorySummary"] as const).flatMap((operation) =>
     (
@@ -418,6 +454,28 @@ it.layer(layerGrokTextGenerationTest)("Grok memory generation", (it) => {
           });
         }),
       memoryContext,
+    ),
+  );
+  it.effect.each(operations)("declares and runs Grok memory operation %s", (operation) =>
+    withFakeAcpGrok(
+      {
+        GOAT_ACP_PROMPT_RESPONSE_TEXT: JSON.stringify(
+          operation === "resolveMemoryConflict"
+            ? { ...output, judgment: "Synthetic" }
+            : { summary: output },
+        ),
+      },
+      (generation) =>
+        Effect.gen(function* () {
+          expect(yield* generation.memoryCapabilities).toEqual({ summary: true, conflict: true });
+          const result =
+            operation === "resolveMemoryConflict"
+              ? yield* generation.resolveMemoryConflict(memoryConflict)
+              : yield* generation.generateMemorySummary(memorySummary);
+          expect(result.result?.text).toBe(output.text);
+        }),
+      memoryContext,
+      [NodePath.dirname(process.execPath), process.env.PATH].join(NodePath.delimiter),
     ),
   );
   it.effect.each(

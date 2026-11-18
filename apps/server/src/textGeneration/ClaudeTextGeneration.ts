@@ -2,8 +2,10 @@ import { collectStreamAsString } from "@goat/provider-core/server/snapshotProbe"
 import { ProviderDriverKind } from "@goat/contracts";
 import {
   MemoryGenerationRunnerError,
+  memoryRunnerCapabilities,
   withMemoryExecution,
   type MemoryGenerationRunnerContext,
+  type MemoryOperationName,
 } from "@goat/provider-core/server/memoryGenerationRunner";
 import * as Effect from "effect/Effect";
 import * as FileSystem from "effect/FileSystem";
@@ -179,6 +181,23 @@ export const makeClaudeTextGeneration = Effect.fn("makeClaudeTextGeneration")(fu
     Effect.flatMap((base) => makeClaudeEnvironment(claudeSettings, base)),
     Effect.provideService(Path.Path, path),
   );
+  const requireClaudeMemory = Effect.fn("ClaudeTextGeneration.requireMemory")(function* (
+    operation: MemoryOperationName,
+    claudeEnvironment: NodeJS.ProcessEnv,
+  ) {
+    if (!claudeSettings.enabled)
+      return yield* new TextGenerationError({
+        operation,
+        detail: "Claude is disabled in GOAT settings.",
+      });
+    yield* verifyClaudeMemoryHooks(operation, claudeEnvironment).pipe(
+      Effect.provideService(ChildProcessSpawner.ChildProcessSpawner, commandSpawner),
+      Effect.provideService(FileSystem.FileSystem, fileSystem),
+      Effect.provideService(Path.Path, path),
+      Effect.provideService(HostProcess.Platform, platform),
+      Effect.provideService(HostProcess.HomeDirectory, home),
+    );
+  });
   const scopedModelCatalog = modelCatalog.pipe(
     Effect.map((catalog) => scopeClaudeModelCatalog(catalog, claudeSettings.customModels)),
   );
@@ -220,11 +239,6 @@ export const makeClaudeTextGeneration = Effect.fn("makeClaudeTextGeneration")(fu
     TextGenerationError,
     S["DecodingServices"]
   > {
-    if (TextGenerationOperations.isMemoryOperation(operation) && !claudeSettings.enabled)
-      return yield* new TextGenerationError({
-        operation,
-        detail: "Claude is disabled in GOAT settings.",
-      });
     const claudeEnvironment = yield* resolveClaudeEnvironment;
     const catalog = yield* scopedModelCatalog;
     const resolvedModelSelection = {
@@ -281,13 +295,7 @@ export const makeClaudeTextGeneration = Effect.fn("makeClaudeTextGeneration")(fu
       noSessionPersistence: boolean,
     ) {
       if (TextGenerationOperations.isMemoryOperation(operation))
-        yield* verifyClaudeMemoryHooks(operation, claudeEnvironment).pipe(
-          Effect.provideService(ChildProcessSpawner.ChildProcessSpawner, commandSpawner),
-          Effect.provideService(FileSystem.FileSystem, fileSystem),
-          Effect.provideService(Path.Path, path),
-          Effect.provideService(HostProcess.Platform, platform),
-          Effect.provideService(HostProcess.HomeDirectory, home),
-        );
+        yield* requireClaudeMemory(operation, claudeEnvironment);
       const workingDirectory =
         operation === "generateThreadTitle" ||
         operation === "generateChannelReception" ||
@@ -452,11 +460,21 @@ export const makeClaudeTextGeneration = Effect.fn("makeClaudeTextGeneration")(fu
     "ClaudeTextGeneration",
     (request) => runClaudeJson(request).pipe(Effect.map((selected) => selected.result)),
     {
-      memoryRunner: withMemoryExecution(
-        memoryRunnerContext,
-        ProviderDriverKind.make("claudeAgent"),
-        runClaudeJson,
-      ),
+      memory: {
+        capabilities: memoryRunnerCapabilities("claudeAgent", memoryRunnerContext, {
+          available: resolveClaudeEnvironment.pipe(
+            Effect.flatMap((environment) =>
+              requireClaudeMemory("generateMemorySummary", environment),
+            ),
+            Effect.isSuccess,
+          ),
+        }),
+        run: withMemoryExecution(
+          memoryRunnerContext,
+          ProviderDriverKind.make("claudeAgent"),
+          runClaudeJson,
+        ),
+      },
       channelReception: true,
     },
   );

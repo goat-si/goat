@@ -15,6 +15,7 @@ import { vi } from "vite-plus/test";
 
 import * as VcsProcess from "../vcs/VcsProcess.ts";
 import * as WorkspaceSearchIndex from "./WorkspaceSearchIndex.ts";
+import { WorkspaceSearchFinderCache } from "./workspaceSearchFinderCache.ts";
 
 const testLayer = VcsProcess.layer.pipe(Layer.provideMerge(NodeServices.layer));
 
@@ -53,7 +54,7 @@ function fakeSymlinkFinder(
     item: { relativePath: entry.path, fileName: entry.path.split("/").at(-1) },
   }));
   const finder = {
-    destroy: vi.fn(),
+    destroyAsync: vi.fn(async () => {}),
     waitForIndexReady: vi.fn(async () => ({ ok: true as const, value: true })),
     // fff's isScanning waits on the picker lock on the JS thread.
     isScanning: () => {
@@ -287,7 +288,7 @@ it.effect.each(["answers not-ok", "rejects"] as const)(
           value: { items: [], totalMatched: 0 },
         }));
         const finder = {
-          destroy: vi.fn(),
+          destroyAsync: vi.fn(async () => {}),
           waitForIndexReady: vi.fn(async () => ({ ok: true as const, value: true })),
           getScanProgressAsync: async () => ({ ok: true as const, value: { isScanning: false } }),
           watchAsync: async () => {
@@ -334,10 +335,14 @@ it.effect("an index closed while its watcher subscription is pending keeps no wa
     const handlers: Array<unknown> = [];
     let answer: (() => void) | undefined;
     const asked = yield* Deferred.make<void>();
+    const destroy = vi.fn(() => {
+      alive = false;
+    });
     const finder = {
-      destroy: vi.fn(() => {
-        alive = false;
-      }),
+      destroy,
+      destroyAsync: async () => {
+        destroy();
+      },
       waitForIndexReady: vi.fn(async () => ({ ok: true as const, value: true })),
       getScanProgressAsync: async () => ({ ok: true as const, value: { isScanning: false } }),
       watchAsync: (callback: unknown) => {
@@ -369,4 +374,211 @@ it.effect("an index closed while its watcher subscription is pending keeps no wa
     expect(finder.destroy).toHaveBeenCalledTimes(1);
     expect(handlers).toEqual([]);
   }).pipe(Effect.scoped, Effect.provide(testLayer)),
+);
+
+it.effect(
+  "truncates the symlink directory scan and verifies native entries from unscanned folders",
+  () =>
+    Effect.scoped(
+      Effect.gen(function* () {
+        if ((yield* HostProcess.Platform) === "win32") return;
+        const fs = yield* FileSystem.FileSystem;
+        const path = yield* Path.Path;
+        const cwd = yield* fs.makeTempDirectoryScoped();
+        const outside = yield* fs.makeTempDirectoryScoped();
+        const extra = path.join(cwd, "extra");
+        yield* fs.makeDirectory(extra);
+        yield* fs.writeFileString(path.join(extra, "safe.ts"), "");
+        yield* fs.symlink(outside, path.join(extra, "unverified.ts"));
+        const dirs = [...Array.from({ length: 4_096 }, (_, i) => `absent-${i}`), "extra"];
+        fakeSymlinkFinder(dirs, {
+          indexed: [
+            { path: "extra/safe.ts", kind: "file" },
+            { path: "extra/unverified.ts", kind: "file" },
+          ],
+        });
+        const index = yield* WorkspaceSearchIndex.make(cwd);
+        const listed = yield* index.list();
+        const searched = yield* index.search("ts", 10, "file");
+        expect(listed.truncated).toBe(true);
+        expect(searched).toEqual({
+          entries: [{ path: "extra/safe.ts", kind: "file" }],
+          truncated: true,
+        });
+        expect(listed.entries.map((entry) => entry.path)).toEqual(["extra", "extra/safe.ts"]);
+      }),
+    ).pipe(Effect.provide(testLayer)),
+);
+
+it.effect(
+  "omits aliases whose ignore file exceeds the scan read budget and marks results truncated",
+  () =>
+    Effect.scoped(
+      Effect.gen(function* () {
+        if ((yield* HostProcess.Platform) === "win32") return;
+        const fs = yield* FileSystem.FileSystem;
+        const path = yield* Path.Path;
+        const cwd = yield* fs.makeTempDirectoryScoped();
+        yield* fs.writeFileString(
+          path.join(cwd, ".ignore"),
+          `#${"x".repeat(64 * 1024)}\nlink.ts\n`,
+        );
+        yield* fs.writeFileString(path.join(cwd, "target.ts"), "");
+        yield* fs.symlink("target.ts", path.join(cwd, "link.ts"));
+        fakeSymlinkFinder([], {
+          indexed: [
+            { path: "link.ts", kind: "file" },
+            { path: "target.ts", kind: "file" },
+          ],
+        });
+        const index = yield* WorkspaceSearchIndex.make(cwd);
+        expect(yield* index.search("ts", 10, "file")).toEqual({
+          entries: [{ path: "target.ts", kind: "file" }],
+          truncated: true,
+        });
+      }),
+    ).pipe(Effect.provide(testLayer)),
+);
+
+it.effect("omits stale native descendants of a directory skipped within the scan budget", () =>
+  Effect.scoped(
+    Effect.gen(function* () {
+      if ((yield* HostProcess.Platform) === "win32") return;
+      const fs = yield* FileSystem.FileSystem;
+      const path = yield* Path.Path;
+      const cwd = yield* fs.makeTempDirectoryScoped();
+      const outside = yield* fs.makeTempDirectoryScoped();
+      yield* fs.writeFileString(path.join(outside, "stale.ts"), "");
+      yield* fs.symlink(outside, path.join(cwd, "alias"));
+      yield* fs.makeDirectory(path.join(cwd, "real"));
+      yield* fs.writeFileString(path.join(cwd, "real", "safe.ts"), "");
+      fakeSymlinkFinder(["alias", "real"], {
+        indexed: [
+          { path: "alias/stale.ts", kind: "file" },
+          { path: "real/safe.ts", kind: "file" },
+        ],
+      });
+      const index = yield* WorkspaceSearchIndex.make(cwd);
+      expect(yield* index.search("ts", 10, "file")).toEqual({
+        entries: [{ path: "real/safe.ts", kind: "file" }],
+        truncated: false,
+      });
+      expect((yield* index.list()).entries.map((entry) => entry.path)).toEqual([
+        "real",
+        "real/safe.ts",
+      ]);
+    }),
+  ).pipe(Effect.provide(testLayer)),
+);
+
+it.effect("holds the index scope open until native finder teardown completes", () =>
+  Effect.gen(function* () {
+    const fs = yield* FileSystem.FileSystem;
+    const cwd = yield* fs.makeTempDirectoryScoped();
+    const cleanupStarted = yield* Deferred.make<void>();
+    const finish = Promise.withResolvers<void>();
+    const teardown = vi.fn(() => {
+      Deferred.doneUnsafe(cleanupStarted, Effect.void);
+      return finish.promise;
+    });
+    const finder = {
+      destroy: () => {
+        void teardown();
+      },
+      destroyAsync: teardown,
+      waitForIndexReady: async () => ({ ok: true, value: true }),
+    } as unknown as FileFinder;
+    vi.spyOn(FileFinder, "create").mockReturnValueOnce({ ok: true, value: finder });
+
+    const scope = yield* Scope.make();
+    yield* WorkspaceSearchIndex.make(cwd).pipe(Scope.provide(scope));
+    const closing = yield* Scope.close(scope, Exit.void).pipe(
+      Effect.forkChild({ startImmediately: true }),
+    );
+    yield* Deferred.await(cleanupStarted);
+    const beforeCleanup = closing.pollUnsafe();
+    finish.resolve();
+    yield* Fiber.join(closing);
+    expect(beforeCleanup).toBeUndefined();
+    expect(teardown).toHaveBeenCalledTimes(1);
+  }).pipe(Effect.scoped, Effect.provide(testLayer)),
+);
+
+it.effect.each(["completes", "fails"] as const)(
+  "serves a cached workspace while native teardown is pending and then %s",
+  (outcome) =>
+    Effect.gen(function* () {
+      const fs = yield* FileSystem.FileSystem;
+      const path = yield* Path.Path;
+      const cache = yield* WorkspaceSearchFinderCache;
+      const cwd = yield* fs.makeTempDirectoryScoped();
+      const started = yield* Deferred.make<string>();
+      const finish = Promise.withResolvers<void>();
+      const live = new Set<string>();
+      let peak = 0;
+      let firstTeardown = true;
+      vi.spyOn(FileFinder, "create").mockImplementation(({ basePath }) => {
+        live.add(basePath);
+        peak = Math.max(peak, live.size);
+        return {
+          ok: true,
+          value: {
+            destroyAsync: async () => {
+              if (firstTeardown) {
+                firstTeardown = false;
+                Deferred.doneUnsafe(started, Effect.succeed(basePath));
+                await finish.promise;
+              }
+              live.delete(basePath);
+            },
+            waitForIndexReady: async () => ({ ok: true, value: true }),
+          } as unknown as FileFinder,
+        };
+      });
+      const read = (root: string) => Effect.scoped(cache.get(root, "paths"));
+      const warmed = new Map<string, WorkspaceSearchIndex.WorkspaceSearchIndex["Service"]>();
+      for (let index = 0; index < 16; index += 1) {
+        const root = path.join(cwd, `repo-${index}`);
+        yield* fs.makeDirectory(root);
+        warmed.set(root, yield* read(root));
+      }
+      const firstCold = path.join(cwd, "cold-a");
+      const secondCold = path.join(cwd, "cold-b");
+      yield* fs.makeDirectory(firstCold);
+      yield* fs.makeDirectory(secondCold);
+      const eviction = yield* read(firstCold).pipe(Effect.forkChild({ startImmediately: true }));
+      try {
+        warmed.delete(yield* Deferred.await(started));
+        const entry = warmed.entries().next().value;
+        if (!entry) return yield* Effect.die("No unrelated cached workspace");
+        const [cachedRoot, cachedIndex] = entry;
+        const hit = yield* read(cachedRoot).pipe(Effect.forkChild({ startImmediately: true }));
+        const overflow = yield* read(secondCold).pipe(Effect.forkChild({ startImmediately: true }));
+        const hitBeforeCleanup = hit.pollUnsafe();
+        const overflowBeforeCleanup = overflow.pollUnsafe();
+        const createdWhileClosing = [live.has(firstCold), live.has(secondCold)];
+        if (outcome === "fails") finish.reject(new Error("native teardown failed"));
+        else finish.resolve();
+
+        expect(hitBeforeCleanup).toEqual(Exit.succeed(cachedIndex));
+        expect(overflowBeforeCleanup).toBeUndefined();
+        expect(createdWhileClosing).toEqual([false, false]);
+        if (outcome === "fails") {
+          expect(Exit.isFailure(yield* Fiber.await(eviction))).toBe(true);
+          yield* TestClock.adjust(0);
+          expect(overflow.pollUnsafe()).toMatchObject({ _tag: "Failure" });
+          // A retry can evict another idle finder even though the failed slot is quarantined.
+          yield* read(secondCold);
+        } else {
+          yield* Fiber.join(eviction);
+          yield* Fiber.join(overflow);
+        }
+        expect(peak).toBe(16);
+      } finally {
+        finish.resolve();
+      }
+    }).pipe(
+      Effect.scoped,
+      Effect.provide(WorkspaceSearchFinderCache.layer.pipe(Layer.provideMerge(testLayer))),
+    ),
 );

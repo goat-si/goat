@@ -185,16 +185,20 @@ const make = Effect.gen(function* () {
       ).settings;
       const worktreePath = projection.thread.worktreePath;
       const worktreeExists = worktreePath !== null && (yield* fileSystem.exists(worktreePath));
-      const result = yield* textGeneration.generateThreadTitle({
-        cwd: worktreeExists ? worktreePath : project.value.workspaceRoot,
-        message: context.message,
-        projectTitle: project.value.title,
-        attachments: context.attachments,
-        ...(input.kind.type === "regenerate" ? { previousTitle: projection.thread.title } : {}),
-        ...(inherited === undefined ? {} : { forkSource: inherited }),
-        instructions: settings.threadTitleInstructions,
-        modelSelection: settings.textGenerationModelSelection,
-      });
+      const result = yield* textGeneration
+        .generateThreadTitle({
+          cwd: worktreeExists ? worktreePath : project.value.workspaceRoot,
+          message: context.message,
+          projectTitle: project.value.title,
+          attachments: context.attachments,
+          ...(input.kind.type === "regenerate" ? { previousTitle: projection.thread.title } : {}),
+          ...(inherited === undefined ? {} : { forkSource: inherited }),
+          instructions: settings.threadTitleInstructions,
+          modelSelection: settings.textGenerationModelSelection,
+        })
+        .pipe(
+          Effect.provideService(TextGeneration.TextGenerationProject, projection.thread.projectId),
+        );
       const generatedTitle = result.title.trim();
       return generatedTitle === "New thread" ||
         (input.kind.type === "regenerate" && generatedTitle === projection.thread.title.trim())

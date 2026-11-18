@@ -1,3 +1,4 @@
+import { fromRunner } from "@goat/provider-core/server/textGenerationOperations";
 import * as ProjectEnrichmentService from "../project/ProjectEnrichmentService.ts";
 import * as DocumentText from "../provider/DocumentText.ts";
 import * as WorkspacePaths from "../workspace/WorkspacePaths.ts";
@@ -86,7 +87,7 @@ const providerInstance = {
   enabled: true,
   snapshot: { getSnapshot: Effect.succeed({}) } as unknown as ProviderInstance["snapshot"],
   orchestrationAdapter,
-  textGeneration: {} as ProviderInstance["textGeneration"],
+  textGeneration: fromRunner("fixture", () => Effect.die("Unexpected generation.")),
 } satisfies ProviderInstance;
 const alternateProviderInstance = {
   ...providerInstance,

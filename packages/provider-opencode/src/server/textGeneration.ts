@@ -1,3 +1,6 @@
+import * as Path from "effect/Path";
+import * as HostProcess from "@goat/shared/HostProcess";
+import { declareMemoryGeneration } from "@goat/shared/memoryGenerationCapabilities";
 import { settingsSecretLiteral } from "@goat/contracts";
 import * as Deferred from "effect/Deferred";
 import * as FileSystem from "effect/FileSystem";
@@ -8,9 +11,9 @@ import * as Schema from "effect/Schema";
 import { NonNegativeInt, ProviderDriverKind, TextGenerationError } from "@goat/contracts";
 import {
   MemoryGenerationRunnerError,
+  memoryRunnerCapabilities,
   withMemoryExecution,
   type MemoryGenerationRunnerContext,
-  type MemoryOperationName,
 } from "@goat/provider-core/server/memoryGenerationRunner";
 import type { OpenCodeSettings } from "../settings.ts";
 import { getModelSelectionStringOptionValue } from "@goat/shared/model";
@@ -19,19 +22,12 @@ import * as ProviderHost from "@goat/provider-core/server/ProviderHost";
 import * as TextGenerationOperations from "@goat/provider-core/server/textGenerationOperations";
 import * as OpenCodeRuntime from "./OpenCodeRuntime.ts";
 import * as OpenCodeServerOwner from "./OpenCodeServerOwner.ts";
-import { prepareMemoryServer } from "./memoryIsolation.ts";
+import {
+  canIsolateOpenCodeMemory,
+  prepareMemoryServer,
+  requireOpenCodeMemoryIsolation,
+} from "./memoryIsolation.ts";
 import { resolveOpenCodeVariant } from "./openCodeVariant.ts";
-
-/** External servers are not controlled by the instance owner. */
-export const requireOpenCodeMemoryIsolation = (operation: MemoryOperationName) =>
-  Effect.fail(
-    new TextGenerationError({
-      operation,
-      detail:
-        "OpenCode memory generation cannot isolate configuration on a user-specified external server.",
-      cause: new MemoryGenerationRunnerError({ code: "unavailable" }),
-    }),
-  );
 
 const isTextGenerationError = Schema.is(TextGenerationError);
 
@@ -211,11 +207,17 @@ export const makeOpenCodeTextGeneration = Effect.fn("makeOpenCodeTextGeneration"
   const openCodeRuntime = yield* OpenCodeRuntime.OpenCodeRuntime;
   const serverOwner = yield* OpenCodeServerOwner.OpenCodeServerOwner;
 
+  const path = yield* Path.Path;
+  const platform = yield* HostProcess.Platform;
+  const currentEnvironment =
+    options.currentEnvironment ?? Effect.succeed(options.environment ?? process.env);
+  const memoryConfig = { serverUrl: openCodeSettings.serverUrl };
+  const external = !declareMemoryGeneration("opencode", memoryConfig).summary;
+
   const runOpenCodeSelected = Effect.fn("runOpenCodeSelected")(
     function* <S extends Schema.Top>(input: TextGenerationOperations.Request<S>) {
       const memory = TextGenerationOperations.isMemoryOperation(input.operation);
-      if (memory && openCodeSettings.serverUrl.trim().length > 0)
-        return yield* requireOpenCodeMemoryIsolation(input.operation);
+      if (memory && external) return yield* requireOpenCodeMemoryIsolation(input.operation);
 
       const parsedModel = OpenCodeRuntime.parseOpenCodeModelSlug(input.modelSelection.model);
       if (!parsedModel) {
@@ -230,7 +232,7 @@ export const makeOpenCodeTextGeneration = Effect.fn("makeOpenCodeTextGeneration"
         ? yield* prepareMemoryServer(
             input.operation,
             parsedModel.providerID,
-            yield* options.currentEnvironment ?? Effect.succeed(options.environment ?? process.env),
+            yield* currentEnvironment,
             1,
           )
         : undefined;
@@ -583,6 +585,8 @@ export const makeOpenCodeTextGeneration = Effect.fn("makeOpenCodeTextGeneration"
         ),
         Effect.scoped,
         Effect.provideService(FileSystem.FileSystem, fs),
+        Effect.provideService(Path.Path, path),
+        Effect.provideService(HostProcess.Platform, platform),
       ),
   );
 
@@ -592,11 +596,24 @@ export const makeOpenCodeTextGeneration = Effect.fn("makeOpenCodeTextGeneration"
       runOpenCodeSelected(input).pipe(Effect.map((selected) => selected.result)),
     ),
     {
-      memoryRunner: withMemoryExecution(
-        options.memoryRunnerContext,
-        ProviderDriverKind.make("opencode"),
-        runOpenCodeSelected,
-      ),
+      memory: {
+        capabilities: memoryRunnerCapabilities("opencode", options.memoryRunnerContext, {
+          config: memoryConfig,
+          available: external
+            ? Effect.succeed(false)
+            : currentEnvironment.pipe(
+                Effect.flatMap(canIsolateOpenCodeMemory),
+                Effect.provideService(FileSystem.FileSystem, fs),
+                Effect.provideService(Path.Path, path),
+                Effect.provideService(HostProcess.Platform, platform),
+              ),
+        }),
+        run: withMemoryExecution(
+          options.memoryRunnerContext,
+          ProviderDriverKind.make("opencode"),
+          runOpenCodeSelected,
+        ),
+      },
     },
   );
 });
