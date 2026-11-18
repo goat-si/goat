@@ -1,3 +1,5 @@
+import { CLAUDE_SETTINGS_TEMP_PREFIX } from "../storage/storagePaths.ts";
+import { makeClaudePrivateSettingsSweep } from "./ClaudePrivateSettings.ts";
 import { compileClaudeModelSelection } from "../claudeModelOptions.ts";
 import type { RouteClaudeModelCatalog } from "../provider/ClaudeCodeModelRoutes.ts";
 import { collectStreamAsString } from "@goat/provider-core/server/snapshotProbe";
@@ -178,6 +180,7 @@ export const makeClaudeTextGeneration = Effect.fn("makeClaudeTextGeneration")(fu
   const path = yield* Path.Path;
   const platform = yield* HostProcess.Platform;
   const home = yield* HostProcess.HomeDirectory;
+  const sweepSettings = makeClaudePrivateSettingsSweep(path, yield* HostProcess.UserId);
   const resolveClaudeEnvironment = (
     Effect.isEffect(environment) ? environment : Effect.succeed(environment)
   ).pipe(
@@ -336,8 +339,9 @@ export const makeClaudeTextGeneration = Effect.fn("makeClaudeTextGeneration")(fu
           : cwd;
       const settingsPath = yield* Effect.gen(function* () {
         const directory = yield* fileSystem.makeTempDirectoryScoped({
-          prefix: "goat-claude-settings-",
+          prefix: `${CLAUDE_SETTINGS_TEMP_PREFIX}p${process.pid}-`,
         });
+        yield* sweepSettings(path.dirname(directory));
         const file = path.join(directory, "settings.json");
         yield* fileSystem.writeFileString(file, settingsJson, { flag: "wx", mode: 0o600 });
         yield* fileSystem.chmod(file, 0o600);

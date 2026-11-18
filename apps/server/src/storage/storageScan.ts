@@ -22,6 +22,7 @@ import * as WorktreeInventory from "../mcp/WorktreeInventoryService.ts";
 import * as HostResources from "../resourceTelemetry/HostResources.ts";
 import * as ServerSettings from "../serverSettings.ts";
 import { isFilesystemRoot, managedWorktreesDirectories } from "../worktreesDirectory.ts";
+import { isProcessAlive } from "../serverRuntimeState.ts";
 import { buildOutputKeeps, findBuildOutputs } from "./buildOutputs.ts";
 import { deletedThreadAttachments } from "./deletedThreadAttachments.ts";
 import { goatDataReason, resolveGoatDataPaths } from "./goatData.ts";
@@ -38,6 +39,7 @@ import { LocalGoatServers, type OtherServerBindings } from "./localGoatServers.t
 import { measureFolder } from "./measureFolder.ts";
 import { scanScratchFolders } from "./scratchFolders.ts";
 import {
+  claudeSettingsTempOwner,
   identityToken,
   isRemovableTempName,
   isRotatedLogName,
@@ -747,6 +749,8 @@ export const scanStorage = Effect.fn("storageScan.scan")(function* (options: {
   const uid = yield* HostProcess.UserId;
   for (const name of yield* fs.readDirectory(tempRoot).pipe(Effect.orElseSucceed(() => []))) {
     if (!isRemovableTempName(name)) continue;
+    const settingsOwner = claudeSettingsTempOwner(name);
+    if (settingsOwner !== undefined && isProcessAlive(settingsOwner)) continue;
     const target = path.join(tempRoot, name);
     const stat = yield* lstatOf(target);
     if (

@@ -231,6 +231,30 @@ describe("StorageReclaim", () => {
     }).pipe(Effect.provide(layer(process.env.TMPDIR ?? "/tmp")), Effect.scoped),
   );
 
+  it.live("offers stale Claude settings while preserving a live launch", () =>
+    Effect.gen(function* () {
+      const fs = yield* FileSystem.FileSystem;
+      const path = yield* Path.Path;
+      const tempRoot = yield* fs.realPath(yield* fs.makeTempDirectoryScoped());
+      const dead = "goat-claude-settings-p2147483647-def456";
+      const live = `goat-claude-settings-p${process.pid}-ghi789`;
+      for (const name of [dead, live]) {
+        const directory = path.join(tempRoot, name);
+        yield* fs.makeDirectory(directory);
+        yield* fs.writeFileString(path.join(directory, "settings.json"), "{}");
+        yield* fs.utimes(directory, LONG_AGO, LONG_AGO);
+      }
+      const names = yield* Effect.gen(function* () {
+        const { reclaim } = yield* setup;
+        const usage = yield* reclaim.usage({ rescan: true });
+        return usage.items
+          .filter((item) => item.kind === "temp")
+          .map((item) => path.basename(item.path));
+      }).pipe(Effect.provide(layer(tempRoot)));
+      expect(names).toEqual([dead]);
+    }).pipe(Effect.provide(Layer.mergeAll(NodeServices.layer, NodeCrypto.layer)), Effect.scoped),
+  );
+
   it.live("offers only stale temp folders of one-shot GOAT work", () =>
     Effect.gen(function* () {
       const fs = yield* FileSystem.FileSystem;

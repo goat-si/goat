@@ -81,6 +81,7 @@ export function withFakeClaudeEnv<A, E, R>(
     argsMustContain?: string;
     settingsMustContain?: string;
     expectPrivateSettings?: boolean;
+    settingsTempRoot?: string;
     argsMustNotContain?: string;
     stdinMustContain?: string;
     configDirMustBe?: string;
@@ -155,6 +156,11 @@ export function withFakeClaudeEnv<A, E, R>(
     ).pipe(
       Effect.provideService(FileSystem.FileSystem, {
         ...fs,
+        makeTempDirectoryScoped: (options) =>
+          input.settingsTempRoot !== undefined &&
+          options?.prefix?.startsWith("goat-claude-settings-")
+            ? fs.makeTempDirectoryScoped({ ...options, directory: input.settingsTempRoot })
+            : fs.makeTempDirectoryScoped(options),
         exists: (file) =>
           file.endsWith("managed-settings.json")
             ? Effect.succeed(
