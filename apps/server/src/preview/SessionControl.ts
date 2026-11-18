@@ -629,7 +629,8 @@ export class SessionControl {
   async close({ preserveHandoff = false } = {}) {
     if (!this.closed) {
       this.closed = true;
-      if (!preserveHandoff) this.clearRequest("ended");
+      if (preserveHandoff) this.agentStopped ||= this.owner !== null && this.requested === null;
+      else this.clearRequest("ended");
       this.changeOwner(null);
     }
     await this.tail;

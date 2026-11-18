@@ -66,15 +66,11 @@ export const answerBy = <A>(
 };
 
 /**
- * One capture at a time per tab. The lock follows the capture itself, which CDP cannot cancel,
- * so the next capture never overlaps one still in flight. A deadline bounds only how long the
- * caller waits: `answer` settles by then, while `run` is the capture itself, for state that must
- * follow it. A capture whose turn comes after its deadline never runs. A desktop guest that is
- * not drawing answers no screenshot (#1084), and without this an agent's snapshot waited behind a
- * viewer's still until the broker cut the whole host off.
+ * The lock follows the CDP capture, which cannot be cancelled. The deadline bounds the caller's
+ * answer, and a queued capture whose deadline has already passed never starts.
  */
 export const queueCaptureBy =
-  (deadlineMs = Number.POSITIVE_INFINITY, timeout = notDrawnInTime) =>
+  (deadlineMs = Number.POSITIVE_INFINITY, timeout: () => Error = notDrawnInTime) =>
   <A>(tab: CaptureLockHolder, operation: () => Promise<A>) => {
     let expired = false;
     const run = tab.captureLock.then(() => {

@@ -83,7 +83,10 @@ export const makeBeforePreviewClose = (
           if (!opening.promise) return;
           const settled = Promise.withResolvers<void>();
           const timer = setTimeout(settled.resolve, PAGE_CLOSE_GRACE_MS);
-          void opening.promise.then(settled.resolve, settled.resolve);
+          void opening.promise.then(
+            () => settled.resolve(),
+            () => settled.resolve(),
+          );
           return settled.promise.finally(() => clearTimeout(timer));
         }),
       ),

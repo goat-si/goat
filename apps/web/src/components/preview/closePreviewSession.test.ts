@@ -69,11 +69,14 @@ describe("closePreviewSession", () => {
   it("keeps a tab this desktop renders mounted until the server closes it", async () => {
     using _native = vi.spyOn(previewRuntime, "rendersServerTabNatively").mockReturnValue(true);
     const desktopSnapshot = { ...snapshot, runtime: "server" as const };
-    const closingRpc = Promise.withResolvers<ReturnType<typeof AsyncResult.success<void>>>();
+    let finishClose: (() => void) | undefined;
+    const closingRpc = new Promise<ReturnType<typeof AsyncResult.success<void>>>((resolve) => {
+      finishClose = () => resolve(AsyncResult.success(undefined));
+    });
     applyPreviewServerSnapshot(threadRef, desktopSnapshot);
 
     const closing = closePreviewSession({
-      closePreview: () => closingRpc.promise,
+      closePreview: () => closingRpc,
       snapshot: desktopSnapshot,
       tabId: desktopSnapshot.tabId,
       threadRef,
@@ -82,7 +85,7 @@ describe("closePreviewSession", () => {
     expect(readThreadPreviewState(threadRef).sessions[desktopSnapshot.tabId]).toEqual(
       desktopSnapshot,
     );
-    closingRpc.resolve(AsyncResult.success(undefined));
+    finishClose?.();
     await closing;
     applyPreviewServerSnapshot(threadRef, desktopSnapshot);
     expect(readThreadPreviewState(threadRef).sessions).toEqual({});

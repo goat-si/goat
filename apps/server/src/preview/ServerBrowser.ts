@@ -718,7 +718,10 @@ const make = Effect.gen(function* () {
         desktopResize: Promise.withResolvers<void>(),
         loading: false,
         loadError: undefined,
-        titleWatcher: makeBrowserTitleWatcher(cdp),
+        titleWatcher: makeBrowserTitleWatcher(cdp, () => {
+          const runId = blockedTabs.capture(tab.threadId)?.runId;
+          return !blockedTabs.isFenced(tab, runId) && !blockedTabs.blockedFrame(tab, runId);
+        }),
         lastReport: undefined,
         crash: replaced?.crash,
         closing: false,

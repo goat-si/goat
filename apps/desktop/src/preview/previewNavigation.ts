@@ -17,14 +17,16 @@ export const makeNavigationProbe = (debuggee: Pick<Electron.Debugger, "sendComma
       isCurrent: () => boolean,
     ) {
       if (!attached || dialog || !isCurrent()) return;
-      const answered = yield* Effect.promise(() =>
-        debuggee.sendCommand("Runtime.evaluate", { expression: "0" }).then(
-          () => undefined,
-          () => undefined,
-        ),
-      ).pipe(Effect.timeoutOption(1_000));
+      const answered = yield* Effect.promise(async () => {
+        try {
+          await debuggee.sendCommand("Runtime.evaluate", { expression: "0" });
+        } catch {
+          // A protocol error answers the probe as promptly as a result.
+        }
+      }).pipe(Effect.timeoutOption(1_000));
       if (Option.isNone(answered) && attached && !dialog && isCurrent()) {
-        void debuggee.sendCommand("Runtime.terminateExecution").catch(() => undefined);
+        const terminate = async () => debuggee.sendCommand("Runtime.terminateExecution");
+        void terminate().catch(() => undefined);
       }
     }),
   };

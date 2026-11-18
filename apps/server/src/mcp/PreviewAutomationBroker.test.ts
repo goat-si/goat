@@ -1,3 +1,4 @@
+import type { RoutedRequest } from "./PreviewAutomationBroker.testkit.ts";
 import {
   makeHost,
   requestsFrom,

@@ -41,12 +41,19 @@ const waitForTitle = (title: string, key: string) => `new Promise((resolve) => {
   bind();
 })`;
 
-export const makeBrowserTitleWatcher = (cdp: CDPSession) => {
+export const makeBrowserTitleWatcher = (cdp: CDPSession, checkRead: () => boolean) => {
+  const canRead = () => {
+    try {
+      return checkRead();
+    } catch {
+      return false;
+    }
+  };
   let active: { document: number; key: string; contextId?: number } | undefined;
   const stop = () => {
     const previous = active;
     active = undefined;
-    if (previous?.contextId === undefined) return;
+    if (previous?.contextId === undefined || !canRead()) return;
     void cdp
       .send("Runtime.evaluate", {
         contextId: previous.contextId,
@@ -55,18 +62,26 @@ export const makeBrowserTitleWatcher = (cdp: CDPSession) => {
       .catch(constVoid);
   };
   const watch = async (document: number, title: string, onChanged: () => Promise<void>) => {
-    if (active?.document === document) return;
+    if (active?.document === document || !canRead()) return;
     stop();
     const token: NonNullable<typeof active> = { document, key: `goatPreviewTitle${++sequence}` };
     active = token;
     try {
       const { frameTree } = await cdp.send("Page.getFrameTree");
       if (active !== token) return;
+      if (!canRead()) {
+        active = undefined;
+        return;
+      }
       const world = await cdp.send("Page.createIsolatedWorld", {
         frameId: frameTree.frame.id,
         worldName: TITLE_WORLD,
       });
       if (active !== token) return;
+      if (!canRead()) {
+        active = undefined;
+        return;
+      }
       token.contextId = world.executionContextId;
       void cdp
         .send("Runtime.evaluate", {
@@ -79,7 +94,7 @@ export const makeBrowserTitleWatcher = (cdp: CDPSession) => {
           ({ result, exceptionDetails }) => {
             if (active !== token) return;
             active = undefined;
-            if (!exceptionDetails && result.value === true) return onChanged();
+            if (!exceptionDetails && result.value === true && canRead()) return onChanged();
           },
           () => {
             if (active === token) active = undefined;

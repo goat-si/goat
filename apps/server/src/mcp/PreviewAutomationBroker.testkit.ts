@@ -33,7 +33,7 @@ export const makeHost = (
   ...overrides,
 });
 
-type RoutedRequest = PreviewAutomationRequest & {
+export type RoutedRequest = PreviewAutomationRequest & {
   readonly connectionId: PreviewAutomationStreamEvent["connectionId"];
 };
 

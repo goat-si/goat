@@ -223,6 +223,7 @@ interface BrowserControlSession {
   readonly webContentsId: number;
   // Retain the attached Debugger to prevent GC crashes (electron/electron#53376); wc.debugger throws after destruction.
   readonly debugger: Electron.Debugger;
+  readonly navigation: ReturnType<typeof makeNavigationProbe>;
   readonly semaphore: Semaphore.Semaphore;
   readonly scope: Scope.Closeable;
   readonly onMessage: (
@@ -235,7 +236,6 @@ interface BrowserControlSession {
 const isRecordingInput = Schema.is(DesktopPreviewRecordingInputSchema);
 
 type RecordingInputListener = (event: DesktopPreviewRecordingInputEvent) => Effect.Effect<void>;
-
 type PointerEventListener = (event: DesktopPreviewCursorEvent) => Effect.Effect<void>;
 
 type OpenLinkListener = (event: DesktopPreviewOpenLinkEvent) => Effect.Effect<void>;

@@ -1,13 +1,4 @@
-/**
- * One debugger screencast shared by every relay session that asked for frames.
- *
- * Electron gives a webContents one debugger session, so each viewer's
- * `Page.startScreencast` would otherwise replace the others' and its stop would
- * end their frames. Chromium also counts acks per screencast rather than per
- * frame, so the page gets one ack per frame, once every viewer it reached has
- * sent its own.
- */
-
+// Every viewer shares one Electron debugger screencast. Chromium counts one native ACK per frame.
 type ScreencastParams = Record<string, unknown>;
 type ViewerRequest = { readonly params: ScreencastParams; readonly token: object };
 
