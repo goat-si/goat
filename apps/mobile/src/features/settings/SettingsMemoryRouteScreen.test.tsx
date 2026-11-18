@@ -1,11 +1,9 @@
-import { revertHistory } from "./MemoryRouteFixtures";
+import { revertHistory, exerciseMemoryMove, receipt } from "./MemoryRouteFixtures";
 import { act } from "react";
 import { afterEach, describe, expect, it, vi } from "vite-plus/test";
 import {
   WS_METHODS,
   MemoryItem,
-  MemoryMutationReceipt,
-  type MemoryForgetInput,
   MemorySourcePage,
   MemoryUpsertInput,
   MemoryHistoryPage,
@@ -60,17 +58,6 @@ const decodeRevertResult = Schema.decodeUnknownSync(MemoryRevertResult);
 const decodeItem = Schema.decodeUnknownSync(MemoryItem);
 const decodeSource = Schema.decodeUnknownSync(MemorySourcePage);
 const decodeHistory = Schema.decodeUnknownSync(MemoryHistoryPage);
-const decodeReceipt = Schema.decodeUnknownSync(MemoryMutationReceipt);
-function receipt(input: unknown, rejected = false) {
-  return decodeReceipt({
-    operationId: (input as MemoryForgetInput).operationId,
-    memoryId: nativeId,
-    revisionId: null,
-    outcome: rejected ? "rejected" : "deleted",
-    pendingSync: !rejected,
-    ...(rejected ? { failureCode: "revision_changed" } : {}),
-  });
-}
 describe("native Memory with shared factory", () => {
   it("searches the selected destination, retains an empty page's cursor, and clears search", async () => {
     await mount();
@@ -2237,3 +2224,6 @@ it("reviews save suggestions and shows the provenance badge in Memory Settings",
   expect(view.container.textContent).toContain("Provenance unverified");
   expect(view.container.textContent).not.toContain(suggestion.text);
 });
+
+it("moves a memory from its details and refreshes the old scope", () =>
+  exerciseMemoryMove(mount, () => ({ h, view })));

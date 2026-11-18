@@ -1,3 +1,5 @@
+import { expect } from "vite-plus/test";
+import * as Option from "effect/Option";
 import {
   MemoryItem,
   MemoryRevision,
@@ -84,3 +86,58 @@ export const retained = {
   revertResults: [],
   nextCursor: null,
 } satisfies Pick<MemoryHistoryPage, "revisions" | "revertResults" | "nextCursor">;
+
+export async function exerciseMemoryMove({
+  state,
+  success,
+  supportedScreen,
+  click,
+  chooseOption,
+}: {
+  state: {
+    threads: { id: string; title: string; environmentId: string }[];
+    queries: Map<string, unknown>;
+    executors: Map<string, (target: unknown) => Promise<unknown>>;
+    calls: (target: unknown) => void;
+    refresh: unknown;
+  };
+  success: (value: unknown) => unknown;
+  supportedScreen: (
+    withDetails: boolean,
+    followNavigation: boolean,
+    originFilter: boolean,
+    scopeMoves: boolean,
+  ) => Promise<unknown>;
+  click: (label: string) => Promise<void>;
+  chooseOption: (label: string, value: string) => Promise<void>;
+}) {
+  state.threads = [
+    { id: "move-thread", title: "Move conversation", environmentId: "remote-owner" },
+  ];
+  state.queries.set(
+    "list",
+    Option.some({ items: [activeItem], projectionWatermark: 1, nextCursor: null }),
+  );
+  state.executors.set("move", async (target) => {
+    state.calls(target);
+    state.queries.set("list", Option.some({ items: [], projectionWatermark: 2, nextCursor: null }));
+    return success({ outcome: "accepted", pendingSync: false });
+  });
+  await supportedScreen(true, false, false, true);
+  await click("Move to…");
+  await chooseOption("Memory scope", "thread");
+  await chooseOption("Memory thread", "move-thread");
+  await click("Move memory");
+  expect(state.calls).toHaveBeenCalledWith(
+    expect.objectContaining({
+      input: expect.objectContaining({
+        fromScope: { kind: "user" },
+        toScope: {
+          kind: "thread",
+          thread: { environmentId: "remote-owner", threadId: "move-thread" },
+        },
+      }),
+    }),
+  );
+  expect(state.refresh).toHaveBeenCalled();
+}

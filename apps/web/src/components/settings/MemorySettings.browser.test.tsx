@@ -4,6 +4,7 @@ import {
   decodeRevert,
   revision,
   activeItem,
+  exerciseMemoryMove,
   resolution,
   entry,
   retained,
@@ -158,6 +159,7 @@ vi.mock("../../state/memory", async () => {
           "hubReconcile",
           "upsert",
           "forget",
+          "move",
           "acceptSuggestion",
           "dismissSuggestion",
           "revertResolution",
@@ -833,7 +835,12 @@ const ownerView = (version: number, requester: string) => ({
     removals: [],
   },
 });
-async function supportedScreen(withDetails = true, followNavigation = false, originFilter = false) {
+async function supportedScreen(
+  withDetails = true,
+  followNavigation = false,
+  originFilter = false,
+  scopeMoves = false,
+) {
   const { AtomRegistry } = await import("effect/reactivity");
   const registry = AtomRegistry.make();
   const get = registry.get.bind(registry);
@@ -848,7 +855,9 @@ async function supportedScreen(withDetails = true, followNavigation = false, ori
   state.environment = {
     serverConfig: {
       environment: {
-        capabilities: { memory: { protocolVersion: 1, resolutionInputs: true, originFilter } },
+        capabilities: {
+          memory: { protocolVersion: 1, resolutionInputs: true, originFilter, scopeMoves },
+        },
       },
     },
   };
@@ -2800,3 +2809,6 @@ it("confirms a memory selection once and reports each result while the conversat
   expect(container.textContent).toContain("· Failed · unavailable");
   expect(container.querySelectorAll('input[aria-label^="Select memory"]:checked')).toHaveLength(1);
 });
+
+it("moves a memory from its details and refreshes the old scope", () =>
+  exerciseMemoryMove({ state, success, supportedScreen, click, chooseOption }));
