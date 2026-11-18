@@ -1607,3 +1607,25 @@ Focused file counts:
 - `@goat/client-runtime` changed files: supervisor.silentRoute 1, markdownImages 12, mediaSource 17, dispatch.realSupervisor 1, dispatch.socketLoss 10, managedRelayState 8, client.streamRecovery 8, assets 28, runtime.executeAtomQuery 2, runtime.streamRecovery 1, runtime 29, server 26, server.updateResume 12, terminalSession 12, threadCommands 27, threadShell 16, threads-sync.applyDefect 1, threads-sync.defect 3.
 - `@goat/contracts`: assets.hostOnly 3, orchestratorMcp 22, threadTitle 2.
 - Related: ProjectionStore.notifications 6, AgentAwarenessRelay 23, .startup 1, .subagent 4, HeldHooksWaker 1, SubagentWaits 2, agentAwareness 29, threads-atoms 4, threads-sync 52, ThreadNotificationCoordinator.badge.browser 23 and .logic 26, useThreadLifecycle.browser 9, useThreadActionMenu 7, Sidebar browser suites (base 4, drag 1, logic 5, pointer 3, renderIsolation 1, shiftGuard 11, shortcuts 1, shortcuts.noBrowser 1).
+
+
+## 2026-11-18 11:13:19 UTC — K7 follow-up review fixes, READY
+
+K7 pushed `a8751d4e4560ff108f09b8c5fba5b853b0d2d340` to `chase/t3-261114-next3-k7-client-protocol` by plain fast-forward from `5205cbb69eca3a1b34f46bf545e28d100325ca6d` and verified the remote SHA. This round contains four GOAT commits and zero merges. Origin integration reached `6def29ca359f546e50dcd731a6364e3f0d575545` during the round. The merge base used by the gate was `2c0e0002a996ec5d46c708919be5a43f579176fa`.
+
+| Finding | GOAT commit | Failing-first evidence |
+| --- | --- | --- |
+| P2-1 | `60c6fde0e7d0e2899bf70f44e701a1ed017bc0f7` | `threads-sync.applyDefect.test.ts` exited 1 after the second recovery request sent `afterSequence: 8` before a snapshot. It now requests a snapshot again and resumes at 8 after installing it. |
+| P2-2 | `a03ef2499be3fa516d593cd43fbaf22ff21dcc9f` | Both new `threadShell.test.ts` cases failed first: the parent reported `user_input` for each approval handoff, and the completed child was missing from detail. Both now show approval in the roll-up and the two detail banner labels, and clear after resolution. The relay already classifies these cards as approval. |
+| P3-1 | `2823e0e01a91e333d689dd5cacc83f9f498f16f5` | The new TestClock case in `dispatch.socketLoss.test.ts` failed first because the resend was still running at ten minutes. It now ends at the deadline with the existing ambiguous-delivery error. |
+| P3-2 | `a8751d4e4560ff108f09b8c5fba5b853b0d2d340` | `threadTitle.test.ts` exited 1 because the public decoder retained caller-supplied failure text. The final contract cases verify that the legacy payload decodes, extra outcome text is discarded, the internal tag is rejected on the public route, and a stored 400-character outcome remains readable. |
+
+The title completion's public fields match `877920d3c3^` by direct comparison. The internal tag stays on the server command path. Older peers use the same wire shape in both directions. The existing metadata event carries server-generated outcomes, and the guarded title-service, launch and effect-worker tests cover the internal producer and the legacy completion path. No existing dev test title, body, setup or expectation was edited. P2-1 extends K7's earlier regression and P3-2 replaces K7's earlier 300-character public-field case with the restored boundary. Neither change introduces test imports in existing dev files. Code budgets stayed fixed.
+
+### Verification on Node 26.12.1
+
+- `vp run check:changed origin/chase/t3-261114-next3` exited 0 on the clean pushed head. Format, lint, both Knip passes, GraphQL, agent-surface audit, agent context budget and typecheck (42 packages) passed. Vitest passed 484 files and 9,702 tests. The gate skipped its unused-patch check because no dependency files changed.
+- From `apps/server`, `GOAT_TEST_TMP_GUARD=fail vp test run` passed the six changed server files plus `ThreadLaunchService.test.ts` and `EffectWorker.test.ts`. Exit 0, eight files, 138 tests. The changed non-server whole-file run exited 0, 25 files, 388 tests. No test skips or failures in either run. Process checks preceded the runs, with one gate at a time in K7's worktree.
+- Earlier receipts: the first gate reported TS2345 on the new resend fixture and was stopped through its own terminal session (exit 130). The resend commit now pins the fixture's phase literal. The next gate exited 1 with 483/484 files and 9,701/9,702 tests passing. Its sole failure was the existing effect-worker assertion for an initial title generation completion. The title commit now uses the legacy completion for initial generation and the internal outcome command for explicit regeneration. The guarded effect-worker suite and the final changed-files gate both passed.
+
+NOT RUN: hosted CI, fresh independent review of this delta, repo-wide suites, full builds and release smoke, integrated web/desktop/mobile UI and older-binary passes, live GOAT Connect relay, and the slow-link terminal attach measurement.
