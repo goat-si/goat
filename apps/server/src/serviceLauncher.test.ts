@@ -176,62 +176,6 @@ it.layer(NodeServices.layer)("service state persistence", (it) => {
       }),
   );
 
-  it.effect("waits for space before launching even when the diagnostic cannot be written", () =>
-    Effect.gen(function* () {
-      const fs = yield* FileSystem.FileSystem;
-      const path = yield* Path.Path;
-      const root = yield* fs.makeTempDirectoryScoped({ prefix: "goat-service-launch-space-" });
-      yield* writeFakeRuntime(
-        fs,
-        path,
-        path.join(root, "runtime", "goat", "versions", "1.0.0"),
-        'process.send("started"); process.on("message", () => {});',
-      );
-      const state = { protocol: SERVICE_LAUNCHER_PROTOCOL, activeVersion: "1.0.0" };
-      yield* Effect.promise(() =>
-        writeServiceState(path.join(root, "runtime", "service-state.json"), state),
-      );
-      const started = Promise.withResolvers<"started">();
-      const waiting = Promise.withResolvers<"waiting">();
-      let free = 0;
-      vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
-      childObserver.current = (child) => child.once("message", () => started.resolve("started"));
-      yield* Effect.addFinalizer(() =>
-        Effect.sync(() => {
-          childObserver.current = undefined;
-          vi.useRealTimers();
-        }),
-      );
-      const launcher = new Launcher(root, state, {
-        startupSpaceProbe: async () => free,
-        writeDiagnostic: () => {
-          waiting.resolve("waiting");
-          throw Object.assign(new Error("disk quota exceeded"), { code: "EDQUOT" });
-        },
-      });
-      const running = launcher.run();
-      yield* Effect.addFinalizer(() =>
-        Effect.promise(async () => {
-          await launcher.stop("SIGTERM");
-          await running;
-        }),
-      );
-      const spawnCount = spawnedChildren.length;
-      assert.equal(
-        yield* Effect.promise(() => Promise.race([waiting.promise, started.promise, running])),
-        "waiting",
-      );
-      assert.equal(spawnedChildren.length, spawnCount);
-      free = 1024 ** 3;
-      yield* Effect.promise(() => vi.advanceTimersByTimeAsync(30_000));
-      assert.equal(
-        yield* Effect.promise(() => Promise.race([started.promise, running])),
-        "started",
-      );
-      assert.equal(spawnedChildren.length, spawnCount + 1);
-    }),
-  );
-
   it.effect("a fresh launcher clears a restart deferred by goat update", () =>
     Effect.gen(function* () {
       const fs = yield* FileSystem.FileSystem;

@@ -47,13 +47,6 @@ import {
   type BackupSpaceProbe,
 } from "./serviceLauncherDatabase.ts";
 import { stateDirOwner } from "./serviceLauncherOwner.ts";
-import {
-  logDiskWait,
-  readAvailableBytes,
-  runtimeExists,
-  runtimePaths,
-  startupDiskBlocker,
-} from "./serviceLauncherRuntime.ts";
 import { smokeProbe } from "./serviceLauncherSmokeProbe.ts";
 import { boundServiceLog, SERVICE_LOG_CHECK_INTERVAL_MS, serviceLogPath } from "./serviceLog.ts";
 import {
@@ -74,7 +67,6 @@ const PREPARED_TIMEOUT_MS = 30 * 60_000;
 export const PROBATION_MS = 10 * 60_000;
 const TERMINATE_GRACE_MS = 5_000;
 const RESTORE_RETRY_MS = 5_000;
-const DISK_SPACE_RETRY_MS = 30_000;
 const STATE_DIR_OWNER_POLL_MS = 30_000;
 // A pending update waits this long for another server to give up the home (ruling C20).
 const STATE_DIR_OWNER_BOUND_MS = 10 * 60_000;
@@ -93,6 +85,17 @@ interface ManagedChild {
   readonly process: NodeChildProcess.ChildProcess;
   exitedAt?: number;
 }
+
+const runtimePaths = (baseDir: string, version: string) => {
+  const versionDir = NodePath.join(baseDir, "runtime", "goat", "versions", version);
+  // oxlint-disable-next-line goat/no-global-process-runtime -- Standalone launcher has no Effect runtime.
+  const executableName = process.platform === "win32" ? "goat.exe" : "goat";
+  return {
+    versionDir,
+    entryPath: NodePath.join(versionDir, executableName),
+    sentinelPath: NodePath.join(versionDir, ".install-complete"),
+  };
+};
 
 const runtimeSpawnArguments = (paths: ReturnType<typeof runtimePaths>) => ({
   command: paths.entryPath,
@@ -145,6 +148,19 @@ const sameSelection = (left: ServiceState, right: ServiceState) =>
   left.activeVersion === right.activeVersion &&
   left.update?.id === right.update?.id &&
   left.update?.status === right.update?.status;
+
+async function runtimeExists(baseDir: string, version: string): Promise<boolean> {
+  const paths = runtimePaths(baseDir, version);
+  try {
+    const [entry, sentinel] = await Promise.all([
+      NodeFSP.stat(paths.entryPath),
+      NodeFSP.readFile(paths.sentinelPath, "utf8"),
+    ]);
+    return entry.isFile() && sentinel.trim() === version;
+  } catch {
+    return false;
+  }
+}
 
 function terminalUpdate<S extends TerminalStatus>(input: {
   readonly pending: PendingServiceUpdate;
@@ -210,8 +226,6 @@ export class Launcher {
   #stopping = false;
   #done = false;
   readonly #completion = Promise.withResolvers<void>();
-  readonly #startupSpaceProbe: (directory: string) => Promise<number>;
-  readonly #writeDiagnostic: (line: string) => void;
   readonly #backupSpaceProbe: Partial<BackupSpaceProbe> | undefined;
   readonly #probationMs: number;
   readonly #now: () => number;
@@ -226,8 +240,6 @@ export class Launcher {
     baseDir: string,
     state: ServiceState,
     options: {
-      readonly startupSpaceProbe?: (directory: string) => Promise<number>;
-      readonly writeDiagnostic?: (line: string) => void;
       readonly backupSpaceProbe?: Partial<BackupSpaceProbe>;
       readonly probationMs?: number;
       readonly now?: () => number;
@@ -237,12 +249,6 @@ export class Launcher {
     } = {},
   ) {
     this.#baseDir = baseDir;
-    this.#startupSpaceProbe = options.startupSpaceProbe ?? readAvailableBytes;
-    this.#writeDiagnostic =
-      options.writeDiagnostic ??
-      ((line) => {
-        NodeFS.writeSync(2, line);
-      });
     this.#backupSpaceProbe = options.backupSpaceProbe;
     this.#probationMs = options.probationMs ?? PROBATION_MS;
     this.#now = options.now ?? Date.now;
@@ -331,39 +337,6 @@ export class Launcher {
     this.#probationTimer = undefined;
   }
 
-  async #deferForDiskSpace(
-    version: string,
-    dbPath: string | undefined,
-    retry: () => Promise<void>,
-  ): Promise<boolean> {
-    if (this.#stopRequested) return true;
-    const reason = await startupDiskBlocker({
-      baseDir: this.#baseDir,
-      statePath: this.#statePath,
-      version,
-      dbPath: dbPath ?? NodePath.join(this.#baseDir, "userdata", "statev2.sqlite"),
-      readAvailableBytes: this.#startupSpaceProbe,
-    });
-    if (this.#stopRequested) return true;
-    if (reason === undefined) return false;
-    logDiskWait(reason, this.#writeDiagnostic);
-    clearTimeout(this.#timer);
-    this.#timer = setTimeout(
-      () =>
-        this.#enqueue(async () => {
-          if (this.#stopRequested) return;
-          if (!sameSelection(await readServiceState(this.#statePath), this.#state)) {
-            throw new Error(
-              "Service selection changed while waiting for disk space. Restart the service.",
-            );
-          }
-          await retry();
-        }),
-      DISK_SPACE_RETRY_MS,
-    );
-    return true;
-  }
-
   // Local installs replace the selection and clear its update record; an old launcher must not
   // write its own selection back over theirs.
   async #selectState(next: ServiceState): Promise<void> {
@@ -447,12 +420,6 @@ export class Launcher {
   }
 
   async #startTrial(pending: PendingServiceUpdate): Promise<void> {
-    if (
-      await this.#deferForDiskSpace(pending.targetVersion, pending.dbPath, () =>
-        this.#startTrial(pending),
-      )
-    )
-      return;
     try {
       this.#snapshot = await backupDatabase(this.#baseDir, pending, this.#stopSignal.signal);
     } catch (cause) {
@@ -481,16 +448,6 @@ export class Launcher {
       throw new Error(`Selected goat@${version} runtime is missing or incomplete.`);
     }
     if (this.#stopping) return;
-    if (
-      await this.#deferForDiskSpace(
-        version,
-        update?.status === "pending" ? update.dbPath : this.#state.probation?.dbPath,
-        role === "trial" && update?.status === "pending"
-          ? () => this.#returnToPrevious(update, "failed", "candidate-start-disk-space")
-          : () => this.#startChild(version, role, update),
-      )
-    )
-      return;
     const paths = runtimePaths(this.#baseDir, version);
     const context: ServiceLauncherContext = {
       protocol: SERVICE_LAUNCHER_PROTOCOL,
@@ -794,12 +751,6 @@ export class Launcher {
       }
       await this.#finishProbation();
     }
-    if (
-      await this.#deferForDiskSpace(child.version, undefined, () =>
-        this.#startChild(child.version, "active", this.#state.update),
-      )
-    )
-      return;
     throw new Error(`Active child exited unexpectedly (${String(code ?? signal ?? "unknown")}).`);
   }
 
@@ -918,15 +869,6 @@ export class Launcher {
       this.#child = null;
       await terminateChild(child.process);
     }
-    // Recovery blocks without the in-process proof. The durable trial phase prevents relaunch.
-    if (
-      this.#snapshot?.updateId === pending.id &&
-      (await databasePhase(this.#baseDir, pending.id)) === "trial" &&
-      (await this.#deferForDiskSpace(pending.fromVersion, pending.dbPath, () =>
-        this.#returnToPrevious(pending, status, reason),
-      ))
-    )
-      return;
     const outcome = terminalUpdate({ pending, status, reason });
     const { probation, ...state } = this.#state;
     const next: ServiceState = { ...state, activeVersion: pending.fromVersion, update: outcome };

@@ -243,7 +243,7 @@ export async function markUntrackedDatabaseOwner(baseDir: string, updateId: stri
 }
 
 // Resolve symlink targets even if a crashed cp -c left the final target missing.
-export async function restoreTarget(path: string): Promise<string> {
+async function restoreTarget(path: string): Promise<string> {
   let current = path;
   for (let hops = 0; hops < 40; hops++) {
     try {
