@@ -932,9 +932,7 @@ export function MemoryDetails({
         <div ref={detailsRef} tabIndex={-1} aria-label="Memory details" className="space-y-3">
           {read.error || history.error ? <p role="alert">{read.error ?? history.error}</p> : null}
           {edit.notice ? <p role="status">{edit.notice}</p> : null}
-          {!edit.start && edit.saveStatus && memorySaveMessage[edit.saveStatus] ? (
-            <p role="status">{memorySaveMessage[edit.saveStatus]}</p>
-          ) : null}
+          {!edit.start && edit.saveMessage ? <p role="status">{edit.saveMessage}</p> : null}
           {!edit.start && edit.needsReview && canWrite ? (
             <Button size="sm" variant="outline" onClick={edit.reviewLatest}>
               Review latest memory

@@ -64,7 +64,7 @@
   "apps/mobile/src/features/settings/SettingsHubNodesRouteScreen.tsx": { "nonNull": 1 },
   "apps/mobile/src/features/settings/SettingsMemoryRouteScreen.test.tsx": { "lines": 2241 },
   "apps/mobile/src/features/settings/SettingsMemoryRouteScreen.tsx": {
-    "lines": 1805,
+    "lines": 1795,
     "nonNull": 2
   },
   "apps/mobile/src/features/settings/SettingsMicrophoneRouteScreen.tsx": { "nonNull": 1 },
@@ -565,7 +565,7 @@
   "apps/web/src/components/settings/LoadBalancingSettings.tsx": { "nonNull": 1 },
   "apps/web/src/components/settings/MemoryImportSettings.tsx": { "nonNull": 8 },
   "apps/web/src/components/settings/MemorySettings.browser.test.tsx": { "lines": 2816 },
-  "apps/web/src/components/settings/MemorySettings.tsx": { "lines": 1694, "nonNull": 6 },
+  "apps/web/src/components/settings/MemorySettings.tsx": { "lines": 1632, "nonNull": 6 },
   "apps/web/src/components/settings/MemorySharingSettings.tsx": { "nonNull": 1 },
   "apps/web/src/components/settings/ProjectSettingsPanel.tsx": { "nonNull": 2 },
   "apps/web/src/components/settings/ProviderAuthenticationSection.tsx": { "nonNull": 5 },

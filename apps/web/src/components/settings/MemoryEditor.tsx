@@ -139,7 +139,7 @@ export function useMemoryEditSession({
     gap,
     start,
     notice,
-    saveStatus,
+    saveMessage: saveStatus && memorySaveMessage[saveStatus],
     needsReview,
     reviewing,
     reviewLatest() {
