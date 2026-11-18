@@ -67,6 +67,14 @@ export function composerThreadHosts(input: {
   return result;
 }
 
+export function composerThreadSearchEnvironments(
+  environmentId: EnvironmentId | null,
+  reachableHosts: ReadonlyMap<EnvironmentId, string>,
+): ReadonlyArray<EnvironmentId> {
+  if (environmentId === null) return [];
+  return [environmentId, ...Array.from(reachableHosts.keys()).filter((id) => id !== environmentId)];
+}
+
 export type ComposerThreadCandidate = ThreadSearchShell &
   Pick<EnvironmentThreadShell, "archivedAt" | "lineage">;
 

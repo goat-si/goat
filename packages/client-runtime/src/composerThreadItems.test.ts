@@ -4,6 +4,7 @@ import { expect, it } from "vite-plus/test";
 import {
   matchComposerThreadItems,
   composerThreadHosts,
+  composerThreadSearchEnvironments,
   type ComposerThreadCandidate,
 } from "./composerThreadItems.ts";
 
@@ -58,6 +59,9 @@ it("admits only mounted online linked routes with unambiguous identity", () => {
     ...composerThreadHosts({ nodes, mounted: new Set([remote, other]), sshHosts: ssh }),
   ]).toEqual([[remote, "same"]]);
   const routes = composerThreadHosts({ nodes, mounted: new Set([remote, other]), sshHosts: ssh });
+  expect(composerThreadSearchEnvironments(environmentId, routes)).toEqual([environmentId, remote]);
+  expect(composerThreadSearchEnvironments(remote, routes)).toEqual([remote]);
+  expect(composerThreadSearchEnvironments(null, routes)).toEqual([]);
   expect(routes.allows(remote, "same")).toBe(true);
   expect(routes.allows(remote, "build")).toBe(true);
   expect(routes.resolve("build")).toBe(remote);
