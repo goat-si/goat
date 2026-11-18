@@ -1434,3 +1434,82 @@ II. Queue and one rule changed.
 - (b), (d), (k) wait for the two reports.
 - (i), which of the two can take the outcome in a few lines. The mobile thread screen can. Its header already has a menu (apps/mobile/src/features/threads/ThreadHeader.tsx:29-61, the history menu), and useThreadListActions.regenerateThreadTitle already reports a failure (the "Could not regenerate title" alert, row 8). One menu item calling it is a few lines, plus a P1 row. The command palette cannot, not in a few lines. It has no per-thread actions at all (CommandPalette.logic.ts lists threads only to open them; settle, archive and rename are not there either). A regenerate entry there is a new "active thread actions" group, not a small addition. The keyboard path is already covered: the keybinding thread.regenerateTitle (useThreadLifecycle.tsx:713) shows the outcome toast. My suggestion for the wire reviewer: the mobile thread header item if the review wants parity, and no palette entry.
 
+
+## Coordinator, 2026-11-18 00:10:01 UTC, section I (K7), verbatim
+
+I. K7 (chase/t3-261114-next3-k7-client-protocol, head 9fb762a2b5f969b2948b3edb22bf12b42a07d3e2)
+Reports saved whole: /Users/jun/handoff-in/chase/next3-K7-conn-review-9fb762a2.md (17,636 bytes) and next3-K7-wire-review-9fb762a2.md (20,960 bytes). Verdicts: conn two P2 and six P3; wire one P2 and four P3; no P0 or P1. Rows 4, 5, 6, 7 and 9, the move-outs, the budgets, rule 3 and the merge commit check out. READ BY ME at the head, after the reports: dispatch.ts:20-65, threads.ts:424-434 and :955-982, contracts threadTitle.ts whole, threadShell.ts:48-76, threadTitleRegeneration.ts:18-34. NOT RUN by me: any test.
+
+RULED, the fix round on top of 9fb762a2b5, one commit per finding, the failing case first for the two conn P2s:
+1. conn P2-1 (dispatch.ts:43-61; a reply lost on a healthy socket waits with no end, and Send in that thread is refused meanwhile). Two parts. (i) A third branch in the race: after a grace, if the SAME session is still current and the phase is still "connected", resend on it; it counts against the existing cap of two. The grace is one constant, and the record says why that value (the real supervisor clears a dead session right after the broadcast, so a session that survives the grace is a live one). (ii) A total bound of 10 minutes on the whole wait, one constant; past it the send gives up and the draft is restored with an error that says the message may not have been sent. This is answer (b): the bound is taken; it differs from upstream, so a fork delta line. Cases on TestClock: same session and connected after the grace resends once and one message lands; a session cleared inside the grace does not resend on it; the bound gives up and the existing restore path shows the draft.
+2. conn P2-2 (threads.ts:430, :962, :978; after an apply defect the resubscribe carries afterSequence past the batch never applied). Fix as the reviewer says: restartAfterDefect makes the next subscribe leave afterSequence out, so a fresh snapshot replaces the state. Do not move the lastSequence write after the fold instead: that replays the same batch into the same throw. The probe (/tmp/k7conn-review-9fb762a2/notes/probe.threads.test.ts.txt) becomes the case; a real event the fold dies on is better than vi.mock if one exists, else the mock stands as fault injection. Correct the false comment and the plan's "never resumed past a half-applied batch (tested)". Upstream de21fbcff3 has the same gap: a fork delta line.
+3. wire P2-1 (failureMessage): B, as ruled at 23:49 UTC, now confirmed by the reviewer. Unchanged: only sentences the server wrote; raw provider or CLI text to the redacted server log only; a case that a CLI failure's detail does not reach the event; fork delta entry.
+4. conn P3-1 and P3-2: one case each (mutations M6 and M8 must fail). conn P3-5: the real-supervisor case already ordered.
+5. conn P3-3: reset streamFailureRetries once a stream has stayed up 60 s, with a TestClock case; if that cannot be done without a wall-clock read, a Limits sentence instead.
+6. conn P3-4: pin the attempt with currentSession() and requestInSession.
+7. conn P3-6: the three record corrections. The IDLE_SERVER_UPDATE_STATE export stays; the record names it and the import cycle.
+8. wire P3-1: a maximum length of 300 on the COMMAND's message (the public input), not on the stored event or the shell schema, which must keep decoding; one case that a longer message is refused.
+9. wire P3-2: settle from the open thread's own subscription (AppThread.lastTitleRegeneration) when the thread is not in the shell snapshot, with a case, if it stays inside threadTitleRegeneration.ts and its caller at about 30 lines; otherwise a Limits sentence and an issue draft. K7 says which in the record before the commit.
+10. wire P3-3: intended behavior ruled: a pending userOnly card (secret request, human handoff) of a delegated child marks the parent "Input needed" until it is answered or cancelled, whether or not the child's run is live; the server already decides pending. So the client roll-up skips the live-run test for userOnly cards. Failing case first.
+11. wire P3-4: no change; upstream's text stays.
+12. Answers closed: (d) a Limits sentence, no code, and an issue draft for an "update this app" message after repeated decode defects; (k) the encode-skip guard is NOT taken (2.79 ms per 8 MiB attach is not worth a second code path); (i) no new entry point in this lane: no mobile thread header item, no palette entry.
+13. Budgets: no entry raised; any touched entry equals countLines at the new head.
+
+Then: push the fix head (still on 9fb762a2b5, no integration merge yet) and say READY. I dispatch goat-ci quick and start ONE fresh fix-delta review (it does not count against the cap). The second integration merge comes after K10 has merged: 010_fork_delta.md keeps both sections; code-budgets.json takes countLines of the merged files (the wire reviewer measured ChatMarkdown.tsx 1658, orchestrationV2.ts 4382, orchestratorMcp.ts 1073; count again then). Merge order stays K5, K10, K7. K7b's branches are still cut only after K7 merges. Heavy jobs by the machine token, ps first, in its own step.
+
+Lane coordinator: both review reports are on the records branch at devlog/_chase/261114_lanes/K7-review/ (records 30b080876e5, cmp identical), and the probe at K7-review/probe.threads.test.ts.txt (records 2ce7916ae1d).
+
+## Fix round (on 9fb762a2b5; one commit per finding)
+
+Ruling 9, decided before any commit, as asked: a LIMITS sentence and an issue draft, no code. Settling from the open thread's own subscription needs the thread detail state (state/threads.ts, EnvironmentThreadState per thread) inside the waiter. createThreadEnvironmentAtoms(runtime, snapshotAtom) receives only the shell snapshot atom, so the open thread's state would have to be passed in through createThreadEnvironmentAtoms and its web and mobile callers (apps/web and apps/mobile state/threads). That goes beyond threadTitleRegeneration.ts and its caller at about 30 lines.
+- Limits: a regeneration started on a thread that is not in the shell snapshot (archived, an idle subagent, or an older settled thread opened from search or a link) settles with no outcome at once and shows no toast, as today.
+- Issue draft: "Title regeneration outcome for threads outside the shell snapshot". Body: the waiter in packages/client-runtime/src/state/threadTitleRegeneration.ts reads only the shell snapshot, and on the main stream archivedThreads is empty, idle subagents are left out and older settled threads are cut (ShellStream.ts:73, :82-101, :537, :564). The chat header offers Regenerate on archived threads (threadActionMenu.logic.ts:249-257). Proposal: when the thread is not in the snapshot, settle from the open thread's own subscription (AppThread.lastTitleRegeneration), which means passing that state into createThreadEnvironmentAtoms. Acceptance: a case for an archived thread showing the failed and kept outcomes.
+
+Ruling 12 (d): LIMITS. A stream chunk this client can never decode resubscribes on the same session with backoff to 30 s, indefinitely. The view keeps the last good state (threads show "Could not synchronize the thread."), each retry costs one fresh subscribe (for the shell, one snapshot), and nothing tells the person to update the app.
+- Issue draft: "Tell the person to update the app after repeated decode defects". Body: rpc/client.ts's same-session retry (row 3) treats a SchemaError die as recoverable forever. Proposal: after K consecutive decode defects with no good chunk between them on one subscription, stop resubscribing and surface "This environment sends data this app cannot read. Update the app.", with a way to retry. Acceptance: a TestClock case that K defects stop the retries and show the message, and that a good chunk in between resets the count.
+
+Ruling 7 (conn P3-6), record corrections:
+1. ebbba8c7f0 (move-out claim 3) also added `export` to IDLE_SERVER_UPDATE_STATE in client-runtime state/server.ts. That makes an import cycle: serverUpdate.ts:21 imports it from server.ts, while server.ts does `export * from "./serverUpdate.ts"`. It is harmless because the value is read only inside a function, never at module load. The export stays, as ruled. The build log's line "The only changed text is the export keyword on SERVER_UPDATE_RESUME_TIMEOUT" was wrong: it is the export keyword on SERVER_UPDATE_RESUME_TIMEOUT in the moved block plus `export` on IDLE_SERVER_UPDATE_STATE in server.ts.
+2. Answer I.4 (b) said the person can type the message again and both would land. On web that was wrong: while a send waits, `sendInFlightRef` stays set (useComposerSend.ts:1524), so every further Send in that thread shows "Still sending your previous message." (chatViewSend.ts:370-378). Since ruling 1 the wait ends: a same-session resend after 5 s, and give-up with the draft restored after 10 minutes.
+3. Answer I.4 (c)'s "at most 6 warnings per durable subscription in the first minute" is really about one. The supervisor clears the dead session right after the disconnect broadcast, before the first 1 s retry, and switchMap ends the retry.
+
+Ruling 2's plan correction: the K7 plan's row 2 negative "stale rows are never resumed past a half-applied batch (tested)" was not true at 9fb762a2b5 (there was no such test, and the code resumed past it). It is true from 8a982a107a on, pinned by threads-sync.applyDefect.test.ts. The comment "follow again for a fresh snapshot" in threadSubscriptionRecovery.ts is now true.
+
+Ruling 11 (wire P3-4): no change; upstream's "Title kept" text stays. Ruling 12 (k): the encode-skip guard is not taken. Ruling 12 (i): no new entry point (no mobile thread header item, no palette entry).
+
+Commits (each checked by the commands named in its message):
+- 0ccca69102, ruling 1, conn P2-1. dispatch.ts: SAME_SESSION_RESEND_GRACE = 5 s and LOST_MESSAGE_WAIT_BOUND = 10 min.
+  - Why 5 s: the real supervisor clears a dead session as soon as the socket's failure reaches pending requests (RpcClient fails pending requests, then session.closed -> clearLease, supervisor.ts:1163, :402-405; the conn report 1(b) traces it), so a session still current and connected after 5 s is a live one whose reply was lost. A longer grace only delays the resend; a shorter one gains nothing measurable.
+  - Cases: dispatch.socketLoss.test.ts, 3 new on TestClock. The same-session and bound cases failed first; the cleared-session case is a guard that passes on the base by design.
+  - The web restore path shows error.message (useComposerSend.ts:1490-1495), so the person reads "… did not confirm the message within 10 minutes. It may not have been sent." with the draft back.
+  - Fork delta message-resend-bound.
+- 8a982a107a, ruling 2, conn P2-2. threadSubscriptionRecovery.ts takeFreshSnapshot; threads.ts one line (1079 = its entry). threads-sync.applyDefect.test.ts is the probe as a case: it failed first with "expected 8 to be undefined". Fork delta thread-apply-defect-resume.
+- 81b7224a06, ruling 3, wire P2-1. GENERATION_FAILED_MESSAGE; the case asserts no CLI text in the stored projection (failed first). Fork delta title-regeneration-failure-text.
+- b41d992232, ruling 4, P3-1: the onDefect case; M6 fails it (8 subscriptions instead of 1).
+- d4becc6ae2, ruling 4, P3-2: the backoff reset after applied items; M8 fails it (10 instead of 11).
+- ba8dad167f, ruling 4, P3-5: dispatch.realSupervisor.test.ts on EnvironmentSupervisor.make. The supervisorTestSupport harness is unchanged (no rule 3 line); the case provides its own ConnectionDriver over it. Mutation: a give-up on "backoff" fails it.
+- 3c5b6775d6, ruling 5, P3-3: the reset after 60 s up, measured on the Effect Clock (TestClock in tests, no wall-clock read). The case failed first (6 instead of 7).
+- b43f456995, ruling 6, P3-4: currentSession() plus requestInSession pin each attempt. No new case: the race needed a swap between two reads that pinning removes.
+- 6a01de8ebd, ruling 8, wire P3-1: ThreadTitleRegenerationCommandOutcome caps the command message at 300; the stored schemas are unchanged. New threadTitle.test.ts (the 301 case failed first).
+- 3f390d3028, ruling 10, wire P3-3: the roll-up counts a userOnly card of a non-native subagent without the live-run test. subagentRequest is unchanged for its other readers. The threadShell.test.ts case failed first.
+
+Rule 3: no existing dev test expectation or setup changed. Cases were added to threadShell.test.ts (dev file, new case only). The other test edits are in files this lane created: dispatch.socketLoss, client.streamRecovery, threads-sync.defect (the lane's own "backs off repeated defects" case extended and retitled), ThreadTitleRegenerationService.test.ts's lane-added outcome case (its expectation changed with ruling 3), plus the new files threads-sync.applyDefect, dispatch.realSupervisor and threadTitle.test.ts.
+Budgets (ruling 13): no entry raised. Touched files with an entry: client-runtime state/threads.ts 1079 and contracts orchestrationV2.ts 4421, both equal to their entries; the gate's code-budget lint checks every file.
+
+## Coordinator, 2026-11-18 00:35:17 UTC, standing rule 3 extension (beside IV), verbatim
+
+"Standing rule from now, so this needs no round trip again: a type-only import added to an existing test file, and a layer provided to an existing case because the code under test gained a dependency, need no word from me when the commit changes no title, body, setup value or expectation of that case; the lane quotes the before and after in its record and the fresh review lists them. A provide that replaces or fakes a service the case's assertions read still comes to me."
+
+K7: the fix round used neither (no type-only import or provide was added to an existing dev test case).
+
+## Coordinator, 2026-11-18 00:45:31 UTC, READY rule, verbatim
+
+"From now on for every lane: READY means the gate exited 0 on the pushed head, or the report names each failure with the same failure shown at the integration head."
+
+## Fix round gate
+
+- Gate: `vp run check:changed origin/chase/t3-261114-next3` (integration head 259883c788, unchanged), run on 3f390d30282777a5880ba861f7031c1ae98e8e35. That is the head pushed; no commit landed during the run, and the tree was clean. Exit 0: format, lint, knip 1/2 and 2/2, graphql, agent surface audit, agent context budget and typecheck (42 packages) pass; test (481 files) pass, 9656 tests.
+- Whole changed test files, each run alone, with the result in its commit: dispatch.socketLoss 10, dispatch.realSupervisor 1, client.streamRecovery 8, threads-sync.applyDefect 1, threads-sync.defect 3, threads-sync and threads-atoms (with the defect files, 60), ThreadTitleRegenerationService 10, threadTitle 2, threadShell 16.
+- Subsystem runs for ruling 10 (it changes who shows "Input needed"): web ThreadNotificationCoordinator logic and badge, 49.
+- Head on origin: chase/t3-261114-next3-k7-client-protocol = 3f390d3028, a plain push from 9fb762a2b5 with ten commits. No integration merge yet, as ruled.
+
