@@ -1,3 +1,4 @@
+import { scanReplicaMemory } from "./testkit/ScanReplicaMemory.ts";
 import { assert, describe, it } from "@effect/vitest";
 import * as M from "@goat/contracts";
 import * as Effect from "effect/Effect";
@@ -178,6 +179,7 @@ describe("memory hub floor", () => {
             reauthorize: Effect.void,
           });
         yield* receive(first, 0);
+        yield* scanReplicaMemory(source.memoryId);
         const wide = newMemory(12);
         const result = yield* service.acceptSuggestionWrite(
           {
@@ -287,6 +289,7 @@ describe("memory hub floor", () => {
           page: tail,
           reauthorize: Effect.void,
         });
+        yield* scanReplicaMemory(op.memoryId);
         assert.isFalse(yield* store.areAutomaticallyUsable(space, [op.revision.revisionId]));
         assert.deepStrictEqual(
           (yield* replica.read(
@@ -295,6 +298,14 @@ describe("memory hub floor", () => {
           )).marks,
           { provenance: "unverified", originThreadId: op.revision.provenance.originThreadId },
         );
+        const legacy = yield* replica.read(
+          { memorySpaceId: space, memoryId: op.memoryId },
+          Effect.void,
+        );
+        assert.strictEqual(legacy.status, "active");
+        if (legacy.status !== "active") throw new Error("expected a scanned replica item");
+        assert.notProperty(legacy.revision.provenance, "unverified");
+        assert.notProperty(legacy.revision.provenance, "originThreadId");
       }).pipe(Effect.provide(Layer.fresh(core)));
       yield* compactor.compact(principal());
       const join = yield* hub.join(

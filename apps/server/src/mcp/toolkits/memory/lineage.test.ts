@@ -1,3 +1,4 @@
+import { scanReplicaMemory } from "../../../memory/testkit/ScanReplicaMemory.ts";
 import { memoryOperationDigest } from "../../../memory/MemoryDecider.ts";
 import { expect, it } from "@effect/vitest";
 import * as M from "@goat/contracts";
@@ -589,6 +590,7 @@ const applyAuthoritativeSave = Effect.fn("test.applyAuthoritativeSave")(function
       ],
     },
   });
+  yield* scanReplicaMemory(op.memoryId);
 });
 
 it.effect.each([101, 1000])(
