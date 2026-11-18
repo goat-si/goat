@@ -1,3 +1,12 @@
+import { isPreviewInputSignal } from "./previewInputSignal.ts";
+import {
+  fitPictureInPictureContentSize,
+  PICTURE_IN_PICTURE_INITIAL_WIDTH,
+  PICTURE_IN_PICTURE_INITIAL_HEIGHT,
+  PICTURE_IN_PICTURE_MIN_WIDTH,
+  PICTURE_IN_PICTURE_MIN_HEIGHT,
+  PICTURE_IN_PICTURE_ASPECT_RATIO_EPSILON,
+} from "./pictureInPictureSize.ts";
 import { isPreviewEditingShortcut } from "./previewEditingShortcut.ts";
 import { isPreviewRefreshShortcut } from "./previewRefresh.ts";
 import { admitAgentPointer, pointerEvent, type AgentPointer } from "./CursorStateOrdering.ts";
@@ -138,32 +147,8 @@ const PICTURE_IN_PICTURE_JPEG_QUALITY = 80;
 const CAPTURE_PAGE_RETRY_ATTEMPTS = 3;
 const CAPTURE_PAGE_RETRY_DELAY_MS = 120;
 const CAPTURE_PAGE_ATTEMPT_TIMEOUT_MS = 1_000;
-const PICTURE_IN_PICTURE_INITIAL_WIDTH = 480;
-const PICTURE_IN_PICTURE_INITIAL_HEIGHT = 320;
-const PICTURE_IN_PICTURE_MIN_WIDTH = 240;
-const PICTURE_IN_PICTURE_MIN_HEIGHT = 160;
-const PICTURE_IN_PICTURE_ASPECT_RATIO_EPSILON = 0.002;
 const requestRecordingCaptureExpression = (tabId: string): string =>
   `globalThis[${JSON.stringify(DESKTOP_PREVIEW_RECORDING_CAPTURE_TRIGGER)}]?.(${JSON.stringify(tabId)}) === true`;
-
-export const fitPictureInPictureContentSize = (
-  current: ReadonlyArray<number>,
-  aspectRatio: number,
-): readonly [width: number, height: number] => {
-  const currentWidth = Math.max(1, current[0] ?? PICTURE_IN_PICTURE_INITIAL_WIDTH);
-  const currentHeight = Math.max(1, current[1] ?? PICTURE_IN_PICTURE_INITIAL_HEIGHT);
-  const currentArea = currentWidth * currentHeight;
-  let width = Math.sqrt(currentArea * aspectRatio);
-  let height = width / aspectRatio;
-  const minimumScale = Math.max(
-    1,
-    PICTURE_IN_PICTURE_MIN_WIDTH / width,
-    PICTURE_IN_PICTURE_MIN_HEIGHT / height,
-  );
-  width *= minimumScale;
-  height *= minimumScale;
-  return [Math.round(width), Math.round(height)];
-};
 
 const recordingFileExtension = (mimeType: string): string => {
   const subtype = mimeType.split(";", 1)[0]?.trim().toLowerCase().split("/")[1] ?? "";
@@ -195,10 +180,6 @@ interface PreviewOperationContext {
 
 type Listener = (tabId: string, state: PreviewTabState) => Effect.Effect<void>;
 type RecordingFrameListener = (frame: DesktopPreviewRecordingFrame) => Effect.Effect<void>;
-
-type PreviewInputSignal =
-  | { readonly kind: "pointer"; readonly x: number; readonly y: number; readonly button: number }
-  | { readonly kind: "key"; readonly key: string; readonly code: string };
 
 interface ManagedListeners {
   readonly attachmentId: symbol;
@@ -256,27 +237,6 @@ type RecordingInputListener = (event: DesktopPreviewRecordingInputEvent) => Effe
 type PointerEventListener = (event: DesktopPreviewCursorEvent) => Effect.Effect<void>;
 
 type OpenLinkListener = (event: DesktopPreviewOpenLinkEvent) => Effect.Effect<void>;
-
-const isPreviewInputSignal = (value: unknown): value is PreviewInputSignal => {
-  if (typeof value !== "object" || value === null || !("kind" in value)) return false;
-  if (value.kind === "pointer") {
-    return (
-      "x" in value &&
-      typeof value.x === "number" &&
-      "y" in value &&
-      typeof value.y === "number" &&
-      "button" in value &&
-      typeof value.button === "number"
-    );
-  }
-  return (
-    value.kind === "key" &&
-    "key" in value &&
-    typeof value.key === "string" &&
-    "code" in value &&
-    typeof value.code === "string"
-  );
-};
 
 const makeNativeOperations = Effect.fn("PreviewManager.makeOperations")(function* (
   artifactDirectory: string,

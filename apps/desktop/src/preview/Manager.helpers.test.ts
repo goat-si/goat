@@ -2,7 +2,7 @@ import { previewWindowOpenAction } from "./PopupLifecycle.ts";
 import { isPreviewEditingShortcut } from "./previewEditingShortcut.ts";
 import { describe, expect, it, vi } from "vite-plus/test";
 
-import * as PreviewManager from "./Manager.ts";
+import { fitPictureInPictureContentSize } from "./pictureInPictureSize.ts";
 
 vi.mock("electron", () => ({
   BrowserWindow: vi.fn(),
@@ -15,8 +15,8 @@ vi.mock("electron", () => ({
 
 describe("fitPictureInPictureContentSize", () => {
   it("does not collapse toward the minimum size when orientation changes repeatedly", () => {
-    const portrait = PreviewManager.fitPictureInPictureContentSize([523, 294], 9 / 16);
-    const landscape = PreviewManager.fitPictureInPictureContentSize(portrait, 16 / 9);
+    const portrait = fitPictureInPictureContentSize([523, 294], 9 / 16);
+    const landscape = fitPictureInPictureContentSize(portrait, 16 / 9);
 
     expect(portrait).toEqual([294, 523]);
     expect(landscape).toEqual([523, 294]);
