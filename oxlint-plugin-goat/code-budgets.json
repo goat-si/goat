@@ -14,7 +14,7 @@
   "apps/desktop/src/preview/DesktopBrowserHost.test.ts": { "lines": 1037 },
   "apps/desktop/src/preview/FaviconCapture.ts": { "nonNull": 11 },
   "apps/desktop/src/preview/Manager.test.ts": { "lines": 2675 },
-  "apps/desktop/src/preview/Manager.ts": { "lines": 3612 },
+  "apps/desktop/src/preview/Manager.ts": { "lines": 3611 },
   "apps/desktop/src/preview/PickPreload.ts": { "lines": 1420 },
   "apps/desktop/src/preview/previewZoom.ts": { "nonNull": 2 },
   "apps/desktop/src/snapShot/CaptureShortcutConfig.ts": { "nonNull": 1 },

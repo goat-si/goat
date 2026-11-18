@@ -2039,7 +2039,6 @@ const makeNativeOperations = Effect.fn("PreviewManager.makeOperations")(function
                 try {
                   window.value.webContents.send(
                     PREVIEW_ANNOTATION_VOICE_EVENT_CHANNEL,
-                    PREVIEW_FIND_RESULT_CHANNEL,
                     tabId,
                     event,
                   );
