@@ -138,3 +138,77 @@ it.effect("sparse restore rewrites manual skip-worktree files and keeps exclusio
     }
   }).pipe(Effect.scoped, Effect.provide(layerGitContract)),
 );
+
+// Edit from here restores every hand-flagged file to the checkpoint, whose capture recorded it:
+// S skip-worktree, h assume-unchanged, s both.
+it.effect.each([
+  { tag: "S", flags: ["--skip-worktree"] },
+  { tag: "h", flags: ["--assume-unchanged"] },
+  { tag: "s", flags: ["--skip-worktree", "--assume-unchanged"] },
+] as const)(
+  "restores a file flagged $tag to the content its checkpoint captured",
+  ({ tag, flags }) =>
+    Effect.gen(function* () {
+      const fileSystem = yield* FileSystem.FileSystem;
+      const path = yield* Path.Path;
+      const driver = yield* GitVcsDriver.makeVcsDriverShape();
+      const cwd = yield* fileSystem.makeTempDirectoryScoped({ prefix: "t3-flagged-restore-" });
+      const { git, checkpointRef } = yield* makeRepo(driver, cwd);
+      const flagged = path.join(cwd, "flagged.txt");
+      yield* fileSystem.writeFileString(flagged, "committed\n");
+      yield* git(["add", "flagged.txt"]);
+      yield* git(["commit", "-m", "add flagged file"]);
+      for (const flag of flags) yield* git(["update-index", flag, "flagged.txt"]);
+      assert.strictEqual(
+        (yield* git(["ls-files", "-v", "flagged.txt"])).stdout,
+        `${tag} flagged.txt\n`,
+      );
+      // The hidden edit made during the turn is what the checkpoint keeps.
+      yield* fileSystem.writeFileString(flagged, "hidden edit\n");
+      yield* driver.checkpoints.captureCheckpoint({ cwd, checkpointRef });
+      assert.strictEqual(
+        (yield* git(["show", `${checkpointRef}:flagged.txt`])).stdout,
+        "hidden edit\n",
+      );
+      yield* fileSystem.writeFileString(flagged, "later\n");
+
+      assert.isTrue(
+        yield* driver.checkpoints.restoreCheckpoint({ cwd, checkpointRef, fallbackToHead: false }),
+      );
+
+      assert.strictEqual(yield* fileSystem.readFileString(flagged), "hidden edit\n");
+    }).pipe(Effect.scoped, Effect.provide(layerGitContract)),
+);
+
+// A checkpoint that matches HEAD leaves git restore nothing to change in the index, so the flag
+// alone decided whether a later edit was put back.
+it.effect.each([
+  { tag: "S", flags: ["--skip-worktree"] },
+  { tag: "h", flags: ["--assume-unchanged"] },
+  { tag: "s", flags: ["--skip-worktree", "--assume-unchanged"] },
+] as const)("restores a file flagged $tag whose checkpoint matches HEAD", ({ tag, flags }) =>
+  Effect.gen(function* () {
+    const fileSystem = yield* FileSystem.FileSystem;
+    const path = yield* Path.Path;
+    const driver = yield* GitVcsDriver.makeVcsDriverShape();
+    const cwd = yield* fileSystem.makeTempDirectoryScoped({ prefix: "t3-flagged-head-" });
+    const { git, checkpointRef } = yield* makeRepo(driver, cwd);
+    const flagged = path.join(cwd, "flagged.txt");
+    yield* fileSystem.writeFileString(flagged, "committed\n");
+    yield* git(["add", "flagged.txt"]);
+    yield* git(["commit", "-m", "add flagged file"]);
+    for (const flag of flags) yield* git(["update-index", flag, "flagged.txt"]);
+    assert.strictEqual(
+      (yield* git(["ls-files", "-v", "flagged.txt"])).stdout,
+      `${tag} flagged.txt\n`,
+    );
+    yield* driver.checkpoints.captureCheckpoint({ cwd, checkpointRef });
+    yield* fileSystem.writeFileString(flagged, "later\n");
+
+    assert.isTrue(
+      yield* driver.checkpoints.restoreCheckpoint({ cwd, checkpointRef, fallbackToHead: false }),
+    );
+
+    assert.strictEqual(yield* fileSystem.readFileString(flagged), "committed\n");
+  }).pipe(Effect.scoped, Effect.provide(layerGitContract)),
+);
