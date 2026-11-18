@@ -282,6 +282,10 @@ async function expectFileHeaderShown(
 
 it("reveals a pending file across pages while a stale selected commit falls back to all commits", async () => {
   setup(true);
+  using _preferences = __setClientSettingsForTests({
+    ...DEFAULT_CLIENT_SETTINGS,
+    diffFilesCollapsed: false,
+  });
   const container = document.createElement("div");
   container.className = "flex h-[500px] w-[900px]";
   // The diff scope menu only renders for a pull request that still has commits.
@@ -402,16 +406,13 @@ it("answers a commit's diff link only once that commit's diff is shown", async (
   await vi.waitFor(() => expect(settled).toHaveBeenCalledWith(url));
 });
 
-// Last: it leaves client settings hydrated, which the paged cases above do not expect.
 // regression: a Viewed answer that lands after a link reveals a file must not fold it
 it("keeps a revealed file open when its Viewed mark loads afterwards", async () => {
   setup();
-  __setClientSettingsForTests({ ...DEFAULT_CLIENT_SETTINGS, diffFilesCollapsed: false });
-  using _preferences = {
-    [Symbol.dispose]() {
-      __setClientSettingsForTests(DEFAULT_CLIENT_SETTINGS);
-    },
-  };
+  using _preferences = __setClientSettingsForTests({
+    ...DEFAULT_CLIENT_SETTINGS,
+    diffFilesCollapsed: false,
+  });
   mocks.viewedPaths = new Set();
   const container = document.createElement("div");
   container.className = "flex h-[700px] w-[900px]";

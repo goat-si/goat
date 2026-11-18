@@ -964,9 +964,19 @@ export function __resetClientSettingsPersistenceForTests(): void {
   }
 }
 
-export function __setClientSettingsForTests(settings: ClientSettings): void {
+export function __setClientSettingsForTests(settings: ClientSettings): Disposable {
+  const previousSettings = clientSettingsSnapshot;
+  const previousStatus = clientSettingsHydrationStatus;
   clientSettingsHydrationGeneration += 1;
   clientSettingsSnapshot = settings;
   clientSettingsHydrationStatus = "ready";
   clientSettingsHydrationPromise = null;
+  return {
+    [Symbol.dispose]() {
+      clientSettingsHydrationGeneration += 1;
+      clientSettingsSnapshot = previousSettings;
+      clientSettingsHydrationStatus = previousStatus;
+      clientSettingsHydrationPromise = null;
+    },
+  };
 }
