@@ -384,3 +384,8 @@ P3-A record correction (made now, as ruled): the P3-4 row's sentence "Why both v
 LIMIT (for #3700): a renamed unheld thread, or a thread deleted while the client was disconnected, keeps its old chip for as long as a chip reads it at least once a minute.
 The fix-delta review report (next3-K10-fix-review-c31dfe1c.md) is not on pen-mac-studio or the records branch: NOT READ by K10; the nits follow the coordinator's ruling text above.
 
+
+## K10 nits round (01:41 ruling), token note under the 00:20 rule 4
+
+K10's nits round is ACTIVE on pen-mac-studio: branch chase/t3-261114-next3-k10-nits (cut from c31dfe1c41, kept there as the 01:50 ruling allows). P3-A committed (0ffafd6205); P3-B's failing run, P3-C's run and the gate wait for the token. Order as I read it: K5's nits job (running now from its worktree), then K10's heavy jobs; SF3 and N10 start nothing new meanwhile.
+
