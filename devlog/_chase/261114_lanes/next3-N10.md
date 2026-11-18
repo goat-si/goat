@@ -294,3 +294,93 @@ Proposal: the bundled archives leave the five faces out (a build step, with thei
 - Release: the 256 MiB cap check stays, and the release workflow's size report adds the font bytes.
 - Install record: a trimmed archive records its own digest. A later release-digest check on the host re-installs from the full release archive, which degrades to today's behaviour.
 
+
+
+## 2026-11-18 UTC — resumed verification and two READY ranges
+
+- Lane branch `chase/t3-261114-next3-n10-service-release`, head `cbd0a4a2d2db5fea776bcc27278a34f9dae2460a`. `git fetch origin` and `git merge origin/chase/t3-261114-next3` exited 0. Integration parent `f82d2df4b0960eb39bd36e4100b72b6f2758c7d2`; `vp i` exited 0 after the lockfile changed. The verification fixes were folded into the unpublished row commits; the merge retains the same integration parent and the checked tree.
+- N10-1 range `259883c788bb32d5601023932e07f879bde9af60..e68a3102cb3a8502ac7b3fadcd7797ee2cd9f651`: move-outs, C17 and D2, C12-1 through C12-5, C20. N10-2 range `e68a3102cb3a8502ac7b3fadcd7797ee2cd9f651..914960c17a3208b8795c0585b60aa5cfcaf5e572`: C19, O25. Fresh C4 review remains owed on both ranges.
+- Resumed guarded run exited 1 (109 passed, 2 failed): the existing deferred-restart test reproduced recovery falling behind an immediate stop, and the new C20 fixture raised `ERR_INVALID_STATE` on double close. The first changed-files gate exited 1 (2,953 passed, 1 failed, 5 skipped): there was also a migration-name type error, two unused internal parser exports, a formatting failure, and an O25 fixture with a stale versioned blockmap.
+- Corrections: queued initial log setup and recovery together before stop, used idempotent SQLite fixture disposal, and gave the protocol rollback fixture a bounded injected clock. Made the two parser helpers private and typed the migration lookups against ledger strings. O25's existing blockmap fixture at `scripts/release-verify.test.ts:321` now uses `${releaseAppImageName(version, "x86_64")}.blockmap` in place of `GOAT-${version}-x86_64.AppImage.blockmap`; its assertion is unchanged. On the next gate (exit 1, 2,952 passed, 2 timed out, 5 skipped), macOS missed both C20 marker notifications after the trial and rollback persisted. Those tests now await launcher completion and read the marker contents.
+- The earlier fail-first outputs showed D2 losing the committed WAL row, the upstream protocol-4 variant stranding a probation rollback, and the C20 cases reaching `failed` while ownership was still held. The subsequent fixes and compatibility evidence are in the rows below.
+
+| Row | Review scope and evidence | Compatibility |
+| --- | --- | --- |
+| C17 | `fa570fcc4d` ports rollback only. `36854f1447` is the GOAT-authored D2 backup fix. `serviceLauncher.linkedDatabase.test.ts` checks the real WAL and retained writes; launcher suites cover ordinary files and rollback. | Same on-disk backup shape for retained runtimes. Online copy is a separate row. |
+| C12-1 | `6768f3ec7a` ports selection leases/repoint and adds D1. `serviceLauncher.selection`, `serviceSelectionLock`, `bootService.selection`, and `serviceLauncherClient` cover rollback, an interrupted repoint, reclaim, refusal, recovery and handshake. | The shipped v0.1.10 source decoder (`6f872e6b2d`, sha256 `ca21c52b7b851df31652d95a150e60f23cccd1b224f7a58264cb46e21387fce1`) and current decoder accepted context and state in L3/S3, L3/S4, L4/S3 and L4/S4. The old decoder rejects protocol:4 and ignores launcherProtocol:4. Probe exit 0. |
+| C12-2 | `cc3f518018` ports rotation and includes the GOAT startup/stop fix. `serviceLauncher.log` and `serviceLauncher.test` verify in-place truncation and immediate-stop recovery. | Existing unit/plist layouts and older children work under the new launcher. The older launcher keeps its previous log behavior. |
+| C12-3 | `1c38c429f7` ports manager UnitPath lookup and shares the parser. `serviceUnitRepoint`, `bootService.manager`, and `bootServiceUnitPaths` cover override and fallback. | Existing unit paths and legacy names remain compatible. Older launchers use their prior lookup. |
+| C12-4 | `5493cb61fc` ports Linux/macOS symlink repoint using GOAT's recorded launcher paths. `repointCommittedLaunchers` and startup suites cover owned links, other homes and committed versus non-committed starts. | An older child keeps its prior symlink behavior; helpers can repoint GOAT-owned links from earlier runtimes. Windows is held. |
+| C20 | `4331d3ed73` ports ownership retry and adds the GOAT 10-minute bound and the D3 rollback/discard distinction. `serviceLauncher.ownerPoll`, `serviceLauncher.test`, and `serverOwnerLock` cover pending, release, both timeout outcomes and database-ahead. | A Node 26.12.1 probe exited 0 for live pre-lock records, reused PIDs and the exclusive lock. An older launcher keeps its existing immediate-refusal policy. |
+| C12-5 | `e68a3102cb` ports preflight with GOAT reconciliation. `servicePreflight.migrations` and the reconciliation suites cover a fresh/released/preview ledger, unknown/skipped migrations and unreadable data. | Reply stays compatible. An older initiator can read `blocked`; an older target omits the new ledger check. |
+| C19 | `a9f8e5d86f` adapts the upstream port to `goat-launcher`. `invocation`, `update`, `environment`, `versionSkew` and `ServerUpdateAction.browser` cover detection, shell quoting and update instructions. | Old schema decodes the new installation as absent. New client retains the manual command/instructions for older servers. Web and desktop use the same action. |
+| O25 | `914960c17a` ports AppImage behavior with GOAT channel naming and verifier changes. `DesktopLinuxUrlHandler`, `DesktopPreReadyPlatform.appImage`, `build-desktop-artifact.appImage`, and `release-verify` cover updater relaunch and asset validation. | Installed versioned AppImage moves beside itself under the new name and the updated desktop app preserves the old path with a relative symlink. Source of electron-updater 6.8.9 and a mocked relaunch case checked. Revert packaging with `VERSION_FREE_APPIMAGES = false` in `scripts/lib/desktop-release-channel.ts:6`. |
+
+P1: in a paired web/desktop scratch environment, check the update action reconnects after a background service update, backup/rollback keeps pre-update data, and an owned home leaves the client reconnecting until release, then rejoins on the new runtime or surfaces `db-owner-busy` with the terminal outcome after reconnecting to the old runtime. For a hand-started pinned runtime, the copied command names its launcher and home. O25 still requires a real nightly transition from an installed versioned AppImage before stable promotion.
+
+goat#3579 remains a separate C4 lane. The measurement and plan above carry forward: transmit the trimmed archive and separately verified fonts, preserve a valid older full runtime, install fonts for directly paired browsers, and fall back to system fonts if the copy fails.
+
+### Checks on the pushed head
+
+- From `apps/server`, `GOAT_TEST_TMP_GUARD=fail vp test run --reporter=default <37 focused server files>` exited 0: 437 passed, 1 Linux-only skip. All 12 changed server test files ran whole with 111 passes.
+- From the root, `vp test run --reporter=default <10 focused client, contract and release files>` exited 0: 207 passed, 4 host-conditioned skips. No test-name filters were used.
+
+<details>
+<summary>Focused test files and pass counts</summary>
+
+| Test file | Passed | Skipped |
+| --- | ---: | ---: |
+| `apps/server/src/cli/invocation.test.ts` | 14 | 0 |
+| `apps/server/src/cli/uninstall.test.ts` | 5 | 0 |
+| `apps/server/src/cli/update.test.ts` | 25 | 0 |
+| `apps/server/src/cloud/CloudLink.lifecycle.test.ts` | 15 | 0 |
+| `apps/server/src/cloud/bootService.manager.test.ts` | 3 | 0 |
+| `apps/server/src/cloud/bootService.render.test.ts` | 8 | 0 |
+| `apps/server/src/cloud/bootService.selection.test.ts` | 2 | 0 |
+| `apps/server/src/cloud/bootService.test.ts` | 59 | 0 |
+| `apps/server/src/cloud/bootServiceUnitPaths.test.ts` | 7 | 0 |
+| `apps/server/src/cloud/pinnedRuntime.test.ts` | 25 | 1 |
+| `apps/server/src/cloud/repointCommittedLaunchers.test.ts` | 1 | 0 |
+| `apps/server/src/cloud/selfUpdate.pruning.test.ts` | 14 | 0 |
+| `apps/server/src/cloud/selfUpdate.test.ts` | 29 | 0 |
+| `apps/server/src/cloud/serviceLauncherClient.test.ts` | 8 | 0 |
+| `apps/server/src/cloud/servicePreflight.migrations.test.ts` | 6 | 0 |
+| `apps/server/src/cloud/servicePreflight.test.ts` | 1 | 0 |
+| `apps/server/src/cloud/serviceSelectionLock.test.ts` | 1 | 0 |
+| `apps/server/src/persistence/reconcileGoatMigrationIds.resume.test.ts` | 50 | 0 |
+| `apps/server/src/persistence/reconcileGoatMigrationIds.test.ts` | 33 | 0 |
+| `apps/server/src/persistence/reconcileGoatMigrationIds.upstream080.test.ts` | 14 | 0 |
+| `apps/server/src/persistence/reconcileV2PreviewMigration.test.ts` | 7 | 0 |
+| `apps/server/src/serverOwnerLock.test.ts` | 4 | 0 |
+| `apps/server/src/serverRuntimeStartup.autoPull.test.ts` | 4 | 0 |
+| `apps/server/src/serverRuntimeStartup.automationHold.test.ts` | 1 | 0 |
+| `apps/server/src/serverRuntimeStartup.codexGoal.test.ts` | 2 | 0 |
+| `apps/server/src/serverRuntimeStartup.sshRefused.test.ts` | 1 | 0 |
+| `apps/server/src/serverRuntimeStartup.stopIntent.test.ts` | 3 | 0 |
+| `apps/server/src/serverRuntimeStartup.test.ts` | 25 | 0 |
+| `apps/server/src/serviceLauncher.integration.test.ts` | 3 | 0 |
+| `apps/server/src/serviceLauncher.legacy.test.ts` | 2 | 0 |
+| `apps/server/src/serviceLauncher.lifecycle.test.ts` | 3 | 0 |
+| `apps/server/src/serviceLauncher.linkedDatabase.test.ts` | 2 | 0 |
+| `apps/server/src/serviceLauncher.log.test.ts` | 2 | 0 |
+| `apps/server/src/serviceLauncher.ownerPoll.test.ts` | 3 | 0 |
+| `apps/server/src/serviceLauncher.selection.test.ts` | 6 | 0 |
+| `apps/server/src/serviceLauncher.test.ts` | 47 | 0 |
+| `apps/server/src/serviceUnitRepoint.test.ts` | 2 | 0 |
+| `apps/desktop/src/app/DesktopLinuxUrlHandler.test.ts` | 18 | 4 |
+| `apps/desktop/src/app/DesktopPreReadyPlatform.appImage.test.ts` | 2 | 0 |
+| `apps/desktop/src/app/DesktopPreReadyPlatform.test.ts` | 5 | 0 |
+| `apps/web/src/components/ServerUpdateAction.browser.test.tsx` | 16 | 0 |
+| `apps/web/src/versionSkew.test.ts` | 16 | 0 |
+| `packages/contracts/src/environment.test.ts` | 16 | 0 |
+| `scripts/build-desktop-artifact.appImage.test.ts` | 3 | 0 |
+| `scripts/build-desktop-artifact.test.ts` | 97 | 0 |
+| `scripts/release-desktop-runtime.test.ts` | 10 | 0 |
+| `scripts/release-verify.test.ts` | 24 | 0 |
+
+</details>
+
+- `vp run check:changed origin/chase/t3-261114-next3` exited 0 on the pushed head. It compared 57 paths to merge base `f82d2df4b096`; format, lint, Knip, GraphQL, agent audits, and typecheck all passed. Vitest reported 95/95 files, 2,954 passed, 5 skipped. Each gate had a separate process check first.
+- Plain lane push exited 0. `git ls-remote` verified the pushed head. Integration advanced during local verification; the gate used the integration commit in the lane's merge. `git merge-tree --write-tree --quiet HEAD origin/chase/t3-261114-next3` also exited 0 against the later tip `2c0e0002a9`.
+
+NOT RUN: PR #3700 CI, repo-wide suites, and real paired P1. Native systemd/launchd, released mixed-version service updates, and the installed-versioned-AppImage nightly transition still need real-host proof. The Windows service/repoint rows remain held. The lane's patch check was skipped because its diff did not change dependency files. Installer-internal font duplication is inferred from published asset sizes and the CLI archive measurement; no installer build or extraction was run for goat#3579.
