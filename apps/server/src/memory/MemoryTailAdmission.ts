@@ -7,6 +7,7 @@ const encodeTail = Schema.encodeEffect(Schema.fromJsonString(M.MemoryHubPullResu
 
 const measureMemoryTailBytes = Effect.fn("MemoryService.measureTailBytes")(function* (
   operation: Exclude<M.MemoryOperation, { kind: "forget" }>,
+  approval?: M.MemoryResolutionApproval,
 ) {
   const sequence = Number.MAX_SAFE_INTEGER;
   const receipt = {
@@ -17,10 +18,10 @@ const measureMemoryTailBytes = Effect.fn("MemoryService.measureTailBytes")(funct
     outcome: "accepted" as const,
     ...(operation.kind === "resolve"
       ? {
-          resolutionApproval: {
+          resolutionApproval: approval ?? {
             resolutionId: operation.resolution.resolutionId,
-            appliedAtUtc: operation.resolution.appliedAtUtc,
-            revertDeadlineUtc: operation.resolution.revertDeadlineUtc,
+            appliedAtUtc: M.MemoryUtcTimestamp.make("1970-01-01T00:00:00.000Z"),
+            revertDeadlineUtc: M.MemoryUtcTimestamp.make("1970-01-31T00:00:00.000Z"),
           },
         }
       : {}),
@@ -35,8 +36,11 @@ const measureMemoryTailBytes = Effect.fn("MemoryService.measureTailBytes")(funct
 });
 
 export const requireMemoryTailFit = Effect.fn("MemoryService.requireTailFit")(
-  function* (operation: Exclude<M.MemoryOperation, { kind: "forget" }>) {
-    const current = yield* measureMemoryTailBytes(operation);
+  function* (
+    operation: Exclude<M.MemoryOperation, { kind: "forget" }>,
+    approval?: M.MemoryResolutionApproval,
+  ) {
+    const current = yield* measureMemoryTailBytes(operation, approval);
     if (current > M.MEMORY_TAIL_ADMISSION_BYTES)
       return yield* new MemoryCapacityError({
         dimension: "payload_bytes",

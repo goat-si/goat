@@ -2162,7 +2162,6 @@ const make = Effect.fnUntraced(function* (
         failureCode: "hub_upgrade_required",
         upgradeRequiredMembers: yield* store.blockingMembers(op.memorySpaceId),
       };
-    if (op.kind !== "forget") yield* requireMemoryTailFit(op);
     // Resolve recomputes lineage from its input payloads; the decider needs heads and restored.
     const current = yield* store.loadAggregate(
       op.memorySpaceId,
@@ -2346,6 +2345,7 @@ const make = Effect.fnUntraced(function* (
       return ledger.entry.receipt;
     }
     const { decision, approval } = prepared;
+    if (op.kind !== "forget") yield* requireMemoryTailFit(op, approval);
     return yield* quota.withAdmission(
       { operation: op, admission: Store.hubAdmission, environmentId, receipt: decision.receipt },
       Effect.gen(function* () {
