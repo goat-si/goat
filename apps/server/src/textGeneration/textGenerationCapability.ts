@@ -10,7 +10,7 @@ import {
 } from "@goat/contracts";
 import { resolveTextGenerationRoute } from "@goat/shared/serverSettings";
 
-import { readProviderGenerationSnapshot } from "../provider/providerGenerationSnapshot.ts";
+import { readProviderRoutingSnapshot } from "../provider/providerGenerationSnapshot.ts";
 import type * as ProviderInstanceRegistry from "../provider/ProviderInstanceRegistry.ts";
 
 /** The project the text is for; a fallback skips providers that project turned off. */
@@ -46,14 +46,14 @@ export const makeTextGenerationCapableSelection = Effect.fn("TextGeneration.make
     ) {
       const instance = yield* registry.getInstance(selection.instanceId);
       const providers: Array<ServerProvider> = [];
-      if (instance !== undefined) providers.push(yield* readProviderGenerationSnapshot(instance));
+      if (instance !== undefined) providers.push(yield* readProviderRoutingSnapshot(instance));
       const projectId = yield* TextGenerationProject;
       const now = DateTime.toEpochMillis(yield* DateTime.now);
       let route = resolveTextGenerationRoute(settings, selection, providers, projectId, now);
       if (route.reason === "no_fallback") {
         for (const other of yield* registry.listInstances) {
           if (other.instanceId === selection.instanceId) continue;
-          providers.push(yield* readProviderGenerationSnapshot(other));
+          providers.push(yield* readProviderRoutingSnapshot(other));
         }
         route = resolveTextGenerationRoute(settings, selection, providers, projectId, now);
       }

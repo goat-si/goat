@@ -284,11 +284,14 @@ const OMO = ProviderInstanceId.make("omo");
 
 const capableSelectionHarness = (
   snapshots: ReadonlyArray<M.ServerProvider>,
-  options: { readonly awaitingFirstCheck?: ProviderInstanceId } = {},
+  options: {
+    readonly awaitingFirstCheck?: ProviderInstanceId;
+    readonly memoryCapabilities?: ProviderInstance["textGeneration"]["memoryCapabilities"];
+  } = {},
 ) => {
   const ran: Array<M.ModelSelection> = [];
-  const instances = snapshots.map((snapshot) => ({
-    ...makeStubInstance(
+  const instances = snapshots.map((snapshot) => {
+    const instance = makeStubInstance(
       snapshot.instanceId,
       makeStubTextGeneration({
         generateBranchName: (input) =>
@@ -297,15 +300,23 @@ const capableSelectionHarness = (
             return { branch: "feature/fallback" };
           }),
       }),
-    ),
-    driverKind: snapshot.driver,
-    snapshot: {
-      getSnapshot: Effect.succeed(snapshot),
-      ...(options.awaitingFirstCheck === snapshot.instanceId
-        ? { isAwaitingFirstCheck: Effect.succeed(true) }
-        : {}),
-    } as unknown as ProviderInstance["snapshot"],
-  }));
+    );
+    return {
+      ...instance,
+      driverKind: snapshot.driver,
+      textGeneration: {
+        ...instance.textGeneration,
+        memoryCapabilities:
+          options.memoryCapabilities ?? instance.textGeneration.memoryCapabilities,
+      },
+      snapshot: {
+        getSnapshot: Effect.succeed(snapshot),
+        ...(options.awaitingFirstCheck === snapshot.instanceId
+          ? { isAwaitingFirstCheck: Effect.succeed(true) }
+          : {}),
+      } as unknown as ProviderInstance["snapshot"],
+    };
+  });
   const generation = TextGeneration.make.pipe(
     Effect.provideService(
       ProviderInstanceRegistry.ProviderInstanceRegistry,
@@ -326,6 +337,38 @@ const generateBranch = (
 ) => generation.generateBranchName({ cwd: "/tmp", message: "Add a model", modelSelection });
 
 describe("TextGeneration model Settings no longer offers", () => {
+  it.effect.each(["saved", "fallback"] as const)(
+    "generates a branch name on the %s route without starting a memory preflight",
+    (route) =>
+      Effect.gen(function* () {
+        const saved = createModelSelection(CODEX, M.DEFAULT_TEXT_GENERATION_MODEL);
+        const fallback = createModelSelection(PI, "default");
+        const { ran, generation } = capableSelectionHarness(
+          [
+            textProvider(CODEX, "codex", [{ slug: saved.model }]),
+            textProvider(PI, "pi", [{ slug: fallback.model }]),
+          ],
+          {
+            ...(route === "fallback" ? { awaitingFirstCheck: CODEX } : {}),
+            memoryCapabilities: Effect.die("Ordinary text generation ran a memory preflight."),
+          },
+        );
+        yield* generateBranch(
+          yield* generation.pipe(
+            Effect.provide(
+              ServerSettings.layerTest({
+                providerInstances: {
+                  [PI]: { driver: M.ProviderDriverKind.make("pi"), enabled: true },
+                },
+              }),
+            ),
+          ),
+          saved,
+        );
+        expect(ran).toEqual([route === "saved" ? saved : fallback]);
+      }),
+  );
+
   it.effect("moves a saved Pi extension model to Pi's default model", () =>
     Effect.gen(function* () {
       const { ran, generation } = capableSelectionHarness([

@@ -33,15 +33,22 @@ export const applyProviderMemoryRevocations = (
   return updated ?? snapshots;
 };
 
+export const readProviderRoutingSnapshot = Effect.fn("Provider.readRoutingSnapshot")(function* (
+  instance: ProviderInstance,
+  emittedSnapshot?: ServerProvider,
+) {
+  const awaiting = yield* instance.snapshot.isAwaitingFirstCheck ?? Effect.succeed(false);
+  const snapshot = emittedSnapshot ?? (yield* instance.snapshot.getSnapshot);
+  return awaiting ? markAwaitingFirstCheck(snapshot) : snapshot;
+});
+
 export const readProviderGenerationSnapshot = Effect.fn("Provider.readGenerationSnapshot")(
   function* (instance: ProviderInstance, emittedSnapshot?: ServerProvider) {
-    const awaiting = yield* instance.snapshot.isAwaitingFirstCheck ?? Effect.succeed(false);
-    const snapshot = emittedSnapshot ?? (yield* instance.snapshot.getSnapshot);
+    const snapshot = yield* readProviderRoutingSnapshot(instance, emittedSnapshot);
     const memoryGeneration = instance.textGeneration.memoryRevocation?.isRevoked()
       ? NO_MEMORY_GENERATION
       : yield* instance.textGeneration.memoryCapabilities;
-    const annotated = { ...snapshot, memoryGeneration };
-    return awaiting ? markAwaitingFirstCheck(annotated) : annotated;
+    return { ...snapshot, memoryGeneration };
   },
 );
 
