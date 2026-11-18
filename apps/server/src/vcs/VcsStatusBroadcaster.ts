@@ -1,6 +1,7 @@
 import { makeBranchUpdates } from "./branchUpdates.ts";
 import { remoteRefreshFailureDiagnostics } from "./vcsStatusDiagnostics.ts";
 import { makeHeadWatchers } from "./headWatchers.ts";
+import * as Arr from "effect/Array";
 import * as Cause from "effect/Cause";
 import { sshHostsRefusal } from "@goat/ssh/hostAccess";
 import * as Context from "effect/Context";
@@ -52,7 +53,7 @@ interface CachedRemoteStatus extends CachedValue<VcsStatusRemoteResult | null> {
 
 interface VcsStatusChange {
   readonly cwd: string;
-  readonly event: VcsStatusStreamEvent;
+  readonly events: Arr.NonEmptyReadonlyArray<VcsStatusStreamEvent>;
 }
 
 interface CachedVcsStatus {
@@ -185,7 +186,7 @@ export const make = Effect.gen(function* () {
   >();
   const publishBranch = branchUpdates.publish;
   const localRefreshLocks = yield* KeyedLock.make<string>();
-  const cacheRef = yield* Ref.make(new Map<string, CachedVcsStatus>());
+  const cache = new Map<string, CachedVcsStatus>();
   // One permit per cwd for remote reads that write the cache. Without it a
   // periodic poll that started before an agent creates a PR can finish after the
   // turn-end refresh and overwrite the fresh PR with its stale `pr: null`.
@@ -194,11 +195,9 @@ export const make = Effect.gen(function* () {
     remoteWriteLocks.withLock(cwd, effect);
   const pollersRef = yield* SynchronizedRef.make(new Map<string, ActiveRemotePoller>());
 
-  const getCachedStatus = Effect.fn("VcsStatusBroadcaster.getCachedStatus")(function* (
-    cwd: string,
-  ) {
-    return yield* Ref.get(cacheRef).pipe(Effect.map((cache) => cache.get(cwd) ?? null));
-  });
+  const getCachedStatus = Effect.fn("VcsStatusBroadcaster.getCachedStatus")((cwd: string) =>
+    Effect.sync(() => cache.get(cwd) ?? null),
+  );
 
   const updateCachedLocalStatus = Effect.fn("VcsStatusBroadcaster.updateCachedLocalStatus")(
     function* (
@@ -208,57 +207,49 @@ export const make = Effect.gen(function* () {
       options?: { publish?: boolean },
     ) {
       const nextLocal = { fingerprint: fingerprintStatusPart(local), value: local };
-      const changes = yield* Ref.modify(cacheRef, (cache) => {
+      const accepted = yield* Effect.sync(() => {
         const head = headDuringLocalRead.get(cwd);
         if (
           head &&
           head.observation > observation &&
           (head.refName !== local.refName || head.isRepo !== local.isRepo)
         ) {
-          return [null, cache] as const;
+          return false;
         }
         const previous = cache.get(cwd) ?? { local: null, remote: null };
         const remote =
           local.isRepo && previous.remote?.branch === local.refName ? previous.remote : null;
-        return [
-          [previous.local?.fingerprint !== nextLocal.fingerprint, previous.remote !== remote],
-          new Map(cache).set(cwd, { local: nextLocal, remote }),
-        ] as const;
+        cache.set(cwd, { local: nextLocal, remote });
+        if (options?.publish) {
+          const events: VcsStatusStreamEvent[] = [];
+          if (previous.remote !== remote) events.push({ _tag: "remoteUpdated", remote: null });
+          if (previous.local?.fingerprint !== nextLocal.fingerprint) {
+            events.push({ _tag: "localUpdated", local });
+          }
+          // Enqueue both events before the unbounded PubSub wakes any subscriber.
+          if (Arr.isArrayNonEmpty(events)) PubSub.publishUnsafe(changesPubSub, { cwd, events });
+        }
+        return true;
       });
-      if (changes === null) return null;
-      const [localChanged, remoteCleared] = changes;
+      if (!accepted) return null;
       yield* publishBranch(cwd, local, observation);
-      if (options?.publish && remoteCleared) {
-        yield* PubSub.publish(changesPubSub, {
-          cwd,
-          event: { _tag: "remoteUpdated", remote: null },
-        });
-      }
-      if (options?.publish && localChanged) {
-        yield* PubSub.publish(changesPubSub, {
-          cwd,
-          event: { _tag: "localUpdated", local },
-        });
-      }
       return local;
     },
   );
 
   const updateCachedRemoteStatus = Effect.fn("VcsStatusBroadcaster.updateCachedRemoteStatus")(
     function* (cwd: string, remote: CachedRemoteStatus | null, options?: { publish?: boolean }) {
-      const [changed, value] = yield* Ref.modify(cacheRef, (cache) => {
+      const [changed, value] = yield* Effect.sync(() => {
         const previous = cache.get(cwd) ?? { local: null, remote: null };
         const local = previous.local?.value;
         const next = local?.isRepo && remote?.branch === local.refName ? remote : null;
-        return [
-          [previous.remote?.fingerprint !== next?.fingerprint, next?.value ?? null],
-          new Map(cache).set(cwd, { ...previous, remote: next }),
-        ] as const;
+        cache.set(cwd, { ...previous, remote: next });
+        return [previous.remote?.fingerprint !== next?.fingerprint, next?.value ?? null] as const;
       });
       if (options?.publish && changed) {
         yield* PubSub.publish(changesPubSub, {
           cwd,
-          event: { _tag: "remoteUpdated", remote: value },
+          events: [{ _tag: "remoteUpdated", remote: value }],
         });
       }
       return value;
@@ -788,10 +779,8 @@ export const make = Effect.gen(function* () {
           // HEAD cannot certify working-tree totals, even when it has not moved.
           localRefreshResults.delete(cwd);
           yield* workflow.invalidateLocalStatus(cwd);
-          yield* Ref.update(cacheRef, (cache) => {
-            const previous = cache.get(cwd);
-            return previous ? new Map(cache).set(cwd, { ...previous, local: null }) : cache;
-          });
+          const previous = cache.get(cwd);
+          if (previous) cache.set(cwd, { ...previous, local: null });
           if (detailedSubscribers.has(cwd)) {
             const local = yield* loadLocalStatus(cwd, { publish: true });
             return (
@@ -882,7 +871,8 @@ export const make = Effect.gen(function* () {
           }),
           Stream.fromSubscription(subscription).pipe(
             Stream.filter((event) => event.cwd === cwd),
-            Stream.map((event) => event.event),
+            Stream.map((change) => change.events),
+            Stream.flattenArray,
           ),
         ).pipe(Stream.ensuring(release));
       }),
