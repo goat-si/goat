@@ -6,6 +6,8 @@ import * as Layer from "effect/Layer";
 import * as Compactor from "./MemoryCompactor.ts";
 import { MemoryFloor2Enabled } from "./MemoryFloor.ts";
 import { memoryOperationDigest } from "./MemoryDecider.ts";
+import * as Schema from "effect/Schema";
+import * as TestClock from "effect/testing/TestClock";
 import * as SqlClient from "effect/sql/SqlClient";
 import * as Service from "./MemoryService.ts";
 import * as Store from "./MemoryStore.ts";
@@ -25,6 +27,7 @@ import {
   space,
 } from "./MemoryHubService.testkit.ts";
 
+const decodeResolution = Schema.decodeUnknownSync(M.MemoryHubApplyResolutionInput);
 const enabled = Effect.provideService(MemoryFloor2Enabled, true);
 const features = M.MEMORY_FLOOR_2;
 const advertise = { ...pullInput, features };
@@ -86,20 +89,58 @@ describe("memory hub floor", () => {
       assert.deepStrictEqual(page.entries, []);
     }).pipe(checkUsage, Effect.provide(live)),
   );
+  it.effect("reports the same upgrade blockers in a negotiated pull and a local refusal", () =>
+    Effect.gen(function* () {
+      yield* seed;
+      const hub = yield* Hub.MemoryHubService;
+      const local = yield* Service.MemoryService;
+      const blockers = [hubEnv, otherEnv];
+      assert.deepStrictEqual(
+        Reflect.get(yield* hub.pull(advertise, principal()), "upgradeRequiredMembers"),
+        blockers,
+      );
+      const op = newMemory(99);
+      const refusal = yield* local
+        .acceptSuggestionWrite(
+          {
+            memorySpaceId: space,
+            memoryId: op.memoryId,
+            operationId: op.operationId,
+            scope: op.revision.scope,
+            assertionKind: op.revision.assertionKind,
+            expectedHeads: [],
+            payload: op.payload,
+            baseBoundary: null,
+          },
+          {
+            origin: { environmentId: hubEnv, threadId: M.ThreadId.make("origin-thread") },
+            unverified: true,
+          },
+          Effect.void,
+        )
+        .pipe(Effect.flip);
+      assert.include(refusal, { code: "hub_upgrade_required" });
+      assert.deepStrictEqual(Reflect.get(refusal, "upgradeRequiredMembers"), blockers);
+    }).pipe(checkUsage, Effect.provide(live)),
+  );
+
   it.effect("a wide save stays invisible until ordered tail settlement", () =>
     Effect.gen(function* () {
       yield* seed;
       const hub = yield* Hub.MemoryHubService;
       const service = yield* Service.MemoryService;
       const store = yield* Store.MemoryStore;
-      const sql = yield* SqlClient.SqlClient;
       const sources = Array.from({ length: 101 }, (_, n) => {
         const op = operation(1000 + n);
         const memoryId = M.MemoryId.make(id(3000 + n));
         return { ...op, memoryId, revision: { ...op.revision, memoryId } };
       });
       for (const source of sources) yield* hub.push(pushInput(source), principal());
-      yield* sql`INSERT INTO memory_space_features VALUES (${space},1000,0)`;
+      assert.isUndefined((yield* hub.pull(advertise, principal())).derivedCap);
+      const peerPull = { ...advertise, environmentId: otherEnv };
+      const firstPage = yield* hub.pull(peerPull, principal(otherEnv));
+      assert.strictEqual(firstPage.derivedCap, 1000);
+      assert.isTrue(firstPage.hasMore);
       const wide = operation(2000);
       const result = yield* service.upsert(
         {
@@ -127,7 +168,46 @@ describe("memory hub floor", () => {
           .receipts[0],
         { outcome: "accepted" },
       );
-    }).pipe(checkUsage, Effect.provide(live)),
+      const source = sources[100]!;
+      const widePage = yield* hub.pull(
+        { ...peerPull, afterSequence: firstPage.throughSequence },
+        principal(otherEnv),
+      );
+      yield* Effect.gen(function* () {
+        const member = yield* Service.MemoryService;
+        const memberStore = yield* Store.MemoryStore;
+        const receive = (page: M.MemoryHubPullResult, expectedSequence: number) =>
+          member.receiveHubPage({
+            page,
+            expectedSequence,
+            memorySpaceId: space,
+            hubEnvironmentId: hubEnv,
+            localEnvironmentId: otherEnv,
+            reauthorize: Effect.void,
+          });
+        yield* receive(firstPage, 0);
+        yield* receive(widePage, firstPage.throughSequence);
+        const saved = (yield* memberStore.loadAggregate(space, wide.memoryId)).revisions[0];
+        assert.lengthOf(saved?.payload?.derivedFromMemoryRevisions ?? [], 101);
+        const deleted = yield* hub.push(
+          { ...pushInput(forget(source)), features, environmentId: otherEnv },
+          principal(otherEnv),
+        );
+        assert.include(deleted.receipts[0], { outcome: "deleted" });
+        const tail = yield* hub.pull(
+          { ...peerPull, afterSequence: widePage.throughSequence },
+          principal(otherEnv),
+        );
+        yield* receive(tail, widePage.throughSequence);
+        const after = yield* memberStore.loadAggregate(space, wide.memoryId);
+        assert.include(after.item, { status: "blocked", failureCode: "source_invalidated" });
+        assert.isTrue(after.revisions.every((pair) => pair.payload === null));
+      }).pipe(Effect.provide(Layer.fresh(core)));
+      assert.include((yield* store.loadAggregate(space, wide.memoryId)).item, {
+        status: "blocked",
+        failureCode: "source_invalidated",
+      });
+    }).pipe(checkUsage, Effect.provide(live), enabled),
   );
   it.effect("activates on pull only when the active credentials advertise the complete set", () =>
     Effect.gen(function* () {
@@ -161,6 +241,8 @@ describe("memory hub floor", () => {
     Effect.gen(function* () {
       yield* seed;
       const hub = yield* Hub.MemoryHubService;
+      const compactor = yield* Compactor.MemoryCompactor;
+      const hubSql = yield* SqlClient.SqlClient;
       const source = newMemory(11);
       yield* hub.push(pushInput(source), principal());
       yield* hub.pull(advertise, principal());
@@ -238,6 +320,11 @@ describe("memory hub floor", () => {
         const after = yield* store.loadAggregate(space, wide.memoryId);
         assert.isTrue(after.revisions.every((pair) => pair.payload === null));
         assert.notStrictEqual(after.item?.status, "active");
+        yield* TestClock.adjust(M.MEMORY_LOG_RETENTION_MS + 1);
+        yield* compactor.compact(principal());
+        assert.isEmpty(
+          yield* hubSql`SELECT operation_id FROM memory_hub_operations WHERE operation_id=${forget(source).operationId}`,
+        );
         const stale = newMemory(13);
         const refused = yield* hub.push(
           { ...pushInput({ ...stale, forgetFence: first.throughSequence }), features },
@@ -328,6 +415,99 @@ describe("memory hub floor", () => {
         { unverified: true, originThreadId: op.revision.provenance.originThreadId },
       );
     }).pipe(checkUsage, Effect.provide(live), enabled),
+  );
+
+  it.effect("fences all legacy hub routes on an active credential", () =>
+    Effect.gen(function* () {
+      yield* seed;
+      const sql = yield* SqlClient.SqlClient;
+      yield* sql`INSERT INTO memory_space_features VALUES (${space},1000,0)`;
+      const hub = yield* Hub.MemoryHubService;
+      const member = principal();
+      const base = { protocolVersion: 1 as const, memorySpaceId: space };
+      const op = operation();
+      const requestId = M.MemorySourceReadRequestId.make(id(40));
+      const conflictId = M.MemoryConflictId.make(id(42));
+      const lease = {
+        ...base,
+        memoryId: op.memoryId,
+        conflictId,
+        attemptId: op.operationId,
+        holderEnvironmentId: hubEnv,
+      };
+      const heads = [M.MemoryRevisionId.make(id(10)), M.MemoryRevisionId.make(id(11))];
+      const model = { instanceId: M.ProviderInstanceId.make("synthetic"), model: "synthetic" };
+      const resolution = decodeResolution({
+        ...base,
+        holderEnvironmentId: hubEnv,
+        attemptId: op.operationId,
+        operation: {
+          ...op,
+          kind: "resolve",
+          expectedHeads: heads,
+          revision: { ...op.revision, parents: heads },
+          conflictId,
+          fencingToken: 1,
+          resolutionPayload: { resolutionId: id(49), judgment: "synthetic judgment" },
+          resolution: {
+            resolutionId: id(49),
+            memorySpaceId: space,
+            memoryId: op.memoryId,
+            inputRevisionIds: heads,
+            inputPayloadRefs: heads,
+            resultRevisionId: op.revision.revisionId,
+            judgmentRef: id(49),
+            requestedModelSelection: model,
+            effectiveProvider: "codex",
+            effectiveModel: "synthetic",
+            resolvingEnvironmentId: hubEnv,
+            fencingToken: 1,
+            appliedAtUtc: "2026-10-14T00:00:00.000Z",
+            revertDeadlineUtc: "2026-11-13T00:00:00.000Z",
+          },
+        },
+      });
+      const calls: ReadonlyArray<Effect.Effect<unknown, Hub.MemoryHubServiceError>> = [
+        hub.join({ ...base, environmentId: hubEnv }, member),
+        hub.push(pushInput(op), member),
+        hub.pull(pullInput, member),
+        hub.claim({ ...lease, conflictHeadSet: heads, frozenDefaultModelSelection: model }, member),
+        hub.renew({ ...lease, fencingToken: 1 }, member),
+        hub.release({ ...lease, fencingToken: 1 }, member),
+        hub.applyResolution(resolution, member),
+        hub.requestSourceRead(
+          {
+            ...base,
+            requestId,
+            memoryId: op.memoryId,
+            sourceThread: { environmentId: otherEnv, threadId: M.ThreadId.make("origin-thread") },
+            sourceWatermark: {
+              fromEventId: M.EventId.make("e1"),
+              toEventId: M.EventId.make("e2"),
+              throughSequence: 1,
+            },
+            messageIds: [M.MessageId.make("m1")],
+            limit: 1,
+            authorizedScopes: ["memory:read", "orchestration:read"],
+          },
+          member,
+        ),
+        hub.collectSourceReads({ ...base, limit: 1 }, member),
+        hub.respondSourceRead(
+          {
+            ...base,
+            kind: "normal",
+            ownerPolicyEpoch: 1,
+            requestId,
+            outcome: { kind: "denied", requiredPermission: "orchestration:read" },
+          },
+          member,
+        ),
+        hub.resultSourceRead({ ...base, requestId }, member),
+      ];
+      for (const call of calls)
+        assert.include(yield* call.pipe(Effect.flip), { code: "unsupported_protocol" });
+    }).pipe(checkUsage, Effect.provide(live)),
   );
 
   it.effect("fences old and partial advertisements after floor activation", () =>
