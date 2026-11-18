@@ -93,7 +93,7 @@ const create = (
   creationSource: "web" as const,
   ...(launcher === undefined ? {} : { launchedBy: launcher }),
 });
-export const setup = (suffix: string, launcher = true) =>
+export const setup = (suffix: string, launcher = true, coordinator = ids(suffix).launcherId) =>
   runOrchestratorV2Scenario({
     name: "question-escalation/setup",
     commands: [
@@ -105,7 +105,7 @@ export const setup = (suffix: string, launcher = true) =>
               kind: "launch" as const,
               environmentLabel: null,
               threadTitle: null,
-              threadId: ThreadId.make(`launcher:${suffix}`),
+              threadId: coordinator,
               environmentId: null,
               via: "thread_launch",
             }
@@ -300,4 +300,25 @@ export const answer = (
             respondedBy,
           },
     );
+  });
+
+export const promote = (suffix: string) =>
+  Effect.gen(function* () {
+    const sink = yield* EventSink.EventSinkV2;
+    const { runs } = yield* records(suffix);
+    const run = runs.find((r) => r.userMessageId === ids(suffix).messageId);
+    if (run === undefined) return yield* Effect.die("Question escalation run missing");
+    const now = yield* DateTime.now;
+    yield* sink.write({
+      events: [
+        {
+          id: EventId.make(`promote:${suffix}`),
+          type: "run.updated",
+          threadId: run.threadId,
+          runId: run.id,
+          occurredAt: now,
+          payload: { ...run, status: "running", startedAt: now },
+        },
+      ],
+    });
   });

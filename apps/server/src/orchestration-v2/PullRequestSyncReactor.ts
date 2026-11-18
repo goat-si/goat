@@ -3,6 +3,8 @@ import {
   PullRequestOperationError,
   PullRequestUnavailableError,
   isOrchestrationV2WorkActive,
+  type OrchestrationV2DomainEvent,
+  type OrchestrationV2StoredEvent,
   type OrchestrationV2TurnItem,
   type PullRequestSummary,
   type ThreadId,
@@ -36,7 +38,10 @@ import * as GitManager from "../git/GitManager.ts";
 import { PullRequestProviderError } from "@goat/source-control-core/server/PullRequestProvider";
 import * as PullRequestService from "../pullRequest/PullRequestService.ts";
 import { forkParked } from "../serverActivation.ts";
+import * as EventSink from "./EventSink.ts";
 import * as Orchestrator from "./Orchestrator.ts";
+import { runResumableReactor } from "../backgroundSupervision.ts";
+import { makeKeyedCursorReactor } from "./keyedCursorReactor.ts";
 import * as ProjectionStore from "./ProjectionStore.ts";
 import { isTerminalRunStatus } from "./ThreadManagementService.ts";
 import {
@@ -54,6 +59,14 @@ const SLOW_SYNC_INTERVAL_MS = 15 * 60 * 1_000;
 // requested refreshes, watches and a host CLI's merge command still read it at once.
 const QUIET_AFTER_MS = 30 * 60 * 1_000;
 const QUIET_SYNC_INTERVAL_MS = 5 * 60 * 1_000;
+
+const PR_REACTION_EVENTS = [
+  "thread.pull-request-link-updated",
+  "thread.pull-request-synced",
+  "turn-item.updated",
+  "thread.settled",
+  "run.updated",
+] as const satisfies ReadonlyArray<OrchestrationV2DomainEvent["type"]>;
 
 const isChangeRequestCloseCommand = (command: string) =>
   sourceControlDefinitions.definitions.some(
@@ -356,6 +369,7 @@ export class PullRequestSyncReactor extends Context.Service<
 /** @public */
 export const make = Effect.gen(function* () {
   const engine = yield* Orchestrator.OrchestratorV2;
+  const sink = yield* EventSink.EventSinkV2;
   const projections = yield* ProjectionStore.ProjectionStoreV2;
   const pullRequests = yield* PullRequestService.PullRequestService;
   const git = yield* GitManager.GitManager;
@@ -819,10 +833,65 @@ export const make = Effect.gen(function* () {
       ),
   );
 
+  const reactsTo = ({ event }: OrchestrationV2StoredEvent) => {
+    if (event.type === "run.updated") return isTerminalRunStatus(event.payload.status);
+    if (event.type !== "turn-item.updated") return true;
+    const item = event.payload;
+    return (
+      item.type === "command_execution" &&
+      (isChangeRequestCloseCommand(item.input) ||
+        (!isOrchestrationV2WorkActive(item.status) &&
+          (isPushCommand(item.input) ||
+            CREATE_COMMANDS.some(({ command }) => command.test(item.input)))))
+    );
+  };
+
+  // All state for a PR reaction, including run-end markers, belongs to the thread's worker.
+  const react = Effect.fnUntraced(
+    function* ({ event }: OrchestrationV2StoredEvent) {
+      const { threadId } = event;
+      switch (event.type) {
+        case "thread.pull-request-link-updated":
+          return yield* requestUnsyncedLinks(threadId, [event.payload]);
+        case "thread.pull-request-synced":
+          return yield* requestUnsyncedLinks(
+            threadId,
+            visibleThreadPullRequests(event.payload.pullRequests ?? []),
+          );
+        case "turn-item.updated": {
+          const item = event.payload;
+          if (item.type !== "command_execution") return;
+          const ended = isChangeRequestCloseCommand(item.input)
+            ? (closeCommands.get(threadId) ?? new Set<string>())
+            : undefined;
+          if (ended !== undefined) closeCommands.set(threadId, ended);
+          if (isOrchestrationV2WorkActive(item.status)) return;
+          yield* linkCreatedChangeRequests(threadId, item);
+          yield* reopenWatchedChecks(threadId, item);
+          if (ended !== undefined && !ended.has(item.id)) {
+            ended.add(item.id);
+            yield* refreshUnmergedLinks(threadId);
+          }
+          return;
+        }
+        case "thread.settled":
+          return yield* refreshUnmergedLinks(threadId);
+        case "run.updated":
+          if (closeCommands.delete(threadId)) yield* refreshUnmergedLinks(threadId);
+          return;
+      }
+    },
+    (effect, { event }) =>
+      Effect.catchCause(effect, (cause) =>
+        Cause.hasInterruptsOnly(cause)
+          ? Effect.interrupt
+          : Effect.logWarning("pull request sync reaction failed", { threadId: event.threadId }),
+      ),
+  );
+
   const start: PullRequestSyncReactor["Service"]["start"] = Effect.fn(
     "PullRequestSyncReactor.start",
   )(function* () {
-    const events = engine.streamDomainEvents;
     const stateChanges = Stream.merge(
       yield* pullRequests.subscribeStateChanges,
       yield* git.subscribePullRequestStateChanges,
@@ -833,43 +902,33 @@ export const make = Effect.gen(function* () {
       ),
     );
     yield* forkParked(
-      Stream.runForEach(events, (event) => {
-        switch (event.type) {
-          case "thread.pull-request-link-updated":
-            return requestUnsyncedLinks(event.threadId, [event.payload]);
-          case "thread.pull-request-synced":
-            return requestUnsyncedLinks(
-              event.threadId,
-              visibleThreadPullRequests(event.payload.pullRequests ?? []),
-            );
-          // An agent can merge or close its pull request from a shell with its host's CLI, which
-          // sends no merge notification. Read the thread's unmerged links fresh once that command
-          // ends, while the agent usually still replies, so settlement can land before the run
-          // ends. Read again when the run ends, since `merge --auto` returns before it merges.
-          case "turn-item.updated": {
-            const item = event.payload;
-            if (item.type !== "command_execution") return Effect.void;
-            const linked = Effect.andThen(
-              linkCreatedChangeRequests(event.threadId, item),
-              reopenWatchedChecks(event.threadId, item),
-            );
-            if (!isChangeRequestCloseCommand(item.input)) return linked;
-            const ended = closeCommands.get(event.threadId) ?? new Set<string>();
-            closeCommands.set(event.threadId, ended);
-            if (isOrchestrationV2WorkActive(item.status) || ended.has(item.id)) return linked;
-            ended.add(item.id);
-            return Effect.andThen(linked, refreshUnmergedLinks(event.threadId));
-          }
-          // Settled threads are not swept, so read their links once to settle with fresh status.
-          case "thread.settled":
-            return refreshUnmergedLinks(event.threadId);
-          case "run.updated":
-            return isTerminalRunStatus(event.payload.status) && closeCommands.delete(event.threadId)
-              ? refreshUnmergedLinks(event.threadId)
-              : Effect.void;
-          default:
-            return Effect.void;
-        }
+      Effect.gen(function* () {
+        const cursor = yield* sink.latestSequence();
+        const reactions = yield* makeKeyedCursorReactor({
+          name: "PullRequestSyncReactor.replayDeferredUpdates",
+          replay: (threadId: ThreadId, _source: null, range) =>
+            sink
+              .stream({
+                ...range,
+                threadId,
+                eventTypes: PR_REACTION_EVENTS,
+              })
+              .pipe(Stream.filter(reactsTo), Stream.runForEach(react)),
+        });
+        yield* runResumableReactor(
+          "PullRequestSyncReactor.events",
+          cursor,
+          (afterSequence) =>
+            sink
+              .stream({
+                afterSequence,
+                journal: true,
+                eventTypes: PR_REACTION_EVENTS,
+              })
+              .pipe(Stream.filter(reactsTo)),
+          (stored) =>
+            reactions.enqueue(stored.event.threadId, null, stored.sequence, react(stored)),
+        );
       }).pipe(Effect.catchCause(logSkipped("pull request sync event stream failed", {}))),
     );
     yield* forkParked(

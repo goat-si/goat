@@ -919,12 +919,11 @@ const PendingBackgroundTaskFields = {
   description: Schema.optional(TrimmedNonEmptyString),
   /** The subagent task that started this work and waits on it. */
   parentTaskId: Schema.optional(TrimmedNonEmptyString),
-  /** Native id of the turn item that started this work, when it is not `taskId`. */
+  /** Native turn item id when it differs from `taskId`. */
   nativeItemId: Schema.optional(TrimmedNonEmptyString),
-  /**
-   * The agent declared it resumes when this work ends, so the thread holds like it does for a
-   * subagent. Only the agent knows whether a command is a wait or a dev server it left running.
-   */
+  /** The run under which the task first appeared, stamped by the projection. */
+  runId: Schema.optional(RunId),
+  /** The agent declared it will resume when this work ends, so the thread waits for it. */
   awaited: Schema.optional(Schema.Literal(true)),
 };
 
