@@ -226,6 +226,24 @@ describe("DesktopPenMembers", () => {
     }).pipe(Effect.scoped),
   );
 
+  it.effect("a member whose ssh settings could not be read once is looked at again", () =>
+    Effect.gen(function* () {
+      const h = yield* harness();
+      h.state.inspections.set(
+        `pen-${id("a")}`,
+        Effect.fail(
+          new PenAliasUnreadable({ alias: `pen-${id("a")}`, detail: "ssh -G timed out" }),
+        ),
+      );
+      h.watches[0]?.onSnapshot(snapshot(1, "a"));
+      yield* TestClock.adjust(0);
+      assert.deepEqual(routes(h.last()), [["box-a", "unreadable"]]);
+      h.trust("a");
+      yield* TestClock.adjust("2 seconds");
+      assert.deepEqual(routes(h.last()), [["box-a", "trusted"]]);
+    }).pipe(Effect.scoped),
+  );
+
   it.effect("the watch is retried on a backoff that doubles and resets after a snapshot", () =>
     Effect.gen(function* () {
       const h = yield* harness();

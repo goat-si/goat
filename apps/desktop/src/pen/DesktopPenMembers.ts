@@ -83,7 +83,9 @@ export class DesktopPenMembers extends Context.Reference<DesktopPenMembersShape>
   },
 ) {}
 
-const settles = (reason: string) => reason === "not-in-pen-config" || reason === "no-recorded-key";
+// Not yet written by Pen, or not readable just now: both can settle without a new snapshot.
+const settles = (reason: string) =>
+  reason === "not-in-pen-config" || reason === "no-recorded-key" || reason === "unreadable";
 const sameState = Schema.toEquivalence(DesktopPenMembersState);
 
 export const make = Effect.fn("DesktopPenMembers.make")(function* (deps: DesktopPenMembersDeps) {
