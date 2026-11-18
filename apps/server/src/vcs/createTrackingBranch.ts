@@ -47,43 +47,55 @@ export const createTrackingBranch = (
       fallbackErrorDetail?: string;
       writesSharedConfig?: boolean;
       retryConfigLock?: boolean;
-      allowNonZeroExit?: boolean;
     },
   ) => Effect.Effect<ExecuteGitResult, GitCommandError>,
 ) => {
   // A failed checkout can have moved HEAD already, so keep a branch created here.
   if (branch === null) return Effect.void;
-  // A tag sharing the remote ref's name wins a short-name lookup, so start from the full ref.
   const startRef = `refs/remotes/${upstream}`;
-  return executeGit(
-    "GitVcsDriver.switchRef.createTrackingBranch",
-    cwd,
-    ["branch", "--no-track", "--", branch, startRef],
-    { timeoutMs: 10_000, fallbackErrorDetail: "git branch create failed" },
-  ).pipe(
-    Effect.andThen(
-      executeGit(
-        "GitVcsDriver.switchRef.trackRemote",
-        cwd,
-        ["branch", `--set-upstream-to=${startRef}`, "--", branch],
-        {
-          timeoutMs: 10_000,
-          fallbackErrorDetail: "git branch --set-upstream-to failed",
-          writesSharedConfig: true,
-          retryConfigLock: true,
-        },
-      ).pipe(
-        // An untracked branch of this name would make every later switch to the remote detach.
-        Effect.tapError(() =>
-          executeGit(
-            "GitVcsDriver.switchRef.removeUntrackedBranch",
-            cwd,
-            ["update-ref", "-d", `refs/heads/${branch}`, startRef],
-            { timeoutMs: 5_000, allowNonZeroExit: true },
-          ).pipe(Effect.ignore),
+  return Effect.gen(function* () {
+    const { stdout } = yield* executeGit(
+      "GitVcsDriver.switchRef.resolveTrackingStart",
+      cwd,
+      ["rev-parse", "--verify", `${startRef}^{commit}`],
+      { timeoutMs: 5_000 },
+    );
+    const startCommit = stdout.trim();
+    yield* executeGit(
+      "GitVcsDriver.switchRef.createTrackingBranch",
+      cwd,
+      ["branch", "--no-track", "--", branch, startCommit],
+      { timeoutMs: 10_000, fallbackErrorDetail: "git branch create failed" },
+    );
+    yield* executeGit(
+      "GitVcsDriver.switchRef.trackRemote",
+      cwd,
+      ["branch", `--set-upstream-to=${startRef}`, "--", branch],
+      {
+        timeoutMs: 10_000,
+        fallbackErrorDetail: "git branch --set-upstream-to failed",
+        writesSharedConfig: true,
+        retryConfigLock: true,
+      },
+    ).pipe(
+      // A racing fetch can move startRef; delete only the exact commit this call installed.
+      Effect.tapError(() =>
+        executeGit(
+          "GitVcsDriver.switchRef.removeUntrackedBranch",
+          cwd,
+          ["update-ref", "-d", `refs/heads/${branch}`, startCommit],
+          { timeoutMs: 5_000 },
+        ).pipe(
+          Effect.catch((error) =>
+            Effect.logWarning("Could not remove untracked branch after upstream setup failed", {
+              cwd,
+              branch,
+              reason: error.reason,
+              exitCode: error.exitCode,
+            }),
+          ),
         ),
       ),
-    ),
-    Effect.asVoid,
-  );
+    );
+  });
 };
