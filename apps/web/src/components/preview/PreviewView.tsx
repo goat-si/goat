@@ -41,8 +41,6 @@ import { capturePreviewAnnotationScreenshot } from "~/lib/previewAnnotation";
 import { getClientSettings } from "~/hooks/useSettings";
 import {
   rememberPreviewUrl,
-  readThreadPreviewState,
-  setActivePreviewTab,
   updatePreviewServerSnapshot,
   useThreadPreviewState,
 } from "~/previewStateStore";
@@ -104,6 +102,7 @@ import { stackedThreadToast, toastManager } from "~/components/ui/toast";
 import { Tooltip, TooltipPopup, TooltipTrigger } from "~/components/ui/tooltip";
 import { observeResize } from "~/lib/observeResize";
 import { focusPreviewWebview } from "./focusPreviewWebview";
+import { activatePreviewAddressTab } from "./activatePreviewAddressTab";
 import type { PreviewViewProps } from "./previewViewProps";
 
 export function PreviewView({
@@ -895,19 +894,9 @@ export function PreviewView({
           ];
         })}
         history={recentHistoryEntries}
-        onActivateTab={(targetTabId) => {
-          const current = readThreadPreviewState(threadRef);
-          if (current.serverEpoch !== previewState.serverEpoch || !current.sessions[targetTabId])
-            return false;
-          const panel = useRightPanelStore.getState();
-          const surface = panel.byThreadKey[threadKey]?.surfaces.find(
-            (entry) => entry.kind === "preview" && entry.resourceId === targetTabId,
-          );
-          if (!surface) return false;
-          setActivePreviewTab(threadRef, targetTabId);
-          panel.activateSurface(threadRef, surface.id);
-          return true;
-        }}
+        onActivateTab={(targetTabId) =>
+          activatePreviewAddressTab(threadRef, previewState.serverEpoch, targetTabId)
+        }
         url={url}
         loading={loading || serverStreamPending}
         canGoBack={canGoBack && !serverInputDisabled}
