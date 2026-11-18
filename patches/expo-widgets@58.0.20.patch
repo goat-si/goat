@@ -1,3 +1,15 @@
+diff --git a/android/src/main/java/expo/modules/widgets/ExpoWidgetsPeekWidget.kt b/android/src/main/java/expo/modules/widgets/ExpoWidgetsPeekWidget.kt
+index edabde8f51b3bd9162b634e46f2f09686c3a3b8a..1a17f3b12972bff9849d39dc257cf1b63a80c5a9 100644
+--- a/android/src/main/java/expo/modules/widgets/ExpoWidgetsPeekWidget.kt
++++ b/android/src/main/java/expo/modules/widgets/ExpoWidgetsPeekWidget.kt
+@@ -25,5 +25,6 @@ internal class ExpoWidgetsPeekWidget(
+     val layout = WidgetsLayoutRegistry.layout(appContext, widgetName)
+       ?: return createErrorRoot("No layout found for $widgetName")
+     val props = WidgetsLayoutRegistry.props(appContext, widgetName)
+-    val environment = getWidgetEnvironment(appContext)
++    val environment = getWidgetEnvironment(appContext) +
++      mapOf("width" to size.width.value.toDouble(), "height" to size.height.value.toDouble())
+     val node = evaluateLayout(appContext, layout, props, environment)
 diff --git a/build/ExpoWidgets.js b/build/ExpoWidgets.js
 index 85f3fbd..05b8dd8 100644
 --- a/build/ExpoWidgets.js
@@ -41,7 +53,20 @@ diff --git a/build/Widgets.types.d.ts b/build/Widgets.types.d.ts
 index 4c474bb..dbfb8b1 100644
 --- a/build/Widgets.types.d.ts
 +++ b/build/Widgets.types.d.ts
-@@ -98,6 +98,10 @@ export type LiveActivityEnvironment = {
+@@ -50,6 +50,12 @@ export type WidgetEnvironment<T extends object | undefined = undefined> = {
+      * The color scheme of the widget's environment.
+      */
+     colorScheme?: 'light' | 'dark';
++    /**
++     * The widget's current size in dp.
++     * @platform android
++     */
++    width?: number;
++    height?: number;
+     /**
+      * A Boolean value that indicates whether the display or environment currently requires reduced luminance.
+      *
+@@ -98,6 +104,10 @@ export type LiveActivityEnvironment = {
       * @platform ios
       */
      colorScheme: 'light' | 'dark';
@@ -52,7 +77,7 @@ index 4c474bb..dbfb8b1 100644
      /**
       * Whether the activity is displayed in a context with reduced luminance.
       * @platform iOS 16+
-@@ -307,6 +311,7 @@ export declare class NativeLiveActivityFactory extends SharedObject {
+@@ -307,6 +317,7 @@ export declare class NativeLiveActivityFactory extends SharedObject {
      constructor(name: string, layout: string);
      start(props?: string, url?: string, staleDate?: number): NativeLiveActivity;
      getInstances(): NativeLiveActivity[];
@@ -247,7 +272,20 @@ diff --git a/src/Widgets.types.ts b/src/Widgets.types.ts
 index 690d069..c60dd79 100644
 --- a/src/Widgets.types.ts
 +++ b/src/Widgets.types.ts
-@@ -112,6 +112,10 @@ export type LiveActivityEnvironment = {
+@@ -63,6 +63,12 @@ export type WidgetEnvironment<T extends object | undefined = undefined> = {
+    * The color scheme of the widget's environment.
+    */
+   colorScheme?: 'light' | 'dark';
++  /**
++   * The widget's current size in dp.
++   * @platform android
++   */
++  width?: number;
++  height?: number;
+   /**
+    * A Boolean value that indicates whether the display or environment currently requires reduced luminance.
+    *
+@@ -112,6 +118,10 @@ export type LiveActivityEnvironment = {
     * @platform ios
     */
    colorScheme: 'light' | 'dark';
@@ -258,7 +296,7 @@ index 690d069..c60dd79 100644
    /**
     * Whether the activity is displayed in a context with reduced luminance.
     * @platform iOS 16+
-@@ -337,4 +341,5 @@ export declare class NativeLiveActivityFactory extends SharedObject {
+@@ -337,4 +347,5 @@ export declare class NativeLiveActivityFactory extends SharedObject {
    constructor(name: string, layout: string);
    start(props?: string, url?: string, staleDate?: number): NativeLiveActivity;
    getInstances(): NativeLiveActivity[];

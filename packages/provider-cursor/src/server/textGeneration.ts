@@ -9,6 +9,7 @@ import * as Stream from "effect/Stream";
 import * as FileSystem from "effect/FileSystem";
 
 import type { AgentOptions, RunResult } from "@cursor/sdk";
+import * as Data from "effect/Data";
 import * as Effect from "effect/Effect";
 import * as Option from "effect/Option";
 import * as Schema from "effect/Schema";
@@ -26,6 +27,8 @@ import * as CursorSdk from "./CursorSdk.ts";
 import * as HostProcess from "@goat/shared/HostProcess";
 
 const CURSOR_TIMEOUT_MS = 180_000;
+const SDK_SANDBOX_UNSUPPORTED =
+  "Local SDK sandboxing was requested, but sandboxing is not supported in this environment. Disable local.sandboxOptions.enabled or remove ~/.cursor/sandbox.json to run without sandboxing.";
 
 const isTextGenerationError = Schema.is(TextGenerationError);
 
@@ -42,13 +45,17 @@ function cursorSdkResultDetail(result: RunResult): string {
   }
 }
 
+class CursorSandboxUnavailable extends Data.TaggedError("CursorSandboxUnavailable")<{
+  readonly cause: unknown;
+}> {}
+
 // Sandboxing fails without cursorsandbox or after a process-wide unsupported result.
 function cursorSandboxUnsupported(cause: unknown): boolean {
   const seen = new Set<object>();
   let current = cause;
   while (typeof current === "object" && current !== null && !seen.has(current)) {
     seen.add(current);
-    if (current instanceof Error && current.message.includes("sandboxing is not supported")) {
+    if (current instanceof Error && current.message === SDK_SANDBOX_UNSUPPORTED) {
       return true;
     }
     current = Reflect.get(current, "cause");
@@ -211,30 +218,33 @@ export const makeCursorTextGeneration = Effect.fn("makeCursorTextGeneration")(fu
         );
       });
 
-      const request = Effect.gen(function* () {
-        // Empty cwd and setting sources isolate the run from user projects even if sandboxing fails.
-        const agent = yield* Effect.acquireRelease(
-          createCursorAgent(true).pipe(
-            Effect.catchIf(cursorSandboxUnsupported, () =>
-              sdk.markLocalSandboxUnsupported.pipe(
-                Effect.andThen(
-                  isMemory ? Effect.fail(sandboxFailure(operation)) : createCursorAgent(false),
-                ),
-              ),
-            ),
-          ),
+      const runPrompt = Effect.fn("CursorTextGeneration.runPrompt")(function* (
+        sandboxEnabled: boolean,
+      ) {
+        const run = yield* Effect.acquireRelease(
+          createCursorAgent(sandboxEnabled),
           (agent) =>
             Effect.tryPromise(() => agent[Symbol.asyncDispose]()).pipe(
               Effect.timeout("5 seconds"),
               Effect.ignore({ log: true }),
             ),
           { interruptible: true },
-        );
-        const run = yield* Effect.tryPromise((signal) =>
-          agent.send(prompt).then((run) => {
-            if (signal.aborted) void run.cancel().catch(() => undefined);
-            return run;
-          }),
+        ).pipe(
+          Effect.flatMap((agent) =>
+            Effect.tryPromise((signal) =>
+              agent.send(prompt).then((run) => {
+                if (signal.aborted) void run.cancel().catch(() => undefined);
+                return run;
+              }),
+            ),
+          ),
+          Effect.catchIf(
+            (cause) => sandboxEnabled && cursorSandboxUnsupported(cause),
+            (cause) =>
+              sdk.markLocalSandboxUnsupported.pipe(
+                Effect.andThen(Effect.fail(new CursorSandboxUnavailable({ cause }))),
+              ),
+          ),
         );
         yield* Effect.addFinalizer(() =>
           run.status === "running"
@@ -274,7 +284,15 @@ export const makeCursorTextGeneration = Effect.fn("makeCursorTextGeneration")(fu
         );
         const [result] = yield* Effect.all([wait, noTools], { concurrency: "unbounded" });
         return result;
-      }).pipe(Effect.scoped);
+      }, Effect.scoped);
+      // The SDK can check sandbox support at create or send. Retry only before it accepts a run.
+      const request = runPrompt(true).pipe(
+        Effect.catchTags({
+          CursorSandboxUnavailable: () =>
+            // The fallback still uses the empty workspace and disabled setting sources.
+            isMemory ? Effect.fail(sandboxFailure(operation)) : runPrompt(false),
+        }),
+      );
       const promptResult = yield* request.pipe(
         Effect.timeoutOption(CURSOR_TIMEOUT_MS),
         Effect.flatMap(

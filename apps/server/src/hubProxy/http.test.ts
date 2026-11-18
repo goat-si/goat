@@ -932,3 +932,25 @@ it.effect(
       yield* accepted.opened;
     }).pipe(Effect.scoped, Effect.provide(authLayer)),
 );
+
+it.effect("a forwarded shell resume probe preserves the last full offline snapshot", () =>
+  Effect.gen(function* () {
+    const hub = yield* startHub();
+    const session = yield* hub.auth.issueSession({ scopes: phoneScopes });
+    const path = `${hub.baseUrl}hub/nodes/node-1/`;
+    const full = yield* fetchResponse(`${path}api/orchestration/shell`, session.token);
+    expect(full.status).toBe(200);
+    const before = yield* fetchResponse(`${path}snapshot`, session.token);
+    expect(before.status).toBe(200);
+
+    const resumed = yield* fetchResponse(
+      `${path}api/orchestration/shell?resumeFrom=1`,
+      session.token,
+    );
+    expect(resumed.status).toBe(200);
+    expect(JSON.parse(resumed.text)).toEqual({ resumable: true });
+    const after = yield* fetchResponse(`${path}snapshot`, session.token);
+    expect(after.status).toBe(200);
+    expect(JSON.parse(after.text)).toEqual(JSON.parse(before.text));
+  }).pipe(Effect.scoped, Effect.provide(authLayer)),
+);

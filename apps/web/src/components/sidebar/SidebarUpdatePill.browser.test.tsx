@@ -1,9 +1,9 @@
-import type { DesktopUpdateState } from "@goat/contracts";
+import type { DesktopBridge, DesktopUpdateState } from "@goat/contracts";
 import { describe, expect, it, vi } from "vite-plus/test";
 import { userEvent } from "vite-plus/test/browser";
 
 import { act, render } from "../../../test/render";
-import { SidebarUpdatePill } from "./SidebarUpdatePill";
+import { installLocalUpdate, SidebarUpdatePill } from "./SidebarUpdatePill";
 
 const mocks = vi.hoisted(() => {
   const listeners = new Set<() => void>();
@@ -98,4 +98,25 @@ describe("SidebarUpdatePill release notes", () => {
     await publish(nightlyUpdate(RELEASE_NOTES));
     await vi.waitFor(() => expect(releaseNotes()).not.toBeNull());
   });
+});
+
+it("reports a refused install refresh timeout as an error", async () => {
+  const message = "Desktop update check on channel nightly did not finish within 2 minutes.";
+  const bridge = {
+    installUpdate: async () => ({
+      accepted: false,
+      completed: false,
+      state: {
+        ...nightlyUpdate([]),
+        status: "downloaded",
+        downloadedVersion: "0.0.50-nightly.2",
+        errorContext: "install",
+        canRetry: true,
+        message,
+      },
+    }),
+  } satisfies Pick<DesktopBridge, "installUpdate">;
+  const reportError = vi.fn();
+  expect(await installLocalUpdate(bridge as DesktopBridge, reportError)).toBe(false);
+  expect(reportError).toHaveBeenCalledExactlyOnceWith("Could not install update", message);
 });

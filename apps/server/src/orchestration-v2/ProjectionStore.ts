@@ -1,4 +1,8 @@
 import {
+  attributePendingBackgroundTasks,
+  upsertProviderThreadProjection,
+} from "./projectionProviderThread.ts";
+import {
   nullableStringField,
   parseEncodedPayload,
   stringField,
@@ -480,6 +484,7 @@ export interface ProjectionRecordFilter {
   readonly runtimeRequestStatuses?: ReadonlyArray<OrchestrationV2RuntimeRequest["status"]>;
   readonly contextTransferStatuses?: ReadonlyArray<OrchestrationV2ContextTransfer["status"]>;
   readonly subagentIds?: ReadonlyArray<NodeId>;
+  readonly subagentChildThreadId?: ThreadId;
   readonly subagentRunIds?: ReadonlyArray<RunId>;
   readonly nodeIds?: ReadonlyArray<NodeId>;
   readonly turnItemRequestIds?: ReadonlyArray<RuntimeRequestId>;
@@ -1605,51 +1610,29 @@ export const layer: Layer.Layer<ProjectionStoreV2, never, SqlClient.SqlClient> =
               break;
             }
             case "provider-thread.updated": {
-              const payloadJson = yield* encodeProviderThreadPayload(event.payload);
+              const existing = event.payload.pendingBackgroundTasks?.some(
+                (task) => task.runId === undefined,
+              )
+                ? (yield* sql<PayloadRow>`
+                    SELECT payload_json FROM orchestration_v2_projection_provider_threads
+                    WHERE provider_thread_id = ${event.payload.id}
+                  `)[0]
+                : undefined;
+              const providerThread = attributePendingBackgroundTasks(
+                event.payload,
+                existing === undefined
+                  ? undefined
+                  : yield* decodeProviderThreadPayload(existing.payload_json),
+                event.runId,
+              );
+              const payloadJson = yield* encodeProviderThreadPayload(providerThread);
               const payload = parseEncodedPayload(payloadJson);
-              yield* sql`
-              INSERT INTO orchestration_v2_projection_provider_threads (
-                provider_thread_id,
-                thread_id,
-                owner_node_id,
-                provider,
-                driver,
-                provider_instance_id,
-                provider_session_id,
-                status,
-                first_run_ordinal,
-                last_run_ordinal,
-                updated_at,
-                payload_json
-              )
-              VALUES (
-                ${event.payload.id},
-                ${event.payload.appThreadId},
-                ${event.payload.ownerNodeId},
-                ${event.payload.providerInstanceId},
-                ${event.payload.driver},
-                ${event.payload.providerInstanceId},
-                ${event.payload.providerSessionId},
-                ${event.payload.status},
-                ${event.payload.firstRunOrdinal},
-                ${event.payload.lastRunOrdinal},
-                ${stringField(payload, "updatedAt")},
-                ${payloadJson}
-              )
-              ON CONFLICT(provider_thread_id)
-              DO UPDATE SET
-                thread_id = excluded.thread_id,
-                owner_node_id = excluded.owner_node_id,
-                provider = excluded.provider,
-                driver = excluded.driver,
-                provider_instance_id = excluded.provider_instance_id,
-                provider_session_id = excluded.provider_session_id,
-                status = excluded.status,
-                first_run_ordinal = excluded.first_run_ordinal,
-                last_run_ordinal = excluded.last_run_ordinal,
-                updated_at = excluded.updated_at,
-                payload_json = excluded.payload_json
-            `;
+              yield* upsertProviderThreadProjection(
+                sql,
+                event.payload,
+                payloadJson,
+                stringField(payload, "updatedAt"),
+              );
               if (
                 event.payload.appThreadId !== null &&
                 !isQueuedProviderThreadPlaceholder(event.payload)
@@ -2985,6 +2968,7 @@ export const layer: Layer.Layer<ProjectionStoreV2, never, SqlClient.SqlClient> =
             FROM orchestration_v2_projection_subagents AS subagent
             WHERE ${threadColumn(filter?.subagentIds)} = ${threadId}
               ${filter?.subagentIds === undefined ? sql`` : sql`AND subagent_id IN (SELECT value FROM json_each(${encodeIdList(filter.subagentIds)}))`}
+              ${filter?.subagentChildThreadId === undefined ? sql`` : sql`AND child_thread_id = ${filter.subagentChildThreadId}`}
               ${filter?.subagentRunIds === undefined ? sql`` : sql`AND run_id IN (SELECT value FROM json_each(${encodeIdList(filter.subagentRunIds)}))`}
               ${
                 filter?.omitSettledSubagents === true

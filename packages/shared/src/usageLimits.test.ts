@@ -464,7 +464,7 @@ describe("pools", () => {
     expect(accounts.map((account) => account.key)).toEqual([
       "env-a:business",
       "env-a:personal",
-      "hub:x.json",
+      "env-a:hub:x.json",
     ]);
     expect(accounts[0]?.limits.windows[0]?.usedPercent).toBe(8);
     const withoutEmail = (id: string, workspaceId: string) => {
@@ -494,8 +494,8 @@ describe("pools", () => {
       ],
     ]);
     expect(collectLimitAccounts(sameFile).map((account) => account.key)).toEqual([
-      "hub:a.json:ws-1",
-      "hub:a.json:ws-2",
+      "env-a:hub:a.json:ws-1",
+      "env-b:hub:a.json:ws-2",
     ]);
     expect(accounts[1]?.environments.map((environment) => environment.label)).toEqual([
       "Laptop",
@@ -540,11 +540,11 @@ describe("pools", () => {
     });
     expect(collectLimitAccounts(withOther(unreadable)).map((account) => account.key)).toEqual([
       "env-a:codex",
-      "hub:claude.json",
+      "env-a:hub:claude.json",
     ]);
   });
 
-  it("keys a hub account without an email by hub, so two environments on one hub share it", () => {
+  it("keeps a hub account without a verified login separate per environment", () => {
     const seat = {
       id: "claude-team-seat.json",
       driver: claude,
@@ -565,7 +565,10 @@ describe("pools", () => {
       ],
     ]);
     const accounts = collectLimitAccounts(input);
-    expect(accounts.map((account) => account.key)).toEqual(["hub:claude-team-seat.json"]);
+    expect(accounts.map((account) => account.key)).toEqual([
+      "env-a:hub:claude-team-seat.json",
+      "env-b:hub:claude-team-seat.json",
+    ]);
     expect(accounts[0]?.displayName).toBe("claude-team-seat");
   });
 
@@ -668,7 +671,7 @@ describe("pools", () => {
     const [session, week] = pools[0]!.windows;
     const untimed = collectLimitPools(
       collectLimitAccounts(input).map((account) =>
-        account.key === "hub:b"
+        account.key === "env-a:hub:b"
           ? {
               ...account,
               limits: {
@@ -690,8 +693,8 @@ describe("pools", () => {
     expect(
       session?.resets.map((reset) => [reset.member.account.key, reset.restoresPercent]),
     ).toEqual([
-      ["hub:a", 40],
-      ["hub:b", 20],
+      ["env-a:hub:a", 40],
+      ["env-a:hub:b", 20],
     ]);
     expect(week).toMatchObject({ id: "seven_day", remainingPercent: 80, members: [{}] });
     // Codex reports `primary` for both its five-hour and (on Go) monthly window.
@@ -730,8 +733,14 @@ describe("pools", () => {
       ["weekly", 1],
       ["monthly", 1],
     ]);
-    expect(session?.members.map((member) => member.account.key)).toEqual(["hub:a", "hub:b"]);
-    expect(pools[0]?.accounts.map((account) => account.key)).toEqual(["hub:a", "hub:b"]);
+    expect(session?.members.map((member) => member.account.key)).toEqual([
+      "env-a:hub:a",
+      "env-a:hub:b",
+    ]);
+    expect(pools[0]?.accounts.map((account) => account.key)).toEqual([
+      "env-a:hub:a",
+      "env-a:hub:b",
+    ]);
   });
 });
 

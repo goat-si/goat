@@ -22,15 +22,14 @@ const THREAD_ID = v2ThreadId;
 
 export function testSession(
   client: WsRpcProtocolClient,
-  config?: { readonly completionMarker?: boolean },
+  config?: { readonly completionMarker?: boolean; readonly threadSnapshotPagination?: boolean },
 ): RpcSession.RpcSession {
   return {
     client,
-    initialConfig: Effect.succeed(
-      config?.completionMarker === true
-        ? ({ threadResumeCompletionMarker: true } as never)
-        : ({} as never),
-    ),
+    initialConfig: Effect.succeed({
+      ...(config?.completionMarker ? { threadResumeCompletionMarker: true } : {}),
+      ...(config?.threadSnapshotPagination ? { threadSnapshotPagination: true } : {}),
+    } as never),
     subscribeServerConfig: (input) => client.subscribeServerConfig(input ?? {}),
     ready: Effect.void,
     probe: Effect.void,

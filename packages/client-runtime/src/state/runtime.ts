@@ -989,3 +989,5 @@ export function createEnvironmentRpcCommand<
     permissionAtom: permissions.permissionAtom,
   };
 }
+
+export { revalidateOnMount } from "./runtimeRevalidation.ts";
