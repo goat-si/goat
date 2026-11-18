@@ -58,6 +58,7 @@ import * as ShellSnapshotLoads from "../src/orchestration-v2/ShellSnapshotLoads.
 import * as ProjectService from "../src/project/ProjectService.ts";
 import * as ProjectEnrichmentService from "../src/project/ProjectEnrichmentService.ts";
 import * as OrchestrationHttp from "../src/orchestration-v2/http.ts";
+import * as RuntimeIdentity from "../src/runtimeIdentity.ts";
 import * as ServerHttp from "../src/http.ts";
 import { subscribeOrchestrationV2Thread, subscribeOrchestrationV2Shell } from "../src/ws.ts";
 import {
@@ -106,7 +107,7 @@ const CLIENT_HISTORY_OPT_INS = { compactIds: "1", deferWork: "1" } satisfies Req
 const CLIENT_SHELL_OPT_INS = {
   omitIdleSubagents: "1",
   omitOlderSettled: "1",
-} satisfies Required<typeof EnvironmentOrchestrationShellSnapshotQuery.Type>;
+} satisfies Required<Omit<typeof EnvironmentOrchestrationShellSnapshotQuery.Type, "resumeFrom">>;
 const CLIENT_THREAD_SUBSCRIPTION = {
   requestCompletionMarker: true,
   acceptBoundedSnapshot: true,
@@ -121,7 +122,12 @@ const CLIENT_SHELL_SUBSCRIPTION = {
   requestCompletionMarker: true,
   omitIdleSubagents: true,
   omitOlderSettled: true,
-} satisfies Required<Omit<OrchestrationV2SubscribeShellInput, "afterSequence">>;
+} satisfies Required<
+  Omit<
+    OrchestrationV2SubscribeShellInput,
+    "afterSequence" | "httpSnapshotFallback" | "knownProjectIdentities"
+  >
+>;
 const query = (optIns: Readonly<Record<string, string>>) => new URLSearchParams(optIns).toString();
 const CLIENT_BOUNDED_QUERY = query(CLIENT_BOUNDED_OPT_INS);
 const CLIENT_HISTORY_QUERY = query(CLIENT_HISTORY_OPT_INS);
@@ -232,6 +238,9 @@ const layerHandlers = group.toLayer({
 const layerRoutes = Layer.mergeAll(
   HttpApiBuilder.layer(TransferApi).pipe(
     Layer.provide(OrchestrationHttp.layer),
+    Layer.provide(
+      Layer.succeed(RuntimeIdentity.RuntimeIdentity, { instanceId: "serving-instance" }),
+    ),
     Layer.provide(layerAuth),
   ),
   RpcServer.layerHttp({ group, path: "/ws", protocol: "websocket" }).pipe(

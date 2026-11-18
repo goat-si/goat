@@ -5,6 +5,8 @@ import type {
   OrchestrationV2UserMessageInputIntent,
 } from "@goat/contracts";
 
+export const CURSOR_TASK_SAVED_ITEM_PREFIX = "cursor-task-saved:";
+
 type TimelineRun = Pick<OrchestrationV2Run, "id" | "status">;
 type TimelineRunAttempt = Pick<OrchestrationV2RunAttempt, "runId" | "rootNodeId" | "status">;
 type TimelineTurnItem = Pick<OrchestrationV2TurnItem, "type" | "runId" | "nodeId"> & {

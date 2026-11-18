@@ -1,8 +1,7 @@
 import type { AuthEnvironmentScope } from "@goat/contracts";
 import * as ProviderHost from "@goat/provider-core/server/ProviderHost";
 import * as Exit from "effect/Exit";
-import { MemoryId, MemoryRevisionId, MemorySpaceId } from "@goat/contracts";
-import { packMemoryContext, memoryContextText } from "@goat/provider-core/server/memoryContext";
+import { memoryContextText } from "@goat/provider-core/server/memoryContext";
 import * as NodeServices from "@effect/platform-node/NodeServices";
 import { assert, describe, it } from "@effect/vitest";
 import type { InteractionUpdate } from "@cursor/sdk";
@@ -35,6 +34,7 @@ import { makeProviderFailure } from "@goat/provider-core/server/failure";
 import { cursorMcpServers, makeCursorAdapterV2 } from "./adapter.ts";
 import * as CursorAgentSdk from "./CursorAgentSdk.ts";
 import { loadCursorSdk } from "./sdk.ts";
+import { wp4Snapshot } from "./adapterMemory.testkit.ts";
 
 const { ConfigurationError } = loadCursorSdk();
 
@@ -344,7 +344,10 @@ describe("CursorAdapterV2", () => {
         model: { id: "claude-fable-5" },
         durationMs: 1,
       }),
-      failure: { class: "transport_error", message: "Provider turn failed." },
+      failure: {
+        class: "transport_error",
+        message: "Error: RetriableError: WritableIterable is closed",
+      },
     },
     {
       reason: "no failure when Cursor's resume after the turn ended made no progress",
@@ -1873,19 +1876,3 @@ describe("CursorAdapterV2", () => {
     assert.isFalse(CursorAgentSdk.isCursorCancellationError(null));
   });
 });
-
-const wp4Snapshot = () =>
-  packMemoryContext({
-    memorySpaceId: MemorySpaceId.make("00000000-0000-4000-8000-000000000099"),
-    projectionWatermark: 1,
-    items: [
-      {
-        memoryId: MemoryId.make("00000000-0000-4000-8000-000000000001"),
-        revisionId: MemoryRevisionId.make("00000000-0000-4000-8000-000000000002"),
-        scope: { kind: "user" },
-        provenance: { environmentId: EnvironmentId.make("fixture") },
-        assertionKind: "fact",
-        text: "& <instruction> 'data'",
-      },
-    ],
-  })!;

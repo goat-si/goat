@@ -14,6 +14,7 @@ import {
 import * as Deferred from "effect/Deferred";
 
 import * as Effect from "effect/Effect";
+import * as Fiber from "effect/Fiber";
 import * as Exit from "effect/Exit";
 import * as Layer from "effect/Layer";
 import * as Option from "effect/Option";
@@ -133,6 +134,146 @@ it.effect("does not dispatch continuations while held and dispatches after relea
 );
 
 describe("ProviderContinuationService", () => {
+  it.effect(
+    "signals source overflow per thread and across threads, while allowing duplicate offers",
+    () =>
+      Effect.gen(function* () {
+        const mailbox = yield* ProviderContinuationRequests.ProviderContinuationRequests;
+        const busy = (index: number) => ({
+          ...request(),
+          messageId: MessageId.make(`busy:${index}`),
+        });
+        for (let index = 0; index < 128; index++) {
+          assert.notEqual(yield* mailbox.offer(busy(index)), "overflow");
+        }
+        assert.equal(yield* mailbox.offer(busy(128)), "overflow");
+        assert.notEqual(yield* mailbox.offer(busy(0)), "overflow");
+        for (let index = 0; index < 896; index++) {
+          assert.notEqual(
+            yield* mailbox.offer({
+              ...request(),
+              threadId: ThreadId.make(`other:${index}`),
+            }),
+            "overflow",
+          );
+        }
+        const fresh = { ...request(), threadId: ThreadId.make("thread:over-global") };
+        assert.equal(yield* mailbox.offer(fresh), "overflow");
+        assert.equal((yield* mailbox.take).messageId, busy(0).messageId);
+        assert.notEqual(yield* mailbox.offer(fresh), "overflow");
+      }).pipe(Effect.provide(ProviderContinuationRequests.layer)),
+  );
+
+  it.effect("retries staged provider and durable delegated wakes after capacity returns", () =>
+    Effect.gen(function* () {
+      const mailbox = yield* ProviderContinuationRequests.ProviderContinuationRequests;
+      for (let index = 0; index < 128; index++)
+        yield* mailbox.offer(request(undefined, `queued:${index}`));
+      const delegated = {
+        ...request(),
+        delegatedCompletion: { parentRunId, generation: 1, messageId: delegatedMessageId },
+      };
+      assert.equal(yield* mailbox.offer(delegated), "overflow");
+      assert.isDefined(mailbox.awaitDelegatedRetry);
+      if (mailbox.awaitDelegatedRetry === undefined) return;
+      const provider = request(undefined, "retried wake");
+      const waiting = yield* ProviderContinuationRequests.offerWithBackpressure(
+        mailbox,
+        provider,
+      ).pipe(Effect.forkScoped({ startImmediately: true }));
+      assert.equal((yield* mailbox.take).detail, "queued:0");
+      yield* mailbox.awaitDelegatedRetry;
+      yield* Fiber.join(waiting);
+      for (let index = 1; index < 128; index++)
+        assert.equal((yield* mailbox.take).detail, `queued:${index}`);
+      assert.equal((yield* mailbox.take).detail, "retried wake");
+      assert.notEqual(yield* mailbox.offer(delegated), "overflow");
+      assert.deepEqual((yield* mailbox.take).delegatedCompletion, delegated.delegatedCompletion);
+    }).pipe(Effect.provide(ProviderContinuationRequests.layer)),
+  );
+
+  it.effect(
+    "dispatches a healthy wake behind a saturated thread and preserves its queued peers",
+    () =>
+      Effect.gen(function* () {
+        const dispatched = yield* Queue.unbounded<unknown>();
+        const entered = yield* Deferred.make<void>();
+        const release = yield* Deferred.make<void>();
+        const otherThreadId = ThreadId.make("thread-saturation-healthy");
+        yield* Effect.gen(function* () {
+          const requests = yield* ProviderContinuationRequests.ProviderContinuationRequests;
+          yield* requests.offer(
+            request(
+              (effect) =>
+                Deferred.succeed(entered, undefined).pipe(
+                  Effect.andThen(Deferred.await(release)),
+                  Effect.andThen(effect),
+                  Effect.asSome,
+                ),
+              "First",
+            ),
+          );
+          yield* Deferred.await(entered);
+          const labels = Array.from({ length: 130 }, (_, index) => `Busy wake ${index}`);
+          const staged = yield* Effect.forEach(
+            labels,
+            (label) =>
+              ProviderContinuationRequests.offerWithBackpressure(
+                requests,
+                request(undefined, label),
+              ),
+            { discard: true },
+          ).pipe(Effect.forkScoped({ startImmediately: true }));
+          yield* requests.offer({ ...request(), threadId: otherThreadId });
+          assert.containSubset(yield* Queue.take(dispatched), { threadId: otherThreadId });
+          yield* Deferred.succeed(release, undefined);
+          yield* Fiber.join(staged);
+          for (const label of ["First", ...labels])
+            assert.containSubset(yield* Queue.take(dispatched), { threadId, text: label });
+        }).pipe(
+          Effect.provide(
+            layerTest({ dispatched, getThreadRecords: () => Effect.succeed(projection) }),
+          ),
+          Effect.scoped,
+        );
+      }),
+  );
+
+  it.effect("dispatches independent wakes while keeping one thread FIFO", () =>
+    Effect.gen(function* () {
+      const dispatched = yield* Queue.unbounded<unknown>();
+      const entered = yield* Deferred.make<void>();
+      const release = yield* Deferred.make<void>();
+      const otherThreadId = ThreadId.make("thread-independent-continuation");
+      const first = request(
+        (effect) =>
+          Deferred.succeed(entered, undefined).pipe(
+            Effect.andThen(Deferred.await(release)),
+            Effect.andThen(effect),
+            Effect.asSome,
+          ),
+        "First wake",
+      );
+      yield* Effect.gen(function* () {
+        const requests = yield* ProviderContinuationRequests.ProviderContinuationRequests;
+        yield* requests.offer(first);
+        yield* Deferred.await(entered);
+        yield* requests.offer(request(undefined, "Second wake"));
+        yield* requests.offer({ ...request(), threadId: otherThreadId });
+        assert.containSubset(yield* Queue.take(dispatched), { threadId: otherThreadId });
+        assert.equal(yield* Queue.size(dispatched), 0);
+        yield* Deferred.succeed(release, undefined);
+        assert.containSubset(yield* Queue.take(dispatched), { threadId, text: "First wake" });
+        assert.containSubset(yield* Queue.take(dispatched), { threadId, text: "Second wake" });
+      }).pipe(
+        Effect.provide(
+          layerTest({ dispatched, getThreadRecords: () => Effect.succeed(projection) }),
+        ),
+        Effect.scoped,
+      );
+    }),
+  );
+
   it.effect("recovers an unaccepted persisted steer using the same delivery identity", () =>
     Effect.gen(function* () {
       const dispatched = yield* Queue.unbounded<unknown>();

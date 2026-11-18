@@ -236,6 +236,7 @@ it.layer(Layer.merge(layerTest, ProviderContinuationRequests.layer))(
             notification: {
               source: { kind: "command" },
               outcome: "completed",
+              aboutRunId: child.childRunId,
               summary: 'Command "sleep 60" finished',
             },
             attachments: [],

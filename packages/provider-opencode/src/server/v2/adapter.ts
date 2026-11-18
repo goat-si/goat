@@ -62,7 +62,13 @@ import {
   sessionOfEvent,
   executionEnd,
 } from "./adapterUtilities.ts";
-import { commandOf, declinedNote, reportOutcome, sessionGrantLabel } from "./adapterHelpers.ts";
+import {
+  wakeReportNotification,
+  commandOf,
+  declinedNote,
+  reportOutcome,
+  sessionGrantLabel,
+} from "./adapterHelpers.ts";
 import * as Path from "effect/Path";
 import * as Option from "effect/Option";
 import * as NodeURL from "node:url";
@@ -1199,14 +1205,13 @@ export const make = Effect.fn("OpenCode2Adapter.make")(function* (instanceId: Pr
     const offerWake = Effect.fnUntraced(function* (state: ThreadState, wake: Wake) {
       const route = state.providerThread.appThreadId;
       if (route === null || wake.messageId === undefined) return;
-      const notification = backgroundWorkNotification(wake.reports);
-      yield* continuationRequests.offer({
+      yield* ProviderContinuationRequests.offerWithBackpressure(continuationRequests, {
         threadId: route,
         providerThreadId: state.providerThread.id,
         driver,
         detail: wake.detail,
         messageId: wake.messageId,
-        ...(notification === null ? {} : { notification }),
+        ...(wake.notification === null ? {} : { notification: wake.notification }),
         dispatchIfCurrent: (dispatch) =>
           wake.dropped ? Effect.succeedNone : Effect.asSome(dispatch),
       });
@@ -1876,7 +1881,7 @@ export const make = Effect.fn("OpenCode2Adapter.make")(function* (instanceId: Pr
             : yield* idAllocator.allocate.message({ threadId: route, ordinal: 0 }),
         events: [],
         running: true,
-        reports: delivered.map((entry) => entry.report),
+        notification: wakeReportNotification(delivered),
         detail: delivered.length === 0 ? null : delivered.map((entry) => entry.text).join("\n\n"),
         dropped: false,
         after: delivered.at(-1)?.inboxId,

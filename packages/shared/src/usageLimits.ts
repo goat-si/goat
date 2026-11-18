@@ -374,7 +374,8 @@ export function collectLimitAccounts(presentations: LimitPresentations): readonl
         : source.label;
       for (const account of source.accounts) {
         if (limitsNotice(account.usageLimits) !== null) continue;
-        const key = `${source.id}:${account.id}${account.workspaceId ? `:${account.workspaceId}` : ""}`;
+        const sourceKey = source.kind === "cliproxy" ? `${environmentId}:${source.id}` : source.id;
+        const key = `${sourceKey}:${account.id}${account.workspaceId ? `:${account.workspaceId}` : ""}`;
         merge(resolveKey(account) ?? key, {
           key,
           driver: account.driver,
@@ -642,7 +643,7 @@ function poolWindows(accounts: readonly LimitAccount[], now: number): readonly L
     return members.length === 0 ? [] : [[key, members, all] as const];
   });
   const pools = byKey.map(([key, members, all]): LimitPoolWindow => {
-    const memberByAccount = new Map(all.map((member) => [member.account.key, member]));
+    const memberByAccount = new Map(all.map((member) => [member.account, member]));
     const first = members[0]!.window;
     const id = members[0]!.account.driver === "codex" ? key : first.id;
     // One unknown plan makes the pool incomparable by plan, so every member then counts once.
@@ -683,9 +684,7 @@ function poolWindows(accounts: readonly LimitAccount[], now: number): readonly L
       kind: first.kind,
       label: first.label,
       members,
-      columns: accounts.map(
-        (account) => memberByAccount.get(account.key) ?? { account, window: null },
-      ),
+      columns: accounts.map((account) => memberByAccount.get(account) ?? { account, window: null }),
       usedPercent: Math.round(usedPercent),
       remainingPercent: Math.round(100 - usedPercent),
       pace: meanElapsed === null ? null : paceOfShares(timedUsed, meanElapsed),
