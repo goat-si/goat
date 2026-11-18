@@ -1,3 +1,6 @@
+import { makeRestorePending } from "./goat/restorePending.ts";
+import { git as realGit } from "./goat/restoreSnapshot.ts";
+import { GitCommandError } from "@goat/contracts";
 import * as PlatformError from "effect/PlatformError";
 import { makeSetAsideFolder } from "./goat/setAsideFolder.ts";
 import * as NodeServices from "@effect/platform-node/NodeServices";
@@ -34,6 +37,7 @@ import * as ThreadCommandExecutor from "./ThreadCommandExecutor.ts";
 interface Row {
   readonly restoreFiles?: boolean;
   readonly createFails?: boolean;
+  readonly lateCreateFails?: boolean;
   readonly shared?: boolean;
   readonly unmanaged?: boolean;
   readonly checkout?: boolean;
@@ -48,6 +52,7 @@ const rollBackOverLeftover = (row: Row) =>
     const {
       restoreFiles = true,
       createFails,
+      lateCreateFails,
       shared,
       unmanaged,
       checkout,
@@ -74,6 +79,26 @@ const rollBackOverLeftover = (row: Row) =>
     const checkpointId = CheckpointId.make("rollback-aside-checkpoint");
     const scopeId = CheckpointScopeId.make("rollback-aside-scope");
     const branch = "feature/rollback";
+    yield* fileSystem.makeDirectory(path.join(workspaceRoot, ".git"), { recursive: true });
+    if (lateCreateFails) {
+      yield* Effect.promise(async () => {
+        await realGit(workspaceRoot, ["init", "-b", "main"]);
+        await realGit(workspaceRoot, [
+          "-c",
+          "user.name=Test",
+          "-c",
+          "user.email=test@example.com",
+          "commit",
+          "--allow-empty",
+          "-m",
+          "base",
+        ]);
+        await realGit(workspaceRoot, ["branch", branch]);
+      });
+      const hook = path.join(workspaceRoot, ".git", "hooks", "post-checkout");
+      yield* fileSystem.writeFileString(hook, "#!/bin/sh\nprintf keep > late.txt\nexit 1\n");
+      yield* fileSystem.chmod(hook, 0o755);
+    }
     const calls: string[] = [];
     const written: OrchestrationV2DomainEvent[] = [];
     const projection = {
@@ -106,13 +131,29 @@ const rollBackOverLeftover = (row: Row) =>
         Layer.mergeAll(
           ThreadCommandExecutor.layer,
           NodeServices.layer,
-          Layer.mock(ServerConfig.ServerConfig)({ worktreesDir } as never),
+          Layer.mock(ServerConfig.ServerConfig)({ worktreesDir, stateDir: workspaceRoot } as never),
           ServerSettings.layerTest(),
           Layer.mock(ProjectStore.ProjectStoreV2)({
             get: () => Effect.succeedSome({ workspaceRoot } as never),
           }),
           Layer.mock(GitWorkflow.GitWorkflowService)({
             pruneWorktrees: () => Effect.sync(() => void calls.push("prune")),
+            resolveCommit: ({ cwd, revision }) =>
+              lateCreateFails
+                ? Effect.tryPromise({
+                    try: async () => ({
+                      commitSha: (await realGit(cwd, ["rev-parse", revision])).toString().trim(),
+                    }),
+                    catch: (cause) =>
+                      new GitCommandError({
+                        operation: "resolveCommit",
+                        command: "git",
+                        cwd,
+                        detail: "unresolved",
+                        cause,
+                      }),
+                  })
+                : Effect.succeed({ commitSha: "fixture-head" }),
             createWorktree: (input) =>
               Effect.gen(function* () {
                 assert.deepEqual(input, {
@@ -126,6 +167,25 @@ const rollBackOverLeftover = (row: Row) =>
                   .readDirectory(worktreePath)
                   .pipe(Effect.orElseSucceed((): ReadonlyArray<string> => []));
                 assert.deepEqual(entries, []);
+                if (lateCreateFails) {
+                  return yield* Effect.tryPromise({
+                    try: async () =>
+                      (await realGit(workspaceRoot, [
+                        "worktree",
+                        "add",
+                        worktreePath,
+                        branch,
+                      ])) as never,
+                    catch: (cause) =>
+                      new GitCommandError({
+                        operation: "git worktree add",
+                        command: "git",
+                        cwd: workspaceRoot,
+                        detail: "post-checkout failed",
+                        cause,
+                      }),
+                  });
+                }
                 if (createFails) return yield* Effect.die("the branch is gone");
                 yield* fileSystem
                   .makeDirectory(path.join(worktreePath, ".git"), { recursive: true })
@@ -199,8 +259,13 @@ const rollBackOverLeftover = (row: Row) =>
     const setAside = siblings.find((name) => name !== "feature");
     const setAsidePath =
       setAside === undefined ? null : path.join(path.dirname(worktreePath), setAside);
+    const pending = yield* makeRestorePending.pipe(
+      Effect.provideService(ServerConfig.ServerConfig, { stateDir: workspaceRoot } as never),
+    );
     return {
       exit,
+      pending: yield* pending.marked(worktreePath, workspaceRoot),
+      linked: yield* fileSystem.exists(path.join(worktreePath, ".git")),
       calls,
       siblings,
       notices,
@@ -329,4 +394,15 @@ it.effect.each([false, true])(
       }
       assert.equal(restored._tag, fails ? "Failure" : "Success");
     }).pipe(Effect.provide(NodeServices.layer)),
+);
+
+it.effect("Edit from here leaves a late hook failure marked after Git registers the checkout", () =>
+  Effect.gen(function* () {
+    const result = yield* rollBackOverLeftover({ lateCreateFails: true });
+    assert.equal(result.exit._tag, "Failure");
+    assert.isTrue(result.linked);
+    assert.isTrue(result.pending);
+    assert.equal(result.setAsideFiles, "keep");
+    assert.deepEqual(result.calls, ["prune", "create"]);
+  }),
 );
