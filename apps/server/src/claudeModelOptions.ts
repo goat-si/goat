@@ -12,14 +12,18 @@ import {
   normalizeClaudeCatalogEffort,
   resolveClaudeCatalogApiModelId,
   resolveClaudeCatalogEffort,
+  resolveClaudeModelSlug,
   type ClaudeModelCatalog,
 } from "./provider/ClaudeModelCatalog.ts";
+
+const CLAUDE_CODE_MODEL_ALIASES = new Set(["opus", "sonnet", "haiku", "fable"]);
 
 export interface CompiledClaudeModelSelection {
   readonly apiModelId: string;
   readonly effort: string | undefined;
   readonly promptEffort: string | undefined;
   readonly settings: Readonly<Record<string, boolean>>;
+  readonly pinnedAlias?: string;
   readonly queryIdentity: string;
 }
 
@@ -51,11 +55,17 @@ export function compileClaudeModelSelection(
   };
   const apiModelId = resolveClaudeCatalogApiModelId(catalog, selection);
   const promptEffort = resolvePromptInjectedEffort(capabilities, rawEffort) ?? undefined;
+  const pinnedAlias =
+    CLAUDE_CODE_MODEL_ALIASES.has(apiModelId) &&
+    resolveClaudeModelSlug(catalog, selection.model) === apiModelId
+      ? apiModelId
+      : undefined;
   return {
     apiModelId,
+    ...(pinnedAlias === undefined ? {} : { pinnedAlias }),
     effort,
     promptEffort,
     settings,
-    queryIdentity: JSON.stringify({ apiModelId, effort: effort ?? null, settings }),
+    queryIdentity: JSON.stringify({ apiModelId, effort: effort ?? null, settings, pinnedAlias }),
   };
 }

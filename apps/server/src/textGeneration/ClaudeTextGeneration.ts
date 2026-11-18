@@ -1,3 +1,4 @@
+import type { RouteClaudeModelCatalog } from "../provider/ClaudeCodeModelRoutes.ts";
 import { collectStreamAsString } from "@goat/provider-core/server/snapshotProbe";
 import { ProviderDriverKind } from "@goat/contracts";
 import {
@@ -169,6 +170,7 @@ export const makeClaudeTextGeneration = Effect.fn("makeClaudeTextGeneration")(fu
   environment?: NodeJS.ProcessEnv | Effect.Effect<NodeJS.ProcessEnv>,
   modelCatalog: Effect.Effect<ClaudeModelCatalog> = Effect.succeed(BUNDLED_CLAUDE_MODEL_CATALOG),
   memoryRunnerContext?: MemoryGenerationRunnerContext,
+  routeModelCatalog: RouteClaudeModelCatalog = Effect.succeed,
 ) {
   const commandSpawner = yield* ChildProcessSpawner.ChildProcessSpawner;
   const fileSystem = yield* FileSystem.FileSystem;
@@ -228,7 +230,31 @@ export const makeClaudeTextGeneration = Effect.fn("makeClaudeTextGeneration")(fu
         detail: "Claude is disabled in GOAT settings.",
       });
     const claudeEnvironment = yield* resolveClaudeEnvironment;
-    const catalog = yield* scopedModelCatalog;
+    const operationIsMemory = TextGenerationOperations.isMemoryOperation(operation);
+    const launchSettings = operationIsMemory
+      ? undefined
+      : yield* readClaudeLaunchArgSettings({
+          settings: claudeSettings,
+          cwd,
+          fileSystem,
+          path,
+        }).pipe(
+          Effect.mapError(
+            (cause) => new TextGenerationError({ operation, detail: cause.message, cause }),
+          ),
+          Effect.provideService(HostProcess.HomeDirectory, home),
+        );
+    const baseCatalog = yield* scopedModelCatalog;
+    const catalog = operationIsMemory
+      ? baseCatalog
+      : yield* routeModelCatalog(
+          baseCatalog,
+          operation === "generateThreadTitle" || operation === "generateChannelReception"
+            ? null
+            : cwd,
+          launchSettings,
+          claudeEnvironment,
+        );
     const resolvedModelSelection = {
       ...modelSelection,
       model: resolveClaudeModelSlug(catalog, modelSelection.model),
@@ -266,20 +292,6 @@ export const makeClaudeTextGeneration = Effect.fn("makeClaudeTextGeneration")(fu
         : undefined;
     const fastMode =
       fastModeDescriptor?.type === "boolean" ? fastModeDescriptor.currentValue : undefined;
-    const operationIsMemory = TextGenerationOperations.isMemoryOperation(operation);
-    const launchSettings = operationIsMemory
-      ? undefined
-      : yield* readClaudeLaunchArgSettings({
-          settings: claudeSettings,
-          cwd,
-          fileSystem,
-          path,
-        }).pipe(
-          Effect.mapError(
-            (cause) => new TextGenerationError({ operation, detail: cause.message, cause }),
-          ),
-          Effect.provideService(HostProcess.HomeDirectory, home),
-        );
     const { settings } = pinClaudeHomeSettings({
       env: claudeEnvironment,
       settings: {

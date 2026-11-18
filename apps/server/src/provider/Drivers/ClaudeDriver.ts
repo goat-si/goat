@@ -37,6 +37,10 @@ import {
 } from "../ClaudeProvider.ts";
 import { makeManagedServerProvider } from "@goat/provider-core/server/managedProvider";
 import * as ModelCatalog from "@goat/provider-core/server/ModelCatalog";
+import {
+  makeClaudeCodeModelRoutes,
+  resolveClaudeModelSettingsKey,
+} from "../ClaudeCodeModelRoutes.ts";
 import { resolveClaudeModelCatalog } from "../ClaudeModelCatalog.ts";
 import {
   defaultProviderContinuationIdentity,
@@ -52,6 +56,7 @@ import {
 } from "@goat/provider-core/server/snapshotSettings";
 import {
   makeClaudeCapabilitiesCacheKey,
+  makeClaudeEnvironment,
   makeClaudeContinuationGroupKey,
   mergeClaudeProcessEnvironment,
   resolveClaudeHomePath,
@@ -163,6 +168,21 @@ export const ClaudeDriver: ProviderDriver<ClaudeSettings, ClaudeDriverEnv, Path.
     });
 
     const scopedLimitNames = yield* makeClaudeScopedLimitNames;
+    const customHome =
+      effectiveConfig.homePath.trim().length > 0 ||
+      processEnv.CLAUDE_CONFIG_DIR !== hostEnvironment.CLAUDE_CONFIG_DIR;
+    const modelRoutes = yield* makeClaudeCodeModelRoutes(
+      (cwd, env) =>
+        resolveClaudeModelSettingsKey(
+          customHome ? ["project", "local"] : ["user", "project", "local"],
+          cwd,
+          env,
+        ).pipe(
+          Effect.provideService(FileSystem.FileSystem, fileSystem),
+          Effect.provideService(Path.Path, path),
+        ),
+      stateDir,
+    );
     const memoryAdmission = yield* Effect.serviceOption(
       AdapterInfrastructure.ProviderMemoryAdmission,
     );
@@ -184,6 +204,7 @@ export const ClaudeDriver: ProviderDriver<ClaudeSettings, ClaudeDriverEnv, Path.
               mcpCredentialRotations: memoryAdmission.value.rotations,
             }),
         modelCatalog,
+        routeModelCatalog: modelRoutes.route,
       },
     ).pipe(
       Effect.mapError(
@@ -204,6 +225,7 @@ export const ClaudeDriver: ProviderDriver<ClaudeSettings, ClaudeDriverEnv, Path.
         providerInstanceId: instanceId,
         ...(host.environmentId === undefined ? {} : { environmentId: host.environmentId }),
       },
+      modelRoutes.route,
     );
 
     // Per-instance capabilities cache: keyed on binary + resolved HOME so
@@ -227,7 +249,16 @@ export const ClaudeDriver: ProviderDriver<ClaudeSettings, ClaudeDriverEnv, Path.
               })),
             ),
           ),
-          Effect.tap(({ capabilities }) => Ref.set(lastGoodCapabilities, { key, capabilities })),
+          Effect.tap(({ capabilities }) =>
+            Ref.set(lastGoodCapabilities, { key, capabilities }).pipe(
+              Effect.andThen(
+                Ref.get(probeEnvironment).pipe(
+                  Effect.flatMap((env) => makeClaudeEnvironment(effectiveConfig, env)),
+                  Effect.flatMap((env) => modelRoutes.record(capabilities.models ?? [], env)),
+                ),
+              ),
+            ),
+          ),
           Effect.catch((error) =>
             Ref.getAndSet(lastGoodCapabilities, undefined).pipe(
               Effect.flatMap((lastGood) =>
@@ -309,6 +340,7 @@ export const ClaudeDriver: ProviderDriver<ClaudeSettings, ClaudeDriverEnv, Path.
           ),
         ),
       ),
+      Effect.ensuring(modelRoutes.settle),
       Effect.provideService(ChildProcessSpawner.ChildProcessSpawner, spawner),
       Effect.provideService(FileSystem.FileSystem, fileSystem),
       Effect.provideService(Path.Path, path),
