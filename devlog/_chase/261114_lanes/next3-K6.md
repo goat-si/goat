@@ -97,3 +97,208 @@ NOT RUN: The five web browser files auto-selected by check:changed. The server-h
 NOT RUN: Separate older client or server binaries and a downgrade rebuild after compact events were written. Persisted legacy rows and both negotiated wire representations were exercised by fixtures.
 
 NOT RUN: Lane CI, full CI suites, build, and release smoke. CI stays on integration PR #3700.
+
+
+## Fix round 1 and the two ruled ports
+
+Lane `chase/t3-261114-next3-k6` advanced from `2e0d7809989c6982d48821f4f6ca838aef095a8a` to `105adb36a661916cbc16c290ad0265be34548f5c` on Node 26.12.1. The integration base for the gate was `2c0e0002a996ec5d46c708919be5a43f579176fa`.
+
+| Finding or upstream row | Lane commit | Failing-first evidence |
+| --- | --- | --- |
+| P2-1 | `6019dd07a3dc20d2dd1b921473fe0ccda9b570f7` | The continued review's untagged completion wake left a native subagent. The focused test returned `completed` where it expected `interrupted`. The marker and settlement now use that exact wake and dispose the parent delivery. The moved suite retains its explicit continuation-request layer. |
+| P2-2 | `fe4941cfcc74f730996bfd56f035ab77611721e7` | The legacy stream emitted a seq-2 `thread.visited` containing seq-3 archive state. The test now expects a snapshot stamped seq 3, then the seq-4 unarchive on the same stream. A compact client receives the visit, archive and unarchive in order. A second red test returned an empty reply body after the snapshot evicted its source message. The deduper now resets its remembered bodies on a replacement snapshot. |
+| P3 | `f142c3681143e0abeac9560ff1bf160047f40188` | A temporary local mutation wrote two events for the same restart notice and enabled notices for unsent usage-limit continuations. The new assertions failed with 2 persisted events instead of 1 and 2 instead of 0. After restoring production code, the two whole suites passed 181 tests. |
+| `b20bbc595d` | `1a167449d1156114478e3c16d9ea7a73e957ee08` | 4/4 focused server cases failed before the port because direct and promoted steers rejected preparing/starting targets. The final tests cover both delivery paths, duplicate readiness events, a replaced attempt, an ended target, delivery-time refusal of a restart-only selection, and explicit recovery from the queue. |
+| `beb528ce4d` | `105adb36a661916cbc16c290ad0265be34548f5c` | 3/5 focused server cases failed before the port. Bound continue and fresh-session sends used the enqueue-time model, and promotion lacked the late-binding marker. Pinned and legacy queued selections passed before and after. |
+
+### Compatibility and surfaces
+
+- `b20bbc595d` uses one optional persisted and wire run field, `steerWhenReadyAttemptId`. GOAT captures the attempt because a restart may reuse the run ID. Old queue rows lack the field. Old clients can decode and display the ordinary queued run. Older servers retain their existing processing of Steer. Automatic promotion uses a receipt keyed by the queued run and target attempt, runs the existing steering checks, and leaves a held queue entry when the attempt cannot receive it. The cross-thread MCP `steer_when_ready` waiting/retry path in `ThreadManagementService.ts` stays independent. Web and desktop use the composer planner, buttons, and keybindings. The shared queue workflow also serves mobile. Providers use the existing native steering or interrupt/restart capabilities. Resume or Send now can deliver a held queued message.
+- `beb528ce4d` uses one optional `followsThreadSelection: true` field on the conversation message schema, which serves the stored `message.updated` event and projection. Absent means the queued selection is retained. A bound scheduled send that omits a model resolves the thread selection at delivery, including when it makes a fresh provider session in that same thread. Explicit model selections and new-thread launches retain their requested model. The queue start and promotion paths recheck the destination provider and goal command. This uses the existing schedule service, queue commands, and provider policy for all clients.
+- The public user workflows keep the existing Steer, queue and schedule controls. The compatibility changes need no SQL migration. The coordinator owns independent review and real-client verification on PR #3700.
+
+Limits: An older server's strict projection rebuild cannot decode compact `thread.visit-recorded` events written by this version.
+
+### P2-3 Rule 3 rulings
+
+The coordinator approved the retained cancellation expectation under IV, consistent with upstream `fd9b2c3eaa:635`. The provider run stays completed while the delegated task is interrupted.
+
+Before `3b8d8f089b`
+
+```ts
+        const after = yield* service.taskStatus(scope, task.id);
+        assert.equal(after.status, "completed");
+        assert.notEqual(after.workState, "waiting_for_children");
+```
+
+After `3b8d8f089b`
+
+```ts
+        const after = yield* service.taskStatus(scope, task.id);
+        assert.equal(
+          childAfter.runs.find((run) => run.id === child.turn.runId)?.status,
+          "completed",
+        );
+        assert.equal(after.status, "interrupted");
+        const parentAfter = yield* orchestrator.getThreadProjection(parentThreadId);
+        const endedTask = parentAfter.subagents.find((entry) => entry.id === task.id);
+        assert.equal(endedTask?.status, "interrupted");
+        assert.equal(endedTask?.completionDelivery?.state, "disposed");
+        assert.notEqual(after.workState, "waiting_for_children");
+```
+
+Upstream `fd9b2c3eaa`
+
+```ts
+        const after = yield* service.taskStatus(scope, task.id);
+        assert.equal(after.status, "interrupted");
+        assert.equal(after.workState, "result_available");
+        const settledTask = yield* parentTask;
+        assert.equal(settledTask?.status, "interrupted");
+        assert.notEqual(settledTask?.completedAt, null);
+        assert.equal(settledTask?.cancelledRunId, child.turn.runId);
+```
+
+The coordinator approved the harness extraction in `6c58f86c07` under IV (vi). The declaration below is byte-identical after removing the new `export` keyword. SHA-256 of the shared declaration is `b455bf4596d60fbe5c43aa927f016cec32f06fd20d66ccc7301c29ba6402ecd5`.
+
+Before in `runtimeLayer.test.ts`
+
+```ts
+const layerSharedApplicationDataPlaneTest = Layer.mergeAll(
+  RuntimeLayer.layer.pipe(Layer.provide(RuntimeLayer.layerProjectService)),
+  RuntimeLayer.layerProjectService,
+  RuntimeLayer.layerEventSink,
+  RuntimeLayer.layerEventInfrastructure,
+).pipe(
+  Layer.provide(
+    Layer.mock(WorkspacePaths.WorkspacePaths)({
+      normalizeWorkspaceRoot: (workspaceRoot) => Effect.succeed(workspaceRoot),
+    }),
+  ),
+  Layer.provide(
+    Layer.mock(ProjectEnrichmentService.ProjectEnrichmentService)({
+      peek: () =>
+        Effect.succeed({
+          repositoryIdentity: null,
+          faviconPath: null,
+          repositoryIdentityResolved: false,
+        }),
+      request: () => Effect.void,
+      getAvailable: () =>
+        Effect.succeed({
+          repositoryIdentity: null,
+          faviconPath: null,
+          repositoryIdentityResolved: false,
+        }),
+      awaitRepositoryIdentity: () => Effect.succeed(null),
+      invalidate: () => Effect.void,
+      subscribeChanges: Effect.never,
+    }),
+  ),
+  Layer.provide(McpSessionRegistryTestkit.layer),
+  Layer.provide(McpProviderSessions.layer),
+  Layer.provideMerge(SqlitePersistence.layerMemory),
+  Layer.provide(layerCheckpointStoreTest),
+  Layer.provide(layerServerConfig),
+  Layer.provide(ServerSettings.layerTest()),
+  Layer.provide(layerTestProviderInstanceRegistry),
+  Layer.provide(layerGitWorkflowTest),
+  Layer.provide(layerPlatformTest),
+);
+```
+
+After in `runtimeLayer.testkit.ts`
+
+```ts
+export const layerSharedApplicationDataPlaneTest = Layer.mergeAll(
+  RuntimeLayer.layer.pipe(Layer.provide(RuntimeLayer.layerProjectService)),
+  RuntimeLayer.layerProjectService,
+  RuntimeLayer.layerEventSink,
+  RuntimeLayer.layerEventInfrastructure,
+).pipe(
+  Layer.provide(
+    Layer.mock(WorkspacePaths.WorkspacePaths)({
+      normalizeWorkspaceRoot: (workspaceRoot) => Effect.succeed(workspaceRoot),
+    }),
+  ),
+  Layer.provide(
+    Layer.mock(ProjectEnrichmentService.ProjectEnrichmentService)({
+      peek: () =>
+        Effect.succeed({
+          repositoryIdentity: null,
+          faviconPath: null,
+          repositoryIdentityResolved: false,
+        }),
+      request: () => Effect.void,
+      getAvailable: () =>
+        Effect.succeed({
+          repositoryIdentity: null,
+          faviconPath: null,
+          repositoryIdentityResolved: false,
+        }),
+      awaitRepositoryIdentity: () => Effect.succeed(null),
+      invalidate: () => Effect.void,
+      subscribeChanges: Effect.never,
+    }),
+  ),
+  Layer.provide(McpSessionRegistryTestkit.layer),
+  Layer.provide(McpProviderSessions.layer),
+  Layer.provideMerge(SqlitePersistence.layerMemory),
+  Layer.provide(layerCheckpointStoreTest),
+  Layer.provide(layerServerConfig),
+  Layer.provide(ServerSettings.layerTest()),
+  Layer.provide(layerTestProviderInstanceRegistry),
+  Layer.provide(layerGitWorkflowTest),
+  Layer.provide(layerPlatformTest),
+);
+```
+
+### Round 1 verification
+
+- With Node 26.12.1, `GOAT_TEST_TMP_GUARD=fail vp test run --maxWorkers=4` ran all 13 changed server test files whole from `apps/server`. Exit 0 with 265 passed, zero failed and zero skipped.
+  - `integration/transferBudgetV2.integration.test.ts` — 1 passed
+  - `src/mcp/TaskCancelNativeSubagent.integration.test.ts` — 1 passed
+  - `src/orchestration-v2/DeferredSteering.integration.test.ts` — 5 passed
+  - `src/orchestration-v2/DelegatedCompletionDelivery.test.ts` — 25 passed
+  - `src/orchestration-v2/DelegatedReviewCompletion.test.ts` — 3 passed
+  - `src/orchestration-v2/ProviderRuntimeRecoveryStreaming.test.ts` — 1 passed
+  - `src/orchestration-v2/ScheduledQueuedSelection.integration.test.ts` — 5 passed
+  - `src/orchestration-v2/UsageLimitRestart.test.ts` — 6 passed
+  - `src/orchestration-v2/WireProjection.test.ts` — 34 passed
+  - `src/orchestration-v2/legacy/LegacyV1ThreadImporter.test.ts` — 6 passed
+  - `src/orchestration-v2/runtimeLayer.dataPlane.test.ts` — 1 passed
+  - `src/orchestration-v2/runtimeLayer.test.ts` — 175 passed
+  - `src/ws.liveProjection.test.ts` — 2 passed
+- `git diff --check origin/chase/t3-261114-next3` and `git diff --exit-code 2e0d780998 HEAD -- pnpm-lock.yaml` both exited 0.
+- `GOAT_TEST_TMP_GUARD=fail vp test run --maxWorkers=1 src/storageCleanupShipping.test.ts` on the lane head exited 1 with 10 passed and one failed at line 211. With pen-lidge Git 2.43.0, the fixture returns “Default branch is unavailable” where it expects “Couldn't refresh origin/main.” The identical mismatch was previously run on the integration base in this record.
+- `node scripts/check-changed.ts origin/chase/t3-261114-next3` exited 1 on Node 26.12.1. The gate passed format, lint, both Knip passes, GraphQL generation, agent surface audit, agent context budget and all 38 package typechecks. Vitest ran 573 files, with 572 passed and one failed. It reported 9,186 passed tests, three skipped and one failed. The only failure was the confirmed Git 2.43.0 host mismatch at `src/storageCleanupShipping.test.ts:211`. The gate advertised 594 selectors before the 21 web browser exclusions below.
+
+### Round 1 NOT RUN
+
+NOT RUN: The 21 auto-selected web browser files below. The existing server-host wrapper excluded the browser and render projects and the browser file selectors. Real web, desktop and mobile passes are coordinator work.
+
+- `apps/web/src/components/ChatView.logic.browser.test.ts`
+- `apps/web/src/components/ChatView.browser.test.tsx`
+- `apps/web/src/components/ChatView.fork.browser.test.tsx`
+- `apps/web/src/components/ChatView.forkLegacyServer.browser.test.tsx`
+- `apps/web/src/components/ChatView.handoffCompaction.browser.test.tsx`
+- `apps/web/src/components/ChatView.modelPick.browser.test.tsx`
+- `apps/web/src/components/ChatView.ssh.browser.test.tsx`
+- `apps/web/src/components/ChatView.terminalFocus.browser.test.tsx`
+- `apps/web/src/components/chat/ChatComposer.previewTabMention.browser.test.tsx`
+- `apps/web/src/components/chat/ChatComposer.ssh.browser.test.tsx`
+- `apps/web/src/components/chat/ChatComposer.terminalAnswer.browser.test.tsx`
+- `apps/web/src/components/ThreadRouteView.browser.test.tsx`
+- `apps/web/src/hooks/useRightPanelSurfaceClose.browser.test.tsx`
+- `apps/web/src/components/Sidebar.drag.browser.test.tsx`
+- `apps/web/src/components/Sidebar.shortcuts.browser.test.tsx`
+- `apps/web/src/components/Sidebar.shortcuts.noBrowser.browser.test.tsx`
+- `apps/web/src/components/ThreadRouteView.forkFamily.browser.test.tsx`
+- `apps/web/src/components/chat/QueuedRunsControl.browser.test.tsx`
+- `apps/web/src/components/chat/useQueuedRunEdit.browser.test.tsx`
+- `apps/web/src/components/goatBot/GoatBotChatView.sync.browser.test.tsx`
+- `apps/web/src/components/sidebar/useBotThreadKeys.browser.test.tsx`
+
+NOT RUN: Separate older client/server binaries and a downgrade rebuild. Local checks used legacy fixtures and both wire paths.
+
+NOT RUN: Lane CI, full CI, build and release smoke. CI stays on integration PR #3700.
