@@ -1,4 +1,8 @@
-import { type ConnectionCatalogEntry, connectionRoutes } from "@goat/client-runtime/connection";
+import {
+  type ConnectionCatalogEntry,
+  connectionRoutes,
+  shownRoutes,
+} from "@goat/client-runtime/connection";
 import { isGoatConnectEnabled } from "@goat/shared/goatConnect";
 import * as Option from "effect/Option";
 import type { EnvironmentId } from "@goat/contracts";
@@ -64,14 +68,14 @@ export function splitEnvironmentSections<T extends EnvironmentSectionEntry>(
 }
 
 export function isGoatConnectOnlyEnvironment(entry: ConnectionCatalogEntry | undefined): boolean {
-  return (
-    entry !== undefined &&
-    connectionRoutes(entry).every((route) => {
-      const profile = Option.getOrNull(route.profile);
-      return (
-        route.target._tag === "RelayConnectionTarget" ||
-        (profile?._tag === "BearerConnectionProfile" && profile.authorization === "t3-connect")
-      );
-    })
-  );
+  if (entry === undefined) return false;
+  // A stored Pen route the closed gate hides is not another way in.
+  const shown = shownRoutes(entry);
+  return (shown.length > 0 ? shown : connectionRoutes(entry)).every((route) => {
+    const profile = Option.getOrNull(route.profile);
+    return (
+      route.target._tag === "RelayConnectionTarget" ||
+      (profile?._tag === "BearerConnectionProfile" && profile.authorization === "t3-connect")
+    );
+  });
 }
