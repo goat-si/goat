@@ -136,7 +136,9 @@ export const validateSshRuntimeArchives = Effect.fn("validateSshRuntimeArchives"
   },
 );
 
-export const stageSshRuntimeArchives = Effect.fn("stageSshRuntimeArchives")(function* (input: {
+export const stageSshRuntimeArchivesWithManifests = Effect.fn(
+  "stageSshRuntimeArchivesWithManifests",
+)(function* (input: {
   readonly sourceDirectory: string;
   readonly destinationDirectory: string;
   readonly clientAssetsDirectory?: string;
@@ -156,7 +158,7 @@ export const stageSshRuntimeArchives = Effect.fn("stageSshRuntimeArchives")(func
   yield* fs.makeDirectory(input.destinationDirectory, { recursive: true });
   const sharedFonts = new Map<string, { sha256: string; bytes: bigint }>();
   let removedFontBytes = 0n;
-  const trimmedArchives = new Set<string>();
+  const expectedFontManifests = new Map<string, string>();
 
   for (const archive of archives) {
     const destination = path.join(input.destinationDirectory, archive.fileName);
@@ -173,12 +175,10 @@ export const stageSshRuntimeArchives = Effect.fn("stageSshRuntimeArchives")(func
         sharedFonts.set(name, font);
         removedFontBytes += font.bytes;
       }
-      trimmedArchives.add(archive.fileName);
       sha256 = hash(yield* fs.readFile(destination));
-      yield* fs.writeFileString(
-        destination + OFFICE_CJK_FONT_MANIFEST_SUFFIX,
-        [...fonts].map(([name, font]) => `${font.sha256}  ${name}\n`).join(""),
-      );
+      const manifest = [...fonts].map(([name, font]) => `${font.sha256}  ${name}\n`).join("");
+      yield* fs.writeFileString(destination + OFFICE_CJK_FONT_MANIFEST_SUFFIX, manifest);
+      expectedFontManifests.set(archive.fileName, manifest);
     } else {
       // Stage the original bytes we hashed, not a second read of a mutable source.
       yield* fs.writeFile(destination, archive.bytes);
@@ -193,7 +193,7 @@ export const stageSshRuntimeArchives = Effect.fn("stageSshRuntimeArchives")(func
     requireSidecars: true,
   });
   for (const archive of staged) {
-    if (trimmedArchives.has(archive.fileName) && archive.fontMembers.length > 0) {
+    if (expectedFontManifests.has(archive.fileName) && archive.fontMembers.length > 0) {
       return yield* new SshRuntimeArchiveValidationError({
         message: `Duplicate CJK fonts remain in staged SSH archive ${archive.fileName}`,
       });
@@ -206,7 +206,16 @@ export const stageSshRuntimeArchives = Effect.fn("stageSshRuntimeArchives")(func
   yield* Effect.logInfo(
     `[desktop-artifact] CJK fonts: ${sharedFontBytes} bytes shared from the desktop web client, ${removedFontBytes} duplicate bytes removed from bundled SSH archives.`,
   );
-  return { sharedBytes: Number(sharedFontBytes), removedBytes: Number(removedFontBytes) };
+  return {
+    fontBytes: { sharedBytes: Number(sharedFontBytes), removedBytes: Number(removedFontBytes) },
+    expectedFontManifests,
+  };
+});
+
+export const stageSshRuntimeArchives = Effect.fn("stageSshRuntimeArchives")(function* (
+  input: Parameters<typeof stageSshRuntimeArchivesWithManifests>[0],
+) {
+  return (yield* stageSshRuntimeArchivesWithManifests(input)).fontBytes;
 });
 
 const hash = (bytes: Uint8Array) => NodeCrypto.createHash("sha256").update(bytes).digest("hex");

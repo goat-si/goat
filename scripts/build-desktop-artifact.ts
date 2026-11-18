@@ -71,13 +71,18 @@ import {
   resolveDevBuildVersion,
 } from "./lib/release-version.ts";
 import { resolveWebAssetBrandForChannel, type WebAssetBrand } from "./lib/brand-assets.ts";
+import {
+  MAX_OFFICE_CJK_FONT_MANIFEST_BYTES,
+  OFFICE_CJK_FONT_MANIFEST_SUFFIX,
+  readOfficeCjkFile,
+} from "@goat/shared/officeCjkFontAssets";
 import { scanReleasePayload, writePayloadReport } from "./lib/release-verify.ts";
 import {
   parseWslRuntimeArchiveMembers,
   SshRuntimeArchiveValidationError,
   SSH_RUNTIME_EXTRA_RESOURCES,
   SSH_RUNTIME_RESOURCE_SOURCE_DIR,
-  stageSshRuntimeArchives,
+  stageSshRuntimeArchivesWithManifests,
   validateSshRuntimeArchives,
 } from "./desktop-ssh-runtime-archives.ts";
 
@@ -3466,6 +3471,7 @@ export const validatePackagedSshRuntimeArchives = Effect.fn("validatePackagedSsh
     readonly stageDistDir: string;
     readonly version: string;
     readonly requireAll: boolean;
+    readonly expectedFontManifests?: ReadonlyMap<string, string>;
   }) {
     const fs = yield* FileSystem.FileSystem;
     const path = yield* Path.Path;
@@ -3493,12 +3499,29 @@ export const validatePackagedSshRuntimeArchives = Effect.fn("validatePackagedSsh
       );
     }
     for (const resources of resourceDirectories) {
-      yield* validateSshRuntimeArchives({
-        directory: path.join(resources, "ssh-runtime", "archives"),
+      const directory = path.join(resources, "ssh-runtime", "archives");
+      const packaged = yield* validateSshRuntimeArchives({
+        directory,
         version: input.version,
         requireAll: input.requireAll,
         requireSidecars: true,
       });
+      for (const [archive, expected] of input.expectedFontManifests ?? []) {
+        const manifest = path.join(directory, archive + OFFICE_CJK_FONT_MANIFEST_SUFFIX);
+        const invalid = () =>
+          new SshRuntimeArchiveValidationError({
+            message: `Missing or changed packaged SSH font manifest for ${archive}: ${manifest}`,
+          });
+        if (!packaged.some(({ fileName }) => fileName === archive)) return yield* invalid();
+        const actual = yield* readOfficeCjkFile(
+          directory,
+          manifest,
+          MAX_OFFICE_CJK_FONT_MANIFEST_BYTES,
+        ).pipe(Effect.mapError(invalid));
+        if (new TextDecoder("utf-8", { ignoreBOM: true }).decode(actual) !== expected) {
+          return yield* invalid();
+        }
+      }
     }
   },
 );
@@ -4241,10 +4264,10 @@ const buildDesktopArtifactUnlocked = Effect.fn("buildDesktopArtifactUnlocked")(f
     });
   }
 
-  const sshRuntimeCjkFonts =
+  const stagedSshRuntimes =
     options.sshRuntimeArchiveDir === undefined
       ? undefined
-      : yield* stageSshRuntimeArchives({
+      : yield* stageSshRuntimeArchivesWithManifests({
           sourceDirectory: path.resolve(repoRoot, options.sshRuntimeArchiveDir),
           destinationDirectory: path.join(stageAppDir, SSH_RUNTIME_RESOURCE_SOURCE_DIR),
           clientAssetsDirectory: path.join(path.dirname(bundledClientEntry), "assets"),
@@ -4383,11 +4406,12 @@ const buildDesktopArtifactUnlocked = Effect.fn("buildDesktopArtifactUnlocked")(f
     yield* validateMacPackagedPayload({ stageDistDir, verbose: options.verbose });
   }
 
-  if (options.sshRuntimeArchiveDir !== undefined) {
+  if (stagedSshRuntimes !== undefined) {
     yield* validatePackagedSshRuntimeArchives({
       stageDistDir,
       version: appVersion,
       requireAll: options.requireAllSshRuntimes,
+      expectedFontManifests: stagedSshRuntimes.expectedFontManifests,
     });
   }
 
@@ -4399,7 +4423,7 @@ const buildDesktopArtifactUnlocked = Effect.fn("buildDesktopArtifactUnlocked")(f
       `desktop-${options.platform}-${options.arch}`,
       appVersion,
       problems,
-      sshRuntimeCjkFonts,
+      stagedSshRuntimes?.fontBytes,
     );
   }
 

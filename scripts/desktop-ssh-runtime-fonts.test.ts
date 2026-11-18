@@ -12,8 +12,10 @@ import { symlinksSupported } from "@goat/shared/testing/symlinks";
 import {
   createBuildConfig,
   stageSshRuntimeArchives,
+  validatePackagedSshRuntimeArchives,
   validateSshRuntimeArchives,
 } from "./build-desktop-artifact.ts";
+import { stageSshRuntimeArchivesWithManifests } from "./desktop-ssh-runtime-archives.ts";
 import { decodeReleaseReport, writePayloadReport } from "./lib/release-verify.ts";
 
 it.effect("strips only shared CJK assets and checksums the staged archive's own bytes", () =>
@@ -176,5 +178,41 @@ it.effect.skipIf(!symlinksSupported)(
       yield* fs.symlink(sibling, path.join(input.clientAssetsDirectory, name));
       const outcome = yield* Effect.exit(stageSshRuntimeArchives(input));
       assert.equal(outcome._tag, "Failure");
+    }).pipe(Effect.provide(NodeServices.layer), Effect.scoped),
+);
+
+it.effect.each(["present", "missing", "changed"] as const)(
+  "checks the %s manifest when packaging a trimmed archive",
+  (mode) =>
+    Effect.gen(function* () {
+      const { fs, path, root, input, name, contents, archive } = yield* desktopFontFixture();
+      yield* fs.writeFileString(path.join(input.clientAssetsDirectory, name), contents);
+      const { expectedFontManifests } = yield* stageSshRuntimeArchivesWithManifests(input);
+      const stageDistDir = path.join(root, "dist");
+      const bundled = path.join(
+        stageDistDir,
+        "linux-unpacked",
+        "resources",
+        "ssh-runtime",
+        "archives",
+      );
+      yield* fs.makeDirectory(path.dirname(bundled), { recursive: true });
+      yield* fs.copy(input.destinationDirectory, bundled);
+      const manifestName = archive + ".fonts.sha256";
+      const packagedManifest = path.join(bundled, manifestName);
+      if (mode === "missing") {
+        yield* fs.remove(packagedManifest);
+      } else if (mode === "changed") {
+        yield* fs.writeFileString(packagedManifest, `${"0".repeat(64)}  ${name}\n`);
+      }
+      const verify = {
+        stageDistDir,
+        version: input.version,
+        requireAll: false,
+        expectedFontManifests,
+      };
+
+      const result = yield* Effect.exit(validatePackagedSshRuntimeArchives(verify));
+      assert.equal(result._tag, mode === "present" ? "Success" : "Failure");
     }).pipe(Effect.provide(NodeServices.layer), Effect.scoped),
 );
