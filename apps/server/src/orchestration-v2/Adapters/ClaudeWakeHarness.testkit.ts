@@ -102,7 +102,7 @@ export const makeWakeHarnessWithOptions = (options?: {
             .observe(() => {
               continuationRequests.push(request);
             })
-            .pipe(Effect.andThen(Queue.offer(continuationReceipts, request))),
+            .pipe(Effect.andThen(Queue.offer(continuationReceipts, request)), Effect.asVoid),
       },
       queryRunner: {
         allocateSessionId:

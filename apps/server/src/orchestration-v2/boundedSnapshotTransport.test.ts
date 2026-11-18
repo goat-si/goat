@@ -48,6 +48,7 @@ import * as OrchestrationEventStore from "../persistence/OrchestrationEventStore
 import * as ProjectEnrichmentService from "../project/ProjectEnrichmentService.ts";
 import { subscribeOrchestrationV2Thread } from "../ws.ts";
 import * as OrchestrationHttp from "./http.ts";
+import * as RuntimeIdentity from "../runtimeIdentity.ts";
 import * as ProjectionStore from "./ProjectionStore.ts";
 import * as ProjectStore from "./ProjectStore.ts";
 import * as ThreadManagementService from "./ThreadManagementService.ts";
@@ -453,6 +454,9 @@ const withHttp = <A>(use: (get: (path: string) => Promise<Response>) => Promise<
     const context = yield* Effect.context<Layer.Success<typeof TestLayer>>();
     const appLayer = HttpApiBuilder.layer(OrchestrationApi).pipe(
       Layer.provide(OrchestrationHttp.layer),
+      Layer.provide(
+        Layer.succeed(RuntimeIdentity.RuntimeIdentity, { instanceId: "serving-instance" }),
+      ),
       Layer.provide(ShellSnapshotLoads.layer),
       Layer.provide(auth),
       Layer.provide(Layer.succeedContext(context)),

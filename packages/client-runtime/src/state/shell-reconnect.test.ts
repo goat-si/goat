@@ -106,8 +106,10 @@ it.effect("opts in to shell omissions and counts authoritative snapshots and rem
     });
     const snapshotLoader = ShellSnapshotLoader.ShellSnapshotLoader.of({
       load: (_prepared, options) =>
-        Ref.update(loadOptions, (all) => [...all, options]).pipe(
-          Effect.as(Option.some(LIVE_SHELL_SNAPSHOT)),
+        Ref.updateAndGet(loadOptions, (all) => [...all, options]).pipe(
+          Effect.map((all) =>
+            Option.some({ ...LIVE_SHELL_SNAPSHOT, instanceId: `server-${all.length}` }),
+          ),
         ),
     });
     const shellState = yield* makeEnvironmentShellState().pipe(

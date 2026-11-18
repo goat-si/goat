@@ -52,18 +52,25 @@ it.effect("cancels tracked setup before provider work is released", () =>
 );
 
 /** Launches a worktree whose cancellation watch fails once while the origin fetch is held. */
-const prepareAfterFailedWatch = (name: string, stopDuringRetry: boolean) =>
+const prepareAfterFailedWatch = (name: string, stopDuringRetry: boolean, beforePin = false) =>
   Effect.gen(function* () {
     const fetchEntered = yield* Deferred.make<void>();
     const allowFetch = yield* Deferred.make<void>();
     const failWatch = yield* Deferred.make<void>();
     const watchFailed = yield* Deferred.make<void>();
+    const setupEntered = yield* Deferred.make<void>();
+    const allowSetup = yield* Deferred.make<void>();
     let watchFailures = 1;
     const harness = makeHarness({
       fetchWorktreeBaseCommit: () =>
         Deferred.succeed(fetchEntered, undefined).pipe(
           Effect.andThen(Deferred.await(allowFetch)),
           Effect.as({ commitSha: "remote-main-sha", remoteRefName: "origin/main" }),
+        ),
+      runSetup: () =>
+        Deferred.succeed(setupEntered, undefined).pipe(
+          Effect.andThen(Deferred.await(allowSetup)),
+          Effect.as({ status: "no-script" as const }),
         ),
       launchEvents: (real) => (input) =>
         input?.eventType === "run.updated" && watchFailures-- > 0
@@ -90,6 +97,10 @@ const prepareAfterFailedWatch = (name: string, stopDuringRetry: boolean) =>
       yield* Deferred.await(fetchEntered);
       yield* Deferred.succeed(failWatch, undefined);
       yield* Deferred.await(watchFailed);
+      if (!beforePin) {
+        yield* Deferred.succeed(allowFetch, undefined);
+        yield* Deferred.await(setupEntered);
+      }
       if (stopDuringRetry) {
         yield* threads.dispatch({
           type: "run.interrupt",
@@ -99,6 +110,7 @@ const prepareAfterFailedWatch = (name: string, stopDuringRetry: boolean) =>
         });
       }
       yield* Deferred.succeed(allowFetch, undefined);
+      yield* Deferred.succeed(allowSetup, undefined);
       const finished = yield* tracker.stream(launched.threadId).pipe(
         Stream.filter((snapshot) => snapshot !== null && snapshot.phase !== "running"),
         Stream.runHead,
@@ -107,6 +119,7 @@ const prepareAfterFailedWatch = (name: string, stopDuringRetry: boolean) =>
       return {
         phase,
         projection: yield* threads.getThreadProjection(launched.threadId),
+        created: harness.createWorktree.mock.calls.length,
         removed: harness.removeWorktree.mock.calls.length,
       };
     }).pipe(Effect.provide(harness.layer));
@@ -128,5 +141,15 @@ it.effect("keeps the checkout when the run stops while its failed watch waits to
     assert.equal(result.projection.runs[0]?.status, "interrupted");
     assert.equal(result.projection.thread.worktreePath, "/repo-worktrees/feature");
     assert.equal(result.removed, 0);
+  }),
+);
+
+it.effect("does not create a checkout when the run stops before accepting the fetched base", () =>
+  Effect.gen(function* () {
+    const result = yield* prepareAfterFailedWatch("stop-before-base-pin", true, true);
+    assert.equal(result.phase, "cancelled");
+    assert.equal(result.projection.runs[0]?.status, "interrupted");
+    assert.isNull(result.projection.thread.worktreePath);
+    assert.equal(result.created, 0);
   }),
 );

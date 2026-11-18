@@ -325,80 +325,14 @@ export const OrchestrationV2ContextTransfer = Schema.Struct({
 });
 export type OrchestrationV2ContextTransfer = typeof OrchestrationV2ContextTransfer.Type;
 
-export const OrchestrationV2CloudSourceRestriction = Schema.Literals([
-  "published-ref",
-  "clean-pushed-sha",
-  "project-folder",
-]);
-export type OrchestrationV2CloudSourceRestriction =
-  typeof OrchestrationV2CloudSourceRestriction.Type;
-
-export const OrchestrationV2SessionCapabilities = Schema.Struct({
-  sourceRestriction: Schema.optional(OrchestrationV2CloudSourceRestriction).pipe(
-    Schema.withDecodingDefault(Effect.succeed("published-ref" as const)),
-  ),
-  executionLocation: Schema.optional(Schema.Literals(["local", "cloud"])).pipe(
-    Schema.withDecodingDefault(Effect.succeed("local" as const)),
-  ),
-  followUp: Schema.optional(
-    Schema.Struct({
-      supported: Schema.Boolean,
-      reason: Schema.optional(Schema.String),
-    }),
-  ).pipe(Schema.withDecodingDefault(Effect.succeed({ supported: true }))),
-  supportsMultipleProviderThreadsPerSession: Schema.Boolean,
-  supportsModelSwitchInSession: Schema.Boolean,
-  supportsProviderSwitchingViaHandoff: Schema.Boolean,
-  supportsRuntimeModeSwitchInSession: Schema.Boolean,
-  pendingRequestsSurviveRestart: Schema.Boolean,
-});
-export type OrchestrationV2SessionCapabilities = typeof OrchestrationV2SessionCapabilities.Type;
-
-export const OrchestrationV2ThreadCapabilities = Schema.Struct({
-  canCreateEmptyThread: Schema.Boolean,
-  canReadThreadSnapshot: Schema.Boolean,
-  canRollbackThread: Schema.Boolean,
-  canForkThread: Schema.Boolean,
-  canForkFromTurn: Schema.Boolean,
-  canForkFromSubagentThread: Schema.Boolean,
-  exposesNativeThreadId: Schema.Boolean,
-  /** Native fork starts the new provider thread in the target thread's cwd. */
-  forkHonorsTargetCwd: Schema.optionalKey(Schema.Boolean),
-});
-export type OrchestrationV2ThreadCapabilities = typeof OrchestrationV2ThreadCapabilities.Type;
-
-export const OrchestrationV2TurnCapabilities = Schema.Struct({
-  supportsNativeGoals: Schema.optional(Schema.Boolean),
-  exposesNativeTurnId: Schema.Boolean,
-  emitsTurnStarted: Schema.Boolean,
-  emitsTurnCompleted: Schema.Boolean,
-  supportsInterrupt: Schema.Boolean,
-  supportsActiveSteering: Schema.Boolean,
-  // Some native steering mechanisms cancel pending tools before consuming the message.
-  activeSteeringInterruptsTools: Schema.optional(Schema.Boolean),
-  // Some take text only, so a steer with attachments restarts the turn instead.
-  activeSteeringAcceptsAttachments: Schema.optional(Schema.Boolean),
-  // Only where a steer leaves a running automatic compaction intact; otherwise clients queue.
-  activeSteeringDuringCompaction: Schema.optional(Schema.Boolean),
-  supportsSteeringByInterruptRestart: Schema.Boolean,
-  supportsQueuedMessages: Schema.Boolean,
-  terminalStatusQuality: Schema.Literals(["strong", "weak", "none"]),
-});
-export type OrchestrationV2TurnCapabilities = typeof OrchestrationV2TurnCapabilities.Type;
-
-export const OrchestrationV2StreamingCapabilities = Schema.Struct({
-  streamsAssistantText: Schema.Boolean,
-  streamsReasoning: Schema.Boolean,
-  streamsToolOutput: Schema.Boolean,
-  streamsPlanText: Schema.Boolean,
-  emitsMessageCompleted: Schema.Boolean,
-});
-export type OrchestrationV2StreamingCapabilities = typeof OrchestrationV2StreamingCapabilities.Type;
-
 export * from "./providerCapabilityParts.ts";
 export * from "./assistantMessagePhase.ts";
 import { AssistantMessagePhase } from "./assistantMessagePhase.ts";
 import {
+  OrchestrationV2SessionCapabilities,
+  OrchestrationV2StreamingCapabilities,
+  OrchestrationV2ThreadCapabilities,
+  OrchestrationV2TurnCapabilities,
   OrchestrationV2ToolCapabilities,
   OrchestrationV2ApprovalCapabilities,
   OrchestrationV2PlanningCapabilities,
@@ -974,12 +908,11 @@ const PendingBackgroundTaskFields = {
   description: Schema.optional(TrimmedNonEmptyString),
   /** The subagent task that started this work and waits on it. */
   parentTaskId: Schema.optional(TrimmedNonEmptyString),
-  /** Native id of the turn item that started this work, when it is not `taskId`. */
+  /** Native turn item id when it differs from `taskId`. */
   nativeItemId: Schema.optional(TrimmedNonEmptyString),
-  /**
-   * The agent declared it resumes when this work ends, so the thread holds like it does for a
-   * subagent. Only the agent knows whether a command is a wait or a dev server it left running.
-   */
+  /** The run under which the task first appeared, stamped by the projection. */
+  runId: Schema.optional(RunId),
+  /** The agent declared it will resume when this work ends, so the thread waits for it. */
   awaited: Schema.optional(Schema.Literal(true)),
 };
 
@@ -2213,9 +2146,26 @@ export const OrchestrationV2ShellSnapshot = Schema.Struct({
 });
 export type OrchestrationV2ShellSnapshot = typeof OrchestrationV2ShellSnapshot.Type;
 
+export const OrchestrationV2ShellHttpSnapshot = OrchestrationV2ShellSnapshot.mapFields(
+  (fields) => ({
+    ...fields,
+    instanceId: Schema.optionalKey(TrimmedNonEmptyString),
+    projectIdentities: Schema.optionalKey(Schema.String),
+  }),
+);
+export type OrchestrationV2ShellHttpSnapshot = typeof OrchestrationV2ShellHttpSnapshot.Type;
+export const OrchestrationV2ShellResumable = Schema.Struct({
+  resumable: Schema.Literal(true),
+  instanceId: Schema.optionalKey(TrimmedNonEmptyString),
+});
+export type OrchestrationV2ShellResumable = typeof OrchestrationV2ShellResumable.Type;
+
 export const OrchestrationV2ShellStreamItem = Schema.Union([
   Schema.Struct({
     kind: Schema.Literal("synchronized"),
+  }),
+  Schema.Struct({
+    kind: Schema.Literal("snapshot-required"),
   }),
   Schema.Struct({
     kind: Schema.Literal("snapshot"),
@@ -3767,6 +3717,9 @@ export type OrchestrationV2GetThreadProjectionInput =
 
 export const OrchestrationV2SubscribeShellInput = Schema.Struct({
   afterSequence: Schema.optionalKey(NonNegativeInt),
+  /** Let the socket refuse an unreplayable cursor so the client can load it over HTTP. */
+  httpSnapshotFallback: Schema.optionalKey(Schema.Literal(true)),
+  knownProjectIdentities: Schema.optionalKey(Schema.String),
   requestCompletionMarker: Schema.optionalKey(Schema.Boolean),
   /**
    * Snapshots leave out idle subagent children; read them with `getThreadFamily`. Send only to

@@ -56,6 +56,7 @@ function harness(reply: (number: number) => Response = () => Response.json({ tex
   const authorization = RemoteEnvironmentAuthorization.of({
     authorizeBearer: () => Effect.die("Unexpected bearer authorization"),
     authorizeDpop: () => Effect.die("Unexpected WebSocket authorization"),
+    rememberCheckedDescriptor: () => Effect.void,
     authorizeDpopHttp: (input) =>
       Effect.sync(() => {
         authorizations.push(input);

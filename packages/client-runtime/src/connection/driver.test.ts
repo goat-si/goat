@@ -11,6 +11,7 @@ import * as Fiber from "effect/Fiber";
 import * as Layer from "effect/Layer";
 import * as Option from "effect/Option";
 import * as TestClock from "effect/testing/TestClock";
+import { RemoteEnvironmentAuthorization } from "../authorization/service.ts";
 import * as RpcHttp from "../rpc/http.ts";
 
 import * as ClientCapabilities from "../platform/capabilities.ts";
@@ -64,6 +65,9 @@ function driverWith(prepare: Resolver.ConnectionResolver["Service"]["prepare"]) 
   return Driver.make.pipe(
     Effect.provide(
       Layer.mergeAll(
+        Layer.mock(RemoteEnvironmentAuthorization)({
+          rememberCheckedDescriptor: () => Effect.void,
+        }),
         Layer.mock(Resolver.ConnectionResolver)({ prepare }),
         Layer.mock(RpcSession.RpcSessionFactory)({ connect: () => Effect.succeed(session) }),
         bearerOnly,
@@ -109,6 +113,9 @@ function refusedSocket(options: {
   const driver = Driver.make.pipe(
     Effect.provide(
       Layer.mergeAll(
+        Layer.mock(RemoteEnvironmentAuthorization)({
+          rememberCheckedDescriptor: () => Effect.void,
+        }),
         Layer.mock(Resolver.ConnectionResolver)({
           prepare: () => Effect.succeed(options.prepared ?? cookieTab),
         }),
@@ -431,6 +438,9 @@ describe("live host checks", () => {
         const driver = yield* Driver.make.pipe(
           Effect.provide(
             Layer.mergeAll(
+              Layer.mock(RemoteEnvironmentAuthorization)({
+                rememberCheckedDescriptor: () => Effect.void,
+              }),
               bearerOnly,
               Layer.mock(Resolver.ConnectionResolver)({}),
               Layer.mock(RpcSession.RpcSessionFactory)({}),
@@ -483,6 +493,9 @@ it.effect("identity mismatch -> no Authorization header sent, kept", () =>
       const driver = yield* Driver.make.pipe(
         Effect.provide(
           Layer.mergeAll(
+            Layer.mock(RemoteEnvironmentAuthorization)({
+              rememberCheckedDescriptor: () => Effect.void,
+            }),
             bearerOnly,
             Layer.mock(Resolver.ConnectionResolver)({ prepare: () => Effect.succeed(bearer) }),
             Layer.mock(RpcSession.RpcSessionFactory)({ connect: () => Effect.succeed(session) }),
@@ -524,6 +537,9 @@ it.effect("SSH lease opens a probe socket without re-preparing", () =>
       const driver = yield* Driver.make.pipe(
         Effect.provide(
           Layer.mergeAll(
+            Layer.mock(RemoteEnvironmentAuthorization)({
+              rememberCheckedDescriptor: () => Effect.void,
+            }),
             bearerOnly,
             Layer.mock(Resolver.ConnectionResolver)({
               prepare: () =>
