@@ -23,13 +23,8 @@ import { GOAT_MIGRATION_NAMES, reconcileGoatMigrationIds } from "./reconcileGoat
 import {
   currentRow,
   fresh,
-  shiftMigrations,
-  hubFloorRow,
-  scopeVersionRow,
-  compactMoveReceiptsRow,
-  originCatchupRow,
-  saveSuggestionsRow,
-  threadLineageRow,
+  laterGoatRows,
+  shiftedGoatNames,
   history,
   isDatabaseNewerThanBuildError,
   schema,
@@ -90,7 +85,7 @@ const onRestart = <A, E>(
 /** The build before cycle 261114: no upstream 080-089, GOAT ten ids lower. */
 const upstream80Names = new Set(UPSTREAM_80S.map(([, name]) => name));
 const previousEntries = migrationEntries.flatMap(([id, name, migration]) =>
-  upstream80Names.has(name) || id >= threadLineageRow[0]
+  upstream80Names.has(name) || id > currentRow("DisposableMachineEnrollment")[0]
     ? []
     : [[GOAT_MIGRATION_NAMES.has(name) ? id - 10 : id, name, migration] as const],
 );
@@ -238,7 +233,7 @@ describe.each(databases)("the GOAT id shift on a %s database", (_kind, database)
     return Effect.gen(function* () {
       yield* seedOldGoatLedger(147);
       const before = yield* history;
-      yield* killWhenRecording(shiftMigrations.at(-1) ?? "");
+      yield* killWhenRecording(shiftedGoatNames.at(-1) ?? "");
       assert.isTrue((yield* Effect.exit(runMigrations()))._tag === "Failure");
       assert.deepStrictEqual(yield* history, before);
       yield* reviveAfterKill;
@@ -255,19 +250,14 @@ describe.each(databases)("the GOAT id shift on a %s database", (_kind, database)
       const data = yield* userData;
       yield* killWhenRecording("ProjectionMessageSearchText");
       assert.isTrue((yield* Effect.exit(runMigrations()))._tag === "Failure");
-      assert.deepStrictEqual(yield* goatRows, shiftMigrations.map(currentRow));
+      assert.deepStrictEqual(yield* goatRows, shiftedGoatNames.map(currentRow));
       assert.deepStrictEqual(yield* recordedUpstream80s, UPSTREAM_80S.slice(0, 1));
       assert.isTrue(yield* hasPendingMigrations());
       yield* reviveAfterKill;
       yield* previousBuildRefuses;
       assert.deepStrictEqual(yield* onRestart(reopen, runMigrations()), [
         ...UPSTREAM_80S.slice(1),
-        threadLineageRow,
-        saveSuggestionsRow,
-        hubFloorRow,
-        scopeVersionRow,
-        compactMoveReceiptsRow,
-        originCatchupRow,
+        ...laterGoatRows,
       ]);
       assert.deepStrictEqual(yield* onRestart(reopen, snapshot), yield* fresh);
       assert.deepStrictEqual(yield* onRestart(reopen, userData), data);
@@ -287,12 +277,7 @@ describe.each(databases)("the GOAT id shift on a %s database", (_kind, database)
       yield* previousBuildRefuses;
       assert.deepStrictEqual(yield* onRestart(reopen, runMigrations()), [
         ...UPSTREAM_80S.slice(3),
-        threadLineageRow,
-        saveSuggestionsRow,
-        hubFloorRow,
-        scopeVersionRow,
-        compactMoveReceiptsRow,
-        originCatchupRow,
+        ...laterGoatRows,
       ]);
       assert.deepStrictEqual(yield* onRestart(reopen, snapshot), yield* fresh);
     }).pipe(provide);
@@ -316,12 +301,7 @@ describe.each(databases)("the GOAT id shift on a %s database", (_kind, database)
       yield* previousBuildRefuses;
       assert.deepStrictEqual(yield* onRestart(reopen, runMigrations()), [
         ...UPSTREAM_80S.slice(5),
-        threadLineageRow,
-        saveSuggestionsRow,
-        hubFloorRow,
-        scopeVersionRow,
-        compactMoveReceiptsRow,
-        originCatchupRow,
+        ...laterGoatRows,
       ]);
       assert.deepStrictEqual(yield* onRestart(reopen, snapshot), yield* fresh);
     }).pipe(provide);
@@ -388,19 +368,14 @@ describe.each(databases)("the GOAT id shift on a %s database", (_kind, database)
       yield* sql`DELETE FROM effect_sql_migrations WHERE migration_id = 30`;
       yield* killWhenRecording("ProjectionMessageSearchText");
       assert.isTrue((yield* Effect.exit(runMigrations()))._tag === "Failure");
-      assert.deepStrictEqual(yield* goatRows, shiftMigrations.map(currentRow));
+      assert.deepStrictEqual(yield* goatRows, shiftedGoatNames.map(currentRow));
       assert.deepStrictEqual(yield* recordedUpstream80s, UPSTREAM_80S.slice(0, 1));
       assert.isFalse((yield* history).some(([recordedId]) => recordedId === 30));
       yield* reviveAfterKill;
       yield* previousBuildRefuses;
       assert.deepStrictEqual(yield* onRestart(reopen, runMigrations()), [
         ...UPSTREAM_80S.slice(1),
-        threadLineageRow,
-        saveSuggestionsRow,
-        hubFloorRow,
-        scopeVersionRow,
-        compactMoveReceiptsRow,
-        originCatchupRow,
+        ...laterGoatRows,
       ]);
       const expected = yield* fresh;
       assert.deepStrictEqual(yield* onRestart(reopen, snapshot), {
@@ -416,7 +391,7 @@ describe.each(databases)("the GOAT id shift on a %s database", (_kind, database)
       Effect.asVoid(runMigrations()),
       [61, 61],
       "61_PullRequestReviewGuides",
-      originCatchupRow[0],
+      currentRow("MemoryOriginCatchup")[0],
     ],
     [
       "a ledger from before the shift that lost row 72",

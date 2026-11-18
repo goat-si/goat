@@ -224,9 +224,50 @@ these may look like success to a local program.
 - **Only the `pen-*` fallback guards the typed name.** Unix ssh replaces `%n` with the name as typed and runs
   ProxyCommand in a shell, and before OpenSSH 9.6 it accepts any name. The fallback single-quotes `%n` and its
   `"!*'*"` pattern skips names holding a quote, so the name reaches `pen pipe` as one word. Member blocks match an
-  exact, validated name and keep `%n` bare, which is the form GOAT's route check (`penSshRoute.ts`) accepts.
+  exact, validated name and keep `%n` bare, which is the form GOAT's route check (`packages/ssh/src/penRoute.ts`) accepts.
   Win32-OpenSSH starts ProxyCommand without a shell and splits a name with spaces into several arguments, so
   `pen pipe` reads flags only before the node.
+
+## GOAT follows Pen membership
+
+Every member's GOAT shows the other members: the desktop adds one managed SSH route per member
+(`packages/client-runtime/src/connection/penDiscovery.ts`, admitted in desktop main by
+`apps/desktop/src/pen/DesktopPenMembers.ts`), and a headless server adds one hub registration per
+member (`apps/server/src/hubNodes/PenHubNodes.ts`). Both ride ssh over Pen's exact `pen-<nodeId>`
+alias. The Pen-native path (`apps/server/src/pen`, `PEN_TARGET_ENABLED`) stays closed.
+
+- **The member list proposes, it never authorizes.** `watch.snapshot` says who to look at. A route
+  is used only when `inspectPenExactAlias` (`packages/ssh/src/penAlias.ts`) finds the alias in
+  Pen's own config pinning that node id and Noise key, with strict host keys from Pen's known_hosts
+  and nothing global that could accept another key. The check is repeated in desktop main and in the
+  server's SSH manager guard at every use, because the renderer and the snapshot are not trusted
+  with it.
+- **A dead watch is not a departure, and neither is an unreadable alias.** Only Pen's `left`
+  marker, a list without this machine, or an alias that now pins another key removes a route. A
+  closed socket, a skipped generation, more than 1024 members or an `ssh -G` that did not answer
+  is "unknown": what exists stays, nothing new is added and no credential is issued.
+- **Pen admits eight snapshot watchers per machine.** The desktop's main process and each GOAT
+  server take one; a dev server that refuses ssh takes none. A refused watch reads as
+  `unavailable`, which closes that server's member fence. One watch per machine is not built.
+- **Managed use is existing-only.** `installation: "existing-only"` reaches every launch script
+  (`packages/ssh/src/existingOnly.ts`): it requires an installed runtime, never upgrades, adopts or
+  refreshes, and refuses instead of publishing a runner wrapper whose bytes differ. Only a person's
+  Set up on the desktop runs without it. On a hub a managed alias is never set up at all, and
+  every manager method that opens ssh is admitted first (`apps/server/src/sshRemote/penManagedSsh.ts`).
+- **A hub's MCP sessions on a member are ordinary sessions.** Only the client session the hub
+  proxy uses is issued as a member session. Dispatch and fleet sessions (`mcp-client`, 12 hours)
+  are not fenced by the member after the hub leaves; they end by expiry.
+- **A member session must be refused by a build that cannot fence it.** The session is issued in a
+  form older builds reject (`--pen-member`, request kind `pen-member-session`) and stored with
+  `revoked_at` set, so a server downgraded to a build without `PenMemberSessionFence` reads the
+  row as revoked. On builds with the fence its real revocation is `pen_member_revoked_at`, and the
+  fence admits it only while the issuer's node id is in this machine's live member list.
+- **A fenced session is suspended, not removed.** While Pen is down the fence is closed and sockets
+  drop, but the session's scopes stay so it works again when the list returns. Only a member that
+  left has its sessions revoked.
+- **Ownership is the optional `pen` binding, never the alias or `kind`.** A hub row a person added
+  for the same alias is never touched, and an older client must still decode the node list, so the
+  binding rides as an optional key on `addedBy` (kind stays `import`) and on the route.
 
 ## Windows
 

@@ -5,6 +5,17 @@ import * as SqlClient from "effect/sql/SqlClient";
 
 export const FIRST_V2_MIGRATION_ID = 55;
 
+const PEN_MEMBER_MIGRATION_ID = 158;
+const PEN_MEMBER_MIGRATION_NAME = "AuthSessionPenMember";
+const prePenMemberMemoryNames = [
+  "MemoryThreadLineage",
+  "MemorySaveSuggestions",
+  "MemoryHubFloor",
+  "MemoryScopeVersion",
+  "MemoryCompactMoveReceipts",
+  "MemoryOriginCatchup",
+] as const;
+
 /**
  * GOAT's own migrations, which sit after upstream's in `migrationEntries`. An upstream sync that
  * adds ids GOAT already used moves these up; the names stay stable.
@@ -78,12 +89,8 @@ export const GOAT_MIGRATION_NAMES: ReadonlySet<string> = new Set([
   "DisposableMachines",
   "DisposableMachineRequests",
   "DisposableMachineEnrollment",
-  "MemoryThreadLineage",
-  "MemorySaveSuggestions",
-  "MemoryHubFloor",
-  "MemoryScopeVersion",
-  "MemoryCompactMoveReceipts",
-  "MemoryOriginCatchup",
+  PEN_MEMBER_MIGRATION_NAME,
+  ...prePenMemberMemoryNames,
 ]);
 
 type MigrationEntry<E> = readonly [
@@ -91,6 +98,31 @@ type MigrationEntry<E> = readonly [
   name: string,
   migration: Effect.Effect<unknown, E, SqlClient.SqlClient>,
 ];
+
+const findPenMemberInsertion = <E>(
+  entries: ReadonlyArray<MigrationEntry<E>>,
+  history: ReadonlyArray<{ readonly migration_id: number; readonly name: string }>,
+) => {
+  // Only a contiguous prefix of the original six memory rows can occupy the old ids.
+  const tail = history.filter((row) => row.migration_id >= PEN_MEMBER_MIGRATION_ID);
+  if (
+    tail.length === 0 ||
+    !tail.every(({ migration_id, name }) => {
+      const index = migration_id - PEN_MEMBER_MIGRATION_ID;
+      return index < tail.length && prePenMemberMemoryNames[index] === name;
+    })
+  ) {
+    return undefined;
+  }
+  const byName = new Map<string, MigrationEntry<E>>(entries.map((entry) => [entry[1], entry]));
+  const insertion = byName.get(PEN_MEMBER_MIGRATION_NAME);
+  return insertion?.[0] === PEN_MEMBER_MIGRATION_ID &&
+    prePenMemberMemoryNames.every(
+      (name, index) => byName.get(name)?.[0] === PEN_MEMBER_MIGRATION_ID + index + 1,
+    )
+    ? insertion
+    : undefined;
+};
 
 /** Whether a recorded GOAT migration sits off its current id, so reconciliation would move it. */
 export const goatMigrationIdsMove = <E>(
@@ -176,12 +208,10 @@ export const skippedV2Migrations = <E>(
 /**
  * Read-only preflight: preview reconciliation must not mutate incompatible memory sandboxes.
  *
- * An upstream sync moves every recorded GOAT migration by the same distance, so a released ledger
- * keeps one offset between its recorded and current GOAT ids and reconciliation can move it. The
- * migrator also runs them in order, so a released ledger that recorded a memory migration recorded
- * every GOAT migration before it. A memory ledger with mixed offsets, a gap before a memory row, or
- * a memory name this build does not know came from an unreleased layout, and its tables may not
- * match the current schema.
+ * An upstream sync moves every recorded GOAT migration by the same distance. The memory
+ * reliability branch also had a known layout where Pen member auth shifts only the memory tail.
+ * Other mixed offsets, gaps before memory rows, and unknown memory names may have incompatible
+ * schema.
  */
 export const assertMemoryMigrationsCompatible = Effect.fn("assertMemoryMigrationsCompatible")(
   function* <E>(entries: ReadonlyArray<MigrationEntry<E>>) {
@@ -197,12 +227,16 @@ export const assertMemoryMigrationsCompatible = Effect.fn("assertMemoryMigration
         `
       : [];
     const currentIds = new Map(entries.map(([id, name]) => [name, id]));
+    const insertion = findPenMemberInsertion(entries, history);
     const memoryRows = history.filter((row) => row.name.startsWith("Memory"));
     const goatOffsets = new Set(
       history.flatMap((row) => {
         const currentId = currentIds.get(row.name);
         const goatRow = GOAT_MIGRATION_NAMES.has(row.name) || row.name.startsWith("Memory");
-        return goatRow && currentId !== undefined ? [row.migration_id - currentId] : [];
+        const adjustment = insertion !== undefined && row.migration_id >= insertion[0] ? 1 : 0;
+        return goatRow && currentId !== undefined
+          ? [row.migration_id + adjustment - currentId]
+          : [];
       }),
     );
     const recordedNames = new Set(history.map((row) => row.name));
@@ -212,7 +246,10 @@ export const assertMemoryMigrationsCompatible = Effect.fn("assertMemoryMigration
         memoryId !== undefined &&
         entries.some(
           ([id, name]) =>
-            GOAT_MIGRATION_NAMES.has(name) && id < memoryId && !recordedNames.has(name),
+            GOAT_MIGRATION_NAMES.has(name) &&
+            id < memoryId &&
+            name !== insertion?.[1] &&
+            !recordedNames.has(name),
         )
       );
     });
@@ -245,33 +282,38 @@ const readHistory = Effect.gen(function* () {
   `;
 });
 
+const runAndRecordMigration = Effect.fn("reconcileGoatMigrationIds.runAndRecordMigration")(
+  function* <E>([id, name, migration]: MigrationEntry<E>) {
+    const sql = yield* SqlClient.SqlClient;
+    yield* migration.pipe(
+      Effect.mapError(
+        (cause) =>
+          new Migrator.MigrationError({
+            kind: "Failed",
+            message: `Migration ${id}_${name} failed: ${String(cause)}`,
+          }),
+      ),
+    );
+    yield* sql`INSERT INTO effect_sql_migrations (migration_id, name) VALUES (${id}, ${name})`;
+    return [id, name] as const;
+  },
+);
+
 /** Runs the next displaced upstream migration and records it, in the caller's transaction. */
 const runNextDisplaced = Effect.fn("reconcileGoatMigrationIds.runNextDisplaced")(function* <E>(
   entries: ReadonlyArray<MigrationEntry<E>>,
   history: ReadonlyArray<{ readonly migration_id: number; readonly name: string }>,
 ) {
-  const sql = yield* SqlClient.SqlClient;
   const [next] = displacedUpstreamMigrations(entries, history);
   if (next === undefined) return undefined;
-  const [id, name, migration] = next;
-  yield* migration.pipe(
-    Effect.mapError(
-      (cause) =>
-        new Migrator.MigrationError({
-          kind: "Failed",
-          message: `Migration ${id}_${name} failed: ${String(cause)}`,
-        }),
-    ),
-  );
-  yield* sql`INSERT INTO effect_sql_migrations (migration_id, name) VALUES (${id}, ${name})`;
-  return [id, name] as const;
+  return yield* runAndRecordMigration(next);
 });
 
 /**
  * Moves recorded GOAT migrations to their current ids, refusing before any write when one would
- * land on an id another migration recorded. The first displaced upstream migration commits with
- * the move: a build from before the shift, reading a moved ledger that holds only names it knows,
- * would move it back and start; with that name recorded it refuses as a newer database (exit 79).
+ * land on an id another migration recorded. The first displaced migration commits with the move:
+ * a build from before the shift would otherwise move the rows back and start. Once it sees the
+ * new migration name, it refuses as a newer database (exit 79).
  */
 const moveGoatLedger = Effect.fn("reconcileGoatMigrationIds.moveGoatLedger")(function* <E>(
   entries: ReadonlyArray<MigrationEntry<E>>,
@@ -329,6 +371,8 @@ const moveGoatLedger = Effect.fn("reconcileGoatMigrationIds.moveGoatLedger")(fun
   for (const row of goatRows) {
     yield* sql`INSERT INTO effect_sql_migrations (migration_id, name) VALUES (${row.migration_id}, ${row.name})`;
   }
+  const insertion = findPenMemberInsertion(entries, history);
+  if (insertion !== undefined) return [yield* runAndRecordMigration(insertion)];
   const first = yield* runNextDisplaced(entries, moved);
   return first === undefined ? [] : [first];
 });
