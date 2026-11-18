@@ -121,6 +121,8 @@ export const ExecutionEnvironmentCapabilities = Schema.Struct({
       asideImport: Schema.optionalKey(Schema.Boolean),
     }),
   ),
+  shellThreadFamilies: Schema.optionalKey(Schema.Boolean),
+  shellOlderSettled: Schema.optionalKey(Schema.Boolean),
   repositoryIdentity: Schema.Boolean.pipe(Schema.withDecodingDefault(Effect.succeed(false))),
   connectionProbe: Schema.optionalKey(Schema.Boolean),
   attachmentUploads: Schema.optionalKey(Schema.Boolean),

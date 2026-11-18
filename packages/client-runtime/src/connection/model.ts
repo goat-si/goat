@@ -1,5 +1,6 @@
 import {
   type DesktopSshPreparationProgress,
+  type ExecutionEnvironmentDescriptor,
   type SshHostStatus,
   EnvironmentId,
 } from "@goat/contracts";
@@ -221,6 +222,7 @@ export interface PreparedConnection {
   readonly socketUrl: string;
   readonly httpAuthorization: PreparedHttpAuthorization | null;
   readonly target: ConnectionTarget;
+  readonly descriptor?: ExecutionEnvironmentDescriptor;
 }
 
 export type SupervisorConnectionPhase =

@@ -84,6 +84,29 @@ function routeHostname(route: ConnectionRoute): string | null {
   }
 }
 
+function directAddressKind(hostname: string, tailscale = false) {
+  if (isLocalLoopbackHost(hostname)) return "loopback";
+  if (tailscale || isTailnetHost(hostname)) return "tailnet";
+  if (isSharedAddressSpaceHost(hostname)) return "vpn";
+  return isPrivateNetworkHost(hostname) ? "lan" : "public";
+}
+
+export function routeKeepsItsHost(route: ConnectionRoute): boolean {
+  return (
+    routeHttpBaseUrl(route)?.startsWith("https:") === true ||
+    connectionRouteKind(route) === "loopback"
+  );
+}
+
+export function isNearbyAddress(httpBaseUrl: string): boolean {
+  try {
+    const kind = directAddressKind(new URL(httpBaseUrl).hostname);
+    return kind === "loopback" || kind === "lan";
+  } catch {
+    return false;
+  }
+}
+
 export function connectionRouteKind(route: ConnectionRoute): ConnectionRouteKind {
   switch (route.target._tag) {
     case "RelayConnectionTarget":
@@ -96,13 +119,11 @@ export function connectionRouteKind(route: ConnectionRoute): ConnectionRouteKind
     case "BearerConnectionTarget": {
       const hostname = routeHostname(route);
       if (hostname === null) return "public";
-      if (isLocalLoopbackHost(hostname)) return "loopback";
       const profile = Option.getOrNull(route.profile);
-      const tailscale =
-        profile?._tag === "BearerConnectionProfile" && profile.network === "tailscale";
-      if (tailscale || isTailnetHost(hostname)) return "tailnet";
-      if (isSharedAddressSpaceHost(hostname)) return "vpn";
-      return isPrivateNetworkHost(hostname) ? "lan" : "public";
+      return directAddressKind(
+        hostname,
+        profile?._tag === "BearerConnectionProfile" && profile.network === "tailscale",
+      );
     }
   }
 }

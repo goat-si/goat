@@ -29,7 +29,13 @@ import {
   OLDER_THREAD_USER_TURN_LIMIT,
 } from "./threadHistoryPaging.ts";
 import * as ThreadManagementService from "./ThreadManagementService.ts";
-import { buildActiveShellSnapshot, shellSnapshotForSubscriber } from "./ShellStream.ts";
+import {
+  buildActiveShellSnapshot,
+  loadShellUnlessResumable,
+  projectIdentitiesDigest,
+  shellSnapshotForSubscriber,
+} from "./ShellStream.ts";
+import * as OrchestrationEventStore from "../persistence/OrchestrationEventStore.ts";
 import * as ShellSnapshotLoads from "./ShellSnapshotLoads.ts";
 import { boundedSnapshotResponseFields } from "./ThreadStream.ts";
 import { projectThreadProjectionForWire } from "./WireProjection.ts";
@@ -51,6 +57,7 @@ export const layer = HttpApiBuilder.group(
   "orchestration",
   Effect.fnUntraced(function* (handlers) {
     const shellLoads = yield* ShellSnapshotLoads.ShellSnapshotLoads;
+    const events = yield* OrchestrationEventStore.OrchestrationEventStore;
     const environment = yield* ServerEnvironment.ServerEnvironmentIdentity;
     const threadManagement = yield* ThreadManagementService.ThreadManagementService;
     const projectEnrichment = yield* ProjectEnrichmentService.ProjectEnrichmentService;
@@ -87,7 +94,7 @@ export const layer = HttpApiBuilder.group(
           parts.shellIndex,
         );
         const projects = yield* enrichProjectShells(base.projects);
-        return { ...snapshot, projects };
+        return { ...snapshot, projects, projectIdentities: projectIdentitiesDigest(projects) };
       },
     );
 
@@ -159,9 +166,17 @@ export const layer = HttpApiBuilder.group(
         Effect.fn("environment.orchestration.shellSnapshot")(function* (args) {
           yield* annotateEnvironmentRequest(args.endpoint.name);
           yield* requireEnvironmentScope(AuthOrchestrationReadScope);
-          return yield* loadShellSnapshot({
-            omitIdleSubagents: args.query.omitIdleSubagents === "1",
-            omitOlderSettled: args.query.omitOlderSettled === "1",
+          const resumeFrom =
+            args.query.resumeFrom === undefined || !/^\d+$/.test(args.query.resumeFrom)
+              ? Number.NaN
+              : Number(args.query.resumeFrom);
+          return yield* loadShellUnlessResumable({
+            events,
+            resumeFrom: Number.isSafeInteger(resumeFrom) ? resumeFrom : undefined,
+            loadSnapshot: loadShellSnapshot({
+              omitIdleSubagents: args.query.omitIdleSubagents === "1",
+              omitOlderSettled: args.query.omitOlderSettled === "1",
+            }),
           }).pipe(
             traceLocalHandlerWork,
             Effect.catch((cause) =>

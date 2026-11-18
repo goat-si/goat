@@ -1,6 +1,7 @@
 import {
   ORCHESTRATION_V2_WS_METHODS,
   type EnvironmentId,
+  type ExecutionEnvironmentDescriptor,
   type OrchestrationV2ShellSnapshot,
   type OrchestrationV2ShellStreamItem,
   type OrchestrationV2ThreadShell,
@@ -13,6 +14,7 @@ import * as DateTime from "effect/DateTime";
 import * as Cause from "effect/Cause";
 import * as Clock from "effect/Clock";
 import * as Effect from "effect/Effect";
+import * as Exit from "effect/Exit";
 import * as Fiber from "effect/Fiber";
 import * as Option from "effect/Option";
 import * as Queue from "effect/Queue";
@@ -20,10 +22,11 @@ import * as Ref from "effect/Ref";
 import * as Semaphore from "effect/Semaphore";
 import * as Stream from "effect/Stream";
 import * as SubscriptionRef from "effect/SubscriptionRef";
+import * as SynchronizedRef from "effect/SynchronizedRef";
 import { AsyncResult, Atom } from "effect/reactivity";
 
 import * as EnvironmentRegistry from "../connection/registry.ts";
-import { connectionProjectionPhase } from "../connection/model.ts";
+import { connectionProjectionPhase, type PreparedConnection } from "../connection/model.ts";
 import * as EnvironmentSupervisor from "../connection/supervisor.ts";
 import * as ConnectionWakeups from "../connection/wakeups.ts";
 import { safeErrorLogAttributes } from "../errors/safeLog.ts";
@@ -92,21 +95,70 @@ const SHELL_SYNCHRONIZATION_ERROR_MESSAGE = "Could not synchronize environment d
 const CACHE_RESUME_MAX_AGE_MILLIS = 12 * 60 * 60 * 1000;
 type ShellOriginIdentity = Omit<Persistence.ShellCacheOrigin, "snapshotAt">;
 
+function sameShellIdentity(left: ShellOriginIdentity, right: ShellOriginIdentity | null): boolean {
+  return (
+    right !== null &&
+    left.instanceId === right.instanceId &&
+    left.serverVersion === right.serverVersion &&
+    left.databaseMigration === right.databaseMigration &&
+    left.omitIdleSubagents === right.omitIdleSubagents &&
+    left.omitOlderSettled === right.omitOlderSettled
+  );
+}
+
 function canResumeFrom(
   origin: Persistence.ShellCacheOrigin | undefined,
   identity: ShellOriginIdentity | null,
   now: number,
 ): boolean {
-  if (origin === undefined || identity === null) return false;
+  if (origin === undefined) return false;
   const age = now - origin.snapshotAt;
+  return age >= 0 && age < CACHE_RESUME_MAX_AGE_MILLIS && sameShellIdentity(origin, identity);
+}
+
+function shellIdentity(
+  descriptor: ExecutionEnvironmentDescriptor | undefined,
+  flags: { readonly shellThreadFamilies?: boolean; readonly shellOlderSettled?: boolean },
+): ShellOriginIdentity | null {
+  if (!descriptor?.instanceId || !descriptor.serverVersion) return null;
+  const omitIdleSubagents = flags.shellThreadFamilies === true;
+  return {
+    instanceId: descriptor.instanceId,
+    serverVersion: descriptor.serverVersion,
+    databaseMigration: descriptor.databaseMigration ?? null,
+    omitIdleSubagents,
+    omitOlderSettled: omitIdleSubagents && flags.shellOlderSettled === true,
+  };
+}
+
+function canReadShellEarly(prepared: PreparedConnection): boolean {
+  if (prepared.httpAuthorization === null) return false;
+  if (prepared.target._tag !== "HubProxyConnectionTarget") return true;
+  try {
+    const http = new URL(prepared.httpBaseUrl);
+    const socket = new URL(prepared.socketUrl);
+    http.protocol = http.protocol === "https:" ? "wss:" : "ws:";
+    return (
+      http.origin === socket.origin && socket.pathname === `${http.pathname.replace(/\/$/, "")}/ws`
+    );
+  } catch {
+    return false;
+  }
+}
+
+interface EarlyShellLoad {
+  readonly prepared: PreparedConnection;
+  readonly identity: ShellOriginIdentity;
+  readonly fiber: Fiber.Fiber<Option.Option<ShellSnapshotLoader.ShellHttpAnswer>>;
+  readonly claimed: boolean;
+}
+
+function samePreparedConnection(left: PreparedConnection, right: PreparedConnection): boolean {
   return (
-    age >= 0 &&
-    age < CACHE_RESUME_MAX_AGE_MILLIS &&
-    origin.instanceId === identity.instanceId &&
-    origin.serverVersion === identity.serverVersion &&
-    origin.databaseMigration === identity.databaseMigration &&
-    origin.omitIdleSubagents === identity.omitIdleSubagents &&
-    origin.omitOlderSettled === identity.omitOlderSettled
+    left.target === right.target &&
+    left.httpBaseUrl === right.httpBaseUrl &&
+    left.socketUrl === right.socketUrl &&
+    left.descriptor === right.descriptor
   );
 }
 
@@ -489,6 +541,68 @@ export const makeEnvironmentShellState = Effect.fn("EnvironmentShellState.make")
     yield* fillDeferredPullRequests(cached.value, cachedSnapshot.value);
   }
 
+  const readShell = Effect.fn("EnvironmentShellState.readOverHttp")(function* (
+    prepared: PreparedConnection,
+    omitIdleSubagents: boolean,
+    omitOlderSettled: boolean,
+    identity: ShellOriginIdentity | null,
+  ) {
+    const held = (yield* SubscriptionRef.get(state)).snapshot;
+    const resumeFrom =
+      Option.isSome(held) &&
+      canResumeFrom(yield* Ref.get(origin), identity, yield* Clock.currentTimeMillis)
+        ? held.value.snapshotSequence
+        : undefined;
+    return yield* snapshotLoader.load(prepared, {
+      omitIdleSubagents,
+      omitOlderSettled,
+      ...(resumeFrom === undefined ? {} : { resumeFrom }),
+    });
+  });
+
+  const earlyLoad = yield* SynchronizedRef.make<EarlyShellLoad | null>(null);
+  const useEarlyLoad = (prepared: PreparedConnection | null, claim: boolean) =>
+    SynchronizedRef.modifyEffect(
+      earlyLoad,
+      Effect.fnUntraced(function* (current) {
+        if (
+          current !== null &&
+          prepared !== null &&
+          samePreparedConnection(current.prepared, prepared)
+        ) {
+          if (current.claimed && current.fiber.pollUnsafe() !== undefined)
+            return [null, null] as const;
+          return claim
+            ? ([current, { ...current, claimed: true }] as const)
+            : ([current, current] as const);
+        }
+        if (current !== null) yield* Fiber.interrupt(current.fiber);
+        if (prepared === null || !canReadShellEarly(prepared)) return [null, null] as const;
+        const descriptor = prepared.descriptor;
+        if (descriptor?.capabilities.shellThreadFamilies === undefined)
+          return [null, null] as const;
+        const identity = shellIdentity(descriptor, descriptor.capabilities);
+        if (identity === null) return [null, null] as const;
+        const fiber = yield* readShell(
+          prepared,
+          identity.omitIdleSubagents,
+          identity.omitOlderSettled,
+          identity,
+        ).pipe(Effect.forkIn(stateScope));
+        const next = { prepared, identity, fiber, claimed: claim };
+        return [next, next] as const;
+      }),
+    ).pipe(Effect.uninterruptible);
+
+  yield* SubscriptionRef.changes(supervisor.prepared).pipe(
+    Stream.runForEach(() =>
+      SubscriptionRef.get(supervisor.prepared).pipe(
+        Effect.flatMap((prepared) => useEarlyLoad(Option.getOrNull(prepared), false)),
+      ),
+    ),
+    Effect.forkScoped,
+  );
+
   const foregroundResubscriptions = Option.match(wakeups, {
     onNone: () => Stream.never,
     onSome: (service) =>
@@ -505,22 +619,11 @@ export const makeEnvironmentShellState = Effect.fn("EnvironmentShellState.make")
             Effect.map((config) => {
               const omitIdleSubagents = config.shellThreadFamilies === true;
               const omitOlderSettled = config.shellOlderSettled === true && omitIdleSubagents;
-              const version = config.environment?.serverVersion;
-              const instanceId = config.environment?.instanceId;
               return {
                 supportsCompletionMarker: config.shellResumeCompletionMarker === true,
                 omitIdleSubagents,
                 omitOlderSettled,
-                identity:
-                  version && instanceId
-                    ? {
-                        instanceId,
-                        serverVersion: version,
-                        databaseMigration: config.environment.databaseMigration ?? null,
-                        omitIdleSubagents,
-                        omitOlderSettled,
-                      }
-                    : null,
+                identity: shellIdentity(config.environment, config),
               };
             }),
             Effect.orElseSucceed(() => ({
@@ -535,50 +638,68 @@ export const makeEnvironmentShellState = Effect.fn("EnvironmentShellState.make")
         yield* setSynchronizing;
 
         let current = yield* SubscriptionRef.get(state);
-        const resumingHeldRows =
+        let resumingHeldRows =
           Option.isSome(current.snapshot) &&
           (canResumeFrom(yield* Ref.get(origin), identity, yield* Clock.currentTimeMillis) ||
             (identity === null && (yield* Ref.get(lastAuthoritativeSession)) === session));
-        let canResume = resumingHeldRows;
-        if (!canResume) {
-          const prepared = yield* SubscriptionRef.get(supervisor.prepared).pipe(
-            Effect.flatMap(
-              Option.match({
-                onSome: Effect.succeed,
-                onNone: () =>
-                  SubscriptionRef.changes(supervisor.prepared).pipe(
-                    Stream.filter(Option.isSome),
-                    Stream.map((value) => value.value),
-                    Stream.runHead,
-                    Effect.map(Option.getOrThrow),
-                  ),
-              }),
-            ),
-          );
-          // HTTP and the socket must agree, or omitted children would return through the socket.
-          const httpSnapshot = yield* snapshotLoader.load(prepared, {
-            omitIdleSubagents,
-            omitOlderSettled,
-          });
-          if (Option.isSome(httpSnapshot)) {
-            yield* cancelActiveFill;
-            const previous = yield* SubscriptionRef.get(state);
-            const snapshot = reuseUnchangedThreadShells(
-              Option.getOrNull(previous.snapshot),
-              withoutDeferredPullRequests(httpSnapshot.value),
-            );
-            const pendingLinkIds = new Set(
-              httpSnapshot.value.loadPullRequests === undefined
-                ? []
-                : httpSnapshot.value.threads.map((thread) => thread.id),
-            );
-            yield* applyItems([[session, { kind: "snapshot", snapshot }]], pendingLinkIds);
-            canResume = true;
-            current = yield* SubscriptionRef.get(state);
-            if (Option.isSome(current.snapshot)) {
-              yield* fillDeferredPullRequests(httpSnapshot.value, current.snapshot.value);
-            }
+        const early = yield* useEarlyLoad(
+          Option.getOrNull(yield* SubscriptionRef.get(supervisor.prepared)),
+          true,
+        );
+        let loaded = Option.none<ShellSnapshotLoader.ShellHttpAnswer>();
+        if (early !== null && sameShellIdentity(early.identity, identity)) {
+          const wait = Fiber.await(early.fiber);
+          if (resumingHeldRows) {
+            const answered = yield* wait.pipe(Effect.timeoutOption("3 seconds"));
+            if (Option.isSome(answered) && Exit.isSuccess(answered.value))
+              loaded = answered.value.value;
+            if (Option.isNone(answered)) yield* Fiber.interrupt(early.fiber);
+          } else {
+            const answered = yield* wait;
+            if (Exit.isSuccess(answered)) loaded = answered.value;
           }
+        } else {
+          if (early !== null) yield* Fiber.interrupt(early.fiber);
+          if (!resumingHeldRows) {
+            const prepared = yield* SubscriptionRef.get(supervisor.prepared).pipe(
+              Effect.flatMap(
+                Option.match({
+                  onSome: Effect.succeed,
+                  onNone: () =>
+                    SubscriptionRef.changes(supervisor.prepared).pipe(
+                      Stream.filter(Option.isSome),
+                      Stream.map((value) => value.value),
+                      Stream.runHead,
+                      Effect.map(Option.getOrThrow),
+                    ),
+                }),
+              ),
+            );
+            loaded = yield* readShell(prepared, omitIdleSubagents, omitOlderSettled, identity);
+          }
+        }
+        let canResume = resumingHeldRows;
+        let knownProjectIdentities: string | undefined;
+        if (Option.isSome(loaded) && !("resumable" in loaded.value)) {
+          const { projectIdentities, ...deferred } = loaded.value;
+          yield* cancelActiveFill;
+          const previous = yield* SubscriptionRef.get(state);
+          const snapshot = reuseUnchangedThreadShells(
+            Option.getOrNull(previous.snapshot),
+            withoutDeferredPullRequests(deferred),
+          );
+          const pendingLinkIds = new Set(
+            deferred.loadPullRequests === undefined
+              ? []
+              : deferred.threads.map((thread) => thread.id),
+          );
+          yield* applyItems([[session, { kind: "snapshot", snapshot }]], pendingLinkIds);
+          current = yield* SubscriptionRef.get(state);
+          if (Option.isSome(current.snapshot))
+            yield* fillDeferredPullRequests(deferred, current.snapshot.value);
+          canResume = true;
+          resumingHeldRows = false;
+          knownProjectIdentities = projectIdentities;
         }
 
         const omission = {
@@ -601,6 +722,7 @@ export const makeEnvironmentShellState = Effect.fn("EnvironmentShellState.make")
         return {
           afterSequence: current.snapshot.value.snapshotSequence,
           ...(resumingHeldRows ? { httpSnapshotFallback: true as const } : {}),
+          ...(knownProjectIdentities === undefined ? {} : { knownProjectIdentities }),
           ...omission,
           ...(supportsCompletionMarker ? { requestCompletionMarker: true as const } : {}),
         };

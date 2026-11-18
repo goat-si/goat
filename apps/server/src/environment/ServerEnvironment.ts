@@ -276,6 +276,8 @@ export const make = Effect.gen(function* () {
           : {}),
       },
       repositoryIdentity: true,
+      shellThreadFamilies: true,
+      shellOlderSettled: true,
       connectionProbe: true,
       attachmentUploads: true,
       questionAttachments: true,

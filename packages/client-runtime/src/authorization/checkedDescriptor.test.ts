@@ -66,6 +66,13 @@ const makeCheck = Effect.fn("test.makeDescriptorCheck")(function* (
         connectionMethod: "direct",
         bearerToken: "test-bearer",
       }),
+      authorizeSsh: remote.authorizeBearer({
+        expectedEnvironmentId: ENVIRONMENT_ID,
+        httpBaseUrl,
+        wsBaseUrl: prepared.socketUrl,
+        connectionMethod: "ssh",
+        bearerToken: "test-ssh-bearer",
+      }),
       descriptorReads: () =>
         harness.fetch.calls.filter(([url]) => String(url).includes("/.well-known/")),
       setEnvironment: (value: EnvironmentId) => {
@@ -117,4 +124,17 @@ it.effect("expired or mismatching checked descriptors require a fresh direct rea
     yield* h.authorize;
     expect(h.descriptorReads()).toHaveLength(4);
   }),
+);
+
+it.effect(
+  "an SSH forward that retargeted a checked loopback URL still requires a fresh identity",
+  () =>
+    Effect.gen(function* () {
+      const h = yield* makeCheck("http://127.0.0.1:3773");
+      expect(yield* h.check).toBe("answered");
+      h.setEnvironment(EnvironmentId.make("replacement"));
+      const error = yield* h.authorizeSsh.pipe(Effect.flip);
+      expect(error._tag).toBe("ConnectionBlockedError");
+      expect(h.descriptorReads()).toHaveLength(2);
+    }),
 );

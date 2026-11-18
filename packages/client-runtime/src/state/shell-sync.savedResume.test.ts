@@ -5,12 +5,14 @@ import {
   type OrchestrationV2SubscribeShellInput,
 } from "@goat/contracts";
 import { it, expect } from "@effect/vitest";
+import * as Deferred from "effect/Deferred";
 import * as Effect from "effect/Effect";
 import * as Option from "effect/Option";
 import * as Queue from "effect/Queue";
 import * as Ref from "effect/Ref";
 import * as Stream from "effect/Stream";
 import * as SubscriptionRef from "effect/SubscriptionRef";
+import * as TestClock from "effect/testing/TestClock";
 import {
   AVAILABLE_CONNECTION_STATE,
   PrimaryConnectionTarget,
@@ -50,7 +52,13 @@ const origin = {
 };
 type ShellInput = OrchestrationV2SubscribeShellInput & { readonly httpSnapshotFallback?: true };
 
-const makeCachedShell = Effect.fn("test.makeCachedShell")(function* (savedOrigin: typeof origin) {
+const makeCachedShell = Effect.fn("test.makeCachedShell")(function* (
+  savedOrigin: typeof origin,
+  startPrepared?: PreparedConnection,
+  httpReply: Effect.Effect<Option.Option<ShellSnapshotLoader.ShellHttpAnswer>> = Effect.succeedSome(
+    nextSnapshot,
+  ),
+) {
   const subscriptions = yield* Queue.unbounded<ShellInput>();
   const events = yield* Queue.unbounded<OrchestrationV2ShellStreamItem>();
   const httpRequests = yield* Ref.make(0);
@@ -77,11 +85,14 @@ const makeCachedShell = Effect.fn("test.makeCachedShell")(function* (savedOrigin
     inboundFrames: Effect.succeed(0),
     closed: Effect.never,
   };
+  const sessions = yield* SubscriptionRef.make(
+    startPrepared ? Option.none<RpcSession>() : Option.some(session),
+  );
   const supervisor = EnvironmentSupervisor.EnvironmentSupervisor.of({
     target,
     state: yield* SubscriptionRef.make(AVAILABLE_CONNECTION_STATE),
-    session: yield* SubscriptionRef.make(Option.some(session)),
-    prepared: yield* SubscriptionRef.make(Option.some(prepared)),
+    session: sessions,
+    prepared: yield* SubscriptionRef.make(Option.some(startPrepared ?? prepared)),
     connect: Effect.void,
     disconnect: Effect.void,
     retryNow: Effect.void,
@@ -107,12 +118,31 @@ const makeCachedShell = Effect.fn("test.makeCachedShell")(function* (savedOrigin
     Effect.provideService(EnvironmentSupervisor.EnvironmentSupervisor, supervisor),
     Effect.provideService(Persistence.EnvironmentCacheStore, cache),
     Effect.provideService(ShellSnapshotLoader.ShellSnapshotLoader, {
-      load: () =>
-        Ref.update(httpRequests, (count) => count + 1).pipe(Effect.as(Option.some(nextSnapshot))),
+      load: () => Ref.update(httpRequests, (count) => count + 1).pipe(Effect.andThen(httpReply)),
     }),
   );
-  return { state, subscriptions, events, httpRequests };
+  return {
+    state,
+    subscriptions,
+    events,
+    httpRequests,
+    connect: SubscriptionRef.set(sessions, Option.some(session)),
+  };
 });
+
+const authenticatedPrepared = {
+  ...prepared,
+  httpAuthorization: { _tag: "Bearer" as const, token: "test-token" },
+  descriptor: {
+    environmentId: target.environmentId,
+    instanceId: origin.instanceId,
+    serverVersion: origin.serverVersion,
+    databaseMigration: origin.databaseMigration,
+    platform: { os: "linux" as const, arch: "x64" as const },
+    label: target.label,
+    capabilities: { repositoryIdentity: false, shellThreadFamilies: true, shellOlderSettled: true },
+  },
+};
 
 it.effect("resumes from the saved rows' cursor and loads HTTP once on server refusal", () =>
   Effect.gen(function* () {
@@ -159,4 +189,64 @@ it.effect(
         );
       }
     }),
+);
+
+it.effect(
+  "starts the authenticated shell read after prepare and before a socket session exists",
+  () =>
+    Effect.gen(function* () {
+      const h = yield* makeCachedShell(origin, authenticatedPrepared);
+      yield* TestClock.adjust("0 millis");
+      expect(yield* Ref.get(h.httpRequests)).toBe(1);
+      yield* h.connect;
+      const request = yield* Queue.take(h.subscriptions);
+      expect(request.afterSequence).toBe(23);
+      expect(yield* Ref.get(h.httpRequests)).toBe(1);
+    }),
+);
+
+it.effect("does not start an early shell read without authorization or advertised flags", () =>
+  Effect.gen(function* () {
+    for (const prepared of [
+      { ...authenticatedPrepared, httpAuthorization: null },
+      {
+        ...authenticatedPrepared,
+        descriptor: {
+          ...authenticatedPrepared.descriptor,
+          capabilities: { repositoryIdentity: false },
+        },
+      },
+    ]) {
+      yield* Effect.scoped(
+        Effect.gen(function* () {
+          const h = yield* makeCachedShell(origin, prepared);
+          yield* TestClock.adjust("0 millis");
+          expect(yield* Ref.get(h.httpRequests)).toBe(0);
+          yield* h.connect;
+          expect((yield* Queue.take(h.subscriptions)).afterSequence).toBe(19);
+        }),
+      );
+    }
+  }),
+);
+
+it.effect("resumes held rows after the early HTTP grace and interrupts the late read", () =>
+  Effect.gen(function* () {
+    const started = yield* Deferred.make<void>();
+    const interrupted = yield* Deferred.make<void>();
+    const read = Deferred.succeed(started, undefined).pipe(
+      Effect.andThen(Effect.never),
+      Effect.onInterrupt(() => Deferred.succeed(interrupted, undefined)),
+    );
+    const h = yield* makeCachedShell(origin, authenticatedPrepared, read);
+    yield* Deferred.await(started);
+    yield* h.connect;
+    yield* TestClock.adjust("3 seconds");
+    expect(yield* Queue.take(h.subscriptions)).toMatchObject({
+      afterSequence: 19,
+      httpSnapshotFallback: true,
+    });
+    yield* Deferred.await(interrupted);
+    expect(yield* Ref.get(h.httpRequests)).toBe(1);
+  }),
 );

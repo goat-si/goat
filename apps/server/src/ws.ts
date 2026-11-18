@@ -210,6 +210,8 @@ import {
   archivedShellStreamItemFromThreadShell,
   bufferShellLiveStream,
   buildActiveShellSnapshot,
+  canResumeShellFrom,
+  resumeIdentityRoots,
   coalesceShellApplicationEvents,
   coalesceStoredThreadEvents,
   composeShellStreamWithEnrichment,
@@ -450,13 +452,6 @@ const ServerWsCoreRpcGroup = WsCoreRpcGroup.middleware(RpcInstrumentation);
 const ServerWsCoreServerRpcGroup = WsCoreServerRpcGroup.middleware(RpcInstrumentation);
 const ServerWsCoreWorkspaceRpcGroup = WsCoreWorkspaceRpcGroup.middleware(RpcInstrumentation);
 const ServerWsChannelRpcGroup = WsChannelRpcGroup.middleware(RpcInstrumentation);
-// A resuming client further behind than this gets a fresh shell snapshot instead of per-event
-// catch-up: each replayed event costs a shell refetch, while one O(active-threads) snapshot is
-// bounded. Matches the event store's default page size (DEFAULT_READ_FROM_SEQUENCE_LIMIT).
-const SHELL_RESUME_MAX_GAP = 1_000;
-// Row counts do not bound large tool payloads; sum stored JSON bytes in SQL and snapshot above budget.
-const ORCHESTRATION_REPLAY_PAYLOAD_BUDGET_BYTES = 8 * 1024 * 1024;
-
 const isClientSurface = Schema.is(ClientSurface);
 const isSiteNoteError = Schema.is(SiteNotes.SiteNoteError);
 const siteNoteRpcError = (error: unknown) =>
@@ -554,34 +549,6 @@ function readClientAnalyticsProps(request: HttpServerRequest.HttpServerRequest) 
     ...(isClientConnectionMethod(connectionMethod) ? { connectionMethod } : {}),
   };
 }
-
-const canReplayPersistedRange = Effect.fnUntraced(function* (
-  afterSequence: number,
-  headSequence: number,
-  maxGap: number,
-) {
-  const applicationEvents = yield* OrchestrationEventStore.OrchestrationEventStore;
-  const replayGap = headSequence - afterSequence;
-  if (replayGap < 0 || replayGap > maxGap) {
-    return false;
-  }
-  const stats = yield* applicationEvents.getReplayStats({
-    afterSequence,
-    throughSequence: headSequence,
-  });
-  if (stats.rawPayloadBytes > ORCHESTRATION_REPLAY_PAYLOAD_BUDGET_BYTES) {
-    yield* Effect.logDebug("orchestration replay replaced by snapshot", {
-      afterSequence,
-      headSequence,
-      replayGap,
-      eventCount: stats.eventCount,
-      payloadBytes: stats.rawPayloadBytes,
-      payloadBudgetBytes: ORCHESTRATION_REPLAY_PAYLOAD_BUDGET_BYTES,
-    });
-    return false;
-  }
-  return true;
-});
 
 export const subscribeOrchestrationV2Thread = Effect.fn("ws.orchestrationV2.subscribeThread")(
   function* (input: {
@@ -798,6 +765,7 @@ export const subscribeOrchestrationV2Thread = Effect.fn("ws.orchestrationV2.subs
 export const subscribeOrchestrationV2Shell = Effect.fn("ws.orchestrationV2.subscribeShell")(
   function* (input: {
     readonly afterSequence?: number;
+    readonly knownProjectIdentities?: string;
     readonly httpSnapshotFallback?: true;
     readonly requestCompletionMarker?: boolean;
     readonly omitIdleSubagents?: boolean;
@@ -985,7 +953,11 @@ export const subscribeOrchestrationV2Shell = Effect.fn("ws.orchestrationV2.subsc
       rpcInitialItems(
         shellStreamItemsFromResumeSnapshot({
           snapshot: loaded.snapshot,
-          resolvedRepositoryIdentityRoots: loaded.resolvedRepositoryIdentityRoots,
+          resolvedRepositoryIdentityRoots: resumeIdentityRoots({
+            projects: loaded.snapshot.projects,
+            resolvedRepositoryIdentityRoots: loaded.resolvedRepositoryIdentityRoots,
+            knownProjectIdentities: input.knownProjectIdentities,
+          }),
         }),
       );
     // Drain initial frames before merging enrichment with live events so marked refreshes cannot precede the initial frame.
@@ -1003,7 +975,7 @@ export const subscribeOrchestrationV2Shell = Effect.fn("ws.orchestrationV2.subsc
       }
 
       const highWater = yield* applicationEvents.latestApplicationSequence;
-      if (!(yield* canReplayPersistedRange(input.afterSequence, highWater, SHELL_RESUME_MAX_GAP))) {
+      if (!(yield* canResumeShellFrom(applicationEvents, input.afterSequence, highWater))) {
         if (input.httpSnapshotFallback) return Stream.make({ kind: "snapshot-required" as const });
         const loaded = yield* loadSnapshot();
         return composeShellStreamWithEnrichment({

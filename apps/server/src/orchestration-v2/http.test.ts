@@ -386,3 +386,38 @@ it.effect("leaves older settled threads out of the HTTP shell only when asked", 
     expect(cut.olderSettled?.counts).toEqual([{ projectId: thread.projectId, count: 1 }]);
   }),
 );
+
+it.effect(
+  "answers a replayable HTTP shell cursor without a snapshot and rejects unscoped requests",
+  () =>
+    Effect.gen(function* () {
+      let allowed = true;
+      const { handler } = yield* serveOrchestrationHttp(() => allowed);
+      const request = (query: string) =>
+        Effect.promise(() =>
+          handler(
+            new Request(`http://localhost/api/orchestration/shell${query}`, {
+              headers: { [ORCHESTRATION_PROTOCOL_HEADER]: ORCHESTRATION_PROTOCOL_VERSION_TEXT },
+            }),
+          ),
+        );
+      const full = yield* request("");
+      expect(full.status).toBe(200);
+      const snapshot = (yield* Effect.promise(() => full.json())) as {
+        readonly snapshotSequence: number;
+      };
+      const response = yield* request(`?resumeFrom=${snapshot.snapshotSequence}`);
+      expect(response.status).toBe(200);
+      expect(yield* Effect.promise(() => response.json())).toEqual({ resumable: true });
+
+      const ahead = yield* request(`?resumeFrom=${snapshot.snapshotSequence + 1}`);
+      expect(yield* Effect.promise(() => ahead.json())).toMatchObject({
+        snapshotSequence: snapshot.snapshotSequence,
+        projectIdentities: expect.any(String),
+      });
+
+      allowed = false;
+      const denied = yield* request(`?resumeFrom=${snapshot.snapshotSequence}`);
+      expect(denied.status).toBe(403);
+    }),
+);

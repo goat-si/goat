@@ -106,7 +106,7 @@ const CLIENT_HISTORY_OPT_INS = { compactIds: "1", deferWork: "1" } satisfies Req
 const CLIENT_SHELL_OPT_INS = {
   omitIdleSubagents: "1",
   omitOlderSettled: "1",
-} satisfies Required<typeof EnvironmentOrchestrationShellSnapshotQuery.Type>;
+} satisfies Required<Omit<typeof EnvironmentOrchestrationShellSnapshotQuery.Type, "resumeFrom">>;
 const CLIENT_THREAD_SUBSCRIPTION = {
   requestCompletionMarker: true,
   acceptBoundedSnapshot: true,
@@ -122,7 +122,10 @@ const CLIENT_SHELL_SUBSCRIPTION = {
   omitIdleSubagents: true,
   omitOlderSettled: true,
 } satisfies Required<
-  Omit<OrchestrationV2SubscribeShellInput, "afterSequence" | "httpSnapshotFallback">
+  Omit<
+    OrchestrationV2SubscribeShellInput,
+    "afterSequence" | "httpSnapshotFallback" | "knownProjectIdentities"
+  >
 >;
 const query = (optIns: Readonly<Record<string, string>>) => new URLSearchParams(optIns).toString();
 const CLIENT_BOUNDED_QUERY = query(CLIENT_BOUNDED_OPT_INS);

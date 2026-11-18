@@ -2158,6 +2158,16 @@ export const OrchestrationV2ShellSnapshot = Schema.Struct({
 });
 export type OrchestrationV2ShellSnapshot = typeof OrchestrationV2ShellSnapshot.Type;
 
+export const OrchestrationV2ShellHttpSnapshot = OrchestrationV2ShellSnapshot.mapFields(
+  (fields) => ({
+    ...fields,
+    projectIdentities: Schema.optionalKey(Schema.String),
+  }),
+);
+export type OrchestrationV2ShellHttpSnapshot = typeof OrchestrationV2ShellHttpSnapshot.Type;
+export const OrchestrationV2ShellResumable = Schema.Struct({ resumable: Schema.Literal(true) });
+export type OrchestrationV2ShellResumable = typeof OrchestrationV2ShellResumable.Type;
+
 export const OrchestrationV2ShellStreamItem = Schema.Union([
   Schema.Struct({
     kind: Schema.Literal("synchronized"),
@@ -3710,6 +3720,7 @@ export const OrchestrationV2SubscribeShellInput = Schema.Struct({
   afterSequence: Schema.optionalKey(NonNegativeInt),
   /** Let the socket refuse an unreplayable cursor so the client can load it over HTTP. */
   httpSnapshotFallback: Schema.optionalKey(Schema.Literal(true)),
+  knownProjectIdentities: Schema.optionalKey(Schema.String),
   requestCompletionMarker: Schema.optionalKey(Schema.Boolean),
   /**
    * Snapshots leave out idle subagent children; read them with `getThreadFamily`. Send only to
