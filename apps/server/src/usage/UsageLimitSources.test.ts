@@ -276,6 +276,21 @@ it.effect("keeps a refused account's last reading within its hub and login", () 
     refused = false;
     percent = 3;
     expect((yield* read)?.accounts[0]?.usageLimits.windows[0]?.usedPercent).toBe(3);
+
+    refused = true;
+    yield* settings.updateSettings({
+      usageLimitSources: {
+        [sourceId]: {
+          ...config,
+          url: "http://hub.test:8317/team-b",
+          managementKey: "rotated-fixture-key",
+        },
+      },
+    });
+    const rotated = yield* read;
+    expect(rotated?.accounts[0]?.usageLimits).toMatchObject(unreadable);
+    expect(rotated?.error).toBeUndefined();
+    expect(JSON.stringify(rotated)).not.toContain("rotated-fixture-key");
   }).pipe(
     Effect.provide([
       ServerSettings.layerTest({ usageLimitSources: { [sourceId]: config } }),

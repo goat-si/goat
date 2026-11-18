@@ -24,6 +24,8 @@ import * as PubSub from "effect/PubSub";
 import * as Ref from "effect/Ref";
 import * as Semaphore from "effect/Semaphore";
 import * as Stream from "effect/Stream";
+import * as Mac from "effect/crypto/Mac";
+import * as Hex from "effect/encoding/Hex";
 
 import * as BackgroundPolicy from "../background/BackgroundPolicy.ts";
 import * as Settings from "../serverSettings.ts";
@@ -107,7 +109,7 @@ function keepLastGoodReadings(
 
 interface UsageSourceState {
   readonly snapshots: ReadonlyArray<UsageLimitSourceSnapshot>;
-  readonly endpoints: ReadonlyMap<string, string>;
+  readonly reuseKeys: ReadonlyMap<string, string>;
 }
 
 /** @public */
@@ -117,7 +119,9 @@ export const make = Effect.gen(function* () {
   const poolRef = yield* Ref.make<Effect.Success<ReturnType<typeof opencodex.read>>>(undefined);
   const settingsService = yield* Settings.ServerSettingsService;
   const backgroundPolicy = yield* BackgroundPolicy.BackgroundPolicy;
-  const stateRef = yield* Ref.make<UsageSourceState>({ snapshots: [], endpoints: new Map() });
+  const stateRef = yield* Ref.make<UsageSourceState>({ snapshots: [], reuseKeys: new Map() });
+  const mac = yield* Mac.Mac;
+  const fingerprintKey = yield* mac.generateKey(Mac.hmacSha256).pipe(Effect.orDie);
   const changes = yield* Effect.acquireRelease(
     PubSub.unbounded<ReadonlyArray<UsageLimitSourceSnapshot>>(),
     PubSub.shutdown,
@@ -137,26 +141,32 @@ export const make = Effect.gen(function* () {
       ...(url && /^https?:$/.test(url.protocol) ? { origin: url.origin } : {}),
       checkedAt,
     } as const;
+    const unreadable = (error: string) => ({
+      snapshot: { ...base, accounts: [], error },
+      reuseKey: undefined,
+    });
     const resolved = yield* Effect.tryPromise(() =>
       resolveUsageManagementKey(settings, config),
     ).pipe(Effect.result);
     if (resolved._tag === "Failure") {
-      return {
-        ...base,
-        accounts: [],
-        error: "Could not read the management key from its secret provider.",
-      };
+      return unreadable("Could not read the management key from its secret provider.");
     }
     const managementKey = resolved.success;
     if (managementKey.length === 0) {
-      return { ...base, accounts: [], error: "No management key configured." };
+      return unreadable("No management key configured.");
     }
     const accounts = yield* api.readAccounts({ ...config, managementKey }).pipe(Effect.result);
     if (accounts._tag === "Failure") {
       yield* Effect.logDebug("usage limit source read failed", { id, cause: accounts.failure });
-      return { ...base, accounts: [], error: accounts.failure.detail };
+      return unreadable(accounts.failure.detail);
     }
-    return { ...base, accounts: accounts.success };
+    const fingerprint = yield* mac
+      .sign(fingerprintKey, new TextEncoder().encode(managementKey))
+      .pipe(Effect.orDie);
+    return {
+      snapshot: { ...base, accounts: accounts.success },
+      reuseKey: `${Hex.encode(fingerprint)}:${config.url}`,
+    };
   });
 
   const publish = Effect.fn("UsageLimitSources.publish")(function* (
@@ -185,23 +195,23 @@ export const make = Effect.gen(function* () {
         .filter((source) => source.kind === "cliproxy")
         .map((source) => [source.id, source]),
     );
-    const snapshots =
+    const reads =
       settings === null
         ? []
         : yield* Effect.forEach(
             entries,
-            ([id, config]) =>
-              readSource(id as UsageLimitSourceId, config, settings).pipe(
-                Effect.map((snapshot) => {
-                  // A hub's path can change while its public origin stays the same.
-                  const previous = previousById.get(snapshot.id);
-                  return previous && current.endpoints.get(id) === config.url
-                    ? keepLastGoodReadings(snapshot, previous)
-                    : snapshot;
-                }),
-              ),
+            ([id, config]) => readSource(id as UsageLimitSourceId, config, settings),
             { concurrency: 4 },
           );
+    const reuseKeys = new Map<string, string>();
+    const snapshots = reads.map(({ snapshot, reuseKey }) => {
+      if (reuseKey === undefined) return snapshot;
+      reuseKeys.set(snapshot.id, reuseKey);
+      const previous = previousById.get(snapshot.id);
+      return previous && current.reuseKeys.get(snapshot.id) === reuseKey
+        ? keepLastGoodReadings(snapshot, previous)
+        : snapshot;
+    });
     const pool = yield* opencodex.read();
     const previous = yield* Ref.getAndSet(poolRef, pool);
     yield* publish(
@@ -210,7 +220,7 @@ export const make = Effect.gen(function* () {
           pool?.pool === undefined
             ? snapshots
             : [...snapshots, { ...quotaPoolSource(pool.pool), origin: pool.origin }],
-        endpoints: new Map(entries.map(([id, config]) => [id, config.url])),
+        reuseKeys,
       },
       !Equal.equals(previous, pool),
     );
@@ -242,12 +252,12 @@ export const make = Effect.gen(function* () {
     if (!managementKey)
       return yield* new UsageLimitSourceError({ detail: "No management key configured." });
     const previous = yield* Ref.get(stateRef);
-    const endpoints = new Map(previous.endpoints);
-    endpoints.delete(input.sourceId);
+    const reuseKeys = new Map(previous.reuseKeys);
+    reuseKeys.delete(input.sourceId);
     const checkedAt = DateTime.formatIso(yield* DateTime.now);
     // Even an interrupted redemption can change quota before the next poll.
     yield* publish({
-      endpoints,
+      reuseKeys,
       snapshots: previous.snapshots.map((source) =>
         source.kind === "cliproxy" && source.id === input.sourceId
           ? {
@@ -273,12 +283,14 @@ export const make = Effect.gen(function* () {
       input.accountId,
       input.creditId,
     );
-    const snapshot = yield* readSource(input.sourceId, config, settings);
+    const { snapshot, reuseKey } = yield* readSource(input.sourceId, config, settings);
+    const nextReuseKeys = new Map(reuseKeys);
+    if (reuseKey !== undefined) nextReuseKeys.set(input.sourceId, reuseKey);
     yield* publish({
       snapshots: previous.snapshots.map((source) =>
         source.kind === "cliproxy" && source.id === input.sourceId ? snapshot : source,
       ),
-      endpoints: new Map(endpoints).set(input.sourceId, config.url),
+      reuseKeys: nextReuseKeys,
     });
     return result;
   }, refreshLock.withPermits(1));
