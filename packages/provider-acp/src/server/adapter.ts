@@ -1573,15 +1573,9 @@ export const makeAcpAdapterV2 = Effect.fn("makeAcpAdapterV2")(function* (
 
         const rememberSnapshotMessage = (message: OrchestrationV2ConversationMessage) =>
           Ref.update(snapshot, (current) => {
-            const key = String(message.id);
-            const exists = current.messages.has(key);
-            const messages = new Map(current.messages);
-            messages.set(key, message);
-            return {
-              ...current,
-              order: exists ? current.order : [...current.order, key],
-              messages,
-            };
+            if (!current.messages.has(message.id)) current.order.push(message.id);
+            current.messages.set(message.id, message);
+            return current;
           });
 
         const textStreamFor = (
@@ -8195,6 +8189,11 @@ export const makeAcpAdapterV2 = Effect.fn("makeAcpAdapterV2")(function* (
                       providerThreadId: snapshotInput.providerThread.id,
                       historyLimitExceeded: true,
                     });
+                  const messages = state.order.flatMap((key) => {
+                    const message = state.messages.get(key);
+                    return message === undefined ? [] : [message];
+                  });
+                  const reasoningMessageIds = [...state.reasoningIds];
                   const now = yield* DateTime.now;
                   return {
                     providerThread: {
@@ -8204,11 +8203,8 @@ export const makeAcpAdapterV2 = Effect.fn("makeAcpAdapterV2")(function* (
                       updatedAt: now,
                     },
                     providerTurns: [...(yield* Ref.get(providerTurns)).values()],
-                    messages: state.order.flatMap((key) => {
-                      const message = state.messages.get(key);
-                      return message === undefined ? [] : [message];
-                    }),
-                    reasoningMessageIds: [...state.reasoningIds],
+                    messages,
+                    reasoningMessageIds,
                     runtimeRequests: [],
                     providerPayload: { protocol: ACP_PROTOCOL, sessionId },
                   };

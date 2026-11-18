@@ -107,6 +107,31 @@ it.effect.each(["bytes", "messages"] as const)("refuses a replay exceeding the %
   }).pipe(Effect.provide(layerTest), Effect.scoped),
 );
 
+it.effect("orders replay chunks and keeps previously returned message snapshots stable", () =>
+  Effect.gen(function* () {
+    const { update, snapshot } = yield* openReplay();
+    const send = (
+      sessionUpdate: "user_message_chunk" | "agent_message_chunk",
+      messageId: string,
+      text: string,
+    ) =>
+      update({
+        sessionId: "mock-session-1",
+        update: { sessionUpdate, messageId, content: { type: "text", text } },
+      });
+    yield* send("user_message_chunk", "u1", "hel");
+    yield* send("agent_message_chunk", "a1", "hi");
+    yield* send("user_message_chunk", "u1", "lo");
+    const before = yield* snapshot;
+    yield* send("agent_message_chunk", "a1", " there");
+    yield* send("user_message_chunk", "u2", "next");
+    const texts = (messages: typeof before.messages) =>
+      messages.slice(1).map((message) => message.text);
+    assert.deepEqual(texts(before.messages), ["hello", "hi"]);
+    assert.deepEqual(texts((yield* snapshot).messages), ["hello", "hi there", "next"]);
+  }).pipe(Effect.provide(layerTest), Effect.scoped),
+);
+
 it.effect("a history-only open propagates failed load without creating a native session", () =>
   Effect.gen(function* () {
     const opened: Array<string | undefined> = [];
