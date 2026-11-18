@@ -92,6 +92,7 @@ export function usePullRequestDiffEntry(navigation: {
 export function usePullRequestDiff(
   params: PullRequestDiffParams,
   terminology: ChangeRequestTerminology,
+  view: { readonly staleDiff?: boolean; readonly headSha?: string | undefined } = {},
 ) {
   const reference = pullRequestTarget(params);
   const target = {
@@ -126,7 +127,11 @@ export function usePullRequestDiff(
   const fileKey = JSON.stringify(fileTarget);
   const [loads, setLoads] = useState({ key: fileKey, paths: NO_PATHS });
   const pageReadable =
-    firstPage?.withheldFilesReadable === true && (!!params.commit || revision !== undefined);
+    !view.staleDiff &&
+    firstPage?.withheldFilesReadable === true &&
+    (!!params.commit ||
+      (revision !== undefined &&
+        (view.headSha === undefined || revision.headSha === view.headSha.toLowerCase())));
   const readable = useAtomValue(
     pageReadable ? composerPullRequests.withheldDiffAdvertised(fileTarget) : UNADVERTISED,
   );

@@ -858,7 +858,17 @@ function PullRequestFileRouteContent({ route }: PullRequestFileRouteProps) {
   const terminology = sourceControlClients.get(
     (detail.data ?? route.params.initialSummary)?.provider,
   ).changeRequest;
-  const result = usePullRequestDiff(route.params, terminology);
+  const scopeKey = pullRequestReviewKey(route.params);
+  const [diffHead, setDiffHead] = useState({ scopeKey, sha: detail.data?.headSha ?? null });
+  if (diffHead.scopeKey !== scopeKey || (!diffHead.sha && detail.data?.headSha))
+    setDiffHead({ scopeKey, sha: detail.data?.headSha ?? null });
+  const staleDiff = Boolean(
+    !commit && diffHead.sha && detail.data?.headSha && diffHead.sha !== detail.data.headSha,
+  );
+  const result = usePullRequestDiff(route.params, terminology, {
+    staleDiff,
+    headSha: detail.data?.headSha,
+  });
   const filter = usePullRequestFileFilter(
     result.parsed,
     route.params.focus ? route.params.path : undefined,
@@ -871,13 +881,6 @@ function PullRequestFileRouteContent({ route }: PullRequestFileRouteProps) {
   const viewed = usePullRequestFilesViewed(route.params, commit ? null : detail.data);
   const [commitViewedPaths, setCommitViewedPaths] = useState<ReadonlySet<string>>(() => new Set());
   const permissions = usePullRequestPermissions(route.params, detail.data);
-  const scopeKey = pullRequestReviewKey(route.params);
-  const [diffHead, setDiffHead] = useState({ scopeKey, sha: detail.data?.headSha ?? null });
-  if (diffHead.scopeKey !== scopeKey || (!diffHead.sha && detail.data?.headSha))
-    setDiffHead({ scopeKey, sha: detail.data?.headSha ?? null });
-  const staleDiff = Boolean(
-    !commit && diffHead.sha && detail.data?.headSha && diffHead.sha !== detail.data.headSha,
-  );
   const canCommentOnDiff =
     permissions.canInlineComment &&
     !commit &&
