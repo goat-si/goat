@@ -124,6 +124,7 @@ import { projectFileCacheKey } from "./fileContentRevision";
 import {
   filePreviewReadErrorMessage,
   isMarkdownPreviewFile,
+  renderedToggleLabel,
   resolveFilePreviewPath,
   setMarkdownTaskChecked,
   shouldShowFileExplorer,
@@ -967,16 +968,6 @@ function RenderedMarkdownSurface({
       </ScrollArea>
     </div>
   );
-}
-
-function renderedToggleLabel(
-  mode: "markdown" | "mermaid" | "html" | "table",
-  rendered: boolean,
-): string {
-  if (mode === "mermaid") return rendered ? "Show Mermaid source" : "Show rendered diagram";
-  if (mode === "markdown") return rendered ? "Show markdown source" : "Show rendered markdown";
-  if (mode === "table") return rendered ? "Show source" : "Show table";
-  return rendered ? "Show HTML source" : "Show rendered page";
 }
 
 function initialExplorerOpen(): boolean {

@@ -514,7 +514,7 @@ describe("presentAsChrome", () => {
   );
 
   it("uploads a file over 50 MB to a desktop tab, which shares the server's filesystem", async () => {
-    const directory = NodeFS.mkdtempSync(NodePath.join(NodeOS.tmpdir(), "t3-desktop-upload-"));
+    const directory = NodeFS.mkdtempSync(NodePath.join(NodeOS.tmpdir(), "goat-desktop-upload-"));
     const userDataDir = NodePath.join(directory, "profile");
     const pool = new ServerBrowserContexts(options());
     try {
@@ -580,9 +580,10 @@ it("sends one Chrome user agent from the page and from a service worker request"
   const probe = await launchChromium();
   const version = probe.version();
   await probe.close();
-  launches.launch.mockImplementation(({ executablePath: _path, ...bundled } = {}) =>
-    launchChromium(bundled),
-  );
+  launches.launch.mockImplementation((options: Parameters<BrowserType["launch"]>[0] = {}) => {
+    const { executablePath: _path, ...bundled } = options;
+    return launchChromium(bundled);
+  });
   const pool = new ServerBrowserContexts({
     ...options(),
     env: { GOAT_SERVER_BROWSER_SANDBOX: "0", GOAT_SERVER_BROWSER_GPU: "0" },

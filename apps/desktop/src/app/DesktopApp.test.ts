@@ -237,6 +237,7 @@ it.effect.each([false, true])(
                 throw new Error("unexpected detach");
               },
               setShown: () => {},
+              setCaptureDrawn: () => {},
               loadFailed: () => {},
               humanStartedDownload: () => false,
               agentLedPage: () => false,
