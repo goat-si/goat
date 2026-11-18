@@ -21,12 +21,27 @@ import {
   cursorToolSearchPattern,
   cursorToolSearchResults,
 } from "./toolPresentation.ts";
+import type { makeTaskTextSnapshots } from "./taskTextSnapshots.ts";
 
 export function makeCursorTurnProjection(
   derive: IdAllocatorV2Derive,
   path: Path.Path,
   emitProviderEvent: (event: ProviderAdapterV2Event) => Effect.Effect<void>,
+  taskTextSnapshots: ReturnType<typeof makeTaskTextSnapshots>,
 ) {
+  const emitTextSnapshot = Effect.fnUntraced(function* (
+    target: CursorProjectionTarget,
+    itemId: string,
+    completed: boolean,
+    events: readonly [ProviderAdapterV2Event, ...ProviderAdapterV2Event[]],
+  ) {
+    if (target.runId === null) {
+      if (!completed) return yield* taskTextSnapshots.offer(itemId, events);
+      taskTextSnapshots.seal(itemId);
+    }
+    for (const event of events) yield* emitProviderEvent(event);
+  });
+
   const emitAssistant = Effect.fnUntraced(function* (
     target: CursorProjectionTarget,
     segment: ActiveCursorTextSegment | null,
@@ -53,7 +68,7 @@ export function makeCursorTurnProjection(
       nativeId: segment.nativeItemId,
       strength: "weak" as const,
     };
-    yield* emitProviderEvent({
+    const nodeEvent: ProviderAdapterV2Event = {
       type: "node.updated",
       driver: CURSOR_PROVIDER,
       node: {
@@ -73,8 +88,8 @@ export function makeCursorTurnProjection(
         startedAt: segment.startedAt,
         completedAt: completed ? now : null,
       },
-    });
-    yield* emitProviderEvent({
+    };
+    const messageEvent: ProviderAdapterV2Event = {
       type: "message.updated",
       driver: CURSOR_PROVIDER,
       message: {
@@ -91,8 +106,8 @@ export function makeCursorTurnProjection(
         createdAt: segment.startedAt,
         updatedAt: now,
       },
-    });
-    yield* emitProviderEvent({
+    };
+    const itemEvent: ProviderAdapterV2Event = {
       type: "turn_item.updated",
       driver: CURSOR_PROVIDER,
       turnItem: {
@@ -115,7 +130,12 @@ export function makeCursorTurnProjection(
         text: segment.text,
         streaming: !completed,
       },
-    });
+    };
+    yield* emitTextSnapshot(target, segment.nativeItemId, completed, [
+      nodeEvent,
+      messageEvent,
+      itemEvent,
+    ]);
   });
 
   const emitReasoning = Effect.fnUntraced(function* (
@@ -140,7 +160,7 @@ export function makeCursorTurnProjection(
       nativeId: segment.nativeItemId,
       strength: "weak" as const,
     };
-    yield* emitProviderEvent({
+    const nodeEvent: ProviderAdapterV2Event = {
       type: "node.updated",
       driver: CURSOR_PROVIDER,
       node: {
@@ -160,8 +180,8 @@ export function makeCursorTurnProjection(
         startedAt: segment.startedAt,
         completedAt: completed ? now : null,
       },
-    });
-    yield* emitProviderEvent({
+    };
+    const itemEvent: ProviderAdapterV2Event = {
       type: "turn_item.updated",
       driver: CURSOR_PROVIDER,
       turnItem: {
@@ -183,7 +203,8 @@ export function makeCursorTurnProjection(
         text: segment.text,
         streaming: !completed,
       },
-    });
+    };
+    yield* emitTextSnapshot(target, segment.nativeItemId, completed, [nodeEvent, itemEvent]);
   });
 
   const emitToolArtifacts = Effect.fnUntraced(function* (input: {

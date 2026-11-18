@@ -1,6 +1,7 @@
 import type { InteractionUpdate, RunResult, SDKUserMessage, ToolCall } from "@cursor/sdk";
 import * as HostProcess from "@goat/shared/HostProcess";
 import { cursorToolFailed } from "./toolPresentation.ts";
+import { makeTaskTextSnapshots } from "./taskTextSnapshots.ts";
 import { makeCursorTurnProjection } from "./turnProjection.ts";
 import { makeCursorTaskProjection, makeTaskProjectionState } from "./taskProjection.ts";
 import {
@@ -320,7 +321,13 @@ export const makeCursorAdapterV2 = Effect.fn("makeCursorAdapterV2")(function* (
             return ordinal;
           });
 
-        const projection = makeCursorTurnProjection(idAllocator.derive, path, emitProviderEvent);
+        const taskTextSnapshots = makeTaskTextSnapshots(emitProviderEvent);
+        const projection = makeCursorTurnProjection(
+          idAllocator.derive,
+          path,
+          emitProviderEvent,
+          taskTextSnapshots,
+        );
         const { emitAssistant, emitReasoning, emitToolArtifacts } = projection;
         const { handleTaskUpdate, completeTaskWork } = makeCursorTaskProjection(projection);
 
@@ -1693,7 +1700,9 @@ export const makeCursorAdapterV2 = Effect.fn("makeCursorAdapterV2")(function* (
             selection.instanceId === adapterOptions.instanceId
               ? cursorContextWindowTokens(selection, adapterOptions.getModels?.(apiKey, env) ?? [])
               : undefined,
-          events: Stream.fromEffectRepeat(Queue.take(events)),
+          events: Stream.fromEffectRepeat(
+            Queue.take(events).pipe(Effect.map(taskTextSnapshots.drain)),
+          ).pipe(Stream.flattenArray),
           ensureThread: Effect.fn("CursorAdapterV2.ensureThread")(
             function* (threadInput: ProviderAdapter.ProviderAdapterV2EnsureThreadInput) {
               const opened = yield* openAgent({

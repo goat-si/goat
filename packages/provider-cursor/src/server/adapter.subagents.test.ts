@@ -494,3 +494,49 @@ it.effect("fills a Cursor Task child from its saved steps where live updates fel
     ),
   ),
 );
+
+it.effect(
+  "bounds pending child text across a paused session and delivers the latest snapshot before completion",
+  () =>
+    Effect.gen(function* () {
+      const chunk = "abcdefgh";
+      const text = chunk.repeat(2_048);
+      const { events, childThreadId } = yield* runCursorTaskTurn(
+        [
+          ...Array.from({ length: 2_048 }, () => ({ type: "text-delta" as const, text: chunk })),
+          { type: "step-completed", stepId: 1, stepDurationMs: 1 },
+          ...Array.from({ length: 32 }, (_, index): CursorTaskUpdate[] => [
+            { type: "text-delta", text: `Step ${index}` },
+            { type: "step-completed", stepId: index + 2, stepDurationMs: 1 },
+          ]).flat(),
+        ],
+        [],
+      );
+      const items = events.flatMap((event) =>
+        event.type === "turn_item.updated" &&
+        event.turnItem.threadId === childThreadId &&
+        event.turnItem.type === "assistant_message"
+          ? [event.turnItem]
+          : [],
+      );
+      const first = items.find((item) => item.text === text);
+      assert.isDefined(first);
+      assert.deepEqual(
+        items.filter((item) => item.id === first.id).map((item) => [item.status, item.text]),
+        [
+          ["running", text],
+          ["completed", text],
+        ],
+      );
+      assert.isAtMost(items.filter((item) => item.streaming).length, 16);
+      assert.lengthOf(
+        items.filter((item) => item.status === "completed"),
+        33,
+      );
+    }).pipe(
+      Effect.scoped,
+      Effect.provide(
+        Layer.mergeAll(NodeServices.layer, IdAllocator.layer, McpProviderSessions.layer),
+      ),
+    ),
+);

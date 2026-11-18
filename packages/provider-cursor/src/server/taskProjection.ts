@@ -9,11 +9,11 @@ import type {
   CursorProjectionTarget,
   CursorTaskProjectionState,
 } from "./activeTurn.ts";
+import { MAX_CURSOR_TASK_TEXT_CHARS } from "./taskTextSnapshots.ts";
 import type { makeCursorTurnProjection } from "./turnProjection.ts";
 
 const MAX_LIVE_TASK_TOOLS = 512;
 const MAX_LIVE_TASK_TEXT_SEGMENTS = 512;
-const MAX_LIVE_TASK_TEXT_CHARS = 256 * 1024;
 
 export function makeTaskProjectionState(): CursorTaskProjectionState {
   return {
@@ -21,7 +21,7 @@ export function makeTaskProjectionState(): CursorTaskProjectionState {
     assistantSegments: [],
     assistant: { current: null, nextSegment: 0 },
     reasoning: { current: null, nextSegment: 0 },
-    remainingText: MAX_LIVE_TASK_TEXT_CHARS,
+    remainingText: MAX_CURSOR_TASK_TEXT_CHARS,
   };
 }
 
