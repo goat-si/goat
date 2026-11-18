@@ -2,6 +2,8 @@ import { assert, describe, it } from "@effect/vitest";
 import * as M from "@goat/contracts";
 import * as Effect from "effect/Effect";
 import * as SqlClient from "effect/sql/SqlClient";
+import * as Service from "./MemoryService.ts";
+import * as Store from "./MemoryStore.ts";
 import * as Hub from "./MemoryHubService.ts";
 import { checkUsage } from "./MemoryUsageScan.testkit.ts";
 import {
@@ -45,6 +47,49 @@ describe("memory hub floor", () => {
       ]);
       const page = yield* hub.pull(pullInput, principal());
       assert.deepStrictEqual(page.entries, []);
+    }).pipe(checkUsage, Effect.provide(live)),
+  );
+  it.effect("a wide save stays invisible until ordered tail settlement", () =>
+    Effect.gen(function* () {
+      yield* seed;
+      const hub = yield* Hub.MemoryHubService;
+      const service = yield* Service.MemoryService;
+      const store = yield* Store.MemoryStore;
+      const sql = yield* SqlClient.SqlClient;
+      const sources = Array.from({ length: 101 }, (_, n) => {
+        const op = operation(1000 + n);
+        const memoryId = M.MemoryId.make(id(3000 + n));
+        return { ...op, memoryId, revision: { ...op.revision, memoryId } };
+      });
+      for (const source of sources) yield* hub.push(pushInput(source), principal());
+      yield* sql`INSERT INTO memory_space_features VALUES (${space},1000,0)`;
+      const wide = operation(2000);
+      const result = yield* service.upsert(
+        {
+          memorySpaceId: space,
+          operationId: wide.operationId,
+          memoryId: wide.memoryId,
+          expectedHeads: [],
+          scope: wide.revision.scope,
+          assertionKind: wide.revision.assertionKind,
+          payload: {
+            ...wide.payload,
+            derivedFromMemoryRevisions: sources.map((op) => op.revision.revisionId),
+          },
+          baseBoundary: null,
+        },
+        Effect.void,
+      );
+      assert.isUndefined((yield* store.loadAggregate(space, wide.memoryId)).item);
+      assert.include(result.receipt, { pendingSync: true, revisionId: null });
+      const queued = yield* store.readWorkOperation(`sync:${space}:${wide.operationId}`);
+      assert.strictEqual(queued?.kind, "upsert");
+      if (!queued) throw new Error("expected a staged write");
+      assert.include(
+        (yield* hub.push({ ...pushInput(queued), features: M.MEMORY_FLOOR_2 }, principal()))
+          .receipts[0],
+        { outcome: "accepted" },
+      );
     }).pipe(checkUsage, Effect.provide(live)),
   );
   it.effect("fences old and partial advertisements after floor activation", () =>
