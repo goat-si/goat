@@ -7,7 +7,7 @@ import {
   replaceComposerContextReferences,
 } from "@goat/shared/composerContextReferences";
 
-export function readPastedPlainText(clipboardData: Pick<DataTransfer, "getData">): string {
+function readPastedPlainText(clipboardData: Pick<DataTransfer, "getData">): string {
   return clipboardData.getData("text/plain").replace(/\r\n?/g, "\n");
 }
 
@@ -62,4 +62,18 @@ export function importPastedComposerText(
         })
       : pastedText;
   return text;
+}
+
+export function hasPastedSnapshot(clipboardData: Pick<DataTransfer, "getData" | "files">): boolean {
+  if (clipboardData.files.length !== 1 || clipboardData.files[0]?.type !== "image/png")
+    return false;
+  const records = readPastedComposerContext(clipboardData)?.records;
+  const record = records?.length === 1 ? records[0] : undefined;
+  return record?.kind === "image" && !("payload" in record) && record.source?.kind === "snap-shot";
+}
+
+export function readEditorPasteText(clipboardData: DataTransfer, acceptsSnapshot: boolean): string {
+  if (clipboardData.files.length > 0 && !(acceptsSnapshot && hasPastedSnapshot(clipboardData)))
+    return "";
+  return readPastedPlainText(clipboardData);
 }

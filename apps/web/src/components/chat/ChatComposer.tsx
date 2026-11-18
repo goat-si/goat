@@ -7,7 +7,11 @@ import { runtimeModeConfig, runtimeModeOptions as runtimeModes } from "./runtime
 import { isLocalEnvironmentDisabled } from "../../localEnvironment";
 import { usePrimaryEnvironmentId } from "../../state/environments";
 import { useRightPanelStore } from "~/rightPanelStore";
-import { importPastedComposerText, readPastedComposerContext } from "../composerInlineTokenPaste";
+import {
+  hasPastedSnapshot,
+  importPastedComposerText,
+  readPastedComposerContext,
+} from "../composerInlineTokenPaste";
 import {
   questionAttachmentDraftId,
   trackOpenQuestionAttachmentDraft,
@@ -143,7 +147,10 @@ import {
   type TerminalContextDraft,
   type TerminalContextSelection,
 } from "../../lib/terminalContext";
-import { toKindScopedComposerContextId } from "@goat/shared/composerContextReferences";
+import {
+  formatComposerContextReference,
+  toKindScopedComposerContextId,
+} from "@goat/shared/composerContextReferences";
 import {
   shouldUseCompactComposerPrimaryActions,
   shouldUseCompactComposerFooter,
@@ -181,6 +188,7 @@ import {
   selectComposerPreviewTab,
 } from "./composerCapabilitySelection";
 import { useNavigate } from "@tanstack/react-router";
+import { copySnapshot } from "./copySnapshot";
 import { buildDraftContextClipboardFragment } from "./composerDraftContextClipboard";
 import { useThreadContextDrop, threadContextDropTargetProps } from "./threadContextDrag";
 import { readThreadShell } from "~/state/entities";
@@ -715,7 +723,7 @@ export const ChatComposer = memo(function ChatComposer(props: ChatComposerProps)
     verifiedHosts: verifiedThreadHosts,
     cwd: gitCwd ?? undefined,
     expandImage: (imageId: string) => {
-      const preview = buildExpandedImagePreview(composerImages, imageId);
+      const preview = buildExpandedImagePreview(composerImages, imageId, copyComposerSnapshot);
       if (preview) onExpandImage(preview);
     },
     openFile: setPreviewFileId,
@@ -1325,6 +1333,19 @@ export const ChatComposer = memo(function ChatComposer(props: ChatComposerProps)
       activeThread?.id,
       composerContextDraft,
     );
+  const copyComposerSnapshot = useStableCallback(async (imageId: string) => {
+    const image = composerImages.find((item) => item.id === imageId);
+    if (!image?.previewUrl || image.source?.kind !== "snap-shot")
+      throw new Error("This snapshot is no longer available.");
+    const contextId = toKindScopedComposerContextId("image", image.id);
+    const fragment = buildContextClipboardFragment([contextId]);
+    if (!fragment) throw new Error("This snapshot could not be copied.");
+    await copySnapshot(
+      image.previewUrl,
+      formatComposerContextReference({ kind: "image", contextId, label: image.name }),
+      fragment,
+    );
+  });
   const buildContextClipboardFragmentStable = useStableCallback(buildContextClipboardFragment);
   const {
     routeThreadContexts,
@@ -2299,6 +2320,7 @@ export const ChatComposer = memo(function ChatComposer(props: ChatComposerProps)
         images={standaloneComposerImages}
         allImages={composerImages}
         resolvedTheme={resolvedTheme}
+        onCopySnapshot={copyComposerSnapshot}
         onExpandImage={onExpandImage}
         onShowMore={showMoreRestingImages}
       />
@@ -2712,6 +2734,7 @@ export const ChatComposer = memo(function ChatComposer(props: ChatComposerProps)
     const { files, folders } = splitTransferredFiles(event.clipboardData);
     const plainText = event.clipboardData.getData("text/plain");
     const bypassAutoAttachment = consumePasteAsTextShortcut(pasteAsTextShortcutUntilRef);
+    if (!isLiteralPendingAnswer && hasPastedSnapshot(event.clipboardData)) return;
     if (
       folders.length > 0 ||
       (activeThreadId &&
@@ -3237,6 +3260,7 @@ export const ChatComposer = memo(function ChatComposer(props: ChatComposerProps)
         environmentId={environmentId}
         attachmentDraftTarget={attachmentDraftTarget}
         canOperateThread={canOperateThread}
+        onCopySnapshot={copyComposerSnapshot}
         onExpandImage={onExpandImage}
         onFileOpen={onFileOpen}
         onRemoveImage={removeComposerImage}

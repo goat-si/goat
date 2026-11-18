@@ -70,7 +70,11 @@ export function buildDraftContextClipboardFragment(
             : null);
         if (!record) return [];
         if (attachment.file) copiedFiles.set(record.attachmentId, attachment.file);
-        return [record];
+        return [
+          record.kind === "image" && attachment.type === "image" && attachment.source
+            ? { ...record, source: attachment.source }
+            : record,
+        ];
       }),
   ];
   if (records.length === 0) return null;
