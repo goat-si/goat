@@ -416,3 +416,126 @@ Rule received: no git stash from now on. Fail-first runs save a patch outside th
 K4's use before the rule: one stash, for the fail-first run of (b) at 09:39 KST (00:39 UTC). It was pushed and popped in the same command: git stash push -m k4-fairness-probe -- apps/server/src/workspace/checkpointRestoreReservation.ts, then git stash pop, which reported "Dropped refs/stash@{0} (16d254b1f7abbd0e8dd8f249ea4fa528c7c6e67a)". The entry it popped was saved as "On chase/t3-261114-next3-k4-checkpoints: k4-fairness-probe", so it was mine. After the pop, git diff shows the three local files with the same content as before (141 insertions, 2 deletions), and they are now also saved at /tmp/k4-review-prep-197f92c954.patch, outside the worktree.
 
 git stash list on pen-macmini now (02:0x UTC) holds two entries, neither mine, both older than this lane: stash@{0} 1be29b5b44 (2026-11-15 14:55 +0900, "On chase/t3-261114-adapters-retry: L02 run3 b5b470542a WIP (Option 2)") and stash@{1} cd32fe2130 (2026-11-11 17:45 +0900, "lint-staged automatic backup (d5ed7f5a)"). Left untouched: not dropped, applied or cleared.
+
+
+8n note: the "about 02:00 UTC" in 8n's heading and the stash-list time "02:0x UTC" were times the lane coordinator wrote without reading a clock (its 01:17 UTC correction). The content stands; the real send time came from the thread log: between about 00:55 and 01:16 UTC.
+
+## 8o. The coordinator's review ruling for K4, verbatim (2026-11-18 01:14:39 UTC): section I, section IV and the merge order
+
+I. K4 (head 197f92c9546d62f8479df1d7ed005ad7c778d4df)
+The review is BLOCK on one P2, with six P3 and one observation. Saved whole: /Users/jun/handoff-in/chase/next3-K4-review-197f92c9.md (21,697 bytes). All nine entries recorded as accepted. The product code held: eleven mutations all caught, 27 files 231 of 231, ProviderSessionManager 117 of 117. READ BY ME: the report whole; the failure line in the job log of server run 44208294112 (shard 4/4: "FAIL src/git/GitManager.prExistingBranch.test.ts ... This test file left 1 goat-* temp entry behind", 1 failed, 537 passed; shards 1 to 3 green); GitManager.prExistingBranch.test.ts:21-140 and GitManagerTestHarness.ts:480-530 at the head. NOT RUN by me: any test. Runs on this head: quick 44208290114 SUCCESS, windows 44208297888 SUCCESS, server 44208294112 FAILURE.
+RULED, the fix round on top of 197f92c954, one commit per finding:
+1. P2-1 (the checkout-race case leaves the test manager's data folder, a goat-git-manager-test-* folder holding the PR worktree; only this case of the nine leaks; wrapping it in Effect.scoped or waiting does not help, by the reviewer's runs). Find the ROOT CAUSE and write it in the record with the evidence: why this one case's folder survives when the other eight on the same harness are removed. Say in one sentence whether the cause is test-only or a product path (a folder removed and then written again by something still running, a worktree created after its owner's cleanup): if it is a product path, stop and report before fixing. Proof: from apps/server, GOAT_TEST_TMP_GUARD=fail vp test run src/git/GitManager.prExistingBranch.test.ts exits 1 before the fix and 0 after, and the same guarded run of every other apps/server test file this lane added or changed exits 0. No deletion of a leftover in the case's own teardown that hides the cause.
+2. P3-1: a warning before checkpointSkipWorktreeRestore.ts:87-90 returns the empty list (the folder and the failed step, no file contents). No test for the log line.
+3. P3-2: the comment of the "index closed while its watcher subscription is pending" case and the record say it covers GOAT's side only; the patch's own line is what protects the rest.
+4. P3-3: NO code this round. A Limits sentence for #3700 with the reviewer's numbers (first search 258 to 313 ms at 50,018 files and 2,500 links against 2 to 4 ms; later searches 5 to 6 ms against 1 to 2 ms; as upstream 0813f4978e) and an issue draft (the first search answers without links after a short bound).
+5. P3-4: tryTurnStartReservation moves into the tests.
+6. P3-5: the comment at CheckpointRollbackService.ts:447 says what is true (a rewind that finds the worktree missing recreates it, under the folder lease, without the reservation). A Limits sentence. No reservation added.
+7. P3-6: (a) the busy message names a restore as well as removal and preparation, if no existing test pins the old text (if one does, quote it and ask); (b) the 0.6 s real-clock wait in switchTagCollision's config-lock case becomes a deterministic wait, or, if it waits for git's own lock retry in a real subprocess, one comment line says so and it stays; (c) one case that a deleted-path restore leaves the flags of a non-deleted s or h path alone; (d) the goat#3681 warning firing twice for one ask: record only, no code.
+8. The observation: one sentence in docs/user/composer.md, product voice: after Edit from here, a file you had hidden from git with skip-worktree or assume-unchanged shows as modified again if its restored content differs from the last commit.
+9. Record: ThreadSettlementService.cache-test-cases.ts's two import lines join the rule 3 list (the 00:35:17 rule covers them); the three-line wrap in resolveHeadRepositoryNameWithOwner (6c0a7cf5cf) is named; a Limits sentence that none of K4's files are in goat-ci's Windows suite list (the reservation's folder overlap, the symlink scan and the terminal notice were not run on Windows); the reviewer's merge note for K7 (Manager.ts keeps all three import lines; its entry becomes countLines of the merged file, 3096 by the reviewer's count).
+Then READY under the 00:45:31 rule and item IV below. I dispatch quick and server on the new head and start ONE fix-delta review. K4 still merges last of the first five (after M3, for the lock file).
+
+IV. STANDING RULE, every lane, from now: before READY, every apps/server test file the lane added or changed is run once from apps/server with GOAT_TEST_TMP_GUARD=fail (CI sets it, check:changed does not), and the READY report says so. The ps check in its own step first, as before.
+
+Merge order unchanged: K5, K10, K7 (second integration merge after K10), then M3, K4, K1 as their fix-delta reviews approve.
+
+## 8p. The coordinator on (b), (c), (a)/(d)/(e), rule 3 and the stash, verbatim (2026-11-18 01:17:54 UTC): sections I, II and V
+
+I. K4, the (b) finding (a waiting restore starved by overlapping turn starts): NOT in this fix round. A Limits sentence and an issue draft; the local commit is not pushed and stays out of the branch.
+Why: the fresh review answered the same question (its 1(c)) as P3 at most. A thread's own starts cannot run beside its rollback (effects for one thread run one at a time), and another thread's running turn in the folder makes the isolation check refuse the restore after the wait anyway, so starvation needs an unbroken stream of other threads' starts and delays an answer that is usually a refusal. The local fix makes every new overlapping turn start wait behind a waiting restore, with no time limit: one provider start that hangs while it holds the reservation, plus one waiting restore, would then keep every thread in that folder from starting a turn. Today only the restore waits. That is a wider failure than the one it removes.
+The Limits sentence: a restore waits, with no time limit, for turn starts already under way in an overlapping folder, and a steady stream of starts from other threads there can keep it waiting. The issue draft says what a bounded design needs (a time limit on the restore's wait with a message to the person, or a bound on how long a start may hold the reservation) and names the hung-start case above as the reason the simple queue was not taken.
+The (c) cases (capture and restore for S, h and s, and a checkpoint equal to HEAD; test only, no production line): MAY join the fix round as one commit, in the lane's own test file, if they have no real-time wait. They are the proof behind the docs sentence.
+(a), (d), (e) noted; they match the review. (d)'s limit (GOAT_PRE_REFRESH_REF is one ref with no reflog, overwritten by the next refresh) becomes a Limits sentence.
+
+II. RULE 3, standing rule extended (beside the 00:35:17 rule), every lane: a VALUE import added to an existing import line of an existing test file needs no word from me when only appended cases or appended helpers use the new names and no existing title, body, setup value or expectation changes. The lane quotes the line before and after in its record; the fresh review lists it. An import that changes what an existing case runs against (a different module, a fake in place of a real service) still comes to me.
+CONFIRMED under it, READ BY ME (git diff against 259883c788): K4's two lines in ThreadSettlementService.cache-test-cases.ts at 197f92c954 ({ expect, it } gains assert; { DEFAULT_SERVER_SETTINGS } gains ThreadId; 104 lines added, 2 removed, the new names used from line 277 on) and K10's one line in threadLineageLookup.test.ts at c31dfe1c41 (the import gains THREAD_LINK_LOOKUP_CACHE; 178 added, 1 removed).
+
+V. The stash incident: closed, noted. "No git stash in any lane" stands as a rule; a lane that needs to set work aside commits it on its own branch locally.
+
+## 8q. Rule 3 covers a new import statement, verbatim (coordinator 2026-11-18 01:20:03 UTC), first paragraph
+
+RULE 3, the 01:17 rule II covers a NEW import statement on the same terms as a name added to an existing line: only appended cases or appended helpers use what it imports, it imports a real module (no fake, no mock, no replacement of something an existing case reads), the import has no effect at load time that an existing case could see (no vi.mock beside it, no module that registers or patches something when loaded), and no existing title, body, setup value or expectation changes. The lane quotes the added statements in its record; the fresh review lists them. Whether the name sits on an existing line or a new one makes no difference, so K5 does NOT move its import.
+
+## 8r. P2-1's root cause accepted and the harness change authorised, verbatim (coordinator 2026-11-18 01:23:39 UTC)
+
+K4, P2-1's root cause: ACCEPTED as test-only. READ BY ME at 197f92c954: GitManagerTestHarness.ts:528-590. makeManager provides layerManager around GitManager.make only (:587-590), so everything that layer built, its own ServerConfig.layerTest folder included, is closed when make returns while the manager goes on using it; with a gate the driver is Layer.fresh (:531) and so is bound to that short-lived folder. That is a manager running on services whose scope has ended, in the harness only. NOT RUN by me: any test; the before and after guarded runs are K4's.
+
+RULE 3 AUTHORISED, this one setup change in the shared helper, exactly as quoted: Layer.build(layerManager) on the scope makeManager already requires, then GitManager.make with Effect.provideContext(services) and Effect.provideContext(stores). No caller, title, body, value or expectation changes. The comment is ONE line. Quote before and after in the record, as you did here.
+Conditions, all in the record with the commit:
+1. One sentence on memoisation, from the code or a probe: after the change, do the cases WITHOUT a gate still share the file's GitVcsDriver (the one it.layer built), or does Layer.build give each makeManager call its own driver and config folder? Either is acceptable; I want to know which, because GitManager.test.ts calls makeManager 90 times.
+2. The wall time of GitManager.test.ts whole, before and after the change, one run each on a quiet machine (ps first). If it grows by more than about a fifth, say so before you push.
+3. One check that no existing case builds two managers in one test and relied on the first one's services or folder being gone (the lane coordinator's point); name the cases with two makeManager calls and say what each does.
+4. The guarded proof as already ruled (prExistingBranch 1 before, 0 after; the six harness users 145 of 145 under the guard) plus every other apps/server test file K4 added or changed.
+The rejected alternative (a worktreesDirectory setting for the one case) stays rejected, for the reason you gave.
+Not for this lane: upstream's harness has the same lines; a note in the record is enough, no upstream report.
+
+The rest of the round is as ruled at 01:14:39 and 01:17 (the starvation fix stays out). Then READY.
+
+## 11. Fix round on 197f92c954 (code log part 4)
+
+Commits, one per finding, in order: 62eff284df P3-1 (sparse fallback warning); c253687203 P3-2 (pending-subscription comment); 82cc5a09a3 P3-4 (tryTurnStartReservation into workspace/testkit/turnStartReservation.ts); eb5fd27afe P2-1 (harness); ebffb754df P3-5 (rewind comment); 5b60d7cf02 P3-6 (a) (busy message); 5da9c9ec5a P3-6 (b) (config-lock clock); 5d5516df2b P3-6 (c) (kept file's flags); e3a6e23a0d the (c) S/h/s cases (01:17:54 I); ac36255ec2 the observation (docs/user/composer.md). Each commit message carries its evidence. The (b) starvation fix stays a local commit, 8917652d36 on the local branch k4-local-review-prep: not pushed, not on the code branch.
+
+### P2-1: root cause, test-only
+
+Why only checkout-race's folder survives: GitManagerTestHarness.ts makeManager (dev's file, unchanged by K4 before this round) ran GitManager.make under Effect.provide(layerManager) (:587-590 at 197f92c954). That builds layerManager, including its own ServerConfig.layerTest with prefix goat-git-manager-test- (makeTempDirectoryScoped, config.ts:220), only while make runs, so the folder is removed when make returns. The eight ungated cases (six in the each table, two submodule cases) use the module-level GitVcsDriver.layer memoised from the file's it.layer, which is bound to the file-level config folder that it.layer removes at file end. With gitSpawnGate, :531 takes Layer.fresh(gitVcsDriver): a new driver bound to the short-lived config, which reads worktreesDir once at build (GitVcsDriverCore.ts:716, the default folder at :3942). The PR worktree is added after make has returned, so git recreates <removed folder>/worktrees/..., and no scope is left to remove it. The cause is test-only: in the product, the ServerConfig layer lives as long as the server, and no product path builds a driver on a config whose scope has ended.
+Evidence, from a temporary afterEach/afterAll probe that was never committed (the file was copied back from /tmp): before the fix, after each ungated case the file folder held caches|userdata|worktrees, with worktrees 1 to 6. After checkout-race a second goat-git-manager-test-* folder held only "worktrees": caches and userdata, which ensureServerDirectories makes, were gone. It was still there at afterAll. Upstream's harness has the same lines (14978e35a5:apps/server/src/git/GitManager.test.ts:702-707 and :757-763); a note here, no upstream report.
+
+Rule 3 (authorised 01:23:39), GitManagerTestHarness.ts:587-590:
+- Before:
+    const manager = yield* GitManager.make.pipe(
+      Effect.provide(layerManager),
+      Effect.provideContext(stores),
+    );
+- After:
+    // The manager keeps using these services, so they live as long as the test's scope.
+    const services = yield* Layer.build(layerManager);
+    const manager = yield* GitManager.make.pipe(
+      Effect.provideContext(services),
+      Effect.provideContext(stores),
+    );
+
+Condition 1, memoisation: ungated cases still share the file's GitVcsDriver. Layer.build and Effect.provide with a layer both build through the fiber's CurrentMemoMap (effect 4.1.3 dist/Layer.js:412 build, and internal/layer.js:6 provideLayer to buildWithScope, both via CurrentMemoMap.forkOrCreate). The probe after the change shows the ungated cases' worktrees 1 to 8 in the one file-level folder, and the gated case's own folder gone by its afterEach. Each makeManager call still builds its own config folder (layerServerConfig is a new layer object per call), which is now removed when the test's scope closes instead of when make returns; ungated drivers do not read it.
+Condition 2, wall time of GitManager.test.ts whole, package goat, one run each, ps first (no vitest running; load 1.74 before, 2.48 after): before (harness checked out from HEAD, the change saved to /tmp/k4-harness-fix.patch and re-applied with git apply) "Duration 67.87s", wall 68 s, EXIT=0; after "Duration 67.57s", wall 67 s, EXIT=0. No growth.
+Condition 3, cases with more than one makeManager call (awk over the six harness users): GitManager.test.ts:637 "finds a fork PR for a branch pushed without an upstream" (four managers, each a fresh status or PR lookup on the same repository after a git change, so no cache carries over); :749 "prefers an exact fork ref but does not guess between equal refs" (three managers, PR lookups with one, then two, fork remotes); :4170 "prepares a worktree from the head branch when the host has no pull ref" (three managers: two preparePullRequestThread calls for other repositories that must leave no local branch, then the one that prepares the worktree). :3663's second call is in the helper defined after the case (:3734), not in the case. None of them reads an earlier manager's config folder or relies on its services being closed: ungated drivers are bound to the file-level config, and GitManager.ts reads no ServerConfig of its own (rg). All three pass in the guarded run below.
+Condition 4: see the guarded runs in READY.
+
+### Other findings
+
+- P3-6 (b): the wait was GOAT's own retry (GitSharedConfig.ts:31-42, 50 ms between up to ten attempts, between real git subprocesses), so it became a deterministic wait: a Clock whose sleeps under one second end at once, with longer sleeps (git's 30 s timeoutOption, GitVcsDriverCore.ts:876) left on the test clock.
+- P3-6 (c): writing the case found two git quirks (git 2.53.0 on pen-macmini): one update-index call keeps only the last of --skip-worktree and --assume-unchanged, and git drops a hand-set skip-worktree on a path inside sparse patterns. So the s variant sets one flag per call in a worktree without sparse patterns. GOAT's restoreSnapshot.ts clears the two flags in separate calls, so it is not affected. Mutation: removing the removed.has filter fails both variants.
+- P3-6 (d), record only, no code: the goat#3681 warning (a marked fiber that is not the holder, queued behind its own marker's lease) can log twice for one ask. It stays a log line, as ruled.
+- The observation's sentence was checked against git in a scratch repository: after git restore --source <older> --worktree --staged --ignore-skip-worktree-bits, a skip-worktree file loses its flag (H) and an assume-unchanged file keeps h, and both show "M  f.txt" in git status with the restored content.
+- The three-line wrap in resolveHeadRepositoryNameWithOwner (6c0a7cf5cf): GitManager.ts:264-267 moved to git/pullRequestHeadIdentity.ts and gained "export", and the formatter then wrapped its signature over three lines. That wrap is the one change in the moved block besides "export", named in that commit's message.
+- Merge note for K7 (the reviewer's): at the integration merge, apps/server/src/terminal/Manager.ts keeps all three import lines (K4's and K7's), and its code-budgets.json entry becomes countLines of the merged file, 3096 by the reviewer's count.
+
+### Rule 3 in this lane (updated)
+
+D4's four (authorised 21:38:37). WorkspaceSearchIndex.test.ts, the provide line, and CheckpointStore.test.ts:7, the type import (both confirmed 00:40). ThreadSettlementService.cache-test-cases.ts, the two value-import lines ({ expect, it } -> { assert, expect, it }; { DEFAULT_SERVER_SETTINGS } -> { DEFAULT_SERVER_SETTINGS, ThreadId }) and the added "import type * as GitManager", now covered by 01:17:54 II and confirmed there. GitManagerTestHarness.ts:587-590 (authorised 01:23:39, quoted above). This round's other test edits are in K4's own cases: the comment in WorkspaceSearchIndex.symlinks.test.ts, the import moves to the testkit in checkpointRestoreReservation.test.ts and CheckpointRollbackService.reservation.test.ts, the config-lock case in switchTagCollision.test.ts (appended by 0cedea5cae; TestClock out, Clock and Duration in), and appended cases in storageCleanup.sparseSnapshot.test.ts and GitVcsDriver.skipWorktreeRestore.test.ts.
+
+### Limits for #3700's body (K4)
+
+- D1: an older server misreads one turn's authored paths after a branch switch.
+- D3: restore reservations are process-local (goat#3703).
+- D5: a restore by another GOAT server does not notify this server's terminals.
+- (b): a restore waits, with no time limit, for turn starts already under way in an overlapping folder, and a steady stream of starts from other threads there can keep it waiting.
+- (d): when a PR worktree's existing branch is reset to the PR head, the old head is kept at one ref (GOAT_PRE_REFRESH_REF) with no reflog, and the next refresh overwrites it; after that only git's reflogs keep it.
+- P3-3: the first workspace search that lists symlinks waits for the whole symlink scan: 258 to 313 ms at 50,018 files and 2,500 links, against 2 to 4 ms without it; later searches take 5 to 6 ms, against 1 to 2 ms (the reviewer's numbers; as upstream 0813f4978e).
+- P3-5: a rewind that finds the thread's worktree missing recreates it under the folder lease, without the restore reservation.
+- Windows: none of K4's files are in goat-ci's Windows suite list, so the reservation's folder overlap, the symlink scan and the terminal notice were not run on Windows.
+
+### Issue drafts (not filed; for the coordinator)
+
+1. "A file restore's wait for overlapping turn starts has no bound." Today a restore (Edit from here with Revert files too) waits, with no time limit, for turn starts already holding an overlapping folder, and other threads' new starts can keep taking the folder first, so the restore can wait for as long as they keep coming. A bounded design needs either a time limit on the restore's wait that tells the person the folder is busy, or a bound on how long a turn start may hold the reservation. The simple queue (new overlapping starts wait behind a waiting restore) was not taken: one provider start that hangs while holding the reservation, plus one waiting restore, would then keep every thread in that folder from starting a turn, which is wider than the failure it removes. Found in the next3 K4 review (question (b), review 1(c)).
+2. "The first workspace search waits for the whole symlink scan." The first search in a workspace that lists symlinks waits until every indexed folder has been read: 258 to 313 ms at 50,018 files and 2,500 links, against 2 to 4 ms without the scan, and it grows with the number of folders. Proposal: the first search waits for the scan only up to a short bound and otherwise answers without links, as later searches already do after 5 ms. Behaviour came with upstream 0813f4978e; found in the next3 K4 review (P3-3).
+
+
+### READY 2 (fix round), under the 00:45:31 rule and IV
+
+- Head on origin: ac36255ec24c1ae9ed6a49d8cc32f01e5e90e82b (chase/t3-261114-next3-k4-checkpoints), a plain fast-forward push from 197f92c954 with the ten commits above. The (b) starvation fix is not on it: it stays a local commit, 8917652d36 on k4-local-review-prep.
+- Integration merge: git merge --no-edit origin/chase/t3-261114-next3 at 259883c788bb32d5601023932e07f879bde9af60 (the head then) reported "Already up to date." (already merged at 46ff34b21f). The head later moved to c31dfe1c41 (K10, 01:42:48) and then to ac238fcce3 (K5, 01:50:54); as ruled, neither was merged. The merge-base of ac36255ec2 with c31dfe1c41 is 259883c788, so check:changed's file set is the same against either.
+- 00:45:31 rule: the gate exited 0 on the pushed head. vp run check:changed origin/chase/t3-261114-next3 on ac36255ec2 ("66 files since 259883c788bb"): goat-rename, unused patches, format, lint (one warning, goat(no-low-value-comments) at workspaceLease.ts:300, a 5-line comment from the initial commit b59034d2b3 that K4 did not touch), graphql, agent context budget, agent surface audit, knip 1/2 and 2/2, typecheck (42 packages) pass; "vp test (336 files) pass", "Test Files 336 passed (336)", "Tests 6021 passed (6021)", EXIT=0.
+- IV: the ps check first in its own step (no vitest running, load 2.35). Then, from apps/server (package goat), GOAT_TEST_TMP_GUARD=fail vp test run over every apps/server test file K4 added or changed (21 files, from git diff --name-only 259883c788..HEAD), plus the files that load K4's changed helpers: ThreadSettlementService.test.ts (cache-test-cases.ts) and the five other GitManagerTestHarness users (the testkit's two users are among the 21). "Test Files 27 passed (27)", "Tests 310 passed (310)", EXIT=0, and no leaked entry.
+- vp i: not needed this round (no lock or patch change). Every lane that merges an integration head containing 0fcf93d99f runs vp i, as before.
+- NOT RUN: Windows (no host; none of K4's files are in goat-ci's Windows suite list); the client pass (P1 rows as before); goat-ci on ac36255ec2 (the coordinator dispatches it); a 500,000-entry workspace.
+
