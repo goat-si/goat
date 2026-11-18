@@ -22,7 +22,7 @@ const APP_ID = "d763fcb8-d37c-41ea-a773-b54a0ab4a454";
 const config = (overrides: Partial<EasDeviceHostConfig> = {}): EasDeviceHostConfig => ({
   kind: "eas",
   id: "eas",
-  label: "EAS Simulator",
+  label: "Expo Simulators",
   appId: APP_ID,
   accessToken: "expo-token",
   maxSessionMinutes: 25,
@@ -155,7 +155,7 @@ const fakeExpo = (
                             node: {
                               id: "someone-else",
                               status: "IN_PROGRESS",
-                              name: "GOAT · EAS Simulator · 000000",
+                              name: "GOAT · Expo Simulators · 000000",
                             },
                           },
                           ...(options.active ?? []).map((node) => ({ node })),
@@ -226,7 +226,7 @@ const makeHost = (
     Effect.provideService(Scope.Scope, scope),
   );
 
-describe("EAS Simulator host", () => {
+describe("Expo Simulators host", () => {
   it.effect("stops a billed session after its token reference becomes unavailable", () =>
     Effect.gen(function* () {
       const expo = fakeExpo();
@@ -371,7 +371,7 @@ describe("EAS Simulator host", () => {
       yield* ready.devices.boot(catalogDevice!);
       const refused = yield* ready.devices.boot(catalogDevice!).pipe(Effect.flip);
       expect(refused.message).toBe(
-        "EAS Simulator is unavailable: EAS Simulator is limited to 1 running session. Close one in the Device panel first.",
+        "Expo Simulators is unavailable: Expo Simulators is limited to 1 running session. Close one in the Device panel first.",
       );
       expect(expo.named("GoatCreateEasSimulatorSession")).toHaveLength(1);
     }).pipe(Effect.scoped, Effect.provide(layer)),
@@ -548,7 +548,7 @@ describe("EAS Simulator host", () => {
     }).pipe(Effect.scoped, Effect.provide(layer)),
   );
 
-  it.effect("asks for an EAS project before starting anything when none can be found", () =>
+  it.effect("asks for an Expo project before starting anything when none can be found", () =>
     Effect.gen(function* () {
       const expo = fakeExpo();
       const host = yield* makeHost(expo, config({ appId: undefined }), yield* Scope.make());
