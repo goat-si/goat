@@ -32,7 +32,6 @@ import * as Hub from "./MemoryHubService.ts";
 import * as Compactor from "./MemoryCompactor.ts";
 import { layerMemoryHubServices, layerMemoryHubRoutes, layerMemoryHubStarted } from "../server.ts";
 import { layerTestLoopback } from "@goat/shared/testing/loopbackHttpServer";
-
 const id = (n: number) => `00000000-0000-4000-8000-${String(n).padStart(12, "0")}`;
 const space = M.MemorySpaceId.make(id(1));
 const memoryId = M.MemoryId.make(id(2));
@@ -63,7 +62,6 @@ const operation = (
   },
   payload: { text: "synthetic memory", evidence: [], derivedFromMemoryRevisions: [] },
 });
-
 // r2 can reuse the actual HTTP/core fixture when L4's H/A/B drivers are integrated.
 // No SyncService double, transcript reader or alternate admission path is installed.
 const makeScenario = (fileSystem?: FileSystem.FileSystem) =>
@@ -848,6 +846,8 @@ describe("Memory hub assembled HTTP scenarios", () => {
         retainedLocalSpace: true,
         provenanceProjection: true,
         derivedCap: 1000,
+        originFilter: true,
+        saveSuggestions: true,
         generationHold: true,
         hubDiagnostics: true,
         siteNotes: true,

@@ -13,8 +13,12 @@ const decode = <A, E>(effect: Effect.Effect<A, E>) => effect.pipe(Effect.mapErro
 export const makeHubAcknowledgement = (deps: {
   store: Store.MemoryStore["Service"];
   settleHubEntryTx: MemoryService["Service"]["settleHubEntryTx"];
+  settleSuggestion: (
+    space: M.MemorySpaceId,
+    receipt: M.MemoryHubReceipt,
+  ) => Effect.Effect<void, Store.MemoryStorageError>;
 }) => {
-  const { store, settleHubEntryTx } = deps;
+  const { store, settleHubEntryTx, settleSuggestion } = deps;
   const reconcileResolutionSubmission: MemoryService["Service"]["reconcileResolutionSubmission"] =
     Effect.fn("MemoryService.reconcileResolutionSubmission")(function* (input) {
       return yield* store.transact(
@@ -86,6 +90,7 @@ export const makeHubAcknowledgement = (deps: {
           (operation !== undefined && M.requiresMemoryFloor2(operation));
         if (staged || receipt.hubSequence === null) {
           yield* store.acknowledgeOutbox(input.workId, receipt);
+          yield* settleSuggestion(input.memorySpaceId, receipt);
           return {
             receipt,
             incorporated: false,

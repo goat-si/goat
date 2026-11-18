@@ -78,6 +78,14 @@ Open the memory, choose **Forget**, and confirm. This cannot be undone. Forgetti
 
 The provider’s original conversation stays, but forgotten content is never imported again. Forgetting content does not automatically shrink the database file.
 
+### Forget several memories
+
+In **Settings → Memory**, choose **Select memories**, mark the records, and choose **Forget** with the number selected. Confirm once. The results show which memories were forgotten, which are waiting to sync, and which you can retry.
+
+### Find memories saved from a conversation
+
+Use **Saved from conversation** to choose a conversation, then browse or search within the selected memory scope. GOAT matches the conversation that originally saved the memory. Older memories with no recorded conversation do not appear in the filtered results.
+
 ## Agent access
 
 Agent memory access depends on the environment’s current policy and the run’s permissions. For scheduled tasks, subagents, and work GOAT Bot or Slack starts for you, **Saved limit** is the stored maximum: none, read only, or read and write. **Allowed now** is what the server currently permits, which may be narrower. If **Allowed now** is absent, the server does not know the current value. Turning agent memory access on cannot widen the saved limit.
@@ -86,7 +94,11 @@ When connecting an outside agent through OAuth, select **Read memory** or **Writ
 
 ## When a conversation cannot save memories
 
-Forked or imported conversations, and conversations that have received more memories than GOAT can safely track, can still use memories but cannot save new ones or produce new memory summaries. Start a new conversation to save the memory.
+If GOAT can only trace part of a conversation’s memory history, it can save the exact words you type. Those memories carry the **Provenance unverified** badge and stay out of automatic memory context and summaries. If GOAT asks you to update the other machines in your memory hub, update them before trying again.
+
+### Review save suggestions
+
+When an agent’s wording needs your review, open **Settings → Memory → Suggestions**. Choose **Accept** to save the text or **Dismiss** to remove the suggestion. GOAT checks the source and permissions again when you accept. Suggestions expire after seven days. Forgetting a memory clears pending suggestions in the same memory space.
 
 ## Connection problems
 

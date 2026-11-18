@@ -299,6 +299,27 @@ export const requestGuarded = Effect.fn("EnvironmentRpc.request")(function* <
         config.environment.capabilities.memory?.refusedReverts === true,
       ) as EnvironmentRpcInput<TTag>;
     }
+    const memoryCapabilities = config.environment.capabilities.memory;
+    if (
+      tag === WS_METHODS.memoryList ||
+      tag === WS_METHODS.memorySearch ||
+      tag === WS_METHODS.memoryRead ||
+      tag === WS_METHODS.memoryHistory
+    ) {
+      const {
+        includeMarks: _marks,
+        origin,
+        ...legacyInput
+      } = dispatchInput as object & {
+        readonly includeMarks?: true;
+        readonly origin?: import("@goat/contracts").ScopedThreadRef;
+      };
+      dispatchInput = {
+        ...legacyInput,
+        ...(memoryCapabilities?.provenanceProjection ? { includeMarks: true as const } : {}),
+        ...(memoryCapabilities?.originFilter && origin ? { origin } : {}),
+      } as EnvironmentRpcInput<TTag>;
+    }
     if (
       !supportsMemoryProtocol(config.environment.capabilities) ||
       (tag === WS_METHODS.memoryHistory &&
@@ -306,6 +327,7 @@ export const requestGuarded = Effect.fn("EnvironmentRpc.request")(function* <
         config.environment.capabilities.memory?.resolutionInputs !== true) ||
       ((tag === WS_METHODS.memoryHubDiagnostics || tag === WS_METHODS.memoryHubReconcile) &&
         config.environment.capabilities.memory?.hubDiagnostics !== true) ||
+      (tag.startsWith("memory.suggestions.") && memoryCapabilities?.saveSuggestions !== true) ||
       (tag === WS_METHODS.memoryImportProvider &&
         config.environment.capabilities.memory?.importProvider !== true) ||
       ((tag === WS_METHODS.siteNotesList ||
@@ -707,7 +729,8 @@ export type MemoryBodyRpcTag =
   | typeof WS_METHODS.memorySearch
   | typeof WS_METHODS.memoryRead
   | typeof WS_METHODS.memoryHistory
-  | typeof WS_METHODS.memoryReadSource;
+  | typeof WS_METHODS.memoryReadSource
+  | typeof WS_METHODS.memorySuggestionsList;
 
 /** Runs an ephemeral body read in the caller's interruptible atom scope. */
 export function requestMemoryQuery<R, E, T extends MemoryBodyRpcTag>(

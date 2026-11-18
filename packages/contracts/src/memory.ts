@@ -1567,8 +1567,9 @@ export type MemorySearchPage = {
   readonly exhausted: boolean;
 };
 
+const browseOptions = { ...includeMarks, origin: Schema.optionalKey(ScopedThreadRef) };
 export const MemorySearchInput = struct({
-  ...includeMarks,
+  ...browseOptions,
   ...space,
   ...paging,
   cursor: Schema.optionalKey(
@@ -1591,7 +1592,7 @@ export const MemorySearchInput = struct({
 export type MemorySearchInput = typeof MemorySearchInput.Type;
 
 export const MemoryListInput = struct({
-  ...includeMarks,
+  ...browseOptions,
   ...space,
   ...paging,
   scope: Schema.optionalKey(MemoryScope),

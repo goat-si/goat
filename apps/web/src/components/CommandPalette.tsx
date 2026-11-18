@@ -1760,17 +1760,17 @@ function OpenCommandPaletteDialog(props: {
       icon: <BrainIcon className={ITEM_ICON_CLASS} />,
       run: async () => {
         setOpen(false);
-        await navigate({
-          to: "/settings/memory",
-          search: validateMemorySettingsSearch({ environmentId: memoryEnvironmentId ?? undefined }),
-          hash: "",
-        });
+        const search = validateMemorySettingsSearch(
+          activeThread
+            ? { environmentId: activeThread.environmentId, originThreadId: activeThread.id }
+            : {},
+        );
+        await navigate({ to: "/settings/memory", search, hash: "" });
       },
     });
   }
   const rootGroups = buildRootGroups({ actionItems, recentThreadItems });
-  // Every setting goes to the palette's own matcher, so settings get the same
-  // word starts and typo tolerance as threads.
+  // Settings use the same word-start and typo matching as threads.
   const settingsSearchItems: CommandPaletteActionItem[] = settingsForThisPlatform(
     availableSettingsSearchItems,
   ).map((item) => ({

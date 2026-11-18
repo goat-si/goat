@@ -70,14 +70,14 @@ describe("runMigrations database ahead of this build", () => {
     }).pipe(Effect.provide(NodeSqliteClient.layer({ filename: ":memory:" }))),
   );
 
-  it.effect("the 158 build refuses a migrated 159 hub floor database", () =>
+  it.effect("the 159 build refuses a migrated 160 hub floor database", () =>
     Effect.gen(function* () {
-      assert.deepStrictEqual((yield* runMigrations({ toMigrationInclusive: 159 })).at(-1), [
-        159,
+      assert.deepStrictEqual((yield* runMigrations({ toMigrationInclusive: 160 })).at(-1), [
+        160,
         "MemoryHubFloor",
       ]);
-      const manifest158 = migrationEntries.filter(([id]) => id <= 158);
-      const failure = yield* Effect.flip(assertMemoryMigrationsCompatible(manifest158));
+      const manifest159 = migrationEntries.filter(([id]) => id <= 159);
+      const failure = yield* Effect.flip(assertMemoryMigrationsCompatible(manifest159));
       assert.strictEqual(failure._tag, "MigrationError");
       assert.include(failure.message, "Unreleased memory DB is incompatible");
     }).pipe(Effect.provide(NodeSqliteClient.layer({ filename: ":memory:" }))),

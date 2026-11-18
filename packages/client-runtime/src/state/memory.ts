@@ -380,6 +380,8 @@ export function createMemoryEnvironmentAtoms<R, E>(
             tag !== WS_METHODS.siteNotesDelete &&
             tag !== WS_METHODS.siteNotesRestoreSeed) ||
             config.environment.capabilities.memory?.siteNotes === true) &&
+          (!tag.startsWith("memory.suggestions.") ||
+            config.environment.capabilities.memory?.saveSuggestions === true) &&
           (tag !== WS_METHODS.memoryImportProvider ||
             config.environment.capabilities.memory?.importProvider === true)
         );
@@ -654,6 +656,9 @@ export function createMemoryEnvironmentAtoms<R, E>(
     readSource: bodyQuery(WS_METHODS.memoryReadSource),
     upsert: command(WS_METHODS.memoryUpsert),
     forget: command(WS_METHODS.memoryForget),
+    suggestions: bodyQuery(WS_METHODS.memorySuggestionsList),
+    acceptSuggestion: command(WS_METHODS.memorySuggestionsAccept),
+    dismissSuggestion: command(WS_METHODS.memorySuggestionsDismiss),
     revertResolution: command(WS_METHODS.memoryRevertResolution),
     projectBindingGet: command(WS_METHODS.memoryProjectBindingGet),
     projectBindingUpdate: command(WS_METHODS.memoryProjectBindingUpdate),
@@ -680,4 +685,40 @@ export function createMemoryEnvironmentAtoms<R, E>(
     draftAtom: (target: MemoryTarget & { readonly draftId: string }) =>
       drafts(JSON.stringify([target.environmentId, target.input, target.draftId])),
   };
+}
+
+export type MemoryBatchForgetResult = {
+  readonly request: import("@goat/contracts").MemoryForgetInput;
+  readonly status: "Forgotten" | "Pending sync" | "Failed";
+  readonly reason?: string;
+};
+
+export async function forgetMemorySelection(
+  requests: readonly import("@goat/contracts").MemoryForgetInput[],
+  forget: (
+    input: import("@goat/contracts").MemoryForgetInput,
+  ) => Promise<AsyncResult.AsyncResult<MemoryMutationReceipt, unknown>>,
+): Promise<MemoryBatchForgetResult[]> {
+  const results: MemoryBatchForgetResult[] = [];
+  for (const request of requests) {
+    const result = await forget(request);
+    if (result._tag === "Success" && result.value.outcome !== "rejected") {
+      results.push({ request, status: result.value.pendingSync ? "Pending sync" : "Forgotten" });
+      continue;
+    }
+    const error =
+      result._tag === "Failure" ? Option.getOrNull(Cause.findErrorOption(result.cause)) : null;
+    const code =
+      result._tag === "Success"
+        ? result.value.failureCode
+        : isMemoryRpcError(error)
+          ? error.code
+          : undefined;
+    results.push({
+      request,
+      status: "Failed",
+      reason: code?.replaceAll("_", " ") ?? "Request could not be confirmed",
+    });
+  }
+  return results;
 }

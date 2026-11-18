@@ -17,16 +17,22 @@ export class MemoryRememberScopeUnavailable extends Schema.TaggedError<MemoryRem
 export class MemoryRefusedSaveHook extends Context.Service<
   MemoryRefusedSaveHook,
   {
-    readonly onRefusedSave: (candidate: {
-      readonly input: M.MemoryUpsertInput;
-      readonly thread: M.ScopedThreadRef;
-      readonly reason:
-        | "thread_lineage_incomplete"
-        | "hub_upgrade_required"
-        | "hub_unavailable"
-        | "capacity_exceeded"
-        | "source_invalidated";
-    }) => Effect.Effect<void, MemoryServiceError>;
+    readonly onRefusedSave: (
+      candidate: {
+        readonly input: M.MemoryUpsertInput;
+        readonly thread: M.ScopedThreadRef;
+        readonly reason:
+          | "thread_lineage_incomplete"
+          | "hub_upgrade_required"
+          | "hub_unavailable"
+          | "capacity_exceeded"
+          | "source_invalidated";
+        readonly knownRevisions: ReadonlyArray<M.MemoryRevisionId>;
+        readonly lineageComplete: boolean;
+        readonly forgetGeneration: number;
+      },
+      permit: Effect.Effect<void, MemoryAccessError>,
+    ) => Effect.Effect<void, MemoryServiceError>;
   }
 >()("goat/memory/MemoryRemember/MemoryRefusedSaveHook") {}
 
@@ -57,7 +63,6 @@ export const makeRemember = (deps: {
     sourceThread?: M.ScopedThreadRef,
     remember?: { readonly allowUnverified: boolean },
   ) => Effect.Effect<Store.StoredReceipt, MemoryServiceError>;
-  readonly onRefusedSave: MemoryRefusedSaveHook["Service"]["onRefusedSave"];
   readonly stableUuid: (text: string) => string;
 }) =>
   Effect.fn("MemoryService.remember")(function* (
@@ -146,41 +151,7 @@ export const makeRemember = (deps: {
       payload: { text: input.text, evidence, derivedFromMemoryRevisions: [] },
       baseBoundary: null,
     };
-    return yield* deps
-      .upsert(candidate, permit, sourceThread, {
-        allowUnverified: input.memoryId === undefined,
-      })
-      .pipe(
-        Effect.tapError((error) => {
-          if (!sourceThread) return Effect.void;
-          if (
-            error._tag === "MemoryCapacityError" &&
-            (error.dimension === "dependencies" || error.dimension === "payload_bytes")
-          )
-            return deps.onRefusedSave({
-              input: candidate,
-              thread: sourceThread,
-              reason: "capacity_exceeded",
-            });
-          if (
-            error._tag === "MemoryStoreConflict" &&
-            (error.code === "thread_lineage_incomplete" ||
-              error.code === "hub_upgrade_required" ||
-              error.code === "hub_unavailable" ||
-              error.code === "source_invalidated")
-          )
-            return deps.onRefusedSave({
-              input: candidate,
-              thread: sourceThread,
-              reason: error.code,
-            });
-          if (error._tag === "MemoryStoreConflict" && error.code === "unsupported_protocol")
-            return deps.onRefusedSave({
-              input: candidate,
-              thread: sourceThread,
-              reason: "hub_upgrade_required",
-            });
-          return Effect.void;
-        }),
-      );
+    return yield* deps.upsert(candidate, permit, sourceThread, {
+      allowUnverified: input.memoryId === undefined,
+    });
   });

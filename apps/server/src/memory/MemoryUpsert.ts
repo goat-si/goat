@@ -1,3 +1,5 @@
+import type { MemoryRefusedSaveHook } from "./MemoryRemember.ts";
+import { suggestionForgetGeneration } from "./store/SaveSuggestions.ts";
 import { floorWriteId } from "./store/FloorWrites.ts";
 import { hubReceiptCodec } from "./store/StoreCodecs.ts";
 import * as M from "@goat/contracts";
@@ -40,6 +42,7 @@ const encodeUpsertRequest = Schema.encodeEffect(
 const decode = <A, E>(effect: Effect.Effect<A, E>) =>
   effect.pipe(Effect.mapError(() => new Store.MemoryStoreConflict({ code: "invalid_output" })));
 type Permit = Effect.Effect<void, MemoryAccessError>;
+type Refusal = Parameters<MemoryRefusedSaveHook["Service"]["onRefusedSave"]>[0];
 
 export const makeUpsert = (deps: {
   readonly sql: SqlClient.SqlClient;
@@ -59,6 +62,7 @@ export const makeUpsert = (deps: {
   ) => Effect.Effect<Store.StoredReceipt, MemoryServiceError>;
   readonly stableUuid: (input: string) => string;
   readonly hash: (input: string) => string;
+  readonly onRefusedSave: MemoryRefusedSaveHook["Service"]["onRefusedSave"];
 }) => {
   const {
     sql,
@@ -91,13 +95,14 @@ export const makeUpsert = (deps: {
     sourceThread?: M.ScopedThreadRef,
     remember?: { readonly allowUnverified: boolean },
     acceptance?: MemorySuggestionAcceptance,
+    captureRefusal?: (candidate: Omit<Refusal, "reason">) => void,
   ) {
     const value = yield* decode(decodeUpsert(input, strict));
     return yield* store.transact(
       Effect.gen(function* () {
         yield* permit;
         yield* requireSharing(value.memorySpaceId);
-        yield* requireCaller(sourceThread);
+        yield* requireCaller(acceptance?.origin ?? sourceThread);
         const requestDigest = hash(
           yield* decode(
             encodeUpsertRequest({
@@ -193,7 +198,7 @@ export const makeUpsert = (deps: {
           ? yield* store.readThreadLineage(sourceThread, space)
           : undefined;
         const current =
-          remember || value.expectedHeads.length
+          remember || acceptance || value.expectedHeads.length
             ? yield* store.loadAggregate(space, value.memoryId, { heads: true }, {})
             : undefined;
         const heads =
@@ -205,6 +210,23 @@ export const makeUpsert = (deps: {
         );
         const supplied = value.payload.derivedFromMemoryRevisions;
         const known = new Set([...inherited, ...supplied, ...(lineage?.revisions ?? [])]);
+        if (acceptance && (current?.identity || current?.tombstone))
+          return yield* new Store.MemoryStoreConflict({ code: "source_invalidated" });
+        if (
+          captureRefusal &&
+          sourceThread &&
+          lineage &&
+          remember?.allowUnverified &&
+          !current?.identity &&
+          !current?.tombstone
+        )
+          captureRefusal({
+            input: value,
+            thread: sourceThread,
+            knownRevisions: [...known],
+            lineageComplete: lineage.state === "tracked",
+            forgetGeneration: yield* suggestionForgetGeneration(space),
+          });
         if (
           (supplied.length > limit || (remember && lineage?.state === "tracked")) &&
           known.size > limit &&
@@ -233,7 +255,9 @@ export const makeUpsert = (deps: {
             ...value.payload,
             derivedFromMemoryRevisions: supplied.filter((id) => !inherited.has(id)),
           }),
+          acceptance !== undefined,
         );
+        if (acceptance) yield* validateSummaryDependencies(space, payload);
         if (lineage || inherited.size) {
           const dependencies = [
             ...new Set([
@@ -305,17 +329,55 @@ export const makeUpsert = (deps: {
       }).pipe(Effect.provideService(SqlClient.SqlClient, sql)),
     );
   }, Quota.withStoreReclaim(environmentId));
-  return Effect.fn("MemoryService.upsert")(function* (...args: Parameters<typeof write>) {
-    const staged = yield* write(...args);
+  const upsert = Effect.fn("MemoryService.upsert")(function* (
+    input: M.MemoryUpsertInput,
+    permit: Permit,
+    sourceThread?: M.ScopedThreadRef,
+    remember?: { readonly allowUnverified: boolean },
+  ) {
+    let candidate: Omit<Refusal, "reason"> | undefined;
+    const capture = (value: Omit<Refusal, "reason">) => {
+      candidate = value;
+    };
+    const stage = write(input, permit, sourceThread, remember, undefined, capture);
     const waiting = (result: Store.StoredReceipt) =>
       "pendingSync" in result.receipt &&
       result.receipt.pendingSync &&
       result.receipt.revisionId === null;
-    if (!deps.submitFloorWrite || !waiting(staged)) return staged;
-    yield* args[1];
-    yield* deps.submitFloorWrite;
-    const settled = yield* write(...args);
-    if (waiting(settled)) return yield* new Store.MemoryStoreConflict({ code: "hub_unavailable" });
-    return settled;
+    return yield* Effect.gen(function* () {
+      const staged = yield* stage;
+      if (!deps.submitFloorWrite || !waiting(staged)) return staged;
+      yield* permit;
+      yield* deps.submitFloorWrite;
+      const settled = yield* stage;
+      if (waiting(settled))
+        return yield* new Store.MemoryStoreConflict({ code: "hub_unavailable" });
+      return settled;
+    }).pipe(
+      Effect.tapError((error) => {
+        if (!candidate) return Effect.void;
+        if (error._tag === "MemoryCapacityError")
+          return deps.onRefusedSave({ ...candidate, reason: "capacity_exceeded" }, permit);
+        if (error._tag === "MemoryStoreConflict") {
+          const code = error.code === "unsupported_protocol" ? "hub_upgrade_required" : error.code;
+          if (
+            code === "thread_lineage_incomplete" ||
+            code === "hub_upgrade_required" ||
+            code === "hub_unavailable" ||
+            code === "source_invalidated"
+          )
+            return deps.onRefusedSave({ ...candidate, reason: code }, permit);
+        }
+        return Effect.void;
+      }),
+    );
   });
+  const stageAcceptedSuggestion = Effect.fn("MemoryService.stageAcceptedSuggestion")(function* (
+    input: M.MemoryUpsertInput,
+    acceptance: MemorySuggestionAcceptance,
+    permit: Permit,
+  ) {
+    return yield* write(input, permit, undefined, undefined, acceptance);
+  });
+  return { upsert, stageAcceptedSuggestion };
 };

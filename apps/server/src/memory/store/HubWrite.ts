@@ -132,8 +132,8 @@ export const makeHubWrite = (
       yield* stored(
         "hub-forget-watermark-advance",
         sql`
-        INSERT INTO memory_space_counters(space,last_forget_sequence)
-        VALUES (${op.memorySpaceId},${hubSequence})
+        INSERT INTO memory_space_counters(space,forget_generation,last_forget_sequence)
+        VALUES (${op.memorySpaceId},0,${hubSequence})
         ON CONFLICT(space) DO UPDATE SET last_forget_sequence=max(last_forget_sequence,excluded.last_forget_sequence)`,
       );
     const record: M.MemoryCompactReceipt = {

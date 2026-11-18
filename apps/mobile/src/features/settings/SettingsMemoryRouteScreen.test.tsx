@@ -1,3 +1,4 @@
+import { revertHistory } from "./MemoryRouteFixtures";
 import { act } from "react";
 import { afterEach, describe, expect, it, vi } from "vite-plus/test";
 import {
@@ -39,8 +40,9 @@ afterEach(async () => {
 async function mount(
   scopes?: Parameters<NativeMemoryHarness["grant"]>[0],
   setup?: (harness: NativeMemoryHarness) => void,
+  capabilities?: Parameters<typeof createNativeMemoryHarness>[0],
 ) {
-  h = createNativeMemoryHarness();
+  h = createNativeMemoryHarness(capabilities);
   setup?.(h);
   if (scopes) h.grant(scopes);
   await h.waitForAtom(h.memory.syncStatus.permissionAtom(nativeEnv), Boolean);
@@ -58,44 +60,6 @@ const decodeRevertResult = Schema.decodeUnknownSync(MemoryRevertResult);
 const decodeItem = Schema.decodeUnknownSync(MemoryItem);
 const decodeSource = Schema.decodeUnknownSync(MemorySourcePage);
 const decodeHistory = Schema.decodeUnknownSync(MemoryHistoryPage);
-function revertHistory() {
-  if (nativeItem.status !== "active") throw new Error("Expected active fixture");
-  return decodeHistory({
-    memoryId: nativeId,
-    revisions: [
-      {
-        revision: { ...nativeItem.revision, revisionId: originalId, payloadRef: originalId },
-        payload: nativeItem.status === "active" ? nativeItem.payload : null,
-      },
-    ],
-    resolutions: [
-      {
-        resolution: {
-          resolutionId,
-          memorySpaceId: nativeSpace,
-          memoryId: nativeId,
-          inputRevisionIds: [originalId, "00000000-0000-4000-8000-000000000007"],
-          inputPayloadRefs: [originalId, "00000000-0000-4000-8000-000000000007"],
-          judgmentRef: resolutionId,
-          requestedModelSelection: { instanceId: "codex", model: "synthetic", options: [] },
-          effectiveProvider: "codex",
-          effectiveModel: "synthetic",
-          resolvingEnvironmentId: nativeEnv,
-          fencingToken: 1,
-          resultRevisionId: "00000000-0000-4000-8000-000000000004",
-          appliedAtUtc: "2000-01-01T00:00:00.000Z",
-          revertDeadlineUtc: "2000-01-31T00:00:00.000Z",
-        },
-        payload: { resolutionId, judgment: "Synthetic resolution" },
-      },
-    ],
-    tombstone: null,
-    reports: [],
-    revertResults: [],
-    localAvailability: nativeItem.localAvailability,
-    nextCursor: null,
-  });
-}
 const decodeReceipt = Schema.decodeUnknownSync(MemoryMutationReceipt);
 function receipt(input: unknown, rejected = false) {
   return decodeReceipt({
@@ -123,6 +87,9 @@ describe("native Memory with shared factory", () => {
       },
     }));
     expect(view.container.textContent).toContain("Synthetic memory body");
+    expect(view.container.textContent).not.toMatch(
+      /Saved from conversation|Select memories|Show suggestions/,
+    );
     await view.type("Search memory", "absent");
     await view.click("Search");
     expect(view.container.textContent).toContain(
@@ -2238,4 +2205,35 @@ it.each([false, true])("keeps native legacy revert with incomplete page=%s", asy
       },
     );
   }
+});
+
+it("reviews save suggestions and shows the provenance badge in Memory Settings", async () => {
+  const suggestion = {
+    suggestionId: nativeId,
+    text: "Synthetic words to review",
+    state: "pending",
+    reason: "thread_lineage_incomplete",
+    lineageComplete: false,
+  };
+  await mount(
+    undefined,
+    (fixture) => {
+      fixture.responses.set(WS_METHODS.memorySuggestionsList, () => [suggestion]);
+      fixture.responses.set(WS_METHODS.memorySuggestionsAccept, () => {
+        fixture.responses.set(WS_METHODS.memorySuggestionsList, () => []);
+        fixture.responses.set(WS_METHODS.memoryList, () => ({
+          items: [{ ...nativeItem, marks: { provenance: "unverified" } }],
+          projectionWatermark: 2,
+          nextCursor: null,
+        }));
+        return { status: "accepted" };
+      });
+    },
+    { protocolVersion: 1, saveSuggestions: true, originFilter: true, provenanceProjection: true },
+  );
+  expect(view.container.textContent).toContain(suggestion.text);
+  await view.click("Accept");
+  expect(view.container.textContent).toContain("Memory saved");
+  expect(view.container.textContent).toContain("Provenance unverified");
+  expect(view.container.textContent).not.toContain(suggestion.text);
 });

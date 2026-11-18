@@ -2,6 +2,7 @@ import { randomUUID } from "../../lib/utils";
 import {
   EnvironmentId,
   MemoryId,
+  ThreadId,
   MemorySpaceId,
   MemoryResolutionId,
   MemoryOperationId,
@@ -31,12 +32,14 @@ export function validateMemorySettingsSearch(raw: Record<string, unknown>) {
   const environmentId = decoded(EnvironmentId, raw.environmentId ?? raw.machine);
   const memorySpaceId = decoded(MemorySpaceId, raw.memorySpaceId);
   const memoryId = memorySpaceId ? decoded(MemoryId, raw.memoryId) : undefined;
+  const originThreadId = environmentId ? decoded(ThreadId, raw.originThreadId) : undefined;
   const resolutionId = memoryId ? decoded(MemoryResolutionId, raw.resolutionId) : undefined;
   return {
     ...(environmentId ? { environmentId, machine: environmentId } : {}),
     ...(memorySpaceId ? { memorySpaceId } : {}),
     ...(memoryId ? { memoryId } : {}),
     ...(resolutionId ? { resolutionId } : {}),
+    ...(originThreadId ? { originThreadId } : {}),
     project: undefined,
     checkout: undefined,
   };

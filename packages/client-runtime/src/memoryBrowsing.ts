@@ -57,3 +57,24 @@ export function memoryPreview(text: string) {
 export function memoryScopeLabel(scope: MemoryScope) {
   return scope.kind === "user" ? "User" : scope.kind === "project" ? "Project" : "Thread";
 }
+
+export const MEMORY_FORGET_SELECTION_LIMIT = 40;
+
+export function memoryForgetRequest(
+  item: import("@goat/contracts").MemoryItem,
+  operationId: import("@goat/contracts").MemoryOperationId,
+): import("@goat/contracts").MemoryForgetInput | null {
+  if (item.status === "forgotten" || item.localAvailability.reasons.includes("forget_pending"))
+    return null;
+  return {
+    memoryId: item.memoryId,
+    memorySpaceId: item.memorySpaceId,
+    operationId,
+    expectedHeads:
+      item.status === "active"
+        ? [item.revision.revisionId]
+        : item.status === "quarantined"
+          ? [...item.conflict.heads].sort()
+          : [],
+  };
+}

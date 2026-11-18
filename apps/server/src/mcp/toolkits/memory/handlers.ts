@@ -204,7 +204,9 @@ const decodeHistory = argumentsOf("memory_history", M.MemoryHistoryInput);
 const decodeSyncStatus = argumentsOf("memory_sync_status", M.MemorySyncStatusInput);
 const decodeUpsert = argumentsOf("memory_upsert", M.MemoryUpsertInput);
 const decodeRemember = argumentsOf("goat_memory_remember", M.MemoryRememberInput);
-const decodeForget = argumentsOf("memory_forget", M.MemoryForgetInput);
+const decodeForget = argumentsOf("memory_forget", M.McpMemoryForgetInput);
+const decodeExplicitForget = argumentsOf("memory_forget", M.MemoryForgetInput);
+const decodeSuggestions = argumentsOf("memory.suggestions", M.MemorySuggestionsInput);
 const decodeRevertResolution = argumentsOf(
   "memory_revert_resolution",
   M.MemoryRevertResolutionInput,
@@ -216,7 +218,7 @@ const callerThread = Effect.gen(function* () {
     ? { environmentId: caller.environmentId, threadId: caller.thread.threadId }
     : undefined;
 });
-/** Read tools default to this server's memory space, so a query or id alone is enough. */
+/** Tools with an optional space use this server's current memory space. */
 const withCurrentSpace = (input: unknown) =>
   Effect.gen(function* () {
     if (typeof input !== "object" || input === null || "memorySpaceId" in input) return input;
@@ -340,12 +342,29 @@ const handlers = {
         );
     }).pipe(Effect.catch(memoryFailure("goat_memory_remember"))),
   ),
+  goat_memory_suggestions: McpToolAccess.reads((input) =>
+    Effect.gen(function* () {
+      const service = yield* MemoryService.MemoryService;
+      return yield* service.listSuggestionMetadata(
+        yield* decodeSuggestions(yield* withCurrentSpace(input)),
+        yield* invocationPermit("read"),
+      );
+    }).pipe(Effect.catch(memoryFailure("goat_memory_suggestions"))),
+  ),
   memory_forget: McpToolAccess.destructive(
     McpToolAccess.writesWithCapability((input) =>
       Effect.gen(function* () {
         const service = yield* MemoryService.MemoryService;
+        const permit = yield* invocationPermit("write");
+        yield* permit;
+        const value = yield* decodeForget(yield* withCurrentSpace(input));
+        if (!value.memorySpaceId) return yield* new M.MemoryRpcError({ code: "hub_disabled" });
+        const request =
+          value.operationId !== undefined
+            ? yield* decodeExplicitForget(value)
+            : { memorySpaceId: value.memorySpaceId, memoryId: value.memoryId };
         return yield* service
-          .forget(yield* decodeForget(input), yield* invocationPermit("write"))
+          .forget(request, permit)
           .pipe(Effect.flatMap((stored) => receipt(stored.receipt)));
       }).pipe(Effect.catch(memoryFailure("memory_forget"))),
     ),

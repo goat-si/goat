@@ -23,6 +23,7 @@ import {
   seedUserData,
   snapshot,
   hubFloorRow,
+  saveSuggestionsRow,
   threadLineageRow,
   UPSTREAM_80S,
   userData,
@@ -85,6 +86,7 @@ describe("GOAT migrations after upstream 080-089", () => {
       assert.deepStrictEqual(yield* runMigrations(), [
         currentRow("DisposableMachineEnrollment"),
         threadLineageRow,
+        saveSuggestionsRow,
         hubFloorRow,
       ]);
       assert.deepStrictEqual(yield* history, migrationManifest);
@@ -191,6 +193,7 @@ describe("GOAT migrations after upstream 080-089", () => {
         assert.deepStrictEqual(yield* runMigrations(), [
           ...UPSTREAM_80S.slice(-1),
           threadLineageRow,
+          saveSuggestionsRow,
           hubFloorRow,
         ]);
         assert.deepStrictEqual(yield* snapshot, yield* fresh);
@@ -207,6 +210,7 @@ describe("GOAT migrations after upstream 080-089", () => {
       assert.deepStrictEqual(yield* runMigrations(), [
         ...UPSTREAM_80S,
         threadLineageRow,
+        saveSuggestionsRow,
         hubFloorRow,
       ]);
       assert.deepStrictEqual(yield* history, migrationManifest);
