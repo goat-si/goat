@@ -30,12 +30,12 @@ import type { UpdateEverything } from "./useUpdateEverything";
 
 const TAB_LABELS: Record<UpdateTab, string> = { app: "App & servers", runtimes: "Runtimes" };
 const TAB_NOTES: Record<UpdateTab, string> = {
-  app: "Servers go first and this Mac restarts last. Busy machines wait until their threads finish.",
+  app: "Servers update before this Mac restarts. Busy machines wait until their threads finish.",
   runtimes: "Provider CLIs update in place. OpenCodex updates the Home before its Children.",
 };
 
 export interface UpdateDialogSelection {
-  readonly tab: UpdateTab;
+  readonly tab: UpdateTab | "both";
   readonly rows: ReadonlyArray<UpdateDialogRow>;
 }
 
@@ -183,8 +183,12 @@ export function UpdateDialogView({
     app: new Set(),
     runtimes: new Set(),
   });
-  const count = (name: UpdateTab) => selectedRows(tabs[name], unchecked[name]).length;
-  const selected = selectedRows(tabs[tab], unchecked[tab]);
+  const selection = {
+    app: selectedRows(app, unchecked.app),
+    runtimes: selectedRows(runtimes, unchecked.runtimes),
+  };
+  const selected = selection[tab];
+  const canUpdateBoth = selection.app.length > 0 && selection.runtimes.length > 0;
   const toggle = (name: UpdateTab, id: string, checked: boolean) =>
     setUnchecked((current) => {
       const next = new Set(current[name]);
@@ -201,7 +205,7 @@ export function UpdateDialogView({
           {(["app", "runtimes"] as const).map((name) => (
             <TabsTab key={name} value={name}>
               {TAB_LABELS[name]}
-              <span className="text-muted-foreground tabular-nums">{count(name)}</span>
+              <span className="text-muted-foreground tabular-nums">{selection[name].length}</span>
             </TabsTab>
           ))}
         </TabsList>
@@ -230,9 +234,21 @@ export function UpdateDialogView({
       ))}
       <AlertDialogFooter className="sm:items-center">
         <p className="text-muted-foreground text-xs max-sm:order-last sm:mr-auto sm:max-w-72">
-          {TAB_NOTES[tab]}
+          {canUpdateBoth
+            ? "Update both runs the checked items in both tabs. Provider updates finish before servers restart."
+            : TAB_NOTES[tab]}
         </p>
         <AlertDialogClose render={<Button variant="outline" />}>Cancel</AlertDialogClose>
+        {canUpdateBoth ? (
+          <Button
+            variant="outline"
+            onClick={() =>
+              onConfirm({ tab: "both", rows: [...selection.app, ...selection.runtimes] })
+            }
+          >
+            Update both ({selection.app.length + selection.runtimes.length})
+          </Button>
+        ) : null}
         <Button disabled={selected.length === 0} onClick={() => onConfirm({ tab, rows: selected })}>
           {updateButtonLabel(selected.length)}
         </Button>

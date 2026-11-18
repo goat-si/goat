@@ -348,11 +348,13 @@ export function updateButtonLabel(count: number): string {
  * resolving false means the person stopped waiting; the result is then null.
  */
 export async function runWhenIdle<A>(steps: {
+  readonly beforeIdle?: Promise<unknown>;
   readonly idle: () => Promise<boolean>;
   readonly attempt: () => Promise<A>;
   readonly isBusy: (result: A) => boolean;
   readonly retryLater: () => Promise<boolean>;
 }): Promise<A | null> {
+  if (steps.beforeIdle !== undefined) await steps.beforeIdle;
   for (;;) {
     if (!(await steps.idle())) return null;
     const result = await steps.attempt();
