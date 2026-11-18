@@ -487,6 +487,40 @@ describe("AcpRegistrySupport", () => {
     );
   });
 
+  it.effect("installs a contained binary whose name starts with two dots", () => {
+    const agent = makeAgent({
+      binary: { "linux-x86_64": { archive: archiveUrl, cmd: "..example-agent" } },
+    });
+    return Effect.gen(function* () {
+      const fileSystem = yield* FileSystem.FileSystem;
+      const cacheDir = yield* fileSystem.makeTempDirectoryScoped({
+        prefix: "goat-acp-registry-dot-name-",
+      });
+      const resolver = yield* AcpRegistrySupport.makeAcpRegistryCatalog({
+        cacheDir,
+        toolsDir: `${cacheDir}/tools`,
+        registryUrl,
+      });
+      const resolved = yield* resolver.resolve(settings(), "/workspace");
+
+      expect(resolved.spawn.command).toContain(
+        "/tools/example-agent/1.2.3/linux-x86_64/..example-agent",
+      );
+    }).pipe(
+      Effect.scoped,
+      Effect.provide(
+        layerResolver((request) =>
+          Effect.succeed(
+            HttpClientResponse.fromWeb(
+              request,
+              new Response(request.url === registryUrl ? makeRegistry(agent) : "#!/bin/sh\n"),
+            ),
+          ),
+        ),
+      ),
+    );
+  });
+
   it.effect("installs and reuses a registry binary in the managed cache", () => {
     const binaryBytes = new TextEncoder().encode("#!/bin/sh\necho example\n");
     const agent = makeAgent({
