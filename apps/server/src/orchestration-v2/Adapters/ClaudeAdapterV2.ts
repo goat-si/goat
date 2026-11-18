@@ -8172,10 +8172,6 @@ export const makeClaudeAdapterV2 = Effect.fn("makeClaudeAdapterV2")(function* (
             ) {
               resetTimes.push(assistantLimit.resetAt);
             }
-            const resetAt =
-              resetTimes.length > 0 && resetTimes.every((time) => time !== null)
-                ? resetTimes.reduce((latest, time) => (time! > latest ? time! : latest), "")
-                : null;
             const resultFailure = interrupted
               ? null
               : limitedCompaction !== null
@@ -8190,9 +8186,18 @@ export const makeClaudeAdapterV2 = Effect.fn("makeClaudeAdapterV2")(function* (
                     failureHint,
                     usageLimited,
                   );
+            if (resultFailure?.class === "usage_limit" && resultFailure.resetAt != null)
+              resetTimes.push(resultFailure.resetAt);
+            const resetAt = resetTimes.includes(null)
+              ? null
+              : resetTimes.reduce<string | null>(
+                  (latest, time) =>
+                    time !== null && (latest === null || time > latest) ? time : latest,
+                  null,
+                );
             const terminalFailure =
               resultFailure?.class === "usage_limit"
-                ? { ...resultFailure, resetAt: resetAt ?? resultFailure.resetAt ?? null }
+                ? { ...resultFailure, resetAt }
                 : resultFailure;
             yield* finalizeActiveTurn({
               context,

@@ -4687,6 +4687,8 @@ describe("ClaudeAdapterV2 background wake turns", () => {
   it.effect.each([
     { cooldown: " (reset after 1h2m3s)", seconds: 3723 },
     { cooldown: " (reset after 4m 6s) (last error: rate limited)", seconds: 246 },
+    { cooldown: " (last error: upstream (reset after 1h))", seconds: 0 },
+    { cooldown: " (reset after 1m) (last error: upstream (reset after 1h))", seconds: 60 },
     { cooldown: "", seconds: 0 },
   ])("keeps a gateway's reset on a direct 429 with cooldown '$cooldown'", (input) =>
     Effect.gen(function* () {
