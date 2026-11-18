@@ -1,3 +1,6 @@
+import { Atom, AsyncResult } from "effect/reactivity";
+import { useEnvironmentQuery } from "~/state/query";
+import type { PullRequestDiffResult } from "@goat/contracts";
 import { useAtomCommand } from "~/state/use-atom-command";
 import { capitalizeTerm } from "@goat/client-runtime/source-control-clients";
 import type { EnvironmentId, PullRequestRef, PullRequestReviewVerdict } from "@goat/contracts";
@@ -13,6 +16,7 @@ import { toastManager } from "../ui/toast";
 import { readableFailure } from "./pullRequestDetail.logic";
 import { CommentSpeechControls, useCommentSpeech } from "../../speech/useCommentSpeech";
 import {
+  pendingReviewRevision,
   pullRequestReviewKey,
   usePendingReviewComments,
   usePullRequestReviewStore,
@@ -21,6 +25,8 @@ import {
   PullRequestMarkdownTextarea,
   type PullRequestCompletionScope,
 } from "./PullRequestMarkdownTextarea";
+
+const NO_REVIEW_DIFF = Atom.make(() => AsyncResult.initial<PullRequestDiffResult>());
 
 const VERDICTS: ReadonlyArray<{
   readonly value: PullRequestReviewVerdict;
@@ -51,6 +57,7 @@ const VERDICTS: ReadonlyArray<{
 export function PullRequestReviewForm({
   environmentId,
   reference,
+  headSha,
   completionScope,
   term,
   verdicts,
@@ -62,6 +69,7 @@ export function PullRequestReviewForm({
 }: {
   environmentId: EnvironmentId;
   reference: PullRequestRef;
+  headSha: string | undefined;
   completionScope: PullRequestCompletionScope | null;
   /** The host's word for a change request, as in "pull request". */
   term: string;
@@ -75,6 +83,13 @@ export function PullRequestReviewForm({
   const [requestedVerdict, setRequestedVerdict] = useState<PullRequestReviewVerdict>("comment");
   const comments = usePendingReviewComments(reference);
   const reviewKey = pullRequestReviewKey(reference);
+  const { data: page } = useEnvironmentQuery(
+    comments.some((comment) => comment.sourceRevision?.baseSha !== undefined)
+      ? pullRequestEnvironment.diff({ environmentId, input: reference })
+      : NO_REVIEW_DIFF,
+  );
+  const { stale, revision } = pendingReviewRevision(comments, headSha, page?.revision);
+  const removeComment = usePullRequestReviewStore((store) => store.removeComment);
   const body = usePullRequestReviewStore((store) => store.summaries[reviewKey] ?? "");
   const removeComments = usePullRequestReviewStore((store) => store.removeComments);
   const setSummary = usePullRequestReviewStore((store) => store.setSummary);
@@ -95,7 +110,7 @@ export function PullRequestReviewForm({
     offered.find((verdict) => verdict.value === requestedVerdict) ?? offered[0];
 
   const submit = async (verdict: (typeof VERDICTS)[number]) => {
-    if (pending || speech.voice.blocksSubmission()) return;
+    if (pending || stale.length > 0 || speech.voice.blocksSubmission()) return;
     const submittedBody = body;
     const submittedComments = comments;
     onPendingChange(true);
@@ -105,7 +120,10 @@ export function PullRequestReviewForm({
         ...reference,
         verdict: verdict.value,
         body: submittedBody,
-        comments: submittedComments,
+        comments: submittedComments.map(
+          ({ id: _id, sourceRevision: _source, ...comment }) => comment,
+        ),
+        ...(revision === undefined ? {} : { revision }),
       },
     });
     onPendingChange(false);
@@ -153,6 +171,29 @@ export function PullRequestReviewForm({
         aria-label="Review summary"
         onValueChange={(next) => setSummary(reviewKey, next)}
       />
+      {stale.length > 0 ? (
+        <div className="mt-2 text-xs text-muted-foreground" role="status">
+          <p>
+            The current diff cannot verify these line comments. Open Code to move them, or discard
+            them here.
+          </p>
+          {stale.map((comment) => (
+            <div key={comment.id} className="flex items-center justify-between gap-2">
+              <span className="min-w-0 whitespace-pre-wrap break-words">
+                {comment.path} · {comment.body}
+              </span>
+              <Button
+                size="xs"
+                variant="ghost"
+                disabled={pending}
+                onClick={() => removeComment(reviewKey, comment.id)}
+              >
+                Discard comment
+              </Button>
+            </div>
+          ))}
+        </div>
+      ) : null}
       <div className="mt-2 flex flex-wrap justify-end gap-2">
         <CommentSpeechControls speech={speech} />
         {offered.length > 1 ? (
@@ -185,6 +226,7 @@ export function PullRequestReviewForm({
           size="xs"
           disabled={
             pending ||
+            stale.length > 0 ||
             speech.voice.blocksSubmission() ||
             selectedVerdict === undefined ||
             !canSubmit(selectedVerdict.value, body)

@@ -1,14 +1,17 @@
+import { PullRequestRawDiffSlices } from "./PullRequestRawDiffSlices";
+import { useWithheldPullRequestFiles } from "./useWithheldPullRequestFiles";
+import { PullRequestWithheldFileNotice } from "./PullRequestWithheldFileNotice";
+import { PullRequestDiffCommitMenu } from "./PullRequestDiffCommitMenu";
 import { useWordWrap } from "~/hooks/useWordWrap";
 import { reviewThreadsByPath } from "./pullRequestThreadsByPath";
 import { capitalizeTerm, sourceControlClients } from "@goat/client-runtime/source-control-clients";
-import type { CodeViewItem, DiffLineAnnotation, SelectedLineRange } from "@pierre/diffs";
+import type { CodeViewItem, SelectedLineRange } from "@pierre/diffs";
 import type { CodeViewAnnotationArgs, CodeViewDiffItem } from "@pierre/diffs/react";
 import type {
   EnvironmentId,
   PullRequestDetailView,
   PullRequestDiffSide,
   PullRequestRef,
-  PullRequestReviewPosition,
   PullRequestReviewThread,
   PullRequestThreadCommentsResult,
 } from "@goat/contracts";
@@ -50,10 +53,8 @@ import { diffModel, NO_SLICES, type DiffSlice } from "./pullRequestDiffModel";
 import {
   PullRequestImageAnnotation,
   pullRequestImagePreviewUrl,
-  type PullRequestImagePreview,
 } from "./PullRequestImageAnnotation";
 import {
-  buildFileDiffRenderKey,
   fnv1a32,
   getDiffLineStat,
   resolveDiffThemeName,
@@ -75,7 +76,6 @@ import { useAtomCommand } from "~/state/use-atom-command";
 
 import { DIFF_SURFACE_TOOLBAR_CLASS, DiffPanelLoadingState } from "../DiffPanelShell";
 import { useDiffWorkerPool } from "../DiffWorkerPoolProvider";
-import { DiffCommentAnnotation } from "../diffs/DiffCommentAnnotation";
 import { DiffFileTree } from "../diffs/DiffFileTree";
 import { useCodeViewFileReveal } from "../diffs/useCodeViewFileReveal";
 import { useHideTestFiles } from "../diffs/useHideTestFiles";
@@ -87,7 +87,6 @@ import {
   DropdownMenu,
   DropdownMenuCheckboxItem,
   DropdownMenuContent,
-  DropdownMenuItem,
   DropdownMenuRadioGroup,
   DropdownMenuRadioItem,
   DropdownMenuSeparator,
@@ -115,49 +114,23 @@ import { PullRequestDiffUnavailableState } from "./PullRequestDiffUnavailableSta
 import { usePullRequestFilesViewed } from "./usePullRequestFilesViewed";
 import { FileViewedToggle, FileViewedToggleContext } from "./FileViewedToggle";
 import {
-  nextPendingReviewCommentId,
+  pendingReviewRevision,
   pullRequestReviewKey,
   usePendingReviewComments,
   usePullRequestReviewStore,
-  type PendingReviewComment,
 } from "./pullRequestReviewStore";
 
-interface ReviewAnnotationGroup {
-  readonly threads: ReadonlyArray<PullRequestReviewThread>;
-  readonly pending: ReadonlyArray<PendingReviewComment>;
-  readonly draft: boolean;
-  readonly image?: PullRequestImagePreview;
-}
-
-type ReviewAnnotation = DiffLineAnnotation<ReviewAnnotationGroup>;
-
-const COMMIT_PAGE_SIZE = 10;
-
-const PULL_REQUEST_FILE_TREE_STORAGE_KEY = "goat.pullRequestFileTreeOpen";
-
-// Show host counts outside the shadow root; hunk totals are zero when hosts withhold hunks.
-const REPLACE_FILE_COUNTS_CSS = `
-[data-diffs-header] [data-additions-count],
-[data-diffs-header] [data-deletions-count] {
-  display: none !important;
-}`;
-
-interface MutableAnnotationGroup {
-  readonly side: PullRequestDiffSide;
-  readonly line: number;
-  readonly threads: PullRequestReviewThread[];
-  readonly pending: PendingReviewComment[];
-  draft: boolean;
-}
-
-interface DraftAnchor {
-  readonly fileKey: string;
-  readonly path: string;
-  readonly oldPath: string | null;
-  readonly position: PullRequestReviewPosition;
-  readonly startPosition?: PullRequestReviewPosition;
-  readonly range: SelectedLineRange;
-}
+import {
+  COMMIT_PAGE_SIZE,
+  PULL_REQUEST_FILE_TREE_STORAGE_KEY,
+  REPLACE_FILE_COUNTS_CSS,
+  type ReviewAnnotationGroup,
+  type ReviewAnnotation,
+  type MutableAnnotationGroup,
+} from "./pullRequestCodeAnnotations";
+import { PullRequestInlineDraft, type DraftAnchor } from "./PullRequestInlineDraft";
+import { PullRequestStaleReviewComments } from "./PullRequestStaleReviewComments";
+import { PullRequestStaleInlineDraft } from "./PullRequestStaleInlineDraft";
 
 export interface PullRequestAgentSelectionInput {
   readonly comment: ReviewCommentContext;
@@ -227,6 +200,15 @@ function PullRequestCodeTab({
     range: SelectedLineRange;
   } | null>(null);
   const [draft, setDraft] = useState<DraftAnchor | null>(null);
+  const [draftText, setDraftText] = useState("");
+  const [reanchoringDraft, setReanchoringDraft] = useState(false);
+  const closeDraft = () => {
+    setDraft(null);
+    setDraftText("");
+    setReanchoringDraft(false);
+    setSelectedLines(null);
+  };
+  const [movingCommentId, setMovingCommentId] = useState<string | null>(null);
   const [threadPending, setThreadPending] = useState(false);
   const [orphansOpen, setOrphansOpen] = useState(false);
   // Scope slices before reset to prevent using a previous pull request's data or cursor.
@@ -249,8 +231,8 @@ function PullRequestCodeTab({
   if (stateScopeKey !== scopeKey) {
     setStateScopeKey(scopeKey);
     setLastViewedFileKey(null);
-    setDraft(null);
-    setSelectedLines(null);
+    setMovingCommentId(null);
+    closeDraft();
     setToggledFiles(new Set());
     setFoldOverride(null);
     setVisibleCommitCount(COMMIT_PAGE_SIZE);
@@ -303,6 +285,9 @@ function PullRequestCodeTab({
         existing.patch === next.patch &&
         existing.truncated === next.truncated &&
         existing.nextCursor === next.nextCursor &&
+        existing.source.withheldFilesReadable === next.source.withheldFilesReadable &&
+        existing.source.revision?.baseSha === next.source.revision?.baseSha &&
+        existing.source.revision?.headSha === next.source.revision?.headSha &&
         existing.omittedFileStats.length === next.omittedFileStats.length &&
         existing.omittedFileStats.every((file, index) => {
           const refreshed = next.omittedFileStats[index];
@@ -320,15 +305,14 @@ function PullRequestCodeTab({
       return { key: scopeKey, cursor, slices: [...slices.slice(0, index), next] };
     });
   }
-  const refreshFirstDiffPage = useAtomRefresh(
-    pullRequestEnvironment.diff({
-      environmentId,
-      input: { ...reference, ...(commit === null ? {} : { commit }) },
-    }),
-  );
+  const firstPageAtom = pullRequestEnvironment.diff({
+    environmentId,
+    input: { ...reference, ...(commit === null ? {} : { commit }) },
+  });
+  const currentFirstPage = useEnvironmentQuery(firstPageAtom).data;
+  const refreshFirstDiffPage = useAtomRefresh(firstPageAtom);
   const reviewKey = referenceKey;
   const pendingComments = usePendingReviewComments(reference);
-  const addComment = usePullRequestReviewStore((store) => store.addComment);
   const removeComment = usePullRequestReviewStore((store) => store.removeComment);
   const replyToThread = useAtomCommand(pullRequestEnvironment.replyToThread, {
     reportFailure: false,
@@ -357,13 +341,44 @@ function PullRequestCodeTab({
     isViewed: isFileViewed,
     isStale: isFileViewedStale,
   } = filesViewed;
+  const {
+    parsedSlices,
+    loadedFiles: pagedFiles,
+    sourceFileStats,
+  } = diffModel(
+    loadedSlices,
+    `pull-request:${scopeKey}:${resolvedTheme}:${ignoreWhitespace}`,
+    ignoreWhitespace,
+  );
+  const firstPage = loadedSlices[0]?.source ?? currentFirstPage;
+  const revision = firstPage?.revision;
+  const { stale: staleComments } = pendingReviewRevision(pendingComments, detail.headSha, revision);
+  const staleCommentSet = new Set(staleComments);
+  const movingComment = staleComments.find((comment) => comment.id === movingCommentId);
+  const staleRevision = revision !== undefined && revision.headSha !== detail.headSha;
+  const withheldReadable =
+    firstPage?.withheldFilesReadable === true &&
+    (commit !== null || (revision !== undefined && !staleRevision));
+  const draftStale =
+    draft !== null &&
+    (staleRevision ||
+      draft.openedHeadSha !== detail.headSha ||
+      (draft.sourceRevision?.baseSha !== undefined &&
+        draft.sourceRevision.baseSha !== revision?.baseSha));
+  if ((staleRevision || draftStale) && selectedLines !== null) setSelectedLines(null);
+  if (draftStale && draftText.length === 0) closeDraft();
+  const withheld = useWithheldPullRequestFiles(
+    { environmentId, input: { ...reference, ...(commit === null ? { revision } : { commit }) } },
+    withheldReadable,
+    pagedFiles,
+  );
+  const { files: loadedFiles, fileKey: fileRenderKey } = withheld;
   const appliedRefreshToken = useRef(refreshToken);
   useEffect(() => {
     if (appliedRefreshToken.current === refreshToken) return;
     appliedRefreshToken.current = refreshToken;
     setSliceState({ key: scopeKey, cursor: null, slices: NO_SLICES });
-    // An equal refetch keeps the answer's identity, so the emptied slices refill only if the
-    // applied page is forgotten too.
+    // An equal refetch keeps its identity, so clear the applied page with the slices.
     setAppliedPage(null);
     refreshFirstDiffPage();
     refreshFilesViewed();
@@ -396,16 +411,12 @@ function PullRequestCodeTab({
     reply: hostReview.reply && detail.viewerPermissions.comment,
     resolve: hostReview.resolve && detail.viewerPermissions.resolve,
   };
-  const canCommentOnLines = review.inlineComment && commit === null;
+  const canReviewCurrentDiff = commit === null && !staleRevision;
+  const canCommentOnLines = review.inlineComment && canReviewCurrentDiff;
   const rangeComments = hostReview.rangeComment === true;
-  // Agent context is local, so it does not require host comment permission.
   const canSelectLines =
-    commit === null && (review.inlineComment || onAddToAgentSelection !== undefined);
-  const { parsedSlices, loadedFiles, sourceFileStats } = diffModel(
-    loadedSlices,
-    `pull-request:${scopeKey}:${resolvedTheme}:${ignoreWhitespace}`,
-    ignoreWhitespace,
-  );
+    canReviewCurrentDiff && (review.inlineComment || onAddToAgentSelection !== undefined);
+  const canStartDraft = canSelectLines && (draft === null || (draftStale && reanchoringDraft));
   const testFileCount = loadedFiles.filter((file) =>
     isTestChangedFile(resolveFileDiffPath(file)),
   ).length;
@@ -442,7 +453,7 @@ function PullRequestCodeTab({
 
   const imagePreviewUrl = pullRequestImagePreviewUrl(detail, commit);
   const annotatedFiles = files.map((fileDiff) => {
-    const fileKey = buildFileDiffRenderKey(fileDiff);
+    const fileKey = fileRenderKey(fileDiff);
     const path = resolveFileDiffPath(fileDiff);
     const groups = new Map<string, MutableAnnotationGroup>();
     const groupAt = (side: PullRequestDiffSide, line: number) => {
@@ -466,12 +477,12 @@ function PullRequestCodeTab({
     }
     if (commit === null) {
       for (const comment of pendingComments) {
-        if (comment.path !== path) continue;
+        if (comment.path !== path || staleCommentSet.has(comment)) continue;
         const anchor = getReviewPositionAnchor(comment.position);
         groupAt(anchor.side, anchor.line).pending.push(comment);
       }
     }
-    if (draft?.fileKey === fileKey) {
+    if (!draftStale && draft?.fileKey === fileKey) {
       const anchor = getReviewPositionAnchor(draft.position);
       groupAt(anchor.side, anchor.line).draft = true;
     }
@@ -488,6 +499,21 @@ function PullRequestCodeTab({
         lineNumber: 0,
         metadata: { threads: [], pending: [], draft: false, image: { url: imageUrl, path } },
       });
+    } else if (fileDiff.hunks.length === 0 && omittedFileStats.has(path)) {
+      annotations.push({
+        side: "additions",
+        lineNumber: 0,
+        metadata: {
+          threads: [],
+          pending: [],
+          draft: false,
+          withheld: {
+            path,
+            readable: withheld.readable,
+            status: withheld.statuses.get(path) ?? "idle",
+          },
+        },
+      });
     }
     return {
       fileKey,
@@ -499,7 +525,7 @@ function PullRequestCodeTab({
         annotations
           .map(
             ({ side, lineNumber, metadata }) =>
-              `${side}:${lineNumber}:${metadata.image?.url ?? ""}:${metadata.draft ? "d" : ""}:${metadata.pending
+              `${side}:${lineNumber}:${metadata.image?.url ?? metadata.withheld?.status ?? ""}:${metadata.withheld?.readable ?? ""}:${metadata.draft ? "d" : ""}:${metadata.pending
                 .map((comment) => `${comment.id}:${comment.body}`)
                 .join(",")}:${metadata.threads
                 .map(
@@ -535,26 +561,10 @@ function PullRequestCodeTab({
       : [];
   const rawSlicesView =
     files.length === 0 && rawSlices.length > 0 ? (
-      <div className="space-y-4 px-4 py-5">
-        {rawSlices.map((slice) => (
-          <div key={`${slice.reason}:${slice.text.slice(0, 64)}`} className="space-y-2">
-            <p className="text-xs text-muted-foreground">{slice.reason}</p>
-            <pre className="whitespace-pre-wrap break-words font-mono text-xs">{slice.text}</pre>
-          </div>
-        ))}
-      </div>
+      <PullRequestRawDiffSlices slices={rawSlices} />
     ) : null;
   const unstructured =
-    rawSlices.length === 0 ? null : (
-      <div className="space-y-4 border-t border-border/60 px-4 py-5">
-        {rawSlices.map((slice) => (
-          <div key={`${slice.reason}:${slice.text.slice(0, 64)}`} className="space-y-2">
-            <p className="text-xs text-muted-foreground">{slice.reason}</p>
-            <pre className="whitespace-pre-wrap break-words font-mono text-xs">{slice.text}</pre>
-          </div>
-        ))}
-      </div>
-    );
+    rawSlices.length > 0 ? <PullRequestRawDiffSlices slices={rawSlices} separated /> : null;
 
   const items: CodeViewDiffItem<ReviewAnnotationGroup>[] = annotatedFiles.map(
     ({ fileKey, path, fileDiff, annotations, annotationsVersion }) => {
@@ -568,7 +578,9 @@ function PullRequestCodeTab({
         fileDiff,
         annotations,
         collapsed,
-        version: fnv1a32(`${collapsed ? "1" : "0"}:${viewedMark}:${annotationsVersion}`),
+        version: fnv1a32(
+          `${collapsed ? "1" : "0"}:${viewedMark}:${annotationsVersion}:${fileDiff.cacheKey}`,
+        ),
       };
     },
   );
@@ -645,10 +657,10 @@ function PullRequestCodeTab({
     range: SelectedLineRange | null,
     context: { item: CodeViewItem<ReviewAnnotationGroup> },
   ) => {
-    if (!range || !canSelectLines) return;
+    if (!range || !canStartDraft || withheld.waiting) return;
     const item = context.item;
     if (item.type !== "diff") return;
-    const file = files.find((candidate) => buildFileDiffRenderKey(candidate) === item.id);
+    const file = files.find((candidate) => fileRenderKey(candidate) === item.id);
     if (!file) return;
     // On a host without ranged comments a range collapses to its last line: one that silently
     // lost its first line there would be worse than one line.
@@ -660,8 +672,22 @@ function PullRequestCodeTab({
     const anchor =
       (sourceFile && resolveDiffReviewAnchor(sourceFile, range, rangeComments)) ??
       resolveDiffReviewAnchor(file, range, rangeComments);
-    if (anchor === null) return;
+    const moving = movingComment ?? (reanchoringDraft ? draft?.moving : undefined);
+    if (anchor === null || (moving && (!canCommentOnLines || !detail.headSha))) return;
+    const needsRevision =
+      withheld.identities.has(file) ||
+      moving ||
+      (reanchoringDraft && draft?.sourceRevision !== undefined);
+    const sourceRevision = needsRevision
+      ? (revision ?? (detail.headSha ? { headSha: detail.headSha } : undefined))
+      : undefined;
+    if (!reanchoringDraft) setDraftText(moving?.body ?? "");
+    setMovingCommentId(null);
+    setReanchoringDraft(false);
     setDraft({
+      sourceRevision,
+      moving,
+      openedHeadSha: detail.headSha,
       fileKey: item.id,
       path,
       oldPath: previousPath === path ? null : previousPath,
@@ -675,7 +701,7 @@ function PullRequestCodeTab({
     text: string,
     onFinish: (comment: ReviewCommentContext) => void,
   ) => {
-    const file = files.find((candidate) => buildFileDiffRenderKey(candidate) === anchor.fileKey);
+    const file = files.find((candidate) => fileRenderKey(candidate) === anchor.fileKey);
     const comment =
       file === undefined
         ? null
@@ -688,8 +714,7 @@ function PullRequestCodeTab({
             range: anchor.range,
             text,
           });
-    setDraft(null);
-    setSelectedLines(null);
+    closeDraft();
     if (comment !== null) onFinish(comment);
   };
 
@@ -766,9 +791,14 @@ function PullRequestCodeTab({
     preferredHighlighter: PREFERRED_HIGHLIGHTER,
     themeType: resolvedTheme,
     stickyHeaders: true,
-    loadDiffFiles,
-    enableGutterUtility: canSelectLines && draft === null,
-    enableLineSelection: canSelectLines && draft === null,
+    loadDiffFiles: (file: Parameters<typeof loadDiffFiles>[0]) =>
+      withheld.cutFiles.has(file)
+        ? Promise.reject(
+            new Error("Unchanged lines are unavailable in a file with shortened lines."),
+          )
+        : loadDiffFiles(file),
+    enableGutterUtility: canStartDraft,
+    enableLineSelection: canStartDraft,
     onGutterUtilityClick: beginComment,
     onLineSelectionEnd: beginComment,
     onPostRender: codeViewReveal.flush,
@@ -872,6 +902,13 @@ function PullRequestCodeTab({
           image={annotation.metadata.image}
         />
       ) : null}
+      {annotation.metadata.withheld ? (
+        <PullRequestWithheldFileNotice
+          status={annotation.metadata.withheld.status}
+          readable={annotation.metadata.withheld.readable}
+          load={() => withheld.load(annotation.metadata.withheld?.path)}
+        />
+      ) : null}
       {annotation.metadata.threads.map(renderThreadCard)}
       {annotation.metadata.pending.map((comment) => (
         <PendingReviewCommentCard
@@ -880,111 +917,42 @@ function PullRequestCodeTab({
           onRemove={() => removeComment(reviewKey, comment.id)}
         />
       ))}
-      {annotation.metadata.draft && draft && canSelectLines ? (
-        <DiffCommentAnnotation
+      {annotation.metadata.draft && draft && !draftStale && canSelectLines ? (
+        <PullRequestInlineDraft
+          draft={draft}
+          text={draftText}
+          onTextChange={setDraftText}
           environmentId={environmentId}
-          kind="draft"
-          rangeLabel={`${draft.path}:${getReviewPositionAnchor(draft.position).line}`}
-          text=""
-          completionScope={canCommentOnLines ? completionScope : null}
-          submitLabel={canCommentOnLines ? "Add to review" : "Add to agent"}
-          {...(canCommentOnLines && onAddToAgentSelection
-            ? {
-                secondaryAction: {
-                  label: "Add to agent",
-                  onAction: (text: string) =>
-                    finishSelection(draft, text, (comment) =>
-                      onAddToAgentSelection({ comment, request: text }),
-                    ),
-                },
-              }
-            : {})}
-          onCancel={() => {
-            setDraft(null);
-            setSelectedLines(null);
-          }}
-          onComment={(body) => {
-            if (!canCommentOnLines) {
-              if (onAddToAgentSelection) {
-                finishSelection(draft, body, (comment) =>
-                  onAddToAgentSelection({ comment, request: body }),
-                );
-              }
-              return;
-            }
-            addComment(reviewKey, {
-              id: nextPendingReviewCommentId(),
-              path: draft.path,
-              ...(draft.oldPath === null ? {} : { oldPath: draft.oldPath }),
-              ...(draft.startPosition === undefined ? {} : { startPosition: draft.startPosition }),
-              position: draft.position,
-              body,
-            });
-            setDraft(null);
-            setSelectedLines(null);
-          }}
+          reviewKey={reviewKey}
+          completionScope={completionScope}
+          canComment={canCommentOnLines}
+          onAddToAgent={
+            onAddToAgentSelection &&
+            ((body) =>
+              finishSelection(draft, body, (comment) =>
+                onAddToAgentSelection({ comment, request: body }),
+              ))
+          }
+          onClose={closeDraft}
         />
       ) : null}
     </div>
   );
 
-  const selectedCommit = orderedCommits.find((entry) => entry.oid === commit);
-  const scopeLabel = selectedCommit ? selectedCommit.messageHeadline : "All commits";
   const changeIgnoreWhitespace = (next: boolean) => {
     setIgnoreWhitespace(next);
-    setDraft(null);
-    setSelectedLines(null);
+    if (!draftStale) closeDraft();
   };
   const toolbar = (
     <div data-glass-layer className={DIFF_SURFACE_TOOLBAR_CLASS}>
       <div className="flex min-w-0 flex-1 items-center gap-3">
-        {orderedCommits.length > 0 ? (
-          <DropdownMenu>
-            <DropdownMenuTrigger
-              render={<Button size="xs" variant="secondary" />}
-              className="min-w-0 max-w-64"
-              aria-label={`Diff scope: ${scopeLabel}`}
-            >
-              <span className="truncate">{scopeLabel}</span>
-              <ChevronDownIcon className="size-3.5 shrink-0 opacity-70" />
-            </DropdownMenuTrigger>
-            <DropdownMenuContent align="start" className="max-w-[min(28rem,calc(100vw-2rem))]">
-              <DropdownMenuRadioGroup
-                value={commit ?? "all"}
-                onValueChange={(value) => onSelectedCommitChange(value === "all" ? null : value)}
-              >
-                <DropdownMenuRadioItem value="all" closeOnClick>
-                  <span>All commits</span>
-                </DropdownMenuRadioItem>
-                {orderedCommits.slice(0, visibleCommitCount).map((entry) => (
-                  <DropdownMenuRadioItem key={entry.oid} value={entry.oid} closeOnClick>
-                    <span className="flex items-center gap-2">
-                      <Tooltip>
-                        <TooltipTrigger
-                          render={<span className="min-w-0 truncate">{entry.messageHeadline}</span>}
-                        />
-                        <TooltipPopup side="top">{entry.messageHeadline}</TooltipPopup>
-                      </Tooltip>
-                      <span className="ml-auto shrink-0 font-mono text-xs text-muted-foreground">
-                        {entry.oid.slice(0, 7)}
-                      </span>
-                    </span>
-                  </DropdownMenuRadioItem>
-                ))}
-              </DropdownMenuRadioGroup>
-              {orderedCommits.length > visibleCommitCount ? (
-                <DropdownMenuItem
-                  closeOnClick={false}
-                  onClick={() => setVisibleCommitCount((count) => count + COMMIT_PAGE_SIZE)}
-                >
-                  <span className="text-muted-foreground">
-                    Show more ({orderedCommits.length - visibleCommitCount} left)
-                  </span>
-                </DropdownMenuItem>
-              ) : null}
-            </DropdownMenuContent>
-          </DropdownMenu>
-        ) : null}
+        <PullRequestDiffCommitMenu
+          commits={orderedCommits}
+          commit={commit}
+          visibleCommitCount={visibleCommitCount}
+          onSelectedCommitChange={onSelectedCommitChange}
+          onShowMore={() => setVisibleCommitCount((count) => count + COMMIT_PAGE_SIZE)}
+        />
         <PullRequestMetaLine>
           <span className="shrink-0 tabular-nums">
             {files.length} {files.length === 1 ? "file" : "files"}
@@ -1277,9 +1245,30 @@ function PullRequestCodeTab({
     answerReveal();
     // oxlint-disable-next-line react/exhaustive-effect-dependencies -- Re-checked as pages load until the requested file arrives.
   }, [canLoadNextSlice, items, revealRequest]);
+  const reviewRecovery = (
+    <PullRequestStaleReviewComments
+      comments={staleComments}
+      moving={movingComment !== undefined}
+      canMove={canCommentOnLines && draft === null && !!detail.headSha}
+      onMove={(comment) => setMovingCommentId(comment.id)}
+      onCancel={() => setMovingCommentId(null)}
+    />
+  );
+  const staleComposer =
+    draftStale && draftText.length > 0 ? (
+      <PullRequestStaleInlineDraft
+        text={draftText}
+        reanchoring={reanchoringDraft}
+        canReanchor={canSelectLines}
+        onReanchor={() => setReanchoringDraft(true)}
+        onDiscard={closeDraft}
+      />
+    ) : null;
   const withToolbar = (body: ReactNode) => (
     <div className="flex h-full min-h-0 flex-col">
       {toolbar}
+      {reviewRecovery}
+      {staleComposer}
       <div ref={scrollerRef} className="min-h-0 flex-1 overflow-auto">
         {body}
       </div>
@@ -1325,6 +1314,8 @@ function PullRequestCodeTab({
   return (
     <div className="flex h-full min-h-0 flex-col">
       {toolbar}
+      {reviewRecovery}
+      {staleComposer}
       {orphanFiles.size > 0 ? (
         <div className="shrink-0 border-b border-border/60">
           <Collapsible open={orphansOpen} onOpenChange={setOrphansOpen}>

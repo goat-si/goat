@@ -1,10 +1,24 @@
 import { GitCommandError } from "@goat/contracts";
 import * as Clock from "effect/Clock";
+import * as Duration from "effect/Duration";
 import * as Effect from "effect/Effect";
 import { makeGitMetadataFingerprint } from "../vcs/gitMetadataFingerprint.ts";
 
 const FRESH_READ_TTL_MS = 1_000;
 const BACKGROUND_READ_TTL_MS = 5 * 60_000;
+
+const PR_LOOKUP_FAILURE_BASE_TTL = Duration.seconds(20);
+const PR_LOOKUP_FAILURE_MAX_TTL = Duration.minutes(15);
+
+/**
+ * Throttled lookups fail fast, so a flat failure TTL would retry faster than a healthy
+ * lookup refreshes. Backing off per branch keeps a 429 from becoming sustained pressure.
+ */
+export function prLookupFailureTtl(consecutiveFailures: number): Duration.Duration {
+  const exponent = Math.max(0, consecutiveFailures - 1);
+  const backoffMs = Duration.toMillis(PR_LOOKUP_FAILURE_BASE_TTL) * Math.pow(2, exponent);
+  return Duration.min(Duration.millis(backoffMs), PR_LOOKUP_FAILURE_MAX_TTL);
+}
 
 export const makePrLookupGitState = Effect.fn("PrLookupGitState.make")(function* (options: {
   readonly normalizeCwd: (cwd: string) => Effect.Effect<string>;

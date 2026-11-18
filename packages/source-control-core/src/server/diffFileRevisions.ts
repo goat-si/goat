@@ -1,3 +1,4 @@
+import { cutLineNote } from "@goat/shared/diffCutLines";
 import { unquoteGitPatchPath } from "@goat/shared/gitPatchPath";
 
 const ENTRY = "diff --git ";
@@ -127,4 +128,55 @@ export function parseDiffFilePaths(
   return parseEntries(patch).flatMap(({ oldPath, newPath }) =>
     (oldPath ?? newPath) === null ? [] : [{ oldPath, newPath }],
   );
+}
+
+/** The canonical head path names a section, or the old path when the file was deleted. */
+export function diffFileSection(patch: string, path: string): string | null {
+  let found: string | null = null;
+  let start = patch.startsWith(ENTRY) ? 0 : patch.indexOf("\n" + ENTRY) + 1;
+  while (patch.startsWith(ENTRY, start)) {
+    const next = patch.indexOf("\n" + ENTRY, start);
+    const end = next < 0 ? patch.length : next + 1;
+    const hunk = patch.indexOf("\n@@", start);
+    const headerEnd = hunk < 0 ? end : Math.min(end, hunk);
+    if (headerEnd - start <= MAX_DIFF_HEADER_LENGTH) {
+      const [entry] = parseEntries(patch.slice(start, headerEnd));
+      if (entry && (entry.deleted ? entry.oldPath : (entry.newPath ?? entry.oldPath)) === path) {
+        if (found !== null) return null;
+        found = patch.slice(start, end);
+      }
+    }
+    start = end;
+  }
+  return found;
+}
+
+const MAX_DIFF_HEADER_LENGTH = 64 * 1024;
+
+/** Keep hunk coordinates intact while bounding rendered text and row count. */
+export function truncateLongDiffLines(patch: string, maxLineLength: number): string | null {
+  const maxPatchLength = 2 * 1024 * 1024;
+  const maxRows = 20_000;
+  let inHunk = false;
+  let size = 0;
+  const lines: string[] = [];
+  for (let start = 0; start < patch.length;) {
+    const next = patch.indexOf("\n", start);
+    const end = next === -1 ? patch.length : next + 1;
+    if (patch.startsWith("@@", start)) inHunk = true;
+    const lineEnd = next === -1 ? end : next;
+    const boundary = start + maxLineLength + 1;
+    const prior = patch.charCodeAt(boundary - 1);
+    const limit = prior >= 0xd800 && prior <= 0xdbff ? boundary - 1 : boundary;
+    const canCut = inHunk && " +-".includes(patch.charAt(start));
+    const line =
+      canCut && lineEnd > limit
+        ? patch.slice(start, limit) + cutLineNote(lineEnd - limit) + (next === -1 ? "" : "\n")
+        : patch.slice(start, end);
+    size += line.length;
+    if (size > maxPatchLength || lines.length >= maxRows) return null;
+    lines.push(line);
+    start = end;
+  }
+  return lines.join("");
 }

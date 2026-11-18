@@ -157,12 +157,14 @@ export function makeSummary(
 
 interface HarnessOptions {
   readonly batchesReads?: (input: PullRequestRef) => boolean;
-  readonly batchesReadsError?: (input: PullRequestRef) => PullRequestOperationError | undefined;
+  readonly batchesReadsError?: (
+    input: PullRequestRef,
+  ) => PullRequestService.PullRequestError | undefined;
   readonly invalidate?: PullRequestService.PullRequestService["Service"]["invalidate"];
   readonly snapshot: TestShellSnapshot;
   readonly summary?: (
     input: PullRequestRef,
-  ) => Effect.Effect<PullRequestSummary, PullRequestOperationError>;
+  ) => Effect.Effect<PullRequestSummary, PullRequestService.PullRequestError>;
   readonly stack?: (
     input: PullRequestRef,
   ) => Effect.Effect<PullRequestStack | null, PullRequestOperationError>;
