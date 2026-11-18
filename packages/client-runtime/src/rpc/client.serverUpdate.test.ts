@@ -1,5 +1,10 @@
 import { expect, it } from "@effect/vitest";
-import { EnvironmentId, WS_METHODS, type ServerConfig } from "@goat/contracts";
+import {
+  EnvironmentId,
+  WS_METHODS,
+  type ServerConfig,
+  type ServerSelfUpdateInput,
+} from "@goat/contracts";
 import * as Effect from "effect/Effect";
 import * as Layer from "effect/Layer";
 import * as Option from "effect/Option";
@@ -25,14 +30,14 @@ it.effect("sends stage-only only to the connection that advertises server update
       wsBaseUrl: "wss://environment.example.test",
     });
     const client = {
-      [WS_METHODS.serverUpdateServer]: (input) =>
+      [WS_METHODS.serverUpdateServer]: (input: ServerSelfUpdateInput) =>
         Effect.sync(() => {
           requests.push(input.stageOnly === true);
           return { targetVersion: input.targetVersion, method: "boot-service" as const };
         }),
-    } satisfies Partial<WsRpcProtocolClient>;
+    };
     const connection = (supportsStaging: boolean): RpcSession => ({
-      client: client as WsRpcProtocolClient,
+      client: client as unknown as WsRpcProtocolClient,
       initialConfig: Effect.succeed({
         environment: { capabilities: supportsStaging ? { serverUpdateStaging: true } : {} },
       } as ServerConfig),
