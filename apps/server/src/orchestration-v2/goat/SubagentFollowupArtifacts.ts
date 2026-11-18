@@ -60,6 +60,7 @@ export function subagentFollowupArtifacts(input: {
     title: title,
     completionWake: "always",
     completionDelivery: { state: "pending", observedByRunId: null },
+    cancelledRunId: undefined,
     status: run.status === "queued" ? (run.queueHeld === true ? "idle" : "pending") : "running",
     progress: undefined,
     result: null,

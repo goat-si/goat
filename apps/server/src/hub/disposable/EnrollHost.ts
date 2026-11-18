@@ -14,7 +14,7 @@ import * as Inventory from "../../opencodex/OpenCodexInventory.ts";
 import * as ProcessRunner from "../../processRunner.ts";
 import * as Settings from "../../serverSettings.ts";
 import { HubOcx, type OcxOutput, type PenExactRoute } from "../HubOcx.ts";
-import type { PenNode } from "../penSshRoute.ts";
+import type { PenNode } from "@goat/ssh/penRoute";
 import { goatFolders, type KeyPathAnswer, keyPathFor } from "./keyPath.ts";
 import { type DisposableRoute, disposableSshExecOptions } from "./routeContract.ts";
 

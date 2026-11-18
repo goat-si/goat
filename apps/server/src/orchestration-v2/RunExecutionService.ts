@@ -148,6 +148,12 @@ export function canRouteRelatedSubagent(status: OrchestrationV2Subagent["status"
   return status === "completed";
 }
 
+export function canRouteNativeSubagent(
+  subagent: Pick<OrchestrationV2Subagent, "origin" | "status">,
+): boolean {
+  return subagent.origin === "provider_native" && canRouteRelatedSubagent(subagent.status);
+}
+
 function emptyOpenRunOwnedSubagentProjection(): OpenRunOwnedSubagentProjection {
   return {
     subagents: new Map(),

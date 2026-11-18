@@ -452,10 +452,28 @@ export const layer: Layer.Layer<
             });
           }
 
+          // The previous checkpoint may have been written under the legacy namespace.
+          const existingPreviousRef = yield* findCheckpointRef(
+            input.scope.cwd,
+            previousScopeOrdinal,
+          ).pipe(
+            Effect.catch((cause) =>
+              Effect.logWarning("orchestration V2 previous checkpoint ref lookup failed", {
+                scopeId: input.scope.id,
+                ordinalWithinScope: previousScopeOrdinal.ordinalWithinScope,
+                cause: String(cause),
+              }).pipe(Effect.as(undefined)),
+            ),
+          );
+          const previousExists = existingPreviousRef !== undefined;
+          const previousCheckpointRef =
+            existingPreviousRef ?? (yield* checkpointRefFor(previousScopeOrdinal));
+
           const captured = yield* checkpointStore
             .captureCheckpoint({
               cwd: input.scope.cwd,
               checkpointRef,
+              ...(input.ordinalWithinScope > 0 ? { previousCheckpointRef } : {}),
             })
             .pipe(
               Effect.map((evidence) => ({ status: "ready" as const, evidence })),
@@ -487,22 +505,6 @@ export const layer: Layer.Layer<
             });
           }
 
-          // The previous checkpoint may have been written under the legacy namespace.
-          const existingPreviousRef = yield* findCheckpointRef(
-            input.scope.cwd,
-            previousScopeOrdinal,
-          ).pipe(
-            Effect.catch((cause) =>
-              Effect.logWarning("orchestration V2 previous checkpoint ref lookup failed", {
-                scopeId: input.scope.id,
-                ordinalWithinScope: previousScopeOrdinal.ordinalWithinScope,
-                cause: String(cause),
-              }).pipe(Effect.as(undefined)),
-            ),
-          );
-          const previousExists = existingPreviousRef !== undefined;
-          const previousCheckpointRef =
-            existingPreviousRef ?? (yield* checkpointRefFor(previousScopeOrdinal));
           const refs = {
             cwd: input.scope.cwd,
             fromCheckpointRef: previousCheckpointRef,

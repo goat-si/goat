@@ -366,4 +366,19 @@ describe("parseGitCloneProgressLine", () => {
     expect(parseGitCloneProgressLine("Cloning into 't3code'...")).toBeNull();
     expect(parseGitCloneProgressLine("fatal: repository not found")).toBeNull();
   });
+
+  it("keeps the transfer detail of a finished counter and stays linear on hostile output", () => {
+    expect(
+      parseGitCloneProgressLine("Receiving objects: 100% (5/5), 40.00 MiB | 1.40 MiB/s, done."),
+    ).toEqual({ stage: "receiving", percent: 100, detail: "40.00 MiB | 1.40 MiB/s" });
+    // One match from the first counter: a failed end-of-line retried at every later counter,
+    // which made remote text joined by U+2028 both slow and read as a different percent.
+    expect(
+      parseGitCloneProgressLine("Receiving objects: 5% (1/20)\u2028x: 6% (2/20), 1 MiB"),
+    ).toEqual({
+      stage: "receiving",
+      percent: null,
+      detail: null,
+    });
+  });
 });

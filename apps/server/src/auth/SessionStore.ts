@@ -8,6 +8,7 @@ import {
 import * as CloudSessionFence from "./CloudSessionFence.ts";
 import * as DurableRevocations from "./DurableRevocations.ts";
 import * as SessionEndLatches from "./SessionEndLatches.ts";
+import * as PenMemberSessionFence from "./PenMemberSessionFence.ts";
 import {
   AuthSessionId,
   AuthStandardClientScopes,
@@ -43,9 +44,9 @@ import * as AuthSessions from "../persistence/AuthSessions.ts";
 import type { ConnectionContext } from "./connectionContext.ts";
 import {
   admitBinding,
-  defaultPrincipalKind,
-  issueShapeRefusal,
-  PEN_SESSION_MAX_TTL,
+  issuePrincipalKind,
+  issueTtlMs,
+  refuseBoundDevCredential,
 } from "./sessionBinding.ts";
 import * as ServerSecretStore from "./ServerSecretStore.ts";
 import {
@@ -108,7 +109,6 @@ export type SessionCredentialChange =
 
 export * from "./sessionStoreErrors.ts";
 import {
-  SessionBindingRefusedError,
   MalformedSessionTokenError,
   InvalidSessionTokenSignatureError,
   InvalidSessionTokenPayloadError,
@@ -143,6 +143,7 @@ export class SessionStore extends Context.Service<
     readonly issue: (input?: {
       readonly ttl?: Duration.Duration;
       readonly subject?: string;
+      readonly penMemberNode?: string;
       readonly method?: ServerAuthSessionMethod;
       readonly scopes?: ReadonlyArray<AuthEnvironmentScope>;
       readonly client?: AuthClientMetadata;
@@ -156,6 +157,8 @@ export class SessionStore extends Context.Service<
       readonly principalKind?: SessionPrincipalKind;
       readonly penBinding?: AuthSessions.AuthSessionPenBinding;
     }) => Effect.Effect<IssuedSession, SessionCredentialInternalError>;
+    readonly followPenMembers: PenMemberSessionFence.StorePenMembers["followPenMembers"];
+    readonly listPenMemberSessions: PenMemberSessionFence.StorePenMembers["listPenMemberSessions"];
     readonly setCloudWithdrawalPending: (pending: boolean) => Effect.Effect<void>;
     /**
      * Token-free live authority: a memory read with no SQL or lock, so it is safe inside a SQL
@@ -319,7 +322,7 @@ export const make = Effect.gen(function* () {
   };
   const activeScopes = yield* Ref.make<ActiveScopeState>({
     records: new Map<AuthSessionId, ActiveScopeRecord>(
-      activeScopeRows.map((row) => [
+      PenMemberSessionFence.loadable(activeScopeRows).map((row) => [
         row.sessionId,
         { scopes: row.scopes, expiresAt: row.expiresAt },
       ]),
@@ -344,8 +347,11 @@ export const make = Effect.gen(function* () {
   // Serialize auth mutations through publication: a delayed activity event must
   // never restore a removed grant, and a committed revoke must update the Ref.
   const authorityLock = yield* Semaphore.make(1);
-  const emitUpsert = (clientSession: AuthClientSession) =>
-    PubSub.publish(changesPubSub, { type: "clientUpserted", clientSession }).pipe(Effect.asVoid);
+  const { fence: penFence, emitUpsert } = yield* PenMemberSessionFence.makeForStore(
+    activeScopeRows,
+    changesPubSub,
+    (sessionId) => loadActiveSession(sessionId),
+  );
   const sessionEnds = SessionEndLatches.make();
 
   /**
@@ -374,6 +380,7 @@ export const make = Effect.gen(function* () {
         cutFences: neededFences(cutFences, current.verifying),
       };
     }).pipe(
+      Effect.andThen(Effect.forEach(sessionIds, penFence.forget, { discard: true })),
       Effect.andThen(reason === "removed" ? sessionEnds.cut(sessionIds) : Effect.void),
       Effect.andThen(
         PubSub.publishAll(
@@ -629,16 +636,9 @@ export const make = Effect.gen(function* () {
       );
       const issuedAt = yield* DateTime.now;
       const purpose = input?.childSetupPurpose;
-      const subject = input?.subject ?? "browser";
-      const principalKind = input?.principalKind ?? defaultPrincipalKind(subject);
-      const shapeRefusal = issueShapeRefusal(subject, principalKind, input?.penBinding);
-      if (shapeRefusal !== undefined)
-        return yield* new SessionCredentialIssueError({ sessionId, cause: shapeRefusal });
-      const requestedTtl = Duration.toMillis(input?.ttl ?? DEFAULT_SESSION_TTL);
-      const ttl =
-        input?.penBinding === undefined
-          ? requestedTtl
-          : Math.min(requestedTtl, Duration.toMillis(PEN_SESSION_MAX_TTL));
+      const subject = yield* penFence.issueSubject(input, sessionId);
+      const principalKind = yield* issuePrincipalKind(subject, input, sessionId);
+      const ttl = issueTtlMs(input, DEFAULT_SESSION_TTL);
       const milliseconds = ChildSetupSession.ttlMs(input, issuedAt.epochMilliseconds, ttl);
       if (milliseconds === undefined)
         return yield* new SessionCredentialIssueError({
@@ -693,10 +693,13 @@ export const make = Effect.gen(function* () {
         issuedAt,
         expiresAt,
         principalKind,
+        ...(input?.penMemberNode === undefined ? {} : { penMemberNode: input.penMemberNode }),
         ...(input?.penBinding === undefined ? {} : { penBinding: input.penBinding }),
       } satisfies AuthSessions.CreateAuthSessionInput;
-      const replacedSessionIds = yield* (
-        input?.replaceSessionId !== undefined || input?.replaceActiveForSubjectAndMethod
+      const replacedSessionIds = yield* penFence.issuing(
+        { sessionId, subject, expiresAt },
+        input,
+        (input?.replaceSessionId !== undefined || input?.replaceActiveForSubjectAndMethod
           ? authSessions.createReplacingActive({
               session: sessionRecord,
               revokedAt: issuedAt,
@@ -705,7 +708,8 @@ export const make = Effect.gen(function* () {
                 : {}),
             })
           : authSessions.create(sessionRecord).pipe(Effect.as([] as ReadonlyArray<AuthSessionId>))
-      ).pipe(Effect.mapError((cause) => new SessionCredentialIssueError({ sessionId, cause })));
+        ).pipe(Effect.mapError((cause) => new SessionCredentialIssueError({ sessionId, cause }))),
+      );
       if (replacedSessionIds.length > 0) {
         yield* Ref.update(connectedSessionsRef, (current) => {
           const next = new Map(current);
@@ -759,6 +763,7 @@ export const make = Effect.gen(function* () {
     "SessionStore.readActiveScopes",
   )(function* (sessionId) {
     yield* cloudFence.guardId(sessionId);
+    yield* penFence.guardId(sessionId);
     const record = (yield* Ref.get(activeScopes)).records.get(sessionId);
     if (!record) return yield* new UnknownSessionTokenError({ sessionId });
     const observedAt = yield* DateTime.now;
@@ -801,6 +806,7 @@ export const make = Effect.gen(function* () {
           observedAt,
         });
       }
+      yield* penFence.guard(row.value);
       yield* rememberVerified(
         row.value.sessionId,
         { scopes: row.value.scopes, expiresAt: row.value.expiresAt },
@@ -866,6 +872,7 @@ export const make = Effect.gen(function* () {
       });
     }
 
+    yield* penFence.guardSigned(claims.sub, row.value);
     yield* rememberVerified(
       claims.sid,
       { scopes: row.value.scopes, expiresAt: row.value.expiresAt },
@@ -1029,7 +1036,7 @@ export const make = Effect.gen(function* () {
         cause: "The ticket's principal does not match its session.",
       });
     }
-
+    yield* penFence.guard(row.value);
     return {
       sessionId: row.value.sessionId,
       token,
@@ -1056,8 +1063,7 @@ export const make = Effect.gen(function* () {
         now,
         connectedSessionIds: Array.from(connectedSessions.keys()),
       });
-
-      return rows.map((row) =>
+      return (yield* penFence.visible(rows)).map((row) =>
         toAuthClientSession({
           sessionId: row.sessionId,
           subject: row.subject,
@@ -1158,7 +1164,8 @@ export const make = Effect.gen(function* () {
         if (
           Option.isNone(row) ||
           row.value.revokedAt !== null ||
-          (yield* cloudFence.denied(sessionId))
+          (yield* cloudFence.denied(sessionId)) ||
+          (yield* penFence.deniedRow(row.value))
         )
           return;
         const now = yield* DateTime.now;
@@ -1179,6 +1186,7 @@ export const make = Effect.gen(function* () {
 
   return SessionStore.of({
     setCloudWithdrawalPending: cloudFence.setPending,
+    ...PenMemberSessionFence.forStore(penFence, authorityLock, authSessions),
     readActiveScopes,
     cookieName,
     legacyCookieName,
@@ -1204,16 +1212,7 @@ export const make = Effect.gen(function* () {
         ? Effect.fail(new MalformedSessionTokenError({}))
         : verify(devAuth.credential).pipe(
             Effect.tap(cloudFence.guard),
-            Effect.tap((session) =>
-              session.penBinding === undefined
-                ? Effect.void
-                : Effect.fail(
-                    new SessionBindingRefusedError({
-                      sessionId: session.sessionId,
-                      reason: "wrong_listener",
-                    }),
-                  ),
-            ),
+            Effect.tap(refuseBoundDevCredential),
           ),
     issueWebSocketToken,
     verifyWebSocketToken: (token, connection) =>

@@ -32,6 +32,7 @@ import { DisposableMachinesSettings } from "./DisposableMachinesSettings";
 import { useHubActions } from "./HubDeviceActions";
 import { HubDeviceListSection } from "./HubDeviceList";
 import { HubRelayWarningRow } from "./HubRelayWarningSettings";
+import { PenHubNodesSetting } from "./PenHubNodesSetting";
 import { SettingsPageContainer, SettingsRow, SettingsSection } from "./settingsLayout";
 import { searchableSetting } from "./settingsSearch";
 import { useSettingsScope } from "./SettingsScopeContext";
@@ -301,6 +302,7 @@ function HubControls({
             />
           }
         />
+        <PenHubNodesSetting environmentId={environmentId} />
         <HubRelayWarningRow
           environmentId={environmentId}
           warning={home?.link.relayWarning ?? null}

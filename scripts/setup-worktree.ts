@@ -6,7 +6,12 @@ import * as NodeOS from "node:os";
 import * as NodePath from "node:path";
 import * as NodeURL from "node:url";
 
-import { currentUnsupportedNodeMessage, readPinnedNodeVersion } from "./lib/node-runtime.ts";
+import {
+  currentUnsupportedNodeMessage,
+  normalizePackageManager,
+  readPinnedNodeVersion,
+  readPinnedPackageManager,
+} from "./lib/node-runtime.ts";
 
 const ENV_FILES = [".env", NodePath.join("infra", "relay", ".env")];
 
@@ -24,15 +29,21 @@ export function pinnedNodeRunners(input: {
   readonly pinned: string;
   readonly vp: boolean;
   readonly autoDownload: boolean;
+  readonly packageManager?: string | undefined;
+  readonly packageManagerFlag?: boolean | undefined;
 }): { readonly command: string; readonly tool: string }[] {
-  return input.vp && input.autoDownload
-    ? [
-        {
-          command: `vp env exec --node ${input.pinned} -- node scripts/setup-worktree.ts`,
-          tool: "vp",
-        },
-      ]
-    : [];
+  if (!input.vp || !input.autoDownload) return [];
+  // vite-plus#2398 (v0.3.1+) resolves packageManager on `vp env exec` and prepends a system_first
+  // pnpm dir ahead of `--node` unless `--package-manager` pins it too.
+  const packageManager =
+    (input.packageManagerFlag ?? true) ? normalizePackageManager(input.packageManager) : undefined;
+  const packageManagerArgs = packageManager ? ` --package-manager ${packageManager}` : "";
+  return [
+    {
+      command: `vp env exec --node ${input.pinned}${packageManagerArgs} -- node scripts/setup-worktree.ts`,
+      tool: "vp",
+    },
+  ];
 }
 
 export function worktreeInstallCandidates(tools: {
@@ -49,7 +60,7 @@ export function worktreeInstallCandidates(tools: {
 export function vpSupportsVerifiedNodeDownload(
   timeout = 5_000,
   command = "vp",
-): { supported: boolean; timedOut: boolean } {
+): { supported: boolean; timedOut: boolean; packageManagerFlag: boolean } {
   const directory = NodeFS.mkdtempSync(NodePath.join(NodeOS.tmpdir(), "goat-vp-version-"));
   const output = NodePath.join(directory, "stdout");
   let fd: number | undefined;
@@ -77,12 +88,17 @@ export function vpSupportsVerifiedNodeDownload(
     }
     const stdout = NodeFS.readFileSync(output, "utf8");
     const match = /^vp v(\d+)\.(\d+)\.(\d+)\s*$/.exec(stdout.split(/\r?\n/, 1)[0] ?? "");
-    if (result.error || result.status !== 0 || !match) return { supported: false, timedOut };
+    if (result.error || result.status !== 0 || !match) {
+      return { supported: false, timedOut, packageManagerFlag: false };
+    }
     const [, major = "0", minor = "0", patch = "0"] = match;
+    const majorNum = Number(major);
+    const minorNum = Number(minor);
+    const patchNum = Number(patch);
     return {
-      supported:
-        Number(major) > 0 || Number(minor) > 2 || (Number(minor) === 2 && Number(patch) >= 2),
+      supported: majorNum > 0 || minorNum > 2 || (minorNum === 2 && patchNum >= 2),
       timedOut,
+      packageManagerFlag: majorNum > 0 || minorNum > 3 || (minorNum === 3 && patchNum >= 1),
     };
   } finally {
     try {
@@ -95,12 +111,7 @@ export function vpSupportsVerifiedNodeDownload(
 
 /** The pnpm release root package.json names, for the message when no installer can run. */
 function pinnedPackageManager(): string {
-  const manifest: { readonly packageManager?: unknown } = JSON.parse(
-    NodeFS.readFileSync(NodePath.join(worktree, "package.json"), "utf8"),
-  );
-  return typeof manifest.packageManager === "string"
-    ? manifest.packageManager.replace("@", " ")
-    : "pnpm";
+  return readPinnedPackageManager()?.replace("@", " ") ?? "pnpm";
 }
 
 export function isCorepackLauncherMissing(output: string): boolean {
@@ -235,7 +246,13 @@ async function main(): Promise<void> {
     const probe = hasVp ? vpSupportsVerifiedNodeDownload() : undefined;
     const signatureBypassed = Boolean(process.env.VP_NODE_SKIP_SIGNATURE_VERIFY);
     const verifiedVp = (probe?.supported ?? false) && !signatureBypassed;
-    const runners = pinnedNodeRunners({ pinned, vp: verifiedVp, autoDownload });
+    const runners = pinnedNodeRunners({
+      pinned,
+      vp: verifiedVp,
+      autoDownload,
+      packageManager: readPinnedPackageManager(),
+      packageManagerFlag: probe?.packageManagerFlag ?? false,
+    });
     const tried: string[] = [];
     for (const runner of runners) {
       process.stderr.write(

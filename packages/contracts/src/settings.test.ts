@@ -1,7 +1,6 @@
 import { MemoryHubSettings, MemoryHubSettingsUpdateInput } from "./memory.ts";
 import { describe, expect, it } from "vite-plus/test";
 import * as Schema from "effect/Schema";
-
 import { type CommandId, ProjectId } from "./baseSchemas.ts";
 import { DEFAULT_OPENCODEX_BASE_URL } from "./codexRoute.ts";
 import {
@@ -31,7 +30,6 @@ import {
   withIdleCompaction,
 } from "./settings.ts";
 import { DEFAULT_SNOOZE_PRESETS, MAX_SNOOZE_PRESETS } from "./snoozePresets.ts";
-
 const decodeClientSettings = Schema.decodeUnknownSync(ClientSettingsSchema);
 const decodeClientSettingsPatch = Schema.decodeUnknownSync(ClientSettingsPatch);
 const encodeClientSettings = Schema.encodeSync(ClientSettingsSchema);

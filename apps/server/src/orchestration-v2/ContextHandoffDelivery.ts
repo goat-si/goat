@@ -1,11 +1,4 @@
-import {
-  isCompactionCommandMessage,
-  parseGoalCommand,
-  type OrchestrationV2ContextHandoff,
-  type OrchestrationV2ProviderThread,
-  type OrchestrationV2Run,
-  type OrchestrationV2ThreadProjection,
-} from "@goat/contracts";
+import type { OrchestrationV2ContextHandoff, OrchestrationV2ProviderThread } from "@goat/contracts";
 import type * as ProviderAdapter from "@goat/provider-core/server/ProviderAdapter";
 import { ContextHandoffBudgetError } from "@goat/provider-core/server/failure";
 import * as Effect from "effect/Effect";
@@ -166,41 +159,4 @@ export class ContextHandoffDeliveryUncertainError extends Schema.TaggedError<Con
   override get message() {
     return "Historical context delivery is uncertain; replace the native thread before retrying.";
   }
-}
-
-export function readyContextHandoffs(
-  projection: Pick<
-    OrchestrationV2ThreadProjection,
-    "contextTransfers" | "contextHandoffs" | "runs" | "messages"
-  >,
-  run: OrchestrationV2Run,
-) {
-  // Older versions also stored subagent replies as history handoffs. Their
-  // queued completion messages carry the results without a history budget.
-  const subagentResultTransfers = new Set(
-    projection.contextTransfers
-      .filter((transfer) => transfer.type === "subagent_result")
-      .map((transfer) => transfer.id),
-  );
-  return projection.contextHandoffs.filter(
-    (handoff) =>
-      (handoff.transferId == null || !subagentResultTransfers.has(handoff.transferId)) &&
-      handoff.status === "ready" &&
-      (handoff.targetRunId === run.id ||
-        (handoff.toProviderThreadId === run.providerThreadId &&
-          projection.runs.some(
-            (source) =>
-              source.id === handoff.targetRunId &&
-              (source.status === "failed" ||
-                source.status === "interrupted" ||
-                (source.status === "completed" &&
-                  handoff.delivery === undefined &&
-                  // Compaction and /goal turns defer history to the next turn.
-                  projection.messages.some(
-                    (message) =>
-                      message.id === source.userMessageId &&
-                      (isCompactionCommandMessage(message) || parseGoalCommand(message) !== null),
-                  ))),
-          ))),
-  );
 }
