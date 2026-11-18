@@ -43,6 +43,9 @@ export const ReleaseReportSchema = Schema.Struct({
       }),
     ),
   ),
+  sshRuntimeCjkFonts: Schema.optional(
+    Schema.Struct({ sharedBytes: Schema.Number, removedBytes: Schema.Number }),
+  ),
   ok: Schema.Boolean,
   checks: Schema.Array(Schema.String),
   problems: Schema.Array(Schema.String),
@@ -457,6 +460,7 @@ export const writePayloadReport = Effect.fn("writePayloadReport")(function* (
   key: string,
   version: string,
   problems: readonly string[],
+  sshRuntimeCjkFonts?: ReleaseReport["sshRuntimeCjkFonts"],
 ) {
   const inputs = yield* releaseInputs(dir);
   const allProblems = [...problems, ...(inputs.length ? [] : ["no distributable artifacts"])];
@@ -468,6 +472,7 @@ export const writePayloadReport = Effect.fn("writePayloadReport")(function* (
     ok: allProblems.length === 0,
     checks: ["exposure-scan", "payload-hashes"],
     problems: allProblems,
+    ...(sshRuntimeCjkFonts === undefined ? {} : { sshRuntimeCjkFonts }),
   });
   if (allProblems.length) return yield* new ReleaseVerificationError({ problems: allProblems });
 });

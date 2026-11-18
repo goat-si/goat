@@ -181,6 +181,10 @@ const layerDesktopSshEnvironment = Layer.unwrap(
             ),
             ...(environment.isPackaged
               ? {
+                  bundledFontAssetDirectory: environment.path.join(
+                    environment.clientAssetsDir,
+                    "assets",
+                  ),
                   bundledArchiveDirectory: environment.path.join(
                     environment.resourcesPath,
                     "ssh-runtime",

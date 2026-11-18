@@ -53,6 +53,7 @@ export interface RemoteGoatRunnerOptions {
   readonly archiveDirectory?: string | null;
   /** Read-only packaged archives. Never create, repair, or download into this directory. */
   readonly bundledArchiveDirectory?: string | null;
+  readonly bundledFontAssetDirectory?: string;
   /**
    * Ask the host to download a published release itself before this client uploads one.
    * The desktop app and the server's SSH dispatch set it; without it the client always

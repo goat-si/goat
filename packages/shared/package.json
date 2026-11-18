@@ -635,6 +635,10 @@
       "types": "./src/hostClassification.ts",
       "import": "./src/hostClassification.ts"
     },
+    "./officeCjkFontAssets": {
+      "types": "./src/officeCjkFontAssets.ts",
+      "import": "./src/officeCjkFontAssets.ts"
+    },
     "./cliRelease": {
       "types": "./src/cliRelease.ts",
       "import": "./src/cliRelease.ts"

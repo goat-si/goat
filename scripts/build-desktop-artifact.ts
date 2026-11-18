@@ -27,7 +27,6 @@ import {
   type DirectoryRecord,
 } from "@electron/asar";
 
-import { cliArchiveFileName, cliArchiveTarCommand, parseChecksums } from "@goat/shared/cliRelease";
 import { fromYaml } from "@goat/shared/schemaYaml";
 import * as HostProcess from "@goat/shared/HostProcess";
 import { clerkFrontendApiHostnameFromPublishableKey } from "@goat/shared/relayAuth";
@@ -61,6 +60,24 @@ import {
 } from "./lib/release-version.ts";
 import { resolveWebAssetBrandForChannel, type WebAssetBrand } from "./lib/brand-assets.ts";
 import { scanReleasePayload, writePayloadReport } from "./lib/release-verify.ts";
+import {
+  parseWslRuntimeArchiveMembers,
+  SshRuntimeArchiveValidationError,
+  SSH_RUNTIME_EXTRA_RESOURCES,
+  SSH_RUNTIME_RESOURCE_SOURCE_DIR,
+  stageSshRuntimeArchives,
+  validateSshRuntimeArchives,
+} from "./desktop-ssh-runtime-archives.ts";
+
+export {
+  parseWslRuntimeArchiveMembers,
+  SSH_RUNTIME_EXTRA_RESOURCES,
+  SSH_RUNTIME_PLATFORM_KEYS,
+  SSH_RUNTIME_RESOURCE_SOURCE_DIR,
+  stageSshRuntimeArchives,
+  validateSshRuntimeArchives,
+} from "./desktop-ssh-runtime-archives.ts";
+
 import {
   computerUseHelperEnvironment,
   computerUseHelperRefusal,
@@ -3273,178 +3290,6 @@ export const stageWslRuntimeArchive = Effect.fn("stageWslRuntimeArchive")(functi
 export const wslRuntimeArchiveStem = (version: string, arch: typeof BuildArch.Type): string =>
   `goat-${version}-linux-${arch}`;
 
-export const parseWslRuntimeArchiveMembers = (listing: string): ReadonlyArray<string> =>
-  listing
-    .split(/\r?\n/)
-    .map((member) => member.replace(/^\.\//, "").replace(/\/$/, ""))
-    .filter((member) => member.length > 0);
-
-export class SshRuntimeArchiveValidationError extends Schema.TaggedError<SshRuntimeArchiveValidationError>()(
-  "SshRuntimeArchiveValidationError",
-  { message: Schema.String },
-) {}
-
-export const SSH_RUNTIME_PLATFORM_KEYS = ["darwin-arm64", "linux-x64", "linux-arm64"] as const;
-export const SSH_RUNTIME_RESOURCE_SOURCE_DIR = "apps/desktop/prod-resources/ssh-runtime/archives";
-export const SSH_RUNTIME_EXTRA_RESOURCES = [
-  {
-    from: SSH_RUNTIME_RESOURCE_SOURCE_DIR,
-    to: "ssh-runtime/archives",
-    filter: ["*.tar.gz", "*.tar.gz.sha256"],
-  },
-] as const;
-
-export const validateSshRuntimeArchives = Effect.fn("validateSshRuntimeArchives")(
-  function* (input: {
-    readonly directory: string;
-    readonly version: string;
-    readonly requireAll: boolean;
-    readonly requireSidecars?: boolean;
-  }) {
-    const fs = yield* FileSystem.FileSystem;
-    const path = yield* Path.Path;
-    const archives: Array<{ fileName: string; bytes: Uint8Array; sha256: string }> = [];
-    for (const key of SSH_RUNTIME_PLATFORM_KEYS) {
-      const fileName = cliArchiveFileName(input.version, key);
-      const archivePath = path.join(input.directory, fileName);
-      if (!(yield* fs.exists(archivePath))) {
-        if (input.requireAll)
-          return yield* Effect.fail(
-            new SshRuntimeArchiveValidationError({
-              message: `Missing SSH runtime archive ${archivePath}`,
-            }),
-          );
-        continue;
-      }
-      const stat = yield* fs.stat(archivePath);
-      if (stat.type !== "File" || stat.size > 256n * 1024n * 1024n) {
-        return yield* Effect.fail(
-          new SshRuntimeArchiveValidationError({
-            message: `Invalid SSH runtime archive ${archivePath}`,
-          }),
-        );
-      }
-      const bytes = yield* fs.readFile(archivePath);
-      if (BigInt(bytes.byteLength) !== stat.size || bytes.byteLength > 256 * 1024 * 1024) {
-        return yield* Effect.fail(
-          new SshRuntimeArchiveValidationError({
-            message: `SSH runtime archive changed while reading ${archivePath}`,
-          }),
-        );
-      }
-      const sha256 = NodeCrypto.createHash("sha256").update(bytes).digest("hex");
-      const sidecar = `${archivePath}.sha256`;
-      const hasSidecar = yield* fs.exists(sidecar);
-      if (input.requireSidecars && !hasSidecar) {
-        return yield* Effect.fail(
-          new SshRuntimeArchiveValidationError({
-            message: `Missing SSH runtime checksum ${sidecar}`,
-          }),
-        );
-      }
-      if (hasSidecar) {
-        const checksum = yield* fs.readFileString(sidecar);
-        if (
-          parseChecksums(checksum).get(fileName) !== sha256 ||
-          (input.requireSidecars && checksum !== `${sha256}  ${fileName}\n`)
-        ) {
-          return yield* Effect.fail(
-            new SshRuntimeArchiveValidationError({
-              message: `Invalid or noncanonical SSH runtime checksum ${sidecar}`,
-            }),
-          );
-        }
-      }
-      const tarCommand = cliArchiveTarCommand(yield* HostProcess.Platform, process.env);
-      const listing = yield* spawnAndCollectOutput(
-        ChildProcess.make(tarCommand, ["-tzf", archivePath], {
-          stdin: "ignore",
-          stdout: "pipe",
-          stderr: "pipe",
-        }),
-      );
-      if (listing.exitCode !== 0) {
-        return yield* Effect.fail(
-          new SshRuntimeArchiveValidationError({
-            message: `Cannot list ${archivePath}: ${listing.stderr.trim()}`,
-          }),
-        );
-      }
-      const members = parseWslRuntimeArchiveMembers(listing.stdout);
-      const stem = fileName.slice(0, -".tar.gz".length);
-      const required = [
-        `${stem}/goat`,
-        `${stem}/client/index.html`,
-        `${stem}/resource-monitor/${key}/goat-resource-monitor`,
-        `${stem}/screen-code/quickjs.wasm`,
-      ];
-      const pty = [
-        `${stem}/node_modules/node-pty/build/Release/pty.node`,
-        `${stem}/node_modules/node-pty/prebuilds/${key}/pty.node`,
-      ];
-      if (
-        members.length === 0 ||
-        members.some(
-          (member) =>
-            member.split("/").some((segment) => segment === "..") ||
-            (member !== stem && !member.startsWith(`${stem}/`)) ||
-            member.endsWith("/bin.mjs"),
-        ) ||
-        required.some((member) => !members.includes(member)) ||
-        !pty.some((member) => members.includes(member))
-      ) {
-        return yield* Effect.fail(
-          new SshRuntimeArchiveValidationError({
-            message: `Incomplete or wrong-version SSH runtime archive ${archivePath}`,
-          }),
-        );
-      }
-      archives.push({ fileName, bytes, sha256 });
-    }
-    if (archives.length === 0)
-      return yield* Effect.fail(
-        new SshRuntimeArchiveValidationError({
-          message: `No SSH runtime archives for ${input.version} in ${input.directory}`,
-        }),
-      );
-    return archives;
-  },
-);
-
-export const stageSshRuntimeArchives = Effect.fn("stageSshRuntimeArchives")(function* (input: {
-  readonly sourceDirectory: string;
-  readonly destinationDirectory: string;
-  readonly version: string;
-  readonly requireAll: boolean;
-}) {
-  const fs = yield* FileSystem.FileSystem;
-  const path = yield* Path.Path;
-  // Validate the entire input before creating any destination resources.
-  const archives = yield* validateSshRuntimeArchives({
-    directory: input.sourceDirectory,
-    version: input.version,
-    requireAll: input.requireAll,
-  });
-  yield* fs.makeDirectory(input.destinationDirectory, { recursive: true });
-  for (const archive of archives) {
-    // Write the bytes we hashed, not a second read/copy of a mutable source.
-    yield* fs.writeFile(path.join(input.destinationDirectory, archive.fileName), archive.bytes);
-    yield* fs.writeFileString(
-      path.join(input.destinationDirectory, `${archive.fileName}.sha256`),
-      `${archive.sha256}  ${archive.fileName}\n`,
-    );
-  }
-  yield* Effect.logInfo(
-    `Staged SSH runtime archives: ${archives.length} archives, ${archives.reduce((total, archive) => total + archive.bytes.byteLength, 0)} bytes (plus canonical SHA-256 sidecars).`,
-  );
-  yield* validateSshRuntimeArchives({
-    directory: input.destinationDirectory,
-    version: input.version,
-    requireAll: input.requireAll,
-    requireSidecars: true,
-  });
-});
-
 export const packWindowsServerAsar = Effect.fn("packWindowsServerAsar")(function* (input: {
   readonly sourceDir: string;
   readonly asarPath: string;
@@ -4460,14 +4305,16 @@ const buildDesktopArtifactUnlocked = Effect.fn("buildDesktopArtifactUnlocked")(f
     });
   }
 
-  if (options.sshRuntimeArchiveDir !== undefined) {
-    yield* stageSshRuntimeArchives({
-      sourceDirectory: path.resolve(repoRoot, options.sshRuntimeArchiveDir),
-      destinationDirectory: path.join(stageAppDir, SSH_RUNTIME_RESOURCE_SOURCE_DIR),
-      version: appVersion,
-      requireAll: options.requireAllSshRuntimes,
-    });
-  }
+  const sshRuntimeCjkFonts =
+    options.sshRuntimeArchiveDir === undefined
+      ? undefined
+      : yield* stageSshRuntimeArchives({
+          sourceDirectory: path.resolve(repoRoot, options.sshRuntimeArchiveDir),
+          destinationDirectory: path.join(stageAppDir, SSH_RUNTIME_RESOURCE_SOURCE_DIR),
+          clientAssetsDirectory: path.join(path.dirname(bundledClientEntry), "assets"),
+          version: appVersion,
+          requireAll: options.requireAllSshRuntimes,
+        });
 
   // electron-builder treats empty signing variables as enabled; scrub them before spawning.
   let buildEnv: NodeJS.ProcessEnv = {
@@ -4616,6 +4463,7 @@ const buildDesktopArtifactUnlocked = Effect.fn("buildDesktopArtifactUnlocked")(f
       `desktop-${options.platform}-${options.arch}`,
       appVersion,
       problems,
+      sshRuntimeCjkFonts,
     );
   }
 
