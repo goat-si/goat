@@ -19,7 +19,7 @@ import {
 import { constVoid } from "effect/Function";
 import * as NodeCrypto from "node:crypto";
 import type { CDPSession, ConsoleMessage, Frame, Locator, Page } from "playwright-core";
-import { shrinkPng, shrinkJpegWithin } from "./ServerBrowserImage.ts";
+import { shrinkPng, shrinkJpegWithin, cappedJpegSize } from "./ServerBrowserImage.ts";
 import { captureFullPage } from "./fullPageScreenshot.ts";
 import { pointerInterception } from "./pointerInterception.ts";
 import { subsequentClick } from "./actionClick.ts";
@@ -458,6 +458,7 @@ type SnapshotInput = PreviewAutomationSnapshotInput & {
   readonly fullScreenshot?: boolean | undefined;
   /** False skips the capture when nothing would show or save the image (L4). */
   readonly captureImage?: boolean;
+  readonly measureSnapshotFrame?: boolean;
   readonly consoleEntries: ReadonlyArray<PreviewAutomationConsoleEntry>;
   readonly networkEntries: ReadonlyArray<PreviewAutomationNetworkEntry>;
   readonly actionTimeline: PreviewAutomationSnapshot["actionTimeline"];
@@ -530,6 +531,17 @@ const capture = async (
     input.annotate || input.captureImage === false ? undefined : track("screenshot", captureImage),
     track("frames", () => tabCookies(input.page)),
     track("page state", () => capturePaint(input.cdp)),
+    input.captureImage === false && input.measureSnapshotFrame
+      ? track("screenshot", async () =>
+          viewportPlacement(
+            viewport,
+            cappedJpegSize(
+              await captureViewport(input.cdp, { format: "jpeg", quality: 10 }),
+              scale,
+            ),
+          ),
+        )
+      : undefined,
   ]);
   void pageAndScreenshot.catch(constVoid);
   let tree: string;
@@ -582,7 +594,8 @@ const capture = async (
     await pageAndScreenshot.catch(constVoid);
     throw cause;
   }
-  const [captured, layersLine, capturedImage, cookies, paint] = await pageAndScreenshot;
+  const [captured, layersLine, capturedImage, cookies, paint, screenshotSize] =
+    await pageAndScreenshot;
   // Checked after the reads: an embedding frame element can be hidden while they run.
   const hidden = scoped ? await scopeHidden(scoped) : false;
   const page = hidden ? { ...captured, visibleText: "" } : captured;
@@ -629,6 +642,7 @@ const capture = async (
       treeComplete,
       ...maskSnapshotRecords(mask, input),
       ...(screenshot === undefined ? {} : { screenshot }),
+      ...(screenshotSize === undefined ? {} : { screenshotSize }),
       ...(full === undefined ? {} : { fullScreenshot: { data: full, ...pngSize(full) } }),
     },
     input,

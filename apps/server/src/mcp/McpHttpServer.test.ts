@@ -97,15 +97,23 @@ const layerPullRequestsTest = McpHttpServer.layerPullRequestsToolkit.pipe(
   ),
 );
 
-const serveSnapshots = (clientId: string, result: unknown) =>
+const serveSnapshots = (
+  clientId: string,
+  result: unknown,
+  frameRequests?: Array<boolean | undefined>,
+) =>
   Effect.gen(function* () {
     const broker = yield* PreviewAutomationBroker.PreviewAutomationBroker;
     const connected = yield* Deferred.make<void>();
     const inputs: Array<unknown> = [];
-    const events = yield* broker.connect({ clientId, environmentId });
+    const events = yield* broker.connect(
+      { clientId, environmentId },
+      frameRequests === undefined ? undefined : { inProcess: true },
+    );
     yield* Stream.runForEach(events, (event) => {
       if (event.type === "connected") return Deferred.succeed(connected, undefined);
       inputs.push(event.request.input);
+      frameRequests?.push(event.request.measureSnapshotFrame);
       return broker.respond({
         clientId,
         connectionId: event.connectionId,
@@ -343,6 +351,34 @@ it.effect("refuses preview tools to a client outside a thread before they run", 
       { type: "text", text: expect.stringContaining("needs an agent running inside GOAT") },
     ]);
   }).pipe(Effect.provide(layerTest)),
+);
+
+it.effect("reports frame dimensions in text and refuses a requested image with no pixels", () =>
+  Effect.scoped(
+    Effect.gen(function* () {
+      const dimensions = { width: 1280, height: 800 };
+      const frameRequests: Array<boolean | undefined> = [];
+      const { screenshot: _image, ...page } = snapshotResult;
+      yield* serveSnapshots(
+        "mcp-dimensions-client",
+        {
+          ...page,
+          screenshotSize: dimensions,
+        },
+        frameRequests,
+      );
+      const text = yield* callSnapshot({});
+      expect(text.isError).toBe(false);
+      expect(text.structuredContent).toMatchObject({ screenshot: dimensions });
+      expect(text.content.every((part) => part.type === "text")).toBe(true);
+      for (const input of [{ includeImage: true }, { save: true }]) {
+        const missing = yield* callSnapshot(input);
+        expect(missing.isError).toBe(true);
+        expect(JSON.stringify(missing.content)).toContain("did not contain requested PNG pixels");
+      }
+      expect(frameRequests).toEqual([true, undefined, undefined]);
+    }),
+  ).pipe(Effect.provide(layerTest)),
 );
 
 it.effect("saves full-page captures without replaying images and keeps clipping metadata", () =>

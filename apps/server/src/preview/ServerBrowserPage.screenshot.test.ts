@@ -94,6 +94,25 @@ describe.skipIf(!chromiumInstalled)("server browser snapshot screenshot", () => 
     }).toEqual({ size: [1280, 800], fullSize: [2560, 1600], colors: ["blue", "red", "red"] });
   });
 
+  it("reports the real capped frame dimensions without returning image bytes", async () => {
+    const page = await context.newPage();
+    await page.setContent(halves(""));
+    const result = await ServerBrowserPage.snapshot({
+      page,
+      cdp: await context.newCDPSession(page),
+      renderScale: 2,
+      captureImage: false,
+      measureSnapshotFrame: true,
+      consoleEntries: [],
+      networkEntries: [],
+      actionTimeline: [],
+      timeoutMs: 30_000,
+    });
+    expect(result.screenshotSize).toEqual(expect.objectContaining({ width: 1280, height: 800 }));
+    expect(result.screenshot).toBeUndefined();
+    expect(result.fullScreenshot).toBeUndefined();
+  });
+
   it("shrinks the screenshot of an XML document, whose createElement makes no canvas", async () => {
     const page = await context.newPage();
     await page.goto("data:text/xml,<a/>");

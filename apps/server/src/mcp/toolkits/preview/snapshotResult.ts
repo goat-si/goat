@@ -1,4 +1,4 @@
-import type { PreviewAutomationSnapshot } from "@goat/contracts";
+import { OrchestratorMcpFailure, type PreviewAutomationSnapshot } from "@goat/contracts";
 import * as Effect from "effect/Effect";
 import * as Schema from "effect/Schema";
 import { McpSchema } from "effect/ai";
@@ -23,24 +23,32 @@ export const snapshotResult = Effect.fn("PreviewSnapshot.result")(function* (
   const snapshot = encodedResult as SnapshotMetadata & {
     readonly url: string;
     readonly screenshot: PreviewAutomationSnapshot["screenshot"];
+    readonly screenshotSize: PreviewAutomationSnapshot["screenshotSize"];
     readonly fullScreenshot?: { readonly data: string };
   };
-  const { screenshot, fullScreenshot, ...page } = snapshot;
-  const { data = "", ...screenshotMetadata } = screenshot ?? {};
-  const png = new Uint8Array(Buffer.from(data, "base64"));
-  const saving = payload?.save === true && screenshot !== undefined;
-  const screenshotPath = saving
-    ? yield* saveScreenshot(
-        snapshot.url,
-        fullScreenshot === undefined
-          ? png
-          : new Uint8Array(Buffer.from(fullScreenshot.data, "base64")),
-      )
-    : undefined;
-  const deliveryKey = snapshotDeliveryKey(invocation, snapshot.tabId);
-  // Images stay out of tool history unless asked for: providers replay them on every
-  // later request, and some reject inline images outright.
+  const { screenshot, screenshotSize, fullScreenshot, ...page } = snapshot;
+  const saving = payload?.save === true;
   const includeImage = payload?.includeImage === true;
+  const needsPixels = saving || includeImage;
+  const { data, ...imageMetadata } = screenshot ?? {};
+  if (needsPixels && !data) {
+    return yield* new OrchestratorMcpFailure({
+      code: "invalid_request",
+      message: "Preview snapshot did not contain requested PNG pixels.",
+    });
+  }
+  const screenshotMetadata = screenshot ? imageMetadata : screenshotSize;
+  const png = needsPixels && data ? new Uint8Array(Buffer.from(data, "base64")) : undefined;
+  const screenshotPath =
+    saving && png
+      ? yield* saveScreenshot(
+          snapshot.url,
+          fullScreenshot === undefined
+            ? png
+            : new Uint8Array(Buffer.from(fullScreenshot.data, "base64")),
+        )
+      : undefined;
+  const deliveryKey = snapshotDeliveryKey(invocation, snapshot.tabId);
   if (screenshotPath !== undefined && !includeImage) {
     recordSnapshotDelivery(deliveryKey, true);
     const saved = {
@@ -56,7 +64,7 @@ export const snapshotResult = Effect.fn("PreviewSnapshot.result")(function* (
   }
   const metadata = withDeliveredBaseline(deliveryKey, {
     ...page,
-    ...(screenshot ? { screenshot: screenshotMetadata } : {}),
+    ...(screenshotMetadata ? { screenshot: screenshotMetadata } : {}),
     ...(screenshotPath === undefined ? {} : { screenshotPath }),
   });
   const bounded = boundSnapshotMetadata(metadata);
@@ -86,7 +94,7 @@ export const snapshotResult = Effect.fn("PreviewSnapshot.result")(function* (
               text: `Snapshot text was bounded. Omitted: ${bounded.omitted.join("; ")}.`,
             },
           ]),
-      ...(includeImage && screenshot
+      ...(includeImage && screenshot && png
         ? [{ type: "image" as const, data: png, mimeType: screenshot.mimeType }]
         : []),
     ],

@@ -44,7 +44,6 @@ import {
   type PreviewAutomationScrollInput,
   type PreviewAutomationSelectInput,
   type PreviewAutomationSetColorSchemeInput,
-  type PreviewAutomationSnapshotInput,
   type PreviewAutomationStatus,
   type PreviewAutomationTypeInput,
   type PreviewAutomationUploadInput,
@@ -106,6 +105,7 @@ import {
   captureFinalRecordingFrame,
   encodeFinalFrame,
 } from "./ServerBrowserRecordingFinal.ts";
+import { snapshotCaptureOptions } from "./snapshotOptions.ts";
 import { awaitRevealedViewer, viewerArrived } from "./ServerBrowserRevealWait.ts";
 import { saveRecording } from "./ServerBrowserRecordingExport.ts";
 import {
@@ -1945,10 +1945,9 @@ const make = Effect.gen(function* () {
               {
                 ...tab,
                 renderScale: tab.desktop ? "display" : RENDER_SCALE,
-                ...(input as PreviewAutomationSnapshotInput & { fullScreenshot?: boolean }),
+                ...snapshotCaptureOptions(request),
                 agentSessionId: request.agentSessionId,
                 actionChannel: actionGate().channel,
-                captureImage: (input as { readonly captureImage?: boolean }).captureImage !== false,
                 timeoutMs: deadlineMs - performance.now(),
               },
               timing,

@@ -1,4 +1,8 @@
-import type { PreviewAutomationSnapshot, PreviewAutomationSnapshotInput } from "@goat/contracts";
+import type {
+  PreviewAutomationRequest,
+  PreviewAutomationSnapshot,
+  PreviewAutomationSnapshotInput,
+} from "@goat/contracts";
 import type { Locator, Page } from "playwright-core";
 import { HIDDEN_IN_DOCUMENT } from "./pageScope.ts";
 
@@ -80,4 +84,18 @@ export const snapshotPageMetadata = async (page: Page, scope?: Locator) => {
         ),
       }
     : metadata;
+};
+
+export const snapshotCaptureOptions = (request: PreviewAutomationRequest) => {
+  const input = request.input as
+    | (PreviewAutomationSnapshotInput & {
+        readonly captureImage?: boolean;
+        readonly fullScreenshot?: boolean;
+      })
+    | undefined;
+  return {
+    ...input,
+    captureImage: input?.captureImage !== false,
+    measureSnapshotFrame: request.measureSnapshotFrame === true,
+  };
 };
