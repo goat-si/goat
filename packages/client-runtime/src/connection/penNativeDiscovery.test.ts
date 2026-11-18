@@ -381,3 +381,88 @@ it.effect(
       expect(opens).toBe(1);
     }),
 );
+
+it.effect("a closed viewer gate keeps a member's stored route and the environment it holds", () =>
+  Effect.gen(function* () {
+    const env = EnvironmentId.make("env");
+    const id = penConnectionId("mesh", "node");
+    const pin = { meshId: "mesh", nodeId: "node", noisePub: "key" };
+    const target = new PenConnectionTarget({ environmentId: env, label: "Node", connectionId: id });
+    // The Pen route is this environment's only one: removing it would delete the environment.
+    const entries = yield* SubscriptionRef.make<ReadonlyMap<EnvironmentId, ConnectionCatalogEntry>>(
+      new Map([
+        [
+          env,
+          {
+            enabled: true,
+            target,
+            profile: Option.some(
+              new PenConnectionProfile({
+                ...pin,
+                environmentId: env,
+                label: "Node",
+                connectionId: id,
+              }),
+            ),
+            alternateRoutes: [],
+          },
+        ],
+      ]),
+    );
+    const removed: string[] = [];
+    const unused = () => Effect.die("unexpected registry call");
+    const unusedStream = () => Stream.die("unexpected registry stream");
+    const registry = EnvironmentRegistry.of({
+      entries,
+      networkStatus: yield* SubscriptionRef.make<"unknown" | "online" | "offline">("online"),
+      start: Effect.void,
+      register: unused,
+      registerPlatform: unused,
+      assertKnownAddress: unused,
+      reconcilePlatform: unused,
+      remove: unused,
+      removeRoute: (_env, route) => Effect.sync(() => void removed.push(route)),
+      reorderRoutes: unused,
+      removeRelayEnvironments: unused,
+      retryNow: unused,
+      reconnect: unused,
+      setEnabled: unused,
+      setCompatibility: unused,
+      state: unused,
+      stateChanges: unusedStream,
+      run: unused,
+      runStream: unusedStream,
+      followStream: unusedStream,
+    });
+    const member = {
+      nodeId: "node",
+      name: "Node",
+      online: true,
+      noisePub: "key",
+      route: { kind: "refused" as const, reason: "not-pen-route" as const },
+    };
+    const ready = {
+      kind: "ready" as const,
+      seq: 1,
+      meshId: "mesh",
+      selfNodeId: "self",
+      members: [member],
+    };
+    const latest = yield* SubscriptionRef.make<Option.Option<PenMembersInput>>(Option.some(ready));
+    for (const gateway of [Option.none(), Option.some({ open: unused, close: () => Effect.void })])
+      yield* Effect.gen(function* () {
+        const discovery = yield* makePenNativeDiscovery();
+        yield* discovery.pass(ready);
+        expect(removed).toEqual([]);
+      }).pipe(
+        Effect.provideService(EnvironmentRegistry, registry),
+        Effect.provideService(PenMembership, { latest, admit: () => Effect.void }),
+        Effect.provideService(PenViewerPolicy, { enabled: false }),
+        Effect.provideService(PenRouteGateway, gateway),
+        Effect.provideService(
+          HttpClient.HttpClient,
+          HttpClient.make(() => Effect.die("unexpected HTTP")),
+        ),
+      );
+  }),
+);

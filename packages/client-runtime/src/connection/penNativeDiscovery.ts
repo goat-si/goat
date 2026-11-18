@@ -44,7 +44,9 @@ export const makePenNativeDiscovery = Effect.fn("PenNativeDiscovery.make")(funct
     for (const route of existing) {
       const { meshId, nodeId, noisePub } = route.profile;
       const pin: DesktopPenPin = { meshId, nodeId, noisePub };
-      if (policy.enabled && Option.isSome(gateway) && penPinIsCurrent(state, pin)) continue;
+      // Only a member that left loses its route: removing an environment's last route deletes the
+      // environment with its drafts. A closed gate leaves the route stored and unusable.
+      if (state.kind === "unavailable" || penPinIsCurrent(state, pin)) continue;
       yield* registry.removeRoute(route.target.environmentId, route.target.connectionId).pipe(
         Effect.catch((error) =>
           Effect.logWarning("Could not remove Pen native route", {
