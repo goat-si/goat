@@ -1,4 +1,3 @@
-// @effect-diagnostics-next-line nodeBuiltinImport:off - Exercise HTTP authentication with the real SDK.
 import { assert, describe, it } from "@effect/vitest";
 import * as NodeServices from "@effect/platform-node/NodeServices";
 import { type OpencodeClient, type ToolPart } from "@opencode-ai/sdk/v2";
@@ -14,6 +13,9 @@ import {
   ThreadId,
   type OrchestrationV2ProviderThread,
   type AuthEnvironmentScope,
+  MemoryId,
+  MemoryRevisionId,
+  MemorySpaceId,
   EnvironmentId,
 } from "@goat/contracts";
 import * as Effect from "effect/Effect";
@@ -41,7 +43,7 @@ import {
   OPENCODE_PROVIDER,
   reconcileOpenCodePromptAdmissionStatus,
 } from "./adapter.ts";
-import { memoryContextText } from "@goat/provider-core/server/memoryContext";
+import { packMemoryContext, memoryContextText } from "@goat/provider-core/server/memoryContext";
 import {
   OPEN_CODE_TEST_SETTINGS,
   promiseGate,
