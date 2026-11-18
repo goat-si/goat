@@ -7,6 +7,7 @@ export const runtimeMock = {
     startCalls: [] as string[],
     promptUrls: [] as string[],
     promptParts: [] as ReadonlyArray<unknown>[],
+    providerListUrls: [] as string[],
     authHeaders: [] as Array<string | null>,
     closeCalls: [] as string[],
     directories: [] as string[],
@@ -51,6 +52,7 @@ export const runtimeMock = {
     this.state.startCalls.length = 0;
     this.state.promptUrls.length = 0;
     this.state.promptParts.length = 0;
+    this.state.providerListUrls.length = 0;
     this.state.authHeaders.length = 0;
     this.state.closeCalls.length = 0;
     this.state.directories.length = 0;
@@ -139,6 +141,16 @@ export const OpenCodeRuntimeTestDouble: OpenCodeRuntime.OpenCodeRuntime["Service
       handled = resolve;
     });
     return {
+      provider: {
+        list: async () => {
+          runtimeMock.state.providerListUrls.push(baseUrl);
+          return {
+            data: {
+              all: [{ id: "openai", models: { "gpt-5": { id: "gpt-5", variants: { high: {} } } } }],
+            },
+          };
+        },
+      },
       config: { get: async () => ({ data: runtimeMock.state.config }) },
       mcp: { status: async () => ({ data: {} }) },
       tool: { ids: async () => ({ data: ["read", "bash", "question"] }) },

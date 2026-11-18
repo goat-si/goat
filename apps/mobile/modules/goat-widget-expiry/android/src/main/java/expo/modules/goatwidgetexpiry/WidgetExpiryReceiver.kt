@@ -48,6 +48,7 @@ class WidgetExpiryReceiver : BroadcastReceiver() {
   companion object {
     private const val EXTRA_NAME = "expo.modules.goatwidgetexpiry.NAME"
     private const val EXTRA_DEADLINES = "expo.modules.goatwidgetexpiry.DEADLINES"
+
     // Deadlines installed builds stored; the name stays so a rename loses none.
     private const val PREFERENCES = "expo.modules.t3widgetexpiry.DEADLINES" // goat-rename: legacy
 

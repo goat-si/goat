@@ -1,10 +1,10 @@
+import { replaceStreamingMessageRows } from "./timelineStreamingRows";
 import type { CloudRunCard } from "@goat/client-runtime/state/cloud-task";
 import { worktreeSetupAgentStarted } from "@goat/client-runtime/worktree-setup";
 export { worktreeSetupAgentStarted } from "@goat/client-runtime/worktree-setup";
 import { isLiveSubagentTurnItem } from "@goat/client-runtime/state/subagentRuntime";
 import * as DateTime from "effect/DateTime";
 import * as Equal from "effect/Equal";
-import { assistantCitationLabel, collectAssistantCitations } from "@goat/shared/assistantCitations";
 import { shallow } from "zustand/vanilla/shallow";
 import { claudeResumeCompactionAge } from "@goat/shared/claudeCompaction";
 import { IDLE_COMPACTING_LABELS, IDLE_COMPACTION_TITLES } from "@goat/client-runtime/user-message";
@@ -25,14 +25,13 @@ import {
   toolGroupSummaryKind,
   workEntryCommandActions,
   contextCompactionTokenCounts,
+  workEntriesViewedImagePaths,
   type ToolGroupSummaryKind,
 } from "@goat/client-runtime/work-log/presentation";
 export { toolGroupAction } from "@goat/client-runtime/work-log/presentation";
 import {
   deriveRevertTurnCountByUserMessageId,
   formatDuration,
-  isStreamingMessageTextUpdate,
-  isStreamingTurnItemTextUpdate,
   timelineEntryIsPersistentResourceCard,
   workEntryDisplayIndicatesToolFailure,
   workEntryIndicatesToolSuccess,
@@ -41,6 +40,7 @@ import {
   type TimelineEntry,
   type WorkLogEntry,
 } from "../../session-logic";
+import { deriveTerminalAssistantMessageIds } from "./terminalAssistantMessages";
 import {
   type ChatMessage,
   type ProposedPlan,
@@ -59,7 +59,8 @@ import {
   type ThreadId,
   type TurnItemId,
 } from "@goat/contracts";
-import type { ThreadRunSummary } from "@goat/client-runtime/state/shell";
+import type { TimelineLatestRun } from "./timelineLatestRun";
+export type { TimelineLatestRun } from "./timelineLatestRun";
 import { deriveUnsettledRunId, timelineIsWorking } from "./timelineLiveRun";
 import {
   resolveGoatMcpItemCall,
@@ -86,7 +87,7 @@ import {
   type TurnThreadTarget,
 } from "./turnThreadTargets";
 
-function timelineEntryRunId(entry: TimelineEntry): RunId | null {
+export function timelineEntryRunId(entry: TimelineEntry): RunId | null {
   if (entry.kind === "message") {
     return entry.message.role === "assistant" ? (entry.message.runId ?? null) : null;
   }
@@ -297,7 +298,10 @@ export function workEntryIsVisibleInGroup(
 }
 const TIMELINE_MINIMAP_ITEM_SPACING = 8;
 export const TIMELINE_MINIMAP_MIN_ITEMS = 2;
-const TIMELINE_MINIMAP_MAX_HEIGHT_CSS = "calc(100vh - 18rem)";
+export const TIMELINE_MINIMAP_TARGET_OFFSET = 24;
+// Relative to the timeline, not the viewport, so an open terminal shrinks the rail and
+// endpoint previews (centered on their strip) still fit above and below it.
+const TIMELINE_MINIMAP_MAX_HEIGHT_CSS = "max(4rem, calc(100% - 14.75rem))";
 const TIMELINE_MINIMAP_PERSISTENT_GUTTER = 48;
 
 export interface WorkGroupScrollAnchor {
@@ -457,7 +461,6 @@ export function resolveTimelineMinimapHasPersistentGutter(
 
 const TIMELINE_MINIMAP_HIT_STRIP_LEFT = 12;
 const TIMELINE_MINIMAP_HIT_STRIP_MAX_WIDTH = 40;
-const TIMELINE_MINIMAP_EXPANDED_HIT_STRIP_WIDTH = "22rem";
 
 export function resolveTimelineMinimapHitStripWidth(
   viewportWidth: number,
@@ -477,13 +480,6 @@ const TIMELINE_MINIMAP_NAVIGATION_REACH = 14;
 
 export function resolveTimelineMinimapNavigationInteractive(collapsedWidth: number): boolean {
   return collapsedWidth >= TIMELINE_MINIMAP_NAVIGATION_REACH;
-}
-
-export function resolveTimelineMinimapInteractiveWidth(
-  collapsedWidth: number,
-  expanded: boolean,
-): number | string {
-  return expanded ? TIMELINE_MINIMAP_EXPANDED_HIT_STRIP_WIDTH : collapsedWidth;
 }
 
 function computeElapsedMs(startIso: string, endIso: string): number | null {
@@ -510,11 +506,6 @@ export interface TimelineDurationMessage {
   updatedAt: string;
   streaming: boolean;
 }
-
-export type TimelineLatestRun = Pick<
-  ThreadRunSummary,
-  "runId" | "status" | "startedAt" | "completedAt" | "turnEnded" | "survivingRestartNotice"
->;
 
 const LIVE_ACTIVITY_ROW_ID = "live-activity-row";
 
@@ -588,6 +579,13 @@ type MessagesTimelineRowContent =
       lineCounts?: WorkLogLineCounts;
     }
   | {
+      /** Images the agent opened in the tool group above, kept visible while the group is collapsed. */
+      kind: "viewed-images";
+      id: string;
+      createdAt: string;
+      paths: ReadonlyArray<string>;
+    }
+  | {
       kind: "turn-fold";
       deferredWorkItemIds?: ReadonlyArray<string>;
       id: string;
@@ -627,6 +625,7 @@ type MessagesTimelineRowContent =
       projectedItem?: OrchestrationV2ProjectedTurnItem;
       durationStart: string;
       showAssistantMeta: boolean;
+      suppressEmptyResponse?: boolean;
       showAssistantCopyButton: boolean;
       assistantCopyStreaming: boolean;
       assistantTurnDiffSummary?: TurnDiffSummary | undefined;
@@ -721,6 +720,17 @@ function expandedWorkGroupRow(
   };
 }
 
+function viewedImagesRows(
+  groupId: string,
+  createdAt: string,
+  groupedEntries: ReadonlyArray<WorkLogEntry>,
+): Array<Extract<MessagesTimelineRow, { kind: "viewed-images" }>> {
+  const paths = workEntriesViewedImagePaths(groupedEntries);
+  return paths.length === 0
+    ? []
+    : [{ kind: "viewed-images", id: `${groupId}:viewed-images`, createdAt, paths }];
+}
+
 export function resolveAssistantMessageCopyState({
   text,
   showCopyButton,
@@ -736,32 +746,6 @@ export function resolveAssistantMessageCopyState({
     text: hasText ? (visible ? renderCodexDirectivesForCopy(text) : text) : null,
     visible,
   };
-}
-
-function deriveTerminalAssistantMessageIds(timelineEntries: ReadonlyArray<TimelineEntry>) {
-  const lastAssistantMessageIdByResponseKey = new Map<string, string>();
-  let nullTurnResponseIndex = 0;
-
-  for (const timelineEntry of timelineEntries) {
-    if (timelineEntry.kind !== "message") {
-      continue;
-    }
-    const { message } = timelineEntry;
-    if (message.role === "user") {
-      nullTurnResponseIndex += 1;
-      continue;
-    }
-    if (message.role !== "assistant") {
-      continue;
-    }
-
-    const responseKey = message.runId
-      ? `turn:${message.runId}`
-      : `unkeyed:${nullTurnResponseIndex}`;
-    lastAssistantMessageIdByResponseKey.set(responseKey, message.id);
-  }
-
-  return new Set(lastAssistantMessageIdByResponseKey.values());
 }
 
 interface TurnFold {
@@ -940,7 +924,7 @@ function timelineEntryIsSteer(entry: TimelineEntry): boolean {
   );
 }
 
-function timelineEntryStartsResponse(entry: TimelineEntry): boolean {
+export function timelineEntryStartsResponse(entry: TimelineEntry): boolean {
   return (
     (entry.kind === "message" && entry.message.role === "user" && !timelineEntryIsSteer(entry)) ||
     (entry.kind === "work" && entry.entry.itemType === "notification")
@@ -1160,6 +1144,8 @@ function deriveTurnFolds(input: {
     const terminalEntryIndex = group.terminalEntry
       ? group.entries.findIndex((entry) => entry.id === group.terminalEntry?.id)
       : group.entries.length;
+    // Folded dividers lose their place in the turn, so only the latest stays visible.
+    const visibleCompactionId = group.entries.findLast(timelineEntryIsCompaction)?.id;
     for (const [index, entry] of group.entries.entries()) {
       if (entry.id === group.terminalEntry?.id) {
         continue;
@@ -1173,7 +1159,7 @@ function deriveTurnFolds(input: {
         continue;
       }
       if (
-        isCompaction ||
+        entry.id === visibleCompactionId ||
         timelineEntryIsPersistentResourceCard(entry) ||
         input.liveSubagentEntryIds.has(entry.id) ||
         input.completeSupersededReplyEntryIds.has(entry.id)
@@ -1440,7 +1426,7 @@ export function deriveMessagesTimelineRows(input: {
   activeTurnStartedAt?: string | null;
   turnDiffSummaries: ReadonlyArray<TurnDiffSummary>;
   supportsConversationRollback: boolean;
-  threadStartCheckpointReady?: boolean;
+  threadStartCheckpointAvailable?: boolean;
   availableRevertTurnCounts?: ReadonlySet<number> | undefined;
   liveAgentTaskIds?: ReadonlySet<string> | undefined;
   worktreeSetup?: WorktreeSetupSnapshot | null;
@@ -1448,6 +1434,12 @@ export function deriveMessagesTimelineRows(input: {
 }): MessagesTimelineRow[] {
   const isWorking = timelineIsWorking(input);
   const timelineEntries = timelineRowEntries(input.timelineEntries);
+  const embeddedResultRunIds = new Set<RunId>();
+  for (const entry of timelineEntries) {
+    if ((entry.kind === "html-render" || entry.kind === "mcp-app") && entry.runId !== null) {
+      embeddedResultRunIds.add(entry.runId);
+    }
+  }
   const turnDiffSummaryByAssistantMessageId = new Map<MessageId, TurnDiffSummary>();
   for (const summary of input.turnDiffSummaries) {
     if (summary.assistantMessageId) {
@@ -1459,7 +1451,7 @@ export function deriveMessagesTimelineRows(input: {
     ? deriveRevertTurnCountByUserMessageId({
         timelineEntries: timelineEntries,
         checkpoints: input.turnDiffSummaries,
-        threadStartCheckpointReady: input.threadStartCheckpointReady === true,
+        threadStartCheckpointAvailable: input.threadStartCheckpointAvailable === true,
         unsettledRunId,
         availableRevertTurnCounts: input.availableRevertTurnCounts,
       })
@@ -1696,9 +1688,17 @@ export function deriveMessagesTimelineRows(input: {
     if (activeWorkRow === null) return;
     nextRows.push(activeWorkRow);
     hasActivityRow ||= activeWorkRow.active;
-    if (!activeWorkRow.expanded) return;
+    if (activeWorkRow.expanded) {
+      nextRows.push(
+        expandedWorkGroupRow(
+          activeWorkRow.groupId,
+          activeWorkRow.createdAt,
+          activeWorkRow.groupedEntries,
+        ),
+      );
+    }
     nextRows.push(
-      expandedWorkGroupRow(
+      ...viewedImagesRows(
         activeWorkRow.groupId,
         activeWorkRow.createdAt,
         activeWorkRow.groupedEntries,
@@ -1972,6 +1972,13 @@ export function deriveMessagesTimelineRows(input: {
             );
           }
         }
+        nextRows.push(
+          ...viewedImagesRows(
+            workGroupId(timelineEntry.id),
+            timelineEntry.createdAt,
+            visibleGroupedEntries,
+          ),
+        );
       }
       index = cursor - 1;
       continue;
@@ -2083,6 +2090,10 @@ export function deriveMessagesTimelineRows(input: {
         : { projectedItem: timelineEntry.projectedItem }),
       durationStart,
       showAssistantMeta,
+      suppressEmptyResponse:
+        timelineEntry.message.role === "assistant" &&
+        timelineEntry.message.runId != null &&
+        embeddedResultRunIds.has(timelineEntry.message.runId),
       showAssistantCopyButton: showAssistantMeta,
       assistantCopyStreaming: timelineEntry.message.streaming || assistantResponseStillInProgress,
       assistantTurnDiffSummary:
@@ -2154,6 +2165,7 @@ export function deriveMessagesTimelineRows(input: {
     if (failedGroupAnchor) {
       const groupId = workGroupId(failedGroupAnchor.id);
       const expanded = input.expandedWorkGroupIds?.has(groupId) ?? false;
+      const groupedEntries = visibleActiveToolEntries.map((entry) => entry.entry);
       nextRows.push({
         kind: "thinking",
         id: LIVE_ACTIVITY_ROW_ID,
@@ -2162,14 +2174,9 @@ export function deriveMessagesTimelineRows(input: {
         expanded,
       });
       if (expanded) {
-        nextRows.push(
-          expandedWorkGroupRow(
-            groupId,
-            failedGroupAnchor.createdAt,
-            visibleActiveToolEntries.map((entry) => entry.entry),
-          ),
-        );
+        nextRows.push(expandedWorkGroupRow(groupId, failedGroupAnchor.createdAt, groupedEntries));
       }
+      nextRows.push(...viewedImagesRows(groupId, failedGroupAnchor.createdAt, groupedEntries));
     } else {
       nextRows.push({
         kind: "thinking",
@@ -2295,99 +2302,6 @@ export function timelineTurnFoldRunIdsByEntryId(
   return byEntryId;
 }
 
-function sameCheckpointSummaries(
-  previous: MessagesTimelineRowsInput["turnDiffSummaries"],
-  next: MessagesTimelineRowsInput["turnDiffSummaries"],
-): boolean {
-  if (previous === next) return true;
-  if (previous.length !== next.length) return false;
-  for (const [index, summary] of previous.entries()) {
-    if (!shallow(summary, next[index])) return false;
-  }
-  return true;
-}
-
-function replaceStreamingMessageRows(
-  input: MessagesTimelineRowsInput,
-  previous: MessagesTimelineRowsProjection,
-): MessagesTimelineRow[] | null {
-  const {
-    timelineEntries: previousEntries,
-    latestRun: previousRun,
-    turnDiffSummaries: previousCheckpoints,
-    expandedRunIds: previousExpandedRuns,
-    expandedAttemptIds: previousExpandedAttempts,
-    expandedWorkGroupIds: previousExpandedGroups,
-    availableRevertTurnCounts: previousAvailableRevertTurnCounts,
-    ...previousContext
-  } = previous.input;
-  const {
-    timelineEntries,
-    latestRun,
-    turnDiffSummaries,
-    expandedRunIds,
-    expandedAttemptIds,
-    expandedWorkGroupIds,
-    availableRevertTurnCounts,
-    ...context
-  } = input;
-  // Shell/checkpoint selectors rebuild summaries per event; compare contents.
-  if (
-    timelineEntries.length !== previousEntries.length ||
-    !shallow(previousContext, context) ||
-    !shallow(previousRun, latestRun) ||
-    !shallow(previousExpandedRuns, expandedRunIds) ||
-    !shallow(previousExpandedAttempts, expandedAttemptIds) ||
-    !shallow(previousExpandedGroups, expandedWorkGroupIds) ||
-    !shallow(previousAvailableRevertTurnCounts, availableRevertTurnCounts) ||
-    !sameCheckpointSummaries(previousCheckpoints, turnDiffSummaries)
-  ) {
-    return null;
-  }
-  const replacements = new Map<ChatMessage, Extract<TimelineEntry, { kind: "message" }>>();
-  for (let index = 0; index < timelineEntries.length; index += 1) {
-    const entry = timelineEntries[index]!;
-    const previousEntry = previousEntries[index]!;
-    if (entry === previousEntry) continue;
-    if (
-      entry.kind !== "message" ||
-      previousEntry.kind !== "message" ||
-      entry.id !== previousEntry.id ||
-      entry.createdAt !== previousEntry.createdAt ||
-      entry.attempt !== previousEntry.attempt
-    ) {
-      return null;
-    }
-    if (
-      entry.projectedItem !== previousEntry.projectedItem &&
-      (entry.projectedItem === undefined ||
-        previousEntry.projectedItem === undefined ||
-        !isStreamingTurnItemTextUpdate(previousEntry.projectedItem, entry.projectedItem))
-    ) {
-      return null;
-    }
-    if (
-      entry.message === previousEntry.message &&
-      entry.projectedItem === previousEntry.projectedItem
-    )
-      continue;
-    if (!isStreamingMessageTextUpdate(previousEntry.message, entry.message)) return null;
-    replacements.set(previousEntry.message, entry);
-  }
-  if (replacements.size === 0) return previous.rows;
-  return previous.rows.map((row) => {
-    if (row.kind !== "message" && row.kind !== "assistant-meta") return row;
-    const entry = replacements.get(row.message);
-    return entry
-      ? {
-          ...row,
-          message: entry.message,
-          ...(entry.projectedItem === undefined ? {} : { projectedItem: entry.projectedItem }),
-        }
-      : row;
-  });
-}
-
 export function deriveMessagesTimelineRowsWithState(
   input: MessagesTimelineRowsInput,
   previous: MessagesTimelineRowsProjection | null = null,
@@ -2475,6 +2389,15 @@ function isRowUnchanged(a: MessagesTimelineRow, b: MessagesTimelineRow): boolean
     case "proposed-plan":
       return a.proposedPlan === (b as typeof a).proposedPlan;
 
+    case "viewed-images": {
+      const bv = b as typeof a;
+      return (
+        a.createdAt === bv.createdAt &&
+        a.paths.length === bv.paths.length &&
+        a.paths.every((path, index) => path === bv.paths[index])
+      );
+    }
+
     case "html-render": {
       // Tool updates rebuild entries; preserve frames for unchanged pages.
       const bh = b as typeof a;
@@ -2545,6 +2468,7 @@ function isRowUnchanged(a: MessagesTimelineRow, b: MessagesTimelineRow): boolean
         a.projectedItem === bm.projectedItem &&
         a.durationStart === bm.durationStart &&
         a.showAssistantMeta === bm.showAssistantMeta &&
+        a.suppressEmptyResponse === bm.suppressEmptyResponse &&
         a.showAssistantCopyButton === bm.showAssistantCopyButton &&
         a.assistantCopyStreaming === bm.assistantCopyStreaming &&
         a.assistantTurnDiffSummary === bm.assistantTurnDiffSummary &&
@@ -2552,33 +2476,6 @@ function isRowUnchanged(a: MessagesTimelineRow, b: MessagesTimelineRow): boolean
       );
     }
   }
-}
-
-const MAX_COLLAPSED_USER_MESSAGE_LINES = 8;
-const MAX_COLLAPSED_USER_MESSAGE_LENGTH = 600;
-const MARKDOWN_LINK = /!?\[([^\]\n]*)\]\((?:<[^>\n]*>|[^\s)]*)\)/g;
-
-function visibleUserMessageText(text: string): string {
-  const linkLabels = (segment: string) => segment.replace(MARKDOWN_LINK, "$1");
-  let visible = "";
-  let cursor = 0;
-  for (const match of collectAssistantCitations(text)) {
-    visible += linkLabels(text.slice(cursor, match.start)) + assistantCitationLabel(match.citation);
-    cursor = match.end;
-  }
-  return visible + linkLabels(text.slice(cursor));
-}
-
-export function shouldCollapseUserMessage(text: string): boolean {
-  const visible = visibleUserMessageText(text);
-  if (visible.trim().length === 0) {
-    return false;
-  }
-
-  return (
-    visible.length > MAX_COLLAPSED_USER_MESSAGE_LENGTH ||
-    visible.split("\n").length > MAX_COLLAPSED_USER_MESSAGE_LINES
-  );
 }
 
 export function handoffRunsSignature(runs: ReadonlyArray<HandoffTimelineRun>): string {

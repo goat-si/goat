@@ -14,10 +14,14 @@ import {
   RuntimeRequestId,
   ThreadId,
   type OrchestrationV2DomainEvent,
+  type OrchestrationV2StoredEvent,
 } from "@goat/contracts";
 import * as DateTime from "effect/DateTime";
 import * as Effect from "effect/Effect";
 import * as Layer from "effect/Layer";
+import * as Fiber from "effect/Fiber";
+import * as Queue from "effect/Queue";
+import * as TestClock from "effect/testing/TestClock";
 import * as Stream from "effect/Stream";
 import * as EventSink from "./EventSink.ts";
 import * as SqlClient from "effect/sql/SqlClient";
@@ -275,13 +279,17 @@ it.effect.each(storageCases)(
       assert.instanceOf(missingThread, ProjectionStore.ProjectionStoreThreadNotFoundError);
 
       const calls: string[] = [];
+      let subscriptions = 0;
+      const interrupts = yield* Queue.unbounded<void>();
+      const pulls = yield* Queue.unbounded<void>();
+      const committed = yield* Queue.unbounded<OrchestrationV2StoredEvent>();
       const layerSessions = Layer.mock(ProviderSessionManager.ProviderSessionManagerV2)({
         get: () =>
           Effect.succeedSome({
             interruptTurn: () =>
               Effect.sync(() => {
                 calls.push("interrupt");
-              }),
+              }).pipe(Effect.andThen(Queue.offer(interrupts, undefined))),
             steerTurn: (input: {
               message: {
                 text: string;
@@ -301,7 +309,14 @@ it.effect.each(storageCases)(
       yield* Effect.gen(function* () {
         const control = yield* ProviderTurnControlService.ProviderTurnControlServiceV2;
         const reply = yield* RuntimeRequestService.RuntimeRequestServiceV2;
-        yield* control.interrupt({ threadId, providerThreadId, providerTurnId, providerSessionId });
+        const pending = yield* Effect.forkChild(
+          control.interrupt({ threadId, providerThreadId, providerTurnId, providerSessionId }),
+        );
+        yield* Queue.take(interrupts);
+        yield* Queue.take(pulls);
+        yield* TestClock.adjust("2 seconds");
+        assert.isAbove(subscriptions, 0, "Stop subscribes to committed settlement events");
+        yield* Fiber.join(pending);
         yield* control.steer({
           threadId,
           providerThreadId,
@@ -335,16 +350,39 @@ it.effect.each(storageCases)(
           "Failure",
         );
         assert.lengthOf(calls, 3);
-        const turn = context.providerTurn!;
-        yield* store.apply({
+        const confirmed = yield* Effect.forkChild(
+          control.interrupt({ threadId, providerThreadId, providerTurnId, providerSessionId }),
+        );
+        yield* Queue.take(pulls);
+        const ingest = (sequence: number, event: OrchestrationV2DomainEvent) =>
+          store
+            .apply(event)
+            .pipe(Effect.andThen(Queue.offer(committed, { sequence, commandId: null, event })));
+        yield* ingest(1, {
           id: EventId.make("control:turn-completed"),
           type: "provider-turn.updated",
           threadId,
           occurredAt: now,
-          payload: { ...turn, status: "completed", completedAt: now },
+          payload: { ...context.providerTurn!, status: "completed", completedAt: now },
         });
+        yield* Queue.take(pulls);
+        assert.isUndefined(confirmed.pollUnsafe());
+        yield* ingest(2, {
+          id: EventId.make("control:attempt-completed"),
+          type: "run-attempt.updated",
+          threadId,
+          occurredAt: now,
+          payload: { ...context.attempt!, status: "completed", completedAt: now },
+        });
+        yield* Fiber.join(confirmed);
         yield* control.interrupt({ threadId, providerThreadId, providerTurnId, providerSessionId });
-        assert.deepEqual(calls, ["interrupt", "Use the smaller fix.", "reply", "interrupt"]);
+        assert.deepEqual(calls, [
+          "interrupt",
+          "Use the smaller fix.",
+          "reply",
+          "interrupt",
+          "interrupt",
+        ]);
       }).pipe(
         Effect.provide(
           Layer.merge(ProviderTurnControlService.layer, RuntimeRequestService.layer).pipe(
@@ -353,7 +391,12 @@ it.effect.each(storageCases)(
                 layerSessions,
                 Layer.mock(EventSink.EventSinkV2)({
                   latestSequence: () => Effect.succeed(0),
-                  stream: () => Stream.never,
+                  stream: () => {
+                    subscriptions++;
+                    return Stream.fromEffectRepeat(
+                      Queue.offer(pulls, undefined).pipe(Effect.andThen(Queue.take(committed))),
+                    );
+                  },
                 }),
               ),
             ),

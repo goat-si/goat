@@ -1,5 +1,5 @@
 import { htmlRenderFromToolItem } from "@goat/shared/toolOutput";
-import * as NodeServices from "@effect/platform-node/NodeServices";
+import * as NodeServices from "@goat/shared/testing/nodeServicesWithCrypto";
 import { assert, describe, it } from "@effect/vitest";
 import {
   ChatFileAttachment,
@@ -13,7 +13,7 @@ import {
   ThreadId,
 } from "@goat/contracts";
 import { resolveSelfInvocation } from "@goat/shared/nodeRuntime";
-import * as Crypto from "effect/Crypto";
+import * as SecureRandom from "effect/crypto/SecureRandom";
 import * as DateTime from "effect/DateTime";
 import * as Deferred from "effect/Deferred";
 import * as Effect from "effect/Effect";
@@ -42,7 +42,7 @@ import {
 
 const flavor = makeAntigravityAcpAdapterFlavor({
   instanceId: ProviderInstanceId.make("antigravity-test"),
-  crypto: undefined as never,
+  random: undefined as never,
   fileSystem: undefined as never,
   path: undefined as never,
   host: undefined as never,
@@ -219,7 +219,7 @@ describe("AntigravityAdapterV2 client file system", () => {
       let writeTextFile: Parameters<RuntimeService["handleWriteTextFile"]>[0] | undefined;
       const logs = yield* fileSystem.makeTempDirectoryScoped({ prefix: "goat-antigravity-log-" });
       const requestLog = path.join(logs, "requests.ndjson");
-      const crypto = yield* Crypto.Crypto;
+      const crypto = yield* SecureRandom.SecureRandom;
       const instanceId = ProviderInstanceId.make("antigravity-containment-test");
       const adapter = yield* makeAntigravityAdapterV2({
         instanceId,
@@ -235,7 +235,7 @@ describe("AntigravityAdapterV2 client file system", () => {
               env: { GOAT_ACP_ANTIGRAVITY: "1", GOAT_ACP_REQUEST_LOG_PATH: requestLog },
             },
           }).pipe(
-            Effect.provideService(Crypto.Crypto, crypto),
+            Effect.provideService(SecureRandom.SecureRandom, crypto),
             Effect.map((runtime): RuntimeService => ({
               ...runtime,
               handleReadTextFile: (handler) =>
@@ -356,7 +356,7 @@ describe("AntigravityAdapterV2 workspace changes", () => {
       const childProcessSpawner = yield* ChildProcessSpawner.ChildProcessSpawner;
       const fileSystem = yield* FileSystem.FileSystem;
       const path = yield* Path.Path;
-      const crypto = yield* Crypto.Crypto;
+      const crypto = yield* SecureRandom.SecureRandom;
       const mockAgentPath = yield* path.fromFileUrl(
         new URL("../../../scripts/acp-mock-agent.ts", import.meta.url),
       );
@@ -388,7 +388,7 @@ describe("AntigravityAdapterV2 workspace changes", () => {
               env: { GOAT_ACP_ANTIGRAVITY: "1", GOAT_ACP_HANG_PROMPT_FOREVER: "1" },
             },
           }).pipe(
-            Effect.provideService(Crypto.Crypto, crypto),
+            Effect.provideService(SecureRandom.SecureRandom, crypto),
             Effect.map((runtime): RuntimeService => ({
               ...runtime,
               prompt: (request) =>
@@ -525,7 +525,7 @@ describe("AntigravityAdapterV2 html_render pages", () => {
     Effect.gen(function* () {
       const childProcessSpawner = yield* ChildProcessSpawner.ChildProcessSpawner;
       const path = yield* Path.Path;
-      const crypto = yield* Crypto.Crypto;
+      const crypto = yield* SecureRandom.SecureRandom;
       const mcpSessions = yield* McpProviderSessions.McpProviderSessions;
       const mockAgentPath = yield* path.fromFileUrl(
         new URL("../../../scripts/acp-mock-agent.ts", import.meta.url),
@@ -558,7 +558,7 @@ describe("AntigravityAdapterV2 html_render pages", () => {
               env: { GOAT_ACP_ANTIGRAVITY: "1" },
             },
           }).pipe(
-            Effect.provideService(Crypto.Crypto, crypto),
+            Effect.provideService(SecureRandom.SecureRandom, crypto),
             Effect.map((runtime): RuntimeService => ({
               ...runtime,
               handleSessionUpdate: (handler) =>
@@ -812,7 +812,7 @@ describe("AntigravityAdapterV2 subagent reads", () => {
       const childProcessSpawner = yield* ChildProcessSpawner.ChildProcessSpawner;
       const fileSystem = yield* FileSystem.FileSystem;
       const path = yield* Path.Path;
-      const crypto = yield* Crypto.Crypto;
+      const crypto = yield* SecureRandom.SecureRandom;
       const mockAgentPath = yield* path.fromFileUrl(
         new URL("../../../scripts/acp-mock-agent.ts", import.meta.url),
       );
@@ -848,7 +848,7 @@ describe("AntigravityAdapterV2 subagent reads", () => {
               env: { GOAT_ACP_ANTIGRAVITY: "1" },
             },
           }).pipe(
-            Effect.provideService(Crypto.Crypto, crypto),
+            Effect.provideService(SecureRandom.SecureRandom, crypto),
             Effect.map((runtime): RuntimeService => ({
               ...runtime,
               handleSessionUpdate: (handler) =>
@@ -1023,7 +1023,7 @@ describe("AntigravityAdapterV2 session system prompt", () => {
         const childProcessSpawner = yield* ChildProcessSpawner.ChildProcessSpawner;
         const fileSystem = yield* FileSystem.FileSystem;
         const path = yield* Path.Path;
-        const crypto = yield* Crypto.Crypto;
+        const crypto = yield* SecureRandom.SecureRandom;
         const mockAgentPath = yield* path.fromFileUrl(
           new URL("../../../scripts/acp-mock-agent.ts", import.meta.url),
         );
@@ -1051,7 +1051,7 @@ describe("AntigravityAdapterV2 session system prompt", () => {
                 },
               },
             }).pipe(
-              Effect.provideService(Crypto.Crypto, crypto),
+              Effect.provideService(SecureRandom.SecureRandom, crypto),
               Effect.map((runtime): RuntimeService => ({
                 ...runtime,
                 prompt: (request) =>

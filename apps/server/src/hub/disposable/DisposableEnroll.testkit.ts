@@ -6,6 +6,7 @@ import type { OcxOutput, PenExactRoute } from "../HubOcx.ts";
 import type { PenNode } from "@goat/ssh/penRoute";
 import { EnrollHost, KnownHostsError, type ReachAnswer } from "./EnrollHost.ts";
 import { MachineKey } from "./machineKey.ts";
+import type { KeyPathAnswer } from "./keyPath.ts";
 import type { DisposableRoute } from "./routeContract.ts";
 
 export const MACHINE_KEY_FILE = "/srv/goat/disposable/machine_ed25519";
@@ -46,7 +47,9 @@ export type AddScript =
   | "residual"
   | "unknown"
   /** The Home stopped mid-operation: the entry stays open until the same id is repeated. */
-  | "open";
+  | "open"
+  /** The Home refuses the key file before its journal opens, naming the hint. */
+  | { readonly identityRefused: string; readonly journalled?: true };
 
 /** Holds a call until released; `arrived` completes once `want` calls wait. */
 export interface Hold {
@@ -76,6 +79,8 @@ interface Operation {
   state: string;
   linkId: string;
   code?: string;
+  /** A person or O5 resolved this residual or unknown entry. */
+  resolvedAt?: string;
 }
 
 /**
@@ -99,20 +104,46 @@ export const fakeEnrollHost = () => {
     statusUnreadable: false,
     keysMade: 0,
     keyFile: MACHINE_KEY_FILE,
+    /** What the check of the key's path for OpenCodex answers. */
+    keyPath: { kind: "ok" } as KeyPathAnswer,
     /** Hold Pen's route read, the reach, or the journal read until a test releases them. */
     holdRoute: undefined as Hold | undefined,
     holdReach: undefined as Hold | undefined,
     holdKnownHosts: undefined as Hold | undefined,
     knownHostsUnwritable: false,
+    /** Where GOAT's state folder keeps known_hosts now; a moved home changes it. */
+    knownHostsDir: "/srv/goat/disposable/known_hosts/",
+    /** Answers the ocx calls it knows (detach's revoke and recover) before the enrollment fake. */
+    extraOcx: undefined as ((args: ReadonlyArray<string>) => OcxOutput | undefined) | undefined,
+    /** Whether Pen's member list holds the node's key; out of Pen, it has no route and never answers. */
+    inPen: (_nodeId: string): boolean => true,
+    /** A machine that is off or gone; the detach fake sets it. */
+    silent: (_nodeId: string): boolean => false,
     /** A listener that does not serve the journal: ocx exits 4 for every journal read. */
     journalRouteMissing: false,
     /** Every read of one journal entry fails, as a stopped Home or a timeout does. */
     journalUnreadable: false,
     /** A repeat of an open entry leaves it open, as a Home that keeps failing to recover it would. */
     openStaysOpen: false,
+    /** Runs as each link add arrives, before it answers. */
+    onAdd: undefined as (() => void) | undefined,
     holdOperations: undefined as Hold | undefined,
+    /** Hold a link add or revoke after GOAT stored its id, before the Home sees it. */
+    holdAdd: undefined as Hold | undefined,
+    holdRevoke: undefined as Hold | undefined,
     journal,
     links,
+    /** The link row an add left residual, unknown or open would commit. */
+    pendingLinks: new Map<string, Record<string, unknown>>(),
+    /** A Home that kept running an open or unsettled add commits it now. */
+    commit: (operationId: string) => {
+      const operation = journal.get(operationId);
+      const row = operation === undefined ? undefined : control.pendingLinks.get(operation.linkId);
+      if (operation === undefined || row === undefined)
+        throw new Error("no pending add " + operationId);
+      operation.state = "committed";
+      links.set(operation.linkId, row);
+    },
     /** The Home pruned this settled entry, as it may after 2 hours. */
     forget: (operationId: string) => journal.delete(operationId),
   };
@@ -120,6 +151,7 @@ export const fakeEnrollHost = () => {
   const json = Schema.encodeSync(Schema.fromJsonString(Schema.Unknown));
   const output = (code: number, stdout = ""): OcxOutput => ({ code, stdout });
   const add = (args: ReadonlyArray<string>) => {
+    control.onAdd?.();
     const alias = args[2] ?? "";
     const operationId = args[args.indexOf("--operation-id") + 1] ?? "";
     const known = journal.get(operationId);
@@ -130,19 +162,28 @@ export const fakeEnrollHost = () => {
     }
     const script = control.adds.shift() ?? "commit";
     if (script === "not_journalled") return output(1);
+    if (typeof script === "object" && "identityRefused" in script) {
+      if (script.journalled === true) {
+        const linkId = "lnk_" + String(nextLink++).padStart(16, "0");
+        journal.set(operationId, { operationId, alias, state: "committed", linkId });
+        links.set(linkId, {
+          id: linkId,
+          alias,
+          childKind: "ephemeral",
+          exclusive: true,
+          explicitRoute: {
+            proxyCommand: args[args.indexOf("--proxy-command") + 1],
+            user: args[args.indexOf("--ssh-user") + 1],
+            port: Number(args[args.indexOf("--ssh-port") + 1]),
+          },
+        });
+      }
+      return { code: 1, stdout: "", phase: script.identityRefused };
+    }
     const linkId = "lnk_" + String(nextLink++).padStart(16, "0");
     const operation: Operation = { operationId, alias, state: "committed", linkId };
     journal.set(operationId, operation);
-    if (typeof script === "object") {
-      operation.state = "failed_clean";
-      operation.code = script.failedClean;
-      return output(1);
-    }
-    if (script === "residual" || script === "unknown" || script === "open") {
-      operation.state = script;
-      return output(1);
-    }
-    links.set(linkId, {
+    const linkRow = {
       id: linkId,
       alias,
       childKind: "ephemeral",
@@ -152,15 +193,36 @@ export const fakeEnrollHost = () => {
         user: args[args.indexOf("--ssh-user") + 1],
         port: Number(args[args.indexOf("--ssh-port") + 1]),
       },
-    });
+    };
+    if (typeof script === "object" && "failedClean" in script) {
+      operation.state = "failed_clean";
+      operation.code = script.failedClean;
+      return output(1);
+    }
+    if (script === "residual" || script === "unknown" || script === "open") {
+      operation.state = script;
+      control.pendingLinks.set(linkId, linkRow);
+      return output(1);
+    }
+    links.set(linkId, linkRow);
     return output(script === "commit" ? 0 : 1, json({ linkId, alias }));
   };
   const service = EnrollHost.of({
     route: (node) =>
       pass(control.holdRoute).pipe(
-        Effect.andThen(Effect.sync(() => control.routes.get(node.nodeId))),
+        Effect.andThen(
+          Effect.sync(() =>
+            control.inPen(node.nodeId) ? control.routes.get(node.nodeId) : undefined,
+          ),
+        ),
       ),
     journalServed: Effect.sync(() => !control.journalRouteMissing),
+    keyPath: () => Effect.sync(() => control.keyPath),
+    forgetKnownHosts: (attachId) =>
+      Effect.sync(() => {
+        control.knownHosts.delete(attachId);
+        return true;
+      }),
     knownHosts: (attachId, line) =>
       Effect.suspend(() => pass(control.holdKnownHosts)).pipe(
         Effect.andThen(
@@ -171,7 +233,7 @@ export const fakeEnrollHost = () => {
             if (known !== undefined && known !== line)
               return Effect.fail(new KnownHostsError({ reason: "changed" }));
             control.knownHosts.set(attachId, line);
-            return Effect.succeed("/srv/goat/disposable/known_hosts/" + attachId);
+            return Effect.succeed(control.knownHostsDir + attachId);
           }),
         ),
       ),
@@ -180,6 +242,9 @@ export const fakeEnrollHost = () => {
         Effect.andThen(
           Effect.sync(() => {
             control.reached.push(route);
+            if (!control.inPen(route.nodeId) || control.silent(route.nodeId)) return "unreachable";
+            // ssh finds no host key in a file under a home that moved away.
+            if (!route.knownHostsFile.startsWith(control.knownHostsDir)) return "host_key_unknown";
             return (
               control.reachAnswers.get(route.nodeId) ??
               (control.unreachable.has(route.nodeId) ? "key_refused" : "ok")
@@ -188,10 +253,19 @@ export const fakeEnrollHost = () => {
         ),
       ),
     ocx: (args) =>
-      (args[1] === "operations" ? pass(control.holdOperations) : Effect.void).pipe(
+      (args[1] === "operations"
+        ? pass(control.holdOperations)
+        : args[1] === "add"
+          ? pass(control.holdAdd)
+          : args[1] === "revoke"
+            ? pass(control.holdRevoke)
+            : Effect.void
+      ).pipe(
         Effect.andThen(
           Effect.sync(() => {
             control.calls.push(args);
+            const extra = control.extraOcx?.(args);
+            if (extra !== undefined) return extra;
             if (args[0] === "link" && args[1] === "add") return add(args);
             if (args[0] === "link" && args[1] === "operations" && control.journalUnreadable)
               return output(1);
@@ -212,6 +286,9 @@ export const fakeEnrollHost = () => {
                   ...(operation.code === undefined
                     ? {}
                     : { error: { code: operation.code, status: 409 } }),
+                  ...(operation.resolvedAt === undefined
+                    ? {}
+                    : { resolvedAt: operation.resolvedAt }),
                 }),
               );
             }

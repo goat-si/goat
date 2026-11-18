@@ -3,6 +3,9 @@ import { createRoot } from "react-dom/client";
 import type { GoatBotActivity, GoatBotRow } from "@goat/client-runtime/goatBot";
 import { vi } from "vite-plus/test";
 
+import type { DraftComposerAttachment } from "../../lib/composerImages";
+import type { GoatBotAttachmentPickTarget } from "./GoatBotComposerAttachments";
+
 // The GoatBotScreen DOM harness: native modules, the session, the list and the composer, mocked
 // once for the screen's appearance and unread suites.
 const appearance = vi.hoisted(() => ({
@@ -30,7 +33,24 @@ const screenSession = vi.hoisted(() => ({
   boundedSnapshots: false,
   environmentId: null as string | null,
   threadId: null as string | null,
+  // Where a message would go; undefined follows the conversation shown.
+  sending: undefined as { environmentId: string; threadId: string } | null | undefined,
+  // Whether the bot can take messages now; Home opens either way.
+  availability: "ready" as string,
+  // Whether the bot's computer, which Home and task screens read, is connected.
+  homeConnected: true,
+  // The computer GOAT Bot waits on, whether this app knows it, and whether it refused this device.
+  homeLabel: null as string | null,
+  homeKnown: false,
+  refusedBy: null as string | null,
+  // Where Home Settings would move the bot.
+  moveTarget: null as { environmentId: string; label: string } | null,
+  // Each task's newest chip in the conversation, which says which questions it took answers to.
+  taskChips: new Map() as ReadonlyMap<string, unknown>,
 }));
+// Where the screen navigates, and which remote computers a card's work thread can reach.
+const navigation = vi.hoisted(() => ({ dispatch: vi.fn() }));
+const remote = vi.hoisted(() => ({ connected: [] as string[] }));
 // Event lines resolve their routine or task against the home's reads, which these tests do not load.
 // Chat file cards read the Library through the environment runtime; GoatBotTimelineRow.files.test covers them.
 // The provider stands in, but the chat's own opener is real: its viewer shows, and a test opens an
@@ -208,10 +228,17 @@ vi.mock("./GoatBotShimmerText", () => ({
   ),
 }));
 const picker = vi.hoisted(() => ({
-  onPicked: null as
-    | ((files: ReadonlyArray<import("../../lib/composerImages").DraftComposerAttachment>) => void)
-    | null,
+  onPicked: null as null | ((files: ReadonlyArray<DraftComposerAttachment>) => void),
   release: vi.fn(),
+  // Picks started from the chat's +, and the one still open: it answers when a test settles it.
+  picks: [] as Array<"media" | "files">,
+  settle: null as null | ((files: ReadonlyArray<DraftComposerAttachment>) => void),
+}));
+// What the chat's composer can do now; each composer test resets it with setupComposer().
+const composer = vi.hoisted(() => ({
+  canSend: true,
+  support: { maxUploadBytes: null } as null | { maxUploadBytes: number | null },
+  alert: vi.fn(),
 }));
 export type LayoutHandler = (event: { nativeEvent: { layout: { height: number } } }) => void;
 const layouts = vi.hoisted(() => new Map<string, LayoutHandler>());
@@ -323,11 +350,13 @@ vi.mock("react-native", () => ({
     value,
     onChangeText,
     accessibilityLabel,
+    editable,
   }: {
     style?: unknown;
     value?: string;
     onChangeText?: (text: string) => void;
     accessibilityLabel?: string;
+    editable?: boolean;
   }) => (
     <input
       // Every chat's message box answers to one label here; other fields keep their own.
@@ -338,6 +367,7 @@ vi.mock("react-native", () => ({
       }
       data-style={JSON.stringify(style)}
       value={value ?? ""}
+      readOnly={editable === false}
       onChange={(event) => onChangeText?.(event.currentTarget.value)}
     />
   ),
@@ -346,6 +376,7 @@ vi.mock("react-native", () => ({
   Image: (props: { accessibilityLabel?: string }) => <img alt={props.accessibilityLabel} />,
   ScrollView: (props: { children?: ReactNode }) => <div>{props.children}</div>,
   Platform: { OS: "ios" },
+  Alert: { alert: composer.alert },
   AccessibilityInfo: {
     announceForAccessibility: a11y.announce,
     setAccessibilityFocus: a11y.focus,
@@ -374,11 +405,30 @@ vi.mock("./useMobileGoatBotModel", () => ({ useMobileGoatBotModelMenu: () => mod
 vi.mock("./useMobileGoatBotMemberModel", () => ({
   useMobileGoatBotMemberModelMenu: () => models.member,
 }));
-// The real model pill renders; only the native menu it opens stands in, as a box that keeps its style.
+// The real model pill and the chat's + render; only the native menu they open stands in, as a box
+// that keeps its style. A named menu also shows each action as a button "<menu>: <action>".
 vi.mock("../../components/ui/Menu", () => ({
-  Menu: (props: { children?: ReactNode; style?: unknown }) => (
-    <div data-box="model-menu" data-style={JSON.stringify(props.style ?? null)}>
+  Menu: (props: {
+    children?: ReactNode;
+    style?: unknown;
+    accessibilityLabel?: string;
+    actions?: ReadonlyArray<{ id: string; title: string }>;
+    onPressAction?: (event: { nativeEvent: { event: string } }) => void;
+  }) => (
+    <div
+      data-box={props.accessibilityLabel === undefined ? "model-menu" : "menu"}
+      data-style={JSON.stringify(props.style ?? null)}
+    >
       {props.children}
+      {props.accessibilityLabel === undefined
+        ? null
+        : props.actions?.map((action) => (
+            <button
+              key={action.id}
+              aria-label={`${props.accessibilityLabel}: ${action.title}`}
+              onClick={() => props.onPressAction?.({ nativeEvent: { event: action.id } })}
+            />
+          ))}
     </div>
   ),
 }));
@@ -386,9 +436,31 @@ vi.mock("../../lib/copyTextWithHaptic", () => ({ tryCopyTextWithHaptic: async ()
 // The native Markdown renderer cannot load under Vitest.
 vi.mock("./GoatBotMarkdown", () => ({ GoatBotMarkdown: () => null }));
 vi.mock("./GoatBotComposerAttachments", () => ({
-  GoatBotAttachButton: (props: { onPicked: typeof picker.onPicked }) => {
-    picker.onPicked = props.onPicked;
-    return null;
+  GoatBotAttachButton: (props: GoatBotAttachmentPickTarget & { disabled: boolean }) => {
+    // A pick answers in the lifetime current when it lands, or in an ended one after unmount.
+    picker.onPicked = (files) => props.onPicked(files, props.getLifetime() ?? AbortSignal.abort());
+    return <button aria-label="Add attachment" disabled={props.disabled} />;
+  },
+  // The pick's contract at the native picker's edge: it holds the box from start to answer, and an
+  // answer after its lifetime ended is released. GoatBotComposerAttachments.test pins the real one.
+  goatBotAttachmentPick: (target: GoatBotAttachmentPickTarget) => {
+    picker.onPicked = (files) =>
+      target.onPicked(files, target.getLifetime() ?? AbortSignal.abort());
+    return async (kind: "media" | "files") => {
+      const signal = target.getLifetime();
+      if (!signal) return;
+      picker.picks.push(kind);
+      target.onIntake?.(1);
+      picker.settle = (files) => {
+        picker.settle = null;
+        if (signal.aborted) {
+          picker.release(files);
+          return;
+        }
+        if (files.length > 0) target.onPicked(files, signal);
+        target.onIntake?.(-1);
+      };
+    };
   },
   GoatBotAttachmentStrip: () => null,
   releaseGoatBotAttachments: picker.release,
@@ -408,6 +480,7 @@ vi.mock("@legendapp/list/react-native", async () => {
       data?: GoatBotRow[];
       renderItem?: Render;
       extraData?: unknown;
+      ListEmptyComponent?: ReactNode;
       ListFooterComponent?: ReactNode;
       ref?: { current: unknown };
     }) => {
@@ -415,6 +488,7 @@ vi.mock("@legendapp/list/react-native", async () => {
       if (props.ref) props.ref.current = { scrollToIndex: list.scrollToIndex };
       return (
         <>
+          {props.data?.length ? null : props.ListEmptyComponent}
           {props.data?.map((item) =>
             list.unmounted.has(item.id) ? null : (
               <Row key={item.id} item={item} extra={props.extraData} render={props.renderItem} />
@@ -431,7 +505,7 @@ vi.mock("@react-navigation/elements", async () => ({
 }));
 vi.mock("@react-navigation/native", () => ({
   useIsFocused: () => device.focused,
-  useNavigation: () => ({ dispatch: () => {} }),
+  useNavigation: () => ({ dispatch: navigation.dispatch }),
   StackActions: { push: (name: string, params: object) => ({ name, params }) },
 }));
 vi.mock("react-native-reanimated", () => ({
@@ -451,30 +525,53 @@ vi.mock("../workspace/useSelectWorkspaceDetail", () => ({
   useSelectWorkspaceDetail: () => () => {},
 }));
 vi.mock("../../state/use-remote-environment-registry", () => ({
-  useRemoteConnectionStatus: () => ({ connectedEnvironments: [] }),
+  useRemoteConnectionStatus: () => ({
+    connectedEnvironments: remote.connected.map((environmentId) => ({
+      environmentId,
+      connectionState: "connected",
+    })),
+  }),
 }));
 vi.mock("./useMobileGoatBotHomeSettings", () => ({
-  useMobileGoatBotHomeSettings: () => ({ moveTarget: null, error: null }),
+  useMobileGoatBotHomeSettings: () => ({
+    moveTarget: screenSession.moveTarget,
+    error: null,
+    busy: false,
+    changeHome: () => {},
+  }),
 }));
 vi.mock("./useMobileGoatBotSession", () => ({
   useMobileGoatBotSession: (_visible: boolean, taskId?: string | null) => {
     screenSession.requestedTaskId = taskId;
     return {
-      availability: "ready",
+      availability: screenSession.availability,
       rows: screenSession.rows,
-      canSend: true,
-      attachmentSupport: { maxUploadBytes: null },
+      canSend: composer.canSend,
+      attachmentSupport: composer.support,
       onSend: screenSession.send,
       onAnswer: screenSession.answer,
       onRetryInput: () => {},
       replyingSince: null,
       activity: screenSession.activity,
       supportsTaskThreads: screenSession.supportsTaskThreads,
+      homeConnected: screenSession.homeConnected,
+      homeLabel: screenSession.homeLabel,
+      homeKnown: screenSession.homeKnown,
+      refusedBy: screenSession.refusedBy,
+      taskChips: screenSession.taskChips,
       streamingReplyIds: new Set<string>(),
       visibleTurnItems: screenSession.visibleTurnItems,
       boundedSnapshots: screenSession.boundedSnapshots,
       historyEnvironmentId: screenSession.environmentId,
       threadId: screenSession.threadId,
+      sendEnvironmentId:
+        screenSession.sending === undefined
+          ? screenSession.environmentId
+          : (screenSession.sending?.environmentId ?? null),
+      sendThreadId:
+        screenSession.sending === undefined
+          ? screenSession.threadId
+          : (screenSession.sending?.threadId ?? null),
     };
   },
 }));
@@ -498,8 +595,29 @@ export const bot: Extract<GoatBotRow, { kind: "bot" }> = {
   groupPosition: "single",
 };
 
+export function setupComposer() {
+  composer.canSend = true;
+  composer.support = { maxUploadBytes: null };
+  composer.alert.mockClear();
+  picker.onPicked = null;
+  picker.picks = [];
+  picker.settle = null;
+  picker.release.mockClear();
+}
+
+/** Resets the bot computer's connection, navigation and reachable remote computers. */
+export function setupTaskNavigation() {
+  screenSession.homeConnected = true;
+  screenSession.supportsTaskThreads = false;
+  screenSession.rows = [];
+  navigation.dispatch.mockReset();
+  remote.connected = [];
+}
+
 export async function typeInto(container: HTMLElement, value: string) {
   const input = container.querySelector<HTMLInputElement>('[aria-label="Message GOAT Bot"]');
+  // A person cannot type into a read-only box, so neither can a test.
+  if (input?.readOnly) throw new Error("The message box is read-only.");
   await act(async () => {
     Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, "value")?.set?.call(input, value);
     input?.dispatchEvent(new Event("input", { bubbles: true }));
@@ -528,11 +646,14 @@ export {
   appearance,
   botEditing,
   chatFiles,
+  composer,
   device,
   layouts,
   list,
   models,
+  navigation,
   picker,
+  remote,
   screenSession,
   threadReads,
 };

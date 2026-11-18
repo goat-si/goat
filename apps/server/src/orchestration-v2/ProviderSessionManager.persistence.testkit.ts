@@ -99,7 +99,11 @@ export const layerPausingAttachEventSink = (pause: {
     }),
   ).pipe(Layer.provide(layerTestEventSink));
 
-export const layerBeforeUnchangedWriteEventSink = (before: Ref.Ref<Effect.Effect<void>>) =>
+export const layerBeforeUnchangedWriteEventSink = (
+  before: Ref.Ref<Effect.Effect<void>>,
+  // One effect runs before each turn-item write, in order.
+  beforeTurnItems: Ref.Ref<ReadonlyArray<Effect.Effect<void>>> | undefined,
+) =>
   Layer.effect(
     EventSink.EventSinkV2,
     Effect.gen(function* () {
@@ -111,6 +115,13 @@ export const layerBeforeUnchangedWriteEventSink = (before: Ref.Ref<Effect.Effect
             Effect.flatten,
             Effect.andThen(delegate.writeIfProviderThreadUnchanged(input)),
           ),
+        writeIfTurnItemUnchanged: (input) =>
+          (beforeTurnItems === undefined
+            ? Effect.void
+            : Ref.modify(beforeTurnItems, ([next, ...rest]) => [next ?? Effect.void, rest]).pipe(
+                Effect.flatten,
+              )
+          ).pipe(Effect.andThen(delegate.writeIfTurnItemUnchanged(input))),
       });
     }),
   ).pipe(Layer.provide(layerTestEventSink));

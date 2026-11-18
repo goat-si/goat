@@ -274,12 +274,17 @@ const createOwnerThread = Effect.gen(function* () {
 describe("what people without a link may not reach", () => {
   it.effect("never shows them the owner's other threads", () => {
     const { harness } = scenario();
-    const seen: Array<{ readonly text: string; readonly titles: ReadonlyArray<string> }> = [];
+    const seen: Array<{
+      readonly text: string;
+      readonly titles: ReadonlyArray<string>;
+      readonly who: string;
+    }> = [];
     harness.script.current = (input) => {
       if (input.mode === "input") {
         seen.push({
           text: input.inputText ?? "",
           titles: (input.recentThreads ?? []).map((thread) => thread.title),
+          who: input.requester.principalId,
         });
       }
       return defaultScript(input);
@@ -299,7 +304,11 @@ describe("what people without a link may not reach", () => {
         (entry) => entry.text === "what is running?" && entry.titles.length > 0,
       );
       assert.isDefined(owner, "the owner sees recent threads");
-      const guest = seen.filter((entry) => entry.text === "what is running?").at(-1);
+      assert.strictEqual(owner?.who, "owner");
+      const guest = seen.find(
+        (entry) => entry.text === "what is running?" && entry.who.startsWith("unlinked:"),
+      );
+      assert.isDefined(guest, "the guest's input was built");
       assert.deepStrictEqual(guest?.titles, []);
     }).pipe(Effect.provide(harness.layer));
   });

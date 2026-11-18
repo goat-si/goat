@@ -4,8 +4,19 @@ import { afterEach, expect, it, vi } from "vite-plus/test";
 import { BotProfile } from "@goat/contracts";
 import * as Schema from "effect/Schema";
 
-// The roster's member rows through the real member-status hook: only the status read underneath
-// it, the thread shells and the native views stand in.
+// The roster's member rows through the real member-status hook; only the status read beneath it,
+// the thread shells and the native views stand in. Home's work signals are not under test, nor
+// keeping answers for offline: the live answer from a readable computer, and nothing once that
+// read is refused, as the real hook returns.
+vi.mock("./useKeptPerComputer", () => ({
+  useKeptPerComputer: (
+    _kind: string,
+    _environmentId: unknown,
+    live: { data: unknown; cause?: { _tag?: string } | null },
+  ) => (live.cause?._tag === "EnvironmentAuthorizationError" ? null : live.data),
+  useComputerReadable: () => true,
+}));
+vi.mock("./useMobileBotRowSignals", () => ({ useMobileBotRowSignals: () => null }));
 vi.mock("react-native", () => ({
   Platform: { OS: "ios" },
   View: (props: {
@@ -65,6 +76,8 @@ const fixture = vi.hoisted(() => ({
   status: {} as Record<string, object | undefined>,
   // Thread shells by thread id.
   shells: {} as Record<string, object | undefined>,
+  // A status read refused for access, by bot id; the query keeps its earlier answer beside it.
+  refused: {} as Record<string, boolean>,
 }));
 vi.mock("../../state/entities", () => ({
   useThreadShell: (ref: { threadId: string } | null) =>
@@ -78,6 +91,10 @@ vi.mock("../../state/channels", () => ({
 vi.mock("../../state/query", () => ({
   useEnvironmentQuery: (atom: { botId: string } | null) => ({
     data: atom === null ? null : (fixture.status[atom.botId] ?? null),
+    cause:
+      atom !== null && fixture.refused[atom.botId]
+        ? { _tag: "EnvironmentAuthorizationError", message: "Not allowed." }
+        : null,
     refresh: () => {},
   }),
 }));
@@ -161,8 +178,9 @@ function setup(statuses: Record<string, object | undefined>) {
   vi.useFakeTimers({ now: NOW });
   fixture.status = statuses;
   fixture.shells = {};
+  fixture.refused = {};
 }
-async function show(bots = [scout]) {
+async function show(bots = [scout], mainUnreadable = false) {
   document.body.appendChild(container);
   root ??= createRoot(container);
   await act(async () =>
@@ -173,6 +191,7 @@ async function show(bots = [scout]) {
           ...bots.map((profile) => ({ kind: "member" as const, profile })),
         ]}
         slackEnabled={false}
+        mainUnreadable={mainUnreadable}
         onOpenBot={() => {}}
       />,
     ),
@@ -184,6 +203,7 @@ const row = (name: string) =>
   );
 const faceOf = (name: string) => row(name)?.querySelector("[data-face]")?.getAttribute("data-face");
 const labelOf = (name: string) => row(name)?.getAttribute("aria-label");
+const mainTile = () => row("GOAT Bot");
 const wait = (ms: number) => act(async () => vi.advanceTimersByTime(ms));
 
 it("reads while the person's message is the newest, from a status with no tasks, then turns back after 90 s", async () => {
@@ -224,17 +244,17 @@ it("works while the status says a task is going, and leaves an inactive shell id
   expect(faceOf("Scout")).toBe("idle");
 });
 
-it("waits first and says it once with its count, the badge's own number hidden from screen readers", async () => {
+it("waits first and says it once with its count, the waiting mark hidden from screen readers", async () => {
   setup({ scout: { waitingCount: 2, tasks: { active: true } } });
   await show();
   expect(faceOf("Scout")).toBe("waiting");
   expect(labelOf("Scout")).toBe("2 waiting for you, Scout, Finds sources");
-  const badge = [...(row("Scout")?.querySelectorAll("span") ?? [])].find(
+  const count = [...(row("Scout")?.querySelectorAll("span") ?? [])].find(
     (span) => span.textContent === "2",
   );
-  expect(badge?.getAttribute("aria-hidden")).toBe("true");
-  expect(badge?.getAttribute("data-important")).toBe("no-hide-descendants");
-  expect(badge?.getAttribute("aria-label")).toBeNull();
+  const mark = count?.closest("[aria-hidden='true']");
+  expect(mark?.getAttribute("data-important")).toBe("no-hide-descendants");
+  expect(count?.getAttribute("aria-label")).toBeNull();
 });
 
 it("keeps Reading through the face hold when the reply arrives, then moves on", async () => {
@@ -275,4 +295,54 @@ it("leads the main bot's label with its state", async () => {
   };
   await show([]);
   expect(container.querySelector('[aria-label="Working, GOAT Bot"]')).not.toBeNull();
+});
+
+it("a member whose status read is refused does not wait or work from its retained conversation", async () => {
+  setup({ scout: { waitingCount: 0 } });
+  // The conversation this phone still holds was stopped on a question to the person.
+  fixture.shells = {
+    "thread-scout": {
+      ...quiet("thread-scout"),
+      source: {
+        ...quiet("thread-scout").source,
+        pendingRuntimeRequest: { kind: "user_input", blocking: true },
+      },
+    },
+  };
+  await show();
+  expect(faceOf("Scout")).toBe("waiting");
+  fixture.refused = { scout: true };
+  await show();
+  expect(faceOf("Scout")).not.toBe("waiting");
+  expect(labelOf("Scout")).not.toContain("aiting");
+});
+
+it("a member and the main tile rest at once when they may no longer be read, with no face hold", async () => {
+  setup({ scout: { waitingCount: 0 } });
+  fixture.shells = { "thread-scout": quiet("thread-scout"), bot: quiet("bot") };
+  await show();
+  expect(faceOf("Scout")).toBe("idle");
+  expect(mainTile()?.querySelector("[data-face]")?.getAttribute("data-face")).toBe("idle");
+  // Both start waiting on the person: the member by its status, the main bot by its question.
+  fixture.status = { scout: { waitingCount: 1 } };
+  fixture.shells = {
+    ...fixture.shells,
+    bot: {
+      ...quiet("bot"),
+      source: {
+        ...quiet("bot").source,
+        pendingRuntimeRequest: { kind: "user_input", blocking: true },
+      },
+    },
+  };
+  await show();
+  expect(faceOf("Scout")).toBe("waiting");
+  expect(mainTile()?.querySelector("[data-face]")?.getAttribute("data-face")).toBe("waiting");
+  // Refused: no timer runs, yet both are idle, drawn and spoken.
+  fixture.refused = { scout: true };
+  await show([scout], true);
+  expect(faceOf("Scout")).toBe("idle");
+  expect(labelOf("Scout")).toBe("Scout, Finds sources");
+  expect(mainTile()?.querySelector("[data-face]")?.getAttribute("data-face")).toBe("idle");
+  expect(mainTile()?.getAttribute("aria-label")).toBe("GOAT Bot");
 });

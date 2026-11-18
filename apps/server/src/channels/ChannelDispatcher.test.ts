@@ -37,7 +37,7 @@ import * as ChannelReceptionService from "./ChannelReceptionService.ts";
 import * as ChannelRuntime from "./ChannelRuntime.ts";
 import { answerForwardIdsFor, taskEventIdFor, turnSteerIdsFor } from "./channelIds.ts";
 import { commitTransition } from "./channelTaskWrites.ts";
-import { holdNextLedgerCall, trackPlacements } from "./testkit/dispatchRace.ts";
+import { LedgerCallHolds, trackPlacements } from "./testkit/dispatchRace.ts";
 import { taskWriteMilestones } from "./testkit/channelWriteMilestones.ts";
 import { RemoteMachine, remoteScript } from "./testing/RemoteMachine.ts";
 import {
@@ -747,7 +747,7 @@ const secondDispatchBehindPlacement = (machine: RemoteMachine, key: string) =>
     const placements = trackPlacements();
     yield* placements.observe(dispatcher.dispatch(task.taskId, "placement-owner"));
     yield* Deferred.await(listing);
-    const identity = yield* holdNextLedgerCall("findIdentity");
+    const identity = yield* (yield* LedgerCallHolds).holdNext("findIdentity");
     const second = yield* Effect.forkChild(dispatcher.dispatch(task.taskId, "placement-owner"));
     yield* identity.reached;
     return {
@@ -788,7 +788,10 @@ it.effect(
       assert.strictEqual((yield* onlyTask).status, "running");
       assert.deepStrictEqual(yield* failedEvents, []);
       assert.lengthOf(machine.launches, 1);
-    }).pipe(Effect.scoped, Effect.provide(harness.layer));
+    }).pipe(
+      Effect.scoped,
+      Effect.provide(Layer.provideMerge(LedgerCallHolds.layer, harness.layer)),
+    );
   },
 );
 
@@ -806,7 +809,10 @@ it.effect(
       assert.strictEqual((yield* onlyTask).status, "failed");
       assert.deepStrictEqual(yield* failedEvents, ["permission_changed"]);
       assert.lengthOf(machine.launches, 0);
-    }).pipe(Effect.scoped, Effect.provide(harness.layer));
+    }).pipe(
+      Effect.scoped,
+      Effect.provide(Layer.provideMerge(LedgerCallHolds.layer, harness.layer)),
+    );
   },
 );
 
@@ -830,7 +836,7 @@ it.effect(
       const sql = yield* SqlClient.SqlClient;
       yield* sql`UPDATE channel_runtime_state SET value_json = json_set(value_json, '$.host', 'other-box') WHERE key = ${"remote-worker:" + task.taskId}`;
       assert.include(yield* ledger.getRemoteWorker(task.taskId), '"host":"other-box"');
-      const state = yield* holdNextLedgerCall("getRemoteWorker");
+      const state = yield* (yield* LedgerCallHolds).holdNext("getRemoteWorker");
       const third = yield* Effect.forkChild(dispatcher.dispatch(task.taskId, "placement-owner"));
       yield* state.reached;
       // The requester stops the task between that dispatch's read and its failure write.
@@ -845,6 +851,64 @@ it.effect(
       succeeded(yield* Fiber.await(third));
       assert.strictEqual((yield* onlyTask).status, "cancelled");
       assert.deepStrictEqual(yield* failedEvents, []);
-    }).pipe(Effect.scoped, Effect.provide(harness.layer));
+    }).pipe(
+      Effect.scoped,
+      Effect.provide(Layer.provideMerge(LedgerCallHolds.layer, harness.layer)),
+    );
   },
 );
+
+it.effect.each([
+  [
+    "a stop that lands while dispatch resolves a local target leaves the task stopped, and dispatch returns quietly",
+    1,
+    "task.dispatch.claimed",
+  ],
+  [
+    "a stop that lands while dispatch asks which project leaves the task stopped, and dispatch returns quietly",
+    2,
+    "task.question.opened",
+  ],
+] as const)("regression #3165: %s", ([_title, projects, forbidden]) => {
+  const harness = makeHarness({
+    projects,
+    providerInstances: [{ instanceId: "codex", displayName: "Local Codex", weeklyUsedPercent: 80 }],
+  });
+  return Effect.gen(function* () {
+    yield* setupBot;
+    yield* linkSlackUser();
+    const runtime = yield* ChannelRuntime.ChannelRuntime;
+    assert.isTrue(yield* runtime.claimForWork);
+    const input = yield* (yield* ChannelGateway.ChannelGateway).ingest(
+      slackInput("do: inspect the build", `race-${projects}`),
+      slackContext,
+    );
+    yield* (yield* ChannelReceptionService.ChannelReceptionService).receive(
+      input.inputId,
+      runtime.ownerToken,
+    );
+    const task = yield* onlyTask;
+    const ledger = yield* ChannelLedger.ChannelLedger;
+    const hold = yield* (yield* LedgerCallHolds).holdNext(
+      "getRemoteWorker",
+      (id) => id === task.taskId,
+    );
+    const fiber = yield* Effect.forkChild(
+      (yield* ChannelDispatcher.ChannelDispatcher).dispatch(task.taskId, runtime.ownerToken),
+    );
+    yield* hold.reached;
+    yield* commitTransition(
+      ledger,
+      (yield* ledger.getTask(task.taskId))!,
+      { type: "task.cancelled", payload: { reason: "Stopped by Owner." } },
+      { owner: runtime.ownerToken },
+    );
+    yield* hold.release;
+    succeeded(yield* Fiber.await(fiber));
+    assert.strictEqual((yield* onlyTask).status, "cancelled");
+    const sql = yield* SqlClient.SqlClient;
+    const events = yield* sql`SELECT type FROM channel_task_events WHERE type = ${forbidden}`;
+    assert.lengthOf(events, 0);
+    assert.lengthOf(harness.world.launches, 0);
+  }).pipe(Effect.provide(Layer.provideMerge(LedgerCallHolds.layer, harness.layer)));
+});

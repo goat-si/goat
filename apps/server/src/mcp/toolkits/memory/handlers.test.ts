@@ -6,8 +6,8 @@ import * as SqlClient from "effect/sql/SqlClient";
 import * as Deferred from "effect/Deferred";
 import * as Fiber from "effect/Fiber";
 import * as Layer from "effect/Layer";
+import * as NodeCrypto from "@effect/platform-node/NodeCrypto";
 import * as NodeServices from "@effect/platform-node/NodeServices";
-import { McpServer } from "effect/ai";
 import * as Sync from "../../../memory/MemorySyncService.ts";
 import * as McpHttpServer from "../../McpHttpServer.ts";
 import * as McpToolAccessTestkit from "../../McpToolAccess.testkit.ts";
@@ -302,10 +302,10 @@ it.effect(
         Layer.provide(Layer.mock(RecallFixture.MemoryRecall)({})),
         Layer.provide(McpToolAccessTestkit.layerPermissionProfilesOff),
         Layer.provideMerge(observed),
-        Layer.provideMerge(McpServer.McpServer.layer),
+        Layer.provideMerge(McpHttpServer.layerInProcessMcpServer),
         Layer.provideMerge(McpToolAccessTestkit.liveThreadsLayer),
         Layer.provide(Layer.mock(Sync.MemorySyncService)({})),
-        Layer.provide(NodeServices.layer),
+        Layer.provide(Layer.mergeAll(NodeServices.layer, NodeCrypto.layer)),
       );
       yield* Effect.gen(function* () {
         const store = yield* Store.MemoryStore;

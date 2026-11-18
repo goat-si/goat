@@ -59,6 +59,7 @@ export class ProjectEnrichmentService extends Context.Service<
     readonly awaitRepositoryIdentity: (
       workspaceRoot: string,
     ) => Effect.Effect<RepositoryIdentity | null>;
+    readonly refreshRepositoryIdentity: (workspaceRoot: string) => Effect.Effect<void>;
     readonly invalidate: (workspaceRoots: Iterable<string>) => Effect.Effect<void>;
     readonly subscribeChanges: Effect.Effect<
       PubSub.Subscription<ProjectEnrichmentChange>,
@@ -103,8 +104,44 @@ export const make = Effect.fn("ProjectEnrichmentService.make")(function* (
   const failureTtl = options.failureTtl ?? DEFAULT_FAILURE_TTL;
   const faviconTtl = options.faviconTtl ?? DEFAULT_FAVICON_TTL;
 
+  // Outlives the cache entry so an expired or refreshing identity still reads as its last value.
+  const lastRepositoryIdentities = new Map<string, RepositoryIdentity>();
+  // `invalidate` drops a root's in-flight lookup so its late result cannot overwrite a newer one.
+  const lookupsInFlight = new Map<string, object>();
+  const rememberRepositoryIdentity = (
+    workspaceRoot: string,
+    repositoryIdentity: RepositoryIdentity | null,
+  ) => {
+    lastRepositoryIdentities.delete(workspaceRoot);
+    if (repositoryIdentity === null) return;
+    if (lastRepositoryIdentities.size >= cacheCapacity) {
+      const oldestRoot = lastRepositoryIdentities.keys().next().value;
+      if (oldestRoot !== undefined) lastRepositoryIdentities.delete(oldestRoot);
+    }
+    lastRepositoryIdentities.set(workspaceRoot, repositoryIdentity);
+  };
+
   const repositoryIdentityCache = yield* Cache.makeWith(
-    (workspaceRoot: string) => Effect.exit(repositoryIdentityResolver.resolve(workspaceRoot)),
+    (workspaceRoot: string) =>
+      Effect.suspend(() => {
+        const lookup = {};
+        lookupsInFlight.set(workspaceRoot, lookup);
+        const isCurrent = () => lookupsInFlight.get(workspaceRoot) === lookup;
+        return Effect.exit(repositoryIdentityResolver.resolve(workspaceRoot)).pipe(
+          Effect.tap((result) =>
+            Effect.sync(() => {
+              if (Exit.isSuccess(result) && isCurrent()) {
+                rememberRepositoryIdentity(workspaceRoot, result.value);
+              }
+            }),
+          ),
+          Effect.ensuring(
+            Effect.sync(() => {
+              if (isCurrent()) lookupsInFlight.delete(workspaceRoot);
+            }),
+          ),
+        );
+      }),
     {
       capacity: cacheCapacity,
       timeToLive: Exit.match({
@@ -254,10 +291,13 @@ export const make = Effect.fn("ProjectEnrichmentService.make")(function* (
         ] as const,
         { concurrency: "unbounded" },
       );
+      const repositoryIdentityResolved = isSuccessfullyResolved(repositoryIdentity);
       return {
-        repositoryIdentity: availableValue(repositoryIdentity),
+        repositoryIdentity: repositoryIdentityResolved
+          ? availableValue(repositoryIdentity)
+          : (lastRepositoryIdentities.get(workspaceRoot) ?? null),
         faviconPath: availableValue(faviconPath),
-        repositoryIdentityResolved: isSuccessfullyResolved(repositoryIdentity),
+        repositoryIdentityResolved,
       };
     },
   );
@@ -302,6 +342,10 @@ export const make = Effect.fn("ProjectEnrichmentService.make")(function* (
         Effect.all(
           [
             Cache.invalidate(repositoryIdentityCache, workspaceRoot),
+            Effect.sync(() => {
+              lookupsInFlight.delete(workspaceRoot);
+              lastRepositoryIdentities.delete(workspaceRoot);
+            }),
             Cache.invalidate(faviconCache, workspaceRoot),
             // The resolver keeps its own misses, which would outlive a clone filling the folder.
             faviconResolver.invalidate(workspaceRoot),
@@ -312,11 +356,29 @@ export const make = Effect.fn("ProjectEnrichmentService.make")(function* (
     );
   });
 
+  const refreshRepositoryIdentity: ProjectEnrichmentService["Service"]["refreshRepositoryIdentity"] =
+    Effect.fn("ProjectEnrichmentService.refreshRepositoryIdentity")(function* (workspaceRoot) {
+      const cached = yield* Cache.get(repositoryIdentityCache, workspaceRoot);
+      if (Exit.isFailure(cached) || cached.value !== null) return;
+      const result = yield* Effect.exit(
+        repositoryIdentityResolver.resolve(workspaceRoot, { refresh: true }),
+      );
+      if (Exit.isFailure(result)) {
+        yield* logFailure(workspaceRoot, "repositoryIdentity", result);
+        return;
+      }
+      if (result.value === null) return;
+      lookupsInFlight.delete(workspaceRoot);
+      yield* Cache.invalidate(repositoryIdentityCache, workspaceRoot);
+      yield* resolveRepositoryIdentity(workspaceRoot);
+    });
+
   return ProjectEnrichmentService.of({
     peek,
     request,
     getAvailable,
     awaitRepositoryIdentity,
+    refreshRepositoryIdentity,
     invalidate,
     subscribeChanges: PubSub.subscribe(changes),
   });

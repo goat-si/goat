@@ -34,7 +34,7 @@ import { servedRuntimeProtocolRanges } from "@goat/shared/sshRuntimeProtocol";
 import * as Cause from "effect/Cause";
 import * as Clock from "effect/Clock";
 import * as Context from "effect/Context";
-import * as Crypto from "effect/Crypto";
+import * as SecureRandom from "effect/crypto/SecureRandom";
 import * as DateTime from "effect/DateTime";
 import * as Deferred from "effect/Deferred";
 import * as Duration from "effect/Duration";
@@ -180,7 +180,7 @@ const make = Effect.gen(function* () {
   const context = yield* Effect.context<
     FileSystem.FileSystem | Path.Path | HttpClient.HttpClient
   >();
-  const crypto = yield* Crypto.Crypto;
+  const random = yield* SecureRandom.SecureRandom;
   const hostname = yield* HostProcess.Hostname;
   const runtimePlatform = yield* HostProcess.Platform;
   const runtimeArch = yield* HostProcess.Architecture;
@@ -510,7 +510,7 @@ const make = Effect.gen(function* () {
         );
       const now = yield* DateTime.now;
       const operation: SyncOperation = {
-        syncId: `sync_${yield* crypto.randomUUIDv4().pipe(Effect.orDie)}`,
+        syncId: `sync_${yield* random.uuidV4().pipe(Effect.orDie)}`,
         driver,
         version,
         login,

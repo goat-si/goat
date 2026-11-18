@@ -1,4 +1,5 @@
 import { describe, expect, it } from "@effect/vitest";
+import * as NodeCrypto from "@effect/platform-node/NodeCrypto";
 import * as NodeServices from "@effect/platform-node/NodeServices";
 import {
   EnvironmentId,
@@ -83,7 +84,7 @@ it.effect(
       layerPermissionProfilesOff,
       liveThreadsLayer,
       ServerConfig.layerTest(process.cwd(), { prefix: "goat-preview-retry-" }).pipe(
-        Layer.provideMerge(NodeServices.layer),
+        Layer.provideMerge(Layer.mergeAll(NodeServices.layer, NodeCrypto.layer)),
       ),
       Layer.mock(PreviewAutomationBroker.PreviewAutomationBroker)({
         invoke: <A>(
@@ -187,7 +188,7 @@ it.effect(
           PreviewStandardToolkit,
           PreviewHandlers.layerStandard,
         ).pipe(
-          Layer.provideMerge(McpServer.McpServer.layer),
+          Layer.provideMerge(McpHttpServer.layerInProcessMcpServer),
           Layer.provide(dependencies),
           Layer.provide(SiteNotes.layer),
           Layer.provideMerge(Sqlite.layerMemory),
@@ -214,7 +215,7 @@ it.effect("preview results and failures expose safety and a next step after MCP 
     layerPermissionProfilesOff,
     liveThreadsLayer,
     ServerConfig.layerTest(process.cwd(), { prefix: "goat-preview-safety-" }).pipe(
-      Layer.provideMerge(NodeServices.layer),
+      Layer.provideMerge(Layer.mergeAll(NodeServices.layer, NodeCrypto.layer)),
     ),
     Layer.mock(PreviewAutomationBroker.PreviewAutomationBroker)({
       invoke: <A>(
@@ -430,7 +431,7 @@ it.effect("preview results and failures expose safety and a next step after MCP 
     Effect.provideService(McpInvocationContext.McpInvocationContext, scope),
     Effect.provide(
       McpHttpServer.toolkitRegistration(PreviewStandardToolkit, PreviewHandlers.layerStandard).pipe(
-        Layer.provideMerge(McpServer.McpServer.layer),
+        Layer.provideMerge(McpHttpServer.layerInProcessMcpServer),
         Layer.provide(dependencies),
         Layer.provide(SiteNotes.layer),
         Layer.provideMerge(Sqlite.layerMemory),
@@ -476,7 +477,7 @@ describe("claimPreviewRecording", () => {
     }).pipe(
       Effect.provide(
         ServerConfig.layerTest(process.cwd(), { prefix: "goat-preview-recording-" }).pipe(
-          Layer.provideMerge(NodeServices.layer),
+          Layer.provideMerge(Layer.mergeAll(NodeServices.layer, NodeCrypto.layer)),
         ),
       ),
     ),
@@ -521,7 +522,7 @@ describe("claimPreviewRecording", () => {
       }).pipe(
         Effect.provide(
           ServerConfig.layerTest(process.cwd(), { prefix: "goat-preview-recording-" }).pipe(
-            Layer.provideMerge(NodeServices.layer),
+            Layer.provideMerge(Layer.mergeAll(NodeServices.layer, NodeCrypto.layer)),
           ),
         ),
       ),
@@ -597,13 +598,13 @@ it.effect(
       Effect.provide(
         McpHttpServer.layerPreviewToolkit.pipe(
           Layer.provide(layerPermissionProfilesOff),
-          Layer.provideMerge(McpServer.McpServer.layer),
+          Layer.provideMerge(McpHttpServer.layerInProcessMcpServer),
           Layer.provideMerge(liveThreadsLayer),
           Layer.provideMerge(PreviewAutomationBroker.layer),
           Layer.provide(SiteNotes.layer),
           Layer.provideMerge(Sqlite.layerMemory),
           Layer.provideMerge(ServerConfig.layerTest(process.cwd(), { prefix: "goat-read-mcp-" })),
-          Layer.provideMerge(NodeServices.layer),
+          Layer.provideMerge(Layer.mergeAll(NodeServices.layer, NodeCrypto.layer)),
         ),
       ),
     );

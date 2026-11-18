@@ -5,11 +5,15 @@ import {
   type ServerConfig,
 } from "@goat/contracts";
 import { describe, expect, it } from "@effect/vitest";
+import * as Deferred from "effect/Deferred";
 import * as Effect from "effect/Effect";
+import * as Fiber from "effect/Fiber";
 import * as Layer from "effect/Layer";
 import * as Option from "effect/Option";
+import * as TestClock from "effect/testing/TestClock";
 import * as RpcHttp from "../rpc/http.ts";
 
+import * as ClientCapabilities from "../platform/capabilities.ts";
 import type { WsRpcProtocolClient } from "../rpc/protocol.ts";
 import * as RpcSession from "../rpc/session.ts";
 import type { ConnectionCatalogEntry } from "./catalog.ts";
@@ -17,9 +21,11 @@ import * as Driver from "./driver.ts";
 import * as Resolver from "./resolver.ts";
 import { hubProxyRefusal } from "./hubProxyHttp.ts";
 import {
+  BearerConnectionTarget,
   ConnectionAttemptSuperseded,
   ConnectionTransientError,
   HubProxyConnectionTarget,
+  PrimaryConnectionTarget,
   SshConnectionTarget,
   type PreparedConnection,
 } from "./model.ts";
@@ -49,17 +55,254 @@ const session: RpcSession.RpcSession = {
   closed: Effect.never,
 };
 
+/** Desktop's primary: signed in by bearer, so the driver never asks for its session. */
+const bearerOnly = Layer.succeed(ClientCapabilities.PrimaryEnvironmentAuth, {
+  bearerToken: Effect.succeedNone,
+});
+
 function driverWith(prepare: Resolver.ConnectionResolver["Service"]["prepare"]) {
   return Driver.make.pipe(
     Effect.provide(
       Layer.mergeAll(
         Layer.mock(Resolver.ConnectionResolver)({ prepare }),
         Layer.mock(RpcSession.RpcSessionFactory)({ connect: () => Effect.succeed(session) }),
+        bearerOnly,
         RpcHttp.layerRemoteHttpClient(() => Promise.reject(new Error("No HTTP request expected."))),
       ),
     ),
   );
 }
+
+const STUDIO = new PrimaryConnectionTarget({
+  environmentId: EnvironmentId.make("studio"),
+  label: "Mac Studio",
+  httpBaseUrl: "http://127.0.0.1:3773",
+  wsBaseUrl: "ws://127.0.0.1:3773",
+});
+const studioEntry: ConnectionCatalogEntry = {
+  target: STUDIO,
+  profile: Option.none(),
+  enabled: true,
+};
+const cookieTab: PreparedConnection = {
+  target: STUDIO,
+  environmentId: STUDIO.environmentId,
+  label: STUDIO.label,
+  httpBaseUrl: "http://127.0.0.1:3773",
+  socketUrl: "ws://127.0.0.1:3773/ws",
+  httpAuthorization: null,
+};
+const droppedSocket = new ConnectionTransientError({
+  reason: "transport",
+  detail: "Mac Studio could not establish a WebSocket connection.",
+  hop: "server",
+});
+
+/** A primary attempt whose socket fails, over a server at that address whose descriptor says `answeringId`. */
+function refusedSocket(options: {
+  readonly prepared?: PreparedConnection;
+  readonly failure?: ConnectionTransientError;
+  readonly sessionEnded?: (httpBaseUrl: string) => Effect.Effect<boolean>;
+  readonly answeringId?: string;
+}) {
+  const descriptorReads: string[] = [];
+  const driver = Driver.make.pipe(
+    Effect.provide(
+      Layer.mergeAll(
+        Layer.mock(Resolver.ConnectionResolver)({
+          prepare: () => Effect.succeed(options.prepared ?? cookieTab),
+        }),
+        Layer.mock(RpcSession.RpcSessionFactory)({
+          connect: () => Effect.fail(options.failure ?? droppedSocket),
+        }),
+        Layer.succeed(ClientCapabilities.PrimaryEnvironmentAuth, {
+          bearerToken: Effect.succeedNone,
+          ...(options.sessionEnded === undefined ? {} : { sessionEnded: options.sessionEnded }),
+        }),
+        RpcHttp.layerRemoteHttpClient((input) => {
+          descriptorReads.push(String(input));
+          return Promise.resolve(
+            Response.json({
+              environmentId: options.answeringId ?? STUDIO.environmentId,
+              label: "Mac Studio",
+              platform: { os: "darwin", arch: "arm64" },
+              serverVersion: "1",
+              capabilities: {},
+            }),
+          );
+        }),
+      ),
+    ),
+  );
+  return { driver, descriptorReads };
+}
+
+const answering = (answer: boolean) => {
+  const reads: string[] = [];
+  const sessionEnded = (httpBaseUrl: string) =>
+    Effect.sync(() => {
+      reads.push(httpBaseUrl);
+      return answer;
+    });
+  return { reads, sessionEnded };
+};
+
+describe("a cookie tab whose own server refuses its socket", () => {
+  it.effect(
+    "a cookie primary whose socket fails and whose server says the session ended fails blocked for authentication at the server, after one read of its own base URL (#3473, access)",
+    () =>
+      Effect.gen(function* () {
+        const server = answering(true);
+        const { driver, descriptorReads } = refusedSocket({ sessionEnded: server.sessionEnded });
+        const error = yield* (yield* driver)
+          .connect(studioEntry, () => Effect.void)
+          .pipe(Effect.scoped, Effect.flip);
+        expect(error).toMatchObject({
+          _tag: "ConnectionBlockedError",
+          reason: "authentication",
+          hop: "server",
+          via: "direct",
+          sessionEnded: true,
+          detail: "This browser is no longer signed in to Mac Studio.",
+        });
+        expect(server.reads).toEqual(["http://127.0.0.1:3773"]);
+        // The identity check: one descriptor read of the same server.
+        expect(descriptorReads.map((url) => new URL(url).pathname)).toEqual([
+          "/.well-known/goat/environment",
+        ]);
+      }),
+  );
+
+  it.effect(
+    "a session read with no answer after 2.5 s leaves the transport failure and is interrupted (#3473, bound)",
+    () =>
+      Effect.gen(function* () {
+        const started = yield* Deferred.make<void>();
+        let interrupted = false;
+        const { driver } = refusedSocket({
+          sessionEnded: () =>
+            Deferred.succeed(started, undefined).pipe(
+              Effect.andThen(Effect.never),
+              Effect.onInterrupt(() =>
+                Effect.sync(() => {
+                  interrupted = true;
+                }),
+              ),
+            ),
+        });
+        const attempt = yield* (yield* driver)
+          .connect(studioEntry, () => Effect.void)
+          .pipe(Effect.scoped, Effect.flip, Effect.forkChild);
+        const first = yield* Effect.raceFirst(
+          Deferred.await(started).pipe(Effect.as("read started")),
+          Fiber.await(attempt).pipe(Effect.as("attempt ended without a read")),
+        );
+        expect(first).toBe("read started");
+        yield* TestClock.adjust("2499 millis");
+        expect(attempt.pollUnsafe()).toBeUndefined();
+        yield* TestClock.adjust("1 millis");
+        expect(yield* Fiber.join(attempt)).toBe(droppedSocket);
+        expect(interrupted).toBe(true);
+      }),
+  );
+
+  it.effect("superseding an attempt interrupts its in-flight session read (#3499, guard)", () =>
+    Effect.gen(function* () {
+      const started = yield* Deferred.make<void>();
+      const interrupted = yield* Deferred.make<void>();
+      const { driver } = refusedSocket({
+        sessionEnded: () =>
+          Deferred.succeed(started, undefined).pipe(
+            Effect.andThen(Effect.never),
+            Effect.onInterrupt(() => Deferred.succeed(interrupted, undefined)),
+          ),
+      });
+      const attempt = yield* (yield* driver)
+        .connect(studioEntry, () => Effect.void)
+        .pipe(Effect.scoped, Effect.forkChild);
+      const first = yield* Effect.raceFirst(
+        Deferred.await(started).pipe(Effect.as("read started")),
+        Fiber.await(attempt).pipe(Effect.as("attempt ended without a read")),
+      );
+      expect(first).toBe("read started");
+      yield* Fiber.interrupt(attempt);
+      expect(yield* Deferred.isDone(interrupted)).toBe(true);
+    }),
+  );
+
+  it.effect(
+    "a server at this origin with another environment id leaves transport (#3473, guard)",
+    () =>
+      Effect.gen(function* () {
+        const server = answering(true);
+        const { driver } = refusedSocket({
+          sessionEnded: server.sessionEnded,
+          answeringId: "another-goat-on-this-port",
+        });
+        const error = yield* (yield* driver)
+          .connect(studioEntry, () => Effect.void)
+          .pipe(Effect.scoped, Effect.flip);
+        expect(error).toBe(droppedSocket);
+      }),
+  );
+
+  const bearer = { _tag: "Bearer", token: "desktop" } as const;
+  it.effect.each([
+    ["the server says this browser is still signed in", { signedIn: true }, 1],
+    [
+      "the socket timed out",
+      { failure: new ConnectionTransientError({ reason: "timeout", detail: "Timed out." }) },
+      0,
+    ],
+    [
+      "the desktop's primary signs in by bearer",
+      { prepared: { ...cookieTab, httpAuthorization: bearer } },
+      0,
+    ],
+    [
+      "a saved remote",
+      {
+        prepared: {
+          ...cookieTab,
+          target: new BearerConnectionTarget({
+            environmentId: STUDIO.environmentId,
+            label: "Mac Studio",
+            connectionId: "saved",
+          }),
+          httpAuthorization: bearer,
+        },
+      },
+      0,
+    ],
+    ["a platform that cannot ask", { noMember: true }, 0],
+    [
+      "the socket goes to another server than the read",
+      { prepared: { ...cookieTab, socketUrl: "ws://127.0.0.1:4000/ws" } },
+      0,
+    ],
+  ] as const)(
+    "a socket failure stays the transport failure when %s (#3473, guard)",
+    ([_case, options, reads]) =>
+      Effect.gen(function* () {
+        // Every server here answers "ended" unless the row says otherwise, so only the guard holds.
+        const server = answering(!("signedIn" in options));
+        const { prepared, failure } = options as {
+          readonly prepared?: PreparedConnection;
+          readonly failure?: ConnectionTransientError;
+        };
+        const { driver } = refusedSocket({
+          ...(prepared === undefined ? {} : { prepared }),
+          ...(failure === undefined ? {} : { failure }),
+          ...("noMember" in options ? {} : { sessionEnded: server.sessionEnded }),
+        });
+        const error = yield* (yield* driver)
+          .connect(studioEntry, () => Effect.void)
+          .pipe(Effect.scoped, Effect.flip);
+        expect(error).toBe(failure ?? droppedSocket);
+        expect(server.reads).toHaveLength(reads);
+      }),
+  );
+});
 
 describe("SSH driver routing", () => {
   it.effect("keeps retrying an unreachable direct route and names the hub's refusal", () =>
@@ -188,6 +431,7 @@ describe("live host checks", () => {
         const driver = yield* Driver.make.pipe(
           Effect.provide(
             Layer.mergeAll(
+              bearerOnly,
               Layer.mock(Resolver.ConnectionResolver)({}),
               Layer.mock(RpcSession.RpcSessionFactory)({}),
               RpcHttp.layerRemoteHttpClient((url, init) => {
@@ -239,6 +483,7 @@ it.effect("identity mismatch -> no Authorization header sent, kept", () =>
       const driver = yield* Driver.make.pipe(
         Effect.provide(
           Layer.mergeAll(
+            bearerOnly,
             Layer.mock(Resolver.ConnectionResolver)({ prepare: () => Effect.succeed(bearer) }),
             Layer.mock(RpcSession.RpcSessionFactory)({ connect: () => Effect.succeed(session) }),
             RpcHttp.layerRemoteHttpClient((_url, init) => {
@@ -279,6 +524,7 @@ it.effect("SSH lease opens a probe socket without re-preparing", () =>
       const driver = yield* Driver.make.pipe(
         Effect.provide(
           Layer.mergeAll(
+            bearerOnly,
             Layer.mock(Resolver.ConnectionResolver)({
               prepare: () =>
                 Effect.sync(() => {

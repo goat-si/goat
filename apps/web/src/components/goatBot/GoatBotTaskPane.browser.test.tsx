@@ -42,7 +42,24 @@ const state = vi.hoisted(() => ({
   sourceIdentity: "first" as string | null,
   baseline: new Set<string>(),
   sources: new Set<string>(),
+  chips: new Map<string, unknown>(),
+  attachmentSupport: null as { readonly maxUploadBytes: number | null } | null,
+  released: [] as Array<ReadonlyArray<string>>,
+  connecting: false,
 }));
+// Records which draft files the task's message box gives back.
+vi.mock("./goatBotAttachments", async (original) => {
+  const real = await original<typeof import("./goatBotAttachments")>();
+  return {
+    ...real,
+    releaseGoatBotAttachments: (
+      attachments: Parameters<typeof real.releaseGoatBotAttachments>[0],
+    ) => {
+      state.released.push(attachments.map((attachment) => attachment.name));
+      real.releaseGoatBotAttachments(attachments);
+    },
+  };
+});
 vi.mock("./useGoatBotSource", () => ({
   useGoatBotSource: () => ({ baselineIds: state.baseline, sourceIds: state.sources }),
 }));
@@ -151,6 +168,7 @@ vi.mock("./useBotRoster", () => ({
       remoteWork: [],
       loaded: true,
       failed: false,
+      chips: state.chips,
       refresh: state.refresh,
     };
   },
@@ -159,7 +177,9 @@ vi.mock("./useGoatBotSession", () => ({
   useGoatBotSession: (_items: unknown, taskId: string) => {
     state.session(taskId);
     return {
-      availability: { kind: "ready", bot: { environmentId: "env", threadId: "bot-thread" } },
+      availability: state.connecting
+        ? { kind: "connecting", environmentId: "env" }
+        : { kind: "ready", bot: { environmentId: "env", threadId: "bot-thread" } },
       canOperate: true,
       supportsTaskRetry: state.supportsRetry,
       visibleTurnItems: [],
@@ -172,7 +192,7 @@ vi.mock("./useGoatBotSession", () => ({
         state.session(id);
         return state.rows;
       },
-      attachmentSupport: null,
+      attachmentSupport: state.attachmentSupport,
       onSendToTask: state.send,
       onRetryInput: () => {},
       onDiscardInput: () => {},
@@ -186,6 +206,7 @@ import { goatBotHomeKey } from "./goatBotHomeRequest";
 import { resetTaskReadAcknowledgementsForTests } from "./useAcknowledgeTaskRead";
 import { GoatBotChatView } from "./GoatBotChatView";
 import { useGoatBotSession } from "./useGoatBotSession";
+import { HoldsNavigation, NavigationHoldsPaused } from "~/lib/navigationHolds";
 
 function Pane({ onClose, taskId = "task-1" }: { onClose: () => void; taskId?: string }) {
   const session = useGoatBotSession();
@@ -541,6 +562,7 @@ it("failing-first: a task-pane answer follows its own folded question without mo
 function setup() {
   state.noRows = false;
   state.lookupSupported = false;
+  state.chips = new Map();
   state.lookup.mockReset();
   state.showMenu.mockReset();
   state.showMenu.mockResolvedValue(null);
@@ -548,6 +570,9 @@ function setup() {
   state.send.mockClear();
   state.update.mockClear();
   state.session.mockClear();
+  state.attachmentSupport = null;
+  state.released.length = 0;
+  state.connecting = false;
 }
 
 it("opens the scoped task and acknowledges it, then sends and closes", async () => {
@@ -555,7 +580,7 @@ it("opens the scoped task and acknowledges it, then sends and closes", async () 
   const close = vi.fn();
   await using screen = await render(<Pane onClose={close} />);
   await expect.element(screen.getByText("Review work")).toBeVisible();
-  await expect.element(screen.getByText("Needs your input")).toBeVisible();
+  await expect.element(screen.getByText("Waiting for you", { exact: true })).toBeVisible();
   expect(state.session).toHaveBeenCalledWith("task-1");
   expect(state.update).toHaveBeenCalledWith({
     environmentId: "env",
@@ -578,8 +603,8 @@ const showingRows = (rows: ReadonlyArray<GoatBotRow>) => {
 };
 
 it("answers its task's question with the question, picked or typed as something else (#2977)", async () => {
-  state.send.mockClear();
-  using _rows = showingRows([
+  setup();
+  const rows: ReadonlyArray<GoatBotRow> = [
     {
       kind: "bot",
       id: "b1",
@@ -595,12 +620,24 @@ it("answers its task's question with the question, picked or typed as something 
       firstInGroup: true,
       groupPosition: "single",
     },
-  ]);
+  ];
+  using _rows = showingRows(rows);
   await using screen = await render(<Pane onClose={() => {}} />);
   await screen.getByRole("button", { name: "A. Keep" }).click();
   expect(state.send).toHaveBeenLastCalledWith("task-1", "Keep", [], "q1");
   await userEvent.type(screen.getByRole("textbox", { name: "Something else" }), "Both{Enter}");
   expect(state.send).toHaveBeenLastCalledWith("task-1", "Both", [], "q1");
+  // The pane keeps a typed answer while its question leaves the rows and the bot reconnects.
+  await userEvent.type(screen.getByRole("textbox", { name: "Something else" }), "Later");
+  state.rows = [];
+  state.connecting = true;
+  await screen.rerender(<Pane onClose={() => {}} />);
+  state.rows = rows;
+  state.connecting = false;
+  await screen.rerender(<Pane onClose={() => {}} />);
+  await expect
+    .element(screen.getByRole("textbox", { name: "Something else" }))
+    .toHaveValue("Later");
 });
 
 const decodeProfile = Schema.decodeSync(BotProfile);
@@ -784,3 +821,104 @@ it("Open Home from an older task goes to the bot's chat with its Home named in h
     goatBotHomeKey(EnvironmentId.make("env"), null),
   );
 });
+
+// Regression: Home's row said "Waiting for your answer" and the pane it opened said "Working".
+it("says in the header that a running task waits for your answer when its worker asks", async () => {
+  setup();
+  state.row = { status: "running", generation: undefined, unread: false };
+  state.chips = new Map([
+    [
+      "task-1",
+      {
+        taskId: "task-1",
+        taskVersion: 2,
+        status: "running",
+        openQuestionCount: 0,
+        observed: {
+          pullRequests: [],
+          needsYou: [{ kind: "question", since: "2026-11-04T10:00:00.000Z" }],
+        },
+      },
+    ],
+  ]);
+  await using screen = await render(<Pane onClose={() => {}} />);
+  await expect.element(screen.getByText("Review work")).toBeVisible();
+  await expect.element(screen.getByText("Waiting for your answer")).toBeVisible();
+  expect(screen.getByText("Working", { exact: true }).query()).toBeNull();
+});
+
+it("while open or unsaved work sits in the chat behind it, Back to Tasks says so and is described by it", async () => {
+  setup();
+  state.noRows = true;
+  const session = useGoatBotSession();
+  const text =
+    "The chat behind this task has open or unsaved work. Leaving this task closes it and discards unsaved changes.";
+  await using screen = await render(
+    <>
+      {/* A draft in the chat the task replaced: its hold pauses there. */}
+      <NavigationHoldsPaused value>
+        <HoldsNavigation />
+      </NavigationHoldsPaused>
+      <GoatBotTaskPane
+        environmentId={EnvironmentId.make("env")}
+        session={session}
+        taskId={ChannelTaskId.make("task-1")}
+        taskTitle="Older task"
+        narrow
+        onClose={() => {}}
+      />
+    </>,
+  );
+  await expect
+    .element(screen.getByRole("button", { name: "Back to Tasks" }))
+    .toHaveAccessibleDescription(text);
+  await expect.element(screen.getByRole("status")).toHaveTextContent(text);
+});
+
+it.each([
+  { to: "another task of the same bot", member: false, box: "Message GOAT Bot" },
+  { to: "a member's task", member: true, box: "Message Research" },
+])(
+  "regression #3393: a draft and its file in a task's own message box are dropped, not sent, when $to opens in the pane",
+  async ({ member, box }) => {
+    setup();
+    state.attachmentSupport = { maxUploadBytes: 1_000_000 };
+    const research = decodeProfile({
+      botId: "research",
+      role: "member",
+      name: "Research",
+      avatar: null,
+      purpose: "",
+      defaultModelSelection: null,
+      defaultProjectId: null,
+      environmentId: "env",
+      sessionThreadId: "thread-research",
+      createdAt: "2026-11-04T10:00:00.000Z",
+      updatedAt: "2026-11-04T10:00:00.000Z",
+    });
+    // The task route keeps one pane and changes its bot and task with the URL.
+    const pane = (profile: BotProfile | null, taskId: string) => (
+      <GoatBotMemberContext value={profile}>
+        <Pane onClose={() => {}} taskId={taskId} />
+      </GoatBotMemberContext>
+    );
+    await using screen = await render(pane(null, "task-1"));
+    await userEvent.type(screen.getByRole("textbox", { name: "Message GOAT Bot" }), "ship it");
+    const input = screen.container.querySelector<HTMLInputElement>('input[type="file"]');
+    if (input === null) throw new Error("expected the file picker");
+    await userEvent.upload(input, new File(["launch"], "checklist.txt", { type: "text/plain" }));
+    await expect
+      .element(screen.getByRole("list", { name: "Attachments" }))
+      .toHaveTextContent("checklist.txt");
+    await screen.rerender(pane(member ? research : null, "task-2"));
+    const field = screen.getByRole("textbox", { name: box });
+    await expect.element(field).toHaveValue("");
+    await expect.element(screen.getByRole("list", { name: "Attachments" })).not.toBeInTheDocument();
+    await expect
+      .element(screen.getByRole("button", { name: "Send", includeHidden: true }))
+      .toBeDisabled();
+    expect(state.released).toContainEqual(["checklist.txt"]);
+    await userEvent.type(field, "{Enter}");
+    expect(state.send).not.toHaveBeenCalled();
+  },
+);

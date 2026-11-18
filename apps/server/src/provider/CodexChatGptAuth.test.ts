@@ -1,6 +1,7 @@
 // @effect-diagnostics nodeBuiltinImport:off globalFetchInEffect:off - Local mock OAuth server validates the browser callback boundary.
 import * as NodeHttp from "node:http";
 import * as NodeCrypto from "node:crypto";
+import * as NodePlatformCrypto from "@effect/platform-node/NodeCrypto";
 import * as NodeServices from "@effect/platform-node/NodeServices";
 import { assert, it } from "@effect/vitest";
 import { EnvironmentId, ProviderInstanceId } from "@goat/contracts";
@@ -377,8 +378,8 @@ const makeHarnessFor = Effect.fnUntraced(function* (
     setIdentityFailure: (value: "issuer" | "audience" | "signature") => {
       identityFailure = value;
     },
-    mismatchCallbackState: () => {
-      mismatchedState = true;
+    mismatchCallbackState: (value = true) => {
+      mismatchedState = value;
     },
     setCallbackClientId: (value: string) => {
       callbackClientId = value;
@@ -396,7 +397,9 @@ const makeHarness = makeHarnessFor(instanceId);
 const provision = <A, E, R>(effect: Effect.Effect<A, E, R>) =>
   effect.pipe(
     Effect.scoped,
-    Effect.provide(Layer.mergeAll(FetchHttpClient.layer, NodeServices.layer)),
+    Effect.provide(
+      Layer.mergeAll(FetchHttpClient.layer, NodeServices.layer, NodePlatformCrypto.layer),
+    ),
   );
 it.effect(
   "changing account registers a new user-owned client and then reuses that registration",
@@ -834,16 +837,24 @@ it.effect(
     ),
 );
 
-it.effect("rejects mismatched callback state before any token exchange or credential write", () =>
+it.effect("rejects mismatched callback state and keeps waiting for the real redirect", () =>
   provision(
     Effect.gen(function* () {
       const h = yield* makeHarness;
       h.mismatchCallbackState();
       yield* h.signIn;
-      assert.include((yield* h.phase("failed")).message!, "could not be verified");
+      assert.include(h.callbackResponses[0]!.body, "does not belong to the active sign-in");
       assert.strictEqual(h.exchanges.length, 0);
       assert.deepEqual(h.storedRecords(), []);
       assert.isTrue(Option.isNone(yield* h.auth.read));
+      h.mismatchCallbackState(false);
+      const waiting = yield* h.phase("waiting");
+      const redirectUri = new URL(waiting.authorizationUrl!).searchParams.get("redirect_uri")!;
+      const unparsable = yield* Effect.promise(() => fetch(`${new URL(redirectUri).origin}//`));
+      assert.strictEqual(unparsable.status, 404);
+      yield* h.finishCallback(waiting);
+      yield* h.phase("succeeded");
+      assert.strictEqual(h.exchanges.length, 1);
     }),
   ),
 );
@@ -913,7 +924,9 @@ it.effect(
       assert.strictEqual(harness.exchanges.length, 2);
     }).pipe(
       Effect.scoped,
-      Effect.provide(Layer.mergeAll(NodeServices.layer, FetchHttpClient.layer)),
+      Effect.provide(
+        Layer.mergeAll(NodeServices.layer, NodePlatformCrypto.layer, FetchHttpClient.layer),
+      ),
     ),
 );
 
@@ -950,7 +963,9 @@ it.effect(
       yield* harness.phase("succeeded");
     }).pipe(
       Effect.scoped,
-      Effect.provide(Layer.mergeAll(NodeServices.layer, FetchHttpClient.layer)),
+      Effect.provide(
+        Layer.mergeAll(NodeServices.layer, NodePlatformCrypto.layer, FetchHttpClient.layer),
+      ),
     ),
 );
 
@@ -984,7 +999,12 @@ it.effect("keeps simultaneous remote accounts and environments independent", () 
     yield* second.phase("succeeded");
     assert.strictEqual(Option.getOrThrow(yield* first.auth.read).subject, "user-test");
     assert.strictEqual(Option.getOrThrow(yield* second.auth.read).subject, "other-user");
-  }).pipe(Effect.scoped, Effect.provide(Layer.mergeAll(NodeServices.layer, FetchHttpClient.layer))),
+  }).pipe(
+    Effect.scoped,
+    Effect.provide(
+      Layer.mergeAll(NodeServices.layer, NodePlatformCrypto.layer, FetchHttpClient.layer),
+    ),
+  ),
 );
 
 it.effect(

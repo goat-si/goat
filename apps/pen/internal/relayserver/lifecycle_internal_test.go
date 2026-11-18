@@ -124,6 +124,8 @@ type liveNode struct {
 	frames chan wire.Frame
 	// pongs receives each pong the relay sends the node (dropped when full).
 	pongs chan struct{}
+	// end receives the error that ended this uplink's reads.
+	end chan error
 }
 
 func (lv *live) uplink(id *ident.Identity, good bool) *liveNode {
@@ -141,12 +143,13 @@ func (lv *live) uplink(id *ident.Identity, good bool) *liveNode {
 		answer = relay.AnswerChallenge(id, lv.origin, ch)
 	}
 	ws.Write(ctx, websocket.MessageBinary, answer)
-	n := &liveNode{id: id, ws: ws, opened: make(chan uint32, 64), frames: make(chan wire.Frame, 1024), pongs: make(chan struct{}, 8)}
+	n := &liveNode{id: id, ws: ws, opened: make(chan uint32, 64), frames: make(chan wire.Frame, 1024), pongs: make(chan struct{}, 8), end: make(chan error, 1)}
 	go func() {
 		total, last := uint64(len(ch)), uint64(0)
 		for {
 			typ, p, err := ws.Read(ctx)
 			if err != nil {
+				n.end <- err
 				return
 			}
 			if typ != websocket.MessageBinary {
@@ -228,6 +231,8 @@ func TestCountersReturnToZeroAfterAnySequenceOfSocketLifecycles(t *testing.T) {
 			// Only how fast stalled random sockets end; no assertion depends on it (the prelude drives
 			// the write-failure path through the write-failure hook).
 			l.WriteTimeout = 200 * time.Millisecond
+			// Auth, pending and idle timeouts outlast any run, so none of them produces a code prelude awaits.
+			l.AuthTimeout, l.PendingTimeout, l.IdleTimeout = time.Hour, time.Hour, time.Hour
 			lv := newLive(t, l)
 			lv.s.Hooks.OnEnd = func(role string, code uint16) { count(fmt.Sprintf("%s %d", role, code)) }
 			lv.s.Hooks.OnWriteFailed = func(role string) { count(role + " write failed") }
@@ -389,8 +394,26 @@ func TestPendingEvictsFirstAcrossSessionIDWrap(t *testing.T) {
 // prelude drives each exit path once so every seed covers them, whatever its random steps do.
 func prelude(t *testing.T, lv *live, ids []*ident.Identity) *liveNode {
 	ctx := context.Background()
-	if lv.uplink(ids[1], false) == nil {
+	t.Cleanup(func() {
+		lv.mu.Lock()
+		conns := append([]*websocket.Conn(nil), lv.conns...)
+		lv.mu.Unlock()
+		for _, conn := range conns {
+			conn.CloseNow()
+		}
+	})
+	refused := lv.uplink(ids[1], false)
+	if refused == nil {
 		t.Fatal("prelude: an uplink failing authentication was refused before its challenge")
+	}
+	// Each exit below is awaited, so no random step that follows can end its socket another way first.
+	select {
+	case err := <-refused.end:
+		if websocket.CloseStatus(err) != websocket.StatusCode(wire.CodeRelayAuth) {
+			t.Fatalf("prelude: the uplink failing authentication ended %v, want 4403", err)
+		}
+	case <-time.After(failsafe):
+		t.Fatal("prelude: the uplink failing authentication did not end")
 	}
 	old := lv.uplink(ids[0], true)
 	orphan := lv.dial("/v1/client/" + ids[0].NodeID())
@@ -403,8 +426,17 @@ func prelude(t *testing.T, lv *live, ids []*ident.Identity) *liveNode {
 	}
 	twice := lv.dial("/v1/client/" + ids[0].NodeID())
 	n.nextOpen(t)
-	twice.Write(ctx, websocket.MessageBinary, []byte("first"))
-	twice.Write(ctx, websocket.MessageBinary, []byte("second")) // 4408
+	for _, msg := range []string{"first", "second"} {
+		if err := twice.Write(ctx, websocket.MessageBinary, []byte(msg)); err != nil {
+			t.Fatalf("prelude: the %s message before the node answered: %v", msg, err)
+		}
+	}
+	readCtx, cancel := context.WithTimeout(ctx, failsafe)
+	_, _, err := twice.Read(readCtx)
+	cancel()
+	if websocket.CloseStatus(err) != websocket.StatusCode(wire.CodeTimeout) {
+		t.Fatalf("prelude: a second message before the node answered ended %v, want 4408", err)
+	}
 	closed := lv.dial("/v1/client/" + ids[0].NodeID())
 	sid := n.nextOpen(t)
 	n.ws.Write(ctx, websocket.MessageBinary, wire.CloseFrame(sid, 1000).Encode())

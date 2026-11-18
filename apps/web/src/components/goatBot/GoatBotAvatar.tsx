@@ -21,6 +21,7 @@ import { useThreadShell } from "~/state/entities";
 import { GoatBotFace } from "./GoatBotFace";
 import { useGoatBotPreferred } from "./GoatBotModeButton";
 import { useGoatBotFaceMotion, useGoatBotSessionFace } from "./useGoatBotFace";
+import { useGoatBotComputerReadable } from "./useGoatBotComputerReadable";
 import { useGoatBotWaitingCount } from "./useGoatBotWaitingCount";
 import { useGoatBotMemberStatus } from "./useGoatBotMemberStatus";
 
@@ -226,20 +227,29 @@ export interface GoatBotShownFace {
   readonly waitingCount: number;
 }
 
+const RESTING_FACE: GoatBotShownFace = { state: "idle", since: null, waitingCount: 0 };
+
 /** The main GOAT Bot's face: its conversation, its waiting count and, in its chat, its activity. */
 export function useGoatBotMainFace(
   activity: { readonly state: "reading" | "working" } | null,
   chatOpen: boolean,
+  waitingOverride?: number | null,
 ): GoatBotShownFace {
   const botRef = useGlobalAgentStore((state) => state.botRef);
-  const waitingCount = useGoatBotWaitingCount() ?? 0;
-  const threadRef = botRef === null ? null : scopeThreadRef(botRef.environmentId, botRef.threadId);
+  // Before a bot is named, nothing has been read from its conversation.
+  const readable = useGoatBotComputerReadable(botRef?.environmentId ?? null) || botRef === null;
+  const legacyWaiting = useGoatBotWaitingCount();
+  const waitingCount =
+    waitingOverride === undefined ? (legacyWaiting ?? 0) : (waitingOverride ?? 0);
+  const threadRef =
+    botRef === null || !readable ? null : scopeThreadRef(botRef.environmentId, botRef.threadId);
   const shell = useThreadShell(threadRef);
   // The bot-mode sidebar row loads the conversation exactly when the server tracks visits
   // (GoatBotSidebarRow), so reading it then adds no load.
   const sidebarHolds = useGoatBotPreferred() && shell?.lastVisitedAt !== undefined;
   const face = useGoatBotSessionFace(threadRef, waitingCount, activity, chatOpen || sidebarHolds);
-  return { ...face, waitingCount };
+  // Rests at once, skipping the face's hold and the chat's live activity.
+  return readable ? { ...face, waitingCount } : RESTING_FACE;
 }
 
 export function GoatBotMainAvatar({
@@ -250,6 +260,7 @@ export function GoatBotMainAvatar({
   surface = "screen",
   emoji = null,
   countInLabel = false,
+  waitingOverride,
 }: {
   readonly size?: keyof typeof CIRCLE;
   readonly activity?: { readonly state: "reading" | "working" } | null;
@@ -262,8 +273,9 @@ export function GoatBotMainAvatar({
   readonly emoji?: string | null | undefined;
   /** The row hides its own waiting badge from assistive technology; the label says the count. */
   readonly countInLabel?: boolean;
+  readonly waitingOverride?: number | null | undefined;
 }) {
-  const face = useGoatBotMainFace(activity, chatOpen);
+  const face = useGoatBotMainFace(activity, chatOpen, waitingOverride);
   return (
     <GoatBotAvatar
       size={size}

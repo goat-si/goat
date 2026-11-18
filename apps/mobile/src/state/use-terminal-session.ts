@@ -2,7 +2,7 @@ import {
   combineTerminalSessionState,
   EMPTY_TERMINAL_BUFFER_STATE,
   EMPTY_TERMINAL_SESSION_STATE,
-  terminalOutputText,
+  terminalOutputReplay,
   type KnownTerminalSession,
   type TerminalSessionState,
 } from "@goat/client-runtime/state/terminal";
@@ -57,9 +57,9 @@ export function useAttachedTerminalSession(input: {
   );
   const output = attach.data?.output ?? EMPTY_TERMINAL_BUFFER_STATE.output;
   const materializeBuffer = input.materializeBuffer ?? true;
-  // Older installed binaries and the text fallback still need initialBuffer.
+  // Older installed binaries are fed this as initialBuffer; clearing it would recreate their emulator.
   const buffer = useMemo(
-    () => (materializeBuffer ? terminalOutputText(output) : ""),
+    () => (materializeBuffer ? terminalOutputReplay(output) : ""),
     [materializeBuffer, output],
   );
 

@@ -97,7 +97,7 @@ export const recoveryPrelude = (
   const codes = ${JSON.stringify(codes)};
   let attempts = 0;
   const prototype = ${JSON.stringify(point)} === "execute" ? sqlite.StatementSync.prototype : sqlite.DatabaseSync.prototype;
-  const method = ${JSON.stringify(point)} === "execute" ? "all" : "prepare";
+  const method = ${JSON.stringify(point)} === "execute" ? "iterate" : "prepare";
   const original = prototype[method];
   prototype[method] = function(...args) {
     const matches = ${JSON.stringify(point)} === "execute" ? this.sourceSQL.includes("recovery_value")

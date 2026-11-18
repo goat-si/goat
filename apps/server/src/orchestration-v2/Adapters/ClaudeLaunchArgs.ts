@@ -1,5 +1,7 @@
 import type { Settings as ClaudeSdkSettings } from "@anthropic-ai/claude-agent-sdk";
 import type { ClaudeSettings } from "@goat/contracts";
+import * as HostProcess from "@goat/shared/HostProcess";
+import { expandHomePath } from "@goat/provider-core/server/pathExpansion";
 import { parseCliArgs } from "@goat/shared/cliArgs";
 import { fromLenientJson } from "@goat/shared/schemaJson";
 import * as Effect from "effect/Effect";
@@ -66,7 +68,10 @@ export const readClaudeAppendSystemPromptFile = Effect.fnUntraced(function* (inp
       flag: "--append-system-prompt-file",
     });
   }
-  const filePath = input.path.resolve(input.cwd ?? ".", file);
+  const filePath = input.path.resolve(
+    input.cwd ?? ".",
+    expandHomePath(file, yield* HostProcess.HomeDirectory),
+  );
   return yield* input.fileSystem
     .readFileString(filePath)
     .pipe(
@@ -95,7 +100,10 @@ export const readClaudeLaunchArgSettings = Effect.fn("ClaudeAdapterV2.readLaunch
         Effect.mapError((cause) => new ClaudeSettingsLaunchArgError({ cause })),
       )) as ClaudeSdkSettings;
     }
-    const filePath = input.path.resolve(input.cwd ?? ".", trimmed);
+    const filePath = input.path.resolve(
+      input.cwd ?? ".",
+      expandHomePath(trimmed, yield* HostProcess.HomeDirectory),
+    );
     return (yield* input.fileSystem.readFileString(filePath).pipe(
       Effect.flatMap(decodeClaudeLaunchArgSettings),
       Effect.mapError((cause) => new ClaudeSettingsLaunchArgError({ path: filePath, cause })),

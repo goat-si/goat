@@ -34,10 +34,17 @@ import {
   gitLabReviewPositionLines,
 } from "./gitLabInput.ts";
 import { gitLabActionSummary } from "./gitLabActionSummary.ts";
+import { makeRevertMergeRequest } from "./gitLabRevert.ts";
+import {
+  gitLabLineRange,
+  gitLabPatchCovering,
+  gitLabRangedFileHeaders,
+} from "./gitLabLineRange.ts";
 import { actionArgs } from "./gitLabActionArgs.ts";
 import { decodeMergeMessagesJson, MERGE_MESSAGES_GRAPHQL_QUERY } from "./gitLabMergeMessages.ts";
 import {
   GitLabDiffRefsUnavailableError,
+  GitLabRevertUnavailableError,
   GitLabPinnedRebaseError,
   GitLabPinnedAutoMergeError,
 } from "./gitLabPullRequestActionErrors.ts";
@@ -116,6 +123,7 @@ export type GitLabPullRequestCliError =
   | GitLabDiffCommitParentUnavailableError
   | GitLabDiffFileContentsUnavailableError
   | GitLabDiffRefsUnavailableError
+  | GitLabRevertUnavailableError
   | GitLabViewerUnavailableError
   | import("./gitLabPullRequestErrors.ts").GitLabMutationRefusedError;
 
@@ -743,6 +751,8 @@ export const make = Effect.gen(function* () {
             });
       }),
     );
+
+  const revertMergeRequest = makeRevertMergeRequest(api);
 
   const getDiffRefs = (input: {
     readonly cwd: string;
@@ -1574,6 +1584,7 @@ export const make = Effect.gen(function* () {
           // The other actions run `glab mr`, which prints prose rather than the merge request.
           return gitLabActionSummary(result.stdout);
         }
+        if (input.action === "revert") return yield* revertMergeRequest(input);
         const executeMr = (subcommand: string, ...flags: ReadonlyArray<string>) =>
           gitlab.execute({
             cwd: input.cwd,
@@ -1679,30 +1690,41 @@ export const make = Effect.gen(function* () {
       }
       if (input.comments.length > 0) {
         const refs = yield* getDiffRefs(input);
+        // Line codes only steer GitLab's highlight of a range, so an unreadable diff falls back
+        // to codes without the other side's counter rather than blocking the review.
+        const patch = yield* gitLabPatchCovering(
+          (page) => diffPage({ ...input, page }),
+          gitLabRangedFileHeaders(input.comments),
+        ).pipe(Effect.orElseSucceed(() => ""));
         yield* Effect.forEach(
           input.comments,
           (comment) =>
-            api({
-              cwd: input.cwd,
-              host: input.host,
-              path: `${mergeRequest}/discussions`,
-              method: "POST",
-              stdin: JSON.stringify({
-                body: comment.body,
-                position: {
-                  base_sha: refs.baseSha,
-                  head_sha: refs.headSha,
-                  start_sha: refs.startSha,
-                  position_type: "text",
-                  // Both paths are sent because GitLab resolves a position against both
-                  // sides of the diff. They differ only for a renamed file, which is why the
-                  // draft carries the name the file had before the change.
-                  old_path: comment.oldPath ?? comment.path,
-                  new_path: comment.path,
-                  ...gitLabReviewPositionLines(comment.position),
-                },
-              }),
-            }),
+            gitLabLineRange(patch, comment).pipe(
+              Effect.flatMap((lineRange) =>
+                api({
+                  cwd: input.cwd,
+                  host: input.host,
+                  path: `${mergeRequest}/discussions`,
+                  method: "POST",
+                  stdin: JSON.stringify({
+                    body: comment.body,
+                    position: {
+                      base_sha: refs.baseSha,
+                      head_sha: refs.headSha,
+                      start_sha: refs.startSha,
+                      position_type: "text",
+                      // Both paths are sent because GitLab resolves a position against both
+                      // sides of the diff. They differ only for a renamed file, which is why the
+                      // draft carries the name the file had before the change.
+                      old_path: comment.oldPath ?? comment.path,
+                      new_path: comment.path,
+                      ...gitLabReviewPositionLines(comment.position),
+                      ...lineRange,
+                    },
+                  }),
+                }),
+              ),
+            ),
           { discard: true },
         );
       }

@@ -2,8 +2,10 @@ import { ORCHESTRATION_PROTOCOL_VERSION } from "@goat/contracts";
 import { SSH_RUNTIME_PROTOCOL_VERSION } from "@goat/shared/sshRuntimeProtocol";
 import * as HostProcess from "@goat/shared/HostProcess";
 import { assert, describe, it } from "@effect/vitest";
+import * as NodeCrypto from "@effect/platform-node/NodeCrypto";
 import * as NodeServices from "@effect/platform-node/NodeServices";
 import * as Effect from "effect/Effect";
+import * as Layer from "effect/Layer";
 import { ARCHIVE, installArchivePsDouble } from "./tunnel.fixture.ts";
 import { makeProtocolFixture } from "./tunnel.protocol.fixture.ts";
 import { launch } from "./tunnel.reconnect-probe.fixture.ts";
@@ -45,7 +47,10 @@ describe.skipIf(HostProcess.Platform.defaultValue() === "win32")(
           assert.equal(result.status, instance === "different" ? "ready" : "pending");
           assert.equal(f.remoteCommands.length - before, 1);
           assert.notInclude(yield* f.fs.readFileString(`${f.test}/events`), '"type":"drain"');
-        }).pipe(Effect.provide(NodeServices.layer), Effect.scoped),
+        }).pipe(
+          Effect.provide(Layer.mergeAll(NodeServices.layer, NodeCrypto.layer)),
+          Effect.scoped,
+        ),
     );
 
     it.live.each(["busy", "unknown", "cancelled"])(
@@ -100,7 +105,10 @@ describe.skipIf(HostProcess.Platform.defaultValue() === "win32")(
           assert.equal(f.remoteCommands.length - beforeContended, 1);
           assert.equal(yield* f.fs.readLink(lock), owner);
           assert.deepEqual(yield* f.snapshot, snapshot);
-        }).pipe(Effect.provide(NodeServices.layer), Effect.scoped),
+        }).pipe(
+          Effect.provide(Layer.mergeAll(NodeServices.layer, NodeCrypto.layer)),
+          Effect.scoped,
+        ),
     );
 
     it.live.each([ARCHIVE.archiveVersion, "1.2.2"])(
@@ -154,7 +162,10 @@ describe.skipIf(HostProcess.Platform.defaultValue() === "win32")(
           assert.equal(third.status, "ready");
           assert.equal(f.remoteCommands.length - beforeThird, 1);
           assert.equal(yield* reconnectEvents, readinessEvent + readinessEvent);
-        }).pipe(Effect.provide(NodeServices.layer), Effect.scoped),
+        }).pipe(
+          Effect.provide(Layer.mergeAll(NodeServices.layer, NodeCrypto.layer)),
+          Effect.scoped,
+        ),
     );
 
     it.live.each([0, 1, 60])(
@@ -207,7 +218,10 @@ describe.skipIf(HostProcess.Platform.defaultValue() === "win32")(
               args: ["__ssh-helper", "wait-ready", String(installed.remotePort), "60000", "1000"],
             }) + "\n",
           );
-        }).pipe(Effect.provide(NodeServices.layer), Effect.scoped),
+        }).pipe(
+          Effect.provide(Layer.mergeAll(NodeServices.layer, NodeCrypto.layer)),
+          Effect.scoped,
+        ),
     );
   },
 );

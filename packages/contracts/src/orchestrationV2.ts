@@ -9,6 +9,8 @@ export * from "./orchestrationV2Attribution.ts";
 import { OrchestrationV2GetThreadFamilyInput } from "./threadFamilyLookup.ts";
 export { OrchestrationV2GetThreadFamilyInput } from "./threadFamilyLookup.ts";
 import { OrchestrationV2RunStatus } from "./orchestrationV2RunStatus.ts";
+import { OrchestrationV2ProviderThreadNativeMetadata } from "./orchestrationV2NativeMetadata.ts";
+export * from "./orchestrationV2NativeMetadata.ts";
 import {
   kindUnionWithFallback,
   OrchestrationV2Notification,
@@ -25,7 +27,6 @@ import {
 } from "./memory.ts";
 import { OrchestrationMessageContext } from "./composerContext.ts";
 import { withRecordIdTable } from "./orchestrationV2IdTable.ts";
-import * as DateTime from "effect/DateTime";
 import * as Effect from "effect/Effect";
 import * as Schema from "effect/Schema";
 import * as SchemaGetter from "effect/SchemaGetter";
@@ -45,6 +46,11 @@ import {
 export * from "./orchestrationV2ThreadFields.ts";
 import { OrchestrationV2SubscribeThreadInput } from "./orchestrationV2ThreadSubscription.ts";
 export * from "./orchestrationV2ThreadSubscription.ts";
+import {
+  OrchestrationV2StopHeldTurnInput,
+  OrchestrationV2StopHeldTurnResult,
+} from "./orchestrationV2HeldTurn.ts";
+export * from "./orchestrationV2HeldTurn.ts";
 import {
   OrchestrationV2ReviewContinueCommand,
   ReviewLedgerEntry,
@@ -344,6 +350,7 @@ export const OrchestrationV2ThreadCapabilities = Schema.Struct({
 export type OrchestrationV2ThreadCapabilities = typeof OrchestrationV2ThreadCapabilities.Type;
 
 export const OrchestrationV2TurnCapabilities = Schema.Struct({
+  supportsNativeGoals: Schema.optional(Schema.Boolean),
   exposesNativeTurnId: Schema.Boolean,
   emitsTurnStarted: Schema.Boolean,
   emitsTurnCompleted: Schema.Boolean,
@@ -351,6 +358,10 @@ export const OrchestrationV2TurnCapabilities = Schema.Struct({
   supportsActiveSteering: Schema.Boolean,
   // Some native steering mechanisms cancel pending tools before consuming the message.
   activeSteeringInterruptsTools: Schema.optional(Schema.Boolean),
+  // Some take text only, so a steer with attachments restarts the turn instead.
+  activeSteeringAcceptsAttachments: Schema.optional(Schema.Boolean),
+  // Only where a steer leaves a running automatic compaction intact; otherwise clients queue.
+  activeSteeringDuringCompaction: Schema.optional(Schema.Boolean),
   supportsSteeringByInterruptRestart: Schema.Boolean,
   supportsQueuedMessages: Schema.Boolean,
   terminalStatusQuality: Schema.Literals(["strong", "weak", "none"]),
@@ -1020,6 +1031,8 @@ const PendingBackgroundTaskFields = {
   description: Schema.optional(TrimmedNonEmptyString),
   /** The subagent task that started this work and waits on it. */
   parentTaskId: Schema.optional(TrimmedNonEmptyString),
+  /** Native id of the turn item that started this work, when it is not `taskId`. */
+  nativeItemId: Schema.optional(TrimmedNonEmptyString),
   /**
    * The agent declared it resumes when this work ends, so the thread holds like it does for a
    * subagent. Only the agent knows whether a command is a wait or a dev server it left running.
@@ -1049,19 +1062,6 @@ export const OrchestrationV2PendingBackgroundTask = kindUnionWithFallback(
   }),
 );
 export type OrchestrationV2PendingBackgroundTask = typeof OrchestrationV2PendingBackgroundTask.Type;
-
-export const OrchestrationV2ProviderThreadNativeMetadata = Schema.Struct({
-  modelSelection: Schema.optional(ModelSelection),
-  title: Schema.optional(Schema.NullOr(TrimmedNonEmptyString)),
-  updatedAt: Schema.optional(Schema.NullOr(TrimmedNonEmptyString)),
-  itemIdentityVersion: Schema.optional(Schema.Literal(2)),
-  forkHeadMessageId: Schema.optional(TrimmedNonEmptyString),
-  claudeAttachmentBudget: Schema.optional(
-    Schema.Struct({ bytesUsed: NonNegativeInt, pagesUsed: NonNegativeInt }),
-  ),
-});
-export type OrchestrationV2ProviderThreadNativeMetadata =
-  typeof OrchestrationV2ProviderThreadNativeMetadata.Type;
 
 export const OrchestrationV2ProviderGoalStatus = Schema.Literals([
   "active",
@@ -1680,6 +1680,7 @@ export const OrchestrationV2TurnItem = Schema.Union([
     exitCode: Schema.optional(Schema.Int),
     /** Set when the command is a monitor, so background work lists it as a monitor. */
     monitor: Schema.optional(Schema.Boolean),
+    completionWake: Schema.optional(Schema.Literal("always")),
   }),
   Schema.Struct({
     ...OrchestrationV2TurnItemBaseFields,
@@ -1720,6 +1721,7 @@ export const OrchestrationV2TurnItem = Schema.Union([
     message: Schema.String,
     /** Set when the provider did not confirm the stop in time; clients then offer Force stop. */
     unresponsiveAt: Schema.optionalKey(Schema.DateTimeUtc),
+    holdsQueue: Schema.optionalKey(Schema.Literal(true)),
   }),
   Schema.Struct({
     ...OrchestrationV2TurnItemBaseFields,
@@ -2134,6 +2136,8 @@ export const OrchestrationV2ThreadShell = Schema.Struct({
   latestRunStopRequested: Schema.optional(Schema.Boolean),
   latestRunStartHeld: Schema.optional(Schema.Boolean),
   latestRunCompletionNotification: Schema.optional(Schema.String),
+  /** The latest run answers a background-work progress wake, like a Monitor line, not a terminal one. Absent from older servers. */
+  latestRunBackgroundWake: Schema.optional(Schema.Boolean),
   activeRunId: Schema.NullOr(RunId),
   activityRunStartedAt: Schema.optional(Schema.NullOr(Schema.DateTimeUtc)),
   activityRunStatus: Schema.optional(
@@ -2219,21 +2223,7 @@ export function isLiveSubagentShell(
     (thread.pendingBackgroundTasks?.length ?? 0) > 0
   );
 }
-/**
- * A settled top-level thread settled before `beforeMs`. Shells that omit older settled threads
- * count every such thread, so the server and clients share this one rule.
- */
-export function isOlderSettledThreadShell(
-  thread: Pick<OrchestrationV2ThreadShell, "lineage" | "settledOverride" | "settledAt">,
-  beforeMs: number,
-): boolean {
-  return (
-    thread.lineage.relationshipToParent !== "subagent" &&
-    thread.settledOverride === "settled" &&
-    thread.settledAt !== null &&
-    DateTime.toEpochMillis(thread.settledAt) < beforeMs
-  );
-}
+export { isOlderSettledThreadShell } from "./orchestrationV2OlderSettled.ts";
 
 export const OrchestrationV2OlderSettledCount = Schema.Struct({
   projectId: ProjectId,
@@ -2568,6 +2558,7 @@ export const OrchestrationV2TurnItemJson = Schema.Union([
     exitCode: Schema.optional(Schema.Int),
     /** Set when the command is a monitor, so background work lists it as a monitor. */
     monitor: Schema.optional(Schema.Boolean),
+    completionWake: Schema.optional(Schema.Literal("always")),
   }),
   Schema.Struct({
     ...OrchestrationV2TurnItemJsonBaseFields,
@@ -2604,6 +2595,7 @@ export const OrchestrationV2TurnItemJson = Schema.Union([
     type: Schema.Literal("run_interrupt_request"),
     message: Schema.String,
     unresponsiveAt: Schema.optionalKey(Schema.DateTimeUtcFromString),
+    holdsQueue: Schema.optionalKey(Schema.Literal(true)),
   }),
   Schema.Struct({
     ...OrchestrationV2TurnItemJsonBaseFields,
@@ -3136,6 +3128,8 @@ export const OrchestrationV2Command = Schema.Union([
     worktreePath: Schema.optional(Schema.NullOr(TrimmedNonEmptyString)),
     expectedWorktreePath: Schema.optional(Schema.NullOr(TrimmedNonEmptyString)),
     expectedBranch: Schema.optional(Schema.NullOr(TrimmedNonEmptyString)),
+    /** A message queued in the same commit, so a workspace change cannot settle the thread first. Server-issued. */
+    continuation: Schema.optional(Schema.Struct({ messageId: MessageId, text: Schema.String })),
     /** Reject unless no message or run has landed on this thread. */
     expectedEmpty: Schema.optional(Schema.Boolean),
     limitRecovery: Schema.optional(Schema.NullOr(OrchestrationV2LimitRecoveryUpdate)),
@@ -3259,6 +3253,8 @@ export const OrchestrationV2Command = Schema.Union([
      * turn once the user has settled, snoozed, archived, or otherwise moved the thread on.
      */
     automatedContinuationOfRunId: Schema.optional(RunId),
+    steerFollowUpOfRunId: Schema.optional(RunId),
+    steerFollowUpAfterRunOrdinal: Schema.optional(NonNegativeInt),
     usageLimitRecoveryRequestId: Schema.optional(CommandId),
     deliveryIntent: Schema.optional(Schema.Literals(["auto", "steer", "restart"])),
     delegatedCompletion: Schema.optional(
@@ -3914,6 +3910,8 @@ export type OrchestrationV2OlderSettledThreadsPage =
 /** Active threads on a worktree path, including subagent children a shell may leave out. */
 export const OrchestrationV2WorktreeThreadIds = Schema.Struct({
   threadIds: Schema.Array(ThreadId),
+  /** Whether GOAT made the worktree; clients offer its removal only when true. Older servers omit it. */
+  managed: Schema.optionalKey(Schema.Boolean),
 });
 export type OrchestrationV2WorktreeThreadIds = typeof OrchestrationV2WorktreeThreadIds.Type;
 
@@ -4161,38 +4159,6 @@ export class OrchestrationV2ForceStopThreadError extends Schema.TaggedError<Orch
     return this.reason === "superseded"
       ? "A new turn started, so nothing was force stopped."
       : "Failed to force stop the agent.";
-  }
-}
-
-/** Stops the Codex turn no run owns that holds the thread's next start; it must be the one shown. */
-export const OrchestrationV2StopHeldTurnInput = Schema.Struct({
-  threadId: ThreadId,
-  nativeTurnId: TrimmedNonEmptyString,
-});
-export type OrchestrationV2StopHeldTurnInput = typeof OrchestrationV2StopHeldTurnInput.Type;
-
-export const OrchestrationV2StopHeldTurnResult = Schema.Struct({
-  /**
-   * `stopped`: the turn ended; the message starts unless another Codex turn still holds the
-   * thread, which the thread then names. `stopping`: Codex took the stop but
-   * has not reported the end yet; the message starts when it does. `none`: that turn no longer
-   * holds the thread as a turn no run owns, so nothing was stopped.
-   */
-  outcome: Schema.Literals(["stopped", "stopping", "none"]),
-});
-export type OrchestrationV2StopHeldTurnResult = typeof OrchestrationV2StopHeldTurnResult.Type;
-
-export class OrchestrationV2StopHeldTurnError extends Schema.TaggedError<OrchestrationV2StopHeldTurnError>()(
-  "OrchestrationV2StopHeldTurnError",
-  {
-    threadId: ThreadId,
-    /** Why, in words a person can act on. */
-    detail: Schema.optional(Schema.String),
-    cause: Schema.optional(Schema.Defect()),
-  },
-) {
-  override get message(): string {
-    return this.detail ?? "Could not stop the Codex turn this message waits for.";
   }
 }
 

@@ -7,7 +7,7 @@ nightlies after a manual goat-ci run on `dev` and promotes soaked nightlies to s
 holds `goat-ci.yml` to the jobs `scope`, `ci`, `screenshot-gate`, `result`, `republish`,
 `refresh-republished` and `connect-auth-postgres`, the pinned
 `ubuntu-24.04` image (or, for the `ci` matrix, `windows-2025` and the trusted-run lidge
-matrix expression, and for the gate jobs the trusted-run lidge gate expression), the `push`, `pull_request`, and
+expression), the `push`, `pull_request`, and
 `workflow_dispatch` triggers, and an allowlist of actions.
 A new check is therefore a matrix task of `ci`. Any other new workflow, a
 `pull_request_target` trigger, or `actions/github-script` does not pass the guard.
@@ -23,17 +23,23 @@ discarded after each job, so steps may install packages through sudo; the self-h
 `RUNNER_ENVIRONMENT` and expect the box to carry those packages. The free plan caps hosted
 concurrency at about 20 jobs, so a few full runs at once queue.
 
+When the box's network changes (its Wi-Fi link loses its address now and then), Chromium fails
+every pending request with `net::ERR_NETWORK_CHANGED`, loopback included (#3646). Off GitHub-hosted
+runners, the whole `@goat/web` suite of `test` (unit, browser and render tests) and the
+`apps/web` browser files of `test-changed` therefore run in a loopback-only network namespace
+through `.github/scripts/loopback-netns.sh`, which needs bubblewrap and fails rather than falling
+back to the host network. Server tests stay on the host: their root-or-self ownership checks cannot
+pass inside an unprivileged user namespace.
+
 Each `ci` matrix entry carries a `runner` pool from `.github/scripts/goat-ci-scope.cjs`: `windows`
 for `test-windows`, `hosted` for the short Node-only tasks in `HOSTED_TASKS` (`check`, `typecheck`
 and the small package suites), and `linux` for the heavy tasks (`test`, `test-packages`,
 `test-changed`, `test-ssh`, `test-desktop`, `test-memory-growth`, `build` and the server shards).
 `hosted` entries always take `ubuntu-24.04`, so short tasks never queue behind the pool, and
-`linux` entries take the lidge pool when it is enabled. The gate jobs `goat-scope`,
-`goat-screenshot-gate` and `goat-ci-result` take the pool on the same terms (kill switch and
-trust test, `ubuntu-24.04` otherwise), because a starved hosted queue left `goat-scope` waiting
-for minutes and no lidge task could start before it. They need only Node and git. `republish`
-waits on the real run and `refresh-republished` writes to Actions, so both stay on `ubuntu-24.04`
-with `connect-auth-postgres`, and the guard pins every `runs-on` value.
+`linux` entries take the lidge pool when it is enabled. `goat-scope`, `goat-screenshot-gate` and
+`goat-ci-result` run on `ubuntu-24.04`: on the pool these half-minute jobs queued behind its
+half-hour server shards, so a finished run waited 20 minutes for its verdict. The guard pins
+every `runs-on` value.
 
 goat-ci skips pull requests from forks for now, so a fork's pull request gets no `goat-ci-result`.
 To check one, a maintainer pushes its head to a branch in goat-si/goat and runs goat-ci there.
@@ -54,8 +60,14 @@ The server suite runs one file at a time, so its selected tests stay in `test-ch
 they fit one six-minute shard. More run as `test-server related` shards, one to four, or as the
 full suite when they carry half of its estimated time: one job of 248 server files hit the
 60-minute job limit (#1928).
-Documentation alone runs only `check`, and a change that selects no tests skips `test-changed`. The
-full suite runs on request: the `ci:full` label, or a manual run of the branch.
+Documentation alone runs only `check`, and a change that selects no tests skips `test-changed`. A
+selection whose file list passes 100 KB runs the full suite instead: `test-changed` receives the
+list in one environment string, which Linux caps at 128 KiB, and
+`packages/shared/src/testing/providerEnv.ts` alone selects every test file. `test-changed` then
+holds, as in every full run (`ci:full` and a manual run of lane `all` too), the test files that no
+suite of the matrix runs: those under `scripts` and `.github/scripts`, and those of a package
+without a test script.
+The full suite otherwise runs on request: the `ci:full` label, or a manual run of the branch.
 `goat-scope` always runs `node scripts/goat-rename.ts --check` before task selection, so new upstream product names fail `goat-ci-result`.
 
 The `ci:affected` label replaces the quick run with the tasks the changed files reach through the

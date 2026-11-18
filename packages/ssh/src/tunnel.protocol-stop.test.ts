@@ -1,6 +1,7 @@
 import { SSH_RUNTIME_PROTOCOL_VERSION } from "@goat/shared/sshRuntimeProtocol";
 import { ORCHESTRATION_PROTOCOL_VERSION } from "@goat/contracts";
 import { assert, describe, it } from "@effect/vitest";
+import * as NodeCrypto from "@effect/platform-node/NodeCrypto";
 import * as NodeServices from "@effect/platform-node/NodeServices";
 import * as NetService from "@goat/shared/Net";
 import * as HostProcess from "@goat/shared/HostProcess";
@@ -23,7 +24,11 @@ import {
   platform,
   arch,
 } from "./tunnel.fixture.ts";
-import { protocolExecutable, makeProtocolFixture } from "./tunnel.protocol.fixture.ts";
+import {
+  protocolExecutable,
+  makeProtocolFixture,
+  assertPickedFromReservedPort,
+} from "./tunnel.protocol.fixture.ts";
 import { awaitProtocolStop, synchronizeProtocolStop } from "./tunnel.protocol-stop.fixture.ts";
 
 describe.skipIf(HostProcess.Platform.defaultValue() === "win32")(
@@ -52,6 +57,7 @@ describe.skipIf(HostProcess.Platform.defaultValue() === "win32")(
           const before = yield* f.snapshot;
           const layer = Layer.mergeAll(
             NodeServices.layer,
+            NodeCrypto.layer,
             Layer.succeed(ChildProcessSpawner.ChildProcessSpawner, f.transport),
             Layer.succeed(FileSystem.FileSystem, f.observedFs),
             Layer.succeed(HttpClient.HttpClient, testHttpClient),
@@ -75,7 +81,10 @@ describe.skipIf(HostProcess.Platform.defaultValue() === "win32")(
             assert.notExists((yield* f.snapshot).pid);
           } else assert.deepEqual(yield* f.snapshot, before);
           assert.deepEqual(f.counters(), { uploads: 0, gh: 0, cacheReads: 0 });
-        }).pipe(Effect.provide(NodeServices.layer), Effect.scoped),
+        }).pipe(
+          Effect.provide(Layer.mergeAll(NodeServices.layer, NodeCrypto.layer)),
+          Effect.scoped,
+        ),
     );
 
     it.live(
@@ -92,6 +101,7 @@ describe.skipIf(HostProcess.Platform.defaultValue() === "win32")(
           let current = { ...f.runner, archiveVersion: String(f.runner.archiveVersion) };
           const layer = Layer.mergeAll(
             NodeServices.layer,
+            NodeCrypto.layer,
             Layer.succeed(ChildProcessSpawner.ChildProcessSpawner, f.transport),
             Layer.succeed(FileSystem.FileSystem, f.observedFs),
             Layer.succeed(HttpClient.HttpClient, testHttpClient),
@@ -156,7 +166,10 @@ describe.skipIf(HostProcess.Platform.defaultValue() === "win32")(
             );
           }).pipe(Effect.provide(layer), Effect.scoped);
           assert.deepEqual(f.counters(), { uploads: 0, gh: 0, cacheReads: 0 });
-        }).pipe(Effect.provide(NodeServices.layer), Effect.scoped),
+        }).pipe(
+          Effect.provide(Layer.mergeAll(NodeServices.layer, NodeCrypto.layer)),
+          Effect.scoped,
+        ),
     );
 
     it.live.each(["goat", ".install-complete"] as const)(
@@ -201,6 +214,7 @@ describe.skipIf(HostProcess.Platform.defaultValue() === "win32")(
           };
           const layer = Layer.mergeAll(
             NodeServices.layer,
+            NodeCrypto.layer,
             Layer.succeed(ChildProcessSpawner.ChildProcessSpawner, f.transport),
             Layer.succeed(FileSystem.FileSystem, f.observedFs),
             Layer.succeed(HttpClient.HttpClient, testHttpClient),
@@ -246,7 +260,10 @@ describe.skipIf(HostProcess.Platform.defaultValue() === "win32")(
             assert.deepEqual(f.counters(), { uploads: 0, gh: 0, cacheReads: 0 });
             assert.isFalse(yield* f.fs.exists(`${f.home}/.goat/runtime/goat/versions/9.9.9`));
           }).pipe(Effect.provide(layer), Effect.scoped);
-        }).pipe(Effect.provide(NodeServices.layer), Effect.scoped),
+        }).pipe(
+          Effect.provide(Layer.mergeAll(NodeServices.layer, NodeCrypto.layer)),
+          Effect.scoped,
+        ),
     );
 
     it.live("disconnect reports the real stop deadline and preserves ownership until exit", () =>
@@ -261,6 +278,7 @@ describe.skipIf(HostProcess.Platform.defaultValue() === "win32")(
         });
         const layer = Layer.mergeAll(
           NodeServices.layer,
+          NodeCrypto.layer,
           Layer.succeed(ChildProcessSpawner.ChildProcessSpawner, f.transport),
           Layer.succeed(FileSystem.FileSystem, f.observedFs),
           Layer.succeed(HttpClient.HttpClient, testHttpClient),
@@ -295,7 +313,7 @@ describe.skipIf(HostProcess.Platform.defaultValue() === "win32")(
             assert.isFalse(yield* f.fs.exists(`${f.state}/${file}`));
         }).pipe(Effect.provide(layer), Effect.scoped);
         assert.deepEqual(f.counters(), { uploads: 0, gh: 0, cacheReads: 0 });
-      }).pipe(Effect.provide(NodeServices.layer), Effect.scoped),
+      }).pipe(Effect.provide(Layer.mergeAll(NodeServices.layer, NodeCrypto.layer)), Effect.scoped),
     );
 
     it.live.each(
@@ -341,6 +359,7 @@ describe.skipIf(HostProcess.Platform.defaultValue() === "win32")(
           );
         const layer = Layer.mergeAll(
           NodeServices.layer,
+          NodeCrypto.layer,
           Layer.succeed(ChildProcessSpawner.ChildProcessSpawner, f.transport),
           Layer.succeed(FileSystem.FileSystem, f.observedFs),
           Layer.succeed(HttpClient.HttpClient, testHttpClient),
@@ -391,7 +410,7 @@ describe.skipIf(HostProcess.Platform.defaultValue() === "win32")(
           yield* Effect.sync(() => process.kill(f.pid, 0));
         }
         assert.deepEqual(f.counters(), { uploads: 0, gh: 0, cacheReads: 0 });
-      }).pipe(Effect.provide(NodeServices.layer), Effect.scoped),
+      }).pipe(Effect.provide(Layer.mergeAll(NodeServices.layer, NodeCrypto.layer)), Effect.scoped),
     );
 
     it.live.each(
@@ -435,6 +454,10 @@ describe.skipIf(HostProcess.Platform.defaultValue() === "win32")(
 if [ "$1" = - ] && [ "\${2:-}" = '${f.state}/port' ]; then
   printf 'pick-port\\n' >> "$HOME/.test/discovered-helpers"
   a=$1; b=$2; shift 3; set -- "$a" "$b" '${f.pickPort}' "$@"
+  picked="$('${process.execPath.replaceAll("'", "'\\''")}' "$@")" || exit $?
+  printf '%s\\n' "$picked" >> "$HOME/.test/pick-port-results"
+  printf '%s\\n' "$picked"
+  exit 0
 fi
 exec '${process.execPath.replaceAll("'", "'\\''")}' "$@"
 `,
@@ -460,6 +483,7 @@ export PATH
           const layer = (nodeScriptPath: string, leaveRemoteServerRunning: boolean) =>
             Layer.mergeAll(
               NodeServices.layer,
+              NodeCrypto.layer,
               Layer.succeed(ChildProcessSpawner.ChildProcessSpawner, f.transport),
               Layer.succeed(FileSystem.FileSystem, f.observedFs),
               Layer.succeed(HttpClient.HttpClient, testHttpClient),
@@ -479,8 +503,13 @@ export PATH
           }).pipe(Effect.provide(layer(entry, true)), Effect.scoped);
           const pid = (yield* f.fs.readFileString(`${f.state}/pid`)).trim();
           const port = (yield* f.fs.readFileString(`${f.state}/port`)).trim();
-          assert.equal(port, String(f.pickPort));
-          const identity = `${entry} serve --host 127.0.0.1 --port ${port} --base-dir ${f.home}/.goat\n`;
+          const picks = (yield* f.fs.readFileString(`${f.test}/pick-port-results`))
+            .trim()
+            .split("\n");
+          const picked = picks[picks.length - 1] ?? "";
+          assertPickedFromReservedPort(f.pickPort, picked);
+          assert.equal(port, picked);
+          const identity = `${entry} serve --host 127.0.0.1 --port ${picked} --base-dir ${f.home}/.goat\n`;
           assert.equal(yield* f.fs.readFileString(`${f.state}/identity`), identity);
           // Read real ps: the shim execs the native binary, not its own pathname.
           const ps = yield* f.realSpawner.spawn(
@@ -490,7 +519,10 @@ export PATH
           assert.equal(Number(yield* ps.exitCode), 0);
           assert.equal(command, `${shim ? process.execPath : "node"} ${identity.trim()}`);
           if (shim)
-            assert.equal(yield* f.fs.readFileString(`${f.test}/discovered-helpers`), "pick-port\n");
+            assert.equal(
+              yield* f.fs.readFileString(`${f.test}/discovered-helpers`),
+              "pick-port\n".repeat(picks.length),
+            );
           yield* Effect.gen(function* () {
             const manager = yield* SshTunnel.SshEnvironmentManager;
             yield* manager.ensureEnvironment(uploadTarget);
@@ -504,7 +536,10 @@ export PATH
             assert.isFalse(yield* f.fs.exists(`${f.state}/${file}`));
           assert.include(yield* f.fs.readFileString(`${f.test}/events`), '"type":"stop"');
           assert.deepEqual(f.counters(), { uploads: 0, gh: 0, cacheReads: 0 });
-        }).pipe(Effect.provide(NodeServices.layer), Effect.scoped),
+        }).pipe(
+          Effect.provide(Layer.mergeAll(NodeServices.layer, NodeCrypto.layer)),
+          Effect.scoped,
+        ),
     );
   },
 );

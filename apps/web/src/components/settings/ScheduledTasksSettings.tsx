@@ -44,6 +44,8 @@ import {
   DEFAULT_WEBHOOK_PROMPT,
   parseWebhookFilterDrafts,
 } from "@goat/client-runtime/scheduled-task-webhook";
+import { scheduleTimeZoneLabel } from "@goat/client-runtime/scheduledTasks";
+
 import {
   MAX_WEBHOOK_DELIVERY_AGE_MINUTES,
   MIN_SCHEDULED_TASK_INTERVAL_MS,
@@ -98,6 +100,9 @@ import {
   scheduledTaskDefaultModel,
   taskToDraft,
   type DraftState,
+  isBotRoutineDraft,
+  withProject,
+  withThreadMode,
   workspaceStrategyFromDraft,
   type ScheduleMode,
   type WorkspaceMode,
@@ -125,6 +130,7 @@ import { Switch } from "../ui/switch";
 import { Textarea } from "../ui/textarea";
 import { stackedThreadToast, toastManager } from "../ui/toast";
 import { Tooltip, TooltipPopup, TooltipTrigger } from "../ui/tooltip";
+import { searchableSetting } from "./settingsSearch";
 import {
   SettingsPageContainer,
   SettingsRow,
@@ -151,8 +157,6 @@ function splitModelKey(value: string): ModelSelection | null {
     model: value.slice(index + 1),
   };
 }
-
-export { scheduleLabel };
 
 /** formatRelativeTime handles only the past; upcoming runs need future labels. */
 function relativeLabel(value: string | null, nowMs: number): string {
@@ -254,7 +258,7 @@ export function ScheduledTasksSettings(target: {
   return (
     <SettingsPageContainer>
       <SettingsSection
-        title="Scheduled tasks"
+        {...searchableSetting("scheduled-tasks")}
         variant="plain"
         headerAction={
           <Button
@@ -349,6 +353,7 @@ function ScheduledTaskEnvironmentList({
     return {
       environment,
       connected: index >= 0,
+      timeZone: data?.timeZone,
       tasks: data?.tasks.filter((task) =>
         matchesScheduledTaskScope(scope, environment.environmentId, task.projectId),
       ),
@@ -383,7 +388,7 @@ function ScheduledTaskEnvironmentList({
 
   return (
     <SettingsGroup>
-      {populated.map(({ environment, tasks }) => {
+      {populated.map(({ environment, tasks, timeZone }) => {
         const { primary, secondary } = settingsScopeEnvironmentLabels(environment, environments);
         return (
           <div key={environment.environmentId} className="divide-y divide-border/50">
@@ -407,6 +412,7 @@ function ScheduledTaskEnvironmentList({
                 key={task.id}
                 environmentId={environment.environmentId}
                 task={task}
+                timeZone={timeZone}
                 onEdit={() => onEdit(environment.environmentId, task)}
               />
             ))}
@@ -533,6 +539,7 @@ function ScheduledTaskEnvironmentSection({
                 key={task.id}
                 environmentId={environment.environmentId}
                 task={task}
+                timeZone={tasksQuery.data?.timeZone}
                 onEdit={() => onEdit(environment.environmentId, task)}
               />
             ))
@@ -546,10 +553,12 @@ function ScheduledTaskEnvironmentSection({
 function ScheduledTaskRow({
   environmentId,
   task,
+  timeZone,
   onEdit,
 }: {
   readonly environmentId: EnvironmentId;
   readonly task: ScheduledTask;
+  readonly timeZone: string | undefined;
   readonly onEdit: () => void;
 }) {
   const canOperate = useAtomValue(
@@ -594,7 +603,7 @@ function ScheduledTaskRow({
       status={
         <div className="flex flex-wrap items-center gap-2">
           <span>
-            {scheduleLabel(task.schedule)} ·{" "}
+            {scheduleLabel(task.schedule, timeZone, task.nextRunAt)} ·{" "}
             {!task.enabled ? (
               "Paused"
             ) : isWebhook ? (
@@ -989,6 +998,8 @@ function ScheduledTaskEditorForm({
   const environment = useEnvironment(environmentId);
   const connected =
     environment?.connection.phase === "connected" && environment.serverConfig !== null;
+  const offersThreadModes =
+    environment?.serverConfig?.environment?.capabilities?.scheduledTaskThreadModes === true;
   const tasksQuery = useEnvironmentQuery(
     connected ? serverEnvironment.scheduledTasksLive({ environmentId, input: {} }) : null,
   );
@@ -1029,14 +1040,11 @@ function ScheduledTaskEditorForm({
     draft.editingId !== null &&
     tasksQuery.data !== null &&
     !tasksQuery.data.tasks.some((entry) => entry.id === draft.editingId);
+  const runAtZone = scheduleTimeZoneLabel(tasksQuery.data?.timeZone);
   const liveTask = tasksQuery.data
     ? (tasksQuery.data.tasks.find((entry) => entry.id === draft.editingId) ?? null)
     : task;
-  // Still bound to its GOAT Bot conversation; moved to new threads it is an ordinary task again.
-  const botRoutine =
-    liveTask?.goatBotRoutine === true &&
-    draft.threadId !== "" &&
-    draft.threadId === liveTask.threadId;
+  const botRoutine = isBotRoutineDraft(liveTask, draft);
   const selectedProjectId = draft.projectId || projects[0]?.id || "";
   const selectedProject = projects.find((project) => project.id === selectedProjectId);
   const instanceEntries = sortProviderInstanceEntries(
@@ -1160,6 +1168,7 @@ function ScheduledTaskEditorForm({
         : {}),
       schedule,
       threadId: draft.threadId ? (draft.threadId as ThreadId) : null,
+      ...(offersThreadModes ? { threadMode: draft.threadMode } : {}),
       ...context,
       runtimeMode: draft.runtimeMode,
       interactionMode: draft.interactionMode,
@@ -1292,6 +1301,12 @@ function ScheduledTaskEditorForm({
           <ScheduledTaskDestination
             environmentId={environmentId}
             threadId={draft.threadId ? (draft.threadId as ThreadId) : null}
+            threadMode={draft.threadMode}
+            onThreadModeChange={
+              offersThreadModes
+                ? (mode) => setDraft((current) => withThreadMode(current, mode, liveTask))
+                : undefined
+            }
             botRoutine={botRoutine}
           />
 
@@ -1302,7 +1317,9 @@ function ScheduledTaskEditorForm({
                   <Select
                     value={selectedProjectId}
                     onValueChange={(projectId) =>
-                      setDraft((current) => ({ ...current, projectId: projectId ?? "" }))
+                      setDraft((current) =>
+                        withProject(current, projectId ?? "", offersThreadModes ? liveTask : null),
+                      )
                     }
                   >
                     <SelectTrigger size="sm" id="scheduled-task-project">
@@ -1634,6 +1651,9 @@ function ScheduledTaskEditorForm({
                   <Input
                     type="time"
                     id="scheduled-task-time"
+                    aria-describedby={
+                      runAtZone === undefined ? undefined : "scheduled-task-time-zone"
+                    }
                     nativeInput
                     className="w-32"
                     value={draft.timeOfDay}
@@ -1641,6 +1661,11 @@ function ScheduledTaskEditorForm({
                       setDraft((current) => ({ ...current, timeOfDay: event.target.value }))
                     }
                   />
+                  {runAtZone === undefined ? null : (
+                    <span id="scheduled-task-time-zone" className="text-xs text-muted-foreground">
+                      {runAtZone}
+                    </span>
+                  )}
                   <span className="text-xs text-muted-foreground">on</span>
                 </div>
                 <ToggleGroup

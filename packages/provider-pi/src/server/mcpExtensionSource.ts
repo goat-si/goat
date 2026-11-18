@@ -67,6 +67,7 @@ const GOAT_CALL_READ_TARGETS = [
 
 export const PI_GOAT_MCP_EXTENSION_SOURCE = `\
 import { stripFrontmatter, type ExtensionAPI, type ExtensionContext } from "@earendil-works/pi-coding-agent";
+import * as NodeCrypto from "node:crypto";
 import * as NodeFSP from "node:fs/promises";
 import * as NodePath from "node:path";
 import type { ChildProcess } from "node:child_process";
@@ -132,12 +133,19 @@ function runtimeMode(): RuntimeMode {
     : "full-access";
 }
 
+// GOAT keys "Always allow this session" on this text, so a cut summary ends with the
+// full input's hash: calls that differ only past the cut get separate grants.
 function toolInputSummary(input: unknown): string {
+  let text: string;
   try {
-    return JSON.stringify(input, null, 2).slice(0, 4_000);
+    text = JSON.stringify(input, null, 2) ?? String(input);
   } catch {
-    return String(input).slice(0, 4_000);
+    text = String(input);
   }
+  if (text.length <= 4_000) return text;
+  const hash = NodeCrypto.createHash("sha256").update(text, "utf16le").digest("hex");
+  return text.slice(0, 4_000) + "\\n... " + (text.length - 4_000) +
+    " more characters not shown (sha256 " + hash + ")";
 }
 
 function parseSseOrJson(body: string, contentType: string): JsonRpcResponse {

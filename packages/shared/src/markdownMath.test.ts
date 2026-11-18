@@ -29,6 +29,18 @@ function text(markdown: string) {
 }
 
 describe("chat math parsing", () => {
+  it("skips traversing a supplied syntax tree for a lone skill token", () => {
+    let reads = 0;
+    const tree = {
+      type: "root" as const,
+      get children() {
+        reads += 1;
+        return [];
+      },
+    };
+    expect(markdownMathRanges("Use $browser today", tree)).toEqual([]);
+    expect(reads).toBe(0);
+  });
   it("keeps GFM autolink destinations intact while restoring literal dollars", () => {
     const source = "Query www.example.com/?$select=id and $x$.";
     const link = collect(parse(source)).find((node) => node.type === "link");

@@ -345,6 +345,7 @@ export const recoverServiceOnboardingOffer = <R>(
       UserError: (error) =>
         Console.warn(error.userMessage ?? error.message).pipe(Effect.as("skipped" as const)),
       BootServiceCommandError: reportServiceSetupFailure,
+      BootServiceBaseDirUnsupportedError: reportServiceSetupFailure,
       BootServiceInstallError: reportServiceSetupFailure,
       BootServicePrerequisiteError: reportServiceSetupFailure,
       BootServiceUpdatePendingError: reportServiceSetupFailure,

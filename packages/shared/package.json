@@ -3,6 +3,10 @@
   "private": true,
   "type": "module",
   "exports": {
+    "./forkInScope": {
+      "types": "./src/forkInScope.ts",
+      "import": "./src/forkInScope.ts"
+    },
     "./sshRuntimeProtocolComparison": {
       "types": "./src/sshRuntimeProtocolComparison.ts",
       "import": "./src/sshRuntimeProtocolComparison.ts"
@@ -62,6 +66,10 @@
     "./actionOutcomeSafety": {
       "types": "./src/actionOutcomeSafety.ts",
       "import": "./src/actionOutcomeSafety.ts"
+    },
+    "./envTrampoline": {
+      "types": "./src/envTrampoline.ts",
+      "import": "./src/envTrampoline.ts"
     },
     "./opencodexCompat": {
       "types": "./src/opencodexCompat.ts",
@@ -503,6 +511,10 @@
       "types": "./src/testing/loopbackHttpServer.ts",
       "import": "./src/testing/loopbackHttpServer.ts"
     },
+    "./testing/nodeServicesWithCrypto": {
+      "types": "./src/testing/nodeServicesWithCrypto.ts",
+      "import": "./src/testing/nodeServicesWithCrypto.ts"
+    },
     "./testing/symlinks": {
       "types": "./src/testing/symlinks.ts",
       "import": "./src/testing/symlinks.ts"
@@ -518,6 +530,10 @@
     "./httpReadiness": {
       "types": "./src/httpReadiness.ts",
       "import": "./src/httpReadiness.ts"
+    },
+    "./databaseMigrationLog": {
+      "types": "./src/databaseMigrationLog.ts",
+      "import": "./src/databaseMigrationLog.ts"
     },
     "./devHome": {
       "types": "./src/devHome.ts",
@@ -682,6 +698,10 @@
     "./generatedImageMarkdown": {
       "types": "./src/generatedImageMarkdown.ts",
       "import": "./src/generatedImageMarkdown.ts"
+    },
+    "./markdownAssistantInsights": {
+      "types": "./src/markdownAssistantInsights.ts",
+      "import": "./src/markdownAssistantInsights.ts"
     },
     "./markdownPipeline": {
       "types": "./src/markdownPipeline.ts",

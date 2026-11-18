@@ -1,3 +1,4 @@
+import * as NodeCrypto from "@effect/platform-node/NodeCrypto";
 import * as NodeServices from "@effect/platform-node/NodeServices";
 import { expect, it } from "@effect/vitest";
 import * as Deferred from "effect/Deferred";
@@ -16,7 +17,7 @@ const testLayer = (fileSystem: SweepFileSystem) =>
   Layer.merge(PendingAttachmentSweep.layerWithFileSystem(fileSystem), ServerSecretStore.layer).pipe(
     Layer.provideMerge(AttachmentFileLeases.layer),
     Layer.provideMerge(ServerConfig.layerTest(process.cwd(), { prefix: "goat-sweep-owner-" })),
-    Layer.provideMerge(NodeServices.layer),
+    Layer.provideMerge(Layer.mergeAll(NodeServices.layer, NodeCrypto.layer)),
   );
 
 it.effect(

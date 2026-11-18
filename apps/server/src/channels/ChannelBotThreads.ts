@@ -22,6 +22,7 @@ import {
   type ChannelSearchBotTasksResult,
   type BotWorkResult,
   GoatBotWorkKind,
+  isGoatBotSessionThreadId,
   MAIN_BOT_ID,
   ProjectId,
 } from "@goat/contracts";
@@ -38,12 +39,27 @@ import * as ChannelLedger from "./ChannelLedger.ts";
 import * as ChannelChildWorkStore from "./channelChildWorkStore.ts";
 import { listChildWork } from "./listChildWork.ts";
 import {
+  botRowPullRequests,
+  observedPullRequestSource,
+  threadPullRequestColumns,
+  threadPullRequestSource,
+  type PullRequestSource,
+  type ThreadPullRequestColumns,
+} from "./channelBotRowPullRequests.ts";
+import {
   decodeHistoryCursor,
   launchesStatement,
   quietMessagesStatement,
   readHistoryPage,
 } from "./channelBotThreadHistory.ts";
 import * as TaskViews from "./channelTaskViews.ts";
+import {
+  makeMarkWarnings,
+  MessageMarkLookup,
+  messageMarkKey,
+  readMessageMark,
+  taskRowUnread,
+} from "./channelTaskMessageMarks.ts";
 import { makeTaskRetry } from "./channelTaskRetry.ts";
 import { cutBotWorkTitle, searchBotTasks as searchTasks } from "./channelBotTaskSearch.ts";
 
@@ -53,7 +69,7 @@ const decodeChild = Schema.decodeUnknownSync(Schema.fromJsonString(ChannelChildW
 const isWorkKind = Schema.is(GoatBotWorkKind);
 const encodeJson = Schema.encodeSync(Schema.fromJsonString(Schema.Unknown));
 const failed = () => new ChannelGatewayError({ reason: "persistence_failed" });
-interface ChildRow {
+interface ChildRow extends ThreadPullRequestColumns {
   readonly key?: string;
   readonly value_json: string;
   readonly title: string | null;
@@ -99,6 +115,9 @@ const make = Effect.gen(function* () {
   const views = yield* TaskViews.ChannelTaskViews;
   const childWork = yield* ChannelChildWorkStore.ChannelChildWorkStore;
   const retry = yield* makeTaskRetry;
+  const warnMark = makeMarkWarnings();
+  // Home re-reads the current list often; one unreadable thread warns once.
+  const warnPullRequests = makeMarkWarnings("GOAT Bot work row pull request");
   /** Rows for these tasks; history caps each task's launches and lists turns by their threads. */
   const rowsFor = Effect.fn("ChannelBotThreads.rows")(function* (
     owner: ChannelConnectionOwner,
@@ -136,14 +155,50 @@ const make = Effect.gen(function* () {
     ).pipe(Effect.mapError(failed));
     const countMap = new Map(countsByTask.map((item) => [item.task_id, item.count]));
     const taskIds = encodeJson(tasks.map((task) => task.taskId));
+    const markKeys = encodeJson(tasks.map((task) => messageMarkKey(owner.ownerId, task.taskId)));
+    // Without marks every row keeps the earlier rule: unread from the task's last update.
+    const markRows = yield* (yield* MessageMarkLookup)(markKeys).pipe(
+      Effect.provideService(SqlClient.SqlClient, sql),
+      Effect.catch((error) =>
+        warnMark("lookup:" + owner.ownerId, "channel task message marks unreadable", {
+          ownerId: owner.ownerId,
+          error,
+        }).pipe(Effect.as([])),
+      ),
+    );
+    const marks = new Map(markRows.map((row) => [row.key, row.value_json]));
     const launchLimit = options.launchLimit;
+    const listsTask = (task: ChannelTask) =>
+      !options.unknownView && !options.threadsOnly?.has(task.taskId);
+    // Another machine's worker is not this projection's thread with the same id, and a session
+    // thread serves several tasks, so its links belong to none of them.
+    const localWorkerThreadId = (task: ChannelTask) =>
+      task.worker === undefined ||
+      task.worker.host !== undefined ||
+      isGoatBotSessionThreadId(task.worker.threadId)
+        ? undefined
+        : task.worker.threadId;
+    const workerIds = [
+      ...new Set(
+        tasks.flatMap((task) => (listsTask(task) ? (localWorkerThreadId(task) ?? []) : [])),
+      ),
+    ];
+    const workerRows =
+      workerIds.length === 0
+        ? []
+        : yield* sql<{ readonly thread_id: string } & ThreadPullRequestColumns>`SELECT p.thread_id,
+            ${threadPullRequestColumns(sql)}
+            FROM orchestration_v2_projection_threads p WHERE p.thread_id IN ${sql.in(workerIds)}`.pipe(
+            Effect.mapError(failed),
+          );
+    const workerColumns = new Map(workerRows.map((row) => [row.thread_id, row]));
     // Truncation comes from the raw lookahead, before decoding, so a record that fails to decode
     // cannot hide that a task has more launches than the page lists.
     const truncated = new Set<string>();
     const childRows: ReadonlyArray<ChildRow> =
       launchLimit === undefined
         ? yield* sql<ChildRow>`SELECT s.value_json, p.title, p.project_id,
-        json_extract(p.payload_json, '$.launchedBy.workKind') AS work_kind
+        json_extract(p.payload_json, '$.launchedBy.workKind') AS work_kind, ${threadPullRequestColumns(sql)}
       FROM channel_runtime_state s
       JOIN json_each(${taskIds}) ids
         ON s.key >= ('child-work:' || ids.value || ':') AND s.key < ('child-work:' || ids.value || ';')
@@ -175,6 +230,7 @@ const make = Effect.gen(function* () {
       title: item.title,
       projectId: item.project_id,
       recordedKind: isWorkKind(item.work_kind) ? item.work_kind : undefined,
+      pullRequestColumns: item,
     });
     let skippedLaunches = 0;
     const children =
@@ -203,14 +259,47 @@ const make = Effect.gen(function* () {
     const launchesTruncated = tasks.flatMap((task) =>
       truncated.has(task.taskId) ? [task.taskId] : [],
     );
+    // A thread whose links cannot be read leaves the row to its other sources.
+    const unreadablePullRequests: Array<string> = [];
+    const nowMs = DateTime.toEpochMillis(yield* DateTime.now);
+    const readSource = (columns: ThreadPullRequestColumns | undefined, threadId: string) => {
+      const source = columns === undefined ? undefined : threadPullRequestSource(columns, nowMs);
+      if (source !== "unreadable") return source === undefined ? [] : [source];
+      unreadablePullRequests.push(threadId);
+      return [];
+    };
     for (const task of tasks) {
-      if (!options.unknownView && !options.threadsOnly?.has(task.taskId)) {
+      if (listsTask(task)) {
         const view = viewsByTask.get(task.taskId) ?? {
           taskId: task.taskId,
           pinnedAt: null,
           doneAt: null,
           readThrough: null,
         };
+        const storedMark = marks.get(messageMarkKey(owner.ownerId, task.taskId));
+        const mark = storedMark === undefined ? undefined : readMessageMark(storedMark);
+        if (storedMark !== undefined && mark === undefined)
+          yield* warnMark(
+            task.taskId,
+            "channel task message mark unreadable; using the last update",
+            {
+              taskId: task.taskId,
+            },
+          );
+        const workerThreadId = localWorkerThreadId(task);
+        const threadSources: Array<PullRequestSource> = [
+          ...(workerThreadId === undefined
+            ? []
+            : readSource(workerColumns.get(workerThreadId), workerThreadId)),
+          // The join reads only a local launch's thread.
+          ...children.flatMap(({ child, pullRequestColumns }) =>
+            child.ownerId === owner.ownerId &&
+            child.taskId === task.taskId &&
+            child.destination?.threadId !== undefined
+              ? readSource(pullRequestColumns, child.destination.threadId)
+              : [],
+          ),
+        ];
         rows.push({
           kind: "task",
           task: {
@@ -223,8 +312,7 @@ const make = Effect.gen(function* () {
           },
           view,
           lastActivityAt: task.updatedAt,
-          unread:
-            view.readThrough === null || Date.parse(task.updatedAt) > Date.parse(view.readThrough),
+          unread: taskRowUnread(task.updatedAt, view.readThrough, mark),
           mainMessagesSinceQuiet: countMap.get(task.taskId) ?? 0,
           // A worker on another machine is not a thread this machine's rows can open.
           ...(task.worker === undefined || task.worker.host !== undefined
@@ -235,6 +323,7 @@ const make = Effect.gen(function* () {
                   threadId: task.worker.threadId,
                 },
               }),
+          ...botRowPullRequests(threadSources, observedPullRequestSource(task)),
         });
       }
       for (const { child, title, projectId, recordedKind } of children) {
@@ -278,7 +367,7 @@ const make = Effect.gen(function* () {
         });
       }
     }
-    return { rows, remoteWork, launchesTruncated, skippedLaunches };
+    return { rows, remoteWork, launchesTruncated, skippedLaunches, unreadablePullRequests };
   });
   const mainMessageCount = Effect.fn("ChannelBotThreads.mainMessageCount")(function* (
     owner: ChannelConnectionOwner,
@@ -356,6 +445,12 @@ const make = Effect.gen(function* () {
       Effect.mapError(failed),
     );
     const built = yield* rowsFor(owner, environmentId, viewsByTask, tasks, {});
+    for (const threadId of built.unreadablePullRequests)
+      yield* warnPullRequests(
+        threadId,
+        "GOAT Bot work rows left out a thread's pull requests they could not read",
+        { botId, threadId },
+      );
     return {
       rows: built.rows,
       mainMessageCount: messages,
@@ -394,13 +489,18 @@ const make = Effect.gen(function* () {
       threadsOnly: page.threadsOnly,
       launchLimit: CHANNEL_BOT_THREADS_HISTORY_LAUNCHES,
     });
-    const partial = page.skippedTasks > 0 || built.skippedLaunches > 0 || skippedViews > 0;
+    const partial =
+      page.skippedTasks > 0 ||
+      built.skippedLaunches > 0 ||
+      skippedViews > 0 ||
+      built.unreadablePullRequests.length > 0;
     if (partial)
       yield* Effect.logWarning("GOAT Bot task history left out records it could not read", {
         botId,
         skippedTasks: page.skippedTasks,
         skippedLaunches: built.skippedLaunches,
         skippedViews,
+        skippedPullRequestThreads: built.unreadablePullRequests.length,
       });
     return {
       rows: built.rows,
@@ -518,7 +618,7 @@ const make = Effect.gen(function* () {
       ),
       remoteWork: built.remoteWork,
       launchesTruncated: built.launchesTruncated.length > 0,
-      partial: !known || built.skippedLaunches > 0,
+      partial: !known || built.skippedLaunches > 0 || built.unreadablePullRequests.length > 0,
     };
   });
   const searchBotTasks = Effect.fn("ChannelBotThreads.searchTasks")(function* (

@@ -88,7 +88,8 @@ function sameConnection(
     left.failure?.kind === right.failure?.kind &&
     left.failure?.reason === right.failure?.reason &&
     left.failure?.detail === right.failure?.detail &&
-    left.failure?.traceId === right.failure?.traceId
+    left.failure?.traceId === right.failure?.traceId &&
+    left.failure?.sessionEnded === right.failure?.sessionEnded
   );
 }
 

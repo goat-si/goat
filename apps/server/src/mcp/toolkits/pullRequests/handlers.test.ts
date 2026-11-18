@@ -2,6 +2,7 @@ import {
   ProjectId,
   ThreadId,
   PullRequestOperationError,
+  PullRequestUnavailableError,
   type PullRequestChecks,
   SourceControlProviderKind,
 } from "@goat/contracts";
@@ -149,6 +150,24 @@ describe("pull request toolkit handlers", () => {
       expect(yield* Ref.get(harness.commands)).toMatchObject([
         { type: "thread.pull-request.watch", number: 3, watching: false },
       ]);
+    }),
+  );
+
+  it.effect("watch_pull_request reports a host the server cannot reach and saves nothing", () =>
+    Effect.gen(function* () {
+      const missing = new PullRequestUnavailableError({
+        reason: "cli-missing",
+        provider: SourceControlProviderKind.make("github"),
+      });
+      const harness = yield* makeHarness({
+        thread: makeThread([]),
+        service: { summary: () => Effect.fail(missing) },
+      });
+      const error = yield* harness
+        .call("watch_pull_request", { repository: "sample-tools/goat", number: 4 })
+        .pipe(Effect.flip);
+      expect(error).toMatchObject({ _tag: "PullRequestUnavailableError", reason: "cli-missing" });
+      expect(yield* Ref.get(harness.commands)).toEqual([]);
     }),
   );
 

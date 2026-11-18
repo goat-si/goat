@@ -1,18 +1,36 @@
+import { assert } from "@effect/vitest";
 import * as Effect from "effect/Effect";
 import * as FileSystem from "effect/FileSystem";
 import * as Path from "effect/Path";
+import * as Schema from "effect/Schema";
 import * as SqlClient from "effect/sql/SqlClient";
 import * as NodeSqliteClient from "@goat/shared/nodeSqliteClient";
 
 import { runMigrations } from "../src/persistence/Migrations.ts";
 
-export const withDatabase = <A, E>(
+const scriptsSchema = Schema.fromJsonString(
+  Schema.Array(
+    Schema.Struct({
+      id: Schema.String,
+      name: Schema.String,
+      command: Schema.String,
+      icon: Schema.String,
+      runOnWorktreeCreate: Schema.Boolean,
+      runOnSettle: Schema.optional(Schema.Boolean),
+    }),
+  ),
+);
+const encodeScripts = Schema.encodeSync(scriptsSchema);
+const decodeScripts = Schema.decodeUnknownSync(scriptsSchema);
+
+export const withDatabase = <A, E, R>(
   databasePath: string,
-  effect: Effect.Effect<A, E, SqlClient.SqlClient>,
+  effect: Effect.Effect<A, E, R | SqlClient.SqlClient>,
 ) => effect.pipe(Effect.provide(NodeSqliteClient.layer({ filename: databasePath })));
 
 export const createFixtureSource = Effect.fn("createMigrateDevDbFixtureSource")(function* (
   baseDir: string,
+  toMigrationInclusive?: number,
 ) {
   const fs = yield* FileSystem.FileSystem;
   const path = yield* Path.Path;
@@ -23,13 +41,32 @@ export const createFixtureSource = Effect.fn("createMigrateDevDbFixtureSource")(
     databasePath,
     Effect.gen(function* () {
       const sql = yield* SqlClient.SqlClient;
-      yield* runMigrations();
-      yield* sql`INSERT INTO memory_items_fts (rowid, body) VALUES (42, 'synthetic searchable memory')`;
+      yield* runMigrations({ toMigrationInclusive });
+      // GOAT's tables exist only on a fully migrated source.
+      const goatSchema = toMigrationInclusive === undefined;
+      if (goatSchema)
+        yield* sql`INSERT INTO memory_items_fts (rowid, body) VALUES (42, 'synthetic searchable memory')`;
 
       yield* sql`INSERT INTO projection_projects
         (project_id, title, workspace_root, scripts_json, created_at, updated_at, deleted_at)
         VALUES
-        ('project-kept', 'Kept', '/tmp/kept', '[]', '2026-08-01', '2026-08-01', NULL),
+        ('project-kept', 'Kept', '/tmp/kept', ${encodeScripts([
+          {
+            id: "lint",
+            name: "Lint",
+            command: "vp lint",
+            icon: "lint",
+            runOnWorktreeCreate: false,
+          },
+          {
+            id: "teardown",
+            name: "Teardown",
+            command: "./teardown",
+            icon: "configure",
+            runOnWorktreeCreate: false,
+            runOnSettle: true,
+          },
+        ])}, '2026-08-01', '2026-08-01', NULL),
         ('project-deleted', 'Deleted', '/tmp/deleted', '[]', '2026-08-01', '2026-08-02', '2026-08-02')`;
 
       const forkPayload =
@@ -93,7 +130,9 @@ export const createFixtureSource = Effect.fn("createMigrateDevDbFixtureSource")(
         VALUES ('delivery-1', 'task-1', 'key-1', 1900000000000, '{}', '{}', '[]')`;
       yield* sql`INSERT INTO auth_sessions (session_id, subject, scopes, method, issued_at, expires_at)
         VALUES ('session-1', 'user', '[]', 'pairing', '2026-08-01', '2027-08-01')`;
-      for (const threadId of ["stopped-thread", "running-thread", "settled-thread"] as const) {
+      for (const threadId of goatSchema
+        ? (["stopped-thread", "running-thread", "settled-thread"] as const)
+        : []) {
         const correlationId = `corr-${threadId}`;
         yield* sql`INSERT INTO remote_report_bindings
           (thread_id, correlation_id, origin_label, origin_thread_id, read_key_hash, last_sequence, created_at)
@@ -116,4 +155,36 @@ export const createFixtureSource = Effect.fn("createMigrateDevDbFixtureSource")(
     }),
   );
   return databasePath;
+});
+
+export const assertCopiedScripts = Effect.fn("assertCopiedScripts")(function* (
+  source: string,
+  destination: string,
+  expected: string,
+) {
+  assert.equal(destination, expected);
+  const read = (database: string) =>
+    withDatabase(
+      database,
+      Effect.gen(function* () {
+        const sql = yield* SqlClient.SqlClient;
+        const [project] = yield* sql<{
+          scripts_json: string;
+        }>`SELECT scripts_json FROM projection_projects WHERE project_id = 'project-kept'`;
+        return decodeScripts(project?.scripts_json ?? "[]");
+      }),
+    );
+  const scripts = yield* read(source);
+  const copied = yield* read(destination);
+  assert.deepStrictEqual(copied, [
+    { id: "lint", name: "Lint", command: "vp lint", icon: "lint", runOnWorktreeCreate: false },
+    {
+      id: "teardown",
+      name: "Teardown",
+      command: "./teardown",
+      icon: "configure",
+      runOnWorktreeCreate: false,
+    },
+  ]);
+  assert.isTrue(scripts[1]?.runOnSettle);
 });

@@ -1,7 +1,8 @@
 import type { EnvironmentMachineKind } from "@goat/contracts";
 import { GOAT_HOME_DIR_NAME } from "@goat/shared/goatHome";
 import * as HostProcess from "@goat/shared/HostProcess";
-import * as Crypto from "effect/Crypto";
+import * as SecureRandom from "effect/crypto/SecureRandom";
+import * as Digest from "effect/crypto/Digest";
 import * as Effect from "effect/Effect";
 import * as Hex from "effect/encoding/Hex";
 import * as FileSystem from "effect/FileSystem";
@@ -189,9 +190,9 @@ const readOsMachineIdentifier = Effect.fn("readOsMachineIdentifier")(function* (
 });
 
 const hashIdentity = Effect.fn("hashServerMachineIdentity")(function* (value: string) {
-  const crypto = yield* Crypto.Crypto;
-  const digest = yield* crypto
-    .digest("SHA-256", new TextEncoder().encode(value))
+  const digester = yield* Digest.Digest;
+  const digest = yield* digester
+    .digest(Digest.sha256, new TextEncoder().encode(value))
     .pipe(Effect.orElseSucceed(() => null));
   return digest === null ? null : Hex.encode(digest).slice(0, 32);
 });
@@ -240,11 +241,11 @@ export const ensureServerMachineNonce = Effect.fn("ensureServerMachineNonce")(fu
   directory: string,
 ) {
   const fileSystem = yield* FileSystem.FileSystem;
-  const crypto = yield* Crypto.Crypto;
+  const random = yield* SecureRandom.SecureRandom;
   const file = yield* nonceFile(directory);
   // Link a complete file into place so a racing server sees nothing or the winner's nonce.
   const create = Effect.gen(function* () {
-    const fresh = Hex.encode(yield* crypto.randomBytes(16));
+    const fresh = Hex.encode(yield* random.randomBytes(16));
     const staged = file + "." + fresh;
     yield* fileSystem.makeDirectory(directory, { recursive: true });
     yield* fileSystem.writeFileString(staged, fresh + "\n");

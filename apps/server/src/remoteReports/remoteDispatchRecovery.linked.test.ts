@@ -6,13 +6,14 @@ import * as Layer from "effect/Layer";
 import * as SqlClient from "effect/sql/SqlClient";
 import { liveThreadShell } from "../mcp/McpToolAccess.testkit.ts";
 import * as Threads from "../orchestration-v2/ThreadManagementService.ts";
-import Migration0062 from "../persistence/Migrations/081_RemoteReports.ts";
-import Migration0063 from "../persistence/Migrations/082_RemoteDispatches.ts";
-import Migration0065 from "../persistence/Migrations/084_RemoteDispatchQuestions.ts";
-import Migration0068 from "../persistence/Migrations/086_RemoteReportRelay.ts";
-import Migration0073 from "../persistence/Migrations/091_MemoryTaskGrantCeiling.ts";
-import Migration0089 from "../persistence/Migrations/104_RemoteDispatchObservation.ts";
-import Migration0101 from "../persistence/Migrations/113_RemoteReportInboxRunId.ts";
+import Migration0062 from "../persistence/Migrations/091_RemoteReports.ts";
+import Migration0063 from "../persistence/Migrations/092_RemoteDispatches.ts";
+import Migration0065 from "../persistence/Migrations/094_RemoteDispatchQuestions.ts";
+import Migration0068 from "../persistence/Migrations/096_RemoteReportRelay.ts";
+import Migration0073 from "../persistence/Migrations/101_MemoryTaskGrantCeiling.ts";
+import Migration0089 from "../persistence/Migrations/114_RemoteDispatchObservation.ts";
+import Migration0101 from "../persistence/Migrations/123_RemoteReportInboxRunId.ts";
+import Migration0143 from "../persistence/Migrations/153_RemoteDispatchHostOutage.ts";
 import { withLinkedHost } from "../sshRemote/testkit/LinkedHostFixture.ts";
 import { resolveLostThreadLaunches } from "./remoteDispatchRecovery.ts";
 
@@ -29,7 +30,8 @@ const recoverOverLink = (originMode: RuntimeMode) =>
     for (const migration of [Migration0062, Migration0063, Migration0065, Migration0068])
       yield* migration;
     yield* sql`CREATE TABLE scheduled_tasks (task_id TEXT PRIMARY KEY)`;
-    for (const migration of [Migration0073, Migration0089, Migration0101]) yield* migration;
+    for (const migration of [Migration0073, Migration0089, Migration0101, Migration0143])
+      yield* migration;
     yield* sql`INSERT INTO remote_dispatches (correlation_id, kind, origin_thread_id, host, read_key,
       delivery, state, created_at, updated_at)
       VALUES (${id}, 'thread', ${origin}, 'box', ${"5".repeat(64)}, 'wake', 'lost',

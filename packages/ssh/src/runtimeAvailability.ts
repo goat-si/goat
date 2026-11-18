@@ -9,7 +9,8 @@ import {
 } from "@goat/shared/cliRelease";
 import { HttpClient } from "effect/http";
 import * as Context from "effect/Context";
-import type * as Crypto from "effect/Crypto";
+import type * as Digest from "effect/crypto/Digest";
+import type * as SecureRandom from "effect/crypto/SecureRandom";
 import * as Effect from "effect/Effect";
 import * as FileSystem from "effect/FileSystem";
 import * as Path from "effect/Path";
@@ -42,7 +43,7 @@ export const RuntimePublishedSearch = Context.Reference<
     readonly platformKey: CliArchivePlatformKey;
     readonly requestedVersion: string;
     readonly exclude: ReadonlySet<string>;
-  }) => Effect.Effect<PublishedRuntimeSearch, never, Crypto.Crypto>
+  }) => Effect.Effect<PublishedRuntimeSearch, never, Digest.Digest | SecureRandom.SecureRandom>
 >("ssh/preflight/RuntimePublishedSearch", {
   defaultValue: () => (input) =>
     findPublishedRuntime(input).pipe(

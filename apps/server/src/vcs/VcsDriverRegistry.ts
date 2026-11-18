@@ -10,6 +10,7 @@ import * as Path from "effect/Path";
 import type { VcsDriverKind, VcsError, VcsRepositoryIdentity } from "@goat/contracts";
 import { VcsUnsupportedOperationError } from "@goat/contracts";
 import * as GitVcsDriver from "./GitVcsDriver.ts";
+import { WORK_TREE_PROBE_OPERATION } from "./gitRepositoryProbe.ts";
 import * as VcsProjectConfig from "./VcsProjectConfig.ts";
 import * as VcsDriver from "./VcsDriver.ts";
 
@@ -91,7 +92,12 @@ export const make = Effect.gen(function* () {
     driver: VcsDriver.VcsDriver["Service"],
     cwd: string,
   ) {
-    const repository = yield* driver.detectRepository(cwd);
+    const repository = yield* driver.detectRepository(cwd).pipe(
+      Effect.catchTags({
+        VcsProcessExitError: (error) =>
+          error.operation === WORK_TREE_PROBE_OPERATION ? Effect.succeed(null) : Effect.fail(error),
+      }),
+    );
     if (!repository) {
       return null;
     }

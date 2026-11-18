@@ -125,6 +125,10 @@ const GOAT_MCP_TOOLS: Readonly<Record<string, GoatMcpToolDefinition>> = {
     ["Read", "Reading", "Read", "a bound delete receipt"],
     "thread-read",
   ),
+  goat_origin_force_stop: tool(
+    ["Force stop", "Force stopping", "Force stopped", "a bound origin task"],
+    "thread-update",
+  ),
   goat_workflow_stop: tool(
     ["Stop", "Stopping", "Requested a stop for", "a workflow"],
     "workflow-stop",
@@ -389,6 +393,12 @@ const GOAT_MCP_TOOLS: Readonly<Record<string, GoatMcpToolDefinition>> = {
     "browser",
     "browser",
   ),
+  goat_preview_stop: tool(
+    ["Stop", "Stopping", "Stopped", "the preview page"],
+    "browser",
+    "browser",
+  ),
+
   goat_environment_usage: tool(
     ["Read", "Reading", "Read", "environment usage"],
     "environment-usage",
@@ -460,6 +470,10 @@ const GOAT_MCP_TOOLS: Readonly<Record<string, GoatMcpToolDefinition>> = {
   ),
   goat_hub_machine_reissue: tool(
     ["Reissue", "Reissuing", "Reissued", "a disposable machine invite"],
+    "environment-update",
+  ),
+  goat_hub_machine_detach: tool(
+    ["Detach", "Detaching", "Detached", "a disposable machine"],
     "environment-update",
   ),
   goat_hub_machine_list: tool(["List", "Listing", "Listed", "disposable machines"], "host-status"),

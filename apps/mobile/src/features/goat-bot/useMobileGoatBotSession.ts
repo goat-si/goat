@@ -4,7 +4,7 @@ import {
   createGoatBotSendQueue,
   goatBotItemReaders,
   goatBotHomeReadBack,
-  pickGoatBotEnvironment,
+  goatBotRefusedBy,
   resolveGoatBotAvailability,
   canSendToGoatBot,
   goatBotActivity,
@@ -71,7 +71,8 @@ import { useReplying } from "./useReplying";
 import { goatBotWorkRevision } from "./goatBotWorkRevision";
 import { markMobileGoatBotMember, mobileGoatBotMemberActive } from "./mobileGoatBotMembers";
 import { useMobileGoatBotHomeMode } from "./useMobileGoatBotHomeMode";
-import { pickMobileGoatBotEnvironment } from "./goatBotHomeMode";
+import { pickMobileGoatBotHomeEnvironment } from "./goatBotHomeMode";
+import { useMobileTaskChips } from "./useMobileTaskChips";
 import {
   settleMobileGoatBotEnsure,
   goatBotSessionKey,
@@ -79,6 +80,9 @@ import {
   type MobileGoatBotNotHome,
   type MobileGoatBotEnsureDestination,
 } from "./mobileGoatBotEnsure";
+import { useKeptWhileOffline } from "./useKeptWhileOffline";
+
+const NO_TASK_IDS: ReadonlyArray<string> = [];
 
 interface Session {
   readonly machine: GoatBotEnsureMachine;
@@ -387,9 +391,7 @@ export function useMobileGoatBotSession(
   member: BotProfile | null = null,
 ) {
   const home = useMobileGoatBotHomeMode();
-  const environment = home.home.supported
-    ? pickGoatBotEnvironment(home.environments, home.botRef)
-    : pickMobileGoatBotEnvironment(home.environments, home.botRef);
+  const environment = pickMobileGoatBotHomeEnvironment(home.environments, home.botRef);
   const environmentId = environment?.environmentId ?? null;
   const configs = useServerConfigs();
   const capabilities =
@@ -404,11 +406,21 @@ export function useMobileGoatBotSession(
         })
       : null,
   );
-  const knownTaskIds = useMemo(
+  // Offline the list is not read; the last answer for this computer and bot still decides which
+  // task cards the chat leaves to Home.
+  const listedTaskIds = useMemo(
     () =>
-      (threads.data?.rows ?? []).flatMap((row) => (row.kind === "task" ? [row.task.taskId] : [])),
+      threads.data === null
+        ? null
+        : threads.data.rows.flatMap((row) => (row.kind === "task" ? [row.task.taskId] : [])),
     [threads.data],
   );
+  const keptTaskIds = useKeptWhileOffline(
+    listedTaskIds,
+    JSON.stringify([environmentId, member?.botId ?? null]),
+    environment?.connected !== true,
+  );
+  const knownTaskIds = keptTaskIds ?? NO_TASK_IDS;
   const connection = useAtomValue(
     environmentId === null ? NO_CONNECTION : environmentCatalog.stateAtom(environmentId),
   );
@@ -659,6 +671,7 @@ export function useMobileGoatBotSession(
     () => (visible ? goatBotWorkRevision(visibleTurnItems) : null),
     [visible, visibleTurnItems],
   );
+  const taskChips = useMobileTaskChips(visibleTurnItems, workRevision);
   const refreshThreads = threads.refresh;
   // oxlint-disable-next-line goat/react-effect-budget -- Refresh the bot's task list when its conversation's task records change.
   useEffect(() => {
@@ -736,6 +749,7 @@ export function useMobileGoatBotSession(
           botRef: home.botRef,
           ensure,
         });
+  const refusedBy = goatBotRefusedBy(resolved);
   const availability: GoatBotAvailability["kind"] | "permission" =
     resolved.kind === "ready" || resolved.kind === "connecting"
       ? connected && capable && (!canEnsure || !canIngest)
@@ -801,12 +815,19 @@ export function useMobileGoatBotSession(
       (target ? configs.get(target.environmentId) : undefined)?.environment.capabilities
         .goatBotOpenAsks === true,
     supportsTaskThreads,
+    /** The bot's computer that Home and task screens read, for the main bot and members, is up. */
+    homeConnected: connected,
     /** Changes when a task record in the conversation changes; null while the chat is hidden. */
     workRevision,
+    /** The newest chip of each task in the conversation, kept across streamed tokens. */
+    taskChips,
     /** The environment of the bot whose history is shown; before a move confirms, the old one. */
     historyEnvironmentId: target?.environmentId ?? null,
     /** The conversation shown: the member's own, else the main bot's. */
     threadId: target?.threadId ?? null,
+    /** Where a message goes now; null until this connection confirms the bot, unlike the history. */
+    sendEnvironmentId: sendBot?.environmentId ?? null,
+    sendThreadId: sendBot?.threadId ?? null,
     /** Bot replies still arriving, by row id. */
     streamingReplyIds,
     replyingSince,
@@ -819,6 +840,8 @@ export function useMobileGoatBotSession(
     availability,
     homeKnown: resolved.kind === "home_offline" ? resolved.known : false,
     homeLabel: resolved.kind === "home_offline" ? resolved.label : null,
+    /** The listed computer GOAT Bot waits on, when it refused this device; otherwise null. */
+    refusedBy,
     error:
       ensure.state === "failed"
         ? (ensure.message ?? null)

@@ -1,4 +1,6 @@
+import * as NodeCrypto from "@effect/platform-node/NodeCrypto";
 import * as NodeServices from "@effect/platform-node/NodeServices";
+import * as Layer from "effect/Layer";
 import { assert, it } from "@effect/vitest";
 import { ProviderInstanceId, ProviderSetupError, type ProviderAuthState } from "@goat/contracts";
 import * as Deferred from "effect/Deferred";
@@ -121,10 +123,11 @@ const makeHarness = Effect.fn("makeAuthTestHarness")(function* (
         catalog = ["gemini-test"];
         events.push("catalog-published");
       }),
-    onSignedOut: Effect.sync(() => {
-      catalog = [];
-      events.push("catalog-cleared");
-    }),
+    onSignedOut: () =>
+      Effect.sync(() => {
+        catalog = [];
+        events.push("catalog-cleared");
+      }),
     forwardCallback: () =>
       options.forwardCallback ??
       Effect.sync(() => {
@@ -149,7 +152,7 @@ const makeHarness = Effect.fn("makeAuthTestHarness")(function* (
   };
 });
 
-it.layer(NodeServices.layer)("AntigravityAuth", (it) => {
+it.layer(Layer.mergeAll(NodeServices.layer, NodeCrypto.layer))("AntigravityAuth", (it) => {
   it.effect("accepts a delayed duplicate after callback completion starts", () =>
     Effect.gen(function* () {
       const harness = yield* makeHarness();
@@ -315,6 +318,33 @@ it.layer(NodeServices.layer)("AntigravityAuth", (it) => {
         Effect.map(Option.getOrThrow),
       );
       assert.equal(stalled.phase, "starting");
+    }),
+  );
+
+  it.effect("does not blame the network when the runtime never answers initialize", () =>
+    Effect.gen(function* () {
+      const initializing = yield* Deferred.make<void>();
+      const harness = yield* makeHarness({
+        beforeInitialize: Deferred.succeed(initializing, undefined).pipe(
+          Effect.andThen(Effect.never),
+        ),
+      });
+      yield* harness.auth.controller.start(owner);
+      yield* Deferred.await(initializing);
+      const blamesNetwork = /reach(ed)? Google|network|ipv6/i;
+
+      yield* TestClock.adjust("90 seconds");
+      const stalled = yield* harness.auth.controller
+        .subscribe(owner)
+        .pipe(Stream.runHead, Effect.map(Option.getOrThrow));
+      assert.equal(stalled.phase, "starting");
+      assert.notMatch(stalled.message ?? "", blamesNetwork);
+      assert.match(stalled.message ?? "", /not started|stuck/i);
+
+      yield* TestClock.adjust("210 seconds");
+      const failed = yield* phase(harness.auth, "failed");
+      assert.notMatch(failed.message ?? "", blamesNetwork);
+      assert.match(failed.message ?? "", /not respond|may not run/i);
     }),
   );
 

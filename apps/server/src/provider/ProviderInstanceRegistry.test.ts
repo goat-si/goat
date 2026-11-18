@@ -5,6 +5,7 @@ import * as ServerEnvironment from "../environment/ServerEnvironment.ts";
 import * as ClaudeSdk from "@anthropic-ai/claude-agent-sdk";
 import { describe, expect, it } from "@effect/vitest";
 import { vi } from "vite-plus/test";
+import * as NodeCrypto from "@effect/platform-node/NodeCrypto";
 import * as NodeServices from "@effect/platform-node/NodeServices";
 import {
   DEFAULT_OPENCODEX_BASE_URL,
@@ -45,9 +46,11 @@ import * as ModelManifest from "./ModelManifest.ts";
 import * as ResetCreditCoordinator from "./resetCreditCoordinator.ts";
 import * as ProviderEventLoggers from "@goat/provider-core/server/ProviderEventLoggers";
 import { makeProviderInstanceRegistry } from "./ProviderInstanceRegistry.ts";
+import { makeTildeProviderFixtures } from "./ProviderInstanceRegistry.testkit.ts";
 import { ProviderDriverError } from "./Errors.ts";
 import * as ProviderOrchestrationAdapterInfrastructure from "./ProviderOrchestrationAdapterInfrastructure.ts";
 import * as ProviderHostLive from "./ProviderHostLive.ts";
+import * as SqlitePersistence from "../persistence/Sqlite.ts";
 
 vi.mock("@anthropic-ai/claude-agent-sdk", { spy: true });
 
@@ -116,55 +119,6 @@ const makeClaudeConfig = (overrides: Partial<ClaudeSettings>): ClaudeSettings =>
   ...overrides,
 });
 
-const makeTildeProviderFixtures = Effect.fn(
-  "ProviderInstanceRegistry.test.makeTildeProviderFixtures",
-)(function* () {
-  const fileSystem = yield* FileSystem.FileSystem;
-  const path = yield* Path.Path;
-  const homePath = yield* HostProcess.HomeDirectory;
-  const fixtureDir = yield* fileSystem.makeTempDirectory({
-    directory: homePath,
-    prefix: ".goat-provider-path-test-",
-  });
-  const codexPath = path.join(fixtureDir, "codex");
-  const claudePath = path.join(fixtureDir, "claude");
-  const claudeHomePath = path.join(fixtureDir, "claude-home");
-  const codexScriptPath = path.join(fixtureDir, "codex-script.json");
-  const codexFixtureDir = path.join(import.meta.dirname, "testFixtures");
-
-  yield* fileSystem.copyFile(path.join(codexFixtureDir, "codexCollabMockPeer.sh"), codexPath);
-  yield* fileSystem.copyFile(
-    path.join(codexFixtureDir, "codexCollabMockPeer.mjs"),
-    path.join(fixtureDir, "codexCollabMockPeer.mjs"),
-  );
-  yield* fileSystem.copyFile(
-    path.join(codexFixtureDir, "codexMultiAgentWire.json"),
-    path.join(fixtureDir, "codexMultiAgentWire.json"),
-  );
-  yield* fileSystem.writeFileString(
-    codexScriptPath,
-    JSON.stringify({ rootThreadId: "probe-thread", notifications: [] }),
-  );
-  yield* fileSystem.chmod(codexPath, 0o755);
-
-  yield* fileSystem.copyFile(
-    yield* path.fromFileUrl(
-      new URL("./testing/ProviderInstanceRegistryLive.fixture.mjs", import.meta.url),
-    ),
-    claudePath,
-  );
-  yield* fileSystem.chmod(claudePath, 0o755);
-  yield* fileSystem.makeDirectory(claudeHomePath);
-
-  const asTildePath = (filePath: string) => `~/${path.relative(homePath, filePath)}`;
-  return {
-    codexBinaryPath: asTildePath(codexPath),
-    claudeBinaryPath: asTildePath(claudePath),
-    claudeHomePath,
-    codexScriptPath,
-  };
-});
-
 describe("ProviderInstanceRegistry — multi-instance codex slice", () => {
   const layerBaseDeps = ServerConfig.layerTest(process.cwd(), {
     prefix: "provider-instance-registry-test",
@@ -174,7 +128,7 @@ describe("ProviderInstanceRegistry — multi-instance codex slice", () => {
         endpoint: Effect.succeed("unused-private-pipe"),
       }),
     ),
-    Layer.provideMerge(NodeServices.layer),
+    Layer.provideMerge(Layer.mergeAll(NodeServices.layer, NodeCrypto.layer)),
     Layer.provideMerge(
       Layer.effectContext(
         Effect.gen(function* () {
@@ -198,7 +152,7 @@ describe("ProviderInstanceRegistry — multi-instance codex slice", () => {
             }),
           );
         }),
-      ).pipe(Layer.provide(NodeServices.layer)),
+      ).pipe(Layer.provide(Layer.mergeAll(NodeServices.layer, NodeCrypto.layer))),
     ),
     Layer.provideMerge(
       Layer.mock(CodexInstallation.CodexInstallation)({
@@ -230,6 +184,7 @@ describe("ProviderInstanceRegistry — multi-instance codex slice", () => {
   );
   const layerBase = ProviderHostLive.layer.pipe(Layer.provideMerge(layerBaseDeps));
   const layerTest = ProviderOrchestrationAdapterInfrastructure.layer.pipe(
+    Layer.provide(SqlitePersistence.layerMemory),
     Layer.provideMerge(layerBase),
   );
 
@@ -363,7 +318,7 @@ describe("ProviderInstanceRegistry — multi-instance codex slice", () => {
       }).pipe(Effect.provide(layerTest)),
   );
 
-  it.live("treats an explicit in-config enabled:false as disabling despite the envelope", () =>
+  it.effect("treats an explicit in-config enabled:false as disabling despite the envelope", () =>
     Effect.gen(function* () {
       const staleId = ProviderInstanceId.make("codex_stale");
       const configMap: ProviderInstanceConfigMap = {
@@ -497,7 +452,7 @@ describe("ProviderInstanceRegistry — multi-instance codex slice", () => {
         yield* Effect.addFinalizer(() => Effect.sync(() => vi.unstubAllEnvs()));
         const config = makeClaudeConfig({
           enabled: true,
-          binaryPath: "claude",
+          binaryPath: "claude.mjs",
           homePath: fixtures.claudeHomePath,
         });
         const inheritedId = ProviderInstanceId.make("claude_host_path");
@@ -534,6 +489,95 @@ describe("ProviderInstanceRegistry — multi-instance codex slice", () => {
         expect(yield* pinned!.snapshot.refresh).toMatchObject({ installed: true });
         expect(yield* fileSystem.exists(hostileLog)).toBe(false);
       }).pipe(Effect.scoped, Effect.provide(layerTest)),
+  );
+
+  it.live("applies the lowest maxEffortLevel across Claude's settings sources", () =>
+    Effect.gen(function* () {
+      if (yield* HostProcess.isWindows) return;
+
+      const fixtures = yield* makeTildeProviderFixtures();
+      const claudeId = ProviderInstanceId.make("claude_source_effort_cap");
+      const { registry } = yield* makeProviderInstanceRegistry<ClaudeDriverEnv>({
+        drivers: [ClaudeDriver],
+        configMap: {
+          [claudeId]: {
+            driver: ProviderDriverKind.make("claudeAgent"),
+            enabled: true,
+            environment: [
+              {
+                name: "GOAT_CLAUDE_SETTINGS_SOURCES",
+                // The merged `effective` settings read as exempting Opus 5; the flag tier's
+                // top-level cap still applies to it.
+                value: JSON.stringify([
+                  {
+                    source: "userSettings",
+                    settings: { modelSettings: { "claude-opus-5": { maxEffortLevel: "max" } } },
+                  },
+                  { source: "flagSettings", settings: { maxEffortLevel: "high" } },
+                ]),
+                sensitive: false,
+              },
+            ],
+            config: makeClaudeConfig({
+              enabled: true,
+              binaryPath: fixtures.claudeBinaryPath,
+              homePath: fixtures.claudeHomePath,
+            }),
+          },
+        },
+      });
+      const claude = yield* registry.getInstance(claudeId);
+
+      const snapshot = yield* claude!.snapshot.refresh;
+      const maxLabel = snapshot.models
+        .find((model) => model.slug === "claude-opus-5")
+        ?.capabilities?.optionDescriptors?.flatMap((descriptor) =>
+          descriptor.id === "effort" && descriptor.type === "select"
+            ? descriptor.options.filter((option) => option.id === "max")
+            : [],
+        )[0]?.label;
+      expect(maxLabel).toBe("Max (capped to High)");
+    }).pipe(Effect.provide(layerTest)),
+  );
+
+  it.live("keeps usage and uncapped efforts when the CLI rejects get_settings", () =>
+    Effect.gen(function* () {
+      if (yield* HostProcess.isWindows) return;
+
+      const fixtures = yield* makeTildeProviderFixtures();
+      const claudeId = ProviderInstanceId.make("claude_settings_unsupported");
+      const { registry } = yield* makeProviderInstanceRegistry<ClaudeDriverEnv>({
+        drivers: [ClaudeDriver],
+        configMap: {
+          [claudeId]: {
+            driver: ProviderDriverKind.make("claudeAgent"),
+            enabled: true,
+            environment: [
+              { name: "GOAT_CLAUDE_SETTINGS_UNSUPPORTED", value: "1", sensitive: false },
+            ],
+            config: makeClaudeConfig({
+              enabled: true,
+              binaryPath: fixtures.claudeBinaryPath,
+              homePath: fixtures.claudeHomePath,
+            }),
+          },
+        },
+      });
+      const claude = yield* registry.getInstance(claudeId);
+
+      const snapshot = yield* claude!.snapshot.refresh;
+      const effortLabels = snapshot.models.flatMap((model) =>
+        (model.capabilities?.optionDescriptors ?? []).flatMap((descriptor) =>
+          descriptor.id === "effort" && descriptor.type === "select"
+            ? descriptor.options.map((option) => option.label)
+            : [],
+        ),
+      );
+      expect(effortLabels).toContain("Max");
+      expect(effortLabels.some((label) => label.includes("capped"))).toBe(false);
+      expect(snapshot.auth).toMatchObject({ status: "authenticated", email: "test@example.com" });
+      expect(snapshot.usageLimits?.windows[0]?.usedPercent).toBe(100);
+    }).pipe(Effect.provide(layerTest)),
   );
 
   it.effect("scopes Claude's one-probe fallback to the logged-in organization", () =>
@@ -671,7 +715,12 @@ describe("ProviderInstanceRegistry — multi-instance codex slice", () => {
     }).pipe(Effect.provide(layerTest)),
   );
 
-  const redeemClaudeReset = (claim: { result: string; usageFailsAfterClaim: boolean }) =>
+  const redeemClaudeReset = (claim: {
+    result: string;
+    usageFailsAfterClaim: boolean;
+    creditId?: string;
+    failOnce?: boolean;
+  }) =>
     Effect.gen(function* () {
       const fs = yield* FileSystem.FileSystem;
       const path = yield* Path.Path;
@@ -694,7 +743,9 @@ describe("ProviderInstanceRegistry — multi-instance codex slice", () => {
                 cedar_ember: {
                   eligible: true,
                   next_grant_id: "grant_a",
-                  grants: [{ id: "grant_a", resets_left: 1, usable_now: true }],
+                  grants: [
+                    { id: "grant_a", resets_left: 1, usable_now: true, clears: ["seven_day"] },
+                  ],
                 },
               }),
             );
@@ -715,6 +766,15 @@ describe("ProviderInstanceRegistry — multi-instance codex slice", () => {
             enabled: true,
             environment: [
               { name: "GOAT_CLAUDE_RESET_MARKER", value: marker, sensitive: false },
+              ...(claim.failOnce
+                ? [
+                    {
+                      name: "GOAT_CLAUDE_USAGE_FAIL_ONCE",
+                      value: `${marker}.failed`,
+                      sensitive: false,
+                    },
+                  ]
+                : []),
               ...(claim.usageFailsAfterClaim
                 ? [{ name: "GOAT_CLAUDE_USAGE_FAILS_AFTER_CLAIM", value: "1", sensitive: false }]
                 : []),
@@ -732,7 +792,10 @@ describe("ProviderInstanceRegistry — multi-instance codex slice", () => {
       const before = yield* instance!.snapshot.refresh;
       expect(before.usageLimits?.windows[0]?.usedPercent).toBe(100);
       expect(before.usageLimits?.resetCredits?.nextCreditId).toBe("grant_a");
-      const outcome = yield* instance!.consumeResetCredit!().pipe(Effect.result);
+      const invalid = yield* instance!.consumeResetCredit!("unknown-grant");
+      expect(invalid).toBe("noCredit");
+      expect(yield* fs.exists(marker)).toBe(false);
+      const outcome = yield* instance!.consumeResetCredit!(claim.creditId).pipe(Effect.result);
       return { outcome, after: yield* instance!.snapshot.getSnapshot };
     }).pipe(
       // macOS logins live in the Keychain, where resets are never read.
@@ -751,6 +814,19 @@ describe("ProviderInstanceRegistry — multi-instance codex slice", () => {
     }),
   );
 
+  // Windows cannot execute the mock CLI script.
+  it.live.skipIf(windowsHost)("refreshes Claude limits after the first post-reset read fails", () =>
+    Effect.gen(function* () {
+      const { outcome, after } = yield* redeemClaudeReset({
+        result: "reset",
+        usageFailsAfterClaim: false,
+        failOnce: true,
+      });
+      expect(outcome).toMatchObject({ _tag: "Success", success: "reset" });
+      expect(after.usageLimits?.windows[0]?.usedPercent).toBe(0);
+    }),
+  );
+
   it.live.skipIf(windowsHost)(
     "reports Claude's answer when a claim changed nothing and the re-probe fails",
     () =>
@@ -758,6 +834,7 @@ describe("ProviderInstanceRegistry — multi-instance codex slice", () => {
         const { outcome } = yield* redeemClaudeReset({
           result: "already_used",
           usageFailsAfterClaim: true,
+          creditId: "grant_a",
         });
         expect(outcome).toMatchObject({ _tag: "Success", success: "alreadyRedeemed" });
       }),
@@ -835,7 +912,7 @@ describe("ProviderInstanceRegistry — multi-instance codex slice", () => {
     );
   }
 
-  it.live(
+  it.effect(
     "shadows instances whose driver is not registered in this build without failing boot",
     () =>
       Effect.gen(function* () {

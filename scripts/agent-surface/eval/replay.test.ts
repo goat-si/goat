@@ -117,6 +117,14 @@ const continuations: Readonly<
       }),
     ]),
   },
+  "background-wait-unmatched-id": {
+    good: run([call("goat_background_wait", { taskIds: ["bq7m2x9k"] })]),
+    bad: run([], "I'll report what failed when the suite finishes."),
+  },
+  "background-wait-matched-id": {
+    good: run([], "The suite is still running; I'll report what fails when it finishes."),
+    bad: run([call("ScheduleWakeup", { delaySeconds: 900 })]),
+  },
 };
 
 it("grades each replay's good and mistaken continuation against the served full and core listings", async () => {

@@ -192,11 +192,11 @@ const caller = ThreadId.make("thread:caller");
 // Admission only: capability "none" writes pass this gate for every profile. The client-only ones
 // (requires "client") then refuse thread callers in their own handlers.
 const ALLOWED_WRITES: Readonly<Record<string, number>> = {
-  observer: 76,
-  worker: 131,
-  manager: 145,
-  "merge-manager": 147,
-  owner: 184,
+  observer: 78,
+  worker: 133,
+  manager: 147,
+  "merge-manager": 149,
+  owner: 187,
 };
 
 it("classifies login fill with the same capability and effect as secret fill", () => {

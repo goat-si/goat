@@ -8,7 +8,7 @@ import { layerFor, config, signingConfig, state, aggregate } from "./ApnsDeliver
 import { makeApnsDeliveryJobPayload, signApnsDeliveryJob } from "./apnsDeliveryJobs.ts";
 import * as ApnsDeliveryQueueConsumer from "./ApnsDeliveryQueueConsumer.ts";
 import { HttpClientResponse } from "effect/http";
-import type * as Cloudflare from "alchemy/Cloudflare";
+import type * as Cloudflare from "@alchemy.run/cloudflare";
 import { it, expect } from "@effect/vitest";
 import * as Effect from "effect/Effect";
 import { createPostgresFixture } from "../accounts/test/PostgresFixture.ts";

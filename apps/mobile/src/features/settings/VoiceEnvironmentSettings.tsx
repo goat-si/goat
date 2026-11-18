@@ -1,6 +1,7 @@
 import { useAtomValue } from "@effect/atom-react";
 import {
   AuthOrchestrationOperateScope,
+  AuthFilesystemReadScope,
   AuthVoiceManageScope,
   DEFAULT_SPEECH_CONFIGURATION,
   type EnvironmentId,
@@ -13,11 +14,12 @@ import {
   downloadEnvironmentSpeechModelEffect,
   getEnvironmentSpeechConfigurationEffect,
   listEnvironmentSpeechModelsEffect,
+  linkEnvironmentSpeechModelsEffect,
   removeEnvironmentSpeechModelEffect,
 } from "@goat/client-runtime/voice-input";
 import * as Option from "effect/Option";
 import { useEffect, useRef, useState } from "react";
-import { View } from "react-native";
+import { TextInput, View } from "react-native";
 import { AppText as Text } from "../../components/ui/AppText";
 import { useEnvironments, type EnvironmentPresentation } from "../../state/environments";
 import {
@@ -173,9 +175,12 @@ function VoiceModels({ environmentId }: { environmentId: EnvironmentId }) {
       patch: { speech: DEFAULT_SPEECH_CONFIGURATION },
     }),
   );
+  const canReadFiles = useEnvironmentScope(environmentId, AuthFilesystemReadScope);
+  const [linkPath, setLinkPath] = useState("");
   const contexts = useAtomValue(voiceRequestContextsAtom);
   const context = contexts.get(environmentId);
   const [models, setModels] = useState<readonly Model[]>([]);
+  const [serverLinks, setServerLinks] = useState(false);
   const [config, setConfig] = useState<SpeechConfiguration | null>(null);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -193,6 +198,7 @@ function VoiceModels({ environmentId }: { environmentId: EnvironmentId }) {
       ([list, current]) => {
         if (controller.signal.aborted) return;
         setModels(list.models);
+        setServerLinks(list.supportsModelLinking === true);
         setConfig(current);
         setBusy(false);
         setError(null);
@@ -209,7 +215,7 @@ function VoiceModels({ environmentId }: { environmentId: EnvironmentId }) {
       if (active.current === controller) active.current = null;
     };
   }, [context, canManage]);
-  async function change(action: "download" | "remove" | "select", modelId: string) {
+  async function change(action: "download" | "remove" | "select" | "link", modelId: string) {
     const signal = active.current?.signal;
     if (
       !signal ||
@@ -217,6 +223,7 @@ function VoiceModels({ environmentId }: { environmentId: EnvironmentId }) {
       busy ||
       !canManage ||
       !readEnvironmentScope(environmentId, AuthVoiceManageScope) ||
+      (action === "link" && !readEnvironmentScope(environmentId, AuthFilesystemReadScope)) ||
       readEnvironmentProxiedByHub(environmentId)
     )
       return;
@@ -226,13 +233,15 @@ function VoiceModels({ environmentId }: { environmentId: EnvironmentId }) {
       return;
     }
     const operation =
-      action === "download"
-        ? downloadEnvironmentSpeechModelEffect(current, modelId)
-        : action === "remove"
-          ? removeEnvironmentSpeechModelEffect(current, modelId)
-          : config
-            ? configureEnvironmentSpeechEffect(current, { ...config, modelId })
-            : null;
+      action === "link"
+        ? linkEnvironmentSpeechModelsEffect(current, modelId)
+        : action === "download"
+          ? downloadEnvironmentSpeechModelEffect(current, modelId)
+          : action === "remove"
+            ? removeEnvironmentSpeechModelEffect(current, modelId)
+            : config
+              ? configureEnvironmentSpeechEffect(current, { ...config, modelId })
+              : null;
     if (!operation) {
       setError("The voice configuration is unavailable.");
       return;
@@ -250,6 +259,7 @@ function VoiceModels({ environmentId }: { environmentId: EnvironmentId }) {
       .then(([list, nextConfig]) => {
         signal.throwIfAborted();
         setModels(list.models);
+        setServerLinks(list.supportsModelLinking === true);
         setConfig(nextConfig);
         return null;
       })
@@ -267,6 +277,22 @@ function VoiceModels({ environmentId }: { environmentId: EnvironmentId }) {
     );
   return (
     <View className="gap-2">
+      {canReadFiles && serverLinks ? (
+        <SettingsSection title="Use an existing model">
+          <TextInput
+            accessibilityLabel="Model file or folder on the environment"
+            value={linkPath}
+            onChangeText={setLinkPath}
+            placeholder="Model file or folder on the environment"
+            className="px-2 text-foreground"
+          />
+          <SettingsActionRow
+            label="Use existing models"
+            disabled={busy || !linkPath.trim()}
+            onPress={() => void change("link", linkPath.trim())}
+          />
+        </SettingsSection>
+      ) : null}
       <SettingsSection title="Voice models">
         {models.map((model) => (
           <View key={model.id}>
@@ -277,6 +303,9 @@ function VoiceModels({ environmentId }: { environmentId: EnvironmentId }) {
               disabled={busy || (model.selected && model.installed)}
               onPress={() => void change(model.installed ? "select" : "download", model.id)}
             />
+            {model.linkedFrom ? (
+              <Text className="px-2 text-sm text-foreground-muted">Using {model.linkedFrom}</Text>
+            ) : null}
             {model.benchmark ? (
               <Text className="px-2 text-sm text-foreground-muted">
                 Reference time for 30 s:{" "}

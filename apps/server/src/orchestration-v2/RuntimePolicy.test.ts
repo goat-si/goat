@@ -95,6 +95,7 @@ const layerTest = RuntimePolicy.layerFromProjectStore.pipe(
         Effect.succeedSome({
           projectId,
           title: "Project",
+          hasCustomTitle: false,
           workspaceRoot: "/project-root",
           defaultModelSelection: null,
           defaultThreadEnvMode: null,

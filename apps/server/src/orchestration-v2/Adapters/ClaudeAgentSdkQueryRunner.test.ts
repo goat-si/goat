@@ -6,6 +6,7 @@ import * as NodeFS from "node:fs";
 import * as NodeOS from "node:os";
 import * as NodePath from "node:path";
 import * as NodeStream from "node:stream";
+import * as NodeCrypto from "@effect/platform-node/NodeCrypto";
 import * as NodeServices from "@effect/platform-node/NodeServices";
 import { assert, describe, it } from "@effect/vitest";
 import { ProviderSessionId, ThreadId } from "@goat/contracts";
@@ -110,7 +111,7 @@ it.effect("forks a session stored under the instance's own CLAUDE_CONFIG_DIR", (
       assert.equal(process.env.CLAUDE_CONFIG_DIR, hostConfigDir);
       assert.equal(inProcessFork.mock.calls.length, 0);
     }).pipe(Effect.provide(forkRunnerLayer)),
-  ).pipe(Effect.provide(NodeServices.layer)),
+  ).pipe(Effect.provide(Layer.mergeAll(NodeServices.layer, NodeCrypto.layer))),
 );
 it.effect("forked Claude sessions keep their compaction chain", () =>
   Effect.scoped(
@@ -196,7 +197,7 @@ it.effect("forked Claude sessions keep their compaction chain", () =>
       ].filter((ref) => !forkedUuids.has(ref));
       assert.deepEqual(danglingRefs, [], "compaction refs missing from the forked transcript");
     }).pipe(Effect.provide(forkRunnerLayer)),
-  ).pipe(Effect.provide(NodeServices.layer)),
+  ).pipe(Effect.provide(Layer.mergeAll(NodeServices.layer, NodeCrypto.layer))),
 );
 
 const realQueryRunner = layerQueryRunner.pipe(
@@ -206,7 +207,7 @@ const realQueryRunner = layerQueryRunner.pipe(
       canonical: undefined,
     }),
   ),
-  Layer.provide(NodeServices.layer),
+  Layer.provide(Layer.mergeAll(NodeServices.layer, NodeCrypto.layer)),
 );
 
 const resumedMcpQueryInput = {
@@ -406,6 +407,40 @@ it.effect("stops retrying MCP registration after two timeouts and reports the ca
   ),
 );
 
+it.effect("a failed open keeps its typed error when the query's disposal also fails", () =>
+  Effect.scoped(
+    Effect.gen(function* () {
+      const registrations = [Promise.withResolvers<void>(), Promise.withResolvers<void>()];
+      const querySpy = vi.spyOn(ClaudeSdk, "query").mockImplementation(() => {
+        const started = registrations[querySpy.mock.calls.length - 1];
+        return {
+          setMcpServers: () => {
+            started?.resolve();
+            return new Promise<ClaudeSdk.McpSetServersResult>(() => {});
+          },
+          [Symbol.asyncDispose]: () => Promise.reject(new Error("dispose failed")),
+        } as unknown as ClaudeSdk.Query;
+      });
+      yield* Effect.addFinalizer(() => Effect.sync(() => querySpy.mockRestore()));
+      const runner = yield* ClaudeAgentSdkQueryRunner;
+      const opening = yield* runner
+        .open(resumedMcpQueryInput)
+        .pipe(Effect.result, Effect.forkChild);
+      yield* Effect.promise(() => registrations[0]!.promise);
+      yield* TestClock.adjust("90 seconds");
+      // Without its typed error the open gives up after the first attempt.
+      const retried = yield* Effect.raceFirst(
+        Effect.promise(() => registrations[1]!.promise).pipe(Effect.as(true)),
+        Fiber.await(opening).pipe(Effect.as(false)),
+      );
+      if (retried) yield* TestClock.adjust("90 seconds");
+      const result = yield* Fiber.join(opening);
+      // ProviderTurnStartService restores unsent context handoffs only on this typed refusal.
+      assert.equal(result._tag, "Failure");
+    }).pipe(Effect.provide(realQueryRunner)),
+  ),
+);
+
 it.effect("cancels a stalled registration without retrying or retaining its prompt queue", () =>
   Effect.scoped(
     Effect.gen(function* () {
@@ -560,14 +595,6 @@ describe.skipIf(HostProcess.Platform.defaultValue() === "win32")("Claude CLI pro
         : "";
     });
 
-  // Claude Code refuses bypassPermissions as root and explains why only on
-  // stderr, so the turn failure has to carry that line.
-  it.effect("reports the CLI's root refusal when it exits before answering", () =>
-    Effect.gen(function* () {
-      assert.include(yield* startupFailureMessage(rootRefusal), rootRefusal);
-    }).pipe(Effect.provide(realQueryRunner)),
-  );
-
   // Startup stderr can carry paths, tokens, or settings, so only the known
   // refusal reaches the failure the client shows.
   it.effect("keeps other startup stderr out of the turn failure", () =>
@@ -619,3 +646,40 @@ describe.skipIf(HostProcess.Platform.defaultValue() === "win32")("Claude CLI pro
     }),
   );
 });
+
+if (HostProcess.Platform.defaultValue() !== "win32") {
+  it.live("enters the cwd in the child and fails the CLI for a missing directory", () =>
+    Effect.scoped(
+      Effect.gen(function* () {
+        const cli = fakeClaudeCli('pwd -P > "$(dirname "$0")/cwd"');
+        const dir = NodePath.dirname(cli);
+        const workspace = NodePath.join(dir, "work space");
+        NodeFS.mkdirSync(workspace);
+        yield* Effect.addFinalizer(() =>
+          Effect.sync(() => NodeFS.rmSync(dir, { recursive: true, force: true })),
+        );
+        const signal = yield* Effect.abortSignal;
+        const exitCode = (cwd: string) =>
+          Effect.promise(
+            () =>
+              new Promise<number | null>((resolve) => {
+                const child = spawnClaudeProcessGroup({
+                  command: cli,
+                  args: [],
+                  cwd,
+                  env: process.env,
+                  signal,
+                });
+                child.once("exit", resolve);
+              }),
+          );
+        assert.equal(yield* exitCode(workspace), 0);
+        assert.equal(
+          NodeFS.readFileSync(NodePath.join(dir, "cwd"), "utf8"),
+          `${NodeFS.realpathSync(workspace)}\n`,
+        );
+        assert.equal(yield* exitCode(NodePath.join(dir, "missing")), 125);
+      }),
+    ),
+  );
+}

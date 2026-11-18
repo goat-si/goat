@@ -1,7 +1,6 @@
-import * as PermissionSettings from "../serverSettings.ts";
 import * as ConfigProvider from "effect/ConfigProvider";
 import * as Schema from "effect/Schema";
-import * as NodeServices from "@effect/platform-node/NodeServices";
+import * as NodeServices from "@goat/shared/testing/nodeServicesWithCrypto";
 // @effect-diagnostics-next-line nodeBuiltinImport:off -- expected paths mirror the host's native join.
 import * as NodePath from "node:path";
 import { expect, it, vi } from "@effect/vitest";
@@ -30,22 +29,21 @@ import { ExitCode } from "effect/process/ChildProcessSpawner";
 import * as ProcessRunner from "../processRunner.ts";
 import * as Diagnosis from "../provider/ProviderDiagnosisRouting.ts";
 import * as SshConfig from "@goat/ssh/config";
-import { SshLaunchError, SshHostKeyProbeError } from "@goat/ssh/errors";
+import { SshHostKeyProbeError } from "@goat/ssh/errors";
 import * as SshTunnel from "@goat/ssh/tunnel";
 import * as DateTime from "effect/DateTime";
 import { TestClock } from "effect/testing";
 import * as Handoffs from "../handoffs/Handoffs.ts";
 import * as SessionStore from "../auth/SessionStore.ts";
+import { probeClient, probeSessionId } from "./SshHostSetup.probe.testkit.ts";
 import * as Context from "effect/Context";
-import * as Crypto from "effect/Crypto";
+import * as Digest from "effect/crypto/Digest";
 import { HttpClient } from "effect/http";
 import * as Deferred from "effect/Deferred";
 import * as Fiber from "effect/Fiber";
 import * as Effect from "effect/Effect";
 import * as Layer from "effect/Layer";
-import { FetchHttpClient } from "effect/http";
 
-import * as ServerConfig from "../config.ts";
 import type { McpInvocationScope } from "../mcp/McpInvocationContext.ts";
 import { dependencies, baseDependencies } from "./testkit/SshHostSetupTestkit.ts";
 import * as SshHostSetup from "./SshHostSetup.ts";
@@ -272,107 +270,6 @@ it.effect.each(["host_unknown", "invalid_request", "ssh_failed"] as const)(
         code: reason === "ssh_failed" ? "operation_failed" : reason,
       });
     }),
-);
-
-it.effect("shares the dispatch manager", () =>
-  Effect.gen(function* () {
-    let snapshot: SshHostResult = { kind: "ok", status: stopped };
-    let ensures = 0;
-    const manager = SshTunnel.SshEnvironmentManager.of({
-      readyEnvironment: () => Effect.die("Unexpected ready environment"),
-      beginSetupOperation: () =>
-        Effect.sync(() => {
-          const setup = { operationId: "operation", generation: 1, stage: "runtime" as const };
-          snapshot = { kind: "ok", status: { ...stopped, setup } };
-          return setup;
-        }),
-      publishSetupOutcome: () => Effect.succeed(true),
-      publishProviderDiagnosis: () => Effect.die("Unexpected provider publication"),
-      forgetEnvironment: () => Effect.die("Unexpected forget"),
-      status: () => Effect.sync(() => snapshot),
-      ensureEnvironment: (received, options) =>
-        Effect.gen(function* () {
-          ensures++;
-          expect(received).toEqual(target);
-          expect(options).toEqual({
-            keyOnly: true,
-            issuePairingToken: false,
-            refreshRuntime: true,
-            confirmReplacement: false,
-            onPhase: expect.any(Function),
-          });
-          snapshot = {
-            kind: "ok",
-            status: {
-              ...stopped,
-              state: "failed",
-              failure: {
-                reason: "archive_unavailable",
-                archive: {
-                  requestedVersion: stopped.requestedVersion,
-                  platformKey: "linux-x64",
-                  sourcesTried: ["https"],
-                },
-                fix: {
-                  actor: "human",
-                  instruction: "Install a published GOAT release, or set a release mirror.",
-                },
-              },
-            },
-          };
-          return yield* new SshLaunchError({
-            reason: "archive-unavailable",
-            message: "No archive",
-            stdout: "",
-          });
-        }),
-      disconnectEnvironment: () => Effect.die("Unexpected disconnect"),
-      revalidateTunnels: () => Effect.void,
-      issueClientSession: () => Effect.die("unused"),
-      issueMcpClientSession: () => Effect.die("Unexpected pairing/session mutation"),
-      runRemoteScript: () => Effect.die("Unexpected remote command"),
-    });
-    const discover = vi
-      .spyOn(SshConfig, "discoverSshHosts")
-      .mockReturnValue(Effect.succeed([{ ...target, source: "ssh-config" }]));
-    const managerLayer = vi
-      .spyOn(SshTunnel.SshEnvironmentManager, "layer")
-      .mockReturnValue(Layer.succeed(SshTunnel.SshEnvironmentManager, manager));
-    try {
-      yield* Effect.gen(function* () {
-        const setup = yield* SshHostSetup.SshHostSetup;
-        const dispatch = yield* SshRemoteDispatch.SshRemoteDispatch;
-        expect(yield* setup.status({ host: "box" })).toEqual({ kind: "ok", status: stopped });
-        const result = yield* setup.update({ host: "box" }, { kind: "mcp", scope: invocation });
-        expect(result).toMatchObject({
-          kind: "ok",
-          status: { state: "failed", failure: { reason: "archive_unavailable" } },
-        });
-        expect(yield* dispatch.runtimeStatus("box")).toEqual(result);
-        expect(yield* setup.status({ host: "box" })).toEqual(result);
-        expect(ensures).toBe(1);
-        expect(
-          yield* setup.update({ host: "unknown" }, { kind: "mcp", scope: invocation }),
-        ).toMatchObject({ kind: "error", code: "host_unknown" });
-        expect(ensures).toBe(1);
-      }).pipe(
-        Effect.provide(
-          SshHostSetup.layer.pipe(
-            Layer.provideMerge(
-              SshRemoteDispatch.layer.pipe(Layer.provide(PermissionSettings.layerTest())),
-            ),
-            Layer.provide(dependencies),
-            Layer.provide(ServerConfig.layerTest("/fixture", { prefix: "ssh-host-setup-" })),
-            Layer.provide(FetchHttpClient.layer),
-            Layer.provide(NodeServices.layer),
-          ),
-        ),
-      );
-    } finally {
-      managerLayer.mockRestore();
-      discover.mockRestore();
-    }
-  }),
 );
 
 it.effect("when_idle returns the first published phase while installation is gated", () =>
@@ -942,26 +839,6 @@ it.effect(
     }),
 );
 
-const probeSessionId = AuthSessionId.make("probe-reviewer");
-const probeClient = Layer.mock(SessionStore.SessionStore)({
-  cookieName: "test",
-  legacyCookieName: undefined,
-  listActive: () =>
-    Effect.succeed([
-      {
-        sessionId: probeSessionId,
-        subject: "reviewer",
-        method: "browser-session-cookie",
-        scopes: ["settings:write"],
-        client: { label: "Reviewer", deviceType: "unknown" },
-        issuedAt: DateTime.makeUnsafe(0),
-        expiresAt: DateTime.makeUnsafe(9999999999999),
-        lastConnectedAt: null,
-        connected: true,
-        current: true,
-      },
-    ]),
-});
 const processOutput = (stdout: string, stderr = "", code = 0) => ({
   stdout,
   stderr,
@@ -1029,10 +906,10 @@ it.effect.each([
                   ChildProcessSpawner.make((command) => {
                     if (command._tag !== "StandardCommand")
                       return Effect.die("Unexpected pipeline");
-                    expect(command.args).toContain("-G");
+                    expect(command.args.map(String)).toContain("-G");
                     return Effect.succeed(
                       makeSuccessfulProcess(
-                        command.args.at(-1) === "bastion"
+                        command.args.map(String).at(-1) === "bastion"
                           ? "proxyjump outer\n"
                           : "proxyjump none\n",
                       ),
@@ -1573,10 +1450,11 @@ it.effect(
               expect(options.runner.nodeScriptPath).toBe("/src/server.ts");
               expect(options.runner.nodeEngineRange).toBeTruthy();
               return Effect.gen(function* () {
-                const crypto = yield* Crypto.Crypto;
+                const digest = yield* Digest.Digest;
                 yield* HttpClient.HttpClient;
                 expect(
-                  (yield* crypto.digest("SHA-256", new Uint8Array()).pipe(Effect.orDie)).byteLength,
+                  (yield* digest.digest(Digest.sha256, new Uint8Array()).pipe(Effect.orDie))
+                    .byteLength,
                 ).toBe(32);
                 return report;
               });
@@ -1672,13 +1550,14 @@ it.effect.each([true, false])(
       const spawner = ChildProcessSpawner.make((command) =>
         Effect.gen(function* () {
           if (command._tag !== "StandardCommand") return yield* Effect.die("Unexpected pipeline");
-          calls.push(command.args);
-          if (command.args.includes("-G"))
+          calls.push(command.args.map(String));
+          if (command.args.map(String).includes("-G"))
             return makeSuccessfulProcess("hostname cursor-2\nuser ubuntu\nport 22\n");
-          if (command.args.includes("-lf"))
+          if (command.args.map(String).includes("-lf"))
             return makeSuccessfulProcess(`256 SHA256:${"a".repeat(43)} cursor-2 (ED25519)\n`);
-          expect(command.args).toContain("PreferredAuthentications=none");
+          expect(command.args.map(String)).toContain("PreferredAuthentications=none");
           const knownHosts = command.args
+            .map(String)
             .find((arg) => arg.startsWith("UserKnownHostsFile="))!
             .slice("UserKnownHostsFile=".length)
             .replace(/^"|"$/gu, "");

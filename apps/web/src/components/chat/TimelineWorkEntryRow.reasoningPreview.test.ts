@@ -1,6 +1,6 @@
 import { parseMarkdownWithMath } from "@goat/shared/markdownMath";
 import { describe, expect, it } from "vite-plus/test";
-import { remarkThoughtPreview } from "./TimelineWorkEntryRow.logic";
+import { remarkThoughtPreview, THOUGHT_PREVIEW_MAX_LENGTH } from "./TimelineWorkEntryRow.logic";
 
 describe("compact reasoning math", () => {
   it.each([
@@ -66,6 +66,10 @@ describe("compact reasoning math", () => {
     [
       "line one\r\nline two\r\n\r\nnext  nbsp　wide 😀𝑥 end",
       [["text", "line one line two next nbsp wide 😀𝑥 end"]],
+    ],
+    [
+      `${"x".repeat(THOUGHT_PREVIEW_MAX_LENGTH - 1)}😀 tail`,
+      [["text", "x".repeat(THOUGHT_PREVIEW_MAX_LENGTH - 1)]],
     ],
     ["\\$5 and \\$6, \\*not em\\*", [["text", "$5 and $6, *not em*"]]],
     ["hard  \nbreak\\\nagain", [["text", "hard break again"]]],

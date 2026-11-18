@@ -28,14 +28,14 @@ import {
   MessagesSquareIcon,
   TerminalIcon as TerminalSquare,
   XIcon,
+  VolumeIcon,
+  VolumeOffIcon,
 } from "~/components/solar";
-import { Volume as Volume2, VolumeOff } from "~/components/solar/nodes";
 import { type MouseEvent as ReactMouseEvent, type ReactNode } from "react";
 
 import type { DesktopPreviewOverlay } from "~/previewStateStore";
 import type { RightPanelSurface } from "~/rightPanelStore";
 import { cn } from "~/lib/utils";
-import { MorphIcon } from "~/components/MorphIcon";
 import { AndroidIcon, AppleIcon } from "~/components/Icons";
 import { Tooltip, TooltipPopup, TooltipTrigger } from "~/components/ui/tooltip";
 import { faviconUrlForOrigin } from "~/lib/favicon";
@@ -426,6 +426,7 @@ export function RightPanelTab(
           onClick={(event) => event.stopPropagation()}
           onKeyDown={(event) => {
             event.stopPropagation();
+            if (event.nativeEvent.isComposing || event.keyCode === 229) return;
             if (event.key === "Enter") event.currentTarget.blur();
             if (event.key === "Escape") {
               event.currentTarget.value = title;
@@ -469,7 +470,11 @@ export function RightPanelTab(
                     .catch(() => undefined);
                 }}
               >
-                <MorphIcon className="size-3.5" icon={audio === "muted" ? VolumeOff : Volume2} />
+                {audio === "muted" ? (
+                  <VolumeOffIcon className="size-3.5" />
+                ) : (
+                  <VolumeIcon className="size-3.5" />
+                )}
               </button>
             }
           />

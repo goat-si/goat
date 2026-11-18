@@ -66,6 +66,8 @@ export function makeSecretResolver(read: typeof readOnePassword = readOnePasswor
   >();
   const pending = new Map<string, Promise<string>>();
   let generation = 0;
+  const cacheKey = (gen: number, provider: string, account: string, reference: SecretReference) =>
+    `${gen}\u0000${provider}\u0000${account}\u0000${reference.reference}`;
   const resolve = async (
     providers: ServerSettings["secretProviders"],
     reference: SecretReference,
@@ -75,7 +77,7 @@ export function makeSecretResolver(read: typeof readOnePassword = readOnePasswor
       throw new Error("Secret provider unavailable");
     }
     const currentGeneration = generation;
-    const key = `${currentGeneration}\u0000${reference.provider}\u0000${provider.config.account}\u0000${reference.reference}`;
+    const key = cacheKey(currentGeneration, reference.provider, provider.config.account, reference);
     const cached = cache.get(key);
     if (cached) {
       if (cached.ok) return cached.value;
@@ -85,17 +87,22 @@ export function makeSecretResolver(read: typeof readOnePassword = readOnePasswor
     if (existing) return existing;
     if (pending.size >= MAX_ACTIVE_READS) throw new Error("Secret provider is busy");
     if (cache.size + pending.size >= 128) throw new Error("Secret provider cache is full");
-    const operation = withSecretReadAdmission(() => resolveSecret(providers, reference, read))
+    // A Check may replace this read while it waits; then its late result is the caller's alone.
+    const current = () => currentGeneration === generation && pending.get(key) === operation;
+    const operation: Promise<string> = withSecretReadAdmission(() =>
+      resolveSecret(providers, reference, read),
+    )
       .then((value) => {
-        if (currentGeneration !== generation) return value;
-        cache.set(key, { ok: true, value });
+        if (current()) cache.set(key, { ok: true, value });
         return value;
       })
       .catch(() => {
-        if (currentGeneration === generation) cache.set(key, { ok: false });
+        if (current()) cache.set(key, { ok: false });
         throw new Error("Could not read secret from 1Password");
       })
-      .finally(() => pending.delete(key));
+      .finally(() => {
+        if (pending.get(key) === operation) pending.delete(key);
+      });
     pending.set(key, operation);
     return operation;
   };
@@ -103,6 +110,20 @@ export function makeSecretResolver(read: typeof readOnePassword = readOnePasswor
     invalidate: () => {
       generation++;
       cache.clear();
+    },
+    /** Caches one reference's value read elsewhere, leaving every other cached secret in place. */
+    prime: (
+      providers: ServerSettings["secretProviders"],
+      reference: SecretReference,
+      value: string,
+    ) => {
+      const provider = providers[reference.provider];
+      if (provider?.kind !== "one_password" || !isOnePasswordConfig(provider.config)) return;
+      const key = cacheKey(generation, reference.provider, provider.config.account, reference);
+      const replaces = cache.has(key) || pending.has(key);
+      if (!replaces && cache.size + pending.size >= 128) return;
+      pending.delete(key);
+      cache.set(key, { ok: true, value });
     },
   });
 }

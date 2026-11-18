@@ -10,6 +10,7 @@ import {
 
 import { scopeThreadRef, scopedThreadKey } from "../environment/scoped.ts";
 import { resolveRemoteBotWork } from "./remoteWork.ts";
+import type { HomeCurrentOpenableLink } from "./homeCurrentOpenableWork.ts";
 
 export interface GoatBotVisibilityThread {
   readonly environmentId: EnvironmentId;
@@ -97,12 +98,13 @@ export function goatBotListedWork(
 const recordsLaunchFrom = (
   thread: GoatBotVisibilityThread,
   from: NonNullable<GoatBotWorkRef["launchedFrom"]>,
+  requireChore = true,
 ) => {
   const launcher = thread.source.launchedBy;
   return (
     launcher?.kind === "launch" &&
     launcher.via === "ssh_thread_launch" &&
-    launcher.workKind === "chore" &&
+    (!requireChore || launcher.workKind === "chore") &&
     launcher.environmentId === from.environmentId &&
     launcher.threadId === from.threadId
   );
@@ -144,6 +146,7 @@ function observedParents(thread: GoatBotVisibilityThread) {
 export function goatBotObservationThreadKeys(input: {
   readonly threads: ReadonlyArray<GoatBotVisibilityThread>;
   readonly listedWork?: ReadonlyArray<GoatBotWorkRef>;
+  readonly homeWork?: ReadonlyArray<HomeCurrentOpenableLink>;
 }): ReadonlySet<string> {
   // A listed key with launch requirements hides only when the thread meets one of them.
   const listed = new Map<string, Array<NonNullable<GoatBotWorkRef["launchedFrom"]>> | null>();
@@ -153,7 +156,20 @@ export function goatBotObservationThreadKeys(input: {
     if (ref.launchedFrom === undefined || current === null) listed.set(key, null);
     else listed.set(key, [...(current ?? []), ref.launchedFrom]);
   }
+  const home = new Map<string, Array<NonNullable<GoatBotWorkRef["launchedFrom"]>> | null>();
+  for (const link of input.homeWork ?? []) {
+    const key = keyOf(link.environmentId, link.threadId);
+    if (link.kind !== "remote") home.set(key, null);
+    else if (link.launchedFrom !== undefined && home.get(key) !== null)
+      home.set(key, [...(home.get(key) ?? []), link.launchedFrom]);
+  }
   const isListed = (key: string, thread: GoatBotVisibilityThread) => {
+    const current = home.get(key);
+    if (
+      current === null ||
+      (current !== undefined && current.some((from) => recordsLaunchFrom(thread, from, false)))
+    )
+      return true;
     const requirements = listed.get(key);
     return (
       requirements === null ||

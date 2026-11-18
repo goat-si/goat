@@ -1,3 +1,4 @@
+import * as NodeCrypto from "@effect/platform-node/NodeCrypto";
 import * as NodeServices from "@effect/platform-node/NodeServices";
 import { expect, it, vi } from "@effect/vitest";
 import * as SshConfig from "@goat/ssh/config";
@@ -82,7 +83,7 @@ it.effect(
               ServerConfig.layerTest("/fixture", { prefix: "goat-ssh-composition-test-" }),
             ),
             Layer.provideMerge(FetchHttpClient.layer),
-            Layer.provideMerge(NodeServices.layer),
+            Layer.provideMerge(Layer.mergeAll(NodeServices.layer, NodeCrypto.layer)),
           ),
         ),
       );

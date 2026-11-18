@@ -175,7 +175,7 @@ const projectsLayer = (lookupFails: boolean) =>
 const layer = (settings: Parameters<typeof ServerSettings.layerTest>[0], fixture: Fixture) =>
   McpHttpServer.layerDeviceToolkit.pipe(
     Layer.provide(McpToolAccessTestkit.layerPermissionProfilesOff),
-    Layer.provideMerge(McpServer.McpServer.layer),
+    Layer.provideMerge(McpHttpServer.layerInProcessMcpServer),
     Layer.provideMerge(threadsLayer),
     Layer.provideMerge(Layer.effect(DeviceService.DeviceService, makeDeviceService(fixture))),
     Layer.provideMerge(ServerSettings.layerTest(settings)),

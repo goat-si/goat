@@ -1,7 +1,8 @@
+import * as NodeCrypto from "@effect/platform-node/NodeCrypto";
 import * as NodeServices from "@effect/platform-node/NodeServices";
 import { expect, it } from "@effect/vitest";
 import { AuthStandardClientScopes } from "@goat/contracts";
-import * as Crypto from "effect/Crypto";
+import * as SecureRandom from "effect/crypto/SecureRandom";
 import {
   DESKTOP_BOOTSTRAP_TOKEN_WINDOW_MS,
   currentDesktopBootstrapToken,
@@ -44,7 +45,7 @@ const layerPairingGrantStore = (
     Layer.provide(layerServerConfig(overrides)),
   );
 
-it.layer(NodeServices.layer)("PairingGrantStore.layer", (it) => {
+it.layer(Layer.mergeAll(NodeServices.layer, NodeCrypto.layer))("PairingGrantStore.layer", (it) => {
   it.effect("refuses the reserved desktop subject for one-time grants", () =>
     Effect.gen(function* () {
       const store = yield* PairingGrantStore.PairingGrantStore;
@@ -76,12 +77,9 @@ it.layer(NodeServices.layer)("PairingGrantStore.layer", (it) => {
       expect(second.message).toContain("Unknown bootstrap credential");
     }).pipe(
       Effect.provide(layerPairingGrantStore()),
-      Effect.provideServiceEffect(
-        Crypto.Crypto,
-        Effect.map(Crypto.Crypto, (crypto) => ({
-          ...crypto,
-          randomBytes: (size) => Effect.succeed(new Uint8Array(size).fill(8)),
-        })),
+      Effect.provideService(
+        SecureRandom.SecureRandom,
+        SecureRandom.make((size) => new Uint8Array(size).fill(8)),
       ),
     ),
   );
@@ -273,5 +271,11 @@ it.effect(
         scopes: ["terminal:read"],
       });
       expect((yield* store.consume(current.credential)).subject).toBe("cloud-connect");
-    }).pipe(Effect.provide(layerPairingGrantStore().pipe(Layer.provideMerge(NodeServices.layer)))),
+    }).pipe(
+      Effect.provide(
+        layerPairingGrantStore().pipe(
+          Layer.provideMerge(Layer.mergeAll(NodeServices.layer, NodeCrypto.layer)),
+        ),
+      ),
+    ),
 );

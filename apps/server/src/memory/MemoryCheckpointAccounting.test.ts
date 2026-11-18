@@ -6,12 +6,12 @@ import * as Schema from "effect/Schema";
 import * as SqlClient from "effect/sql/SqlClient";
 import * as Statement from "effect/sql/Statement";
 import * as NodeSqliteClient from "@goat/shared/nodeSqliteClient";
-import migration from "../persistence/Migrations/088_Memory.ts";
-import hub from "../persistence/Migrations/089_MemoryHubSync.ts";
-import lineage from "../persistence/Migrations/092_MemoryImportLineage.ts";
-import checkpointMigration from "../persistence/Migrations/093_MemoryCheckpointAccounting.ts";
-import lifecycleMigration from "../persistence/Migrations/100_MemoryCheckpointLifecycle.ts";
-import revisionSizeMigration from "../persistence/Migrations/105_MemoryRevisionCheckpointSize.ts";
+import migration from "../persistence/Migrations/098_Memory.ts";
+import hub from "../persistence/Migrations/099_MemoryHubSync.ts";
+import lineage from "../persistence/Migrations/102_MemoryImportLineage.ts";
+import checkpointMigration from "../persistence/Migrations/103_MemoryCheckpointAccounting.ts";
+import lifecycleMigration from "../persistence/Migrations/110_MemoryCheckpointLifecycle.ts";
+import revisionSizeMigration from "../persistence/Migrations/115_MemoryRevisionCheckpointSize.ts";
 import {
   CheckpointAccountingError,
   refreshCheckpointAccounting,

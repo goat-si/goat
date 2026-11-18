@@ -9,7 +9,7 @@ import {
   type OrchestrationV2ServerCommand,
 } from "@goat/contracts";
 import { describe, expect, it } from "@effect/vitest";
-import * as Crypto from "effect/Crypto";
+import * as SecureRandom from "effect/crypto/SecureRandom";
 import * as DateTime from "effect/DateTime";
 import * as Deferred from "effect/Deferred";
 import * as Effect from "effect/Effect";
@@ -130,7 +130,9 @@ describe("ThreadPullRequestServiceV2 reads", () => {
                 return null;
               }),
           }),
-          Layer.mock(PullRequestService.PullRequestService)({}),
+          Layer.mock(PullRequestService.PullRequestService)({
+            notifyLinkedThreadsChanged: Effect.void,
+          }),
           Layer.mock(RepositoryIdentityResolver.RepositoryIdentityResolver)({
             resolve: () =>
               Effect.succeed({
@@ -153,11 +155,8 @@ describe("ThreadPullRequestServiceV2 reads", () => {
           }),
           Layer.succeed(ServerActivation.ServerActivation, Deferred.await(activation)),
           Layer.succeed(
-            Crypto.Crypto,
-            Crypto.make({
-              randomBytes: (size) => new Uint8Array(size).fill(1),
-              digest: (_algorithm, data) => Effect.succeed(data),
-            }),
+            SecureRandom.SecureRandom,
+            SecureRandom.make((size) => new Uint8Array(size).fill(1)),
           ),
           FileSystem.layerNoop({}),
           Path.layer,
@@ -205,7 +204,7 @@ describe("ThreadPullRequestServiceV2 reads", () => {
         // A turn end commits its checkpoints and the run's end together. The queued
         // non-refresh request ahead of them must still become a refresh when they join it.
         const turnEnd = [
-          { type: "thread.metadata-updated", threadId: thread.id },
+          { type: "thread.metadata-updated", threadId: thread.id, payload: thread },
           { type: "checkpoint.captured", threadId: thread.id },
           { type: "checkpoint.captured", threadId: thread.id },
           { type: "run.updated", threadId: thread.id, payload: { status: "completed" } },
@@ -215,8 +214,8 @@ describe("ThreadPullRequestServiceV2 reads", () => {
         // Arrives during the thread's own lookup, which may already have read the old host state.
         const duringLookup = [
           { type: "checkpoint.captured", threadId: thread.id },
-          { type: "thread.metadata-updated", threadId: thread.id },
-        ] as Array<OrchestrationV2DomainEvent>;
+          { type: "thread.metadata-updated", threadId: thread.id, payload: thread },
+        ] as unknown as Array<OrchestrationV2DomainEvent>;
         const activation = yield* Deferred.make<void>();
         const sweepStarted = yield* Deferred.make<void>();
         const turnEndQueued = yield* Deferred.make<void>();
@@ -270,7 +269,9 @@ describe("ThreadPullRequestServiceV2 reads", () => {
                 return null;
               }),
           }),
-          Layer.mock(PullRequestService.PullRequestService)({}),
+          Layer.mock(PullRequestService.PullRequestService)({
+            notifyLinkedThreadsChanged: Effect.void,
+          }),
           Layer.mock(RepositoryIdentityResolver.RepositoryIdentityResolver)({
             resolve: () =>
               Effect.succeed({
@@ -291,11 +292,8 @@ describe("ThreadPullRequestServiceV2 reads", () => {
           }),
           Layer.succeed(ServerActivation.ServerActivation, Deferred.await(activation)),
           Layer.succeed(
-            Crypto.Crypto,
-            Crypto.make({
-              randomBytes: (size) => new Uint8Array(size).fill(1),
-              digest: (_algorithm, data) => Effect.succeed(data),
-            }),
+            SecureRandom.SecureRandom,
+            SecureRandom.make((size) => new Uint8Array(size).fill(1)),
           ),
           FileSystem.layerNoop({}),
           Path.layer,
@@ -395,7 +393,9 @@ describe("ThreadPullRequestServiceV2 reads", () => {
                   return null;
                 }),
             }),
-            Layer.mock(PullRequestService.PullRequestService)({}),
+            Layer.mock(PullRequestService.PullRequestService)({
+              notifyLinkedThreadsChanged: Effect.void,
+            }),
             Layer.mock(RepositoryIdentityResolver.RepositoryIdentityResolver)({
               resolve: () =>
                 Effect.succeed({
@@ -413,11 +413,8 @@ describe("ThreadPullRequestServiceV2 reads", () => {
             Layer.mock(BackgroundPolicy.BackgroundPolicy)({}),
             Layer.succeed(ServerActivation.ServerActivation, Deferred.await(activation)),
             Layer.succeed(
-              Crypto.Crypto,
-              Crypto.make({
-                randomBytes: (size) => new Uint8Array(size).fill(1),
-                digest: (_algorithm, data) => Effect.succeed(data),
-              }),
+              SecureRandom.SecureRandom,
+              SecureRandom.make((size) => new Uint8Array(size).fill(1)),
             ),
             FileSystem.layerNoop({
               exists: (path) =>
@@ -509,7 +506,9 @@ describe("ThreadPullRequestServiceV2 reads", () => {
                 return null;
               }),
           }),
-          Layer.mock(PullRequestService.PullRequestService)({}),
+          Layer.mock(PullRequestService.PullRequestService)({
+            notifyLinkedThreadsChanged: Effect.void,
+          }),
           Layer.mock(RepositoryIdentityResolver.RepositoryIdentityResolver)({
             resolve: () =>
               Effect.succeed({
@@ -530,11 +529,8 @@ describe("ThreadPullRequestServiceV2 reads", () => {
           }),
           Layer.succeed(ServerActivation.ServerActivation, Deferred.await(activation)),
           Layer.succeed(
-            Crypto.Crypto,
-            Crypto.make({
-              randomBytes: (size) => new Uint8Array(size).fill(1),
-              digest: (_algorithm, data) => Effect.succeed(data),
-            }),
+            SecureRandom.SecureRandom,
+            SecureRandom.make((size) => new Uint8Array(size).fill(1)),
           ),
           FileSystem.layerNoop({}),
           Path.layer,
@@ -567,6 +563,135 @@ describe("ThreadPullRequestServiceV2 reads", () => {
         }).pipe(Effect.provide(dependencies));
       }),
     ),
+  );
+
+  it.effect.each([
+    { state: "open", checkedOut: false },
+    { state: "merged", checkedOut: false },
+    { state: "closed", checkedOut: false },
+    { state: "merged", checkedOut: true },
+  ] as const)(
+    "associates a $state branch PR (checkedOut=$checkedOut) only with threads that predate its completion or saved it",
+    ({ state, checkedOut }) =>
+      Effect.scoped(
+        Effect.gen(function* () {
+          const reference = {
+            projectId: ProjectId.make("project-1"),
+            repository: "acme/project",
+            number: 42,
+            url: "https://github.com/acme/project/pull/42",
+          };
+          const terminalAt = "2026-09-19T00:00:00.000Z";
+          const detected = {
+            number: 42,
+            url: reference.url,
+            title: "Previous staging work",
+            baseRef: "main",
+            headRef: "staging",
+            state,
+            updatedAt: terminalAt,
+            closedAt: state === "closed" ? terminalAt : null,
+            mergedAt: state === "merged" ? terminalAt : null,
+            repositoryKey: "github.com/acme/project",
+          };
+          const threads = [
+            { ...threadShell("older"), createdAt: DateTime.makeUnsafe("2026-09-18T00:00:00Z") },
+            { ...threadShell("same-time"), createdAt: DateTime.makeUnsafe(terminalAt) },
+            threadShell("new"),
+            { ...threadShell("saved"), branchPullRequest: reference },
+            { ...threadShell("explicit"), linkedPullRequest: reference },
+          ].map((thread) => ({ ...thread, branch: "staging" }));
+          const project: OrchestrationProjectShell = {
+            id: reference.projectId,
+            title: "Project",
+            workspaceRoot: "/workspace/project",
+            defaultModelSelection: null,
+            scripts: [],
+            createdAt: "2026-08-01T00:00:00.000Z",
+            updatedAt: "2026-08-01T00:00:00.000Z",
+          };
+          const activation = yield* Deferred.make<void>();
+          const sweepStarted = yield* Deferred.make<void>();
+          const commands: Array<OrchestrationV2ServerCommand> = [];
+          const dependencies = Layer.mergeAll(
+            Layer.mock(Orchestrator.OrchestratorV2)({
+              streamDomainEvents: Stream.never,
+              getPullRequestSnapshot: () =>
+                Deferred.succeed(sweepStarted, undefined).pipe(
+                  Effect.as({ snapshotSequence: 1, threads }),
+                ),
+              dispatch: (command) =>
+                Effect.sync(() => {
+                  commands.push(command);
+                  return { sequence: 2, storedEvents: [] };
+                }),
+            }),
+            Layer.mock(ProjectStore.ProjectStoreV2)({
+              listShells: () => Effect.succeed([project]),
+              getShell: () => Effect.succeedSome(project),
+            }),
+            Layer.mock(GitManager.GitManager)({
+              branchPullRequest: () => Effect.succeed(detected),
+              checkedOutPullRequest: () => Effect.succeed(checkedOut),
+            }),
+            Layer.mock(PullRequestService.PullRequestService)({
+              summary: () =>
+                Effect.succeed({
+                  ...detected,
+                  ...reference,
+                  provider: SourceControlProviderKind.make("github"),
+                  baseBranch: detected.baseRef,
+                  headBranch: detected.headRef,
+                }),
+            }),
+            Layer.mock(RepositoryIdentityResolver.RepositoryIdentityResolver)({
+              resolve: () =>
+                Effect.succeed({
+                  canonicalKey: "github.com/acme/project",
+                  locator: {
+                    source: "git-remote" as const,
+                    remoteName: "origin",
+                    remoteUrl: "git@github.com:acme/project.git",
+                  },
+                  provider: SourceControlProviderKind.make("github"),
+                  owner: "acme",
+                  name: "project",
+                }),
+            }),
+            Layer.mock(BackgroundPolicy.BackgroundPolicy)({
+              shouldRunScopeWork: () => Effect.succeed(true),
+              shouldRunOpportunisticWork: Effect.succeed(true),
+            }),
+            Layer.succeed(ServerActivation.ServerActivation, Deferred.await(activation)),
+            Layer.succeed(
+              SecureRandom.SecureRandom,
+              SecureRandom.make((size) => new Uint8Array(size).fill(1)),
+            ),
+            FileSystem.layerNoop({}),
+            Path.layer,
+          );
+          yield* Effect.gen(function* () {
+            const service = yield* ThreadPullRequestService.make;
+            yield* service.start();
+            yield* Deferred.succeed(activation, undefined);
+            yield* Deferred.await(sweepStarted);
+            yield* service.drain;
+          }).pipe(Effect.provide(dependencies));
+
+          expect(
+            commands.map((command) => {
+              if (command.type !== "thread.pull-request.sync") throw new Error(command.type);
+              expect(command).not.toHaveProperty("linkedPullRequest");
+              return [command.threadId, command.branchPullRequest];
+            }),
+          ).toEqual(
+            (state === "open" || checkedOut
+              ? ["older", "same-time", "new", "explicit"]
+              : ["older", "same-time"]
+            ).map((id) => [id, reference]),
+          );
+        }),
+      ),
   );
 
   it.effect.each([
@@ -676,18 +801,17 @@ describe("ThreadPullRequestServiceV2 reads", () => {
                   repositoryKey: `github.com/${repository}`,
                 }),
             }),
-            Layer.mock(PullRequestService.PullRequestService)({}),
+            Layer.mock(PullRequestService.PullRequestService)({
+              notifyLinkedThreadsChanged: Effect.void,
+            }),
             Layer.mock(RepositoryIdentityResolver.RepositoryIdentityResolver)({
               resolve: () => Effect.succeed(identity),
             }),
             Layer.mock(BackgroundPolicy.BackgroundPolicy)({}),
             Layer.succeed(ServerActivation.ServerActivation, Deferred.await(activation)),
             Layer.succeed(
-              Crypto.Crypto,
-              Crypto.make({
-                randomBytes: (size) => new Uint8Array(size).fill(1),
-                digest: (_algorithm, data) => Effect.succeed(data),
-              }),
+              SecureRandom.SecureRandom,
+              SecureRandom.make((size) => new Uint8Array(size).fill(1)),
             ),
             FileSystem.layerNoop({}),
             Path.layer,
@@ -813,11 +937,8 @@ describe("ThreadPullRequestServiceV2 reads", () => {
             Layer.mock(BackgroundPolicy.BackgroundPolicy)({}),
             Layer.succeed(ServerActivation.ServerActivation, Deferred.await(activation)),
             Layer.succeed(
-              Crypto.Crypto,
-              Crypto.make({
-                randomBytes: (size) => new Uint8Array(size).fill(1),
-                digest: (_algorithm, data) => Effect.succeed(data),
-              }),
+              SecureRandom.SecureRandom,
+              SecureRandom.make((size) => new Uint8Array(size).fill(1)),
             ),
             FileSystem.layerNoop({}),
             Path.layer,

@@ -1,10 +1,12 @@
 import type { GoatBotRow } from "@goat/client-runtime/goatBot";
+import type { ReactNode } from "react";
 import { userEvent } from "vite-plus/test/browser";
 import { expect, it, vi } from "vite-plus/test";
 
 import { render } from "../../../test/render";
 import { GoatBotQuestionCard } from "./GoatBotQuestionCard";
-import { navigationBlocked } from "~/lib/navigationHolds";
+import { GoatBotTypedAnswersScope } from "./GoatBotTypedAnswers";
+import { navigationBlocked, resetNavigationHoldsForTests } from "~/lib/navigationHolds";
 
 const question: Extract<GoatBotRow, { kind: "bot" }> = {
   kind: "bot",
@@ -21,14 +23,23 @@ const question: Extract<GoatBotRow, { kind: "bot" }> = {
   groupPosition: "single",
 };
 
+/** The card as a chat holds it: typed answers live in the chat's scope. */
+const inChat = (card: ReactNode) => (
+  <GoatBotTypedAnswersScope destination="env:bot" visibleTurnItems={[]}>
+    {card}
+  </GoatBotTypedAnswersScope>
+);
+
 it("sends a lettered choice, or what the person types as something else, to the question's task", async () => {
   const onPick = vi.fn<(answer: string, taskId?: string, questionId?: string) => void>();
   await using screen = await render(
-    <GoatBotQuestionCard
-      row={{ ...question, answerQuestionId: "question-1" }}
-      body={question.text}
-      onPick={onPick}
-    />,
+    inChat(
+      <GoatBotQuestionCard
+        row={{ ...question, answerQuestionId: "question-1" }}
+        body={question.text}
+        onPick={onPick}
+      />,
+    ),
     { router: false }, // No links inside the card.
   );
   await expect.element(screen.getByRole("button", { name: "A. Short summary" })).toBeVisible();
@@ -41,8 +52,9 @@ it("sends a lettered choice, or what the person types as something else, to the 
 });
 
 it("an answer being typed holds back a New bot open until it is sent", async () => {
+  resetNavigationHoldsForTests();
   await using screen = await render(
-    <GoatBotQuestionCard row={question} body={question.text} onPick={() => {}} />,
+    inChat(<GoatBotQuestionCard row={question} body={question.text} onPick={() => {}} />),
     { router: false }, // No links inside the card.
   );
   const field = screen.getByRole("textbox", { name: "Something else" });
@@ -56,7 +68,7 @@ it("an answer being typed holds back a New bot open until it is sent", async () 
 it("keeps only the picked row once the question is answered", async () => {
   const answered = { ...question, options: [], answer: "Detailed summary", answerIndex: 1 };
   await using screen = await render(
-    <GoatBotQuestionCard row={answered} body={answered.text} onPick={() => {}} />,
+    inChat(<GoatBotQuestionCard row={answered} body={answered.text} onPick={() => {}} />),
     { router: false }, // No links inside the card.
   );
   await expect.element(screen.getByText("You answered B:")).toBeInTheDocument();
@@ -65,11 +77,13 @@ it("keeps only the picked row once the question is answered", async () => {
   expect(screen.container.querySelectorAll("button")).toHaveLength(0);
   expect(screen.container.querySelector("input")).toBeNull();
   await screen.rerender(
-    <GoatBotQuestionCard
-      row={{ ...answered, answerSending: true }}
-      body={answered.text}
-      onPick={() => {}}
-    />,
+    inChat(
+      <GoatBotQuestionCard
+        row={{ ...answered, answerSending: true }}
+        body={answered.text}
+        onPick={() => {}}
+      />,
+    ),
   );
   await expect.element(screen.getByText("Sending…")).toBeVisible();
 });

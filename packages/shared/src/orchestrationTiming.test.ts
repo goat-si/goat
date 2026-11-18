@@ -1,6 +1,24 @@
 import { describe, expect, it } from "vite-plus/test";
 
-import { deriveActiveWorkStartedAt, deriveSubagentElapsedMs } from "./orchestrationTiming.ts";
+import {
+  deriveActiveWorkStartedAt,
+  deriveSubagentElapsedMs,
+  formatDuration,
+} from "./orchestrationTiming.ts";
+
+describe("formatDuration", () => {
+  it.each([
+    [59_000, "59s"],
+    [59_500, "1m 0s"],
+    [60_000, "1m 0s"],
+    [720_000, "12m 0s"],
+    [736_000, "12m 16s"],
+    [3_600_000, "1h"],
+    [3_660_000, "1h 1m 0s"],
+  ])("formats %i milliseconds as %s", (durationMs, expected) => {
+    expect(formatDuration(durationMs)).toBe(expected);
+  });
+});
 
 describe("deriveActiveWorkStartedAt", () => {
   it.each([null, "2026-09-06T23:34:00.000Z"])(

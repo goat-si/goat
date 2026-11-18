@@ -18,7 +18,7 @@ import { Command, Flag, GlobalFlag, Prompt } from "effect/cli";
 import * as Clock from "effect/Clock";
 import * as Config from "effect/Config";
 import * as Console from "effect/Console";
-import * as Crypto from "effect/Crypto";
+import * as SecureRandom from "effect/crypto/SecureRandom";
 import * as Duration from "effect/Duration";
 import * as Effect from "effect/Effect";
 import * as Exit from "effect/Exit";
@@ -48,7 +48,11 @@ import * as RelayTracing from "../cloud/relayTracing.ts";
 import * as ServerConfig from "../config.ts";
 import * as ServerEnvironment from "../environment/ServerEnvironment.ts";
 import * as ExternalLauncher from "../process/externalLauncher.ts";
-import { isProcessAlive, readPersistedServerRuntimeState } from "../serverRuntimeState.ts";
+import {
+  isProcessAlive,
+  readLiveServerRuntimeState,
+  readPersistedServerRuntimeState,
+} from "../serverRuntimeState.ts";
 import { projectLocationFlags, resolveCliAuthConfig } from "./config.ts";
 import { resolveCliCommand } from "./invocation.ts";
 import * as CliService from "./service.ts";
@@ -285,9 +289,9 @@ const CLOUD_CLI_REACHABILITY_WAIT = Duration.seconds(60);
 const CLOUD_CLI_REACHABILITY_RETRY = Duration.seconds(5);
 
 /** Asks the running server to check GOAT Connect now. `null` when no server answers. */
-const checkLiveReachability = Effect.fn("cloud.cli.check_live_reachability")(function* () {
+export const checkLiveReachability = Effect.fn("cloud.cli.check_live_reachability")(function* () {
   const config = yield* ServerConfig.ServerConfig;
-  const runtimeState = yield* readPersistedServerRuntimeState(config.serverRuntimeStatePath);
+  const runtimeState = yield* readLiveServerRuntimeState(config.serverRuntimeStatePath);
   if (Option.isNone(runtimeState)) return null;
   const environmentAuth = yield* EnvironmentAuth.EnvironmentAuth;
   return yield* withCloudCliSessionToken(environmentAuth, AuthRelayReadScope, (token) =>
@@ -496,7 +500,7 @@ const runCloudCommand = Effect.fn("cloud.cli.run_cloud_command")(function* <A, E
     | RelayClient.RelayClient
     | EnvironmentAuth.EnvironmentAuth
     | BootService.BootService
-    | Crypto.Crypto
+    | SecureRandom.SecureRandom
     | FileSystem.FileSystem
     | HttpClient.HttpClient
     | Prompt.Environment

@@ -17,7 +17,7 @@ import {
   hubProxyEffectiveScopes,
   type AuthEnvironmentScope,
 } from "@goat/contracts";
-import * as NodeSocket from "@effect/platform-node/NodeSocket";
+import * as NodeWS from "@effect/platform-node/NodeWS";
 import { guardErrors } from "@goat/shared/errorGuards";
 import * as Duration from "effect/Duration";
 import * as Effect from "effect/Effect";
@@ -52,6 +52,7 @@ import {
   SNAPSHOT_MAX_BYTES,
   type HubProxyUpstream,
 } from "./HubProxySessions.ts";
+import { requestUrl } from "../requestUrl.ts";
 
 /** Node paths a client reads through the hub. Everything else under a node is not served. */
 const READ_PATHS: ReadonlyArray<RegExp> = [
@@ -355,7 +356,7 @@ const proxyRead = Effect.fn("HubProxyHttp.proxyRead")(function* (
 export const openUpstreamSocket = (upstream: HubProxyUpstream, search: string) =>
   Effect.suspend(() => {
     let status: number | undefined;
-    let ws: NodeSocket.NodeWS.WebSocket | undefined;
+    let ws: NodeWS.WebSocket | undefined;
     return Effect.gen(function* () {
       const socket = yield* Socket.makeWebSocket(
         new URL(`ws${search}`, upstream.wsBaseUrl).toString(),
@@ -375,7 +376,7 @@ export const openUpstreamSocket = (upstream: HubProxyUpstream, search: string) =
       Effect.provideService(Socket.WebSocketConstructor, (url, options) => {
         // Effect detaches its listener before closing a still-connecting socket.
         const socket = guardErrors(
-          new NodeSocket.NodeWS.WebSocket(
+          new NodeWS.WebSocket(
             url,
             typeof options === "object" && !Array.isArray(options) ? options.protocols : options,
             {
@@ -472,7 +473,7 @@ const isWebSocketUpgrade = (request: HttpServerRequest.HttpServerRequest) =>
 
 const handler = Effect.gen(function* () {
   const request = yield* HttpServerRequest.HttpServerRequest;
-  const url = HttpServerRequest.toURL(request);
+  const url = requestUrl(request);
   if (Option.isNone(url)) return HttpServerResponse.text("Bad Request", { status: 400 });
   const target = parseNodePath(url.value.pathname);
   if (target === undefined) return HttpServerResponse.text("Not Found", { status: 404 });

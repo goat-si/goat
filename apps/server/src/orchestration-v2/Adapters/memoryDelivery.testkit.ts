@@ -4,12 +4,13 @@ import * as NodeStream from "node:stream";
 import * as Fiber from "effect/Fiber";
 import { runAcpMcpStdioBridge } from "../../mcp/AcpMcpStdioBridge.ts";
 import * as HostProcess from "@goat/shared/HostProcess";
+import * as NodeCrypto from "@effect/platform-node/NodeCrypto";
 import * as NodeServices from "@effect/platform-node/NodeServices";
 import { assert } from "@effect/vitest";
 import * as M from "@goat/contracts";
 import * as Effect from "effect/Effect";
 import * as Exit from "effect/Exit";
-import * as Crypto from "effect/Crypto";
+import * as SecureRandom from "effect/crypto/SecureRandom";
 import * as DateTime from "effect/DateTime";
 import * as Layer from "effect/Layer";
 import * as Path from "effect/Path";
@@ -116,7 +117,7 @@ export const acpMemoryDelivery = (kind: "acp" | "grok" | "antigravity", attached
       new URL("../../../scripts/acp-mock-agent.ts", import.meta.url),
     );
     const spawner = yield* ChildProcessSpawner.ChildProcessSpawner;
-    const crypto = yield* Crypto.Crypto;
+    const random = yield* SecureRandom.SecureRandom;
     const prompts: ReadonlyArray<{ type: string; text?: string }>[] = [];
     const launchServers: Array<
       Parameters<Parameters<typeof makeAntigravityAdapterV2>[0]["makeRuntime"]>[0]["mcpServers"]
@@ -147,7 +148,7 @@ export const acpMemoryDelivery = (kind: "acp" | "grok" | "antigravity", attached
             Layer.provide(
               Layer.merge(
                 Layer.succeed(ChildProcessSpawner.ChildProcessSpawner, spawner),
-                Layer.succeed(Crypto.Crypto, crypto),
+                Layer.succeed(SecureRandom.SecureRandom, random),
               ),
             ),
           ),
@@ -410,9 +411,12 @@ export const acpMemoryDelivery = (kind: "acp" | "grok" | "antigravity", attached
     Effect.provide(
       Layer.mergeAll(
         NodeServices.layer,
+        NodeCrypto.layer,
         IdAllocator.layer,
         McpProviderSessions.layer,
-        TestProviderHost.layer().pipe(Layer.provide(NodeServices.layer)),
+        TestProviderHost.layer().pipe(
+          Layer.provide(Layer.mergeAll(NodeServices.layer, NodeCrypto.layer)),
+        ),
       ),
     ),
   );

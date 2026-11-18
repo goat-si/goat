@@ -1,0 +1,271 @@
+import type { OrchestrationV2ThreadShell, StorageItem, StorageItemState } from "@goat/contracts";
+import * as Clock from "effect/Clock";
+import * as DateTime from "effect/DateTime";
+import * as Effect from "effect/Effect";
+import * as FileSystem from "effect/FileSystem";
+import * as Option from "effect/Option";
+import * as Path from "effect/Path";
+import * as SqlClient from "effect/sql/SqlClient";
+
+import { WORKTREE_BUSY_STATUSES } from "../mcp/WorktreeInventoryService.ts";
+import { threadHasQueuedTurnStart } from "../orchestration-v2/ThreadSettlementService.ts";
+import type { ContentStamp, FileIdentity } from "./fileState.ts";
+import { lstatOf } from "./fileState.ts";
+import { isStrictlyInside, type PathRules, samePath } from "./storagePaths.ts";
+
+/**
+ * No project ("Scratch") threads each work in a folder of <GOAT home>/scratch. Storage lists those
+ * folders for a person to delete one by one; nothing removes them on its own, and the thread's
+ * next turn or terminal starts in an empty folder in its place.
+ *
+ * @module scratchFolders
+ */
+
+/** Leftover and scratch folders younger than this may still be in use. */
+const SCRATCH_MIN_AGE_MS = 60 * 60_000;
+
+interface ScratchThreadRow {
+  readonly id: string;
+  readonly title: string | null;
+  readonly path: string;
+  readonly status: string | null;
+  readonly activeRunId: string | null;
+  readonly pendingRequest: string | null;
+  readonly pendingTasks: number | null;
+  readonly updatedAt: string | null;
+  readonly latestUserMessageAt: string | null;
+  readonly latestRunId: string | null;
+  readonly latestRunRequestedAt: string | null;
+  readonly latestRunStartedAt: string | null;
+  readonly latestRunCompletedAt: string | null;
+}
+
+const at = (value: string | null) =>
+  value === null ? null : Option.getOrNull(DateTime.make(value));
+
+/** A run, a queued or waiting turn, a question or background work: the folder is in use. */
+const busy = (row: ScratchThreadRow, nowMs: number) =>
+  row.activeRunId !== null ||
+  (row.status !== null && WORKTREE_BUSY_STATUSES.has(row.status)) ||
+  row.pendingRequest !== null ||
+  (row.pendingTasks ?? 0) > 0 ||
+  threadHasQueuedTurnStart(
+    {
+      status: row.status as OrchestrationV2ThreadShell["status"],
+      latestRunId: row.latestRunId as OrchestrationV2ThreadShell["latestRunId"],
+      latestUserMessageAt: at(row.latestUserMessageAt),
+      latestRunRequestedAt: at(row.latestRunRequestedAt),
+      latestRunStartedAt: at(row.latestRunStartedAt),
+      latestRunCompletedAt: at(row.latestRunCompletedAt),
+    },
+    nowMs,
+  );
+
+interface ScratchThread extends ScratchThreadRow {
+  /** The folder as recorded and as the filesystem resolves it. */
+  readonly bound: ReadonlyArray<string>;
+  readonly busy: boolean;
+}
+
+/** This server's threads that are not deleted and have a folder, each resolved once; null if unread. */
+const readScratchThreads = Effect.fn("scratchFolders.readThreads")(function* () {
+  const sql = yield* SqlClient.SqlClient;
+  const fs = yield* FileSystem.FileSystem;
+  const path = yield* Path.Path;
+  const rows = yield* sql<ScratchThreadRow>`
+    SELECT thread_id AS "id",
+      COALESCE(json_extract(payload_json, '$.title'), title) AS "title",
+      json_extract(payload_json, '$.worktreePath') AS "path",
+      json_extract(payload_json, '$.status') AS "status",
+      json_extract(payload_json, '$.activeRunId') AS "activeRunId",
+      json_extract(payload_json, '$.pendingRuntimeRequest') AS "pendingRequest",
+      json_array_length(payload_json, '$.pendingBackgroundTasks') AS "pendingTasks",
+      updated_at AS "updatedAt",
+      json_extract(payload_json, '$.latestUserMessageAt') AS "latestUserMessageAt",
+      json_extract(payload_json, '$.latestRunId') AS "latestRunId",
+      json_extract(payload_json, '$.latestRunRequestedAt') AS "latestRunRequestedAt",
+      json_extract(payload_json, '$.latestRunStartedAt') AS "latestRunStartedAt",
+      json_extract(payload_json, '$.latestRunCompletedAt') AS "latestRunCompletedAt"
+    FROM orchestration_v2_projection_threads
+    WHERE deleted_at IS NULL AND json_extract(payload_json, '$.worktreePath') IS NOT NULL
+  `.pipe(Effect.orElseSucceed(() => null));
+  if (rows === null) return null;
+  const nowMs = yield* Clock.currentTimeMillis;
+  return yield* Effect.forEach(rows, (row): Effect.Effect<ScratchThread> =>
+    fs.realPath(row.path).pipe(
+      Effect.orElseSucceed(() => path.resolve(row.path)),
+      Effect.map((real) => ({
+        ...row,
+        bound: [path.resolve(row.path), real],
+        busy: busy(row, nowMs),
+      })),
+    ),
+  );
+});
+
+/** The threads that work in folder or inside it. */
+const threadsUsing = Effect.fn("scratchFolders.threadsUsing")(function* (
+  folder: string,
+  threads: ReadonlyArray<ScratchThread>,
+  rules: PathRules,
+) {
+  const fs = yield* FileSystem.FileSystem;
+  const path = yield* Path.Path;
+  const targets = [
+    path.resolve(folder),
+    yield* fs.realPath(folder).pipe(Effect.orElseSucceed(() => path.resolve(folder))),
+  ];
+  return threads
+    .filter((thread) =>
+      targets.some((target) =>
+        thread.bound.some(
+          (value) => samePath(value, target, rules) || isStrictlyInside(target, value, rules),
+        ),
+      ),
+    )
+    .toSorted((left, right) => left.id.localeCompare(right.id));
+});
+
+/** Why a reviewed scratch folder must stay now: its threads changed or one started working. */
+export const scratchReuseReason = Effect.fn("scratchFolders.reuseReason")(function* (
+  folder: string,
+  reviewed: ReadonlyArray<string>,
+  rules: PathRules,
+) {
+  const threads = yield* readScratchThreads();
+  if (threads === null) return "this server's threads could not be read";
+  const users = yield* threadsUsing(folder, threads, rules);
+  const working = users.find((user) => user.busy);
+  if (working !== undefined) return "its thread is working in it now";
+  if (users.map((user) => user.id).join("\n") !== reviewed.join("\n"))
+    return "a thread started using it after it was reviewed";
+  return null;
+});
+
+/** Names every thread of an idle folder and says what removing it costs. */
+const idleReason = (users: ReadonlyArray<ScratchThread>) => {
+  if (users.length === 0)
+    return "No thread uses this No project folder. Removing it deletes its files for good.";
+  const names = users.map((user) => `"${user.title ?? user.id}"`);
+  const listed =
+    names.length === 1 ? names[0] : `${names.slice(0, -1).join(", ")} and ${names.at(-1)}`;
+  const idleSince = users
+    .map((user) => user.updatedAt)
+    .filter((value) => value !== null)
+    .toSorted()
+    .at(-1);
+  return (
+    `Folder of the No project thread${users.length === 1 ? "" : "s"} ${listed}` +
+    (idleSince === undefined ? "" : `, idle since ${idleSince.slice(0, 10)}`) +
+    ". Removing it deletes its files for good; " +
+    (users.length === 1 ? "the thread's" : "their") +
+    " next turn starts in an empty folder."
+  );
+};
+
+type Decision = {
+  readonly state: StorageItemState;
+  readonly reason: string;
+  readonly selected: boolean;
+};
+
+/** Adds each folder of the scratch root, never pre-selected, to the scan. */
+export const scanScratchFolders = Effect.fn("scratchFolders.scan")(function* (scan: {
+  readonly baseDir: string;
+  readonly rules: PathRules;
+  readonly notes: Array<string>;
+  readonly state: (value: StorageItemState, reason: string) => Decision;
+  /** Other GOAT servers or running processes that use a folder; null when none. */
+  readonly usedOutside: (target: string) => Decision | null;
+  readonly stamped: (
+    id: string,
+    folder: string,
+    minAgeMs: number,
+    decision: Decision,
+  ) => Effect.Effect<{
+    readonly decision: Decision;
+    readonly token: ReadonlyArray<string | number | bigint>;
+    readonly stamp: ContentStamp | null;
+  }>;
+  readonly add: (
+    item: Omit<StorageItem, "id" | "token" | "bytes">,
+    target: {
+      readonly kind: "path";
+      readonly root: string;
+      readonly identity: FileIdentity;
+      readonly worktree: null;
+      readonly stamp: ContentStamp | null;
+      readonly scratchThreads: ReadonlyArray<string>;
+    },
+    identity: ReadonlyArray<string | number | bigint | null>,
+  ) => void;
+  readonly measureLater: (id: string, target: string, priority: number) => void;
+}) {
+  const fs = yield* FileSystem.FileSystem;
+  const path = yield* Path.Path;
+  const sql = yield* SqlClient.SqlClient;
+  const root = yield* fs
+    .realPath(path.join(scan.baseDir, "scratch"))
+    .pipe(Effect.orElseSucceed(() => null));
+  if (root === null) return;
+  // A promoted No project thread leaves its folder as a project's root, with no thread bound.
+  const projectRows = yield* sql<{ readonly root: string }>`
+    SELECT workspace_root AS "root" FROM projection_projects WHERE deleted_at IS NULL
+  `.pipe(Effect.orElseSucceed(() => null));
+  if (projectRows === null) {
+    scan.notes.push(
+      "This server's projects could not be read, so no No project folder is offered.",
+    );
+    return;
+  }
+  const projectRoots = yield* Effect.forEach(projectRows, (row) =>
+    fs.realPath(row.root).pipe(Effect.orElseSucceed(() => path.resolve(row.root))),
+  );
+  // Read and resolved once per scan; removal reads them again under the folder's hold.
+  let threads: ReadonlyArray<ScratchThread> | null | undefined;
+  for (const name of yield* fs.readDirectory(root).pipe(Effect.orElseSucceed(() => []))) {
+    const folder = path.join(root, name);
+    const stat = yield* lstatOf(folder);
+    if (stat === null || !stat.isDirectory || stat.isLink) continue;
+    threads ??= yield* readScratchThreads();
+    if (threads === null) {
+      scan.notes.push(
+        "This server's threads could not be read, so no No project folder is offered.",
+      );
+      return;
+    }
+    const users = yield* threadsUsing(folder, threads, scan.rules);
+    const working = users.find((user) => user.busy);
+    const projectInside = projectRoots.some(
+      (projectRoot) =>
+        samePath(projectRoot, folder, scan.rules) ||
+        isStrictlyInside(folder, projectRoot, scan.rules),
+    );
+    const offered =
+      scan.usedOutside(folder) ??
+      (projectInside
+        ? scan.state("protected", "A project's folder is at or inside it")
+        : working !== undefined
+          ? scan.state(
+              "protected",
+              `The No project thread "${working.title ?? working.id}" is working in it`,
+            )
+          : scan.state("removable", idleReason(users)));
+    const id = "orphan_folder:" + folder;
+    const { decision, token, stamp } = yield* scan.stamped(id, folder, SCRATCH_MIN_AGE_MS, offered);
+    const threadIds = users.map((user) => user.id);
+    scan.add(
+      { kind: "orphan_folder", path: folder, label: path.join("No project", name), ...decision },
+      {
+        kind: "path",
+        root,
+        identity: stat.identity,
+        worktree: null,
+        stamp,
+        scratchThreads: threadIds,
+      },
+      [stat.identity.dev, stat.identity.ino, ...token, ...threadIds],
+    );
+    scan.measureLater(id, folder, decision.state === "removable" ? 1 : 3);
+  }
+});

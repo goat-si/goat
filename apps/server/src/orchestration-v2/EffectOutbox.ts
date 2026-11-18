@@ -1,19 +1,4 @@
-import {
-  CheckpointId,
-  CheckpointScopeId,
-  CommandId,
-  MessageId,
-  NodeId,
-  ProviderSessionId,
-  RunAttemptId,
-  ProviderApprovalDecision,
-  ProviderUserInputAnswers,
-  ProviderThreadId,
-  ProviderTurnId,
-  RunId,
-  RuntimeRequestId,
-  ThreadId,
-} from "@goat/contracts";
+import { CommandId, ProviderTurnId, RunId, ThreadId } from "@goat/contracts";
 // @effect-diagnostics nodeBuiltinImport:off
 import * as NodeOS from "node:os";
 import * as Context from "effect/Context";
@@ -37,6 +22,7 @@ export {
   PROCESS_BOUND_EFFECT_TYPES,
   REPLAY_SAFE_EFFECT_TYPES_AFTER_PROCESS_LOSS,
 } from "./EffectOutboxEffectTypes.ts";
+import type { EffectRow } from "./effectOutboxRow.ts";
 import * as EffectExecutionFences from "./EffectExecutionFences.ts";
 import { effectTypesForLane } from "./EffectExecutionPolicy.ts";
 import type {
@@ -51,114 +37,14 @@ export type {
 import { forkParked } from "../serverActivation.ts";
 import * as AutomationHold from "../automationHold.ts";
 import * as HostPressureMonitor from "../fleet/pressure/HostPressureMonitor.ts";
-export const OrchestrationEffectRequestV2 = Schema.Union([
-  Schema.Struct({
-    type: Schema.Literal("provider-runtime.continue"),
-    sourceRunId: RunId,
-  }),
-  Schema.Struct({
-    type: Schema.Literal("provider-session.detach"),
-    providerSessionId: ProviderSessionId,
-    detail: Schema.optional(Schema.String),
-    revokeMcpCredential: Schema.optional(Schema.Boolean),
-  }),
-  Schema.Struct({
-    type: Schema.Literal("provider-turn.reattach"),
-    runId: RunId,
-  }),
-  Schema.Struct({
-    type: Schema.Literal("provider-turn.start"),
-    runId: RunId,
-  }),
-  Schema.Struct({
-    type: Schema.Literal("provider-turn.interrupt"),
-    providerSessionId: ProviderSessionId,
-    providerThreadId: ProviderThreadId,
-    providerTurnId: ProviderTurnId,
-    subagent: Schema.optional(Schema.Struct({ id: NodeId, nativeTaskId: Schema.String })),
-  }),
-  Schema.Struct({
-    type: Schema.Literal("provider-turn.steer"),
-    providerSessionId: ProviderSessionId,
-    providerThreadId: ProviderThreadId,
-    providerTurnId: ProviderTurnId,
-    messageId: MessageId,
-  }),
-  Schema.Struct({
-    type: Schema.Literal("provider-turn.restart"),
-    providerSessionId: ProviderSessionId,
-    providerThreadId: ProviderThreadId,
-    providerTurnId: ProviderTurnId,
-    interruptedAttemptId: RunAttemptId,
-    runId: RunId,
-    sessionTransition: Schema.optional(
-      Schema.Union([
-        Schema.Struct({
-          type: Schema.Literal("replace"),
-          replacementProviderSessionId: ProviderSessionId,
-        }),
-        Schema.Struct({ type: Schema.Literal("detach") }),
-      ]),
-    ),
-  }),
-  Schema.Struct({
-    type: Schema.Literal("runtime-request.respond"),
-    providerSessionId: ProviderSessionId,
-    requestId: RuntimeRequestId,
-    decision: Schema.optional(ProviderApprovalDecision),
-    feedback: Schema.optional(Schema.String),
-    answers: Schema.optional(ProviderUserInputAnswers),
-  }),
-  Schema.Struct({
-    type: Schema.Literal("provider-thread.rollback"),
-    restoreFiles: Schema.optional(Schema.Boolean),
-    providerThreadId: ProviderThreadId,
-    checkpointId: CheckpointId,
-    scopeId: CheckpointScopeId,
-  }),
-  Schema.Struct({
-    type: Schema.Literal("checkpoint.capture"),
-    runId: RunId,
-    scopeId: CheckpointScopeId,
-  }),
-  Schema.Struct({
-    type: Schema.Literal("scheduled-tasks.cleanup"),
-  }),
-  Schema.Struct({
-    type: Schema.Literal("terminal.cleanup"),
-  }),
-  Schema.Struct({ type: Schema.Literal("preview.cleanup") }),
-  Schema.Struct({ type: Schema.Literal("device.release") }),
-  Schema.Struct({
-    type: Schema.Literal("attachment.cleanup"),
-    attachmentIds: Schema.Array(Schema.String),
-  }),
-  Schema.Struct({
-    type: Schema.Literal("thread-title.generate"),
-    kind: Schema.Union([
-      Schema.Struct({ type: Schema.Literal("initial"), messageId: MessageId }),
-      Schema.Struct({ type: Schema.Literal("regenerate") }),
-    ]),
-  }),
-  Schema.Struct({
-    type: Schema.Literal("delegated-tasks.stop"),
-    childThreadIds: Schema.optional(Schema.Array(ThreadId)),
-    reason: Schema.optional(Schema.String),
-  }),
-  Schema.Struct({
-    type: Schema.Literal("computer-use.stop"),
-    cutoff: Schema.optional(Schema.Number),
-  }),
-]);
-export type OrchestrationEffectRequestV2 = typeof OrchestrationEffectRequestV2.Type;
-export const OrchestrationEffectStatusV2 = Schema.Literals([
-  "pending",
-  "running",
-  "succeeded",
-  "failed",
-  "cancelled",
-]);
-export type OrchestrationEffectStatusV2 = typeof OrchestrationEffectStatusV2.Type;
+import {
+  OrchestrationEffectRequestV2,
+  OrchestrationEffectStatusV2,
+} from "./EffectOutboxRequest.ts";
+export {
+  OrchestrationEffectRequestV2,
+  OrchestrationEffectStatusV2,
+} from "./EffectOutboxRequest.ts";
 
 /** Receipts deduplicate retries, and restart re-enqueues need far less than a week. Retain failed rows to keep deleted-thread worktrees. */
 export const SETTLED_EFFECT_RETENTION = Duration.days(7);
@@ -277,23 +163,6 @@ export class EffectOutboxV2 extends Context.Service<EffectOutboxV2, EffectOutbox
   "goat/orchestration-v2/EffectOutbox/EffectOutboxV2",
 ) {}
 
-type EffectRow = {
-  readonly effect_id: string;
-  readonly command_id: string;
-  readonly thread_id: string;
-  readonly effect_type: string;
-  readonly payload_json: string;
-  readonly status: string;
-  readonly attempt_count: number;
-  readonly available_at: string;
-  readonly lease_owner: string | null;
-  readonly lease_expires_at: string | null;
-  readonly created_at: string;
-  readonly updated_at: string;
-  readonly completed_at: string | null;
-  readonly last_error: string | null;
-};
-
 const encodeRequest = Schema.encodeSync(Schema.fromJsonString(OrchestrationEffectRequestV2));
 const encodeIds = Schema.encodeSync(Schema.fromJsonString(Schema.Array(Schema.String)));
 const decodeRequest = Schema.decodeUnknownEffect(
@@ -326,15 +195,12 @@ export const layer = Layer.effect(
     const fences = yield* EffectExecutionFences.EffectExecutionFences;
     const claimLock = yield* Semaphore.make(1);
     const pressure = yield* Effect.serviceOption(HostPressureMonitor.HostPressureMonitor);
+    const startSlots = Math.max(2, Math.floor(NodeOS.availableParallelism() / 2));
     const sampleStartCapacity = Option.isSome(pressure)
       ? pressure.value.held.pipe(
-          Effect.map((sample) =>
-            sample?.level === "critical"
-              ? 1
-              : Math.max(2, Math.floor(NodeOS.availableParallelism() / 2)),
-          ),
+          Effect.map((sample) => (sample?.level === "critical" ? 1 : startSlots)),
         )
-      : Effect.succeed(Math.max(2, Math.floor(NodeOS.availableParallelism() / 2)));
+      : Effect.succeed(startSlots);
     const hold = yield* AutomationHold.AutomationHold;
     let backlog: { readonly effects: string; readonly threads: string } | undefined;
     const heldBacklog = Effect.gen(function* () {
@@ -401,6 +267,7 @@ export const layer = Layer.effect(
         AND candidate.status = 'pending'
         AND (candidate.effect_type != 'provider-turn.start' OR candidate.thread_id NOT IN (SELECT value FROM json_each(${encodeIds(guard.blockedThreads)})) OR ${allowedSurvivor})
         AND ${effectTypes === undefined ? sql`1 = 1` : effectTypes.length === 0 ? sql`0 = 1` : sql`candidate.effect_type IN ${sql.in(effectTypes)}`}
+        AND ${occupancy.titleAtCapacity ? sql`candidate.effect_type != 'thread-title.generate'` : sql`1 = 1`}
         AND ${occupancy.titleThreads.length === 0 ? sql`1 = 1` : sql`(candidate.effect_type != 'thread-title.generate' OR candidate.thread_id NOT IN ${sql.in(occupancy.titleThreads)})`}
         AND ${occupancy.mainThreads.length === 0 ? sql`1 = 1` : sql`(candidate.effect_type = 'thread-title.generate' OR candidate.thread_id NOT IN ${sql.in(occupancy.mainThreads)})`}
         AND ${occupancy.fullLanes.length === 0 ? sql`1 = 1` : sql`candidate.effect_type NOT IN ${sql.in(occupancy.fullLanes.flatMap(effectTypesForLane))}`}
@@ -784,7 +651,7 @@ export const layer = Layer.effect(
           const held = yield* heldBacklog;
           const startState = yield* startGuard;
           const startCapacity = yield* sampleStartCapacity;
-          const occupancy = yield* fences.snapshotWith({ startCapacity });
+          const occupancy = yield* fences.snapshotWith({ startCapacity, startSlots });
           const now = yield* DateTime.now;
           const nowIso = DateTime.formatIso(now);
           const leaseExpiresAt = DateTime.formatIso(
@@ -827,7 +694,7 @@ export const layer = Layer.effect(
           const held = yield* heldBacklog;
           const startState = yield* startGuard;
           const startCapacity = yield* sampleStartCapacity;
-          const occupancy = yield* fences.snapshotWith({ startCapacity });
+          const occupancy = yield* fences.snapshotWith({ startCapacity, startSlots });
           const rows = yield* sql<{ readonly available_at: string | null }>`
           SELECT MIN(candidate.available_at) AS available_at
           FROM orchestration_v2_effect_outbox AS candidate

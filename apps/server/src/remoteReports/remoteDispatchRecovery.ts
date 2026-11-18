@@ -5,7 +5,8 @@
  * The destination binds a correlation id before it creates the thread, so asking it is the only
  * honest source. It answers with the binding and the thread state, or fences the id so a launch
  * still in flight can never bind later. A fence is the one proof that nothing ran; any other
- * answer, an older destination, or an unreachable host leaves the row lost and its capacity held.
+ * answer or an older destination leaves the row lost and its capacity held. A host unreachable for
+ * a day ends the row's hold (it may still start there), and asking continues until it answers.
  *
  * @module remoteDispatchRecovery
  */
@@ -18,6 +19,8 @@ import * as Schema from "effect/Schema";
 import * as SqlClient from "effect/sql/SqlClient";
 import * as ThreadManagementService from "../orchestration-v2/ThreadManagementService.ts";
 import * as SshRemoteDispatch from "../sshRemote/SshRemoteDispatch.ts";
+import { publicRow } from "./remoteDispatchModel.ts";
+import { isUnreachable, recordLostLaunchUnreachable } from "./remoteDispatchOutage.ts";
 import { decodeRemoteDispatchRows, type RemoteDispatchRow } from "./remoteDispatchRow.ts";
 import { threadKnownRun } from "./remoteThreadObservation.ts";
 
@@ -45,23 +48,40 @@ const resolveLostThreadLaunch = Effect.fn("remoteReports.resolveLostThreadLaunch
     ),
     Effect.orElseSucceed(() => "approval-required" as const),
   );
-  const answer = yield* ssh.callHostTool(
-    {
-      host: row.host,
-      tool: "goat_origin_resolve_binding",
-      // A fence is a durable write on the destination; the read key is its only credential.
-      writes: true,
-      timeoutMs: 60_000,
-      arguments: { correlationId: row.correlation_id, readKey: row.read_key },
-    },
-    ceiling,
-  );
-  const resolution = yield* decodeResolution(answer);
+  const answer = yield* ssh
+    .callHostTool(
+      {
+        host: row.host,
+        tool: "goat_origin_resolve_binding",
+        // A fence is a durable write on the destination; the read key is its only credential.
+        writes: true,
+        timeoutMs: 60_000,
+        arguments: { correlationId: row.correlation_id, readKey: row.read_key },
+      },
+      ceiling,
+    )
+    .pipe(Effect.result);
+  const clearOutage = sql`UPDATE remote_dispatches SET host_unavailable_since = NULL, host_last_failed_at = NULL
+    WHERE correlation_id = ${row.correlation_id} AND state = 'lost' AND remote_thread_id IS NULL AND end_reason IS NULL`;
+  if (answer._tag === "Failure") {
+    if (
+      answer.failure instanceof SshRemoteDispatch.SshRemoteDispatchError &&
+      answer.failure.hostAnswered === true
+    )
+      yield* clearOutage;
+    if (!isUnreachable(answer.failure)) return yield* answer.failure;
+    yield* recordLostLaunchUnreachable(publicRow(row));
+    return { _tag: "pending" } as const satisfies LostLaunchOutcome;
+  }
+  yield* clearOutage;
+  const resolution = yield* decodeResolution(answer.success);
+
   const at = DateTime.formatIso(yield* DateTime.now);
   // Each write keeps its guard: a row another writer already settled is left as it is.
   const settle = (lastError: string) =>
     sql`UPDATE remote_dispatches SET state = 'cancelled', last_error = ${lastError},
-        updated_at = ${at}
+        updated_at = ${at}, end_reason = NULL, ended_at = NULL,
+        host_unavailable_since = NULL, host_last_failed_at = NULL
         WHERE correlation_id = ${row.correlation_id} AND state = 'lost' AND remote_thread_id IS NULL
         RETURNING correlation_id`.pipe(Effect.map((changed) => changed.length > 0));
   const settled = (changed: boolean): LostLaunchOutcome =>
@@ -82,7 +102,8 @@ const resolveLostThreadLaunch = Effect.fn("remoteReports.resolveLostThreadLaunch
   // running dispatch; without an active run the drain follows the latest run, as at startup.
   const rebound = yield* sql`UPDATE remote_dispatches SET remote_thread_id = ${resolution.threadId},
       launched_run_id = ${resolution.activeRunId}, reports_supported = 1, state = 'running',
-      last_error = NULL, updated_at = ${at}
+      last_error = NULL, updated_at = ${at}, end_reason = NULL, ended_at = NULL,
+      host_unavailable_since = NULL, host_last_failed_at = NULL
       WHERE correlation_id = ${row.correlation_id} AND state = 'lost' AND remote_thread_id IS NULL
       RETURNING correlation_id`;
   // Another writer settled the row first; it owns any drain, so this pass starts none.
@@ -97,6 +118,7 @@ const resolveLostThreadLaunch = Effect.fn("remoteReports.resolveLostThreadLaunch
 const LOST_RESOLVE_AFTER_MS = 10 * 60_000;
 // An inconclusive answer (unreachable host, older GOAT, thread not created yet) is asked again later.
 const LOST_RESOLVE_RETRY_MS = 5 * 60_000;
+const LOST_ENDED_RETRY_MS = 30 * 60_000;
 
 /** One pass over this origin's lost thread launches; it never fails, it logs and asks again. */
 export const resolveLostThreadLaunches = Effect.fn("remoteReports.resolveLostThreadLaunches")(
@@ -115,7 +137,13 @@ export const resolveLostThreadLaunches = Effect.fn("remoteReports.resolveLostThr
       const id = row.correlation_id;
       if (Date.parse(row.updated_at) > nowMs - LOST_RESOLVE_AFTER_MS) continue;
       if ((input.retryAt.get(id) ?? 0) > nowMs) continue;
-      input.retryAt.set(id, nowMs + (yield* retryDelayMs(LOST_RESOLVE_RETRY_MS)));
+      input.retryAt.set(
+        id,
+        nowMs +
+          (yield* retryDelayMs(
+            row.end_reason === "host_unreachable" ? LOST_ENDED_RETRY_MS : LOST_RESOLVE_RETRY_MS,
+          )),
+      );
       yield* resolveLostThreadLaunch(row).pipe(
         Effect.tap((outcome) => {
           if (outcome._tag !== "pending") input.retryAt.delete(id);
@@ -142,7 +170,7 @@ export const reopenUnreachable = Effect.fn("remoteReports.reopenUnreachable")(fu
   const reopened = yield* sql`UPDATE remote_dispatches SET state = 'running', end_reason = NULL,
       ended_at = NULL, host_unavailable_since = NULL, host_last_failed_at = NULL, last_error = NULL,
       updated_at = ${at}
-      WHERE correlation_id = ${id} AND state = 'lost' AND end_reason = 'host_unreachable'
+      WHERE correlation_id = ${id} AND state = 'lost' AND end_reason = 'host_unreachable' AND remote_thread_id IS NOT NULL
       RETURNING correlation_id`;
   return reopened.length > 0;
 });
@@ -163,7 +191,7 @@ export const probeUnreachableThreads = Effect.fn("remoteReports.probeUnreachable
     const ssh = yield* SshRemoteDispatch.SshRemoteDispatch;
     const nowMs = yield* Clock.currentTimeMillis;
     const lost = yield* sql`SELECT * FROM remote_dispatches WHERE kind = 'thread'
-      AND state = 'lost' AND end_reason = 'host_unreachable'`.pipe(
+      AND state = 'lost' AND end_reason = 'host_unreachable' AND remote_thread_id IS NOT NULL`.pipe(
       Effect.flatMap(decodeRemoteDispatchRows),
     );
     const byHost = new Map<string, Array<(typeof lost)[number]>>();

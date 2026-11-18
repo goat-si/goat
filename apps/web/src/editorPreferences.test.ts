@@ -67,3 +67,13 @@ it("checks revocation and regrant when a retained editor callback is invoked", a
   });
   expect(state.setPreference).toHaveBeenCalledTimes(1);
 });
+
+it("opens a thread file in its project while retaining older requests without a root", async () => {
+  state.allowed.add(secondary);
+  const open = useOpenInPreferredEditor(secondary, ["webstorm"], "/work/project");
+  expect((await open("/work/project/file.ts:4"))._tag).toBe("Success");
+  expect(state.run).toHaveBeenCalledWith({
+    environmentId: secondary,
+    input: { cwd: "/work/project/file.ts:4", editor: "webstorm", projectRoot: "/work/project" },
+  });
+});

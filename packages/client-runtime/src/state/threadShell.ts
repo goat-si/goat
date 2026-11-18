@@ -21,6 +21,10 @@ import { presentThreadShell, threadRuntimeIsActive } from "./models.ts";
 import { type EnvironmentCatalogState, enabledEnvironmentIds } from "./connections.ts";
 import { goatBotObservationThreadKeys, type GoatBotWorkRef } from "../goatBot/visibility.ts";
 import {
+  homeWorkGoverns,
+  type HomeCurrentOpenableLink,
+} from "../goatBot/homeCurrentOpenableWork.ts";
+import {
   arrayElementsEqual,
   parseProjectRefCollectionKey,
   parseThreadKey,
@@ -146,6 +150,16 @@ export function createEnvironmentThreadShellAtoms(input: {
    * The work GOAT Bot's rows list, read again for an environment when its signal changes:
    * a bot launch or worker appeared, or a bot conversation recorded something.
    */
+  readonly goatBotHomeWork?: (environmentId: EnvironmentId) => Atom.Atom<{
+    readonly rosterKnown: boolean;
+    readonly byBot: ReadonlyArray<{ readonly eligible: boolean }>;
+    readonly links: ReadonlyArray<HomeCurrentOpenableLink>;
+  }>;
+  /**
+   * The computer whose bot Home this client opens. When given, only its Home links govern
+   * Threads; every other computer keeps the listed-work rule and reads no Home work at all.
+   */
+  readonly goatBotHomeEnvironmentId?: Atom.Atom<EnvironmentId | null>;
   readonly goatBotListedWork?: (source: {
     readonly environmentIdsAtom: Atom.Atom<ReadonlyArray<EnvironmentId>>;
     readonly signal: (environmentId: EnvironmentId) => Atom.Atom<string>;
@@ -455,8 +469,18 @@ export function createEnvironmentThreadShellAtoms(input: {
   const goatBotEnvironmentIdsAtom = Atom.make((get) => [
     ...enabledEnvironmentIds(get(input.catalogValueAtom)),
   ]).pipe(Atom.withLabel("environment-goat-bot-environment-ids"));
+  const governedHomeLinks = (get: Atom.AtomContext, id: EnvironmentId) => {
+    if (input.goatBotHomeWork === undefined) return null;
+    if (input.goatBotHomeEnvironmentId !== undefined && get(input.goatBotHomeEnvironmentId) !== id)
+      return null;
+    const work = get(input.goatBotHomeWork(id));
+    return homeWorkGoverns(work) ? work.links : null;
+  };
+  const legacyBotEnvironmentIdsAtom = Atom.make((get) =>
+    get(goatBotEnvironmentIdsAtom).filter((id) => governedHomeLinks(get, id) === null),
+  );
   const goatBotListedWorkAtom = input.goatBotListedWork?.({
-    environmentIdsAtom: goatBotEnvironmentIdsAtom,
+    environmentIdsAtom: legacyBotEnvironmentIdsAtom,
     signal: goatBotWorkSignalAtom,
   });
 
@@ -465,6 +489,7 @@ export function createEnvironmentThreadShellAtoms(input: {
   const goatBotObservationThreadKeysAtom = Atom.make((get) => {
     const next = goatBotObservationThreadKeys({
       threads: get(quietThreadShellsAtom),
+      homeWork: get(goatBotEnvironmentIdsAtom).flatMap((id) => governedHomeLinks(get, id) ?? []),
       ...(goatBotListedWorkAtom === undefined ? {} : { listedWork: get(goatBotListedWorkAtom) }),
     });
     if (

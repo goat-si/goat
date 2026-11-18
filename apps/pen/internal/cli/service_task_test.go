@@ -573,6 +573,10 @@ func TestOverlappingTaskStartsEachGetTheirOwnRefusal(t *testing.T) {
 	var st *state.Store
 	var mu sync.Mutex
 	bWaiting := make(chan struct{})
+	aDone := make(chan struct{})
+	var releaseOnce sync.Once
+	releaseB := func() { releaseOnce.Do(func() { close(aDone) }) }
+	var bStarted, bWaitedForTurn atomic.Bool
 	var once sync.Once
 	bReached := func() { once.Do(func() { close(bWaiting) }) }
 	var bErr error
@@ -599,11 +603,17 @@ func TestOverlappingTaskStartsEachGetTheirOwnRefusal(t *testing.T) {
 		mu.Unlock()
 		if first {
 			// Caller B starts while A waits for its supervisor.
+			bStarted.Store(true)
 			go func() {
 				defer close(bDone)
 				bErr = startTask(st)
 			}()
-			<-bWaiting
+			select {
+			case <-bWaiting:
+			case <-bDone:
+			case <-time.After(30 * time.Second):
+				t.Error("caller B never reached its start")
+			}
 		} else {
 			bReached() // without turns, B gets here while A still waits
 		}
@@ -613,11 +623,41 @@ func TestOverlappingTaskStartsEachGetTheirOwnRefusal(t *testing.T) {
 	fakeTaskClock(t)
 	old := startLockWaits
 	t.Cleanup(func() { startLockWaits = old })
-	startLockWaits = bReached
-	if err := startTask(st); err == nil || !strings.Contains(err.Error(), "refused for this start") {
+	// Join B before restores and home removal (cleanups run last-in first-out); a stuck B fails instead of hanging.
+	t.Cleanup(func() {
+		releaseB()
+		if !bStarted.Load() {
+			return
+		}
+		select {
+		case <-bDone:
+		case <-time.After(30 * time.Second):
+			t.Error("caller B's start did not end; it may still use this test's home")
+		}
+	})
+	startLockWaits = func() {
+		bWaitedForTurn.Store(true)
+		bReached()
+		// B's turn wait advances the fake clock without regard to A, so it starts once A released the turn.
+		select {
+		case <-aDone:
+		case <-time.After(30 * time.Second):
+			t.Error("caller A's start did not finish while caller B waited for its turn")
+		}
+	}
+	err := startTask(st)
+	releaseB()
+	if err == nil || !strings.Contains(err.Error(), "refused for this start") {
 		t.Fatalf("caller A: %v, want the refusal of its own start", err)
 	}
-	<-bDone
+	select {
+	case <-bDone:
+	case <-time.After(30 * time.Second):
+		t.Fatal("caller B's start did not finish")
+	}
+	if !bWaitedForTurn.Load() {
+		t.Fatal("caller B never waited for caller A's turn: the two starts were not serialized")
+	}
 	if bErr == nil || !strings.Contains(bErr.Error(), "refused for this start") {
 		t.Fatalf("caller B: %v, want the refusal of its own start", bErr)
 	}

@@ -72,7 +72,7 @@ const world = <A, E, R>(body: Effect.Effect<A, E, R>) =>
 it.effect("a row the wire cannot carry makes the table unreadable, never the hub node list", () =>
   world(
     Effect.gen(function* () {
-      yield* runMigrations({ toMigrationInclusive: 145 });
+      yield* runMigrations({ toMigrationInclusive: 155 });
       const store = yield* Store.DisposableMachineStore;
       yield* insert("a1", "g");
       expect(yield* store.records).toHaveLength(1);
@@ -113,7 +113,7 @@ it.effect("a row the wire cannot carry makes the table unreadable, never the hub
 it.effect("a padded state or attach id makes the table unreadable instead of reading changed", () =>
   world(
     Effect.gen(function* () {
-      yield* runMigrations({ toMigrationInclusive: 145 });
+      yield* runMigrations({ toMigrationInclusive: 155 });
       const store = yield* Store.DisposableMachineStore;
       const sql = yield* SqlClient.SqlClient;
       for (const [attachId, state] of [
@@ -137,7 +137,7 @@ it.effect("an unreadable table reads as no records, so every machine is kept", (
       // Before the migration there is no table at all.
       expect(yield* store.records.pipe(Effect.flip)).toBeInstanceOf(Store.DisposableStoreError);
       expect(yield* store.recordsOrKept).toEqual([]);
-      yield* runMigrations({ toMigrationInclusive: 145 });
+      yield* runMigrations({ toMigrationInclusive: 155 });
       yield* insert("a1", "g", { provisioner_json: "{not json" });
       expect(yield* store.records.pipe(Effect.flip)).toBeInstanceOf(Store.DisposableStoreError);
       expect(yield* store.recordsOrKept).toEqual([]);
@@ -148,7 +148,7 @@ it.effect("an unreadable table reads as no records, so every machine is kept", (
 it.effect("a forward commit runs only under the switch's grant and the record's fence", () =>
   world(
     Effect.gen(function* () {
-      yield* runMigrations({ toMigrationInclusive: 145 });
+      yield* runMigrations({ toMigrationInclusive: 155 });
       const settings = yield* Settings.ServerSettingsService;
       const store = yield* Store.DisposableMachineStore;
       yield* withPersonConsent(settings.updateSettings(switchOn));
@@ -194,7 +194,7 @@ it.effect("a forward commit runs only under the switch's grant and the record's 
 it.effect("a forward commit queued behind a settings change sees that change", () =>
   world(
     Effect.gen(function* () {
-      yield* runMigrations({ toMigrationInclusive: 145 });
+      yield* runMigrations({ toMigrationInclusive: 155 });
       const settings = yield* Settings.ServerSettingsService;
       yield* withPersonConsent(settings.updateSettings(switchOn));
       yield* insert("a1", yield* currentGrant);
@@ -233,7 +233,7 @@ it.effect("a forward commit queued behind a settings change sees that change", (
 it.effect("a switch-off during a forward commit lets that commit finish and refuses the next", () =>
   world(
     Effect.gen(function* () {
-      yield* runMigrations({ toMigrationInclusive: 145 });
+      yield* runMigrations({ toMigrationInclusive: 155 });
       const settings = yield* Settings.ServerSettingsService;
       const store = yield* Store.DisposableMachineStore;
       yield* withPersonConsent(settings.updateSettings(switchOn));
@@ -282,7 +282,7 @@ it.effect(
   () =>
     world(
       Effect.gen(function* () {
-        yield* runMigrations({ toMigrationInclusive: 145 });
+        yield* runMigrations({ toMigrationInclusive: 155 });
         const store = yield* Store.DisposableMachineStore;
         // Records in a final state are not read, whatever their number.
         for (let index = 0; index < 1000; index += 1)
@@ -300,7 +300,7 @@ it.effect(
 it.effect("a forward commit that waits for the database past the switch's expiry is refused", () =>
   world(
     Effect.gen(function* () {
-      yield* runMigrations({ toMigrationInclusive: 145 });
+      yield* runMigrations({ toMigrationInclusive: 155 });
       const sql = yield* SqlClient.SqlClient;
       const settings = yield* Settings.ServerSettingsService;
       yield* withPersonConsent(settings.updateSettings(switchOn));
@@ -348,7 +348,7 @@ it.effect("a forward commit that waits for the database past the switch's expiry
 it.effect("two steps that read the same fence: the first commits, the second is refused", () =>
   world(
     Effect.gen(function* () {
-      yield* runMigrations({ toMigrationInclusive: 145 });
+      yield* runMigrations({ toMigrationInclusive: 155 });
       const settings = yield* Settings.ServerSettingsService;
       const store = yield* Store.DisposableMachineStore;
       yield* withPersonConsent(settings.updateSettings(switchOn));
@@ -365,7 +365,7 @@ it.effect("two steps that read the same fence: the first commits, the second is 
 it.effect("a write that stalls gives up the settings lock at the bound and changes nothing", () =>
   world(
     Effect.gen(function* () {
-      yield* runMigrations({ toMigrationInclusive: 145 });
+      yield* runMigrations({ toMigrationInclusive: 155 });
       const settings = yield* Settings.ServerSettingsService;
       const store = yield* Store.DisposableMachineStore;
       yield* withPersonConsent(settings.updateSettings(switchOn));
@@ -394,7 +394,7 @@ it.effect("a write that stalls gives up the settings lock at the bound and chang
 it.effect("a write's own failure reaches the caller as itself, never as unreadable records", () =>
   world(
     Effect.gen(function* () {
-      yield* runMigrations({ toMigrationInclusive: 145 });
+      yield* runMigrations({ toMigrationInclusive: 155 });
       const settings = yield* Settings.ServerSettingsService;
       const store = yield* Store.DisposableMachineStore;
       yield* withPersonConsent(settings.updateSettings(switchOn));
@@ -416,7 +416,7 @@ it.effect("a write's own failure reaches the caller as itself, never as unreadab
 it.effect("a record cannot enter a final state without final_at", () =>
   world(
     Effect.gen(function* () {
-      yield* runMigrations({ toMigrationInclusive: 145 });
+      yield* runMigrations({ toMigrationInclusive: 155 });
       expect(yield* insert("a1", "g", { state: "failed" }).pipe(Effect.isFailure)).toBe(true);
       yield* insert("a2", "g", { state: "failed", final_at: T0 });
       const store = yield* Store.DisposableMachineStore;
@@ -428,7 +428,7 @@ it.effect("a record cannot enter a final state without final_at", () =>
 it.effect("a write admitted before the switch expires but finishing after it is rolled back", () =>
   world(
     Effect.gen(function* () {
-      yield* runMigrations({ toMigrationInclusive: 145 });
+      yield* runMigrations({ toMigrationInclusive: 155 });
       const settings = yield* Settings.ServerSettingsService;
       const store = yield* Store.DisposableMachineStore;
       yield* withPersonConsent(settings.updateSettings(switchOn));

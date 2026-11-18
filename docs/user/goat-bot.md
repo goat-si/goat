@@ -11,6 +11,13 @@ open from the bot's home: select the bot's name at the top of its chat. Finished
 the chat never told, such as a request made from Slack, keeps its card. Older servers show each
 task as a card in the conversation.
 
+On mobile, **Something else** on a task's question lets you answer it in your own words: Send
+answers that question. The "Answering" chip above the message box stays until you send, close it,
+or the task records an answer.
+On web and desktop, while the chat stays open, what you type into **Something else** stays until
+you send or clear it. If the task records an answer first, your words show as **Not sent** until
+you discard them. Opening a task, leaving the chat or reloading the page loses them.
+
 ## Bots
 
 The main bot is GOAT Bot. On servers that support it, **New bot** creates more bots, each with its
@@ -44,6 +51,12 @@ other requests that need your attention, including requests from hidden bots. Ex
 an item to open its task. Use the **Open next bot ask** command to move through them. When more
 wait than the list shows, **Show more** lists the next ones.
 
+On a phone, while the computer GOAT Bot runs on is offline, the Bots list and **Needs you** show
+what the phone last read from it, which may be out of date. You can open a bot's conversation, but
+bots can't be added or changed until the computer is back. Closing the app forgets that list.
+**Settings → GOAT Bot** also shows the bot's settings as the phone last read them; they can't be
+changed until the computer is back.
+
 ## The face
 
 Each bot's avatar shows what it is doing:
@@ -67,6 +80,19 @@ bot** changes its name, face, purpose and model. **Home** is one page: a status 
 something needs fixing, the bot's tasks, its routines and the machines its work runs on. Selecting
 a task shows its conversation right there, beside the chat, and marks it read; **Go to thread**
 opens it in full. A task's menu pins it, marks it done or marks it read.
+A pull request on a task's row shown without Open, Merged or Closed has no state GOAT is checking;
+open its thread to see where it stands.
+
+With a newer server, on a computer and on mobile, the bot's work lives in its Home: a thread the
+bot started leaves Threads while its task's **Show work** in Home links it (a finished task past
+the first five appears after **Show more**). Some threads stay in Threads, such as launches from an older chat,
+some of a long task's threads, and work on a machine this device can't open; on an older server
+everything stays as it was. This holds for the computer the bot runs on in this app, while this
+device can open that bot's Home; threads a bot started on your other computers are listed in
+Threads as before. The unread badge on a bot's row counts recent work only; older work may be
+missing. An unavailable mark means its unread or waiting count could not be read; the mark names
+which.
+
 **Show more** under the tasks reads older work page by page while the home stays open. An older
 task can be shown, opened and pinned from its menu; pinned, it joins the recent tasks, where it can
 be marked done or read, and opening it marks it read. On a newer server, its full view shows the task's
@@ -84,12 +110,15 @@ bot's tasks, and a task opens in its own view.
   open and waiting work, or Slack. Each problem comes with the action that fixes it when you're
   allowed to take it. The full status stays in **Settings → GOAT Bot**.
 - **Routines** lists routines that post into this conversation, when they run next, how the last
-  run went, and a switch to pause them. **Check in on me** sets up a routine on the days and
-  hours you choose: the bot looks over its tasks and writes only when something needs you. A
-  routine whose last run failed shows **Run now**. **New routine** starts a routine request in the
-  message box for you to finish and send.
-- **New routine**, **Ask to change** and **Ask to forget** fill only an empty message box. If it
-  already holds your text or files, they stay as they are: send or clear them first.
+  run went, and a switch to pause them. Dots under a routine show its recent runs; select one to
+  see what it said. **Check in on me** sets up a routine on the days and hours you choose: the bot
+  looks over its tasks and writes only when something needs you. A routine whose last run failed
+  shows **Run now**. **New routine** starts a routine request in the message box for you to finish
+  and send. On the phone, the **+** beside the chat's message box offers it too, with your photos
+  and files.
+- **New routine**, **Ask to change** and **Ask to forget** fill only a message box with no words or
+  files in it; blank space counts as empty. If it holds your words or files, they stay as they
+  are: send or clear them first.
 - A task that failed or that you stopped shows **Retry** in its task view; each
   retry runs it again as its next attempt (**Attempt 2**, then 3). While the stopped work is still
   ending, Retry is refused; try again once it has ended. Work that ran on another computer is not

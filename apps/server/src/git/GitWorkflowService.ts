@@ -29,6 +29,7 @@ import {
   type VcsStatusLocalResult,
   type VcsStatusRemoteResult,
   type VcsStatusResult,
+  type ThreadId,
 } from "@goat/contracts";
 
 import * as GitManager from "./GitManager.ts";
@@ -40,6 +41,7 @@ import {
   withWorkspaceLease,
   type WorkspaceLeaseUnavailableError,
 } from "../workspace/workspaceLease.ts";
+import { makeIsManagedWorktreePath } from "../worktreesDirectory.ts";
 
 const leaseUnavailable =
   (operation: string, command: string, cwd: string) => (error: WorkspaceLeaseUnavailableError) =>
@@ -48,7 +50,7 @@ const leaseUnavailable =
 export class GitWorkflowService extends Context.Service<
   GitWorkflowService,
   {
-    readonly isRepository: (cwd: string) => Effect.Effect<boolean, GitManagerServiceError>;
+    readonly repositoryRoot: (cwd: string) => Effect.Effect<string | null, GitManagerServiceError>;
     readonly hasCommit: (input: {
       readonly cwd: string;
       readonly refName: string;
@@ -64,6 +66,14 @@ export class GitWorkflowService extends Context.Service<
       input: VcsStatusInput,
     ) => Effect.Effect<VcsStatusLocalResult, GitManagerServiceError>;
     readonly currentBranch: (cwd: string) => Effect.Effect<string | null, GitManagerServiceError>;
+    readonly upstreamDivergence: (cwd: string) => Effect.Effect<
+      {
+        readonly refName: string;
+        readonly aheadCount: number;
+        readonly behindCount: number;
+      } | null,
+      GitManagerServiceError
+    >;
     readonly remoteStatus: (
       input: VcsStatusInput,
       options?: GitManager.GitRemoteStatusOptions,
@@ -328,13 +338,13 @@ export const make = Effect.gen(function* () {
       ensureGit(operation, input.cwd).pipe(Effect.andThen(run(input)));
 
   return GitWorkflowService.of({
-    isRepository: Effect.fn("GitWorkflowService.isRepository")(function (cwd) {
+    repositoryRoot: Effect.fn("GitWorkflowService.repositoryRoot")(function (cwd) {
       return registry.detect({ cwd }).pipe(
-        Effect.map((handle) => handle?.kind === "git"),
+        Effect.map((handle) => (handle?.kind === "git" ? handle.repository.rootPath : null)),
         Effect.mapError(
           (cause) =>
             new GitManagerError({
-              operation: "GitWorkflowService.isRepository",
+              operation: "GitWorkflowService.repositoryRoot",
               cwd,
               detail: "Failed to detect a VCS repository for this Git workflow.",
               cause,
@@ -416,6 +426,16 @@ export const make = Effect.gen(function* () {
         stderrLength: result.stderr.length,
         detail: "Failed to read the checked-out branch.",
       });
+    }),
+    upstreamDivergence: Effect.fn("GitWorkflowService.upstreamDivergence")(function* (cwd) {
+      const details = yield* git.statusDetailsRemote(cwd, { refreshUpstream: false });
+      return details.hasUpstream && details.branch !== null
+        ? {
+            refName: details.branch,
+            aheadCount: details.aheadCount,
+            behindCount: details.behindCount,
+          }
+        : null;
     }),
     remoteStatus: Effect.fn("GitWorkflowService.remoteStatus")(function (input, options) {
       return detectGitRepositoryForStatus("GitWorkflowService.remoteStatus", input.cwd).pipe(
@@ -585,3 +605,39 @@ export const make = Effect.gen(function* () {
 });
 
 export const layer = Layer.effect(GitWorkflowService, make);
+
+/**
+ * Worktree reads and removals clients ask for. A thread's worktreePath can name a checkout GOAT
+ * never made (an imported session's own worktree, an existing_worktree launch), and the client's
+ * "Delete the worktree too?" runs a forced removal, so the server removes only GOAT-managed folders
+ * whatever the client's version.
+ */
+export const makeClientWorktrees = Effect.gen(function* () {
+  const gitWorkflow = yield* GitWorkflowService;
+  const path = yield* Path.Path;
+  const isManaged = yield* makeIsManagedWorktreePath;
+
+  const remove = Effect.fn("ClientWorktrees.remove")(function* (input: VcsRemoveWorktreeInput) {
+    const target = path.resolve(input.cwd, input.path);
+    if (!(yield* isManaged(target)))
+      return yield* new GitCommandError({
+        operation: "ClientWorktrees.remove",
+        command: "git worktree remove",
+        cwd: input.cwd,
+        detail: `${target} is outside GOAT's worktrees folder. GOAT removes only worktrees it created; it left this folder in place.`,
+      });
+    return yield* gitWorkflow.removeWorktree(input);
+  });
+
+  /** Threads using a worktree, and whether GOAT made it, which decides whether a client offers its removal. */
+  const withManaged =
+    (worktreePath: string) =>
+    <E, R>(
+      rows: Effect.Effect<{ readonly threads: ReadonlyArray<{ readonly id: ThreadId }> }, E, R>,
+    ) =>
+      Effect.all([rows, isManaged(worktreePath)]).pipe(
+        Effect.map(([{ threads }, managed]) => ({ threadIds: threads.map((t) => t.id), managed })),
+      );
+
+  return { remove, withManaged };
+});

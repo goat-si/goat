@@ -76,7 +76,7 @@ export interface ContinueReviewDeps {
 
 export interface ContinueReviewCall {
   readonly scope: McpThreadInvocationScope;
-  readonly parent: Pick<OrchestrationV2ThreadProjection, "thread" | "subagents">;
+  readonly parent: Pick<OrchestrationV2ThreadProjection, "thread">;
   readonly parentRun: {
     readonly id: RunId;
     readonly rootNodeId: NodeId;

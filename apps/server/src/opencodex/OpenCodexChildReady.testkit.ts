@@ -1,3 +1,4 @@
+import * as NodeCrypto from "@effect/platform-node/NodeCrypto";
 import * as NodeServices from "@effect/platform-node/NodeServices";
 import {
   type ChildReadyPrepareInput,
@@ -154,6 +155,7 @@ export const fixture = Effect.fn("OpenCodexChildReady.testkit.fixture")(function
   };
   const probes = yield* Ref.make(0);
   const resolveCalls: Array<boolean | undefined> = [];
+  const installUpdates: Array<boolean> = [];
   const executable = {
     executablePath: "/fixture/codex",
     source: "managed" as const,
@@ -237,10 +239,12 @@ export const fixture = Effect.fn("OpenCodexChildReady.testkit.fixture")(function
             );
       },
       acquire: () => Effect.succeed(executable),
-      startManagedOnly: Effect.sync(() => {
-        if (state.installResult === "succeeded") state.managedCodex = true;
-        return installState(state.installResult);
-      }),
+      startManagedOnly: (input) =>
+        Effect.sync(() => {
+          installUpdates.push(input.allowUpdate);
+          if (state.installResult === "succeeded") state.managedCodex = true;
+          return installState(state.installResult);
+        }),
     }),
     Layer.mock(ProcessRunner.ProcessRunner)({
       run: (input) =>
@@ -272,7 +276,7 @@ export const fixture = Effect.fn("OpenCodexChildReady.testkit.fixture")(function
               .pipe(Effect.orDie);
           }
           return yield* ok();
-        }).pipe(Effect.provide(NodeServices.layer)),
+        }).pipe(Effect.provide(Layer.mergeAll(NodeServices.layer, NodeCrypto.layer))),
     }),
     Layer.mock(Profiles.PermissionProfiles)({}),
     Layer.mock(UpdateHost.OpenCodexUpdateHost)({}),
@@ -310,7 +314,7 @@ export const fixture = Effect.fn("OpenCodexChildReady.testkit.fixture")(function
     ),
     Layer.provideMerge(settingsLayer),
     Layer.provideMerge(ServerConfig.layerTest(process.cwd(), { prefix: "goat-child-ready-" })),
-    Layer.provideMerge(NodeServices.layer),
+    Layer.provideMerge(Layer.mergeAll(NodeServices.layer, NodeCrypto.layer)),
   );
   const ready = yield* Layer.build(service);
   const run = <A, E>(
@@ -380,6 +384,7 @@ export const fixture = Effect.fn("OpenCodexChildReady.testkit.fixture")(function
     seedInstance,
     probes: Ref.get(probes),
     resolveCalls,
+    installUpdates,
   };
 });
 

@@ -1,3 +1,4 @@
+import { EnvironmentId, ProviderInstanceId, ThreadId } from "@goat/contracts";
 import * as Queue from "effect/Queue";
 import * as Effect from "effect/Effect";
 import type * as ServerBrowser from "./ServerBrowser.ts";
@@ -101,10 +102,12 @@ export function makeSession(
         return { result: { value: { ratio: 1, width: 1280, height: 800 } } };
       }
       if (method === "Page.addScriptToEvaluateOnNewDocument") frame?.recording.resolve();
-      if (method === "Input.dispatchKeyEvent" && (input as { commands?: unknown }).commands) {
-        if (mockCopy.focusedFrame)
-          mockCopy.focusedFrame.copy = mockCopy.key || mockCopy.focusedFrame.copy;
-        else mockCopy.page = mockCopy.key || mockCopy.page;
+      if (
+        method === "Input.dispatchKeyEvent" &&
+        ["copy", "cut"].includes((input as { commands?: string[] }).commands?.[0] ?? "")
+      ) {
+        if (mockCopy.focusedFrame) mockCopy.focusedFrame.copy = mockCopy.key;
+        else mockCopy.page = mockCopy.key;
       }
       if (method === "Runtime.evaluate" && (input as { contextId?: number }).contextId === 7) {
         const value = frame ? frame.copy : mockCopy.page;
@@ -141,3 +144,24 @@ export const stallViewer = (viewer: ServerBrowser.ServerBrowserViewer) => {
   while (Queue.offerUnsafe(output, { _tag: "frame", data: Buffer.alloc(0), ack })) unacked++;
   return Effect.promise(() => acked.promise);
 };
+
+export const viewportSizes = (items: ReadonlyArray<ServerBrowser.ServerBrowserViewerOutput>) =>
+  items.flatMap((item) => (item._tag === "viewport" ? [`${item.width}x${item.height}`] : []));
+
+const testThread = {
+  threadId: ThreadId.make("browser-test-thread"),
+  providerSessionId: "agent-a",
+  providerInstanceId: ProviderInstanceId.make("codex"),
+};
+export const scope = {
+  environmentId: EnvironmentId.make("browser-test-environment"),
+  thread: testThread,
+  client: undefined,
+  requestNamespace: "browser-test",
+  capabilities: new Set(["preview"] as const),
+  issuedAt: 1,
+};
+export const asSession = (providerSessionId: string) => ({
+  ...scope,
+  thread: { ...testThread, providerSessionId },
+});

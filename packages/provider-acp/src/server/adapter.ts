@@ -1,12 +1,32 @@
 import { ACP_PROMPT_ACTIVITY_UPDATES } from "./capabilities.ts";
+import {
+  acpSubagentStatusBlocksTurnSettlement,
+  acpSubagentStatusIsTerminal,
+} from "./acpSubagentStatus.ts";
+import { launchEnvironment } from "./sessionLaunchEnvironment.ts";
 import { negotiatedCapabilities, nativeThreadId, makeProviderThread } from "./capabilities.ts";
 export { AcpProviderCapabilitiesV2 } from "./capabilities.ts";
+import type {
+  AcpAdapterV2RuntimeInput,
+  AcpAdapterV2UserInputRequest,
+  AcpAdapterV2Flavor,
+  AcpAdapterV2SubagentUpdate,
+  AcpAdapterV2Options,
+} from "./adapterFlavor.ts";
+export type {
+  AcpAdapterV2RuntimeInput,
+  AcpAdapterV2NativeLogging,
+  AcpAdapterV2UserInputRequest,
+  AcpAdapterV2ExtensionContext,
+  AcpAdapterV2Flavor,
+  AcpSubagentSessionEvent,
+  AcpAdapterV2SubagentUpdate,
+  AcpAdapterV2Options,
+} from "./adapterFlavor.ts";
 import {
   selectPermissionOptionId,
   selectAutoApprovedPermissionOption,
 } from "./permissionOptions.ts";
-// @effect-diagnostics nodeBuiltinImport:off
-
 // @effect-diagnostics nodeBuiltinImport:off
 import {
   type ChatAttachment,
@@ -15,7 +35,6 @@ import {
   type OrchestrationV2ExecutionNode,
   type OrchestrationV2PlanArtifact,
   type OrchestrationV2PlanStep,
-  type OrchestrationV2ProviderCapabilities,
   type OrchestrationV2ProviderFailure,
   type OrchestrationV2ProviderRetry,
   type OrchestrationV2ProviderSession,
@@ -25,24 +44,20 @@ import {
   type OrchestrationV2RuntimeRequest,
   type OrchestrationV2Subagent,
   type OrchestrationV2TurnItem,
-  type OrchestrationV2UserInputQuestion,
   type OrchestrationV2WebSearchResult,
   type ProviderApprovalDecision,
-  type ProviderApprovalOption,
   type ProviderInstanceId,
   type ProviderInteractionMode,
-  type ProviderDriverKind,
   type ProviderThreadId,
   type ProviderUserInputAnswers,
   type RuntimeRequestId,
   type ThreadTokenUsageSnapshot,
   type ThreadId,
-  type TurnTokenUsage,
 } from "@goat/contracts";
 import { AgentScope, AgentScopeThreadId } from "@goat/shared/AgentScope";
+import { forkInScope } from "@goat/shared/forkInScope";
 import { HTML_RENDER_TOOL_NAME } from "@goat/shared/htmlRender";
 import { modelSelectionsEqual } from "@goat/shared/model";
-import { type SelfInvocation } from "@goat/shared/nodeRuntime";
 import {
   resolveGoatMcpItemCall,
   resolveGoatMcpShippedToolId,
@@ -61,7 +76,7 @@ import {
 export { acpToolCallDiffPatch, acpToolCallSnippetEdit } from "./toolDiff.ts";
 import * as Cause from "effect/Cause";
 import * as Clock from "effect/Clock";
-import * as Crypto from "effect/Crypto";
+import * as SecureRandom from "effect/crypto/SecureRandom";
 import * as DateTime from "effect/DateTime";
 import * as Deferred from "effect/Deferred";
 import * as Duration from "effect/Duration";
@@ -105,12 +120,12 @@ import {
   withTrackedPermissionToolCall,
   type AcpPlanUpdate,
   type AcpAgentTerminalState,
-  type AcpSessionModeState,
   type AcpToolCallState,
 } from "./runtimeModel.ts";
 import { acpNoticeContent, isReplayedAcpNotice } from "./noticeProjection.ts";
-import { textFromUnknown } from "./toolOutputText.ts";
+import { appendToolContentText, textFromUnknown } from "./toolOutputText.ts";
 import { parseElicitationForm } from "./elicitationForm.ts";
+import * as AdvertisedCommands from "./advertisedCommands.ts";
 import {
   appendToolCallContentChunk,
   applyInterruptedToolStatus,
@@ -126,7 +141,6 @@ import {
   acpClientExecuteDisposition,
   acpMcpToolApprovalElicitationDisposition,
   acpPermissionDisposition,
-  type AcpPermissionDisposition,
   makeAcpClientPolicyGrants,
   unknownRecord,
 } from "./clientPolicy.ts";
@@ -147,9 +161,7 @@ import {
 } from "@goat/provider-core/server/orchestrationInstructions";
 import { acpInstructionState, buildAcpRuntimeInstructions } from "./screenInstructions.ts";
 import * as IdAllocator from "@goat/provider-core/server/IdAllocator";
-import type * as ProviderContinuationRequests from "@goat/provider-core/server/ProviderContinuationRequests";
 import {
-  type BackgroundWork,
   type BackgroundWorkReport,
   backgroundWorkNotification,
 } from "@goat/provider-core/server/notification";
@@ -172,6 +184,9 @@ import {
   type AcpMcpContext,
 } from "./mcpContext.ts";
 
+import { acpPerTurnPromptUsage } from "./promptUsage.ts";
+export { acpPerTurnPromptUsage } from "./promptUsage.ts";
+
 export const ACP_PROTOCOL = "acp.ndjson-jsonrpc" as const;
 
 // Grok summaries can trail hydrated tools by over two seconds; shorter waits split the wake.
@@ -182,79 +197,39 @@ const ACP_DEFERRED_FINALIZE_DEBOUNCE: Duration.Input = "3000 millis";
  * This avoids quadratic output; scheduled flushes can run late under host load.
  */
 const ACP_TEXT_FLUSH_INTERVAL: Duration.Input = "50 millis";
+const ACP_BUSY_PROMPT_RETRY_INTERVAL: Duration.Input = "1 second";
+
+// pi-agent-core agents (oh-my-pi) end a turn while background work runs and reject
+// prompts until it finishes; the prompt is resent rather than failing the turn.
+function isAgentBusyPromptError(error: EffectAcpErrors.AcpError): boolean {
+  return (
+    error._tag === "AcpRequestError" && error.errorMessage.startsWith("Agent is already processing")
+  );
+}
+
+function sendPromptWhenIdle<A>(
+  turn: { readonly interrupted: boolean; readonly finalized: boolean },
+  prompt: () => Effect.Effect<A, EffectAcpErrors.AcpError>,
+): Effect.Effect<A, EffectAcpErrors.AcpError> {
+  // A Stop can land during the wait, so the flags are rechecked before each resend.
+  const stopped = () => turn.interrupted || turn.finalized;
+  return prompt().pipe(
+    Effect.catchIf(
+      (error) => isAgentBusyPromptError(error) && !stopped(),
+      (error) =>
+        Effect.sleep(ACP_BUSY_PROMPT_RETRY_INTERVAL).pipe(
+          Effect.andThen(
+            Effect.suspend(() =>
+              stopped() ? Effect.fail(error) : sendPromptWhenIdle(turn, prompt),
+            ),
+          ),
+        ),
+    ),
+  );
+}
 
 // Output of the running prompt. Session metadata and unknown updates do not reset its timeout.
 
-export interface AcpAdapterV2RuntimeInput {
-  readonly cwd: string;
-  readonly runtimePolicy: ProviderAdapter.ProviderAdapterV2RuntimePolicy;
-  readonly mcpServers: ReadonlyArray<EffectAcpSchema.McpServer>;
-  readonly acpMcpServers?: ReadonlyArray<EffectAcpSchema.McpServer>;
-  readonly processEnvironment?: NodeJS.ProcessEnv;
-  readonly resumeSessionId?: string;
-  readonly interruptPromptOnCancel?: boolean;
-  readonly clientCapabilities: EffectAcpSchema.InitializeRequest["clientCapabilities"];
-  readonly clientInfo: AcpSessionRuntime.AcpSessionRuntimeOptions["clientInfo"];
-  readonly requestLogger?: NonNullable<AcpSessionRuntime.AcpSessionRuntimeOptions["requestLogger"]>;
-  readonly protocolLogging: NonNullable<
-    AcpSessionRuntime.AcpSessionRuntimeOptions["protocolLogging"]
-  >;
-  readonly onTermination: NonNullable<AcpSessionRuntime.AcpSessionRuntimeOptions["onTermination"]>;
-  readonly onOutgoingResponseFailure?: AcpSessionRuntime.AcpSessionRuntimeOptions["onOutgoingResponseFailure"];
-  readonly onOutgoingResponse?: AcpSessionRuntime.AcpSessionRuntimeOptions["onOutgoingResponse"];
-  readonly onIncomingRequest?: AcpSessionRuntime.AcpSessionRuntimeOptions["onIncomingRequest"];
-}
-
-export type AcpAdapterV2NativeLogging = Pick<
-  AcpSessionRuntime.AcpSessionRuntimeOptions,
-  "requestLogger" | "protocolLogging"
->;
-
-export interface AcpAdapterV2UserInputRequest {
-  readonly nativeItemId: string;
-  readonly nativeRequestId: string;
-  readonly questions: ReadonlyArray<OrchestrationV2UserInputQuestion>;
-}
-
-export interface AcpAdapterV2ExtensionContext {
-  readonly runtime: AcpSessionRuntime.AcpSessionRuntime["Service"];
-  readonly reportProviderRetry: (input: {
-    readonly sessionId: string;
-    readonly failure: OrchestrationV2ProviderFailure;
-  }) => Effect.Effect<void>;
-  readonly finishSubagent: (notice: {
-    readonly sessionId: string;
-    readonly childSessionId: string;
-    readonly status: "completed" | "failed" | "cancelled";
-    readonly result: string | null;
-  }) => Effect.Effect<void>;
-  readonly applyBackgroundTaskMutation: (mutation: {
-    readonly sessionId: string;
-    readonly taskId: string;
-    readonly status: "running" | "completed" | "failed";
-    readonly output?: string;
-    readonly report?: BackgroundWork;
-  }) => Effect.Effect<void>;
-  readonly requestUserInput: (
-    input: AcpAdapterV2UserInputRequest,
-    requestContext: EffectAcpProtocol.AcpRequestContext,
-  ) => Effect.Effect<
-    {
-      readonly acknowledgeNativeResponse: Effect.Effect<void, EffectAcpErrors.AcpError>;
-      readonly answers: ProviderUserInputAnswers | null;
-    },
-    EffectAcpErrors.AcpError
-  >;
-  readonly captureProposedPlan: (input: { readonly planMarkdown: string }) => Effect.Effect<void>;
-  readonly lastProposedPlanMarkdown: Effect.Effect<string | undefined>;
-}
-
-/**
- * Raised when an agent does not accept the session's model selection: the
- * session's model option does not offer it, or the agent answers the write
- * with invalid params. `makeProviderFailure` shows its message to the user;
- * the agent's reply stays on `cause`.
- */
 class AcpModelSelectionError extends Schema.TaggedError<AcpModelSelectionError>()(
   "AcpModelSelectionError",
   {
@@ -265,236 +240,6 @@ class AcpModelSelectionError extends Schema.TaggedError<AcpModelSelectionError>(
   override get message(): string {
     return `The agent did not accept the model "${this.model}". Choose another model for this provider, then retry.`;
   }
-}
-
-/**
- * Maps one per-turn usage sample (flavors with reportsPerTurnPromptUsage)
- * directly onto TurnTokenUsage: the response's counters already cover exactly
- * this prompt.
- */
-export function acpPerTurnPromptUsage(
-  usage: EffectAcpSchema.Usage | null | undefined,
-  hasSubagents: boolean,
-  terminalStatus: OrchestrationV2ProviderTurn["status"],
-  geminiUsage = false,
-): TurnTokenUsage {
-  if (usage == null) {
-    return { usageScope: "main_agent", usageStatus: "unavailable", hasSubagents };
-  }
-  const inputTokens = geminiUsage
-    ? usage.inputTokens + (usage.cachedReadTokens ?? 0)
-    : usage.inputTokens;
-  const outputTokens = geminiUsage
-    ? usage.outputTokens + (usage.thoughtTokens ?? 0)
-    : usage.outputTokens;
-  // TurnTokenUsage contract: input includes cache read + write and reasoning
-  // is a subset of output, so clamp counters that exceed their parent and
-  // drop the ones the agent left unset. Cache writes are capped at whatever
-  // cache reads leave of input, so the pair cannot exceed it.
-  const clampSubset = (value: number | null | undefined, parent: number) =>
-    value == null ? undefined : Math.min(value, parent);
-  const cachedInputTokens = clampSubset(usage.cachedReadTokens, inputTokens);
-  const cacheCreationTokens = clampSubset(
-    usage.cachedWriteTokens,
-    inputTokens - (cachedInputTokens ?? 0),
-  );
-  const reasoningTokens = clampSubset(usage.thoughtTokens, outputTokens);
-  return {
-    usageScope: "main_agent",
-    usageStatus: terminalStatus === "completed" ? "complete" : "partial",
-    hasSubagents,
-    inputTokens,
-    outputTokens,
-    ...(cachedInputTokens === undefined ? {} : { cachedInputTokens }),
-    ...(cacheCreationTokens === undefined ? {} : { cacheCreationTokens }),
-    ...(reasoningTokens === undefined ? {} : { reasoningTokens }),
-  };
-}
-
-export interface AcpAdapterV2Flavor {
-  readonly buildPrompt?: (input: {
-    readonly text: string;
-    readonly attachments: ReadonlyArray<ChatAttachment>;
-    readonly resolveAttachmentPath: (attachment: ChatAttachment) => string | null;
-    readonly promptCapabilities: EffectAcpSchema.AgentCapabilities["promptCapabilities"];
-    readonly agentVersion: string | undefined;
-    /** The session's model after selection, with its display name when the agent lists it. */
-    readonly currentModel: { readonly id: string; readonly name: string | undefined } | undefined;
-  }) => Effect.Effect<ReadonlyArray<EffectAcpSchema.ContentBlock>, EffectAcpErrors.AcpError>;
-  readonly promptFailure?: (cause: unknown) => OrchestrationV2ProviderFailure;
-  /**
-   * Runs before `session/prompt`. The returned check sees a prompt the agent ended
-   * without an error or cancel, and reports a failure its stop reason hid. A reported
-   * failure restarts the runtime before the next turn.
-   */
-  readonly watchPromptOutcome?: (
-    sessionId: string,
-  ) => Effect.Effect<
-    (
-      result: EffectAcpSchema.PromptResponse,
-    ) => Effect.Effect<OrchestrationV2ProviderFailure | undefined>
-  >;
-  readonly requiresSignIn?: (cause: unknown) => boolean;
-  /**
-   * Runs before attachment paths, GOAT instructions and native slash-command detection,
-   * so a rewrite can turn the user's text into a native command.
-   */
-  readonly rewriteUserText?: (
-    text: string,
-    turnInput: ProviderAdapter.ProviderAdapterV2TurnInput,
-  ) => Effect.Effect<string, never, ChildProcessSpawner.ChildProcessSpawner>;
-  readonly driver: ProviderDriverKind;
-  readonly capabilities: OrchestrationV2ProviderCapabilities;
-  readonly clientCapabilitiesMeta?: NonNullable<
-    EffectAcpSchema.InitializeRequest["clientCapabilities"]
-  >["_meta"];
-  readonly normalizeSessionUpdate?: (
-    notification: EffectAcpSchema.SessionNotification,
-  ) => EffectAcpSchema.SessionNotification;
-  readonly onAvailableCommandsUpdate?: (
-    commands: ReadonlyArray<EffectAcpSchema.AvailableCommand>,
-  ) => Effect.Effect<void>;
-  readonly onSessionConfigurationUpdate?: (
-    configOptions: ReadonlyArray<EffectAcpSchema.SessionConfigOption>,
-    modeState: AcpSessionModeState | undefined,
-    modelState: EffectAcpSchema.SessionModelState | null | undefined,
-  ) => Effect.Effect<void>;
-  readonly onUrlElicitation?: (input: {
-    readonly elicitationId: string;
-    readonly url: string;
-    readonly message: string;
-  }) => Effect.Effect<boolean>;
-  readonly extractElicitationForm?: (request: EffectAcpSchema.CreateElicitationRequest) =>
-    | {
-        readonly questions: ReadonlyArray<OrchestrationV2UserInputQuestion>;
-        readonly respond: (
-          answers: ProviderUserInputAnswers,
-        ) => EffectAcpSchema.CreateElicitationResponse;
-      }
-    | undefined;
-  readonly withRuntimeStartup?: <A, E, R>(effect: Effect.Effect<A, E, R>) => Effect.Effect<A, E, R>;
-  readonly makeRuntime: (
-    input: AcpAdapterV2RuntimeInput,
-  ) => Effect.Effect<
-    AcpSessionRuntime.AcpSessionRuntime["Service"],
-    EffectAcpErrors.AcpError,
-    ChildProcessSpawner.ChildProcessSpawner | Crypto.Crypto | Scope.Scope
-  >;
-  readonly customModels?: ReadonlyArray<string>;
-  readonly resolveModelId?: (selection: ModelSelection) => string | undefined;
-  readonly getModelContextWindow?: (
-    selection: ModelSelection,
-    session: AcpSessionRuntime.AcpSessionRuntimeStartResult,
-  ) => number | undefined;
-  readonly applyModelSelection?: (input: {
-    readonly runtime: AcpSessionRuntime.AcpSessionRuntime["Service"];
-    readonly startResult: AcpSessionRuntime.AcpSessionRuntimeStartResult;
-    readonly modelSelection: ModelSelection;
-  }) => Effect.Effect<string | undefined, EffectAcpErrors.AcpError>;
-  readonly sessionModeForPolicy?: (
-    policy: ProviderAdapter.ProviderAdapterV2RuntimePolicy,
-  ) => string | undefined;
-  readonly clientFileSystem?: {
-    readonly readTextFile: (
-      request: EffectAcpSchema.ReadTextFileRequest,
-      cwd: string | null,
-    ) => Effect.Effect<EffectAcpSchema.ReadTextFileResponse, EffectAcpErrors.AcpError>;
-    readonly writeTextFile?: (
-      request: EffectAcpSchema.WriteTextFileRequest,
-      cwd: string | null,
-    ) => Effect.Effect<EffectAcpSchema.WriteTextFileResponse, EffectAcpErrors.AcpError>;
-  };
-  readonly extractPermissionQuestion?: (request: EffectAcpSchema.RequestPermissionRequest) =>
-    | {
-        readonly question: OrchestrationV2UserInputQuestion;
-        readonly respond: (
-          answers: ProviderUserInputAnswers,
-        ) => EffectAcpSchema.RequestPermissionResponse | undefined;
-      }
-    | undefined;
-  /** Grok Auto asks only about classifier refusals; GOAT policy must not auto-approve them. */
-  readonly permissionDisposition?: (
-    policy: ProviderAdapter.ProviderAdapterV2RuntimePolicy,
-    request: EffectAcpSchema.RequestPermissionRequest,
-  ) => AcpPermissionDisposition;
-  readonly approvalOptions?: (
-    request: EffectAcpSchema.RequestPermissionRequest,
-  ) => ReadonlyArray<ProviderApprovalOption>;
-  /** Prefer resume over load when both exist; Antigravity's load replays history slowly. */
-  readonly preferResumeSession?: boolean;
-  readonly onSessionEvent?: (
-    event: AcpSessionRuntime.AcpSessionRuntimeEvent,
-  ) => Effect.Effect<void>;
-  readonly subagentsIdleOnTurnCompletion?: boolean;
-  readonly supportsCompaction?: boolean;
-  readonly runtimeHarness?: string;
-  readonly registerExtensions?: (
-    context: AcpAdapterV2ExtensionContext,
-  ) => Effect.Effect<void, EffectAcpErrors.AcpError>;
-  readonly extractSubagentSessionEvent?: (
-    notification: EffectAcpSchema.SessionNotification,
-  ) => AcpSubagentSessionEvent | undefined;
-  readonly extractSubagentUpdate?: (
-    toolCall: AcpToolCallState,
-  ) => AcpAdapterV2SubagentUpdate | undefined;
-  readonly isProvisionalSubagentTool?: (toolCall: AcpToolCallState) => boolean;
-  readonly normalizeToolCall?: (toolCall: AcpToolCallState) => AcpToolCallState;
-  readonly extractProposedPlanMarkdown?: (toolCall: AcpToolCallState) => string | undefined;
-  readonly extractBackgroundTaskId?: (toolCall: AcpToolCallState) => string | undefined;
-  /** Distinguishes commands from monitors when lifecycle notifications omit their kind. */
-  readonly isBackgroundCommandTool?: (toolCall: AcpToolCallState) => boolean;
-  readonly extractBackgroundToolMutation?: (text: string) => ReadonlyArray<{
-    readonly taskId: string;
-    readonly status: "running" | "completed" | "failed";
-    readonly appendOutput: string;
-  }>;
-  readonly extractSubagentEndNotice?: (text: string) =>
-    | {
-        readonly childSessionId: string;
-        readonly status: "completed" | "failed";
-      }
-    | undefined;
-  readonly extractBackgroundTaskCompletion?: (toolCall: AcpToolCallState) => ReadonlyArray<{
-    readonly taskId: string;
-    readonly status: "running" | "completed" | "failed";
-    readonly appendOutput: string;
-  }>;
-  readonly isPersistentBackgroundTool?: (toolCall: AcpToolCallState) => boolean;
-  readonly isProviderWakeNotification?: (
-    notification: EffectAcpSchema.SessionNotification,
-  ) => boolean;
-  readonly deferFinalizeForBackgroundWork?: boolean;
-  readonly assertComplete?: Effect.Effect<void, EffectAcpErrors.AcpError>;
-  /** Interrupt the local prompt fiber before `session/cancel` (Grok wedged prompts). */
-  readonly interruptPromptOnCancel?: boolean;
-  /**
-   * The agent's PromptResponse.usage counters read per-turn. The ACP spec
-   * leaves usage semantics open, so this stays unset until proven live.
-   */
-  readonly reportsPerTurnPromptUsage?: boolean;
-  /** Gemini-style usage: inputTokens leaves out cachedReadTokens, outputTokens leaves out thoughtTokens. */
-  readonly geminiPromptUsage?: boolean;
-  /**
-   * Fails a dispatched prompt after this long with no update for its session while no
-   * agent request, tool or subagent is open, and replaces the agent before the next turn.
-   */
-  readonly promptInactivityTimeout?: Duration.Input;
-  /** Grok can retain task_already_running until process exit. */
-  readonly restartRuntimeAfterInterrupt?: boolean;
-  /** Prompt failures after which the agent process keeps failing until replaced. */
-  readonly restartRuntimeAfterPromptError?: (error: unknown) => boolean;
-  readonly restartRuntimeOnEveryInterrupt?: boolean;
-  readonly terminateRuntimeProcessGroupOnInterrupt?: boolean;
-  readonly preserveRuntimeOnSettledInterrupt?: boolean;
-  readonly enablePostSettleContinuation?: boolean;
-  /** Settle on native idle after the accepted user echo, only on negotiated ACP v2. */
-  readonly followAgentWorkState?: boolean;
-  /**
-   * Grok CLI currently accepts and vision-processes image blocks while still
-   * reporting the capability as false; without this override, screenshot turns
-   * fail before `session/prompt`.
-   */
-  readonly supportsImagePrompts?: boolean;
 }
 
 function acpSupportsImagePrompts(input: {
@@ -516,84 +261,6 @@ function acpProviderItemNativeId(input: {
   return input.itemIdentityVersion === 2
     ? acpScopedNativeId(input.instanceId, input.nativeId)
     : input.nativeId;
-}
-
-export type AcpSubagentSessionEvent =
-  | {
-      readonly type: "state";
-      readonly childSessionId: string;
-      readonly parentSessionId: string;
-      readonly status: "running" | "completed" | "failed" | "cancelled";
-      readonly result: string | null;
-    }
-  | {
-      readonly type: "delegation";
-      readonly childSessionId: string;
-      readonly parentSessionId: string | null;
-      readonly delegationId: string;
-      readonly prompt: string;
-    };
-
-export interface AcpAdapterV2SubagentUpdate {
-  readonly nativeTaskId: string;
-  readonly prompt: string;
-  readonly title: string | null;
-  readonly model: string | null;
-  readonly status:
-    | "pending"
-    | "running"
-    | "idle"
-    | "completed"
-    | "failed"
-    | "interrupted"
-    | "cancelled";
-  readonly childSessionId: string | null;
-  readonly result: string | null;
-  readonly suppressNormalTool?: boolean;
-}
-
-export interface AcpAdapterV2Options {
-  readonly instanceId: ProviderInstanceId;
-  readonly flavor: AcpAdapterV2Flavor;
-  readonly selfInvocation: SelfInvocation;
-  readonly clientTerminals?: {
-    readonly environment?: NodeJS.ProcessEnv;
-    readonly shellCommands?: boolean;
-  };
-  readonly nativeLogging?: (threadId: ThreadId) => AcpAdapterV2NativeLogging;
-  readonly continuationRequests?: {
-    readonly offer: (
-      request: ProviderContinuationRequests.ProviderContinuationRequest,
-    ) => Effect.Effect<void>;
-  };
-  readonly testHooks?: {
-    readonly onDeferredFinalizeScheduled?: (debounce: Duration.Input) => Effect.Effect<void>;
-    /** Wire signal is set; the completion callback has not requested its permit yet. */
-    readonly afterPromptWireSettled?: () => Effect.Effect<void>;
-    readonly afterPromptSettledWithBackgroundWork?: () => Effect.Effect<void>;
-    /** Terminal events, carryover cleanup, and the completion signal are finished. */
-    readonly afterTurnFinalized?: () => Effect.Effect<void>;
-    readonly afterNativeResponseTransportClosed?: () => Effect.Effect<void>;
-    readonly afterHardTeardownTransportDrained?: () => Effect.Effect<void>;
-    readonly beforeNativeResponseAdmissionCheck?: (
-      generation: number,
-      requestId: string,
-    ) => Effect.Effect<void>;
-    readonly onNativeResponseLifecycle?: (event: {
-      readonly generation?: number;
-      readonly requestId?: string;
-      readonly type:
-        | "admission_rejected"
-        | "failed"
-        | "late_noop"
-        | "registered"
-        | "removed"
-        | "timer_exited"
-        | "timer_started"
-        | "watcher_exited"
-        | "watcher_started";
-    }) => Effect.Effect<void>;
-  };
 }
 
 export function acpMcpToolCallOutput(rawOutput: unknown): unknown {
@@ -708,7 +375,12 @@ interface ActiveTextSegment {
 interface ActiveTextStream {
   current: ActiveTextSegment | null;
   nextSegment: number;
+  /** Closed messages a later chunk can resume, oldest first, up to MAX_RESUMABLE_TEXT_SEGMENTS. */
+  readonly closedNamedSegments: Map<string, ActiveTextSegment>;
 }
+
+// A message resumed after this many newer named messages closed starts over from its new text.
+export const MAX_RESUMABLE_TEXT_SEGMENTS = 64;
 
 interface AcpNativeBuildConfiguration {
   readonly modeId?: string;
@@ -776,6 +448,8 @@ interface ActiveAcpTurn {
   lastProgressAt: number;
   inactivityWatchdog: Fiber.Fiber<void> | undefined;
   readonly promptDispatched: Deferred.Deferred<void>;
+  /** Frees the runtime for the next prompt while the agent still holds this one's response. */
+  readonly foregroundIdle: Deferred.Deferred<void>;
 }
 
 type AcpRuntimeTeardownState =
@@ -956,20 +630,6 @@ interface AcpNativeChildSession {
   readonly pending: Array<EffectAcpSchema.SessionNotification>;
 }
 
-function acpSubagentStatusIsTerminal(status: OrchestrationV2Subagent["status"]): boolean {
-  return (
-    status === "completed" ||
-    status === "failed" ||
-    status === "interrupted" ||
-    status === "cancelled" ||
-    status === "idle"
-  );
-}
-
-function acpSubagentStatusBlocksTurnSettlement(status: OrchestrationV2Subagent["status"]): boolean {
-  return status === "running" || status === "pending";
-}
-
 function acpSubagentHasPendingBackgroundWork(subagent: ActiveAcpSubagent): boolean {
   return (
     acpSubagentStatusBlocksTurnSettlement(subagent.task.status) || !subagent.terminalStatusProjected
@@ -1038,7 +698,7 @@ function shouldPersistToolUpdate(
 export const makeAcpAdapterV2 = Effect.fn("makeAcpAdapterV2")(function* (
   options: AcpAdapterV2Options,
 ) {
-  const crypto = yield* Crypto.Crypto;
+  const random = yield* SecureRandom.SecureRandom;
   const fileSystem = yield* FileSystem.FileSystem;
   const toolNice = yield* resolveNice(yield* HostProcess.Platform);
   const childProcessSpawner = yield* ChildProcessSpawner.ChildProcessSpawner;
@@ -1059,11 +719,22 @@ export const makeAcpAdapterV2 = Effect.fn("makeAcpAdapterV2")(function* (
   const postSettleContinuationEnabled =
     flavor.enablePostSettleContinuation === true && continuationRequests !== undefined;
 
+  const readCapabilities = Effect.gen(function* () {
+    if (flavor.supportsNativeGoals === undefined) return flavor.capabilities;
+    return {
+      ...flavor.capabilities,
+      turns: {
+        ...flavor.capabilities.turns,
+        supportsNativeGoals: yield* flavor.supportsNativeGoals,
+      },
+    };
+  });
+
   return ProviderAdapter.ProviderAdapterV2.of({
     instanceId: options.instanceId,
     driver,
-    getCapabilities: Effect.fn("AcpAdapter.getCapabilities")(function () {
-      return Effect.succeed(flavor.capabilities);
+    getCapabilities: Effect.fn("AcpAdapter.getCapabilities")(function* () {
+      return yield* readCapabilities;
     }),
     planSelectionTransition: Effect.fn("AcpAdapter.planSelectionTransition")(function (input) {
       return Effect.succeed(acpSelectionTransition(input));
@@ -1151,13 +822,22 @@ export const makeAcpAdapterV2 = Effect.fn("makeAcpAdapterV2")(function* (
             terminalEnvironmentBySessionId.set(sessionId, environment);
           }
         };
+        const sessionEnvironment = options.currentEnvironment && {
+          ...(yield* options.currentEnvironment),
+        };
+        const sessionLaunch = yield* (
+          flavor.resolveSessionLaunch?.(
+            launchEnvironment(sessionEnvironment, input.runtimePolicy.cwd),
+            sessionEnvironment ?? {},
+          ) ?? Effect.void
+        );
         const clientTerminals: AcpClientTerminals | undefined =
           options.clientTerminals === undefined
             ? undefined
             : yield* makeAcpClientTerminals({
                 defaultCwd: input.runtimePolicy.cwd ?? process.cwd(),
                 nice: toolNice,
-                environment: options.clientTerminals.environment,
+                environment: sessionEnvironment ?? options.clientTerminals.environment,
                 shellCommands: options.clientTerminals.shellCommands,
                 environmentForSession: (sessionId) => {
                   const remembered = terminalEnvironmentBySessionId.get(sessionId);
@@ -1298,6 +978,9 @@ export const makeAcpAdapterV2 = Effect.fn("makeAcpAdapterV2")(function* (
         const promptInstructionStates = yield* Ref.make(new Map<string, GoatAcpInstructionState>());
         // Unique markers keep delayed prompt completions from clearing later compactions.
         const compactionMarkers = yield* Ref.make(new Map<string, symbol>());
+        const advertisedCommandsBySession = yield* Ref.make(AdvertisedCommands.empty);
+        const compactsContext =
+          flavor.supportsCompaction === true || flavor.compactViaAdvertisedCommand === true;
         const runtimeRestartRequired = yield* Ref.make(false);
         const runtimeTeardownState = yield* Ref.make<AcpRuntimeTeardownState>({ _tag: "Idle" });
         const runtimeCallbackGeneration = yield* Ref.make(0);
@@ -1735,6 +1418,8 @@ export const makeAcpAdapterV2 = Effect.fn("makeAcpAdapterV2")(function* (
             runtimePolicy: input.runtimePolicy,
             mcpServers: mcpContext.servers,
             acpMcpServers: mcpContext.acpServers,
+            sessionEnvironment,
+            sessionLaunch,
             ...(mcpContext.processEnvironment === undefined
               ? {}
               : { processEnvironment: mcpContext.processEnvironment }),
@@ -2228,9 +1913,46 @@ export const makeAcpAdapterV2 = Effect.fn("makeAcpAdapterV2")(function* (
           kind: "user" | "assistant" | "reasoning",
         ) {
           const stream = textStreamFor(context, kind);
-          if (stream.current === null) return;
+          const segment = stream.current;
+          if (segment === null) return;
           yield* emitTextSegment(context, kind, true);
+          if (segment.sourceMessageId !== null) {
+            stream.closedNamedSegments.set(segment.sourceMessageId, segment);
+            if (stream.closedNamedSegments.size > MAX_RESUMABLE_TEXT_SEGMENTS) {
+              const [oldest] = stream.closedNamedSegments.keys();
+              if (oldest !== undefined) stream.closedNamedSegments.delete(oldest);
+            }
+          }
           stream.current = null;
+        });
+
+        const openTextSegment = Effect.fnUntraced(function* (
+          context: ActiveAcpTurn,
+          kind: "user" | "assistant" | "reasoning",
+          sourceMessageId: string | null,
+        ) {
+          const stream = textStreamFor(context, kind);
+          const closed =
+            sourceMessageId === null ? undefined : stream.closedNamedSegments.get(sourceMessageId);
+          if (sourceMessageId !== null) stream.closedNamedSegments.delete(sourceMessageId);
+          // A new object, so a flush scheduled before the close stays a no-op.
+          const segment: ActiveTextSegment =
+            closed === undefined
+              ? {
+                  nativeItemId:
+                    sourceMessageId === null
+                      ? `${context.nativeTurnId}:${kind}:${stream.nextSegment}`
+                      : `${context.nativeTurnId}:${kind}:message:${sourceMessageId}`,
+                  startedAt: yield* DateTime.now,
+                  sourceMessageId,
+                  text: "",
+                  emitted: false,
+                  dirty: false,
+                }
+              : { ...closed, emitted: false, dirty: false };
+          if (closed === undefined) stream.nextSegment += 1;
+          stream.current = segment;
+          return segment;
         });
 
         const closeTextStreams = Effect.fnUntraced(function* (context: ActiveAcpTurn) {
@@ -2250,7 +1972,7 @@ export const makeAcpAdapterV2 = Effect.fn("makeAcpAdapterV2")(function* (
             if (other !== kind) yield* closeTextStream(context, other);
           }
           const stream = textStreamFor(context, kind);
-          const sourceMessageId = messageId?.trim() || null;
+          const sourceMessageId = messageId || null;
           if (
             stream.current !== null &&
             sourceMessageId !== null &&
@@ -2259,25 +1981,14 @@ export const makeAcpAdapterV2 = Effect.fn("makeAcpAdapterV2")(function* (
           ) {
             yield* closeTextStream(context, kind);
           }
-          if (stream.current === null) {
-            const now = yield* DateTime.now;
-            stream.current = {
-              nativeItemId:
-                sourceMessageId === null
-                  ? `${context.nativeTurnId}:${kind}:${stream.nextSegment}`
-                  : `${context.nativeTurnId}:${kind}:message:${sourceMessageId}`,
-              startedAt: now,
-              sourceMessageId,
-              text: "",
-              emitted: false,
-              dirty: false,
-            };
-            stream.nextSegment += 1;
-          } else if (stream.current.sourceMessageId === null && sourceMessageId !== null) {
+          let segment = stream.current;
+          if (segment === null) {
+            segment = yield* openTextSegment(context, kind, sourceMessageId);
+          } else if (segment.sourceMessageId === null && sourceMessageId !== null) {
             // Agents may omit the first messageId; retain projected identity until the first later id.
-            stream.current.sourceMessageId = sourceMessageId;
+            segment.sourceMessageId = sourceMessageId;
           }
-          stream.current.text += text;
+          segment.text += text;
           yield* publishTextSegment(context, kind);
         });
 
@@ -2290,22 +2001,12 @@ export const makeAcpAdapterV2 = Effect.fn("makeAcpAdapterV2")(function* (
           for (const other of ["user", "reasoning", "assistant"] as const) {
             if (other !== kind) yield* closeTextStream(context, other);
           }
-          const stream = textStreamFor(context, kind);
-          if (stream.current?.sourceMessageId !== messageId) {
+          let segment = textStreamFor(context, kind).current;
+          if (segment?.sourceMessageId !== messageId) {
             yield* closeTextStream(context, kind);
-            const now = yield* DateTime.now;
-            stream.current = {
-              nativeItemId: `${context.nativeTurnId}:${kind}:message:${messageId}`,
-              startedAt: now,
-              sourceMessageId: messageId,
-              text,
-              emitted: false,
-              dirty: false,
-            };
-            stream.nextSegment += 1;
-          } else {
-            stream.current.text = text;
+            segment = yield* openTextSegment(context, kind, messageId);
           }
+          segment.text = text;
           yield* publishTextSegment(context, kind);
         });
 
@@ -2531,7 +2232,7 @@ export const makeAcpAdapterV2 = Effect.fn("makeAcpAdapterV2")(function* (
           const nodeId = existing?.task.id ?? providerNodeId(nativeTaskId);
           const childThreadId =
             existing?.childThreadId ??
-            idAllocator.derive.threadFromProviderThread({
+            idAllocator.derive.subagentThread({
               driver,
               providerInstanceId: context.input.modelSelection.instanceId,
               nativeThreadId: `${context.nativeThreadId}:task:${nativeTaskId}`,
@@ -4106,7 +3807,10 @@ export const makeAcpAdapterV2 = Effect.fn("makeAcpAdapterV2")(function* (
             for (const event of parseSessionUpdateEvent(notification).events) {
               if (event._tag !== "ToolCallUpdated") continue;
               const toolCall = flavor.normalizeToolCall?.(event.toolCall) ?? event.toolCall;
-              const proposedPlanMarkdown = flavor.extractProposedPlanMarkdown?.(toolCall);
+              const proposedPlanMarkdown = flavor.extractProposedPlanMarkdown?.(toolCall, {
+                environment: sessionEnvironment,
+                launch: sessionLaunch,
+              });
               if (proposedPlanMarkdown !== undefined && proposedPlanMarkdown.length > 0) {
                 yield* captureProposedPlan({ planMarkdown: proposedPlanMarkdown });
               }
@@ -4209,10 +3913,10 @@ export const makeAcpAdapterV2 = Effect.fn("makeAcpAdapterV2")(function* (
                 ? ("completed" as const)
                 : ("failed" as const);
           const embeddedToolCallIds = toolCallIdsByAgentTerminalId.get(terminalKey);
-          const projectedToolCallIds =
-            embeddedToolCallIds === undefined || embeddedToolCallIds.size === 0
-              ? [`acp-agent-terminal:${update.terminalId}`]
-              : [...embeddedToolCallIds];
+          const linked = embeddedToolCallIds !== undefined && embeddedToolCallIds.size > 0;
+          const projectedToolCallIds = linked
+            ? [...embeddedToolCallIds]
+            : [`acp-agent-terminal:${update.terminalId}`];
           for (const toolCallId of projectedToolCallIds) {
             const existing = context.tools.get(toolCallId);
             const seeded: AcpToolCallState =
@@ -4230,7 +3934,8 @@ export const makeAcpAdapterV2 = Effect.fn("makeAcpAdapterV2")(function* (
               setToolOutputText(
                 {
                   ...seeded,
-                  status,
+                  // An agent-reported tool owns its status; terminal state only drives the synthetic one.
+                  status: (linked ? existing?.status : undefined) ?? status,
                   ...(next.command === undefined ? {} : { command: next.command }),
                 },
                 next.output,
@@ -4818,7 +4523,24 @@ export const makeAcpAdapterV2 = Effect.fn("makeAcpAdapterV2")(function* (
                   status: "inProgress" as const,
                   data: { toolCallId: update.toolCallId },
                 };
-                yield* emitTool(context, appendToolOutputText(previous, text));
+                // Text chunks extend the content list so a later content replacement still shows.
+                yield* emitTool(
+                  context,
+                  update.content.type === "content" && previous.data.rawOutput === undefined
+                    ? {
+                        ...previous,
+                        data: {
+                          ...previous.data,
+                          content: appendToolContentText(previous.data.content, text),
+                        },
+                      }
+                    : previous.data.rawOutput === undefined
+                      ? setToolOutputText(
+                          previous,
+                          `${textFromUnknown(previous.data.content) ?? ""}${text}`,
+                        )
+                      : appendToolOutputText(previous, text),
+                );
               }
               break;
             }
@@ -5652,10 +5374,12 @@ export const makeAcpAdapterV2 = Effect.fn("makeAcpAdapterV2")(function* (
                       clientTerminals.readOutputSnapshot,
                     );
               if (notification.update.sessionUpdate === "available_commands_update") {
-                yield* (
-                  flavor.onAvailableCommandsUpdate?.(notification.update.availableCommands) ??
-                    Effect.void
+                const sessionId = rawNotification.sessionId;
+                const advertisedCommands = notification.update.availableCommands;
+                yield* Ref.update(advertisedCommandsBySession, (current) =>
+                  AdvertisedCommands.remember(current, sessionId, advertisedCommands),
                 );
+                yield* flavor.onAvailableCommandsUpdate?.(advertisedCommands) ?? Effect.void;
               }
               if (
                 notification.update.sessionUpdate === "config_option_update" ||
@@ -5954,12 +5678,9 @@ export const makeAcpAdapterV2 = Effect.fn("makeAcpAdapterV2")(function* (
                   ).pipe(Effect.asVoid),
                 ),
               );
-              if (
-                parsedPermission.kind !== "unknown" &&
-                (decision === "accept" || decision === "acceptForSession")
-              ) {
+              if (decision === "accept" || decision === "acceptForSession") {
                 clientPolicyGrants.recordApproval({
-                  kind: providerRequestKind(parsedPermission.kind),
+                  toolKind: parsedPermission.kind,
                   scope: decision === "acceptForSession" ? "session" : "turn",
                   turnKey: String(context.providerTurnId),
                 });
@@ -6135,6 +5856,27 @@ export const makeAcpAdapterV2 = Effect.fn("makeAcpAdapterV2")(function* (
                     yield* finishSubagentFromNotice(notice);
                   }),
                 ).pipe(Effect.asVoid),
+              reportForegroundWork: (notice) =>
+                runRuntimeCallbackAtGeneration(
+                  handlerGeneration,
+                  Effect.gen(function* () {
+                    if (yield* Ref.get(stoppedRunQuarantine)) return;
+                    const context = yield* Ref.get(activeTurn);
+                    if (
+                      context === null ||
+                      context.finalized ||
+                      context.interrupted ||
+                      context.nativeThreadId !== notice.sessionId
+                    )
+                      return;
+                    if (notice.state === "running") {
+                      context.workAccepted = true;
+                    } else if (context.workAccepted) {
+                      yield* Deferred.succeed(context.foregroundIdle, undefined);
+                      yield* finalizeTurn(context, "completed");
+                    }
+                  }),
+                ).pipe(Effect.asVoid),
               applyBackgroundTaskMutation: (incoming) =>
                 runRuntimeCallbackAtGeneration(
                   handlerGeneration,
@@ -6200,7 +5942,7 @@ export const makeAcpAdapterV2 = Effect.fn("makeAcpAdapterV2")(function* (
           const mcpBridge = yield* makeAcpMcpOverAcpBridge({
             endpoint: mcpContext.endpoint,
             authorization: mcpContext.authorization,
-            allocateConnectionId: crypto.randomUUIDv4().pipe(Effect.orDie),
+            allocateConnectionId: random.uuidV4(),
           });
           yield* Scope.addFinalizer(scope, mcpBridge.dispose);
           return mcpBridge;
@@ -6239,7 +5981,7 @@ export const makeAcpAdapterV2 = Effect.fn("makeAcpAdapterV2")(function* (
             )
             .pipe(
               Effect.provideService(Scope.Scope, runtimeScope),
-              Effect.provideService(Crypto.Crypto, crypto),
+              Effect.provideService(SecureRandom.SecureRandom, random),
               Effect.provideService(ChildProcessSpawner.ChildProcessSpawner, childProcessSpawner),
               Effect.provideService(AgentScope, agentScope),
               Effect.provideService(AgentScopeThreadId, threadId ?? undefined),
@@ -6321,7 +6063,7 @@ export const makeAcpAdapterV2 = Effect.fn("makeAcpAdapterV2")(function* (
               )
               .pipe(
                 Effect.provideService(Scope.Scope, replacementScope),
-                Effect.provideService(Crypto.Crypto, crypto),
+                Effect.provideService(SecureRandom.SecureRandom, random),
                 Effect.provideService(ChildProcessSpawner.ChildProcessSpawner, childProcessSpawner),
                 Effect.provideService(AgentScope, agentScope),
                 Effect.provideService(AgentScopeThreadId, threadId ?? undefined),
@@ -6482,6 +6224,8 @@ export const makeAcpAdapterV2 = Effect.fn("makeAcpAdapterV2")(function* (
           },
         );
 
+        // Read before the session exists: its own config updates replace what the client showed.
+        const unsetOptionDefaults = yield* flavor.unsetOptionDefaults ?? Effect.succeed([]);
         const initialStart = yield* Effect.result(
           startAcpRuntime(input.threadId, input.initialNativeThreadId),
         );
@@ -6511,7 +6255,8 @@ export const makeAcpAdapterV2 = Effect.fn("makeAcpAdapterV2")(function* (
         yield* Ref.set(activeSessionId, started.sessionId);
         yield* setActiveSessionSetup(started);
         rememberTerminalEnvironment(started.sessionId, runtimeMcpContext!);
-        const capabilities = negotiatedCapabilities(flavor.capabilities, started);
+        yield* runtime.drainEvents;
+        const capabilities = negotiatedCapabilities(yield* readCapabilities, started);
         const canLoadSession = started.initializeResult.agentCapabilities?.loadSession === true;
         const canResumeSession =
           started.initializeResult.agentCapabilities?.sessionCapabilities?.resume != null;
@@ -6581,6 +6326,7 @@ export const makeAcpAdapterV2 = Effect.fn("makeAcpAdapterV2")(function* (
           startResult: AcpSessionRuntime.AcpSessionRuntimeStartResult,
           modelSelection: ModelSelection,
           runtimePolicy: ProviderAdapter.ProviderAdapterV2RuntimePolicy,
+          unsetOptionDefaults: NonNullable<ModelSelection["options"]> = [],
         ) {
           yield* Ref.set(activeSelection, null);
           yield* validateModelSelection(modelSelection);
@@ -6616,7 +6362,9 @@ export const makeAcpAdapterV2 = Effect.fn("makeAcpAdapterV2")(function* (
                 )
               ) {
                 yield* runtime
-                  .setConfigOption(modelOption.id, requestedModel)
+                  .setConfigOption(modelOption.id, requestedModel, {
+                    resendCurrentValue: flavor.alwaysSetModel === true,
+                  })
                   .pipe(Effect.mapError(rejectedModel));
                 appliedModel = requestedModel;
               }
@@ -6650,9 +6398,15 @@ export const makeAcpAdapterV2 = Effect.fn("makeAcpAdapterV2")(function* (
               };
             });
           }
-          const optionSelections = (modelSelection.options ?? []).map((selection) =>
-            selection.value === ACP_EMPTY_OPTION_VALUE ? { ...selection, value: "" } : selection,
+          const explicitSelections = modelSelection.options ?? [];
+          const implicitSelections = unsetOptionDefaults.filter(
+            (implicit) => !explicitSelections.some((selection) => selection.id === implicit.id),
           );
+          const optionSelections = [...explicitSelections, ...implicitSelections]
+            .filter((selection) => !flavor.ownedModelOptionIds?.includes(selection.id))
+            .map((selection) =>
+              selection.value === ACP_EMPTY_OPTION_VALUE ? { ...selection, value: "" } : selection,
+            );
           const configOptions = yield* runtime.getConfigOptions;
           const availableConfigIds = new Set(configOptions.map((option) => option.id));
           const hasNativeConfigWithSyntheticModeId = availableConfigIds.has(
@@ -6695,11 +6449,13 @@ export const makeAcpAdapterV2 = Effect.fn("makeAcpAdapterV2")(function* (
             yield* runtime.setConfigOption(selection.id, selection.value).pipe(
               Effect.catchTags({
                 AcpRequestError: (error) =>
-                  Effect.logWarning("ACP session rejected a configuration option value", {
-                    optionId: selection.id,
-                    value: selection.value,
-                    detail: error.message,
-                  }),
+                  error.code === -32602
+                    ? Effect.logWarning("ACP session rejected a configuration option value", {
+                        optionId: selection.id,
+                        value: selection.value,
+                        detail: error.message,
+                      })
+                    : Effect.fail(error),
               }),
             );
           }
@@ -6792,7 +6548,12 @@ export const makeAcpAdapterV2 = Effect.fn("makeAcpAdapterV2")(function* (
           );
         });
 
-        yield* configureSession(started, input.modelSelection, input.runtimePolicy);
+        yield* configureSession(
+          started,
+          input.modelSelection,
+          input.runtimePolicy,
+          started.sessionId !== input.initialNativeThreadId ? unsetOptionDefaults : [],
+        );
         yield* Ref.set(activeSelection, input.modelSelection);
         yield* Ref.set(activeInteractionMode, input.runtimePolicy.interactionMode);
         const createdAt = yield* DateTime.now;
@@ -6940,11 +6701,18 @@ export const makeAcpAdapterV2 = Effect.fn("makeAcpAdapterV2")(function* (
           }
           const now = yield* DateTime.now;
           if (
-            flavor.supportsCompaction === true &&
+            compactsContext &&
             context.input.message.text.trim() === "/compact" &&
             context.input.message.attachments.length === 0 &&
-            settledStatus === "completed"
+            settledStatus === "completed" &&
+            !context.tools.keys().some((id) => id.startsWith("acp-compaction:"))
           ) {
+            context.contextUsage = null;
+            yield* Ref.update(contextUsageBySessionId, (current) => {
+              const updated = new Map(current);
+              updated.delete(context.nativeThreadId);
+              return updated;
+            });
             const nativeItemId = `${context.nativeTurnId}:compaction`;
             yield* Ref.update(compactionMarkers, (current) => {
               const updated = new Map(current);
@@ -7218,7 +6986,10 @@ export const makeAcpAdapterV2 = Effect.fn("makeAcpAdapterV2")(function* (
             flavor.rewriteUserText === undefined
               ? turnInput.message.text
               : yield* flavor
-                  .rewriteUserText(turnInput.message.text, turnInput)
+                  .rewriteUserText(turnInput.message.text, turnInput, {
+                    environment: sessionEnvironment,
+                    launch: sessionLaunch,
+                  })
                   .pipe(
                     Effect.provideService(
                       ChildProcessSpawner.ChildProcessSpawner,
@@ -7428,6 +7199,22 @@ export const makeAcpAdapterV2 = Effect.fn("makeAcpAdapterV2")(function* (
                 yield* Ref.set(activeInteractionMode, turnInput.runtimePolicy.interactionMode);
               }
             }
+            // Checked after activation: a loaded session advertises its own commands.
+            if (
+              flavor.compactViaAdvertisedCommand === true &&
+              turnInput.message.text.trim() === "/compact" &&
+              turnInput.message.attachments.length === 0 &&
+              !AdvertisedCommands.advertises(
+                yield* Ref.get(advertisedCommandsBySession),
+                requestedSessionId,
+                "compact",
+              )
+            ) {
+              return yield* new ProviderAdapter.ProviderCompactionUnsupportedError({
+                driver,
+                providerThreadId: turnInput.providerThread.id,
+              });
+            }
             yield* validateModelSelection(turnInput.modelSelection);
             yield* Ref.set(lastTurnRoute, {
               threadId: turnInput.threadId,
@@ -7506,9 +7293,9 @@ export const makeAcpAdapterV2 = Effect.fn("makeAcpAdapterV2")(function* (
                 (yield* Ref.get(activeSessionSetup))?.initializeResult.protocolVersion === 2
                   ? promptParts?.prompt
                   : undefined,
-              user: { current: null, nextSegment: 0 },
-              assistant: { current: null, nextSegment: 0 },
-              reasoning: { current: null, nextSegment: 0 },
+              user: { current: null, nextSegment: 0, closedNamedSegments: new Map() },
+              assistant: { current: null, nextSegment: 0, closedNamedSegments: new Map() },
+              reasoning: { current: null, nextSegment: 0, closedNamedSegments: new Map() },
               contextUsage: rememberedContextUsage ?? turnInput.providerThread.contextUsage ?? null,
               nativeMetadata: initialNativeMetadata,
               tools: new Map(),
@@ -7536,6 +7323,7 @@ export const makeAcpAdapterV2 = Effect.fn("makeAcpAdapterV2")(function* (
               lastProgressAt: 0,
               inactivityWatchdog: undefined,
               promptDispatched,
+              foregroundIdle: yield* Deferred.make<void>(),
             };
             const carryover = yield* Ref.getAndSet(carryoverSubagents, null);
             let rehydratedCarryoverSubagents: ReadonlyArray<ActiveAcpSubagent> = [];
@@ -7678,7 +7466,7 @@ export const makeAcpAdapterV2 = Effect.fn("makeAcpAdapterV2")(function* (
             const prompt = yield* Effect.gen(function* () {
               const snapshot =
                 isAppOwnedWakeTurn ||
-                (flavor.supportsCompaction === true &&
+                (compactsContext &&
                   turnInput.message.text.trim() === "/compact" &&
                   turnInput.message.attachments.length === 0)
                   ? undefined
@@ -7731,7 +7519,12 @@ export const makeAcpAdapterV2 = Effect.fn("makeAcpAdapterV2")(function* (
                 promptInactivityTimeoutMillis,
               ).pipe(Effect.forkIn(sessionScope));
             }
-            yield* runtime.prompt({ prompt }, { dispatched: context.promptDispatched }).pipe(
+            yield* sendPromptWhenIdle(context, () =>
+              runtime.prompt(
+                { prompt },
+                { dispatched: context.promptDispatched, released: context.foregroundIdle },
+              ),
+            ).pipe(
               Effect.tap(() =>
                 Ref.update(promptInstructionStates, (current) => {
                   if (promptParts?.instructionState === undefined) return current;
@@ -8131,13 +7924,16 @@ export const makeAcpAdapterV2 = Effect.fn("makeAcpAdapterV2")(function* (
               ),
           ),
           startTurn,
-          ...(flavor.supportsCompaction === true
+          ...(compactsContext
             ? {
-                compactThread: (turnInput: ProviderAdapter.ProviderAdapterV2TurnInput) =>
-                  startTurn({
+                compactThread: Effect.fn("AcpAdapterV2.compactThread")(function* (
+                  turnInput: ProviderAdapter.ProviderAdapterV2TurnInput,
+                ) {
+                  return yield* startTurn({
                     ...turnInput,
                     message: { ...turnInput.message, text: "/compact" },
-                  }),
+                  });
+                }),
               }
             : {}),
           steerTurn: (turnInput) =>
@@ -8452,7 +8248,7 @@ export const makeAcpAdapterV2 = Effect.fn("makeAcpAdapterV2")(function* (
                     );
                   }).pipe(
                     Effect.ensuring(runtimeTransitionPermit.release(1)),
-                    Effect.forkIn(sessionScope, { startImmediately: true, uninterruptible: true }),
+                    forkInScope(sessionScope, { startImmediately: true, uninterruptible: true }),
                   );
                   return yield* restore(Fiber.join(transitionFiber)).pipe(
                     Effect.onInterrupt(() =>

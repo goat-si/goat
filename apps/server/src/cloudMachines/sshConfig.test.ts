@@ -1,7 +1,9 @@
 // @effect-diagnostics nodeBuiltinImport:off - the fake OpenSSH answers synchronously from the files under test.
+import * as NodeCrypto from "@effect/platform-node/NodeCrypto";
 import * as NodeServices from "@effect/platform-node/NodeServices";
 import { describe, expect, it } from "@effect/vitest";
 import * as Effect from "effect/Effect";
+import * as Layer from "effect/Layer";
 import * as FileSystem from "effect/FileSystem";
 import * as NodeFS from "node:fs";
 import * as NodePath from "node:path";
@@ -110,7 +112,7 @@ const withSsh = <A, E>(
       ).pipe(Effect.provideService(ProcessRunner.ProcessRunner, openSsh.runner));
       return yield* use(ssh, { home, calls: openSsh.calls });
     }),
-  ).pipe(Effect.provide(NodeServices.layer));
+  ).pipe(Effect.provide(Layer.mergeAll(NodeServices.layer, NodeCrypto.layer)));
 
 const mode = (file: string) => NodeFS.statSync(file).mode & 0o777;
 

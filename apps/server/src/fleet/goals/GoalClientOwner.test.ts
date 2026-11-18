@@ -1,3 +1,4 @@
+import * as NodeCrypto from "@effect/platform-node/NodeCrypto";
 import * as NodeServices from "@effect/platform-node/NodeServices";
 import { describe, expect, it } from "@effect/vitest";
 import {
@@ -272,7 +273,9 @@ const fleetFor = (world: World) =>
 
 /** One server: every layer built fresh over the database file at `path`. */
 const server = (world: World, path: string, goatclaw?: GoatclawSettings) => {
-  const database = SqlitePersistence.layerFromPath(path).pipe(Layer.provide(NodeServices.layer));
+  const database = SqlitePersistence.layerFromPath(path).pipe(
+    Layer.provide(Layer.mergeAll(NodeServices.layer, NodeCrypto.layer)),
+  );
   const settings = ServerSettings.ServerSettingsService.layerTest({
     fleet: { controllerEnabled: true },
     ...(goatclaw === undefined ? {} : { goatclaw }),
@@ -299,7 +302,7 @@ const server = (world: World, path: string, goatclaw?: GoatclawSettings) => {
     Layer.provideMerge(sessions),
     Layer.provideMerge(settings),
     Layer.provideMerge(database),
-    Layer.provide(NodeServices.layer),
+    Layer.provide(Layer.mergeAll(NodeServices.layer, NodeCrypto.layer)),
   );
 };
 
@@ -360,7 +363,7 @@ const blockedReason = (id: string) =>
 const tempDatabase = FileSystem.FileSystem.pipe(
   Effect.flatMap((fs) => fs.makeTempDirectoryScoped()),
   Effect.map((directory) => directory + "/state.sqlite"),
-  Effect.provide(NodeServices.layer),
+  Effect.provide(Layer.mergeAll(NodeServices.layer, NodeCrypto.layer)),
 );
 
 describe("a fleet goal owned by an outside MCP client (#493)", () => {

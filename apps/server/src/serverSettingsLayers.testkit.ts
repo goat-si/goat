@@ -1,3 +1,4 @@
+import { assert } from "@effect/vitest";
 import * as Layer from "effect/Layer";
 import * as ServerSettingsModule from "./serverSettings.ts";
 import * as ServerSecretStore from "./auth/ServerSecretStore.ts";
@@ -16,3 +17,10 @@ export const layerServerSettings = () =>
       ),
     ),
   );
+
+export const assertTerminalSecret = (environment: Record<string, string>, persisted: string) => {
+  assert.equal(environment.OPENROUTER_API_KEY, "sk-terminal-secret");
+  assert.match(environment.CODEX_HOME ?? "", /[\\/][.]codex-terminal$/);
+  assert.notInclude(persisted, "sk-terminal-secret");
+  assert.include(persisted, '"valueRedacted": true');
+};

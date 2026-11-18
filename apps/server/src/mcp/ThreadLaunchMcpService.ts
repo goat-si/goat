@@ -17,7 +17,7 @@ import * as ChannelChildWork from "../channels/ChannelChildWork.ts";
 import { captureRpcMemoryGrantCeiling } from "../auth/RpcAuthorization.ts";
 import { effectiveMemoryGrant } from "../memory/MemoryAccess.ts";
 import * as Context from "effect/Context";
-import * as Crypto from "effect/Crypto";
+import * as SecureRandom from "effect/crypto/SecureRandom";
 import * as Effect from "effect/Effect";
 import * as FileSystem from "effect/FileSystem";
 import * as Layer from "effect/Layer";
@@ -112,6 +112,14 @@ const assertProjectWorktree = Effect.fn("mcp.assertProjectWorktree")(function* (
     });
 });
 
+// A top-level name blocked by a nested branch has no slash-free alternative to offer.
+function branchConflictHint(branch: string) {
+  const sibling = branch.replaceAll("/", "-");
+  return `Use a name that does not nest under or contain an existing branch${
+    sibling === branch ? "" : `, such as "${sibling}"`
+  }.`;
+}
+
 /** The refusal plus the step that gets the caller a folder to launch into. */
 function workspaceMissingMessage(error: ThreadLaunch.ThreadLaunchWorkspaceMissingError) {
   if (error.kind === "worktree")
@@ -165,7 +173,7 @@ const make = Effect.gen(function* () {
   const folders = yield* ManagedProjectFolders.ManagedProjectFolders;
   const git = yield* GitVcsDriver.GitVcsDriver;
   const fileSystem = yield* FileSystem.FileSystem;
-  const crypto = yield* Crypto.Crypto;
+  const random = yield* SecureRandom.SecureRandom;
   const config = yield* ServerConfig.ServerConfig;
   const settings = yield* ServerSettings.ServerSettingsService;
   const watches = yield* LaunchWatchService.LaunchWatchService;
@@ -490,24 +498,32 @@ const make = Effect.gen(function* () {
           if (!cloud && strategy?.type === "worktree")
             yield* ThreadLaunch.ThreadLaunchService.pipe(
               Effect.flatMap((launches) =>
-                launches.checkWorktreeBase({ projectId, workspaceStrategy: strategy }),
+                launches.checkWorktreeBase({ commandId, projectId, workspaceStrategy: strategy }),
               ),
               Effect.mapError(
                 (error) =>
                   new OrchestratorMcpFailure({
                     code: "invalid_request",
                     message:
-                      error._tag === "ThreadLaunchBranchError"
+                      error._tag === "ThreadLaunchNotRepositoryError"
                         ? `${error.message} No thread was created. ${
-                            error.worktreePath === null
-                              ? "Pass a branch name that does not exist yet."
-                              : `Launch into that checkout with workspaceStrategy ${JSON.stringify({ type: "existing_worktree", worktreePath: error.worktreePath, branch: error.branch })}, or pass a branch name that does not exist yet.`
+                            error.checkFailed === undefined
+                              ? 'Use workspaceStrategy {"type":"root"}, or pass the projectId of a Git repository.'
+                              : 'Try again, or use workspaceStrategy {"type":"root"} to work in the project folder without a new worktree.'
                           }`
-                        : `${error.message} No thread was created. Pass a branch, tag, or commit that exists there${
-                            strategy.startFromOrigin === true
-                              ? "; the project has no origin remote to fetch it from."
-                              : ", or set startFromOrigin:true if it exists only on origin."
-                          }`,
+                        : error._tag === "ThreadLaunchBranchConflictError"
+                          ? `${error.message} No thread was created. ${branchConflictHint(error.branch)}`
+                          : error._tag === "ThreadLaunchBranchError"
+                            ? `${error.message} No thread was created. ${
+                                error.worktreePath === null
+                                  ? "Pass a branch name that does not exist yet."
+                                  : `Launch into that checkout with workspaceStrategy ${JSON.stringify({ type: "existing_worktree", worktreePath: error.worktreePath, branch: error.branch })}, or pass a branch name that does not exist yet.`
+                              }`
+                            : `${error.message} No thread was created. Pass a branch, tag, or commit that exists there${
+                                strategy.startFromOrigin === true
+                                  ? "; the project has no origin remote to fetch it from."
+                                  : ", or set startFromOrigin:true if it exists only on origin."
+                              }`,
                   }),
               ),
             );
@@ -803,7 +819,7 @@ const make = Effect.gen(function* () {
         Effect.provideService(ManagedProjectFolders.ManagedProjectFolders, folders),
         Effect.provideService(GitVcsDriver.GitVcsDriver, git),
         Effect.provideService(FileSystem.FileSystem, fileSystem),
-        Effect.provideService(Crypto.Crypto, crypto),
+        Effect.provideService(SecureRandom.SecureRandom, random),
         Effect.provideService(ServerConfig.ServerConfig, config),
         Effect.provideService(ServerSettings.ServerSettingsService, settings),
         Effect.provideService(LaunchWatchService.LaunchWatchService, watches),

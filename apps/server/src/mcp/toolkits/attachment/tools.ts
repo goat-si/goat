@@ -12,7 +12,7 @@ import {
   OrchestrationV2RunStatus,
   OrchestratorMcpFailure,
 } from "@goat/contracts";
-import * as Crypto from "effect/Crypto";
+import * as SecureRandom from "effect/crypto/SecureRandom";
 import * as FileSystem from "effect/FileSystem";
 import * as Schema from "effect/Schema";
 import { Tool, Toolkit } from "effect/ai";
@@ -33,7 +33,7 @@ const shared = {
     ServerConfig.ServerConfig,
     ServerSecretStore.ServerSecretStore,
     FileSystem.FileSystem,
-    Crypto.Crypto,
+    SecureRandom.SecureRandom,
     AttachmentFileLeases.AttachmentFileLeases,
     PendingAttachmentSweep.PendingAttachmentSweep,
   ],

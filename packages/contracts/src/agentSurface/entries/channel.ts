@@ -27,7 +27,8 @@ export const channelEntries = {
     toolkit: "channel",
     summary: "Stop a task",
     description: "Stop a task from an authorized GOAT Bot session.",
-    guide: "Only a live session acting for the requester may change a task in its conversation.",
+    guide:
+      "Only a live session acting for the requester may stop a task: one in its conversation, or one in another conversation that person can see and direct.",
     effect: "write",
     capability: "none",
     capabilityReason: "The service checks the session run and requester.",

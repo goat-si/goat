@@ -6,8 +6,13 @@ import {
 import { makeCloseOnSettle } from "./TerminalSettlement.ts";
 import { normalizedRuntimeEnv } from "./TerminalLaunchEnvironment.ts";
 import { timedShutdownPhase } from "@goat/shared/timedShutdownPhase";
-// @effect-diagnostics-next-line nodeBuiltinImport:off -- Effect's Crypto digest is effectful; a sync hash keeps historyPath a plain function.
-import * as NodeCrypto from "node:crypto";
+import {
+  encodedHistoryThreadPart,
+  hashId,
+  hashedHistoryThreadPart,
+  joinHistoryFileName,
+  legacySafeThreadId,
+} from "./historyFileNames.ts";
 
 import {
   createAgentTerminalState,
@@ -17,17 +22,24 @@ import {
   type AgentTerminalSession,
   type AgentTerminalMutateInput,
 } from "./AgentTerminalState.ts";
-import { BoundedTerminalHistory, DEFAULT_HISTORY_BYTE_LIMIT } from "./BoundedTerminalHistory.ts";
+import {
+  BoundedTerminalHistory,
+  DEFAULT_HISTORY_BYTE_LIMIT,
+  type TerminalHistoryPersistenceCursor,
+} from "./BoundedTerminalHistory.ts";
+import {
+  readTerminalHistoryTail,
+  TERMINAL_HISTORY_COMPACTION_NOTICE,
+} from "./terminalHistoryFile.ts";
 import {
   neutralizeInheritedHistory,
   sanitizeTerminalHistoryChunk,
 } from "./terminalHistoryReplay.ts";
 export { BoundedTerminalHistory } from "./BoundedTerminalHistory.ts";
 
-import {
-  isWorkspaceLeaseUnavailableError,
-  withWorkspaceLease,
-} from "../workspace/workspaceLease.ts";
+import { makeTerminalLeaseOrder, type TerminalLeaseBusy } from "./terminalLeaseOrder.ts";
+import { refuseMovedWorktree, TerminalThreadWorktree } from "./TerminalThreadWorktree.ts";
+import { registerTerminalProbe } from "./terminalProbes.ts";
 import {
   DEFAULT_TERMINAL_ID,
   DEFAULT_MAX_TERMINAL_BUFFER_BYTES,
@@ -36,7 +48,7 @@ import {
   TerminalCwdNotFoundError,
   TerminalCwdStatError,
   TerminalError,
-  type OrchestratorMcpFailure,
+  OrchestratorMcpFailure,
   TerminalHistoryError,
   TerminalNotRunningError,
   TerminalProviderInstanceNotFoundError,
@@ -68,7 +80,12 @@ import * as KeyedLock from "@goat/shared/KeyedLock";
 import { AgentScope } from "@goat/shared/AgentScope";
 import * as HostProcess from "@goat/shared/HostProcess";
 import { resolveNice, toolPriorityLaunch } from "@goat/shared/toolPriority";
-import { windowsCmdPath, windowsPowerShellPath } from "./windowsShellPaths.ts";
+import {
+  defaultShellResolver,
+  formatShellCandidate,
+  isRetryableShellSpawnError,
+  resolveShellCandidates,
+} from "./shellCandidates.ts";
 import { mergePathEntries } from "@goat/shared/shell";
 
 import { acpRegistryManagedBinaryDirectories } from "@goat/provider-acp-registry/server";
@@ -96,7 +113,7 @@ import * as ServerConfig from "../config.ts";
 import { mergeProviderInstanceEnvironment } from "@goat/provider-core/server/instanceEnvironment";
 import { resolveCodexHomeLayout } from "../provider/Drivers/CodexHomeLayout.ts";
 import { makeClaudeEnvironment } from "../provider/Drivers/ClaudeHome.ts";
-import { deriveProviderInstanceConfigMap } from "../provider/ProviderInstanceRegistryHydration.ts";
+import type { deriveProviderInstanceConfigMap } from "../provider/ProviderInstanceRegistryHydration.ts";
 import * as ServerSettings from "../serverSettings.ts";
 import {
   increment,
@@ -496,156 +513,6 @@ function enqueueProcessEvent(
   return true;
 }
 
-function defaultShellResolver(platform: NodeJS.Platform, env: NodeJS.ProcessEnv): string {
-  if (platform === "win32") {
-    return "pwsh.exe";
-  }
-  return env.SHELL ?? "bash";
-}
-
-function normalizeShellCommand(
-  value: string | undefined,
-  platform: NodeJS.Platform,
-): string | null {
-  if (!value) return null;
-  const trimmed = value.trim();
-  if (trimmed.length === 0) return null;
-
-  if (platform === "win32") {
-    return trimmed;
-  }
-
-  const firstToken = trimmed.split(/\s+/g)[0]?.trim();
-  if (!firstToken) return null;
-  return firstToken.replace(/^['"]|['"]$/g, "");
-}
-
-function basenameForPlatform(command: string, platform: NodeJS.Platform): string {
-  const normalized =
-    platform === "win32" ? command.replaceAll("/", "\\") : command.replaceAll("\\", "/");
-  const parts = normalized
-    .split(platform === "win32" ? /\\+/ : /\/+/)
-    .filter((part) => part.length > 0);
-  return parts.at(-1) ?? normalized;
-}
-
-function shellCandidateFromCommand(
-  command: string | null,
-  platform: NodeJS.Platform,
-): ShellCandidate | null {
-  if (!command || command.length === 0) return null;
-  const shellName = basenameForPlatform(command, platform).toLowerCase();
-  if (platform === "win32" && (shellName === "pwsh.exe" || shellName === "powershell.exe")) {
-    return { shell: command, args: ["-NoLogo"] };
-  }
-  if (platform !== "win32" && shellName === "zsh") {
-    return { shell: command, args: ["-o", "nopromptsp"] };
-  }
-  // Login shells load ~/.bash_profile, matching macOS terminal startup.
-  if (platform === "darwin" && shellName === "bash") {
-    return { shell: command, args: ["-l"] };
-  }
-  return { shell: command };
-}
-
-function formatShellCandidate(candidate: ShellCandidate): string {
-  if (!candidate.args || candidate.args.length === 0) return candidate.shell;
-  return `${candidate.shell} ${candidate.args.join(" ")}`;
-}
-
-function uniqueShellCandidates(candidates: Array<ShellCandidate | null>): ShellCandidate[] {
-  const seen = new Set<string>();
-  const ordered: ShellCandidate[] = [];
-  for (const candidate of candidates) {
-    if (!candidate) continue;
-    const key = formatShellCandidate(candidate);
-    if (seen.has(key)) continue;
-    seen.add(key);
-    ordered.push(candidate);
-  }
-  return ordered;
-}
-
-function resolveShellCandidates(
-  shellResolver: () => string,
-  platform: NodeJS.Platform,
-  env: NodeJS.ProcessEnv,
-): ShellCandidate[] {
-  const requested = shellCandidateFromCommand(
-    normalizeShellCommand(shellResolver(), platform),
-    platform,
-  );
-
-  if (platform === "win32") {
-    return uniqueShellCandidates([
-      requested,
-      shellCandidateFromCommand("pwsh.exe", platform),
-      shellCandidateFromCommand(windowsPowerShellPath(env), platform),
-      shellCandidateFromCommand("powershell.exe", platform),
-      shellCandidateFromCommand(env.ComSpec ?? null, platform),
-      shellCandidateFromCommand(windowsCmdPath(env), platform),
-      shellCandidateFromCommand("cmd.exe", platform),
-    ]);
-  }
-
-  return uniqueShellCandidates([
-    requested,
-    shellCandidateFromCommand(normalizeShellCommand(env.SHELL, platform), platform),
-    shellCandidateFromCommand("/bin/zsh", platform),
-    shellCandidateFromCommand("/bin/bash", platform),
-    shellCandidateFromCommand("/bin/sh", platform),
-    shellCandidateFromCommand("zsh", platform),
-    shellCandidateFromCommand("bash", platform),
-    shellCandidateFromCommand("sh", platform),
-  ]);
-}
-
-function isRetryableShellSpawnError(error: PtyAdapter.PtySpawnError): boolean {
-  const queue: unknown[] = [error];
-  const seen = new Set<unknown>();
-  const messages: string[] = [];
-
-  while (queue.length > 0) {
-    const current = queue.shift();
-    if (!current || seen.has(current)) {
-      continue;
-    }
-    seen.add(current);
-
-    if (typeof current === "string") {
-      messages.push(current);
-      continue;
-    }
-
-    if (current instanceof Error) {
-      messages.push(current.message);
-      if (current.cause) {
-        queue.push(current.cause);
-      }
-      continue;
-    }
-
-    if (typeof current === "object") {
-      const value = current as { message?: unknown; cause?: unknown };
-      if (typeof value.message === "string") {
-        messages.push(value.message);
-      }
-      if (value.cause) {
-        queue.push(value.cause);
-      }
-    }
-  }
-
-  const message = messages.join(" ").toLowerCase();
-  return (
-    message.includes("posix_spawnp failed") ||
-    message.includes("enoent") ||
-    message.includes("not found") ||
-    message.includes("file not found") ||
-    message.includes("no such file")
-  );
-}
-
 interface TerminalProcessTableSnapshot {
   readonly childrenByParent: ReadonlyMap<number, ReadonlyArray<number>>;
   readonly commandById: ReadonlyMap<number, string>;
@@ -827,27 +694,6 @@ const windowsProcessTableSnapshot = Effect.fn("terminal.windowsProcessTableSnaps
   return processTableSnapshotFromProcesses(processes);
 });
 
-function legacySafeThreadId(threadId: string): string {
-  return threadId.replace(/[^a-zA-Z0-9._-]/g, "_");
-}
-
-function encodedHistoryThreadPart(threadId: string): string {
-  return `terminal_${Base64Url.encode(threadId)}`;
-}
-
-function hashId(id: string): string {
-  return NodeCrypto.createHash("sha256").update(id).digest("base64url");
-}
-
-// "." is outside the base64url alphabet, so a hashed name can never collide with an encoded one.
-function hashedHistoryThreadPart(threadId: string): string {
-  return `terminal_sha256.${hashId(threadId)}`;
-}
-
-function joinHistoryFileName(threadPart: string, terminalPart: string | null): string {
-  return terminalPart === null ? `${threadPart}.log` : `${threadPart}_${terminalPart}.log`;
-}
-
 function toSessionKey(threadId: string, terminalId: string): string {
   return `${threadId}\u0000${terminalId}`;
 }
@@ -885,11 +731,13 @@ interface TerminalManagerOptions {
     Record<string, string>,
     TerminalProviderInstanceNotFoundError | TerminalProviderEnvironmentError
   >;
+  threadWorktree?: TerminalThreadWorktree["Service"];
 }
 
 export const resolveProviderInstanceTerminalEnvironment = Effect.fn(
   "terminal.resolveProviderInstanceTerminalEnvironment",
 )(function* (input: {
+  readonly deriveProviderInstanceConfigMap: typeof deriveProviderInstanceConfigMap;
   readonly serverSettings: ServerSettings.ServerSettingsService["Service"];
   readonly path: Path.Path;
   readonly rawProviderInstanceId: string;
@@ -899,7 +747,7 @@ export const resolveProviderInstanceTerminalEnvironment = Effect.fn(
   const settings = yield* input.serverSettings.getSettings.pipe(
     Effect.mapError((cause) => new TerminalProviderEnvironmentError({ providerInstanceId, cause })),
   );
-  const instance = deriveProviderInstanceConfigMap(settings)[providerInstanceId];
+  const instance = input.deriveProviderInstanceConfigMap(settings)[providerInstanceId];
   if (instance === undefined) {
     return yield* new TerminalProviderInstanceNotFoundError({ providerInstanceId });
   }
@@ -929,7 +777,9 @@ export const resolveProviderInstanceTerminalEnvironment = Effect.fn(
 });
 
 /** @public */
-export const make = Effect.fn("TerminalManager.make")(function* () {
+export const make = Effect.fn("TerminalManager.make")(function* (
+  deriveConfigMap: typeof deriveProviderInstanceConfigMap,
+) {
   const { terminalLogsDir, providerStatusCacheDir, baseDir } = yield* ServerConfig.ServerConfig;
   const ptyAdapter = yield* PtyAdapter.PtyAdapter;
   const portDiscovery = yield* PortScanner.PortDiscovery;
@@ -940,6 +790,7 @@ export const make = Effect.fn("TerminalManager.make")(function* () {
     "terminal.resolveProviderInstanceEnvironment",
   )((rawProviderInstanceId: string, env: Record<string, string> | undefined) =>
     resolveProviderInstanceTerminalEnvironment({
+      deriveProviderInstanceConfigMap: deriveConfigMap,
       serverSettings,
       path,
       rawProviderInstanceId,
@@ -959,6 +810,7 @@ export const make = Effect.fn("TerminalManager.make")(function* () {
     registerTerminalProcesses: portDiscovery.registerTerminalProcesses,
     unregisterTerminal: portDiscovery.unregisterTerminal,
     resolveProviderInstanceEnvironment,
+    threadWorktree: yield* TerminalThreadWorktree,
   });
 });
 
@@ -1375,6 +1227,7 @@ export const makeWithOptions = Effect.fn("TerminalManager.makeWithOptions")(func
     yield* registerKillFiber(process, fiber);
   });
 
+  const persistedHistory = new WeakMap<BoundedTerminalHistory, TerminalHistoryPersistenceCursor>();
   const persistWorker = yield* makeKeyedCoalescingWorker<
     string,
     PersistHistoryRequest,
@@ -1395,9 +1248,19 @@ export const makeWithOptions = Effect.fn("TerminalManager.makeWithOptions")(func
         return;
       }
 
+      const update = request.history.persistenceUpdate(
+        request.immediate ? undefined : persistedHistory.get(request.history),
+      );
+      if (update.append && update.data.length === 0) return;
+      // An append may partially succeed before failing. Retry from a full snapshot,
+      // never from an uncertain file offset.
+      persistedHistory.delete(request.history);
       yield* fileSystem
-        .writeFileString(historyPath(threadId, terminalId), request.history.value())
+        .writeFileString(historyPath(threadId, terminalId), update.data, {
+          flag: update.append ? "a" : "w",
+        })
         .pipe(
+          Effect.tap(() => Effect.sync(() => persistedHistory.set(request.history, update.cursor))),
           Effect.catch((error) =>
             Effect.logWarning("failed to persist terminal history", {
               threadId,
@@ -1439,30 +1302,6 @@ export const makeWithOptions = Effect.fn("TerminalManager.makeWithOptions")(func
     yield* flushPersist(threadId, terminalId);
   });
 
-  const readHistoryTail = Effect.fn("terminal.readHistoryTail")(function* (filePath: string) {
-    const file = yield* fileSystem.open(filePath, { flag: "r" });
-    const info = yield* file.stat;
-    const limit = BigInt(historyByteLimit);
-    const offset = info.size > limit ? info.size - limit : 0n;
-    yield* file.seek(offset, "start");
-    const bytes = new Uint8Array(Number(info.size - offset));
-    let length = 0;
-    while (length < bytes.length) {
-      const read = Number(yield* file.read(bytes.subarray(length)));
-      if (read === 0) break;
-      length += read;
-    }
-    let start = 0;
-    if (offset > 0n) {
-      // A tail read can start inside a UTF-8 code point. Skip its remaining bytes.
-      while (start < length && ((bytes[start] ?? 0) & 0xc0) === 0x80) start += 1;
-    }
-    return {
-      history: new TextDecoder("utf-8", { ignoreBOM: true }).decode(bytes.subarray(start, length)),
-      truncated: offset > 0n,
-    };
-  });
-
   const readHistory = Effect.fn("terminal.readHistory")(function* (
     threadId: string,
     terminalId: string,
@@ -1479,7 +1318,11 @@ export const makeWithOptions = Effect.fn("TerminalManager.makeWithOptions")(func
         ))
       )
         continue;
-      const { history: raw, truncated } = yield* readHistoryTail(sourcePath).pipe(
+      const { history: raw, truncated } = yield* readTerminalHistoryTail(
+        fileSystem,
+        sourcePath,
+        historyByteLimit,
+      ).pipe(
         Effect.scoped,
         Effect.mapError(
           (cause) => new TerminalHistoryError({ operation, threadId, terminalId, cause }),
@@ -1488,17 +1331,15 @@ export const makeWithOptions = Effect.fn("TerminalManager.makeWithOptions")(func
       const history = new BoundedTerminalHistory(historyLineLimit, raw, historyByteLimit);
       const capped = history.value();
       if (migrating || truncated || capped !== raw) {
-        const write = migrating
-          ? Effect.gen(function* () {
-              const temporaryPath = yield* fileSystem.makeTempFileScoped({
-                directory: logsDir,
-                prefix: ".history-",
-              });
-              yield* fileSystem.writeFileString(temporaryPath, capped);
-              yield* fileSystem.rename(temporaryPath, nextPath);
-            }).pipe(Effect.scoped)
-          : fileSystem.writeFileString(nextPath, capped);
-        yield* write.pipe(
+        const write = Effect.gen(function* () {
+          const temporaryPath = yield* fileSystem.makeTempFileScoped({
+            directory: logsDir,
+            prefix: ".history-",
+          });
+          yield* fileSystem.writeFileString(temporaryPath, capped);
+          yield* fileSystem.rename(temporaryPath, nextPath);
+        }).pipe(
+          Effect.scoped,
           Effect.mapError(
             (cause) =>
               new TerminalHistoryError({
@@ -1509,6 +1350,22 @@ export const makeWithOptions = Effect.fn("TerminalManager.makeWithOptions")(func
               }),
           ),
         );
+        // The file keeps its old bytes, so the next full save compacts it instead.
+        yield* migrating
+          ? write
+          : write.pipe(
+              Effect.catch((error) =>
+                Effect.logWarning("failed to compact terminal history", {
+                  threadId,
+                  terminalId,
+                  error,
+                }).pipe(
+                  Effect.andThen(
+                    Effect.sync(() => history.append(TERMINAL_HISTORY_COMPACTION_NOTICE)),
+                  ),
+                ),
+              ),
+            );
       }
       if (migrating) {
         yield* fileSystem.remove(sourcePath, { force: true }).pipe(
@@ -1883,6 +1740,7 @@ export const makeWithOptions = Effect.fn("TerminalManager.makeWithOptions")(func
     eventType: "started" | "restarted",
     authorize: Effect.Effect<void, E> = Effect.void,
   ): Effect.fn.Return<void, E> {
+    yield* supersede(session.threadId, session.terminalId, "start");
     yield* stopProcess(session, authorize);
     yield* Effect.annotateCurrentSpan({
       "terminal.thread_id": session.threadId,
@@ -2317,13 +2175,11 @@ export const makeWithOptions = Effect.fn("TerminalManager.makeWithOptions")(func
     ),
   );
 
-  /** Runs under the checkout's lease; claims of other GOAT servers that cannot be read fail like an unreachable cwd. */
-  const withTerminalLease = <A, E, R>(cwd: string, effect: Effect.Effect<A, E, R>) =>
-    withWorkspaceLease(path.resolve(cwd), effect).pipe(
-      Effect.catchIf(isWorkspaceLeaseUnavailableError, (error) =>
-        Effect.fail(new TerminalCwdStatError({ cwd, cause: error })),
-      ),
-    );
+  const leaseOrder = makeTerminalLeaseOrder({
+    resolve: (cwd) => path.resolve(cwd),
+    withThreadLock,
+  });
+  const { attempt, supersede, tryTerminalLease, withThreadLockAndLease } = leaseOrder;
 
   const openWithWorkspaceLease = Effect.fn("terminal.openLocked")(function* <
     E extends OrchestratorMcpFailure = never,
@@ -2474,15 +2330,39 @@ export const makeWithOptions = Effect.fn("TerminalManager.makeWithOptions")(func
     return liveSession;
   });
 
-  const openLocked = (input: TerminalOpenInput) =>
-    withTerminalLease(input.worktreePath ?? input.cwd, openWithWorkspaceLease(input)).pipe(
-      Effect.map(snapshot),
+  /** A person's request that waited must not start a shell in a worktree its thread has left. */
+  const stillBound = (input: TerminalOpenInput) =>
+    Effect.flatMap(attempt, (run) =>
+      run !== "first" && options.threadWorktree !== undefined
+        ? refuseMovedWorktree(options.threadWorktree, (folder) => path.resolve(folder), input)
+        : Effect.void,
+    );
+
+  /** What a request overtaken while it waited returns: the terminal as it is now. */
+  const current = (input: { readonly threadId: string; readonly terminalId: string }) =>
+    Effect.map(getSession(input.threadId, input.terminalId), Option.map(snapshot));
+
+  const notFound = (input: { readonly threadId: string; readonly terminalId: string }) =>
+    Effect.fail(
+      new TerminalSessionLookupError({ threadId: input.threadId, terminalId: input.terminalId }),
+    );
+
+  const openLocked = <B, E>(input: TerminalOpenInput, gone: Effect.Effect<B, E>) =>
+    tryTerminalLease(
+      input,
+      input.worktreePath ?? input.cwd,
+      stillBound(input).pipe(Effect.andThen(openWithWorkspaceLease(input)), Effect.map(snapshot)),
+      current(input),
+      gone,
     );
 
   const open: TerminalManager["Service"]["open"] = (input) =>
-    withThreadLock(
+    withThreadLockAndLease(
       input.threadId,
-      resolveLaunchInputEnvironment(input).pipe(Effect.flatMap(openLocked)),
+      input.terminalId,
+      resolveLaunchInputEnvironment(input).pipe(
+        Effect.flatMap((resolved) => openLocked(resolved, notFound(resolved))),
+      ),
     );
 
   const getShell = Effect.fn("terminal.getShell")(function* (input: TerminalObserveInput) {
@@ -2514,7 +2394,7 @@ export const makeWithOptions = Effect.fn("TerminalManager.makeWithOptions")(func
         terminalId,
         cwd: input.cwd,
       });
-      return yield* Effect.uninterruptible(openLocked(resolvedInput));
+      return yield* Effect.uninterruptible(openLocked(resolvedInput, Effect.succeed(null)));
     }
 
     const session = existing.value;
@@ -2527,7 +2407,7 @@ export const makeWithOptions = Effect.fn("TerminalManager.makeWithOptions")(func
         terminalId,
         cwd: input.cwd,
       });
-      return yield* Effect.uninterruptible(openLocked(resolvedInput));
+      return yield* Effect.uninterruptible(openLocked(resolvedInput, Effect.succeed(null)));
     }
 
     if (
@@ -2578,7 +2458,7 @@ export const makeWithOptions = Effect.fn("TerminalManager.makeWithOptions")(func
   // Snapshot listeners run under that lock and must not block.
   const streamSession = (
     input: TerminalObserveInput,
-    initial: Effect.Effect<TerminalSessionSnapshot | null, TerminalError>,
+    initial: Effect.Effect<TerminalSessionSnapshot | null, TerminalError | TerminalLeaseBusy>,
     listener: (event: TerminalAttachStreamEvent) => Effect.Effect<void>,
     registerCleanup?: (stop: () => void) => void,
   ) => {
@@ -2623,6 +2503,8 @@ export const makeWithOptions = Effect.fn("TerminalManager.makeWithOptions")(func
           return attachEvent ? listener(attachEvent) : Effect.void;
         },
         (cleanup) => {
+          // A rerun after a busy folder replaces the earlier attempt's listener, never keeps it.
+          unsubscribe?.();
           unsubscribe = cleanup;
           registerCleanup?.(stop);
         },
@@ -2653,8 +2535,8 @@ export const makeWithOptions = Effect.fn("TerminalManager.makeWithOptions")(func
       deliverLive = true;
       return stop;
     }).pipe(
-      (effect) => withThreadLock(input.threadId, effect),
       Effect.onError(() => Effect.sync(stop)),
+      (effect) => withThreadLockAndLease(input.threadId, input.terminalId, effect),
     );
   };
 
@@ -2683,9 +2565,10 @@ export const makeWithOptions = Effect.fn("TerminalManager.makeWithOptions")(func
     viewerId,
   ) => {
     const viewer = viewerId ?? `stream:${++anonymousViewerCount}`;
-    let detach = () => {};
+    let detach: (() => void) | undefined;
     const initial = Effect.suspend(() => {
-      detach = retainViewerOnce(
+      // A rerun after its folder was busy keeps the first retention.
+      detach ??= retainViewerOnce(
         input,
         viewer,
         input.cols !== undefined && input.rows !== undefined
@@ -2702,14 +2585,14 @@ export const makeWithOptions = Effect.fn("TerminalManager.makeWithOptions")(func
         ((stop) =>
           registerCleanup(() => {
             stop();
-            detach();
+            detach?.();
           })),
     ).pipe(
       Effect.map((stop) => () => {
         stop();
-        detach();
+        detach?.();
       }),
-      Effect.onError(() => Effect.sync(detach)),
+      Effect.onError(() => Effect.sync(() => detach?.())),
     );
   };
 
@@ -3026,16 +2909,24 @@ export const makeWithOptions = Effect.fn("TerminalManager.makeWithOptions")(func
   });
 
   const restart: TerminalManager["Service"]["restart"] = (input) =>
-    withThreadLock(
+    withThreadLockAndLease(
       input.threadId,
+      input.terminalId,
       resolveLaunchInputEnvironment(input).pipe(
         Effect.flatMap((resolved) =>
-          withTerminalLease(
+          tryTerminalLease(
+            resolved,
             resolved.worktreePath ?? resolved.cwd,
-            restartResolved(resolved).pipe(Effect.map(snapshot)),
+            stillBound(resolved).pipe(
+              Effect.andThen(restartResolved(resolved)),
+              Effect.map(snapshot),
+            ),
+            current(resolved),
+            notFound(resolved),
           ),
         ),
       ),
+      true,
     );
 
   const close: TerminalManager["Service"]["close"] = (input) =>
@@ -3043,10 +2934,12 @@ export const makeWithOptions = Effect.fn("TerminalManager.makeWithOptions")(func
       input.threadId,
       Effect.gen(function* () {
         if (input.terminalId) {
+          yield* supersede(input.threadId, input.terminalId, "close");
           yield* closeSession(input.threadId, input.terminalId, input.deleteHistory === true);
           return;
         }
 
+        yield* supersede(input.threadId, undefined, "close");
         const threadSessions = yield* sessionsForThread(input.threadId);
         yield* Effect.forEach(
           threadSessions,
@@ -3134,11 +3027,17 @@ export const makeWithOptions = Effect.fn("TerminalManager.makeWithOptions")(func
   });
 
   const agentOperations = makeAgentTerminalOperations({
-    withThreadLock,
+    withThreadLock: (threadId, effect) => withThreadLockAndLease(threadId, undefined, effect),
     sessionsForThread,
     requireSession,
     open: (input) =>
-      withTerminalLease(input.cwd, openWithWorkspaceLease(input, input.owner, input.authorize)),
+      tryTerminalLease(
+        input,
+        input.cwd,
+        openWithWorkspaceLease(input, input.owner, input.authorize),
+        Effect.succeedNone,
+        notFound(input),
+      ),
     mutate: Effect.fn("terminal.agentMutateLocked")(function* (
       session: TerminalSessionState,
       input: AgentTerminalMutateInput,
@@ -3153,7 +3052,8 @@ export const makeWithOptions = Effect.fn("TerminalManager.makeWithOptions")(func
         case "clear":
           return yield* clearLocked(input, input.owner, input.authorize);
         case "restart":
-          yield* withTerminalLease(
+          yield* tryTerminalLease(
+            input,
             session.worktreePath ?? session.cwd,
             restartResolved(
               {
@@ -3168,15 +3068,23 @@ export const makeWithOptions = Effect.fn("TerminalManager.makeWithOptions")(func
               input.owner,
               input.authorize,
             ),
+            Effect.succeedNone,
+            Effect.fail(
+              new OrchestratorMcpFailure({
+                code: "conflict",
+                message: "The terminal changed while this operation waited.",
+              }),
+            ),
           );
           return;
         case "close":
-          return yield* closeSession(input.threadId, input.terminalId, false, input.authorize);
+          yield* closeSession(input.threadId, input.terminalId, false, input.authorize);
+          return yield* supersede(input.threadId, input.terminalId, "close");
       }
     }),
   });
 
-  return TerminalManager.of({
+  const service = TerminalManager.of({
     ...agentOperations,
     open,
     getShell,
@@ -3194,6 +3102,15 @@ export const makeWithOptions = Effect.fn("TerminalManager.makeWithOptions")(func
     subscribe,
     subscribeMetadata,
   });
+  registerTerminalProbe(
+    service,
+    Effect.sync(() => ({
+      waiting: leaseOrder.waitingCount(),
+      listeners: terminalEventListeners.size,
+    })),
+  );
+  return service;
 });
 
-export const layer = Layer.effect(TerminalManager, make()).pipe(Layer.provide(ProcessRunner.layer));
+export const layer = (deriveConfigMap: typeof deriveProviderInstanceConfigMap) =>
+  Layer.effect(TerminalManager, make(deriveConfigMap)).pipe(Layer.provide(ProcessRunner.layer));

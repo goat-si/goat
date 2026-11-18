@@ -1,3 +1,4 @@
+import { isRunningDatabaseMigrations } from "@goat/shared/databaseMigrationLog";
 import * as Duration from "effect/Duration";
 import * as Effect from "effect/Effect";
 import * as Option from "effect/Option";
@@ -18,6 +19,7 @@ export const makeStartupFailureReporter = Effect.fn("desktop.backendStartup.make
         reset: Effect.void,
         append: (_stream: "stdout" | "stderr", _chunk: Uint8Array) => Effect.void,
         report: (_reason: string) => Effect.void,
+        migratingDatabase: Effect.succeed(false),
       };
     }
     const tail = yield* Ref.make("");
@@ -42,6 +44,7 @@ export const makeStartupFailureReporter = Effect.fn("desktop.backendStartup.make
         Ref.get(tail).pipe(
           Effect.flatMap((output) => onFailure?.({ reason, output }) ?? Effect.void),
         ),
+      migratingDatabase: Ref.get(tail).pipe(Effect.map(isRunningDatabaseMigrations)),
     };
   },
 );

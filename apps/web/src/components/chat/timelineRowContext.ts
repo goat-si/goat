@@ -14,12 +14,12 @@ import {
 import type { AsyncResult, Atom } from "effect/reactivity";
 import type { CommandOutputView } from "@goat/client-runtime/state/command-output";
 import type { WorkflowOpening } from "@goat/client-runtime/state/subagentRuntime";
-import { createContext, type MouseEvent, type ReactNode } from "react";
+import { useEffect, useRef, createContext, type MouseEvent, type ReactNode } from "react";
 import { type LegendListRef } from "@legendapp/list/react";
 import type { CodexArtifactTemplate } from "@goat/shared/codexArtifactTemplates";
 import { type ChatFileAttachment } from "../../types";
 import { type OpenTurnDiff } from "../../diffPanelStore";
-import { ExpandedImagePreview } from "./ExpandedImagePreview";
+import { type ExpandedImageItem, ExpandedImagePreview } from "./ExpandedImagePreview";
 import { type AssistantCitationTarget } from "./AssistantCitationSource";
 import { type MessagesTimelineRow, type WorkGroupScrollAnchor } from "./MessagesTimeline.logic";
 import { type TimestampFormat } from "@goat/contracts/settings";
@@ -90,7 +90,8 @@ export interface TimelineRowSharedState {
   onFileDownload: (attachment: ChatFileAttachment) => void;
   openPullRequest: (event: MouseEvent<HTMLElement>, url: string) => void;
   onToggleWorkGroup: (groupId: string, anchorKey: string) => void;
-  onToggleWorkEntry: (anchorKey: string, collapsed: boolean) => void;
+  onToggleWorkEntry: (anchorKey: string, collapsed: boolean, entryId?: string) => void;
+  onWorkEntryContentReady?: (anchorKey: string, entryId: string) => void;
   onCancelWorktreeSetup: (() => void) | null;
   onRetryCloudRun: ((runId: RunId) => void) | null;
   retryableWorkspacePreparationRunIds: ReadonlySet<RunId>;
@@ -107,6 +108,7 @@ export interface TimelineRowActivityState {
   activeTurnInProgress: boolean;
   awaitingUser: boolean;
   isPreparingWorktree: boolean;
+  providerStartingLabel: string | null;
   latestRunId: RunId | null;
   backgroundWorktreeSetup: WorktreeSetupSnapshot | null;
 }
@@ -120,9 +122,17 @@ export interface WorkGroupViewState {
   expandedEntries: Set<string>;
 }
 
+/** One image the group's agent viewed; `item` is null until its URL resolves. */
+export interface WorkGroupViewedImage {
+  readonly path: string;
+  readonly item: ExpandedImageItem | null;
+}
+
 export const WorkGroupViewCtx = createContext<{
   state: WorkGroupViewState;
-  onToggleEntry: (collapsed: boolean) => void;
+  viewedImages: ReadonlyArray<WorkGroupViewedImage>;
+  onToggleEntry: (collapsed: boolean, entryId: string) => void;
+  onContentReady?: ((entryId: string) => void) | undefined;
 } | null>(null);
 
 export type TimelineWorkEntry = Extract<
@@ -131,3 +141,14 @@ export type TimelineWorkEntry = Extract<
 >["groupedEntries"][number];
 
 export type TimelineRow = MessagesTimelineRow;
+
+export function useInitialOutputReady(pending: boolean, onReady: (() => void) | undefined) {
+  const notified = useRef(false);
+  // oxlint-disable-next-line goat/react-effect-budget -- reveals a disclosure after its first async output commits
+  useEffect(() => {
+    if (!pending && !notified.current) {
+      notified.current = true;
+      onReady?.();
+    }
+  }, [pending, onReady]);
+}

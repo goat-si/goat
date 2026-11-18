@@ -1,4 +1,5 @@
 import { AuthStandardClientScopes } from "@goat/contracts";
+import * as NodeCrypto from "@effect/platform-node/NodeCrypto";
 import * as NodeServices from "@effect/platform-node/NodeServices";
 import { expect, it } from "@effect/vitest";
 import * as Effect from "effect/Effect";
@@ -10,7 +11,7 @@ import * as SqlitePersistence from "../persistence/Sqlite.ts";
 import * as EnvironmentAuth from "./EnvironmentAuth.ts";
 import * as ServerSecretStore from "./ServerSecretStore.ts";
 import * as SessionStore from "./SessionStore.ts";
-import { MAIN_LISTENER } from "./connectionContext.testkit.ts";
+import { MAIN_LISTENER, onMainListenerAuth } from "./connectionContext.testkit.ts";
 
 const layerServerConfig = (
   overrides?: Partial<Pick<ServerConfig.ServerConfig["Service"], "desktopBootstrapToken">>,
@@ -42,56 +43,108 @@ const layerEnvironmentAuth = (
     Layer.provide(layerServerConfig(overrides)),
   );
 
-it.layer(NodeServices.layer)("EnvironmentAuth administrative operations", (it) => {
-  it.effect("creates, lists, and revokes client pairing links", () =>
-    Effect.gen(function* () {
-      const environmentAuth = yield* EnvironmentAuth.EnvironmentAuth;
+it.layer(Layer.mergeAll(NodeServices.layer, NodeCrypto.layer))(
+  "EnvironmentAuth administrative operations",
+  (it) => {
+    it.effect("creates, lists, and revokes client pairing links", () =>
+      Effect.gen(function* () {
+        const environmentAuth = yield* EnvironmentAuth.EnvironmentAuth;
 
-      const created = yield* environmentAuth.createPairingLink({
-        scopes: ["orchestration:read"],
-        subject: "one-time-token",
-        label: "CI phone",
-      });
-      const listedBeforeRevoke = yield* environmentAuth.listPairingLinks();
-      const revoked = yield* environmentAuth.revokePairingLink(created.id);
-      const listedAfterRevoke = yield* environmentAuth.listPairingLinks();
+        const created = yield* environmentAuth.createPairingLink({
+          scopes: ["orchestration:read"],
+          subject: "one-time-token",
+          label: "CI phone",
+        });
+        const listedBeforeRevoke = yield* environmentAuth.listPairingLinks();
+        const revoked = yield* environmentAuth.revokePairingLink(created.id);
+        const listedAfterRevoke = yield* environmentAuth.listPairingLinks();
 
-      expect(created.scopes).toEqual(["orchestration:read"]);
-      expect(created.credential.length).toBeGreaterThan(0);
-      expect(listedBeforeRevoke).toHaveLength(1);
-      expect(listedBeforeRevoke[0]?.id).toBe(created.id);
-      expect(listedBeforeRevoke[0]?.label).toBe("CI phone");
-      expect(listedBeforeRevoke[0]).not.toHaveProperty("credential");
-      expect(revoked).toBe(true);
-      expect(listedAfterRevoke).toHaveLength(0);
-    }).pipe(Effect.provide(layerEnvironmentAuth())),
-  );
+        expect(created.scopes).toEqual(["orchestration:read"]);
+        expect(created.credential.length).toBeGreaterThan(0);
+        expect(listedBeforeRevoke).toHaveLength(1);
+        expect(listedBeforeRevoke[0]?.id).toBe(created.id);
+        expect(listedBeforeRevoke[0]?.label).toBe("CI phone");
+        expect(listedBeforeRevoke[0]).not.toHaveProperty("credential");
+        expect(revoked).toBe(true);
+        expect(listedAfterRevoke).toHaveLength(0);
+      }).pipe(Effect.provide(layerEnvironmentAuth())),
+    );
 
-  it.effect("issues bearer access token sessions without exposing raw tokens", () =>
-    Effect.gen(function* () {
-      const environmentAuth = yield* EnvironmentAuth.EnvironmentAuth;
-      const sessionCredentials = yield* SessionStore.SessionStore;
+    it.effect("issues bearer access token sessions without exposing raw tokens", () =>
+      Effect.gen(function* () {
+        const environmentAuth = yield* EnvironmentAuth.EnvironmentAuth;
+        const sessionCredentials = yield* SessionStore.SessionStore;
 
-      const issued = yield* environmentAuth.issueSession({
-        label: "deploy-bot",
-      });
-      const verified = yield* sessionCredentials.verify(issued.token, MAIN_LISTENER);
-      const listedBeforeRevoke = yield* environmentAuth.listSessions();
-      const revoked = yield* environmentAuth.revokeSession(issued.sessionId);
-      const listedAfterRevoke = yield* environmentAuth.listSessions();
+        const issued = yield* environmentAuth.issueSession({
+          label: "deploy-bot",
+        });
+        const verified = yield* sessionCredentials.verify(issued.token, MAIN_LISTENER);
+        const listedBeforeRevoke = yield* environmentAuth.listSessions();
+        const revoked = yield* environmentAuth.revokeSession(issued.sessionId);
+        const listedAfterRevoke = yield* environmentAuth.listSessions();
 
-      expect(issued.method).toBe("bearer-access-token");
-      expect(issued.scopes).toEqual(AuthStandardClientScopes);
-      expect(issued.client.deviceType).toBe("bot");
-      expect(issued.client.label).toBe("deploy-bot");
-      expect(verified.sessionId).toBe(issued.sessionId);
-      expect(verified.scopes).toEqual(AuthStandardClientScopes);
-      expect(verified.method).toBe("bearer-access-token");
-      expect(listedBeforeRevoke).toHaveLength(1);
-      expect(listedBeforeRevoke[0]?.sessionId).toBe(issued.sessionId);
-      expect("token" in (listedBeforeRevoke[0] ?? {})).toBe(false);
-      expect(revoked).toBe(true);
-      expect(listedAfterRevoke).toHaveLength(0);
-    }).pipe(Effect.provide(layerEnvironmentAuth())),
-  );
-});
+        expect(issued.method).toBe("bearer-access-token");
+        expect(issued.scopes).toEqual(AuthStandardClientScopes);
+        expect(issued.client.deviceType).toBe("bot");
+        expect(issued.client.label).toBe("deploy-bot");
+        expect(verified.sessionId).toBe(issued.sessionId);
+        expect(verified.scopes).toEqual(AuthStandardClientScopes);
+        expect(verified.method).toBe("bearer-access-token");
+        expect(listedBeforeRevoke).toHaveLength(1);
+        expect(listedBeforeRevoke[0]?.sessionId).toBe(issued.sessionId);
+        expect("token" in (listedBeforeRevoke[0] ?? {})).toBe(false);
+        expect(revoked).toBe(true);
+        expect(listedAfterRevoke).toHaveLength(0);
+      }).pipe(Effect.provide(layerEnvironmentAuth())),
+    );
+
+    it.effect(
+      "Revoke others keeps the desktop session minted by the bootstrap exchange and ends look-alikes (contract)",
+      () =>
+        Effect.gen(function* () {
+          const auth = onMainListenerAuth(yield* EnvironmentAuth.EnvironmentAuth);
+          const sessions = yield* SessionStore.SessionStore;
+          const desktopClient = { label: "GOAT Desktop", deviceType: "desktop" } as const;
+          const exchange = (credential: string, input?: { readonly proofKeyThumbprint: string }) =>
+            auth
+              .exchangeBootstrapCredentialForAccessToken(
+                credential,
+                undefined,
+                desktopClient,
+                input,
+              )
+              .pipe(
+                Effect.flatMap((result) => sessions.verify(result.access_token, MAIN_LISTENER)),
+                Effect.map((session) => session.sessionId),
+              );
+          const pair = (label: string) =>
+            auth
+              .issuePairingCredential({ label })
+              .pipe(Effect.flatMap((pairing) => exchange(pairing.credential)));
+          // The desktop main process's own exchange: the bootstrap credential, no proof key.
+          const desktop = yield* exchange("desktop-bootstrap-token");
+          const lookAlikes = [
+            yield* pair("GOAT Desktop"),
+            yield* exchange("desktop-bootstrap-token", { proofKeyThumbprint: "test-proof-key" }),
+            (yield* auth.issueSession({ subject: "desktop-local", label: "GOAT Desktop" }))
+              .sessionId,
+          ];
+          const current = yield* pair("Test browser");
+
+          const result = yield* auth.revokeOtherClientSessions(current);
+          const listed = yield* auth.listClientSessions(current);
+
+          expect(result).toEqual({ revokedCount: lookAlikes.length, kept: { desktop: 1, pen: 0 } });
+          expect(
+            Object.fromEntries(
+              listed.map((session) => [session.sessionId, session.keptByRevokeOthers ?? "none"]),
+            ),
+          ).toEqual({ [current]: "none", [desktop]: "desktop" });
+        }).pipe(
+          Effect.provide(
+            layerEnvironmentAuth({ desktopBootstrapToken: "desktop-bootstrap-token" }),
+          ),
+        ),
+    );
+  },
+);

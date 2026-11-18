@@ -1,3 +1,4 @@
+import * as NodeCrypto from "@effect/platform-node/NodeCrypto";
 import * as NodeServices from "@effect/platform-node/NodeServices";
 import { expect, it } from "@effect/vitest";
 import { vi } from "vite-plus/test";
@@ -36,7 +37,7 @@ const layer = Routes.layer.pipe(
   Layer.provide(Secrets.layer),
   Layer.provide(Environment.layerIdentity),
   Layer.provideMerge(Config.layerTest(process.cwd(), { prefix: "goat-connect-settings-rpc-" })),
-  Layer.provideMerge(NodeServices.layer),
+  Layer.provideMerge(Layer.mergeAll(NodeServices.layer, NodeCrypto.layer)),
 );
 const tags = [...RpcAuthorization.AuthorizedWsRpcGroup.requests.values()].map((rpc) => rpc._tag);
 const group = RpcAuthorization.AuthorizedWsRpcGroup.omit(

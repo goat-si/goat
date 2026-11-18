@@ -1,6 +1,7 @@
 import type {
   OrchestrationV2ProjectedTurnItem,
   OrchestrationV2ThreadProjection,
+  OrchestrationV2TurnItem,
 } from "@goat/contracts";
 import { isOrchestrationV2TurnItemVisible } from "@goat/shared/orchestrationV2Timeline";
 
@@ -184,4 +185,13 @@ export function applyHistoryPageMeta(
 
 export function shouldShowLoadEarlierControl(history: ThreadHistoryMeta): boolean {
   return history.hasMoreHistory || history.error !== null;
+}
+
+export function startsTurn(item: OrchestrationV2TurnItem): boolean {
+  return (
+    item.type === "notification" ||
+    (item.type === "user_message" &&
+      item.inputIntent !== "steer" &&
+      item.inputIntent !== "promoted_queued_to_steer")
+  );
 }

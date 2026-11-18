@@ -12,6 +12,7 @@ import { symlinksSupported } from "@goat/shared/testing/symlinks";
 import {
   discoverCursorSkills,
   hasCursorSkillMention,
+  makeCursorSkillTextResolver,
   probeCursorSkills,
   rewriteCursorSkillMentions,
 } from "./skills.ts";
@@ -331,4 +332,43 @@ describe("Cursor skills", () => {
       expect(rewriteCursorSkillMentions(text, names)).toBe(text);
     }
   });
+
+  it("carries user-invoked skills hidden from the model into the Cursor prompt", async () =>
+    await runNode(
+      Effect.gen(function* () {
+        const fileSystem = yield* FileSystem.FileSystem;
+        const path = yield* Path.Path;
+        const workspace = yield* fileSystem.makeTempDirectoryScoped({
+          directory: NodeOS.tmpdir(),
+          prefix: "cursor-skills-invoked-",
+        });
+        const writeSkill = (name: string, contents: string) =>
+          fileSystem
+            .makeDirectory(path.join(workspace, ".cursor", "skills", name), { recursive: true })
+            .pipe(
+              Effect.andThen(
+                fileSystem.writeFileString(
+                  path.join(workspace, ".cursor", "skills", name, "SKILL.md"),
+                  contents,
+                ),
+              ),
+            );
+        yield* writeSkill("review", "# Review\nReview the code.");
+        yield* writeSkill(
+          "grill-me",
+          "---\nname: grill-me\ndescription: Grill the plan.\ndisable-model-invocation: true\n---\nAsk one question at a time.",
+        );
+        const resolve = makeCursorSkillTextResolver({ HOME: workspace });
+
+        expect(yield* resolve("$review Look at the tests.", workspace)).toBe(
+          "/review Look at the tests.",
+        );
+        // Cursor hides `disable-model-invocation` skills from the model, so the prompt carries them.
+        const invoked = yield* resolve("$grill-me My plan.", workspace);
+        expect(invoked.startsWith("/grill-me My plan.")).toBe(true);
+        expect(invoked).toContain("Ask one question at a time.");
+        expect(invoked).not.toContain("disable-model-invocation");
+        expect(yield* resolve("Plain text.", workspace)).toBe("Plain text.");
+      }),
+    ));
 });

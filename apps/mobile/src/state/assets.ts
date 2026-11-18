@@ -8,6 +8,7 @@ import {
   EMPTY_ASSET_URL_ATOM,
   makeRevisionedAssetUrlFamily,
 } from "@goat/client-runtime/state/assets";
+import { squashAtomCommandFailure } from "@goat/client-runtime/state/runtime";
 import type { AssetResource, EnvironmentId } from "@goat/contracts";
 import { useCallback, useContext } from "react";
 
@@ -86,6 +87,7 @@ export function useAssetUrl(
 export function useRefreshAssetUrl(
   environmentId: EnvironmentId | null,
   resource: AssetResource | null,
+  options?: { reportError?: boolean },
 ): () => Promise<string | null> {
   const registry = useContext(RegistryContext);
   const connection = usePreparedConnection(environmentId);
@@ -99,10 +101,11 @@ export function useRefreshAssetUrl(
     const connectionAtom = environmentSession.preparedConnectionValueAtom(environmentId);
     if (registry.get(connectionAtom)._tag === "None") return null;
     const result = await createUrl({ environmentId, input: { resource } });
+    if (options?.reportError && result._tag === "Failure") throw squashAtomCommandFailure(result);
     // Signing can wait through a reconnect; use the destination connection that answered.
     const connection = registry.get(connectionAtom);
     if (connection._tag === "None") return null;
     const state = assetUrlStateFromResult(result, connection.value.httpBaseUrl);
     return state._tag === "Success" ? state.url : null;
-  }, [createUrl, environmentId, httpBaseUrl, registry, resource]);
+  }, [createUrl, environmentId, httpBaseUrl, registry, resource, options?.reportError]);
 }

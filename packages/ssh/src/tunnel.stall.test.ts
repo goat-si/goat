@@ -1,6 +1,7 @@
 // SSH is a fake process; forwarded HTTP and the stalled carrier use real loopback sockets.
 // @effect-diagnostics-next-line nodeBuiltinImport:off -- a real HTTP server must keep the forwarded response pending.
 import * as NodeHttp from "node:http";
+import * as NodeCrypto from "@effect/platform-node/NodeCrypto";
 import * as NodeServices from "@effect/platform-node/NodeServices";
 import * as NodeHttpClient from "@effect/platform-node/NodeHttpClient";
 import { assert, it } from "@effect/vitest";
@@ -88,6 +89,7 @@ it.effect(
       );
       const layer = Layer.mergeAll(
         NodeServices.layer,
+        NodeCrypto.layer,
         NodeHttpClient.layerNodeHttp,
         Layer.succeed(ChildProcessSpawner.ChildProcessSpawner, spawner),
         Layer.succeed(NetService.NetService, {
@@ -170,6 +172,7 @@ it.effect("records failed target resolution separately from manager preparation 
     );
     const layer = Layer.mergeAll(
       NodeServices.layer,
+      NodeCrypto.layer,
       NodeHttpClient.layerNodeHttp,
       Layer.succeed(ChildProcessSpawner.ChildProcessSpawner, spawner),
       Layer.succeed(NetService.NetService, testNetService),

@@ -24,6 +24,7 @@ import {
   OpenCodexUpdateStatus,
 } from "./opencodex.ts";
 import { HubParityResult } from "./hubParity.ts";
+import { HubNodeMachineClass } from "./disposableMachines.ts";
 import { ServerActivityBlocker } from "./serverActivity.ts";
 import { GoatclawHostSync } from "./permissionProfiles.ts";
 
@@ -294,6 +295,11 @@ export const HostStatusEntry = Schema.Struct({
    * the hub for SSH hosts GOAT manages while it is a hub; older hubs omit it.
    */
   opencodexChildOptIn: Schema.optional(Schema.Boolean),
+  /**
+   * Set by the hub for an SSH host that is a disposable machine (its class, state and Pen
+   * membership); absent for a kept host and from older hubs.
+   */
+  machineClass: ForwardCompatibleOptional(HubNodeMachineClass),
   /** Resource pressure that machine reports for itself. Older hosts omit it. */
   pressure: Schema.optional(HostPressure),
   /** Whether this machine's goatclaw policy has reached the host. Set by the machine that fanned out. */

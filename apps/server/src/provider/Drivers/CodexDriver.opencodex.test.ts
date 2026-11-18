@@ -1,3 +1,4 @@
+import * as NodeCrypto from "@effect/platform-node/NodeCrypto";
 import * as NodeServices from "@effect/platform-node/NodeServices";
 import { assert, it } from "@effect/vitest";
 import { EnvironmentId, ProviderInstanceId } from "@goat/contracts";
@@ -31,6 +32,7 @@ const dependencies = Config.layerTest(process.cwd(), { prefix: "codex-home-drive
   Layer.provideMerge(
     Layer.mergeAll(
       NodeServices.layer,
+      NodeCrypto.layer,
       IdAllocator.layer,
       McpProviderSessions.layer,
       MemoryDerivedCache.layer,

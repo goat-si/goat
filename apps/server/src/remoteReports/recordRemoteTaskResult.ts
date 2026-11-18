@@ -150,7 +150,7 @@ export const waitForRemoteTask = Effect.fn("remoteReports.waitForRemoteTask")(fu
     observedRun:
       answer.runId === null || answer.status === "idle"
         ? null
-        : { runId: answer.runId, status: answer.status, summary: null },
+        : { runId: answer.runId, status: answer.status, summary: answer.result?.summary ?? null },
     timedOut: answer.timedOut,
   } satisfies RemoteOriginReportsWaitResult;
 });

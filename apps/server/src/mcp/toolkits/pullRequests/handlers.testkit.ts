@@ -12,7 +12,7 @@ import {
   type ThreadPullRequestLink,
   SourceControlProviderKind,
 } from "@goat/contracts";
-import * as Crypto from "effect/Crypto";
+import * as SecureRandom from "effect/crypto/SecureRandom";
 import * as Effect from "effect/Effect";
 import * as Layer from "effect/Layer";
 import * as Option from "effect/Option";
@@ -28,6 +28,7 @@ import {
 } from "../../../orchestration-v2/testkit/pullRequestFixtures.ts";
 import * as ProjectService from "../../../project/ProjectService.ts";
 import * as PullRequestService from "../../../pullRequest/PullRequestService.ts";
+import * as PullRequestWatchService from "../../../pullRequest/PullRequestWatchService.ts";
 import * as PullRequestReviewGuideService from "../../../pullRequest/PullRequestReviewGuideService.ts";
 import * as McpInvocationContext from "../../McpInvocationContext.ts";
 import * as McpToolAccess from "../../McpToolAccess.ts";
@@ -38,10 +39,7 @@ import { PullRequestsToolkit } from "./tools.ts";
 export const PROJECT_ID = ProjectId.make("project-1");
 export const THREAD_ID = ThreadId.make("thread-1");
 
-const testCrypto = Crypto.make({
-  randomBytes: (size) => new Uint8Array(size).fill(7),
-  digest: (_algorithm, data) => Effect.succeed(data),
-});
+const testCrypto = SecureRandom.make((size) => new Uint8Array(size).fill(7));
 
 const invocation = (
   capabilities: ReadonlyArray<McpInvocationContext.McpCapability>,
@@ -203,6 +201,18 @@ export const makeHarness = Effect.fn("makePullRequestsToolkitHarness")(function*
         ),
     }),
     Layer.mock(PullRequestService.PullRequestService)({
+      // Watch registration reads the pull request first; an open one lets it through.
+      summary: (input) =>
+        Effect.succeed({
+          ...input,
+          provider: SourceControlProviderKind.make("github"),
+          title: "Pull request",
+          url: `https://github.com/${input.repository}/pull/${input.number}`,
+          state: "open" as const,
+          headBranch: "feature",
+          baseBranch: "main",
+          updatedAt: "2026-08-20T00:00:00.000Z",
+        }),
       ...options.service,
       detail: (input) =>
         Ref.update(reads, (recorded) => [...recorded, input]).pipe(
@@ -220,13 +230,16 @@ export const makeHarness = Effect.fn("makePullRequestsToolkitHarness")(function*
         Effect.succeed(id === thread?.id ? v2PullRequestThread(thread) : null),
       dispatch,
     }),
-    Layer.succeed(Crypto.Crypto, testCrypto),
+    Layer.succeed(SecureRandom.SecureRandom, testCrypto),
     McpToolAccessTestkit.liveThreadsLayer,
+  );
+  const layerWithWatches = PullRequestWatchService.layer.pipe(
+    Layer.provideMerge(layerDependencies),
   );
   const toolkit = yield* PullRequestsToolkit.pipe(
     Effect.provide(
       McpToolAccess.HandlersLayer.layer(PullRequestsHandlers.layer).pipe(
-        Layer.provide(layerDependencies),
+        Layer.provide(layerWithWatches),
       ),
     ),
   );
@@ -245,7 +258,7 @@ export const makeHarness = Effect.fn("makePullRequestsToolkitHarness")(function*
           : Effect.succeed(last.result as Tool.Success<(typeof PullRequestsToolkit.tools)[Name]>);
       }),
       Effect.provideService(McpInvocationContext.McpInvocationContext, invocation(capabilities)),
-      Effect.provide(layerDependencies),
+      Effect.provide(layerWithWatches),
     );
   return { commands, guideRequests, reads, call };
 });

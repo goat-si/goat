@@ -207,4 +207,71 @@ export const replayCases: ReadonlyArray<ReplayCase> = [
       ],
     },
   },
+  {
+    id: "background-wait-unmatched-id",
+    upstreamId: "background-wait-unmatched-id",
+    role: "top",
+    experience:
+      "An agent waited on an ID that matched no background work, read the result as a registered wait, and ended its turn; nothing woke it.",
+    priorTurns: [
+      {
+        role: "user",
+        text: "Run the full test suite in the background and fix whatever fails. It takes about 15 minutes.",
+      },
+      {
+        role: "assistant",
+        text: "The suite is running in the background.",
+        calls: [
+          {
+            tool: "Bash",
+            input: { command: "vp test run", run_in_background: true },
+            result: "Command running in background with ID: bq7m2x9k.",
+          },
+          {
+            tool: "goat_background_wait",
+            input: { taskIds: ["placeholder"] },
+            isError: true,
+            result: {
+              code: "invalid_request",
+              message:
+                "None of these IDs is running background work on this thread, so this request registers no wait for them.",
+            },
+          },
+        ],
+      },
+    ],
+    prompt: "I'm heading out for a bit. Tell me what failed when it's done.",
+    expect: { calls: [{ tool: "background.wait", args: { taskIds: "~bq7m2x9k" } }] },
+  },
+  {
+    id: "background-wait-matched-id",
+    upstreamId: "background-wait-matched-id",
+    role: "top",
+    experience:
+      "With the command's own ID registered, ending the turn is right; a fix must not make agents distrust a good wait and poll.",
+    priorTurns: [
+      {
+        role: "user",
+        text: "Run the full test suite in the background and fix whatever fails. It takes about 15 minutes.",
+      },
+      {
+        role: "assistant",
+        text: "The suite is running in the background.",
+        calls: [
+          {
+            tool: "Bash",
+            input: { command: "vp test run", run_in_background: true },
+            result: "Command running in background with ID: bq7m2x9k.",
+          },
+          {
+            tool: "goat_background_wait",
+            input: { taskIds: ["bq7m2x9k"] },
+            result: { matched: ["bq7m2x9k"], unmatched: [] },
+          },
+        ],
+      },
+    ],
+    prompt: "I'm heading out for a bit. Tell me what failed when it's done.",
+    expect: { maxCalls: { "background.wait": 1, Bash: 3 }, notCalls: ["ScheduleWakeup"] },
+  },
 ];

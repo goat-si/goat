@@ -8,7 +8,8 @@ import {
   RelayAgentAwarenessPreferences,
   type RelayDeliveryResult,
 } from "@goat/contracts/relay";
-import * as Crypto from "effect/Crypto";
+import * as Digest from "effect/crypto/Digest";
+import * as SecureRandom from "effect/crypto/SecureRandom";
 import type * as PlatformError from "effect/PlatformError";
 import * as Context from "effect/Context";
 import * as DateTime from "effect/DateTime";
@@ -151,7 +152,8 @@ export class FcmDeliveries extends Context.Service<
 export const make = Effect.gen(function* () {
   const authorization = yield* DeliveryAuthorization.DeliveryAuthorization;
   const config = yield* RelayConfiguration.RelayConfiguration;
-  const crypto = yield* Crypto.Crypto;
+  const crypto = yield* Digest.Digest;
+  const random = yield* SecureRandom.SecureRandom;
   const sender = yield* FcmDeliveryQueueSender.FcmDeliveryQueueSender;
   const client = yield* FcmClient.FcmClient;
   const devices = yield* LiveActivities.LiveActivities;
@@ -177,8 +179,8 @@ export const make = Effect.gen(function* () {
       if (input.target.account_epoch === null) return null;
       const payload = {
         version: 2,
-        jobId: yield* crypto
-          .randomUUIDv4()
+        jobId: yield* random
+          .uuidV4()
           .pipe(Effect.mapError((cause) => new FcmDeliveryError({ operation: "enqueue", cause }))),
         accountEpoch: input.target.account_epoch,
         userId: input.target.user_id,
@@ -347,7 +349,10 @@ export const make = Effect.gen(function* () {
       };
       if (alert) {
         // Hash the full stable group identity to stay within the payload budget.
-        const digest = yield* crypto.digest("SHA-256", new TextEncoder().encode(alert.alert_id));
+        const digest = yield* crypto.digest(
+          Digest.sha256,
+          new TextEncoder().encode(alert.alert_id),
+        );
         data.alert_id = Array.from(digest, (byte) => byte.toString(16).padStart(2, "0")).join("");
       }
       if (!(yield* authorization.eligible(deliveryTarget))) return;

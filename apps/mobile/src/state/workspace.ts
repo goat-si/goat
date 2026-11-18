@@ -3,7 +3,7 @@ import { useMemo } from "react";
 import { Atom } from "effect/reactivity";
 
 import { environmentShell, environmentShellSummaryAtom } from "./shell";
-import { projectWorkspaceState } from "./workspaceModel";
+import { isEnvironmentShellPending, projectWorkspaceState } from "./workspaceModel";
 import { environmentCatalog } from "../connection/catalog";
 import { environmentPresentations } from "./presentation";
 import { createWorkspaceConnectionAtoms } from "./workspace-connection-atoms";
@@ -20,7 +20,7 @@ const hasSyncingConnectedEnvironmentAtom = Atom.make((get) =>
     (environment) =>
       environment.isEnabled &&
       environment.connectionState === "connected" &&
-      get(environmentShell.stateValueAtom(environment.environmentId)).status === "synchronizing",
+      isEnvironmentShellPending(get(environmentShell.stateValueAtom(environment.environmentId))),
   ),
 ).pipe(Atom.withLabel("mobile:has-syncing-connected-environment"));
 

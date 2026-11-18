@@ -1,6 +1,7 @@
 import * as RemoteReportInbox from "../../remoteReports/RemoteReportInbox.ts";
 import * as OtelEnvironment from "@goat/shared/otelEnvironment";
 import { DEFAULT_SIGNAL_EXPORT } from "@goat/shared/observability";
+import * as NodeCrypto from "@effect/platform-node/NodeCrypto";
 import * as NodeServices from "@effect/platform-node/NodeServices";
 import type {
   CodexAppServerIsolation,
@@ -51,6 +52,7 @@ import * as ProviderAuthService from "../../provider/ProviderAuthService.ts";
 import * as ProviderContinuationRequests from "@goat/provider-core/server/ProviderContinuationRequests";
 import * as ProviderContinuationService from "../ProviderContinuationService.ts";
 import * as ProviderEventIngestor from "../ProviderEventIngestor.ts";
+import * as ProviderInstallationGate from "../../provider/ProviderInstallationGate.ts";
 import * as ProviderInstanceRegistry from "../../provider/ProviderInstanceRegistry.ts";
 import * as ProviderRuntimeRecoveryService from "../ProviderRuntimeRecoveryService.ts";
 import * as ProviderSessionManager from "../ProviderSessionManager.ts";
@@ -326,6 +328,9 @@ export function layerWithRegistry<Error>(
     readonly projects?: Layer.Layer<ProjectService.ProjectService>;
     readonly continuationRequests?: Layer.Layer<never>;
     readonly databaseLayer?: Layer.Layer<SqlClient.SqlClient, ReplayDatabaseError>;
+    readonly wrapProjectionStore?: (
+      store: ProjectionStore.ProjectionStoreV2Shape,
+    ) => ProjectionStore.ProjectionStoreV2Shape;
     readonly runEffectWorker?: boolean;
     readonly runContinuationWorker?: boolean;
     readonly recoverOnStartup?: boolean;
@@ -335,6 +340,7 @@ export function layerWithRegistry<Error>(
   } = {},
 ): Layer.Layer<
   | Orchestrator.OrchestratorV2
+  | EffectOutbox.EffectOutboxV2
   | EffectWorker.OrchestrationEffectWorkerV2
   | EventSink.EventSinkV2
   | EffectOutbox.EffectOutboxV2
@@ -343,13 +349,14 @@ export function layerWithRegistry<Error>(
   | ProviderTurnControlService.ProviderTurnControlServiceV2
   | ThreadManagementService.ThreadManagementService
   | ProviderSessionManager.ProviderSessionManagerV2
-  | CommandOutputRecorder.CommandOutputRecorder,
+  | CommandOutputRecorder.CommandOutputRecorder
+  | ThreadCommandExecutor.ThreadCommandExecutor,
   Error | ReplayDatabaseError
 > {
   const layerServerConfig = Layer.effect(
     ServerConfig.ServerConfig,
     makeReplayServerConfig(scenario.name).pipe(Effect.orDie),
-  ).pipe(Layer.provide(NodeServices.layer));
+  ).pipe(Layer.provide(Layer.mergeAll(NodeServices.layer, NodeCrypto.layer)));
   const layerRuntime =
     scenario.runtimePolicyOverride === undefined
       ? RuntimePolicy.layer
@@ -373,12 +380,23 @@ export function layerWithRegistry<Error>(
       ? {}
       : { codexAppServerIsolation: options.codexAppServerIsolation }),
   }).pipe(Layer.orDie);
+  const layerEffectOutboxProvided = EffectOutbox.layer.pipe(Layer.provide(layerDatabase));
+  const wrapProjectionStore = options.wrapProjectionStore;
+  const layerProjectionStore =
+    wrapProjectionStore === undefined
+      ? ProjectionStore.layer
+      : Layer.effect(
+          ProjectionStore.ProjectionStoreV2,
+          Effect.gen(function* () {
+            return wrapProjectionStore(yield* ProjectionStore.ProjectionStoreV2);
+          }),
+        ).pipe(Layer.provide(ProjectionStore.layer));
   const layerStores = Layer.mergeAll(
     EventStore.layer,
-    ProjectionStore.layer,
+    layerProjectionStore,
     ProjectStore.layer,
     CommandReceiptStore.layer,
-    EffectOutbox.layer,
+    layerEffectOutboxProvided,
     TurnItemPositionStore.layer,
   ).pipe(Layer.provide(layerDatabase));
   const layerEventSinkProvided = EventSink.layerFromStores.pipe(
@@ -400,7 +418,7 @@ export function layerWithRegistry<Error>(
         ThreadCommandExecutor.layer,
         GitVcsDriver.layer.pipe(
           Layer.provide(layerServerConfig),
-          Layer.provide(NodeServices.layer),
+          Layer.provide(Layer.mergeAll(NodeServices.layer, NodeCrypto.layer)),
         ),
       ),
     ),
@@ -408,11 +426,11 @@ export function layerWithRegistry<Error>(
   const layerVcsDriverRegistry = VcsDriverRegistry.layer.pipe(
     Layer.provide(VcsProcess.layer),
     Layer.provide(layerServerConfig),
-    Layer.provide(NodeServices.layer),
+    Layer.provide(Layer.mergeAll(NodeServices.layer, NodeCrypto.layer)),
   );
   const layerCheckpointStore = CheckpointStore.layer.pipe(
     Layer.provide(layerVcsDriverRegistry),
-    Layer.provide(NodeServices.layer),
+    Layer.provide(Layer.mergeAll(NodeServices.layer, NodeCrypto.layer)),
   );
   const layerCheckpointServiceProvided = CheckpointService.layer.pipe(
     Layer.provide(Layer.mergeAll(layerCheckpointStore, IdAllocator.layer)),
@@ -443,6 +461,7 @@ export function layerWithRegistry<Error>(
         McpSessionRegistryTestkit.layer,
         layerProviderEventIngestorProvided,
         layerStores,
+        ProviderInstallationGate.layer,
       ),
     ),
   );
@@ -458,6 +477,7 @@ export function layerWithRegistry<Error>(
         layerCheckpointServiceProvided,
         layerEventSinkProvided,
         IdAllocator.layer,
+        ThreadCommandExecutor.layer,
         layerProviderEventIngestorProvided,
         layerServerSettings,
         layerStores,
@@ -620,6 +640,7 @@ export function layerWithRegistry<Error>(
       : { maxAttempts: options.effectWorkerMaxAttempts },
   ).pipe(Layer.provide(Layer.merge(layerStores, layerEffectExecutorProvided)));
   const layerReplayRuntime = Layer.mergeAll(
+    layerEffectOutboxProvided,
     layerOrchestratorProvided,
     layerStores,
     layerProviderTurnStartServiceProvided,
@@ -630,13 +651,14 @@ export function layerWithRegistry<Error>(
     layerEventSinkProvided,
     layerContinuationWorkerProvided,
     layerCommandOutputHubProvided,
+    ThreadCommandExecutor.layer,
   ).pipe(
     Layer.provide(
       options.projects === undefined
         ? ProviderTurnStartServiceTestkit.layer
         : Layer.merge(ProviderTurnStartServiceTestkit.layer, options.projects),
     ),
-    Layer.provide(NodeServices.layer),
+    Layer.provide(Layer.mergeAll(NodeServices.layer, NodeCrypto.layer)),
   );
 
   if (options.runEffectWorker === false) {

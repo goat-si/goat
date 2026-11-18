@@ -49,7 +49,7 @@ import {
   resolveUserMessagePresentation,
 } from "@goat/client-runtime/user-message";
 import type { ThreadCheckpointSummary } from "@goat/client-runtime/state/thread-checkpoints";
-import { formatDiffCount } from "@goat/client-runtime/diff-count";
+import { assistantReplyStatusBadge } from "@goat/client-runtime/state/thread-workflows";
 import type { WorkflowOpening } from "@goat/client-runtime/state/subagentRuntime";
 import {
   AuthFilesystemReadScope,
@@ -68,7 +68,6 @@ import {
 import { renderAssistantCitationsAsText } from "@goat/shared/assistantCitations";
 import { encodeComposerContextFragment } from "@goat/shared/composerContextClipboard";
 import { parseThreadLinkHref, resolveThreadLinkRef } from "@goat/shared/threadLinks";
-import { PROMPT_LINK_MAX_PROMPT_LENGTH } from "@goat/shared/promptLinks";
 import {
   parseComposerContextHref,
   collectComposerContextReferences,
@@ -94,6 +93,7 @@ import { CHAT_LIST_ANCHOR_OFFSET, resolveChatListAnchoredEndSpace } from "@goat/
 import { imageMimeType } from "@goat/shared/image";
 import { videoMimeType } from "@goat/shared/video";
 import { SymbolView } from "../../components/ui/AppSymbol";
+import { TurnDiffStat } from "./TurnDiffStat";
 import { HeaderHeightContext } from "@react-navigation/elements";
 import { useFocusEffect, useNavigation } from "@react-navigation/native";
 import { useNativeWorkspaceColumnsSupported } from "../../native/NativeWorkspaceColumns";
@@ -166,11 +166,11 @@ import { VideoPreviewModal, type VideoPreviewSource } from "../../components/Vid
 import { markdownFileEmbedLabel, resolveMarkdownMediaPreview } from "../../lib/markdownMedia";
 import { attachmentVideoPreviewSource } from "../../lib/videoPreviewSource";
 import { CopyTextButton } from "./CopyTextButton";
+import { UserMessageCopyButton } from "./UserMessageCopyButton";
+import { PendingMessageWaitReason } from "./PendingMessageWaitReason";
 import { getReviewSectionIdForCheckpoint } from "../review/reviewModel";
 import { setReviewSelectedSectionId } from "../review/reviewState";
-import { Menu } from "../../components/ui/Menu";
 import { useAndroidControlSizing } from "../../components/ui/useAndroidControlSizing";
-import { copyPromptLink } from "../prompt-links/prompt-link-actions";
 import { parseReviewCommentMessageSegments } from "../review/reviewCommentSelection";
 import {
   ReviewCommentCard,
@@ -285,6 +285,7 @@ const WIDE_MARKDOWN_BLOCK_OPTIONS = {
 
 const TURN_FOLD_HEIGHT = EXPANDABLE_ROW_MIN_HEIGHT + 3.5;
 const FEED_PADDING_TOP = 12;
+const VIEWED_IMAGE_GAP = 8;
 // Rows re-measure within a commit or two of a width change. LegendList also defers imperative
 // scrolls for 100ms after it compensates a size change, and a deferred restore could land
 // under a drag that starts meanwhile.
@@ -308,7 +309,8 @@ export interface ThreadFeedHistoryControls {
   readonly error: string | null;
   readonly onLoadEarlier: () => void;
   /** Loads earlier history down to the entry, in one request. */
-  readonly onLoadThrough: (entryId: string) => void;
+  /** Resolves whether that load brought history in; a failure ends a message jump. */
+  readonly onLoadThrough: (entryId: string) => Promise<boolean>;
 }
 
 export interface ThreadFeedHandle {
@@ -359,40 +361,6 @@ export interface ThreadFeedProps {
   readonly onEndFollowEnabledChange?: (enabled: boolean) => void;
   readonly skills?: ReadonlyArray<SelectableMarkdownSkill>;
   readonly onUseArtifactTemplate?: (template: CodexArtifactTemplate) => void;
-}
-
-const USER_MESSAGE_COPY_MENU_ACTIONS = [
-  { id: "copy-prompt-link", title: "Copy prompt link", image: "link" },
-];
-
-function UserMessageCopyButton(props: {
-  readonly text: string;
-  readonly onCopy: (() => Promise<void>) | undefined;
-  readonly tintColor: ColorValue;
-}) {
-  const button = (
-    <CopyTextButton
-      accessibilityLabel="Copy message"
-      text={props.text}
-      onCopy={props.onCopy}
-      tintColor={props.tintColor}
-      buttonSize={28}
-      iconSize={13}
-    />
-  );
-  const linkText = replaceComposerContextReferences(props.text, (reference) => reference.label);
-  if (linkText.length > PROMPT_LINK_MAX_PROMPT_LENGTH) return button;
-  return (
-    <Menu
-      actions={USER_MESSAGE_COPY_MENU_ACTIONS}
-      onPressAction={({ nativeEvent }) => {
-        if (nativeEvent.event === "copy-prompt-link") void copyPromptLink(linkText);
-      }}
-      shouldOpenOnLongPress
-    >
-      {button}
-    </Menu>
-  );
 }
 
 function MessageAttachmentImage(props: {
@@ -1166,7 +1134,13 @@ function renderFeedEntry(
   }
 
   if (entry.type === "thinking") {
-    return <ThreadThinkingRow rowSizing={props.workRowSizing} iconSubtleColor={iconSubtleColor} />;
+    return (
+      <ThreadThinkingRow
+        rowSizing={props.workRowSizing}
+        iconSubtleColor={iconSubtleColor}
+        providerStartingLabel={entry.providerStartingLabel}
+      />
+    );
   }
 
   if (entry.type === "html-render") {
@@ -1178,6 +1152,19 @@ function renderFeedEntry(
         frameWidth={props.contentWidth}
         iconColor={iconSubtleColor}
       />
+    );
+  }
+
+  if (entry.type === "viewed-images") {
+    const thumbnailWidth = Math.floor((props.contentWidth - VIEWED_IMAGE_GAP) / 2);
+    return (
+      <View className="flex-row flex-wrap pb-2" style={{ gap: VIEWED_IMAGE_GAP }}>
+        {entry.paths.map((path) => (
+          <View key={path} style={{ width: thumbnailWidth }}>
+            {props.renderViewedImage({ href: path, alt: null, title: null })}
+          </View>
+        ))}
+      </View>
     );
   }
 
@@ -1307,6 +1294,10 @@ function renderFeedEntry(
       props.terminalAssistantMessageIds.has(message.id) &&
       !assistantTurnStillInProgress &&
       !message.streaming;
+    const statusBadge =
+      message.role === "assistant" && !message.streaming
+        ? assistantReplyStatusBadge(message.projectedItem, showAssistantMeta)
+        : null;
 
     if (isUser && props.workflowOpening?.messageId === message.id) {
       return (
@@ -1364,9 +1355,13 @@ function renderFeedEntry(
       const foldRowId = presentation.attribution === "agent" ? `agent:${message.id}` : null;
       const foldExpanded = foldRowId !== null && (props.expandedWorkRows[foldRowId] ?? false);
       const bubbleBodyVisible = foldRowId === null || foldExpanded;
-      // A message from another thread names its sender; how it arrived adds nothing.
       const intentBadge =
-        foldRowId === null ? resolveUserMessageIntentBadge(message.inputIntent) : null;
+        foldRowId !== null
+          ? null
+          : resolveUserMessageIntentBadge(
+              message.inputIntent,
+              message.projectedItem?.item.status === "pending",
+            );
       const referenceIds = new Set(
         collectComposerContextReferences(message.text).map((reference) => reference.contextId),
       );
@@ -1589,6 +1584,9 @@ function renderFeedEntry(
               ) : null}
             </View>
           ) : null}
+          {entry.pendingMessage && !entry.acknowledged ? (
+            <PendingMessageWaitReason messageId={entry.pendingMessage.messageId} />
+          ) : null}
         </Animated.View>
       );
     }
@@ -1633,8 +1631,14 @@ function renderFeedEntry(
             onOpenTurnDiff={props.onOpenTurnDiff}
           />
         ) : null}
+        {!showAssistantMeta && statusBadge ? (
+          <View className="mt-1 flex-row">
+            <AssistantStatusBadge status={statusBadge} />
+          </View>
+        ) : null}
         {showAssistantMeta ? (
           <View className="mt-1 flex-row items-center gap-1">
+            {statusBadge ? <AssistantStatusBadge status={statusBadge} /> : null}
             <CopyTextButton
               accessibilityLabel="Copy message"
               text={renderedText}
@@ -1685,29 +1689,11 @@ function renderFeedEntry(
   );
 }
 
-function TurnDiffStat(props: {
-  readonly checkpoint: ThreadCheckpointSummary;
-  readonly onOpenTurnDiff: (checkpoint: ThreadCheckpointSummary) => void;
-}) {
-  const { files } = props.checkpoint;
-  const additions = files.reduce((total, file) => total + file.additions, 0);
-  const deletions = files.reduce((total, file) => total + file.deletions, 0);
-  const fileCountLabel = `${files.length} file${files.length === 1 ? "" : "s"} changed`;
+function AssistantStatusBadge(props: { readonly status: string }) {
   return (
-    <Pressable
-      accessibilityRole="button"
-      accessibilityLabel={`Review ${fileCountLabel}, ${additions} additions, ${deletions} deletions`}
-      onPress={() => props.onOpenTurnDiff(props.checkpoint)}
-      className="min-h-11 shrink-0 flex-row items-center gap-2 px-2 active:bg-subtle"
-    >
-      <Text className="font-goat-medium text-xs tabular-nums text-adaptive-emerald-700-300">
-        +{formatDiffCount(additions)}
-      </Text>
-      <Text className="font-goat-medium text-xs tabular-nums text-adaptive-rose-700-300">
-        −{formatDiffCount(deletions)}
-      </Text>
-      <SymbolView name="chevron.right" size={12} tintColorClassName="accent-foreground-muted" />
-    </Pressable>
+    <View className="rounded-full border border-border px-1.5 py-0.5">
+      <Text className="font-goat-medium text-2xs text-foreground-secondary">{props.status}</Text>
+    </View>
   );
 }
 
@@ -2641,7 +2627,7 @@ export const ThreadFeed = memo(function ThreadFeed({
   const jumpRunId =
     jumpReady &&
     !presentedFeed.some((entry) => entry.type === "message" && entry.id === jumpToMessageId)
-      ? messageFoldRunId(props.feed, jumpToMessageId)
+      ? messageFoldRunId(props.feed, jumpToMessageId, presentedFeed)
       : null;
   if (jumpRunId && !expandedTurnIds.has(jumpRunId)) {
     setInteractionState((current) => ({
@@ -3328,7 +3314,7 @@ function ThreadFeedLoadEarlierControl(props: ThreadFeedHistoryControls) {
     return null;
   }
   return (
-    <View className="mb-3 items-center gap-1.5 px-2">
+    <View className="mb-3 items-center px-2">
       {props.hasMoreHistory ? (
         <View className="self-center">
           <Button
@@ -3342,11 +3328,17 @@ function ThreadFeedLoadEarlierControl(props: ThreadFeedHistoryControls) {
           />
         </View>
       ) : null}
-      {props.error !== null ? (
-        <Text className="text-center text-xs" style={{ color: mutedColor }}>
-          {props.error}
-        </Text>
-      ) : null}
+      {/* Mounted with the control so TalkBack announces an error line when it appears. */}
+      <View collapsable={false} accessibilityLiveRegion="polite">
+        {props.error !== null ? (
+          <Text
+            className={props.hasMoreHistory ? "mt-1.5 text-center text-xs" : "text-center text-xs"}
+            style={{ color: mutedColor }}
+          >
+            {props.error}
+          </Text>
+        ) : null}
+      </View>
     </View>
   );
 }

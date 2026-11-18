@@ -1,3 +1,4 @@
+import * as NodeCrypto from "@effect/platform-node/NodeCrypto";
 import * as NodeServices from "@effect/platform-node/NodeServices";
 import { assert, it } from "@effect/vitest";
 import { EnvironmentId } from "@goat/contracts";
@@ -49,7 +50,7 @@ const withSettings = <A, E>(
           }),
         ).pipe(
           Layer.provideMerge(ServerConfig.layerTest(process.cwd(), baseDir)),
-          Layer.provideMerge(NodeServices.layer),
+          Layer.provideMerge(Layer.mergeAll(NodeServices.layer, NodeCrypto.layer)),
         ),
       ),
     ),
@@ -59,7 +60,7 @@ const withSettings = <A, E>(
 const tempBaseDir = Effect.gen(function* () {
   const fs = yield* FileSystem.FileSystem;
   return yield* fs.makeTempDirectoryScoped({ prefix: "goat-slack-access-test-" });
-}).pipe(Effect.provide(NodeServices.layer));
+}).pipe(Effect.provide(Layer.mergeAll(NodeServices.layer, NodeCrypto.layer)));
 
 /** Writes a settings file in the format saved before channel scope and user access existed. */
 const writeLegacyFile = (allowedChannelIds: ReadonlyArray<string>) =>

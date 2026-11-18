@@ -1,9 +1,11 @@
 import { SSH_RUNTIME_PROTOCOL_VERSION } from "@goat/shared/sshRuntimeProtocol";
 import { ORCHESTRATION_PROTOCOL_VERSION } from "@goat/contracts";
 import { assert, describe, it } from "@effect/vitest";
+import * as NodeCrypto from "@effect/platform-node/NodeCrypto";
 import * as NodeServices from "@effect/platform-node/NodeServices";
 import * as HostProcess from "@goat/shared/HostProcess";
 import * as Effect from "effect/Effect";
+import * as Layer from "effect/Layer";
 import * as Result from "effect/Result";
 import * as Stream from "effect/Stream";
 import { ChildProcess } from "effect/process";
@@ -89,7 +91,10 @@ describe.skipIf(HostProcess.Platform.defaultValue() === "win32")(
             log.filter((entry) => entry.type === "stop" && entry.version === "1.2.2").length,
             1,
           );
-        }).pipe(Effect.provide(NodeServices.layer), Effect.scoped),
+        }).pipe(
+          Effect.provide(Layer.mergeAll(NodeServices.layer, NodeCrypto.layer)),
+          Effect.scoped,
+        ),
     );
 
     const refusedBecause = {
@@ -141,7 +146,10 @@ describe.skipIf(HostProcess.Platform.defaultValue() === "win32")(
             yield* f.fs.readFileString(`${f.state}/server.log`),
             `GOAT did not stop PID ${f.pid} for an approved forced update: ${refusedBecause[mismatch]}.`,
           );
-        }).pipe(Effect.provide(NodeServices.layer), Effect.scoped),
+        }).pipe(
+          Effect.provide(Layer.mergeAll(NodeServices.layer, NodeCrypto.layer)),
+          Effect.scoped,
+        ),
     );
 
     it.live(
@@ -168,7 +176,10 @@ describe.skipIf(HostProcess.Platform.defaultValue() === "win32")(
             yield* f.fs.readFileString(`${f.state}/server.log`),
             `GOAT did not stop PID ${f.pid} for an approved forced update: it no longer matched the approved runtime before SIGKILL.`,
           );
-        }).pipe(Effect.provide(NodeServices.layer), Effect.scoped),
+        }).pipe(
+          Effect.provide(Layer.mergeAll(NodeServices.layer, NodeCrypto.layer)),
+          Effect.scoped,
+        ),
     );
 
     it.live(
@@ -199,7 +210,10 @@ describe.skipIf(HostProcess.Platform.defaultValue() === "win32")(
             `child process ${child}`,
           );
           assert.isTrue((yield* events(f)).some((entry) => entry.type === "stop"));
-        }).pipe(Effect.provide(NodeServices.layer), Effect.scoped),
+        }).pipe(
+          Effect.provide(Layer.mergeAll(NodeServices.layer, NodeCrypto.layer)),
+          Effect.scoped,
+        ),
     );
 
     it.live.each([false, true])(
@@ -232,7 +246,10 @@ describe.skipIf(HostProcess.Platform.defaultValue() === "win32")(
             assert.equal(result.success.pending?.refreshCause, "drain_unavailable");
             assert.isTrue(isAlive(f.pid));
           }
-        }).pipe(Effect.provide(NodeServices.layer), Effect.scoped),
+        }).pipe(
+          Effect.provide(Layer.mergeAll(NodeServices.layer, NodeCrypto.layer)),
+          Effect.scoped,
+        ),
     );
   },
 );
@@ -285,7 +302,10 @@ describe.skipIf(HostProcess.Platform.defaultValue() === "win32")(
                   },
                 },
           );
-        }).pipe(Effect.provide(NodeServices.layer), Effect.scoped),
+        }).pipe(
+          Effect.provide(Layer.mergeAll(NodeServices.layer, NodeCrypto.layer)),
+          Effect.scoped,
+        ),
     );
   },
 );
@@ -321,7 +341,7 @@ exec "$HOME/.test/identity-bin/ps" "$@"
         assert.isTrue(Result.isSuccess(result));
         assert.isFalse(isAlive(f.pid));
         assert.isTrue(isAlive(bystanderPid));
-      }).pipe(Effect.provide(NodeServices.layer), Effect.scoped),
+      }).pipe(Effect.provide(Layer.mergeAll(NodeServices.layer, NodeCrypto.layer)), Effect.scoped),
     );
   },
 );
@@ -359,7 +379,7 @@ exec "$HOME/.test/identity-bin/ps" "$@"
         assert.isTrue(Result.isFailure(result));
         assert.isTrue(isAlive(f.pid));
         assert.isFalse((yield* events(f)).some((entry) => entry.type === "stop"));
-      }).pipe(Effect.provide(NodeServices.layer), Effect.scoped),
+      }).pipe(Effect.provide(Layer.mergeAll(NodeServices.layer, NodeCrypto.layer)), Effect.scoped),
     );
 
     it.live("a table whose runtime row is another process signals nothing, children included", () =>
@@ -384,7 +404,7 @@ exec "$HOME/.test/identity-bin/ps" "$@"
         assert.isTrue(isAlive(f.pid));
         assert.isTrue(isAlive(bystanderPid));
         assert.isFalse((yield* events(f)).some((entry) => entry.type === "stop"));
-      }).pipe(Effect.provide(NodeServices.layer), Effect.scoped),
+      }).pipe(Effect.provide(Layer.mergeAll(NodeServices.layer, NodeCrypto.layer)), Effect.scoped),
     );
   },
 );
@@ -415,7 +435,7 @@ exec /usr/bin/awk "$@"
         assert.isTrue(Result.isFailure(result));
         assert.isTrue(isAlive(f.pid));
         assert.isFalse((yield* events(f)).some((entry) => entry.type === "stop"));
-      }).pipe(Effect.provide(NodeServices.layer), Effect.scoped),
+      }).pipe(Effect.provide(Layer.mergeAll(NodeServices.layer, NodeCrypto.layer)), Effect.scoped),
     );
   },
 );
@@ -443,7 +463,10 @@ describe.skipIf(HostProcess.Platform.defaultValue() === "win32")(
             assert.equal(result.success.version, ARCHIVE.archiveVersion);
           assert.isFalse(isAlive(f.pid));
           assert.isFalse(yield* f.fs.exists(`${f.state}/draining`));
-        }).pipe(Effect.provide(NodeServices.layer), Effect.scoped),
+        }).pipe(
+          Effect.provide(Layer.mergeAll(NodeServices.layer, NodeCrypto.layer)),
+          Effect.scoped,
+        ),
     );
   },
 );
@@ -480,7 +503,10 @@ describe.skipIf(HostProcess.Platform.defaultValue() === "win32")(
           }
           assert.isFalse(isAlive(f.pid));
           assert.isFalse(yield* f.fs.exists(`${f.state}/draining`));
-        }).pipe(Effect.provide(NodeServices.layer), Effect.scoped),
+        }).pipe(
+          Effect.provide(Layer.mergeAll(NodeServices.layer, NodeCrypto.layer)),
+          Effect.scoped,
+        ),
     );
 
     it.live("a malformed descendant row stops the update before any signal", () =>
@@ -510,7 +536,7 @@ exec "$HOME/.test/identity-bin/ps" "$@"
         assert.isTrue(Result.isFailure(result));
         assert.isTrue(isAlive(f.pid));
         assert.isFalse((yield* events(f)).some((entry) => entry.type === "stop"));
-      }).pipe(Effect.provide(NodeServices.layer), Effect.scoped),
+      }).pipe(Effect.provide(Layer.mergeAll(NodeServices.layer, NodeCrypto.layer)), Effect.scoped),
     );
   },
 );
@@ -542,7 +568,7 @@ describe.skipIf(HostProcess.Platform.defaultValue() === "win32")(
             ["drain", "drain-request", "stop"].includes(entry.type),
           ),
         );
-      }).pipe(Effect.provide(NodeServices.layer), Effect.scoped),
+      }).pipe(Effect.provide(Layer.mergeAll(NodeServices.layer, NodeCrypto.layer)), Effect.scoped),
     );
   },
 );
@@ -596,7 +622,7 @@ exec "$HOME/.test/identity-bin/ps" "$@"
           yield* f.fs.readFileString(`${f.state}/server.log`),
           `child process ${deepPid}`,
         );
-      }).pipe(Effect.provide(NodeServices.layer), Effect.scoped),
+      }).pipe(Effect.provide(Layer.mergeAll(NodeServices.layer, NodeCrypto.layer)), Effect.scoped),
     );
   },
 );

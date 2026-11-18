@@ -1,7 +1,7 @@
 import { Toolbar } from "./Toolbar";
 import { AppActivityIndicator } from "./AppActivityIndicator";
-import type { HeaderBarButtonMailSearchToolbarItem } from "react-native-screens";
-import { useId } from "react";
+import type { HeaderBarButtonMailSearchToolbarItem, SearchBarCommands } from "react-native-screens";
+import { useId, useLayoutEffect, useRef } from "react";
 import { View } from "react-native";
 import { createNativeHeaderMenu } from "./nativeHeaderMenu.ios";
 import { ScreenHeaderButton } from "./ScreenHeaderButton";
@@ -46,6 +46,19 @@ export function AppBar(props: AppBarProps) {
   const usesNativeMailSearchToolbar = useNativeMailSearchToolbar();
   const { search, menus } = props;
   const menu = menus?.[0];
+  const searchBarRef = useRef<SearchBarCommands>(null);
+  const nativeSearchText = useRef(search?.value ?? "");
+  const searchValue = search?.value;
+  // oxlint-disable-next-line goat/react-effect-budget -- the native search bar keeps its own text; a value the caller changes (a reset) has to be pushed into it
+  useLayoutEffect(() => {
+    if (searchValue === undefined || searchValue === nativeSearchText.current) return;
+    nativeSearchText.current = searchValue;
+    searchBarRef.current?.setText(searchValue);
+  }, [searchValue]);
+  const reportSearchText = (text: string) => {
+    nativeSearchText.current = text;
+    search?.onChangeText(text);
+  };
   const compactSearch =
     search !== undefined &&
     (search.compactToolbar ?? !layout.usesSplitView) &&
@@ -108,8 +121,9 @@ export function AppBar(props: AppBarProps) {
                       hideNavigationBar: false,
                       ...(search.mode === "inline" ? { obscureBackground: false } : undefined),
                       placeholder: search.placeholder,
-                      onChangeText: (event) => search.onChangeText(event.nativeEvent.text),
-                      onCancelButtonPress: () => search.onChangeText(""),
+                      ref: searchBarRef,
+                      onChangeText: (event) => reportSearchText(event.nativeEvent.text),
+                      onCancelButtonPress: () => reportSearchText(""),
                     },
               }
             : undefined),

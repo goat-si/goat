@@ -5,8 +5,10 @@ import * as NodeFS from "node:fs";
 import * as NodeOS from "node:os";
 import * as NodePath from "node:path";
 import { assert, describe, it } from "@effect/vitest";
+import * as NodeCrypto from "@effect/platform-node/NodeCrypto";
 import * as NodeServices from "@effect/platform-node/NodeServices";
 import * as Effect from "effect/Effect";
+import * as Layer from "effect/Layer";
 import * as Result from "effect/Result";
 import * as HostProcess from "@goat/shared/HostProcess";
 import { SSH_RUNTIME_PROTOCOL_VERSION } from "@goat/shared/sshRuntimeProtocol";
@@ -166,7 +168,7 @@ case "$-" in *f*) ;; *) exit 3 ;; esac
         assert.equal(Number((yield* f.fs.readFileString(`${f.state}/pid`)).trim()), record.pid);
         assert.include(yield* f.fs.readFileString(`${f.state}/server.log`), "EADDRINUSE");
         assert.isTrue(foreign.listening);
-      }).pipe(Effect.provide(NodeServices.layer), Effect.scoped),
+      }).pipe(Effect.provide(Layer.mergeAll(NodeServices.layer, NodeCrypto.layer)), Effect.scoped),
   );
 
   it.live("bounds repeated collisions and preserves the foreign listener", () =>
@@ -207,7 +209,7 @@ case "$-" in *f*) ;; *) exit 3 ;; esac
       for (const name of ["pid", "port", "managed", "identity"])
         assert.isFalse(yield* f.fs.exists(`${f.state}/${name}`));
       assert.isTrue(foreign.listening);
-    }).pipe(Effect.provide(NodeServices.layer), Effect.scoped),
+    }).pipe(Effect.provide(Layer.mergeAll(NodeServices.layer, NodeCrypto.layer)), Effect.scoped),
   );
 
   it.live(
@@ -231,7 +233,7 @@ case "$-" in *f*) ;; *) exit 3 ;; esac
           .map((line) => JSON.parse(line));
         assert.equal(events.filter((event) => event.type === "failed-start").length, 1);
         assert.isFalse(yield* f.fs.exists(`${f.state}/pid`));
-      }).pipe(Effect.provide(NodeServices.layer), Effect.scoped),
+      }).pipe(Effect.provide(Layer.mergeAll(NodeServices.layer, NodeCrypto.layer)), Effect.scoped),
   );
 
   it.skipIf(!canIsolateListenerPath)("finds lsof from a minimal PATH that omits /usr/sbin", () => {

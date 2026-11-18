@@ -2,6 +2,7 @@
 // @effect-diagnostics nodeBuiltinImport:off
 import * as NodeChildProcess from "node:child_process";
 
+import * as NodeCrypto from "@effect/platform-node/NodeCrypto";
 import * as NodeServices from "@effect/platform-node/NodeServices";
 import { assert, describe, it } from "@effect/vitest";
 import {
@@ -13,7 +14,7 @@ import * as NetService from "@goat/shared/Net";
 import { WINDOWS_DETACHED_SPAWN_POWERSHELL } from "@goat/shared/windowsHostProcess";
 import * as Effect from "effect/Effect";
 import * as FileSystem from "effect/FileSystem";
-import * as Crypto from "effect/Crypto";
+import * as Digest from "effect/crypto/Digest";
 import * as Hex from "effect/encoding/Hex";
 import * as Layer from "effect/Layer";
 import * as Sink from "effect/Sink";
@@ -135,6 +136,7 @@ describe("Windows SSH host", () => {
     );
     const layer = Layer.mergeAll(
       NodeServices.layer,
+      NodeCrypto.layer,
       Layer.succeed(ChildProcessSpawner.ChildProcessSpawner, spawner),
       Layer.succeed(HttpClient.HttpClient, testHttpClient),
       Layer.succeed(NetService.NetService, testNetService),
@@ -211,7 +213,7 @@ describe("Windows SSH host", () => {
       assert.equal(runWithDoubles(bin, "server_alive 4242").status, 0);
       assert.notEqual(runWithDoubles(bin, "server_alive 9999").status, 0);
       assert.equal(runWithDoubles(bin, 'printf %s "$MSYS"').stdout, "winsymlinks:sys");
-    }).pipe(Effect.provide(NodeServices.layer), Effect.scoped),
+    }).pipe(Effect.provide(Layer.mergeAll(NodeServices.layer, NodeCrypto.layer)), Effect.scoped),
   );
 
   it.effect(
@@ -298,7 +300,7 @@ describe("Windows SSH host", () => {
         yield* record("2026-11-08T14:23:57.456Z");
         ask();
         assert.equal(yield* starts(), 4);
-      }).pipe(Effect.provide(NodeServices.layer), Effect.scoped),
+      }).pipe(Effect.provide(Layer.mergeAll(NodeServices.layer, NodeCrypto.layer)), Effect.scoped),
   );
 
   it.effect("reads a native server's identity with one PowerShell query per verification", () =>
@@ -374,7 +376,7 @@ describe("Windows SSH host", () => {
       assert.deepEqual((yield* calls()).slice(3), ["9999"]);
       assert.equal(run(`verify_legacy_process 4242 '${identity}' && echo legacy`), "legacy\n");
       assert.deepEqual((yield* calls()).slice(4), ["4242"]);
-    }).pipe(Effect.provide(NodeServices.layer), Effect.scoped),
+    }).pipe(Effect.provide(Layer.mergeAll(NodeServices.layer, NodeCrypto.layer)), Effect.scoped),
   );
 
   it.effect("passes a usable Windows working directory to initial and supervisor launches", () =>
@@ -428,7 +430,7 @@ if [ "$1" = -u ] && [ "$2" = 'D:/' ]; then printf '%s\n' "$TEST_DRIVE"; else pri
       assert.include(WINDOWS_DETACHED_SPAWN_POWERSHELL, "CurrentDirectory = $env:GOAT_SPAWN_CWD");
       assert.include(launch, 'windows_spawn_detached "$SUPERVISE_LOG"');
       assert.include(launch, 'windows_spawn_detached "$LOG_FILE"');
-    }).pipe(Effect.provide(NodeServices.layer), Effect.scoped),
+    }).pipe(Effect.provide(Layer.mergeAll(NodeServices.layer, NodeCrypto.layer)), Effect.scoped),
   );
 
   it.effect.each([
@@ -476,7 +478,7 @@ if [ "$1" = -u ] && [ "$2" = 'D:/' ]; then printf '%s\n' "$TEST_DRIVE"; else pri
       yield* fs.chmod(profile, 0o700);
       assert.equal(result.status, 0, result.stderr);
       assert.equal(result.stdout.trim(), drive);
-    }).pipe(Effect.provide(NodeServices.layer), Effect.scoped),
+    }).pipe(Effect.provide(Layer.mergeAll(NodeServices.layer, NodeCrypto.layer)), Effect.scoped),
   );
 
   it("feeds a Windows host the upload script ahead of the archive on stdin", () => {
@@ -522,7 +524,7 @@ if [ "$1" = -u ] && [ "$2" = 'D:/' ]; then printf '%s\n' "$TEST_DRIVE"; else pri
   ] as const)("installs the Windows zip with publish failure %s", (failure) =>
     Effect.gen(function* () {
       const fs = yield* FileSystem.FileSystem;
-      const crypto = yield* Crypto.Crypto;
+      const digest = yield* Digest.Digest;
       const root = yield* fs.makeTempDirectoryScoped({ prefix: "goat-windows-install-" });
       const home = `${root}/home`;
       const bin = `${root}/bin`;
@@ -545,7 +547,7 @@ if [ "$1" = -u ] && [ "$2" = 'D:/' ]; then printf '%s\n' "$TEST_DRIVE"; else pri
         `${root}/stage`,
         `goat-${ARCHIVE.archiveVersion}-win32-x64`,
       ]);
-      const sha = Hex.encode(yield* crypto.digest("SHA-256", yield* fs.readFile(zipPath)));
+      const sha = Hex.encode(yield* digest.digest(Digest.sha256, yield* fs.readFile(zipPath)));
       yield* fs.writeFileString(
         `${release}/SHA256SUMS`,
         `${sha} *goat-${ARCHIVE.archiveVersion}-win32-x64.zip\n`,
@@ -695,7 +697,7 @@ exec '${realRm}' "$@"
       );
       assert.include(record.trim(), `${ARCHIVE.archiveVersion} ${sha} `);
       assert.isTrue(record.trim().endsWith(" https"));
-    }).pipe(Effect.provide(NodeServices.layer), Effect.scoped),
+    }).pipe(Effect.provide(Layer.mergeAll(NodeServices.layer, NodeCrypto.layer)), Effect.scoped),
   );
 
   it.effect(
@@ -717,7 +719,7 @@ exec '${realRm}' "$@"
         });
         assert.notEqual(probe.status, 0);
         assert.include(probe.stderr, "Remote host i686 has no GOAT release archive.");
-      }).pipe(Effect.provide(NodeServices.layer), Effect.scoped),
+      }).pipe(Effect.provide(Layer.mergeAll(NodeServices.layer, NodeCrypto.layer)), Effect.scoped),
   );
 
   it.effect.each([
@@ -777,6 +779,7 @@ exec '${realRm}' "$@"
     );
     const layer = Layer.mergeAll(
       NodeServices.layer,
+      NodeCrypto.layer,
       Layer.succeed(ChildProcessSpawner.ChildProcessSpawner, spawner),
       Layer.succeed(HttpClient.HttpClient, testHttpClient),
       Layer.succeed(NetService.NetService, testNetService),
@@ -822,6 +825,7 @@ exec '${realRm}' "$@"
     );
     const layer = Layer.mergeAll(
       NodeServices.layer,
+      NodeCrypto.layer,
       Layer.succeed(ChildProcessSpawner.ChildProcessSpawner, spawner),
       Layer.succeed(HttpClient.HttpClient, testHttpClient),
       Layer.succeed(NetService.NetService, testNetService),

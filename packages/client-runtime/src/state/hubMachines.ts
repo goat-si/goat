@@ -19,5 +19,13 @@ export function createHubMachinesAtoms<R, E>(
       label: "environment-data:server:hub-machines:reissue",
       tag: WS_METHODS.hubMachinesReissue,
     }),
+    hubMachinesDetach: createEnvironmentRpcCommand(runtime, {
+      label: "environment-data:server:hub-machines:detach",
+      tag: WS_METHODS.hubMachinesDetach,
+    }),
+    hubMachinesRelease: createEnvironmentRpcCommand(runtime, {
+      label: "environment-data:server:hub-machines:release",
+      tag: WS_METHODS.hubMachinesRelease,
+    }),
   };
 }

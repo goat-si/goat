@@ -1,4 +1,5 @@
 import {
+  AssetWorkspaceAssetNotFoundError,
   AuthFilesystemReadScope,
   EnvironmentAuthorizationError,
   EnvironmentId,
@@ -133,4 +134,19 @@ it("does not return an old capability after disconnecting during signing", async
   state.mint.mockClear();
   await expect(useRefreshAssetUrl(environmentId, resource)()).resolves.toBeNull();
   expect(state.mint).not.toHaveBeenCalled();
+});
+
+it("reports a missing file to preview while preserving disconnect handling", async () => {
+  const missing = new AssetWorkspaceAssetNotFoundError({
+    resource,
+    checkedPath: "/repo/missing.png",
+  });
+  state.mint.mockResolvedValue(AsyncResult.failure(Cause.fail(missing)));
+  await expect(useRefreshAssetUrl(environmentId, resource, { reportError: true })()).rejects.toBe(
+    missing,
+  );
+  state.connection = { _tag: "None" };
+  await expect(
+    useRefreshAssetUrl(environmentId, resource, { reportError: true })(),
+  ).resolves.toBeNull();
 });

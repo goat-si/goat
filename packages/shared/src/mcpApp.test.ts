@@ -5,7 +5,9 @@ import {
   injectMcpAppCsp,
   injectMcpAppThemeBootstrap,
   injectMcpAppCookieBootstrap,
+  MCP_APP_COLOR_SCHEME_PARAM,
   mcpAppContentSecurityPolicy,
+  mcpAppFrameUrl,
   mcpAppToolCallableByApp,
   readMcpAppCsp,
   readMcpAppReference,
@@ -100,6 +102,38 @@ describe("injectMcpAppThemeBootstrap", () => {
     expect(style.colorScheme).toBe("light");
     send(initialized);
     expect(style.colorScheme).toBe("dark");
+  });
+
+  it("applies only a valid scheme from the frame URL before any message arrives", () => {
+    const html = injectMcpAppThemeBootstrap("<p>app</p>");
+    const script = html.slice(html.indexOf("<script>") + 8, html.indexOf("</script>"));
+    const initialScheme = (search: string) => {
+      const head: Array<{ name?: string; content?: string }> = [];
+      NodeVM.runInNewContext(script, {
+        URLSearchParams,
+        location: { search },
+        window: { parent: {}, addEventListener: () => {} },
+        document: {
+          createElement: () => ({}),
+          head: { append: (element: (typeof head)[number]) => head.push(element) },
+        },
+      });
+      return head.find((element) => element.name === "color-scheme")?.content ?? "normal";
+    };
+    expect(initialScheme(`?a=1&${MCP_APP_COLOR_SCHEME_PARAM}=dark`)).toBe("dark");
+    expect(initialScheme(`?${MCP_APP_COLOR_SCHEME_PARAM}=light`)).toBe("light");
+    expect(initialScheme(`?${MCP_APP_COLOR_SCHEME_PARAM}=normal`)).toBe("normal");
+    expect(initialScheme("")).toBe("normal");
+  });
+
+  it("carries the host's color scheme in the frame URL a client loads", () => {
+    const search = (url: string) => new URL(url).searchParams;
+    const plain = mcpAppFrameUrl("https://host/attachments/app.html", "dark");
+    expect(search(plain).get(MCP_APP_COLOR_SCHEME_PARAM)).toBe("dark");
+    const signed = mcpAppFrameUrl("https://host/attachments/app.html?token=a%2Bb#top", "light");
+    expect(search(signed).get("token")).toBe("a+b");
+    expect(search(signed).get(MCP_APP_COLOR_SCHEME_PARAM)).toBe("light");
+    expect(new URL(signed).hash).toBe("#top");
   });
 });
 

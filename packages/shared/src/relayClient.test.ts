@@ -1,8 +1,9 @@
 import { sha256 } from "@noble/hashes/sha2";
+import * as NodeCrypto from "@effect/platform-node/NodeCrypto";
 import * as NodeServices from "@effect/platform-node/NodeServices";
 import { describe, expect, it } from "@effect/vitest";
 import * as ConfigProvider from "effect/ConfigProvider";
-import * as Crypto from "effect/Crypto";
+import * as Digest from "effect/crypto/Digest";
 import * as Deferred from "effect/Deferred";
 import * as Effect from "effect/Effect";
 import * as Fiber from "effect/Fiber";
@@ -88,7 +89,9 @@ const writeExecutable = (filePath: string, contents = "cloudflared") =>
   });
 
 type RelayClientTestServices =
-  | Layer.Success<ReturnType<typeof layerHostRuntime> | typeof NodeServices.layer>
+  | Layer.Success<
+      ReturnType<typeof layerHostRuntime> | typeof NodeServices.layer | typeof NodeCrypto.layer
+    >
   | HttpClient.HttpClient
   | ChildProcessSpawner.ChildProcessSpawner;
 
@@ -141,6 +144,7 @@ const testReleaseAsset = {
 const layerInstallRuntime = (platform: NodeJS.Platform) =>
   Layer.mergeAll(
     NodeServices.layer,
+    NodeCrypto.layer,
     layerHttpClient(testBinary),
     layerSpawner([]),
     layerHostRuntime({ PATH: "" }, platform),
@@ -247,7 +251,6 @@ describe("RelayClient", () => {
     ([platform, arch, assetName, checksum]) =>
       Effect.gen(function* () {
         const fileSystem = yield* FileSystem.FileSystem;
-        const crypto = yield* Crypto.Crypto;
         const path = yield* Path.Path;
         const baseDir = yield* fileSystem.makeTempDirectoryScoped({
           prefix: "goat-cloudflared-test-",
@@ -287,8 +290,8 @@ describe("RelayClient", () => {
               : fileSystem,
           ),
           // Supply published digests without storing multi-megabyte release binaries in fixtures.
-          Effect.provideService(Crypto.Crypto, {
-            ...crypto,
+          Effect.provideService(Digest.Digest, {
+            digestHex: () => Effect.succeed(checksum),
             digest: () => Effect.succeed(Buffer.from(checksum, "hex")),
           }),
           Effect.provideService(ChildProcessSpawner.ChildProcessSpawner, spawner),
@@ -319,6 +322,7 @@ describe("RelayClient", () => {
         Effect.provide(
           Layer.mergeAll(
             NodeServices.layer,
+            NodeCrypto.layer,
             layerHostRuntime({ PATH: "" }, platform),
             Layer.succeed(HostProcess.Architecture, arch),
           ),
@@ -359,6 +363,7 @@ describe("RelayClient", () => {
       Effect.provide(
         Layer.mergeAll(
           NodeServices.layer,
+          NodeCrypto.layer,
           layerHttpClient(new Uint8Array()),
           layerSpawner([]),
           layerHostRuntime({ PATH: "" }),
@@ -392,6 +397,7 @@ describe("RelayClient", () => {
       Effect.provide(
         Layer.mergeAll(
           NodeServices.layer,
+          NodeCrypto.layer,
           layerHttpClient(new Uint8Array()),
           layerSpawner([]),
           layerHostRuntime({ PATH: "" }),
@@ -452,6 +458,7 @@ describe("RelayClient", () => {
       Effect.provide(
         Layer.mergeAll(
           NodeServices.layer,
+          NodeCrypto.layer,
           layerHttpClient(new TextEncoder().encode("test-binary")),
           layerSpawner([]),
           layerHostRuntime({ PATH: "" }),
@@ -511,12 +518,56 @@ describe("RelayClient", () => {
         Effect.provide(
           Layer.mergeAll(
             NodeServices.layer,
+            NodeCrypto.layer,
             layerHttpClient(new TextEncoder().encode("test-cloudflared-binary")),
             layerSpawner([]),
             layerHostRuntime(),
           ),
         ),
       ),
+  );
+
+  it.effect.skipIf(windowsHost)(
+    "installs when the downloaded binary's first launch is held by an antivirus scan",
+    () =>
+      Effect.gen(function* () {
+        const fileSystem = yield* FileSystem.FileSystem;
+        const baseDir = yield* fileSystem.makeTempDirectoryScoped({
+          prefix: "goat-cloudflared-test-",
+        });
+        const scanning = yield* Deferred.make<void>();
+        const release = yield* Deferred.make<void>();
+        const manager = yield* RelayClient.makeCloudflaredRelayClient({
+          baseDir,
+          releaseAsset: testReleaseAsset,
+        }).pipe(
+          Effect.provideService(
+            ChildProcessSpawner.ChildProcessSpawner,
+            ChildProcessSpawner.make(() =>
+              Deferred.succeed(scanning, undefined).pipe(
+                Effect.andThen(Deferred.await(release)),
+                Effect.as(
+                  makeHandle(
+                    0,
+                    `cloudflared version ${RelayClient.CLOUDFLARED_VERSION} (built 2026-01-01-00:00 UTC)\n`,
+                  ),
+                ),
+              ),
+            ),
+          ),
+        );
+
+        const installing = yield* manager.install.pipe(Effect.forkChild);
+        yield* Deferred.await(scanning);
+        yield* TestClock.adjust("25 seconds");
+        yield* Deferred.succeed(release, undefined);
+
+        expect(yield* Fiber.join(installing)).toMatchObject({
+          status: "available",
+          source: "managed",
+          version: RelayClient.CLOUDFLARED_VERSION,
+        });
+      }).pipe(Effect.scoped, Effect.provide(layerInstallRuntime("linux"))),
   );
 
   it.effect("rejects downloads whose checksum does not match the pinned manifest", () => {
@@ -552,6 +603,7 @@ describe("RelayClient", () => {
       Effect.provide(
         Layer.mergeAll(
           NodeServices.layer,
+          NodeCrypto.layer,
           layerHttpClient(new TextEncoder().encode("tampered")),
           layerSpawner(commands),
           layerHostRuntime(),
@@ -587,6 +639,7 @@ describe("RelayClient", () => {
       Effect.provide(
         Layer.mergeAll(
           NodeServices.layer,
+          NodeCrypto.layer,
           layerHttpClient(bytes),
           layerSpawner(commands),
           layerHostRuntime(),
@@ -659,6 +712,7 @@ describe("RelayClient", () => {
       Effect.provide(
         Layer.mergeAll(
           NodeServices.layer,
+          NodeCrypto.layer,
           layerHttpClient(new Uint8Array()),
           layerSpawner([]),
           layerHostRuntime(configEnv, platform),
@@ -683,6 +737,7 @@ describe("RelayClient", () => {
         Effect.provide(
           Layer.mergeAll(
             NodeServices.layer,
+            NodeCrypto.layer,
             layerHttpClient(new Uint8Array()),
             layerSpawner([], options.versions),
             layerHostRuntime({ PATH: "" }),

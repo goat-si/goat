@@ -1,3 +1,4 @@
+import * as NodeCrypto from "@effect/platform-node/NodeCrypto";
 import * as NodeServices from "@effect/platform-node/NodeServices";
 import * as Deferred from "effect/Deferred";
 import * as Effect from "effect/Effect";
@@ -22,7 +23,7 @@ export const gitSpawnObserverLayer = (gitCommands?: string[], gitSpawnGate?: Git
         const args =
           command._tag === "StandardCommand" &&
           NodePath.parse(command.command).name.toLowerCase() === "git"
-            ? command.args
+            ? command.args.map(String)
             : null;
         if (args !== null) gitCommands?.push(args.join(" "));
         if (args === null || gitSpawnGate === undefined || !gitSpawnGate.matches(args)) {
@@ -40,4 +41,4 @@ export const gitSpawnObserverLayer = (gitCommands?: string[], gitSpawnGate?: Git
           );
       });
     }),
-  ).pipe(Layer.provide(NodeServices.layer));
+  ).pipe(Layer.provide(Layer.mergeAll(NodeServices.layer, NodeCrypto.layer)));

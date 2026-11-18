@@ -1,4 +1,5 @@
 import { assert, describe, it } from "@effect/vitest";
+import * as NodeCrypto from "@effect/platform-node/NodeCrypto";
 import * as NodeServices from "@effect/platform-node/NodeServices";
 import {
   type ComputerUsePauseReason,
@@ -144,7 +145,7 @@ const threadFixture = Effect.fn("LeaseRouteTest.threadFixture")(function* (
       getEnvironmentId: Effect.succeed(EnvironmentId.make("environment:test")),
       getDescriptor: Effect.die("unused"),
     }),
-    Effect.provide(NodeServices.layer),
+    Effect.provide(Layer.mergeAll(NodeServices.layer, NodeCrypto.layer)),
   );
   const credential = yield* registry.issue({
     threadId,

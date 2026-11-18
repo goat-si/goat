@@ -188,7 +188,7 @@ const toastUpdateError: ReportLocalUpdateError = (title, description) => {
   toastManager.add(stackedThreadToast({ type: "error", title, description }));
 };
 
-async function downloadLocalUpdate(
+export async function downloadLocalUpdate(
   bridge: DesktopBridge,
   {
     notifyDownloaded,
@@ -388,6 +388,7 @@ function SidebarUpdateControl({ placement }: { placement: SidebarUpdatePlacement
       try {
         confirmed = await ensureLocalApi().dialogs.confirm(
           getDesktopUpdateInstallConfirmationMessage(state),
+          { initialFocus: "confirm" },
         );
       } catch (error) {
         setIsActionPending(false);

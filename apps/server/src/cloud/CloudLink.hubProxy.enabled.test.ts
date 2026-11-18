@@ -1,5 +1,6 @@
 // @effect-diagnostics-next-line nodeBuiltinImport:off -- real Ed25519 relay proofs for the mint boundary.
 import * as NodeCrypto from "node:crypto";
+import * as PlatformNodeCrypto from "@effect/platform-node/NodeCrypto";
 import * as NodeServices from "@effect/platform-node/NodeServices";
 import { expect, it } from "@effect/vitest";
 import { vi } from "vite-plus/test";
@@ -60,7 +61,7 @@ const layer = CloudLink.layer.pipe(
   Layer.provide(Sqlite.layerMemory),
   Layer.provide(Config.layerTest(process.cwd(), { prefix: "goat-cloud-hub-proof-" })),
   Layer.provide(FetchHttpClient.layer),
-  Layer.provide(NodeServices.layer),
+  Layer.provide(Layer.mergeAll(NodeServices.layer, PlatformNodeCrypto.layer)),
 );
 
 it.effect(

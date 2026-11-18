@@ -137,6 +137,14 @@ const makeConnectedDiscovery = Effect.fn(function* (options: {
   readonly onStrongRead?: (stored: Map<string, BearerConnectionCredential>) => void;
   /** Adds a device reached through the hub whose last attempt was refused. */
   readonly blockedDevice?: boolean;
+  /** Holds the node list back until `nodesReleased`, so the hub can refuse before its first one. */
+  readonly holdNodes?: boolean;
+  /** Why the device behind the hub was last refused; "permission" unless set. */
+  readonly deviceFailure?: "authentication" | "permission";
+  /** Sends the same node list this many times per subscription. */
+  readonly repeatLists?: number;
+  /** Every subscription after the first answers with a node list that no longer has the device. */
+  readonly dropNodeOnResubscribe?: boolean;
   /** Credential reads and writes that fail before the store answers again. */
   readonly failStoreReads?: number;
   readonly failStoreWrites?: number;
@@ -150,6 +158,7 @@ const makeConnectedDiscovery = Effect.fn(function* (options: {
   const reconnected = yield* Deferred.make<void>();
   const deviceRetried = yield* Deferred.make<void>();
   const storeFailed = yield* Deferred.make<void>();
+  const nodesReleased = yield* Deferred.make<void>();
   let storeReads = 0;
   let storeWrites = 0;
   const retried: EnvironmentId[] = [];
@@ -226,13 +235,23 @@ const makeConnectedDiscovery = Effect.fn(function* (options: {
             Stream.unwrap(
               Effect.gen(function* () {
                 subscriptions++;
+                const lists = Array.from({ length: options.repeatLists ?? 1 }, () =>
+                  options.dropNodeOnResubscribe === true && subscriptions > 1
+                    ? { ...snapshot, nodes: [] }
+                    : snapshot,
+                );
                 yield* Deferred.succeed(subscribed, undefined);
                 return subscriptions <= (options.failSubscriptions ?? 0)
                   ? Stream.fail(
                       options.subscriptionError ??
                         new HubNodesError({ reason: "host_unavailable", detail: "Try again" }),
                     )
-                  : Stream.make(snapshot).pipe(Stream.concat(Stream.never));
+                  : (options.holdNodes
+                      ? Stream.fromEffect(Deferred.await(nodesReleased)).pipe(
+                          Stream.flatMap(() => Stream.fromIterable(lists)),
+                        )
+                      : Stream.fromIterable(lists)
+                    ).pipe(Stream.concat(Stream.never));
               }),
             ),
         } as unknown as WsRpcProtocolClient),
@@ -302,7 +321,10 @@ const makeConnectedDiscovery = Effect.fn(function* (options: {
             ? {
                 ...AVAILABLE_CONNECTION_STATE,
                 phase: "blocked" as const,
-                lastFailure: new ConnectionBlockedError({ reason: "permission", detail: "No" }),
+                lastFailure: new ConnectionBlockedError({
+                  reason: options.deviceFailure ?? "permission",
+                  detail: "No",
+                }),
               }
             : { ...AVAILABLE_CONNECTION_STATE, phase: "connected" as const },
         ),
@@ -396,6 +418,8 @@ const makeConnectedDiscovery = Effect.fn(function* (options: {
     firstRead,
     subscribed,
     reconciled,
+    removed: h.removed,
+    nodesReleased,
     config,
     configs,
     counts: () => ({ reads, subscriptions }),
@@ -505,6 +529,84 @@ describe("hub proxy discovery coordinator", () => {
       yield* Deferred.await(h.deviceRetried);
       expect(h.retried).toEqual([NODE]);
     }).pipe(Effect.scoped),
+  );
+
+  it.effect(
+    "a confirmed node list retries a device its hub refused for authentication, once (#3583)",
+    () =>
+      Effect.gen(function* () {
+        const h = yield* makeConnectedDiscovery({
+          blockedDevice: true,
+          holdNodes: true,
+          deviceFailure: "authentication",
+        });
+        yield* Deferred.await(h.subscribed);
+        // The node list arrives from a timer: adjust returns once the reconcile it woke has settled.
+        yield* Effect.forkChild(
+          Effect.sleep("1 millis").pipe(
+            Effect.andThen(Deferred.succeed(h.nodesReleased, undefined)),
+          ),
+        );
+        yield* TestClock.adjust("1 millis");
+        expect(h.retried).toEqual([NODE]);
+      }).pipe(Effect.scoped),
+  );
+
+  it.effect(
+    "each confirmed node list retries a refused device at most once, also when the same list repeats (#3583)",
+    () =>
+      Effect.gen(function* () {
+        const h = yield* makeConnectedDiscovery({
+          blockedDevice: true,
+          holdNodes: true,
+          deviceFailure: "authentication",
+          repeatLists: 3,
+        });
+        yield* Deferred.await(h.subscribed);
+        // The lists arrive from a timer: adjust returns once every reconcile they woke has settled.
+        yield* Effect.forkChild(
+          Effect.sleep("1 millis").pipe(
+            Effect.andThen(Deferred.succeed(h.nodesReleased, undefined)),
+          ),
+        );
+        yield* TestClock.adjust("1 millis");
+        expect(h.retried).toEqual([NODE, NODE, NODE]);
+        expect(yield* Deferred.isDone(h.removed)).toBe(false);
+      }).pipe(Effect.scoped),
+  );
+
+  it.effect(
+    "after a refusal, a confirmed node list that no longer has a device still removes its route (#3583)",
+    () =>
+      Effect.gen(function* () {
+        const h = yield* makeConnectedDiscovery({
+          blockedDevice: true,
+          dropNodeOnResubscribe: true,
+        });
+        yield* Deferred.await(h.deviceRetried);
+        // Refused from a timer: adjust returns once everything the refusal woke has settled.
+        yield* Effect.forkChild(
+          Effect.sleep("1 millis").pipe(
+            Effect.andThen(
+              SubscriptionRef.set(h.supervisor.state, {
+                ...AVAILABLE_CONNECTION_STATE,
+                phase: "blocked",
+                lastFailure: new ConnectionBlockedError({
+                  reason: "authentication",
+                  detail: "Hub did not accept this device.",
+                }),
+              }),
+            ),
+          ),
+        );
+        yield* TestClock.adjust("1 millis");
+        expect(yield* Deferred.isDone(h.removed)).toBe(false);
+        yield* SubscriptionRef.set(h.supervisor.state, {
+          ...AVAILABLE_CONNECTION_STATE,
+          phase: "connected" as const,
+        });
+        expect(yield* Deferred.await(h.removed)).toBe("hub:hub:node");
+      }).pipe(Effect.scoped),
   );
 
   it.effect("keeps a refused subscription terminal until the config changes", () =>
@@ -751,24 +853,79 @@ describe("hub proxy discovery coordinator", () => {
   );
 });
 
-it.effect("definitive permission loss removes only routes owned by that hub connection", () =>
-  Effect.gen(function* () {
-    const h = yield* makeRegistry;
-    const update = {
-      hubEnvironmentId: HUB,
-      hubConnectionId: "another-route",
-      hubLabel: "Hub",
-      nodes: [],
-      sessionScopes: [],
-    };
-    yield* watchHubProxyDiscovery(Stream.succeed(update)).pipe(
-      Effect.provideService(EnvironmentRegistry, h.registry),
-    );
-    expect(yield* Deferred.isDone(h.removed)).toBe(false);
-    yield* watchHubProxyDiscovery(Stream.succeed({ ...update, hubConnectionId: "primary" })).pipe(
-      Effect.provideService(EnvironmentRegistry, h.registry),
-    );
-    expect(yield* Deferred.isDone(h.removed)).toBe(true);
-    expect(yield* Deferred.await(h.removed)).toBe("hub:hub:node");
-  }),
+it.effect(
+  "a hub that does not offer hub access removes only the routes owned by that hub connection",
+  () =>
+    Effect.gen(function* () {
+      const h = yield* makeRegistry;
+      const update = {
+        hubEnvironmentId: HUB,
+        hubConnectionId: "another-route",
+        hubLabel: "Hub",
+        nodes: [],
+        sessionScopes: [],
+        config: { environment: { capabilities: { hubProxy: false } } } as ServerConfig,
+      };
+      yield* watchHubProxyDiscovery(Stream.succeed(update)).pipe(
+        Effect.provideService(EnvironmentRegistry, h.registry),
+      );
+      expect(yield* Deferred.isDone(h.removed)).toBe(false);
+      yield* watchHubProxyDiscovery(Stream.succeed({ ...update, hubConnectionId: "primary" })).pipe(
+        Effect.provideService(EnvironmentRegistry, h.registry),
+      );
+      expect(yield* Deferred.isDone(h.removed)).toBe(true);
+      expect(yield* Deferred.await(h.removed)).toBe("hub:hub:node");
+    }),
+);
+
+const hubRefusal = (reason: "authentication" | "permission", sessionEnded: boolean) =>
+  new ConnectionBlockedError({
+    reason,
+    detail: "Hub did not accept this device.",
+    hop: "server",
+    via: "direct",
+    ...(sessionEnded ? { sessionEnded } : {}),
+  });
+
+it.effect.each([
+  { row: "a saved hub refused for authentication", reason: "authentication" },
+  { row: "a hub refused for permission", reason: "permission" },
+  { row: "a session that never held hub access, refused later", reason: "authentication" },
+  { row: "this browser's ended session (#3473, guard)", reason: "authentication" },
+] as const)(
+  "a hub's refusal before its first node list keeps the routes reached through it: $row (#3583)",
+  ({ row, reason }) =>
+    Effect.gen(function* () {
+      const withoutHubAccess = row.startsWith("a session that never held");
+      const h = yield* makeConnectedDiscovery({
+        blockedDevice: true,
+        ...(withoutHubAccess ? { scopes: [] } : { holdNodes: true }),
+      });
+      yield* Deferred.await(withoutHubAccess ? h.emitted : h.subscribed);
+      // Refused from a timer: adjust returns once everything the refusal woke has settled.
+      yield* Effect.forkChild(
+        Effect.sleep("1 millis").pipe(
+          Effect.andThen(
+            SubscriptionRef.set(h.supervisor.state, {
+              ...AVAILABLE_CONNECTION_STATE,
+              phase: "blocked",
+              lastFailure: hubRefusal(reason, row.startsWith("this browser")),
+            }),
+          ),
+        ),
+      );
+      yield* TestClock.adjust("1 millis");
+      expect(yield* Deferred.isDone(h.removed)).toBe(false);
+      // Without hub access discovery never reconciles, so the settled refusal is the last milestone.
+      if (withoutHubAccess) return;
+      // The hub comes back with its node list; the device retry follows that reconcile's removals.
+      yield* Deferred.succeed(h.nodesReleased, undefined);
+      yield* SubscriptionRef.set(h.supervisor.state, {
+        ...AVAILABLE_CONNECTION_STATE,
+        phase: "connected" as const,
+      });
+      yield* TestClock.adjust(0);
+      yield* Deferred.await(h.deviceRetried);
+      expect(yield* Deferred.isDone(h.removed)).toBe(false);
+    }).pipe(Effect.scoped),
 );

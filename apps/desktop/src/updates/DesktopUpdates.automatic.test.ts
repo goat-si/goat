@@ -1,6 +1,7 @@
 import { assert, describe, it } from "@effect/vitest";
 import { DesktopUpdateStateSchema, type DesktopUpdateState } from "@goat/contracts";
 import * as Deferred from "effect/Deferred";
+import * as Duration from "effect/Duration";
 import * as Effect from "effect/Effect";
 import * as Fiber from "effect/Fiber";
 import * as Layer from "effect/Layer";
@@ -183,7 +184,7 @@ describe("DesktopUpdates automatic coordinator", () => {
               "Could not check for updates: the update server did not answer within 2 minutes.",
             );
 
-            yield* TestClock.adjust("2 minutes");
+            yield* TestClock.adjust("4 hours");
             yield* Deferred.await(polled);
             const offered = yield* observe(
               updates,
@@ -216,13 +217,13 @@ describe("DesktopUpdates automatic coordinator", () => {
             yield* updates.configure;
             yield* TestClock.adjust("15 seconds");
             assert.equal(harness.checkCount(), 1);
-            yield* TestClock.adjust("225 seconds");
+            yield* TestClock.adjust(Duration.subtract(Duration.hours(4), Duration.seconds(15)));
             assert.equal(harness.checkCount(), 2);
-            yield* TestClock.adjust("4 minutes");
+            yield* TestClock.adjust("4 hours");
             assert.equal(harness.checkCount(), 3);
           }),
         ).pipe(Effect.provide(harness.layer));
-        yield* TestClock.adjust("4 minutes");
+        yield* TestClock.adjust("4 hours");
         assert.equal(harness.checkCount(), 3);
       }).pipe(Effect.provide(TestClock.layer()));
     }),

@@ -104,4 +104,16 @@ export const layer = McpToolAccess.toLayer(RemoteReportToolkit, {
       return yield* service.receipt(input);
     }),
   ),
+  // goat#2338: the read key authorizes the bound thread only; the session ceiling still applies.
+  goat_origin_force_stop: McpToolAccess.destructive(
+    McpToolAccess.writesThreads(
+      (input) => [input.threadId],
+      (input) =>
+        Effect.gen(function* () {
+          const service = yield* OriginBoundDeleteService.OriginBoundDeleteService;
+          const caller = yield* loadCaller();
+          return yield* service.forceStop(input, caller.limits);
+        }),
+    ),
+  ),
 });

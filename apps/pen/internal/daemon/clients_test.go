@@ -94,11 +94,12 @@ func closedWith(ctx context.Context, sec *session.Secure) uint16 {
 }
 
 type clientFixture struct {
-	ctx  context.Context
-	rs   *relaytest.Server
-	a    *node
-	prog *program
-	h    *holder
+	ctx   context.Context
+	rs    *relaytest.Server
+	a     *node
+	prog  *program
+	h     *holder
+	ended chan string
 }
 
 func newClientFixture(t *testing.T) *clientFixture {
@@ -107,12 +108,28 @@ func newClientFixture(t *testing.T) *clientFixture {
 	t.Cleanup(cancel)
 	rs := relaytest.New()
 	t.Cleanup(rs.Close)
-	a := founder(t, ctx, rs, "a", nil)
+	// Buffer teardown notifications so registrations can end without a waiting test.
+	ended := make(chan string, 16)
+	a := hookedFounder(t, ctx, rs, func(o *Options) { o.ServiceEnded = func(id string) { ended <- id } })
 	key := newKey(t)
 	prog := newProgram(t, "goat", key)
 	prog.serve()
 	h := register(t, a, "goat", prog.port(), key)
-	return &clientFixture{ctx: ctx, rs: rs, a: a, prog: prog, h: h}
+	return &clientFixture{ctx: ctx, rs: rs, a: a, prog: prog, h: h, ended: ended}
+}
+
+func awaitEnded(t *testing.T, ctx context.Context, ended <-chan string, id any) {
+	t.Helper()
+	waitCtx, cancel := context.WithTimeout(ctx, 30*time.Second)
+	defer cancel()
+	select {
+	case got := <-ended:
+		if got != id {
+			t.Fatalf("registration %s ended, want %v", got, id)
+		}
+	case <-waitCtx.Done():
+		t.Fatalf("registration %v did not end: %v", id, waitCtx.Err())
+	}
 }
 
 func TestAListedClientKeyOpensTheGoatServiceAndTheProgramReadsItsClientLine(t *testing.T) {
@@ -329,6 +346,8 @@ func TestTheEndOfARegistrationClosesItsClientSessions4401AndForgetsItsList(t *te
 		t.Fatal(err)
 	}
 	f.h.c.Close()
+	// closedWith's FIN would end the session normally (1000) if it reached the program before the end did.
+	awaitEnded(t, f.ctx, f.ended, f.h.reply["id"])
 	if code := closedWith(f.ctx, sec); code != wire.CodeNotAdmitted {
 		t.Fatalf("a client session of an ended registration closed %d, want 4401", code)
 	}

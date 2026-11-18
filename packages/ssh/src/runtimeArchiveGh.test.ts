@@ -1,9 +1,11 @@
+import * as NodeCrypto from "@effect/platform-node/NodeCrypto";
 import * as NodeServices from "@effect/platform-node/NodeServices";
 import { afterEach, assert, beforeEach, describe, it, vi } from "@effect/vitest";
 import { CLI_RELEASE_REPOSITORY, cliArchiveFileName } from "@goat/shared/cliRelease";
 import * as Deferred from "effect/Deferred";
 import * as Duration from "effect/Duration";
 import * as Effect from "effect/Effect";
+import * as Layer from "effect/Layer";
 import * as Fiber from "effect/Fiber";
 import * as FileSystem from "effect/FileSystem";
 import * as Result from "effect/Result";
@@ -74,7 +76,7 @@ const fixture = Effect.fn("test.ghFixture")(function* (
       commands.push(command);
       if (command.command === ghCommand) {
         calls.push("gh");
-        const temp = command.args[command.args.indexOf("--dir") + 1];
+        const temp = command.args.map(String)[command.args.map(String).indexOf("--dir") + 1];
         assert.isDefined(temp);
         if (temp === undefined) return processHandle("", 1);
         staging.push(temp);
@@ -103,17 +105,17 @@ const fixture = Effect.fn("test.ghFixture")(function* (
           ? yield* input.stream.pipe(Stream.runCollect)
           : [];
       const data = new Uint8Array(chunks.flatMap((chunk) => Array.from(chunk)));
-      if (command.args.includes("-c")) {
+      if (command.args.map(String).includes("-c")) {
         calls.push("upload");
         uploads.push(data);
         return processHandle();
       }
-      if (command.args.includes("goat-runtime-cleanup")) {
+      if (command.args.map(String).includes("goat-runtime-cleanup")) {
         calls.push("cleanup");
         return processHandle();
       }
       const script = new TextDecoder().decode(data);
-      if (script.includes("ready=false") && !isRemoteLaunch(command.args)) {
+      if (script.includes("ready=false") && !isRemoteLaunch(command.args.map(String))) {
         calls.push("probe");
         if (barrier !== undefined && calls.filter((call) => call === "probe").length === 2) {
           yield* Deferred.succeed(barrier.secondProbe, undefined);
@@ -130,7 +132,7 @@ const fixture = Effect.fn("test.ghFixture")(function* (
         calls.push("mcp");
         return processHandle('T3_CEILING=default\n{"token":"fixture-session","expiresAt":null}');
       }
-      if (isRemoteLaunch(command.args)) {
+      if (isRemoteLaunch(command.args.map(String))) {
         calls.push("launch");
         return processHandle(
           JSON.stringify({
@@ -237,7 +239,7 @@ describe("SSH archives from locally authenticated gh", () => {
         assert.equal(command?.options.env?.GH_PROMPT_DISABLED, "1");
         assert.equal(command?.options.env?.GOAT_SSH_AUTH_SECRET, undefined);
         yield* assertCleanStaging(state);
-      }).pipe(Effect.provide(NodeServices.layer), Effect.scoped),
+      }).pipe(Effect.provide(Layer.mergeAll(NodeServices.layer, NodeCrypto.layer)), Effect.scoped),
   );
 
   it.effect.each(["launch", "pairing", "mcp"] as const)(
@@ -256,7 +258,7 @@ describe("SSH archives from locally authenticated gh", () => {
         assert.deepEqual(state.calls, ["probe", "gh"]);
         assert.isFalse(yield* state.fs.exists(`${state.directory}/${asset}`));
         yield* assertCleanStaging(state);
-      }).pipe(Effect.provide(NodeServices.layer), Effect.scoped),
+      }).pipe(Effect.provide(Layer.mergeAll(NodeServices.layer, NodeCrypto.layer)), Effect.scoped),
   );
 
   it.effect.each(["mismatch", "missing-checksum", "missing-asset"] as const)(
@@ -279,7 +281,7 @@ describe("SSH archives from locally authenticated gh", () => {
         assert.deepEqual(state.uploads, []);
         assert.deepEqual(yield* state.fs.readDirectory(state.directory), []);
         yield* assertCleanStaging(state);
-      }).pipe(Effect.provide(NodeServices.layer), Effect.scoped),
+      }).pipe(Effect.provide(Layer.mergeAll(NodeServices.layer, NodeCrypto.layer)), Effect.scoped),
   );
 
   it.effect("explicit mirror retains remote download and never invokes gh", () =>
@@ -293,7 +295,7 @@ describe("SSH archives from locally authenticated gh", () => {
       assert.deepEqual(state.calls, ["probe", "launch", "cleanup"]);
       assert.deepEqual(state.uploads, []);
       assert.deepEqual(yield* state.fs.readDirectory(state.directory), []);
-    }).pipe(Effect.provide(NodeServices.layer), Effect.scoped),
+    }).pipe(Effect.provide(Layer.mergeAll(NodeServices.layer, NodeCrypto.layer)), Effect.scoped),
   );
 
   it.effect.each(["ready", "cached"] as const)("%s skips gh", (mode) =>
@@ -308,7 +310,7 @@ describe("SSH archives from locally authenticated gh", () => {
         mode === "ready" ? ["probe", "launch"] : ["probe", "upload", "launch", "cleanup"],
       );
       assert.deepEqual(state.uploads, mode === "ready" ? [] : [bytes]);
-    }).pipe(Effect.provide(NodeServices.layer), Effect.scoped),
+    }).pipe(Effect.provide(Layer.mergeAll(NodeServices.layer, NodeCrypto.layer)), Effect.scoped),
   );
 
   it.effect("blank mirror does not authorize anonymous download", () =>
@@ -323,7 +325,7 @@ describe("SSH archives from locally authenticated gh", () => {
       );
       assert.isTrue(Result.isFailure(result));
       assert.deepEqual(state.calls, ["probe", "gh"]);
-    }).pipe(Effect.provide(NodeServices.layer), Effect.scoped),
+    }).pipe(Effect.provide(Layer.mergeAll(NodeServices.layer, NodeCrypto.layer)), Effect.scoped),
   );
 
   it.effect.each(["directory", "platform"] as const)(
@@ -345,7 +347,7 @@ describe("SSH archives from locally authenticated gh", () => {
             mode === "platform" ? "unsupported-darwin-x64" : asset,
           );
         assert.deepEqual(state.calls, ["probe"]);
-      }).pipe(Effect.provide(NodeServices.layer), Effect.scoped),
+      }).pipe(Effect.provide(Layer.mergeAll(NodeServices.layer, NodeCrypto.layer)), Effect.scoped),
   );
 
   it.effect("minimal PATH reports gh not found on PATH with no remote acquisition", () =>
@@ -360,7 +362,7 @@ describe("SSH archives from locally authenticated gh", () => {
         }
         // Real Node spawn, isolated child environment; never mutate process.env.
         return realSpawner.spawn(
-          ChildProcess.make(command.command, command.args, {
+          ChildProcess.make(command.command, command.args.map(String), {
             ...command.options,
             extendEnv: false,
             env: { PATH: emptyPath, GH_PROMPT_DISABLED: "1" },
@@ -381,7 +383,7 @@ describe("SSH archives from locally authenticated gh", () => {
       assert.deepEqual(state.calls, ["probe"]);
       assert.deepEqual(state.uploads, []);
       assert.deepEqual(yield* state.fs.readDirectory(state.directory), []);
-    }).pipe(Effect.provide(NodeServices.layer), Effect.scoped),
+    }).pipe(Effect.provide(Layer.mergeAll(NodeServices.layer, NodeCrypto.layer)), Effect.scoped),
   );
 
   it.effect("ghCommand override acquires and uploads from a spaced executable path", () =>
@@ -396,7 +398,7 @@ describe("SSH archives from locally authenticated gh", () => {
       assert.deepEqual(state.calls, ["probe", "gh", "upload", "launch", "cleanup"]);
       assert.deepEqual(state.uploads, [bytes]);
       assert.deepEqual(yield* state.fs.readFile(`${state.directory}/${asset}`), bytes);
-    }).pipe(Effect.provide(NodeServices.layer), Effect.scoped),
+    }).pipe(Effect.provide(Layer.mergeAll(NodeServices.layer, NodeCrypto.layer)), Effect.scoped),
   );
 
   it.effect("gh failure includes bounded sanitized stderr", () =>
@@ -429,7 +431,7 @@ describe("SSH archives from locally authenticated gh", () => {
       assert.deepEqual(state.calls, ["probe", "gh"]);
       assert.deepEqual(state.uploads, []);
       yield* assertCleanStaging(state);
-    }).pipe(Effect.provide(NodeServices.layer), Effect.scoped),
+    }).pipe(Effect.provide(Layer.mergeAll(NodeServices.layer, NodeCrypto.layer)), Effect.scoped),
   );
 
   it.effect.each(["valid", "tampered", "malformed"] as const)(
@@ -464,7 +466,7 @@ describe("SSH archives from locally authenticated gh", () => {
           assert.deepEqual(state.calls, ["probe"]);
           assert.deepEqual(state.uploads, []);
         }
-      }).pipe(Effect.provide(NodeServices.layer), Effect.scoped),
+      }).pipe(Effect.provide(Layer.mergeAll(NodeServices.layer, NodeCrypto.layer)), Effect.scoped),
   );
 
   it.effect("two prepares race with one complete cache publication and no partial visible", () =>
@@ -530,7 +532,7 @@ describe("SSH archives from locally authenticated gh", () => {
       assert.deepEqual(yield* state.fs.readFile(archivePath), bytes);
       assert.equal(yield* state.fs.readFileString(sidecarPath), `${sha256}  ${asset}\n`);
       yield* assertCleanStaging(state);
-    }).pipe(Effect.provide(NodeServices.layer), Effect.scoped),
+    }).pipe(Effect.provide(Layer.mergeAll(NodeServices.layer, NodeCrypto.layer)), Effect.scoped),
   );
 
   it.effect("timeout closes gh scope and removes staging without publication", () =>
@@ -568,6 +570,6 @@ describe("SSH archives from locally authenticated gh", () => {
       }
       assert.isTrue(closed);
       assert.deepEqual(yield* fs.readDirectory(root), []);
-    }).pipe(Effect.provide(NodeServices.layer), Effect.scoped),
+    }).pipe(Effect.provide(Layer.mergeAll(NodeServices.layer, NodeCrypto.layer)), Effect.scoped),
   );
 });

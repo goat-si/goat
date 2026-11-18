@@ -1,9 +1,4 @@
 import { useAtomValue } from "@effect/atom-react";
-import {
-  connectionCatalogDisplayUrl,
-  hasRelayRoute,
-  type EnvironmentPresentation as BaseEnvironmentPresentation,
-} from "@goat/client-runtime/connection";
 import { Discovery } from "@goat/client-runtime/relay";
 import type { EnvironmentId } from "@goat/contracts";
 import * as Option from "effect/Option";
@@ -15,29 +10,15 @@ import {
   environmentSummaries,
   useEnvironmentPresentation,
 } from "./presentation";
+import {
+  projectEnvironmentPresentation,
+  type EnvironmentPresentation,
+} from "./environmentProjection";
 import { primaryEnvironmentIdAtom } from "./primaryEnvironment";
+
+export type { EnvironmentPresentation };
 import { relayEnvironmentDiscovery } from "./relay";
 import { usePreparedConnection } from "./session";
-
-export interface EnvironmentPresentation extends BaseEnvironmentPresentation {
-  readonly environmentId: EnvironmentId;
-  readonly label: string;
-  readonly displayUrl: string | null;
-  readonly relayManaged: boolean;
-}
-
-function projectEnvironmentPresentation(
-  environmentId: EnvironmentId,
-  presentation: BaseEnvironmentPresentation,
-): EnvironmentPresentation {
-  return {
-    ...presentation,
-    environmentId,
-    label: presentation.entry.target.label,
-    displayUrl: connectionCatalogDisplayUrl(presentation.entry),
-    relayManaged: hasRelayRoute(presentation.entry),
-  };
-}
 
 export function useEnvironments() {
   const catalog = useAtomValue(environmentCatalog.catalogValueAtom);

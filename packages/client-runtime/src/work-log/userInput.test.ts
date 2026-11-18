@@ -5,7 +5,11 @@ import {
   EnvironmentId,
   type UserInputAttachmentAnswerPayload,
 } from "@goat/contracts";
-import { getQuestionAnswerAttribution } from "./userInput.ts";
+import {
+  getQuestionAnswerAttribution,
+  getQuestionAnswerPreview,
+  getQuestionAnswerText,
+} from "./userInput.ts";
 
 function answer(
   overrides: Partial<UserInputAttachmentAnswerPayload> = {},
@@ -81,5 +85,46 @@ describe("getQuestionAnswerAttribution", () => {
     ).toBe("Answered by an MCP client: R");
     expect(getQuestionAnswerAttribution(answer())).toBeNull();
     expect(getQuestionAnswerAttribution(answer({ respondedBy: { type: "user" } }))).toBeNull();
+  });
+});
+
+// Shape the web client submits for an answer holding a review-comment chip.
+const answerWithReviewComment = [
+  "See my note: [Review comment: notes.md L2; ref=review-comment_c1]",
+  "",
+  '<goat_context version="1">',
+  '<context kind="review-comment" id="review-comment_c1">',
+  "file: notes.md",
+  "range: L2 (2-2)",
+  "comment:",
+  "  Rename this",
+  "diff:",
+  "  +line changed",
+  "</context>",
+  "</goat_context>",
+].join("\n");
+
+describe("question answer display", () => {
+  it("keeps the provider context envelope out of answer history and preview", () => {
+    const history = getQuestionAnswerText(answerWithReviewComment);
+    const preview = getQuestionAnswerPreview(
+      answer({
+        answers: { q1: answerWithReviewComment },
+        attachmentsByQuestionId: {},
+        questionTextById: { q1: "What should change?" },
+      }),
+    );
+
+    expect(history).toBe("See my note: [Review comment: notes.md L2]");
+    expect(preview).toContain("See my note:");
+    expect(preview).not.toContain("<goat_context");
+
+    const typedXml =
+      'Use this XML literally: <goat_context version="1"><context kind="review-comment" id="example">keep me</context></goat_context>';
+    expect(getQuestionAnswerText(typedXml)).toBe(typedXml);
+    const legacy = answerWithReviewComment.replaceAll("goat_context", "t3_context"); // goat-rename: legacy
+    expect(getQuestionAnswerText(legacy)).toBe(history);
+    const mismatched = answerWithReviewComment.replace('id="review-comment_c1"', 'id="other"');
+    expect(getQuestionAnswerText(mismatched)).toBe(mismatched);
   });
 });

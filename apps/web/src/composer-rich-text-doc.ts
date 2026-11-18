@@ -1,3 +1,5 @@
+import { parseListPrefix, type ListLinePrefix } from "./composer-list-prefix";
+import { listNormalizationPlugin } from "./composer-list-normalization";
 import { atomJsonForSegment } from "./composerAtomJson";
 import { styledEdge, touchesMarkdownSource } from "./composerMarkdownSourceHelpers";
 import { joinTextblockBackward, joinTextblockForward } from "@tiptap/pm/commands";
@@ -22,7 +24,6 @@ import { Italic, starInputRegex, starPasteRegex } from "@tiptap/extension-italic
 import {
   type Command,
   type Editor,
-  Extension,
   InputRule,
   markInputRule,
   markPasteRule,
@@ -276,6 +277,47 @@ function markInputRuleOutsideCode(find: RegExp, type: MarkType) {
   });
 }
 
+const SURROUND_MARKS: Record<string, string> = { "`": "code", "*": "italic", _: "italic" };
+
+export function surroundSelectionWithMark(
+  state: EditorState,
+  from: number,
+  to: number,
+  marker: string,
+) {
+  const markType = state.schema.marks[SURROUND_MARKS[marker] ?? ""];
+  if (!markType || touchesMarkdownSource(state, from, to)) return null;
+  const $from = state.doc.resolve(from);
+  if (!$from.sameParent(state.doc.resolve(to)) || !$from.parent.type.allowsMarkType(markType)) {
+    return null;
+  }
+  // Inline markdown cannot span lines, so keep literal wrapping across hard breaks.
+  let crossesLine = false;
+  state.doc.nodesBetween(from, to, (node) => {
+    if (node.type.name === "hardBreak") crossesLine = true;
+    return !crossesLine;
+  });
+  if (crossesLine) return null;
+  const tr = state.tr.addMark(from, to, markType.create());
+  // Nearby delimiters can change how the saved span parses. Atoms are opaque
+  // to inline markdown, so use a placeholder instead of parsing their sources.
+  const children: ProseMirrorNode[] = [];
+  tr.doc.resolve(from).parent.forEach((node) => {
+    children.push(
+      node.isAtom && !node.isText && node.type.name !== "hardBreak"
+        ? state.schema.text("\uFFFC", node.marks)
+        : node,
+    );
+  });
+  const paragraphType = state.schema.nodes.paragraph;
+  if (!paragraphType) return null;
+  const paragraph = paragraphType.create(null, children);
+  const markdown = serializeEditorDoc(state.doc.type.create(null, paragraph)).value;
+  const rebuilt = buildTiptapContent(markdown, () => null, { blocks: false });
+  const restored = state.schema.nodeFromJSON({ type: "doc", content: rebuilt });
+  return restored.firstChild && paragraph.content.eq(restored.firstChild.content) ? tr : null;
+}
+
 /**
  * The composer writes italic as `*text*`, so it keeps only the `*` shortcuts.
  * Tiptap's `_text_` rules fire on the `_` in names like `node_modules` and
@@ -302,20 +344,6 @@ export const ComposerBoldExtension = Bold.extend({
 export const ComposerStrikeExtension = Strike.extend({
   addInputRules() {
     return [markInputRuleOutsideCode(strikeInputRegex, this.type)];
-  },
-});
-
-/**
- * Mod+B bolds selected text only. Without a selection Tiptap would toggle bold
- * for the next typed text, which users hit by accident when they mean the
- * sidebar toggle. Runs ahead of the Bold extension and swallows the chord.
- */
-export const ComposerBoldSelectionOnlyExtension = Extension.create({
-  name: "composerBoldSelectionOnly",
-  priority: 1000,
-  addKeyboardShortcuts() {
-    const ignoreWithoutSelection = () => this.editor.state.selection.empty;
-    return { "Mod-b": ignoreWithoutSelection, "Mod-B": ignoreWithoutSelection };
   },
 });
 
@@ -434,7 +462,8 @@ const ComposerListItemExtension = ListItem.extend({
   addKeyboardShortcuts() {
     return {
       ...withoutBlockChords(this.parent?.(), LIST_NESTING_KEYS),
-      Backspace: () => backspaceAcrossList(this.editor),
+      // Replacing Tiptap's Backspace drops its undoInputRule, which keeps a just-typed "+ " literal.
+      Backspace: () => this.editor.commands.undoInputRule() || backspaceAcrossList(this.editor),
       Delete: () => deleteAcrossList(this.editor),
     };
   },
@@ -455,6 +484,12 @@ const ComposerListItemExtension = ListItem.extend({
 
 export const ComposerListExtensions = [
   BulletList.extend({
+    addProseMirrorPlugins() {
+      return [
+        ...(this.parent?.() ?? []),
+        listNormalizationPlugin(() => this.editor.view.composing),
+      ];
+    },
     addKeyboardShortcuts() {
       return withoutBlockChords(this.parent?.(), ["Mod-Shift-8"]);
     },
@@ -521,29 +556,6 @@ export const ComposerBlockExtensions = [
   ComposerHeadingExtension,
 ];
 
-interface TaskLinePrefix {
-  indent: string;
-  checked: boolean;
-  markerSpace: string;
-  contentSpace: string;
-}
-
-function parseTaskPrefix(head: string): { prefix: TaskLinePrefix; markerLength: number } | null {
-  const match = head.match(/^([ \t]*)-([ \t]+)\[([ xX])\]([ \t]*)/);
-  if (!match) return null;
-  const after = head.slice(match[0].length);
-  if (after.length > 0 && !match[4]) return null;
-  return {
-    prefix: {
-      indent: match[1] ?? "",
-      checked: (match[3] ?? " ").toLowerCase() === "x",
-      markerSpace: match[2]!,
-      contentSpace: match[4]!,
-    },
-    markerLength: match[0].length,
-  };
-}
-
 export function parseOpeningFence(line: string): { fence: string; language: string } | null {
   // Unlike `.`, `[^\n]` accepts the stored \r in CRLF lines.
   const match = /^(`{3,}|~{3,})([^\n]*)$/.exec(line);
@@ -559,30 +571,6 @@ export function isClosingFence(line: string, fence: string): boolean {
   if (!match) return false;
   const run = match[1]!;
   return run[0] === fence[0] && run.length >= fence.length;
-}
-
-type ListLinePrefix =
-  | ({ kind: "task" } & TaskLinePrefix)
-  | { kind: "bullet" | "ordered"; indent: string; marker: string; space: string };
-
-function parseListPrefix(line: string): { prefix: ListLinePrefix; markerLength: number } | null {
-  const task = parseTaskPrefix(line);
-  if (task) return { prefix: { kind: "task", ...task.prefix }, markerLength: task.markerLength };
-  const ordered = /^([ \t]*)(\d+[.)])((?:[ \t]+)|$)/.exec(line);
-  if (ordered) {
-    return {
-      prefix: { kind: "ordered", indent: ordered[1]!, marker: ordered[2]!, space: ordered[3]! },
-      markerLength: ordered[0].length,
-    };
-  }
-  const bullet = /^([ \t]*)([-*+])((?:[ \t]+)|$)/.exec(line);
-  if (bullet) {
-    return {
-      prefix: { kind: "bullet", indent: bullet[1]!, marker: bullet[2]!, space: bullet[3]! },
-      markerLength: bullet[0].length,
-    };
-  }
-  return null;
 }
 
 function listKey(prefix: ListLinePrefix): string {

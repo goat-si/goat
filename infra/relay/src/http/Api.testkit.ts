@@ -8,6 +8,7 @@ import * as ConnectLinkReservations from "../environments/ConnectLinkReservation
 import * as EnvironmentLinks from "../environments/EnvironmentLinks.ts";
 import * as EnvironmentCredentials from "../environments/EnvironmentCredentials.ts";
 import * as ManagedEndpointProvider from "../environments/ManagedEndpointProvider.ts";
+import { EnvironmentId } from "@goat/contracts";
 import { RelayEnvironmentLinkRequest } from "@goat/contracts/relay";
 import { RelayEnvironmentLinkUnavailableError } from "@goat/contracts/relay";
 import { vi } from "vite-plus/test";
@@ -120,3 +121,15 @@ export function layerRelayUnlinkTest(input?: {
     ),
   );
 }
+
+export const linkedEnvironmentRecord = {
+  environmentId: EnvironmentId.make("environment-1"),
+  label: "Environment 1",
+  endpoint: {
+    httpBaseUrl: "https://environment-1.example.test/",
+    wsBaseUrl: "wss://environment-1.example.test/ws",
+    providerKind: "cloudflare_tunnel",
+  },
+  environmentPublicKey: "public-key",
+  linkedAt: "2026-07-28T00:00:00.000Z",
+} as const;

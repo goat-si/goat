@@ -1,3 +1,4 @@
+import { DEFAULT_MAX_TERMINAL_BUFFER_BYTES } from "@goat/contracts";
 import { BoundedTerminalHistory } from "./BoundedTerminalHistory.ts";
 
 // Pop beyond Ghostty's eight-entry Kitty stacks on both screens before clearing
@@ -59,7 +60,7 @@ function shouldStripCsiSequence(body: string, finalByte: string): boolean {
   if (finalByte === "R" && /^[0-9;?]*$/.test(body)) {
     return true;
   }
-  if (finalByte === "c" && /^[>0-9;?]*$/.test(body)) {
+  if (finalByte === "c" && /^[>=0-9;?]*$/.test(body)) {
     return true;
   }
   // Strip DECRQM/DECRPM query traffic to prevent echoed replies during replay; $ guards preserve setters.
@@ -97,15 +98,70 @@ function stripStringTerminator(value: string): string {
   return value;
 }
 
-function findStringTerminatorIndex(input: string, start: number): number | null {
+interface C1Effect {
+  /** ESC form of the sequence the code point starts, or "" when it returns to ground. */
+  readonly next: string;
+  /** Its 0x9A byte ran DECID, which replies with device attributes. */
+  readonly query: boolean;
+  /** What replays its visible effect from ground. */
+  readonly safe: string;
+}
+
+// Outside ground and OSC, libghostty parses a code point's UTF-8 bytes one at a time: 0x80-0x9F
+// act as C1 controls, the rest are dropped. Bytes left over after a return to ground print U+FFFD.
+function c1Effect(codePoint: number): C1Effect | undefined {
+  // A lone surrogate is encoded as U+FFFD, whose bytes are all dropped.
+  if (codePoint >= 0xd800 && codePoint <= 0xdfff) return undefined;
+  let next: string | undefined;
+  let query = false;
+  let safe = "";
+  for (let shift = codePoint > 0xffff ? 12 : codePoint > 0x7ff ? 6 : 0; shift >= 0; shift -= 6) {
+    const byte = 0x80 | ((codePoint >> shift) & 0x3f);
+    if (next === "") {
+      safe += "\ufffd";
+    } else if (next?.startsWith("\u001b]")) {
+      next += "\ufffd";
+    } else if (byte === 0x9b) {
+      next = "\u001b[";
+    } else if (byte === 0x9d) {
+      next = "\u001b]";
+    } else if (byte === 0x90) {
+      next = "\u001bP";
+    } else if (byte === 0x98 || byte === 0x9e || byte === 0x9f) {
+      next = "\u001b_";
+    } else if (byte < 0xa0) {
+      next = "";
+      query = byte === 0x9a;
+      // Any other C1 control but ST runs as ESC plus the byte less 0x40.
+      safe = query || byte === 0x9c ? "" : `\u001b${String.fromCharCode(byte - 0x40)}`;
+    }
+  }
+  return next === undefined ? undefined : { next, query, safe };
+}
+
+// BEL ends only OSC; inside DCS, PM and APC it is payload. Non-ASCII is the reverse: libghostty
+// keeps it inside OSC, while a C1 byte in it ends the other strings.
+function findStringEnd(
+  input: string,
+  start: number,
+  isOsc: boolean,
+): { end: number; c1?: { effect: C1Effect; index: number } } | null {
   for (let index = start; index < input.length; index += 1) {
     const codePoint = input.charCodeAt(index);
-    if (codePoint === 0x07 || codePoint === 0x9c || isControlSequenceCancel(codePoint)) {
-      return index + 1;
+    if ((isOsc && codePoint === 0x07) || isControlSequenceCancel(codePoint)) {
+      return { end: index + 1 };
     }
+    // Like xterm.js, an ESC that does not start ST ends the string and begins the next sequence.
     if (codePoint === 0x1b) {
       if (index + 1 >= input.length) return null;
-      return input.charCodeAt(index + 1) === 0x5c ? index + 2 : index;
+      return { end: input.charCodeAt(index + 1) === 0x5c ? index + 2 : index };
+    }
+    if (codePoint >= 0x80 && !isOsc) {
+      const fullCodePoint = input.codePointAt(index) ?? codePoint;
+      const end = index + (fullCodePoint > 0xffff ? 2 : 1);
+      const effect = c1Effect(fullCodePoint);
+      if (effect) return { end, c1: { effect, index } };
+      index = end - 1;
     }
   }
   return null;
@@ -127,14 +183,115 @@ function findEscapeSequenceEndIndex(input: string, start: number): number | null
   if (cursor >= input.length) {
     return null;
   }
-  if (input.charCodeAt(cursor) === 0x1b) return cursor;
+  // A second ESC restarts the sequence, so leave it for the next pass.
+  if (input.charCodeAt(cursor) === 0x1b) {
+    return cursor;
+  }
   return isEscapeFinalByte(input.charCodeAt(cursor)) ? cursor + 1 : start + 1;
 }
 
+// libghostty prints UTF-8 C1 code points (U+0080-U+009F) as text, so only ESC starts a sequence.
 const HISTORY_SEQUENCE_START = /\u001b/;
 const NEXT_HISTORY_SEQUENCE_START = new RegExp(HISTORY_SEQUENCE_START.source, "g");
 
+// UTF-16 code units of an unfinished string sequence held per terminal: the clients' replay window,
+// which counts UTF-8 bytes (the same for ASCII image and sixel payloads). A longer one is left out
+// of history whole; the live terminal already drew it and no client could replay it.
+export const MAX_PENDING_HISTORY_CONTROL_SEQUENCE_LENGTH = DEFAULT_MAX_TERMINAL_BUFFER_BYTES;
+
+// An unfinished CSI or plain escape is never longer than a few hundred units in practice, and
+// the sanitizer rescans a held CSI on every chunk, so these are held far less.
+export const MAX_PENDING_HISTORY_ESCAPE_SEQUENCE_LENGTH = 4 * 1024;
+
+// Held while the rest of a sequence past the cap is swallowed: this marker, the sequence's kind,
+// and at most one code unit split across chunks. A held unfinished sequence always starts with ESC.
+const SWALLOWING = "swallowing:";
+
+function swallowedKind(sequence: string): string {
+  const introducer = sequence.charAt(1);
+  if (introducer === "]" || introducer === "[") return introducer;
+  return introducer === "P" || introducer === "^" || introducer === "_" ? "P" : "E";
+}
+
+// An ESC may begin ST, and a high surrogate may begin a code point that acts as a C1 control.
+function carriedUnit(input: string): string {
+  const last = input.charCodeAt(input.length - 1);
+  return last === 0x1b || (last >= 0xd800 && last <= 0xdbff) ? input.slice(-1) : "";
+}
+
+/** Where a swallowed sequence ends, as the sanitizer ends that kind, and what a C1 end leaves. */
+function endOfSwallowedSequence(
+  kind: string,
+  input: string,
+): { end: number; safe: string; next: string } | null {
+  if (kind === "]" || kind === "P") {
+    const stringEnd = findStringEnd(input, 0, kind === "]");
+    if (stringEnd === null) return null;
+    const effect = stringEnd.c1?.effect;
+    return { end: stringEnd.end, safe: effect?.safe ?? "", next: effect?.next ?? "" };
+  }
+  if (kind === "[") {
+    for (let cursor = 0; cursor < input.length; cursor += 1) {
+      const codePoint = input.charCodeAt(cursor);
+      if (isControlSequenceCancel(codePoint) || isCsiFinalByte(codePoint)) {
+        return { end: cursor + 1, safe: "", next: "" };
+      }
+      // An ESC abandons the CSI and starts the next sequence.
+      if (codePoint === 0x1b) return { end: cursor, safe: "", next: "" };
+      if (codePoint >= 0x80) {
+        const fullCodePoint = input.codePointAt(cursor) ?? codePoint;
+        const end = cursor + (fullCodePoint > 0xffff ? 2 : 1);
+        const c1 = c1Effect(fullCodePoint);
+        if (c1) return { end, safe: c1.safe, next: c1.next };
+        cursor = end - 1;
+      }
+    }
+    return null;
+  }
+  let cursor = 0;
+  while (cursor < input.length && isEscapeIntermediateByte(input.charCodeAt(cursor))) cursor += 1;
+  if (cursor >= input.length) return null;
+  return {
+    end: isEscapeFinalByte(input.charCodeAt(cursor)) ? cursor + 1 : cursor,
+    safe: "",
+    next: "",
+  };
+}
+
 export function sanitizeTerminalHistoryChunk(
+  pendingControlSequence: string,
+  data: string,
+): { visibleText: string; pendingControlSequence: string } {
+  let pending = pendingControlSequence;
+  let rest = data;
+  let swallowedEffect = "";
+  if (pending.startsWith(SWALLOWING)) {
+    const kind = pending.charAt(SWALLOWING.length);
+    const input = pending.slice(SWALLOWING.length + 1) + data;
+    const sequenceEnd = endOfSwallowedSequence(kind, input);
+    // A terminal inside a sequence shows nothing until it ends, so neither does history.
+    if (sequenceEnd === null) {
+      return { visibleText: "", pendingControlSequence: SWALLOWING + kind + carriedUnit(input) };
+    }
+    swallowedEffect = sequenceEnd.safe;
+    pending = sequenceEnd.next;
+    rest = input.slice(sequenceEnd.end);
+  }
+  const result = sanitizeChunk(pending, rest);
+  const visibleText = swallowedEffect + result.visibleText;
+  const held = result.pendingControlSequence;
+  const kind = swallowedKind(held);
+  const limit =
+    kind === "]" || kind === "P"
+      ? MAX_PENDING_HISTORY_CONTROL_SEQUENCE_LENGTH
+      : MAX_PENDING_HISTORY_ESCAPE_SEQUENCE_LENGTH;
+  if (held.length <= limit) {
+    return { visibleText, pendingControlSequence: held };
+  }
+  return { visibleText, pendingControlSequence: SWALLOWING + kind + carriedUnit(held) };
+}
+
+function sanitizeChunk(
   pendingControlSequence: string,
   data: string,
 ): { visibleText: string; pendingControlSequence: string } {
@@ -147,6 +304,8 @@ export function sanitizeTerminalHistoryChunk(
   const pendingScanStart = Math.max(0, pendingControlSequence.length - 1);
   let visibleText = "";
   let index = 0;
+  // Set when a C1 code point began the sequence at `index`: the ESC form that stands in for it.
+  let c1Introducer = "";
 
   const append = (value: string) => {
     visibleText += value;
@@ -155,29 +314,68 @@ export function sanitizeTerminalHistoryChunk(
   while (index < input.length) {
     const codePoint = input.charCodeAt(index);
 
-    if (codePoint === 0x1b) {
-      const nextCodePoint = input.charCodeAt(index + 1);
+    if (c1Introducer.length > 0 || codePoint === 0x1b) {
+      // Empty for a sequence the input introduces itself, which starts with ESC at `index`.
+      const prefix = c1Introducer;
+      c1Introducer = "";
+      const contentStart = prefix.length > 0 ? index : index + 2;
+      const nextCodePoint = (prefix || input).charCodeAt(prefix.length > 0 ? 1 : index + 1);
       if (Number.isNaN(nextCodePoint)) {
         return { visibleText, pendingControlSequence: input.slice(index) };
       }
 
       if (nextCodePoint === 0x5b) {
-        let cursor = index + 2;
+        let cursor = contentStart;
+        // Inside a CSI Ghostty executes 0x00-0x0F and ignores DEL and 0x10-0x1F, which it would
+        // print in ground state. None join the parameters; only executed ones survive a strip.
+        let body = "";
+        let executedControls = "";
         while (cursor < input.length) {
-          const cancelled = isControlSequenceCancel(input.charCodeAt(cursor));
-          if (cancelled || isCsiFinalByte(input.charCodeAt(cursor))) {
-            const sequence = input.slice(index, cursor + 1);
-            const body = input.slice(index + 2, cursor);
+          const cursorCodePoint = input.charCodeAt(cursor);
+          const cancelled = isControlSequenceCancel(cursorCodePoint);
+          if (cancelled || isCsiFinalByte(cursorCodePoint)) {
             if (cancelled || !shouldStripCsiSequence(body, input[cursor] ?? "")) {
-              append(sequence);
+              append(prefix + input.slice(index, cursor + 1));
+            } else {
+              append(executedControls);
             }
             index = cursor + 1;
             break;
           }
+          if (cursorCodePoint >= 0x80) {
+            const fullCodePoint = input.codePointAt(cursor) ?? cursorCodePoint;
+            const end = cursor + (fullCodePoint > 0xffff ? 2 : 1);
+            const c1 = c1Effect(fullCodePoint);
+            if (c1) {
+              // The CSI ends here undispatched, so it is kept only when the terminal is back in
+              // ground with nothing to answer.
+              if (c1.next.length === 0 && !c1.query) {
+                append(prefix + input.slice(index, end));
+              } else {
+                append(executedControls + c1.safe);
+              }
+              c1Introducer = c1.next;
+              index = end;
+              break;
+            }
+            cursor = end;
+            continue;
+          }
+          // An ESC abandons the CSI and starts the next sequence, which may be stripped.
+          if (cursorCodePoint === 0x1b) {
+            append(executedControls);
+            index = cursor;
+            break;
+          }
+          if (cursorCodePoint < 0x10) {
+            executedControls += input[cursor];
+          } else if (cursorCodePoint >= 0x20 && cursorCodePoint !== 0x7f) {
+            body += input[cursor];
+          }
           cursor += 1;
         }
         if (cursor >= input.length) {
-          return { visibleText, pendingControlSequence: input.slice(index) };
+          return { visibleText, pendingControlSequence: prefix + input.slice(index) };
         }
         continue;
       }
@@ -188,22 +386,32 @@ export function sanitizeTerminalHistoryChunk(
         nextCodePoint === 0x5e ||
         nextCodePoint === 0x5f
       ) {
-        const terminatorIndex = findStringTerminatorIndex(
+        const stringEnd = findStringEnd(
           input,
-          Math.max(index + 2, pendingScanStart),
+          Math.max(contentStart, pendingScanStart),
+          nextCodePoint === 0x5d,
         );
-        if (terminatorIndex === null) {
-          return { visibleText, pendingControlSequence: input.slice(index) };
+        if (stringEnd === null) {
+          return { visibleText, pendingControlSequence: prefix + input.slice(index) };
         }
-        const sequence = input.slice(index, terminatorIndex);
-        const content = stripStringTerminator(input.slice(index + 2, terminatorIndex));
+        const { end, c1 } = stringEnd;
+        const content = stripStringTerminator(
+          prefix.slice(2) + input.slice(contentStart, c1?.index ?? end),
+        );
         const strip =
           (nextCodePoint === 0x5d && shouldStripOscSequence(content)) ||
           (nextCodePoint === 0x50 && shouldStripDcsSequence(content));
-        if (!strip) {
-          append(sequence);
+        if (c1 === undefined || (!strip && c1.effect.next.length === 0 && !c1.effect.query)) {
+          if (!strip) {
+            append(prefix + input.slice(index, end));
+          }
+        } else {
+          // ST stands in for a code point that cannot be replayed as it came.
+          const closed = strip ? "" : `${prefix}${input.slice(index, c1.index)}\u009c`;
+          append(closed + c1.effect.safe);
+          c1Introducer = c1.effect.next;
         }
-        index = terminatorIndex;
+        index = end;
         continue;
       }
 
@@ -211,7 +419,10 @@ export function sanitizeTerminalHistoryChunk(
       if (escapeSequenceEndIndex === null) {
         return { visibleText, pendingControlSequence: input.slice(index) };
       }
-      append(input.slice(index, escapeSequenceEndIndex));
+      // ESC Z (DECID) is the legacy primary device attributes query.
+      if (nextCodePoint !== 0x5a) {
+        append(input.slice(index, escapeSequenceEndIndex));
+      }
       index = escapeSequenceEndIndex;
       continue;
     }
@@ -223,5 +434,5 @@ export function sanitizeTerminalHistoryChunk(
     index = nextSequenceStart;
   }
 
-  return { visibleText, pendingControlSequence: "" };
+  return { visibleText, pendingControlSequence: c1Introducer };
 }

@@ -39,8 +39,13 @@ export function useWorkspaceTabs() {
 export function WorkspaceTabsProvider(props: {
   readonly children: ReactNode;
   readonly settingsOpen?: boolean;
+  readonly initialTab?: WorkspaceTab;
 }) {
-  const [state, dispatch] = useReducer(workspaceTabsReducer, undefined, initialWorkspaceTabsState);
+  const [state, dispatch] = useReducer(
+    workspaceTabsReducer,
+    props.initialTab,
+    initialWorkspaceTabsState,
+  );
   const order = useNavigationTabOrder();
   const hidden = useHiddenNavigationTabs();
   const selected = resolveSelectedNavigationTab(order, hidden, state.selectedTab);

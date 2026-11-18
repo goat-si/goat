@@ -1,3 +1,4 @@
+import * as NodeCrypto from "@effect/platform-node/NodeCrypto";
 import * as NodeServices from "@effect/platform-node/NodeServices";
 import { expect, it } from "@effect/vitest";
 import * as Effect from "effect/Effect";
@@ -69,101 +70,111 @@ it("a session is a person only when it was issued as one (mesh link design §5)"
   expect(steps({ subject: "browser" })).toEqual({ personOnly: false, runtimeApproval: false });
 });
 
-it.layer(NodeServices.layer)("Pen member principals through EnvironmentAuth", (it) => {
-  it.effect(
-    "/mcp admits a member agent on its own connection with no approvals and refuses a member proxy",
-    () =>
-      Effect.gen(function* () {
-        const auth = yield* EnvironmentAuth.EnvironmentAuth;
-        const sessions = yield* SessionStore.SessionStore;
-        const agent = yield* sessions.issue({
-          subject: MCP_CLIENT_SUBJECT,
-          method: "bearer-access-token",
-          scopes: ["orchestration:read", "orchestration:operate"],
-          principalKind: "outside_client",
-          penBinding: binding,
-        });
-        const proxy = yield* sessions.issue({
-          subject: PEN_PROXY_SUBJECT,
-          method: "bearer-access-token",
-          scopes: ["orchestration:read"],
-          principalKind: "proxied_person",
-          penBinding: binding,
-        });
-        const own = penConnection(peer).context;
-        const admitted = yield* auth.authenticateMcpClient(onConnection(bearer(agent.token), own));
-        expect(admitted.approvals).toBe(false);
-        expect(admitted.childSetupPurpose).toBeUndefined();
-        const proxyAtMcp = yield* Effect.exit(
-          auth.authenticateMcpClient(onConnection(bearer(proxy.token), own)),
-        );
-        expect(Exit.isFailure(proxyAtMcp)).toBe(true);
-        const agentOnMain = yield* Effect.exit(
-          auth.authenticateMcpClient(onConnection(bearer(agent.token), MAIN_LISTENER)),
-        );
-        expect(Exit.isFailure(agentOnMain)).toBe(true);
-      }).pipe(Effect.provide(layerAuth)),
-  );
+it.layer(Layer.mergeAll(NodeServices.layer, NodeCrypto.layer))(
+  "Pen member principals through EnvironmentAuth",
+  (it) => {
+    it.effect(
+      "/mcp admits a member agent on its own connection with no approvals and refuses a member proxy",
+      () =>
+        Effect.gen(function* () {
+          const auth = yield* EnvironmentAuth.EnvironmentAuth;
+          const sessions = yield* SessionStore.SessionStore;
+          const agent = yield* sessions.issue({
+            subject: MCP_CLIENT_SUBJECT,
+            method: "bearer-access-token",
+            scopes: ["orchestration:read", "orchestration:operate"],
+            principalKind: "outside_client",
+            penBinding: binding,
+          });
+          const proxy = yield* sessions.issue({
+            subject: PEN_PROXY_SUBJECT,
+            method: "bearer-access-token",
+            scopes: ["orchestration:read"],
+            principalKind: "proxied_person",
+            penBinding: binding,
+          });
+          const own = penConnection(peer).context;
+          const admitted = yield* auth.authenticateMcpClient(
+            onConnection(bearer(agent.token), own),
+          );
+          expect(admitted.approvals).toBe(false);
+          expect(admitted.childSetupPurpose).toBeUndefined();
+          const proxyAtMcp = yield* Effect.exit(
+            auth.authenticateMcpClient(onConnection(bearer(proxy.token), own)),
+          );
+          expect(Exit.isFailure(proxyAtMcp)).toBe(true);
+          const agentOnMain = yield* Effect.exit(
+            auth.authenticateMcpClient(onConnection(bearer(agent.token), MAIN_LISTENER)),
+          );
+          expect(Exit.isFailure(agentOnMain)).toBe(true);
+        }).pipe(Effect.provide(layerAuth)),
+    );
 
-  it.effect(
-    "a member proxy authenticates as proxied_person on its connection; a member agent never outside /mcp",
-    () =>
-      Effect.gen(function* () {
-        const auth = yield* EnvironmentAuth.EnvironmentAuth;
-        const sessions = yield* SessionStore.SessionStore;
-        const agent = yield* sessions.issue({
-          subject: MCP_CLIENT_SUBJECT,
-          method: "bearer-access-token",
-          scopes: ["orchestration:read"],
-          principalKind: "outside_client",
-          penBinding: binding,
-        });
-        const proxy = yield* sessions.issue({
-          subject: PEN_PROXY_SUBJECT,
-          method: "bearer-access-token",
-          scopes: ["orchestration:read"],
-          principalKind: "proxied_person",
-          penBinding: binding,
-        });
-        const own = penConnection(peer).context;
-        const session = yield* auth.authenticateHttpRequest(onConnection(bearer(proxy.token), own));
-        expect(session.principalKind).toBe("proxied_person");
-        expect(canResolveHumanStep(sessionResolver(session), "person_only")).toBe(false);
-        const agentHttp = yield* Effect.exit(
-          auth.authenticateHttpRequest(onConnection(bearer(agent.token), own)),
-        );
-        expect(Exit.isFailure(agentHttp)).toBe(true);
-        // Pen-bound sessions never get WebSocket tickets: their sockets carry a bearer header.
-        expect(
-          Exit.isFailure(yield* Effect.exit(auth.issueWebSocketTicket(session, { use: "rpc" }))),
-        ).toBe(true);
-      }).pipe(Effect.provide(layerAuth)),
-  );
-  it.effect(
-    "every existing kind of session is issued as before: a person unless it is an MCP client",
-    () =>
-      Effect.gen(function* () {
-        const sessions = yield* SessionStore.SessionStore;
-        for (const subject of [
-          "desktop-bootstrap",
-          "browser",
-          "cli-issued-session",
-          "hub-proxy",
-          "one-time-token",
-        ])
-          yield* sessions.issue({ subject });
-        yield* sessions.issue({ subject: MCP_CLIENT_SUBJECT, method: "bearer-access-token" });
-        const kinds = Object.fromEntries(
-          (yield* sessions.listActive()).map((session) => [session.subject, session.principalKind]),
-        );
-        expect(kinds).toEqual({
-          "desktop-bootstrap": "person",
-          browser: "person",
-          "cli-issued-session": "person",
-          "hub-proxy": "person",
-          "one-time-token": "person",
-          [MCP_CLIENT_SUBJECT]: "outside_client",
-        });
-      }).pipe(Effect.provide(layerAuth)),
-  );
-});
+    it.effect(
+      "a member proxy authenticates as proxied_person on its connection; a member agent never outside /mcp",
+      () =>
+        Effect.gen(function* () {
+          const auth = yield* EnvironmentAuth.EnvironmentAuth;
+          const sessions = yield* SessionStore.SessionStore;
+          const agent = yield* sessions.issue({
+            subject: MCP_CLIENT_SUBJECT,
+            method: "bearer-access-token",
+            scopes: ["orchestration:read"],
+            principalKind: "outside_client",
+            penBinding: binding,
+          });
+          const proxy = yield* sessions.issue({
+            subject: PEN_PROXY_SUBJECT,
+            method: "bearer-access-token",
+            scopes: ["orchestration:read"],
+            principalKind: "proxied_person",
+            penBinding: binding,
+          });
+          const own = penConnection(peer).context;
+          const session = yield* auth.authenticateHttpRequest(
+            onConnection(bearer(proxy.token), own),
+          );
+          expect(session.principalKind).toBe("proxied_person");
+          expect(canResolveHumanStep(sessionResolver(session), "person_only")).toBe(false);
+          const agentHttp = yield* Effect.exit(
+            auth.authenticateHttpRequest(onConnection(bearer(agent.token), own)),
+          );
+          expect(Exit.isFailure(agentHttp)).toBe(true);
+          // Pen-bound sessions never get WebSocket tickets: their sockets carry a bearer header.
+          expect(
+            Exit.isFailure(yield* Effect.exit(auth.issueWebSocketTicket(session, { use: "rpc" }))),
+          ).toBe(true);
+        }).pipe(Effect.provide(layerAuth)),
+    );
+    it.effect(
+      "every existing kind of session is issued as before: a person unless it is an MCP client",
+      () =>
+        Effect.gen(function* () {
+          const sessions = yield* SessionStore.SessionStore;
+          for (const subject of [
+            "desktop-bootstrap",
+            "browser",
+            "cli-issued-session",
+            "hub-proxy",
+            "one-time-token",
+          ])
+            yield* sessions.issue({ subject });
+          yield* sessions.issue({ subject: MCP_CLIENT_SUBJECT, method: "bearer-access-token" });
+          const kinds = Object.fromEntries(
+            (yield* sessions.listActive()).map((session) => [
+              session.subject,
+              session.principalKind,
+            ]),
+          );
+          expect(kinds).toEqual({
+            "desktop-bootstrap": "person",
+            browser: "person",
+            "cli-issued-session": "person",
+            "hub-proxy": "person",
+            "one-time-token": "person",
+            [MCP_CLIENT_SUBJECT]: "outside_client",
+          });
+        }).pipe(Effect.provide(layerAuth)),
+    );
+  },
+);

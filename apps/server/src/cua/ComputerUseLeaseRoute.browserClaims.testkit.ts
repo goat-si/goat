@@ -1,4 +1,5 @@
 import { assert } from "@effect/vitest";
+import * as NodeCrypto from "@effect/platform-node/NodeCrypto";
 import * as NodeServices from "@effect/platform-node/NodeServices";
 import * as NodeSqliteClient from "@goat/shared/nodeSqliteClient";
 import { EnvironmentId, ProviderInstanceId, ThreadId } from "@goat/contracts";
@@ -46,7 +47,7 @@ export const threadFixture = Effect.fn("LeaseRouteTest.threadFixture")(function*
       getEnvironmentId: Effect.succeed(EnvironmentId.make("environment:test")),
       getDescriptor: Effect.die("unused"),
     }),
-    Effect.provide(NodeServices.layer),
+    Effect.provide(Layer.mergeAll(NodeServices.layer, NodeCrypto.layer)),
   );
   const credential = yield* registry.issue({
     threadId,
@@ -265,6 +266,7 @@ export const admissionFixture = Effect.fn("LeaseRouteTest.admissionFixture")(fun
         Layer.mergeAll(
           database,
           NodeServices.layer,
+          NodeCrypto.layer,
           ServerSettings.layerTest({ enableCua: true, cuaStrictInputGuards: false }),
         ),
       ),

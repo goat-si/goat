@@ -14,6 +14,7 @@ import * as Schema from "effect/Schema";
 import * as SqlClient from "effect/sql/SqlClient";
 import * as ChannelLedger from "./ChannelLedger.ts";
 import { mayDirect, originConnectionOf } from "./ChannelGateway.ts";
+import { canSeeTask } from "./channelBotRecall.ts";
 import { senderOf } from "./channelSenderAuthority.ts";
 import { requesterForDispatch } from "./channelDispatchAuthority.ts";
 import * as SlackChannelSettings from "./SlackChannelSettings.ts";
@@ -72,7 +73,10 @@ const make = Effect.gen(function* () {
     `.pipe(Effect.mapError(dbError));
     if (rows.length === 0) return yield* fail("forbidden");
   });
-  const authorize = Effect.fn("ChannelSessionTaskActions.authorize")(function* (input: Common) {
+  const authorize = Effect.fn("ChannelSessionTaskActions.authorize")(function* (
+    input: Common,
+    reach: "conversation" | "visible" = "conversation",
+  ) {
     const sessions = yield* sql<{
       readonly conversation_id: string;
       readonly requester_json: string;
@@ -102,7 +106,9 @@ const make = Effect.gen(function* () {
     if (
       target === undefined ||
       target.ownerId !== requester.ownerId ||
-      target.task.conversationId !== session.conversation_id ||
+      (reach === "visible"
+        ? !canSeeTask(requester, target.task, source.task.conversationId)
+        : target.task.conversationId !== session.conversation_id) ||
       !mayDirect(requester, connectionId, target.task)
     )
       return yield* fail("not_found");
@@ -174,7 +180,8 @@ const make = Effect.gen(function* () {
         );
     }),
     stop: Effect.fn("ChannelSessionTaskActions.stop")(function* (input) {
-      const { target, requester } = yield* authorize(withFullTaskId(input));
+      // A person may stop any work they can see by asking; their session may stop the same work.
+      const { target, requester } = yield* authorize(withFullTaskId(input), "visible");
       if (!["received", "dispatching", "running", "waiting_input"].includes(target.task.status))
         return null;
       const bot = yield* ledger.getBotById(target.ownerId, target.botId);

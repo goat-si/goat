@@ -66,7 +66,7 @@ import {
   computerUseRun,
   hasComputerUseHistory,
 } from "@goat/client-runtime/work-log/computer-use";
-import { ReplCodeText } from "./ReplCodeText";
+import { commandCodeText, ReplCodeText } from "./ReplCodeText";
 import { threadComputerUseEntry } from "./threadComputerUseEntry";
 
 import { AppText as Text } from "../../components/ui/AppText";
@@ -75,12 +75,8 @@ import { BrowserAppIcon } from "./BrowserAppIcon";
 import { useAppActive, useReduceMotionEnabled } from "../../lib/appState";
 import { cn } from "../../lib/cn";
 import { THREAD_WORK_ROW_MIN_HEIGHT, type deriveThreadWorkLogSizing } from "../../lib/layout";
-import {
-  formatItemFullDetail,
-  relativizeWorkLabelPaths,
-  type ThreadFeedActivity,
-  workEntryRowLabel,
-} from "../../lib/threadActivity";
+import { formatItemFullDetail, type ThreadFeedActivity } from "../../lib/threadActivity";
+import { relativizeWorkLabelPaths, workEntryRowLabel } from "../../lib/workEntryRowLabel";
 import {
   toolCallLines,
   turnItemOutputImages,
@@ -1200,7 +1196,7 @@ const ThreadWorkLogRow = function ThreadWorkLogRow(
               props.renderReasoning(reasoning.text)
             ) : call ? (
               [
-                call.command,
+                commandCodeText(call.command, props.themeAppearance),
                 ...(call.args ?? []).map(([key, value]) =>
                   key === "code" &&
                   shownItem.type === "dynamic_tool" &&
@@ -1387,11 +1383,13 @@ function lineCountsAccessibilityText(counts: WorkLogLineCounts): string {
 export function ThreadThinkingRow(props: {
   readonly rowSizing: ReturnType<typeof deriveThreadWorkLogSizing>;
   readonly iconSubtleColor: ColorValue;
+  readonly providerStartingLabel?: string | undefined;
 }) {
+  const label = props.providerStartingLabel ?? "Thinking";
   return (
     <View
       accessible
-      accessibilityLabel="Thinking"
+      accessibilityLabel={label}
       className="-mx-1 min-h-8 flex-row items-center px-1.5 py-0"
       style={{ minHeight: props.rowSizing.estimatedRowHeight }}
     >
@@ -1399,7 +1397,7 @@ export function ThreadThinkingRow(props: {
         key={props.rowSizing.textSizeKey}
         icon="brain"
         iconSubtleColor={props.iconSubtleColor}
-        label="Thinking"
+        label={label}
         showIcon
       />
     </View>

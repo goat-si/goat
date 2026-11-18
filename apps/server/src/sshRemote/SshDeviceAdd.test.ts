@@ -13,9 +13,13 @@ import {
 } from "@goat/contracts";
 import * as Context from "effect/Context";
 import * as DateTime from "effect/DateTime";
+import * as Deferred from "effect/Deferred";
+import * as Duration from "effect/Duration";
 import * as Effect from "effect/Effect";
+import * as Fiber from "effect/Fiber";
 import * as Layer from "effect/Layer";
 import * as Schema from "effect/Schema";
+import * as TestClock from "effect/testing/TestClock";
 import * as Broker from "../connections/ConnectionCatalogBroker.ts";
 import * as Sessions from "../auth/SessionStore.ts";
 import * as HubNodes from "../hubNodes/HubNodes.ts";
@@ -85,10 +89,15 @@ const fixture = (
     fingerprint?: boolean;
     trustResult?: SshHostResult;
     prepareResult?: SshHostResult;
+    /** The hub names this host a disposable machine by its alias or by the key it offers. */
+    disposable?: "alias" | "host_key";
+    /** Runs inside the hub registration before it saves; Effect.never models a stuck lock. */
+    hubWait?: Effect.Effect<void>;
   } = {},
 ) =>
   Effect.gen(function* () {
     const calls: string[] = [];
+    const hubSaves: string[] = [];
     let pinned = !options.typed && !options.configured;
     const managedAlias = options.configured ? "goat-build" : "build";
     const checkedHosts: string[] = [];
@@ -154,7 +163,24 @@ const fixture = (
               Effect.sync(() => {
                 calls.push("preflight");
                 checkedHosts.push(input.host);
-                return pinned && options.typed ? readyPreflight : report;
+                const answered = pinned && options.typed ? readyPreflight : report;
+                // What SshHostSetup.preflight answers for a disposable machine's offered key.
+                return options.disposable === "host_key"
+                  ? {
+                      ...answered,
+                      ready: false,
+                      steps: answered.steps.map((step) =>
+                        step.id === "host_key"
+                          ? {
+                              id: "host_key" as const,
+                              state: "failed" as const,
+                              summary:
+                                "This is a disposable machine; GOAT reaches it only through its Pen route.",
+                            }
+                          : step,
+                      ),
+                    }
+                  : answered;
               }),
             add: () =>
               Effect.sync(() => {
@@ -182,6 +208,12 @@ const fixture = (
               }),
           }),
           Layer.mock(HubNodes.HubNodes)({
+            disposableRoute: (target) =>
+              Effect.sync(() =>
+                options.disposable === "alias" && target.alias === "build"
+                  ? "build is a disposable machine (attach a-1, matched by its Pen alias)."
+                  : undefined,
+              ),
             add: (input, hubOptions) =>
               Effect.gen(function* () {
                 calls.push("hub");
@@ -201,6 +233,8 @@ const fixture = (
                     detail: "Could not reach build.",
                   });
                 yield* hubOptions.beforeSave;
+                if (options.hubWait !== undefined) yield* options.hubWait;
+                hubSaves.push(input.kind === "ssh" ? input.alias : input.kind);
                 return { created: true, node: hubNode };
               }),
           }),
@@ -250,6 +284,7 @@ const fixture = (
     return {
       call,
       calls,
+      hubSaves,
       checkedHosts,
       report,
       approve: () => {
@@ -257,6 +292,34 @@ const fixture = (
       },
     };
   });
+it.effect(
+  "a disposable machine's Pen alias is refused before preflight reaches the network, so an offline one is refused too",
+  () =>
+    Effect.gen(function* () {
+      const f = yield* fixture({ disposable: "alias", blocked: "failed" });
+      const refused = yield* f.call();
+      expect(refused).toMatchObject({ saved: false, kind: "error", code: "invalid_request" });
+      expect(JSON.stringify(refused)).toContain("disposable machine");
+      expect(f.calls).toEqual([]);
+    }),
+);
+it.effect(
+  "a preflight that refuses a disposable machine's offered key stops the add before any trust, catalog or hub save",
+  () =>
+    Effect.gen(function* () {
+      const f = yield* fixture({
+        disposable: "host_key",
+        typed: true,
+        fingerprint: true,
+        blocked: "needs_review",
+      });
+      const refused = yield* f.call();
+      expect(refused).toMatchObject({ outcome: "failed" });
+      expect(JSON.stringify(refused)).toContain("disposable machine");
+      expect(JSON.stringify(refused)).not.toContain("SHA256:private");
+      expect(f.calls).toEqual(["preflight"]);
+    }),
+);
 it.effect("failed preflight creates no handoff and never dispatches", () =>
   Effect.gen(function* () {
     const f = yield* fixture({ blocked: "failed" });
@@ -323,6 +386,57 @@ it.effect("a saved desktop connection is also registered on the hub", () =>
     });
     expect(f.calls).toEqual(["preflight", "broker", "hub"]);
   }),
+);
+it.effect("a call cut after the desktop saved the connection still registers it on the hub", () =>
+  Effect.gen(function* () {
+    const registering = yield* Deferred.make<void>();
+    const gate = yield* Deferred.make<void>();
+    const f = yield* fixture({
+      hubWait: Deferred.succeed(registering, undefined).pipe(Effect.andThen(Deferred.await(gate))),
+    });
+    const adding = yield* f.call().pipe(Effect.forkChild({ startImmediately: true }));
+    yield* Deferred.await(registering);
+    // Once the desktop answered, the cut waits for the registration instead of interrupting it.
+    const cutting = yield* Fiber.interrupt(adding).pipe(
+      Effect.forkChild({ startImmediately: true }),
+    );
+    expect(f.hubSaves).toEqual([]);
+    yield* Deferred.succeed(gate, undefined);
+    yield* Fiber.join(cutting);
+    expect(f.hubSaves).toEqual(["build"]);
+  }),
+);
+it.effect(
+  "a hub registration still waiting after 30 seconds ends unsaved instead of holding the add",
+  () =>
+    Effect.gen(function* () {
+      const registering = yield* Deferred.make<void>();
+      const release = yield* Deferred.make<void>();
+      // Releases a registration the 30-second limit failed to end, so a failing test still ends.
+      yield* Effect.addFinalizer(() => Deferred.succeed(release, undefined));
+      const f = yield* fixture({
+        hubWait: Deferred.succeed(registering, undefined).pipe(
+          Effect.andThen(Deferred.await(release)),
+        ),
+      });
+      const done = yield* Deferred.make<unknown>();
+      yield* f.call().pipe(
+        Effect.flatMap((result) => Deferred.succeed(done, result)),
+        Effect.forkChild({ startImmediately: true }),
+      );
+      // The registration and its 30-second limit have started.
+      yield* Deferred.await(registering);
+      yield* TestClock.adjust(Duration.seconds(29));
+      expect(yield* Deferred.isDone(done)).toBe(false);
+      yield* TestClock.adjust(Duration.seconds(1));
+      expect(yield* Deferred.isDone(done)).toBe(true);
+      expect(yield* Deferred.await(done)).toMatchObject({
+        outcome: "connected",
+        desktopCatalog: "saved",
+        hub: { saved: false },
+      });
+      expect(f.hubSaves).toEqual([]);
+    }).pipe(Effect.scoped),
 );
 it.effect("a hub failure after the desktop saved is reported without failing the add", () =>
   Effect.gen(function* () {

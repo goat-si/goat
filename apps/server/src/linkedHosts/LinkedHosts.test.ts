@@ -6,7 +6,7 @@ import { GOAT_ENVIRONMENT_PATH } from "@goat/contracts/legacyT3Names";
 import { describe, expect, it } from "@effect/vitest";
 import * as Cause from "effect/Cause";
 import * as Context from "effect/Context";
-import * as Crypto from "effect/Crypto";
+import * as SecureRandom from "effect/crypto/SecureRandom";
 import * as Deferred from "effect/Deferred";
 import * as Effect from "effect/Effect";
 import * as Exit from "effect/Exit";
@@ -19,6 +19,7 @@ import * as TestClock from "effect/testing/TestClock";
 import * as Etag from "effect/http/Etag";
 import * as FetchHttpClient from "effect/http/FetchHttpClient";
 import * as HttpClient from "effect/http/HttpClient";
+import * as HttpClientError from "effect/http/HttpClientError";
 import type * as HttpClientRequest from "effect/http/HttpClientRequest";
 import * as HttpClientResponse from "effect/http/HttpClientResponse";
 import * as HttpPlatform from "effect/http/HttpPlatform";
@@ -34,8 +35,24 @@ import * as McpOAuthHttp from "../auth/mcpOAuthHttp.ts";
 import * as ServerSecretStore from "../auth/ServerSecretStore.ts";
 import * as ServerConfig from "../config.ts";
 import * as ServerEnvironment from "../environment/ServerEnvironment.ts";
+import { DisposableRouteGuard } from "../hub/disposable/DisposableRouteGuard.ts";
 import * as Sqlite from "../persistence/Sqlite.ts";
 import * as LinkedHosts from "./LinkedHosts.ts";
+
+/** A route guard for which the GOAT `disposable` names is an open disposable machine; none by default. */
+const routeGuard = (disposable?: string) =>
+  Layer.succeed(
+    DisposableRouteGuard,
+    DisposableRouteGuard.of({
+      claim: () => Effect.undefined,
+      refusal: (input, target) =>
+        Effect.succeed(
+          disposable !== undefined && input.environmentId === disposable
+            ? `${target} is a disposable machine`
+            : undefined,
+        ),
+    }),
+  );
 
 class HostAuthApi extends HttpApi.make("environment")
   .add(EnvironmentHttpApi.groups.auth)
@@ -61,7 +78,7 @@ const withHost = <A, E>(
   ) => Effect.Effect<A, E, LinkedHosts.LinkedHosts>,
 ) =>
   Effect.gen(function* () {
-    const crypto = yield* Crypto.Crypto;
+    const random = yield* SecureRandom.SecureRandom;
     const hostConfig = ServerConfig.layerTest(process.cwd(), { prefix: "goat-linked-host-" });
     const hostAuthLayer = EnvironmentAuth.layer.pipe(
       Layer.provide(Sqlite.layerMemory),
@@ -90,17 +107,17 @@ const withHost = <A, E>(
       Layer.provide(hostConfig),
       Layer.provideMerge(
         HttpPlatform.layer.pipe(
-          Layer.provideMerge(NodeServices.layer),
+          Layer.provideMerge(Layer.mergeAll(NodeServices.layer, NodeCrypto.layer)),
           Layer.provideMerge(Etag.layerWeak),
         ),
       ),
-      Layer.provide(NodeServices.layer),
+      Layer.provide(Layer.mergeAll(NodeServices.layer, NodeCrypto.layer)),
     );
     const requests: Array<string> = [];
     return yield* Effect.acquireUseRelease(
       Effect.sync(() => HttpRouter.toWebHandler(routes, { disableLogger: true })),
       (web) => {
-        const context = Context.make(Crypto.Crypto, crypto);
+        const context = Context.make(SecureRandom.SecureRandom, random);
         const toHost = async (input: string | URL | Request, init?: RequestInit) => {
           const request = new Request(input, init);
           const url = new URL(request.url);
@@ -130,10 +147,11 @@ const withHost = <A, E>(
             Effect.provide(
               LinkedHosts.layer.pipe(
                 Layer.provide(ServerSecretStore.layer),
+                Layer.provide(routeGuard()),
                 Layer.provide(ServerConfig.layerTest(process.cwd(), { prefix: "goat-linker-" })),
                 Layer.provide(FetchHttpClient.layer),
                 Layer.provide(Layer.succeed(FetchHttpClient.Fetch, toHost as typeof fetch)),
-                Layer.provide(NodeServices.layer),
+                Layer.provide(Layer.mergeAll(NodeServices.layer, NodeCrypto.layer)),
               ),
             ),
           );
@@ -142,7 +160,7 @@ const withHost = <A, E>(
       },
       (web) => Effect.promise(() => web.dispose()),
     );
-  }).pipe(Effect.provide(NodeServices.layer));
+  }).pipe(Effect.provide(Layer.mergeAll(NodeServices.layer, NodeCrypto.layer)));
 
 const pairingCode = (auth: EnvironmentAuth.EnvironmentAuth["Service"]) =>
   auth
@@ -199,13 +217,18 @@ const exchangeResponse = (request: HttpClientRequest.HttpClientRequest) => {
   );
 };
 
-const clientFixture = (client: HttpClient.HttpClient, beforeWrite = Effect.void) => {
+const clientFixture = (
+  client: HttpClient.HttpClient,
+  beforeWrite = Effect.void,
+  disposable?: string,
+) => {
   let stored: Option.Option<Uint8Array> = Option.none();
   let writes = 0;
   return {
     writes: () => writes,
     layer: LinkedHosts.layer.pipe(
       Layer.provide(Layer.succeed(HttpClient.HttpClient, client)),
+      Layer.provide(routeGuard(disposable)),
       Layer.provide(
         Layer.mock(ServerSecretStore.ServerSecretStore)({
           get: () => Effect.sync(() => stored),
@@ -233,6 +256,56 @@ const expectUnavailable = <A>(exit: Exit.Exit<A, LinkedHosts.LinkedHostError>) =
     if (Option.isSome(error)) expect(error.value).toMatchObject({ reason: "host_unavailable" });
   }
 };
+
+it.effect(
+  "a disposable machine's descriptor is refused by the service itself, for every caller, before any registration, pairing-code spend or save",
+  () =>
+    Effect.gen(function* () {
+      const paths: Array<string> = [];
+      const fixture = clientFixture(
+        HttpClient.make((request) => {
+          paths.push(new URL(request.url).pathname);
+          return Effect.succeed(exchangeResponse(request));
+        }),
+        Effect.void,
+        "env-box",
+      );
+      const refused = yield* LinkedHosts.LinkedHosts.pipe(
+        Effect.flatMap((links) => links.link(LINK_INPUT)),
+        Effect.flip,
+        Effect.provide(fixture.layer),
+      );
+      expect(refused).toMatchObject({ reason: "invalid_request" });
+      expect(refused.message).toContain("disposable machine");
+      expect(paths).toEqual([GOAT_ENVIRONMENT_PATH]);
+      expect(fixture.writes()).toBe(0);
+    }),
+);
+
+it.effect("explains a refused host discovery without saving a link", () =>
+  Effect.gen(function* () {
+    const fixture = clientFixture(
+      HttpClient.make((request) =>
+        Effect.fail(
+          new HttpClientError.HttpClientError({
+            reason: new HttpClientError.TransportError({
+              request,
+              cause: Object.assign(new Error("refused"), { code: "ECONNREFUSED" }),
+            }),
+          }),
+        ),
+      ),
+    );
+    const error = yield* LinkedHosts.LinkedHosts.pipe(
+      Effect.flatMap((links) => links.link(LINK_INPUT)),
+      Effect.flip,
+      Effect.provide(fixture.layer),
+    );
+    expect(error.reason).toBe("host_unavailable");
+    expect(error.message).toContain("ECONNREFUSED");
+    expect(fixture.writes()).toBe(0);
+  }),
+);
 
 describe("LinkedHosts deadlines", () => {
   it.effect.each(STAGES)("times out a linked-host $name body without saving credentials", (stage) =>
@@ -584,12 +657,14 @@ describe("LinkedHosts", () => {
           });
           const found = yield* links.find("build-box");
           const token = Option.getOrThrow(found).token;
-          const session = yield* hostAuth.authenticateMcpClient(
-            onMainListener(
-              HttpServerRequest.fromWeb(
-                new Request(`http://127.0.0.1/mcp`, {
-                  headers: { host: HOST, authorization: `Bearer ${token}` },
-                }),
+          const session = yield* Effect.scoped(
+            hostAuth.authenticateMcpClient(
+              onMainListener(
+                HttpServerRequest.fromWeb(
+                  new Request(`http://127.0.0.1/mcp`, {
+                    headers: { host: HOST, authorization: `Bearer ${token}` },
+                  }),
+                ),
               ),
             ),
           );

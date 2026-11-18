@@ -15,6 +15,7 @@ import {
 import * as Effect from "effect/Effect";
 import * as Layer from "effect/Layer";
 import * as Schema from "effect/Schema";
+import * as NodeCrypto from "@effect/platform-node/NodeCrypto";
 import * as NodeServices from "@effect/platform-node/NodeServices";
 import * as ProviderAdapter from "@goat/provider-core/server/ProviderAdapter";
 import * as SqlitePersistence from "../persistence/Sqlite.ts";
@@ -163,6 +164,7 @@ it.effect.each([false, true])(
       }
       const dependencies = Layer.mergeAll(
         NodeServices.layer,
+        NodeCrypto.layer,
         ServerSettings.layerTest(),
         Layer.mock(ThreadManagementService.ThreadManagementService)({
           getThreadRecords: (id, fields, filter) =>

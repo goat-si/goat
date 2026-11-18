@@ -16,6 +16,7 @@ import { render } from "../../../test/render";
 const state = vi.hoisted(() => ({
   tasks: [] as ScheduledTask[],
   dropPolicy: false,
+  threadModes: false,
   upsert: vi.fn(),
   toast: vi.fn(),
 }));
@@ -29,7 +30,7 @@ vi.mock(import("../../state/session"), async (original) => ({
 }));
 vi.mock(import("../../state/entities"), async (original) => ({
   ...(await original()),
-  useProjects: (() => [project()]) as never,
+  useProjects: (() => [project(), otherProject()]) as never,
   useThreadShell: (() => ({ title: "Synthetic thread" })) as never,
 }));
 vi.mock(import("../../state/query"), async (original) => ({
@@ -101,6 +102,9 @@ function project() {
     scripts: [],
   };
 }
+function otherProject() {
+  return { ...project(), id: ProjectId.make("other"), title: "Other", workspaceRoot: "/other" };
+}
 function providers() {
   return [
     {
@@ -123,14 +127,23 @@ function environment() {
     label: "Synthetic",
     connection: { phase: "connected" },
     serverConfig: {
-      environment: { platform: "darwin" },
+      environment: {
+        platform: "darwin",
+        capabilities: { scheduledTaskThreadModes: state.threadModes },
+      },
       settings: DEFAULT_SERVER_SETTINGS,
       providers: providers(),
     },
   };
 }
-function setup(policy = "all_runs", bound = true, overrides: Partial<ScheduledTask> = {}) {
+function setup(
+  policy = "all_runs",
+  bound = true,
+  overrides: Partial<ScheduledTask> = {},
+  threadModes = false,
+) {
   state.dropPolicy = false;
+  state.threadModes = threadModes;
   state.toast.mockReset();
   state.upsert.mockReset();
   const task: ScheduledTask = {
@@ -159,11 +172,20 @@ function setup(policy = "all_runs", bound = true, overrides: Partial<ScheduledTa
   };
   state.tasks = [task];
   state.upsert.mockImplementation(async ({ input }: { input: ScheduledTaskUpsertInput }) => {
+    // With thread modes the server keeps the stored thread unless the mode is new_thread.
+    const mode = input.threadMode ?? task.threadMode;
     const saved: ScheduledTask = {
       ...task,
       title: input.title,
       prompt: input.prompt,
-      threadId: input.threadId ?? null,
+      // A task moved to another project leaves its thread.
+      threadId: !state.threadModes
+        ? (input.threadId ?? null)
+        : mode === "new_thread" || input.projectId !== task.projectId
+          ? null
+          : (input.threadId ?? task.threadId),
+      projectId: input.projectId ?? task.projectId,
+      ...(state.threadModes && mode !== undefined ? { threadMode: mode } : {}),
       ...(input.notificationPolicy === undefined
         ? {}
         : { notificationPolicy: input.notificationPolicy }),
@@ -200,6 +222,56 @@ it("visibly resets an important policy when unbinding and retains it on editor r
   await expect
     .element(page.getByRole("combobox", { name: "Notifications" }))
     .toHaveTextContent("All runs");
+});
+
+it("with thread modes, Run in new threads saves the task as a new thread each run", async () => {
+  const task = setup("all_runs", true, { threadMode: "continue" }, true);
+  await using screen = await render(
+    <ScheduledTasksSettings environmentId={environmentId} taskId={task.id} />,
+  );
+  const destination = page.getByRole("combobox", { name: "Destination" });
+  await expect.element(destination).toHaveTextContent("One thread, continuing the conversation");
+  await userEvent.click(page.getByRole("button", { name: "Run in new threads" }));
+  await expect.element(destination).toHaveTextContent("New thread each run");
+  await userEvent.click(page.getByRole("button", { name: "Save task" }));
+  await expect.element(page.getByRole("dialog")).not.toBeInTheDocument();
+  expect(state.tasks[0]?.threadId).toBeNull();
+  expect(state.tasks[0]?.threadMode).toBe("new_thread");
+  await screen.rerender(
+    <ScheduledTasksSettings key="reopened" environmentId={environmentId} taskId={task.id} />,
+  );
+  await expect
+    .element(page.getByRole("combobox", { name: "Destination" }))
+    .toHaveTextContent("New thread each run");
+});
+
+it("with thread modes, New thread each run drops Important updates with the button's notice", async () => {
+  const task = setup("important_updates", true, { threadMode: "continue" }, true);
+  await using _screen = await render(
+    <ScheduledTasksSettings environmentId={environmentId} taskId={task.id} />,
+  );
+  await userEvent.click(page.getByRole("combobox", { name: "Destination" }));
+  await userEvent.click(page.getByRole("option", { name: "New thread each run" }));
+  await expect
+    .element(
+      page.getByText(
+        "Notifications changed to All runs because Important updates requires an existing thread.",
+      ),
+    )
+    .toBeVisible();
+  await userEvent.click(page.getByRole("combobox", { name: "Notifications" }));
+  await expect.element(page.getByRole("option", { name: "Failed runs only" })).toBeVisible();
+  await expect
+    .element(page.getByRole("option", { name: "Important updates" }))
+    .not.toBeInTheDocument();
+  await userEvent.click(page.getByRole("option", { name: "All runs" }));
+  await userEvent.click(page.getByRole("button", { name: "Save task" }));
+  await expect.element(page.getByRole("dialog")).not.toBeInTheDocument();
+  expect(state.tasks[0]).toMatchObject({
+    threadId: null,
+    threadMode: "new_thread",
+    notificationPolicy: "all_runs",
+  });
 });
 
 it("keeps the editor open when an older host drops the requested policy", async () => {
@@ -303,4 +375,185 @@ it("a routine from a server that does not mark GOAT Bot routines keeps the full 
   await expect
     .element(dialog.getByText("GOAT Bot's model", { exact: true }))
     .not.toBeInTheDocument();
+});
+
+// What Destination says is what the save stores: a one-thread mode keeps the saved thread.
+it("with thread modes, a one-thread choice after Run in new threads keeps the task's thread", async () => {
+  const task = setup("all_runs", true, { threadMode: "continue" }, true);
+  await using _screen = await render(
+    <ScheduledTasksSettings environmentId={environmentId} taskId={task.id} />,
+  );
+  await userEvent.click(page.getByRole("button", { name: "Run in new threads" }));
+  await userEvent.click(page.getByRole("combobox", { name: "Destination" }));
+  await userEvent.click(
+    page.getByRole("option", { name: "One thread, continuing the conversation" }),
+  );
+  await expect
+    .element(page.getByText("Each run continues this conversation", { exact: false }))
+    .toBeVisible();
+  await userEvent.click(page.getByRole("button", { name: "Save task" }));
+  await expect.element(page.getByRole("dialog")).not.toBeInTheDocument();
+  expect(state.tasks[0]).toMatchObject({ threadId: "bound", threadMode: "continue" });
+});
+
+it("with thread modes, Run in new threads is not offered once Destination is New thread each run", async () => {
+  const task = setup("all_runs", true, { threadMode: "fresh_session" }, true);
+  await using _screen = await render(
+    <ScheduledTasksSettings environmentId={environmentId} taskId={task.id} />,
+  );
+  const destination = page.getByRole("combobox", { name: "Destination" });
+  await userEvent.click(destination);
+  await userEvent.click(page.getByRole("option", { name: "New thread each run" }));
+  await expect
+    .element(page.getByRole("button", { name: "Run in new threads" }))
+    .not.toBeInTheDocument();
+  await userEvent.click(destination);
+  await userEvent.click(page.getByRole("option", { name: "One thread, fresh session each run" }));
+  await expect
+    .element(page.getByText("Each run starts a fresh session in this thread", { exact: false }))
+    .toBeVisible();
+  await userEvent.click(page.getByRole("button", { name: "Save task" }));
+  await expect.element(page.getByRole("dialog")).not.toBeInTheDocument();
+  expect(state.tasks[0]).toMatchObject({ threadId: "bound", threadMode: "fresh_session" });
+});
+
+it("with thread modes, a GOAT Bot routine returned to one thread shows its Bot view again", async () => {
+  const task = setup("all_runs", true, { ...botRoutine, threadMode: "continue" }, true);
+  await using _screen = await render(
+    <ScheduledTasksSettings environmentId={environmentId} taskId={task.id} />,
+  );
+  const dialog = page.getByRole("dialog");
+  await userEvent.click(dialog.getByRole("button", { name: "Run in new threads" }));
+  await expect.element(dialog.getByRole("combobox", { name: "Project" })).toBeVisible();
+  await userEvent.click(dialog.getByRole("combobox", { name: "Destination" }));
+  await userEvent.click(
+    page.getByRole("option", { name: "One thread, continuing the conversation" }),
+  );
+  await expect.element(dialog.getByText("GOAT Bot's model", { exact: true })).toBeVisible();
+  await expect.element(dialog.getByRole("combobox", { name: "Project" })).not.toBeInTheDocument();
+});
+
+it("with thread modes, choosing Important updates again clears the reset notice", async () => {
+  const task = setup("important_updates", true, { threadMode: "continue" }, true);
+  await using _screen = await render(
+    <ScheduledTasksSettings environmentId={environmentId} taskId={task.id} />,
+  );
+  const notice = page.getByText(
+    "Notifications changed to All runs because Important updates requires an existing thread.",
+  );
+  const destination = page.getByRole("combobox", { name: "Destination" });
+  await userEvent.click(destination);
+  await userEvent.click(page.getByRole("option", { name: "New thread each run" }));
+  await expect.element(notice).toBeVisible();
+  await userEvent.click(destination);
+  await userEvent.click(
+    page.getByRole("option", { name: "One thread, continuing the conversation" }),
+  );
+  await userEvent.click(page.getByRole("combobox", { name: "Notifications" }));
+  await userEvent.click(page.getByRole("option", { name: "Important updates" }));
+  await expect.element(notice).not.toBeInTheDocument();
+  await expect
+    .element(page.getByRole("combobox", { name: "Notifications" }))
+    .toHaveTextContent("Important updates");
+});
+
+it("with thread modes, moving a bound task to another project leaves its thread as Destination says", async () => {
+  const task = setup("important_updates", true, { threadMode: "continue" }, true);
+  await using _screen = await render(
+    <ScheduledTasksSettings environmentId={environmentId} taskId={task.id} />,
+  );
+  const projectPicker = page.getByRole("combobox", { name: "Project" });
+  await userEvent.click(projectPicker);
+  await userEvent.click(page.getByRole("option", { name: "Other" }));
+  await expect
+    .element(
+      page.getByText(
+        "Notifications changed to All runs because Important updates requires an existing thread.",
+      ),
+    )
+    .toBeVisible();
+  await expect
+    .element(page.getByText("The first run starts a thread", { exact: false }))
+    .toBeVisible();
+  await userEvent.click(projectPicker);
+  await userEvent.click(page.getByRole("option", { name: "Synthetic" }));
+  await expect
+    .element(page.getByText("Each run continues this conversation", { exact: false }))
+    .toBeVisible();
+  await userEvent.click(projectPicker);
+  await userEvent.click(page.getByRole("option", { name: "Other" }));
+  await userEvent.click(page.getByRole("button", { name: "Save task" }));
+  await expect.element(page.getByRole("dialog")).not.toBeInTheDocument();
+  expect(state.tasks[0]).toMatchObject({
+    projectId: "other",
+    threadId: null,
+    threadMode: "continue",
+    notificationPolicy: "all_runs",
+  });
+});
+
+it("without thread modes, moving a bound task to another project keeps its thread, as an older server does", async () => {
+  const task = setup("important_updates", true, {}, false);
+  await using _screen = await render(
+    <ScheduledTasksSettings environmentId={environmentId} taskId={task.id} />,
+  );
+  await userEvent.click(page.getByRole("combobox", { name: "Project" }));
+  await userEvent.click(page.getByRole("option", { name: "Other" }));
+  await expect
+    .element(page.getByText("Each run continues this conversation", { exact: false }))
+    .toBeVisible();
+  await expect
+    .element(page.getByText("Notifications changed to All runs", { exact: false }))
+    .not.toBeInTheDocument();
+  await userEvent.click(page.getByRole("button", { name: "Save task" }));
+  await expect.element(page.getByRole("dialog")).not.toBeInTheDocument();
+  const sent = state.upsert.mock.calls.at(-1)?.[0]?.input;
+  expect(sent).toMatchObject({ threadId: "bound", notificationPolicy: "important_updates" });
+  expect(sent).not.toHaveProperty("threadMode");
+});
+
+it("with thread modes, coming back to the thread clears the reset notice and keeps All runs", async () => {
+  const task = setup("important_updates", true, { threadMode: "continue" }, true);
+  await using _screen = await render(
+    <ScheduledTasksSettings environmentId={environmentId} taskId={task.id} />,
+  );
+  const notice = page.getByText("Notifications changed to All runs", { exact: false });
+  const destination = page.getByRole("combobox", { name: "Destination" });
+  await userEvent.click(destination);
+  await userEvent.click(page.getByRole("option", { name: "New thread each run" }));
+  await expect.element(notice).toBeVisible();
+  await userEvent.click(destination);
+  await userEvent.click(
+    page.getByRole("option", { name: "One thread, continuing the conversation" }),
+  );
+  await expect.element(notice).not.toBeInTheDocument();
+  await expect
+    .element(page.getByRole("combobox", { name: "Notifications" }))
+    .toHaveTextContent("All runs");
+  await userEvent.click(page.getByRole("combobox", { name: "Notifications" }));
+  await userEvent.click(page.getByRole("option", { name: "Important updates" }));
+  const projectPicker = page.getByRole("combobox", { name: "Project" });
+  await userEvent.click(projectPicker);
+  await userEvent.click(page.getByRole("option", { name: "Other" }));
+  await expect.element(notice).toBeVisible();
+  await userEvent.click(projectPicker);
+  await userEvent.click(page.getByRole("option", { name: "Synthetic" }));
+  await expect.element(notice).not.toBeInTheDocument();
+  await expect
+    .element(page.getByRole("combobox", { name: "Notifications" }))
+    .toHaveTextContent("All runs");
+});
+
+it("with thread modes, picking another policy while away from the thread clears the reset notice", async () => {
+  const task = setup("important_updates", true, { threadMode: "continue" }, true);
+  await using _screen = await render(
+    <ScheduledTasksSettings environmentId={environmentId} taskId={task.id} />,
+  );
+  const notice = page.getByText("Notifications changed to All runs", { exact: false });
+  await userEvent.click(page.getByRole("combobox", { name: "Destination" }));
+  await userEvent.click(page.getByRole("option", { name: "New thread each run" }));
+  await expect.element(notice).toBeVisible();
+  await userEvent.click(page.getByRole("combobox", { name: "Notifications" }));
+  await userEvent.click(page.getByRole("option", { name: "Failed runs only" }));
+  await expect.element(notice).not.toBeInTheDocument();
 });

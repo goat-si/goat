@@ -1,7 +1,7 @@
 import { assert } from "@effect/vitest";
 import * as NetService from "@goat/shared/Net";
 import * as HostProcess from "@goat/shared/HostProcess";
-import * as Crypto from "effect/Crypto";
+import * as Digest from "effect/crypto/Digest";
 import * as Hex from "effect/encoding/Hex";
 import * as Duration from "effect/Duration";
 import * as Effect from "effect/Effect";
@@ -90,7 +90,7 @@ export const testNetService = NetService.NetService.of({
 });
 
 export function commandArgs(command: ChildProcess.Command): ReadonlyArray<string> {
-  return command._tag === "StandardCommand" ? command.args : [];
+  return command._tag === "StandardCommand" ? command.args.map(String) : [];
 }
 
 /** Every ssh command ends its options with `--`; only the remote launch passes args after `sh -s --`. */
@@ -133,8 +133,8 @@ export const makeUploadFixture = Effect.fn("test.makeUploadFixture")(function* (
   );
   assert.equal(yield* child.exitCode, 0);
   const bytes = yield* fs.readFile(`${directory}/${stem}.tar.gz`);
-  const crypto = yield* Crypto.Crypto;
-  const sha256 = Hex.encode(yield* crypto.digest("SHA-256", bytes));
+  const digest = yield* Digest.Digest;
+  const sha256 = Hex.encode(yield* digest.digest(Digest.sha256, bytes));
   yield* fs.writeFileString(`${directory}/SHA256SUMS`, `${sha256}  ${stem}.tar.gz\n`);
   return { root, directory, bytes, sha256, spawner, fs };
 });

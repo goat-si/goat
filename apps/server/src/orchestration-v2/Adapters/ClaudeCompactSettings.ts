@@ -37,9 +37,32 @@ export const resolveAutoCompactWindow = Effect.fn("ClaudeAdapterV2.resolveAutoCo
     readonly model: string;
     readonly launchSettings: unknown;
     readonly files: ReadonlyArray<string>;
+    readonly environment: NodeJS.ProcessEnv;
     readonly fileSystem: FileSystem.FileSystem;
   }) {
     if (input.configured !== "") return input.configured;
+    const launchEnv =
+      typeof input.launchSettings === "object" && input.launchSettings !== null
+        ? Reflect.get(input.launchSettings, "env")
+        : undefined;
+    let envValue: unknown =
+      typeof launchEnv === "object" && launchEnv !== null
+        ? Reflect.get(launchEnv, "CLAUDE_CODE_AUTO_COMPACT_WINDOW")
+        : undefined;
+    if (typeof envValue !== "string") {
+      for (const file of input.files) {
+        envValue = yield* readSettingsEnv(
+          input.fileSystem,
+          file,
+          "CLAUDE_CODE_AUTO_COMPACT_WINDOW",
+        );
+        if (envValue !== undefined) break;
+      }
+      envValue ??= input.environment.CLAUDE_CODE_AUTO_COMPACT_WINDOW;
+    }
+    const numeric = typeof envValue === "string" ? Number(envValue) : NaN;
+    if (Number.isInteger(numeric) && numeric >= 100_000 && numeric <= 1_000_000)
+      return String(numeric);
     const model = input.model.replace(/\[1m\]$/i, "");
     const launch = windowFrom(input.launchSettings, model);
     if (launch !== undefined) return launch;
@@ -62,15 +85,18 @@ const decodeEnvSettings = Schema.decodeUnknownEffect(
     ),
   ),
 );
-export const readToolSearchSetting = (fileSystem: FileSystem.FileSystem, filePath: string) =>
+const readSettingsEnv = (fileSystem: FileSystem.FileSystem, filePath: string, name: string) =>
   fileSystem.readFileString(filePath).pipe(
     Effect.flatMap(decodeEnvSettings),
     Effect.map((settings) => {
-      const value = settings.env?.ENABLE_TOOL_SEARCH;
+      const value = settings.env?.[name];
       return typeof value === "string" ? value : undefined;
     }),
     Effect.orElseSucceed(() => undefined),
   );
+
+export const readToolSearchSetting = (fileSystem: FileSystem.FileSystem, filePath: string) =>
+  readSettingsEnv(fileSystem, filePath, "ENABLE_TOOL_SEARCH");
 
 /** The CLI reports a compaction it aborted for our interrupt as failed; callers pass that check in. */
 export const claudeCompactionOutcome = (succeeded: boolean, failed: boolean) =>

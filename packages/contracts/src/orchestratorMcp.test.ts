@@ -1,8 +1,29 @@
+import { IsoDateTime, NonNegativeInt, ProjectId, RunId, ThreadId } from "./baseSchemas.ts";
+import { ProviderInstanceId } from "./providerInstance.ts";
+import { ProviderInteractionMode, RuntimeMode } from "./providerPolicy.ts";
+import { OrchestrationV2Actor, OrchestrationV2CreationSource } from "./orchestrationV2.ts";
+import { ThreadLinkedPullRequest } from "./threadPullRequest.ts";
+import { ThreadTitleRegeneration } from "./threadTitle.ts";
+import { OrchestratorMcpReconcileFields } from "./orchestratorMcpReconcile.ts";
+import * as Lineage from "./orchestratorMcpThreadLineage.ts";
+import {
+  OrchestratorMcpThreadListResult,
+  OrchestratorMcpThreadReadResult,
+  OrchestratorMcpThreadSearchResult,
+  OrchestratorMcpThreadStatus,
+  OrchestratorMcpThreadPullRequest,
+  OrchestratorMcpThreadSearchMatch,
+  OrchestratorMcpThreadTimelineItem,
+} from "./orchestratorMcp.ts";
+import { OrchestratorMcpCloudTask } from "./orchestratorMcpCloudTask.ts";
+import { ThreadReplicaStatus } from "./threadReplica.ts";
+import { ThreadResult } from "./threadResult.ts";
 import { describe, expect, it } from "@effect/vitest";
 import * as Schema from "effect/Schema";
 
 import {
   OrchestratorMcpScheduledTask,
+  OrchestratorMcpThreadReadInput,
   OrchestratorMcpScheduleTaskInput,
   OrchestratorMcpUpdateScheduledTaskInput,
   OrchestratorMcpCreateThreadsInput,
@@ -25,6 +46,7 @@ import {
 const decodePendingRequestRespondInput = Schema.decodeUnknownSync(
   OrchestratorMcpPendingRequestRespondInput,
 );
+const decodeScheduleTaskInput = Schema.decodeUnknownSync(OrchestratorMcpScheduleTaskInput);
 const decodePendingRequestRespondResult = Schema.decodeUnknownSync(
   OrchestratorMcpPendingRequestRespondResult,
 );
@@ -487,6 +509,30 @@ it("preserves lastRun in MCP JSON and keeps legacy and future nested outcomes re
   expect(decode({ ...task, lastRun: { status: "future" } }).lastRun).toBeUndefined();
 });
 
+it("adds lastRunError to MCP task output without breaking an older reader", () => {
+  const task = {
+    scheduledTaskId: "task",
+    title: "Synthetic",
+    prompt: "Synthetic",
+    enabled: true,
+    projectId: "project",
+    boundThreadId: null,
+    schedule: { type: "interval", everyMs: 60000 },
+    nextRunAt: null,
+    lastRunStatus: "failed",
+  };
+  const codec = Schema.fromJsonString(OrchestratorMcpScheduledTask);
+  const old = OrchestratorMcpScheduledTask.mapFields(
+    ({ lastRunError: _lastRunError, ...fields }) => fields,
+  );
+  const decode = Schema.decodeUnknownSync(codec);
+  const output = JSON.stringify({ ...task, lastRunError: "Weekly usage limit reached" });
+  expect(decode(output).lastRunError).toBe("Weekly usage limit reached");
+  expect(decode(JSON.stringify(task)).lastRunError).toBeUndefined();
+  expect(() => decode(JSON.stringify({ ...task, lastRunError: 404 }))).toThrow();
+  expect(Schema.decodeUnknownSync(Schema.fromJsonString(old))(output).lastRunStatus).toBe("failed");
+});
+
 it("retains notification policy in MCP writes and future-policy task output", () => {
   const create = Schema.decodeUnknownSync(OrchestratorMcpScheduleTaskInput);
   const update = Schema.decodeUnknownSync(OrchestratorMcpUpdateScheduledTaskInput);
@@ -516,4 +562,251 @@ it("retains notification policy in MCP writes and future-policy task output", ()
   expect(
     Schema.decodeUnknownSync(codec)(Schema.encodeSync(codec)(decodeTask(task))).notificationPolicy,
   ).toBe("future");
+});
+
+// Reply schemas from origin/dev, retained to exercise older peers.
+const OrchestratorMcpResultHost = Schema.optional(Schema.String);
+const PreviousOrchestratorMcpThreadListItem = Schema.Struct({
+  threadId: ThreadId,
+  projectId: Schema.optional(ProjectId),
+  host: OrchestratorMcpResultHost,
+  title: Schema.String,
+  link: Schema.optional(Schema.String),
+  createdBy: OrchestrationV2Actor,
+  creationSource: OrchestrationV2CreationSource,
+  status: OrchestratorMcpThreadStatus,
+  latestRunId: Schema.NullOr(RunId),
+  providerInstanceId: ProviderInstanceId,
+  model: Schema.String,
+  runtimeMode: RuntimeMode,
+  interactionMode: ProviderInteractionMode,
+  linkedPullRequest: Schema.NullOr(ThreadLinkedPullRequest),
+  pullRequests: Schema.optional(Schema.Array(OrchestratorMcpThreadPullRequest)),
+  settled: Schema.Boolean,
+  settledAt: Schema.NullOr(IsoDateTime),
+  snoozed: Schema.Boolean,
+  snoozedUntil: Schema.NullOr(IsoDateTime),
+  parentThreadId: Schema.NullOr(ThreadId),
+  relationshipToParent: Schema.NullOr(Schema.Literals(["fork", "subagent"])),
+  itemCount: NonNegativeInt,
+  ...Lineage.OrchestratorMcpThreadLineageItemFields,
+  createdAt: IsoDateTime,
+  updatedAt: IsoDateTime,
+});
+
+const PreviousOrchestratorMcpThreadListResult = Schema.Struct({
+  /** Null when several projects are listed. */
+  projectId: Schema.NullOr(ProjectId),
+  host: OrchestratorMcpResultHost,
+  /** The calling thread, or null when the caller is not a GOAT thread. */
+  currentThreadId: Schema.NullOr(ThreadId),
+  threads: Schema.Array(PreviousOrchestratorMcpThreadListItem),
+  nextCursor: Schema.NullOr(NonNegativeInt),
+  total: NonNegativeInt,
+  /** For allHosts: whether more threads matched than were returned. */
+  truncated: Schema.optional(Schema.Boolean),
+  /** For allHosts: hosts that could not be listed, with why. */
+  unavailableHosts: Schema.optional(
+    Schema.Array(
+      Schema.Struct({ host: Schema.String, code: Schema.String, message: Schema.String }),
+    ),
+  ),
+});
+
+const PreviousOrchestratorMcpThreadSearchResult = Schema.Struct({
+  matches: Schema.Array(OrchestratorMcpThreadSearchMatch),
+  nextCursor: Schema.NullOr(Schema.String),
+  /** Whether an environment had more matching threads than one search scans. */
+  truncated: Schema.Boolean,
+  /** For hosts and allHosts: hosts that could not be searched, with why. */
+  unavailableHosts: Schema.optional(
+    Schema.Array(
+      Schema.Struct({ host: Schema.String, code: Schema.String, message: Schema.String }),
+    ),
+  ),
+});
+
+const PreviousOrchestratorMcpThreadDetail = Schema.Struct({
+  threadId: ThreadId,
+  projectId: ProjectId,
+  title: Schema.String,
+  link: Schema.optional(Schema.String),
+  createdBy: OrchestrationV2Actor,
+  creationSource: OrchestrationV2CreationSource,
+  status: OrchestratorMcpThreadStatus,
+  latestRunId: Schema.NullOr(RunId),
+  activeRunId: Schema.NullOr(RunId),
+  providerInstanceId: ProviderInstanceId,
+  model: Schema.String,
+  runtimeMode: RuntimeMode,
+  interactionMode: ProviderInteractionMode,
+  linkedPullRequest: Schema.NullOr(ThreadLinkedPullRequest),
+  pullRequests: Schema.optional(Schema.Array(OrchestratorMcpThreadPullRequest)),
+  titleRegeneration: Schema.NullOr(ThreadTitleRegeneration),
+  branch: Schema.NullOr(Schema.String),
+  worktreePath: Schema.NullOr(Schema.String),
+  parentThreadId: Schema.NullOr(ThreadId),
+  relationshipToParent: Schema.NullOr(Schema.Literals(["fork", "subagent"])),
+  runCount: NonNegativeInt,
+  itemCount: NonNegativeInt,
+  pendingRequestCount: NonNegativeInt,
+  archived: Schema.Boolean,
+  settled: Schema.Boolean,
+  settledAt: Schema.NullOr(IsoDateTime),
+  snoozed: Schema.Boolean,
+  snoozedUntil: Schema.NullOr(IsoDateTime),
+  ...OrchestratorMcpReconcileFields.thread,
+  createdAt: IsoDateTime,
+  updatedAt: IsoDateTime,
+});
+
+const PreviousOrchestratorMcpThreadReadResult = Schema.Struct({
+  replicaStatus: Schema.optional(ThreadReplicaStatus),
+  cloudTask: Schema.optional(OrchestratorMcpCloudTask),
+  host: OrchestratorMcpResultHost,
+  thread: PreviousOrchestratorMcpThreadDetail,
+  recentRuns: Schema.Array(OrchestratorMcpThreadRun),
+  items: Schema.Array(OrchestratorMcpThreadTimelineItem),
+  nextPosition: Schema.NullOr(NonNegativeInt),
+  hasMore: Schema.Boolean,
+  /**
+   * The latest run's structured result; null before the thread's first run.
+   * Optional because hosts running an older GOAT do not send it.
+   */
+  result: Schema.optional(Schema.NullOr(ThreadResult)),
+  ...Lineage.OrchestratorMcpThreadReadSummaryFields,
+});
+
+it("decodes list, detail and search replies across peer versions", () => {
+  const common = {
+    threadId: "thread-1",
+    projectId: "project-1",
+    title: "Example",
+    createdBy: "user",
+    creationSource: "web",
+    status: "idle",
+    latestRunId: null,
+    providerInstanceId: "codex",
+    model: "model",
+    runtimeMode: "full-access",
+    interactionMode: "default",
+    linkedPullRequest: null,
+    settled: false,
+    settledAt: null,
+    snoozed: false,
+    snoozedUntil: null,
+    parentThreadId: null,
+    relationshipToParent: null,
+    itemCount: 0,
+    createdAt: "2026-01-01T00:00:00.000Z",
+    updatedAt: "2026-01-01T00:00:00.000Z",
+  };
+  const detail = {
+    ...common,
+    activeRunId: null,
+    titleRegeneration: null,
+    branch: null,
+    worktreePath: null,
+    runCount: 0,
+    pendingRequestCount: 0,
+    archived: false,
+  };
+  const list = {
+    projectId: "project-1",
+    currentThreadId: null,
+    threads: [common],
+    nextCursor: null,
+    total: 1,
+  };
+  const read = { thread: detail, recentRuns: [], items: [], nextPosition: null, hasMore: false };
+  const search = {
+    matches: [
+      {
+        threadId: "thread-1",
+        projectId: "project-1",
+        projectTitle: "Project",
+        title: "Example",
+        status: "idle",
+        updatedAt: common.updatedAt,
+        archived: false,
+        source: "title",
+        snippet: "Example",
+        messageCreatedAt: null,
+      },
+    ],
+    nextCursor: null,
+    truncated: false,
+  };
+  const additions = {
+    blockedOnThreadWait: true,
+    pendingBackgroundTasks: [{ taskId: "task-1", kind: "command", awaited: true }],
+  };
+  const pairs = [
+    [
+      PreviousOrchestratorMcpThreadListResult,
+      OrchestratorMcpThreadListResult,
+      list,
+      { ...list, threads: [{ ...common, ...additions }] },
+    ],
+    [
+      PreviousOrchestratorMcpThreadReadResult,
+      OrchestratorMcpThreadReadResult,
+      read,
+      { ...read, thread: { ...detail, ...additions }, earlierPosition: 3 },
+    ],
+    [
+      PreviousOrchestratorMcpThreadSearchResult,
+      OrchestratorMcpThreadSearchResult,
+      search,
+      { ...search, currentThreadId: "thread-1" },
+    ],
+  ] as const;
+  for (const [previous, current, olderReply, newReply] of pairs) {
+    expect(() => Schema.decodeUnknownSync(previous)(newReply)).not.toThrow();
+    expect(() => Schema.decodeUnknownSync(current)(olderReply)).not.toThrow();
+    expect(Schema.decodeUnknownSync(current)(newReply)).toEqual(newReply);
+  }
+});
+
+it("thread reads start at the oldest item with afterPosition -1 and page back with beforePosition", () => {
+  const decode = Schema.decodeUnknownSync(OrchestratorMcpThreadReadInput);
+  expect(decode({ threadId: "thread-1", afterPosition: -1 }).afterPosition).toBe(-1);
+  expect(decode({ threadId: "thread-1", beforePosition: 4 }).beforePosition).toBe(4);
+  expect(() => decode({ threadId: "thread-1", afterPosition: -2 })).toThrow();
+  expect(() => decode({ threadId: "thread-1", beforePosition: -1 })).toThrow();
+  expect(decode({ threadId: "thread-1", maxCharsPerItem: 50_000 }).maxCharsPerItem).toBe(20_000);
+});
+
+it("rejects a nonboolean schedule binding and advertises the cross-project default", () => {
+  const base = { prompt: "Synthetic", schedule: { type: "interval", everyMs: 60000 } };
+  expect(() => decodeScheduleTaskInput({ ...base, bindToCurrentThread: "true" })).toThrow();
+  expect(JSON.stringify(Schema.toJsonSchemaDocument(OrchestratorMcpScheduleTaskInput))).toContain(
+    "true in own project, else false",
+  );
+});
+
+it("decodes a running-task next written by another version", () => {
+  const next = "Completion wakes this thread, so end your turn. Do not wait on it or poll it.";
+  expect(
+    decodeThreadWaitResult({
+      threadId: "thread-child-1",
+      runId: "run-child-1",
+      status: "running",
+      timedOut: true,
+      next,
+    }).next,
+  ).toBe(next);
+});
+
+it("decodes a running-task next in a newer host's wording", () => {
+  const next = "Completion wakes this thread. Wording a newer host sends.";
+  expect(
+    decodeThreadWaitResult({
+      threadId: "thread-child-1",
+      runId: "run-child-1",
+      status: "running",
+      timedOut: true,
+      next,
+    }).next,
+  ).toBe(next);
 });

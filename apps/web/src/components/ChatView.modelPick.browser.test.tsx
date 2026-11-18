@@ -91,3 +91,39 @@ it("sends the picked model while its thread selection save is pending", async ()
     expect(sent.some((text) => text.includes("Send immediately"))).toBe(true);
   });
 });
+
+it("shows a busy toast and does not dispatch a second message while sending", async () => {
+  const thread = threadWithHistory("thread-busy-send", 1);
+  const commands: OrchestrationV2Command[] = [];
+  let releaseSend: (result: { sequence: number }) => void = () => {};
+  const pendingSend = new Promise<{ sequence: number }>((resolve) => {
+    releaseSend = resolve;
+  });
+  using _environment = installFakeEnvironment([thread], {
+    capabilities: { serverResolvedCommandContext: true },
+    onCommand: async (command) => {
+      commands.push(command);
+      return command.type === "message.dispatch" ? pendingSend : { sequence: 2 };
+    },
+  });
+  __setClientSettingsForTests({
+    ...DEFAULT_CLIENT_SETTINGS,
+    onboardingCompletedAt: "2026-01-01T00:00:00.000Z",
+  });
+  const router = getRouter(
+    createMemoryHistory({ initialEntries: [`/${ENVIRONMENT_ID}/${thread.id}`] }),
+  );
+  await router.load();
+  await using _app = await render(<AppRoot router={router} />, { router: false });
+  await expect.element(page.getByText("Answer 0 for thread-busy-send.")).toBeVisible();
+  await page.getByTestId("composer-editor").click();
+  await userEvent.keyboard("First message{Enter}");
+  await vi.waitFor(() =>
+    expect(commands.filter((command) => command.type === "message.dispatch")).toHaveLength(1),
+  );
+  await page.getByTestId("composer-editor").click();
+  await userEvent.keyboard("Second message{Enter}");
+  await expect.element(page.getByText("Still sending your previous message.")).toBeVisible();
+  expect(commands.filter((command) => command.type === "message.dispatch")).toHaveLength(1);
+  releaseSend({ sequence: 2 });
+});

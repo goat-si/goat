@@ -1,4 +1,4 @@
-import { useRef, useState, type ReactNode } from "react";
+import { Fragment, useRef, useState, type ReactNode } from "react";
 import type { BotRosterEntry } from "@goat/client-runtime/goatBot";
 import {
   FACE_MOTION_RANK,
@@ -8,7 +8,7 @@ import {
   goatBotPreviewText,
   goatBotAccent,
 } from "@goat/client-runtime/goatBot";
-import type { BotProfile, ChannelTaskId } from "@goat/contracts";
+import { BotId, type BotProfile, type ChannelTaskId, type EnvironmentId } from "@goat/contracts";
 import {
   Platform,
   Pressable,
@@ -24,10 +24,13 @@ import { useSafeAreaInsets } from "react-native-safe-area-context";
 import { useAppearancePreferences } from "../settings/appearance/AppearancePreferencesProvider";
 import { useWorkspaceTabs } from "../workspace/WorkspaceTabsContext";
 import { Button } from "../../components/ui/Button";
+import { SymbolView } from "../../components/ui/AppSymbol";
 import { MOBILE_CHROME_MAX_FONT_SCALE } from "../../lib/typography";
 import { GoatBotFaceAvatar } from "./GoatBotFace";
 import { useMobileGoatBotFace, useMobileGoatBotFaceMotion } from "./useMobileGoatBotFace";
 import { useMobileMemberStatus } from "./useMobileMemberStatus";
+import { MobileBotRowSignalMarks } from "./MobileBotRowSignalMarks";
+import { useMobileBotRowSignals } from "./useMobileBotRowSignals";
 import { mobileGoatBotMemberPicture } from "./mobileGoatBotMembers";
 import { MobileNeedsYouStrip } from "./MobileNeedsYouStrip";
 
@@ -88,6 +91,10 @@ export function MobileBotRosterView(props: {
   slackEnabled: boolean;
   preview?: string;
   unread?: boolean;
+  /** The main bot's computer may no longer be read here (refused or removed): its tile rests. */
+  mainUnreadable?: boolean;
+  /** The main bot's computer, whose Home may govern its work signals. */
+  mainEnvironmentId?: EnvironmentId | null;
   onOpenBot: (bot: BotRosterEntry) => void;
   /** Opens one task in its bot's chat, from an ask in the Needs you strip. */
   onOpenTask?: (bot: BotRosterEntry, taskId: ChannelTaskId) => void;
@@ -102,9 +109,16 @@ export function MobileBotRosterView(props: {
     readonly hidden: ReadonlyArray<BotProfile>;
     readonly deleted: ReadonlyArray<BotProfile>;
     readonly canCreate: boolean;
+    /** Why New bot and Restore cannot be used now (the computer is offline); said to the screen reader. */
+    readonly unavailable?: string;
     readonly onNewBot: () => void;
     /** Edit, hide, show, delete or restore; the panel asks what to do. */
     readonly onLongPressBot: (bot: BotRosterEntry) => void;
+    /** Where the panel opens a row's actions as a menu around the row (Android), it draws the row. */
+    readonly menuRow?: (
+      bot: BotRosterEntry,
+      row: (onLongPress: () => void) => ReactNode,
+    ) => ReactNode;
     /** Whether this person may restore a deleted bot; its row then offers Restore. */
     readonly canRestore: boolean;
     readonly onRestoreDeleted: (bot: BotProfile) => void;
@@ -116,7 +130,16 @@ export function MobileBotRosterView(props: {
   const bottomClearance =
     Math.max(insets.bottom, useWorkspaceTabs()?.bottomClearance ?? 0) -
     (Platform.OS === "ios" ? insets.bottom : 0);
-  const mainFace = useMobileGoatBotFace(null);
+  const mainFace = useMobileGoatBotFace(
+    null,
+    props.mainUnreadable ? null : undefined,
+    undefined,
+    props.mainUnreadable,
+  );
+  const mainSignals = useMobileBotRowSignals({
+    environmentId: props.mainEnvironmentId ?? null,
+    botId: BotId.make("main"),
+  });
   const mainFaceLabel = goatBotFaceLabel(mainFace.state);
   const mainEmoji = goatBotAvatarEmoji(
     props.bots.find((bot) => bot.kind === "main")?.profile?.avatar,
@@ -130,6 +153,14 @@ export function MobileBotRosterView(props: {
     mainFace.since,
     onScreen && mainEmoji === null,
   );
+  // A row with its long press, through the panel's menu when it draws one.
+  const withMenu = (
+    bot: BotRosterEntry,
+    row: (onLongPress: (() => void) | undefined) => ReactNode,
+  ) =>
+    props.members?.menuRow
+      ? props.members.menuRow(bot, row)
+      : row(props.members ? () => props.members?.onLongPressBot(bot) : undefined);
   return (
     <ScrollView
       ref={scrollRef}
@@ -146,6 +177,7 @@ export function MobileBotRosterView(props: {
       <MobileNeedsYouStrip
         bots={props.bots}
         hidden={props.members?.hidden ?? []}
+        environmentId={props.mainEnvironmentId ?? null}
         visible={props.visible ?? true}
         onOpenAsk={props.onOpenTask ?? ((bot) => props.onOpenBot(bot))}
         onUnknownBot={props.onUnknownBot}
@@ -153,68 +185,83 @@ export function MobileBotRosterView(props: {
       {props.bots.map((bot) => {
         const key = bot.kind === "main" ? "main" : `bot:${bot.profile.botId}`;
         const selected = props.selectedKey === key;
-        const longPress = props.members ? () => props.members?.onLongPressBot(bot) : undefined;
         if (bot.kind === "main") {
           // The main bot leads the list as one tile, like a contact the person returns to most.
+          // Keyed by its computer too, so a switch closes a menu opened on the other one. Android
+          // wraps the tile in its menu, so this view re-measures when the tile moves in the list.
           return (
-            <Pressable
-              key="main"
-              ref={rowRef}
-              onLayout={measure}
-              accessibilityRole="button"
-              onPress={() => props.onOpenBot(bot)}
-              onLongPress={longPress}
-              accessibilityState={{ selected }}
-              accessibilityLabel={[
-                mainFaceLabel,
-                bot.profile?.name ?? "GOAT Bot",
-                props.unread ? "unread" : null,
-              ]
-                .filter((part) => part !== null)
-                .join(", ")}
-              className={
-                selected
-                  ? "mx-4 my-2 items-center gap-2 rounded-2xl bg-thread-selected px-4 py-4"
-                  : "mx-4 my-2 items-center gap-2 rounded-2xl px-4 py-4"
-              }
-            >
-              <GoatBotFaceAvatar
-                state={mainFace.state}
-                size={88}
-                motion={mainMotion}
-                emoji={mainEmoji}
-                surface={selected ? "selected" : "screen"}
-              />
-              <Text numberOfLines={1} className="text-base font-semibold text-foreground">
-                {bot.profile?.name ?? "GOAT Bot"}
-              </Text>
-              {props.preview ? (
-                <View className="max-w-full flex-row items-center gap-1">
-                  {props.unread ? (
-                    <View
-                      accessibilityElementsHidden
-                      className="h-2 w-2 rounded-full bg-adaptive-blue-500-400"
-                    />
+            <View key={`main:${props.mainEnvironmentId ?? ""}`} onLayout={measure}>
+              {withMenu(bot, (longPress) => (
+                <Pressable
+                  ref={rowRef}
+                  onLayout={measure}
+                  accessibilityRole="button"
+                  onPress={() => props.onOpenBot(bot)}
+                  onLongPress={longPress}
+                  accessibilityState={{ selected }}
+                  accessibilityLabel={[
+                    mainFaceLabel,
+                    bot.profile?.name ?? "GOAT Bot",
+                    props.unread ? "unread" : null,
+                    ...(mainSignals?.spoken ?? []),
+                    props.preview || null,
+                  ]
+                    .filter((part) => part !== null)
+                    .join(", ")}
+                  className={
+                    selected
+                      ? "mx-4 my-2 items-center gap-2 rounded-2xl bg-thread-selected px-4 py-4"
+                      : "mx-4 my-2 items-center gap-2 rounded-2xl px-4 py-4"
+                  }
+                >
+                  <GoatBotFaceAvatar
+                    state={mainFace.state}
+                    size={88}
+                    motion={mainMotion}
+                    emoji={mainEmoji}
+                    surface={selected ? "selected" : "screen"}
+                  />
+                  <View className="max-w-full flex-row items-center gap-2">
+                    <Text
+                      numberOfLines={1}
+                      className="shrink text-base font-semibold text-foreground"
+                    >
+                      {bot.profile?.name ?? "GOAT Bot"}
+                    </Text>
+                    <MobileBotRowSignalMarks signals={mainSignals} />
+                  </View>
+                  {props.preview ? (
+                    <View className="max-w-full flex-row items-center gap-1">
+                      {props.unread ? (
+                        <View
+                          accessibilityElementsHidden
+                          className="h-2 w-2 rounded-full bg-adaptive-blue-500-400"
+                        />
+                      ) : null}
+                      <Text numberOfLines={1} className="shrink text-sm text-foreground-muted">
+                        {props.preview}
+                      </Text>
+                    </View>
                   ) : null}
-                  <Text numberOfLines={1} className="shrink text-sm text-foreground-muted">
-                    {props.preview}
-                  </Text>
-                </View>
-              ) : null}
-              {props.slackEnabled ? (
-                <Text className="text-xs text-foreground-muted">Also in Slack</Text>
-              ) : null}
-            </Pressable>
+                  {props.slackEnabled ? (
+                    <Text className="text-xs text-foreground-muted">Also in Slack</Text>
+                  ) : null}
+                </Pressable>
+              ))}
+            </View>
           );
         }
         return (
-          <MemberRow
-            key={key}
-            bot={bot.profile}
-            selected={selected}
-            onPress={() => props.onOpenBot(bot)}
-            onLongPress={longPress}
-          />
+          <Fragment key={`${bot.profile.environmentId}:${key}`}>
+            {withMenu(bot, (longPress) => (
+              <MemberRow
+                bot={bot.profile}
+                selected={selected}
+                onPress={() => props.onOpenBot(bot)}
+                onLongPress={longPress}
+              />
+            ))}
+          </Fragment>
         );
       })}
       {props.newBotRow}
@@ -232,13 +279,16 @@ export function MobileBotRosterView(props: {
           </Pressable>
           {hiddenOpen
             ? props.members.hidden.map((profile) => (
-                <MemberRow
-                  key={profile.botId}
-                  bot={profile}
-                  hidden
-                  onPress={() => props.onOpenBot({ kind: "member", profile })}
-                  onLongPress={() => props.members?.onLongPressBot({ kind: "member", profile })}
-                />
+                <Fragment key={`${profile.environmentId}:${profile.botId}`}>
+                  {withMenu({ kind: "member", profile }, (longPress) => (
+                    <MemberRow
+                      bot={profile}
+                      hidden
+                      onPress={() => props.onOpenBot({ kind: "member", profile })}
+                      onLongPress={longPress}
+                    />
+                  ))}
+                </Fragment>
               ))
             : null}
         </View>
@@ -248,13 +298,22 @@ export function MobileBotRosterView(props: {
           <Text accessibilityRole="header" className="px-4 pt-3 text-foreground-muted">
             Deleted bots
           </Text>
+          {props.members.canRestore && props.members.unavailable !== undefined ? (
+            <Text
+              accessibilityElementsHidden
+              importantForAccessibility="no-hide-descendants"
+              className="px-4 text-sm text-foreground-muted"
+            >
+              Restore: {props.members.unavailable.replace(/^Unavailable/, "unavailable")}
+            </Text>
+          ) : null}
           {props.members.deleted.map((profile) => (
             <View key={profile.botId} className="flex-row items-center pr-4">
               <Pressable
                 accessibilityRole="button"
                 accessibilityLabel={`${profile.name}, deleted`}
                 accessibilityHint="Opens its archived conversation"
-                {...(props.members?.canRestore
+                {...(props.members?.canRestore && props.members.unavailable === undefined
                   ? { onLongPress: () => props.members?.onRestoreDeleted(profile) }
                   : {})}
                 onPress={() => props.onOpenBot({ kind: "member", profile })}
@@ -267,10 +326,23 @@ export function MobileBotRosterView(props: {
                 <Pressable
                   accessibilityRole="button"
                   accessibilityLabel={`Restore ${profile.name}`}
+                  disabled={props.members.unavailable !== undefined}
+                  accessibilityState={{ disabled: props.members.unavailable !== undefined }}
+                  {...(props.members.unavailable === undefined
+                    ? {}
+                    : { accessibilityHint: props.members.unavailable })}
                   onPress={() => props.members?.onRestoreDeleted(profile)}
                   className="min-h-[44px] min-w-[44px] items-center justify-center px-3"
                 >
-                  <Text className="font-goat-medium text-primary-text">Restore</Text>
+                  <Text
+                    className={
+                      props.members.unavailable === undefined
+                        ? "font-goat-medium text-primary-text"
+                        : "font-goat-medium text-foreground-muted"
+                    }
+                  >
+                    Restore
+                  </Text>
                 </Pressable>
               ) : null}
             </View>
@@ -279,13 +351,28 @@ export function MobileBotRosterView(props: {
       ) : null}
       <View className="px-4 py-3">
         {props.members ? (
-          <Button
-            label="New bot"
-            icon="plus"
-            disabled={!props.members.canCreate}
-            fullWidth
-            onPress={props.members.onNewBot}
-          />
+          <>
+            <Button
+              label="New bot"
+              icon="plus"
+              disabled={!props.members.canCreate}
+              fullWidth
+              {...(props.members.unavailable === undefined
+                ? {}
+                : { accessibilityHint: props.members.unavailable })}
+              onPress={props.members.onNewBot}
+            />
+            {props.members.unavailable === undefined ? null : (
+              // The hint says it to a screen reader; this says it on screen.
+              <Text
+                accessibilityElementsHidden
+                importantForAccessibility="no-hide-descendants"
+                className="pt-2 text-center text-sm text-foreground-muted"
+              >
+                {props.members.unavailable}
+              </Text>
+            )}
+          </>
         ) : (
           <Button
             label="New bot · Coming soon"
@@ -314,11 +401,23 @@ function MemberRow(props: {
   readonly onLongPress: (() => void) | undefined;
 }) {
   const { bot } = props;
-  const { waitingCount, latest, unread, status } = useMobileMemberStatus(bot);
+  const member = useMobileMemberStatus(bot);
+  const { waitingState, latest, unread, status } = member;
+  const signals = useMobileBotRowSignals({
+    environmentId: bot.environmentId,
+    botId: bot.botId,
+    waiting: waitingState,
+  });
+  // Where Home governs, a count that could not be read is marked unavailable, not shown stale.
+  const stale = signals !== null && waitingState === "unavailable";
+  const waitingCount = stale ? 0 : member.waitingCount;
   const face = useMobileGoatBotFace(
     null,
-    { environmentId: bot.environmentId, threadId: bot.sessionThreadId },
-    { status },
+    // A member this phone may no longer read rests: its retained conversation says nothing.
+    member.unreadable ? null : { environmentId: bot.environmentId, threadId: bot.sessionThreadId },
+    // A status whose refresh failed is not read for the face either; it keeps the face it had.
+    { status: stale ? null : status },
+    member.unreadable,
   );
   const latestText = latest === undefined ? "" : goatBotPreviewText(latest.text);
   const line =
@@ -333,6 +432,7 @@ function MemberRow(props: {
     bot.name,
     props.hidden ? "hidden" : null,
     unread ? "unread" : null,
+    ...(signals?.spoken ?? []),
     line || null,
   ]
     .filter((part) => part !== null)
@@ -363,14 +463,34 @@ function MemberRow(props: {
           <Text numberOfLines={1} className="shrink font-semibold text-foreground">
             {bot.name}
           </Text>
+          <MobileBotRowSignalMarks signals={signals} />
           {waitingCount > 0 ? (
-            <Text
+            // The bubble sets waiting apart from the unread pill by shape; on a selected light row
+            // the warning colour falls under 4.5:1, so a selected row's mark takes its text colour.
+            <View
               accessibilityElementsHidden
               importantForAccessibility="no-hide-descendants"
-              className="text-xs font-semibold text-foreground"
+              className="flex-row items-center gap-0.5"
             >
-              {waitingCount}
-            </Text>
+              <SymbolView
+                name="questionmark.bubble"
+                size={13}
+                tintColorClassName={
+                  props.selected === true
+                    ? "accent-thread-selected-foreground"
+                    : "accent-warning-foreground"
+                }
+              />
+              <Text
+                className={
+                  props.selected === true
+                    ? "text-xs font-semibold text-thread-selected-foreground"
+                    : "text-xs font-semibold text-warning-foreground"
+                }
+              >
+                {waitingCount}
+              </Text>
+            </View>
           ) : null}
         </View>
         {line ? (

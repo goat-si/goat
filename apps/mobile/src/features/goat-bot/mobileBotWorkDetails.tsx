@@ -1,8 +1,41 @@
-import type { BotWorkTask } from "@goat/client-runtime/goatBot";
-import type { BotThreadRow, EnvironmentId, ThreadId } from "@goat/contracts";
-import { Pressable, Text } from "react-native";
+import type { BotWorkTask, HomeCurrentOpenableLink } from "@goat/client-runtime/goatBot";
+import type { BotThreadRow, BotWorkResult, EnvironmentId, ThreadId } from "@goat/contracts";
+import { Text } from "react-native";
 import type { MobileBotHomeItem } from "./MobileBotTaskList";
 import { MobileBotRemoteWork } from "./MobileBotRemoteWork";
+import { MobileWorkThreadLink } from "./MobileWorkThreadLink";
+
+const workThreadName = (title: string | undefined) => title?.trim() || "Open work thread";
+const threadKey = (thread: { environmentId: EnvironmentId; threadId: ThreadId }) =>
+  JSON.stringify([thread.environmentId, thread.threadId]);
+
+type WorkThread = { readonly environmentId: EnvironmentId; readonly threadId: ThreadId };
+/**
+ * A task's work thread as a link: a coding thread by its title (as on web), else a plain label.
+ * The worker and a thread with no coding row are named after the task to a screen reader.
+ */
+export function workThreadLink(input: {
+  thread: WorkThread;
+  worker: WorkThread | undefined;
+  rows: ReadonlyArray<BotThreadRow | BotWorkResult["codingRows"][number]>;
+  taskTitle: string;
+}) {
+  const { thread, worker } = input;
+  const isWorker =
+    worker?.environmentId === thread.environmentId && worker.threadId === thread.threadId;
+  const coding = isWorker
+    ? undefined
+    : input.rows.find(
+        (row) =>
+          row.kind === "coding" &&
+          row.environmentId === thread.environmentId &&
+          row.threadId === thread.threadId,
+      );
+  if (coding?.kind !== "coding")
+    return { text: "Open work thread", label: "Work thread: " + input.taskTitle };
+  const text = workThreadName(coding.title);
+  return { text, label: "GOAT thread: " + text };
+}
 
 export function mobileBotWorkDetails(props: {
   entry: BotWorkTask;
@@ -15,43 +48,66 @@ export function mobileBotWorkDetails(props: {
   pending: boolean;
   /** How many children the read returned for this task; null when it left the task out. */
   groupChildren: number | null;
+  /**
+   * For a task in the bot's current list, the links Home's shared value opens for it (the same
+   * value that hides those threads from Threads); null for older work or before that list is read.
+   */
+  currentLinks?: ReadonlyArray<HomeCurrentOpenableLink> | null;
   openThread: (thread: { environmentId: EnvironmentId; id: ThreadId }) => void;
 }): MobileBotHomeItem[] {
   const { entry, openThread } = props;
   const closed = !props.openable;
   const id = entry.row.task.taskId;
+  const currentLinks = props.currentLinks ?? null;
+  const worker = entry.row.worker;
+  // The list's own threads for the task; anything else in entry.threads came from the child read.
+  const listed = new Set(
+    [
+      ...(worker === undefined ? [] : [worker]),
+      ...props.rows.flatMap((row) => (row.kind === "coding" && row.taskId === id ? [row] : [])),
+      ...(currentLinks ?? []),
+    ].map(threadKey),
+  );
+  const threads =
+    currentLinks === null
+      ? entry.threads
+      : [
+          ...currentLinks.filter((link) => link.kind !== "remote"),
+          ...entry.threads.filter((thread) => !listed.has(threadKey(thread))),
+        ];
   const items: MobileBotHomeItem[] = [
-    ...entry.threads.map((thread) => ({
+    ...threads.map((thread) => ({
       key: JSON.stringify(["task-detail", id, "thread", thread.environmentId, thread.threadId]),
-      render: () => {
-        const coding = props.rows.find(
-          (row) =>
-            row.kind === "coding" &&
-            row.environmentId === thread.environmentId &&
-            row.threadId === thread.threadId,
-        );
-        const title = coding?.kind === "coding" ? coding.title || "GOAT thread" : null;
-        return (
-          <Pressable
-            accessibilityRole="button"
-            accessibilityLabel={
-              title === null ? "Work thread: " + entry.row.task.title : "GOAT thread: " + title
-            }
-            accessibilityState={{ disabled: closed }}
-            disabled={closed}
-            onPress={() => openThread({ environmentId: thread.environmentId, id: thread.threadId })}
-            className="min-h-[44px] justify-center"
-          >
-            <Text numberOfLines={1} className="text-foreground underline">
-              {title ?? "Open work thread"}
-            </Text>
-          </Pressable>
-        );
-      },
+      render: () => (
+        <MobileWorkThreadLink
+          link={workThreadLink({
+            thread,
+            worker,
+            rows: props.rows,
+            taskTitle: entry.row.task.title,
+          })}
+          disabled={closed}
+          onPress={() => openThread({ environmentId: thread.environmentId, id: thread.threadId })}
+        />
+      ),
     })),
     ...entry.remote.map((item) => ({
       key: JSON.stringify(["task-detail", id, "remote", item.childWorkId]),
-      render: () => <MobileBotRemoteWork item={item} onOpenThread={openThread} disabled={closed} />,
+      render: () => (
+        <MobileBotRemoteWork
+          item={item}
+          onOpenThread={openThread}
+          disabled={closed}
+          // A current task's remote work opens exactly when Home's shared value links it.
+          {...(currentLinks === null
+            ? {}
+            : {
+                openable: currentLinks.some(
+                  (link) => link.kind === "remote" && link.remoteChildWorkId === item.childWorkId,
+                ),
+              })}
+        />
+      ),
     })),
     ...entry.subagents.map((agent) => ({
       key: JSON.stringify(["task-detail", id, "subagent", agent.childWorkId]),

@@ -1,4 +1,8 @@
-import { ASSISTANT_CITATION_CONTEXT_LENGTH, type AssistantCitation } from "@goat/contracts";
+import {
+  ASSISTANT_CITATION_CONTEXT_LENGTH,
+  type AssistantCitation,
+  RESPONSE_CONTEXT_OPENING_MAX_CHARS,
+} from "@goat/contracts";
 
 import { mathWrapperOf } from "../markdown-clipboard";
 
@@ -230,6 +234,22 @@ export function captureAssistantTextSelection(
 
   const captured = captureRenderedTextSelection(source, selection);
   return captured === null ? null : { source, ...captured };
+}
+
+/**
+ * The opening of a response, which a reply carries. Falls back to the raw text when the source
+ * is virtualized away or renders no text, as in an image-only response.
+ */
+export function captureAssistantMessageOpening(
+  source: HTMLElement | null,
+  fallbackText: string,
+): AssistantTextSelector | null {
+  const rendered = source ? readAssistantText(source).text : "";
+  const text = rendered.trim() ? rendered : fallbackText;
+  const rawStart = text.length - text.trimStart().length;
+  let rawEnd = Math.min(text.trimEnd().length, rawStart + RESPONSE_CONTEXT_OPENING_MAX_CHARS);
+  if (splitsSurrogatePair(text, rawEnd)) rawEnd -= 1;
+  return createAssistantTextSelector(text, rawStart, rawEnd);
 }
 
 /** Captures visible text within one rendered surface, without claiming source line numbers. */

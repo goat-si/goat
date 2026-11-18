@@ -38,6 +38,8 @@ import {
   serverProviderCliFields,
 } from "./serverProviderState.ts";
 
+export * from "./serverProcessDiagnostics.ts";
+
 const KeybindingsMalformedConfigIssue = Schema.Struct({
   kind: Schema.Literal("keybindings.malformed-config"),
   message: TrimmedNonEmptyString,
@@ -96,6 +98,8 @@ export const ServerProviderAuth = Schema.Struct({
   subscriptionSharing: Schema.optional(Schema.Boolean),
   profileId: Schema.optional(TrimmedNonEmptyString),
   workspaceId: Schema.optional(TrimmedNonEmptyString),
+  /** Origin of the custom endpoint the instance sends its requests to. */
+  endpoint: Schema.optional(TrimmedNonEmptyString),
 });
 export type ServerProviderAuth = typeof ServerProviderAuth.Type;
 
@@ -109,6 +113,9 @@ export const ServerProviderModel = Schema.Struct({
   isCustom: Schema.Boolean,
   isDefault: Schema.optional(Schema.Boolean),
   isLegacy: Schema.optional(Schema.Boolean),
+  // False when the provider can run this model in sessions but not for
+  // application text generation. Absent means supported.
+  supportsTextGeneration: Schema.optional(Schema.Boolean),
   capabilities: Schema.NullOr(ModelCapabilities),
 });
 export type ServerProviderModel = typeof ServerProviderModel.Type;
@@ -155,6 +162,11 @@ export const ServerProviderWorkspaceSnapshot = Schema.Struct({
   slashCommandsPending: Schema.optional(Schema.Boolean),
   skills: Schema.Array(ServerProviderSkill),
   optionDescriptors: Schema.optional(Schema.Array(ProviderOptionDescriptor)),
+  // Differences from the provider's machine `models`, which a catalog can make large: entries the
+  // machine lacks or lists differently, and machine slugs this folder does not list.
+  models: Schema.optional(Schema.Array(ServerProviderModel)),
+  removedModels: Schema.optional(Schema.Array(TrimmedNonEmptyString)),
+  modelsPending: Schema.optional(Schema.Boolean),
 });
 export type ServerProviderWorkspaceSnapshot = typeof ServerProviderWorkspaceSnapshot.Type;
 
@@ -165,6 +177,13 @@ export function isProviderWorkspaceSnapshotCurrent(
   nowMs: number,
 ): boolean {
   return nowMs - Date.parse(snapshot.checkedAt) < PROVIDER_WORKSPACE_SNAPSHOT_TTL_MS;
+}
+
+/** A pending snapshot keeps what it found before and is rescanned before its TTL. */
+export function isProviderWorkspaceSnapshotPending(
+  snapshot: Pick<ServerProviderWorkspaceSnapshot, "slashCommandsPending" | "modelsPending">,
+): boolean {
+  return snapshot.slashCommandsPending === true || snapshot.modelsPending === true;
 }
 
 /** Unavailable snapshots must set installed and enabled false. */
@@ -310,6 +329,10 @@ export const isProviderAvailable = (snapshot: ServerProvider): boolean =>
 export const isProviderTextGenerationCapable = (snapshot: ServerProvider): boolean =>
   snapshot.supportsTextGeneration !== false;
 
+/** A model the provider runs in sessions only, such as a Pi extension model. Absent means supported. */
+export const isModelTextGenerationCapable = (snapshot: ServerProvider, model: string): boolean =>
+  snapshot.models.find((candidate) => candidate.slug === model)?.supportsTextGeneration !== false;
+
 export const OtlpEndpointSource = Schema.Literals(["environment", "bootstrap", "settings"]);
 export type OtlpEndpointSource = typeof OtlpEndpointSource.Type;
 
@@ -429,117 +452,6 @@ export const ServerTraceDiagnosticsResult = Schema.Struct({
   ),
 });
 export type ServerTraceDiagnosticsResult = typeof ServerTraceDiagnosticsResult.Type;
-
-export const ServerProcessSignal = Schema.Literals(["SIGINT", "SIGKILL"]);
-export type ServerProcessSignal = typeof ServerProcessSignal.Type;
-
-export const ServerProcessDiagnosticsEntry = Schema.Struct({
-  pid: PositiveInt,
-  startTimeMs: NonNegativeInt,
-  ppid: NonNegativeInt,
-  pgid: Schema.Option(Schema.Int),
-  status: TrimmedNonEmptyString,
-  cpuPercent: Schema.Number,
-  rssBytes: NonNegativeInt,
-  elapsed: TrimmedNonEmptyString,
-  command: TrimmedNonEmptyString,
-  depth: NonNegativeInt,
-  childPids: Schema.Array(PositiveInt),
-});
-export type ServerProcessDiagnosticsEntry = typeof ServerProcessDiagnosticsEntry.Type;
-
-export const ServerProcessDiagnosticsResult = Schema.Struct({
-  serverPid: PositiveInt,
-  readAt: Schema.DateTimeUtc,
-  processCount: NonNegativeInt,
-  totalRssBytes: NonNegativeInt,
-  totalCpuPercent: Schema.Number,
-  processes: Schema.Array(ServerProcessDiagnosticsEntry),
-  error: Schema.Option(
-    Schema.Struct({
-      message: TrimmedNonEmptyString,
-    }),
-  ),
-});
-export type ServerProcessDiagnosticsResult = typeof ServerProcessDiagnosticsResult.Type;
-
-export const ServerProcessResourceHistoryInput = Schema.Struct({
-  windowMs: NonNegativeInt,
-  bucketMs: NonNegativeInt,
-});
-export type ServerProcessResourceHistoryInput = typeof ServerProcessResourceHistoryInput.Type;
-
-export const ServerProcessResourceHistoryBucket = Schema.Struct({
-  startedAt: Schema.DateTimeUtc,
-  endedAt: Schema.DateTimeUtc,
-  avgCpuPercent: Schema.Number,
-  maxCpuPercent: Schema.Number,
-  maxRssBytes: NonNegativeInt,
-  maxProcessCount: NonNegativeInt,
-});
-export type ServerProcessResourceHistoryBucket = typeof ServerProcessResourceHistoryBucket.Type;
-
-export const ServerProcessResourceHistorySummary = Schema.Struct({
-  processKey: TrimmedNonEmptyString,
-  pid: PositiveInt,
-  ppid: NonNegativeInt,
-  command: TrimmedNonEmptyString,
-  depth: NonNegativeInt,
-  isServerRoot: Schema.Boolean,
-  firstSeenAt: Schema.DateTimeUtc,
-  lastSeenAt: Schema.DateTimeUtc,
-  currentCpuPercent: Schema.Number,
-  avgCpuPercent: Schema.Number,
-  maxCpuPercent: Schema.Number,
-  cpuSecondsApprox: Schema.Number,
-  currentRssBytes: NonNegativeInt,
-  maxRssBytes: NonNegativeInt,
-  sampleCount: NonNegativeInt,
-});
-export type ServerProcessResourceHistorySummary = typeof ServerProcessResourceHistorySummary.Type;
-
-export const ServerProcessResourceHistoryFailureTag = Schema.Literals([
-  "ProcessDiagnosticsQueryTimeoutError",
-  "ProcessDiagnosticsQueryFailedError",
-  "ProcessDiagnosticsServerProcessSignalError",
-  "ProcessDiagnosticsNotDescendantError",
-  "ProcessDiagnosticsSignalFailedError",
-]);
-export type ServerProcessResourceHistoryFailureTag =
-  typeof ServerProcessResourceHistoryFailureTag.Type;
-
-export const ServerProcessResourceHistoryResult = Schema.Struct({
-  readAt: Schema.DateTimeUtc,
-  windowMs: NonNegativeInt,
-  bucketMs: NonNegativeInt,
-  sampleIntervalMs: NonNegativeInt,
-  retainedSampleCount: NonNegativeInt,
-  totalCpuSecondsApprox: Schema.Number,
-  buckets: Schema.Array(ServerProcessResourceHistoryBucket),
-  topProcesses: Schema.Array(ServerProcessResourceHistorySummary),
-  error: Schema.Option(
-    Schema.Struct({
-      failureTag: ServerProcessResourceHistoryFailureTag,
-      message: TrimmedNonEmptyString,
-    }),
-  ),
-});
-export type ServerProcessResourceHistoryResult = typeof ServerProcessResourceHistoryResult.Type;
-
-export const ServerSignalProcessInput = Schema.Struct({
-  pid: PositiveInt,
-  startTimeMs: NonNegativeInt,
-  signal: ServerProcessSignal,
-});
-export type ServerSignalProcessInput = typeof ServerSignalProcessInput.Type;
-
-export const ServerSignalProcessResult = Schema.Struct({
-  pid: PositiveInt,
-  signal: ServerProcessSignal,
-  signaled: Schema.Boolean,
-  message: Schema.Option(TrimmedNonEmptyString),
-});
-export type ServerSignalProcessResult = typeof ServerSignalProcessResult.Type;
 
 export const EnvironmentThemeColor = Schema.String.check(
   Schema.isPattern(/^#(?:[0-9a-fA-F]{3}|[0-9a-fA-F]{6})$/),

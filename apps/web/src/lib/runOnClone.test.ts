@@ -2,7 +2,10 @@ import { EnvironmentId, ProjectId, type ScopedProjectRef } from "@goat/contracts
 import { describe, expect, it, vi } from "vite-plus/test";
 
 const state = vi.hoisted(() => ({
-  addProjectToMachine: vi.fn((_input: { readonly projectId: string }) => Promise.resolve()),
+  // Resolves with the cloning project, which is the requested one unless a stranded one owns the folder.
+  addProjectToMachine: vi.fn((input: { readonly projectId: string }) =>
+    Promise.resolve(input.projectId),
+  ),
   arrive: new Map<string, (project: unknown) => void>(),
 }));
 

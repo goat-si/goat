@@ -10,6 +10,7 @@ import {
   EnvironmentAuthorizationError,
   AuthStandardClientScopes,
   type AuthAccessTokenResult,
+  type AuthOtherClientSessionsRevokeResult,
   type AuthBrowserSessionResult,
   type AuthClientMetadata,
   type AuthClientSession,
@@ -32,7 +33,7 @@ import {
 } from "@goat/contracts";
 import { encodeOAuthScope } from "@goat/shared/oauthScope";
 import * as Context from "effect/Context";
-import * as Crypto from "effect/Crypto";
+import * as Digest from "effect/crypto/Digest";
 import * as DateTime from "effect/DateTime";
 import * as Duration from "effect/Duration";
 import * as Effect from "effect/Effect";
@@ -40,6 +41,7 @@ import * as Layer from "effect/Layer";
 import * as Option from "effect/Option";
 import * as Redacted from "effect/Redacted";
 import * as Schema from "effect/Schema";
+import type * as Scope from "effect/Scope";
 import * as HttpServerRequest from "effect/http/HttpServerRequest";
 
 import * as ServerEnvironment from "../environment/ServerEnvironment.ts";
@@ -56,8 +58,10 @@ import { legacyScopedSessionCookieName } from "./utils.ts";
 import { verifyRequestDpopProof } from "./dpop.ts";
 import { DESKTOP_RENDERER_ORIGINS } from "../httpCors.ts";
 import * as SqlitePersistence from "../persistence/Sqlite.ts";
+import { requestUrl } from "../requestUrl.ts";
 import { MCP_CLIENT_SUBJECT } from "./mcpClientSubject.ts";
 import { mcpClientScopes } from "./mcpClientScopes.ts";
+import type { SessionEnd } from "./SessionEndLatches.ts";
 import { ADMINISTRATIVE_BOOTSTRAP_SUBJECT, canDelegateHubProxy } from "./hubProxyDelegation.ts";
 
 export { mcpClientScopes };
@@ -100,6 +104,7 @@ export interface McpClientSession {
   readonly reauthorize?: (
     required: ReadonlyArray<AuthEnvironmentScope>,
   ) => Effect.Effect<void, EnvironmentAuthorizationError>;
+  readonly sessionEnd?: SessionEnd;
 }
 
 export interface AuthenticatedSession {
@@ -221,7 +226,7 @@ export class EnvironmentAuth extends Context.Service<
     ) => Effect.Effect<boolean, ServerAuthInternalError>;
     readonly revokeOtherSessionsExcept: (
       sessionId: AuthSessionId,
-    ) => Effect.Effect<number, ServerAuthInternalError>;
+    ) => Effect.Effect<AuthOtherClientSessionsRevokeResult, ServerAuthInternalError>;
     readonly listClientSessions: (
       currentSessionId: AuthSessionId,
     ) => Effect.Effect<ReadonlyArray<AuthClientSession>, ServerAuthInternalError>;
@@ -231,7 +236,7 @@ export class EnvironmentAuth extends Context.Service<
     ) => Effect.Effect<boolean, ServerAuthForbiddenOperationError | ServerAuthInternalError>;
     readonly revokeOtherClientSessions: (
       currentSessionId: AuthSessionId,
-    ) => Effect.Effect<number, ServerAuthInternalError>;
+    ) => Effect.Effect<AuthOtherClientSessionsRevokeResult, ServerAuthInternalError>;
     readonly authenticateHttpRequest: (
       request: HttpServerRequest.HttpServerRequest,
     ) => Effect.Effect<AuthenticatedSession, ServerAuthCredentialError | ServerAuthInternalError>;
@@ -250,7 +255,11 @@ export class EnvironmentAuth extends Context.Service<
     ) => Effect.Effect<string, ServerAuthInternalError>;
     readonly authenticateMcpClient: (
       request: HttpServerRequest.HttpServerRequest,
-    ) => Effect.Effect<McpClientSession, ServerAuthCredentialError | ServerAuthInternalError>;
+    ) => Effect.Effect<
+      McpClientSession,
+      ServerAuthCredentialError | ServerAuthInternalError,
+      Scope.Scope
+    >;
     readonly issueMcpClientSession: (input: {
       readonly label: string;
       readonly access: AuthMcpClientAccess;
@@ -427,7 +436,7 @@ export const make = Effect.gen(function* () {
   const bootstrapCredentials = yield* PairingGrantStore.PairingGrantStore;
   const sessions = yield* SessionStore.SessionStore;
   const secretStore = yield* ServerSecretStore.ServerSecretStore;
-  const crypto = yield* Crypto.Crypto;
+  const digest = yield* Digest.Digest;
   const descriptor = yield* policy.getDescriptor();
   const config = yield* ServerConfig.ServerConfig;
   const devAuth = resolveReusableDevAuth(config);
@@ -516,7 +525,7 @@ export const make = Effect.gen(function* () {
             expectedAccessToken: dpopToken,
           }).pipe(
             Effect.provideService(ServerSecretStore.ServerSecretStore, secretStore),
-            Effect.provideService(Crypto.Crypto, crypto),
+            Effect.provideService(Digest.Digest, digest),
             Effect.as(session),
           );
         }
@@ -925,10 +934,10 @@ export const make = Effect.gen(function* () {
 
   const authenticateWebSocketUpgrade: EnvironmentAuth["Service"]["authenticateWebSocketUpgrade"] =
     Effect.fn("EnvironmentAuth.authenticateWebSocketUpgrade")(function* (request, use) {
-      const requestUrl = HttpServerRequest.toURL(request);
-      if (Option.isSome(requestUrl)) {
+      const url = requestUrl(request);
+      if (Option.isSome(url)) {
         const query = yield* decodeWebSocketUpgradeQuery(
-          Object.fromEntries(requestUrl.value.searchParams),
+          Object.fromEntries(url.value.searchParams),
         ).pipe(Effect.orDie);
         const websocketTicket = query.wsTicket && Redacted.value(query.wsTicket);
         if (websocketTicket && websocketTicket.trim().length > 0) {
@@ -959,7 +968,7 @@ export const make = Effect.gen(function* () {
               expectedAccessToken: websocketTicket,
             }).pipe(
               Effect.provideService(ServerSecretStore.ServerSecretStore, secretStore),
-              Effect.provideService(Crypto.Crypto, crypto),
+              Effect.provideService(Digest.Digest, digest),
             );
           }
           return ConnectHubCredentials.authenticatedSession(session);
@@ -971,9 +980,9 @@ export const make = Effect.gen(function* () {
   const authenticateMcpClient: EnvironmentAuth["Service"]["authenticateMcpClient"] = (request) => {
     const token = parseBearerToken(request);
     if (token === null) return Effect.fail(new ServerAuthMissingCredentialError({}));
-    return sessions.verify(token, connectionOf(request)).pipe(
+    return sessions.admitMcpCall(token, connectionOf(request)).pipe(
       mapSessionVerificationErrors,
-      Effect.flatMap((session) =>
+      Effect.flatMap(({ session, sessionEnd }) =>
         session.subject === MCP_CLIENT_SUBJECT && session.method === "bearer-access-token"
           ? sessions.markUsed(session.sessionId).pipe(
               Effect.as({
@@ -987,6 +996,7 @@ export const make = Effect.gen(function* () {
                   ? { childSetupPurpose: session.childSetupPurpose }
                   : {}),
                 reauthorize: reauthorizeSession(sessions, session.sessionId),
+                sessionEnd,
                 approvals:
                   session.scopes.includes(AuthOrchestrationOperateScope) &&
                   session.scopes.includes(AuthOrchestrationApproveScope),
@@ -1154,7 +1164,7 @@ export const layer = Layer.effect(EnvironmentAuth, make).pipe(
   Layer.provideMerge(HubConnectAccess.layer),
   Layer.provideMerge(EnvironmentAuthPolicy.layer),
 );
-const layerStorage = Layer.mergeAll(ServerSecretStore.layer, SqlitePersistence.layerConfig);
+const layerStorage = Layer.mergeAll(ServerSecretStore.layer, SqlitePersistence.layerCliConfig);
 export const layerRuntime = layer.pipe(
   Layer.provideMerge(layerStorage),
   Layer.provideMerge(ServerEnvironment.layerIdentity),

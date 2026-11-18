@@ -38,7 +38,7 @@ function readHostSystemLocale(): string | null {
   return window.desktopBridge?.getSystemLocale?.() ?? null;
 }
 
-const timestampLocale = resolveTimestampLocale(readHostSystemLocale());
+export const timestampLocale = resolveTimestampLocale(readHostSystemLocale());
 
 const WEEKDAY_INDEXES = [0, 1, 2, 3, 4, 5, 6] as const;
 type WeekdayIndex = (typeof WEEKDAY_INDEXES)[number];
@@ -135,6 +135,13 @@ export function formatChatTimestampTooltip(
   const month = monthNameFormatter.format(date);
   const year = date.getFullYear();
   return `${time}, ${day}${ordinalSuffix(day)} ${month} ${year}`;
+}
+
+export function formatFullTimestamp(isoDate: string, timestampFormat: TimestampFormat): string {
+  return new Date(isoDate).toLocaleString(
+    undefined,
+    timestampFormat === "locale" ? undefined : { hour12: timestampFormat === "12-hour" },
+  );
 }
 
 export function formatShortTimestamp(isoDate: string, timestampFormat: TimestampFormat): string {

@@ -22,11 +22,10 @@ export function cloneForRunOn(input: AddProjectToMachineInput): Promise<RunOnClo
   const key = [input.target.environmentId, input.destinationPath, input.remoteUrl].join("\n");
   const existing = pending.get(key);
   if (existing) return existing;
-  const ref = scopeProjectRef(input.target.environmentId, input.projectId);
-  const started = addProjectToMachine(input).then(() => ({
-    ref,
-    arrived: waitForProject(ref).catch(() => null),
-  }));
+  const started = addProjectToMachine(input).then((projectId) => {
+    const ref = scopeProjectRef(input.target.environmentId, projectId);
+    return { ref, arrived: waitForProject(ref).catch(() => null) };
+  });
   pending.set(key, started);
   void started
     .then(

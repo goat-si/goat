@@ -42,3 +42,24 @@ it("ignores composing keys in the search", async () => {
     expect(screen.router?.state.location.pathname).toBe("/settings/appearance"),
   );
 });
+
+it("tabs through settings sections and moves focus with arrow keys", async () => {
+  await page.viewport(1280, 800);
+  await using _screen = await render(
+    <SidebarProvider defaultOpen>
+      <SettingsSidebarNav pathname="/settings/general" />
+    </SidebarProvider>,
+    { router: "/settings/general" },
+  );
+  const sections = Array.from(document.querySelectorAll<HTMLElement>("[data-settings-section]"));
+  expect(sections.length).toBeGreaterThan(1);
+  await userEvent.click(page.getByRole("combobox", { name: "Search settings" }));
+  for (const section of sections) {
+    await userEvent.tab();
+    expect(document.activeElement).toBe(section);
+  }
+  sections[0]?.focus();
+  await userEvent.keyboard("{ArrowDown}");
+  expect(document.activeElement).toBe(sections[1]);
+  expect(page.getByRole("tree").query()).toBeNull();
+});

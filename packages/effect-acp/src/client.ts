@@ -1,3 +1,7 @@
+import {
+  decodeNoticeUpdate,
+  normalizeV1SessionUpdate,
+} from "./_internal/normalizeV1SessionUpdate.ts";
 import * as Context from "effect/Context";
 import * as Deferred from "effect/Deferred";
 import * as Effect from "effect/Effect";
@@ -29,16 +33,6 @@ import {
 import { makeChildStdio, makeTerminationError } from "./_internal/stdio.ts";
 const decodeElicitationRequest = Schema.decodeUnknownEffect(
   Schema.Union([AcpSchemaV2.CreateElicitationRequest, AcpSchemaV1.CreateElicitationRequest]),
-);
-// ACP session notices postdate the pinned v1.21 and v2 alpha.3 schemas, so they arrive as unknown updates.
-const decodeNoticeUpdate = Schema.decodeUnknownOption(
-  Schema.Struct({
-    sessionUpdate: Schema.Literal("notice"),
-    severity: Schema.String,
-    title: Schema.NonEmptyString,
-    description: Schema.optionalKey(Schema.NullOr(Schema.String)),
-    _meta: Schema.optionalKey(Schema.NullOr(Schema.Record(Schema.String, Schema.Json))),
-  }),
 );
 
 export interface AcpClientOptions {
@@ -503,41 +497,6 @@ function normalizeSessionUpdate(
       };
     }
   }
-}
-
-function normalizeV1SessionUpdate(
-  notification: AcpSchemaV1.SessionNotification,
-): AcpSchema.SessionNotification {
-  // v1 passes unknown updates through raw, so a malformed notice must not reach consumers as one.
-  if ((notification.update.sessionUpdate as string) === "notice") {
-    const notice = decodeNoticeUpdate(notification.update);
-    return {
-      ...notification,
-      update: Option.isSome(notice)
-        ? notice.value
-        : {
-            sessionUpdate: "_t3_unknown",
-            originalSessionUpdate: "notice",
-            raw: notification.update,
-          },
-    };
-  }
-  if (notification.update.sessionUpdate !== "available_commands_update") {
-    return notification as unknown as AcpSchema.SessionNotification;
-  }
-  return {
-    ...notification,
-    update: {
-      ...notification.update,
-      availableCommands: notification.update.availableCommands.map((command) => {
-        const { input, ...rest } = command;
-        return {
-          ...rest,
-          ...(input == null ? {} : { input: { type: "text" as const, hint: input.hint } }),
-        };
-      }),
-    },
-  };
 }
 
 function toV2McpServer(server: AcpSchema.McpServer): AcpSchemaV2.McpServer {

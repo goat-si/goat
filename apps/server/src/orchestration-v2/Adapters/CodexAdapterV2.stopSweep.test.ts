@@ -424,7 +424,7 @@ describe("Codex Stop that fails after it ended the turn (#1654)", () => {
 
   // Codex accepted the child's interrupt but sent no terminal notification. A later
   // Stop of the root still has no native confirmation that the child stopped.
-  it.effect("keeps a subagent running under a turn an earlier successful Stop forced", () =>
+  it.effect("keeps a subagent running under a turn an earlier unconfirmed Stop left open", () =>
     Effect.scoped(
       Effect.gen(function* () {
         const root = "stop-earlier-forced";
@@ -472,11 +472,13 @@ describe("Codex Stop that fails after it ended the turn (#1654)", () => {
           },
         });
         interrupt(f, 4, child, "child-turn");
+        // The child's turn is still open, so the root's Stop reaches it again.
         interrupt(f, 5, root, "turn-1");
+        interrupt(f, 6, child, "child-turn");
         f.entries.push(turn(root, "turn-1", "interrupted"));
-        terminalSurvives(f, root, 6);
-        terminalSurvives(f, root, 8);
-        yield* f.turnStart(10, 2, false);
+        terminalSurvives(f, root, 7);
+        terminalSurvives(f, root, 9);
+        yield* f.turnStart(11, 2, false);
         f.turnCompleted(2);
         const replay = yield* f.open;
         yield* replay.startTurn(1);
@@ -496,8 +498,20 @@ describe("Codex Stop that fails after it ended the turn (#1654)", () => {
           Effect.forkChild({ startImmediately: true }),
         );
         yield* TestClock.adjust("10 seconds");
-        assert.isTrue(Exit.isSuccess(yield* Fiber.join(childStop)));
-        const stopped = yield* stop(replay, "turn-1", true);
+        const childStopped = yield* Fiber.join(childStop);
+        assert.isTrue(Exit.isFailure(childStopped));
+        assert.instanceOf(
+          Exit.isFailure(childStopped) ? Cause.squash(childStopped.cause) : undefined,
+          ProviderAdapter.ProviderAdapterInterruptTimeoutError,
+        );
+        // The child never confirms, so the root's Stop waits out its confirm window. Each terminate
+        // has a 10 s limit of its own, so the first one finishes before the window ends.
+        const rootStop = yield* stop(replay, "turn-1", true).pipe(
+          Effect.forkChild({ startImmediately: true }),
+        );
+        yield* TestClock.adjust("9 seconds");
+        yield* TestClock.adjust("1 second");
+        const stopped = yield* Fiber.join(rootStop);
         assert.propertyVal(
           stopCause(stopped),
           "detail",

@@ -46,8 +46,20 @@ import {
 import { useSettingsEnvironmentFilter } from "./settings-environment-filter";
 import { filterSettingsSections } from "./settings-search";
 import { NativePrimaryColumnContext } from "../../native/v5-workspace-context";
+import { I18nProvider, useGT, useLanguagePreference } from "../../i18n/I18nProvider";
+import { nativeLanguageName } from "@goat/client-runtime/locales";
+import { SUPPORTED_LOCALES } from "../../i18n/locales";
 
 export function SettingsRouteScreen() {
+  return (
+    <I18nProvider>
+      <TranslatedSettingsRouteScreen />
+    </I18nProvider>
+  );
+}
+
+function TranslatedSettingsRouteScreen() {
+  const gt = useGT();
   const surface = useWorkspaceSurface();
   const deviceType = useDeviceType();
   const compactTabs = useCompactWorkspaceTabs();
@@ -77,7 +89,7 @@ export function SettingsRouteScreen() {
         <ScreenScrollViewBottomInset value={deviceType === "pad" || compactTabs ? 80 : 0}>
           {Platform.OS === "android" ? (
             <SettingsScreen
-              title="Settings"
+              title={gt("Settings")}
               trailing={<AndroidSettingsEnvironmentFilter />}
               search={
                 workspace
@@ -85,7 +97,7 @@ export function SettingsRouteScreen() {
                       value: workspace.state.tabs.settings.query,
                       onChangeText: (query) =>
                         workspace.dispatch({ type: "query", tab: "settings", query }),
-                      placeholder: "Search settings",
+                      placeholder: gt("Search settings"),
                     }
                   : undefined
               }
@@ -113,15 +125,16 @@ interface SettingsListSection {
 }
 
 function ConfiguredSettingsRouteScreen() {
+  const gt = useGT();
   const navigation = useNavigation();
   const { isLoaded, isSignedIn } = useAuth({ treatPendingAsSignedOut: true });
   const { user } = useUser();
   const { savedConnectionsById } = useSavedRemoteConnections();
   const accountLabel = !isLoaded
-    ? "Checking"
+    ? gt("Checking")
     : !isSignedIn
-      ? "Sign in"
-      : (user?.primaryEmailAddress?.emailAddress ?? "Signed in");
+      ? gt("Sign in")
+      : (user?.primaryEmailAddress?.emailAddress ?? gt("Signed in"));
 
   return (
     <SettingsList
@@ -129,17 +142,17 @@ function ConfiguredSettingsRouteScreen() {
         {
           id: "account",
           icon: "person.crop.circle",
-          label: "GOAT Account",
+          label: gt("GOAT Account"),
           value: accountLabel,
           disabled: !isLoaded,
           onPress: () => navigation.navigate("SettingsAuth"),
         },
         hubDevicesRow,
-        environmentsRow(Object.keys(savedConnectionsById).length),
+        environmentsRow(gt("Environments"), Object.keys(savedConnectionsById).length),
         {
           id: "SettingsNotifications",
           icon: "bell.badge",
-          label: "Notifications",
+          label: gt("Notifications"),
           target: "SettingsNotifications",
         },
       ]}
@@ -148,12 +161,13 @@ function ConfiguredSettingsRouteScreen() {
 }
 
 function LocalSettingsRouteScreen() {
+  const gt = useGT();
   const { savedConnectionsById } = useSavedRemoteConnections();
   return (
     <SettingsList
       connections={[
         hubDevicesRow,
-        environmentsRow(Object.keys(savedConnectionsById).length),
+        environmentsRow(gt("Environments"), Object.keys(savedConnectionsById).length),
         ...(isGoatConnectEnabled() ? [] : [goatConnectComingSoonRow]),
       ]}
     />
@@ -180,11 +194,11 @@ const goatConnectComingSoonRow: SettingsListRow = {
   },
 };
 
-function environmentsRow(count: number): SettingsListRow {
+function environmentsRow(label: string, count: number): SettingsListRow {
   return {
     id: "SettingsEnvironments",
     icon: "desktopcomputer",
-    label: "Environments",
+    label,
     value: `${count}`,
     valuePosition: "trailing",
     target: "SettingsEnvironments",
@@ -192,6 +206,7 @@ function environmentsRow(count: number): SettingsListRow {
 }
 
 function SettingsList(props: { readonly connections: readonly SettingsListRow[] }) {
+  const gt = useGT();
   // UIKit's scroll-edge material takes the scroll view's own color; like the chat list, match
   // the sidebar's surface so the bar doesn't darken over content at rest.
   // Grouped cards only lift off the screen surface; the drawer is as dark as they are.
@@ -202,7 +217,11 @@ function SettingsList(props: { readonly connections: readonly SettingsListRow[] 
   const overflowRows = useOverflowRows();
   const indexSections = useSettingsIndexSections();
   const sections = filterSettingsSections(
-    [{ rows: overflowRows }, { title: "Connections", rows: props.connections }, ...indexSections],
+    [
+      { rows: overflowRows },
+      { title: gt("Connections"), rows: props.connections },
+      ...indexSections,
+    ],
     query,
   );
 
@@ -237,8 +256,8 @@ function SettingsList(props: { readonly connections: readonly SettingsListRow[] 
         ) : (
           <EmptyState
             variant="plain"
-            title="No results"
-            detail={`No settings match “${query.trim()}”.`}
+            title={gt("No results")}
+            detail={gt("No settings match “{query}”.", { query: query.trim() })}
           />
         )}
       </ScrollView>
@@ -247,6 +266,8 @@ function SettingsList(props: { readonly connections: readonly SettingsListRow[] 
 }
 
 function useSettingsIndexSections(): SettingsListSection[] {
+  const gt = useGT();
+  const language = useLanguagePreference();
   const { selectedTargets, projectGroups, selectedProjectKey } = useSettingsEnvironmentFilter();
   const noServerTargets = selectedTargets.length === 0;
   const selectedProject = projectGroups.find((group) => group.key === selectedProjectKey);
@@ -262,7 +283,7 @@ function useSettingsIndexSections(): SettingsListSection[] {
           representative: scopedProjectMembers[0]!,
           members: scopedProjectMembers,
         })
-      : (selectedProject?.label ?? "Unavailable project");
+      : (selectedProject?.label ?? gt("Unavailable project"));
   const { supported: goatBotHomeSupported } = useMobileGoatBotHomeSettings();
   const page = (
     target: SettingsPageTarget | GoatSettingsPageTarget,
@@ -276,11 +297,16 @@ function useSettingsIndexSections(): SettingsListSection[] {
     {
       title: "Interface",
       rows: [
-        page("SettingsAppearance", "paintbrush", "Appearance"),
+        page("SettingsAppearance", "paintbrush", gt("Appearance")),
+        page("SettingsLanguage", "globe", gt("Language"), {
+          value: SUPPORTED_LOCALES.includes(language)
+            ? nativeLanguageName(language)
+            : gt("System default"),
+        }),
         ...(navigationCustomizationAvailable()
-          ? [page("SettingsNavigation", "line.3.horizontal", "Navigation tabs")]
+          ? [page("SettingsNavigation", "line.3.horizontal", gt("Navigation tabs"))]
           : []),
-        ...(Platform.OS === "ios" ? [page("SettingsKeyboard", "keyboard", "Keyboard")] : []),
+        ...(Platform.OS === "ios" ? [page("SettingsKeyboard", "keyboard", gt("Keyboard"))] : []),
         page("SettingsMicrophone", "mic", "Microphone"),
       ],
     },
@@ -289,7 +315,7 @@ function useSettingsIndexSections(): SettingsListSection[] {
       rows: [
         ...(goatBotHomeSupported ? [page("SettingsGoatBot", "text.bubble", "GOAT Bot")] : []),
         page("SettingsDecisionInbox", "questionmark.bubble", "Decision inbox"),
-        page("SettingsScheduledTasks", "clock", "Scheduled tasks"),
+        page("SettingsScheduledTasks", "clock", gt("Scheduled tasks")),
       ],
     },
     {
@@ -315,9 +341,13 @@ function useSettingsIndexSections(): SettingsListSection[] {
         })),
         serverPage("SettingsProviderAccounts", "person.crop.circle", "Provider accounts"),
         serverPage("SettingsEnvironmentNewThreads", "text.bubble", "New threads"),
-        serverPage("SettingsEnvironmentSourceControl", "arrow.triangle.branch", "Source control"),
+        serverPage(
+          "SettingsEnvironmentSourceControl",
+          "arrow.triangle.branch",
+          gt("Source control"),
+        ),
         serverPage("SettingsEnvironmentAgentBehavior", "text.alignleft", "Agent behavior"),
-        serverPage("SettingsEnvironmentMaintenance", "arrow.clockwise", "Maintenance"),
+        serverPage("SettingsEnvironmentMaintenance", "arrow.clockwise", gt("Maintenance")),
       ],
     },
     {

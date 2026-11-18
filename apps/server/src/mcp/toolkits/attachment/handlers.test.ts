@@ -1,3 +1,4 @@
+import * as NodeCrypto from "@effect/platform-node/NodeCrypto";
 import * as NodeServices from "@effect/platform-node/NodeServices";
 import { expect, it } from "@effect/vitest";
 import { EnvironmentId, ProviderInstanceId, ThreadId } from "@goat/contracts";
@@ -110,7 +111,7 @@ it.effect.each(obstacles)(
       Effect.provide(
         Layer.mergeAll(attachmentToolkit, McpHttpServer.catalogRegistrations.agentSurface).pipe(
           Layer.provide(McpToolAccessTestkit.layerPermissionProfilesOff),
-          Layer.provideMerge(McpServer.McpServer.layer),
+          Layer.provideMerge(McpHttpServer.layerInProcessMcpServer),
           Layer.provide(McpToolAccessTestkit.liveThreadsLayer),
           // goat_describe reaches other hosts through it; this test never passes host.
           Layer.provide(Layer.mock(HostThreadsMcpService.HostThreadsMcpService)({})),
@@ -119,7 +120,7 @@ it.effect.each(obstacles)(
           Layer.provideMerge(
             ServerConfig.layerTest(process.cwd(), { prefix: "goat-mcp-attachment-" }),
           ),
-          Layer.provideMerge(NodeServices.layer),
+          Layer.provideMerge(Layer.mergeAll(NodeServices.layer, NodeCrypto.layer)),
         ),
       ),
     ),
@@ -171,12 +172,12 @@ it.effect("only the caller that prepared a pending upload can discard it", () =>
     Effect.provide(
       attachmentToolkit.pipe(
         Layer.provide(McpToolAccessTestkit.layerPermissionProfilesOff),
-        Layer.provideMerge(McpServer.McpServer.layer),
+        Layer.provideMerge(McpHttpServer.layerInProcessMcpServer),
         Layer.provide(McpToolAccessTestkit.liveThreadsLayer),
         Layer.provide(Sqlite.layerMemory),
         Layer.provide(ServerSecretStore.layer),
         Layer.provide(ServerConfig.layerTest(process.cwd(), { prefix: "goat-mcp-attachment-" })),
-        Layer.provide(NodeServices.layer),
+        Layer.provide(Layer.mergeAll(NodeServices.layer, NodeCrypto.layer)),
       ),
     ),
   ),

@@ -1,7 +1,11 @@
+import * as Deferred from "effect/Deferred";
+import * as Fiber from "effect/Fiber";
+import * as TestClock from "effect/testing/TestClock";
 import { publishWithRefresh } from "./publishRefresh.ts";
 import * as Result from "effect/Result";
 import { SourceControlProviderKind } from "@goat/contracts";
 import * as NodePath from "@effect/platform-node/NodePath";
+import * as NodeCrypto from "@effect/platform-node/NodeCrypto";
 import * as NodeServices from "@effect/platform-node/NodeServices";
 import { assert, it } from "@effect/vitest";
 import * as Effect from "effect/Effect";
@@ -102,7 +106,7 @@ function layer(input: {
         Layer.provide(Layer.succeed(FileSystem.FileSystem, input.fileSystem)),
         Layer.provideMerge(NodePath.layer),
       )
-    : layerService.pipe(Layer.provideMerge(NodeServices.layer));
+    : layerService.pipe(Layer.provideMerge(Layer.mergeAll(NodeServices.layer, NodeCrypto.layer)));
 }
 
 const lookupFailingWith = (cause: unknown, detail: string) =>
@@ -195,7 +199,7 @@ it.effect("clones a looked-up repository after creating missing parent directori
         }),
       ),
     );
-  }).pipe(Effect.provide(NodeServices.layer)),
+  }).pipe(Effect.provide(Layer.mergeAll(NodeServices.layer, NodeCrypto.layer))),
 );
 
 it.effect.each(["--bare", "source.git"])(
@@ -229,7 +233,7 @@ it.effect.each(["--bare", "source.git"])(
               prefix: "goat-clone-options-config-",
             }),
           ),
-          Layer.provideMerge(NodeServices.layer),
+          Layer.provideMerge(Layer.mergeAll(NodeServices.layer, NodeCrypto.layer)),
         ),
       ),
     ),
@@ -292,6 +296,65 @@ it.effect("reports clone progress from git's stderr and keeps its error text on 
       error.detail,
       "fatal: early EOF fatal: unable to access 'https://github.com/octocat/goat.git/': could not resolve host",
     );
+  }).pipe(Effect.provide(Layer.mergeAll(NodeServices.layer, NodeCrypto.layer))),
+);
+
+it.effect("says a clone that ran out of time timed out, not git's last remote line", () =>
+  Effect.gen(function* () {
+    const fs = yield* FileSystem.FileSystem;
+    const path = yield* Path.Path;
+    const parent = yield* fs.makeTempDirectoryScoped({
+      prefix: "goat-source-control-clone-timeout-",
+    });
+    const started = yield* Deferred.make<void>();
+    const clone = yield* Effect.gen(function* () {
+      const service = yield* SourceControlRepositoryService.SourceControlRepositoryService;
+      return yield* Effect.flip(
+        service.cloneRepository({
+          remoteUrl: CLONE_URLS.url,
+          destinationPath: path.join(parent, "goat"),
+        }),
+      );
+    }).pipe(
+      Effect.provide(
+        layer({
+          git: {
+            // Like the real driver: the transfer outlives its deadline and git's last line is
+            // a remote summary.
+            execute: (input) =>
+              Effect.gen(function* () {
+                yield* (
+                  input.progress?.onStderrLine?.(
+                    "remote: Total 4 (delta 0), reused 0 (delta 0), pack-reused 0",
+                  ) ?? Effect.void
+                );
+                yield* Deferred.succeed(started, undefined);
+                return yield* Effect.never;
+              }).pipe(
+                Effect.timeoutOrElse({
+                  duration: input.timeoutMs ?? Infinity,
+                  orElse: () =>
+                    Effect.fail(
+                      new GitCommandError({
+                        operation: input.operation,
+                        command: "git",
+                        cwd: input.cwd,
+                        detail: "Git command timed out.",
+                      }),
+                    ),
+                }),
+              ),
+          },
+        }),
+      ),
+      Effect.forkChild,
+    );
+
+    yield* Deferred.await(started);
+    yield* TestClock.adjust("2 minutes");
+    const error = yield* Fiber.join(clone);
+
+    assert.match(error.detail, /timed out/i);
   }).pipe(Effect.provide(NodeServices.layer)),
 );
 
@@ -341,7 +404,7 @@ const cloneInTemporaryDirectory = (
         destinationPath: path.join(parent, "t3code"),
       });
     }).pipe(Effect.provide(layer({ git }).pipe(Layer.orDie)));
-  }).pipe(Effect.provide(NodeServices.layer));
+  }).pipe(Effect.provide(Layer.mergeAll(NodeServices.layer, NodeCrypto.layer)));
 
 it.effect("retries a clone over HTTPS when the SSH login is refused", () =>
   Effect.gen(function* () {
@@ -521,7 +584,7 @@ it.effect("discards only a directory git wrote to", () =>
     assert.deepStrictEqual(yield* fs.readDirectory(partial), []);
     assert.deepStrictEqual(yield* fs.readDirectory(foreign), ["notes.txt"]);
     assert.strictEqual(yield* fs.readFileString(replaced), "not a directory");
-  }).pipe(Effect.provide(NodeServices.layer)),
+  }).pipe(Effect.provide(Layer.mergeAll(NodeServices.layer, NodeCrypto.layer))),
 );
 
 it.effect("redacts query tokens and userinfo containing '@' from reported URLs", () =>
@@ -542,7 +605,7 @@ it.effect("redacts query tokens and userinfo containing '@' from reported URLs",
       });
       assert.equal(nested.remoteUrl, "https://github.com/octocat/goat.git");
     }).pipe(Effect.provide(layer({})));
-  }).pipe(Effect.provide(NodeServices.layer)),
+  }).pipe(Effect.provide(Layer.mergeAll(NodeServices.layer, NodeCrypto.layer))),
 );
 
 it.effect("preserves destination probe failures instead of treating them as missing paths", () => {

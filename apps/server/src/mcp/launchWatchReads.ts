@@ -277,15 +277,17 @@ export const makeLaunchWatchReads = <CeilingError, HostError>(deps: {
     return { _tag: "Unreachable", error: String(error) };
   };
 
-  /** A local look reads the runs only when the thread's latest run is not the one last seen. */
+  /** A local look reads the runs only when the thread has a run newer than the one last seen. */
   const localLook = Effect.fn("LaunchWatchReads.localLook")(function* (watch: LaunchWatch) {
     yield* deps.launcherCeiling(watch);
-    const shell = yield* threads.getThreadShell(watch.threadId);
-    if (shell === null || shell.deletedAt !== null || shell.archivedAt !== null)
+    // The newest run by ordinal, as the remote look reads: the shell's latest run can stay on an
+    // earlier run that outlived a newer one cancelled before it started.
+    const thread = yield* threads.getThreadNewestRun(watch.threadId);
+    if (thread === null || thread.deletedAt !== null || thread.archivedAt !== null)
       return { _tag: "Gone" } satisfies Look;
     if (
-      shell.latestRunId == null ||
-      (shell.latestRunId === watch.seen?.runId && watch.heldRuns.length === 0)
+      thread.newestRun === null ||
+      (thread.newestRun.ordinal <= (watch.seen?.ordinal ?? 0) && watch.heldRuns.length === 0)
     )
       return { _tag: "Runs", runs: [] } satisfies Look;
     const records = yield* threads.getThreadRecords(watch.threadId, ["runs"]);

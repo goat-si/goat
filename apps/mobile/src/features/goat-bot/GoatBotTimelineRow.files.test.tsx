@@ -74,6 +74,7 @@ vi.mock("../../native/SelectableMarkdownText", async () => {
 });
 vi.mock("./GoatBotComposerAttachments", () => ({
   GoatBotAttachButton: () => null,
+  goatBotAttachmentPick: () => async () => {},
   GoatBotAttachmentStrip: () => null,
   releaseGoatBotAttachments: () => {},
 }));
@@ -654,6 +655,7 @@ function screenFor(threadId: string, rows: ReturnType<typeof bot>[]) {
     replyingSince: null,
     activity: null,
     supportsTaskThreads: false,
+    taskChips: new Map(),
     historyEnvironmentId: EnvironmentId.make("env"),
     threadId: ThreadId.make(threadId),
     streamingReplyIds: new Set<string>(),

@@ -120,6 +120,8 @@ export const CLIENT_GUARDED_RPC_SCOPES = {
   [WS_METHODS.serverCleanUpStrayProcesses]: AuthEnvironmentMaintainScope,
   [WS_METHODS.serverCleanUpStorageItems]: AuthEnvironmentMaintainScope,
   [WS_METHODS.serverCheckOtlpEndpoint]: AuthSettingsWriteScope,
+  // Reading a secret can prompt the store and reloads providers that use it.
+  [WS_METHODS.serverCheckSecretSource]: AuthSettingsWriteScope,
   [WS_METHODS.pullRequestsRunAction]: AuthSourceControlWriteScope,
   [WS_METHODS.pullRequestsUpdate]: AuthSourceControlWriteScope,
   [WS_METHODS.pullRequestsComment]: AuthSourceControlWriteScope,
@@ -216,6 +218,8 @@ export const CLIENT_GUARDED_RPC_SCOPES = {
   // Attaching admits a machine to the owner's Pen mesh; the service also requires a person.
   [WS_METHODS.hubMachinesAttach]: AuthSettingsWriteScope,
   [WS_METHODS.hubMachinesReissue]: AuthSettingsWriteScope,
+  [WS_METHODS.hubMachinesDetach]: AuthSettingsWriteScope,
+  [WS_METHODS.hubMachinesRelease]: AuthSettingsWriteScope,
   [WS_METHODS.hubMachinesList]: AuthOrchestrationReadScope,
   // Preparing may install GOAT on a node; enrolling lets the hub act there for every proxied client.
   [WS_METHODS.hubProxyPrepareNode]: AuthSettingsWriteScope,

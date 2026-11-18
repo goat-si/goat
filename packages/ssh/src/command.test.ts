@@ -1,8 +1,10 @@
 import { it } from "@effect/vitest";
 import { assert, describe } from "vite-plus/test";
+import * as NodeCrypto from "@effect/platform-node/NodeCrypto";
 import * as NodeServices from "@effect/platform-node/NodeServices";
 import * as Effect from "effect/Effect";
 import * as Layer from "effect/Layer";
+import * as Logger from "effect/Logger";
 import * as PlatformError from "effect/PlatformError";
 import * as Result from "effect/Result";
 import * as Sink from "effect/Sink";
@@ -88,7 +90,7 @@ describe("ssh command", () => {
   it.effect("passes an option-shaped alias to ssh as the destination", () => {
     const spawned: Array<ReadonlyArray<string>> = [];
     const spawner = lazyChildProcessSpawner((command) => {
-      if (ChildProcess.isStandardCommand(command)) spawned.push(command.args);
+      if (ChildProcess.isStandardCommand(command)) spawned.push(command.args.map(String));
       return Effect.succeed(makeFailedProcess({ stdout: "", stderr: "bad hostname\n" }));
     });
     return runSshCommand(
@@ -101,7 +103,7 @@ describe("ssh command", () => {
       }),
       Effect.provide(
         Layer.merge(
-          NodeServices.layer,
+          Layer.mergeAll(NodeServices.layer, NodeCrypto.layer),
           Layer.succeed(ChildProcessSpawner.ChildProcessSpawner, spawner),
         ),
       ),
@@ -153,7 +155,7 @@ describe("ssh command", () => {
           ? `[truncated]\n${redacted.slice(-4_000)}`
           : `${redacted.slice(0, 4_000)}\n[truncated]`,
       );
-    }).pipe(Effect.provide(NodeServices.layer)),
+    }).pipe(Effect.provide(Layer.mergeAll(NodeServices.layer, NodeCrypto.layer))),
   );
 
   it.effect("redacts credentials from stdout in non-zero command failures", () => {
@@ -161,7 +163,7 @@ describe("ssh command", () => {
       Effect.succeed(makeFailedProcess({ stdout: '{"credential":"pairing-secret"}\n' })),
     );
     const layerSpawner = Layer.succeed(ChildProcessSpawner.ChildProcessSpawner, spawner);
-    const layerProcess = Layer.mergeAll(NodeServices.layer, layerSpawner);
+    const layerProcess = Layer.mergeAll(NodeServices.layer, NodeCrypto.layer, layerSpawner);
 
     return Effect.gen(function* () {
       const result = yield* Effect.result(
@@ -183,6 +185,107 @@ describe("ssh command", () => {
         assert.equal(result.failure.stdout, '{"credential":"[redacted]"}\n');
       }
     }).pipe(Effect.provide(layerProcess));
+  });
+
+  it.effect.each(["pairing-secret\\", "pairing-secret\\u12", "pairing-secret"])(
+    "redacts incomplete credentials on failure and timeout: %s",
+    (value) =>
+      Effect.gen(function* () {
+        const stdout = `{"credential":"${value}`;
+        const target = { alias: "devbox", hostname: "devbox", username: null, port: null };
+        const failureSpawner = lazyChildProcessSpawner(() =>
+          Effect.succeed(makeFailedProcess({ stdout })),
+        );
+        const failure = yield* Effect.result(
+          runSshCommand(target, {}).pipe(
+            Effect.provideService(ChildProcessSpawner.ChildProcessSpawner, failureSpawner),
+          ),
+        );
+        assert.isTrue(Result.isFailure(failure));
+        if (Result.isFailure(failure)) assert.instanceOf(failure.failure, SshCommandError);
+        if (Result.isFailure(failure) && failure.failure instanceof SshCommandError)
+          assert.notInclude(failure.failure.stdout ?? "", "pairing-secret");
+
+        const read = yield* Deferred.make<void>();
+        const timeoutSpawner = lazyChildProcessSpawner(() =>
+          Effect.succeed({
+            ...makeNeverFinishingProcess(),
+            stdout: Stream.make(encoder.encode(stdout)).pipe(
+              Stream.ensuring(Deferred.succeed(read, undefined)),
+            ),
+          }),
+        );
+        const fiber = yield* Effect.forkChild(
+          Effect.result(
+            runSshCommand(target, { timeoutMs: 1 }).pipe(
+              Effect.provideService(ChildProcessSpawner.ChildProcessSpawner, timeoutSpawner),
+            ),
+          ),
+        );
+        yield* Deferred.await(read);
+        yield* TestClock.adjust(Duration.millis(1));
+        const timeout = yield* Fiber.join(fiber);
+        assert.isTrue(Result.isFailure(timeout));
+        if (Result.isFailure(timeout)) assert.instanceOf(timeout.failure, SshCommandError);
+        if (Result.isFailure(timeout) && timeout.failure instanceof SshCommandError)
+          assert.notInclude(timeout.failure.stdout ?? "", "pairing-secret");
+      }).pipe(
+        Effect.provide(Layer.mergeAll(NodeServices.layer, NodeCrypto.layer, TestClock.layer())),
+      ),
+  );
+
+  it.effect.each([false, true])("redacts stderr from errors and logs on timeout %s", (timesOut) => {
+    const logs: string[] = [];
+    const logger = Logger.make(({ message }) => {
+      logs.push(JSON.stringify(message));
+    });
+    return Effect.gen(function* () {
+      const secret = "synthetic-stderr-secret";
+      const stderr = `{"credential":"${secret}"}`;
+      const read = yield* Deferred.make<void>();
+      const spawner = lazyChildProcessSpawner(() =>
+        Effect.succeed(
+          timesOut
+            ? {
+                ...makeNeverFinishingProcess(),
+                stderr: Stream.make(encoder.encode(stderr)).pipe(
+                  Stream.ensuring(Deferred.succeed(read, undefined)),
+                ),
+              }
+            : makeFailedProcess({ stdout: "", stderr }),
+        ),
+      );
+      const target = { alias: "devbox", hostname: "devbox", username: null, port: null };
+      const fiber = yield* Effect.forkChild(
+        Effect.result(
+          runSshCommand(target, { timeoutMs: 1 }).pipe(
+            Effect.provideService(ChildProcessSpawner.ChildProcessSpawner, spawner),
+          ),
+        ),
+      );
+      if (timesOut) {
+        yield* Deferred.await(read);
+        yield* TestClock.adjust(Duration.millis(1));
+      }
+      const result = yield* Fiber.join(fiber);
+      assert.isTrue(Result.isFailure(result));
+      if (Result.isFailure(result)) {
+        assert.instanceOf(result.failure, SshCommandError);
+        if (!(result.failure instanceof SshCommandError)) return;
+        assert.notInclude(result.failure.stderr, secret);
+        assert.notInclude(result.failure.message, secret);
+      }
+      assert.notInclude(JSON.stringify(logs), secret);
+    }).pipe(
+      Effect.provide(
+        Layer.mergeAll(
+          NodeServices.layer,
+          NodeCrypto.layer,
+          TestClock.layer(),
+          Logger.layer([logger], { mergeWithExisting: false }),
+        ),
+      ),
+    );
   });
 
   it.effect.each([
@@ -222,7 +325,7 @@ describe("ssh command", () => {
         }),
         Effect.provide(
           Layer.merge(
-            NodeServices.layer,
+            Layer.mergeAll(NodeServices.layer, NodeCrypto.layer),
             Layer.succeed(ChildProcessSpawner.ChildProcessSpawner, spawner),
           ),
         ),
@@ -267,7 +370,7 @@ describe("ssh command", () => {
     ).pipe(
       Effect.provide(
         Layer.merge(
-          NodeServices.layer,
+          Layer.mergeAll(NodeServices.layer, NodeCrypto.layer),
           Layer.succeed(ChildProcessSpawner.ChildProcessSpawner, spawner),
         ),
       ),
@@ -331,7 +434,7 @@ process.stderr.write('reader waiting');`,
         const result = yield* Fiber.join(upload);
         assert.deepEqual(JSON.parse(result.stdout), { received: bytes.byteLength, valid: true });
         assert.deepEqual(progress, [1024 * 1024, 2 * 1024 * 1024, bytes.byteLength]);
-      }).pipe(Effect.provide(NodeServices.layer), Effect.scoped),
+      }).pipe(Effect.provide(Layer.mergeAll(NodeServices.layer, NodeCrypto.layer)), Effect.scoped),
   );
 
   it.effect.each([
@@ -355,6 +458,7 @@ process.stderr.write('reader waiting');`,
     );
     const layerProcess = Layer.mergeAll(
       NodeServices.layer,
+      NodeCrypto.layer,
       Layer.succeed(ChildProcessSpawner.ChildProcessSpawner, spawner),
     );
     return Effect.gen(function* () {
@@ -401,7 +505,7 @@ process.stderr.write('reader waiting');`,
     }).pipe(
       Effect.provide(
         Layer.merge(
-          NodeServices.layer,
+          Layer.mergeAll(NodeServices.layer, NodeCrypto.layer),
           Layer.succeed(ChildProcessSpawner.ChildProcessSpawner, spawner),
         ),
       ),
@@ -414,6 +518,7 @@ process.stderr.write('reader waiting');`,
     );
     const layerProcess = Layer.mergeAll(
       NodeServices.layer,
+      NodeCrypto.layer,
       Layer.succeed(ChildProcessSpawner.ChildProcessSpawner, spawner),
     );
     return Effect.gen(function* () {
@@ -546,7 +651,9 @@ process.stderr.write('reader waiting');`,
           assert.equal(result.failure.message, message);
           assert.equal(sshPreparationFailure(result.failure).reason, reason);
         }
-      }).pipe(Effect.provide(Layer.mergeAll(NodeServices.layer, TestClock.layer())));
+      }).pipe(
+        Effect.provide(Layer.mergeAll(NodeServices.layer, NodeCrypto.layer, TestClock.layer())),
+      );
     },
   );
   it.effect(
@@ -667,7 +774,9 @@ process.stderr.write('reader waiting');`,
         assert.isUndefined(
           yield* settleOf(makeFailedProcess({ stdout: "", stderr: "", exitCode: 7 })),
         );
-      }).pipe(Effect.provide(Layer.mergeAll(NodeServices.layer, TestClock.layer()))),
+      }).pipe(
+        Effect.provide(Layer.mergeAll(NodeServices.layer, NodeCrypto.layer, TestClock.layer())),
+      ),
   );
 });
 
@@ -697,7 +806,7 @@ it.effect("rejects oversized SSH stdout after draining the finite stream", () =>
     assert.equal(result._tag, "Failure");
     if (result._tag === "Failure")
       assert.match(result.failure.message, /stdout exceeded its byte budget/u);
-  }).pipe(Effect.provide(NodeServices.layer)),
+  }).pipe(Effect.provide(Layer.mergeAll(NodeServices.layer, NodeCrypto.layer))),
 );
 
 it.effect("retains only the SSH diagnostic byte tail while observing authentication", () =>
@@ -723,5 +832,5 @@ it.effect("retains only the SSH diagnostic byte tail while observing authenticat
     assert.isAtMost(Buffer.byteLength(result.stderr), 64 * 1024);
     assert.isTrue(result.stderr.endsWith("\nlast diagnostic\n"));
     assert.equal(result.stdout, "ok");
-  }).pipe(Effect.provide(NodeServices.layer)),
+  }).pipe(Effect.provide(Layer.mergeAll(NodeServices.layer, NodeCrypto.layer))),
 );

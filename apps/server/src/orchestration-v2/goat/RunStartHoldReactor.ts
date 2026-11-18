@@ -13,7 +13,7 @@ import {
   type ThreadId,
 } from "@goat/contracts";
 import * as Context from "effect/Context";
-import * as Crypto from "effect/Crypto";
+import * as SecureRandom from "effect/crypto/SecureRandom";
 import * as Deferred from "effect/Deferred";
 import * as Effect from "effect/Effect";
 import * as Layer from "effect/Layer";
@@ -83,7 +83,7 @@ export const make = Effect.gen(function* () {
   const orchestrator = yield* Orchestrator.OrchestratorV2;
   const sink = yield* EventSink.EventSinkV2;
   const survivors = yield* CodexSurvivors.CodexSurvivors;
-  const crypto = yield* Crypto.Crypto;
+  const random = yield* SecureRandom.SecureRandom;
   const update = Effect.fn("RunStartHoldReactor.update")(
     function* (run: OrchestrationV2Run, holds: ReadonlyMap<ThreadId, ThreadHold>) {
       let hold = heldBy(run, holds);
@@ -97,7 +97,7 @@ export const make = Effect.gen(function* () {
           hold = { reason: "restart_survivor", nativeTurnId: hold.nativeTurnId };
       }
       if (withStartHold(run, hold) === null) return;
-      const uuid = yield* crypto.randomUUIDv4();
+      const uuid = yield* random.uuidV4();
       yield* orchestrator.dispatch({
         type: "run.start-hold.update",
         commandId: CommandId.make(`server:run-start-hold:${run.id}:${uuid}`),

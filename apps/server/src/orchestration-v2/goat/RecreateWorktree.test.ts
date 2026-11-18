@@ -91,6 +91,13 @@ it.effect("restores a deleted branch from its snapshot and refuses a moved branc
     assert.equal(remote.headSha, headSha);
     git(repo, ["worktree", "remove", "--force", worktreePath]);
     git(repo, ["branch", "-D", "feature"]);
+    git(repo, ["remote", "rename", "origin", "upstream"]);
+    const nonOrigin = yield* recreate({ cwd: repo, worktreePath, branch: "feature" });
+    assert.equal(nonOrigin.restoredFrom, "remote-branch");
+    assert.equal(nonOrigin.headSha, headSha);
+    git(repo, ["worktree", "remove", "--force", worktreePath]);
+    git(repo, ["branch", "-D", "feature"]);
+    git(repo, ["remote", "rename", "upstream", "origin"]);
     git(repo, ["update-ref", "-d", "refs/remotes/origin/feature"]);
     const base = yield* recreate({ cwd: repo, worktreePath, branch: "feature" });
     assert.equal(base.restoredFrom, "base");

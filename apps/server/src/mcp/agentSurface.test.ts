@@ -63,6 +63,7 @@ import {
   routeOutcome,
 } from "./agentSurfaceOutcome.testkit.ts";
 import { DEPRECATED_META_KEY, listedToolCall } from "./ToolDispatch.ts";
+import * as McpHttpServer from "./McpHttpServer.ts";
 import { layerTestLoopback } from "@goat/shared/testing/loopbackHttpServer";
 
 const toolkits = { ...standardToolkits, screen: ScreenToolkit };
@@ -71,12 +72,12 @@ const registered = catalog.pipe(
   Layer.provide(dependencies),
   // As served: ToolAdmission reserves keys and goat_eval journals steps in the database.
   Layer.provideMerge(Sqlite.layerMemory),
-  Layer.provideMerge(McpServer.McpServer.layer),
+  Layer.provideMerge(McpHttpServer.layerInProcessMcpServer),
 );
 
 it("gives every entry a unique path, listed name and resolvable schema reference", () => {
-  // Includes upload/report receipts, origin binding, OpenCodex sync, Child setup, storage tools, fill_secret, sign_in_state, site notes, browser claims, memory recall, the bot list, the session notes change, handoff withdraw, hub device move, hub device routes and hub machine attach, reissue and list.
-  expect(entries).toHaveLength(305);
+  // Includes upload/report receipts, origin binding and force stop, OpenCodex sync, Child setup, storage tools, fill_secret, sign_in_state, site notes, browser claims, memory recall, the bot list, the session notes change, handoff withdraw, hub device move, hub device routes and hub machine attach, reissue and list, preview stop.
+  expect(entries).toHaveLength(308);
   expect(new Set(entries.map((entry) => entry.name)).size).toBe(entries.length);
   expect(new Set(entries.map(listedToolName)).size).toBe(entries.length);
   // 75 shipped names off the path grammar plus five whose verb D11 normalized.
@@ -569,7 +570,7 @@ describe("agent surface access", () => {
             if (route === "legacy" && legacy === undefined) continue;
             const call: Effect.Effect<
               McpSchema.CallToolResult,
-              McpSchema.InternalError | McpSchema.InvalidParams,
+              McpSchema.InternalError | McpSchema.InvalidParams | McpSchema.McpErrorBase,
               McpServer.McpServer
             > =
               route === "legacy"
@@ -834,7 +835,7 @@ const failingDevice = Layer.mock(DeviceService.DeviceService)({
 });
 const registeredWithFailingDevice = catalog.pipe(
   Layer.provide(Layer.mergeAll(dependencies, deviceAccessGranted, failingDevice)),
-  Layer.provideMerge(McpServer.McpServer.layer),
+  Layer.provideMerge(McpHttpServer.layerInProcessMcpServer),
 );
 
 it.effect("goat_call never shows failure text a direct call hides", () =>
@@ -880,7 +881,7 @@ const operationKey = Layer.mock(ServerSecretStore.ServerSecretStore)({
 });
 const registeredWithOperationKey = catalog.pipe(
   Layer.provide(Layer.mergeAll(dependencies, operationKey)),
-  Layer.provideMerge(McpServer.McpServer.layer),
+  Layer.provideMerge(McpHttpServer.layerInProcessMcpServer),
 );
 
 it.effect("goat_operation_cancel meets exactly the refusals of the kind's own cancel tool", () =>
@@ -928,7 +929,7 @@ it.effect("goat_call starts no long work it could not hand back a handle for", (
             }),
           ),
         ),
-        Layer.provideMerge(McpServer.McpServer.layer),
+        Layer.provideMerge(McpHttpServer.layerInProcessMcpServer),
       ),
     ),
   ),
@@ -972,7 +973,7 @@ it.effect(
               }),
             ),
           ),
-          Layer.provideMerge(McpServer.McpServer.layer),
+          Layer.provideMerge(McpHttpServer.layerInProcessMcpServer),
         ),
       ),
     ),

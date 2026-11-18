@@ -2,6 +2,7 @@
 import * as NodeCrypto from "node:crypto";
 import { vi } from "vite-plus/test";
 import { it, expect } from "@effect/vitest";
+import * as PlatformNodeCrypto from "@effect/platform-node/NodeCrypto";
 import * as NodeServices from "@effect/platform-node/NodeServices";
 import { AuthHubProxyScope, EnvironmentId } from "@goat/contracts";
 import {
@@ -99,7 +100,7 @@ const testLayer = CloudLink.layer.pipe(
   Layer.provideMerge(Sqlite.layerMemory),
   Layer.provide(external),
   Layer.provide(ServerConfig.layerTest(process.cwd(), { prefix: "goat-key-incident-" })),
-  Layer.provide(NodeServices.layer),
+  Layer.provide(Layer.mergeAll(NodeServices.layer, PlatformNodeCrypto.layer)),
 );
 
 it.effect(
@@ -390,7 +391,7 @@ it.effect.each([
             Layer.provideMerge(
               ServerConfig.layerTest(process.cwd(), { prefix: "goat-withdrawal-journal-" }),
             ),
-            Layer.provideMerge(NodeServices.layer),
+            Layer.provideMerge(Layer.mergeAll(NodeServices.layer, PlatformNodeCrypto.layer)),
           ),
         ),
       );

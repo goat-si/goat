@@ -1,9 +1,11 @@
 import { SSH_RUNTIME_PROTOCOL_VERSION } from "@goat/shared/sshRuntimeProtocol";
 import { ORCHESTRATION_PROTOCOL_VERSION } from "@goat/contracts";
 import { assert, describe, it } from "@effect/vitest";
+import * as NodeCrypto from "@effect/platform-node/NodeCrypto";
 import * as NodeServices from "@effect/platform-node/NodeServices";
 import * as HostProcess from "@goat/shared/HostProcess";
 import * as Effect from "effect/Effect";
+import * as Layer from "effect/Layer";
 import * as Result from "effect/Result";
 import * as Stream from "effect/Stream";
 import { ChildProcess } from "effect/process";
@@ -31,7 +33,10 @@ describe.skipIf(HostProcess.Platform.defaultValue() === "win32")(
             assert.isTrue(Result.isSuccess(result));
             assert.deepEqual(f.counters(), { uploads: 0, gh: 0, cacheReads: 0 });
           }
-        }).pipe(Effect.provide(NodeServices.layer), Effect.scoped),
+        }).pipe(
+          Effect.provide(Layer.mergeAll(NodeServices.layer, NodeCrypto.layer)),
+          Effect.scoped,
+        ),
     );
 
     it.live.each(
@@ -91,7 +96,7 @@ describe.skipIf(HostProcess.Platform.defaultValue() === "win32")(
         assert.deepEqual(f.counters(), { uploads: 0, gh: 0, cacheReads: 0 });
         const events = yield* f.fs.readFileString(`${f.test}/events`);
         for (const type of ["auth", "start", "stop"]) assert.notInclude(events, `"type":"${type}"`);
-      }).pipe(Effect.provide(NodeServices.layer), Effect.scoped),
+      }).pipe(Effect.provide(Layer.mergeAll(NodeServices.layer, NodeCrypto.layer)), Effect.scoped),
     );
 
     it.live.each(
@@ -121,7 +126,7 @@ describe.skipIf(HostProcess.Platform.defaultValue() === "win32")(
         assert.deepEqual(f.counters(), { uploads: 0, gh: 0, cacheReads: 0 });
         const events = yield* f.fs.readFileString(`${f.test}/events`);
         for (const type of ["auth", "start", "stop"]) assert.notInclude(events, `"type":"${type}"`);
-      }).pipe(Effect.provide(NodeServices.layer), Effect.scoped),
+      }).pipe(Effect.provide(Layer.mergeAll(NodeServices.layer, NodeCrypto.layer)), Effect.scoped),
     );
     it.live.each(
       (["launch", "pairing", "mcp"] as const).flatMap((entry) =>
@@ -151,7 +156,7 @@ describe.skipIf(HostProcess.Platform.defaultValue() === "win32")(
         const after = yield* f.snapshot;
         assert.equal(after.oldExecutable, before.oldExecutable);
         assert.equal(after.oldMarker, before.oldMarker);
-      }).pipe(Effect.provide(NodeServices.layer), Effect.scoped),
+      }).pipe(Effect.provide(Layer.mergeAll(NodeServices.layer, NodeCrypto.layer)), Effect.scoped),
     );
 
     it.live.each((["launch", "pairing", "mcp"] as const).map((entry) => ({ entry })))(
@@ -169,7 +174,10 @@ describe.skipIf(HostProcess.Platform.defaultValue() === "win32")(
           assert.isTrue(Result.isFailure(yield* f.run(entry)));
           assert.deepEqual(yield* f.snapshot, before);
           assert.deepEqual(f.counters(), { uploads: 0, gh: 0, cacheReads: 0 });
-        }).pipe(Effect.provide(NodeServices.layer), Effect.scoped),
+        }).pipe(
+          Effect.provide(Layer.mergeAll(NodeServices.layer, NodeCrypto.layer)),
+          Effect.scoped,
+        ),
     );
 
     it.live.each(
@@ -202,7 +210,7 @@ describe.skipIf(HostProcess.Platform.defaultValue() === "win32")(
         assert.notInclude(events, '"type":"stop"');
         const files = yield* f.fs.readDirectory(f.state);
         assert.isFalse(files.some((file) => file.includes(".next.") || file.endsWith(".pin")));
-      }).pipe(Effect.provide(NodeServices.layer), Effect.scoped),
+      }).pipe(Effect.provide(Layer.mergeAll(NodeServices.layer, NodeCrypto.layer)), Effect.scoped),
     );
     it.live(
       "validates the requested runtime before drain and publishes it before supervised startup",
@@ -245,7 +253,10 @@ describe.skipIf(HostProcess.Platform.defaultValue() === "win32")(
           assert.isBelow(stop, start);
           assert.include(events[start].runner, `GOAT_ARCHIVE_VERSION='${ARCHIVE.archiveVersion}'`);
           assert.equal(f.counters().uploads, 1);
-        }).pipe(Effect.provide(NodeServices.layer), Effect.scoped),
+        }).pipe(
+          Effect.provide(Layer.mergeAll(NodeServices.layer, NodeCrypto.layer)),
+          Effect.scoped,
+        ),
     );
   },
 );

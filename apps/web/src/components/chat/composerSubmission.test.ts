@@ -11,7 +11,11 @@ import {
 } from "@goat/shared/assistantCitations";
 import { describe, expect, it, vi } from "vite-plus/test";
 
-import { submitComposerDraft } from "./composerSubmission";
+import {
+  isComposerSubmissionBlocked,
+  sideChatCommandOverAnswer,
+  submitComposerDraft,
+} from "./composerSubmission";
 
 const assistantCitation = {
   version: 1 as const,
@@ -206,5 +210,53 @@ describe("submitComposerDraft", () => {
 
     expect(result).toEqual({ validationMessage: null, didDispatch: true });
     expect(onSend).toHaveBeenCalledOnce();
+  });
+});
+
+describe("isComposerSubmissionBlocked", () => {
+  const sendBlocked = {
+    noProviderAvailable: true,
+    sendDisabledReason: "Messages loading",
+    attachmentBlockReason: null,
+    environmentUnavailable: false,
+  };
+
+  // regression: #9318
+  it("lets a pending answer through while provider-turn sends are blocked", () => {
+    expect(
+      isComposerSubmissionBlocked({ ...sendBlocked, submissionTarget: "pending-user-input" }),
+    ).toBe(false);
+    expect(isComposerSubmissionBlocked({ ...sendBlocked, submissionTarget: "provider-turn" })).toBe(
+      true,
+    );
+  });
+
+  it("still blocks a pending answer on its attachments or a lost connection", () => {
+    const answer = { ...sendBlocked, submissionTarget: "pending-user-input" as const };
+    expect(
+      isComposerSubmissionBlocked({ ...answer, attachmentBlockReason: "Attach the file again" }),
+    ).toBe(true);
+    expect(isComposerSubmissionBlocked({ ...answer, environmentUnavailable: true })).toBe(true);
+  });
+});
+
+describe("sideChatCommandOverAnswer", () => {
+  const answer = { sideChatAvailable: true, hasAttachmentsOrContext: false };
+
+  // regression: /side typed while a question was open became the answer text
+  it("lets /side open the side chat instead of answering the open question", () => {
+    expect(sideChatCommandOverAnswer({ ...answer, answer: "/side what changed?" })).toEqual({
+      prompt: "what changed?",
+    });
+  });
+
+  it("keeps the text as the answer when no side chat can take it", () => {
+    expect(sideChatCommandOverAnswer({ ...answer, answer: "Purple" })).toBeNull();
+    expect(
+      sideChatCommandOverAnswer({ ...answer, answer: "/side why?", sideChatAvailable: false }),
+    ).toBeNull();
+    expect(
+      sideChatCommandOverAnswer({ ...answer, answer: "/side why?", hasAttachmentsOrContext: true }),
+    ).toBeNull();
   });
 });

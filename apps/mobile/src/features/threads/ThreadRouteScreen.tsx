@@ -1,5 +1,6 @@
 import { firstRouteParam } from "../terminal/terminalRouteHelpers.ts";
 import { useRememberThreadProject } from "./useRememberThreadProject";
+import { useThreadHistoryControls } from "./useThreadHistoryControls";
 import * as Dialog from "../../components/ui/Dialog";
 import { useOpenPullRequest } from "../../native/useOpenPullRequest";
 import { makeTurnCommandMetadata } from "../../lib/commandMetadata";
@@ -118,6 +119,7 @@ import {
   type ThreadInspectorPresentation,
 } from "./thread-inspector-preview";
 import { routeThreadIdentity, type ThreadInspectorTarget } from "./thread-inspector-navigation";
+import { useOpenThreadStatusAnnouncements } from "./useOpenThreadStatusAnnouncements";
 import { useSelectWorkspaceDetail } from "../workspace/useSelectWorkspaceDetail";
 
 interface ThreadInspectorSelection {
@@ -160,7 +162,7 @@ export function ThreadRouteScreen(props: ThreadRouteScreenProps) {
 }
 
 function LiveThreadRouteController(props: ThreadRouteScreenProps) {
-  useAndroidWorkspaceBack("threads");
+  useAndroidWorkspaceBack();
   const connectionsReady = useConnectionsReady();
   const { connectionState } = useRemoteConnectionStatus();
   const { selectedThread } = useThreadSelection();
@@ -298,6 +300,7 @@ function ThreadRouteContent(
   const gitState = useSelectedThreadGitState();
   const gitActions = useSelectedThreadGitActions();
   const requests = useSelectedThreadRequests();
+  useOpenThreadStatusAnnouncements(selectedThread, props.inspectorPresentation, requests, composer);
   const interruptThreadTurn = useAtomCommand(threadEnvironment.interruptTurn, "thread interrupt");
   const resumeThreadQueue = useAtomCommand(threadEnvironment.resumeThreadQueue, {
     label: "resume queue",
@@ -315,36 +318,10 @@ function ThreadRouteContent(
     label: "set thread interaction mode",
     reportFailure: false,
   });
-  const loadEarlierHistory = useAtomCommand(threadEnvironment.loadEarlierHistory, {
-    label: "load earlier thread history",
-    reportFailure: false,
-  });
-  const historyControls = (() => {
-    const history = selectedThreadDetailState.history;
-    if (!selectedThread) {
-      return undefined;
-    }
-    if (!history.hasMoreHistory && history.error === null) {
-      return undefined;
-    }
-    return {
-      hasMoreHistory: history.hasMoreHistory,
-      loading: history.loading,
-      error: history.error,
-      onLoadEarlier: () => {
-        void loadEarlierHistory({
-          environmentId: selectedThread.environmentId,
-          input: { threadId: selectedThread.id },
-        });
-      },
-      onLoadThrough: (throughEntryId: string) => {
-        void loadEarlierHistory({
-          environmentId: selectedThread.environmentId,
-          input: { threadId: selectedThread.id, throughEntryId },
-        });
-      },
-    };
-  })();
+  const historyControls = useThreadHistoryControls(
+    selectedThread,
+    selectedThreadDetailState.history,
+  );
   const navigation = useNavigation();
   const selectDetail = useSelectWorkspaceDetail();
   const openPullRequest = useOpenPullRequest();
@@ -1037,6 +1014,7 @@ function ThreadRouteContent(
               : composer.activeWorkStartedAt
           }
           isCompacting={composer.isCompacting}
+          compactBeforeSend={composer.compactBeforeSend}
           runlessWorkActive={composer.runlessWorkActive}
           extensionStatuses={composer.extensionStatuses}
           providerSubagentStatus={composer.providerSubagentStatus}
@@ -1102,9 +1080,7 @@ function ThreadRouteContent(
           onRemoveDraftImage={composer.onRemoveDraftImage}
           serverConfig={serverConfig}
           onStopThread={awaitingBootstrapTurn ? handleCancelWorktreeSetup : handleStopThread}
-          onResumeQueue={
-            composer.queueHeld || composer.resumableRunId !== null ? handleResumeQueue : null
-          }
+          onResumeQueue={composer.canResume ? handleResumeQueue : null}
           onSendMessage={composer.onSendMessage}
           onReconnectEnvironment={handleReconnectEnvironment}
           canSwitchThreadProvider={composer.canSwitchThreadProvider}

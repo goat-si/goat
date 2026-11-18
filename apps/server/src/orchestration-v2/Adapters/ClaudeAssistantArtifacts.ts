@@ -16,6 +16,7 @@ export function buildAssistantArtifacts(input: {
   readonly nativeItemId: string;
   readonly text: string;
   readonly ordinal: number;
+  readonly status?: "completed" | "interrupted";
   readonly startedAt: DateTime.Utc;
   readonly completedAt: DateTime.Utc;
   readonly streaming?: boolean | undefined;
@@ -50,7 +51,7 @@ export function buildAssistantArtifacts(input: {
       parentNodeId: input.turnInput.rootNodeId,
       rootNodeId: input.turnInput.rootNodeId,
       kind: "assistant_message",
-      status: input.streaming ? "running" : "completed",
+      status: input.streaming ? "running" : (input.status ?? "completed"),
       countsForRun: false,
       providerThreadId: input.turnInput.providerThread.id,
       providerTurnId: input.providerTurnId,
@@ -84,7 +85,7 @@ export function buildAssistantArtifacts(input: {
       nativeItemRef,
       parentItemId: null,
       ordinal: input.ordinal,
-      status: input.streaming ? "running" : "completed",
+      status: input.streaming ? "running" : (input.status ?? "completed"),
       title: null,
       startedAt: input.startedAt,
       completedAt: input.streaming ? null : input.completedAt,

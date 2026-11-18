@@ -164,3 +164,23 @@ it("shows the name row and the answering chip together, the name row first", asy
 });
 
 vi.mock("./GoatBotHeroFace", () => ({ GoatBotHeroFace: () => null }));
+
+// The chat's half of a pair: goatBotHomeThreadHiding.test.tsx shows the real sheet hides and opens
+// the link while the bot's commands are refused. Gating Home on readiness must change both.
+it("the chat asks Home to open while the bot cannot take messages", async () => {
+  try {
+    for (const availability of ["error", "connecting", "permission"]) {
+      Object.assign(screenSession, { availability, rows: [], homeOpen: false });
+      const view = await render(<GoatBotScreen visible />);
+      const chip = [...view.container.querySelectorAll("button")].find(
+        (item) => item.getAttribute("aria-label") === "Chip GOAT Bot",
+      );
+      expect(chip, availability).toBeDefined();
+      await act(async () => chip?.click());
+      expect(screenSession.homeOpen, availability).toBe(true);
+      await view.unmount();
+    }
+  } finally {
+    screenSession.availability = "ready";
+  }
+});

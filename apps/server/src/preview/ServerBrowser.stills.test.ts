@@ -1,11 +1,13 @@
 // @effect-diagnostics-next-line nodeBuiltinImport:off - static JPEG test fixtures are read outside the Effect runtime.
 import * as NodeFS from "node:fs";
 import * as NodeEvents from "node:events";
+import * as NodeCrypto from "@effect/platform-node/NodeCrypto";
 import * as NodeServices from "@effect/platform-node/NodeServices";
 import { it } from "@effect/vitest";
-import { EnvironmentId, ThreadId } from "@goat/contracts";
+import { EnvironmentId, ThreadId, type PreviewAutomationStatus } from "@goat/contracts";
 import * as Effect from "effect/Effect";
 import * as Layer from "effect/Layer";
+import * as PubSub from "effect/PubSub";
 import * as Queue from "effect/Queue";
 import * as Stream from "effect/Stream";
 import type { BrowserContext, Page } from "playwright-core";
@@ -22,7 +24,7 @@ import * as ServerBrowser from "./ServerBrowser.ts";
 import * as PreviewBrowser from "./PreviewBrowser.ts";
 import { unusedPreviewBrowser } from "./PreviewBrowser.testkit.ts";
 import { historyMemoryLayer } from "./BrowserHistoryAssertions.testkit.ts";
-import { makeSession } from "./ServerBrowserTestFixtures.ts";
+import { makeSession, scope } from "./ServerBrowserTestFixtures.ts";
 
 const originalJpeg = NodeFS.readFileSync(
   new URL("./fixtures/still-large.jpg", import.meta.url),
@@ -143,7 +145,7 @@ const dependencies = Layer.mergeAll(
   Layer.mock(SecretRequests.SecretRequests)({}),
 ).pipe(
   Layer.provideMerge(ServerConfig.layerTest(process.cwd(), { prefix: "goat-server-browser-" })),
-  Layer.provideMerge(NodeServices.layer),
+  Layer.provideMerge(Layer.mergeAll(NodeServices.layer, NodeCrypto.layer)),
 );
 const layer = ServerBrowser.layer.pipe(Layer.provideMerge(dependencies));
 const ready = Effect.gen(function* () {
@@ -219,4 +221,33 @@ it.effect.each(["transport", "exception"] as const)(
         );
       }),
     ).pipe(Effect.provide(layer)),
+);
+// Upstream's ServerBrowser.test.ts case; that file is at its code budget.
+it.effect("preview_open reports a tab it shows as visible once the client attaches", () =>
+  Effect.scoped(
+    Effect.gen(function* () {
+      failure = null;
+      fit = true;
+      const browser = yield* ServerBrowser.ServerBrowser;
+      const broker = yield* Broker.PreviewAutomationBroker;
+      const manager = yield* Manager.PreviewManager;
+      const events = yield* manager.subscribeEvents;
+      yield* Effect.yieldNow;
+      // Like a real client, the stream attaches asynchronously after the reveal request arrives.
+      yield* Effect.gen(function* () {
+        let event;
+        do event = yield* PubSub.take(events);
+        while (event.type !== "navigated" || !event.snapshot.revealRequest);
+        yield* browser.attachViewer(viewerInput(event.tabId, false)).pipe(Effect.forkScoped);
+      }).pipe(Effect.forkScoped);
+
+      const opened = yield* broker.invoke<PreviewAutomationStatus>({
+        scope,
+        operation: "open",
+        input: { reuseExistingTab: false, open: true },
+      });
+
+      expect(opened.visible).toBe(true);
+    }),
+  ).pipe(Effect.provide(layer)),
 );

@@ -1,9 +1,11 @@
 import { SSH_RUNTIME_PROTOCOL_VERSION } from "@goat/shared/sshRuntimeProtocol";
 import { ORCHESTRATION_PROTOCOL_VERSION } from "@goat/contracts";
 import { assert, describe, it } from "@effect/vitest";
+import * as NodeCrypto from "@effect/platform-node/NodeCrypto";
 import * as NodeServices from "@effect/platform-node/NodeServices";
 import * as HostProcess from "@goat/shared/HostProcess";
 import * as Effect from "effect/Effect";
+import * as Layer from "effect/Layer";
 import * as Result from "effect/Result";
 import { ARCHIVE } from "./tunnel.fixture.ts";
 import { makeProtocolFixture } from "./tunnel.protocol.fixture.ts";
@@ -58,7 +60,7 @@ describe.skipIf(HostProcess.Platform.defaultValue() === "win32")("SSH runtime ca
         assert.include(events, `"type":"${type}"`);
       assert.notInclude(events, '"type":"stop"');
       assert.notEqual((yield* f.snapshot).pid, before.pid);
-    }).pipe(Effect.provide(NodeServices.layer), Effect.scoped),
+    }).pipe(Effect.provide(Layer.mergeAll(NodeServices.layer, NodeCrypto.layer)), Effect.scoped),
   );
 
   it.live("a busy runtime without memory scopes stays attached with a capability replacement", () =>
@@ -80,7 +82,7 @@ describe.skipIf(HostProcess.Platform.defaultValue() === "win32")("SSH runtime ca
       const events = yield* f.fs.readFileString(`${f.test}/events`);
       for (const type of ["drain", "self-stop", "supervise", "stop"])
         assert.notInclude(events, `"type":"${type}"`);
-    }).pipe(Effect.provide(NodeServices.layer), Effect.scoped),
+    }).pipe(Effect.provide(Layer.mergeAll(NodeServices.layer, NodeCrypto.layer)), Effect.scoped),
   );
 
   it.live("never replaces a newer runtime, even one without memory scopes", () =>
@@ -93,7 +95,7 @@ describe.skipIf(HostProcess.Platform.defaultValue() === "win32")("SSH runtime ca
       assert.isUndefined(result.success.pending);
       assert.deepEqual(yield* f.snapshot, before);
       assert.isFalse(yield* f.fs.exists(`${f.test}/activity-requests`));
-    }).pipe(Effect.provide(NodeServices.layer), Effect.scoped),
+    }).pipe(Effect.provide(Layer.mergeAll(NodeServices.layer, NodeCrypto.layer)), Effect.scoped),
   );
 
   it.live(
@@ -106,7 +108,7 @@ describe.skipIf(HostProcess.Platform.defaultValue() === "win32")("SSH runtime ca
         if (Result.isFailure(result)) throw result.failure;
         assert.equal(result.success.version, ARCHIVE.archiveVersion);
         assert.equal(f.counters().uploads, 1);
-      }).pipe(Effect.provide(NodeServices.layer), Effect.scoped),
+      }).pipe(Effect.provide(Layer.mergeAll(NodeServices.layer, NodeCrypto.layer)), Effect.scoped),
   );
 
   it.live("no drain defers an unorderable capability refresh and allows ordinary sessions", () =>
@@ -130,7 +132,7 @@ describe.skipIf(HostProcess.Platform.defaultValue() === "win32")("SSH runtime ca
       const events = yield* f.fs.readFileString(`${f.test}/events`);
       for (const type of ["drain", "self-stop", "supervise", "stop", "activity"])
         assert.notInclude(events, `"type":"${type}"`);
-    }).pipe(Effect.provide(NodeServices.layer), Effect.scoped),
+    }).pipe(Effect.provide(Layer.mergeAll(NodeServices.layer, NodeCrypto.layer)), Effect.scoped),
   );
 
   it.live("a kept runtime refuses a memory session with a reason the client shows", () =>
@@ -153,7 +155,7 @@ describe.skipIf(HostProcess.Platform.defaultValue() === "win32")("SSH runtime ca
       assert.include(error.message, `GOAT ${ARCHIVE.archiveVersion} replaces it`);
       // No session was issued without the grants the task asked for.
       assert.notInclude(yield* f.fs.readFileString(`${f.test}/events`), '"type":"auth"');
-    }).pipe(Effect.provide(NodeServices.layer), Effect.scoped),
+    }).pipe(Effect.provide(Layer.mergeAll(NodeServices.layer, NodeCrypto.layer)), Effect.scoped),
   );
 
   it.live("a runtime with memory scopes issues them under the ceiling in one call", () =>
@@ -176,6 +178,6 @@ describe.skipIf(HostProcess.Platform.defaultValue() === "win32")("SSH runtime ca
         "full-access",
       ])
         assert.include(args, expected);
-    }).pipe(Effect.provide(NodeServices.layer), Effect.scoped),
+    }).pipe(Effect.provide(Layer.mergeAll(NodeServices.layer, NodeCrypto.layer)), Effect.scoped),
   );
 });

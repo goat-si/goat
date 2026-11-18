@@ -1,3 +1,4 @@
+import { ingestCompletedProviderTurn } from "./testkit/ingestCompletedProviderTurn.ts";
 import {
   modelSelection,
   CODEX_DRIVER,
@@ -11,6 +12,7 @@ export {
 import { registerAgentOomIngestorCases } from "./ProviderEventIngestor.oomCases.ts";
 import { AgentScope } from "@goat/shared/AgentScope";
 import { assert, it } from "@effect/vitest";
+import * as NodeCrypto from "@effect/platform-node/NodeCrypto";
 import * as NodeServices from "@effect/platform-node/NodeServices";
 import {
   CheckpointId,
@@ -34,6 +36,7 @@ import {
   RunAttemptId,
   RunId,
   RuntimeRequestId,
+  type ServerProvider,
   TurnItemId,
 } from "@goat/contracts";
 import * as Cause from "effect/Cause";
@@ -59,6 +62,7 @@ import * as ProjectionStore from "./ProjectionStore.ts";
 import * as ProviderEventIngestor from "./ProviderEventIngestor.ts";
 import * as ThreadCommandExecutor from "./ThreadCommandExecutor.ts";
 import * as ProviderInstanceRegistry from "../provider/ProviderInstanceRegistry.ts";
+import { UsageLimitResetFallback } from "../usage/UsageLimitSources.ts";
 import * as ProviderAdapter from "@goat/provider-core/server/ProviderAdapter";
 import type { ProviderInstance } from "@goat/provider-core/server/driver";
 import { makeProviderFailure } from "@goat/provider-core/server/failure";
@@ -80,7 +84,7 @@ export const layerTestEventSink = EventSink.layer.pipe(
 
 const layerGit = GitVcsDriver.layer.pipe(
   Layer.provide(ServerConfig.layerTest(process.cwd(), { prefix: "ingestor-git-" })),
-  Layer.provideMerge(NodeServices.layer),
+  Layer.provideMerge(Layer.mergeAll(NodeServices.layer, NodeCrypto.layer)),
 );
 
 export const layerEmptyInstances = Layer.mock(ProviderInstanceRegistry.ProviderInstanceRegistry)({
@@ -180,7 +184,7 @@ const makeSharedWorktree = Effect.gen(function* () {
 });
 const layer = it.layer(layerTest);
 
-it.effect("refreshes the failing instance snapshot after a committed usage_limit terminal", () =>
+it.effect("takes a hub's reset for an unreset usage_limit, then refreshes the snapshot", () =>
   Effect.scoped(
     Effect.gen(function* () {
       const refreshed = yield* Deferred.make<void>();
@@ -211,7 +215,9 @@ it.effect("refreshes the failing instance snapshot after a committed usage_limit
         },
         snapshot: {
           refreshUsage: Deferred.succeed(refreshed, undefined).pipe(Effect.asVoid),
-          getSnapshot: Effect.die("unused"),
+          getSnapshot: Effect.succeed({
+            auth: { status: "authenticated", endpoint: "http://hub.test:8317" },
+          } as ServerProvider),
           refresh: Effect.die("unused"),
           resolveMaintenance: () => Effect.die("unused"),
           applyUsageLimits: () => Effect.die("unused"),
@@ -219,6 +225,7 @@ it.effect("refreshes the failing instance snapshot after a committed usage_limit
         },
       };
       const lookups: ProviderInstanceId[] = [];
+      const hubLookups: Array<[string, string, string | null]> = [];
       const instances = Layer.mock(ProviderInstanceRegistry.ProviderInstanceRegistry)({
         getInstance: (id) =>
           Effect.sync(() => {
@@ -267,10 +274,29 @@ it.effect("refreshes the failing instance snapshot after a committed usage_limit
           });
           assert.equal(stored.length, 1);
           if (failureClass === "validation_error") assert.deepEqual(lookups, []);
+          else {
+            const event = stored[0]?.event;
+            assert.equal(
+              event?.type === "turn-item.updated" && event.payload.type === "error"
+                ? event.payload.failure.resetAt
+                : undefined,
+              "2026-11-13T18:00:00.000Z",
+            );
+          }
         }
-        assert.deepEqual(lookups, [instance.instanceId]);
+        assert.deepEqual(lookups, [instance.instanceId, instance.instanceId]);
+        assert.deepEqual(hubLookups, [["cursor", "http://hub.test:8317", modelSelection.model]]);
         yield* Deferred.await(refreshed);
-      }).pipe(Effect.provide(makeLayerTest(layerTestEventSink, instances)));
+      }).pipe(
+        Effect.provide(makeLayerTest(layerTestEventSink, instances)),
+        Effect.provideService(UsageLimitResetFallback, {
+          resetAt: (driver, endpoint, model) =>
+            Effect.sync(() => {
+              hubLookups.push([driver, endpoint, model]);
+              return "2026-11-13T18:00:00.000Z";
+            }),
+        }),
+      );
     }),
   ),
 );
@@ -1911,15 +1937,18 @@ layer("ProviderEventIngestorV2", (it) => {
   );
 
   it.effect.each([
-    { parentMoved: false, failure: null },
-    { parentMoved: true, failure: null },
-    { parentMoved: false, failure: "write" },
-    { parentMoved: false, failure: "git" },
+    { parentMoved: false, failure: null, temporaryBranch: "t3/abcd1234" },
+    { parentMoved: true, failure: null, temporaryBranch: "t3/abcd1234" },
+    { parentMoved: false, failure: "write", temporaryBranch: "t3/abcd1234" },
+    { parentMoved: false, failure: "git", temporaryBranch: "t3/abcd1234" },
+    { parentMoved: false, failure: null, temporaryBranch: "my-prefix/abcd1234" },
   ])(
     "rechecks a pending native child's branch after the rename scan: %j",
-    ({ parentMoved, failure }) =>
+    ({ parentMoved, failure, temporaryBranch }) =>
       Effect.gen(function* () {
         const { worktreePath, command } = yield* makeSharedWorktree;
+        if (temporaryBranch !== "t3/abcd1234")
+          yield* command(worktreePath, ["branch", "-m", temporaryBranch]);
         const git = yield* GitVcsDriver.GitVcsDriver;
         const now = yield* DateTime.now;
         const eventSink = yield* EventSink.EventSinkV2;
@@ -1929,13 +1958,13 @@ layer("ProviderEventIngestorV2", (it) => {
         if (rootEvent.type !== "thread.created") throw new Error("Expected thread fixture");
         const parent = {
           ...rootEvent.payload,
-          branch: "t3/abcd1234",
+          branch: temporaryBranch,
           worktreePath,
         };
         yield* eventSink.write({ events: [{ ...rootEvent, payload: parent }] });
         const childId = ids.derive.threadFromProviderThread({
           driver: CODEX_DRIVER,
-          nativeThreadId: `child-created-during-rename:${parentMoved}:${failure}`,
+          nativeThreadId: `child-created-during-rename:${parentMoved}:${failure}:${temporaryBranch}`,
         });
         const beforeCommit = yield* Deferred.make<
           void,
@@ -2104,7 +2133,7 @@ layer("ProviderEventIngestorV2", (it) => {
         });
         assert.equal((yield* projections.getThread(childId)).branch, branch);
         assert.equal(stored.length, 1);
-        assert.equal(gitReads, scenario === "explicit" ? 0 : 1);
+        assert.equal(gitReads, 1);
       }),
   );
 
@@ -2392,51 +2421,6 @@ layer("ProviderEventIngestorV2", (it) => {
     ),
   );
 });
-
-const ingestCompletedProviderTurn = (
-  guard: Pick<
-    Parameters<ProviderEventIngestor.ProviderEventIngestorV2Shape["ingestNormalized"]>[0],
-    "writeIfRunCurrent" | "writeIfProviderThreadOwner"
-  >,
-) =>
-  Effect.gen(function* () {
-    const now = yield* DateTime.now;
-    const eventSink = yield* EventSink.EventSinkV2;
-    const projectionStore = yield* ProjectionStore.ProjectionStoreV2;
-    const ingestor = yield* ProviderEventIngestor.ProviderEventIngestorV2;
-    const idAllocator = yield* IdAllocator.IdAllocatorV2;
-    const threadEvent = yield* threadCreatedEvent(now);
-    yield* eventSink.write({ events: [threadEvent] });
-    const providerTurnId = ProviderTurnId.make("provider-turn:locked");
-    const exit = yield* ingestor
-      .ingestNormalized({
-        providerSessionId: yield* idAllocator.allocate.providerSession({
-          providerInstanceId: modelSelection.instanceId,
-          threadId: threadEvent.threadId,
-        }),
-        providerInstanceId: modelSelection.instanceId,
-        threadId: threadEvent.threadId,
-        event: {
-          type: "provider_turn.updated",
-          driver: CODEX_DRIVER,
-          providerTurn: {
-            id: providerTurnId,
-            providerThreadId: ProviderThreadId.make("provider-thread:locked"),
-            nodeId: NodeId.make("node:locked-turn"),
-            runAttemptId: null,
-            nativeTurnRef: null,
-            ordinal: 1,
-            status: "completed",
-            startedAt: now,
-            completedAt: now,
-          },
-        },
-        ...guard,
-      })
-      .pipe(Effect.exit);
-    const projection = yield* projectionStore.getThreadProjection(threadEvent.threadId);
-    return { exit, providerTurnId, persisted: projection.providerTurns.map((turn) => turn.id) };
-  });
 
 // Neither guard matches a stored run, so a guarded write correctly commits nothing.
 const runId = RunId.make("run:locked");

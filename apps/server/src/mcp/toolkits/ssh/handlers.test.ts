@@ -609,10 +609,10 @@ const fixture = (sourceFault?: "missing" | "size") =>
         ServerConfig.layerTest("/fixture", { prefix: "ssh-handler-attachments-" }),
       ),
       Layer.provide(FetchHttpClient.layer),
-      Layer.provide(NodeServices.layer),
+      Layer.provide(Layer.mergeAll(NodeServices.layer, NodeCrypto.layer)),
     );
     const layer = McpHttpServer.toolkitRegistration(SshToolkit, SshHandlers.layer).pipe(
-      Layer.provideMerge(McpServer.McpServer.layer),
+      Layer.provideMerge(McpHttpServer.layerInProcessMcpServer),
       Layer.provide(dependencies),
       Layer.provide(NodeCrypto.layer),
     );
@@ -728,9 +728,8 @@ it.effect("rejects SSH launch attachment arrays above eight through MCP decoding
         })),
       })
       .pipe(Effect.flip, Effect.provide(f.layer));
-    // Like core.test.ts, invalid schema parameters fail callTool with InvalidParams.
-    // The MCP protocol encodes this RPC error; it is not a returned tool isError payload.
-    expect(error._tag).toBe("InvalidParams");
+    // Invalid parameters fail callTool with an InvalidParams RPC error, not an isError payload.
+    expect("_tag" in error ? error._tag : undefined).toBe("InvalidParams");
     f.assertNoDispatch();
   }),
 );
@@ -960,7 +959,7 @@ const handoff = (
           Layer.mock(SshDeviceAdd.SshDeviceAdd)({}),
         ),
       ),
-      Layer.provideMerge(McpServer.McpServer.layer),
+      Layer.provideMerge(McpHttpServer.layerInProcessMcpServer),
       Layer.provide(dependencies),
     );
     const response = yield* Effect.gen(function* () {
@@ -1273,6 +1272,7 @@ const runtimeFixture = (
                 }),
             }),
             Layer.mock(HubNodes.HubNodes)({
+              disposableRoute: () => Effect.sync(() => undefined),
               add: (input, options) =>
                 options.beforeSave.pipe(
                   Effect.andThen(
@@ -1316,7 +1316,7 @@ const runtimeFixture = (
         ),
       ),
     ),
-    Layer.provideMerge(McpServer.McpServer.layer),
+    Layer.provideMerge(McpHttpServer.layerInProcessMcpServer),
     Layer.provide(
       Layer.unwrap(
         Effect.gen(function* () {

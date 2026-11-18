@@ -1,5 +1,6 @@
 import { GitCommandError, ReviewDiffFileStat } from "@goat/contracts";
-import type * as Crypto from "effect/Crypto";
+import * as Digest from "effect/crypto/Digest";
+import type * as SecureRandom from "effect/crypto/SecureRandom";
 import * as Effect from "effect/Effect";
 import * as Hex from "effect/encoding/Hex";
 import * as Schema from "effect/Schema";
@@ -14,18 +15,19 @@ const encodeRevisionHash = Schema.encodeSync(
 );
 
 export const makeReviewDiffHash = Effect.fn("GitVcsDriver.makeReviewDiffHash")(function* (
-  crypto: Crypto.Crypto,
+  random: SecureRandom.SecureRandom["Service"],
+  digest: Digest.Digest["Service"],
   cwd: string,
   metadataOnly: boolean,
 ) {
   // Metadata has no content identity, so invalidate content caches on each preview.
   const revision = metadataOnly
-    ? yield* crypto.randomUUIDv4().pipe(
+    ? yield* random.uuidV4().pipe(
         Effect.mapError(
           (cause) =>
             new GitCommandError({
               operation: "GitVcsDriver.getReviewDiffPreview.revision",
-              command: "crypto.randomUUIDv4",
+              command: "random.uuidV4",
               cwd,
               detail: "Failed to generate review revision.",
               cause,
@@ -40,13 +42,13 @@ export const makeReviewDiffHash = Effect.fn("GitVcsDriver.makeReviewDiffHash")(f
     const data = new TextEncoder().encode(
       revision === null ? encodeHash([diff, files]) : encodeRevisionHash([diff, files, revision]),
     );
-    return yield* crypto.digest("SHA-256", data).pipe(
+    return yield* digest.digest(Digest.sha256, data).pipe(
       Effect.map(Hex.encode),
       Effect.mapError(
         (cause) =>
           new GitCommandError({
             operation: "GitVcsDriver.getReviewDiffPreview.hash",
-            command: "crypto.digest SHA-256",
+            command: "digest.digest SHA-256",
             cwd,
             detail: "Failed to hash review diff.",
             cause,

@@ -3,6 +3,7 @@ import { useEffect, useRef, useState, type ReactNode } from "react";
 import { Image, Modal, Pressable, Text, View } from "react-native";
 
 import { type ImagePreview, openBotLibraryFile } from "./openBotLibraryFile";
+import { MobileSheetSafeArea } from "./MobileSheetSafeArea";
 
 const withoutKey = (record: Readonly<Record<string, string>>, key: string) =>
   Object.fromEntries(Object.entries(record).filter(([entry]) => entry !== key));
@@ -97,49 +98,51 @@ export function useBotFileOpener(
       presentationStyle="pageSheet"
       onRequestClose={closePreview}
     >
-      <View className="flex-1 gap-3 bg-screen px-4 pt-4">
-        <View className="flex-row gap-4">
-          <Pressable
-            accessibilityRole="button"
-            onPress={closePreview}
-            className="min-h-[44px] min-w-[44px] justify-center px-2"
-          >
-            <Text className="text-foreground">Close</Text>
-          </Pressable>
-          <Pressable
-            accessibilityRole="button"
-            onPress={() => {
-              const signal = lifetime.current?.controller.signal;
-              if (!preview || !signal) return;
-              setPreviewError(null);
-              void preview.file.share(signal).catch((error: unknown) => {
-                if (!signal.aborted)
-                  setPreviewError(
-                    error instanceof Error
-                      ? error.message
-                      : "Could not open the share sheet. Try again.",
-                  );
-              });
-            }}
-            className="min-h-[44px] min-w-[44px] justify-center px-2"
-          >
-            <Text className="text-foreground">Share</Text>
-          </Pressable>
+      <MobileSheetSafeArea>
+        <View className="flex-1 gap-3 bg-screen px-4 pt-4">
+          <View className="flex-row gap-4">
+            <Pressable
+              accessibilityRole="button"
+              onPress={closePreview}
+              className="min-h-[44px] min-w-[44px] justify-center px-2"
+            >
+              <Text className="text-foreground">Close</Text>
+            </Pressable>
+            <Pressable
+              accessibilityRole="button"
+              onPress={() => {
+                const signal = lifetime.current?.controller.signal;
+                if (!preview || !signal) return;
+                setPreviewError(null);
+                void preview.file.share(signal).catch((error: unknown) => {
+                  if (!signal.aborted)
+                    setPreviewError(
+                      error instanceof Error
+                        ? error.message
+                        : "Could not open the share sheet. Try again.",
+                    );
+                });
+              }}
+              className="min-h-[44px] min-w-[44px] justify-center px-2"
+            >
+              <Text className="text-foreground">Share</Text>
+            </Pressable>
+          </View>
+          {previewError !== null ? (
+            <Text accessibilityRole="alert" className="text-danger-foreground">
+              {previewError}
+            </Text>
+          ) : null}
+          {preview ? (
+            <Image
+              source={{ uri: preview.file.uri }}
+              accessibilityLabel={preview.name}
+              resizeMode="contain"
+              className="flex-1"
+            />
+          ) : null}
         </View>
-        {previewError !== null ? (
-          <Text accessibilityRole="alert" className="text-danger-foreground">
-            {previewError}
-          </Text>
-        ) : null}
-        {preview ? (
-          <Image
-            source={{ uri: preview.file.uri }}
-            accessibilityLabel={preview.name}
-            resizeMode="contain"
-            className="flex-1"
-          />
-        ) : null}
-      </View>
+      </MobileSheetSafeArea>
     </Modal>
   );
   return { open, opening, messages, viewer, covered: preview !== null };

@@ -128,6 +128,7 @@ export const makeEnvironmentQueryHarness = Effect.fn("TestEnvironmentQuery.makeH
 
   return {
     runtime,
+    family,
     atom: family({ environmentId: QUERY_ENVIRONMENT.environmentId, input: undefined }),
     supervisorSession,
     supervisorState,

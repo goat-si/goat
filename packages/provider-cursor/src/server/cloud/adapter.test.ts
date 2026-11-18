@@ -31,6 +31,7 @@ import {
   runtimePolicy,
   decodeAttachment,
   harness,
+  makeHarness,
   type Task,
 } from "./adapter.testkit.ts";
 
@@ -510,9 +511,8 @@ describe("Cursor Cloud adapter", () => {
   );
   effectIt.effect("credential read failures expose no raw exception to the logged Cause", () =>
     Effect.gen(function* () {
-      const h = yield* harness;
       const marker = "synthetic-cursor-key-read-marker";
-      h.readKey.mockReturnValue(
+      const h = yield* makeHarness(
         Effect.fail(
           new ProviderSetupError({
             instanceId,
@@ -537,8 +537,7 @@ describe("Cursor Cloud adapter", () => {
     "a sign-in refusal before any Cursor request records the submitting intent as failed with its reason",
     () =>
       Effect.gen(function* () {
-        const h = yield* harness;
-        h.readKey.mockReturnValue(
+        const h = yield* makeHarness(
           Effect.fail(
             new ProviderSetupError({
               instanceId,
@@ -572,8 +571,7 @@ describe("Cursor Cloud adapter", () => {
     "a recorded refusal stays failed when a restart reattaches the run before it was finalized",
     () =>
       Effect.gen(function* () {
-        const h = yield* harness;
-        h.readKey.mockReturnValue(
+        const h = yield* makeHarness(
           Effect.fail(
             new ProviderSetupError({
               instanceId,

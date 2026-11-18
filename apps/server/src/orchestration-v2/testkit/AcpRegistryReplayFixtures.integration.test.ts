@@ -1,3 +1,4 @@
+import * as NodeCrypto from "@effect/platform-node/NodeCrypto";
 import * as NodeServices from "@effect/platform-node/NodeServices";
 import { assert, describe, it } from "@effect/vitest";
 import {
@@ -203,7 +204,9 @@ describe("ACP registry replay fixtures", () => {
     }).pipe(
       Effect.scoped,
       provideDeterministicTestRuntime,
-      Effect.provide(Layer.merge(IdAllocator.layer, NodeServices.layer)),
+      Effect.provide(
+        Layer.merge(IdAllocator.layer, Layer.mergeAll(NodeServices.layer, NodeCrypto.layer)),
+      ),
     ),
   );
 

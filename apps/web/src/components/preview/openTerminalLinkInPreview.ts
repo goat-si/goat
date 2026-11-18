@@ -68,7 +68,9 @@ export async function openTerminalLinkInPreview<E>(
       url: input.url,
       viewport: browserDefaultOpenViewport(defaults),
       profileId: browserDefaultOpenProfileId(defaults),
-      ...(runtime === undefined ? {} : { runtime }),
+      ...(runtime === undefined
+        ? {}
+        : { runtime, zoomFactor: defaults.zoomFactor, colorScheme: defaults.appearance }),
     },
   });
   if (result._tag === "Failure") {

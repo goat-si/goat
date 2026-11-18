@@ -2,17 +2,20 @@
 import * as NodePath from "node:path";
 import * as NodeURL from "node:url";
 
+import * as NodeCrypto from "@effect/platform-node/NodeCrypto";
 import * as NodeServices from "@effect/platform-node/NodeServices";
 import { EnvironmentId, ProjectId, ProviderInstanceId } from "@goat/contracts";
 import { AcpRegistrySettings } from "@goat/provider-acp-registry/settings";
 import { describe, expect, it } from "@effect/vitest";
 import * as Effect from "effect/Effect";
+import * as FileSystem from "effect/FileSystem";
 import * as Layer from "effect/Layer";
 import { McpSchema, McpServer } from "effect/ai";
 import * as Sqlite from "../persistence/Sqlite.ts";
 import * as AcpSessionService from "./AcpSessionService.ts";
 import { catalog as mcpCatalog, client, dependencies } from "../mcp/agentSurface.testkit.ts";
 import { McpInvocationContext } from "../mcp/McpInvocationContext.ts";
+import * as McpHttpServer from "../mcp/McpHttpServer.ts";
 import * as Schema from "effect/Schema";
 import * as EffectAcpErrors from "effect-acp/errors";
 
@@ -24,6 +27,7 @@ import {
   logoutAcpRegistry,
   normalizeAcpRegistryAuthMethods,
   normalizeAcpRegistryCommands,
+  probeAcpRegistryConfiguration,
 } from "@goat/provider-acp-registry/testing";
 import * as AcpRegistrySupport from "@goat/provider-acp-registry/server/AcpRegistrySupport";
 
@@ -98,6 +102,22 @@ describe("ACP Registry probe", () => {
               { value: "gpt-5.4", name: "Duplicate" },
             ],
           },
+          {
+            id: "effort",
+            name: "Effort",
+            category: "thought_level",
+            type: "select",
+            currentValue: "high",
+            options: [{ value: "high", name: "High" }],
+          },
+          {
+            id: "mode",
+            name: "Mode",
+            category: "mode",
+            type: "select",
+            currentValue: "ask",
+            options: [{ value: "ask", name: "Ask" }],
+          },
         ],
       },
       modelConfigId: "model",
@@ -120,7 +140,24 @@ describe("ACP Registry probe", () => {
       ],
       models: [{ id: "gpt-5.4", name: "GPT-5.4", description: null }],
       currentModelId: "gpt-5.4",
-      configOptions: [],
+      configOptions: [
+        {
+          id: "effort",
+          label: "Effort",
+          type: "select",
+          options: [{ id: "high", label: "High" }],
+          currentValue: "high",
+          role: "reasoning",
+        },
+        {
+          id: "mode",
+          label: "Mode",
+          type: "select",
+          options: [{ id: "ask", label: "Ask" }],
+          currentValue: "ask",
+        },
+      ],
+      modelOptionIds: ["effort"],
       sessionManagement: {
         canList: true,
         canLoad: true,
@@ -393,7 +430,7 @@ describe("ACP Registry probe", () => {
       yield* logoutAcpRegistry(input);
     }).pipe(
       Effect.provideService(AcpRegistrySupport.AcpRegistryCatalog, catalog),
-      Effect.provide(NodeServices.layer),
+      Effect.provide(Layer.mergeAll(NodeServices.layer, NodeCrypto.layer)),
       Effect.scoped,
     );
   });
@@ -413,7 +450,7 @@ describe("ACP Registry probe", () => {
       expect(listed.cursorDropped).toBe(false);
     }).pipe(
       Effect.provideService(AcpRegistrySupport.AcpRegistryCatalog, sessionListCatalog(257)),
-      Effect.provide(NodeServices.layer),
+      Effect.provide(Layer.mergeAll(NodeServices.layer, NodeCrypto.layer)),
       Effect.scoped,
     );
   });
@@ -437,7 +474,7 @@ describe("ACP Registry probe", () => {
           AcpRegistrySupport.AcpRegistryCatalog,
           sessionListCatalog(2, scenario),
         ),
-        Effect.provide(NodeServices.layer),
+        Effect.provide(Layer.mergeAll(NodeServices.layer, NodeCrypto.layer)),
         Effect.scoped,
       );
     },
@@ -465,7 +502,7 @@ describe("ACP Registry probe", () => {
           AcpRegistrySupport.AcpRegistryCatalog,
           sessionListCatalog(1, scenario),
         ),
-        Effect.provide(NodeServices.layer),
+        Effect.provide(Layer.mergeAll(NodeServices.layer, NodeCrypto.layer)),
         Effect.scoped,
       );
     },
@@ -495,7 +532,7 @@ describe("ACP Registry probe", () => {
           AcpRegistrySupport.AcpRegistryCatalog,
           sessionListCatalog(1, scenario),
         ),
-        Effect.provide(NodeServices.layer),
+        Effect.provide(Layer.mergeAll(NodeServices.layer, NodeCrypto.layer)),
         Effect.scoped,
       );
     },
@@ -518,7 +555,7 @@ describe("ACP Registry probe", () => {
         AcpRegistrySupport.AcpRegistryCatalog,
         sessionListCatalog(2, "dropped-keeps-cursor"),
       ),
-      Effect.provide(NodeServices.layer),
+      Effect.provide(Layer.mergeAll(NodeServices.layer, NodeCrypto.layer)),
       Effect.scoped,
     );
   });
@@ -541,7 +578,7 @@ describe("ACP Registry probe", () => {
         AcpRegistrySupport.AcpRegistryCatalog,
         sessionListCatalog(1, "cursor-unchanged"),
       ),
-      Effect.provide(NodeServices.layer),
+      Effect.provide(Layer.mergeAll(NodeServices.layer, NodeCrypto.layer)),
       Effect.scoped,
     );
   });
@@ -574,7 +611,7 @@ describe("ACP Registry probe", () => {
           ),
         ),
         Layer.provideMerge(Sqlite.layerMemory),
-        Layer.provideMerge(McpServer.McpServer.layer),
+        Layer.provideMerge(McpHttpServer.layerInProcessMcpServer),
       );
       const result = yield* McpServer.McpServer.pipe(
         Effect.flatMap((server) =>
@@ -609,10 +646,66 @@ describe("ACP Registry probe", () => {
         AcpRegistrySupport.AcpRegistryCatalog,
         sessionListCatalog(2, "id-whitespace"),
       ),
-      Effect.provide(NodeServices.layer),
+      Effect.provide(Layer.mergeAll(NodeServices.layer, NodeCrypto.layer)),
       Effect.scoped,
     );
   });
+
+  it.live.each(["succeeds", "fails", "unsupported"] as const)(
+    "handles health-probe cleanup when deletion is %s",
+    (deleteOutcome) =>
+      Effect.gen(function* () {
+        const fs = yield* FileSystem.FileSystem;
+        const directory = yield* fs.makeTempDirectoryScoped({ prefix: "acp-probe-delete-" });
+        const requestLogPath = NodePath.join(directory, "requests.ndjson");
+        const catalog = AcpRegistrySupport.AcpRegistryCatalog.of({
+          search: () => Effect.die("unused search"),
+          prepare: () => Effect.die("unused prepare"),
+          inspect: () => Effect.die("unused inspect"),
+          uninstallManagedBinary: () => Effect.die("unused uninstall"),
+          resolve: () =>
+            Effect.succeed({
+              agent: {
+                id: "mock-agent",
+                name: "Mock Agent",
+                version: "1.0.0",
+                description: "ACP probe cleanup test agent",
+                distribution: { npx: { package: "mock-agent@1.0.0" } },
+              },
+              distribution: "npx" as const,
+              spawn: {
+                command: "node",
+                args: [mockAgentPath],
+                env: {
+                  ...process.env,
+                  ...(deleteOutcome === "unsupported" ? {} : { GOAT_ACP_V2_MANAGEMENT: "1" }),
+                  GOAT_ACP_REQUEST_LOG_PATH: requestLogPath,
+                  ...(deleteOutcome === "fails" ? { GOAT_ACP_FAIL_DELETE_SESSION: "1" } : {}),
+                },
+              },
+            }),
+        });
+
+        const result = yield* probeAcpRegistryConfiguration({
+          instanceId,
+          settings: decodeSettings({ agentId: "mock-agent" }),
+          cwd: process.cwd(),
+          environment: process.env,
+        }).pipe(Effect.provideService(AcpRegistrySupport.AcpRegistryCatalog, catalog));
+        expect(result.probe.ready).toBe(true);
+        expect(result.probe.sessionManagement.canDelete).toBe(deleteOutcome !== "unsupported");
+
+        const requests = (yield* fs.readFileString(requestLogPath))
+          .split("\n")
+          .filter((line) => line.length > 0)
+          .map((line) => JSON.parse(line));
+        expect(requests.filter((request) => request.method === "session/delete")).toEqual(
+          deleteOutcome === "unsupported"
+            ? []
+            : [expect.objectContaining({ params: { sessionId: "mock-session-1" } })],
+        );
+      }).pipe(Effect.scoped, Effect.provide(Layer.mergeAll(NodeServices.layer, NodeCrypto.layer))),
+  );
 
   it("distinguishes authentication failures from generic probe failures", () => {
     const advertised = normalizeAcpRegistryAuthMethods([

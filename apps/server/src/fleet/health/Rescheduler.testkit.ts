@@ -1,4 +1,5 @@
 /** The hosts, dispatch and server the Rescheduler's integration tests run against. */
+import * as NodeCrypto from "@effect/platform-node/NodeCrypto";
 import * as NodeServices from "@effect/platform-node/NodeServices";
 import { expect, it } from "@effect/vitest";
 import { FleetOwnerKey, type HostStatusEntry, type RuntimeMode, ThreadId } from "@goat/contracts";
@@ -13,8 +14,8 @@ import * as TestClock from "effect/testing/TestClock";
 
 import * as HostPowerMonitor from "../../background/HostPowerMonitor.ts";
 import * as ThreadManagementService from "../../orchestration-v2/ThreadManagementService.ts";
-import Migration0087 from "../../persistence/Migrations/102_FleetHealth.ts";
-import Migration0140 from "../../persistence/Migrations/140_PlacementAdmission.ts";
+import Migration0087 from "../../persistence/Migrations/112_FleetHealth.ts";
+import Migration0140 from "../../persistence/Migrations/150_PlacementAdmission.ts";
 import { layer as PlacementAttemptsLayer } from "../admission/PlacementAttempts.ts";
 import { PlacementAdmissionEnabled } from "../admission/PlacementKey.ts";
 import * as PlacementPlacer from "../admission/PlacementPlacer.ts";
@@ -426,7 +427,7 @@ export const databaseFile = Effect.gen(function* () {
     yield* fs.makeTempDirectoryScoped({ prefix: "goat-fleet-health-" }),
     "state.sqlite",
   );
-}).pipe(Effect.provide(NodeServices.layer));
+}).pipe(Effect.provide(Layer.mergeAll(NodeServices.layer, NodeCrypto.layer)));
 
 export const ref = { host: "A", threadId: ThreadId.make("thread:a1"), watchId: null };
 

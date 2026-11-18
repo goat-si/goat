@@ -1,4 +1,4 @@
-import { afterEach, beforeEach, describe, expect, it } from "vite-plus/test";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vite-plus/test";
 import { EnvironmentId, MessageId, ThreadId } from "@goat/contracts";
 import {
   collectAssistantCitations,
@@ -6,6 +6,7 @@ import {
 } from "@goat/shared/assistantCitations";
 
 import { removeLocalStorageItem } from "./hooks/useLocalStorage";
+import { createMemoryStorage } from "./lib/storage";
 
 import {
   MAX_STASH_ENTRIES,
@@ -235,6 +236,65 @@ describe("promptStashStore", () => {
       }),
     );
     expect(usePromptStashStore.getState().entries).toEqual([]);
+  });
+});
+
+describe("prompt stash saved by another tab", () => {
+  /** Two module instances over one localStorage stand in for two tabs of the same origin. */
+  async function openTwoTabs() {
+    const sharedStorage = createMemoryStorage();
+    vi.stubGlobal("localStorage", sharedStorage);
+    vi.resetModules();
+    const thisTab = await import("./promptStashStore");
+    vi.resetModules();
+    const otherTab = await import("./promptStashStore");
+    const savedIds = () =>
+      JSON.parse(sharedStorage.getItem(PROMPT_STASH_STORAGE_KEY) as string).state.entries.map(
+        (entry: PromptStashEntry) => entry.id,
+      );
+    return { sharedStorage, thisTab, otherTab, savedIds };
+  }
+
+  afterEach(() => {
+    vi.unstubAllGlobals();
+    vi.resetModules();
+  });
+
+  // regression: upstream #35010 stashing in one tab erased what another tab stashed after it loaded
+  it("keeps an entry another tab stashed after this tab loaded", async () => {
+    const { sharedStorage, thisTab } = await openTwoTabs();
+    sharedStorage.setItem(
+      PROMPT_STASH_STORAGE_KEY,
+      JSON.stringify({ version: 2, state: { entries: [makeEntry({ id: "other-tab" })] } }),
+    );
+
+    thisTab.usePromptStashStore.getState().stashEntry(makeEntry({ id: "this-tab" }));
+
+    const saved = JSON.parse(sharedStorage.getItem(PROMPT_STASH_STORAGE_KEY) as string);
+    expect(saved.state.entries.map((entry: PromptStashEntry) => entry.id)).toEqual([
+      "this-tab",
+      "other-tab",
+    ]);
+  });
+
+  it("keeps this tab's entry when the other tab stashes after it", async () => {
+    const { thisTab, otherTab, savedIds } = await openTwoTabs();
+
+    thisTab.usePromptStashStore.getState().stashEntry(makeEntry({ id: "this-tab" }));
+    otherTab.usePromptStashStore.getState().stashEntry(makeEntry({ id: "other-tab" }));
+
+    expect(savedIds()).toEqual(["other-tab", "this-tab"]);
+  });
+
+  it("does not bring back an entry the other tab took", async () => {
+    const { thisTab, otherTab, savedIds } = await openTwoTabs();
+    thisTab.usePromptStashStore.getState().stashEntry(makeEntry({ id: "shared" }));
+    otherTab.usePromptStashStore.getState().stashEntry(makeEntry({ id: "other-tab" }));
+    expect(otherTab.usePromptStashStore.getState().takeEntry("shared").entry?.id).toBe("shared");
+
+    thisTab.usePromptStashStore.getState().stashEntry(makeEntry({ id: "this-tab" }));
+
+    expect(savedIds()).toEqual(["this-tab", "other-tab"]);
   });
 });
 

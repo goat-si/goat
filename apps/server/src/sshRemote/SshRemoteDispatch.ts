@@ -30,7 +30,7 @@ import {
 import * as NetService from "@goat/shared/Net";
 import { isWindowsShellOs, toWindowsHostPath } from "@goat/shared/path";
 import * as SshAuth from "@goat/ssh/auth";
-import { discoverSshHosts } from "@goat/ssh/config";
+import { discoverSshHostAliases } from "./sshHostAliases.ts";
 import { SshPasswordPromptError } from "@goat/ssh/errors";
 import * as SshTunnel from "@goat/ssh/tunnel";
 import { PenManagedRoutes } from "../hubNodes/PenManagedRoutes.ts";
@@ -80,6 +80,7 @@ import {
 } from "./sshEnvironmentRoute.ts";
 import { remoteModelOffer } from "./remoteModelOffer.ts";
 import {
+  answeredToolFailure,
   describe,
   failure,
   rpcLaunchFacts,
@@ -548,7 +549,7 @@ const make = Effect.gen(function* () {
           ),
         );
 
-  const knownHosts = withRuntime(discoverSshHosts({})).pipe(
+  const knownHosts = withRuntime(discoverSshHostAliases()).pipe(
     Effect.mapError((error) => failure("ssh_failed", describe(error))),
   );
 
@@ -1713,6 +1714,7 @@ const make = Effect.gen(function* () {
               failure(
                 "remote_outdated",
                 missingRemoteToolMessage(alias, call.tool, link.host.serverVersion),
+                { hostAnswered: true },
               ),
             );
           return Effect.fail(
@@ -1721,6 +1723,7 @@ const make = Effect.gen(function* () {
               : failure(
                   "remote_refused",
                   `GOAT on ${alias} could not run ${call.tool}: ${describe(error)}`,
+                  answeredToolFailure(error),
                 ),
           );
         }),
@@ -1732,10 +1735,9 @@ const make = Effect.gen(function* () {
         );
       const result = readRemoteToolResult(call.tool, answer.value);
       if (!result.ok)
-        return yield* new SshRemoteDispatchError({
-          reason: "remote_refused",
-          message: result.message,
+        return yield* failure("remote_refused", result.message, {
           remoteCode: result.code,
+          hostAnswered: true,
         });
       return result.value;
     });
@@ -1844,10 +1846,9 @@ const make = Effect.gen(function* () {
         }
         const result = readRemoteToolResult(call.tool, answer.value);
         if (!result.ok) {
-          return yield* new SshRemoteDispatchError({
-            reason: "remote_refused",
-            message: result.message,
+          return yield* failure("remote_refused", result.message, {
             remoteCode: result.code,
+            hostAnswered: true,
           });
         }
         if (call.onResolvedEnvironmentId !== undefined) {
@@ -1918,6 +1919,7 @@ const make = Effect.gen(function* () {
                   call.tool,
                   routeBootstrap.remoteServerVersion,
                 ),
+                { hostAnswered: true },
               ),
             );
           }
@@ -1927,6 +1929,7 @@ const make = Effect.gen(function* () {
               : failure(
                   "remote_refused",
                   `GOAT on ${target.alias} could not run ${call.tool}: ${describe(error)}`,
+                  answeredToolFailure(error),
                 ),
           );
         }),

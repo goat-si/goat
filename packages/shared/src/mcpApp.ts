@@ -6,6 +6,20 @@ export const MCP_APP_MIME_TYPE = "text/html;profile=mcp-app";
 export const MCP_APP_EXTENSION_ID = "io.modelcontextprotocol/ui";
 export const MCP_APP_RESOURCE_SCHEME = "ui://";
 export const MCP_APP_OUTPUT_KEY = GOAT_MCP_APP_OUTPUT_KEY;
+/** Frame URL query parameter carrying the host's color scheme before `ui/initialize`. */
+export const MCP_APP_COLOR_SCHEME_PARAM = "goat-color-scheme";
+
+/**
+ * The URL a client loads an MCP App from: the app paints before `ui/initialize`, so it reads
+ * the initial scheme from here. Plain string work, since React Native's URL cannot set params.
+ */
+export function mcpAppFrameUrl(assetUrl: string, appearance: "light" | "dark"): string {
+  const hashAt = assetUrl.indexOf("#");
+  const base = hashAt === -1 ? assetUrl : assetUrl.slice(0, hashAt);
+  const hash = hashAt === -1 ? "" : assetUrl.slice(hashAt);
+  const separator = base.includes("?") ? "&" : "?";
+  return `${base}${separator}${MCP_APP_COLOR_SCHEME_PARAM}=${appearance}${hash}`;
+}
 
 const MCP_APP_MIN_HEIGHT = 80;
 export const MCP_APP_DEFAULT_HEIGHT = 320;
@@ -184,6 +198,16 @@ export function injectMcpAppCsp(html: string, csp: McpAppCsp | undefined): strin
 export function injectMcpAppThemeBootstrap(html: string): string {
   const script = `<script>
 (() => {
+  try {
+    const initial = new URLSearchParams(location.search).get(${JSON.stringify(MCP_APP_COLOR_SCHEME_PARAM)});
+    if (initial === "light" || initial === "dark") {
+      // A meta tag, unlike an inline style, survives the app's own <html style> attribute.
+      const meta = document.createElement("meta");
+      meta.name = "color-scheme";
+      meta.content = initial;
+      document.head.append(meta);
+    }
+  } catch {}
   window.addEventListener("message", (event) => {
     if (event.source !== window.parent) return;
     const message = event.data;

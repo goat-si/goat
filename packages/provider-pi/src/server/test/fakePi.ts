@@ -1,6 +1,7 @@
 import { assert } from "@effect/vitest";
 import * as Cause from "effect/Cause";
 import * as Effect from "effect/Effect";
+import * as Redacted from "effect/Redacted";
 import * as Queue from "effect/Queue";
 import * as Schema from "effect/Schema";
 import * as Sink from "effect/Sink";
@@ -9,6 +10,15 @@ import * as ChildProcess from "effect/process/ChildProcess";
 import * as ChildProcessSpawner from "effect/process/ChildProcessSpawner";
 
 import type { PiRpcRecord } from "../rpc.ts";
+
+const plainEnvValue = (value: string | Redacted.Redacted<string> | undefined) =>
+  Redacted.isRedacted(value) ? Redacted.value(value) : value;
+const plainEnv = (
+  env: Readonly<Record<string, string | Redacted.Redacted<string> | undefined>> | undefined,
+) =>
+  env === undefined
+    ? undefined
+    : Object.fromEntries(Object.entries(env).map(([key, value]) => [key, plainEnvValue(value)]));
 
 const decodeJsonLine = Schema.decodeSync(Schema.fromJsonString(Schema.Unknown));
 const encodeJsonLine = Schema.encodeSync(Schema.fromJsonString(Schema.Unknown));
@@ -31,8 +41,12 @@ export interface FakePi {
   readonly resolveDeferredState: (data: unknown) => Effect.Effect<void>;
   readonly failNextState: () => void;
   readonly failNextPrompt: () => void;
+  /** Pi before 0.99 acknowledges prompts without a disposition. */
+  readonly omitPromptDisposition: () => void;
   readonly failNextThinking: () => void;
-  readonly deferNextLifecycle: (type: "switch_session" | "new_session" | "fork" | "abort") => void;
+  readonly deferNextLifecycle: (
+    type: "switch_session" | "new_session" | "fork" | "prompt" | "abort",
+  ) => void;
   readonly deferNextModelSelection: () => void;
   readonly queueModels: (models: ReadonlyArray<unknown>) => void;
   readonly vetoNextNewSession: () => void;
@@ -84,6 +98,7 @@ export const makeFakePi: Effect.Effect<FakePi> = Effect.gen(function* () {
   let deferredStateRequest: PiRpcRecord | undefined;
   let failState = false;
   let failPrompt = false;
+  let promptDisposition = true;
   let failThinking = false;
   let vetoSwitch = false;
   let vetoNewSession = false;
@@ -150,7 +165,9 @@ export const makeFakePi: Effect.Effect<FakePi> = Effect.gen(function* () {
               "Agent is already processing. Specify streamingBehavior ('steer' or 'followUp') to queue the message.",
           };
         }
-        return base;
+        return promptDisposition && isStreaming
+          ? { ...base, data: { disposition: "queued" } }
+          : base;
       case "get_available_models":
         return { ...base, data: { models } };
       case "set_model":
@@ -233,8 +250,8 @@ export const makeFakePi: Effect.Effect<FakePi> = Effect.gen(function* () {
     Effect.sync(() => {
       if (ChildProcess.isStandardCommand(command)) {
         lastSpawn = {
-          args: command.args,
-          env: command.options.env ?? {},
+          args: command.args.map(String),
+          env: plainEnv(command.options.env) ?? {},
           cwd: command.options.cwd,
         };
       }
@@ -293,6 +310,9 @@ export const makeFakePi: Effect.Effect<FakePi> = Effect.gen(function* () {
     },
     failNextPrompt: () => {
       failPrompt = true;
+    },
+    omitPromptDisposition: () => {
+      promptDisposition = false;
     },
     deferNextLifecycle: (type) => {
       deferredLifecycle = type;

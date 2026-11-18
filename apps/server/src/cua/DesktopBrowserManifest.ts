@@ -1,5 +1,5 @@
 import { DesktopCuaManifestRequest } from "@goat/contracts";
-import * as Crypto from "effect/Crypto";
+import * as SecureRandom from "effect/crypto/SecureRandom";
 import * as Deferred from "effect/Deferred";
 import * as Effect from "effect/Effect";
 import * as Schema from "effect/Schema";
@@ -17,14 +17,14 @@ const decodeRequest = Schema.decodeUnknownEffect(DesktopCuaManifestRequest);
 export const makeDesktopBrowserManifest = Effect.fn("CuaDriver.makeDesktopBrowserManifest")(
   function* () {
     const receiver = yield* DesktopTelemetryReceiver.DesktopTelemetryReceiver;
-    const crypto = yield* Crypto.Crypto;
+    const random = yield* SecureRandom.SecureRandom;
     return (union: Union) =>
       Effect.gen(function* () {
         if (!receiver.cuaManifestReports || !receiver.requestCuaManifest)
           return yield* new DesktopBrowserManifestError({
             cause: "Desktop manifest channel unavailable.",
           });
-        const requestId = yield* crypto.randomUUIDv4();
+        const requestId = yield* random.uuidV4();
         const request = yield* decodeRequest({
           version: 1,
           type: "cuaManifestRequest",

@@ -1,4 +1,3 @@
-/** Finds a usable Node on the remote host for the Node-script runner. */
 export const REMOTE_NODE_ENV_SCRIPT = `prepend_path_if_dir() {
   if [ -d "$1" ]; then
     case ":$PATH:" in

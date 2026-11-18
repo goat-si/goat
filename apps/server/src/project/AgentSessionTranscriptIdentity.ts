@@ -16,7 +16,7 @@ export function transcriptIdentity(filePath: string, stats: FileSystem.File.Info
   };
 }
 
-type TranscriptIdentity = Pick<
+export type TranscriptIdentity = Pick<
   AgentSessionImportSource,
   "filePath" | "size" | "mtimeMs" | "device" | "inode" | "birthtimeMs"
 >;

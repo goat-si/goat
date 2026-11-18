@@ -1,10 +1,9 @@
 import { getPromptControlledTraits, getTraitSelectChange } from "@goat/client-runtime/model-traits";
-import { DEFAULT_SERVER_SETTINGS } from "@goat/contracts";
+import { DEFAULT_SERVER_SETTINGS, ProviderInstanceId } from "@goat/contracts";
 import type {
   EnvironmentId,
   ModelSelection,
   ProjectId,
-  ProviderInstanceId,
   ProviderOptionDescriptor,
   ProviderOptionSelection,
   RuntimeMode,
@@ -14,21 +13,24 @@ import {
   modelPreferencesMigrationPatch,
   resolveModelPreferences,
 } from "@goat/shared/serverSettings";
-import { RegistryContext, useAtomValue } from "@effect/atom-react";
+import { RegistryContext, useAtomMount, useAtomValue } from "@effect/atom-react";
 import * as Haptics from "expo-haptics";
 import { AsyncResult } from "effect/reactivity";
 import { createContext, use, useEffect, useRef, useState, type ReactNode } from "react";
 
+import { isAtomCommandInterrupted } from "@goat/client-runtime/state/runtime";
 import * as Dialog from "../../components/ui/Dialog";
 import { environmentCatalog } from "../../connection/catalog";
 import {
   buildModelOptions,
   groupByProvider,
+  serverConfigForCwd,
   type ModelOption,
   type ProviderGroup,
 } from "../../lib/modelOptions";
 import { applyProviderOptionSelection } from "../../lib/providerOptions";
 import { mobilePreferencesAtom } from "../../state/preferences";
+import { providerWorkspaceSnapshotRefresh } from "../../state/provider-workspace-snapshot-refresh";
 import { useEnvironmentQuery } from "../../state/query";
 import { environmentServerConfigsAtom, serverEnvironment } from "../../state/server";
 import { useAtomCommand } from "../../state/use-atom-command";
@@ -36,6 +38,7 @@ import {
   compatibleRuntimeModeForChoices,
   runtimeModeChoicesForSupportedModes,
 } from "./thread-settings-options";
+import { commandFailureText } from "../../lib/commandFailureText";
 import { canSelectModel, modelFavoriteKey } from "./thread-settings-sheet-state";
 
 const EMPTY_MODEL_FAVORITES: ReadonlyArray<{
@@ -49,6 +52,7 @@ const attemptedMigrationGenerations = new Map<EnvironmentId, number>();
 export type ThreadSettingsSessionProps = {
   readonly environmentId: EnvironmentId | null;
   readonly projectId: ProjectId | null;
+  readonly cwd: string | null;
   readonly providerInstanceId?: ProviderInstanceId;
   readonly lockedProviderInstanceId?: ProviderInstanceId;
   readonly providerGroups: ReadonlyArray<ProviderGroup>;
@@ -97,6 +101,8 @@ export type ThreadSettingsSessionValue = {
   readonly setSearchQuery: (query: string) => void;
   readonly setShowLegacy: (showLegacy: boolean) => void;
   readonly toggleProvider: (providerKey: string) => void;
+  /** The provider whose catalog for this folder the picker keeps fresh. */
+  readonly workspaceScan: { readonly instanceId: ProviderInstanceId; readonly cwd: string } | null;
 };
 
 const ThreadSettingsSessionContext = createContext<ThreadSettingsSessionValue | null>(null);
@@ -123,7 +129,7 @@ export function ThreadSettingsSessionProvider(
     manageHidden && config
       ? groupByProvider(
           buildModelOptions(
-            config,
+            serverConfigForCwd(config, props.cwd),
             props.selectedModel,
             props.lockedProviderInstanceId,
             props.projectId,
@@ -204,6 +210,13 @@ export function ThreadSettingsSessionProvider(
         },
       },
     });
+    // A later toggle of the same model replaces this one; only the latest says why it failed.
+    if (
+      result._tag === "Failure" &&
+      !isAtomCommandInterrupted(result) &&
+      pendingFavorites.current.get(key) === pending
+    )
+      Dialog.alert("Favorites not saved", commandFailureText(result));
     if (
       AsyncResult.isSuccess(result) &&
       registry.get(environmentServerConfigsAtom).get(environmentId)?.settings.favorites ===
@@ -248,9 +261,14 @@ export function ThreadSettingsSessionProvider(
           ],
         },
       },
-    }).then(() => {
+    }).then((result) => {
       pendingHidden.current.delete(option.key);
       setPendingHiddenKeys(new Set(pendingHidden.current));
+      if (result._tag === "Failure" && !isAtomCommandInterrupted(result))
+        Dialog.alert(
+          option.isHidden ? "Could not show the model" : "Could not hide the model",
+          commandFailureText(result),
+        );
     });
   };
   const [showLegacyToggle, setShowLegacyToggle] = useState(false);
@@ -272,7 +290,7 @@ export function ThreadSettingsSessionProvider(
       ? findApplied(
           groupByProvider(
             buildModelOptions(
-              config,
+              serverConfigForCwd(config, props.cwd),
               props.selectedModel,
               props.lockedProviderInstanceId,
               props.projectId,
@@ -337,8 +355,17 @@ export function ThreadSettingsSessionProvider(
     });
   };
 
+  const environmentId = props.environmentId;
+  // Like the web picker's open tab: scanning every provider would spawn a probe per provider.
+  const scannedInstanceId =
+    providerFilter !== null && providerFilter !== FAVORITES_PROVIDER_FILTER
+      ? ProviderInstanceId.make(providerFilter)
+      : props.providerInstanceId;
+  const workspaceScan =
+    props.cwd && scannedInstanceId ? { instanceId: scannedInstanceId, cwd: props.cwd } : null;
+
   const value = {
-    environmentId: props.environmentId,
+    environmentId,
     providerInstanceId: props.providerInstanceId,
     providerGroups,
     appliedModel,
@@ -368,13 +395,32 @@ export function ThreadSettingsSessionProvider(
     setShowLegacy: setShowLegacyToggle,
     toggleProvider,
     toggleFavorite,
+    workspaceScan,
   } satisfies ThreadSettingsSessionValue;
 
   return (
     <ThreadSettingsSessionContext.Provider value={value}>
+      {environmentId && workspaceScan ? (
+        <ProviderWorkspaceSnapshotScan
+          key={workspaceScan.instanceId}
+          environmentId={environmentId}
+          instanceId={workspaceScan.instanceId}
+          cwd={workspaceScan.cwd}
+        />
+      ) : null}
       {props.children}
     </ThreadSettingsSessionContext.Provider>
   );
+}
+
+/** A project's own provider config can add models only its workspace scan lists. */
+function ProviderWorkspaceSnapshotScan(props: {
+  readonly environmentId: EnvironmentId;
+  readonly instanceId: ProviderInstanceId;
+  readonly cwd: string;
+}) {
+  useAtomMount(providerWorkspaceSnapshotRefresh(props));
+  return null;
 }
 
 export function useThreadSettingsSession() {

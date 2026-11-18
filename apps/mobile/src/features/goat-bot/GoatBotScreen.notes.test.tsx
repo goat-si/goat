@@ -60,6 +60,26 @@ vi.mock("../threads/ComposerAttachmentButton", () => ({
     <button onClick={props.onPickMedia}>Photo Library</button>
   ),
 }));
+// The chat's + opens a native menu; a button per action, "<menu>: <action>", stands for choosing it.
+vi.mock("../../components/ui/Menu", () => ({
+  Menu: (props: {
+    children?: ReactNode;
+    accessibilityLabel?: string;
+    actions: ReadonlyArray<{ id: string; title: string }>;
+    onPressAction: (event: { nativeEvent: { event: string } }) => void;
+  }) => (
+    <div>
+      {props.children}
+      {props.actions.map((action) => (
+        <button
+          key={action.id}
+          aria-label={`${props.accessibilityLabel}: ${action.title}`}
+          onClick={() => props.onPressAction({ nativeEvent: { event: action.id } })}
+        />
+      ))}
+    </div>
+  ),
+}));
 vi.mock("../../components/ComposerAttachmentStrip", () => ({
   ComposerAttachmentStrip: () => null,
 }));
@@ -237,6 +257,8 @@ vi.mock("./useMobileGoatBotSession", () => ({
     replyingSince: null,
     activity: null,
     supportsTaskThreads: true,
+    homeConnected: true,
+    taskChips: new Map(),
     streamingReplyIds: new Set<string>(),
     visibleTurnItems: [],
     boundedSnapshots: false,
@@ -247,6 +269,8 @@ vi.mock("../../state/atom-registry", () => ({ appAtomRegistry: {} }));
 vi.mock("expo-crypto", () => ({ randomUUID: () => globalThis.crypto.randomUUID() }));
 vi.mock("../../state/channels", () => ({
   channelEnvironment: {
+    // Home's shared current work; its links are not read in this file.
+    homeCurrentOpenableWorkAtom: () => "home-current",
     listBotThreads: () => "tasks",
     listChildWork: () => "child",
     listBotNotes: () => "notes",
@@ -275,7 +299,7 @@ vi.mock("../../state/environments", () => ({
 }));
 vi.mock("./goatBotHomeMode", async (original) => ({
   ...(await original<typeof import("./goatBotHomeMode")>()),
-  pickMobileGoatBotEnvironment: () => ({ environmentId: "env", connected: true }),
+  pickMobileGoatBotHomeEnvironment: () => ({ environmentId: "env", connected: true }),
 }));
 vi.mock("./useMobileGoatBotHomeMode", () => ({
   useMobileGoatBotHomeMode: () => ({ environments: [], botRef: { threadId: "bot" } }),
@@ -590,7 +614,7 @@ it("a photo the picker is still reading counts as a message in the box", async (
   const { Alert } = await import("react-native");
   vi.mocked(Alert.alert).mockClear();
   const view = await render();
-  await press(view.container, "Photo Library");
+  await press(view.container, "Add to message: Photo Library");
   expect(box.pick).not.toBeNull();
   await press(view.container, "Open GOAT Bot home");
   await press(view.container, "New routine");
@@ -612,7 +636,7 @@ it("a photo the picker could not read, or that failed outright, frees the box ag
     setup();
     session.attachments = true;
     const view = await render();
-    await press(view.container, "Photo Library");
+    await press(view.container, "Add to message: Photo Library");
     await press(view.container, "Open GOAT Bot home");
     await press(view.container, "New routine");
     expect(composer(view.container).value).toBe("");
@@ -641,6 +665,18 @@ it("Android focuses the message box after the sheet has gone and the request is 
   // Android draws its own header chip, named for the bot.
   await press(view.container, "GOAT Bot");
   await press(view.container, "New routine");
+  expect(box.focus).toHaveBeenCalledTimes(1);
+  expect(box.atFocus).toEqual({ sheet: false, text: "Set up a routine: " });
+  const end = "Set up a routine: ".length;
+  expect(box.setSelection).toHaveBeenCalledWith(end, end);
+  await view.unmount();
+});
+
+it("Android focuses the message box once New routine from the + is in it, caret at the end", async () => {
+  setup();
+  box.platform.OS = "android";
+  const view = await render();
+  await press(view.container, "Add to message: New routine");
   expect(box.focus).toHaveBeenCalledTimes(1);
   expect(box.atFocus).toEqual({ sheet: false, text: "Set up a routine: " });
   const end = "Set up a routine: ".length;

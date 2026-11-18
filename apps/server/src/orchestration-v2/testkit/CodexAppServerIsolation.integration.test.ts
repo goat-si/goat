@@ -1,4 +1,5 @@
 import { assert, it } from "@effect/vitest";
+import * as NodeCrypto from "@effect/platform-node/NodeCrypto";
 import * as NodeServices from "@effect/platform-node/NodeServices";
 import {
   type CodexAppServerIsolation,
@@ -241,7 +242,11 @@ const runIsolationScenario = (isolation: CodexAppServerIsolation) =>
           ),
         ),
       );
-    }).pipe(Effect.provide(Layer.merge(IdAllocator.layer, NodeServices.layer))),
+    }).pipe(
+      Effect.provide(
+        Layer.merge(IdAllocator.layer, Layer.mergeAll(NodeServices.layer, NodeCrypto.layer)),
+      ),
+    ),
   );
 
 it.effect("one Codex app-server ending leaves another thread's turn running", () =>

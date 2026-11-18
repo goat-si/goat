@@ -1,4 +1,10 @@
-import { ChannelTaskId, EnvironmentId, ThreadId, type BotThreadRow } from "@goat/contracts";
+import {
+  ChannelTaskId,
+  EnvironmentId,
+  ThreadId,
+  type BotThreadRow,
+  type ChannelTaskChip,
+} from "@goat/contracts";
 import { useState } from "react";
 import { expect, it, vi } from "vite-plus/test";
 import { userEvent } from "vite-plus/test/browser";
@@ -10,10 +16,17 @@ const actions = vi.hoisted(() => ({
   update: vi.fn(),
   refresh: vi.fn(),
   permit: true,
+  current: { eligible: false, list: "pending", links: [] } as {
+    eligible: boolean;
+    list: string;
+    links: unknown[];
+    work?: unknown;
+  },
+  children: [] as unknown[],
 }));
 vi.mock("@effect/atom-react", async (original) => ({
   ...(await original<typeof import("@effect/atom-react")>()),
-  useAtomValue: () => actions.permit,
+  useAtomValue: (atom: string) => (atom === "current" ? actions.current : actions.permit),
 }));
 vi.mock("~/localApi", () => {
   const api = () => ({ contextMenu: { show: actions.show } });
@@ -24,6 +37,7 @@ vi.mock("~/state/channels", () => ({
     updateTaskView: { permissionAtom: () => "permission", execute: actions.update },
     listChildWork: () => null,
     remoteWorkOpenable: () => "openable",
+    homeCurrentOpenableWorkAtom: () => "current",
   },
 }));
 vi.mock("~/state/use-atom-command", () => ({
@@ -32,7 +46,7 @@ vi.mock("~/state/use-atom-command", () => ({
 vi.mock("~/state/environments", () => ({ useEnvironment: () => null }));
 vi.mock("~/state/query", () => ({
   useEnvironmentQuery: () => ({
-    data: null,
+    data: { groups: actions.children },
     error: null,
     failure: null,
     isPending: false,
@@ -42,6 +56,7 @@ vi.mock("~/state/query", () => ({
 }));
 
 import { GoatBotHomeWork, type HomeHistory } from "./GoatBotHomeWork";
+import { GoatBotMemberContext } from "./goatBotMemberContext";
 
 const environmentId = EnvironmentId.make("env");
 
@@ -66,6 +81,8 @@ function taskRow(
 
 function setup(rows: Row[] = []) {
   actions.permit = true;
+  actions.current = { eligible: false, list: "pending", links: [] };
+  actions.children = [];
   actions.show.mockReset();
   actions.show.mockResolvedValue(null);
   actions.update.mockReset();
@@ -186,6 +203,134 @@ it("says Unread on the control that opens an unread task", async () => {
     .toBeVisible();
 });
 
+it("a row names its pull requests and their state on the control that opens it", async () => {
+  const pullRequests = [
+    { repository: "goat-si/goat", number: 42, state: "open", watching: false },
+    { repository: "goat-si/goat", number: 41, state: "merged", watching: false },
+    { repository: "goat-si/goat", number: 40, watching: false },
+  ];
+  const rows = setup([
+    {
+      ...taskRow("task-a", "Ship chips", "running", "2026-11-09T03:00:00.000Z"),
+      pullRequests,
+      pullRequestsOmitted: 2,
+    } as Row,
+    {
+      ...taskRow("task-b", "Read state", "running", "2026-11-09T02:00:00.000Z"),
+      pullRequests: [{ repository: "goat-si/goat", number: 7, watching: false }],
+    } as Row,
+    // An older server sends no pull requests.
+    taskRow("task-c", "Older server", "running", "2026-11-09T01:00:00.000Z"),
+  ]);
+  await using screen = await render(view(rows));
+  await expect
+    .element(
+      screen.getByRole("button", {
+        name: /^Ship chips.*Pull request goat-si\/goat#42, open.*Pull request goat-si\/goat#41, merged.*3 more pull requests$/,
+      }),
+    )
+    .toBeVisible();
+  expect(screen.getByRole("button", { name: /goat-si\/goat#40/ }).query()).toBeNull();
+  await expect
+    .element(
+      screen.getByRole("button", {
+        name: /^Read state.*Pull request goat-si\/goat#7, state unknown/,
+      }),
+    )
+    .toBeVisible();
+  expect(screen.getByText("State unknown").query()).toBeNull();
+  const older = screen.getByRole("button", { name: /^Older server/ });
+  await expect.element(older).toBeVisible();
+  expect(older.element().textContent).not.toMatch(/#|more/);
+});
+
+it("a row says when it last moved: compact on screen, in words to a screen reader", async () => {
+  vi.setSystemTime(Date.parse("2026-11-09T12:00:30.000Z"));
+  using _clock = { [Symbol.dispose]: () => vi.useRealTimers() };
+  const rows = setup([
+    taskRow("task-now", "Just started", "running", "2026-11-09T12:00:10.000Z"),
+    taskRow("task-min", "Four minutes", "running", "2026-11-09T11:56:00.000Z"),
+    {
+      ...taskRow("task-hour", "One hour", "running", "2026-11-09T10:30:00.000Z"),
+      pullRequests: [{ repository: "goat-si/goat", number: 42, state: "open", watching: false }],
+    } as Row,
+    taskRow("task-days", "Three days", "running", "2026-11-06T11:00:00.000Z"),
+  ]);
+  await using screen = await render(view(rows));
+  for (const name of [
+    /^Just started\W+Working\W+just now$/,
+    /^Four minutes\W+Working\W+4 minutes ago$/,
+    /^One hour\W+Working\W+1 hour ago\W+Pull request goat-si\/goat#42, open$/,
+    /^Three days\W+Working\W+3 days ago$/,
+  ])
+    await expect.element(screen.getByRole("button", { name })).toBeVisible();
+  expect(screen.getByRole("button", { name: /^Four minutes/ }).element().textContent).toContain(
+    "4m",
+  );
+});
+
+it("a row whose pull requests are all counted, not listed, says how many", async () => {
+  const rows = setup([
+    {
+      ...taskRow("task-a", "Counted only", "running", "2026-11-09T01:00:00.000Z"),
+      pullRequestsOmitted: 3,
+    } as Row,
+  ]);
+  await using screen = await render(view(rows));
+  const control = screen.getByRole("button", { name: /^Counted only.*3 more pull requests$/ });
+  await expect.element(control).toBeVisible();
+  expect(control.element().textContent).toContain("+3 more");
+});
+
+it("in the 230px panel a pinned row keeps its pin, and each chip keeps its number and state", async () => {
+  const at = "2026-11-09T01:00:00.000Z";
+  const row = taskRow("task-pin", "Pinned with long repository names", "running", at);
+  const rows = setup([
+    {
+      ...row,
+      view: { ...row.view, pinnedAt: at },
+      pullRequests: [
+        {
+          repository: "goat-si/a-very-long-repository-name-for-chips",
+          number: 3301,
+          state: "closed",
+          watching: false,
+        },
+        {
+          repository: "another-organization/another-quite-long-repository",
+          number: 77,
+          state: "merged",
+          watching: false,
+        },
+      ],
+    } as Row,
+  ]);
+  await using screen = await render(
+    <div data-panel style={{ width: 230 }}>
+      {view(rows)}
+    </div>,
+  );
+  await expect.element(screen.getByRole("button", { name: /^Pinned with long/ })).toBeVisible();
+  const panel = document.querySelector("[data-panel]")?.getBoundingClientRect();
+  const pin = document.querySelector("[data-work-pin]");
+  expect(panel).toBeDefined();
+  expect(pin).not.toBeNull();
+  const shown = [
+    pin,
+    ...["#3301", "Closed", "#77", "Merged"].map((text) =>
+      screen.getByText(text, { exact: true }).element(),
+    ),
+  ];
+  for (const element of shown) {
+    const box = element?.getBoundingClientRect();
+    expect(box?.width).toBeGreaterThan(0);
+    expect(box?.left).toBeGreaterThanOrEqual(panel?.left ?? Number.NaN);
+    expect(box?.right).toBeLessThanOrEqual((panel?.right ?? Number.NaN) + 0.5);
+    if (element instanceof HTMLElement)
+      expect(element.scrollWidth).toBeLessThanOrEqual(element.clientWidth);
+  }
+});
+
 it("ends a long list with a centred Show more row that shows the rest", async () => {
   const rows = setup(
     Array.from({ length: 7 }, (_, index) =>
@@ -211,6 +356,85 @@ function Expandable({ rows }: { readonly rows: readonly Row[] }) {
   const [showAll, setShowAll] = useState(false);
   return view(rows, { showAll, onShowAllChange: setShowAll });
 }
+
+const finishedRows = () =>
+  Array.from({ length: 7 }, (_, index) =>
+    taskRow(`task-${index}`, `Finished ${index + 1}`, "completed", "2026-11-04T01:00:00.000Z"),
+  );
+function PagedWork({
+  rows,
+  loadMore,
+  loading = false,
+}: {
+  readonly rows: readonly Row[];
+  readonly loadMore: () => void;
+  readonly loading?: boolean;
+}) {
+  const [showAll, setShowAll] = useState(false);
+  return view(rows, {
+    showAll,
+    onShowAllChange: setShowAll,
+    history: history({
+      supported: true,
+      hasMore: true,
+      loading,
+      loadMore,
+      currentTaskIds: new Set(rows.map((row) => row.task.taskId)),
+    }),
+  });
+}
+
+it("without Home's governance one Show more press shows the held rows and asks for older work, as before", async () => {
+  const rows = setup(finishedRows());
+  const loadMore = vi.fn();
+  await using screen = await render(<PagedWork rows={rows} loadMore={loadMore} />);
+  await userEvent.click(screen.getByRole("button", { name: "Show more" }));
+  await expect.element(screen.getByText("Finished 7")).toBeVisible();
+  expect(loadMore).toHaveBeenCalledOnce();
+});
+
+it("a governed Home reveals a held row and its atom link with one press, before older work answers", async () => {
+  const rows = setup(finishedRows()).map((row) =>
+    row.task.taskId === "task-6"
+      ? { ...row, worker: { environmentId, threadId: ThreadId.make("held-worker") } }
+      : row,
+  );
+  actions.current = {
+    eligible: true,
+    list: "ready",
+    work: { running: [], waiting: [], finished: rows.map((row) => ({ row, remote: [] })) },
+    links: [{ taskId: "task-6", environmentId, threadId: "held-worker", kind: "worker" }],
+  };
+  // The older-work read never answers here: the held row must not wait for it.
+  const loadMore = vi.fn(() => new Promise<void>(() => {}));
+  await using screen = await render(<PagedWork rows={rows} loadMore={loadMore} />);
+  await expect.element(screen.getByText("Finished 7")).not.toBeInTheDocument();
+  await userEvent.click(screen.getByRole("button", { name: "Show more" }));
+  await expect.element(screen.getByText("Finished 7")).toBeVisible();
+  actions.show.mockResolvedValueOnce("work");
+  await userEvent.click(screen.getByRole("button", { name: "Actions for Finished 7" }));
+  await vi.waitFor(() =>
+    expect(
+      Array.from(screen.container.querySelectorAll("a")).map((link) => link.getAttribute("href")),
+    ).toContain("/env/held-worker"),
+  );
+  expect(loadMore).toHaveBeenCalledOnce();
+});
+
+it("a governed Home reveals its held rows even while an older-work read is still running", async () => {
+  const rows = setup(finishedRows());
+  actions.current = {
+    eligible: true,
+    list: "ready",
+    work: { running: [], waiting: [], finished: [] },
+    links: [],
+  };
+  const loadMore = vi.fn();
+  await using screen = await render(<PagedWork rows={rows} loadMore={loadMore} loading />);
+  await userEvent.click(screen.getByRole("button", { name: "Show more" }));
+  await expect.element(screen.getByText("Finished 7")).toBeVisible();
+  expect(loadMore).not.toHaveBeenCalled();
+});
 
 it("says it is loading while the first read runs, not an empty claim", async () => {
   const rows = setup([]);
@@ -295,6 +519,7 @@ it("offers history continuation and explains incomplete older work and truncated
   await using screen = await render(
     view(rows, {
       history: history({
+        supported: true,
         hasMore: true,
         incomplete: true,
         launchesTruncated: new Set([ChannelTaskId.make("task-a")]),
@@ -308,6 +533,46 @@ it("offers history continuation and explains incomplete older work and truncated
   await expect.element(screen.getByText("Some threads are listed in Threads.")).toBeVisible();
   await userEvent.click(screen.getByRole("button", { name: "Show more" }));
   expect(loadMore).toHaveBeenCalledOnce();
+});
+
+it("removes the truncated history note when the task returns to the current list", async () => {
+  const rows = setup([taskRow("task-a", "Earlier task", "completed", "2026-11-09T01:00:00.000Z")]);
+  const truncated = new Set([ChannelTaskId.make("task-a")]);
+  await using screen = await render(
+    view(rows, { history: history({ supported: true, launchesTruncated: truncated }) }),
+  );
+  await expect.element(screen.getByText("Some threads are listed in Threads.")).toBeVisible();
+  actions.current = {
+    eligible: true,
+    list: "ready",
+    work: { running: [], waiting: [], finished: [] },
+    links: [],
+  };
+  await screen.rerender(
+    view(rows, {
+      history: history({
+        supported: true,
+        launchesTruncated: truncated,
+        currentTaskIds: truncated,
+      }),
+    }),
+  );
+  expect(screen.getByText("Some threads are listed in Threads.").query()).toBeNull();
+});
+
+it("without Home's governance a current task keeps the truncated note, as before", async () => {
+  const rows = setup([taskRow("task-a", "Earlier task", "completed", "2026-11-09T01:00:00.000Z")]);
+  const truncated = new Set([ChannelTaskId.make("task-a")]);
+  await using screen = await render(
+    view(rows, {
+      history: history({
+        supported: true,
+        launchesTruncated: truncated,
+        currentTaskIds: truncated,
+      }),
+    }),
+  );
+  await expect.element(screen.getByText("Some threads are listed in Threads.")).toBeVisible();
 });
 
 it("a failed older-work read is announced in the status region", async () => {
@@ -410,4 +675,159 @@ it("does not steal focus after a person leaves Show more while history is pendin
   await act(() => finish());
   await expect.element(screen.getByRole("button", { name: /^Older task/ })).toBeVisible();
   expect(document.activeElement).toBe(document.body);
+});
+
+it("uses current atom links, preserves child-only and history links, and falls back on failure", async () => {
+  const current = {
+    ...taskRow("current", "Current", "running", "2026-11-09T01:00:00.000Z"),
+    worker: { environmentId, threadId: ThreadId.make("worker") },
+  };
+  const older = {
+    ...taskRow("older", "Older", "running", "2026-11-09T00:00:00.000Z"),
+    worker: { environmentId, threadId: ThreadId.make("history-worker") },
+  };
+  setup();
+  actions.current = {
+    eligible: true,
+    list: "ready",
+    work: {
+      running: [{ row: current, remote: [{ childWorkId: "kept" }, { childWorkId: "dropped" }] }],
+      waiting: [],
+      finished: [],
+    },
+    links: [
+      { taskId: "current", environmentId, threadId: "worker", kind: "worker" },
+      { taskId: "current", environmentId, threadId: "coding", kind: "coding" },
+      {
+        taskId: "current",
+        environmentId: "remote",
+        threadId: "kept",
+        kind: "remote",
+        remoteChildWorkId: "kept",
+      },
+    ],
+  };
+  actions.children = [
+    {
+      taskId: "current",
+      truncated: false,
+      children: [{ surface: "thread_launch", destination: { threadId: "child-only" } }],
+    },
+  ];
+  const remote = [
+    {
+      childWorkId: "kept",
+      taskId: "current",
+      callerThreadId: "caller",
+      host: "kept-host",
+      state: "bound",
+      threadId: "kept",
+      environmentId: "remote",
+    },
+    {
+      childWorkId: "dropped",
+      taskId: "current",
+      callerThreadId: "caller",
+      host: "dropped-host",
+      state: "bound",
+      threadId: "dropped",
+      environmentId: "remote",
+    },
+  ];
+  remote.push({
+    childWorkId: "history",
+    taskId: "current",
+    callerThreadId: "caller",
+    host: "history-host",
+    state: "released",
+    threadId: "history",
+    environmentId: "remote",
+  });
+  const options = {
+    remoteWork: remote,
+    history: history({ supported: true, currentTaskIds: new Set([ChannelTaskId.make("current")]) }),
+  };
+  await using screen = await render(view([current, older], options));
+  actions.show.mockResolvedValueOnce("work");
+  await userEvent.click(screen.getByRole("button", { name: "Actions for Current" }));
+  actions.show.mockResolvedValueOnce("work");
+  await userEvent.click(screen.getByRole("button", { name: "Actions for Older" }));
+  const hrefs = () =>
+    Array.from(screen.container.querySelectorAll("a")).map((link) => link.getAttribute("href"));
+  expect(hrefs()).toContain("/env/worker");
+  expect(hrefs()).toContain("/env/coding");
+  expect(hrefs()).toContain("/remote/kept");
+  expect(hrefs()).not.toContain("/remote/dropped");
+  await expect.element(screen.getByText("dropped-host · Unavailable")).toBeVisible();
+  await expect
+    .element(screen.getByRole("link", { name: "Open work thread on kept-host" }))
+    .toHaveAttribute("href", "/remote/kept");
+  await expect
+    .element(screen.getByRole("link", { name: "Open work thread on history-host" }))
+    .toHaveAttribute("href", "/remote/history");
+  expect(hrefs()).toContain("/env/child-only");
+  expect(hrefs()).toContain("/env/history-worker");
+  actions.current = { eligible: true, list: "failed", links: [] };
+  await screen.rerender(view([current, older], options));
+  expect(hrefs()).toContain("/remote/dropped");
+});
+
+it("records the member Home when opening a worker link from its row", async () => {
+  const row = {
+    ...taskRow("task-a", "Member task", "running", "2026-11-09T01:00:00.000Z"),
+    worker: { environmentId, threadId: ThreadId.make("worker") },
+  };
+  setup();
+  const member = {
+    botId: "member",
+    environmentId,
+    sessionThreadId: "member-thread",
+  } as unknown as import("@goat/contracts").BotProfile;
+  await using screen = await render(
+    <GoatBotMemberContext value={member}>{view([row])}</GoatBotMemberContext>,
+  );
+  const router = screen.router;
+  if (!router) throw new Error("missing router");
+  actions.show.mockResolvedValueOnce("work");
+  await userEvent.click(screen.getByRole("button", { name: "Actions for Member task" }));
+  await userEvent.click(screen.getByRole("link", { name: "Open work thread" }));
+  router.history.back();
+  await vi.waitFor(() =>
+    expect(router.state.location.state.goatBotOpenHome).toEqual({
+      key: JSON.stringify(["env", "member"]),
+      taskId: "task-a",
+    }),
+  );
+});
+
+// Regression: the row said Working while the bot's face said it waited for an answer.
+it("says a running task waits for your answer when its worker asks you something", async () => {
+  setup();
+  const rows = [
+    taskRow("quiet", "Keep going", "running", "2026-11-09T01:00:00.000Z"),
+    taskRow("asks", "Pick a name", "running", "2026-11-09T02:00:00.000Z"),
+  ];
+  const chips = new Map([
+    [
+      ChannelTaskId.make("asks"),
+      {
+        taskId: "asks",
+        taskVersion: 2,
+        status: "running",
+        openQuestionCount: 0,
+        observed: {
+          pullRequests: [],
+          needsYou: [{ kind: "question", since: "2026-11-09T02:00:00.000Z" }],
+        },
+      } as unknown as ChannelTaskChip,
+    ],
+  ]);
+  await using screen = await render(view(rows, { chips }));
+  await expect
+    .element(screen.getByRole("button", { name: /^Pick a name/ }))
+    .toMatchTextContent(/Waiting for your answer/);
+  await expect
+    .element(screen.getByRole("button", { name: /^Keep going/ }))
+    .toMatchTextContent(/Working/);
+  expect(titles(screen, ["Keep going", "Pick a name"])).toEqual(["Keep going", "Pick a name"]);
 });

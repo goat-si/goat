@@ -1,3 +1,10 @@
+import { codexHomeHintRegression } from "./CodexHomeHint.testkit.ts";
+import {
+  mockHandle,
+  layerMockSpawner,
+  writeFakeCodexCli,
+  makeMutableServerSettingsService,
+} from "./ProviderRegistry.testkit.ts";
 import * as HostProcess from "@goat/shared/HostProcess";
 import * as CodexErrors from "effect-codex-app-server/errors";
 import { vi } from "vite-plus/test";
@@ -8,6 +15,7 @@ import * as ServerSecretStore from "../auth/ServerSecretStore.ts";
 import * as CodexInstallation from "./CodexInstallation.ts";
 import * as CodexManagedTokenBroker from "./CodexManagedTokenBroker.ts";
 import * as ServerEnvironment from "../environment/ServerEnvironment.ts";
+import * as NodeCrypto from "@effect/platform-node/NodeCrypto";
 import * as NodeServices from "@effect/platform-node/NodeServices";
 import { describe, it, assert, expect } from "@effect/vitest";
 
@@ -24,7 +32,6 @@ import * as PubSub from "effect/PubSub";
 import * as Ref from "effect/Ref";
 import * as Schema from "effect/Schema";
 import * as Scope from "effect/Scope";
-import * as Sink from "effect/Sink";
 import * as Stream from "effect/Stream";
 import * as TestClock from "effect/testing/TestClock";
 
@@ -38,7 +45,6 @@ import {
   ProviderInstanceId,
   ServerSettings,
   ServerProvider,
-  type ServerProviderSlashCommand,
   type ServerSettings as ContractServerSettings,
 } from "@goat/contracts";
 
@@ -46,9 +52,8 @@ import { HttpClient, HttpClientResponse } from "effect/http";
 import { ChildProcessSpawner } from "effect/process";
 import { deepMerge } from "@goat/shared/Struct";
 import { createModelCapabilities } from "@goat/shared/model";
-import { applyServerSettingsPatch } from "@goat/shared/serverSettings";
 
-import { checkCodexProviderStatus, type CodexAppServerProviderSnapshot } from "./CodexProvider.ts";
+import { checkCodexProviderStatus } from "./CodexProvider.ts";
 import { checkClaudeProviderStatus } from "./ClaudeProvider.ts";
 import * as BackgroundPolicy from "../background/BackgroundPolicy.ts";
 import * as AntigravityInstallation from "./AntigravityInstallation.ts";
@@ -77,12 +82,17 @@ import * as ProviderInstanceRegistry from "./ProviderInstanceRegistry.ts";
 import * as ProviderRegistry from "./ProviderRegistry.ts";
 
 import { makeManualOnlyProviderMaintenanceCapabilities } from "@goat/provider-core/server/maintenanceResolver";
+import {
+  selectDescriptor,
+  booleanDescriptor,
+  claudeCapabilities,
+  OBSOLETE_CODEX_APP_SERVER,
+  codexModelCapabilities,
+  makeCodexProbeSnapshot,
+} from "./ProviderRegistry.fixtures.testkit.ts";
 
 vi.mock("@anthropic-ai/claude-agent-sdk", { spy: true });
 
-const decodeServerProvider = Schema.decodeSync(ServerProvider);
-
-const encodeServerProvider = Schema.encodeSync(ServerProvider);
 const decodeServerSettings = Schema.decodeSync(ServerSettings);
 const encodeServerSettings = Schema.encodeSync(ServerSettings);
 const encodedDefaultServerSettings = encodeServerSettings(DEFAULT_SERVER_SETTINGS);
@@ -103,7 +113,6 @@ const defaultCodexSettings: CodexSettings = Schema.decodeSync(CodexSettings)({})
 
 process.env.GOAT_CURSOR_ENABLED = "1";
 
-const encoder = new TextEncoder();
 const TEST_EPOCH = DateTime.makeUnsafe("1970-01-01T00:00:00.000Z");
 const withBundledCompatibility = (snapshot: ServerProvider) =>
   applyProviderCompatibility(
@@ -148,198 +157,6 @@ const layerBackgroundPolicyAlwaysRun = Layer.mock(BackgroundPolicy.BackgroundPol
   shouldRunOpportunisticWork: Effect.succeed(true),
 });
 
-function selectDescriptor(
-  id: string,
-  label: string,
-  options: ReadonlyArray<{ id: string; label: string; isDefault?: boolean }>,
-) {
-  return {
-    id,
-    label,
-    type: "select" as const,
-    options: [...options],
-    ...(options.find((option) => option.isDefault)?.id
-      ? { currentValue: options.find((option) => option.isDefault)?.id }
-      : {}),
-  };
-}
-
-function booleanDescriptor(id: string, label: string) {
-  return {
-    id,
-    label,
-    type: "boolean" as const,
-  };
-}
-
-type TestClaudeCapabilities = {
-  readonly email: string | undefined;
-  readonly subscriptionType: string | undefined;
-  readonly tokenSource: string | undefined;
-  readonly apiKeySource: string | undefined;
-  readonly apiProvider: string | undefined;
-  readonly slashCommands: ReadonlyArray<ServerProviderSlashCommand>;
-};
-
-function claudeCapabilities(overrides: Partial<TestClaudeCapabilities> = {}) {
-  return () =>
-    Effect.succeed({
-      email: undefined,
-      subscriptionType: undefined,
-      tokenSource: undefined,
-      apiKeySource: undefined,
-      apiProvider: undefined,
-      slashCommands: [],
-      ...overrides,
-    });
-}
-
-function mockHandle(result: { stdout: string; stderr: string; code: number }) {
-  return ChildProcessSpawner.makeHandle({
-    pid: ChildProcessSpawner.ProcessId(1),
-    exitCode: Effect.succeed(ChildProcessSpawner.ExitCode(result.code)),
-    isRunning: Effect.succeed(false),
-    kill: () => Effect.void,
-    unref: Effect.succeed(Effect.void),
-    stdin: Sink.drain,
-    stdout: Stream.make(encoder.encode(result.stdout)),
-    stderr: Stream.make(encoder.encode(result.stderr)),
-    all: Stream.empty,
-    getInputFd: () => Sink.drain,
-    getOutputFd: () => Stream.empty,
-  });
-}
-
-function layerMockSpawner(
-  handler: (args: ReadonlyArray<string>) => {
-    stdout: string;
-    stderr: string;
-    code: number;
-  },
-) {
-  return Layer.succeed(
-    ChildProcessSpawner.ChildProcessSpawner,
-    // `ChildProcessSpawner.make` calls `spawn` while building `exitCode` and
-    // `string` effects, and drivers build commands they may never run (Claude's
-    // logout). Handle a command only when its effect runs, as the Node spawner does.
-    ChildProcessSpawner.make((command) => {
-      const cmd = command as unknown as { args: ReadonlyArray<string> };
-      return Effect.sync(() => mockHandle(handler(cmd.args)));
-    }),
-  );
-}
-
-// A Codex CLI on disk whose `app-server` and `--version` behave as `script` says.
-const writeFakeCodexCli = Effect.fn("writeFakeCodexCli")(function* (script: string) {
-  const fs = yield* FileSystem.FileSystem;
-  const path = yield* Path.Path;
-  const directory = yield* fs.makeTempDirectoryScoped({ prefix: "goat-fake-codex-" });
-  const binaryPath = path.join(directory, "codex");
-  yield* fs.writeFileString(binaryPath, `#!/bin/sh\n${script}\n`);
-  yield* fs.chmod(binaryPath, 0o755);
-  return { directory, binaryPath };
-});
-
-// The npm `@openai/codex` 0.1 CLI treats `app-server` as a prompt and exits 1.
-const OBSOLETE_CODEX_APP_SERVER = `echo "Missing OpenAI API key." >&2; exit 1`;
-
-const codexModelCapabilities = createModelCapabilities({
-  optionDescriptors: [
-    selectDescriptor("reasoningEffort", "Reasoning", [
-      { id: "high", label: "High", isDefault: true },
-      { id: "low", label: "Low" },
-    ]),
-    booleanDescriptor("fastMode", "Fast Mode"),
-  ],
-}) satisfies NonNullable<ServerProvider["models"][number]["capabilities"]>;
-
-function makeCodexProbeSnapshot(
-  input: Partial<CodexAppServerProviderSnapshot> = {},
-): CodexAppServerProviderSnapshot {
-  return {
-    version: "1.0.0",
-    account: {
-      account: {
-        type: "chatgpt",
-        email: "test@example.com",
-        planType: "pro",
-      },
-      requiresOpenaiAuth: false,
-    },
-    models: [
-      {
-        slug: "gpt-live-codex",
-        name: "GPT Live Codex",
-        isCustom: false,
-        capabilities: codexModelCapabilities,
-      },
-    ],
-    skills: [],
-    ...input,
-  };
-}
-
-function makeMutableServerSettingsService(
-  initial: ContractServerSettings = DEFAULT_SERVER_SETTINGS,
-) {
-  return Effect.gen(function* () {
-    const settingsRef = yield* Ref.make(initial);
-    const changes = yield* PubSub.unbounded<ContractServerSettings>();
-
-    return {
-      start: Effect.void,
-      ready: Effect.void,
-      getSettings: Ref.get(settingsRef),
-      updateSettings: (patch) =>
-        Effect.gen(function* () {
-          const current = yield* Ref.get(settingsRef);
-          const next = applyServerSettingsPatch(current, patch);
-          encodeServerSettings(next);
-          yield* Ref.set(settingsRef, next);
-          yield* PubSub.publish(changes, next);
-          return next;
-        }),
-      updateSettingsWith: (patchFor) =>
-        Ref.get(settingsRef).pipe(
-          Effect.flatMap(patchFor),
-          Effect.flatMap((patch) =>
-            Effect.gen(function* () {
-              const current = yield* Ref.get(settingsRef);
-              const next = applyServerSettingsPatch(current, patch);
-              encodeServerSettings(next);
-              yield* Ref.set(settingsRef, next);
-              yield* PubSub.publish(changes, next);
-              return next;
-            }),
-          ),
-        ),
-      updateProviderInstance: (mutation, patch = {}) =>
-        Effect.gen(function* () {
-          const current = yield* Ref.get(settingsRef);
-          const next = ServerSettingsModule.applyProviderInstanceMutation(
-            applyServerSettingsPatch(current, patch),
-            mutation,
-          );
-          encodeServerSettings(next);
-          yield* Ref.set(settingsRef, next);
-          yield* PubSub.publish(changes, next);
-          return next;
-        }),
-      checkpointReplicationPermit: () =>
-        Effect.die("checkpoint replication is not used by this fixture"),
-      withSettingsSnapshot: (use) => Ref.get(settingsRef).pipe(Effect.flatMap(use)),
-      get streamChanges() {
-        return Stream.fromPubSub(changes);
-      },
-      get subscribeChanges() {
-        return PubSub.subscribe(changes).pipe(
-          Effect.map((subscription) => Stream.fromSubscription(subscription)),
-        );
-      },
-    } satisfies ServerSettingsModule.ServerSettingsService["Service"];
-  });
-}
-
 const awaitPersistedProvider = (
   registry: ProviderRegistry.ProviderRegistry["Service"],
   checkedAt: string,
@@ -355,6 +172,7 @@ const awaitPersistedProvider = (
 const layerTestNodeServices = Layer.mergeAll(
   ProviderLatestVersions.layer,
   NodeServices.layer,
+  NodeCrypto.layer,
   Layer.mock(CodexManagedTokenBroker.CodexManagedTokenBroker)({
     endpoint: Effect.succeed("unused-private-pipe"),
   }),
@@ -371,7 +189,7 @@ const layerTestNodeServices = Layer.mergeAll(
     Effect.gen(function* () {
       return yield* (yield* FileSystem.FileSystem).makeTempDirectoryScoped();
     }),
-  ).pipe(Layer.provide(NodeServices.layer)),
+  ).pipe(Layer.provide(Layer.mergeAll(NodeServices.layer, NodeCrypto.layer))),
 );
 
 it.layer(
@@ -434,6 +252,20 @@ it.layer(
       }),
     );
 
+    it.effect("allows a slow successful Codex probe with a configured budget", () =>
+      Effect.gen(function* () {
+        const fiber = yield* checkCodexProviderStatus(
+          defaultCodexSettings,
+          () => Effect.sleep("22 seconds").pipe(Effect.as(makeCodexProbeSnapshot())),
+          { GOAT_CODEX_PROBE_TIMEOUT_MS: "60000" },
+        ).pipe(Effect.forkChild);
+        yield* TestClock.adjust("22 seconds");
+        const status = yield* Fiber.join(fiber);
+        assert.strictEqual(status.status, "ready");
+        assert.strictEqual(status.auth.status, "authenticated");
+      }),
+    );
+
     it.effect("labels the plan the usage read reports over the cached login plan", () =>
       Effect.gen(function* () {
         const statusWithUsagePlan = (planType: string | null) =>
@@ -480,6 +312,11 @@ it.layer(
           message: "Codex CLI is not authenticated. Run `codex login` and try again.",
         });
       }),
+    );
+
+    it.effect(
+      "names the instance's CODEX_HOME in the sign-in hint for a custom home",
+      codexHomeHintRegression,
     );
 
     it.effect("returns ready with unknown auth when app-server does not require OpenAI auth", () =>
@@ -633,126 +470,6 @@ it.layer(
   });
 
   describe("ProviderRegistry.layer", () => {
-    it("stores workspace skills, commands and options without changing machine metadata", () => {
-      const provider = {
-        instanceId: ProviderInstanceId.make("codex"),
-        driver: ProviderDriverKind.make("codex"),
-        status: "ready",
-        enabled: true,
-        installed: true,
-        auth: { status: "authenticated" },
-        checkedAt: "2026-03-25T00:00:00.000Z",
-        version: "1.0.0",
-        models: [],
-        slashCommands: [{ name: "global" }],
-        skills: [{ name: "global", path: "/global/SKILL.md", enabled: true }],
-      } satisfies ServerProvider;
-      const scopedSnapshot = {
-        ...provider,
-        checkedAt: "2026-03-25T00:01:00.000Z",
-        slashCommands: [{ name: "project" }],
-        skills: [{ name: "project", path: "/project/SKILL.md", enabled: true }],
-        optionDescriptors: [
-          {
-            id: "agent",
-            label: "Agent",
-            type: "select",
-            options: [{ id: "readonly", label: "Readonly" }],
-          },
-        ],
-      } satisfies ProviderWorkspaceSnapshot;
-
-      const result = ProviderRegistry.upsertProviderWorkspaceSnapshot(
-        provider,
-        "/project",
-        scopedSnapshot,
-      );
-
-      assert.deepStrictEqual(result.slashCommands, provider.slashCommands);
-      assert.deepStrictEqual(result.skills, provider.skills);
-      assert.strictEqual(result.models, provider.models);
-      const decoded = decodeServerProvider(encodeServerProvider(result));
-      assert.deepStrictEqual(decoded.workspaceSnapshots, [
-        {
-          cwd: "/project",
-          checkedAt: scopedSnapshot.checkedAt,
-          slashCommands: scopedSnapshot.slashCommands,
-          skills: scopedSnapshot.skills,
-          optionDescriptors: scopedSnapshot.optionDescriptors,
-        },
-      ]);
-
-      const pendingSnapshot = {
-        ...scopedSnapshot,
-        slashCommands: [COMPACT_SLASH_COMMAND],
-        slashCommandsPending: true,
-      } satisfies ProviderWorkspaceSnapshot;
-      const partial = ProviderRegistry.upsertProviderWorkspaceSnapshot(
-        result,
-        "/project",
-        pendingSnapshot,
-      );
-      assert.deepStrictEqual(partial.workspaceSnapshots?.[0]?.slashCommands, [{ name: "project" }]);
-      assert.strictEqual(partial.workspaceSnapshots?.[0]?.slashCommandsPending, true);
-      const otherProject = ProviderRegistry.upsertProviderWorkspaceSnapshot(
-        partial,
-        "/other-project",
-        pendingSnapshot,
-      );
-      assert.deepStrictEqual(otherProject.workspaceSnapshots?.[1]?.slashCommands, [
-        COMPACT_SLASH_COMMAND,
-      ]);
-      const recovered = ProviderRegistry.upsertProviderWorkspaceSnapshot(partial, "/project", {
-        ...scopedSnapshot,
-        slashCommands: [COMPACT_SLASH_COMMAND, { name: "replacement" }],
-      });
-      assert.deepStrictEqual(recovered.workspaceSnapshots?.[0]?.slashCommands, [
-        COMPACT_SLASH_COMMAND,
-        { name: "replacement" },
-      ]);
-      assert.strictEqual(recovered.workspaceSnapshots?.[0]?.slashCommandsPending, undefined);
-
-      const { optionDescriptors, ...failedSnapshot } = scopedSnapshot;
-      const firstFailure = ProviderRegistry.upsertProviderWorkspaceSnapshot(
-        provider,
-        "/project",
-        failedSnapshot,
-      );
-      assert.strictEqual(
-        Object.hasOwn(firstFailure.workspaceSnapshots![0]!, "optionDescriptors"),
-        false,
-      );
-      const failedOtherProject = ProviderRegistry.upsertProviderWorkspaceSnapshot(
-        recovered,
-        "/other-project",
-        failedSnapshot,
-      );
-      assert.strictEqual(
-        Object.hasOwn(failedOtherProject.workspaceSnapshots![1]!, "optionDescriptors"),
-        false,
-      );
-
-      for (const clearedDescriptors of [[], [{ ...optionDescriptors[0]!, options: [] }]]) {
-        const cleared = ProviderRegistry.upsertProviderWorkspaceSnapshot(recovered, "/project", {
-          ...scopedSnapshot,
-          optionDescriptors: clearedDescriptors,
-        });
-        assert.deepStrictEqual(
-          cleared.workspaceSnapshots?.[0]?.optionDescriptors,
-          clearedDescriptors,
-        );
-      }
-
-      const failedRefresh = ProviderRegistry.upsertProviderWorkspaceSnapshot(
-        failedOtherProject,
-        "/project",
-        failedSnapshot,
-      );
-      assert.deepStrictEqual(
-        failedRefresh.workspaceSnapshots?.[1]?.optionDescriptors,
-        optionDescriptors,
-      );
-    });
     it("preserves previously discovered provider models when a refresh returns none", () => {
       const previousProvider = {
         instanceId: ProviderInstanceId.make("cursor"),
@@ -791,6 +508,7 @@ it.layer(
       } as const satisfies ServerProvider;
       const refreshedProvider = {
         ...previousProvider,
+        status: "warning",
         checkedAt: "2026-04-14T00:01:00.000Z",
         models: [],
         slashCommands: [],
@@ -808,39 +526,6 @@ it.layer(
       assert.deepStrictEqual(
         ProviderRegistry.mergeProviderSnapshot(previousProvider, refreshedProvider).skills,
         [],
-      );
-    });
-
-    it("does not bring back models the installed CLI is too old to run", () => {
-      const pendingProvider = {
-        instanceId: ProviderInstanceId.make("claudeAgent"),
-        driver: ProviderDriverKind.make("claudeAgent"),
-        status: "warning",
-        enabled: true,
-        installed: false,
-        auth: { status: "unknown" },
-        checkedAt: "2026-04-14T00:00:00.000Z",
-        version: null,
-        models: [
-          { slug: "claude-old", name: "Old", isCustom: false, capabilities: null },
-          { slug: "claude-next", name: "Next", isCustom: false, capabilities: null },
-        ],
-        slashCommands: [],
-        skills: [],
-      } as const satisfies ServerProvider;
-      const probedProvider = {
-        ...pendingProvider,
-        status: "ready",
-        installed: true,
-        auth: { status: "authenticated" },
-        version: "1.0.0",
-        models: [pendingProvider.models[0]],
-        updateRequiredModels: [{ slug: "claude-next", name: "Next", minVersion: "1.1.0" }],
-      } satisfies ServerProvider;
-
-      assert.deepStrictEqual(
-        ProviderRegistry.mergeProviderSnapshot(pendingProvider, probedProvider).models,
-        [...probedProvider.models],
       );
     });
 
@@ -1163,7 +848,7 @@ it.layer(
             Effect.provide(
               ServerConfig.layerTest(process.cwd(), {
                 prefix: "goat-pi-model-cache-",
-              }).pipe(Layer.provideMerge(NodeServices.layer)),
+              }).pipe(Layer.provideMerge(Layer.mergeAll(NodeServices.layer, NodeCrypto.layer))),
             ),
           ),
       );
@@ -1242,6 +927,9 @@ it.layer(
                   }),
                 ),
               getSnapshot: Ref.get(currentProvider),
+              isAwaitingFirstCheck: Ref.get(currentProvider).pipe(
+                Effect.map((provider) => provider === pendingProvider),
+              ),
               refresh: Ref.get(nextProvider).pipe(
                 Effect.tap((provider) => Ref.set(currentProvider, provider)),
               ),
@@ -1275,6 +963,23 @@ it.layer(
                 ? retainedModels
                 : [customModel, ...cachedProvider.models];
               assert.deepStrictEqual((yield* registry.getProviders)[0]?.models, expectedModels);
+              if (!restarted) {
+                const probeFields = ({ status, installed, auth, version }: ServerProvider) => ({
+                  status,
+                  installed,
+                  auth,
+                  version,
+                });
+                // Boot reads the probe state from the cache, not the pending snapshot, and never persists the pending one.
+                assert.deepStrictEqual(
+                  probeFields((yield* registry.getProviders)[0]!),
+                  probeFields(cachedProvider),
+                );
+                assert.deepStrictEqual(
+                  probeFields((yield* readProviderStatusCache(filePath))!),
+                  probeFields(cachedProvider),
+                );
+              }
 
               yield* registry.refreshInstance(instance.instanceId);
               assert.deepStrictEqual(
@@ -1298,7 +1003,80 @@ it.layer(
           Effect.provide(
             ServerConfig.layerTest(process.cwd(), {
               prefix: "goat-codex-retired-model-cache-",
-            }).pipe(Layer.provideMerge(NodeServices.layer)),
+            }).pipe(Layer.provideMerge(Layer.mergeAll(NodeServices.layer, NodeCrypto.layer))),
+          ),
+        ),
+      );
+      it.effect("keeps a check that finished before boot over the cached status", () =>
+        Effect.gen(function* () {
+          const config = yield* ServerConfig.ServerConfig;
+          const filePath = yield* resolveProviderStatusCachePath({
+            cacheDir: config.providerStatusCacheDir,
+            instanceId: cachedProvider.instanceId,
+          });
+          const instance = {
+            instanceId: cachedProvider.instanceId,
+            driverKind: cachedProvider.driver,
+            continuationIdentity: {
+              driverKind: cachedProvider.driver,
+              continuationKey: "codex:instance:codex-personal",
+            },
+            displayName: undefined,
+            enabled: true,
+            snapshot: {
+              resolveMaintenance: () =>
+                Effect.succeed(
+                  makeManualOnlyProviderMaintenanceCapabilities({
+                    provider: cachedProvider.driver,
+                    packageName: null,
+                  }),
+                ),
+              getSnapshot: Effect.succeed(failedProvider),
+              isAwaitingFirstCheck: Effect.succeed(false),
+              refresh: Effect.succeed(failedProvider),
+              streamChanges: Stream.empty,
+              applyUsageLimits: () => Effect.void,
+            },
+            orchestrationAdapter: {} as ProviderInstance["orchestrationAdapter"],
+            textGeneration: {} as ProviderInstance["textGeneration"],
+          } satisfies ProviderInstance;
+          const layerInstanceRegistry = Layer.succeed(
+            ProviderInstanceRegistry.ProviderInstanceRegistry,
+            {
+              getInstance: (id) =>
+                Effect.succeed(id === instance.instanceId ? instance : undefined),
+              listInstances: Effect.succeed([instance]),
+              listUnavailable: Effect.succeed([]),
+              streamChanges: Stream.empty,
+              subscribeChanges: Effect.flatMap(PubSub.unbounded<void>(), PubSub.subscribe),
+            },
+          );
+
+          // First boot has no cache file; the second has a stale ready one.
+          for (const hasCache of [false, true]) {
+            if (hasCache) {
+              yield* writeProviderStatusCache({
+                filePath,
+                provider: { ...cachedProvider, status: "ready" },
+              });
+            }
+            yield* Effect.gen(function* () {
+              const registry = yield* ProviderRegistry.ProviderRegistry;
+              assert.strictEqual((yield* registry.getProviders)[0]?.status, failedProvider.status);
+              assert.strictEqual(
+                (yield* readProviderStatusCache(filePath))?.status,
+                failedProvider.status,
+              );
+            }).pipe(
+              Effect.provide(ProviderRegistry.layer.pipe(Layer.provide(layerInstanceRegistry))),
+              Effect.scoped,
+            );
+          }
+        }).pipe(
+          Effect.provide(
+            ServerConfig.layerTest(process.cwd(), {
+              prefix: "goat-codex-probed-before-boot-",
+            }).pipe(Layer.provideMerge(Layer.mergeAll(NodeServices.layer, NodeCrypto.layer))),
           ),
         ),
       );
@@ -1497,142 +1275,6 @@ it.layer(
       );
     });
 
-    it.effect("invalidates model caches only for an explicit model refresh", () =>
-      Effect.gen(function* () {
-        const forceRefreshCalls = yield* Ref.make(0);
-        const makeInstance = (name: string) =>
-          Effect.gen(function* () {
-            const driver = ProviderDriverKind.make("codex");
-            const instanceId = ProviderInstanceId.make(name);
-            const provider = {
-              instanceId,
-              driver,
-              status: "ready",
-              enabled: true,
-              installed: true,
-              auth: { status: "authenticated" },
-              checkedAt: "2026-06-10T00:00:00.000Z",
-              version: "1.0.0",
-              models: [],
-              slashCommands: [],
-              skills: [],
-            } as const satisfies ServerProvider;
-            const invalidations = yield* Ref.make(0);
-            const maintenanceReads = yield* Ref.make<ReadonlyArray<boolean>>([]);
-            const instance = {
-              instanceId,
-              driverKind: driver,
-              continuationIdentity: {
-                driverKind: driver,
-                continuationKey: `codex:instance:${name}`,
-              },
-              displayName: undefined,
-              enabled: true,
-              snapshot: {
-                resolveMaintenance: (options) =>
-                  Ref.update(maintenanceReads, (reads) => [...reads, options?.fresh === true]).pipe(
-                    Effect.as(
-                      makeManualOnlyProviderMaintenanceCapabilities({
-                        provider: driver,
-                        packageName: `${name}-package`,
-                      }),
-                    ),
-                  ),
-                getSnapshot: Effect.succeed(provider),
-                refresh: Effect.succeed(provider),
-                streamChanges: Stream.empty,
-                applyUsageLimits: () => Effect.void,
-              },
-              invalidateCaches: Ref.update(invalidations, (count) => count + 1),
-              orchestrationAdapter: {} as ProviderInstance["orchestrationAdapter"],
-              textGeneration: {} as ProviderInstance["textGeneration"],
-            } satisfies ProviderInstance;
-            const takeMaintenanceReads = Ref.getAndSet(maintenanceReads, []);
-            return { instance, invalidations, takeMaintenanceReads };
-          });
-        const first = yield* makeInstance("codex_first");
-        const second = yield* makeInstance("codex_second");
-        const instances = [first.instance, second.instance];
-        const layerInstanceRegistry = Layer.succeed(
-          ProviderInstanceRegistry.ProviderInstanceRegistry,
-          {
-            getInstance: (instanceId) =>
-              Effect.succeed(instances.find((instance) => instance.instanceId === instanceId)),
-            listInstances: Effect.succeed(instances),
-            listUnavailable: Effect.succeed([]),
-            streamChanges: Stream.empty,
-            subscribeChanges: Effect.flatMap(PubSub.unbounded<void>(), PubSub.subscribe),
-          },
-        );
-        const layerModelManifest = Layer.succeed(ModelManifest.ModelManifest, {
-          current: Effect.succeed(ModelManifest.BUNDLED_MODEL_MANIFEST),
-          refresh: Effect.succeed(ModelManifest.BUNDLED_MODEL_MANIFEST),
-          forceRefresh: Ref.update(forceRefreshCalls, (count) => count + 1).pipe(
-            Effect.as(ModelManifest.BUNDLED_MODEL_MANIFEST),
-          ),
-          refreshOnDemand: Effect.succeed(ModelManifest.BUNDLED_MODEL_MANIFEST),
-          refreshInBackground: Effect.void,
-        });
-        const layerLatestVersions = Layer.effect(
-          ProviderLatestVersions.ProviderLatestVersions,
-          ProviderLatestVersions.make([
-            ["codex_first-package", "1.0.0"],
-            ["codex_second-package", "1.0.0"],
-          ]),
-        );
-        const readCachedVersion = (key: string) =>
-          ProviderLatestVersions.ProviderLatestVersions.use((latestVersions) =>
-            latestVersions.cached(key, Effect.succeed("2.0.0")),
-          );
-        yield* Effect.gen(function* () {
-          const registry = yield* ProviderRegistry.ProviderRegistry;
-
-          yield* registry.refreshInstance(first.instance.instanceId);
-          yield* registry.refresh();
-          assert.strictEqual(yield* Ref.get(forceRefreshCalls), 0);
-          assert.strictEqual(yield* Ref.get(first.invalidations), 0);
-          assert.strictEqual(yield* readCachedVersion("codex_first-package"), "1.0.0");
-          yield* first.takeMaintenanceReads;
-
-          yield* registry.invalidateModelCaches({ instanceId: first.instance.instanceId });
-          // The instance refresh that follows resolves installer metadata fresh itself.
-          assert.deepStrictEqual(yield* first.takeMaintenanceReads, [false]);
-          assert.strictEqual(yield* Ref.get(forceRefreshCalls), 1);
-          assert.strictEqual(yield* Ref.get(first.invalidations), 1);
-          assert.strictEqual(yield* Ref.get(second.invalidations), 0);
-          assert.strictEqual(yield* readCachedVersion("codex_first-package"), "2.0.0");
-          assert.strictEqual(yield* readCachedVersion("codex_second-package"), "1.0.0");
-
-          yield* registry.invalidateModelCaches({});
-          assert.strictEqual(yield* Ref.get(first.invalidations), 2);
-          assert.strictEqual(yield* Ref.get(second.invalidations), 1);
-          assert.strictEqual(yield* readCachedVersion("codex_second-package"), "2.0.0");
-          yield* first.takeMaintenanceReads;
-
-          // Only a cached workspace refresh leaves the fresh resolution to this call.
-          const workspace = { instanceId: first.instance.instanceId, cwd: process.cwd() };
-          yield* registry.invalidateModelCaches(workspace);
-          assert.deepStrictEqual(yield* first.takeMaintenanceReads, [true]);
-          yield* registry.invalidateModelCaches({ ...workspace, fresh: true });
-          assert.deepStrictEqual(yield* first.takeMaintenanceReads, [false]);
-        }).pipe(
-          Effect.provide(
-            ProviderRegistry.layer.pipe(
-              Layer.provideMerge(layerInstanceRegistry),
-              Layer.provideMerge(layerModelManifest),
-              Layer.provideMerge(layerLatestVersions),
-              Layer.provideMerge(
-                ServerConfig.layerTest(process.cwd(), {
-                  prefix: "goat-provider-registry-model-cache-",
-                }),
-              ),
-              Layer.provideMerge(NodeServices.layer),
-            ),
-          ),
-        );
-      }),
-    );
-
     it.effect(
       "a second request for a cwd being scanned gets its result, even if the first leaves",
       () =>
@@ -1704,7 +1346,7 @@ it.layer(
                   prefix: "goat-provider-registry-shared-workspace-scan-",
                 }),
               ),
-              Layer.provideMerge(NodeServices.layer),
+              Layer.provideMerge(Layer.mergeAll(NodeServices.layer, NodeCrypto.layer)),
             ),
           ).pipe(Scope.provide(scope));
 
@@ -1799,7 +1441,7 @@ it.layer(
                 prefix: "goat-provider-registry-unhealthy-workspace-",
               }),
             ),
-            Layer.provideMerge(NodeServices.layer),
+            Layer.provideMerge(Layer.mergeAll(NodeServices.layer, NodeCrypto.layer)),
           ),
         ).pipe(Scope.provide(scope));
 
@@ -1919,7 +1561,7 @@ it.layer(
                 prefix: "goat-provider-registry-shared-refresh-",
               }),
             ),
-            Layer.provideMerge(NodeServices.layer),
+            Layer.provideMerge(Layer.mergeAll(NodeServices.layer, NodeCrypto.layer)),
           ),
         ).pipe(Scope.provide(scope));
 
@@ -2039,7 +1681,7 @@ it.layer(
             Layer.provideMerge(
               ServerConfig.layerTest(process.cwd(), { prefix: "goat-cloud-auth-refresh-" }),
             ),
-            Layer.provideMerge(NodeServices.layer),
+            Layer.provideMerge(Layer.mergeAll(NodeServices.layer, NodeCrypto.layer)),
           ),
         ).pipe(Scope.provide(scope));
 
@@ -2156,7 +1798,7 @@ it.layer(
                 prefix: "goat-provider-registry-enriched-refresh-",
               }),
             ),
-            Layer.provideMerge(NodeServices.layer),
+            Layer.provideMerge(Layer.mergeAll(NodeServices.layer, NodeCrypto.layer)),
           ),
         ).pipe(Scope.provide(scope));
 
@@ -2228,6 +1870,7 @@ it.layer(
         } as const satisfies ServerProvider;
         const refreshedProvider = {
           ...initialProvider,
+          status: "warning",
           checkedAt: "2026-04-14T00:01:00.000Z",
           models: [],
         } satisfies ServerProvider;
@@ -2281,7 +1924,7 @@ it.layer(
               }),
             ),
             Layer.provideMerge(layerBackgroundPolicyAlwaysRun),
-            Layer.provideMerge(NodeServices.layer),
+            Layer.provideMerge(Layer.mergeAll(NodeServices.layer, NodeCrypto.layer)),
           ),
         ).pipe(Scope.provide(scope));
 
@@ -2394,7 +2037,7 @@ it.layer(
                 ),
             } satisfies FileSystem.FileSystem;
           }),
-        ).pipe(Layer.provide(NodeServices.layer));
+        ).pipe(Layer.provide(Layer.mergeAll(NodeServices.layer, NodeCrypto.layer)));
         const scope = yield* Scope.make();
         yield* Effect.addFinalizer(() => Scope.close(scope, Exit.void));
         const runtimeServices = yield* Layer.build(
@@ -2407,7 +2050,7 @@ it.layer(
             ),
             Layer.provideMerge(layerBackgroundPolicyAlwaysRun),
             Layer.provideMerge(layerGatedFileSystem),
-            Layer.provideMerge(NodeServices.layer),
+            Layer.provideMerge(Layer.mergeAll(NodeServices.layer, NodeCrypto.layer)),
           ),
         ).pipe(Scope.provide(scope));
 
@@ -2568,7 +2211,7 @@ it.layer(
                   prefix: "goat-provider-registry-opencode-authoritative-persist-",
                 }),
               ),
-              Layer.provideMerge(NodeServices.layer),
+              Layer.provideMerge(Layer.mergeAll(NodeServices.layer, NodeCrypto.layer)),
             ),
           ).pipe(Scope.provide(scope));
 
@@ -2672,7 +2315,7 @@ it.layer(
               }),
             ),
             Layer.provideMerge(layerBackgroundPolicyAlwaysRun),
-            Layer.provideMerge(NodeServices.layer),
+            Layer.provideMerge(Layer.mergeAll(NodeServices.layer, NodeCrypto.layer)),
           ),
         ).pipe(Scope.provide(scope));
 
@@ -2767,7 +2410,7 @@ it.layer(
               });
             }),
           ),
-          Layer.provideMerge(NodeServices.layer),
+          Layer.provideMerge(Layer.mergeAll(NodeServices.layer, NodeCrypto.layer)),
           Layer.provideMerge(layerBackgroundPolicyAlwaysRun),
         );
         const runtimeServices = yield* Layer.build(layerProviderRegistry).pipe(
@@ -2872,7 +2515,7 @@ it.layer(
           Layer.provideMerge(
             OpenCodeRuntime.layer.pipe(Layer.provide(OpenCodeServerLedger.layerTest)),
           ),
-          Layer.provideMerge(NodeServices.layer),
+          Layer.provideMerge(Layer.mergeAll(NodeServices.layer, NodeCrypto.layer)),
           Layer.provideMerge(layerBackgroundPolicyAlwaysRun),
         );
         const runtimeServices = yield* Layer.build(layerProviderRegistry).pipe(

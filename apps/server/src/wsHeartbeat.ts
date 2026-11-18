@@ -1,10 +1,9 @@
-import { NodeWS } from "@effect/platform-node/NodeSocket";
+import * as NodeWS from "@effect/platform-node/NodeWS";
 import * as Effect from "effect/Effect";
 
 const live = new Set<HeartbeatWebSocket>();
 const connectingSeen = new WeakSet<HeartbeatWebSocket>();
 
-// oxlint-disable-next-line goat/guard-error-emitters -- the constructor hears 'error' right after super().
 export class HeartbeatWebSocket extends NodeWS.WebSocket {
   private terminating = false;
   private pingPending = false;

@@ -1,5 +1,5 @@
 import type { SettingsSearchItem } from "./settingsSearch";
-export const GOAT_BOT_ROUTING_SEARCH_ITEMS = [
+export const GOAT_BOT_SEARCH_ITEMS = [
   {
     id: "goat-bot-suggestions",
     title: "Suggestions on the bot's home",
@@ -27,5 +27,26 @@ export const GOAT_BOT_ROUTING_SEARCH_ITEMS = [
     to: "/settings/goat-bot",
     targetId: "goat-bot",
     searchTerms: ["goat bot session reception routing"],
+  },
+  {
+    id: "goat-bot-model",
+    title: "GOAT Bot model",
+    to: "/settings/goat-bot",
+    targetId: "goat-bot",
+    searchTerms: ["goat bot model provider llm assistant turns"],
+  },
+  {
+    id: "slack-connection",
+    title: "Slack connection",
+    to: "/settings/goat-bot",
+    targetId: "slack-channel",
+    environmentOnly: true,
+    searchTerms: ["slack socket mode bot app token mention direct message dm channel thread reply"],
+  },
+  {
+    id: "imessage-channel",
+    title: "iMessage",
+    to: "/settings/goat-bot",
+    searchTerms: ["goat bot imessage messages text sms phone mac link code"],
   },
 ] as const satisfies ReadonlyArray<SettingsSearchItem>;

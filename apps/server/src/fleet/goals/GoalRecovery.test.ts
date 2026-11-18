@@ -179,6 +179,7 @@ const project = (world: World) =>
       Effect.succeedSome({
         projectId,
         title: "repo",
+        hasCustomTitle: false,
         workspaceRoot: world.repo,
         defaultModelSelection: null,
         defaultThreadEnvMode: null,

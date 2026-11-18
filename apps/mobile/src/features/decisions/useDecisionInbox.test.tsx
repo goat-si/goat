@@ -1,4 +1,6 @@
 import "../../testing/decisionNativeHarness";
+import { Box, InputHost, PressHost, TextHost } from "../../testing/decisionInboxHosts";
+import type { HostProps } from "../../testing/decisionInboxHosts";
 import { RegistryContext } from "@effect/atom-react";
 import type { DecisionItem } from "@goat/client-runtime/state/decision-inbox";
 import type { AtomCommandResult } from "@goat/client-runtime/state/runtime";
@@ -45,6 +47,7 @@ const fixture = vi.hoisted<{
   os: string;
   threads: EnvironmentThreadShell[];
   projects: EnvironmentProject[];
+  threadShell: Partial<EnvironmentThreadShell>;
   selectedEnvironmentId: EnvironmentId | null;
   selectedProjectKey: string | null;
   searchQuery: string;
@@ -69,6 +72,7 @@ const fixture = vi.hoisted<{
   os: "ios",
   threads: [],
   projects: [],
+  threadShell: {},
   selectedEnvironmentId: null,
   selectedProjectKey: null,
   searchQuery: "",
@@ -142,51 +146,6 @@ vi.mock("../../state/use-thread-selection", () => ({
     throw new Error("Inbox must not read selection");
   },
 }));
-// Interactive native host adapters preserve the real cards, body and list branches.
-type HostProps = {
-  children?: ReactNode;
-  onPress?: () => void;
-  onChangeText?: (value: string) => void;
-  disabled?: boolean;
-  editable?: boolean;
-  value?: string;
-  label?: string;
-  accessibilityLabel?: string;
-  testID?: string;
-  accessibilityElementsHidden?: boolean;
-};
-function Box(props: HostProps) {
-  return (
-    <div data-testid={props.testID} hidden={props.accessibilityElementsHidden}>
-      {props.children}
-    </div>
-  );
-}
-function TextHost(props: HostProps) {
-  return <span>{props.children}</span>;
-}
-function PressHost(props: HostProps) {
-  return (
-    <button
-      type="button"
-      aria-label={props.accessibilityLabel}
-      disabled={props.disabled}
-      onClick={props.onPress}
-    >
-      {props.children ?? props.label}
-    </button>
-  );
-}
-function InputHost(props: HostProps) {
-  return (
-    <input
-      aria-label={props.accessibilityLabel}
-      value={props.value ?? ""}
-      disabled={props.editable === false || props.disabled}
-      onChange={(event) => props.onChangeText?.(event.currentTarget.value)}
-    />
-  );
-}
 vi.mock("react-native", () => ({
   useWindowDimensions: () => ({ width: 390, height: 844, scale: 1, fontScale: 1 }),
   View: Box,
@@ -235,9 +194,11 @@ vi.mock("../workspace/useSelectWorkspaceDetail", () => ({
 }));
 vi.mock("../../state/entities", () => ({
   useThreadShell: (ref: ScopedThreadRef | null) =>
-    ref ? { title: `Thread ${ref.threadId}` } : null,
+    ref ? { title: `Thread ${ref.threadId}`, ...fixture.threadShell } : null,
   useNavigationThreadShells: () => fixture.threads,
   useProjects: () => fixture.projects,
+  useProject: (ref: { projectId: ProjectId } | null) =>
+    fixture.projects.find((project) => project.id === ref?.projectId) ?? null,
 }));
 vi.mock("../../state/use-remote-environment-registry", () => ({
   useSavedRemoteConnection: (id: EnvironmentId | null) =>
@@ -250,8 +211,18 @@ vi.mock("../../components/ui/ControlPill", () => ({
 vi.mock("../../components/ui/Menu", () => ({ Menu: Box }));
 vi.mock("../../components/ui/GlassSurface", () => ({ GlassSurface: Box }));
 vi.mock("../../native/SelectableMarkdownText", () => ({
-  SelectableMarkdownText: (props: { readonly markdown: string }) => (
-    <TextHost>{props.markdown}</TextHost>
+  SelectableMarkdownText: (props: {
+    readonly markdown: string;
+    readonly onLinkPress?: (href: string) => void;
+  }) => (
+    <>
+      <TextHost>{props.markdown}</TextHost>
+      {[...props.markdown.matchAll(/\[([^\]]+)\]\(([^)]+)\)/g)].map(([, label, href]) => (
+        <button key={href} type="button" onClick={() => props.onLinkPress?.(href!)}>
+          {label}
+        </button>
+      ))}
+    </>
   ),
 }));
 vi.mock("../../native/useOpenPullRequest", () => ({
@@ -266,7 +237,6 @@ vi.mock("../threads/QuestionAttachments", () => ({
     <InputHost {...props} accessibilityLabel={props.question.question} />
   ),
 }));
-
 import { useDecisionInbox, useDecisionInboxSessionState } from "./useDecisionInbox";
 import { DecisionsRouteScreen } from "./DecisionsRouteScreen";
 import { PendingUserInputBody } from "../threads/PendingUserInputBody";
@@ -408,6 +378,7 @@ beforeEach(() => {
   fixture.producerEvaluations.clear();
   fixture.threads = [];
   fixture.projects = [];
+  fixture.threadShell = {};
   fixture.selectedEnvironmentId = null;
   fixture.selectedProjectKey = null;
   fixture.searchQuery = "";
@@ -810,6 +781,35 @@ it("sends a durable decision from the route screen and drops a choice the live d
   expect(fixture.userInput).toHaveBeenCalledTimes(1);
 });
 
+it("opens a workspace file a Decisions question cites by absolute path at its workspace path", async () => {
+  const projectId = ProjectId.make("project");
+  fixture.threadShell = { environmentId: envA, projectId, worktreePath: null };
+  fixture.projects = [
+    {
+      environmentId: envA,
+      id: projectId,
+      title: "Project",
+      workspaceRoot: "/synthetic/repo",
+      repositoryIdentity: null,
+      defaultModelSelection: null,
+      scripts: [],
+      createdAt: a.createdAt,
+      updatedAt: a.createdAt,
+    },
+  ];
+  const navigate = vi.fn();
+  fixture.navigate = navigate;
+  const cited = { ...question, question: "Update [probe.md](/synthetic/repo/docs/probe.md:12)?" };
+  await mount([userInput(envA, [cited])], <DecisionsRouteScreen />);
+  await click("probe.md");
+  expect(navigate).toHaveBeenCalledExactlyOnceWith("ThreadFile", {
+    environmentId: envA,
+    threadId: "thread",
+    path: ["docs", "probe.md"],
+    line: "12",
+  });
+});
+
 it("renders recovery and honest empty states then allows a recovered answer", async () => {
   write([], { loadingRefs: [a.ref], isLoading: true });
   await render(<DecisionsRouteScreen />);
@@ -974,7 +974,7 @@ vi.mock("../threads/goatBotThreadVisibility", async () => {
   return { hiddenGoatBotThreadKeysAtom: Atom.make(new Set<string>() as ReadonlySet<string>) };
 });
 vi.mock("../../state/use-thread-outbox", () => ({ useQueuedThreadKeys: () => new Set() }));
-vi.mock("../../state/use-pending-new-tasks", () => ({ usePendingNewTasks: () => [] }));
+vi.mock("../../state/use-pending-new-tasks", () => import("../../testing/noPendingNewTasks"));
 vi.mock("../../state/server", () => ({ serverEnvironment: { answerDecision: "answerDecision" } }));
 vi.mock("../../state/presentation", () => import("../../testing/threadListEnvironments"));
 vi.mock("../threads/thread-provider-instance", () => ({

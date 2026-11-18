@@ -77,7 +77,7 @@ export type BotThreadHistoryMerge =
       readonly remoteWork: ReadonlyArray<BotRemoteWork>;
       /** The current list's; history pages do not count the bot's main messages. */
       readonly mainMessageCount: number;
-      /** Tasks whose launches the history lists only in part; the rest stay in Threads. */
+      /** Tasks whose launches history lists only in part; the rest are in the current list or in Threads. */
       readonly launchesTruncated: ReadonlySet<ChannelTaskId>;
       /** The walk stopped at a task the server could not name in a cursor. */
       readonly endedEarly: boolean;

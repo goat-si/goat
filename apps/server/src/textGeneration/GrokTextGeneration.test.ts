@@ -6,6 +6,7 @@ import * as NodeReadline from "node:readline";
 import * as NodeURL from "node:url";
 import * as NodeFS from "node:fs";
 
+import * as NodeCrypto from "@effect/platform-node/NodeCrypto";
 import * as NodeServices from "@effect/platform-node/NodeServices";
 import { it } from "@effect/vitest";
 import * as Clock from "effect/Clock";
@@ -35,7 +36,7 @@ const mockAgentPath = NodePath.join(__dirname, "../provider/testFixtures/grok-te
 
 const layerGrokTextGenerationTest = ServerConfig.ServerConfig.layerTest(process.cwd(), {
   prefix: "goat-grok-text-generation-test-",
-}).pipe(Layer.provideMerge(NodeServices.layer));
+}).pipe(Layer.provideMerge(Layer.mergeAll(NodeServices.layer, NodeCrypto.layer)));
 
 function makeAcpGrokWrapper(dir: string, env: Record<string, string>): string {
   const scriptPath = NodePath.join(dir, "mock.mjs");

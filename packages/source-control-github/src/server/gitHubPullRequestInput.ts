@@ -36,8 +36,7 @@ export const decodeMergeBase = Schema.decodeUnknownOption(
   ),
 );
 
-export const GRAPHQL_MERGE_METHODS = {
-  merge: "MERGE",
-  squash: "SQUASH",
-  rebase: "REBASE",
-} as const satisfies Record<PullRequestMergeMethod, string>;
+// GitHub has no fast-forward-only merge; the service refuses methods a host does not advertise.
+export const GRAPHQL_MERGE_METHODS: Partial<
+  Record<PullRequestMergeMethod, "MERGE" | "SQUASH" | "REBASE">
+> = { merge: "MERGE", squash: "SQUASH", rebase: "REBASE" };

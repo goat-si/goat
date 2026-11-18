@@ -5,7 +5,7 @@
  * @module DesktopAppsListing
  */
 import type { ComputerUseApp } from "@goat/contracts";
-import * as Crypto from "effect/Crypto";
+import * as SecureRandom from "effect/crypto/SecureRandom";
 import * as Deferred from "effect/Deferred";
 import * as Effect from "effect/Effect";
 import * as Option from "effect/Option";
@@ -28,14 +28,14 @@ export const makeDesktopAppsRequest = Effect.fn("CuaDriver.makeDesktopAppsReques
   requireCatalog = false,
 ) {
   const receiver = yield* DesktopTelemetryReceiver.DesktopTelemetryReceiver;
-  const crypto = yield* Crypto.Crypto;
+  const random = yield* SecureRandom.SecureRandom;
   const ask: Effect.Effect<Option.Option<DesktopAppsListed>> = Effect.gen(function* () {
     // An older desktop ignores the request, which would hold the approval card for the whole
     // deadline; only a desktop that says it answers is asked (#1567).
     const readiness = yield* receiver.cuaReadiness;
     if (Option.isNone(readiness) || readiness.value.appsListing !== true)
       return Option.none<DesktopAppsListed>();
-    const requestId = yield* crypto.randomUUIDv4();
+    const requestId = yield* random.uuidV4();
     const ready = yield* Deferred.make<Option.Option<DesktopAppsListed>>();
     // Subscribe before sending: a desktop can answer during the write itself.
     yield* receiver.cuaApps.pipe(

@@ -3,6 +3,7 @@ import * as Option from "effect/Option";
 import * as Schema from "effect/Schema";
 import * as GitWorkflowService from "../../git/GitWorkflowService.ts";
 import * as GitVcsDriver from "../../vcs/GitVcsDriver.ts";
+import { parseRemoteNamesInGitOrder } from "../../git/remoteRefs.ts";
 import { tryWithForeignWorkspaceSubtree } from "../../workspace/workspaceLease.ts";
 import type { RestorePendingError } from "./restorePending.ts";
 import {
@@ -76,6 +77,7 @@ export const makeRecreateMissingWorktree = Effect.gen(function* () {
   const discard = yield* makeDiscardWorktree;
   const resolveRecreateBase = Effect.fn("ProviderTurnStartService.resolveRecreateBase")(function* (
     cwd: string,
+    remoteName: string | null,
   ) {
     // Recovery can follow an external checkout, before the status cache expires.
     yield* gitWorkflow.invalidateLocalStatus(cwd);
@@ -84,14 +86,15 @@ export const makeRecreateMissingWorktree = Effect.gen(function* () {
       const refName = `refs/heads/${currentBranch}`;
       return { refName, baseRefName: refName };
     }
-    if (yield* gitWorkflow.hasCommit({ cwd, refName: "refs/remotes/origin/HEAD" })) {
+    const remoteHead = `refs/remotes/${remoteName}/HEAD`;
+    if (remoteName !== null && (yield* gitWorkflow.hasCommit({ cwd, refName: remoteHead }))) {
       const { commitSha } = yield* gitWorkflow.resolveRemoteTrackingCommit({
         cwd,
         refName: "HEAD",
-        fallbackRemoteName: "origin",
+        fallbackRemoteName: remoteName,
       });
       // Start from the commit so the thread branch does not track the default branch.
-      return { refName: commitSha, baseRefName: "refs/remotes/origin/HEAD" };
+      return { refName: commitSha, baseRefName: remoteHead };
     }
     if (yield* gitWorkflow.hasCommit({ cwd, refName: "HEAD" })) {
       return { refName: "HEAD", baseRefName: undefined };
@@ -155,17 +158,26 @@ export const makeRecreateMissingWorktree = Effect.gen(function* () {
       } else if (localBranchNames.includes(branch)) {
         refName = branch;
         restoredFrom = "branch";
-      } else if (yield* gitWorkflow.hasCommit({ cwd, refName: `refs/remotes/origin/${branch}` })) {
-        refName = `refs/remotes/origin/${branch}`;
-        newRefName = branch;
-        restoredFrom = "remote-branch";
       } else {
-        const base = yield* resolveRecreateBase(cwd);
-        if (base === null) return yield* new WorktreeRecreateNoBaseError({ worktreePath, branch });
-        refName = base.refName;
-        baseRefName = base.baseRefName;
+        const remotes = parseRemoteNamesInGitOrder(
+          yield* runGit(["remote"]).pipe(Effect.orElseSucceed(() => "")),
+        );
+        const remoteName = remotes.includes("origin") ? "origin" : (remotes[0] ?? null);
+        if (
+          remoteName !== null &&
+          (yield* gitWorkflow.hasCommit({ cwd, refName: `refs/remotes/${remoteName}/${branch}` }))
+        ) {
+          refName = `refs/remotes/${remoteName}/${branch}`;
+          restoredFrom = "remote-branch";
+        } else {
+          const base = yield* resolveRecreateBase(cwd, remoteName);
+          if (base === null)
+            return yield* new WorktreeRecreateNoBaseError({ worktreePath, branch });
+          refName = base.refName;
+          baseRefName = base.baseRefName;
+          restoredFrom = "base";
+        }
         newRefName = branch;
-        restoredFrom = "base";
       }
       yield* gitWorkflow.createWorktree({
         cwd,

@@ -1,3 +1,4 @@
+import * as NodeCrypto from "@effect/platform-node/NodeCrypto";
 import * as NodeServices from "@effect/platform-node/NodeServices";
 import { expect, it } from "@effect/vitest";
 import { EnvironmentId } from "@goat/contracts";
@@ -16,7 +17,7 @@ import { member, PIN } from "./penDaemon.testkit.ts";
 import { PenRuntime } from "./PenRuntime.ts";
 import * as PenServer from "./PenServerLayers.ts";
 
-it.layer(NodeServices.layer)("the server's Pen layer", (it) => {
+it.layer(Layer.mergeAll(NodeServices.layer, NodeCrypto.layer))("the server's Pen layer", (it) => {
   it.effect("is the build's closed gate: a stored trust root starts nothing", () =>
     Effect.gen(function* () {
       expect(PEN_TARGET_ENABLED).toBe(false);

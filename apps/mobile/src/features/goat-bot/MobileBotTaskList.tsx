@@ -1,6 +1,5 @@
 import {
   COLLAPSED_FINISHED,
-  presentTaskStatus,
   type BotHomeWork,
   type GoatBotTaskCard,
 } from "@goat/client-runtime/goatBot";
@@ -12,12 +11,13 @@ import type {
   ThreadId,
 } from "@goat/contracts";
 import type { ReactNode } from "react";
-import { Pressable, Text, View } from "react-native";
+import { Pressable, Text } from "react-native";
 
-import { SymbolView } from "../../components/ui/AppSymbol";
 import { GoatBotTaskRow } from "./GoatBotTaskRow";
 import { MobileBotPanelEmpty } from "./MobileBotPanelEmpty";
 import { MobileBotRowMenu } from "./MobileBotRowMenu";
+import type { MobileTaskChips } from "./mobileBotTaskStatus";
+import { MobileBotWorkRow } from "./MobileBotWorkRow";
 
 type ThreadSelection = { readonly environmentId: EnvironmentId; readonly id: ThreadId };
 type TaskRow = Extract<BotThreadRow, { kind: "task" }>;
@@ -29,12 +29,6 @@ export interface MobileBotHomeItem {
   readonly render: () => ReactNode;
 }
 
-/** The words a task row says and VoiceOver reads: title, status, then unread and pinned. */
-export function mobileBotTaskLabel(row: TaskRow): string {
-  const status = presentTaskStatus(row.task.status, row.view.doneAt).label;
-  return `${row.task.title}, ${status}${row.unread ? ", unread" : ""}${row.view.pinnedAt ? ", pinned" : ""}`;
-}
-
 /**
  * The only list of the work a bot started, as Home list entries: its tasks with their state and
  * actions, coding threads no listed task owns, and tasks the conversation still shows that the
@@ -43,6 +37,10 @@ export function mobileBotTaskLabel(row: TaskRow): string {
 export function mobileBotTaskListItems(props: {
   readonly botName: string;
   readonly work: BotHomeWork;
+  /** The conversation's newest task chips, which say what a running task's worker asks. */
+  readonly chips: MobileTaskChips;
+  /** Home is shown and the app active: rows' times follow the clock only then. */
+  readonly ticking: boolean;
   readonly showAllFinished: boolean;
   readonly onToggleFinished: () => void;
   readonly expanded: ReadonlySet<ChannelTaskId>;
@@ -155,66 +153,30 @@ export function mobileBotTaskListItems(props: {
             actions={actions(row)}
             onSelect={(id) => choose(row, id)}
             row={
-              <Pressable
-                accessibilityRole="button"
-                accessibilityLabel={mobileBotTaskLabel(row)}
-                accessibilityActions={actions(row)
+              <MobileBotWorkRow
+                row={row}
+                section={section}
+                chips={props.chips}
+                ticking={props.ticking}
+                openable={openable}
+                actions={actions(row)
                   .filter(
                     (action) => !("attributes" in action && action.attributes?.disabled === true),
                   )
                   .map((action) => ({ name: action.id, label: action.title }))}
-                onAccessibilityAction={(event) => choose(row, event.nativeEvent.actionName)}
-                accessibilityState={{ disabled: !openable }}
-                disabled={!openable}
-                className="min-h-[44px] flex-1 flex-row items-center gap-2"
+                onAction={(name) => choose(row, name)}
                 onPress={() => props.onPeekTask(row.task.taskId)}
-              >
-                {section === "running" ? (
-                  <View className="h-2 w-2 rounded-full bg-adaptive-blue-500-400" />
-                ) : (
-                  <SymbolView
-                    name={section === "waiting" ? "questionmark.bubble" : "checkmark"}
-                    size={14}
-                    tintColorClassName={
-                      section === "waiting"
-                        ? "accent-warning-foreground"
-                        : "accent-foreground-muted"
-                    }
-                  />
-                )}
-                <View className="flex-1">
-                  <Text className="text-foreground">{row.task.title}</Text>
-                  <View className="flex-row items-center gap-1">
-                    {row.view.pinnedAt ? (
-                      <SymbolView
-                        name="pin"
-                        size={12}
-                        tintColorClassName="accent-foreground-muted"
-                      />
-                    ) : null}
-                    {row.unread ? (
-                      <View
-                        accessibilityElementsHidden
-                        className="h-2 w-2 rounded-full bg-adaptive-blue-500-400"
-                      />
-                    ) : null}
-                    <Text className="text-xs text-foreground-muted">
-                      {presentTaskStatus(row.task.status, row.view.doneAt).label}
-                      {row.unread ? " · Unread" : ""}
-                    </Text>
-                  </View>
-                </View>
-                <SymbolView
-                  name="chevron.right"
-                  size={14}
-                  tintColorClassName="accent-foreground-muted"
-                />
-              </Pressable>
+              />
             }
           />
         ),
       });
-      if (history?.launchesTruncated.has(row.task.taskId))
+      // Only older work's note is true: a current task's omitted threads have no Home link, so
+      // Threads keeps them, and the note goes once the task is current again.
+      if (
+        history?.launchesTruncated.has(row.task.taskId) &&
+        !(history.currentEligible === true && history.currentTaskIds.has(row.task.taskId))
+      )
         items.push({
           key: JSON.stringify(["task-truncated", row.task.taskId]),
           render: () => (
@@ -285,6 +247,8 @@ export interface MobileBotHomeHistory {
   readonly supported: boolean;
   readonly currentTaskIds: ReadonlySet<ChannelTaskId>;
   readonly launchesTruncated: ReadonlySet<ChannelTaskId>;
+  /** The bot's current list is read through Home's shared value, which links its tasks' threads. */
+  readonly currentEligible?: boolean;
   readonly hasMore: boolean;
   readonly loading: boolean;
   readonly incomplete: boolean;

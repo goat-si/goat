@@ -1,6 +1,5 @@
 import * as NodeChildProcess from "node:child_process";
 import * as NodeFSP from "node:fs/promises";
-import * as NodeOS from "node:os";
 import * as NodePath from "node:path";
 import * as NodeURL from "node:url";
 import { expect, it } from "vite-plus/test";
@@ -69,7 +68,11 @@ it("publishes every source guide and resolves all app docs links and rendered gu
   const slugs = (await NodeFSP.readdir(new URL("docs/user/", repository)))
     .filter((name) => name.endsWith(".md"))
     .map((name) => name.slice(0, -3));
-  const output = await NodeFSP.mkdtemp(NodePath.join(NodeOS.tmpdir(), "goat-user-docs-test-"));
+  // Astro moves prerendered assets out of this package's .astro folder with rename, which cannot
+  // cross file systems, so the build output stays beside it and not in the system temp folder.
+  const cache = NodeURL.fileURLToPath(new URL(".astro/", root));
+  await NodeFSP.mkdir(cache, { recursive: true });
+  const output = await NodeFSP.mkdtemp(NodePath.join(cache, "goat-user-docs-test-"));
   try {
     for (const base of ["/", "/goat/"]) {
       const outDir = new URL(`file://${output}/${base === "/" ? "root" : "preview"}/`);

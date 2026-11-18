@@ -1,4 +1,4 @@
-import * as NodeServices from "@effect/platform-node/NodeServices";
+import * as NodeServices from "@goat/shared/testing/nodeServicesWithCrypto";
 import { assert, it } from "@effect/vitest";
 import { CheckpointRef, GitCommandError, VcsProcessExitError } from "@goat/contracts";
 import * as HostProcess from "@goat/shared/HostProcess";

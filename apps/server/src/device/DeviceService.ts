@@ -29,7 +29,7 @@ import {
   LOCAL_DEVICE_HOST_LABEL,
   type ThreadId,
 } from "@goat/contracts";
-import { sshProbeFailureMessage } from "./DeviceHostDiagnostics.ts";
+import { actionableHostFailure, sshProbeFailureMessage } from "./DeviceHostDiagnostics.ts";
 import * as FileSystem from "effect/FileSystem";
 import { resolveNodeExecutable, nodeRuntimeUnavailableMessage } from "@goat/shared/nodeRuntime";
 import * as Path from "effect/Path";
@@ -48,7 +48,7 @@ import {
   writeAgentDeviceConfig,
 } from "./AgentDeviceTarget.ts";
 import * as Context from "effect/Context";
-import * as Crypto from "effect/Crypto";
+import * as Digest from "effect/crypto/Digest";
 import * as DateTime from "effect/DateTime";
 import * as Effect from "effect/Effect";
 import * as Layer from "effect/Layer";
@@ -174,7 +174,7 @@ export const makeWithHosts = Effect.fn("DeviceService.makeWithHosts")(function* 
 ) {
   const agentCloses = makePendingAgentCloses(closeAgentSession);
   const settings = yield* ServerSettings.ServerSettingsService;
-  const crypto = yield* Crypto.Crypto;
+  const digest = yield* Digest.Digest;
   const lifecycleLock = yield* Semaphore.make(1);
   const closeLock = yield* Semaphore.make(1);
   const readDeviceSettings = settings.getSettings.pipe(
@@ -260,9 +260,7 @@ export const makeWithHosts = Effect.fn("DeviceService.makeWithHosts")(function* 
             setHostStatus(host.id, {
               status: "failed",
               detail:
-                error._tag === "DeviceHostError" && error.step === "probe"
-                  ? sshProbeFailureMessage(error)
-                  : error.message,
+                (error._tag === "DeviceHostError" && actionableHostFailure(error)) || error.message,
             }),
           ),
           Effect.mapError(
@@ -273,9 +271,8 @@ export const makeWithHosts = Effect.fn("DeviceService.makeWithHosts")(function* 
                 reason:
                   error._tag === "NodeRuntimeUnavailableError"
                     ? nodeRuntimeUnavailableMessage("Local device support")
-                    : error.step === "probe"
-                      ? sshProbeFailureMessage(error)
-                      : `Device support failed during ${error.step}.`,
+                    : (actionableHostFailure(error) ??
+                      `Device support failed during ${error.step}.`),
                 cause: error,
               }),
           ),
@@ -323,9 +320,7 @@ export const makeWithHosts = Effect.fn("DeviceService.makeWithHosts")(function* 
             setHostStatus(host.id, {
               status: "failed",
               detail:
-                error._tag === "DeviceHostError" && error.step === "probe"
-                  ? sshProbeFailureMessage(error)
-                  : error.message,
+                (error._tag === "DeviceHostError" && actionableHostFailure(error)) || error.message,
             }),
           ),
           Effect.mapError(
@@ -340,9 +335,8 @@ export const makeWithHosts = Effect.fn("DeviceService.makeWithHosts")(function* 
                       ? `Agent tools did not start within ${error.timeoutMs} ms.`
                       : error._tag === "AgentDeviceStartError"
                         ? error.message
-                        : error.step === "probe"
-                          ? sshProbeFailureMessage(error)
-                          : `Device support failed during ${error.step}.`,
+                        : (actionableHostFailure(error) ??
+                          `Device support failed during ${error.step}.`),
                 cause: error,
               }),
           ),
@@ -847,7 +841,7 @@ export const makeWithHosts = Effect.fn("DeviceService.makeWithHosts")(function* 
           input.threadId,
           input.hostId,
           input.deviceId,
-        ).pipe(Effect.provideService(Crypto.Crypto, crypto));
+        ).pipe(Effect.provideService(Digest.Digest, digest));
         return { agentDeviceId, args: ["--config", configPath, "--session", session] };
       }),
       state: SynchronizedRef.get(stateRef).pipe(Effect.map(({ state }) => state)),
@@ -901,10 +895,10 @@ export const make = Effect.gen(function* () {
   const hosts = new Map<DeviceHostId, DeviceHost.DeviceHost["Service"]>([
     [localHost.id, localHost],
   ]);
-  const crypto = yield* Crypto.Crypto;
+  const digest = yield* Digest.Digest;
   const configPath = (hostId: DeviceHostId, deviceId?: DeviceId) =>
     agentDeviceConfigPath(config.stateDir, hostId, path, deviceId).pipe(
-      Effect.provideService(Crypto.Crypto, crypto),
+      Effect.provideService(Digest.Digest, digest),
     );
   const configureAgent = Effect.fn("DeviceService.configureAgent")(
     function* (

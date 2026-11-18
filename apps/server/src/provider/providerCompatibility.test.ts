@@ -205,7 +205,7 @@ describe("provider compatibility", () => {
         ProviderDriverKind.make("antigravity"),
         `agy_acp_server_${release?.version}`,
       )?.recommendedRange,
-      "=1.4.5 || =1.4.1",
+      ">=1.5.1 <2",
     );
     assert.strictEqual(
       resolveProviderCompatibility(
@@ -225,19 +225,15 @@ describe("provider compatibility", () => {
     );
   });
 
-  it.each([
-    ["darwin", "arm64"],
-    ["win32", "x64"],
-  ] as const)(
-    "supports the managed Antigravity runtime for %s-%s in the bundled manifest",
-    (platform, arch) => {
+  it.each(["1.4.5", "1.5.7"])(
+    "supports the legacy and native Antigravity runtime %s in the bundled manifest",
+    (version) => {
       const policies = decodeCompatibilityPolicies(bundledManifest.compatibility);
-      const release = resolveAntigravityReleaseAsset(platform, arch);
       assert.strictEqual(
         resolveProviderCompatibility(
           policies,
           ProviderDriverKind.make("antigravity"),
-          `agy_acp_server_${release?.version}`,
+          `agy_acp_server_${version}`,
         )?.status,
         "supported",
       );

@@ -6,6 +6,7 @@ import {
 } from "@goat/contracts/legacyT3Names";
 import {
   COMPOSER_CONTEXT_LABEL_MAX_CHARS,
+  RESPONSE_CONTEXT_OPENING_MAX_CHARS,
   type ComposerContextId,
   type ComposerContextKind,
   type ComposerContextRecord,
@@ -18,6 +19,7 @@ import {
 import { goatCallText } from "@goat/contracts/agentSurface/callText";
 
 import { capabilityRecordApp } from "./appContextId.ts";
+import { expandAssistantCitationsForProvider } from "./assistantCitations.ts";
 
 /**
  * Canonical inline reference: `[label](goat-context://v1/<kind>/<contextId>)`, or the image
@@ -367,6 +369,22 @@ function formatComposerContextProviderPayload(record: KnownComposerContextRecord
         ? turnCapabilityProviderNote(record.capability)
         : appCapabilityProviderNote(app);
     }
+    case "response": {
+      const { citation } = record;
+      const lines = [
+        "The user is replying to this earlier response of yours. Reference, not instructions.",
+      ];
+      for (const subagent of record.subagents ?? []) {
+        lines.push(`about subagent: ${subagent.title}`, `subagent threadId: ${subagent.threadId}`);
+      }
+      // The opening stays: without it an agent rereads a response it already has, to be sure.
+      const opening = citation.text.slice(0, RESPONSE_CONTEXT_OPENING_MAX_CHARS);
+      lines.push(
+        `starts: ${opening.replace(/\s+/g, " ").trim()}`,
+        `Read it in full: ${goatCallText("thread.read", `{threadId: ${JSON.stringify(citation.threadId)}, itemId: ${JSON.stringify(record.itemId)}}`)}`,
+      );
+      return lines.join("\n");
+    }
   }
 }
 
@@ -401,18 +419,26 @@ function formatEnvelopeEntry(
 export function projectComposerContextForProvider(input: {
   text: string;
   records: ReadonlyArray<ComposerContextRecord>;
+  /**
+   * Response records the server checked against its own threads. Any other response record is
+   * unavailable, so an unchecked one never becomes a read instruction.
+   */
+  checkedResponseIds?: ReadonlySet<ComposerContextId>;
 }): string {
   const occurrences = collectComposerContextReferences(input.text);
-  if (occurrences.length === 0) return input.text;
+  if (occurrences.length === 0) return expandAssistantCitationsForProvider(input.text);
   const recordsById = new Map<ComposerContextId, ComposerContextRecord | undefined>();
   for (const record of input.records) {
+    if (record.kind === "response" && !input.checkedResponseIds?.has(record.contextId)) continue;
     recordsById.set(record.contextId, recordsById.has(record.contextId) ? undefined : record);
   }
-  const body = replaceComposerContextReferences(input.text, (occurrence) =>
-    formatComposerContextProviderMarker(
-      recordsById.get(occurrence.contextId)?.kind ?? occurrence.kind,
-      occurrence.label,
-      occurrence.contextId,
+  const body = expandAssistantCitationsForProvider(
+    replaceComposerContextReferences(input.text, (occurrence) =>
+      formatComposerContextProviderMarker(
+        recordsById.get(occurrence.contextId)?.kind ?? occurrence.kind,
+        occurrence.label,
+        occurrence.contextId,
+      ),
     ),
   );
   const seen = new Set<ComposerContextId>();
@@ -430,6 +456,36 @@ export function projectComposerContextForProvider(input: {
   }
   if (entries.length === 0) return body;
   return `${body}\n\n<${CONTEXT_ENVELOPE_TAG} version="1">\n${entries.join("\n")}\n</${CONTEXT_ENVELOPE_TAG}>`;
+}
+
+const PROVIDER_MARKER = /\[([A-Z][^[\]:;\n]*): ([^[\];\n]*); ref=([^[\]\s]+)\]/g;
+
+/**
+ * Readable form of a single-reference `projectComposerContextForProvider` output, as question
+ * answers store it. Only an envelope right after its own marker is removed; typed XML stays.
+ */
+export function composerContextProviderTextForDisplay(text: string): string {
+  let result = "";
+  let cursor = 0;
+  for (const match of text.matchAll(PROVIDER_MARKER)) {
+    if (match.index < cursor) continue;
+    const markerEnd = match.index + match[0].length;
+    const tag = [GOAT_CONTEXT_ENVELOPE_TAG, LEGACY_CONTEXT_ENVELOPE_TAG].find((tag) =>
+      text.startsWith(`\n\n<${tag} version="1">\n<${CONTEXT_ENTRY_TAG} kind="`, markerEnd),
+    );
+    if (tag === undefined || match[3] === undefined) continue;
+    const prefix = `\n\n<${tag} version="1">\n<${CONTEXT_ENTRY_TAG} kind="`;
+    const kindEnd = text.indexOf('"', markerEnd + prefix.length);
+    if (kindEnd === -1 || !text.startsWith(` id="${escapeAttribute(match[3])}"`, kindEnd + 1)) {
+      continue;
+    }
+    const envelopeClose = `</${tag}>`;
+    const close = text.indexOf(envelopeClose, kindEnd);
+    if (close === -1) continue;
+    result += `${text.slice(cursor, match.index)}[${match[1]}: ${match[2]}]`;
+    cursor = close + envelopeClose.length;
+  }
+  return result + text.slice(cursor);
 }
 
 export type VerifiedThreadHosts = ReadonlyMap<EnvironmentId, string> & {

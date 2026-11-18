@@ -12,6 +12,7 @@ import {
   handoffTokenCapConfig,
   handoffBudget,
   attachmentTokenAllowance,
+  estimateTextTokens,
   contextUsageForHandoff,
   historicalMessage,
   latestNativeContextUsage,
@@ -157,7 +158,7 @@ export const makeProviderTurnHandoffRecovery = Effect.gen(function* () {
                   : 0;
               return (
                 sum +
-                (historical === null ? 0 : Buffer.byteLength(historical.text)) +
+                (historical === null ? 0 : estimateTextTokens(historical.text)) +
                 nativeAttachments
               );
             }, 0)

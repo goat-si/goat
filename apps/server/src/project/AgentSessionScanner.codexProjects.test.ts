@@ -8,6 +8,7 @@ import {
   ProviderDriverKind,
   ProviderInstanceId,
 } from "@goat/contracts";
+import * as HostProcess from "@goat/shared/HostProcess";
 import * as Effect from "effect/Effect";
 import * as DateTime from "effect/DateTime";
 import * as FileSystem from "effect/FileSystem";
@@ -21,6 +22,7 @@ import * as ProjectStore from "../orchestration-v2/ProjectStore.ts";
 import * as ServerSettings from "../serverSettings.ts";
 import * as AgentSessionScanner from "./AgentSessionScanner.ts";
 import { readCodexProjectState, resolveCodexProjectCwd } from "./CodexStateDatabase.ts";
+import * as ProviderSessionRuntime from "../persistence/ProviderSessionRuntime.ts";
 
 const makeProjectShell = (workspaceRoot: string): OrchestrationProjectShell => ({
   id: ProjectId.make("project-1"),
@@ -49,6 +51,9 @@ const layerScannerTest = (input: {
   AgentSessionScanner.layer.pipe(
     Layer.provide(
       Layer.mergeAll(
+        Layer.mock(ProviderSessionRuntime.ProviderSessionRuntimeRepository)({
+          list: () => Effect.succeed([]),
+        }),
         ServerSettings.layerTest({
           providerInstances: {
             [ProviderInstanceId.make("claudeAgent")]: {
@@ -508,6 +513,185 @@ it.layer(NodeServices.layer)("AgentSessionScanner Codex projects", (it) => {
       ]);
       expect(state.complete).toBe(false);
       expect(state.stateByHome.get(codexHomePath)?.projectRoots).toHaveLength(20_000);
+    }),
+  );
+  it.effect("keeps Codex rollout cwds when the Codex state database is unreadable", () =>
+    Effect.gen(function* () {
+      const fileSystem = yield* FileSystem.FileSystem;
+      const path = yield* Path.Path;
+      // GOAT counts threads inside its activity window, so the clock sits just after the rollout.
+      yield* TestClock.setTime(Date.parse("2026-05-03T00:01:00.000Z"));
+      const claudeHomePath = yield* makeTempDir("goat-claude-home-");
+      const codexHomePath = yield* makeTempDir("goat-codex-home-");
+      const piAgentDir = yield* makeTempDir("goat-pi-agent-");
+      const workspace = yield* makeTempDir("goat-workspace-");
+      yield* writeTranscript({
+        filePath: path.join(
+          codexHomePath,
+          "sessions",
+          "2026",
+          "05",
+          "03",
+          "rollout-2026-05-03T00-00-00-019a5f00-0000-7000-8000-00000000000a.jsonl",
+        ),
+        contents: `${JSON.stringify({ timestamp: "2026-01-01T00:00:00.000Z", type: "session_meta", payload: { id: "r1", cwd: workspace } })}\n`,
+        mtimeMs: Date.parse("2026-05-03T00:00:00.000Z"),
+      });
+      yield* fileSystem.writeFileString(
+        path.join(codexHomePath, "state_5.sqlite"),
+        "not a database",
+      );
+
+      const result = yield* runScan({ claudeHomePath, codexHomePath, piAgentDir });
+
+      expect(result.candidates.map(({ path, threadCount }) => ({ path, threadCount }))).toEqual([
+        { path: workspace, threadCount: 1 },
+      ]);
+    }),
+  );
+
+  it.effect("imports Codex chats moved from a scratch folder into a Codex project", () =>
+    Effect.gen(function* () {
+      const fileSystem = yield* FileSystem.FileSystem;
+      const path = yield* Path.Path;
+      const nowMs = Date.parse("2026-11-08T12:00:00.000Z");
+      yield* TestClock.setTime(nowMs);
+      const claudeHomePath = yield* makeTempDir("goat-claude-home-");
+      const codexHomePath = yield* makeTempDir("goat-codex-home-");
+      const piAgentDir = yield* makeTempDir("goat-pi-agent-");
+      const homeDir = yield* makeTempDir("goat-home-");
+      const projectDir = path.join(homeDir, "code", "my-project");
+      const scratchDir = path.join(homeDir, "Documents", "Codex", "2026-11-08", "new-chat");
+      const otherDir = path.join(homeDir, "code", "other-project");
+      yield* fileSystem.makeDirectory(projectDir, { recursive: true });
+      yield* fileSystem.makeDirectory(scratchDir, { recursive: true });
+      yield* fileSystem.makeDirectory(otherDir, { recursive: true });
+
+      const projectId = "019a5f00-0000-7000-8000-000000000001";
+      const chats = [
+        {
+          id: "019a5f00-0000-7000-8000-00000000000a",
+          cwd: scratchDir,
+          message: "Started with no project",
+        },
+        {
+          id: "019a5f00-0000-7000-8000-00000000000b",
+          cwd: projectDir,
+          message: "Started in the project",
+        },
+        {
+          id: "019a5f00-0000-7000-8000-00000000000c",
+          cwd: otherDir,
+          message: "Started in another folder",
+        },
+        {
+          id: "019a5f00-0000-7000-8000-00000000000d",
+          rolloutId: "019a5f00-0000-7000-8000-0000000000d1",
+          cwd: scratchDir,
+          message: "Rewound with no project",
+        },
+      ];
+      const rolloutPaths: Array<string> = [];
+      for (const [index, chat] of chats.entries()) {
+        const filePath = path.join(
+          codexHomePath,
+          "sessions",
+          "2026",
+          "11",
+          "08",
+          `rollout-2026-11-08T08-0${index}-00-${"rolloutId" in chat ? `${chat.id}_${chat.rolloutId}` : chat.id}.jsonl`,
+        );
+        rolloutPaths.push(filePath);
+        yield* writeTranscript({
+          filePath,
+          contents: [
+            JSON.stringify({ type: "session_meta", payload: { id: chat.id, cwd: chat.cwd } }),
+            JSON.stringify({ type: "turn_context", payload: { cwd: chat.cwd } }),
+            JSON.stringify({
+              type: "event_msg",
+              payload: { type: "user_message", message: chat.message },
+            }),
+          ].join("\n"),
+          mtimeMs: nowMs - 60_000 + index,
+        });
+      }
+      // Codex records a chat's project only in its state DB; the rollout keeps the original cwd.
+      // GOAT also reads updated_at, archived and source, which Codex's threads table carries.
+      yield* Effect.sync(() => {
+        const db = new NodeSqlite.DatabaseSync(path.join(codexHomePath, "state_5.sqlite"));
+        try {
+          db.exec(`
+            CREATE TABLE projects (
+              id TEXT PRIMARY KEY,
+              name TEXT NOT NULL,
+              metadata TEXT NOT NULL DEFAULT '{}',
+              position INTEGER NOT NULL,
+              created_at_ms INTEGER NOT NULL,
+              updated_at_ms INTEGER NOT NULL
+            );
+            CREATE TABLE project_roots (
+              project_id TEXT NOT NULL REFERENCES projects(id) ON DELETE CASCADE,
+              position INTEGER NOT NULL,
+              path TEXT NOT NULL,
+              PRIMARY KEY (project_id, position)
+            );
+            CREATE TABLE threads (
+              id TEXT PRIMARY KEY,
+              rollout_path TEXT NOT NULL,
+              cwd TEXT NOT NULL,
+              project_id TEXT REFERENCES projects(id) ON DELETE SET NULL,
+              updated_at INTEGER NOT NULL,
+              archived INTEGER NOT NULL DEFAULT 0,
+              source TEXT NOT NULL DEFAULT 'vscode'
+            );
+          `);
+          db.prepare("INSERT INTO projects VALUES (?, ?, '{}', 0, ?, ?)").run(
+            projectId,
+            "my-project",
+            nowMs,
+            nowMs,
+          );
+          db.prepare("INSERT INTO project_roots VALUES (?, 0, ?)").run(projectId, projectDir);
+          const insertThread = db.prepare(
+            "INSERT INTO threads (id, rollout_path, cwd, project_id, updated_at) VALUES (?, ?, ?, ?, ?)",
+          );
+          for (const [index, chat] of chats.entries()) {
+            insertThread.run(
+              chat.id,
+              rolloutPaths[index]!,
+              chat.cwd,
+              projectId,
+              Math.floor((nowMs - 60_000 + index) / 1000),
+            );
+          }
+        } finally {
+          db.close();
+        }
+      });
+
+      const threads = yield* runRecentThreads({
+        claudeHomePath,
+        codexHomePath,
+        piAgentDir,
+        workspaceRoot: projectDir,
+      }).pipe(Effect.provideService(HostProcess.HomeDirectory, homeDir));
+      expect(threads.map((thread) => thread.title).toSorted()).toEqual([
+        "Rewound with no project",
+        "Started in the project",
+        "Started with no project",
+      ]);
+
+      const result = yield* runScan({ claudeHomePath, codexHomePath, piAgentDir }).pipe(
+        Effect.provideService(HostProcess.HomeDirectory, homeDir),
+      );
+      expect(
+        result.candidates
+          .map(({ path, threadCount }) => ({ path, threadCount }))
+          .toSorted((left, right) => left.path.localeCompare(right.path)),
+      ).toEqual([
+        { path: projectDir, threadCount: 3 },
+        { path: otherDir, threadCount: 1 },
+      ]);
     }),
   );
 });

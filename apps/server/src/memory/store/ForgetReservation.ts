@@ -5,7 +5,7 @@ import { exclusionsCodec, lineageCodec, suppressionCodec } from "./StoreCodecs.t
 /**
  * Bytes and keys a later forget may spend on suppression records: one source exclusion per
  * evidence message of a source-attributed revision, plus each lineage record with the
- * deleteOperationId a suppression adds (64 bytes, as migration 082 charges it).
+ * deleteOperationId a suppression adds (64 bytes, as the MemoryImportLineage migration charges it).
  */
 export const measureForgetReservation = Effect.fnUntraced(function* (
   op: Pick<M.MemoryOperation, "memorySpaceId" | "memoryId" | "operationId">,

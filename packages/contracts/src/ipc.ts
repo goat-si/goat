@@ -41,49 +41,15 @@ import type {
   DesktopAppActivationRequest,
   DesktopAppActivationResponse,
 } from "./desktopAppActivation.ts";
-export interface ContextMenuItem<T extends string = string> {
-  id: T;
-  label: string;
-  destructive?: boolean;
-  disabled?: boolean;
-  header?: boolean;
-  icon?: string;
-  separatorBefore?: boolean;
-  checked?: boolean;
-  children?: readonly ContextMenuItem<T>[];
-}
+
+import type { ConfirmDialogOptions } from "./confirmDialog.ts";
+import type { ContextMenuItem } from "./contextMenu.ts";
+export { ContextMenuItemSchema } from "./contextMenu.ts";
+export type { ContextMenuItem, ContextMenuItemSchemaType } from "./contextMenu.ts";
 
 export type QuitShortcutHintEvent =
   | { readonly state: "down"; readonly mode: Exclude<QuitConfirmationMode, "direct"> }
   | { readonly state: "up" };
-
-export interface ContextMenuItemSchemaType {
-  readonly id: string;
-  readonly label: string;
-  readonly destructive?: boolean;
-  readonly disabled?: boolean;
-  readonly header?: boolean;
-  readonly icon?: string;
-  readonly separatorBefore?: boolean;
-  readonly checked?: boolean;
-  readonly children?: readonly ContextMenuItemSchemaType[];
-}
-
-export const ContextMenuItemSchema: Schema.Codec<ContextMenuItemSchemaType> = Schema.Struct({
-  id: Schema.String,
-  label: Schema.String,
-  destructive: Schema.optionalKey(Schema.Boolean),
-  disabled: Schema.optionalKey(Schema.Boolean),
-  header: Schema.optionalKey(Schema.Boolean),
-  icon: Schema.optionalKey(Schema.String),
-  separatorBefore: Schema.optionalKey(Schema.Boolean),
-  checked: Schema.optionalKey(Schema.Boolean),
-  children: Schema.optionalKey(
-    Schema.Array(
-      Schema.suspend((): Schema.Codec<ContextMenuItemSchemaType> => ContextMenuItemSchema),
-    ),
-  ),
-});
 
 export type DesktopUpdateStatus =
   | "disabled"
@@ -1258,6 +1224,8 @@ export interface DesktopBridge extends DesktopBridgeParts, DesktopPenBridge {
   /** Decode with AuthWebSocketTicketResultJson; Redacted cannot cross the context bridge. */
   issueSshWebSocketTicket: (httpBaseUrl: string, bearerToken: string) => Promise<unknown>;
   onSshPasswordPrompt: (listener: (request: DesktopSshPasswordPromptRequest) => void) => () => void;
+  /** Fires with a prompt's request id once it is answered, cancelled, expired or abandoned. */
+  onSshPasswordPromptSettled: (listener: (requestId: string) => void) => () => void;
   resolveSshPasswordPrompt: (requestId: string, password: string | null) => Promise<void>;
   getServerExposureState: () => Promise<DesktopServerExposureState>;
   setServerExposureMode: (mode: DesktopServerExposureMode) => Promise<DesktopServerExposureState>;
@@ -1343,6 +1311,8 @@ export interface DesktopPreviewBridge extends AnnotationVoiceBridge {
   goBack: (tabId: string) => Promise<void>;
   goForward: (tabId: string) => Promise<void>;
   refresh: (tabId: string) => Promise<void>;
+  /** Absent in desktop apps older than Stop; the web shows Stop only when it is here. */
+  stopLoading?: (tabId: string) => Promise<void>;
   zoomIn: (tabId: string) => Promise<void>;
   zoomOut: (tabId: string) => Promise<void>;
   resetZoom: (tabId: string) => Promise<void>;
@@ -1400,12 +1370,6 @@ export interface DesktopPreviewBridge extends AnnotationVoiceBridge {
   onPointerEvent: (listener: (event: DesktopPreviewCursorEvent) => void) => () => void;
   onServerTabCapture: (listener: (event: DesktopPreviewCaptureEvent) => void) => () => void;
   onOpenLink: (listener: (event: DesktopPreviewOpenLinkEvent) => void) => () => void;
-}
-
-export type ConfirmDialogVariant = "default" | "destructive";
-
-export interface ConfirmDialogOptions {
-  readonly variant?: ConfirmDialogVariant;
 }
 
 export interface LocalApi {

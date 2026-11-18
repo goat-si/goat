@@ -20,6 +20,7 @@ import * as TextGenerationOperations from "@goat/provider-core/server/textGenera
 import * as OpenCodeRuntime from "./OpenCodeRuntime.ts";
 import * as OpenCodeServerOwner from "./OpenCodeServerOwner.ts";
 import { prepareMemoryServer } from "./memoryIsolation.ts";
+import { resolveOpenCodeVariant } from "./openCodeVariant.ts";
 
 /** External servers are not controlled by the instance owner. */
 export const requireOpenCodeMemoryIsolation = (operation: MemoryOperationName) =>
@@ -202,6 +203,7 @@ export const makeOpenCodeTextGeneration = Effect.fn("makeOpenCodeTextGeneration"
   options: {
     readonly memoryRunnerContext?: MemoryGenerationRunnerContext;
     readonly environment?: NodeJS.ProcessEnv;
+    readonly currentEnvironment?: Effect.Effect<NodeJS.ProcessEnv>;
   } = {},
 ) {
   const fs = yield* FileSystem.FileSystem;
@@ -228,7 +230,7 @@ export const makeOpenCodeTextGeneration = Effect.fn("makeOpenCodeTextGeneration"
         ? yield* prepareMemoryServer(
             input.operation,
             parsedModel.providerID,
-            options.environment ?? process.env,
+            yield* options.currentEnvironment ?? Effect.succeed(options.environment ?? process.env),
             1,
           )
         : undefined;
@@ -386,9 +388,10 @@ export const makeOpenCodeTextGeneration = Effect.fn("makeOpenCodeTextGeneration"
             );
           }
           const selectedAgent = getModelSelectionStringOptionValue(input.modelSelection, "agent");
-          const selectedVariant = getModelSelectionStringOptionValue(
-            input.modelSelection,
-            "variant",
+          const selectedVariant = yield* resolveOpenCodeVariant(
+            client,
+            parsedModel,
+            getModelSelectionStringOptionValue(input.modelSelection, "variant"),
           );
           const promptContext = {
             operation: input.operation,

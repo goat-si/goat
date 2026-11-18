@@ -1,6 +1,6 @@
 import * as ProviderHost from "@goat/provider-core/server/ProviderHost";
 import { ProviderCredentialError } from "@goat/provider-core/server/errors";
-import * as Crypto from "effect/Crypto";
+import * as Digest from "effect/crypto/Digest";
 import * as Effect from "effect/Effect";
 import * as FileSystem from "effect/FileSystem";
 import * as Layer from "effect/Layer";
@@ -23,7 +23,7 @@ export const layer = Layer.effect(
     const serverSettings = yield* ServerSettings.ServerSettingsService;
     const backgroundPolicy = yield* BackgroundPolicy.BackgroundPolicy;
     const secrets = yield* ServerSecretStore.ServerSecretStore;
-    const crypto = yield* Crypto.Crypto;
+    const digest = yield* Digest.Digest;
     const fileSystem = yield* FileSystem.FileSystem;
     return ProviderHost.ProviderHost.of({
       environmentId,
@@ -72,7 +72,7 @@ export const layer = Layer.effect(
             ),
           })),
           Effect.provideService(ServerSecretStore.ServerSecretStore, secrets),
-          Effect.provideService(Crypto.Crypto, crypto),
+          Effect.provideService(Digest.Digest, digest),
         );
       }),
     });

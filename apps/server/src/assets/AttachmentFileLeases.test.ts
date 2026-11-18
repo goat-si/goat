@@ -12,6 +12,12 @@ const layer = AttachmentFileLeases.layer.pipe(
   Layer.provideMerge(ServerConfig.layerTest(process.cwd(), { prefix: "goat-file-leases-" })),
 );
 
+// regression: DocumentText writes <file>.txt.<n>.part, so a crash leaves one the sweeper must claim.
+it("attributes a pending document text sidecar to its attachment", () => {
+  expect(AttachmentFileLeases.attachmentIdForFile(`/attachments/${id}.pdf.txt.0.part`)).toBe(id);
+  expect(AttachmentFileLeases.attachmentIdForFile(`/attachments/${id}.pdf.txt.12.part`)).toBe(id);
+});
+
 it.effect("excludes every alias while a writer is active without blocking another attachment", () =>
   Effect.gen(function* () {
     const leases = yield* AttachmentFileLeases.AttachmentFileLeases;

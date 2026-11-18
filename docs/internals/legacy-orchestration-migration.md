@@ -86,5 +86,5 @@ database a later build migrated. The cases are pinned in `reconcileGoatMigration
 
 A migration appended after the older build's last id does not trigger that refusal: the older build
 logs the newer row as unknown and runs. A data repair therefore holds only until an older build
-writes again, and returning to the newer build does not rerun it. `111_NotificationCursorRepair`
-is an example: nightly 282 and earlier can move unread cursors for idle compactions again.
+writes again, and returning to the newer build does not rerun it. The `NotificationCursorRepair`
+migration is an example: nightly 282 and earlier can move unread cursors for idle compactions again.

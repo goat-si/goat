@@ -192,6 +192,8 @@ The desktop app, and `goat serve --tailscale-serve`, re-apply that HTTPS port
 each time they start and keep trying until Tailscale is running, so the address
 stays the same across restarts. A mapping left by `goat pair --tailscale` on
 another port stays until you remove it with `tailscale serve --https=<port> off`.
+If that HTTPS port already serves another running server or app, GOAT leaves it
+alone; a mapping to a server that has stopped is taken over within a minute.
 
 To start a command-line server with Tailscale HTTPS:
 
@@ -684,6 +686,14 @@ asleep stays in the list as **Unreachable**, with its threads as last seen and h
 is, for example "last state 5 min ago". It reconnects on its own when the machine comes back.
 Stopped cloud machines are never started by opening them.
 
+If a hub stops accepting this device, for example because its pairing was revoked, the machines
+you reach through it stay in your list and show that they were not accepted. Their threads and
+saved drafts are kept, and on the phone so are thread messages waiting to send. GOAT Bot
+messages still waiting to send are cleared when the page reloads or the app restarts, as before.
+Pairing with the hub again retries the machines, and each one reconnects once it also accepts
+this device. If you no longer need one, remove the machine, or remove the hub, which also
+removes the machines you reach only through it.
+
 When GOAT Connect becomes available, **Settings → Hub → Allow GOAT Connect devices to
 reach hub devices** (or **Settings → Hub devices** on mobile) gives standing consent to every
 trusted device signed in to the linked account. Any settings administrator can change it;
@@ -821,11 +831,33 @@ threads on an environment through its MCP server. See
 
 On the host, **Settings → Connections** lets authorized administrators create
 pairing links and revoke client sessions. Revoking an unused link prevents new
-pairings; revoke a device's session to remove its existing access. Command-line
-management is available through `goat auth --help`.
+pairings; revoke a device's session to remove its existing access. An MCP request
+that session still has in progress stops at once.
+
+`goat auth session revoke <id>` does the same from the command line: the session
+is refused at once, and a running server closes its open connections and stops
+its MCP requests in progress within about 5 seconds. A command-line revoke of a
+session that has already expired does not stop a request still running on it.
+**Revoke others** in Settings stops the requests in progress on every session it
+revokes, expired or not.
+
+An agent whose request was stopped sees the call fail and has to sign in again.
+Work the request had already handed to the server, such as a turn it started,
+keeps running. More commands are listed by `goat auth --help`.
+
+**Revoke others** keeps sessions signed in with the desktop app's built-in
+credential, normally the desktop app on that computer, and sessions Pen members
+hold; both are marked **Kept by Revoke others**. An MCP request a Pen member's
+session has in progress keeps running. If you do not recognise a kept session or
+suspect it, revoke it by itself in Settings, which also stops its requests in
+progress. A Pen member's session whose sign-in has expired is no longer listed,
+and nothing in Settings or on the command line stops a request it still has
+running, so that request can continue until it finishes or GOAT restarts. After
+you revoke the desktop app's session, quit and reopen GOAT on that computer.
 
 A session with an open connection stays listed after its access credential
-expires.
+expires. **Settings → Connections** shows which sessions are connected;
+`goat auth session list` cannot tell.
 
 To choose a token's permissions, pass `--scope` once for each scope you want:
 
@@ -835,11 +867,20 @@ goat pair --scope orchestration:read --scope relay:read
 
 The selected scopes replace the default permissions. The same option works with
 `goat auth pairing create` and `goat auth session issue`; each command's
-`--help` lists the available scopes. Without `--scope`, pairing tokens and issued
-bearer sessions get every permission, including managing access.
+`--help` lists the available scopes. `goat pair` prints a link for the running server it finds: the
+one in `--base-dir` when you pass it, otherwise the one in `GOAT_HOME` or the default GOAT
+home. `goat auth pairing create` prints a pairing code, or a link when you add
+`--base-url <url>`. Without `--scope`, pairing tokens and issued bearer sessions get the
+full standard permissions, including managing access, which can be more than a
+paired client's own **Create link** dialog offers.
+
 A terminal or a full-access agent on the host can reach those as well, so a
 client that should not manage access also needs to go without `terminal:operate`
 and `orchestration:operate`.
+
+A desktop app that shows several environments creates its **Create link** links
+for its own environment. To pair a device with another one, create the link on
+the machine that runs it, as above.
 
 To change an existing client's permissions, create a fresh pairing link with the
 scopes it needs. In a browser opened directly on the environment, open that link

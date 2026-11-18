@@ -2,6 +2,7 @@ import { assertPinSettled } from "./testkit/PinSettledAssertion.ts";
 import { PullRequestProviderError } from "@goat/source-control-core/server/PullRequestProvider";
 import { markStartClaimed } from "./StartLaneRecovery.testkit.ts";
 import * as Option from "effect/Option";
+import * as NodeCrypto from "@effect/platform-node/NodeCrypto";
 import * as NodeServices from "@effect/platform-node/NodeServices";
 import type * as ProviderAdapter from "@goat/provider-core/server/ProviderAdapter";
 import * as Scheduler from "../scheduling/Scheduler.ts";
@@ -26,7 +27,6 @@ import {
   NodeId,
   RuntimeRequestId,
   TurnItemId,
-  type ModelSelection,
   type OrchestrationV2Run,
   type OrchestrationV2RuntimeRequest,
   ProjectId,
@@ -82,6 +82,7 @@ import * as ScheduledTaskService from "../scheduledTasks/ScheduledTaskService.ts
 import * as ThreadCommandExecutor from "./ThreadCommandExecutor.ts";
 
 import {
+  antigravityInstanceId,
   driver,
   layerPlatformTest,
   layerServerConfig,
@@ -89,111 +90,15 @@ import {
   alternateInstanceId,
   layerCheckpointStoreTest,
   layerGitWorkflowTest,
+  layerLegacyImportTest,
   layerProjectServiceTest,
   layerTestProviderInstanceRegistry,
+  moveProject,
+  seedProject,
+  watchedPullRequestDetail,
 } from "./runtimeLayer.testkit.ts";
 
 const prWatchDisabledProjectId = ProjectId.make("pr-watch-disabled-project");
-
-const watchedPullRequestDetail = (input: {
-  readonly projectId: ProjectId;
-  readonly number: number;
-  readonly at: string;
-}): PullRequestDetail => ({
-  provider: SourceControlProviderKind.make("github"),
-  capabilities: {
-    diff: true,
-    comment: true,
-    actions: [],
-    mergeMethods: [],
-    search: false,
-    checksAlwaysReport: true,
-    review: { inlineComment: false, reply: false, resolve: false, verdicts: [] },
-    reviewers: { request: false, listCandidates: false },
-  },
-  viewerPermissions: {
-    actions: [],
-    comment: true,
-    resolve: true,
-    verdicts: [],
-    requestReviewers: false,
-  },
-  projectId: input.projectId,
-  projectTitle: "Watch wake",
-  workspaceRoot: "/workspace/watch",
-  repository: "goat-si/goat",
-  number: input.number,
-  title: "Watched pull request",
-  body: "",
-  url: `https://github.com/goat-si/goat/pull/${input.number}`,
-  author: { login: "agent-user", name: null, avatarUrl: null },
-  state: "open",
-  isDraft: false,
-  mergeability: "mergeable",
-  additions: 1,
-  deletions: 0,
-  changedFiles: 1,
-  headBranch: "feature",
-  headSha: "abc1234def",
-  baseBranch: "main",
-  createdAt: input.at,
-  updatedAt: input.at,
-  mergedAt: null,
-  closedAt: null,
-  reviewers: [],
-  labels: [],
-  checks: [{ name: "lint", status: "failure", description: null, url: null }],
-  mergeCapabilities: { merge: true, squash: true, rebase: true },
-  viewer: "agent-user",
-});
-
-const seedProject = (input: {
-  readonly projectId: ProjectId;
-  readonly title: string;
-  readonly workspaceRoot: string;
-  readonly defaultModelSelection: ModelSelection | null;
-  readonly createdAt: string;
-}) =>
-  Effect.flatMap(ProjectStore.ProjectStoreV2, (projects) =>
-    projects.apply({
-      sequence: 0,
-      eventId: EventId.make(`seed:${input.projectId}`),
-      aggregateKind: "project",
-      aggregateId: input.projectId,
-      occurredAt: input.createdAt,
-      commandId: null,
-      causationEventId: null,
-      correlationId: null,
-      metadata: {},
-      type: "project.created",
-      payload: {
-        projectId: input.projectId,
-        title: input.title,
-        workspaceRoot: input.workspaceRoot,
-        defaultModelSelection: input.defaultModelSelection,
-        scripts: [],
-        createdAt: input.createdAt,
-        updatedAt: input.createdAt,
-      },
-    }),
-  );
-
-const moveProject = (projectId: ProjectId, workspaceRoot: string, updatedAt: string) =>
-  Effect.flatMap(ProjectStore.ProjectStoreV2, (projects) =>
-    projects.apply({
-      sequence: 0,
-      eventId: EventId.make(`move:${projectId}:${workspaceRoot}`),
-      aggregateKind: "project",
-      aggregateId: projectId,
-      occurredAt: updatedAt,
-      commandId: null,
-      causationEventId: null,
-      correlationId: null,
-      metadata: {},
-      type: "project.meta-updated",
-      payload: { projectId, workspaceRoot, updatedAt },
-    }),
-  );
 
 const layerTest = Layer.mergeAll(
   RuntimeLayer.layer,
@@ -221,18 +126,6 @@ const layerTest = Layer.mergeAll(
   Layer.provide(layerPlatformTest),
 );
 
-const layerLegacyImportTest = RuntimeLayer.layer.pipe(
-  Layer.provide(McpSessionRegistryTestkit.layer),
-  Layer.provide(McpProviderSessions.layer),
-  Layer.provideMerge(SqlitePersistence.layerMemory),
-  Layer.provide(layerCheckpointStoreTest),
-  Layer.provide(layerServerConfig),
-  Layer.provide(ServerSettings.layerTest()),
-  Layer.provide(layerTestProviderInstanceRegistry),
-  Layer.provide(layerGitWorkflowTest),
-  Layer.provide(layerProjectServiceTest),
-  Layer.provide(layerPlatformTest),
-);
 const layerSharedApplicationDataPlaneTest = Layer.mergeAll(
   RuntimeLayer.layer.pipe(Layer.provide(RuntimeLayer.layerProjectService)),
   RuntimeLayer.layerProjectService,
@@ -245,7 +138,7 @@ const layerSharedApplicationDataPlaneTest = Layer.mergeAll(
     }),
   ),
   Layer.provide(
-    Layer.succeed(ProjectEnrichmentService.ProjectEnrichmentService, {
+    Layer.mock(ProjectEnrichmentService.ProjectEnrichmentService)({
       peek: () =>
         Effect.succeed({
           repositoryIdentity: null,
@@ -541,7 +434,7 @@ it.effect.each([
               ordinal: run.ordinal + 1,
               status: scenario === "provider-live-queue" ? "queued" : "cancelled",
               startedAt: null,
-              completedAt: now,
+              completedAt: cancelledQueue ? DateTime.add(now, { seconds: 1 }) : now,
             },
           },
         ],
@@ -999,7 +892,9 @@ it.layer(layerTest)("OrchestrationV2LayerLive", (it) => {
             (yield* outbox.listByCommandId(commandId)).map((effect) => effect.request.type),
             ["provider-thread.rollback"],
           );
-          const path = yield* Path.Path.pipe(Effect.provide(NodeServices.layer));
+          const path = yield* Path.Path.pipe(
+            Effect.provide(Layer.mergeAll(NodeServices.layer, NodeCrypto.layer)),
+          );
           yield* orchestrator.dispatch({
             type: "thread.create",
             createdBy: "user",
@@ -1201,6 +1096,8 @@ it.layer(layerTest)("OrchestrationV2LayerLive", (it) => {
             providerThreadId: providerThread.id,
             providerTurnId: providerTurn.id,
             messageId: steerMessageId,
+            modelSelection: run.modelSelection,
+            steerFollowUpAfterRunOrdinal: run.ordinal,
           },
         ],
       );
@@ -2782,6 +2679,49 @@ it.layer(layerLegacyImportTest)("OrchestrationV2 legacy import", (it) => {
 });
 
 it.layer(layerTest)("OrchestrationV2LayerLive lifecycle", (it) => {
+  it.effect.each(["", "pause", "resume", "clear", "edit"])(
+    "refuses unsupported Antigravity goal controls: %s",
+    (control) =>
+      Effect.gen(function* () {
+        const orchestrator = yield* Orchestrator.OrchestratorV2;
+        const threadId = ThreadId.make(`antigravity-goal-control-${control}`);
+        yield* orchestrator.dispatch({
+          type: "thread.create",
+          commandId: CommandId.make(`${threadId}:create`),
+          threadId,
+          projectId: ProjectId.make(`${threadId}:project`),
+          createdBy: "user",
+          creationSource: "web",
+          title: "Native goal",
+          modelSelection: { ...modelSelection, instanceId: antigravityInstanceId },
+          runtimeMode: "full-access",
+          interactionMode: "default",
+          branch: null,
+          worktreePath: process.cwd(),
+        });
+        const sequence = yield* orchestrator.getThreadEventSequence(threadId);
+        const refused = yield* Effect.flip(
+          orchestrator.dispatch({
+            type: "message.dispatch",
+            commandId: CommandId.make(`${threadId}:goal`),
+            threadId,
+            messageId: MessageId.make(`${threadId}:goal`),
+            text: `/goal ${control}`,
+            attachments: [],
+            dispatchMode: { type: "start_immediately" },
+            createdBy: "user",
+            creationSource: "web",
+          }),
+        );
+        assert.instanceOf(refused, Orchestrator.OrchestratorDispatchError);
+        assert.equal(
+          refused.cause,
+          "Antigravity accepts /goal followed by an objective. Interrupt the running turn, then ask Antigravity to stop the current goal.",
+        );
+        assert.equal(yield* orchestrator.getThreadEventSequence(threadId), sequence);
+      }),
+  );
+
   it.effect("applies lifecycle commands idempotently and emits archive/removal shell deltas", () =>
     Effect.gen(function* () {
       const orchestrator = yield* Orchestrator.OrchestratorV2;
@@ -3787,6 +3727,7 @@ it.layer(layerTest)("OrchestrationV2LayerLive lifecycle", (it) => {
         Effect.provide(
           Layer.mergeAll(
             NodeServices.layer,
+            NodeCrypto.layer,
             ServerSettings.layerTest(),
             Layer.mock(PullRequestService.PullRequestService)({
               detail: () => Effect.die("host unreachable"),
@@ -3851,6 +3792,7 @@ it.layer(layerTest)("OrchestrationV2LayerLive lifecycle", (it) => {
         Effect.provide(
           Layer.mergeAll(
             NodeServices.layer,
+            NodeCrypto.layer,
             ServerSettings.layerTest(),
             Layer.mock(PullRequestService.PullRequestService)({
               watchFingerprint: () => Effect.succeed(null),
@@ -3960,6 +3902,7 @@ it.layer(layerTest)("OrchestrationV2LayerLive lifecycle", (it) => {
           Effect.provide(
             Layer.mergeAll(
               NodeServices.layer,
+              NodeCrypto.layer,
               ServerSettings.layerTest(),
               Layer.mock(PullRequestService.PullRequestService)({
                 watchFingerprint: () => Effect.succeed(null),
@@ -4090,6 +4033,7 @@ it.layer(layerTest)("OrchestrationV2LayerLive lifecycle", (it) => {
       let headSha = "ad70160aaa";
       const host = Layer.mergeAll(
         NodeServices.layer,
+        NodeCrypto.layer,
         ServerSettings.layerTest(),
         Layer.mock(PullRequestService.PullRequestService)({
           detail: () =>
@@ -4189,6 +4133,7 @@ it.layer(layerTest)("OrchestrationV2LayerLive lifecycle", (it) => {
       let remainingStatus: "pending" | "success" = "pending";
       const host = Layer.mergeAll(
         NodeServices.layer,
+        NodeCrypto.layer,
         ServerSettings.layerTest(),
         Layer.mock(PullRequestService.PullRequestService)({
           detail: () =>
@@ -4333,6 +4278,7 @@ it.layer(layerTest)("OrchestrationV2LayerLive lifecycle", (it) => {
       );
       const host = Layer.mergeAll(
         NodeServices.layer,
+        NodeCrypto.layer,
         ServerSettings.layerTest(),
         Layer.mock(PullRequestService.PullRequestService)({
           detail: () =>
@@ -4432,6 +4378,7 @@ it.layer(layerTest)("OrchestrationV2LayerLive lifecycle", (it) => {
       let checks: PullRequestDetail["checks"] = [];
       const host = Layer.mergeAll(
         NodeServices.layer,
+        NodeCrypto.layer,
         ServerSettings.layerTest(),
         Layer.mock(PullRequestService.PullRequestService)({
           detail: () =>
@@ -4536,6 +4483,7 @@ it.layer(layerTest)("OrchestrationV2LayerLive lifecycle", (it) => {
       let checks: PullRequestDetail["checks"] = [];
       const host = Layer.mergeAll(
         NodeServices.layer,
+        NodeCrypto.layer,
         ServerSettings.layerTest(),
         Layer.mock(PullRequestService.PullRequestService)({
           detail: () =>
@@ -4651,6 +4599,7 @@ it.layer(layerTest)("OrchestrationV2LayerLive lifecycle", (it) => {
         let reads = 0;
         const host = Layer.mergeAll(
           NodeServices.layer,
+          NodeCrypto.layer,
           ServerSettings.layerTest(),
           Layer.mock(PullRequestService.PullRequestService)({
             // The host reports the same fingerprint throughout, so only the deadline can prompt a read.
@@ -4786,6 +4735,111 @@ it.layer(layerTest)("OrchestrationV2LayerLive lifecycle", (it) => {
     }),
   );
 
+  it.effect("persists each merge queue removal wake across reactor restarts", () =>
+    Effect.gen(function* () {
+      const orchestrator = yield* Orchestrator.OrchestratorV2;
+      const worker = yield* EffectWorker.OrchestrationEffectWorkerV2;
+      const threadId = ThreadId.make("queue-removal-watch");
+      const projectId = ProjectId.make("queue-removal-project");
+      yield* seedProject({
+        projectId,
+        title: "Queue removal",
+        workspaceRoot: "/workspace/watch",
+        defaultModelSelection: null,
+        createdAt: "2026-10-01T00:00:00.000Z",
+      });
+      yield* orchestrator.dispatch({
+        type: "thread.create",
+        createdBy: "user",
+        creationSource: "web",
+        commandId: CommandId.make("queue-removal-create"),
+        threadId,
+        projectId,
+        title: "Queue removal",
+        modelSelection,
+        runtimeMode: "full-access",
+        interactionMode: "default",
+        branch: null,
+        worktreePath: null,
+      });
+      yield* orchestrator.dispatch({
+        type: "thread.pull-request.watch",
+        commandId: CommandId.make("queue-removal-start"),
+        threadId,
+        host: "github.com",
+        repository: "goat-si/goat",
+        number: 7,
+        watching: true,
+        link: { url: "https://github.com/goat-si/goat/pull/7", source: "agent" },
+      });
+      let removal: PullRequestDetail["mergeQueueRemoval"];
+      const host = Layer.mergeAll(
+        NodeServices.layer,
+        NodeCrypto.layer,
+        ServerSettings.layerTest(),
+        Layer.mock(PullRequestService.PullRequestService)({
+          watchFingerprint: () =>
+            Effect.succeed({ status: removal?.id ?? "green", remarks: "none" }),
+          invalidate: () => Effect.void,
+          detail: () =>
+            Effect.succeed({
+              ...watchedPullRequestDetail({ projectId, number: 7, at: "2026-10-02T12:00:00.000Z" }),
+              checks: [{ name: "lint", status: "success", description: null, url: null }],
+              ...(removal === undefined ? {} : { mergeQueueRemoval: removal }),
+            }),
+          activity: () =>
+            Effect.succeed({
+              comments: [],
+              commentCount: 0,
+              commentsTruncated: false,
+              reviewThreads: [],
+              commits: [],
+            }),
+        }),
+      );
+      const reactor = yield* PullRequestWatchReactor.make.pipe(Effect.provide(host));
+      yield* TestClock.adjust("10 minutes");
+      yield* reactor.sweep;
+      yield* worker.drain();
+      removal = {
+        id: "first",
+        removedAt: "2000-01-01T00:00:00Z",
+        reason: "Required checks failed",
+      };
+      yield* TestClock.adjust("10 minutes");
+      yield* reactor.sweep;
+      yield* worker.drain();
+      const persisted = (yield* orchestrator.getThreadShell(threadId))?.pullRequests?.[0]?.watch;
+      assert.equal(persisted?.mergeQueueRemovalId, "first");
+      const restarted = yield* PullRequestWatchReactor.make.pipe(Effect.provide(host));
+      yield* TestClock.adjust("10 minutes");
+      yield* restarted.sweep;
+      yield* worker.drain();
+      removal = { ...removal, id: "second" };
+      yield* TestClock.adjust("10 minutes");
+      yield* restarted.sweep;
+      yield* worker.drain();
+      yield* TestClock.adjust("10 minutes");
+      yield* restarted.sweep;
+      yield* worker.drain();
+      const { messages } = yield* orchestrator.getThreadRecords(threadId, ["messages"]);
+      const told = messages.flatMap(
+        (message) => message.text.match(/removed from the merge queue[^\n]*/g) ?? [],
+      );
+      assert.deepEqual(
+        told,
+        Array(2).fill("removed from the merge queue without merging: Required checks failed."),
+      );
+      const digest = messages.find((message) => message.notification?.outcome === "failed");
+      assert.equal(digest?.notification?.summary, "2 notices · #7: removed from merge queue");
+      assert.equal(
+        (yield* orchestrator.getThreadShell(threadId))?.pullRequests?.[0]?.watch
+          ?.mergeQueueRemovalId,
+        "second",
+      );
+    }),
+  );
+
   it.effect.each([
     "single page",
     "paginated",
@@ -4875,6 +4929,7 @@ it.layer(layerTest)("OrchestrationV2LayerLive lifecycle", (it) => {
         Effect.provide(
           Layer.mergeAll(
             NodeServices.layer,
+            NodeCrypto.layer,
             ServerSettings.layerTest(),
             Layer.mock(PullRequestService.PullRequestService)({
               detail: () => Effect.succeed(detail),
@@ -7386,8 +7441,8 @@ it.layer(layerSharedApplicationDataPlaneTest)("pending provider interruption", (
 });
 
 it.layer(layerTest)("snooze queued runs", (it) => {
-  it.effect.each(["notification", "delegated-completion", "user"] as const)(
-    "only user messages block snooze with a held %s run",
+  it.effect.each(["notification", "delegated-completion", "user", "limited-user"] as const)(
+    "only user messages block snooze with a queued %s run, unless a usage limit holds them",
     (kind) =>
       Effect.gen(function* () {
         const orchestrator = yield* Orchestrator.OrchestratorV2;
@@ -7456,8 +7511,8 @@ it.layer(layerTest)("snooze queued runs", (it) => {
           attachments: [],
           modelSelection,
           dispatchMode: { type: "queue_after_active" },
-          createdBy: kind === "user" ? "user" : "agent",
-          creationSource: kind === "user" ? "web" : "server",
+          createdBy: kind === "user" || kind === "limited-user" ? "user" : "agent",
+          creationSource: kind === "user" || kind === "limited-user" ? "web" : "server",
           ...(kind === "notification"
             ? {
                 notification: {
@@ -7476,6 +7531,43 @@ it.layer(layerTest)("snooze queued runs", (it) => {
                 }
               : {}),
         });
+        if (kind === "limited-user") {
+          yield* eventSink.write({
+            events: [
+              {
+                id: EventId.make(`limited:${threadId}`),
+                type: "turn-item.updated",
+                threadId,
+                occurredAt: now,
+                payload: {
+                  id: TurnItemId.make(`limited:${threadId}`),
+                  type: "error",
+                  threadId,
+                  runId: activeRun.id,
+                  nodeId: activeRun.rootNodeId,
+                  providerThreadId: null,
+                  providerTurnId: null,
+                  nativeItemRef: null,
+                  parentItemId: null,
+                  ordinal: 2,
+                  status: "failed",
+                  title: "Usage limit reached",
+                  startedAt: now,
+                  completedAt: now,
+                  updatedAt: now,
+                  // A proxied provider can report no reset time.
+                  failure: {
+                    class: "usage_limit",
+                    message: "Claude API rate limit reached. Try again later.",
+                    code: "api_error_429",
+                    retryable: true,
+                    resetAt: null,
+                  },
+                },
+              },
+            ],
+          });
+        }
         const beforeRecovery = yield* orchestrator.getThreadProjection(threadId);
         yield* eventSink.commitCommand({
           commandId: CommandId.make(`recovery:${threadId}`),
@@ -7490,13 +7582,24 @@ it.layer(layerTest)("snooze queued runs", (it) => {
             occurredAt: now,
             payload:
               run.status === "queued"
-                ? { ...run, queueHeld: true }
-                : { ...run, status: "cancelled" as const, completedAt: now },
+                ? // A usage limit stops the queue from starting without marking it held.
+                  kind === "limited-user"
+                  ? run
+                  : { ...run, queueHeld: true }
+                : {
+                    ...run,
+                    status: kind === "limited-user" ? ("failed" as const) : ("cancelled" as const),
+                    completedAt: now,
+                  },
           })),
           effects: [],
         });
         const beforeSnooze = yield* orchestrator.getThreadProjection(threadId);
-        assert.isTrue(beforeSnooze.runs.some((run) => run.status === "queued" && run.queueHeld));
+        assert.isTrue(
+          beforeSnooze.runs.some(
+            (run) => run.status === "queued" && (kind === "limited-user" || run.queueHeld),
+          ),
+        );
         const snooze = orchestrator.dispatch({
           type: "thread.snooze",
           commandId: CommandId.make(`snooze:${threadId}`),
@@ -7603,7 +7706,7 @@ const layerScratchPromotionTest = ScratchThreadPromotion.layer.pipe(
         }),
     }),
   ),
-  Layer.provide(NodeServices.layer),
+  Layer.provide(Layer.mergeAll(NodeServices.layer, NodeCrypto.layer)),
   Layer.provideMerge(layerSharedApplicationDataPlaneTest),
 );
 
@@ -9878,130 +9981,3 @@ it.layer(layerTest)("automated continuation", (it) => {
     }),
   );
 });
-
-const queueResumeDisabledInstanceProjectId = ProjectId.make(
-  "project:queue-resume-disabled-instance",
-);
-
-const layerQueueResumeDisabledInstanceTest = Layer.mergeAll(
-  RuntimeLayer.layer,
-  RuntimeLayer.layerEventSink,
-  ProjectStore.layer,
-  ProjectionStore.layer,
-  EffectOutbox.layer,
-  ThreadCommandExecutor.layer,
-).pipe(
-  Layer.provide(McpSessionRegistryTestkit.layer),
-  Layer.provide(McpProviderSessions.layer),
-  Layer.provide(SqlitePersistence.layerMemory),
-  Layer.provide(layerCheckpointStoreTest),
-  Layer.provide(layerServerConfig),
-  Layer.provide(
-    ServerSettings.layerTest({
-      providerInstances: {
-        [alternateInstanceId]: { driver: "codex", enabled: true },
-      },
-      projectSettingsOverrides: {
-        [queueResumeDisabledInstanceProjectId]: {
-          providerInstances: { [alternateInstanceId]: { enabled: false } },
-        },
-      },
-    }),
-  ),
-  Layer.provide(layerTestProviderInstanceRegistry),
-  Layer.provide(layerGitWorkflowTest),
-  Layer.provide(layerProjectServiceTest),
-  Layer.provide(layerPlatformTest),
-);
-
-it.layer(layerQueueResumeDisabledInstanceTest)(
-  "queue.resume on a project-disabled instance",
-  (it) => {
-    it.effect(
-      "holds a queued run instead of starting it on an instance the project turned off",
-      () =>
-        Effect.gen(function* () {
-          const orchestrator = yield* Orchestrator.OrchestratorV2;
-          const events = yield* EventSink.EventSinkV2;
-          const threadId = ThreadId.make("queue-resume-disabled-instance-thread");
-          const queuedModelSelection = {
-            instanceId: alternateInstanceId,
-            model: "gpt-5.5",
-          } satisfies ModelSelection;
-
-          yield* orchestrator.dispatch({
-            type: "thread.create",
-            createdBy: "user",
-            creationSource: "web",
-            commandId: CommandId.make(`${threadId}:create`),
-            threadId,
-            projectId: queueResumeDisabledInstanceProjectId,
-            title: "Queue resume disabled instance",
-            modelSelection,
-            runtimeMode: "full-access",
-            interactionMode: "default",
-            branch: null,
-            worktreePath: null,
-          });
-          yield* orchestrator.dispatch({
-            type: "message.dispatch",
-            createdBy: "user",
-            creationSource: "web",
-            commandId: CommandId.make(`${threadId}:message:active`),
-            threadId,
-            messageId: MessageId.make(`${threadId}:message:active`),
-            text: "Active",
-            attachments: [],
-            dispatchMode: { type: "defer_start" },
-          });
-          yield* orchestrator.dispatch({
-            type: "message.dispatch",
-            createdBy: "user",
-            creationSource: "web",
-            commandId: CommandId.make(`${threadId}:message:queued`),
-            threadId,
-            messageId: MessageId.make(`${threadId}:message:queued`),
-            text: "Queued",
-            attachments: [],
-            modelSelection: queuedModelSelection,
-            dispatchMode: { type: "queue_after_active" },
-          });
-
-          const before = yield* orchestrator.getThreadProjection(threadId);
-          const activeRun = before.runs.find((run) => run.status !== "queued")!;
-          const queuedRun = before.runs.find((run) => run.status === "queued")!;
-          const now = yield* DateTime.now;
-          yield* events.write({
-            events: [
-              {
-                id: EventId.make(`${threadId}:active-completed`),
-                type: "run.updated",
-                threadId,
-                runId: activeRun.id,
-                occurredAt: now,
-                payload: { ...activeRun, status: "completed", completedAt: now },
-              },
-            ],
-          });
-
-          yield* orchestrator.dispatch({
-            type: "queue.resume",
-            commandId: CommandId.make(`${threadId}:resume`),
-            threadId,
-          });
-
-          const resumed = yield* orchestrator.getThreadProjection(threadId);
-          const resumedQueuedRun = resumed.runs.find((run) => run.id === queuedRun.id);
-          assert.equal(
-            resumedQueuedRun?.status,
-            "queued",
-            "a disabled instance must not start the queued run",
-          );
-          assert.isTrue(
-            resumedQueuedRun?.queueHeld,
-            "a refused resume re-holds the queue instead of leaving it looking resumable",
-          );
-        }),
-    );
-  },
-);

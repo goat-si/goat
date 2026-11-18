@@ -1,3 +1,4 @@
+import * as NodeCrypto from "@effect/platform-node/NodeCrypto";
 import * as NodeServices from "@effect/platform-node/NodeServices";
 import * as Path from "effect/Path";
 import * as HostProcess from "@goat/shared/HostProcess";
@@ -98,7 +99,7 @@ it.effect("uses the first four SHA256 bytes with a colon separator", () =>
     expect(yield* AutoUpdate.rolloutBucket("env", "1.1.0")).not.toBe(
       yield* AutoUpdate.rolloutBucket("env", "1.1.1"),
     );
-  }).pipe(Effect.provide(NodeServices.layer)),
+  }).pipe(Effect.provide(Layer.mergeAll(NodeServices.layer, NodeCrypto.layer))),
 );
 
 const makeHarness = Effect.fn("test.auto_update.harness")(function* (
@@ -263,7 +264,7 @@ const makeHarness = Effect.fn("test.auto_update.harness")(function* (
   };
 });
 
-it.layer(NodeServices.layer)("server auto-update", (it) => {
+it.layer(Layer.mergeAll(NodeServices.layer, NodeCrypto.layer))("server auto-update", (it) => {
   // quarantine: #612 This case reaches native Windows compiler startup, not a platform mock.
   it.effect.skipIf(HostProcess.Platform.defaultValue() !== "win32")(
     "retries activation compiler failure at the next six-hour check without losing the scheduler",

@@ -153,6 +153,9 @@ function headline(host: string, located: Located, failure: ConnectionAttemptErro
   }
 }
 
+/** The way back for a browser whose own server ended its cookie session. */
+export const SESSION_ENDED_STEP = "Reload this page, then pair this browser again.";
+
 function steps(host: string, located: Located, failure: ConnectionAttemptError | null): string[] {
   const checkHost = `On ${host}, check Settings > Connections.`;
   switch (located.cause) {
@@ -224,10 +227,12 @@ function steps(host: string, located: Located, failure: ConnectionAttemptError |
           ]
         : [`Make sure ${host} is awake and online.`, checkHost];
     case "server":
-      return [
-        `Make sure GOAT is running on ${host}.`,
-        "Retry. If it keeps failing, copy the diagnostics.",
-      ];
+      return failure?._tag === "ConnectionBlockedError" && failure.sessionEnded === true
+        ? [SESSION_ENDED_STEP]
+        : [
+            `Make sure GOAT is running on ${host}.`,
+            "Retry. If it keeps failing, copy the diagnostics.",
+          ];
   }
 }
 

@@ -18,6 +18,7 @@ import type { SqliteClientConfig } from "./nodeSqliteClient.ts";
 import { hasLargeBinding, sqliteParameters } from "./nodeSqliteParameters.ts";
 import { CHECKPOINT_BACKPRESSURE_FRAMES } from "./sqliteCheckpointWorker.ts";
 import { writerWorkerSource } from "./sqliteWriterWorkerSource.ts";
+import * as RowBatches from "./sqliteRowBatches.ts";
 import { connectionOwner, recordSlowSql } from "./slowSqlOperations.ts";
 
 interface WorkerError {
@@ -30,6 +31,7 @@ interface WorkerError {
 interface Reply {
   readonly id: number;
   readonly rows?: unknown;
+  readonly more?: boolean;
   readonly completedAtMs?: number;
   readonly backpressure?: boolean;
   readonly walFrames?: number;
@@ -82,7 +84,13 @@ export const makeWriter = Effect.fn("SqliteWriter.make")(function* (
   let retirement: Promise<number> | undefined;
   const retire = (worker: NodeWorkerThreads.Worker) => (retirement ??= worker.terminate());
   let stopped: SqlError | undefined;
-  let pending: { readonly id: number; readonly resume: (reply: Reply) => void } | undefined;
+  let pending:
+    | {
+        readonly id: number;
+        readonly batch: RowBatches.Batches;
+        readonly resume: (reply: Reply) => void;
+      }
+    | undefined;
   const failPending = (cause: unknown) => {
     if (stopped !== undefined) return;
     stopped = failure(cause, "execute");
@@ -151,9 +159,11 @@ export const makeWriter = Effect.fn("SqliteWriter.make")(function* (
     }
     if (reply.id !== pending?.id) return;
     const request = pending;
+    if (reply.more)
+      return RowBatches.acknowledge(request.batch, reply.rows as ReadonlyArray<unknown>);
     pending = undefined;
     worker.unref();
-    request?.resume(reply);
+    request.resume(RowBatches.finish(request.batch, reply));
   });
   // Native work must finish before interruption can release the connection or roll it back.
   const send = Effect.fn("SqliteWriter.send")(function* (input: Request) {
@@ -174,11 +184,12 @@ export const makeWriter = Effect.fn("SqliteWriter.make")(function* (
         return;
       }
       const id = ++sequence;
-      pending = { id, resume: (reply) => resume(Effect.succeed(reply)) };
+      const batch = RowBatches.make();
+      pending = { id, batch, resume: (reply) => resume(Effect.succeed(reply)) };
       worker.ref();
       try {
         // oxlint-disable-next-line unicorn/require-post-message-target-origin -- Node workers have no target origin.
-        worker.postMessage({ id, ...input });
+        worker.postMessage({ id, ...input, received: batch.received });
       } catch (cause) {
         pending = undefined;
         worker.unref();

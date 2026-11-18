@@ -38,13 +38,17 @@ type ViewportTab = {
   desktopViewportRead: Promise<Size | null>;
   /** A read queued behind `desktopViewportRead`, shared by every caller that waits for it. */
   desktopViewportNext: Promise<Size | null> | null;
+  /** A page resize or load since the last read started; status measures again. */
+  desktopViewportStale: boolean;
+  /** Counts page resizes, loads and dialog closes, so a caller can tell one landed during a read. */
+  desktopViewportChanges: number;
 };
 const mutate = <A>(channel: ActionChannel | undefined, work: () => A) =>
   channel ? channel.call(work) : work();
 
 export const makeRendering = (runPromise: <A>(effect: Effect.Effect<A>) => Promise<A>) => {
   // Desktop pages have no Playwright viewport; an isolated world keeps page script
-  // from overriding the CSS size, and failed reads preserve the last usable size.
+  // from overriding the CSS size. A failed read answers null and keeps the last usable size.
   const readDesktopViewport = async (tab: ViewportTab) => {
     const readSize = async () => {
       const { frameTree } = await tab.cdp.send("Page.getFrameTree");
@@ -69,26 +73,41 @@ export const makeRendering = (runPromise: <A>(effect: Effect.Effect<A>) => Promi
     const width = size?.width;
     const height = size?.height;
     if (typeof width === "number" && width > 0 && typeof height === "number" && height > 0)
-      tab.desktopViewport = { width, height };
-    return tab.desktopViewport;
+      return (tab.desktopViewport = { width, height });
+    tab.desktopViewportStale = true;
+    return null;
   };
 
   // Reads run one at a time, and callers that arrive during a read share the next one.
   const measureDesktopViewport = (tab: ViewportTab) =>
     (tab.desktopViewportNext ??= tab.desktopViewportRead.then(() => {
       tab.desktopViewportNext = null;
+      tab.desktopViewportStale = false;
       return (tab.desktopViewportRead = readDesktopViewport(tab));
     }));
 
   const layoutSize = async (tab: ViewportTab) => {
     // A dialog blocks page script; its close measures again.
-    if (tab.desktop) return tab.dialog ? tab.desktopViewport : measureDesktopViewport(tab);
+    if (tab.desktop) {
+      return tab.dialog
+        ? tab.desktopViewport
+        : ((await measureDesktopViewport(tab)) ?? tab.desktopViewport);
+    }
     const size = tab.page.viewportSize();
     if (!size) return size;
     return {
       width: Math.max(1, Math.round(size.width / tab.zoomFactor)),
       height: Math.max(1, Math.round(size.height / tab.zoomFactor)),
     };
+  };
+
+  // Page resizes and loads mark the size stale; only then does status read the page. One
+  // during the read it waits for can leave that answer old, so it reads once more.
+  const desktopStatusViewport = async (tab: ViewportTab) => {
+    const changes = tab.desktopViewportChanges;
+    await (tab.desktopViewportStale || tab.dialog ? layoutSize(tab) : tab.desktopViewportRead);
+    if (tab.desktopViewportChanges !== changes) await layoutSize(tab);
+    return tab.desktopViewport;
   };
 
   const applyZoom = async (tab: ViewportTab, channel?: ActionChannel) => {
@@ -175,5 +194,13 @@ export const makeRendering = (runPromise: <A>(effect: Effect.Effect<A>) => Promi
         : undefined,
     );
 
-  return { layoutSize, broadcastViewport, applySetting, applyRendering, applyOpenRendering };
+  return {
+    layoutSize,
+    measureDesktopViewport,
+    desktopStatusViewport,
+    broadcastViewport,
+    applySetting,
+    applyRendering,
+    applyOpenRendering,
+  };
 };

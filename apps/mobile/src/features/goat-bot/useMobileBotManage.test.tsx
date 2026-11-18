@@ -7,9 +7,15 @@ import { expect, it, vi } from "vite-plus/test";
 
 const rn = vi.hoisted(() => ({ alert: vi.fn() }));
 const rpc = vi.hoisted(() => ({ result: { _tag: "Success" } as object, inputs: [] as unknown[] }));
+// Whether the bot's computer is connected, as the app's environment presentation says.
+const link = vi.hoisted(() => ({ phase: "connected" }));
 vi.mock("react-native", () => ({ Alert: { alert: rn.alert } }));
 vi.mock("@effect/atom-react", () => ({ useAtomValue: () => true }));
 vi.mock("../../state/atom-registry", () => ({ appAtomRegistry: {} }));
+vi.mock("./goatBotComputerLink", () => ({
+  useGoatBotComputerConnected: () => link.phase === "connected",
+  goatBotComputerConnectedNow: () => link.phase === "connected",
+}));
 vi.mock("../../state/channels", () => ({
   channelEnvironment: {
     createBot: { permissionAtom: () => "can-create" },
@@ -46,6 +52,7 @@ const scout = Schema.decodeUnknownSync(BotProfile)({
 
 async function restoreScout() {
   (globalThis as { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT = true;
+  link.phase = "connected";
   let manage: ReturnType<typeof useMobileBotManage> | null = null;
   function Probe() {
     manage = useMobileBotManage(scout.environmentId);
@@ -105,5 +112,59 @@ it("sends a new bot's colour when one was chosen, and no colour key otherwise", 
       defaultModelSelection: null,
     },
   ]);
+  await act(async () => root.unmount());
+});
+
+function setupOffline() {
+  (globalThis as { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT = true;
+  rn.alert.mockClear();
+  rpc.inputs.length = 0;
+  rpc.result = { _tag: "Success", value: { bot: scout } };
+  link.phase = "connected";
+}
+
+it("offers no bot writes while the bot's computer is offline, and offers them again once it is back", async () => {
+  setupOffline();
+  let manage: ReturnType<typeof useMobileBotManage> | null = null;
+  function Probe() {
+    manage = useMobileBotManage(scout.environmentId);
+    return null;
+  }
+  const root = createRoot(document.createElement("div"));
+  link.phase = "disconnected";
+  await act(async () => root.render(<Probe />));
+  expect(manage!.canCreate).toBe(false);
+  expect(manage!.canEdit).toBe(false);
+  expect(manage!.canManage).toBe(false);
+  link.phase = "connected";
+  await act(async () => root.render(<Probe />));
+  expect(manage!.canCreate).toBe(true);
+  expect(manage!.canEdit).toBe(true);
+  expect(manage!.canManage).toBe(true);
+  await act(async () => root.unmount());
+});
+
+it("a write started from a menu opened before the computer went offline sends nothing", async () => {
+  setupOffline();
+  let manage: ReturnType<typeof useMobileBotManage> | null = null;
+  function Probe() {
+    manage = useMobileBotManage(scout.environmentId);
+    return null;
+  }
+  const root = createRoot(document.createElement("div"));
+  await act(async () => root.render(<Probe />));
+  // The menu kept the actions it was opened with; the computer drops before the person picks one.
+  const opened = manage!;
+  link.phase = "disconnected";
+  expect(await opened.restore(scout)).toBe(false);
+  expect(await opened.hide(scout, true)).toBe(false);
+  // A profile save (the bot sheet, and Settings > GOAT Bot) says why it did not go out.
+  expect(await opened.update(scout, { name: "Scout 2" })).toBe(
+    "GOAT Bot's computer isn't connected.",
+  );
+  expect(rpc.inputs).toEqual([]);
+  link.phase = "connected";
+  expect(await opened.restore(scout)).toBe(true);
+  expect(rpc.inputs).toHaveLength(1);
   await act(async () => root.unmount());
 });

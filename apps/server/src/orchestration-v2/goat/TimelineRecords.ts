@@ -1,5 +1,6 @@
 import {
   CommandId,
+  isProviderNativeSubagentThread,
   ThreadId,
   TurnItemId,
   type OrchestrationV2Command,
@@ -20,6 +21,7 @@ import type {
   OrchestratorCommandRejectedError,
   OrchestratorDispatchError,
   OrchestratorProjectionError,
+  OrchestratorSubagentThreadReadOnlyError,
   OrchestratorV2Error,
 } from "../Orchestrator.ts";
 import type { ProjectionStoreV2Shape } from "../ProjectionStore.ts";
@@ -53,6 +55,7 @@ export interface TimelineRecordDeps {
   readonly OrchestratorCommandRejectedError: typeof OrchestratorCommandRejectedError;
   readonly OrchestratorDispatchError: typeof OrchestratorDispatchError;
   readonly OrchestratorProjectionError: typeof OrchestratorProjectionError;
+  readonly OrchestratorSubagentThreadReadOnlyError: typeof OrchestratorSubagentThreadReadOnlyError;
 }
 
 /** Thread notices and GOAT bot channel records: timeline items that start no run. */
@@ -64,6 +67,7 @@ export const makeTimelineRecords = (deps: TimelineRecordDeps) => {
     OrchestratorCommandRejectedError,
     OrchestratorDispatchError,
     OrchestratorProjectionError,
+    OrchestratorSubagentThreadReadOnlyError,
   } = deps;
 
   const dispatchThreadNoticeRecord = Effect.fn("orchestrationV2.dispatch.threadNoticeRecord")(
@@ -378,9 +382,23 @@ export const makeTimelineRecords = (deps: TimelineRecordDeps) => {
   );
 
   /* Runs inside the message.dispatch span, ahead of the provider run it would start. */
-  const refuseChannelOnlyMessage = Effect.fnUntraced(function* (
+  const refuseMessageTarget = Effect.fnUntraced(function* (
     command: Extract<OrchestrationV2Command, { readonly type: "message.dispatch" }>,
   ) {
+    // Providers own native subagent conversations; messages cannot target them, and adapters ask questions on the parent.
+    const thread = yield* projectionStore
+      .getThread(command.threadId)
+      .pipe(
+        Effect.mapError(
+          (cause) => new OrchestratorProjectionError({ threadId: command.threadId, cause }),
+        ),
+      );
+    if (isProviderNativeSubagentThread(thread)) {
+      return yield* new OrchestratorSubagentThreadReadOnlyError({
+        commandId: command.commandId,
+        threadId: command.threadId,
+      });
+    }
     const isBot = yield* botDirectory
       .isBotThread(command.threadId)
       .pipe(
@@ -402,7 +420,8 @@ export const makeTimelineRecords = (deps: TimelineRecordDeps) => {
         cause: "Notifications sent as messages cannot carry a ledger task.",
       });
     }
+    return thread;
   });
 
-  return { dispatchThreadNoticeRecord, dispatchChannelTimelineRecord, refuseChannelOnlyMessage };
+  return { dispatchThreadNoticeRecord, dispatchChannelTimelineRecord, refuseMessageTarget };
 };

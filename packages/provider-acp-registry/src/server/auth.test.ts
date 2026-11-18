@@ -1,9 +1,12 @@
+import * as NodeCrypto from "@effect/platform-node/NodeCrypto";
 import * as NodeServices from "@effect/platform-node/NodeServices";
+import * as Layer from "effect/Layer";
 import { assert, it } from "@effect/vitest";
 import { ProviderInstanceId, type ProviderAuthState } from "@goat/contracts";
 import { AcpRegistrySettings } from "../settings.ts";
 import * as Deferred from "effect/Deferred";
 import * as Effect from "effect/Effect";
+import * as Fiber from "effect/Fiber";
 import * as Option from "effect/Option";
 import * as Schema from "effect/Schema";
 import * as Stream from "effect/Stream";
@@ -60,10 +63,13 @@ const makeHarness = (
   settings = decodeSettings({ agentId: "test-agent" }),
   providerInstanceId = instanceId,
   authenticateError?: AcpRequestError,
+  currentEnvironment?: Effect.Effect<NodeJS.ProcessEnv>,
+  logoutEffect: Effect.Effect<void> = Effect.void,
 ) =>
   Effect.gen(function* () {
     const verify = yield* Deferred.make<void>();
     const changed: boolean[] = [];
+    const changedEnvironments: Array<NodeJS.ProcessEnv | undefined> = [];
     const closed: number[] = [];
     const authenticated: string[] = [];
     const started: number[] = [];
@@ -76,14 +82,18 @@ const makeHarness = (
     let closedBeforeTerminal = false;
     const written: string[] = [];
     const sizes: number[][] = [];
+    const inspectedPaths: (string | undefined)[] = [];
+    const resolvedPaths: (string | undefined)[] = [];
     const controller = yield* makeAcpRegistryAuth({
       instanceId: providerInstanceId,
       settings,
       cwd: "/workspace",
       environment: { PATH: "/tools", OVERRIDE: "base" },
-      onChanged: (value) =>
+      ...(currentEnvironment ? { currentEnvironment } : {}),
+      onChanged: (value, environment) =>
         Effect.sync(() => {
           changed.push(value);
+          changedEnvironments.push(environment);
         }),
       makeRuntime: () =>
         Effect.gen(function* () {
@@ -140,19 +150,26 @@ const makeHarness = (
                   modelConfigId: undefined,
                 };
               }),
-            logout: Effect.succeed({}),
+            logout: logoutEffect.pipe(Effect.as({})),
           };
         }),
     }).pipe(
       Effect.provideService(AcpRegistrySupport.AcpRegistryCatalog, {
         ...catalog,
-        inspect: () =>
-          Effect.sync(() => ({
-            status: "ready" as const,
-            agentId: "test-agent",
-            version,
-            distribution: "binary" as const,
-          })),
+        inspect: (_settings, environment) =>
+          Effect.sync(
+            () => (
+              inspectedPaths.push(environment?.PATH),
+              {
+                status: "ready" as const,
+                agentId: "test-agent",
+                version,
+                distribution: "binary" as const,
+              }
+            ),
+          ),
+        resolve: (_settings, _cwd, environment) =>
+          Effect.sync(() => (resolvedPaths.push(environment?.PATH), resolved)),
       }),
       Effect.provideService(PtyAdapter.PtyAdapter, {
         spawn: (input) =>
@@ -196,6 +213,7 @@ const makeHarness = (
       controller,
       verify,
       changed,
+      changedEnvironments,
       closed,
       authenticated,
       started,
@@ -208,12 +226,81 @@ const makeHarness = (
       killed: () => killed,
       written,
       sizes,
+      inspectedPaths,
+      resolvedPaths,
       runtimes: () => runtimes,
       setVersion: (value: string) => {
         version = value;
       },
     };
   }).pipe(Effect.provideService(AcpRegistrySupport.AcpRegistryCatalog, catalog));
+
+it.effect("logout reports the profile captured before the operation started", () =>
+  Effect.gen(function* () {
+    const started = yield* Deferred.make<void>();
+    const release = yield* Deferred.make<void>();
+    const host = { HOME: "/profile/a" };
+    const h = yield* makeHarness(
+      browserMethod,
+      false,
+      undefined,
+      undefined,
+      undefined,
+      Effect.sync(() => ({ ...host })),
+      Deferred.succeed(started, undefined).pipe(Effect.andThen(Deferred.await(release))),
+    );
+    const logout = yield* h.controller.logout(Effect.void).pipe(Effect.forkChild);
+    yield* Deferred.await(started);
+    host.HOME = "/profile/b";
+    yield* Deferred.succeed(release, undefined);
+    yield* Fiber.join(logout);
+    assert.deepEqual(h.changedEnvironments, [{ HOME: "/profile/a" }]);
+  }).pipe(Effect.scoped, Effect.provide(Layer.mergeAll(NodeServices.layer, NodeCrypto.layer))),
+);
+
+it.effect("regression #3079: ACP authentication discovers and launches with the current PATH", () =>
+  Effect.gen(function* () {
+    const host = { PATH: "/tools", OVERRIDE: "base" };
+    const h = yield* makeHarness(
+      terminalMethod,
+      false,
+      undefined,
+      undefined,
+      undefined,
+      Effect.sync(() => ({ ...host })),
+    );
+    host.PATH = "/new";
+    h.setVersion("2.0.0");
+    yield* h.controller.refreshMethods!;
+    assert.strictEqual(h.inspectedPaths.at(-1), "/new");
+    assert.strictEqual(h.resolvedPaths.at(-1), "/new");
+    const flow = yield* h.controller.start("owner", Effect.void, "terminal");
+    yield* h.phase("waiting");
+    assert.strictEqual(h.resolvedPaths.at(-1), "/new");
+    assert.strictEqual(h.terminalSpawn()?.env?.PATH, "/new");
+    yield* h.controller.cancel("owner", flow.flowId!);
+  }).pipe(Effect.scoped, Effect.provide(Layer.mergeAll(NodeServices.layer, NodeCrypto.layer))),
+);
+
+it.effect("rediscovers sign-in methods when the environment changes without a version change", () =>
+  Effect.gen(function* () {
+    const host = { PATH: "/first", HOME: "/profile/one" };
+    const h = yield* makeHarness(
+      browserMethod,
+      false,
+      undefined,
+      undefined,
+      undefined,
+      Effect.sync(() => ({ ...host })),
+    );
+    assert.strictEqual(h.runtimes(), 1);
+    yield* h.controller.refreshMethods!;
+    assert.strictEqual(h.runtimes(), 1);
+    host.HOME = "/profile/two";
+    yield* h.controller.refreshMethods!;
+    assert.strictEqual(h.runtimes(), 2);
+  }).pipe(Effect.scoped, Effect.provide(Layer.mergeAll(NodeServices.layer, NodeCrypto.layer))),
+);
 
 it.effect("keeps local credentials separate from a matching registry agent ID", () =>
   Effect.gen(function* () {
@@ -232,7 +319,7 @@ it.effect("keeps local credentials separate from a matching registry agent ID", 
       owner: "provider",
       key: "acp:local:test-agent",
     });
-  }).pipe(Effect.scoped, Effect.provide(NodeServices.layer)),
+  }).pipe(Effect.scoped, Effect.provide(Layer.mergeAll(NodeServices.layer, NodeCrypto.layer))),
 );
 
 it.effect(
@@ -266,7 +353,7 @@ it.effect(
       assert.deepEqual(h.closed, [1, 2]);
       yield* h.controller.logout(Effect.void);
       assert.deepEqual(h.changed, [true, false]);
-    }).pipe(Effect.scoped, Effect.provide(NodeServices.layer)),
+    }).pipe(Effect.scoped, Effect.provide(Layer.mergeAll(NodeServices.layer, NodeCrypto.layer))),
 );
 
 it.effect(
@@ -310,7 +397,7 @@ it.effect(
       yield* h.phase("succeeded");
       assert.deepEqual(h.started, [3]);
       assert.deepEqual(h.changed, [true]);
-    }).pipe(Effect.scoped, Effect.provide(NodeServices.layer)),
+    }).pipe(Effect.scoped, Effect.provide(Layer.mergeAll(NodeServices.layer, NodeCrypto.layer))),
 );
 
 it.effect("cancels the login PTY and rejects further terminal input", () =>
@@ -331,7 +418,7 @@ it.effect("cancels the login PTY and rejects further terminal input", () =>
       }).pipe(Effect.result))._tag,
       "Failure",
     );
-  }).pipe(Effect.scoped, Effect.provide(NodeServices.layer)),
+  }).pipe(Effect.scoped, Effect.provide(Layer.mergeAll(NodeServices.layer, NodeCrypto.layer))),
 );
 
 it.effect("does not report authentication when post-login verification fails", () =>
@@ -345,7 +432,7 @@ it.effect("does not report authentication when post-login verification fails", (
     yield* h.phase("failed");
     assert.deepEqual(h.changed, []);
     assert.isTrue(h.killed());
-  }).pipe(Effect.scoped, Effect.provide(NodeServices.layer)),
+  }).pipe(Effect.scoped, Effect.provide(Layer.mergeAll(NodeServices.layer, NodeCrypto.layer))),
 );
 
 it.effect("surfaces the agent error message when authenticate fails with AcpRequestError", () =>
@@ -369,5 +456,5 @@ it.effect("surfaces the agent error message when authenticate fails with AcpRequ
       "The ACP agent could not complete sign-in. Connect to the VPN, then sign in again.",
     );
     assert.deepEqual(h.changed, []);
-  }).pipe(Effect.scoped, Effect.provide(NodeServices.layer)),
+  }).pipe(Effect.scoped, Effect.provide(Layer.mergeAll(NodeServices.layer, NodeCrypto.layer))),
 );

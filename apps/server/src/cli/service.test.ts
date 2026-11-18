@@ -1,6 +1,7 @@
 import * as NodeServices from "@effect/platform-node/NodeServices";
 import { assert, expect, it } from "@effect/vitest";
 import * as HostProcess from "@goat/shared/HostProcess";
+import { BootServiceBaseDirUnsupportedError } from "../cloud/systemdPath.ts";
 import * as NetService from "@goat/shared/Net";
 import * as ConfigProvider from "effect/ConfigProvider";
 import * as Effect from "effect/Effect";
@@ -245,6 +246,7 @@ it.effect("leaves a newer service unchanged during onboarding without prompting"
     const terminal = Terminal.make({
       columns: Effect.succeed(80),
       rows: Effect.succeed(24),
+      size: Effect.die("These tests never read the terminal size."),
       readInput: Effect.die("Onboarding must not prompt to replace a newer service."),
       readLine: Effect.die("Onboarding must not prompt to replace a newer service."),
       display: () => Effect.die("Onboarding must not prompt to replace a newer service."),
@@ -299,6 +301,7 @@ it.effect.each([
     const terminal = Terminal.make({
       columns: Effect.succeed(80),
       rows: Effect.succeed(24),
+      size: Effect.die("These tests never read the terminal size."),
       readInput: Effect.die("Onboarding must not prompt without a terminal."),
       readLine: Effect.die("Onboarding must not prompt without a terminal."),
       display: () => Effect.die("Onboarding must not prompt without a terminal."),
@@ -312,6 +315,15 @@ it.effect.each([
 
     expect(ready).toBe("skipped");
     expect(installOptions).toEqual([]);
+  }),
+);
+
+it.effect("keeps the manual-server fallback for an unsupported service home", () =>
+  Effect.gen(function* () {
+    const ready = yield* recoverServiceOnboardingOffer(
+      Effect.fail(new BootServiceBaseDirUnsupportedError({ baseDir: '/bad"home' })),
+    );
+    expect(ready).toBe("skipped");
   }),
 );
 

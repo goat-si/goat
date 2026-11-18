@@ -1,5 +1,6 @@
 import { Button } from "~/components/ui/button";
 import { DownloadIcon, CopyIcon, CheckIcon } from "~/components/solar";
+import { CodeIcon, EyeIcon, TableIcon } from "~/components/solar";
 import { useCopyToClipboard } from "~/hooks/useCopyToClipboard";
 import { Spinner } from "~/components/ui/spinner";
 import {
@@ -50,7 +51,6 @@ import {
   GlobeIcon as Globe2,
   TextWrapIcon as WrapTextIcon,
 } from "~/components/solar";
-import { Code as Code2, Eye, Table as Table2 } from "~/components/solar/nodes";
 import * as Schema from "effect/Schema";
 import { lazy, Suspense, useEffect, useRef, useState } from "react";
 
@@ -60,7 +60,6 @@ import { OpenInPicker } from "~/components/chat/OpenInPicker";
 import { MediaVideoPlayer } from "~/components/media/MediaVideoPlayer";
 import { MediaImagePreview } from "~/components/media/MediaImagePreview";
 import { MediaActions, type MediaActionSource } from "~/components/media/MediaActions";
-import { MorphIcon } from "~/components/MorphIcon";
 import { useRemoteOpenState } from "~/remoteOpen";
 import { useClientSettings } from "~/hooks/useSettings";
 import { useTheme } from "~/hooks/useTheme";
@@ -88,6 +87,8 @@ import { useAtomCommand } from "~/state/use-atom-command";
 import { useAtomQueryRunner } from "~/state/use-atom-query-runner";
 
 import { AttachmentFilePreview } from "./AttachmentFilePreview";
+import { WorkspaceDocumentPreview } from "./WorkspaceDocumentPreview";
+import { selectRenderedContentOnSelectAll } from "./selectRenderedContent";
 import { AudioPreview } from "./AudioPreview";
 import { isPdfPreviewFile } from "./BrowserDocumentFrame";
 import { DelimitedTablePreview } from "./DelimitedTablePreview";
@@ -109,7 +110,6 @@ import {
 } from "./fileCommentAnnotations";
 import { installFileEditorDismissal } from "./fileEditorDismissal";
 import {
-  FILE_LINK_REVEAL_ATTRIBUTE,
   FILE_LINK_REVEAL_UNSAFE_CSS,
   FILE_SURFACE_SUBHEADER_CLASS,
   FileSurfaceAction,
@@ -118,6 +118,7 @@ import {
 } from "./fileSurfaceChrome";
 import SourceFilePreview from "./ReadOnlySourcePreview";
 import { clampFileLine, resolveCenteredFileLineScrollTop } from "./fileLineReveal";
+import { updateFileLinkReveal } from "./fileLinkReveal";
 import { DiffCommentAnnotation } from "../diffs/DiffCommentAnnotation";
 import { projectFileCacheKey } from "./fileContentRevision";
 import {
@@ -354,21 +355,6 @@ function WorkspaceAudioPreview(props: {
       onError={() => setFailedUrl(url)}
     />
   );
-}
-
-function updateFileLinkReveal(fileContainer: HTMLElement, line: number | null): void {
-  const root = fileContainer.shadowRoot ?? fileContainer;
-  for (const element of root.querySelectorAll<HTMLElement>(`[${FILE_LINK_REVEAL_ATTRIBUTE}]`)) {
-    element.removeAttribute(FILE_LINK_REVEAL_ATTRIBUTE);
-  }
-  if (line === null) return;
-
-  root
-    .querySelector<HTMLElement>(`[data-line="${line}"]`)
-    ?.setAttribute(FILE_LINK_REVEAL_ATTRIBUTE, "");
-  root
-    .querySelector<HTMLElement>(`[data-column-number="${line}"]`)
-    ?.setAttribute(FILE_LINK_REVEAL_ATTRIBUTE, "");
 }
 
 const REVEAL_MAX_ATTEMPTS = 30;
@@ -952,7 +938,7 @@ function RenderedMarkdownSurface({
   return (
     <div className="flex min-h-0 flex-1 flex-col">
       {!readOnly ? <FileSaveStatus coordinator={saveCoordinator} /> : null}
-      <ScrollArea className="min-h-0 flex-1">
+      <ScrollArea className="min-h-0 flex-1" onKeyDown={selectRenderedContentOnSelectAll}>
         <FileMarkdownPreview
           text={contents}
           cwd={cwd}
@@ -1343,10 +1329,13 @@ export default function FilePreviewPanel({
                 );
               }}
             >
-              <MorphIcon
-                className="size-3.5"
-                icon={rendered ? Code2 : renderedMode === "table" ? Table2 : Eye}
-              />
+              {rendered ? (
+                <CodeIcon className="size-3.5" />
+              ) : renderedMode === "table" ? (
+                <TableIcon className="size-3.5" />
+              ) : (
+                <EyeIcon className="size-3.5" />
+              )}
             </FileSurfaceAction>
           ) : null}
           {showsRawText ? (
@@ -1474,24 +1463,17 @@ export default function FilePreviewPanel({
           ) : relativePath &&
             absolutePath &&
             (isDocument || file.readError?.failure === "binary_file") ? (
-            <AttachmentFilePreview
-              key={`${environmentId}:${absolutePath}:${workspaceMutationId}:${fileRefreshRevision}`}
+            <WorkspaceDocumentPreview
+              key={`${environmentId}:${absolutePath}`}
+              environmentId={environmentId}
+              threadRef={threadRef}
+              draft={draft}
+              document={isDocument}
+              absolutePath={absolutePath}
+              workspaceRoot={cwd}
               name={relativePath.split(/[\\/]/).at(-1) || relativePath}
-              mimeType="application/octet-stream"
-              sizeBytes={0}
-              asset={{
-                environmentId,
-                resource:
-                  draft && isDocument
-                    ? { _tag: "draft-workspace-file", cwd, path: absolutePath }
-                    : {
-                        _tag: "media-file",
-                        threadId: threadRef.threadId,
-                        path: absolutePath,
-                        ...(isDocument ? {} : { disposition: "attachment" as const }),
-                      },
-              }}
-              origin="File"
+              workspaceMutationId={workspaceMutationId}
+              refreshRevision={fileRefreshRevision}
             />
           ) : relativePath && file.error && file.data === null ? (
             <div

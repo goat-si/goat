@@ -1,11 +1,18 @@
 import { useAtomValue } from "@effect/atom-react";
-import { serverUpdateStateAtom } from "@goat/client-runtime/state/server";
-import { EnvironmentId } from "@goat/contracts";
+import { AVAILABLE_CONNECTION_STATE } from "@goat/client-runtime/connection";
+import {
+  nudgeReconnectDuringUpdateRestart,
+  serverUpdateStateAtom,
+} from "@goat/client-runtime/state/server";
+import { EnvironmentId, type ServerConfig } from "@goat/contracts";
+import * as Effect from "effect/Effect";
 import * as Option from "effect/Option";
 import * as Schema from "effect/Schema";
-import { AsyncResult, Atom } from "effect/reactivity";
+import * as Stream from "effect/Stream";
+import { AsyncResult, Atom, AtomRegistry } from "effect/reactivity";
 
 import { APP_VERSION } from "~/branding";
+import { environmentCatalog } from "~/connection/catalog";
 import { appAtomRegistry } from "~/rpc/atomRegistry";
 import { environmentIdsKey } from "~/state/environmentAtomList";
 import { desktopUpdateStateAtom } from "~/state/desktopUpdate";
@@ -196,6 +203,13 @@ export function settleUpdateRunMachine(
   );
 }
 
+function runsVersion(config: ServerConfig | null, targetVersion: string): boolean {
+  return (
+    config !== null &&
+    resolveVersionMismatch(config.environment.serverVersion, targetVersion) === null
+  );
+}
+
 export function retryFailedUpdateRunServers(
   update: (
     target: ServerUpdateTarget,
@@ -209,12 +223,26 @@ export function retryFailedUpdateRunServers(
         ? [machine]
         : [],
   );
-  const retried = new Set(failed.map((machine) => machine.key));
+  const pending: typeof failed = [];
+  for (const machine of failed) {
+    if (
+      machine.server !== null &&
+      runsVersion(
+        appAtomRegistry.get(serverEnvironment.configValueAtom(machine.server.environmentId)),
+        machine.server.targetVersion,
+      )
+    ) {
+      settleUpdateRunMachine(machine.key, machine.providerFailure, { serverUpdated: true });
+    } else {
+      pending.push(machine);
+    }
+  }
+  const retried = new Set(pending.map((machine) => machine.key));
   const startedAt = Date.now();
   updateRunMachines((machine) =>
     retried.has(machine.key) ? { ...machine, result: null, failure: null, startedAt } : machine,
   );
-  for (const machine of failed) {
+  for (const machine of pending) {
     // Retry keeps the run's promise: a busy machine refuses again instead of losing its turns.
     const attempt =
       machine.server !== null
@@ -425,6 +453,7 @@ function followHandedOffServers(servers: ReadonlyArray<HandedOffServer>): void {
       if (settled) return;
       settled = true;
       clearTimeout(timer);
+      stopReconnectNudge();
       queueMicrotask(() => unsubscribe());
       appAtomRegistry.set(stateAtom, { status: "idle" });
       releaseState();
@@ -446,15 +475,23 @@ function followHandedOffServers(servers: ReadonlyArray<HandedOffServer>): void {
       () => settle(`Not back after ${HANDOFF_TIMEOUT_MS / 60_000} minutes`),
       server.startedAt + HANDOFF_TIMEOUT_MS - Date.now(),
     );
+    const stopReconnectNudge = Effect.runCallback(
+      nudgeReconnectDuringUpdateRestart({
+        stateChanges: AtomRegistry.toStream(
+          appAtomRegistry,
+          environmentCatalog.stateAtom(server.environmentId),
+        ).pipe(
+          Stream.map((state) => AsyncResult.getOrElse(state, () => AVAILABLE_CONNECTION_STATE)),
+        ),
+        retryNow: Effect.promise(() =>
+          environmentCatalog.retryNow.run(appAtomRegistry, server.environmentId),
+        ).pipe(Effect.asVoid),
+      }),
+    );
     const unsubscribe = appAtomRegistry.subscribe(
       serverEnvironment.configValueAtom(server.environmentId),
       (config) => {
-        if (
-          config !== null &&
-          resolveVersionMismatch(config.environment.serverVersion, server.targetVersion) === null
-        ) {
-          settle(null);
-        }
+        if (runsVersion(config, server.targetVersion)) settle(null);
       },
       { immediate: true },
     );

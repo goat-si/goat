@@ -29,7 +29,7 @@ export function GoatBotRouteScreen({
   // background has not been seen, and no visit is written then. Only the background ends the
   // visit: a moment of inactivity keeps its unread boundary.
   const seen = focused && active;
-  const { botRef } = useMobileGoatBotHomeMode();
+  const { botRef, environments } = useMobileGoatBotHomeMode();
   const botId = route.params?.botId;
   const { member, main, missing } = useMobileGoatBotMember(botId);
   const taskId = route.params?.taskId;
@@ -68,6 +68,9 @@ export function GoatBotRouteScreen({
   const visit = useAtomCommand(threadEnvironment.visit, { reportFailure: false });
   const chatEnvironmentId = chat?.environmentId;
   const chatThreadId = chat?.threadId;
+  // A visit waits for the computer; it is written once the computer is back if the chat is still seen.
+  const chatConnected =
+    environments.find((entry) => entry.environmentId === chatEnvironmentId)?.connected === true;
   // A member's chat marks its own conversation read, as the main chat does, so its roster row and
   // waiting count follow what the person has seen.
   // oxlint-disable-next-line goat/react-effect-budget -- Persist the visit while the conversation is visible.
@@ -77,6 +80,7 @@ export function GoatBotRouteScreen({
       if (conversation !== null && newestAt !== null)
         recordGoatBotLocalRead(conversation, newestAt);
     } else if (unreadAt) {
+      if (!chatConnected) return;
       void visit({
         environmentId: chatEnvironmentId,
         input: { threadId: chatThreadId, visitedAt: unreadAt },
@@ -84,6 +88,7 @@ export function GoatBotRouteScreen({
     }
   }, [
     seen,
+    chatConnected,
     chatEnvironmentId,
     chatThreadId,
     unreadAt,
@@ -110,8 +115,10 @@ export function GoatBotRouteScreen({
       member={member}
       main={main}
       onRestoreMember={
-        member !== null && member.state === "deleted" && manage.canManage
-          ? () => manage.restore(member)
+        member !== null && member.state === "deleted" && manage.mayManage
+          ? manage.connected
+            ? () => manage.restore(member)
+            : { unavailable: `Unavailable while ${member.name}'s computer is offline` }
           : undefined
       }
       taskId={taskId ? ChannelTaskId.make(taskId) : undefined}

@@ -2,6 +2,7 @@
  * A fake remote GOAT for SSH launch tests: it answers tools/list with the goat_thread_launch
  * arguments a test declares and records every launch it receives.
  */
+import * as NodeCrypto from "@effect/platform-node/NodeCrypto";
 import * as NodeServices from "@effect/platform-node/NodeServices";
 import { expect, vi } from "@effect/vitest";
 import { EnvironmentId, NodeId, RunId, ThreadId } from "@goat/contracts";
@@ -16,11 +17,11 @@ import * as SqlClient from "effect/sql/SqlClient";
 import * as ServerConfig from "../config.ts";
 import * as LaunchWatchService from "../mcp/LaunchWatchService.ts";
 import * as ThreadManagement from "../orchestration-v2/ThreadManagementService.ts";
-import Migration0062 from "../persistence/Migrations/081_RemoteReports.ts";
-import Migration0063 from "../persistence/Migrations/082_RemoteDispatches.ts";
-import Migration0065 from "../persistence/Migrations/084_RemoteDispatchQuestions.ts";
-import Migration0068 from "../persistence/Migrations/086_RemoteReportRelay.ts";
-import Migration0073 from "../persistence/Migrations/091_MemoryTaskGrantCeiling.ts";
+import Migration0062 from "../persistence/Migrations/091_RemoteReports.ts";
+import Migration0063 from "../persistence/Migrations/092_RemoteDispatches.ts";
+import Migration0065 from "../persistence/Migrations/094_RemoteDispatchQuestions.ts";
+import Migration0068 from "../persistence/Migrations/096_RemoteReportRelay.ts";
+import Migration0073 from "../persistence/Migrations/101_MemoryTaskGrantCeiling.ts";
 import * as Coordinator from "../remoteReports/RemoteDispatchCoordinator.ts";
 import * as ServerSettings from "../serverSettings.ts";
 import * as SshRemoteDispatch from "./SshRemoteDispatch.ts";
@@ -338,6 +339,7 @@ export const launchAgainst = (remote: {
       forgetEnvironment: () => Effect.die("Unexpected forget"),
       disconnectEnvironment: () => Effect.die("Unexpected SSH disconnect"),
       revalidateTunnels: () => Effect.void,
+      closeAllTunnels: Effect.void,
       issueClientSession: () => Effect.die("unused"),
       issueMcpClientSession: (_target, options) =>
         Effect.sync(() => {
@@ -465,7 +467,7 @@ export const launchAgainst = (remote: {
             Layer.provide(ServerSettings.layerTest()),
             Layer.provide(ServerConfig.layerTest("/fixture", { prefix: "goat-dispatch-test-" })),
             Layer.provide(FetchHttpClient.layer),
-            Layer.provide(NodeServices.layer),
+            Layer.provide(Layer.mergeAll(NodeServices.layer, NodeCrypto.layer)),
           ),
         ),
       );

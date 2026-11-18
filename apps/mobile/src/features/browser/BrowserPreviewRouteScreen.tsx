@@ -14,6 +14,7 @@ import { ControlPill } from "../../components/ui/ControlPill";
 import { useAppForeground } from "../../lib/appState";
 import { AppBar } from "../../components/ui/AppBar";
 
+import { useEnvironmentServerConfig } from "../../state/entities";
 import { useThreadServerBrowserTabs } from "../../state/preview";
 import { usePreparedConnection } from "../../state/session";
 import { useAppearancePreferences } from "../settings/appearance/AppearancePreferencesProvider";
@@ -38,6 +39,10 @@ type BrowserPreviewRouteScreenProps = StaticScreenProps<{
 export function BrowserPreviewRouteScreen({ route }: BrowserPreviewRouteScreenProps) {
   const navigation = useNavigation();
   const onClose = useCallback(() => navigation.goBack(), [navigation]);
+  const { environmentId, threadId } = route.params;
+  if (!environmentId?.trim() || !threadId?.trim()) {
+    return <BrowserUnavailableScreen onClose={onClose} />;
+  }
   return (
     <View collapsable={false} className="flex-1 bg-sheet">
       <BrowserPreviewStack.Navigator
@@ -52,14 +57,26 @@ export function BrowserPreviewRouteScreen({ route }: BrowserPreviewRouteScreenPr
         <BrowserPreviewStack.Screen name="BrowserPreview">
           {() => (
             <BrowserPreviewScreen
-              environmentId={EnvironmentId.make(route.params.environmentId)}
-              threadId={ThreadId.make(route.params.threadId)}
+              environmentId={EnvironmentId.make(environmentId)}
+              threadId={ThreadId.make(threadId)}
               initialTabId={route.params.tabId ?? null}
               onClose={onClose}
             />
           )}
         </BrowserPreviewStack.Screen>
       </BrowserPreviewStack.Navigator>
+    </View>
+  );
+}
+
+function BrowserUnavailableScreen({ onClose }: { readonly onClose: () => void }) {
+  const insets = useSafeAreaInsets();
+  return (
+    <View
+      className="flex-1 bg-sheet"
+      style={{ paddingTop: insets.top, paddingBottom: insets.bottom }}
+    >
+      <SheetHeader title="Browser" onClose={onClose} accessibilityLabel="Close browser" />
     </View>
   );
 }
@@ -217,6 +234,11 @@ function BrowserAddressBar({
 }) {
   const url = browserTabUrl(tab);
   const [draft, setDraft] = useState<string | null>(null);
+  const serverConfig = useEnvironmentServerConfig(environmentId);
+  // Stop reaches the page only on servers that say so; older ones ignore it.
+  const stoppable =
+    tab.navStatus._tag === "Loading" &&
+    serverConfig?.environment.capabilities.serverBrowserStopLoading === true;
   const submit = () => {
     const value = draft ?? url;
     setDraft(null);
@@ -258,10 +280,10 @@ function BrowserAddressBar({
         className="h-10 min-w-0 flex-1 rounded-full border border-input-border bg-input px-4 font-sans text-sm text-foreground"
       />
       <ControlPill
-        icon="arrow.clockwise"
-        accessibilityLabel="Reload page"
+        icon={stoppable ? "xmark" : "arrow.clockwise"}
+        accessibilityLabel={stoppable ? "Stop loading" : "Reload page"}
         disabled={!ready}
-        onPress={() => onCommand({ type: "reload" })}
+        onPress={() => onCommand(stoppable ? { type: "stopLoading" } : { type: "reload" })}
       />
       <BrowserTabMenu
         environmentId={environmentId}

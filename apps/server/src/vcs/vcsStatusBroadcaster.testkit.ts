@@ -1,4 +1,5 @@
 import { SourceControlProviderKind } from "@goat/contracts";
+import * as NodeCrypto from "@effect/platform-node/NodeCrypto";
 import * as NodeServices from "@effect/platform-node/NodeServices";
 import * as DateTime from "effect/DateTime";
 import * as Duration from "effect/Duration";
@@ -51,6 +52,7 @@ export const remoteStatusWithPr: VcsStatusRemoteResult = {
 export function layerTestFor(state: {
   currentLocalStatus: VcsStatusLocalResult;
   currentRemoteStatus: VcsStatusRemoteResult | null;
+  currentDivergence?: Pick<VcsStatusRemoteResult, "aheadCount" | "behindCount">;
   localStatusCalls: number;
   remoteStatusCalls: number;
   localInvalidationCalls: number;
@@ -68,7 +70,7 @@ export function layerTestFor(state: {
     Layer.provideMerge(
       state.fileSystem
         ? Layer.succeed(FileSystem.FileSystem, state.fileSystem)
-        : NodeServices.layer,
+        : Layer.mergeAll(NodeServices.layer, NodeCrypto.layer),
     ),
     Layer.provide(layerBackgroundPolicy(() => state.backgroundWorkEnabled !== false)),
     Layer.provide(
@@ -87,6 +89,16 @@ export function layerTestFor(state: {
             );
           }),
         currentBranch: () => Effect.sync(() => state.currentLocalStatus.refName),
+        upstreamDivergence: () =>
+          Effect.sync(() =>
+            state.currentRemoteStatus?.hasUpstream && state.currentLocalStatus.refName !== null
+              ? {
+                  refName: state.currentLocalStatus.refName,
+                  aheadCount: (state.currentDivergence ?? state.currentRemoteStatus).aheadCount,
+                  behindCount: (state.currentDivergence ?? state.currentRemoteStatus).behindCount,
+                }
+              : null,
+          ),
         remoteStatus: (_input, options) =>
           Effect.suspend(() => {
             return (state.beforeRemoteStatus ?? Effect.void).pipe(

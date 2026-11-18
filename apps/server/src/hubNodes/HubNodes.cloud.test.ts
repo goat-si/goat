@@ -10,9 +10,10 @@ import * as CloudMachineService from "../cloudMachines/CloudMachineService.ts";
 import { ALIAS, ID, makeWorld } from "../cloudMachines/CloudMachineService.testkit.ts";
 import * as ServerEnvironment from "../environment/ServerEnvironment.ts";
 import * as LinkedHosts from "../linkedHosts/LinkedHosts.ts";
-import migration from "../persistence/Migrations/106_HubNodes.ts";
+import migration from "../persistence/Migrations/116_HubNodes.ts";
 import * as SshRemoteDispatch from "../sshRemote/SshRemoteDispatch.ts";
 import * as DisposableMachineStore from "../hub/disposable/DisposableMachineStore.ts";
+import * as DisposableRouteGuard from "../hub/disposable/DisposableRouteGuard.ts";
 import * as HubNodeRepository from "./HubNodeRepository.ts";
 import * as HubNodes from "./HubNodes.ts";
 
@@ -56,6 +57,10 @@ it.effect("learns a running cloud machine's identity on the check that prepares 
       const service = yield* HubNodes.make.pipe(
         Effect.provideService(HubNodeRepository.HubNodeRepository, repository),
         Effect.provideService(DisposableMachineStore.DisposableMachineStore, noDisposableMachines),
+        Effect.provideService(DisposableRouteGuard.DisposableRouteGuard, {
+          claim: () => Effect.undefined,
+          refusal: () => Effect.undefined,
+        }),
         Effect.provideService(
           LinkedHosts.LinkedHosts,
           LinkedHosts.LinkedHosts.of({

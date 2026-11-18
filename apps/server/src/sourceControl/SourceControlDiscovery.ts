@@ -4,6 +4,7 @@ import {
   type VcsDriverKind,
 } from "@goat/contracts";
 import * as Context from "effect/Context";
+import * as Duration from "effect/Duration";
 import * as Effect from "effect/Effect";
 import * as Layer from "effect/Layer";
 import * as Option from "effect/Option";
@@ -12,10 +13,11 @@ import * as ServerConfig from "../config.ts";
 import * as VcsProcess from "../vcs/VcsProcess.ts";
 import {
   detailFromCause,
+  failedProbeHint,
   firstNonEmptyLine,
-  unavailableInstallHint,
 } from "@goat/source-control-core/server/discovery";
 import * as SourceControlProviderRegistry from "./SourceControlProviderRegistry.ts";
+import { refreshDiscoveryPath } from "./refreshDiscoveryPath.ts";
 
 interface DiscoveryProbe {
   readonly label: string;
@@ -73,6 +75,9 @@ export const make = Effect.gen(function* () {
   const config = yield* ServerConfig.ServerConfig;
   const process = yield* VcsProcess.VcsProcess;
   const sourceControlProviders = yield* SourceControlProviderRegistry.SourceControlProviderRegistry;
+  const refreshPath = yield* refreshDiscoveryPath(process, config.cwd).pipe(
+    Effect.cachedWithTTL(Duration.seconds(10)),
+  );
 
   const probe = <Kind extends VcsDriverKind>(
     input: DiscoveryProbe & { readonly kind: Kind },
@@ -120,7 +125,10 @@ export const make = Effect.gen(function* () {
         ),
         Effect.catch((cause) =>
           Effect.gen(function* () {
-            const installHint = yield* unavailableInstallHint(executable, input.installHint, cause);
+            const installHint = yield* failedProbeHint(
+              { executable, versionArgs, installHint: input.installHint },
+              cause,
+            );
             return {
               kind: input.kind,
               label: input.label,
@@ -137,13 +145,16 @@ export const make = Effect.gen(function* () {
   };
 
   return SourceControlDiscovery.of({
-    discover: Effect.all({
-      versionControlSystems: Effect.all(
-        VCS_PROBES.map((entry) => probe(entry)) as ReadonlyArray<Effect.Effect<VcsDiscoveryItem>>,
-        { concurrency: "unbounded" },
-      ),
-      sourceControlProviders: sourceControlProviders.discover,
-    }),
+    discover: Effect.andThen(
+      refreshPath,
+      Effect.all({
+        versionControlSystems: Effect.all(
+          VCS_PROBES.map((entry) => probe(entry)) as ReadonlyArray<Effect.Effect<VcsDiscoveryItem>>,
+          { concurrency: "unbounded" },
+        ),
+        sourceControlProviders: sourceControlProviders.discover,
+      }),
+    ),
   });
 });
 

@@ -3,7 +3,8 @@ import { AccountErasure } from "./AccountErasure.ts";
 import { type RelayAccountDeletionStatus, type RelayAccountDeletion } from "@goat/contracts/relay";
 import { AccountOperationProgress, operationProgress } from "./AccountOperationProgress.ts";
 import * as Context from "effect/Context";
-import * as Crypto from "effect/Crypto";
+import * as Digest from "effect/crypto/Digest";
+import * as SecureRandom from "effect/crypto/SecureRandom";
 import * as DateTime from "effect/DateTime";
 import * as Effect from "effect/Effect";
 import * as Hex from "effect/encoding/Hex";
@@ -87,7 +88,8 @@ const make = Effect.gen(function* () {
   const erasure = yield* AccountErasure;
   const sql = db.$client;
   const tx = yield* AccountTransactions;
-  const crypto = yield* Crypto.Crypto;
+  const random = yield* SecureRandom.SecureRandom;
+  const crypto = yield* Digest.Digest;
   const config = yield* RelayConfiguration;
   const inbox = yield* HookInbox;
   const unavailable = () =>
@@ -204,7 +206,7 @@ const make = Effect.gen(function* () {
               if (!config.managedEndpointBaseDomain) return yield* unavailable();
               const hash = yield* crypto
                 .digest(
-                  "SHA-256",
+                  Digest.sha256,
                   new TextEncoder().encode(
                     managedEndpointDigestInput(
                       identity.stage,
@@ -262,7 +264,7 @@ const make = Effect.gen(function* () {
     if (operation.completed_at !== null) return operation;
     if (!operation.user_id) return yield* unavailable();
     const userId = operation.user_id;
-    const lease = yield* crypto.randomUUIDv4().pipe(Effect.mapError(unavailable));
+    const lease = yield* random.uuidV4().pipe(Effect.mapError(unavailable));
     const [claimed] = yield* sql<{
       claim_version: number;
     }>`UPDATE relay_account_operations SET state='running',lease_owner=${lease},lease_expires_at=now()+interval '60 seconds',claim_version=claim_version+1,attempts=attempts+1 WHERE id=${id} AND completed_at IS NULL AND (lease_expires_at IS NULL OR lease_expires_at<now()) RETURNING claim_version`.pipe(

@@ -1,3 +1,4 @@
+import * as NodeCrypto from "@effect/platform-node/NodeCrypto";
 import * as NodeServices from "@effect/platform-node/NodeServices";
 import { assert, describe, it } from "@effect/vitest";
 import * as NetService from "@goat/shared/Net";
@@ -91,7 +92,7 @@ describe("SSH manager shutdown ownership", () => {
           if (command.args.includes("-G"))
             return makeSuccessfulProcess("hostname devbox.example.com\nuser alex\nport 2222\n");
           if (command.args.includes("-N")) return makeRunningProcess(() => {});
-          if (isRemoteLaunch(command.args)) {
+          if (isRemoteLaunch(command.args.map(String))) {
             count.launches++;
             const value =
               response === "pending"
@@ -134,6 +135,7 @@ describe("SSH manager shutdown ownership", () => {
       const scope = yield* Scope.make();
       const layer = Layer.mergeAll(
         NodeServices.layer,
+        NodeCrypto.layer,
         Layer.succeed(FileSystem.FileSystem, memoryFileSystem),
         Layer.succeed(ChildProcessSpawner.ChildProcessSpawner, spawner),
         Layer.succeed(NetService.NetService, testNetService),
@@ -228,7 +230,7 @@ describe("SSH manager shutdown ownership", () => {
               ),
             };
           }
-          if (isRemoteLaunch(command.args)) {
+          if (isRemoteLaunch(command.args.map(String))) {
             count.launches++;
             return {
               ...makeSuccessfulProcess(
@@ -250,6 +252,7 @@ describe("SSH manager shutdown ownership", () => {
       const scope = yield* Scope.make();
       const layer = Layer.mergeAll(
         NodeServices.layer,
+        NodeCrypto.layer,
         Layer.succeed(FileSystem.FileSystem, memoryFileSystem),
         Layer.succeed(ChildProcessSpawner.ChildProcessSpawner, spawner),
         Layer.succeed(NetService.NetService, testNetService),

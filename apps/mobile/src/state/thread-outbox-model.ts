@@ -21,10 +21,12 @@ import {
   type ProviderInteractionMode as ProviderInteractionModeType,
   type RuntimeMode as RuntimeModeType,
   type ServerProvider,
+  type ServerProviderModel,
 } from "@goat/contracts";
 import * as Schema from "effect/Schema";
 
 import { DraftComposerAttachmentSchema } from "../lib/composer-image-schema";
+import { withImplicitFastModeSelection } from "../lib/providerOptions";
 import type { ComposerDispatchMode } from "@goat/client-runtime/state/composer-dispatch";
 import type { DraftComposerAttachment } from "../lib/composerImages";
 import { scopedThreadKey } from "../lib/scopedEntities";
@@ -104,9 +106,16 @@ export interface ThreadSettingsSnapshot {
 export function resolveQueuedThreadSettings(
   message: QueuedThreadMessage,
   thread: ThreadSettingsSnapshot,
-  providers: ReadonlyArray<Pick<ServerProvider, "instanceId" | "showInteractionModeToggle">> = [],
+  providers: ReadonlyArray<
+    Pick<ServerProvider, "instanceId" | "showInteractionModeToggle"> & {
+      readonly models: ReadonlyArray<Pick<ServerProviderModel, "slug" | "capabilities">>;
+    }
+  > = [],
 ): ThreadSettingsSnapshot {
-  const modelSelection = message.modelSelection ?? thread.modelSelection;
+  const modelSelection = withImplicitFastModeSelection(
+    message.modelSelection ?? thread.modelSelection,
+    providers,
+  );
   const provider = providers.find(
     (candidate) => candidate.instanceId === modelSelection.instanceId,
   );

@@ -61,15 +61,10 @@ import * as ChannelRemoteWorkers from "./ChannelRemoteWorkers.ts";
 import { makeChannelProjectChoices } from "./channelProjectChoices.ts";
 import { channelBotFilesFor } from "./channelBotNotes.ts";
 import { makeSkillProposalAnswers } from "./channelSkillProposals.ts";
-import {
-  answerForwardIdsFor,
-  questionIdFor,
-  stopIdsFor,
-  workerLaunchIdsFor,
-} from "./channelIds.ts";
+import { answerForwardIdsFor, stopIdsFor, workerLaunchIdsFor } from "./channelIds.ts";
 import { choosePlacement, type PlacementCandidate, usageWindows } from "./channelPlacement.ts";
 import { requesterForDispatch } from "./channelDispatchAuthority.ts";
-import { PlacementStarted, unlessMovedOn } from "./channelDispatchFences.ts";
+import { PlacementStarted, askRequester, unlessMovedOn } from "./channelDispatchFences.ts";
 import { refuseAnswerForward, requesterForDelivery } from "./channelSenderAuthority.ts";
 import { sessionExemptsCapacity } from "./channelSessionReceipt.ts";
 import { currentChannelIdentity } from "./channelCurrentIdentity.ts";
@@ -165,42 +160,6 @@ const make = Effect.gen(function* () {
             }).pipe(Effect.as(undefined)),
           ),
         );
-
-  const askRequester = (
-    stored: ChannelLedger.ChannelStoredTask,
-    text: string,
-    owner: string,
-    options: {
-      readonly choices?: ReadonlyArray<string>;
-    } = {},
-  ) =>
-    Effect.gen(function* () {
-      const askedAt = DateTime.formatIso(yield* DateTime.now);
-      return yield* commitTransition(
-        ledger,
-        stored,
-        {
-          type: "task.question.opened",
-          payload: {
-            question: {
-              questionId: questionIdFor(stored.task.taskId, stored.task.version + 1),
-              text,
-              askedAt,
-              ...(options.choices === undefined || options.choices.length < 2
-                ? {}
-                : { options: options.choices }),
-              ...(stored.task.requester.externalActorId === undefined
-                ? {}
-                : { requesterExternalActorId: stored.task.requester.externalActorId }),
-            },
-          },
-        },
-        {
-          owner,
-          narrate: true,
-        },
-      );
-    });
 
   const projectChoices = (yield* makeChannelProjectChoices).question;
 
@@ -672,6 +631,7 @@ const make = Effect.gen(function* () {
     const resolved = yield* resolveTarget({ ...stored, task: { ...stored.task, requester } }, true);
     if (resolved.type === "question")
       return yield* askRequester(
+        ledger,
         stored,
         resolved.text,
         owner,
@@ -761,6 +721,7 @@ const make = Effect.gen(function* () {
       );
       if (placed === undefined)
         return yield* askRequester(
+          ledger,
           current,
           "No ready account on an eligible machine offers the requested model.",
           owner,
@@ -934,6 +895,7 @@ const make = Effect.gen(function* () {
       });
       if (resolved.type === "question") {
         return yield* askRequester(
+          ledger,
           stored,
           resolved.text,
           owner,
@@ -941,18 +903,20 @@ const make = Effect.gen(function* () {
         );
       }
       const claimedAt = DateTime.formatIso(yield* DateTime.now);
-      const claimed = yield* commitTransition(
-        ledger,
-        stored,
-        {
-          type: "task.dispatch.claimed",
-          payload: {
-            generation: stored.task.generation,
-            target: resolved.target,
-            leaseExpiresAt: claimedAt,
+      const claimed = yield* unlessMovedOn(
+        commitTransition(
+          ledger,
+          stored,
+          {
+            type: "task.dispatch.claimed",
+            payload: {
+              generation: stored.task.generation,
+              target: resolved.target,
+              leaseExpiresAt: claimedAt,
+            },
           },
-        },
-        { owner, narrate: resolved.target.placementReason !== undefined },
+          { owner, narrate: resolved.target.placementReason !== undefined },
+        ),
       );
       if (claimed === undefined) return;
       const reread = yield* ledger.getTask(taskId);

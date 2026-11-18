@@ -221,7 +221,7 @@ const harness = Effect.gen(function* () {
   const registered = McpHttpServer.toolkitRegistration(ProviderToolkit, Handlers.layer).pipe(
     Layer.provide(Layer.mock(AcpSessionService.AcpSessionService)({})),
     Layer.provide(layerPermissionProfilesOff),
-    Layer.provideMerge(McpServer.McpServer.layer),
+    Layer.provideMerge(McpHttpServer.layerInProcessMcpServer),
     Layer.provide(Layer.mock(HomeRequests.CodexHomeRequests)({})),
     Layer.provide(
       Layer.mock(ProviderSettingsService.ProviderSettings)({

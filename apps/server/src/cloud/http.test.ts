@@ -1,3 +1,4 @@
+import * as NodeCrypto from "@effect/platform-node/NodeCrypto";
 import * as NodeServices from "@effect/platform-node/NodeServices";
 import { onMainListenerWeb } from "../auth/connectionContext.testkit.ts";
 import { describe, expect, it } from "@effect/vitest";
@@ -109,7 +110,7 @@ const layerLinkProofRoutes = HttpApiBuilder.layer(LinkProofTestApi).pipe(
   Layer.provideMerge(ServerSecretStore.layer),
   Layer.provide(layerConfig),
   Layer.provideMerge(HttpPlatform.layer.pipe(Layer.provideMerge(Etag.layerWeak))),
-  Layer.provideMerge(NodeServices.layer),
+  Layer.provideMerge(Layer.mergeAll(NodeServices.layer, NodeCrypto.layer)),
 );
 
 const withLinkProofClient = async (
@@ -302,7 +303,7 @@ it("refuses cloud health requests while GOAT Connect is disabled", async () => {
     Layer.provide(AuthHttp.layerAuthenticatedAuth),
     Layer.provide(Layer.mock(EnvironmentAuth.EnvironmentAuth)({})),
     Layer.provideMerge(HttpPlatform.layer.pipe(Layer.provideMerge(Etag.layerWeak))),
-    Layer.provideMerge(NodeServices.layer),
+    Layer.provideMerge(Layer.mergeAll(NodeServices.layer, NodeCrypto.layer)),
   );
   const { handler, dispose } = onMainListenerWeb(
     HttpRouter.toWebHandler(layerRoutes, { disableLogger: true }),

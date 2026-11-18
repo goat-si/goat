@@ -92,7 +92,9 @@ export function claudeWorkflowFrames(
           phaseTitle: "Alpha",
           model: input.model ?? "claude-opus-5[1m]",
           promptPreview: input.prompt ?? "Reply with exactly: A1",
-          ...(input.startedAt === undefined ? {} : { startedAt: input.startedAt }),
+          ...(input.startedAt === undefined && input.state !== "start"
+            ? {}
+            : { startedAt: input.startedAt ?? 0 }),
           ...(input.lastProgressAt === undefined ? {} : { lastProgressAt: input.lastProgressAt }),
           ...(input.durationMs === undefined ? {} : { durationMs: input.durationMs }),
           ...(input.attempt === undefined ? {} : { attempt: input.attempt }),
@@ -106,6 +108,7 @@ export function claudeWorkflowFrames(
           label: "alpha:two",
           agentId: "a2",
           state: input.secondState ?? input.state,
+          ...((input.secondState ?? input.state) === "start" ? { startedAt: 0 } : {}),
           phaseIndex: 1,
           phaseTitle: "Alpha",
           promptPreview: "Reply with exactly: A2",

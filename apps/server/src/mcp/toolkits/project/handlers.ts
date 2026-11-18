@@ -200,7 +200,7 @@ export const layer = McpToolAccess.toLayer(ProjectToolkit, {
     McpToolAccess.setsUpProjects((input) =>
       Effect.gen(function* () {
         const repositories = yield* Repositories.SourceControlRepositoryService;
-        return yield* repositories.cloneRepository(input).pipe(
+        return yield* repositories.cloneRepository(input, { timeoutMs: null }).pipe(
           Effect.mapError(
             (error) =>
               new OrchestratorMcpFailure({

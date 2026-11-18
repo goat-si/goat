@@ -1,4 +1,4 @@
-import type { GoatBotEnvironmentInput } from "@goat/client-runtime/goatBot";
+import { pickGoatBotEnvironment, type GoatBotEnvironmentInput } from "@goat/client-runtime/goatBot";
 import { EnvironmentId, ProjectId, ThreadId } from "@goat/contracts";
 import { describe, expect, it } from "vite-plus/test";
 import {
@@ -7,6 +7,7 @@ import {
   mobileGoatBotDetailOpen,
   mobileGoatBotWorkspaceVisible,
   pickMobileGoatBotEnvironment,
+  pickMobileGoatBotHomeEnvironment,
 } from "./goatBotHomeMode";
 
 const botRef = {
@@ -92,6 +93,24 @@ describe("mobile GOAT Bot home mode", () => {
     expect(
       pickMobileGoatBotEnvironment([environment("a", { connected: false }), connected], null),
     ).toBe(connected);
+  });
+  // The roster, Home and Threads go where the chat sends, as on web.
+  it("follows the chat to an unclaimed Home-capable computer over a saved bot on an older one", () => {
+    const homeTarget = (id: string, supportsHome: boolean) => ({
+      environmentId: EnvironmentId.make(id),
+      supportsHome,
+      supportsBot: true,
+      connected: true,
+      settingsLoaded: true,
+      home: null,
+    });
+    const older = environment("cached", { homeTarget: homeTarget("cached", false) });
+    const newer = environment("newer", { homeTarget: homeTarget("newer", true) });
+    const picked = pickMobileGoatBotHomeEnvironment([older, newer], botRef);
+    expect(picked).toBe(newer);
+    expect(picked).toBe(pickGoatBotEnvironment([older, newer], botRef));
+    // With no Home-capable computer, the saved bot keeps its computer as before.
+    expect(pickMobileGoatBotHomeEnvironment([older, environment("other")], botRef)).toBe(older);
   });
 });
 

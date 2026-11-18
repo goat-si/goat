@@ -35,11 +35,25 @@ interface TriageAgent {
   readonly id: "claude" | "codex";
   readonly command: string;
   readonly label: string;
+  readonly stateDirEnv: string;
+  readonly defaultStateDir: string;
 }
 
 const TRIAGE_AGENTS: ReadonlyArray<TriageAgent> = [
-  { id: "claude", command: "claude", label: "Claude Code" },
-  { id: "codex", command: "codex", label: "Codex" },
+  {
+    id: "claude",
+    command: "claude",
+    label: "Claude Code",
+    stateDirEnv: "CLAUDE_CONFIG_DIR",
+    defaultStateDir: ".claude",
+  },
+  {
+    id: "codex",
+    command: "codex",
+    label: "Codex",
+    stateDirEnv: "CODEX_HOME",
+    defaultStateDir: ".codex",
+  },
 ];
 
 export class TriageAgentUnavailableError extends Schema.TaggedError<TriageAgentUnavailableError>()(
@@ -249,14 +263,34 @@ export const triageCommand = Command.make("triage", {
       }
 
       const model = Option.getOrUndefined(flags.model);
+      const launchPrompt = buildTriageLaunchPrompt(promptFilePath);
       const spawnSpec = yield* resolveSpawnCommand(selected.command, [
         ...(model === undefined ? [] : ["--model", model]),
-        buildTriageLaunchPrompt(promptFilePath),
+        launchPrompt,
       ]);
       yield* Console.log(`Starting ${selected.label}. It will ask what went wrong.\n`);
       const exitCode = yield* runInteractiveSession({ ...spawnSpec, cwd: scratchDir });
       if (exitCode !== 0) {
         process.exitCode = exitCode;
+        const stateDir =
+          process.env[selected.stateDirEnv]?.trim() ||
+          path.join(NodeOS.homedir(), selected.defaultStateDir);
+        yield* Console.log(
+          [
+            "",
+            `${selected.label} exited with code ${String(exitCode)}.`,
+            "",
+            `${selected.label} keeps its state in ${stateDir}.`,
+            `If that drive is out of space, free some up or set ${selected.stateDirEnv} to a folder on another drive.`,
+            "",
+            "The triage prompt and machine context were written to:",
+            `  ${promptFilePath}`,
+            `  ${contextFilePath}`,
+            "",
+            `To retry, start \`${selected.command}\` yourself with any flags it suggested, or use any coding agent, and give it this prompt:`,
+            launchPrompt,
+          ].join("\n"),
+        );
       }
     }),
   ),

@@ -1,12 +1,8 @@
 // Precedence and hold adapted from threebot web/src/lib/avatarActivity.ts (MIT, Copyright (c) 2026 Threebot contributors).
-import type {
-  ChannelTaskChip,
-  OrchestrationV2ProjectedTurnItem,
-  OrchestrationV2ThreadShell,
-} from "@goat/contracts";
+import type { OrchestrationV2ProjectedTurnItem, OrchestrationV2ThreadShell } from "@goat/contracts";
 import * as DateTime from "effect/DateTime";
 
-import { goatBotTaskWaitsOnPerson } from "./activity.ts";
+import { goatBotNewestTaskChips, goatBotTaskWaitsOnPerson } from "./activity.ts";
 import { GOAT_BOT_READING_LIMIT_MS } from "./rows.ts";
 
 /** What a bot's face shows. Each is a still drawing; a change fades once at most. */
@@ -278,27 +274,14 @@ export interface GoatBotFaceTasks {
  * own shell never runs; these chips are where its work shows.
  */
 export function goatBotFaceTasks(items: ReadonlyArray<GoatBotFaceTaskItem>): GoatBotFaceTasks {
-  const newestChips = new Map<string, ChannelTaskChip>();
-  for (const { item } of items) {
-    if (item.type !== "notification" || item.ledgerTask === undefined) continue;
-    const previous = newestChips.get(item.ledgerTask.taskId);
-    if (previous === undefined || item.ledgerTask.taskVersion > previous.taskVersion) {
-      newestChips.set(item.ledgerTask.taskId, item.ledgerTask);
-    }
-  }
   let waiting = 0;
   let active = 0;
   let ended: GoatBotFaceTasks["ended"] = null;
   let activeSince: number | null = null;
-  for (const chip of newestChips.values()) {
+  for (const chip of goatBotNewestTaskChips(items).values()) {
     const status = chip.status;
     const going = status === "received" || status === "dispatching" || status === "running";
-    const approvalLeft =
-      (status === "completed" || status === "failed") &&
-      chip.observed?.needsYou.some((item) => item.kind === "approval") === true;
-    // A running turn whose coding thread asks something waits on the person too.
-    if (status === "waiting_input" || approvalLeft || (going && goatBotTaskWaitsOnPerson(chip)))
-      waiting++;
+    if (status === "waiting_input" || goatBotTaskWaitsOnPerson(chip)) waiting++;
     else if (going) {
       active++;
       const since = Date.parse(chip.createdAt);

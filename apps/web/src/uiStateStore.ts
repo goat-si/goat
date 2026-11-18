@@ -1,6 +1,7 @@
 import { migratingStorage } from "@goat/client-runtime/storage-migration";
 import { Debouncer } from "@tanstack/react-pacer";
-import type { PullRequestMergeMethod } from "@goat/contracts";
+import { PullRequestMergeMethod } from "@goat/contracts";
+import * as Schema from "effect/Schema";
 import { create } from "zustand";
 import { normalizeProjectPathForComparison } from "./lib/projectPaths";
 
@@ -105,6 +106,8 @@ function sanitizeOptionalKey(value: unknown): string | null {
   return typeof value === "string" && value.length > 0 ? value : null;
 }
 
+const isPullRequestMergeMethod = Schema.is(PullRequestMergeMethod);
+
 function sanitizeTimestampRecord(value: unknown): Record<string, string> {
   if (!value || typeof value !== "object") {
     return {};
@@ -118,10 +121,6 @@ function sanitizeTimestampRecord(value: unknown): Record<string, string> {
         Number.isFinite(Date.parse(entry[1])),
     ),
   );
-}
-
-function isPullRequestMergeMethod(value: unknown): value is PullRequestMergeMethod {
-  return value === "merge" || value === "squash" || value === "rebase";
 }
 
 export function parsePersistedState(parsed: PersistedUiState): UiState {
@@ -222,15 +221,10 @@ export function persistState(state: UiState): void {
     return;
   }
   try {
-    const projectExpandedById = Object.fromEntries(
-      Object.entries(state.projectExpandedById).filter(
-        ([key]) => key !== LEGACY_PROJECT_EXPANSION_DEFAULT_KEY,
-      ),
-    );
     migratingStorage(window.localStorage).setItem(
       PERSISTED_STATE_KEY,
       JSON.stringify({
-        projectExpandedById,
+        projectExpandedById: state.projectExpandedById,
         projectOrder: state.projectOrder,
         threadLastVisitedAtById: state.threadLastVisitedAtById,
         defaultAdvertisedEndpointKey: state.defaultAdvertisedEndpointKey,

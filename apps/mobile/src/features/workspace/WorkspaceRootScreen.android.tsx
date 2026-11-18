@@ -11,6 +11,7 @@ import { EmptyState } from "../../components/ui/EmptyState";
 import { ScreenContent } from "../../components/ui/ScreenContent";
 import { useAndroidControlSizing } from "../../components/ui/useAndroidControlSizing";
 import { HomeRouteScreen } from "../home/HomeRouteScreen";
+import { useMobileGoatBotHomeMode } from "../goat-bot/useMobileGoatBotHomeMode";
 import { PullRequestFilterMenuProvider } from "../pull-requests/PullRequestFilterMenuContext";
 import { PullRequestsScreen } from "../pull-requests/PullRequestsScreen";
 import { PullRequestToolbar } from "../pull-requests/PullRequestToolbar.android";
@@ -19,6 +20,8 @@ import { AndroidWorkspaceNavigation } from "./AndroidWorkspaceNavigation";
 import { WorkspaceTabsContext, useWorkspaceTabs } from "./WorkspaceTabsContext";
 import { WorkspaceTabPanes } from "./WorkspaceTabPanes";
 import type { WorkspaceTab } from "./workspace-tabs-state";
+import { useSelectWorkspaceTab } from "./useSelectWorkspaceTab";
+import { useHardwareBack } from "../../lib/backHandler";
 
 const TABS: readonly WorkspaceTab[] = NAVIGATION_TAB_ORDER;
 
@@ -28,14 +31,30 @@ export function WorkspaceRootScreen() {
   const enabled = useEnabledNavigationTabs();
   const insets = useSafeAreaInsets();
   const { fabClearance } = useAndroidControlSizing();
+  const botsShown = useMobileGoatBotHomeMode().mode === "bot";
+  // Room for the Threads list's floating New thread button, which the Bots view does not show
+  // (HomeRouteScreen renders AndroidHomeFabLayout only outside it).
+  const floatsButtons = workspace.state.selectedTab === "threads" && !botsShown;
   const context = useMemo(
     () => ({
       ...workspace,
-      bottomClearance: workspace.state.selectedTab === "threads" ? fabClearance + 16 : 16,
+      bottomClearance: floatsButtons ? fabClearance + 16 : 16,
     }),
-    [workspace, fabClearance],
+    [workspace, fabClearance, floatsButtons],
   );
   const tab = workspace.state.selectedTab;
+  const selectTab = useSelectWorkspaceTab();
+  // Tabs are panes of Home, not routes, so Back has nothing to pop and would leave the app.
+  // An open search keeps Back for itself.
+  useHardwareBack(
+    tab !== "threads" &&
+      enabled.includes("threads") &&
+      workspace.state.tabs[tab].searchMode === "resting",
+    () => {
+      selectTab("threads");
+      return true;
+    },
+  );
 
   if (layout.usesSplitView) {
     if (enabled.length === 0) return <View className="flex-1 bg-screen" />;

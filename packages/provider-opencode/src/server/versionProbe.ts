@@ -1,3 +1,5 @@
+// @effect-diagnostics nodeBuiltinImport:off
+import * as NodeCrypto from "node:crypto";
 import { parseSemver } from "@goat/shared/semver";
 import * as Cache from "effect/Cache";
 import * as Duration from "effect/Duration";
@@ -9,7 +11,11 @@ import * as HttpClient from "effect/http/HttpClient";
 import * as HttpClientRequest from "effect/http/HttpClientRequest";
 
 import * as OpenCodeRuntime from "./OpenCodeRuntime.ts";
-import { parseGenericCliVersion } from "@goat/provider-core/server/snapshotProbe";
+import {
+  parseGenericCliVersion,
+  resolveProviderProbeTimeoutMs,
+} from "@goat/provider-core/server/snapshotProbe";
+import { LaunchEnvironment } from "./launchEnvironment.ts";
 
 export interface ProbedOpenCode {
   readonly generation: "v1" | "v2";
@@ -17,8 +23,8 @@ export interface ProbedOpenCode {
 }
 
 // Meant to stop a hung `--version`; wrapped installs can take several seconds to start cold.
-const OPENCODE_VERSION_PROBE_TIMEOUT = "10 seconds";
-const OPENCODE_SERVER_PROBE_TIMEOUT = "5 seconds";
+const OPENCODE_VERSION_PROBE_TIMEOUT_MS = 10_000;
+const OPENCODE_SERVER_PROBE_TIMEOUT_MS = 5_000;
 // 2.x's own CLI decodes `{version, pid}` from `/api/info`; requiring both keeps unrelated JSON out.
 const decodeApiInfo = Schema.decodeUnknownOption(
   Schema.fromJsonString(Schema.Struct({ version: Schema.String, pid: Schema.Int })),
@@ -55,11 +61,16 @@ function classifyOpenCodeProbeResponse(
   return probed(Option.getOrUndefined(version));
 }
 
-const probeOpenCodeBinary = Effect.fn("probeOpenCodeBinary")(function* (
+export const probeOpenCodeBinary = Effect.fn("probeOpenCodeBinary")(function* (
   binaryPath: string,
   environment: NodeJS.ProcessEnv | undefined,
 ) {
   const runtime = yield* OpenCodeRuntime.OpenCodeRuntime;
+  const timeoutMs = resolveProviderProbeTimeoutMs(
+    "opencode",
+    OPENCODE_VERSION_PROBE_TIMEOUT_MS,
+    environment,
+  );
   const { stdout, code } = yield* runtime
     .runOpenCodeCommand({
       binaryPath,
@@ -68,12 +79,12 @@ const probeOpenCodeBinary = Effect.fn("probeOpenCodeBinary")(function* (
     })
     .pipe(
       Effect.timeoutOrElse({
-        duration: OPENCODE_VERSION_PROBE_TIMEOUT,
+        duration: timeoutMs,
         orElse: () =>
           Effect.fail(
             new OpenCodeRuntime.OpenCodeRuntimeError({
               operation: "probeOpenCodeBinary",
-              detail: `OpenCode CLI version probe timed out after ${OPENCODE_VERSION_PROBE_TIMEOUT}.`,
+              detail: `OpenCode CLI version probe timed out after ${timeoutMs / 1_000} seconds.`,
             }),
           ),
       }),
@@ -90,6 +101,7 @@ const probeOpenCodeBinary = Effect.fn("probeOpenCodeBinary")(function* (
 const probeOpenCodeServer = Effect.fn("probeOpenCodeServer")(function* (
   serverUrl: string,
   serverPassword: string,
+  environment?: NodeJS.ProcessEnv,
 ) {
   const client = yield* HttpClient.HttpClient;
   const baseUrl = URL.parse(serverUrl.trim());
@@ -132,7 +144,11 @@ const probeOpenCodeServer = Effect.fn("probeOpenCodeServer")(function* (
             }),
         ),
         Effect.timeoutOrElse({
-          duration: OPENCODE_SERVER_PROBE_TIMEOUT,
+          duration: resolveProviderProbeTimeoutMs(
+            "opencode",
+            OPENCODE_SERVER_PROBE_TIMEOUT_MS,
+            environment,
+          ),
           orElse: () =>
             Effect.fail(
               new OpenCodeRuntime.OpenCodeRuntimeError({
@@ -169,22 +185,54 @@ export const probeOpenCodeRuntime = (
   HttpClient.HttpClient | OpenCodeRuntime.OpenCodeRuntime
 > =>
   settings.serverUrl.trim().length > 0
-    ? probeOpenCodeServer(settings.serverUrl, settings.serverPassword)
+    ? probeOpenCodeServer(settings.serverUrl, settings.serverPassword, environment)
     : probeOpenCodeBinary(settings.binaryPath, environment);
 
-// Only 2.x is kept: 1.x can be upgraded in place while GOAT runs, and 2.x converts the shared
-// database, so going back is unsupported.
-export const makeOpenCodeRuntimeProbe = <E>(probe: Effect.Effect<ProbedOpenCode, E>) =>
-  Effect.map(
-    Cache.makeWith(() => probe, {
+// Keep only the successful probe for the selected executable and environment.
+export const makeOpenCodeRuntimeProbe = <E>(
+  probe: Effect.Effect<ProbedOpenCode, E>,
+  environment: Effect.Effect<NodeJS.ProcessEnv> = Effect.succeed({}),
+  executableIdentity: (environment: NodeJS.ProcessEnv) => Effect.Effect<unknown> = () =>
+    Effect.succeed(null),
+) => {
+  const identityFor = (env: NodeJS.ProcessEnv) =>
+    executableIdentity(env).pipe(
+      Effect.map((executable) =>
+        NodeCrypto.createHash("sha256")
+          .update(
+            JSON.stringify({
+              environment: Object.fromEntries(
+                Object.entries(env).toSorted(([a], [b]) => a.localeCompare(b)),
+              ),
+              executable,
+            }),
+          )
+          .digest("hex"),
+      ),
+    );
+  const key = Effect.flatMap(environment, identityFor);
+  return Effect.map(
+    Cache.makeWith((_identity: string) => probe, {
       capacity: 1,
-      timeToLive: (exit) =>
-        Exit.isSuccess(exit) && exit.value.generation === "v2" ? Duration.infinity : Duration.zero,
+      timeToLive: (exit) => (Exit.isSuccess(exit) ? Duration.infinity : Duration.zero),
     }),
     (cache) => ({
-      get: Cache.get(cache, undefined),
-      refresh: Cache.refresh(cache, undefined),
-      lastSuccess: Cache.getSuccess(cache, undefined),
-      record: (probed: ProbedOpenCode) => Cache.set(cache, undefined, probed),
+      identity: key,
+      lastSuccessAt: (identity: string) => Cache.getSuccess(cache, identity),
+      recordAt: (identity: string, probed: ProbedOpenCode) => Cache.set(cache, identity, probed),
+      get: Effect.flatMap(environment, (env) =>
+        Effect.flatMap(identityFor(env), (identity) =>
+          Cache.get(cache, identity).pipe(Effect.provideService(LaunchEnvironment, env)),
+        ),
+      ),
+      refresh: Effect.flatMap(environment, (env) =>
+        Effect.flatMap(identityFor(env), (identity) =>
+          Cache.refresh(cache, identity).pipe(Effect.provideService(LaunchEnvironment, env)),
+        ),
+      ),
+      lastSuccess: Effect.flatMap(key, (identity) => Cache.getSuccess(cache, identity)),
+      record: (probed: ProbedOpenCode) =>
+        Effect.flatMap(key, (identity) => Cache.set(cache, identity, probed)),
     }),
   );
+};

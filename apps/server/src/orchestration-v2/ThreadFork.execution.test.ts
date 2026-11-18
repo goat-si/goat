@@ -476,6 +476,10 @@ it.effect.each(forkCases)(
       const history = handoff.history?.messages.map((message) => message.text).join("\n") ?? "";
       assert.include(`${handoff.summaryText}\n${history}`, "INCLUDED_SOURCE_MARKER");
       assert.notInclude(`${handoff.summaryText}\n${history}`, "EXCLUDED_LATER_MARKER");
+      // Omitted items live in the source thread, so recovery reads point there.
+      const coverage = handoff.history?.coverage ?? "";
+      assert.include(coverage, `threadId:"${sourceThreadId}"`);
+      assert.notInclude(coverage, `threadId:"${targetThreadId}"`);
       assert.isNull(target.providerThreads[0]?.forkedFrom);
     }).pipe(Effect.provide(layer)),
 );

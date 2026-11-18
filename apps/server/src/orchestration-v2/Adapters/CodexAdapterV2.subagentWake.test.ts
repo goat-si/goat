@@ -1,3 +1,4 @@
+import * as NodeCrypto from "@effect/platform-node/NodeCrypto";
 import * as NodeServices from "@effect/platform-node/NodeServices";
 import { RunAttemptId } from "@goat/contracts";
 import { assert, describe, it } from "@effect/vitest";
@@ -26,6 +27,7 @@ const layerAdapterTest = Layer.mergeAll(
   IdAllocator.layer,
   McpProviderSessions.layer,
   NodeServices.layer,
+  NodeCrypto.layer,
 );
 
 describe("CodexAdapterV2 native subagent wakes", () => {

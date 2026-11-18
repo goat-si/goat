@@ -1,9 +1,11 @@
 import { SSH_RUNTIME_PROTOCOL_VERSION } from "@goat/shared/sshRuntimeProtocol";
 import { ORCHESTRATION_PROTOCOL_VERSION } from "@goat/contracts";
 import { assert, describe, it } from "@effect/vitest";
+import * as NodeCrypto from "@effect/platform-node/NodeCrypto";
 import * as NodeServices from "@effect/platform-node/NodeServices";
 import * as HostProcess from "@goat/shared/HostProcess";
 import * as Effect from "effect/Effect";
+import * as Layer from "effect/Layer";
 import * as Result from "effect/Result";
 import { makeProtocolFixture } from "./tunnel.protocol.fixture.ts";
 
@@ -37,7 +39,7 @@ describe.skipIf(HostProcess.Platform.defaultValue() === "win32")(
         const events = eventTypes(yield* f.fs.readFileString(`${f.test}/events`));
         for (const type of ["drain", "self-stop", "supervise"]) assert.include(events, type);
         assert.notInclude(events, "stop");
-      }).pipe(Effect.provide(NodeServices.layer), Effect.scoped),
+      }).pipe(Effect.provide(Layer.mergeAll(NodeServices.layer, NodeCrypto.layer)), Effect.scoped),
     );
 
     it.live("a busy orphan is adopted and kept serving; the refresh waits", () =>
@@ -63,7 +65,7 @@ describe.skipIf(HostProcess.Platform.defaultValue() === "win32")(
         const events = eventTypes(yield* f.fs.readFileString(`${f.test}/events`));
         assert.notInclude(events, "drain");
         assert.notInclude(events, "stop");
-      }).pipe(Effect.provide(NodeServices.layer), Effect.scoped),
+      }).pipe(Effect.provide(Layer.mergeAll(NodeServices.layer, NodeCrypto.layer)), Effect.scoped),
     );
 
     it.live("an owning attach without refresh adopts the orphan and keeps it running", () =>
@@ -77,7 +79,7 @@ describe.skipIf(HostProcess.Platform.defaultValue() === "win32")(
         }
         assert.equal((yield* f.snapshot).managed, "managed\n");
         assert.notInclude(eventTypes(yield* f.fs.readFileString(`${f.test}/events`)), "stop");
-      }).pipe(Effect.provide(NodeServices.layer), Effect.scoped),
+      }).pipe(Effect.provide(Layer.mergeAll(NodeServices.layer, NodeCrypto.layer)), Effect.scoped),
     );
 
     it.live("a secondary preparation never writes ownership records", () =>
@@ -90,7 +92,7 @@ describe.skipIf(HostProcess.Platform.defaultValue() === "win32")(
         assert.equal(after.managed, before.managed);
         assert.equal(after.pid, before.pid);
         assert.equal(after.identity, before.identity);
-      }).pipe(Effect.provide(NodeServices.layer), Effect.scoped),
+      }).pipe(Effect.provide(Layer.mergeAll(NodeServices.layer, NodeCrypto.layer)), Effect.scoped),
     );
 
     it.live("a foreign server stays external and is never drained", () =>
@@ -109,7 +111,7 @@ describe.skipIf(HostProcess.Platform.defaultValue() === "win32")(
         const events = eventTypes(yield* f.fs.readFileString(`${f.test}/events`));
         assert.notInclude(events, "drain");
         assert.notInclude(events, "stop");
-      }).pipe(Effect.provide(NodeServices.layer), Effect.scoped),
+      }).pipe(Effect.provide(Layer.mergeAll(NodeServices.layer, NodeCrypto.layer)), Effect.scoped),
     );
 
     it.live(
@@ -129,7 +131,10 @@ describe.skipIf(HostProcess.Platform.defaultValue() === "win32")(
           const events = eventTypes(yield* f.fs.readFileString(`${f.test}/events`));
           assert.notInclude(events, "drain");
           assert.notInclude(events, "stop");
-        }).pipe(Effect.provide(NodeServices.layer), Effect.scoped),
+        }).pipe(
+          Effect.provide(Layer.mergeAll(NodeServices.layer, NodeCrypto.layer)),
+          Effect.scoped,
+        ),
     );
 
     // A person restarting the runtime by hand on Windows recorded PowerShell's CommandLine for
@@ -159,7 +164,7 @@ describe.skipIf(HostProcess.Platform.defaultValue() === "win32")(
         const events = eventTypes(yield* f.fs.readFileString(`${f.test}/events`));
         assert.notInclude(events, "drain");
         assert.notInclude(events, "stop");
-      }).pipe(Effect.provide(NodeServices.layer), Effect.scoped),
+      }).pipe(Effect.provide(Layer.mergeAll(NodeServices.layer, NodeCrypto.layer)), Effect.scoped),
     );
 
     it.live("a mismatched identity for any other process is refused with the next step", () =>
@@ -184,7 +189,7 @@ describe.skipIf(HostProcess.Platform.defaultValue() === "win32")(
         const events = eventTypes(yield* f.fs.readFileString(`${f.test}/events`));
         assert.notInclude(events, "drain");
         assert.notInclude(events, "stop");
-      }).pipe(Effect.provide(NodeServices.layer), Effect.scoped),
+      }).pipe(Effect.provide(Layer.mergeAll(NodeServices.layer, NodeCrypto.layer)), Effect.scoped),
     );
 
     it.live("a hand-written identity is not repaired when the installed goat is a symlink", () =>
@@ -204,7 +209,7 @@ describe.skipIf(HostProcess.Platform.defaultValue() === "win32")(
         const events = eventTypes(yield* f.fs.readFileString(`${f.test}/events`));
         assert.notInclude(events, "drain");
         assert.notInclude(events, "stop");
-      }).pipe(Effect.provide(NodeServices.layer), Effect.scoped),
+      }).pipe(Effect.provide(Layer.mergeAll(NodeServices.layer, NodeCrypto.layer)), Effect.scoped),
     );
 
     it.live.each([
@@ -232,7 +237,7 @@ describe.skipIf(HostProcess.Platform.defaultValue() === "win32")(
         const events = eventTypes(yield* f.fs.readFileString(`${f.test}/events`));
         assert.notInclude(events, "drain");
         assert.notInclude(events, "stop");
-      }).pipe(Effect.provide(NodeServices.layer), Effect.scoped),
+      }).pipe(Effect.provide(Layer.mergeAll(NodeServices.layer, NodeCrypto.layer)), Effect.scoped),
     );
   },
 );

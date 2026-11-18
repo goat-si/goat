@@ -1,3 +1,4 @@
+import { queuedRunEditThreadId } from "./queuedRunEditDraftId";
 import { CONTEXT_LINK_PROTOCOLS } from "@goat/contracts/legacyT3Names";
 import { hasPendingThreadPick, type PendingThreadIdsAtom } from "./state/modelPickPending";
 import * as draftModels from "./lib/persistedModelSelections";
@@ -24,7 +25,7 @@ import {
   RuntimeMode,
   ThreadContextRecord,
   PreviewTabContextRecord,
-  type ServerProvider,
+  ResponseContextRecord,
   type ScopedProjectRef,
   type ScopedThreadRef,
   ThreadId,
@@ -46,7 +47,6 @@ import {
   createModelSelection,
   draftModelPickMatchesThread,
   normalizeCustomModelSlug,
-  normalizeModelSlug,
 } from "@goat/shared/model";
 import { AsyncResult, Atom, type AtomRegistry } from "effect/reactivity";
 import * as Option from "effect/Option";
@@ -56,11 +56,6 @@ import type {
 } from "@goat/client-runtime/state/shell";
 import { getLocalStorageItem } from "./hooks/useLocalStorage";
 import { readThreadPreviewState } from "./previewStateStore";
-import {
-  readInstanceCustomModels,
-  resolveAppModelSelection,
-  resolveAppModelSelectionForInstance,
-} from "./modelSelection";
 import {
   DEFAULT_INTERACTION_MODE,
   DEFAULT_RUNTIME_MODE,
@@ -100,16 +95,17 @@ import {
 } from "./lib/draftSshDestination";
 export { draftSshDestinationsEqual, type DraftSshDestination } from "./lib/draftSshDestination";
 import { create } from "zustand";
-import { persist, type PersistStorage, type StorageValue } from "zustand/middleware";
+import { persist } from "zustand/middleware";
+import {
+  createComposerPersistStorage,
+  type ComposerPersistState,
+} from "./composerDraftPersistStorage";
 import { useShallow } from "zustand/react/shallow";
-import { createDeferredStorage, createMemoryStorage } from "./lib/storage";
-import { getDefaultServerModel } from "./providerModels";
 import {
   replaceComposerContextReferences,
   toComposerContextId,
   toKindScopedComposerContextId,
 } from "@goat/shared/composerContextReferences";
-import { UnifiedSettings } from "@goat/contracts/settings";
 
 const isElementContextDetails = Schema.is(ElementContextDetails);
 import { ReviewCommentContextSchema, type ReviewCommentContext } from "./reviewCommentContext";
@@ -117,6 +113,7 @@ const isRuntimeMode = Schema.is(RuntimeMode);
 const isProviderDriverKind = Schema.is(ProviderDriverKind);
 const isReviewCommentContext = Schema.is(ReviewCommentContextSchema);
 const isThreadContextRecord = Schema.is(ThreadContextRecord);
+const isResponseContextRecord = Schema.is(ResponseContextRecord);
 const isPreviewTabContextRecord = Schema.is(PreviewTabContextRecord);
 const isSnapShotSource = Schema.is(SnapShotSource);
 const isPreviewAnnotationPayload = Schema.is(PreviewAnnotationPayloadSchema);
@@ -129,42 +126,7 @@ export type DraftThreadEnvMode = typeof DraftThreadEnvModeSchema.Type;
 export const DraftId = Schema.String.pipe(Schema.brand("DraftId"));
 export type DraftId = typeof DraftId.Type;
 
-const COMPOSER_PERSIST_DEBOUNCE_MS = 300;
-
-type ComposerPersistState =
-  | { capturedState: ComposerDraftStoreState }
-  | PersistedComposerDraftStoreState;
-
-const composerDebouncedStorage = createDeferredStorage<StorageValue<ComposerPersistState>>(
-  typeof localStorage !== "undefined" ? localStorage : createMemoryStorage(),
-  (value) =>
-    JSON.stringify({
-      state:
-        "capturedState" in value.state
-          ? partializeComposerDraftStoreState(value.state.capturedState)
-          : value.state,
-      version: value.version,
-    }),
-  COMPOSER_PERSIST_DEBOUNCE_MS,
-);
-
-const composerPersistStorage: PersistStorage<ComposerPersistState> = {
-  getItem: (name) => {
-    const raw = composerDebouncedStorage.getItem(name);
-    if (typeof raw !== "string") {
-      return null;
-    }
-    return JSON.parse(raw) as StorageValue<ComposerPersistState>;
-  },
-  setItem: (name, value) => composerDebouncedStorage.setItem(name, value),
-  removeItem: (name) => composerDebouncedStorage.removeItem(name),
-};
-
-if (typeof window !== "undefined" && typeof window.addEventListener === "function") {
-  window.addEventListener("beforeunload", () => {
-    composerDebouncedStorage.flush();
-  });
-}
+const composerPersist = createComposerPersistStorage(partializeComposerDraftStoreState);
 
 export const PersistedComposerImageAttachment = Schema.Struct({
   id: Schema.String,
@@ -258,6 +220,7 @@ const PersistedComposerThreadDraftState = Schema.Struct({
   previewAnnotations: Schema.optionalKey(Schema.Array(PreviewAnnotationPayloadSchema)),
   reviewComments: Schema.optionalKey(Schema.Array(ReviewCommentContextSchema)),
   threadContexts: Schema.optionalKey(Schema.Array(ThreadContextRecord)),
+  replyTo: Schema.optionalKey(ResponseContextRecord),
   previewTabs: Schema.optionalKey(Schema.Array(PreviewTabContextRecord)),
   modelSelectionByProvider: Schema.optionalKey(Schema.Record(ProviderInstanceId, ModelSelection)),
   activeProvider: Schema.optionalKey(Schema.NullOr(ProviderInstanceId)),
@@ -267,7 +230,7 @@ const PersistedComposerThreadDraftState = Schema.Struct({
 });
 type PersistedComposerThreadDraftState = typeof PersistedComposerThreadDraftState.Type;
 
-type ProviderOptionSelectionsByProvider = Partial<
+export type ProviderOptionSelectionsByProvider = Partial<
   Record<string, ReadonlyArray<ProviderOptionSelection>>
 >;
 
@@ -354,7 +317,7 @@ const PersistedComposerDraftStoreState = Schema.Struct({
   ),
   stickyActiveProvider: Schema.optionalKey(Schema.NullOr(ProviderInstanceId)),
 });
-type PersistedComposerDraftStoreState = typeof PersistedComposerDraftStoreState.Type;
+export type PersistedComposerDraftStoreState = typeof PersistedComposerDraftStoreState.Type;
 
 const PersistedComposerDraftStoreStorage = Schema.Struct({
   version: Schema.Number,
@@ -383,6 +346,8 @@ export interface ComposerThreadDraftState {
   previewAnnotations: PreviewAnnotationPayload[];
   reviewComments: ReviewCommentContext[];
   threadContexts: ThreadContextRecord[];
+  /** The response this message replies to. It becomes a context record when the message is sent. */
+  replyTo: ResponseContextRecord | null;
   previewTabs: PreviewTabContextRecord[];
   modelSelectionByProvider: Partial<Record<ProviderInstanceId, ModelSelection>>;
   activeProvider: ProviderInstanceId | null;
@@ -406,7 +371,8 @@ export function composerDraftHasUserContent(
     draft.previewAnnotations.length > 0 ||
     draft.reviewComments.length > 0 ||
     draft.threadContexts.length > 0 ||
-    draft.previewTabs.length > 0
+    draft.previewTabs.length > 0 ||
+    draft.replyTo !== null
   );
 }
 
@@ -436,7 +402,7 @@ interface ProjectDraftSession extends DraftSessionState {
 
 export type ComposerThreadTarget = ScopedThreadRef | DraftId;
 
-interface ComposerDraftStoreState extends PreviewTabDraftActions {
+export interface ComposerDraftStoreState extends PreviewTabDraftActions {
   draftsByThreadKey: Record<string, ComposerThreadDraftState>;
   draftThreadsByThreadKey: Record<string, DraftThreadState>;
   logicalProjectDraftThreadKeyByLogicalProjectKey: Record<string, string>;
@@ -629,6 +595,7 @@ interface ComposerDraftStoreState extends PreviewTabDraftActions {
     threadRef: ComposerThreadTarget,
     records: ReadonlyArray<ThreadContextRecord>,
   ) => void;
+  setReplyTo: (threadRef: ComposerThreadTarget, response: ResponseContextRecord | null) => void;
   clearPersistedAttachments: (threadRef: ComposerThreadTarget) => void;
   syncPersistedAttachments: (
     threadRef: ComposerThreadTarget,
@@ -641,33 +608,9 @@ interface ComposerDraftStoreState extends PreviewTabDraftActions {
   moveComposerPromptAndImages: (from: ComposerThreadTarget, to: ComposerThreadTarget) => void;
 }
 
-export interface EffectiveComposerModelState {
-  selectedModel: string;
-  modelOptions: ProviderOptionSelectionsByProvider | null;
-}
-
 interface ComposerDraftModelState {
   activeProvider: ProviderInstanceId | null;
   modelSelectionByProvider: Partial<Record<ProviderInstanceId, ModelSelection>>;
-}
-
-function selectionsByInstance(
-  modelSelection: ModelSelection | null | undefined,
-): Partial<Record<string, ModelSelection>> | null {
-  return modelSelection ? { [modelSelection.instanceId]: modelSelection } : null;
-}
-
-function modelSelectionByProviderToOptions(
-  map: Partial<Record<string, ModelSelection>> | null | undefined,
-): ProviderOptionSelectionsByProvider | null {
-  if (!map) return null;
-  const result: ProviderOptionSelectionsByProvider = {};
-  for (const [provider, selection] of Object.entries(map)) {
-    if (selection?.options && selection.options.length > 0) {
-      result[provider] = selection.options;
-    }
-  }
-  return Object.keys(result).length > 0 ? result : null;
 }
 
 function cloneModelSelection(selection: ModelSelection): DeepMutable<ModelSelection> {
@@ -762,6 +705,7 @@ const EMPTY_THREAD_DRAFT = Object.freeze<ComposerThreadDraftState>({
   reviewComments: EMPTY_REVIEW_COMMENTS,
   threadContexts: EMPTY_THREAD_CONTEXTS,
   previewTabs: [],
+  replyTo: null,
   modelSelectionByProvider: EMPTY_MODEL_SELECTION_BY_PROVIDER,
   activeProvider: null,
   runtimeMode: null,
@@ -780,6 +724,7 @@ function createEmptyThreadDraft(): ComposerThreadDraftState {
     reviewComments: [],
     threadContexts: [],
     previewTabs: [],
+    replyTo: null,
     modelSelectionByProvider: {},
     activeProvider: null,
     runtimeMode: null,
@@ -886,6 +831,7 @@ function shouldRemoveDraft(draft: ComposerThreadDraftState): boolean {
     draft.reviewComments.length === 0 &&
     draft.threadContexts.length === 0 &&
     draft.previewTabs.length === 0 &&
+    draft.replyTo === null &&
     Object.keys(draft.modelSelectionByProvider).length === 0 &&
     draft.activeProvider === null &&
     draft.runtimeMode === null &&
@@ -1097,147 +1043,6 @@ function legacyToModelSelectionByProvider(
   return result;
 }
 
-export function deriveEffectiveComposerModelState(input: {
-  draft:
-    | Pick<ComposerThreadDraftState, "modelSelectionByProvider" | "activeProvider">
-    | null
-    | undefined;
-  providers: ReadonlyArray<ServerProvider>;
-  selectedProvider: ProviderDriverKind;
-  selectedInstanceId?: ProviderInstanceId | null | undefined;
-  /** The instance the draft, thread or project asked for; differs from the selection on fallback. */
-  requestedInstanceId?: ProviderInstanceId | null | undefined;
-  threadModelSelection: ModelSelection | null | undefined;
-  projectModelSelection: ModelSelection | null | undefined;
-  settings: UnifiedSettings;
-}): EffectiveComposerModelState {
-  const baseModelCandidate =
-    input.threadModelSelection?.model ?? input.projectModelSelection?.model ?? null;
-  const preserveThreadModel =
-    input.selectedInstanceId !== null &&
-    input.selectedInstanceId !== undefined &&
-    input.threadModelSelection?.instanceId === input.selectedInstanceId;
-  const baseModel =
-    (input.selectedInstanceId
-      ? resolveAppModelSelectionForInstance(
-          input.selectedInstanceId,
-          input.settings,
-          input.providers,
-          baseModelCandidate,
-          { preserveUnavailableSelection: preserveThreadModel },
-        )
-      : null) ??
-    // Antigravity has no static model or cross-account catalog fallback.
-    (input.selectedProvider === "antigravity" && input.selectedInstanceId ? "" : null) ??
-    resolveAppModelSelection(
-      input.selectedProvider,
-      input.settings,
-      input.providers,
-      baseModelCandidate,
-    ) ??
-    normalizeModelSlug(baseModelCandidate, input.selectedProvider) ??
-    getDefaultServerModel(input.providers, input.selectedProvider);
-  const instanceSelection = input.selectedInstanceId
-    ? input.draft?.modelSelectionByProvider?.[input.selectedInstanceId]
-    : undefined;
-  // Legacy driver-keyed drafts belong to the default instance.
-  const legacySelection =
-    input.selectedInstanceId &&
-    input.selectedInstanceId !== defaultInstanceIdForDriver(input.selectedProvider)
-      ? undefined
-      : input.draft?.modelSelectionByProvider?.[ProviderInstanceId.make(input.selectedProvider)];
-  const activeSelection = instanceSelection ?? legacySelection;
-  const activeSelectionInstanceId = instanceSelection
-    ? (input.selectedInstanceId ?? ProviderInstanceId.make(input.selectedProvider))
-    : ProviderInstanceId.make(input.selectedProvider);
-  const selectedModel = activeSelection?.model
-    ? (resolveAppModelSelectionForInstance(
-        activeSelectionInstanceId,
-        input.settings,
-        input.providers,
-        activeSelection.model,
-        { preserveUnavailableSelection: true },
-      ) ??
-      (input.selectedProvider === "antigravity" ? "" : null) ??
-      resolveAppModelSelection(
-        input.selectedProvider,
-        input.settings,
-        input.providers,
-        activeSelection.model,
-      ))
-    : baseModel;
-  // Options come from the first of the draft, thread and project that has any. Their selections
-  // stay with them, so a fallback instance can check which model the options belong to.
-  const optionSelections =
-    [
-      input.draft?.modelSelectionByProvider,
-      selectionsByInstance(input.threadModelSelection),
-      selectionsByInstance(input.projectModelSelection),
-    ].find((selections) => modelSelectionByProviderToOptions(selections) !== null) ?? null;
-  const modelOptions = modelSelectionByProviderToOptions(optionSelections);
-
-  return {
-    selectedModel,
-    modelOptions: withFallbackInstanceOptions({
-      ...input,
-      modelOptions,
-      optionSelections,
-      selectedModel,
-    }),
-  };
-}
-
-/**
- * When the requested instance is disabled or unavailable, the composer shows another instance of
- * the same driver. When that instance has no options of its own and shows the model the requested
- * instance's options were picked with, it takes those options instead of the model's defaults.
- */
-function withFallbackInstanceOptions(input: {
-  readonly modelOptions: ProviderOptionSelectionsByProvider | null;
-  readonly optionSelections: Partial<Record<string, ModelSelection>> | null;
-  readonly selectedModel: string;
-  readonly providers: ReadonlyArray<ServerProvider>;
-  readonly selectedProvider: ProviderDriverKind;
-  readonly selectedInstanceId?: ProviderInstanceId | null | undefined;
-  readonly requestedInstanceId?: ProviderInstanceId | null | undefined;
-  readonly settings: UnifiedSettings;
-}): ProviderOptionSelectionsByProvider | null {
-  const { modelOptions, selectedInstanceId, requestedInstanceId } = input;
-  if (
-    !modelOptions ||
-    !selectedInstanceId ||
-    !requestedInstanceId ||
-    selectedInstanceId === requestedInstanceId ||
-    modelOptions[selectedInstanceId] !== undefined
-  ) {
-    return modelOptions;
-  }
-  const requestedOptions = modelOptions[requestedInstanceId];
-  const requestedProvider = input.providers.find(
-    (provider) => provider.instanceId === requestedInstanceId,
-  );
-  const requestedModel = input.optionSelections?.[requestedInstanceId]?.model;
-  // Static aliases are shared across instances; exact custom slugs and catalog aliases are not.
-  const modelIdentity = (instanceId: ProviderInstanceId, model: string | undefined) => {
-    const isCustom =
-      input.providers
-        .find((provider) => provider.instanceId === instanceId)
-        ?.models.some((entry) => entry.slug === model && entry.isCustom) ||
-      readInstanceCustomModels(input.settings, instanceId, input.selectedProvider).some(
-        (entry) => entry.slug === model,
-      );
-    return isCustom ? model : normalizeModelSlug(model, input.selectedProvider);
-  };
-  const sameModel =
-    requestedModel === input.selectedModel ||
-    modelIdentity(requestedInstanceId, requestedModel) ===
-      modelIdentity(selectedInstanceId, input.selectedModel);
-  if (!requestedOptions || requestedProvider?.driver !== input.selectedProvider || !sameModel) {
-    return modelOptions;
-  }
-  return { ...modelOptions, [selectedInstanceId]: requestedOptions };
-}
-
 function revokeObjectPreviewUrl(previewUrl: string): void {
   if (typeof URL === "undefined") {
     return;
@@ -1422,7 +1227,6 @@ export function resolveComposerDraftKey(
   const threadKey = composerTargetKey(normalizedTarget);
   return threadKey.length > 0 ? threadKey : null;
 }
-
 function resolveComposerThreadId(
   state: ComposerThreadLookupState,
   target: ComposerThreadTarget,
@@ -1434,7 +1238,10 @@ function resolveComposerThreadId(
   if (typeof normalizedTarget !== "string") {
     return normalizedTarget.threadId;
   }
-  return state.draftThreadsByThreadKey[normalizedTarget]?.threadId ?? null;
+  return (
+    state.draftThreadsByThreadKey[normalizedTarget]?.threadId ??
+    queuedRunEditThreadId(normalizedTarget)
+  );
 }
 
 function getComposerDraftState(
@@ -1876,6 +1683,7 @@ function normalizePersistedDraftsByThreadId(
     const reviewComments = Array.isArray(draftCandidate.reviewComments)
       ? draftCandidate.reviewComments.filter(isReviewCommentContext)
       : [];
+    const replyTo = isResponseContextRecord(draftCandidate.replyTo) ? draftCandidate.replyTo : null;
     const threadContexts = Array.isArray(draftCandidate.threadContexts)
       ? draftCandidate.threadContexts.filter(isThreadContextRecord)
       : [];
@@ -2002,6 +1810,7 @@ function normalizePersistedDraftsByThreadId(
       reviewComments.length === 0 &&
       threadContexts.length === 0 &&
       previewTabs.length === 0 &&
+      replyTo === null &&
       !hasModelData &&
       !runtimeMode &&
       !interactionMode
@@ -2029,6 +1838,7 @@ function normalizePersistedDraftsByThreadId(
       ...(reviewComments.length > 0 ? { reviewComments } : {}),
       ...(threadContexts.length > 0 ? { threadContexts } : {}),
       ...(previewTabs.length > 0 ? { previewTabs } : {}),
+      ...(replyTo ? { replyTo: replyTo as DeepMutable<ResponseContextRecord> } : {}),
       ...(hasModelData
         ? {
             modelSelectionByProvider: compactModelSelectionByProvider(modelSelectionByProvider),
@@ -2053,7 +1863,8 @@ function persistedComposerDraftHasUserContent(draft: PersistedComposerThreadDraf
     (draft.previewAnnotations?.length ?? 0) > 0 ||
     (draft.reviewComments?.length ?? 0) > 0 ||
     (draft.threadContexts?.length ?? 0) > 0 ||
-    (draft.previewTabs?.length ?? 0) > 0
+    (draft.previewTabs?.length ?? 0) > 0 ||
+    draft.replyTo !== undefined
   );
 }
 
@@ -2133,6 +1944,7 @@ export function partializeComposerDraftStoreState(
       draft.reviewComments.length === 0 &&
       draft.threadContexts.length === 0 &&
       draft.previewTabs.length === 0 &&
+      draft.replyTo === null &&
       !hasModelData &&
       draft.runtimeMode === null &&
       draft.interactionMode === null
@@ -2190,6 +2002,9 @@ export function partializeComposerDraftStoreState(
         : {}),
       ...(draft.previewTabs.length > 0
         ? { previewTabs: draft.previewTabs.map((record) => ({ ...record })) }
+        : {}),
+      ...(draft.replyTo
+        ? { replyTo: { ...draft.replyTo } as DeepMutable<ResponseContextRecord> }
         : {}),
       ...(hasModelData
         ? {
@@ -2338,7 +2153,7 @@ function verifyPersistedAttachments(
 ): void {
   let persistedIdSet = new Set<string>();
   try {
-    composerDebouncedStorage.flush();
+    composerPersist.flush();
     persistedIdSet = new Set(readPersistedAttachmentIdsFromStorage(threadKey));
   } catch {
     persistedIdSet = new Set();
@@ -2469,6 +2284,7 @@ function toHydratedThreadDraft(
     reviewComments: persistedDraft.reviewComments?.map((comment) => ({ ...comment })) ?? [],
     threadContexts: persistedDraft.threadContexts?.map((record) => ({ ...record })) ?? [],
     previewTabs: persistedDraft.previewTabs?.map((record) => ({ ...record })) ?? [],
+    replyTo: persistedDraft.replyTo ?? null,
     modelSelectionByProvider,
     activeProvider,
     ...(persistedDraft.modelSelectionExplicit ? { modelSelectionExplicit: true } : {}),
@@ -3984,6 +3800,18 @@ const composerDraftStore = create<ComposerDraftStoreState>()(
             return { draftsByThreadKey: nextDraftsByThreadKey };
           });
         },
+        setReplyTo: (threadRef, response) => {
+          const threadKey = resolveComposerDraftKey(get(), threadRef);
+          if (!threadKey) return;
+          set((state) => {
+            const existing = state.draftsByThreadKey[threadKey] ?? createEmptyThreadDraft();
+            const nextDraft = { ...existing, replyTo: response };
+            const nextDraftsByThreadKey = { ...state.draftsByThreadKey };
+            if (shouldRemoveDraft(nextDraft)) delete nextDraftsByThreadKey[threadKey];
+            else nextDraftsByThreadKey[threadKey] = nextDraft;
+            return { draftsByThreadKey: nextDraftsByThreadKey };
+          });
+        },
         removeReviewComment: (threadRef, commentId) => {
           const threadKey = resolveComposerDraftKey(get(), threadRef);
           if (!threadKey || !commentId) return;
@@ -4081,6 +3909,7 @@ const composerDraftStore = create<ComposerDraftStoreState>()(
               reviewComments: [],
               threadContexts: [],
               previewTabs: [],
+              replyTo: null,
             };
             const nextDraftsByThreadKey = { ...state.draftsByThreadKey };
             if (shouldRemoveDraft(nextDraft)) {
@@ -4233,7 +4062,7 @@ const composerDraftStore = create<ComposerDraftStoreState>()(
     {
       name: COMPOSER_DRAFT_STORAGE_KEY,
       version: COMPOSER_DRAFT_STORAGE_VERSION,
-      storage: composerPersistStorage,
+      storage: composerPersist.storage,
       migrate: migratePersistedComposerDraftStoreState,
       partialize: (state): ComposerPersistState => ({ capturedState: state }),
       merge: (persistedState, currentState) => {
@@ -4265,6 +4094,7 @@ const composerDraftStore = create<ComposerDraftStoreState>()(
   ),
 );
 
+composerPersist.markLoaded(composerDraftStore.getState());
 export const useComposerDraftStore = composerDraftStore;
 
 export function subscribeComposerDraftModelReconciliation(input: {
@@ -4426,7 +4256,7 @@ export function clearComposerDraftsEnvironment(environmentId: EnvironmentId): vo
       ),
     };
   });
-  composerDebouncedStorage.flush();
+  composerPersist.flush();
 }
 
 export function useComposerThreadDraft(threadRef: ComposerThreadTarget): ComposerThreadDraftState {

@@ -2,6 +2,7 @@ import { describe, expect, it } from "vite-plus/test";
 import type { ComposerContextId, EnvironmentId, ThreadId } from "@goat/contracts";
 import {
   enrichedLinkVariantPattern,
+  enrichedSkillDisplayName,
   enrichedSkillLinkRegex,
   enrichedThreadLinkPresentation,
   ENRICHED_INLINE_FILE_LINK_REGEX,
@@ -22,12 +23,15 @@ describe("Enriched link presentation", () => {
       "/tmp/report.md",
       "C:\\repo\\app.tsx",
       "app.tsx:12:3",
+      "src/http.ts:42-64",
+      "http.ts:42-64",
     ]) {
       expect(ENRICHED_INLINE_FILE_LINK_REGEX.test(path), path).toBe(true);
     }
     for (const text of [
       "npm run dev",
       "port:3000",
+      "port:3000-3010",
       "TODO:12",
       "example.com",
       "https://example.com/app.tsx",
@@ -101,4 +105,8 @@ describe("Enriched link presentation", () => {
     ]);
     expect(threadChipTargets(here, "No links here.")).toEqual([]);
   });
+});
+
+it("uses a provider skill name unchanged when no display name is set", () => {
+  expect(enrichedSkillDisplayName({ name: "plugin:skill-name" })).toBe("plugin:skill-name");
 });

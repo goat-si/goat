@@ -55,6 +55,17 @@ Then choose what the agent may do:
   threads in every project. A thread it starts or steers cannot run with more
   permissions than the mode you chose.
 
+## What outside agents can call
+
+Some tools act as the calling GOAT thread and require an agent running inside one,
+including subagent delegation, secret requests, browser preview, devices, and
+worktree handoff. An outside agent can start work with `goat_thread_launch` and
+follow it with `goat_thread_wait` or `goat_thread_read`.
+
+Tools that default to the calling project or thread need an explicit `projectId`
+or `threadId`. To list threads across projects, pass `allProjects: true` to
+`goat_thread_list`, or use `goat_thread_search`.
+
 ## Work with files and terminals
 
 In **Settings → Integrations → Agent tools**, choose workspace and terminal access for the
@@ -287,15 +298,20 @@ goat thread show "$id"
 goat thread list
 ```
 
-`.` means the project that contains the current folder; a project id also
-works. A new thread uses the project's default model and permission mode, and
-runs in the project folder unless you pass `--worktree <base-branch>`. `send`
-never interrupts: a busy thread gets the message as its next turn. Pass `-` as
-the message to read it from stdin.
+`.` means the project that contains the current folder, or a git worktree of
+its repository; a project id also works. A new thread uses the project's
+default model and permission mode, and runs in the project folder unless you
+pass `--worktree <base-branch>`. `send` never interrupts: a busy thread gets
+the message as its next turn. Pass `-` as the message to read it from stdin.
 
 `--wait` prints the agent's reply. It exits 1 when the run fails or stops, and
 2 when the agent waits for an answer you give in the app. Add `--json` for a
 result that always includes the thread id.
+With `start --wait`, and with `send --wait` to a thread that was idle when you
+sent the message, a turn that ends waiting on tasks or background work keeps
+the wait going until that work wakes the agent and the woken run ends; you get
+that reply instead. A send to a busy thread returns that turn's reply, and a
+message someone else sends meanwhile ends the wait with the first reply.
 
 Every other capability is a command too. `goat describe` lists them, `goat describe thread`
 shows one resource, and `goat describe thread.read` prints its arguments. Run one as

@@ -10,6 +10,7 @@ import {
   type ConnectionCatalogEntry,
   type ConnectionRoute,
 } from "./catalog.ts";
+import * as ClientCapabilities from "../platform/capabilities.ts";
 import * as Driver from "./driver.ts";
 import { BearerConnectionTarget, RelayConnectionTarget, type PreparedConnection } from "./model.ts";
 import * as Resolver from "./resolver.ts";
@@ -76,6 +77,9 @@ function harness() {
     }),
   );
   const make = Driver.make.pipe(
+    Effect.provideService(ClientCapabilities.PrimaryEnvironmentAuth, {
+      bearerToken: Effect.succeedNone,
+    }),
     Effect.provideService(Resolver.ConnectionResolver, {
       prepare,
       prepareForUpdate: () => Effect.die("unused"),

@@ -20,6 +20,7 @@ import {
   OrchestrationV2ThreadLaunchWorkspaceStrategy,
 } from "./orchestrationV2.ts";
 import { ProviderInteractionMode, RuntimeMode } from "./providerPolicy.ts";
+import { ScheduledTaskRecentRun } from "./scheduledTaskRecentRuns.ts";
 
 const TimeOfDay = TrimmedNonEmptyString.check(
   Schema.isPattern(/^([01]?\d|2[0-3]):([0-5]\d)$/),
@@ -245,6 +246,20 @@ export const ScheduledTaskWebhookEndpoint = Schema.Struct({
 });
 export type ScheduledTaskWebhookEndpoint = typeof ScheduledTaskWebhookEndpoint.Type;
 
+/**
+ * Where runs go. One-thread modes launch their thread on the first run and keep it; fresh_session
+ * starts each later run in a new provider session there.
+ */
+export const ScheduledTaskThreadMode = Schema.Literals(["new_thread", "continue", "fresh_session"]);
+export type ScheduledTaskThreadMode = typeof ScheduledTaskThreadMode.Type;
+
+/** Servers before thread modes omit it; their bound tasks continue the conversation. */
+export function scheduledTaskThreadMode(
+  task: Pick<ScheduledTask, "threadId" | "threadMode">,
+): ScheduledTaskThreadMode {
+  return task.threadMode ?? (task.threadId === null ? "new_thread" : "continue");
+}
+
 export const ScheduledTask = Schema.Struct({
   memoryGrantCeiling: MemoryTaskGrantCeilingField,
   currentMemoryAccess: Schema.optionalKey(MemoryCurrentAccess),
@@ -256,6 +271,8 @@ export const ScheduledTask = Schema.Struct({
   schedule: ScheduledTaskSchedule,
   projectId: ProjectId,
   threadId: Schema.NullOr(ThreadId),
+  /** Absent from older servers; a mode this client does not know reads as absent. */
+  threadMode: ForwardCompatibleOptional(ScheduledTaskThreadMode),
   workspaceStrategy: OrchestrationV2ThreadLaunchWorkspaceStrategy,
   modelSelection: ModelSelection,
   runtimeMode: RuntimeMode,
@@ -274,6 +291,8 @@ export const ScheduledTask = Schema.Struct({
   /** GOAT Bot answers this routine with its own model: it was set up in a GOAT Bot conversation,
       even one replaced since. Absent for other tasks and from older servers. */
   goatBotRoutine: Schema.optionalKey(Schema.Literal(true)),
+  /** Newest first, at most SCHEDULED_TASK_RECENT_RUNS. GOAT Bot routines only; absent from older servers. */
+  recentRuns: ForwardCompatibleOptional(ForwardCompatibleArray(ScheduledTaskRecentRun)),
 });
 export type ScheduledTask = typeof ScheduledTask.Type;
 
@@ -282,6 +301,8 @@ export type ScheduledTaskListInput = typeof ScheduledTaskListInput.Type;
 
 export const ScheduledTaskListResult = Schema.Struct({
   tasks: ForwardCompatibleArray(ScheduledTask),
+  /** The server's IANA zone for fixed-time schedules. Absent from older servers. */
+  timeZone: Schema.optional(TrimmedNonEmptyString),
 });
 export type ScheduledTaskListResult = typeof ScheduledTaskListResult.Type;
 
@@ -298,6 +319,8 @@ const ScheduledTaskUpsertInputFields = Schema.Struct({
   schedule: ScheduledTaskUpsertSchedule,
   projectId: ProjectId,
   threadId: Schema.optional(Schema.NullOr(ThreadId)),
+  /** Omitted: keep the stored mode, or derive it from threadId for a new or rebound task. */
+  threadMode: Schema.optional(ScheduledTaskThreadMode),
   workspaceStrategy: OrchestrationV2ThreadLaunchWorkspaceStrategy,
   modelSelection: ModelSelection,
   runtimeMode: RuntimeMode,

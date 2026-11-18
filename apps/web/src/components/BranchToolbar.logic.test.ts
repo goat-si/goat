@@ -1,9 +1,11 @@
-import { type VcsRef } from "@goat/contracts";
+import { ProviderInstanceId, RunId, type VcsRef } from "@goat/contracts";
 import { describe, expect, it } from "vite-plus/test";
 import {
   dedupeRemoteBranchesWithLocalMatches,
   deriveLocalBranchNameFromRemoteRef,
+  isWorktreeChangeBlocked,
   resolveBranchSelectionTarget,
+  shouldReuseSelectedWorktree,
   resolveDraftEnvModeAfterBranchChange,
   resolveEffectiveEnvMode,
   resolveBranchToolbarPrBranch,
@@ -170,6 +172,11 @@ describe("dedupeRemoteBranchesWithLocalMatches", () => {
 });
 
 describe("resolveBranchSelectionTarget", () => {
+  it("does not initiate a checkout without source-control write permission", () => {
+    const active = { reuseExistingWorktree: true, staysInActiveCheckout: true };
+    expect(shouldReuseSelectedWorktree(active, false)).toBe(true);
+    expect(shouldReuseSelectedWorktree(active, true)).toBe(false);
+  });
   it("reuses an existing secondary worktree for the selected ref", () => {
     expect(
       resolveBranchSelectionTarget({
@@ -182,6 +189,7 @@ describe("resolveBranchSelectionTarget", () => {
       checkoutCwd: "/repo",
       nextWorktreePath: "/repo",
       reuseExistingWorktree: true,
+      staysInActiveCheckout: false,
     });
     expect(
       resolveBranchSelectionTarget({
@@ -196,6 +204,7 @@ describe("resolveBranchSelectionTarget", () => {
       checkoutCwd: "/repo/.t3/worktrees/feature-b",
       nextWorktreePath: "/repo/.t3/worktrees/feature-b",
       reuseExistingWorktree: true,
+      staysInActiveCheckout: false,
     });
   });
 
@@ -223,6 +232,8 @@ describe("resolveBranchSelectionTarget", () => {
         checkoutCwd: "/repo",
         nextWorktreePath: null,
         reuseExistingWorktree: true,
+        // A ref listed in the thread's own checkout may be stale, so it is checked out, not assumed.
+        staysInActiveCheckout: activeWorktreePath === null,
       });
     }
   });
@@ -241,8 +252,39 @@ describe("resolveBranchSelectionTarget", () => {
       checkoutCwd: "/repo/.t3/worktrees/feature-a",
       nextWorktreePath: "/repo/.t3/worktrees/feature-a",
       reuseExistingWorktree: false,
+      staysInActiveCheckout: true,
     });
   });
+});
+
+describe("isWorktreeChangeBlocked", () => {
+  const runtime = (status: "preparing" | "running" | "queued" | "completed", hasRun = true) => ({
+    status,
+    activeRunId: status === "completed" || !hasRun ? null : RunId.make("run"),
+    providerInstanceId: ProviderInstanceId.make("codex"),
+    providerName: null,
+    lastError: null,
+  });
+
+  it.each([
+    ["preparing", true, "/repo/wt-a", null, true],
+    ["running", true, "/repo/wt-a", "/repo/wt-b", true],
+    ["running", true, null, "/repo/wt-b", true],
+    ["running", true, "/repo/wt-a", "/repo/wt-a", false],
+    ["queued", false, "/repo/wt-a", null, false],
+    ["completed", false, "/repo/wt-a", null, false],
+  ] as const)(
+    "a %s turn (run attached: %s) moving %s -> %s is blocked: %s",
+    (status, hasRun, currentWorktreePath, nextWorktreePath, blocked) => {
+      expect(
+        isWorktreeChangeBlocked({
+          runtime: runtime(status, hasRun),
+          currentWorktreePath,
+          nextWorktreePath,
+        }),
+      ).toBe(blocked);
+    },
+  );
 });
 
 describe("shouldIncludeBranchPickerItem", () => {

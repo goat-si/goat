@@ -1,9 +1,15 @@
-import { useLayoutEffect } from "react";
+import { createContext, useContext, useLayoutEffect, useSyncExternalStore } from "react";
 
 // Surfaces holding unsaved or in-progress work hold back an automatic navigation, such as New bot
 // opening the chat it created. They live all over the app, so the holds are a module the navigating
 // code reads when it is about to move.
 const holds = new Set<symbol>();
+// Holds under a surface kept mounted but off screen: unsaved work the person cannot see now.
+const pausedHolds = new Set<symbol>();
+const pausedListeners = new Set<() => void>();
+const notifyPaused = () => {
+  for (const listener of pausedListeners) listener();
+};
 
 // Any modal popup in the app: dialogs, alert dialogs, sheets and the command palette. Base UI
 // drops data-open as soon as one starts to close. The narrow sidebar's sheet renders as
@@ -32,11 +38,37 @@ export function navigationBlocked(): boolean {
 
 export function resetNavigationHoldsForTests(): void {
   holds.clear();
+  pausedHolds.clear();
+  notifyPaused();
 }
 
-/** Holds navigation back while mounted; render it inside a surface that mounts only while shown. */
+/** True under a surface kept mounted but off screen: the holds inside it pause. */
+export const NavigationHoldsPaused = createContext(false);
+
+/** How many holds are paused under a surface off screen: unsaved work the person cannot see. */
+export function usePausedNavigationHolds(): number {
+  return useSyncExternalStore(
+    (listener) => {
+      pausedListeners.add(listener);
+      return () => pausedListeners.delete(listener);
+    },
+    () => pausedHolds.size,
+  );
+}
+
+/** Holds navigation back while mounted and shown; while its surface is off screen, it is counted. */
 export function HoldsNavigation(): null {
+  const paused = useContext(NavigationHoldsPaused);
   // oxlint-disable-next-line goat/react-effect-budget -- The hold must end with the surface, however it unmounts.
-  useLayoutEffect(() => holdNavigation(), []);
+  useLayoutEffect(() => {
+    if (!paused) return holdNavigation();
+    const token = Symbol("paused-navigation-hold");
+    pausedHolds.add(token);
+    notifyPaused();
+    return () => {
+      pausedHolds.delete(token);
+      notifyPaused();
+    };
+  }, [paused]);
   return null;
 }

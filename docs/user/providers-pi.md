@@ -53,6 +53,8 @@ Pi loads its normal user extensions, and project extensions once the folder is t
 Blocking `select`, `confirm`, `input`, and `editor` dialogs work in GOAT. Notifications appear in
 the work log. Extensions can publish status text near the composer. Terminal titles and generic
 widgets do not have a GOAT equivalent.
+Models that an extension or package registers run in threads but are not offered for text
+generation (thread titles, branch names, commit messages).
 
 ## Use OpenCodex Home
 

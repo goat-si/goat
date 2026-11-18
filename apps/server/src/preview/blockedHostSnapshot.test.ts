@@ -1,3 +1,4 @@
+import * as NodeCrypto from "@effect/platform-node/NodeCrypto";
 import * as NodeServices from "@effect/platform-node/NodeServices";
 import { it } from "@effect/vitest";
 import * as Effect from "effect/Effect";
@@ -18,7 +19,7 @@ it.effect("the blocked-host view sees the committed settings update", () =>
     Effect.provide(
       ServerSettings.layerTest().pipe(
         Layer.provideMerge(ServerConfig.layerTest(process.cwd(), { prefix: "goat-host-view-" })),
-        Layer.provideMerge(NodeServices.layer),
+        Layer.provideMerge(Layer.mergeAll(NodeServices.layer, NodeCrypto.layer)),
       ),
     ),
   ),
@@ -32,5 +33,11 @@ it.effect("the production settings service publishes its committed blocked-host 
     expect(yield* settings.blockedBrowserHostsSnapshot).toEqual([]);
     yield* settings.updateSettings({ blockedBrowserHosts: ["blocked.test"] });
     expect(yield* settings.blockedBrowserHostsSnapshot).toEqual(["blocked.test"]);
-  }).pipe(Effect.provide(layerServerSettings().pipe(Layer.provideMerge(NodeServices.layer)))),
+  }).pipe(
+    Effect.provide(
+      layerServerSettings().pipe(
+        Layer.provideMerge(Layer.mergeAll(NodeServices.layer, NodeCrypto.layer)),
+      ),
+    ),
+  ),
 );

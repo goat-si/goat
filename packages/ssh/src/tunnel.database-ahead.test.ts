@@ -1,10 +1,12 @@
 // @effect-diagnostics nodeBuiltinImport:off
 import * as NodeFS from "node:fs";
 import { assert, describe, it } from "@effect/vitest";
+import * as NodeCrypto from "@effect/platform-node/NodeCrypto";
 import * as NodeServices from "@effect/platform-node/NodeServices";
 import { SERVER_EXIT_CODE_DATABASE_AHEAD } from "@goat/contracts";
 import * as HostProcess from "@goat/shared/HostProcess";
 import * as Effect from "effect/Effect";
+import * as Layer from "effect/Layer";
 import * as Result from "effect/Result";
 import { ARCHIVE } from "./tunnel.fixture.ts";
 import { makeProtocolFixture } from "./tunnel.protocol.fixture.ts";
@@ -82,7 +84,10 @@ describe.skipIf(HostProcess.Platform.defaultValue() === "win32")(
           const third = yield* f.run("launch");
           assert.isTrue(Result.isFailure(third));
           assert.isAbove(serveCount(yield* events(f)), started);
-        }).pipe(Effect.provide(NodeServices.layer), Effect.scoped),
+        }).pipe(
+          Effect.provide(Layer.mergeAll(NodeServices.layer, NodeCrypto.layer)),
+          Effect.scoped,
+        ),
     );
 
     it.live("classifies an older runtime's migration error the same way", () =>
@@ -107,7 +112,7 @@ describe.skipIf(HostProcess.Platform.defaultValue() === "win32")(
           ARCHIVE.archiveVersion,
         );
         assert.isAbove(serveCount(yield* events(f)), 0);
-      }).pipe(Effect.provide(NodeServices.layer), Effect.scoped),
+      }).pipe(Effect.provide(Layer.mergeAll(NodeServices.layer, NodeCrypto.layer)), Effect.scoped),
     );
   },
 );

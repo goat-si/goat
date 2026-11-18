@@ -1,15 +1,24 @@
 import {
-  presentTaskStatus,
   taskAttemptLabel,
   type BotWorkTask,
   type GoatBotTaskCard,
 } from "@goat/client-runtime/goatBot";
-import type { ChannelUpdateTaskViewInput, EnvironmentId, ThreadId } from "@goat/contracts";
+import type {
+  BotThreadRow,
+  ChannelUpdateTaskViewInput,
+  EnvironmentId,
+  ThreadId,
+} from "@goat/contracts";
 import type { ReactNode } from "react";
 import { Pressable, Text, View } from "react-native";
 
 import { GoatBotTaskRow } from "./GoatBotTaskRow";
 import { MobileTaskActions } from "./MobileTaskActions";
+import {
+  mobileBotTaskStatus,
+  mobileTaskSummaryStatus,
+  type MobileTaskChips,
+} from "./mobileBotTaskStatus";
 import { MobileTaskLookupNotices, MobileTaskUnavailable } from "./MobileTaskLookupParts";
 import type { useMobileTaskScreen } from "./useMobileTaskScreen";
 import { useMobileStatusAnnouncement } from "./useMobileStatusAnnouncement";
@@ -40,6 +49,10 @@ import { lookedUpTitle } from "./lookedUpTitle";
  */
 export function MobileTaskHeader(props: {
   readonly task: BotWorkTask | undefined;
+  /** The bot list's rows, which carry the current task's coding thread titles. */
+  readonly rows: ReadonlyArray<BotThreadRow>;
+  /** The conversation's newest task chips, which say what the task's worker asks. */
+  readonly chips: MobileTaskChips;
   /** The by-id read for a task the current list does not hold, and the task's actions. */
   readonly screen: Pick<
     ReturnType<typeof useMobileTaskScreen>,
@@ -65,7 +78,9 @@ export function MobileTaskHeader(props: {
 }) {
   const { lookup, canUpdate, retried } = props.screen;
   const onUpdate = (input: ChannelUpdateTaskViewInput) => void props.screen.update(input);
-  useMobileStatusAnnouncement(props.task === undefined ? lookupLine(lookup) : null);
+  useMobileStatusAnnouncement(props.task === undefined ? lookupLine(lookup) : null, {
+    onMount: true,
+  });
   const found =
     props.task === undefined && (lookup.state === "known" || lookup.state === "unavailable");
   const task = props.task ?? (lookup.state === "known" ? lookup.task : undefined);
@@ -84,9 +99,9 @@ export function MobileTaskHeader(props: {
           ? lookedUpTitle(unavailable.task.task.title, unavailable.task.task.titleTruncated)
           : (props.title ?? "Task thread");
   const status = task
-    ? presentTaskStatus(task.row.task.status, task.row.view.doneAt).label
+    ? mobileBotTaskStatus(task.row, props.chips)
     : unavailable
-      ? presentTaskStatus(unavailable.task.task.status).label
+      ? mobileTaskSummaryStatus(unavailable.task.task, props.chips)
       : null;
   const generation = task?.row.task.generation ?? unavailable?.task.task.generation;
   return (
@@ -157,6 +172,12 @@ export function MobileTaskHeader(props: {
       {task ? (
         <MobileTaskActions
           task={task}
+          rows={
+            props.task !== undefined || lookup.state !== "known"
+              ? props.rows
+              : lookup.result.codingRows
+          }
+          taskTitle={title}
           environmentId={props.environmentId}
           enabled={props.enabled}
           canUpdate={canUpdate}
@@ -171,6 +192,7 @@ export function MobileTaskHeader(props: {
         <MobileTaskUnavailable
           task={unavailable.task}
           result={unavailable.result}
+          taskTitle={title}
           environmentId={props.environmentId}
           enabled={props.enabled}
           canRetry={props.canRetry}

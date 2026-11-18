@@ -1,3 +1,4 @@
+import * as NodeCrypto from "@effect/platform-node/NodeCrypto";
 import * as NodeServices from "@effect/platform-node/NodeServices";
 import { assert, it } from "@effect/vitest";
 import * as ConfigProvider from "effect/ConfigProvider";
@@ -85,6 +86,7 @@ const provideRefreshManager = (
           secrets,
           Layer.mock(ExternalLauncher.ExternalLauncher)({}),
           NodeServices.layer,
+          NodeCrypto.layer,
         ),
       ),
       Layer.provideMerge(ConfigProvider.layer(ConfigProvider.fromEnv({ env: TEST_ENV }))),

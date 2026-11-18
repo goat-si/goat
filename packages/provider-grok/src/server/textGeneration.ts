@@ -1,7 +1,7 @@
 import * as Deferred from "effect/Deferred";
 import * as FileSystem from "effect/FileSystem";
 import * as Path from "effect/Path";
-import * as Crypto from "effect/Crypto";
+import * as SecureRandom from "effect/crypto/SecureRandom";
 import * as Effect from "effect/Effect";
 import * as Fiber from "effect/Fiber";
 import * as Option from "effect/Option";
@@ -47,7 +47,7 @@ export const makeGrokTextGeneration = Effect.fn("makeGrokTextGeneration")(functi
 ) {
   const fs = yield* FileSystem.FileSystem;
   const path = yield* Path.Path;
-  const crypto = yield* Crypto.Crypto;
+  const random = yield* SecureRandom.SecureRandom;
   const commandSpawner = yield* ChildProcessSpawner.ChildProcessSpawner;
 
   const runGrokSelected = Effect.fn("GrokTextGeneration.runGrokJson")(
@@ -87,7 +87,7 @@ export const makeGrokTextGeneration = Effect.fn("makeGrokTextGeneration")(functi
           : {}),
         clientInfo: { name: "t3-code-git-text", version: "0.0.0" },
       }).pipe(
-        Effect.provideService(Crypto.Crypto, crypto),
+        Effect.provideService(SecureRandom.SecureRandom, random),
         Effect.provideService(ChildProcessSpawner.ChildProcessSpawner, commandSpawner),
       );
 

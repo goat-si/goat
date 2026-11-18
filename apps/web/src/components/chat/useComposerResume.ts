@@ -1,3 +1,4 @@
+import { canResumeThread } from "@goat/client-runtime/state/thread-execution";
 import {
   type EnvironmentId,
   type ProviderInteractionMode,
@@ -27,6 +28,7 @@ interface ComposerResumeInput {
   readonly activeThread: EnvironmentThreadShell | undefined;
   readonly resumableRunId: RunId | null;
   readonly hasHeldQueuedRuns: boolean;
+  readonly projection: Parameters<typeof canResumeThread>[0] | null;
   readonly isSendBusy: boolean;
   readonly isConnecting: boolean;
   readonly isRevertingCheckpoint: boolean;
@@ -60,6 +62,7 @@ export function useComposerResume(input: ComposerResumeInput) {
     activeThread,
     resumableRunId,
     hasHeldQueuedRuns,
+    projection,
     isSendBusy,
     isConnecting,
     isRevertingCheckpoint,
@@ -84,12 +87,14 @@ export function useComposerResume(input: ComposerResumeInput) {
     () => new Set(),
   );
   const isResuming = resumingThreadKeys.has(routeThreadKey);
+  const canResume =
+    projection !== null && canResumeThread(projection, resumableRunId, hasHeldQueuedRuns);
   const { sendInFlight: sendInFlightRef } = draftSendState(routeThreadKey);
 
   const onResume = async () => {
     if (
       !activeThread ||
-      (resumableRunId === null && !hasHeldQueuedRuns) ||
+      !canResume ||
       isSendBusy ||
       isResuming ||
       isConnecting ||
@@ -106,13 +111,11 @@ export function useComposerResume(input: ComposerResumeInput) {
     setThreadError(threadId, null);
     // Commands settle into a result, so this always runs.
     const resume = async () => {
-      if (resumableRunId === null) {
-        return resumeThreadQueue({ environmentId, input: { threadId } });
-      }
       // Read before the first await: the composer follows the route, so after the user switches
       // threads it holds the other thread's model.
       const modelSelection = composerRef.current?.getSendContext().selectedModelSelection;
       const createdAt = new Date().toISOString();
+      // Released queued turns run under the modes the composer shows, as a send does.
       const settingsResult = await persistThreadSettingsForNextTurn({
         threadId,
         createdAt,
@@ -123,6 +126,9 @@ export function useComposerResume(input: ComposerResumeInput) {
         interactionMode,
       });
       if (settingsResult._tag === "Failure") return settingsResult;
+      if (resumableRunId === null) {
+        return resumeThreadQueue({ environmentId, input: { threadId } });
+      }
       const turnResult = await startThreadTurn({
         environmentId,
         input: {
@@ -165,5 +171,5 @@ export function useComposerResume(input: ComposerResumeInput) {
     });
   };
 
-  return { onResume, isResuming };
+  return { onResume, isResuming, canResume };
 }

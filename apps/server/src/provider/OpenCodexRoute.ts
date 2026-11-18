@@ -98,6 +98,24 @@ const codexRouteEnvironment = (
   return { ...environment, OPENAI_BASE_URL: normalizeOpenCodexBaseUrl(settings.opencodexBaseUrl) };
 };
 
+/** The home a Codex process launched from `cwd` runs under; sessions and status checks share it. */
+export const codexExecutionHome = (
+  path: Path.Path,
+  userHome: string,
+  input: {
+    readonly home?: string | undefined;
+    readonly cwd: string;
+    readonly environment: NodeJS.ProcessEnv;
+  },
+) =>
+  path.resolve(
+    input.cwd,
+    expandHomePath(
+      input.home || input.environment.CODEX_HOME || path.join(userHome, ".codex"),
+      userHome,
+    ),
+  );
+
 /** Call after shadow/reception home preparation, using the actual spawn cwd and environment. */
 export const resolveCodexRouteContext = (input: {
   readonly settings: CodexSettings;
@@ -110,13 +128,7 @@ export const resolveCodexRouteContext = (input: {
   Effect.gen(function* () {
     const path = yield* Path.Path;
     const userHome = yield* HostProcess.HomeDirectory;
-    const home = path.resolve(
-      input.cwd,
-      expandHomePath(
-        input.home || input.environment.CODEX_HOME || path.join(userHome, ".codex"),
-        userHome,
-      ),
-    );
+    const home = codexExecutionHome(path, userHome, input);
     const environment = yield* Effect.try({
       try: () => codexRouteEnvironment(input.settings, { ...input.environment, CODEX_HOME: home }),
       catch: (error) => (isUnavailable(error) ? error : unavailable(INVALID_ADDRESS)),

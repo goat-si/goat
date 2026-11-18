@@ -19,6 +19,8 @@ it.each([
   ["github.com:Sample-Tools/goat.git", "Sample-Tools/goat"],
   ["gitlab.com:T3Tools/platform/t3code", "T3Tools/platform/t3code"],
   ["https://github.com/Sample-Tools/goat.git", "Sample-Tools/goat"],
+  ["https://github.com/Sample-Tools/goat.git?view=compact", "Sample-Tools/goat"],
+  ["https://github.com/Sample-Tools/goat.git#section", "Sample-Tools/goat"],
   ["C:/repos/t3code", null],
 ])("reads the repository path of %s", (remoteUrl, expected) => {
   assert.strictEqual(repositoryPathFromRemoteUrl(remoteUrl), expected);

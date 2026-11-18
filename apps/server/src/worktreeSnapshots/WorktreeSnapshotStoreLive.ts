@@ -1,6 +1,6 @@
 import { ThreadId, type WorktreeSnapshot } from "@goat/contracts";
 import * as Clock from "effect/Clock";
-import * as Crypto from "effect/Crypto";
+import * as SecureRandom from "effect/crypto/SecureRandom";
 import * as DateTime from "effect/DateTime";
 import * as Schema from "effect/Schema";
 import * as Effect from "effect/Effect";
@@ -39,7 +39,7 @@ const snapshot = (row: Row): WorktreeSnapshot => ({
 });
 const make = Effect.gen(function* () {
   const sql = yield* SqlClient.SqlClient;
-  const crypto = yield* Crypto.Crypto;
+  const random = yield* SecureRandom.SecureRandom;
   const git = yield* GitVcsDriver.GitVcsDriver;
   const fs = yield* FileSystem.FileSystem;
   const path = yield* Path.Path;
@@ -77,10 +77,8 @@ const make = Effect.gen(function* () {
       const date = DateTime.formatIso(DateTime.makeUnsafe(now))
         .replace(/[-:]/g, "")
         .replace(/\.\d{3}/, "");
-      const random = (yield* crypto.randomUUIDv4().pipe(Effect.orDie))
-        .replace(/-/g, "")
-        .slice(0, 6);
-      const ref = `refs/goat/snapshots/${segment}/${date}-${random}`;
+      const suffix = (yield* random.uuidV4().pipe(Effect.orDie)).replace(/-/g, "").slice(0, 6);
+      const ref = `refs/goat/snapshots/${segment}/${date}-${suffix}`;
       const fail = (cause: unknown) =>
         new WorktreeSnapshotError({
           worktreePath: input.worktreePath,

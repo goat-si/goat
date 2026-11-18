@@ -17,13 +17,16 @@ export function MobileBotRemoteWork(props: {
   }) => void;
   /** Listed but closed, as when the bot's computer is offline. */
   readonly disabled?: boolean;
+  /** Whether it opens, when the caller already knows (Home's shared value for current work). */
+  readonly openable?: boolean;
 }) {
   const { item } = props;
-  const openable = useAtomValue(
+  const reachable = useAtomValue(
     item.environmentId === undefined
       ? NOT_OPENABLE
       : channelEnvironment.remoteWorkOpenable(item.environmentId),
   );
+  const openable = props.openable ?? reachable;
   const target = resolveRemoteBotWork(
     item,
     (environmentId) => environmentId === item.environmentId && openable,

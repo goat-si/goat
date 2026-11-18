@@ -983,8 +983,7 @@ public final class GoatComposerEditorView: ExpoView, UITextViewDelegate, UITextD
       icon: icon,
       // Hold the icon's place while it loads, as Android does, so the label never shifts.
       reservesIcon: token.iconUri?.isEmpty == false,
-      color: color,
-      font: chipFont
+      style: ChipStyle(color: color, font: chipFont)
     )
     let attachment = ComposerTextAttachment(
       source: token.source,
@@ -1001,14 +1000,20 @@ public final class GoatComposerEditorView: ExpoView, UITextViewDelegate, UITextD
     return attributedAttachment
   }
 
+  private struct ChipStyle {
+    let color: UIColor
+    let font: UIFont
+  }
+
   private func renderChip(
     label: String,
     detail: String?,
     icon: UIImage?,
     reservesIcon: Bool,
-    color: UIColor,
-    font: UIFont
+    style: ChipStyle
   ) -> UIImage {
+    let color = style.color
+    let font = style.font
     let paragraph = NSMutableParagraphStyle()
     paragraph.alignment = .left
     paragraph.lineBreakMode = .byTruncatingMiddle

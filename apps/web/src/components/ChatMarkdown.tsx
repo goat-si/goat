@@ -1,3 +1,5 @@
+import { GITHUB_ALERT_PRESENTATIONS } from "./chat/markdownAlertPresentations";
+import { orderedListGutterStyle } from "./chat/orderedListGutterStyle";
 import { buildFileLinkParentSuffixByPath, fileLinkLabel } from "@goat/shared/fileLinks";
 import {
   isWindowsDrivePathHref,
@@ -18,20 +20,13 @@ import {
   CHAT_MARKDOWN_REMARK_PLUGINS,
   CHAT_MARKDOWN_REMARK_PLUGINS_WITH_BREAKS,
   CHAT_MARKDOWN_REHYPE_PLUGINS,
+  remarkAssistantInsights,
 } from "@goat/shared/markdownPipeline";
 import { useAtomValue } from "@effect/atom-react";
 import {
   COMPOSER_CONTEXT_CLIPBOARD_MIME,
   encodeComposerContextClipboardHtml,
 } from "@goat/shared/composerContextClipboard";
-import {
-  InfoIcon,
-  LightbulbIcon,
-  MessageSquareWarningIcon,
-  OctagonAlertIcon,
-  SparklesIcon,
-  TriangleAlertIcon,
-} from "~/components/solar";
 import {
   AssetWorkspaceAssetNotFoundError,
   AuthPreviewOperateScope,
@@ -46,10 +41,7 @@ import {
   isAtomCommandInterrupted,
   squashAtomCommandFailure,
 } from "@goat/client-runtime/state/runtime";
-import {
-  codexArtifactTemplatePresentationLabel,
-  type CodexArtifactTemplate,
-} from "@goat/shared/codexArtifactTemplates";
+import type { CodexArtifactTemplate } from "@goat/shared/codexArtifactTemplates";
 import {
   classifyMarkdownImageSource,
   markdownImageSourceFragment,
@@ -80,10 +72,11 @@ import type {
 import { createIncrementalMarkdownPlugin } from "../markdown-incremental";
 import type { Pluggable, PluggableList } from "unified";
 import { defaultUrlTransform } from "react-markdown";
+import { CodexArtifactTemplateCard } from "./chat/CodexArtifactTemplateCard";
 import { parseAssistantCitationHref } from "@goat/shared/assistantCitations";
 import { parseComposerContextHref } from "@goat/shared/composerContextReferences";
 import { parseThreadLinkHref } from "@goat/shared/threadLinks";
-import { AssistantCitationChip } from "./chat/AssistantCitationChip";
+import { AssistantCitationEmbed } from "./chat/AssistantCitationChip";
 import { MarkdownThreadLink } from "./chat/MarkdownThreadLink";
 import { mathKind } from "@goat/shared/markdownMath";
 import remarkMath from "remark-math";
@@ -109,7 +102,6 @@ import {
   showExternalLinkContextMenu,
 } from "./chat/externalLinkContextMenu";
 import { Tooltip, TooltipPopup, TooltipTrigger } from "./ui/tooltip";
-import { Button } from "./ui/button";
 import { stackedThreadToast, toastManager } from "./ui/toast";
 import { recordVisitForThread } from "../browserHistoryStore";
 import {
@@ -221,9 +213,9 @@ import {
   openMarkdownLinkInSystemBrowser,
   reportMarkdownExternalOpenFailure,
 } from "./chat/markdownSystemBrowserLink";
-import { ARTIFACT_TEMPLATE_ICON_BY_KIND } from "./chat/artifactTemplateIcons";
 const isAssetNotFoundError = Schema.is(AssetWorkspaceAssetNotFoundError);
 interface ChatMarkdownProps {
+  renderInsights?: boolean;
   /** Compact markdown transforms remove blocks before rendering inside a label. */
   inline?: boolean;
   text: string;
@@ -258,101 +250,13 @@ export interface ChatMarkdownContextReference {
   kind: string;
   contextId: string;
   label: string;
+  /** Whether it starts or ends its block, for a reference that renders as a block. */
+  leading?: boolean;
+  trailing?: boolean;
 }
 const EMPTY_MARKDOWN_SKILLS: ReadonlyArray<ServerProviderSkill> = [];
 const EMPTY_REMARK_PLUGINS: NonNullable<ReactMarkdownOptions["remarkPlugins"]> = [];
-function CodexArtifactTemplateCard(props: {
-  readonly template: CodexArtifactTemplate;
-  readonly onUse?: ((template: CodexArtifactTemplate) => void) | undefined;
-}) {
-  const Icon = ARTIFACT_TEMPLATE_ICON_BY_KIND[props.template.artifactKind];
-  const presentationLabel = codexArtifactTemplatePresentationLabel(props.template.artifactKind);
-  return (
-    <div
-      role="group"
-      aria-label={`${props.template.displayName} template`}
-      data-chat-markdown-artifact-template
-      className="my-[0.65rem] flex w-full min-w-0 items-center gap-3 rounded-xl border border-border/70 bg-card/60 px-3 py-2.5 text-foreground shadow-xs"
-      data-artifact-kind={props.template.artifactKind}
-      data-markdown-copy={`${props.template.displayName} (${presentationLabel})\n\n`}
-      data-skill-name={props.template.skillName}
-    >
-      <div className="flex min-w-0 flex-1 items-center gap-3">
-        <span className="relative flex size-9 shrink-0 items-center justify-center rounded-lg border border-border/70 bg-background text-muted-foreground shadow-xs">
-          <Icon aria-hidden className="size-5" />
-          <span className="absolute -right-1 -bottom-1 flex size-4 items-center justify-center rounded-full border border-background bg-primary text-primary-foreground shadow-xs">
-            <SparklesIcon aria-hidden className="size-2.5" />
-          </span>
-        </span>
-        <div className="min-w-0">
-          <div className="truncate text-sm font-medium text-foreground">
-            {props.template.displayName}
-          </div>
-          <div className="text-xs text-muted-foreground">{presentationLabel}</div>
-        </div>
-      </div>
-      {props.onUse ? (
-        <Button
-          data-thread-find-ignore
-          type="button"
-          size="sm"
-          variant="outline"
-          className="shrink-0"
-          onClick={() => props.onUse?.(props.template)}
-        >
-          Use template
-        </Button>
-      ) : null}
-    </div>
-  );
-}
 const WINDOWS_DRIVE_PATH_REGEX = /^[A-Za-z]:[\\/]/;
-function orderedListGutterStyle(
-  itemCount: number,
-  start: unknown,
-): { "--list-gutter": string } | undefined {
-  const parsedStart = Number.parseInt(String(start ?? 1), 10);
-  const firstNumber = Number.isNaN(parsedStart) ? 1 : parsedStart;
-  const lastNumber = firstNumber + Math.max(itemCount - 1, 0);
-  const markerWidth = Math.max(String(firstNumber).length, String(lastNumber).length);
-  if (markerWidth <= 1) return undefined;
-  return { "--list-gutter": `${markerWidth + 2}ch` };
-}
-const GITHUB_ALERT_PRESENTATIONS: Record<
-  string,
-  { label: string; Icon: typeof InfoIcon; borderClassName: string; titleClassName: string }
-> = {
-  note: {
-    label: "Note",
-    Icon: InfoIcon,
-    borderClassName: "border-info/70",
-    titleClassName: "text-info-foreground",
-  },
-  tip: {
-    label: "Tip",
-    Icon: LightbulbIcon,
-    borderClassName: "border-success/70",
-    titleClassName: "text-success-foreground",
-  },
-  important: {
-    label: "Important",
-    Icon: MessageSquareWarningIcon,
-    borderClassName: "border-purple-500/70",
-    titleClassName: "text-purple-600 dark:text-purple-400",
-  },
-  warning: {
-    label: "Warning",
-    Icon: TriangleAlertIcon,
-    borderClassName: "border-warning/70",
-    titleClassName: "text-warning-foreground",
-  },
-  caution: {
-    label: "Caution",
-    Icon: OctagonAlertIcon,
-    borderClassName: "border-destructive/70",
-    titleClassName: "text-destructive-foreground",
-  },
-};
 
 function normalizeMarkdownLinkHrefKey(href: string): string {
   const normalizedHref = normalizeMarkdownLinkDestination(href);
@@ -610,7 +514,7 @@ function useChatMarkdownState({
   const projects = useProjects();
   const [preferredEditor] = usePreferredEditor(availableEditors);
   const preferredEditorMenuLabel = openInEditorMenuLabel(preferredEditor);
-  const openInPreferredEditor = useOpenInPreferredEditor(environmentId, availableEditors);
+  const openInPreferredEditor = useOpenInPreferredEditor(environmentId, availableEditors, cwd);
   const openInEditor = useAtomCommand(shellEnvironment.openInEditor, {
     reportFailure: false,
   });
@@ -824,11 +728,7 @@ function useChatMarkdownState({
         panelPath={panelPath}
         line={fileLinkMeta.line}
         label={fileLinkLabel(
-          {
-            path: fileLinkMeta.filePath,
-            ...(fileLinkMeta.line !== undefined ? { line: fileLinkMeta.line } : {}),
-            ...(fileLinkMeta.column !== undefined ? { column: fileLinkMeta.column } : {}),
-          },
+          { ...fileLinkMeta, path: fileLinkMeta.filePath },
           fileLinkParentSuffixByPath,
         )}
         copyMarkdown={copyMarkdown}
@@ -927,6 +827,15 @@ const ChatMarkdownRendererContext = React.createContext<
 // Isolate streamed source text from the renderer context; only offset-based renderers need it.
 const ChatMarkdownTextContext = React.createContext("");
 
+// A quote card is a block. These say nothing else shares its paragraph or list item on that side.
+const LIST_MARKER = String.raw`(?:[-*+]|\d+[.)])[ \t]+`;
+const CITATION_LEADS_BLOCK = new RegExp(
+  String.raw`(?:(?:^|\n[ \t]*\n)[ \t>]*(?:${LIST_MARKER})?|\n[ \t>]*${LIST_MARKER})$`,
+);
+const CITATION_ENDS_BLOCK = new RegExp(
+  String.raw`^[ \t]*(?:$|\n[ \t]*(?:\n|$)|\n[ \t>]*${LIST_MARKER})`,
+);
+
 function markdownHeadingRenderer(level: 1 | 2 | 3 | 4 | 5 | 6) {
   const Tag = `h${level}` as const;
   return function MarkdownHeading({
@@ -970,19 +879,21 @@ const CHAT_MARKDOWN_COMPONENTS = {
     return <p {...props}>{renderSkillInlineMarkdownChildren(children, skills, threadRef)}</p>;
   },
   blockquote: function MarkdownBlockquote({ node: _node, children, ...props }) {
-    const alert =
-      GITHUB_ALERT_PRESENTATIONS[String((props as Record<string, unknown>)["data-alert"] ?? "")];
+    const alertKind = String((props as Record<string, unknown>)["data-alert"] ?? "");
+    const alert = GITHUB_ALERT_PRESENTATIONS[alertKind];
     if (!alert) {
       return <blockquote {...props}>{children}</blockquote>;
     }
     return (
       <div
         role="note"
+        data-markdown-alert={alertKind}
         dir={props.dir}
         className={cn("my-1 border-s-2 ps-3", alert.borderClassName)}
       >
         <p
           data-thread-find-ignore="true"
+          data-markdown-alert-label=""
           className={cn("flex items-center gap-1.5 font-medium", alert.titleClassName)}
         >
           <alert.Icon aria-hidden className="size-3.5 shrink-0" />
@@ -993,10 +904,11 @@ const CHAT_MARKDOWN_COMPONENTS = {
     );
   },
   ol: function MarkdownOrderedList({ node, start, style, ...props }) {
-    const itemCount =
-      node?.children?.filter((child) => child.type === "element" && child.tagName === "li")
-        .length ?? 0;
-    const gutterStyle = orderedListGutterStyle(itemCount, start);
+    const itemValues =
+      node?.children?.flatMap((child) =>
+        child.type === "element" && child.tagName === "li" ? [child.properties.value] : [],
+      ) ?? [];
+    const gutterStyle = orderedListGutterStyle(itemValues, start);
     return (
       <ol {...props} start={start} style={gutterStyle ? { ...style, ...gutterStyle } : style} />
     );
@@ -1066,7 +978,13 @@ const CHAT_MARKDOWN_COMPONENTS = {
     } = use(ChatMarkdownRendererContext);
     const text = use(ChatMarkdownTextContext);
     const citation = href ? parseAssistantCitationHref(href) : null;
-    if (citation) return <AssistantCitationChip citation={citation} />;
+    const before = node?.position?.start.offset;
+    const after = node?.position?.end.offset;
+    const leading = before !== undefined && CITATION_LEADS_BLOCK.test(text.slice(0, before));
+    const trailing = after !== undefined && CITATION_ENDS_BLOCK.test(text.slice(after));
+    if (citation) {
+      return <AssistantCitationEmbed citation={citation} leading={leading} trailing={trailing} />;
+    }
     const linkedThreadId = href ? parseThreadLinkHref(href) : null;
     if (linkedThreadId) {
       const label = hastPlainTextDeep(node) || linkedThreadId;
@@ -1080,7 +998,7 @@ const CHAT_MARKDOWN_COMPONENTS = {
     if (contextReference) {
       const label = hastPlainTextDeep(node) || contextReference.contextId;
       return renderContextReference ? (
-        renderContextReference({ ...contextReference, label })
+        renderContextReference({ ...contextReference, label, leading, trailing })
       ) : (
         <span>{label}</span>
       );
@@ -1613,6 +1531,8 @@ const CHAT_MARKDOWN_REMARK_PLUGIN_SETS = {
 const combinedPlugins = new WeakMap<PluggableList, WeakMap<PluggableList, PluggableList>>();
 
 // One combined list per pair, so a stable extra list shares a renderer and its parse cache.
+const INSIGHT_REMARK_PLUGINS: PluggableList = [remarkAssistantInsights];
+
 function withExtraPlugins(shared: PluggableList, extra: PluggableList): PluggableList {
   if (extra.length === 0) return shared;
   let byShared = combinedPlugins.get(extra);
@@ -1671,10 +1591,12 @@ function ChatMarkdown({
   lineBreaks = false,
   parseRawHtml = true,
   extraRemarkPlugins = EMPTY_REMARK_PLUGINS,
+  renderInsights = false,
   ...props
 }: ChatMarkdownProps) {
   const { componentState, handleCopy, markdownRef, localMediaPreview, closeLocalMediaPreview } =
     useChatMarkdownState({ text, inline, ...props });
+  const hasInsights = renderInsights && text.includes("★ Insight");
   // Streaming re-renders only the last block; offsets for task edits need the whole text.
   const streamingBlocks =
     props.isStreaming === true &&
@@ -1685,6 +1607,7 @@ function ChatMarkdown({
       : null;
   const incrementalParsing =
     props.isStreaming === true &&
+    !hasInsights &&
     streamingBlocks === null &&
     extraRemarkPlugins.length === 0 &&
     /(?:^|\n) {0,3}(?:`{3}|~{3})/.test(text);
@@ -1706,7 +1629,12 @@ function ChatMarkdown({
   const uncachedPlugins = incrementalParsing;
   const remarkPlugins = incrementalParsing
     ? [...sharedRemarkPlugins, ...extraRemarkPlugins, createIncrementalMarkdownPlugin()]
-    : withExtraPlugins(sharedRemarkPlugins, extraRemarkPlugins);
+    : withExtraPlugins(
+        hasInsights
+          ? withExtraPlugins(INSIGHT_REMARK_PLUGINS, sharedRemarkPlugins)
+          : sharedRemarkPlugins,
+        extraRemarkPlugins,
+      );
   const blocks = streamingBlocks ?? [text];
 
   return (

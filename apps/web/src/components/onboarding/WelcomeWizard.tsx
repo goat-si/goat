@@ -899,7 +899,7 @@ function ConnectedAgentsStep({
   );
 }
 
-function OnboardingCodexSetup({
+export function OnboardingCodexSetup({
   createdAccount,
   onAutoStartConsumed,
   environmentId,
@@ -958,6 +958,14 @@ function OnboardingCodexSetup({
           },
         }),
       },
+    }).then((result) => {
+      if (result._tag !== "Failure" || isAtomCommandInterrupted(result)) return;
+      const error = squashAtomCommandFailure(result);
+      toastManager.add({
+        type: "error",
+        title: "Could not change Codex setup",
+        description: error instanceof Error ? error.message : String(error),
+      });
     });
   };
   return existingChosen ? (

@@ -69,6 +69,8 @@ it("publishes immediately, rolls back with one failure toast and supports retry"
   expect(button.textContent).toBe("unwrapped");
   expect(result).toBeUndefined();
   expect(mocks.toast).not.toHaveBeenCalled();
+  // The write starts once the cross-tab settings lock is granted, a task after the click.
+  await vi.waitFor(() => expect(mocks.setClientSettings).toHaveBeenCalledOnce());
   await act(async () => {
     rejectWrite(new Error("disk full"));
     await save;

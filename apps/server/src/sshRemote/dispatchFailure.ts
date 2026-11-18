@@ -1,6 +1,7 @@
 import type { SshDispatchFailureReason } from "@goat/contracts";
 import type * as NetService from "@goat/shared/Net";
-import type * as Crypto from "effect/Crypto";
+import type * as Digest from "effect/crypto/Digest";
+import type * as SecureRandom from "effect/crypto/SecureRandom";
 import * as Data from "effect/Data";
 import type * as FileSystem from "effect/FileSystem";
 import type * as Path from "effect/Path";
@@ -15,6 +16,8 @@ export class SshRemoteDispatchError extends Data.TaggedError("SshRemoteDispatchE
    */
   readonly reason: SshDispatchFailureReason;
   readonly message: string;
+  /** True only when the remote replied to this tool call. */
+  readonly hostAnswered?: boolean | undefined;
   readonly remoteCode?: string | undefined;
   readonly launchMayHaveStarted?: boolean | undefined;
   /** Arguments a remote refused goat_thread_launch for before creating anything; nothing ran. */
@@ -84,6 +87,11 @@ export const rpcLaunchFacts = (
   return tool === "goat_thread_launch" ? { launchMayHaveStarted: true } : {};
 };
 
+export const answeredToolFailure = (error: {
+  readonly kind: string;
+  readonly stage?: string | undefined;
+}) => (error.kind === "rpc" && error.stage !== "initialize" ? { hostAnswered: true } : {});
+
 export const failure = (reason: SshRemoteDispatchError["reason"], message: string, facts = {}) =>
   new SshRemoteDispatchError({ reason, message, ...facts });
 
@@ -98,7 +106,8 @@ export const describe = (error: unknown): string => {
 /** The platform services every SSH operation runs with. */
 export type RuntimeServices =
   | ChildProcessSpawner.ChildProcessSpawner
-  | Crypto.Crypto
+  | Digest.Digest
+  | SecureRandom.SecureRandom
   | FileSystem.FileSystem
   | Path.Path
   | HttpClient.HttpClient

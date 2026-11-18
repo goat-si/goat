@@ -20,13 +20,15 @@ import { SSH_DISPATCH_SESSION_LABEL } from "./mcpClientSubject.ts";
 import { encodeOAuthScope } from "@goat/shared/oauthScope";
 import * as Clock from "effect/Clock";
 import * as Context from "effect/Context";
-import * as Crypto from "effect/Crypto";
+import * as Digest from "effect/crypto/Digest";
+import * as SecureRandom from "effect/crypto/SecureRandom";
 import * as Effect from "effect/Effect";
 import * as Layer from "effect/Layer";
 import * as Option from "effect/Option";
 import * as Redacted from "effect/Redacted";
 import * as Ref from "effect/Ref";
 import * as Schema from "effect/Schema";
+import * as Scope from "effect/Scope";
 import { HttpServerRequest } from "effect/http";
 
 import * as ServerEnvironment from "../environment/ServerEnvironment.ts";
@@ -41,6 +43,7 @@ import {
   deriveAuthClientMetadata,
   timingSafeEqualBase64Url,
 } from "./utils.ts";
+import { requestUrl } from "../requestUrl.ts";
 
 // Request-derived origins support loopback, Tailscale and tunnels.
 // Signed client metadata keeps unauthenticated registration stateless.
@@ -69,7 +72,7 @@ export interface McpOAuthUrls {
 }
 
 export const requestUrls = (request: HttpServerRequest.HttpServerRequest): McpOAuthUrls => {
-  const origin = Option.match(HttpServerRequest.toURL(request), {
+  const origin = Option.match(requestUrl(request), {
     onNone: () => "http://localhost",
     onSome: (url) => url.origin,
   });
@@ -249,7 +252,8 @@ export const redirectForError = (error: McpOAuthRedirectError, issuer: string) =
 const make = Effect.gen(function* () {
   const environmentAuth = yield* EnvironmentAuth.EnvironmentAuth;
   const secretStore = yield* ServerSecretStore.ServerSecretStore;
-  const crypto = yield* Crypto.Crypto;
+  const random = yield* SecureRandom.SecureRandom;
+  const digester = yield* Digest.Digest;
   const signingKey = yield* secretStore
     .getOrCreateRandom(SIGNING_SECRET_NAME, 32)
     .pipe(Effect.orDie);
@@ -282,7 +286,7 @@ const make = Effect.gen(function* () {
 
   const pkceVerifies = (verifier: string, challenge: string) =>
     CODE_VERIFIER_PATTERN.test(verifier)
-      ? crypto.digest("SHA-256", new TextEncoder().encode(verifier)).pipe(
+      ? digester.digest(Digest.sha256, new TextEncoder().encode(verifier)).pipe(
           Effect.orDie,
           Effect.map((digest) => timingSafeEqualBase64Url(base64UrlEncode(digest), challenge)),
         )
@@ -397,9 +401,7 @@ const make = Effect.gen(function* () {
     workspaceTerminalScopes: ReadonlyArray<AuthMcpWorkspaceTerminalScope>,
   ) {
     const now = yield* Clock.currentTimeMillis;
-    const code = Buffer.from(yield* crypto.randomBytes(32).pipe(Effect.orDie)).toString(
-      "base64url",
-    );
+    const code = Buffer.from(yield* random.randomBytes(32)).toString("base64url");
     yield* Ref.update(codes, (current) => {
       const next = new Map(Array.from(current).filter(([, pending]) => pending.expiresAtMs > now));
       next.set(code, {
@@ -575,7 +577,14 @@ export const layerMcpClientAuthenticator = Layer.effect(
     return McpHttpServer.McpClientAuthenticator.of({
       authenticate: Effect.fn("McpHttpServer.McpClientAuthenticator.authenticate")(
         function (request) {
-          return environmentAuth.authenticateMcpClient(request).pipe(
+          // The admission lives until this request ends; every HTTP request runs in its own scope.
+          return Effect.flatMap(Effect.serviceOption(Scope.Scope), (scope) =>
+            Option.isSome(scope)
+              ? environmentAuth
+                  .authenticateMcpClient(request)
+                  .pipe(Effect.provideService(Scope.Scope, scope.value))
+              : Effect.die(new Error("MCP client authentication must run in its request's scope.")),
+          ).pipe(
             Effect.flatMap((client) =>
               Clock.currentTimeMillis.pipe(
                 Effect.map((issuedAt): McpInvocationContext.McpInvocationScope => ({
@@ -584,6 +593,7 @@ export const layerMcpClientAuthenticator = Layer.effect(
                     ? {}
                     : { grantedScopes: client.grantedScopes }),
                   ...(client.reauthorize === undefined ? {} : { reauthorize: client.reauthorize }),
+                  ...(client.sessionEnd === undefined ? {} : { sessionEnd: client.sessionEnd }),
                   ...(client.childSetupPurpose === undefined
                     ? {}
                     : { childSetupPurpose: client.childSetupPurpose }),

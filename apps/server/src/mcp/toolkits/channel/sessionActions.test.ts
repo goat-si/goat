@@ -230,7 +230,9 @@ it.effect(
       );
       yield* sql`UPDATE channel_tasks SET owner_id = ${source.requester.ownerId}, task_json = json_set(task_json, '$.conversationId', 'foreign') WHERE task_id = ${target.taskId}`;
       assert.strictEqual(
-        (yield* Effect.flip(actions.stop({ caller, taskId: target.taskId }))).reason,
+        (yield* Effect.flip(
+          actions.followUp({ caller, taskId: target.taskId, text: "more", clientRequestId: "x" }),
+        )).reason,
         "not_found",
       );
       yield* sql`UPDATE channel_tasks SET task_json = json_set(task_json, '$.conversationId', ${source.conversationId}) WHERE task_id = ${target.taskId}`;
@@ -368,3 +370,25 @@ it.effect("a session stops a task it names without the channel-task: prefix", ()
     assert.strictEqual((yield* current(target.taskId)).status, "cancelled");
   }).pipe(Effect.provide(harness.layer));
 });
+
+it.effect(
+  "a session stops a waiting task its person can see in another conversation, as asking would",
+  () => {
+    const harness = sessionHarness();
+    return Effect.gen(function* () {
+      yield* setupBot;
+      const source = yield* ask("look: source", "cross-stop-source");
+      const other = yield* ask("look: other", "cross-stop-other");
+      const threadId = source.worker!.threadId;
+      const caller = { threadId, runId: runsOf(harness, threadId)[0]!.id };
+      const sql = yield* SqlClient.SqlClient;
+      // Needs you lists the owner's waiting work from every conversation, Slack threads included.
+      yield* sql`UPDATE channel_tasks SET task_json = json_set(task_json, '$.conversationId', 'channel-conversation:slack-thread') WHERE task_id = ${other.taskId}`;
+      const actions = yield* ChannelSessionTaskActions.ChannelSessionTaskActions;
+      const stopped = yield* actions.stop({ caller, taskId: other.taskId });
+      assert.strictEqual(stopped?.type, "task.cancelled");
+      assert.strictEqual((yield* current(other.taskId)).status, "cancelled");
+      assert.notStrictEqual((yield* current(source.taskId)).status, "cancelled");
+    }).pipe(Effect.provide(harness.layer));
+  },
+);

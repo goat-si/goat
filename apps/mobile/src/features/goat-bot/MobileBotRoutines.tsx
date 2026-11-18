@@ -1,5 +1,5 @@
 import { useAtomValue } from "@effect/atom-react";
-import type { BotRoutineRow } from "@goat/client-runtime/scheduledTasks";
+import { botRoutineRows, type BotRoutineRow } from "@goat/client-runtime/scheduledTasks";
 import {
   isAtomCommandInterrupted,
   runAtomCommand,
@@ -10,14 +10,13 @@ import { useState } from "react";
 import { Pressable, Text, View } from "react-native";
 
 import { ThemedSwitch } from "../../components/ui/ThemedSwitch";
+import { useNowMinuteMs } from "../../lib/clock";
 import { appAtomRegistry } from "../../state/atom-registry";
 import { serverEnvironment } from "../../state/server";
 import { MobileBotCheckInForm } from "./MobileBotCheckInForm";
 import type { MobileCheckInDraft, MobileCheckInDraftUpdate } from "./mobileCheckInDraft";
 import { MobileBotPanelEmpty } from "./MobileBotPanelEmpty";
-
-/** What New routine puts in the message box: the person finishes the sentence. */
-export const GOAT_BOT_NEW_ROUTINE_DRAFT = "Set up a routine: ";
+import { MobileRoutineRunStrip } from "./MobileRoutineRunStrip";
 
 /** The bot's routines on its home: the check-in form, then each bound routine with its switch. */
 export function MobileBotRoutines(props: {
@@ -28,7 +27,6 @@ export function MobileBotRoutines(props: {
   readonly tasks: ReadonlyArray<ScheduledTask> | null;
   readonly error: boolean;
   readonly onRetry: () => void;
-  readonly rows: ReadonlyArray<BotRoutineRow>;
   readonly showAll: boolean;
   readonly onShowAllChange: (showAll: boolean) => void;
   /** A routine the home opened on; its row reports where it sits so the list can scroll to it. */
@@ -41,6 +39,10 @@ export function MobileBotRoutines(props: {
   readonly onCheckInDraftChange: MobileCheckInDraftUpdate;
 }) {
   const { environmentId, botName } = props;
+  // The card keeps its own clock for "Next run in …", so a minute re-renders it alone, not Home.
+  const now = useNowMinuteMs();
+  const rows =
+    props.tasks && props.botThreadId ? botRoutineRows(props.tasks, props.botThreadId, now) : [];
   // Asking the bot for a routine needs no list, so the entry point never waits on it.
   const newRoutine = props.onNewRoutine ? (
     <Pressable
@@ -77,12 +79,14 @@ export function MobileBotRoutines(props: {
         </Pressable>
       ) : !props.tasks ? (
         <Text className="text-foreground-muted">Loading routines…</Text>
-      ) : props.rows.length && environmentId ? (
-        (props.showAll ? props.rows : props.rows.slice(0, 5)).map((routine) => (
+      ) : rows.length && environmentId ? (
+        (props.showAll ? rows : rows.slice(0, 5)).map((routine) => (
           <MobileRoutineRow
             key={routine.id}
             environmentId={environmentId}
             row={routine}
+            task={props.tasks?.find((task) => task.id === routine.id)}
+            botName={botName}
             onLayout={
               routine.id === props.focusRoutineId && props.onFocusedRowLayout
                 ? (y) => props.onFocusedRowLayout?.(y)
@@ -100,7 +104,7 @@ export function MobileBotRoutines(props: {
           }
         />
       )}
-      {props.rows.length > 5 ? (
+      {rows.length > 5 ? (
         <Pressable
           accessibilityRole="button"
           onPress={() => props.onShowAllChange(!props.showAll)}
@@ -116,6 +120,9 @@ export function MobileBotRoutines(props: {
 function MobileRoutineRow(props: {
   readonly environmentId: EnvironmentId;
   readonly row: BotRoutineRow;
+  /** The routine as listed, whose recent runs draw under its first line. */
+  readonly task: ScheduledTask | undefined;
+  readonly botName: string;
   readonly onLayout?: ((y: number) => void) | undefined;
 }) {
   const { environmentId, row } = props;
@@ -191,6 +198,14 @@ function MobileRoutineRow(props: {
           onValueChange={(enabled) => void toggle(enabled)}
         />
       </View>
+      {props.task ? (
+        <MobileRoutineRunStrip
+          environmentId={environmentId}
+          task={props.task}
+          title={row.title}
+          botName={props.botName}
+        />
+      ) : null}
       {expanded ? <Text className="text-foreground-muted">{row.prompt}</Text> : null}
       {row.lastFailed && canRunNow ? (
         <Pressable

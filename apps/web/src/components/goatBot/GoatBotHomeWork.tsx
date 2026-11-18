@@ -2,25 +2,31 @@ import { useAtomValue } from "@effect/atom-react";
 import {
   accessDenied,
   botHomeWork,
+  botTaskWait,
   COLLAPSED_FINISHED,
+  goatBotRowTime,
   presentTaskStatus,
   type BotWorkTask,
+  type HomeCurrentOpenableLink,
 } from "@goat/client-runtime/goatBot";
+import { BotId } from "@goat/contracts";
 import type {
   BotRemoteWork,
   BotThreadRow,
   ChannelTaskId,
+  ChannelTaskChip,
   ChannelUpdateTaskViewInput,
   EnvironmentId,
   ThreadId,
 } from "@goat/contracts";
 import { type ReactNode, useLayoutEffect, useRef, useState } from "react";
-import { Link, useNavigate } from "@tanstack/react-router";
+import { Link, useNavigate, useRouter } from "@tanstack/react-router";
 import { holdNavigation } from "~/lib/navigationHolds";
 import { cn } from "~/lib/utils";
 import { readLocalApi } from "~/localApi";
 import { channelEnvironment } from "~/state/channels";
 import { useAtomCommand } from "~/state/use-atom-command";
+import { useNowMinute } from "~/hooks/useNowMinute";
 import {
   BookmarkIcon,
   CheckIcon,
@@ -31,6 +37,8 @@ import {
 import { Button } from "../ui/button";
 import { goatBotSearch, useGoatBotMember } from "./goatBotMemberContext";
 import { GoatBotCardSkeleton, GoatBotShowMoreRow } from "./GoatBotSectionCard";
+import { rememberHomeOrigin } from "./goatBotHomeRequest";
+import { GoatBotPullRequestChips } from "./GoatBotPullRequestChips";
 import { GoatBotWorkDetails } from "./GoatBotWorkDetails";
 
 type TaskRow = Extract<BotThreadRow, { kind: "task" }>;
@@ -46,6 +54,7 @@ export type HomeHistory = {
 };
 
 const NO_REMOTE: ReadonlyArray<BotRemoteWork> = [];
+const NO_CHIPS: ReadonlyMap<ChannelTaskId, ChannelTaskChip> = new Map();
 
 const MARK = {
   running: "bg-info",
@@ -63,6 +72,7 @@ export function GoatBotHomeWork({
   botName,
   rows,
   remoteWork = NO_REMOTE,
+  chips = NO_CHIPS,
   loaded,
   failed,
   failure = null,
@@ -75,6 +85,7 @@ export function GoatBotHomeWork({
   onShowAllChange,
   focusTaskId = null,
   focusRef,
+  returnTaskId = null,
   notice = null,
   history,
 }: {
@@ -84,6 +95,8 @@ export function GoatBotHomeWork({
   readonly botName: string;
   readonly rows: ReadonlyArray<BotThreadRow>;
   readonly remoteWork?: ReadonlyArray<BotRemoteWork> | undefined;
+  /** Each task's newest chip in the conversation, which says what its worker asks the person. */
+  readonly chips?: ReadonlyMap<ChannelTaskId, ChannelTaskChip> | undefined;
   readonly loaded: boolean;
   readonly failed: boolean;
   /** Why the read failed; an authorization refusal gets no Retry. */
@@ -102,13 +115,22 @@ export function GoatBotHomeWork({
   /** The row Back returns to; it takes focus when it shows again. */
   readonly focusTaskId?: ChannelTaskId | null | undefined;
   readonly focusRef?: ((element: HTMLElement | null) => void) | undefined;
+  readonly returnTaskId?: ChannelTaskId | null | undefined;
   /** The bot's own turn waiting in the chat, which no task row lists. */
   readonly notice?: ReactNode;
   /** The bot's older work; rows missing from currentTaskIds came from this walk. */
   readonly history?: HomeHistory | undefined;
 }) {
+  const member = useGoatBotMember();
+  const current = useAtomValue(
+    channelEnvironment.homeCurrentOpenableWorkAtom([
+      environmentId,
+      member?.botId ?? BotId.make("main"),
+    ]),
+  );
+  const currentLinks = current.eligible && current.list === "ready" ? current.links : null;
   const historyAvailable = history?.hasMore === true;
-  const work = botHomeWork(rows, [], environmentId, remoteWork);
+  const work = botHomeWork(rows, [], environmentId, remoteWork, chips);
   const empty = work.running.length + work.waiting.length + work.finished.length === 0;
   const denied = failed && accessDenied(failure);
   const hidden = work.finished.length - COLLAPSED_FINISHED;
@@ -120,6 +142,16 @@ export function GoatBotHomeWork({
   const showMore = historyAvailable || hidden > 0;
   // oxlint-disable-next-line goat/react-effect-budget -- Preserve focus when history removes its continuation button.
   useLayoutEffect(() => {
+    if (
+      returnTaskId !== null &&
+      focusTaskId === returnTaskId &&
+      loaded &&
+      !failed &&
+      !rows.some((row) => row.kind === "task" && row.task.taskId === returnTaskId)
+    ) {
+      const heading = containerRef.current?.closest("section")?.querySelector<HTMLElement>("h3");
+      if (heading) focusRef?.(heading);
+    }
     if (showMore || pendingFocus.current === null) return;
     if (document.activeElement === document.body) {
       const added = [...work.running, ...work.waiting, ...finished].find(
@@ -135,19 +167,36 @@ export function GoatBotHomeWork({
       key={task.row.task.taskId}
       task={task}
       mark={mark}
+      wait={botTaskWait(task.row, chips.get(task.row.task.taskId))}
+      returned={task.row.task.taskId === returnTaskId}
       rows={rows}
       remoteWork={remoteWork}
       environmentId={environmentId}
       onOpenTask={onOpenTask}
       onRefresh={onRetry}
       older={history?.supported === true && !history.currentTaskIds.has(task.row.task.taskId)}
+      currentRemoteIds={
+        currentLinks === null
+          ? null
+          : ([...current.work.running, ...current.work.waiting, ...current.work.finished]
+              .find((entry) => entry.row.task.taskId === task.row.task.taskId)
+              ?.remote.map((item) => item.childWorkId) ?? [])
+      }
+      currentLinks={
+        history?.supported === true && !history.currentTaskIds.has(task.row.task.taskId)
+          ? null
+          : currentLinks
+      }
       peekable={peekable}
       focusRef={(element) => {
         if (element) rowRefs.current.set(task.row.task.taskId, element);
         else rowRefs.current.delete(task.row.task.taskId);
         if (task.row.task.taskId === focusTaskId) focusRef?.(element);
       }}
-      launchesTruncated={history?.launchesTruncated.has(task.row.task.taskId) === true}
+      launchesTruncated={
+        history?.launchesTruncated.has(task.row.task.taskId) === true &&
+        !(current.eligible && history.currentTaskIds.has(task.row.task.taskId))
+      }
     />
   );
   return (
@@ -208,7 +257,11 @@ export function GoatBotHomeWork({
           expanded={showAll}
           label={historyAvailable ? "Show more" : undefined}
           onToggle={() => {
-            if (history?.loading) return;
+            if (history?.loading) {
+              // A governed Home's links hide threads, so its held rows never wait on a server read.
+              if (current.eligible && hidden > 0 && !showAll) onShowAllChange(true);
+              return;
+            }
             if (historyAvailable) {
               if (document.activeElement === showMoreRef.current)
                 pendingFocus.current = new Set(
@@ -237,6 +290,8 @@ function MarkIcon({ mark }: { readonly mark: Mark }) {
 function WorkRow({
   task,
   mark,
+  wait,
+  returned,
   rows,
   remoteWork,
   environmentId,
@@ -246,9 +301,14 @@ function WorkRow({
   focusRef,
   launchesTruncated,
   older,
+  currentLinks,
+  currentRemoteIds,
 }: {
   readonly task: BotWorkTask;
   readonly mark: Mark;
+  /** What the task waits on the person for, which its row says instead of its status. */
+  readonly wait: string | null;
+  readonly returned: boolean;
   readonly rows: ReadonlyArray<BotThreadRow>;
   readonly remoteWork: ReadonlyArray<BotRemoteWork>;
   readonly environmentId: EnvironmentId;
@@ -258,15 +318,29 @@ function WorkRow({
   readonly focusRef?: ((element: HTMLElement | null) => void) | undefined;
   readonly launchesTruncated: boolean;
   readonly older: boolean;
+  readonly currentLinks: ReadonlyArray<HomeCurrentOpenableLink> | null;
+  readonly currentRemoteIds: ReadonlyArray<string> | null;
 }) {
   const row = task.row;
   const title = row.task.title;
   const member = useGoatBotMember();
   const navigate = useNavigate();
+  const router = useRouter();
+  const remember = (event: React.MouseEvent) => {
+    if (
+      !event.defaultPrevented &&
+      event.button === 0 &&
+      !event.metaKey &&
+      !event.ctrlKey &&
+      !event.shiftKey &&
+      !event.altKey
+    )
+      rememberHomeOrigin(router, environmentId, member?.botId ?? null, row.task.taskId);
+  };
   const update = useAtomCommand(channelEnvironment.updateTaskView);
   const canUpdate = useAtomValue(channelEnvironment.updateTaskView.permissionAtom(environmentId));
   const [expanded, setExpanded] = useState(false);
-  const status = presentTaskStatus(row.task.status, row.view.doneAt);
+  const status = wait ?? presentTaskStatus(row.task.status, row.view.doneAt).label;
   async function menu(position: { readonly x: number; readonly y: number }) {
     const api = readLocalApi();
     if (api == null) return;
@@ -322,7 +396,10 @@ function WorkRow({
     if (result._tag === "Success") onRefresh();
   }
   return (
-    <div className="border-t border-border/50 first:border-t-0">
+    <div
+      data-home-return={returned || undefined}
+      className={cn("border-t border-border/50 first:border-t-0", returned && "bg-accent/40")}
+    >
       <div className="flex min-h-11 items-center gap-2 px-3">
         <span aria-hidden className="flex size-4 shrink-0 items-center justify-center">
           <MarkIcon mark={mark} />
@@ -334,20 +411,25 @@ function WorkRow({
             onClick={() => onOpenTask(row)}
             className="flex min-w-0 flex-1 items-center gap-2 rounded-sm py-1.5 text-start outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-inset"
           >
-            <WorkRowText title={title} status={status.label} unread={row.unread} />
+            <WorkRowText row={row} title={title} status={status} returned={returned} />
           </button>
         ) : (
           <Link
             to="/bot"
+            onClick={remember}
             ref={focusRef}
             search={{ task: row.task.taskId, taskTitle: title, ...goatBotSearch(member) }}
             className="flex min-w-0 flex-1 items-center gap-2 rounded-sm py-1.5 text-start outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-inset"
           >
-            <WorkRowText title={title} status={status.label} unread={row.unread} />
+            <WorkRowText row={row} title={title} status={status} returned={returned} />
           </Link>
         )}
         {row.view.pinnedAt !== null && (
-          <BookmarkIcon aria-hidden className="size-3.5 shrink-0 text-muted-foreground" />
+          <BookmarkIcon
+            data-work-pin
+            aria-hidden
+            className="size-3.5 shrink-0 text-muted-foreground"
+          />
         )}
         <Button
           variant="ghost"
@@ -374,6 +456,9 @@ function WorkRow({
             taskId={row.task.taskId}
             rows={rows}
             remoteWork={remoteWork}
+            currentLinks={currentLinks?.filter((link) => link.taskId === row.task.taskId) ?? null}
+            currentRemoteIds={older ? null : currentRemoteIds}
+            onHomeNavigate={remember}
           />
         </div>
       )}
@@ -381,34 +466,57 @@ function WorkRow({
   );
 }
 
-/** A row's title and status, then the chevron that says the row opens. */
+/** A row's title, status and last activity, its pull requests, then the chevron that says it opens. */
 function WorkRowText({
+  row,
   title,
   status,
-  unread,
+  returned,
 }: {
+  readonly row: TaskRow;
   readonly title: string;
   readonly status: string;
-  readonly unread: boolean;
+  readonly returned: boolean;
 }) {
   return (
     <>
       <span className="min-w-0 flex-1">
         <span className="block truncate">{title}</span>
-        <span className="block truncate text-xs text-muted-foreground">{status}</span>
+        <span className="flex min-w-0 gap-1 text-xs text-muted-foreground">
+          <span className="truncate">{status}</span>
+          <span aria-hidden>·</span>
+          <span className="shrink-0">
+            <WorkRowTime timestamp={row.lastActivityAt} />
+          </span>
+        </span>
+        <GoatBotPullRequestChips row={row} />
       </span>
-      {unread ? (
+      {row.unread ? (
         <>
           <span aria-hidden className="size-2 shrink-0 rounded-full bg-info" />
           {/* The open control says it, so a person tabbing through hears it with the title. */}
           <span className="sr-only">Unread</span>
         </>
       ) : null}
+      {/* The returned row's highlight, said to a screen reader on the control it focuses. */}
+      {returned ? <span className="sr-only">Where you left off</span> : null}
       <ChevronRightIcon
         data-work-chevron
         aria-hidden
         className="size-4 shrink-0 text-muted-foreground"
       />
+    </>
+  );
+}
+/** The row's last activity, compact on screen and in words to a screen reader; only it ticks. */
+function WorkRowTime({ timestamp }: { readonly timestamp: string }) {
+  const nowMinute = useNowMinute();
+  const time = goatBotRowTime(timestamp, Date.parse(`${nowMinute}:00.000Z`));
+  if (time === null) return null;
+  return (
+    <>
+      <span aria-hidden>{time.text}</span>
+      <span className="sr-only">{time.spoken}</span>
     </>
   );
 }

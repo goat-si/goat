@@ -8,7 +8,7 @@ import * as Layer from "effect/Layer";
 import * as Redacted from "effect/Redacted";
 import * as TestClock from "effect/testing/TestClock";
 import * as Base64Url from "effect/encoding/Base64Url";
-import * as Crypto from "effect/Crypto";
+import * as Digest from "effect/crypto/Digest";
 import * as RelayConfiguration from "../Config.ts";
 import * as DpopProofs from "./DpopProofs.ts";
 import * as CliLinkApprovals from "./CliLinkApprovals.ts";
@@ -75,10 +75,10 @@ function layer() {
 const fixture = Effect.gen(function* () {
   yield* TestClock.setTime(NOW * 1000);
   const service = yield* CliLinkApprovals.CliLinkApprovals;
-  const crypto = yield* Crypto.Crypto;
+  const crypto = yield* Digest.Digest;
   const verifier = "v".repeat(43);
   const approvalChallenge = Base64Url.encode(
-    yield* crypto.digest("SHA-256", new TextEncoder().encode(verifier)),
+    yield* crypto.digest(Digest.sha256, new TextEncoder().encode(verifier)),
   );
   const issued = yield* service.issue(
     { intent, cliKeyThumbprint: "cli-key", approvalChallenge, state: "approval-state" },

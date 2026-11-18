@@ -52,6 +52,7 @@ vi.mock("./sdk.ts", () => ({
     createAgentPlatform: async () => ({ prewarmLocalWorkspace: async () => async () => {} }),
   }),
   loadCursorSqlite: () => ({ SqliteLocalAgentStore: { open: vi.fn() } }),
+  isCursorSdkError: () => false,
 }));
 const decodeCursorSettings = Schema.decodeEffect(CursorSettings);
 

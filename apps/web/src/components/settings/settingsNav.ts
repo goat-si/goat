@@ -1,3 +1,5 @@
+import { msg } from "gt-react";
+
 import type { SettingsPath } from "./settingsSearch";
 
 export interface SettingsNavGroup {
@@ -18,7 +20,7 @@ export const SETTINGS_NAV_GROUPS: ReadonlyArray<SettingsNavGroup> = [
     ],
   },
   {
-    label: "Agents",
+    label: msg("Agents"),
     paths: [
       "/settings/providers",
       "/settings/memory",

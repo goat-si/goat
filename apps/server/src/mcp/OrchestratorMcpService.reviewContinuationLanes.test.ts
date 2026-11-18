@@ -1,6 +1,13 @@
 import { assert, it } from "@effect/vitest";
-import { CommandId, type OrchestrationV2Run } from "@goat/contracts";
+import {
+  CommandId,
+  type OrchestrationV2Run,
+  type OrchestratorMcpDelegateTaskResult,
+  type OrchestratorMcpFailure,
+} from "@goat/contracts";
+import * as Deferred from "effect/Deferred";
 import * as Effect from "effect/Effect";
+import * as Fiber from "effect/Fiber";
 import * as SqlClient from "effect/sql/SqlClient";
 import {
   childModel,
@@ -149,8 +156,8 @@ it.effect(
         runStatus: "completed",
       });
       yield* finishTask(other.id, "completed");
-      const before = (yield* fixture.store.getThreadRecords(parentId, ["subagents"])).subagents;
-      const staleTasks: ServiceOptions["staleTasks"] = { current: undefined };
+      const race: ServiceOptions["race"] = { current: undefined };
+      const beforeLock: ServiceOptions["beforeLock"] = { current: undefined };
       const sql = yield* SqlClient.SqlClient;
       const lanes = () =>
         sql<{
@@ -160,18 +167,30 @@ it.effect(
         fixture,
         (service) =>
           Effect.gen(function* () {
+            const testScope = yield* Effect.scope;
+            const passedPreflight = yield* Deferred.make<void>();
+            let second:
+              | Fiber.Fiber<OrchestratorMcpFailure, OrchestratorMcpDelegateTaskResult>
+              | undefined;
+            // The first call holds the continue lock and has not committed. The second call
+            // passes its caller check and waits for the lock while the same-id round commits.
+            race.current = Effect.gen(function* () {
+              beforeLock.current = passedPreflight;
+              second = yield* service
+                .delegateTask(scope, continueInput(fixture, { continueFrom: other.id }))
+                .pipe(Effect.flip, Effect.forkIn(testScope));
+              yield* Deferred.await(passedPreflight);
+            });
             yield* service.delegateTask(scope, continueInput(fixture));
-            staleTasks.current = before;
-            const refused = yield* service
-              .delegateTask(scope, continueInput(fixture, { continueFrom: other.id }))
-              .pipe(Effect.flip);
+            if (second === undefined) return yield* Effect.die("The waiting call never started.");
+            const refused = yield* Fiber.join(second);
             assert.include(refused.message, "different review round");
             assert.deepEqual(
               (yield* lanes()).map((lane) => lane.child_thread_id),
               [fixture.childThreadId],
             );
           }),
-        { goatclaw: true, staleTasks },
+        { goatclaw: true, race, beforeLock },
       );
     }).pipe(Effect.provide(layerTestWithSql)),
 );

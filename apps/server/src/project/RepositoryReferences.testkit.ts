@@ -1,3 +1,4 @@
+import * as NodeCrypto from "@effect/platform-node/NodeCrypto";
 import * as NodeServices from "@effect/platform-node/NodeServices";
 import { expect } from "@effect/vitest";
 import { ProjectId } from "@goat/contracts";
@@ -10,7 +11,9 @@ import * as Projects from "./ProjectService.ts";
 import * as Inventory from "./RepositoryInventory.ts";
 import * as References from "./RepositoryReferences.ts";
 
-export const referenceTestLayer = ProcessRunner.layer.pipe(Layer.provideMerge(NodeServices.layer));
+export const referenceTestLayer = ProcessRunner.layer.pipe(
+  Layer.provideMerge(Layer.mergeAll(NodeServices.layer, NodeCrypto.layer)),
+);
 
 export const referenceFixture = Effect.gen(function* () {
   const fs = yield* FileSystem.FileSystem;

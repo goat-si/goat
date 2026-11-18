@@ -755,7 +755,8 @@ internal class SelectionAwareEditText(
   private fun pasteContextOrImages(): Boolean {
     val payload = GoatComposerClipboard.read(context)
     val html = payload["html"] ?: ""
-    if (html.contains("data-t3-context-fragment=") || html.contains("data-goat-context-fragment=")) { // goat-rename: legacy
+    val legacyFragment = html.contains("data-t3-context-fragment=") // goat-rename: legacy
+    if (legacyFragment || html.contains("data-goat-context-fragment=")) {
       pasteContextListener?.invoke(payload)
       return true
     }

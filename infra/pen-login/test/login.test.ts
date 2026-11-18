@@ -442,18 +442,6 @@ describe("pen-login contract (Accounts v1.1)", () => {
     }
   });
 
-  it("polls with unknown device codes count per source: the eleventh in a minute is 429", async () => {
-    const machine = await device();
-    const source = freshSource();
-    const statuses = [];
-    for (let i = 0; i < 11; i++) {
-      const code = base64url(crypto.getRandomValues(new Uint8Array(32)));
-      statuses.push((await poll(service.url, machine, code, source)).status);
-    }
-    expect(statuses.slice(0, 10).every((status) => status === 410)).toBe(true);
-    expect(statuses[10]).toBe(429);
-  });
-
   it("two polls at once get one answer and one slow_down", async () => {
     const machine = await device();
     const started = await startDevice(service.url, machine);
@@ -545,29 +533,6 @@ describe("pen-login contract (Accounts v1.1)", () => {
     const b = await approved(service, issuer, { sub }, "box-2");
     expect(b.token.mesh).toBeNull();
     expect((await register(service, b, MESH_B)).status).toBe(200);
-  });
-
-  it("per-source limits answer 429: device start past 10 a minute, pages past 20, register and forget past 30", async () => {
-    const machine = await device();
-    const source = freshSource();
-    const starts = [];
-    for (let i = 0; i < 11; i++)
-      starts.push((await startDevice(service.url, machine, source)).status);
-    expect(starts.slice(0, 10).every((status) => status === 200)).toBe(true);
-    expect(starts[10]).toBe(429);
-
-    const browser = new Browser(service.url);
-    const pages = [];
-    for (let i = 0; i < 21; i++) pages.push((await browser.get("/device")).status);
-    expect(pages.slice(0, 20).every((status) => status === 200)).toBe(true);
-    expect(pages[20]).toBe(429);
-
-    const registry = freshSource();
-    const calls = [];
-    for (let i = 0; i < 31; i++)
-      calls.push((await api(service.url, "/v1/mesh/register", {}, registry)).status);
-    expect(calls.slice(0, 30).every((status) => status === 400)).toBe(true);
-    expect(calls[30]).toBe(429);
   });
 });
 

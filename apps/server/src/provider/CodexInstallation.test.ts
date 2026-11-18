@@ -1,146 +1,23 @@
+import * as NodeCrypto from "@effect/platform-node/NodeCrypto";
 import * as NodeServices from "@effect/platform-node/NodeServices";
+import * as Layer from "effect/Layer";
 import * as ModelManifest from "./ModelManifest.ts";
 import { expect, it } from "@effect/vitest";
 import * as HostProcess from "@goat/shared/HostProcess";
-import * as Crypto from "effect/Crypto";
 import * as Cause from "effect/Cause";
 import * as Deferred from "effect/Deferred";
 import * as Effect from "effect/Effect";
-import * as Hex from "effect/encoding/Hex";
 import * as FileSystem from "effect/FileSystem";
 import * as Fiber from "effect/Fiber";
-import * as Option from "effect/Option";
 import * as PlatformError from "effect/PlatformError";
 import * as Exit from "effect/Exit";
-import * as Queue from "effect/Queue";
 import * as Scope from "effect/Scope";
 import * as Sink from "effect/Sink";
 import * as Stream from "effect/Stream";
-import { HttpClient, HttpClientError, HttpClientRequest, HttpClientResponse } from "effect/http";
+import { HttpClientError, HttpClientRequest, HttpClientResponse } from "effect/http";
 import * as TestClock from "effect/testing/TestClock";
 import { ChildProcess, ChildProcessSpawner } from "effect/process";
-import * as CodexInstallation from "./CodexInstallation.ts";
-
-const archive = Buffer.from(
-  "H4sIAAAAAAAC/+3W0W6DIBQGYB/FcD0sKNSkD7J7aom6tmAQtzXL3n3QZM3qdWVt+n8XoCckJp78wLY3q8bu9Ge2HBbUUp7nYD4H8s9zrNdSsCxnWQLT6JULn8ye09K9h/u2/c0/jSM9xqGzo0+bf3Gdf15WQiD/Kdy61/CA+z8dlO9Wrv2387+c5Z9VZY38p7BY0+Gh8t/sVauLt9Ga9Pnnop7ln1e4/6fxRQ7qZCf/qt3YW0M2OX/JyfvljbCCy3XBSaiGH9VqH4tKuaZbC6qG4aDpTrmP3sQV2nh3Gmxvzqsud0vyjaABAAAAAAAAAAAAAAAk8gOq19rvACgAAA==",
-  "base64",
-);
-const asset = {
-  version: "0.156.1",
-  target: "aarch64-apple-darwin",
-  url: "https://github.com/openai/codex/releases/download/test/package.tar.gz",
-  archiveBytes: archive.length,
-};
-const makeHarness = Effect.fn("test.makeCodexInstallation")(function* (
-  input: {
-    options?: Partial<CodexInstallation.CodexInstallationOptions>;
-    manifestCurrent?: Effect.Effect<ModelManifest.ModelManifestData>;
-    body?: Stream.Stream<Uint8Array, HttpClientError.HttpClientError>;
-    downloadStatus?: number;
-    baseDir?: string;
-    local?: { version: string; appServerFails?: boolean; versionFails?: boolean };
-    platform?: NodeJS.Platform;
-    spawner?: ChildProcessSpawner.ChildProcessSpawner["Service"];
-    runtimeRenameFailures?: number;
-  } = {},
-) {
-  const fs = yield* FileSystem.FileSystem;
-  const baseDir =
-    input.baseDir ?? (yield* fs.makeTempDirectoryScoped({ prefix: "goat-codex-install-test-" }));
-  const localDirectory = `${baseDir}/local`;
-  const localBinaryPath = `${localDirectory}/codex${input.platform === "win32" ? ".exe" : ""}`;
-  const probeLog = `${baseDir}/local-probes.txt`;
-  if (input.local) {
-    yield* fs.makeDirectory(localDirectory, { recursive: true });
-    yield* fs.writeFileString(
-      localBinaryPath,
-      `#!/bin/sh\nprintf '%s\\n' "$*" >> '${probeLog}'\ncase "$1" in\n--version) ${input.local.versionFails ? "exit 1" : `printf '%s\\n' 'codex-cli ${input.local.version}'`};;\napp-server) exit ${input.local.appServerFails ? "1" : "0"};;\nesac\n`,
-      { mode: 0o755 },
-    );
-  }
-  let downloads = 0;
-  const crypto = yield* Crypto.Crypto;
-  const sha256 = Hex.encode(yield* crypto.digest("SHA-256", archive).pipe(Effect.orDie));
-  let runtimeRenameFailures = input.runtimeRenameFailures ?? 0;
-  const failedRenames = yield* Queue.unbounded<void>();
-  const lockingFs: FileSystem.FileSystem = {
-    ...fs,
-    // Suspended so each retry of the same effect is a fresh attempt, like the real rename.
-    rename: (from, to) =>
-      Effect.suspend(() =>
-        /[/\\]runtime$/u.test(from) && runtimeRenameFailures-- > 0
-          ? Queue.offer(failedRenames, undefined).pipe(
-              Effect.andThen(
-                Effect.fail(
-                  PlatformError.systemError({
-                    _tag: "PermissionDenied",
-                    module: "FileSystem",
-                    method: "rename",
-                    pathOrDescriptor: from,
-                  }),
-                ),
-              ),
-            )
-          : fs.rename(from, to),
-      ),
-  };
-  const spawner = input.spawner ?? (yield* ChildProcessSpawner.ChildProcessSpawner);
-  const installation = yield* CodexInstallation.makeCodexInstallation({
-    baseDir,
-    releaseAsset: { ...asset, sha256 },
-    validate: () => Effect.void,
-    ...input.options,
-  }).pipe(
-    Effect.provideService(ModelManifest.ModelManifest, {
-      current: input.manifestCurrent ?? Effect.succeed(ModelManifest.BUNDLED_MODEL_MANIFEST),
-      refresh: Effect.succeed(ModelManifest.BUNDLED_MODEL_MANIFEST),
-      forceRefresh: Effect.succeed(ModelManifest.BUNDLED_MODEL_MANIFEST),
-      refreshOnDemand: Effect.succeed(ModelManifest.BUNDLED_MODEL_MANIFEST),
-      refreshInBackground: Effect.void,
-    }),
-    Effect.provideService(HostProcess.Platform, input.platform ?? "darwin"),
-    Effect.provideService(HostProcess.Architecture, "arm64"),
-    Effect.provideService(HostProcess.Environment, {
-      PATH: input.local ? localDirectory : "",
-      SystemRoot: "C:\\Windows",
-    }),
-    Effect.provideService(FileSystem.FileSystem, lockingFs),
-    Effect.provideService(ChildProcessSpawner.ChildProcessSpawner, spawner),
-    Effect.provideService(
-      HttpClient.HttpClient,
-      HttpClient.make((request) =>
-        Effect.sync(() => {
-          downloads++;
-          return Object.defineProperty(
-            HttpClientResponse.fromWeb(
-              request,
-              new Response(null, { status: input.downloadStatus ?? 200 }),
-            ),
-            "stream",
-            {
-              value: input.body ?? Stream.succeed(archive),
-            },
-          );
-        }),
-      ),
-    ),
-  );
-  return {
-    installation,
-    fs,
-    baseDir,
-    localBinaryPath,
-    probeLog,
-    failedRenames,
-    downloads: () => downloads,
-  };
-});
-const terminalState = (installation: CodexInstallation.CodexInstallation["Service"]) =>
-  installation.changes.pipe(
-    Stream.filter((state) => ["succeeded", "failed", "cancelled"].includes(state.phase)),
-    Stream.runHead,
-    Effect.map(Option.getOrThrow),
-  );
+import { archive, asset, makeHarness, terminalState } from "./CodexInstallation.testkit.ts";
 
 const startupInfo = JSON.stringify({
   appServerVersion: "different-from-cli-version",
@@ -165,7 +42,7 @@ it.live(
         const executable = yield* h.installation.acquire();
         expect(executable.source).toBe("local");
         expect(yield* h.fs.exists(marker)).toBe(true);
-      }).pipe(Effect.provide(NodeServices.layer)),
+      }).pipe(Effect.provide(Layer.mergeAll(NodeServices.layer, NodeCrypto.layer))),
     ),
 );
 
@@ -187,7 +64,7 @@ function startupProbeFixture(
   const spawner = ChildProcessSpawner.make((command) =>
     Effect.gen(function* () {
       if (!ChildProcess.isStandardCommand(command)) return yield* Effect.die("Unexpected pipe");
-      calls.push(command.args);
+      calls.push(command.args.map(String));
       const version = command.args[0] === "--version";
       const startup = command.args.includes("--print-startup-config");
       if (version && input.beforeVersion) yield* input.beforeVersion;
@@ -255,7 +132,7 @@ it.effect.each([true, false])(
         3,
       );
       expect(h.downloads()).toBe(0);
-    }).pipe(Effect.scoped, Effect.provide(NodeServices.layer)),
+    }).pipe(Effect.scoped, Effect.provide(Layer.mergeAll(NodeServices.layer, NodeCrypto.layer))),
 );
 
 it.effect.each(["0.156.0", "0.163.0", "0.164.0", "0.165.0", "1.0.0"])(
@@ -277,7 +154,7 @@ it.effect.each(["0.156.0", "0.163.0", "0.164.0", "0.165.0", "1.0.0"])(
             ]),
       ]);
       expect(h.downloads()).toBe(0);
-    }).pipe(Effect.scoped, Effect.provide(NodeServices.layer)),
+    }).pipe(Effect.scoped, Effect.provide(Layer.mergeAll(NodeServices.layer, NodeCrypto.layer))),
 );
 
 it.effect.each(["0.164.0-alpha.1", "0.164.0-rc.1", "0.165.0-alpha.1", "unknown"])(
@@ -288,7 +165,7 @@ it.effect.each(["0.164.0-alpha.1", "0.164.0-rc.1", "0.165.0-alpha.1", "unknown"]
       const h = yield* makeHarness({ local: { version }, spawner: fixture.spawner });
       expect((yield* h.installation.state).installedVersion).toBeNull();
       expect(fixture.calls).toEqual([["--version"]]);
-    }).pipe(Effect.scoped, Effect.provide(NodeServices.layer)),
+    }).pipe(Effect.scoped, Effect.provide(Layer.mergeAll(NodeServices.layer, NodeCrypto.layer))),
 );
 
 it.effect.each([
@@ -360,7 +237,7 @@ it.effect.each([
       ["app-server", "--print-startup-config"],
       ["app-server", "--print-startup-config"],
     ]);
-  }).pipe(Effect.scoped, Effect.provide(NodeServices.layer)),
+  }).pipe(Effect.scoped, Effect.provide(Layer.mergeAll(NodeServices.layer, NodeCrypto.layer))),
 );
 
 it.effect.each(["version", "legacy-help"] as const)(
@@ -383,7 +260,7 @@ it.effect.each(["version", "legacy-help"] as const)(
       expect((yield* h.installation.state).installedVersion).toBeNull();
       expect(fixture.calls).toHaveLength(stage === "version" ? 1 : 2);
       expect(h.downloads()).toBe(0);
-    }).pipe(Effect.scoped, Effect.provide(NodeServices.layer)),
+    }).pipe(Effect.scoped, Effect.provide(Layer.mergeAll(NodeServices.layer, NodeCrypto.layer))),
 );
 
 it.effect("shares the five-second budget and retains the candidate on diagnostic timeout", () =>
@@ -420,7 +297,7 @@ it.effect("shares the five-second budget and retains the candidate on diagnostic
     expect(yield* h.installation.resolve()).not.toHaveProperty("startupWarning");
     expect(fixture.calls).toHaveLength(3);
     expect(h.downloads()).toBe(0);
-  }).pipe(Effect.scoped, Effect.provide(NodeServices.layer)),
+  }).pipe(Effect.scoped, Effect.provide(Layer.mergeAll(NodeServices.layer, NodeCrypto.layer))),
 );
 
 it.effect("recovers a diagnostic timeout on the same service and unchanged binary", () =>
@@ -463,7 +340,7 @@ it.effect("recovers a diagnostic timeout on the same service and unchanged binar
     ]);
     expect(fixture.calls.filter((args) => args[0] === "--version")).toHaveLength(1);
     expect(fixture.calls.filter((args) => args.includes("--print-startup-config"))).toHaveLength(3);
-  }).pipe(Effect.scoped, Effect.provide(NodeServices.layer)),
+  }).pipe(Effect.scoped, Effect.provide(Layer.mergeAll(NodeServices.layer, NodeCrypto.layer))),
 );
 
 it.effect("propagates external diagnostic cancellation and finalizes the child", () =>
@@ -485,7 +362,7 @@ it.effect("propagates external diagnostic cancellation and finalizes the child",
     const exit = yield* Fiber.await(fiber);
     expect(Exit.isFailure(exit) && Cause.hasInterruptsOnly(exit.cause)).toBe(true);
     expect(fixture.calls).toHaveLength(2);
-  }).pipe(Effect.scoped, Effect.provide(NodeServices.layer)),
+  }).pipe(Effect.scoped, Effect.provide(Layer.mergeAll(NodeServices.layer, NodeCrypto.layer))),
 );
 
 it.effect.each(["0.156.0", "0.156.1", "0.156.2", "0.157.0"])(
@@ -516,7 +393,7 @@ it.effect.each(["0.156.0", "0.156.1", "0.156.2", "0.157.0"])(
       yield* h.installation.remove();
       expect(yield* h.fs.exists(h.localBinaryPath)).toBe(true);
       expect((yield* h.installation.state).source).toBe("local");
-    }).pipe(Effect.scoped, Effect.provide(NodeServices.layer)),
+    }).pipe(Effect.scoped, Effect.provide(Layer.mergeAll(NodeServices.layer, NodeCrypto.layer))),
 );
 it.effect.each([
   { version: "0.128.9" },
@@ -539,7 +416,7 @@ it.effect.each([
     expect(installed.executablePath).toBe(executable.executablePath);
     expect(h.downloads()).toBe(1);
     expect(yield* h.fs.exists(h.localBinaryPath)).toBe(true);
-  }).pipe(Effect.scoped, Effect.provide(NodeServices.layer)),
+  }).pipe(Effect.scoped, Effect.provide(Layer.mergeAll(NodeServices.layer, NodeCrypto.layer))),
 );
 
 const compileNative = Effect.fn("test.compileNative")(function* (
@@ -569,7 +446,7 @@ it.effect("rechecks compatibility after the local executable is replaced", () =>
     expect((yield* terminalState(h.installation)).phase).toBe("succeeded");
     expect((yield* h.installation.resolve()).source).toBe("managed");
     expect(h.downloads()).toBe(1);
-  }).pipe(Effect.scoped, Effect.provide(NodeServices.layer)),
+  }).pipe(Effect.scoped, Effect.provide(Layer.mergeAll(NodeServices.layer, NodeCrypto.layer))),
 );
 
 it.effect("rechecks a cached local executable when the shared manifest policy changes", () =>
@@ -601,7 +478,7 @@ it.effect("rechecks a cached local executable when the shared manifest policy ch
       "--version",
       "app-server --help",
     ]);
-  }).pipe(Effect.scoped, Effect.provide(NodeServices.layer)),
+  }).pipe(Effect.scoped, Effect.provide(Layer.mergeAll(NodeServices.layer, NodeCrypto.layer))),
 );
 
 it.effect("uses bundled Codex compatibility when the remote manifest omits its policy", () =>
@@ -615,7 +492,7 @@ it.effect("uses bundled Codex compatibility when the remote manifest omits its p
     });
     expect((yield* h.installation.start).source).toBe("local");
     expect(h.downloads()).toBe(0);
-  }).pipe(Effect.scoped, Effect.provide(NodeServices.layer)),
+  }).pipe(Effect.scoped, Effect.provide(Layer.mergeAll(NodeServices.layer, NodeCrypto.layer))),
 );
 
 it.effect.each([
@@ -654,7 +531,7 @@ int main(int argc, char **argv) {
     expect(yield* h.installation.start).toMatchObject({ source: "local", phase: "succeeded" });
     expect((yield* h.installation.resolve()).executablePath).toBe(h.localBinaryPath);
     expect(h.downloads()).toBe(0);
-  }).pipe(Effect.scoped, Effect.provide(NodeServices.layer)),
+  }).pipe(Effect.scoped, Effect.provide(Layer.mergeAll(NodeServices.layer, NodeCrypto.layer))),
 );
 
 it.effect(
@@ -674,7 +551,7 @@ it.effect(
       );
       const restarted = yield* makeHarness({ baseDir });
       expect((yield* restarted.installation.resolve()).version).toBe("0.156.1");
-    }).pipe(Effect.scoped, Effect.provide(NodeServices.layer)),
+    }).pipe(Effect.scoped, Effect.provide(Layer.mergeAll(NodeServices.layer, NodeCrypto.layer))),
 );
 
 it.effect("requires an update before running an older activated managed installation", () =>
@@ -704,7 +581,7 @@ it.effect("requires an update before running an older activated managed installa
     expect((yield* terminalState(restarted.installation)).phase).toBe("succeeded");
     expect((yield* restarted.installation.resolve()).version).toBe("0.156.1");
     expect(restarted.downloads()).toBe(1);
-  }).pipe(Effect.scoped, Effect.provide(NodeServices.layer)),
+  }).pipe(Effect.scoped, Effect.provide(Layer.mergeAll(NodeServices.layer, NodeCrypto.layer))),
 );
 
 it.effect("updates an older supported managed installation to the pinned release on startup", () =>
@@ -731,7 +608,7 @@ it.effect("updates an older supported managed installation to the pinned release
     expect((yield* terminalState(restarted.installation)).phase).toBe("succeeded");
     expect((yield* restarted.installation.resolve()).version).toBe("0.156.1");
     expect(restarted.downloads()).toBe(1);
-  }).pipe(Effect.scoped, Effect.provide(NodeServices.layer)),
+  }).pipe(Effect.scoped, Effect.provide(Layer.mergeAll(NodeServices.layer, NodeCrypto.layer))),
 );
 
 it.effect("rejects corrupted downloads without publishing a runtime", () =>
@@ -745,7 +622,7 @@ it.effect("rejects corrupted downloads without publishing a runtime", () =>
     expect(state.message).toContain("SHA-256");
     expect(yield* fs.exists(`${installation.managedDirectory}/active.json`)).toBe(false);
     expect(yield* fs.exists(`${installation.managedDirectory}/0.156.1`)).toBe(false);
-  }).pipe(Effect.scoped, Effect.provide(NodeServices.layer)),
+  }).pipe(Effect.scoped, Effect.provide(Layer.mergeAll(NodeServices.layer, NodeCrypto.layer))),
 );
 
 it.effect.each(["interrupted body", "HTTP 404"] as const)(
@@ -782,7 +659,7 @@ it.effect.each(["interrupted body", "HTTP 404"] as const)(
       });
       expect(h.downloads()).toBe(1);
       expect(yield* h.fs.readDirectory(h.installation.managedDirectory)).toEqual([]);
-    }).pipe(Effect.scoped, Effect.provide(NodeServices.layer)),
+    }).pipe(Effect.scoped, Effect.provide(Layer.mergeAll(NodeServices.layer, NodeCrypto.layer))),
 );
 
 it.effect(
@@ -801,7 +678,7 @@ it.effect(
       });
       expect(h.downloads()).toBe(0);
       expect(yield* fs.readFileString(baseDir)).toBe("existing file");
-    }).pipe(Effect.scoped, Effect.provide(NodeServices.layer)),
+    }).pipe(Effect.scoped, Effect.provide(Layer.mergeAll(NodeServices.layer, NodeCrypto.layer))),
 );
 
 it.effect("reports a download timeout and cleans the staging directory", () =>
@@ -820,7 +697,7 @@ it.effect("reports a download timeout and cleans the staging directory", () =>
     });
     expect(h.downloads()).toBe(1);
     expect(yield* h.fs.readDirectory(h.installation.managedDirectory)).toEqual([]);
-  }).pipe(Effect.scoped, Effect.provide(NodeServices.layer)),
+  }).pipe(Effect.scoped, Effect.provide(Layer.mergeAll(NodeServices.layer, NodeCrypto.layer))),
 );
 
 it.effect("cancels an in-flight download and cleans the staging directory", () =>
@@ -839,7 +716,7 @@ it.effect("cancels an in-flight download and cleans the staging directory", () =
       ),
     ).toEqual([]);
     expect(yield* fs.exists(`${installation.managedDirectory}/active.json`)).toBe(false);
-  }).pipe(Effect.scoped, Effect.provide(NodeServices.layer)),
+  }).pipe(Effect.scoped, Effect.provide(Layer.mergeAll(NodeServices.layer, NodeCrypto.layer))),
 );
 
 it.effect("protects active process leases and removes the runtime after release", () =>
@@ -855,7 +732,7 @@ it.effect("protects active process leases and removes the runtime after release"
     expect(yield* fs.exists(installation.managedDirectory)).toBe(false);
     expect((yield* installation.state).installedVersion).toBeNull();
     expect((yield* installation.state).executablePath).toBeNull();
-  }).pipe(Effect.scoped, Effect.provide(NodeServices.layer)),
+  }).pipe(Effect.scoped, Effect.provide(Layer.mergeAll(NodeServices.layer, NodeCrypto.layer))),
 );
 
 it.effect.each([true, false])(
@@ -894,7 +771,7 @@ it.effect.each([true, false])(
       yield* Scope.close(leaseScope, Exit.void);
       if (hasManaged) yield* h.installation.remove();
       expect(yield* h.fs.exists(h.localBinaryPath)).toBe(true);
-    }).pipe(Effect.scoped, Effect.provide(NodeServices.layer)),
+    }).pipe(Effect.scoped, Effect.provide(Layer.mergeAll(NodeServices.layer, NodeCrypto.layer))),
 );
 
 it.effect("keeps an activated runtime when a later update fails verification", () =>
@@ -912,7 +789,7 @@ it.effect("keeps an activated runtime when a later update fails verification", (
     yield* update.installation.start;
     expect((yield* terminalState(update.installation)).phase).toBe("failed");
     expect((yield* update.installation.resolve()).version).toBe("0.156.1");
-  }).pipe(Effect.scoped, Effect.provide(NodeServices.layer)),
+  }).pipe(Effect.scoped, Effect.provide(Layer.mergeAll(NodeServices.layer, NodeCrypto.layer))),
 );
 
 // Stands in for Windows' bsdtar: CRLF listings, and extraction writes the Windows layout.
@@ -928,7 +805,7 @@ it.effect(
       expect((yield* h.installation.resolve({ managedOnly: true }).pipe(Effect.result))._tag).toBe(
         "Failure",
       );
-      yield* h.installation.startManagedOnly;
+      yield* h.installation.startManagedOnly({ allowUpdate: true });
       const finished = yield* terminalState(h.installation);
       expect(finished.phase).toBe("succeeded");
       expect(finished.source).toBe("managed");
@@ -936,5 +813,5 @@ it.effect(
       const managed = yield* h.installation.resolve({ managedOnly: true });
       expect(managed.source).toBe("managed");
       expect(managed.executablePath).not.toBe(h.localBinaryPath);
-    }).pipe(Effect.scoped, Effect.provide(NodeServices.layer)),
+    }).pipe(Effect.scoped, Effect.provide(Layer.mergeAll(NodeServices.layer, NodeCrypto.layer))),
 );

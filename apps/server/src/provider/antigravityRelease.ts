@@ -89,6 +89,8 @@ const releaseAssets = new Map<string, AntigravityReleaseAsset>([
 export function resolveAntigravityReleaseAsset(
   platform: NodeJS.Platform,
   arch: string,
+  musl = false,
 ): AntigravityReleaseAsset | null {
-  return releaseAssets.get(`${platform}-${arch}`) ?? null;
+  // The pinned runtime is built for glibc only.
+  return musl ? null : (releaseAssets.get(`${platform}-${arch}`) ?? null);
 }

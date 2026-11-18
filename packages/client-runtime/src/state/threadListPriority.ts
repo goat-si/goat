@@ -2,6 +2,7 @@ import { isRemoteDelegatedChild } from "@goat/shared/threadLaunchState";
 
 import { scopeThreadRef, scopedThreadKey } from "../environment/scoped.ts";
 import type { EnvironmentThreadShell } from "./models.ts";
+import { THREAD_STATUS_TEXT } from "./threadActivityAnnouncement.ts";
 
 /** A thread row's status, shared by the web sidebar and the mobile thread list. */
 export type ThreadListStatus =
@@ -59,6 +60,24 @@ export function resolveThreadListStatus(thread: ThreadListStatusInput): ThreadLi
     return thread.runtime.lastErrorClass === "usage_limit" ? "limited" : "failed";
   }
   return "ready";
+}
+
+/** What the window title says the open thread is doing, in the words its announcer uses. */
+export function resolveWindowTitleThreadStatus(thread: ThreadListStatusInput): string | null {
+  // A guest waiting doesn't hide that the agent is still working.
+  switch (resolveThreadListStatus({ ...thread, pendingGuestMessageCount: 0 })) {
+    case "approval":
+      return THREAD_STATUS_TEXT.approval;
+    case "input":
+      return THREAD_STATUS_TEXT.input;
+    case "working":
+      return THREAD_STATUS_TEXT.working;
+    case "waiting":
+      // Waiting on a child thread is still this turn, so it must not read as finished.
+      return thread.runtime?.status === "running" ? THREAD_STATUS_TEXT.working : null;
+    default:
+      return null;
+  }
 }
 
 type UnseenCompletionInput = {

@@ -10,7 +10,7 @@ import {
 
 import * as Clock from "effect/Clock";
 import * as Context from "effect/Context";
-import * as Crypto from "effect/Crypto";
+import * as SecureRandom from "effect/crypto/SecureRandom";
 import * as Deferred from "effect/Deferred";
 import * as Effect from "effect/Effect";
 import * as Layer from "effect/Layer";
@@ -19,6 +19,7 @@ import * as Schema from "effect/Schema";
 
 import * as ServerSettings from "../serverSettings.ts";
 import * as TerminalManager from "../terminal/Manager.ts";
+import { withoutBindingCheck } from "../terminal/TerminalThreadWorktree.ts";
 import * as ProjectService from "./ProjectService.ts";
 import * as GoatProjectFileLoader from "./GoatProjectFileLoader.ts";
 import { makeSetupScriptResolver } from "./projectSetupScripts.ts";
@@ -72,6 +73,11 @@ export interface ProjectSetupScriptRunnerInput {
   readonly observeCompletion?: {
     readonly onOutputLine?: (line: string) => Effect.Effect<void>;
   };
+  /**
+   * Starts the script in a new shell even when this terminal already runs one: a restored worktree
+   * is a new folder at the old path, and a live shell there still sits in the removed one.
+   */
+  readonly freshShell?: boolean;
 }
 
 export class ProjectSetupScriptOperationError extends Schema.TaggedError<ProjectSetupScriptOperationError>()(
@@ -152,11 +158,15 @@ function stripTerminalControl(text: string): string {
     .replace(/[\x00-\x08\x0b\x0c\x0e-\x1f\x7f]/g, "");
 }
 
-// Line editors (zsh, fish, bash 5.1+) enable bracketed paste when they start reading a command.
+// Line editors (zsh, fish, nu, bash 5.1+) enable bracketed paste when they start reading a command.
 const BRACKETED_PASTE_ON = "\x1b[?2004h";
 const BRACKETED_PASTE_OFF = "\x1b[?2004l";
 // Longer than one subprocess poll plus its ps timeout, so a startup prompt is seen as busy first.
 const SHELL_QUIET_FALLBACK = "3 seconds";
+// The restart contract requires a size; these are the terminal manager's own defaults, and the open
+// that follows keeps the size an attached viewer sets.
+const FRESH_SHELL_COLS = 120;
+const FRESH_SHELL_ROWS = 30;
 
 function lineEditorReading(text: string, previous: boolean): boolean {
   const on = text.lastIndexOf(BRACKETED_PASTE_ON);
@@ -164,12 +174,13 @@ function lineEditorReading(text: string, previous: boolean): boolean {
   return on === off ? previous : on > off;
 }
 
-type CompletionShell = "posix" | "fish" | "powershell";
+type CompletionShell = "posix" | "fish" | "nushell" | "powershell";
 
 function resolveCompletionShell(shell: string): CompletionShell | null {
   const name = (shell.split(/[/\\]/).at(-1) ?? shell).toLowerCase().replace(/\.exe$/, "");
   if (name === "cmd") return null;
   if (name === "fish") return "fish";
+  if (name === "nu") return "nushell";
   if (name === "pwsh" || name === "powershell") return "powershell";
   return "posix";
 }
@@ -186,6 +197,20 @@ function wrapCommandForCompletion(
       return `$global:LASTEXITCODE = $null; & {\r${body}\r}; if ($null -ne $LASTEXITCODE) { $__goatc = $LASTEXITCODE } elseif ($?) { $__goatc = 0 } else { $__goatc = 1 }; Write-Host "${sentinel}$__goatc"`;
     case "fish":
       return `begin\r${body}\rend; printf '\\n${sentinel}%s\\n' $status`;
+    case "nushell": {
+      const escaped = command.replace(/["\\\x00-\x1f]/g, (char) =>
+        char === '"' || char === "\\" ? `\\${char}` : `\\u{${char.charCodeAt(0).toString(16)}}`,
+      );
+      // Nu resolves imports before running cd; source a file rooted in the worktree.
+      return [
+        "$env.LAST_EXIT_CODE = 0",
+        "let __goatf = try { mktemp --tmpdir-path $env.GOAT_WORKTREE_PATH --suffix .nu .goat-setup-XXXXXXXX } catch {|e| print -e $e.msg; null }",
+        `if $__goatf == null { $env.LAST_EXIT_CODE = 1 } else { try { [$"rm --permanent ($__goatf | to nuon)" "${escaped}"] | str join (char newline) | save --force --raw $__goatf; ^$nu.current-exe --login --commands $"cd $env.GOAT_WORKTREE_PATH; source ($__goatf | to nuon)" } catch {|e| if $e != null and $e.exit_code? == null { print -e $e.msg }; if $env.LAST_EXIT_CODE == 0 { $env.LAST_EXIT_CODE = 1 } } }`,
+        "let __goatc = $env.LAST_EXIT_CODE",
+        "try { if $__goatf != null and ($__goatf | path exists) { rm --permanent $__goatf } } catch {|e| print -e $e.msg }",
+        `print $"\\n${sentinel}($__goatc)"`,
+      ].join("; ");
+    }
     case "posix":
       return `( ${body}\r); printf '\\n${sentinel}%s\\n' "$?"`;
   }
@@ -197,8 +222,10 @@ export const make = Effect.gen(function* () {
   const terminalManager = yield* TerminalManager.TerminalManager;
   const serverSettings = yield* ServerSettings.ServerSettingsService;
   const resolveSetupProjectScripts = yield* makeSetupScriptResolver;
-  const crypto = yield* Crypto.Crypto;
+  const random = yield* SecureRandom.SecureRandom;
   const serviceScope = yield* Effect.scope;
+  // Runs of a terminal still waiting to type, by thread and terminal; an entry lives while one does.
+  const pendingRuns = new Map<string, { generation: number; alive: number }>();
 
   const observeTerminalCompletion = Effect.fn("ProjectSetupScriptRunner.observeTerminalCompletion")(
     function* (input: {
@@ -209,6 +236,8 @@ export const make = Effect.gen(function* () {
       /** The shell echoes typed input; lines ending with these are the wrapper, not output. */
       readonly echoedWrapperLines: ReadonlyArray<string>;
       readonly onOutputLine: ((line: string) => Effect.Effect<void>) | undefined;
+      /** Whether a fresh-shell run has superseded this one. */
+      readonly superseded: () => boolean;
     }) {
       const startedAtMs = yield* Clock.currentTimeMillis;
       const done = yield* Deferred.make<ProjectSetupScriptCompletion>();
@@ -216,6 +245,8 @@ export const make = Effect.gen(function* () {
       const promptReturned = yield* Deferred.make<void>();
       let lineBuffer = "";
       let settled = false;
+      let written = false;
+      let replaced = false;
 
       const settle = (exitCode: number | null) =>
         Effect.suspend(() => {
@@ -253,6 +284,7 @@ export const make = Effect.gen(function* () {
           return Effect.void;
         }
         if (event.type === "output") {
+          if (replaced) return Effect.void;
           lineBuffer += event.data;
           // Bare CR redraws progress in place; split redraws instead of growing one line.
           const lines = lineBuffer.split(/\r\n|\r|\n/);
@@ -271,7 +303,10 @@ export const make = Effect.gen(function* () {
             ),
           );
         }
-        if (event.type === "exited" || event.type === "closed") {
+        // A restart ends a run whose command was already typed, or one a fresh-shell run superseded;
+        // the new shell's output is not its.
+        if (event.type === "restarted" && (written || input.superseded())) replaced = true;
+        if (event.type === "exited" || event.type === "closed" || replaced) {
           return settle(null).pipe(Effect.andThen(Deferred.succeed(promptReturned, undefined)));
         }
         return Effect.void;
@@ -291,12 +326,16 @@ export const make = Effect.gen(function* () {
       const abandon = settle(null).pipe(
         Effect.andThen(Deferred.succeed(promptReturned, undefined)),
       );
-      return { completion, unsubscribe, flushPartialLine, abandon };
+      const markWritten = Effect.sync(() => {
+        written = true;
+      });
+      return { completion, unsubscribe, flushPartialLine, abandon, markWritten };
     },
   );
 
   // Input typed during shell startup can be read by an rc-file prompt (fnm, nvm) instead of the
-  // shell, which loses the command. Subscribe before the terminal opens so no activity is missed.
+  // shell, which loses the command. Subscribe before the open (after a fresh shell's restart) so no
+  // activity of the shell this run types into is missed.
   const watchShellReadiness = Effect.fn("ProjectSetupScriptRunner.watchShellReadiness")(
     function* (input: {
       readonly threadId: string;
@@ -314,6 +353,8 @@ export const make = Effect.gen(function* () {
         }
         activity += 1;
         // A new shell process starts idle; the manager resets its subprocess state without an event.
+        // A run still waiting for its prompt carries on into a restarted shell (a person restarting
+        // the setup terminal past a stuck rc-file prompt still gets setup).
         if (event.type === "started" || event.type === "restarted") {
           busy = false;
           reading = false;
@@ -436,7 +477,7 @@ export const make = Effect.gen(function* () {
     const terminalId =
       input.preferredTerminalId ??
       (trigger === "settle" || trigger === "check"
-        ? `${trigger}-${script.id}-${(yield* crypto.randomUUIDv4().pipe(Effect.orDie)).slice(0, 8)}`
+        ? `${trigger}-${script.id}-${(yield* random.uuidV4().pipe(Effect.orDie)).slice(0, 8)}`
         : `setup-${script.id}`);
     const cwd = input.cwd ?? input.worktreePath;
     const threadWorktreePath = input.cwd === undefined ? input.worktreePath : null;
@@ -448,12 +489,52 @@ export const make = Effect.gen(function* () {
       // Before client attachment, truecolor probes wait for terminal replies nobody can send.
       COLORTERM: "",
     };
+    const shellEnv = { ...env, NO_COLOR: "1", FORCE_COLOR: "0" };
+    const runKey = `${input.threadId}\u0000${terminalId}`;
+    // A fresh shell supersedes earlier runs that have not typed: in the new shell they could finish
+    // first and close it before this run types. A person's restart supersedes nothing.
+    if (input.freshShell === true) {
+      const earlier = pendingRuns.get(runKey);
+      if (earlier !== undefined) earlier.generation += 1;
+    }
+    // Restarted before the watchers subscribe, so the old shell's end settles nothing of this run;
+    // a prompt the new shell printed before them is covered by the readiness watcher's quiet fallback.
+    if (input.freshShell === true)
+      yield* withoutBindingCheck(
+        terminalManager.restart({
+          threadId: input.threadId,
+          terminalId,
+          cwd,
+          worktreePath: threadWorktreePath,
+          cols: FRESH_SHELL_COLS,
+          rows: FRESH_SHELL_ROWS,
+          env: shellEnv,
+        }),
+      ).pipe(
+        Effect.mapError(
+          (cause) =>
+            new ProjectSetupScriptOperationError({
+              ...errorContext,
+              operation: "openTerminal",
+              cause,
+            }),
+        ),
+      );
     const observe = input.observeCompletion;
-    const completionToken = observe
-      ? (yield* crypto.randomUUIDv4().pipe(Effect.orDie)).replaceAll("-", "")
-      : null;
+    const completionToken = observe ? (yield* random.uuidV4()).replaceAll("-", "") : null;
+    // Registered before the open: an open that waits for a folder a restore holds comes back with the
+    // restore's shell, and a fresh run's restart must supersede it too.
+    const pending = pendingRuns.get(runKey) ?? { generation: 0, alive: 0 };
+    pendingRuns.set(runKey, pending);
+    pending.alive += 1;
+    const generation = pending.generation;
+    const release = Effect.sync(() => {
+      pending.alive -= 1;
+      if (pending.alive === 0) pendingRuns.delete(runKey);
+    });
     const echoedWrapperLines: string[] = [];
-    // Subscribe before opening so neither startup activity nor the sentinel can race the listeners.
+    // Subscribe before the open (after a fresh shell's restart) so neither the shell's startup
+    // activity nor the sentinel can race the listeners.
     const observed =
       observe && completionToken
         ? yield* observeTerminalCompletion({
@@ -463,6 +544,7 @@ export const make = Effect.gen(function* () {
             sentinelPattern: completionSentinelPattern(completionToken),
             echoedWrapperLines,
             onOutputLine: observe.onOutputLine,
+            superseded: () => pending.generation !== generation,
           })
         : undefined;
     const readiness = yield* watchShellReadiness({
@@ -471,30 +553,31 @@ export const make = Effect.gen(function* () {
       onStartupPrompt: observed?.flushPartialLine ?? Effect.void,
     });
     const { completionShell, commandLine } = yield* Effect.gen(function* () {
-      const shell = yield* terminalManager
-        .open({
+      // Setup may open before its thread is bound to this worktree, as a pull request's does.
+      const shell = yield* withoutBindingCheck(
+        terminalManager.open({
           threadId: input.threadId,
           terminalId,
           stopOnSettle: script.stopOnSettle ?? false,
           cwd,
           worktreePath: threadWorktreePath,
-          env: { ...env, NO_COLOR: "1", FORCE_COLOR: "0" },
-        })
-        .pipe(
-          Effect.andThen(() =>
-            terminalManager
-              .getShell({ threadId: input.threadId, terminalId })
-              .pipe(Effect.catchTags({ TerminalNotRunningError: () => Effect.succeed(null) })),
-          ),
-          Effect.mapError(
-            (cause) =>
-              new ProjectSetupScriptOperationError({
-                ...errorContext,
-                operation: "openTerminal",
-                cause,
-              }),
-          ),
-        );
+          env: shellEnv,
+        }),
+      ).pipe(
+        Effect.andThen(() =>
+          terminalManager
+            .getShell({ threadId: input.threadId, terminalId })
+            .pipe(Effect.catchTags({ TerminalNotRunningError: () => Effect.succeed(null) })),
+        ),
+        Effect.mapError(
+          (cause) =>
+            new ProjectSetupScriptOperationError({
+              ...errorContext,
+              operation: "openTerminal",
+              cause,
+            }),
+        ),
+      );
       if (shell === null) {
         yield* observed?.abandon ?? Effect.void;
         return { completionShell: null, commandLine: null };
@@ -519,25 +602,32 @@ export const make = Effect.gen(function* () {
         Effect.sync(() => {
           observed?.unsubscribe();
           readiness.unsubscribe();
-        }),
+        }).pipe(Effect.andThen(release)),
       ),
     );
 
     // Return once the terminal exists so callers can show it while a startup prompt waits.
     // PowerShell and cmd have no line-editor signal.
     yield* (
-      completionShell === "posix" || completionShell === "fish"
-        ? readiness.wait
-        : Effect.succeed("ready" as const)
+      completionShell === "powershell" || completionShell === null
+        ? Effect.succeed("ready" as const)
+        : readiness.wait
     ).pipe(
       Effect.flatMap((shell) =>
         shell === "exited" || commandLine === null
           ? Effect.void
-          : terminalManager.write({
-              threadId: input.threadId,
-              terminalId,
-              data: projectScriptTerminalInput(commandLine),
-            }),
+          : pending.generation !== generation
+            ? (observed?.abandon ?? Effect.void)
+            : // Marked first: a restart before the write lands must not leave this run waiting.
+              (observed?.markWritten ?? Effect.void).pipe(
+                Effect.andThen(
+                  terminalManager.write({
+                    threadId: input.threadId,
+                    terminalId,
+                    data: projectScriptTerminalInput(commandLine),
+                  }),
+                ),
+              ),
       ),
       Effect.catchCause((cause) =>
         Effect.logWarning("project script command was not written", {
@@ -547,6 +637,7 @@ export const make = Effect.gen(function* () {
         }).pipe(Effect.andThen(observed?.abandon ?? Effect.void)),
       ),
       Effect.ensuring(Effect.sync(() => readiness.unsubscribe())),
+      Effect.ensuring(release),
       Effect.forkIn(serviceScope),
     );
 

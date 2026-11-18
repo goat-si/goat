@@ -1,4 +1,5 @@
 import { snapshotResult } from "./toolkits/preview/snapshotTransport.testkit.ts";
+import * as NodeCrypto from "@effect/platform-node/NodeCrypto";
 import * as NodeServices from "@effect/platform-node/NodeServices";
 import { expect, it } from "@effect/vitest";
 import {
@@ -77,17 +78,17 @@ const client = McpSchema.McpServerClient.of({
 });
 const layerTest = McpHttpServer.layerPreviewToolkit.pipe(
   Layer.provide(McpToolAccessTestkit.layerPermissionProfilesOff),
-  Layer.provideMerge(McpServer.McpServer.layer),
+  Layer.provideMerge(McpHttpServer.layerInProcessMcpServer),
   Layer.provideMerge(McpToolAccessTestkit.liveThreadsLayer),
   Layer.provideMerge(PreviewAutomationBroker.layer),
   Layer.provideMerge(
     ServerConfig.layerTest(process.cwd(), { prefix: "goat-mcp-http-server-test-" }),
   ),
-  Layer.provideMerge(NodeServices.layer),
+  Layer.provideMerge(Layer.mergeAll(NodeServices.layer, NodeCrypto.layer)),
 );
 const layerPullRequestsTest = McpHttpServer.layerPullRequestsToolkit.pipe(
   Layer.provide(McpToolAccessTestkit.layerPermissionProfilesOff),
-  Layer.provideMerge(McpServer.McpServer.layer),
+  Layer.provideMerge(McpHttpServer.layerInProcessMcpServer),
   Layer.provideMerge(McpToolAccessTestkit.liveThreadsLayer),
   Layer.provide(
     Layer.mergeAll(
@@ -96,6 +97,7 @@ const layerPullRequestsTest = McpHttpServer.layerPullRequestsToolkit.pipe(
       Layer.mock(Orchestrator.OrchestratorV2)({}),
       Layer.mock(ProjectionStore.ProjectionStoreV2)({}),
       NodeServices.layer,
+      NodeCrypto.layer,
     ),
   ),
 );
@@ -158,7 +160,7 @@ const layerRecordingTools = (calls: Array<unknown>) => {
     }),
   ).pipe(
     Layer.provide(McpToolAccessTestkit.layerPermissionProfilesOff),
-    Layer.provideMerge(McpServer.McpServer.layer),
+    Layer.provideMerge(McpHttpServer.layerInProcessMcpServer),
     Layer.provide(
       Layer.mergeAll(
         McpToolAccessTestkit.liveThreadsLayer,
@@ -167,6 +169,7 @@ const layerRecordingTools = (calls: Array<unknown>) => {
         Layer.mock(HostThreadsMcpService.HostThreadsMcpService)({}),
         Layer.mock(ThreadResultService.ThreadResultService)({}),
         NodeServices.layer,
+        NodeCrypto.layer,
       ),
     ),
   );
@@ -346,6 +349,24 @@ it.effect.each([
   ).pipe(Effect.provide(layerTest)),
 );
 
+it.effect("names the screenshot destination when saving it fails", () =>
+  Effect.scoped(
+    Effect.gen(function* () {
+      const config = yield* ServerConfig.ServerConfig;
+      yield* (yield* FileSystem.FileSystem).writeFileString(config.browserArtifactsDir, "occupied");
+      yield* serveSnapshots("mcp-save-failure-client", snapshotResult);
+      const snapshot = yield* callSnapshot({ tabId: alternateTabId, save: true });
+      const text = snapshot.content[0]?.type === "text" ? snapshot.content[0].text : "";
+      expect(snapshot.isError).toBe(true);
+      expect(text).toMatch(/^Preview snapshot failed: Could not save preview screenshot to /);
+      expect(text).toContain(config.browserArtifactsDir);
+      expect(snapshot.structuredContent).toMatchObject({
+        error: { _tag: "PreviewScreenshotSaveError", message: text.slice(25) },
+      });
+    }),
+  ).pipe(Effect.provide(layerTest)),
+);
+
 it.effect("refuses preview tools to a client outside a thread before they run", () =>
   Effect.gen(function* () {
     const server = yield* McpServer.McpServer;
@@ -484,13 +505,13 @@ it.effect(
         ...thread,
         limit: 100,
         runLimit: 50,
-        maxCharsPerItem: 50_000,
+        maxCharsPerItem: 20_000,
       });
       yield* callTool("goat_thread_read", { ...thread, limit: 7, runLimit: 1, maxCharsPerItem: 1 });
 
       expect(calls).toEqual([
-        { ...thread, limit: 100, runLimit: 50, maxCharsPerItem: 50_000 },
-        { ...thread, limit: 100, runLimit: 50, maxCharsPerItem: 50_000 },
+        { ...thread, limit: 100, runLimit: 50, maxCharsPerItem: 20_000 },
+        { ...thread, limit: 100, runLimit: 50, maxCharsPerItem: 20_000 },
         { ...thread, limit: 7, runLimit: 1, maxCharsPerItem: 1 },
       ]);
     }).pipe(Effect.provide(layerRecordingTools(calls)));
@@ -562,10 +583,21 @@ it.effect("bounds large ARIA trees without dropping every server locator", () =>
         { length: 2_000 },
         (_, index) => `- button "删除 ${index}" [ref=t3-snapshot-e${index}]`,
       ).join("\n");
-      yield* serveSnapshots("mcp-large-server-refs", { ...snapshotResult, accessibilityTree });
+      const visibleText = Array.from({ length: 700 }, (_, index) => `Row ${index} value`).join(
+        "\n",
+      );
+      yield* serveSnapshots("mcp-large-server-refs", {
+        ...snapshotResult,
+        visibleText,
+        accessibilityTree,
+      });
       const result = yield* callSnapshot({ includeImage: false });
       expect(result.isError).toBe(false);
-      const metadata = result.structuredContent as { accessibilityTree: string };
+      const metadata = result.structuredContent as {
+        accessibilityTree: string;
+        visibleText: string;
+      };
+      expect(metadata.visibleText.slice(0, 1_000)).toBe(visibleText.slice(0, 1_000));
       expect(metadata.accessibilityTree).toContain("[ref=t3-snapshot-e0]");
       expect(metadata.accessibilityTree.length).toBeLessThan(accessibilityTree.length);
       const body = result.content[1];
@@ -733,7 +765,7 @@ it.effect("terminates HTTP MCP sessions with DELETE", () =>
         capabilities: new Set(["orchestration"]),
         issuedAt: 1,
       };
-      const layerServer = McpHttpServer.layerMcpTransport.pipe(
+      const layerServer = McpHttpServer.layerMcpTransport(Layer.empty).pipe(
         Layer.provide(
           Layer.mock(McpSessionRegistry.McpSessionRegistry)({
             explainRefusal: () => Effect.succeed({ reason: "unknown" as const }),
@@ -922,7 +954,7 @@ it.effect("registers annotated tools and preserves authenticated request context
           Effect.provideService(McpSchema.McpServerClient, client),
           Effect.flip,
         );
-      expect(malformed._tag).toBe("InvalidParams");
+      expect("_tag" in malformed ? malformed._tag : undefined).toBe("InvalidParams");
 
       const snapshot = yield* server
         .callTool({
@@ -1012,7 +1044,7 @@ it.effect(
               }),
             ),
             Effect.provideService(ServerEnvironment.ServerEnvironment, fakeEnvironment),
-            Effect.provide(NodeServices.layer),
+            Effect.provide(Layer.mergeAll(NodeServices.layer, NodeCrypto.layer)),
           );
         const registry = yield* makeRegistry;
         const earlierRun = yield* makeRegistry;
@@ -1027,7 +1059,7 @@ it.effect(
             .pipe(Effect.map(tokenOf));
 
         yield* HttpRouter.serve(
-          McpHttpServer.layerMcpTransport.pipe(
+          McpHttpServer.layerMcpTransport(Layer.empty).pipe(
             Layer.provide(Layer.succeed(McpSessionRegistry.McpSessionRegistry, registry)),
           ),
           { disableListenLog: true, disableLogger: true },

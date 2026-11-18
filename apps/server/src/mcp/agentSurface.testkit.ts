@@ -392,9 +392,8 @@ export interface ListedTool {
   readonly _meta?: Readonly<Record<string, unknown>>;
 }
 
-const serveVia = <ET, RT>(
-  transport: Layer.Layer<Layer.Success<typeof McpHttpServer.layerMcpTransport>, ET, RT>,
-) =>
+/** `transportServices` are what the transport itself reads, such as goatclaw profiles. */
+const serveVia = <PA, PE, PR>(transportServices: Layer.Layer<PA, PE, PR>) =>
   Effect.fn("agentSurfaceTestkit.serveOverHttp")(function* <E, R>(
     scopes: Readonly<Record<string, McpInvocationScope>>,
     registrations: Layer.Layer<never, E, R>,
@@ -405,8 +404,8 @@ const serveVia = <ET, RT>(
       Object.entries(scopes).map(([caller, scope]) => [`Bearer ${caller}.token`, scope]),
     );
     yield* HttpRouter.serve(
-      registrations.pipe(
-        Layer.provideMerge(transport),
+      McpHttpServer.layerMcpTransport(registrations).pipe(
+        Layer.provide(transportServices),
         Layer.provide(
           Layer.mock(McpSessionRegistry.McpSessionRegistry)({
             resolve: () => Effect.succeed(undefined),
@@ -426,6 +425,17 @@ const serveVia = <ET, RT>(
     const http = yield* HttpClient.HttpClient;
     const sessions = new Map<string, string>();
     let nextId = 0;
+    const requestHeaders = (caller: string) => {
+      const session = sessions.get(caller);
+      return {
+        ...headersOf[caller],
+        accept: "application/json, text/event-stream",
+        authorization: `Bearer ${caller}.token`,
+        ...(session === undefined
+          ? {}
+          : { "mcp-session-id": session, "mcp-protocol-version": "2025-06-18" }),
+      };
+    };
     const post = Effect.fn(function* (
       caller: string,
       method: string,
@@ -436,14 +446,7 @@ const serveVia = <ET, RT>(
       const id = ++nextId;
       const session = sessions.get(caller);
       const response = yield* http.post("/mcp", {
-        headers: {
-          ...headersOf[caller],
-          accept: "application/json, text/event-stream",
-          authorization: `Bearer ${caller}.token`,
-          ...(session === undefined
-            ? {}
-            : { "mcp-session-id": session, "mcp-protocol-version": "2025-06-18" }),
-        },
+        headers: requestHeaders(caller),
         body: HttpBody.text(
           rewrite(encodeJson({ jsonrpc: "2.0", id, method, params })),
           "application/json",
@@ -508,14 +511,29 @@ const serveVia = <ET, RT>(
         };
         return page._meta;
       }),
+      /** A JSON-RPC notification as the caller, such as notifications/cancelled. */
+      notify: (caller: string, method: string, params: object) =>
+        ensureSession(caller).pipe(
+          Effect.andThen(
+            http.post("/mcp", {
+              headers: requestHeaders(caller),
+              body: HttpBody.text(
+                encodeJson({ jsonrpc: "2.0", method, params }),
+                "application/json",
+              ),
+            }),
+          ),
+          Effect.orDie,
+          Effect.asVoid,
+        ),
+      /** The id the caller's next request carries, once its session exists. */
+      nextRequestId: () => nextId + 1,
     };
   });
 
-export const serveOverHttp = serveVia(McpHttpServer.layerMcpTransport);
+export const serveOverHttp = serveVia(Layer.empty);
 // tools/list follows the caller's goatclaw profile, so this transport reads profiles too.
-const serveOverHttpWithProfiles = serveVia(
-  McpHttpServer.layerMcpTransport.pipe(Layer.provide(Profiles.layer)),
-);
+const serveOverHttpWithProfiles = serveVia(Profiles.layer);
 
 // Settings come from the caller, so a test can change the goatclaw policy.
 const serveWith = <E, R>(

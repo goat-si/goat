@@ -1,5 +1,10 @@
 import { useAtomValue } from "@effect/atom-react";
-import { botThreadKey, presentTaskStatus, selectBotChildren } from "@goat/client-runtime/goatBot";
+import {
+  botTaskWait,
+  botThreadKey,
+  presentTaskStatus,
+  selectBotChildren,
+} from "@goat/client-runtime/goatBot";
 import {
   type BotThreadRow,
   type ChannelUpdateTaskViewInput,
@@ -85,7 +90,8 @@ export function GoatBotChildRows({
               : "";
           const status = task ? presentTaskStatus(task.task.status, task.view.doneAt) : null;
           const statusPill = status && {
-            label: status.label,
+            // These rows hold no chips, so only waiting_input reads as waiting, in Home's words.
+            label: (task && botTaskWait(task, undefined)) ?? status.label,
             ...(status.tone === "danger"
               ? {
                   colorClass: "text-red-600 dark:text-red-300/90",

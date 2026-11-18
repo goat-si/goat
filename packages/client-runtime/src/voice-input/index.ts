@@ -39,11 +39,13 @@ export {
   getEnvironmentSpeechConfigurationEffect,
   downloadEnvironmentSpeechModelEffect,
   removeEnvironmentSpeechModelEffect,
+  linkEnvironmentSpeechModelsEffect,
   configureEnvironmentSpeechEffect,
   listEnvironmentSpeechModels,
   getEnvironmentSpeechConfiguration,
   downloadEnvironmentSpeechModel,
   removeEnvironmentSpeechModel,
+  linkEnvironmentSpeechModels,
   configureEnvironmentSpeech,
 } from "./environmentSpeech.ts";
 export {

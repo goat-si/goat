@@ -1,6 +1,7 @@
 // Adopts legacy T3 env names before anything reads the environment.
 import "@goat/contracts/adoptLegacyEnv";
 import * as NodeRuntime from "@effect/platform-node/NodeRuntime";
+import * as NodeCrypto from "@effect/platform-node/NodeCrypto";
 import * as NodeServices from "@effect/platform-node/NodeServices";
 import * as Config from "effect/Config";
 import * as Console from "effect/Console";
@@ -62,7 +63,7 @@ const RECORDINGS = {
   message_steering: {
     prompts: [MESSAGE_STEERING_INITIAL_PROMPT, MESSAGE_STEERING_STEER_PROMPT],
     output: "../src/orchestration-v2/testkit/fixtures/message_steering/cursor_transcript.ndjson",
-    interruptAfterRunStartPromptIndex: 0,
+    steerAfterRunStartPromptIndex: 0,
   },
   provider_thread_resume: {
     prompts: [PROVIDER_THREAD_RESUME_FIRST_PROMPT, PROVIDER_THREAD_RESUME_SECOND_PROMPT],
@@ -190,8 +191,8 @@ const recordScenario = Effect.fn("recordScenario")(function* (
     ...("interruptAfterToolStart" in recording
       ? { interruptAfterToolStart: recording.interruptAfterToolStart }
       : {}),
-    ...("interruptAfterRunStartPromptIndex" in recording
-      ? { interruptAfterRunStartPromptIndex: recording.interruptAfterRunStartPromptIndex }
+    ...("steerAfterRunStartPromptIndex" in recording
+      ? { steerAfterRunStartPromptIndex: recording.steerAfterRunStartPromptIndex }
       : {}),
     ...("restartBeforePromptIndex" in recording
       ? { restartBeforePromptIndex: recording.restartBeforePromptIndex }
@@ -226,6 +227,8 @@ const recordCursorReplayCommand = Command.make(
 );
 
 Command.run(recordCursorReplayCommand, { version: "0.0.0" }).pipe(
-  Effect.provide(Layer.mergeAll(CursorSdk.layer, NodeServices.layer)),
+  Effect.provide(
+    CursorSdk.layer.pipe(Layer.provideMerge(Layer.mergeAll(NodeServices.layer, NodeCrypto.layer))),
+  ),
   NodeRuntime.runMain,
 );

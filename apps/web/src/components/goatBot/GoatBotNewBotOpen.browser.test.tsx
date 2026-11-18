@@ -55,6 +55,7 @@ const roster = vi.hoisted(() => {
   };
 });
 const channels = vi.hoisted(() => ({
+  homeCurrentOpenableWorkAtom: () => "current-work",
   createBot: { permissionAtom: () => null },
   updateBot: { permissionAtom: () => null },
   setBotHidden: { permissionAtom: () => null },
@@ -64,6 +65,7 @@ const channels = vi.hoisted(() => ({
   readBotArtifact: { permissionAtom: () => null },
 }));
 vi.mock("~/state/channels", () => ({ channelEnvironment: channels }));
+vi.mock("./goatBotGoverned", () => ({ goatBotGovernedAtom: () => "governed" }));
 vi.mock("~/state/use-atom-command", () => ({
   useAtomCommand: (command: unknown) =>
     command === channels.createBot
@@ -72,7 +74,12 @@ vi.mock("~/state/use-atom-command", () => ({
 }));
 vi.mock("@effect/atom-react", async (original) => ({
   ...(await original<typeof import("@effect/atom-react")>()),
-  useAtomValue: () => true,
+  useAtomValue: (atom: unknown) =>
+    atom === "governed"
+      ? false
+      : atom === "current-work"
+        ? { eligible: true, list: "ready", work: { running: [], waiting: [], finished: [] } }
+        : true,
 }));
 vi.mock("~/state/environments", async (original) => ({
   ...(await original<typeof import("~/state/environments")>()),
@@ -101,7 +108,7 @@ vi.mock("./GoatBotAvatar", async (original) => ({
   GoatBotSessionAvatar: () => null,
 }));
 vi.mock("./useGoatBotMemberStatus", () => ({
-  useGoatBotMemberStatus: () => ({ waitingCount: 0, latest: undefined }),
+  useGoatBotMemberStatus: () => ({ waitingCount: 0, sidebarWaitingCount: 0, latest: undefined }),
 }));
 // The palette's New bot, against the same server and list as the roster.
 vi.mock("./goatBotPaletteItems", async (original) => ({

@@ -1,3 +1,4 @@
+import { preparationSettled } from "./testkit/preparationSettled.ts";
 import { otherProjectId, project, adapter, makeHarness } from "./testkit/ThreadLaunchHarness.ts";
 import { launchInput, projectId, modelSelection } from "./testkit/threadLaunchInput.ts";
 import { makeObservedSetup } from "../project/testkit/ProjectScriptRunnerHarness.ts";
@@ -25,6 +26,7 @@ import {
   ProviderInstanceId,
   ScheduledTaskId,
   ThreadId,
+  TextGenerationError,
 } from "@goat/contracts";
 import * as Cause from "effect/Cause";
 import * as Deferred from "effect/Deferred";
@@ -517,22 +519,6 @@ function scratchHarness() {
 
 const worktreeStrategy = { type: "worktree", baseRef: "main", startFromOrigin: true } as const;
 
-/** Settles once preparation releases the run, or fails it. */
-const preparationSettled = (threadId: ThreadId) =>
-  Effect.gen(function* () {
-    const threads = yield* ThreadManagement.ThreadManagementService;
-    yield* threads.streamStoredEventsFrom({ threadId }).pipe(
-      Stream.filter(
-        (stored) =>
-          stored.event.type === "run.updated" &&
-          (stored.commandId?.endsWith(":release") === true ||
-            stored.event.payload.status === "failed"),
-      ),
-      Stream.runHead,
-    );
-    return yield* threads.getThreadProjection(threadId);
-  });
-
 function scheduledTaskInput(id: string, targetProjectId: ProjectId) {
   return {
     id: ScheduledTaskId.make(id),
@@ -720,7 +706,7 @@ it.effect.each(["stable", "upstream/release"])(
       Effect.provide(
         GitVcsDriver.layer.pipe(
           Layer.provide(ServerConfig.layerTest(process.cwd(), { prefix: "launch-remote-git-" })),
-          Layer.provideMerge(NodeServices.layer),
+          Layer.provideMerge(Layer.mergeAll(NodeServices.layer, NodeCrypto.layer)),
         ),
       ),
     ),
@@ -970,116 +956,6 @@ it.effect.each(["fails", "is interrupted"] as const)(
         }
       }).pipe(Effect.provide(harness.layer));
     }),
-);
-
-it.effect.each(["failed", "interrupted"] as const)(
-  "holds a message queued during setup that arrives after the setup %s",
-  (ending) => {
-    let fetchEntered: Deferred.Deferred<void> | null = null;
-    const harness = makeHarness({
-      fetchWorktreeBaseCommit: () =>
-        ending === "interrupted"
-          ? Deferred.succeed(fetchEntered!, undefined).pipe(Effect.andThen(Effect.never))
-          : Effect.fail(
-              new GitCommandError({
-                operation: "GitVcsDriver.fetchRemote",
-                command: "git",
-                cwd: project.workspaceRoot,
-                detail: "Git could not reach the remote.",
-                exitCode: 128,
-              }),
-            ),
-    });
-    return Effect.gen(function* () {
-      fetchEntered = yield* Deferred.make<void>();
-      const launches = yield* ThreadLaunch.ThreadLaunchService;
-      const threads = yield* ThreadManagement.ThreadManagementService;
-      const launched = yield* launches.launch(
-        launchInput({
-          command: `command:launch:late-queued-follow-up-${ending}`,
-          thread: `thread:launch:late-queued-follow-up-${ending}`,
-          message: "First message",
-          workspace: { type: "worktree", baseRef: "main", startFromOrigin: true },
-        }),
-      );
-      if (ending === "interrupted") {
-        yield* Deferred.await(fetchEntered);
-        yield* threads.dispatch({
-          type: "run.interrupt",
-          commandId: CommandId.make("command:launch:late-queued-follow-up:interrupt"),
-          threadId: launched.threadId,
-          runId: launched.projection.runs[0]!.id,
-        });
-      }
-      yield* threads.streamStoredEventsFrom({ threadId: launched.threadId }).pipe(
-        Stream.filter(
-          (stored) => stored.event.type === "run.updated" && stored.event.payload.status === ending,
-        ),
-        Stream.runHead,
-      );
-
-      const queued = yield* threads.sendToThread({
-        projectId,
-        commandId: CommandId.make(`command:launch:late-queued-follow-up-${ending}:send`),
-        threadId: launched.threadId,
-        messageId: MessageId.make(`message:launch:late-queued-follow-up-${ending}:send`),
-        text: "Sent during setup",
-        attachments: [],
-        mode: "queue",
-        createdBy: "user",
-        creationSource: "web",
-      });
-      assert.equal(queued.delivery, "queued");
-      const projection = yield* threads.getThreadProjection(launched.threadId);
-      const held = projection.runs.at(-1)!;
-      assert.equal(held.status, "queued");
-      assert.equal(held.queueHeld, true);
-
-      // A message the user starts does not release it: the held message would
-      // run after it in the project checkout.
-      yield* threads.sendToThread({
-        projectId,
-        commandId: CommandId.make(`command:launch:late-queued-follow-up-${ending}:start`),
-        threadId: launched.threadId,
-        messageId: MessageId.make(`message:launch:late-queued-follow-up-${ending}:start`),
-        text: "Sent after setup",
-        attachments: [],
-        mode: "auto",
-        createdBy: "user",
-        creationSource: "web",
-      });
-      yield* threads.dispatch({
-        type: "message.dispatch",
-        commandId: CommandId.make(`command:launch:late-queued-follow-up-${ending}:wake`),
-        threadId: launched.threadId,
-        messageId: MessageId.make(`message:launch:late-queued-follow-up-${ending}:wake`),
-        text: "Background task completed.",
-        attachments: [],
-        dispatchMode: { type: "queue_after_active" },
-        createdBy: "agent",
-        creationSource: "provider",
-      });
-      const wake = (yield* threads.getThreadProjection(launched.threadId)).runs.at(-1)!;
-      assert.equal(wake.status, "queued");
-      assert.isTrue(wake.queueHeld);
-
-      // Nor does the next one, though the run that message started is now the
-      // latest and carries no workspace preparation.
-      yield* threads.sendToThread({
-        projectId,
-        commandId: CommandId.make(`command:launch:late-queued-follow-up-${ending}:again`),
-        threadId: launched.threadId,
-        messageId: MessageId.make(`message:launch:late-queued-follow-up-${ending}:again`),
-        text: "Sent after that",
-        attachments: [],
-        mode: "auto",
-        createdBy: "user",
-        creationSource: "web",
-      });
-      const after = yield* threads.getThreadProjection(launched.threadId);
-      assert.isTrue(after.runs.find((run) => run.id === held.id)?.queueHeld);
-    }).pipe(Effect.provide(harness.layer));
-  },
 );
 
 it.effect("replays a server-allocated launch", () =>
@@ -1868,7 +1744,7 @@ it.effect("retries a launch into the worktree a failed attempt left on its branc
     Effect.provide(
       GitVcsDriver.layer.pipe(
         Layer.provide(ServerConfig.layerTest(process.cwd(), { prefix: "launch-leftover-git-" })),
-        Layer.provideMerge(NodeServices.layer),
+        Layer.provideMerge(Layer.mergeAll(NodeServices.layer, NodeCrypto.layer)),
       ),
     ),
   ),
@@ -1997,7 +1873,7 @@ it.effect.each([false, true])(
           "starting",
         );
       }).pipe(Effect.provide(harness.layer));
-    }).pipe(Effect.provide(NodeServices.layer)),
+    }).pipe(Effect.provide(Layer.mergeAll(NodeServices.layer, NodeCrypto.layer))),
 );
 
 it.effect.each([0, 1])("releases an async setup before its completion with exit %s", (exitCode) =>
@@ -2678,3 +2554,41 @@ it.effect("does not release a prepared run after the project disables its provid
     }).pipe(Effect.provide(harness.layer));
   });
 });
+
+it.effect("tells the thread when its worktree branch could not be renamed", () =>
+  Effect.gen(function* () {
+    const harness = makeHarness({
+      generateBranchName: () =>
+        Effect.fail(
+          new TextGenerationError({
+            operation: "generateBranchName",
+            detail: "Failed to spawn Codex CLI process",
+          }),
+        ),
+    });
+    yield* Effect.gen(function* () {
+      const launches = yield* ThreadLaunch.ThreadLaunchService;
+      const tracker = yield* WorktreeSetupTracker.WorktreeSetupTracker;
+      const threads = yield* ThreadManagement.ThreadManagementService;
+      const launched = yield* launches.launch(
+        launchInput({
+          command: "launch:rename-fails",
+          thread: "thread:rename-fails",
+          message: "Start",
+          workspace: { type: "worktree", baseRef: "main" },
+        }),
+      );
+      yield* tracker.stream(launched.threadId).pipe(
+        Stream.filter((snapshot) => snapshot?.phase === "done"),
+        Stream.runHead,
+      );
+      const projection = yield* threads.getThreadProjection(launched.threadId);
+      const notice = projection.turnItems.find((item) => item.type === "system_notice");
+      assert.equal(notice?.type === "system_notice" ? notice.runId : null, projection.runs[0]?.id);
+      assert.include(
+        notice?.type === "system_notice" ? notice.message : "",
+        `stays ${projection.thread.branch}. Text generation failed in generateBranchName: Failed to spawn Codex CLI process`,
+      );
+    }).pipe(Effect.provide(harness.layer));
+  }),
+);

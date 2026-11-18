@@ -121,7 +121,12 @@ const testLayer = (
       ),
     ),
     Layer.provideMerge(liveThreadsLayer),
-    Layer.provideMerge(Layer.mock(HubNodes.HubNodes)(hub)),
+    Layer.provideMerge(
+      Layer.mock(HubNodes.HubNodes)({
+        disposableRoute: () => Effect.sync(() => undefined),
+        ...hub,
+      }),
+    ),
     Layer.provideMerge(
       Layer.mock(Broker.ConnectionCatalogBroker)({
         hasHost: Effect.succeed(false),
@@ -137,7 +142,9 @@ const call = <N extends keyof typeof ConnectionToolkit.tools>(
 ) =>
   Effect.gen(function* () {
     const toolkit = yield* ConnectionToolkit;
-    const result = yield* toolkit.handle(name, input).pipe(Stream.unwrap, Stream.runCollect);
+    const result = yield* toolkit
+      .handle(name, input as Schema.Json)
+      .pipe(Stream.unwrap, Stream.runCollect);
     return result.at(-1)?.result;
   });
 

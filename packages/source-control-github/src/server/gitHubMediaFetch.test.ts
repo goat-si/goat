@@ -11,6 +11,46 @@ import * as GitHubRest from "./GitHubRest.ts";
 
 const PR_REPOSITORY = "enterprise/private";
 
+const rawFile = (repositoryPath: string) =>
+  `https://raw.githubusercontent.com/${repositoryPath}/main/shot.png`;
+
+/** A signed-in account whose private files answer only a request that carries its token. */
+const layerPrivateFiles = (
+  seen: Array<{ url: string; authorization?: string }>,
+  redirects: Readonly<Record<string, string>> = {},
+) =>
+  Layer.mergeAll(
+    Layer.mock(GitHubRest.GitHubRest)({}),
+    Layer.mock(GitHubCredentials.GitHubCredentials)({
+      get: (host) =>
+        Effect.succeed({
+          host,
+          token: Redacted.make("signed-in"),
+          source: "gh" as const,
+          fingerprint: "fingerprint",
+        }),
+    }),
+    Layer.succeed(
+      HttpClient.HttpClient,
+      HttpClient.make((request) =>
+        Effect.sync(() => {
+          const authorization = request.headers.authorization;
+          seen.push({ url: request.url, ...(authorization ? { authorization } : {}) });
+          const location = redirects[request.url];
+          return HttpClientResponse.fromWeb(
+            request,
+            location === undefined
+              ? new Response(null, {
+                  status: authorization ? 200 : 404,
+                  headers: { "content-type": "image/png" },
+                })
+              : new Response(null, { status: 302, headers: { location } }),
+          );
+        }),
+      ),
+    ),
+  );
+
 /** An SSO organization: the upload URL answers with a sign-in page, a rendered signed URL with bytes. */
 const makeSsoFixture = (uploadUrl: string) => {
   const state = { account: "account-a", expired: new Set<string>() };
@@ -84,6 +124,7 @@ describe("GitHubMediaFetch", () => {
       const request = {
         url: "https://raw.githubusercontent.com/owner/repo/main/shot.png",
         headers: {},
+        repository: "owner/repo",
       };
       expect((yield* fetchMedia(request))?.status).toBe(404);
       expect((yield* fetchMedia(request))?.status).toBe(200);
@@ -238,5 +279,65 @@ describe("GitHubMediaFetch", () => {
       expect(fixture.rendered).toHaveLength(4);
       expect(fixture.requests.at(-1)?.url).toBe(fixture.signedUrls.at(-1));
     }).pipe(Effect.provide(fixture.layer), Effect.scoped);
+  });
+
+  it.effect("sends the GitHub credential only with a file of the request's own repository", () => {
+    const seen: Array<{ url: string; authorization?: string }> = [];
+    const lfs = (repositoryPath: string) =>
+      `https://media.githubusercontent.com/media/${repositoryPath}/main/clip.mp4`;
+    const cases: ReadonlyArray<readonly [string, string, string | undefined]> = [
+      ["own repository", rawFile("owner/repo"), "owner/repo"],
+      ["own repository in other letter case", rawFile("Owner/REPO"), "owner/repo"],
+      ["own repository's LFS file", lfs("owner/repo"), "owner/repo"],
+      ["the same file asked for under another repository", rawFile("owner/repo"), "someone/else"],
+      ["the same file with no repository", rawFile("owner/repo"), undefined],
+      ["another repository", rawFile("owner/other"), "owner/repo"],
+      ["another owner's repository of the same name", rawFile("other/repo"), "owner/repo"],
+      ["another repository's LFS file", lfs("owner/other"), "owner/repo"],
+      ["dot segments", rawFile("owner/repo/../../other/secret"), "owner/repo"],
+      ["encoded dot segments", rawFile("owner/repo/%2e%2e/%2E%2E/other/secret"), "owner/repo"],
+      ["an encoded separator", rawFile("owner/repo%2F..%2F..%2Fother%2Fsecret"), "owner/repo"],
+    ];
+    return Effect.gen(function* () {
+      const fetchMedia = yield* GitHubMediaFetch.make;
+      const outcomes = yield* Effect.forEach(cases, ([name, url, repository]) =>
+        fetchMedia({ url, headers: {}, ...(repository === undefined ? {} : { repository }) }).pipe(
+          Effect.map((response) => ({
+            name,
+            credential: seen.at(-1)?.authorization ?? null,
+            status: response?.status,
+          })),
+        ),
+      );
+      expect(outcomes).toEqual(
+        cases.map(([name], index) =>
+          index < 3
+            ? { name, credential: "Bearer signed-in", status: 200 }
+            : { name, credential: null, status: 404 },
+        ),
+      );
+    }).pipe(Effect.provide(layerPrivateFiles(seen)), Effect.scoped);
+  });
+
+  it.effect("a redirect away from the request's own repository drops the credential", () => {
+    const seen: Array<{ url: string; authorization?: string }> = [];
+    const redirects = {
+      [rawFile("owner/repo")]: rawFile("other/secret"),
+      [rawFile("owner/moved")]: "https://objects.example.com/signed",
+    };
+    return Effect.gen(function* () {
+      const fetchMedia = yield* GitHubMediaFetch.make;
+      const repository = "owner/repo";
+      expect(
+        (yield* fetchMedia({ url: rawFile("owner/repo"), headers: {}, repository }))?.status,
+      ).toBe(404);
+      yield* fetchMedia({ url: rawFile("owner/moved"), headers: {}, repository: "owner/moved" });
+      expect(seen).toEqual([
+        { url: rawFile("owner/repo"), authorization: "Bearer signed-in" },
+        { url: rawFile("other/secret") },
+        { url: rawFile("owner/moved"), authorization: "Bearer signed-in" },
+        { url: "https://objects.example.com/signed" },
+      ]);
+    }).pipe(Effect.provide(layerPrivateFiles(seen, redirects)), Effect.scoped);
   });
 });

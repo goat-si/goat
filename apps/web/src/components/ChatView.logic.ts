@@ -5,12 +5,6 @@ import {
   deriveThreadRuntime,
 } from "@goat/client-runtime/state/thread-execution";
 import { checkpointFileTotals } from "@goat/client-runtime/state/thread-checkpoints";
-import { derivePendingBackgroundWork } from "@goat/shared/orchestrationV2PendingBackgroundWork";
-import {
-  latestUnheldRun,
-  usageLimitRunPresentedAsLatest,
-} from "@goat/shared/orchestrationV2ThreadError";
-import * as Option from "effect/Option";
 import type { SetStateAction } from "react";
 import { applyClaudePromptEffortPrefix, resolvePromptInjectedEffort } from "@goat/shared/model";
 import { getProviderModelCapabilities } from "../providerModels";
@@ -22,7 +16,6 @@ import {
   type AssetCreateUrlInput,
   type AssetCreateUrlResult,
   type ChatFileAttachment,
-  type CommandId,
   type EnvironmentId,
   isProviderDriverKind,
   ProjectId,
@@ -72,7 +65,7 @@ import {
 } from "../composerDraftStore";
 import * as Schema from "effect/Schema";
 import { appAtomRegistry } from "../rpc/atomRegistry";
-import { environmentThreadShells, environmentThreadDetails } from "../state/threads";
+import { environmentThreadShells } from "../state/threads";
 import { waitForAtomValue } from "../state/waitForAtomValue";
 import {
   filterTerminalContextsWithText,
@@ -231,16 +224,6 @@ export function resolveProactiveTurnDiffAction(input: {
   }
   const totals = checkpointFileTotals(input.checkpoint);
   return totals.count >= 3 || totals.additions + totals.deletions >= 50 ? "open" : "ignore";
-}
-
-/** Mark reactivated Diff tabs to preserve review scope. Already-active tabs must not leave a marker for
- * the next open. */
-export function resolveExplicitDiffOpenOnActivate(input: {
-  readonly surfaceKind: RightPanelSurface["kind"];
-  readonly diffOpen: boolean;
-  readonly activeThreadRef: ScopedThreadRef;
-}): ScopedThreadRef | null {
-  return input.surfaceKind === "diff" && !input.diffOpen ? input.activeThreadRef : null;
 }
 
 export function codexArtifactTemplatePromptToAppend(
@@ -1017,87 +1000,6 @@ export async function waitForStartedServerThread(
   });
 }
 
-export async function waitForRevertedMessage(
-  threadRef: ScopedThreadRef,
-  turnCount: number,
-  requestId: CommandId,
-  revert: () => Promise<void>,
-  timeoutMs = 120_000,
-): Promise<void> {
-  const threadAtom = environmentThreadDetails.stateAtom(threadRef);
-  const readProjection = () => Option.getOrNull(appAtomRegistry.get(threadAtom).data);
-  const initial = readProjection();
-  const providerThreadId = initial?.thread.activeProviderThreadId;
-  const initialProviderThread = initial?.providerThreads.find(
-    (providerThread) => providerThread.id === providerThreadId,
-  );
-  const initialProviderThreadIds = new Set(initial?.providerThreads.map((thread) => thread.id));
-  // Paging can omit the source run. Rollback commits the entire settled suffix atomically.
-  const witness = initial?.runs.reduce<(typeof initial.runs)[number] | undefined>((latest, run) => {
-    if (
-      run.ordinal <= turnCount ||
-      (run.status !== "completed" &&
-        run.status !== "interrupted" &&
-        run.status !== "failed" &&
-        run.status !== "cancelled")
-    )
-      return latest;
-    return latest === undefined || run.ordinal > latest.ordinal ? run : latest;
-  }, undefined);
-  if (witness === undefined) {
-    throw new Error("The thread has changed. Select a message to rewind again.");
-  }
-  return new Promise<void>((resolve, reject) => {
-    let settled = false;
-    let accepted = false;
-    let unsubscribe = () => {};
-    let timeout: ReturnType<typeof globalThis.setTimeout> | undefined;
-    const finish = (error?: unknown) => {
-      if (settled) return;
-      settled = true;
-      if (timeout !== undefined) globalThis.clearTimeout(timeout);
-      unsubscribe();
-      if (error !== undefined) reject(error);
-      else resolve();
-    };
-    const inspect = () => {
-      const thread = readProjection();
-      if (!thread) return;
-      const failure = thread.thread.rollbackFailure;
-      if (failure?.requestId === requestId) {
-        finish(new Error(failure.message));
-        return;
-      }
-      if (
-        accepted &&
-        thread.providerThreads.some(
-          (providerThread) =>
-            (providerThread.id === providerThreadId ||
-              // Claude resets to a fresh root session when rewinding to thread start.
-              (turnCount === 0 &&
-                providerThread.ownerNodeId === null &&
-                providerThread.appThreadId === initial?.thread.id &&
-                providerThread.providerInstanceId === initialProviderThread?.providerInstanceId &&
-                !initialProviderThreadIds.has(providerThread.id))) &&
-            providerThread.lastRunOrdinal === (turnCount === 0 ? null : turnCount),
-        ) &&
-        thread.runs.some((run) => run.id === witness.id && run.status === "rolled_back")
-      )
-        finish();
-    };
-    unsubscribe = appAtomRegistry.subscribe(threadAtom, inspect);
-    timeout = globalThis.setTimeout(() => {
-      finish(new Error("Timed out waiting for the thread to rewind."));
-    }, timeoutMs);
-    Promise.resolve()
-      .then(revert)
-      .then(() => {
-        accepted = true;
-        inspect();
-      }, finish);
-  });
-}
-
 export interface LocalDispatchSnapshot {
   startedAt: string;
   preparingWorktree: boolean;
@@ -1205,10 +1107,10 @@ export function hasServerAcknowledgedLocalDispatch(input: {
   );
 }
 
-// Returning to the window should land the caret in the composer, so the reader can type right
-// away. The exceptions are places where focus is deliberate: another text field, a terminal in
-// the drawer or the right panel, an open dialog, menu, or popup, or a region or sidebar row
-// reached from the keyboard. A plain focused button or a clicked row yields to the composer.
+// Window return puts the caret in the composer unless focus is deliberate: another text field,
+// a terminal, an open dialog, menu, or popup, a region, timeline, or sidebar row reached from the
+// keyboard, or a region with its own keys (aria-keyshortcuts). A plain focused button or a clicked
+// row yields to the composer.
 export function shouldRefocusComposerOnWindowFocus(
   activeElement:
     | (Pick<Element, "tagName" | "closest" | "getAttribute"> & { isContentEditable?: boolean })
@@ -1228,7 +1130,7 @@ export function shouldRefocusComposerOnWindowFocus(
   }
   return (
     activeElement.closest(
-      '[data-workspace-keyboard-focus], [data-sidebar-row]:focus-visible, [role="dialog"], [role="alertdialog"], [role="application"], [role="menu"], [role="listbox"], [data-slot$="-popup"], [data-terminal-owner]',
+      '[data-workspace-keyboard-focus], [data-sidebar-row]:focus-visible, [role="dialog"], [role="alertdialog"], [role="application"], [role="menu"], [role="listbox"], [data-slot$="-popup"], [data-terminal-owner], [aria-keyshortcuts]',
     ) === null
   );
 }
@@ -1429,6 +1331,8 @@ export interface ComposerSendContents {
   readonly reviewComments: ReadonlyArray<ReviewCommentContext>;
   readonly threadContexts: ReadonlyArray<ThreadContextRecord>;
   readonly previewTabs?: ReadonlyArray<import("@goat/contracts").PreviewTabContextRecord>;
+  /** The response the message replies to. `prompt` already leads with its reference. */
+  readonly replyTo?: import("@goat/contracts").ResponseContextRecord | null;
 }
 
 /**
@@ -1440,6 +1344,15 @@ export function snapshotComposerSend(contents: ComposerSendContents) {
   const images = [...contents.images];
   const files = [...contents.files];
   const terminalContexts = [...contents.sendableTerminalContexts];
+  const replyTo = contents.replyTo ?? null;
+  const messageText = contents.terminalContexts
+    .filter((context) => !terminalContexts.includes(context))
+    .reduce(
+      (text, context) =>
+        removeInlineContextReference(text, terminalContextReference(context).contextId).prompt,
+      contents.prompt,
+    )
+    .trim();
   return {
     images,
     files,
@@ -1449,14 +1362,12 @@ export function snapshotComposerSend(contents: ComposerSendContents) {
     reviewComments: [...contents.reviewComments],
     threadContexts: [...contents.threadContexts],
     previewTabs: [...(contents.previewTabs ?? [])],
-    messageText: contents.terminalContexts
-      .filter((context) => !terminalContexts.includes(context))
-      .reduce(
-        (text, context) =>
-          removeInlineContextReference(text, terminalContextReference(context).contextId).prompt,
-        contents.prompt,
-      )
-      .trim(),
+    replyTo,
+    messageText,
+    /** What a failed send puts back in the composer: the reply returns above it, not in the text. */
+    draftText: replyTo
+      ? removeInlineContextReference(messageText, replyTo.contextId).prompt.trimStart()
+      : messageText,
   };
 }
 
@@ -1628,28 +1539,6 @@ export function presentThreadShellFromProjection(
     latestRun,
     runtime,
   };
-}
-
-/** Background work the provider still runs after the latest run ended. */
-export function deriveThreadPendingBackgroundTasks(projection: ThreadStructure | null) {
-  if (projection === null) return [];
-  const sessionError =
-    projection.providerSessions.findLast(
-      (session) => session.providerInstanceId === projection.thread.providerInstanceId,
-    )?.lastError ?? null;
-  const latestRun =
-    usageLimitRunPresentedAsLatest(projection.runs, projection.turnItems, sessionError) ??
-    latestUnheldRun(projection.runs);
-  return [
-    ...derivePendingBackgroundWork({
-      latestRun,
-      providerThreads: projection.providerThreads,
-      turnItems: projection.turnItems,
-      activeProviderThreadId: projection.thread.activeProviderThreadId,
-      runs: projection.runs,
-      pullRequests: projection.thread.pullRequests,
-    }),
-  ];
 }
 
 /**

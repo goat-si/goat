@@ -15,6 +15,8 @@ export interface EnvironmentQueryView<A, E = unknown> {
   readonly failure: E | null;
   readonly isPending: boolean;
   readonly isSuccess: boolean;
+  /** The settled success, as mobile's view has it: a new object only when a read succeeds. */
+  readonly successResult: AsyncResult.Success<A, E> | null;
   readonly refresh: () => void;
 }
 
@@ -47,6 +49,7 @@ export function useEnvironmentQuery<A, E>(
       result._tag === "Failure" ? Option.getOrNull(Cause.findErrorOption(result.cause)) : null,
     isPending: atom !== null && result.waiting,
     isSuccess: result._tag === "Success",
+    successResult: result._tag === "Success" && !result.waiting ? result : null,
     refresh,
   };
 }

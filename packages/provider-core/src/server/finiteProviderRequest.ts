@@ -37,8 +37,9 @@ export const makeFiniteRequestGuard = Effect.fn("FiniteProviderRequest.make")(fu
     const sentAt = generation;
     const duration = policy.duration(method);
     const liveness = policy.liveness;
+    // Effect 4.1 forks nothing into a closed scope; the fiber comes back interrupted unrun.
     const fiber =
-      liveness !== undefined && duration !== undefined
+      liveness !== undefined && duration !== undefined && liveness.scope.state._tag !== "Closed"
         ? yield* effect.pipe(Effect.forkIn(liveness.scope, { startImmediately: true }))
         : undefined;
     let retained = false;

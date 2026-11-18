@@ -14,8 +14,11 @@ interface TextBlock {
   text: string;
   published: string;
   completed: boolean;
-  lineFlushed: boolean;
+  publishedAt?: number;
 }
+
+// A line still streaming publishes at most this often; a line break publishes at once.
+const PARTIAL_LINE_INTERVAL_MS = 50;
 
 export function makeClaudeAssistantTextProjector() {
   let messageId: string | null = null;
@@ -40,7 +43,7 @@ export function makeClaudeAssistantTextProjector() {
       starts.set(id, start);
       return start;
     },
-    stream(event: StreamEvent): TextUpdate[] {
+    stream(event: StreamEvent, nowMillis?: number): TextUpdate[] {
       if (event.type === "message_start") {
         messageId = event.message.id;
         return [];
@@ -59,7 +62,7 @@ export function makeClaudeAssistantTextProjector() {
           text: event.content_block.text,
           published: "",
           completed: false,
-          lineFlushed: false,
+          ...(nowMillis === undefined ? {} : { publishedAt: nowMillis }),
         });
       }
       if (!("index" in event)) return [];
@@ -68,9 +71,17 @@ export function makeClaudeAssistantTextProjector() {
       if (event.type === "content_block_delta" && event.delta.type === "text_delta")
         block.text += event.delta.text;
       if (event.type === "content_block_stop") return update(block, true);
-      if (!block.lineFlushed && block.text.includes("\n")) {
-        block.lineFlushed = true;
+      if (block.text.slice(block.published.length).includes("\n")) {
+        if (nowMillis !== undefined) block.publishedAt = nowMillis;
         return update(block, false, true);
+      }
+      if (
+        nowMillis !== undefined &&
+        block.publishedAt !== undefined &&
+        nowMillis - block.publishedAt >= PARTIAL_LINE_INTERVAL_MS
+      ) {
+        block.publishedAt = nowMillis;
+        return update(block, false);
       }
       return [];
     },
@@ -88,7 +99,6 @@ export function makeClaudeAssistantTextProjector() {
           text: "",
           published: "",
           completed: false,
-          lineFlushed: false,
         };
         if (content.text.length > 0) block.text = content.text;
         blocks.set(blockKey, block);

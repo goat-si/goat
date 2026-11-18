@@ -5,7 +5,7 @@ import { DeliveryAuthorization } from "./DeliveryAuthorization.ts";
 import { Devices } from "./Devices.ts";
 import * as DateTime from "effect/DateTime";
 import * as ApnsDeliveryQueueConsumer from "./ApnsDeliveryQueueConsumer.ts";
-import type * as Cloudflare from "alchemy/Cloudflare";
+import type * as Cloudflare from "@alchemy.run/cloudflare";
 import { EnvironmentId, ThreadId } from "@goat/contracts";
 import type {
   RelayAgentActivityAggregateState,

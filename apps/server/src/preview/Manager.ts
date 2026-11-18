@@ -21,7 +21,7 @@ import {
   normalizePreviewUrl,
 } from "@goat/shared/preview";
 import * as Context from "effect/Context";
-import * as Crypto from "effect/Crypto";
+import * as SecureRandom from "effect/crypto/SecureRandom";
 import * as DateTime from "effect/DateTime";
 import * as Effect from "effect/Effect";
 import * as Layer from "effect/Layer";
@@ -127,8 +127,8 @@ const currentIsoTimestamp = DateTime.now.pipe(Effect.map(DateTime.formatIso));
 
 /** @public */
 export const make = Effect.gen(function* PreviewManagerMake() {
-  const crypto = yield* Crypto.Crypto;
-  const serverEpoch = yield* crypto.randomUUIDv4().pipe(Effect.orDie);
+  const random = yield* SecureRandom.SecureRandom;
+  const serverEpoch = yield* random.uuidV4();
   const stateRef = yield* SynchronizedRef.make<ManagerState>(initialState);
   const eventsPubSub = yield* PubSub.unbounded<PreviewEvent>();
   const events: Stream.Stream<PreviewEvent> = Stream.fromPubSub(eventsPubSub);
@@ -197,6 +197,8 @@ export const make = Effect.gen(function* PreviewManagerMake() {
         viewport: input.viewport ?? FILL_PREVIEW_VIEWPORT,
         ...(input.profileId === undefined ? {} : { profileId: input.profileId }),
         ...(runtime === undefined ? {} : { runtime }),
+        ...(input.colorScheme === undefined ? {} : { colorScheme: input.colorScheme }),
+        ...(input.zoomFactor === undefined ? {} : { zoomFactor: input.zoomFactor }),
         ...(runtime === "server" && input.automationOwner !== undefined
           ? { automationOwner: input.automationOwner }
           : {}),
@@ -480,7 +482,7 @@ export const make = Effect.gen(function* PreviewManagerMake() {
           ...session.snapshot,
           reveal: true,
           revealRequest: {
-            id: yield* crypto.randomUUIDv4().pipe(Effect.orDie),
+            id: yield* random.uuidV4(),
             force: input.force,
           },
           updatedAt: yield* currentIsoTimestamp,

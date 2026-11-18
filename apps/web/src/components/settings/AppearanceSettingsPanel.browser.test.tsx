@@ -113,7 +113,7 @@ it("selects and restores the Liquid Glass style through client settings", async 
   await expect
     .element(screen.getByText("Higher values make menus, dialogs, and the composer more solid."))
     .toBeVisible();
-  expect(fixture.saved().appearancePreset).toBe("default");
+  await vi.waitFor(() => expect(fixture.saved().appearancePreset).toBe("default"));
 });
 
 it("saves a chosen image and selects the custom background", async () => {

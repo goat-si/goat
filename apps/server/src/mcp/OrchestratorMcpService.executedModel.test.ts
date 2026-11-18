@@ -1,3 +1,4 @@
+import * as NodeCrypto from "@effect/platform-node/NodeCrypto";
 import * as NodeServices from "@effect/platform-node/NodeServices";
 import { assert, it } from "@effect/vitest";
 import {
@@ -41,15 +42,6 @@ it.effect("retries terminal acknowledgement with a fresh command id", () =>
     const parentProjection = {
       thread: { id: parentThreadId },
       runs: [],
-      contextTransfers: [
-        {
-          id: resultTransferId,
-          type: "subagent_result",
-          sourceThreadId: childThreadId,
-          targetThreadId: parentThreadId,
-          sourcePoint: { runId: childRunId },
-        },
-      ],
       subagents: [
         {
           id: taskId,
@@ -83,7 +75,15 @@ it.effect("retries terminal acknowledgement with a fresh command id", () =>
           completedAt: DateTime.makeUnsafe("2026-10-03T10:05:00Z"),
         },
       ],
-      contextTransfers: [],
+      contextTransfers: [
+        {
+          id: resultTransferId,
+          type: "subagent_result",
+          sourceThreadId: childThreadId,
+          targetThreadId: parentThreadId,
+          sourcePoint: { runId: childRunId },
+        },
+      ],
       messages: [
         {
           id: MessageId.make("message:mcp-ack-result"),
@@ -104,6 +104,7 @@ it.effect("retries terminal acknowledgement with a fresh command id", () =>
     let settleAfterTaskRead = false;
     const layerDependencies = Layer.mergeAll(
       NodeServices.layer,
+      NodeCrypto.layer,
       Layer.mock(ThreadManagementService.ThreadManagementService)({
         getThreadRecords: (threadId) =>
           Effect.sync(() => {
@@ -111,6 +112,7 @@ it.effect("retries terminal acknowledgement with a fresh command id", () =>
               return hasNestedWork
                 ? {
                     ...childProjection,
+                    contextTransfers: [],
                     subagents: [{ ...parentProjection.subagents[0]!, status: "running" as const }],
                   }
                 : childProjection;
@@ -118,7 +120,6 @@ it.effect("retries terminal acknowledgement with a fresh command id", () =>
             const snapshot = hasNestedWork
               ? {
                   ...parentProjection,
-                  contextTransfers: [],
                   subagents: parentProjection.subagents.map((task) => ({
                     ...task,
                     result: null,

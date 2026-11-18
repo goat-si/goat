@@ -32,8 +32,8 @@ Uncordoning the host stops further moves.
 An agent outside GOAT can declare a goal too, with its MCP sign-in or a
 [client token](outside-agents.md#long-running-orchestrators) approved for more than read-only
 access. The goal then acts as that client and is capped by the access it was approved with. It
-stops acting while the client's session is revoked or expired, so a goal that should outlive a
-token needs a token that lasts as long.
+stops acting within about 5 seconds of the client's session being revoked, or when it expires, so
+a goal that should outlive a token needs a token that lasts as long.
 
 This goal starts two workers, each on its own branch from `dev`, and is done when the pull
 requests they open are merged and each has reported its result:

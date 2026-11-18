@@ -1,5 +1,6 @@
 import { layerNoFleetSync } from "../goatclaw/FleetSync.testkit.ts";
 import { assert, it } from "@effect/vitest";
+import * as NodeCrypto from "@effect/platform-node/NodeCrypto";
 import * as NodeServices from "@effect/platform-node/NodeServices";
 import {
   CommandId,
@@ -118,7 +119,7 @@ it.effect(
       let due: Effect.Effect<void> = Effect.die("scheduler not registered");
       const phaseLayer = () => {
         const databaseLayer = Persistence.layerFromPath(dbPath).pipe(
-          Layer.provide(NodeServices.layer),
+          Layer.provide(Layer.mergeAll(NodeServices.layer, NodeCrypto.layer)),
         );
         const adapter = {
           instanceId: shell.providerInstanceId,
@@ -244,6 +245,7 @@ it.effect(
             resolveCommit: () => Effect.succeed({ commitSha: "testkit-base" }),
           }),
           NodeServices.layer,
+          NodeCrypto.layer,
           delivery,
           Layer.mock(Scheduler.Scheduler)({
             register: <E, R>(name: string, work: Effect.Effect<void, E, R>) =>
@@ -515,5 +517,5 @@ it.effect(
           assert.equal(row.memory_grant_ceiling, expected.get(row.task_id));
         }
       }).pipe(Effect.provide(phaseLayer()));
-    }).pipe(Effect.scoped, Effect.provide(NodeServices.layer)),
+    }).pipe(Effect.scoped, Effect.provide(Layer.mergeAll(NodeServices.layer, NodeCrypto.layer))),
 );

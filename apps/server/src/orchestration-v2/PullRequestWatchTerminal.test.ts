@@ -1,4 +1,5 @@
 import * as McpProviderSessions from "@goat/provider-core/server/McpProviderSessions";
+import * as NodeCrypto from "@effect/platform-node/NodeCrypto";
 import * as NodeServices from "@effect/platform-node/NodeServices";
 import { assert, describe, it } from "@effect/vitest";
 import {
@@ -185,6 +186,7 @@ const watchedThread = (name: string) =>
       Effect.provide(
         Layer.mergeAll(
           NodeServices.layer,
+          NodeCrypto.layer,
           ServerSettings.layerTest(),
           Layer.mock(PullRequestService.PullRequestService)({
             detail: (input) =>
@@ -355,6 +357,18 @@ describe("a watch on a pull request that merged or closed", () => {
     }).pipe(Effect.provide(layerTest)),
   );
 
+  it.effect("ends on a closed pull request even when activity cannot be read", () =>
+    Effect.gen(function* () {
+      const { host, activityBroken, reactor, link, records } =
+        yield* watchedThread("closed-activity");
+      yield* Ref.set(host, { ...openAt("aaaa111", [pending]), state: "closed", closedAt: AT });
+      yield* Ref.set(activityBroken, true);
+      yield* reactor.sweep;
+      assert.isUndefined((yield* link)?.watch);
+      assert.deepEqual((yield* records).summaries, ["#41: closed, stopped watching"]);
+    }).pipe(Effect.provide(layerTest)),
+  );
+
   it.effect("never wakes for news read just before the pull request closed", () =>
     Effect.gen(function* () {
       const { host, duringRead, reactor, records, snapshot } =
@@ -517,6 +531,7 @@ it.effect("reads a watched pull request before another project's fingerprint ret
       Effect.provide(
         Layer.mergeAll(
           NodeServices.layer,
+          NodeCrypto.layer,
           ServerSettings.layerTest(),
           Layer.mock(PullRequestService.PullRequestService)({
             watchFingerprint: (input) =>

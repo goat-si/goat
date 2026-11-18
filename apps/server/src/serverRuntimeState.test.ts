@@ -1,5 +1,6 @@
 // @effect-diagnostics nodeBuiltinImport:off - independent synthetic filesystem permission oracle; injects a real file replacement during the native SQLite transaction.
 import * as NodeSqlite from "node:sqlite";
+import * as NodeCrypto from "@effect/platform-node/NodeCrypto";
 import * as NodeServices from "@effect/platform-node/NodeServices";
 import { assert, describe, it } from "@effect/vitest";
 import { ORCHESTRATION_PROTOCOL_VERSION } from "@goat/contracts";
@@ -175,7 +176,7 @@ describe("server ownership", () => {
       }),
     ),
     Layer.succeed(HostProcess.Environment, {}),
-  ).pipe(Layer.provideMerge(NodeServices.layer));
+  ).pipe(Layer.provideMerge(Layer.mergeAll(NodeServices.layer, NodeCrypto.layer)));
   const makeState = ServerRuntimeState.makePersistedServerRuntimeState({
     config: { host: undefined, devUrl: undefined },
     port: 3773,
@@ -398,7 +399,7 @@ describe("serverRuntimeState", () => {
       yield* ServerRuntimeState.persistServerRuntimeState({ path, state });
       const read = yield* ServerRuntimeState.readPersistedServerRuntimeState(path);
       assert.deepEqual(Option.getOrThrow(read), state);
-    }).pipe(Effect.provide(NodeServices.layer), Effect.scoped),
+    }).pipe(Effect.provide(Layer.mergeAll(NodeServices.layer, NodeCrypto.layer)), Effect.scoped),
   );
   describe("beside an installed boot service", () => {
     it.effect("checks owned legacy units even beside a foreign current unit", () =>
@@ -432,7 +433,7 @@ describe("serverRuntimeState", () => {
           assert.equal(foreign.result._tag, "Success");
           assert.deepEqual(foreign.probedUnits, []);
         }
-      }).pipe(Effect.provide(NodeServices.layer)),
+      }).pipe(Effect.provide(Layer.mergeAll(NodeServices.layer, NodeCrypto.layer))),
     );
 
     it.effect("refuses an old active or scheduled service even without its runtime record", () =>
@@ -483,7 +484,7 @@ describe("serverRuntimeState", () => {
           assert.include(result.failure.message, "goat service restart");
           assert.include(result.failure.message, "No server was stopped");
         }
-      }).pipe(Effect.provide(NodeServices.layer)),
+      }).pipe(Effect.provide(Layer.mergeAll(NodeServices.layer, NodeCrypto.layer))),
     );
 
     it.effect(
@@ -502,7 +503,7 @@ describe("serverRuntimeState", () => {
           if (result._tag !== "Failure") return;
           assert.equal(result.failure._tag, "OlderBootServiceError");
           assert.equal(Runtime.getErrorExitCode(result.failure), 78);
-        }).pipe(Effect.provide(NodeServices.layer)),
+        }).pipe(Effect.provide(Layer.mergeAll(NodeServices.layer, NodeCrypto.layer))),
     );
 
     it.effect("refuses while the loaded service has not restarted into its lock-aware update", () =>
@@ -516,7 +517,7 @@ describe("serverRuntimeState", () => {
           },
         });
         assert.equal(result._tag === "Failure" && result.failure._tag, "OlderBootServiceError");
-      }).pipe(Effect.provide(NodeServices.layer)),
+      }).pipe(Effect.provide(Layer.mergeAll(NodeServices.layer, NodeCrypto.layer))),
     );
 
     it.effect("allows lock-aware stable services that are loaded or stopped and enabled", () =>
@@ -539,7 +540,7 @@ describe("serverRuntimeState", () => {
           const { result } = yield* startBesideBootService({ ...fixture, activeVersion: "0.1.0" });
           assert.equal(result._tag, "Success");
         }
-      }).pipe(Effect.provide(NodeServices.layer)),
+      }).pipe(Effect.provide(Layer.mergeAll(NodeServices.layer, NodeCrypto.layer))),
     );
 
     it.effect("allows services that cannot compete for this home", () =>
@@ -576,7 +577,7 @@ describe("serverRuntimeState", () => {
           const { result } = yield* startBesideBootService(fixture);
           assert.equal(result._tag, "Success");
         }
-      }).pipe(Effect.provide(NodeServices.layer)),
+      }).pipe(Effect.provide(Layer.mergeAll(NodeServices.layer, NodeCrypto.layer))),
     );
 
     it.effect("allows startup when the service configuration or manager is unavailable", () =>
@@ -594,7 +595,7 @@ describe("serverRuntimeState", () => {
           const { result } = yield* startBesideBootService({ platform: "darwin", ...fixture });
           assert.equal(result._tag, "Success");
         }
-      }).pipe(Effect.provide(NodeServices.layer)),
+      }).pipe(Effect.provide(Layer.mergeAll(NodeServices.layer, NodeCrypto.layer))),
     );
   });
 
@@ -621,7 +622,10 @@ describe("serverRuntimeState", () => {
         assert.equal(log.message, `Failed to decode server runtime state at ${path}.`);
     }).pipe(
       Effect.provide(
-        Layer.merge(NodeServices.layer, Logger.layer([logger], { mergeWithExisting: false })),
+        Layer.merge(
+          Layer.mergeAll(NodeServices.layer, NodeCrypto.layer),
+          Logger.layer([logger], { mergeWithExisting: false }),
+        ),
       ),
     );
   });

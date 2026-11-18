@@ -57,6 +57,7 @@ vi.mock("./GoatBotMarkdown", async () => {
 });
 vi.mock("./GoatBotComposerAttachments", () => ({
   GoatBotAttachButton: () => null,
+  goatBotAttachmentPick: () => async () => {},
   GoatBotAttachmentStrip: () => null,
   releaseGoatBotAttachments: () => {},
 }));

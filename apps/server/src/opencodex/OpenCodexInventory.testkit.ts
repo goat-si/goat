@@ -3,7 +3,6 @@ import * as NodePath from "@effect/platform-node/NodePath";
 import * as HostProcess from "@goat/shared/HostProcess";
 import * as ByteSize from "effect/ByteSize";
 import * as Context from "effect/Context";
-import * as Crypto from "effect/Crypto";
 import * as Effect from "effect/Effect";
 import * as FileSystem from "effect/FileSystem";
 import * as Layer from "effect/Layer";
@@ -40,7 +39,6 @@ export const setup = Effect.fn("OpenCodexInventoryTest.setup")(function* (
     managedPath?: string;
     managed?: boolean;
     hostname?: string;
-    crypto?: Crypto.Crypto;
     linkTraffic?: HubLinkTraffic.HubLinkTraffic["Service"];
   } = {},
 ) {
@@ -135,9 +133,7 @@ export const setup = Effect.fn("OpenCodexInventoryTest.setup")(function* (
   };
   const context = yield* Layer.build(
     Inventory.layer.pipe(
-      Layer.provide(
-        options.crypto ? Layer.succeed(Crypto.Crypto, options.crypto) : NodeCrypto.layer,
-      ),
+      Layer.provide(NodeCrypto.layer),
       Layer.provide(Layer.succeed(FileSystem.FileSystem, fs)),
       Layer.provide(Layer.succeed(ProcessRunner.ProcessRunner, runner)),
       Layer.provide(

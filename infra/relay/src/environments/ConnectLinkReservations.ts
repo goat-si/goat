@@ -11,7 +11,7 @@ import {
 } from "@goat/contracts/connectAssurance";
 import { and, eq, sql } from "drizzle-orm";
 import * as Context from "effect/Context";
-import * as Crypto from "effect/Crypto";
+import * as SecureRandom from "effect/crypto/SecureRandom";
 import * as DateTime from "effect/DateTime";
 import * as Effect from "effect/Effect";
 import * as Layer from "effect/Layer";
@@ -100,7 +100,7 @@ const make = Effect.gen(function* () {
   const { subtle } = yield* WebCrypto.WebCrypto;
   const accounts = yield* ConnectAccounts.ConnectAccounts;
   const transactions = yield* AccountTransactions;
-  const crypto = yield* Crypto.Crypto;
+  const random = yield* SecureRandom.SecureRandom;
   const config = yield* Config.RelayConfiguration;
   const key = yield* Effect.tryPromise({
     try: async () => {
@@ -130,7 +130,7 @@ const make = Effect.gen(function* () {
     input: Reservation,
     outcome: Outcome,
   ) {
-    const iv = yield* crypto.randomBytes(12).pipe(Effect.mapError(unavailable));
+    const iv = yield* random.randomBytes(12).pipe(Effect.mapError(unavailable));
     const encrypted = yield* Effect.tryPromise({
       try: () =>
         subtle.encrypt(

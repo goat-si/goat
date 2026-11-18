@@ -4,7 +4,7 @@ import { assert } from "@effect/vitest";
 import { build } from "vite-plus";
 import * as NodeURL from "node:url";
 import * as NetService from "@goat/shared/Net";
-import * as Crypto from "effect/Crypto";
+import * as Digest from "effect/crypto/Digest";
 import * as Clock from "effect/Clock";
 import * as Hex from "effect/encoding/Hex";
 import * as Effect from "effect/Effect";
@@ -345,6 +345,15 @@ else if (!${JSON.stringify((signals.nodeReadiness ?? false) || signals.contested
 `;
 };
 
+/** pick-port scans up from the reserved start, so a port another process took first moves it higher. */
+export const assertPickedFromReservedPort = (pickPort: number, port: string) => {
+  assert.match(port, /^[1-9]\d*$/);
+  const picked = Number(port);
+  assert.isAtMost(picked, 65_535);
+  assert.isAtLeast(picked, pickPort);
+  assert.isBelow(picked, pickPort + 200); // REMOTE_PORT_SCAN_WINDOW in tunnel.ts and the shim's "$4" check.
+};
+
 export const makeProtocolFixture = Effect.fn("test.protocol.fixture")(function* (input: {
   live: boolean;
   /**
@@ -437,6 +446,10 @@ export const makeProtocolFixture = Effect.fn("test.protocol.fixture")(function* 
 if [ "$#" -eq 4 ] && [ "$1" = - ] && [ "\${2##*/}" = port ] && [ "$3" = 3773 ] && [ "$4" = 200 ]; then
   printf '%s\\n' "$3" >> "$HOME/.test/pick-port-defaults"
   set -- "$1" "$2" ${pickPort} "$4"
+  picked="$('${process.execPath.replaceAll("'", "'\\''")}' "$@")" || exit $?
+  printf '%s\\n' "$picked" >> "$HOME/.test/pick-port-results"
+  printf '%s\\n' "$picked"
+  exit 0
 fi
 exec -a node '${process.execPath.replaceAll("'", "'\\''")}' "$@"
 `,
@@ -616,9 +629,9 @@ exec -a node '${process.execPath.replaceAll("'", "'\\''")}' "$@"
     ChildProcess.make("tar", ["-czf", `${cache}/${stem}.tar.gz`, "-C", `${home}/stage`, stem]),
   );
   assert.equal(Number(yield* packed.exitCode), 0);
-  const crypto = yield* Crypto.Crypto;
+  const digest = yield* Digest.Digest;
   const sha = Hex.encode(
-    yield* crypto.digest("SHA-256", yield* fs.readFile(`${cache}/${stem}.tar.gz`)),
+    yield* digest.digest(Digest.sha256, yield* fs.readFile(`${cache}/${stem}.tar.gz`)),
   );
   yield* fs.writeFileString(`${cache}/${stem}.tar.gz.sha256`, `${sha}  ${stem}.tar.gz\n`);
   const runner = { ...ARCHIVE, archiveDirectory: cache };
@@ -633,7 +646,9 @@ exec -a node '${process.execPath.replaceAll("'", "'\\''")}' "$@"
     source: "retained",
     requireInstalled: true,
     mayUpgradeOwnedServer: true,
-    retainedRunnerSha256: Hex.encode(yield* crypto.digest("SHA-256", encoder.encode(oldRunner))),
+    retainedRunnerSha256: Hex.encode(
+      yield* digest.digest(Digest.sha256, encoder.encode(oldRunner)),
+    ),
     refreshIfIdle: true,
     expectedLiveVersion: input.oldVersion,
   };

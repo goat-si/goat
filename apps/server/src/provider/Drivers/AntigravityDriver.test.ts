@@ -1,4 +1,5 @@
 import * as ServerEnvironment from "../../environment/ServerEnvironment.ts";
+import * as NodeCrypto from "@effect/platform-node/NodeCrypto";
 import * as NodeServices from "@effect/platform-node/NodeServices";
 import { expect, it } from "@effect/vitest";
 import {
@@ -6,26 +7,25 @@ import {
   ANTIGRAVITY_DEFAULT_MODEL,
   ProviderInstanceId,
   ProviderSessionId,
+  type RuntimeRequestId,
   ThreadId,
-  type AntigravitySettings,
 } from "@goat/contracts";
 import * as HostProcess from "@goat/shared/HostProcess";
 import * as Effect from "effect/Effect";
+import * as Deferred from "effect/Deferred";
+import * as Fiber from "effect/Fiber";
+import * as DateTime from "effect/DateTime";
+import * as Stream from "effect/Stream";
 import * as FileSystem from "effect/FileSystem";
 import * as Layer from "effect/Layer";
 import * as Path from "effect/Path";
-import * as Schema from "effect/Schema";
-import * as ChildProcessSpawner from "effect/process/ChildProcessSpawner";
 import { HttpClient } from "effect/http";
 
 import * as BackgroundPolicy from "../../background/BackgroundPolicy.ts";
 import * as ServerConfig from "../../config.ts";
 import * as ServerSettings from "../../serverSettings.ts";
 import * as AntigravityInstallation from "../AntigravityInstallation.ts";
-import {
-  ANTIGRAVITY_AUTH_STDOUT_PREFIX,
-  resolveAntigravityInstanceDirectories,
-} from "../antigravityAuthSupport.ts";
+import { resolveAntigravityInstanceDirectories } from "../antigravityAuthSupport.ts";
 import * as ProviderEventLoggers from "@goat/provider-core/server/ProviderEventLoggers";
 import * as McpProviderSessions from "@goat/provider-core/server/McpProviderSessions";
 import * as ModelManifest from "../ModelManifest.ts";
@@ -34,238 +34,14 @@ import { AntigravityDriver } from "./AntigravityDriver.ts";
 import * as ProviderAdapter from "@goat/provider-core/server/ProviderAdapter";
 import * as ProviderHostLive from "../ProviderHostLive.ts";
 import * as ServerSecretStore from "../../auth/ServerSecretStore.ts";
+import { makeTurnInput } from "../../orchestration-v2/Adapters/AcpAdapterV2.testkit.ts";
 
-const hostPlatform = HostProcess.Platform.defaultValue();
-const windowsHost = hostPlatform === "win32";
-const decodeRequest = Schema.decodeEffect(
-  Schema.fromJsonString(
-    Schema.Struct({
-      method: Schema.optional(Schema.String),
-      params: Schema.optional(Schema.Record(Schema.String, Schema.Unknown)),
-    }),
-  ),
-);
-const blockedCredentialKeys = new Set([
-  "GEMINI_API_KEY",
-  "GOOGLE_API_KEY",
-  "GOOGLE_APPLICATION_CREDENTIALS",
-  "GOOGLE_GENAI_USE_VERTEXAI",
-]);
-
-function shellQuote(value: string): string {
-  return `'${value.replaceAll("'", `'"'"'`)}'`;
-}
-
-const makeHarness = Effect.fn("makeAntigravityDriverHarness")(function* (
-  options: { readonly config?: Partial<AntigravitySettings>; readonly enabled?: boolean } = {},
-) {
-  const fs = yield* FileSystem.FileSystem;
-  const path = yield* Path.Path;
-  const config = yield* ServerConfig.ServerConfig;
-  const spawner = yield* ChildProcessSpawner.ChildProcessSpawner;
-  const nodePath = yield* HostProcess.ExecutablePath;
-  const baseEnv = yield* HostProcess.Environment;
-  const root = yield* fs.makeTempDirectoryScoped({ prefix: "goat-antigravity-driver-" });
-  const instanceId = ProviderInstanceId.make(path.basename(root));
-  const mockAgentPath = yield* path.fromFileUrl(
-    new URL("../../../scripts/acp-mock-agent.ts", import.meta.url),
-  );
-  const requestLog = path.join(root, "requests.jsonl");
-  const directories = yield* resolveAntigravityInstanceDirectories(config.stateDir, instanceId);
-  const profileDirectory = directories.profile;
-  const instancePath = `${path.join(root, "instance-bin")}:${baseEnv.PATH ?? ""}`;
-
-  const makeExecutable = Effect.fn("AntigravityDriverTest.makeExecutable")(function* (
-    name: string,
-    options:
-      | { loginRequired?: boolean; initialMode?: string; newSessionErrorData?: unknown }
-      | boolean = {},
-  ) {
-    const loginRequired = typeof options === "boolean" ? options : (options.loginRequired ?? false);
-    const initialMode = typeof options === "boolean" ? undefined : options.initialMode;
-    const newSessionErrorData =
-      typeof options === "boolean" ? undefined : options.newSessionErrorData;
-    const directory = path.join(root, name);
-    const executablePath = path.join(directory, "agy_acp_server.par");
-    const harnessPath = path.join(directory, "localharness_external");
-    yield* fs.makeDirectory(directory, { recursive: true });
-    const authorizationUrl =
-      "https://accounts.google.com/o/oauth2/v2/auth?response_type=code&redirect_uri=http%3A%2F%2F127.0.0.1%3A51234%2F&state=fixture-state";
-    yield* fs.writeFileString(
-      executablePath,
-      [
-        "#!/bin/sh",
-        ...(loginRequired
-          ? [`printf '%s\\n' ${shellQuote(ANTIGRAVITY_AUTH_STDOUT_PREFIX + authorizationUrl)}`]
-          : []),
-        ...(initialMode === undefined
-          ? []
-          : [`export GOAT_ACP_INITIAL_MODE=${shellQuote(initialMode)}`]),
-        ...(newSessionErrorData === undefined
-          ? []
-          : [
-              `export GOAT_ACP_NEW_SESSION_ERROR_DATA=${shellQuote(JSON.stringify(newSessionErrorData))}`,
-            ]),
-        `exec ${shellQuote(nodePath)} ${shellQuote(mockAgentPath)} "$@"`,
-        "",
-      ].join("\n"),
-    );
-    yield* fs.writeFileString(harnessPath, "#!/bin/sh\nexit 99\n");
-    yield* fs.chmod(executablePath, 0o755);
-    yield* fs.chmod(harnessPath, 0o755);
-    return {
-      executablePath,
-      harnessPath,
-      source: "managed",
-      version: name,
-      managedVersionDirectory: directory,
-    } satisfies AntigravityInstallation.AntigravityExecutable;
-  });
-
-  const first = yield* makeExecutable("runtime 'one");
-  const second = yield* makeExecutable("runtime two");
-  const signedOut = yield* makeExecutable("runtime signed-out", true);
-  const controls: {
-    selected: AntigravityInstallation.AntigravityExecutable;
-    failResolution: boolean;
-    beforeAcquire: Effect.Effect<void>;
-  } = { selected: first, failResolution: false, beforeAcquire: Effect.void };
-  const acquisitions: Array<{ binaryPath: string | undefined; path: string | undefined }> = [];
-  const releases: Array<string | null> = [];
-  const launches: Array<{
-    command: string;
-    args: ReadonlyArray<string>;
-    cwd: string | undefined;
-    extendEnv: boolean | undefined;
-    profileDirectory: string | undefined;
-    harnessPath: string | undefined;
-    forceFileStorage: string | undefined;
-    credentialKeys: ReadonlyArray<string>;
-    geminiApiKey: string | undefined;
-    tempDirectory: string | undefined;
-    handle: ChildProcessSpawner.ChildProcessHandle;
-  }> = [];
-
-  const layerInstallation = Layer.mock(AntigravityInstallation.AntigravityInstallation)({
-    managedDirectory: root,
-    resolve: () =>
-      Effect.gen(function* () {
-        if (controls.failResolution) {
-          return yield* new AntigravityInstallation.AntigravityInstallationError({
-            operation: "resolve",
-            detail: "Fixture resolution failed.",
-          });
-        }
-        return controls.selected;
-      }),
-    acquire: (binaryPath, environment) =>
-      Effect.gen(function* () {
-        acquisitions.push({ binaryPath, path: environment?.PATH });
-        yield* controls.beforeAcquire;
-        if (controls.failResolution) {
-          return yield* new AntigravityInstallation.AntigravityInstallationError({
-            operation: "resolve",
-            detail: "Fixture resolution failed.",
-          });
-        }
-        const selected = controls.selected;
-        yield* Effect.addFinalizer(() =>
-          Effect.sync(() => {
-            releases.push(selected.version);
-          }),
-        );
-        return selected;
-      }),
-  });
-  const observedSpawner = ChildProcessSpawner.make((command) =>
-    Effect.gen(function* () {
-      if (command._tag !== "StandardCommand")
-        return yield* Effect.die("Unexpected process pipeline.");
-      const handle = yield* spawner.spawn(command);
-      const environment = command.options.env ?? {};
-      launches.push({
-        command: command.command,
-        args: command.args,
-        cwd: command.options.cwd,
-        extendEnv: command.options.extendEnv,
-        profileDirectory: environment.GEMINI_HOME,
-        harnessPath: environment.ANTIGRAVITY_HARNESS_PATH,
-        forceFileStorage: environment.AGY_ACP_FORCE_FILE_STORAGE,
-        credentialKeys: Object.keys(environment).filter((key) =>
-          blockedCredentialKeys.has(key.toUpperCase()),
-        ),
-        geminiApiKey: environment.GEMINI_API_KEY,
-        tempDirectory:
-          environment.ANTIGRAVITY_HARNESS_PATH === undefined ? undefined : environment.TMPDIR,
-        handle,
-      });
-      return handle;
-    }),
-  );
-  const instance = yield* AntigravityDriver.create({
-    instanceId,
-    displayName: "Google test account",
-    enabled: options.enabled ?? true,
-    config: { ...AntigravityDriver.defaultConfig(), ...options.config },
-    environment: [
-      { name: "PATH", value: instancePath },
-      { name: "GOAT_ACP_ANTIGRAVITY", value: "1" },
-      { name: "GOAT_ACP_REQUEST_LOG_PATH", value: requestLog },
-      { name: "GEMINI_API_KEY", value: "must-not-be-used" },
-      { name: "google_api_key", value: "must-not-be-used" },
-      { name: "GOOGLE_APPLICATION_CREDENTIALS", value: "/must-not-be-used.json" },
-      { name: "GOOGLE_GENAI_USE_VERTEXAI", value: "true" },
-      { name: "GEMINI_HOME", value: "/must-not-be-used" },
-      { name: "ANTIGRAVITY_HARNESS_PATH", value: "/must-not-be-used" },
-      { name: "BROWSER", value: "must-not-run" },
-    ].map((variable) => ({ ...variable, sensitive: false })),
-  }).pipe(
-    Effect.provide(layerInstallation),
-    Effect.provideService(ChildProcessSpawner.ChildProcessSpawner, observedSpawner),
-  );
-  const refresh = instance.refreshModels;
-  if (!refresh) return yield* Effect.die("Antigravity does not expose model refresh.");
-  const readRequests = Effect.gen(function* () {
-    if (!(yield* fs.exists(requestLog))) return [];
-    const text = yield* fs.readFileString(requestLog);
-    return yield* Effect.forEach(text.split(/\r?\n/u).filter(Boolean), (line) =>
-      decodeRequest(line),
-    );
-  });
-  const assertClosed = Effect.gen(function* () {
-    for (const launch of launches) {
-      yield* launch.handle.exitCode.pipe(Effect.ignore);
-      expect(yield* launch.handle.isRunning).toBe(false);
-      if (launch.cwd) expect(yield* fs.exists(launch.cwd)).toBe(false);
-      if (launch.tempDirectory) expect(yield* fs.exists(launch.tempDirectory)).toBe(false);
-    }
-  });
-  return {
-    instance,
-    instanceId,
-    makeExecutable,
-    refresh,
-    fs,
-    path,
-    profileDirectory,
-    directories,
-    instancePath,
-    first,
-    second,
-    signedOut,
-    controls,
-    acquisitions,
-    releases,
-    launches,
-    readRequests,
-    assertClosed,
-  };
-});
+import { hostPlatform, makeHarness, windowsHost } from "./AntigravityDriver.testkit.ts";
 
 const layerDeps = ServerConfig.layerTest(process.cwd(), {
   prefix: "goat-antigravity-driver-config-",
 }).pipe(
-  Layer.provideMerge(NodeServices.layer),
+  Layer.provideMerge(Layer.mergeAll(NodeServices.layer, NodeCrypto.layer)),
   Layer.provideMerge(
     Layer.succeed(
       HttpClient.HttpClient,
@@ -299,6 +75,436 @@ const layerTest = ProviderHostLive.layer.pipe(
 );
 
 it.layer(layerTest)("AntigravityDriver", (it) => {
+  // The runtime fixture uses POSIX shell scripts and profile symlinks.
+  it.effect.skipIf(windowsHost)(
+    "a turn in flight keeps its runtime home through an instance rebuild while orphaned runs are swept",
+    () =>
+      Effect.gen(function* () {
+        const original = yield* HostProcess.Environment;
+        const fs = yield* FileSystem.FileSystem;
+        const path = yield* Path.Path;
+        const home = yield* fs.makeTempDirectoryScoped();
+        const skills = path.join(home, ".gemini", "config", "skills");
+        yield* fs.makeDirectory(skills, { recursive: true });
+        const h = yield* makeHarness().pipe(
+          Effect.provideService(HostProcess.Environment, { ...original, HOME: home }),
+        );
+        // The agent asks permission mid-turn and waits for GOAT's answer, holding the turn open.
+        h.controls.selected = yield* h.makeExecutable("held turn", { emitToolCalls: true });
+        const threadId = ThreadId.make("replacement-live");
+        const runtimePolicy = ProviderAdapter.ProviderAdapterV2RuntimePolicy.make({
+          runtimeMode: "approval-required",
+          interactionMode: "default",
+          cwd: home,
+        });
+        const modelSelection = { instanceId: h.instanceId, model: "gemini-test-low" };
+        const session = yield* h.instance.orchestrationAdapter.openSession({
+          threadId,
+          providerSessionId: ProviderSessionId.make("replacement-live"),
+          modelSelection,
+          runtimePolicy,
+        });
+        const providerThread = yield* session.ensureThread({
+          threadId,
+          modelSelection,
+          runtimePolicy,
+        });
+        const runtimeHome = h.launches.at(-1)?.profileDirectory;
+        if (!runtimeHome) return yield* Effect.die("Missing runtime home");
+        const pendingRequest = yield* Deferred.make<RuntimeRequestId>();
+        const turnEvents = yield* session.events.pipe(
+          Stream.tap((event) =>
+            event.type === "runtime_request.updated" && event.runtimeRequest.status === "pending"
+              ? Deferred.succeed(pendingRequest, event.runtimeRequest.id)
+              : Effect.void,
+          ),
+          Stream.takeUntil((event) => event.type === "turn.terminal"),
+          Stream.runCollect,
+          Effect.forkScoped,
+        );
+        yield* session.startTurn(
+          makeTurnInput({
+            threadId,
+            providerThread,
+            instanceId: h.instanceId,
+            modelSelection,
+            runtimePolicy,
+            now: yield* DateTime.now,
+            ordinal: 1,
+          }),
+        );
+        const requestId = yield* Deferred.await(pendingRequest);
+        const orphan = path.join(h.directories.runtimeTemp, "run-orphan");
+        yield* fs.makeDirectory(orphan);
+        yield* h.makeReplacement();
+        expect(yield* fs.exists(runtimeHome)).toBe(true);
+        expect(yield* fs.readLink(path.join(runtimeHome, "antigravity-acp"))).toBe(
+          path.join(h.profileDirectory, "antigravity-acp"),
+        );
+        expect(yield* fs.readLink(path.join(runtimeHome, "config", "skills"))).toBe(skills);
+        expect(yield* fs.exists(orphan)).toBe(false);
+        yield* session.respondToRuntimeRequest({ requestId, decision: "accept" });
+        const events = Array.from(yield* Fiber.join(turnEvents));
+        expect(events.at(-1)).toMatchObject({ type: "turn.terminal", status: "completed" });
+      }).pipe(Effect.scoped),
+  );
+  // The runtime fixture uses POSIX shell scripts.
+  it.effect.skipIf(windowsHost)("session command updates retain the home captured at launch", () =>
+    Effect.gen(function* () {
+      const original = yield* HostProcess.Environment;
+      const host = { ...original, HOME: "/fixture/home-a" };
+      const h = yield* makeHarness().pipe(Effect.provideService(HostProcess.Environment, host));
+      const runtimePolicy = ProviderAdapter.ProviderAdapterV2RuntimePolicy.make({
+        runtimeMode: "full-access",
+        interactionMode: "default",
+        cwd: h.profileDirectory,
+      });
+      const modelSelection = { instanceId: h.instanceId, model: "gemini-test-low" };
+      const open = Effect.fn("openFixtureSession")(function* (name: string) {
+        h.controls.selected = yield* h.makeExecutable(`commands-${name}`, {
+          promptCommand: `command-${name}`,
+        });
+        const threadId = ThreadId.make(`commands-${name}`);
+        const session = yield* h.instance.orchestrationAdapter.openSession({
+          threadId,
+          providerSessionId: ProviderSessionId.make(`commands-${name}`),
+          modelSelection,
+          runtimePolicy,
+        });
+        const providerThread = yield* session.ensureThread({
+          threadId,
+          modelSelection,
+          runtimePolicy,
+        });
+        return { session, threadId, providerThread };
+      });
+      const old = yield* open("old");
+      host.HOME = "/fixture/home-b";
+      const current = yield* open("current");
+      const run = Effect.fn("runFixtureSession")(function* (opened: typeof old) {
+        const terminal = yield* Deferred.make<void>();
+        const reader = yield* opened.session.events.pipe(
+          Stream.takeUntil((event) => event.type === "turn.terminal"),
+          Stream.runDrain,
+          Effect.andThen(Deferred.succeed(terminal, undefined)),
+          Effect.forkChild,
+        );
+        yield* opened.session.startTurn(
+          makeTurnInput({
+            threadId: opened.threadId,
+            providerThread: opened.providerThread,
+            instanceId: h.instanceId,
+            modelSelection,
+            runtimePolicy,
+            now: yield* DateTime.now,
+            ordinal: 1,
+          }),
+        );
+        yield* Deferred.await(terminal);
+        yield* Fiber.join(reader);
+      });
+      yield* run(current);
+      expect(
+        (yield* h.instance.snapshot.getSnapshot).slashCommands.map((command) => command.name),
+      ).toEqual(["command-current"]);
+      yield* run(old);
+      expect(
+        (yield* h.instance.snapshot.getSnapshot).slashCommands.map((command) => command.name),
+      ).toEqual(["command-current"]);
+    }).pipe(Effect.scoped),
+  );
+  // The runtime fixture uses POSIX shell scripts and profile symlinks.
+  it.effect.skipIf(windowsHost)("reads user skills from the current host home", () =>
+    Effect.gen(function* () {
+      const original = yield* HostProcess.Environment;
+      const fs = yield* FileSystem.FileSystem;
+      const path = yield* Path.Path;
+      const root = yield* fs.makeTempDirectoryScoped();
+      const oldHome = path.join(root, "old");
+      const newHome = path.join(root, "new");
+      for (const [home, name] of [
+        [oldHome, "old-skill"],
+        [newHome, "new-skill"],
+      ] as const) {
+        const directory = path.join(home, ".gemini", "config", "skills", name);
+        yield* fs.makeDirectory(directory, { recursive: true });
+        yield* fs.writeFileString(path.join(directory, "SKILL.md"), `---\nname: ${name}\n---\n`);
+      }
+      const host = { ...original, HOME: oldHome };
+      const h = yield* makeHarness().pipe(Effect.provideService(HostProcess.Environment, host));
+      yield* h.refresh();
+      expect((yield* h.instance.snapshot.getSnapshot).auth.status).toBe("authenticated");
+      expect((yield* h.instance.snapshot.refresh).auth.status).toBe("authenticated");
+      host.HOME = newHome;
+      expect((yield* h.instance.snapshot.refresh).auth.status).not.toBe("authenticated");
+      const snapshotForCwd = h.instance.snapshotForCwd;
+      if (snapshotForCwd === undefined) return yield* Effect.die("Missing workspace snapshot");
+      const snapshot = yield* snapshotForCwd(root);
+      expect(snapshot.skills.map((skill) => skill.name)).toEqual(["new-skill"]);
+      yield* h.refresh();
+      expect((yield* h.instance.snapshot.getSnapshot).auth.status).toBe("authenticated");
+      const acquired = yield* Deferred.make<void>();
+      const release = yield* Deferred.make<void>();
+      h.controls.beforeAcquire = Deferred.succeed(acquired, undefined).pipe(
+        Effect.andThen(Deferred.await(release)),
+      );
+      const oldLaunch = yield* Effect.forkChild(h.refresh());
+      yield* Deferred.await(acquired);
+      host.HOME = oldHome;
+      yield* Deferred.succeed(release, undefined);
+      yield* Fiber.join(oldLaunch);
+      expect((yield* h.instance.snapshot.getSnapshot).auth.status).not.toBe("authenticated");
+    }).pipe(Effect.scoped),
+  );
+  // The runtime fixture uses POSIX shell scripts.
+  it.effect.skipIf(windowsHost)(
+    "an old session sign-in failure does not clear the current profile",
+    () =>
+      Effect.gen(function* () {
+        const original = yield* HostProcess.Environment;
+        const host = { ...original, HOME: "/fixture/home-a" };
+        const h = yield* makeHarness().pipe(Effect.provideService(HostProcess.Environment, host));
+        const acquired = yield* Deferred.make<void>();
+        const release = yield* Deferred.make<void>();
+        h.controls.beforeAcquire = Deferred.succeed(acquired, undefined).pipe(
+          Effect.andThen(Deferred.await(release)),
+        );
+        const threadId = ThreadId.make("old-auth-failure");
+        const runtimePolicy = ProviderAdapter.ProviderAdapterV2RuntimePolicy.make({
+          runtimeMode: "full-access",
+          interactionMode: "default",
+          cwd: h.profileDirectory,
+        });
+        const modelSelection = { instanceId: h.instanceId, model: "gemini-test-low" };
+        const opening = yield* Effect.forkChild(
+          h.instance.orchestrationAdapter.openSession({
+            threadId,
+            providerSessionId: ProviderSessionId.make("old-auth"),
+            modelSelection,
+            runtimePolicy,
+          }),
+        );
+        yield* Deferred.await(acquired);
+        h.controls.beforeAcquire = Effect.void;
+        host.HOME = "/fixture/home-b";
+        yield* h.refresh();
+        expect((yield* h.instance.snapshot.getSnapshot).auth.status).toBe("authenticated");
+        h.controls.selected = h.signedOut;
+        yield* Deferred.succeed(release, undefined);
+        yield* Fiber.join(opening).pipe(Effect.flip);
+        expect((yield* h.instance.snapshot.getSnapshot).auth.status).toBe("authenticated");
+        yield* h.refresh().pipe(Effect.flip);
+        expect((yield* h.instance.snapshot.getSnapshot).auth.status).toBe("unauthenticated");
+        host.HOME = "/fixture/home-c";
+        expect((yield* h.instance.snapshot.getSnapshot).auth.status).not.toBe("unauthenticated");
+      }).pipe(Effect.scoped),
+  );
+  // The runtime fixture uses POSIX shell scripts and profile symlinks.
+  it.effect.skipIf(windowsHost)(
+    "overlapping sessions retain their captured home skills across restart",
+    () =>
+      Effect.gen(function* () {
+        const original = yield* HostProcess.Environment;
+        const fs = yield* FileSystem.FileSystem;
+        const path = yield* Path.Path;
+        const root = yield* fs.makeTempDirectoryScoped();
+        const homes = [path.join(root, "a"), path.join(root, "b")];
+        for (const home of homes)
+          yield* fs.makeDirectory(path.join(home, ".gemini", "config", "skills"), {
+            recursive: true,
+          });
+        const host = { ...original, HOME: homes[0] };
+        const h = yield* makeHarness().pipe(Effect.provideService(HostProcess.Environment, host));
+        const threadId = ThreadId.make("skills-overlap");
+        const runtimePolicy = ProviderAdapter.ProviderAdapterV2RuntimePolicy.make({
+          runtimeMode: "full-access",
+          interactionMode: "default",
+          cwd: root,
+        });
+        const modelSelection = { instanceId: h.instanceId, model: "gemini-test-low" };
+        const sessions = yield* McpProviderSessions.McpProviderSessions;
+        const config = (token: string) => ({
+          environmentId: EnvironmentId.make("environment"),
+          threadId,
+          providerSessionId: "mcp-session",
+          providerInstanceId: h.instanceId,
+          endpoint: "http://127.0.0.1:43123/mcp",
+          authorizationHeader: `Bearer ${token}`,
+          browserToolsAvailable: false,
+        });
+        yield* sessions.set(config("old"));
+        const first = yield* h.instance.orchestrationAdapter.openSession({
+          threadId,
+          providerSessionId: ProviderSessionId.make("skills-a"),
+          modelSelection,
+          runtimePolicy,
+        });
+        const providerThread = yield* first.ensureThread({
+          threadId,
+          modelSelection,
+          runtimePolicy,
+        });
+        const firstHome = h.launches
+          .filter((launch) => launch.harnessPath !== undefined)
+          .at(-1)?.profileDirectory;
+        if (!firstHome) return yield* Effect.die("Missing first runtime home");
+        host.HOME = homes[1];
+        const second = yield* h.instance.orchestrationAdapter.openSession({
+          threadId,
+          providerSessionId: ProviderSessionId.make("skills-b"),
+          modelSelection,
+          runtimePolicy,
+        });
+        yield* second.ensureThread({ threadId, modelSelection, runtimePolicy });
+        const secondHome = h.launches
+          .filter((launch) => launch.harnessPath !== undefined)
+          .at(-1)?.profileDirectory;
+        if (!secondHome) return yield* Effect.die("Missing second runtime home");
+        expect(yield* fs.readLink(path.join(firstHome, "antigravity-acp"))).toBe(
+          path.join(h.profileDirectory, "antigravity-acp"),
+        );
+        expect(yield* fs.readLink(path.join(secondHome, "antigravity-acp"))).toBe(
+          path.join(h.profileDirectory, "antigravity-acp"),
+        );
+        expect(yield* fs.readLink(path.join(firstHome, "config", "skills"))).toBe(
+          path.join(homes[0]!, ".gemini", "config", "skills"),
+        );
+        expect(yield* fs.readLink(path.join(secondHome, "config", "skills"))).toBe(
+          path.join(homes[1]!, ".gemini", "config", "skills"),
+        );
+        yield* sessions.set(config("new"));
+        yield* first.startTurn(
+          makeTurnInput({
+            threadId,
+            providerThread,
+            instanceId: h.instanceId,
+            modelSelection,
+            runtimePolicy,
+            now: yield* DateTime.now,
+            ordinal: 1,
+          }),
+        );
+        yield* first.events.pipe(
+          Stream.takeUntil((event) => event.type === "turn.terminal"),
+          Stream.runCollect,
+        );
+        const restartedHome = h.launches
+          .filter((launch) => launch.harnessPath !== undefined)
+          .at(-1)?.profileDirectory;
+        if (!restartedHome) return yield* Effect.die("Missing restarted runtime home");
+        expect(yield* fs.readLink(path.join(restartedHome, "config", "skills"))).toBe(
+          path.join(homes[0]!, ".gemini", "config", "skills"),
+        );
+        expect(yield* fs.readLink(path.join(secondHome, "config", "skills"))).toBe(
+          path.join(homes[1]!, ".gemini", "config", "skills"),
+        );
+      }).pipe(Effect.scoped),
+  );
+  // The runtime fixture uses POSIX shell scripts and profile symlinks.
+  it.effect.skipIf(windowsHost)(
+    "keeps the session executable and environment when MCP credentials change",
+    () =>
+      Effect.gen(function* () {
+        const original = yield* HostProcess.Environment;
+        const host = { ...original, PATH: original.PATH ?? "/usr/bin:/bin" };
+        const h = yield* makeHarness({ inheritPath: true }).pipe(
+          Effect.provideService(HostProcess.Environment, host),
+        );
+        const oldPath = host.PATH;
+        const threadId = ThreadId.make("thread-antigravity-session-environment");
+        const runtimePolicy = ProviderAdapter.ProviderAdapterV2RuntimePolicy.make({
+          runtimeMode: "full-access",
+          interactionMode: "default",
+          cwd: h.profileDirectory,
+        });
+        const modelSelection = { instanceId: h.instanceId, model: "gemini-test-low" };
+        const sessions = yield* McpProviderSessions.McpProviderSessions;
+        const config = (token: string) => ({
+          environmentId: EnvironmentId.make("environment"),
+          threadId,
+          providerSessionId: "mcp-session",
+          providerInstanceId: h.instanceId,
+          endpoint: "http://127.0.0.1:43123/mcp",
+          authorizationHeader: `Bearer ${token}`,
+          browserToolsAvailable: false,
+        });
+        yield* sessions.set(config("old"));
+        const first = yield* h.instance.orchestrationAdapter.openSession({
+          threadId,
+          providerSessionId: ProviderSessionId.make("antigravity-first"),
+          modelSelection,
+          runtimePolicy,
+        });
+        const providerThread = yield* first.ensureThread({
+          threadId,
+          modelSelection,
+          runtimePolicy,
+        });
+        h.controls.selected = h.second;
+        host.PATH = `/new/bin:${oldPath}`;
+        yield* sessions.set(config("new"));
+        yield* first.startTurn(
+          makeTurnInput({
+            threadId,
+            providerThread,
+            instanceId: h.instanceId,
+            modelSelection,
+            runtimePolicy,
+            now: yield* DateTime.now,
+            ordinal: 1,
+          }),
+        );
+        yield* first.events.pipe(
+          Stream.takeUntil((event) => event.type === "turn.terminal"),
+          Stream.runCollect,
+        );
+        const second = yield* h.instance.orchestrationAdapter.openSession({
+          threadId,
+          providerSessionId: ProviderSessionId.make("antigravity-second"),
+          modelSelection,
+          runtimePolicy,
+        });
+        yield* second.ensureThread({ threadId, modelSelection, runtimePolicy });
+        const launches = h.launches.filter((launch) => launch.harnessPath !== undefined);
+        expect(launches.map((launch) => [launch.command, launch.path])).toEqual([
+          [h.first.executablePath, oldPath],
+          [h.first.executablePath, oldPath],
+          [h.second.executablePath, host.PATH],
+        ]);
+        expect(h.acquisitions).toHaveLength(2);
+      }).pipe(Effect.scoped),
+  );
+  // The runtime fixture uses POSIX shell scripts and profile symlinks.
+  it.effect.skipIf(windowsHost)(
+    "regression #3079: status and new runtimes read the current host PATH while instance PATH wins",
+    () =>
+      Effect.gen(function* () {
+        const original = yield* HostProcess.Environment;
+        const host = { ...original, PATH: original.PATH ?? "/usr/bin:/bin" };
+        const inherited = yield* makeHarness({ inheritPath: true }).pipe(
+          Effect.provideService(HostProcess.Environment, host),
+        );
+        const overridden = yield* makeHarness().pipe(
+          Effect.provideService(HostProcess.Environment, host),
+        );
+        host.PATH = `/new/bin:${host.PATH}`;
+        yield* inherited.instance.snapshot.refresh;
+        expect(inherited.resolutions.at(-1)).toBe(host.PATH);
+        yield* inherited.refresh();
+        expect(inherited.acquisitions.at(-1)?.path).toBe(host.PATH);
+        expect(inherited.launches.at(-1)?.path).toBe(host.PATH);
+        const launchedPath = host.PATH;
+        const launch = inherited.launches.at(-1);
+        host.PATH = `/later/bin:${host.PATH}`;
+        yield* inherited.refresh();
+        expect(launch?.path).toBe(launchedPath);
+        expect(inherited.launches.at(-1)?.path).toBe(host.PATH);
+        yield* overridden.instance.snapshot.refresh;
+        yield* overridden.refresh();
+        expect(overridden.resolutions.at(-1)).toBe(overridden.instancePath);
+        expect(overridden.launches.at(-1)?.path).toBe(overridden.instancePath);
+      }).pipe(Effect.scoped),
+  );
   it.effect.skipIf(windowsHost)(
     "refreshes through the selected executable and personal Google ACP",
     () =>
@@ -334,7 +540,7 @@ it.layer(layerTest)("AntigravityDriver", (it) => {
         ]);
         for (const launch of nativeLaunches) {
           expect(launch.args).toEqual(hostPlatform === "linux" ? ["--uid="] : []);
-          expect(launch.profileDirectory).toBe(h.profileDirectory);
+          expect(launch.profileDirectory).toBe(launch.tempDirectory);
           expect(launch.forceFileStorage).toBe("1");
           expect(launch.extendEnv).toBe(false);
         }
@@ -385,7 +591,14 @@ it.layer(layerTest)("AntigravityDriver", (it) => {
             modelSelection,
             runtimePolicy: cliPolicy,
           });
-          expect(h.launches.at(-1)?.args).toEqual(["acp"]);
+          // The CLI's state follows the run's own GEMINI_HOME, never the shared profile.
+          expect(h.launches.at(-1)?.args).toEqual([
+            "acp",
+            "--gemini-dir",
+            h.launches.at(-1)?.profileDirectory,
+            "--app-data-dir",
+            "antigravity-acp",
+          ]);
           expect(
             (yield* h.readRequests)
               .slice(requestsBefore)

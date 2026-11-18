@@ -2,11 +2,13 @@ import {
   CommandId,
   MessageId,
   RunId,
+  SCHEDULED_TASK_RECENT_RUNS,
   ScheduledTaskId,
   ScheduledTaskError,
   ScheduledTaskRun,
   OrchestrationV2RunJson,
   OrchestrationV2ConversationMessageJson,
+  OrchestrationV2TurnItemJson,
   ScheduledTaskSchedule,
   type ScheduledTask,
   type OrchestrationV2Run,
@@ -22,6 +24,7 @@ import * as PubSub from "effect/PubSub";
 import * as Schema from "effect/Schema";
 import type * as Scope from "effect/Scope";
 import * as SqlClient from "effect/sql/SqlClient";
+import { latestRootProviderFailure } from "@goat/shared/orchestrationV2ThreadError";
 import { nextScheduledRunAt } from "./Schedule.ts";
 
 /** A firing answered by GOAT Bot through channel input: no orchestration run or message. */
@@ -142,6 +145,9 @@ const decodeRun = Schema.decodeUnknownEffect(Schema.fromJsonString(Orchestration
 const decodeMessage = Schema.decodeUnknownEffect(
   Schema.fromJsonString(OrchestrationV2ConversationMessageJson),
 );
+const decodeTurnItem = Schema.decodeUnknownEffect(
+  Schema.fromJsonString(OrchestrationV2TurnItemJson),
+);
 const encodeSchedule = Schema.encodeEffect(Schema.fromJsonString(ScheduledTaskSchedule));
 const decodeSchedule = Schema.decodeUnknownEffect(Schema.fromJsonString(ScheduledTaskSchedule));
 const terminal = new Set<ScheduledTaskRun["status"]>([
@@ -172,6 +178,16 @@ function safeError(run: ScheduledTaskRun): string | null {
   if (run.status === "unknown") return "The scheduled run outcome could not be recovered.";
   return terminal.has(run.status) && run.status !== "completed" ? run.status : null;
 }
+const UNSUCCESSFUL_RUN_ERRORS = {
+  failed: "The run failed.",
+  interrupted: "The run was stopped.",
+  cancelled: "The run was cancelled.",
+  rolled_back: "The run was rolled back.",
+} as const;
+const MAX_RUN_ERROR_LENGTH = 500;
+const isUnsuccessful = (
+  status: ScheduledTaskRun["status"],
+): status is keyof typeof UNSUCCESSFUL_RUN_ERRORS => Object.hasOwn(UNSUCCESSFUL_RUN_ERRORS, status);
 const isScheduledTaskError = Schema.is(ScheduledTaskError);
 const failure = (message: string) => (cause: unknown) =>
   isScheduledTaskError(cause) ? cause : new ScheduledTaskError({ message, cause });
@@ -276,13 +292,39 @@ export const make = Effect.fn("ScheduledTaskRuns.make")(function* (
     Effect.mapError(failure("Could not resolve scheduled firing.")),
   );
 
+  // Read in the event sink's transaction, so error items committed in the same batch count.
+  const runError = Effect.fn("ScheduledTaskRuns.runError")(function* (
+    run: OrchestrationV2Run,
+    status: keyof typeof UNSUCCESSFUL_RUN_ERRORS,
+  ) {
+    let error: string = UNSUCCESSFUL_RUN_ERRORS[status];
+    if (run.status === "failed") {
+      const rows = yield* sql<{ readonly payload_json: string }>`SELECT payload_json
+        FROM orchestration_v2_projection_turn_items WHERE thread_id=${run.threadId} AND run_id=${run.id}
+        AND type='error' AND status='failed'`;
+      const items = yield* Effect.forEach(rows, (row) => decodeTurnItem(row.payload_json));
+      error = latestRootProviderFailure(run, items)?.message ?? error;
+    }
+    if (error.length <= MAX_RUN_ERROR_LENGTH) return error;
+    let end = MAX_RUN_ERROR_LENGTH - 1;
+    // Cut between characters, not inside an emoji's surrogate pair.
+    const atCut = error.charCodeAt(end);
+    if (atCut >= 0xdc00 && atCut <= 0xdfff) end--;
+    return `${error.slice(0, end)}…`;
+  });
+
   const prune = Effect.fn("ScheduledTaskRuns.prune")(function* (
     row: Pick<Row, "task_id" | "task_created_at">,
   ) {
+    // A bot routine keeps its seven most recent firings, what its history strip shows. Only finished
+    // firings are deleted, so more can stay while they run. Other tasks keep one finished firing.
     yield* sql`DELETE FROM scheduled_task_runs
       WHERE task_id=${row.task_id} AND task_created_at=${row.task_created_at} AND dispatch_bookkept_at IS NOT NULL
       AND dispatch_status <> 'dispatching' AND status IN ('completed','failed','interrupted','cancelled','rolled_back')
       AND firing_id IS NOT (SELECT last_firing_id FROM scheduled_tasks WHERE task_id=${row.task_id})
+      AND NOT (message_id LIKE ${ROUTINE_MESSAGE_PREFIX + "%"} AND firing_id IN (SELECT firing_id FROM scheduled_task_runs
+        WHERE task_id=${row.task_id} AND task_created_at=${row.task_created_at}
+        ORDER BY requested_at DESC,firing_id DESC LIMIT ${SCHEDULED_TASK_RECENT_RUNS}))
       AND NOT EXISTS (SELECT 1 FROM scheduled_task_webhook_pending p WHERE p.delivery_id=scheduled_task_runs.webhook_delivery_id)
       AND NOT (dispatch_status='failed' AND webhook_delivery_id IS NOT NULL AND EXISTS (
         SELECT 1 FROM scheduled_task_webhook_deliveries d WHERE d.delivery_id=scheduled_task_runs.webhook_delivery_id))`;
@@ -470,15 +512,25 @@ export const make = Effect.fn("ScheduledTaskRuns.make")(function* (
           message: "Scheduled firing changed during observation.",
         });
       if (!changed) continue;
+      const ended =
+        run !== null &&
+        next.dispatchStatus === "accepted" &&
+        (before.runId !== next.runId || before.status !== next.status);
+      // Only the terminal transition writes a run's reason; later receipt changes keep it.
+      const error =
+        ended && isUnsuccessful(next.status)
+          ? yield* runError(run, next.status)
+          : !ended &&
+              terminal.has(next.status) &&
+              before.status === next.status &&
+              before.dispatchStatus === next.dispatchStatus
+            ? sql`last_run_error`
+            : safeError(next);
       const current =
-        yield* sql`UPDATE scheduled_tasks SET last_run_status=${legacyStatus(next.status)},last_run_error=${safeError(next)},updated_at=${at}
+        yield* sql`UPDATE scheduled_tasks SET last_run_status=${legacyStatus(next.status)},last_run_error=${error},updated_at=${at}
         WHERE task_id=${row.task_id} AND created_at=${row.task_created_at} AND last_firing_id=${row.firing_id} RETURNING task_id`;
       visible ||= current.length > 0;
-      if (
-        run &&
-        next.dispatchStatus === "accepted" &&
-        (before.runId !== next.runId || before.status !== next.status)
-      ) {
+      if (ended) {
         switch (next.status) {
           case "completed":
           case "failed":

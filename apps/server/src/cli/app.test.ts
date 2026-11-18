@@ -1,4 +1,5 @@
 // @effect-diagnostics nodeBuiltinImport:off - The integration fixture binds the same platform socket or named pipe as the CLI.
+import * as NodeCrypto from "@effect/platform-node/NodeCrypto";
 import * as NodeServices from "@effect/platform-node/NodeServices";
 import { assert, it } from "@effect/vitest";
 import type { DesktopAppActivationRequest } from "@goat/contracts";
@@ -10,6 +11,7 @@ import * as ConfigProvider from "effect/ConfigProvider";
 import * as Effect from "effect/Effect";
 import * as Layer from "effect/Layer";
 import * as Schema from "effect/Schema";
+import * as TestConsole from "effect/testing/TestConsole";
 import * as NodeChildProcess from "node:child_process";
 import * as NodeEvents from "node:events";
 import * as NodeFSP from "node:fs/promises";
@@ -43,11 +45,35 @@ const runCli = (args: ReadonlyArray<string>, env: Record<string, string> = {}) =
     Effect.provide(
       Layer.mergeAll(
         NodeServices.layer,
+        NodeCrypto.layer,
         NetService.layer,
         ConfigProvider.layer(ConfigProvider.fromEnv({ env })),
       ),
     ),
   );
+
+it.effect("serve help omits auto-bootstrap because serve never bootstraps", () =>
+  Effect.gen(function* () {
+    yield* runCli(["serve", "--help"]);
+    const help = (yield* TestConsole.logLines).join("\n");
+    expect(help).toContain("--no-browser");
+    expect(help).not.toContain("--auto-bootstrap-project-from-cwd");
+  }).pipe(Effect.provide(Layer.fresh(TestConsole.layer))),
+);
+
+it.effect("serve rejects its unsupported auto-bootstrap flag", () =>
+  withTempDirectory("goat-cli-unsupported-", (root) =>
+    Effect.gen(function* () {
+      const result = yield* runCli([
+        "serve",
+        "--base-dir",
+        root,
+        "--auto-bootstrap-project-from-cwd",
+      ]).pipe(Effect.result);
+      expect(result._tag).toBe("Failure");
+    }),
+  ),
+);
 
 const pathExists = (path: string) =>
   Effect.promise(() =>

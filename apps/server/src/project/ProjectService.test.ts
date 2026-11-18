@@ -1,10 +1,12 @@
 import { assert, it } from "@effect/vitest";
+import * as NodeCrypto from "@effect/platform-node/NodeCrypto";
 import * as NodeServices from "@effect/platform-node/NodeServices";
 import { CommandId, type Project, ProjectId, ProviderInstanceId } from "@goat/contracts";
 import * as Context from "effect/Context";
 import * as Deferred from "effect/Deferred";
 import * as Effect from "effect/Effect";
 import * as Fiber from "effect/Fiber";
+import * as FileSystem from "effect/FileSystem";
 import * as Layer from "effect/Layer";
 import * as Metric from "effect/Metric";
 import * as Option from "effect/Option";
@@ -27,12 +29,14 @@ import * as ProjectStore from "../orchestration-v2/ProjectStore.ts";
 import * as RuntimeLayer from "../orchestration-v2/runtimeLayer.ts";
 import * as ThreadCommandExecutor from "../orchestration-v2/ThreadCommandExecutor.ts";
 import * as SqlitePersistence from "../persistence/Sqlite.ts";
+import * as ProcessRunner from "../processRunner.ts";
 import * as ServerSettings from "../serverSettings.ts";
 import * as WorkspacePaths from "../workspace/WorkspacePaths.ts";
 import * as ProjectEnrichmentService from "./ProjectEnrichmentService.ts";
 import * as ProjectFaviconResolver from "./ProjectFaviconResolver.ts";
 import * as ProjectService from "./ProjectService.ts";
 import * as RepositoryIdentityResolver from "./RepositoryIdentityResolver.ts";
+import * as GoatProjectFileLoader from "./GoatProjectFileLoader.ts";
 
 const layerWorkspacePaths = Layer.succeed(WorkspacePaths.WorkspacePaths, {
   normalizeWorkspaceRoot: (workspaceRoot) => Effect.succeed(workspaceRoot.replace(/\/$/, "")),
@@ -101,7 +105,7 @@ const layerTestFor = (
     Layer.provideMerge(SqlitePersistence.layerMemory),
     Layer.provideMerge(ServerSettings.layerTest()),
     Layer.provide(ServerConfig.layerTest(process.cwd(), { prefix: "project-service-test-" })),
-    Layer.provide(NodeServices.layer),
+    Layer.provide(Layer.mergeAll(NodeServices.layer, NodeCrypto.layer)),
     Layer.provideMerge(layerEnrichmentCompletions),
   );
 
@@ -120,8 +124,8 @@ const layerProjectServiceDependencies = Layer.mergeAll(
   Layer.provideMerge(layerMetadata),
   Layer.provideMerge(SqlitePersistence.layerMemory),
   Layer.provideMerge(ServerSettings.layerTest()),
-  Layer.provide(ServerConfig.layerTest(process.cwd(), { prefix: "project-service-race-" })),
-  Layer.provide(NodeServices.layer),
+  Layer.provideMerge(ServerConfig.layerTest(process.cwd(), { prefix: "project-service-race-" })),
+  Layer.provideMerge(NodeServices.layer),
 );
 
 const waitForProject = Effect.fn("ProjectServiceTest.waitForProject")(function* (
@@ -215,7 +219,14 @@ it.layer(layerTest)("ProjectService", (it) => {
       });
       assert.isFalse(reset.autoPull);
       assert.isNull(reset.projectIcon);
-      assert.equal(reset.faviconPath, hydratedCreated.faviconPath);
+      assert.equal(
+        (yield* waitForProject(
+          service,
+          projectId,
+          (project) => project.faviconPath === hydratedCreated.faviconPath,
+        )).faviconPath,
+        hydratedCreated.faviconPath,
+      );
       assert.isNull(reset.defaultThreadEnvMode);
       assert.deepEqual(
         (yield* service.snapshot).projects.map((project) => project.id),
@@ -645,6 +656,112 @@ it.effect("invalidates workspace-derived metadata when a project moves", () =>
       );
     }).pipe(Effect.provide(layerTestFor(layerVersionedMetadata)));
   }),
+);
+
+it.effect("resolves a restored icon immediately after reselecting its saved path", () =>
+  Effect.gen(function* () {
+    const fileSystem = yield* FileSystem.FileSystem;
+    const cwd = yield* fileSystem.makeTempDirectoryScoped({ prefix: "project-icon-reselect-" });
+    const iconPath = `${cwd}/icon.svg`;
+    const metadata = Layer.merge(
+      Layer.succeed(RepositoryIdentityResolver.RepositoryIdentityResolver, {
+        resolve: () => Effect.succeed(null),
+      }),
+      ProjectFaviconResolver.layer.pipe(
+        Layer.provide(layerWorkspacePaths),
+        Layer.provide(GoatProjectFileLoader.layer),
+        Layer.provide(NodeServices.layer),
+      ),
+    );
+    yield* Effect.gen(function* () {
+      const service = yield* ProjectService.ProjectService;
+      const resolver = yield* ProjectFaviconResolver.ProjectFaviconResolver;
+      const projectId = ProjectId.make("project:icon-reselect");
+      yield* service.create({
+        commandId: CommandId.make("command:icon-reselect:create"),
+        projectId,
+        title: "Icon reselection",
+        workspaceRoot: cwd,
+      });
+      yield* service.update({
+        commandId: CommandId.make("command:icon-reselect:missing"),
+        projectId,
+        faviconPath: "icon.svg",
+      });
+      assert.isNull(yield* resolver.resolvePath(cwd, "icon.svg"));
+      yield* fileSystem.writeFileString(iconPath, '<svg xmlns="http://www.w3.org/2000/svg"/>');
+      assert.isNull(yield* resolver.resolvePath(cwd, "icon.svg"));
+      yield* service.update({
+        commandId: CommandId.make("command:icon-reselect:restored"),
+        projectId,
+        faviconPath: "icon.svg",
+      });
+      assert.equal(yield* resolver.resolvePath(cwd, "icon.svg"), iconPath);
+    }).pipe(Effect.provide(layerTestFor(metadata)));
+  }).pipe(Effect.provide(NodeServices.layer)),
+);
+
+it.effect("refuses a worktree container as a new project and as a new workspace root", () =>
+  Effect.gen(function* () {
+    const fileSystem = yield* FileSystem.FileSystem;
+    const processRunner = yield* ProcessRunner.ProcessRunner;
+    const fixture = yield* fileSystem.makeTempDirectoryScoped({ prefix: "project-container-" });
+    const git = (cwd: string, ...args: ReadonlyArray<string>) =>
+      processRunner.run({
+        command: "git",
+        args: ["-C", cwd, "-c", "user.email=t@t", "-c", "user.name=t", ...args],
+      });
+    const source = `${fixture}/source`;
+    const container = `${fixture}/container`;
+    yield* fileSystem.makeDirectory(source);
+    yield* fileSystem.makeDirectory(container);
+    yield* git(source, "init", "-b", "develop");
+    yield* fileSystem.writeFileString(`${source}/README.md`, "readme\n");
+    yield* git(source, "add", "README.md");
+    yield* git(source, "commit", "-m", "init");
+    yield* git(fixture, "clone", "--bare", source, `${container}/.bare`);
+    yield* fileSystem.writeFileString(`${container}/.git`, "gitdir: ./.bare\n");
+    yield* git(container, "worktree", "add", "develop", "develop");
+
+    yield* Effect.gen(function* () {
+      const service = yield* ProjectService.ProjectService;
+      // As cloned the container is bare; Initialize Git or a config edit clears core.bare.
+      for (const coreBare of ["true", "false"]) {
+        yield* git(container, "config", "core.bare", coreBare);
+        const rejected = yield* service
+          .create({
+            commandId: CommandId.make(`command:container:create:${coreBare}`),
+            projectId: ProjectId.make(`project:container:${coreBare}`),
+            title: "Container",
+            workspaceRoot: container,
+          })
+          .pipe(Effect.flip);
+        assert.equal(rejected._tag, "ProjectInvalidError", `core.bare=${coreBare}`);
+        assert.include(rejected.message, "Add one of its worktrees");
+        assert.isTrue(Option.isNone(yield* service.getByWorkspaceRoot(container)));
+      }
+
+      const projectId = ProjectId.make("project:container:worktree");
+      const worktree = yield* service.create({
+        commandId: CommandId.make("command:container:worktree"),
+        projectId,
+        title: "Worktree",
+        workspaceRoot: `${container}/develop`,
+      });
+      const moved = yield* service
+        .update({
+          commandId: CommandId.make("command:container:move"),
+          projectId,
+          workspaceRoot: container,
+        })
+        .pipe(Effect.flip);
+      assert.equal(moved._tag, "ProjectInvalidError");
+      assert.equal(
+        Option.getOrThrow(yield* service.getById(projectId)).workspaceRoot,
+        worktree.workspaceRoot,
+      );
+    }).pipe(Effect.provide(layerTest));
+  }).pipe(Effect.provide(ProcessRunner.layer.pipe(Layer.provideMerge(NodeServices.layer)))),
 );
 
 it.effect("serializes two projects claiming the same workspace root", () =>

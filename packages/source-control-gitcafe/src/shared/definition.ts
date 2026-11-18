@@ -13,6 +13,7 @@ import {
   isChangeRequestOnProjectHost,
   parseChangeRequestPath,
   projectChangeRequestHost,
+  repositoryUrlFromPagePath,
 } from "@goat/source-control-core/shared/definition";
 import { icon } from "./icon.ts";
 
@@ -21,6 +22,7 @@ const GITCAFE_HOSTS = new Set(["git.cafe", "staging.git.cafe"]);
 
 /** GitCafe serves pull requests at `/pull/<n>` and redirects the older `/pulls/<n>` there. */
 const CHANGE_REQUEST_PATH = /^\/([^/]+\/[^/]+)\/pulls?\/(\d+)(?:\/|$)/u;
+const REPOSITORY_PAGE_PATH = /^\/([^/]+\/[^/]+)\/(?:tree|blob)\/[^/]/u;
 
 function parseChangeRequestUrl(url: URL) {
   return GITCAFE_HOSTS.has(url.hostname.toLowerCase())
@@ -68,6 +70,10 @@ export const definition = defineSourceControl({
   // `/pull/` and `/pulls/` are GitHub's and Forgejo's shapes too, so only GitCafe's own hosts
   // claim them.
   parseChangeRequestUrl,
+  repositoryUrlFromPage: (url) =>
+    GITCAFE_HOSTS.has(url.hostname.toLowerCase())
+      ? repositoryUrlFromPagePath(url, REPOSITORY_PAGE_PATH)
+      : null,
   changeRequestUrlFromReferenceAutolink: () => null,
   changeRequestActions: new Set([
     "ready",

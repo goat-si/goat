@@ -8,9 +8,11 @@ import {
   type RuntimeMode,
 } from "@goat/contracts";
 import { GOAT_ENVIRONMENT_PATH } from "@goat/contracts/legacyT3Names";
+import * as Cause from "effect/Cause";
 import * as Clock from "effect/Clock";
 import * as Context from "effect/Context";
-import * as Crypto from "effect/Crypto";
+import * as SecureRandom from "effect/crypto/SecureRandom";
+import * as Digest from "effect/crypto/Digest";
 import * as Data from "effect/Data";
 import * as DateTime from "effect/DateTime";
 import * as Effect from "effect/Effect";
@@ -22,10 +24,12 @@ import * as Stream from "effect/Stream";
 import * as Semaphore from "effect/Semaphore";
 import * as FetchHttpClient from "effect/http/FetchHttpClient";
 import * as HttpClient from "effect/http/HttpClient";
+import * as HttpClientError from "effect/http/HttpClientError";
 import * as HttpClientRequest from "effect/http/HttpClientRequest";
 
 import * as ServerSecretStore from "../auth/ServerSecretStore.ts";
 import { base64UrlEncode } from "../auth/utils.ts";
+import { DisposableRouteGuard } from "../hub/disposable/DisposableRouteGuard.ts";
 
 /**
  * Linked hosts are other GOAT servers this environment reaches over HTTPS
@@ -191,8 +195,10 @@ export class LinkedHosts extends Context.Service<
 
 const make = Effect.gen(function* () {
   const secrets = yield* ServerSecretStore.ServerSecretStore;
+  const routeGuard = yield* DisposableRouteGuard;
   const http = yield* HttpClient.HttpClient;
-  const crypto = yield* Crypto.Crypto;
+  const random = yield* SecureRandom.SecureRandom;
+  const digest = yield* Digest.Digest;
   const lock = yield* Semaphore.make(1);
   const signals = yield* PubSub.unbounded<void>();
 
@@ -234,9 +240,26 @@ const make = Effect.gen(function* () {
           cache: "no-store",
         }),
         Effect.timeout(LINK_TIMEOUT),
-        Effect.mapError(() =>
-          fail("host_unavailable", `${new URL(request.url).origin} did not answer.`),
-        ),
+        Effect.mapError((error) => {
+          const origin = new URL(request.url).origin;
+          if (Cause.isTimeoutError(error)) return fail("host_unavailable", `${origin} timed out.`);
+          const cause =
+            HttpClientError.isHttpClientError(error) && error.reason._tag === "TransportError"
+              ? error.reason.cause
+              : undefined;
+          const nested =
+            typeof cause === "object" && cause !== null && "cause" in cause
+              ? cause.cause
+              : undefined;
+          const code = [cause, nested]
+            .map((value) =>
+              typeof value === "object" && value !== null && "code" in value
+                ? value.code
+                : undefined,
+            )
+            .find((value) => typeof value === "string" && /^[A-Z0-9_]{1,64}$/.test(value));
+          return fail("host_unavailable", `${origin} did not answer${code ? ` (${code})` : ""}.`);
+        }),
       );
   });
   const decoded =
@@ -269,6 +292,12 @@ const make = Effect.gen(function* () {
         ExecutionEnvironmentDescriptor,
         "its environment descriptor",
       )(descriptorResponse.body);
+      // A disposable machine's GOAT is never linked (design section 6): refused before anything is spent.
+      const refused = yield* routeGuard.refusal(
+        { environmentId: descriptor.environmentId },
+        target.baseUrl,
+      );
+      if (refused !== undefined) return yield* fail("invalid_request", refused);
 
       const registered = yield* send(
         HttpClientRequest.post(url("/oauth/mcp/register")).pipe(
@@ -286,11 +315,11 @@ const make = Effect.gen(function* () {
         );
       const client = yield* decoded(AuthMcpRegisteredClient, "client registration")(registeredBody);
 
-      const verifier = base64UrlEncode(yield* crypto.randomBytes(32).pipe(Effect.orDie));
+      const verifier = base64UrlEncode(yield* random.randomBytes(32).pipe(Effect.orDie));
       const challenge = base64UrlEncode(
-        yield* crypto.digest("SHA-256", new TextEncoder().encode(verifier)).pipe(Effect.orDie),
+        yield* digest.digest(Digest.sha256, new TextEncoder().encode(verifier)).pipe(Effect.orDie),
       );
-      const state = base64UrlEncode(yield* crypto.randomBytes(16).pipe(Effect.orDie));
+      const state = base64UrlEncode(yield* random.randomBytes(16).pipe(Effect.orDie));
       const resource = url("/mcp");
       const decision = yield* send(
         HttpClientRequest.post(url("/oauth/mcp/decision")).pipe(

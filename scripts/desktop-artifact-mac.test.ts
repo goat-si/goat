@@ -7,11 +7,21 @@ import * as Path from "effect/Path";
 import {
   BundleNotSelfContainedError,
   validateMacPackagedPayload,
+  verifyPackagedBundleIsSelfContained,
 } from "./build-desktop-artifact.ts";
+import {
+  LinuxPackagedAppMissingError,
+  makeLinuxPackagedPayloadValidator,
+} from "./desktop-artifact-linux.ts";
 import { MacPackagedAppMissingError } from "./desktop-artifact-mac.ts";
 
-const makeMacPayloadFixture = Effect.fn("test.makeMacPayloadFixture")(function* (input: {
+const validateLinuxPackagedPayload = makeLinuxPackagedPayloadValidator(
+  verifyPackagedBundleIsSelfContained,
+);
+
+const makePackagedAppFixture = Effect.fn("test.makePackagedAppFixture")(function* (input: {
   readonly serverEntrySource?: string;
+  readonly resourcesPath?: string;
 }) {
   const fs = yield* FileSystem.FileSystem;
   const path = yield* Path.Path;
@@ -22,7 +32,10 @@ const makeMacPayloadFixture = Effect.fn("test.makeMacPayloadFixture")(function* 
   yield* fs.writeFileString(serverEntryPath, input.serverEntrySource ?? "console.log('server');\n");
 
   const stageDistDir = path.join(tempDir, "dist");
-  const resourcesDir = path.join(stageDistDir, "mac-arm64/GOAT.app/Contents/Resources");
+  const resourcesDir = path.join(
+    stageDistDir,
+    input.resourcesPath ?? "mac-arm64/GOAT.app/Contents/Resources",
+  );
   yield* fs.makeDirectory(resourcesDir, { recursive: true });
   yield* Effect.promise(() =>
     createPackageWithOptions(sourceDir, path.join(resourcesDir, "app.asar"), {}),
@@ -34,7 +47,7 @@ it.layer(NodeServices.layer, { excludeTestServices: true })("macOS packaged payl
   it.effect("rejects a macOS app whose packaged server bundle cannot resolve", () =>
     Effect.scoped(
       Effect.gen(function* () {
-        const fixture = yield* makeMacPayloadFixture({
+        const fixture = yield* makePackagedAppFixture({
           serverEntrySource: 'import "goat-deliberately-missing-package";\n',
         });
         const error = yield* validateMacPackagedPayload({
@@ -50,7 +63,7 @@ it.layer(NodeServices.layer, { excludeTestServices: true })("macOS packaged payl
   it.effect("accepts a macOS app whose packaged server bundle resolves", () =>
     Effect.scoped(
       Effect.gen(function* () {
-        const fixture = yield* makeMacPayloadFixture({});
+        const fixture = yield* makePackagedAppFixture({});
         yield* validateMacPackagedPayload({ stageDistDir: fixture.stageDistDir });
       }),
     ),
@@ -83,6 +96,33 @@ it.layer(NodeServices.layer, { excludeTestServices: true })("macOS packaged payl
         const error = yield* validateMacPackagedPayload({ stageDistDir }).pipe(Effect.flip);
 
         assert.instanceOf(error, BundleNotSelfContainedError);
+      }),
+    ),
+  );
+});
+
+it.layer(NodeServices.layer, { excludeTestServices: true })("Linux packaged payload", (it) => {
+  it.effect("rejects a Linux app whose packaged server bundle cannot resolve", () =>
+    Effect.scoped(
+      Effect.gen(function* () {
+        const fs = yield* FileSystem.FileSystem;
+        const fixture = yield* makePackagedAppFixture({
+          resourcesPath: "linux-arm64-unpacked/resources",
+          serverEntrySource: 'import "goat-deliberately-missing-package";\n',
+        });
+        const error = yield* validateLinuxPackagedPayload({
+          stageDistDir: fixture.stageDistDir,
+        }).pipe(Effect.flip);
+        assert.instanceOf(error, BundleNotSelfContainedError);
+        assert.include(error.output, "goat-deliberately-missing-package");
+
+        const emptyStage = yield* fs.makeTempDirectoryScoped({
+          prefix: "goat-linux-payload-test-",
+        });
+        const missing = yield* validateLinuxPackagedPayload({ stageDistDir: emptyStage }).pipe(
+          Effect.flip,
+        );
+        assert.instanceOf(missing, LinuxPackagedAppMissingError);
       }),
     ),
   );

@@ -3,7 +3,7 @@ import { ClaudeSettings, ProviderSessionId, ThreadId } from "@goat/contracts";
 import * as IdAllocator from "@goat/provider-core/server/IdAllocator";
 import * as ProviderAdapter from "@goat/provider-core/server/ProviderAdapter";
 import type * as ProviderContinuationRequests from "@goat/provider-core/server/ProviderContinuationRequests";
-import * as Crypto from "effect/Crypto";
+import * as SecureRandom from "effect/crypto/SecureRandom";
 import * as Deferred from "effect/Deferred";
 import * as Effect from "effect/Effect";
 import * as FileSystem from "effect/FileSystem";
@@ -24,7 +24,7 @@ const WAKE_NATIVE_SESSION = "native-thread-claude-wake";
 export const makeWakeHarnessWithOptions = (options?: {
   readonly offer?: (message: SDKUserMessage) => Effect.Effect<void>;
   readonly close?: (sdkMessages: Queue.Queue<SDKMessage>) => Effect.Effect<void>;
-  readonly interrupt?: Effect.Effect<void>;
+  readonly interrupt?: Effect.Effect<void, ClaudeAdapterV2.ClaudeAgentSdkQueryRunnerError>;
   readonly applyFlagSettings?: ClaudeAdapterV2.ClaudeAgentSdkQuerySession["applyFlagSettings"];
   readonly stopTask?: (
     taskId: string,
@@ -34,6 +34,7 @@ export const makeWakeHarnessWithOptions = (options?: {
   ) => Effect.Effect<boolean, ClaudeAdapterV2.ClaudeAgentSdkQueryRunnerError>;
   readonly environment?: NodeJS.ProcessEnv;
   readonly subagentLaunchToolUseId?: string;
+  readonly subagentModel?: string;
   readonly nativeSessionId?: string;
   readonly settings?: ClaudeSettings;
   readonly modelCatalog?: Effect.Effect<ClaudeModelCatalog>;
@@ -93,7 +94,7 @@ export const makeWakeHarnessWithOptions = (options?: {
       attachmentsDir,
       fileSystem,
       path: yield* Path.Path,
-      crypto: yield* Crypto.Crypto,
+      random: yield* SecureRandom.SecureRandom,
       idAllocator,
       continuationRequests: {
         offer: (request) =>
@@ -166,6 +167,7 @@ export const makeWakeHarnessWithOptions = (options?: {
           }),
         forkSession: options?.forkSession ?? (() => Effect.die("unused forkSession")),
         subagentLaunchToolUseId: () => Effect.succeed(options?.subagentLaunchToolUseId ?? null),
+        subagentModel: () => Effect.succeed(options?.subagentModel ?? null),
         assertComplete: Effect.void,
       },
     });

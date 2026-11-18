@@ -46,7 +46,7 @@ it.each([
 ])("prepares $platform/$hostArch cache", async ({ platform, hostArch, arch, ...layout }) => {
   const { spawnSync } = await import("node:child_process");
   const root = NodeFS.realpathSync(
-    NodeFS.mkdtempSync(NodePath.join(NodeOS.tmpdir(), "t3-hook-cache-")),
+    NodeFS.mkdtempSync(NodePath.join(NodeOS.tmpdir(), "goat-hook-cache-")),
   );
   try {
     const resources = NodePath.join(root, layout.resources);
@@ -120,7 +120,7 @@ it.each([
 
 it("rejects ambiguous bundled server entries before importing them", async () => {
   const { spawnSync } = await import("node:child_process");
-  const root = NodeFS.mkdtempSync(NodePath.join(NodeOS.tmpdir(), "t3-cache-ambiguous-"));
+  const root = NodeFS.mkdtempSync(NodePath.join(NodeOS.tmpdir(), "goat-cache-ambiguous-"));
   try {
     const dist = NodePath.join(root, "app.asar/apps/server/dist");
     NodeFS.mkdirSync(dist, { recursive: true });
@@ -156,7 +156,7 @@ it("rejects ambiguous bundled server entries before importing them", async () =>
 it("reclaims only AppImage cache directories linked to gone mounts", async () => {
   const { spawnSync } = await import("node:child_process");
   const root = NodeFS.realpathSync(
-    NodeFS.mkdtempSync(NodePath.join(NodeOS.tmpdir(), "t3-cache-reclaim-")),
+    NodeFS.mkdtempSync(NodePath.join(NodeOS.tmpdir(), "goat-cache-reclaim-")),
   );
   try {
     const resources = NodePath.join(root, ".mount_live/resources");

@@ -1,15 +1,21 @@
-import { useAtomValue } from "@effect/atom-react";
-import { runAtomCommand, squashAtomCommandFailure } from "@goat/client-runtime/state/runtime";
-import type { EnvironmentId } from "@goat/contracts";
-import { useState } from "react";
+import { RegistryContext, useAtomValue } from "@effect/atom-react";
+import type { BotProfile, EnvironmentId } from "@goat/contracts";
+import { useContext, useState } from "react";
 import { Text } from "react-native";
 
 import { ScreenScrollView } from "../../components/ui/ScreenScrollView";
-import { appAtomRegistry } from "../../state/atom-registry";
 import { channelEnvironment } from "../../state/channels";
 import { useEnvironments } from "../../state/environments";
+import { environmentPresentations } from "../../state/presentation";
 import { useEnvironmentQuery } from "../../state/query";
 import { MobileBotProfileSheet } from "../goat-bot/MobileBotProfileSheet";
+import {
+  isComputerReadable,
+  useComputerReadable,
+  useComputerStartingOver,
+  useKeptPerComputer,
+} from "../goat-bot/useKeptPerComputer";
+import { useMobileBotManage } from "../goat-bot/useMobileBotManage";
 import { useMobileGoatBotHomeSettings } from "../goat-bot/useMobileGoatBotHomeSettings";
 import { useMobileGoatBotModel } from "../goat-bot/useMobileGoatBotModel";
 import { SettingsChoiceRow } from "./components/SettingsChoiceRow";
@@ -46,10 +52,11 @@ export function SettingsGoatBotRouteScreen() {
           </Text>
         ) : (
           <>
-            {resolution.state === "claimed" && resolution.homeConnected ? (
+            {resolution.state === "claimed" && resolution.homeKnown ? (
               <GoatBotProfileSection
                 key={"profile:" + resolution.claim.environmentId}
                 environmentId={resolution.claim.environmentId}
+                connected={resolution.homeConnected}
               />
             ) : null}
             <Text className="text-foreground-muted">
@@ -90,10 +97,12 @@ export function SettingsGoatBotRouteScreen() {
                   />
                 ))}
             </SettingsSection>
-            {resolution.state === "claimed" && resolution.homeConnected ? (
+            {resolution.state === "claimed" && resolution.homeKnown ? (
               <GoatBotModelSection
                 key={resolution.claim.environmentId}
                 environmentId={resolution.claim.environmentId}
+                computer={label(resolution.claim.environmentId)}
+                connected={resolution.homeConnected}
                 canWrite={writableIds.has(resolution.claim.environmentId)}
               />
             ) : null}
@@ -104,74 +113,159 @@ export function SettingsGoatBotRouteScreen() {
   );
 }
 
-/** The main bot's name, avatar and purpose on its home computer. */
-function GoatBotProfileSection({ environmentId }: { readonly environmentId: EnvironmentId }) {
+/**
+ * The main bot's name, avatar and purpose on its home computer. Offline it shows what the roster
+ * last read there and stays closed; refused or removed, it shows nothing from that computer.
+ */
+function GoatBotProfileSection({
+  environmentId,
+  connected,
+}: {
+  readonly environmentId: EnvironmentId;
+  readonly connected: boolean;
+}) {
+  const registry = useContext(RegistryContext);
   const { presentationById } = useEnvironments();
-  const supported =
-    presentationById.get(environmentId)?.serverConfig?.environment.capabilities
-      .goatBotProfileEdit === true;
+  const capabilities = presentationById.get(environmentId)?.serverConfig?.environment.capabilities;
+  const supported = capabilities?.goatBotProfileEdit === true;
+  // The roster's exact read, so both share one request and one kept answer.
   const profiles = useEnvironmentQuery(
-    supported ? channelEnvironment.listBots({ environmentId, input: {} }) : null,
+    supported && connected
+      ? channelEnvironment.listBots({
+          environmentId,
+          input: capabilities?.goatBotMembers === true ? { includeDeleted: true } : {},
+        })
+      : null,
   );
-  const canEdit = useAtomValue(channelEnvironment.updateBot.permissionAtom(environmentId));
-  const [editing, setEditing] = useState(false);
+  const listed = useKeptPerComputer("bots", environmentId, profiles, !connected);
+  const readable = useComputerReadable(environmentId);
+  const startingOver = useComputerStartingOver(environmentId);
+  const mayEdit = useAtomValue(channelEnvironment.updateBot.permissionAtom(environmentId));
+  const main = listed?.bots.find((bot) => bot.role === "main");
+  const manage = useMobileBotManage(environmentId, main?.name);
+  // The sheet holds the bot's profile, so a list read again on reconnect keeps it open; it closes
+  // for good once this computer may not be read.
+  const [editing, setEditing] = useState<BotProfile | null>(null);
+  if (editing !== null && !readable) setEditing(null);
   if (!supported) return null;
-  const main = profiles.data?.bots.find((bot) => bot.role === "main");
+  // Starting over, a refusal being asked again is still loading; one that stands is not.
+  const loadFailed = startingOver
+    ? profiles.error !== null && !profiles.isPending
+    : !readable || profiles.error !== null;
   return (
     <SettingsSection title="Profile">
       <SettingsRow
         icon="person.crop.circle"
         label={main === undefined ? "GOAT Bot" : [main.avatar, main.name].filter(Boolean).join(" ")}
         value={
-          profiles.error
+          loadFailed
             ? "Couldn't load"
-            : main === undefined
-              ? "Not started yet"
-              : canEdit
-                ? "Edit"
-                : "Permission required"
+            : !connected
+              ? "Offline"
+              : main === undefined
+                ? listed == null
+                  ? "Loading…"
+                  : "Not started yet"
+                : mayEdit
+                  ? "Edit"
+                  : "Permission required"
         }
-        disabled={main === undefined || !canEdit}
-        onPress={() => setEditing(true)}
+        disabled={main === undefined || !manage.canEdit}
+        onPress={() => setEditing(main ?? null)}
       />
       {main?.purpose ? (
         <Text className="px-4 py-2 text-foreground-muted">{main.purpose}</Text>
       ) : null}
-      {editing && main !== undefined ? (
+      {editing !== null ? (
         <MobileBotProfileSheet
           mode="edit"
-          initial={main}
-          canSubmit={canEdit}
-          onClose={() => setEditing(false)}
-          onSubmit={async (changes) => {
-            const result = await runAtomCommand(appAtomRegistry, channelEnvironment.updateBot, {
-              environmentId,
-              input: { botId: main.botId, ...changes },
-            });
-            if (result._tag === "Success") return null;
-            const failure = squashAtomCommandFailure(result);
-            return failure instanceof Error ? failure.message : "Couldn't save the profile.";
-          }}
+          initial={editing}
+          canSubmit={manage.canEdit}
+          unavailableReason={manage.connected ? undefined : manage.offlineReason}
+          onClose={() => setEditing(null)}
+          // Save reads the store when pressed: a refusal not yet rendered sends nothing.
+          onSubmit={(changes) =>
+            isComputerReadable(registry, environmentId)
+              ? manage.update(editing, changes)
+              : Promise.resolve(null)
+          }
         />
       ) : null}
     </SettingsSection>
   );
 }
 
+/**
+ * Messages, Workers and Model on the home computer, shown only while this phone may read it, the
+ * same check as Profile, connected or not. Offline they keep the config last loaded from it and
+ * stay closed to changes; refused or removed, they show none of it, and while a fresh bot list is
+ * asked after that they read as loading.
+ */
 function GoatBotModelSection({
   environmentId,
+  computer,
+  connected,
   canWrite,
 }: {
   readonly environmentId: EnvironmentId;
+  readonly computer: string;
+  readonly connected: boolean;
   readonly canWrite: boolean;
 }) {
+  const registry = useContext(RegistryContext);
   const model = useMobileGoatBotModel(environmentId, canWrite);
+  const readable = useComputerReadable(environmentId);
+  const startingOver = useComputerStartingOver(environmentId);
+  const { presentationById } = useEnvironments();
+  const capabilities = presentationById.get(environmentId)?.serverConfig?.environment.capabilities;
+  // The roster's read; started over, it decides whether the fresh list failed or is still asked.
+  const list = useEnvironmentQuery(
+    startingOver && connected && capabilities?.goatBotProfiles === true
+      ? channelEnvironment.listBots({
+          environmentId,
+          input: capabilities.goatBotMembers === true ? { includeDeleted: true } : {},
+        })
+      : null,
+  );
   const [pickerOpen, setPickerOpen] = useState(false);
-  if (!model) return null;
-  const { state: modelState, settings, saving, error, allowed, save } = model;
+  if (pickerOpen && !(connected && readable)) setPickerOpen(false);
+  if (!readable || !model) {
+    // Connected, the config is still loading.
+    if (readable && connected) return null;
+    const pending = readable || (startingOver && !(list.error !== null && !list.isPending));
+    return (
+      <>
+        <Text className="text-foreground-muted">
+          {!pending
+            ? `Couldn't load these settings from ${computer}.`
+            : connected
+              ? "Loading…"
+              : `Shown when ${computer} connects.`}
+        </Text>
+        {["Messages", "Workers", "Model"].map((title) => (
+          <SettingsSection key={title} title={title}>
+            {null}
+          </SettingsSection>
+        ))}
+      </>
+    );
+  }
+  const { state: modelState, settings, saving, error } = model;
+  const allowed = model.allowed && connected;
+  // Read when pressed: a refusal or a drop not yet rendered saves nothing.
+  const save = (patch: Parameters<typeof model.save>[0]) => {
+    const live = registry.get(environmentPresentations.presentationsAtom).get(environmentId);
+    if (live?.connection.phase === "connected" && isComputerReadable(registry, environmentId))
+      void model.save(patch);
+  };
 
   return (
     <>
+      {connected ? null : (
+        <Text className="text-foreground-muted">
+          {`Last read from ${computer}, so these may be out of date. Changes need it connected.`}
+        </Text>
+      )}
       <SettingsSection title="Messages">
         <SettingsSwitchRow
           label="Answer with the bot session"

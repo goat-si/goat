@@ -61,6 +61,10 @@ vi.mock("../ui/toast", () => ({ toastManager: { add: state.toast } }));
 vi.mock("../../state/projectClones", () => ({
   unsilenceProjectCloneToasts: state.unsilenceProjectCloneToasts,
 }));
+vi.mock("./chatViewSend", async () => {
+  const { Atom } = await import("effect/reactivity");
+  return { draftFanoutSelectionsAtom: Atom.family(() => Atom.make([])) };
+});
 
 import { DraftId, useComposerDraftStore } from "../../composerDraftStore";
 import type { MachineWithoutProject } from "../../lib/runOnArrival";
@@ -101,7 +105,11 @@ const clonedRef = (): ScopedProjectRef =>
 async function setup() {
   state.projects.clear();
   state.listeners.clear();
-  state.addProjectToMachine.mockReset().mockResolvedValue(undefined);
+  state.addProjectToMachine
+    .mockReset()
+    .mockImplementation((input: { readonly projectId: string }) =>
+      Promise.resolve(input.projectId),
+    );
   state.toast.mockReset();
   state.unsilenceProjectCloneToasts.mockReset();
   state.projectArrivalTimesOut = false;

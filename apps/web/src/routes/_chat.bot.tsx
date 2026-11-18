@@ -4,8 +4,7 @@ import { scopeThreadRef } from "@goat/client-runtime/environment";
 import type { ChannelTaskId, EnvironmentId } from "@goat/contracts";
 import { useGlobalAgentStore } from "../globalAgentStore";
 import { useClientSettings } from "../hooks/useSettings";
-import { useMediaQuery } from "../hooks/useMediaQuery";
-import { RIGHT_PANEL_INLINE_LAYOUT_MEDIA_QUERY } from "../rightPanelLayout";
+import { NavigationHoldsPaused } from "../lib/navigationHolds";
 import {
   resolveThreadDetailRef,
   useThreadShell,
@@ -19,6 +18,14 @@ import { GoatBotChatView } from "../components/goatBot/GoatBotChatView";
 import { GoatBotStepsProvider } from "../components/goatBot/GoatBotStepsProvider";
 import { GoatBotChannelContext } from "../components/goatBot/goatBotChannelPort";
 import { useLegacyGlobalAgentRoute } from "../components/goatBot/goatBotHooks";
+import {
+  GOAT_BOT_HOME_RESERVE_ROW_CLASS,
+  GOAT_BOT_HOME_RESERVE_ROW_STYLE,
+  GoatBotChatCanHide,
+  GoatBotChatHidden,
+  GoatBotHomeDockedRegistry,
+  useGoatBotTaskBeside,
+} from "../components/goatBot/goatBotLayout";
 import {
   GoatBotMainProfileContext,
   GoatBotMemberContext,
@@ -171,10 +178,10 @@ export function GoatBotTaskRoute({
   taskId: ChannelTaskId;
   taskTitle?: string | undefined;
 }) {
-  const narrowViewport = useMediaQuery(RIGHT_PANEL_INLINE_LAYOUT_MEDIA_QUERY);
   const taskFocus = getTaskPaneFocus();
   const besideChat = useClientSettings((settings) => settings.goatBotTaskThreadsBesideChat);
-  const narrow = narrowViewport || !besideChat;
+  const { beside, rowRef, onChatFocus, watchModalClose, registerHomeDocked } =
+    useGoatBotTaskBeside(besideChat);
   const navigate = useNavigate();
   const legacyAgentRoute = useLegacyGlobalAgentRoute();
   const member = useGoatBotMember();
@@ -182,25 +189,46 @@ export function GoatBotTaskRoute({
   const memberDeleted = member?.state === "deleted";
   return (
     <SidebarInset className="h-dvh min-h-0 overflow-hidden overscroll-y-none">
-      <div className="flex min-h-0 min-w-0 flex-1">
-        {!narrow && (
-          <GoatBotStepsProvider
-            visibleTurnItems={session.visibleTurnItems}
-            environmentId={memberDeleted ? null : environmentId}
-          >
-            <GoatBotChatView
-              {...session}
-              environmentId={environmentId}
-              legacyAgentRoute={legacyAgentRoute}
-              removal={memberDeleted ? "deleted" : null}
-              onRestore={
-                memberDeleted && manage.canManage ? () => void manage.restore(member) : undefined
-              }
-            />
-          </GoatBotStepsProvider>
-        )}
+      <div
+        ref={rowRef}
+        className={`flex min-h-0 min-w-0 flex-1 ${GOAT_BOT_HOME_RESERVE_ROW_CLASS}`}
+        style={GOAT_BOT_HOME_RESERVE_ROW_STYLE}
+      >
+        {/* Hidden, not unmounted, while the task replaces it: the composer keeps its draft, and its
+            holds pause as they did when it unmounted. */}
+        <div
+          ref={beside ? undefined : watchModalClose}
+          onFocus={onChatFocus}
+          hidden={!beside}
+          className="flex min-h-0 min-w-0 flex-1"
+        >
+          <NavigationHoldsPaused value={!beside}>
+            <GoatBotChatHidden value={!beside}>
+              <GoatBotChatCanHide value>
+                <GoatBotHomeDockedRegistry value={registerHomeDocked}>
+                  <GoatBotStepsProvider
+                    visibleTurnItems={session.visibleTurnItems}
+                    environmentId={memberDeleted ? null : environmentId}
+                  >
+                    <GoatBotChatView
+                      {...session}
+                      environmentId={environmentId}
+                      legacyAgentRoute={legacyAgentRoute}
+                      removal={memberDeleted ? "deleted" : null}
+                      onRestore={
+                        memberDeleted && manage.canManage
+                          ? () => void manage.restore(member)
+                          : undefined
+                      }
+                    />
+                  </GoatBotStepsProvider>
+                </GoatBotHomeDockedRegistry>
+              </GoatBotChatCanHide>
+            </GoatBotChatHidden>
+          </NavigationHoldsPaused>
+        </div>
         <GoatBotTaskPane
-          narrow={narrow}
+          narrow={!beside}
           environmentId={environmentId}
           session={session}
           taskId={taskId}

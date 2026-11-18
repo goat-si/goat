@@ -115,6 +115,7 @@ const members = vi.hoisted(() => ({
       waitingCount: number;
       latest?: { text: string; at: string; author: "bot" | "person" };
       unread: boolean;
+      waitingState?: "ready" | "pending" | "unavailable";
     }
   >,
 }));
@@ -128,8 +129,17 @@ vi.mock("./useMobileMemberStatus", () => ({
     return { ...shown, status: { waitingCount: shown.waitingCount, latest: shown.latest } };
   },
 }));
+// Each bot's work signals as Home's shared value gives them; none where Home does not govern.
+const signals = vi.hoisted(() => ({
+  byBot: {} as Record<string, { unread: number | null; missing: string | null; spoken: string[] }>,
+}));
+vi.mock("./useMobileBotRowSignals", () => ({
+  useMobileBotRowSignals: (input: { botId: string }) => signals.byBot[input.botId] ?? null,
+}));
 vi.mock("../../state/use-thread-detail", () => ({
-  useThreadVisibleTurnItems: () => face.items,
+  // A face asked for no conversation reads nothing, as the real read does.
+  useThreadVisibleTurnItems: (target: { environmentId: string | null }) =>
+    target.environmentId === null ? [] : face.items,
 }));
 vi.mock("react-native-safe-area-context", () => ({
   useSafeAreaInsets: () => ({ top: 0, bottom: 0 }),
@@ -147,15 +157,22 @@ vi.mock("../../components/ui/Button", () => ({
   Button: ({
     label,
     accessibilityLabel,
+    accessibilityHint,
     disabled,
     onPress,
   }: {
     label: string;
     accessibilityLabel?: string;
+    accessibilityHint?: string;
     disabled?: boolean;
     onPress?: () => void;
   }) => (
-    <button aria-label={accessibilityLabel} disabled={disabled} onClick={onPress}>
+    <button
+      aria-label={accessibilityLabel}
+      aria-description={accessibilityHint}
+      disabled={disabled}
+      onClick={onPress}
+    >
       {label}
     </button>
   ),
@@ -208,8 +225,12 @@ it("lists only bots: the main bot as a tile with its latest message, and no task
   expect(container.textContent).toContain("Also in Slack");
   expect(container.textContent).not.toContain("Show more");
   expect(container.querySelector("button:disabled")?.textContent).toContain("Coming soon");
-  const tile = container.querySelector('[aria-label="GOAT Bot, unread"]') as HTMLButtonElement;
-  await act(async () => tile.click());
+  const tile = [...container.querySelectorAll("button")].find((element) =>
+    element.getAttribute("aria-label")?.startsWith("GOAT Bot"),
+  );
+  // As on a member row, the spoken name ends with the line the tile shows.
+  expect(tile?.getAttribute("aria-label")).toBe("GOAT Bot, unread, Latest reply");
+  await act(async () => tile?.click());
   expect(open).toHaveBeenCalledWith({ kind: "main", profile: null });
 });
 
@@ -553,5 +574,124 @@ it("gives each member row its latest message, unread mark and state in one spoke
     expect(row("Fresh")?.getAttribute("aria-label")).toBe("Fresh, Watches the disks");
   } finally {
     members.status = {};
+  }
+});
+
+it("where Home governs, a row shows and says its unread recent tasks and what it cannot read", async () => {
+  signals.byBot = {
+    main: {
+      unread: 3,
+      missing: null,
+      spoken: ["3 unread tasks; recent work only; older work may be missing"],
+    },
+    scout: {
+      unread: null,
+      missing: "Unread and waiting unavailable",
+      spoken: ["Unread and waiting unavailable"],
+    },
+  };
+  // Scout's last status read failed; the count it answered before is no longer known.
+  members.status = { scout: { waitingCount: 1, unread: false, waitingState: "unavailable" } };
+  try {
+    root = createRoot(container);
+    await act(async () =>
+      root?.render(
+        <MobileBotRosterView
+          bots={[
+            { kind: "main", profile: null },
+            {
+              kind: "member",
+              profile: decodeProfile({
+                botId: "scout",
+                role: "member",
+                name: "Scout",
+                avatar: null,
+                purpose: "",
+                defaultModelSelection: null,
+                defaultProjectId: null,
+                environmentId: "env",
+                sessionThreadId: "thread-scout",
+                createdAt: at,
+                updatedAt: at,
+              }),
+            },
+          ]}
+          slackEnabled={false}
+          onOpenBot={() => {}}
+        />,
+      ),
+    );
+    const row = (name: string) =>
+      [...container.querySelectorAll("button")].find((element) =>
+        element.getAttribute("aria-label")?.split(", ").includes(name),
+      );
+    expect(row("GOAT Bot")?.getAttribute("aria-label")).toContain(
+      "3 unread tasks; recent work only; older work may be missing",
+    );
+    expect(row("GOAT Bot")?.textContent).toContain("3");
+    expect(row("Scout")?.getAttribute("aria-label")).toBe("Scout, Unread and waiting unavailable");
+    expect(row("Scout")?.textContent).toBe("Scout–");
+  } finally {
+    signals.byBot = {};
+    members.status = {};
+  }
+});
+
+it("while the computer is offline, New bot stays New bot, unavailable, and says why", async () => {
+  root = createRoot(container);
+  await act(async () =>
+    root?.render(
+      <MobileBotRosterView
+        bots={[{ kind: "main", profile: null }]}
+        slackEnabled={false}
+        onOpenBot={() => {}}
+        members={{
+          hidden: [],
+          deleted: [],
+          canCreate: false,
+          unavailable: "Unavailable while Studio Mac is offline",
+          onNewBot: () => {},
+          onLongPressBot: () => {},
+          canRestore: false,
+          onRestoreDeleted: () => {},
+        }}
+      />,
+    ),
+  );
+  const add = [...container.querySelectorAll("button")].find((element) =>
+    element.textContent?.includes("New bot"),
+  );
+  expect(add?.textContent).toBe("New bot");
+  expect(add?.disabled).toBe(true);
+  expect(add?.getAttribute("aria-description")).toBe("Unavailable while Studio Mac is offline");
+  // A sighted person reads the reason too, under the button and in the deleted bots' section.
+  expect(container.textContent).toContain("Unavailable while Studio Mac is offline");
+});
+
+it("once its computer may no longer be read here, the main tile rests and says nothing it read there", async () => {
+  // The conversation still holds a waiting task from before access was refused.
+  face.items = [
+    {
+      item: {
+        type: "notification",
+        ledgerTask: { taskId: "quiet", taskVersion: 2, status: "waiting_input" },
+      },
+    },
+  ];
+  try {
+    root = createRoot(container);
+    await act(async () =>
+      root?.render(
+        <MobileBotRosterView
+          bots={[{ kind: "main", profile: null }]}
+          mainUnreadable
+          slackEnabled={false}
+          onOpenBot={() => {}}
+        />,
+      ),
+    );
+    expect(container.querySelector('[aria-label="GOAT Bot"]')).not.toBeNull();
+  } finally {
+    face.items = [];
   }
 });

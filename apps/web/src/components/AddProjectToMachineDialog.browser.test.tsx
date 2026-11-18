@@ -11,10 +11,17 @@ const project = vi.hoisted(() => {
   const listeners = new Map<string, Set<() => void>>();
   const keyOf = (ref: ScopedProjectRef) => `${ref.environmentId}:${ref.projectId}`;
   let targets: readonly AddProjectTarget[] = [];
+  let environments: readonly unknown[] = [];
+  let ignoredListing: unknown = { files: [], truncated: false };
+  const listedInputs: unknown[] = [];
   return {
     setup: (
       initial: readonly { environmentId: EnvironmentId; id: ProjectId }[],
       availableTargets: readonly AddProjectTarget[] = [],
+      sources: { environments: readonly unknown[]; ignoredListing: unknown } = {
+        environments: [],
+        ignoredListing: { files: [], truncated: false },
+      },
     ) => {
       values.clear();
       for (const scopedListeners of listeners.values()) {
@@ -25,6 +32,9 @@ const project = vi.hoisted(() => {
         values.set(keyOf({ environmentId: value.environmentId, projectId: value.id }), value);
       }
       targets = availableTargets;
+      environments = sources.environments;
+      ignoredListing = sources.ignoredListing;
+      listedInputs.length = 0;
     },
     get: (ref: ScopedProjectRef) => values.get(keyOf(ref)) ?? null,
     set: (ref: ScopedProjectRef, next: unknown) => {
@@ -39,6 +49,12 @@ const project = vi.hoisted(() => {
       return () => scopedListeners.delete(listener);
     },
     targets: () => targets,
+    environments: () => environments,
+    listIgnoredFiles: (input: unknown) => {
+      listedInputs.push(input);
+      return ignoredListing;
+    },
+    listedInputs: () => listedInputs,
   };
 });
 
@@ -58,8 +74,20 @@ vi.mock(import("../state/entities"), async (original) => {
 });
 vi.mock(import("../state/environments"), async (original) => ({
   ...(await original()),
-  useEnvironments: (() => ({ environments: [] })) as never,
+  useEnvironments: (() => ({ environments: project.environments() })) as never,
 }));
+vi.mock(import("../state/projects"), async (original) => {
+  const { AsyncResult, Atom } = await import("effect/reactivity");
+  const actual = await original();
+  return {
+    ...actual,
+    projectEnvironment: {
+      ...actual.projectEnvironment,
+      listIgnoredFiles: ((request: { input: unknown }) =>
+        Atom.make(AsyncResult.success(project.listIgnoredFiles(request.input)))) as never,
+    },
+  };
+});
 vi.mock(import("../hooks/useHandleNewThread"), async (original) => ({
   ...(await original()),
   useNewThreadHandler: (() => () => undefined) as never,
@@ -168,5 +196,36 @@ describe("AddProjectToMachineDialog", () => {
     await expect.element(page.getByText(/Clone Replacement/)).toBeInTheDocument();
     await act(() => project.set(replacementRef, null));
     await expect.element(page.getByText("Add to another machine")).not.toBeInTheDocument();
+  });
+
+  it("offers no search and sends no query when the source server cannot search ignored files", async () => {
+    const buildMachine = EnvironmentId.make("build-machine");
+    project.setup(
+      [PROJECT],
+      [{ environmentId: buildMachine, label: "Build machine", machine: "desktop" }],
+      {
+        environments: [
+          {
+            environmentId,
+            serverConfig: {
+              environment: {
+                platform: { machine: "desktop" },
+                capabilities: { ignoredFileListing: true },
+              },
+            },
+          },
+        ],
+        ignoredListing: { files: [{ path: ".env", byteLength: 4 }], truncated: true },
+      },
+    );
+    await using _screen = await render(<AddProjectToMachineDialogHost />);
+    await act(() => openAddProjectToMachine({ projectRef, targetEnvironmentId: buildMachine }));
+
+    await expect.element(page.getByText(/^Showing the first 1 files\.$/)).toBeInTheDocument();
+    await expect
+      .element(page.getByRole("searchbox", { name: "Search ignored files" }))
+      .not.toBeInTheDocument();
+    expect(project.listedInputs()).not.toHaveLength(0);
+    expect(project.listedInputs()).toEqual(project.listedInputs().map(() => ({ cwd: "/repo" })));
   });
 });

@@ -1,6 +1,11 @@
 #!/usr/bin/env node
 // @effect-diagnostics nodeBuiltinImport:off - Node's typed junction API avoids Windows symlink privileges while keeping the probe isolated.
 import { MAC_COMMAND_USAGE_DESCRIPTIONS } from "./lib/mac-command-usage-descriptions.ts";
+import {
+  LINUX_BROWSER_SECRET_EXTRA_RESOURCES,
+  LINUX_CAPTURE_EXTRA_RESOURCES,
+  makeLinuxPackagedPayloadValidator,
+} from "./desktop-artifact-linux.ts";
 import { makeMacPackagedPayloadValidator } from "./desktop-artifact-mac.ts";
 import { countWindowsPayloadFiles } from "./desktop-artifact-windows-payload.ts";
 
@@ -45,6 +50,7 @@ import {
 import { stageDesktopComputerUseHelper } from "./lib/desktop-computer-use-helper.ts";
 
 import { resolveBuildCommitTime } from "./lib/build-commit-time.ts";
+import { BUNDLE_SELF_CHECK_RESOLVE_HOOK } from "./lib/bundle-self-check-hook.ts";
 import { resolveDesktopBuildIconAssets } from "./lib/desktop-icon-assets.ts";
 export { resolveDesktopBuildIconAssets };
 export type { DesktopBuildIconAssets } from "./lib/desktop-icon-assets.ts";
@@ -85,6 +91,7 @@ import {
 import { loadRepoEnv } from "./lib/public-config.ts";
 import { selectDesktopRuntimeExternalDependencies } from "./lib/desktop-external-packages.ts";
 import { resolveCatalogDependencies } from "./lib/resolve-catalog.ts";
+import { resolveTaggedSourceVersion } from "./lib/tagged-source-version.ts";
 
 import * as NodeRuntime from "@effect/platform-node/NodeRuntime";
 import * as NodeServices from "@effect/platform-node/NodeServices";
@@ -1131,6 +1138,7 @@ export const WSL_RUNTIME_EXTRA_RESOURCES = [
   WSL_RUNTIME_ARCHIVE_EXTRA_RESOURCE,
   WSL_RUNTIME_ARCHIVE_HASH_EXTRA_RESOURCE,
 ] as const;
+export { LINUX_BROWSER_SECRET_EXTRA_RESOURCES, LINUX_CAPTURE_EXTRA_RESOURCES };
 export const DESKTOP_EXTRA_RESOURCES = [
   { from: "apps/desktop/prod-resources/screen-code/quickjs.wasm", to: "screen-code/quickjs.wasm" },
   // electron-builder treats apps/desktop/resources as buildResources and leaves it out of the app.
@@ -1149,24 +1157,6 @@ export const DESKTOP_EXTRA_RESOURCES = [
     from: "apps/desktop/prod-resources/LICENSE-T3CODE.txt",
     to: "LICENSE-T3CODE.txt",
   },
-] as const;
-export const LINUX_CAPTURE_EXTRA_RESOURCES = [
-  {
-    from: "apps/desktop/prod-resources/hyprland-capture",
-    to: "hyprland-capture",
-  },
-  {
-    from: "apps/desktop/prod-resources/kde-capture",
-    to: "kde-capture",
-  },
-  {
-    from: "apps/desktop/gnome-extension",
-    to: "gnome-extension",
-    filter: gnomeCaptureBundle.files,
-  },
-] as const;
-export const LINUX_BROWSER_SECRET_EXTRA_RESOURCES = [
-  { from: "apps/desktop/prod-resources/browser-secret", to: "browser-secret" },
 ] as const;
 
 export interface MacPasskeySigningConfiguration {
@@ -1812,7 +1802,7 @@ export const resolveBuildOptions = Effect.fn("resolveBuildOptions")(function* (
   const skipBuild = resolveBooleanFlag(input.skipBuild, env.skipBuild);
   const version = yield* resolveDesktopBuildVersion({
     explicitVersion: mergeOptions(input.buildVersion, env.version, undefined),
-    packageVersion: serverPackageJson.version,
+    packageVersion: resolveTaggedSourceVersion(repoRoot, serverPackageJson.version),
     ci: env.ci,
     skipBuild,
     repoRoot,
@@ -2415,46 +2405,6 @@ export const copyDirectoryPreservingSymlinks = Effect.fn("copyDirectoryPreservin
   },
 );
 
-// Preloaded with --require, in argv and NODE_OPTIONS, before the server entry. A CommonJS preload
-// also runs in every worker, including one evaluated from a string, and NODE_OPTIONS carries it
-// into child Node processes. registerHooks covers import and require; dlopen is wrapped because
-// an addon loaded by path never passes through resolve.
-const BUNDLE_SELF_CHECK_RESOLVE_HOOK = `const { realpathSync } = require("node:fs");
-const { registerHooks } = require("node:module");
-const { pathToFileURL } = require("node:url");
-
-const tree = process.env.GOAT_BUNDLE_SELF_CHECK_TREE;
-// The hook lives beside the tree and is required again through argv after NODE_OPTIONS.
-const self = pathToFileURL(__filename).href;
-const outside = (url) => url.startsWith("file:") && !url.startsWith(tree) && url !== self;
-// Fail the way a clean machine would, so optional-dependency probes still read it as missing.
-const escaped = (what, url, code) =>
-  Object.assign(new Error(what + " resolved outside the packaged tree to " + url), { code });
-
-registerHooks({
-  resolve(specifier, context, nextResolve) {
-    const resolved = nextResolve(specifier, context);
-    if (outside(resolved.url)) {
-      const code = context.conditions.includes("require") ? "MODULE_NOT_FOUND" : "ERR_MODULE_NOT_FOUND";
-      throw escaped(specifier, resolved.url, code);
-    }
-    return resolved;
-  },
-});
-
-const dlopen = process.dlopen;
-process.dlopen = function (module, filename, ...rest) {
-  let url;
-  try {
-    url = pathToFileURL(realpathSync(filename)).href;
-  } catch {
-    // A missing file fails in dlopen itself with its usual error.
-  }
-  if (url !== undefined && outside(url)) throw escaped(filename, url, "ERR_DLOPEN_FAILED");
-  return dlopen.call(this, module, filename, ...rest);
-};
-`;
-
 export const verifyPackagedBundleIsSelfContained = Effect.fn("verifyPackagedBundleIsSelfContained")(
   function* (input: { readonly asarPath: string; readonly verbose: boolean }) {
     const fs = yield* FileSystem.FileSystem;
@@ -2478,7 +2428,6 @@ export const verifyPackagedBundleIsSelfContained = Effect.fn("verifyPackagedBund
     // Node looks for node_modules in every ancestor directory, so a dependency missing from the
     // packaged tree could resolve from whatever the machine has installed above the probe and
     // pass this check. The hook fails any resolution that leaves the tree instead.
-    const treeUrl = NodeURL.pathToFileURL(`${yield* fs.realPath(probeApp)}${path.sep}`).href;
     const hookPath = path.join(probeRoot, "contain-resolution.cjs");
     yield* fs.writeFileString(hookPath, BUNDLE_SELF_CHECK_RESOLVE_HOOK);
 
@@ -2505,7 +2454,7 @@ export const verifyPackagedBundleIsSelfContained = Effect.fn("verifyPackagedBund
             NODE_PATH: "",
             // Quoted so a path with spaces or backslashes survives NODE_OPTIONS parsing.
             NODE_OPTIONS: `--require="${hookPath.replace(/["\\]/g, "\\$&")}"`,
-            GOAT_BUNDLE_SELF_CHECK_TREE: treeUrl,
+            GOAT_BUNDLE_SELF_CHECK_TREE: probeApp,
           },
         },
       ),
@@ -3206,7 +3155,8 @@ export const createBuildConfig = Effect.fn("createBuildConfig")(function* (
       ],
       desktop: {
         entry: {
-          StartupWMClass: "t3code",
+          // Match Electron's WM_CLASS from setDesktopName so docks use this launcher.
+          StartupWMClass: "com.t3tools.T3Code",
         },
       },
     };
@@ -4631,6 +4581,17 @@ const buildDesktopArtifactUnlocked = Effect.fn("buildDesktopArtifactUnlocked")(f
         platform: options.platform,
         runtimeArchivePath: options.wslRuntime,
       }),
+      verbose: options.verbose,
+    });
+  }
+  // The probe runs on the host Node, so a cross-arch build skips it.
+  if (
+    options.platform === "linux" &&
+    hostPlatform === "linux" &&
+    options.arch === (yield* HostProcess.Architecture)
+  ) {
+    yield* makeLinuxPackagedPayloadValidator(verifyPackagedBundleIsSelfContained)({
+      stageDistDir,
       verbose: options.verbose,
     });
   }

@@ -16,6 +16,7 @@ const fakeTab = () =>
       getURL: () => "about:blank",
       getTitle: () => "",
       getUserAgent: () => "Electron",
+      isLoadingMainFrame: () => false,
     }) as unknown as Electron.WebContents,
     [["debug", "ger"].join("")]: Object.assign(new NodeEvents.EventEmitter(), {
       sendCommand: async () => ({}),

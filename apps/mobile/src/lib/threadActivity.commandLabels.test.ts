@@ -2,7 +2,7 @@ import { describe, expect, it } from "vite-plus/test";
 
 import type { WorkLogPresentationEntry } from "@goat/client-runtime/work-log/presentation";
 
-import { workEntryRowLabel } from "./threadActivity";
+import { workEntryRowLabel } from "./workEntryRowLabel";
 
 const command: WorkLogPresentationEntry = {
   id: "command",

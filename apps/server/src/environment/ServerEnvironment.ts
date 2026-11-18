@@ -12,7 +12,7 @@ import {
   servedRuntimeProtocolRanges,
 } from "@goat/shared/sshRuntimeProtocol";
 import * as Context from "effect/Context";
-import * as Crypto from "effect/Crypto";
+import * as SecureRandom from "effect/crypto/SecureRandom";
 import * as Effect from "effect/Effect";
 import * as FileSystem from "effect/FileSystem";
 import * as Layer from "effect/Layer";
@@ -105,7 +105,7 @@ function platformArch(
 const makeIdentity = Effect.gen(function* () {
   const fileSystem = yield* FileSystem.FileSystem;
   const serverConfig = yield* ServerConfig.ServerConfig;
-  const crypto = yield* Crypto.Crypto;
+  const random = yield* SecureRandom.SecureRandom;
 
   const readPersistedEnvironmentId = Effect.gen(function* () {
     const exists = yield* fileSystem.exists(serverConfig.environmentIdPath).pipe(
@@ -179,7 +179,7 @@ const makeIdentity = Effect.gen(function* () {
       return persisted;
     }
 
-    const generated = yield* crypto.randomUUIDv4();
+    const generated = yield* random.uuidV4();
     yield* persistEnvironmentId(generated, "create");
     let winner = yield* readPersistedEnvironmentId;
     if (winner === null) {
@@ -227,10 +227,11 @@ export const make = Effect.gen(function* () {
     launcherManaged: launcher.managed,
   });
   const serverInstallation = serverSelfUpdate === null ? yield* resolveServerInstallation : null;
-  // Desktop and server ship together; a control fd guarantees requestDesktopUpdate support.
-
+  // The desktop reports whether it can install updates; requests travel over its control fd.
   const desktopAppUpdate =
-    serverSelfUpdate === "desktop-managed" && serverConfig.desktopTelemetryControlFd !== undefined;
+    serverSelfUpdate === "desktop-managed" &&
+    serverConfig.desktopAppUpdate === true &&
+    serverConfig.desktopTelemetryControlFd !== undefined;
   const appServerLive = yield* makeAppServerLive();
   // The effective state, read after startup applied the dev SSH policy.
   const devSshOn = serverConfig.devUrl !== undefined && (yield* sshHostsRefusal) === undefined;
@@ -255,6 +256,7 @@ export const make = Effect.gen(function* () {
     orchestrationProtocolVersion: ORCHESTRATION_PROTOCOL_VERSION,
     capabilities: {
       freshContext: true,
+      scheduledTaskThreadModes: true,
       modelCatalogRefresh: true,
       textGenerators: true,
       // The core and owner memory RPC groups are always installed by ws.ts.
@@ -278,6 +280,7 @@ export const make = Effect.gen(function* () {
       fileAttachments: { maxUploadBytes: PROVIDER_SEND_TURN_MAX_FILE_BYTES },
       pullRequests: true,
       pullRequestChecks: true,
+      linkedThreadRefreshes: true,
       inlineMessageContext: true,
       requiredWorktreeBootstrap: true,
       threadSettlement: true,
@@ -287,6 +290,7 @@ export const make = Effect.gen(function* () {
       worktreeRestore: true,
       databaseStorage: true,
       otlpEndpointCheck: true,
+      secretSourceCheck: true,
       projectWorktreeCleanup: true,
       settledWorktreeCleanup: true,
       worktreesDirectory: true,
@@ -294,6 +298,7 @@ export const make = Effect.gen(function* () {
       storageUsage: true,
       threadAutoSettlementScope: true,
       threadRestartContinuation: true,
+      offeredSourceControlProviders: true,
       ...(codexAppServerIsolationAvailable(codexTransport)
         ? { codexTurnSurvival: true, codexAppServerIsolation: true }
         : {}),
@@ -331,6 +336,7 @@ export const make = Effect.gen(function* () {
       automaticServerUpdates: true,
       projectOrganization: true,
       ignoredFileListing: true,
+      ignoredFileSearch: true,
       ...(serverSelfUpdate === null ? {} : { serverSelfUpdate }),
       ...(serverInstallation === null ? {} : { serverInstallation }),
       ...(serverSelfUpdate === "boot-service" || desktopAppUpdate
@@ -338,6 +344,8 @@ export const make = Effect.gen(function* () {
         : {}),
       ...(desktopAppUpdate ? { desktopAppUpdate: true } : {}),
       serverBrowser: true,
+      replyToResponse: true,
+      serverBrowserStopLoading: true,
       sshActivity: true,
       hubProxy: true,
       drainRestart: true,

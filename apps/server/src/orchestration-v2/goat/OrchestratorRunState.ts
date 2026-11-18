@@ -4,6 +4,7 @@ import type {
   OrchestrationV2Run,
   OrchestrationV2ThreadProjection,
 } from "@goat/contracts";
+import { latestExecutedRun } from "@goat/shared/orchestrationV2ThreadError";
 import type * as DateTime from "effect/DateTime";
 
 /** Stop ended this task, so its result is not delivered to the parent agent. */
@@ -35,12 +36,42 @@ export function mayStartSubagentFollowup(
   );
 }
 
+// A workspace change detaches the session, which can settle the calling run at once. Queuing its
+// follow-up in a later command would let a delegated task report its result before that exists.
+export function metadataUpdateContinuation(
+  command: Extract<OrchestrationV2Command, { readonly type: "thread.metadata.update" }>,
+): Extract<OrchestrationV2Command, { readonly type: "message.dispatch" }> | undefined {
+  return command.continuation === undefined
+    ? undefined
+    : {
+        type: "message.dispatch",
+        commandId: command.commandId,
+        threadId: command.threadId,
+        messageId: command.continuation.messageId,
+        text: command.continuation.text,
+        attachments: [],
+        dispatchMode: { type: "queue_after_active" },
+        createdBy: "agent",
+        creationSource: "mcp",
+      };
+}
+
 export function isBlockingRun(run: OrchestrationV2Run): boolean {
   return (
     run.status === "preparing" ||
     run.status === "starting" ||
     run.status === "running" ||
     run.status === "waiting"
+  );
+}
+
+/** The run a follow-up to a finished remote task binds to: the latest active one, else the last that ran. */
+export function followUpOwnerRun(
+  runs: ReadonlyArray<OrchestrationV2Run>,
+): OrchestrationV2Run | null {
+  return (
+    runs.filter(isBlockingRun).toSorted((a, b) => b.ordinal - a.ordinal)[0] ??
+    latestExecutedRun(runs)
   );
 }
 

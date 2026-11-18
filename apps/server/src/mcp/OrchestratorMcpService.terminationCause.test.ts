@@ -5,6 +5,7 @@ import {
   ThreadId,
   type OrchestrationV2ThreadProjection,
 } from "@goat/contracts";
+import * as NodeCrypto from "@effect/platform-node/NodeCrypto";
 import * as NodeServices from "@effect/platform-node/NodeServices";
 import * as DateTime from "effect/DateTime";
 import * as Effect from "effect/Effect";
@@ -54,13 +55,16 @@ it.effect("thread read exposes run cause", () =>
     };
     const dependencies = Layer.mergeAll(
       NodeServices.layer,
+      NodeCrypto.layer,
       ServerSettings.layerTest(),
       Layer.mock(RemoteDispatchCoordinator.RemoteDispatchCoordinator)({}),
       Layer.mock(SshRemoteDispatch.SshRemoteDispatch)({}),
       Layer.mock(ThreadManagementService.ThreadManagementService)({
         getThreadShell: () => Effect.succeed(shell),
         getProjectThreadRecords: () => Effect.succeed({ ...target, runs: [run] }),
-        getTimelinePage: () => Effect.succeed({ items: [], totalItems: 0, hasMore: false }),
+        getThreadRecords: () => Effect.succeed({ turnItems: [] } as never),
+        getTimelinePage: () =>
+          Effect.succeed({ items: [], totalItems: 0, hasMore: false, hasEarlier: false }),
       }),
       Layer.mock(ProviderRegistry.ProviderRegistry)({ getProviders: Effect.succeed([]) }),
       Layer.mock(ProviderAdapterRegistry.ProviderAdapterRegistryV2)({

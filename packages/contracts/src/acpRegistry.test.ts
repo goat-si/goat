@@ -2,6 +2,7 @@ import { describe, expect, it } from "@effect/vitest";
 import * as Schema from "effect/Schema";
 
 import {
+  AcpRegistryProbeResult,
   AcpRegistryListSessionsInput,
   AcpRegistryListSessionsResult,
   AcpRegistryManagedBinaryUninstallInput,
@@ -24,6 +25,27 @@ const listResult = {
 };
 
 describe("ACP Registry contracts", () => {
+  it("accepts older probe payloads and limits model-specific options", () => {
+    const probe = {
+      instanceId: "acp-fixture",
+      ready: true,
+      icon: null,
+      authMethods: [],
+      models: [],
+      currentModelId: null,
+      configOptions: [],
+    };
+    const decode = Schema.decodeUnknownSync(AcpRegistryProbeResult);
+    expect(decode(probe).modelOptionIds).toBeUndefined();
+    expect(decode({ ...probe, modelOptionIds: ["effort"] }).modelOptionIds).toEqual(["effort"]);
+    expect(() =>
+      decode({ ...probe, modelOptionIds: Array.from({ length: 17 }, () => "effort") }),
+    ).toThrow();
+    const { modelOptionIds: _ignored, ...oldFields } = AcpRegistryProbeResult.fields;
+    const olderClient = Schema.decodeUnknownSync(Schema.Struct(oldFields));
+    expect(olderClient({ ...probe, modelOptionIds: ["effort"] }).ready).toBe(true);
+  });
+
   it("accepts only official Registry icon URLs and safe agent IDs", () => {
     expect(officialAcpRegistryIconUrlForAgentId("antigravity-acp")).toBe(
       "https://cdn.agentclientprotocol.com/registry/v1/latest/antigravity-acp.svg",

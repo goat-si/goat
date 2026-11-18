@@ -1,6 +1,7 @@
 // @effect-diagnostics nodeBuiltinImport:off - The test stands in for the app server with a real loopback HTTP listener.
 import * as NodeHttp from "node:http";
 
+import * as NodeCrypto from "@effect/platform-node/NodeCrypto";
 import * as NodeServices from "@effect/platform-node/NodeServices";
 import { describe, expect, it } from "@effect/vitest";
 import { EnvironmentId, ORCHESTRATION_PROTOCOL_VERSION } from "@goat/contracts";
@@ -248,7 +249,7 @@ describe("Git Bash managed server", () => {
       expect(yield* probe()).toEqual({ kind: "unusable", reason: "dead-pid" });
       yield* issue(server.port).pipe(Effect.flip);
       expect(server.sessions).toHaveLength(1);
-    }).pipe(Effect.provide(NodeServices.layer), Effect.scoped),
+    }).pipe(Effect.provide(Layer.mergeAll(NodeServices.layer, NodeCrypto.layer)), Effect.scoped),
   );
   it.live("rejects a replacement with another control token after the descriptor check", () =>
     Effect.gen(function* () {
@@ -285,7 +286,7 @@ describe("Git Bash managed server", () => {
         failure: { message: expect.stringContaining("HTTP 403") },
       });
       expect(server.sessions).toEqual([{ header: TOKEN, body: null }]);
-    }).pipe(Effect.provide(NodeServices.layer), Effect.scoped),
+    }).pipe(Effect.provide(Layer.mergeAll(NodeServices.layer, NodeCrypto.layer)), Effect.scoped),
   );
   it("accepts only bounded known probe reasons", () => {
     expect(parseExistingServerProbe("GOAT_EXISTING=absent\n")).toEqual({ kind: "absent" });
@@ -379,7 +380,7 @@ describe("GOAT app server attachment", () => {
           })}\n`,
         ).kind,
       ).toBe("unusable");
-    }).pipe(Effect.provide(NodeServices.layer), Effect.scoped),
+    }).pipe(Effect.provide(Layer.mergeAll(NodeServices.layer, NodeCrypto.layer)), Effect.scoped),
   );
   it.live(
     "a host running the app server serves SSH clients from it, credentials included, and starts no managed server",
@@ -440,7 +441,7 @@ describe("GOAT app server attachment", () => {
         const fs = yield* FileSystem.FileSystem;
         expect(yield* fs.exists(`${host.home}/.goat/ssh-launch`)).toBe(false);
         expect(yield* fs.exists(`${host.home}/.goat/runtime`)).toBe(false);
-      }).pipe(Effect.provide(NodeServices.layer), Effect.scoped),
+      }).pipe(Effect.provide(Layer.mergeAll(NodeServices.layer, NodeCrypto.layer)), Effect.scoped),
   );
 
   it.live(
@@ -536,7 +537,7 @@ describe("GOAT app server attachment", () => {
         ).pipe(Effect.provide(both.spawner));
         expect(nightly.sessions.map((session) => session.header)).toEqual([TOKEN]);
         expect(stable.sessions).toEqual([]);
-      }).pipe(Effect.provide(NodeServices.layer), Effect.scoped),
+      }).pipe(Effect.provide(Layer.mergeAll(NodeServices.layer, NodeCrypto.layer)), Effect.scoped),
   );
 
   it.live("a server running from development desktop state is never attached", () =>
@@ -548,7 +549,7 @@ describe("GOAT app server attachment", () => {
           kind: "none",
         });
       }
-    }).pipe(Effect.provide(NodeServices.layer), Effect.scoped),
+    }).pipe(Effect.provide(Layer.mergeAll(NodeServices.layer, NodeCrypto.layer)), Effect.scoped),
   );
 
   it.live(
@@ -607,7 +608,7 @@ describe("GOAT app server attachment", () => {
             yield* fs.remove(`${nightlyDir}/runtime-control.token`);
           }),
         );
-      }).pipe(Effect.provide(NodeServices.layer), Effect.scoped),
+      }).pipe(Effect.provide(Layer.mergeAll(NodeServices.layer, NodeCrypto.layer)), Effect.scoped),
   );
 
   it.live(
@@ -630,7 +631,7 @@ describe("GOAT app server attachment", () => {
         expect(yield* probeAppServer(uploadTarget).pipe(Effect.provide(goneHost.spawner))).toEqual({
           kind: "none",
         });
-      }).pipe(Effect.provide(NodeServices.layer), Effect.scoped),
+      }).pipe(Effect.provide(Layer.mergeAll(NodeServices.layer, NodeCrypto.layer)), Effect.scoped),
   );
 
   it("declines an app server whose protocols this client cannot speak", () => {
@@ -709,6 +710,7 @@ describe("manager on a host running the app server", () => {
   const managerLayer = (spawner: Layer.Layer<ChildProcessSpawner.ChildProcessSpawner>) =>
     Layer.mergeAll(
       NodeServices.layer,
+      NodeCrypto.layer,
       spawner,
       Layer.succeed(HttpClient.HttpClient, testHttpClient),
       Layer.succeed(NetService.NetService, testNetService),
@@ -749,7 +751,7 @@ describe("manager on a host running the app server", () => {
           kind: "unavailable",
         });
       }).pipe(Effect.provide(managerLayer(host.spawner)));
-    }).pipe(Effect.provide(NodeServices.layer), Effect.scoped),
+    }).pipe(Effect.provide(Layer.mergeAll(NodeServices.layer, NodeCrypto.layer)), Effect.scoped),
   );
   const appProbes = (scripts: ReadonlyArray<string>) =>
     scripts.filter((script) => script.includes("GOAT_APP_SERVER=live")).length;
@@ -787,7 +789,7 @@ describe("manager on a host running the app server", () => {
           yield* manager.ensureEnvironment(uploadTarget).pipe(Effect.ignore);
           expect(appProbes(host.scripts.slice(before))).toBe(0);
         }).pipe(Effect.provide(managerLayer(host.spawner)));
-      }).pipe(Effect.provide(NodeServices.layer), Effect.scoped),
+      }).pipe(Effect.provide(Layer.mergeAll(NodeServices.layer, NodeCrypto.layer)), Effect.scoped),
   );
 
   it.live(
@@ -813,7 +815,7 @@ describe("manager on a host running the app server", () => {
             host.scripts.slice(before).some((script) => script.includes("ready_version()")),
           ).toBe(false);
         }).pipe(Effect.provide(managerLayer(host.spawner)));
-      }).pipe(Effect.provide(NodeServices.layer), Effect.scoped),
+      }).pipe(Effect.provide(Layer.mergeAll(NodeServices.layer, NodeCrypto.layer)), Effect.scoped),
   );
 
   it.live(
@@ -865,6 +867,6 @@ describe("manager on a host running the app server", () => {
         expect(yield* identify(null)).toBe("nightly-env");
         expect(yield* identify("app")).toBe("nightly-env");
         expect(yield* identify("managed")).toBe("managed-env");
-      }).pipe(Effect.provide(NodeServices.layer), Effect.scoped),
+      }).pipe(Effect.provide(Layer.mergeAll(NodeServices.layer, NodeCrypto.layer)), Effect.scoped),
   );
 });

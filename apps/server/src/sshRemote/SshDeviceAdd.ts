@@ -18,7 +18,9 @@ import {
 } from "@goat/contracts";
 import * as Context from "effect/Context";
 import * as DateTime from "effect/DateTime";
+import * as Duration from "effect/Duration";
 import * as Effect from "effect/Effect";
+import * as Fiber from "effect/Fiber";
 import * as Layer from "effect/Layer";
 import * as Option from "effect/Option";
 import * as Schema from "effect/Schema";
@@ -50,6 +52,9 @@ export const SshDeviceAddInput = Schema.Struct({
   Schema.makeFilter((input) => (input.host === undefined) !== (input.address === undefined)),
 );
 export type SshDeviceAddInput = typeof SshDeviceAddInput.Type;
+/** The longest the hub registration after a desktop save may run; a cut call cannot stop it. */
+const HUB_REGISTRATION_TIMEOUT = Duration.seconds(30);
+
 const unsaved = {
   preflight: Schema.optional(SshPreflightReport),
   saved: Schema.Literal(false),
@@ -148,16 +153,40 @@ const make = Effect.gen(function* () {
         ...input,
         address: input.host ?? input.address!,
       });
-      const preflight = toAgentReport(
-        yield* setup.preflight(
-          resolved.host
-            ? { host: resolved.host }
-            : { ...resolved.input, host: resolved.input.address },
-          caller,
-        ),
+      const refusal = (message: string) => ({
+        saved: false as const,
+        reason: message,
+        kind: "error" as const,
+        code: "invalid_request" as const,
+        message,
+        fix: {
+          actor: "human" as const,
+          instruction: "Detach the disposable machine in Settings → Hub on web or desktop first.",
+        },
+      });
+      // A disposable machine's Pen alias is refused by name, before preflight reaches the network.
+      const named =
+        resolved.host === undefined
+          ? undefined
+          : yield* hub.disposableRoute({ alias: resolved.host, identify: false });
+      if (named !== undefined) return refusal(named);
+      const reviewed = yield* setup.preflight(
+        resolved.host
+          ? { host: resolved.host }
+          : { ...resolved.input, host: resolved.input.address },
+        caller,
       );
+      const preflight = toAgentReport(reviewed);
+      // Preflight itself refuses a disposable machine by its alias or the ED25519 key it offers.
       if (preflight.steps.some((step) => step.state === "failed"))
         return { outcome: "failed", preflight };
+      // A disposable machine is reached only through its own Pen route (design section 6): the GOAT
+      // an alias reaches is checked too, before any trust or save.
+      const disposable =
+        resolved.host === undefined
+          ? undefined
+          : yield* hub.disposableRoute({ alias: resolved.host, probeKey: false });
+      if (disposable !== undefined) return { ...refusal(disposable), preflight };
       // Why the connection could not be saved, kept so a later denied step still explains it.
       let saveBlocked: string | undefined;
       const deniedReason = (message: string) =>
@@ -281,17 +310,40 @@ const make = Effect.gen(function* () {
               },
             );
           register = nodeRegistration;
-          const response = yield* broker
-            .invoke(
-              {
-                type: "add_ssh",
-                host: resolved.host,
-                ...(input.label ? { label: input.label } : {}),
-                addedBy,
-              },
-              10 * 60_000,
-            )
-            .pipe(
+          // The desktop already saved it; a hub failure is reported, not turned into a failed add.
+          // A child fiber stays interruptible, so its own limit ends it even though a cut cannot.
+          const registerSaved = () =>
+            nodeRegistration().pipe(
+              Effect.map(({ node }) => ({ saved: true as const, node })),
+              Effect.catchTags({
+                HubNodesError: (error) =>
+                  Effect.succeed({ saved: false as const, reason: error.message }),
+                OrchestratorMcpFailure: (error) =>
+                  Effect.succeed({ saved: false as const, reason: error.message }),
+              }),
+              Effect.timeoutOption(HUB_REGISTRATION_TIMEOUT),
+              Effect.map(
+                Option.getOrElse(() => ({
+                  saved: false as const,
+                  reason: `The hub did not finish registering ${alias} within ${Duration.toSeconds(HUB_REGISTRATION_TIMEOUT)} seconds; it stays saved on the desktop. Call this tool again to register it.`,
+                })),
+              ),
+              Effect.forkChild,
+              Effect.flatMap(Fiber.join),
+            );
+          // Once the desktop has answered, its save is registered on the hub even if the call is cut.
+          const settled = yield* Effect.uninterruptibleMask((restore) =>
+            restore(
+              broker.invoke(
+                {
+                  type: "add_ssh",
+                  host: alias,
+                  ...(input.label ? { label: input.label } : {}),
+                  addedBy,
+                },
+                10 * 60_000,
+              ),
+            ).pipe(
               Effect.catchTags({
                 ConnectionCatalogHostUnavailable: () => Effect.succeed(null),
                 ConnectionCatalogHostDetached: () =>
@@ -311,27 +363,25 @@ const make = Effect.gen(function* () {
                     }),
                   ),
               }),
-            );
-          if (response?.type === "add_ssh") {
-            // The desktop already saved it; a hub failure is reported, not turned into a failed add.
-            const hubResult = yield* nodeRegistration().pipe(
-              Effect.map(({ node }) => ({ saved: true as const, node })),
-              Effect.catchTags({
-                HubNodesError: (error) =>
-                  Effect.succeed({ saved: false as const, reason: error.message }),
-                OrchestratorMcpFailure: (error) =>
-                  Effect.succeed({ saved: false as const, reason: error.message }),
-              }),
-            );
+              Effect.flatMap(
+                Effect.fnUntraced(function* (answer) {
+                  if (answer?.type !== "add_ssh") return { kind: "other" as const, answer };
+                  return { kind: "saved" as const, answer, hub: yield* registerSaved() };
+                }),
+              ),
+            ),
+          );
+          if (settled.kind === "saved") {
             return {
               outcome: "connected" as const,
               preflight,
-              connection: response.connection,
-              created: response.created,
-              hub: hubResult,
+              connection: settled.answer.connection,
+              created: settled.answer.created,
+              hub: settled.hub,
               desktopCatalog: "saved" as const,
             };
           }
+          const response = settled.answer;
           if (response !== null)
             return yield* new OrchestratorMcpFailure({
               code:

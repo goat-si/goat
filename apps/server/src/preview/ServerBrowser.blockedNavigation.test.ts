@@ -1,6 +1,7 @@
 import * as SqlitePersistence from "../persistence/Sqlite.ts";
 // @effect-diagnostics nodeBuiltinImport:off - local HTTP fixture for Chromium navigation.
 import * as NodeHttp from "node:http";
+import * as NodeCrypto from "@effect/platform-node/NodeCrypto";
 import * as NodeServices from "@effect/platform-node/NodeServices";
 import { it } from "@effect/vitest";
 import {
@@ -100,7 +101,7 @@ const layer = ServerBrowser.layer.pipe(
       PreviewAgentActivity.layer,
     ).pipe(
       Layer.provideMerge(ServerConfig.layerTest(process.cwd(), { prefix: "goat-blocked-nav-" })),
-      Layer.provideMerge(NodeServices.layer),
+      Layer.provideMerge(Layer.mergeAll(NodeServices.layer, NodeCrypto.layer)),
     ),
   ),
 );
@@ -505,14 +506,9 @@ it.effect("a blocked popup at the tab limit still fences its opener", () =>
       }
       const fenced = yield* cutBlockedUrlObserved;
       const admission = yield* popupAdmissionObserved(f.manager);
-      const popupReady = f.page.waitForEvent("popup");
       yield* f.call(f.tabId, "click", { locator: "#popup" }).pipe(Effect.result);
-      const popup = yield* Effect.promise(() => popupReady);
-      // The press needs the opener's fence; Playwright's close event for the refused popup can be late.
-      yield* Effect.raceFirst(
-        Deferred.await(fenced),
-        popup.isClosed() ? Effect.void : Effect.promise(() => popup.waitForEvent("close")),
-      );
+      // The press needs only the opener's fence, which inspection sets before closing the refused popup.
+      yield* Deferred.await(fenced);
       blocked(yield* f.call(f.tabId, "press", { key: "Enter" }).pipe(Effect.result));
       expect(yield* Deferred.await(admission)).toBe("refused");
     }),

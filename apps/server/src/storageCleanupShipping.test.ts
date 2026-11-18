@@ -186,7 +186,7 @@ describe("automatic cleanup keeps unshipped commits", () => {
         // origin/main holds this head, but only as of the last fetch.
         yield* fixture.command(fixture.repo, ["push", "origin", "feature:main"]);
         yield* fixture.command(fixture.repo, ["fetch", "origin"]);
-        const second = fixture.path.join(fixture.config.worktreesDir, "second");
+        const second = fixture.path.join(fixture.config.worktreesDir, "repo", "second");
         yield* fixture.command(fixture.repo, [
           "worktree",
           "add",
@@ -242,11 +242,12 @@ describe("automatic cleanup keeps unshipped commits", () => {
   it.live("keeps the worktree when the remote default is unavailable even if main exists", () =>
     runCleanupTest(
       Effect.gen(function* () {
-        const { service, fs, repo, worktree, command } = yield* cleanupFixture({
+        const { service, fs, repo, worktree, command, setThreads } = yield* cleanupFixture({
           ...DEFAULT_SERVER_SETTINGS.storageCleanup,
           ...LEGACY_WORKTREE_RULES,
           worktreeUnchanged: true,
         });
+        setThreads([shell({ branch: "feature", worktreePath: worktree, archivedAt: at(-DAY_MS) })]);
         const remote = yield* fs.makeTempDirectoryScoped({ prefix: "cleanup-remote-" });
         yield* command(remote, ["init", "--bare", "-b", "trunk"]);
         yield* command(repo, ["remote", "add", "origin", remote]);

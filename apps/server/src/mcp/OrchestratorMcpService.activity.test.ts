@@ -3,6 +3,7 @@ import * as NodeCrypto from "@effect/platform-node/NodeCrypto";
 import {
   EnvironmentId,
   NodeId,
+  OrchestratorMcpThreadDetail,
   type OrchestrationV2ThreadProjection,
   type OrchestrationV2ThreadShell,
   ProjectId,
@@ -16,6 +17,7 @@ import {
 import * as DateTime from "effect/DateTime";
 import * as Effect from "effect/Effect";
 import * as Layer from "effect/Layer";
+import * as Schema from "effect/Schema";
 import { expect, it } from "vite-plus/test";
 import * as ProviderAdapterRegistry from "../orchestration-v2/ProviderAdapterRegistry.ts";
 import * as ThreadLaunchService from "../orchestration-v2/ThreadLaunchService.ts";
@@ -40,6 +42,7 @@ const layerOrchestratorService = OrchestratorMcpService.layer.pipe(
 );
 
 const environmentId = EnvironmentId.make("environment-mcp-orchestrator-detail");
+const decodeThreadDetail = Schema.decodeUnknownSync(OrchestratorMcpThreadDetail);
 const projectId = ProjectId.make("project-mcp-orchestrator-detail");
 const parentThreadId = ThreadId.make("thread-mcp-orchestrator-parent");
 const childThreadId = ThreadId.make("thread-mcp-orchestrator-child");
@@ -120,6 +123,7 @@ function makeRun(input: {
   };
 }
 
+/** The service over one projection whose timeline pages come from `getTimelinePage`. */
 it("readThread preserves caller access errors and prefers activity-run status over a newer cancelled queued run", async () => {
   let callerUnavailable = false;
   const projection = {
@@ -148,7 +152,8 @@ it("readThread preserves caller access errors and prefers activity-run status ov
     Layer.provide(
       Layer.mergeAll(
         Layer.mock(ThreadManagementService.ThreadManagementService)({
-          getTimelinePage: () => Effect.succeed({ items: [], totalItems: 0, hasMore: false }),
+          getTimelinePage: () =>
+            Effect.succeed({ items: [], totalItems: 0, hasMore: false, hasEarlier: false }),
           getThreadRecords: (threadId) =>
             callerUnavailable
               ? Effect.fail(
@@ -165,7 +170,19 @@ it("readThread preserves caller access errors and prefers activity-run status ov
               ? Effect.die("A failed caller read must not reach the target")
               : Effect.succeed(
                   threadId === parentThreadId
-                    ? (projection.thread as unknown as OrchestrationV2ThreadShell)
+                    ? ({
+                        ...projection.thread,
+                        blockedOnThreadWait: true,
+                        pendingBackgroundTasks: [
+                          {
+                            taskId: "task-subagent",
+                            kind: "subagent",
+                            parentTaskId: "private",
+                            providerInstanceId: parentInstanceId,
+                            childThreadId,
+                          },
+                        ],
+                      } as unknown as OrchestrationV2ThreadShell)
                     : null,
                 ),
           getProjectThreadRecords: (input) =>
@@ -196,6 +213,16 @@ it("readThread preserves caller access errors and prefers activity-run status ov
     expect(result.thread.status).toBe("running");
     expect(result.thread.latestRunId).toBe(cancelledRunId);
     expect(result.thread.activeRunId).toBe(activeRunId);
+    expect(result.thread.blockedOnThreadWait).toBe(true);
+    expect(result.thread.pendingBackgroundTasks).toEqual([
+      { taskId: "task-subagent", kind: "subagent", childThreadId },
+    ]);
+    const {
+      pendingBackgroundTasks: _pending,
+      blockedOnThreadWait: _blocked,
+      ...older
+    } = result.thread;
+    expect(decodeThreadDetail(older).threadId).toBe(parentThreadId);
 
     callerUnavailable = true;
     const denied = yield* service
@@ -242,18 +269,37 @@ it("readThread pages cut-off text without splitting an emoji across pages", asyn
       updatedAt: now,
     },
   };
+  const rows = [
+    row,
+    ...Array.from({ length: 11 }, (_, index) => ({
+      ...row,
+      position: index + 1,
+      sourceItemId: TurnItemId.make(`turn-item-mcp-${index}`),
+      item: { ...row.item, text: "x".repeat(600) },
+    })),
+  ];
 
   const layer = layerOrchestratorService.pipe(
     Layer.provide(
       Layer.mergeAll(
         Layer.mock(ThreadManagementService.ThreadManagementService)({
-          getTimelinePage: () =>
-            Effect.succeed({
-              items: [row] as unknown as OrchestrationV2ThreadProjection["visibleTurnItems"],
-              totalItems: 1,
-              hasMore: false,
-            }),
-          getThreadRecords: () => Effect.succeed(projection),
+          getTimelinePage: (_threadId, options) => {
+            const remaining = rows.filter(
+              (candidate) =>
+                candidate.position > (options.afterPosition ?? -1) &&
+                (options.itemId === undefined || candidate.sourceItemId === options.itemId),
+            );
+            return Effect.succeed({
+              items: remaining.slice(
+                0,
+                options.limit,
+              ) as unknown as OrchestrationV2ThreadProjection["visibleTurnItems"],
+              totalItems: rows.length,
+              hasMore: remaining.length > options.limit,
+              hasEarlier: false,
+            });
+          },
+          getThreadRecords: () => Effect.succeed({ ...projection, turnItems: [] }),
           getProjectThreadRecords: () => Effect.succeed(projection),
           getThreadShell: () =>
             Effect.succeed(projection.thread as unknown as OrchestrationV2ThreadShell),
@@ -300,6 +346,17 @@ it("readThread pages cut-off text without splitting an emoji across pages", asyn
         });
       }
     }
+    const first = yield* service.readThread(makeScope(), {
+      threadId: parentThreadId,
+      view: "activity",
+    });
+    expect(first.items[1]).toMatchObject({
+      text: "x".repeat(500),
+      textTruncated: true,
+      nextTextOffset: 500,
+    });
+    expect(first.items).toHaveLength(10);
+    expect(first).toMatchObject({ nextPosition: 9, hasMore: true });
   }).pipe(Effect.provide(layer), Effect.runPromise);
 });
 
@@ -383,20 +440,22 @@ it("taskStatus returns task.providerInstanceId rather than the driver kind", asy
     updatedAt: now,
   } as unknown as OrchestrationV2ThreadProjection;
 
-  const parentMessageRoles: Array<ReadonlyArray<string> | undefined> = [];
+  const parentSections: Array<ReadonlyArray<string>> = [];
   const layer = layerOrchestratorService.pipe(
     Layer.provide(Layer.mock(RemoteDispatchCoordinator.RemoteDispatchCoordinator)({})),
     Layer.provide(Layer.mock(SshRemoteDispatch.SshRemoteDispatch)({})),
     Layer.provide(
       Layer.mergeAll(
         Layer.mock(ThreadManagementService.ThreadManagementService)({
-          getTimelinePage: () => Effect.succeed({ items: [], totalItems: 0, hasMore: false }),
-          getThreadRecords: (threadId, _sections, options) => {
+          getTimelinePage: () =>
+            Effect.succeed({ items: [], totalItems: 0, hasMore: false, hasEarlier: false }),
+          getThreadRecords: (threadId, sections) => {
             if (threadId === parentThreadId) {
-              parentMessageRoles.push(options?.messageRoles);
-              return Effect.succeed(parentProjection);
+              parentSections.push(sections);
+              return Effect.succeed({ ...parentProjection, turnItems: [] });
             }
-            if (threadId === childThreadId) return Effect.succeed(childProjection);
+            if (threadId === childThreadId)
+              return Effect.succeed({ ...childProjection, turnItems: [] });
             return Effect.die(`unexpected thread ${threadId}`);
           },
         } satisfies Partial<ThreadManagementService.ThreadManagementService["Service"]>),
@@ -425,7 +484,8 @@ it("taskStatus returns task.providerInstanceId rather than the driver kind", asy
     expect(result.status).toBe("running");
     expect(result.taskId).toBe(taskId);
     expect(result.childThreadId).toBe(childThreadId);
-    expect(parentMessageRoles).toContainEqual([]);
+    // The caller check reads only active runs, so no read asks for the caller's messages.
+    expect(parentSections.flat()).not.toContain("messages");
   }).pipe(Effect.provide(layer), Effect.runPromise);
 });
 
@@ -499,7 +559,8 @@ it("readThread and sendToThread reach threads in other projects", async () => {
         Layer.mock(ThreadManagementService.ThreadManagementService)({
           getThreadRecords: (threadId) => {
             if (threadId === parentThreadId) return Effect.succeed(parentProjection);
-            if (threadId === foreignThreadId) return Effect.succeed(foreignProjection(threadId));
+            if (threadId === foreignThreadId)
+              return Effect.succeed({ ...foreignProjection(threadId), turnItems: [] });
             return Effect.die(`unexpected thread ${threadId}`);
           },
           getThreadShell: (threadId) =>
@@ -515,6 +576,7 @@ it("readThread and sendToThread reach threads in other projects", async () => {
               items: foreignProjection(threadId).visibleTurnItems,
               totalItems: 1,
               hasMore: false,
+              hasEarlier: false,
             }),
           getProjectThreadRecords: (input) =>
             input.threadId === foreignThreadId && input.projectId === foreignProjectId
@@ -708,8 +770,9 @@ it.each([
       Layer.provide(
         Layer.mergeAll(
           Layer.mock(ThreadManagementService.ThreadManagementService)({
-            getTimelinePage: () => Effect.succeed({ items: [], totalItems: 0, hasMore: false }),
-            getThreadRecords: () => Effect.succeed(projection),
+            getTimelinePage: () =>
+              Effect.succeed({ items: [], totalItems: 0, hasMore: false, hasEarlier: false }),
+            getThreadRecords: () => Effect.succeed({ ...projection, turnItems: [] }),
             getThreadShell: () =>
               Effect.succeed(projection.thread as unknown as OrchestrationV2ThreadShell),
             getProjectThreadRecords: () => Effect.succeed(projection),

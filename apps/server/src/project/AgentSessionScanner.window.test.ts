@@ -17,6 +17,7 @@ import * as ServerConfig from "../config.ts";
 import * as ProjectStore from "../orchestration-v2/ProjectStore.ts";
 import * as ServerSettings from "../serverSettings.ts";
 import * as AgentSessionScanner from "./AgentSessionScanner.ts";
+import * as ProviderSessionRuntime from "../persistence/ProviderSessionRuntime.ts";
 
 const makeProjectShell = (workspaceRoot: string): OrchestrationProjectShell => ({
   id: ProjectId.make("project-1"),
@@ -44,6 +45,9 @@ const layerScannerTest = (input: {
   AgentSessionScanner.layer.pipe(
     Layer.provide(
       Layer.mergeAll(
+        Layer.mock(ProviderSessionRuntime.ProviderSessionRuntimeRepository)({
+          list: () => Effect.succeed([]),
+        }),
         ServerSettings.layerTest({
           providerInstances: {
             [ProviderInstanceId.make("claudeAgent")]: {

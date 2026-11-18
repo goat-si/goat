@@ -52,6 +52,7 @@ vi.mock("~/state/environments", async (original) => ({
 
 import type { GoatBotComposerHandle } from "./GoatBotComposer";
 import { GoatBotMemberContext } from "./goatBotMemberContext";
+import { GoatBotChatHidden } from "./goatBotLayout";
 import { GoatBotNameRow } from "./GoatBotNameRow";
 import { resetBotNameRowDismissalsForTests } from "./goatBotNameRowDismissed";
 import { openNewBotChat, resetNameRowFocusForTests } from "./goatBotNewBotOpen";
@@ -107,17 +108,66 @@ function FakeComposer({ ref }: { readonly ref: Ref<GoatBotComposerHandle> }) {
   return <textarea aria-label="Message" ref={field} />;
 }
 
-function Chat({ bot }: { readonly bot: BotProfile | null }) {
+function Chat({
+  bot,
+  hidden = false,
+}: {
+  readonly bot: BotProfile | null;
+  readonly hidden?: boolean;
+}) {
   const composer = useRef<GoatBotComposerHandle>(null);
   return (
-    <GoatBotMemberContext value={bot}>
-      <GoatBotNameRow composer={composer} />
-      <FakeComposer ref={composer} />
-    </GoatBotMemberContext>
+    <GoatBotChatHidden value={hidden}>
+      <GoatBotMemberContext value={bot}>
+        <GoatBotNameRow composer={composer} />
+        <FakeComposer ref={composer} />
+      </GoatBotMemberContext>
+    </GoatBotChatHidden>
   );
 }
 
 const nameField = () => page.getByRole("textbox", { name: "Name this bot" });
+
+it("clears an earlier rename error when the unchanged name is submitted", async () => {
+  const { update } = setup();
+  update.mockResolvedValueOnce({ _tag: "Failure", cause: Cause.fail(new Error("Not allowed.")) });
+  await using screen = await render(<Chat bot={member("New bot")} />);
+  await userEvent.fill(nameField(), "Scout");
+  await userEvent.keyboard("{Enter}");
+  await expect.element(screen.getByRole("alert")).toHaveTextContent("Not allowed.");
+  await userEvent.fill(nameField(), "New bot");
+  await userEvent.keyboard("{Enter}");
+  await expect
+    .element(screen.getByRole("status"))
+    .toHaveTextContent(
+      "Already called New bot. Type a different name, or use More for other settings.",
+    );
+  expect(screen.getByRole("alert").query()).toBeNull();
+});
+
+it("explains an unchanged name and clears the note when the draft changes", async () => {
+  const { update } = setup();
+  await using screen = await render(<Chat bot={member("New bot")} />);
+  const status = screen.getByRole("status");
+  await expect.element(status).toHaveTextContent("");
+  await userEvent.click(page.getByRole("button", { name: "Done" }));
+  await expect
+    .element(status)
+    .toHaveTextContent(
+      "Already called New bot. Type a different name, or use More for other settings.",
+    );
+  expect(update).not.toHaveBeenCalled();
+  await expect.element(nameField()).toHaveValue("New bot");
+  await userEvent.fill(nameField(), "Scout");
+  await expect.element(status).toHaveTextContent("");
+  await userEvent.fill(nameField(), "New bot");
+  await userEvent.keyboard("{Enter}");
+  await expect
+    .element(status)
+    .toHaveTextContent(
+      "Already called New bot. Type a different name, or use More for other settings.",
+    );
+});
 
 it("New bot 2 shows Name this bot; Ada, the main bot, a deleted member and a read-only viewer do not", async () => {
   setup();
@@ -254,4 +304,20 @@ it("a chat New bot opened without its name row never gives the row focus when it
   await act(() => permission.set(true));
   await expect.element(nameField()).toBeVisible();
   await expect.element(message).toHaveFocus();
+});
+
+it("Edit bot stays open with its typed name and focus when a task replaces the chat: a dialog on screen is the person's", async () => {
+  setup();
+  const bot = member("New bot");
+  await using screen = await render(<Chat bot={bot} />);
+  await userEvent.fill(nameField(), "Scout");
+  await userEvent.click(page.getByRole("button", { name: "More settings for New bot" }));
+  const dialog = page.getByRole("dialog", { name: "Edit bot" });
+  await expect.element(dialog).toBeVisible();
+  const name = dialog.getByRole("textbox", { name: "Name" });
+  await userEvent.click(name);
+  await screen.rerender(<Chat bot={bot} hidden />);
+  await expect.element(dialog).toBeVisible();
+  await expect.element(name).toHaveValue("Scout");
+  await expect.element(name).toHaveFocus();
 });

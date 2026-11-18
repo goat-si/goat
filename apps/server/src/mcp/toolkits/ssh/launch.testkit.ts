@@ -10,6 +10,7 @@ import {
 } from "@goat/contracts";
 import * as NodeCrypto from "@effect/platform-node/NodeCrypto";
 import * as Effect from "effect/Effect";
+import type * as Schema from "effect/Schema";
 import * as Exit from "effect/Exit";
 import * as Layer from "effect/Layer";
 import * as Stream from "effect/Stream";
@@ -261,7 +262,7 @@ export const launchRaw = (options: LaunchOptions = {}) =>
         ...(options.workspace === undefined ? {} : { workspace: options.workspace }),
         ...(options.notifyTarget === undefined ? {} : { notifyTarget: options.notifyTarget }),
         ...(options.goatclawRole === undefined ? {} : { goatclawRole: options.goatclawRole }),
-      })
+      } as Schema.Json)
       .pipe(Stream.unwrap, Stream.runCollect, Effect.provide(dependencies), Effect.exit);
     return {
       response: Exit.isSuccess(responses) ? responses.value.at(-1)?.result : undefined,

@@ -1,3 +1,4 @@
+import * as NodeCrypto from "@effect/platform-node/NodeCrypto";
 import * as NodeServices from "@effect/platform-node/NodeServices";
 import { expect, it } from "@effect/vitest";
 import {
@@ -9,6 +10,7 @@ import {
 } from "@goat/contracts";
 import * as Deferred from "effect/Deferred";
 import * as Effect from "effect/Effect";
+import * as Layer from "effect/Layer";
 import * as Result from "effect/Result";
 import * as Stream from "effect/Stream";
 import * as PreviewAutomationBroker from "./PreviewAutomationBroker.ts";
@@ -33,7 +35,9 @@ type RoutedRequest = PreviewAutomationRequest & {
 it.effect("forwards the run identity without changing the browser session owner", () =>
   Effect.scoped(
     Effect.gen(function* () {
-      const broker = yield* PreviewAutomationBroker.make.pipe(Effect.provide(NodeServices.layer));
+      const broker = yield* PreviewAutomationBroker.make.pipe(
+        Effect.provide(Layer.mergeAll(NodeServices.layer, NodeCrypto.layer)),
+      );
       const events = yield* broker.connect(
         { clientId: "client-1", environmentId: scope.environmentId },
         { inProcess: true },

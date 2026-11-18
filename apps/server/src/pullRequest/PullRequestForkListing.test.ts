@@ -1,3 +1,4 @@
+import * as NodeCrypto from "@effect/platform-node/NodeCrypto";
 import * as NodeServices from "@effect/platform-node/NodeServices";
 import { assert, it } from "@effect/vitest";
 import {
@@ -143,7 +144,7 @@ function makeService(input: {
         PullRequestFilesViewed.layer.pipe(Layer.provide(SqlitePersistence.layerMemory)),
         Layer.effect(PullRequestReadCache.PullRequestReadCache, PullRequestReadCache.make).pipe(
           Layer.provide(KeyValueStore.layerMemory),
-          Layer.provide(NodeServices.layer),
+          Layer.provide(Layer.mergeAll(NodeServices.layer, NodeCrypto.layer)),
         ),
       ),
     ),
@@ -156,14 +157,14 @@ function forkProject(id: string, workspaceRoot: string): OrchestrationProjectShe
   return {
     ...base,
     repositoryIdentity: {
-      canonicalKey: "github.com/pingdotgg/t3code",
+      canonicalKey: "github.com/sample-tools/upstream",
       locator: {
         source: "git-remote",
         remoteName: "upstream",
-        remoteUrl: "https://github.com/pingdotgg/t3code.git",
+        remoteUrl: "https://github.com/sample-tools/upstream.git",
       },
       provider: SourceControlProviderKind.make("github"),
-      displayName: "pingdotgg/t3code",
+      displayName: "sample-tools/upstream",
       origin: {
         canonicalKey: "github.com/goat-si/goat",
         remoteUrl: "https://github.com/goat-si/goat.git",
@@ -214,13 +215,17 @@ it.effect("lists a fork's own repository and leaves its upstream out unless aske
 
     listed.length = 0;
     const withUpstream = yield* service.list({ state: "open", includeUpstream: true });
-    assert.deepStrictEqual(listed.toSorted(), ["acme/web", "goat-si/goat", "pingdotgg/t3code"]);
+    assert.deepStrictEqual(listed.toSorted(), [
+      "acme/web",
+      "goat-si/goat",
+      "sample-tools/upstream",
+    ]);
     assert.deepStrictEqual(
       withUpstream.entries
         .filter((entry) => entry.projectId === "p1")
         .map((entry) => entry.repository)
         .toSorted(),
-      ["goat-si/goat", "pingdotgg/t3code"],
+      ["goat-si/goat", "sample-tools/upstream"],
     );
   }),
 );
@@ -233,7 +238,7 @@ it.effect("answers line counts for a fork's own and upstream rows that share a n
           id: "p2",
           title: "t3code",
           workspaceRoot: "/t3",
-          repository: "pingdotgg/t3code",
+          repository: "sample-tools/upstream",
         }),
         forkProject("p1", "/goat"),
       ],
@@ -255,7 +260,7 @@ it.effect("answers line counts for a fork's own and upstream rows that share a n
     const { stats } = yield* service.listStats({
       refs: [
         { projectId: "p1" as ProjectId, repository: "goat-si/goat", number: 1 },
-        { projectId: "p1" as ProjectId, repository: "pingdotgg/t3code", number: 1 },
+        { projectId: "p1" as ProjectId, repository: "sample-tools/upstream", number: 1 },
       ],
     });
 
@@ -263,7 +268,7 @@ it.effect("answers line counts for a fork's own and upstream rows that share a n
       stats.map((stat) => [stat.projectId, stat.repository, stat.additions]).toSorted(),
       [
         ["p1", "goat-si/goat", 10],
-        ["p1", "pingdotgg/t3code", 20],
+        ["p1", "sample-tools/upstream", 20],
       ],
     );
   }),
@@ -292,4 +297,40 @@ it.effect("keeps the host on line counts a detail read already filled in", () =>
       [["github.com", "goat-si/goat", 6]],
     );
   }),
+);
+
+it.effect(
+  "counts a repository only while a project that is not deleted, archived or not, has it as origin or upstream",
+  () =>
+    Effect.gen(function* () {
+      const projects = [
+        forkProject("p1", "/goat"),
+        project({ id: "p2", title: "web", workspaceRoot: "/web", repository: "acme/web" }),
+        // Archived, as requireProject already reads its pull requests.
+        {
+          ...project({ id: "p3", title: "docs", workspaceRoot: "/docs", repository: "acme/docs" }),
+          archivedAt: "2026-07-03T00:00:00Z",
+        },
+      ];
+      const service = yield* makeService({
+        projects,
+        providers: [fakePullRequestProvider(SourceControlProviderKind.make("github"), {})],
+      });
+      const has = (repository: string, host = "github.com") =>
+        service.hasProjectRepository({ host, repository });
+      assert.deepStrictEqual(
+        yield* Effect.all([
+          has("goat-si/goat"),
+          has("SAMPLE-TOOLS/Upstream"),
+          has("acme/web"),
+          has("acme/docs"),
+          has("victim/private"),
+          has("acme/web", "gitlab.com"),
+        ]),
+        [true, true, true, true, false, false],
+      );
+      // acme/web's project is removed; the next lookup reads the project list again.
+      projects.splice(1, 1);
+      assert.strictEqual(yield* has("acme/web"), false);
+    }),
 );

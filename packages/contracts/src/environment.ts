@@ -89,6 +89,8 @@ export const ExecutionEnvironmentCapabilities = Schema.Struct({
   modelCatalogRefresh: Schema.optionalKey(Schema.Boolean),
   textGenerators: Schema.optionalKey(Schema.Boolean),
   freshContext: Schema.optionalKey(Schema.Boolean),
+  /** Server saves and runs scheduled task threadMode; older servers ignore it. */
+  scheduledTaskThreadModes: Schema.optionalKey(Schema.Boolean),
   memoryHubProtocolVersion: Schema.optionalKey(Schema.Int),
   memory: Schema.optionalKey(
     Schema.Struct({
@@ -134,6 +136,8 @@ export const ExecutionEnvironmentCapabilities = Schema.Struct({
   worktreeRestore: Schema.optionalKey(Schema.Boolean),
   databaseStorage: Schema.optionalKey(Schema.Boolean),
   otlpEndpointCheck: Schema.optionalKey(Schema.Boolean),
+  /** Serves server.checkSecretSource; clients hide the secret check where it is absent. */
+  secretSourceCheck: Schema.optionalKey(Schema.Boolean),
   projectWorktreeCleanup: Schema.optionalKey(Schema.Boolean),
   settledWorktreeCleanup: Schema.optionalKey(Schema.Boolean),
   worktreesDirectory: Schema.optionalKey(Schema.Boolean),
@@ -148,6 +152,8 @@ export const ExecutionEnvironmentCapabilities = Schema.Struct({
   threadAutoSettlementScope: Schema.optionalKey(Schema.Boolean),
   threadRestartContinuation: Schema.optionalKey(Schema.Boolean),
   codexTurnSurvival: Schema.optionalKey(Schema.Boolean),
+  /** Server stores `offeredSourceControlProviders`; older servers drop the patch, so clients disable the switches. */
+  offeredSourceControlProviders: Schema.optionalKey(Schema.Boolean),
   /** Server honors `codexAppServerIsolation` for new Codex threads. */
   codexAppServerIsolation: Schema.optionalKey(Schema.Boolean),
   projectSettingsOverrides: Schema.optionalKey(Schema.Boolean),
@@ -216,12 +222,19 @@ export const ExecutionEnvironmentCapabilities = Schema.Struct({
   projectOrganization: Schema.optionalKey(Schema.Boolean),
   /** Server answers projects.listIgnoredFiles. */
   ignoredFileListing: Schema.optionalKey(Schema.Boolean),
+  /** projects.listIgnoredFiles honors `query`. Older servers ignore it. */
+  ignoredFileSearch: Schema.optionalKey(Schema.Boolean),
   environmentIcon: Schema.optionalKey(Schema.Boolean),
   desktopAppUpdate: Schema.optionalKey(Schema.Boolean),
   /** Subscribe to command output only when advertised; older servers never send it. */
   commandOutputStreaming: Schema.optionalKey(Schema.Boolean),
   /** Hosts headless Chromium tabs streamed over /api/preview-stream for clients without a local runtime. */
   serverBrowser: Schema.optionalKey(Schema.Boolean),
+  /** Server checks `response` context records before an agent reads one. Older servers drop
+      them, so clients offer Reply to a response only when this is true. */
+  replyToResponse: Schema.optionalKey(Schema.Boolean),
+  /** Server browser viewers' stopLoading input cancels a loading page; older servers ignore it. */
+  serverBrowserStopLoading: Schema.optionalKey(Schema.Boolean),
   /** Server exposes the bounded SSH runtime activity probe. */
   sshActivity: Schema.optionalKey(Schema.Boolean),
   /** Server proxies its nodes' APIs below `/hub/nodes` for clients holding `hub:proxy`. */
@@ -280,6 +293,8 @@ export const ExecutionEnvironmentCapabilities = Schema.Struct({
   /** Slack settings take channelScope, userAccess and unlinkedRuntimeModeCeiling. Older servers
       answer listed channels and linked accounts only and drop those fields. */
   slackChannelAccess: Schema.optionalKey(Schema.Boolean),
+  /** Publishes a pull request refresh when linked-thread answers change; older servers need polling. */
+  linkedThreadRefreshes: Schema.optionalKey(Schema.Boolean),
 });
 export type ExecutionEnvironmentCapabilities = typeof ExecutionEnvironmentCapabilities.Type;
 

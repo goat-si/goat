@@ -1,4 +1,6 @@
 #!/usr/bin/env node
+import { rejectUnimportedLegacyThreads } from "./legacy-dev-seed.ts";
+import { pruneDevSettleScripts } from "./prune-dev-settle-scripts.ts";
 
 import * as NodeRuntime from "@effect/platform-node/NodeRuntime";
 import * as NodeServices from "@effect/platform-node/NodeServices";
@@ -24,6 +26,16 @@ import { Command, Flag } from "effect/cli";
 import * as ProjectionStore from "../src/orchestration-v2/ProjectionStore.ts";
 import { rebuildMessageSearch } from "../src/orchestration-v2/messageSearchIndex.ts";
 import { runMigrations } from "../src/persistence/Migrations.ts";
+import {
+  describeForeignKeyViolations,
+  groupForeignKeys,
+  orderTablesParentsFirst,
+  parentExistsPredicates,
+  quoteIdent,
+  type ForeignKeyConstraint,
+  type ForeignKeyRow,
+  type ForeignKeyViolation,
+} from "./migrate-dev-db-foreign-keys.ts";
 import { isProtectedDestination } from "./migrate-dev-db-protected.ts";
 import * as NodeSqliteClient from "@goat/shared/nodeSqliteClient";
 
@@ -142,110 +154,6 @@ interface KeptProject {
   readonly title: string;
   readonly threads: number;
 }
-
-interface ForeignKeyRow {
-  readonly child_table: string;
-  readonly id: number;
-  readonly parent_table: string;
-  readonly from: string;
-  readonly to: string | null;
-}
-
-interface ForeignKeyConstraint {
-  readonly parentTable: string;
-  readonly columns: ReadonlyArray<{ readonly from: string; readonly to: string | null }>;
-}
-
-interface ForeignKeyViolation {
-  readonly table: string;
-  readonly rowid: number | null;
-  readonly parent: string;
-  readonly fkid: number;
-}
-
-const quoteIdent = (identifier: string) => `"${identifier.replaceAll('"', '""')}"`;
-
-const groupForeignKeys = (rows: ReadonlyArray<ForeignKeyRow>) => {
-  const byTable = new Map<string, Map<number, ForeignKeyConstraint>>();
-  for (const row of rows) {
-    let constraints = byTable.get(row.child_table);
-    if (constraints === undefined) {
-      constraints = new Map();
-      byTable.set(row.child_table, constraints);
-    }
-    const existing = constraints.get(row.id);
-    const column = { from: row.from, to: row.to };
-    constraints.set(
-      row.id,
-      existing === undefined
-        ? { parentTable: row.parent_table, columns: [column] }
-        : { ...existing, columns: [...existing.columns, column] },
-    );
-  }
-  return new Map(
-    Array.from(byTable, ([table, constraints]) => [table, Array.from(constraints.values())]),
-  );
-};
-
-const orderTablesParentsFirst = <T extends { readonly name: string }>(
-  tables: ReadonlyArray<T>,
-  foreignKeys: ReadonlyMap<string, ReadonlyArray<ForeignKeyConstraint>>,
-): Array<T> => {
-  const byName = new Map(tables.map((table) => [table.name, table]));
-  const visited = new Set<string>();
-  const ordered: Array<T> = [];
-  const visit = (table: T) => {
-    if (visited.has(table.name)) return;
-    visited.add(table.name);
-    for (const fk of foreignKeys.get(table.name) ?? []) {
-      if (fk.parentTable === table.name) continue;
-      const parent = byName.get(fk.parentTable);
-      if (parent !== undefined) visit(parent);
-    }
-    ordered.push(table);
-  };
-  for (const table of tables) visit(table);
-  return ordered;
-};
-
-const parentExistsPredicates = (
-  childTable: string,
-  constraints: ReadonlyArray<ForeignKeyConstraint>,
-  primaryKeys: ReadonlyMap<string, ReadonlyArray<string>>,
-  options?: { readonly includeSelf?: boolean },
-): Array<string> => {
-  const childRef = quoteIdent(childTable);
-  return constraints.flatMap((fk) => {
-    // A self-reference cannot be filtered while the table is being inserted:
-    // the parent row is still in the source, not in main. Delete it afterwards.
-    if (fk.parentTable === childTable && options?.includeSelf !== true) return [];
-    const parentPks = primaryKeys.get(fk.parentTable) ?? [];
-    const resolved = fk.columns.map((col, idx) => ({
-      from: col.from,
-      to: col.to ?? parentPks[idx],
-    }));
-    if (resolved.some((col) => col.to === undefined)) return [];
-    const nullable = resolved.map((col) => `${childRef}.${quoteIdent(col.from)} IS NULL`);
-    const matches = resolved.map(
-      (col) => `parent.${quoteIdent(col.to!)} = ${childRef}.${quoteIdent(col.from)}`,
-    );
-    return [
-      `(${[
-        ...nullable,
-        `EXISTS (SELECT 1 FROM main.${quoteIdent(fk.parentTable)} AS parent WHERE ${matches.join(" AND ")})`,
-      ].join(" OR ")})`,
-    ];
-  });
-};
-
-const describeForeignKeyViolations = (violations: ReadonlyArray<ForeignKeyViolation>) => {
-  const sample = violations
-    .slice(0, 12)
-    .map((row) => `${row.table} row ${row.rowid ?? "without rowid"} -> ${row.parent}`)
-    .join("; ");
-  const extra = violations.length > 12 ? `; and ${violations.length - 12} more` : "";
-  return `${violations.length} dangling foreign key${violations.length === 1 ? "" : "s"} (${sample}${extra})`;
-};
 
 /**
  * `PRAGMA foreign_key_check` is the real constraint list. One pass deletes the
@@ -421,10 +329,9 @@ const rootIsVisible = (sql: SqlClient.SqlClient) => sql`
   AND json_extract(root.payload_json, '$.deletedAt') IS NULL
   AND json_extract(root.payload_json, '$.archivedAt') IS NULL`;
 
-// A single read transaction keeps the copy consistent with concurrent server writes.
-const copySourceSlice = Effect.fn("copyDevDbSourceSlice")(function* (sourcePath: string) {
-  const sql = yield* SqlClient.SqlClient;
-  yield* sql`ATTACH DATABASE ${`${NodeURL.pathToFileURL(sourcePath).href}?mode=ro`} AS src`;
+// Reads the attached source inside the copy transaction, so the copied schema and rows come
+// from one snapshot of a database the server may be writing.
+const readSourceSchema = Effect.fn("readDevDbSourceSchema")(function* (sql: SqlClient.SqlClient) {
   const schema = yield* sql<{ type: string; name: string; sql: string }>`
     SELECT type, name, sql FROM src.sqlite_master
     WHERE sql IS NOT NULL AND name NOT LIKE 'sqlite_%'`;
@@ -499,7 +406,24 @@ const copySourceSlice = Effect.fn("copyDevDbSourceSlice")(function* (sourcePath:
       }
     }
   }
+  return {
+    schema,
+    shadowTables,
+    virtualTables,
+    threadIdNullable,
+    writableColumns,
+    primaryKeys,
+    foreignKeys,
+    tables,
+    filtered,
+    cleared,
+  };
+});
 
+// A single read transaction keeps the copy consistent with concurrent server writes.
+const copySourceSlice = Effect.fn("copyDevDbSourceSlice")(function* (sourcePath: string) {
+  const sql = yield* SqlClient.SqlClient;
+  yield* sql`ATTACH DATABASE ${`${NodeURL.pathToFileURL(sourcePath).href}?mode=ro`} AS src`;
   // node:sqlite turns foreign keys on by default. The thread filter drops
   // parent rows (remote_report_bindings, and any self-reference) that a child
   // row still points at, so the INSERT fails before prune can run. The pragma
@@ -515,6 +439,19 @@ const copySourceSlice = Effect.fn("copyDevDbSourceSlice")(function* (sourcePath:
 
   yield* sql.withTransaction(
     Effect.gen(function* () {
+      const {
+        schema,
+        shadowTables,
+        virtualTables,
+        threadIdNullable,
+        writableColumns,
+        primaryKeys,
+        foreignKeys,
+        tables,
+        filtered,
+        cleared,
+      } = yield* readSourceSchema(sql);
+      yield* rejectUnimportedLegacyThreads(sourcePath, tables, filtered);
       for (const table of tables) yield* sql.unsafe(table.sql).unprepared;
       if (filtered) {
         yield* sql`CREATE TEMP TABLE copied_threads (thread_id TEXT PRIMARY KEY)`;
@@ -705,6 +642,14 @@ const pruneSnapshot = Effect.fn("pruneDevDbSnapshot")(function* (input: RunMigra
             AND stream_id NOT IN (SELECT thread_id FROM kept_threads))
            OR (aggregate_kind = 'project'
             AND stream_id NOT IN (SELECT project_id FROM kept_projects))`;
+      yield* sql`UPDATE orchestration_v2_projection_threads
+        SET payload_json = json_set(payload_json, '$.pullRequests', json((
+          SELECT json_group_array(json_remove(link.value, '$.watch') ORDER BY link.key)
+          FROM json_each(payload_json, '$.pullRequests') AS link)))
+        WHERE EXISTS (
+          SELECT 1 FROM json_each(payload_json, '$.pullRequests') AS link
+          WHERE json_extract(link.value, '$.watch') IS NOT NULL)`;
+      yield* pruneDevSettleScripts();
       for (const { name } of orderedClearedTables) {
         yield* sql`DELETE FROM ${sql(name)}`;
       }
@@ -735,6 +680,33 @@ const pruneSnapshot = Effect.fn("pruneDevDbSnapshot")(function* (input: RunMigra
     projects: keptProjects as ReadonlyArray<KeptProject>,
     eventCount: events?.count ?? 0,
   };
+});
+
+// Peer links preview builds recorded 68-70 before main took those slots for other migrations.
+// A snapshot with exactly that history drops the preview's schema so main's 68+ can run.
+const PEER_LINKS_PREVIEW_HISTORY = [
+  "68:PeerLinks",
+  "69:PeerLinkFence",
+  "70:WaitingLinkRequestIndex",
+];
+
+const forgetPeerLinksPreviewHistory = Effect.fn("forgetPeerLinksPreviewHistory")(function* () {
+  const sql = yield* SqlClient.SqlClient;
+  const tables = yield* sql`
+    SELECT name FROM sqlite_master WHERE type = 'table' AND name = 'effect_sql_migrations'`;
+  if (tables.length === 0) return;
+  const tail = yield* sql<{ migration_id: number; name: string }>`
+    SELECT migration_id, name FROM effect_sql_migrations WHERE migration_id >= 68
+    ORDER BY migration_id`;
+  const history = tail.map((row) => `${row.migration_id}:${row.name}`);
+  if (history.join() !== PEER_LINKS_PREVIEW_HISTORY.join()) return;
+  yield* sql.withTransaction(
+    Effect.gen(function* () {
+      yield* sql`DROP INDEX IF EXISTS orchestration_v2_projection_turn_items_waiting_link_idx`;
+      yield* sql`DROP TABLE IF EXISTS peer_environment_links`;
+      yield* sql`DELETE FROM effect_sql_migrations WHERE migration_id >= 68`;
+    }),
+  );
 });
 
 export const runMigrateDevDb = Effect.fn("runMigrateDevDb")(function* (
@@ -803,8 +775,6 @@ export const runMigrateDevDb = Effect.fn("runMigrateDevDb")(function* (
   if (modeChange !== undefined) {
     yield* Console.log(describePrivateDevDirectoryChange(stateDir, modeChange));
   }
-  yield* ensureNotInUse(databasePath);
-
   const wrapPhase =
     (phase: MigrateDevDbPhaseError["phase"], phaseDatabasePath: string) =>
     <A, E, R>(effect: Effect.Effect<A, E, R>) =>
@@ -819,14 +789,22 @@ export const runMigrateDevDb = Effect.fn("runMigrateDevDb")(function* (
     yield* Console.log(`Copying visible threads from ${sourcePath} (read-only)...`);
     yield* copySourceSlice(sourcePath).pipe(
       Effect.provide(NodeSqliteClient.layer({ filename: snapshotPath })),
-      wrapPhase("snapshot", sourcePath),
+      Effect.catchTags({
+        SqlError: (cause) =>
+          Effect.fail(
+            new MigrateDevDbPhaseError({ phase: "snapshot", databasePath: sourcePath, cause }),
+          ),
+      }),
     );
+
+    yield* ensureNotInUse(databasePath);
 
     // Migrate first so prune queries can use columns missing from older sources.
     yield* Console.log("Running migrations on the snapshot...");
     const executed = yield* Effect.gen(function* () {
       const sql = yield* SqlClient.SqlClient;
       yield* sql.unsafe("PRAGMA foreign_keys = ON").unprepared;
+      yield* forgetPeerLinksPreviewHistory();
       return yield* runMigrations();
     }).pipe(
       Effect.provide(NodeSqliteClient.layer({ filename: snapshotPath })),

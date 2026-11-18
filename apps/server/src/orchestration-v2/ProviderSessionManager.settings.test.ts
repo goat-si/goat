@@ -1,3 +1,4 @@
+import * as NodeCrypto from "@effect/platform-node/NodeCrypto";
 import * as NodeServices from "@effect/platform-node/NodeServices";
 import { assert, it } from "@effect/vitest";
 import {
@@ -241,7 +242,7 @@ const mcpRegistry = Layer.effect(
       getEnvironmentId: Effect.succeed(EnvironmentId.make("session-settings-test")),
     }),
   ),
-  Layer.provide(NodeServices.layer),
+  Layer.provide(Layer.mergeAll(NodeServices.layer, NodeCrypto.layer)),
 );
 
 const layer = (fixture: Fixture) => {
@@ -299,7 +300,7 @@ const layer = (fixture: Fixture) => {
         ),
       ),
     ),
-  ).pipe(Layer.provide(NodeServices.layer));
+  ).pipe(Layer.provide(Layer.mergeAll(NodeServices.layer, NodeCrypto.layer)));
 };
 
 const appThread = (
@@ -656,7 +657,7 @@ it.effect(
         yield* open(threadC);
         assert.strictEqual(yield* Ref.get(fixture.opens), 2);
       }).pipe(Effect.provide(layer(fixture)));
-    }).pipe(Effect.scoped, Effect.provide(NodeServices.layer)),
+    }).pipe(Effect.scoped, Effect.provide(Layer.mergeAll(NodeServices.layer, NodeCrypto.layer))),
 );
 
 it.effect(
@@ -681,7 +682,7 @@ it.effect(
         assert.strictEqual(yield* Ref.get(fixture.opens), 2);
         assert.strictEqual(yield* Queue.size(fixture.closed), 1);
       }).pipe(Effect.provide(layer(fixture)));
-    }).pipe(Effect.scoped, Effect.provide(NodeServices.layer)),
+    }).pipe(Effect.scoped, Effect.provide(Layer.mergeAll(NodeServices.layer, NodeCrypto.layer))),
 );
 
 it.effect("a model no fresh process would know never restarts or refuses", () =>

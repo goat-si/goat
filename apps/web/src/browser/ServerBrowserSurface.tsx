@@ -5,7 +5,6 @@ import {
   previewStreamModifiers,
   type PreviewStreamClient,
   type PreviewStreamControl,
-  type PreviewStreamDownload,
   type PreviewStreamFileChooser,
   uploadPreviewStreamFiles,
   type PreviewStreamInput,
@@ -39,6 +38,7 @@ import { CommandBlock } from "~/components/CommandBlock";
 import { Button } from "~/components/ui/button";
 import { Input } from "~/components/ui/input";
 import { toastManager } from "~/components/ui/toast";
+import { offerDownload } from "./serverBrowserDownload";
 import { BrowserPagePrompt } from "./BrowserPagePrompt";
 import { cn } from "~/lib/utils";
 import { usePreviewTabAgentDriven } from "~/previewStateStore";
@@ -57,6 +57,7 @@ export interface ServerBrowserHandle {
   readonly navigate: (url: string) => void;
   readonly history: (delta: -1 | 1) => void;
   readonly reload: (options?: { readonly ignoreCache?: boolean }) => void;
+  readonly stopLoading: () => void;
   readonly viewport: (setting: PreviewViewportSetting) => void;
   readonly canvas: () => HTMLCanvasElement | null;
   /** Asks the stream for control of the page; onControl reports whether it was granted. */
@@ -134,23 +135,6 @@ async function copyPageText(text: string) {
       },
     });
   }
-}
-
-function offerDownload(download: PreviewStreamDownload) {
-  const id = toastManager.add({
-    type: "info",
-    title: `Downloaded ${download.fileName}`,
-    actionProps: {
-      children: "Save",
-      onClick: () => {
-        toastManager.close(id);
-        const anchor = document.createElement("a");
-        anchor.href = download.url;
-        anchor.download = download.fileName;
-        anchor.click();
-      },
-    },
-  });
 }
 
 export function ServerBrowserSurface(props: {
@@ -370,6 +354,7 @@ export function ServerBrowserSurface(props: {
       history: (delta) => send({ type: "history", delta }),
       reload: (options) =>
         send({ type: "reload", ...(options?.ignoreCache ? { ignoreCache: true } : {}) }),
+      stopLoading: () => send({ type: "stopLoading" }),
       viewport: (setting) => send({ type: "viewport", setting }),
       canvas: () => (!pdfUrl && hasFrameRef.current ? canvasRef.current : null),
       takeControl: () => send({ type: "takeControl" }),

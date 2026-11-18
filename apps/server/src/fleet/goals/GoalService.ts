@@ -23,7 +23,7 @@ import {
   type ThreadId,
 } from "@goat/contracts";
 import * as Context from "effect/Context";
-import * as Crypto from "effect/Crypto";
+import * as SecureRandom from "effect/crypto/SecureRandom";
 import * as DateTime from "effect/DateTime";
 import * as Effect from "effect/Effect";
 import * as Layer from "effect/Layer";
@@ -136,7 +136,7 @@ const make = Effect.gen(function* () {
   const permissions = yield* Profiles.PermissionProfiles;
   const store = yield* GoalStore;
   const recovery = yield* GoalRecovery;
-  const crypto = yield* Crypto.Crypto;
+  const random = yield* SecureRandom.SecureRandom;
   const threads = yield* ThreadManagementService.ThreadManagementService;
   const clients = yield* McpClientAuthority.McpClientAuthority;
   /** The calling thread or outside client, read with the caller's own scope. */
@@ -240,7 +240,7 @@ const make = Effect.gen(function* () {
                 message: "This MCP client cannot own a goal: " + grant.unavailable,
               });
           }
-          const ulid = yield* crypto.randomULID.pipe(
+          const ulid = yield* random.ulid.pipe(
             Effect.mapError(
               () =>
                 new OrchestratorMcpFailure({

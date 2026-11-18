@@ -1,3 +1,4 @@
+import * as TurnItemPositionStore from "./TurnItemPositionStore.ts";
 // @effect-diagnostics nodeBuiltinImport:off -- the restorable checkout is a real Git fixture.
 import * as NodeChildProcess from "node:child_process";
 import { vi } from "vite-plus/test";
@@ -105,6 +106,7 @@ export function makeWorktreeStartHarness(
         Layer.mock(ContextHandoffService.ContextHandoffServiceV2)({}),
         Layer.mock(EventSink.EventSinkV2)({ writeIfRunCurrent }),
         IdAllocator.layer,
+        Layer.mock(TurnItemPositionStore.TurnItemPositionStoreV2)({}),
         Layer.succeed(FileSystem.FileSystem, {
           exists: () => Effect.succeed(false),
           realPath: (target: string) =>
@@ -194,7 +196,7 @@ export function startWithMissingWorktree(worktreePath: string, realPaths?: Recor
   const projectionReadCount = harness.projectionReadCount;
   const start = Effect.gen(function* () {
     return yield* (yield* ProviderTurnStart.ProviderTurnStartServiceV2)
-      .start({ threadId, runId })
+      .start({ threadId, runId, willRetry: true })
       .pipe(Effect.exit);
   }).pipe(Effect.provide(layer), Effect.runPromise);
   return {

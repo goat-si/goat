@@ -9,7 +9,8 @@ import {
 import * as DateTime from "effect/DateTime";
 import { describe, expect, it } from "vite-plus/test";
 
-import { buildThreadFeed, workEntryRowLabel } from "./threadActivity";
+import { buildThreadFeed } from "./threadActivity";
+import { workEntryRowLabel } from "./workEntryRowLabel";
 
 const threadId = ThreadId.make("thread-1");
 const runId = RunId.make("run-1");

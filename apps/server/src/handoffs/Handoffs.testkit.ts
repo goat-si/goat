@@ -1,3 +1,4 @@
+import * as NodeCrypto from "@effect/platform-node/NodeCrypto";
 import * as NodeServices from "@effect/platform-node/NodeServices";
 import {
   type AuthClientSession,
@@ -92,7 +93,7 @@ export const withHarness = <A, E, R>(
         ).pipe(Layer.provideMerge(databaseLayer), Layer.provide(handoffsLayer ?? Layer.empty)),
       ),
     );
-  }).pipe(Effect.provide(NodeServices.layer), Effect.scoped);
+  }).pipe(Effect.provide(Layer.mergeAll(NodeServices.layer, NodeCrypto.layer)), Effect.scoped);
 
 /**
  * Handoffs over the harness database and a temp secret store. Each `start` builds a fresh

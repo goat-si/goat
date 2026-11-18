@@ -1,10 +1,14 @@
 import {
+  appendAnswerToDraft,
   buildPendingUserInputAnswers,
   normalizeSelectedOptionValues,
   resolvePendingUserInputAnswer,
   type PendingUserInputDraftAnswer,
 } from "@goat/client-runtime/state/user-input-draft";
 import type {
+  PreviewAnnotationContextRecord,
+  PreviewAnnotationPayload,
+  ReviewCommentContextRecord,
   ThreadContextRecord,
   UserInputQuestion as ProviderUserInputQuestion,
 } from "@goat/contracts";
@@ -23,19 +27,51 @@ export {
 export type { PendingUserInputDraftAnswer } from "@goat/client-runtime/state/user-input-draft";
 
 import { collectInlineContextIds } from "./lib/composerContextReferences";
+import {
+  previewAnnotationContextRecord,
+  reviewCommentContextRecord,
+} from "./lib/composerContextRecords";
+import type { ReviewCommentContext } from "./reviewCommentContext";
 
 type UserInputQuestion = ProviderUserInputQuestion & { readonly required?: boolean | undefined };
+
+type AnswerContextRecord =
+  | ThreadContextRecord
+  | ReviewCommentContextRecord
+  | PreviewAnnotationContextRecord;
+
+// Diff comments and preview annotations land in the thread draft even when their chip is in an answer.
+export function answerContextRecords(
+  questionDraft: { threadContexts: ReadonlyArray<ThreadContextRecord> } | null | undefined,
+  threadDraft:
+    | {
+        reviewComments: ReadonlyArray<ReviewCommentContext>;
+        previewAnnotations: ReadonlyArray<PreviewAnnotationPayload>;
+      }
+    | null
+    | undefined,
+): AnswerContextRecord[] {
+  return [
+    ...(questionDraft?.threadContexts ?? []),
+    ...(threadDraft?.reviewComments ?? []).map(reviewCommentContextRecord),
+    ...(threadDraft?.previewAnnotations ?? []).map((annotation) =>
+      previewAnnotationContextRecord(annotation),
+    ),
+  ];
+}
 
 /** Question responses carry text, so send thread chips as links with the actual thread IDs. */
 export function projectPendingUserInputAnswer(
   answer: unknown,
-  threadContexts: ReadonlyArray<ThreadContextRecord>,
+  records: ReadonlyArray<AnswerContextRecord>,
 ) {
-  if (typeof answer !== "string" || threadContexts.length === 0) return answer;
-  const recordsById = new Map(threadContexts.map((record) => [record.contextId, record]));
+  if (typeof answer !== "string" || records.length === 0) return answer;
+  const recordsById = new Map(records.map((record) => [record.contextId, record]));
   return replaceComposerContextReferences(answer, (reference) => {
-    const record = reference.kind === "thread" ? recordsById.get(reference.contextId) : undefined;
-    if (!record) return reference.source;
+    const record = recordsById.get(reference.contextId);
+    if (record?.kind !== reference.kind) return reference.source;
+    if (record.kind !== "thread")
+      return projectComposerContextForProvider({ text: reference.source, records: [record] });
     // Remote thread tools need the SSH alias as well as the ID; a local-only link loses it.
     return record.host === undefined
       ? formatThreadLink(record.threadId, reference.label)
@@ -52,9 +88,9 @@ export function threadContextsReferencedByAnswer(
   return threadContexts.filter((record) => referencedIds.has(record.contextId));
 }
 
-export interface PendingUserInputProgress {
+export interface PendingUserInputProgress<Q extends UserInputQuestion = UserInputQuestion> {
   questionIndex: number;
-  activeQuestion: UserInputQuestion | null;
+  activeQuestion: Q | null;
   activeDraft: PendingUserInputDraftAnswer | undefined;
   selectedOptionValues: string[];
   customAnswer: string;
@@ -72,14 +108,29 @@ export function carryDisplacedCustomAnswerIntoPrompt(
   prompt: string,
   customAnswer: string | undefined,
 ): string {
-  const displaced = customAnswer?.trim() ?? "";
-  if (displaced.length === 0) {
-    return prompt;
-  }
-  if (prompt.trim().length === 0) {
-    return displaced;
-  }
-  return `${prompt.trimEnd()}${DISPLACED_ANSWER_SEPARATOR}${displaced}`;
+  return appendAnswerToDraft(prompt, customAnswer);
+}
+
+/**
+ * Takes set-aside answer text back out of the thread draft once it is the answer again.
+ * `laterDisplaced` is what was set aside after it, in order: together they locate this copy,
+ * so equal text inside another answer or the user's own draft is never the one removed.
+ */
+export function withdrawDisplacedCustomAnswerFromPrompt(
+  prompt: string,
+  displaced: string,
+  laterDisplaced: ReadonlyArray<string> = [],
+): string {
+  const text = displaced.trim();
+  if (text.length === 0) return prompt;
+  const later = laterDisplaced.map((entry) => entry.trim()).filter((entry) => entry.length > 0);
+  const suffix = [text, ...later].join(DISPLACED_ANSWER_SEPARATOR);
+  if (!prompt.endsWith(suffix)) return prompt;
+  const before = prompt.slice(0, prompt.length - suffix.length);
+  const after = later.join(DISPLACED_ANSWER_SEPARATOR);
+  if (before.length === 0) return after;
+  if (!before.endsWith(DISPLACED_ANSWER_SEPARATOR)) return prompt;
+  return after.length === 0 ? before.slice(0, -DISPLACED_ANSWER_SEPARATOR.length) : before + after;
 }
 
 function countAnsweredPendingUserInputQuestions(
@@ -106,11 +157,11 @@ export function findFirstUnansweredPendingUserInputQuestionIndex(
   return unansweredIndex === -1 ? Math.max(questions.length - 1, 0) : unansweredIndex;
 }
 
-export function derivePendingUserInputProgress(
-  questions: ReadonlyArray<UserInputQuestion>,
+export function derivePendingUserInputProgress<Q extends UserInputQuestion>(
+  questions: ReadonlyArray<Q>,
   draftAnswers: Record<string, PendingUserInputDraftAnswer>,
   questionIndex: number,
-): PendingUserInputProgress {
+): PendingUserInputProgress<Q> {
   const normalizedQuestionIndex =
     questions.length === 0 ? 0 : Math.max(0, Math.min(questionIndex, questions.length - 1));
   const activeQuestion = questions[normalizedQuestionIndex] ?? null;

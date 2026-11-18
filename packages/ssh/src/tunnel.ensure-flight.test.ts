@@ -1,3 +1,4 @@
+import * as NodeCrypto from "@effect/platform-node/NodeCrypto";
 import * as NodeServices from "@effect/platform-node/NodeServices";
 import { assert, describe, it } from "@effect/vitest";
 import type { DesktopSshPreparationProgress } from "@goat/contracts";
@@ -88,7 +89,7 @@ describe("real manager preparation sharing", () => {
           }
           assert.equal(new Set(events.flat().map((event) => event.operationId)).size, 1);
         }).pipe(Effect.provide(f.layer), Effect.scoped);
-      }).pipe(Effect.provide(NodeServices.layer), Effect.scoped),
+      }).pipe(Effect.provide(Layer.mergeAll(NodeServices.layer, NodeCrypto.layer)), Effect.scoped),
   );
 
   it.effect.each([false, true])(
@@ -128,7 +129,7 @@ describe("real manager preparation sharing", () => {
           assert.equal(next.operationId === original.operationId, !changed);
           assert.equal(f.count.uploads, 1);
         }).pipe(Effect.provide(f.layer), Effect.scoped);
-      }).pipe(Effect.provide(NodeServices.layer), Effect.scoped),
+      }).pipe(Effect.provide(Layer.mergeAll(NodeServices.layer, NodeCrypto.layer)), Effect.scoped),
   );
 
   it.effect("a failed per-caller pairing cannot fail the prepared runtime or another caller", () =>
@@ -154,7 +155,7 @@ describe("real manager preparation sharing", () => {
         assert.equal(f.count.launches, 1);
         assert.equal(f.count.pairings, 2);
       }).pipe(Effect.provide(f.layer), Effect.scoped);
-    }).pipe(Effect.provide(NodeServices.layer), Effect.scoped),
+    }).pipe(Effect.provide(Layer.mergeAll(NodeServices.layer, NodeCrypto.layer)), Effect.scoped),
   );
 
   it.effect.each(["disconnect", "forget"] as const)(
@@ -188,7 +189,7 @@ describe("real manager preparation sharing", () => {
           assert.equal(f.count.forwards, 0);
           assert.isTrue(Exit.isFailure(yield* Effect.exit(manager.readyEnvironment(uploadTarget))));
         }).pipe(Effect.provide(f.layer), Effect.scoped);
-      }).pipe(Effect.provide(NodeServices.layer), Effect.scoped),
+      }).pipe(Effect.provide(Layer.mergeAll(NodeServices.layer, NodeCrypto.layer)), Effect.scoped),
   );
 
   it.effect(
@@ -220,7 +221,7 @@ describe("real manager preparation sharing", () => {
           assert.equal(f.count.launches, 0);
           assert.isTrue(Exit.isFailure(yield* Effect.exit(manager.readyEnvironment(uploadTarget))));
         }).pipe(Effect.provide(f.layer), Effect.scoped);
-      }).pipe(Effect.provide(NodeServices.layer), Effect.scoped),
+      }).pipe(Effect.provide(Layer.mergeAll(NodeServices.layer, NodeCrypto.layer)), Effect.scoped),
   );
 
   it.effect(
@@ -264,7 +265,7 @@ describe("real manager preparation sharing", () => {
           assert.equal(f.count.pairings, 1);
           assert.equal(f.count.kills, 1);
         }).pipe(Effect.provide(f.layer), Effect.scoped);
-      }).pipe(Effect.provide(NodeServices.layer), Effect.scoped),
+      }).pipe(Effect.provide(Layer.mergeAll(NodeServices.layer, NodeCrypto.layer)), Effect.scoped),
   );
 
   it.effect(
@@ -316,6 +317,6 @@ describe("real manager preparation sharing", () => {
           Effect.provideService(References.MinimumLogLevel, "Info"),
           Effect.scoped,
         );
-      }).pipe(Effect.provide(NodeServices.layer), Effect.scoped),
+      }).pipe(Effect.provide(Layer.mergeAll(NodeServices.layer, NodeCrypto.layer)), Effect.scoped),
   );
 });

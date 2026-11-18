@@ -1,3 +1,5 @@
+import * as NodeServices from "@effect/platform-node/NodeServices";
+import { resolveCommandPath } from "@goat/shared/shell";
 import { makeProviderFailure } from "@goat/provider-core/server/failure";
 import {
   XAiPromptFailureText,
@@ -14,7 +16,7 @@ import {
   type RuntimeMode,
 } from "@goat/contracts";
 import { GrokSettings } from "../settings.ts";
-import * as Crypto from "effect/Crypto";
+import * as SecureRandom from "effect/crypto/SecureRandom";
 import * as Effect from "effect/Effect";
 import * as FileSystem from "effect/FileSystem";
 import * as Path from "effect/Path";
@@ -22,6 +24,7 @@ import * as Schema from "effect/Schema";
 import type * as Scope from "effect/Scope";
 import * as ChildProcessSpawner from "effect/process/ChildProcessSpawner";
 import * as EffectAcpErrors from "effect-acp/errors";
+import { getModelSelectionStringOptionValue } from "@goat/shared/model";
 
 import * as McpProviderSessions from "@goat/provider-core/server/McpProviderSessions";
 import * as ProviderHost from "@goat/provider-core/server/ProviderHost";
@@ -29,10 +32,12 @@ import { makeAcpNativeLoggerFactory } from "@goat/provider-acp/server/nativeLogg
 import {
   applyGrokAcpModelSelection,
   currentGrokModelIdFromSessionSetup,
+  GROK_DEFAULT_MODEL_SLUG,
   grokApprovalOptions,
   makeGrokAcpRuntime,
   resolveGrokAcpBaseModelId,
 } from "./acpSupport.ts";
+import { grokReasoningOptionsFromModel } from "./status.ts";
 import {
   extractGrokPlanMarkdownFromToolCallData,
   extractXAiAcpBackgroundToolMutation,
@@ -121,6 +126,7 @@ export interface GrokAdapterV2Options {
   readonly instanceId: Parameters<typeof makeAcpAdapterV2>[0]["instanceId"];
   readonly settings: GrokSettings;
   readonly environment: NodeJS.ProcessEnv;
+  readonly currentEnvironment?: Effect.Effect<NodeJS.ProcessEnv>;
   /** Read at each launch so a key saved after this adapter was created reaches the CLI. */
   readonly readStoredApiKey?: Effect.Effect<string | undefined>;
   readonly hostPlatform: NodeJS.Platform;
@@ -133,7 +139,7 @@ export interface GrokAdapterV2Options {
   ) => Effect.Effect<
     AcpSessionRuntime.AcpSessionRuntime["Service"],
     EffectAcpErrors.AcpError,
-    ChildProcessSpawner.ChildProcessSpawner | Crypto.Crypto | Scope.Scope
+    ChildProcessSpawner.ChildProcessSpawner | SecureRandom.SecureRandom | Scope.Scope
   >;
   readonly assertComplete?: Effect.Effect<void, EffectAcpErrors.AcpError>;
 }
@@ -232,6 +238,98 @@ export function grokLaunchRuntimeMode(
     : "approval-required";
 }
 
+interface GrokSessionLaunch {
+  readonly environment: NodeJS.ProcessEnv;
+  readonly executable: string;
+}
+
+/** The capability id the composer stores Grok's reasoning effort under. */
+const GROK_REASONING_EFFORT_OPTION_ID = "reasoningEffort";
+
+// Protocol 1 sends the effort as `session/set_model` metadata on every call: that response
+// carries no config options, so there is no live effort to compare against. Newer protocols
+// write the `thought_level` config option after the model switch. An effort the model does
+// not offer, or that Grok refuses, is skipped with a warning and Grok's default applies.
+const applyGrokSessionModelSelection: NonNullable<AcpAdapterV2Flavor["applyModelSelection"]> =
+  Effect.fn("GrokAdapter.applyModelSelection")(function* ({
+    runtime,
+    startResult,
+    modelSelection,
+  }) {
+    const requestedModelId = resolveGrokAcpBaseModelId(modelSelection.model);
+    const requestedEffort = getModelSelectionStringOptionValue(
+      modelSelection,
+      GROK_REASONING_EFFORT_OPTION_ID,
+    );
+    const skipEffort = (detail: string) =>
+      Effect.logWarning("Grok session skipped the requested reasoning effort", {
+        sessionId: startResult.sessionId,
+        reasoningEffort: requestedEffort,
+        detail,
+      });
+
+    if (startResult.initializeResult.protocolVersion === 1) {
+      const setup = startResult.sessionSetupResult;
+      const currentModelId = currentGrokModelIdFromSessionSetup(setup);
+      const targetModelId =
+        requestedModelId === GROK_DEFAULT_MODEL_SLUG ? currentModelId : requestedModelId;
+      const targetModel = setup.models?.availableModels.find(
+        (model) => model.modelId.trim() === targetModelId,
+      );
+      const offeredEfforts =
+        targetModel === undefined
+          ? []
+          : grokReasoningOptionsFromModel(targetModel).options.map((option) => option.value);
+      const effort =
+        requestedEffort !== undefined &&
+        (offeredEfforts.length === 0 || offeredEfforts.includes(requestedEffort))
+          ? requestedEffort
+          : undefined;
+      if (requestedEffort !== undefined && effort === undefined) {
+        yield* skipEffort(`${targetModelId} does not offer it`);
+      }
+      const apply = (requestedReasoningEffort: string | undefined) =>
+        applyGrokAcpModelSelection({
+          runtime,
+          currentModelId,
+          requestedModelId,
+          requestedReasoningEffort,
+          mapError: (cause) => cause,
+        });
+      return yield* effort === undefined
+        ? apply(undefined)
+        : apply(effort).pipe(
+            Effect.catchTags({
+              AcpRequestError: (error) =>
+                skipEffort(error.message).pipe(Effect.andThen(apply(undefined))),
+            }),
+          );
+    }
+
+    const appliedModelId = yield* applyGrokAcpModelSelection({
+      runtime: { setSessionModel: (model) => runtime.setModel(model).pipe(Effect.as({})) },
+      currentModelId: findModelConfigOption(yield* runtime.getConfigOptions)?.currentValue,
+      requestedModelId,
+      mapError: (cause) => cause,
+    });
+    if (requestedEffort === undefined) {
+      return appliedModelId;
+    }
+    // Read after the model switch: the effort choices belong to the new model.
+    const effortOption = (yield* runtime.getConfigOptions).find(
+      (option) => option.type === "select" && option.category === "thought_level",
+    );
+    if (effortOption === undefined) {
+      yield* skipEffort("the session has no reasoning effort option");
+      return appliedModelId;
+    }
+    // setConfigOption rejects a value the option does not offer and skips the current one.
+    yield* runtime
+      .setConfigOption(effortOption.id, requestedEffort)
+      .pipe(Effect.catchTags({ AcpRequestError: (error) => skipEffort(error.message) }));
+    return appliedModelId;
+  });
+
 export function makeGrokAcpAdapterFlavor(
   options: GrokAdapterV2Options,
   homeDirectory: string,
@@ -251,12 +349,13 @@ export function makeGrokAcpAdapterFlavor(
     supportsCompaction: true,
     // Grok expands only a leading `/name`, while the `$` picker inserts `$name` from the
     // `grok inspect` catalog. Ask that catalog again so other `$` text is left alone.
-    rewriteUserText: (text, turnInput) => {
+    rewriteUserText: (text, turnInput, session) => {
       const mention = leadingGrokSkillMention(text);
       if (mention === undefined) return Effect.succeed(text);
+      const launch = session?.launch as GrokSessionLaunch | undefined;
       return discoverGrokSkills(
-        options.settings,
-        options.environment,
+        launch ? { binaryPath: launch.executable } : options.settings,
+        launch?.environment ?? session?.environment ?? options.environment,
         turnInput.runtimePolicy.cwd ?? undefined,
       ).pipe(
         Effect.map((skills) =>
@@ -281,38 +380,37 @@ export function makeGrokAcpAdapterFlavor(
         ? window
         : undefined;
     },
-    applyModelSelection: Effect.fn("GrokAdapter.applyModelSelection")(function* ({
-      runtime,
-      startResult,
-      modelSelection,
-    }) {
-      const legacy = startResult.initializeResult.protocolVersion === 1;
-      const options = legacy ? [] : yield* runtime.getConfigOptions;
-      const configuredModel = findModelConfigOption(options)?.currentValue;
-      return yield* applyGrokAcpModelSelection({
-        runtime: legacy
-          ? runtime
-          : { setSessionModel: (model) => runtime.setModel(model).pipe(Effect.as({})) },
-        currentModelId: legacy
-          ? currentGrokModelIdFromSessionSetup(startResult.sessionSetupResult)
-          : configuredModel,
-        requestedModelId: resolveGrokAcpBaseModelId(modelSelection.model),
-        mapError: (cause) => cause,
-      });
+    applyModelSelection: applyGrokSessionModelSelection,
+    ownedModelOptionIds: [GROK_REASONING_EFFORT_OPTION_ID],
+    resolveSessionLaunch: Effect.fn("GrokAdapter.resolveSessionLaunch")(function* (
+      environment,
+      sessionEnvironment = environment,
+    ) {
+      const stored = options.readStoredApiKey ? yield* options.readStoredApiKey : undefined;
+      const command = options.settings.binaryPath || "grok";
+      const executable = yield* resolveCommandPath(command, {
+        env: applyStoredGrokApiKey(environment, stored),
+      }).pipe(
+        Effect.provide(NodeServices.layer),
+        Effect.provideService(HostProcess.Platform, options.hostPlatform),
+      );
+      return {
+        environment: applyStoredGrokApiKey(sessionEnvironment, stored),
+        executable: executable ?? command,
+      };
     }),
     makeRuntime:
       options.makeRuntime ??
-      (({ runtimePolicy, ...input }) =>
-        Effect.gen(function* () {
-          const stored = options.readStoredApiKey ? yield* options.readStoredApiKey : undefined;
-          return yield* makeGrokAcpRuntime({
-            ...input,
-            interruptPromptOnCancel: input.interruptPromptOnCancel ?? false,
-            grokSettings: options.settings,
-            environment: applyStoredGrokApiKey(options.environment, stored),
-            runtimeMode: grokLaunchRuntimeMode(runtimePolicy),
-          });
-        })),
+      (({ runtimePolicy, ...input }) => {
+        const launch = input.sessionLaunch as GrokSessionLaunch;
+        return makeGrokAcpRuntime({
+          ...input,
+          interruptPromptOnCancel: input.interruptPromptOnCancel ?? false,
+          grokSettings: { ...options.settings, binaryPath: launch.executable },
+          environment: launch.environment,
+          runtimeMode: grokLaunchRuntimeMode(runtimePolicy),
+        });
+      }),
     // Auto prompts represent classifier refusals and must reach the user.
     permissionDisposition: (policy, request) =>
       grokLaunchRuntimeMode(policy) === "auto" ? "ask" : acpPermissionDisposition(policy, request),
@@ -335,12 +433,17 @@ export function makeGrokAcpAdapterFlavor(
     extractSubagentUpdate: extractXAiAcpSubagentUpdate,
     extractSubagentEndNotice: extractXAiAcpSubagentEndNotice,
     normalizeToolCall: normalizeXAiAcpToolCallState,
-    extractProposedPlanMarkdown: (toolCall) =>
-      extractGrokPlanMarkdownFromToolCallData(toolCall.data, {
+    extractProposedPlanMarkdown: (toolCall, session) => {
+      const environment = session === undefined ? options.environment : (session.environment ?? {});
+      return extractGrokPlanMarkdownFromToolCallData(toolCall.data, {
         platform: options.hostPlatform,
-        environment: options.environment,
-        homeDirectory,
-      }),
+        environment,
+        homeDirectory:
+          session === undefined
+            ? homeDirectory
+            : (environment.HOME ?? environment.USERPROFILE ?? ""),
+      });
+    },
     extractBackgroundTaskId: extractXAiMonitorTaskId,
     isBackgroundCommandTool: (toolCall) => xAiBackgroundShellTaskId(toolCall) !== undefined,
     extractBackgroundToolMutation: extractXAiAcpBackgroundToolMutation,
@@ -363,6 +466,7 @@ export const makeGrokAdapterV2 = Effect.fn("makeGrokAdapterV2")(function* (
     instanceId: options.instanceId,
     flavor: makeGrokAcpAdapterFlavor(options, yield* HostProcess.HomeDirectory),
     selfInvocation: options.selfInvocation,
+    currentEnvironment: options.currentEnvironment ?? Effect.succeed(options.environment),
     ...(options.nativeLogging === undefined ? {} : { nativeLogging: options.nativeLogging }),
     ...(options.continuationRequests === undefined
       ? {}
@@ -373,7 +477,7 @@ export const makeGrokAdapterV2 = Effect.fn("makeGrokAdapterV2")(function* (
 
 export type GrokAdapterV2DriverEnv =
   | ChildProcessSpawner.ChildProcessSpawner
-  | Crypto.Crypto
+  | SecureRandom.SecureRandom
   | FileSystem.FileSystem
   | IdAllocator.IdAllocatorV2
   | Path.Path
@@ -388,6 +492,9 @@ export const GrokAdapterV2Driver: ProviderAdapterDriver<GrokSettings, GrokAdapte
   create: Effect.fn("GrokAdapterV2Driver.create")(
     function* (input: ProviderAdapterDriverCreateInput<GrokSettings>) {
       const hostEnvironment = yield* HostProcess.Environment;
+      const currentEnvironment = Effect.suspend(() =>
+        mergeProviderInstanceEnvironment(input.environment, hostEnvironment),
+      ).pipe(Effect.provideService(HostProcess.HomeDirectory, yield* HostProcess.HomeDirectory));
       const hostPlatform = yield* HostProcess.Platform;
       const credentials = yield* (yield* ProviderHost.ProviderHost).credentials(
         GROK_CREDENTIAL_NAMESPACE,
@@ -400,7 +507,8 @@ export const GrokAdapterV2Driver: ProviderAdapterDriver<GrokSettings, GrokAdapte
       return yield* makeGrokAdapterV2({
         instanceId: input.instanceId,
         settings: { ...input.config, enabled: input.enabled },
-        environment: yield* mergeProviderInstanceEnvironment(input.environment, hostEnvironment),
+        environment: { ...(yield* currentEnvironment) },
+        currentEnvironment,
         readStoredApiKey: readStoredGrokApiKey(credentials),
         hostPlatform,
         selfInvocation,

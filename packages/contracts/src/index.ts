@@ -33,6 +33,7 @@ export * from "./remoteAccess.ts";
 export * from "./sshHost.ts";
 export * from "./ipc.ts";
 export * from "./penMembers.ts";
+export * from "./confirmDialog.ts";
 export * from "./desktopPermissions.ts";
 export * from "./desktopWindowMaterial.ts";
 export * from "./snoozePresets.ts";
@@ -79,6 +80,7 @@ export * from "./settings.ts";
 export * from "./worktreeRetention.ts";
 export {
   SecretReference,
+  SecretSourceCheckResult,
   isSecretReference,
   isOnePasswordReference,
   SettingsSecretValue,
@@ -102,6 +104,7 @@ export * from "./orchestratorMcp.ts";
 export * from "./orchestratorMcpThreadConfiguration.ts";
 export * from "./orchestratorMcpCloudTask.ts";
 export * from "./orchestratorMcpFailure.ts";
+export * from "./orchestratorMcpStop.ts";
 export * from "./threadReplica.ts";
 export * from "./remoteReports.ts";
 export * from "./remoteLaunchesRpc.ts";
@@ -151,6 +154,7 @@ export * from "./fleetGoal.ts";
 export * from "./fleetResources.ts";
 export * from "./usage.ts";
 export * from "./scheduledTask.ts";
+export * from "./scheduledTaskRecentRuns.ts";
 export * from "./notes.ts";
 export * from "./worktreeMcp.ts";
 export * from "./resourceTelemetry.ts";

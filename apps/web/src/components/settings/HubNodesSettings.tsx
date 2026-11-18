@@ -29,6 +29,7 @@ import {
   savedHubNodeProfiles,
   canRemoveHubNode,
   hubNodeLastSeenLabel,
+  hubNodeClassView,
   hubNodeRemovalInput,
   hubNodeRouteLabel,
   hubNodeStatusLabel,
@@ -108,8 +109,14 @@ export type HubNodes = ReturnType<typeof useHubNodes>;
 
 /** A node's routes and whether the hub last reached it. */
 export function HubNodeStatus({ node, now }: { readonly node: HubNode; readonly now: number }) {
+  const machineClass = hubNodeClassView(node.machineClass, now);
   return (
     <div className="flex flex-wrap items-center gap-1.5 text-xs text-muted-foreground">
+      {machineClass?.badges.map((badge) => (
+        <Badge key={badge.label} variant={badge.tone} size="sm">
+          {badge.label}
+        </Badge>
+      ))}
       {node.routes.map((route) => (
         <Badge key={route.routeId} variant="secondary" size="sm">
           {hubNodeRouteLabel(route)}
@@ -128,6 +135,7 @@ export function HubNodeStatus({ node, now }: { readonly node: HubNode; readonly 
       <span>
         {hubNodeStatusLabel(node.status)}
         {node.lastSeenAt ? ` · ${hubNodeLastSeenLabel(node.lastSeenAt, now)}` : ""}
+        {machineClass === undefined ? "" : ` · ${machineClass.detail}`}
       </span>
     </div>
   );

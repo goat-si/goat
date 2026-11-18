@@ -1,10 +1,20 @@
 import { shouldPreserveAssistantLineBreaks } from "@goat/shared/markdownPipeline";
-import { type RunId } from "@goat/contracts";
-import { canForkProjectedAssistantItem } from "@goat/client-runtime/state/thread-workflows";
+import { scopeThreadRef } from "@goat/client-runtime/environment";
+import { type RunId, type ThreadId, type TurnItemId } from "@goat/contracts";
+import {
+  assistantReplyStatusBadge,
+  canForkProjectedAssistantItem,
+} from "@goat/client-runtime/state/thread-workflows";
 import { memo, use, useState } from "react";
 import { type ChatMessage, type TurnDiffSummary } from "../../types";
 import ChatMarkdown from "../ChatMarkdown";
-import { GitForkIcon } from "~/components/solar";
+import { GitForkIcon, ReplyIcon } from "~/components/solar";
+import { captureAssistantMessageOpening } from "~/lib/assistantTextSelection";
+import { responseContextRecord } from "~/lib/composerContextRecords";
+import { readResponseSubagents } from "~/state/responseSubagents";
+import { stackedThreadToast, toastManager } from "../ui/toast";
+import { replyHolderIsHeld, useReplyToResponseAvailable } from "./composerReply";
+import { replyFromTimeline } from "./composerReplyTarget";
 import { Button } from "../ui/button";
 import { Spinner } from "../ui/spinner";
 import { ProposedPlanCard } from "./ProposedPlanCard";
@@ -30,10 +40,11 @@ export function AssistantTimelineRow({ row }: { row: Extract<TimelineRow, { kind
   // The timeline holds a streaming message's row while only its text grows.
   const liveText = useAssistantMessageText(
     row.message.streaming ? ctx.threadRef : null,
-    row.projectedItem?.item.id,
+    row.projectedItem,
   );
   const text = liveText ?? row.message.text;
-  const messageText = text || (row.message.streaming ? "" : "(empty response)");
+  const messageText =
+    text || (row.message.streaming || row.suppressEmptyResponse ? "" : "(empty response)");
 
   return (
     <>
@@ -49,6 +60,7 @@ export function AssistantTimelineRow({ row }: { row: Extract<TimelineRow, { kind
           >
             <ChatMarkdown
               text={messageText}
+              renderInsights
               cwd={ctx.markdownCwd}
               threadRef={ctx.threadRef ?? undefined}
               isStreaming={Boolean(row.message.streaming)}
@@ -68,6 +80,11 @@ export function AssistantTimelineRow({ row }: { row: Extract<TimelineRow, { kind
             resolvedTheme={ctx.resolvedTheme}
             onOpenTurnDiff={ctx.onOpenTurnDiff}
           />
+        ) : null}
+        {!row.showAssistantMeta && assistantReplyStatusBadge(row.projectedItem, false) ? (
+          <div className="mt-1.5 flex">
+            <AssistantStatusBadge status="interrupted" />
+          </div>
         ) : null}
         {row.showAssistantMeta ? (
           <AssistantMessageMeta
@@ -168,6 +185,7 @@ function AssistantMessageMeta({
   alwaysVisible?: boolean;
 }) {
   const ctx = use(TimelineRowCtx);
+  const statusBadge = assistantReplyStatusBadge(projectedItem, true);
 
   return (
     <div
@@ -179,11 +197,7 @@ function AssistantMessageMeta({
         className,
       )}
     >
-      {projectedItem && projectedItem.item.status !== "completed" ? (
-        <span className="rounded-full border border-border/70 px-1.5 py-0.5 font-mono text-3xs text-muted-foreground">
-          {projectedItem.item.status}
-        </span>
-      ) : null}
+      {statusBadge ? <AssistantStatusBadge status={statusBadge} /> : null}
       <AssistantCopyButton
         message={message}
         showCopyButton={showCopyButton}
@@ -191,6 +205,13 @@ function AssistantMessageMeta({
       />
       {projectedItem?.item.type === "assistant_message" ? (
         <AssistantForkButton projectedItem={projectedItem} />
+      ) : null}
+      {!message.streaming && projectedItem ? (
+        <AssistantReplyButton
+          message={message}
+          sourceThreadId={projectedItem.sourceThreadId}
+          itemId={projectedItem.sourceItemId}
+        />
       ) : null}
       {!message.streaming && (
         <Tooltip>
@@ -203,6 +224,101 @@ function AssistantMessageMeta({
         </Tooltip>
       )}
     </div>
+  );
+}
+
+function AssistantReplyButton({
+  message,
+  sourceThreadId,
+  itemId,
+}: {
+  message: ChatMessage;
+  /** The thread that holds the response; a side chat or fork inherits its source's rows. */
+  sourceThreadId: ThreadId;
+  itemId: TurnItemId;
+}) {
+  const { threadRef } = use(TimelineRowCtx);
+  const available = useReplyToResponseAvailable(threadRef?.environmentId ?? null);
+  const inheritedFrom =
+    threadRef && sourceThreadId !== threadRef.threadId
+      ? scopeThreadRef(threadRef.environmentId, sourceThreadId)
+      : null;
+  const holderShell = useThreadShell(inheritedFrom);
+  if (
+    !threadRef ||
+    !available ||
+    !replyHolderIsHeld(threadRef.threadId, sourceThreadId, holderShell) ||
+    !message.text.trim()
+  ) {
+    return null;
+  }
+
+  const reply = (button: HTMLButtonElement) => {
+    // The meta row can sit below trailing tool rows, so the message may be virtualized away.
+    const source = [
+      ...document.querySelectorAll<HTMLElement>("[data-assistant-citation-source]"),
+    ].find(
+      (element) =>
+        element.dataset.assistantCitationSource === message.id &&
+        element.dataset.assistantCitationThread === threadRef.threadId &&
+        element.dataset.assistantCitationEnvironment === threadRef.environmentId,
+    );
+    const opening = captureAssistantMessageOpening(source ?? null, message.text);
+    if (!opening) return;
+    const outcome = replyFromTimeline(
+      button,
+      responseContextRecord({
+        citation: {
+          version: 1,
+          environmentId: threadRef.environmentId,
+          threadId: sourceThreadId,
+          messageId: message.id,
+          ...opening,
+        },
+        itemId,
+        // The server keeps only subagents the holding thread ran, as this thread's projection lists.
+        subagents:
+          sourceThreadId === threadRef.threadId ? readResponseSubagents(threadRef, itemId) : [],
+      }),
+    );
+    if (outcome === "replying") return;
+    toastManager.add(
+      stackedThreadToast(
+        outcome === "refused"
+          ? { type: "warning", title: "Answer the open question first, then reply." }
+          : {
+              type: "warning",
+              title: "This thread's composer is not open, so the reply has nowhere to go.",
+            },
+      ),
+    );
+  };
+
+  return (
+    <Tooltip>
+      <TooltipTrigger
+        render={
+          <Button
+            type="button"
+            size="xs"
+            variant="ghost-muted"
+            onClick={(event) => reply(event.currentTarget)}
+            aria-label="Reply to this response"
+          />
+        }
+      >
+        <ReplyIcon className="size-3" />
+      </TooltipTrigger>
+      <TooltipPopup side="top">Reply to this response</TooltipPopup>
+    </Tooltip>
+  );
+}
+
+function AssistantStatusBadge({ status }: { status: string }) {
+  return (
+    <span className="rounded-full border border-border/70 px-1.5 py-0.5 font-mono text-3xs text-muted-foreground">
+      {status}
+    </span>
   );
 }
 

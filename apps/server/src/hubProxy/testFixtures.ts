@@ -5,8 +5,9 @@ import * as NodeHttp from "node:http";
 
 import * as NodeHttpServerRequest from "@effect/platform-node/NodeHttpServerRequest";
 import * as NodeHttpServer from "@effect/platform-node/NodeHttpServer";
+import * as NodeCrypto from "@effect/platform-node/NodeCrypto";
 import * as NodeServices from "@effect/platform-node/NodeServices";
-import * as NodeSocket from "@effect/platform-node/NodeSocket";
+import * as NodeWS from "@effect/platform-node/NodeWS";
 import {
   EnvironmentAuthorizationError,
   EnvironmentId,
@@ -379,7 +380,7 @@ export const authLayer = Layer.mergeAll(EnvironmentAuth.layer, Settings.layer).p
   Layer.provideMerge(ServerSecretStore.layer),
   Layer.provideMerge(ServerEnvironment.layerIdentity),
   Layer.provideMerge(ServerConfig.layerTest(process.cwd(), { prefix: "goat-hub-proxy-test-" })),
-  Layer.provideMerge(NodeServices.layer),
+  Layer.provideMerge(Layer.mergeAll(NodeServices.layer, NodeCrypto.layer)),
 );
 
 export const startHub = Effect.fnUntraced(function* <E = never, R = never>(options?: {
@@ -468,7 +469,7 @@ export const startHub = Effect.fnUntraced(function* <E = never, R = never>(optio
 
 export const makeRpcClient = Effect.fnUntraced(function* (url: string) {
   const socket = yield* Socket.makeWebSocket(url).pipe(
-    Effect.provide(NodeSocket.layerWebSocketConstructorWS),
+    Effect.provide(NodeWS.layerWebSocketConstructor),
   );
   const protocol = yield* RpcClient.makeProtocolSocket({ retryTransientErrors: false }).pipe(
     Effect.provideService(Socket.Socket, socket),

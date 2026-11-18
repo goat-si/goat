@@ -2,6 +2,7 @@ import * as SqlitePersistence from "../persistence/Sqlite.ts";
 // @effect-diagnostics nodeBuiltinImport:off - local HTTP fixture and the saved file Chromium wrote.
 import * as NodeHttp from "node:http";
 import * as NodeFSP from "node:fs/promises";
+import * as NodeCrypto from "@effect/platform-node/NodeCrypto";
 import * as NodeServices from "@effect/platform-node/NodeServices";
 import { it } from "@effect/vitest";
 import {
@@ -92,7 +93,7 @@ const layer = ServerBrowser.layer.pipe(
       PreviewAgentActivity.layer,
     ).pipe(
       Layer.provideMerge(ServerConfig.layerTest(process.cwd(), { prefix: "goat-download-wait-" })),
-      Layer.provideMerge(NodeServices.layer),
+      Layer.provideMerge(Layer.mergeAll(NodeServices.layer, NodeCrypto.layer)),
     ),
   ),
 );

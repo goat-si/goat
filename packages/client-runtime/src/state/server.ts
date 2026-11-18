@@ -1,3 +1,4 @@
+import { processResourceHistoryOptions } from "./serverResourceHistory.ts";
 import {
   type EnvironmentId,
   type ProviderInstanceId,
@@ -47,6 +48,7 @@ import { runCachePersistence } from "./cachePersistence.ts";
 import { createDecisionEnvironmentAtoms } from "./decisionRpc.ts";
 import { createHubMachinesAtoms } from "./hubMachines.ts";
 import { createHubDeviceCommands } from "./hubDeviceCommands.ts";
+import { readUsageSummary } from "./serverUsageSummary.ts";
 import {
   isRpcClientError,
   request,
@@ -675,6 +677,7 @@ type ServerProviderEntry = ServerConfig["providers"][number];
 const snapshotBasis = (provider: ServerProviderEntry | undefined) =>
   provider && {
     enabled: provider.enabled,
+    models: provider.models,
     slashCommands: provider.slashCommands,
     skills: provider.skills,
   };
@@ -1397,10 +1400,10 @@ export function createServerEnvironmentAtoms<R, E>(
       execute: (input: EnvironmentRpcInput<typeof WS_METHODS.serverGetHostStatus>) =>
         request(WS_METHODS.serverGetHostStatus, input).pipe(Effect.timeout("30 seconds")),
     }),
-    processResourceHistory: createEnvironmentRpcQueryAtomFamily(runtime, {
-      label: "environment-data:server:process-resource-history",
-      tag: WS_METHODS.serverGetProcessResourceHistory,
-    }),
+    processResourceHistory: createEnvironmentRpcQueryAtomFamily(
+      runtime,
+      processResourceHistoryOptions,
+    ),
     remoteLaunches,
     /** Stops following a launch whose host no longer answers; the list then shows it dismissed. */
     dismissRemoteLaunch: createEnvironmentRpcCommand(runtime, {
@@ -1442,24 +1445,7 @@ export function createServerEnvironmentAtoms<R, E>(
       tag: WS_METHODS.serverGetUsageSummary,
       staleTimeMs: 60_000,
       refreshTrigger: ({ environmentId }) => usageScanSettingsAtom(environmentId),
-      execute: (input, emit) =>
-        request(WS_METHODS.serverGetUsageSummary, input).pipe(
-          Effect.filterOrElse(
-            (summary) => !summary.sources.some((source) => source.refreshing === true),
-            (summary) =>
-              emit(summary).pipe(
-                Effect.andThen(
-                  request(WS_METHODS.serverGetUsageSummary, { ...input, awaitRefresh: true }),
-                ),
-                Effect.catch((error) =>
-                  Effect.logWarning("Could not refresh slow usage sources.").pipe(
-                    Effect.annotateLogs({ ...safeErrorLogAttributes(error) }),
-                    Effect.as(summary),
-                  ),
-                ),
-              ),
-          ),
-        ),
+      execute: readUsageSummary,
     }),
     resourceTelemetry: createEnvironmentRpcSubscriptionAtomFamily(runtime, {
       label: "environment-data:server:resource-telemetry",
@@ -1554,8 +1540,6 @@ export function createServerEnvironmentAtoms<R, E>(
     updateProvider: createEnvironmentRpcCommand(runtime, {
       label: "environment-data:server:update-provider",
       tag: WS_METHODS.serverUpdateProvider,
-      scheduler: configScheduler,
-      concurrency: configConcurrency,
     }),
     updateServer,
     upsertKeybinding: createEnvironmentRpcCommand(runtime, {
@@ -1775,6 +1759,10 @@ export function createServerEnvironmentAtoms<R, E>(
     checkOtlpEndpoint: createEnvironmentRpcCommand(runtime, {
       label: "environment-data:server:check-otlp-endpoint",
       tag: WS_METHODS.serverCheckOtlpEndpoint,
+    }),
+    checkSecretSource: createEnvironmentRpcCommand(runtime, {
+      label: "environment-data:server:check-secret-source",
+      tag: WS_METHODS.serverCheckSecretSource,
     }),
     retryResourceTelemetry: createEnvironmentRpcCommand(runtime, {
       label: "environment-data:server:retry-resource-telemetry",

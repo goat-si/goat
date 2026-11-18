@@ -15,7 +15,7 @@ export type BotRoutineSource = Pick<
   | "lastRunStatus"
   | "lastRunError"
 > &
-  Partial<Pick<ScheduledTask, "lastRun">>;
+  Partial<Pick<ScheduledTask, "lastRun" | "recentRuns">>;
 
 export interface BotRoutineRow {
   readonly id: ScheduledTaskId;

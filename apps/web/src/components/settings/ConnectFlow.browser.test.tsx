@@ -22,7 +22,11 @@ import { HubDeviceCard } from "./HubDeviceCard";
 import { pairingLinkConnectFlow } from "./PairingLinkConnectFlow";
 import "../../index.css";
 
-const mocks = vi.hoisted(() => ({ createCredential: vi.fn() }));
+type EnvironmentRow = { environmentId: EnvironmentId; label: string; entry: { enabled: boolean } };
+const mocks = vi.hoisted(() => ({
+  createCredential: vi.fn(),
+  environments: null as ReadonlyArray<EnvironmentRow> | null,
+}));
 vi.mock("~/environments/primary", async (importOriginal) => ({
   ...(await importOriginal<typeof import("~/environments/primary")>()),
   createServerPairingCredential: mocks.createCredential,
@@ -35,6 +39,7 @@ vi.mock("~/state/session", async (importOriginal) => ({
 vi.mock("~/state/environments", async (importOriginal) => ({
   ...(await importOriginal<typeof import("~/state/environments")>()),
   usePrimaryEnvironmentId: () => EnvironmentId.make("primary"),
+  useEnvironments: () => ({ environments: mocks.environments ?? [] }),
 }));
 vi.mock("./settingsSearch", () => ({
   searchableSetting: (id: string) => ({ id, title: id }),
@@ -84,6 +89,7 @@ function exposure(
 
 function setup() {
   cancelConnectFlowResume();
+  mocks.environments = null;
   mocks.createCredential.mockReset().mockResolvedValue({
     id: "phone-link",
     credential: "PHONE1234",
@@ -218,9 +224,16 @@ it("phone QR: offers Tailscale HTTPS only while Serve is off; an unreachable Ser
   }
 });
 
-function CreateLink({ actions }: { readonly actions: ReturnType<typeof setup> }) {
+function CreateLink({
+  actions,
+  environmentId,
+}: {
+  readonly actions: ReturnType<typeof setup>;
+  readonly environmentId?: EnvironmentId;
+}) {
   return (
     <AuthorizedClientsHeaderAction
+      {...(environmentId === undefined ? {} : { environmentId })}
       onPairingLinkCreated={() => undefined}
       clientSessions={null}
       isRevokingOtherClients={false}
@@ -260,6 +273,66 @@ it("Create link: offers Network access in the dialog and reopens it after a rela
   }
 });
 
+it("Create link names the environment the link pairs with and the other environments the app shows", async () => {
+  const actions = setup();
+  const row = (id: string, label: string, enabled = true): EnvironmentRow => ({
+    environmentId: EnvironmentId.make(id),
+    label,
+    entry: { enabled },
+  });
+  // Primary and a saved SSH runtime, an enabled one that is offline, and a disabled one.
+  mocks.environments = [
+    row("primary", "Desk PC"),
+    row("withgame", "Withgame box"),
+    row("laptop", "Old laptop"),
+    row("retired", "Retired box", false),
+  ];
+  {
+    // These renders exercise the dialog alone; nothing here navigates.
+    await using _screen = await render(<CreateLink actions={actions} />, { router: false });
+    await page.getByRole("button", { name: "Create link" }).click();
+    await expect
+      .element(dialog().getByText(/pair with Desk PC as an authorized client/))
+      .toBeVisible();
+    await expect
+      .element(
+        dialog().getByText(
+          /also shows Withgame box and Old laptop, which this link does not pair with/,
+        ),
+      )
+      .toBeVisible();
+    expect(
+      dialog()
+        .getByText(/Retired box/)
+        .query(),
+    ).toBeNull();
+  }
+  {
+    // The saved-environment access view passes its own environment.
+    await using _screen = await render(
+      <CreateLink actions={actions} environmentId={EnvironmentId.make("withgame")} />,
+      { router: false },
+    );
+    await page.getByRole("button", { name: "Create link" }).click();
+    await expect
+      .element(dialog().getByText(/pair with Withgame box as an authorized/))
+      .toBeVisible();
+    await expect.element(dialog().getByText(/also shows Desk PC and Old laptop/)).toBeVisible();
+  }
+  mocks.environments = [row("primary", "Desk PC")];
+  {
+    // A single environment needs no second sentence.
+    await using _screen = await render(<CreateLink actions={actions} />, { router: false });
+    await page.getByRole("button", { name: "Create link" }).click();
+    await expect.element(dialog().getByText(/pair with Desk PC as an authorized/)).toBeVisible();
+    expect(
+      dialog()
+        .getByText(/also shows/)
+        .query(),
+    ).toBeNull();
+  }
+});
+
 it("returns a relaunched app to the Connections section of the flow it left", async () => {
   setup();
   requestConnectFlowResume("pairing-link");
@@ -281,5 +354,83 @@ it("returns a relaunched app to the Connections section of the flow it left", as
       ),
     );
     expect(peekConnectFlowResume()).toBeNull();
+  }
+});
+
+const environmentRow = (id: string, label: string): EnvironmentRow => ({
+  environmentId: EnvironmentId.make(id),
+  label,
+  entry: { enabled: true },
+});
+
+it("Create link's advice for another environment names no command and claims no permissions for it", async () => {
+  const actions = setup();
+  mocks.environments = [
+    environmentRow("primary", "Desk PC"),
+    environmentRow("withgame", "Withgame box"),
+  ];
+  await using _screen = await render(<CreateLink actions={actions} />, { router: false });
+  await page.getByRole("button", { name: "Create link" }).click();
+  await dialog().getByRole("button", { name: "Read only" }).click();
+  await expect
+    .element(
+      dialog().getByText(
+        /A link for it is created on the machine that runs it; see Manage or revoke access in the Remote access guide\./,
+      ),
+    )
+    .toBeVisible();
+  expect(
+    dialog()
+      .getByText(/goat (pair|auth)|--scope|Standard permissions/)
+      .query(),
+  ).toBeNull();
+});
+
+it("Create link keeps a long environment name and many environments inside a 390 px dialog", async () => {
+  const actions = setup();
+  mocks.environments = [
+    environmentRow("primary", "x".repeat(80)),
+    ...Array.from({ length: 12 }, (_, index) =>
+      environmentRow("env-" + index, "Box " + (index + 1)),
+    ),
+  ];
+  await page.viewport(390, 844);
+  try {
+    await using _screen = await render(<CreateLink actions={actions} />, { router: false });
+    await page.getByRole("button", { name: "Create link" }).click();
+    await expect
+      .element(dialog().getByText(/also shows Box 1, Box 2, Box 3, and 9 more, which/))
+      .toBeVisible();
+    // Nothing in the dialog is wider than the dialog itself.
+    const popup = dialog().element();
+    expect(popup.scrollWidth).toBeLessThanOrEqual(popup.clientWidth);
+  } finally {
+    await page.viewport(1280, 720);
+  }
+});
+
+it("Create link keeps its buttons on a phone screen with very long environment names", async () => {
+  const actions = setup();
+  mocks.environments = [
+    environmentRow("primary", "t".repeat(2000)),
+    ...["a", "b", "c"].map((letter) => environmentRow("env-" + letter, letter.repeat(500))),
+  ];
+  await page.viewport(390, 844);
+  try {
+    await using _screen = await render(<CreateLink actions={actions} />, { router: false });
+    await page.getByRole("button", { name: "Create link" }).click();
+    await expect
+      .element(dialog().getByText(/which this link does not pair with/))
+      .toBeInTheDocument();
+    for (const name of ["Create link", "Cancel"]) {
+      const box = dialog()
+        .getByRole("button", { name, exact: true })
+        .element()
+        .getBoundingClientRect();
+      expect(box.top).toBeGreaterThanOrEqual(0);
+      expect(box.bottom).toBeLessThanOrEqual(window.innerHeight);
+    }
+  } finally {
+    await page.viewport(1280, 720);
   }
 });

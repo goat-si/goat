@@ -6,7 +6,7 @@ import {
   OpenCodexProtocolEvidence,
 } from "@goat/contracts";
 import * as Clock from "effect/Clock";
-import * as Crypto from "effect/Crypto";
+import * as Digest from "effect/crypto/Digest";
 import * as Hex from "effect/encoding/Hex";
 import * as HostProcess from "@goat/shared/HostProcess";
 import { providerProbeEnvironment } from "@goat/provider-core/server/snapshotProbe";
@@ -179,12 +179,11 @@ const make = Effect.gen(function* () {
   const runner = yield* ProcessRunner.ProcessRunner;
   const linkTraffic = yield* HubLinkTraffic.HubLinkTraffic;
   const http = HttpClient.withScope(yield* HttpClient.HttpClient);
-  const crypto = yield* Crypto.Crypto;
+  const digestService = yield* Digest.Digest;
   const digest = (value: unknown) =>
-    crypto.digest("SHA-256", new TextEncoder().encode(JSON.stringify(value))).pipe(
-      Effect.map(Hex.encode),
-      Effect.orElseSucceed(() => undefined),
-    );
+    digestService
+      .digest(Digest.sha256, new TextEncoder().encode(JSON.stringify(value)))
+      .pipe(Effect.map(Hex.encode));
   const ocxHome = path.resolve(cwd, environment.OPENCODEX_HOME || path.join(home, ".opencodex"));
   const decodeJson = <A, I>(schema: Schema.Codec<A, I>, text: string) =>
     Option.getOrUndefined(Schema.decodeUnknownOption(Schema.fromJsonString(schema))(text));

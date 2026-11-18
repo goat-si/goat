@@ -19,6 +19,7 @@ import * as Lifetime from "./SessionSocketLifetime.ts";
 
 export { layerFor as rpcAuthorization } from "./proxiedCallPolicy.ts";
 import { failEnvironmentAuthInvalid, failEnvironmentInternal } from "./http.ts";
+import { requestUrl } from "../requestUrl.ts";
 
 export const layer = <E, R>(
   rpc: (
@@ -30,7 +31,7 @@ export const layer = <E, R>(
     "/ws",
     Effect.gen(function* () {
       const request = yield* HttpServerRequest.HttpServerRequest;
-      const url = HttpServerRequest.toURL(request);
+      const url = requestUrl(request);
       if (
         Option.isNone(url) ||
         !servesOrchestrationProtocol(url.value.searchParams.get(ORCHESTRATION_PROTOCOL_QUERY_PARAM))

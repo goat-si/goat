@@ -35,16 +35,25 @@ function providerThreadRuntimeKey(
     : `${nativeThreadRef.driver}:${nativeThreadRef.nativeId}`;
 }
 
-export function providerThreadLoadKey(input: {
-  readonly providerThread: Parameters<
-    ProviderAdapter.ProviderAdapterV2SessionRuntime["resumeThread"]
-  >[0]["providerThread"];
-  readonly modelSelection?: ModelSelection;
-  readonly runtimePolicy?: ProviderAdapter.ProviderAdapterV2RuntimePolicy;
-}): string {
+export function providerThreadLoadKey(
+  runtime:
+    | Pick<ProviderAdapter.ProviderAdapterV2SessionRuntime, "normalizeThreadLoadModelSelection">
+    | undefined,
+  input: {
+    readonly providerThread: Parameters<
+      ProviderAdapter.ProviderAdapterV2SessionRuntime["resumeThread"]
+    >[0]["providerThread"];
+    readonly modelSelection?: ModelSelection;
+    readonly runtimePolicy?: ProviderAdapter.ProviderAdapterV2RuntimePolicy;
+  },
+): string {
   return JSON.stringify({
     providerThread: providerThreadRuntimeKey(input.providerThread),
-    modelSelection: input.modelSelection ?? null,
+    modelSelection:
+      input.modelSelection === undefined
+        ? null
+        : (runtime?.normalizeThreadLoadModelSelection?.(input.modelSelection) ??
+          input.modelSelection),
     runtimePolicy: input.runtimePolicy ?? null,
   });
 }

@@ -78,7 +78,9 @@ export async function openUrlInPreview<E>(input: {
       url: input.url,
       viewport: browserDefaultOpenViewport(defaults),
       profileId: input.profileId ?? browserDefaultOpenProfileId(defaults),
-      ...(runtime === undefined ? {} : { runtime }),
+      ...(runtime === undefined
+        ? {}
+        : { runtime, zoomFactor: defaults.zoomFactor, colorScheme: defaults.appearance }),
     },
   });
   return mapAtomCommandResult(result, (snapshot) => {

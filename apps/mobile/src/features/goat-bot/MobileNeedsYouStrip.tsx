@@ -3,6 +3,7 @@ import {
   type BotProfile,
   type ChannelOpenAsk,
   type ChannelTaskId,
+  type EnvironmentId,
   MAIN_BOT_ID,
 } from "@goat/contracts";
 import { useEffect, useRef, useState } from "react";
@@ -10,7 +11,6 @@ import { Pressable, Text, View } from "react-native";
 
 import { SymbolView } from "../../components/ui/AppSymbol";
 import { goatBotTime } from "./GoatBotMessageParts";
-import { useMobileGoatBotHomeMode } from "./useMobileGoatBotHomeMode";
 import { useMobileOpenAsks } from "./useMobileOpenAsks";
 
 /**
@@ -22,6 +22,8 @@ export function MobileNeedsYouStrip(props: {
   /** The shown bots; hidden members still have asks, and open from here too. */
   readonly bots: ReadonlyArray<BotRosterEntry>;
   readonly hidden: ReadonlyArray<BotProfile>;
+  /** The computer the roster lists bots from; the asks are read from the same one. */
+  readonly environmentId: EnvironmentId | null;
   /** The roster is on screen; coming back into view reads the asks again. */
   readonly visible: boolean;
   readonly onOpenAsk: (bot: BotRosterEntry, taskId: ChannelTaskId) => void;
@@ -32,8 +34,7 @@ export function MobileNeedsYouStrip(props: {
    */
   readonly onUnknownBot?: (() => void) | undefined;
 }) {
-  const { botRef } = useMobileGoatBotHomeMode();
-  const open = useMobileOpenAsks(botRef?.environmentId ?? null, props.visible);
+  const open = useMobileOpenAsks(props.environmentId, props.visible);
   const [expanded, setExpanded] = useState(false);
   const members = [
     ...props.bots.flatMap((entry) => (entry.kind === "member" ? [entry.profile] : [])),
@@ -80,6 +81,15 @@ export function MobileNeedsYouStrip(props: {
       </View>
     );
   }
+  if (open.state === "unavailable") {
+    return (
+      <View className="mx-4 my-2 rounded-2xl bg-goat-bot-message">
+        <Text className="min-h-[44px] px-4 py-3 text-foreground-muted">
+          Needs you · unavailable while {open.computer} is offline
+        </Text>
+      </View>
+    );
+  }
   if (open.state !== "ready" || (open.total === 0 && !open.truncated)) return null;
   const main = props.bots.find((entry) => entry.kind === "main") ?? null;
   // Each ask names its bot; one not among the profiles yet has no destination until they load.
@@ -92,20 +102,23 @@ export function MobileNeedsYouStrip(props: {
   };
   const count = `${open.total}${open.truncated ? "+" : ""}`;
   const title = open.total > 0 ? `Needs you · ${count}` : "Needs you";
-  const stale =
-    open.staleRetry === null ? null : (
-      <Pressable
-        accessibilityRole="button"
-        accessibilityLabel="Couldn't refresh, this may be out of date. Try again"
-        onPress={open.staleRetry}
-        className="min-h-[44px] justify-center border-t border-border px-4 py-2"
-      >
-        <Text className="text-xs text-foreground-muted">
-          Couldn't refresh, this may be out of date.{" "}
-          <Text className="text-foreground">Try again</Text>
-        </Text>
-      </Pressable>
-    );
+  const stale = open.offline ? (
+    <Text className="border-t border-border px-4 py-2 text-xs text-foreground-muted">
+      Offline · this may be out of date
+    </Text>
+  ) : open.staleRetry === null ? null : (
+    <Pressable
+      accessibilityRole="button"
+      accessibilityLabel="Couldn't refresh, this may be out of date. Try again"
+      onPress={open.staleRetry}
+      className="min-h-[44px] justify-center border-t border-border px-4 py-2"
+    >
+      <Text className="text-xs text-foreground-muted">
+        Couldn't refresh, this may be out of date.{" "}
+        <Text className="text-foreground">Try again</Text>
+      </Text>
+    </Pressable>
+  );
   const newest = open.asks[0];
   if (newest === undefined) {
     // The server stopped before it read all the waiting work, and found none in what it read.
@@ -126,7 +139,7 @@ export function MobileNeedsYouStrip(props: {
       <Pressable
         accessibilityRole="button"
         accessibilityState={{ expanded }}
-        accessibilityLabel={`${count} waiting for you${open.staleRetry ? ", may be out of date" : ""}. ${line}`}
+        accessibilityLabel={`${count} waiting for you${open.offline ? ", offline, may be out of date" : open.staleRetry ? ", may be out of date" : ""}. ${line}`}
         onPress={() => setExpanded((value) => !value)}
         className="min-h-[44px] flex-row items-center gap-2 px-4 py-2"
       >

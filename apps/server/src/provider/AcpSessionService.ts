@@ -14,7 +14,7 @@ import {
 import * as IdAllocator from "@goat/provider-core/server/IdAllocator";
 import * as AcpRegistryRuntimeCoordinator from "@goat/provider-acp-registry/server/AcpRegistryRuntimeCoordinator";
 import * as Context from "effect/Context";
-import * as Crypto from "effect/Crypto";
+import * as SecureRandom from "effect/crypto/SecureRandom";
 import * as Effect from "effect/Effect";
 import * as Layer from "effect/Layer";
 import * as Result from "effect/Result";
@@ -54,7 +54,7 @@ const make = Effect.gen(function* () {
   const acpRegistryRuntimeCoordinator =
     yield* AcpRegistryRuntimeCoordinator.AcpRegistryRuntimeCoordinator;
   const startup = yield* ServerRuntimeStartup.ServerRuntimeStartup;
-  const crypto = yield* Crypto.Crypto;
+  const random = yield* SecureRandom.SecureRandom;
   const continuations = yield* makeAcpSessionContinuations();
   const continuationUnavailable = () =>
     new AcpRegistryOperationError({
@@ -249,7 +249,7 @@ const make = Effect.gen(function* () {
           provider?.models.find((candidate) => candidate.isDefault)?.slug ??
           provider?.models[0]?.slug ??
           "default";
-        const commandId = CommandId.make(yield* crypto.randomUUIDv4().pipe(Effect.orDie));
+        const commandId = CommandId.make(yield* random.uuidV4().pipe(Effect.orDie));
         const launched = yield* Effect.result(
           startup.enqueueCommand(
             threadLaunch.launch({

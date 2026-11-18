@@ -1,3 +1,6 @@
+// @effect-diagnostics-next-line nodeBuiltinImport:off -- the bundle's compile cache sits beside it.
+import * as NodePath from "node:path";
+import * as NodeServices from "@effect/platform-node/NodeServices";
 import * as AcpSessionRuntime from "@goat/provider-acp/server/AcpSessionRuntime";
 import type {
   AcpAdapterV2Flavor,
@@ -5,14 +8,51 @@ import type {
 } from "@goat/provider-acp/server/adapter";
 import type * as Duration from "effect/Duration";
 import * as Effect from "effect/Effect";
+import * as Exit from "effect/Exit";
+import * as FileSystem from "effect/FileSystem";
 import * as Layer from "effect/Layer";
 import * as Option from "effect/Option";
+import * as Path from "effect/Path";
 import * as Queue from "effect/Queue";
 import * as Schema from "effect/Schema";
+import * as Scope from "effect/Scope";
 import * as ChildProcessSpawner from "effect/process/ChildProcessSpawner";
 import type * as EffectAcpProtocol from "effect-acp/protocol";
+import { afterAll } from "vite-plus/test";
 
 export const decodeUnknownJson = Schema.decodeUnknownOption(Schema.fromJsonString(Schema.Unknown));
+
+// Node spends about half a second loading the mock agent's TypeScript module graph on every
+// spawn; a bundle built once per test file starts faster. Tests still talk to a real subprocess.
+const bundleScope = Scope.makeUnsafe();
+afterAll(() => Effect.runPromise(Scope.close(bundleScope, Exit.void)));
+const bundleMockAgent = Effect.gen(function* () {
+  const fileSystem = yield* FileSystem.FileSystem;
+  const path = yield* Path.Path;
+  const outDir = yield* fileSystem.makeTempDirectoryScoped({ prefix: "goat-acp-agents-" });
+  const mock = yield* path.fromFileUrl(
+    new URL("../../../scripts/acp-mock-agent.ts", import.meta.url),
+  );
+  const { build } = yield* Effect.promise(() => import("vite-plus"));
+  yield* Effect.promise(() =>
+    build({
+      configFile: false,
+      logLevel: "silent",
+      root: path.dirname(mock),
+      ssr: { noExternal: true },
+      build: {
+        ssr: true,
+        outDir,
+        rollupOptions: { input: { mock }, output: { format: "es", entryFileNames: "[name].mjs" } },
+      },
+    }),
+  );
+  return path.join(outDir, "mock.mjs");
+}).pipe(Scope.provide(bundleScope), Effect.provide(NodeServices.layer));
+let bundledMockAgent: Promise<string> | undefined;
+export const bundledMockAgentPath = Effect.promise(
+  () => (bundledMockAgent ??= Effect.runPromise(bundleMockAgent)),
+);
 
 export function makeMockRuntime(input: {
   readonly childProcessSpawner: ChildProcessSpawner.ChildProcessSpawner["Service"];
@@ -90,6 +130,14 @@ export function makeMockRuntime(input: {
             cwd: runtimeInput.cwd,
             env: {
               GOAT_ACP_SESSION_LIFECYCLE: "1",
+              ...(input.mockAgentPath.endsWith(".mjs")
+                ? {
+                    NODE_COMPILE_CACHE: NodePath.join(
+                      NodePath.dirname(input.mockAgentPath),
+                      "cache",
+                    ),
+                  }
+                : {}),
               ...(typeof input.environment === "function"
                 ? input.environment(runtimeOrdinal)
                 : input.environment),

@@ -34,6 +34,10 @@ import * as ThreadManagement from "../orchestration-v2/ThreadManagementService.t
 import { ReleaseCatalog } from "../opencodex/OpenCodexInstallation.ts";
 import * as Sqlite from "../persistence/Sqlite.ts";
 import * as Settings from "../serverSettings.ts";
+import type { DisposableRecord } from "./disposable/disposableClass.ts";
+import { DisposableMachineStore } from "./disposable/DisposableMachineStore.ts";
+import * as DisposableRouteGuard from "./disposable/DisposableRouteGuard.ts";
+import { SshHostKeys } from "../sshRemote/SshHostKeys.ts";
 import * as HubMembership from "./HubMembership.ts";
 import {
   countLinkTunnels,
@@ -83,6 +87,8 @@ export interface Fixture {
   readonly profile?: string;
   readonly pin?: string;
   readonly offered?: string;
+  /** The key type OpenCodex's probe reports with `offered`; ED25519 by default. */
+  readonly offeredKeyType?: string;
   readonly direct?: boolean;
   /** Why the direct-alias check could not decide, as when Pen's files cannot be read. */
   readonly directFailure?: string;
@@ -133,10 +139,22 @@ export interface Fixture {
   readonly linkStatus?: "forbidden" | "failed";
   /** Home `ocx link revoke` refuses, so the link stays. */
   readonly revokeFails?: boolean;
+  /** Runs once Home `ocx link revoke` has removed the link, before it answers. */
+  readonly afterRevoke?: Effect.Effect<void>;
+  /** Runs while the move probes the target's host key, before anything changes. */
+  readonly duringProbe?: Effect.Effect<void>;
+  /** Runs while GOAT reads the key it pinned for the target, before anyone is asked. */
+  readonly duringPin?: Effect.Effect<void>;
   /** Home `ocx link routes` answers; absent answers as an OpenCodex without the command. */
   readonly routes?: (args: ReadonlyArray<string>) => OcxOutput;
   /** Home `ocx link routes` as a run that can fail or never finish; overrides routes. */
   readonly routesRun?: (args: ReadonlyArray<string>) => Effect.Effect<OcxOutput, HubOcxError>;
+  /** Disposable machine records the hub holds; none by default. */
+  readonly disposable?: ReadonlyArray<DisposableRecord>;
+  /** Pen's own known_hosts, as the route guard reads it offline. */
+  readonly penKnownHosts?: string;
+  /** The ED25519 sshd key fingerprint each alias offers to the route guard's own probe. */
+  readonly hostKeys?: Readonly<Record<string, string>>;
 }
 
 export const setup = Effect.fn("HubMembershipTest.setup")(function* (fixture: Fixture = {}) {
@@ -192,7 +210,10 @@ export const setup = Effect.fn("HubMembershipTest.setup")(function* (fixture: Fi
       );
     }
     if (command === "probe")
-      return Effect.succeed(json({ alias, fingerprint: offered, keyType: "ssh-ed25519" }));
+      return Effect.as(
+        fixture.duringProbe ?? Effect.void,
+        json({ alias, fingerprint: offered, keyType: fixture.offeredKeyType ?? "ssh-ed25519" }),
+      );
     if (group === "link" && command === "routes")
       return (
         fixture.routesRun?.(args) ??
@@ -217,7 +238,7 @@ export const setup = Effect.fn("HubMembershipTest.setup")(function* (fixture: Fi
       if (fixture.revokeFails) return Effect.succeed({ code: 1, stdout: "" });
       for (const [name, id] of links) if (id === args[3]) links.delete(name);
       revoked = true;
-      return Effect.succeed(json({ linkId: args[3] }));
+      return Effect.as(fixture.afterRevoke ?? Effect.void, json({ linkId: args[3] }));
     }
     return Effect.succeed(json({ linkId: args[3] }));
   };
@@ -315,6 +336,29 @@ export const setup = Effect.fn("HubMembershipTest.setup")(function* (fixture: Fi
   const context = yield* Layer.build(
     HubMembership.layerWithoutDependencies.pipe(
       Layer.provide(
+        Layer.effect(
+          DisposableRouteGuard.DisposableRouteGuard,
+          DisposableRouteGuard.make(Effect.succeed(fixture.penKnownHosts ?? "")),
+        ).pipe(
+          Layer.provide(
+            Layer.mock(DisposableMachineStore)({
+              recordsOrKept: Effect.succeed(fixture.disposable ?? []),
+            }),
+          ),
+          Layer.provide(
+            Layer.succeed(
+              SshHostKeys,
+              SshHostKeys.of({
+                negotiatedFingerprint: (target) => {
+                  calls.push(`hostkey ${target.alias}`);
+                  return Effect.succeed(fixture.hostKeys?.[target.alias]);
+                },
+              }),
+            ),
+          ),
+        ),
+      ),
+      Layer.provide(
         ApprovalHandoffs.layer.pipe(
           Layer.provide(handoffLayer),
           Layer.provide(threadLayer),
@@ -373,7 +417,7 @@ export const setup = Effect.fn("HubMembershipTest.setup")(function* (fixture: Fi
                       connect: { code: fixture.connectExit ?? 0, stdout: "" },
                     };
               }),
-            pinnedFingerprint: () => Effect.succeed(fixture.pin),
+            pinnedFingerprint: () => Effect.as(fixture.duringPin ?? Effect.void, fixture.pin),
             ensureDeviceRuntime: () => Effect.die("unused"),
             syncDevice: () => Effect.die("unused"),
             directAlias: () =>

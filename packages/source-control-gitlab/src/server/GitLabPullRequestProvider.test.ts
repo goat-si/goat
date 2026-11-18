@@ -149,6 +149,7 @@ describe("gitLabViewerPermissions", () => {
         "update-branch",
         "enable-auto-merge",
         "disable-auto-merge",
+        "revert",
       ],
       comment: true,
       resolve: true,

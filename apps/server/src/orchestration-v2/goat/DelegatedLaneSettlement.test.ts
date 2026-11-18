@@ -9,7 +9,7 @@ import {
   type OrchestrationV2AppThread,
   type OrchestrationV2DomainEvent,
 } from "@goat/contracts";
-import * as Crypto from "effect/Crypto";
+import * as SecureRandom from "effect/crypto/SecureRandom";
 import * as DateTime from "effect/DateTime";
 import * as Deferred from "effect/Deferred";
 import * as Effect from "effect/Effect";
@@ -191,11 +191,8 @@ const sweep = Effect.fn("sweep")(function* (
         ServerSettings.layerTest(scenario.settings),
         Layer.succeed(ServerActivation.ServerActivation, Deferred.await(activation)),
         Layer.succeed(
-          Crypto.Crypto,
-          Crypto.make({
-            randomBytes: (size) => new Uint8Array(size).fill(1),
-            digest: (_algorithm, data) => Effect.succeed(data),
-          }),
+          SecureRandom.SecureRandom,
+          SecureRandom.make((size) => new Uint8Array(size).fill(1)),
         ),
         FileSystem.layerNoop({ exists: () => Effect.succeed(true) }),
         Path.layer,

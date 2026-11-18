@@ -1,8 +1,7 @@
+import { CheckIcon, CopyIcon } from "~/components/solar";
 import { commandDisplayText } from "@goat/client-runtime/work-log/command-label";
-import { Check, Copy } from "~/components/solar/nodes";
 import { type ReactNode, useState } from "react";
 
-import { MorphIcon } from "~/components/MorphIcon";
 import { useCopyToClipboard } from "~/hooks/useCopyToClipboard";
 import { cn } from "~/lib/utils";
 import { Button } from "../ui/button";
@@ -59,7 +58,7 @@ export function CopyRegion(props: {
                 />
               }
             >
-              <MorphIcon className="size-3" icon={isCopied ? Check : Copy} />
+              {isCopied ? <CheckIcon className="size-3" /> : <CopyIcon className="size-3" />}
             </TooltipTrigger>
             <TooltipPopup side="top">{isCopied ? "Copied" : props.label}</TooltipPopup>
           </Tooltip>

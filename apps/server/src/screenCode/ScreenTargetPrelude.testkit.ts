@@ -1,3 +1,4 @@
+import * as NodeCrypto from "@effect/platform-node/NodeCrypto";
 import * as NodeServices from "@effect/platform-node/NodeServices";
 import {
   PreviewTabId,
@@ -62,7 +63,7 @@ export const runCells = (
             entrypoint: NodeURL.fileURLToPath(new URL("../bin.ts", import.meta.url)),
           },
           assetResolver: () => resolveScreenRuntimeAsset("dev"),
-        }).pipe(Layer.provide(NodeServices.layer)),
+        }).pipe(Layer.provide(Layer.mergeAll(NodeServices.layer, NodeCrypto.layer))),
       ),
     );
   });

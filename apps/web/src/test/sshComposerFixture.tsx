@@ -59,6 +59,7 @@ export { state };
 // Browser importActual resolves shared helpers from a URL; root paths keep those mocks resolvable.
 vi.mock("/src/components/ui/toast", () => ({
   toastManager: { add: state.toast },
+  anchoredToastManager: { add: state.toast },
   stackedThreadToast: (v: unknown) => v,
 }));
 vi.mock("@tanstack/react-router", { spy: true });
@@ -116,6 +117,7 @@ vi.mock("/src/components/PullRequestThreadDialog", () => ({ PullRequestThreadDia
 vi.mock("/src/components/ThreadTerminalDrawer", () => ({ default: () => null }));
 vi.mock("/src/components/ui/sidebar", () => ({
   useSidebar: () => ({ state: "expanded", isMobile: false }),
+  useMobileSidebarSheetMounted: () => false,
   SidebarInset: ({ children }: { children: ReactNode }) => <div>{children}</div>,
 }));
 import { AppAtomRegistryProvider, appAtomRegistry } from "~/rpc/atomRegistry";

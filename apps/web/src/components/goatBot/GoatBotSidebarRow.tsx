@@ -6,7 +6,7 @@ import {
   type GoatBotRef,
 } from "@goat/client-runtime/goatBot";
 import { scopeThreadRef, scopedThreadKey } from "@goat/client-runtime/environment";
-import type { BotProfile } from "@goat/contracts";
+import { BotId, type BotProfile, type EnvironmentId } from "@goat/contracts";
 import { Link, useLocation, useParams } from "@tanstack/react-router";
 import { useContext } from "react";
 
@@ -34,7 +34,9 @@ import { GoatBotMainAvatar } from "./GoatBotAvatar";
 import { useGoatBotPreferred } from "./GoatBotModeButton";
 import { GoatBotChannelContext } from "./goatBotChannelPort";
 import { GoatBotMainMenu } from "./GoatBotMemberRows";
-import { useGoatBotWaitingCount } from "./useGoatBotWaitingCount";
+import { useGoatBotComputerReadable } from "./useGoatBotComputerReadable";
+import { useGoatBotSidebarWaiting } from "./useGoatBotWaitingCount";
+import { GoatBotRowSignals, GoatBotWaitingMark } from "./GoatBotRowSignals";
 import { useGoatBotReadMenu } from "./useGoatBotReadMenu";
 import { useBotThreads } from "./useBotRoster";
 
@@ -68,9 +70,12 @@ function GoatBotSidebarObserver({
   slackEnabled: boolean;
   main: BotProfile | null;
 }) {
-  const count = useGoatBotWaitingCount();
-  const readMenu = useGoatBotReadMenu(count, name, { holdsNewBotOpen: true });
+  const waiting = useGoatBotSidebarWaiting();
   const botRef = useGlobalAgentStore((state) => state.botRef);
+  // Before a bot is named, nothing has been read from its conversation.
+  const readable = useGoatBotComputerReadable(botRef?.environmentId ?? null) || botRef === null;
+  const count = readable ? waiting.count : undefined;
+  const readMenu = useGoatBotReadMenu(count, name, { holdsNewBotOpen: true });
   const pathname = useLocation({ select: (location) => location.pathname });
   const task = useLocation({
     select: (location) => (location.search as { task?: string } | undefined)?.task,
@@ -88,7 +93,7 @@ function GoatBotSidebarObserver({
     <SidebarGroup className="z-1">
       <SidebarMenu>
         <SidebarMenuItem>
-          {botRef && shell?.lastVisitedAt !== undefined ? (
+          {botRef && readable && shell?.lastVisitedAt !== undefined ? (
             <GoatBotSidebarPreview
               key={`${botRef.environmentId}:${botRef.threadId}`}
               name={name}
@@ -97,6 +102,7 @@ function GoatBotSidebarObserver({
               botRef={botRef}
               active={active}
               count={count}
+              waiting={waiting}
               onClick={handleClick}
               readMenu={readMenu}
             />
@@ -107,10 +113,12 @@ function GoatBotSidebarObserver({
               slackEnabled={slackEnabled}
               active={active}
               count={count}
+              waiting={waiting}
               onClick={handleClick}
               readMenu={readMenu}
               preview={null}
-              at={shell?.updatedAt ?? null}
+              at={readable ? (shell?.updatedAt ?? null) : null}
+              readable={readable}
             />
           )}
           {main ? <GoatBotMainMenu environmentId={main.environmentId} main={main} /> : null}
@@ -127,6 +135,7 @@ function GoatBotSidebarPreview({
   botRef,
   active,
   count,
+  waiting,
   onClick,
   readMenu,
 }: {
@@ -136,6 +145,12 @@ function GoatBotSidebarPreview({
   botRef: GoatBotRef;
   active: boolean;
   count: number | undefined;
+  waiting: {
+    environmentId: EnvironmentId | null;
+    governed: boolean;
+    count: number | undefined;
+    state: "ready" | "pending" | "unavailable";
+  };
   onClick: () => void;
   readMenu: GoatBotReadMenuProps;
 }) {
@@ -170,10 +185,12 @@ function GoatBotSidebarPreview({
       slackEnabled={slackEnabled}
       active={active}
       count={count}
+      waiting={waiting}
       onClick={onClick}
       readMenu={readMenu}
       preview={preview}
       at={preview?.at ?? shell?.updatedAt ?? null}
+      readable
     />
   );
 }
@@ -184,24 +201,35 @@ function GoatBotConversationRow({
   slackEnabled,
   active,
   count,
+  waiting,
   onClick,
   readMenu,
   preview,
   at,
+  readable,
 }: {
   name: string;
   avatar: string | null;
   slackEnabled: boolean;
   active: boolean;
   count: number | undefined;
+  waiting: {
+    environmentId: EnvironmentId | null;
+    governed: boolean;
+    count: number | undefined;
+    state: "ready" | "pending" | "unavailable";
+  };
   onClick: () => void;
   readMenu: GoatBotReadMenuProps;
   preview: GoatBotConversationPreview | null;
   at: string | null;
+  /** False once this client may no longer read the bot's computer: only the name and Main stay. */
+  readable: boolean;
 }) {
   return (
     <SidebarMenuButton
       size="lg"
+      className="group/bot-row"
       isActive={active}
       aria-current={active ? "page" : undefined}
       onClick={onClick}
@@ -215,38 +243,56 @@ function GoatBotConversationRow({
       >
         {preview?.unread ? <span className="size-2.5 rounded-full bg-info" /> : null}
       </span>
-      <GoatBotMainAvatar size="md" place="list" surface="sidebar" emoji={avatar} countInLabel />
+      <GoatBotMainAvatar
+        size="md"
+        place="list"
+        surface="sidebar"
+        emoji={avatar}
+        countInLabel
+        waitingOverride={waiting.governed ? (count ?? null) : undefined}
+      />
       <span className="flex min-w-0 flex-1 flex-col gap-0.5 group-data-[collapsible=icon]:hidden">
-        <span className="flex min-w-0 items-center gap-2">
-          <span
-            className={
-              preview?.unread
-                ? "min-w-0 flex-1 truncate font-semibold text-sidebar-foreground"
-                : "min-w-0 flex-1 truncate"
-            }
-          >
-            {name}
-            {preview?.unread ? <span className="sr-only">, unread</span> : null}
-          </span>
-          {at ? (
-            <span
-              data-slot="goat-bot-relative-time"
-              className="shrink-0 text-xs font-normal text-sidebar-muted-foreground"
-            >
-              <RelativeTimeLabel timestamp={at} />
+        <span className="group/bot-line flex min-w-0 items-center gap-2">
+          {/* The time wraps onto a hidden second line before the counts would run under the options button. */}
+          <span className="flex h-5 min-w-0 flex-1 flex-wrap content-start items-center gap-x-2 overflow-hidden">
+            {/* With counts, under one letter and its ellipsis (26px) the name fades; it stays in the link's name. */}
+            <span className="@container min-w-0 flex-1">
+              <span
+                className={
+                  preview?.unread
+                    ? "block truncate font-semibold text-sidebar-foreground group-has-[[data-slot=badge]]/bot-line:@max-[1.625rem]:opacity-0 group-has-[[data-slot=goat-bot-waiting-mark]]/bot-line:@max-[1.625rem]:opacity-0"
+                    : "block truncate group-has-[[data-slot=badge]]/bot-line:@max-[1.625rem]:opacity-0 group-has-[[data-slot=goat-bot-waiting-mark]]/bot-line:@max-[1.625rem]:opacity-0"
+                }
+              >
+                {name}
+                {preview?.unread ? <span className="sr-only">, unread</span> : null}
+              </span>
             </span>
+            {at ? (
+              <span
+                data-slot="goat-bot-relative-time"
+                className="shrink-0 text-xs font-normal text-sidebar-muted-foreground"
+              >
+                <RelativeTimeLabel timestamp={at} />
+              </span>
+            ) : null}
+          </span>
+          {readable ? (
+            <GoatBotRowSignals
+              environmentId={waiting.environmentId}
+              botId={BotId.make("main")}
+              governed={waiting.governed}
+              waiting={count}
+              waitingState={waiting.state}
+            />
           ) : null}
-          {count !== undefined && count > 0 ? (
-            <Badge size="sm" variant="secondary" aria-hidden>
-              {count}
-            </Badge>
-          ) : null}
+          <GoatBotWaitingMark count={count} />
         </span>
         <span className="flex min-w-0 items-center gap-1">
           <Badge size="sm" variant="secondary">
             Main
           </Badge>
-          {slackEnabled && (
+          {readable && slackEnabled && (
             <Badge size="sm" variant="secondary">
               Slack
             </Badge>

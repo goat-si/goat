@@ -1,4 +1,5 @@
 import * as M from "@goat/contracts";
+import * as NodeCrypto from "@effect/platform-node/NodeCrypto";
 import * as NodeServices from "@effect/platform-node/NodeServices";
 import * as NodeSqliteClient from "@goat/shared/nodeSqliteClient";
 import * as Effect from "effect/Effect";
@@ -8,21 +9,21 @@ import * as Schema from "effect/Schema";
 // eslint-disable-next-line goat/no-raw-mcp-registration -- Test harness calls only toolkits registered through McpHttpServer.toolkitRegistration.
 import { McpSchema, McpServer } from "effect/ai";
 import { listedToolName, resolveAgentSurfaceEntry } from "@goat/contracts/agentSurface/resolve";
-import { ToolDispatch } from "../../ToolDispatch.ts";
+import { dispatchError, ToolDispatch } from "../../ToolDispatch.ts";
 import { dispatchEnvelope } from "../agentSurface/dispatchEnvelope.ts";
 import * as Profiles from "../../../goatclaw/PermissionProfiles.ts";
-import profileMigration from "../../../persistence/Migrations/109_PermissionProfiles.ts";
-import migration from "../../../persistence/Migrations/088_Memory.ts";
-import searchMigration from "../../../persistence/Migrations/090_MemorySearchCounters.ts";
-import hubMigration from "../../../persistence/Migrations/089_MemoryHubSync.ts";
-import lineageMigration from "../../../persistence/Migrations/092_MemoryImportLineage.ts";
-import checkpointMigration from "../../../persistence/Migrations/093_MemoryCheckpointAccounting.ts";
-import revisionSizeMigration from "../../../persistence/Migrations/105_MemoryRevisionCheckpointSize.ts";
-import reportMigration from "../../../persistence/Migrations/094_MemoryReportLifecycle.ts";
-import usageMigration from "../../../persistence/Migrations/095_MemoryUsageCounters.ts";
-import revertMigration from "../../../persistence/Migrations/096_MemoryRevertResults.ts";
-import readyMigration from "../../../persistence/Migrations/098_MemoryLastReadySpace.ts";
-import administeredMigration from "../../../persistence/Migrations/099_MemoryHubAdministered.ts";
+import profileMigration from "../../../persistence/Migrations/119_PermissionProfiles.ts";
+import migration from "../../../persistence/Migrations/098_Memory.ts";
+import searchMigration from "../../../persistence/Migrations/100_MemorySearchCounters.ts";
+import hubMigration from "../../../persistence/Migrations/099_MemoryHubSync.ts";
+import lineageMigration from "../../../persistence/Migrations/102_MemoryImportLineage.ts";
+import checkpointMigration from "../../../persistence/Migrations/103_MemoryCheckpointAccounting.ts";
+import revisionSizeMigration from "../../../persistence/Migrations/115_MemoryRevisionCheckpointSize.ts";
+import reportMigration from "../../../persistence/Migrations/104_MemoryReportLifecycle.ts";
+import usageMigration from "../../../persistence/Migrations/105_MemoryUsageCounters.ts";
+import revertMigration from "../../../persistence/Migrations/106_MemoryRevertResults.ts";
+import readyMigration from "../../../persistence/Migrations/108_MemoryLastReadySpace.ts";
+import administeredMigration from "../../../persistence/Migrations/109_MemoryHubAdministered.ts";
 import * as RepositoryResolver from "../../../project/RepositoryIdentityResolver.ts";
 import * as Environment from "../../../environment/ServerEnvironment.ts";
 import * as Threads from "../../../orchestration-v2/ThreadManagementService.ts";
@@ -101,7 +102,7 @@ const admin = Layer.effect(Hub.MemoryHubAdministrator, Hub.makeAdministrator).pi
   Layer.provide(
     Secrets.layer.pipe(
       Layer.provide(Config.layerTest(process.cwd(), { prefix: "goat-memory-mcp-test-" })),
-      Layer.provide(NodeServices.layer),
+      Layer.provide(Layer.mergeAll(NodeServices.layer, NodeCrypto.layer)),
     ),
   ),
 );
@@ -171,9 +172,9 @@ const makeLayer = <E, R, E2, R2>(
         }),
       }),
     ),
-    Layer.provideMerge(McpServer.McpServer.layer),
+    Layer.provideMerge(McpHttpServer.layerInProcessMcpServer),
     Layer.provideMerge(threads),
-    Layer.provide(NodeServices.layer),
+    Layer.provide(Layer.mergeAll(NodeServices.layer, NodeCrypto.layer)),
   );
 export const layer = makeLayer(core, McpToolAccessTestkit.layerPermissionProfilesOff);
 /** No memory space is bound on this server. */
@@ -251,9 +252,9 @@ export const layerForThreadEnvironment = <E, R>(
           permit.pipe(Effect.andThen(Effect.fail(new M.MemoryHubError({ code: "hub_disabled" })))),
       }),
     ),
-    Layer.provideMerge(McpServer.McpServer.layer),
+    Layer.provideMerge(McpHttpServer.layerInProcessMcpServer),
     Layer.provideMerge(McpToolAccessTestkit.liveThreadsLayer),
-    Layer.provide(NodeServices.layer),
+    Layer.provide(Layer.mergeAll(NodeServices.layer, NodeCrypto.layer)),
   );
 export const layerWithSourceReadAuthority = (
   authority: Service.MemorySourceReadAuthority["readSource"],
@@ -328,7 +329,10 @@ export const callThroughGoatCall = (name: string, input: Record<string, unknown>
   Effect.gen(function* () {
     const server = yield* McpServer.McpServer;
     const dispatch = ToolDispatch.of({
-      call: (tool, args) => server.callTool({ name: listedName(tool), arguments: args }),
+      call: (tool, args) =>
+        server
+          .callTool({ name: listedName(tool), arguments: args })
+          .pipe(Effect.mapError(dispatchError)),
       served: () => undefined,
     });
     return yield* dispatchEnvelope(dispatch, listedName(name), input, "read");

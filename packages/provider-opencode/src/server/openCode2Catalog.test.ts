@@ -1,44 +1,55 @@
 import { assert, it } from "@effect/vitest";
+import * as Clock from "effect/Clock";
 import * as Effect from "effect/Effect";
+import * as Fiber from "effect/Fiber";
 import * as Layer from "effect/Layer";
+import * as TestClock from "effect/testing/TestClock";
 import { HttpClient, HttpClientResponse } from "effect/http";
 import { describe } from "vite-plus/test";
 
 import { loadOpenCode2Catalog } from "./openCode2Catalog.ts";
+import { makeOpenCode2ModelLoader } from "./status.ts";
 import * as OpenCode2Client from "./v2/OpenCode2Client.ts";
 
 const MODELS_BODY = `{"location":{"directory":"/project"},"data":[{"id":"step-5-preview-free","modelID":"step-5-preview-free","providerID":"opencode-go","name":"Step 5 Preview Free","compatibility":{"reasoningField":"reasoning_content"},"package":"@opencode/ai/providers/openai-compatible","settings":{"apiKey":"sk-demo-not-real","baseURL":"http://127.0.0.1:48990/v1","provider":"opencode-go"},"capabilities":{"tools":true,"input":["text","image","video"],"output":["text"]},"variants":[{"id":"low","settings":{"reasoningEffort":"low"}},{"id":"medium","settings":{"reasoningEffort":"medium"}},{"id":"high","settings":{"reasoningEffort":"high"}}],"time":{"released":1789516800000},"cost":[{"input":0,"output":0,"cache":{"read":0,"write":0}}],"status":"active","enabled":true,"limit":{"context":1000000,"input":1000000,"output":65536}},{"id":"step-5-preview-free","modelID":"step-5-preview-free","providerID":"opencode","name":"Step 5 Preview Free","compatibility":{"reasoningField":"reasoning_content"},"package":"@opencode/ai/providers/openai-compatible","settings":{"apiKey":"public","baseURL":"https://opencode.ai/zen/v1","provider":"opencode"},"capabilities":{"tools":true,"input":["text","image","video"],"output":["text"]},"variants":[{"id":"low","settings":{"reasoningEffort":"low"}},{"id":"medium","settings":{"reasoningEffort":"medium"}},{"id":"high","settings":{"reasoningEffort":"high"}}],"time":{"released":1789516800000},"cost":[{"input":0,"output":0,"cache":{"read":0,"write":0}}],"status":"active","enabled":true,"limit":{"context":1000000,"input":1000000,"output":65536}}]}`;
 
 const PROVIDERS_BODY = `{"location":{"directory":"/project"},"data":[{"id":"opencode-go","integrationID":"opencode-go","name":"OpenCode Go","activation":"enabled","package":"@opencode/ai/providers/openai-compatible","settings":{"apiKey":"sk-demo-not-real","baseURL":"http://127.0.0.1:48990/v1","provider":"opencode-go"}},{"id":"opencode","integrationID":"opencode","name":"OpenCode Zen","activation":"enabled","package":"@opencode/ai/providers/openai-compatible","settings":{"apiKey":"public","baseURL":"https://opencode.ai/zen/v1"}}]}`;
 
+const PLUGINS_ACTIVATING_BODY =
+  '{"_tag":"ServiceUnavailableError","message":"Location plugins did not finish activating","service":"plugin"}';
+
+type Reply = string | { readonly status: number; readonly body: string };
+
 const layerServerReplying = (
-  bodies: Readonly<Record<string, string>>,
+  bodies: Readonly<Record<string, Reply | Effect.Effect<Reply>>>,
   hanging: ReadonlyArray<string> = [],
 ) =>
   Layer.succeed(
     HttpClient.HttpClient,
     HttpClient.make((request) =>
-      Effect.suspend(() => {
+      Effect.gen(function* () {
         const path = new URL(request.url).pathname;
         if (hanging.includes(path)) {
-          return Effect.never;
+          return yield* Effect.never;
         }
-        const body = bodies[path];
-        return Effect.succeed(
-          HttpClientResponse.fromWeb(
-            request,
-            new Response(body ?? '{"_tag":"NotFoundError","message":"not recorded"}', {
-              status: body === undefined ? 404 : 200,
-              headers: { "content-type": "application/json" },
-            }),
-          ),
+        const recorded = bodies[path];
+        const reply = Effect.isEffect(recorded) ? yield* recorded : recorded;
+        const { status, body } =
+          reply === undefined
+            ? { status: 404, body: '{"_tag":"NotFoundError","message":"not recorded"}' }
+            : typeof reply === "string"
+              ? { status: 200, body: reply }
+              : reply;
+        return HttpClientResponse.fromWeb(
+          request,
+          new Response(body, { status, headers: { "content-type": "application/json" } }),
         );
       }),
     ),
   );
 
 const readCatalog = (
-  bodies: Readonly<Record<string, string>>,
+  bodies: Readonly<Record<string, Reply | Effect.Effect<Reply>>>,
   hanging: ReadonlyArray<string> = [],
 ) =>
   Effect.gen(function* () {
@@ -94,6 +105,105 @@ describe("loadOpenCode2Catalog", () => {
 
       assert.strictEqual(error.operation, "model.list");
       assert.match(error.detail, /could not list its models/i);
+    }),
+  );
+
+  // regression: #30251 a busy cold OpenCode 2 holds each model read past 5 seconds, then 503s
+  it.effect("lists models once OpenCode 2 finishes activating its plugins", () =>
+    Effect.gen(function* () {
+      const activatedAt = (yield* Clock.currentTimeMillis) + 60_000;
+      // Timings measured from OpenCode 2.2.7 on a CPU-throttled cold start.
+      const listModels = Effect.gen(function* () {
+        if ((yield* Clock.currentTimeMillis) >= activatedAt) {
+          return yield* Effect.as(Effect.sleep("9 seconds"), MODELS_BODY);
+        }
+        yield* Effect.sleep("14 seconds");
+        return { status: 503, body: PLUGINS_ACTIVATING_BODY };
+      });
+      const load = yield* makeOpenCode2ModelLoader(
+        readCatalog({ "/api/model": listModels, "/api/provider": PROVIDERS_BODY }),
+      );
+      const fiber = yield* Effect.forkChild(load);
+      yield* TestClock.adjust("2 minutes");
+
+      assert.strictEqual((yield* Fiber.join(fiber)).length, 2);
+    }),
+  );
+
+  it.effect("lists no models once a model list that never answers reaches the deadline", () =>
+    Effect.gen(function* () {
+      const load = yield* makeOpenCode2ModelLoader(
+        readCatalog({ "/api/provider": PROVIDERS_BODY }, ["/api/model"]),
+      );
+      const fiber = yield* Effect.forkChild(load);
+      yield* TestClock.adjust("2 minutes");
+
+      assert.deepStrictEqual(yield* Fiber.join(fiber), []);
+    }),
+  );
+});
+
+describe("a lent OpenCode 2 server's model read", () => {
+  const loadHungRead = (environment: NodeJS.ProcessEnv) =>
+    makeOpenCode2ModelLoader(
+      (_identity: undefined, boundRead) =>
+        boundRead(readCatalog({ "/api/provider": PROVIDERS_BODY }, ["/api/model"])),
+      undefined,
+      undefined,
+      Effect.succeed(environment),
+    );
+
+  it.effect("lists nothing yet once a read that never answers reaches 20 seconds", () =>
+    Effect.gen(function* () {
+      const fiber = yield* Effect.forkChild(yield* loadHungRead({}));
+      yield* TestClock.adjust("19999 millis");
+      assert.isUndefined(fiber.pollUnsafe());
+      yield* TestClock.adjust("1 millis");
+
+      assert.deepStrictEqual(yield* Fiber.join(fiber), []);
+    }),
+  );
+
+  it.effect.each([
+    { override: "30000", endsAt: 30_000 },
+    { override: "5000", endsAt: 20_000 },
+  ])(
+    "GOAT_OPENCODE_PROBE_TIMEOUT_MS=$override raises the read cap and never lowers it",
+    ({ override, endsAt }) =>
+      Effect.gen(function* () {
+        const fiber = yield* Effect.forkChild(
+          yield* loadHungRead({ GOAT_OPENCODE_PROBE_TIMEOUT_MS: override }),
+        );
+        yield* TestClock.adjust(endsAt - 1);
+        assert.isUndefined(fiber.pollUnsafe());
+        yield* TestClock.adjust(1);
+
+        assert.deepStrictEqual(yield* Fiber.join(fiber), []);
+      }),
+  );
+
+  // regression: #30251 OpenCode 2.2.7 holds each read about 14 s before the plugin 503
+  it.effect("still lists every model when plugins finish activating within 2 minutes", () =>
+    Effect.gen(function* () {
+      const activatedAt = (yield* Clock.currentTimeMillis) + 60_000;
+      const listModels = Effect.gen(function* () {
+        if ((yield* Clock.currentTimeMillis) >= activatedAt) {
+          return yield* Effect.as(Effect.sleep("9 seconds"), MODELS_BODY);
+        }
+        yield* Effect.sleep("14 seconds");
+        return { status: 503, body: PLUGINS_ACTIVATING_BODY };
+      });
+      const load = yield* makeOpenCode2ModelLoader(
+        (_identity: undefined, boundRead) =>
+          boundRead(readCatalog({ "/api/model": listModels, "/api/provider": PROVIDERS_BODY })),
+        undefined,
+        undefined,
+        Effect.succeed({}),
+      );
+      const fiber = yield* Effect.forkChild(load);
+      yield* TestClock.adjust("2 minutes");
+
+      assert.strictEqual((yield* Fiber.join(fiber)).length, 2);
     }),
   );
 });

@@ -6,7 +6,8 @@ import * as Schema from "effect/Schema";
 const decodeBase = Schema.decodeUnknownOption(
   Schema.Struct({ thread_id: Schema.String, end_byte_offset: Schema.Number }),
 );
-const rolloutId = /[-_]([0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12})\.jsonl$/i;
+const rolloutId =
+  /[-_]([0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12})\.jsonl(?:\.zst)?$/i;
 
 type RecordWithBase = {
   readonly type?: string | undefined;

@@ -215,6 +215,7 @@ export const layer = McpToolAccess.toLayer(
                 mode: "steer_when_ready",
                 createdBy: "agent",
                 creationSource: "mcp",
+                refuseUnrestorableWorktree: true,
               }).pipe(
                 Effect.mapError((error) =>
                   error._tag === "AttachmentClaimError"

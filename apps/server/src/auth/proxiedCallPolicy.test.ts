@@ -1,3 +1,4 @@
+import * as NodeCrypto from "@effect/platform-node/NodeCrypto";
 import * as NodeServices from "@effect/platform-node/NodeServices";
 import { expect, it } from "@effect/vitest";
 import { EnvironmentId, WS_METHODS, WsRpcGroup } from "@goat/contracts";
@@ -77,75 +78,81 @@ const makeClient = (
 const refusedBeforeHandler = (exit: Exit.Exit<unknown, unknown>) =>
   Exit.isFailure(exit) && JSON.stringify(exit.cause).includes("EnvironmentAuthorizationError");
 
-it.layer(NodeServices.layer)("Pen member proxy RPC frames (mesh link design §5)", (it) => {
-  it.effect(
-    "a member proxy's frames pass the hub proxy's policy; a person with the same scopes keeps the plain check",
-    () =>
+it.layer(Layer.mergeAll(NodeServices.layer, NodeCrypto.layer))(
+  "Pen member proxy RPC frames (mesh link design §5)",
+  (it) => {
+    it.effect(
+      "a member proxy's frames pass the hub proxy's policy; a person with the same scopes keeps the plain check",
+      () =>
+        Effect.gen(function* () {
+          const sessions = yield* SessionStore.SessionStore;
+          const proxy = yield* sessions.issue({
+            subject: PEN_PROXY_SUBJECT,
+            method: "bearer-access-token",
+            scopes: ["orchestration:read", "orchestration:operate"],
+            principalKind: "proxied_person",
+            penBinding: binding,
+          });
+          const handled: Array<string> = [];
+          const client = yield* makeClient(
+            { sessionId: proxy.sessionId, scopes: proxy.scopes, principalKind: "proxied_person" },
+            sessions,
+            handled,
+          );
+          expect(yield* client[WS_METHODS.serverProbe]({})).toEqual({});
+          yield* Effect.exit(client[WS_METHODS.projectsEnsureScratch]({}));
+          const stopAll = yield* Effect.exit(client[WS_METHODS.computerUseStopAll]({}));
+          expect(refusedBeforeHandler(stopAll)).toBe(true);
+          expect(handled).toEqual(["probe", "scratch"]);
+
+          const person = yield* sessions.issue({
+            subject: "browser",
+            scopes: ["orchestration:read", "orchestration:operate"],
+          });
+          const personHandled: Array<string> = [];
+          const personClient = yield* makeClient(
+            { sessionId: person.sessionId, scopes: person.scopes, principalKind: "person" },
+            sessions,
+            personHandled,
+          );
+          yield* Effect.exit(personClient[WS_METHODS.computerUseStopAll]({}));
+          expect(personHandled).toEqual(["stopAll"]);
+        }).pipe(Effect.scoped, Effect.provide(layerStore)),
+    );
+
+    it.effect("revocation applies on the next frame; a frame already admitted may finish", () =>
       Effect.gen(function* () {
         const sessions = yield* SessionStore.SessionStore;
         const proxy = yield* sessions.issue({
           subject: PEN_PROXY_SUBJECT,
           method: "bearer-access-token",
-          scopes: ["orchestration:read", "orchestration:operate"],
+          scopes: ["orchestration:read"],
           principalKind: "proxied_person",
           penBinding: binding,
         });
         const handled: Array<string> = [];
+        const gate = {
+          entered: yield* Deferred.make<void>(),
+          release: yield* Deferred.make<void>(),
+        };
         const client = yield* makeClient(
           { sessionId: proxy.sessionId, scopes: proxy.scopes, principalKind: "proxied_person" },
           sessions,
           handled,
+          gate,
         );
-        expect(yield* client[WS_METHODS.serverProbe]({})).toEqual({});
-        yield* Effect.exit(client[WS_METHODS.projectsEnsureScratch]({}));
-        const stopAll = yield* Effect.exit(client[WS_METHODS.computerUseStopAll]({}));
-        expect(refusedBeforeHandler(stopAll)).toBe(true);
-        expect(handled).toEqual(["probe", "scratch"]);
-
-        const person = yield* sessions.issue({
-          subject: "browser",
-          scopes: ["orchestration:read", "orchestration:operate"],
-        });
-        const personHandled: Array<string> = [];
-        const personClient = yield* makeClient(
-          { sessionId: person.sessionId, scopes: person.scopes, principalKind: "person" },
-          sessions,
-          personHandled,
+        const inFlight = yield* client[WS_METHODS.serverProbe]({}).pipe(
+          Effect.forkScoped({ startImmediately: true }),
         );
-        yield* Effect.exit(personClient[WS_METHODS.computerUseStopAll]({}));
-        expect(personHandled).toEqual(["stopAll"]);
+        // The admitted frame reaches its handler before the revocation.
+        yield* Deferred.await(gate.entered);
+        yield* sessions.revoke(proxy.sessionId);
+        yield* Deferred.succeed(gate.release, undefined);
+        expect(yield* Fiber.join(inFlight)).toEqual({});
+        const next = yield* Effect.exit(client[WS_METHODS.serverProbe]({}));
+        expect(refusedBeforeHandler(next)).toBe(true);
+        expect(handled).toEqual(["probe"]);
       }).pipe(Effect.scoped, Effect.provide(layerStore)),
-  );
-
-  it.effect("revocation applies on the next frame; a frame already admitted may finish", () =>
-    Effect.gen(function* () {
-      const sessions = yield* SessionStore.SessionStore;
-      const proxy = yield* sessions.issue({
-        subject: PEN_PROXY_SUBJECT,
-        method: "bearer-access-token",
-        scopes: ["orchestration:read"],
-        principalKind: "proxied_person",
-        penBinding: binding,
-      });
-      const handled: Array<string> = [];
-      const gate = { entered: yield* Deferred.make<void>(), release: yield* Deferred.make<void>() };
-      const client = yield* makeClient(
-        { sessionId: proxy.sessionId, scopes: proxy.scopes, principalKind: "proxied_person" },
-        sessions,
-        handled,
-        gate,
-      );
-      const inFlight = yield* client[WS_METHODS.serverProbe]({}).pipe(
-        Effect.forkScoped({ startImmediately: true }),
-      );
-      // The admitted frame reaches its handler before the revocation.
-      yield* Deferred.await(gate.entered);
-      yield* sessions.revoke(proxy.sessionId);
-      yield* Deferred.succeed(gate.release, undefined);
-      expect(yield* Fiber.join(inFlight)).toEqual({});
-      const next = yield* Effect.exit(client[WS_METHODS.serverProbe]({}));
-      expect(refusedBeforeHandler(next)).toBe(true);
-      expect(handled).toEqual(["probe"]);
-    }).pipe(Effect.scoped, Effect.provide(layerStore)),
-  );
-});
+    );
+  },
+);

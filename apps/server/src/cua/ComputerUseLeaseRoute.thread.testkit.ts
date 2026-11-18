@@ -1,3 +1,4 @@
+import * as NodeCrypto from "@effect/platform-node/NodeCrypto";
 import * as NodeServices from "@effect/platform-node/NodeServices";
 import {
   ComputerUseLeaseThreadUpdate,
@@ -47,7 +48,7 @@ export const threadRouteFixture = Effect.fn("ThreadLeaseRouteTest.fixture")(func
         getEnvironmentId: Effect.succeed(EnvironmentId.make("environment:test")),
         getDescriptor: Effect.die("unused"),
       }),
-      Effect.provide(NodeServices.layer),
+      Effect.provide(Layer.mergeAll(NodeServices.layer, NodeCrypto.layer)),
     );
     const credential = yield* registry.issue({
       threadId,

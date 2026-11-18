@@ -1,5 +1,6 @@
+import { BETA_SETTINGS_SEARCH_ITEMS } from "./settingsSearchBetaItems";
 import { CLONE_SETTINGS_SEARCH_ITEMS } from "./settingsSearchCloneItems";
-import { GOAT_BOT_ROUTING_SEARCH_ITEMS } from "./settingsSearchGoatBotItems";
+import { GOAT_BOT_SEARCH_ITEMS } from "./settingsSearchGoatBotItems";
 import { UPDATES_SETTINGS_SEARCH_ITEMS } from "./settingsSearchUpdatesItems";
 import { GOAT_CONNECT_COMING_SOON, isGoatConnectEnabled } from "@goat/shared/goatConnect";
 import { isElectron } from "~/env";
@@ -13,9 +14,11 @@ import {
 } from "@goat/client-runtime/source-control-clients";
 import { DEFAULT_KEYBINDINGS } from "@goat/shared/keybindings";
 import * as Schema from "effect/Schema";
+import { msg } from "gt-react";
 import { TYPOGRAPHY_ADVANCED_STORAGE_KEY } from "../../appearanceFonts";
 import { writeLocalStorageValue } from "../../hooks/useLocalStorage";
 import { commandLabel } from "./KeybindingsSettings.logic";
+import { AUTOMATION_SETTINGS_SEARCH_ITEMS } from "./settingsSearchAutomationItems";
 import { AGENT_SETTINGS_SEARCH_ITEMS } from "./settingsSearchAgentItems";
 import { BROWSER_SETTINGS_SEARCH_ITEMS } from "./settingsSearchBrowserItems";
 import { COMPUTER_USE_SETTINGS_SEARCH_ITEMS } from "./settingsSearchComputerUseItems";
@@ -96,22 +99,22 @@ export interface SettingsSearchAvailability {
 }
 
 export const SETTINGS_SECTION_LABELS: Readonly<Record<SettingsPath, string>> = {
-  "/settings/diagnostics": "Diagnostics",
+  "/settings/diagnostics": msg("Diagnostics"),
   "/settings/projects": "Project",
-  "/settings/general": "General",
-  "/settings/appearance": "Appearance",
-  "/settings/keybindings": "Keybindings",
-  "/settings/snap-shot": "SnapShots",
-  "/settings/providers": "Providers",
+  "/settings/general": msg("General"),
+  "/settings/appearance": msg("Appearance"),
+  "/settings/keybindings": msg("Keybindings"),
+  "/settings/snap-shot": msg("SnapShots"),
+  "/settings/providers": msg("Providers"),
   "/settings/memory": "Memory",
   "/settings/integrations": "Integrations",
   "/settings/goat-bot": "GOAT Bot",
   "/settings/decision-inbox": "Decision Inbox",
   "/settings/hub": "Hub",
-  "/settings/scheduled-tasks": "Scheduled tasks",
-  "/settings/source-control": "Source control",
+  "/settings/scheduled-tasks": msg("Scheduled tasks"),
+  "/settings/source-control": msg("Source control"),
   "/settings/storage": "Storage",
-  "/settings/connections": "Connections",
+  "/settings/connections": msg("Connections"),
   "/settings/beta": "Beta",
   "/settings/archived": "Archived Threads",
 };
@@ -376,13 +379,13 @@ export const SETTINGS_SEARCH_ITEMS = [
   },
   {
     id: "project-grouping",
-    title: "Project grouping",
+    title: msg("Project grouping"),
     to: "/settings/general",
     searchTerms: ["combine matching repositories environments sidebar"],
   },
   {
     id: "project-order",
-    title: "Project order",
+    title: msg("Project order"),
     to: "/settings/general",
     searchTerms: ["sort projects sidebar manual created recent"],
   },
@@ -411,17 +414,22 @@ export const SETTINGS_SEARCH_ITEMS = [
     to: "/settings/general",
     searchTerms: ["usage quota rate limit reset recover continue"],
   },
+  ...BETA_SETTINGS_SEARCH_ITEMS,
   {
-    id: "new-design",
-    title: "New design",
-    to: "/settings/beta",
-    searchTerms: ["beta redesign look style sidebar composer black quieter classic"],
+    id: "screen-reader-announcements",
+    title: msg("Screen reader announcements"),
+    to: "/settings/general",
+    searchTerms: [
+      "accessibility a11y screen reader nvda jaws voiceover orca narrator speech announce read aloud messages activity steps",
+    ],
   },
   {
-    id: "working-shelf",
-    title: "Working section",
-    to: "/settings/beta",
-    searchTerms: ["beta hide fold running monitoring threads inbox sidebar shelf"],
+    id: "screen-reader-window-title",
+    title: msg("Screen reader window title"),
+    to: "/settings/general",
+    searchTerms: [
+      "accessibility a11y screen reader nvda jaws voiceover orca narrator window title tab title alt tab taskbar thread status order working approval",
+    ],
   },
   {
     id: "guest-links",
@@ -528,13 +536,21 @@ export const SETTINGS_SEARCH_ITEMS = [
   },
   {
     id: "in-app-notifications",
-    title: "In-app notifications",
+    title: msg("In-app notifications"),
     to: "/settings/general",
     searchTerms: ["notification toast popup completion input approval failure"],
   },
   {
+    id: "language",
+    title: msg("Language"),
+    to: "/settings/general",
+    searchTerms: [
+      "locale translation english deutsch german español spanish français french português portuguese brasil brazilian chinese 中文 japanese 日本語 korean 한국어 russian русский sprache idioma langue 语言 言語 언어 язык",
+    ],
+  },
+  {
     id: "time-format",
-    title: "Time format",
+    title: msg("Time format"),
     to: "/settings/general",
     searchTerms: ["timestamp clock locale system browser os 12 hour 24 hour"],
   },
@@ -638,25 +654,25 @@ export const SETTINGS_SEARCH_ITEMS = [
   ...CLONE_SETTINGS_SEARCH_ITEMS,
   {
     id: "unpin-confirmation",
-    title: "Unpin confirmation",
+    title: msg("Unpin confirmation"),
     to: "/settings/general",
     searchTerms: ["ask before thread pinned section"],
   },
   {
     id: "archive-confirmation",
-    title: "Archive confirmation",
+    title: msg("Archive confirmation"),
     to: "/settings/general",
     searchTerms: ["ask before thread second click inline action"],
   },
   {
     id: "delete-confirmation",
-    title: "Delete confirmation",
+    title: msg("Delete confirmation"),
     to: "/settings/general",
     searchTerms: ["ask before thread chat history"],
   },
   {
     id: "quit-confirmation",
-    title: "Quit shortcut",
+    title: msg("Quit shortcut"),
     to: "/settings/general",
     searchTerms: ["confirmation desktop app exit direct hold double click press twice"],
     desktopOnly: true,
@@ -865,35 +881,8 @@ export const SETTINGS_SEARCH_ITEMS = [
     searchTerms: ["xcode android studio sdk avd runtime"],
   },
   ...COMPUTER_USE_SETTINGS_SEARCH_ITEMS,
-  {
-    id: "goat-bot-home",
-    title: "Runs on",
-    to: "/settings/goat-bot",
-    targetId: "goat-bot",
-    searchTerms: ["goat bot home computer environment cluster"],
-  },
-  ...GOAT_BOT_ROUTING_SEARCH_ITEMS,
-  {
-    id: "goat-bot-model",
-    title: "GOAT Bot model",
-    to: "/settings/goat-bot",
-    targetId: "goat-bot",
-    searchTerms: ["goat bot model provider llm assistant turns"],
-  },
-  {
-    id: "slack-connection",
-    title: "Slack connection",
-    to: "/settings/goat-bot",
-    targetId: "slack-channel",
-    environmentOnly: true,
-    searchTerms: ["slack socket mode bot app token mention direct message dm channel thread reply"],
-  },
-  {
-    id: "imessage-channel",
-    title: "iMessage",
-    to: "/settings/goat-bot",
-    searchTerms: ["goat bot imessage messages text sms phone mac link code"],
-  },
+  ...AUTOMATION_SETTINGS_SEARCH_ITEMS,
+  ...GOAT_BOT_SEARCH_ITEMS,
   ...BROWSER_SETTINGS_SEARCH_ITEMS,
   {
     id: "automatic-pull",
@@ -1341,6 +1330,7 @@ export function settingsForThisPlatform(
 export function searchSettings(
   query: string,
   items: ReadonlyArray<SettingsSearchItem> = SETTINGS_SEARCH_ITEMS,
+  translate: (message: string) => string = (message) => message,
 ): ReadonlyArray<SettingsSearchItem> {
   const normalizedQuery = normalizeSearchText(query);
   if (normalizedQuery.length === 0) return [];
@@ -1351,6 +1341,9 @@ export function searchSettings(
       const fields = [
         title,
         normalizeSearchText(SETTINGS_SECTION_LABELS[item.to]),
+        // The labels as displayed, so search also works in the active language.
+        normalizeSearchText(translate(item.title)),
+        normalizeSearchText(translate(SETTINGS_SECTION_LABELS[item.to])),
         ...(item.searchTerms ?? []).map(normalizeSearchText),
       ];
       if (!queryTokens.every((token) => fields.some((field) => field.includes(token)))) return [];

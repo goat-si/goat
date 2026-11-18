@@ -1,6 +1,7 @@
 import { useAuth } from "@clerk/react";
 import { DEFAULT_UNIFIED_SETTINGS } from "@goat/contracts/settings";
 import { Link } from "@tanstack/react-router";
+import { useGT, useMessages } from "gt-react";
 
 import { hasCloudPublicConfig } from "~/cloud/publicConfig";
 import { useGoatConnectAuthPrompt } from "../clerk/useGoatConnectAuthPrompt";
@@ -18,8 +19,11 @@ import { useScopedSettings, useUpdateScopedSettings } from "./useScopedSettings"
 
 /** Features that are still settling in. Some are on by default; each can be turned off here. */
 export function BetaSettingsPanel() {
+  const gt = useGT();
+  const m = useMessages();
   const settings = useScopedSettings();
   const updateSettings = useUpdateScopedSettings();
+  const workingShelf = searchableSetting("working-shelf");
   return (
     <SettingsPageContainer>
       <SettingsSection id="beta" title="Beta">
@@ -45,7 +49,8 @@ export function BetaSettingsPanel() {
           }
         />
         <SettingsRow
-          {...searchableSetting("working-shelf")}
+          {...workingShelf}
+          title={m(workingShelf.title)}
           description="Order active threads by when each last came back to you. Running work stays in Priority."
           resetAction={
             settings.sidebarWorkingShelfEnabled !==
@@ -66,7 +71,7 @@ export function BetaSettingsPanel() {
               onCheckedChange={(checked) =>
                 updateSettings({ sidebarWorkingShelfEnabled: Boolean(checked) })
               }
-              aria-label="Working section"
+              aria-label={gt("Working section")}
             />
           }
         />

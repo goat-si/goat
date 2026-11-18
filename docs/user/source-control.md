@@ -170,7 +170,9 @@ publish it. If Git has no name or email on that machine, the project is created 
 first commit.
 
 Use **Add Project** in the command palette (`Cmd/Ctrl+K`) to clone a repository. Choose a hosting
-provider or paste a Git URL, then choose where to save it. The project opens right away while the
+provider or paste a Git URL, then choose where to save it. A branch or file page copied from GitHub,
+GitLab, GitCafe, Codeberg or Bitbucket also works: GOAT clones that repository's default branch.
+On other hosts, paste the repository's clone URL. The project opens right away while the
 clone runs in the background: you can write your first prompt, and sending waits until the files
 are in place. A toast tracks progress and lets you cancel; if the clone fails, retry it from the
 toast or from the banner above the composer. When the host refuses the machine's SSH key, GOAT
@@ -194,6 +196,11 @@ SSH connection; that is the same as choosing it under **Work on SSH**, which nee
 For a local Git repository without a remote, **Publish Repository** creates a hosted repository,
 adds it as `origin`, and pushes your commits. If there are no commits yet, it creates the remote;
 make your first commit before pushing.
+
+Every hosting provider is listed in **Add Project** and **Publish Repository**. To hide one you do
+not use, turn off its switch under **Settings → Source control** (on mobile, **Project sources**
+under **Source control**). The choice is saved on each machine's server. On a server too old to
+store it, every provider is listed and the switches are disabled.
 
 ## Create a pull request
 
@@ -252,7 +259,8 @@ To close several, press **Close**, drag across the rows in the same group, and r
 Press **Escape** before releasing to cancel. Failed closes stay in the list so you can retry them.
 
 GitHub, GitLab, and Azure DevOps support auto-merge while checks are outstanding. GitHub also
-supports approving waiting fork workflows and opening a revert pull request for a merged change.
+supports approving waiting fork workflows. GitHub and GitLab can open a revert pull request for
+a merged change.
 
 Pull request sharing is off by default. In Settings → Connections → Pull request sharing (Pull
 request routing under Environments on mobile), choose **Read PRs** or **Read and act** for each
@@ -354,7 +362,7 @@ Linking and unlinking are available in the web and desktop clients.
 The **Linked pull requests** panel lists every review and groups stacks. Unlink a review from its
 row menu. An unlinked stack layer stays out of later syncs. Open linked reviews refresh on the server;
 closed reviews refresh periodically so reopening one on the host is detected. Merged reviews refresh
-when requested. A settled thread's reviews stop refreshing until you unsettle it. With **Auto-settle merged threads** enabled, a thread can settle after every linked
+when requested. Settling a thread refreshes its open and closed reviews once; after that they stop refreshing until you unsettle it. With **Auto-settle merged threads** enabled, a thread can settle after every linked
 review is terminal. An open or unsynced link keeps it active.
 
 GOAT automatically watches open pull requests that a thread creates or its agent links, unless you
@@ -362,9 +370,13 @@ turn off automatic watching. Automatic watches can wake the agent without keepin
 **Working**. Ask the agent to watch, monitor, or babysit a pull request to make the watch explicit
 with `goat_call {path:"pull_request.watch"}` and keep the thread working between wakes.
 
-The server checks every two minutes. Checks waiting for workflow approval are reported once and
+The server checks every two minutes. On github.com, when GitHub offers your account pull request
+event streams, it also checks about 20 seconds after GitHub reports a push, review, state change,
+merge conflict, or finished check suite, so a burst of updates is read once. Checks waiting for
+workflow approval are reported once and
 follow the failed-check notification setting. By default, failed checks, passing required checks, and other
-people's comments or reviews wake the agent. Your own comments do not. Bot comments are ignored
+people's comments or reviews wake the agent. On github.com, the merge queue dropping the pull request
+without merging it follows the failed-check setting and carries GitHub's reason. Your own comments do not. Bot comments are ignored
 unless the bot is listed in **Bots that count as people**. Merge conflicts do not wake a thread idle
 for more than 3 days. In **Settings → Organization**, choose **React** to wake the agent immediately,
 **Keep as context** to record an update on the timeline and include it with the next wake without

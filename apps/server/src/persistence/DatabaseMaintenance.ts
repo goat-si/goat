@@ -27,9 +27,16 @@ export class DatabaseMissingError extends Schema.TaggedError<DatabaseMissingErro
 
 export class DatabaseInUseError extends Schema.TaggedError<DatabaseInUseError>()(
   "DatabaseInUseError",
-  { path: Schema.String, cause: Schema.Defect() },
+  {
+    path: Schema.String,
+    cause: Schema.Defect(),
+    pid: Schema.optional(Schema.Int),
+    serviceManaged: Schema.optional(Schema.Boolean),
+  },
 ) {
   override get message() {
+    if (this.pid !== undefined)
+      return `Stop GOAT server process ${this.pid}${this.serviceManaged ? "" : ", which the background service did not start,"} before repairing the database.`;
     return "Stop the GOAT server and desktop app, including any version before 0.1.0, before repairing the database.";
   }
 }
@@ -70,6 +77,8 @@ export class LegacyDatabaseRemoveError extends Schema.TaggedError<LegacyDatabase
   }
 }
 
+export type DatabaseCompactStep = "prune-events" | "vacuum" | "rebuild-search" | "checkpoint";
+
 /** Offline inspection and repair of a GOAT state database, for `goat doctor`. */
 export class DatabaseMaintenance extends Context.Service<
   DatabaseMaintenance,
@@ -84,8 +93,14 @@ export class DatabaseMaintenance extends Context.Service<
       },
       DatabaseMissingError | DatabaseInspectError
     >;
-    /** Compacts history, then VACUUMs into incremental auto_vacuum. Refuses while a server has it open. */
-    readonly compact: (databasePath: string) => Effect.Effect<
+    /**
+     * Compacts history, then VACUUMs into incremental auto_vacuum. Refuses while a server has it open.
+     * Calls `onStep` as each step starts; VACUUM time grows with the whole database size.
+     */
+    readonly compact: (
+      databasePath: string,
+      onStep?: (step: DatabaseCompactStep) => Effect.Effect<void>,
+    ) => Effect.Effect<
       {
         readonly beforeBytes: number;
         readonly afterBytes: number;
@@ -191,13 +206,17 @@ const make = Effect.fnUntraced(function* (options: LegacyRemovalOptions) {
   );
 
   const compact = Effect.fn("DatabaseMaintenance.compact")(
-    function* (databasePath: string) {
+    function* (
+      databasePath: string,
+      onStep: (step: DatabaseCompactStep) => Effect.Effect<void> = () => Effect.void,
+    ) {
       yield* locate(databasePath);
       const beforeBytes = Number((yield* fs.stat(databasePath)).size);
       const result = yield* Effect.gen(function* () {
         const sql = yield* SqlClient.SqlClient;
         yield* lockExclusively(databasePath);
         const maintenance = yield* ProjectionMaintenance.ProjectionMaintenanceV2;
+        yield* onStep("prune-events");
         if (!(yield* maintenance.verify).valid) {
           return yield* new DatabaseProjectionsInvalidError({ path: databasePath });
         }
@@ -205,10 +224,13 @@ const make = Effect.fnUntraced(function* (options: LegacyRemovalOptions) {
         if (!(yield* maintenance.verify).valid) {
           return yield* new DatabaseProjectionsInvalidError({ path: databasePath });
         }
+        yield* onStep("vacuum");
         // VACUUM is required to enable incremental auto_vacuum on existing databases.
         yield* sql`PRAGMA auto_vacuum = INCREMENTAL`;
         yield* sql`VACUUM`;
+        yield* onStep("rebuild-search");
         yield* rebuildMessageSearch(sql);
+        yield* onStep("checkpoint");
         yield* sql`PRAGMA wal_checkpoint(TRUNCATE)`;
         return summary;
       }).pipe(

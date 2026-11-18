@@ -88,9 +88,17 @@ function GoatBotThreadSession({
   // request is taken once and removed from that entry, so Back, Forward or a remount find none.
   const openHomeKey = useLocation({ select: (location) => location.state.goatBotOpenHome ?? null });
   const openHomeEntry = useLocation({ select: (location) => location.state.__TSR_key ?? "" });
-  const [openHome, setOpenHome] = useState<{ key: string; entry: string } | null>(null);
+  const [openHome, setOpenHome] = useState<{
+    key: string;
+    entry: string;
+    taskId?: import("@goat/contracts").ChannelTaskId;
+  } | null>(null);
   if (openHomeKey !== null && openHome?.entry !== openHomeEntry)
-    setOpenHome({ key: openHomeKey, entry: openHomeEntry });
+    setOpenHome(
+      typeof openHomeKey === "string"
+        ? { key: openHomeKey, entry: openHomeEntry }
+        : { ...openHomeKey, entry: openHomeEntry },
+    );
   const router = useRouter();
   // oxlint-disable-next-line goat/react-effect-budget -- Removes the one-shot Open Home request from the browser history entry.
   useEffect(() => {
@@ -195,6 +203,7 @@ function GoatBotThreadSession({
           environmentId={environmentId}
           unreadSince={unreadSince}
           openHome={openHome}
+          onHomeHandled={() => setOpenHome(null)}
           homeMove={
             moveTarget
               ? {

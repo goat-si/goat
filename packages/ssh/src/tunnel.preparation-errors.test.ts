@@ -1,3 +1,4 @@
+import * as NodeCrypto from "@effect/platform-node/NodeCrypto";
 import * as NodeServices from "@effect/platform-node/NodeServices";
 import { assert, describe, it, afterEach, vi } from "@effect/vitest";
 import { cliArchiveFileName } from "@goat/shared/cliRelease";
@@ -74,7 +75,7 @@ describe("SSH runtime preparation errors", () => {
         assert.match(result.failure.message, /absolute/i);
       }
       assert.equal(spawns, 0);
-    }).pipe(Effect.provide(NodeServices.layer), Effect.scoped),
+    }).pipe(Effect.provide(Layer.mergeAll(NodeServices.layer, NodeCrypto.layer)), Effect.scoped),
   );
   it.effect.each([
     {
@@ -103,6 +104,7 @@ describe("SSH runtime preparation errors", () => {
         );
         const managerLayer = Layer.mergeAll(
           NodeServices.layer,
+          NodeCrypto.layer,
           Layer.succeed(ChildProcessSpawner.ChildProcessSpawner, spawner),
           Layer.succeed(HttpClient.HttpClient, testHttpClient),
           Layer.succeed(NetService.NetService, testNetService),
@@ -162,7 +164,7 @@ describe("SSH runtime preparation errors", () => {
           assert.equal(result.failure.acquisition?.requestedVersion, ARCHIVE.archiveVersion);
         }
       }
-    }).pipe(Effect.provide(NodeServices.layer), Effect.scoped),
+    }).pipe(Effect.provide(Layer.mergeAll(NodeServices.layer, NodeCrypto.layer)), Effect.scoped),
   );
 
   it.effect("preserves the executed bundle/cache/HTTPS/gh acquisition chain through wrappers", () =>
@@ -201,7 +203,7 @@ describe("SSH runtime preparation errors", () => {
           sourcesTried: ["bundle", "cache", "https", "gh"],
         });
       } else assert.fail("Expected an archive acquisition failure");
-    }).pipe(Effect.provide(NodeServices.layer), Effect.scoped),
+    }).pipe(Effect.provide(Layer.mergeAll(NodeServices.layer, NodeCrypto.layer)), Effect.scoped),
   );
 
   it.effect("reports an unreachable host as an SSH connection error", () =>
@@ -220,7 +222,7 @@ describe("SSH runtime preparation errors", () => {
           "Cannot reach devbox over SSH (100.127.141.108:22: Operation timed out). Check the network or VPN connection to that host.",
         );
       }
-    }).pipe(Effect.provide(NodeServices.layer)),
+    }).pipe(Effect.provide(Layer.mergeAll(NodeServices.layer, NodeCrypto.layer))),
   );
 
   it.effect("keeps the cause of a non-archive failure and gives no archive advice", () =>
@@ -235,7 +237,7 @@ describe("SSH runtime preparation errors", () => {
         );
         assert.notInclude(result.failure.message, ARCHIVE_ADVICE);
       }
-    }).pipe(Effect.provide(NodeServices.layer)),
+    }).pipe(Effect.provide(Layer.mergeAll(NodeServices.layer, NodeCrypto.layer))),
   );
 
   it.effect("gives archive advice only when no source can supply the archive", () =>
@@ -257,7 +259,7 @@ describe("SSH runtime preparation errors", () => {
           `No GOAT runtime for linux-x64 that works with this app (GOAT ${ARCHIVE.archiveVersion}) could be installed on devbox. Reinstall this app, then reconnect.`,
         );
       }
-    }).pipe(Effect.provide(NodeServices.layer)),
+    }).pipe(Effect.provide(Layer.mergeAll(NodeServices.layer, NodeCrypto.layer))),
   );
 
   it.effect("retained fallback keeps the failed acquisition alongside the actual selection", () =>
@@ -295,7 +297,7 @@ describe("SSH runtime preparation errors", () => {
         platformKey: "linux-x64",
         sourcesTried: [],
       });
-    }).pipe(Effect.provide(NodeServices.layer)),
+    }).pipe(Effect.provide(Layer.mergeAll(NodeServices.layer, NodeCrypto.layer))),
   );
 
   // The archive is found locally, then the upload command exits with `exitCode`.
@@ -338,7 +340,7 @@ describe("SSH runtime preparation errors", () => {
         assert.include(result.failure.message, "No space left on device");
         assert.notInclude(result.failure.message, ARCHIVE_ADVICE);
       }
-    }).pipe(Effect.scoped, Effect.provide(NodeServices.layer)),
+    }).pipe(Effect.scoped, Effect.provide(Layer.mergeAll(NodeServices.layer, NodeCrypto.layer))),
   );
 
   it.effect("keeps a connection lost during upload as an SSH connection error", () =>
@@ -352,6 +354,6 @@ describe("SSH runtime preparation errors", () => {
         assert.instanceOf(result.failure, SshCommandError);
         assert.include(result.failure.message, "Cannot reach devbox over SSH");
       }
-    }).pipe(Effect.scoped, Effect.provide(NodeServices.layer)),
+    }).pipe(Effect.scoped, Effect.provide(Layer.mergeAll(NodeServices.layer, NodeCrypto.layer))),
   );
 });

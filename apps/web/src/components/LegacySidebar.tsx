@@ -91,10 +91,8 @@ import { useDesktopLocalBootstraps } from "../connection/useDesktopLocalBootstra
 import { isElectron } from "../env";
 import { useStableCallback } from "../hooks/useStableCallback";
 import { useNowMinute } from "../hooks/useNowMinute";
-import { useTerminalFocus } from "../hooks/useTerminalFocus";
 import { useOpenPrLink } from "../lib/openPullRequestLink";
 import { releaseProjectDraftUploads } from "../lib/composerDraftUploads";
-import { isTerminalFocused } from "../lib/terminalFocus";
 import { isMacPlatform } from "../lib/utils";
 import { useSidebarPendingFileDropStore } from "../sidebarPendingFileDropStore";
 import { makeWorkspaceFileDropHandlers } from "./chat/workspaceFileDrop";
@@ -124,13 +122,11 @@ import {
 import {
   resolveShortcutCommand,
   shortcutLabelForCommand,
-  shouldShowThreadJumpHintsForModifiers,
   threadJumpCommandForIndex,
   threadJumpIndexFromCommand,
   threadTraversalDirectionFromCommand,
 } from "../keybindings";
 import { isModelPickerOpen } from "../modelPickerVisibility";
-import { useShortcutModifierState } from "../shortcutModifierState";
 import { ensureLocalApi, readLocalApi } from "../localApi";
 import { useComposerDraftStore } from "../composerDraftStore";
 import { useGlobalAgentStore } from "../globalAgentStore";
@@ -149,7 +145,7 @@ import { useEnvironment, useEnvironments, usePrimaryEnvironmentId } from "../sta
 import { buildThreadRouteParams, resolveActiveThreadRouteRef } from "../threadRoutes";
 import { stackedThreadToast, toastManager } from "./ui/toast";
 import { RelativeTime } from "./RelativeTime";
-import { useThreadRouteTarget } from "../hooks/useThreadRouteTarget";
+import { useShownThreadRouteTarget } from "../hooks/useShownThreadRouteTarget";
 import {
   getArm64IntelBuildWarningDescription,
   getDesktopUpdateActionError,
@@ -215,11 +211,11 @@ import {
   sortPinnedThreadsForSidebar,
   useSidebarRowSubscriptionLease,
   setFileDragActive,
-  useThreadJumpHintsVisible,
   ThreadStatusPill,
   type SidebarChildAttention,
   withSidebarChildRequest,
 } from "./Sidebar.logic";
+import { threadShortcutContext, useThreadJumpHintsVisible } from "./sidebar/threadJumpHints";
 import {
   isProjectsViewPinnedThread,
   isProjectsViewListedThread,
@@ -3494,7 +3490,8 @@ export default function LegacySidebar({ routeReveal }: { routeReveal: SidebarRou
   const { archiveThread, deleteThread, markThreadUnread, pinThread, confirmAndUnpinThread } =
     useThreadActions();
   const { isMobile, setOpenMobile } = useSidebar();
-  const routeTarget = useThreadRouteTarget();
+  // The Usage modal keeps the thread behind it current.
+  const routeTarget = useShownThreadRouteTarget().shownTarget;
   const routeDraftThread = useComposerDraftStore((store) =>
     routeTarget?.kind === "draft" ? store.getDraftSession(routeTarget.draftId) : null,
   );
@@ -3519,8 +3516,6 @@ export default function LegacySidebar({ routeReveal }: { routeReveal: SidebarRou
   const clearSelection = useThreadSelectionStore((s) => s.clearSelection);
   const setSelectionAnchor = useThreadSelectionStore((s) => s.setAnchor);
   const platform = navigator.platform;
-  const shortcutModifiers = useShortcutModifierState();
-  const terminalFocused = useTerminalFocus();
   const {
     projectsLength,
     orderedProjects,
@@ -3633,38 +3628,20 @@ export default function LegacySidebar({ routeReveal }: { routeReveal: SidebarRou
   };
 
   const isManualProjectSorting = sidebarProjectSortOrder === "manual";
-  // Build before modifier-dependent context to give the compiler a separate cache used by every row.
   const threadJumpLabelByKey = buildThreadJumpLabelMap({
     keybindings,
     platform,
     terminalOpen: routeTerminalOpen,
     threadJumpCommandByKey,
   });
-  const sidebarShortcutContext = {
-    terminalFocus: terminalFocused,
-    terminalOpen: routeTerminalOpen,
-    modelPickerOpen: isModelPickerOpen(),
-  };
-  const shouldShowThreadJumpHintsNow = shouldShowThreadJumpHintsForModifiers(
-    shortcutModifiers,
-    keybindings,
-    {
-      platform,
-      context: sidebarShortcutContext,
-    },
-  );
-  const showThreadJumpHints = useThreadJumpHintsVisible(shouldShowThreadJumpHintsNow);
+  const showThreadJumpHints = useThreadJumpHintsVisible(keybindings, routeThreadRef);
   const visibleThreadJumpLabelByKey = showThreadJumpHints
     ? threadJumpLabelByKey
     : EMPTY_THREAD_JUMP_LABELS;
   const orderedSidebarThreadKeys = visibleSidebarThreadKeys;
 
   const onWindowKeyDown = useEffectEvent((event: globalThis.KeyboardEvent) => {
-    const shortcutContext = {
-      terminalFocus: isTerminalFocused(),
-      terminalOpen: routeTerminalOpen,
-      modelPickerOpen: isModelPickerOpen(),
-    };
+    const shortcutContext = threadShortcutContext(routeThreadRef);
 
     if (event.defaultPrevented || event.repeat || isCommandPaletteOpen() || isModelPickerOpen()) {
       return;

@@ -10,6 +10,7 @@ import {
 import {
   canRemoveHubNode,
   HUB_NODE_IMPORT_NOTICE,
+  hubNodeClassView,
   hubNodeLastSeenLabel,
   hubNodeRemovalInput,
   hubNodeRouteLabel,
@@ -28,7 +29,7 @@ import {
   squashAtomCommandFailure,
   type AtomCommandResult,
 } from "@goat/client-runtime/state/runtime";
-import type { EnvironmentId } from "@goat/contracts";
+import type { EnvironmentId, HubNode } from "@goat/contracts";
 import { useEffect, useState } from "react";
 import { Pressable, View } from "react-native";
 import { useEnvironments, type EnvironmentPresentation } from "../../state/environments";
@@ -143,6 +144,23 @@ function consentText(
   return value.expiresAt === null
     ? ""
     : ` Consent ends ${new Date(value.expiresAt).toLocaleString()}.`;
+}
+
+/** A disposable machine's class, Pen membership and who attached it, as web shows them as badges. */
+function HubNodeClass({ node, now }: { readonly node: HubNode; readonly now: number }) {
+  const view = hubNodeClassView(node.machineClass, now);
+  if (view === undefined) return null;
+  return (
+    <Text
+      className={
+        node.machineClass?.class === "disposable"
+          ? "text-sm text-foreground-muted"
+          : "text-sm text-warning-foreground"
+      }
+    >
+      {[...view.badges.map((badge) => badge.label), view.detail].join(" · ")}
+    </Text>
+  );
 }
 
 /** The hub's machines with their OpenCodex link, as Settings → Hub shows them on desktop and web. */
@@ -432,6 +450,7 @@ function HubDevicesList({
                     {node.lastSeenAt ? ` · ${hubNodeLastSeenLabel(node.lastSeenAt, now)}` : ""}
                   </Text>
                 </View>
+                <HubNodeClass node={node} now={now} />
               </>
             )}
             {device === null ? null : (

@@ -12,7 +12,7 @@ import * as EffectAcpSchema from "effect-acp/compat";
 import * as EffectAcpSchemaV1 from "effect-acp/schema-v1";
 import { deriveToolActivityPresentation, mergeToolActivityData } from "@goat/shared/toolActivity";
 import { GOAT_MCP_TOOL_NAMES } from "@goat/shared/goatMcpToolPresentation";
-import { acpMcpFallbackInput, ompDeviceGoatToolCall } from "./acpMcpCallInput.ts";
+import { acpMcpFallbackInput, hermesGoatTool, ompDeviceGoatToolCall } from "./acpMcpCallInput.ts";
 import type {
   OrchestrationV2ProviderThreadNativeMetadata,
   ThreadTokenUsageSnapshot,
@@ -844,6 +844,19 @@ function makeToolCallState(
       ? title
       : undefined;
   const data: Record<string, unknown> = { toolCallId };
+  // ACP v2 clears a field set to null; mergeToolCallState consumes these markers.
+  const clearable = {
+    name: input.name,
+    title: input.title,
+    kind: input.kind,
+    status: input.status,
+    content: input.content,
+    rawInput: input.rawInput,
+    meta: input._meta,
+  };
+  for (const [key, value] of Object.entries(clearable)) {
+    if (value === null) data[key] = null;
+  }
   if (input.name != null) data.name = input.name;
   if (kind) {
     data.kind = kind;
@@ -931,9 +944,9 @@ export function mergeToolCallState(
   next: AcpToolCallState,
 ): AcpToolCallState {
   const nextKind = next.kind ?? (typeof next.data.kind === "string" ? next.data.kind : undefined);
-  const kind = nextKind ?? previous?.kind;
-  const title = next.title ?? previous?.title;
-  const status = next.status ?? previous?.status;
+  const kind = next.data.kind === null ? nextKind : (nextKind ?? previous?.kind);
+  const title = next.data.title === null ? next.title : (next.title ?? previous?.title);
+  const status = next.data.status === null ? next.status : (next.status ?? previous?.status);
   const command = next.command ?? previous?.command;
   const detail = next.detail ?? previous?.detail;
   const data = mergeToolActivityData(previous?.data, next.data) ?? next.data;
@@ -1139,6 +1152,8 @@ export function extractMcpToolCallIdentity(
   for (const candidate of candidates) {
     const trimmed = candidate.trim();
     const qualified = /^mcp__(.+?)__(.+)$/i.exec(trimmed);
+    const hermesTool = hermesGoatTool(qualified?.[1], qualified?.[2]);
+    if (hermesTool !== undefined) return { server: "goat", tool: hermesTool };
     if (qualified?.[1] && qualified[2] && !/^goat$/i.test(qualified[1]))
       return { server: qualified[1], tool: qualified[2] };
     // The server key and the tool prefix are both "goat", so "goat_thread_send"

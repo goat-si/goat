@@ -66,11 +66,18 @@ export function makeTestAdapter(input: {
   readonly failure?: ReturnType<typeof makeProviderFailure>;
   readonly failedRunOrdinals?: ReadonlySet<number>;
   readonly interruptedRunOrdinals?: ReadonlySet<number>;
+  readonly cancelledRunOrdinals?: ReadonlySet<number>;
   readonly holdRunOrdinal?: number;
   readonly pendingBackgroundWork?: Ref.Ref<boolean>;
   readonly subagentOnlyBackgroundWork?: boolean;
   readonly holdFirstTurn?: Deferred.Deferred<void>;
   readonly releaseFirstTurn?: Deferred.Deferred<void>;
+  /** A tool call the held turn reports running before it holds. */
+  readonly heldRunningToolCall?: {
+    readonly id: TurnItemId;
+    readonly toolName: string;
+  };
+  readonly backgroundTasksEndWithProcess?: true;
   readonly backgroundWork?: Ref.Ref<boolean>;
   readonly closedSessions?: Ref.Ref<ReadonlyArray<string>>;
 }): ProviderAdapter.ProviderAdapterV2["Service"] {
@@ -109,6 +116,9 @@ export function makeTestAdapter(input: {
         providerSessionId: sessionInput.providerSessionId,
         providerSession,
         events: Stream.fromPubSub(events),
+        ...(input.backgroundTasksEndWithProcess === undefined
+          ? {}
+          : { backgroundTasksEndWithProcess: input.backgroundTasksEndWithProcess }),
         ...(input.pendingBackgroundWork === undefined
           ? {}
           : {
@@ -231,23 +241,66 @@ export function makeTestAdapter(input: {
                 : { nativeThreadHasTurns: turnInput.nativeThreadHasTurns }),
             },
           ]);
+          const providerTurnId = ProviderTurnId.make(
+            `provider-turn:${input.driver}:${turnInput.threadId}:${turnInput.runOrdinal}`,
+          );
           if (
             turnInput.runOrdinal === (input.holdRunOrdinal ?? 1) &&
             input.holdFirstTurn !== undefined
           ) {
+            if (input.heldRunningToolCall !== undefined) {
+              const startedAt = yield* DateTime.now;
+              yield* PubSub.publish(events, {
+                type: "provider_turn.updated",
+                driver: input.driver,
+                providerTurn: {
+                  id: providerTurnId,
+                  providerThreadId: turnInput.providerThread.id,
+                  nodeId: turnInput.rootNodeId,
+                  runAttemptId: turnInput.attemptId,
+                  nativeTurnRef: null,
+                  ordinal: turnInput.runOrdinal,
+                  status: "running",
+                  startedAt,
+                  completedAt: null,
+                },
+              });
+              yield* PubSub.publish(events, {
+                type: "turn_item.updated",
+                driver: input.driver,
+                turnItem: {
+                  id: input.heldRunningToolCall.id,
+                  threadId: turnInput.threadId,
+                  runId: turnInput.runId,
+                  nodeId: turnInput.rootNodeId,
+                  providerThreadId: turnInput.providerThread.id,
+                  providerTurnId,
+                  nativeItemRef: null,
+                  parentItemId: null,
+                  ordinal: turnInput.runOrdinal * 100 + 1,
+                  status: "running",
+                  title: null,
+                  startedAt,
+                  completedAt: null,
+                  updatedAt: startedAt,
+                  type: "dynamic_tool",
+                  toolName: input.heldRunningToolCall.toolName,
+                  input: {},
+                },
+              });
+            }
             yield* Deferred.succeed(input.holdFirstTurn, undefined);
             if (input.releaseFirstTurn === undefined) return;
             yield* Deferred.await(input.releaseFirstTurn);
           }
           const eventTime = yield* DateTime.now;
-          const providerTurnId = ProviderTurnId.make(
-            `provider-turn:${input.driver}:${turnInput.threadId}:${turnInput.runOrdinal}`,
-          );
           const terminalStatus = input.failedRunOrdinals?.has(turnInput.runOrdinal)
             ? "failed"
             : input.interruptedRunOrdinals?.has(turnInput.runOrdinal)
               ? "interrupted"
-              : "completed";
+              : input.cancelledRunOrdinals?.has(turnInput.runOrdinal)
+                ? "cancelled"
+                : "completed";
           const response =
             input.responseByThreadId?.[turnInput.threadId]?.[turnInput.runOrdinal] ??
             input.responseByRunOrdinal[turnInput.runOrdinal] ??

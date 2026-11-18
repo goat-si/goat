@@ -290,6 +290,29 @@ export const HubMachineListInput = Schema.Struct({
 });
 export type HubMachineListInput = typeof HubMachineListInput.Type;
 
+/**
+ * Detaches an admitted machine: GOAT removes its OpenCodex link and the lightweight Child with a
+ * journalled purge, and the record ends purged. `force` (a person only) removes the link without
+ * the machine, leaving a tombstone GOAT cleans once the machine answers. The machine stays a Pen
+ * member until a person removes it with pen revoke.
+ */
+export const HubMachineDetachInput = Schema.Struct({
+  attachId: DisposableAttachId,
+  clientRequestId: RequestKey,
+  force: Schema.optionalKey(Schema.Boolean),
+});
+export type HubMachineDetachInput = typeof HubMachineDetachInput.Type;
+
+/**
+ * A person frees the slot of an attach whose invite Pen lost or used without a saved admit. The
+ * machine may still have joined Pen; if so, a person removes it with pen revoke.
+ */
+export const HubMachineReleaseInput = Schema.Struct({
+  attachId: DisposableAttachId,
+  clientRequestId: RequestKey,
+});
+export type HubMachineReleaseInput = typeof HubMachineReleaseInput.Type;
+
 /** One attach step as the caller sees it; texts are GOAT's own, never a machine's output. */
 export const HubMachineStep = Schema.Struct({
   step: TrimmedNonEmptyString.check(Schema.isMaxLength(40)),
@@ -356,6 +379,9 @@ export const HubMachinesErrorReason = Schema.Literals([
   "conflict",
   "unknown_outcome",
   "storage_failed",
+  "person_required",
+  "hold_unsupported",
+  "pen_unavailable",
 ]);
 export type HubMachinesErrorReason = typeof HubMachinesErrorReason.Type;
 

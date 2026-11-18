@@ -1,4 +1,5 @@
 import { unlistedApprovalsNotice } from "@goat/client-runtime/state/decision-inbox";
+import { scopeProjectRef } from "@goat/client-runtime/environment";
 import { useSelectWorkspaceDetail } from "../workspace/useSelectWorkspaceDetail";
 import { useIsFocused, useNavigation } from "@react-navigation/native";
 import { View } from "react-native";
@@ -9,7 +10,7 @@ import { EmptyState } from "../../components/ui/EmptyState";
 import { ScreenContent } from "../../components/ui/ScreenContent";
 import { ScreenScrollView } from "../../components/ui/ScreenScrollView";
 import { AppBar } from "../../components/ui/AppBar";
-import { useThreadShell } from "../../state/entities";
+import { useProject, useThreadShell } from "../../state/entities";
 import { useSavedRemoteConnection } from "../../state/use-remote-environment-registry";
 import { PendingApprovalCard } from "../threads/PendingApprovalCard";
 import { HumanHandoffCard } from "../threads/HumanHandoffCard";
@@ -64,6 +65,9 @@ function FocusedDecisionsContent(props: {
   const navigation = useNavigation();
   const selectDetail = useSelectWorkspaceDetail();
   const thread = useThreadShell(current?.ref ?? null);
+  const project = useProject(
+    thread ? scopeProjectRef(thread.environmentId, thread.projectId) : null,
+  );
   const parentThread = useThreadShell(current?.routing.parentRef ?? null);
   const parentTitle = parentThread?.title ?? current?.routing.parentTitle;
   const connection = useSavedRemoteConnection(current?.ref.environmentId ?? null);
@@ -186,6 +190,9 @@ function FocusedDecisionsContent(props: {
                     Fill in the pending answers
                   </Text>
                   <PendingUserInputBody
+                    environmentId={current.ref.environmentId}
+                    threadId={current.ref.threadId}
+                    workspaceRoot={thread?.worktreePath ?? project?.workspaceRoot ?? null}
                     pendingUserInput={userInput}
                     drafts={drafts}
                     disabled={!canOperateThread || paused}

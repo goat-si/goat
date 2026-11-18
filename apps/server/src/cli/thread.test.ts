@@ -2,19 +2,25 @@ import * as NodeServices from "@effect/platform-node/NodeServices";
 import * as HostProcess from "@goat/shared/HostProcess";
 import * as FileSystem from "effect/FileSystem";
 import * as Path from "effect/Path";
+import { ChildProcess, ChildProcessSpawner } from "effect/process";
 import { assert, it } from "@effect/vitest";
 import { ProjectId, RunId, ThreadId } from "@goat/contracts";
 import * as Effect from "effect/Effect";
+import * as Schema from "effect/Schema";
+import * as Fiber from "effect/Fiber";
+import * as TestClock from "effect/testing/TestClock";
 
 import {
   resolveProject,
   readLatestMessages,
+  ThreadToolFailedError,
   type ThreadTools,
   titleFromMessage,
   waitForRun,
 } from "./thread.ts";
 
 const threadId = ThreadId.make("thread-1");
+const isToolFailure = Schema.is(ThreadToolFailedError);
 const runId = RunId.make("run-1");
 
 /** Answers each tool call with the next scripted response for that tool. */
@@ -23,7 +29,8 @@ const scriptedTools = (script: Record<string, Array<unknown>>) => {
   const call = ((tool: string, args: unknown) => {
     calls.push({ tool, args });
     const next = script[tool]?.shift();
-    return next === undefined ? Effect.die(`unscripted ${tool} call`) : Effect.succeed(next);
+    if (next === undefined) return Effect.die(`unscripted ${tool} call`);
+    return isToolFailure(next) ? Effect.fail(next) : Effect.succeed(next);
   }) as ThreadTools["call"];
   return { tools: { call } satisfies ThreadTools, calls };
 };
@@ -83,6 +90,157 @@ it.effect("--wait reports its run's result when a later run is the one waiting",
     });
   }),
 );
+/** The reads that ask whether a run after `runId` holds a message someone sent. */
+const laterRunReads = (
+  laterRun: RunId,
+  items: ReadonlyArray<{ readonly runId: RunId; readonly type: string }>,
+) => [
+  {
+    recentRuns: [
+      { runId, ordinal: 1 },
+      { runId: laterRun, ordinal: 2 },
+    ],
+  },
+  { thread: {}, items, nextPosition: null, hasMore: false },
+];
+
+it.effect("--wait lasts until background work the agent waits on wakes it and that run ends", () =>
+  Effect.gen(function* () {
+    const wakeRun = RunId.make("run-2");
+    const { tools, calls } = scriptedTools({
+      goat_thread_wait: [
+        { threadId, runId, status: "completed", timedOut: false },
+        {
+          threadId,
+          runId,
+          status: "completed",
+          timedOut: false,
+          delegatedWorkSettled: true,
+          resultRun: { runId: wakeRun, status: "completed" },
+        },
+      ],
+      // The wake run starts from a notification, which the messages view leaves out.
+      goat_thread_read: laterRunReads(wakeRun, []),
+    });
+
+    const outcome = yield* waitForRun(tools, threadId, runId, true);
+
+    assert.deepStrictEqual(
+      calls.filter((entry) => entry.tool === "goat_thread_wait").map((entry) => entry.args),
+      [
+        { threadId, runId, timeoutMs: 15_000 },
+        { threadId, runId, timeoutMs: 15_000, untilDelegatedWorkSettled: true },
+      ],
+    );
+    assert.deepStrictEqual(outcome, { type: "ended", runId: wakeRun, status: "completed" });
+  }),
+);
+
+it.effect(
+  "--wait waits out the moment between background work ending and its wake run starting",
+  () =>
+    Effect.gen(function* () {
+      const wakeRun = RunId.make("run-2");
+      const ownOnly = { recentRuns: [{ runId, ordinal: 1, status: "completed" }] };
+      const withWake = (status: string) => [
+        {
+          recentRuns: [
+            { runId, ordinal: 1, status: "completed" },
+            { runId: wakeRun, ordinal: 2, status },
+          ],
+        },
+        { thread: {}, items: [], nextPosition: null, hasMore: false },
+      ];
+      const settled = (resultRun: RunId) => ({
+        threadId,
+        runId,
+        status: "completed",
+        timedOut: false,
+        delegatedWorkSettled: true,
+        resultRun: { runId: resultRun, status: "completed" },
+      });
+      const { tools } = scriptedTools({
+        goat_thread_wait: [
+          { threadId, runId, status: "completed", timedOut: false },
+          { threadId, runId, status: "completed", timedOut: true, delegatedWorkSettled: false },
+          // The work ended, and the run it wakes is not recorded yet.
+          settled(runId),
+          settled(wakeRun),
+        ],
+        goat_thread_read: [
+          ownOnly,
+          { thread: { pendingRequestCount: 0 } },
+          ownOnly,
+          ...withWake("running"),
+          ...withWake("completed"),
+        ],
+      });
+
+      const fiber = yield* Effect.forkChild(waitForRun(tools, threadId, runId, true));
+      yield* TestClock.adjust("500 millis");
+
+      assert.deepStrictEqual(yield* Fiber.join(fiber), {
+        type: "ended",
+        runId: wakeRun,
+        status: "completed",
+      });
+    }),
+);
+
+it.effect(
+  "--wait keeps its own run's result when another client's later run settles the thread",
+  () =>
+    Effect.gen(function* () {
+      const sentRun = RunId.make("run-2");
+      const { tools } = scriptedTools({
+        goat_thread_wait: [
+          { threadId, runId, status: "completed", timedOut: false },
+          {
+            threadId,
+            runId,
+            status: "completed",
+            timedOut: false,
+            delegatedWorkSettled: true,
+            resultRun: { runId: sentRun, status: "failed" },
+          },
+        ],
+        goat_thread_read: laterRunReads(sentRun, [{ runId: sentRun, type: "user_message" }]),
+      });
+
+      assert.deepStrictEqual(yield* waitForRun(tools, threadId, runId, true), {
+        type: "ended",
+        runId,
+        status: "completed",
+      });
+    }),
+);
+
+it.effect.each([
+  {
+    server: "refuses the argument",
+    answer: new ThreadToolFailedError({
+      tool: "goat_thread_wait",
+      detail: "goat_thread_wait does not take untilDelegatedWorkSettled, so nothing ran.",
+    }),
+  },
+  {
+    server: "ignores the argument",
+    answer: { threadId, runId, status: "completed", timedOut: false },
+  },
+])("--wait on a server that $server reports its own run's end, as before", ({ answer }) =>
+  Effect.gen(function* () {
+    const { tools } = scriptedTools({
+      goat_thread_wait: [{ threadId, runId, status: "completed", timedOut: false }, answer],
+    });
+
+    assert.deepStrictEqual(yield* waitForRun(tools, threadId, runId, true), {
+      type: "ended",
+      runId,
+      status: "completed",
+    });
+  }),
+);
+
 /** Serves goat_thread_read pages the way the server does: positions count every item. */
 const timelineTools = (types: ReadonlyArray<string>) => {
   const items = types.map((type, position) => ({ position, itemId: `item-${position}`, type }));
@@ -200,5 +358,71 @@ it.effect("resolves home-relative project paths and preserves exact IDs", () =>
       );
       assert.equal(project.id, ProjectId.make(expected));
     }
+  }).pipe(Effect.scoped, Effect.provide(NodeServices.layer)),
+);
+
+const git = Effect.fn("test.git")(function* (cwd: string, args: ReadonlyArray<string>) {
+  const spawner = yield* ChildProcessSpawner.ChildProcessSpawner;
+  const exitCode = yield* spawner.exitCode(ChildProcess.make("git", args, { cwd }));
+  assert.strictEqual(Number(exitCode), 0, `git ${args.join(" ")}`);
+});
+
+const commitAll = (cwd: string) =>
+  Effect.andThen(
+    git(cwd, ["add", "."]),
+    git(cwd, [
+      "-c",
+      "user.name=Test",
+      "-c",
+      "user.email=test@example.test",
+      "commit",
+      "--quiet",
+      "-m",
+      "initial",
+    ]),
+  );
+
+it.live("resolves a path inside a git worktree of the project's repository to that project", () =>
+  Effect.gen(function* () {
+    const fileSystem = yield* FileSystem.FileSystem;
+    const path = yield* Path.Path;
+    const root = yield* fileSystem.makeTempDirectoryScoped({ prefix: "goat-thread-worktree-" });
+    const repo = path.join(root, "sample");
+    const worktree = path.join(root, "worktrees", "sample", "t3-8ff64c24");
+    const feature = path.join(root, "wt", "feature");
+    const featureWorktree = path.join(root, "worktrees", "feature", "t3-1a2b3c4d");
+    yield* fileSystem.makeDirectory(path.join(repo, "pkg"), { recursive: true });
+    yield* fileSystem.writeFileString(path.join(repo, "pkg", "index.ts"), "export {};\n");
+    yield* git(repo, ["init", "--quiet", "-b", "main"]);
+    yield* commitAll(repo);
+    yield* git(repo, ["worktree", "add", "--quiet", "-b", "t3/8ff64c24", worktree]);
+    yield* git(repo, ["worktree", "add", "--quiet", "-b", "feature", feature]);
+    yield* git(feature, ["worktree", "add", "--quiet", "-b", "t3/1a2b3c4d", featureWorktree]);
+
+    const project = (id: string, workspaceRoot: string) => ({
+      id: ProjectId.make(id),
+      title: path.basename(workspaceRoot),
+      workspaceRoot,
+    });
+    const sample = project("project-sample", repo);
+    const featureProject = project("project-feature", feature);
+    const resolveFrom = (
+      projects: ReadonlyArray<ReturnType<typeof project>>,
+      workingDirectory: string,
+      identifier = ".",
+    ) =>
+      resolveProject(
+        scriptedTools({ goat_project_list: [{ projects, nextCursor: null }] }).tools,
+        identifier,
+      ).pipe(Effect.provideService(HostProcess.WorkingDirectory, workingDirectory));
+
+    assert.deepStrictEqual(yield* resolveFrom([sample], worktree), sample);
+    assert.deepStrictEqual(yield* resolveFrom([sample], path.join(worktree, "pkg")), sample);
+    assert.deepStrictEqual(yield* resolveFrom([sample], worktree, "pkg/index.ts"), sample);
+    assert.deepStrictEqual(yield* resolveFrom([featureProject], featureWorktree), featureProject);
+    const ambiguous = yield* Effect.flip(resolveFrom([sample, featureProject], featureWorktree));
+    assert.strictEqual(ambiguous._tag, "ThreadUsageError");
+    assert.include(ambiguous.message, "sample (project-sample)");
+    assert.include(ambiguous.message, "feature (project-feature)");
   }).pipe(Effect.scoped, Effect.provide(NodeServices.layer)),
 );

@@ -1,4 +1,4 @@
-import { scopedThreadKey } from "@goat/client-runtime/environment";
+import { parseScopedThreadKey, scopedThreadKey } from "@goat/client-runtime/environment";
 import { shellSyncMessage } from "@goat/client-runtime/state/presentation";
 import type { EnvironmentId, ScopedThreadRef } from "@goat/contracts";
 import { useAtomRefresh } from "@effect/atom-react";
@@ -6,6 +6,7 @@ import { useNavigate } from "@tanstack/react-router";
 import { useEffect, useState } from "react";
 
 import ChatView from "./ChatView";
+import { useForkSourceMissing } from "./forkSourceShell";
 import { GoatBotThreadView } from "./goatBot/GoatBotThreadView";
 import { useGoatBotMemberAt } from "./goatBot/goatBotMemberThread";
 import { GoatBotMemberUnavailable } from "./goatBot/GoatBotMemberUnavailable";
@@ -26,13 +27,27 @@ import { useGlobalAgentStore } from "../globalAgentStore";
 import { useSidebarPendingFileDropStore } from "../sidebarPendingFileDropStore";
 import { useEnvironmentThreadRefs, useThreadRefs, useQuietThreadShell } from "../state/entities";
 import { environmentShell, useEnvironmentShellStatus } from "../state/shell";
-import { useEnvironmentThread } from "../state/threads";
+import { threadFamilies, useEnvironmentThread } from "../state/threads";
+import { appAtomRegistry } from "../rpc/atomRegistry";
 import {
   buildThreadRouteParams,
   isThreadRouteSnapshotAuthoritative,
   resolveThreadRouteRenderState,
   type ThreadRouteTarget,
 } from "../threadRoutes";
+
+function useOpenThreadFamily(threadRef: ScopedThreadRef | null, missing: boolean) {
+  const key = threadRef === null ? null : scopedThreadKey(threadRef);
+  const [mountedKey, setMountedKey] = useState<string | null>(null);
+  const nextKey = missing || mountedKey === key ? key : null;
+  if (nextKey !== mountedKey) setMountedKey(nextKey);
+  // oxlint-disable-next-line goat/react-effect-budget -- keeps the open thread family mounted until the route changes
+  useEffect(() => {
+    const ref = mountedKey === null ? null : parseScopedThreadKey(mountedKey);
+    if (ref === null) return;
+    return threadFamilies.mount(appAtomRegistry, ref.environmentId, ref.threadId);
+  }, [mountedKey]);
+}
 
 /**
  * Render in the shared layout to retain ChatView across route swaps; plain server threads remain unkeyed.
@@ -130,6 +145,11 @@ export function ThreadRouteView({
   const unlistedThreadDetail = useEnvironmentThread(
     unlistedThreadRef?.environmentId ?? null,
     unlistedThreadRef?.threadId ?? null,
+  );
+  const forkSourceMissing = useForkSourceMissing(serverThreadRef, serverThreadShell);
+  useOpenThreadFamily(
+    serverThreadRef,
+    bootstrapComplete && (unlistedThreadRef !== null || forkSourceMissing),
   );
   const renderState = resolveThreadRouteRenderState({
     bootstrapComplete,

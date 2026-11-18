@@ -1,6 +1,7 @@
 import { act, type ReactNode } from "react";
 import { createRoot } from "react-dom/client";
-import type { GoatBotTaskCard } from "@goat/client-runtime/goatBot";
+import { presentTaskChip, type GoatBotTaskCard } from "@goat/client-runtime/goatBot";
+import { ChannelConversationId, ChannelTaskId, type ChannelTaskChip } from "@goat/contracts";
 import { expect, it, vi } from "vite-plus/test";
 
 vi.mock("react-native", () => ({
@@ -91,5 +92,45 @@ it("without its status, a row still names the work and opens its thread", async 
   expect(row?.getAttribute("aria-label")).not.toContain("Needs your input");
   await act(async () => row?.click());
   expect(onSelectThread).toHaveBeenCalledWith({ environmentId: "env", id: "t-1" });
+  await act(async () => root.unmount());
+});
+
+// The shared reader decides the attention line; this pins what both kinds of row show and say.
+it("shows and says what waits on a person first, and no missing-report line under a written result", async () => {
+  (globalThis as { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT = true;
+  const finished = (extra: Partial<ChannelTaskChip>) =>
+    presentTaskChip({
+      taskId: ChannelTaskId.make("task-1"),
+      conversationId: ChannelConversationId.make("conv-1"),
+      taskVersion: 3,
+      title: "Summarize the README",
+      status: "completed",
+      completionReport: "missing",
+      originKind: "goat",
+      requesterLabel: "Jun",
+      createdAt: "2026-11-11T02:00:00.000Z",
+      updatedAt: "2026-11-11T02:05:00.000Z",
+      openQuestionCount: 0,
+      ...extra,
+    });
+  const cases = [
+    { card: finished({ summary: "I added clamp next to sum." }), status: "Done" },
+    { card: finished({ summary: "Finished." }), status: "Done · Finished without a report" },
+    { card: finished({ openQuestionCount: 1 }), status: "Done · 1 question" },
+  ];
+  const container = document.createElement("div");
+  const root = createRoot(container);
+  for (const { card: shown, status } of cases)
+    // The result row (no onOpenTask) and a row that hides the summary, as Earlier in chat does.
+    for (const onOpenTask of [undefined, vi.fn()]) {
+      await act(async () =>
+        root.render(
+          <GoatBotTaskRow card={shown} onSelectThread={vi.fn()} onOpenTask={onOpenTask} />,
+        ),
+      );
+      const row = container.querySelector("button");
+      expect(row?.querySelector("span")?.textContent, status).toBe(status);
+      expect(row?.getAttribute("aria-label"), status).toContain(`Summarize the README. ${status}.`);
+    }
   await act(async () => root.unmount());
 });

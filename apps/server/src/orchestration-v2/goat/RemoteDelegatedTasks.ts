@@ -23,6 +23,7 @@ import type {
   OrchestratorV2Error,
 } from "../Orchestrator.ts";
 import type { ProjectionStoreV2Shape } from "../ProjectionStore.ts";
+import { followUpOwnerRun } from "./OrchestratorRunState.ts";
 
 type Events = Ref.Ref<Array<OrchestrationV2DomainEvent>>;
 
@@ -114,9 +115,17 @@ export const makeRemoteDelegatedTasks = (deps: RemoteDelegatedTaskDeps) => {
           ),
         );
       const run = parent.runs.find((value) => value.id === command.parentRunId);
+      // A follow-up to a finished task there binds to the parent's latest run, which may have ended.
+      const followsUp = parent.subagents.some(
+        (task) =>
+          task.result !== null &&
+          command.remote.threadId !== null &&
+          task.remote?.host === command.remote.host &&
+          task.remote.threadId === command.remote.threadId,
+      );
       if (
         run === undefined ||
-        !isBlockingRun(run) ||
+        (followsUp ? run.id !== followUpOwnerRun(parent.runs)?.id : !isBlockingRun(run)) ||
         (yield* stopReachedRun(command, command.parentThreadId, run.id))
       )
         return yield* new OrchestratorDispatchError({

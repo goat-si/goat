@@ -1,5 +1,6 @@
 // A real SshRemoteDispatch with one linked host: link admission runs as in production, and
 // `answer` plays the host's /mcp. Nothing may reach SSH.
+import * as NodeCrypto from "@effect/platform-node/NodeCrypto";
 import * as NodeServices from "@effect/platform-node/NodeServices";
 import { vi } from "@effect/vitest";
 import * as SshConfig from "@goat/ssh/config";
@@ -32,7 +33,8 @@ const LINK: LinkedHosts.LinkedHostCredential = {
 export type Answer =
   | { readonly status: number }
   | { readonly result: unknown }
-  | { readonly rpcError: string };
+  | { readonly rpcError: string }
+  | { readonly wrongId: true };
 
 /**
  * Runs body against a dispatch with one linked host and an SSH manager that
@@ -43,10 +45,11 @@ export const withLinkedHost = <A, E, R>(
     readonly method: string;
     readonly tool?: string;
     readonly args?: unknown;
-  }) => Answer,
+  }) => Answer | Promise<Answer>,
   body: Effect.Effect<A, E, R>,
   serverVersion = LINK.host.serverVersion,
   access: LinkedHosts.LinkedHost["access"] = LINK.host.access,
+  initializeReply?: () => "reject" | "offline",
 ) =>
   Effect.gen(function* () {
     const link = { ...LINK, host: { ...LINK.host, serverVersion, access } };
@@ -68,6 +71,14 @@ export const withLinkedHost = <A, E, R>(
         method: request.method,
         ...(request.params?.name === undefined ? {} : { tool: request.params.name }),
       });
+      if (request.method === "initialize" && initializeReply !== undefined) {
+        if (initializeReply() === "offline") throw new TypeError("offline");
+        return Response.json({
+          jsonrpc: "2.0",
+          id: request.id,
+          error: { code: -32600, message: "no" },
+        });
+      }
       if (request.method === "initialize")
         return Response.json({
           jsonrpc: "2.0",
@@ -80,11 +91,12 @@ export const withLinkedHost = <A, E, R>(
         });
       if (request.method === "notifications/initialized")
         return new Response(null, { status: 202 });
-      const reply = answer({
+      const reply = await answer({
         method: request.method,
         ...(request.params?.name === undefined ? {} : { tool: request.params.name }),
         args: request.params?.arguments,
       });
+      if ("wrongId" in reply) return Response.json({ jsonrpc: "2.0", id: "wrong", result: {} });
       if ("status" in reply) return new Response(null, { status: reply.status });
       if ("rpcError" in reply)
         return Response.json({
@@ -105,6 +117,7 @@ export const withLinkedHost = <A, E, R>(
       forgetEnvironment: noSsh,
       disconnectEnvironment: noSsh,
       revalidateTunnels: () => Effect.void,
+      closeAllTunnels: Effect.void,
       issueClientSession: () => Effect.die("unused"),
       issueMcpClientSession: noSsh,
       runRemoteScript: noSsh,
@@ -131,10 +144,11 @@ export const withLinkedHost = <A, E, R>(
         Effect.provide(
           SshRemoteDispatch.layer.pipe(
             Layer.provide(ServerSettings.layerTest()),
-            Layer.provide(Layer.succeed(LinkedHosts.LinkedHosts, links)),
+            // Merged, so a body that reads linked hosts itself sees this same link.
+            Layer.provideMerge(Layer.succeed(LinkedHosts.LinkedHosts, links)),
             Layer.provide(ServerConfig.layerTest("/fixture", { prefix: "goat-linked-dispatch-" })),
             Layer.provide(FetchHttpClient.layer),
-            Layer.provide(NodeServices.layer),
+            Layer.provide(Layer.mergeAll(NodeServices.layer, NodeCrypto.layer)),
           ),
         ),
       );

@@ -17,13 +17,27 @@ type Terminal = Extract<ProviderAdapter.ProviderAdapterV2Event, { readonly type:
 const isStreamError = Schema.is(ProviderAdapter.ProviderAdapterEventStreamError);
 const isCapabilityUnsupported = Schema.is(CommandPolicyCapabilityUnsupportedError);
 
+/** How a parent's and an origin's Force stop name themselves in the forced run (goat#2338). */
+export const PARENT_FORCE_STOP_PREFIX = "Force stopped by parent thread ";
+export const ORIGIN_FORCE_STOP_PREFIX = "Force stopped by its origin task owner on ";
+
 export function stopTerminationKind(
   reason: string | undefined,
-  userStopReason: string,
+  /** Absent where no person's Stop can arrive, such as a background-work settle. */
+  userStopReason?: string,
   absentIsPerson = false,
 ): Kind {
-  if (reason === userStopReason || (absentIsPerson && reason === undefined)) return "person_stop";
+  if (
+    (userStopReason !== undefined && reason === userStopReason) ||
+    (absentIsPerson && reason === undefined)
+  )
+    return "person_stop";
   if (reason === "Stopped by an agent" || reason?.startsWith("Stopped by an agent: ") === true)
+    return "agent_stop";
+  if (
+    reason?.startsWith(PARENT_FORCE_STOP_PREFIX) === true ||
+    reason?.startsWith(ORIGIN_FORCE_STOP_PREFIX) === true
+  )
     return "agent_stop";
   return "unknown";
 }

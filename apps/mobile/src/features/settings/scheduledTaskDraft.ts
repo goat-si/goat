@@ -1,4 +1,4 @@
-import { isWebhookDedupeTemplate } from "@goat/contracts";
+import { isWebhookDedupeTemplate, scheduledTaskThreadMode } from "@goat/contracts";
 import type {
   ModelSelection,
   OrchestrationV2ThreadLaunchWorkspaceStrategy,
@@ -6,6 +6,7 @@ import type {
   ProjectId,
   RuntimeMode,
   ScheduledTask,
+  ScheduledTaskThreadMode,
   ScheduledTaskUpsertSchedule,
   ScheduledTaskWebhookSignature,
 } from "@goat/contracts";
@@ -196,6 +197,9 @@ export type ScheduledTaskDraft = {
   readonly modelSelection: ModelSelection | null;
   readonly modelSelectionIsExplicit: boolean;
   readonly schedule: ScheduleDraft;
+  readonly threadMode: ScheduledTaskThreadMode;
+  /** Set when leaving the thread dropped Important updates, so the form can say so. */
+  readonly notificationPolicyReset?: boolean;
   readonly workspace: Workspace;
   readonly baseRef: string;
   readonly checkoutPath: string;
@@ -224,6 +228,7 @@ function draftSignature(draft: ScheduledTaskDraft): string {
     draft.schedule.coalesceKey,
     draft.schedule.coalesceWindowSeconds,
     draft.schedule.filters.map(({ path, op, value }) => [path, op, value]),
+    draft.threadMode,
     draft.workspace,
     draft.baseRef,
     draft.checkoutPath,
@@ -253,6 +258,7 @@ export function createDraft(
     modelSelection,
     modelSelectionIsExplicit: false,
     schedule: DEFAULT_SCHEDULE,
+    threadMode: "new_thread",
     workspace: "worktree",
     baseRef: "main",
     checkoutPath: "",
@@ -272,6 +278,7 @@ export function editDraft(task: ScheduledTask): ScheduledTaskDraft {
     modelSelection: task.modelSelection,
     modelSelectionIsExplicit: true,
     schedule: scheduleDraftForTask(task),
+    threadMode: scheduledTaskThreadMode(task),
     workspace: task.workspaceStrategy.type,
     baseRef: task.workspaceStrategy.type === "worktree" ? task.workspaceStrategy.baseRef : "main",
     checkoutPath:
@@ -332,3 +339,41 @@ export function scheduledTaskContextFields(
             },
   };
 }
+
+/**
+ * The save keeps the task's thread: one-thread mode and, on a server with thread modes, the same
+ * project (its rule); an older server keeps the thread across a project change.
+ */
+export const keepsThread = (draft: ScheduledTaskDraft, threadModes = true) =>
+  draft.task?.threadId != null &&
+  draft.threadMode !== "new_thread" &&
+  (!threadModes || draft.projectId === draft.task.projectId);
+
+/** Important updates needs a thread that later runs keep. */
+export const offersImportantUpdates = keepsThread;
+
+/** A draft that keeps a thread again drops the reset notice: its reason no longer holds. */
+const settleNotice = (draft: ScheduledTaskDraft): ScheduledTaskDraft =>
+  keepsThread(draft) ? { ...draft, notificationPolicyReset: false } : draft;
+
+/** Choosing a new thread each run drops Important updates to All runs. */
+export const withThreadMode = (
+  draft: ScheduledTaskDraft,
+  threadMode: ScheduledTaskThreadMode,
+): ScheduledTaskDraft =>
+  threadMode === "new_thread" && draft.notificationPolicy === "important_updates"
+    ? { ...draft, threadMode, notificationPolicy: "all_runs", notificationPolicyReset: true }
+    : settleNotice({ ...draft, threadMode });
+
+/** Moving a bound task to another project leaves its thread, so Important updates drops too. */
+export const withProject = (
+  draft: ScheduledTaskDraft,
+  projectId: ProjectId,
+): ScheduledTaskDraft => {
+  const moved = { ...draft, projectId };
+  return keepsThread(draft) &&
+    !keepsThread(moved) &&
+    draft.notificationPolicy === "important_updates"
+    ? { ...moved, notificationPolicy: "all_runs", notificationPolicyReset: true }
+    : settleNotice(moved);
+};

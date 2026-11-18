@@ -1,5 +1,3 @@
-import { stopWaitPlaceholders } from "./stopWait.ts";
-import { REMOTE_NODE_ENV_SCRIPT } from "./remoteNodeEnvScript.ts";
 import {
   EXACT_ARCHIVE_VERSION,
   SshInvalidArchiveVersionError,
@@ -48,7 +46,8 @@ import { compareRuntimeBuilds } from "@goat/shared/semver";
 import * as Option from "effect/Option";
 import * as Clock from "effect/Clock";
 import * as Context from "effect/Context";
-import * as Crypto from "effect/Crypto";
+import * as Digest from "effect/crypto/Digest";
+import * as SecureRandom from "effect/crypto/SecureRandom";
 import * as Effect from "effect/Effect";
 import * as Exit from "effect/Exit";
 import * as Fiber from "effect/Fiber";
@@ -67,6 +66,7 @@ import {
   supersededPreparation,
   type PreparationAdmission,
 } from "./ensureFlight.ts";
+import { REMOTE_ARCHIVE_EXTRACT, REMOTE_ARCHIVE_FETCH } from "./remoteArchiveScripts.ts";
 import { REMOTE_NODE_ENGINE_CHECK_SCRIPT } from "./remoteNodeEngineCheck.ts";
 import { waitForTunnelReady } from "./tunnelForwardReadiness.ts";
 import { ensureSshMaster } from "./master.ts";
@@ -112,7 +112,10 @@ import {
   type SshRuntimeProgressCallback,
 } from "./remoteRuntime.ts";
 import { REMOTE_PROTOCOL_TOKEN_SCRIPT, REMOTE_RUNNER_HINT_SCRIPT } from "./runtimeFactsScripts.ts";
+import { buildRemoteStopScript } from "./remoteStopScript.ts";
+export { buildRemoteStopScript };
 import { REMOTE_RUNTIME_PUBLISH_SCRIPT, remoteUploadCommand } from "./runtimeInstallScripts.ts";
+import { REMOTE_NODE_ENV_SCRIPT } from "./remoteNodeEnvScript.ts";
 import { runtimePreparationError } from "./runtimePreparationErrors.ts";
 import { buildRemoteRuntimeProbeScript, decodeRemoteRuntimeProbe } from "./runtimeProbe.ts";
 import { makeRuntimeProvisioning } from "./runtimeProvisioning.ts";
@@ -239,7 +242,8 @@ export interface SshTunnelEntry {
 
 export type SshEnvironmentEffectContext =
   | ChildProcessSpawner.ChildProcessSpawner
-  | Crypto.Crypto
+  | Digest.Digest
+  | SecureRandom.SecureRandom
   | FileSystem.FileSystem
   | Path.Path
   | HttpClient.HttpClient
@@ -351,6 +355,8 @@ export interface SshEnvironmentManagerShape
   readonly disconnectEnvironment: (
     target: DesktopSshEnvironmentTarget,
   ) => Effect.Effect<void, SshEnvironmentEffectError, SshEnvironmentEffectContext>;
+  /** Closes every local forward, as the manager's scope finalizer does, and keeps the manager open. */
+  readonly closeAllTunnels: Effect.Effect<void>;
   /**
    * Checks every open local forward and closes the ones that no longer
    * answer, so the next ensure opens a fresh forward instead of handing out
@@ -656,12 +662,7 @@ if ! goat_runtime_ready; then
   GOAT_ARCHIVE="goat-$GOAT_ARCHIVE_VERSION-$GOAT_PLATFORM_KEY.tar.gz"
   case "$GOAT_PLATFORM_KEY" in win32-*) GOAT_ARCHIVE="goat-$GOAT_ARCHIVE_VERSION-$GOAT_PLATFORM_KEY.zip" ;; esac
   GOAT_STAGING="$(mktemp -d "$HOME/.goat/runtime/goat/versions/.staging-XXXXXX")"
-  goat_fetch() {
-    if command -v curl >/dev/null 2>&1; then curl -fsSL --connect-timeout 30 --max-time "$3" "$1" -o "$2"
-    elif command -v wget >/dev/null 2>&1; then wget -q --timeout=30 --tries=1 "$1" -O "$2"
-    else printf 'Remote host needs curl or wget to download %s.\\n' "$GOAT_ARCHIVE" >&2; exit 1
-    fi
-  }
+${REMOTE_ARCHIVE_FETCH}
   goat_fetch "$GOAT_RELEASE_BASE_URL/v$GOAT_ARCHIVE_VERSION/SHA256SUMS" "$GOAT_STAGING/SHA256SUMS" @@GOAT_ARCHIVE_CHECKSUMS_SECONDS@@
   goat_fetch "$GOAT_RELEASE_BASE_URL/v$GOAT_ARCHIVE_VERSION/$GOAT_ARCHIVE" "$GOAT_STAGING/$GOAT_ARCHIVE" @@GOAT_ARCHIVE_DOWNLOAD_SECONDS@@
   GOAT_EXPECTED="$(grep " \\*\\{0,1\\}$GOAT_ARCHIVE$" "$GOAT_STAGING/SHA256SUMS" | cut -d' ' -f1)"
@@ -673,10 +674,7 @@ if ! goat_runtime_ready; then
   if [ -z "$GOAT_EXPECTED" ] || [ "$GOAT_ACTUAL" != "$GOAT_EXPECTED" ]; then
     printf 'Checksum mismatch for %s.\\n' "$GOAT_ARCHIVE" >&2; exit 1
   fi
-  case "$GOAT_PLATFORM_KEY" in
-    win32-*) "$(cygpath -S)/tar.exe" -xf "$GOAT_STAGING/$GOAT_ARCHIVE" -C "$GOAT_STAGING" --strip-components=1 ;; # GNU tar cannot read zip.
-    *) tar -xzf "$GOAT_STAGING/$GOAT_ARCHIVE" -C "$GOAT_STAGING" --strip-components=1 ;;
-  esac
+${REMOTE_ARCHIVE_EXTRACT}
   rm -f "$GOAT_STAGING/$GOAT_ARCHIVE" "$GOAT_STAGING/SHA256SUMS"
   # Verify the executable and exact version before replacing a runtime,
   # including a same-version directory whose completion marker is broken.
@@ -1054,69 +1052,6 @@ fi
 
 `;
 
-const REMOTE_STOP_SCRIPT = `set -eu
-DEFAULT_SERVER_HOME="$HOME/.goat"
-STATE_DIR="$HOME/.goat/ssh-launch/@@GOAT_STATE_KEY@@"
-PID_FILE="$STATE_DIR/pid"
-PORT_FILE="$STATE_DIR/port"
-MANAGED_FILE="$STATE_DIR/managed"
-mkdir -p "$STATE_DIR"
-@@GOAT_PROTOCOL_TOKENS@@
-@@GOAT_REPLACEMENT_LOCK@@
-trap 'release_recovery_lock; release_replacement_lock' EXIT
-trap 'exit 129' HUP
-trap 'exit 130' INT
-trap 'exit 143' TERM
-acquire_replacement_lock || { printf 'Another client is replacing the remote runtime.\\n' >&2; exit 1; }; [ -e "$STATE_DIR/run-t3.sh" ] || rm -f "$STATE_DIR/run-goat.sh" || :
-fact_slurp "$MANAGED_FILE" || FACT_TEXT=; REMOTE_MANAGED="$FACT_TEXT"
-fact_slurp "$PID_FILE" || FACT_TEXT=; REMOTE_PID="$FACT_TEXT"
-fact_slurp "$PORT_FILE" || FACT_TEXT=; REMOTE_PORT="$FACT_TEXT"
-# Forget may stop only an owned runtime; external/unknown state belongs to another owner.
-if [ @@GOAT_STOP_OWNED_ONLY@@ = 1 ] && [ "$REMOTE_MANAGED" != managed ]; then
-  printf '{"stopped":false,"activity":"unknown"}\\n'
-  exit 0
-fi
-ownership_unverified() {
-  printf 'GOAT ownership could not be verified for PID %s; process and ownership files were preserved.\\n' "$REMOTE_PID" >&2
-  exit 1
-}
-@@GOAT_OWNED_IDENTITY@@
-if [ "$REMOTE_MANAGED" = managed ] && [ -n "$REMOTE_PID" ]; then
-  valid_positive "$REMOTE_PID" || ownership_unverified
-  if server_alive "$REMOTE_PID"; then
-    verify_owned_identity "$REMOTE_PID" "$REMOTE_PORT" || ownership_unverified
-    # Other clients share this server, and its threads outlive any one tunnel:
-    # stopping is only safe when the server itself reports no active work.
-    STOP_ACTIVITY=unknown
-    if [ -x "$STATE_DIR/run-t3.sh" ]; then
-      STOP_ACTIVITY="$("$STATE_DIR/run-t3.sh" __ssh-helper activity --port "$REMOTE_PORT" --pid "$REMOTE_PID" --shell 2>/dev/null || true)"
-    fi
-    if [ "$STOP_ACTIVITY" != idle ]; then
-      case "$STOP_ACTIVITY" in busy) ;; *) STOP_ACTIVITY=unknown ;; esac
-      printf '{"stopped":false,"activity":"%s"}\\n' "$STOP_ACTIVITY"
-      exit 0
-    fi
-    verify_owned_identity "$REMOTE_PID" "$REMOTE_PORT" || ownership_unverified
-    server_kill "$REMOTE_PID" || true
-    STOP_WAIT_ATTEMPTS=@@GOAT_STOP_WAIT_ATTEMPTS@@
-    STOP_WAIT_INTERVAL=@@GOAT_STOP_WAIT_INTERVAL@@
-    WAIT_COUNT=0
-    while server_alive "$REMOTE_PID" && [ "$WAIT_COUNT" -lt "$STOP_WAIT_ATTEMPTS" ]; do
-      WAIT_COUNT=$((WAIT_COUNT + 1))
-      sleep "$STOP_WAIT_INTERVAL"
-    done
-    if server_alive "$REMOTE_PID"; then
-      printf 'Remote GOAT server with PID %s did not stop within @@GOAT_STOP_WAIT_LABEL@@. Its ownership files were kept.\\n' "$REMOTE_PID" >&2
-      exit 1
-    fi
-  fi
-elif [ "$REMOTE_MANAGED" != external ] && [ -n "$REMOTE_PID" ]; then
-  valid_positive "$REMOTE_PID" || ownership_unverified
-  if server_alive "$REMOTE_PID"; then ownership_unverified; fi
-fi
-rm -f "$PID_FILE" "$PORT_FILE" "$MANAGED_FILE" "$STATE_DIR/identity"
-printf '{"stopped":true}\\n'
-`;
 
 export function buildRemoteGoatRunnerScript(input?: RemoteGoatRunnerOptions): string {
   const nodeScriptPath = absoluteRemoteNodeScriptPath(input);
@@ -1327,24 +1262,6 @@ export type {
   RemoteMcpClientSessionOptions,
 } from "./remoteSessions.ts";
 
-export function buildRemoteStopScript(
-  stateKey: string,
-  options: {
-    readonly ownedOnly?: boolean;
-    readonly stopWaitAttempts?: number;
-    readonly stopWaitIntervalSeconds?: string;
-  } = {},
-): string {
-  return applyScriptPlaceholders(REMOTE_STOP_SCRIPT, {
-    GOAT_STATE_KEY: stateKey,
-    GOAT_STOP_OWNED_ONLY: options.ownedOnly === true ? "1" : "0",
-    GOAT_PROTOCOL_TOKENS: REMOTE_PROTOCOL_TOKEN_SCRIPT,
-    GOAT_REPLACEMENT_LOCK: REMOTE_REPLACEMENT_LOCK_SCRIPT,
-    GOAT_OWNED_IDENTITY: REMOTE_OWNED_IDENTITY_SCRIPT,
-    ...stopWaitPlaceholders(options),
-  });
-}
-
 // Keep the probe in its own shell: its exit paths and shell options must not affect launch.
 function buildReconnectProbeScript(selected: PreparedRemoteRuntime) {
   return `reconnect_probe() {
@@ -1455,7 +1372,11 @@ export const launchOrReuseRemoteServer = Effect.fn("ssh/tunnel.launchOrReuseRemo
     }) => Effect.Effect<
       void,
       never,
-      ChildProcessSpawner.ChildProcessSpawner | Crypto.Crypto | FileSystem.FileSystem | Path.Path
+      | ChildProcessSpawner.ChildProcessSpawner
+      | Digest.Digest
+      | SecureRandom.SecureRandom
+      | FileSystem.FileSystem
+      | Path.Path
     >,
     /** The app server refused a credential recently, so this launch goes to the managed server. */
     skipAppServer = false,
@@ -1470,7 +1391,11 @@ export const launchOrReuseRemoteServer = Effect.fn("ssh/tunnel.launchOrReuseRemo
       }
     | { readonly status: "pending"; readonly pending: SshRuntimePendingReplacement },
     SshCommandError | SshInvalidTargetError | SshLaunchError,
-    ChildProcessSpawner.ChildProcessSpawner | Crypto.Crypto | FileSystem.FileSystem | Path.Path
+    | ChildProcessSpawner.ChildProcessSpawner
+    | Digest.Digest
+    | SecureRandom.SecureRandom
+    | FileSystem.FileSystem
+    | Path.Path
   > {
     return yield* Effect.uninterruptibleMask((restore) =>
       Effect.gen(function* () {
@@ -1773,7 +1698,11 @@ const stopRemoteServer = Effect.fn("ssh/tunnel.stopRemoteServer")(function* (
 ): Effect.fn.Return<
   void,
   SshCommandError | SshInvalidTargetError | SshLaunchError,
-  ChildProcessSpawner.ChildProcessSpawner | Crypto.Crypto | FileSystem.FileSystem | Path.Path
+  | ChildProcessSpawner.ChildProcessSpawner
+  | Digest.Digest
+  | SecureRandom.SecureRandom
+  | FileSystem.FileSystem
+  | Path.Path
 > {
   const stateKey = REMOTE_RUNTIME_STATE_KEY;
   yield* Effect.logInfo("ssh.remoteServer.stop.start", {
@@ -1817,7 +1746,11 @@ const readRemoteServerLogTail = Effect.fn("ssh/tunnel.readRemoteServerLogTail")(
 ): Effect.fn.Return<
   string,
   SshCommandError | SshInvalidTargetError | SshLaunchError,
-  ChildProcessSpawner.ChildProcessSpawner | Crypto.Crypto | FileSystem.FileSystem | Path.Path
+  | ChildProcessSpawner.ChildProcessSpawner
+  | Digest.Digest
+  | SecureRandom.SecureRandom
+  | FileSystem.FileSystem
+  | Path.Path
 > {
   const result = yield* runSshCommand(target, {
     remoteCommandArgs: ["sh", "-s"],
@@ -1892,7 +1825,8 @@ const startSshTunnelAttempt = Effect.fn("ssh/tunnel.startSshTunnel")(function* (
   SshTunnelEntry,
   SshCommandError | SshInvalidTargetError | SshReadinessError,
   | ChildProcessSpawner.ChildProcessSpawner
-  | Crypto.Crypto
+  | Digest.Digest
+  | SecureRandom.SecureRandom
   | FileSystem.FileSystem
   | Path.Path
   | HttpClient.HttpClient
@@ -2555,6 +2489,15 @@ const makeSshEnvironmentManager = Effect.fn("ssh/tunnel.SshEnvironmentManager.ma
       remotePort: entry.remotePort,
     });
   });
+  const closeAllTunnels = Effect.sync(() => [...tunnels.values()]).pipe(
+    Effect.flatMap((entries) =>
+      Effect.all([
+        Effect.forEach(entries, closeTunnelEntry, { concurrency: "unbounded" }),
+        routes.closeAll(),
+      ]),
+    ),
+    Effect.ignore,
+  );
   yield* Scope.addFinalizer(
     managerScope,
     Effect.sync(() => {
@@ -3091,7 +3034,8 @@ const makeSshEnvironmentManager = Effect.fn("ssh/tunnel.SshEnvironmentManager.ma
       if (!existingOnly(input.runner) && remoteLaunch.pending === undefined && !needsArchiveRetry)
         pendingReplacements.delete(input.key);
       const spawnerService = yield* ChildProcessSpawner.ChildProcessSpawner;
-      const cryptoService = yield* Crypto.Crypto;
+      const randomService = yield* SecureRandom.SecureRandom;
+      const digestService = yield* Digest.Digest;
       const fileSystemService = yield* FileSystem.FileSystem;
       const pathService = yield* Path.Path;
       yield* Scope.addFinalizer(
@@ -3140,7 +3084,8 @@ const makeSshEnvironmentManager = Effect.fn("ssh/tunnel.SshEnvironmentManager.ma
           ).pipe(
             Effect.provideService(SshConnectionSharing, sharing),
             Effect.provideService(ChildProcessSpawner.ChildProcessSpawner, spawnerService),
-            Effect.provideService(Crypto.Crypto, cryptoService),
+            Effect.provideService(SecureRandom.SecureRandom, randomService),
+            Effect.provideService(Digest.Digest, digestService),
             Effect.provideService(FileSystem.FileSystem, fileSystemService),
             Effect.provideService(Path.Path, pathService),
           );
@@ -4914,6 +4859,7 @@ const makeSshEnvironmentManager = Effect.fn("ssh/tunnel.SshEnvironmentManager.ma
     forgetEnvironment: withSharing(forgetEnvironment),
     ensureEnvironment: withSharing(ensureEnvironment),
     disconnectEnvironment: withSharing(disconnectEnvironment),
+    closeAllTunnels,
     existingEnvironment: withSharing(routes.existingEnvironment),
     existingEnvironmentOther: withSharing(routes.existingEnvironmentOther),
     issueExistingMcpSession: withSharing(routes.issueExistingMcpSession),
@@ -4929,7 +4875,7 @@ const makeSshEnvironmentManager = Effect.fn("ssh/tunnel.SshEnvironmentManager.ma
 });
 
 /**
- * @effect-expect-leaking ChildProcessSpawner | Crypto | FileSystem | HttpClient | NetService | Path | SshPasswordPrompt
+ * @effect-expect-leaking ChildProcessSpawner | Digest | FileSystem | HttpClient | NetService | Path | SecureRandom | SshPasswordPrompt
  */
 export class SshEnvironmentManager extends Context.Service<
   SshEnvironmentManager,

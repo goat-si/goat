@@ -14,6 +14,7 @@ import {
   sourceAccountName,
   type LimitAccount,
   type LimitOrigin,
+  type LimitPool,
   type LimitPoolWindow,
   type LimitPresentations,
 } from "./usageLimits.ts";
@@ -50,6 +51,7 @@ export interface LimitBoardGroup {
   readonly poolReadings: string | undefined;
   /** Pool-wide blocks for this pool only. */
   readonly blocks: readonly string[];
+  readonly pool: LimitPool | undefined;
   readonly windows: readonly LimitPoolWindow[];
   readonly rows: readonly LimitBoardRow[];
 }
@@ -401,27 +403,26 @@ function withoutReadings(presentations: LimitPresentations, now: number) {
 }
 
 function sourceNotices(presentations: LimitPresentations): string[] {
-  const notices: string[] = [];
+  const notices = new Set<string>();
   for (const presentation of presentations.values()) {
     const prefix = presentations.size > 1 ? `${presentation.entry.target.label} · ` : "";
     for (const source of presentation.serverConfig?.usageLimitSources ?? []) {
-      if (source.error) notices.push(`${prefix}${source.label}: ${source.error}`);
+      if (source.error) notices.add(`${prefix}${source.label}: ${source.error}`);
       else if (source.accounts.length === 0)
-        notices.push(`${prefix}${source.label}: No accounts reported.`);
+        notices.add(`${prefix}${source.label}: No accounts reported.`);
     }
   }
-  return notices;
+  return [...notices];
 }
 
-function groupWindows(accounts: readonly LimitAccount[], now: number) {
+function groupPool(accounts: readonly LimitAccount[], now: number) {
   // A group's own accounts set its columns; a routed login is the whole of its group.
   const counted = accounts.map((account) =>
     account.aggregated === false && account.state !== "paused" && account.state !== "reauth"
       ? { ...account, aggregated: true }
       : account,
   );
-  const pool = collectLimitPools(counted, now)[0];
-  return pool === undefined ? [] : displayLimitWindows(pool);
+  return collectLimitPools(counted, now)[0];
 }
 
 /** The whole Limits view; notices are only what no group or row already shows. */
@@ -462,6 +463,10 @@ export function limitBoard(presentations: LimitPresentations, now: number) {
         });
     }
     const built = [...groups].map(([key, group]): LimitBoardGroup => {
+      const pool = groupPool(
+        group.rows.flatMap((row) => (row.account ? [row.account] : [])),
+        now,
+      );
       const { origin } = group;
       const line =
         origin.kind === "pool"
@@ -505,10 +510,8 @@ export function limitBoard(presentations: LimitPresentations, now: number) {
               .join(" · ") || undefined
           : undefined,
         blocks: poolBlocks.map((block) => availabilityText(block, now)),
-        windows: groupWindows(
-          group.rows.flatMap((row) => (row.account ? [row.account] : [])),
-          now,
-        ),
+        pool,
+        windows: pool ? displayLimitWindows(pool) : [],
         rows: [...underPoolBlock(group.rows, poolBlocks)].sort(compareRows(now)),
       };
     });
@@ -522,6 +525,7 @@ export function limitBoard(presentations: LimitPresentations, now: number) {
         unreadable: [...missing.messages].join(" "),
         poolReadings: undefined,
         blocks: [],
+        pool: undefined,
         windows: [],
         rows: [],
       });

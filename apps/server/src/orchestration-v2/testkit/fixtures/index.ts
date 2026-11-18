@@ -2,8 +2,7 @@ import { acpTitledMultiSelectFixture } from "./acp_titled_multiselect/fixture.ts
 import { ProviderDriverKind } from "@goat/contracts";
 import { claudeBackgroundSubagentAfterRootInput } from "./claude_background_subagent_after_root/input.ts";
 import { assertClaudeBackgroundSubagentAfterRootOutput } from "./claude_background_subagent_after_root/output.ts";
-import { claudeBackgroundTaskAfterRootInput } from "./claude_background_task_after_root/input.ts";
-import { assertClaudeBackgroundTaskAfterRootOutput } from "./claude_background_task_after_root/output.ts";
+import { claudeBackgroundTaskAfterRootFixture } from "./claude_background_task_after_root/fixture.ts";
 import { claudeBackgroundSubagentLifecycleInput } from "./claude_background_subagent_lifecycle/input.ts";
 import { assertClaudeBackgroundSubagentLifecycleOutput } from "./claude_background_subagent_lifecycle/output.ts";
 import { claudeBackgroundTaskInterruptInput } from "./claude_background_task_interrupt/input.ts";
@@ -241,21 +240,7 @@ export const ORCHESTRATOR_REPLAY_FIXTURES: ReadonlyArray<OrchestratorReplayFixtu
       },
     ],
   },
-  {
-    name: "claude_background_task_after_root",
-    buildInput: claudeBackgroundTaskAfterRootInput,
-    providers: [
-      {
-        driver: ProviderDriverKind.make("claudeAgent"),
-        transcriptFile: new URL(
-          "./claude_background_task_after_root/claude_transcript.ndjson",
-          import.meta.url,
-        ),
-        modelSelection: CLAUDE_MODEL_SELECTION,
-        assertOutput: assertClaudeBackgroundTaskAfterRootOutput,
-      },
-    ],
-  },
+  claudeBackgroundTaskAfterRootFixture,
   {
     name: "claude_background_subagent_lifecycle",
     buildInput: claudeBackgroundSubagentLifecycleInput,

@@ -47,6 +47,22 @@ it.effect("preserves shell metacharacters and newlines in remote arguments", () 
   }),
 );
 
+it.effect("rejects Node below the agent-device 22.12 floor", () =>
+  Effect.gen(function* () {
+    if ((yield* HostProcess.Platform) === "win32") return;
+    const probe = NodeChildProcess.spawnSync(process.execPath, [], {
+      input:
+        `{ const os = require("node:os"); os.homedir = () => ${JSON.stringify(NodeOS.tmpdir())}; }\n` +
+        `Object.defineProperty(process.versions, "node", { value: "22.11.0" });\n` +
+        remoteDeviceScript("owner", "probe"),
+      env: { PATH: NodePath.dirname(process.execPath) },
+      encoding: "utf8",
+    });
+    expect(probe.status).not.toBe(0);
+    expect(probe.stderr).toContain("Node 22.12 or newer");
+  }),
+);
+
 // Runs the stop-agent script against a fake agent-device whose behaviour is given as module source.
 const stopAgentWith = async (fakeAgentDevice: string) => {
   const home = await NodeFSP.mkdtemp(NodePath.join(NodeOS.tmpdir(), "goat-ssh-agent-stop-"));

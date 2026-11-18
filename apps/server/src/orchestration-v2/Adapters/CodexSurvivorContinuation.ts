@@ -1,3 +1,4 @@
+import { forkInScope } from "@goat/shared/forkInScope";
 import * as Effect from "effect/Effect";
 import * as Cause from "effect/Cause";
 import * as Exit from "effect/Exit";
@@ -473,7 +474,7 @@ export const adoptSurvivor = Effect.fn("CodexSurvivorContinuation.adopt")(functi
     context,
   }).pipe(
     Effect.ensuring(Deferred.succeed(done, undefined)),
-    Effect.forkIn(input.continuation.scope, { startImmediately: true }),
+    forkInScope(input.continuation.scope, { startImmediately: true }),
   );
   return true;
 });
@@ -904,13 +905,17 @@ class SurvivorFenceInterruptError extends ProviderAdapter.ProviderAdapterInterru
 }
 
 const isSurvivorStopFenceError = Schema.is(CodexSurvivorStopFenceError);
+const isInterruptTimeoutError = Schema.is(ProviderAdapter.ProviderAdapterInterruptTimeoutError);
 
+// A Stop Codex never confirmed keeps its own error, so clients offer Force stop.
 export const mapSurvivorInterruptError = (input: {
   readonly driver: ProviderDriverKind;
   readonly providerThreadId: ProviderAdapter.ProviderAdapterV2InterruptInput["providerThread"]["id"];
   readonly providerTurnId: ProviderTurnId;
   readonly cause: unknown;
 }) =>
-  isSurvivorStopFenceError(input.cause)
-    ? new SurvivorFenceInterruptError(input)
-    : new ProviderAdapter.ProviderAdapterInterruptError(input);
+  isInterruptTimeoutError(input.cause)
+    ? input.cause
+    : isSurvivorStopFenceError(input.cause)
+      ? new SurvivorFenceInterruptError(input)
+      : new ProviderAdapter.ProviderAdapterInterruptError(input);

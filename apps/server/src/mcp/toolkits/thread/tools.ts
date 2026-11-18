@@ -14,6 +14,7 @@ import {
   OrchestratorMcpPendingRequestReadResult,
   OrchestratorMcpPendingRequestRespondInput,
   OrchestratorMcpPendingRequestRespondResult,
+  OrchestratorMcpScheduledTask,
   OrchestratorMcpThreadConfigurationInput,
   OrchestratorMcpThreadConfigurationResult,
   OrchestratorMcpThreadConfigureInput,
@@ -29,7 +30,7 @@ import {
   TrimmedNonEmptyString,
 } from "@goat/contracts";
 import { agentSurfaceRegistry } from "@goat/contracts/agentSurface";
-import * as Crypto from "effect/Crypto";
+import * as SecureRandom from "effect/crypto/SecureRandom";
 import * as Schema from "effect/Schema";
 import { Tool, Toolkit } from "effect/ai";
 import { agentSurfaceAnnotations } from "../../agentSurface.ts";
@@ -70,7 +71,7 @@ const ThreadOrganizeTool = Tool.make(agentSurfaceRegistry["thread.organize"].nam
   dependencies: [
     McpInvocationContext.McpInvocationContext,
     ThreadManagementService.ThreadManagementService,
-    Crypto.Crypto,
+    SecureRandom.SecureRandom,
   ],
 }).annotateMerge(agentSurfaceAnnotations(agentSurfaceRegistry["thread.organize"]));
 
@@ -82,7 +83,7 @@ const commandTool = {
   dependencies: [
     McpInvocationContext.McpInvocationContext,
     ThreadManagementService.ThreadManagementService,
-    Crypto.Crypto,
+    SecureRandom.SecureRandom,
   ],
 };
 const queueEntry = Schema.Struct({
@@ -140,7 +141,7 @@ const pendingTool = {
     McpInvocationContext.McpInvocationContext,
     ThreadManagementService.ThreadManagementService,
     PendingQuestionsMcpService.PendingQuestionsMcpService,
-    Crypto.Crypto,
+    SecureRandom.SecureRandom,
   ],
 };
 const PendingRequestListTool = Tool.make(agentSurfaceRegistry["pending_request.list"].name, {
@@ -236,6 +237,7 @@ const ScheduledTaskRunTool = Tool.make(agentSurfaceRegistry["schedule.run"].name
     link: Schema.optional(Schema.String),
     lastRunStatus: ScheduledTask.fields.lastRunStatus,
     lastRun: ScheduledTask.fields.lastRun,
+    lastRunError: OrchestratorMcpScheduledTask.fields.lastRunError,
     runCount: NonNegativeInt,
     nextRunAt: ScheduledTask.fields.nextRunAt,
   }),

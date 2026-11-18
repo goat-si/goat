@@ -9,43 +9,45 @@ export const resolveCodexLaunchArgs = (
 
 const codexLaunchArgv = (launchArgs?: string): ReadonlyArray<string> => tokenizeCliArgs(launchArgs);
 
-export const codexAppServerArgs = (launchArgs?: string, routeArgs: ReadonlyArray<string> = []) => [
+export const codexAppServerArgs = (
+  launchArgs?: string,
+  routeArgs: ReadonlyArray<string> = [],
+  unloadImmediately = false,
+) => [
   "app-server",
+  ...(unloadImmediately ? ["-c", "thread_unload_delay_secs=0"] : []),
   ...codexLaunchArgv(launchArgs),
   ...routeArgs,
 ];
 
-export const codexExecLaunchArgs = (launchArgs?: string, routeArgs: ReadonlyArray<string> = []) => {
-  const args = codexLaunchArgv(launchArgs);
-  const execArgs: Array<string> = [];
+const SHARED_VALUE_FLAGS = new Set(["--config", "-c", "--enable", "--disable", "--profile", "-p"]);
+const SHARED_INLINE_PREFIXES = ["--config=", "-c=", "--enable=", "--disable=", "--profile=", "-p="];
 
+const filterLaunchArgs = (args: ReadonlyArray<string>, exec: boolean) => {
+  const kept: Array<string> = [];
   for (let index = 0; index < args.length; index++) {
     const arg = args[index];
     if (arg === undefined) continue;
-
-    if (arg === "--strict-config" || arg.startsWith("--config=") || arg.startsWith("-c=")) {
-      execArgs.push(arg);
-    } else if (
-      arg === "--config" ||
-      arg === "-c" ||
-      arg === "--enable" ||
-      arg === "--disable" ||
-      arg === "--profile" ||
-      arg === "-p"
-    ) {
+    if (exec && (arg === "--strict-config" || arg === "--oss")) kept.push(arg);
+    else if (SHARED_VALUE_FLAGS.has(arg) || (exec && arg === "--local-provider")) {
       const value = args[index + 1];
       if (value !== undefined && !value.startsWith("-")) {
-        execArgs.push(arg, value);
+        kept.push(arg, value);
         index++;
       }
     } else if (
-      arg.startsWith("--enable=") ||
-      arg.startsWith("--disable=") ||
-      arg.startsWith("--profile=")
-    ) {
-      execArgs.push(arg);
-    }
+      SHARED_INLINE_PREFIXES.some((prefix) => arg.startsWith(prefix)) ||
+      (exec && arg.startsWith("--local-provider="))
+    )
+      kept.push(arg);
   }
-
-  return [...execArgs, ...routeArgs];
+  return kept;
 };
+
+export const codexExecLaunchArgs = (launchArgs?: string, routeArgs: ReadonlyArray<string> = []) => [
+  ...filterLaunchArgs(codexLaunchArgv(launchArgs), true),
+  ...routeArgs,
+];
+
+export const codexMcpListLaunchArgs = (args: ReadonlyArray<string>) =>
+  filterLaunchArgs(args, false);

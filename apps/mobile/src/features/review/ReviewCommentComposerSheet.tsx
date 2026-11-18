@@ -5,6 +5,7 @@ import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { Platform, Pressable, ScrollView, View, useWindowDimensions } from "react-native";
 import { KeyboardAvoidingView, KeyboardStickyView } from "react-native-keyboard-controller";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
+import * as Dialog from "../../components/ui/Dialog";
 import { FilePreviewModal, type FilePreviewSource } from "../../components/FilePreviewModal";
 
 import { AppText as Text, AppTextInput as TextInput } from "../../components/ui/AppText";
@@ -18,7 +19,7 @@ import { useNativePaste } from "../../lib/useNativePaste";
 import { retainComposerAttachmentFile } from "../../lib/composerAttachmentFiles";
 import { releaseUnusedComposerAttachmentFiles } from "../../state/use-composer-drafts";
 import { setPendingConnectionError } from "../../state/use-remote-environment-registry";
-import { appendReviewCommentToDraft } from "../../state/use-thread-composer-state";
+import { appendReviewCommentToDraft } from "../../state/thread-draft-review";
 import {
   clearReviewCommentTarget,
   formatReviewCommentContext,
@@ -129,13 +130,14 @@ export function ReviewCommentComposerSheet(props: ReviewCommentComposerSheetProp
     if (!signal || signal.aborted) return;
     void (async () => {
       try {
-        const images = await convertPastedImagesToAttachments({
+        const result = await convertPastedImagesToAttachments({
           uris,
           existingCount: attachments.length,
         });
-        if (images.length > 0) {
-          addImages(images, signal);
+        if (result.attachments.length > 0) {
+          addImages(result.attachments, signal);
         }
+        if (result.error) Dialog.alert("Could not paste image", result.error);
       } catch (error) {
         console.error("[review comment] error converting pasted images", error);
       }

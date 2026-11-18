@@ -17,7 +17,8 @@ import type {
 import { fromLenientJson } from "@goat/shared/schemaJson";
 import * as Context from "effect/Context";
 import * as Clock from "effect/Clock";
-import * as Crypto from "effect/Crypto";
+import * as SecureRandom from "effect/crypto/SecureRandom";
+import * as Digest from "effect/crypto/Digest";
 import * as Effect from "effect/Effect";
 import * as Base64 from "effect/encoding/Base64";
 import * as Hex from "effect/encoding/Hex";
@@ -441,7 +442,8 @@ export const make = Effect.gen(function* () {
   const fileSystem = yield* FileSystem.FileSystem;
   const path = yield* Path.Path;
   const safeStorage = yield* ElectronSafeStorage.ElectronSafeStorage;
-  const crypto = yield* Crypto.Crypto;
+  const random = yield* SecureRandom.SecureRandom;
+  const digest = yield* Digest.Digest;
   const savedEnvironments = yield* DesktopSavedEnvironments.DesktopSavedEnvironments;
   const siblingKeys = yield* DesktopSafeStorageSiblingKeys.DesktopSafeStorageSiblingKeys;
   const catalogPath = path.join(environment.stateDir, "connection-catalog.json");
@@ -489,7 +491,7 @@ export const make = Effect.gen(function* () {
           }),
       ),
     );
-    const token = `${process.pid}:${yield* crypto.randomUUIDv4()}`;
+    const token = `${process.pid}:${yield* random.uuidV4()}`;
     for (let attempt = 0; attempt < 100; attempt++) {
       const acquired = yield* fileSystem
         .writeFileString(lockPath, token, { flag: "wx", mode: 0o600 })
@@ -593,7 +595,7 @@ export const make = Effect.gen(function* () {
     ),
   );
 
-  const temporarySuffix = crypto.randomUUIDv4().pipe(
+  const temporarySuffix = random.uuidV4().pipe(
     Effect.map((uuid) => uuid.replace(/-/g, "")),
     Effect.mapError(
       (cause) =>
@@ -637,7 +639,7 @@ export const make = Effect.gen(function* () {
     });
 
   const contentHash = (raw: Uint8Array) =>
-    crypto.digest("SHA-256", raw).pipe(
+    digest.digest(Digest.sha256, raw).pipe(
       Effect.map((digest) => Hex.encode(digest).slice(0, 16)),
       Effect.mapError(backupError(catalogPath)),
     );

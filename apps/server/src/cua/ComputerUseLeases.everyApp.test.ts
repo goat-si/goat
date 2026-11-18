@@ -1,4 +1,5 @@
 import { assert, it } from "@effect/vitest";
+import * as NodeCrypto from "@effect/platform-node/NodeCrypto";
 import * as NodeServices from "@effect/platform-node/NodeServices";
 import { RunId, ThreadId } from "@goat/contracts";
 import * as Effect from "effect/Effect";
@@ -40,6 +41,7 @@ const everyAppLayer = ComputerUseLeases.layer.pipe(
     Layer.mergeAll(
       database,
       NodeServices.layer,
+      NodeCrypto.layer,
       // Strict preserves the full-access-only cases; individual suites opt into default admission.
       ServerSettings.ServerSettingsService.layerTest({
         enableCua: true,
@@ -302,7 +304,7 @@ it.effect("a mint before the settings rename succeeds and after the rename refus
       Effect.provide(ComputerUseLeases.layer.pipe(Layer.provideMerge(layerServerSettings()))),
       Effect.provideService(FileSystem.FileSystem, controlledFs),
     );
-  }).pipe(Effect.provide(NodeServices.layer)),
+  }).pipe(Effect.provide(Layer.mergeAll(NodeServices.layer, NodeCrypto.layer))),
 );
 
 it.effect(

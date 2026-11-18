@@ -3,6 +3,7 @@ package daemon
 import (
 	"context"
 	"testing"
+	"time"
 
 	"github.com/goat-si/goat/apps/pen/internal/ident"
 	"github.com/goat-si/goat/apps/pen/internal/mesh"
@@ -62,12 +63,19 @@ func (s *slotNode) pending(t *testing.T, rs *relaytest.Server, id *ident.Identit
 	return session.InitiateHandshake(s.ctx, conn, session.KindSession, s.n.d.NodeID(), s.n.id.NoisePub, id, nil, goatService())
 }
 
-// total waits until the node reports n held slots.
+// total waits, bounded, until the node reports n held slots.
 func (s *slotNode) total(t *testing.T, n int) {
 	t.Helper()
-	for got := range s.counts {
-		if got == n {
-			return
+	timeout := time.NewTimer(30 * time.Second)
+	defer timeout.Stop()
+	for {
+		select {
+		case got := <-s.counts:
+			if got == n {
+				return
+			}
+		case <-timeout.C:
+			t.Fatalf("the node never reported %d held phone slots", n)
 		}
 	}
 }
@@ -147,15 +155,26 @@ func TestAPhoneSlotIsReturnedHoweverItsSessionEnds(t *testing.T) {
 	closedWith(s.ctx, sec) // a normal end
 	s.total(t, 0)
 
-	p, err = s.pending(t, s.a, k)
+	conn, err := relay.Dial(s.ctx, s.a.URL, s.n.d.NodeID()) // held: its close shows when relay a forgot the uplink
 	if err != nil {
 		t.Fatal(err)
 	}
-	s.total(t, 1)
-	s.a.DropUplink(s.n.d.NodeID()) // the uplink that carried it is gone
-	s.total(t, 0)
-	if err := s.a.WaitOnline(s.ctx, s.n.d.NodeID()); err != nil {
+	if p, err = session.InitiateHandshake(s.ctx, conn, session.KindSession, s.n.d.NodeID(), s.n.id.NoisePub, k, nil, goatService()); err != nil {
 		t.Fatal(err)
+	}
+	s.total(t, 1)
+	if !s.a.DropUplink(s.n.d.NodeID()) { // the uplink that carried it is gone
+		t.Fatal("the node has no uplink on relay a to drop")
+	}
+	s.total(t, 0)
+	// Relay a counts a dropped uplink as online until it forgets it, and closes its clients 4404 only after that.
+	waitCtx, cancel := context.WithTimeout(s.ctx, 30*time.Second)
+	defer cancel()
+	if _, err := conn.Recv(waitCtx); relay.CodeOf(err) != wire.CodeOffline {
+		t.Fatalf("the handshake on the dropped uplink ended %v, want the relay's 4404", err)
+	}
+	if err := s.a.WaitOnline(waitCtx, s.n.d.NodeID()); err != nil {
+		t.Fatalf("no uplink replaced the dropped one on relay a: %v", err)
 	}
 	if p, err = s.pending(t, s.a, k); err != nil {
 		t.Fatalf("after the uplink came back: %v", err)

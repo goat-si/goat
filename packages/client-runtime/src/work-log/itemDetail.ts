@@ -1,5 +1,11 @@
 import type { AssetResource, OrchestrationV2TurnItem } from "@goat/contracts";
-import { toolOutputImageBlocks, toolOutputImages } from "@goat/shared/toolOutput";
+import { LEGACY_MCP_APP_OUTPUT_KEY } from "@goat/contracts/legacyT3Names";
+import { MCP_APP_OUTPUT_KEY } from "@goat/shared/mcpApp";
+import {
+  mcpToolResultOutput,
+  toolOutputImageBlocks,
+  toolOutputImages,
+} from "@goat/shared/toolOutput";
 import * as DateTime from "effect/DateTime";
 
 const MAX_TEXT_BLOCK_DEPTH = 4;
@@ -130,10 +136,11 @@ function formatToolValue(
   value: unknown,
   hasImagePreview = false,
   omitLinks = false,
+  previewedImageBlocks = toolOutputImageBlocks(value),
 ): string | null {
   if (value === undefined || value === null) return null;
   if (hasImagePreview && isRecord(value) && value.type === "image") return null;
-  const text = textFromBlocks(value, 0, toolOutputImageBlocks(value), omitLinks);
+  const text = textFromBlocks(value, 0, previewedImageBlocks, omitLinks);
   if (text !== null) return text.trim() ? prettyJsonText(text) : null;
   return formatJsonValue(value);
 }
@@ -228,6 +235,28 @@ function commandOutputText(output: string): string {
     .join("\n");
 }
 
+// App calls store the provider result beside the app reference; its images get no preview.
+function dynamicToolOutputText(
+  item: Extract<OrchestrationV2TurnItem, { readonly type: "dynamic_tool" }>,
+  omitLinks: boolean,
+): string | null {
+  const output = item.output;
+  if (
+    !isRecord(output) ||
+    !(MCP_APP_OUTPUT_KEY in output || LEGACY_MCP_APP_OUTPUT_KEY in output) ||
+    !("result" in output)
+  ) {
+    return formatToolValue(output, item.viewedImagePath !== undefined, omitLinks);
+  }
+  const result = output.result;
+  return formatToolValue(
+    isRecord(result) ? mcpToolResultOutput(result) : result,
+    false,
+    omitLinks,
+    [],
+  );
+}
+
 /** `omitLinks` leaves out the resource links a client lists separately with turnItemOutputLinks. */
 export function turnItemOutputText(
   item: OrchestrationV2TurnItem,
@@ -239,11 +268,7 @@ export function turnItemOutputText(
     case "dynamic_tool":
       return item.outputOmitted === true
         ? null
-        : formatToolValue(
-            item.output,
-            item.viewedImagePath !== undefined,
-            options.omitLinks === true,
-          );
+        : dynamicToolOutputText(item, options.omitLinks === true);
     case "file_search":
       return item.results?.length
         ? item.results

@@ -2,6 +2,7 @@ import { Schema } from "effect";
 import { describe, expect, it } from "vite-plus/test";
 
 import { EnvironmentId, ThreadId } from "./baseSchemas.ts";
+import { PreviewOpenInput } from "./preview.ts";
 import {
   PreviewAutomationHost,
   PreviewAutomationInvalidSelectorError,
@@ -12,6 +13,9 @@ import { ProviderInstanceId } from "./providerInstance.ts";
 
 const decodeAutomationHost = Schema.decodeUnknownSync(PreviewAutomationHost);
 const decodeAutomationStatus = Schema.decodeUnknownSync(PreviewAutomationStatus);
+// An older client's status schema, from before load errors.
+const { loadError: _addedLoadError, ...olderStatusFields } = PreviewAutomationStatus.fields;
+const decodeOlderAutomationStatus = Schema.decodeUnknownSync(Schema.Struct(olderStatusFields));
 
 describe("PreviewAutomationLogsInput", () => {
   const decode = Schema.decodeUnknownSync(PreviewAutomationLogsInput);
@@ -50,6 +54,23 @@ describe("PreviewAutomationLogsInput", () => {
   });
 });
 
+describe("PreviewOpenInput", () => {
+  const decode = Schema.decodeUnknownSync(PreviewOpenInput);
+  it("decodes a tab without zoom and appearance and rejects values the browser lacks", () => {
+    expect(decode({ threadId: "thread-1", runtime: "server" })).toEqual({
+      threadId: "thread-1",
+      runtime: "server",
+    });
+    expect(decode({ threadId: "thread-1", zoomFactor: 1.25, colorScheme: "dark" })).toEqual({
+      threadId: "thread-1",
+      zoomFactor: 1.25,
+      colorScheme: "dark",
+    });
+    expect(() => decode({ threadId: "thread-1", zoomFactor: 7 })).toThrow();
+    expect(() => decode({ threadId: "thread-1", colorScheme: "sepia" })).toThrow();
+  });
+});
+
 describe("PreviewAutomationHost", () => {
   it("accepts legacy hosts and current operation advertisements", () => {
     expect(decodeAutomationHost({ clientId: "legacy", environmentId: "environment-1" })).toEqual({
@@ -67,6 +88,26 @@ describe("PreviewAutomationHost", () => {
 });
 
 describe("PreviewAutomationStatus", () => {
+  it("carries a load error to current clients while older peers on either side still decode", () => {
+    const base = {
+      available: true,
+      visible: false,
+      tabId: "preview-t",
+      url: "chrome-error://chromewebdata/",
+      title: null,
+      loading: false,
+    };
+    const loadError = {
+      url: "https://localhost/",
+      code: -202,
+      description: "ERR_CERT_AUTHORITY_INVALID",
+    };
+    // An older server or desktop host sends no load error.
+    expect(decodeAutomationStatus(base)).toEqual(base);
+    expect(decodeAutomationStatus({ ...base, loadError })).toEqual({ ...base, loadError });
+    expect(decodeOlderAutomationStatus({ ...base, loadError })).toEqual(base);
+    expect(() => decodeAutomationStatus({ ...base, loadError: { url: "x" } })).toThrow();
+  });
   it("accepts old hosts without viewport data and exposes it from current hosts", () => {
     const base = {
       available: true,

@@ -33,3 +33,8 @@ it.each(CONTEXT_CLIPBOARD_MIMES)("imports context from clipboard MIME %s", (mime
   }
 });
 // goat-rename: legacy-end
+
+it("imports CRLF and CR clipboard text with LF line breaks", () => {
+  const clipboard = { getData: (type: string) => (type === "text/plain" ? "x\r\n\r\ny\rz" : "") };
+  expect(importPastedComposerText(clipboard, () => new Map())).toBe("x\n\ny\nz");
+});

@@ -1,7 +1,7 @@
 import type { AcpRegistrySession } from "@goat/contracts";
 import type { AcpRegistrySessionPage } from "@goat/provider-core/server/driver";
 import * as Clock from "effect/Clock";
-import * as Crypto from "effect/Crypto";
+import * as SecureRandom from "effect/crypto/SecureRandom";
 import * as Effect from "effect/Effect";
 import * as Semaphore from "effect/Semaphore";
 
@@ -100,7 +100,7 @@ const trimHeld = (rows: ReadonlyArray<AcpRegistrySession>) => {
 };
 
 export const makeAcpSessionContinuations = Effect.fn("AcpSessionContinuations.make")(function* () {
-  const crypto = yield* Crypto.Crypto;
+  const random = yield* SecureRandom.SecureRandom;
   const gate = yield* Semaphore.make(1);
   const holds = new Map<string, Hold>();
   // In-flight provider calls, newest claim per key; a commit lands only for the claim still listed.
@@ -120,7 +120,7 @@ export const makeAcpSessionContinuations = Effect.fn("AcpSessionContinuations.ma
   };
 
   const mint = Effect.fn("AcpSessionContinuations.token")(function* () {
-    return (yield* crypto.randomUUIDv4().pipe(Effect.orDie)).replaceAll("-", "");
+    return (yield* random.uuidV4().pipe(Effect.orDie)).replaceAll("-", "");
   });
 
   const evictExpired = (now: number) => {

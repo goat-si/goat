@@ -6,6 +6,7 @@ import * as Fiber from "effect/Fiber";
 import * as Deferred from "effect/Deferred";
 import * as TestClock from "effect/testing/TestClock";
 import * as Logger from "effect/Logger";
+import * as NodeCrypto from "@effect/platform-node/NodeCrypto";
 import * as NodeServices from "@effect/platform-node/NodeServices";
 import { expect, vi } from "vite-plus/test";
 import * as ProviderInstanceRegistry from "../provider/ProviderInstanceRegistry.ts";
@@ -132,7 +133,7 @@ it.effect("uses a key materialized from real settings storage for title generati
             ServerConfig.layerTest(process.cwd(), { prefix: "goat-textgen-integration-" }),
           ),
         ),
-        Layer.provideMerge(NodeServices.layer),
+        Layer.provideMerge(Layer.mergeAll(NodeServices.layer, NodeCrypto.layer)),
       ),
     ),
   ),

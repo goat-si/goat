@@ -21,6 +21,8 @@ export const copilotClientCapabilitiesMeta = {
       "subagent.failed",
       "assistant.message_delta",
       "assistant.reasoning_delta",
+      "assistant.turn_start",
+      "assistant.idle",
     ],
   },
 };
@@ -116,6 +118,15 @@ export function makeCopilotSubagentRouting() {
             childSessionId: childSessionId(data.toolCallId),
             status: event.type === "subagent.failed" ? "failed" : "completed",
             result: typeof data.error === "string" ? data.error : null,
+          });
+        }
+        // Copilot holds session/prompt while an attached async shell runs (github/copilot-cli#5293).
+        case "assistant.turn_start":
+        case "assistant.idle": {
+          if (event.agentId !== undefined || data.aborted === true) return Effect.void;
+          return context.reportForegroundWork({
+            sessionId: event.sessionId,
+            state: event.type === "assistant.idle" ? "idle" : "running",
           });
         }
         default:

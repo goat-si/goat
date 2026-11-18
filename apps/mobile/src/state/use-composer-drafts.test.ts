@@ -1,19 +1,4 @@
-import { PrimaryConnectionTarget } from "@goat/client-runtime/connection";
 import { createGoatBotSendQueue } from "@goat/client-runtime/goatBot";
-import { createEnvironmentThreadShellAtoms } from "@goat/client-runtime/state/threads";
-import {
-  applyShellStreamEvent,
-  createEnvironmentSnapshotAtom,
-  EMPTY_SHELL_STATE,
-  type EnvironmentShellState,
-  type EnvironmentShellStatus,
-} from "@goat/client-runtime/state/shell";
-import {
-  v2ShellSnapshot,
-  v2ThreadShell,
-} from "../../../../packages/client-runtime/src/state/orchestrationV2TestFixtures";
-import * as Option from "effect/Option";
-import { AsyncResult, Atom, AtomRegistry } from "effect/reactivity";
 import { afterEach, describe, expect, it } from "@effect/vitest";
 import {
   CommandId,
@@ -23,8 +8,6 @@ import {
   ProjectId,
   ProviderInstanceId,
   ThreadId,
-  type OrchestrationV2ThreadShell,
-  type OrchestrationV2ShellSnapshot,
   type ModelSelection,
 } from "@goat/contracts";
 import { onTestFinished, vi } from "vite-plus/test";
@@ -184,7 +167,6 @@ import {
   archiveCloudComposerDrafts,
   clearComposerDraftContent,
   clearComposerDraftContentState,
-  subscribeComposerDraftModelReconciliation,
   clearComposerDraftsEnvironment,
   ComposerDraftPersistenceError,
   composerDraftsAtom,
@@ -195,13 +177,11 @@ import {
   decodePersistedComposerState,
   ensureComposerDraftsLoaded,
   type ComposerDraft,
-  findNewTaskDraftKeys,
   flushComposerDrafts,
   getComposerDraftSnapshot,
   mergeComposerDraftContentState,
   mergeComposerDraftContent,
   undoComposerDraftMerge,
-  migrateLegacyNewTaskDraft,
   modelOptionMemoryAtom,
   releaseUnusedComposerAttachmentFiles,
   removeComposerDraftsForEnvironment,
@@ -223,6 +203,8 @@ import {
 } from "./use-composer-drafts";
 import { retainComposerAttachmentFileForPreview } from "../lib/composerAttachmentPreviewRetention";
 import { retainComposerAttachmentUpload } from "../lib/composerAttachmentFiles";
+import { modelReconciliationHarness } from "../testing/composerDraftModelReconciliation";
+import { retargetSavedNewTaskDraft } from "./retarget-saved-draft";
 
 const DRAFT: ComposerDraft = {
   text: "hello",
@@ -264,98 +246,6 @@ function contextDraft(start: number, count: number): ComposerDraft {
     text: records.map((record) => `[Skill](t3-context://v1/skill/${record.contextId})`).join(" "),
     context: { version: 1, records },
     attachments: [],
-  };
-}
-
-function modelReconciliationHarness(
-  environmentId: EnvironmentId,
-  threadId: ThreadId,
-  initialStatus: EnvironmentShellStatus = "live",
-) {
-  const tasks: Array<() => void> = [];
-  const registry = AtomRegistry.make({
-    scheduleTask: (task) => {
-      tasks.push(task);
-      return () => {};
-    },
-  });
-  onTestFinished(() => registry.dispose());
-  const flush = () => {
-    for (let task = tasks.shift(); task !== undefined; task = tasks.shift()) task();
-  };
-  const selectedThreadId = ThreadId.make("another-selected-thread");
-  const initialSnapshot: OrchestrationV2ShellSnapshot = {
-    ...v2ShellSnapshot,
-    threads: [
-      { ...v2ThreadShell, id: threadId },
-      { ...v2ThreadShell, id: selectedThreadId },
-    ],
-  };
-  const shellStateAtom = Atom.make<EnvironmentShellState>({
-    ...EMPTY_SHELL_STATE,
-    snapshot: Option.some(initialSnapshot),
-    status: initialStatus,
-  });
-  const shellResultAtom = Atom.map(shellStateAtom, AsyncResult.success);
-  const snapshotAtom = createEnvironmentSnapshotAtom(() => shellResultAtom)(environmentId);
-  const catalogValueAtom = Atom.make({
-    isReady: true,
-    entries: new Map([
-      [
-        environmentId,
-        {
-          target: new PrimaryConnectionTarget({
-            environmentId,
-            label: "Environment",
-            httpBaseUrl: "https://example.test",
-            wsBaseUrl: "wss://example.test",
-          }),
-          profile: Option.none(),
-          enabled: true,
-        },
-      ],
-    ]),
-  });
-  const shells = createEnvironmentThreadShellAtoms({
-    catalogValueAtom,
-    snapshotAtom: () => snapshotAtom,
-  });
-  const selectedShell = shells.threadShellAtom({ environmentId, threadId: selectedThreadId });
-  onTestFinished(registry.mount(selectedShell));
-  onTestFinished(
-    subscribeComposerDraftModelReconciliation({
-      registry,
-      threadShellAtom: shells.threadShellAtom,
-      threadRefsAtom: shells.threadRefsAtom,
-      shellStateAtom: () => shellResultAtom,
-    }),
-  );
-  flush();
-  return {
-    flush,
-    setStatus(status: EnvironmentShellStatus) {
-      registry.set(shellStateAtom, { ...registry.get(shellStateAtom), status });
-      flush();
-    },
-    update(changes: Partial<OrchestrationV2ThreadShell>, status?: EnvironmentShellStatus) {
-      const state = registry.get(shellStateAtom);
-      const snapshot = Option.getOrThrow(state.snapshot);
-      registry.set(shellStateAtom, {
-        ...state,
-        status: status ?? state.status,
-        snapshot: Option.some(
-          applyShellStreamEvent(snapshot, {
-            kind: "thread.updated",
-            location: "active",
-            sequence: snapshot.snapshotSequence + 1,
-            thread: { ...snapshot.threads[0]!, ...changes },
-          }),
-        ),
-      });
-      flush();
-      expect(registry.get(selectedShell)?.id).toBe(selectedThreadId);
-    },
-    model: () => registry.get(shells.threadShellAtom({ environmentId, threadId }))!.modelSelection,
   };
 }
 
@@ -1806,101 +1696,28 @@ describe("mobile composer drafts", () => {
     expect(kept[0]).toMatchObject(receiptDraft);
   });
 
-  it("migrates project-keyed new-task drafts to id keys with the project stamped in", () => {
-    const now = "2026-09-05T12:00:00.000Z";
-    const [key, draft] = migrateLegacyNewTaskDraft(
-      "new-task:environment-1:project-1",
-      { text: "keep me", attachments: [] },
-      now,
-    );
-
-    expect(key).toMatch(/^new-task:[0-9a-z-]+$/);
-    expect(draft).toEqual({
-      text: "keep me",
-      attachments: [],
-      project: {
-        environmentId: EnvironmentId.make("environment-1"),
-        projectId: ProjectId.make("project-1"),
-        createdAt: now,
-      },
-    });
-
-    const stamped: ComposerDraft = {
-      text: "x",
-      attachments: [],
-      project: {
-        environmentId: EnvironmentId.make("environment-1"),
-        projectId: ProjectId.make("project-1"),
-        createdAt: now,
-      },
-    };
-    expect(migrateLegacyNewTaskDraft("new-task:some-id", stamped, now)).toEqual([
-      "new-task:some-id",
-      stamped,
-    ]);
-    expect(migrateLegacyNewTaskDraft("environment-1:thread-1", DRAFT, now)).toEqual([
-      "environment-1:thread-1",
-      DRAFT,
-    ]);
-    expect(migrateLegacyNewTaskDraft("pending-task:message-1", DRAFT, now)).toEqual([
-      "pending-task:message-1",
-      DRAFT,
-    ]);
-  });
-
-  it("keeps a freshly minted new-task draft bound until content arrives, then lists it per project", () => {
-    const project = {
-      environmentId: EnvironmentId.make("environment-1"),
-      projectId: ProjectId.make("project-1"),
-    };
-    const first = createNewTaskDraft(project);
-    const second = createNewTaskDraft(project);
-    expect(first).not.toBe(second);
-
-    expect(appAtomRegistry.get(composerDraftsAtom)[first]?.project).toMatchObject(project);
-
-    setComposerDraftText(first, "first idea");
-    setComposerDraftText(second, "second idea");
-    expect(findNewTaskDraftKeys(appAtomRegistry.get(composerDraftsAtom), project)).toEqual(
-      expect.arrayContaining([first, second]),
-    );
-
-    clearComposerDraftContent(first, { clearModelSelection: true, clearWorkspaceSelection: true });
-    expect(appAtomRegistry.get(composerDraftsAtom)[first]).toBeUndefined();
-    expect(getComposerDraftSnapshot(second).text).toBe("second idea");
-  });
-
-  it("retargets a new-task draft to another project without losing its text", () => {
+  it("retargets a saved new-task draft only after drafts load", async () => {
     const from = {
       environmentId: EnvironmentId.make("environment-1"),
       projectId: ProjectId.make("project-1"),
     };
     const to = {
-      environmentId: EnvironmentId.make("environment-2"),
+      environmentId: EnvironmentId.make("environment-1"),
       projectId: ProjectId.make("project-2"),
     };
     const key = createNewTaskDraft(from);
-    setComposerDraftText(key, "moving house");
-    appAtomRegistry.set(composerDraftsAtom, {
-      ...appAtomRegistry.get(composerDraftsAtom),
-      [key]: {
-        ...getComposerDraftSnapshot(key),
-        runtimeMode: "approval-required",
-        workspaceSelection: { mode: "worktree", branch: "feature/a", worktreePath: null },
-      },
+    setComposerDraftText(key, "kept through a cold start");
+    await flushComposerDrafts();
+    appAtomRegistry.set(composerDraftsAtom, {});
+    resetComposerDraftsLoadState();
+
+    await expect(retargetSavedNewTaskDraft(key, to)).resolves.toBe(true);
+    expect(getComposerDraftSnapshot(key)).toMatchObject({
+      text: "kept through a cold start",
+      project: to,
     });
-    const createdAt = getComposerDraftSnapshot(key).project?.createdAt;
-
-    retargetNewTaskDraft(key, to);
-
-    const moved = getComposerDraftSnapshot(key);
-    expect(moved.text).toBe("moving house");
-    expect(moved.runtimeMode).toBe("approval-required");
-
-    expect(moved.workspaceSelection).toBeUndefined();
-    expect(moved.project).toEqual({ ...to, createdAt });
-    expect(findNewTaskDraftKeys(appAtomRegistry.get(composerDraftsAtom), from)).toEqual([]);
-    expect(findNewTaskDraftKeys(appAtomRegistry.get(composerDraftsAtom), to)).toEqual([key]);
+    await expect(retargetSavedNewTaskDraft(`${key}-gone`, to)).resolves.toBe(false);
+    expect(appAtomRegistry.get(composerDraftsAtom)[`${key}-gone`]).toBeUndefined();
   });
 
   it("merges persisted option memory without replacing newer choices", async () => {

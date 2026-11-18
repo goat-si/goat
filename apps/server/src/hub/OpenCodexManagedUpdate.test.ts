@@ -1,3 +1,4 @@
+import * as NodeCrypto from "@effect/platform-node/NodeCrypto";
 import * as NodeServices from "@effect/platform-node/NodeServices";
 import { expect, it } from "@effect/vitest";
 import { EnvironmentId, OpenCodexUpdateMemberRecord } from "@goat/contracts";
@@ -56,7 +57,7 @@ const decodeOldState = Schema.decodeEffect(
   ),
 );
 
-it.layer(NodeServices.layer)("OpenCodex managed update", (it) => {
+it.layer(Layer.mergeAll(NodeServices.layer, NodeCrypto.layer))("OpenCodex managed update", (it) => {
   it.effect("applies an adopted Home through its ocx and accepts after probation", () =>
     Effect.gen(function* () {
       const fleet = makeFleet({ homeOwnership: "adopted" });
@@ -884,7 +885,11 @@ it.live("managed update and rollback use only retained compiled release pins", (
     expect(restarts).toHaveLength(2);
   }).pipe(
     Effect.scoped,
-    Effect.provide(ProcessRunner.layer.pipe(Layer.provideMerge(NodeServices.layer))),
+    Effect.provide(
+      ProcessRunner.layer.pipe(
+        Layer.provideMerge(Layer.mergeAll(NodeServices.layer, NodeCrypto.layer)),
+      ),
+    ),
   ),
 );
 

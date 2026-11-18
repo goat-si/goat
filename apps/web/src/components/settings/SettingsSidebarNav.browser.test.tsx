@@ -1,7 +1,7 @@
 import { describe, expect, it, vi } from "vite-plus/test";
 import { page, userEvent } from "vite-plus/test/browser";
 
-import { render } from "../../../test/render";
+import { act, render } from "../../../test/render";
 import { Sidebar, SidebarProvider } from "../ui/sidebar";
 import { SETTINGS_SEARCH_ITEMS } from "./settingsSearch";
 import { SettingsSearchShortcut } from "./SettingsSearchShortcut";
@@ -30,6 +30,22 @@ function SettingsSidebar({ defaultOpen = true }: { defaultOpen?: boolean }) {
 const searchInput = () => page.getByRole("combobox", { name: "Search settings" });
 
 describe("Settings search shortcut", () => {
+  it("opens search from physical Slash and F keys on non-US layouts", async () => {
+    await page.viewport(1280, 900);
+    await using _screen = await render(<SettingsSidebar />, { router: "/settings/hub" });
+    for (const { init, opens } of [
+      { init: { key: "/", code: "Digit7", shiftKey: true }, opens: true },
+      { init: { key: ".", code: "Slash" }, opens: true },
+      { init: { key: "а", code: "KeyF", ctrlKey: true }, opens: true },
+      { init: { key: "?", code: "Slash", shiftKey: true }, opens: false },
+    ]) {
+      if (document.activeElement instanceof HTMLElement) document.activeElement.blur();
+      const event = new KeyboardEvent("keydown", { ...init, bubbles: true, cancelable: true });
+      await act(() => document.body.dispatchEvent(event));
+      expect(event.defaultPrevented, JSON.stringify(init)).toBe(opens);
+      if (opens) await expect.element(searchInput()).toHaveFocus();
+    }
+  });
   it("opens the closed phone-width sidebar with search focused (#1198)", async () => {
     await page.viewport(390, 844);
     await using screen = await render(<SettingsSidebar />, { router: "/settings/hub" });

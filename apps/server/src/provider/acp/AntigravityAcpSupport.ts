@@ -7,11 +7,12 @@ import {
   type RuntimeMode,
 } from "@goat/contracts";
 import * as HostProcess from "@goat/shared/HostProcess";
-import * as Crypto from "effect/Crypto";
+import * as SecureRandom from "effect/crypto/SecureRandom";
 import * as Effect from "effect/Effect";
 import * as FileSystem from "effect/FileSystem";
 import * as Layer from "effect/Layer";
 import * as Path from "effect/Path";
+import * as Predicate from "effect/Predicate";
 import * as Scope from "effect/Scope";
 import * as Stream from "effect/Stream";
 import * as ChildProcessSpawner from "effect/process/ChildProcessSpawner";
@@ -40,6 +41,8 @@ export interface AntigravityAcpRuntimeInput extends Omit<
   | "transformStdout"
 > {
   readonly processEnvironment?: NodeJS.ProcessEnv;
+  readonly sessionEnvironment?: NodeJS.ProcessEnv | undefined;
+  readonly sessionLaunch?: unknown;
   readonly agentDeviceEnvironment?: Readonly<Record<string, string>>;
   readonly childProcessSpawner: ChildProcessSpawner.ChildProcessSpawner["Service"];
   readonly onAuthorizationUrl?: (url: string) => Effect.Effect<void, EffectAcpErrors.AcpError>;
@@ -93,8 +96,15 @@ const OPEN_MODEL_ACCESS_RELEASE = [1, 5, 1] as const;
  * 1.4.5 appends `systemPrompt.append` to its system instructions on new, load and resume, and
  * keeps none of it between processes, so every activation sends it again.
  */
-const antigravityAppendsSystemPrompt = (initializeResult: EffectAcpSchema.InitializeResponse) =>
-  isQualifiedAntigravityRelease(initializeResult.agentInfo?.version);
+const antigravityAppendsSystemPrompt = (initializeResult: EffectAcpSchema.InitializeResponse) => {
+  if (isQualifiedAntigravityRelease(initializeResult.agentInfo?.version)) return true;
+  const extension = initializeResult.agentCapabilities?._meta?.antigravity;
+  return (
+    Predicate.isObject(extension) &&
+    Predicate.isObject(extension.systemPrompt) &&
+    extension.systemPrompt.append === true
+  );
+};
 
 export function antigravitySessionMeta(
   initializeResult: EffectAcpSchema.InitializeResponse,
@@ -124,7 +134,7 @@ export const makeAntigravityAcpRuntime = Effect.fn("makeAntigravityAcpRuntime")(
 ): Effect.fn.Return<
   AcpSessionRuntime.AcpSessionRuntime["Service"],
   EffectAcpErrors.AcpError,
-  Crypto.Crypto | Scope.Scope
+  SecureRandom.SecureRandom | Scope.Scope
 > {
   const context = yield* Layer.build(
     AcpSessionRuntime.layer({

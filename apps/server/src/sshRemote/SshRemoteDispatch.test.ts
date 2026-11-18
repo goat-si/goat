@@ -31,6 +31,7 @@ import * as Ref from "effect/Ref";
 import * as Tracer from "effect/Tracer";
 import * as TestClock from "effect/testing/TestClock";
 import { resolveAttachmentPath } from "../attachmentStore.ts";
+import * as NodeCrypto from "@effect/platform-node/NodeCrypto";
 import * as NodeServices from "@effect/platform-node/NodeServices";
 import { describe, expect, it, vi } from "@effect/vitest";
 import * as SshConfig from "@goat/ssh/config";
@@ -140,6 +141,7 @@ describe("SSH dispatch tool compatibility", () => {
         forgetEnvironment: () => Effect.die("Unexpected forget"),
         disconnectEnvironment: () => Effect.die("Unexpected SSH disconnect"),
         revalidateTunnels: () => Effect.void,
+        closeAllTunnels: Effect.void,
         issueClientSession: () => Effect.die("unused"),
         issueMcpClientSession: () =>
           Effect.succeed({
@@ -183,7 +185,7 @@ describe("SSH dispatch tool compatibility", () => {
               Layer.provide(ServerSettings.layerTest()),
               Layer.provide(ServerConfig.layerTest("/fixture", { prefix: "goat-dispatch-test-" })),
               Layer.provide(FetchHttpClient.layer),
-              Layer.provide(NodeServices.layer),
+              Layer.provide(Layer.mergeAll(NodeServices.layer, NodeCrypto.layer)),
             ),
           ),
         );
@@ -578,6 +580,21 @@ describe("SshRemoteDispatch.callHostTool", () => {
     }),
   );
 
+  it.effect("does not count rejected initialization as an SSH tool answer", () =>
+    Effect.gen(function* () {
+      const { result, record } = yield* withRemote(
+        {
+          answer: (request) =>
+            request.method === "initialize" ? { rpcError: "no" } : { result: {} },
+        },
+        readCall(),
+      );
+      expect(result).toMatchObject({ _tag: "Failure", failure: { reason: "remote_refused" } });
+      if (result._tag === "Failure") expect(result.failure.hostAnswered).toBeUndefined();
+      expect(record.toolCalls).toEqual([]);
+    }),
+  );
+
   it.effect("returns the remote result and remembers the host as connected", () =>
     Effect.gen(function* () {
       const { result, record } = yield* withRemote(
@@ -612,7 +629,9 @@ describe("SshRemoteDispatch.callHostTool", () => {
         { answer: () => ({ throws: "fetch failed" }) },
         readCall(),
       );
-      expect(result._tag === "Failure" && result.failure.reason).toBe("host_unavailable");
+      expect(result).toMatchObject({ _tag: "Failure", failure: { reason: "host_unavailable" } });
+      if (result._tag === "Failure")
+        expect(result.failure).not.toHaveProperty("hostAnswered", true);
     }),
   );
 
@@ -638,6 +657,7 @@ describe("SshRemoteDispatch.callHostTool", () => {
       if (result._tag !== "Failure") return;
       expect(result.failure.reason).toBe("remote_refused");
       expect(result.failure.remoteCode).toBe("thread_not_found");
+      expect(result.failure).toHaveProperty("hostAnswered", true);
       expect(hostFailure(result.failure).code).toBe("thread_not_found");
     }),
   );
@@ -648,7 +668,10 @@ describe("SshRemoteDispatch.callHostTool", () => {
         { answer: (request) => initialize(request) ?? { rpcError: "Unknown tool" } },
         readCall(),
       );
-      expect(result._tag === "Failure" && result.failure.reason).toBe("remote_refused");
+      expect(result).toMatchObject({
+        _tag: "Failure",
+        failure: { reason: "remote_refused", hostAnswered: true },
+      });
     }),
   );
 
@@ -704,6 +727,7 @@ describe("SshRemoteDispatch.callHostTool", () => {
       expect(record.toolCalls).toEqual(["goat_provider_sync_status"]);
       if (result._tag !== "Failure") throw new Error("expected a refusal");
       expect(result.failure.reason).toBe("remote_outdated");
+      expect(result.failure).toHaveProperty("hostAnswered", true);
       expect(hostFailure(result.failure)).toMatchObject({
         code: "remote_outdated",
         reason: "remote_outdated",
@@ -1207,7 +1231,7 @@ const registrationLayer = McpHttpServer.toolkitRegistration(
   }),
 ).pipe(
   Layer.provide(layerPermissionProfilesOff),
-  Layer.provideMerge(McpServer.McpServer.layer),
+  Layer.provideMerge(McpHttpServer.layerInProcessMcpServer),
   Layer.provide(Layer.mock(ThreadManagement.ThreadManagementService)({})),
 );
 const mcpClient = McpSchema.McpServerClient.of({
@@ -1361,6 +1385,7 @@ const withLaunchRemote = <A, E>(
       forgetEnvironment: () => Effect.die("Unexpected forget"),
       disconnectEnvironment: () => Effect.void,
       revalidateTunnels: () => Effect.void,
+      closeAllTunnels: Effect.void,
       issueClientSession: () => Effect.die("unused"),
       issueMcpClientSession: (target, opts) =>
         Effect.gen(function* () {
@@ -1514,7 +1539,7 @@ const withLaunchRemote = <A, E>(
             Layer.provide(ServerSettings.layerTest()),
             Layer.provide(ServerConfig.layerTest("/fixture", { prefix: "goat-saved-target-" })),
             Layer.provide(FetchHttpClient.layer),
-            Layer.provide(NodeServices.layer),
+            Layer.provide(Layer.mergeAll(NodeServices.layer, NodeCrypto.layer)),
           ),
         ),
       );
@@ -2749,6 +2774,7 @@ it.effect.each(["matching", "missing", "wrong"] as const)(
         forgetEnvironment: () => Effect.die("Unexpected forget"),
         disconnectEnvironment: () => Effect.void,
         revalidateTunnels: () => Effect.void,
+        closeAllTunnels: Effect.void,
         issueClientSession: () => Effect.die("unused"),
         issueMcpClientSession: () =>
           Effect.succeed({ token: "fixture", expiresAt: null, runtimeModeCeilingApplied: true }),
@@ -2789,7 +2815,7 @@ it.effect.each(["matching", "missing", "wrong"] as const)(
                 ServerConfig.layerTest("/projects/fixture", { prefix: "report-echo-test-" }),
               ),
               Layer.provide(FetchHttpClient.layer),
-              Layer.provide(NodeServices.layer),
+              Layer.provide(Layer.mergeAll(NodeServices.layer, NodeCrypto.layer)),
             ),
           ),
         );
@@ -3160,6 +3186,7 @@ describe("SshRemoteDispatch SSH attachments", () => {
           forgetEnvironment: () => Effect.die("Unexpected forget"),
           disconnectEnvironment: () => Effect.die("Unexpected disconnect"),
           revalidateTunnels: () => Effect.void,
+          closeAllTunnels: Effect.void,
           issueClientSession: () => Effect.die("unused"),
           issueMcpClientSession: () =>
             Effect.sync(() => {
@@ -3279,7 +3306,7 @@ describe("SshRemoteDispatch SSH attachments", () => {
                 Layer.provide(Layer.succeed(ServerConfig.ServerConfig, config)),
                 Layer.provide(Layer.succeed(FileSystem.FileSystem, testFs)),
                 Layer.provide(Layer.succeed(HttpClient.HttpClient, uploadHttp)),
-                Layer.provide(NodeServices.layer),
+                Layer.provide(Layer.mergeAll(NodeServices.layer, NodeCrypto.layer)),
               ),
             ),
           );
@@ -3297,7 +3324,7 @@ describe("SshRemoteDispatch SSH attachments", () => {
       }).pipe(
         Effect.provide(
           ServerConfig.layerTest("/fixture", { prefix: "ssh-attachments-" }).pipe(
-            Layer.provideMerge(NodeServices.layer),
+            Layer.provideMerge(Layer.mergeAll(NodeServices.layer, NodeCrypto.layer)),
           ),
         ),
       ),
@@ -4016,6 +4043,7 @@ describe("SSH launcher transport", () => {
         forgetEnvironment: () => Effect.die("Unexpected forget"),
         disconnectEnvironment: () => Effect.die("Unexpected disconnect"),
         revalidateTunnels: () => Effect.void,
+        closeAllTunnels: Effect.void,
         issueClientSession: () => Effect.die("unused"),
         issueMcpClientSession: () =>
           Effect.succeed({ token: "fixture", expiresAt: null, runtimeModeCeilingApplied: true }),
@@ -4067,7 +4095,7 @@ describe("SSH launcher transport", () => {
             Layer.provide(ServerSettings.layerTest()),
             Layer.provide(ServerConfig.layerTest("/fixture", { prefix: "goat-launcher-test-" })),
             Layer.provide(FetchHttpClient.layer),
-            Layer.provide(NodeServices.layer),
+            Layer.provide(Layer.mergeAll(NodeServices.layer, NodeCrypto.layer)),
           ),
         ),
       );
@@ -4156,7 +4184,7 @@ it.effect("ready-only host tools never bootstrap or issue a session on a stopped
           Layer.provide(ServerSettings.layerTest()),
           Layer.provide(ServerConfig.layerTest("/fixture", { prefix: "ready-only-" })),
           Layer.provide(FetchHttpClient.layer),
-          Layer.provide(NodeServices.layer),
+          Layer.provide(Layer.mergeAll(NodeServices.layer, NodeCrypto.layer)),
         ),
       ),
       Effect.ensuring(
@@ -4293,7 +4321,7 @@ it.effect(
                 Layer.provide(ServerSettings.layerTest()),
                 Layer.provide(ServerConfig.layerTest("/fixture", { prefix: "placement-restart-" })),
                 Layer.provide(FetchHttpClient.layer),
-                Layer.provide(NodeServices.layer),
+                Layer.provide(Layer.mergeAll(NodeServices.layer, NodeCrypto.layer)),
               ),
             ),
           );

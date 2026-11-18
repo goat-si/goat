@@ -16,6 +16,16 @@ import {
   type NewTaskFlowState,
 } from "./new-task-flow-state";
 
+/**
+ * The route this flow serves when its draft cannot open: the draft is gone
+ * (`missing`) or only its project is (`pickProject`). Only the topmost draft
+ * route is served, so a screen compares `draftId` with its own draft id.
+ */
+export type UnopenableRouteDraft = {
+  readonly draftId: string;
+  readonly kind: "missing" | "pickProject";
+};
+
 export function useNewTaskRouteFlow(
   props: { flowKey?: string; routeDraftId?: string },
   projects: ReadonlyArray<EnvironmentProject>,
@@ -62,6 +72,10 @@ export function useNewTaskRouteFlow(
     read,
     update,
     pending: resolution.kind === "pending",
-    missingRouteDraftId: resolution.kind === "missing" ? (props.routeDraftId ?? null) : null,
+    unopenableRouteDraft:
+      props.routeDraftId !== undefined &&
+      (resolution.kind === "missing" || resolution.kind === "pickProject")
+        ? { draftId: props.routeDraftId, kind: resolution.kind }
+        : null,
   };
 }

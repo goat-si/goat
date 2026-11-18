@@ -83,15 +83,7 @@ import type { QueuedRunEdit } from "../../state/queued-run-edit";
 import type { FollowUpBehavior } from "../../lib/followUpBehavior";
 import type { ActiveTurnComposerAction } from "@goat/client-runtime/state/composer-dispatch";
 import * as Haptics from "expo-haptics";
-import {
-  useCallback,
-  useContext,
-  useEffect,
-  useEffectEvent,
-  useRef,
-  useState,
-  useSyncExternalStore,
-} from "react";
+import { useCallback, useContext, useEffect, useRef, useState } from "react";
 import {
   AppState,
   Keyboard,
@@ -149,11 +141,8 @@ import { ThreadBrowserFloat } from "../browser/ThreadBrowserFloat";
 import { useThreadServerBrowserTabs } from "../../state/preview";
 import type { QueuedThreadMessage } from "../../state/thread-outbox-model";
 import { scopedThreadKey } from "../../lib/scopedEntities";
-import {
-  finishThreadMessageJump,
-  pendingThreadMessageJump,
-  subscribeThreadMessageJump,
-} from "./threadMessageJump";
+import { finishThreadMessageJump } from "./threadMessageJump";
+import { useThreadMessageJumpLoading } from "./useThreadMessageJumpLoading";
 import {
   clearThreadComposerError,
   threadComposerErrorsAtom,
@@ -179,7 +168,8 @@ import { ComposerUsageLimits } from "./ComposerUsageLimits";
 import { PendingUserInputCard } from "./PendingUserInputCard";
 import { ProviderSubagentBar } from "./ProviderSubagentBar";
 import { SideChatParentRow } from "./SideChatParentRow";
-import { ThreadCreationFailedCard } from "./ThreadCreationFailedCard";
+import { ThreadCreationFailedSlot } from "./ThreadCreationFailedSlot";
+import { CompactBeforeSendNotice, type CompactBeforeSendState } from "./CompactBeforeSendNotice";
 import {
   FLOATING_WORKING_CONTROL_COVERAGE,
   FloatingWorkingControl,
@@ -255,6 +245,8 @@ export interface ThreadDetailScreenProps {
   readonly providerSubagentStatus?: ProviderSubagentStatus | null;
   readonly extensionStatuses?: NonNullable<OrchestrationV2ProviderSession["extensionStatuses"]>;
   readonly isCompacting: boolean;
+  /** Set while the next send compacts the thread first. */
+  readonly compactBeforeSend?: CompactBeforeSendState | null;
   readonly creationState:
     | {
         readonly kind: "preparing";
@@ -832,36 +824,12 @@ function ThreadDetailBody(
       (entry) => "acknowledged" in entry && entry.acknowledged === true,
     );
   const selectedThreadFeed = props.selectedThreadFeed;
-  // A palette message result opens the thread at that message: earlier
-  // history loads until the message is in the feed, which then scrolls to it.
-  const jumpMessageId = useSyncExternalStore(subscribeThreadMessageJump, () =>
-    pendingThreadMessageJump(selectedThreadKey),
-  );
-  const jumpMessageLoaded =
-    jumpMessageId !== null &&
-    selectedThreadFeed.some((entry) => entry.type === "message" && entry.id === jumpMessageId);
-  const historyForJump = props.historyControls;
-  // History down to the message in one request; another page if it is not there yet.
-  const loadEarlierForJump = useEffectEvent(() => {
-    if (jumpMessageId !== null) historyForJump?.onLoadThrough(jumpMessageId);
+  const { jumpMessageId, jumpMessageLoaded } = useThreadMessageJumpLoading({
+    threadKey: selectedThreadKey,
+    feed: selectedThreadFeed,
+    ready: contentPresentationKind === "ready",
+    history: props.historyControls,
   });
-  useEffect(() => {
-    if (jumpMessageId === null || jumpMessageLoaded || contentPresentationKind !== "ready") return;
-    if (historyForJump?.loading) return;
-    if (!historyForJump?.hasMoreHistory || historyForJump.error !== null) {
-      finishThreadMessageJump(selectedThreadKey);
-      return;
-    }
-    loadEarlierForJump();
-  }, [
-    contentPresentationKind,
-    historyForJump?.error,
-    historyForJump?.hasMoreHistory,
-    historyForJump?.loading,
-    jumpMessageId,
-    jumpMessageLoaded,
-    selectedThreadKey,
-  ]);
   const hasCompactableConversation =
     selectedThreadFeed.some(
       (entry) =>
@@ -1622,6 +1590,7 @@ function ThreadDetailBody(
                       />
                     </Animated.View>
                   ) : null}
+                  <CompactBeforeSendNotice state={props.compactBeforeSend} />
                   {usageLimitsReport && activeUserInputRequestId === null ? (
                     <Animated.View
                       className="shrink-0 px-4"
@@ -1639,17 +1608,11 @@ function ThreadDetailBody(
                     </Animated.View>
                   ) : null}
                   {props.creationState?.kind === "failed" ? (
-                    <Animated.View
-                      className="shrink-0 px-4"
-                      style={{ paddingBottom: composerBottomInset }}
-                      entering={FadeInDown.duration(220)}
-                      exiting={FadeOut.duration(140)}
-                    >
-                      <ThreadCreationFailedCard
-                        reason={props.creationState.reason}
-                        onEditTask={props.creationState.onEditTask}
-                      />
-                    </Animated.View>
+                    <ThreadCreationFailedSlot
+                      reason={props.creationState.reason}
+                      onEditTask={props.creationState.onEditTask}
+                      bottomInset={composerBottomInset}
+                    />
                   ) : null}
                 </ComposerCards>
                 <ComposerCards maxWidth={contentMaxWidth} onHeight={handlePendingCardHeight}>
@@ -1676,6 +1639,9 @@ function ThreadDetailBody(
                       ) : null}
                       {props.activePendingUserInput ? (
                         <PendingUserInputCard
+                          environmentId={props.environmentId}
+                          threadId={props.selectedThread.id}
+                          workspaceRoot={props.threadCwd}
                           canOperateThread={props.canOperateThread}
                           pendingUserInput={props.activePendingUserInput}
                           maxHeight={pendingUserInputMaxHeight}

@@ -237,7 +237,7 @@ it.effect("creates one Boat machine when a create is retried with the same clien
   }).pipe(
     Effect.provide(
       McpHttpServer.toolkitRegistration(SshToolkit, SshHandlers.layer).pipe(
-        Layer.provideMerge(McpServer.McpServer.layer),
+        Layer.provideMerge(McpHttpServer.layerInProcessMcpServer),
         Layer.provide(caller.dependencies),
         Layer.provideMerge(Sqlite.layerMemory),
       ),

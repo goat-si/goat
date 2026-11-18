@@ -15,6 +15,8 @@ import * as Option from "effect/Option";
 import * as Queue from "effect/Queue";
 
 import {
+  reuseHeldWorkspaceLease,
+  tryEnterWorkspaceLease,
   tryWithForeignWorkspaceSubtree,
   tryWithWorkspaceLease,
   tryWithWorkspaceSubtree,
@@ -512,6 +514,57 @@ it.live(
         );
         assert.isFalse(yield* fs.exists(record));
         assert.equal(yield* other.answer("lease", folder + "/inner"), "held");
+      }),
+    ).pipe(Effect.provide(NodeServices.layer)),
+);
+it.live(
+  "a reentrant section neither takes nor gives back the holder's claim other servers see",
+  () =>
+    Effect.scoped(
+      Effect.gen(function* () {
+        const { folder, other } = yield* twoServers;
+        const innerDone = yield* Deferred.make<void>();
+        const release = yield* Deferred.make<void>();
+        // A restore holds the worktree and its setup terminal reenters the lease (goat#3674).
+        const restore = yield* withWorkspaceLease(
+          folder,
+          reuseHeldWorkspaceLease(withWorkspaceLease(folder, Effect.void)).pipe(
+            Effect.andThen(Deferred.succeed(innerDone, undefined)),
+            Effect.andThen(Deferred.await(release)),
+          ),
+        ).pipe(Effect.forkChild);
+        yield* Deferred.await(innerDone);
+        // The holder's claim still keeps the other server's removal out.
+        assert.equal(yield* other.answer("subtree", folder), "busy");
+        yield* Deferred.succeed(release, undefined);
+        yield* Fiber.join(restore);
+        assert.equal(yield* other.answer("subtree", folder), "held");
+        assert.equal(yield* other.answer("release"), "released");
+      }),
+    ).pipe(Effect.provide(NodeServices.layer)),
+);
+
+it.live(
+  "while another server holds a folder whole a terminal's try is busy, and a fiber holding a folder whole fails instead of waiting",
+  () =>
+    Effect.scoped(
+      Effect.gen(function* () {
+        const { fs, base, folder, other } = yield* twoServers;
+        yield* fs.makeDirectory(base + "/own");
+        assert.equal(yield* other.answer("subtree", folder), "held");
+        assert.isTrue(
+          Option.isNone(yield* tryEnterWorkspaceLease(folder + "/inner", Effect.die("busy"))),
+        );
+        const waited = yield* tryWithWorkspaceSubtree(
+          base + "/own",
+          withWorkspaceLease(folder + "/inner", Effect.die("must not enter")).pipe(Effect.flip),
+        );
+        assert.equal(Option.getOrThrow(waited)._tag, "WorkspaceLeaseUnavailableError");
+        assert.equal(yield* other.answer("release"), "released");
+        assert.deepEqual(
+          yield* tryEnterWorkspaceLease(folder + "/inner", Effect.succeed(1)),
+          Option.some(1),
+        );
       }),
     ).pipe(Effect.provide(NodeServices.layer)),
 );

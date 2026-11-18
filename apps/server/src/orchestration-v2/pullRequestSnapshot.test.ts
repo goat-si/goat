@@ -101,7 +101,7 @@ it.layer(layer)("pull request snapshot", (it) => {
           snapshot.threads,
         );
         const setState = (settledAt: string | null, archivedAt: string | null) =>
-          sql`UPDATE orchestration_v2_projection_threads SET payload_json = json_set(payload_json, '$.settledAt', ${settledAt}, '$.archivedAt', ${archivedAt}) WHERE thread_id = ${threadId}`;
+          sql`UPDATE orchestration_v2_projection_threads SET payload_json = json_set(payload_json, '$.settledAt', ${settledAt}, '$.archivedAt', ${archivedAt}), archived_at = ${archivedAt} WHERE thread_id = ${threadId}`;
         yield* setState(DateTime.formatIso(now), null);
         assert.isEmpty((yield* store.getPullRequestSnapshot({ unsettledOnly: true })).threads);
         assert.lengthOf((yield* store.getPullRequestSnapshot({ threadId })).threads, 1);

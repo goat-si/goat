@@ -46,6 +46,8 @@ import {
   isDeviceHubInstalled,
   deviceToolVersions,
   DEVICE_HUB_VERSION,
+  AGENT_DEVICE_VERSION,
+  installedAgentDeviceEntry,
 } from "./DeviceToolchain.ts";
 
 const HUB_READY_TIMEOUT_MS = 30_000;
@@ -657,7 +659,35 @@ export const make = Effect.fn("LocalDeviceHost.make")(function* () {
   const stopAgentDeviceDaemon = Effect.fn("LocalDeviceHost.stopAgentDeviceDaemon")(function* (
     agentTool: { readonly entryPath: string; readonly nodePath: string } | null,
   ) {
-    if (!agentTool) return;
+    if (!agentTool) {
+      if (!(yield* fs.exists(daemonFilePath()).pipe(Effect.orElseSucceed(() => false)))) return;
+      const recorded = yield* readDaemonFile().pipe(Effect.option);
+      if (
+        Option.isSome(recorded) &&
+        recorded.value.pid &&
+        !(yield* isProcessAlive(recorded.value.pid))
+      ) {
+        yield* fs.remove(daemonFilePath(), { force: true }).pipe(Effect.ignore);
+        return;
+      }
+      const entryPath = yield* installedAgentDeviceEntry(config.baseDir, [
+        ...(Option.isSome(recorded) && recorded.value.version ? [recorded.value.version] : []),
+        AGENT_DEVICE_VERSION,
+      ]).pipe(
+        Effect.provideService(FileSystem.FileSystem, fs),
+        Effect.provideService(Path.Path, path),
+        Effect.orElseSucceed(() => null),
+      );
+      if (!entryPath) return;
+      const nodePath = yield* resolveNodeExecutable("Local device support", hostEnvironment).pipe(
+        Effect.provideService(FileSystem.FileSystem, fs),
+        Effect.provideService(Path.Path, path),
+        Effect.provideService(HostProcess.Platform, hostPlatform),
+        Effect.option,
+      );
+      if (Option.isNone(nodePath)) return;
+      agentTool = { entryPath, nodePath: nodePath.value };
+    }
     const clean = describeStop(yield* runDaemonStop(agentTool, true).pipe(Effect.result));
     if (clean === undefined) return;
     const plain = describeStop(yield* runDaemonStop(agentTool, false).pipe(Effect.result));
@@ -837,6 +867,9 @@ export const make = Effect.fn("LocalDeviceHost.make")(function* () {
         timeout: Duration.millis(options?.timeoutMs ?? 20_000),
         timeoutBehavior: "timedOutResult",
         ...(options?.stdin === undefined ? {} : { stdin: options.stdin }),
+        ...(options?.maxOutputBytes === undefined
+          ? {}
+          : { maxOutputBytes: options.maxOutputBytes }),
       })
       .pipe(
         Effect.map((result) => ({
@@ -878,9 +911,15 @@ export const make = Effect.fn("LocalDeviceHost.make")(function* () {
   const stop: DeviceHost.DeviceHost["Service"]["stop"] = startLock.withPermits(1)(
     Effect.gen(function* () {
       const running = yield* Ref.getAndSet(runningRef, null);
-      yield* stopHub(running?.hub);
-      yield* fs.remove(hubStatePath(), { force: true }).pipe(Effect.ignore);
-      yield* stopAgentDeviceDaemon(agentToolRef);
+      yield* Effect.all(
+        [
+          stopHub(running?.hub).pipe(
+            Effect.andThen(fs.remove(hubStatePath(), { force: true }).pipe(Effect.ignore)),
+          ),
+          stopAgentDeviceDaemon(agentToolRef),
+        ],
+        { concurrency: "unbounded", discard: true },
+      );
     }),
   );
 

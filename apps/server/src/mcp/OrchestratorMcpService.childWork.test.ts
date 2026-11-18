@@ -1,4 +1,5 @@
 import * as FleetSync from "../goatclaw/FleetSync.ts";
+import * as NodeCrypto from "@effect/platform-node/NodeCrypto";
 import * as NodeServices from "@effect/platform-node/NodeServices";
 import { assert, describe, it } from "@effect/vitest";
 import {
@@ -383,6 +384,7 @@ const fixture = Effect.fn("childWorkTest.fixture")(function* (
   );
   const layerDependencies = Layer.mergeAll(
     NodeServices.layer,
+    NodeCrypto.layer,
     Layer.mock(ThreadManagementService.ThreadManagementService)({
       hasReceipt: (commandId) =>
         stopBeforeClaim("receipt").pipe(
@@ -617,6 +619,7 @@ describe("OrchestratorMcpService delegate child work", () => {
         Effect.gen(function* () {
           const dispatchedCommands: Array<string> = [];
           let parentReads = 0;
+          let taskReads = 0;
           const delegatedTaskId = NodeId.make("subagent:wait-steer");
           const childThreadId = ThreadId.make("thread:oms-cw-child");
           const childRunId = RunId.make("run:oms-cw-child");
@@ -653,6 +656,7 @@ describe("OrchestratorMcpService delegate child work", () => {
             Layer.provide(
               Layer.mergeAll(
                 NodeServices.layer,
+                NodeCrypto.layer,
                 Layer.mock(ThreadManagementService.ThreadManagementService)({
                   hasReceipt: () => Effect.succeed(false),
                   getThreadShell: () =>
@@ -661,7 +665,8 @@ describe("OrchestratorMcpService delegate child work", () => {
                   getThreadRecords: (threadId, fields) =>
                     Effect.sync(() => {
                       if (threadId === callerThreadId) {
-                        if (!(fields?.length === 1 && fields[0] === "subagents")) parentReads += 1;
+                        if (fields?.length === 1 && fields[0] === "subagents") taskReads += 1;
+                        else parentReads += 1;
                         return parentWithSubagent;
                       }
                       return runningChild;
@@ -774,9 +779,11 @@ describe("OrchestratorMcpService delegate child work", () => {
             "delegated_task.request",
             "delegated_task.wake-policy",
           ]);
-          // Initial parent read (1) + initial readTask (2) + subagent.updated readTask (3, kept waiting)
-          // + steered user_message readTask (4, unblocked); queued_turn was filtered out.
-          assert.equal(parentReads, 4);
+          // The caller check reads the parent once; readTask reads only the task: initially (1), on
+          // subagent.updated (2, kept waiting) and on the steered user_message (3, unblocked);
+          // queued_turn was filtered out.
+          assert.equal(parentReads, 1);
+          assert.equal(taskReads, 3);
         }),
       ),
   );

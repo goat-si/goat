@@ -26,7 +26,7 @@ import {
   RelayAuthorizationUnavailableError,
 } from "@goat/contracts/relayErrors";
 import * as Alchemy from "alchemy";
-import * as Cloudflare from "alchemy/Cloudflare";
+import * as Cloudflare from "@alchemy.run/cloudflare";
 import * as Arr from "effect/Array";
 import * as Context from "effect/Context";
 import * as DateTime from "effect/DateTime";

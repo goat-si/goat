@@ -1,7 +1,7 @@
 import type { ProviderDriverKind, ThreadId } from "@goat/contracts";
 import { causeErrorTag } from "@goat/shared/observability";
 import * as Cause from "effect/Cause";
-import * as Crypto from "effect/Crypto";
+import * as SecureRandom from "effect/crypto/SecureRandom";
 import * as DateTime from "effect/DateTime";
 import * as Effect from "effect/Effect";
 import type * as EffectAcpProtocol from "effect-acp/protocol";
@@ -87,7 +87,7 @@ function filterTransientProtocolLog(
 }
 
 export const makeAcpNativeLoggerFactory = Effect.fn("makeAcpNativeLoggerFactory")(function* () {
-  const crypto = yield* Crypto.Crypto;
+  const random = yield* SecureRandom.SecureRandom;
   return (input: {
     readonly nativeEventLogger: ProviderEventLoggers.EventNdjsonLogger | undefined;
     readonly provider: ProviderDriverKind;
@@ -102,7 +102,7 @@ export const makeAcpNativeLoggerFactory = Effect.fn("makeAcpNativeLoggerFactory"
           {
             observedAt,
             event: {
-              id: yield* crypto.randomUUIDv4(),
+              id: yield* random.uuidV4(),
               kind: logInput.kind,
               provider: input.provider,
               createdAt: observedAt,

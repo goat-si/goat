@@ -1,4 +1,5 @@
 // @effect-diagnostics nodeBuiltinImport:off -- real Git fixtures run in temporary repositories.
+import * as NodeCrypto from "@effect/platform-node/NodeCrypto";
 import * as NodeServices from "@effect/platform-node/NodeServices";
 import { assert, it } from "@effect/vitest";
 import { hostCanStoreFileName } from "@goat/shared/testing/fileNames";
@@ -16,7 +17,7 @@ import * as VcsProcess from "./VcsProcess.ts";
 const layerGit = Layer.mergeAll(GitVcsDriver.layerVcs, GitVcsDriver.layer).pipe(
   Layer.provide(ServerConfig.layerTest(process.cwd(), { prefix: "goat-materialize-" })),
   Layer.provideMerge(VcsProcess.layer),
-  Layer.provideMerge(NodeServices.layer),
+  Layer.provideMerge(Layer.mergeAll(NodeServices.layer, NodeCrypto.layer)),
 );
 
 const git = (cwd: string, args: ReadonlyArray<string>, env?: NodeJS.ProcessEnv) =>

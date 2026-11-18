@@ -17,8 +17,7 @@ import * as CloudProviderAutoSetup from "./provider/CloudProviderAutoSetup.ts";
 import * as ProviderPathRefresh from "./provider/ProviderPathRefresh.ts";
 import * as ProviderSettings from "./provider/ProviderSettings.ts";
 import * as SshDeviceAdd from "./sshRemote/SshDeviceAdd.ts";
-import * as ProviderEventLoggers from "@goat/provider-core/server/ProviderEventLoggers";
-import type * as Crypto from "effect/Crypto";
+import type * as SecureRandom from "effect/crypto/SecureRandom";
 import type * as FileSystem from "effect/FileSystem";
 import * as Path from "effect/Path";
 import type * as ChildProcessSpawner from "effect/process/ChildProcessSpawner";
@@ -32,6 +31,7 @@ import * as HandoffExpiry from "./handoffs/HandoffExpiry.ts";
 import * as HubDown from "./hub/HubDown.ts";
 import * as HubNodeRepository from "./hubNodes/HubNodeRepository.ts";
 import * as DisposableMachineStore from "./hub/disposable/DisposableMachineStore.ts";
+import * as DisposableRouteGuard from "./hub/disposable/DisposableRouteGuard.ts";
 import * as HubNodes from "./hubNodes/HubNodes.ts";
 import * as LinkedHosts from "./linkedHosts/LinkedHosts.ts";
 import * as HostThreadsMcpService from "./mcp/HostThreadsMcpService.ts";
@@ -66,6 +66,7 @@ import * as SiteNotes from "./preview/SiteNotes.ts";
 
 import { heartbeat, HeartbeatWebSocket } from "./wsHeartbeat.ts";
 import * as NodeHttpServer from "@effect/platform-node/NodeHttpServer";
+import * as NodeCrypto from "@effect/platform-node/NodeCrypto";
 import * as NodeServices from "@effect/platform-node/NodeServices";
 import { EnvironmentHttpApi, type RepositoryIdentity } from "@goat/contracts";
 import * as Deferred from "effect/Deferred";
@@ -74,7 +75,6 @@ import { FetchHttpClient, HttpRouter, HttpServer } from "effect/http";
 import * as HttpApiBuilder from "effect/http-api/HttpApiBuilder";
 import * as Layer from "effect/Layer";
 import * as Option from "effect/Option";
-import * as Stream from "effect/Stream";
 
 import * as AcpRegistrySupport from "@goat/provider-acp-registry/server/AcpRegistrySupport";
 import * as McpProviderSessions from "@goat/provider-core/server/McpProviderSessions";
@@ -95,6 +95,7 @@ import * as SourceControlBuiltInDrivers from "./sourceControl/builtInDrivers.ts"
 import { BUILT_IN_SOURCE_CONTROL_DRIVER_LIST } from "./sourceControl/sourceControlDefinitions.ts";
 import * as TextGeneration from "./textGeneration/TextGeneration.ts";
 import * as AcpSessionService from "./provider/AcpSessionService.ts";
+import * as ProviderInstallationGate from "./provider/ProviderInstallationGate.ts";
 import * as ProviderInstanceRegistryHydration from "./provider/ProviderInstanceRegistryHydration.ts";
 import * as ProjectSettingsOverrideSweep from "./provider/ProjectSettingsOverrideSweep.ts";
 import * as TerminalManager from "./terminal/Manager.ts";
@@ -124,7 +125,7 @@ import * as AntigravityInstallation from "./provider/AntigravityInstallation.ts"
 import * as ProviderInstallation from "./provider/providerInstallation.ts";
 import * as ProviderCliGate from "./provider/ProviderCliGate.ts";
 import * as CodexInstallation from "./provider/CodexInstallation.ts";
-import * as ProviderInstanceRegistry from "./provider/ProviderInstanceRegistry.ts";
+import * as ProviderInstallationRefresh from "./provider/ProviderInstallationRefresh.ts";
 import * as ProviderAdapterRegistry from "./orchestration-v2/ProviderAdapterRegistry.ts";
 import * as ProviderRegistry from "./provider/ProviderRegistry.ts";
 import * as ProviderUsageLimitsIngestion from "./provider/ProviderUsageLimitsIngestion.ts";
@@ -174,6 +175,7 @@ import * as SshRuntimeAutoUpdate from "./cloud/sshRuntimeAutoUpdate.ts";
 import * as ServiceLauncherClient from "./cloud/serviceLauncherClient.ts";
 import { layerCommandReadiness } from "./commandReadiness.ts";
 import * as PendingAttachmentSweep from "./assets/PendingAttachmentSweep.ts";
+import * as NonBlockingSpawner from "./process/NonBlockingSpawner.ts";
 import * as ServerConfig from "./config.ts";
 import * as CuaDriver from "./cua/CuaDriver.ts";
 import * as LinuxFrameSource from "./cua/linuxFrames/LinuxFrameSource.ts";
@@ -216,6 +218,7 @@ import * as OrchestrationHttp from "./orchestration-v2/http.ts";
 import * as IdleCompactionService from "./orchestration-v2/IdleCompactionService.ts";
 import * as ProjectionMaintenance from "./orchestration-v2/ProjectionMaintenance.ts";
 import * as ProjectionStoreV2 from "./orchestration-v2/ProjectionStore.ts";
+import * as TerminalThreadWorktreeLive from "./orchestration-v2/goat/terminalThreadWorktree.ts";
 import * as ProjectStore from "./orchestration-v2/ProjectStore.ts";
 import * as ProviderEventIngestor from "./orchestration-v2/ProviderEventIngestor.ts";
 import * as RunFinalizationService from "./orchestration-v2/RunFinalizationService.ts";
@@ -244,7 +247,7 @@ import * as WorktreeSetupTracker from "./project/WorktreeSetupTracker.ts";
 import * as CodexManagedTokenBroker from "./provider/CodexManagedTokenBroker.ts";
 import * as AntigravityUsage from "./provider/Drivers/AntigravityUsage.ts";
 import { MuseUsageHome } from "@goat/provider-muse/server";
-import * as EventNdjsonLogger from "./provider/EventNdjsonLogger.ts";
+import { layerProviderEventLoggers } from "./provider/ProviderEventLoggersLayer.ts";
 import * as ModelManifest from "./provider/ModelManifest.ts";
 import * as ProviderDiagnosisService from "./provider/ProviderDiagnosisService.ts";
 import * as ResetCreditCoordinator from "./provider/resetCreditCoordinator.ts";
@@ -296,27 +299,6 @@ const layerApplicationObservability = EventLoopMonitor.layer.pipe(
   Layer.provideMerge(layerResourceAttribution),
 );
 
-// Share rotation state so driver loggers cannot race.
-const layerProviderEventLoggers = Layer.effect(
-  ProviderEventLoggers.ProviderEventLoggers,
-  Effect.gen(function* () {
-    const { providerEventLogPath } = yield* ServerConfig.ServerConfig;
-    const attribution = yield* ResourceAttribution.ResourceAttribution;
-    const store = yield* EventNdjsonLogger.makeEventNdjsonLogStore(providerEventLogPath, {
-      attribution,
-    }).pipe(
-      Effect.catch((error) =>
-        Effect.logWarning(error.message, { error }).pipe(
-          Effect.annotateLogs({ scope: "provider-observability" }),
-          Effect.as(undefined),
-        ),
-      ),
-    );
-    if (!store) return ProviderEventLoggers.NoOpProviderEventLoggers;
-    yield* Effect.addFinalizer(() => store.close());
-    return { native: store.logger("native"), canonical: store.logger("canonical") };
-  }),
-);
 const layerPtyAdapter = NodePtyAdapter.layer;
 
 export const layerServerSettings = ServerSettings.layer.pipe(
@@ -415,8 +397,14 @@ export const layerHttpServer = Layer.unwrap(
       },
     );
   }),
+).pipe(
+  // NodeHttpServer.layer also outputs NodeServices, whose spawner would shadow the wrapped one.
+  (layer) => NonBlockingSpawner.layer.pipe(Layer.provideMerge(layer)),
 );
-const layerPlatformServices = DocumentText.layer.pipe(Layer.provideMerge(NodeServices.layer));
+const layerPlatformServices = DocumentText.layer.pipe(
+  Layer.provideMerge(NonBlockingSpawner.layer),
+  Layer.provideMerge(Layer.mergeAll(NodeServices.layer, NodeCrypto.layer)),
+);
 export const layerPersistence = Layer.empty.pipe(Layer.provideMerge(SqlitePersistence.layerConfig));
 const layerVcsDriverRegistry = VcsDriverRegistry.layer.pipe(Layer.provide(VcsProjectConfig.layer));
 const layerSourceControlProviderRegistry = SourceControlProviderRegistry.layer.pipe(
@@ -456,7 +444,7 @@ const layerPullRequestService = PullRequestService.layer.pipe(
 );
 
 export const layerTextGeneration = TextGeneration.layer.pipe(
-  Layer.provide(layerSourceControlProviderRegistry),
+  Layer.provide(Layer.mergeAll(layerSourceControlProviderRegistry, ProviderInstallationGate.layer)),
 );
 
 const layerGitManager = GitManager.layer.pipe(
@@ -524,10 +512,13 @@ const layerCheckpointStore = CheckpointStore.layer.pipe(Layer.provide(layerVcsDr
 
 const layerPortScanner = PortScanner.layer.pipe(Layer.provide(ProcessRunner.layer));
 
-const layerTerminal = TerminalManager.layer.pipe(
+const layerTerminal = TerminalManager.layer(
+  ProviderInstanceRegistryHydration.deriveProviderInstanceConfigMap,
+).pipe(
   Layer.provide(layerPtyAdapter),
   Layer.provide(layerPortScanner),
   Layer.provide(layerNativeTelemetry),
+  Layer.provide(TerminalThreadWorktreeLive.layer.pipe(Layer.provide(ProjectionStoreV2.layer))),
 );
 
 const layerPreview = Layer.empty.pipe(
@@ -680,6 +671,7 @@ const layerScheduledTaskWebhookOrigin = Layer.effect(
 
 const layerOrchestrationV2Runtime = RuntimeLayer.layerProduction.pipe(
   RuntimeLayer.provideHostPressure(HostPressureMonitor.layer),
+  Layer.provide(UsageLimitSources.layerResetFallback),
   Layer.provide(layerScheduledTaskWebhookOrigin),
   Layer.provide(ProviderEventIngestor.layerAnalytics),
   Layer.provide(layerCheckpointStore),
@@ -712,38 +704,6 @@ const layerIdleCompactionWorker = Layer.effectDiscard(
 const layerThreadPullRequestWorker = Layer.effectDiscard(
   ThreadPullRequestService.make.pipe(Effect.flatMap((service) => service.start())),
 ).pipe(Layer.provide(layerPullRequestService));
-
-const layerProviderInstallationRefresh = Layer.effectDiscard(
-  Effect.gen(function* () {
-    const antigravity = yield* AntigravityInstallation.AntigravityInstallation;
-    const codex = yield* CodexInstallation.CodexInstallation;
-    const instances = yield* ProviderInstanceRegistry.ProviderInstanceRegistry;
-    const providers = yield* ProviderRegistry.ProviderRegistry;
-    yield* Stream.merge(
-      antigravity.changes.pipe(
-        Stream.changesWith((a, b) => a.installedVersion === b.installedVersion),
-        Stream.drop(1),
-      ),
-      codex.changes.pipe(
-        Stream.changesWith((a, b) => a.installedVersion === b.installedVersion),
-        Stream.drop(1),
-      ),
-    ).pipe(
-      Stream.runForEach((state) =>
-        instances.listInstances.pipe(
-          Effect.flatMap((entries) =>
-            Effect.forEach(
-              entries.filter((instance) => instance.driverKind === state.driver),
-              (instance) => providers.refreshInstance(instance.instanceId),
-              { discard: true },
-            ),
-          ),
-        ),
-      ),
-      Effect.forkScoped,
-    );
-  }),
-);
 
 const layerRuntimeCoreDependenciesBase = Layer.mergeAll(
   layerMemoryStarted,
@@ -803,7 +763,7 @@ const layerRuntimeCoreDependenciesBase = Layer.mergeAll(
     Layer.provide(ProjectionStoreV2.layer),
   ),
   ProviderUsageLimitsIngestion.layer,
-  layerProviderInstallationRefresh,
+  ProviderInstallationRefresh.layer,
   ProviderInstallation.layer,
   CloudFolderTrust.layer,
   ReplayMarkers.layer,
@@ -836,7 +796,8 @@ const layerRuntimeCoreDependenciesBase = Layer.mergeAll(
   // per-alias readiness lock and SSH cache invalidation span every caller.
   Layer.provideMerge(SshRemoteDispatchLive.layerCloudMachines),
   // Hosts linked over HTTPS, for the same SshRemoteDispatch builds and the MCP link tools.
-  Layer.provideMerge(LinkedHosts.layer),
+  // With the guard every route add, link and move asks whether a route names a disposable machine.
+  Layer.provideMerge(LinkedHosts.layer.pipe(Layer.provide(DisposableRouteGuard.layer))),
   Layer.provideMerge(
     DecisionLayers.layer.pipe(
       // The decision feed follows committed events through the shared sink.
@@ -923,6 +884,9 @@ const layerRuntimeCoreDependenciesBase = Layer.mergeAll(
     Layer.mergeAll(
       AntigravityInstallation.AntigravityInstallation.layer,
       CodexInstallation.CodexInstallation.layer,
+      // One gate for the server, below hydration so the Claude driver sees it: layers memoize
+      // by reference, so the runtime and text generation layers share it.
+      ProviderInstallationGate.layer,
     ),
   ),
 );
@@ -979,7 +943,7 @@ const layerRuntimeDependencies = layerRuntimeCoreDependencies.pipe(
   Layer.provideMerge(AnalyticsService.layer),
   Layer.provideMerge(ExternalLauncher.layer),
   Layer.provideMerge(RemoteOpenTargets.layer),
-  Layer.provideMerge(DirectEndpoints.layer),
+  Layer.provideMerge(DirectEndpoints.layer.pipe(Layer.provide(layerServerEnvironment))),
   Layer.provideMerge(RuntimeControl.layer),
   Layer.provideMerge(ServerLifecycleEvents.layer),
   Layer.provide(NetService.layer),
@@ -1026,7 +990,7 @@ const layerMakeRoutes = Layer.mergeAll(
     ServerHttp.layerRuntimeDrainRoute,
     RuntimeSessionRoute.layer,
     ServerHttp.layerOtlpTracesProxyRoute,
-    ServerHttp.layerAssetRoute,
+    ServerHttp.layerAssetRoute.pipe(HttpRouter.provideRequest(layerPullRequestService)),
     ServerHttp.layerAttachmentUploadRoute,
     GuestHttp.layer,
     DeviceHubProxy.layer,
@@ -1038,20 +1002,26 @@ const layerMakeRoutes = Layer.mergeAll(
     PenMembership.layer,
   ),
   Layer.mergeAll(
-    McpHttpServer.layer.pipe(Layer.provide(Layer.mergeAll(layerFleetHealth, layerFleetPressure))),
-    ComputerUseLeaseRoute.layer,
-    layerMemoryToolkits,
-    McpHttpServer.layerProviderToolkit.pipe(
-      Layer.provide(PermissionProfiles.layer),
-      Layer.provide(AcpSessionService.layer),
-    ),
-    HandoffExpiry.layer,
-    // Fleet goals act through the same launch, watch and dispatch services as these tools.
-    McpHttpServer.layerFleetToolkit.pipe(
-      Layer.provide(
-        GoalLayers.layer.pipe(Layer.provide(HubDown.layer), Layer.provideMerge(layerFleetHealth)),
+    McpHttpServer.layerWith(
+      Layer.mergeAll(
+        layerMemoryToolkits,
+        McpHttpServer.layerProviderToolkit.pipe(
+          Layer.provide(PermissionProfiles.layer),
+          Layer.provide(AcpSessionService.layer),
+        ),
+        // Fleet goals act through the same launch, watch and dispatch services as these tools.
+        McpHttpServer.layerFleetToolkit.pipe(
+          Layer.provide(
+            GoalLayers.layer.pipe(
+              Layer.provide(HubDown.layer),
+              Layer.provideMerge(layerFleetHealth),
+            ),
+          ),
+        ),
       ),
-    ),
+    ).pipe(Layer.provide(Layer.mergeAll(layerFleetHealth, layerFleetPressure))),
+    ComputerUseLeaseRoute.layer,
+    HandoffExpiry.layer,
   ).pipe(
     Layer.provide(ProviderAdapterRegistry.layerFromProviderInstanceRegistry),
     Layer.provide(McpOAuth.layerMcpClientAuthenticator),
@@ -1079,7 +1049,13 @@ const layerMakeRoutes = Layer.mergeAll(
     SshDeviceAdd.layer.pipe(
       Layer.provideMerge(
         SshHostSetup.layer.pipe(
-          Layer.provide(Layer.mergeAll(MaintenanceAudit.layer, PermissionProfiles.layer)),
+          Layer.provide(
+            Layer.mergeAll(
+              MaintenanceAudit.layer,
+              PermissionProfiles.layer,
+              DisposableRouteGuard.layer,
+            ),
+          ),
           Layer.provideMerge(
             ProviderHostSync.layer.pipe(
               Layer.provide(
@@ -1311,6 +1287,11 @@ export const runServer: Effect.Effect<
   | FileSystem.FileSystem
   | Path.Path
   | ChildProcessSpawner.ChildProcessSpawner
-  | Crypto.Crypto
+  | SecureRandom.SecureRandom
   | ServerConfig.ServerConfig
-> = PersistenceRecoveryOwner.run(Layer.launch(layerMakeServer));
+> = PersistenceRecoveryOwner.run(
+  Layer.launch(
+    // For the layers above whose spawner requirement is met by the caller's runtime.
+    layerMakeServer.pipe(Layer.provide(NonBlockingSpawner.layer)),
+  ),
+);

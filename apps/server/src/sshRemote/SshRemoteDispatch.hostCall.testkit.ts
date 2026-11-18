@@ -1,4 +1,5 @@
 // The fake SSH manager and remote /mcp that SshRemoteDispatch.callHostTool tests drive.
+import * as NodeCrypto from "@effect/platform-node/NodeCrypto";
 import * as NodeServices from "@effect/platform-node/NodeServices";
 import { vi } from "@effect/vitest";
 import * as SshConfig from "@goat/ssh/config";
@@ -133,6 +134,7 @@ export const withRemote = <A, E>(
       forgetEnvironment: () => Effect.die("Unexpected forget"),
       disconnectEnvironment: () => Effect.die("Unexpected SSH disconnect"),
       revalidateTunnels: () => Effect.void,
+      closeAllTunnels: Effect.void,
       issueClientSession: () => Effect.die("unused"),
       issueMcpClientSession: (_target, sessionOptions) => {
         record.sessionOptions.push(sessionOptions);
@@ -187,7 +189,7 @@ export const withRemote = <A, E>(
             ),
             Layer.provide(ServerConfig.layerTest("/fixture", { prefix: "goat-host-call-test-" })),
             Layer.provide(FetchHttpClient.layer),
-            Layer.provide(NodeServices.layer),
+            Layer.provide(Layer.mergeAll(NodeServices.layer, NodeCrypto.layer)),
           ),
         ),
       );

@@ -8,11 +8,20 @@ import {
   TerminalSessionSnapshot,
   TerminalAttachStreamEvent,
   TerminalProviderEnvironmentError,
+  TerminalCwdNotFoundError,
 } from "./terminal.ts";
 import { ProviderInstanceId } from "./providerInstance.ts";
 
 const encodeTerminalError = Schema.encodeUnknownSync(TerminalError);
 const decodeTerminalError = Schema.decodeUnknownSync(TerminalError);
+
+it("preserves missing-folder recovery guidance across the terminal error contract", () => {
+  const decoded = decodeTerminalError(
+    encodeTerminalError(new TerminalCwdNotFoundError({ cwd: "/missing" })),
+  );
+  expect(decoded.message).toContain("Restore the folder at this path before retrying.");
+  expect(() => decodeTerminalError({ _tag: "TerminalCwdNotFoundError", cwd: 42 })).toThrow();
+});
 
 function decodeSync<S extends Schema.Top>(schema: S, input: unknown): Schema.Schema.Type<S> {
   return Schema.decodeUnknownSync(schema as never)(input) as Schema.Schema.Type<S>;

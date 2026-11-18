@@ -46,7 +46,7 @@ import * as Stream from "effect/Stream";
 import * as Schema from "effect/Schema";
 import * as Scope from "effect/Scope";
 import * as SqlClient from "effect/sql/SqlClient";
-import * as NodeServices from "@effect/platform-node/NodeServices";
+import * as NodeServices from "@goat/shared/testing/nodeServicesWithCrypto";
 import { McpServer, McpSchema } from "effect/ai";
 import type * as ProviderAdapter from "@goat/provider-core/server/ProviderAdapter";
 import {
@@ -135,7 +135,7 @@ function cloudDelegationMcpLayer<A, E, R>(
     Layer.provide(layerNoFleetSync),
     Layer.provide(Layer.mock(ThreadLaunchService.ThreadLaunchService)({})),
     Layer.provide(Layer.mock(GitVcsDriver.GitVcsDriver)({})),
-    Layer.provideMerge(McpServer.McpServer.layer),
+    Layer.provideMerge(McpHttpServer.layerInProcessMcpServer),
     Layer.provideMerge(runtime),
     Layer.provide(registry),
     Layer.provide(projects),

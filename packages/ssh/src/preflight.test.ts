@@ -1,8 +1,10 @@
 import * as HostProcess from "@goat/shared/HostProcess";
+import * as NodeCrypto from "@effect/platform-node/NodeCrypto";
 import * as NodeServices from "@effect/platform-node/NodeServices";
 import { expect, it } from "@effect/vitest";
 import { SshPreflightReport, SSH_PREFLIGHT_STEP_ORDER } from "@goat/contracts";
 import * as Effect from "effect/Effect";
+import * as Layer from "effect/Layer";
 import * as Deferred from "effect/Deferred";
 import * as Fiber from "effect/Fiber";
 import * as Stream from "effect/Stream";
@@ -51,33 +53,38 @@ const fixture = (
     const spawner = ChildProcessSpawner.make((command) =>
       Effect.gen(function* () {
         if (command._tag !== "StandardCommand") return yield* Effect.die("Unexpected pipeline");
-        calls.push(command.args);
-        if (command.args[0] === "release")
+        calls.push(command.args.map(String));
+        if (command.args.map(String)[0] === "release")
           return {
             ...makeSuccessfulProcess(""),
             exitCode: Effect.succeed(ChildProcessSpawner.ExitCode(1)),
             stderr: Stream.make(new TextEncoder().encode("release not found")),
           };
-        if (command.args.includes("-G")) {
-          if (command.args.at(-1) === "bastion") return makeSuccessfulProcess("proxyjump none\n");
+        if (command.args.map(String).includes("-G")) {
+          if (command.args.map(String).at(-1) === "bastion")
+            return makeSuccessfulProcess("proxyjump none\n");
           return makeSuccessfulProcess(
             `hostname ${input.resolvedHost ?? input.host ?? "build.example"}\nuser ${input.user ?? "deploy"}\nport ${input.port ?? 22}\nidentityfile /keys/id_ed25519\nproxyjump bastion\n${input.settings ?? ""}`,
           );
         }
-        if (command.args.includes("-lf"))
+        if (command.args.map(String).includes("-lf"))
           return makeSuccessfulProcess(`256 SHA256:${"a".repeat(43)} build.example (ED25519)\n`);
-        const knownHosts = command.args.find((arg) => arg.startsWith("UserKnownHostsFile="));
+        const knownHosts = command.args
+          .map(String)
+          .find((arg) => arg.startsWith("UserKnownHostsFile="));
         if (knownHosts) {
           const file = knownHosts.slice("UserKnownHostsFile=".length).replace(/^"|"$/gu, "");
           if (!input.missingFingerprint)
             yield* fs.writeFileString(file, "build.example ssh-ed25519 AAAA\n");
           return makeSuccessfulProcess("");
         }
-        const auth = command.args.some(
-          (arg) =>
-            arg === "PreferredAuthentications=publickey" ||
-            arg === "PreferredAuthentications=none,publickey",
-        );
+        const auth = command.args
+          .map(String)
+          .some(
+            (arg) =>
+              arg === "PreferredAuthentications=publickey" ||
+              arg === "PreferredAuthentications=none,publickey",
+          );
         const error = auth
           ? (input.auth ?? "")
           : (input.handshake ??
@@ -94,7 +101,7 @@ const fixture = (
                 ...(input.factsEnv ?? []),
                 "sh",
                 "-c",
-                `sh -c ${command.args.at(-1)}`,
+                `sh -c ${command.args.map(String).at(-1)}`,
               ]).pipe(Effect.provideService(ChildProcessSpawner.ChildProcessSpawner, nativeSpawner))
             : undefined;
         return {
@@ -156,7 +163,7 @@ it.effect(
       expect(proxies[0]).toContain("bastion");
       expect(proxies[1]).toBe(proxies[0]);
       expect(report.steps[5]?.summary).toContain("already installed");
-    }).pipe(Effect.provide(NodeServices.layer)),
+    }).pipe(Effect.provide(Layer.mergeAll(NodeServices.layer, NodeCrypto.layer))),
 );
 
 it.effect.each(["refused", "dns", "proxy", "jumpDenied"] as const)(
@@ -179,7 +186,7 @@ it.effect.each(["refused", "dns", "proxy", "jumpDenied"] as const)(
       if (kind === "proxy") expect(report.steps[0]?.fix?.instruction).toContain("Tailscale");
       if (kind === "jumpDenied")
         expect(report.steps[0]?.summary).toContain("jump hop bastion.example");
-    }).pipe(Effect.provide(NodeServices.layer)),
+    }).pipe(Effect.provide(Layer.mergeAll(NodeServices.layer, NodeCrypto.layer))),
 );
 it.effect.each(["node", "node.tail.ts.net", "100.64.0.2", "100.127.255.254"])(
   "offers Tailscale guidance for %s",
@@ -187,7 +194,7 @@ it.effect.each(["node", "node.tail.ts.net", "100.64.0.2", "100.127.255.254"])(
     Effect.gen(function* () {
       const { report } = yield* fixture({ host, handshake: stderr.dns });
       expect(report.steps[0]?.fix?.instruction).toContain("Tailscale");
-    }).pipe(Effect.provide(NodeServices.layer)),
+    }).pipe(Effect.provide(Layer.mergeAll(NodeServices.layer, NodeCrypto.layer))),
 );
 it.effect.each(["unknownKey", "changedKey"] as const)("stops after %s", (kind) =>
   Effect.gen(function* () {
@@ -196,7 +203,7 @@ it.effect.each(["unknownKey", "changedKey"] as const)("stops after %s", (kind) =
     expect(report.steps[1]?.state).toBe(kind === "unknownKey" ? "needs_review" : "failed");
     if (kind === "unknownKey") expect(report.steps[1]?.fingerprint).toContain("SHA256:");
     expect(report.steps[2]?.state).toBe("skipped");
-  }).pipe(Effect.provide(NodeServices.layer)),
+  }).pipe(Effect.provide(Layer.mergeAll(NodeServices.layer, NodeCrypto.layer))),
 );
 it.effect("requires a managed pin even when known_hosts already matches", () =>
   Effect.gen(function* () {
@@ -208,7 +215,7 @@ it.effect("requires a managed pin even when known_hosts already matches", () =>
     expect(report.steps[1]?.fingerprint).toContain("SHA256:");
     expect(report.steps[2]?.summary).toBe("Waits for the host key check.");
     expect(calls.filter((args) => args.includes("-G"))).toHaveLength(3);
-  }).pipe(Effect.provide(NodeServices.layer)),
+  }).pipe(Effect.provide(Layer.mergeAll(NodeServices.layer, NodeCrypto.layer))),
 );
 it.effect.each(["keyAndPassword", "passwordOnly", "partial"] as const)(
   "explains %s authentication",
@@ -227,7 +234,7 @@ it.effect.each(["keyAndPassword", "passwordOnly", "partial"] as const)(
         expect(report.steps[2]?.fix?.instruction).toContain("PubkeyAuthentication yes");
       if (kind === "partial")
         expect(report.steps[2]?.fix?.instruction).toContain("AuthenticationMethods publickey");
-    }).pipe(Effect.provide(NodeServices.layer)),
+    }).pipe(Effect.provide(Layer.mergeAll(NodeServices.layer, NodeCrypto.layer))),
 );
 it.effect("does not mistake bastion authentication for destination sign-in", () =>
   Effect.gen(function* () {
@@ -240,7 +247,7 @@ it.effect("does not mistake bastion authentication for destination sign-in", () 
     expect(report.steps[2]?.summary).toContain("build refused Origin's SSH keys");
     expect(report.steps[2]?.fix?.command).toContain("ssh-copy-id");
     expect(report.steps.slice(3).every((step) => step.state === "skipped")).toBe(true);
-  }).pipe(Effect.provide(NodeServices.layer)),
+  }).pipe(Effect.provide(Layer.mergeAll(NodeServices.layer, NodeCrypto.layer))),
 );
 it.effect("ignores bastion key authentication in the destination's no-key success summary", () =>
   Effect.gen(function* () {
@@ -252,7 +259,7 @@ it.effect("ignores bastion key authentication in the destination's no-key succes
     });
     expect(report.ready).toBe(true);
     expect(report.steps[2]?.summary).toBe("The host let GOAT in without a key.");
-  }).pipe(Effect.provide(NodeServices.layer)),
+  }).pipe(Effect.provide(Layer.mergeAll(NodeServices.layer, NodeCrypto.layer))),
 );
 it.effect.each(["build.example", "build", "BUILD.EXAMPLE", "[2001:db8::1]"])(
   "recognizes destination key authentication for %s even if the shell fails",
@@ -266,7 +273,7 @@ it.effect.each(["build.example", "build", "BUILD.EXAMPLE", "[2001:db8::1]"])(
       expect(report.steps[2]?.state).toBe("passed");
       expect(report.steps[2]?.summary).toBe("Signed in using Origin's SSH key.");
       expect(report.steps[3]?.state).toBe("failed");
-    }).pipe(Effect.provide(NodeServices.layer)),
+    }).pipe(Effect.provide(Layer.mergeAll(NodeServices.layer, NodeCrypto.layer))),
 );
 it.effect.each(["private", "goat-private-12345678"])(
   "retains %s routing and managed pin in key registration",
@@ -289,7 +296,7 @@ it.effect.each(["private", "goat-private-12345678"])(
       expect(
         calls[3]?.some((arg) => arg.startsWith("ProxyCommand=") && arg.includes("bastion")),
       ).toBe(true);
-    }).pipe(Effect.provide(NodeServices.layer)),
+    }).pipe(Effect.provide(Layer.mergeAll(NodeServices.layer, NodeCrypto.layer))),
 );
 it.effect.each([
   ["goat-juns-macbook-pro-e6ef0008", "juns-macbook-pro"],
@@ -310,7 +317,7 @@ it.effect.each([
       `Add this computer's key to ${displayHost} once: run this command in Terminal on jun’s Mac Studio, enter the password when asked, then choose Check again.`,
     );
     expect(report.steps[2]?.fix?.command).toBe(`ssh-copy-id -i '/keys/id_ed25519.pub' '${host}'`);
-  }).pipe(Effect.provide(NodeServices.layer)),
+  }).pipe(Effect.provide(Layer.mergeAll(NodeServices.layer, NodeCrypto.layer))),
 );
 it.effect.each(["handshake", "auth"] as const)(
   "reports Tailscale SSH policy refusals during %s as sign-in failures",
@@ -338,7 +345,7 @@ it.effect.each(["handshake", "auth"] as const)(
       });
       expect(report.steps.slice(3).every((step) => step.state === "skipped")).toBe(true);
       expect(calls).toHaveLength(stage === "handshake" ? 3 : 4);
-    }).pipe(Effect.provide(NodeServices.layer)),
+    }).pipe(Effect.provide(Layer.mergeAll(NodeServices.layer, NodeCrypto.layer))),
 );
 it.effect("accepts none authentication", () =>
   Effect.gen(function* () {
@@ -348,7 +355,7 @@ it.effect("accepts none authentication", () =>
     });
     expect(report.ready).toBe(true);
     expect(report.steps[2]?.summary).toBe("The host let GOAT in without a key.");
-  }).pipe(Effect.provide(NodeServices.layer)),
+  }).pipe(Effect.provide(Layer.mergeAll(NodeServices.layer, NodeCrypto.layer))),
 );
 it.effect.each([
   ["GOAT_OS=Darwin\nGOAT_ARCH=x86_64\nGOAT_FACTS_DONE=yes\n", "does not support"],
@@ -361,7 +368,7 @@ it.effect.each([
     expect(report.steps[3]?.state).toBe("failed");
     expect(report.steps[3]?.summary).toContain(message);
     expect(report.steps[5]?.summary).toBe("Waits for the platform check.");
-  }).pipe(Effect.provide(NodeServices.layer)),
+  }).pipe(Effect.provide(Layer.mergeAll(NodeServices.layer, NodeCrypto.layer))),
 );
 it.effect("bounds a stalled handshake with TestClock", () =>
   Effect.gen(function* () {
@@ -369,7 +376,7 @@ it.effect("bounds a stalled handshake with TestClock", () =>
     const spawner = ChildProcessSpawner.make((command) =>
       Effect.gen(function* () {
         if (command._tag !== "StandardCommand") return yield* Effect.die("Unexpected pipeline");
-        if (command.args.includes("-G"))
+        if (command.args.map(String).includes("-G"))
           return makeSuccessfulProcess("hostname build.example\nuser deploy\nport 22\n");
         yield* Deferred.succeed(entered, undefined);
         return { ...makeSuccessfulProcess(""), exitCode: Effect.never };
@@ -387,7 +394,7 @@ it.effect("bounds a stalled handshake with TestClock", () =>
     yield* TestClock.adjust("20 seconds");
     const report = yield* Fiber.join(fiber);
     expect(report.steps[0]?.summary).toContain("timed out");
-  }).pipe(Effect.provide(NodeServices.layer)),
+  }).pipe(Effect.provide(Layer.mergeAll(NodeServices.layer, NodeCrypto.layer))),
 );
 
 it.effect.each([true, false])("low disk space blocks only a required transfer (%s)", (transfer) =>
@@ -398,7 +405,7 @@ it.effect.each([true, false])("low disk space blocks only a required transfer (%
     expect(report.steps[4]?.state).toBe(transfer ? "failed" : "passed");
     if (transfer)
       expect(report.steps[4]?.summary).toContain("512 MB for the archive and extracted runtime");
-  }).pipe(Effect.provide(NodeServices.layer)),
+  }).pipe(Effect.provide(Layer.mergeAll(NodeServices.layer, NodeCrypto.layer))),
 );
 it.effect("bounds both process streams to 64 KiB while draining the child", () =>
   Effect.gen(function* () {
@@ -431,7 +438,7 @@ it.effect.each([
     expect(report.steps[0]?.state).toBe("passed");
     expect(report.steps[2]?.state).toBe("passed");
     expect(calls).toHaveLength(4);
-  }).pipe(Effect.provide(NodeServices.layer)),
+  }).pipe(Effect.provide(Layer.mergeAll(NodeServices.layer, NodeCrypto.layer))),
 );
 it.effect.each(["2001:db8::2", "[2001:db8::2]"])("attributes IPv6 jump-hop %s", (hop) =>
   Effect.gen(function* () {
@@ -443,7 +450,7 @@ it.effect.each(["2001:db8::2", "[2001:db8::2]"])("attributes IPv6 jump-hop %s", 
     expect(report.steps[0]?.summary).toContain(`jump hop ${hop} failed`);
     expect(report.steps[2]?.state).toBe("skipped");
     expect(calls).toHaveLength(3);
-  }).pipe(Effect.provide(NodeServices.layer)),
+  }).pipe(Effect.provide(Layer.mergeAll(NodeServices.layer, NodeCrypto.layer))),
 );
 it.effect.each(["oracle.tail.ts.net", "100.64.0.1", "100.127.255.254"])(
   "explains no-key Tailscale sign-in for %s",
@@ -456,7 +463,7 @@ it.effect.each(["oracle.tail.ts.net", "100.64.0.1", "100.127.255.254"])(
       });
       expect(report.ready).toBe(true);
       expect(report.steps[2]?.summary).toBe("Signed in through Tailscale SSH; no key needed.");
-    }).pipe(Effect.provide(NodeServices.layer)),
+    }).pipe(Effect.provide(Layer.mergeAll(NodeServices.layer, NodeCrypto.layer))),
 );
 it.effect.each(["clisu-oracle", "100.63.255.255", "100.128.0.0", "public.example"])(
   "does not call non-Tailscale none authentication Tailscale for %s",
@@ -468,7 +475,7 @@ it.effect.each(["clisu-oracle", "100.63.255.255", "100.128.0.0", "public.example
         handshake: `Authenticated to ${host} using none.`,
       });
       expect(report.steps[2]?.summary).toBe("The host let GOAT in without a key.");
-    }).pipe(Effect.provide(NodeServices.layer)),
+    }).pipe(Effect.provide(Layer.mergeAll(NodeServices.layer, NodeCrypto.layer))),
 );
 it.effect("formats disk space in human units and only counts incremental installation space", () =>
   Effect.gen(function* () {
@@ -481,7 +488,7 @@ it.effect("formats disk space in human units and only counts incremental install
       "Only 1 MB free; installing GOAT needs 512 MB for the archive and extracted runtime.",
     );
     expect(low.report.steps[4]?.fix?.instruction).toContain("512 MB");
-  }).pipe(Effect.provide(NodeServices.layer)),
+  }).pipe(Effect.provide(Layer.mergeAll(NodeServices.layer, NodeCrypto.layer))),
 );
 
 it.effect("fingerprint review keeps every SSH stage read-only", () =>
@@ -494,7 +501,7 @@ it.effect("fingerprint review keeps every SSH stage read-only", () =>
       expect(args).toContain("ControlMaster=no");
       expect(args).toContain("ControlPath=none");
     }
-  }).pipe(Effect.provide(NodeServices.layer)),
+  }).pipe(Effect.provide(Layer.mergeAll(NodeServices.layer, NodeCrypto.layer))),
 );
 
 it.effect(
@@ -520,7 +527,7 @@ it.effect(
           expect(args).toContain(option);
       }
       expect(calls[3]).toContain("sh");
-    }).pipe(Effect.provide(NodeServices.layer)),
+    }).pipe(Effect.provide(Layer.mergeAll(NodeServices.layer, NodeCrypto.layer))),
 );
 it.effect("fingerprint collection failure gives actionable guidance instead of review", () =>
   Effect.gen(function* () {
@@ -528,7 +535,7 @@ it.effect("fingerprint collection failure gives actionable guidance instead of r
     expect(report.steps[1]?.state).toBe("failed");
     expect(report.steps[1]?.fingerprint).toBeUndefined();
     expect(report.steps[1]?.fix?.instruction).toContain("negotiated destination host key");
-  }).pipe(Effect.provide(NodeServices.layer)),
+  }).pipe(Effect.provide(Layer.mergeAll(NodeServices.layer, NodeCrypto.layer))),
 );
 it.effect("fingerprint probes also terminate none-auth sessions and override remote commands", () =>
   Effect.gen(function* () {
@@ -549,7 +556,7 @@ it.effect("fingerprint probes also terminate none-auth sessions and override rem
       "ForwardX11=no",
     ])
       expect(probe).toContain(option);
-  }).pipe(Effect.provide(NodeServices.layer)),
+  }).pipe(Effect.provide(Layer.mergeAll(NodeServices.layer, NodeCrypto.layer))),
 );
 
 it.effect(
@@ -566,7 +573,7 @@ it.effect(
       expect(report.steps[4]?.summary).toContain("1 MB free");
       expect(report.steps[4]?.summary).toContain("installed runtime cannot be reused");
       expect(report.ready).toBe(true);
-    }).pipe(Effect.provide(NodeServices.layer)),
+    }).pipe(Effect.provide(Layer.mergeAll(NodeServices.layer, NodeCrypto.layer))),
 );
 
 it.effect("provides key creation and alias-based installation when no local key exists", () =>
@@ -581,7 +588,7 @@ it.effect("provides key creation and alias-based installation when no local key 
     expect(report.steps[2]?.fix?.command).toBe(
       "ssh-keygen -t ed25519 && ssh-copy-id -i '/isolated owner/.ssh/id_ed25519.pub' 'build'",
     );
-  }).pipe(Effect.provide(NodeServices.layer)),
+  }).pipe(Effect.provide(Layer.mergeAll(NodeServices.layer, NodeCrypto.layer))),
 );
 
 it.effect.each([
@@ -612,7 +619,7 @@ it.effect.each([
     );
     expect(publishedSearches).toBe(database ? 0 : 1);
     expect(report.ready).toBe(!database);
-  }).pipe(Effect.provide(NodeServices.layer)),
+  }).pipe(Effect.provide(Layer.mergeAll(NodeServices.layer, NodeCrypto.layer))),
 );
 it.effect("a published fallback still requires space to install", () =>
   Effect.gen(function* () {
@@ -625,7 +632,7 @@ it.effect("a published fallback still requires space to install", () =>
     expect(report.steps.find((step) => step.id === "runtime")?.state).toBe("passed");
     expect(report.steps.find((step) => step.id === "disk")?.state).toBe("failed");
     expect(report.ready).toBe(false);
-  }).pipe(Effect.provide(NodeServices.layer)),
+  }).pipe(Effect.provide(Layer.mergeAll(NodeServices.layer, NodeCrypto.layer))),
 );
 
 it.effect.each(["pending", "rejected"] as const)(
@@ -654,7 +661,7 @@ it.effect.each(["pending", "rejected"] as const)(
       );
       expect(publishedSearches).toBe(0);
       expect(report.ready).toBe(false);
-    }).pipe(Effect.provide(NodeServices.layer)),
+    }).pipe(Effect.provide(Layer.mergeAll(NodeServices.layer, NodeCrypto.layer))),
 );
 
 it.effect("a rejected nightly does not bypass stable fallback lookup or disk enforcement", () =>
@@ -677,7 +684,7 @@ it.effect("a rejected nightly does not bypass stable fallback lookup or disk enf
     expect(publishedExcludes).toEqual([new Set([nightly])]);
     expect(report.steps.find((step) => step.id === "disk")?.state).toBe("failed");
     expect(report.ready).toBe(false);
-  }).pipe(Effect.provide(NodeServices.layer)),
+  }).pipe(Effect.provide(Layer.mergeAll(NodeServices.layer, NodeCrypto.layer))),
 );
 
 it.effect("finds System32 tar with SystemRoot unset and SYSTEMROOT set", () =>
@@ -699,5 +706,5 @@ it.effect("finds System32 tar with SystemRoot unset and SYSTEMROOT set", () =>
       factsEnv: [`PATH=${bin}:${process.env.PATH ?? ""}`, "SYSTEMROOT=C:\\WINDOWS"],
     });
     expect(report.steps.find((step) => step.id === "platform")?.state).toBe("passed");
-  }).pipe(Effect.provide(NodeServices.layer), Effect.scoped),
+  }).pipe(Effect.provide(Layer.mergeAll(NodeServices.layer, NodeCrypto.layer)), Effect.scoped),
 );

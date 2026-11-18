@@ -238,7 +238,7 @@ const makeCuaStageFixture = Effect.fn("test.makeCuaStageFixture")(function* (
     if (command._tag !== "StandardCommand" || command.command !== "curl") {
       return spawner.spawn(command);
     }
-    const output = command.args[command.args.indexOf("--output") + 1];
+    const output = command.args.map(String)[command.args.map(String).indexOf("--output") + 1];
     assert.isString(output);
     requests++;
     return fs.writeFile(output!, download).pipe(Effect.as(mockProcess(0)));

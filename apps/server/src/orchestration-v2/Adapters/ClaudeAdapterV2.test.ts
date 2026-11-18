@@ -41,10 +41,8 @@ import type {
   TaskUpdateInput,
   TaskUpdateOutput,
 } from "@anthropic-ai/claude-agent-sdk/sdk-tools";
-import * as NodeServices from "@effect/platform-node/NodeServices";
 import {
   ChatAttachmentId,
-  type ChatAttachment,
   ChatFileAttachment,
   ChatImageAttachment,
   CheckpointId,
@@ -55,7 +53,6 @@ import {
   NodeId,
   type OrchestrationV2PendingBackgroundTask,
   OrchestrationV2ProviderThread,
-  ProjectId,
   ProviderInstanceId,
   ProviderDriverKind,
   type ProviderReplayTranscript,
@@ -70,12 +67,11 @@ import { vi } from "vite-plus/test";
 import * as Context from "effect/Context";
 import * as DateTime from "effect/DateTime";
 import * as Deferred from "effect/Deferred";
-import * as Crypto from "effect/Crypto";
+import * as SecureRandom from "effect/crypto/SecureRandom";
 import * as Effect from "effect/Effect";
 import * as Exit from "effect/Exit";
 import * as FileSystem from "effect/FileSystem";
 import * as Fiber from "effect/Fiber";
-import * as Layer from "effect/Layer";
 import * as Option from "effect/Option";
 import * as Path from "effect/Path";
 import * as Queue from "effect/Queue";
@@ -108,6 +104,31 @@ import * as ProviderEventLoggers from "@goat/provider-core/server/ProviderEventL
 import * as ProviderAdapter from "@goat/provider-core/server/ProviderAdapter";
 import { makeProviderFailure } from "@goat/provider-core/server/failure";
 import * as ClaudeAdapterV2 from "./ClaudeAdapterV2.ts";
+import { layerClaudeAdapterTest } from "./ClaudeAdapterTestLayer.testkit.ts";
+import {
+  WAKE_NATIVE_SESSION,
+  WAKE_TASK_ID,
+  WAKE_SUMMARY,
+  WAKE_ASSISTANT_TEXT,
+  WAKE_RESULT_TEXT,
+  claudeSdkFrame,
+  wakeTaskStarted,
+  makeAssistantTextFrame,
+  makeAssistantErrorFrame,
+  makeResultFrame,
+  turnOneResult,
+  wakeNotification,
+  wakeAssistant,
+  wakeTurnInit,
+  wakeResult,
+  STALE_TASK_NOTIFICATION_RESULT_TEXT,
+  staleTaskNotificationResult,
+  makeSubagentAssistantFrames,
+  makeSubagentToolResultFrame,
+  makeSubagentTaskStartedFrame,
+  makeSubagentNotificationFrame,
+  subagentRouting,
+} from "./ClaudeWakeFrames.testkit.ts";
 import * as IdAllocator from "@goat/provider-core/server/IdAllocator";
 import { ClaudeOrchestratorReplayHarness } from "./ClaudeAdapterV2.testkit.ts";
 import {
@@ -155,21 +176,7 @@ beforeEach(() => {
     sources: [],
   });
 });
-const layerAdapterTest = Layer.mergeAll(
-  MemoryDerivedCache.layer,
-  IdAllocator.layer,
-  McpProviderSessions.layer,
-  NodeServices.layer,
-  Layer.effectContext(
-    Effect.gen(function* () {
-      const fs = yield* FileSystem.FileSystem;
-      const home = yield* fs.makeTempDirectoryScoped({ prefix: "claude-adapter-test-" });
-      return Context.make(HostProcess.HomeDirectory, home).pipe(
-        Context.add(HostProcess.Environment, { HOME: home, PATH: "/usr/bin:/bin" }),
-      );
-    }),
-  ).pipe(Layer.provide(NodeServices.layer)),
-);
+const layerAdapterTest = layerClaudeAdapterTest;
 const DEFAULT_CLAUDE_SETTINGS = Schema.decodeSync(ClaudeSettings)({});
 const AUTO_COMPACT_CLAUDE_SETTINGS = Schema.decodeSync(ClaudeSettings)({
   autoCompactWindow: "300000",
@@ -286,6 +293,23 @@ describe("ClaudeAdapterV2 runtime query policy", () => {
       env,
     );
   });
+
+  it("makes a resumed Claude session wait for its MCP servers before the first request", () => {
+    const appThread = {
+      lineage: {
+        parentThreadId: null,
+        relationshipToParent: null,
+        rootThreadId: ThreadId.make("t"),
+      },
+    };
+    const nonblocking = (environment: NodeJS.ProcessEnv, resume: boolean) =>
+      ClaudeAdapterV2.claudeQueryEnvironment(environment, appThread, undefined, resume)
+        .MCP_CONNECTION_NONBLOCKING;
+    assert.equal(nonblocking({}, true), "0");
+    assert.isUndefined(nonblocking({}, false));
+    assert.equal(nonblocking({ MCP_CONNECTION_NONBLOCKING: "1" }, true), "1");
+  });
+
   it("pins Claude's auto tool search on through flag settings", () => {
     const override = ClaudeAdapterV2.claudeToolSearchOverride;
     for (const value of ["auto", "auto:10", "auto:99.5", "auto:x", "auto:Infinity"]) {
@@ -766,7 +790,7 @@ describe("ClaudeAdapterV2 Auto-accept edits", () => {
           attachmentsDir,
           fileSystem,
           path: yield* Path.Path,
-          crypto: yield* Crypto.Crypto,
+          random: yield* SecureRandom.SecureRandom,
           idAllocator,
           queryRunner: {
             allocateSessionId: Effect.succeed("native-thread-claude-accept-edits"),
@@ -974,7 +998,7 @@ describe("ClaudeAdapterV2 resumeThread", () => {
           attachmentsDir: configDir,
           fileSystem,
           path,
-          crypto: yield* Crypto.Crypto,
+          random: yield* SecureRandom.SecureRandom,
           idAllocator: yield* IdAllocator.IdAllocatorV2,
           queryRunner: {
             allocateSessionId: Effect.succeed("native-thread-empty"),
@@ -1045,7 +1069,7 @@ describe("ClaudeAdapterV2 resume compaction", () => {
           attachmentsDir,
           fileSystem,
           path: yield* Path.Path,
-          crypto: yield* Crypto.Crypto,
+          random: yield* SecureRandom.SecureRandom,
           idAllocator,
           queryRunner: {
             allocateSessionId: Effect.succeed("native-thread-claude-resume"),
@@ -1231,787 +1255,6 @@ describe("ClaudeAdapterV2 resume compaction", () => {
   );
 });
 
-describe("ClaudeAdapterV2 attachments", () => {
-  it.effect.each([
-    ...[
-      "retained-images",
-      "retained-text",
-      "same-message-images",
-      "retained-documents",
-      "later-images",
-      "partial-images",
-      "cancelled-send",
-      "cancelled-steer",
-    ].map((budget) => ({
-      name: budget,
-      prompt: "Read this PDF.",
-      expectedText: "Read this PDF.",
-      command: undefined,
-      ultrathink: false,
-      resumed: false,
-      budget,
-    })),
-    {
-      name: "ordinary text",
-      prompt: "What’s in this image?",
-      expectedText: "Ultrathink:\nWhat’s in this image?",
-      command: undefined,
-      ultrathink: true,
-      resumed: false,
-      budget: "none",
-    },
-    {
-      name: "mid-sentence skill",
-      prompt: "please $implement fixes\n\nThen report the result",
-      expectedText: "Ultrathink:\nplease /implement fixes\n\nThen report the result",
-      command: "/implement fixes\n\nThen report the result",
-      ultrathink: true,
-      resumed: false,
-      budget: "none",
-    },
-    {
-      name: "prompt-leading skill",
-      prompt: "$implement fixes",
-      expectedText: "/implement fixes",
-      command: undefined,
-      ultrathink: false,
-      resumed: false,
-      budget: "none",
-    },
-    {
-      name: "resumed history without persisted counters",
-      prompt: "Inspect this file",
-      expectedText: "Ultrathink:\nInspect this file",
-      command: undefined,
-      ultrathink: true,
-      resumed: true,
-      budget: "none",
-    },
-  ])(
-    "preserves $name with native PDFs, images, and paths on sends and steering",
-    ({ prompt, expectedText, command, ultrathink, resumed, budget }) =>
-      Effect.scoped(
-        Effect.gen(function* () {
-          const fileSystem = yield* FileSystem.FileSystem;
-          const idAllocator = yield* IdAllocator.IdAllocatorV2;
-          const path = yield* Path.Path;
-          const claudeHome = yield* fileSystem.makeTempDirectoryScoped({
-            prefix: "goat-claude-v2-skills-home-",
-          });
-          yield* fileSystem.makeDirectory(path.join(claudeHome, "skills", "implement"), {
-            recursive: true,
-          });
-          yield* fileSystem.writeFileString(
-            path.join(claudeHome, "skills", "implement", "SKILL.md"),
-            "---\ndescription: Implement the requested change\n---\nImplement it.\n",
-          );
-          const modelSelection = {
-            ...CLAUDE_TEST_MODEL_SELECTION,
-            options: ultrathink ? CLAUDE_TEST_MODEL_SELECTION.options : [],
-          };
-          const attachmentsDir = yield* fileSystem.makeTempDirectoryScoped({
-            prefix: "goat-claude-v2-attachments-",
-          });
-          const offeredMessages: Array<SDKUserMessage> = [];
-          let failOpen = false;
-          let failOffer = false;
-          let cancelAfterQueue = false;
-          const queued = yield* Deferred.make<void>();
-          const adapter = yield* ClaudeAdapterV2.makeClaudeAdapterV2({
-            instanceId: ClaudeAdapterV2.CLAUDE_DEFAULT_INSTANCE_ID,
-            settings: { ...DEFAULT_CLAUDE_SETTINGS, homePath: claudeHome },
-            environment: {},
-            attachmentsDir,
-            fileSystem,
-            path: yield* Path.Path,
-            crypto: yield* Crypto.Crypto,
-            idAllocator,
-            queryRunner: {
-              allocateSessionId: Effect.succeed("native-thread-claude-attachments"),
-              open: () =>
-                Effect.gen(function* () {
-                  if (failOpen) {
-                    failOpen = false;
-                    return yield* new ClaudeAdapterV2.ClaudeAgentSdkQueryRunnerError({
-                      method: "open",
-                      cause: "rejected open",
-                    });
-                  }
-                  const messages = yield* Queue.unbounded<SDKMessage>();
-                  return {
-                    messages: Stream.fromQueue(messages),
-                    offer: (message, onQueued) =>
-                      Effect.suspend(() => {
-                        if (failOffer) {
-                          failOffer = false;
-                          return Effect.fail(
-                            new ClaudeAdapterV2.ClaudeAgentSdkQueryRunnerError({
-                              method: "offer",
-                              cause: "rejected offer",
-                            }),
-                          );
-                        }
-                        return Effect.sync(() => {
-                          offeredMessages.push(message);
-                          onQueued?.();
-                        }).pipe(
-                          Effect.andThen(() =>
-                            cancelAfterQueue
-                              ? Deferred.succeed(queued, undefined).pipe(
-                                  Effect.andThen(Effect.never),
-                                )
-                              : Effect.void,
-                          ),
-                        );
-                      }),
-                    setModel: () => Effect.void,
-                    applyFlagSettings: () => Effect.void,
-                    setPermissionMode: () => Effect.void,
-                    backgroundTasks: () => Effect.succeed(false),
-                    stopTask: () => Effect.void,
-                    interrupt: Effect.void,
-                    close: Queue.shutdown(messages),
-                  };
-                }),
-              forkSession: () => Effect.die("unused forkSession"),
-              subagentLaunchToolUseId: () => Effect.succeed(null),
-              assertComplete: Effect.void,
-            },
-          });
-          const threadId = ThreadId.make("thread-claude-attachments");
-          const providerSessionId = ProviderSessionId.make("provider-session-claude-attachments");
-          const runtime = yield* adapter.openSession({
-            threadId,
-            providerSessionId,
-            modelSelection,
-            runtimePolicy: CLAUDE_TEST_RUNTIME_POLICY,
-          });
-          const providerThread = yield* runtime.ensureThread({
-            threadId,
-            modelSelection,
-            runtimePolicy: CLAUDE_TEST_RUNTIME_POLICY,
-          });
-          const attachment = ChatImageAttachment.make({
-            type: "image",
-            id: ChatAttachmentId.make(
-              "thread-claude-attachments-12345678-1234-1234-1234-123456789abc",
-            ),
-            name: "diagram.png",
-            mimeType: "image/png",
-            sizeBytes: 4,
-          });
-          const document = ChatFileAttachment.make({
-            type: "file",
-            id: ChatAttachmentId.make(
-              "thread-claude-attachments-abcdefab-1234-1234-1234-123456789abc",
-            ),
-            name: "requirements.pdf",
-            mimeType: "application/pdf",
-            sizeBytes: 4,
-          });
-          yield* fileSystem.writeFile(
-            path.join(attachmentsDir, attachmentRelativePath(attachment)!),
-            Uint8Array.from([1, 2, 3, 4]),
-          );
-          const pdfBytes = Buffer.from(
-            "%PDF-1.7\n1 0 obj << /Type /Catalog /Pages 2 0 R >> endobj\n2 0 obj << /Type /Pages /Count 1 /Kids [3 0 R] >> endobj\n3 0 obj << /Type /Page /Parent 2 0 R >> endobj\n%%EOF",
-          );
-          yield* fileSystem.writeFile(
-            path.join(attachmentsDir, attachmentRelativePath(document)!),
-            pdfBytes,
-          );
-          const attemptId = RunAttemptId.make("attempt-claude-attachments");
-          const now = yield* DateTime.now;
-
-          const turnInput = {
-            ...makeClaudeTestTurnInput({
-              threadId,
-              providerThread,
-              now,
-              attemptId,
-              modelSelection,
-              text: prompt,
-              attachments: resumed ? [attachment] : [attachment, document],
-            }),
-            nativeThreadHasTurns: resumed,
-          };
-          if (budget === "cancelled-send" || budget === "cancelled-steer") {
-            const documentPath = path.join(attachmentsDir, attachmentRelativePath(document)!);
-            const pages = Buffer.from(
-              `%PDF-1.7\n1 0 obj << /Type /Catalog /Pages 2 0 R >> endobj\n2 0 obj << /Type /Pages /Count 60 >> endobj\n${Array.from({ length: 60 }, (_, i) => `${i + 3} 0 obj << /Type /Page /Parent 2 0 R >> endobj`).join("\n")}\n`,
-            );
-            yield* fileSystem.writeFile(
-              documentPath,
-              Buffer.concat([
-                pages,
-                Buffer.alloc(19 * 1024 * 1024 - pages.length - 5, 32),
-                Buffer.from("%%EOF"),
-              ]),
-            );
-            const message = { ...turnInput.message, attachments: [document] };
-            if (budget === "cancelled-steer") {
-              yield* runtime.startTurn({ ...turnInput, message: { ...message, attachments: [] } });
-            }
-            const deliver =
-              budget === "cancelled-send"
-                ? runtime.startTurn({ ...turnInput, message })
-                : runtime.steerTurn({
-                    threadId,
-                    runId: turnInput.runId,
-                    providerThread,
-                    providerTurnId: idAllocator.derive.providerTurn({
-                      driver: ClaudeAdapterV2.CLAUDE_PROVIDER,
-                      nativeTurnId: `turn:${attemptId}`,
-                    }),
-                    message,
-                  });
-            cancelAfterQueue = true;
-            const delivering = yield* deliver.pipe(Effect.forkChild);
-            yield* Deferred.await(queued);
-            yield* Fiber.interrupt(delivering);
-            const delivered = offeredMessages.at(-1)!.message.content;
-            assert.include(JSON.stringify(delivered), '"type":"document"');
-            cancelAfterQueue = false;
-            if (budget === "cancelled-send") {
-              yield* runtime.interruptTurn({
-                providerThread,
-                providerTurnId: idAllocator.derive.providerTurn({
-                  driver: ClaudeAdapterV2.CLAUDE_PROVIDER,
-                  nativeTurnId: `turn:${attemptId}`,
-                }),
-              });
-            }
-            yield* deliver;
-            const retried = offeredMessages.at(-1)!.message.content;
-            assert.notInclude(JSON.stringify(retried), '"type":"document"');
-            assert.include(JSON.stringify(retried), JSON.stringify(documentPath).slice(1, -1));
-            assert.isBelow(Buffer.byteLength(JSON.stringify(offeredMessages)), 32_000_000);
-            return;
-          }
-          if (budget !== "none") {
-            const providerTurnId = idAllocator.derive.providerTurn({
-              driver: ClaudeAdapterV2.CLAUDE_PROVIDER,
-              nativeTurnId: `turn:${attemptId}`,
-            });
-            const imagePath = path.join(attachmentsDir, attachmentRelativePath(attachment)!);
-            // The on-disk length deliberately disagrees with sizeBytes.
-            yield* fileSystem.writeFile(imagePath, Buffer.alloc(4 * 1024 * 1024));
-            if (["later-images", "partial-images"].includes(budget)) {
-              const documentPath = path.join(attachmentsDir, attachmentRelativePath(document)!);
-              yield* fileSystem.writeFile(
-                documentPath,
-                Buffer.concat([
-                  pdfBytes.subarray(0, -5),
-                  Buffer.alloc(
-                    (budget === "later-images" ? 19 : 16) * 1024 * 1024 - pdfBytes.length,
-                    32,
-                  ),
-                  Buffer.from("%%EOF"),
-                ]),
-              );
-              yield* runtime.startTurn({
-                ...turnInput,
-                message: { ...turnInput.message, attachments: [document] },
-              });
-              assert.include(
-                JSON.stringify(offeredMessages[0]!.message.content),
-                '"type":"document"',
-              );
-              const message = { ...turnInput.message, attachments: [attachment, attachment] };
-              yield* runtime.interruptTurn({ providerThread, providerTurnId });
-              const laterAttemptId = RunAttemptId.make("attempt-claude-attachments-later");
-              yield* runtime.startTurn({
-                ...turnInput,
-                attemptId: laterAttemptId,
-                providerTurnOrdinal: 2,
-                nativeThreadHasTurns: true,
-                message,
-              });
-              const sent = offeredMessages.at(-1)!.message.content;
-              assert.isArray(sent);
-              assert.lengthOf(
-                typeof sent === "string" ? [] : sent.filter((block) => block.type === "image"),
-                budget === "partial-images" ? 1 : 0,
-              );
-              assert.include(JSON.stringify(sent), JSON.stringify(imagePath).slice(1, -1));
-              yield* runtime.steerTurn({
-                threadId,
-                runId: RunId.make("run-claude-attachments"),
-                providerThread,
-                providerTurnId: idAllocator.derive.providerTurn({
-                  driver: ClaudeAdapterV2.CLAUDE_PROVIDER,
-                  nativeTurnId: `turn:${laterAttemptId}`,
-                }),
-                message,
-              });
-              const steered = offeredMessages.at(-1)!.message.content;
-              assert.isArray(steered);
-              assert.lengthOf(
-                typeof steered === "string"
-                  ? []
-                  : steered.filter((block) => block.type === "image"),
-                0,
-              );
-              assert.include(JSON.stringify(steered), JSON.stringify(imagePath).slice(1, -1));
-              assert.isBelow(
-                Buffer.byteLength(
-                  JSON.stringify(offeredMessages.map((message) => message.message)),
-                ),
-                32_000_000,
-              );
-              return;
-            }
-            if (budget === "retained-documents") {
-              yield* fileSystem.writeFile(
-                path.join(attachmentsDir, attachmentRelativePath(document)!),
-                Buffer.concat([
-                  pdfBytes.subarray(0, pdfBytes.length - 5),
-                  Buffer.alloc(10 * 1024 * 1024, 32),
-                  Buffer.from("%%EOF"),
-                ]),
-              );
-            }
-            yield* runtime.startTurn({
-              ...turnInput,
-              message: {
-                ...turnInput.message,
-                text: budget === "retained-text" ? "x".repeat(10 * 1024 * 1024) : prompt,
-                attachments:
-                  budget === "retained-text"
-                    ? []
-                    : budget === "retained-documents"
-                      ? [document]
-                      : [attachment, attachment],
-              },
-            });
-            const largePdf = Buffer.concat([
-              pdfBytes.subarray(0, pdfBytes.length - 5),
-              Buffer.alloc(
-                (budget === "retained-documents" ? 20 : 19) * 1024 * 1024 - pdfBytes.length,
-                32,
-              ),
-              Buffer.from("%%EOF"),
-            ]);
-            const documentPath = path.join(attachmentsDir, attachmentRelativePath(document)!);
-            yield* fileSystem.writeFile(documentPath, largePdf);
-            yield* runtime.steerTurn({
-              threadId,
-              runId: RunId.make("run-claude-attachments"),
-              providerThread,
-              providerTurnId,
-              message: {
-                ...turnInput.message,
-                attachments:
-                  budget === "same-message-images"
-                    ? [document, attachment, attachment]
-                    : [document],
-              },
-            });
-            const sent = offeredMessages.at(-1)!.message.content;
-            assert.isArray(sent);
-            assert.lengthOf(
-              typeof sent === "string" ? [] : sent.filter((block) => block.type === "document"),
-              0,
-              budget,
-            );
-            assert.include(JSON.stringify(sent), JSON.stringify(documentPath).slice(1, -1));
-            return;
-          }
-          if (!resumed) {
-            const undelivered = Buffer.from(
-              `%PDF-1.7\n1 0 obj << /Type /Catalog /Pages 2 0 R >> endobj\n2 0 obj << /Type /Pages /Count 60 >> endobj\n${Array.from({ length: 60 }, (_, i) => `${i + 3} 0 obj << /Type /Page /Parent 2 0 R >> endobj`).join("\n")}\n%%EOF`,
-            );
-            yield* fileSystem.writeFile(
-              path.join(attachmentsDir, attachmentRelativePath(document)!),
-              undelivered,
-            );
-            failOpen = true;
-            assert.isTrue(Exit.isFailure(yield* runtime.startTurn(turnInput).pipe(Effect.exit)));
-            assert.lengthOf(offeredMessages, 0);
-            yield* fileSystem.writeFile(
-              path.join(attachmentsDir, attachmentRelativePath(document)!),
-              pdfBytes,
-            );
-          }
-          yield* runtime.startTurn(turnInput);
-
-          const expectedImageBlock = {
-            type: "image",
-            source: {
-              type: "base64",
-              media_type: "image/png",
-              data: "AQIDBA==",
-            },
-          } as const;
-          const expectedDocumentBlock = {
-            type: "document",
-            source: {
-              type: "base64",
-              media_type: "application/pdf",
-              data: Buffer.from(pdfBytes).toString("base64"),
-            },
-          } as const;
-          const expectedAttachmentPath = path.join(
-            attachmentsDir,
-            attachmentRelativePath(attachment)!,
-          );
-          const expectedDocumentPath = path.join(attachmentsDir, attachmentRelativePath(document)!);
-          const attachmentNotes = `\n\n[Attached image "diagram.png" is saved at: ${expectedAttachmentPath}]${resumed ? "" : `\n\n[Attached file "requirements.pdf" is saved at: ${expectedDocumentPath}]`}`;
-          const requestBlock = { type: "text" as const, text: expectedText + attachmentNotes };
-          const expectedContent = command
-            ? [
-                requestBlock,
-                expectedImageBlock,
-                ...(!resumed ? [expectedDocumentBlock] : []),
-                { type: "text" as const, text: command + attachmentNotes },
-              ]
-            : [expectedImageBlock, ...(!resumed ? [expectedDocumentBlock] : []), requestBlock];
-          assert.deepEqual(offeredMessages[0]?.message.content, expectedContent);
-
-          const providerTurnId = idAllocator.derive.providerTurn({
-            driver: ClaudeAdapterV2.CLAUDE_PROVIDER,
-            nativeTurnId: `turn:${attemptId}`,
-          });
-          yield* runtime.steerTurn({
-            threadId,
-            runId: RunId.make("run-claude-attachments"),
-            providerThread,
-            providerTurnId,
-            message: {
-              createdBy: "user",
-              creationSource: "web",
-              messageId: MessageId.make("message-claude-attachments-steer"),
-              text: prompt,
-              attachments: resumed ? [attachment] : [attachment, document],
-            },
-          });
-
-          assert.equal(offeredMessages[1]?.priority, "now");
-          assert.deepEqual(offeredMessages[1]?.message.content, expectedContent);
-          const documentPath = path.join(attachmentsDir, attachmentRelativePath(document)!);
-          for (const scenario of [
-            "pages",
-            "bytes",
-            "invalid",
-            "invalid-page-tree",
-            "object-stream",
-            "encrypted",
-            "cyclic-tree",
-            "unterminated-string",
-            "missing-eof",
-            "escaped-name",
-            "incremental",
-            "compressed-bomb",
-            "indirect-count",
-            "indirect-type",
-            "indirect-kids",
-            "indirect-101-pages",
-            "aggregate-pages",
-            "retained-pages",
-            "delivery-failure",
-            "pasted-text",
-            "text-only",
-          ]) {
-            let attachments: ReadonlyArray<ChatAttachment> = [document];
-            if (
-              ["pages", "aggregate-pages", "retained-pages", "delivery-failure"].includes(scenario)
-            ) {
-              const pages = scenario === "pages" ? 101 : scenario === "delivery-failure" ? 30 : 60;
-              const large = Buffer.from(
-                `%PDF-1.7\n1 0 obj << /Type /Catalog /Pages 2 0 R >> endobj\n2 0 obj << /Type /Pages /Count ${pages} >> endobj\n${Array.from({ length: pages }, (_, i) => `${i + 3} 0 obj << /Type /Page /Parent 2 0 R >> endobj`).join("\n")}\n%%EOF`,
-              );
-              yield* fileSystem.writeFile(documentPath, large);
-              if (scenario === "aggregate-pages") {
-                const second = {
-                  ...document,
-                  id: ChatAttachmentId.make("second-pdf"),
-                  name: "second.pdf",
-                };
-                yield* fileSystem.copyFile(
-                  documentPath,
-                  path.join(attachmentsDir, attachmentRelativePath(second)!),
-                );
-                attachments = [document, second];
-              }
-            } else if (scenario.startsWith("indirect-")) {
-              const raw =
-                scenario === "indirect-count" || scenario === "indirect-101-pages"
-                  ? `%PDF-1.7\n1 0 obj ${scenario === "indirect-count" ? 1 : 101} endobj\n2 0 obj << /Type /Catalog /Pages 3 0 R >> endobj\n3 0 obj << /Type /Pages /Count 1 0 R /Kids [${Array.from({ length: scenario === "indirect-count" ? 1 : 101 }, (_, i) => `${i + 4} 0 R`).join(" ")}] >> endobj\n4 0 obj << /Type /Page /Parent 3 0 R >> endobj\n${scenario === "indirect-count" ? "" : Array.from({ length: 100 }, (_, i) => `${i + 5} 0 obj << /Type 105 0 R /Parent 3 0 R >> endobj`).join("\n")}\n105 0 obj /Page endobj\n%%EOF`
-                  : scenario === "indirect-type"
-                    ? pdfBytes
-                        .toString()
-                        .replace(
-                          "%%EOF",
-                          "4 0 obj << /Type 5 0 R >> endobj\n5 0 obj /Annot endobj\n%%EOF",
-                        )
-                    : pdfBytes
-                        .toString()
-                        .replace("/Kids [3 0 R]", "/Kids 4 0 R")
-                        .replace("%%EOF", "4 0 obj [3 0 R] endobj\n%%EOF");
-              yield* fileSystem.writeFileString(documentPath, raw);
-            } else if (scenario === "bytes") {
-              yield* fileSystem.truncate(documentPath, 20 * 1024 * 1024 + 1);
-            } else if (scenario === "invalid") {
-              yield* fileSystem.writeFileString(documentPath, "This is not a PDF");
-            } else if (scenario === "invalid-page-tree") {
-              const malformedBytes = Buffer.from(
-                "%PDF-1.7\n1 0 obj\n<< /Type /Catalog /Pages 42 >>\nendobj\ntrailer\n<< /Root 1 0 R >>\n%%EOF",
-              );
-              yield* fileSystem.writeFile(documentPath, malformedBytes);
-            } else if (
-              ["object-stream", "encrypted", "cyclic-tree", "compressed-bomb"].includes(scenario)
-            ) {
-              const suffix =
-                scenario === "encrypted"
-                  ? "/Encrypt 9 0 R"
-                  : scenario === "cyclic-tree"
-                    ? "/Count 0 /Kids [2 0 R]"
-                    : "/Type /ObjStm /Filter /FlateDecode /Length 1000000000";
-              yield* fileSystem.writeFile(
-                documentPath,
-                Buffer.concat([
-                  pdfBytes.subarray(0, pdfBytes.length - 5),
-                  Buffer.from(`\n4 0 obj << ${suffix} >> stream\nx\nendstream endobj\n%%EOF`),
-                ]),
-              );
-            } else if (
-              ["unterminated-string", "missing-eof", "escaped-name", "incremental"].includes(
-                scenario,
-              )
-            ) {
-              const raw = pdfBytes.toString();
-              yield* fileSystem.writeFileString(
-                documentPath,
-                scenario === "missing-eof"
-                  ? raw.slice(0, -5)
-                  : scenario === "escaped-name"
-                    ? raw.replace("/Type /Page ", "/Type /Pa#67e ")
-                    : raw.replace(
-                        "%%EOF",
-                        scenario === "incremental" ? "/Prev 42\n%%EOF" : "(unfinished\n%%EOF",
-                      ),
-              );
-            } else if (scenario === "pasted-text") {
-              yield* fileSystem.writeFile(documentPath, pdfBytes);
-              attachments = [{ ...document, source: { _tag: "pasted-text" } }];
-            } else {
-              attachments = [];
-              yield* fileSystem.remove(documentPath);
-            }
-            const steering = {
-              threadId,
-              runId: RunId.make("run-claude-attachments"),
-              providerThread,
-              providerTurnId,
-              message: {
-                createdBy: "user",
-                creationSource: "web",
-                messageId: MessageId.make(`message-${scenario}`),
-                text: "Continue.",
-                attachments,
-              },
-            } satisfies ProviderAdapter.ProviderAdapterV2SteerInput;
-            if (scenario === "delivery-failure") {
-              failOffer = true;
-              assert.isTrue(Exit.isFailure(yield* runtime.steerTurn(steering).pipe(Effect.exit)));
-            }
-            yield* runtime.steerTurn(steering);
-
-            const sent = offeredMessages.at(-1)!.message.content;
-            const documents =
-              typeof sent === "string" ? [] : sent.filter((block) => block.type === "document");
-            assert.lengthOf(
-              documents,
-              ["aggregate-pages", "delivery-failure"].includes(scenario) ? 1 : 0,
-              scenario,
-            );
-            if (scenario === "text-only")
-              assert.equal(sent, ultrathink ? "Ultrathink:\nContinue." : "Continue.");
-            else assert.include(JSON.stringify(sent), JSON.stringify(documentPath).slice(1, -1));
-          }
-        }).pipe(Effect.provide(layerAdapterTest)),
-      ),
-  );
-});
-
-describe("ClaudeAdapterV2 native fork", () => {
-  it.effect("forks at the source assistant cursor and resumes the forked session", () =>
-    Effect.scoped(
-      Effect.gen(function* () {
-        const fileSystem = yield* FileSystem.FileSystem;
-        const idAllocator = yield* IdAllocator.IdAllocatorV2;
-        const attachmentsDir = yield* fileSystem.makeTempDirectoryScoped({
-          prefix: "goat-claude-v2-fork-attachments-",
-        });
-        const openedQueries: Array<ClaudeAdapterV2.ClaudeAgentSdkQueryOpenInput> = [];
-        const forkCalls: Array<ClaudeAdapterV2.ClaudeAgentSdkSessionForkInput> = [];
-        const adapter = yield* ClaudeAdapterV2.makeClaudeAdapterV2({
-          instanceId: ClaudeAdapterV2.CLAUDE_DEFAULT_INSTANCE_ID,
-          settings: DEFAULT_CLAUDE_SETTINGS,
-          environment: { CLAUDE_CONFIG_DIR: "/custom/claude-home" },
-          attachmentsDir,
-          fileSystem,
-          path: yield* Path.Path,
-          crypto: yield* Crypto.Crypto,
-          idAllocator,
-          queryRunner: {
-            allocateSessionId: Effect.succeed("source-native-session"),
-            open: (input) =>
-              Effect.sync(() => {
-                openedQueries.push(input);
-                return {
-                  messages: Stream.never,
-                  offer: () => Effect.void,
-                  setModel: () => Effect.void,
-                  applyFlagSettings: () => Effect.void,
-                  setPermissionMode: () => Effect.void,
-                  backgroundTasks: () => Effect.succeed(false),
-                  stopTask: () => Effect.void,
-                  interrupt: Effect.void,
-                  close: Effect.void,
-                };
-              }),
-            forkSession: (input) =>
-              Effect.sync(() => {
-                forkCalls.push(input);
-                return { sessionId: "forked-native-session" };
-              }),
-            subagentLaunchToolUseId: () => Effect.succeed(null),
-            assertComplete: Effect.void,
-          },
-        });
-        const providerSessionId = ProviderSessionId.make("provider-session-claude-fork");
-        const sourceThreadId = ThreadId.make("thread-claude-fork-source");
-        const targetThreadId = ThreadId.make("thread-claude-fork-target");
-        const runtime = yield* adapter.openSession({
-          threadId: sourceThreadId,
-          providerSessionId,
-          modelSelection: {
-            instanceId: ProviderInstanceId.make(ClaudeAdapterV2.CLAUDE_PROVIDER),
-            model: "claude-sonnet-4-6",
-          },
-          runtimePolicy: ProviderAdapter.ProviderAdapterV2RuntimePolicy.make({
-            runtimeMode: "full-access",
-            interactionMode: "default",
-            cwd: "/workspace",
-          }),
-        });
-        const sourceProviderThread = yield* runtime.ensureThread({
-          threadId: sourceThreadId,
-          modelSelection: {
-            instanceId: ProviderInstanceId.make(ClaudeAdapterV2.CLAUDE_PROVIDER),
-            model: "claude-sonnet-4-6",
-          },
-          runtimePolicy: ProviderAdapter.ProviderAdapterV2RuntimePolicy.make({
-            runtimeMode: "full-access",
-            interactionMode: "default",
-            cwd: "/workspace",
-          }),
-        });
-        const now = yield* DateTime.now;
-        const providerTurnId = ProviderTurnId.make("provider-turn-claude-source");
-        const forkedProviderThread = yield* runtime.forkThread({
-          sourceProviderThread,
-          sourceProviderTurns: [
-            {
-              id: providerTurnId,
-              providerThreadId: sourceProviderThread.id,
-              nodeId: NodeId.make("node-claude-source"),
-              runAttemptId: RunAttemptId.make("run-attempt-claude-source"),
-              nativeTurnRef: {
-                driver: ClaudeAdapterV2.CLAUDE_PROVIDER,
-                nativeId: "assistant-message-cursor",
-                strength: "weak",
-              },
-              ordinal: 1,
-              status: "completed",
-              startedAt: now,
-              completedAt: now,
-            },
-          ],
-          providerTurnId,
-          targetThreadId,
-        });
-
-        assert.deepEqual(forkCalls, [
-          {
-            sessionId: "source-native-session",
-            options: {
-              dir: "/workspace",
-              upToMessageId: "assistant-message-cursor",
-            },
-            environment: { CLAUDE_CONFIG_DIR: "/custom/claude-home" },
-            threadId: targetThreadId,
-            providerSessionId,
-          },
-        ]);
-        assert.equal(forkedProviderThread.nativeThreadRef?.nativeId, "forked-native-session");
-        assert.equal(forkedProviderThread.forkedFrom?.providerThreadId, sourceProviderThread.id);
-        assert.equal(forkedProviderThread.forkedFrom?.providerTurnId, providerTurnId);
-
-        yield* runtime.startTurn({
-          appThread: {
-            createdBy: "user",
-            creationSource: "web",
-            id: targetThreadId,
-            projectId: ProjectId.make("project-claude-fork-target"),
-            title: "Claude fork target",
-            providerInstanceId: ProviderInstanceId.make(ClaudeAdapterV2.CLAUDE_PROVIDER),
-            modelSelection: {
-              instanceId: ProviderInstanceId.make(ClaudeAdapterV2.CLAUDE_PROVIDER),
-              model: "claude-sonnet-4-6",
-            },
-            runtimeMode: "full-access",
-            interactionMode: "default",
-            branch: null,
-            worktreePath: null,
-            activeProviderThreadId: forkedProviderThread.id,
-            lineage: {
-              parentThreadId: sourceThreadId,
-              relationshipToParent: "fork",
-              rootThreadId: sourceThreadId,
-            },
-            forkedFrom: null,
-            createdAt: now,
-            updatedAt: now,
-            archivedAt: null,
-            settledOverride: null,
-            settledAt: null,
-            lastVisitedAt: null,
-            deletedAt: null,
-          },
-          threadId: targetThreadId,
-          runId: RunId.make("run-claude-fork-target"),
-          runOrdinal: 1,
-          providerTurnOrdinal: 1,
-          attemptId: RunAttemptId.make("run-attempt-claude-fork-target"),
-          rootNodeId: NodeId.make("node-claude-fork-target-root"),
-          providerThread: forkedProviderThread,
-          message: {
-            createdBy: "user",
-            creationSource: "web",
-            messageId: MessageId.make("message-claude-fork-target"),
-            text: "Respond with fork ok",
-            attachments: [],
-          },
-          modelSelection: {
-            instanceId: ProviderInstanceId.make(ClaudeAdapterV2.CLAUDE_PROVIDER),
-            model: "claude-sonnet-4-6",
-          },
-          runtimePolicy: ProviderAdapter.ProviderAdapterV2RuntimePolicy.make({
-            runtimeMode: "full-access",
-            interactionMode: "default",
-            cwd: "/workspace",
-          }),
-        });
-
-        assert.equal(openedQueries[0]?.options.resume, "forked-native-session");
-        assert.equal(openedQueries[0]?.options.sessionId, undefined);
-      }).pipe(Effect.provide(layerAdapterTest)),
-    ),
-  );
-});
-
 function makeFakeClaudeCli(answerSetServers = true) {
   const spawns: Array<SpawnOptions> = [];
   const controlRequests: Array<object> = [];
@@ -2184,7 +1427,7 @@ describe("ClaudeAdapterV2 native session identity", () => {
           attachmentsDir,
           fileSystem,
           path,
-          crypto: yield* Crypto.Crypto,
+          random: yield* SecureRandom.SecureRandom,
           idAllocator,
           queryRunner: {
             allocateSessionId: Effect.succeed("native-session-identity"),
@@ -2309,178 +1552,6 @@ const encodeProviderThreadJson = Schema.encodeEffect(providerThreadJson);
 const decodeProviderThreadJson = Schema.decodeUnknownEffect(providerThreadJson);
 
 describe("ClaudeAdapterV2 background wake turns", () => {
-  const WAKE_NATIVE_SESSION = "native-thread-claude-wake";
-  const WAKE_TASK_ID = "bdqirlcyw";
-  const WAKE_TOOL_USE_ID = "toolu_01Rs6JNNf5SqHRxpq5DeJHrW";
-  const WAKE_TASK_DESCRIPTION = "Background sleep test";
-  const WAKE_SUMMARY = 'Background command "Background sleep test" completed (exit code 0)';
-  const WAKE_ASSISTANT_TEXT = "WAKE_DONE";
-  const WAKE_RESULT_TEXT = "WAKE_DONE";
-
-  function claudeSdkFrame(frame: unknown): SDKMessage {
-    if (
-      typeof frame !== "object" ||
-      frame === null ||
-      typeof Reflect.get(frame, "type") !== "string"
-    ) {
-      throw new Error("Frame is not a Claude Agent SDK message.");
-    }
-    return frame as SDKMessage;
-  }
-
-  const wakeTaskStarted = claudeSdkFrame({
-    type: "system",
-    subtype: "task_started",
-    task_id: WAKE_TASK_ID,
-    tool_use_id: WAKE_TOOL_USE_ID,
-    description: WAKE_TASK_DESCRIPTION,
-    is_backgrounded: true,
-    task_type: "local_bash",
-    uuid: "00000000-0000-4000-8000-000000000101",
-    session_id: WAKE_NATIVE_SESSION,
-  });
-  const makeAssistantTextFrame = (input: { readonly uuid: string; readonly text: string }) =>
-    claudeSdkFrame({
-      type: "assistant",
-      message: {
-        model: "claude-sonnet-4-6",
-        id: `msg_${input.uuid}`,
-        type: "message",
-        role: "assistant",
-        content: [{ type: "text", text: input.text }],
-        stop_reason: null,
-        stop_sequence: null,
-        usage: {
-          input_tokens: 1,
-          output_tokens: 1,
-          cache_creation_input_tokens: 0,
-          cache_read_input_tokens: 0,
-        },
-      },
-      parent_tool_use_id: null,
-      uuid: input.uuid,
-      session_id: WAKE_NATIVE_SESSION,
-    });
-  const makeAssistantErrorFrame = (input: {
-    readonly uuid: string;
-    readonly error:
-      | "authentication_failed"
-      | "invalid_request"
-      | "rate_limit"
-      | "server_error"
-      | undefined;
-    readonly text?: string;
-    readonly parentToolUseId?: string | null;
-    readonly apiErrorParams?: unknown;
-  }) =>
-    claudeSdkFrame({
-      type: "assistant",
-      message: {
-        model: "claude-sonnet-4-6",
-        id: `msg_${input.uuid}`,
-        type: "message",
-        role: "assistant",
-        content: [{ type: "text", text: input.text ?? "Claude could not complete this request." }],
-        stop_reason: null,
-        stop_sequence: null,
-        usage: {
-          input_tokens: 1,
-          output_tokens: 1,
-          cache_creation_input_tokens: 0,
-          cache_read_input_tokens: 0,
-        },
-      },
-      parent_tool_use_id: input.parentToolUseId ?? null,
-      ...(input.error === undefined ? {} : { error: input.error }),
-      ...(input.apiErrorParams === undefined ? {} : { api_error_params: input.apiErrorParams }),
-      uuid: input.uuid,
-      session_id: WAKE_NATIVE_SESSION,
-    });
-  const makeResultFrame = (input: {
-    readonly uuid: string;
-    readonly result: string;
-    readonly numTurns?: number;
-    readonly origin?: { readonly kind: "task-notification" };
-    readonly subtype?: string;
-    readonly isError?: boolean;
-    readonly errors?: ReadonlyArray<string>;
-    readonly apiErrorStatus?: number;
-    // null omits the field, as the CLI does on a zero-turn result.
-    readonly terminalReason?: SDKResultMessage["terminal_reason"] | null;
-    readonly usage?: {
-      readonly input_tokens: number;
-      readonly output_tokens: number;
-      readonly cache_creation_input_tokens: number;
-      readonly cache_read_input_tokens: number;
-    };
-  }) =>
-    claudeSdkFrame({
-      type: "result",
-      subtype: input.subtype ?? "success",
-      duration_ms: 10,
-      duration_api_ms: 10,
-      is_error: input.isError ?? false,
-      num_turns: input.numTurns ?? 1,
-      result: input.result,
-      stop_reason: "end_turn",
-      total_cost_usd: 0,
-      usage: input.usage ?? {
-        input_tokens: 1,
-        output_tokens: 1,
-        cache_creation_input_tokens: 0,
-        cache_read_input_tokens: 0,
-      },
-      modelUsage: {},
-      permission_denials: [],
-      uuid: input.uuid,
-      session_id: WAKE_NATIVE_SESSION,
-      ...(input.origin === undefined ? {} : { origin: input.origin }),
-      ...(input.errors === undefined ? {} : { errors: input.errors }),
-      ...(input.apiErrorStatus === undefined ? {} : { api_error_status: input.apiErrorStatus }),
-      ...(input.terminalReason === null
-        ? {}
-        : { terminal_reason: input.terminalReason ?? "completed" }),
-    });
-  const turnOneResult = makeResultFrame({
-    uuid: "00000000-0000-4000-8000-000000000102",
-    result: "Kicked off the build in the background.",
-  });
-  const wakeNotification = claudeSdkFrame({
-    type: "system",
-    subtype: "task_notification",
-    task_id: WAKE_TASK_ID,
-    tool_use_id: WAKE_TOOL_USE_ID,
-    status: "completed",
-    output_file: `/tmp/claude-replay/tasks/${WAKE_TASK_ID}.output`,
-    summary: WAKE_SUMMARY,
-    uuid: "00000000-0000-4000-8000-000000000103",
-    session_id: WAKE_NATIVE_SESSION,
-  });
-  const wakeAssistant = makeAssistantTextFrame({
-    uuid: "00000000-0000-4000-8000-000000000107",
-    text: WAKE_ASSISTANT_TEXT,
-  });
-  const wakeTurnInit = claudeSdkFrame({
-    type: "system",
-    subtype: "init",
-    uuid: "00000000-0000-4000-8000-000000000110",
-    session_id: WAKE_NATIVE_SESSION,
-  });
-  const wakeResult = makeResultFrame({
-    uuid: "00000000-0000-4000-8000-000000000104",
-    result: WAKE_RESULT_TEXT,
-    origin: { kind: "task-notification" },
-  });
-  const STALE_TASK_NOTIFICATION_RESULT_TEXT =
-    "Stale task-notification origin text that must not appear.";
-  const staleTaskNotificationResult = makeResultFrame({
-    uuid: "00000000-0000-4000-8000-000000000106",
-    result: STALE_TASK_NOTIFICATION_RESULT_TEXT,
-    numTurns: 0,
-    origin: { kind: "task-notification" },
-    terminalReason: null,
-  });
-
   const makeWakeHarness = makeWakeHarnessWithOptions();
 
   it.effect("names the starting run on a background wake", () =>
@@ -4573,7 +3644,7 @@ describe("ClaudeAdapterV2 background wake turns", () => {
       }).pipe(Effect.scoped, Effect.provide(layerAdapterTest)),
   );
 
-  it.effect.each(["cancelled", "denied", "permission_denied", undefined])(
+  it.effect.each(["cancelled", "interrupted", "denied", "permission_denied", undefined])(
     "preserves native tool non-execution metadata %s without inferring a denial from text",
     (kind) =>
       Effect.scoped(
@@ -4629,7 +3700,10 @@ describe("ClaudeAdapterV2 background wake turns", () => {
               : [],
           );
           const failed = items.findLast((item) => item.nativeItemRef?.nativeId === "tool-error")!;
-          assert.equal(failed.status, kind === "cancelled" ? "cancelled" : "failed");
+          assert.equal(
+            failed.status,
+            kind === "cancelled" || kind === "interrupted" ? kind : "failed",
+          );
           assert.equal(failed.toolNonExecutionKind, kind);
           const ok = items.findLast((item) => item.nativeItemRef?.nativeId === "tool-ok")!;
           assert.equal(ok.status, "completed");
@@ -4745,6 +3819,15 @@ describe("ClaudeAdapterV2 background wake turns", () => {
           });
           assert.equal(harness.offeredMessages[1]?.priority, "now");
         }
+        const partialText = "The audit covers the `integ";
+        if (!queryExits)
+          yield* Queue.offer(
+            harness.sdkMessages,
+            makeAssistantTextFrame({
+              uuid: "00000000-0000-4000-8000-000000000900",
+              text: partialText,
+            }),
+          );
         yield* harness.offerAndWait(
           makeResultFrame({
             uuid: "00000000-0000-4000-8000-000000000901",
@@ -4782,6 +3865,19 @@ describe("ClaudeAdapterV2 background wake turns", () => {
           terminal.status,
           queryExits ? "failed" : steered ? "completed" : "interrupted",
         );
+        if (steered && !queryExits && terminalReason === "aborted_streaming") {
+          // The steer cut this reply off mid-stream; it must not read as a finished answer.
+          const partial = harness.events.findLast(
+            (event) =>
+              event.type === "turn_item.updated" &&
+              event.turnItem.type === "assistant_message" &&
+              event.turnItem.text === partialText,
+          );
+          assert.equal(
+            partial?.type === "turn_item.updated" ? partial.turnItem.status : undefined,
+            "interrupted",
+          );
+        }
         if (steered) {
           if (!queryExits)
             assert.isTrue(
@@ -7402,11 +6498,15 @@ describe("ClaudeAdapterV2 background wake turns", () => {
           retryDelayMs: 1_500,
         });
 
+        // The stream starting again settles the retry before any assistant message completes.
         yield* Queue.offer(
           harness.sdkMessages,
-          makeAssistantTextFrame({
-            uuid: "00000000-0000-4000-8000-000000000202",
-            text: "Opening GitHub.",
+          claudeSdkFrame({
+            type: "stream_event",
+            event: { type: "message_start", message: { id: "api-retry-recovered-message" } },
+            parent_tool_use_id: null,
+            session_id: WAKE_NATIVE_SESSION,
+            uuid: "00000000-0000-4000-8000-000000000204",
           }),
         );
         yield* harness.awaitUntil(() => retryItems().length === 2, "resolved Claude retry item");
@@ -7415,6 +6515,13 @@ describe("ClaudeAdapterV2 background wake turns", () => {
         assert.equal(recoveredRetry?.id, runningRetry?.id);
         assert.equal(recoveredRetry?.status, "completed");
         assert.equal(recoveredRetry?.title, "Provider recovered");
+        yield* Queue.offer(
+          harness.sdkMessages,
+          makeAssistantTextFrame({
+            uuid: "00000000-0000-4000-8000-000000000202",
+            text: "Opening GitHub.",
+          }),
+        );
 
         yield* Queue.offer(
           harness.sdkMessages,
@@ -7563,7 +6670,7 @@ describe("ClaudeAdapterV2 background wake turns", () => {
     );
 
   it.effect(
-    "uses task_started as an incremental roster fallback and clears on empty snapshot",
+    "uses task_started as an incremental roster fallback and clears internal work on empty snapshot",
     () =>
       Effect.scoped(
         Effect.gen(function* () {
@@ -7629,15 +6736,13 @@ describe("ClaudeAdapterV2 background wake turns", () => {
             "subagent shell roster",
           );
 
-          yield* Queue.offer(harness.sdkMessages, emptyRoster);
-          yield* harness.awaitUntil(
-            () =>
-              providerThreadRosterEvents(harness.events).some(
-                (event) =>
-                  event.providerThread.status === "idle" &&
-                  (event.providerThread.pendingBackgroundTasks?.length ?? 0) === 0,
-              ),
-            "empty roster clear",
+          yield* harness.offerAndWait(emptyRoster);
+          assert.include(
+            (
+              providerThreadRosterEvents(harness.events).at(-1)?.providerThread
+                .pendingBackgroundTasks ?? []
+            ).map((task) => task.taskId),
+            WAKE_TASK_ID,
           );
           assert.isFalse(yield* harness.hasPendingBackgroundWork);
         }).pipe(Effect.provide(layerAdapterTest)),
@@ -7706,9 +6811,6 @@ describe("ClaudeAdapterV2 background wake turns", () => {
             ["dev-server", false],
           ],
         );
-        yield* Queue.offer(harness.sdkMessages, turnOneResult);
-        yield* Queue.take(harness.terminalReceipts);
-
         // A replacing level rebuilds every entry; the mark must survive it.
         yield* Queue.offer(
           harness.sdkMessages,
@@ -7722,10 +6824,10 @@ describe("ClaudeAdapterV2 background wake turns", () => {
           ],
         );
 
-        // Once the task leaves the roster, a reused id starts unmarked.
+        // Once the task ends, a reused id starts unmarked.
         yield* Queue.offer(
           harness.sdkMessages,
-          roster(["dev-server"], "00000000-0000-4000-8000-000000000303"),
+          claudeSdkFrame({ ...wakeNotification, uuid: "00000000-0000-4000-8000-000000000303" }),
         );
         yield* nextRoster((tasks) => tasks.length === 1);
         yield* Queue.offer(
@@ -7762,6 +6864,8 @@ describe("ClaudeAdapterV2 background wake turns", () => {
             [WAKE_TASK_ID, false],
           ],
         );
+        yield* Queue.offer(harness.sdkMessages, turnOneResult);
+        yield* Queue.take(harness.terminalReceipts);
       }).pipe(Effect.provide(layerAdapterTest)),
     ),
   );
@@ -7892,7 +6996,12 @@ describe("ClaudeAdapterV2 background wake turns", () => {
         const roster = providerThreadRosterEvents(harness.events).at(-1)?.providerThread
           .pendingBackgroundTasks;
         assert.deepEqual(roster, [
-          { taskId: longRunning.taskId, kind: "monitor", description: "Monitor 0" },
+          {
+            taskId: longRunning.taskId,
+            kind: "monitor",
+            description: "Monitor 0",
+            nativeItemId: "toolu_monitor_0",
+          },
         ]);
       }).pipe(Effect.provide(layerAdapterTest)),
     ),
@@ -8217,7 +7326,7 @@ describe("ClaudeAdapterV2 background wake turns", () => {
           attachmentsDir,
           fileSystem,
           path: yield* Path.Path,
-          crypto: yield* Crypto.Crypto,
+          random: yield* SecureRandom.SecureRandom,
           idAllocator,
           continuationRequests: {
             offer: (request) =>
@@ -8400,7 +7509,7 @@ describe("ClaudeAdapterV2 background wake turns", () => {
             attachmentsDir,
             fileSystem,
             path: yield* Path.Path,
-            crypto: yield* Crypto.Crypto,
+            random: yield* SecureRandom.SecureRandom,
             idAllocator,
             continuationRequests: {
               offer: () => Effect.void,
@@ -8529,7 +7638,12 @@ describe("ClaudeAdapterV2 background wake turns", () => {
             (event) => event.providerThread.id === providerThreadA.id,
           )?.providerThread.pendingBackgroundTasks;
           assert.deepEqual(rosterAAfterSettle ?? [], [
-            { taskId: taskA, description: "work on A", kind: "command" },
+            {
+              taskId: taskA,
+              description: "work on A",
+              kind: "command",
+              nativeItemId: "toolu-roster-a",
+            },
           ]);
           assert.isTrue(yield* hasPendingBackgroundWork);
           assert.isTrue(yield* hasPendingBackgroundWorkForThread(providerThreadA));
@@ -9993,118 +9107,6 @@ describe("ClaudeAdapterV2 background wake turns", () => {
     ),
   );
 
-  const makeSubagentAssistantFrames = (input: {
-    readonly parentToolUseId: string;
-    readonly uuid: string;
-    readonly messageId?: string;
-    readonly text?: string;
-    readonly bashToolUseId?: string;
-  }): ReadonlyArray<SDKMessage> =>
-    [
-      ...(input.text === undefined ? [] : [{ type: "text", text: input.text }]),
-      ...(input.bashToolUseId === undefined
-        ? []
-        : [
-            {
-              type: "tool_use",
-              id: input.bashToolUseId,
-              name: "Bash",
-              input: { command: "git log -5" },
-            },
-          ]),
-    ].map((block, index) =>
-      claudeSdkFrame({
-        type: "assistant",
-        message: {
-          model: "claude-sonnet-4-6",
-          id: input.messageId ?? `msg_${input.uuid}`,
-          type: "message",
-          role: "assistant",
-          content: [block],
-        },
-        parent_tool_use_id: input.parentToolUseId,
-        uuid: index === 0 ? input.uuid : `${input.uuid}:${index}`,
-        session_id: WAKE_NATIVE_SESSION,
-      }),
-    );
-  const makeSubagentToolResultFrame = (input: {
-    readonly parentToolUseId: string;
-    readonly uuid: string;
-    readonly toolUseId: string;
-  }) =>
-    claudeSdkFrame({
-      type: "user",
-      message: {
-        role: "user",
-        content: [{ type: "tool_result", tool_use_id: input.toolUseId, content: "ok" }],
-      },
-      parent_tool_use_id: input.parentToolUseId,
-      uuid: input.uuid,
-      session_id: WAKE_NATIVE_SESSION,
-    });
-  const makeSubagentTaskStartedFrame = (input: {
-    readonly taskId: string;
-    readonly toolUseId: string;
-    readonly uuid: string;
-  }) =>
-    claudeSdkFrame({
-      type: "system",
-      subtype: "task_started",
-      task_id: input.taskId,
-      tool_use_id: input.toolUseId,
-      description: "Audit recent commits",
-      subagent_type: "general-purpose",
-      is_backgrounded: true,
-      task_type: "local_agent",
-      prompt: "Audit the last five commits.",
-      uuid: input.uuid,
-      session_id: WAKE_NATIVE_SESSION,
-    });
-  const makeSubagentNotificationFrame = (input: {
-    readonly taskId: string;
-    readonly toolUseId: string;
-    readonly summary: string;
-    readonly uuid: string;
-  }) =>
-    claudeSdkFrame({
-      type: "system",
-      subtype: "task_notification",
-      task_id: input.taskId,
-      tool_use_id: input.toolUseId,
-      status: "completed",
-      output_file: `/tmp/${input.taskId}.output`,
-      summary: input.summary,
-      uuid: input.uuid,
-      session_id: WAKE_NATIVE_SESSION,
-    });
-  const subagentRouting = (
-    events: ReadonlyArray<ProviderAdapter.ProviderAdapterV2Event>,
-    nativeToolIds: ReadonlyArray<string>,
-  ) => {
-    const childThreadId =
-      events.find((event) => event.type === "subagent.updated")?.subagent.childThreadId ??
-      undefined;
-    const toolThreadIds = new Map<string, Set<string>>();
-    for (const event of events) {
-      const nativeId =
-        event.type === "turn_item.updated" ? event.turnItem.nativeItemRef?.nativeId : undefined;
-      if (event.type === "turn_item.updated" && nativeId && nativeToolIds.includes(nativeId)) {
-        toolThreadIds.set(
-          nativeId,
-          (toolThreadIds.get(nativeId) ?? new Set()).add(event.turnItem.threadId),
-        );
-      }
-    }
-    const assistantTexts = (threadId: string | undefined) =>
-      events.flatMap((event) =>
-        event.type === "message.updated" &&
-        event.message.role === "assistant" &&
-        event.message.threadId === threadId
-          ? [event.message.text]
-          : [],
-      );
-    return { childThreadId, toolThreadIds, assistantTexts };
-  };
   it.effect.each([
     { label: "an empty one", quotaFailureFirst: false },
     { label: "a quota failure and an empty one", quotaFailureFirst: true },
@@ -10248,7 +9250,7 @@ describe("ClaudeAdapterV2 background wake turns", () => {
         attachmentsDir,
         fileSystem,
         path: yield* Path.Path,
-        crypto: yield* Crypto.Crypto,
+        random: yield* SecureRandom.SecureRandom,
         idAllocator: yield* IdAllocator.IdAllocatorV2,
         continuationRequests: { offer: () => Effect.void },
         queryRunner: {
@@ -11833,6 +10835,10 @@ describe("ClaudeAdapterV2 background wake turns", () => {
 
         const routing = subagentRouting(harness.events, ["toolu-early-bash"]);
         assert.isDefined(routing.childThreadId);
+        // Agents quote this id back to goat_thread_send/goat_thread_read.
+        const childThreadId = routing.childThreadId ?? "";
+        assert.notInclude(childThreadId, "%");
+        assert.isAtMost(childThreadId.length, 64);
         assert.deepEqual(
           [...(routing.toolThreadIds.get("toolu-early-bash") ?? [])],
           [routing.childThreadId],
@@ -12377,11 +11383,11 @@ describe("ClaudeAdapterV2 background wake turns", () => {
     ),
   );
 
-  it.effect("gives a nested subagent its own effort, else the one its owner runs at", () =>
+  it.effect("records only explicit effort for nested subagents", () =>
     Effect.scoped(
       Effect.gen(function* () {
         const OUTER_TOOL_USE_ID = "toolu-effort-outer";
-        const INHERITING_TOOL_USE_ID = "toolu-effort-nested-inheriting";
+        const UNSPECIFIED_TOOL_USE_ID = "toolu-effort-nested-unspecified";
         const OVERRIDING_TOOL_USE_ID = "toolu-effort-nested-overriding";
         const harness = yield* makeWakeHarness;
         const now = yield* DateTime.now;
@@ -12447,14 +11453,14 @@ describe("ClaudeAdapterV2 background wake turns", () => {
               type: "message",
               role: "assistant",
               content: [
-                agentCall(INHERITING_TOOL_USE_ID),
+                agentCall(UNSPECIFIED_TOOL_USE_ID),
                 agentCall(OVERRIDING_TOOL_USE_ID, "max"),
               ],
             },
             uuid: "00000000-0000-4000-8000-000000000223",
             session_id: WAKE_NATIVE_SESSION,
           }),
-          taskStarted(INHERITING_TOOL_USE_ID, "00000000-0000-4000-8000-000000000224"),
+          taskStarted(UNSPECIFIED_TOOL_USE_ID, "00000000-0000-4000-8000-000000000224"),
           taskStarted(OVERRIDING_TOOL_USE_ID, "00000000-0000-4000-8000-000000000225"),
           makeResultFrame({
             uuid: "00000000-0000-4000-8000-000000000226",
@@ -12480,7 +11486,7 @@ describe("ClaudeAdapterV2 background wake turns", () => {
         );
         assert.deepEqual(Object.fromEntries(efforts), {
           [`task-${OUTER_TOOL_USE_ID}`]: "low",
-          [`task-${INHERITING_TOOL_USE_ID}`]: "low",
+          [`task-${UNSPECIFIED_TOOL_USE_ID}`]: undefined,
           [`task-${OVERRIDING_TOOL_USE_ID}`]: "max",
         });
         const childEfforts = harness.events.flatMap((event) =>
@@ -12488,12 +11494,31 @@ describe("ClaudeAdapterV2 background wake turns", () => {
             ? [getModelSelectionStringOptionValue(event.appThread.modelSelection, "effort")]
             : [],
         );
-        assert.deepEqual(childEfforts, ["low", "low", "max"]);
+        assert.deepEqual(childEfforts, ["low", undefined, "max"]);
       }).pipe(Effect.provide(layerAdapterTest)),
     ),
   );
 
-  it.effect("extracts text from direct content-block subagent results", () =>
+  it.effect.each([
+    {
+      label: "extracts text from direct content-block subagent results",
+      content: [
+        { type: "text", text: "First line." },
+        { type: "text", text: "Second line." },
+      ],
+      expected: "First line.\nSecond line.",
+    },
+    {
+      label: "drops Claude Code's tools-used note from a subagent result",
+      content: [
+        {
+          type: "text",
+          text: "<tools-used-before-summary>Read</tools-used-before-summary>\n\nadd (line 1)\nmean (line 6)",
+        },
+      ],
+      expected: "add (line 1)\nmean (line 6)",
+    },
+  ])("$label", ({ content, expected }) =>
     Effect.scoped(
       Effect.gen(function* () {
         const SUBAGENT_TASK_ID = "task-direct-content-blocks";
@@ -12547,10 +11572,7 @@ describe("ClaudeAdapterV2 background wake turns", () => {
                 {
                   type: "tool_result",
                   tool_use_id: SUBAGENT_TOOL_USE_ID,
-                  content: [
-                    { type: "text", text: "First line." },
-                    { type: "text", text: "Second line." },
-                  ],
+                  content,
                 },
               ],
             },
@@ -12564,7 +11586,7 @@ describe("ClaudeAdapterV2 background wake turns", () => {
           "subagent terminal",
         );
 
-        assert.equal(subagentEvents().at(-1)?.subagent.result, "First line.\nSecond line.");
+        assert.equal(subagentEvents().at(-1)?.subagent.result, expected);
 
         yield* Queue.offer(
           harness.sdkMessages,
@@ -13025,7 +12047,7 @@ describe("ClaudeAdapterV2 background wake turns", () => {
           attachmentsDir,
           fileSystem,
           path: yield* Path.Path,
-          crypto: yield* Crypto.Crypto,
+          random: yield* SecureRandom.SecureRandom,
           idAllocator,
           continuationRequests: {
             offer: (request) =>
@@ -13197,7 +12219,7 @@ describe("ClaudeAdapterV2 background wake turns", () => {
             attachmentsDir,
             fileSystem,
             path: yield* Path.Path,
-            crypto: yield* Crypto.Crypto,
+            random: yield* SecureRandom.SecureRandom,
             idAllocator,
             continuationRequests: {
               offer: (request) =>
@@ -13378,7 +12400,7 @@ describe("ClaudeAdapterV2 background wake turns", () => {
           attachmentsDir,
           fileSystem,
           path: yield* Path.Path,
-          crypto: yield* Crypto.Crypto,
+          random: yield* SecureRandom.SecureRandom,
           idAllocator,
           continuationRequests: { offer: () => Effect.void },
           queryRunner: {
@@ -13559,7 +12581,7 @@ describe("ClaudeAdapterV2 background wake turns", () => {
             attachmentsDir,
             fileSystem,
             path: yield* Path.Path,
-            crypto: yield* Crypto.Crypto,
+            random: yield* SecureRandom.SecureRandom,
             idAllocator,
             continuationRequests: {
               offer: () => Effect.void,
@@ -14122,6 +13144,7 @@ describe("ClaudeAdapterV2 background wake turns", () => {
             uuid: "00000000-0000-4000-8000-000000001005",
             state: "start",
             secondState: "queued",
+            startedAt: DateTime.toEpochMillis(memberStartedAt),
           }),
         );
         // The coordinator's turn item is emitted after its members are
@@ -14150,6 +13173,7 @@ describe("ClaudeAdapterV2 background wake turns", () => {
             uuid: "00000000-0000-4000-8000-000000001017",
             state: "start",
             secondState: "queued",
+            startedAt: DateTime.toEpochMillis(memberStartedAt),
             label: "alpha:review",
             prompt: "Review the change",
             model: "claude-sonnet-4-6",
@@ -15594,9 +14618,42 @@ describe("ClaudeAdapterV2 background wake turns", () => {
       expected:
         "Claude stopped: the prompt exceeds the model's context window. Run /compact or start a new thread.",
     },
+    ...[
+      {
+        name: "a model version error rewritten by a custom endpoint",
+        baseUrl: "https://gateway.example.test/v1",
+        installed: "2.1.322",
+        expected:
+          "The custom API endpoint gateway.example.test reported Claude Code 2.1.280, but this session runs Claude Code 2.1.322. Running claude update will not fix this; the endpoint or a proxy behind it rewrote the version.",
+      },
+      { name: "a model version error without a custom endpoint", installed: "2.1.322" },
+      {
+        name: "a model version error from an older Claude Code",
+        baseUrl: "https://gateway.example.test/v1",
+        installed: "2.1.285",
+      },
+    ].map((row) => {
+      const result =
+        "API Error: 400 Claude Code 2.1.280 does not support this model; version 2.1.290 or newer is required. Run 'claude update', or update the Claude desktop app, then try again.";
+      return {
+        ...row,
+        isError: true,
+        result,
+        errors: undefined,
+        apiErrorStatus: undefined,
+        terminalReason: undefined,
+        environment: {
+          CLAUDE_CONFIG_DIR: "/synthetic/no-claude-config",
+          ...(row.baseUrl === undefined ? {} : { ANTHROPIC_BASE_URL: row.baseUrl }),
+        },
+        expected: row.expected ?? result,
+      };
+    }),
   ])("reports terminal API error text for $name", (input) =>
     Effect.gen(function* () {
-      const harness = yield* makeWakeHarness;
+      const harness = yield* makeWakeHarnessWithOptions(
+        "environment" in input ? { environment: input.environment } : undefined,
+      );
       const now = yield* DateTime.now;
       yield* harness.runtime.startTurn(
         makeClaudeTestTurnInput({
@@ -15608,6 +14665,17 @@ describe("ClaudeAdapterV2 background wake turns", () => {
           attachments: [],
         }),
       );
+      if ("installed" in input) {
+        yield* harness.offerAndWait(
+          claudeSdkFrame({
+            type: "system",
+            subtype: "init",
+            uuid: "00000000-0000-4000-8000-000000000698",
+            session_id: WAKE_NATIVE_SESSION,
+            claude_code_version: input.installed,
+          }),
+        );
+      }
       const apiErrorStatus = input.apiErrorStatus ?? 400;
       yield* Queue.offer(
         harness.sdkMessages,
@@ -15969,6 +15037,163 @@ describe("ClaudeAdapterV2 background wake turns", () => {
             terminal.failure.code,
             terminalReason === "overloaded_status" ? "api_error_529" : terminalReason,
           );
+        }).pipe(Effect.provide(layerAdapterTest)),
+      ),
+  );
+
+  it.effect.each(["none", "before", "after", "sibling"] as const)(
+    "keeps an exited background command on the roster until its wake run starts (empty level %s notification)",
+    (emptyLevel) =>
+      Effect.scoped(
+        Effect.gen(function* () {
+          const harness = yield* makeWakeHarness;
+          const now = yield* DateTime.now;
+          const secondTaskId = "second-owed-wake";
+          const taskIds = emptyLevel === "sibling" ? [WAKE_TASK_ID, secondTaskId] : [WAKE_TASK_ID];
+          const wakeAttemptId = RunAttemptId.make("attempt-claude-wake-roster-2");
+          const emptyRoster = claudeSdkFrame({
+            type: "system",
+            subtype: "background_tasks_changed",
+            tasks: [],
+            uuid: "00000000-0000-4000-8000-000000000204",
+            session_id: WAKE_NATIVE_SESSION,
+          });
+
+          yield* harness.runtime.startTurn(
+            makeClaudeTestTurnInput({
+              threadId: harness.threadId,
+              providerThread: harness.providerThread,
+              now,
+              attemptId: RunAttemptId.make("attempt-claude-wake-roster-1"),
+              text: "Run the build in the background.",
+              attachments: [],
+            }),
+          );
+          yield* harness.offerAndWait(wakeTaskStarted);
+          if (emptyLevel === "sibling")
+            yield* harness.offerAndWait(
+              claudeSdkFrame({
+                ...wakeTaskStarted,
+                task_id: secondTaskId,
+                tool_use_id: "toolu_second_owed_wake",
+                uuid: "00000000-0000-4000-8000-000000000205",
+              }),
+            );
+          const awaitBackgroundTasks = harness.runtime.awaitBackgroundTasks;
+          assert.isDefined(awaitBackgroundTasks);
+          yield* awaitBackgroundTasks!({
+            providerThread: harness.providerThread,
+            taskIds,
+            awaited: true,
+          });
+          yield* Queue.offer(harness.sdkMessages, turnOneResult);
+          yield* harness.awaitTerminal(1);
+          const afterFirstTurn = harness.events.length;
+          if (emptyLevel === "before" || emptyLevel === "sibling")
+            yield* harness.offerAndWait(emptyRoster);
+          yield* harness.offerAndWait(wakeNotification);
+          if (emptyLevel === "after") yield* harness.offerAndWait(emptyRoster);
+          // Query replacement reads the internal roster, which the exit already cleared.
+          assert.isFalse(yield* harness.hasPendingBackgroundWork);
+          yield* harness.offerAndWait(wakeTurnInit);
+          yield* harness.runtime.startTurn(
+            makeClaudeTestTurnInput({
+              threadId: harness.threadId,
+              providerThread: harness.providerThread,
+              now,
+              attemptId: wakeAttemptId,
+              text: "Background task completed.",
+              attachments: [],
+              providerTurnOrdinal: 2,
+              messageCreatedBy: "agent",
+              messageCreationSource: "provider",
+            }),
+          );
+          yield* harness.offerAndWait(wakeAssistant);
+          yield* harness.offerAndWait(wakeResult);
+          yield* harness.awaitTerminal(2);
+
+          const wakeStart = harness.events.findIndex(
+            (event) =>
+              event.type === "provider_turn.updated" &&
+              event.providerTurn.runAttemptId === wakeAttemptId,
+          );
+          assert.isAbove(wakeStart, -1);
+          const rosters = harness.events.flatMap((event, index) =>
+            event.type === "provider_thread.updated" &&
+            event.providerThread.id === harness.providerThread.id &&
+            index >= afterFirstTurn
+              ? [
+                  {
+                    beforeWake: index < wakeStart,
+                    pendingWork: event.pendingBackgroundWork === true,
+                    taskIds: (event.providerThread.pendingBackgroundTasks ?? []).map((task) => [
+                      task.taskId,
+                      task.awaited === true,
+                    ]),
+                  },
+                ]
+              : [],
+          );
+          assert.deepEqual(
+            rosters.filter((roster) => roster.beforeWake).map((roster) => roster.taskIds),
+            rosters
+              .filter((roster) => roster.beforeWake)
+              .map(() => taskIds.map((id) => [id, true])),
+          );
+          assert.isTrue(
+            rosters.filter((roster) => roster.beforeWake).every((roster) => roster.pendingWork),
+          );
+          assert.deepEqual(
+            rosters.at(-1)?.taskIds,
+            emptyLevel === "sibling" ? [[secondTaskId, true]] : [],
+          );
+          if (emptyLevel === "sibling") {
+            assert.isTrue(rosters.at(-1)?.pendingWork);
+            yield* harness.offerAndWait(
+              claudeSdkFrame({
+                ...wakeNotification,
+                task_id: secondTaskId,
+                tool_use_id: "toolu_second_owed_wake",
+                uuid: "00000000-0000-4000-8000-000000000206",
+              }),
+            );
+            yield* harness.offerAndWait(
+              claudeSdkFrame({ ...wakeTurnInit, uuid: "00000000-0000-4000-8000-000000000207" }),
+            );
+            yield* harness.runtime.startTurn(
+              makeClaudeTestTurnInput({
+                threadId: harness.threadId,
+                providerThread: harness.providerThread,
+                now,
+                attemptId: RunAttemptId.make("attempt-claude-owed-sibling-3"),
+                text: "Second command completed.",
+                attachments: [],
+                providerTurnOrdinal: 3,
+                messageCreatedBy: "agent",
+                messageCreationSource: "provider",
+              }),
+            );
+            yield* harness.offerAndWait(
+              makeAssistantTextFrame({
+                uuid: "00000000-0000-4000-8000-000000000208",
+                text: "Second command finished.",
+              }),
+            );
+            yield* harness.offerAndWait(
+              makeResultFrame({
+                uuid: "00000000-0000-4000-8000-000000000209",
+                result: "Second command finished.",
+                origin: { kind: "task-notification" },
+              }),
+            );
+            yield* harness.awaitTerminal(3);
+            assert.deepEqual(
+              providerThreadRosterEvents(harness.events).at(-1)?.providerThread
+                .pendingBackgroundTasks,
+              [],
+            );
+          }
         }).pipe(Effect.provide(layerAdapterTest)),
       ),
   );
@@ -16601,7 +15826,7 @@ describe("ClaudeAdapterV2 background wake turns", () => {
           }),
           fileSystem,
           path: yield* Path.Path,
-          crypto: yield* Crypto.Crypto,
+          random: yield* SecureRandom.SecureRandom,
           idAllocator: yield* IdAllocator.IdAllocatorV2,
           continuationRequests: { offer: () => Effect.void },
           queryRunner: {
@@ -16792,7 +16017,7 @@ const liveClaudeQueryFixture = Effect.fn("claudeTest.liveQueryFixture")(function
     attachmentsDir,
     fileSystem,
     path: yield* Path.Path,
-    crypto: yield* Crypto.Crypto,
+    random: yield* SecureRandom.SecureRandom,
     idAllocator: yield* IdAllocator.IdAllocatorV2,
     queryRunner: {
       allocateSessionId: Effect.succeed(nativeSessionId),
@@ -17148,26 +16373,6 @@ describe("Claude WP4 memory delivery", () => {
       }).pipe(Effect.provide(layerAdapterTest)),
     ),
   );
-  it("preapproves the six granted reads and never any memory write on read-only policy", () => {
-    const session: McpProviderSession.McpProviderSessionConfig = {
-      environmentId: EnvironmentId.make("fixture"),
-      threadId: ThreadId.make("fixture"),
-      providerSessionId: "fixture",
-      providerInstanceId: ProviderInstanceId.make("claude"),
-      endpoint: "http://127.0.0.1:1/mcp",
-      authorizationHeader: "Bearer fixture",
-      browserToolsAvailable: false,
-      grantedScopes: ["memory:read", "memory:write", "orchestration:read"],
-    };
-    const overrides = ClaudeAdapterV2.claudeMcpQueryOverrides({
-      mcpSession: session,
-      readOnlySandbox: true,
-    });
-    for (const tool of ClaudeAdapterV2.CLAUDE_MEMORY_READ_TOOLS)
-      assert.include(overrides.allowedTools ?? [], tool);
-    for (const tool of ClaudeAdapterV2.CLAUDE_MEMORY_WRITE_TOOLS)
-      assert.notInclude(overrides.allowedTools ?? [], tool);
-  });
 });
 describe("ClaudeAdapterV2 computer use", () => {
   const cuaDriver: M.CuaDriverMcpConfiguration = {

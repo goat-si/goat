@@ -1,7 +1,9 @@
+import * as NodeCrypto from "@effect/platform-node/NodeCrypto";
 import * as NodeServices from "@effect/platform-node/NodeServices";
+import * as Layer from "effect/Layer";
 import { expect, it } from "@effect/vitest";
 import { symlinksSupported } from "@goat/shared/testing/symlinks";
-import * as Crypto from "effect/Crypto";
+import * as Digest from "effect/crypto/Digest";
 import * as DateTime from "effect/DateTime";
 import * as Effect from "effect/Effect";
 import * as Hex from "effect/encoding/Hex";
@@ -18,7 +20,7 @@ import {
   ROOT,
 } from "./PreviewBrowser.testkit.ts";
 
-it.layer(NodeServices.layer)("PreviewBrowser", (it) => {
+it.layer(Layer.mergeAll(NodeServices.layer, NodeCrypto.layer))("PreviewBrowser", (it) => {
   it.effect.each(["headless-shell", "chrome"] as const)(
     "selects the pinned Chrome 157 archive for %s",
     (variant) =>
@@ -26,7 +28,7 @@ it.layer(NodeServices.layer)("PreviewBrowser", (it) => {
         const { browser, requests } = yield* makeHarness({ variant, pinnedRelease: true });
         yield* browser.executable.pipe(Effect.flip);
         expect(requests).toHaveLength(1);
-        expect(requests[0]).toContain(`/157.0.8103.38/`);
+        expect(requests[0]).toContain(`/157.0.8103.78/`);
         expect(requests[0]).toContain(
           variant === "chrome" ? "/chrome-" : "/chrome-headless-shell-",
         );
@@ -175,8 +177,10 @@ it.layer(NodeServices.layer)("PreviewBrowser", (it) => {
             mode: 0o120755,
           },
         ]);
-        const crypto = yield* Crypto.Crypto;
-        const sha256 = Hex.encode(yield* crypto.digest("SHA-256", chromeZip).pipe(Effect.orDie));
+        const digest = yield* Digest.Digest;
+        const sha256 = Hex.encode(
+          yield* digest.digest(Digest.sha256, chromeZip).pipe(Effect.orDie),
+        );
         const { browser, fs, path, baseDir, installRoot } = yield* makeHarness({
           variant: "chrome",
           archive: chromeZip,

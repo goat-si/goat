@@ -1,15 +1,21 @@
 import { WORKTREE_CLEANUP_OFF } from "@goat/contracts";
 import { useAtomValue } from "@effect/atom-react";
+import {
+  type AtomCommandResult,
+  isAtomCommandInterrupted,
+} from "@goat/client-runtime/state/runtime";
 import type { EnvironmentId, StorageCleanupSettings } from "@goat/contracts";
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { TextInput, View } from "react-native";
 
 import { AppText as Text } from "../../components/ui/AppText";
+import * as Dialog from "../../components/ui/Dialog";
 import { serverEnvironment } from "../../state/server";
 import { useAtomCommand } from "../../state/use-atom-command";
 import { SettingsActionRow } from "./components/SettingsActionRow";
 import { SettingsSection } from "./components/SettingsSection";
 import { SettingsSwitchRow } from "./components/SettingsSwitchRow";
+import { commandFailureText } from "../../lib/commandFailureText";
 
 function NumberRow({
   label,
@@ -24,9 +30,45 @@ function NumberRow({
   readonly maximum: number;
   readonly disabled: boolean;
   readonly emptyLabel?: string;
-  readonly onSave: (value: number | null) => void;
+  readonly onSave: (value: number | null) => Promise<boolean>;
 }) {
-  const [draft, setDraft] = useState(value === null ? "" : String(value));
+  // Null shows the saved value. A newer saved value replaces the draft only outside the field.
+  const [draft, setDraft] = useState<string | null>(null);
+  const [focused, setFocused] = useState(false);
+  const [savedValue, setSavedValue] = useState(value);
+  if (!focused && savedValue !== value) {
+    setSavedValue(value);
+    setDraft(null);
+  }
+  const pending = useRef<{ readonly id: number; readonly value: number | null }[]>([]);
+  const lastSubmission = useRef(0);
+  const typedSinceSubmission = useRef(false);
+  const shown = draft ?? (value === null ? "" : String(value));
+  const endEditing = () => {
+    setFocused(false);
+    if (draft === null) return;
+    const inFlight = pending.current.at(-1);
+    const next = draft.trim() === "" ? null : Number(draft);
+    if (next === (inFlight ? inFlight.value : value)) {
+      // The same number as the newest save still in flight, or as the saved one: nothing to send.
+      typedSinceSubmission.current = false;
+      if (!inFlight) setDraft(null);
+      return;
+    }
+    if (next !== null && !(Number.isInteger(next) && next >= 1 && next <= maximum)) {
+      typedSinceSubmission.current = false;
+      setDraft(inFlight ? String(inFlight.value ?? "") : null);
+      return;
+    }
+    const id = ++lastSubmission.current;
+    pending.current = [...pending.current, { id, value: next }];
+    typedSinceSubmission.current = false;
+    setSavedValue(value);
+    void onSave(next).then((saved) => {
+      pending.current = pending.current.filter((entry) => entry.id !== id);
+      if (!saved && id === lastSubmission.current && !typedSinceSubmission.current) setDraft(null);
+    });
+  };
   return (
     <View className="gap-2 p-4">
       <Text>{label}</Text>
@@ -34,15 +76,14 @@ function NumberRow({
         accessibilityLabel={label}
         keyboardType="number-pad"
         editable={!disabled}
-        value={draft}
+        value={shown}
         placeholder={emptyLabel}
-        onChangeText={setDraft}
-        onEndEditing={() => {
-          const number = Number(draft);
-          if (draft.trim() === "") onSave(null);
-          else if (Number.isInteger(number) && number >= 1 && number <= maximum) onSave(number);
-          else setDraft(value === null ? "" : String(value));
+        onFocus={() => setFocused(true)}
+        onChangeText={(text) => {
+          typedSinceSubmission.current = true;
+          setDraft(text);
         }}
+        onEndEditing={endEditing}
       />
     </View>
   );
@@ -67,8 +108,19 @@ export function WorktreeCleanupSection({
     if (previewId !== undefined && seenAt === null)
       void respond({ environmentId, input: { previewId, response: "seen" } });
   }, [environmentId, previewId, seenAt, respond]);
+  const run = async (
+    title: string,
+    action: () => Promise<AtomCommandResult<unknown, unknown>>,
+  ): Promise<boolean> => {
+    const result = await action();
+    if (result._tag !== "Failure") return true;
+    if (!isAtomCommandInterrupted(result)) Dialog.alert(title, commandFailureText(result));
+    return false;
+  };
   const write = (patch: Partial<StorageCleanupSettings>) =>
-    void update({ environmentId, input: { patch: { storageCleanup: patch } } });
+    run("Could not save settings", () =>
+      update({ environmentId, input: { patch: { storageCleanup: patch } } }),
+    );
   return (
     <SettingsSection title="Worktree cleanup">
       <NumberRow
@@ -89,14 +141,14 @@ export function WorktreeCleanupSection({
         label="Clean up when archived"
         value={settings.worktreeOnArchive}
         disabled={!allowed}
-        onValueChange={(value) => write({ worktreeOnArchive: value })}
+        onValueChange={(value) => void write({ worktreeOnArchive: value })}
       />
       <SettingsSwitchRow
         label="Clean up worktrees with uncommitted changes"
         subtitle="A snapshot is saved first."
         value={settings.worktreeSnapshotChanges}
         disabled={!allowed}
-        onValueChange={(value) => write({ worktreeSnapshotChanges: value })}
+        onValueChange={(value) => void write({ worktreeSnapshotChanges: value })}
       />
       <NumberRow
         label="Keep snapshots for days"
@@ -111,7 +163,7 @@ export function WorktreeCleanupSection({
         subtitle="Cleanup waits until you have seen what it would remove."
         value={settings.worktreeCleanupPreview}
         disabled={!allowed}
-        onValueChange={(value) => write({ worktreeCleanupPreview: value })}
+        onValueChange={(value) => void write({ worktreeCleanupPreview: value })}
       />
       {preview ? (
         <>
@@ -126,13 +178,15 @@ export function WorktreeCleanupSection({
             label="Clean up now"
             disabled={!allowed}
             onPress={() =>
-              void respond({ environmentId, input: { previewId: preview.id, response: "confirm" } })
+              void run("Could not clean up worktrees", () =>
+                respond({ environmentId, input: { previewId: preview.id, response: "confirm" } }),
+              )
             }
           />
           <SettingsActionRow
             label="Turn off"
             disabled={!allowed}
-            onPress={() => write(WORKTREE_CLEANUP_OFF)}
+            onPress={() => void write(WORKTREE_CLEANUP_OFF)}
           />
         </>
       ) : null}

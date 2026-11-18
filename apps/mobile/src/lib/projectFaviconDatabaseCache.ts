@@ -8,6 +8,7 @@ import {
 import * as Effect from "effect/Effect";
 
 import * as MobileDatabase from "../persistence/mobile-database";
+import { localFileUri } from "./fileUri";
 
 const CACHE_KIND = "project-favicon";
 const CACHE_SCHEMA_VERSION = 1;
@@ -46,7 +47,7 @@ export async function downscaleProjectFavicon(
       await Image.writeToCacheAsync(decoded, cacheKey);
       const path = await Image.getCachePathAsync(cacheKey);
       if (!path) throw new Error("Project icon thumbnail was not written.");
-      const file = new File(path.startsWith("file:") ? path : `file://${path}`);
+      const file = new File(localFileUri(path));
       try {
         if (file.size > PROJECT_FAVICON_MAX_DATA_URL_LENGTH) continue;
         const base64 = await file.base64();

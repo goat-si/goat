@@ -11,7 +11,7 @@ import type * as EffectAcpSchema from "effect-acp/compat";
 import { causeErrorTag } from "@goat/shared/observability";
 import { withLoginShellPathNote } from "@goat/shared/cliPath";
 import * as HostProcess from "@goat/shared/HostProcess";
-import * as Crypto from "effect/Crypto";
+import * as SecureRandom from "effect/crypto/SecureRandom";
 import * as DateTime from "effect/DateTime";
 import * as Effect from "effect/Effect";
 import * as Exit from "effect/Exit";
@@ -36,6 +36,7 @@ import {
   providerModelsFromSettings,
   spawnAndCollect,
   type ServerProviderDraft,
+  resolveProviderProbeTimeoutMs,
 } from "@goat/provider-core/server/snapshotProbe";
 import {
   enrichProviderSnapshotWithVersionAdvisory,
@@ -132,7 +133,7 @@ function isRecord(value: unknown): value is Record<string, unknown> {
 
 const GROK_EFFORT_RANK = ["none", "minimal", "low", "medium", "high", "xhigh", "max"];
 
-function grokReasoningOptionsFromModel(model: EffectAcpSchema.ModelInfo): {
+export function grokReasoningOptionsFromModel(model: EffectAcpSchema.ModelInfo): {
   readonly options: ReadonlyArray<{
     value: string;
     label: string;
@@ -318,7 +319,7 @@ const probeGrokModels = Effect.fn("GrokProviderStatus.probeGrokModels")(function
   environment: NodeJS.ProcessEnv,
 ) {
   const modelsResult = yield* runGrokCliCommand(grokSettings, ["models"], environment).pipe(
-    Effect.timeoutOption(AUTH_PROBE_TIMEOUT_MS),
+    Effect.timeoutOption(resolveProviderProbeTimeoutMs("grok", AUTH_PROBE_TIMEOUT_MS, environment)),
     Effect.result,
   );
   // Only a clean exit is parsed. Failed invocations print help or error text that
@@ -406,7 +407,7 @@ export const checkGrokProviderStatus = Effect.fn("checkGrokProviderStatus")(func
 ): Effect.fn.Return<
   ServerProviderDraft,
   never,
-  ChildProcessSpawner.ChildProcessSpawner | Crypto.Crypto
+  ChildProcessSpawner.ChildProcessSpawner | SecureRandom.SecureRandom
 > {
   const checkedAt = DateTime.formatIso(yield* DateTime.now);
   const fallbackModels = grokModelsFromSettings(grokSettings.customModels);
@@ -450,7 +451,12 @@ export const checkGrokProviderStatus = Effect.fn("checkGrokProviderStatus")(func
     ["--version"],
     probeEnvironment,
     spawnCwd,
-  ).pipe(Effect.timeoutOption(VERSION_PROBE_TIMEOUT_MS), Effect.result);
+  ).pipe(
+    Effect.timeoutOption(
+      resolveProviderProbeTimeoutMs("grok", VERSION_PROBE_TIMEOUT_MS, environment),
+    ),
+    Effect.result,
+  );
 
   if (Result.isFailure(versionResult)) {
     const error = versionResult.failure;
@@ -552,7 +558,12 @@ export const checkGrokProviderStatus = Effect.fn("checkGrokProviderStatus")(func
     grokSettings,
     probeEnvironment,
     spawnCwd,
-  ).pipe(Effect.timeoutOption(GROK_ACP_INITIALIZE_TIMEOUT_MS), Effect.exit);
+  ).pipe(
+    Effect.timeoutOption(
+      resolveProviderProbeTimeoutMs("grok", GROK_ACP_INITIALIZE_TIMEOUT_MS, environment),
+    ),
+    Effect.exit,
+  );
   const acpMetadata = Exit.isSuccess(acpExit) ? Option.getOrUndefined(acpExit.value) : undefined;
   const acpModels = acpMetadata?.models ?? [];
   const acpFailed = Exit.isFailure(acpExit) || Option.isNone(acpExit.value);

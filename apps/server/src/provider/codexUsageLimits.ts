@@ -91,6 +91,7 @@ function codexRateLimitsToWindows(
       kind: "monthly",
       label: "Monthly credit limit",
       usedPercent: clampPercent(100 - individualLimit.remainingPercent),
+      ...(windows.length > 0 && individualLimit.remainingPercent <= 0 ? { exhausted: false } : {}),
       ...(resetsAt ? { resetsAt } : {}),
     });
   }

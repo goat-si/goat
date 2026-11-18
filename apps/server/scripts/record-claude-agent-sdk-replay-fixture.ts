@@ -1,8 +1,10 @@
 // Adopts legacy T3 env names before anything reads the environment.
 import "@goat/contracts/adoptLegacyEnv";
+import * as NodeCrypto from "@effect/platform-node/NodeCrypto";
 import * as NodeServices from "@effect/platform-node/NodeServices";
 import * as Console from "effect/Console";
 import * as Effect from "effect/Effect";
+import * as Layer from "effect/Layer";
 import * as FileSystem from "effect/FileSystem";
 import * as Path from "effect/Path";
 import * as Schema from "effect/Schema";
@@ -389,7 +391,9 @@ if (recording === undefined) {
 
 const positionalOutputPath = process.argv[2]?.startsWith("--") ? undefined : process.argv[2];
 const path = await Effect.runPromise(
-  Effect.service(Path.Path).pipe(Effect.provide(NodeServices.layer)),
+  Effect.service(Path.Path).pipe(
+    Effect.provide(Layer.mergeAll(NodeServices.layer, NodeCrypto.layer)),
+  ),
 );
 const outputPath =
   readArgValue("--out") ??
@@ -419,7 +423,9 @@ function joinPath(directory: string, fileName: string): string {
 }
 
 function runFileSystem<A, E>(effect: Effect.Effect<A, E, FileSystem.FileSystem>): Promise<A> {
-  return Effect.runPromise(effect.pipe(Effect.provide(NodeServices.layer)));
+  return Effect.runPromise(
+    effect.pipe(Effect.provide(Layer.mergeAll(NodeServices.layer, NodeCrypto.layer))),
+  );
 }
 
 function selectedPrompts(): ReadonlyArray<string> {

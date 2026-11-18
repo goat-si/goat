@@ -1,7 +1,7 @@
 import { SSH_RUNTIME_PROTOCOL_VERSION } from "@goat/shared/sshRuntimeProtocol";
 import { ORCHESTRATION_PROTOCOL_VERSION } from "@goat/contracts";
 import { assert } from "@effect/vitest";
-import * as Crypto from "effect/Crypto";
+import * as Digest from "effect/crypto/Digest";
 import * as Hex from "effect/encoding/Hex";
 import * as Effect from "effect/Effect";
 import * as FileSystem from "effect/FileSystem";
@@ -320,9 +320,9 @@ export const fixture = Effect.fn("test.runnerSwitch.fixture")(function* (
     ChildProcess.make("tar", ["-czf", `${release}/${stem}.tar.gz`, "-C", `${home}/stage`, stem]),
   );
   assert.equal(Number(yield* packed.exitCode), 0);
-  const crypto = yield* Crypto.Crypto;
+  const digest = yield* Digest.Digest;
   const sum = Hex.encode(
-    yield* crypto.digest("SHA-256", yield* fs.readFile(`${release}/${stem}.tar.gz`)),
+    yield* digest.digest(Digest.sha256, yield* fs.readFile(`${release}/${stem}.tar.gz`)),
   );
   yield* fs.writeFileString(
     `${release}/SHA256SUMS`,

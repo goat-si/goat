@@ -21,6 +21,7 @@ import * as ServerConfig from "../config.ts";
 import * as ProjectStore from "../orchestration-v2/ProjectStore.ts";
 import * as ServerSettings from "../serverSettings.ts";
 import * as AgentSessionScanner from "./AgentSessionScanner.ts";
+import * as ProviderSessionRuntime from "../persistence/ProviderSessionRuntime.ts";
 
 // Frozen response shape from 215d07e418: the source enum must stay closed in this decoder.
 const legacyScanResult = Schema.Struct({
@@ -87,6 +88,9 @@ const fixture = Effect.gen(function* () {
   const layer = AgentSessionScanner.layer.pipe(
     Layer.provide(
       Layer.mergeAll(
+        Layer.mock(ProviderSessionRuntime.ProviderSessionRuntimeRepository)({
+          list: () => Effect.succeed([]),
+        }),
         ServerConfig.layerTest(root, path.join(root, "config")),
         Layer.mock(ProjectStore.ProjectStoreV2)({ listShells: () => Effect.succeed([]) }),
         ServerSettings.layerTest({

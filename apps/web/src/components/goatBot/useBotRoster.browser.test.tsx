@@ -19,6 +19,7 @@ vi.mock("~/globalAgentStore", () => ({
 }));
 vi.mock("~/state/entities", () => ({
   useThreadVisibleTurnItems: (ref: unknown) => (ref === null ? [] : state.items),
+  useTimelineVisibleTurnItems: (ref: unknown) => (ref === null ? [] : state.items),
 }));
 vi.mock("~/state/environments", () => ({
   useEnvironment: () => ({
@@ -47,6 +48,14 @@ vi.mock("~/state/query", () => ({
 }));
 import { useBotRoster, useBotThreads } from "./useBotRoster";
 
+function setup() {
+  state.supported = false;
+  state.items = [];
+  state.failure = null;
+  state.refresh.mockClear();
+  state.listThreads.mockClear();
+}
+
 function RosterProbe() {
   const { roster, rows } = useBotRoster();
   return (
@@ -57,8 +66,7 @@ function RosterProbe() {
 }
 
 it("queries task threads only when the server advertises the capability", async () => {
-  state.supported = false;
-  state.listThreads.mockClear();
+  setup();
   // This probe has no route-dependent behavior.
   await using screen = await render(<RosterProbe />, { router: false });
   await expect.element(screen.getByText("1 bots, 0 tasks")).toBeVisible();
@@ -70,9 +78,8 @@ it("queries task threads only when the server advertises the capability", async 
 });
 
 it("refreshes the task roster when a new task chip appears", async () => {
+  setup();
   state.supported = true;
-  state.items = [];
-  state.refresh.mockClear();
   await using screen = await render(<RosterProbe />, { router: false });
   state.refresh.mockClear();
   state.items = [
@@ -91,6 +98,7 @@ function TurnsProbe() {
 }
 
 it("sees a question the bot asked in its chat even when the server cannot list task threads", async () => {
+  setup();
   state.supported = false;
   state.items = [
     {
@@ -111,10 +119,10 @@ it("sees a question the bot asked in its chat even when the server cannot list t
   // This probe has no route-dependent behavior.
   await using screen = await render(<TurnsProbe />, { router: false });
   await expect.element(screen.getByText("1 questions in the chat")).toBeVisible();
-  state.items = [];
 });
 
 it("retains a denied listBotThreads read for the Work panel", async () => {
+  setup();
   state.supported = true;
   state.failure = new EnvironmentAuthorizationError({
     message: "denied",
@@ -131,5 +139,4 @@ it("retains a denied listBotThreads read for the Work panel", async () => {
   // The probe reads no route state.
   await using screen = await render(<Probe />, { router: false });
   await expect.element(screen.getByText("denied read")).toBeVisible();
-  state.failure = null;
 });

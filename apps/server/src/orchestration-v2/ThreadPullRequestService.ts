@@ -10,11 +10,13 @@ import {
 import { makeDrainableWorker } from "@goat/shared/DrainableWorker";
 import * as Cause from "effect/Cause";
 import * as Context from "effect/Context";
-import * as Crypto from "effect/Crypto";
+import * as SecureRandom from "effect/crypto/SecureRandom";
+import * as DateTime from "effect/DateTime";
 import * as Effect from "effect/Effect";
 import * as FileSystem from "effect/FileSystem";
 import * as Option from "effect/Option";
 import * as Path from "effect/Path";
+import * as Queue from "effect/Queue";
 import * as Schedule from "effect/Schedule";
 import type * as Scope from "effect/Scope";
 import * as Stream from "effect/Stream";
@@ -23,6 +25,7 @@ import * as BackgroundPolicy from "../background/BackgroundPolicy.ts";
 import * as GitManager from "../git/GitManager.ts";
 import * as ProjectStore from "./ProjectStore.ts";
 import * as PullRequestService from "../pullRequest/PullRequestService.ts";
+import { makeLinkedThreadsChangeDetector } from "../pullRequest/linkedThreads.ts";
 import * as RepositoryIdentityResolver from "../project/RepositoryIdentityResolver.ts";
 import { forkParked } from "../serverActivation.ts";
 import { sourceControlDefinitions } from "../sourceControl/sourceControlDefinitions.ts";
@@ -47,6 +50,19 @@ function samePullRequest(
     left.number === right.number &&
     left.url === right.url
   );
+}
+
+function pullRequestPredatesThread(
+  pullRequest: Pick<GitManager.GitBranchPullRequest, "state" | "closedAt" | "mergedAt">,
+  createdAt: DateTime.Utc,
+): boolean {
+  const terminalAt =
+    pullRequest.state === "merged"
+      ? pullRequest.mergedAt
+      : pullRequest.state === "closed"
+        ? pullRequest.closedAt
+        : null;
+  return terminalAt != null && Date.parse(terminalAt) < DateTime.toEpochMillis(createdAt);
 }
 
 function pullRequestRepository(
@@ -102,7 +118,7 @@ export const make = Effect.gen(function* () {
   const git = yield* GitManager.GitManager;
   const pullRequests = yield* PullRequestService.PullRequestService;
   const repositoryIdentities = yield* RepositoryIdentityResolver.RepositoryIdentityResolver;
-  const crypto = yield* Crypto.Crypto;
+  const random = yield* SecureRandom.SecureRandom;
   const fileSystem = yield* FileSystem.FileSystem;
   const path = yield* Path.Path;
   const backgroundPolicy = yield* BackgroundPolicy.BackgroundPolicy;
@@ -213,9 +229,20 @@ export const make = Effect.gen(function* () {
                 }
               : null;
 
+          const isHistoricalFor = (thread: (typeof group)[number]) =>
+            detected !== null &&
+            pullRequestPredatesThread(detected, thread.createdAt) &&
+            !samePullRequest(thread.branchPullRequest, detectedReference);
+          const dropsHistorical =
+            detected !== null &&
+            first.branch !== null &&
+            group.some(isHistoricalFor) &&
+            !(yield* git.checkedOutPullRequest({ cwd, branch: first.branch, url: detected.url }));
+
           const plans = yield* Effect.forEach(group, (thread) =>
             Effect.gen(function* () {
-              let branchPullRequest = detectedReference;
+              let branchPullRequest =
+                dropsHistorical && isHistoricalFor(thread) ? null : detectedReference;
               if (
                 detected === null &&
                 branchPullRequest === null &&
@@ -306,7 +333,7 @@ export const make = Effect.gen(function* () {
                 if (!projectWorkspaceMatchesSnapshot(currentProject, project.workspaceRoot)) {
                   return failBackfill([thread]);
                 }
-                const uuid = yield* crypto.randomUUIDv4();
+                const uuid = yield* random.uuidV4();
                 yield* orchestrator.dispatch({
                   type: "thread.pull-request.sync",
                   commandId: CommandId.make(`server:thread-pull-request:${thread.id}:${uuid}`),
@@ -384,7 +411,26 @@ export const make = Effect.gen(function* () {
       return worker.enqueue(request);
     });
 
-  const processEvent = (event: OrchestrationV2DomainEvent) => {
+  const linkedThreadsChange = makeLinkedThreadsChangeDetector();
+  // A running linked thread can reorder its answers on every event, so reorders refresh readers at
+  // most once per 10s, the cadence clients used to poll at.
+  const linkedThreadReorders = yield* Queue.dropping<void>(1);
+
+  const notifyLinkedThreads = (event: OrchestrationV2DomainEvent) => {
+    switch (linkedThreadsChange(event)) {
+      case "changed":
+        return pullRequests.notifyLinkedThreadsChanged;
+      case "reordered":
+        return Queue.offer(linkedThreadReorders, undefined).pipe(Effect.asVoid);
+      case null:
+        return Effect.void;
+    }
+  };
+
+  const processEvent = (event: OrchestrationV2DomainEvent) =>
+    Effect.andThen(notifyLinkedThreads(event), refreshForEvent(event));
+
+  const refreshForEvent = (event: OrchestrationV2DomainEvent) => {
     switch (event.type) {
       case "thread.created":
       case "thread.unarchived":
@@ -411,6 +457,13 @@ export const make = Effect.gen(function* () {
     "ThreadPullRequestServiceV2.start",
   )(function* () {
     yield* forkParked(Stream.runForEach(orchestrator.streamDomainEvents, processEvent));
+    yield* forkParked(
+      Queue.take(linkedThreadReorders).pipe(
+        Effect.andThen(pullRequests.notifyLinkedThreadsChanged),
+        Effect.andThen(Effect.sleep("10 seconds")),
+        Effect.forever,
+      ),
+    );
     yield* forkParked(
       Effect.gen(function* () {
         yield* worker.enqueue({ threadId: null, refresh: false, backfill: true });

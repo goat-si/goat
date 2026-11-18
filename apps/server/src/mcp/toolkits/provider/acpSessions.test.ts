@@ -14,6 +14,7 @@ import * as Sqlite from "../../../persistence/Sqlite.ts";
 import * as AcpSessionService from "../../../provider/AcpSessionService.ts";
 import { catalog, client, dependencies } from "../../agentSurface.testkit.ts";
 import { McpInvocationContext, type McpInvocationScope } from "../../McpInvocationContext.ts";
+import * as McpHttpServer from "../../McpHttpServer.ts";
 
 const input = {
   instanceId: ProviderInstanceId.make("acp-test"),
@@ -50,7 +51,7 @@ it.effect("lists a page through the served MCP path only while read access is li
     const registered = catalog.pipe(
       Layer.provide(Layer.mergeAll(dependencies, service)),
       Layer.provideMerge(Sqlite.layerMemory),
-      Layer.provideMerge(McpServer.McpServer.layer),
+      Layer.provideMerge(McpHttpServer.layerInProcessMcpServer),
     );
     const call = (as: McpInvocationScope) =>
       McpServer.McpServer.pipe(
@@ -122,7 +123,7 @@ it.effect("refuses an incomplete provider page through the served MCP path", () 
     const registered = catalog.pipe(
       Layer.provide(Layer.mergeAll(dependencies, service)),
       Layer.provideMerge(Sqlite.layerMemory),
-      Layer.provideMerge(McpServer.McpServer.layer),
+      Layer.provideMerge(McpHttpServer.layerInProcessMcpServer),
     );
     const call = (name: string, args: object) =>
       McpServer.McpServer.pipe(
@@ -180,7 +181,7 @@ it.effect("refuses a continuation page that is not truncated and returns no sess
     const registered = catalog.pipe(
       Layer.provide(Layer.mergeAll(dependencies, service)),
       Layer.provideMerge(Sqlite.layerMemory),
-      Layer.provideMerge(McpServer.McpServer.layer),
+      Layer.provideMerge(McpHttpServer.layerInProcessMcpServer),
     );
     yield* Effect.gen(function* () {
       const direct = yield* McpServer.McpServer.pipe(

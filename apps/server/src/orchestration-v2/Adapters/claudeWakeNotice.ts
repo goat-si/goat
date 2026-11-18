@@ -73,7 +73,29 @@ export const makeClaudeWakeReports = Effect.fn("ClaudeWakeReports.make")(functio
     });
   const clearWakeReports = (nativeThreadId: string) =>
     takeWakeReports(nativeThreadId).pipe(Effect.asVoid);
-  return { recordWakeReport, startUserTurnForWakeReports, takeWakeReports, clearWakeReports };
+  const peekWakeReports = (nativeThreadId: string) =>
+    Ref.get(wakeReportsByNativeThread).pipe(
+      Effect.map(({ reports }) => reports.get(nativeThreadId)),
+    );
+  /** Forgets the reports of tasks whose buffered wake was retired. */
+  const dropWakeReports = (nativeThreadId: string, taskIds: ReadonlySet<string>) =>
+    Ref.update(wakeReportsByNativeThread, ({ userTurns, reports }) => {
+      const threadReports = reports.get(nativeThreadId);
+      if (threadReports === undefined) return { userTurns, reports };
+      const remaining = new Map([...threadReports].filter(([taskId]) => !taskIds.has(taskId)));
+      const updatedReports = new Map(reports);
+      if (remaining.size === 0) updatedReports.delete(nativeThreadId);
+      else updatedReports.set(nativeThreadId, remaining);
+      return { userTurns, reports: updatedReports };
+    });
+  return {
+    recordWakeReport,
+    startUserTurnForWakeReports,
+    takeWakeReports,
+    clearWakeReports,
+    peekWakeReports,
+    dropWakeReports,
+  };
 });
 
 /** Tasks that never notify keep their stamp; the oldest go past this many. */

@@ -9,6 +9,14 @@ import {
 import { useRightPanelStore } from "./rightPanelStore";
 import { resolvePathLinkTarget } from "@goat/shared/fileLinks";
 
+export const diffRepositoryRoot = (
+  thread: { worktreePath?: string | null | undefined } | null | undefined,
+  project:
+    | { repositoryIdentity?: { rootPath?: string | undefined } | null | undefined }
+    | null
+    | undefined,
+) => (thread?.worktreePath ? undefined : project?.repositoryIdentity?.rootPath);
+
 interface OpenDiffFilePrimaryActionInput {
   readonly threadRef: ScopedThreadRef | null;
   readonly filePath: string;

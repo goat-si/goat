@@ -259,108 +259,6 @@ describe("orchestration V2 contracts", () => {
     ).toThrow();
   });
 
-  it("decodes persisted capability snapshots that predate runtimePolicy", () => {
-    const legacyCapabilities = {
-      sessions: {
-        supportsMultipleProviderThreadsPerSession: false,
-        supportsModelSwitchInSession: false,
-        supportsProviderSwitchingViaHandoff: true,
-        supportsRuntimeModeSwitchInSession: false,
-        pendingRequestsSurviveRestart: false,
-      },
-      threads: {
-        canCreateEmptyThread: true,
-        canReadThreadSnapshot: false,
-        canRollbackThread: true,
-        canForkThread: false,
-        canForkFromTurn: false,
-        canForkFromSubagentThread: false,
-        exposesNativeThreadId: true,
-      },
-      turns: {
-        exposesNativeTurnId: false,
-        emitsTurnStarted: true,
-        emitsTurnCompleted: true,
-        supportsInterrupt: true,
-        supportsActiveSteering: false,
-        supportsSteeringByInterruptRestart: true,
-        supportsQueuedMessages: true,
-        terminalStatusQuality: "strong",
-      },
-      streaming: {
-        streamsAssistantText: true,
-        streamsReasoning: true,
-        streamsToolOutput: true,
-        streamsPlanText: false,
-        emitsMessageCompleted: true,
-      },
-      tools: {
-        exposesToolItemIds: true,
-        emitsToolStarted: true,
-        emitsToolCompleted: true,
-        emitsToolOutput: true,
-        supportsMcpTools: false,
-        supportsDynamicToolCallbacks: false,
-      },
-      approvals: {
-        supportsCommandApproval: true,
-        supportsFileReadApproval: true,
-        supportsFileChangeApproval: true,
-        supportsApplyPatchApproval: false,
-        approvalsHaveNativeRequestIds: false,
-        approvalCallbacksAreLiveOnly: true,
-        approvalsCanOriginateFromSubagents: false,
-      },
-      planning: {
-        emitsPlanUpdated: true,
-        emitsTodoList: true,
-        emitsProposedPlan: false,
-        supportsStructuredQuestions: true,
-        planDeltasHaveItemIds: false,
-      },
-      subagents: {
-        supportsSubagents: false,
-        exposesSubagentThreadIds: false,
-        emitsSubagentLifecycle: false,
-        canWaitForSubagents: false,
-        canCloseSubagents: false,
-        canForkSubagentThread: false,
-      },
-      context: {
-        acceptsSystemContext: false,
-        acceptsDeveloperContext: false,
-        acceptsSyntheticUserContext: true,
-        canGenerateSummaries: true,
-        canConsumeHandoffSummaries: true,
-        supportsDeltaHandoff: true,
-        supportsFullThreadHandoff: true,
-        maxRecommendedHandoffChars: null,
-      },
-      checkpointing: {
-        appCanCheckpointFilesystem: true,
-        supportsNestedCheckpointScopes: true,
-        providerCanRollbackConversation: true,
-        providerRollbackReturnsSnapshot: true,
-        providerCanReadConversationSnapshot: false,
-      },
-      identity: {
-        nativeThreadIds: "strong",
-        nativeTurnIds: "weak",
-        nativeItemIds: "weak",
-        nativeRequestIds: "weak",
-      },
-    };
-
-    const decoded = decodeOrchestrationV2ProviderCapabilities(legacyCapabilities);
-    expect(decoded.runtimePolicy).toEqual({ enforcement: "client-boundary" });
-
-    const explicit = decodeOrchestrationV2ProviderCapabilities({
-      ...legacyCapabilities,
-      runtimePolicy: { enforcement: "native" },
-    });
-    expect(explicit.runtimePolicy).toEqual({ enforcement: "native" });
-  });
-
   it("decodes command and domain event shapes for command-to-projection tests", () => {
     const command = decodeOrchestrationV2Command({
       type: "message.dispatch",
@@ -457,6 +355,28 @@ describe("orchestration V2 contracts", () => {
     expect(runtimeThread.pendingBackgroundTasks).toEqual([]);
     expect(runtimeThread.contextUsage).toBeNull();
     expect(runtimeThread.nativeMetadata).toBeNull();
+  });
+});
+
+describe("handoff continuation from older or newer peers", () => {
+  const binding = {
+    type: "thread.metadata.update",
+    commandId: "command-handoff",
+    threadId: "thread-handoff",
+    branch: "goat/handoff",
+    worktreePath: "/worktrees/handoff",
+  } as const;
+
+  it("decodes a binding from a server that predates continuation without inventing one", () => {
+    const command = decodeOrchestrationV2Command(binding);
+    expect(command.type === "thread.metadata.update" && "continuation" in command).toBe(false);
+  });
+
+  it("round-trips the continuation a newer server commits with its binding", () => {
+    const continuation = { messageId: "message-handoff", text: "Keep going." };
+    expect(decodeOrchestrationV2Command({ ...binding, continuation })).toMatchObject({
+      continuation,
+    });
   });
 });
 

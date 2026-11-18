@@ -1,4 +1,5 @@
 import { assert, it } from "@effect/vitest";
+import * as NodeCrypto from "@effect/platform-node/NodeCrypto";
 import * as NodeServices from "@effect/platform-node/NodeServices";
 import { EnvironmentId, ProviderInstanceId, ThreadId } from "@goat/contracts";
 import * as Context from "effect/Context";
@@ -41,7 +42,7 @@ it.effect(
           getEnvironmentId: Effect.succeed(EnvironmentId.make("environment:test")),
           getDescriptor: Effect.die("unused"),
         }),
-        Effect.provide(NodeServices.layer),
+        Effect.provide(Layer.mergeAll(NodeServices.layer, NodeCrypto.layer)),
       );
       const credential = yield* registry.issue({
         threadId,

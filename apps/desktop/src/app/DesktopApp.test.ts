@@ -8,6 +8,7 @@ import * as FileSystem from "effect/FileSystem";
 import * as Path from "effect/Path";
 import * as HttpClient from "effect/http/HttpClient";
 import * as NetService from "@goat/shared/Net";
+import { ChildProcessSpawner } from "effect/process";
 import * as Fiber from "effect/Fiber";
 import * as Option from "effect/Option";
 import * as Ref from "effect/Ref";
@@ -66,6 +67,7 @@ import * as MediaPermissions from "../permissions/MediaPermissions.ts";
 import * as DesktopRendererOriginMigration from "./DesktopRendererOriginMigration.ts";
 import * as DesktopSafeStorageKeyMigration from "./DesktopSafeStorageKeyMigration.ts";
 import * as DesktopCuaDriver from "../cua/DesktopCuaDriver.ts";
+import * as DesktopPrimaryPaste from "./DesktopPrimaryPaste.ts";
 import * as DesktopSshEnvironment from "../ssh/DesktopSshEnvironment.ts";
 import * as DesktopSshPasswordPrompts from "../ssh/DesktopSshPasswordPrompts.ts";
 import * as DesktopTelemetryPublisher from "../telemetry/DesktopTelemetryPublisher.ts";
@@ -117,6 +119,7 @@ it.effect.each([false, true])(
             platform: "linux",
             isDevelopment: false,
             isPackaged: true,
+            stateDir: "/isolated/userdata",
             configuredBackendPort: Option.some(3773),
             defaultDesktopSettings: { serverExposureMode: "local-only" },
           } as unknown as DesktopEnvironment.DesktopEnvironment["Service"]),
@@ -234,12 +237,15 @@ it.effect.each([false, true])(
                 throw new Error("unexpected detach");
               },
               setShown: () => {},
+              loadFailed: () => {},
               humanStartedDownload: () => false,
+              agentLedPage: () => false,
               placeDownload: () => false,
             }),
             Layer.mock(DesktopHeadlessServer.DesktopHeadlessServer, {}),
             Layer.mock(DesktopWindowMaterial.DesktopWindowMaterial, {}),
             Layer.mock(BrowserImport.BrowserImport, {}),
+            Layer.mock(ChildProcessSpawner.ChildProcessSpawner, {}),
             Layer.mock(DesktopBackendConfiguration.DesktopBackendConfiguration, {}),
             Layer.mock(DesktopCliCommand.DesktopCliCommand, {}),
             Layer.mock(DesktopClientSettings.DesktopClientSettings, {}),
@@ -256,6 +262,7 @@ it.effect.each([false, true])(
               run: () => Effect.void,
             } as DesktopSafeStorageKeyMigration.DesktopSafeStorageKeyMigration["Service"]),
             Layer.mock(DesktopCuaDriver.DesktopCuaDriver, { listen: Effect.void }),
+            Layer.succeed(DesktopPrimaryPaste.DesktopPrimaryPaste, { enabled: true }),
             Layer.mock(DesktopSshEnvironment.DesktopSshEnvironment, {}),
             Layer.mock(DesktopSshPasswordPrompts.DesktopSshPasswordPrompts, {}),
             Layer.mock(DesktopTelemetryPublisher.DesktopTelemetryPublisher, {}),

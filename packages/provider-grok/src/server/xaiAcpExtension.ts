@@ -10,12 +10,12 @@ import type * as EffectAcpSchema from "effect-acp/compat";
 
 import type * as AcpSessionRuntime from "@goat/provider-acp/server/AcpSessionRuntime";
 import type { AcpToolCallState } from "@goat/provider-acp/server/runtimeModel";
+import { normalizeXAiMcpToolCall } from "./xaiMcpToolCall.ts";
 import { truncateCommandTitle } from "./commandTitle.ts";
 
 const xAiStopReasonMissingMetaKey = "xAiStopReasonMissing";
 export const xAiRateLimitedErrorCode = -32003;
 const completedXAiPromptIdLimit = 128;
-
 const XAiPromptCompleteNotification = Schema.Struct({
   sessionId: Schema.String,
   promptId: Schema.optional(Schema.String),
@@ -119,7 +119,6 @@ export interface XAiAcpSubagentEndNotice {
 }
 
 const XAI_UUID_RE = "[0-9a-f]{8}(?:-[0-9a-f]{4}){3}-[0-9a-f]{12}";
-
 function unknownRecord(value: unknown): Record<string, unknown> | undefined {
   return typeof value === "object" && value !== null && !Array.isArray(value)
     ? (value as Record<string, unknown>)
@@ -558,7 +557,8 @@ function resolveXAiAcpToolTitle(toolCall: AcpToolCallState): string | undefined 
 }
 
 /** Grok 1.0.41 monitor ticks report exit_code 0 before ending via _x.ai/task_completed. */
-export function normalizeXAiAcpToolCallState(toolCall: AcpToolCallState): AcpToolCallState {
+export function normalizeXAiAcpToolCallState(incoming: AcpToolCallState): AcpToolCallState {
+  const toolCall = normalizeXAiMcpToolCall(incoming);
   const resolvedTitle = resolveXAiAcpToolTitle(toolCall);
   const withTitle =
     resolvedTitle !== undefined && resolvedTitle !== toolCall.title

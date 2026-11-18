@@ -43,6 +43,7 @@ export class ThreadTitleRegenerationService extends Context.Service<
       | ProjectStore.ProjectStoreV2Error
       | ServerSettingsError
       | ThreadManagementService.ThreadManagementProviderInstanceDisabledError
+      | ThreadManagementService.ThreadManagementWorktreeUnrestorableError
     >;
   }
 >()("goat/orchestration-v2/ThreadTitleRegenerationService") {}
@@ -168,6 +169,7 @@ const make = Effect.gen(function* () {
       const result = yield* textGeneration.generateThreadTitle({
         cwd: worktreeExists ? worktreePath : project.value.workspaceRoot,
         message: context.message,
+        projectTitle: project.value.title,
         attachments: context.attachments,
         ...(input.kind.type === "regenerate" ? { previousTitle: projection.thread.title } : {}),
         ...(inherited === undefined ? {} : { forkSource: inherited }),

@@ -50,6 +50,17 @@ func (g *hookGate) hook() {
 	}
 }
 
+func awaitSignal(t *testing.T, ctx context.Context, signal <-chan struct{}, message string) {
+	t.Helper()
+	waitCtx, cancel := context.WithTimeout(ctx, 30*time.Second)
+	defer cancel()
+	select {
+	case <-signal:
+	case <-waitCtx.Done():
+		t.Fatalf("%s: %v", message, waitCtx.Err())
+	}
+}
+
 func TestAReplacementClosesTheOldSessionsWhileTheOldHolderCannotBeWrittenTo(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
@@ -57,7 +68,11 @@ func TestAReplacementClosesTheOldSessionsWhileTheOldHolderCannotBeWrittenTo(t *t
 	defer rs.Close()
 	g := newHookGate()
 	defer g.open()
-	a := hookedFounder(t, ctx, rs, func(o *Options) { o.HolderWriting = g.hook })
+	closed := make(chan struct{}, 4)
+	a := hookedFounder(t, ctx, rs, func(o *Options) {
+		o.HolderWriting = g.hook
+		o.ClientClosed = func() { closed <- struct{}{} }
+	})
 	key := newKey(t)
 	prog := newProgram(t, "goat", key)
 	prog.serve()
@@ -73,8 +88,10 @@ func TestAReplacementClosesTheOldSessionsWhileTheOldHolderCannotBeWrittenTo(t *t
 	}
 	g.armed.Store(true)
 	old.c.Write([]byte(cancelOp("AAAAAAAAAAAAAAAA") + "\n"))
-	<-g.reached // the old holder's writer holds write ownership and is stuck: replaced cannot be written
+	// The old holder's writer holds write ownership and is stuck: replaced cannot be written.
+	awaitSignal(t, ctx, g.reached, "the old holder's writer never reached its write hook")
 	register(t, a, "goat", prog.port(), key)
+	awaitSignal(t, ctx, closed, "the old registration's client session was not closed")
 	if code := closedWith(ctx, sec); code != wire.CodeNotAdmitted {
 		t.Fatalf("the old registration's client session closed %d, want 4401 while its holder notice is blocked", code)
 	}
@@ -179,7 +196,11 @@ func TestAReplacementClosesTheOldSessionsBeforeTheNewHolderIsAnswered(t *testing
 	defer rs.Close()
 	g := newHookGate()
 	defer g.open()
-	a := hookedFounder(t, ctx, rs, func(o *Options) { o.Registering = g.hook })
+	closed := make(chan struct{}, 4)
+	a := hookedFounder(t, ctx, rs, func(o *Options) {
+		o.Registering = g.hook
+		o.ClientClosed = func() { closed <- struct{}{} }
+	})
 	key := newKey(t)
 	prog := newProgram(t, "goat", key)
 	prog.serve()
@@ -203,7 +224,9 @@ func TestAReplacementClosesTheOldSessionsBeforeTheNewHolderIsAnswered(t *testing
 		`,"key":"` + ident.B64.EncodeToString(key) + `"}` + "\n")); err != nil {
 		t.Fatal(err)
 	}
-	<-g.reached // the new registration is current and its holder has not been answered
+	// The new registration is current and its holder has not been answered.
+	awaitSignal(t, ctx, g.reached, "the new registration never reached its registering hook")
+	awaitSignal(t, ctx, closed, "the old registration's client session was not closed before the new holder is answered")
 	if code := closedWith(ctx, sec); code != wire.CodeNotAdmitted {
 		t.Fatalf("the old client session closed %d, want 4401 before the new holder is answered", code)
 	}

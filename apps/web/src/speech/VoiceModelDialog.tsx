@@ -1,5 +1,6 @@
 import {
   AuthVoiceManageScope,
+  AuthFilesystemReadScope,
   type EnvironmentId,
   type SpeechConfiguration,
   type SpeechModelList,
@@ -10,6 +11,7 @@ import {
   downloadEnvironmentSpeechModel,
   getEnvironmentSpeechConfiguration,
   listEnvironmentSpeechModels,
+  linkEnvironmentSpeechModels,
   removeEnvironmentSpeechModel,
   type EnvironmentVoiceRequestContext,
 } from "@goat/client-runtime/voice-input";
@@ -38,6 +40,7 @@ export function VoiceModelDialog(props: {
   resolveContext: (id: EnvironmentId) => Promise<EnvironmentVoiceRequestContext | null>;
 }) {
   const [search, setSearch] = useState("");
+  const [linkPath, setLinkPath] = useState("");
   const [installedOnly, setInstalledOnly] = useState(false);
   const [sorting, setSorting] = useState<{
     environmentId: EnvironmentId;
@@ -47,9 +50,14 @@ export function VoiceModelDialog(props: {
     environmentId: EnvironmentId;
     models: readonly Model[];
     config: SpeechConfiguration;
+    supportsModelLinking: boolean;
   } | null>(null);
   const models = snapshot?.environmentId === props.environmentId ? snapshot.models : [];
   const config = snapshot?.environmentId === props.environmentId ? snapshot.config : null;
+  const canLink =
+    snapshot?.environmentId === props.environmentId &&
+    snapshot.supportsModelLinking &&
+    readEnvironmentScope(props.environmentId, AuthFilesystemReadScope);
   const tiers = speechBenchmarkTiers(config?.acceleration);
   const selectedSort =
     sorting.environmentId === props.environmentId ? sorting.value : "recommended";
@@ -74,7 +82,12 @@ export function VoiceModelDialog(props: {
       getEnvironmentSpeechConfiguration(context, signal),
     ]);
     signal.throwIfAborted();
-    setSnapshot({ environmentId, models: list.models, config: current });
+    setSnapshot({
+      environmentId,
+      models: list.models,
+      config: current,
+      supportsModelLinking: list.supportsModelLinking === true,
+    });
   });
   // oxlint-disable-next-line goat/react-effect-budget -- Cancel model requests when the dialog closes or the destination changes.
   useEffect(() => {
@@ -142,6 +155,26 @@ export function VoiceModelDialog(props: {
         <DialogPanel>
           {error ? <p role="alert">{error}</p> : null}
           {busy ? <p role="status">Updating voice model…</p> : null}
+          {canLink ? (
+            <div>
+              <label>
+                Existing model file or folder on {props.label}{" "}
+                <input value={linkPath} onChange={(event) => setLinkPath(event.target.value)} />
+              </label>
+              <Button
+                size="sm"
+                variant="outline"
+                disabled={busy || !props.canManage || !linkPath.trim()}
+                onClick={() =>
+                  void mutate((ctx, signal) =>
+                    linkEnvironmentSpeechModels(ctx, linkPath.trim(), signal),
+                  )
+                }
+              >
+                Use existing models
+              </Button>
+            </div>
+          ) : null}
           <label>
             Search models{" "}
             <input value={search} onChange={(event) => setSearch(event.target.value)} />
@@ -197,6 +230,9 @@ export function VoiceModelDialog(props: {
                 <p className="text-xs text-muted-foreground">
                   {model.description} · {(model.size / 1_000_000_000).toFixed(1)} GB
                 </p>
+                {model.linkedFrom ? (
+                  <p className="text-xs text-muted-foreground">Using {model.linkedFrom}</p>
+                ) : null}
                 {model.benchmark ? (
                   <p className="text-xs text-muted-foreground">
                     Reference time for 30 s:{" "}

@@ -1,5 +1,8 @@
+import { rowBatchesSource } from "./sqliteRowBatches.ts";
+
 // Eval source also runs in bundles and single-executable builds without module files.
 export const writerWorkerSource = `
+${rowBatchesSource}
 const { parentPort, workerData } = require("node:worker_threads");
 const { DatabaseSync, constants } = require("node:sqlite");
 const { statSync } = require("node:fs");
@@ -134,7 +137,7 @@ const maintain = (observeOnly = false) => {
 };
 parentPort.on("message", (request) => {
   if (request.type === "initialize") return initialize();
-  const { id, sql, params, safeIntegers, values, raw, cached, owner } = request;
+  const { id, sql, params, safeIntegers, values, raw, cached, owner, received } = request;
   if (!db) return errorReply(id, new Error("Writer unavailable"), "open");
   if (!Number.isSafeInteger(id) || id <= nextSequence)
     return errorReply(id, new Error("Out of order writer request"), "execute");
@@ -169,7 +172,9 @@ parentPort.on("message", (request) => {
     statement.setReturnArrays(values);
     let rows;
     try {
-      rows = statement.columns().length > 0 ? statement.all(...params)
+      rows = statement.columns().length > 0
+        ? collectRows(statement.iterate(...params), received, (batch) =>
+            parentPort.postMessage({ id, rows: batch, more: true }))
         : (raw ? statement.run(...params) : (statement.run(...params), []));
     } finally { statement.setReturnArrays(false); }
     nativeMs = performance.now() - started;
@@ -182,6 +187,8 @@ parentPort.on("message", (request) => {
     parentPort.postMessage({ id, rows, prepareMs, nativeMs, completedAtMs,
       backpressure: entry.flags.backpressure ? false : undefined });
   } catch (error) {
+    // A failed iterator can report its previous SQLite error when the statement is reused.
+    cache.delete(sql);
     if (!db.isTransaction) transactionOwner = undefined;
     if (operation === "prepare") prepareMs = performance.now() - started;
     if (operation === "execute" && nativeMs === undefined) nativeMs = performance.now() - started;

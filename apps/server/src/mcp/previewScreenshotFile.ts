@@ -1,5 +1,5 @@
 import * as Clock from "effect/Clock";
-import * as Crypto from "effect/Crypto";
+import * as SecureRandom from "effect/crypto/SecureRandom";
 import * as Effect from "effect/Effect";
 import * as FileSystem from "effect/FileSystem";
 import * as Path from "effect/Path";
@@ -25,8 +25,8 @@ export const saveScreenshot = Effect.fn("McpHttpServer.saveScreenshot")(function
   const fileSystem = yield* FileSystem.FileSystem;
   const path = yield* Path.Path;
   const millis = yield* Clock.currentTimeMillis;
-  const crypto = yield* Crypto.Crypto;
-  const unique = (yield* crypto.randomUUIDv4().pipe(Effect.orDie)).slice(0, 8);
+  const random = yield* SecureRandom.SecureRandom;
+  const unique = (yield* random.uuidV4().pipe(Effect.orDie)).slice(0, 8);
   const fileName = `browser-screenshot-${artifactSiteSlug(pageUrl)}-${millis.toString(36)}-${unique}.png`;
   const screenshotPath = path.join(config.browserArtifactsDir, fileName);
   yield* fileSystem.makeDirectory(config.browserArtifactsDir, { recursive: true }).pipe(

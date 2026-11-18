@@ -3,7 +3,51 @@ import * as NodeFSP from "node:fs/promises";
 import * as Effect from "effect/Effect";
 import * as FileSystem from "effect/FileSystem";
 import * as Path from "effect/Path";
+import * as PlatformError from "effect/PlatformError";
 import * as Schema from "effect/Schema";
+import * as Semaphore from "effect/Semaphore";
+
+/** Live runtimes whose directories the sweep must skip; past this a new runtime is refused. */
+export const MAX_LIVE_ANTIGRAVITY_RUNTIMES = 256;
+const runtimeTempGate = Semaphore.makeUnsafe(1);
+const liveRuntimeDirectories = new Set<string>();
+
+export const acquireAntigravityRuntimeTemp = Effect.fn("acquireAntigravityRuntimeTemp")(function* (
+  root: string,
+) {
+  const fs = yield* FileSystem.FileSystem;
+  return yield* Effect.acquireRelease(
+    runtimeTempGate.withPermits(1)(
+      Effect.gen(function* () {
+        if (liveRuntimeDirectories.size >= MAX_LIVE_ANTIGRAVITY_RUNTIMES) {
+          return yield* PlatformError.systemError({
+            _tag: "Busy",
+            module: "AntigravitySessionFiles",
+            method: "acquireAntigravityRuntimeTemp",
+            description: "Too many Antigravity sessions are running. Close one and try again.",
+          });
+        }
+        yield* fs.makeDirectory(root, { recursive: true });
+        const directory = yield* fs.makeTempDirectory({ directory: root, prefix: "run-" });
+        liveRuntimeDirectories.add(directory);
+        return directory;
+      }),
+    ),
+    (directory) =>
+      runtimeTempGate.withPermits(1)(
+        fs.remove(directory, { recursive: true, force: true }).pipe(
+          Effect.catch(() =>
+            Effect.logWarning("Could not remove an Antigravity runtime temp directory."),
+          ),
+          Effect.ensuring(
+            Effect.sync(() => {
+              liveRuntimeDirectories.delete(directory);
+            }),
+          ),
+        ),
+      ),
+  );
+});
 
 const isNativeSessionId = Schema.is(Schema.String.check(Schema.isUUID(4)));
 const decodeSessionMetadata = Schema.decodeEffect(
@@ -58,28 +102,56 @@ export const retireAntigravityRuntimeTempDirs = Effect.fn("retireAntigravityRunt
     const path = yield* Path.Path;
     const parent = path.dirname(tempDirectory);
     const prefix = `${path.basename(tempDirectory)}.old-`;
-    if (yield* fs.exists(tempDirectory)) {
-      yield* fs.makeTempDirectory({ directory: parent, prefix }).pipe(
-        Effect.flatMap((retired) => fs.rename(tempDirectory, path.join(retired, "runtime"))),
-        Effect.catch(() => fs.remove(tempDirectory, { recursive: true, force: true })),
-      );
-    }
-    return Effect.gen(function* () {
-      const entries = yield* Effect.tryPromise(() => listRetiredDirectories(parent, prefix)).pipe(
-        Effect.orElseSucceed(() => [] as string[]),
-      );
-      yield* Effect.forEach(
-        entries,
-        (entry) =>
-          fs
-            .remove(path.join(parent, entry), { recursive: true, force: true })
-            .pipe(Effect.catch(() => warnRuntimeTempLeftovers)),
-        { discard: true },
-      );
-    });
+    const entries = yield* runtimeTempGate.withPermits(1)(
+      Effect.gen(function* () {
+        if (yield* fs.exists(tempDirectory)) {
+          const hasLive = Array.from(liveRuntimeDirectories).some(
+            (directory) => path.dirname(directory) === tempDirectory,
+          );
+          if (!hasLive) {
+            yield* fs.makeTempDirectory({ directory: parent, prefix }).pipe(
+              Effect.flatMap((retired) => fs.rename(tempDirectory, path.join(retired, "runtime"))),
+              Effect.catch(() => fs.remove(tempDirectory, { recursive: true, force: true })),
+            );
+          } else {
+            const children = yield* Effect.tryPromise(() => listDirectoryEntries(tempDirectory));
+            const retired = yield* fs.makeTempDirectory({ directory: parent, prefix });
+            for (const entry of children) {
+              const source = path.join(tempDirectory, entry);
+              if (!liveRuntimeDirectories.has(source)) {
+                yield* fs
+                  .rename(source, path.join(retired, entry))
+                  .pipe(Effect.catch(() => warnRuntimeTempLeftovers));
+              }
+            }
+          }
+        }
+        return yield* Effect.tryPromise(() => listRetiredDirectories(parent, prefix)).pipe(
+          Effect.orElseSucceed(() => [] as string[]),
+        );
+      }),
+    );
+    return Effect.forEach(
+      entries,
+      (entry) =>
+        fs
+          .remove(path.join(parent, entry), { recursive: true, force: true })
+          .pipe(Effect.catch(() => warnRuntimeTempLeftovers)),
+      { discard: true },
+    );
   },
   Effect.catch(() => warnRuntimeTempLeftovers.pipe(Effect.as(Effect.void))),
 );
+
+async function listDirectoryEntries(directoryPath: string): Promise<string[]> {
+  const directory = await NodeFSP.opendir(directoryPath);
+  const entries: string[] = [];
+  for await (const entry of directory) {
+    entries.push(entry.name);
+    if (entries.length === 1_024) break;
+  }
+  return entries;
+}
 
 async function listRetiredDirectories(parent: string, prefix: string): Promise<string[]> {
   const directory = await NodeFSP.opendir(parent);

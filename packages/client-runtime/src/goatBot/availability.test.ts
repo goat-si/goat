@@ -5,6 +5,8 @@ import {
   canSendToGoatBot,
   environmentSupportsChannelLedger,
   goatBotHomeReadBack,
+  goatBotRefusedBy,
+  goatBotRefusedText,
   resolveGoatBotRemoval,
   pickGoatBotEnvironment,
   resolveGoatBotAvailability,
@@ -391,5 +393,169 @@ describe("cluster home availability", () => {
         ).toEqual({ kind, environmentId: primary });
       }
     }
+  });
+});
+
+describe("refused computers (#3550)", () => {
+  const claim = { environmentId: remote, claimedAt: 100, claimId: "winner" };
+  const disconnected = (environmentId: EnvironmentId, home: typeof claim | null) => ({
+    environmentId,
+    connected: false,
+    supportsHome: true,
+    supportsBot: true,
+    settingsLoaded: true,
+    home,
+  });
+  const idle = { state: "idle" } as const;
+
+  it("a listed computer that refused this device makes GOAT Bot's wait say refused, whether the home is claimed, unclaimed or on an older server (#3550, access)", () => {
+    const claimed = resolveGoatBotAvailability({
+      environments: [
+        homeEnv(primary, claim),
+        homeEnv(remote, claim, {
+          connected: false,
+          refused: true,
+          homeTarget: disconnected(remote, claim),
+        }),
+      ],
+      botRef: null,
+      ensure: idle,
+    });
+    expect(claimed).toStrictEqual({
+      kind: "home_offline",
+      known: true,
+      environmentId: remote,
+      label: "Remote Mac",
+      refused: true,
+    });
+    const unclaimed = resolveGoatBotAvailability({
+      environments: [
+        homeEnv(primary, null, {
+          connected: false,
+          refused: true,
+          homeTarget: disconnected(primary, null),
+        }),
+      ],
+      botRef: null,
+      ensure: idle,
+    });
+    expect(unclaimed).toStrictEqual({
+      kind: "offline",
+      environmentId: primary,
+      refused: true,
+      label: "This device",
+    });
+    const olderServer = resolveGoatBotAvailability({
+      environments: [env(primary, { connected: false, refused: true, label: "Mac Studio" })],
+      botRef: null,
+      ensure: idle,
+    });
+    expect(olderServer).toStrictEqual({
+      kind: "offline",
+      environmentId: primary,
+      refused: true,
+      label: "Mac Studio",
+    });
+    // A cold start whose config has not loaded yet: support is unknown, not absent.
+    const coldStart = resolveGoatBotAvailability({
+      environments: [
+        env(primary, {
+          connected: false,
+          refused: true,
+          supportsChannelLedger: false,
+          label: "Mac Studio",
+          homeTarget: {
+            environmentId: primary,
+            connected: false,
+            supportsHome: false,
+            supportsBot: false,
+            settingsLoaded: false,
+            home: null,
+          },
+        }),
+      ],
+      botRef: null,
+      ensure: idle,
+    });
+    expect(coldStart).toStrictEqual({
+      kind: "offline",
+      environmentId: primary,
+      refused: true,
+      label: "Mac Studio",
+    });
+    expect(goatBotRefusedBy(claimed)).toBe("Remote Mac");
+    expect(goatBotRefusedBy(unclaimed)).toBe("This device");
+    // A removed home and an unreachable one that did not refuse are never called a refusal.
+    expect(
+      goatBotRefusedBy({
+        kind: "home_offline",
+        known: false,
+        environmentId: remote,
+        label: "remote-c",
+      }),
+    ).toBe(null);
+    expect(
+      goatBotRefusedBy({
+        kind: "home_offline",
+        known: true,
+        environmentId: remote,
+        label: "Remote Mac",
+      }),
+    ).toBe(null);
+    expect(goatBotRefusedText("Remote Mac")).toBe("GOAT on Remote Mac did not accept this device");
+    expect(canSendToGoatBot(claimed, true)).toBe(false);
+  });
+
+  it("refusal never changes which computer GOAT Bot waits on: a removed home, a connected computer and an unrefused one read as before (#3550, guard)", () => {
+    // The claimed home is not in this app's list; the computer that refused is another one.
+    const removed = resolveGoatBotAvailability({
+      environments: [homeEnv(primary, claim, { refused: true })],
+      botRef: null,
+      ensure: idle,
+    });
+    expect(removed).toStrictEqual({
+      kind: "home_offline",
+      known: false,
+      environmentId: remote,
+      label: remote.slice(0, 8),
+    });
+    const bot = { environmentId: remote, threadId: botThread };
+    expect(
+      resolveGoatBotAvailability({
+        environments: [homeEnv(primary, claim), homeEnv(remote, claim, { refused: true })],
+        botRef: null,
+        ensure: { state: "confirmed", bot },
+      }),
+    ).toStrictEqual({ kind: "ready", bot });
+    expect(
+      resolveGoatBotAvailability({
+        environments: [homeEnv(primary, null, { refused: true })],
+        botRef: null,
+        ensure: idle,
+      }),
+    ).toStrictEqual({ kind: "connecting", environmentId: primary });
+    const unrefused = resolveGoatBotAvailability({
+      environments: [
+        homeEnv(primary, claim),
+        homeEnv(remote, claim, { connected: false, homeTarget: disconnected(remote, claim) }),
+      ],
+      botRef: null,
+      ensure: idle,
+    });
+    expect(unrefused).toStrictEqual({
+      kind: "home_offline",
+      known: true,
+      environmentId: remote,
+      label: "Remote Mac",
+    });
+    expect(
+      resolveGoatBotAvailability({
+        environments: [
+          homeEnv(primary, null, { connected: false, homeTarget: disconnected(primary, null) }),
+        ],
+        botRef: null,
+        ensure: idle,
+      }),
+    ).toStrictEqual({ kind: "offline", environmentId: primary });
   });
 });

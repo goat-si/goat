@@ -211,15 +211,18 @@ export const makeIsManagedWorktreePath = Effect.gen(function* () {
       realLocation,
     );
     const candidate = yield* realLocation(worktreePath);
-    return roots.some((root) => {
-      if (isFilesystemRoot(root, path)) return false;
-      const relative = path.relative(root, candidate);
-      const segments = relative.split(path.sep);
-      return (
-        !path.isAbsolute(relative) &&
-        segments.length === 2 &&
-        segments.every((segment) => segment !== "" && segment !== "..")
-      );
-    });
+    return roots.some((root) => isManagedWorktreeLocation(root, candidate, path));
   });
 });
+
+/** Whether a real path sits where GOAT creates worktrees: exactly `<root>/<repository>/<name>`. */
+export function isManagedWorktreeLocation(root: string, candidate: string, path: Path.Path) {
+  if (isFilesystemRoot(root, path)) return false;
+  const relative = path.relative(root, candidate);
+  const segments = relative.split(path.sep);
+  return (
+    !path.isAbsolute(relative) &&
+    segments.length === 2 &&
+    segments.every((segment) => segment !== "" && segment !== "..")
+  );
+}

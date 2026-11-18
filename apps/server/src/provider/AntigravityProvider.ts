@@ -33,6 +33,7 @@ import {
   buildServerProvider,
   isCommandMissingCause,
   type ServerProviderDraft,
+  resolveProviderProbeTimeoutMs,
 } from "@goat/provider-core/server/snapshotProbe";
 import { resolveUsageLimitsAfterProbe } from "@goat/provider-core/server/usageLimits";
 
@@ -40,7 +41,7 @@ import { antigravityThinkingConfig } from "./acp/AntigravityAcpSupport.ts";
 
 const EMPTY_MODEL_CAPABILITIES = createModelCapabilities({ optionDescriptors: [] });
 const MAX_WORKSPACE_SNAPSHOTS = 32;
-const HEALTH_CHECK_TIMEOUT = "90 seconds";
+const HEALTH_CHECK_TIMEOUT_MS = 90_000;
 const SIGN_IN_MESSAGE = "Sign in with Google to use Antigravity.";
 const AUTH_UNCHECKED_MESSAGE =
   "Antigravity is installed. Google account access is not checked yet.";
@@ -152,9 +153,12 @@ function isMissingInstallation(error: EffectAcpErrors.AcpError | ProviderSetupEr
 interface AntigravityProviderState {
   readonly draft: ServerProviderDraft;
   readonly authRevision: number;
+  readonly authProfile?: string;
 }
 
 interface AntigravityProviderOptions {
+  /** Read at each check, so a probe timeout override set after construction applies. */
+  readonly environment?: Effect.Effect<NodeJS.ProcessEnv>;
   readonly stampIdentity: (snapshot: ServerProviderDraft) => Effect.Effect<ServerProvider>;
   readonly probe: Effect.Effect<
     EffectAcpSchema.InitializeResponse,
@@ -165,6 +169,7 @@ interface AntigravityProviderOptions {
   readonly clearUsage?: Effect.Effect<void>;
   readonly maintenanceCapabilities?: ProviderMaintenanceCapabilities;
   readonly auth?: { readonly type: string; readonly label: string };
+  readonly currentProfile?: Effect.Effect<string>;
 }
 
 export const makeAntigravityProvider = Effect.fn("makeAntigravityProvider")(function* (
@@ -223,7 +228,36 @@ export const makeAntigravityProvider = Effect.fn("makeAntigravityProvider")(func
       thinkingLevels.set(model.currentValue, antigravityThinkingConfig(configOptions) ?? null);
     }
   };
-  const getSnapshot = SubscriptionRef.get(metadata).pipe(
+  const reconcileProfile = Effect.fn("AntigravityProvider.reconcileProfile")(function* () {
+    if (!options.currentProfile) return;
+    const profile = yield* options.currentProfile;
+    const previous = yield* SubscriptionRef.get(metadata);
+    if (previous.authProfile === undefined || previous.authProfile === profile) return;
+    yield* resetUsage;
+    discoveredSkills.clear();
+    thinkingLevels.clear();
+    yield* SubscriptionRef.update(metadata, (state) =>
+      state.authProfile === undefined || state.authProfile === profile
+        ? state
+        : ({
+            authRevision: state.authRevision + 1,
+            draft: {
+              ...state.draft,
+              auth: { status: "unknown", ...(options.auth ? { type: options.auth.type } : {}) },
+              status: "warning",
+              message: authUncheckedMessage,
+              models: [],
+              slashCommands: [],
+              skills: [],
+              workspaceSnapshots: [],
+              supportsTextGeneration: false,
+              usageLimits: undefined,
+            },
+          } satisfies AntigravityProviderState),
+    );
+  });
+  const getSnapshot = reconcileProfile().pipe(
+    Effect.andThen(SubscriptionRef.get(metadata)),
     Effect.flatMap((state) => options.stampIdentity(state.draft)),
   );
 
@@ -270,11 +304,14 @@ export const makeAntigravityProvider = Effect.fn("makeAntigravityProvider")(func
 
   const checkProvider = Effect.fn("checkAntigravityProvider")(function* () {
     if (!settings.enabled) return yield* getSnapshot;
+    yield* reconcileProfile();
     const before = yield* SubscriptionRef.get(metadata);
-    const result = yield* options.probe.pipe(
-      Effect.timeoutOption(HEALTH_CHECK_TIMEOUT),
-      Effect.result,
+    const timeoutMs = resolveProviderProbeTimeoutMs(
+      "antigravity",
+      HEALTH_CHECK_TIMEOUT_MS,
+      options.environment ? yield* options.environment : undefined,
     );
+    const result = yield* options.probe.pipe(Effect.timeoutOption(timeoutMs), Effect.result);
     const initialized =
       Result.isSuccess(result) && Option.isSome(result.success) ? result.success.value : undefined;
     const version = initialized?.agentInfo?.version;
@@ -289,10 +326,11 @@ export const makeAntigravityProvider = Effect.fn("makeAntigravityProvider")(func
             ? "Antigravity ACP runtime is not installed or its executable could not be found."
             : failure
               ? "Antigravity could not complete its local health check."
-              : `Antigravity did not respond to its local health check within ${HEALTH_CHECK_TIMEOUT}.`;
+              : `Antigravity did not respond to its local health check within ${timeoutMs / 1_000} seconds.`;
     const supportsTextGeneration =
       initialized !== undefined ? yield* options.supportsTextGeneration : false;
     const updatedAt = DateTime.formatIso(yield* DateTime.now);
+    yield* reconcileProfile();
     const next = yield* SubscriptionRef.updateAndGet(metadata, (state) => {
       if (state.authRevision !== before.authRevision) return state;
       const { message: _previousMessage, ...draft } = state.draft;
@@ -333,7 +371,12 @@ export const makeAntigravityProvider = Effect.fn("makeAntigravityProvider")(func
         },
       } satisfies AntigravityProviderState;
     });
-    if (initialized !== undefined) yield* refreshUsage();
+    if (
+      initialized !== undefined &&
+      (!options.currentProfile || next.draft.auth.status === "authenticated")
+    ) {
+      yield* refreshUsage();
+    }
     return yield* options.stampIdentity(next.draft);
   });
 
@@ -362,8 +405,12 @@ export const makeAntigravityProvider = Effect.fn("makeAntigravityProvider")(func
   const onSessionStarted = Effect.fn("AntigravityProvider.onSessionStarted")(function* (
     started: AcpSessionRuntime.AcpSessionRuntimeStartResult,
     cwd?: string,
+    profile?: string,
   ) {
     if (!settings.enabled) return;
+    yield* reconcileProfile();
+    const currentProfile = options.currentProfile ? yield* options.currentProfile : undefined;
+    if (options.currentProfile && profile !== currentProfile) return;
     observeThinkingLevels(started.sessionSetupResult.configOptions);
     const before = yield* SubscriptionRef.get(metadata);
     const supportsTextGeneration = yield* options.supportsTextGeneration;
@@ -380,6 +427,7 @@ export const makeAntigravityProvider = Effect.fn("makeAntigravityProvider")(func
       const workspace = cwd ? workspaces.find((entry) => entry.cwd === cwd) : undefined;
       return {
         authRevision: state.authRevision + 1,
+        ...(currentProfile === undefined ? {} : { authProfile: currentProfile }),
         draft: {
           ...draft,
           installed: true,
@@ -414,11 +462,17 @@ export const makeAntigravityProvider = Effect.fn("makeAntigravityProvider")(func
 
   const onConfigOptionsUpdated = Effect.fn("AntigravityProvider.onConfigOptionsUpdated")(function* (
     configOptions: ReadonlyArray<EffectAcpSchema.SessionConfigOption>,
+    profile?: string,
   ) {
+    if (options.currentProfile && profile !== (yield* options.currentProfile)) return;
     observeThinkingLevels(configOptions);
     const models = buildAntigravityModelsFromSession({ configOptions }, thinkingLevels);
     yield* SubscriptionRef.update(metadata, (state) => {
-      if (state.draft.auth.status !== "authenticated") return state;
+      if (
+        state.draft.auth.status !== "authenticated" ||
+        (profile !== undefined && state.authProfile !== profile)
+      )
+        return state;
       return { ...state, draft: { ...state.draft, models } };
     });
   });
@@ -426,12 +480,18 @@ export const makeAntigravityProvider = Effect.fn("makeAntigravityProvider")(func
   const onAvailableCommands = Effect.fn("AntigravityProvider.onAvailableCommands")(function* (
     commands: ReadonlyArray<EffectAcpSchema.AvailableCommand>,
     cwd?: string,
+    profile?: string,
   ) {
     if (!settings.enabled) return;
+    if (options.currentProfile && profile !== (yield* options.currentProfile)) return;
     const slashCommands = nativeCommands(commands);
     const updatedAt = DateTime.formatIso(yield* DateTime.now);
     yield* SubscriptionRef.update(metadata, (state) => {
-      if (state.draft.auth.status === "unauthenticated") return state;
+      if (
+        state.draft.auth.status === "unauthenticated" ||
+        (profile !== undefined && state.authProfile !== profile)
+      )
+        return state;
       return {
         ...state,
         draft: {
@@ -458,35 +518,51 @@ export const makeAntigravityProvider = Effect.fn("makeAntigravityProvider")(func
     });
   });
 
-  const clearAccountMetadata = Effect.fn("AntigravityProvider.clearAccountMetadata")(function* () {
-    yield* resetUsage;
-    if (!settings.enabled) return;
-    const updatedAt = DateTime.formatIso(yield* DateTime.now);
-    yield* SubscriptionRef.update(
-      metadata,
-      (state) =>
-        ({
-          authRevision: state.authRevision + 1,
-          draft: {
-            ...state.draft,
-            auth: {
-              status: "unauthenticated",
-              ...(usesCredentials ? options.auth : {}),
+  /** Without a profile it applies to every profile and forgets which one was confirmed. */
+  const markSignedOut = (updatedAt: string, profile?: string) =>
+    SubscriptionRef.update(metadata, (state) =>
+      profile !== undefined && state.authProfile !== undefined && state.authProfile !== profile
+        ? state
+        : ({
+            authRevision: state.authRevision + 1,
+            ...(profile === undefined ? {} : { authProfile: profile }),
+            draft: {
+              ...state.draft,
+              auth: {
+                status: "unauthenticated",
+                ...(usesCredentials ? options.auth : {}),
+              },
+              status: "warning",
+              message: signInMessage,
+              checkedAt: updatedAt,
+              models: [],
+              slashCommands: [],
+              skills: [],
+              workspaceSnapshots: [],
+              supportsTextGeneration: false,
+              usageLimits: undefined,
             },
-            status: "warning",
-            message: signInMessage,
-            checkedAt: updatedAt,
-            models: [],
-            slashCommands: [],
-            skills: [],
-            workspaceSnapshots: [],
-            supportsTextGeneration: false,
-            usageLimits: undefined,
-          },
-        }) satisfies AntigravityProviderState,
+          } satisfies AntigravityProviderState),
+    ).pipe(
+      Effect.andThen(
+        Effect.sync(() => {
+          discoveredSkills.clear();
+          thinkingLevels.clear();
+        }),
+      ),
     );
-    discoveredSkills.clear();
-    thinkingLevels.clear();
+
+  const clearAccountMetadata = Effect.fn("AntigravityProvider.clearAccountMetadata")(function* (
+    profile?: string,
+  ) {
+    if (!settings.enabled) return;
+    if (options.currentProfile && profile !== (yield* options.currentProfile)) return;
+    yield* reconcileProfile();
+    yield* resetUsage;
+    if (options.currentProfile && profile !== (yield* options.currentProfile)) return;
+    const updatedAt = DateTime.formatIso(yield* DateTime.now);
+    if (options.currentProfile && profile !== (yield* options.currentProfile)) return;
+    yield* markSignedOut(updatedAt, profile);
   });
 
   const snapshotForCwd = Effect.fn("AntigravityProvider.snapshotForCwd")(function* (
@@ -539,8 +615,14 @@ export const makeAntigravityProvider = Effect.fn("makeAntigravityProvider")(func
       ),
       Effect.asVoid,
     ),
-    onSignedOut: clearAccountMetadata(),
-    onAuthRequired: clearAccountMetadata(),
+    // Every runtime home links the same credential profile, so a sign-out from any home
+    // removes the credentials of every profile, whatever the home reads meanwhile.
+    onSignedOut: Effect.fn("AntigravityProvider.onSignedOut")(function* (_profile?: string) {
+      if (!settings.enabled) return;
+      yield* resetUsage;
+      yield* markSignedOut(DateTime.formatIso(yield* DateTime.now));
+    }),
+    onAuthRequired: clearAccountMetadata,
     snapshotForCwd,
   };
 });

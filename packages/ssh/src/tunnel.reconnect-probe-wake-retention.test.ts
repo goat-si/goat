@@ -1,5 +1,6 @@
 import * as HostProcess from "@goat/shared/HostProcess";
 import { assert, describe, it } from "@effect/vitest";
+import * as NodeCrypto from "@effect/platform-node/NodeCrypto";
 import * as NodeServices from "@effect/platform-node/NodeServices";
 import * as Effect from "effect/Effect";
 import * as FileSystem from "effect/FileSystem";
@@ -60,6 +61,7 @@ describe.skipIf(HostProcess.Platform.defaultValue() === "win32")(
         });
         const layer = Layer.mergeAll(
           NodeServices.layer,
+          NodeCrypto.layer,
           Layer.succeed(ChildProcessSpawner.ChildProcessSpawner, transport),
           Layer.succeed(FileSystem.FileSystem, f.observedFs),
           Layer.succeed(HttpClient.HttpClient, testHttpClient),
@@ -153,7 +155,7 @@ describe.skipIf(HostProcess.Platform.defaultValue() === "win32")(
           if (action === "uncertain drain" || action === "rejected attachment")
             yield* manager.readyEnvironment(uploadTarget);
         }).pipe(Effect.provide(layer), Effect.scoped);
-      }).pipe(Effect.provide(NodeServices.layer), Effect.scoped),
+      }).pipe(Effect.provide(Layer.mergeAll(NodeServices.layer, NodeCrypto.layer)), Effect.scoped),
     );
   },
 );

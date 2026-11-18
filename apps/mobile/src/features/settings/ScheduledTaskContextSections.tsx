@@ -1,4 +1,8 @@
-import { resolveProjectProviderInstanceEnabled, type ServerConfig } from "@goat/contracts";
+import {
+  resolveProjectProviderInstanceEnabled,
+  type ScheduledTaskThreadMode,
+  type ServerConfig,
+} from "@goat/contracts";
 import type { EnvironmentProject } from "@goat/client-runtime/state/shell";
 import { resolvePastedPath } from "@goat/shared/path";
 import { Pressable, View } from "react-native";
@@ -9,7 +13,19 @@ import { buildModelOptions } from "../../lib/modelOptions";
 import { resolveNewTaskBranchLabel } from "../threads/new-task-context-presentation";
 import { SettingsSection } from "./components/SettingsSection";
 import { FormField, SelectRow } from "./ScheduledTaskFormFields";
-import { scheduledTaskDefaultModel, type ScheduledTaskDraft as Draft } from "./scheduledTaskDraft";
+import {
+  scheduledTaskDefaultModel,
+  type ScheduledTaskDraft as Draft,
+  keepsThread,
+  withProject,
+  withThreadMode,
+} from "./scheduledTaskDraft";
+
+const THREAD_MODE_LABELS: Record<ScheduledTaskThreadMode, string> = {
+  new_thread: "New thread each run",
+  continue: "One thread, same conversation",
+  fresh_session: "One thread, fresh session",
+};
 
 function PickerRow(props: {
   readonly label: string;
@@ -111,14 +127,19 @@ export function ScheduledTaskContextSections({
                   project.id,
                   draft.modelSelection.instanceId,
                 ));
-            setDraft({
+            const next = {
               ...draft,
-              projectId: project.id,
               modelSelection: keepsExplicitModel
                 ? draft.modelSelection
                 : scheduledTaskDefaultModel(config, project),
               modelSelectionIsExplicit: keepsExplicitModel,
-            });
+            };
+            // Only a server with thread modes moves a task off its thread with its project.
+            setDraft(
+              config?.environment?.capabilities?.scheduledTaskThreadModes === true
+                ? withProject(next, project.id)
+                : { ...next, projectId: project.id },
+            );
           }}
         />
         <PickerRow
@@ -137,6 +158,39 @@ export function ScheduledTaskContextSections({
           disabled={locked}
         />
       </SettingsSection>
+
+      {config?.environment?.capabilities?.scheduledTaskThreadModes === true ? (
+        <SettingsSection
+          title="Destination"
+          footer={
+            draft.threadMode === "new_thread"
+              ? "Each run starts a new thread."
+              : keepsThread(draft)
+                ? (draft.threadMode === "continue"
+                    ? "Each run continues this conversation."
+                    : "Each run starts a fresh session in this thread, without earlier runs' context.") +
+                  " Deleting the thread also deletes this task."
+                : (draft.threadMode === "continue"
+                    ? "Runs continue one conversation."
+                    : "Runs share one thread, each in a fresh session without earlier runs' context.") +
+                  " The first run starts the thread. Deleting it also deletes this task."
+          }
+        >
+          <SelectRow
+            label="Runs go to"
+            value={THREAD_MODE_LABELS[draft.threadMode]}
+            actions={(Object.keys(THREAD_MODE_LABELS) as ScheduledTaskThreadMode[]).map((mode) => ({
+              id: mode,
+              title: THREAD_MODE_LABELS[mode],
+              state: draft.threadMode === mode ? "on" : undefined,
+            }))}
+            onSelect={(id) => {
+              if (id === "new_thread" || id === "continue" || id === "fresh_session")
+                setDraft(withThreadMode(draft, id));
+            }}
+          />
+        </SettingsSection>
+      ) : null}
 
       <SettingsSection title="Workspace">
         <SelectRow

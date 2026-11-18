@@ -111,7 +111,7 @@ const served = McpHttpServer.toolkitRegistration(
   LifecycleHandlers.layer,
 ).pipe(
   Layer.provide(Lifecycle.layer),
-  Layer.provideMerge(McpServer.McpServer.layer),
+  Layer.provideMerge(McpHttpServer.layerInProcessMcpServer),
   Layer.provideMerge(services),
   Layer.provide(NodeCrypto.layer),
 );

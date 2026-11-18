@@ -1,13 +1,34 @@
 import * as NodeServices from "@effect/platform-node/NodeServices";
 import { expect, it } from "@effect/vitest";
 import * as Effect from "effect/Effect";
+import * as Exit from "effect/Exit";
 import * as FileSystem from "effect/FileSystem";
 import * as Path from "effect/Path";
 import * as PlatformError from "effect/PlatformError";
+import * as Scope from "effect/Scope";
 
-import { retireAntigravityRuntimeTempDirs } from "./AntigravitySessionFiles.ts";
+import {
+  acquireAntigravityRuntimeTemp,
+  MAX_LIVE_ANTIGRAVITY_RUNTIMES,
+  retireAntigravityRuntimeTempDirs,
+} from "./AntigravitySessionFiles.ts";
 
 it.layer(NodeServices.layer)("retireAntigravityRuntimeTempDirs", (it) => {
+  it.effect("refuses a runtime directory past the live limit until one is released", () =>
+    Effect.gen(function* () {
+      const fs = yield* FileSystem.FileSystem;
+      const root = yield* fs.makeTempDirectoryScoped();
+      const held = yield* Scope.make();
+      for (let index = 0; index < MAX_LIVE_ANTIGRAVITY_RUNTIMES; index += 1) {
+        yield* acquireAntigravityRuntimeTemp(root).pipe(Scope.provide(held));
+      }
+      const refused = yield* acquireAntigravityRuntimeTemp(root).pipe(Effect.scoped, Effect.flip);
+      expect(refused.reason._tag).toBe("Busy");
+      yield* Scope.close(held, Exit.void);
+      yield* acquireAntigravityRuntimeTemp(root).pipe(Effect.scoped);
+    }).pipe(Effect.scoped),
+  );
+
   it.effect("moves leftovers aside at once and deletes them, plus older retirees, later", () =>
     Effect.gen(function* () {
       const fs = yield* FileSystem.FileSystem;

@@ -144,6 +144,8 @@ const state = vi.hoisted(() => ({
   canUpdate: true,
   lookup: vi.fn(),
   update: vi.fn(),
+  // The task's child work, as the child read returns it.
+  childGroups: null as null | { groups: unknown[] },
 }));
 
 // The real face module draws the chip's face; only its native drawing and styling stand in.
@@ -165,7 +167,11 @@ vi.mock("../../lib/appState", () => ({
   useReduceMotionEnabled: () => false,
 }));
 vi.mock("@react-navigation/native", () => ({ useIsFocused: () => true }));
-vi.mock("../../state/entities", () => ({ useThreadShell: () => null }));
+vi.mock("../../state/entities", () => ({
+  useThreadShell: () => null,
+  // No config: the Machines card asks as it does on a server without bot members.
+  useEnvironmentServerConfig: () => null,
+}));
 vi.mock("../../lib/copyTextWithHaptic", () => ({ tryCopyTextWithHaptic: async () => true }));
 vi.mock("@effect/atom-react", () => ({
   useAtomValue: (atom: unknown) => (atom === "update-permission" ? state.canUpdate : true),
@@ -196,8 +202,13 @@ vi.mock("../../native/StackHeader", () => ({
 }));
 vi.mock("../../state/atom-registry", () => ({ appAtomRegistry: {} }));
 vi.mock("expo-crypto", () => ({ randomUUID: () => globalThis.crypto.randomUUID() }));
+vi.mock("react-native-keyboard-controller", () => ({
+  KeyboardEvents: { addListener: () => ({ remove: () => {} }) },
+}));
 vi.mock("../../state/channels", () => ({
   channelEnvironment: {
+    // Home's shared current work; its links are not read in this file.
+    homeCurrentOpenableWorkAtom: () => "home-current",
     // One list per computer and bot, so a test can count each one's refreshes.
     listBotThreads: (key: { environmentId: string; input: { botId?: string } }) =>
       `task:${key.environmentId}:${key.input.botId ?? "main"}`,
@@ -254,8 +265,9 @@ vi.mock("../../state/environments", () => {
   };
 });
 vi.mock("./MobileBotStatusCard", () => ({ MobileBotStatusCard: () => null }));
-vi.mock("./goatBotHomeMode", () => ({
-  pickMobileGoatBotEnvironment: () => ({
+vi.mock("./goatBotHomeMode", async (original) => ({
+  ...(await original<typeof import("./goatBotHomeMode")>()),
+  pickMobileGoatBotHomeEnvironment: () => ({
     environmentId: state.environmentId,
     connected: state.connected,
   }),
@@ -276,11 +288,11 @@ vi.mock("../../state/query", () => ({
       : key === "routines"
         ? state.routines
         : {
-            data: null,
+            data: key === "child" ? state.childGroups : null,
             cause: null,
             error: null,
             isPending: false,
-            isSuccess: false,
+            isSuccess: key === "child" && state.childGroups !== null,
             refresh: vi.fn(),
           },
 }));
@@ -328,6 +340,7 @@ function reset() {
   state.retry.mockReset();
   state.lookup.mockReset();
   state.update.mockReset();
+  state.childGroups = null;
   Object.assign(state.task, { isPending: false, isSuccess: true, data: { rows: [] } });
 }
 const scout = {
@@ -611,4 +624,197 @@ it("a Pin that completes after the task screen closed refreshes no list and read
   await act(async () => sent.settle(AsyncResult.success({})));
   expect(refreshes("env", "main")).toBe(0);
   expect(lookups("env", "main", "task-old")).toBe(1);
+});
+
+it("a refresh that returns the task while its lookup is out shows the row, and the late answer is ignored", async () => {
+  reset();
+  const read = deferred();
+  state.lookup.mockReturnValueOnce(read.promise);
+  await show("task-old");
+  Object.assign(state.task, { isPending: true });
+  await show("task-old");
+  Object.assign(state.task, {
+    isPending: false,
+    data: { rows: [listRow("task-old", "Summarize the README now")] },
+  });
+  await show("task-old");
+  expect(text()).toContain("Summarize the README now");
+  await act(async () => read.settle(AsyncResult.success(lookedUp("completed", { pinnedAt: at }))));
+  expect(text()).toContain("Summarize the README now");
+  expect(button("Unpin")).toBeUndefined();
+  expect(lookups("env", "main", "task-old")).toBe(1);
+});
+
+it("a refresh that fails while the lookup is out leaves the read running, and its answer lands", async () => {
+  reset();
+  const read = deferred();
+  state.lookup.mockReturnValueOnce(read.promise);
+  await show("task-old");
+  Object.assign(state.task, { isPending: true });
+  await show("task-old");
+  // The failed refresh keeps the last successful list, as the real query does.
+  Object.assign(state.task, { isPending: false, isSuccess: false, error: "failed" });
+  await show("task-old");
+  await act(async () => read.settle(AsyncResult.success(lookedUp("completed"))));
+  expect(button("Pin")).toBeDefined();
+  expect(lookups("env", "main", "task-old")).toBe(1);
+});
+
+it("a Pin that completes while the next task's lookup is out refreshes nothing and leaves that read alone", async () => {
+  reset();
+  const pinned = deferred();
+  const nextRead = deferred();
+  state.lookup
+    .mockResolvedValueOnce(AsyncResult.success(lookedUp("completed")))
+    .mockReturnValueOnce(nextRead.promise);
+  state.update.mockReturnValueOnce(pinned.promise);
+  await show("task-old");
+  await press("Pin");
+  await show("task-b");
+  expect(lookups("env", "main", "task-b")).toBe(1);
+  const before = refreshes("env", "main");
+  await act(async () => pinned.settle(AsyncResult.success({})));
+  await settleList("task-b");
+  expect(refreshes("env", "main")).toBe(before);
+  expect(lookups("env", "main", "task-b")).toBe(1);
+  expect(lookups("env", "main", "task-old")).toBe(1);
+  await act(async () => nextRead.settle(AsyncResult.success(lookedUp("completed"))));
+  expect(button("Pin")).toBeDefined();
+});
+
+it.each(["Retry", "read mark"] as const)(
+  "a %s that completes after the task screen closed refreshes no list and reads nothing",
+  async (kind) => {
+    reset();
+    const sent = deferred();
+    if (kind === "Retry") {
+      state.lookup.mockResolvedValue(AsyncResult.success(lookedUp("failed")));
+      state.retry.mockReturnValueOnce(sent.promise);
+      await show("task-old");
+      await press("Retry");
+    } else {
+      state.lookup.mockResolvedValue(AsyncResult.success(lookedUp("completed", { unread: true })));
+      state.update.mockReturnValueOnce(sent.promise);
+      await show("task-old");
+      expect(state.update).toHaveBeenCalled();
+    }
+    await act(async () => root?.unmount());
+    root = undefined;
+    await act(async () =>
+      sent.settle(AsyncResult.success(kind === "Retry" ? { status: "started" } : {})),
+    );
+    expect(refreshes("env", "main")).toBe(0);
+    expect(lookups("env", "main", "task-old")).toBe(1);
+  },
+);
+
+it("a Pin sent while the task was listed, landing after a refresh dropped it and before any read, leads to one read", async () => {
+  reset();
+  Object.assign(state.task, { data: { rows: [listRow("task-old", "Summarize the README")] } });
+  state.lookup.mockResolvedValue(AsyncResult.success(lookedUp("completed", { pinnedAt: at })));
+  const pinned = deferred();
+  state.update.mockReturnValueOnce(pinned.promise);
+  await show("task-old");
+  await press("Pin");
+  // A refresh dropped the task, and the list is being read again, so no lookup has started yet.
+  Object.assign(state.task, { isPending: true, data: { rows: [] } });
+  await show("task-old");
+  expect(lookups("env", "main", "task-old")).toBe(0);
+  await act(async () => pinned.settle(AsyncResult.success({})));
+  expect(lookups("env", "main", "task-old")).toBe(0);
+  await settleList("task-old");
+  expect(lookups("env", "main", "task-old")).toBe(1);
+  expect(button("Unpin")).toBeDefined();
+});
+
+it("a Pin sent while the task was listed, landing during the first read after it left, reads once more after it", async () => {
+  reset();
+  Object.assign(state.task, { data: { rows: [listRow("task-old", "Summarize the README")] } });
+  const first = deferred();
+  state.lookup
+    .mockReturnValueOnce(first.promise)
+    .mockResolvedValue(AsyncResult.success(lookedUp("completed", { pinnedAt: at })));
+  const pinned = deferred();
+  state.update.mockReturnValueOnce(pinned.promise);
+  await show("task-old");
+  await press("Pin");
+  Object.assign(state.task, { data: { rows: [] } });
+  await show("task-old");
+  expect(lookups("env", "main", "task-old")).toBe(1);
+  await act(async () => pinned.settle(AsyncResult.success({})));
+  await settleList("task-old");
+  expect(lookups("env", "main", "task-old")).toBe(1);
+  await act(async () => first.settle(AsyncResult.success(lookedUp("completed"))));
+  expect(lookups("env", "main", "task-old")).toBe(2);
+  expect(button("Unpin")).toBeDefined();
+});
+
+it("a task's own screen names its coding threads by title, as Show work does (#3307)", async () => {
+  reset();
+  state.openThread.mockReset();
+  const long =
+    "Move every workflow that still pins Node 22 to the Node 24 runtime and drop the old cache keys";
+  const coding = (threadId: string, title: string) =>
+    decodeRow({
+      kind: "coding",
+      taskId: "task-a",
+      environmentId: "env",
+      threadId,
+      title,
+      state: "bound",
+      lastActivityAt: at,
+    });
+  Object.assign(state.task, {
+    data: {
+      rows: [
+        decodeRow({
+          kind: "task",
+          task: {
+            taskId: "task-a",
+            title: "Move the build to Node 24",
+            status: "running",
+            updatedAt: at,
+          },
+          view: { taskId: "task-a", pinnedAt: null, doneAt: null, readThrough: null },
+          lastActivityAt: at,
+          unread: false,
+          mainMessagesSinceQuiet: 0,
+          worker: { environmentId: "env", threadId: "worker" },
+        }),
+        coding("thread-a", "  Patch web  "),
+        coding("thread-long", long),
+        coding("thread-blank", "   "),
+      ],
+    },
+  });
+  // A thread the child read found that the list has no row for.
+  state.childGroups = {
+    groups: [
+      {
+        taskId: "task-a",
+        truncated: false,
+        children: [
+          {
+            childWorkId: "c1",
+            surface: "thread_launch",
+            state: "running",
+            destination: { threadId: "child-thread" },
+          },
+        ],
+      },
+    ],
+  };
+  await show("task-a");
+  const links = [...container.querySelectorAll("button")]
+    .filter((item) => /^(GOAT|Work) thread: /.test(item.getAttribute("aria-label") ?? ""))
+    .map((item) => [item.getAttribute("aria-label"), item.textContent]);
+  expect(links).toEqual([
+    ["Work thread: Move the build to Node 24", "Open work thread"],
+    ["GOAT thread: Patch web", "Patch web"],
+    [`GOAT thread: ${long}`, long],
+    ["GOAT thread: Open work thread", "Open work thread"],
+    ["Work thread: Move the build to Node 24", "Open work thread"],
+  ]);
+  await press("Patch web");
+  expect(state.openThread).toHaveBeenCalledWith({ environmentId: "env", id: "thread-a" });
 });

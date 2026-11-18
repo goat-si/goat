@@ -29,7 +29,11 @@ import { resolveSpawnCommand } from "@goat/shared/shell";
 import { resolveAttachmentPath } from "../attachmentStore.ts";
 import * as ServerConfig from "../config.ts";
 import { expandHomePath } from "@goat/provider-core/server/pathExpansion";
-import { codexExecLaunchArgs, resolveCodexLaunchArgs } from "../provider/codexLaunchArgs.ts";
+import {
+  codexExecLaunchArgs,
+  codexMcpListLaunchArgs,
+  resolveCodexLaunchArgs,
+} from "../provider/codexLaunchArgs.ts";
 import * as TextGenerationOperations from "@goat/provider-core/server/textGenerationOperations";
 import {
   normalizeCliError,
@@ -90,6 +94,11 @@ const codexMcpServersOff = (names: ReadonlyArray<string>): string | null =>
   names.length === 0
     ? null
     : `mcp_servers={${names.map((name) => `${JSON.stringify(name)}={enabled=false}`).join(",")}}`;
+// Codex splits -c keys at the first "=" and on every dot, so only those names take a dotted flag.
+const codexMcpServerOffFlags = (names: ReadonlyArray<string>) =>
+  names
+    .filter((name) => !name.includes(".") && !name.includes("="))
+    .flatMap((name) => ["--config", `mcp_servers.${name}.enabled=false`]);
 const encodeJsonString = Schema.encodeEffect(Schema.fromJsonString(Schema.Unknown));
 export const makeCodexTextGeneration = Effect.fn("makeCodexTextGeneration")(function* (
   codexConfig: CodexSettings,
@@ -101,6 +110,7 @@ export const makeCodexTextGeneration = Effect.fn("makeCodexTextGeneration")(func
     Scope.Scope
   >,
   memoryRunnerContext?: MemoryGenerationRunnerContext,
+  currentEnvironment?: Effect.Effect<NodeJS.ProcessEnv>,
 ) {
   const homeRoute = yield* Effect.serviceOption(HomeRoute.OpenCodexRoute);
   const routeState = yield* Effect.serviceOption(CodexRoutes.CodexRouteState);
@@ -416,7 +426,9 @@ export const makeCodexTextGeneration = Effect.fn("makeCodexTextGeneration")(func
           operation,
           detail: "Codex is disabled in GOAT settings.",
         });
-      const effectiveEnvironment = resolved?.environment ?? resolvedEnvironment;
+      const effectiveEnvironment =
+        resolved?.environment ??
+        (currentEnvironment ? yield* currentEnvironment : resolvedEnvironment);
       const models = yield* getModels;
       const requestedModel = modelSelection.model;
       const listed = models.filter((candidate) => !candidate.isCustom);
@@ -459,7 +471,9 @@ export const makeCodexTextGeneration = Effect.fn("makeCodexTextGeneration")(func
       const codexHome = isChannelReception
         ? yield* makeReceptionCodexHome(
             operation,
-            configuredHome ?? effectiveEnvironment.CODEX_HOME ?? path.join(homeDirectory, ".codex"),
+            // Codex treats an empty CODEX_HOME as unset.
+            configuredHome ??
+              (effectiveEnvironment.CODEX_HOME || path.join(homeDirectory, ".codex")),
             { settings: effectiveConfig, environment: effectiveEnvironment },
           )
         : configuredHome;
@@ -527,21 +541,27 @@ export const makeCodexTextGeneration = Effect.fn("makeCodexTextGeneration")(func
       const execLaunchArgs = isChannelReception
         ? [...CODEX_CHANNEL_RECEPTION_ARGS, ...routeArgs]
         : codexExecLaunchArgs(launchArgs, routeArgs);
-      const mcpServersOff = yield* listEnabledMcpServers({
+      const enabledMcpServers = yield* listEnabledMcpServers({
         binary,
         cwd: workingDirectory,
         env: execEnvironment,
-        // `codex mcp` rejects --strict-config; the overrides still apply.
-        launchArgs: execLaunchArgs.filter((arg) => arg !== "--strict-config"),
-      }).pipe(Effect.map(codexMcpServersOff));
+        launchArgs: codexMcpListLaunchArgs(execLaunchArgs),
+      });
+      const mcpServersOff = codexMcpServersOff(enabledMcpServers);
+      // A launch-arg mcp_servers={...} table replaces ours and can re-enable dotted names.
+      const launchArgsSetMcpTable = execLaunchArgs.some((arg) => /\bmcp_servers\s*=/.test(arg));
       const spawnCommand = yield* resolveSpawnCommand(
         binary,
         [
           "exec",
+          // Before launch args: a later table would replace servers their -c flags define.
+          ...(mcpServersOff ? ["--config", mcpServersOff] : []),
           ...execLaunchArgs,
           // A user's MCP server could act on the text-generation prompt.
           ...CODEX_NO_PLUGIN_ARGS,
-          ...(mcpServersOff ? ["--config", mcpServersOff] : []),
+          ...(mcpServersOff && launchArgsSetMcpTable ? ["--config", mcpServersOff] : []),
+          // After launch args, so a launch arg's enabled=true cannot turn a server back on.
+          ...codexMcpServerOffFlags(enabledMcpServers),
           "--ephemeral",
           "--skip-git-repo-check",
           "-s",

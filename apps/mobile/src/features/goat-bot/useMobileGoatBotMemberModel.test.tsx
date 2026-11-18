@@ -14,6 +14,7 @@ const state = vi.hoisted(() => ({
   permitted: true,
   run: vi.fn(async (..._args: unknown[]) => ({ _tag: "Success" as string })),
   alert: vi.fn(),
+  connected: true,
 }));
 const provider: ServerProvider = {
   instanceId: codex,
@@ -35,6 +36,10 @@ const provider: ServerProvider = {
 vi.mock("react-native", () => ({ Alert: { alert: state.alert } }));
 vi.mock("@effect/atom-react", () => ({ useAtomValue: () => state.permitted }));
 vi.mock("../../state/atom-registry", () => ({ appAtomRegistry: {} }));
+vi.mock("./goatBotComputerLink", () => ({
+  useGoatBotComputerConnected: () => state.connected,
+  goatBotComputerConnectedNow: () => state.connected,
+}));
 vi.mock("../../state/channels", () => ({
   channelEnvironment: { updateBot: { permissionAtom: () => "permission" } },
 }));
@@ -44,6 +49,7 @@ vi.mock("@goat/client-runtime/state/runtime", () => ({
 }));
 vi.mock("../../state/environments", () => ({
   useEnvironments: () => ({
+    environments: [{ environmentId: "env", label: "Studio" }],
     presentationById: new Map([
       [
         "env",
@@ -124,4 +130,30 @@ it("shows the model read-only, with the reason, on an older server or without pe
   viewer.select("codex:astra");
   expect(state.run).not.toHaveBeenCalled();
   state.permitted = true;
+});
+
+it("offers no model change while the member's computer is offline, and a menu opened before sends nothing", async () => {
+  state.supported = true;
+  state.permitted = true;
+  state.connected = true;
+  state.run.mockClear();
+  const opened = await menuOf();
+  state.connected = false;
+  const offline = await menuOf();
+  expect(offline).toMatchObject({
+    canChange: false,
+    title:
+      "Last read from Studio, so Research's model may be out of date. Changes need it connected.",
+  });
+  state.alert.mockClear();
+  opened.select("codex:astra");
+  expect(state.run).not.toHaveBeenCalled();
+  // Refused, and the person is told why, as the other bot changes do.
+  expect(state.alert).toHaveBeenCalledExactlyOnceWith(
+    "Couldn't change Research's model",
+    "Research's computer isn't connected.",
+  );
+  state.connected = true;
+  const back = await menuOf();
+  expect(back.canChange).toBe(true);
 });

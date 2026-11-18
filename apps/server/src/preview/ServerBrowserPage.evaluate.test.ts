@@ -18,6 +18,10 @@ import {
 import { chromiumInstalled } from "./chromiumInstalled.testkit.ts";
 import { testActionGate } from "./actionChannel.testkit.ts";
 import * as ServerBrowserPage from "./ServerBrowserPage.ts";
+import { PreviewAutomationEvaluateInput } from "@goat/contracts";
+import * as Schema from "effect/Schema";
+
+const decodeEvaluateInput = Schema.decodeUnknownSync(PreviewAutomationEvaluateInput);
 
 describe.skipIf(!chromiumInstalled)("preview evaluation", () => {
   let browser: Browser;
@@ -48,6 +52,16 @@ describe.skipIf(!chromiumInstalled)("preview evaluation", () => {
       testActionGate(page, cdp),
     );
     expect(result).toBe("Ready");
+  });
+
+  it("returns object contents when a legacy caller asks for a remote reference", async () => {
+    const input = decodeEvaluateInput({
+      expression: "({ answer: 42, nested: { ready: true } })",
+      returnByValue: false,
+    });
+    expect(
+      await ServerBrowserPage.evaluate({ page, cdp }, input, 5_000, testActionGate(page, cdp)),
+    ).toEqual({ answer: 42, nested: { ready: true } });
   });
 
   it("does not repeat side effects when a running expression throws a SyntaxError", async () => {

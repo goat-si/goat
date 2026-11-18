@@ -3,7 +3,7 @@ import * as Option from "effect/Option";
 import { ClaudeSettings, ProviderDriverKind } from "@goat/contracts";
 import * as Cache from "effect/Cache";
 import * as Duration from "effect/Duration";
-import * as Crypto from "effect/Crypto";
+import * as SecureRandom from "effect/crypto/SecureRandom";
 import * as Effect from "effect/Effect";
 import * as Exit from "effect/Exit";
 import * as FileSystem from "effect/FileSystem";
@@ -77,7 +77,7 @@ export type ClaudeDriverEnv =
   | ProviderHost.ProviderHost
   | ChildProcessSpawner.ChildProcessSpawner
   | ResetCreditCoordinator.ResetCreditCoordinator
-  | Crypto.Crypto
+  | SecureRandom.SecureRandom
   | FileSystem.FileSystem
   | HttpClient.HttpClient
   | ProviderLatestVersions.ProviderLatestVersions
@@ -376,9 +376,15 @@ export const ClaudeDriver: ProviderDriver<ClaudeSettings, ClaudeDriverEnv, Path.
     const consumeResetCredit: NonNullable<ProviderInstance["consumeResetCredit"]> = Effect.fn(
       "ClaudeDriver.consumeResetCredit",
     )(
-      function* () {
+      function* (creditId) {
         const current = yield* snapshot.getSnapshot;
-        const grantId = current.usageLimits?.resetCredits?.nextCreditId;
+        const credits = current.usageLimits?.resetCredits;
+        const grantId =
+          creditId === undefined
+            ? credits?.nextCreditId
+            : credits?.options?.some((option) => option.creditId === creditId)
+              ? creditId
+              : undefined;
         if (!grantId || !current.version) return "noCredit" as const;
         const version = current.version;
         return yield* resetCreditCoordinator.redeem(
@@ -403,32 +409,32 @@ export const ClaudeDriver: ProviderDriver<ClaudeSettings, ClaudeDriverEnv, Path.
             driver: DRIVER_KIND,
             instanceId,
             detail:
-              cause._tag === "ClaudeResetCreditError"
+              cause._tag === "ClaudeResetCreditError" ||
+              cause._tag === "ResetCreditAccountLimitError"
                 ? cause.message
                 : "Claude could not redeem the reset.",
             cause,
           }),
       ),
       Effect.tap((outcome) =>
-        Effect.gen(function* () {
-          const before = (yield* snapshot.getSnapshot).usageLimits?.checkedAt;
-          yield* Cache.invalidateAll(capabilitiesProbeCache);
-          const refreshed = yield* snapshot.refresh;
-          const after = refreshed.usageLimits?.checkedAt;
-          if (
-            outcome === "reset" &&
-            (after === undefined ||
-              after === before ||
-              refreshed.usageLimits?.unavailable?.reason === "probeFailed")
-          ) {
-            return yield* new ProviderDriverError({
-              driver: DRIVER_KIND,
-              instanceId,
-              detail:
-                "The reset was applied, but Claude could not confirm the new limits. Refresh to check.",
-            });
-          }
-        }),
+        ResetCreditCoordinator.refreshAfterRedemption({
+          outcome,
+          getSnapshot: snapshot.getSnapshot,
+          refresh: Cache.invalidateAll(capabilitiesProbeCache).pipe(
+            Effect.andThen(snapshot.refresh),
+          ),
+        }).pipe(
+          Effect.filterOrFail(
+            (confirmed) => confirmed,
+            () =>
+              new ProviderDriverError({
+                driver: DRIVER_KIND,
+                instanceId,
+                detail:
+                  "The reset was applied, but Claude could not confirm the new limits. Refresh to check.",
+              }),
+          ),
+        ),
       ),
     );
 

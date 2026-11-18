@@ -70,9 +70,13 @@ const serveFakeRelease = Effect.fn("test.serveFakeRelease")(function* (
   const archive = yield* fs.readFile(path.join(root, "release", archiveName));
   let checksum = NodeCrypto.createHash("sha256").update(archive).digest("hex");
   const requests: Array<string> = [];
+  const failures: Array<number> = [];
   const server = NodeHttp.createServer((request, response) => {
     requests.push(request.url ?? "");
-    if (request.url === `/v${version}/SHA256SUMS`) {
+    const failure = failures.shift();
+    if (failure !== undefined) {
+      response.writeHead(failure).end("upstream timed out");
+    } else if (request.url === `/v${version}/SHA256SUMS`) {
       response.end(`${checksum}  ${archiveName}\n`);
     } else if (request.url === `/v${version}/${archiveName}`) {
       response.writeHead(200, { "Content-Length": archive.length }).end(archive);
@@ -96,6 +100,9 @@ const serveFakeRelease = Effect.fn("test.serveFakeRelease")(function* (
     requests,
     corruptChecksum: () => {
       checksum = "0".repeat(64);
+    },
+    failNextRequests: (...statuses: Array<number>) => {
+      failures.push(...statuses);
     },
   };
 });
@@ -284,6 +291,8 @@ it.layer(NodeServices.layer)("build-npm-launcher", (it) => {
         const packageDir = path.join(installed, "package");
 
         const release = yield* serveFakeRelease(root);
+        // regression: #32897
+        release.failNextRequests(504, 524);
         const home = path.join(root, "home");
         const env = {
           PATH: process.env.PATH,

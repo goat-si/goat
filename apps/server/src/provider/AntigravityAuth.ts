@@ -5,7 +5,7 @@ import {
 } from "@goat/contracts";
 import * as Cause from "effect/Cause";
 import * as Clock from "effect/Clock";
-import * as Crypto from "effect/Crypto";
+import * as SecureRandom from "effect/crypto/SecureRandom";
 import * as DateTime from "effect/DateTime";
 import * as Deferred from "effect/Deferred";
 import * as Effect from "effect/Effect";
@@ -31,11 +31,15 @@ import {
 import type { ProviderAuthController } from "./ProviderAuthService.ts";
 
 const AUTH_TIMEOUT_MS = 300_000;
-// Once initialized, a healthy agent shows the Google link or finishes within seconds. Its bundled
-// Python has no IPv4 fallback race, so a host with broken IPv6 waits about two minutes per Google
-// request. The hint is timed from initialize, not spawn: the one-file runtime unpacks itself on
-// every launch, which can take about a minute on Windows before it answers at all.
+// Once initialized, a healthy agent shows the Google link within seconds; its bundled Python has no
+// IPv4 fallback, so broken IPv6 stalls each Google request. Startup is timed separately: the
+// one-file runtime unpacks on every launch (about a minute on Windows) before it answers initialize.
 const NO_RESPONSE_HINT_MS = 30_000;
+const STARTUP_HINT_MS = 90_000;
+const NOT_STARTED_MESSAGE =
+  "Antigravity has not started after 90 seconds. Its runtime may be stuck starting on this machine.";
+const NOT_RESPONDING_MESSAGE =
+  "Antigravity did not respond. Its runtime may not run on this machine.";
 const NO_RESPONSE_MESSAGE =
   "Antigravity has not reached Google after 30 seconds. Check this machine's network connection. Broken IPv6 is a common cause.";
 const UNREACHABLE_MESSAGE =
@@ -55,6 +59,7 @@ interface AuthFlow {
   readonly expiresAtMillis: number;
   state: ProviderAuthState;
   pending: AntigravityAuthorizationUrl | undefined;
+  initialized: boolean;
   callbackSent: boolean;
   fiber: Fiber.Fiber<void> | undefined;
   forwarding: Fiber.Fiber<void, ProviderSetupError> | undefined;
@@ -89,7 +94,7 @@ export interface AntigravityAuthOptions<
     result: AcpSessionRuntime.AcpSessionRuntimeStartResult,
     runtime: Runtime,
   ) => Effect.Effect<void>;
-  readonly onSignedOut: Effect.Effect<void>;
+  readonly onSignedOut: (runtime: Runtime) => Effect.Effect<void>;
   readonly forwardCallback?: (callback: URL) => Effect.Effect<void, ProviderSetupError>;
   readonly usesBrowser?: boolean;
 }
@@ -139,8 +144,8 @@ export const makeAntigravityAuth = Effect.fn("makeAntigravityAuth")(function* <
   Runtime extends AntigravityAuthRuntime,
 >(
   options: AntigravityAuthOptions<Runtime>,
-): Effect.fn.Return<AntigravityAuth, never, Crypto.Crypto | Scope.Scope> {
-  const crypto = yield* Crypto.Crypto;
+): Effect.fn.Return<AntigravityAuth, never, SecureRandom.SecureRandom | Scope.Scope> {
+  const random = yield* SecureRandom.SecureRandom;
   const instanceScope = yield* Scope.Scope;
   const usesBrowser = options.usesBrowser ?? true;
   const lock = yield* Semaphore.make(1);
@@ -270,25 +275,33 @@ export const makeAntigravityAuth = Effect.fn("makeAntigravityAuth")(function* <
       ),
     );
 
+  const publishStartingHint = Effect.fn("AntigravityAuth.publishStartingHint")(
+    (flow: AuthFlow, delayMs: number, message: string) =>
+      Effect.sleep(delayMs).pipe(
+        Effect.andThen(
+          lock.withPermits(1)(
+            Effect.gen(function* () {
+              if (activeFlow !== flow || flow.state.phase !== "starting") return;
+              yield* publishFlow(flow, { ...flow.state, message });
+            }),
+          ),
+        ),
+        Effect.forkScoped,
+      ),
+  );
+
   const runSignIn = Effect.fn("AntigravityAuth.runSignIn")(
     function* (flow: AuthFlow, stopSessions: Effect.Effect<void, ProviderSetupError>) {
       yield* stopSessions.pipe(Effect.ensuring(stopOwnedProcesses));
       const runtime = yield* options.makeRuntime({
         onAuthorizationUrl: (url) => receiveAuthorizationUrl(flow, url),
       });
+      const startupHint = yield* publishStartingHint(flow, STARTUP_HINT_MS, NOT_STARTED_MESSAGE);
       // `start` reuses this memoized handshake.
       yield* runtime.initialize();
-      yield* Effect.sleep(NO_RESPONSE_HINT_MS).pipe(
-        Effect.andThen(
-          lock.withPermits(1)(
-            Effect.gen(function* () {
-              if (activeFlow !== flow || flow.state.phase !== "starting") return;
-              yield* publishFlow(flow, { ...flow.state, message: NO_RESPONSE_MESSAGE });
-            }),
-          ),
-        ),
-        Effect.forkScoped,
-      );
+      flow.initialized = true;
+      yield* Fiber.interrupt(startupHint);
+      yield* publishStartingHint(flow, NO_RESPONSE_HINT_MS, NO_RESPONSE_MESSAGE);
       const started = yield* runtime.start();
       yield* lock.withPermits(1)(
         Effect.gen(function* () {
@@ -313,9 +326,11 @@ export const makeAntigravityAuth = Effect.fn("makeAntigravityAuth")(function* <
             Effect.fail(
               setupError(
                 "start",
-                flow.state.phase === "starting"
-                  ? UNREACHABLE_MESSAGE
-                  : "Google sign-in expired. Start sign-in again.",
+                flow.state.phase !== "starting"
+                  ? "Google sign-in expired. Start sign-in again."
+                  : flow.initialized
+                    ? UNREACHABLE_MESSAGE
+                    : NOT_RESPONDING_MESSAGE,
               ),
             ),
         }),
@@ -381,8 +396,8 @@ export const makeAntigravityAuth = Effect.fn("makeAntigravityAuth")(function* <
             if (operation !== "idle") {
               return yield* setupError("start", "Antigravity setup is already in progress.");
             }
-            const flowId = yield* crypto
-              .randomUUIDv4()
+            const flowId = yield* random
+              .uuidV4()
               .pipe(
                 Effect.mapError(() =>
                   setupError("start", "Could not start Google sign-in. Try again."),
@@ -402,6 +417,7 @@ export const makeAntigravityAuth = Effect.fn("makeAntigravityAuth")(function* <
               expiresAtMillis,
               state,
               pending: undefined,
+              initialized: false,
               callbackSent: false,
               fiber: undefined,
               forwarding: undefined,
@@ -510,7 +526,7 @@ export const makeAntigravityAuth = Effect.fn("makeAntigravityAuth")(function* <
                 );
               }
               yield* runtime.request("logout", {});
-              yield* options.onSignedOut;
+              yield* options.onSignedOut(runtime);
             }).pipe(
               Effect.scoped,
               Effect.timeoutOrElse({

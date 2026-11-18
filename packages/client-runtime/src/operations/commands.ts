@@ -31,10 +31,12 @@ import {
 import { modelSelectionCommandType } from "@goat/shared/model";
 import { derivePendingBackgroundWork } from "@goat/shared/orchestrationV2PendingBackgroundWork";
 import { visibleThreadPullRequests } from "@goat/shared/threadPullRequests";
-import * as Crypto from "effect/Crypto";
+import * as SecureRandom from "effect/crypto/SecureRandom";
 import * as Effect from "effect/Effect";
 
 import { getInitialServerConfig, request } from "../rpc/client.ts";
+import type { StartThreadBootstrap } from "./startThreadBootstrap.ts";
+import { dispatch, dispatchMessage } from "./dispatch.ts";
 
 interface CommandMetadata {
   readonly commandId?: CommandId;
@@ -144,27 +146,6 @@ export interface SetThreadRuntimeModeInput extends ThreadCommandInput {
 
 export interface SetThreadInteractionModeInput extends ThreadCommandInput {
   readonly interactionMode: ProviderInteractionMode;
-}
-
-interface StartThreadBootstrap {
-  readonly createThread?: {
-    readonly projectId: ProjectId;
-    readonly title: string;
-    readonly modelSelection: ModelSelection;
-    readonly runtimeMode: RuntimeMode;
-    readonly interactionMode: ProviderInteractionMode;
-    readonly branch: string | null;
-    readonly worktreePath: string | null;
-    readonly createdAt: string;
-  };
-  readonly prepareWorktree?: {
-    readonly requireWorktree?: boolean;
-    readonly projectCwd: string;
-    readonly baseBranch: string;
-    readonly branch?: string;
-    readonly startFromOrigin?: boolean;
-  };
-  readonly runSetupScript?: boolean;
 }
 
 export interface StartThreadTurnInput extends ThreadCommandInput {
@@ -277,12 +258,9 @@ const allocateCommandId = Effect.fn("EnvironmentCommands.allocateCommandId")(fun
   input: CommandMetadata,
 ) {
   if (input.commandId !== undefined) return input.commandId;
-  const crypto = yield* Crypto.Crypto;
-  return CommandId.make(yield* crypto.randomUUIDv4().pipe(Effect.orDie));
+  const random = yield* SecureRandom.SecureRandom;
+  return CommandId.make(yield* random.uuidV4());
 });
-
-const dispatch = (command: OrchestrationV2Command) =>
-  request(ORCHESTRATION_V2_WS_METHODS.dispatchCommand, command);
 
 const getProjection = (threadId: ThreadId) =>
   request(ORCHESTRATION_V2_WS_METHODS.getThreadProjection, { threadId });
@@ -757,7 +735,7 @@ export const startThreadTurn = Effect.fn("EnvironmentCommands.startThreadTurn")(
 
   const requestedMode = input.dispatchMode ?? "auto";
   if (requestedMode === "start") {
-    return yield* dispatch({
+    return yield* dispatchMessage({
       type: "message.dispatch",
       commandId,
       createdBy: "user",
@@ -824,7 +802,7 @@ export const startThreadTurn = Effect.fn("EnvironmentCommands.startThreadTurn")(
   const shouldSendTitleSeed =
     input.titleSeed !== undefined &&
     (serverResolvesCommandContext || projection?.messages.length === 0);
-  return yield* dispatch({
+  return yield* dispatchMessage({
     type: "message.dispatch",
     commandId,
     createdBy: "user",
@@ -1007,7 +985,12 @@ export const revertThreadCheckpoint = Effect.fn("EnvironmentCommands.revertThrea
           ? candidate.ordinalWithinScope === 0 && candidate.appRunOrdinal === null
           : candidate.appRunOrdinal === input.turnCount,
       );
-    if (checkpoint === undefined || checkpoint.status !== "ready") {
+    if (
+      checkpoint === undefined ||
+      // Missing snapshots support conversation rewind only.
+      (checkpoint.status !== "ready" &&
+        !(input.restoreFiles === false && checkpoint.status === "missing"))
+    ) {
       const target =
         input.checkpointId === undefined
           ? `run ordinal ${input.turnCount ?? "unknown"}`

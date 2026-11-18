@@ -2,10 +2,12 @@
 import * as NodePath from "node:path";
 import * as NodeURL from "node:url";
 
+import * as NodeCrypto from "@effect/platform-node/NodeCrypto";
 import * as NodeServices from "@effect/platform-node/NodeServices";
 import { it } from "@effect/vitest";
 import * as Deferred from "effect/Deferred";
 import * as Effect from "effect/Effect";
+import * as Layer from "effect/Layer";
 import * as Exit from "effect/Exit";
 import * as Scope from "effect/Scope";
 import { ChildProcessSpawner } from "effect/process";
@@ -59,6 +61,6 @@ describe("AcpSessionRuntime release", () => {
       yield* Scope.close(owner, Exit.void);
 
       expect(yield* Deferred.isDone(cleanupFinished)).toBe(true);
-    }).pipe(Effect.provide(NodeServices.layer)),
+    }).pipe(Effect.provide(Layer.mergeAll(NodeServices.layer, NodeCrypto.layer))),
   );
 });

@@ -1,6 +1,5 @@
 import * as RecallFixture from "./MemoryRecall.ts";
 import { checkUsage } from "./MemoryUsageScan.testkit.ts";
-import { McpServer } from "effect/ai";
 import * as NodeServices from "@effect/platform-node/NodeServices";
 import * as McpHttpServer from "../mcp/McpHttpServer.ts";
 import * as McpAccess from "../mcp/McpToolAccess.testkit.ts";
@@ -813,7 +812,7 @@ it.effect(
           Layer.provide(McpAccess.layerPermissionProfilesOff),
           Layer.provideMerge(live),
           Layer.provide(Layer.mock(Sync.MemorySyncService)({})),
-          Layer.provideMerge(McpServer.McpServer.layer),
+          Layer.provideMerge(McpHttpServer.layerInProcessMcpServer),
           Layer.provide(McpAccess.liveThreadsLayer),
           Layer.provide(NodeServices.layer),
         ),

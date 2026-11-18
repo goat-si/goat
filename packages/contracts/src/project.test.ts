@@ -6,18 +6,21 @@ import { describe, expect, it } from "vite-plus/test";
 import { OrchestrationProjectShell } from "./orchestrationProject.ts";
 
 import {
+  ProjectListIgnoredFilesInput,
   ProjectFaviconPath,
   ReceivedProjectIcon,
   StoredProjectIcon,
   ProjectReadFileError,
+  ProjectReadFileInput,
+  ProjectReadFileResult,
   ProjectCreatePayload,
   ProjectUpdatePayload,
   ProjectMutation,
   ProjectSearchContentsError,
   ProjectSearchEntriesError,
   ProjectWriteFileError,
-  ProjectReadFileResult,
   ProjectWriteFileInput,
+  ProjectWriteFileResult,
 } from "./project.ts";
 
 const decodeProjectCreatePayload = Schema.decodeUnknownSync(ProjectCreatePayload);
@@ -58,6 +61,45 @@ describe("guarded file contracts", () => {
 });
 
 describe("project RPC errors", () => {
+  it("keeps whitespace in file paths across the wire", () => {
+    const roundTrip = <S extends Schema.Codec<unknown, unknown>>(schema: S, value: S["Type"]) =>
+      Schema.decodeUnknownSync(schema)(Schema.encodeSync(schema)(value));
+
+    for (const relativePath of [" ", " report.txt", "report.txt\t"]) {
+      const cwd = "/workspace";
+      const resolvedPath = `${cwd}/${relativePath}`;
+      expect(roundTrip(ProjectReadFileInput, { cwd, relativePath }).relativePath).toBe(
+        relativePath,
+      );
+      expect(
+        roundTrip(ProjectWriteFileInput, { cwd, relativePath, contents: "" }).relativePath,
+      ).toBe(relativePath);
+      expect(
+        roundTrip(ProjectReadFileResult, {
+          relativePath,
+          contents: "",
+          byteLength: 0,
+          truncated: false,
+        }).relativePath,
+      ).toBe(relativePath);
+      expect(roundTrip(ProjectWriteFileResult, { relativePath }).relativePath).toBe(relativePath);
+      for (const FileError of [ProjectReadFileError, ProjectWriteFileError]) {
+        const error = new FileError({
+          cwd,
+          relativePath,
+          failure: "operation_failed",
+          resolvedPath,
+          operationPath: resolvedPath,
+        });
+        expect(roundTrip(FileError, error)).toMatchObject({
+          relativePath,
+          resolvedPath,
+          operationPath: resolvedPath,
+        });
+      }
+    }
+  });
+
   it("derives stable messages from structured request context while retaining causes", () => {
     const cause = new Error("sensitive platform detail");
     const searchError = new ProjectSearchEntriesError({
@@ -212,3 +254,32 @@ effectIt.effect("an icon kind from a newer server shows the default icon", () =>
     assert.strictEqual(broken._tag, "Failure");
   }),
 );
+
+const { hasCustomTitle: _newField, ...olderShellFields } = OrchestrationProjectShell.fields;
+const decodeOlderProjectShell = Schema.decodeUnknownEffect(Schema.Struct(olderShellFields));
+
+effectIt.effect("a project shell decodes with or without hasCustomTitle across versions", () =>
+  Effect.gen(function* () {
+    const fromOlderServer = {
+      id: "project-1",
+      title: "Project",
+      workspaceRoot: "/tmp/project",
+      defaultModelSelection: null,
+      scripts: [],
+      createdAt: "2026-01-01T00:00:00.000Z",
+      updatedAt: "2026-01-01T00:00:00.000Z",
+    };
+    assert.isUndefined((yield* decodeProjectShell(fromOlderServer)).hasCustomTitle);
+    const fromNewerServer = { ...fromOlderServer, hasCustomTitle: true };
+    assert.isTrue((yield* decodeProjectShell(fromNewerServer)).hasCustomTitle);
+    // An older client's shell has no such field and drops it.
+    assert.notProperty(yield* decodeOlderProjectShell(fromNewerServer), "hasCustomTitle");
+  }),
+);
+
+it("keeps ignored-file listing compatible with old clients and bounds search", () => {
+  const decode = Schema.decodeUnknownSync(ProjectListIgnoredFilesInput);
+  expect(decode({ cwd: "/repo" })).toEqual({ cwd: "/repo" });
+  expect(decode({ cwd: "/repo", query: "config" })).toEqual({ cwd: "/repo", query: "config" });
+  expect(() => decode({ cwd: "/repo", query: "x".repeat(257) })).toThrow();
+});

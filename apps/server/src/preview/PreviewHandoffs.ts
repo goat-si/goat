@@ -20,7 +20,7 @@ import {
   TurnItemId,
 } from "@goat/contracts";
 import * as Context from "effect/Context";
-import * as Crypto from "effect/Crypto";
+import * as SecureRandom from "effect/crypto/SecureRandom";
 import * as DateTime from "effect/DateTime";
 import * as Effect from "effect/Effect";
 import * as Layer from "effect/Layer";
@@ -105,7 +105,7 @@ const make = Effect.gen(function* () {
   const browser = yield* Effect.serviceOption(ServerBrowser.ServerBrowser);
   const leases = yield* Effect.serviceOption(ComputerUseLeases.ComputerUseLeases);
   const screen = yield* Effect.serviceOption(ScreenRunService.ScreenRunService);
-  const crypto = yield* Crypto.Crypto;
+  const random = yield* SecureRandom.SecureRandom;
   const lock = yield* Semaphore.make(1);
   const locked = lock.withPermits(1);
   const scope = yield* Effect.scope;
@@ -190,8 +190,8 @@ const make = Effect.gen(function* () {
       const before = yield* storedEnd(entry);
       if (before !== undefined) return before;
     }
-    const fresh = crypto
-      .randomUUIDv4()
+    const fresh = random
+      .uuidV4()
       .pipe(Effect.mapError((cause) => new HandoffError({ reason: "unavailable", cause })));
     const repeat = retry ? `:${yield* fresh}` : "";
     yield* threads
@@ -343,7 +343,7 @@ const make = Effect.gen(function* () {
    * can repeat (taken, dropped, taken again), so each one is its own command.
    */
   const opened = (entry: Pending) =>
-    crypto.randomUUIDv4().pipe(
+    random.uuidV4().pipe(
       Effect.flatMap((id) =>
         threads.dispatch({
           type: "handoff.transition",

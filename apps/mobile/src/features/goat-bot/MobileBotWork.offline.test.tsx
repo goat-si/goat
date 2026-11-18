@@ -151,6 +151,8 @@ const state = vi.hoisted(() => ({
   upsert: vi.fn<() => Promise<unknown>>(),
   // The live routines list; a saved check-in arrives here.
   routineTasks: [] as object[],
+  // How often Home drew its status card: once per Home render.
+  statusRenders: 0,
 }));
 vi.mock("@effect/atom-react", () => ({
   useAtomValue: (atom: unknown) =>
@@ -172,8 +174,13 @@ vi.mock("../../native/StackHeader", () => ({
 }));
 vi.mock("../../state/atom-registry", () => ({ appAtomRegistry: {} }));
 vi.mock("expo-crypto", () => ({ randomUUID: () => globalThis.crypto.randomUUID() }));
+vi.mock("react-native-keyboard-controller", () => ({
+  KeyboardEvents: { addListener: () => ({ remove: () => {} }) },
+}));
 vi.mock("../../state/channels", () => ({
   channelEnvironment: {
+    // Home's shared current work; its links are not read in this file.
+    homeCurrentOpenableWorkAtom: () => "home-current",
     listBotThreads: (key: { environmentId: string }) => {
       state.taskKeys.push(key.environmentId);
       return key.environmentId === "env2" ? "task2" : "task";
@@ -294,7 +301,12 @@ vi.mock("../settings/appearance/useScaledTextRole", () => ({ useScaledTextRole: 
 vi.mock("./GoatBotFace", () => ({ GoatBotFaceAvatar: () => null }));
 vi.mock("./GoatBotTaskRow", () => ({ GoatBotTaskRow: () => null }));
 vi.mock("../../components/ui/AppSymbol", () => ({ SymbolView: () => null }));
-vi.mock("./MobileBotStatusCard", () => ({ MobileBotStatusCard: () => <p>status card</p> }));
+vi.mock("./MobileBotStatusCard", () => ({
+  MobileBotStatusCard: () => {
+    state.statusRenders += 1;
+    return <p>status card</p>;
+  },
+}));
 vi.mock("./MobileBotComputer", () => ({
   MobileBotComputer: (props: { workKey?: string }) => {
     state.machinesKey = props.workKey;
@@ -428,6 +440,7 @@ afterEach(async () => {
     hidden: [],
     machinesKey: undefined,
     routineTasks: [],
+    statusRenders: 0,
   });
   state.draft.mockClear();
   state.openTask.mockClear();
@@ -758,6 +771,54 @@ it("keeps an offline task listed, but it neither opens nor offers task actions",
   expect(reads()).toHaveLength(sent);
 });
 
+it("keeps an offline row's pull requests on screen and in its name, while the row stays closed", async () => {
+  state.rows = [
+    decode({
+      ...task("t1", "Fix the slow test"),
+      pullRequests: [{ repository: "goat-si/goat", number: 42, state: "merged", watching: false }],
+    }),
+  ];
+  await open();
+  expect(home()?.textContent).toContain("#42 Merged");
+  state.connected = false;
+  await open();
+  expect(home()?.textContent).toContain("#42 Merged");
+  const row = button("Fix the slow test");
+  expect(row?.getAttribute("aria-label")).toContain("Pull request goat-si/goat#42, merged");
+  expect(row?.hasAttribute("disabled")).toBe(true);
+});
+
+it("a minute re-renders a row's time, not Home or its list", async () => {
+  vi.useFakeTimers({ now: Date.parse("2026-11-11T02:05:00.000Z") });
+  try {
+    state.rows = [task("t1", "Check the disks")];
+    await open();
+    expect(home()?.textContent).toContain("Working · 5m");
+    const drawn = state.statusRenders;
+    await act(async () => vi.advanceTimersByTime(60_000));
+    expect(home()?.textContent).toContain("Working · 6m");
+    expect(state.statusRenders).toBe(drawn);
+  } finally {
+    vi.useRealTimers();
+  }
+});
+
+it("rows behind a task's peek stop following the clock, and show the right time once it closes", async () => {
+  vi.useFakeTimers({ now: Date.parse("2026-11-11T02:05:00.000Z") });
+  try {
+    state.rows = [task("t1", "Check the disks")];
+    await open();
+    await press("Check the disks");
+    expect(button("Back to home. Check the disks")).toBeDefined();
+    await act(async () => vi.advanceTimersByTime(10 * 60_000));
+    expect(home()?.textContent).toContain("Working · 5m");
+    await press("Back to home. Check the disks");
+    expect(home()?.textContent).toContain("Working · 15m");
+  } finally {
+    vi.useRealTimers();
+  }
+});
+
 it("with no bot computer saved, keeps nothing once that computer disconnects and none is connected", async () => {
   state.botRef = null;
   state.rows = [task("t1", "Fix the build")];
@@ -790,4 +851,39 @@ it("with no bot computer saved, follows another connected computer and shows onl
   expect(state.taskKeys.at(-1)).toBe("env2");
   expect(button("Patch the mini")?.hasAttribute("disabled")).toBe(false);
   expect(button("Fix the build")).toBeUndefined();
+});
+
+it("a routine's recent runs show while its computer is connected and are gone while it is offline", async () => {
+  state.routineTasks = [
+    {
+      id: "goat-bot-check-in:bot",
+      title: "Check in",
+      prompt: "Check in",
+      enabled: true,
+      schedule: { type: "fixed_time", timeOfDay: "09:00", weekdays: [1, 2, 3, 4, 5] },
+      threadId: "bot",
+      nextRunAt: null,
+      lastRunAt: null,
+      lastRunStatus: null,
+      lastRunError: null,
+      recentRuns: [
+        {
+          firingId: "firing-1",
+          status: "completed",
+          requestedAt: "2026-11-14T09:00:00.000Z",
+          completedAt: "2026-11-14T09:00:05.000Z",
+        },
+      ],
+    },
+  ];
+  const runDots = () =>
+    [...container.querySelectorAll("button")].filter((item) =>
+      item.getAttribute("aria-label")?.startsWith("Run on "),
+    );
+  await open();
+  expect(runDots()).toHaveLength(1);
+  state.connected = false;
+  await open();
+  expect(home()?.textContent).toContain("Routines are unavailable while");
+  expect(runDots()).toHaveLength(0);
 });

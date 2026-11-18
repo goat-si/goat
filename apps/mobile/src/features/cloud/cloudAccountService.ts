@@ -26,6 +26,7 @@ import {
   setAgentAwarenessRelayTokenProvider,
   unregisterAgentAwarenessDeviceForCurrentUser,
 } from "../agent-awareness/remoteRegistration";
+import { refuseRelayOnlyComputers } from "../goat-bot/keptPerComputerStore";
 import { removeCloudEnvironments } from "./cloud-drafts";
 import { clearConnectOnboardingRequest, requestConnectOnboarding } from "./connectOnboarding";
 import { resolveRelayClerkTokenOptions } from "./publicConfig";
@@ -35,6 +36,8 @@ type ClerkInstance = ReturnType<typeof getClerkInstance>;
 export function deactivateCloudRelayAccount(): void {
   setAgentAwarenessRelayTokenProvider(null);
   setManagedRelaySession(appAtomRegistry, null);
+  // A cleanup that fails leaves relay-only computers listed; nothing read from them shows meanwhile.
+  refuseRelayOnlyComputers(appAtomRegistry);
 }
 
 export function activateCloudRelayAccount(

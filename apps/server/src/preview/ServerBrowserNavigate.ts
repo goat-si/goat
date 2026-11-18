@@ -6,43 +6,58 @@ import type { SessionControl } from "./SessionControl.ts";
 import * as ServerBrowserPage from "./ServerBrowserPage.ts";
 
 export const guardedNavigate = async (
-  tab: { readonly page: Page; readonly control: Pick<SessionControl, "track"> },
+  tab: {
+    readonly page: Page;
+    readonly control: Pick<SessionControl, "track">;
+    pendingInitialRequestUrl?: string | null;
+  },
   url: string,
   readiness: "load" | "domContentLoaded" | "none",
   timeout: number,
   channel: ActionChannel,
+  /** Checks the page the navigation reached, once it has loaded. */
+  assertLoaded?: () => void,
 ) => {
+  // A stopped first load to the same URL must not swallow this navigation's request.
+  tab.pendingInitialRequestUrl = null;
+  const startedAt = performance.now();
   const navigation = channel.call(() =>
     tab.page.goto(url, {
       timeout,
-      waitUntil:
-        readiness === "domContentLoaded"
-          ? "domcontentloaded"
-          : readiness === "none"
-            ? "commit"
-            : "load",
+      waitUntil: "commit",
     }),
   );
   if (readiness === "none") {
     tab.control.track(navigation);
     return;
   }
-  await navigation.catch((cause: unknown) => {
-    const message = cause instanceof Error ? cause.message : String(cause);
-    if (message.includes("Download is starting")) {
-      throw new ServerBrowserPage.ServerBrowserOperationError(
-        "PreviewAutomationExecutionError",
-        `${url} is a file this browser cannot show, so it was downloaded instead. goat_call {path:"preview.status"} lists it under downloads.`,
-      );
-    }
-    if (/ERR_[A-Z_]+/.test(message)) {
-      throw new ServerBrowserPage.ServerBrowserOperationError(
-        "PreviewAutomationExecutionError",
-        `Navigation to ${url} failed: ${ServerBrowserPage.parseNetError(message).description}`,
-      );
-    }
-    throw ServerBrowserPage.toOperationError(cause, timeout);
-  });
+  await navigation
+    .then(() =>
+      tab.page
+        .waitForLoadState(readiness === "domContentLoaded" ? "domcontentloaded" : "load", {
+          timeout: Math.max(1, timeout - (performance.now() - startedAt)),
+        })
+        .catch((cause: unknown) => {
+          if (!(cause instanceof Error && cause.name === "TimeoutError")) throw cause;
+        }),
+    )
+    .catch((cause: unknown) => {
+      const message = cause instanceof Error ? cause.message : String(cause);
+      if (message.includes("Download is starting")) {
+        throw new ServerBrowserPage.ServerBrowserOperationError(
+          "PreviewAutomationExecutionError",
+          `${url} is a file this browser cannot show, so it was downloaded instead. goat_call {path:"preview.status"} lists it under downloads.`,
+        );
+      }
+      if (/ERR_[A-Z_]+/.test(message)) {
+        throw new ServerBrowserPage.ServerBrowserOperationError(
+          "PreviewAutomationExecutionError",
+          `Navigation to ${url} failed: ${ServerBrowserPage.parseNetError(message).description}`,
+        );
+      }
+      throw ServerBrowserPage.toOperationError(cause, timeout);
+    });
+  assertLoaded?.();
 };
 
 export const resolveNavigationUrl = (input: PreviewAutomationNavigateInput) => {

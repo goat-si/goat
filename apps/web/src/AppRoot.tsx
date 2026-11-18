@@ -8,6 +8,7 @@ import { environmentShell } from "./state/shell";
 import { ElectronBrowserHost } from "./browser/ElectronBrowserHost";
 import { GoatBotChannelProvider } from "./components/goatBot/GoatBotChannelProvider";
 import { QuitHoldOverlay } from "./components/QuitHoldOverlay";
+import { I18nProvider } from "./i18n/I18nProvider";
 import { appAtomRegistry, AppAtomRegistryProvider } from "./rpc/atomRegistry";
 import type { AppRouter } from "./router";
 
@@ -25,12 +26,14 @@ export function AppRoot({ router }: { readonly router: AppRouter }) {
     [],
   );
   return (
-    <AppAtomRegistryProvider>
-      <GoatBotChannelProvider>
-        <RouterProvider router={router} />
-      </GoatBotChannelProvider>
-      <ElectronBrowserHost />
-      <QuitHoldOverlay />
-    </AppAtomRegistryProvider>
+    <I18nProvider>
+      <AppAtomRegistryProvider>
+        <GoatBotChannelProvider>
+          <RouterProvider router={router} />
+        </GoatBotChannelProvider>
+        <ElectronBrowserHost />
+        <QuitHoldOverlay />
+      </AppAtomRegistryProvider>
+    </I18nProvider>
   );
 }

@@ -1,6 +1,8 @@
+import * as NodeCrypto from "@effect/platform-node/NodeCrypto";
 import * as NodeServices from "@effect/platform-node/NodeServices";
 import { expect, it } from "@effect/vitest";
 import * as Effect from "effect/Effect";
+import * as Layer from "effect/Layer";
 import * as FileSystem from "effect/FileSystem";
 import { ChildProcessSpawner } from "effect/process";
 import { FetchHttpClient, HttpClient, HttpClientResponse } from "effect/http";
@@ -121,7 +123,7 @@ it.effect("source runners warn without looking for archives", () =>
     expect(result.step.summary).toContain("^24.13.1");
     expect(result.requests).toBe(0);
     expect(result.needsTransfer).toBe(false);
-  }).pipe(Effect.provide(NodeServices.layer)),
+  }).pipe(Effect.provide(Layer.mergeAll(NodeServices.layer, NodeCrypto.layer))),
 );
 it.effect("installed requested runtime needs no transfer", () =>
   Effect.gen(function* () {
@@ -129,7 +131,7 @@ it.effect("installed requested runtime needs no transfer", () =>
     expect(result.step.state).toBe("passed");
     expect(result.requests).toBe(0);
     expect(result.needsTransfer).toBe(false);
-  }).pipe(Effect.provide(NodeServices.layer)),
+  }).pipe(Effect.provide(Layer.mergeAll(NodeServices.layer, NodeCrypto.layer))),
 );
 it.effect("a local archive and sidecar are checked by metadata only", () =>
   Effect.gen(function* () {
@@ -138,14 +140,14 @@ it.effect("a local archive and sidecar are checked by metadata only", () =>
     expect(result.step.summary).toContain("Origin");
     expect(result.requests).toBe(0);
     expect(result.needsTransfer).toBe(true);
-  }).pipe(Effect.provide(NodeServices.layer)),
+  }).pipe(Effect.provide(Layer.mergeAll(NodeServices.layer, NodeCrypto.layer))),
 );
 it.effect("a local archive without a checksum is not a confirmed source", () =>
   Effect.gen(function* () {
     const result = yield* fixture({ local: "archive" });
     expect(result.step.state).toBe("failed");
     expect(result.step.fix?.instruction).toContain("published GOAT release");
-  }).pipe(Effect.provide(NodeServices.layer)),
+  }).pipe(Effect.provide(Layer.mergeAll(NodeServices.layer, NodeCrypto.layer))),
 );
 it.effect.each(["present", "absent", "unknown"] as const)("handles public HTTPS %s", (head) =>
   Effect.gen(function* () {
@@ -153,7 +155,7 @@ it.effect.each(["present", "absent", "unknown"] as const)("handles public HTTPS 
     expect(result.step.state).toBe(
       head === "present" ? "passed" : head === "absent" ? "failed" : "warning",
     );
-  }).pipe(Effect.provide(NodeServices.layer)),
+  }).pipe(Effect.provide(Layer.mergeAll(NodeServices.layer, NodeCrypto.layer))),
 );
 it.effect.each(["absent", "unknown"] as const)(
   "requires the release checksum asset (%s)",
@@ -161,7 +163,7 @@ it.effect.each(["absent", "unknown"] as const)(
     Effect.gen(function* () {
       const result = yield* fixture({ head: "present", checksum });
       expect(result.step.state).toBe(checksum === "absent" ? "failed" : "warning");
-    }).pipe(Effect.provide(NodeServices.layer)),
+    }).pipe(Effect.provide(Layer.mergeAll(NodeServices.layer, NodeCrypto.layer))),
 );
 it.effect.each(["both", "archive", "unknown"] as const)(
   "handles authenticated release assets %s",
@@ -171,7 +173,7 @@ it.effect.each(["both", "archive", "unknown"] as const)(
       expect(result.step.state).toBe(
         gh === "both" ? "passed" : gh === "archive" ? "failed" : "warning",
       );
-    }).pipe(Effect.provide(NodeServices.layer)),
+    }).pipe(Effect.provide(Layer.mergeAll(NodeServices.layer, NodeCrypto.layer))),
 );
 it.effect("preserves a compatible-runtime fallback when the requested release is absent", () =>
   Effect.gen(function* () {
@@ -179,7 +181,7 @@ it.effect("preserves a compatible-runtime fallback when the requested release is
     expect(result.step.state).toBe("warning");
     expect(result.step.summary).toContain("connect checks whether it is compatible");
     expect(result.needsTransfer).toBe(false);
-  }).pipe(Effect.provide(NodeServices.layer)),
+  }).pipe(Effect.provide(Layer.mergeAll(NodeServices.layer, NodeCrypto.layer))),
 );
 
 it.effect.each([200, 404, 401, 500])(
@@ -206,7 +208,7 @@ it.effect("accepts a user-supplied cache archive without a checksum or content r
     expect(result.step.summary).toContain("Uploads GOAT");
     expect(result.requests).toBe(0);
     expect(result.needsTransfer).toBe(true);
-  }).pipe(Effect.provide(NodeServices.layer)),
+  }).pipe(Effect.provide(Layer.mergeAll(NodeServices.layer, NodeCrypto.layer))),
 );
 it.effect.each(["directory", "oversized"] as const)(
   "rejects a cache archive with invalid %s metadata",
@@ -215,7 +217,7 @@ it.effect.each(["directory", "oversized"] as const)(
       const result = yield* fixture({ local, cache: true });
       expect(result.step.state).toBe("failed");
       expect(result.needsTransfer).toBe(false);
-    }).pipe(Effect.provide(NodeServices.layer)),
+    }).pipe(Effect.provide(Layer.mergeAll(NodeServices.layer, NodeCrypto.layer))),
 );
 
 it.effect.each(["bundle", "cache", "release", "authenticated"] as const)(
@@ -234,7 +236,7 @@ it.effect.each(["bundle", "cache", "release", "authenticated"] as const)(
       });
       expect(result.step.state).toBe("passed");
       expect(result.needsTransfer).toBe(false);
-    }).pipe(Effect.provide(NodeServices.layer)),
+    }).pipe(Effect.provide(Layer.mergeAll(NodeServices.layer, NodeCrypto.layer))),
 );
 
 it.effect.each(["nightly", "stable"] as const)(
@@ -255,7 +257,7 @@ it.effect.each(["nightly", "stable"] as const)(
       expect(result.searches).toEqual([
         { platformKey: "linux-arm64", requestedVersion: "0.1.0", exclude: new Set() },
       ]);
-    }).pipe(Effect.provide(NodeServices.layer)),
+    }).pipe(Effect.provide(Layer.mergeAll(NodeServices.layer, NodeCrypto.layer))),
 );
 it.effect.each(["unreachable", "client-too-old", "none"] as const)(
   "explains a published runtime search miss: %s",
@@ -285,7 +287,7 @@ it.effect.each(["unreachable", "client-too-old", "none"] as const)(
         );
         expect(result.step.fix?.instruction).toContain("on Origin.");
       }
-    }).pipe(Effect.provide(NodeServices.layer)),
+    }).pipe(Effect.provide(Layer.mergeAll(NodeServices.layer, NodeCrypto.layer))),
 );
 it.effect.each([undefined, "build.example"])(
   "refuses fallback when %s has GOAT data but no installed runtime",
@@ -303,7 +305,7 @@ it.effect.each([undefined, "build.example"])(
       );
       expect(result.step.fix?.instruction).toContain("on Origin.");
       expect(result.searches).toEqual([]);
-    }).pipe(Effect.provide(NodeServices.layer)),
+    }).pipe(Effect.provide(Layer.mergeAll(NodeServices.layer, NodeCrypto.layer))),
 );
 it.effect.each(["mirror", "disabled", "not opted in", "installed"] as const)(
   "does not search published fallbacks with %s",
@@ -317,7 +319,7 @@ it.effect.each(["mirror", "disabled", "not opted in", "installed"] as const)(
       });
       expect(result.searches).toEqual([]);
       expect(result.step.state).toBe(gate === "installed" ? "warning" : "failed");
-    }).pipe(Effect.provide(NodeServices.layer)),
+    }).pipe(Effect.provide(Layer.mergeAll(NodeServices.layer, NodeCrypto.layer))),
 );
 it.effect.each(["installed", "bundle", "cache", "release", "authenticated"] as const)(
   "an exact %s runtime takes precedence over published fallback",
@@ -338,7 +340,7 @@ it.effect.each(["installed", "bundle", "cache", "release", "authenticated"] as c
       expect(result.step.state).toBe("passed");
       expect(result.step.summary).toContain("0.1.0");
       expect(result.searches).toEqual([]);
-    }).pipe(Effect.provide(NodeServices.layer)),
+    }).pipe(Effect.provide(Layer.mergeAll(NodeServices.layer, NodeCrypto.layer))),
 );
 it.effect.each(["found", "none"] as const)(
   "keeps exact-source uncertainty unless published fallback is %s",
@@ -359,7 +361,7 @@ it.effect.each(["found", "none"] as const)(
       expect(result.step.summary).toContain(
         outcome === "found" ? "GOAT installs 0.2.0" : "Could not confirm",
       );
-    }).pipe(Effect.provide(NodeServices.layer)),
+    }).pipe(Effect.provide(Layer.mergeAll(NodeServices.layer, NodeCrypto.layer))),
 );
 
 it.effect("keeps exact-source uncertainty on a host with existing data", () =>
@@ -368,7 +370,7 @@ it.effect("keeps exact-source uncertainty on a host with existing data", () =>
     expect(result.step.state).toBe("warning");
     expect(result.step.summary).toContain("Could not confirm");
     expect(result.searches).toEqual([]);
-  }).pipe(Effect.provide(NodeServices.layer)),
+  }).pipe(Effect.provide(Layer.mergeAll(NodeServices.layer, NodeCrypto.layer))),
 );
 
 it.effect.each(["pending", "rejected"] as const)(
@@ -383,7 +385,7 @@ it.effect.each(["pending", "rejected"] as const)(
       expect(result.step.state).toBe("passed");
       expect(result.step.summary).toContain("Downloads the published GOAT 0.1.0");
       expect(result.needsTransfer).toBe(true);
-    }).pipe(Effect.provide(NodeServices.layer)),
+    }).pipe(Effect.provide(Layer.mergeAll(NodeServices.layer, NodeCrypto.layer))),
 );
 
 it.effect("only rejected held runtimes are excluded from the published search", () =>
@@ -403,5 +405,5 @@ it.effect("only rejected held runtimes are excluded from the published search", 
         exclude: new Set(["0.2.0-nightly.1"]),
       },
     ]);
-  }).pipe(Effect.provide(NodeServices.layer)),
+  }).pipe(Effect.provide(Layer.mergeAll(NodeServices.layer, NodeCrypto.layer))),
 );

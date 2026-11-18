@@ -36,7 +36,6 @@ import * as HttpServerRequest from "effect/http/HttpServerRequest";
 import * as HttpServerResponse from "effect/http/HttpServerResponse";
 import * as HttpApi from "effect/http-api/HttpApi";
 import * as HttpApiBuilder from "effect/http-api/HttpApiBuilder";
-import { EnvironmentId } from "@goat/contracts";
 import { RelayEnvironmentAuth, RelayEnvironmentPrincipal, RelayApi } from "@goat/contracts/relay";
 import { RELAY_MANAGED_TUNNEL_RECOVERY_TYP, signRelayJwt } from "@goat/shared/relayJwt";
 
@@ -72,6 +71,7 @@ import {
   encodeLinkRequest,
   decodeLinkUnavailableError,
   layerRelayUnlinkTest,
+  linkedEnvironmentRecord,
 } from "./Api.testkit.ts";
 
 describe("managed endpoint provisioning errors", () => {
@@ -159,6 +159,7 @@ describe("managed endpoint provisioning errors", () => {
             },
             body: payload,
           }),
+          Context.empty(),
         ),
       );
       expect(response.status).toBe(503);
@@ -271,6 +272,7 @@ describe("device listing compatibility", () => {
             new Request(`https://relay.example.test/${version}/client/devices`, {
               headers: { authorization: "Bearer test-token" },
             }),
+            Context.empty(),
           ),
         );
         expect(response.status).toBe(200);
@@ -368,6 +370,7 @@ describe("Cloudflare rate-limit retry hint", () => {
                 managedTunnelsEnabled: true,
               }),
             }),
+            Context.empty(),
           ),
         ),
       ),
@@ -482,18 +485,6 @@ describe("relay environment authentication", () => {
     );
   });
 });
-
-const linkedEnvironmentRecord = {
-  environmentId: EnvironmentId.make("environment-1"),
-  label: "Environment 1",
-  endpoint: {
-    httpBaseUrl: "https://environment-1.example.test/",
-    wsBaseUrl: "wss://environment-1.example.test/ws",
-    providerKind: "cloudflare_tunnel",
-  },
-  environmentPublicKey: "public-key",
-  linkedAt: "2026-07-28T00:00:00.000Z",
-} as const;
 
 describe("relay managed tunnel recovery", () => {
   it.effect("binds recovery requests to the host, cloud user, and T3 service origin", () =>

@@ -1,3 +1,4 @@
+import * as NodeCrypto from "@effect/platform-node/NodeCrypto";
 import * as NodeServices from "@effect/platform-node/NodeServices";
 import {
   DEFAULT_SERVER_SETTINGS,
@@ -71,7 +72,7 @@ export const runSetup = Effect.fn("test.runSetup")(function* (input: {
           }),
       }),
     ),
-    Layer.provide(NodeServices.layer),
+    Layer.provide(Layer.mergeAll(NodeServices.layer, NodeCrypto.layer)),
   );
   const result = yield* Effect.gen(function* () {
     const runner = yield* ProjectSetupScriptRunner.ProjectSetupScriptRunner;
@@ -116,7 +117,7 @@ export const makeObservedSetup = Effect.gen(function* () {
           }),
       }),
     ),
-    Layer.provide(NodeServices.layer),
+    Layer.provide(Layer.mergeAll(NodeServices.layer, NodeCrypto.layer)),
   );
   const context = yield* Layer.build(layer);
   const { runForThread } = Context.get(context, ProjectSetupScriptRunner.ProjectSetupScriptRunner);

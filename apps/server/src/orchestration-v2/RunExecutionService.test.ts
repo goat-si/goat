@@ -1,11 +1,14 @@
+import * as ThreadCommandExecutor from "./ThreadCommandExecutor.ts";
+import { rootAppThread } from "./RunExecutionService.compactCases.ts";
+import { registerCompactUnsupportedCase } from "./RunExecutionService.compactCases.ts";
 import { memoryRun, memoryMessage } from "./RunMemoryFixtures.testkit.ts";
 import { registerAgentOomRunCases } from "./RunExecutionService.oomCases.ts";
 import { AgentScope } from "@goat/shared/AgentScope";
 import * as NodeSqliteClient from "@goat/shared/nodeSqliteClient";
 import * as SqlClient from "effect/sql/SqlClient";
-import Migration0063 from "../persistence/Migrations/082_RemoteDispatches.ts";
-import Migration0065 from "../persistence/Migrations/084_RemoteDispatchQuestions.ts";
-import Migration0101 from "../persistence/Migrations/113_RemoteReportInboxRunId.ts";
+import Migration0063 from "../persistence/Migrations/092_RemoteDispatches.ts";
+import Migration0065 from "../persistence/Migrations/094_RemoteDispatchQuestions.ts";
+import Migration0101 from "../persistence/Migrations/123_RemoteReportInboxRunId.ts";
 import * as RemoteReportInbox from "../remoteReports/RemoteReportInbox.ts";
 import { framePendingReports } from "../remoteReports/reportFrame.ts";
 import { assert, it } from "@effect/vitest";
@@ -17,7 +20,6 @@ import {
   MessageId,
   NodeId,
   ScheduledTaskId,
-  type OrchestrationV2AppThread,
   type OrchestrationV2CheckpointScope,
   type OrchestrationV2DomainEvent,
   type OrchestrationV2ExecutionNode,
@@ -81,12 +83,6 @@ import {
   rootTerminalEvent,
   type BackgroundScenarioIds,
 } from "./RunExecutionService.testkit.ts";
-
-const rootAppThread = (id: ThreadId) =>
-  ({
-    id,
-    lineage: { parentThreadId: null, relationshipToParent: null, rootThreadId: id },
-  }) as OrchestrationV2AppThread;
 
 it.effect("routes shared-runtime events only to their owning root run", () =>
   Effect.gen(function* () {
@@ -906,7 +902,7 @@ it.effect("passes the thread's MCP app context to the provider under a safe key"
             }),
             layerTurnItemPositionsTest,
             mockEventSink({}),
-            IdAllocator.layer,
+            Layer.merge(IdAllocator.layer, ThreadCommandExecutor.layer),
             Layer.mock(ProviderEventIngestor.ProviderEventIngestorV2)({
               ingestNormalized: () => Effect.succeed([]),
             }),
@@ -941,7 +937,7 @@ it.effect("fails the run when its ownership check cannot be read before calling 
                 Effect.as({ committed: true, storedEvents: [] }),
               ),
           }),
-          IdAllocator.layer,
+          Layer.merge(IdAllocator.layer, ThreadCommandExecutor.layer),
           Layer.mock(ProviderEventIngestor.ProviderEventIngestorV2)({
             ingestNormalized: () => Effect.succeed([]),
           }),
@@ -1183,7 +1179,7 @@ it.effect("starts the provider when checkpoint baseline capture fails", () =>
                 { events: input.events, effects: input.effects },
               ]).pipe(Effect.as([])),
           }),
-          IdAllocator.layer,
+          Layer.merge(IdAllocator.layer, ThreadCommandExecutor.layer),
           Layer.mock(ProviderEventIngestor.ProviderEventIngestorV2)({
             ingestNormalized: () => Effect.succeed([]),
           }),
@@ -1306,7 +1302,7 @@ it.effect.each(["failure", "interruption", "stale-attempt", "start-guard"] as co
                   return { committed: true, storedEvents: [] };
                 }),
             }),
-            IdAllocator.layer,
+            Layer.merge(IdAllocator.layer, ThreadCommandExecutor.layer),
             Layer.mock(ProviderEventIngestor.ProviderEventIngestorV2)({
               ingestNormalized: () => Effect.succeed([]),
             }),
@@ -1476,7 +1472,7 @@ it.effect("ingests new member threads of an owned child after the root turn term
               }),
             writeIfRunCurrent: () => Effect.succeed({ committed: true, storedEvents: [] }),
           }),
-          IdAllocator.layer,
+          Layer.merge(IdAllocator.layer, ThreadCommandExecutor.layer),
           Layer.mock(ProviderEventIngestor.ProviderEventIngestorV2)({
             ingestNormalized: (input) =>
               Effect.gen(function* () {
@@ -1721,7 +1717,7 @@ it.effect("ends a nested native subagent and its thread when the root run is int
                 [],
               ),
           }),
-          IdAllocator.layer,
+          Layer.merge(IdAllocator.layer, ThreadCommandExecutor.layer),
           Layer.mock(ProviderEventIngestor.ProviderEventIngestorV2)({
             ingestNormalized: () => Effect.succeed([]),
           }),
@@ -2134,7 +2130,7 @@ it.effect(
                 }),
               writeIfRunCurrent: () => Effect.succeed({ committed: true, storedEvents: [] }),
             }),
-            IdAllocator.layer,
+            Layer.merge(IdAllocator.layer, ThreadCommandExecutor.layer),
             Layer.mock(ProviderEventIngestor.ProviderEventIngestorV2)({
               ingestNormalized: (input) =>
                 Ref.update(ingested, (current) => [...current, input.event]).pipe(Effect.as([])),
@@ -2711,6 +2707,8 @@ it.effect("records a provider's input rejection at turn start in the terminal er
   }),
 );
 
+registerCompactUnsupportedCase(captureRootRunTermination);
+
 it.effect.each(["failure", "defect", "interrupt-failure", "ownership-lost"] as const)(
   "stops the live provider and background work before settling an ingestion %s",
   (failureMode) =>
@@ -3224,6 +3222,7 @@ export function captureRootRunTermination(input: {
   >;
   readonly startTurn?: ProviderAdapter.ProviderAdapterV2SessionRuntime["startTurn"];
   readonly interruptTurn?: ProviderAdapter.ProviderAdapterV2SessionRuntime["interruptTurn"];
+  readonly messageText?: string;
   readonly initialProviderTurnId?: ProviderTurnId | null;
   readonly refreshAfterTurn?: Effect.Effect<void>;
   readonly shouldStartProviderTurn?: RunExecutionService.RunExecutionServiceV2StartRootRunInput["shouldStartProviderTurn"];
@@ -3312,7 +3311,7 @@ export function captureRootRunTermination(input: {
                 return { committed: true, storedEvents: [] };
               }),
           }),
-          IdAllocator.layer,
+          Layer.merge(IdAllocator.layer, ThreadCommandExecutor.layer),
           Layer.mock(ProviderEventIngestor.ProviderEventIngestorV2)({
             ingestNormalized: input.ingestNormalized ?? (() => Effect.succeed([])),
           }),
@@ -3336,6 +3335,7 @@ export function captureRootRunTermination(input: {
         appThread: rootAppThread(ids.threadId),
         providerSessionId: ProviderSessionId.make(`session:${input.key}`),
         session: {
+          driver,
           events: Stream.empty,
           subscribeEvents: Effect.succeed({
             events:
@@ -3413,7 +3413,7 @@ export function captureRootRunTermination(input: {
           : { loadRunInterruptReason: input.loadRunInterruptReason }),
         message: {
           messageId: MessageId.make(`message:${input.key}`),
-          text: "interrupt projection",
+          text: input.messageText ?? "interrupt projection",
           attachments: [],
           createdBy: "user",
           creationSource: "web",
@@ -3500,7 +3500,7 @@ function runBackgroundItemScenario(
               }),
             writeIfRunCurrent: () => Effect.succeed({ committed: true, storedEvents: [] }),
           }),
-          IdAllocator.layer,
+          Layer.merge(IdAllocator.layer, ThreadCommandExecutor.layer),
           Layer.mock(ProviderEventIngestor.ProviderEventIngestorV2)({
             ingestNormalized: (input) =>
               Effect.gen(function* () {
@@ -3747,7 +3747,7 @@ it.effect.each(["accepted", "rejected", "skipped", "compact"] as const)(
               writeWithEffects: () => Effect.succeed([]),
               writeIfRunCurrent: () => Effect.succeed({ committed: true, storedEvents: [] }),
             }),
-            IdAllocator.layer,
+            Layer.merge(IdAllocator.layer, ThreadCommandExecutor.layer),
             Layer.mock(ProviderEventIngestor.ProviderEventIngestorV2)({
               ingestNormalized: () => Effect.succeed([]),
             }),

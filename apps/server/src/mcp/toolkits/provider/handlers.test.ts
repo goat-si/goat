@@ -44,7 +44,7 @@ it.effect.each([undefined, "box"])("uses one routing entry point for host=%s", (
     const registered = McpHttpServer.toolkitRegistration(ProviderToolkit, Handlers.layer).pipe(
       Layer.provide(Layer.mock(AcpSessionService.AcpSessionService)({})),
       Layer.provide(layerPermissionProfilesOff),
-      Layer.provideMerge(McpServer.McpServer.layer),
+      Layer.provideMerge(McpHttpServer.layerInProcessMcpServer),
       Layer.provide(liveThreadsLayer),
       Layer.provide(Layer.mock(HomeRequests.CodexHomeRequests)({})),
       Layer.provide(Layer.mock(HostSync.ProviderHostSync)({})),
@@ -91,7 +91,7 @@ it.effect(
       const registered = McpHttpServer.toolkitRegistration(ProviderToolkit, Handlers.layer).pipe(
         Layer.provide(Layer.mock(AcpSessionService.AcpSessionService)({})),
         Layer.provide(layerPermissionProfilesOff),
-        Layer.provideMerge(McpServer.McpServer.layer),
+        Layer.provideMerge(McpHttpServer.layerInProcessMcpServer),
         Layer.provide(liveThreadsLayer),
         Layer.provide(Layer.mock(HomeRequests.CodexHomeRequests)({})),
         Layer.provide(Layer.mock(HostSync.ProviderHostSync)({})),
@@ -153,7 +153,7 @@ it.effect(
       const registered = McpHttpServer.toolkitRegistration(ProviderToolkit, Handlers.layer).pipe(
         Layer.provide(Layer.mock(AcpSessionService.AcpSessionService)({})),
         Layer.provide(layerPermissionProfilesOff),
-        Layer.provideMerge(McpServer.McpServer.layer),
+        Layer.provideMerge(McpHttpServer.layerInProcessMcpServer),
         Layer.provide(liveThreadsLayer),
         Layer.provide(Layer.mock(Routing.ProviderDiagnosisRouting)({})),
         Layer.provide(Layer.mock(HostSync.ProviderHostSync)({})),
@@ -211,7 +211,7 @@ const settingsServer = (manage: ProviderSettingsService.ProviderSettings["Servic
   McpHttpServer.toolkitRegistration(ProviderToolkit, Handlers.layer).pipe(
     Layer.provide(Layer.mock(AcpSessionService.AcpSessionService)({})),
     Layer.provide(layerPermissionProfilesOff),
-    Layer.provideMerge(McpServer.McpServer.layer),
+    Layer.provideMerge(McpHttpServer.layerInProcessMcpServer),
     Layer.provide(liveThreadsLayer),
     Layer.provide(Layer.mock(Routing.ProviderDiagnosisRouting)({})),
     Layer.provide(Layer.mock(HostSync.ProviderHostSync)({})),
@@ -308,7 +308,7 @@ const failureOf = (
     const registered = McpHttpServer.toolkitRegistration(ProviderToolkit, Handlers.layer).pipe(
       Layer.provide(Layer.mock(AcpSessionService.AcpSessionService)({})),
       Layer.provide(layerPermissionProfilesOff),
-      Layer.provideMerge(McpServer.McpServer.layer),
+      Layer.provideMerge(McpHttpServer.layerInProcessMcpServer),
       Layer.provide(liveThreadsLayer),
       Layer.provide(Layer.mock(ProviderSettingsService.ProviderSettings)({})),
       Layer.provide(Layer.mock(HomeRequests.CodexHomeRequests)({})),

@@ -29,8 +29,10 @@ import {
   usableRoutes,
 } from "./routes.ts";
 import * as RpcSession from "../rpc/session.ts";
+import * as ClientCapabilities from "../platform/capabilities.ts";
 import { issueRemoteWebSocketTicket } from "../authorization/remote.ts";
 import { fetchRemoteEnvironmentDescriptor } from "../environment/descriptor.ts";
+import { classifySocketFailure } from "./sessionEndedCheck.ts";
 import { withSshConnectionTiming } from "./sshTiming.ts";
 
 export type ConnectionDriverProgress =
@@ -196,6 +198,7 @@ export const make = Effect.gen(function* () {
   const resolver = yield* ConnectionResolver.ConnectionResolver;
   const sessions = yield* RpcSession.RpcSessionFactory;
   const httpClient = yield* HttpClient.HttpClient;
+  const primaryAuth = yield* ClientCapabilities.PrimaryEnvironmentAuth;
 
   // The descriptor is public, so this sends no credential to whatever
   // answers at a saved LAN address on a different network.
@@ -269,10 +272,19 @@ export const make = Effect.gen(function* () {
             yield* reportProgress({ stage: "synchronizing", routeId, prepared });
             yield* session.ready;
             return session;
-          }).pipe((effect) =>
-            route.target._tag === "SshConnectionTarget"
-              ? withSshConnectionTiming("ready")(effect)
-              : effect,
+          }).pipe(
+            Effect.catchTags({
+              ConnectionTransientError: (failure) =>
+                classifySocketFailure(prepared, failure, {
+                  sessionEnded: primaryAuth.sessionEnded,
+                  checkHost,
+                  timeoutMs: ROUTE_CHECK_TIMEOUT_MS,
+                }),
+            }),
+            (effect) =>
+              route.target._tag === "SshConnectionTarget"
+                ? withSshConnectionTiming("ready")(effect)
+                : effect,
           );
           const openProbeSocket = Effect.gen(function* () {
             let fresh = prepared;

@@ -1,4 +1,4 @@
-import { describe, expect, it } from "@effect/vitest";
+import { assert, describe, expect, it } from "@effect/vitest";
 import * as M from "@goat/contracts";
 import * as Effect from "effect/Effect";
 import * as Schema from "effect/Schema";
@@ -59,7 +59,12 @@ const conflict = M.ResolveMemoryConflictInput.make({
 });
 const result = { text: "Synthetic result", assertionKind: "inference" as const, evidence: [] };
 
-import { fromRunner, outputDecodeOptions, type Runner } from "./textGenerationOperations.ts";
+import {
+  decodeJsonReply,
+  fromRunner,
+  outputDecodeOptions,
+  type Runner,
+} from "./textGenerationOperations.ts";
 import { withMemoryExecution, type MemorySelectedRunner } from "./memoryGenerationRunner.ts";
 describe("memory shared operations", () => {
   const legacy: Runner = (request) =>
@@ -314,3 +319,26 @@ describe("memory shared operations", () => {
     }),
   );
 });
+
+// regression: #23726 a reply that echoes the schema key replaced the seed title with "title"
+it.effect("fails a thread title reply that is only the schema key", () =>
+  Effect.gen(function* () {
+    const textGeneration = fromRunner("Stub", (request) =>
+      decodeJsonReply(request, "Stub", '{"title":"title","needsRefinement":false}'),
+    );
+
+    const outcome = yield* textGeneration
+      .generateThreadTitle({
+        cwd: process.cwd(),
+        message: "$implement Issue #140",
+        modelSelection: {
+          instanceId: M.ProviderInstanceId.make("pi"),
+          model: "anthropic/claude-haiku-4-5",
+        },
+      })
+      .pipe(Effect.match({ onFailure: (error) => error, onSuccess: (result) => result }));
+
+    assert.instanceOf(outcome, M.TextGenerationError);
+    assert.strictEqual(outcome.operation, "generateThreadTitle");
+  }),
+);

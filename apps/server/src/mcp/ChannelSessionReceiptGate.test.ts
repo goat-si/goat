@@ -243,7 +243,7 @@ it.effect.each(["direct", "call", "eval"] as const)(
             }),
           ),
           Layer.provide(Layer.mock(HostThreadsMcpService.HostThreadsMcpService)({})),
-          Layer.provideMerge(McpServer.McpServer.layer),
+          Layer.provideMerge(McpHttpServer.layerInProcessMcpServer),
           Layer.provide(UserDocs.layer),
           Layer.provide(NodeServices.layer),
           Layer.provideMerge(testLayer),
@@ -435,7 +435,7 @@ it.effect(
       expect(writes).toBe(1);
     }).pipe(
       Effect.provide(
-        // Only what McpHttpServer.layer provides: the test supplies no receipt gate.
+        // Only what McpHttpServer.layerMcpTransport provides: the test supplies no receipt gate.
         McpHttpServer.provideAdmission(McpHttpServer.catalogRegistrations.note).pipe(
           Layer.provide(
             Layer.mock(Notes.NotesService)({
@@ -446,7 +446,7 @@ it.effect(
                 }),
             }),
           ),
-          Layer.provideMerge(McpServer.McpServer.layer),
+          Layer.provideMerge(McpHttpServer.layerInProcessMcpServer),
           Layer.provide(ServerSettings.layerTest()),
           Layer.provideMerge(
             Layer.mergeAll(

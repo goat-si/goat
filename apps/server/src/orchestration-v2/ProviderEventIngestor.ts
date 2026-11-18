@@ -1,4 +1,5 @@
 import { withAgentOom } from "./agentOomFailure.ts";
+import { providerTurnAnalyticsProperties } from "./providerTurnAnalytics.ts";
 import { handedOffSurvivorTurns } from "./goat/CodexSurvivorHandoff.ts";
 import {
   NodeId,
@@ -7,7 +8,6 @@ import {
   OrchestrationV2StoredEvent,
   type OrchestrationV2PlanArtifact,
   type OrchestrationV2Run,
-  type OrchestrationV2ProviderTurn,
   type OrchestrationV2Subagent,
   type OrchestrationV2ThreadProjection,
   type OrchestrationV2TurnItem,
@@ -35,12 +35,11 @@ import * as SqlError from "effect/sql/SqlError";
 
 import { AgentScope } from "@goat/shared/AgentScope";
 import { isCommandActions, parseCommandActions } from "@goat/shared/commandActions";
-import { isTemporaryWorktreeBranch } from "@goat/shared/git";
-import { getModelSelectionStringOptionValue, modelSelectionsEqual } from "@goat/shared/model";
+import { modelSelectionsEqual } from "@goat/shared/model";
 import * as AnalyticsService from "../telemetry/AnalyticsService.ts";
-import { BUNDLED_MODEL_MANIFEST } from "../provider/ModelManifest.ts";
 import * as GitVcsDriver from "../vcs/GitVcsDriver.ts";
 import * as ProviderInstanceRegistry from "../provider/ProviderInstanceRegistry.ts";
+import { UsageLimitResetFallback } from "../usage/UsageLimitSources.ts";
 import * as EventSink from "./EventSink.ts";
 import * as ProjectionStore from "./ProjectionStore.ts";
 import * as IdAllocator from "@goat/provider-core/server/IdAllocator";
@@ -132,58 +131,6 @@ export const layerAnalytics = Layer.effect(
     };
   }),
 );
-
-function providerTurnAnalyticsProperties(input: {
-  readonly driver: ProviderAdapter.ProviderAdapterV2Event["driver"];
-  readonly providerTurn: OrchestrationV2ProviderTurn;
-  readonly context?: ProviderTurnAnalyticsContext;
-}): Readonly<Record<string, unknown>> {
-  const usage = input.providerTurn.turnTokenUsage;
-  const observedModel = usage?.models?.length === 1 ? usage.models[0] : undefined;
-  const catalog = BUNDLED_MODEL_MANIFEST.providers?.[input.driver];
-  const confirmedModel =
-    observedModel === undefined
-      ? undefined
-      : catalog?.models.find(
-          (model) => model.slug === observedModel || model.aliases?.includes(observedModel),
-        )?.slug;
-  const modelSelection = input.context?.modelSelection;
-  const effort = modelSelection
-    ? (getModelSelectionStringOptionValue(modelSelection, "reasoningEffort") ??
-      getModelSelectionStringOptionValue(modelSelection, "effort"))
-    : undefined;
-  return {
-    provider: input.driver,
-    terminalStatus: input.providerTurn.status,
-    usageStatus: usage?.usageStatus ?? "unavailable",
-    usageScope: usage?.usageScope ?? "main_agent",
-    ...(usage ? { hasSubagents: usage.hasSubagents } : {}),
-    ...(usage?.inputTokens === undefined ? {} : { inputTokens: usage.inputTokens }),
-    ...(usage?.cachedInputTokens === undefined
-      ? {}
-      : { cachedInputTokens: usage.cachedInputTokens }),
-    ...(usage?.cacheCreationTokens === undefined
-      ? {}
-      : { cacheCreationTokens: usage.cacheCreationTokens }),
-    ...(usage?.outputTokens === undefined ? {} : { outputTokens: usage.outputTokens }),
-    ...(usage?.reasoningTokens === undefined ? {} : { reasoningTokens: usage.reasoningTokens }),
-    ...(confirmedModel ? { model: confirmedModel, mixedModels: false } : {}),
-    ...(usage?.models !== undefined && usage.models.length > 1 ? { mixedModels: true } : {}),
-    ...(effort ? { effort } : {}),
-    ...(input.context?.runtimeMode ? { runtimeMode: input.context.runtimeMode } : {}),
-    ...(input.context?.interactionMode ? { interactionMode: input.context.interactionMode } : {}),
-    ...input.context?.origin,
-    ...(input.providerTurn.startedAt && input.providerTurn.completedAt
-      ? {
-          durationMs: Math.max(
-            0,
-            DateTime.toEpochMillis(input.providerTurn.completedAt) -
-              DateTime.toEpochMillis(input.providerTurn.startedAt),
-          ),
-        }
-      : {}),
-  };
-}
 
 type TodoListPlan = Extract<OrchestrationV2PlanArtifact, { readonly kind: "todo_list" }>;
 
@@ -372,6 +319,7 @@ export const layer: Layer.Layer<
     const analytics = yield* ProviderTurnAnalytics;
     const agentScope = yield* AgentScope;
     const instances = yield* ProviderInstanceRegistry.ProviderInstanceRegistry;
+    const usageLimitResets = yield* UsageLimitResetFallback;
     const scope = yield* Effect.scope;
     const completedTurnAnalytics = new Set<string>();
 
@@ -766,6 +714,35 @@ export const layer: Layer.Layer<
                 }),
               ];
             }
+            case "steer.updated": {
+              const item = yield* projections.getTurnItem({
+                threadId: input.event.threadId,
+                itemId: idAllocator.derive.userTurnItem({ messageId: input.event.messageId }),
+              });
+              if (
+                item?.type !== "user_message" ||
+                item.status === input.event.status ||
+                (item.status !== "pending" && item.status !== "completed")
+              ) {
+                return [];
+              }
+              const occurredAt = yield* DateTime.now;
+              return [
+                yield* makeDomainEvent(input, {
+                  type: "turn-item.updated",
+                  threadId: item.threadId,
+                  payload: {
+                    ...item,
+                    status: input.event.status,
+                    completedAt: input.event.status === "pending" ? null : occurredAt,
+                    updatedAt: occurredAt,
+                  },
+                  runId: item.runId,
+                  nodeId: item.nodeId,
+                  occurredAt,
+                }),
+              ];
+            }
             case "background_work.updated":
               return [];
             case "command_output.delta":
@@ -777,9 +754,39 @@ export const layer: Layer.Layer<
                 return dismissed;
               }
               const occurredAt = yield* DateTime.now;
-              const failure = yield* withAgentOom(input.threadId, input.event.failure).pipe(
+              const reported = yield* withAgentOom(input.threadId, input.event.failure).pipe(
                 Effect.provideService(AgentScope, agentScope),
               );
+              // A proxied CLI can drop the reset time; the hub still knows when its pool refills.
+              const endpoint =
+                reported.class === "usage_limit" && reported.resetAt == null
+                  ? (yield* Effect.flatMap(
+                      instances.getInstance(input.providerInstanceId),
+                      (instance) => instance?.snapshot.getSnapshot ?? Effect.undefined,
+                    ))?.auth.endpoint
+                  : undefined;
+              const hubResetAt =
+                endpoint === undefined
+                  ? null
+                  : yield* Effect.gen(function* () {
+                      // The failing run's model, which may differ from a selection changed mid-turn.
+                      const { runs } =
+                        input.runId === undefined
+                          ? { runs: [] }
+                          : yield* projections.getThreadRecords(input.threadId, ["runs"], {
+                              runIds: [input.runId],
+                            });
+                      return (
+                        runs[0]?.modelSelection ??
+                        (yield* projections.getThread(input.threadId)).modelSelection
+                      ).model;
+                    }).pipe(
+                      Effect.orElseSucceed(() => null),
+                      Effect.flatMap((model) =>
+                        usageLimitResets.resetAt(input.event.driver, endpoint, model),
+                      ),
+                    );
+              const failure = hubResetAt === null ? reported : { ...reported, resetAt: hubResetAt };
               return [
                 ...dismissed,
                 yield* makeDomainEvent(input, {
@@ -892,12 +899,7 @@ export const layer: Layer.Layer<
                   );
                   if (created?.event.type !== "thread.created") return storedEvents;
                   const child = created.event.payload;
-                  if (
-                    child.worktreePath === null ||
-                    child.branch === null ||
-                    !isTemporaryWorktreeBranch(child.branch)
-                  )
-                    return storedEvents;
+                  if (child.worktreePath === null || child.branch === null) return storedEvents;
                   // Git renames before scanning committed threads. If that scan missed this
                   // creation, HEAD already has the new name, even if the parent moved away.
                   const branch = yield* git.resolveBranchName(child.worktreePath, "HEAD");

@@ -7,6 +7,7 @@ import { expect, it, vi } from "vite-plus/test";
 const state = vi.hoisted(() => ({
   canManage: true,
   restore: vi.fn(async (_bot: unknown) => true),
+  connected: true,
 }));
 vi.mock("react-native", () => ({
   View: ({ children }: { children?: ReactNode }) => <div>{children}</div>,
@@ -15,12 +16,19 @@ vi.mock("react-native", () => ({
     children,
     onPress,
     disabled,
+    accessibilityHint,
   }: {
     children?: ReactNode;
     onPress?: () => void;
     disabled?: boolean;
+    accessibilityHint?: string;
   }) => (
-    <button type="button" onClick={onPress} disabled={disabled}>
+    <button
+      type="button"
+      onClick={onPress}
+      disabled={disabled}
+      aria-description={accessibilityHint}
+    >
       {children}
     </button>
   ),
@@ -51,7 +59,13 @@ async function mount() {
     root.render(
       <MobileDeletedBotBanner
         member={scout}
-        onRestore={state.canManage ? () => state.restore(scout) : undefined}
+        onRestore={
+          !state.canManage
+            ? undefined
+            : state.connected
+              ? () => state.restore(scout)
+              : { unavailable: "Unavailable while Scout's computer is offline" }
+        }
       />,
     ),
   );
@@ -91,4 +105,23 @@ it("offers no Restore to someone who cannot manage bots", async () => {
   expect(container.textContent).toContain("Scout was deleted");
   expect(restore()).toBeUndefined();
   await act(async () => root.unmount());
+});
+
+it("offline, Restore stays in view, disabled with the reason; back online it restores", async () => {
+  state.canManage = true;
+  state.connected = false;
+  state.restore.mockClear();
+  const { root, restore } = await mount();
+  expect(restore()?.disabled).toBe(true);
+  expect(restore()?.getAttribute("aria-description")).toBe(
+    "Unavailable while Scout's computer is offline",
+  );
+  await act(async () => restore()?.click());
+  expect(state.restore).not.toHaveBeenCalled();
+  await act(async () => root.unmount());
+  state.connected = true;
+  const back = await mount();
+  await act(async () => back.restore()?.click());
+  expect(state.restore).toHaveBeenCalledTimes(1);
+  await act(async () => back.root.unmount());
 });

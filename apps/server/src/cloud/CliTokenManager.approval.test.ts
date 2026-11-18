@@ -1,5 +1,6 @@
 // @effect-diagnostics nodeBuiltinImport:off - The fixture holds a real TCP port.
 import * as NodeNet from "node:net";
+import * as NodeCrypto from "@effect/platform-node/NodeCrypto";
 import * as NodeServices from "@effect/platform-node/NodeServices";
 import { describe, expect, it } from "@effect/vitest";
 import * as Cause from "effect/Cause";
@@ -85,6 +86,7 @@ describe("CLI approval and OAuth callback join", () => {
                 Terminal.make({
                   columns: Effect.succeed(80),
                   rows: Effect.succeed(24),
+                  size: Effect.die("These tests never read the terminal size."),
                   readInput: Effect.succeed(input),
                   readLine: Effect.die("unused"),
                   display: () => Effect.void,
@@ -135,6 +137,7 @@ describe("CLI approval and OAuth callback join", () => {
           Layer.mergeAll(
             ConfigProvider.layer(ConfigProvider.fromEnv({ env })),
             NodeServices.layer,
+            NodeCrypto.layer,
             FetchHttpClient.layer,
           ),
         ),
@@ -168,6 +171,7 @@ it.live("ordinary CLI login obtains only withdrawal identity without minting a l
             Terminal.make({
               columns: Effect.succeed(80),
               rows: Effect.succeed(24),
+              size: Effect.die("These tests never read the terminal size."),
               readInput: Effect.succeed(input),
               readLine: Effect.die("unused"),
               display: () => Effect.void,
@@ -220,6 +224,7 @@ it.live("ordinary CLI login obtains only withdrawal identity without minting a l
       Layer.mergeAll(
         ConfigProvider.layer(ConfigProvider.fromEnv({ env })),
         NodeServices.layer,
+        NodeCrypto.layer,
         FetchHttpClient.layer,
       ),
     ),

@@ -190,4 +190,40 @@ export const originEntries = {
       openWorldHint: true,
     },
   }),
+  "origin.force_stop": entry({
+    resource: "origin",
+    verb: "force_stop",
+    name: "goat_origin_force_stop",
+    toolkit: "remoteReport",
+    summary: "Force stop the run of a task thread an origin launched here.",
+    description:
+      "Force stop the bound thread's run once it ignored its origin's cancel: kill its agent and end the run. The read key authorizes only that thread; every refusal stops nothing.",
+    guide:
+      "Origins call this when an agent cancels a remote task with force: true, after the host advertised features.taskForceStop. Pass the launch correlation id, its read key, the bound thread id, and the task's run id. A run whose Stop is not unanswered refuses as not_unresponsive, a newer run as superseded, a cloud agent as cloud, and a thread above this session's mode ceiling as a mode refusal.",
+    effect: "destructive",
+    capability: "none",
+    capabilityReason:
+      "The correlation read key authorizes force stopping only the run of the thread that binding names.",
+    hostRoutable: false,
+    requires: "either",
+    dryRun: "unsupported",
+    humanSteps: [],
+    idempotencyReason:
+      "Force stop acts only on a live run whose Stop went unanswered; a repeat finds that run ended and refuses as not_unresponsive.",
+    examples: [
+      {
+        title: "Force stop an unresponsive remote task run",
+        args: {
+          correlationId: "launch-1",
+          readKey: "ab".repeat(32),
+          threadId: "thread:bound",
+          runId: "run:task",
+        },
+      },
+    ],
+    annotations: {
+      idempotentHint: true,
+      openWorldHint: true,
+    },
+  }),
 } as const;

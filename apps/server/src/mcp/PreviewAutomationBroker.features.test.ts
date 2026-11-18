@@ -1,4 +1,4 @@
-import { NodeServices } from "@effect/platform-node";
+import { NodeCrypto, NodeServices } from "@effect/platform-node";
 import { expect, it } from "@effect/vitest";
 import {
   EnvironmentId,
@@ -10,6 +10,7 @@ import {
 } from "@goat/contracts";
 import * as Deferred from "effect/Deferred";
 import * as Effect from "effect/Effect";
+import * as Layer from "effect/Layer";
 import * as Stream from "effect/Stream";
 import * as PreviewAutomationBroker from "./PreviewAutomationBroker.ts";
 
@@ -31,7 +32,9 @@ it.effect.each(["ordinary", "assigned", "exact", "serverOnly"] as const)(
   (route) =>
     Effect.scoped(
       Effect.gen(function* () {
-        const broker = yield* PreviewAutomationBroker.make.pipe(Effect.provide(NodeServices.layer));
+        const broker = yield* PreviewAutomationBroker.make.pipe(
+          Effect.provide(Layer.mergeAll(NodeServices.layer, NodeCrypto.layer)),
+        );
         const ready = yield* Deferred.make<string>();
         const tabId = PreviewTabId.make("tab-features");
         const clientId = SERVER_BROWSER_AUTOMATION_CLIENT_ID;
@@ -84,7 +87,9 @@ it.effect.each(["ordinary", "assigned", "exact", "serverOnly"] as const)(
   (route) =>
     Effect.scoped(
       Effect.gen(function* () {
-        const broker = yield* PreviewAutomationBroker.make.pipe(Effect.provide(NodeServices.layer));
+        const broker = yield* PreviewAutomationBroker.make.pipe(
+          Effect.provide(Layer.mergeAll(NodeServices.layer, NodeCrypto.layer)),
+        );
         const ready = yield* Deferred.make<string>();
         const tabId = PreviewTabId.make("tab-capable");
         const clientId = SERVER_BROWSER_AUTOMATION_CLIENT_ID;
@@ -137,7 +142,9 @@ it.effect.each(["ordinary", "assigned", "exact", "serverOnly"] as const)(
 it.effect("carries a closed popup's opener from the host to the caller's error", () =>
   Effect.scoped(
     Effect.gen(function* () {
-      const broker = yield* PreviewAutomationBroker.make.pipe(Effect.provide(NodeServices.layer));
+      const broker = yield* PreviewAutomationBroker.make.pipe(
+        Effect.provide(Layer.mergeAll(NodeServices.layer, NodeCrypto.layer)),
+      );
       const ready = yield* Deferred.make<string>();
       const tabId = PreviewTabId.make("tab-popup");
       const clientId = SERVER_BROWSER_AUTOMATION_CLIENT_ID;
@@ -226,7 +233,9 @@ it.effect.each(["ordinary", "assigned", "exact", "serverOnly"] as const)(
   (route) =>
     Effect.scoped(
       Effect.gen(function* () {
-        const broker = yield* PreviewAutomationBroker.make.pipe(Effect.provide(NodeServices.layer));
+        const broker = yield* PreviewAutomationBroker.make.pipe(
+          Effect.provide(Layer.mergeAll(NodeServices.layer, NodeCrypto.layer)),
+        );
         const { clientId, connectionId, tabId } = yield* connectHost(broker, false);
         if (route === "assigned") yield* broker.invoke({ scope, operation: "status", input: {} });
         const target =
@@ -251,7 +260,9 @@ it.effect.each(["ordinary", "assigned", "exact", "serverOnly"] as const)(
 it.effect("the in-process server browser receives server-only action and wait fields", () =>
   Effect.scoped(
     Effect.gen(function* () {
-      const broker = yield* PreviewAutomationBroker.make.pipe(Effect.provide(NodeServices.layer));
+      const broker = yield* PreviewAutomationBroker.make.pipe(
+        Effect.provide(Layer.mergeAll(NodeServices.layer, NodeCrypto.layer)),
+      );
       yield* connectHost(broker, true);
       for (const request of SERVER_ONLY_REQUESTS)
         expect(yield* broker.invoke({ scope, ...request })).toMatchObject({

@@ -3,7 +3,9 @@ import type {
   AuthClientMetadata,
   AuthEnvironmentScope,
   AuthGrantScope,
+  AuthOtherClientSessionsRevokeResult,
   AuthPairingCredentialResult,
+  AuthRevokeOthersKeep,
   ServerAuthSessionMethod,
   AuthSessionId,
   AuthSessionState,
@@ -125,6 +127,7 @@ export interface ServerClientSessionRecord {
   readonly lastConnectedAt: string | null;
   readonly connected: boolean;
   readonly current: boolean;
+  readonly keptByRevokeOthers?: AuthRevokeOthersKeep;
 }
 
 type ServerAuthGateState =
@@ -187,6 +190,11 @@ export async function fetchSessionState(): Promise<AuthSessionState> {
       });
     }
   });
+}
+
+/** Whether this tab signed in to its own server, so it holds that server's credential. */
+export function isPrimaryAuthGateAuthenticated(): boolean {
+  return resolvedAuthenticatedGateState?.status === "authenticated";
 }
 
 function readHttpApiStatus(error: unknown): number | null {
@@ -408,14 +416,13 @@ export async function revokeServerClientSession(sessionId: AuthSessionId): Promi
   }
 }
 
-export async function revokeOtherServerClientSessions(): Promise<number> {
+export async function revokeOtherServerClientSessions(): Promise<AuthOtherClientSessionsRevokeResult> {
   try {
-    const result = await runPrimaryHttp(
+    return await runPrimaryHttp(
       PrimaryEnvironmentHttpClient.pipe(
         Effect.flatMap((client) => client.auth.revokeOtherClients({ headers: {} })),
       ),
     );
-    return result.revokedCount;
   } catch (error) {
     throw PrimaryEnvironmentRequestError.fromCause({
       operation: "revoke-other-client-sessions",

@@ -338,6 +338,10 @@ export const FAILURE_CLASSES: Readonly<Record<string, FailureClass>> = {
   request_failed: c("internal"),
   settings_failed: c("internal"),
   hub_rejected: c("internal"),
+  // PullRequestUnavailableError: the host's CLI is missing or signed out; fix the host, then retry.
+  "cli-missing": { code: "failed_precondition", nothingRan: true, releasesKey: true },
+  "cli-unauthenticated": { code: "unauthenticated", nothingRan: true, releasesKey: true },
+  "provider-unsupported": before("failed_precondition"),
   PullRequestUrlInvalidError: before("invalid_request"),
   PullRequestTargetIncompleteError: before("invalid_request"),
   PullRequestHostRequiredError: before("invalid_request"),

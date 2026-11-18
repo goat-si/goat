@@ -8,6 +8,10 @@ import { useEffect, useEffectEvent, useRef, useState } from "react";
 
 import { previewBridge } from "~/components/preview/previewBridge";
 import { usePreviewBridge } from "~/components/preview/usePreviewBridge";
+import {
+  preventThumbButtonFocus,
+  takeThumbButtonNavigation,
+} from "~/components/preview/thumbButtons";
 import { useClientSettingsHydrated } from "~/hooks/useSettings";
 import { cn, isMacPlatform } from "~/lib/utils";
 
@@ -176,16 +180,24 @@ export function HostedBrowserWebview(props: {
         if (!disposed) remountCrashedWebview();
       }, recovery.delayMs);
     };
-    // Guest clicks only emit focus here; replay pointerdown to dismiss host popups.
+    // Guest clicks never reach this document, so replay a pointerdown to dismiss host popups.
+    // The guest preload reports each press, since the guest does not always take focus.
     const dismissHostPopups = () => {
       webview.dispatchEvent(
         new PointerEvent("pointerdown", { bubbles: true, pointerType: "mouse" }),
       );
     };
+    const guestPointerDown = (event: Event) => {
+      // Mirrors POINTER_DOWN_HOST_CHANNEL in apps/desktop/src/preview/GuestProtocol.ts.
+      if ((event as Event & { channel?: string }).channel === "preview:pointer-down") {
+        dismissHostPopups();
+      }
+    };
     webview.addEventListener("did-attach", register);
     webview.addEventListener("dom-ready", register);
     webview.addEventListener("render-process-gone", recoverGuest);
     webview.addEventListener("focus", dismissHostPopups);
+    webview.addEventListener("ipc-message", guestPointerDown);
     register();
     return () => {
       disposed = true;
@@ -194,6 +206,7 @@ export function HostedBrowserWebview(props: {
       webview.removeEventListener("dom-ready", register);
       webview.removeEventListener("render-process-gone", recoverGuest);
       webview.removeEventListener("focus", dismissHostPopups);
+      webview.removeEventListener("ipc-message", guestPointerDown);
     };
   }, [
     clientSettingsHydrated,
@@ -296,6 +309,14 @@ export function HostedBrowserWebview(props: {
 
   if (!clientSettingsHydrated || !config) return null;
 
+  // This fixed wrapper sits outside the right panel shell, so it takes thumb presses on host
+  // chrome itself. Presses inside the guest never reach this DOM; the desktop preview manager
+  // navigates those.
+  const navigateThumb = (direction: "back" | "forward") => {
+    if (direction === "back") void previewBridge?.goBack(runtimeTabId);
+    else void previewBridge?.goForward(runtimeTabId);
+  };
+
   const renderingActive = active || backgroundActivity || pictureInPicture || recordingActive;
   const wrapperStyle = resolveHostedBrowserWebviewWrapperStyle({
     active,
@@ -314,6 +335,8 @@ export function HostedBrowserWebview(props: {
       className="fixed overflow-hidden bg-muted/35"
       style={{ ...wrapperStyle, overscrollBehavior: "contain" }}
       onScroll={syncContentPresentation}
+      onMouseDown={preventThumbButtonFocus}
+      onMouseUp={(event) => takeThumbButtonNavigation(event, navigateThumb)}
       data-preview-rendering={renderingActive ? "active" : "suspended"}
       data-preview-viewport={runtimeTabId}
     >

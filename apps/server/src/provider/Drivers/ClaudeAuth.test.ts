@@ -1,8 +1,10 @@
+import * as NodeCrypto from "@effect/platform-node/NodeCrypto";
 import * as NodeServices from "@effect/platform-node/NodeServices";
 import { assert, it } from "@effect/vitest";
 import { ClaudeSettings, ProviderInstanceId, type ProviderAuthState } from "@goat/contracts";
 import type { PtyProcess, PtySpawnInput } from "@goat/shared/PtyAdapter";
 import * as Effect from "effect/Effect";
+import * as Layer from "effect/Layer";
 import * as Option from "effect/Option";
 import * as Schema from "effect/Schema";
 import * as Stream from "effect/Stream";
@@ -53,7 +55,7 @@ it.effect.each([0, 1])("Claude login requires auth status success (%s)", (status
           Effect.sync(() => {
             assert.strictEqual(command._tag, "StandardCommand");
             if (command._tag === "StandardCommand") {
-              commands.push(command.args);
+              commands.push(command.args.map(String));
               assert.strictEqual(command.options.cwd, "/sandbox/state");
               assert.strictEqual(command.options.stdout, "ignore");
               assert.strictEqual(command.options.stderr, "ignore");
@@ -92,5 +94,5 @@ it.effect.each([0, 1])("Claude login requires auth status success (%s)", (status
       assert.lengthOf(commands, 2);
       assert.deepEqual(commands[1], ["auth", "logout"]);
     }
-  }).pipe(Effect.scoped, Effect.provide(NodeServices.layer)),
+  }).pipe(Effect.scoped, Effect.provide(Layer.mergeAll(NodeServices.layer, NodeCrypto.layer))),
 );

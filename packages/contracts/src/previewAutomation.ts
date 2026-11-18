@@ -32,6 +32,7 @@ import * as WaitState from "./previewWaitState.ts";
 import {
   PreviewAutomationFeature,
   PreviewAutomationConsoleEntry,
+  PreviewAutomationLoadError,
   PreviewAutomationNetworkEntry,
   PreviewAutomationPageError,
 } from "./previewAutomationSnapshot.ts";
@@ -72,15 +73,19 @@ export const ServerBrowserReadiness = Schema.Struct({
 });
 export type ServerBrowserReadiness = typeof ServerBrowserReadiness.Type;
 
+const VISIBLE_DESCRIPTION =
+  "True while a client shows this tab: a streamed live view, or the desktop app's own browser panel.";
+
 export const PreviewAutomationStatus = Schema.Struct({
   available: Schema.Boolean,
   /** On the server browser's status without a tab; desktop hosts and older servers omit it. */
   browser: ForwardCompatibleOptional(ServerBrowserReadiness),
-  visible: Schema.Boolean,
+  visible: Schema.Boolean.annotate({ description: VISIBLE_DESCRIPTION }),
   tabId: Schema.NullOr(PreviewTabId),
   url: Schema.NullOr(Schema.String),
   title: Schema.NullOr(Schema.String),
   loading: Schema.Boolean,
+  loadError: Schema.optional(PreviewAutomationLoadError),
   /** Server hosts: moves on every main-frame navigation, so screenshot points from an older one fail. */
   documentGeneration: Schema.optional(Schema.Number),
   control: Schema.optional(PreviewAutomationTabControl),
@@ -121,14 +126,13 @@ export const PreviewAutomationStatus = Schema.Struct({
         openerTabId: Schema.optional(PreviewTabId),
         owner: Schema.optional(PreviewAutomationTabOwner),
         ownedByCaller: Schema.optional(Schema.Boolean),
-        visible: Schema.optional(Schema.Boolean),
+        visible: Schema.optional(Schema.Boolean.annotate({ description: VISIBLE_DESCRIPTION })),
         profileId: Schema.optional(BrowserProfileId),
         session: Schema.optional(Session.PreviewTabSession),
       }),
     ),
   ),
-  profiles: Schema.optional(Schema.Array(Session.PreviewAutomationProfile)),
-  defaultProfileId: Schema.optional(BrowserProfileId),
+  ...Session.PreviewAutomationProfileListFields,
   session: Schema.optional(Session.PreviewTabSession),
 });
 export type PreviewAutomationStatus = typeof PreviewAutomationStatus.Type;
@@ -458,11 +462,6 @@ export const PreviewAutomationEvaluateInput = Schema.Struct({
     .check(Schema.isNonEmpty())
     .check(Schema.isMaxLength(64_000)),
   awaitPromise: Schema.optional(Schema.Boolean.annotate({ description: "Default true." })),
-  returnByValue: Schema.optional(
-    Schema.Boolean.annotate({
-      description: "False returns a ref. Default true.",
-    }),
-  ),
 });
 export type PreviewAutomationEvaluateInput = typeof PreviewAutomationEvaluateInput.Type;
 

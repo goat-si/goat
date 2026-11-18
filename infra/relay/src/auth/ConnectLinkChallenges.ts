@@ -8,7 +8,7 @@ import {
   RelayInternalError,
   type RelayEnvironmentLinkChallengeRequest,
 } from "@goat/contracts/relay";
-import * as Crypto from "effect/Crypto";
+import * as SecureRandom from "effect/crypto/SecureRandom";
 import * as DateTime from "effect/DateTime";
 import * as Effect from "effect/Effect";
 import * as Schema from "effect/Schema";
@@ -65,7 +65,7 @@ export const createLinkChallenge = Effect.fn("ConnectLinkChallenges.create")(fun
         const now = Math.floor((yield* DateTime.now).epochMilliseconds / 1000);
         if (!isConnectAssuranceFresh(assurance, now))
           return yield* strengthRequired("reauthentication_required");
-        const crypto = yield* Crypto.Crypto;
+        const random = yield* SecureRandom.SecureRandom;
         const tokens = yield* RelayTokens.RelayTokens;
         const expires = Math.min(
           now + 300,
@@ -77,7 +77,7 @@ export const createLinkChallenge = Effect.fn("ConnectLinkChallenges.create")(fun
           assurance,
           intent,
           ...(input.thumbprint ? { cliKeyThumbprint: input.thumbprint } : {}),
-          jti: yield* crypto.randomUUIDv4(),
+          jti: yield* random.uuidV4(),
           issuedAtEpochSeconds: now,
           expiresAtEpochSeconds: expires,
         });

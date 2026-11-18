@@ -1,3 +1,4 @@
+import * as NodeCrypto from "@effect/platform-node/NodeCrypto";
 import * as NodeServices from "@effect/platform-node/NodeServices";
 import { assert, it } from "@effect/vitest";
 import { ProviderInstanceId, type ProviderInstanceConfigMap } from "@goat/contracts";
@@ -43,7 +44,7 @@ const sessionConfigKey = (config: Record<string, unknown>) =>
             McpProviderSessions.layer,
           ),
         ),
-        Layer.provide(NodeServices.layer),
+        Layer.provide(Layer.mergeAll(NodeServices.layer, NodeCrypto.layer)),
       ),
     ),
   );
@@ -61,5 +62,5 @@ it.effect("a CODEX_HOME change under a shadow home gives Codex a new settings ke
     for (const homePath of homes) keys.push(yield* sessionConfigKey({ homePath, shadowHomePath }));
     assert.isDefined(keys[0]);
     assert.notStrictEqual(keys[0], keys[1]);
-  }).pipe(Effect.scoped, Effect.provide(NodeServices.layer)),
+  }).pipe(Effect.scoped, Effect.provide(Layer.mergeAll(NodeServices.layer, NodeCrypto.layer))),
 );

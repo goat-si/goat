@@ -27,6 +27,7 @@ import {
 import { projectLocationFlags, resolveCliAuthConfig } from "./config.ts";
 import * as CliService from "./service.ts";
 import { findWindowsShim, resolveLauncherPath } from "./update.ts";
+import { hostShellWord } from "./invocation.ts";
 
 export class CliUninstallError extends Schema.TaggedError<CliUninstallError>()(
   "CliUninstallError",
@@ -39,6 +40,7 @@ export class CliUninstallError extends Schema.TaggedError<CliUninstallError>()(
 
 export interface UninstallPlan {
   readonly service: boolean;
+  readonly otherHomeService: string | undefined;
   readonly launcher: string | undefined;
   readonly runtimeDir: string | undefined;
   /** Launcher files that sit beside `runtime/goat`, not inside it. */
@@ -128,6 +130,7 @@ const planUninstall = Effect.fn("cli.uninstall.plan")(function* (input: {
   }
   const plan: UninstallPlan = {
     service: status.supported && status.installed && servesThisHome,
+    otherHomeService: status.supported && !servesThisHome ? status.installedBaseDir : undefined,
     launcher: yield* findOwnedLauncher({ launchedAs, versionsDir }),
     runtimeDir: (yield* fs.exists(runtimeDir).pipe(Effect.orElseSucceed(() => false)))
       ? runtimeDir
@@ -171,6 +174,12 @@ const runUninstall = Effect.fn("cli.uninstall.run")(function* (input: {
   const environment = yield* HostProcess.Environment;
   const service = yield* BootService.BootService;
   const plan = yield* planUninstall({ baseDir: input.baseDir });
+  const logOtherHomeService =
+    plan.otherHomeService === undefined
+      ? Effect.void
+      : Console.log(
+          `The GOAT service serves ${plan.otherHomeService}, so it was not removed. Run goat service uninstall --base-dir ${hostShellWord(platform, plan.otherHomeService)} to remove it.`,
+        );
 
   if (
     !plan.service &&
@@ -184,6 +193,7 @@ const runUninstall = Effect.fn("cli.uninstall.run")(function* (input: {
         "  This goat runs from a Node script, so it was installed by npm or built from source. Remove it the same way (`npm uninstall -g goat`, or delete the checkout).",
       );
     }
+    yield* logOtherHomeService;
     return;
   }
 
@@ -270,4 +280,5 @@ const runUninstall = Effect.fn("cli.uninstall.run")(function* (input: {
   }
   yield* Console.log("");
   yield* Console.log("goat is uninstalled. Thanks for trying GOAT.");
+  yield* logOtherHomeService;
 });

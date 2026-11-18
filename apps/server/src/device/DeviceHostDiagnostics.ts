@@ -1,3 +1,5 @@
+import * as Schema from "effect/Schema";
+import { DeviceToolchainInstallError } from "./DeviceToolchain.ts";
 import { SshCommandError } from "@goat/ssh/errors";
 import type { DeviceHostError } from "./DeviceHost.ts";
 import { isSshWindowsHostError } from "./SshDeviceHost.ts";
@@ -22,3 +24,11 @@ export function sshProbeFailureMessage(error: DeviceHostError): string {
   if (windows) return windows.message;
   return `Connected over SSH, but the device host check failed (exit code ${cause.exitCode}).`;
 }
+
+const isToolchainInstallError = Schema.is(DeviceToolchainInstallError);
+export const actionableHostFailure = (error: DeviceHostError): string | undefined => {
+  if (error.step === "probe") return sshProbeFailureMessage(error);
+  if (isToolchainInstallError(error.cause) && error.cause.reason === "npm_not_found")
+    return error.cause.message;
+  return undefined;
+};

@@ -36,6 +36,7 @@ export function MobileBotEditSheet(props: {
       initial={bot}
       draftName={props.draftName}
       canSubmit={manage.canEdit}
+      unavailableReason={manage.connected ? undefined : manage.offlineReason}
       extraChanged={modelChanged}
       colorEditable={colorEditable}
       onClose={props.onClose}

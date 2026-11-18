@@ -138,12 +138,15 @@ const environmentId = (stateDir: string) =>
     }
   });
 
-const ledgerLayer = (dbPath: string) =>
-  ChannelLedger.layer.pipe(Layer.provide(SqlitePersistence.layerFromPath(dbPath)));
-const identityLayer = (dbPath: string) =>
+type ServerDatabase = { readonly dbPath: string; readonly serverRuntimeStatePath: string };
+const serverDatabase = (target: ServerDatabase) =>
+  SqlitePersistence.layerCliFromPath(target.dbPath, target.serverRuntimeStatePath);
+const ledgerLayer = (target: ServerDatabase) =>
+  ChannelLedger.layer.pipe(Layer.provide(serverDatabase(target)));
+const identityLayer = (target: ServerDatabase) =>
   ChannelIdentityService.layer.pipe(
     Layer.provideMerge(ChannelLedger.layer),
-    Layer.provide(SqlitePersistence.layerFromPath(dbPath)),
+    Layer.provide(serverDatabase(target)),
   );
 
 export const formatImessageStatus = (input: {
@@ -202,7 +205,7 @@ const statusCommand = Command.make("status", { baseDir: baseDirFlag }).pipe(
           ? undefined
           : yield* ChannelLedger.ChannelLedger.pipe(
               Effect.flatMap((ledger) => ledger.getImessageCursor(configured.connectionId)),
-              Effect.provide(ledgerLayer(target.dbPath)),
+              Effect.provide(ledgerLayer(target)),
             );
       let database: string =
         file !== undefined && configured === undefined ? "invalid_settings" : "not_checked";
@@ -255,7 +258,7 @@ const linkCodeCommand = Command.make("link-code", {
             file.owner,
           ),
         ),
-        Effect.provide(identityLayer(target.dbPath)),
+        Effect.provide(identityLayer(target)),
       );
       yield* Console.log(linked.code);
     }),
@@ -277,7 +280,7 @@ const unlinkCommand = Command.make("unlink", {
         Effect.flatMap((service) =>
           service.unlink({ connectionId: file.connectionId, externalActorId: handle }),
         ),
-        Effect.provide(identityLayer(target.dbPath)),
+        Effect.provide(identityLayer(target)),
       );
       yield* Console.log("iMessage identity unlinked.");
     }),

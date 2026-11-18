@@ -35,6 +35,8 @@ if (
 ) {
   adoptLegacyEnv(process.env);
   if (process.argv[2] === "__service-launcher" && process.argv.length === 3) {
+    const { installServerOutputHandlers } = await import("./cli/serverOutput.ts");
+    installServerOutputHandlers();
     const { runServiceLauncherCli } = await import("./cli/serviceLauncher.ts");
     await runServiceLauncherCli();
   } else {

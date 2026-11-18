@@ -12,6 +12,7 @@ import * as ServerConfig from "../config.ts";
 import * as ProjectStore from "../orchestration-v2/ProjectStore.ts";
 import * as ServerSettings from "../serverSettings.ts";
 import * as AgentSessionScanner from "./AgentSessionScanner.ts";
+import * as ProviderSessionRuntime from "../persistence/ProviderSessionRuntime.ts";
 
 const makeTempDir = Effect.fn("test.makeTempDir")(function* (prefix: string) {
   return yield* (yield* FileSystem.FileSystem).makeTempDirectoryScoped({ prefix });
@@ -44,6 +45,9 @@ const runRecentThreads = (input: {
       AgentSessionScanner.layer.pipe(
         Layer.provide(
           Layer.mergeAll(
+            Layer.mock(ProviderSessionRuntime.ProviderSessionRuntimeRepository)({
+              list: () => Effect.succeed([]),
+            }),
             ServerSettings.layerTest({
               providerInstances: {
                 [ProviderInstanceId.make("claudeAgent")]: {
@@ -83,9 +87,9 @@ it.layer(NodeServices.layer)("Codex inherited history", (it) => {
       const path = yield* Path.Path;
       const nowMs = Date.parse("2026-08-24T12:00:00.000Z");
       yield* TestClock.setTime(nowMs);
-      const claudeHomePath = yield* makeTempDir("t3code-claude-home-");
-      const codexHomePath = yield* makeTempDir("t3code-codex-home-");
-      const workspace = yield* makeTempDir("t3code-workspace-");
+      const claudeHomePath = yield* makeTempDir("goat-claude-home-");
+      const codexHomePath = yield* makeTempDir("goat-codex-home-");
+      const workspace = yield* makeTempDir("goat-workspace-");
       const threadId = "019a0000-0000-7000-8000-000000000001";
       const rolloutId = "019a0000-0000-7000-8000-000000000002";
       const sessionsDir = path.join(codexHomePath, "sessions", "2026", "08", "24");
@@ -173,4 +177,29 @@ it.layer(NodeServices.layer)("Codex inherited history", (it) => {
       ]);
     }),
   );
+});
+
+it("titles a Codex event after the request that follows injected setup blocks", () => {
+  const prompt = [
+    "<recommended_plugins>\nGitHub\n</recommended_plugins>",
+    "# AGENTS.md instructions for /tmp/project\n\n<INSTRUCTIONS>\nRules\n</INSTRUCTIONS>",
+    '<in-app-browser-context source="ambient-ui-state">\nTab\n</in-app-browser-context>',
+    "Fix the import titles",
+  ].join("\n");
+  const thread = AgentSessionScanner.parseAgentSessionTranscript({
+    contents: [
+      encodeTranscriptRecord({ type: "session_meta", payload: { id: "codex-session" } }),
+      encodeTranscriptRecord({
+        type: "event_msg",
+        payload: { type: "user_message", message: prompt },
+      }),
+    ].join("\n"),
+    source: "codex",
+    providerInstanceId: ProviderInstanceId.make("codex"),
+    fallbackSessionId: "fallback",
+    lastActiveAtMs: Date.parse("2026-08-25T08:00:00.000Z"),
+  });
+
+  expect(thread?.title).toBe("Fix the import titles");
+  expect(thread?.messages.map((message) => message.text)).toEqual([prompt]);
 });

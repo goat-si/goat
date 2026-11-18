@@ -4,6 +4,7 @@ import { ProviderDriverKind, ProviderInstanceId, type ProviderInstallState } fro
 import * as HostProcess from "@goat/shared/HostProcess";
 import * as Effect from "effect/Effect";
 import * as Deferred from "effect/Deferred";
+import * as Fiber from "effect/Fiber";
 import * as SubscriptionRef from "effect/SubscriptionRef";
 import * as FileSystem from "effect/FileSystem";
 import * as Layer from "effect/Layer";
@@ -62,6 +63,7 @@ const makeHarness = Effect.fn("providerInstallation.test.makeHarness")(function*
   const refreshed = yield* Deferred.make<void>();
   const observed = yield* Deferred.make<void>();
   const listening = yield* Deferred.make<void>();
+  const checked = yield* Deferred.make<void>();
   const installationState = yield* SubscriptionRef.make(state);
   let protectedPaths: ReadonlyArray<string> = [];
   const configured = input.instance ?? instance();
@@ -84,10 +86,11 @@ const makeHarness = Effect.fn("providerInstallation.test.makeHarness")(function*
         calls.push("codex-start");
         return { ...state, driver: ProviderDriverKind.make("codex") };
       }),
-      startManagedOnly: Effect.sync(() => {
-        calls.push("codex-start-managed-only");
-        return { ...state, driver: ProviderDriverKind.make("codex") };
-      }),
+      startManagedOnly: (input) =>
+        Effect.sync(() => {
+          calls.push(`codex-start-managed-only:${input.allowUpdate}`);
+          return { ...state, driver: ProviderDriverKind.make("codex") };
+        }),
       cancel: () =>
         Effect.sync(() => {
           calls.push("codex-cancel");
@@ -95,6 +98,7 @@ const makeHarness = Effect.fn("providerInstallation.test.makeHarness")(function*
         }),
       state: Effect.succeed({ ...state, driver: ProviderDriverKind.make("codex") }),
       changes: Stream.succeed({ ...state, driver: ProviderDriverKind.make("codex") }),
+      checkForUpdate: Effect.void,
       remove: (paths) =>
         Effect.sync(() => {
           protectedPaths = paths ?? [];
@@ -103,6 +107,9 @@ const makeHarness = Effect.fn("providerInstallation.test.makeHarness")(function*
     }),
     Layer.mock(AntigravityInstallation.AntigravityInstallation)({
       managedDirectory: "/unused-managed-runtime",
+      checkForUpdate: Effect.sync(() => calls.push("check")).pipe(
+        Effect.andThen(Deferred.succeed(checked, undefined)),
+      ),
       start: Effect.sync(() => {
         calls.push("start");
         return { ...state, operationId: "install-1", phase: "downloading" as const };
@@ -137,6 +144,7 @@ const makeHarness = Effect.fn("providerInstallation.test.makeHarness")(function*
     listening,
     calls,
     refreshed,
+    checked,
     observed,
     installationState,
     protectedPaths: () => protectedPaths,
@@ -144,6 +152,21 @@ const makeHarness = Effect.fn("providerInstallation.test.makeHarness")(function*
 });
 
 describe("provider installation routing", () => {
+  // Ported from upstream 4099e62767, where the gate lived in the installer; GOAT gates the caller.
+  it.effect.each([true, false])(
+    "respects background update checks (%s) while allowing explicit installation",
+    (enabled) =>
+      Effect.gen(function* () {
+        const harness = yield* makeHarness({ settings: { enableProviderUpdateChecks: enabled } });
+        yield* harness.router.subscribe({ instanceId }).pipe(Stream.runHead);
+        if (enabled) yield* Deferred.await(harness.checked);
+        // A check subscribe forked runs before this later fiber, so its absence is settled here.
+        else yield* Effect.forkDetach(Effect.void).pipe(Effect.flatMap(Fiber.join));
+        yield* harness.router.start({ instanceId });
+        assert.deepEqual(harness.calls, enabled ? ["check", "start"] : ["start"]);
+      }).pipe(Effect.scoped, Effect.provide(NodeServices.layer)),
+  );
+
   it.effect.each([
     { phase: "succeeded", enabled: true, checkFails: false, expectedChecks: 1 },
     { phase: "succeeded", enabled: true, checkFails: true, expectedChecks: 1 },
@@ -256,7 +279,7 @@ describe("provider installation routing", () => {
 
   it.effect.each([
     { route: "default", opencodexAuth: "openai", expected: "codex-start" },
-    { route: "opencodex", opencodexAuth: "none", expected: "codex-start-managed-only" },
+    { route: "opencodex", opencodexAuth: "none", expected: "codex-start-managed-only:true" },
   ] as const)(
     "installs managed Codex for a managed $route instance without reusing PATH only for Home None",
     ({ route, opencodexAuth, expected }) =>

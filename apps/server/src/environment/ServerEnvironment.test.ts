@@ -1,5 +1,6 @@
 import { vi } from "vite-plus/test";
 import { ProviderMemoryImportRuntime } from "../memory/imports/MemoryImportTypes.ts";
+import * as NodeCrypto from "@effect/platform-node/NodeCrypto";
 import * as NodeServices from "@effect/platform-node/NodeServices";
 import {
   MemoryOperationId,
@@ -9,7 +10,7 @@ import {
 } from "@goat/contracts";
 import { SSH_RUNTIME_PROTOCOL_VERSION } from "@goat/shared/sshRuntimeProtocol";
 import { expect, it } from "@effect/vitest";
-import * as Crypto from "effect/Crypto";
+import * as SecureRandom from "effect/crypto/SecureRandom";
 import * as Deferred from "effect/Deferred";
 import * as Effect from "effect/Effect";
 import * as FileSystem from "effect/FileSystem";
@@ -91,7 +92,7 @@ const makeServerConfig = Effect.fn(function* (baseDir: string) {
   } satisfies ServerConfig.ServerConfig["Service"];
 });
 
-it.layer(NodeServices.layer)("ServerEnvironmentLive", (it) => {
+it.layer(Layer.mergeAll(NodeServices.layer, NodeCrypto.layer))("ServerEnvironmentLive", (it) => {
   it.effect(
     "shares one start identity between descriptor and runtime state, and changes it on restart",
     () =>
@@ -114,10 +115,64 @@ it.layer(NodeServices.layer)("ServerEnvironmentLive", (it) => {
           );
           expect(descriptor.capabilities.drainRestart).toBe(true);
           expect(descriptor.capabilities.goatBotLibrary).toBe(true);
+          expect(descriptor.capabilities.offeredSourceControlProviders).toBe(true);
+          expect(descriptor.capabilities.serverBrowserStopLoading).toBe(true);
           expect(descriptor.capabilities.memoryHubProtocolVersion).toBeUndefined();
           return identity.instanceId;
         }).pipe(Effect.provide(Layer.fresh(layerServerEnvironment(baseDir))));
         expect(yield* observe).not.toBe(yield* observe);
+      }),
+  );
+  it.effect("advertises that it checks a reply before an agent reads it", () =>
+    Effect.gen(function* () {
+      const fs = yield* FileSystem.FileSystem;
+      const baseDir = yield* fs.makeTempDirectoryScoped();
+      const descriptor = yield* Effect.flatMap(
+        ServerEnvironment.ServerEnvironment,
+        (environment) => environment.getDescriptor,
+      ).pipe(Effect.provide(Layer.fresh(layerServerEnvironment(baseDir))));
+      expect(descriptor.capabilities.replyToResponse).toBe(true);
+    }),
+  );
+  it.effect.each([
+    { desktopAppUpdate: false, advertised: undefined },
+    { desktopAppUpdate: true, advertised: true },
+  ])(
+    "advertises desktop app updates only when the desktop can install them ($desktopAppUpdate)",
+    ({ desktopAppUpdate, advertised }) =>
+      Effect.gen(function* () {
+        const fs = yield* FileSystem.FileSystem;
+        const baseDir = yield* fs.makeTempDirectoryScoped();
+        const config = yield* makeServerConfig(baseDir);
+        yield* fs.makeDirectory(config.stateDir, { recursive: true });
+        const descriptor = yield* ServerEnvironment.ServerEnvironment.use(
+          (environment) => environment.getDescriptor,
+        ).pipe(
+          Effect.provide(
+            ServerEnvironment.layer.pipe(
+              Layer.provide(layerEmptySecretStore),
+              Layer.provide(
+                ServerConfig.layer({
+                  ...config,
+                  mode: "desktop",
+                  desktopTelemetryControlFd: 5,
+                  desktopAppUpdate,
+                }),
+              ),
+            ),
+          ),
+          Effect.provideService(HostProcess.Environment, {}),
+        );
+        const capabilities = descriptor.capabilities;
+        expect({
+          serverSelfUpdate: capabilities.serverSelfUpdate,
+          desktopAppUpdate: capabilities.desktopAppUpdate,
+          serverSelfUpdateProgress: capabilities.serverSelfUpdateProgress,
+        }).toEqual({
+          serverSelfUpdate: "desktop-managed",
+          desktopAppUpdate: advertised,
+          serverSelfUpdateProgress: advertised,
+        });
       }),
   );
   it.effect("advertises core memory without provider import in web and desktop modes", () =>
@@ -277,7 +332,7 @@ it.layer(NodeServices.layer)("ServerEnvironmentLive", (it) => {
   ])("concurrent initializers recover a $name environment id file", ({ content }) =>
     Effect.gen(function* () {
       const fileSystem = yield* FileSystem.FileSystem;
-      const crypto = yield* Crypto.Crypto;
+      const random = yield* SecureRandom.SecureRandom;
       const baseDir = yield* fileSystem.makeTempDirectoryScoped({
         prefix: "goat-server-environment-concurrent-test-",
       });
@@ -317,17 +372,17 @@ it.layer(NodeServices.layer)("ServerEnvironmentLive", (it) => {
               ),
             ),
         }),
-        Effect.provideService(Crypto.Crypto, {
-          ...crypto,
-          randomUUIDv4: (() =>
+        Effect.provideService(SecureRandom.SecureRandom, {
+          ...random,
+          uuidV4: (() =>
             Effect.gen(function* () {
-              const id = yield* crypto.randomUUIDv4();
+              const id = yield* random.uuidV4();
               if (--remaining === 0) {
                 yield* Deferred.succeed(bothGenerated, undefined);
               }
               yield* Deferred.await(bothGenerated);
               return id;
-            })) as Crypto.Crypto["randomUUIDv4"],
+            })) as SecureRandom.SecureRandom["Service"]["uuidV4"],
         }),
       );
 
@@ -546,7 +601,7 @@ it.effect("hub advertisement follows registered routes and live disable/re-enabl
       yield* update("hub");
       yield* expectCapabilities(1);
     }).pipe(Effect.provide(ServerEnvironment.layer.pipe(Layer.provideMerge(routes))));
-  }).pipe(Effect.provide(NodeServices.layer)),
+  }).pipe(Effect.provide(Layer.mergeAll(NodeServices.layer, NodeCrypto.layer))),
 );
 
 vi.mock("@goat/shared/goatConnect", async (importOriginal) => ({

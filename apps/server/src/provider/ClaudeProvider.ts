@@ -1,3 +1,8 @@
+// @effect-diagnostics nodeBuiltinImport:off - the SDK's spawn hook returns a Node child process.
+import * as NodeChildProcess from "node:child_process";
+import { guardChild } from "@goat/shared/errorGuards";
+import { envTrampoline, supportsEnvChdir } from "@goat/shared/envTrampoline";
+import * as Schema from "effect/Schema";
 import {
   type ClaudeSettings,
   type ModelCapabilities,
@@ -27,6 +32,7 @@ import {
   type SDKControlGetUsageResponse,
   type SDKUserMessage,
   type SettingSource,
+  type SpawnOptions as ClaudeSpawnOptions,
 } from "@anthropic-ai/claude-agent-sdk";
 
 import {
@@ -42,11 +48,20 @@ import {
   providerModelsFromSettings,
   spawnAndCollect,
   type ServerProviderDraft,
+  resolveProviderProbeTimeoutMs,
 } from "@goat/provider-core/server/snapshotProbe";
 import { claudeReportedModels } from "./ClaudeReportedModels.ts";
 import { resolveClaudeSdkExecutablePath } from "./Drivers/ClaudeExecutable.ts";
-import { hasClaudeManagedMcpConfig, makeClaudeEnvironment } from "./Drivers/ClaudeHome.ts";
-import { discoverClaudeSkills, readClaudeSettingsEnv } from "./Drivers/ClaudeSkills.ts";
+import {
+  claudeSignedOutMessage,
+  hasClaudeManagedMcpConfig,
+  makeClaudeEnvironment,
+} from "./Drivers/ClaudeHome.ts";
+import {
+  customClaudeApiEndpointHost,
+  discoverClaudeSkills,
+  readClaudeSettingsEnv,
+} from "./Drivers/ClaudeSkills.ts";
 import type { ProviderWorkspaceSnapshot } from "@goat/provider-core/server/driver";
 import { makeUnavailableUsageLimits } from "@goat/provider-core/server/usageLimits";
 import { claudeHomeFlagSettings } from "./ClaudeHomeSettings.ts";
@@ -57,6 +72,10 @@ import {
 } from "./claudeUsageLimits.ts";
 import {
   BUNDLED_CLAUDE_MODEL_CATALOG,
+  CLAUDE_EFFORT_LEVELS,
+  capClaudeCatalogEffort,
+  type ClaudeEffortCapSource,
+  type ClaudeEffortLevel,
   type ClaudeModelCatalog,
   formatClaudeVersionUpgradeMessage,
   resolveClaudeModelsForVersion,
@@ -219,14 +238,36 @@ const CLAUDE_CAPABILITIES_PROBE_SETTING_SOURCES = [
   "local",
 ] as const satisfies ReadonlyArray<SettingSource>;
 
+export function spawnClaudeProbeThroughEnv({
+  command,
+  args,
+  cwd,
+  env,
+  signal,
+}: ClaudeSpawnOptions) {
+  const launch = envTrampoline(command, args, cwd) ?? { command, args, cwd };
+  const child = guardChild(
+    NodeChildProcess.spawn(launch.command, launch.args, {
+      ...("cwd" in launch ? { cwd: launch.cwd } : {}),
+      env,
+      signal,
+      stdio: ["pipe", "pipe", "ignore"],
+    }),
+    () => child.kill("SIGKILL"),
+  );
+  return child;
+}
+
 export function buildClaudeCapabilitiesProbeQueryOptions(input: {
   readonly executablePath: string;
   readonly abortController: AbortController;
   readonly environment: NodeJS.ProcessEnv;
   readonly cwd: string | undefined;
   readonly managedMcpConfig: boolean;
+  readonly spawnThroughEnv?: boolean;
 }): ClaudeQueryOptions {
   return {
+    ...(input.spawnThroughEnv ? { spawnClaudeCodeProcess: spawnClaudeProbeThroughEnv } : {}),
     persistSession: false,
     pathToClaudeCodeExecutable: input.executablePath,
     abortController: input.abortController,
@@ -269,7 +310,72 @@ export type ClaudeCapabilitiesProbe = {
   /** Undefined means get_usage failed; absent windows on success mean no subscription windows, as with API keys. */
   readonly usage?: Pick<SDKControlGetUsageResponse, "rate_limits_available" | "rate_limits">;
   readonly usageCheckedAt?: string;
+  /** Each settings source's `maxEffortLevel` caps; Claude Code clamps every higher effort. */
+  readonly effortCapSources?: ReadonlyArray<ClaudeEffortCapSource>;
 };
+
+// `getSettings` exists at runtime but is missing from the SDK's `Query` type, and older CLIs
+// reject the control request.
+type ClaudeSettingsQuery = {
+  readonly getSettings?: () => Promise<{
+    readonly effective?: unknown;
+    readonly sources?: unknown;
+  }>;
+};
+
+function parseClaudeMaxEffortLevel(value: unknown): ClaudeEffortLevel | undefined {
+  return CLAUDE_EFFORT_LEVELS.find((level) => level === value);
+}
+
+function parseClaudeModelMaxEffortLevels(
+  modelSettings: unknown,
+): ReadonlyMap<string, ClaudeEffortLevel> | undefined {
+  if (!modelSettings || typeof modelSettings !== "object") return undefined;
+  const levels = new Map<string, ClaudeEffortLevel>();
+  for (const [model, settings] of Object.entries(modelSettings)) {
+    const level = parseClaudeMaxEffortLevel(
+      settings && typeof settings === "object"
+        ? (settings as { readonly maxEffortLevel?: unknown }).maxEffortLevel
+        : undefined,
+    );
+    if (level) levels.set(model, level);
+  }
+  return levels.size > 0 ? levels : undefined;
+}
+
+function parseClaudeEffortCapSource(settings: unknown): ClaudeEffortCapSource | undefined {
+  if (!settings || typeof settings !== "object") return undefined;
+  const { maxEffortLevel, modelSettings } = settings as {
+    readonly maxEffortLevel?: unknown;
+    readonly modelSettings?: unknown;
+  };
+  const level = parseClaudeMaxEffortLevel(maxEffortLevel);
+  const modelMaxEffortLevels = parseClaudeModelMaxEffortLevels(modelSettings);
+  return level || modelMaxEffortLevels
+    ? {
+        ...(level ? { maxEffortLevel: level } : {}),
+        ...(modelMaxEffortLevels ? { modelMaxEffortLevels } : {}),
+      }
+    : undefined;
+}
+
+// `sources` holds each settings file's raw settings. CLIs that report only the merged `effective`
+// settings are read as a single source.
+function parseClaudeEffortCapSources(
+  settings: { readonly effective?: unknown; readonly sources?: unknown } | undefined,
+): ReadonlyArray<ClaudeEffortCapSource> | undefined {
+  const sources = Array.isArray(settings?.sources)
+    ? settings.sources.flatMap((source) => {
+        const parsed = parseClaudeEffortCapSource(
+          source && typeof source === "object"
+            ? (source as { readonly settings?: unknown }).settings
+            : undefined,
+        );
+        return parsed ? [parsed] : [];
+      })
+    : [parseClaudeEffortCapSource(settings?.effective)].filter((source) => source !== undefined);
+  return sources.length > 0 ? sources : undefined;
+}
 
 function parseClaudeInitializationCommands(
   commands: ReadonlyArray<ClaudeSlashCommand> | undefined,
@@ -358,6 +464,15 @@ function claudeGatewayDiscoveryGraceMs(environment: Readonly<Record<string, unkn
   return Number.isFinite(configured) && configured > 0 ? Math.min(configured, 30_000) : 3_000;
 }
 
+class ClaudeCapabilitiesProbeSdkError extends Schema.TaggedError<ClaudeCapabilitiesProbeSdkError>()(
+  "ClaudeCapabilitiesProbeSdkError",
+  { operation: Schema.Literals(["initialize", "usage", "settings"]), cause: Schema.Defect() },
+) {
+  override get message(): string {
+    return `Claude capability probe ${this.operation} failed.`;
+  }
+}
+
 /** A never-yielding prompt allows local initialization IPC without sending an Anthropic request. */
 const probeClaudeCapabilities = (
   claudeSettings: ClaudeSettings,
@@ -382,6 +497,8 @@ const probeClaudeCapabilities = (
           ...(yield* readClaudeSettingsEnv(claudeSettings, cwd, claudeEnvironment)),
         })
       : 0;
+    const spawnThroughEnv =
+      (yield* HostProcess.Platform) === "linux" && (yield* Effect.promise(supportsEnvChdir));
     return yield* Effect.tryPromise(async () => {
       const q = claudeQuery({
         // oxlint-disable-next-line require-yield -- never yields, so no prompt reaches the API
@@ -394,24 +511,46 @@ const probeClaudeCapabilities = (
           environment: claudeEnvironment,
           cwd,
           managedMcpConfig,
+          spawnThroughEnv,
         }),
       });
       const init = await q.initializationResult();
       return { q, init, graceMs };
     });
   }).pipe(
-    Effect.timeout(CAPABILITIES_PROBE_TIMEOUT_MS),
+    Effect.timeout(
+      resolveProviderProbeTimeoutMs("claude", CAPABILITIES_PROBE_TIMEOUT_MS, environment),
+    ),
     Effect.flatMap(({ q, init, graceMs }) =>
       Effect.gen(function* () {
         // Usage has its own deadline so a slow optional request cannot discard initialization.
         // Only the rate limits are read, so skip the local transcript scan that fills
         // `behaviors`: with a few GB of transcripts it outlasts the deadline.
+        // The effort caps are read in parallel under the same deadline; workspace probes skip both.
         const usageCheckedAt = DateTime.formatIso(yield* DateTime.now);
-        const usageResult = includeUsage
-          ? yield* Effect.tryPromise(() =>
-              q.usage_EXPERIMENTAL_MAY_CHANGE_DO_NOT_RELY_ON_THIS_API_YET({ skipBehaviors: true }),
-            ).pipe(Effect.timeout(DEFAULT_TIMEOUT_MS), Effect.result)
-          : undefined;
+        const { getSettings } = q as ClaudeSettingsQuery;
+        const [usageResult, settingsResult] = yield* Effect.all(
+          [
+            includeUsage
+              ? Effect.tryPromise({
+                  try: () =>
+                    q.usage_EXPERIMENTAL_MAY_CHANGE_DO_NOT_RELY_ON_THIS_API_YET({
+                      skipBehaviors: true,
+                    }),
+                  catch: (cause) =>
+                    new ClaudeCapabilitiesProbeSdkError({ operation: "usage", cause }),
+                }).pipe(Effect.timeout(DEFAULT_TIMEOUT_MS), Effect.result)
+              : Effect.undefined,
+            includeUsage && getSettings
+              ? Effect.tryPromise({
+                  try: () => getSettings.call(q),
+                  catch: (cause) =>
+                    new ClaudeCapabilitiesProbeSdkError({ operation: "settings", cause }),
+                }).pipe(Effect.timeout(DEFAULT_TIMEOUT_MS), Effect.result)
+              : Effect.undefined,
+          ],
+          { concurrency: "unbounded" },
+        );
         const usage =
           usageResult && Result.isSuccess(usageResult)
             ? {
@@ -419,6 +558,9 @@ const probeClaudeCapabilities = (
                 rate_limits: usageResult.success.rate_limits,
               }
             : undefined;
+        const effortCapSources = parseClaudeEffortCapSources(
+          settingsResult && Result.isSuccess(settingsResult) ? settingsResult.success : undefined,
+        );
         const account = init.account as
           | {
               readonly email?: string;
@@ -437,6 +579,7 @@ const probeClaudeCapabilities = (
           slashCommands: parseClaudeInitializationCommands(init.commands),
           ...(init.models?.length ? { models: init.models } : {}),
           ...(usage ? { usage, usageCheckedAt } : {}),
+          ...(effortCapSources ? { effortCapSources } : {}),
         } satisfies ClaudeCapabilitiesProbe;
       }).pipe(
         Effect.tap(() =>
@@ -561,7 +704,12 @@ export const checkClaudeProviderStatus = Effect.fn("checkClaudeProviderStatus")(
     ["--version"],
     resolvedEnvironment,
     spawnCwd,
-  ).pipe(Effect.timeoutOption(CLAUDE_VERSION_CHECK_TIMEOUT_MS), Effect.result);
+  ).pipe(
+    Effect.timeoutOption(
+      resolveProviderProbeTimeoutMs("claude", CLAUDE_VERSION_CHECK_TIMEOUT_MS, resolvedEnvironment),
+    ),
+    Effect.result,
+  );
 
   if (Result.isFailure(versionProbe)) {
     const error = versionProbe.failure;
@@ -646,12 +794,16 @@ export const checkClaudeProviderStatus = Effect.fn("checkClaudeProviderStatus")(
     probeResult && Result.isSuccess(probeResult) ? probeResult.success : undefined;
   const probeFailure =
     probeResult && Result.isFailure(probeResult) ? probeResult.failure : undefined;
-  const models = claudeProviderModels(
-    [
-      ...resolveClaudeModelsForVersion(modelCatalog, parsedVersion),
-      ...claudeReportedModels(modelCatalog, claudeSettings.customModels, capabilities?.models),
-    ],
-    claudeSettings.customModels,
+  const models = capClaudeCatalogEffort(
+    modelCatalog,
+    claudeProviderModels(
+      [
+        ...resolveClaudeModelsForVersion(modelCatalog, parsedVersion),
+        ...claudeReportedModels(modelCatalog, claudeSettings.customModels, capabilities?.models),
+      ],
+      claudeSettings.customModels,
+    ),
+    capabilities?.effortCapSources ?? [],
   );
   const skills = yield* discoverClaudeSkills(claudeSettings, cwd, resolvedEnvironment);
   const slashCommands = [COMPACT_SLASH_COMMAND, ...(capabilities?.slashCommands ?? [])];
@@ -674,7 +826,7 @@ export const checkClaudeProviderStatus = Effect.fn("checkClaudeProviderStatus")(
         auth: { status: "unknown" },
         message: probeFailure
           ? Cause.isTimeoutError(probeFailure)
-            ? `Timed out after ${CAPABILITIES_PROBE_TIMEOUT_MS / 1_000}s while checking Claude account status.`
+            ? `Timed out after ${resolveProviderProbeTimeoutMs("claude", CAPABILITIES_PROBE_TIMEOUT_MS, resolvedEnvironment) / 1_000}s while checking Claude account status.`
             : "Claude Agent CLI failed while checking account status."
           : "Could not verify Claude authentication status from initialization result.",
       },
@@ -685,13 +837,12 @@ export const checkClaudeProviderStatus = Effect.fn("checkClaudeProviderStatus")(
   const baseUrl =
     (yield* readClaudeSettingsEnv(claudeSettings, cwd, resolvedEnvironment)).ANTHROPIC_BASE_URL ??
     resolvedEnvironment.ANTHROPIC_BASE_URL;
-  const endpoint = URL.parse(baseUrl?.trim() ?? "");
-  const customApiEndpoint =
-    endpoint !== null &&
-    (endpoint.protocol === "http:" || endpoint.protocol === "https:") &&
-    endpoint.hostname !== "" &&
-    endpoint.hostname !== "api.anthropic.com";
+  const customApiEndpoint = customClaudeApiEndpointHost(baseUrl) !== undefined;
+  const endpoint = customApiEndpoint ? URL.parse(baseUrl?.trim() ?? "")?.origin : undefined;
   if (!customApiEndpoint && claudeAuthStatus(capabilities) === "unauthenticated") {
+    const path = yield* Path.Path;
+    const configDir = (yield* makeClaudeEnvironment(claudeSettings, resolvedEnvironment))
+      .CLAUDE_CONFIG_DIR;
     return buildServerProvider({
       presentation: CLAUDE_PRESENTATION,
       enabled: claudeSettings.enabled,
@@ -706,7 +857,10 @@ export const checkClaudeProviderStatus = Effect.fn("checkClaudeProviderStatus")(
         version: parsedVersion,
         status: "error",
         auth: { status: "unauthenticated" },
-        message: "Claude Code is not authenticated. Run `claude auth login` and try again.",
+        message:
+          configDir === undefined
+            ? "Claude Code is not authenticated. Run `claude auth login` and try again."
+            : claudeSignedOutMessage({ configDir, cwd: path.resolve(cwd ?? ".") }),
       },
     });
   }
@@ -714,7 +868,9 @@ export const checkClaudeProviderStatus = Effect.fn("checkClaudeProviderStatus")(
   // A proxy's ANTHROPIC_AUTH_TOKEN reads as an API key; the endpoint is what the token is for.
   const authMetadata =
     apiProviderAuthMetadata(capabilities.apiProvider) ??
-    (customApiEndpoint ? { type: "customEndpoint", label: "Custom API endpoint" } : undefined) ??
+    (customApiEndpoint
+      ? { type: "customEndpoint", label: "Custom API endpoint", ...(endpoint ? { endpoint } : {}) }
+      : undefined) ??
     claudeAuthMetadata({
       subscriptionType: capabilities.subscriptionType,
       authMethod: capabilities.tokenSource,

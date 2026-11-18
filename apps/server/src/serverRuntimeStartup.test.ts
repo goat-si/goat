@@ -84,6 +84,7 @@ it.effect.each([
   "disabled-default",
   "launch-failure",
   "project-failure",
+  "project-refused",
 ] as const)("keeps bootstrap launch failures separate from project failures: %s", (scenario) =>
   bootstrapScenario(scenario),
 );

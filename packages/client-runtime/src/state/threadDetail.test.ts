@@ -1,9 +1,17 @@
 import {
+  CheckpointId,
+  CheckpointRef,
+  CheckpointScopeId,
   EnvironmentId,
   EventId,
   MessageId,
+  NodeId,
   RunId,
+  ThreadId,
   TurnItemId,
+  type OrchestrationV2Checkpoint,
+  type OrchestrationV2ConversationMessage,
+  type OrchestrationV2Run,
   type OrchestrationV2ThreadProjection,
   type OrchestrationV2TurnItem,
 } from "@goat/contracts";
@@ -62,6 +70,57 @@ function withItem(item: OrchestrationV2TurnItem, updatedAt = v2Now) {
     updatedAt,
   };
 }
+
+function withRows(items: ReadonlyArray<OrchestrationV2TurnItem>): OrchestrationV2ThreadProjection {
+  return {
+    ...v2Projection,
+    turnItems: items,
+    visibleTurnItems: items.map((item, position) => ({
+      position,
+      visibility: "local" as const,
+      sourceThreadId: v2ThreadId,
+      sourceItemId: item.id,
+      item,
+    })),
+  };
+}
+
+// Reducer copies of a counted array stay counted, so every streamed input counts its reads.
+function countSlotReads() {
+  const counter = { reads: 0 };
+  class CountedRows<T> extends Array<T> {
+    constructor(length = 0) {
+      super(length);
+      return new Proxy(this, {
+        get(target, key, receiver) {
+          if (typeof key === "string" && /^\d+$/.test(key)) counter.reads++;
+          return Reflect.get(target, key, receiver);
+        },
+      });
+    }
+  }
+  return { counter, CountedRows };
+}
+
+const longConversation = (length: number) => {
+  const message = (index: number) => ({
+    ...assistant,
+    id: TurnItemId.make(`item-${index}`),
+    messageId: MessageId.make(`message-${index}`),
+    ordinal: index,
+  });
+  const streaming = message(length - 1);
+  const rows = [
+    ...Array.from({ length: length - 1 }, (_, index) => ({
+      ...message(index),
+      text: "Done",
+      status: "completed" as const,
+      streaming: false,
+    })),
+    streaming,
+  ];
+  return { streaming, rows };
+};
 
 describe("sameThreadStructure", () => {
   const before = withItem(assistant);
@@ -205,6 +264,26 @@ describe("quietThreadAtom", () => {
 describe("timelineVisibleTurnItemsAtom", () => {
   const ref = { environmentId: EnvironmentId.make("environment-1"), threadId: v2ThreadId };
 
+  function setup(initial: OrchestrationV2ThreadProjection) {
+    const stateAtom = Atom.make(
+      AsyncResult.success({ ...EMPTY_ENVIRONMENT_THREAD_STATE, data: Option.some(initial) }),
+    );
+    const timelineAtom = createEnvironmentThreadDetailAtoms(
+      () => stateAtom,
+    ).timelineVisibleTurnItemsAtom(ref);
+    const registry = AtomRegistry.make();
+    registry.mount(timelineAtom);
+    return {
+      read: () => registry.get(timelineAtom),
+      [Symbol.dispose]: () => registry.dispose(),
+      push: (projection: OrchestrationV2ThreadProjection) =>
+        registry.set(
+          stateAtom,
+          AsyncResult.success({ ...EMPTY_ENVIRONMENT_THREAD_STATE, data: Option.some(projection) }),
+        ),
+    };
+  }
+
   it("holds through streamed assistant text while the message reads its own text", () => {
     const stateAtom = Atom.make(
       AsyncResult.success({
@@ -214,7 +293,7 @@ describe("timelineVisibleTurnItemsAtom", () => {
     );
     const details = createEnvironmentThreadDetailAtoms(() => stateAtom);
     const timelineAtom = details.timelineVisibleTurnItemsAtom(ref);
-    const textAtom = details.assistantMessageTextAtom(ref, assistant.id);
+    const textAtom = details.assistantMessageTextAtom(ref, v2ThreadId, assistant.id);
     const registry = AtomRegistry.make();
     registry.mount(timelineAtom);
     registry.mount(textAtom);
@@ -235,6 +314,248 @@ describe("timelineVisibleTurnItemsAtom", () => {
     push({ ...assistant, text: "Hello", streaming: false, status: "completed" });
     expect(registry.get(timelineAtom)[0]?.item).toMatchObject({ text: "Hello", streaming: false });
     registry.dispose();
+  });
+
+  it("compares one row per consecutive streamed token in a long conversation", () => {
+    const { counter, CountedRows } = countSlotReads();
+    const { streaming, rows } = longConversation(200);
+    const initial = withRows(rows);
+    let projection: OrchestrationV2ThreadProjection = {
+      ...initial,
+      visibleTurnItems: CountedRows.from(initial.visibleTurnItems),
+    };
+    using timeline = setup(projection);
+    const held = timeline.read();
+    const readsPerToken: number[] = [];
+    const heldPerToken: boolean[] = [];
+
+    for (let token = 1; token <= 20; token++) {
+      projection = replaceItem(projection, {
+        ...streaming,
+        text: `Hel${"l".repeat(token)}`,
+        updatedAt: later,
+      });
+      counter.reads = 0;
+      timeline.push(projection);
+      heldPerToken.push(timeline.read() === held);
+      readsPerToken.push(counter.reads);
+    }
+
+    expect(heldPerToken).toEqual(Array.from({ length: 20 }, () => true));
+    // Each reader of the input touches only the replaced row, whatever the conversation's length.
+    expect(readsPerToken).toEqual(Array.from({ length: 20 }, () => readsPerToken[0]));
+    // The reducer's copies must inherit the counting array, or every token would read as 0.
+    expect(readsPerToken[0]).toBeGreaterThan(0);
+    expect(readsPerToken[0]).toBeLessThanOrEqual(8);
+  });
+
+  it("delivers a structure change on the update it arrives, after held tokens", () => {
+    const reasoning: OrchestrationV2TurnItem = {
+      ...assistant,
+      id: TurnItemId.make("reasoning"),
+      type: "reasoning",
+      ordinal: 1,
+    };
+    const message = { ...assistant, ordinal: 2 };
+    const second = {
+      ...assistant,
+      id: TurnItemId.make("item-second"),
+      messageId: MessageId.make("message-second"),
+      ordinal: 3,
+    };
+    let projection = withRows([reasoning, message]);
+    using timeline = setup(projection);
+    const step = (item: OrchestrationV2TurnItem) => {
+      projection = replaceItem(projection, item);
+      timeline.push(projection);
+      return timeline.read();
+    };
+    const tokens = (item: typeof message, texts: ReadonlyArray<string>) => {
+      const before = timeline.read();
+      for (const text of texts) {
+        expect(step({ ...item, text, updatedAt: later })).toBe(before);
+      }
+    };
+
+    tokens(message, ["Hello", "Hello the", "Hello there"]);
+    const afterReasoning = step({ ...reasoning, text: "Thinking", updatedAt: later });
+    expect(afterReasoning[0]?.item).toMatchObject({ type: "reasoning", text: "Thinking" });
+
+    tokens(message, ["Hello there,", "Hello there, I"]);
+    expect(timeline.read()).toBe(afterReasoning);
+    const afterNewItem = step(second);
+    expect(afterNewItem.map((row) => row.item.id)).toEqual([reasoning.id, message.id, second.id]);
+
+    tokens(second, ["And", "And then"]);
+    const finished = step({
+      ...message,
+      text: "Hello there, I",
+      status: "completed",
+      streaming: false,
+    });
+    expect(finished).not.toBe(afterNewItem);
+    expect(finished[1]?.item).toMatchObject({ status: "completed", streaming: false });
+
+    // A resync replaces every array, so no hint relates it to the previous input.
+    tokens(second, ["And then more"]);
+    const resync = (next: OrchestrationV2ThreadProjection) => {
+      projection = { ...next, visibleTurnItems: next.visibleTurnItems.slice() };
+      timeline.push(projection);
+      return timeline.read();
+    };
+    expect(resync(replaceItem(projection, { ...second, text: "Resynced", updatedAt: later }))).toBe(
+      finished,
+    );
+    const restored = resync(replaceItem(projection, { ...reasoning, title: "Restored" }));
+    expect(restored).not.toBe(finished);
+    expect(restored[0]?.item).toMatchObject({ title: "Restored" });
+  });
+});
+
+describe("assistantMessageTextAtom", () => {
+  const ref = { environmentId: EnvironmentId.make("environment-1"), threadId: v2ThreadId };
+
+  function setup(initial: OrchestrationV2ThreadProjection) {
+    const stateAtom = Atom.make(
+      AsyncResult.success({ ...EMPTY_ENVIRONMENT_THREAD_STATE, data: Option.some(initial) }),
+    );
+    const details = createEnvironmentThreadDetailAtoms(() => stateAtom);
+    const registry = AtomRegistry.make();
+    return {
+      text: (itemId: string, sourceThreadId: string = v2ThreadId) => {
+        const atom = details.assistantMessageTextAtom(ref, sourceThreadId, itemId);
+        registry.mount(atom);
+        return () => registry.get(atom);
+      },
+      [Symbol.dispose]: () => registry.dispose(),
+      push: (projection: OrchestrationV2ThreadProjection) =>
+        registry.set(
+          stateAtom,
+          AsyncResult.success({ ...EMPTY_ENVIRONMENT_THREAD_STATE, data: Option.some(projection) }),
+        ),
+    };
+  }
+
+  it("reads a bounded number of rows per token for the streaming last row of a long conversation", () => {
+    const { counter, CountedRows } = countSlotReads();
+    const { streaming, rows } = longConversation(200);
+    const initial = withRows(rows);
+    let projection: OrchestrationV2ThreadProjection = {
+      ...initial,
+      visibleTurnItems: CountedRows.from(initial.visibleTurnItems),
+    };
+    // Only this row's text atom is mounted, so every counted read belongs to it and its inputs.
+    using thread = setup(projection);
+    const text = thread.text(streaming.id);
+    const readsPerToken: number[] = [];
+    const textPerToken: Array<string | null> = [];
+
+    for (let token = 1; token <= 20; token++) {
+      projection = replaceItem(projection, {
+        ...streaming,
+        text: `Hel${"l".repeat(token)}`,
+        updatedAt: later,
+      });
+      counter.reads = 0;
+      thread.push(projection);
+      textPerToken.push(text());
+      readsPerToken.push(counter.reads);
+    }
+
+    expect(textPerToken).toEqual(
+      Array.from({ length: 20 }, (_, index) => `Hel${"l".repeat(index + 1)}`),
+    );
+    // The reducer's copies must inherit the counting array, or every token would read as 0.
+    expect(readsPerToken[0]).toBeGreaterThan(0);
+    expect(readsPerToken).toEqual(Array.from({ length: 20 }, () => readsPerToken[0]));
+    expect(readsPerToken[0]).toBeLessThanOrEqual(8);
+  });
+
+  it("returns the text of any assistant row and null for a missing or non-assistant row", () => {
+    const reasoning: OrchestrationV2TurnItem = {
+      ...assistant,
+      id: TurnItemId.make("reasoning"),
+      type: "reasoning",
+      ordinal: 1,
+    };
+    const finished: OrchestrationV2TurnItem = {
+      ...assistant,
+      id: TurnItemId.make("finished"),
+      messageId: MessageId.make("message-finished"),
+      ordinal: 2,
+      text: "Earlier answer",
+      status: "completed",
+      streaming: false,
+    };
+    const first = {
+      ...assistant,
+      id: TurnItemId.make("first"),
+      messageId: MessageId.make("message-first"),
+      ordinal: 3,
+    };
+    const second = {
+      ...assistant,
+      id: TurnItemId.make("second"),
+      messageId: MessageId.make("message-second"),
+      ordinal: 4,
+      text: "Wor",
+    };
+    let projection = withRows([reasoning, finished, first, second]);
+    using thread = setup(projection);
+    const firstText = thread.text(first.id);
+    const secondText = thread.text(second.id);
+    const finishedText = thread.text(finished.id);
+    const reasoningText = thread.text(reasoning.id);
+    const missingText = thread.text("missing");
+
+    // Two rows stream at once and the earlier, not last, one moves.
+    projection = replaceItem(projection, { ...first, text: "Hello", updatedAt: later });
+    thread.push(projection);
+
+    expect(firstText()).toBe("Hello");
+    expect(secondText()).toBe("Wor");
+    expect(finishedText()).toBe("Earlier answer");
+    expect(reasoningText()).toBeNull();
+    expect(missingText()).toBeNull();
+  });
+
+  it("gives each streaming row its own text when a merged page brings back the same item id from the source thread", () => {
+    const parent = ThreadId.make("thread-parent");
+    const shared = TurnItemId.make("shared");
+    const local: OrchestrationV2TurnItem = { ...assistant, id: shared, ordinal: 2, text: "Local" };
+    const inherited: OrchestrationV2TurnItem = {
+      ...assistant,
+      id: shared,
+      threadId: parent,
+      ordinal: 1,
+      text: "Parent",
+    };
+    // A history page carrying the source's row was answered, then a local update with the same
+    // id was applied before the page, which the merge keys by source thread as well as item id.
+    let projection = replaceItem({ ...v2Projection, turnItems: [], visibleTurnItems: [] }, local);
+    projection = mergeOlderHistoryIntoProjection(projection, [
+      {
+        position: 0,
+        visibility: "inherited",
+        sourceThreadId: parent,
+        sourceItemId: shared,
+        item: inherited,
+      },
+    ]);
+    expect(projection.visibleTurnItems.map((row) => [row.sourceThreadId, row.item.id])).toEqual([
+      [parent, shared],
+      [v2ThreadId, shared],
+    ]);
+    using thread = setup(projection);
+    const inheritedText = thread.text(shared, parent);
+    const localText = thread.text(shared);
+
+    projection = replaceItem(projection, { ...local, text: "Local reply", updatedAt: later });
+    thread.push(projection);
+
+    expect(projection.visibleTurnItems).toHaveLength(2);
+    expect(inheritedText()).toBe("Parent");
+    expect(localText()).toBe("Local reply");
   });
 });
 
@@ -277,6 +598,139 @@ it("only compares replaced entries in a streamed reducer delta", () => {
 
   expect(sameThreadStructure(before, next!)).toBe(true);
   expect(slotReads).toBeLessThanOrEqual(2);
+});
+
+describe("derived thread state through a streamed message", () => {
+  const ref = { environmentId: EnvironmentId.make("environment-1"), threadId: v2ThreadId };
+  const runId = RunId.make("run-1");
+  const streamed: OrchestrationV2ConversationMessage = {
+    id: MessageId.make("message-assistant"),
+    threadId: v2ThreadId,
+    runId,
+    nodeId: null,
+    role: "assistant",
+    text: "Hel",
+    attachments: [],
+    streaming: true,
+    createdBy: "agent",
+    creationSource: "provider",
+    createdAt: v2Now,
+    updatedAt: v2Now,
+  };
+  const queuedMessage: OrchestrationV2ConversationMessage = {
+    ...streamed,
+    id: MessageId.make("message-queued"),
+    runId: RunId.make("run-2"),
+    role: "user",
+    text: "Then run the tests",
+    streaming: false,
+    createdBy: "user",
+    creationSource: "mobile",
+  };
+  const queuedRun: OrchestrationV2Run = {
+    id: RunId.make("run-2"),
+    threadId: v2ThreadId,
+    ordinal: 2,
+    providerInstanceId: v2Projection.thread.providerInstanceId,
+    modelSelection: v2Projection.thread.modelSelection,
+    providerThreadId: null,
+    userMessageId: queuedMessage.id,
+    rootNodeId: null,
+    activeAttemptId: null,
+    status: "queued",
+    requestedAt: v2Now,
+    startedAt: null,
+    completedAt: null,
+    checkpointId: null,
+    contextHandoffId: null,
+  };
+  const checkpoint = (ordinal: number): OrchestrationV2Checkpoint => ({
+    id: CheckpointId.make(`checkpoint-${ordinal}`),
+    threadId: v2ThreadId,
+    scopeId: CheckpointScopeId.make("scope"),
+    runId,
+    nodeId: NodeId.make("node"),
+    parentCheckpointId: null,
+    ordinalWithinScope: ordinal,
+    appRunOrdinal: ordinal,
+    ref: CheckpointRef.make(`refs/t3/checkpoint-${ordinal}`),
+    status: "ready",
+    files: [],
+    capturedAt: v2Now,
+  });
+  const initial: OrchestrationV2ThreadProjection = {
+    ...v2Projection,
+    runs: [queuedRun],
+    messages: [streamed, queuedMessage],
+    checkpoints: [checkpoint(1)],
+  };
+
+  function setup() {
+    const stateAtom = Atom.make(
+      AsyncResult.success({ ...EMPTY_ENVIRONMENT_THREAD_STATE, data: Option.some(initial) }),
+    );
+    const details = createEnvironmentThreadDetailAtoms(() => stateAtom);
+    const queue = details.queueWorkflowAtom(ref);
+    const checkpoints = details.checkpointSummariesAtom(ref);
+    const registry = AtomRegistry.make();
+    registry.mount(queue);
+    registry.mount(checkpoints);
+    let projection = initial;
+    return {
+      queue: () => registry.get(queue),
+      checkpoints: () => registry.get(checkpoints),
+      apply: (event: Parameters<typeof applyOrchestrationV2ProjectionEvent>[1]) => {
+        projection = applyOrchestrationV2ProjectionEvent(projection, event)!;
+        registry.set(
+          stateAtom,
+          AsyncResult.success({ ...EMPTY_ENVIRONMENT_THREAD_STATE, data: Option.some(projection) }),
+        );
+      },
+      [Symbol.dispose]: () => registry.dispose(),
+    };
+  }
+
+  const messageUpdated = (message: OrchestrationV2ConversationMessage) => ({
+    id: EventId.make(`event-${message.id}-${message.text.length}`),
+    type: "message.updated" as const,
+    threadId: v2ThreadId,
+    occurredAt: later,
+    payload: message,
+  });
+
+  it("keeps the queue workflow through streamed text and follows a queued message edit", () => {
+    using thread = setup();
+    const first = thread.queue();
+    thread.apply(messageUpdated({ ...streamed, text: "Hello", updatedAt: later }));
+    thread.apply(messageUpdated({ ...streamed, text: "Hello there", updatedAt: later }));
+    expect(thread.queue()).toBe(first);
+
+    thread.apply(messageUpdated({ ...queuedMessage, text: "Then run lint", updatedAt: later }));
+    expect(thread.queue()?.queuedRuns.map((queued) => queued.text)).toEqual(["Then run lint"]);
+  });
+
+  it("keeps checkpoint summaries through streamed text and follows new assistant messages and checkpoints", () => {
+    using thread = setup();
+    const first = thread.checkpoints();
+    thread.apply(messageUpdated({ ...streamed, text: "Hello", updatedAt: later }));
+    thread.apply(messageUpdated({ ...streamed, text: "Hello there", updatedAt: later }));
+    expect(thread.checkpoints()).toBe(first);
+
+    const followUp = { ...streamed, id: MessageId.make("message-follow-up"), text: "Done" };
+    thread.apply(messageUpdated(followUp));
+    expect(thread.checkpoints().map((summary) => summary.assistantMessageId)).toEqual([
+      followUp.id,
+    ]);
+
+    thread.apply({
+      id: EventId.make("checkpoint-2"),
+      type: "checkpoint.captured",
+      threadId: v2ThreadId,
+      occurredAt: later,
+      payload: checkpoint(2),
+    });
+    expect(thread.checkpoints().map((summary) => summary.checkpointTurnCount)).toEqual([1, 2]);
+  });
 });
 
 function replaceItem(projection: OrchestrationV2ThreadProjection, item: OrchestrationV2TurnItem) {

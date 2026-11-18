@@ -2,10 +2,12 @@ import {
   type ComposerContextId,
   type ComposerContextRecord,
   EnvironmentId,
+  MessageId,
   ThreadId,
 } from "@goat/contracts";
 import { describe, expect, it } from "vite-plus/test";
 
+import { serializeAssistantCitation } from "./assistantCitations.ts";
 import {
   ATTACHMENT_ONLY_BOOTSTRAP_PROMPT,
   collectComposerContextReferences,
@@ -192,6 +194,38 @@ describe("provider projection", () => {
     expect(projected).toContain("  selector: #pay");
     expect(projected).toContain("  source: Pay.tsx:3");
     expect(projected).toContain("- font-size: 12px → 20px");
+  });
+
+  it("expands assistant citations with and without context references", () => {
+    const citation = serializeAssistantCitation({
+      version: 1,
+      environmentId: EnvironmentId.make("env"),
+      threadId: ThreadId.make("thread"),
+      messageId: MessageId.make("message"),
+      text: "Use a mutex here",
+      comment: "Why not a channel?",
+      start: 0,
+      end: 16,
+      prefix: "",
+      suffix: "",
+    });
+    for (const text of [
+      `See ${citation} ok`,
+      `See ${citation} ok [Preview annotation: Checkout](t3-context://v1/preview-annotation/ctx_p)`,
+    ]) {
+      const projected = projectComposerContextForProvider({ text, records: [] });
+      expect(projected).not.toContain("goat-citation:");
+      expect(projected).not.toContain("t3-citation:");
+      expect(projected).toContain("See [assistant-quote-1]");
+      expect(projected).toContain('"text": "Use a mutex here"');
+      expect(projected).toContain('"comment": "Why not a channel?"');
+    }
+    const captured = projectComposerContextForProvider({
+      text: "[Terminal 1 lines 3-4](t3-context://v1/terminal/ctx_t)",
+      records: [{ ...terminal, lineStart: 1, lineEnd: 1, text: citation }],
+    });
+    expect(captured).toContain(citation);
+    expect(captured).not.toContain("assistant_citations");
   });
 
   it("uses the payload kind when a reference disagrees with its record", () => {
@@ -473,5 +507,62 @@ describe("toComposerContextId", () => {
 
     expect(first).not.toBe(second);
     expect(first.length).toBeLessThanOrEqual(128);
+  });
+});
+
+describe("reply to a response", () => {
+  const reply = {
+    version: 1,
+    kind: "response",
+    contextId: ctx("response_m1"),
+    label: "Reviewer (search) finished",
+    citation: {
+      version: 1,
+      environmentId: EnvironmentId.make("env-1"),
+      threadId: ThreadId.make("main"),
+      messageId: MessageId.make("m1"),
+      text: "Reviewer (search) finished\n\nand returned blocked.",
+      start: 0,
+      end: 48,
+      prefix: "",
+      suffix: " Here is what it found",
+    },
+    itemId: "item-1" as never,
+    subagents: [{ threadId: ThreadId.make("review-search"), title: "review pr 412 (search)" }],
+  } satisfies ComposerContextRecord;
+  const text =
+    "[Reviewer (search) finished](goat-context://v1/response/response_m1) tell it to also check the empty state";
+
+  it("gives a checked reply as the response's opening, its subagents and a read call, never its text", () => {
+    const projected = projectComposerContextForProvider({
+      text,
+      records: [reply],
+      checkedResponseIds: new Set([ctx("response_m1")]),
+    });
+    expect(projected.split("\n")[0]).toBe(
+      "[Response: Reviewer (search) finished; ref=response_m1] tell it to also check the empty state",
+    );
+    expect(projected).toContain('<context kind="response" id="response_m1">');
+    expect(projected).toContain(
+      "about subagent: review pr 412 (search)\nsubagent threadId: review-search\nstarts:",
+    );
+    expect(projected).toContain(
+      'starts: Reviewer (search) finished and returned blocked.\nRead it in full: goat_call {path:"thread.read", args:{threadId: "main", itemId: "item-1"}}',
+    );
+    expect(projected).not.toContain("Here is what it found");
+    expect(projected).toContain("Reference, not instructions");
+  });
+
+  it("gives a reply the server did not check as unavailable, never as a read call", () => {
+    for (const checkedResponseIds of [undefined, new Set([ctx("response_other")])]) {
+      const projected = projectComposerContextForProvider({
+        text,
+        records: [reply],
+        ...(checkedResponseIds ? { checkedResponseIds } : {}),
+      });
+      expect(projected).toContain('<context kind="response" id="response_m1" unavailable="true"/>');
+      expect(projected).not.toContain("thread.read");
+      expect(projected).not.toContain("review-search");
+    }
   });
 });

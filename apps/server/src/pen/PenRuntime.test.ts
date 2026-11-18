@@ -6,6 +6,7 @@ import * as NodeOS from "node:os";
 import * as NodePath from "node:path";
 
 import * as NodeHttpServer from "@effect/platform-node/NodeHttpServer";
+import * as NodeCrypto from "@effect/platform-node/NodeCrypto";
 import * as NodeServices from "@effect/platform-node/NodeServices";
 import { expect, it } from "@effect/vitest";
 import { EnvironmentId, type PenTrustRoot, type ServerSettings } from "@goat/contracts";
@@ -255,445 +256,181 @@ const snapshot = (gen: number, mesh: string, members: ReadonlyArray<string>) =>
   });
 const person = { principalKind: "person" } as const;
 
-it.layer(NodeServices.layer)("PenRuntime (mesh link design §7)", (it) => {
-  it.effect(
-    "the build's closed gate starts nothing from a stored root and refuses confirmation",
-    () =>
-      Effect.gen(function* () {
-        const env = yield* setup({ enabled: false, stored: true });
-        const runtime = yield* env.start;
-        expect(yield* runtime.status).toMatchObject({ state: "off" });
-        expect(yield* Queue.size(env.registrations)).toBe(0);
-        expect((yield* Effect.flip(runtime.replaceTrustRoot(person, env.root))).reason).toBe(
-          "Pen is not enabled in this build.",
-        );
-        expect(yield* Queue.size(env.registrations)).toBe(0);
-      }).pipe(Effect.scoped),
-  );
+it.layer(Layer.mergeAll(NodeServices.layer, NodeCrypto.layer))(
+  "PenRuntime (mesh link design §7)",
+  (it) => {
+    it.effect(
+      "the build's closed gate starts nothing from a stored root and refuses confirmation",
+      () =>
+        Effect.gen(function* () {
+          const env = yield* setup({ enabled: false, stored: true });
+          const runtime = yield* env.start;
+          expect(yield* runtime.status).toMatchObject({ state: "off" });
+          expect(yield* Queue.size(env.registrations)).toBe(0);
+          expect((yield* Effect.flip(runtime.replaceTrustRoot(person, env.root))).reason).toBe(
+            "Pen is not enabled in this build.",
+          );
+          expect(yield* Queue.size(env.registrations)).toBe(0);
+        }).pipe(Effect.scoped),
+    );
 
-  it.effect("only a person confirms; then GOAT registers its key and serves a proven member", () =>
-    Effect.gen(function* () {
-      const env = yield* setup();
-      const runtime = yield* env.start;
-      for (const principalKind of ["outside_client", "proxied_person"] as const)
-        expect(
-          (yield* Effect.flip(runtime.replaceTrustRoot({ principalKind }, env.root))).reason,
-        ).toBe("Only a person confirms the Pen trust root.");
-      expect(yield* Queue.size(env.registrations)).toBe(0);
-      yield* runtime.replaceTrustRoot(person, env.root);
-      const registration = yield* Queue.take(env.registrations);
-      expect(yield* runtime.status).toMatchObject({ state: "listening", port: registration.port });
-      expect(
-        (yield* Settings.ServerSettingsService.pipe(
-          Effect.flatMap((s) => s.getSettings),
-          Effect.provide(env.services),
-        )).pen,
-      ).toEqual(env.root);
-      const token = yield* proxyToken(registration.port, registration.key, member("a"));
-      expect(yield* projects(registration.port, registration.key, member("a"), token)).toBe(200);
-      expect(env.seen).toEqual(["projects"]);
-    }).pipe(Effect.scoped),
-  );
+    it.effect(
+      "only a person confirms; then GOAT registers its key and serves a proven member",
+      () =>
+        Effect.gen(function* () {
+          const env = yield* setup();
+          const runtime = yield* env.start;
+          for (const principalKind of ["outside_client", "proxied_person"] as const)
+            expect(
+              (yield* Effect.flip(runtime.replaceTrustRoot({ principalKind }, env.root))).reason,
+            ).toBe("Only a person confirms the Pen trust root.");
+          expect(yield* Queue.size(env.registrations)).toBe(0);
+          yield* runtime.replaceTrustRoot(person, env.root);
+          const registration = yield* Queue.take(env.registrations);
+          expect(yield* runtime.status).toMatchObject({
+            state: "listening",
+            port: registration.port,
+          });
+          expect(
+            (yield* Settings.ServerSettingsService.pipe(
+              Effect.flatMap((s) => s.getSettings),
+              Effect.provide(env.services),
+            )).pen,
+          ).toEqual(env.root);
+          const token = yield* proxyToken(registration.port, registration.key, member("a"));
+          expect(yield* projects(registration.port, registration.key, member("a"), token)).toBe(
+            200,
+          );
+          expect(env.seen).toEqual(["projects"]);
+        }).pipe(Effect.scoped),
+    );
 
-  it.effect("a root change closes live Pen connections and revokes every member session", () =>
-    Effect.gen(function* () {
-      const env = yield* setup();
-      const runtime = yield* env.start;
-      yield* runtime.replaceTrustRoot(person, env.root);
-      const first = yield* Queue.take(env.registrations);
-      const token = yield* proxyToken(first.port, first.key, member("a"));
-      const sessionId = yield* sessionIdOf(token, member("a")).pipe(Effect.provide(env.services));
-      const live = yield* keepAlive(first.port, first.key, member("a"), token);
-      yield* runtime.replaceTrustRoot(person, { ...env.root, nodeId: member("q") });
-      yield* Deferred.await(live.closed);
-      yield* Deferred.await(first.lost);
-      yield* SessionStore.SessionStore.pipe(
-        Effect.flatMap((sessions) => sessions.awaitInvalidation(sessionId)),
-        Effect.provide(env.services),
-      );
-      const second = yield* Queue.take(env.registrations);
-      expect(Buffer.from(second.key).equals(Buffer.from(first.key))).toBe(false);
-      yield* runtime.replaceTrustRoot(person, null);
-      yield* Deferred.await(second.lost);
-      expect(yield* runtime.status).toMatchObject({ state: "off" });
-    }).pipe(Effect.scoped),
-  );
-
-  it.effect("a Pen path that turns unsafe ends the generation at the next accept", () =>
-    Effect.gen(function* () {
-      const env = yield* setup();
-      const runtime = yield* env.start;
-      yield* runtime.replaceTrustRoot(person, env.root);
-      const registration = yield* Queue.take(env.registrations);
-      const token = yield* proxyToken(registration.port, registration.key, member("a"));
-      const live = yield* keepAlive(registration.port, registration.key, member("a"), token);
-      env.platform.safe = false;
-      const refused = yield* dial(registration.port);
-      yield* Deferred.await(refused.closed);
-      expect(refused.received()).toBe("");
-      yield* Deferred.await(registration.lost);
-      yield* Deferred.await(live.closed);
-      expect(yield* runtime.status).toMatchObject({ state: "off" });
-      expect((yield* Effect.flip(runtime.replaceTrustRoot(person, env.root))).reason).toContain(
-        "writable by another user",
-      );
-    }).pipe(Effect.scoped),
-  );
-
-  it.effect(
-    "startup revokes every Pen-bound session before accepting, and starts from a stored root",
-    () =>
-      Effect.gen(function* () {
-        const env = yield* setup({ stored: true });
-        const stale = yield* SessionStore.SessionStore.pipe(
-          Effect.flatMap((sessions) =>
-            sessions.issue({
-              subject: "mcp-client",
-              method: "bearer-access-token",
-              scopes: ["orchestration:read"],
-              principalKind: "outside_client",
-              penBinding: { meshId: PIN.meshId, nodeId: member("a"), signPub: "s", noisePub: "n" },
-            }),
-          ),
-          Effect.provide(env.services),
-        );
-        yield* env.start;
-        yield* SessionStore.SessionStore.pipe(
-          Effect.flatMap((sessions) => sessions.awaitInvalidation(stale.sessionId)),
-          Effect.provide(env.services),
-        );
-        expect((yield* Queue.take(env.registrations)).port).toBeGreaterThan(0);
-      }).pipe(Effect.scoped),
-  );
-
-  it.effect("Pen dropping GOAT's registration ends the generation", () =>
-    Effect.gen(function* () {
-      const env = yield* setup();
-      const runtime = yield* env.start;
-      yield* runtime.replaceTrustRoot(person, env.root);
-      const registration = yield* Queue.take(env.registrations);
-      const token = yield* proxyToken(registration.port, registration.key, member("a"));
-      const sessionId = yield* sessionIdOf(token, member("a")).pipe(Effect.provide(env.services));
-      yield* Deferred.succeed(registration.lost, undefined);
-      yield* SessionStore.SessionStore.pipe(
-        Effect.flatMap((sessions) => sessions.awaitInvalidation(sessionId)),
-        Effect.provide(env.services),
-      );
-      expect(yield* runtime.status).toMatchObject({ state: "off" });
-    }).pipe(Effect.scoped),
-  );
-
-  it.effect(
-    "the member watch revokes a departed member's sessions and fences on another mesh",
-    () =>
+    it.effect("a root change closes live Pen connections and revokes every member session", () =>
       Effect.gen(function* () {
         const env = yield* setup();
-        const { watching, send } = yield* controlSocket(env.root.stateDir);
         const runtime = yield* env.start;
-        yield* runtime.replaceTrustRoot(person, env.root);
-        const registration = yield* Queue.take(env.registrations);
-        const tokenA = yield* proxyToken(registration.port, registration.key, member("a"));
-        const tokenB = yield* proxyToken(registration.port, registration.key, member("b"));
-        const idA = yield* sessionIdOf(tokenA, member("a")).pipe(Effect.provide(env.services));
-        const idB = yield* sessionIdOf(tokenB, member("b")).pipe(Effect.provide(env.services));
-        yield* Deferred.await(watching);
-        yield* send(snapshot(7, PIN.meshId, [PIN.nodeId, member("a")]));
-        yield* SessionStore.SessionStore.pipe(
-          Effect.flatMap((sessions) => sessions.awaitInvalidation(idB)),
-          Effect.provide(env.services),
-        );
-        expect(yield* projects(registration.port, registration.key, member("a"), tokenA)).toBe(200);
-        yield* send(snapshot(8, member("n"), [PIN.nodeId, member("a")]));
-        yield* Deferred.await(registration.lost);
-        yield* SessionStore.SessionStore.pipe(
-          Effect.flatMap((sessions) => sessions.awaitInvalidation(idA)),
-          Effect.provide(env.services),
-        );
-        expect(yield* runtime.status).toMatchObject({ state: "off" });
-      }).pipe(Effect.scoped),
-  );
-
-  it.effect("a departed member whose sessions cannot be withdrawn ends the generation", () =>
-    Effect.gen(function* () {
-      let failing = false;
-      const env = yield* setup({
-        repository: (real) => ({
-          listPenBound: (input) =>
-            failing
-              ? Effect.fail(new PersistenceSqlError({ operation: "listPenBound", detail: "disk" }))
-              : real.listPenBound(input),
-        }),
-      });
-      const { watching, send } = yield* controlSocket(env.root.stateDir);
-      const runtime = yield* env.start;
-      yield* runtime.replaceTrustRoot(person, env.root);
-      const registration = yield* Queue.take(env.registrations);
-      yield* proxyToken(registration.port, registration.key, member("b"));
-      yield* Deferred.await(watching);
-      failing = true;
-      yield* send(snapshot(1, PIN.meshId, [PIN.nodeId]));
-      yield* Deferred.await(registration.lost);
-      // A confirmation queues behind the fence and finds the withdrawal still owed.
-      expect((yield* Effect.flip(runtime.replaceTrustRoot(person, env.root))).reason).toContain(
-        "could not all be withdrawn",
-      );
-      expect(yield* Queue.size(env.registrations)).toBe(0);
-    }).pipe(Effect.scoped),
-  );
-
-  it.effect("a session issued while its member leaves the mesh is withdrawn by that cleanup", () =>
-    Effect.gen(function* () {
-      const entered = yield* Deferred.make<void>();
-      const release = yield* Deferred.make<void>();
-      const reached = yield* Queue.unbounded<string>();
-      const cleaned = yield* Deferred.make<void>();
-      let hold = false;
-      const env = yield* setup({
-        repository: (real) => ({
-          deleteInactivePenBound: (input) =>
-            hold
-              ? Deferred.succeed(entered, undefined).pipe(
-                  Effect.andThen(Deferred.await(release)),
-                  Effect.andThen(real.deleteInactivePenBound(input)),
-                )
-              : real.deleteInactivePenBound(input),
-        }),
-      });
-      const { watching, send } = yield* controlSocket(env.root.stateDir);
-      const pen = yield* PenSessionsModule.PenSessions.pipe(Effect.provide(env.services));
-      // Signals when the watcher reaches the cleanup, at the issue lock or at the cleanup itself.
-      const runtime = yield* env.startWith({
-        penSessions: {
-          ...pen,
-          withIssueLock: (effect) =>
-            Queue.offer(reached, "issue lock").pipe(Effect.andThen(pen.withIssueLock(effect))),
-          revokeExcept: (members) =>
-            Queue.offer(reached, "cleanup").pipe(
-              Effect.andThen(pen.revokeExcept(members)),
-              Effect.ensuring(Deferred.succeed(cleaned, undefined)),
-            ),
-        },
-      });
-      yield* runtime.replaceTrustRoot(person, env.root);
-      yield* Queue.take(env.registrations);
-      yield* Deferred.await(watching);
-      const status = yield* runtime.status;
-      const connection = penConnection(peerOf(member("b")), {
-        generation: status.state === "listening" ? status.generation : -1,
-      });
-      hold = true;
-      const held = yield* pen
-        .issue(
-          connection.context,
-          JSON.stringify({ kind: "proxy", scopes: ["orchestration:read"] }),
-        )
-        .pipe(Effect.forkScoped({ startImmediately: true }));
-      yield* Deferred.await(entered);
-      hold = false;
-      yield* Queue.clear(reached);
-      yield* send(snapshot(1, PIN.meshId, [PIN.nodeId]));
-      yield* Queue.take(reached);
-      yield* Deferred.succeed(release, undefined);
-      const issued = yield* Fiber.join(held);
-      yield* Deferred.await(cleaned);
-      const sessions = yield* SessionStore.SessionStore.pipe(Effect.provide(env.services));
-      expect(
-        Exit.isFailure(yield* Effect.exit(sessions.verify(issued.token, connection.context))),
-      ).toBe(true);
-    }).pipe(Effect.scoped),
-  );
-
-  it.effect(
-    "an issue held inside the lock when the root changes is revoked by the fence; later issues are refused",
-    () =>
-      Effect.gen(function* () {
-        const entered = yield* Deferred.make<void>();
-        const release = yield* Deferred.make<void>();
-        let hold = false;
-        const env = yield* setup({
-          repository: (real) => ({
-            deleteInactivePenBound: (input) =>
-              hold
-                ? Deferred.succeed(entered, undefined).pipe(
-                    Effect.andThen(Deferred.await(release)),
-                    Effect.andThen(real.deleteInactivePenBound(input)),
-                  )
-                : real.deleteInactivePenBound(input),
-          }),
-        });
-        const runtime = yield* env.start;
-        yield* runtime.replaceTrustRoot(person, env.root);
-        const registration = yield* Queue.take(env.registrations);
-        const pen = yield* PenSessionsModule.PenSessions.pipe(Effect.provide(env.services));
-        const status = yield* runtime.status;
-        const generation = status.state === "listening" ? status.generation : -1;
-        const connection = penConnection(peerOf(member("a")), { generation });
-        hold = true;
-        const held = yield* pen
-          .issue(
-            connection.context,
-            JSON.stringify({ kind: "proxy", scopes: ["orchestration:read"] }),
-          )
-          .pipe(Effect.forkScoped({ startImmediately: true }));
-        yield* Deferred.await(entered);
-        hold = false;
-        const replacing = yield* runtime
-          .replaceTrustRoot(person, null)
-          .pipe(Effect.forkScoped({ startImmediately: true }));
-        yield* Deferred.succeed(release, undefined);
-        const issued = yield* Fiber.join(held);
-        yield* Fiber.join(replacing);
-        yield* Deferred.await(registration.lost);
-        const sessions = yield* SessionStore.SessionStore.pipe(Effect.provide(env.services));
-        const exit = yield* Effect.exit(sessions.verify(issued.token, connection.context));
-        expect(Exit.isFailure(exit)).toBe(true);
-        expect(
-          (yield* Effect.flip(
-            pen.issue(
-              connection.context,
-              JSON.stringify({ kind: "proxy", scopes: ["orchestration:read"] }),
-            ),
-          )).code,
-        ).toBe("refused");
-      }).pipe(Effect.scoped),
-  );
-
-  it.effect(
-    "a hand-edited root fences the live generation and stays off until a person confirms",
-    () =>
-      Effect.gen(function* () {
-        const env = yield* setup();
-        const changes = yield* Queue.unbounded<ServerSettings>();
-        const base = yield* Settings.ServerSettingsService.pipe(Effect.provide(env.services));
-        const runtime = yield* env.startWith({
-          settings: {
-            ...base,
-            streamChanges: Stream.fromQueue(changes),
-            subscribeChanges: Effect.succeed(Stream.fromQueue(changes)),
-          },
-        });
         yield* runtime.replaceTrustRoot(person, env.root);
         const first = yield* Queue.take(env.registrations);
-        const current = yield* base.getSettings;
-        const edited = { ...env.root, nodeId: member("q") };
-        yield* Queue.offer(changes, current);
-        // A hand edit changes what is stored, then a notification arrives.
-        yield* base.updateSettings({ pen: edited });
-        yield* Queue.offer(changes, { ...current, pen: edited });
+        const token = yield* proxyToken(first.port, first.key, member("a"));
+        const sessionId = yield* sessionIdOf(token, member("a")).pipe(Effect.provide(env.services));
+        const live = yield* keepAlive(first.port, first.key, member("a"), token);
+        yield* runtime.replaceTrustRoot(person, { ...env.root, nodeId: member("q") });
+        yield* Deferred.await(live.closed);
         yield* Deferred.await(first.lost);
+        yield* SessionStore.SessionStore.pipe(
+          Effect.flatMap((sessions) => sessions.awaitInvalidation(sessionId)),
+          Effect.provide(env.services),
+        );
+        const second = yield* Queue.take(env.registrations);
+        expect(Buffer.from(second.key).equals(Buffer.from(first.key))).toBe(false);
+        yield* runtime.replaceTrustRoot(person, null);
+        yield* Deferred.await(second.lost);
         expect(yield* runtime.status).toMatchObject({ state: "off" });
-        // A confirmation waits behind the edit's own transition, so only it may register.
-        yield* runtime.replaceTrustRoot(person, edited);
-        expect((yield* Queue.take(env.registrations)).port).toBeGreaterThan(0);
-        expect(yield* Queue.size(env.registrations)).toBe(0);
       }).pipe(Effect.scoped),
-  );
+    );
 
-  it.effect("an edit stored while startup registers fences that generation once startup ends", () =>
-    Effect.gen(function* () {
-      const env = yield* setup({ stored: true });
-      const hold = yield* Deferred.make<void>();
-      env.holds.push(hold);
-      const base = yield* Settings.ServerSettingsService.pipe(Effect.provide(env.services));
-      const starting = yield* env.start.pipe(Effect.forkScoped({ startImmediately: true }));
-      const first = yield* Queue.take(env.registrations);
-      // The test settings publish no notification, so only startup's own reconcile can see this.
-      yield* base.updateSettings({ pen: { ...env.root, nodeId: member("q") } });
-      yield* Deferred.succeed(hold, undefined);
-      const runtime = yield* Fiber.join(starting);
-      expect(yield* Deferred.isDone(first.lost)).toBe(true);
-      expect(yield* runtime.status).toMatchObject({ state: "off" });
-      expect(yield* Queue.size(env.registrations)).toBe(0);
-    }).pipe(Effect.scoped),
-  );
+    it.effect("a Pen path that turns unsafe ends the generation at the next accept", () =>
+      Effect.gen(function* () {
+        const env = yield* setup();
+        const runtime = yield* env.start;
+        yield* runtime.replaceTrustRoot(person, env.root);
+        const registration = yield* Queue.take(env.registrations);
+        const token = yield* proxyToken(registration.port, registration.key, member("a"));
+        const live = yield* keepAlive(registration.port, registration.key, member("a"), token);
+        env.platform.safe = false;
+        const refused = yield* dial(registration.port);
+        yield* Deferred.await(refused.closed);
+        expect(refused.received()).toBe("");
+        yield* Deferred.await(registration.lost);
+        yield* Deferred.await(live.closed);
+        expect(yield* runtime.status).toMatchObject({ state: "off" });
+        expect((yield* Effect.flip(runtime.replaceTrustRoot(person, env.root))).reason).toContain(
+          "writable by another user",
+        );
+      }).pipe(Effect.scoped),
+    );
 
-  it.effect("confirmations run one at a time and leave only the last confirmed root running", () =>
-    Effect.gen(function* () {
-      const env = yield* setup();
-      const entered = yield* Deferred.make<void>();
-      const hold = yield* Deferred.make<void>();
-      const waits = yield* Queue.unbounded<string>();
-      const base = yield* Settings.ServerSettingsService.pipe(Effect.provide(env.services));
-      const pen = yield* PenSessionsModule.PenSessions.pipe(Effect.provide(env.services));
-      const runtime = yield* env.startWith({
-        // A pauses inside its own settings write, after its fence and before its start.
-        settings: {
-          ...base,
-          updateSettings: (patch, authorize) =>
-            patch.pen?.nodeId === env.root.nodeId
-              ? Deferred.succeed(entered, undefined).pipe(
-                  Effect.andThen(Deferred.await(hold)),
-                  Effect.andThen(base.updateSettings(patch, authorize)),
-                )
-              : base.updateSettings(patch, authorize),
-        },
-        // Wherever B has to wait (the transition, or the issue lock), it is queued before A goes on.
-        onTransitionWait: Queue.offer(waits, "transition").pipe(Effect.asVoid),
-        penSessions: {
-          ...pen,
-          withIssueLock: (effect) =>
-            Queue.offer(waits, "issue lock").pipe(
-              Effect.andThen(pen.withIssueLock(effect)),
-              // Hand a released lock to whoever is queued for it, as a busy scheduler may.
-              Effect.tap(() => Effect.yieldNow),
+    it.effect(
+      "startup revokes every Pen-bound session before accepting, and starts from a stored root",
+      () =>
+        Effect.gen(function* () {
+          const env = yield* setup({ stored: true });
+          const stale = yield* SessionStore.SessionStore.pipe(
+            Effect.flatMap((sessions) =>
+              sessions.issue({
+                subject: "mcp-client",
+                method: "bearer-access-token",
+                scopes: ["orchestration:read"],
+                principalKind: "outside_client",
+                penBinding: {
+                  meshId: PIN.meshId,
+                  nodeId: member("a"),
+                  signPub: "s",
+                  noisePub: "n",
+                },
+              }),
             ),
-        },
-      });
-      const confirmA = yield* runtime
-        .replaceTrustRoot(person, env.root)
-        .pipe(Effect.forkScoped({ startImmediately: true }));
-      yield* Deferred.await(entered);
-      yield* Queue.clear(waits);
-      const confirmB = yield* runtime
-        .replaceTrustRoot(person, { ...env.root, nodeId: member("q") })
-        .pipe(Effect.forkScoped({ startImmediately: true }));
-      yield* Queue.take(waits);
-      yield* Deferred.succeed(hold, undefined);
-      yield* Fiber.join(confirmA);
-      yield* Fiber.join(confirmB);
-      const first = yield* Queue.take(env.registrations);
-      const last = yield* Queue.take(env.registrations);
-      expect(yield* Deferred.isDone(first.lost)).toBe(true);
-      expect(yield* Deferred.isDone(last.lost)).toBe(false);
-      expect(yield* runtime.status).toMatchObject({ state: "listening", port: last.port });
-      expect(yield* Queue.size(env.registrations)).toBe(0);
-    }).pipe(Effect.scoped),
-  );
+            Effect.provide(env.services),
+          );
+          yield* env.start;
+          yield* SessionStore.SessionStore.pipe(
+            Effect.flatMap((sessions) => sessions.awaitInvalidation(stale.sessionId)),
+            Effect.provide(env.services),
+          );
+          expect((yield* Queue.take(env.registrations)).port).toBeGreaterThan(0);
+        }).pipe(Effect.scoped),
+    );
 
-  it.effect("a late notification of an earlier confirmation does not fence the newer one", () =>
-    Effect.gen(function* () {
-      const env = yield* setup();
-      const changes = yield* Queue.unbounded<ServerSettings>();
-      const waits = yield* Queue.unbounded<void>();
-      const base = yield* Settings.ServerSettingsService.pipe(Effect.provide(env.services));
-      const runtime = yield* env.startWith({
-        settings: {
-          ...base,
-          streamChanges: Stream.fromQueue(changes),
-          subscribeChanges: Effect.succeed(Stream.fromQueue(changes)),
-        },
-        onTransitionWait: Queue.offer(waits, undefined).pipe(Effect.asVoid),
-      });
-      yield* runtime.replaceTrustRoot(person, env.root);
-      const a = yield* Queue.take(env.registrations);
-      const atA = yield* base.getSettings;
-      yield* runtime.replaceTrustRoot(person, { ...env.root, nodeId: member("q") });
-      const b = yield* Queue.take(env.registrations);
-      yield* Deferred.await(a.lost);
-      yield* Queue.clear(waits);
-      yield* Queue.offer(changes, atA);
-      yield* Queue.offer(changes, yield* base.getSettings);
-      // The handler takes one notification at a time: the second wait means the first is done.
-      yield* Queue.take(waits);
-      yield* Queue.take(waits);
-      expect(yield* Deferred.isDone(b.lost)).toBe(false);
-      expect(yield* runtime.status).toMatchObject({ state: "listening", port: b.port });
-    }).pipe(Effect.scoped),
-  );
+    it.effect("Pen dropping GOAT's registration ends the generation", () =>
+      Effect.gen(function* () {
+        const env = yield* setup();
+        const runtime = yield* env.start;
+        yield* runtime.replaceTrustRoot(person, env.root);
+        const registration = yield* Queue.take(env.registrations);
+        const token = yield* proxyToken(registration.port, registration.key, member("a"));
+        const sessionId = yield* sessionIdOf(token, member("a")).pipe(Effect.provide(env.services));
+        yield* Deferred.succeed(registration.lost, undefined);
+        yield* SessionStore.SessionStore.pipe(
+          Effect.flatMap((sessions) => sessions.awaitInvalidation(sessionId)),
+          Effect.provide(env.services),
+        );
+        expect(yield* runtime.status).toMatchObject({ state: "off" });
+      }).pipe(Effect.scoped),
+    );
 
-  it.effect(
-    "a revocation that fails keeps Pen off until it succeeds; the old token stays dead",
-    () =>
+    it.effect(
+      "the member watch revokes a departed member's sessions and fences on another mesh",
+      () =>
+        Effect.gen(function* () {
+          const env = yield* setup();
+          const { watching, send } = yield* controlSocket(env.root.stateDir);
+          const runtime = yield* env.start;
+          yield* runtime.replaceTrustRoot(person, env.root);
+          const registration = yield* Queue.take(env.registrations);
+          const tokenA = yield* proxyToken(registration.port, registration.key, member("a"));
+          const tokenB = yield* proxyToken(registration.port, registration.key, member("b"));
+          const idA = yield* sessionIdOf(tokenA, member("a")).pipe(Effect.provide(env.services));
+          const idB = yield* sessionIdOf(tokenB, member("b")).pipe(Effect.provide(env.services));
+          yield* Deferred.await(watching);
+          yield* send(snapshot(7, PIN.meshId, [PIN.nodeId, member("a")]));
+          yield* SessionStore.SessionStore.pipe(
+            Effect.flatMap((sessions) => sessions.awaitInvalidation(idB)),
+            Effect.provide(env.services),
+          );
+          expect(yield* projects(registration.port, registration.key, member("a"), tokenA)).toBe(
+            200,
+          );
+          yield* send(snapshot(8, member("n"), [PIN.nodeId, member("a")]));
+          yield* Deferred.await(registration.lost);
+          yield* SessionStore.SessionStore.pipe(
+            Effect.flatMap((sessions) => sessions.awaitInvalidation(idA)),
+            Effect.provide(env.services),
+          );
+          expect(yield* runtime.status).toMatchObject({ state: "off" });
+        }).pipe(Effect.scoped),
+    );
+
+    it.effect("a departed member whose sessions cannot be withdrawn ends the generation", () =>
       Effect.gen(function* () {
         let failing = false;
         const env = yield* setup({
@@ -706,64 +443,355 @@ it.layer(NodeServices.layer)("PenRuntime (mesh link design §7)", (it) => {
                 : real.listPenBound(input),
           }),
         });
+        const { watching, send } = yield* controlSocket(env.root.stateDir);
         const runtime = yield* env.start;
         yield* runtime.replaceTrustRoot(person, env.root);
-        const first = yield* Queue.take(env.registrations);
-        const token = yield* proxyToken(first.port, first.key, member("a"));
-        const sessionId = yield* sessionIdOf(token, member("a")).pipe(Effect.provide(env.services));
+        const registration = yield* Queue.take(env.registrations);
+        yield* proxyToken(registration.port, registration.key, member("b"));
+        yield* Deferred.await(watching);
         failing = true;
-        expect((yield* Effect.flip(runtime.replaceTrustRoot(person, null))).reason).toContain(
-          "could not all be withdrawn",
-        );
-        yield* Deferred.await(first.lost);
-        expect(yield* runtime.status).toMatchObject({
-          state: "off",
-          reason: expect.stringContaining("could not all be withdrawn"),
-        });
+        yield* send(snapshot(1, PIN.meshId, [PIN.nodeId]));
+        yield* Deferred.await(registration.lost);
+        // A confirmation queues behind the fence and finds the withdrawal still owed.
         expect((yield* Effect.flip(runtime.replaceTrustRoot(person, env.root))).reason).toContain(
           "could not all be withdrawn",
         );
         expect(yield* Queue.size(env.registrations)).toBe(0);
-        failing = false;
-        yield* runtime.replaceTrustRoot(person, env.root);
-        const second = yield* Queue.take(env.registrations);
-        yield* SessionStore.SessionStore.pipe(
-          Effect.flatMap((sessions) => sessions.awaitInvalidation(sessionId)),
-          Effect.provide(env.services),
-        );
-        expect(yield* projects(second.port, second.key, member("a"), token)).toBe(401);
       }).pipe(Effect.scoped),
-  );
+    );
 
-  it.effect("a hand edit that races a confirmation is fenced after it, not started", () =>
-    Effect.gen(function* () {
-      const env = yield* setup();
-      const hold = yield* Deferred.make<void>();
-      env.holds.push(hold);
-      const changes = yield* Queue.unbounded<ServerSettings>();
-      const base = yield* Settings.ServerSettingsService.pipe(Effect.provide(env.services));
-      const runtime = yield* env.startWith({
-        settings: {
-          ...base,
-          streamChanges: Stream.fromQueue(changes),
-          subscribeChanges: Effect.succeed(Stream.fromQueue(changes)),
-        },
-      });
-      const confirm = yield* runtime
-        .replaceTrustRoot(person, env.root)
-        .pipe(Effect.forkScoped({ startImmediately: true }));
-      const a = yield* Queue.take(env.registrations);
-      const current = yield* base.getSettings;
-      // The edit lands while A is still starting, after A stored its root.
-      yield* base.updateSettings({ pen: { ...env.root, nodeId: member("q") } });
-      yield* Queue.offer(changes, { ...current, pen: { ...env.root, nodeId: member("q") } });
-      yield* Deferred.succeed(hold, undefined);
-      yield* Fiber.join(confirm);
-      yield* Deferred.await(a.lost);
-      // Clearing waits behind the edit's transition; nothing the edit named may have registered.
-      yield* runtime.replaceTrustRoot(person, null);
-      expect(yield* runtime.status).toMatchObject({ state: "off" });
-      expect(yield* Queue.size(env.registrations)).toBe(0);
-    }).pipe(Effect.scoped),
-  );
-});
+    it.effect(
+      "a session issued while its member leaves the mesh is withdrawn by that cleanup",
+      () =>
+        Effect.gen(function* () {
+          const entered = yield* Deferred.make<void>();
+          const release = yield* Deferred.make<void>();
+          const reached = yield* Queue.unbounded<string>();
+          const cleaned = yield* Deferred.make<void>();
+          let hold = false;
+          const env = yield* setup({
+            repository: (real) => ({
+              deleteInactivePenBound: (input) =>
+                hold
+                  ? Deferred.succeed(entered, undefined).pipe(
+                      Effect.andThen(Deferred.await(release)),
+                      Effect.andThen(real.deleteInactivePenBound(input)),
+                    )
+                  : real.deleteInactivePenBound(input),
+            }),
+          });
+          const { watching, send } = yield* controlSocket(env.root.stateDir);
+          const pen = yield* PenSessionsModule.PenSessions.pipe(Effect.provide(env.services));
+          // Signals when the watcher reaches the cleanup, at the issue lock or at the cleanup itself.
+          const runtime = yield* env.startWith({
+            penSessions: {
+              ...pen,
+              withIssueLock: (effect) =>
+                Queue.offer(reached, "issue lock").pipe(Effect.andThen(pen.withIssueLock(effect))),
+              revokeExcept: (members) =>
+                Queue.offer(reached, "cleanup").pipe(
+                  Effect.andThen(pen.revokeExcept(members)),
+                  Effect.ensuring(Deferred.succeed(cleaned, undefined)),
+                ),
+            },
+          });
+          yield* runtime.replaceTrustRoot(person, env.root);
+          yield* Queue.take(env.registrations);
+          yield* Deferred.await(watching);
+          const status = yield* runtime.status;
+          const connection = penConnection(peerOf(member("b")), {
+            generation: status.state === "listening" ? status.generation : -1,
+          });
+          hold = true;
+          const held = yield* pen
+            .issue(
+              connection.context,
+              JSON.stringify({ kind: "proxy", scopes: ["orchestration:read"] }),
+            )
+            .pipe(Effect.forkScoped({ startImmediately: true }));
+          yield* Deferred.await(entered);
+          hold = false;
+          yield* Queue.clear(reached);
+          yield* send(snapshot(1, PIN.meshId, [PIN.nodeId]));
+          yield* Queue.take(reached);
+          yield* Deferred.succeed(release, undefined);
+          const issued = yield* Fiber.join(held);
+          yield* Deferred.await(cleaned);
+          const sessions = yield* SessionStore.SessionStore.pipe(Effect.provide(env.services));
+          expect(
+            Exit.isFailure(yield* Effect.exit(sessions.verify(issued.token, connection.context))),
+          ).toBe(true);
+        }).pipe(Effect.scoped),
+    );
+
+    it.effect(
+      "an issue held inside the lock when the root changes is revoked by the fence; later issues are refused",
+      () =>
+        Effect.gen(function* () {
+          const entered = yield* Deferred.make<void>();
+          const release = yield* Deferred.make<void>();
+          let hold = false;
+          const env = yield* setup({
+            repository: (real) => ({
+              deleteInactivePenBound: (input) =>
+                hold
+                  ? Deferred.succeed(entered, undefined).pipe(
+                      Effect.andThen(Deferred.await(release)),
+                      Effect.andThen(real.deleteInactivePenBound(input)),
+                    )
+                  : real.deleteInactivePenBound(input),
+            }),
+          });
+          const runtime = yield* env.start;
+          yield* runtime.replaceTrustRoot(person, env.root);
+          const registration = yield* Queue.take(env.registrations);
+          const pen = yield* PenSessionsModule.PenSessions.pipe(Effect.provide(env.services));
+          const status = yield* runtime.status;
+          const generation = status.state === "listening" ? status.generation : -1;
+          const connection = penConnection(peerOf(member("a")), { generation });
+          hold = true;
+          const held = yield* pen
+            .issue(
+              connection.context,
+              JSON.stringify({ kind: "proxy", scopes: ["orchestration:read"] }),
+            )
+            .pipe(Effect.forkScoped({ startImmediately: true }));
+          yield* Deferred.await(entered);
+          hold = false;
+          const replacing = yield* runtime
+            .replaceTrustRoot(person, null)
+            .pipe(Effect.forkScoped({ startImmediately: true }));
+          yield* Deferred.succeed(release, undefined);
+          const issued = yield* Fiber.join(held);
+          yield* Fiber.join(replacing);
+          yield* Deferred.await(registration.lost);
+          const sessions = yield* SessionStore.SessionStore.pipe(Effect.provide(env.services));
+          const exit = yield* Effect.exit(sessions.verify(issued.token, connection.context));
+          expect(Exit.isFailure(exit)).toBe(true);
+          expect(
+            (yield* Effect.flip(
+              pen.issue(
+                connection.context,
+                JSON.stringify({ kind: "proxy", scopes: ["orchestration:read"] }),
+              ),
+            )).code,
+          ).toBe("refused");
+        }).pipe(Effect.scoped),
+    );
+
+    it.effect(
+      "a hand-edited root fences the live generation and stays off until a person confirms",
+      () =>
+        Effect.gen(function* () {
+          const env = yield* setup();
+          const changes = yield* Queue.unbounded<ServerSettings>();
+          const base = yield* Settings.ServerSettingsService.pipe(Effect.provide(env.services));
+          const runtime = yield* env.startWith({
+            settings: {
+              ...base,
+              streamChanges: Stream.fromQueue(changes),
+              subscribeChanges: Effect.succeed(Stream.fromQueue(changes)),
+            },
+          });
+          yield* runtime.replaceTrustRoot(person, env.root);
+          const first = yield* Queue.take(env.registrations);
+          const current = yield* base.getSettings;
+          const edited = { ...env.root, nodeId: member("q") };
+          yield* Queue.offer(changes, current);
+          // A hand edit changes what is stored, then a notification arrives.
+          yield* base.updateSettings({ pen: edited });
+          yield* Queue.offer(changes, { ...current, pen: edited });
+          yield* Deferred.await(first.lost);
+          expect(yield* runtime.status).toMatchObject({ state: "off" });
+          // A confirmation waits behind the edit's own transition, so only it may register.
+          yield* runtime.replaceTrustRoot(person, edited);
+          expect((yield* Queue.take(env.registrations)).port).toBeGreaterThan(0);
+          expect(yield* Queue.size(env.registrations)).toBe(0);
+        }).pipe(Effect.scoped),
+    );
+
+    it.effect(
+      "an edit stored while startup registers fences that generation once startup ends",
+      () =>
+        Effect.gen(function* () {
+          const env = yield* setup({ stored: true });
+          const hold = yield* Deferred.make<void>();
+          env.holds.push(hold);
+          const base = yield* Settings.ServerSettingsService.pipe(Effect.provide(env.services));
+          const starting = yield* env.start.pipe(Effect.forkScoped({ startImmediately: true }));
+          const first = yield* Queue.take(env.registrations);
+          // The test settings publish no notification, so only startup's own reconcile can see this.
+          yield* base.updateSettings({ pen: { ...env.root, nodeId: member("q") } });
+          yield* Deferred.succeed(hold, undefined);
+          const runtime = yield* Fiber.join(starting);
+          expect(yield* Deferred.isDone(first.lost)).toBe(true);
+          expect(yield* runtime.status).toMatchObject({ state: "off" });
+          expect(yield* Queue.size(env.registrations)).toBe(0);
+        }).pipe(Effect.scoped),
+    );
+
+    it.effect(
+      "confirmations run one at a time and leave only the last confirmed root running",
+      () =>
+        Effect.gen(function* () {
+          const env = yield* setup();
+          const entered = yield* Deferred.make<void>();
+          const hold = yield* Deferred.make<void>();
+          const waits = yield* Queue.unbounded<string>();
+          const base = yield* Settings.ServerSettingsService.pipe(Effect.provide(env.services));
+          const pen = yield* PenSessionsModule.PenSessions.pipe(Effect.provide(env.services));
+          const runtime = yield* env.startWith({
+            // A pauses inside its own settings write, after its fence and before its start.
+            settings: {
+              ...base,
+              updateSettings: (patch, authorize) =>
+                patch.pen?.nodeId === env.root.nodeId
+                  ? Deferred.succeed(entered, undefined).pipe(
+                      Effect.andThen(Deferred.await(hold)),
+                      Effect.andThen(base.updateSettings(patch, authorize)),
+                    )
+                  : base.updateSettings(patch, authorize),
+            },
+            // Wherever B has to wait (the transition, or the issue lock), it is queued before A goes on.
+            onTransitionWait: Queue.offer(waits, "transition").pipe(Effect.asVoid),
+            penSessions: {
+              ...pen,
+              withIssueLock: (effect) =>
+                Queue.offer(waits, "issue lock").pipe(
+                  Effect.andThen(pen.withIssueLock(effect)),
+                  // Hand a released lock to whoever is queued for it, as a busy scheduler may.
+                  Effect.tap(() => Effect.yieldNow),
+                ),
+            },
+          });
+          const confirmA = yield* runtime
+            .replaceTrustRoot(person, env.root)
+            .pipe(Effect.forkScoped({ startImmediately: true }));
+          yield* Deferred.await(entered);
+          yield* Queue.clear(waits);
+          const confirmB = yield* runtime
+            .replaceTrustRoot(person, { ...env.root, nodeId: member("q") })
+            .pipe(Effect.forkScoped({ startImmediately: true }));
+          yield* Queue.take(waits);
+          yield* Deferred.succeed(hold, undefined);
+          yield* Fiber.join(confirmA);
+          yield* Fiber.join(confirmB);
+          const first = yield* Queue.take(env.registrations);
+          const last = yield* Queue.take(env.registrations);
+          expect(yield* Deferred.isDone(first.lost)).toBe(true);
+          expect(yield* Deferred.isDone(last.lost)).toBe(false);
+          expect(yield* runtime.status).toMatchObject({ state: "listening", port: last.port });
+          expect(yield* Queue.size(env.registrations)).toBe(0);
+        }).pipe(Effect.scoped),
+    );
+
+    it.effect("a late notification of an earlier confirmation does not fence the newer one", () =>
+      Effect.gen(function* () {
+        const env = yield* setup();
+        const changes = yield* Queue.unbounded<ServerSettings>();
+        const waits = yield* Queue.unbounded<void>();
+        const base = yield* Settings.ServerSettingsService.pipe(Effect.provide(env.services));
+        const runtime = yield* env.startWith({
+          settings: {
+            ...base,
+            streamChanges: Stream.fromQueue(changes),
+            subscribeChanges: Effect.succeed(Stream.fromQueue(changes)),
+          },
+          onTransitionWait: Queue.offer(waits, undefined).pipe(Effect.asVoid),
+        });
+        yield* runtime.replaceTrustRoot(person, env.root);
+        const a = yield* Queue.take(env.registrations);
+        const atA = yield* base.getSettings;
+        yield* runtime.replaceTrustRoot(person, { ...env.root, nodeId: member("q") });
+        const b = yield* Queue.take(env.registrations);
+        yield* Deferred.await(a.lost);
+        yield* Queue.clear(waits);
+        yield* Queue.offer(changes, atA);
+        yield* Queue.offer(changes, yield* base.getSettings);
+        // The handler takes one notification at a time: the second wait means the first is done.
+        yield* Queue.take(waits);
+        yield* Queue.take(waits);
+        expect(yield* Deferred.isDone(b.lost)).toBe(false);
+        expect(yield* runtime.status).toMatchObject({ state: "listening", port: b.port });
+      }).pipe(Effect.scoped),
+    );
+
+    it.effect(
+      "a revocation that fails keeps Pen off until it succeeds; the old token stays dead",
+      () =>
+        Effect.gen(function* () {
+          let failing = false;
+          const env = yield* setup({
+            repository: (real) => ({
+              listPenBound: (input) =>
+                failing
+                  ? Effect.fail(
+                      new PersistenceSqlError({ operation: "listPenBound", detail: "disk" }),
+                    )
+                  : real.listPenBound(input),
+            }),
+          });
+          const runtime = yield* env.start;
+          yield* runtime.replaceTrustRoot(person, env.root);
+          const first = yield* Queue.take(env.registrations);
+          const token = yield* proxyToken(first.port, first.key, member("a"));
+          const sessionId = yield* sessionIdOf(token, member("a")).pipe(
+            Effect.provide(env.services),
+          );
+          failing = true;
+          expect((yield* Effect.flip(runtime.replaceTrustRoot(person, null))).reason).toContain(
+            "could not all be withdrawn",
+          );
+          yield* Deferred.await(first.lost);
+          expect(yield* runtime.status).toMatchObject({
+            state: "off",
+            reason: expect.stringContaining("could not all be withdrawn"),
+          });
+          expect((yield* Effect.flip(runtime.replaceTrustRoot(person, env.root))).reason).toContain(
+            "could not all be withdrawn",
+          );
+          expect(yield* Queue.size(env.registrations)).toBe(0);
+          failing = false;
+          yield* runtime.replaceTrustRoot(person, env.root);
+          const second = yield* Queue.take(env.registrations);
+          yield* SessionStore.SessionStore.pipe(
+            Effect.flatMap((sessions) => sessions.awaitInvalidation(sessionId)),
+            Effect.provide(env.services),
+          );
+          expect(yield* projects(second.port, second.key, member("a"), token)).toBe(401);
+        }).pipe(Effect.scoped),
+    );
+
+    it.effect("a hand edit that races a confirmation is fenced after it, not started", () =>
+      Effect.gen(function* () {
+        const env = yield* setup();
+        const hold = yield* Deferred.make<void>();
+        env.holds.push(hold);
+        const changes = yield* Queue.unbounded<ServerSettings>();
+        const base = yield* Settings.ServerSettingsService.pipe(Effect.provide(env.services));
+        const runtime = yield* env.startWith({
+          settings: {
+            ...base,
+            streamChanges: Stream.fromQueue(changes),
+            subscribeChanges: Effect.succeed(Stream.fromQueue(changes)),
+          },
+        });
+        const confirm = yield* runtime
+          .replaceTrustRoot(person, env.root)
+          .pipe(Effect.forkScoped({ startImmediately: true }));
+        const a = yield* Queue.take(env.registrations);
+        const current = yield* base.getSettings;
+        // The edit lands while A is still starting, after A stored its root.
+        yield* base.updateSettings({ pen: { ...env.root, nodeId: member("q") } });
+        yield* Queue.offer(changes, { ...current, pen: { ...env.root, nodeId: member("q") } });
+        yield* Deferred.succeed(hold, undefined);
+        yield* Fiber.join(confirm);
+        yield* Deferred.await(a.lost);
+        // Clearing waits behind the edit's transition; nothing the edit named may have registered.
+        yield* runtime.replaceTrustRoot(person, null);
+        expect(yield* runtime.status).toMatchObject({ state: "off" });
+        expect(yield* Queue.size(env.registrations)).toBe(0);
+      }).pipe(Effect.scoped),
+    );
+  },
+);

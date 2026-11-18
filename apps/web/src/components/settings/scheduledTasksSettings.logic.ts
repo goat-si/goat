@@ -1,10 +1,11 @@
-import { isWebhookDedupeTemplate } from "@goat/contracts";
+import { isWebhookDedupeTemplate, scheduledTaskThreadMode } from "@goat/contracts";
 import {
   EnvironmentId,
   MAX_WEBHOOK_DELIVERY_AGE_MINUTES,
   type ProjectId,
   ScheduledTaskId,
   type ScheduledTask,
+  type ScheduledTaskThreadMode,
   type ScheduledTaskUpsertSchedule,
   type ModelSelection,
   type OrchestrationV2ThreadLaunchWorkspaceStrategy,
@@ -68,6 +69,9 @@ export interface DraftState {
   readonly weekdays: ReadonlySet<number>;
   readonly projectId: string;
   readonly threadId: string;
+  readonly threadMode: ScheduledTaskThreadMode;
+  /** Set when leaving the thread dropped Important updates, so the form can say so. */
+  readonly notificationPolicyReset?: boolean;
   readonly workspaceMode: WorkspaceMode;
   readonly baseRef: string;
   readonly startFromOrigin: boolean;
@@ -218,6 +222,7 @@ export function taskToDraft(task: ScheduledTask): DraftState {
     weekdays,
     projectId: task.projectId,
     threadId: task.threadId ?? "",
+    threadMode: scheduledTaskThreadMode(task),
     workspaceMode: task.workspaceStrategy.type,
     baseRef: task.workspaceStrategy.type === "worktree" ? task.workspaceStrategy.baseRef : "main",
     startFromOrigin:
@@ -323,6 +328,7 @@ export const EMPTY_DRAFT: DraftState = {
   weekdays: new Set([1, 2, 3, 4, 5]),
   projectId: "",
   threadId: "",
+  threadMode: "new_thread",
   workspaceMode: "worktree",
   baseRef: "main",
   startFromOrigin: true,
@@ -354,3 +360,60 @@ export function workspaceStrategyFromDraft(
     startFromOrigin: draft.startFromOrigin,
   };
 }
+
+/** A draft that keeps a thread again drops the reset notice: its reason no longer holds. */
+const settleNotice = (draft: DraftState): DraftState =>
+  draft.threadId !== "" && draft.threadMode !== "new_thread"
+    ? { ...draft, notificationPolicyReset: false }
+    : draft;
+
+/**
+ * Destination shows what the save stores. Important updates needs a thread, so a new thread each
+ * run drops it to All runs. A one-thread mode keeps the saved thread unless the project changed,
+ * as the server does, so a draft cleared by "Run in new threads" gets it back.
+ */
+export const withThreadMode = (
+  draft: DraftState,
+  threadMode: ScheduledTaskThreadMode,
+  saved?: Pick<ScheduledTask, "threadId" | "projectId"> | null,
+): DraftState =>
+  threadMode === "new_thread"
+    ? draft.notificationPolicy === "important_updates"
+      ? { ...draft, threadMode, notificationPolicy: "all_runs", notificationPolicyReset: true }
+      : { ...draft, threadMode }
+    : settleNotice(
+        draft.threadId === "" && saved?.threadId && draft.projectId === saved.projectId
+          ? { ...draft, threadMode, threadId: saved.threadId }
+          : { ...draft, threadMode },
+      );
+
+/**
+ * A task moved to another project leaves its thread on save, as the server does, so the draft
+ * leaves it now, with the same Important updates reset; the saved project gets it back. Callers
+ * pass the saved task only for a server with thread modes; an older server keeps the thread.
+ */
+export const withProject = (
+  draft: DraftState,
+  projectId: string,
+  saved?: Pick<ScheduledTask, "threadId" | "projectId"> | null,
+): DraftState => {
+  const moved = { ...draft, projectId };
+  if (!saved?.threadId) return moved;
+  if (projectId === saved.projectId)
+    return draft.threadId === "" && draft.threadMode !== "new_thread"
+      ? settleNotice({ ...moved, threadId: saved.threadId })
+      : moved;
+  if (draft.threadId === "") return moved;
+  return draft.notificationPolicy === "important_updates"
+    ? { ...moved, threadId: "", notificationPolicy: "all_runs", notificationPolicyReset: true }
+    : { ...moved, threadId: "" };
+};
+
+// Still bound to its GOAT Bot conversation; moved to new threads it is an ordinary task again.
+export const isBotRoutineDraft = (
+  liveTask: ScheduledTask | null | undefined,
+  draft: Pick<DraftState, "threadId">,
+) =>
+  liveTask?.goatBotRoutine === true &&
+  draft.threadId !== "" &&
+  draft.threadId === liveTask.threadId;

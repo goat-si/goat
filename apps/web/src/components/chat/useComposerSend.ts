@@ -10,18 +10,12 @@ import {
   sendTitleFallbackLabels,
   snapshotComposerSend,
   withMessageContext,
-  makeThreadErrorSetter,
 } from "../ChatView.logic";
 import { isUsageLimitsCommand } from "@goat/shared/usageLimits";
 import {
   AuthOrchestrationOperateScope,
   DEFAULT_MODEL,
-  type EnvironmentId,
-  type ModelSelection,
   type PreviewAnnotationPayload,
-  type ThreadId,
-  ProviderInteractionMode,
-  RuntimeMode,
 } from "@goat/contracts";
 import { deriveThreadTitleSeed } from "@goat/client-runtime/operations";
 import { wasBootstrapThreadDeleted } from "@goat/client-runtime/errors";
@@ -29,14 +23,10 @@ import {
   declinePendingApprovals,
   sendApprovalFeedback,
 } from "@goat/client-runtime/state/thread-requests";
-import {
-  parseCodexFeedbackCommand,
-  submitCodexFeedback,
-  type CodexFeedbackSubmission,
-} from "@goat/client-runtime/state/threads";
+import { parseCodexFeedbackCommand, submitCodexFeedback } from "@goat/client-runtime/state/threads";
 import { scopedThreadKey, scopeProjectRef, scopeThreadRef } from "@goat/client-runtime/environment";
 import { createModelSelection } from "@goat/shared/model";
-import { type SetStateAction, useLayoutEffect, useRef } from "react";
+import { useLayoutEffect, useRef } from "react";
 import { flushSync } from "react-dom";
 import { useNavigate } from "@tanstack/react-router";
 import {
@@ -66,13 +56,10 @@ import {
   markPromotedDraftThreadByRef,
   restoreFailedDraftThread,
   composerDraftHasUserContent,
-  type ComposerFileAttachment,
   type ComposerImageAttachment,
-  type DraftThreadEnvMode,
   useComposerDraftStore,
   DraftId,
 } from "../../composerDraftStore";
-import { type TerminalContextDraft } from "../../lib/terminalContext";
 import { ensureInlineContextReferences } from "../../lib/composerContextReferences";
 import {
   buildMessageContext,
@@ -82,7 +69,7 @@ import { environmentServerConfigsAtom } from "../../state/server";
 import { threadEnvironment } from "../../state/threads";
 import { runMobileComposerTransition } from "./draftHeroTransition";
 import { useClientSettingsHydrated, useEnvironmentSettings } from "../../hooks/useSettings";
-import { environmentPresentations } from "../../state/presentation";
+import { useSendWithRouting } from "./useSendWithRouting";
 import {
   approvalRedirectNotice,
   expiredTerminalContextToast,
@@ -102,7 +89,6 @@ import {
   startAttachmentUpload,
 } from "../../lib/attachmentUploadQueue";
 import { appAtomRegistry } from "../../rpc/atomRegistry";
-import { fileAttachmentCapabilityBlockReason } from "./composerAttachmentFiles";
 import { readEnvironmentScope } from "../../state/session";
 import { useOrchestrationCommand } from "../../state/use-orchestration-command";
 import {
@@ -111,37 +97,18 @@ import {
 } from "@goat/shared/composerContextReferences";
 import {
   draftSendState,
+  notifySendBusy,
   type MultipleModelTarget,
   resolveMultipleModelTargets,
   prepareTurnAttachments,
   restoreComposerDraft,
 } from "./chatViewSend";
-import type { EnvironmentProject, EnvironmentThreadShell } from "@goat/client-runtime/state/shell";
-import type { UnifiedSettings } from "@goat/contracts";
-import type { Dispatch } from "react";
-import type { ComposerThreadTarget } from "../../composerDraftStore";
-import type { ProviderInstanceEntry } from "../../providerInstances";
-import type { SessionPhase } from "../../types";
-import type { DraftSessionState } from "../../composerDraftStore";
-import type { ComposerHandleRef } from "../../composerHandleContext";
-import type { useLogicalProjectEnvironments } from "../../hooks/useLogicalProjectEnvironments";
-import type { LatestProposedPlanState } from "../../session-logic";
-import type { useDraftEnvironmentRouting } from "./useDraftEnvironmentRouting";
-import type { useLocalDispatchState } from "./useLocalDispatchState";
-import type { usePendingThreadRequests } from "./usePendingThreadRequests";
-import type { useQueuedRunEdit } from "./useQueuedRunEdit";
-import type { useTimelineFollow } from "./useTimelineFollow";
-import type { useUsageLimitsPanel } from "./useUsageLimitsPanel";
-import type { useWorktreeSetup } from "./useWorktreeSetup";
-import type { DraftSshDestination } from "../../composerDraftStore";
+import { notifyDirectAnnotationAttached } from "./composerSendNotices";
 import { NO_PROVIDER_MODEL_SELECTION } from "../../providerInstances";
 import type { SavedSshWorktreeOption } from "../../lib/sshWorktree";
-import type { SshThreadOpenPorts } from "../../lib/sshWorktreeSubmission";
-import type { SshWorktreeSubmissionPorts } from "../../lib/sshWorktreeSubmission";
 import { environmentCatalog } from "../../connection/catalog";
 import { environmentThreadDetails } from "../../state/threads";
 import { findSavedSshWorktreeOption } from "../../lib/sshWorktree";
-import { isDraftContentUnchanged } from "../ChatView.logic";
 import { openSshThread } from "../../lib/sshWorktreeSubmission";
 import { parseSideChatCommand } from "../sideChat/sideChat.logic";
 import { readThreadShell } from "../../state/entities";
@@ -153,132 +120,27 @@ import { sshWorktreeErrorFeedback } from "../../lib/sshWorktreeSubmission";
 import { sshWorktreeSendBlockReason } from "../../lib/sshWorktree";
 import { submitSshWorktree } from "../../lib/sshWorktreeSubmission";
 import { sshStartedNotOpenedToast } from "./sshStartedNotOpenedToast";
-import { useRightPanelStore } from "../../rightPanelStore";
-import { useSideChatStore } from "../sideChat/sideChatStore";
-import { waitForThreadShell } from "../../state/entities";
-import type { ScopedThreadRef } from "@goat/contracts";
-import { deriveCloudTaskState } from "@goat/client-runtime/state/cloud-task";
+import { queueSideChatQuestion, startSideChatOverAnswer } from "../sideChat/sideChatFromComposer";
 import { useAtomCommand } from "../../state/use-atom-command";
+import { sshComposerPorts, type SshComposerPorts } from "./sshComposerPorts";
+import { draftReplyTo, refuseReplyThatGoesUnread, withReplyReference } from "./composerReply";
 import { vcsEnvironment } from "../../state/vcs";
+import type { ComposerSendInput } from "./useComposerSend.input";
+import {
+  checkoutBranchOverride,
+  draftHasNonPromptContent,
+  firstCallOnly,
+  liveAttachmentCapabilities,
+  readEnvironmentPresentation,
+  saveSettingsBeforeRedirect,
+  selectPlanModeEnabled,
+  showMultipleModelsNeedGitThread,
+} from "./useComposerSend.helpers";
+import { keepFailedSendInStash } from "./stashFailedSend";
 
 const sshWorkspaceLaunchCommand = vcsEnvironment.sshWorkspaceLaunch;
 
 const ENVIRONMENT_UNAVAILABLE_SEND_TOAST_TRAIL_SIZE = 3;
-
-const selectPlanModeEnabled = (settings: UnifiedSettings) => settings.planModeEnabled;
-
-function readEnvironmentPresentation(environmentId: EnvironmentId) {
-  return appAtomRegistry.get(environmentPresentations.presentationsAtom).get(environmentId);
-}
-
-function draftHasNonPromptContent(target: ComposerThreadTarget) {
-  const draft = useComposerDraftStore.getState().getComposerDraft(target);
-  return draft ? composerDraftHasUserContent({ ...draft, prompt: "" }) : false;
-}
-
-type PendingThreadRequests = ReturnType<typeof usePendingThreadRequests>;
-type LocalDispatchState = ReturnType<typeof useLocalDispatchState>;
-type DraftEnvironmentRouting = ReturnType<typeof useDraftEnvironmentRouting>;
-type UsageLimitsPanel = ReturnType<typeof useUsageLimitsPanel>;
-type TimelineFollow = ReturnType<typeof useTimelineFollow>;
-
-interface ComposerSendInput {
-  readonly isCloudThread: boolean;
-  readonly activeThreadRef: ScopedThreadRef | null;
-  readonly environmentId: EnvironmentId;
-  readonly routeThreadRef: ScopedThreadRef;
-  readonly primaryEnvironmentId: EnvironmentId | null;
-  readonly cloudState: ReturnType<typeof deriveCloudTaskState>;
-  readonly sideChatAvailable: boolean;
-  /** GOAT: what decides whether this thread can continue on a saved SSH host. */
-  readonly sshHandoffGuard: Omit<
-    Parameters<typeof sshThreadHandoffBlockReason>[0],
-    "sourceThreadAvailable" | "hasMessages" | "runs" | "catalogReady" | "options" | "canLaunch"
-  >;
-  readonly routeThreadKey: string;
-  readonly currentRouteThreadKeyRef: { readonly current: string | null };
-  readonly draftId: DraftId | null;
-  readonly draftThread: DraftSessionState | null;
-  readonly activeThread: EnvironmentThreadShell | undefined;
-  readonly activeThreadKey: string | null;
-  readonly activeThreadBranch: string | null;
-  readonly activeProject: EnvironmentProject | null;
-  readonly activeProjectDefaultModelSelection: ModelSelection | null;
-  readonly activeProposedPlan: LatestProposedPlanState | null;
-  readonly activeMessageCount: number;
-  readonly isServerThread: boolean;
-  readonly isLocalDraftThread: boolean;
-  readonly isGitRepo: boolean;
-  readonly phase: SessionPhase;
-  readonly runtimeMode: RuntimeMode;
-  readonly sendEnvMode: DraftThreadEnvMode;
-  readonly startFromOrigin: boolean;
-  readonly localCheckoutBranchMismatch: {
-    readonly threadBranch: string;
-    readonly currentBranch: string;
-  } | null;
-  readonly logicalProjectEnvironments: ReturnType<typeof useLogicalProjectEnvironments>;
-  readonly providerInstanceEntries: ReadonlyArray<ProviderInstanceEntry>;
-  readonly composerRef: ComposerHandleRef;
-  readonly composerDraftTarget: ComposerThreadTarget;
-  readonly promptRef: { current: string };
-  readonly composerImagesRef: { current: ComposerImageAttachment[] };
-  readonly composerFilesRef: { current: ComposerFileAttachment[] };
-  readonly composerTerminalContextsRef: { current: TerminalContextDraft[] };
-  readonly feedbackUploadsInFlightRef: { readonly current: Set<string> };
-  readonly queuedRunEdit: ReturnType<typeof useQueuedRunEdit>;
-  readonly isConnecting: boolean;
-  readonly isRevertingCheckpoint: boolean;
-  readonly threadDetailLoading: boolean;
-  readonly activeEnvironmentUnavailable: boolean;
-  readonly isSendBusy: boolean;
-  readonly sendQueuesBehindSetup: boolean;
-  readonly isDraftHeroState: boolean;
-  readonly panelAnimationsActive: boolean;
-  readonly panelAnimationDurationMs: number;
-  readonly keepFullHistory: boolean;
-  readonly resumeCompactionTokens: number | null;
-  readonly showPlanFollowUpPrompt: boolean;
-  readonly usageLimitsKey: string | null;
-  readonly usageLimitsOffered: boolean;
-  readonly openUsageLimits: UsageLimitsPanel["open"];
-  readonly clearUsageLimitsFor: UsageLimitsPanel["clearFor"];
-  readonly needsLoadBalancing: boolean;
-  readonly loadBalancing: DraftEnvironmentRouting["loadBalancing"];
-  readonly readPendingEnvironmentChange: DraftEnvironmentRouting["readPendingEnvironmentChange"];
-  readonly pendingApprovals: PendingThreadRequests["pendingApprovals"];
-  readonly respondingRequestIds: PendingThreadRequests["respondingRequestIds"];
-  readonly activePendingProgress: PendingThreadRequests["activePendingProgress"];
-  readonly onAdvanceActivePendingUserInput: PendingThreadRequests["onAdvanceActivePendingUserInput"];
-  readonly onRespondToApproval: PendingThreadRequests["onRespondToApproval"];
-  readonly beginLocalDispatch: LocalDispatchState["beginLocalDispatch"];
-  readonly resetLocalDispatch: LocalDispatchState["resetLocalDispatch"];
-  readonly beginWorktreeSetup: ReturnType<typeof useWorktreeSetup>["begin"];
-  readonly captureDraftHeroComposerRect: () => void;
-  readonly setDockedDraftHeroThreadKey: Dispatch<SetStateAction<string | null>>;
-  readonly setSetupQueueSendThreadKey: Dispatch<SetStateAction<string | null>>;
-  readonly setOptimisticUserMessages: Dispatch<SetStateAction<ChatMessage[]>>;
-  readonly optimisticBlobPreviews: {
-    readonly track: (message: ChatMessage) => void;
-    readonly release: (message: ChatMessage) => void;
-  };
-  readonly setFeedbackSubmissionsByThreadKey: Dispatch<
-    SetStateAction<Record<string, ReadonlyArray<CodexFeedbackSubmission>>>
-  >;
-  readonly setThreadError: ReturnType<typeof makeThreadErrorSetter>;
-  readonly setKeepFullHistory: (threadKey: string, keep: boolean) => void;
-  readonly anchorNewTurn: TimelineFollow["anchorNewTurn"];
-  readonly acknowledgeActiveThreadWoke: () => void;
-  readonly handleInteractionModeChange: (mode: ProviderInteractionMode) => void;
-  readonly handleNewThreadInActiveProject: () => void;
-  readonly persistThreadSettingsForNextTurn: (input: {
-    threadId: ThreadId;
-    createdAt: string;
-    branch?: string;
-    runtimeMode: RuntimeMode;
-    interactionMode: ProviderInteractionMode;
-  }) => Promise<AtomCommandResult<void, unknown>>;
-}
 
 /**
  * Everything the composer's send button can start: a turn on this thread or a new one,
@@ -343,11 +205,13 @@ export function useComposerSend(input: ComposerSendInput) {
     clearUsageLimitsFor,
     needsLoadBalancing,
     loadBalancing,
+    refreshBeforeSend,
     readPendingEnvironmentChange,
     pendingApprovals,
     respondingRequestIds,
     activePendingProgress,
     onAdvanceActivePendingUserInput,
+    onChangeActivePendingUserInputCustomAnswer,
     onRespondToApproval: onRespondToApprovalStable,
     beginLocalDispatch,
     resetLocalDispatch,
@@ -434,77 +298,24 @@ export function useComposerSend(input: ComposerSendInput) {
     respondingRequestIdsRef.current = respondingRequestIds;
   }, [pendingApprovals, respondingRequestIds]);
 
-  const makeSshThreadOpenPorts = (
-    savedDestination: DraftSshDestination,
-    automaticRouteKey: string | null,
-  ): SshThreadOpenPorts => ({
-    reconnect: async (savedEnvironmentId) => {
-      const catalog = appAtomRegistry.get(environmentCatalog.catalogValueAtom);
-      const option = findSavedSshWorktreeOption(
-        savedSshWorktreeOptions(catalog.entries, window.desktopBridge !== undefined),
-        savedDestination,
-      );
-      if (
-        !catalog.isReady ||
-        !option ||
-        option.disabledReason ||
-        savedEnvironmentId !== savedDestination.environmentId
-      ) {
-        throw new Error("This saved SSH connection is unavailable. Check Settings → Connections.");
-      }
-      const result = await retryEnvironment(savedEnvironmentId);
-      if (result._tag === "Failure") throw squashAtomCommandFailure(result);
-    },
-    waitForShell: waitForThreadShell,
-    navigate: async (remoteRef) => {
-      if (automaticRouteKey !== null && currentRouteThreadKeyRef.current !== automaticRouteKey) {
-        throw new Error("The remote thread started. Use Open thread when ready.");
-      }
-      await navigate({
-        to: "/$environmentId/$threadId",
-        params: buildThreadRouteParams(remoteRef),
-        replace: true,
-      });
-    },
-  });
-  const makeSshSubmissionPorts = (
-    capturedDraftId: DraftId,
-    submittedContentSnapshot: string,
-    savedDestination: DraftSshDestination,
-    capturedRouteThreadKey: string,
-    onDispatchBegan: () => void,
-  ): SshWorktreeSubmissionPorts => {
-    return {
-      ...makeSshThreadOpenPorts(savedDestination, capturedRouteThreadKey),
-      launch: async (target) => {
-        onDispatchBegan();
-        const result = await launchSshWorkspace(target);
-        if (result._tag === "Failure") throw squashAtomCommandFailure(result);
-        return result.value;
-      },
-      // Always re-read by captured ID, including after route changes or remounts.
-      isSubmittedDraftContentUnchanged: () =>
-        isDraftContentUnchanged(
-          submittedContentSnapshot,
-          useComposerDraftStore.getState().getComposerDraft(capturedDraftId),
-        ),
-      // Called synchronously after an unchanged-content comparison and successful navigation.
-      deleteSubmittedDraft: () => clearDraftThread(capturedDraftId),
-      // Called when navigation did not happen (timeout, route changed, identity mismatch): the draft
-      // session stays so its route stays mounted. Called only when content still matches the
-      // snapshot; remove it through the existing selector alias, never the displayed target.
-      emptySubmittedDraftContent: () => {
-        clearComposerDraftContent(capturedDraftId); // ChatView.tsx:1833 → composerDraftStore.ts:4186
-        if (currentRouteThreadKeyRef.current === capturedRouteThreadKey) {
-          promptRef.current = "";
-          composerRef.current?.resetCursorState();
-        }
-      },
-    };
-  };
-
-  const showSshStartedNotOpened = sshStartedNotOpenedToast(makeSshThreadOpenPorts);
-
+  // Built when a send runs, as the inline factories were: the ports read refs, which render must not.
+  const sshPorts = () =>
+    sshComposerPorts({
+      navigate,
+      launchSshWorkspace,
+      retryEnvironment,
+      clearDraftThread,
+      clearComposerDraftContent,
+      currentRouteThreadKeyRef,
+      composerRef,
+      promptRef,
+    });
+  const makeSshThreadOpenPorts: SshComposerPorts["makeSshThreadOpenPorts"] = (...args) =>
+    sshPorts().makeSshThreadOpenPorts(...args);
+  const makeSshSubmissionPorts: SshComposerPorts["makeSshSubmissionPorts"] = (...args) =>
+    sshPorts().makeSshSubmissionPorts(...args);
+  const showSshStartedNotOpened: ReturnType<typeof sshStartedNotOpenedToast> = (...args) =>
+    sshStartedNotOpenedToast(makeSshThreadOpenPorts)(...args);
   const continueThreadOnSsh = async (
     selected: SavedSshWorktreeOption,
     instructions: string,
@@ -594,7 +405,6 @@ export function useComposerSend(input: ComposerSendInput) {
         sendInFlightRef.current = false;
       });
   };
-
   const onSend = async (
     e?: { preventDefault: () => void },
     dispatchMode: ComposerDispatchMode = "auto",
@@ -635,30 +445,41 @@ export function useComposerSend(input: ComposerSendInput) {
       forkCommand.run();
       return;
     }
-
-    const notifyDirectAnnotationAttached = () => {
-      if (!directAnnotation) return;
-      toastManager.add(
-        stackedThreadToast({
-          type: "info",
-          title: "Annotation attached to draft",
-          description: "Sending is unavailable right now. Finish the current action, then send.",
-        }),
-      );
-    };
+    const sendCtx = composerRef.current?.getSendContext();
+    if (activePendingProgress && sendCtx?.answeringPendingUserInput !== false) {
+      const sideChat = {
+        progress: activePendingProgress,
+        composer: sendCtx,
+        sideChatAvailable,
+        threadKey: activeThreadKey,
+        threadRef: activeThreadRef,
+        clearAnswer: onChangeActivePendingUserInputCustomAnswer,
+      };
+      if (!directAnnotation && startSideChatOverAnswer(sideChat)) return;
+      if (directAnnotation) notifyDirectAnnotationAttached(true);
+      else if (
+        activeThread &&
+        !activeEnvironmentUnavailable &&
+        readEnvironmentScope(environmentId, AuthOrchestrationOperateScope)
+      )
+        onAdvanceActivePendingUserInput();
+      return;
+    }
     if (
       !readEnvironmentScope(environmentId, AuthOrchestrationOperateScope) ||
       !activeThread ||
-      (isSendBusy && !sendQueuesBehindSetup) ||
       isConnecting ||
       isRevertingCheckpoint ||
       !clientSettingsHydrated ||
       threadDetailLoading ||
       readPendingEnvironmentChange() !== null ||
-      sendInFlightRef.current ||
       feedbackUploadsInFlightRef.current.has(routeThreadKey)
     ) {
-      notifyDirectAnnotationAttached();
+      notifyDirectAnnotationAttached(directAnnotation !== undefined);
+      return;
+    }
+    if ((isSendBusy && !sendQueuesBehindSetup) || sendInFlightRef.current) {
+      notifySendBusy(directAnnotation !== undefined);
       return;
     }
     if (needsLoadBalancing) {
@@ -687,15 +508,6 @@ export function useComposerSend(input: ComposerSendInput) {
         }),
         id: `chat-send-environment-unavailable:${toastSlot}`,
       });
-      return;
-    }
-    const sendCtx = composerRef.current?.getSendContext();
-    if (activePendingProgress && sendCtx?.answeringPendingUserInput !== false) {
-      if (directAnnotation) {
-        notifyDirectAnnotationAttached();
-        return;
-      }
-      onAdvanceActivePendingUserInput();
       return;
     }
     if (cloudState.composerBlockReason !== null) {
@@ -841,7 +653,7 @@ export function useComposerSend(input: ComposerSendInput) {
     }
 
     if (!sendCtx?.providerAvailable) {
-      notifyDirectAnnotationAttached();
+      notifyDirectAnnotationAttached(directAnnotation !== undefined);
       return;
     }
     const multipleModelSelections = sendCtx.multipleModelSelections;
@@ -866,14 +678,7 @@ export function useComposerSend(input: ComposerSendInput) {
       return;
     }
     if (multipleModelBlock === "needs-new-git-thread") {
-      toastManager.add(
-        stackedThreadToast({
-          type: "warning",
-          title: "Choose models and a base branch",
-          description:
-            "Multiple models need a new thread in a Git project. Each gets its own worktree.",
-        }),
-      );
+      showMultipleModelsNeedGitThread();
       return;
     }
     const {
@@ -899,12 +704,18 @@ export function useComposerSend(input: ComposerSendInput) {
         previewAnnotations: sendContextPreviewAnnotations,
         direct: directAnnotation,
       });
+    const replyTo = draftReplyTo(composerDraftTarget);
+    const sentTo = typeof composerDraftTarget === "string" ? activeThreadRef : composerDraftTarget;
+    if (refuseReplyThatGoesUnread(replyTo, environmentId, sentTo)) return;
     // Include a same-tick annotation reference before React renders its draft.
-    const promptForSend = directAnnotation
-      ? ensureInlineContextReferences(promptRef.current, [
-          previewAnnotationContextReference(directAnnotation.annotation),
-        ])
-      : promptRef.current;
+    const promptForSend = withReplyReference(
+      directAnnotation
+        ? ensureInlineContextReferences(promptRef.current, [
+            previewAnnotationContextReference(directAnnotation.annotation),
+          ])
+        : promptRef.current,
+      replyTo,
+    );
     const strandedThread = threadContextsOutsideEnvironment({
       text: promptForSend,
       records: composerThreadContexts,
@@ -936,6 +747,7 @@ export function useComposerSend(input: ComposerSendInput) {
           reviewComments: composerReviewComments,
           previewAnnotations: composerPreviewAnnotations,
           threadContexts: composerThreadContexts,
+          replyTo,
         },
         setThreadError,
       );
@@ -1046,6 +858,7 @@ export function useComposerSend(input: ComposerSendInput) {
           reviewComments: composerReviewComments,
           previewAnnotations: composerPreviewAnnotations,
           threadContexts: composerThreadContexts,
+          replyTo,
           text: followUp.text,
         }),
         interactionMode: followUp.interactionMode,
@@ -1100,10 +913,7 @@ export function useComposerSend(input: ComposerSendInput) {
         ? parseSideChatCommand(trimmed)
         : null;
     if (sideChatCommand && activeThreadKey !== null && activeThreadRef !== null) {
-      if (sideChatCommand.prompt !== "") {
-        useSideChatStore.getState().setPendingPrompt(activeThreadKey, sideChatCommand.prompt);
-      }
-      useRightPanelStore.getState().open(activeThreadRef, "side-chat");
+      queueSideChatQuestion(activeThreadKey, activeThreadRef, sideChatCommand.prompt);
       promptRef.current = "";
       clearComposerDraftContent(composerDraftTarget);
       composerRef.current?.resetCursorState();
@@ -1153,6 +963,7 @@ export function useComposerSend(input: ComposerSendInput) {
       reviewComments: composerReviewComments,
       threadContexts: composerThreadContexts,
       previewTabs: composerPreviewTabs,
+      replyTo,
     });
     const {
       files: composerFilesSnapshot,
@@ -1198,6 +1009,7 @@ export function useComposerSend(input: ComposerSendInput) {
         previewAnnotations: composerPreviewAnnotationsSnapshot,
         threadContexts: composerThreadContextsSnapshot,
         previewTabs: previewTabsSnapshot,
+        replyTo,
         text: messageTextForSend,
         attachments: composerAttachmentsSnapshot.map((attachment, index) => ({
           attachment,
@@ -1220,21 +1032,8 @@ export function useComposerSend(input: ComposerSendInput) {
       return;
     }
 
-    const readLiveAttachmentCapabilities = () => {
-      const config = appAtomRegistry.get(environmentServerConfigsAtom).get(environmentId) ?? null;
-      const liveSupportsAttachmentUploads =
-        config?.environment.capabilities.attachmentUploads === true;
-      return {
-        supportsAttachmentUploads: liveSupportsAttachmentUploads,
-        fileBlockReason: fileAttachmentCapabilityBlockReason({
-          files: composerFilesSnapshot,
-          attachmentUploadsCapabilityKnown: config !== null,
-          supportsAttachmentUploads: liveSupportsAttachmentUploads,
-          maxFileAttachmentBytes:
-            config?.environment.capabilities.fileAttachments?.maxUploadBytes ?? null,
-        }),
-      };
-    };
+    const readLiveAttachmentCapabilities = () =>
+      liveAttachmentCapabilities(environmentId, composerFilesSnapshot);
 
     const multipleTargets: MultipleModelTarget[] = [];
     for (const resolved of resolveMultipleModelTargets({
@@ -1333,6 +1132,15 @@ export function useComposerSend(input: ComposerSendInput) {
       );
       return;
     }
+    const persistSendSettings = firstCallOnly(() =>
+      persistThreadSettingsForNextTurn({
+        threadId: threadIdForSend,
+        createdAt: messageCreatedAt,
+        ...checkoutBranchOverride(localCheckoutBranchMismatch),
+        runtimeMode,
+        interactionMode: sendInteractionMode,
+      }),
+    );
     // A message sent while approvals are pending redirects the agent. They are declined only
     // here, after everything above has accepted the send, so local commands and rejected
     // drafts leave them alone. After navigating away during an upload, the shown approvals
@@ -1367,7 +1175,9 @@ export function useComposerSend(input: ComposerSendInput) {
           sameIds(attachmentIds, attachmentIdsAtSend) ||
           (annotationImageId !== undefined &&
             sameIds(attachmentIds, attachmentIdsBeforeAnnotation));
-        return !promptUnchanged || !attachmentsUnchanged;
+        // The reply is not in the prompt, so cancelling or changing it is checked on its own.
+        const liveReply = draftReplyTo(composerDraftTarget);
+        return !promptUnchanged || !attachmentsUnchanged || liveReply !== replyTo;
       };
       const draftBeforeDecline = useComposerDraftStore
         .getState()
@@ -1413,6 +1223,19 @@ export function useComposerSend(input: ComposerSendInput) {
           clearComposerDraftContent(composerDraftTarget);
           composerRef.current?.resetCursorState();
         }
+        return;
+      }
+      const refusal = await saveSettingsBeforeRedirect(
+        isServerThread &&
+          runtimeMode !== activeThread.runtimeMode &&
+          !changedBeforeDecline &&
+          !approvalResponding,
+        persistSendSettings,
+      );
+      if (refusal !== null) {
+        sendInFlightRef.current = false;
+        setThreadError(threadIdForSend, refusal);
+        setDockedDraftHeroThreadKey((key) => (key === activeThreadKey ? null : key));
         return;
       }
       const declined =
@@ -1553,15 +1376,7 @@ export function useComposerSend(input: ComposerSendInput) {
     let failure: AtomCommandResult<unknown, unknown> | null = null;
 
     if (failure === null && isServerThread) {
-      const settingsResult = await persistThreadSettingsForNextTurn({
-        threadId: threadIdForSend,
-        createdAt: messageCreatedAt,
-        ...(localCheckoutBranchMismatch
-          ? { branch: localCheckoutBranchMismatch.currentBranch }
-          : {}),
-        runtimeMode,
-        interactionMode: sendInteractionMode,
-      });
+      const settingsResult = await persistSendSettings();
       if (settingsResult._tag === "Failure") {
         failure = settingsResult;
       }
@@ -1742,25 +1557,32 @@ export function useComposerSend(input: ComposerSendInput) {
         );
         clearBackgroundDraftSubmissionByRef(scopeThreadRef(environmentId, threadIdForSend));
       }
+      // Only an acknowledged send replaces its optimistic row, so a failed one leaves here.
+      setOptimisticUserMessages((existing) => {
+        const next = existing.filter((message) => message.id !== messageIdForSend);
+        return next.length === existing.length ? existing : next;
+      });
+      optimisticBlobPreviews.release(optimisticMessage);
       if (
-        !composerDraftHasUserContent(
+        composerDraftHasUserContent(
           useComposerDraftStore.getState().getComposerDraft(composerDraftTarget),
         )
       ) {
-        setOptimisticUserMessages((existing) => {
-          const next = existing.filter((message) => message.id !== messageIdForSend);
-          return next.length === existing.length ? existing : next;
-        });
-        optimisticBlobPreviews.release(optimisticMessage);
+        const interrupted = isAtomCommandInterrupted(failure);
+        void keepFailedSendInStash({ snapshot: sendSnapshot, environmentId, interrupted });
+      } else {
         const retryComposerImages = restoreComposerDraft(composerDraftTarget, sendSnapshot);
         if (currentRouteThreadKeyRef.current === routeThreadKey) {
-          promptRef.current = messageTextForSend;
+          promptRef.current = sendSnapshot.draftText;
           composerImagesRef.current = retryComposerImages;
           composerFilesRef.current = composerFilesSnapshot;
           composerTerminalContextsRef.current = composerTerminalContextsSnapshot;
           composerRef.current?.resetCursorState({
-            cursor: collapseExpandedComposerCursor(messageTextForSend, messageTextForSend.length),
-            prompt: messageTextForSend,
+            cursor: collapseExpandedComposerCursor(
+              sendSnapshot.draftText,
+              sendSnapshot.draftText.length,
+            ),
+            prompt: sendSnapshot.draftText,
             detectTrigger: true,
           });
         }
@@ -1803,6 +1625,11 @@ export function useComposerSend(input: ComposerSendInput) {
       if (!sendQueuesBehindSetup) resetLocalDispatch();
     }
   };
-
-  return { onSend, continueThreadOnSsh, forkCommand };
+  const onSendWithRouting = useSendWithRouting(
+    onSend,
+    sendInFlightRef,
+    readPendingEnvironmentChange,
+    refreshBeforeSend,
+  );
+  return { onSend: onSendWithRouting, continueThreadOnSsh, forkCommand };
 }

@@ -15,7 +15,7 @@ import {
 import { resolveProjectSettings } from "@goat/shared/projectSettings";
 import * as Cause from "effect/Cause";
 import * as Context from "effect/Context";
-import * as Crypto from "effect/Crypto";
+import * as SecureRandom from "effect/crypto/SecureRandom";
 import * as Effect from "effect/Effect";
 import * as FileSystem from "effect/FileSystem";
 import * as Layer from "effect/Layer";
@@ -67,7 +67,7 @@ const asOperationFailed = (prefix: string) =>
   );
 
 const make = Effect.gen(function* () {
-  const crypto = yield* Crypto.Crypto;
+  const random = yield* SecureRandom.SecureRandom;
   const fileSystem = yield* FileSystem.FileSystem;
   const threadManagement = yield* ThreadManagementService.ThreadManagementService;
   const projects = yield* ProjectService.ProjectService;
@@ -139,7 +139,7 @@ const make = Effect.gen(function* () {
     );
 
   const handoffIds = (scope: McpThreadInvocationScope) =>
-    crypto.randomUUIDv4().pipe(
+    random.uuidV4().pipe(
       Effect.map((uuid) => {
         const part = (kind: string, operation: string) =>
           [kind, "mcp", encodeURIComponent(scope.thread.providerSessionId), operation, uuid].join(
@@ -147,7 +147,6 @@ const make = Effect.gen(function* () {
           );
         return {
           commandId: CommandId.make(part("command", "worktree-handoff")),
-          continuationCommandId: CommandId.make(part("command", "worktree-continuation")),
           continuationMessageId: MessageId.make(part("message", "worktree-continuation")),
         };
       }),
@@ -296,7 +295,7 @@ const make = Effect.gen(function* () {
               `Thread '${scope.thread.threadId}' was archived while the worktree was being created; the handoff was rolled back.`,
             );
           }
-          yield* threadManagement
+          return yield* threadManagement
             .dispatch({
               type: "thread.metadata.update",
               commandId: ids.commandId,
@@ -304,6 +303,15 @@ const make = Effect.gen(function* () {
               branch: worktree.worktree.refName,
               worktreePath,
               expectedWorktreePath: null,
+              // Binding detaches the session and ends the caller; a later send could lose the race.
+              ...(input.continuationPrompt === undefined
+                ? {}
+                : {
+                    continuation: {
+                      messageId: ids.continuationMessageId,
+                      text: input.continuationPrompt,
+                    },
+                  }),
             })
             .pipe(
               Effect.catchCause((cause) =>
@@ -324,33 +332,18 @@ const make = Effect.gen(function* () {
           ),
         );
 
-        // Queue continuation immediately after binding; detachment terminates the caller, so relaunch needs a durable message.
-        const queueContinuation: Effect.Effect<WorktreeMcpContinuationStatus, WorktreeMcpFailure> =
-          Effect.suspend(() =>
-            input.continuationPrompt === undefined
-              ? Effect.succeed<WorktreeMcpContinuationStatus>({ status: "skipped" })
-              : threadManagement
-                  .sendToThread({
-                    projectId: projection.thread.projectId,
-                    commandId: ids.continuationCommandId,
-                    threadId: scope.thread.threadId,
-                    messageId: ids.continuationMessageId,
-                    text: input.continuationPrompt,
-                    attachments: [],
-                    mode: "queue",
-                    createdBy: "agent",
-                    creationSource: "mcp",
-                  })
-                  .pipe(
-                    Effect.map((sendResult): WorktreeMcpContinuationStatus => ({
-                      status: "scheduled",
-                      delivery: sendResult.delivery,
-                    })),
-                    reportFailed("worktree handoff continuation failed to queue"),
-                  ),
-          );
-
-        const continuation = yield* recheckAndBind.pipe(Effect.andThen(queueContinuation));
+        const bound = yield* recheckAndBind;
+        const continuation: WorktreeMcpContinuationStatus =
+          input.continuationPrompt === undefined
+            ? { status: "skipped" }
+            : {
+                status: "scheduled",
+                delivery: bound.storedEvents.some(
+                  ({ event }) => event.type === "run.created" && event.payload.status !== "queued",
+                )
+                  ? "started"
+                  : "queued",
+              };
 
         yield* vcsStatusBroadcaster
           .refreshStatus(worktreePath)
@@ -464,7 +457,7 @@ const make = Effect.gen(function* () {
 export const layer: Layer.Layer<
   WorktreeMcpService,
   never,
-  | Crypto.Crypto
+  | SecureRandom.SecureRandom
   | FileSystem.FileSystem
   | ThreadManagementService.ThreadManagementService
   | ProjectService.ProjectService

@@ -40,6 +40,7 @@ export function ComposerControlsBar(props: {
   contextWindowMeter: ReactNode;
   /** GOAT: the effort popover's model row hands off to the model picker. */
   openComposerModelPicker: () => void;
+  workspaceCwd: string | null;
   routeKind: ChatComposerProps["routeKind"];
   routeThreadRef: ChatComposerProps["routeThreadRef"];
   draftId: ChatComposerProps["draftId"];
@@ -226,6 +227,7 @@ export function ComposerControlsBar(props: {
   const composerModelPicker = (
     <ComposerModelPicker
       environmentId={environmentId}
+      workspaceCwd={props.workspaceCwd}
       compact={false}
       isComposerOwned
       disabled={providerCatalogPending || isSendBusy}

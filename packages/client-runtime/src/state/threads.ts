@@ -43,6 +43,7 @@ import { followStreamInEnvironment } from "./runtime.ts";
 import * as ThreadHistoryController from "./threadHistoryController.ts";
 import { fetchEnvironmentThreadHistoryPage } from "./threadHistoryHttp.ts";
 import {
+  startsTurn,
   applyHistoryPageMeta,
   clearActiveHistoryLoading,
   EMPTY_THREAD_HISTORY_META,
@@ -59,7 +60,7 @@ import {
 } from "./threadStateSnapshots.ts";
 import * as StreamDiagnostics from "./threadStreamDiagnostics.ts";
 import { threadStreamFailureMessage } from "./threadTextAppends.ts";
-import { makeThreadRequestsResolvedAnnouncer, pendingRuntimeRequestIds } from "./threadRequests.ts";
+import { makeThreadRequestsResolvedAnnouncer } from "./threadRequests.ts";
 import { EMPTY_ENVIRONMENT_THREAD_STATE, type EnvironmentThreadState } from "./threadState.ts";
 
 function formatHistoryError(error: unknown): string {
@@ -190,7 +191,7 @@ export const makeEnvironmentThreadState = Effect.fn("EnvironmentThreadState.make
     const owns = resumeCache === undefined || resumeCache.owner === owner;
     if (owns && current.status === "deleted") announceRequests([]);
     else if (owns && current.status === "live" && Option.isSome(current.data))
-      announceRequests(pendingRuntimeRequestIds(current.data.value));
+      announceRequests(current.data.value.runtimeRequests);
     committed = {
       state: current,
       sequence,
@@ -719,9 +720,7 @@ export const makeEnvironmentThreadState = Effect.fn("EnvironmentThreadState.make
               ? page.nextCursor !== null
               : throughEntryId === undefined &&
                 page.hasMoreHistory &&
-                !page.items.some(
-                  ({ item }) => item.type === "user_message" && item.createdBy === "user",
-                ));
+                !page.items.some(({ item }) => startsTurn(item)));
           if (keepPaging && (page.nextCursor === null || page.nextCursor === requestCursor))
             return yield* failLoad(
               workAnchorId === undefined

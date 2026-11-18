@@ -155,8 +155,10 @@ On web and desktop, select text within one assistant response and choose
 **Cite in composer**. You can add a comment about the quote and write instructions
 around it.
 
-Select the quote in a draft or sent message to return to its source. If the source
-is unavailable or has changed, the saved quote remains readable.
+In a sent message the quote shows as a card, with your comment under it. Click the card, or the
+quote in a draft, to return to its source. If the source is unavailable or has changed, the saved
+quote remains readable. Find in a thread matches your comment and skips the quoted text, which
+stays findable in the response it came from.
 
 The chip shows your comment when it has one, or a short quote preview otherwise. Use the pencil
 button to add or change the comment. To remove the citation, place the caret beside its chip and
@@ -167,6 +169,16 @@ The quoted text and comment count toward the message limit.
 
 Mobile displays saved quotes and comments, but does not create citations or
 navigate to their sources.
+
+## Reply to a response
+
+On web and desktop, choose **Reply** in an assistant response's hover actions. The response
+shows above the composer until you send or cancel it, and the sent message opens with a card for
+it. The agent gets where the response is and how it starts, and rereads the rest itself, so a
+reply costs the same however long the response was. Reply appears only when the thread's machine
+runs a GOAT version that supports it, and, on a response a fork or side chat shows from the thread
+it started from, only while GOAT can find that thread: not after it was deleted or archived. Mobile
+shows a received reply as a chip and has no Reply action.
 
 ## Recall a sent prompt
 
@@ -257,7 +269,7 @@ composer's microphone (long-press on a touch screen, or press Shift+F10) to open
 dictation options. This sends recordings to that environment and uses a
 speech model installed there. The choice belongs to this device; select **Use
 existing voice input** to turn it off. Someone with voice management permission can
-download, select, or remove models from **Manage voice models** in the same menu.
+download, select, or remove models from **Manage voice models** in the same menu. You can also use a verified model file already on the environment by entering its file or folder path; removing the model from GOAT leaves the original file in place.
 Connections through a hub do not currently support this option.
 Model speed figures are CPU and GPU reference measurements, not timings from your
 environment. When acceleration is automatic, both are shown because transcription
@@ -398,20 +410,24 @@ from a handoff of the conversation, as described in
 
 ## Goals
 
-With Codex and Claude, send `/goal` followed by what "done" means, for example
+With Codex, Claude, and OpenCode 2.2.5 or later, send `/goal` followed by what "done" means, for example
 `/goal all tests in packages/api pass`. The agent keeps working across turns
 until it judges the goal met. The thread shows **Goal** while it works, and a
 row above the composer shows the goal and its progress.
 
 - `/goal` alone shows the current goal. `/goal clear` removes it.
-- Codex also supports `/goal pause` and `/goal resume`. Stopping a Codex goal
-  pauses it, and so does Codex ending its work without meeting the goal.
+- Codex and OpenCode also support `/goal pause` and `/goal resume`. Stopping
+  their goal pauses it. Codex also pauses when its work ends without meeting the goal.
 - Stopping Claude ends the current turn, but the goal stays set. Claude checks it
   again at the end of your next message.
 - Sending a new goal, or `/goal resume`, while the agent works stops the current
   turn and starts the goal, unless you queue it. `/goal clear` and `/goal pause`
   stop the turn only when it is working on the goal. Other goal commands wait for
   the turn to end.
+
+With Antigravity, send `/goal` followed by the objective; that is the only form it accepts.
+Bare `/goal`, `/goal clear`, `/goal pause` and `/goal resume` are refused, and its 1.4.5
+runtime has no goals. See [Antigravity](./providers-antigravity.md#run-a-native-goal).
 
 ## Context in your message
 

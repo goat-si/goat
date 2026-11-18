@@ -452,6 +452,17 @@ describe("orchestration V2 wire projection", () => {
     });
   });
 
+  it("does not split an emoji at the tool summary boundary", () => {
+    const projected = projectTurnItemForWire({
+      ...base,
+      input: { text: "a".repeat(149) + "😀" + "b".repeat(17_000) },
+    });
+    expect(projected.type === "dynamic_tool" ? projected.input : null).toEqual({
+      summary: '{"text":"' + "a".repeat(149) + "…",
+      truncated: true,
+    });
+  });
+
   it("keeps a page rendered through goat_call when its input is too large to send", () => {
     const htmlRender = { attachmentId: "thread-1-page", title: "Chart", height: 300 };
     const page = (toolName: string, input: unknown) =>
@@ -520,6 +531,65 @@ describe("orchestration V2 wire projection", () => {
       output: { content: [{ type: "image", mimeType: "image/png" }] },
     });
     expect(item.output.content[0]?.source.data).toBe(data);
+
+    const goatMcpApp = {
+      attachmentId: "app-html",
+      server: "repro",
+      tool: "chart",
+      resourceUri: "ui://repro/chart",
+    };
+    const text = { type: "text", text: "Rendered chart" };
+    const appItem = {
+      ...item,
+      toolName: "repro.chart",
+      output: {
+        goatMcpApp,
+        result: { content: [text, { type: "image", mimeType: "image/png", data }] },
+      },
+    };
+    expect(projectTurnItemForDetail(appItem)).toMatchObject({
+      output: { goatMcpApp, result: { content: [text, { type: "image", mimeType: "image/png" }] } },
+    });
+    const largeOutput = projectTurnItemForDetail(appItem);
+    expect(
+      JSON.stringify(largeOutput.type === "dynamic_tool" ? largeOutput.output : null),
+    ).not.toContain(data);
+
+    const smallApp = {
+      goatMcpApp,
+      result: { content: [text, { type: "image", mimeType: "image/png", data: "iVBORw0KGgo=" }] },
+    };
+    expect(projectTurnItemForDetail({ ...appItem, output: smallApp })).toMatchObject({
+      output: smallApp,
+    });
+
+    const forged = projectTurnItemForDetail({
+      ...appItem,
+      output: { goatMcpApp: { ...goatMcpApp, resourceUri: data }, result: { content: [text] } },
+    });
+    expect(
+      JSON.stringify(forged.type === "dynamic_tool" ? forged.output : null).length,
+    ).toBeLessThan(270_000);
+  });
+
+  it("sends an app saved under the legacy key under the current key", () => {
+    const app = {
+      attachmentId: "app-html",
+      server: "repro",
+      tool: "chart",
+      resourceUri: "ui://repro/chart",
+    };
+    const result = { content: [{ type: "text", text: "Rendered chart" }] };
+    const item = {
+      ...base,
+      type: "dynamic_tool" as const,
+      toolName: "repro.chart",
+      input: {},
+      output: { t3McpApp: app, result },
+    };
+    expect(projectTurnItemForDetail(item)).toMatchObject({
+      output: { goatMcpApp: app, result },
+    });
   });
 
   it("keeps image markers when the rest of a tool output is too large to send", () => {

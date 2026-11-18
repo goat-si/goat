@@ -1,7 +1,9 @@
 import { CommandId, type OrchestrationV2Run, type ProjectId, type ThreadId } from "@goat/contracts";
+import * as DateTime from "effect/DateTime";
 import * as Duration from "effect/Duration";
 import * as Effect from "effect/Effect";
 import * as Stream from "effect/Stream";
+import { threadPullRequestsOf } from "../sourceControl/threadPullRequests.ts";
 import type * as Orchestrator from "./Orchestrator.ts";
 import type { ThreadManagementServiceShape } from "./ThreadManagementService.ts";
 
@@ -11,15 +13,25 @@ export const settleAfterRun = Effect.fn("orchestrationV2.threadManagement.settle
     readonly threadId: ThreadId;
     readonly run: OrchestrationV2Run;
     readonly timeoutMs: number;
+    readonly requestedAt?: DateTime.Utc;
     readonly orchestrator: Orchestrator.OrchestratorV2["Service"];
     readonly records: ThreadManagementServiceShape["getProjectThreadRecords"];
     readonly dispatch: ThreadManagementServiceShape["dispatch"];
   }) {
     const { run, orchestrator } = input;
+    const requestedAt = input.requestedAt ?? (yield* DateTime.now);
     const afterSequence = yield* orchestrator.getThreadEventSequence(input.threadId);
     const trySettle = Effect.gen(function* () {
       const sequence = yield* orchestrator.getThreadEventSequence(input.threadId);
       const records = yield* input.records(input, ["runs"]);
+      if (
+        threadPullRequestsOf(records.thread).some(
+          (link) =>
+            link.watch !== undefined &&
+            !DateTime.isLessThan(DateTime.makeUnsafe(link.watch.startedAt), requestedAt),
+        )
+      )
+        return true;
       const following = records.runs.filter((candidate) => candidate.ordinal > run.ordinal);
       if (following.length > 0) {
         const { messages } = yield* input.records(input, ["messages"], {
@@ -103,11 +115,12 @@ export const make = (services: {
   readonly dispatch: ThreadManagementServiceShape["dispatch"];
 }): ThreadManagementServiceShape["settleAfterRun"] =>
   Effect.fn("orchestrationV2.threadManagement.settleAfterRun")(function* (input) {
+    const requestedAt = yield* DateTime.now;
     const { run } = yield* services.waitForThread({
       ...input,
       timeoutMs: services.timeoutMs,
       releaseOnPendingQuestion: false,
     });
     if (run?.status !== "completed") return;
-    yield* settleAfterRun({ ...services, ...input, run });
+    yield* settleAfterRun({ ...services, ...input, run, requestedAt });
   });

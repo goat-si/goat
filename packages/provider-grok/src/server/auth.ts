@@ -103,7 +103,8 @@ export interface GrokAuth {
 export const makeGrokAuth = Effect.fnUntraced(function* (options: {
   readonly instanceId: ProviderInstanceId;
   readonly enabled: boolean;
-  readonly hasEnvironmentKey: boolean;
+  readonly currentEnvironment: Effect.Effect<NodeJS.ProcessEnv>;
+  readonly verifyKey: (key: string) => Effect.Effect<void, ProviderSetupError>;
   readonly onChanged: (expectAuthenticated: boolean) => Effect.Effect<void, ProviderSetupError>;
 }) {
   const credentials = yield* (yield* ProviderHost.ProviderHost).credentials(
@@ -128,7 +129,7 @@ export const makeGrokAuth = Effect.fnUntraced(function* (options: {
         if (!options.enabled) {
           return yield* failure(options.instanceId, "start", "Enable Grok before signing in.");
         }
-        if (options.hasEnvironmentKey) {
+        if ((yield* options.currentEnvironment)[GROK_API_KEY_ENV]?.trim()) {
           return yield* failure(
             options.instanceId,
             "start",
@@ -166,6 +167,21 @@ export const makeGrokAuth = Effect.fnUntraced(function* (options: {
         // returns interrupts that handler and the client sees a failed submit.
         yield* Effect.yieldNow;
         yield* context.verifying;
+        if ((yield* options.currentEnvironment)[GROK_API_KEY_ENV]?.trim()) {
+          return yield* failure(
+            options.instanceId,
+            "start",
+            "XAI_API_KEY overrides this key; remove it before saving.",
+          );
+        }
+        yield* options.verifyKey(key);
+        if ((yield* options.currentEnvironment)[GROK_API_KEY_ENV]?.trim()) {
+          return yield* failure(
+            options.instanceId,
+            "start",
+            "XAI_API_KEY overrides this key; remove it before saving.",
+          );
+        }
         yield* credentials
           .set(new TextEncoder().encode(key))
           .pipe(
@@ -179,14 +195,23 @@ export const makeGrokAuth = Effect.fnUntraced(function* (options: {
             ),
           );
         const verified = yield* options.onChanged(true).pipe(Effect.exit);
-        if (Exit.isFailure(verified)) {
+        const overridden = Boolean((yield* options.currentEnvironment)[GROK_API_KEY_ENV]?.trim());
+        if (Exit.isFailure(verified) || overridden) {
           yield* credentials.remove.pipe(Effect.ignore);
-          return yield* Effect.failCause(verified.cause);
+          if (Exit.isFailure(verified)) return yield* Effect.failCause(verified.cause);
+          return yield* failure(
+            options.instanceId,
+            "start",
+            "XAI_API_KEY overrides this key; remove it before saving.",
+          );
         }
       }),
     logout: Effect.gen(function* () {
       const stored = yield* readStored;
-      if (!stored && options.hasEnvironmentKey) {
+      const hasEnvironmentKey = Boolean(
+        (yield* options.currentEnvironment)[GROK_API_KEY_ENV]?.trim(),
+      );
+      if (!stored && hasEnvironmentKey) {
         return yield* failure(
           options.instanceId,
           "logout",
@@ -206,7 +231,7 @@ export const makeGrokAuth = Effect.fnUntraced(function* (options: {
         );
       }
       yield* options.onChanged(false);
-      return options.hasEnvironmentKey
+      return hasEnvironmentKey
         ? "Removed the saved API key. XAI_API_KEY in this provider's environment still signs Grok in."
         : undefined;
     }),

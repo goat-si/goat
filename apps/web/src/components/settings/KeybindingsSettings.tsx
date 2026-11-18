@@ -1,3 +1,4 @@
+import { handleKeybindingsSearchEscape } from "./keybindingsSearchEscape";
 import { useEnvironmentScope } from "../../state/session";
 import { useEnvironmentsWithScope, readEnvironmentScope } from "../../state/session";
 import {
@@ -96,12 +97,7 @@ function KeybindingsSearchInput({
         type="search"
         value={query}
         onChange={(event) => onChange(event.currentTarget.value)}
-        onKeyDown={(event) => {
-          if (event.key !== "Escape") return;
-          event.preventDefault();
-          if (query.length > 0) onChange("");
-          else event.currentTarget.blur();
-        }}
+        onKeyDown={(event) => handleKeybindingsSearchEscape(event, query, onChange)}
         placeholder="Search keybindings"
         aria-label="Search keybindings"
         size="sm"

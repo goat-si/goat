@@ -35,6 +35,7 @@ import {
   WEBHOOK_FILTER_OPS,
   type WebhookFilterDraft,
 } from "@goat/client-runtime/scheduled-task-webhook";
+import { scheduleTimeZoneLabel } from "@goat/client-runtime/scheduledTasks";
 import { useRef, useState, type ReactNode } from "react";
 import { useFocusEffect, useNavigation, usePreventRemove } from "@react-navigation/native";
 import type { NativeStackNavigationProp } from "@react-navigation/native-stack";
@@ -55,6 +56,7 @@ import { SegmentedControl } from "../../components/ui/SegmentedControl";
 import { ThemedSwitch } from "../../components/ui/ThemedSwitch";
 import { webhookAddress } from "@goat/client-runtime/webhook-address";
 import { tryCopyTextWithHaptic } from "../../lib/copyTextWithHaptic";
+import { withImplicitFastModeSelection } from "../../lib/providerOptions";
 import { usePreparedConnection } from "../../state/session";
 import { NativeStackScreenOptions } from "../../native/StackHeader";
 import { useProjects, useEnvironmentServerConfig } from "../../state/entities";
@@ -88,7 +90,10 @@ import {
 import { appAtomRegistry } from "../../state/atom-registry";
 import {
   formatNextScheduledTaskRun,
-  formatScheduledTaskInterval,
+  DAYS,
+  describeSchedule,
+  formatTime,
+  repeatLabel,
 } from "./scheduledTaskPresentation";
 
 const isNotificationPolicy = Schema.is(ScheduledTaskNotificationPolicy);
@@ -99,31 +104,6 @@ type ScheduledTaskRoutes = {
   SettingsScheduledTaskModel: undefined;
   SettingsScheduledTaskBranch: undefined;
 };
-const DAYS = [
-  { index: 1, label: "Mon" },
-  { index: 2, label: "Tue" },
-  { index: 3, label: "Wed" },
-  { index: 4, label: "Thu" },
-  { index: 5, label: "Fri" },
-  { index: 6, label: "Sat" },
-  { index: 0, label: "Sun" },
-] as const;
-
-function describeSchedule(task: ScheduledTask): string {
-  if (task.schedule.type === "webhook") return "On webhook";
-  if (task.schedule.type === "interval") return formatScheduledTaskInterval(task.schedule.everyMs);
-  const days = task.schedule.weekdays?.length ? repeatLabel(task.schedule.weekdays) : "Every day";
-  return `${days} at ${formatTime(task.schedule.timeOfDay)}`;
-}
-
-function formatTime(value: string): string {
-  const [hours, minutes] = value.split(":").map(Number);
-  if (!Number.isInteger(hours) || !Number.isInteger(minutes)) return value;
-  const time = new Date();
-  time.setHours(hours ?? 9, minutes ?? 0, 0, 0);
-  return time.toLocaleTimeString([], { hour: "numeric", minute: "2-digit" });
-}
-
 function timePickerValue(value: string): Date {
   const [hours, minutes] = value.split(":").map(Number);
   const time = new Date();
@@ -134,17 +114,6 @@ function timePickerValue(value: string): Date {
     0,
   );
   return time;
-}
-
-function repeatLabel(weekdays: ReadonlyArray<number>): string {
-  const days = new Set(weekdays);
-  if (days.size === 7) return "Every day";
-  if (days.size === 5 && [1, 2, 3, 4, 5].every((day) => days.has(day))) return "Weekdays";
-  return (
-    DAYS.filter((day) => days.has(day.index))
-      .map((day) => day.label)
-      .join(", ") || "Choose days"
-  );
 }
 
 function WebhookFilterRows(props: {
@@ -542,6 +511,7 @@ function TaskForm({
     )
     .sort((left, right) => Number(right.pinnedAt != null) - Number(left.pinnedAt != null));
   const config = useEnvironmentServerConfig(environmentId);
+  const threadModes = config?.environment?.capabilities?.scheduledTaskThreadModes === true;
   const canOperate = useAtomValue(
     serverEnvironment.upsertScheduledTask.permissionAtom(environmentId),
   );
@@ -555,6 +525,7 @@ function TaskForm({
     draft.task !== null &&
     tasks.data !== null &&
     !tasks.data.tasks.some((task) => task.id === draft.task?.id);
+  const runAtZone = scheduleTimeZoneLabel(tasks.data?.timeZone);
   const environmentUnavailable = !availableTargets.some(
     (target) => target.environmentId === environmentId,
   );
@@ -624,13 +595,17 @@ function TaskForm({
       title: draft.title.trim(),
       prompt: draft.prompt.trim(),
       projectId: context.projectId,
-      modelSelection: context.modelSelection,
+      modelSelection: withImplicitFastModeSelection(
+        context.modelSelection,
+        config?.providers ?? [],
+      ),
       schedule,
       enabled: draft.enabled,
       ...(isNotificationPolicy(draft.notificationPolicy)
         ? { notificationPolicy: draft.notificationPolicy }
         : {}),
       threadId: draft.task?.threadId ?? null,
+      ...(threadModes ? { threadMode: draft.threadMode } : {}),
       workspaceStrategy: context.workspaceStrategy,
       runtimeMode: draft.runtimeMode,
       interactionMode: draft.task?.interactionMode ?? "default",
@@ -754,13 +729,16 @@ function TaskForm({
             <>
               <Pressable
                 accessibilityRole="button"
-                accessibilityLabel={`Time, ${formatTime(draft.schedule.timeOfDay)}`}
+                accessibilityLabel={`Time, ${formatTime(draft.schedule.timeOfDay)}${
+                  runAtZone ? ` ${runAtZone}` : ""
+                }`}
                 onPress={() => setTimePickerOpen((open) => !open)}
                 className="min-h-14 flex-row items-center gap-3 border-t border-border-subtle px-4 py-3 active:opacity-70"
               >
                 <Text className="text-lg text-foreground">Time</Text>
                 <Text className="min-w-0 flex-1 text-right text-base text-foreground-muted">
                   {formatTime(draft.schedule.timeOfDay)}
+                  {runAtZone ? ` ${runAtZone}` : ""}
                 </Text>
                 <SymbolView
                   name="chevron.right"
@@ -919,8 +897,9 @@ function TaskForm({
           )}
           <ScheduledTaskNotificationPolicySection
             draft={draft}
+            threadModes={threadModes}
             disabled={saving}
-            onChange={(notificationPolicy) => setDraft({ ...draft, notificationPolicy })}
+            onChange={setDraft}
           />
           <View className="min-h-14 flex-row items-center gap-3 border-t border-border-subtle px-4 py-3">
             <Text className="min-w-0 flex-1 text-lg text-foreground">Enabled</Text>
@@ -1130,7 +1109,7 @@ function EnvironmentTasks({
                 {task.title}
               </Text>
               <Text className="text-sm text-foreground-muted" numberOfLines={2}>
-                {`${describeSchedule(task)} · ${scheduledTaskRunPresentation(task).label}`}
+                {`${describeSchedule(task, tasks.data?.timeZone)} · ${scheduledTaskRunPresentation(task).label}`}
                 {!task.enabled
                   ? " · Paused"
                   : task.nextRunAt

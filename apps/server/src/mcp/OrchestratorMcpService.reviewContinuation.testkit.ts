@@ -18,14 +18,17 @@ import {
   type OrchestrationV2Subagent,
   type ServerProvider,
 } from "@goat/contracts";
+import * as Deferred from "effect/Deferred";
 import * as Effect from "effect/Effect";
 import * as Option from "effect/Option";
 import * as SqlClient from "effect/sql/SqlClient";
 import * as DateTime from "effect/DateTime";
 import * as Layer from "effect/Layer";
 import { TestClock } from "effect/testing";
+import * as NodeCrypto from "@effect/platform-node/NodeCrypto";
 import * as NodeServices from "@effect/platform-node/NodeServices";
 import * as ProviderAdapter from "@goat/provider-core/server/ProviderAdapter";
+import * as ProviderContinuationRequests from "@goat/provider-core/server/ProviderContinuationRequests";
 import * as SqlitePersistence from "../persistence/Sqlite.ts";
 import * as CommandReceiptStore from "../orchestration-v2/CommandReceiptStore.ts";
 import * as Orchestrator from "../orchestration-v2/Orchestrator.ts";
@@ -102,6 +105,13 @@ export const layerTest = ProviderReplayHarness.layerWithRegistry(
 );
 // The same database layer reference, so goatclaw lanes share the projection tables.
 export const layerTestWithSql = Layer.merge(layerTest, SqlitePersistence.layerMemory);
+// Continuation requests queue instead of dropping, so a test can take the wakes it caused.
+const continuationRequests = ProviderContinuationRequests.layer;
+export const layerTestWithContinuations = ProviderReplayHarness.layerWithRegistry(
+  { name: "review-continuation" },
+  ProviderAdapterRegistry.layerFromAdapters([adapter]),
+  { databaseLayer: SqlitePersistence.layerMemory, runEffectWorker: false, continuationRequests },
+).pipe(Layer.provideMerge(continuationRequests));
 
 /** The value, or a defect naming what the fixture expected to find. */
 const required = <A>(value: A | null | undefined, what: string): Effect.Effect<A> =>
@@ -336,6 +346,8 @@ export interface ServiceOptions {
   readonly race?: { current: Effect.Effect<void> | undefined };
   /** The next read of the parent's tasks returns these, as a call that read before a commit. */
   readonly staleTasks?: { current: ReadonlyArray<OrchestrationV2Subagent> | undefined };
+  /** Completed by the next runs-only read of the parent: a call's caller check, its last read before the continue lock. */
+  readonly beforeLock?: { current: Deferred.Deferred<void> | undefined };
 }
 
 const serviceLayer = ({ orchestrator, store }: Fixture, options: ServiceOptions = {}) =>
@@ -343,9 +355,10 @@ const serviceLayer = ({ orchestrator, store }: Fixture, options: ServiceOptions 
     const receipts = yield* Effect.serviceOption(CommandReceiptStore.CommandReceiptStoreV2);
     const sql = yield* Effect.serviceOption(SqlClient.SqlClient);
     const ownerProfile = yield* required(BUILTIN_PERMISSION_PROFILES.owner, "the owner profile");
-    const { race: raceRef, staleTasks } = options;
+    const { race: raceRef, staleTasks, beforeLock } = options;
     const dependencies = Layer.mergeAll(
       NodeServices.layer,
+      NodeCrypto.layer,
       ServerSettings.layerTest({
         goatclaw: {
           enabled: options.goatclaw === true,
@@ -377,6 +390,13 @@ const serviceLayer = ({ orchestrator, store }: Fixture, options: ServiceOptions 
         getThreadRecords: (id, fields, filter) =>
           store.getThreadRecords(id, fields, filter).pipe(
             Effect.orDie,
+            Effect.tap(() => {
+              const reached = beforeLock?.current;
+              if (reached === undefined || id !== parentId || fields.join() !== "runs")
+                return Effect.void;
+              if (beforeLock !== undefined) beforeLock.current = undefined;
+              return Deferred.succeed(reached, undefined);
+            }),
             Effect.map((records) => {
               const stale = staleTasks?.current;
               if (
@@ -392,6 +412,8 @@ const serviceLayer = ({ orchestrator, store }: Fixture, options: ServiceOptions 
           ),
         getReviewLedgerEntries: (input) => store.getReviewLedgerEntries(input).pipe(Effect.orDie),
         getThreadShell: (id) => store.getThreadShell(id).pipe(Effect.orDie),
+        getTimelinePage: (id, options) => store.getTimelinePage(id, options).pipe(Effect.orDie),
+        listLaunchEdges: () => store.listLaunchEdges().pipe(Effect.orDie),
         getProjectThreadRecords: (target, fields, filter) =>
           store.getThreadRecords(target.threadId, fields, filter).pipe(Effect.orDie),
         delegatedTaskResultPending: () => Effect.succeed(false),

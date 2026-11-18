@@ -80,7 +80,7 @@ it("rolls the switch back when the desktop settings write is rejected", async ()
     await write.promise.catch(() => undefined);
   });
   await expect.element(toggle).not.toBeChecked();
-  expect(fixture.saved().desktopSystemMaterialEnabled).toBe(false);
+  await vi.waitFor(() => expect(fixture.saved().desktopSystemMaterialEnabled).toBe(false));
 });
 
 it.each([

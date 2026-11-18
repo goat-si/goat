@@ -1,5 +1,9 @@
 import type { ProjectIconOverride } from "@goat/contracts";
 
+import type {
+  SidebarProjectGroupMember,
+  SidebarProjectSnapshot,
+} from "../../sidebarProjectGrouping";
 import type { Project } from "../../types";
 
 export const SCRATCH_PROJECT_TITLE = "No project";
@@ -9,12 +13,27 @@ const SCRATCH_PROJECT_ICON = {
   color: "gray",
 } as const satisfies ProjectIconOverride;
 
+export function scopeProjectSettingsGroup(
+  group: SidebarProjectSnapshot,
+  members: readonly SidebarProjectGroupMember[],
+): SidebarProjectSnapshot {
+  const representative =
+    members.find(
+      (member) => member.environmentId === group.environmentId && member.id === group.id,
+    ) ?? members[0];
+  if (!representative) throw new Error("A project settings group must have at least one member");
+  return { ...group, ...representative, memberProjects: members };
+}
+
 export function projectGroupTitleNeedsUpdate(
-  memberTitles: ReadonlyArray<string>,
+  members: ReadonlyArray<Pick<Project, "title" | "hasCustomTitle">>,
   nextTitle: string,
   wasEdited: boolean,
 ): boolean {
-  return wasEdited && memberTitles.some((title) => title !== nextTitle);
+  return (
+    wasEdited &&
+    members.some((member) => member.title !== nextTitle || member.hasCustomTitle !== true)
+  );
 }
 
 export function defaultProjectIcon(project: Pick<Project, "isScratch">) {

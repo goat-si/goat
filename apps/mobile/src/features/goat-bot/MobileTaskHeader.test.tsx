@@ -10,8 +10,10 @@ vi.mock("react-native", () => ({
   AccessibilityInfo: { announceForAccessibility: (line: string) => spoken.lines.push(line) },
   View: (props: Props) => <div>{props.children}</div>,
   Text: (props: Props) => <span>{props.children}</span>,
-  Pressable: (props: Props & { onPress?: () => void; disabled?: boolean }) => (
-    <button onClick={props.onPress} disabled={props.disabled}>
+  Pressable: (
+    props: Props & { onPress?: () => void; disabled?: boolean; accessibilityLabel?: string },
+  ) => (
+    <button onClick={props.onPress} disabled={props.disabled} aria-label={props.accessibilityLabel}>
       {props.children}
     </button>
   ),
@@ -23,6 +25,7 @@ vi.mock("./MobileBotRemoteWork", () => ({
 }));
 
 import { MobileTaskHeader } from "./MobileTaskHeader";
+import { taskChip } from "./mobileTaskChipFixture";
 import type { MobileTaskLookup } from "./useMobileBotTaskLookup";
 
 const at = "2026-11-01T00:00:00.000Z";
@@ -59,13 +62,20 @@ const knownTask = {
 const container = document.createElement("div");
 const retry = vi.fn();
 const openHome = vi.fn();
-async function render(lookup: MobileTaskLookup, enabled = true, card: unknown = null) {
+async function render(
+  lookup: MobileTaskLookup,
+  enabled = true,
+  card: unknown = null,
+  chips: ReadonlyMap<string, unknown> = new Map(),
+) {
   (globalThis as { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT = true;
   const root = createRoot(container);
   await act(async () =>
     root.render(
       <MobileTaskHeader
         task={undefined}
+        rows={[]}
+        chips={chips as never}
         screen={{ lookup, canUpdate: true, update: async () => true, retried: () => {} }}
         title="Old report"
         botName="GOAT Bot"
@@ -126,6 +136,42 @@ it("an unavailable task shows its status and work but nothing that needs its rea
   await act(async () => root.unmount());
 });
 
+it("a task's header says what its worker asks, from the conversation's chip, as Home does", async () => {
+  const running = { ...row, task: { ...row.task, status: "running" } };
+  const root = await render(
+    {
+      state: "known",
+      task: { ...knownTask, row: running },
+      result: result({ state: "known", row: running } as never),
+    } as never,
+    true,
+    null,
+    new Map([["t1", taskChip("t1", { openQuestionCount: 1 })]]),
+  );
+  expect(text()).toContain("Waiting for your answer");
+  expect(text()).not.toContain("Working");
+  await act(async () => root.unmount());
+});
+
+it("an unavailable task says what its worker asks, from the conversation's chip, as Home does", async () => {
+  const root = await render(
+    {
+      state: "unavailable",
+      task: {
+        state: "unavailable",
+        task: { taskId: "t1", title: "Old report", status: "running", updatedAt: at },
+      },
+      result: result({ state: "unavailable" } as never),
+    } as never,
+    true,
+    null,
+    new Map([["t1", taskChip("t1", { openQuestionCount: 1 })]]),
+  );
+  expect(text()).toContain("Waiting for your answer");
+  expect(text()).not.toContain("Working");
+  await act(async () => root.unmount());
+});
+
 it("a task the server does not have says so once, with no way to Home", async () => {
   const root = await render({ state: "missing" });
   expect(text()).toContain("This task cannot be found here.");
@@ -176,6 +222,8 @@ it("tells the screen reader once when the lookup settles on a failure, a refusal
       root.render(
         <MobileTaskHeader
           task={undefined}
+          rows={[]}
+          chips={new Map()}
           screen={{ lookup, canUpdate: true, update: async () => true, retried: () => {} }}
           title="Old report"
           botName="GOAT Bot"
@@ -205,6 +253,74 @@ it("tells the screen reader once when the lookup settles on a failure, a refusal
     "Couldn't load this task.",
     "Permission to read this task is unavailable.",
     "Some task details could not be checked.",
+  ]);
+  await act(async () => root.unmount());
+});
+
+it("a status already showing when the header mounts is told to the screen reader once", async () => {
+  spoken.lines = [];
+  const root = await render({ state: "denied" });
+  expect(spoken.lines).toEqual(["Permission to read this task is unavailable."]);
+  await act(async () => root.unmount());
+});
+
+const codingRow = (threadId: string, title?: string) => ({
+  kind: "coding" as const,
+  taskId: "t1",
+  environmentId: "env",
+  threadId,
+  ...(title === undefined ? {} : { title }),
+  state: "bound" as const,
+  lastActivityAt: at,
+});
+const threadLinks = () =>
+  [...container.querySelectorAll("button")]
+    .filter((item) => /^(GOAT|Work) thread: /.test(item.getAttribute("aria-label") ?? ""))
+    .map((item) => [item.getAttribute("aria-label"), item.textContent]);
+
+it("a looked-up task names its coding threads from the lookup's rows (#3307)", async () => {
+  const withWorker = { ...row, worker: { environmentId: "env", threadId: "w-1" } };
+  const root = await render({
+    state: "known",
+    task: {
+      ...knownTask,
+      row: withWorker,
+      threads: [
+        { environmentId: "env", threadId: "w-1" },
+        { environmentId: "env", threadId: "thread-a" },
+        { environmentId: "env", threadId: "thread-b" },
+        { environmentId: "env", threadId: "child-thread" },
+      ],
+    } as never,
+    result: result({ state: "known", row: withWorker } as never, {
+      codingRows: [codingRow("thread-a", "Patch web"), codingRow("thread-b")] as never,
+    }),
+  });
+  expect(threadLinks()).toEqual([
+    ["Work thread: Old report…", "Open work thread"],
+    ["GOAT thread: Patch web", "Patch web"],
+    ["GOAT thread: Open work thread", "Open work thread"],
+    ["Work thread: Old report…", "Open work thread"],
+  ]);
+  await act(async () => root.unmount());
+});
+
+it("an unavailable looked-up task names its coding threads the same way (#3307)", async () => {
+  const root = await render({
+    state: "unavailable",
+    task: {
+      state: "unavailable",
+      task: { taskId: "t1", title: "Old report", status: "failed", updatedAt: at },
+      worker: { environmentId: "env", threadId: "w-1" },
+    } as never,
+    result: result({ state: "unavailable" } as never, {
+      codingRows: [codingRow("thread-a", "Patch web"), codingRow("thread-b")] as never,
+    }),
+  });
+  expect(threadLinks()).toEqual([
+    ["Work thread: Old report", "Open work thread"],
+    ["GOAT thread: Patch web", "Patch web"],
+    ["GOAT thread: Open work thread", "Open work thread"],
   ]);
   await act(async () => root.unmount());
 });

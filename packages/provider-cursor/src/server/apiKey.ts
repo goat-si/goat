@@ -3,10 +3,15 @@ import * as Schema from "effect/Schema";
 import * as HttpClient from "effect/http/HttpClient";
 import * as HttpClientRequest from "effect/http/HttpClientRequest";
 import * as HttpClientResponse from "effect/http/HttpClientResponse";
+import { cursorBackendIdentity } from "./sdkBackend.ts";
 
 export const DEFAULT_CURSOR_API_ENDPOINT = "https://api2.cursor.sh";
 
 const ApiKeyExchange = Schema.Struct({ accessToken: Schema.NonEmptyString });
+
+/** The exchange is Cursor's own service, so only a key from Cursor's production backend goes there. */
+export const exchangesAtCursor = (backendUrl: string | undefined) =>
+  cursorBackendIdentity(backendUrl) === DEFAULT_CURSOR_API_ENDPOINT;
 
 /** Trades a user API key for the access token Cursor's RPCs accept, as `@cursor/sdk` does. */
 export const exchangeCursorApiKey = Effect.fn("exchangeCursorApiKey")(function* (apiKey: string) {

@@ -92,6 +92,14 @@ function resolveThreadProviderSession(projection: Projection): ProviderSession |
   );
 }
 
+export function threadSteersDuringCompaction(projection: Projection | null | undefined): boolean {
+  if (projection == null) return false;
+  return (
+    resolveThreadProviderSession(projection)?.capabilities.turns.activeSteeringDuringCompaction ===
+    true
+  );
+}
+
 export function threadSupportsProviderHandoff(projection: Projection | null | undefined): boolean {
   if (projection == null) return false;
   const session = resolveThreadProviderSession(projection);
@@ -176,6 +184,19 @@ export function deriveThreadQueueWorkflowState(projection: Projection): ThreadQu
         (capabilities?.supportsActiveSteering === true ||
           capabilities?.supportsSteeringByInterruptRestart === true)),
   };
+}
+
+/**
+ * The status a reply's badge names, if any: an interrupted reply says so wherever it sits in its
+ * turn, and any other unfinished reply only in the meta row that closes the turn.
+ */
+export function assistantReplyStatusBadge(
+  projectedItem: OrchestrationV2ProjectedTurnItem | undefined,
+  inMetaRow: boolean,
+): string | null {
+  const status = projectedItem?.item.status;
+  if (status === undefined || status === "completed") return null;
+  return inMetaRow || status === "interrupted" ? status : null;
 }
 
 export function canForkProjectedAssistantItem(input: {

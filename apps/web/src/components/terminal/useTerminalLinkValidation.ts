@@ -4,7 +4,7 @@ import {
   type EnvironmentId,
 } from "@goat/contracts";
 import { executeAtomQuery } from "@goat/client-runtime/state/runtime";
-import { resolvePathLinkTarget } from "@goat/shared/fileLinks";
+import { resolveTerminalLinkTarget } from "../../terminal-links";
 import { AsyncResult } from "effect/reactivity";
 import { useContext, useEffect, useEffectEvent, useState, type RefObject } from "react";
 import { FileMetadataThreadContext } from "../../hooks/FileMetadataThreadProvider";
@@ -27,7 +27,7 @@ export function useTerminalLinkValidation(
     linkPath !== null && canOpenHostEditor && canReadFilesystem
       ? getFileMetadataQueryAtom(
           environmentId,
-          resolvePathLinkTarget(linkPath, cwd),
+          resolveTerminalLinkTarget(linkPath, cwd),
           cwd,
           metadataThreadRef,
         )
@@ -52,7 +52,7 @@ export function useTerminalLinkValidation(
       return false;
     const query = getFileMetadataQueryAtom(
       environmentId,
-      resolvePathLinkTarget(text, cwd),
+      resolveTerminalLinkTarget(text, cwd),
       cwd,
       metadataThreadRef,
     );

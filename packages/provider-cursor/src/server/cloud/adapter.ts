@@ -1,4 +1,6 @@
 import type { RunResult, SDKMessage } from "@cursor/sdk";
+import { type Progress, progressText } from "./progress.ts";
+export { progressText } from "./progress.ts";
 import {
   ProviderDriverKind,
   PositiveInt,
@@ -23,6 +25,7 @@ import * as Stream from "effect/Stream";
 import { CursorProviderCapabilitiesV2 } from "../adapter.ts";
 import { cursorSdkModelSelection } from "../sdkModel.ts";
 import * as CursorCloudSdk from "./sdk.ts";
+import * as Credentials from "./credentials.ts";
 import { runErrorText } from "./runError.ts";
 
 export const DRIVER = ProviderDriverKind.make("cursorCloud");
@@ -84,6 +87,7 @@ export const capabilities = {
 } satisfies OrchestrationV2ProviderCapabilities;
 
 type Task = NonNullable<OrchestrationV2ProviderThread["cloudTask"]>;
+const RETRY_ACCEPT_TIMEOUT = "2 minutes";
 
 export const RETRY_PROMPT =
   "Your previous run stopped because of an unexpected error before it finished. Continue the original task from where it stopped.";
@@ -109,7 +113,6 @@ export function shouldRetryCursorRun(task: Task, result: RunResult, stopRequeste
 }
 type TurnInput = ProviderAdapter.ProviderAdapterV2TurnInput;
 type AttachInput = Omit<TurnInput, "message" | "cloudLaunchSource">;
-type Progress = { assistantText: string; text: string };
 type Active = {
   input: AttachInput;
   thread: OrchestrationV2ProviderThread;
@@ -181,86 +184,6 @@ export function resultTask(task: Task, result: RunResult): Task {
   };
 }
 
-const toolProgressLabels = new Map<string, readonly [string, string]>([
-  ["run_terminal_cmd", ["Running a command", "Command"]],
-  ["shell", ["Running a command", "Command"]],
-  ["read_file", ["Reading a file", "File read"]],
-  ["read", ["Reading a file", "File read"]],
-  ["edit_file", ["Editing a file", "File edit"]],
-  ["edit", ["Editing a file", "File edit"]],
-  ["apply_patch", ["Editing a file", "File edit"]],
-  ["grep", ["Searching the code", "Code search"]],
-  ["ripgrep", ["Searching the code", "Code search"]],
-  ["glob", ["Finding files", "File search"]],
-  ["glob_file_search", ["Finding files", "File search"]],
-  ["ls", ["Listing files", "File listing"]],
-  ["web_search", ["Searching the web", "Web search"]],
-  ["webSearch", ["Searching the web", "Web search"]],
-  ["web_fetch", ["Reading a web page", "Web page read"]],
-  ["webFetch", ["Reading a web page", "Web page read"]],
-  ["task", ["Working on a delegated task", "Delegated task"]],
-]);
-
-function progressLine(text: string): string {
-  const sentence =
-    text
-      .trim()
-      .replace(/\s+/g, " ")
-      .split(/(?<=[.!?])\s+/)
-      .at(-1) ?? "";
-  if (sentence.length <= 240) return sentence;
-  // Reserve one UTF-16 unit for the ellipsis without splitting a surrogate pair.
-  const end = (sentence.codePointAt(238) ?? 0) > 0xffff ? 238 : 239;
-  return `${sentence.slice(0, end)}…`;
-}
-
-export function progressText(previous: Progress, message: SDKMessage): Progress {
-  switch (message.type) {
-    case "assistant": {
-      // SDK 1.0.35 assistant content is a text delta, not a display-status suffix.
-      const delta = message.message.content
-        .flatMap((part) => (part.type === "text" ? [part.text] : []))
-        .join("");
-      if (!delta) return previous;
-      const accumulated = previous.assistantText + delta;
-      let start = Math.max(0, accumulated.length - 8000);
-      // A cut inside a surrogate pair must discard both units to stay within the cap.
-      if ((accumulated.codePointAt(start - 1) ?? 0) > 0xffff) start += 1;
-      const assistantText = accumulated.slice(start);
-      return { assistantText, text: progressLine(assistantText) || previous.text };
-    }
-    case "thinking":
-      return previous;
-    case "tool_call": {
-      const [running, finished] = toolProgressLabels.get(message.name) ?? ["Using a tool", "Tool"];
-      return {
-        ...previous,
-        // The SDK accumulator starts a new assistant step after a completed tool.
-        assistantText: message.status === "running" ? previous.assistantText : "",
-        text:
-          message.status === "running"
-            ? `${running}.`
-            : `${finished} ${message.status === "completed" ? "completed" : "failed"}.`,
-      };
-    }
-    case "status": {
-      const text = {
-        CREATING: "Cursor Cloud is starting.",
-        RUNNING: "Cursor Cloud is running.",
-        FINISHED: "Cursor Cloud finished.",
-        ERROR: "Cursor Cloud reported an error. Open the agent for details.",
-        CANCELLED: "Cursor Cloud was cancelled.",
-        EXPIRED: "Cursor Cloud expired.",
-      }[message.status];
-      return { ...previous, text };
-    }
-    case "task":
-      return { ...previous, text: progressLine(message.text ?? "") || previous.text };
-    default:
-      return previous;
-  }
-}
-
 export const makeCursorCloudAdapter = Effect.fn("makeCursorCloudAdapter")(function* (
   instanceId: ProviderInstanceId,
   requireApiKey: Effect.Effect<string, ProviderSetupError>,
@@ -277,12 +200,13 @@ export const makeCursorCloudAdapter = Effect.fn("makeCursorCloudAdapter")(functi
     operation: CursorCloudSdk.CursorCloudSdkError["operation"],
     request: () => Promise<A>,
   ) =>
-    CursorCloudSdk.request(operation, request).pipe(
-      Effect.mapError((cause) => protocol(`Cursor Cloud ${operation} failed.`, cause)),
+    Effect.suspend(() =>
+      Credentials.cloudSdkBackendMatches()
+        ? CursorCloudSdk.request(operation, request).pipe(
+            Effect.mapError((cause) => protocol(`Cursor Cloud ${operation} failed.`, cause)),
+          )
+        : Effect.fail(protocol(Credentials.BACKEND_MISMATCH)),
     );
-  const key = requireApiKey.pipe(
-    Effect.mapError(() => protocol("Cursor Cloud sign-in is unavailable.")),
-  );
 
   return ProviderAdapter.ProviderAdapterV2.of({
     instanceId,
@@ -292,6 +216,14 @@ export const makeCursorCloudAdapter = Effect.fn("makeCursorCloudAdapter")(functi
     openSession: (opened) =>
       Effect.gen(function* () {
         const scope = yield* Scope.Scope;
+        const captured = yield* requireApiKey.pipe(
+          Effect.mapError((error) => protocol(Credentials.credentialFailureDetail(error))),
+          Effect.result,
+        );
+        const key: Effect.Effect<string, ProviderAdapter.ProviderAdapterProtocolError> =
+          captured._tag === "Success"
+            ? Effect.succeed(captured.success)
+            : Effect.fail(captured.failure);
         const now = yield* DateTime.now;
         const events = yield* Queue.unbounded<ProviderAdapter.ProviderAdapterV2Event>();
         let active: Active | undefined;
@@ -377,13 +309,19 @@ export const makeCursorCloudAdapter = Effect.fn("makeCursorCloudAdapter")(functi
             // Spend the retry before sending: a restart in between reconciles as unknown.
             yield* commit(ctx, marked);
             yield* retryItem(ctx, "running", yield* DateTime.now);
-            const agent = yield* call("resume", () => sdk.resume(ctx.run.agentId, { apiKey }));
+            // The SDK has no deadline; a retry Cursor never takes otherwise leaves the task submitting.
+            const agent = yield* call("resume", () => sdk.resume(ctx.run.agentId, { apiKey })).pipe(
+              Effect.timeout(RETRY_ACCEPT_TIMEOUT),
+            );
             const sent = yield* call("send", () =>
               agent.send(RETRY_PROMPT, {
                 model: cursorSdkModelSelection(ctx.input.modelSelection),
                 idempotencyKey: `goat:${instanceId}:${ctx.input.runId}:${ctx.input.attemptId}:retry`,
               }),
-            ).pipe(Effect.ensuring(Effect.sync(() => agent.close())));
+            ).pipe(
+              Effect.timeout(RETRY_ACCEPT_TIMEOUT),
+              Effect.ensuring(Effect.sync(() => agent.close())),
+            );
             ctx.run = sent;
             yield* commit(ctx, {
               ...marked,
@@ -391,6 +329,8 @@ export const makeCursorCloudAdapter = Effect.fn("makeCursorCloudAdapter")(functi
               status: "running",
               tracking: "polled",
             });
+            // Polling emits nothing, so a row left running would read as a stalled retry.
+            yield* retryItem(ctx, "completed", yield* DateTime.now);
           });
         const finalize = (ctx: Active, result: RunResult) =>
           Effect.gen(function* () {
@@ -414,9 +354,6 @@ export const makeCursorCloudAdapter = Effect.fn("makeCursorCloudAdapter")(functi
               completedAt: timestamp,
             } satisfies OrchestrationV2ProviderTurn;
             yield* commit(ctx, task, turn);
-            // A failed retry is reported by the terminal failure item, which shares this item's id.
-            if (status === "completed" && task.autoRetriedFromTaskId !== undefined)
-              yield* retryItem(ctx, "completed", timestamp);
             yield* emit(
               status === "failed"
                 ? {
@@ -475,7 +412,9 @@ export const makeCursorCloudAdapter = Effect.fn("makeCursorCloudAdapter")(functi
             if (agent) {
               const messages: AsyncIterable<SDKMessage> = {
                 [Symbol.asyncIterator]() {
-                  const iterator = ctx.run.stream();
+                  const iterator = CursorCloudSdk.guardedStream(ctx.run, () =>
+                    protocol(Credentials.BACKEND_MISMATCH),
+                  );
                   return {
                     next: () => iterator.next(),
                     // Abort the owned stream before awaiting return with a pending next.

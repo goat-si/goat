@@ -32,6 +32,25 @@ Running `codex login` does not change a managed ChatGPT connection. In
 **Settings → Providers**, add a Codex instance, choose **Configure manually**,
 and complete the wizard. Then select that instance from the thread’s model picker.
 
+## Allow more time for provider checks
+
+If an authenticated Codex installation reports “Timed out while checking Codex
+app-server provider status,” set `GOAT_CODEX_PROBE_TIMEOUT_MS=60000` in the
+GOAT server's environment and restart it. See [Provider check timeouts](./install.md#provider-check-timeouts)
+for configuration and other providers.
+
+## Generate images
+
+Codex can generate images in a GOAT thread when your Codex version, model, and
+account support native image generation. If Codex reports that its image tool is
+unavailable, open **Settings → Providers**, edit your Codex instance, and add
+`-c features.image_generation=true` to **Launch arguments**, keeping any other
+arguments. This enables the feature for that instance without changing shared Codex
+configuration; it does not add support to an unsupported model or account.
+
+Start a new thread with that instance after saving the change and ask Codex to
+generate an image.
+
 ## Change an instance's settings
 
 Changing a Codex instance's binary path, launch arguments, environment,
@@ -170,6 +189,15 @@ Codex tools can request access to another app. Respond to the named app's reques
 in the thread on web, desktop, or mobile. Some tools offer access for one request,
 the current session, or permanently. See [Permission modes](./permission-modes.md)
 for command and file approvals.
+
+## Use Daybreak
+
+Models with cyber access programs show a Cyber Access option in the model
+options. It starts on Standard, or on Daybreak when `config.toml` in your Codex
+home sets `daybreak = true` or the model only runs under Daybreak. Your choice carries
+over to new threads. Custom models do not offer it. If Codex rejects a turn
+because your login lacks the program, switch Cyber Access back to Standard or
+sign in to Codex with an account that has it.
 
 ## Codex says I hit a usage limit
 

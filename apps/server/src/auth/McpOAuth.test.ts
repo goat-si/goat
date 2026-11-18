@@ -1,6 +1,6 @@
 import * as MemoryToolkitFixture from "../mcp/toolkits/memory/handlers.testkit.ts";
 import * as McpHttpServer from "../mcp/McpHttpServer.ts";
-import * as NodeServices from "@effect/platform-node/NodeServices";
+import * as NodeServices from "@goat/shared/testing/nodeServicesWithCrypto";
 import {
   AuthStandardClientScopes,
   type AuthCreatePairingCredentialInput,
@@ -13,7 +13,7 @@ import { agentSurfaceRegistry } from "@goat/contracts/agentSurface";
 import { expect, it } from "@effect/vitest";
 import * as Clock from "effect/Clock";
 import * as Context from "effect/Context";
-import * as Crypto from "effect/Crypto";
+import * as SecureRandom from "effect/crypto/SecureRandom";
 import * as Duration from "effect/Duration";
 import * as Effect from "effect/Effect";
 import * as Layer from "effect/Layer";
@@ -76,6 +76,19 @@ const makeLayerRoutes = (capture: (auth: EnvironmentAuth.EnvironmentAuth["Servic
     Layer.provide(NodeServices.layer),
   );
 
+/** One /mcp request's authentication; its admission ends with the request. */
+const authenticateOnce = (
+  auth: EnvironmentAuth.EnvironmentAuth["Service"],
+  authorization: string,
+) =>
+  Effect.scoped(
+    auth.authenticateMcpClient(
+      onMainListener(
+        onMainListener(HttpServerRequest.fromWeb(at("/mcp", { headers: { authorization } }))),
+      ),
+    ),
+  );
+
 const encodeJson = Schema.encodeSync(Schema.fromJsonString(Schema.Unknown));
 const ORIGIN = "https://box.example.ts.net";
 const REDIRECT = "http://localhost/callback";
@@ -99,8 +112,8 @@ const withRoutes = <A, E>(
   use: (handler: Handler, auth: EnvironmentAuth.EnvironmentAuth["Service"]) => Effect.Effect<A, E>,
 ) =>
   Effect.gen(function* () {
-    const crypto = yield* Crypto.Crypto;
-    const context = Context.make(Crypto.Crypto, crypto);
+    const random = yield* SecureRandom.SecureRandom;
+    const context = Context.make(SecureRandom.SecureRandom, random);
     let routerAuth: EnvironmentAuth.EnvironmentAuth["Service"] | undefined;
     const layerRoutes = makeLayerRoutes((auth) => {
       routerAuth = auth;
@@ -215,7 +228,7 @@ const authorizeParams = (clientId: string, redirect = "http://localhost:51234/ca
   resource: `${ORIGIN}/mcp`,
 });
 
-it.live("derives discovery metadata from the origin the client reached", () =>
+it.effect("derives discovery metadata from the origin the client reached", () =>
   withRoutes((handler) =>
     Effect.gen(function* () {
       const resource = yield* handler(at("/.well-known/oauth-protected-resource/mcp"));
@@ -237,7 +250,7 @@ it.live("derives discovery metadata from the origin the client reached", () =>
   ),
 );
 
-it.live("registers loopback and https clients and never redirects for an unverified client", () =>
+it.effect("registers loopback and https clients and never redirects for an unverified client", () =>
   withRoutes((handler) =>
     Effect.gen(function* () {
       for (const refused of [
@@ -348,15 +361,7 @@ it.live("signs in with a pairing code and issues a token only /mcp accepts", () 
       expect((yield* exchange(verifier)).status).toBe(400);
 
       for (const scheme of ["Bearer", "bearer", "bEaReR"]) {
-        const client = yield* auth.authenticateMcpClient(
-          onMainListener(
-            onMainListener(
-              HttpServerRequest.fromWeb(
-                at("/mcp", { headers: { authorization: `${scheme} ${token.access_token}` } }),
-              ),
-            ),
-          ),
-        );
+        const client = yield* authenticateOnce(auth, `${scheme} ${token.access_token}`);
         expect(client).toMatchObject({ label: "Claude Code", access: "auto" });
       }
 
@@ -427,15 +432,7 @@ it.live("signs in a hosted agent with an https callback that asked for a client 
       );
       expect(tokenResponse.status).toBe(200);
       const token = (yield* json<unknown>(tokenResponse)) as { access_token: string };
-      const signedIn = yield* auth.authenticateMcpClient(
-        onMainListener(
-          onMainListener(
-            HttpServerRequest.fromWeb(
-              at("/mcp", { headers: { authorization: `Bearer ${token.access_token}` } }),
-            ),
-          ),
-        ),
-      );
+      const signedIn = yield* authenticateOnce(auth, `Bearer ${token.access_token}`);
       expect(signedIn).toMatchObject({ label: "Hosted bot", access: "approval-required" });
     }),
   ),
@@ -542,14 +539,9 @@ it.live(
           ),
         ).pipe(Effect.flatMap(json<{ access_token: string; scope: string }>));
         expect(readOnlyToken.scope).toBe("orchestration:read");
-        const readOnlyClient = yield* auth.authenticateMcpClient(
-          onMainListener(
-            onMainListener(
-              HttpServerRequest.fromWeb(
-                at("/mcp", { headers: { authorization: `Bearer ${readOnlyToken.access_token}` } }),
-              ),
-            ),
-          ),
+        const readOnlyClient = yield* authenticateOnce(
+          auth,
+          `Bearer ${readOnlyToken.access_token}`,
         );
         expect(readOnlyClient.access).toBe("read-only");
       }),
@@ -677,16 +669,7 @@ it.effect("grants approvals only to issued clients with operate and approve, and
         label: "Grok Bot",
         runtimeModeCeiling: "approval-required",
       });
-    const authenticate = (token: string) =>
-      auth.authenticateMcpClient(
-        onMainListener(
-          onMainListener(
-            HttpServerRequest.fromWeb(
-              at("/mcp", { headers: { authorization: `Bearer ${token}` } }),
-            ),
-          ),
-        ),
-      );
+    const authenticate = (token: string) => authenticateOnce(auth, `Bearer ${token}`);
 
     const approver = yield* issue([
       "orchestration:read",
@@ -754,15 +737,7 @@ it.live.each([
         expect(token.scope.split(" ").filter((scope) => scope.startsWith("memory:"))).toEqual([
           ...memoryScopes,
         ]);
-        const client = yield* auth.authenticateMcpClient(
-          onMainListener(
-            onMainListener(
-              HttpServerRequest.fromWeb(
-                at("/mcp", { headers: { authorization: `Bearer ${token.access_token}` } }),
-              ),
-            ),
-          ),
-        );
+        const client = yield* authenticateOnce(auth, `Bearer ${token.access_token}`);
         expect(client.grantedScopes?.filter((scope) => scope.startsWith("memory:"))).toEqual([
           ...memoryScopes,
         ]);

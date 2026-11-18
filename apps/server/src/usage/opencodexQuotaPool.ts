@@ -23,6 +23,7 @@ import * as HttpClient from "effect/http/HttpClient";
 import * as HttpClientRequest from "effect/http/HttpClientRequest";
 import * as HttpIncomingMessage from "effect/http/HttpIncomingMessage";
 import { mergeProviderInstanceEnvironment } from "@goat/provider-core/server/instanceEnvironment";
+import { appliesToModel, isWindowExhausted } from "@goat/shared/quotaVerdict";
 import { resolveClaudeHomePath } from "../provider/Drivers/ClaudeHome.ts";
 
 const Config = Schema.Struct({
@@ -365,3 +366,73 @@ export const makeOpenCodexQuotaPool = Effect.gen(function* () {
   );
   return { read, project };
 });
+
+const LOOPBACK_HOSTS = ["127.0.0.1", "localhost", "[::1]"];
+
+// OpenCodex listens on loopback, which an instance may name by any loopback host.
+export function servesEndpoint(source: UsageLimitSourceSnapshot, endpoint: string): boolean {
+  if (source.origin === endpoint) return true;
+  if (source.kind !== "opencodex" || source.origin === undefined) return false;
+  const served = URL.parse(source.origin);
+  const requested = URL.parse(endpoint);
+  return (
+    served !== null &&
+    requested !== null &&
+    requested.protocol === served.protocol &&
+    requested.port === served.port &&
+    LOOPBACK_HOSTS.includes(requested.hostname)
+  );
+}
+
+type PoolAccount = UsageLimitSourceSnapshot["accounts"][number];
+
+// GOAT's quota verdict reads each window: a window that does not gate the run's model is dropped,
+// and the producer's exhausted flag decides before the percentage does.
+const judged = (account: PoolAccount, model: string | null, now: number): PoolAccount => ({
+  ...account,
+  usageLimits: {
+    ...account.usageLimits,
+    windows: account.usageLimits.windows.flatMap((window) =>
+      appliesToModel(window.scopeModel, model ?? undefined)
+        ? [
+            {
+              ...window,
+              usedPercent: isWindowExhausted(window, now) ? 100 : Math.min(window.usedPercent, 99),
+            },
+          ]
+        : [],
+    ),
+  },
+});
+
+// Paused and reauth accounts take no turns. An exhausted account that no window shows spent is
+// spent with no known reset: it adds no time, so the others' earliest refill answers.
+const countsTowardReset = (account: PoolAccount) =>
+  account.state !== "paused" &&
+  account.state !== "reauth" &&
+  !(
+    account.state === "exhausted" &&
+    !account.usageLimits.windows.some((window) => window.usedPercent >= 100)
+  );
+
+/** The OpenCodex pool answers when it knows the reset; otherwise a CLIProxyAPI hub does. */
+export function poolFirstResetAt(
+  serving: ReadonlyArray<UsageLimitSourceSnapshot>,
+  model: string | null,
+  now: number,
+  resetAt: (sources: ReadonlyArray<UsageLimitSourceSnapshot>) => string | null,
+): string | null {
+  const pools = serving.flatMap((source) =>
+    source.kind === "opencodex"
+      ? [
+          {
+            ...source,
+            accounts: source.accounts
+              .map((account) => judged(account, model, now))
+              .filter(countsTowardReset),
+          },
+        ]
+      : [],
+  );
+  return resetAt(pools) ?? resetAt(serving.filter((source) => source.kind !== "opencodex"));
+}

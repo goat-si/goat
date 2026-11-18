@@ -1,4 +1,5 @@
 import { afterEach, assert, beforeEach, describe, it, vi } from "@effect/vitest";
+import * as NodeCrypto from "@effect/platform-node/NodeCrypto";
 import * as NodeServices from "@effect/platform-node/NodeServices";
 import * as HostProcess from "@goat/shared/HostProcess";
 import * as NetService from "@goat/shared/Net";
@@ -116,7 +117,10 @@ describe("ssh tunnel diagnostics", () => {
         assert.equal(finalized, 1, "disconnect must release the stderr reader");
       }).pipe(
         Effect.provide(
-          Layer.merge(NodeServices.layer, managerLayer(spawner, readyAfter(readerStarted))),
+          Layer.merge(
+            Layer.mergeAll(NodeServices.layer, NodeCrypto.layer),
+            managerLayer(spawner, readyAfter(readerStarted)),
+          ),
         ),
         Effect.scoped,
       );
@@ -139,7 +143,12 @@ describe("ssh tunnel diagnostics", () => {
         const manager = yield* SshTunnel.SshEnvironmentManager;
         return yield* Effect.result(manager.ensureEnvironment(uploadTarget));
       }).pipe(
-        Effect.provide(Layer.merge(NodeServices.layer, managerLayer(spawner, hangingHttpClient))),
+        Effect.provide(
+          Layer.merge(
+            Layer.mergeAll(NodeServices.layer, NodeCrypto.layer),
+            managerLayer(spawner, hangingHttpClient),
+          ),
+        ),
         Effect.scoped,
       );
       assert.isTrue(Result.isFailure(result));
@@ -179,7 +188,12 @@ describe("ssh tunnel diagnostics", () => {
         const manager = yield* SshTunnel.SshEnvironmentManager;
         return yield* Effect.result(manager.ensureEnvironment(uploadTarget));
       }).pipe(
-        Effect.provide(Layer.merge(NodeServices.layer, managerLayer(spawner, hangingHttpClient))),
+        Effect.provide(
+          Layer.merge(
+            Layer.mergeAll(NodeServices.layer, NodeCrypto.layer),
+            managerLayer(spawner, hangingHttpClient),
+          ),
+        ),
         Effect.scoped,
       );
       assert.isTrue(Result.isFailure(result));
@@ -252,6 +266,6 @@ describe("ssh tunnel diagnostics", () => {
         assert.equal(finalized, 1);
         assert.isFalse(yield* child.isRunning);
       }).pipe(Effect.provide(managerLayer(spawner, readyAfter(readerStarted))), Effect.scoped);
-    }).pipe(Effect.provide(NodeServices.layer), Effect.scoped),
+    }).pipe(Effect.provide(Layer.mergeAll(NodeServices.layer, NodeCrypto.layer)), Effect.scoped),
   );
 });

@@ -26,7 +26,7 @@ import * as Schema from "effect/Schema";
 import * as PubSub from "effect/PubSub";
 import * as Stream from "effect/Stream";
 import * as Semaphore from "effect/Semaphore";
-import * as Crypto from "effect/Crypto";
+import * as SecureRandom from "effect/crypto/SecureRandom";
 
 import * as ServerSecretStore from "../auth/ServerSecretStore.ts";
 import * as ServerConfig from "../config.ts";
@@ -169,7 +169,7 @@ const make = Effect.gen(function* () {
   const fs = yield* FileSystem.FileSystem;
   const path = yield* Path.Path;
   const config = yield* ServerConfig.ServerConfig;
-  const crypto = yield* Crypto.Crypto;
+  const random = yield* SecureRandom.SecureRandom;
 
   const catalogPath = path.join(config.stateDir, CATALOG_FILE);
   const catalogLock = yield* Semaphore.make(1);
@@ -199,7 +199,7 @@ const make = Effect.gen(function* () {
   const writeCatalog = (catalog: Catalog) =>
     Effect.gen(function* () {
       const contents = yield* encodeCatalog(catalog);
-      const temp = `${catalogPath}.${yield* crypto.randomUUIDv4()}.tmp`;
+      const temp = `${catalogPath}.${yield* random.uuidV4()}.tmp`;
       yield* fs.makeDirectory(config.stateDir, { recursive: true });
       yield* fs.writeFileString(temp, `${contents}\n`, { mode: 0o600, flag: "wx" }).pipe(
         Effect.andThen(fs.chmod(temp, 0o600)),
@@ -497,9 +497,7 @@ const make = Effect.gen(function* () {
       const key = yield* apiKey;
       yield* resolvePendingCreates(key);
       const pending: PendingCreate = {
-        idempotencyKey: yield* crypto
-          .randomUUIDv4()
-          .pipe(Effect.mapError(() => fail("storage_failed"))),
+        idempotencyKey: yield* random.uuidV4().pipe(Effect.mapError(() => fail("storage_failed"))),
         label: input.label,
         type: input.type,
         ttlSeconds: input.ttlSeconds,

@@ -3,6 +3,7 @@ import * as Context from "effect/Context";
 import * as Scope from "effect/Scope";
 import * as ServerConfig from "../config.ts";
 import * as CodexManagedTokenBroker from "./CodexManagedTokenBroker.ts";
+import * as NodeCrypto from "@effect/platform-node/NodeCrypto";
 import * as NodeServices from "@effect/platform-node/NodeServices";
 import { assert, it } from "@effect/vitest";
 import { EnvironmentId, ProviderInstanceId } from "@goat/contracts";
@@ -127,7 +128,7 @@ const provideBroker = <A, E, R>(effect: Effect.Effect<A, E, R>) =>
     Effect.scoped,
     Effect.provide(
       ServerConfig.layerTest(process.cwd(), { prefix: "goat-renewal-test-" }).pipe(
-        Layer.provideMerge(NodeServices.layer),
+        Layer.provideMerge(Layer.mergeAll(NodeServices.layer, NodeCrypto.layer)),
       ),
     ),
   );

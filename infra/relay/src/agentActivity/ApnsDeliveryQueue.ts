@@ -1,8 +1,8 @@
 import * as DeliveryAuthorization from "./DeliveryAuthorization.ts";
 import { RelayAuthorizationUnavailableError } from "@goat/contracts/relayErrors";
 import * as Alchemy from "alchemy";
-import * as Cloudflare from "alchemy/Cloudflare";
-import * as Crypto from "effect/Crypto";
+import * as Cloudflare from "@alchemy.run/cloudflare";
+import * as SecureRandom from "effect/crypto/SecureRandom";
 import * as Context from "effect/Context";
 import * as DateTime from "effect/DateTime";
 import * as Effect from "effect/Effect";
@@ -85,7 +85,7 @@ export class ApnsDeliveryQueue extends Context.Service<
 export const make = Effect.gen(function* () {
   const authorization = yield* DeliveryAuthorization.DeliveryAuthorization;
   const sender = yield* ApnsDeliveryQueueSender;
-  const crypto = yield* Crypto.Crypto;
+  const random = yield* SecureRandom.SecureRandom;
   const config = yield* RelayConfiguration.RelayConfiguration;
 
   return ApnsDeliveryQueue.of({
@@ -110,7 +110,7 @@ export const make = Effect.gen(function* () {
             apnsId: null,
           };
         const now = yield* DateTime.now;
-        const jobId = yield* crypto.randomUUIDv4().pipe(
+        const jobId = yield* random.uuidV4().pipe(
           Effect.mapError(
             (cause) =>
               new ApnsDeliveryQueueSendError({
@@ -183,7 +183,7 @@ export const make = Effect.gen(function* () {
             apnsId: null,
           };
         const now = yield* DateTime.now;
-        const jobId = yield* crypto.randomUUIDv4().pipe(
+        const jobId = yield* random.uuidV4().pipe(
           Effect.mapError(
             (cause) =>
               new ApnsDeliveryQueueSendError({

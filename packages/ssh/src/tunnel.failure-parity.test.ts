@@ -1,3 +1,4 @@
+import * as NodeCrypto from "@effect/platform-node/NodeCrypto";
 import * as NodeServices from "@effect/platform-node/NodeServices";
 import { assert, describe, it } from "@effect/vitest";
 import * as NetService from "@goat/shared/Net";
@@ -91,7 +92,7 @@ describe("SSH preparation/runtime status parity", () => {
           assert.notEqual(status.status?.state, "auth_failed");
           assert.notEqual(status.status?.state, "failed");
         }).pipe(Effect.provide(f.layer), Effect.scoped);
-      }).pipe(Effect.provide(NodeServices.layer), Effect.scoped),
+      }).pipe(Effect.provide(Layer.mergeAll(NodeServices.layer, NodeCrypto.layer)), Effect.scoped),
   );
   it.effect.each(cases)("classifies real stderr consistently: %s", ([stderr, expected]) => {
     const spawner = ChildProcessSpawner.make((command) =>
@@ -136,6 +137,7 @@ describe("SSH preparation/runtime status parity", () => {
       Effect.provide(
         Layer.mergeAll(
           NodeServices.layer,
+          NodeCrypto.layer,
           Layer.succeed(ChildProcessSpawner.ChildProcessSpawner, spawner),
           Layer.succeed(NetService.NetService, testNetService),
           Layer.succeed(HttpClient.HttpClient, testHttpClient),

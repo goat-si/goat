@@ -17,6 +17,20 @@ export interface PendingUserInputDraftAnswer {
 
 export type PendingUserInputAnswer = string | string[];
 
+const ANSWER_SEPARATOR = "\n\n";
+
+/**
+ * Appends a typed answer to a draft, as web and mobile do when an answer goes back to the
+ * composer: the draft's trailing whitespace is trimmed and the answer follows after a blank line.
+ * Every answer is kept, even one equal to existing text; a blank answer changes nothing.
+ */
+export function appendAnswerToDraft(draft: string, answer: string | undefined): string {
+  const appended = answer?.trim() ?? "";
+  if (appended.length === 0) return draft;
+  if (draft.trim().length === 0) return appended;
+  return `${draft.trimEnd()}${ANSWER_SEPARATOR}${appended}`;
+}
+
 function normalizeDraftAnswer(value: string | undefined): string | null {
   if (typeof value !== "string") {
     return null;

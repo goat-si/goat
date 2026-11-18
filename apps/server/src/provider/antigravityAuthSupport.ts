@@ -4,7 +4,7 @@ import * as NodeFSP from "node:fs/promises";
 import type { AntigravityAuthMethod, ProviderInstanceId } from "@goat/contracts";
 import * as HostProcess from "@goat/shared/HostProcess";
 import { resolveNodeExecutable, nodeRuntimeUnavailableMessage } from "@goat/shared/nodeRuntime";
-import * as Crypto from "effect/Crypto";
+import * as Digest from "effect/crypto/Digest";
 import * as Effect from "effect/Effect";
 import * as Hex from "effect/encoding/Hex";
 import * as FileSystem from "effect/FileSystem";
@@ -180,9 +180,9 @@ export interface AntigravityInstanceDirectories {
 export const resolveAntigravityInstanceDirectories = Effect.fn(
   "resolveAntigravityInstanceDirectories",
 )(function* (stateDir: string, instanceId: ProviderInstanceId) {
-  const crypto = yield* Crypto.Crypto;
+  const digest = yield* Digest.Digest;
   const path = yield* Path.Path;
-  const key = Hex.encode(yield* crypto.digest("SHA-256", new TextEncoder().encode(instanceId)));
+  const key = Hex.encode(yield* digest.digest(Digest.sha256, new TextEncoder().encode(instanceId)));
   return {
     profile: path.join(stateDir, "providers", "antigravity", key),
     runtimeTemp: path.join(stateDir, "antigravity-tmp", key.slice(0, 12)),
@@ -293,6 +293,33 @@ const linkAntigravityUserSkills = Effect.fn("linkAntigravityUserSkills")(functio
   }
 });
 
+export const prepareAntigravityRuntimeHome = Effect.fn("prepareAntigravityRuntimeHome")(
+  function* (input: {
+    readonly directory: string;
+    readonly profile: AntigravityProfile;
+    readonly userHome: string;
+  }) {
+    const path = yield* Path.Path;
+    yield* Effect.tryPromise(() =>
+      NodeFSP.symlink(
+        input.profile.acpDirectory,
+        path.join(input.directory, "antigravity-acp"),
+        input.profile.platform === "win32" ? "junction" : "dir",
+      ),
+    ).pipe(
+      Effect.mapError(() =>
+        authSupportError("The Antigravity runtime profile could not be linked."),
+      ),
+    );
+    yield* linkAntigravityUserSkills({
+      profileDirectory: input.directory,
+      userHome: input.userHome,
+      platform: input.profile.platform,
+    });
+    return { ...input.profile, geminiHome: input.directory };
+  },
+);
+
 export const prepareAntigravityProfile = Effect.fn("prepareAntigravityProfile")(function* (input: {
   readonly profileDirectory: string;
   readonly baseEnv?: NodeJS.ProcessEnv;
@@ -301,6 +328,7 @@ export const prepareAntigravityProfile = Effect.fn("prepareAntigravityProfile")(
   readonly auth?: AntigravityAuthConfig;
   readonly userHome?: string;
   readonly tempDirectory?: string;
+  readonly skipUserSkills?: boolean;
 }) {
   const auth = input.auth ?? ANTIGRAVITY_PERSONAL_AUTH;
   const fs = yield* FileSystem.FileSystem;
@@ -439,7 +467,9 @@ export const prepareAntigravityProfile = Effect.fn("prepareAntigravityProfile")(
         authSupportError("The Antigravity profile settings could not be written."),
       ),
     );
-  yield* linkAntigravityUserSkills({ profileDirectory: geminiHome, userHome, platform });
+  if (!input.skipUserSkills) {
+    yield* linkAntigravityUserSkills({ profileDirectory: geminiHome, userHome, platform });
+  }
   return profile;
 });
 
@@ -459,7 +489,14 @@ export function buildAntigravityAcpSpawnInput(input: {
     // The agy CLI has no harness sibling and serves ACP through its `acp` subcommand.
     args:
       input.installation.harnessPath === null
-        ? ["acp"]
+        ? [
+            "acp",
+            "--gemini-dir",
+            input.profile.geminiHome,
+            "--app-data-dir",
+            // The CLI joins this beneath gemini-dir, including when the value is absolute.
+            "antigravity-acp",
+          ]
         : input.profile.platform === "linux"
           ? ["--uid="]
           : [],

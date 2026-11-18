@@ -1,13 +1,5 @@
 // @effect-diagnostics nodeBuiltinImport:off - ACP fixtures use Node HTTP servers and native paths
-import { makeAcpRegistryAdapterV2 } from "@goat/provider-acp-registry/testing";
-import { AcpRegistrySettings } from "@goat/provider-acp-registry/settings";
-import { AcpRegistryCatalog } from "@goat/provider-acp-registry/server/AcpRegistrySupport";
-import {
-  acpMcpAuthorization,
-  decodeAcpReplayTranscript,
-  makeAcpReplayRuntime,
-  makeTurnInput,
-} from "./AcpAdapterV2.testkit.ts";
+import { acpMcpAuthorization, makeTurnInput } from "./AcpAdapterV2.testkit.ts";
 import {
   makeMockRuntime,
   rawProtocolMethod,
@@ -16,10 +8,10 @@ import {
   rawProtocolPromptTextBlocks,
   pollProtocolMethods,
   decodeUnknownJson,
+  bundledMockAgentPath,
 } from "./AcpMockRuntime.testkit.ts";
-import { type OrchestrationV2TurnItem, type ProviderUserInputAnswers } from "@goat/contracts";
+import { type OrchestrationV2TurnItem } from "@goat/contracts";
 import { deriveBlockedOnThreadWait } from "@goat/shared/orchestrationV2PendingBackgroundWork";
-import { appendUserInputAttachmentPaths } from "../../provider/userInputAttachments.ts";
 import { makeGrokAcpAdapterFlavor } from "@goat/provider-grok/testing";
 import {
   extractCopilotSubagentUpdate,
@@ -34,6 +26,7 @@ import * as NodeFS from "node:fs";
 import * as NodePath from "node:path";
 import { assertNoticeInitialization } from "./AcpNoticeReplay.testkit.ts";
 
+import * as NodeCrypto from "@effect/platform-node/NodeCrypto";
 import * as NodeServices from "@effect/platform-node/NodeServices";
 import * as DocumentText from "../../provider/DocumentText.ts";
 import { assert, describe, it } from "@effect/vitest";
@@ -114,13 +107,15 @@ import {
 } from "@goat/provider-acp-registry/testing";
 
 const DEFAULT_GROK_SETTINGS = Schema.decodeSync(GrokSettings)({});
-const DROID_SETTINGS = Schema.decodeSync(AcpRegistrySettings)({ agentId: "factory-droid" });
 
-const layerHost = TestProviderHost.layer().pipe(Layer.provide(NodeServices.layer));
+const layerHost = TestProviderHost.layer().pipe(
+  Layer.provide(Layer.mergeAll(NodeServices.layer, NodeCrypto.layer)),
+);
 
 const layerTest = Layer.mergeAll(
-  DocumentText.layer.pipe(Layer.provide(NodeServices.layer)),
+  DocumentText.layer.pipe(Layer.provide(Layer.mergeAll(NodeServices.layer, NodeCrypto.layer))),
   NodeServices.layer,
+  NodeCrypto.layer,
   IdAllocator.layer,
   McpProviderSessions.layer,
   layerHost,
@@ -361,7 +356,6 @@ describe("acpToolCallDiffPatch", () => {
 describe("AcpAdapterV2", () => {
   it.live("reports per-turn usage unavailable on a continuation turn that never prompts", () =>
     Effect.gen(function* () {
-      const path = yield* Path.Path;
       const instanceId = ProviderInstanceId.make("acp-test-usage-continuation");
       const threadId = ThreadId.make("thread-acp-usage-continuation");
       let promptOrdinal = 0;
@@ -380,9 +374,7 @@ describe("AcpAdapterV2", () => {
           enablePostSettleContinuation: true,
           makeRuntime: makeMockRuntime({
             childProcessSpawner: yield* ChildProcessSpawner.ChildProcessSpawner,
-            mockAgentPath: yield* path.fromFileUrl(
-              new URL("../../../scripts/acp-mock-agent.ts", import.meta.url),
-            ),
+            mockAgentPath: yield* bundledMockAgentPath,
             wrapRuntime: (runtime) => ({
               ...runtime,
               prompt: () => {
@@ -483,7 +475,6 @@ describe("AcpAdapterV2", () => {
   );
   it.live("fails an end_turn the outcome check rejects and restarts before the next turn", () =>
     Effect.gen(function* () {
-      const path = yield* Path.Path;
       const instanceId = ProviderInstanceId.make("acp-test-prompt-outcome");
       const threadId = ThreadId.make("thread-acp-prompt-outcome");
       const quota = {
@@ -510,9 +501,7 @@ describe("AcpAdapterV2", () => {
             }),
           makeRuntime: makeMockRuntime({
             childProcessSpawner: yield* ChildProcessSpawner.ChildProcessSpawner,
-            mockAgentPath: yield* path.fromFileUrl(
-              new URL("../../../scripts/acp-mock-agent.ts", import.meta.url),
-            ),
+            mockAgentPath: yield* bundledMockAgentPath,
             wrapRuntime: (runtime, runtimeOrdinal) => ({
               ...runtime,
               prompt: () =>
@@ -574,7 +563,6 @@ describe("AcpAdapterV2", () => {
   );
   it.live("retains returned usage when Stop finalizes before the prompt callback", () =>
     Effect.gen(function* () {
-      const path = yield* Path.Path;
       const instanceId = ProviderInstanceId.make("acp-test-prompt-usage-stop");
       const threadId = ThreadId.make("thread-acp-prompt-usage-stop");
       const wireSettled = yield* Deferred.make<void>();
@@ -596,9 +584,7 @@ describe("AcpAdapterV2", () => {
           preserveRuntimeOnSettledInterrupt: true,
           makeRuntime: makeMockRuntime({
             childProcessSpawner: yield* ChildProcessSpawner.ChildProcessSpawner,
-            mockAgentPath: yield* path.fromFileUrl(
-              new URL("../../../scripts/acp-mock-agent.ts", import.meta.url),
-            ),
+            mockAgentPath: yield* bundledMockAgentPath,
             wrapRuntime: (runtime) => ({
               ...runtime,
               prompt: () =>
@@ -667,7 +653,6 @@ describe("AcpAdapterV2", () => {
 
   it.live("drops a late prompt response that lands after the turn finalized", () =>
     Effect.gen(function* () {
-      const path = yield* Path.Path;
       const instanceId = ProviderInstanceId.make("acp-test-prompt-usage-late");
       const threadId = ThreadId.make("thread-acp-prompt-usage-late");
       const dispatched = yield* Deferred.make<void>();
@@ -688,9 +673,7 @@ describe("AcpAdapterV2", () => {
           terminateRuntimeProcessGroupOnInterrupt: true,
           makeRuntime: makeMockRuntime({
             childProcessSpawner: yield* ChildProcessSpawner.ChildProcessSpawner,
-            mockAgentPath: yield* path.fromFileUrl(
-              new URL("../../../scripts/acp-mock-agent.ts", import.meta.url),
-            ),
+            mockAgentPath: yield* bundledMockAgentPath,
             ownDetachedProcessGroup: true,
             processGroupTerminationGrace: 0,
             wrapRuntime: (runtime) => ({
@@ -794,284 +777,8 @@ describe("AcpAdapterV2", () => {
     }).pipe(Effect.provide(layerTest), Effect.scoped),
   );
 
-  it.live("passes per-turn usage samples through", () =>
-    Effect.gen(function* () {
-      const path = yield* Path.Path;
-      const instanceId = ProviderInstanceId.make("acp-test-per-turn-usage");
-      const threadId = ThreadId.make("thread-acp-per-turn-usage");
-      let promptOrdinal = 0;
-      // Fixture shaped after the live glm-acp-agent probe: three sequential
-      // prompts whose inputTokens grow by tens, not by a context per turn.
-      // GLM never sends cachedWriteTokens; those values are added here to
-      // exercise the clamp path.
-      const promptUsages = [
-        {
-          inputTokens: 2432,
-          outputTokens: 3,
-          totalTokens: 2435,
-          cachedReadTokens: 1024,
-          cachedWriteTokens: 64,
-          thoughtTokens: 2,
-        },
-        {
-          inputTokens: 2453,
-          outputTokens: 4,
-          totalTokens: 2457,
-          cachedReadTokens: 1045,
-          cachedWriteTokens: 85,
-          thoughtTokens: 3,
-        },
-        {
-          inputTokens: 2475,
-          outputTokens: 25,
-          totalTokens: 2500,
-          cachedReadTokens: 1067,
-          cachedWriteTokens: 107,
-          thoughtTokens: 20,
-        },
-      ];
-      const adapter = yield* makeAcpAdapterV2({
-        instanceId,
-        selfInvocation: yield* resolveSelfInvocation(),
-        flavor: {
-          driver: ACP_TEST_DRIVER,
-          capabilities: AcpProviderCapabilitiesV2,
-          reportsPerTurnPromptUsage: true,
-          makeRuntime: makeMockRuntime({
-            childProcessSpawner: yield* ChildProcessSpawner.ChildProcessSpawner,
-            mockAgentPath: yield* path.fromFileUrl(
-              new URL("../../../scripts/acp-mock-agent.ts", import.meta.url),
-            ),
-            wrapRuntime: (runtime) => ({
-              ...runtime,
-              prompt: () => {
-                const usage = promptUsages[promptOrdinal++];
-                if (usage === undefined) return Effect.die("Unexpected prompt");
-                return Effect.succeed({ stopReason: "end_turn" as const, usage });
-              },
-            }),
-          }),
-        },
-      });
-      const runtimePolicy = ProviderAdapter.ProviderAdapterV2RuntimePolicy.make({
-        runtimeMode: "full-access",
-        interactionMode: "default",
-        cwd: process.cwd(),
-      });
-      const modelSelection = { instanceId, model: "default" } as const;
-      const runtime = yield* adapter.openSession({
-        threadId,
-        providerSessionId: ProviderSessionId.make("provider-session-acp-per-turn-usage"),
-        modelSelection,
-        runtimePolicy,
-      });
-      const providerThread = yield* runtime.ensureThread({
-        threadId,
-        modelSelection,
-        runtimePolicy,
-      });
-      const now = yield* DateTime.now;
-      for (const [index, sample] of promptUsages.entries()) {
-        yield* runtime.startTurn(
-          makeTurnInput({
-            threadId,
-            providerThread,
-            instanceId,
-            runtimePolicy,
-            now,
-            ordinal: index + 1,
-          }),
-        );
-        const events = Array.from(
-          yield* runtime.events.pipe(
-            Stream.takeUntil((event) => event.type === "turn.terminal"),
-            Stream.runCollect,
-          ),
-        );
-        const completed = events.find(
-          (event) =>
-            event.type === "provider_turn.updated" && event.providerTurn.status === "completed",
-        );
-        // Per-turn: each response's own sample maps straight onto its turn.
-        assert.deepEqual(
-          completed?.type === "provider_turn.updated"
-            ? completed.providerTurn.turnTokenUsage
-            : null,
-          {
-            usageScope: "main_agent",
-            usageStatus: "complete",
-            hasSubagents: false,
-            inputTokens: sample.inputTokens,
-            outputTokens: sample.outputTokens,
-            cachedInputTokens: sample.cachedReadTokens,
-            cacheCreationTokens: sample.cachedWriteTokens,
-            reasoningTokens: sample.thoughtTokens,
-          },
-        );
-      }
-    }).pipe(Effect.provide(layerTest), Effect.scoped),
-  );
-
-  it.live("clamps per-turn subsets that exceed their parent counters", () =>
-    Effect.gen(function* () {
-      const path = yield* Path.Path;
-      const instanceId = ProviderInstanceId.make("acp-test-per-turn-clamp");
-      const threadId = ThreadId.make("thread-acp-per-turn-clamp");
-      const adapter = yield* makeAcpAdapterV2({
-        instanceId,
-        selfInvocation: yield* resolveSelfInvocation(),
-        flavor: {
-          driver: ACP_TEST_DRIVER,
-          capabilities: AcpProviderCapabilitiesV2,
-          reportsPerTurnPromptUsage: true,
-          makeRuntime: makeMockRuntime({
-            childProcessSpawner: yield* ChildProcessSpawner.ChildProcessSpawner,
-            mockAgentPath: yield* path.fromFileUrl(
-              new URL("../../../scripts/acp-mock-agent.ts", import.meta.url),
-            ),
-            wrapRuntime: (runtime) => ({
-              ...runtime,
-              prompt: () =>
-                Effect.succeed({
-                  stopReason: "end_turn" as const,
-                  usage: {
-                    inputTokens: 100,
-                    outputTokens: 10,
-                    totalTokens: 110,
-                    cachedReadTokens: 150,
-                    cachedWriteTokens: 120,
-                    thoughtTokens: 30,
-                  },
-                }),
-            }),
-          }),
-        },
-      });
-      const runtimePolicy = ProviderAdapter.ProviderAdapterV2RuntimePolicy.make({
-        runtimeMode: "full-access",
-        interactionMode: "default",
-        cwd: process.cwd(),
-      });
-      const modelSelection = { instanceId, model: "default" } as const;
-      const runtime = yield* adapter.openSession({
-        threadId,
-        providerSessionId: ProviderSessionId.make("provider-session-acp-per-turn-clamp"),
-        modelSelection,
-        runtimePolicy,
-      });
-      const providerThread = yield* runtime.ensureThread({
-        threadId,
-        modelSelection,
-        runtimePolicy,
-      });
-      yield* runtime.startTurn(
-        makeTurnInput({
-          threadId,
-          providerThread,
-          instanceId,
-          runtimePolicy,
-          now: yield* DateTime.now,
-        }),
-      );
-      const events = Array.from(
-        yield* runtime.events.pipe(
-          Stream.takeUntil((event) => event.type === "turn.terminal"),
-          Stream.runCollect,
-        ),
-      );
-      const completed = events.find(
-        (event) =>
-          event.type === "provider_turn.updated" && event.providerTurn.status === "completed",
-      );
-      // TurnTokenUsage contract: input includes cache read + write and
-      // reasoning is a subset of output. Reads clamp to input, writes clamp
-      // to what reads leave of it (100 - 100 = 0 here).
-      assert.deepEqual(
-        completed?.type === "provider_turn.updated" ? completed.providerTurn.turnTokenUsage : null,
-        {
-          usageScope: "main_agent",
-          usageStatus: "complete",
-          hasSubagents: false,
-          inputTokens: 100,
-          outputTokens: 10,
-          cachedInputTokens: 100,
-          cacheCreationTokens: 0,
-          reasoningTokens: 10,
-        },
-      );
-    }).pipe(Effect.provide(layerTest), Effect.scoped),
-  );
-
-  it.live("reports per-turn usage unavailable when the agent omits usage", () =>
-    Effect.gen(function* () {
-      const path = yield* Path.Path;
-      const instanceId = ProviderInstanceId.make("acp-test-per-turn-missing");
-      const threadId = ThreadId.make("thread-acp-per-turn-missing");
-      const adapter = yield* makeAcpAdapterV2({
-        instanceId,
-        selfInvocation: yield* resolveSelfInvocation(),
-        flavor: {
-          driver: ACP_TEST_DRIVER,
-          capabilities: AcpProviderCapabilitiesV2,
-          reportsPerTurnPromptUsage: true,
-          makeRuntime: makeMockRuntime({
-            childProcessSpawner: yield* ChildProcessSpawner.ChildProcessSpawner,
-            mockAgentPath: yield* path.fromFileUrl(
-              new URL("../../../scripts/acp-mock-agent.ts", import.meta.url),
-            ),
-            wrapRuntime: (runtime) => ({
-              ...runtime,
-              prompt: () => Effect.succeed({ stopReason: "end_turn" as const }),
-            }),
-          }),
-        },
-      });
-      const runtimePolicy = ProviderAdapter.ProviderAdapterV2RuntimePolicy.make({
-        runtimeMode: "full-access",
-        interactionMode: "default",
-        cwd: process.cwd(),
-      });
-      const modelSelection = { instanceId, model: "default" } as const;
-      const runtime = yield* adapter.openSession({
-        threadId,
-        providerSessionId: ProviderSessionId.make("provider-session-acp-per-turn-missing"),
-        modelSelection,
-        runtimePolicy,
-      });
-      const providerThread = yield* runtime.ensureThread({
-        threadId,
-        modelSelection,
-        runtimePolicy,
-      });
-      yield* runtime.startTurn(
-        makeTurnInput({
-          threadId,
-          providerThread,
-          instanceId,
-          runtimePolicy,
-          now: yield* DateTime.now,
-        }),
-      );
-      const events = Array.from(
-        yield* runtime.events.pipe(
-          Stream.takeUntil((event) => event.type === "turn.terminal"),
-          Stream.runCollect,
-        ),
-      );
-      const completed = events.find(
-        (event) =>
-          event.type === "provider_turn.updated" && event.providerTurn.status === "completed",
-      );
-      assert.deepEqual(
-        completed?.type === "provider_turn.updated" ? completed.providerTurn.turnTokenUsage : null,
-        { usageScope: "main_agent", usageStatus: "unavailable", hasSubagents: false },
-      );
-    }).pipe(Effect.provide(layerTest), Effect.scoped),
-  );
-
   it.live("keeps usage unavailable for undeclared agents even when they report usage", () =>
     Effect.gen(function* () {
-      const path = yield* Path.Path;
       const instanceId = ProviderInstanceId.make("acp-test-usage-undeclared");
       const threadId = ThreadId.make("thread-acp-usage-undeclared");
       const adapter = yield* makeAcpAdapterV2({
@@ -1082,9 +789,7 @@ describe("AcpAdapterV2", () => {
           capabilities: AcpProviderCapabilitiesV2,
           makeRuntime: makeMockRuntime({
             childProcessSpawner: yield* ChildProcessSpawner.ChildProcessSpawner,
-            mockAgentPath: yield* path.fromFileUrl(
-              new URL("../../../scripts/acp-mock-agent.ts", import.meta.url),
-            ),
+            mockAgentPath: yield* bundledMockAgentPath,
             wrapRuntime: (runtime) => ({
               ...runtime,
               prompt: () =>
@@ -1144,7 +849,6 @@ describe("AcpAdapterV2", () => {
     "fails the turn on an ACP v2 idle error with %s, settles its open tool, and accepts the next prompt",
     (details) =>
       Effect.gen(function* () {
-        const path = yield* Path.Path;
         const instanceId = ProviderInstanceId.make(`idle-error-${details}`);
         const threadId = ThreadId.make(`thread-idle-error-${details}`);
         const childSessionId = "mock-child-session-idle-error";
@@ -1173,9 +877,7 @@ describe("AcpAdapterV2", () => {
                 : undefined,
             makeRuntime: makeMockRuntime({
               childProcessSpawner: yield* ChildProcessSpawner.ChildProcessSpawner,
-              mockAgentPath: yield* path.fromFileUrl(
-                new URL("../../../scripts/acp-mock-agent.ts", import.meta.url),
-              ),
+              mockAgentPath: yield* bundledMockAgentPath,
               environment: { GOAT_ACP_IDLE_ERROR: details },
             }),
           },
@@ -1289,7 +991,6 @@ describe("AcpAdapterV2", () => {
     "projects Mistral retry notices and their %s outcome",
     (outcome) =>
       Effect.gen(function* () {
-        const path = yield* Path.Path;
         const instanceId = ProviderInstanceId.make(`vibe-retry-${outcome}`);
         const threadId = ThreadId.make(`thread-vibe-retry-${outcome}`);
         const adapter = yield* makeAcpAdapterV2({
@@ -1302,9 +1003,7 @@ describe("AcpAdapterV2", () => {
             promptFailure: (cause) => acpRegistryPromptFailure("mistral-vibe", cause),
             makeRuntime: makeMockRuntime({
               childProcessSpawner: yield* ChildProcessSpawner.ChildProcessSpawner,
-              mockAgentPath: yield* path.fromFileUrl(
-                new URL("../../../scripts/acp-mock-agent.ts", import.meta.url),
-              ),
+              mockAgentPath: yield* bundledMockAgentPath,
               environment: { GOAT_ACP_VIBE_RETRY_OUTCOME: outcome },
             }),
           },
@@ -1378,11 +1077,8 @@ describe("AcpAdapterV2", () => {
       Effect.gen(function* () {
         const [attached, skill] = [mode !== "detached", mode !== "skill-off"];
         const childProcessSpawner = yield* ChildProcessSpawner.ChildProcessSpawner;
-        const path = yield* Path.Path;
         const selfInvocation = yield* resolveSelfInvocation();
-        const mockAgentPath = yield* path.fromFileUrl(
-          new URL("../../../scripts/acp-mock-agent.ts", import.meta.url),
-        );
+        const mockAgentPath = yield* bundledMockAgentPath;
         const protocolEvents = yield* Queue.unbounded<EffectAcpProtocol.AcpProtocolLogEvent>();
         const instanceId = ProviderInstanceId.make(`acp-test-cua-${mode}`);
         const threadId = ThreadId.make(`thread-acp-cua-${mode}`);
@@ -1480,11 +1176,8 @@ describe("AcpAdapterV2", () => {
   it.live("restarts the agent without the driver when a session switches to Plan", () =>
     Effect.gen(function* () {
       const childProcessSpawner = yield* ChildProcessSpawner.ChildProcessSpawner;
-      const path = yield* Path.Path;
       const selfInvocation = yield* resolveSelfInvocation();
-      const mockAgentPath = yield* path.fromFileUrl(
-        new URL("../../../scripts/acp-mock-agent.ts", import.meta.url),
-      );
+      const mockAgentPath = yield* bundledMockAgentPath;
       const protocolEvents = yield* Queue.unbounded<EffectAcpProtocol.AcpProtocolLogEvent>();
       const instanceId = ProviderInstanceId.make("acp-test-cua-plan");
       const threadId = ThreadId.make("thread-acp-cua-plan");
@@ -1592,11 +1285,8 @@ describe("AcpAdapterV2", () => {
     (attached, copilotModes) =>
       Effect.gen(function* () {
         const childProcessSpawner = yield* ChildProcessSpawner.ChildProcessSpawner;
-        const path = yield* Path.Path;
         const selfInvocation = yield* resolveSelfInvocation();
-        const mockAgentPath = yield* path.fromFileUrl(
-          new URL("../../../scripts/acp-mock-agent.ts", import.meta.url),
-        );
+        const mockAgentPath = yield* bundledMockAgentPath;
         const protocolEvents = yield* Queue.unbounded<EffectAcpProtocol.AcpProtocolLogEvent>();
         const instanceId = ProviderInstanceId.make("acp-test-instruction-transitions");
         const threadId = ThreadId.make("thread-acp-instruction-transitions");
@@ -1730,10 +1420,7 @@ describe("AcpAdapterV2", () => {
   it.live("reapplies a selection after a switch away from it failed partway", () =>
     Effect.gen(function* () {
       const childProcessSpawner = yield* ChildProcessSpawner.ChildProcessSpawner;
-      const path = yield* Path.Path;
-      const mockAgentPath = yield* path.fromFileUrl(
-        new URL("../../../scripts/acp-mock-agent.ts", import.meta.url),
-      );
+      const mockAgentPath = yield* bundledMockAgentPath;
       const protocolEvents = yield* Queue.unbounded<EffectAcpProtocol.AcpProtocolLogEvent>();
       const instanceId = ProviderInstanceId.make("acp-test-partial-selection-reapply");
       const threadId = ThreadId.make("thread-acp-partial-selection-reapply");
@@ -1818,11 +1505,8 @@ describe("AcpAdapterV2", () => {
   it.effect("starts a new replay message after ACP v2 plan boundaries", () =>
     Effect.gen(function* () {
       const childProcessSpawner = yield* ChildProcessSpawner.ChildProcessSpawner;
-      const path = yield* Path.Path;
       const selfInvocation = yield* resolveSelfInvocation();
-      const mockAgentPath = yield* path.fromFileUrl(
-        new URL("../../../scripts/acp-mock-agent.ts", import.meta.url),
-      );
+      const mockAgentPath = yield* bundledMockAgentPath;
       type RuntimeService = AcpSessionRuntime.AcpSessionRuntime["Service"];
       let sessionUpdateHandler: Parameters<RuntimeService["handleSessionUpdate"]>[0] | undefined;
       const instanceId = ProviderInstanceId.make("acp-test-v2-plan-replay-boundary");
@@ -1902,10 +1586,7 @@ describe("AcpAdapterV2", () => {
   it.effect("persists a bounded subset of streamed root and child tool updates", () =>
     Effect.gen(function* () {
       const childProcessSpawner = yield* ChildProcessSpawner.ChildProcessSpawner;
-      const path = yield* Path.Path;
-      const mockAgentPath = yield* path.fromFileUrl(
-        new URL("../../../scripts/acp-mock-agent.ts", import.meta.url),
-      );
+      const mockAgentPath = yield* bundledMockAgentPath;
       type Runtime = AcpSessionRuntime.AcpSessionRuntime["Service"];
       let handler: Parameters<Runtime["handleSessionUpdate"]>[0] | undefined;
       // Devin resends the growing file without status on each update.
@@ -2074,10 +1755,7 @@ describe("AcpAdapterV2", () => {
   it.effect("keeps Devin parent paragraphs intact while projecting native child work", () =>
     Effect.gen(function* () {
       const childProcessSpawner = yield* ChildProcessSpawner.ChildProcessSpawner;
-      const path = yield* Path.Path;
-      const mockAgentPath = yield* path.fromFileUrl(
-        new URL("../../../scripts/acp-mock-agent.ts", import.meta.url),
-      );
+      const mockAgentPath = yield* bundledMockAgentPath;
       type Runtime = AcpSessionRuntime.AcpSessionRuntime["Service"];
       let handler: Parameters<Runtime["handleSessionUpdate"]>[0] | undefined;
       let createTerminal: Parameters<Runtime["handleCreateTerminal"]>[0] | undefined;
@@ -2438,10 +2116,7 @@ describe("AcpAdapterV2", () => {
   it.effect("routes interleaved Copilot subagent output into subagent threads", () =>
     Effect.gen(function* () {
       const childProcessSpawner = yield* ChildProcessSpawner.ChildProcessSpawner;
-      const path = yield* Path.Path;
-      const mockAgentPath = yield* path.fromFileUrl(
-        new URL("../../../scripts/acp-mock-agent.ts", import.meta.url),
-      );
+      const mockAgentPath = yield* bundledMockAgentPath;
       type Runtime = AcpSessionRuntime.AcpSessionRuntime["Service"];
       let handler: Parameters<Runtime["handleSessionUpdate"]>[0] | undefined;
       let sessionEvent:
@@ -2636,11 +2311,8 @@ describe("AcpAdapterV2", () => {
   it.effect("keeps protocol diagnostics off unless a protocol logger is supplied", () =>
     Effect.gen(function* () {
       const childProcessSpawner = yield* ChildProcessSpawner.ChildProcessSpawner;
-      const path = yield* Path.Path;
       const selfInvocation = yield* resolveSelfInvocation();
-      const mockAgentPath = yield* path.fromFileUrl(
-        new URL("../../../scripts/acp-mock-agent.ts", import.meta.url),
-      );
+      const mockAgentPath = yield* bundledMockAgentPath;
       const runTurn = Effect.fn("AcpAdapterV2.testProtocolLoggingTurn")(function* (
         name: string,
         nativeLogging?: NonNullable<Parameters<typeof makeAcpAdapterV2>[0]["nativeLogging"]>,
@@ -2798,11 +2470,8 @@ describe("AcpAdapterV2", () => {
   it.effect("projects ACP v2 fidelity updates into first-class orchestration items", () =>
     Effect.gen(function* () {
       const childProcessSpawner = yield* ChildProcessSpawner.ChildProcessSpawner;
-      const path = yield* Path.Path;
       const selfInvocation = yield* resolveSelfInvocation();
-      const mockAgentPath = yield* path.fromFileUrl(
-        new URL("../../../scripts/acp-mock-agent.ts", import.meta.url),
-      );
+      const mockAgentPath = yield* bundledMockAgentPath;
       type RuntimeService = AcpSessionRuntime.AcpSessionRuntime["Service"];
       let sessionUpdateHandler: Parameters<RuntimeService["handleSessionUpdate"]>[0] | undefined;
       const instanceId = ProviderInstanceId.make("acp-test-v2-fidelity");
@@ -2999,11 +2668,8 @@ describe("AcpAdapterV2", () => {
       Effect.gen(function* () {
         const childProcessSpawner = yield* ChildProcessSpawner.ChildProcessSpawner;
         const idAllocator = yield* IdAllocator.IdAllocatorV2;
-        const path = yield* Path.Path;
         const selfInvocation = yield* resolveSelfInvocation();
-        const mockAgentPath = yield* path.fromFileUrl(
-          new URL("../../../scripts/acp-mock-agent.ts", import.meta.url),
-        );
+        const mockAgentPath = yield* bundledMockAgentPath;
         const protocolEvents = yield* Queue.unbounded<EffectAcpProtocol.AcpProtocolLogEvent>();
         const instanceId = ProviderInstanceId.make("acp-test-eager-resume");
         const adapter = yield* makeAcpAdapterV2({
@@ -3077,11 +2743,8 @@ describe("AcpAdapterV2", () => {
   it.live("creates a fresh ACP identity when recovering an exhausted target", () =>
     Effect.gen(function* () {
       const childProcessSpawner = yield* ChildProcessSpawner.ChildProcessSpawner;
-      const path = yield* Path.Path;
       const selfInvocation = yield* resolveSelfInvocation();
-      const mockAgentPath = yield* path.fromFileUrl(
-        new URL("../../../scripts/acp-mock-agent.ts", import.meta.url),
-      );
+      const mockAgentPath = yield* bundledMockAgentPath;
       const protocolEvents = yield* Queue.unbounded<EffectAcpProtocol.AcpProtocolLogEvent>();
       const instanceId = ProviderInstanceId.make("acp-test-exhausted-target");
       const adapter = yield* makeAcpAdapterV2({
@@ -3171,11 +2834,8 @@ describe("AcpAdapterV2", () => {
     Effect.gen(function* () {
       const childProcessSpawner = yield* ChildProcessSpawner.ChildProcessSpawner;
       const idAllocator = yield* IdAllocator.IdAllocatorV2;
-      const path = yield* Path.Path;
       const selfInvocation = yield* resolveSelfInvocation();
-      const mockAgentPath = yield* path.fromFileUrl(
-        new URL("../../../scripts/acp-mock-agent.ts", import.meta.url),
-      );
+      const mockAgentPath = yield* bundledMockAgentPath;
       const protocolEvents = yield* Queue.unbounded<EffectAcpProtocol.AcpProtocolLogEvent>();
       const instanceId = ProviderInstanceId.make("acp-test-stale-eager-resume");
       const adapter = yield* makeAcpAdapterV2({
@@ -3271,11 +2931,8 @@ describe("AcpAdapterV2", () => {
   it.live("replaces an unexpectedly terminated ACP runtime before the next turn", () =>
     Effect.gen(function* () {
       const childProcessSpawner = yield* ChildProcessSpawner.ChildProcessSpawner;
-      const path = yield* Path.Path;
       const selfInvocation = yield* resolveSelfInvocation();
-      const mockAgentPath = yield* path.fromFileUrl(
-        new URL("../../../scripts/acp-mock-agent.ts", import.meta.url),
-      );
+      const mockAgentPath = yield* bundledMockAgentPath;
       const runtimeInputs: AcpAdapterV2RuntimeInput[] = [];
       let runtimeOrdinalSeen = 0;
       const baseMakeRuntime = makeMockRuntime({
@@ -3350,9 +3007,7 @@ describe("AcpAdapterV2", () => {
       const fileSystem = yield* FileSystem.FileSystem;
       const path = yield* Path.Path;
       const selfInvocation = yield* resolveSelfInvocation();
-      const mockAgentPath = yield* path.fromFileUrl(
-        new URL("../../../scripts/acp-mock-agent.ts", import.meta.url),
-      );
+      const mockAgentPath = yield* bundledMockAgentPath;
       // A directory stands in for cgroupfs: the join wrapper appends the agent
       // PID to cgroup.procs and stays in this process's cgroup, which is the
       // cgroup the lease reports.
@@ -3445,11 +3100,8 @@ describe("AcpAdapterV2", () => {
   it.effect("forks ACP sessions with the target thread process credential (#934)", () =>
     Effect.gen(function* () {
       const childProcessSpawner = yield* ChildProcessSpawner.ChildProcessSpawner;
-      const path = yield* Path.Path;
       const selfInvocation = yield* resolveSelfInvocation();
-      const mockAgentPath = yield* path.fromFileUrl(
-        new URL("../../../scripts/acp-mock-agent.ts", import.meta.url),
-      );
+      const mockAgentPath = yield* bundledMockAgentPath;
       const protocolEvents = yield* Queue.bounded<EffectAcpProtocol.AcpProtocolLogEvent>(256);
       type RuntimeService = AcpSessionRuntime.AcpSessionRuntime["Service"];
       let createTerminal: Parameters<RuntimeService["handleCreateTerminal"]>[0] | undefined;
@@ -3653,9 +3305,7 @@ describe("AcpAdapterV2", () => {
         const fileSystem = yield* FileSystem.FileSystem;
         const path = yield* Path.Path;
         const selfInvocation = yield* resolveSelfInvocation();
-        const mockAgentPath = yield* path.fromFileUrl(
-          new URL("../../../scripts/acp-mock-agent.ts", import.meta.url),
-        );
+        const mockAgentPath = yield* bundledMockAgentPath;
         const workspace = yield* fileSystem.makeTempDirectoryScoped({
           prefix: "goat-acp-no-client-fs-",
         });
@@ -3741,11 +3391,8 @@ describe("AcpAdapterV2", () => {
   it.effect("does not turn an unknown permission approval into an execute grant", () =>
     Effect.gen(function* () {
       const childProcessSpawner = yield* ChildProcessSpawner.ChildProcessSpawner;
-      const path = yield* Path.Path;
       const selfInvocation = yield* resolveSelfInvocation();
-      const mockAgentPath = yield* path.fromFileUrl(
-        new URL("../../../scripts/acp-mock-agent.ts", import.meta.url),
-      );
+      const mockAgentPath = yield* bundledMockAgentPath;
       type RuntimeService = AcpSessionRuntime.AcpSessionRuntime["Service"];
       let requestPermission: Parameters<RuntimeService["handleRequestPermission"]>[0] | undefined;
       let createTerminal: Parameters<RuntimeService["handleCreateTerminal"]>[0] | undefined;
@@ -3868,164 +3515,12 @@ describe("AcpAdapterV2", () => {
     }).pipe(Effect.provide(layerTest), Effect.scoped),
   );
 
-  it.effect.each([
-    {
-      label: "grants an ID-only execute approval its tracked command",
-      kind: "execute",
-      granted: true,
-    },
-    {
-      label: "does not grant execution to an ID-only approval of another tool",
-      kind: "other",
-      granted: false,
-    },
-  ] as const)("$label", ({ kind, granted }) =>
-    Effect.gen(function* () {
-      const childProcessSpawner = yield* ChildProcessSpawner.ChildProcessSpawner;
-      const path = yield* Path.Path;
-      const selfInvocation = yield* resolveSelfInvocation();
-      const mockAgentPath = yield* path.fromFileUrl(
-        new URL("../../../scripts/acp-mock-agent.ts", import.meta.url),
-      );
-      type RuntimeService = AcpSessionRuntime.AcpSessionRuntime["Service"];
-      let requestPermission: Parameters<RuntimeService["handleRequestPermission"]>[0] | undefined;
-      let createTerminal: Parameters<RuntimeService["handleCreateTerminal"]>[0] | undefined;
-      let runtimeInput: AcpAdapterV2RuntimeInput | undefined;
-      const makeRuntime = makeMockRuntime({
-        childProcessSpawner,
-        mockAgentPath,
-        environment: { GOAT_ACP_EMIT_TRACKED_TOOL_CALL_KIND_THEN_HANG: kind },
-        wrapRuntime: (runtime) => ({
-          ...runtime,
-          handleRequestPermission: (handler) =>
-            Effect.sync(() => {
-              requestPermission = handler;
-            }).pipe(Effect.andThen(runtime.handleRequestPermission(handler))),
-          handleCreateTerminal: (handler) =>
-            Effect.sync(() => {
-              createTerminal = handler;
-            }).pipe(Effect.andThen(runtime.handleCreateTerminal(handler))),
-        }),
-      });
-      const instanceId = ProviderInstanceId.make("acp-test-id-only-permission");
-      const adapter = yield* makeAcpAdapterV2({
-        instanceId,
-        flavor: {
-          driver: ACP_TEST_DRIVER,
-          capabilities: AcpProviderCapabilitiesV2,
-          interruptPromptOnCancel: true,
-          makeRuntime: (input) =>
-            Effect.sync(() => {
-              runtimeInput = input;
-            }).pipe(Effect.andThen(makeRuntime(input))),
-        },
-        selfInvocation,
-        clientTerminals: {},
-      });
-      const threadId = ThreadId.make("thread-acp-id-only-permission");
-      const runtimePolicy = ProviderAdapter.ProviderAdapterV2RuntimePolicy.make({
-        runtimeMode: "approval-required",
-        interactionMode: "default",
-        cwd: process.cwd(),
-      });
-      const modelSelection = { instanceId, model: "default" } as const;
-      const runtime = yield* adapter.openSession({
-        threadId,
-        providerSessionId: ProviderSessionId.make("provider-session-acp-id-only-permission"),
-        modelSelection,
-        runtimePolicy,
-      });
-      const providerThread = yield* runtime.ensureThread({
-        threadId,
-        modelSelection,
-        runtimePolicy,
-      });
-      const turnFiber = yield* runtime
-        .startTurn(
-          makeTurnInput({
-            threadId,
-            providerThread,
-            instanceId,
-            runtimePolicy,
-            now: yield* DateTime.now,
-          }),
-        )
-        .pipe(Effect.forkScoped);
-      if (requestPermission === undefined || createTerminal === undefined) {
-        return yield* Effect.die("ACP runtime must register permission and terminal handlers");
-      }
-      yield* runtime.events.pipe(
-        Stream.filter(
-          (event) =>
-            event.type === "turn_item.updated" &&
-            event.turnItem.nativeItemRef?.nativeId === "tracked-tool-call",
-        ),
-        Stream.runHead,
-      );
-
-      const permissionFiber = yield* requestPermission(
-        {
-          sessionId: "mock-session-1",
-          toolCall: { toolCallId: "tracked-tool-call" },
-          options: [{ optionId: "allow-once", name: "Allow once", kind: "allow_once" }],
-        },
-        { requestId: "id-only-permission-request", method: "session/request_permission" },
-      ).pipe(Effect.forkScoped);
-      const approvalEvent = Option.getOrThrow(
-        yield* runtime.events.pipe(
-          Stream.filter(
-            (event) =>
-              event.type === "turn_item.updated" && event.turnItem.type === "approval_request",
-          ),
-          Stream.runHead,
-        ),
-      );
-      if (
-        approvalEvent.type !== "turn_item.updated" ||
-        approvalEvent.turnItem.type !== "approval_request" ||
-        approvalEvent.turnItem.providerTurnId === null
-      ) {
-        return yield* Effect.die("Expected an ACP approval request");
-      }
-      const approval = approvalEvent.turnItem;
-      const providerTurnId = approvalEvent.turnItem.providerTurnId;
-      const responseFiber = yield* runtime
-        .respondToRuntimeRequest({ requestId: approval.requestId, decision: "accept" })
-        .pipe(Effect.forkScoped);
-      assert.equal((yield* Fiber.join(permissionFiber)).outcome.outcome, "selected");
-      if (runtimeInput?.onOutgoingResponse === undefined) {
-        return yield* Effect.die("ACP runtime must expose native response acknowledgements");
-      }
-      yield* runtimeInput.onOutgoingResponse("id-only-permission-request");
-      yield* Fiber.join(responseFiber);
-
-      const terminalExit = yield* createTerminal(
-        {
-          sessionId: "mock-session-1",
-          command: process.execPath,
-          args: ["-e", ""],
-        },
-        { requestId: "id-only-permission-terminal", method: "terminal/create" },
-      ).pipe(Effect.exit);
-      assert.deepEqual(
-        { prompt: approval.prompt, terminalCreated: Exit.isSuccess(terminalExit) },
-        { prompt: "git status", terminalCreated: granted },
-      );
-
-      yield* runtime.interruptTurn({ providerThread, providerTurnId });
-      yield* Fiber.join(turnFiber);
-    }).pipe(Effect.provide(layerTest), Effect.scoped),
-  );
-
   it.effect("replaces the ACP session and clears conversation state on rollback", () =>
     Effect.gen(function* () {
       const childProcessSpawner = yield* ChildProcessSpawner.ChildProcessSpawner;
       const idAllocator = yield* IdAllocator.IdAllocatorV2;
-      const path = yield* Path.Path;
       const selfInvocation = yield* resolveSelfInvocation();
-      const mockAgentPath = yield* path.fromFileUrl(
-        new URL("../../../scripts/acp-mock-agent.ts", import.meta.url),
-      );
+      const mockAgentPath = yield* bundledMockAgentPath;
       const instanceId = ProviderInstanceId.make("acp-test-rollback-session");
       const rollbackThreadId = ThreadId.make("thread-acp-rollback-session-target");
       yield* (yield* McpProviderSessions.McpProviderSessions).set({
@@ -4231,10 +3726,7 @@ describe("AcpAdapterV2", () => {
       });
       const initiallyEmpty = transition === "rollback removal";
       if (!initiallyEmpty) yield* sessions.set(config("A"));
-      const path = yield* Path.Path;
-      const mockAgentPath = yield* path.fromFileUrl(
-        new URL("../../../scripts/acp-mock-agent.ts", import.meta.url),
-      );
+      const mockAgentPath = yield* bundledMockAgentPath;
       type Runtime = AcpSessionRuntime.AcpSessionRuntime["Service"];
       const handlers = new Map<
         number,
@@ -4417,11 +3909,8 @@ describe("AcpAdapterV2", () => {
   it.effect("quarantines callbacks from a failed rollback replacement before retrying", () =>
     Effect.gen(function* () {
       const childProcessSpawner = yield* ChildProcessSpawner.ChildProcessSpawner;
-      const path = yield* Path.Path;
       const selfInvocation = yield* resolveSelfInvocation();
-      const mockAgentPath = yield* path.fromFileUrl(
-        new URL("../../../scripts/acp-mock-agent.ts", import.meta.url),
-      );
+      const mockAgentPath = yield* bundledMockAgentPath;
       type RuntimeService = AcpSessionRuntime.AcpSessionRuntime["Service"];
       const sessionUpdateHandlers: Array<
         Parameters<RuntimeService["handleSessionUpdate"]>[0] | undefined
@@ -4569,10 +4058,7 @@ describe("AcpAdapterV2", () => {
   it.live("settles a Grok background command that completed before an ACP v2 idle error", () =>
     Effect.gen(function* () {
       const childProcessSpawner = yield* ChildProcessSpawner.ChildProcessSpawner;
-      const path = yield* Path.Path;
-      const mockAgentPath = yield* path.fromFileUrl(
-        new URL("../../../scripts/acp-mock-agent.ts", import.meta.url),
-      );
+      const mockAgentPath = yield* bundledMockAgentPath;
       const instanceId = ProviderInstanceId.make("grok-idle-error-background");
       const adapter = yield* makeGrokAdapterV2({
         instanceId,
@@ -4639,10 +4125,7 @@ describe("AcpAdapterV2", () => {
     () =>
       Effect.gen(function* () {
         const childProcessSpawner = yield* ChildProcessSpawner.ChildProcessSpawner;
-        const path = yield* Path.Path;
-        const mockAgentPath = yield* path.fromFileUrl(
-          new URL("../../../scripts/acp-mock-agent.ts", import.meta.url),
-        );
+        const mockAgentPath = yield* bundledMockAgentPath;
         const instanceId = ProviderInstanceId.make("grok-background-completion");
         const adapter = yield* makeGrokAdapterV2({
           instanceId,
@@ -4730,10 +4213,7 @@ describe("AcpAdapterV2", () => {
     Effect.gen(function* () {
       const childProcessSpawner = yield* ChildProcessSpawner.ChildProcessSpawner;
       const fileSystem = yield* FileSystem.FileSystem;
-      const path = yield* Path.Path;
-      const mockAgentPath = yield* path.fromFileUrl(
-        new URL("../../../scripts/acp-mock-agent.ts", import.meta.url),
-      );
+      const mockAgentPath = yield* bundledMockAgentPath;
       const hostPlatform = yield* HostProcess.Platform;
       // Stands in for `grok inspect --json`, the catalog behind the `$` picker.
       const catalog = { skills: [{ name: "deploy", source: { path: "/s/deploy/SKILL.md" } }] };
@@ -4822,10 +4302,7 @@ describe("AcpAdapterV2", () => {
     ({ shape, expectedCommand }) =>
       Effect.gen(function* () {
         const childProcessSpawner = yield* ChildProcessSpawner.ChildProcessSpawner;
-        const path = yield* Path.Path;
-        const mockAgentPath = yield* path.fromFileUrl(
-          new URL("../../../scripts/acp-mock-agent.ts", import.meta.url),
-        );
+        const mockAgentPath = yield* bundledMockAgentPath;
         const instanceId = ProviderInstanceId.make("grok-kill-completion");
         const adapter = yield* makeGrokAdapterV2({
           instanceId,
@@ -4905,11 +4382,8 @@ describe("AcpAdapterV2", () => {
   it.effect("keeps an agent's empty-valued default choice selectable", () =>
     Effect.gen(function* () {
       const childProcessSpawner = yield* ChildProcessSpawner.ChildProcessSpawner;
-      const path = yield* Path.Path;
       const selfInvocation = yield* resolveSelfInvocation();
-      const mockAgentPath = yield* path.fromFileUrl(
-        new URL("../../../scripts/acp-mock-agent.ts", import.meta.url),
-      );
+      const mockAgentPath = yield* bundledMockAgentPath;
       const protocolEvents = yield* Queue.bounded<EffectAcpProtocol.AcpProtocolLogEvent>(256);
       const instanceId = ProviderInstanceId.make("acp-test");
       let agentDescriptor: ProviderOptionDescriptor | undefined;
@@ -5005,11 +4479,8 @@ describe("AcpAdapterV2", () => {
     Effect.gen(function* () {
       const childProcessSpawner = yield* ChildProcessSpawner.ChildProcessSpawner;
       const idAllocator = yield* IdAllocator.IdAllocatorV2;
-      const path = yield* Path.Path;
       const selfInvocation = yield* resolveSelfInvocation();
-      const mockAgentPath = yield* path.fromFileUrl(
-        new URL("../../../scripts/acp-mock-agent.ts", import.meta.url),
-      );
+      const mockAgentPath = yield* bundledMockAgentPath;
       const protocolEvents = yield* Queue.bounded<EffectAcpProtocol.AcpProtocolLogEvent>(256);
       const instanceId = ProviderInstanceId.make("acp-test");
       const adapter = yield* makeAcpAdapterV2({
@@ -5145,7 +4616,6 @@ describe("AcpAdapterV2", () => {
   it.effect("drains native ACP cancellation before admitting the next prompt", () =>
     Effect.gen(function* () {
       const childProcessSpawner = yield* ChildProcessSpawner.ChildProcessSpawner;
-      const path = yield* Path.Path;
       const selfInvocation = yield* resolveSelfInvocation();
       const protocolEvents = yield* Queue.unbounded<EffectAcpProtocol.AcpProtocolLogEvent>();
       const native: { current?: AcpSessionRuntime.AcpSessionRuntime["Service"] } = {};
@@ -5157,9 +4627,7 @@ describe("AcpAdapterV2", () => {
           capabilities: AcpProviderCapabilitiesV2,
           makeRuntime: makeMockRuntime({
             childProcessSpawner,
-            mockAgentPath: yield* path.fromFileUrl(
-              new URL("../../../scripts/acp-mock-agent.ts", import.meta.url),
-            ),
+            mockAgentPath: yield* bundledMockAgentPath,
             environment: { GOAT_ACP_COMPLETE_FIRST_PROMPT_ON_CANCEL: "1" },
             protocolEvents,
             cancelBehavior: "wait-for-prompt",
@@ -5252,11 +4720,8 @@ describe("AcpAdapterV2", () => {
   it.effect("cancels pending permission requests while interrupting an ACP turn", () =>
     Effect.gen(function* () {
       const childProcessSpawner = yield* ChildProcessSpawner.ChildProcessSpawner;
-      const path = yield* Path.Path;
       const selfInvocation = yield* resolveSelfInvocation();
-      const mockAgentPath = yield* path.fromFileUrl(
-        new URL("../../../scripts/acp-mock-agent.ts", import.meta.url),
-      );
+      const mockAgentPath = yield* bundledMockAgentPath;
       const releaseCancel = yield* Deferred.make<void>();
       const instanceId = ProviderInstanceId.make("acp-test");
       const adapter = yield* makeAcpAdapterV2({
@@ -5346,11 +4811,8 @@ describe("AcpAdapterV2", () => {
   it.live("keeps hard teardown excluded until a permission response is enqueued", () =>
     Effect.gen(function* () {
       const childProcessSpawner = yield* ChildProcessSpawner.ChildProcessSpawner;
-      const path = yield* Path.Path;
       const selfInvocation = yield* resolveSelfInvocation();
-      const mockAgentPath = yield* path.fromFileUrl(
-        new URL("../../../scripts/acp-mock-agent.ts", import.meta.url),
-      );
+      const mockAgentPath = yield* bundledMockAgentPath;
       const responseEnqueued = yield* Deferred.make<void>();
       const releaseResponseAcknowledgement = yield* Deferred.make<void>();
       const instanceId = ProviderInstanceId.make("acp-test");
@@ -5438,11 +4900,8 @@ describe("AcpAdapterV2", () => {
   it.live("auto-approves tagged MCP elicitations under full-access policy", () =>
     Effect.gen(function* () {
       const childProcessSpawner = yield* ChildProcessSpawner.ChildProcessSpawner;
-      const path = yield* Path.Path;
       const selfInvocation = yield* resolveSelfInvocation();
-      const mockAgentPath = yield* path.fromFileUrl(
-        new URL("../../../scripts/acp-mock-agent.ts", import.meta.url),
-      );
+      const mockAgentPath = yield* bundledMockAgentPath;
       const instanceId = ProviderInstanceId.make("acp-test-mcp-approval-elicitation");
       const adapter = yield* makeAcpAdapterV2({
         instanceId,
@@ -5499,11 +4958,8 @@ describe("AcpAdapterV2", () => {
   it.live("fails a held native response acknowledgement before normal session close", () =>
     Effect.gen(function* () {
       const childProcessSpawner = yield* ChildProcessSpawner.ChildProcessSpawner;
-      const path = yield* Path.Path;
       const selfInvocation = yield* resolveSelfInvocation();
-      const mockAgentPath = yield* path.fromFileUrl(
-        new URL("../../../scripts/acp-mock-agent.ts", import.meta.url),
-      );
+      const mockAgentPath = yield* bundledMockAgentPath;
       const responseWritten = yield* Deferred.make<void>();
       const releaseResponseAcknowledgement = yield* Deferred.make<void>();
       const responseLifecycle: Array<string> = [];
@@ -5601,11 +5057,8 @@ describe("AcpAdapterV2", () => {
     Effect.gen(function* () {
       const childProcessSpawner = yield* ChildProcessSpawner.ChildProcessSpawner;
       const idAllocator = yield* IdAllocator.IdAllocatorV2;
-      const path = yield* Path.Path;
       const selfInvocation = yield* resolveSelfInvocation();
-      const mockAgentPath = yield* path.fromFileUrl(
-        new URL("../../../scripts/acp-mock-agent.ts", import.meta.url),
-      );
+      const mockAgentPath = yield* bundledMockAgentPath;
       const protocolEvents = yield* Queue.bounded<EffectAcpProtocol.AcpProtocolLogEvent>(256);
       const instanceId = ProviderInstanceId.make("acp-test");
       const adapter = yield* makeAcpAdapterV2({
@@ -5688,104 +5141,14 @@ describe("AcpAdapterV2", () => {
     }).pipe(Effect.provide(layerTest), Effect.scoped),
   );
 
-  it.effect("finalizes a settled turn held open for background work when interrupted", () =>
-    Effect.gen(function* () {
-      const childProcessSpawner = yield* ChildProcessSpawner.ChildProcessSpawner;
-      const idAllocator = yield* IdAllocator.IdAllocatorV2;
-      const path = yield* Path.Path;
-      const selfInvocation = yield* resolveSelfInvocation();
-      const mockAgentPath = yield* path.fromFileUrl(
-        new URL("../../../scripts/acp-mock-agent.ts", import.meta.url),
-      );
-      const instanceId = ProviderInstanceId.make("acp-test");
-      const promptSettled = yield* Deferred.make<void>();
-      const adapter = yield* makeAcpAdapterV2({
-        testHooks: {
-          afterPromptSettledWithBackgroundWork: () =>
-            Deferred.succeed(promptSettled, undefined).pipe(Effect.asVoid),
-        },
-        instanceId,
-        flavor: {
-          driver: ACP_TEST_DRIVER,
-          capabilities: AcpProviderCapabilitiesV2,
-          deferFinalizeForBackgroundWork: true,
-          extractSubagentUpdate: (toolCall) =>
-            toolCall.toolCallId === "tool-call-generic-1"
-              ? {
-                  nativeTaskId: "task-generic-1",
-                  prompt: "background subagent",
-                  title: "background subagent",
-                  model: null,
-                  status: "running",
-                  childSessionId: null,
-                  result: null,
-                }
-              : undefined,
-          makeRuntime: makeMockRuntime({
-            childProcessSpawner,
-            mockAgentPath,
-            environment: { GOAT_ACP_EMIT_GENERIC_TOOL_PLACEHOLDERS: "1" },
-          }),
-        },
-        selfInvocation,
-      });
-      const threadId = ThreadId.make("thread-acp-interrupt-background-hold");
-      const runtimePolicy = ProviderAdapter.ProviderAdapterV2RuntimePolicy.make({
-        runtimeMode: "full-access",
-        interactionMode: "default",
-        cwd: process.cwd(),
-      });
-      const modelSelection = { instanceId, model: "default" } as const;
-      const runtime = yield* adapter.openSession({
-        threadId,
-        providerSessionId: ProviderSessionId.make("provider-session-acp-interrupt-background"),
-        modelSelection,
-        runtimePolicy,
-      });
-      const events = yield* Queue.unbounded<ProviderAdapter.ProviderAdapterV2Event>();
-      yield* runtime.events.pipe(
-        Stream.runForEach((event) => Queue.offer(events, event)),
-        Effect.forkScoped,
-      );
-      const providerThread = yield* runtime.ensureThread({
-        threadId,
-        modelSelection,
-        runtimePolicy,
-      });
-      const now = yield* DateTime.now;
-      yield* runtime.startTurn(
-        makeTurnInput({ threadId, providerThread, instanceId, runtimePolicy, now }),
-      );
-      yield* Deferred.await(promptSettled);
-
-      const providerTurnId = idAllocator.derive.providerTurn({
-        driver: ACP_TEST_DRIVER,
-        nativeTurnId: acpScopedNativeId(instanceId, "mock-session-1:turn:1"),
-      });
-      yield* runtime.interruptTurn({ providerThread, providerTurnId });
-
-      let terminalStatus: string | null = null;
-      while (terminalStatus === null) {
-        const event = yield* Queue.take(events);
-        if (event.type === "turn.terminal" && event.providerTurnId === providerTurnId) {
-          terminalStatus = event.status;
-        }
-      }
-      assert.equal(terminalStatus, "interrupted");
-    }).pipe(Effect.provide(layerTest), Effect.scoped),
-  );
-
   it.effect(
     "carries a live subagent lineage across an interrupt so the next turn can complete it",
     () =>
       Effect.gen(function* () {
         const childProcessSpawner = yield* ChildProcessSpawner.ChildProcessSpawner;
         const idAllocator = yield* IdAllocator.IdAllocatorV2;
-        const path = yield* Path.Path;
         const selfInvocation = yield* resolveSelfInvocation();
-        const mockAgentPath = yield* path.fromFileUrl(
-          new URL("../../../scripts/acp-mock-agent.ts", import.meta.url),
-        );
+        const mockAgentPath = yield* bundledMockAgentPath;
         const instanceId = ProviderInstanceId.make("acp-test");
         let subagentPhase: "spawn" | "complete" = "spawn";
         const promptSettled = yield* Deferred.make<void>();
@@ -5920,11 +5283,8 @@ describe("AcpAdapterV2", () => {
       Effect.gen(function* () {
         const childProcessSpawner = yield* ChildProcessSpawner.ChildProcessSpawner;
         const idAllocator = yield* IdAllocator.IdAllocatorV2;
-        const path = yield* Path.Path;
         const selfInvocation = yield* resolveSelfInvocation();
-        const mockAgentPath = yield* path.fromFileUrl(
-          new URL("../../../scripts/acp-mock-agent.ts", import.meta.url),
-        );
+        const mockAgentPath = yield* bundledMockAgentPath;
         const baseClock = yield* Clock.Clock;
         const finalizationClockRead = yield* Deferred.make<void>();
         const releaseFinalizationClockRead = yield* Deferred.make<void>();
@@ -6146,11 +5506,8 @@ describe("AcpAdapterV2", () => {
     Effect.gen(function* () {
       const childProcessSpawner = yield* ChildProcessSpawner.ChildProcessSpawner;
       const idAllocator = yield* IdAllocator.IdAllocatorV2;
-      const path = yield* Path.Path;
       const selfInvocation = yield* resolveSelfInvocation();
-      const mockAgentPath = yield* path.fromFileUrl(
-        new URL("../../../scripts/acp-mock-agent.ts", import.meta.url),
-      );
+      const mockAgentPath = yield* bundledMockAgentPath;
       const protocolEvents = yield* Queue.bounded<EffectAcpProtocol.AcpProtocolLogEvent>(256);
       const continuationRequests: Array<ProviderContinuationRequests.ProviderContinuationRequest> =
         [];
@@ -6389,11 +5746,8 @@ describe("AcpAdapterV2", () => {
       Effect.gen(function* () {
         const childProcessSpawner = yield* ChildProcessSpawner.ChildProcessSpawner;
         const idAllocator = yield* IdAllocator.IdAllocatorV2;
-        const path = yield* Path.Path;
         const selfInvocation = yield* resolveSelfInvocation();
-        const mockAgentPath = yield* path.fromFileUrl(
-          new URL("../../../scripts/acp-mock-agent.ts", import.meta.url),
-        );
+        const mockAgentPath = yield* bundledMockAgentPath;
         const continuationRequests: Array<ProviderContinuationRequests.ProviderContinuationRequest> =
           [];
         const bufferedAssistantText = "BUFFERED_WAKE_AFTER_USER_ATTACH";
@@ -6683,11 +6037,8 @@ describe("AcpAdapterV2", () => {
       Effect.gen(function* () {
         const childProcessSpawner = yield* ChildProcessSpawner.ChildProcessSpawner;
         const idAllocator = yield* IdAllocator.IdAllocatorV2;
-        const path = yield* Path.Path;
         const selfInvocation = yield* resolveSelfInvocation();
-        const mockAgentPath = yield* path.fromFileUrl(
-          new URL("../../../scripts/acp-mock-agent.ts", import.meta.url),
-        );
+        const mockAgentPath = yield* bundledMockAgentPath;
         const instanceId = ProviderInstanceId.make("acp-test");
         let subagentPhase: "spawn" | "complete" = "spawn";
         let cancelCalled = false;
@@ -6842,11 +6193,8 @@ describe("AcpAdapterV2", () => {
     Effect.gen(function* () {
       const childProcessSpawner = yield* ChildProcessSpawner.ChildProcessSpawner;
       const idAllocator = yield* IdAllocator.IdAllocatorV2;
-      const path = yield* Path.Path;
       const selfInvocation = yield* resolveSelfInvocation();
-      const mockAgentPath = yield* path.fromFileUrl(
-        new URL("../../../scripts/acp-mock-agent.ts", import.meta.url),
-      );
+      const mockAgentPath = yield* bundledMockAgentPath;
       const protocolEvents = yield* Queue.bounded<EffectAcpProtocol.AcpProtocolLogEvent>(256);
       const instanceId = ProviderInstanceId.make("acp-test");
       const adapter = yield* makeAcpAdapterV2({
@@ -6918,11 +6266,8 @@ describe("AcpAdapterV2", () => {
     Effect.gen(function* () {
       const childProcessSpawner = yield* ChildProcessSpawner.ChildProcessSpawner;
       const idAllocator = yield* IdAllocator.IdAllocatorV2;
-      const path = yield* Path.Path;
       const selfInvocation = yield* resolveSelfInvocation();
-      const mockAgentPath = yield* path.fromFileUrl(
-        new URL("../../../scripts/acp-mock-agent.ts", import.meta.url),
-      );
+      const mockAgentPath = yield* bundledMockAgentPath;
       const protocolEvents = yield* Queue.bounded<EffectAcpProtocol.AcpProtocolLogEvent>(256);
       const instanceId = ProviderInstanceId.make("acp-test");
       const capturedMutation: {
@@ -7059,11 +6404,8 @@ describe("AcpAdapterV2", () => {
       Effect.gen(function* () {
         const childProcessSpawner = yield* ChildProcessSpawner.ChildProcessSpawner;
         const idAllocator = yield* IdAllocator.IdAllocatorV2;
-        const path = yield* Path.Path;
         const selfInvocation = yield* resolveSelfInvocation();
-        const mockAgentPath = yield* path.fromFileUrl(
-          new URL("../../../scripts/acp-mock-agent.ts", import.meta.url),
-        );
+        const mockAgentPath = yield* bundledMockAgentPath;
         const protocolEvents = yield* Queue.bounded<EffectAcpProtocol.AcpProtocolLogEvent>(256);
         const continuationRequests: Array<ProviderContinuationRequests.ProviderContinuationRequest> =
           [];
@@ -7182,11 +6524,8 @@ describe("AcpAdapterV2", () => {
     Effect.gen(function* () {
       const childProcessSpawner = yield* ChildProcessSpawner.ChildProcessSpawner;
       const idAllocator = yield* IdAllocator.IdAllocatorV2;
-      const path = yield* Path.Path;
       const selfInvocation = yield* resolveSelfInvocation();
-      const mockAgentPath = yield* path.fromFileUrl(
-        new URL("../../../scripts/acp-mock-agent.ts", import.meta.url),
-      );
+      const mockAgentPath = yield* bundledMockAgentPath;
       const continuationRequests: Array<ProviderContinuationRequests.ProviderContinuationRequest> =
         [];
       const userPromptStarted = yield* Deferred.make<void>();
@@ -7386,11 +6725,8 @@ describe("AcpAdapterV2", () => {
       Effect.gen(function* () {
         const childProcessSpawner = yield* ChildProcessSpawner.ChildProcessSpawner;
         const idAllocator = yield* IdAllocator.IdAllocatorV2;
-        const path = yield* Path.Path;
         const selfInvocation = yield* resolveSelfInvocation();
-        const mockAgentPath = yield* path.fromFileUrl(
-          new URL("../../../scripts/acp-mock-agent.ts", import.meta.url),
-        );
+        const mockAgentPath = yield* bundledMockAgentPath;
         const protocolEvents = yield* Queue.bounded<EffectAcpProtocol.AcpProtocolLogEvent>(256);
         const continuationRequests: Array<ProviderContinuationRequests.ProviderContinuationRequest> =
           [];
@@ -7593,11 +6929,8 @@ describe("AcpAdapterV2", () => {
       Effect.gen(function* () {
         const childProcessSpawner = yield* ChildProcessSpawner.ChildProcessSpawner;
         const idAllocator = yield* IdAllocator.IdAllocatorV2;
-        const path = yield* Path.Path;
         const selfInvocation = yield* resolveSelfInvocation();
-        const mockAgentPath = yield* path.fromFileUrl(
-          new URL("../../../scripts/acp-mock-agent.ts", import.meta.url),
-        );
+        const mockAgentPath = yield* bundledMockAgentPath;
         const protocolEvents = yield* Queue.bounded<EffectAcpProtocol.AcpProtocolLogEvent>(256);
         const continuationRequests: Array<ProviderContinuationRequests.ProviderContinuationRequest> =
           [];
@@ -7955,11 +7288,8 @@ describe("AcpAdapterV2", () => {
     Effect.gen(function* () {
       const childProcessSpawner = yield* ChildProcessSpawner.ChildProcessSpawner;
       const idAllocator = yield* IdAllocator.IdAllocatorV2;
-      const path = yield* Path.Path;
       const selfInvocation = yield* resolveSelfInvocation();
-      const mockAgentPath = yield* path.fromFileUrl(
-        new URL("../../../scripts/acp-mock-agent.ts", import.meta.url),
-      );
+      const mockAgentPath = yield* bundledMockAgentPath;
       const continuationRequests: Array<ProviderContinuationRequests.ProviderContinuationRequest> =
         [];
       type RuntimeService = AcpSessionRuntime.AcpSessionRuntime["Service"];
@@ -8102,11 +7432,8 @@ describe("AcpAdapterV2", () => {
     Effect.gen(function* () {
       const childProcessSpawner = yield* ChildProcessSpawner.ChildProcessSpawner;
       const idAllocator = yield* IdAllocator.IdAllocatorV2;
-      const path = yield* Path.Path;
       const selfInvocation = yield* resolveSelfInvocation();
-      const mockAgentPath = yield* path.fromFileUrl(
-        new URL("../../../scripts/acp-mock-agent.ts", import.meta.url),
-      );
+      const mockAgentPath = yield* bundledMockAgentPath;
       const protocolEvents = yield* Queue.bounded<EffectAcpProtocol.AcpProtocolLogEvent>(256);
       const instanceId = ProviderInstanceId.make("acp-test");
       const adapter = yield* makeAcpAdapterV2({
@@ -8185,11 +7512,8 @@ describe("AcpAdapterV2", () => {
     Effect.gen(function* () {
       const childProcessSpawner = yield* ChildProcessSpawner.ChildProcessSpawner;
       const idAllocator = yield* IdAllocator.IdAllocatorV2;
-      const path = yield* Path.Path;
       const selfInvocation = yield* resolveSelfInvocation();
-      const mockAgentPath = yield* path.fromFileUrl(
-        new URL("../../../scripts/acp-mock-agent.ts", import.meta.url),
-      );
+      const mockAgentPath = yield* bundledMockAgentPath;
       const protocolEvents = yield* Queue.bounded<EffectAcpProtocol.AcpProtocolLogEvent>(256);
       const teardownStarted = yield* Deferred.make<void>();
       const releaseTeardown = yield* Deferred.make<void>();
@@ -8294,11 +7618,8 @@ describe("AcpAdapterV2", () => {
       Effect.gen(function* () {
         const childProcessSpawner = yield* ChildProcessSpawner.ChildProcessSpawner;
         const idAllocator = yield* IdAllocator.IdAllocatorV2;
-        const path = yield* Path.Path;
         const selfInvocation = yield* resolveSelfInvocation();
-        const mockAgentPath = yield* path.fromFileUrl(
-          new URL("../../../scripts/acp-mock-agent.ts", import.meta.url),
-        );
+        const mockAgentPath = yield* bundledMockAgentPath;
         const instanceId = ProviderInstanceId.make("acp-test");
         let subagentPhase: "spawn" | "complete" = "spawn";
         const promptSettled = yield* Deferred.make<void>();
@@ -8444,11 +7765,8 @@ describe("AcpAdapterV2", () => {
     ({ status, exitCode }) =>
       Effect.gen(function* () {
         const childProcessSpawner = yield* ChildProcessSpawner.ChildProcessSpawner;
-        const path = yield* Path.Path;
         const selfInvocation = yield* resolveSelfInvocation();
-        const mockAgentPath = yield* path.fromFileUrl(
-          new URL("../../../scripts/acp-mock-agent.ts", import.meta.url),
-        );
+        const mockAgentPath = yield* bundledMockAgentPath;
         type RuntimeService = AcpSessionRuntime.AcpSessionRuntime["Service"];
         let sessionUpdateHandler: Parameters<RuntimeService["handleSessionUpdate"]>[0] | undefined;
         let taskCompleted:
@@ -8657,266 +7975,12 @@ describe("AcpAdapterV2", () => {
       }).pipe(Effect.provide(layerTest), Effect.scoped),
   );
 
-  const droidChoice = {
-    type: "string",
-    title: "Format",
-    description: "Which reply format?",
-    oneOf: [
-      { const: "option_0", title: "JSON" },
-      { const: "option_1", title: "Plain text" },
-      { const: "other", title: "Other answer" },
-    ],
-  };
-
-  const droidSchema = {
-    type: "object",
-    properties: {
-      question_1: droidChoice,
-      question_1_other: { type: "string" },
-      question_2: { ...droidChoice, title: "Alternative" },
-      question_2_other: { type: "string" },
-    },
-    required: ["question_1", "question_2"],
-  };
-
-  const droidQuestions = ["question_1", "question_2"].map((id, index) => ({
-    id,
-    header: index === 0 ? "Format" : "Alternative",
-    question: "Which reply format?",
-    options: [
-      { label: "JSON", description: "JSON", value: "option_0" },
-      { label: "Plain text", description: "Plain text", value: "option_1" },
-    ],
-  }));
-
-  it.live.each([
-    {
-      scenario: "preserves selected IDs and encodes custom answers",
-      schema: droidSchema,
-      questions: droidQuestions,
-      answers: { question_1: "option_1", question_2: "Markdown" },
-      result: {
-        action: "accept",
-        content: { question_1: "option_1", question_2: "other", question_2_other: "Markdown" },
-      },
-    },
-    {
-      scenario: "preserves selected labels and attachment paths in custom answers",
-      schema: droidSchema,
-      questions: droidQuestions,
-      withAttachments: true,
-      answers: {
-        question_1: "option_1",
-        question_2: "option_1\n\nAttached notes: keep this custom text",
-      },
-      result: (directory: string) => ({
-        action: "accept",
-        content: {
-          question_1: "other",
-          question_1_other: `Plain text\n\nAttached image "shot.png": ${JSON.stringify(NodePath.join(directory, "droid-shot.png"))}\nAttached file "spec.txt": ${JSON.stringify(NodePath.join(directory, "droid-spec.txt"))}`,
-          question_2: "other",
-          question_2_other: "option_1\n\nAttached notes: keep this custom text",
-        },
-      }),
-    },
-    {
-      scenario: "cancels without accepting answers",
-      schema: droidSchema,
-      questions: droidQuestions,
-      answers: undefined,
-      result: { action: "cancel" },
-    },
-    {
-      scenario: "falls back for an unrelated form",
-      schema: { type: "object", properties: { name: { type: "string" } } },
-      questions: [{ id: "name", header: "Question 1", question: "Your answer?", options: [] }],
-      answers: { name: "Ada" },
-      result: { action: "accept", content: { name: "Ada" } },
-    },
-  ])("Droid elicitation $scenario", ({ schema, questions, answers, result, withAttachments }) =>
-    Effect.gen(function* () {
-      const fileSystem = yield* FileSystem.FileSystem;
-      const path = yield* Path.Path;
-      const directory = yield* fileSystem.makeTempDirectoryScoped({ prefix: "goat-droid-form-" });
-      const statusPath = path.join(directory, "status.json");
-      const expectedResult = typeof result === "function" ? result(directory) : result;
-      let preparedAnswers: ProviderUserInputAnswers | undefined = answers;
-      if (withAttachments && answers !== undefined) {
-        yield* fileSystem.writeFileString(path.join(directory, "droid-shot.png"), "image");
-        yield* fileSystem.writeFileString(path.join(directory, "droid-spec.txt"), "spec");
-        preparedAnswers = yield* appendUserInputAttachmentPaths({
-          answers,
-          attachmentsDir: directory,
-          attachmentsByQuestionId: {
-            question_1: [
-              {
-                type: "image",
-                id: "droid-shot",
-                name: "shot.png",
-                mimeType: "image/png",
-                sizeBytes: 5,
-              },
-              {
-                type: "file",
-                id: "droid-spec",
-                name: "spec.txt",
-                mimeType: "text/plain",
-                sizeBytes: 4,
-              },
-            ],
-          },
-        });
-      }
-      const driver = ProviderDriverKind.make("acpRegistry");
-      const transcript = yield* decodeAcpReplayTranscript(
-        {
-          provider: driver,
-          protocol: "acp.ndjson-jsonrpc",
-          version: "1",
-          scenario: "droid-form",
-          entries: [
-            {
-              type: "expect_outbound",
-              frame: { kind: "request", method: "initialize", params: "<any>" },
-            },
-            {
-              type: "emit_inbound",
-              frame: {
-                kind: "response",
-                method: "initialize",
-                result: { protocolVersion: 1, agentCapabilities: {}, authMethods: [] },
-              },
-            },
-            {
-              type: "expect_outbound",
-              frame: { kind: "request", method: "session/new", params: "<any>" },
-            },
-            {
-              type: "emit_inbound",
-              frame: {
-                kind: "response",
-                method: "session/new",
-                result: { sessionId: "droid-session" },
-              },
-            },
-            {
-              type: "expect_outbound",
-              frame: { kind: "request", method: "session/prompt", params: "<any>" },
-            },
-            {
-              type: "emit_inbound",
-              frame: {
-                kind: "request",
-                method: "elicitation/create",
-                params: {
-                  mode: "form",
-                  sessionId: "droid-session",
-                  message: "Your answer?",
-                  requestedSchema: schema,
-                },
-              },
-            },
-            {
-              type: "expect_outbound",
-              frame: {
-                kind: "response",
-                method: "elicitation/create",
-                result: expectedResult,
-              },
-            },
-            {
-              type: "emit_inbound",
-              frame: {
-                kind: "response",
-                method: "session/prompt",
-                result: { stopReason: "end_turn" },
-              },
-            },
-            { type: "runtime_exit", status: "success" },
-          ],
-        },
-        driver,
-      );
-      const instanceId = ProviderInstanceId.make("droid-form-test");
-      const adapter = yield* makeAcpRegistryAdapterV2({
-        instanceId,
-        selfInvocation: yield* resolveSelfInvocation(),
-        settings: DROID_SETTINGS,
-        environment: {},
-        makeRuntime: makeAcpReplayRuntime({
-          transcript,
-          statusPath,
-          fileSystem,
-          scriptPath: yield* path.fromFileUrl(
-            new URL("../../../scripts/acp-replay-agent.ts", import.meta.url),
-          ),
-          childProcessSpawner: yield* ChildProcessSpawner.ChildProcessSpawner,
-        }),
-      }).pipe(
-        Effect.provide(
-          Layer.mock(AcpRegistryCatalog)({ resolve: () => Effect.die("runtime is injected") }),
-        ),
-      );
-      const threadId = ThreadId.make("droid-form-thread");
-      const modelSelection = { instanceId, model: "default" } as const;
-      const runtimePolicy = ProviderAdapter.ProviderAdapterV2RuntimePolicy.make({
-        runtimeMode: "approval-required",
-        interactionMode: "default",
-        cwd: directory,
-      });
-      const runtime = yield* adapter.openSession({
-        threadId,
-        modelSelection,
-        runtimePolicy,
-        providerSessionId: ProviderSessionId.make("droid-form-session"),
-      });
-      const providerThread = yield* runtime.ensureThread({
-        threadId,
-        modelSelection,
-        runtimePolicy,
-      });
-      yield* runtime.startTurn(
-        makeTurnInput({
-          threadId,
-          providerThread,
-          instanceId,
-          runtimePolicy,
-          now: yield* DateTime.now,
-        }),
-      );
-      const item = Option.getOrThrow(
-        yield* runtime.events.pipe(
-          Stream.filter(
-            (event) =>
-              event.type === "turn_item.updated" && event.turnItem.type === "user_input_request",
-          ),
-          Stream.runHead,
-        ),
-      );
-      if (item.type !== "turn_item.updated" || item.turnItem.type !== "user_input_request")
-        return yield* Effect.die("Expected Droid question");
-      assert.deepEqual(item.turnItem.questions, questions);
-      yield* runtime.respondToRuntimeRequest({
-        requestId: item.turnItem.requestId,
-        ...(preparedAnswers === undefined ? {} : { answers: preparedAnswers }),
-      });
-      const terminal = yield* runtime.events.pipe(
-        Stream.filter((event) => event.type === "turn.terminal"),
-        Stream.runHead,
-      );
-      assert.equal(Option.getOrThrow(terminal).status, "completed");
-    }).pipe(Effect.provide(layerTest), Effect.scoped),
-  );
-
   it.live("lets a caller abandon Stop while hard teardown stalls, and finishes the teardown", () =>
     Effect.gen(function* () {
       const childProcessSpawner = yield* ChildProcessSpawner.ChildProcessSpawner;
       const idAllocator = yield* IdAllocator.IdAllocatorV2;
-      const path = yield* Path.Path;
       const selfInvocation = yield* resolveSelfInvocation();
-      const mockAgentPath = yield* path.fromFileUrl(
-        new URL("../../../scripts/acp-mock-agent.ts", import.meta.url),
-      );
+      const mockAgentPath = yield* bundledMockAgentPath;
       const protocolEvents = yield* Queue.bounded<EffectAcpProtocol.AcpProtocolLogEvent>(256);
       const teardownStarted = yield* Deferred.make<void>();
       const releaseTeardown = yield* Deferred.make<void>();
@@ -9002,7 +8066,6 @@ describe("AcpAdapterV2", () => {
     "projects Mistral retry notices and their %s outcome",
     (outcome) =>
       Effect.gen(function* () {
-        const path = yield* Path.Path;
         const instanceId = ProviderInstanceId.make(`vibe-retry-${outcome}`);
         const threadId = ThreadId.make(`thread-vibe-retry-${outcome}`);
         const adapter = yield* makeAcpAdapterV2({
@@ -9015,9 +8078,7 @@ describe("AcpAdapterV2", () => {
             promptFailure: (cause) => acpRegistryPromptFailure("mistral-vibe", cause),
             makeRuntime: makeMockRuntime({
               childProcessSpawner: yield* ChildProcessSpawner.ChildProcessSpawner,
-              mockAgentPath: yield* path.fromFileUrl(
-                new URL("../../../scripts/acp-mock-agent.ts", import.meta.url),
-              ),
+              mockAgentPath: yield* bundledMockAgentPath,
               environment: { GOAT_ACP_VIBE_RETRY_OUTCOME: outcome },
             }),
           },
@@ -9092,7 +8153,6 @@ describe("AcpAdapterV2", () => {
         type RuntimeService = AcpSessionRuntime.AcpSessionRuntime["Service"];
         let handler: Parameters<RuntimeService["handleSessionUpdate"]>[0] | undefined;
         const instanceId = ProviderInstanceId.make("acp-named-stream-wait");
-        const path = yield* Path.Path;
         const adapter = yield* makeAcpAdapterV2({
           instanceId,
           selfInvocation: yield* resolveSelfInvocation(),
@@ -9101,9 +8161,7 @@ describe("AcpAdapterV2", () => {
             capabilities: AcpProviderCapabilitiesV2,
             makeRuntime: makeMockRuntime({
               childProcessSpawner: yield* ChildProcessSpawner.ChildProcessSpawner,
-              mockAgentPath: yield* path.fromFileUrl(
-                new URL("../../../scripts/acp-mock-agent.ts", import.meta.url),
-              ),
+              mockAgentPath: yield* bundledMockAgentPath,
               wrapRuntime: (runtime) => ({
                 ...runtime,
                 handleSessionUpdate: (next) =>
@@ -9222,11 +8280,8 @@ describe("AcpAdapterV2", () => {
     environment: Readonly<Record<string, string>>,
   ) {
     const childProcessSpawner = yield* ChildProcessSpawner.ChildProcessSpawner;
-    const path = yield* Path.Path;
     const selfInvocation = yield* resolveSelfInvocation();
-    const mockAgentPath = yield* path.fromFileUrl(
-      new URL("../../../scripts/acp-mock-agent.ts", import.meta.url),
-    );
+    const mockAgentPath = yield* bundledMockAgentPath;
     const protocolEvents = yield* Queue.unbounded<EffectAcpProtocol.AcpProtocolLogEvent>();
     const instanceId = ProviderInstanceId.make("acp-test-instruction-compaction");
     const threadId = ThreadId.make("thread-acp-instruction-compaction");

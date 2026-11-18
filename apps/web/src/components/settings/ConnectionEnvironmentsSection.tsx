@@ -1,7 +1,7 @@
 import { useAddEnvironmentForm } from "./useAddEnvironmentForm";
 import { GOAT_CONNECT_COMING_SOON } from "@goat/shared/goatConnect";
 import { isGoatConnectUnavailable } from "./EnvironmentRow.logic";
-import { isHubNodesUnsupportedError } from "@goat/client-runtime/hub-nodes";
+import { disposableRouteRefusal, isHubNodesUnsupportedError } from "@goat/client-runtime/hub-nodes";
 import { sshHostProbeErrorText } from "@goat/client-runtime/state/sshHost";
 import * as Schema from "effect/Schema";
 import { HandoffReview } from "../chat/HandoffReview";
@@ -26,6 +26,8 @@ import {
   parseRemotePairingFields,
   savedConnectionPresentation,
   savedConnectionSshRoute,
+  sshHostSuggestionValue,
+  unsavedSshHostSuggestions,
 } from "./ConnectionsSettings.logic";
 import { appAtomRegistry } from "~/rpc/atomRegistry";
 import { SessionPermissions } from "./SessionPermissions";
@@ -817,6 +819,12 @@ export function ConnectionEnvironmentsSection({
   const desktopSshHosts = useEnvironmentQuery(
     isSshDiscoveryActive ? desktopSshHostsStateAtom : null,
   );
+  // Add route refuses a saved environment the hub reaches as a disposable machine (Pen only).
+  const hubNodes = useEnvironmentQuery(
+    primaryEnvironmentId === null
+      ? null
+      : serverEnvironment.hubNodesLive({ environmentId: primaryEnvironmentId, input: {} }),
+  ).data?.nodes;
   // The discovery atom is kept alive across dialog opens, so re-read SSH config
   // each time the SSH tab is shown; stale hosts stay visible while it refreshes.
   const refreshDesktopSshHosts = desktopSshHosts.refresh;
@@ -834,13 +842,10 @@ export function ConnectionEnvironmentsSection({
         target.source === "ssh-config" &&
         target.alias.toLowerCase() === savedBackendSshHost.trim().toLowerCase(),
     );
-  const unsavedDiscoveredSshHosts = discoveredSshHosts.filter((target) => {
-    const address = formatDesktopSshTarget(target);
-    return (
-      !savedDesktopSshEnvironmentKeys.has(target.alias) &&
-      (target.source === "ssh-config" || !savedDesktopSshEnvironmentKeys.has(address))
-    );
-  });
+  const unsavedDiscoveredSshHosts = unsavedSshHostSuggestions(
+    discoveredSshHosts,
+    savedDesktopSshEnvironmentKeys,
+  );
   const filteredDiscoveredSshHosts = filterDiscoveredSshHosts(
     unsavedDiscoveredSshHosts,
     savedBackendSshHost,
@@ -1181,12 +1186,14 @@ export function ConnectionEnvironmentsSection({
     invalidateSshPreflight();
     setSavedBackendSshHost(target.alias);
     setSavedBackendSshUsername("");
-    setSavedBackendSshPort("");
+    // Only a known_hosts entry's port is an override; a configured alias resolves its own Port.
+    const port = target.source === "known-hosts" ? target.port : null;
+    setSavedBackendSshPort(port === null ? "" : String(port));
     await checkSavedBackendSshTarget({
       alias: target.alias,
       hostname: target.alias,
       username: null,
-      port: null,
+      port,
     });
   };
 
@@ -1502,7 +1509,7 @@ export function ConnectionEnvironmentsSection({
           </label>
           <Autocomplete
             items={filteredDiscoveredSshHosts}
-            itemToStringValue={(target) => target.alias}
+            itemToStringValue={sshHostSuggestionValue}
             mode="none"
             openOnInputClick
             open={sshHostSuggestionsOpen}
@@ -1516,7 +1523,9 @@ export function ConnectionEnvironmentsSection({
               setSavedBackendSshHost(value);
               if (eventDetails.reason !== "item-press") return;
 
-              const target = filteredDiscoveredSshHosts.find((host) => host.alias === value);
+              const target = filteredDiscoveredSshHosts.find(
+                (host) => sshHostSuggestionValue(host) === value,
+              );
               if (target) void handleSelectSshHostSuggestion(target);
             }}
           >
@@ -1783,6 +1792,17 @@ export function ConnectionEnvironmentsSection({
               setAddBackendDialogOpen(true);
             }}
             onAddRoute={(target) => {
+              const refused = disposableRouteRefusal(hubNodes ?? [], target.environmentId);
+              if (refused !== undefined) {
+                toastManager.add(
+                  stackedThreadToast({
+                    type: "error",
+                    title: "Could not add a route",
+                    description: refused,
+                  }),
+                );
+                return;
+              }
               setRouteTarget(target);
               setSavedBackendError(null);
               setAddBackendDialogOpen(true);

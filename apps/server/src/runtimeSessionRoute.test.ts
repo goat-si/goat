@@ -1,3 +1,4 @@
+import * as NodeCrypto from "@effect/platform-node/NodeCrypto";
 import * as NodeServices from "@effect/platform-node/NodeServices";
 import { onMainListener } from "./auth/connectionContext.testkit.ts";
 import { expect, it } from "@effect/vitest";
@@ -92,7 +93,7 @@ const mcpSession = {
 };
 const decodeSessionRequest = Schema.decodeUnknownEffect(RuntimeSessionRequest);
 
-it.layer(NodeServices.layer)("runtime session route", (it) => {
+it.layer(Layer.mergeAll(NodeServices.layer, NodeCrypto.layer))("runtime session route", (it) => {
   it.effect("issues the requested Pen member session with its exact scopes", () =>
     Effect.gen(function* () {
       const body = {
@@ -255,5 +256,10 @@ it.live("preserves the Child setup purpose through runtime session issuance", ()
     expect((yield* auth.listSessions()).map((session) => session.sessionId)).toEqual([
       issued.sessionId,
     ]);
-  }).pipe(Effect.scoped, Effect.provide(layerAuth.pipe(Layer.provideMerge(NodeServices.layer)))),
+  }).pipe(
+    Effect.scoped,
+    Effect.provide(
+      layerAuth.pipe(Layer.provideMerge(Layer.mergeAll(NodeServices.layer, NodeCrypto.layer))),
+    ),
+  ),
 );

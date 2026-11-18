@@ -1,3 +1,4 @@
+import { PULL_REQUEST_WS_METHODS } from "./pullRequestMethods.ts";
 import {
   SOURCE_CONTROL_STAR_METHODS,
   WsSourceControlStarredRpc,
@@ -135,6 +136,11 @@ import {
 import { HUB_NODES_WS_METHODS, HubNodesRpcs } from "./hubNodesRpc.ts";
 import { HUB_MACHINES_WS_METHODS, HubMachinesRpcs } from "./hubMachinesRpc.ts";
 import { AgentTerminalBinding, EnvironmentAuthorizationError } from "./auth.ts";
+import {
+  SERVER_CHECK_WS_METHODS,
+  WsServerCheckOtlpEndpointRpc,
+  WsServerCheckSecretSourceRpc,
+} from "./serverCheckRpc.ts";
 import {
   BackgroundPolicySnapshot,
   ClientActivityReportInput,
@@ -372,8 +378,6 @@ import {
 import {
   ServerConfigStreamEvent,
   DesktopUpdateCommitInput,
-  OtlpEndpointCheckInput,
-  OtlpEndpointCheckResult,
   ServerConfig,
   ServerProviderUpdateError,
   ServerProviderUpdateInput,
@@ -690,7 +694,7 @@ export const WS_METHODS = {
   serverGetProcessResourceHistory: "server.getProcessResourceHistory",
   serverGetResourceTelemetryHistory: "server.getResourceTelemetryHistory",
   serverRetryResourceTelemetry: "server.retryResourceTelemetry",
-  serverCheckOtlpEndpoint: "server.checkOtlpEndpoint",
+  ...SERVER_CHECK_WS_METHODS,
   serverSignalProcess: "server.signalProcess",
   serverReportClientActivity: "server.reportClientActivity",
   serverReportHostPowerState: "server.reportHostPowerState",
@@ -743,40 +747,7 @@ export const WS_METHODS = {
   cloudGetRelayClientStatus: "cloud.getRelayClientStatus",
   cloudInstallRelayClient: "cloud.installRelayClient",
 
-  pullRequestsList: "pullRequests.list",
-  pullRequestsListStats: "pullRequests.listStats",
-  pullRequestsFilterOptions: "pullRequests.filterOptions",
-  pullRequestsSummary: "pullRequests.summary",
-  pullRequestsRouting: "pullRequests.routing",
-  pullRequestsRoutingIdentity: "pullRequests.routingIdentity",
-  pullRequestsStack: "pullRequests.stack",
-  pullRequestsLinkedThreads: "pullRequests.linkedThreads",
-  pullRequestsDetail: "pullRequests.detail",
-  pullRequestsPreview: "pullRequests.preview",
-  pullRequestsChecks: "pullRequests.checks",
-  pullRequestsActivity: "pullRequests.activity",
-  pullRequestsReviewGuide: "pullRequests.reviewGuide",
-  pullRequestsGenerateReviewGuide: "pullRequests.generateReviewGuide",
-  pullRequestsThreadComments: "pullRequests.threadComments",
-  pullRequestsDiffFileContents: "pullRequests.diffFileContents",
-  pullRequestsFilesViewed: "pullRequests.filesViewed",
-  pullRequestsChangeBreakdown: "pullRequests.changeBreakdown",
-  pullRequestsSetFilesViewed: "pullRequests.setFilesViewed",
-  pullRequestsRunAction: "pullRequests.runAction",
-  pullRequestsUpdate: "pullRequests.update",
-  pullRequestsComment: "pullRequests.comment",
-  pullRequestsUpdateComment: "pullRequests.updateComment",
-  pullRequestsSubmitReview: "pullRequests.submitReview",
-  pullRequestsReplyToThread: "pullRequests.replyToThread",
-  pullRequestsSetThreadResolution: "pullRequests.setThreadResolution",
-  pullRequestsSetReaction: "pullRequests.setReaction",
-  pullRequestsInvalidate: "pullRequests.invalidate",
-  pullRequestsReportState: "pullRequests.reportState",
-  pullRequestsSubscribeRefreshes: "pullRequests.subscribeRefreshes",
-  pullRequestsReviewerCandidates: "pullRequests.reviewerCandidates",
-  pullRequestsRequestReviewers: "pullRequests.requestReviewers",
-  pullRequestsLabelCandidates: "pullRequests.labelCandidates",
-  pullRequestsSetLabels: "pullRequests.setLabels",
+  ...PULL_REQUEST_WS_METHODS,
 
   sourceControlLookupRepository: "sourceControl.lookupRepository",
   sourceControlCloneRepository: "sourceControl.cloneRepository",
@@ -1257,12 +1228,6 @@ const WsServerRetryResourceTelemetryRpc = Rpc.make(WS_METHODS.serverRetryResourc
   error: EnvironmentAuthorizationError,
 });
 
-const WsServerCheckOtlpEndpointRpc = Rpc.make(WS_METHODS.serverCheckOtlpEndpoint, {
-  payload: OtlpEndpointCheckInput,
-  success: OtlpEndpointCheckResult,
-  error: EnvironmentAuthorizationError,
-});
-
 const WsServerGetUsageSummaryRpc = Rpc.make(WS_METHODS.serverGetUsageSummary, {
   payload: UsageSummaryInput,
   success: UsageSummary,
@@ -1498,6 +1463,17 @@ const WsPullRequestsSubscribeRefreshesRpc = Rpc.make(WS_METHODS.pullRequestsSubs
   error: EnvironmentAuthorizationError,
   stream: true,
 });
+
+// Separate from the refreshes above so linked-thread changes don't refetch forge-backed reads.
+const WsPullRequestsSubscribeLinkedThreadRefreshesRpc = Rpc.make(
+  WS_METHODS.pullRequestsSubscribeLinkedThreadRefreshes,
+  {
+    payload: Schema.Struct({}),
+    success: NonNegativeInt,
+    error: EnvironmentAuthorizationError,
+    stream: true,
+  },
+);
 
 // Fetch reviewer candidates only when the menu opens to avoid unused host requests.
 const WsPullRequestsReviewerCandidatesRpc = Rpc.make(WS_METHODS.pullRequestsReviewerCandidates, {
@@ -2554,6 +2530,7 @@ export const WsCoreServerRpcGroup = RpcGroup.make(
   WsServerGetResourceTelemetryHistoryRpc,
   WsServerRetryResourceTelemetryRpc,
   WsServerCheckOtlpEndpointRpc,
+  WsServerCheckSecretSourceRpc,
   WsServerGetUsageSummaryRpc,
   WsServerRefreshUsageRatesRpc,
   WsServerSignalProcessRpc,
@@ -2620,6 +2597,7 @@ export const WsCoreServerRpcGroup = RpcGroup.make(
   WsPullRequestsInvalidateRpc,
   WsPullRequestsReportStateRpc,
   WsPullRequestsSubscribeRefreshesRpc,
+  WsPullRequestsSubscribeLinkedThreadRefreshesRpc,
   WsPullRequestsReviewerCandidatesRpc,
   WsPullRequestsRequestReviewersRpc,
   WsPullRequestsLabelCandidatesRpc,

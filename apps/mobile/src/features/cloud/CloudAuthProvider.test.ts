@@ -35,11 +35,16 @@ vi.mock("../../lib/runtime", () => ({
   },
 }));
 
-vi.mock("../../connection/catalog", () => ({
-  environmentCatalog: {
-    removeRelayEnvironments: {},
-  },
-}));
+vi.mock("../../connection/catalog", async () => {
+  const { Atom } = await import("effect/reactivity");
+  return {
+    environmentCatalog: {
+      removeRelayEnvironments: {},
+      // Signing out reads the app's computers to mark the relay-only ones refused.
+      catalogValueAtom: Atom.make({ isReady: true, entries: new Map() }),
+    },
+  };
+});
 
 vi.mock("./cloud-drafts", () => ({ removeCloudEnvironments: {} }));
 vi.mock("./connectOnboarding", () => ({

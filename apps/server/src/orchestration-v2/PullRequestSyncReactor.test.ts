@@ -1,7 +1,6 @@
 import * as NodeV8 from "node:v8";
 
 import { SourceControlProviderKind } from "@goat/contracts";
-import * as Stream from "effect/Stream";
 import {
   EventId,
   MessageId,
@@ -11,300 +10,41 @@ import {
   RunId,
   ThreadId,
   TurnItemId,
-  type OrchestrationV2Command as OrchestrationCommand,
   type OrchestrationV2DomainEvent,
   type OrchestrationV2Run,
-  type OrchestrationProjectShell,
   type PullRequestRef,
   type PullRequestStack,
   type PullRequestSummary,
-  type ThreadPullRequestKey,
-  type ThreadPullRequestLink,
-  type ThreadPullRequestSnapshot,
 } from "@goat/contracts";
 import { assert, describe, it } from "@effect/vitest";
 import * as Cache from "effect/Cache";
 import * as Clock from "effect/Clock";
-import * as Crypto from "effect/Crypto";
 import * as DateTime from "effect/DateTime";
 import * as Deferred from "effect/Deferred";
 import * as Duration from "effect/Duration";
 import * as Effect from "effect/Effect";
-import * as Layer from "effect/Layer";
 import * as Queue from "effect/Queue";
 import * as Ref from "effect/Ref";
 import { TestClock } from "effect/testing";
 
-import * as GitManager from "../git/GitManager.ts";
 import * as PullRequestService from "../pullRequest/PullRequestService.ts";
-import * as ServerActivation from "../serverActivation.ts";
-import * as Orchestrator from "./Orchestrator.ts";
-import * as ProjectionStore from "./ProjectionStore.ts";
 import * as PullRequestSyncReactor from "./PullRequestSyncReactor.ts";
-import type { PullRequestTestThread } from "./testkit/pullRequestFixtures.ts";
+import { v2PullRequestThread } from "./testkit/pullRequestFixtures.ts";
 
-const NOW = "2026-08-28T12:00:00.000Z";
-const PROJECT_ID = ProjectId.make("sync-project");
-
-type SyncCommand = Extract<
-  OrchestrationCommand,
-  { readonly type: "thread.pull-request-link.sync" }
->;
-type LinkCommand = Extract<OrchestrationCommand, { readonly type: "thread.pull-request.link" }>;
-
-const testCrypto = Crypto.make({
-  randomBytes: (size) => new Uint8Array(size).fill(1),
-  digest: (_algorithm, data) => Effect.succeed(data),
-});
-
-function makeProject(id: ProjectId = PROJECT_ID): OrchestrationProjectShell {
-  return {
-    id,
-    title: `Project ${id}`,
-    workspaceRoot: "/workspace/project",
-    defaultModelSelection: null,
-    scripts: [],
-    createdAt: "2026-08-01T00:00:00.000Z",
-    updatedAt: NOW,
-  };
-}
-
-function makeThread(
-  id: string,
-  overrides: Partial<PullRequestTestThread> = {},
-): PullRequestTestThread {
-  return {
-    id: ThreadId.make(id),
-    projectId: PROJECT_ID,
-    title: id,
-    modelSelection: {
-      instanceId: ProviderInstanceId.make("codex"),
-      model: "gpt-5",
-    },
-    runtimeMode: "full-access",
-    interactionMode: "default",
-    branch: null,
-    worktreePath: null,
-    pullRequests: [],
-    createdAt: "2026-08-01T00:00:00.000Z",
-    updatedAt: "2026-08-20T00:00:00.000Z",
-    archivedAt: null,
-    settledOverride: null,
-    settledAt: null,
-    latestUserMessageAt: "2026-08-20T00:00:00.000Z",
-    ...overrides,
-  };
-}
-
-function makeLink(
-  number: number,
-  snapshot: Partial<ThreadPullRequestSnapshot> | null = null,
-  overrides: Partial<ThreadPullRequestLink> = {},
-): ThreadPullRequestLink {
-  return {
-    host: "github.com",
-    repository: "owner/repository",
-    number,
-    url: `https://github.com/owner/repository/pull/${number}`,
-    source: "manual",
-    linkedAt: "2026-08-10T00:00:00.000Z",
-    snapshot:
-      snapshot === null
-        ? null
-        : {
-            state: "open",
-            title: "Pull request",
-            headBranch: "feature",
-            baseBranch: "main",
-            isDraft: false,
-            updatedAt: "2026-08-27T00:00:00.000Z",
-            syncedAt: "2026-08-27T00:00:00.000Z",
-            ...snapshot,
-          },
-    stack: null,
-    ...overrides,
-  };
-}
-
-interface TestShellSnapshot {
-  readonly snapshotSequence: number;
-  readonly projects: ReadonlyArray<OrchestrationProjectShell>;
-  readonly threads: ReadonlyArray<PullRequestTestThread>;
-  readonly updatedAt: string;
-}
-
-function makeSnapshot(
-  threads: ReadonlyArray<PullRequestTestThread>,
-  snapshotSequence = 1,
-): TestShellSnapshot {
-  return {
-    snapshotSequence,
-    projects: [makeProject()],
-    threads,
-    updatedAt: NOW,
-  };
-}
-
-function makeSummary(
-  input: PullRequestRef,
-  overrides: Partial<PullRequestSummary> = {},
-): PullRequestSummary {
-  return {
-    provider: SourceControlProviderKind.make("github"),
-    projectId: input.projectId,
-    repository: input.repository,
-    number: input.number,
-    title: "Pull request",
-    url: `https://github.com/${input.repository}/pull/${input.number}`,
-    state: "open",
-    headBranch: "feature",
-    baseBranch: "main",
-    updatedAt: "2026-08-27T00:00:00.000Z",
-    ...overrides,
-  };
-}
-
-interface HarnessOptions {
-  readonly invalidate?: PullRequestService.PullRequestService["Service"]["invalidate"];
-  readonly snapshot: TestShellSnapshot;
-  readonly summary?: (
-    input: PullRequestRef,
-  ) => Effect.Effect<PullRequestSummary, PullRequestOperationError>;
-  readonly stack?: (
-    input: PullRequestRef,
-  ) => Effect.Effect<PullRequestStack | null, PullRequestOperationError>;
-  readonly onSync?: (command: SyncCommand) => Effect.Effect<unknown>;
-}
-
-const makeHarness = Effect.fn("makePullRequestSyncHarness")(function* (options: HarnessOptions) {
-  const activation = yield* Deferred.make<void>();
-  const snapshots = yield* Ref.make(options.snapshot);
-  const snapshotReads = yield* Queue.unbounded<void>();
-  const shellSnapshotReads = yield* Ref.make(0);
-  const syncCommands = yield* Ref.make<ReadonlyArray<SyncCommand>>([]);
-  const linkCommands = yield* Ref.make<ReadonlyArray<LinkCommand>>([]);
-  const summaryCalls = yield* Ref.make<ReadonlyArray<PullRequestRef>>([]);
-  const stackCalls = yield* Ref.make<ReadonlyArray<PullRequestRef>>([]);
-  const domainEvents = yield* Queue.unbounded<OrchestrationV2DomainEvent>();
-  const stateChanges = yield* Queue.unbounded<ThreadPullRequestKey>();
-
-  const summary: PullRequestService.PullRequestService["Service"]["summary"] = (
-    input,
-    readOptions,
-  ) =>
-    Effect.gen(function* () {
-      assert.strictEqual(readOptions?.recoverTransientFailure, false);
-      yield* Ref.update(summaryCalls, (calls) => [...calls, input]);
-      return yield* options.summary?.(input) ?? Effect.succeed(makeSummary(input));
-    });
-
-  const stack: PullRequestService.PullRequestService["Service"]["stack"] = (input, readOptions) =>
-    Effect.gen(function* () {
-      assert.strictEqual(readOptions?.includeDetails, false);
-      yield* Ref.update(stackCalls, (calls) => [...calls, input]);
-      return yield* options.stack?.(input) ?? Effect.succeed(null);
-    });
-
-  const dispatch: Orchestrator.OrchestratorV2Shape["dispatch"] = (command) => {
-    if (command.type === "thread.pull-request-link.sync") {
-      return Ref.update(syncCommands, (recorded) => [...recorded, command]).pipe(
-        Effect.andThen(options.onSync?.(command) ?? Effect.void),
-        Effect.as({ sequence: 1, storedEvents: [] }),
-      );
-    }
-    if (command.type === "thread.pull-request.link") {
-      return Ref.update(linkCommands, (recorded) => [...recorded, command]).pipe(
-        Effect.as({ sequence: 1, storedEvents: [] }),
-      );
-    }
-    return Effect.die(new Error(`Unexpected command: ${command.type}`));
-  };
-
-  const layerDependencies = Layer.mergeAll(
-    Layer.mock(PullRequestService.PullRequestService)({
-      withSharedProjectReads: (effect) => effect,
-      summary,
-      stack,
-      invalidate: options.invalidate ?? (() => Effect.void),
-      subscribeStateChanges: Effect.succeed(Stream.fromQueue(stateChanges)),
-    }),
-    Layer.mock(GitManager.GitManager)({
-      subscribePullRequestStateChanges: Effect.succeed(Stream.empty),
-    }),
-    Layer.mock(ProjectionStore.ProjectionStoreV2)({
-      getThreadsWithPullRequests: (threadId) =>
-        Queue.offer(snapshotReads, undefined).pipe(
-          Effect.andThen(Ref.get(snapshots)),
-          Effect.map((snapshot) =>
-            snapshot.threads
-              .filter(
-                (thread) =>
-                  (threadId === undefined || thread.id === threadId) &&
-                  thread.archivedAt === null &&
-                  thread.pullRequests.length > 0,
-              )
-              .map((thread) => ({
-                id: thread.id,
-                projectId: thread.projectId,
-                lineage: {
-                  parentThreadId: null,
-                  relationshipToParent: null,
-                  rootThreadId: thread.id,
-                },
-                settledOverride: thread.settledOverride,
-                settledAt: thread.settledAt === null ? null : DateTime.makeUnsafe(thread.settledAt),
-                updatedAt: DateTime.makeUnsafe(0),
-                pullRequests: thread.pullRequests,
-              })),
-          ),
-        ),
-    }),
-    Layer.mock(Orchestrator.OrchestratorV2)({
-      getShellSnapshot: () =>
-        Ref.update(shellSnapshotReads, (count) => count + 1).pipe(
-          Effect.andThen(Effect.die(new Error("pull request sync must not read the shell"))),
-        ),
-      dispatch,
-      streamDomainEvents: Stream.fromQueue(domainEvents),
-    }),
-    Layer.succeed(ServerActivation.ServerActivation, Deferred.await(activation)),
-    Layer.succeed(Crypto.Crypto, testCrypto),
-  );
-
-  return {
-    activation,
-    snapshots,
-    snapshotReads,
-    shellSnapshotReads,
-    syncCommands,
-    linkCommands,
-    summaryCalls,
-    stackCalls,
-    domainEvents,
-    stateChanges,
-    layer: PullRequestSyncReactor.layer.pipe(Layer.provide(layerDependencies)),
-  };
-});
-
-type Harness = Effect.Success<ReturnType<typeof makeHarness>>;
-
-const startAndSweep = Effect.fn("startPullRequestSyncHarness")(function* (fixture: Harness) {
-  const reactor = yield* PullRequestSyncReactor.PullRequestSyncReactor;
-  yield* reactor.start();
-  yield* Deferred.succeed(fixture.activation, undefined);
-  yield* Queue.take(fixture.snapshotReads);
-  yield* reactor.drain;
-  return reactor;
-});
-
-const sweepAgain = Effect.fn("sweepPullRequestSyncHarness")(function* (
-  fixture: Harness,
-  reactor: PullRequestSyncReactor.PullRequestSyncReactor["Service"],
-) {
-  yield* TestClock.adjust("1 minute");
-  yield* Queue.take(fixture.snapshotReads);
-  yield* reactor.drain;
-});
+import {
+  NOW,
+  PROJECT_ID,
+  makeThread,
+  makeLink,
+  makeSnapshot,
+  makeSummary,
+  makeHarness,
+  startAndSweep,
+  sweepAgain,
+  type SyncCommand,
+  type TestShellSnapshot,
+  type Harness,
+} from "./testkit/pullRequestSync.fixture.ts";
 
 function runUpdated(
   threadId: ThreadId,
@@ -501,6 +241,14 @@ const linksFrom = Effect.fn("linksFrom")(function* (
 const mergingSnapshot = () =>
   makeSnapshot([makeThread(MERGING_THREAD, { pullRequests: [makeLink(7, { state: "open" })] })]);
 
+const missingSummary = Effect.fail(
+  new PullRequestOperationError({
+    operation: "summary",
+    detail: "Pull request not found",
+    reason: "not-found",
+  }),
+);
+
 describe("PullRequestSyncReactor", () => {
   it.effect("lets a finished sweep's links go while a cache keeps the fiber that read them", () =>
     Effect.gen(function* () {
@@ -679,6 +427,152 @@ describe("PullRequestSyncReactor", () => {
               [ThreadId.make("two"), "Owner/Repository"],
             ],
           );
+        }).pipe(Effect.provide(fixture.layer));
+      }),
+    ),
+  );
+
+  it.effect(
+    "retries missing links every fifteen minutes and resumes normal reads after recovery",
+    () =>
+      Effect.scoped(
+        Effect.gen(function* () {
+          yield* TestClock.setTime(Date.parse(NOW));
+          const found = yield* Ref.make(false);
+          const fixture = yield* makeHarness({
+            snapshot: makeSnapshot([
+              makeThread("missing", { pullRequests: [makeLink(9), makeLink(10, {})] }),
+            ]),
+            summary: (input) =>
+              Ref.get(found).pipe(
+                Effect.flatMap((available) =>
+                  available ? Effect.succeed(makeSummary(input)) : missingSummary,
+                ),
+              ),
+          });
+          yield* Effect.gen(function* () {
+            const reactor = yield* startAndSweep(fixture);
+            assert.strictEqual((yield* Ref.get(fixture.summaryCalls)).length, 2);
+            for (let index = 0; index < 14; index += 1) yield* sweepAgain(fixture, reactor);
+            assert.strictEqual((yield* Ref.get(fixture.summaryCalls)).length, 2);
+            yield* sweepAgain(fixture, reactor);
+            assert.strictEqual((yield* Ref.get(fixture.summaryCalls)).length, 4);
+            assert.deepStrictEqual(yield* Ref.get(fixture.syncCommands), []);
+
+            yield* Ref.set(found, true);
+            for (let index = 0; index < 14; index += 1) yield* sweepAgain(fixture, reactor);
+            assert.strictEqual((yield* Ref.get(fixture.summaryCalls)).length, 4);
+            yield* sweepAgain(fixture, reactor);
+            const commands = yield* Ref.get(fixture.syncCommands);
+            assert.deepStrictEqual(
+              commands.map((command) => command.number),
+              [9],
+            );
+            yield* Ref.update(fixture.snapshots, (snapshot) => applySync(snapshot, commands));
+            // Recovered quiet open pull requests return to the five-minute cadence.
+            for (let index = 0; index < 5; index += 1) yield* sweepAgain(fixture, reactor);
+            assert.deepStrictEqual(
+              (yield* Ref.get(fixture.summaryCalls))
+                .map((call) => call.number)
+                .toSorted((left, right) => left - right),
+              [9, 9, 9, 9, 10, 10, 10, 10],
+            );
+          }).pipe(Effect.provide(fixture.layer));
+        }),
+      ),
+  );
+
+  it.effect(
+    "holds missing links through sibling and link updates but honors a reader refresh",
+    () =>
+      Effect.scoped(
+        Effect.gen(function* () {
+          yield* TestClock.setTime(Date.parse(NOW));
+          const fixture = yield* makeHarness({
+            snapshot: makeSnapshot([makeThread("missing", { pullRequests: [makeLink(9)] })]),
+            summary: (input) =>
+              input.number === 9 ? missingSummary : Effect.succeed(makeSummary(input)),
+          });
+          const missingReads = Ref.get(fixture.summaryCalls).pipe(
+            Effect.map((calls) => calls.filter((call) => call.number === 9).length),
+          );
+          yield* Effect.gen(function* () {
+            const reactor = yield* startAndSweep(fixture);
+            const linked = makeThread("missing", { pullRequests: [makeLink(9), makeLink(8)] });
+            yield* Ref.set(fixture.snapshots, makeSnapshot([linked]));
+            yield* Queue.offer(fixture.domainEvents, {
+              type: "thread.pull-request-synced",
+              id: EventId.make("sibling-synced"),
+              threadId: linked.id,
+              occurredAt: DateTime.makeUnsafe(NOW),
+              payload: { ...v2PullRequestThread(linked), lastVisitedAt: null },
+            });
+            yield* Queue.take(fixture.snapshotReads);
+            yield* reactor.drain;
+            const afterSiblingSync = yield* missingReads;
+            assert.deepStrictEqual(
+              (yield* Ref.get(fixture.syncCommands)).map((command) => command.number),
+              [8],
+            );
+
+            yield* Queue.offer(fixture.domainEvents, {
+              type: "thread.pull-request-link-updated",
+              id: EventId.make("missing-link-updated"),
+              threadId: linked.id,
+              occurredAt: DateTime.makeUnsafe(NOW),
+              payload: makeLink(9),
+            });
+            // Let the event consumer finish even when it correctly queues no sweep.
+            yield* TestClock.adjust(0);
+            yield* reactor.drain;
+            const afterLinkUpdate = yield* missingReads;
+
+            yield* Queue.offer(fixture.stateChanges, makeLink(9));
+            yield* TestClock.adjust(0);
+            yield* reactor.drain;
+            const afterReaderRefresh = yield* missingReads;
+            yield* sweepAgain(fixture, reactor);
+            assert.deepStrictEqual(
+              {
+                afterSiblingSync,
+                afterLinkUpdate,
+                afterReaderRefresh,
+                afterSweep: yield* missingReads,
+              },
+              { afterSiblingSync: 1, afterLinkUpdate: 1, afterReaderRefresh: 2, afterSweep: 2 },
+            );
+          }).pipe(Effect.provide(fixture.layer));
+        }),
+      ),
+  );
+
+  it.effect("a pending stack retry respects the missing summary backoff", () =>
+    Effect.scoped(
+      Effect.gen(function* () {
+        yield* TestClock.setTime(Date.parse(NOW));
+        const found = yield* Ref.make(true);
+        const fixture = yield* makeHarness({
+          snapshot: makeSnapshot([makeThread("missing", { pullRequests: [makeLink(4)] })]),
+          summary: (input) =>
+            Ref.get(found).pipe(
+              Effect.flatMap((available) =>
+                available ? Effect.succeed(makeSummary(input)) : missingSummary,
+              ),
+            ),
+          stack: () =>
+            Effect.fail(new PullRequestOperationError({ operation: "stack", detail: "host down" })),
+        });
+        yield* Effect.gen(function* () {
+          const reactor = yield* startAndSweep(fixture);
+          assert.strictEqual((yield* Ref.get(fixture.stackCalls)).length, 1);
+          yield* Ref.set(found, false);
+          yield* sweepAgain(fixture, reactor);
+          assert.strictEqual((yield* Ref.get(fixture.summaryCalls)).length, 2);
+          for (let index = 0; index < 14; index += 1) yield* sweepAgain(fixture, reactor);
+          assert.strictEqual((yield* Ref.get(fixture.summaryCalls)).length, 2);
+          yield* sweepAgain(fixture, reactor);
+          assert.strictEqual((yield* Ref.get(fixture.summaryCalls)).length, 3);
+          assert.strictEqual((yield* Ref.get(fixture.stackCalls)).length, 1);
         }).pipe(Effect.provide(fixture.layer));
       }),
     ),
@@ -1211,7 +1105,7 @@ describe("PullRequestSyncReactor", () => {
     ),
   );
 
-  it.effect("leaves a settled thread's links unread until the thread is unsettled", () =>
+  it.effect("reads a settled thread's links once when it settles, then until unsettled", () =>
     Effect.scoped(
       Effect.gen(function* () {
         yield* TestClock.setTime(Date.parse(NOW));
@@ -1220,13 +1114,57 @@ describe("PullRequestSyncReactor", () => {
             makeThread("settled", {
               settledOverride: "settled",
               settledAt: "2026-08-21T00:00:00.000Z",
-              pullRequests: [makeLink(5, { state: "open" }), makeLink(6, { state: "closed" })],
+              pullRequests: [
+                makeLink(5, { state: "open" }),
+                makeLink(6, { state: "closed" }),
+                makeLink(7),
+              ],
             }),
           ]),
         });
 
         yield* Effect.gen(function* () {
           const reactor = yield* startAndSweep(fixture);
+          assert.deepStrictEqual(yield* Ref.get(fixture.summaryCalls), []);
+
+          const threadId = ThreadId.make("settled");
+          const at = DateTime.makeUnsafe(NOW);
+          yield* Queue.offer(fixture.domainEvents, {
+            type: "thread.settled",
+            id: EventId.make("event:settled"),
+            threadId,
+            occurredAt: at,
+            payload: {
+              createdBy: "user",
+              creationSource: "web",
+              id: threadId,
+              projectId: PROJECT_ID,
+              title: "settled",
+              providerInstanceId: ProviderInstanceId.make("codex"),
+              modelSelection: { instanceId: ProviderInstanceId.make("codex"), model: "gpt-5" },
+              runtimeMode: "full-access",
+              interactionMode: "default",
+              branch: null,
+              worktreePath: null,
+              activeProviderThreadId: null,
+              lineage: { parentThreadId: null, relationshipToParent: null, rootThreadId: threadId },
+              forkedFrom: null,
+              createdAt: at,
+              updatedAt: at,
+              archivedAt: null,
+              settledOverride: "settled",
+              settledAt: at,
+              lastVisitedAt: null,
+              deletedAt: null,
+            },
+          });
+          yield* Queue.take(fixture.snapshotReads);
+          yield* Queue.take(fixture.snapshotReads);
+          yield* reactor.drain;
+          assert.deepStrictEqual(
+            (yield* Ref.getAndSet(fixture.summaryCalls, [])).map((call) => call.number).toSorted(),
+            [5, 6],
+          );
           for (let index = 0; index < 15; index += 1) yield* sweepAgain(fixture, reactor);
           assert.deepStrictEqual(yield* Ref.get(fixture.summaryCalls), []);
 
@@ -1241,7 +1179,7 @@ describe("PullRequestSyncReactor", () => {
           yield* sweepAgain(fixture, reactor);
           assert.deepStrictEqual(
             (yield* Ref.get(fixture.summaryCalls)).map((call) => call.number).toSorted(),
-            [5, 6],
+            [5, 6, 7],
           );
         }).pipe(Effect.provide(fixture.layer));
       }),

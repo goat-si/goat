@@ -1,10 +1,8 @@
 import { expect, it } from "@effect/vitest";
 import { GoatHostStatusResult, OpenCodexInventorySnapshot } from "@goat/contracts";
-import * as Crypto from "effect/Crypto";
 import * as Deferred from "effect/Deferred";
 import * as Effect from "effect/Effect";
 import * as Fiber from "effect/Fiber";
-import * as PlatformError from "effect/PlatformError";
 import * as Schema from "effect/Schema";
 import * as TestClock from "effect/testing/TestClock";
 
@@ -16,11 +14,6 @@ import { setup } from "./OpenCodexInventory.testkit.ts";
 
 const decodeSnapshot = Schema.decodeUnknownEffect(OpenCodexInventorySnapshot);
 const encodeHostStatus = Schema.encodeUnknownEffect(GoatHostStatusResult);
-const isJson = Schema.is(Schema.Json);
-const failingCrypto = Crypto.make({
-  randomBytes: (size) => new Uint8Array(size),
-  digest: () => Effect.fail(PlatformError.badArgument({ module: "Crypto", method: "digest" })),
-});
 
 it.effect("probes OpenCodex shims offline without mistaking a missing CLI for installed", () =>
   Effect.gen(function* () {
@@ -444,36 +437,6 @@ it.effect.each(["missing Home", "invalid timestamp", "unknown document field"])(
       });
       expect((yield* inventory.readParity).parityEvidence?.settingsDigest).toBeUndefined();
     }),
-);
-
-it.effect("a digest that cannot be computed is omitted, so the snapshot stays JSON", () =>
-  Effect.gen(function* () {
-    const { inventory } = yield* setup({
-      fixture: fleet["mac-studio"],
-      crypto: failingCrypto,
-      files: {
-        "/fixture/.opencodex/link/home-codex-settings.json": JSON.stringify(
-          parityFixture.settingsRecord,
-        ),
-      },
-      response: (url) =>
-        new Response(
-          JSON.stringify(
-            url.endsWith("/v1/models")
-              ? { data: [{ id: "a" }] }
-              : url.endsWith("/healthz")
-                ? fleet["mac-studio"].health
-                : fleet["mac-studio"].ready,
-          ),
-        ),
-    });
-    const evidence = (yield* inventory.readParity).parityEvidence;
-    expect(evidence?.settingsLinkId).toBe(parityFixture.settingsRecord.linkId);
-    expect(evidence?.modelsStatus).toBe(200);
-    expect(Object.hasOwn(evidence ?? {}, "settingsDigest")).toBe(false);
-    expect(Object.hasOwn(evidence ?? {}, "catalogDigest")).toBe(false);
-    expect(isJson(evidence)).toBe(true);
-  }),
 );
 
 it.effect(

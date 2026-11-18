@@ -1,9 +1,15 @@
 import { EnvironmentId, ThreadId } from "@goat/contracts";
 import { describe, expect, it } from "vite-plus/test";
 import { formatInlineContextReference } from "./lib/composerContextReferences";
-import { threadContextRecord, threadContextReference } from "./lib/composerContextRecords";
+import {
+  previewAnnotationContextRecord,
+  reviewCommentContextRecord,
+  threadContextRecord,
+  threadContextReference,
+} from "./lib/composerContextRecords";
 
 import {
+  answerContextRecords,
   buildPendingUserInputAnswers,
   carryDisplacedCustomAnswerIntoPrompt,
   derivePendingUserInputProgress,
@@ -13,6 +19,7 @@ import {
   setPendingUserInputCustomAnswer,
   threadContextsReferencedByAnswer,
   togglePendingUserInputOptionSelection,
+  withdrawDisplacedCustomAnswerFromPrompt,
 } from "./pendingUserInput";
 
 describe("projectPendingUserInputAnswer", () => {
@@ -29,6 +36,84 @@ describe("projectPendingUserInputAnswer", () => {
     expect(projectPendingUserInputAnswer(answer, [record])).toBe(
       "Compare [Reference work](goat-thread://v1/reference-thread)",
     );
+  });
+
+  // regression: #28022 a review comment chip in an answer reached the agent as a bare link
+  it("sends review comment chips with the comment text and diff", () => {
+    const comment = reviewCommentContextRecord({
+      id: "file-comment-1",
+      sectionId: "branch",
+      sectionTitle: "Changes",
+      filePath: "notes.md",
+      startIndex: 2,
+      endIndex: 2,
+      rangeLabel: "+2",
+      text: "Rename this to line two updated",
+      diff: "@@ -0,0 +2,1 @@\n+line two changed",
+      fenceLanguage: "diff",
+    });
+    const answer = `See my note: ${formatInlineContextReference({
+      kind: "review-comment",
+      contextId: comment.contextId,
+      label: comment.label,
+    })}`;
+    const projected = projectPendingUserInputAnswer(answer, [comment]);
+    expect(projected).toContain("Rename this to line two updated");
+    expect(projected).toContain("+line two changed");
+  });
+
+  // regression: #28022, #36293 review comment and preview annotation chips in an answer reached the agent as bare links
+  it("sends thread draft chips with their full content", () => {
+    const reviewComment = {
+      id: "file-comment-1",
+      sectionId: "branch",
+      sectionTitle: "Changes",
+      filePath: "notes.md",
+      startIndex: 2,
+      endIndex: 2,
+      rangeLabel: "+2",
+      text: "Rename this to line two updated",
+      diff: "@@ -0,0 +2,1 @@\n+line two changed",
+      fenceLanguage: "diff",
+    };
+    const annotation = {
+      id: "annotation-1",
+      pageUrl: "http://localhost:3000/",
+      pageTitle: "Home",
+      comment: "FIRST NOTE: this features section looks too bare; add three feature cards",
+      elements: [],
+      regions: [],
+      strokes: [],
+      styleChanges: [],
+      screenshot: null,
+      createdAt: "2026-01-01T00:00:00.000Z",
+    };
+    const annotationRecord = previewAnnotationContextRecord(annotation);
+    const annotationAnswer = formatInlineContextReference({
+      kind: annotationRecord.kind,
+      contextId: annotationRecord.contextId,
+      label: annotationRecord.label,
+    });
+    expect(projectPendingUserInputAnswer(annotationAnswer, [annotationRecord])).toContain(
+      `comment: ${annotation.comment}`,
+    );
+    const records = answerContextRecords(undefined, {
+      reviewComments: [reviewComment],
+      previewAnnotations: [annotation],
+    });
+    const answer = `See my notes: ${records
+      .map((record) =>
+        formatInlineContextReference({
+          kind: record.kind,
+          contextId: record.contextId,
+          label: record.label,
+        }),
+      )
+      .join(" ")}`;
+    const projected = projectPendingUserInputAnswer(answer, records);
+    expect(projected).toContain("Rename this to line two updated");
+    expect(projected).toContain("+line two changed");
+    expect(projected).toContain(`comment: ${annotation.comment}`);
   });
 
   // regression: #18789 answers to pending questions lost exact text and option values
@@ -284,5 +369,42 @@ describe("carryDisplacedCustomAnswerIntoPrompt", () => {
     expect(carryDisplacedCustomAnswerIntoPrompt("first half\n", "second half")).toBe(
       "first half\n\nsecond half",
     );
+  });
+});
+
+describe("withdrawDisplacedCustomAnswerFromPrompt", () => {
+  // regression: #35205 an answer restored with undo stayed in the thread draft and was sent twice
+  it("takes set-aside text back out of the thread draft and leaves the rest", () => {
+    const setAside = carryDisplacedCustomAnswerIntoPrompt("", "first answer ");
+    expect(withdrawDisplacedCustomAnswerFromPrompt(setAside, "first answer ")).toBe("");
+
+    const afterDraft = carryDisplacedCustomAnswerIntoPrompt("draft", "first answer");
+    expect(withdrawDisplacedCustomAnswerFromPrompt(afterDraft, "first answer")).toBe("draft");
+
+    const beforeSecond = carryDisplacedCustomAnswerIntoPrompt(setAside, "second answer");
+    expect(
+      withdrawDisplacedCustomAnswerFromPrompt(beforeSecond, "first answer", ["second answer"]),
+    ).toBe("second answer");
+
+    const between = carryDisplacedCustomAnswerIntoPrompt(afterDraft, "second answer");
+    expect(
+      withdrawDisplacedCustomAnswerFromPrompt(between, "first answer", ["second answer"]),
+    ).toBe("draft\n\nsecond answer");
+  });
+
+  it("removes its own copy, not equal text inside a later set-aside answer", () => {
+    const first = carryDisplacedCustomAnswerIntoPrompt("", "foo");
+    const both = carryDisplacedCustomAnswerIntoPrompt(first, "bar\n\nfoo");
+    expect(withdrawDisplacedCustomAnswerFromPrompt(both, "foo", ["bar\n\nfoo"])).toBe("bar\n\nfoo");
+  });
+
+  it("leaves a thread draft that no longer holds the set-aside text where it was put", () => {
+    expect(withdrawDisplacedCustomAnswerFromPrompt("first answer, edited", "first answer")).toBe(
+      "first answer, edited",
+    );
+    expect(withdrawDisplacedCustomAnswerFromPrompt("my first answer", "first answer")).toBe(
+      "my first answer",
+    );
+    expect(withdrawDisplacedCustomAnswerFromPrompt("draft", "  ")).toBe("draft");
   });
 });

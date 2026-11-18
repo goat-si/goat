@@ -1,14 +1,18 @@
 import * as DesktopState from "../app/DesktopState.ts";
+import * as NodeServices from "@effect/platform-node/NodeServices";
 import { assert, describe, it } from "@effect/vitest";
 import * as Effect from "effect/Effect";
 import * as FileSystem from "effect/FileSystem";
 import * as Layer from "effect/Layer";
 import * as Option from "effect/Option";
+import * as Path from "effect/Path";
 import * as Ref from "effect/Ref";
 import * as Stream from "effect/Stream";
 import { HttpClient } from "effect/http";
 import { ChildProcessSpawner } from "effect/process";
 
+import * as DesktopConfig from "../app/DesktopConfig.ts";
+import * as DesktopEnvironment from "../app/DesktopEnvironment.ts";
 import * as DesktopObservability from "../app/DesktopObservability.ts";
 import * as DesktopAppSettings from "../settings/DesktopAppSettings.ts";
 import * as DesktopTelemetryPublisher from "../telemetry/DesktopTelemetryPublisher.ts";
@@ -35,6 +39,7 @@ function layerPool(
           ChildProcessSpawner.ChildProcessSpawner,
           ChildProcessSpawner.make(() => Effect.die("unexpected child process spawn")),
         ),
+        Path.layer,
         Layer.succeed(
           HttpClient.HttpClient,
           HttpClient.make(() => Effect.die("unexpected HTTP request")),
@@ -82,6 +87,20 @@ function layerPool(
           currentBootstrapToken: Effect.die("unexpected bootstrap token read"),
         } satisfies DesktopBackendConfiguration.DesktopBackendConfiguration["Service"]),
         DesktopAppSettings.layerTest(),
+        DesktopEnvironment.layer({
+          dirname: "/repo/apps/desktop/src",
+          homeDirectory: "/home/test",
+          platform: "linux",
+          processArch: "x64",
+          appVersion: "0.0.0",
+          appPath: "/repo",
+          isPackaged: true,
+          resourcesPath: "/missing/resources",
+          runningUnderArm64Translation: false,
+        }).pipe(
+          Layer.provide(Layer.mergeAll(NodeServices.layer, DesktopConfig.layerTest({}))),
+          Layer.orDie,
+        ),
         DesktopState.layer,
         DesktopWslEnvironment.layerTest(),
         ElectronDialog.layer,

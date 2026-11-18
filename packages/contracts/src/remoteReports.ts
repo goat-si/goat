@@ -210,6 +210,22 @@ export const OriginBoundDeleteResult = Schema.Union([
   }),
 ]);
 export type OriginBoundDeleteResult = typeof OriginBoundDeleteResult.Type;
+/**
+ * goat#2338: the origin force stops the run of a thread it launched as a task, once that run
+ * ignored the cancel. The read key authorizes only the bound thread.
+ */
+export const OriginBoundForceStopInput = Schema.Struct({
+  correlationId: CorrelationId.annotate({ description: "The task launch's correlation id." }),
+  readKey: HexKey.annotate({ description: "The correlation's read key." }),
+  threadId: ThreadId.annotate({ description: "The thread the correlation is bound to." }),
+  runId: RunId.annotate({ description: "The task's run; a newer run refuses as superseded." }),
+});
+export type OriginBoundForceStopInput = typeof OriginBoundForceStopInput.Type;
+export const OriginBoundForceStopResult = Schema.Struct({
+  outcome: Schema.Literals(["killed", "released", "releasing", "shared"]),
+  sharedWithThreadIds: Schema.Array(ThreadId),
+});
+export type OriginBoundForceStopResult = typeof OriginBoundForceStopResult.Type;
 export const RemoteOriginReportsWaitResult = Schema.Struct({
   threadId: ThreadId,
   reports: Schema.Array(RemoteReport),

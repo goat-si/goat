@@ -8,6 +8,7 @@ export interface GoatBotSourceIds {
   readonly identity: string | null;
   readonly baselineIds: ReadonlySet<string> | null | undefined;
   readonly sourceIds: ReadonlySet<string> | undefined;
+  readonly speechBaselineIds?: ReadonlySet<string> | undefined;
 }
 
 export function useGoatBotSource(
@@ -37,6 +38,9 @@ export function useGoatBotSource(
           ? null
           : snapshot.ids,
     sourceIds: ref === undefined ? undefined : sourceIds,
+    ...(status === "synchronizing" && snapshot?.identity === identity
+      ? { speechBaselineIds: snapshot.ids }
+      : {}),
     committedSends,
   };
 }

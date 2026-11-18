@@ -1,3 +1,4 @@
+import { CheckIcon, CopyIcon } from "~/components/solar";
 import { DesktopWindowMaterialSync } from "../desktop/DesktopWindowMaterialSync";
 import { LiquidGlassBackdrop } from "../appearance/LiquidGlassBackdrop";
 import { hasCloudPublicConfig } from "../cloud/publicConfig";
@@ -13,7 +14,6 @@ import {
   useNavigate,
   useRouter,
 } from "@tanstack/react-router";
-import { Check, Copy } from "~/components/solar/nodes";
 import { useEffect, useEffectEvent, useRef, useState } from "react";
 
 import { APP_DISPLAY_NAME, APP_VERSION } from "../branding";
@@ -48,7 +48,6 @@ import { ThemeEditorHost } from "../components/settings/ThemeEditorHost";
 import { useCopyToClipboard } from "../hooks/useCopyToClipboard";
 import { useEnvironmentThemeSync } from "../hooks/useEnvironmentTheme";
 import { Button } from "../components/ui/button";
-import { MorphIcon } from "~/components/MorphIcon";
 import { StandalonePage, StandalonePageHeader } from "../components/ui/standalone-page";
 import {
   AnchoredToastProvider,
@@ -87,6 +86,7 @@ import {
 
 import { getDesktopSnapShotBridge } from "../lib/desktopSnapShot";
 import { installDesktopPasteAsText } from "../lib/desktopPasteAsText";
+import { isChunkLoadError } from "../lib/chunkReloadGuard";
 import { shouldResumeSnapShotSetupOnStartup } from "../lib/snapShotSetupResume";
 
 export const Route = createRootRoute({
@@ -352,7 +352,12 @@ function RootRouteErrorView({ error }: ErrorComponentProps) {
       />
 
       <div className="mt-5 flex flex-wrap gap-2">
-        <Button size="sm" onClick={() => void router.invalidate()}>
+        <Button
+          size="sm"
+          onClick={() =>
+            isChunkLoadError(error) ? window.location.reload() : void router.invalidate()
+          }
+        >
           Try again
         </Button>
         <Button size="sm" variant="outline" onClick={() => window.location.reload()}>
@@ -376,7 +381,11 @@ function CopyErrorButton({ report }: { report: string }) {
 
   return (
     <Button size="sm" variant="outline" onClick={() => copyToClipboard(report)}>
-      <MorphIcon className={cn(isCopied && "text-success")} icon={isCopied ? Check : Copy} />
+      {isCopied ? (
+        <CheckIcon className={cn(isCopied && "text-success")} />
+      ) : (
+        <CopyIcon className={cn(isCopied && "text-success")} />
+      )}
       {isCopied ? "Copied" : "Copy error"}
     </Button>
   );

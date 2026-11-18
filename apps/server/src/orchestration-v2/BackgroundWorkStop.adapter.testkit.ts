@@ -20,6 +20,7 @@ export const makeBackgroundStopAdapter = ({
   events,
   started,
   interrupts,
+  interruptCalls,
   failedStart,
   backgroundWorkAfterStop,
 }: {
@@ -27,6 +28,7 @@ export const makeBackgroundStopAdapter = ({
   readonly events: Queue.Queue<ProviderAdapter.ProviderAdapterV2Event>;
   readonly started: ProviderAdapter.ProviderAdapterV2TurnInput[];
   readonly interrupts: ProviderAdapter.ProviderAdapterV2InterruptInput[];
+  readonly interruptCalls: Queue.Queue<void>;
   readonly failedStart: boolean;
   readonly backgroundWorkAfterStop: "running" | "unknown" | undefined;
 }): ProviderAdapter.ProviderAdapterV2["Service"] => ({
@@ -114,7 +116,7 @@ export const makeBackgroundStopAdapter = ({
         interruptTurn: (interrupt) =>
           Effect.sync(() => {
             interrupts.push(interrupt);
-          }),
+          }).pipe(Effect.andThen(Queue.offer(interruptCalls, undefined))),
         respondToRuntimeRequest: () => Effect.die("unused"),
         readThreadSnapshot: () => Effect.die("unused"),
         rollbackThread: () => Effect.die("unused"),

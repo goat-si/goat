@@ -8,7 +8,7 @@ import {
 import * as Logger from "effect/Logger";
 import * as MemorySnapshot from "../memory/MemorySnapshot.ts";
 import { MemoryTaskGrantCeiling } from "@goat/contracts";
-import * as NodeServices from "@effect/platform-node/NodeServices";
+import * as NodeServices from "@goat/shared/testing/nodeServicesWithCrypto";
 import { expect, it, vi } from "vite-plus/test";
 import { it as effectIt } from "@effect/vitest";
 import {
@@ -74,7 +74,9 @@ it.each([
     await Effect.gen(function* () {
       const service = yield* ProviderTurnStart.ProviderTurnStartServiceV2;
       // A fake checkout cannot pass verification, so the start settles failed before reading on.
-      const exit = yield* service.start({ threadId, runId }).pipe(Effect.exit);
+      const exit = yield* service
+        .start({ threadId, runId, willRetry: branch === null })
+        .pipe(Effect.exit);
       expect(exit._tag).toBe(branch === null ? "Failure" : "Success");
       expect(harness.projectionReadCount()).toBe(branch === null ? 2 : 1);
       if (branch === null) {

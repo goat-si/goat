@@ -1,5 +1,6 @@
 // @effect-diagnostics-next-line nodeBuiltinImport:off -- Signed relay proofs exercise the real host consumer.
 import * as NodeCrypto from "node:crypto";
+import * as PlatformNodeCrypto from "@effect/platform-node/NodeCrypto";
 import * as NodeServices from "@effect/platform-node/NodeServices";
 import { expect, it } from "@effect/vitest";
 import { vi } from "vite-plus/test";
@@ -67,7 +68,7 @@ const layer = CloudLink.layer.pipe(
     ),
   ),
   Layer.provideMerge(Config.layerTest("/", { prefix: "connect-host-auth-" })),
-  Layer.provide(NodeServices.layer),
+  Layer.provide(Layer.mergeAll(NodeServices.layer, PlatformNodeCrypto.layer)),
 );
 
 it.effect(

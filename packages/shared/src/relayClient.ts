@@ -6,7 +6,8 @@ import type {
 } from "@goat/contracts";
 import * as Config from "effect/Config";
 import * as Context from "effect/Context";
-import * as Crypto from "effect/Crypto";
+import * as Digest from "effect/crypto/Digest";
+import * as SecureRandom from "effect/crypto/SecureRandom";
 import * as Data from "effect/Data";
 import * as Duration from "effect/Duration";
 import * as Effect from "effect/Effect";
@@ -119,6 +120,8 @@ const INSTALL_LOCK_RETRY_COUNT = 100;
 const INSTALL_LOCK_RETRY_DELAY = "100 millis";
 const INSTALL_LOCK_STALE_MS = 5 * 60 * 1_000;
 const VERSION_PROBE_TIMEOUT = "10 seconds";
+// Antivirus scans can hold the first launch of a freshly downloaded binary for 20-30 s.
+const INSTALL_VALIDATION_TIMEOUT = "2 minutes";
 
 const ACTIVATE_RETRY_COUNT = 40;
 const ACTIVATE_RETRY_DELAY = "250 millis";
@@ -225,12 +228,14 @@ export const makeCloudflaredRelayClient = Effect.fn("cloudflared.make")(function
   RelayClientShape,
   never,
   | ChildProcessSpawner.ChildProcessSpawner
-  | Crypto.Crypto
+  | SecureRandom.SecureRandom
+  | Digest.Digest
   | FileSystem.FileSystem
   | HttpClient.HttpClient
   | Path.Path
 > {
-  const crypto = yield* Crypto.Crypto;
+  const random = yield* SecureRandom.SecureRandom;
+  const digest = yield* Digest.Digest;
   const fileSystem = yield* FileSystem.FileSystem;
   const httpClient = yield* HttpClient.HttpClient;
   const path = yield* Path.Path;
@@ -253,19 +258,23 @@ export const makeCloudflaredRelayClient = Effect.fn("cloudflared.make")(function
     return platform === "win32" || (info.value.mode & 0o111) !== 0;
   });
 
+  const runVersionProbe = Effect.fn("cloudflared.runVersionProbe")(function* (
+    executablePath: string,
+    timeout: Duration.Input,
+  ) {
+    return yield* spawner
+      .string(ChildProcess.make(executablePath, ["version"], { stdin: "ignore", stderr: "ignore" }))
+      .pipe(
+        Effect.map(parseCloudflaredVersionOutput),
+        Effect.timeoutOption(timeout),
+        Effect.map(Option.getOrNull),
+        Effect.orElseSucceed(() => null),
+      );
+  });
+
   // Cache successful version probes per file revision; do not let transient failures hide valid binaries.
   const versionCache = yield* Cache.makeWith(
-    (key: VersionProbeKey) =>
-      spawner
-        .string(
-          ChildProcess.make(key.executablePath, ["version"], { stdin: "ignore", stderr: "ignore" }),
-        )
-        .pipe(
-          Effect.map(parseCloudflaredVersionOutput),
-          Effect.timeoutOption(VERSION_PROBE_TIMEOUT),
-          Effect.map(Option.getOrNull),
-          Effect.orElseSucceed(() => null),
-        ),
+    (key: VersionProbeKey) => runVersionProbe(key.executablePath, VERSION_PROBE_TIMEOUT),
     {
       capacity: 16,
       timeToLive: (exit) =>
@@ -441,7 +450,7 @@ export const makeCloudflaredRelayClient = Effect.fn("cloudflared.make")(function
       ),
     );
     yield* report("verifying");
-    const checksum = yield* crypto.digest("SHA-256", bytes).pipe(
+    const checksum = yield* digest.digest(Digest.sha256, bytes).pipe(
       Effect.mapError(
         (cause) =>
           new RelayClientInstallError({
@@ -561,7 +570,7 @@ export const makeCloudflaredRelayClient = Effect.fn("cloudflared.make")(function
       }
       yield* report("validating");
       // Verify the pin so mislabeled assets cannot cause repeated redownloads.
-      const installedVersion = yield* probeVersion(executablePath);
+      const installedVersion = yield* runVersionProbe(executablePath, INSTALL_VALIDATION_TIMEOUT);
       if (installedVersion !== CLOUDFLARED_VERSION) {
         return yield* new RelayClientInstallError({
           reason: "validation_failed",
@@ -572,7 +581,7 @@ export const makeCloudflaredRelayClient = Effect.fn("cloudflared.make")(function
         });
       }
 
-      const stagedPath = `${managedPath}.${yield* crypto.randomUUIDv4()}.tmp`;
+      const stagedPath = `${managedPath}.${yield* random.uuidV4()}.tmp`;
       yield* report("activating");
       yield* renameWhenUnlocked(executablePath, stagedPath).pipe(
         wrapInstallFailure("write_failed", "Could not stage the relay client."),

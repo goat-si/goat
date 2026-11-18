@@ -14,6 +14,8 @@ export const probeHostKey = Effect.fn("ssh/hostKey.probeHostKey")(function* (inp
   readonly user?: string;
   readonly port?: number;
   readonly resolvedSettings?: ReadonlyMap<string, string>;
+  /** Restricts the key OpenSSH negotiates, e.g. "ssh-ed25519" to compare with an ED25519 pin. */
+  readonly hostKeyAlgorithms?: string;
 }) {
   return yield* Effect.scoped(
     Effect.gen(function* () {
@@ -90,6 +92,9 @@ export const probeHostKey = Effect.fn("ssh/hostKey.probeHostKey")(function* (inp
         "HashKnownHosts=no",
         "-o",
         "CheckHostIP=no",
+        ...(input.hostKeyAlgorithms === undefined
+          ? []
+          : ["-o", `HostKeyAlgorithms=${input.hostKeyAlgorithms}`]),
         input.target,
         "exit",
         "0",

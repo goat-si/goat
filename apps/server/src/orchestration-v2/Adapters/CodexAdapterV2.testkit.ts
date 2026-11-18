@@ -1,6 +1,7 @@
 import * as MemoryDerivedCache from "../../memory/MemoryDerivedCache.ts";
 import * as OtelEnvironment from "@goat/shared/otelEnvironment";
 import { DEFAULT_SIGNAL_EXPORT } from "@goat/shared/observability";
+import * as NodeCrypto from "@effect/platform-node/NodeCrypto";
 import * as NodeServices from "@effect/platform-node/NodeServices";
 import {
   MessageId,
@@ -241,7 +242,7 @@ export function layerWithClientFactory(input: {
   const layerServerConfig = Layer.effect(
     ServerConfig.ServerConfig,
     makeReplayServerConfig(input.scenario).pipe(Effect.orDie),
-  ).pipe(Layer.provide(NodeServices.layer));
+  ).pipe(Layer.provide(Layer.mergeAll(NodeServices.layer, NodeCrypto.layer)));
   const layerRegistry = ProviderAdapterRegistry.layerFromDrivers({
     drivers: [CodexAdapterV2.CodexAdapterV2Driver],
     configMap: {
@@ -256,6 +257,7 @@ export function layerWithClientFactory(input: {
         layerReplayClientFactory,
         layerServerConfig,
         NodeServices.layer,
+        NodeCrypto.layer,
         IdAllocator.layer,
       ),
     ),

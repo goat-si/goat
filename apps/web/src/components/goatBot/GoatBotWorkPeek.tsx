@@ -1,6 +1,7 @@
 import type { GoatBotRow } from "@goat/client-runtime/goatBot";
 import type { ChannelTaskId, EnvironmentId } from "@goat/contracts";
-import { Link } from "@tanstack/react-router";
+import { Link, useRouter } from "@tanstack/react-router";
+import { useContext } from "react";
 
 import { ChevronLeftIcon } from "~/components/solar";
 
@@ -10,6 +11,8 @@ import { GoatBotTaskTargetHidden } from "./goatBotTaskTargetContext";
 import { GoatBotStepsContext } from "./GoatBotStepsLine";
 import { GoatBotActivityContext, GoatBotTimeline } from "./GoatBotTimeline";
 import { HoldsNavigation } from "~/lib/navigationHolds";
+import { rememberHomeOrigin } from "./goatBotHomeRequest";
+import { GoatBotChatHidden } from "./goatBotLayout";
 import { useAcknowledgeTaskRead } from "./useAcknowledgeTaskRead";
 import type { GoatBotSourceIds } from "./useGoatBotSource";
 
@@ -48,8 +51,10 @@ export function GoatBotWorkPeek({
   readonly onBack: () => void;
 }) {
   const member = useGoatBotMember();
-  // Opening a task acknowledges its activity, as its task view does.
-  useAcknowledgeTaskRead({ environmentId, taskId, readThrough: unreadThrough, onAcknowledged });
+  const router = useRouter();
+  // Opening a task acknowledges its activity, as its task view does; not while a task hides it.
+  const readThrough = useContext(GoatBotChatHidden) ? null : unreadThrough;
+  useAcknowledgeTaskRead({ environmentId, taskId, readThrough, onAcknowledged });
   return (
     <section
       aria-label={title}
@@ -103,7 +108,21 @@ export function GoatBotWorkPeek({
         <Button
           className="w-full"
           render={
-            <Link to="/bot" search={{ task: taskId, taskTitle: title, ...goatBotSearch(member) }} />
+            <Link
+              to="/bot"
+              search={{ task: taskId, taskTitle: title, ...goatBotSearch(member) }}
+              onClick={(event) => {
+                if (
+                  !event.defaultPrevented &&
+                  event.button === 0 &&
+                  !event.metaKey &&
+                  !event.ctrlKey &&
+                  !event.shiftKey &&
+                  !event.altKey
+                )
+                  rememberHomeOrigin(router, environmentId, member?.botId ?? null, taskId);
+              }}
+            />
           }
         >
           Go to thread

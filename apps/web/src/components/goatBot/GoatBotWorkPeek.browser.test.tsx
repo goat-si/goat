@@ -77,6 +77,7 @@ vi.mock(import("../../remoteOpen"), async (original) => ({
 vi.mock("../settings/MemorySettings", () => ({ MemorySettingsEntry: () => null }));
 
 import { GoatBotWorkPeek } from "./GoatBotWorkPeek";
+import { GoatBotChatHidden } from "./goatBotLayout";
 import { resetTaskReadAcknowledgementsForTests } from "./useAcknowledgeTaskRead";
 
 const at = "2026-11-09T00:00:00.000Z";
@@ -516,4 +517,16 @@ it("starts a fresh peek timeline when the same bot changes thread", async () => 
     1,
   );
   expect(screen.container.textContent).not.toContain("Jump to latest");
+});
+
+it("a peek in a Home that a task has hidden acknowledges nothing, and acknowledges once the chat shows again", async () => {
+  setup();
+  const peek = () => ackPeek("task-hidden", "2026-11-09T00:00:00.000Z");
+  await using screen = await render(<GoatBotChatHidden value>{peek()}</GoatBotChatHidden>);
+  await expect
+    .element(screen.getByRole("button", { name: "Back to Home from Count the stars" }))
+    .toBeInTheDocument();
+  expect(sentFor("task-hidden")).toBe(0);
+  await screen.rerender(<GoatBotChatHidden value={false}>{peek()}</GoatBotChatHidden>);
+  await vi.waitFor(() => expect(sentFor("task-hidden")).toBe(1));
 });

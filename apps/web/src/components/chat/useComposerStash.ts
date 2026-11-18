@@ -10,7 +10,6 @@ import {
   type ComposerFileAttachment,
   type ComposerThreadDraftState,
   type PersistedComposerFileAttachment,
-  type PersistedComposerImageAttachment,
   composerFileDedupKey,
   composerFileMatchesReattachMarker,
   composerFileNeedsReattach,
@@ -22,13 +21,12 @@ import { type ComposerPromptEditorHandle } from "../ComposerPromptEditor";
 import {
   MAX_STASH_ENTRIES,
   type PromptStashEntry,
-  partitionStashAttachments,
   usePromptStashStore,
 } from "../../promptStashStore";
 import { type PendingUserInput } from "../../session-logic";
 import { type ReviewCommentContext } from "../../reviewCommentContext";
 import { collapseExpandedComposerCursor } from "../../composer-logic";
-import { compressImageForStash } from "../../lib/imageCompression";
+import { collectComposerPromptInlineTokens } from "../../composer-editor-mentions";
 import { formatInlineContextReference } from "~/lib/composerContextReferences";
 import { isCommandPaletteOpen } from "../../commandPaletteBus";
 import { pendingDraftWork } from "./pendingDraftWork";
@@ -46,7 +44,6 @@ import {
 } from "../../lib/attachmentUploadQueue";
 import { remainingComposerAttachmentSlots } from "./composerThreadImport";
 import { replaceComposerContextReferences } from "@goat/shared/composerContextReferences";
-import { resizeSnapShotSource } from "../../lib/snapShotSource";
 import { registerCommands } from "../../shortcuts/dispatcher";
 import { selectThreadTerminalUiState, useTerminalUiStateStore } from "../../terminalUiStateStore";
 import { toastManager } from "../ui/toast";
@@ -61,7 +58,9 @@ import {
   useState,
 } from "react";
 import { BackgroundThreadContext } from "./backgroundThread";
+import { encodeImagesForStash, reportStashedImages } from "./stashFailedSend";
 import { useStableCallback } from "../../hooks/useStableCallback";
+import { restoreStashedReply } from "./composerReply";
 
 /**
  * The prompt stash: saving the draft aside, restoring or deleting an entry, the badge pulse,
@@ -125,6 +124,7 @@ export function useComposerStash(input: {
   } = input;
   const getComposerDraft = useComposerDraftStore((store) => store.getComposerDraft);
   const setComposerDraftPrompt = useComposerDraftStore((store) => store.setPrompt);
+  const setComposerDraftReplyTo = useComposerDraftStore((store) => store.setReplyTo);
   const addComposerDraftImages = useComposerDraftStore((store) => store.addImages);
   const addComposerDraftFiles = useComposerDraftStore((store) => store.addFiles);
   const removeComposerDraftPreviewAnnotation = useComposerDraftStore(
@@ -206,6 +206,7 @@ export function useComposerStash(input: {
     const rewrittenContextIds = entry.records
       ? importContextRecords(entry.records, null, composerDraftTarget)
       : new Map<string, string>();
+    restoreStashedReply(entry.records ?? [], composerDraftTarget);
     const restoredPrompt = replaceComposerContextReferences(entry.prompt, (reference) => {
       const contextId = rewrittenContextIds.get(reference.contextId);
       return contextId
@@ -454,11 +455,17 @@ export function useComposerStash(input: {
       });
       return;
     }
-    const prompt = promptRef.current.trim();
+    const trimmedPrompt = promptRef.current.trim();
+    const endsWithChip =
+      collectComposerPromptInlineTokens(promptRef.current).at(-1)?.end ===
+      promptRef.current.trimEnd().length;
+    const prompt = endsWithChip ? `${trimmedPrompt} ` : trimmedPrompt;
     const attachmentDraft = readAttachmentDraft();
     const images = [...attachmentDraft.images];
     const files = [...attachmentDraft.files];
+    const replyTo = getComposerDraft(composerDraftTarget)?.replyTo;
     const stashedRecords: ComposerContextRecord[] = [
+      ...(replyTo ? [replyTo] : []),
       ...composerThreadContexts,
       ...readTerminalContexts().map(terminalContextRecord),
       ...composerReviewComments.map(reviewCommentContextRecord),
@@ -563,6 +570,7 @@ export function useComposerStash(input: {
       clearComposerDraftPromptAndImages(stashTarget);
       clearComposerDraftTerminalContexts(stashTarget);
       setComposerDraftThreadContexts(stashTarget, []);
+      setComposerDraftReplyTo(stashTarget, null);
       for (const comment of composerReviewComments) {
         removeComposerDraftReviewComment(stashTarget, comment.id);
       }
@@ -594,56 +602,16 @@ export function useComposerStash(input: {
         });
       }
 
-      // Images are re-encoded for the stash rather than stored verbatim: the
-      // composer allows up to 10MB per image, but localStorage gives the whole
-      // origin ~5MB.
-      const candidateAttachments: PersistedComposerImageAttachment[] = [];
-      const oversizedImageNames: string[] = [];
-      const unreadableImageNames: string[] = [];
-      for (const image of images) {
-        const result = await compressImageForStash(image.file);
-        if (!result.ok) {
-          (result.reason === "too-large" ? oversizedImageNames : unreadableImageNames).push(
-            image.name,
-          );
-          continue;
-        }
-        candidateAttachments.push({
-          id: image.id,
-          name: image.name,
-          mimeType: result.image.mimeType,
-          sizeBytes: result.image.sizeBytes,
-          dataUrl: result.image.dataUrl,
-          ...(image.source
-            ? { source: resizeSnapShotSource(image.source, result.image.imageSize) }
-            : {}),
-        });
-      }
-      const { kept, droppedNames } = partitionStashAttachments(candidateAttachments);
-
-      const { attached, durable: imagesDurable } = finalizeStashEntryImages(entryId, {
-        attachments: kept,
-        droppedImageNames: [...oversizedImageNames, ...droppedNames],
-        unreadableImageNames,
+      const encoded = await encodeImagesForStash(images);
+      const kept = encoded.attachments;
+      const { attached, durable: imagesDurable } = finalizeStashEntryImages(entryId, encoded);
+      reportStashedImages({
+        attached,
+        imagesDurable,
+        entryDurable: durable,
+        imageCount: images.length,
+        keptCount: kept.length,
       });
-      if (attached) {
-        if (!imagesDurable && durable && images.length > 0) {
-          toastManager.add({
-            type: "warning",
-            title: "Stashed images were not saved",
-            description:
-              "The prompt was stashed, but browser storage rejected its images. They will be missing if you reload.",
-            data: { hideCopyButton: true },
-          });
-        }
-      } else if (kept.length > 0) {
-        toastManager.add({
-          type: "warning",
-          title: "Stashed images did not attach",
-          description: `That prompt was restored or deleted before ${kept.length} image${kept.length === 1 ? "" : "s"} finished saving. Re-attach ${kept.length === 1 ? "it" : "them"} if you still need ${kept.length === 1 ? "it" : "them"}.`,
-          data: { hideCopyButton: true },
-        });
-      }
     };
     await stashAndEncode().finally(() => stashInFlightRef.current.delete(snapshotKey));
   };

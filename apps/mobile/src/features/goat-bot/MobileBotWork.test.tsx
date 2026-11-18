@@ -161,7 +161,11 @@ vi.mock("../../lib/appState", () => ({
   useReduceMotionEnabled: () => false,
 }));
 vi.mock("@react-navigation/native", () => ({ useIsFocused: () => true }));
-vi.mock("../../state/entities", () => ({ useThreadShell: () => null }));
+vi.mock("../../state/entities", () => ({
+  useThreadShell: () => null,
+  // No config: the Machines card asks as it does on a server without bot members.
+  useEnvironmentServerConfig: () => null,
+}));
 vi.mock("../../lib/copyTextWithHaptic", () => ({ tryCopyTextWithHaptic: async () => true }));
 vi.mock("@effect/atom-react", () => ({ useAtomValue: () => true }));
 // The header's trailing items render as buttons, so tests press Work where iOS shows it.
@@ -190,8 +194,13 @@ vi.mock("../../native/StackHeader", () => ({
 }));
 vi.mock("../../state/atom-registry", () => ({ appAtomRegistry: {} }));
 vi.mock("expo-crypto", () => ({ randomUUID: () => globalThis.crypto.randomUUID() }));
+vi.mock("react-native-keyboard-controller", () => ({
+  KeyboardEvents: { addListener: () => ({ remove: () => {} }) },
+}));
 vi.mock("../../state/channels", () => ({
   channelEnvironment: {
+    // Home's shared current work; its links are not read in this file.
+    homeCurrentOpenableWorkAtom: () => "home-current",
     listBotThreads: () => "task",
     listChildWork: () => "child",
     listBotArtifacts: () => "artifacts",
@@ -241,8 +250,9 @@ vi.mock("../../state/environments", () => ({
   }),
 }));
 vi.mock("./MobileBotStatusCard", () => ({ MobileBotStatusCard: () => null }));
-vi.mock("./goatBotHomeMode", () => ({
-  pickMobileGoatBotEnvironment: () => ({ environmentId: "env", connected: state.connected }),
+vi.mock("./goatBotHomeMode", async (original) => ({
+  ...(await original<typeof import("./goatBotHomeMode")>()),
+  pickMobileGoatBotHomeEnvironment: () => ({ environmentId: "env", connected: state.connected }),
 }));
 vi.mock("./useMobileGoatBotHomeMode", () => ({
   useMobileGoatBotHomeMode: () => ({ environments: [], botRef: { threadId: "bot" } }),

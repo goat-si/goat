@@ -4,7 +4,7 @@ import { environmentThreadDetails } from "../../state/threads";
 import { AudioPreview } from "../files/AudioPreview";
 import { onTestFinished } from "vite-plus/test";
 import { stubGlobal } from "../../../test/render";
-import { cdp } from "vite-plus/test/browser";
+import { cdp, userEvent } from "vite-plus/test/browser";
 import {
   NodeId,
   ProviderDriverKind,
@@ -19,7 +19,6 @@ import {
 } from "@goat/contracts";
 import { Profiler, StrictMode } from "react";
 import { describe, expect, it, vi } from "vite-plus/test";
-import { userEvent } from "vite-plus/test/browser";
 
 import "~/index.css";
 
@@ -44,7 +43,7 @@ import type { TimelineNavigation } from "./timelineViewport";
 import { rememberTimelinePosition } from "./timelineScrollAnchoring";
 
 const environmentQuery = vi.hoisted(() => ({
-  error: "Pull request not found",
+  error: "Pull request not found" as string | null,
   data: null as unknown,
 }));
 vi.mock(import("~/state/query"), async (original) => ({
@@ -73,6 +72,7 @@ vi.mock(import("~/assets/assetUrls"), async (original) => {
 });
 
 function setup({ scheduledTasks = [] as ReadonlyArray<{ id: string; title: string }> } = {}) {
+  environmentQuery.error = "Pull request not found";
   environmentQuery.data = { tasks: scheduledTasks };
 }
 

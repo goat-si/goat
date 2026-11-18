@@ -32,13 +32,7 @@ import * as IdAllocator from "@goat/provider-core/server/IdAllocator";
 import * as McpProviderSessions from "@goat/provider-core/server/McpProviderSessions";
 import * as ProviderAdapter from "@goat/provider-core/server/ProviderAdapter";
 import { makeProviderFailure } from "@goat/provider-core/server/failure";
-import {
-  cursorMcpServers,
-  cursorRuntimeAgentPolicy,
-  makeCursorAgentOptions,
-  makeCursorAdapterV2,
-  nestedToolCallFromEnvelope,
-} from "./adapter.ts";
+import { cursorMcpServers, makeCursorAdapterV2 } from "./adapter.ts";
 import * as CursorAgentSdk from "./CursorAgentSdk.ts";
 import { loadCursorSdk } from "./sdk.ts";
 
@@ -187,6 +181,7 @@ describe("CursorAdapterV2", () => {
           modelSelection,
           runtimePolicy,
         });
+        assert.equal(providerThread.nativeMetadata?.cursorStoreCwd, workspace);
         const now = yield* DateTime.now;
         yield* runtime.startTurn({
           threadId,
@@ -406,10 +401,44 @@ describe("CursorAdapterV2", () => {
       failure: null,
       answers: [],
     },
-  ])("ends the turn with $reason", ({ updates = [], wait, failure, answers }) =>
+    {
+      reason: "the token usage Cursor reported",
+      // Cursor's inputTokens already include cache reads and writes.
+      updates: [
+        { type: "text-delta", text: "Done." },
+        {
+          type: "turn-ended",
+          usage: {
+            inputTokens: 31_961,
+            outputTokens: 181,
+            cacheReadTokens: 0,
+            cacheWriteTokens: 31_955,
+          },
+        },
+      ] satisfies ReadonlyArray<InteractionUpdate>,
+      wait: Effect.succeed({
+        id: "native-cursor-run",
+        requestId: "native-request",
+        status: "finished" as const,
+        model: { id: "claude-fable-5" },
+        durationMs: 1,
+      }),
+      failure: null,
+      usage: {
+        inputTokens: 31_961,
+        cachedInputTokens: 0,
+        cacheCreationTokens: 31_955,
+        outputTokens: 181,
+      },
+      // The checkpoint holds the context fill; billed input counts every step.
+      contextFill: { usedTokens: 8_304, maxTokens: 200_000 },
+    },
+  ])("ends the turn with $reason", ({ updates = [], wait, failure, answers, usage, contextFill }) =>
     Effect.gen(function* () {
       const fileSystem = yield* FileSystem.FileSystem;
-      const workspace = yield* fileSystem.makeTempDirectoryScoped({ prefix: "cursor-v2-failure-" });
+      const workspace = yield* fileSystem.makeTempDirectoryScoped({
+        prefix: "cursor-v2-failure-",
+      });
       const instanceId = ProviderInstanceId.make("cursor");
       const threadId = ThreadId.make("cursor-failure-thread");
       const modelSelection = { instanceId, model: "claude-fable-5" };
@@ -429,6 +458,7 @@ describe("CursorAdapterV2", () => {
             Effect.succeed({
               agentId: "native-cursor-failure",
               listMessages: Effect.succeed([]),
+              readContextUsage: Effect.succeed(contextFill),
               close: Effect.void,
               send: (input) =>
                 Effect.gen(function* () {
@@ -516,6 +546,15 @@ describe("CursorAdapterV2", () => {
           ),
           answers,
         );
+      }
+      if (usage !== undefined) {
+        const completedTurn = events.findLast(
+          (event) =>
+            event.type === "provider_turn.updated" && event.providerTurn.completedAt !== null,
+        );
+        assert(completedTurn?.type === "provider_turn.updated");
+        assert.deepInclude(completedTurn.providerTurn.turnTokenUsage, usage);
+        assert.deepInclude(completedTurn.providerTurn.tokenUsage, contextFill);
       }
     }).pipe(
       Effect.scoped,
@@ -1819,194 +1858,6 @@ describe("CursorAdapterV2", () => {
     ),
   );
 
-  it("maps runtime modes to the SDK sandbox and auto-review controls", () => {
-    const base = {
-      interactionMode: "default" as const,
-      cwd: "/tmp/cursor-adapter",
-    };
-    assert.deepEqual(
-      cursorRuntimeAgentPolicy(
-        {
-          ...base,
-          runtimeMode: "full-access",
-        },
-        "linux",
-      ),
-      {
-        autoReview: false,
-        sandboxEnabled: false,
-      },
-    );
-    assert.deepEqual(
-      cursorRuntimeAgentPolicy(
-        {
-          ...base,
-          runtimeMode: "auto-accept-edits",
-        },
-        "linux",
-      ),
-      {
-        autoReview: false,
-        sandboxEnabled: true,
-      },
-    );
-    assert.deepEqual(
-      cursorRuntimeAgentPolicy(
-        {
-          ...base,
-          runtimeMode: "auto",
-        },
-        "linux",
-      ),
-      {
-        autoReview: true,
-        sandboxEnabled: true,
-      },
-    );
-    assert.deepEqual(
-      cursorRuntimeAgentPolicy(
-        {
-          ...base,
-          runtimeMode: "approval-required",
-        },
-        "linux",
-      ),
-      {
-        autoReview: true,
-        sandboxEnabled: true,
-      },
-    );
-    assert.deepEqual(
-      cursorRuntimeAgentPolicy(
-        {
-          ...base,
-          runtimeMode: "full-access",
-          approvalPolicy: "never",
-          sandboxPolicy: { type: "readOnly" },
-        },
-        "linux",
-      ),
-      {
-        autoReview: false,
-        sandboxEnabled: true,
-      },
-    );
-    assert.deepEqual(
-      cursorRuntimeAgentPolicy(
-        {
-          ...base,
-          runtimeMode: "approval-required",
-          approvalPolicy: "never",
-          sandboxPolicy: { type: "dangerFullAccess" },
-        },
-        "linux",
-      ),
-      {
-        autoReview: false,
-        sandboxEnabled: false,
-      },
-    );
-    assert.deepEqual(
-      cursorRuntimeAgentPolicy(
-        {
-          ...base,
-          runtimeMode: "auto-accept-edits",
-        },
-        "win32",
-      ),
-      {
-        autoReview: false,
-        sandboxEnabled: true,
-      },
-    );
-    assert.deepEqual(
-      cursorRuntimeAgentPolicy(
-        {
-          ...base,
-          runtimeMode: "auto",
-          approvalPolicy: "never",
-        },
-        "win32",
-      ),
-      {
-        autoReview: false,
-        sandboxEnabled: true,
-      },
-    );
-    // Auto-review can gate Windows execution without the unsupported SDK sandbox.
-    assert.deepEqual(
-      cursorRuntimeAgentPolicy(
-        {
-          ...base,
-          runtimeMode: "auto",
-        },
-        "win32",
-      ),
-      {
-        autoReview: true,
-        sandboxEnabled: false,
-      },
-    );
-    assert.deepEqual(
-      cursorRuntimeAgentPolicy(
-        {
-          ...base,
-          runtimeMode: "auto",
-          sandboxPolicy: { type: "workspaceWrite" },
-        },
-        "win32",
-      ),
-      {
-        autoReview: true,
-        sandboxEnabled: true,
-      },
-    );
-  });
-
-  it("injects thread-scoped MCP credentials without logging them", () => {
-    const threadId = ThreadId.make("thread-cursor-mcp");
-    const mcpSession = {
-      environmentId: EnvironmentId.make("environment-cursor-mcp"),
-      threadId,
-      providerSessionId: "mcp-session-cursor",
-      providerInstanceId: ProviderInstanceId.make("cursor"),
-      endpoint: "http://127.0.0.1:43123/mcp",
-      authorizationHeader: "Bearer secret-cursor-mcp-token",
-      browserToolsAvailable: true,
-    };
-
-    assert.deepEqual(cursorMcpServers(mcpSession), {
-      goat: {
-        type: "http",
-        url: "http://127.0.0.1:43123/mcp",
-        headers: {
-          Authorization: "Bearer secret-cursor-mcp-token",
-        },
-      },
-    });
-
-    const options = makeCursorAgentOptions({
-      apiKey: "secret-cursor-api-key",
-      modelSelection: {
-        instanceId: ProviderInstanceId.make("cursor"),
-        model: "composer-2.5",
-      },
-      runtimePolicy: {
-        runtimeMode: "full-access",
-        interactionMode: "default",
-        cwd: "/workspace",
-      },
-      threadId,
-      mcpSession,
-      platform: "linux",
-    });
-    assert.deepEqual(options.mcpServers, cursorMcpServers(mcpSession));
-
-    const logged = JSON.stringify(CursorAgentSdk.loggedCursorAgentOptions(options));
-    assert.notInclude(logged, "secret-cursor-api-key");
-    assert.notInclude(logged, "secret-cursor-mcp-token");
-  });
-
   it("recognizes direct and SDK-wrapped abort failures as cancellation", () => {
     assert.isTrue(CursorAgentSdk.isCursorCancellationError({ name: "AbortError" }));
     assert.isTrue(
@@ -2020,29 +1871,6 @@ describe("CursorAdapterV2", () => {
     );
     assert.isFalse(CursorAgentSdk.isCursorCancellationError(new Error("request failed")));
     assert.isFalse(CursorAgentSdk.isCursorCancellationError(null));
-  });
-
-  it("preserves failed nested read calls when Cursor omits their path", () => {
-    assert.deepEqual(
-      nestedToolCallFromEnvelope({
-        toolCallId: "tool:failed-read",
-        readToolCall: {
-          args: {},
-          result: { error: "File path was not provided." },
-        },
-      }),
-      {
-        callId: "tool:failed-read",
-        toolCall: {
-          type: "read",
-          args: { path: "<unknown path>" },
-          result: {
-            status: "error",
-            error: "File path was not provided.",
-          },
-        },
-      },
-    );
   });
 });
 

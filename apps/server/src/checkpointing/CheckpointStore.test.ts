@@ -1,6 +1,7 @@
 // @effect-diagnostics nodeBuiltinImport:off
 import * as NodePath from "node:path";
 
+import * as NodeCrypto from "@effect/platform-node/NodeCrypto";
 import * as NodeServices from "@effect/platform-node/NodeServices";
 import { it } from "@effect/vitest";
 import { ThreadId, type VcsError } from "@goat/contracts";
@@ -22,17 +23,19 @@ import * as ServerConfig from "../config.ts";
 const layerServerConfig = ServerConfig.ServerConfig.layerTest(process.cwd(), {
   prefix: "goat-checkpoint-store-test-",
 });
-const layerVcsProcessTest = VcsProcess.layer.pipe(Layer.provide(NodeServices.layer));
+const layerVcsProcessTest = VcsProcess.layer.pipe(
+  Layer.provide(Layer.mergeAll(NodeServices.layer, NodeCrypto.layer)),
+);
 const layerVcsDriverTest = VcsDriverRegistry.layer.pipe(Layer.provide(layerVcsProcessTest));
 const layerCheckpointStoreTest = CheckpointStore.layer.pipe(
   Layer.provideMerge(layerVcsDriverTest),
-  Layer.provideMerge(NodeServices.layer),
+  Layer.provideMerge(Layer.mergeAll(NodeServices.layer, NodeCrypto.layer)),
 );
 const layerTest = layerCheckpointStoreTest.pipe(
   Layer.provideMerge(layerVcsProcessTest),
   Layer.provideMerge(layerVcsDriverTest),
   Layer.provideMerge(layerServerConfig),
-  Layer.provideMerge(NodeServices.layer),
+  Layer.provideMerge(Layer.mergeAll(NodeServices.layer, NodeCrypto.layer)),
 );
 
 function makeTmpDir(
@@ -111,6 +114,19 @@ it.layer(layerTest)("CheckpointStore.layer", (it) => {
       yield* fileSystem.makeDirectory(nested, { recursive: true });
       const checkpointStore = yield* CheckpointStore.CheckpointStore;
       expect(yield* checkpointStore.isGitRepository(nested)).toBe(true);
+    }),
+  );
+  it.effect("fails the repository probe that other callers read as no repository", () =>
+    Effect.gen(function* () {
+      const tmp = yield* makeTmpDir();
+      yield* git(tmp, ["init"]);
+      yield* writeTextFile(NodePath.join(tmp, ".git", "config"), "invalid config\n");
+      const registry = yield* VcsDriverRegistry.VcsDriverRegistry;
+      const checkpointStore = yield* CheckpointStore.CheckpointStore;
+
+      expect(yield* registry.detect({ cwd: tmp })).toBeNull();
+      const probe = yield* Effect.flip(checkpointStore.isGitRepository(tmp));
+      expect(probe._tag).toBe("VcsProcessExitError");
     }),
   );
   describe("diffCheckpoints", () => {

@@ -35,6 +35,7 @@ import { McpInvocationContext, type McpInvocationScope } from "../../McpInvocati
 import { liveThreadShell } from "../../McpToolAccess.testkit.ts";
 import * as OrchestratorMcpService from "../../OrchestratorMcpService.ts";
 import * as ThreadReplicaService from "../../ThreadReplicaService.ts";
+import * as McpHttpServer from "../../McpHttpServer.ts";
 
 const CALLER = ThreadId.make("thread:describe-host");
 const base = {
@@ -136,7 +137,7 @@ const describeAs = (options: Options, calls: ReadonlyArray<readonly [string, obj
     const dispatch = yield* SshRemoteDispatch.SshRemoteDispatch;
     const served = catalog.pipe(
       Layer.provide(Layer.mergeAll(dependencies, overrides(dispatch))),
-      Layer.provideMerge(McpServer.McpServer.layer),
+      Layer.provideMerge(McpHttpServer.layerInProcessMcpServer),
     );
     return yield* Effect.gen(function* () {
       const server = yield* McpServer.McpServer;

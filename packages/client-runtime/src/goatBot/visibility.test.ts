@@ -471,3 +471,77 @@ describe("resolveRemoteBotWork", () => {
     }
   });
 });
+
+it("hides current Home links only with matching remote launcher provenance", () => {
+  const refs = [
+    {
+      taskId: "task" as never,
+      environmentId: HOME,
+      threadId: ThreadId.make("worker"),
+      kind: "worker" as const,
+    },
+    {
+      taskId: "task" as never,
+      environmentId: HOME,
+      threadId: ThreadId.make("coding"),
+      kind: "coding" as const,
+    },
+    ...["remote-coding", "wrong", "missing"].map((id) => ({
+      taskId: "task" as never,
+      environmentId: REMOTE,
+      threadId: ThreadId.make(id),
+      kind: "remote" as const,
+      launchedFrom: { environmentId: HOME, threadId: ThreadId.make(SESSION) },
+    })),
+  ];
+  const threads = [
+    thread("worker"),
+    thread("coding", { launchedBy: SESSION, workKind: "coding" }),
+    thread("remote-coding", {
+      environmentId: REMOTE,
+      launchedBy: SESSION,
+      launcherEnvironment: HOME,
+      via: "ssh_thread_launch",
+      workKind: "coding",
+    }),
+    thread("wrong", {
+      environmentId: REMOTE,
+      launchedBy: "someone-else",
+      launcherEnvironment: HOME,
+      via: "ssh_thread_launch",
+    }),
+    thread("missing", { environmentId: REMOTE, launchedBy: SESSION, via: "ssh_thread_launch" }),
+  ];
+  const visibleKeys = (links: typeof refs) =>
+    [...goatBotObservationThreadKeys({ threads, homeWork: links })]
+      .filter((value) => threads.some((t) => key(t.id, t.environmentId) === value))
+      .toSorted();
+  expect(visibleKeys(refs)).toEqual(
+    [key("worker"), key("coding"), key("remote-coding", REMOTE)].toSorted(),
+  );
+  expect(visibleKeys(refs.filter((ref) => ref.threadId !== "remote-coding"))).toEqual(
+    [key("worker"), key("coding")].toSorted(),
+  );
+});
+
+it("does not carry the bot observation closure across a delegated child's top-level launch", () => {
+  const threads = [
+    thread(SESSION),
+    thread("delegate", { launchedBy: SESSION, via: "delegate_task" }),
+    thread("launch", { launchedBy: "delegate", via: "thread_launch" }),
+  ];
+  expect([...goatBotObservationThreadKeys({ threads, homeWork: [] })]).not.toContain(key("launch"));
+  expect([
+    ...goatBotObservationThreadKeys({
+      threads,
+      homeWork: [
+        {
+          taskId: "task" as never,
+          environmentId: HOME,
+          threadId: ThreadId.make("launch"),
+          kind: "coding",
+        },
+      ],
+    }),
+  ]).toContain(key("launch"));
+});

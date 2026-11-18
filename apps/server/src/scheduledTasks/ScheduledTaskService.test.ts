@@ -440,6 +440,37 @@ it.effect(
     ),
 );
 
+// Migration 080 backfills thread_mode from thread_id; upstream's later reader trusts the column.
+it.effect("saves thread_mode by the same rule as migration 080 on create and every edit", () =>
+  withWebhookService(({ service, sql }) =>
+    Effect.gen(function* () {
+      const input = yield* webhookTaskInput();
+      const mode = sql<{ thread_mode: string }>`
+        SELECT thread_mode FROM scheduled_tasks WHERE task_id = ${input.id}`.pipe(
+        Effect.map((rows) => rows.map((row) => row.thread_mode)),
+      );
+      yield* service.upsert({ ...input, threadId: ThreadId.make("bound") });
+      assert.deepEqual(yield* mode, ["continue"]);
+      // The old call shape no longer unbinds: the stored thread and mode are kept.
+      const kept = yield* service.upsert({ ...input, threadId: null });
+      assert.deepEqual([kept.task.threadId, yield* mode], ["bound", ["continue"]]);
+      yield* service.upsert({ ...input, threadId: null, threadMode: "new_thread" });
+      assert.deepEqual(yield* mode, ["new_thread"]);
+      yield* service.upsert({ ...input, threadId: ThreadId.make("bound") });
+      assert.deepEqual(yield* mode, ["continue"]);
+      // A create without a mode still follows the thread it names.
+      const unbound = yield* service.upsert({ ...input, id: undefined, threadId: null });
+      assert.equal(unbound.task.threadMode, "new_thread");
+      const bound = yield* service.upsert({
+        ...input,
+        id: undefined,
+        threadId: ThreadId.make("other"),
+      });
+      assert.equal(bound.task.threadMode, "continue");
+    }),
+  ),
+);
+
 it.effect("a bound run follows its thread when promotion moves it mid-send", () =>
   Effect.gen(function* () {
     const scratch = ProjectId.make("project:scratch");

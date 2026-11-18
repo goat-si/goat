@@ -178,3 +178,22 @@ describe("presentConnectionDiagnosis", () => {
     expect(diagnosis?.facts.map(([label]) => label)).not.toContain("HTTP status");
   });
 });
+it("gives a browser whose own server ended its cookie session one step: reload and pair again (#3473, contract)", () => {
+  const refusal = {
+    reason: "authentication",
+    detail: "This browser is no longer signed in to Mac mini.",
+    hop: "server",
+    via: "direct",
+  } as const;
+  expect(
+    diagnose(backoff(new ConnectionBlockedError({ ...refusal, sessionEnded: true })), "direct"),
+  ).toMatchObject({
+    headline: "GOAT on Mac mini did not accept this device",
+    steps: ["Reload this page, then pair this browser again."],
+  });
+  // A bearer refusal keeps the server's generic steps.
+  expect(diagnose(backoff(new ConnectionBlockedError(refusal)), "direct")?.steps).toEqual([
+    "Make sure GOAT is running on Mac mini.",
+    "Retry. If it keeps failing, copy the diagnostics.",
+  ]);
+});

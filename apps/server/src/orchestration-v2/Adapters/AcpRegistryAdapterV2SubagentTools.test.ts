@@ -5,6 +5,7 @@ import {
   claudeMarker,
   claudeChild,
 } from "./AcpClaudeReplay.testkit.ts";
+import * as NodeCrypto from "@effect/platform-node/NodeCrypto";
 import * as NodeServices from "@effect/platform-node/NodeServices";
 import { assert, describe, it } from "@effect/vitest";
 import * as Fiber from "effect/Fiber";
@@ -18,7 +19,9 @@ import * as TestProviderHost from "@goat/provider-testing/TestProviderHost";
 import * as ServerSettings from "../../serverSettings.ts";
 import * as IdAllocator from "@goat/provider-core/server/IdAllocator";
 
-const layerHost = TestProviderHost.layer().pipe(Layer.provide(NodeServices.layer));
+const layerHost = TestProviderHost.layer().pipe(
+  Layer.provide(Layer.mergeAll(NodeServices.layer, NodeCrypto.layer)),
+);
 
 const layerRegistry = Layer.succeed(
   HttpClient.HttpClient,
@@ -58,6 +61,7 @@ const layerRegistry = Layer.succeed(
 
 const layerTest = Layer.mergeAll(
   NodeServices.layer,
+  NodeCrypto.layer,
   IdAllocator.layer,
   McpProviderSessions.layer,
   layerHost,
@@ -200,6 +204,69 @@ describe("AcpRegistryAdapterV2SubagentTools", () => {
           (event) => event.type === "message.updated" && event.message.text.includes("onetwo"),
         ),
       );
+    }).pipe(Effect.provide(layerTest), Effect.scoped),
+  );
+
+  it.effect("replaces streamed root tool output with a later content list", () =>
+    Effect.gen(function* () {
+      const { update } = claudeFrames;
+      const text = (value: string) => [{ type: "content", content: { type: "text", text: value } }];
+      const session = yield* openClaudeReplaySession([
+        ...claudeFrames.open,
+        ...claudeFrames.prompt(1),
+        update(CLAUDE_ROOT_SESSION, {
+          sessionUpdate: "tool_call_update",
+          toolCallId: "root-tool",
+          title: "Stream",
+          status: "in_progress",
+          content: text("one"),
+        }),
+        update(CLAUDE_ROOT_SESSION, {
+          sessionUpdate: "tool_call_content_chunk",
+          toolCallId: "root-tool",
+          content: { type: "content", content: { type: "text", text: "two" } },
+        }),
+        update(CLAUDE_ROOT_SESSION, {
+          sessionUpdate: "tool_call_update",
+          toolCallId: "root-tool",
+          status: "completed",
+          content: text("replacement"),
+        }),
+        update(CLAUDE_ROOT_SESSION, {
+          sessionUpdate: "tool_call_content_chunk",
+          toolCallId: "root-tool",
+          content: { type: "content", content: { type: "text", text: "-more" } },
+        }),
+        update(CLAUDE_ROOT_SESSION, {
+          sessionUpdate: "tool_call_content_chunk",
+          toolCallId: "root-tool",
+          content: {
+            type: "diff",
+            changes: [{ operation: "add", path: "/a.txt" }],
+            patch: { format: "git_patch", text: "PATCH" },
+          },
+        }),
+        claudeMarker("tools complete"),
+        claudeFrames.idle("end_turn"),
+        claudeFrames.closeRequest,
+        claudeFrames.closed,
+      ]);
+      yield* session.runtime.startTurn(session.turnInput(1));
+      const events = yield* session.throughMarker("tools complete");
+      const outputs = events.flatMap((event) =>
+        event.type === "turn_item.updated" &&
+        event.turnItem.nativeItemRef?.nativeId === "root-tool" &&
+        "output" in event.turnItem
+          ? [event.turnItem.output]
+          : [],
+      );
+      assert.deepEqual(outputs, [
+        text("one"),
+        text("onetwo"),
+        text("replacement"),
+        text("replacement-more"),
+        { type: "Text", text: "replacement-morePATCH" },
+      ]);
     }).pipe(Effect.provide(layerTest), Effect.scoped),
   );
 

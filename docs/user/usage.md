@@ -132,8 +132,8 @@ Each group has one row per account with its status (Ready, Blocked and when it f
 Paused, or Sign in again) and how much is left in each window with the time until it resets. Column
 headers show how much the whole group has left. Ready accounts with the most quota left come first,
 then blocked accounts by which frees soonest. A reading older than five minutes counts as no reading
-until Limits refreshes. Codex and Claude accounts with banked reset credits show **Use reset** in
-their row. Claude resets are not available when the server runs on macOS, where Claude keeps its
+until Limits refreshes. Codex accounts with banked reset credits show **Use reset** in their row. Claude lists each
+available kind of reset with its label, count, and a **Use** action; its description appears in the confirmation dialog. Claude resets are not available when the server runs on macOS, where Claude keeps its
 login in the Keychain. On mobile, tap a row for the account's plan, where it is signed in, and its
 reset time.
 
@@ -169,6 +169,9 @@ with Cursor's default API endpoint. For a custom endpoint, use an explicit token
 Grok reports the remaining subscription allowance and reset time for its current billing period
 after signing in with `grok login`. Explicit `XAI_API_KEY` connections and custom authentication
 or endpoint configurations do not report subscription limits.
+
+Muse Code reports its session and weekly windows and its tier once the Muse CLI has run in a thread.
+Until then it shows no limits. Readings are not kept across a server restart.
 
 API-key accounts may not report subscription limits. This also applies to Claude connections
 using a proxy through `ANTHROPIC_AUTH_TOKEN`.
@@ -297,7 +300,8 @@ the limit off.
 To see pooled accounts, open **Settings → Providers → Usage providers → Add CLIProxyAPI hub**. Choose the
 environment that will connect to the hub and enter its URL and management key.
 
-The accounts appear under **Usage → Limits**. Codex accounts show banked reset credits; select an
+The hub's Codex, Claude, xAI (shown as Grok) and Antigravity accounts appear under **Usage → Limits**;
+accounts for other providers are not read. Codex accounts show banked reset credits; select an
 account and choose **Use reset** to redeem one. No hub plugin is required.
 
 This connection supplies usage information; configure

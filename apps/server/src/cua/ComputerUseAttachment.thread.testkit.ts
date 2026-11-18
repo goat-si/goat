@@ -1,3 +1,4 @@
+import * as NodeCrypto from "@effect/platform-node/NodeCrypto";
 import * as NodeServices from "@effect/platform-node/NodeServices";
 import { type CuaDriverMcpConfiguration, ProviderDriverKind } from "@goat/contracts";
 import type { McpProviderSessionConfig } from "@goat/provider-core/server/mcpSession";
@@ -16,6 +17,7 @@ export const threadAttachmentLayer = ComputerUseLeases.layer.pipe(
     Layer.mergeAll(
       database,
       NodeServices.layer,
+      NodeCrypto.layer,
       ServerSettings.ServerSettingsService.layerTest({ enableCua: true }),
     ),
   ),

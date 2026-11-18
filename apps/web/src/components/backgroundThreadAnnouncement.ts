@@ -1,7 +1,10 @@
 import type { OrchestrationV2RunStatus, RunId } from "@goat/contracts";
 
 import type { SidebarThreadSummary } from "../types";
-import { runOutcomeText, THREAD_STATUS_TEXT } from "./chat/threadActivityAnnouncement";
+import {
+  runOutcomeText,
+  THREAD_STATUS_TEXT,
+} from "@goat/client-runtime/state/thread-activity-announcement";
 
 export interface BackgroundThreadSnapshot {
   readonly key: string;

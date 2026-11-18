@@ -23,6 +23,7 @@ interface CodexStateThread {
   readonly createdAtMs: number;
   readonly title: string;
   readonly model: string | null;
+  readonly projectId: string | null;
 }
 
 interface CodexStateProject {
@@ -33,6 +34,7 @@ interface CodexStateSnapshot {
   readonly threads: ReadonlyArray<CodexStateThread>;
   readonly projects: ReadonlyArray<CodexStateProject>;
   readonly projectRoots: ReadonlyArray<string>;
+  readonly rootsByProject: ReadonlyMap<string, ReadonlyArray<string>>;
   readonly complete: boolean;
 }
 
@@ -141,6 +143,7 @@ const emptySnapshot = (complete = true): CodexStateSnapshot => ({
   threads: [],
   projects: [],
   projectRoots: [],
+  rootsByProject: new Map(),
   complete,
 });
 
@@ -172,7 +175,7 @@ function readSnapshot(databasePath: string): CodexStateSnapshot {
     const optional = (name: string) => (columns.has(name) ? name : `NULL AS ${name}`);
     const rows = database
       .prepare(
-        `SELECT id, cwd, updated_at, source, ${optional("created_at")}, ${optional("title")}, ${optional("model")} FROM threads WHERE archived = 0 ORDER BY updated_at DESC LIMIT ?`,
+        `SELECT id, cwd, updated_at, source, ${optional("created_at")}, ${optional("title")}, ${optional("model")}, ${optional("project_id")} FROM threads WHERE archived = 0 ORDER BY updated_at DESC LIMIT ?`,
       )
       .all(MAX_CODEX_STATE_THREADS + 1) as unknown as ReadonlyArray<{
       id: unknown;
@@ -182,6 +185,7 @@ function readSnapshot(databasePath: string): CodexStateSnapshot {
       created_at: unknown;
       title: unknown;
       model: unknown;
+      project_id: unknown;
     }>;
     const threadRows = rows.slice(0, MAX_CODEX_STATE_THREADS);
     if (rows.length > MAX_CODEX_STATE_THREADS) complete = false;
@@ -189,7 +193,7 @@ function readSnapshot(databasePath: string): CodexStateSnapshot {
     const collectProjects = () => {
       const allRows = database
         .prepare(
-          "SELECT p.id AS id, r.path AS path FROM projects p JOIN project_roots r ON r.project_id = p.id LIMIT ?",
+          "SELECT p.id AS id, r.path AS path FROM projects p JOIN project_roots r ON r.project_id = p.id ORDER BY r.project_id, r.position LIMIT ?",
         )
         .all(MAX_CODEX_PROJECT_ROOTS + 1) as unknown as ReadonlyArray<{
         id: unknown;
@@ -240,6 +244,7 @@ function readSnapshot(databasePath: string): CodexStateSnapshot {
           title: typeof row.title === "string" ? row.title.trim() : "",
           model:
             typeof row.model === "string" && row.model.trim().length > 0 ? row.model.trim() : null,
+          projectId: typeof row.project_id === "string" ? row.project_id : null,
         },
       ];
     });
@@ -248,6 +253,7 @@ function readSnapshot(databasePath: string): CodexStateSnapshot {
       threads,
       projects: projectList,
       projectRoots: projectList.flatMap((project) => project.roots),
+      rootsByProject: new Map([...projects].map(([id, project]) => [id, project.roots])),
       complete,
     };
   } finally {
@@ -282,6 +288,7 @@ const readCodexStates = Effect.fn("CodexStateDatabase.readAll")(function* (
 function buildCodexCwdByThread(
   homes: ReadonlyArray<CodexHome>,
   states: ReadonlyMap<string, CodexStateSnapshot>,
+  isExcludedCwd: (cwd: string) => boolean,
 ): ReadonlyMap<string, string> {
   const cwdByThread = new Map<string, string>();
   for (const home of homes) {
@@ -289,9 +296,14 @@ function buildCodexCwdByThread(
     if (state === undefined) continue;
     const roots = makeProjectRootLookup(state.projectRoots);
     for (const thread of state.threads) {
+      // Moving a chat into a project records only its project_id; its cwd stays where it started.
+      const movedRoot =
+        thread.projectId === null ? undefined : state.rootsByProject.get(thread.projectId)?.[0];
       cwdByThread.set(
         `${home.providerInstanceId}\0${thread.id}`,
-        resolveProjectRoot(thread.cwd, roots) ?? thread.cwd,
+        movedRoot !== undefined && isExcludedCwd(thread.cwd)
+          ? movedRoot
+          : (resolveProjectRoot(thread.cwd, roots) ?? thread.cwd),
       );
     }
   }
@@ -366,11 +378,12 @@ function buildCodexCandidateGroups(
 
 export const readCodexProjectState = Effect.fn("CodexStateDatabase.readProjectState")(function* (
   homes: ReadonlyArray<CodexHome>,
+  isExcludedCwd: (cwd: string) => boolean = () => false,
 ) {
   const stateByHome = yield* readCodexStates(homes);
   return {
     stateByHome,
-    cwdByThread: buildCodexCwdByThread(homes, stateByHome),
+    cwdByThread: buildCodexCwdByThread(homes, stateByHome, isExcludedCwd),
     complete: [...stateByHome.values()].every((state) => state.complete),
   };
 });

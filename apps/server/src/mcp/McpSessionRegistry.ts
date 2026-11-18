@@ -9,7 +9,8 @@ import {
 } from "@goat/contracts";
 import * as Clock from "effect/Clock";
 import * as Context from "effect/Context";
-import * as Crypto from "effect/Crypto";
+import * as Digest from "effect/crypto/Digest";
+import * as SecureRandom from "effect/crypto/SecureRandom";
 import * as Effect from "effect/Effect";
 import * as FileSystem from "effect/FileSystem";
 import * as Layer from "effect/Layer";
@@ -280,7 +281,8 @@ const getHttpMcpEndpointHost = (address: NetAddress.IpAddress): string =>
 const makeWithOptions = Effect.fn("McpSessionRegistry.make")(function* (
   options: McpSessionRegistryOptions = {},
 ) {
-  const crypto = yield* Crypto.Crypto;
+  const random = yield* SecureRandom.SecureRandom;
+  const digest = yield* Digest.Digest;
   const environment = yield* ServerEnvironment.ServerEnvironment;
   const environmentId = yield* environment.getEnvironmentId;
   const httpServer = yield* HttpServer.HttpServer;
@@ -288,7 +290,7 @@ const makeWithOptions = Effect.fn("McpSessionRegistry.make")(function* (
   const changes = yield* PubSub.sliding<void>(1);
   const currentTimeMillis = options.now ? Effect.sync(options.now) : Clock.currentTimeMillis;
   const livenessWindowMs = options.livenessWindowMs ?? DEFAULT_LIVENESS_WINDOW_MS;
-  const runTag = yield* crypto.randomBytes(6).pipe(Effect.map(tokenFromBytes), Effect.orDie);
+  const runTag = yield* random.randomBytes(6).pipe(Effect.map(tokenFromBytes), Effect.orDie);
   registerCredentialRunTag(runTag);
   const endpoint = NetAddress.isInetAddress(httpServer.address)
     ? "http://" +
@@ -299,8 +301,8 @@ const makeWithOptions = Effect.fn("McpSessionRegistry.make")(function* (
     : "http://127.0.0.1/mcp";
 
   const hashToken = (token: string) =>
-    crypto
-      .digest("SHA-256", new TextEncoder().encode(token))
+    digest
+      .digest(Digest.sha256, new TextEncoder().encode(token))
       .pipe(Effect.map(bytesToHex), Effect.orDie);
 
   const isIdle = (record: CredentialRecord, timestamp: number) =>
@@ -361,9 +363,9 @@ const makeWithOptions = Effect.fn("McpSessionRegistry.make")(function* (
     function* (request) {
       const issuedAt = yield* currentTimeMillis;
       yield* expireDetached(issuedAt);
-      const freshId = yield* crypto.randomUUIDv4().pipe(Effect.orDie);
+      const freshId = yield* random.uuidV4().pipe(Effect.orDie);
       const freshToken =
-        runTag + (yield* crypto.randomBytes(32).pipe(Effect.map(tokenFromBytes), Effect.orDie));
+        runTag + (yield* random.randomBytes(32).pipe(Effect.map(tokenFromBytes), Effect.orDie));
       const renewToken =
         request.renew === undefined ? undefined : rawTokenOf(request.renew.authorizationHeader);
       const renewHash =

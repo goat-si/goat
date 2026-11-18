@@ -5,7 +5,7 @@ import {
 } from "@goat/contracts";
 import * as Clock from "effect/Clock";
 import * as Context from "effect/Context";
-import * as Crypto from "effect/Crypto";
+import * as Digest from "effect/crypto/Digest";
 import * as Deferred from "effect/Deferred";
 import * as Effect from "effect/Effect";
 import * as Exit from "effect/Exit";
@@ -91,7 +91,7 @@ const make = Effect.gen(function* () {
   const config = yield* ServerConfig.ServerConfig;
   const fs = yield* FileSystem.FileSystem;
   const path = yield* Path.Path;
-  const crypto = yield* Crypto.Crypto;
+  const digest = yield* Digest.Digest;
   const environmentId = yield* environment.getEnvironmentId;
   const stateFile = path.join(config.stateDir, STATE_FILE);
   const status = yield* Ref.make<OpenCodexUpdateStatus | undefined>(undefined);
@@ -654,7 +654,7 @@ const make = Effect.gen(function* () {
       isRolloutEligible({
         channel: "stable",
         bucket: yield* rolloutBucket(environmentId, latest.version).pipe(
-          Effect.provideService(Crypto.Crypto, crypto),
+          Effect.provideService(Digest.Digest, digest),
         ),
         publishedAt: latest.publishedAt,
         now,

@@ -9,6 +9,8 @@ import {
   extractDevinSubagentUpdate,
 } from "./devinAcp.ts";
 import { extractDroidElicitationForm } from "./droidAcp.ts";
+import { extractOmpElicitationForm } from "./ompAcp.ts";
+import { extractOpenCodeElicitationForm } from "./opencodeAcp.ts";
 import {
   copilotClientCapabilitiesMeta,
   extractCopilotSubagentUpdate,
@@ -20,7 +22,7 @@ import { readCustomModelEntries } from "@goat/shared/model";
 import { AcpRegistrySettings } from "../settings.ts";
 import * as HostProcess from "@goat/shared/HostProcess";
 import { resolveSelfInvocation, type SelfInvocation } from "@goat/shared/nodeRuntime";
-import * as Crypto from "effect/Crypto";
+import * as SecureRandom from "effect/crypto/SecureRandom";
 import * as Effect from "effect/Effect";
 import * as FileSystem from "effect/FileSystem";
 import * as Path from "effect/Path";
@@ -41,6 +43,12 @@ import {
   normalizeAcpRegistryWebUrl,
 } from "./probe.ts";
 import * as AcpRegistrySupport from "./AcpRegistrySupport.ts";
+import {
+  acpRegistryEnvironmentKey,
+  acpRegistrySessionEnvironment,
+  configurationOrigin,
+  withConfigurationOrigin,
+} from "./sessionEnvironmentKey.ts";
 import * as AcpRegistryRuntimeCoordinator from "./AcpRegistryRuntimeCoordinator.ts";
 import * as AcpSessionRuntime from "@goat/provider-acp/server/AcpSessionRuntime";
 import { makeAcpNativeLoggerFactory } from "@goat/provider-acp/server/nativeLogging";
@@ -71,6 +79,7 @@ export interface AcpRegistryAdapterV2Options {
   readonly instanceId: Parameters<typeof makeAcpAdapterV2>[0]["instanceId"];
   readonly settings: AcpRegistrySettings;
   readonly environment: NodeJS.ProcessEnv;
+  readonly currentEnvironment?: Effect.Effect<NodeJS.ProcessEnv>;
   readonly selfInvocation: SelfInvocation;
   readonly nativeLogging?: Parameters<typeof makeAcpAdapterV2>[0]["nativeLogging"];
   readonly makeRuntime?: (
@@ -78,7 +87,7 @@ export interface AcpRegistryAdapterV2Options {
   ) => Effect.Effect<
     AcpSessionRuntime.AcpSessionRuntime["Service"],
     EffectAcpErrors.AcpError,
-    ChildProcessSpawner.ChildProcessSpawner | Crypto.Crypto | Scope.Scope
+    ChildProcessSpawner.ChildProcessSpawner | SecureRandom.SecureRandom | Scope.Scope
   >;
   readonly continuationRequests?: Parameters<typeof makeAcpAdapterV2>[0]["continuationRequests"];
   readonly assertComplete?: Effect.Effect<void, EffectAcpErrors.AcpError>;
@@ -131,42 +140,28 @@ export function acpRegistryPromptFailure(agentId: string, cause: unknown) {
   });
 }
 
-function makeAcpRegistryRuntime(
-  options: AcpRegistryAdapterV2Options,
-  catalog: AcpRegistrySupport.AcpRegistryCatalog["Service"],
-) {
+function makeAcpRegistryRuntime(options: AcpRegistryAdapterV2Options) {
   return (
     input: AcpAdapterV2RuntimeInput,
   ): Effect.Effect<
     AcpSessionRuntime.AcpSessionRuntime["Service"],
     EffectAcpErrors.AcpError,
-    ChildProcessSpawner.ChildProcessSpawner | Crypto.Crypto | Scope.Scope
+    ChildProcessSpawner.ChildProcessSpawner | SecureRandom.SecureRandom | Scope.Scope
   > =>
     Effect.gen(function* () {
-      const { processEnvironment, ...runtimeInput } = input;
-      const resolved = yield* catalog
-        .resolve(options.settings, input.cwd, options.environment)
-        .pipe(
-          Effect.mapError(
-            (cause) =>
-              new EffectAcpErrors.AcpSpawnError({
-                command: options.settings.agentId || ACP_REGISTRY_PROVIDER,
-                cause,
-              }),
-          ),
-        );
+      const { processEnvironment, sessionEnvironment, sessionLaunch, ...runtimeInput } = input;
+      const resolved = sessionLaunch as AcpRegistrySupport.ResolvedAcpRegistryAgent;
+      const spawn = { ...resolved.spawn, cwd: input.cwd };
       const context = yield* Layer.build(
         AcpSessionRuntime.layer({
           ...runtimeInput,
+          sessionEnvironment,
           spawn:
             processEnvironment === undefined
-              ? resolved.spawn
+              ? spawn
               : {
-                  ...resolved.spawn,
-                  env: McpProviderSession.mergeThreadEnvironment(
-                    resolved.spawn.env,
-                    processEnvironment,
-                  ),
+                  ...spawn,
+                  env: McpProviderSession.mergeThreadEnvironment(spawn.env, processEnvironment),
                 },
           ...(options.settings.authMethodId ? { authMethodId: options.settings.authMethodId } : {}),
           customModels: readCustomModelEntries(options.settings.customModels).map(
@@ -174,9 +169,18 @@ function makeAcpRegistryRuntime(
           ),
         }),
       );
-      return yield* Effect.service(AcpSessionRuntime.AcpSessionRuntime).pipe(
+      const runtime = yield* Effect.service(AcpSessionRuntime.AcpSessionRuntime).pipe(
         Effect.provide(context),
       );
+      if (sessionEnvironment === undefined) return runtime;
+      // The configuration this session reports names the environment it runs with.
+      const environmentKey = acpRegistryEnvironmentKey(sessionEnvironment);
+      return {
+        ...runtime,
+        getConfigOptions: runtime.getConfigOptions.pipe(
+          Effect.map((configOptions) => withConfigurationOrigin(configOptions, environmentKey)),
+        ),
+      };
     });
 }
 
@@ -190,6 +194,16 @@ export const makeAcpRegistryAdapterV2 = Effect.fn("makeAcpRegistryAdapterV2")(fu
   const registryAgentId = options.settings.source === "local" ? "" : options.settings.agentId;
   const startupKey =
     options.settings.source === "local" ? `local:${options.instanceId}` : registryAgentId;
+  const isOmp =
+    options.settings.source === "local" &&
+    /^omp(\.exe|\.cmd)?$/i.test(options.settings.commandPath.split(/[\\/]/).pop() ?? "");
+  const isOpenCode =
+    registryAgentId === "opencode" ||
+    registryAgentId === "opencode-v2" ||
+    (options.settings.source === "local" &&
+      /^opencode(?:-v2)?(\.exe|\.cmd)?$/i.test(
+        options.settings.commandPath.split(/[\\/]/).pop() ?? "",
+      ));
   // Cloud auto setup adds Devin as a local `devin acp` command, so match the binary too.
   const isDevin =
     registryAgentId === "devin" ||
@@ -206,16 +220,8 @@ export const makeAcpRegistryAdapterV2 = Effect.fn("makeAcpRegistryAdapterV2")(fu
       /^claude-agent-acp(\.exe|\.cmd)?$/i.test(
         options.settings.commandPath.split(/[\\/]/).pop() ?? "",
       ));
-  const runtimeOptions = isClaude
-    ? {
-        ...options,
-        environment: {
-          ...options.environment,
-          CLAUDE_AGENT_ACP_EXPERIMENTAL_V2:
-            options.environment.CLAUDE_AGENT_ACP_EXPERIMENTAL_V2 ?? "1",
-        },
-      }
-    : options;
+  const withClaudeEnvironment = (environment: NodeJS.ProcessEnv) =>
+    acpRegistrySessionEnvironment(options.settings, environment);
   const copilotRouting = isCopilot ? makeCopilotSubagentRouting() : undefined;
   const flavor: AcpAdapterV2Flavor = {
     driver: ACP_REGISTRY_PROVIDER,
@@ -227,10 +233,15 @@ export const makeAcpRegistryAdapterV2 = Effect.fn("makeAcpRegistryAdapterV2")(fu
         }
       : AcpProviderCapabilitiesV2,
     customModels: readCustomModelEntries(options.settings.customModels).map((entry) => entry.slug),
+    compactViaAdvertisedCommand: true,
     promptFailure: (cause) => acpRegistryPromptFailure(registryAgentId, cause),
     ...(registryAgentId === "factory-droid"
       ? { extractElicitationForm: extractDroidElicitationForm }
-      : {}),
+      : isOmp
+        ? { extractElicitationForm: extractOmpElicitationForm }
+        : isOpenCode
+          ? { extractElicitationForm: extractOpenCodeElicitationForm }
+          : {}),
     // glm-acp-agent is the one agent whose per-turn usage a live probe has verified.
     ...(registryAgentId === "glm-acp-agent" ? { reportsPerTurnPromptUsage: true } : {}),
     ...(registryAgentId === "mistral-vibe"
@@ -263,8 +274,31 @@ export const makeAcpRegistryAdapterV2 = Effect.fn("makeAcpRegistryAdapterV2")(fu
           normalizeSessionUpdate: copilotRouting.normalizeSessionUpdate,
           extractSubagentUpdate: extractCopilotSubagentUpdate,
           restartRuntimeAfterPromptError: isCopilotLostSessionError,
+          // session/new reports a built-in default, not the model Copilot runs (github/copilot-cli#5363).
+          alwaysSetModel: true,
         }),
-    makeRuntime: options.makeRuntime ?? makeAcpRegistryRuntime(runtimeOptions, catalog),
+    ...(options.makeRuntime === undefined
+      ? {
+          resolveSessionLaunch: (
+            environment: NodeJS.ProcessEnv,
+            sessionEnvironment = environment,
+          ) =>
+            catalog
+              .resolve(options.settings, process.cwd(), environment, {
+                spawnEnvironment: sessionEnvironment,
+              })
+              .pipe(
+                Effect.mapError(
+                  (cause) =>
+                    new EffectAcpErrors.AcpSpawnError({
+                      command: options.settings.agentId || ACP_REGISTRY_PROVIDER,
+                      cause,
+                    }),
+                ),
+              ),
+        }
+      : {}),
+    makeRuntime: options.makeRuntime ?? makeAcpRegistryRuntime(options),
     ...(runtimeCoordinator === undefined
       ? {}
       : {
@@ -273,11 +307,35 @@ export const makeAcpRegistryAdapterV2 = Effect.fn("makeAcpRegistryAdapterV2")(fu
               options.instanceId,
               normalizeAcpRegistryCommands(commands),
             ),
-          onSessionConfigurationUpdate: (configOptions, modeState, modelState) =>
-            runtimeCoordinator.publishLiveConfiguration(
-              options.instanceId,
-              normalizeAcpRegistryLiveConfiguration(configOptions, modeState, modelState),
-            ),
+          // A new Copilot session starts at its own effort, not the one the composer shows.
+          ...(isCopilot
+            ? {
+                unsetOptionDefaults: runtimeCoordinator
+                  .getLiveConfiguration(options.instanceId)
+                  .pipe(
+                    Effect.map(
+                      Option.match({
+                        onNone: () => [],
+                        onSome: ({ configOptions }) =>
+                          configOptions.flatMap((descriptor) =>
+                            descriptor.type === "select" &&
+                            descriptor.role === "reasoning" &&
+                            descriptor.currentValue !== undefined
+                              ? [{ id: descriptor.id, value: descriptor.currentValue }]
+                              : [],
+                          ),
+                      }),
+                    ),
+                  ),
+              }
+            : {}),
+          onSessionConfigurationUpdate: (configOptions, modeState, modelState) => {
+            const environmentKey = configurationOrigin(configOptions);
+            return runtimeCoordinator.publishLiveConfiguration(options.instanceId, {
+              ...normalizeAcpRegistryLiveConfiguration(configOptions, modeState, modelState),
+              ...(environmentKey === undefined ? {} : { environmentKey }),
+            });
+          },
           onUrlElicitation: ({ elicitationId, url, message }) => {
             const normalizedUrl = normalizeAcpRegistryWebUrl(url);
             if (normalizedUrl === undefined || elicitationId.trim().length === 0) {
@@ -298,6 +356,9 @@ export const makeAcpRegistryAdapterV2 = Effect.fn("makeAcpRegistryAdapterV2")(fu
     instanceId: options.instanceId,
     flavor,
     selfInvocation: options.selfInvocation,
+    currentEnvironment: (options.currentEnvironment ?? Effect.succeed(options.environment)).pipe(
+      Effect.map(withClaudeEnvironment),
+    ),
     ...(options.continuationRequests === undefined
       ? {}
       : { continuationRequests: options.continuationRequests }),
@@ -316,7 +377,7 @@ export const makeAcpRegistryAdapterV2 = Effect.fn("makeAcpRegistryAdapterV2")(fu
 
 export type AcpRegistryAdapterV2DriverEnv =
   | ChildProcessSpawner.ChildProcessSpawner
-  | Crypto.Crypto
+  | SecureRandom.SecureRandom
   | FileSystem.FileSystem
   | AcpRegistrySupport.AcpRegistryCatalog
   | IdAllocator.IdAllocatorV2
@@ -335,13 +396,17 @@ export const AcpRegistryAdapterV2Driver: ProviderAdapterDriver<
   create: Effect.fn("AcpRegistryAdapterV2Driver.create")(
     function* (input: ProviderAdapterDriverCreateInput<AcpRegistrySettings>) {
       const hostEnvironment = yield* HostProcess.Environment;
+      const currentEnvironment = Effect.suspend(() =>
+        mergeProviderInstanceEnvironment(input.environment, hostEnvironment),
+      ).pipe(Effect.provideService(HostProcess.HomeDirectory, yield* HostProcess.HomeDirectory));
       const selfInvocation = yield* resolveSelfInvocation();
       const providerEventLoggers = yield* ProviderEventLoggers.ProviderEventLoggers;
       const makeNativeLogger = yield* makeAcpNativeLoggerFactory();
       return yield* makeAcpRegistryAdapterV2({
         instanceId: input.instanceId,
         settings: { ...input.config, enabled: input.enabled },
-        environment: yield* mergeProviderInstanceEnvironment(input.environment, hostEnvironment),
+        environment: yield* currentEnvironment,
+        currentEnvironment,
         selfInvocation,
         continuationRequests: yield* ProviderContinuationRequests.ProviderContinuationRequests,
         nativeLogging: (threadId) =>

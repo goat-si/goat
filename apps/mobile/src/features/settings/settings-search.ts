@@ -29,6 +29,7 @@ const SETTINGS_SEARCH_TERMS = {
     "word break",
     "math",
   ],
+  SettingsLanguage: ["language", "locale", "translation", "english"],
   SettingsNavigation: ["tabs", "tab order", "reorder", "hide tabs"],
   SettingsKeyboard: ["return key", "send message", "new line", "hardware keyboard"],
   SettingsMicrophone: ["voice", "dictation", "audio input", "bluetooth"],

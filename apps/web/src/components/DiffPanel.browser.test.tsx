@@ -4,6 +4,7 @@ import {
   DEFAULT_CLIENT_SETTINGS,
   EnvironmentId,
   ProjectId,
+  RunId,
   ThreadId,
   type ClientSettings,
   type ReviewDiffPreviewResult,
@@ -31,6 +32,8 @@ const state = vi.hoisted(() => ({
   status: null as unknown as ResultAtom<VcsStatusResult>,
   localRefs: null as unknown as ResultAtom<VcsListRefsResult>,
   remoteRefs: null as unknown as ResultAtom<VcsListRefsResult>,
+  checkpoints: [] as unknown[],
+  checkpointDiff: null as { diff: string } | null,
 }));
 
 vi.mock("~/state/server", () => ({
@@ -53,7 +56,7 @@ vi.mock("~/state/vcs", () => ({
 vi.mock("~/state/entities", () => ({
   useQuietThreadShell: () => state.thread,
   useProject: () => ({ workspaceRoot: "/project", repositoryIdentity: null }),
-  useThreadCheckpointSummaries: () => [],
+  useThreadCheckpointSummaries: () => state.checkpoints,
   useQuietThreadVisibleTurnItems: () => [],
 }));
 vi.mock("~/state/filesystem", () => ({
@@ -67,7 +70,7 @@ vi.mock("~/hooks/useSettings", () => ({
 }));
 vi.mock("~/hooks/useTheme", () => ({ useRenderedAppearance: () => "dark" }));
 vi.mock("~/state/queries", () => ({
-  useCheckpointDiff: () => ({ data: null, error: null, isPending: false }),
+  useCheckpointDiff: () => ({ data: state.checkpointDiff, error: null, isPending: false }),
   useTurnItemDetail: () => ({ data: null, error: null, isPending: false }),
   useDebouncedValue: <A,>(value: A) => value,
 }));
@@ -114,6 +117,8 @@ function setup(failedBaseRef: string | null) {
     useDiffPanelSessionStore.setState({ collapsedFileKeysByScopeKey: {} });
   };
   reset();
+  state.checkpoints = [];
+  state.checkpointDiff = null;
   state.threadRef = {
     environmentId: EnvironmentId.make("environment"),
     threadId: ThreadId.make("thread"),
@@ -230,4 +235,53 @@ it("does not claim there are no changes when an incomplete preview fails", async
   await expect
     .element(screen.getByText("No net changes in this selection."))
     .not.toBeInTheDocument();
+});
+
+const TURN_PATCH =
+  "diff --git a/first.txt b/first.txt\n--- a/first.txt\n+++ b/first.txt\n@@ -0,0 +1 @@\n+visible\n";
+const SIZE_LIMIT_NOTICE = "This preview exceeds the size limit. Changes shown are incomplete.";
+
+function selectTurnDiff(context: { threadRef: ScopedThreadRef }, diff: string) {
+  state.checkpoints = [
+    {
+      runId: "run",
+      checkpointTurnCount: 1,
+      checkpointRef: "ref",
+      status: "ready",
+      files: [],
+      assistantMessageId: null,
+      completedAt: "2026-01-01T00:00:00Z",
+    },
+  ];
+  state.checkpointDiff = { diff };
+  useDiffPanelStore.getState().selectTurn(context.threadRef, RunId.make("run"));
+}
+
+// Servers of every release end a cut-off turn diff with this same marker.
+it("says a turn diff cut off at the server's size limit is incomplete", async () => {
+  using context = setup("origin/orphan");
+  selectTurnDiff(context, `${TURN_PATCH}\n\n[truncated]`);
+  await using screen = await render(
+    <RegistryContext.Provider value={context.registry}>
+      <DiffPanel composerDraftTarget={context.threadRef} workspaceMutationId={null} visible />
+    </RegistryContext.Provider>,
+  );
+  await expect
+    .element(screen.getByRole("group", { name: "1 additions, 0 deletions" }))
+    .toBeVisible();
+  await expect.element(screen.getByText(SIZE_LIMIT_NOTICE)).toBeVisible();
+});
+
+it("does not call a complete turn diff incomplete", async () => {
+  using context = setup("origin/orphan");
+  selectTurnDiff(context, TURN_PATCH);
+  await using screen = await render(
+    <RegistryContext.Provider value={context.registry}>
+      <DiffPanel composerDraftTarget={context.threadRef} workspaceMutationId={null} visible />
+    </RegistryContext.Provider>,
+  );
+  await expect
+    .element(screen.getByRole("group", { name: "1 additions, 0 deletions" }))
+    .toBeVisible();
+  await expect.element(screen.getByText(SIZE_LIMIT_NOTICE)).not.toBeInTheDocument();
 });

@@ -9,6 +9,7 @@ import {
   ThreadId,
 } from "@goat/contracts";
 import { requestedTurnCapabilities } from "@goat/shared/turnCapabilities";
+import * as NodeCrypto from "@effect/platform-node/NodeCrypto";
 import * as NodeServices from "@effect/platform-node/NodeServices";
 import * as ProviderAdapter from "@goat/provider-core/server/ProviderAdapter";
 import * as Effect from "effect/Effect";
@@ -77,6 +78,7 @@ it.effect("goat_thread_send capabilities reach the thread as the chips a person 
     const sent: ThreadManagementService.ThreadManagementSendInput[] = [];
     const dependencies = Layer.mergeAll(
       NodeServices.layer,
+      NodeCrypto.layer,
       ServerSettings.layerTest(),
       Layer.mock(ThreadManagementService.ThreadManagementService)({
         getThreadRecords: (id, fields, filter) =>

@@ -27,6 +27,8 @@ const session = vi.hoisted(() => ({
   // The last entry the list has measured; scrolling to one past it fails, as the real list does.
   measured: null as null | number,
   failedScrolls: 0,
+  // The bot's computer: the selected environment and the session follow it together.
+  connected: true,
 }));
 type Read =
   | null
@@ -169,6 +171,7 @@ vi.mock("../../components/ui/AppSymbol", () => ({ SymbolView: () => null }));
 vi.mock("./useMobileGoatBotModel", () => ({ useMobileGoatBotModelMenu: () => null }));
 vi.mock("./useMobileGoatBotMemberModel", () => ({ useMobileGoatBotMemberModelMenu: () => null }));
 vi.mock("./GoatBotModelPill", () => ({ GoatBotModelPill: () => null }));
+vi.mock("./GoatBotComposerMenu", () => ({ GoatBotComposerMenu: () => null }));
 // The header chip opens the home; it renders as a button here.
 vi.mock("../../lib/copyTextWithHaptic", () => ({ tryCopyTextWithHaptic: async () => true }));
 vi.mock("./GoatBotFace", () => ({
@@ -187,6 +190,7 @@ vi.mock("../../native/StackHeader", () => ({ NativeStackScreenOptions: () => nul
 vi.mock("./GoatBotMarkdown", () => ({ GoatBotMarkdown: () => null }));
 vi.mock("./GoatBotComposerAttachments", () => ({
   GoatBotAttachButton: () => null,
+  goatBotAttachmentPick: () => async () => {},
   GoatBotAttachmentStrip: () => null,
   releaseGoatBotAttachments: () => {},
 }));
@@ -249,6 +253,8 @@ vi.mock("./useMobileGoatBotSession", () => ({
     replyingSince: null,
     activity: null,
     supportsTaskThreads: true,
+    homeConnected: session.connected,
+    taskChips: new Map(),
     streamingReplyIds: new Set<string>(),
     visibleTurnItems: [],
     boundedSnapshots: false,
@@ -259,6 +265,8 @@ vi.mock("../../state/atom-registry", () => ({ appAtomRegistry: {} }));
 vi.mock("expo-crypto", () => ({ randomUUID: () => globalThis.crypto.randomUUID() }));
 vi.mock("../../state/channels", () => ({
   channelEnvironment: {
+    // Home's shared current work; its links are not read in this file.
+    homeCurrentOpenableWorkAtom: () => "home-current",
     listBotThreads: () => "tasks",
     listChildWork: () => "child",
     listBotNotes: () => "notes",
@@ -295,7 +303,7 @@ vi.mock("../../state/environments", () => ({
 }));
 vi.mock("./goatBotHomeMode", async (original) => ({
   ...(await original<typeof import("./goatBotHomeMode")>()),
-  pickMobileGoatBotEnvironment: () => ({ environmentId: "env", connected: true }),
+  pickMobileGoatBotHomeEnvironment: () => ({ environmentId: "env", connected: session.connected }),
 }));
 vi.mock("./useMobileGoatBotHomeMode", () => ({
   useMobileGoatBotHomeMode: () => ({ environments: [], botRef: { threadId: "bot" } }),
@@ -378,6 +386,7 @@ const event = (subject: { kind: "routine" | "task"; id: string; name: string }):
 
 async function render(rows: GoatBotRow[]) {
   session.rows = rows;
+  session.connected = true;
   session.dispatch.mockClear();
   session.scrollToIndex.mockClear();
   session.window = null;
@@ -632,5 +641,24 @@ it("a refresh that failed is not read as absence, though an earlier read lacked 
   await press(view.button("Task Check disks ran. Open task Check disks"));
   expect(session.dispatch).not.toHaveBeenCalled();
   expect(view.sheet()).not.toBeNull();
+  await view.unmount();
+});
+
+it("offline, a task's event line opens Home with its focus held and never a task screen; online, a settled read without the task opens it (#3427)", async () => {
+  session.routines = [];
+  session.tasks = [listedTask("task-1")];
+  const view = await render([event({ kind: "task", id: "task-gone", name: "Old work" })]);
+  session.connected = false;
+  await view.rerender();
+  await press(view.button("Task Old work ran. Open task Old work"));
+  expect(view.sheet()).not.toBeNull();
+  expect(view.container.querySelector('[aria-label="Peek task-gone"]')).toBeNull();
+  expect(session.dispatch).not.toHaveBeenCalled();
+  session.connected = true;
+  await view.rerender();
+  expect(session.dispatch).toHaveBeenCalledTimes(1);
+  expect(session.dispatch).toHaveBeenCalledWith(
+    expect.objectContaining({ name: "GoatBot", params: { taskId: "task-gone" } }),
+  );
   await view.unmount();
 });

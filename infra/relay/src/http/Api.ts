@@ -27,7 +27,7 @@ import * as ClientKeys from "../auth/ClientKeys.ts";
 import { createLinkChallenge } from "../auth/ConnectLinkChallenges.ts";
 import * as ConnectAuthentication from "../auth/ConnectAuthentication.ts";
 import { sql as drizzleSql } from "drizzle-orm";
-import * as Crypto from "effect/Crypto";
+import * as SecureRandom from "effect/crypto/SecureRandom";
 import * as Context from "effect/Context";
 import * as DateTime from "effect/DateTime";
 import * as Duration from "effect/Duration";
@@ -913,7 +913,7 @@ export const layerClientApi = HttpApiBuilder.group(
   "client",
   Effect.fnUntraced(function* (handlers) {
     const config = yield* RelayConfiguration.RelayConfiguration;
-    const crypto = yield* Crypto.Crypto;
+    const random = yield* SecureRandom.SecureRandom;
     const relayTokens = yield* RelayTokens.RelayTokens;
     const linker = yield* EnvironmentLinker.EnvironmentLinker;
     const links = yield* EnvironmentLinks.EnvironmentLinks;
@@ -1081,10 +1081,9 @@ export const layerClientApi = HttpApiBuilder.group(
           }).pipe(
             Effect.provideService(RelayTokens.RelayTokens, relayTokens),
             Effect.provideService(CliLinkApprovals.CliLinkApprovals, approvals),
-            Effect.provideService(Crypto.Crypto, crypto),
+            Effect.provideService(SecureRandom.SecureRandom, random),
             Effect.catchTags({
               RelayJwtError: () => relayInternalErrorResponse("internal_error"),
-              PlatformError: () => relayInternalErrorResponse("internal_error"),
             }),
           );
         }, mapRelayCommonApiErrors("not_authorized")),

@@ -15,7 +15,7 @@ import { useWorkspaceBackNavigation } from "../workspace/useAndroidWorkspaceNavi
 import { ThreadScreenFallback } from "./ThreadScreenHost";
 
 function ThreadRouteFallbackLayout(props: { readonly children: ReactNode }) {
-  const goBack = useWorkspaceBackNavigation("threads");
+  const goBack = useWorkspaceBackNavigation();
   const { layout } = useAdaptiveWorkspaceLayout();
   const { themeVariables } = useAppearancePreferences();
   if (Platform.OS !== "android")

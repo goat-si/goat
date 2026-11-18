@@ -24,21 +24,27 @@ const fixture = Effect.gen(function* () {
   let temporaryFile = "";
   let contents = `[endpoint.example]:2200 ssh-ed25519 ${key}\n`;
   let failFingerprint = false;
+  // An older OpenSSH prefers ECDSA unless the probe names the key type it wants.
+  let ecdsaFirst = false;
+  let written = "";
   const spawner = lazyChildProcessSpawner((command) =>
     Effect.gen(function* () {
       if (command._tag !== "StandardCommand") return yield* Effect.die("Unexpected command");
-      calls.push({ command: command.command, args: command.args });
+      calls.push({ command: command.command, args: command.args.map(String) });
       assert.equal(command.options.forceKillAfter, 2_000);
-      if (command.args.includes("-G")) {
-        if (command.args.at(-1) === "trusted-jump")
+      if (command.args.map(String).includes("-G")) {
+        if (command.args.map(String).at(-1) === "trusted-jump")
           return makeSuccessfulProcess("proxyjump none\n");
         return makeSuccessfulProcess(
           "hostname endpoint.example\nport 2200\nuser deploy\nproxyjump trusted-jump\nproxycommand none\n",
         );
       }
-      if (command.args.includes("-lf")) {
-        assert.equal(command.args[command.args.indexOf("-lf") + 1], temporaryFile);
-        assert.equal(yield* fs.readFileString(temporaryFile), contents);
+      if (command.args.map(String).includes("-lf")) {
+        assert.equal(
+          command.args.map(String)[command.args.map(String).indexOf("-lf") + 1],
+          temporaryFile,
+        );
+        assert.equal(yield* fs.readFileString(temporaryFile), written);
         return makeSuccessfulProcess(
           failFingerprint
             ? "not a fingerprint"
@@ -46,11 +52,17 @@ const fixture = Effect.gen(function* () {
         );
       }
       temporaryFile = command.args
+        .map(String)
         .find((arg) => arg.startsWith("UserKnownHostsFile="))!
         .slice("UserKnownHostsFile=".length)
         .replace(/^"|"$/gu, "");
       assert.equal((yield* fs.stat(temporaryFile)).mode & 0o777, 0o600);
-      yield* fs.writeFileString(temporaryFile, contents);
+      const ed25519Only = command.args.map(String).includes("HostKeyAlgorithms=ssh-ed25519");
+      written =
+        ecdsaFirst && !ed25519Only
+          ? "[endpoint.example]:2200 ecdsa-sha2-nistp256 " + key + "\n"
+          : contents;
+      yield* fs.writeFileString(temporaryFile, written);
       yield* Deferred.succeed(entered, undefined);
       if (hangProbe) return { ...makeSuccessfulProcess(""), exitCode: Effect.never };
       return {
@@ -60,11 +72,20 @@ const fixture = Effect.gen(function* () {
       };
     }),
   );
-  const probe = probeHostKey({ target: "private-alias", user: "deploy", port: 2200 }).pipe(
-    Effect.provideService(ChildProcessSpawner.ChildProcessSpawner, spawner),
-  );
+  const probeWith = (hostKeyAlgorithms?: string) =>
+    probeHostKey({
+      target: "private-alias",
+      user: "deploy",
+      port: 2200,
+      ...(hostKeyAlgorithms === undefined ? {} : { hostKeyAlgorithms }),
+    }).pipe(Effect.provideService(ChildProcessSpawner.ChildProcessSpawner, spawner));
+  const probe = probeWith();
   return {
     probe,
+    probeWith,
+    preferEcdsa: () => {
+      ecdsaFirst = true;
+    },
     calls,
     entered,
     hang: () => {
@@ -167,6 +188,17 @@ describe("negotiated SSH host keys", () => {
       f.setContents(`[endpoint.example]:2200 ssh-rsa ${key}\n`);
       assert.equal((yield* f.probe).algorithm, "ssh-rsa");
     }).pipe(Effect.provide(NodeServices.layer)),
+  );
+
+  it.effect(
+    "a probe that names ssh-ed25519 gets the ED25519 key from a client that prefers ECDSA",
+    () =>
+      Effect.gen(function* () {
+        const f = yield* fixture;
+        f.preferEcdsa();
+        assert.equal((yield* f.probe).algorithm, "ecdsa-sha2-nistp256");
+        assert.equal((yield* f.probeWith("ssh-ed25519")).algorithm, "ssh-ed25519");
+      }).pipe(Effect.provide(NodeServices.layer)),
   );
 
   it.effect("rejects ssh-keygen failure and releases the temporary directory", () =>

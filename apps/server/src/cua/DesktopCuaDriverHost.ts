@@ -1,5 +1,5 @@
 import type { CuaDriverMcpConfiguration } from "@goat/contracts";
-import * as Crypto from "effect/Crypto";
+import * as SecureRandom from "effect/crypto/SecureRandom";
 import * as Deferred from "effect/Deferred";
 import * as Effect from "effect/Effect";
 import * as Exit from "effect/Exit";
@@ -13,12 +13,12 @@ import { desktopStopAcknowledged } from "./CuaDriverStop.ts";
 
 export const makeDesktopHostFactory = Effect.fn("CuaDriver.makeDesktopHostFactory")(function* () {
   const receiver = yield* DesktopTelemetryReceiver.DesktopTelemetryReceiver;
-  const crypto = yield* Crypto.Crypto;
+  const random = yield* SecureRandom.SecureRandom;
   // The desktop app runs in the signed-in session and starts the driver with its own environment.
   return (_display: ReadonlyArray<CuaDisplay.CuaDisplayVariable>) =>
     Effect.gen(function* () {
-      const requestId = yield* crypto
-        .randomUUIDv4()
+      const requestId = yield* random
+        .uuidV4()
         .pipe(Effect.mapError((cause) => new CuaDriverHostError({ operation: "desktop", cause })));
       const scope = yield* Scope.make();
       const ready = yield* Deferred.make<CuaDriverMcpConfiguration, CuaDriverError>();

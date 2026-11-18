@@ -1,11 +1,12 @@
 import { expect, it } from "@effect/vitest";
+import * as NodeCrypto from "@effect/platform-node/NodeCrypto";
 import * as NodeServices from "@effect/platform-node/NodeServices";
 import * as M from "@goat/contracts";
 import * as IdAllocator from "@goat/provider-core/server/IdAllocator";
 import * as McpProviderSessions from "@goat/provider-core/server/McpProviderSessions";
 import * as Context from "effect/Context";
-import * as Crypto from "effect/Crypto";
 import * as Effect from "effect/Effect";
+import * as Digest from "effect/crypto/Digest";
 import * as FileSystem from "effect/FileSystem";
 import * as Layer from "effect/Layer";
 import * as Option from "effect/Option";
@@ -64,7 +65,7 @@ const hydration = Layer.effect(
       }),
       environment: {},
       clientFactory: { open: () => Effect.die("fixture must never open a provider") },
-      crypto: yield* Crypto.Crypto,
+      digest: yield* Digest.Digest,
       fileSystem: yield* FileSystem.FileSystem,
       idAllocator: yield* IdAllocator.IdAllocatorV2,
       serverConfig: yield* Config.ServerConfig,
@@ -74,11 +75,12 @@ const hydration = Layer.effect(
 );
 const prerequisites = Layer.mergeAll(
   NodeServices.layer,
+  NodeCrypto.layer,
   IdAllocator.layer,
   Cache.layer,
   McpProviderSessions.layer,
   Config.layerTest(import.meta.dirname, { prefix: "wp4-compose-graph-" }).pipe(
-    Layer.provide(NodeServices.layer),
+    Layer.provide(Layer.mergeAll(NodeServices.layer, NodeCrypto.layer)),
   ),
 );
 

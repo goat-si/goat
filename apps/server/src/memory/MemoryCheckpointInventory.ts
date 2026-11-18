@@ -255,8 +255,8 @@ export const selectCheckpointMemory = Effect.fnUntraced(function* (
         ? sql`r.revision_id IN ${sql.in(selected)}`
         : sql`0=1`;
   // A shared payload is deliberately joined once per selected revision. Columns
-  // are named: a statement cached before migration 090 added checkpoint_bytes
-  // would map `r.*` onto stale column names and read body_json as NULL.
+  // are named: a statement cached before the MemoryRevisionCheckpointSize migration added
+  // checkpoint_bytes would map `r.*` onto stale column names and read body_json as NULL.
   const revisions = yield* sql<
     RevisionRow & { body_json: string | null }
   >`SELECT r.space,r.revision_id,r.memory_id,r.operation_id,r.parents_json,r.scope_json,r.assertion_kind,r.provenance_json,r.payload_ref,r.created_at,p.body_json FROM memory_revisions r LEFT JOIN memory_payloads p ON p.space=r.space AND p.payload_ref=r.payload_ref WHERE r.space=${space} AND r.memory_id=${id} AND ${selection} ORDER BY r.revision_id`;

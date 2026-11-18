@@ -54,6 +54,8 @@ export interface ServerDerivedPaths {
   readonly environmentIdPath: string;
   readonly serverRuntimeStatePath: string;
   readonly secretsDir: string;
+  /** The base folder came from GOAT_HOME or --base-dir, not GOAT's default. */
+  readonly baseDirIsExplicit?: boolean;
 }
 
 export interface DeriveServerPathsOptions {
@@ -101,6 +103,7 @@ export class ServerConfig extends Context.Service<
     readonly desktopStopIntentPath?: string | undefined;
     readonly desktopTelemetryFd?: number | undefined;
     readonly desktopTelemetryControlFd?: number | undefined;
+    readonly desktopAppUpdate?: boolean | undefined;
     readonly desktopBrowserFd?: number | undefined;
     readonly desktopBrowserControlFd?: number | undefined;
     readonly resourceMonitorPath?: string | undefined;
@@ -175,6 +178,7 @@ export const deriveServerPaths = Effect.fn(function* (
     environmentIdPath: join(stateDir, "environment-id"),
     serverRuntimeStatePath: join(stateDir, "server-runtime.json"),
     secretsDir: join(stateDir, "secrets"),
+    ...(options.baseDirIsExplicit === true ? { baseDirIsExplicit: true } : {}),
   };
 });
 

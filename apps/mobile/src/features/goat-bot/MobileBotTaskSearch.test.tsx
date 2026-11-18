@@ -15,13 +15,27 @@ vi.mock("react-native", () => ({
     accessibilityLabel: string;
     value: string;
     onChangeText: (text: string) => void;
+    onFocus?: () => void;
+    onBlur?: () => void;
   }) => (
     <input
       aria-label={props.accessibilityLabel}
       value={props.value}
       onChange={(event) => props.onChangeText(event.target.value)}
+      onFocus={props.onFocus}
+      onBlur={props.onBlur}
     />
   ),
+}));
+// The keyboard's show event: each listener the field holds, and a way to fire them.
+const keyboard = vi.hoisted(() => ({ listeners: new Set<() => void>() }));
+vi.mock("react-native-keyboard-controller", () => ({
+  KeyboardEvents: {
+    addListener: (_event: string, listener: () => void) => {
+      keyboard.listeners.add(listener);
+      return { remove: () => keyboard.listeners.delete(listener) };
+    },
+  },
 }));
 const net = vi.hoisted(() => ({
   calls: [] as Array<{
@@ -54,10 +68,11 @@ import { TASK_SEARCH_DEBOUNCE_MS } from "./useMobileBotTaskSearch";
 const container = document.createElement("div");
 let root: ReturnType<typeof createRoot> | null = null;
 const openTask = vi.fn();
-async function setup(botId = "main") {
+async function setup(botId = "main", onNeedsRoom?: () => void) {
   (globalThis as { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT = true;
   net.calls = [];
   spoken.lines = [];
+  keyboard.listeners.clear();
   openTask.mockClear();
   root?.unmount();
   root = createRoot(container);
@@ -68,6 +83,7 @@ async function setup(botId = "main") {
         botId={botId as never}
         botName="GOAT Bot"
         onOpenTask={openTask}
+        onNeedsRoom={onNeedsRoom}
       />,
     ),
   );
@@ -401,4 +417,20 @@ it("speaks each status once when it changes, and nothing while a page is read", 
   } finally {
     vi.useRealTimers();
   }
+});
+
+it("asks Home for room on focus and again as the keyboard shows, and no longer once the field loses focus", async () => {
+  const room = vi.fn();
+  await setup("main", room);
+  const input = container.querySelector("input") as HTMLInputElement;
+  const keyboardShows = () => act(async () => keyboard.listeners.forEach((listener) => listener()));
+  // React hears focus and blur as bubbling focusin and focusout.
+  await act(async () => input.dispatchEvent(new FocusEvent("focusin", { bubbles: true })));
+  expect(room).toHaveBeenCalledTimes(1);
+  await keyboardShows();
+  expect(room).toHaveBeenCalledTimes(2);
+  await act(async () => input.dispatchEvent(new FocusEvent("focusout", { bubbles: true })));
+  await keyboardShows();
+  // Another field's keyboard must not pull Home back to the search.
+  expect(room).toHaveBeenCalledTimes(2);
 });

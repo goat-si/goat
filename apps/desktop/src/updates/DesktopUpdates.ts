@@ -1,7 +1,6 @@
 import {
   DESKTOP_UPDATE_RESTART_MARKER_FILE,
   DesktopUpdateChannelSchema,
-  type DesktopRuntimeInfo,
   type DesktopUpdateActionResult,
   type DesktopUpdateChannel,
   type DesktopUpdateInstallPolicy,
@@ -36,7 +35,19 @@ import * as ElectronUpdater from "../electron/ElectronUpdater.ts";
 import * as ElectronWindow from "../electron/ElectronWindow.ts";
 import * as IpcChannels from "../ipc/channels.ts";
 import * as DesktopAppSettings from "../settings/DesktopAppSettings.ts";
-import { normalizeDesktopUpdateReleaseNotes } from "./releaseNotes.ts";
+import * as DesktopSshEnvironment from "../ssh/DesktopSshEnvironment.ts";
+import {
+  normalizeDesktopUpdateReleaseNotes,
+  releaseNotesOfOfferedVersion,
+} from "./releaseNotes.ts";
+import {
+  type AppUpdateYmlConfig,
+  createBaseUpdateState,
+  getAutoUpdateDisabledReason,
+  getCanRetryFromState,
+  isArm64HostRunningIntelBuild,
+  parseAppUpdateYml,
+} from "./updateStateHelpers.ts";
 import {
   checkFailureMessage,
   DesktopUpdateCheckTimeoutError,
@@ -67,7 +78,7 @@ import {
 } from "./updateMachine.ts";
 
 const AUTO_UPDATE_STARTUP_DELAY = "15 seconds";
-const AUTO_UPDATE_POLL_INTERVAL = "4 minutes";
+const AUTO_UPDATE_POLL_INTERVAL = "4 hours";
 // Remote installs (DesktopRemoteUpdates) must answer within the server's commit budget, so
 // they wait less than a check's full deadline; quit passes UPDATE_CHECK_SETTLE_WAIT instead.
 const PREPARED_INSTALL_CHECK_WAIT = Duration.seconds(90);
@@ -78,13 +89,11 @@ interface DesktopPreparedUpdateInstallResult extends DesktopUpdateActionResult {
   readonly failed: boolean;
 }
 
-const AppUpdateYmlConfig = Schema.Record(Schema.String, Schema.String);
-type AppUpdateYmlConfig = typeof AppUpdateYmlConfig.Type;
-
 const UpdateInfo = Schema.Struct({
   version: Schema.String,
   // Malformed notes must not block update-state decoding; normalizeDesktopUpdateReleaseNotes validates separately.
   releaseNotes: Schema.optional(Schema.Unknown),
+  releaseName: Schema.optional(Schema.NullOr(Schema.String)),
   releaseDate: Schema.optional(Schema.String),
 });
 
@@ -98,7 +107,6 @@ const DesktopUpdateInstallRecord = Schema.fromJsonString(
 const decodeInstallRecord = Schema.decodeUnknownEffect(DesktopUpdateInstallRecord);
 const encodeInstallRecord = Schema.encodeEffect(DesktopUpdateInstallRecord);
 
-const decodeAppUpdateYmlConfig = Schema.decodeUnknownEffect(AppUpdateYmlConfig);
 const decodeUpdateInfo = Schema.decodeUnknownEffect(UpdateInfo);
 const decodeDownloadProgressInfo = Schema.decodeUnknownEffect(DownloadProgressInfo);
 
@@ -223,73 +231,13 @@ const {
   logError: logUpdaterError,
 } = DesktopObservability.makeComponentLogger("desktop-updater");
 
-function parseAppUpdateYml(raw: string): Effect.Effect<Option.Option<AppUpdateYmlConfig>> {
-  const entries: Record<string, string> = {};
-  for (const line of raw.split("\n")) {
-    const match = line.match(/^(\w+):\s*(.+)$/);
-    if (match?.[1] && match[2]) {
-      entries[match[1]] = match[2].trim();
-    }
-  }
-
-  return decodeAppUpdateYmlConfig(entries).pipe(
-    Effect.map((config) => (config.provider ? Option.some(config) : Option.none())),
-    Effect.orElseSucceed(() => Option.none<AppUpdateYmlConfig>()),
-  );
-}
-
-function createBaseUpdateState(
-  channel: DesktopUpdateChannel,
-  disabledReason: Option.Option<string>,
-  environment: DesktopEnvironment.DesktopEnvironment["Service"],
-): DesktopUpdateState {
-  const enabled = Option.isNone(disabledReason);
-  return {
-    ...createInitialDesktopUpdateState(environment.appVersion, environment.runtimeInfo, channel),
-    enabled,
-    status: enabled ? "idle" : "disabled",
-    message: Option.getOrNull(disabledReason),
-  };
-}
-
-function getCanRetryFromState(state: DesktopUpdateState): boolean {
-  return state.availableVersion !== null || state.downloadedVersion !== null;
-}
-
-function getAutoUpdateDisabledReason(args: {
-  isDevelopment: boolean;
-  isPackaged: boolean;
-  platform: NodeJS.Platform;
-  appImage?: string | undefined;
-  isDebPackage: boolean;
-  disabledByEnv: boolean;
-  hasUpdateFeedConfig: boolean;
-}): string | null {
-  if (!args.hasUpdateFeedConfig) {
-    return "Automatic updates are not available because no update feed is configured.";
-  }
-  if (args.isDevelopment || !args.isPackaged) {
-    return "Automatic updates are only available in packaged production builds.";
-  }
-  if (args.disabledByEnv) {
-    return "Automatic updates are disabled by the GOAT_DISABLE_AUTO_UPDATE setting.";
-  }
-  if (args.platform === "linux" && !args.appImage && !args.isDebPackage) {
-    return "Automatic updates on Linux require the AppImage or the .deb package.";
-  }
-  return null;
-}
-
-function isArm64HostRunningIntelBuild(runtimeInfo: DesktopRuntimeInfo): boolean {
-  return runtimeInfo.hostArch === "arm64" && runtimeInfo.appArch === "x64";
-}
-
 /** @public */
 export const make = Effect.gen(function* () {
   const backendActivity = yield* DesktopBackendActivity.DesktopBackendActivity;
   const config = yield* DesktopConfig.DesktopConfig;
   const pool = yield* DesktopBackendPool.DesktopBackendPool;
   const desktopState = yield* DesktopState.DesktopState;
+  const sshEnvironment = yield* DesktopSshEnvironment.DesktopSshEnvironment;
   const electronUpdater = yield* ElectronUpdater.ElectronUpdater;
   const electronWindow = yield* ElectronWindow.ElectronWindow;
   const environment = yield* DesktopEnvironment.DesktopEnvironment;
@@ -858,16 +806,22 @@ export const make = Effect.gen(function* () {
           yield* writeUpdateRestartMarker;
           const { downloadedVersion } = yield* Ref.get(updateStateRef);
           if (downloadedVersion !== null) yield* writeInstallRecord(downloadedVersion);
-          // Stop pooled backends before quitAndInstall can outrun their scope finalizers.
+          // Stop pooled backends and SSH tunnels before quitAndInstall can outrun their scope finalizers.
           const instances = yield* pool.list;
           // stop clears desiredRunning, so retain the recovery set beforehand.
           const runningInstances = yield* Effect.filter(instances, (instance) =>
             instance.snapshot.pipe(Effect.map((snapshot) => snapshot.desiredRunning)),
           );
           yield* Ref.set(installRunningBackendsRef, runningInstances);
-          yield* Effect.forEach(
-            instances,
-            (instance) => instance.stop("update-install", { timeout: BACKEND_STOP_TIMEOUT }),
+          yield* Effect.all(
+            [
+              Effect.forEach(
+                instances,
+                (instance) => instance.stop("update-install", { timeout: BACKEND_STOP_TIMEOUT }),
+                { concurrency: "unbounded" },
+              ),
+              sshEnvironment.closeAllTunnels,
+            ],
             { concurrency: "unbounded" },
           );
           yield* electronUpdater.quitAndInstall({
@@ -1112,7 +1066,7 @@ export const make = Effect.gen(function* () {
 
           const checkedAt = yield* currentIsoTimestamp;
           const { releaseNotes, omittedReleaseCount } = normalizeDesktopUpdateReleaseNotes(
-            info.releaseNotes,
+            releaseNotesOfOfferedVersion(info),
             info.version,
             state.channel,
             info.releaseDate,
@@ -1361,6 +1315,8 @@ export const make = Effect.gen(function* () {
         else pendingPersistenceFailed = true;
       }
       const disabledReason = yield* resolveDisabledReason;
+      // A blocked nightly channel still lets the user switch back to stable, so it stays updatable.
+      yield* Ref.set(desktopState.canInstallUpdates, Option.isNone(disabledReason));
       const enabled = Option.isNone(disabledReason);
       yield* setState({
         ...(yield* baseUpdateState(settings.updateChannel, disabledReason)),

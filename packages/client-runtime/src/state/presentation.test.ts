@@ -5,6 +5,7 @@ import { AsyncResult, Atom, AtomRegistry } from "effect/reactivity";
 
 import {
   AVAILABLE_CONNECTION_STATE,
+  ConnectionBlockedError,
   PrimaryConnectionTarget,
   ConnectionTransientError,
 } from "../connection/model.ts";
@@ -306,6 +307,33 @@ describe("connection presentation", () => {
       h.registry.set(h.catalog, { isReady: true, entries: new Map([[FIRST, entry(FIRST)]]) });
       h.registry.set(h.state, AsyncResult.success({ ...AVAILABLE_CONNECTION_STATE }));
       expect(phase()).toBe("available");
+    } finally {
+      stop();
+      h.registry.dispose();
+    }
+  });
+  it("a refusal that turns into this browser's ended session is a new connection, so its readers see the marker (#3473, contract)", () => {
+    const h = harness();
+    const failure = () => h.registry.get(h.full.presentationAtom(FIRST))?.connection.failure;
+    const refused = (sessionEnded: boolean) =>
+      AsyncResult.success({
+        ...AVAILABLE_CONNECTION_STATE,
+        desired: true,
+        phase: "blocked" as const,
+        lastFailure: new ConnectionBlockedError({
+          reason: "authentication",
+          detail: "This browser is no longer signed in to first.",
+          hop: "server",
+          via: "direct",
+          ...(sessionEnded ? { sessionEnded } : {}),
+        }),
+      });
+    const stop = h.registry.subscribe(h.full.presentationAtom(FIRST), () => {});
+    try {
+      h.registry.set(h.state, refused(false));
+      expect(failure()?.sessionEnded).toBeUndefined();
+      h.registry.set(h.state, refused(true));
+      expect(failure()?.sessionEnded).toBe(true);
     } finally {
       stop();
       h.registry.dispose();

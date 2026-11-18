@@ -1,5 +1,6 @@
 import { useAtomValue } from "@effect/atom-react";
 import { useNavigation, type StaticScreenProps } from "@react-navigation/native";
+import { getProviderClient } from "../../lib/providerClients";
 import { EnvironmentId } from "@goat/contracts";
 import {
   collectExternalUsageLinks,
@@ -27,6 +28,7 @@ import { ProviderIcon } from "../../components/ProviderIcon";
 import { SettingsScreen } from "../settings/components/SettingsScreen";
 import { environmentPresentations } from "../../state/presentation";
 import { ResetCredits } from "./UsageLimitsSection";
+import { ZeroSpendCap } from "./UsageLimitDetails";
 import { usageProviderKind, useProviderColors } from "./usageProviders";
 
 const DRIVER_LABEL: Partial<Record<string, string>> = {
@@ -54,7 +56,7 @@ const VERDICT_CLASS = {
 function rowName(row: LimitBoardRow) {
   if (row.name) return row.name;
   if (row.email) return "••••••@••••••";
-  return DRIVER_LABEL[row.driver] ?? String(row.driver);
+  return DRIVER_LABEL[row.driver] ?? getProviderClient(row.driver)?.label ?? String(row.driver);
 }
 
 function LimitRow({
@@ -106,7 +108,7 @@ function LimitRow({
         return (
           <View key={`${pool.kind}:${pool.id}`} className="flex-row items-center gap-2">
             <Text numberOfLines={1} className="w-20 text-xs text-foreground-muted">
-              {cursorUsageWindowDetails(pool.id)?.label ?? pool.label}
+              {cursorUsageWindowDetails(pool.id, group.pool)?.label ?? pool.label}
             </Text>
             <View className="h-1 min-w-0 flex-1 overflow-hidden rounded-full bg-subtle">
               <View
@@ -227,7 +229,9 @@ function LimitSectionView({
         <View className="flex-row items-center gap-2">
           <ProviderIcon provider={section.driver} size={18} />
           <Text className="text-base font-goat-medium text-foreground">
-            {DRIVER_LABEL[section.driver] ?? section.driver}
+            {DRIVER_LABEL[section.driver] ??
+              getProviderClient(section.driver)?.label ??
+              section.driver}
           </Text>
         </View>
         <Text className={`text-sm ${VERDICT_CLASS[section.verdict.tone]}`}>
@@ -394,6 +398,7 @@ export function UsageLimitAccountScreen({ route }: AccountScreenProps) {
                   {account.poolName ??
                     account.displayName ??
                     DRIVER_LABEL[account.driver] ??
+                    getProviderClient(account.driver)?.label ??
                     account.driver}
                 </Text>
               </View>
@@ -415,6 +420,7 @@ export function UsageLimitAccountScreen({ route }: AccountScreenProps) {
                 </Text>
               ) : null}
             </View>
+            {account.limits.zeroSpendCap ? <ZeroSpendCap /> : null}
             {window ? (
               <View className="gap-3 rounded-[24px] border-continuous bg-grouped-card p-4">
                 <Text className="text-sm font-goat-medium text-foreground">{window.label}</Text>

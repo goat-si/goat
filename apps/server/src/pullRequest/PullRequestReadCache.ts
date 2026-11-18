@@ -3,7 +3,8 @@ import * as Clock from "effect/Clock";
 import * as Equal from "effect/Equal";
 import * as Hash from "effect/Hash";
 import { PullRequestOperationError, PullRequestUnavailableError } from "@goat/contracts";
-import * as Crypto from "effect/Crypto";
+import * as SecureRandom from "effect/crypto/SecureRandom";
+import * as Digest from "effect/crypto/Digest";
 import * as Hex from "effect/encoding/Hex";
 import * as Context from "effect/Context";
 import * as Duration from "effect/Duration";
@@ -28,7 +29,7 @@ const CONCURRENT_READS = 512;
 const SCOPE_STRIPES = 64;
 // Entry filenames have the store-id prefix; the scope revisions file does not.
 const STORE_ID = "pr-v2";
-const ENTRY_FILE_NAME = new RegExp(`^${STORE_ID}[0-9a-f]{64}$`);
+const ENTRY_FILE_NAME = new RegExp(`^${STORE_ID}(?:%3A)?[0-9a-f]{64}$`);
 /**
  * A file untouched for a day is long expired; the day only leaves slack for
  * clock changes.
@@ -81,7 +82,8 @@ export class PullRequestReadCache extends Context.Service<
 
 export const make = Effect.gen(function* () {
   const backing = yield* KeyValueStore.KeyValueStore;
-  const crypto = yield* Crypto.Crypto;
+  const random = yield* SecureRandom.SecureRandom;
+  const digester = yield* Digest.Digest;
   const clock = yield* Clock.Clock;
   let enabled = true;
   const lock = yield* Semaphore.make(CONCURRENT_READS);
@@ -96,7 +98,7 @@ export const make = Effect.gen(function* () {
   };
   const revisionWrites = yield* Semaphore.make(1);
   const digest = (key: string) =>
-    crypto.digest("SHA-256", new TextEncoder().encode(key)).pipe(Effect.map(Hex.encode));
+    digester.digest(Digest.sha256, new TextEncoder().encode(key)).pipe(Effect.map(Hex.encode));
   const revisions = yield* Cache.makeWith(
     () =>
       backing.get("revisions").pipe(
@@ -166,7 +168,6 @@ export const make = Effect.gen(function* () {
         ).payload;
       }).pipe(
         Effect.catchTags({
-          PlatformError: () => read,
           KeyValueStoreError: () => read,
           PersistenceError: () => read,
           SchemaError: () => read,
@@ -187,7 +188,7 @@ export const make = Effect.gen(function* () {
         const next = Object.fromEntries(
           Object.entries(current).filter(([, value]) => value.expiresAt > now),
         );
-        next[scope] = { revision: yield* crypto.randomUUIDv4(), expiresAt: now + 60_000 };
+        next[scope] = { revision: yield* random.uuidV4(), expiresAt: now + 60_000 };
         const encoded = yield* Schema.encodeEffect(revisionCodec)(next);
         yield* backing.set("revisions", encoded);
         yield* Cache.set(revisions, undefined, next);
@@ -208,33 +209,33 @@ export const make = Effect.gen(function* () {
  * The persisted cache drops an expired entry only when it is read again, so
  * files for PRs nobody reopens would otherwise stay forever.
  */
-const pruneExpiredEntryFiles = Effect.fn("PullRequestReadCache.pruneExpiredEntryFiles")(function* (
-  directory: string,
-) {
-  const fileSystem = yield* FileSystem.FileSystem;
-  const path = yield* Path.Path;
-  const cutoff = (yield* Clock.currentTimeMillis) - Duration.toMillis(ENTRY_FILE_MAX_AGE);
-  const entries = (yield* fileSystem.readDirectory(directory)).filter((name) =>
-    ENTRY_FILE_NAME.test(name),
-  );
-  const [, failures] = yield* Effect.partition(entries, (name) => {
-    const entryPath = path.join(directory, name);
-    return fileSystem.stat(entryPath).pipe(
-      Effect.flatMap((info) =>
-        Option.exists(info.mtime, (mtime) => mtime.getTime() < cutoff)
-          ? fileSystem.remove(entryPath)
-          : Effect.void,
-      ),
-      Effect.catchReason("PlatformError", "NotFound", () => Effect.void),
+export const pruneExpiredEntryFiles = Effect.fn("PullRequestReadCache.pruneExpiredEntryFiles")(
+  function* (directory: string) {
+    const fileSystem = yield* FileSystem.FileSystem;
+    const path = yield* Path.Path;
+    const cutoff = (yield* Clock.currentTimeMillis) - Duration.toMillis(ENTRY_FILE_MAX_AGE);
+    const entries = (yield* fileSystem.readDirectory(directory)).filter((name) =>
+      ENTRY_FILE_NAME.test(name),
     );
-  });
-  if (failures.length > 0) {
-    yield* Effect.logWarning("Failed to prune some PR cache files", {
-      failed: failures.length,
-      cause: failures[0],
+    const [, failures] = yield* Effect.partition(entries, (name) => {
+      const entryPath = path.join(directory, name);
+      return fileSystem.stat(entryPath).pipe(
+        Effect.flatMap((info) =>
+          Option.exists(info.mtime, (mtime) => mtime.getTime() < cutoff)
+            ? fileSystem.remove(entryPath)
+            : Effect.void,
+        ),
+        Effect.catchReason("PlatformError", "NotFound", () => Effect.void),
+      );
     });
-  }
-});
+    if (failures.length > 0) {
+      yield* Effect.logWarning("Failed to prune some PR cache files", {
+        failed: failures.length,
+        cause: failures[0],
+      });
+    }
+  },
+);
 
 export const layer = Layer.unwrap(
   Effect.gen(function* () {

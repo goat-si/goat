@@ -1,7 +1,9 @@
+import * as NodeCrypto from "@effect/platform-node/NodeCrypto";
 import * as NodeServices from "@effect/platform-node/NodeServices";
 import { assert, describe, it } from "@effect/vitest";
 import * as ByteSize from "effect/ByteSize";
 import * as Effect from "effect/Effect";
+import * as Layer from "effect/Layer";
 import * as FileSystem from "effect/FileSystem";
 import * as Result from "effect/Result";
 
@@ -21,7 +23,7 @@ describe("local runtime archive", () => {
         archive?.sha256,
         "5240672d7b51756b829ad0ef8d9468b7a078afa2f410484fd3892dab47becb72",
       );
-    }).pipe(Effect.provide(NodeServices.layer), Effect.scoped),
+    }).pipe(Effect.provide(Layer.mergeAll(NodeServices.layer, NodeCrypto.layer)), Effect.scoped),
   );
 
   it.effect("returns null only for a missing archive", () =>
@@ -30,7 +32,7 @@ describe("local runtime archive", () => {
       const root = yield* fs.makeTempDirectoryScoped();
       assert.isNull(yield* readLocalRuntimeArchive(root, "1.2.3", "linux-x64"));
       assert.isNull(yield* readLocalRuntimeArchive(root, "1.2.3", "linux-x64", true));
-    }).pipe(Effect.provide(NodeServices.layer), Effect.scoped),
+    }).pipe(Effect.provide(Layer.mergeAll(NodeServices.layer, NodeCrypto.layer)), Effect.scoped),
   );
 
   it.effect.each(["directory", "oversized", "changed", "grew past cap"] as const)(
@@ -65,7 +67,7 @@ describe("local runtime archive", () => {
         assert.isTrue(Result.isFailure(result));
         if (Result.isFailure(result)) assert.instanceOf(result.failure, SshLaunchError);
         assert.equal(reads, mode === "directory" || mode === "oversized" ? 0 : 1);
-      }).pipe(Effect.provide(NodeServices.layer), Effect.scoped),
+      }).pipe(Effect.provide(Layer.mergeAll(NodeServices.layer, NodeCrypto.layer)), Effect.scoped),
   );
 });
 
@@ -97,6 +99,6 @@ describe("read-only bundled archive checksum", () => {
         assert.equal(Result.isFailure(result), mode !== "valid");
         if (Result.isSuccess(result)) assert.deepEqual(result.success?.bytes, bytes);
         assert.deepEqual(yield* fs.readFile(`${root}/${name}`), bytes);
-      }).pipe(Effect.provide(NodeServices.layer), Effect.scoped),
+      }).pipe(Effect.provide(Layer.mergeAll(NodeServices.layer, NodeCrypto.layer)), Effect.scoped),
   );
 });

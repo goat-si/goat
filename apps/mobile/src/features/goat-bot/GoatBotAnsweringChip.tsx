@@ -1,10 +1,10 @@
-import type { GoatBotRow } from "@goat/client-runtime/goatBot";
 import type { ChannelQuestionId, ChannelTaskId } from "@goat/contracts";
 import { useCallback, useState } from "react";
 import { Pressable, Text, View } from "react-native";
 
 import { SymbolView } from "../../components/ui/AppSymbol";
 import { useScaledTextRole } from "../settings/appearance/useScaledTextRole";
+import type { MobileTaskChips } from "./mobileBotTaskStatus";
 
 /** The question a typed message answers, from its card's Something else. */
 export interface GoatBotAnswerTarget {
@@ -16,20 +16,23 @@ export interface GoatBotAnswerTarget {
 }
 
 /**
- * Which question the message box answers. It lets go when the person sends or stops answering,
- * when another question's row or a drafted request takes the box, and for good when the question
- * closes or the screen shows another conversation, so a later message never goes to that task.
+ * Which question the message box answers, until sent, stopped, replaced, the conversation changes,
+ * or its task records an answer to it. A row that is missing or shows no choices is not closure:
+ * it may be unloaded, or a pick still on its way. The server decides a named answer it receives.
  */
-export function useGoatBotAnswering(rows: ReadonlyArray<GoatBotRow>, conversation: string) {
+export function useGoatBotAnswering(chips: MobileTaskChips, conversation: string) {
   const [held, setHeld] = useState<{
     readonly target: GoatBotAnswerTarget;
     readonly conversation: string;
   } | null>(null);
-  const asked = held === null ? undefined : rows.find((row) => row.id === held.target.rowId);
-  if (
+  const questionId = held?.target.questionId;
+  const answered =
     held !== null &&
-    (held.conversation !== conversation || asked?.kind !== "bot" || asked.options.length === 0)
-  ) {
+    questionId !== undefined &&
+    chips
+      .get(held.target.taskId)
+      ?.answeredQuestions?.some((answer) => answer.questionId === questionId) === true;
+  if (held !== null && (held.conversation !== conversation || answered)) {
     setHeld(null);
   }
   const target = held !== null && held.conversation === conversation ? held.target : null;

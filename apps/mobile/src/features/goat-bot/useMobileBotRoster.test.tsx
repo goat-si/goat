@@ -1,19 +1,39 @@
+import { useLayoutEffect } from "react";
+import { RegistryContext } from "@effect/atom-react";
+import { AtomRegistry } from "effect/reactivity";
 import { act } from "react";
 import { createRoot } from "react-dom/client";
 import { afterEach, expect, it, vi } from "vite-plus/test";
 import { EnvironmentId } from "@goat/contracts";
 
+const answers = vi.hoisted(() => new WeakMap<object, { bots: unknown }>());
+const answerOf = (bots: ReadonlyArray<Record<string, unknown>>) => {
+  let answer = answers.get(bots);
+  if (answer === undefined) answers.set(bots, (answer = { bots }));
+  return answer;
+};
 const state = vi.hoisted(() => ({
   capabilities: {} as Record<string, boolean>,
   calls: [] as string[],
   bots: [] as ReadonlyArray<Record<string, unknown>>,
   connected: true,
   botRef: null as { readonly environmentId: string; readonly threadId: string } | null,
+  environmentId: "env",
+  // A bot-list read refused for access; the query keeps its earlier answer beside it.
+  cause: null as unknown,
+  // The computer's Slack connections, as its settings read answers.
+  slack: null as null | ReadonlyArray<{ enabled: boolean }>,
+  // The bot list was read again (a removal refreshes it): its answer shows marked waiting.
+  refreshed: false,
 }));
 vi.mock("./useMobileGoatBotHomeMode", () => ({
   useMobileGoatBotHomeMode: () => ({
     environments: [
-      { environmentId: "env", connected: state.connected, supportsChannelLedger: true },
+      {
+        environmentId: state.environmentId,
+        connected: state.connected,
+        supportsChannelLedger: true,
+      },
     ],
     botRef: state.botRef,
   }),
@@ -22,32 +42,73 @@ vi.mock("../../state/use-thread-detail", () => ({ useThreadVisibleTurnItems: () 
 vi.mock("../../state/environments", () => ({
   useEnvironments: () => ({
     presentationById: new Map([
-      ["env", { serverConfig: { environment: { capabilities: state.capabilities } } }],
+      [
+        state.environmentId,
+        { serverConfig: { environment: { capabilities: state.capabilities } } },
+      ],
     ]),
   }),
 }));
 vi.mock("../../state/query", () => ({
-  useEnvironmentQuery: (query: string | null) => {
+  useEnvironmentQuery: (atom: string | object | null) => {
+    // The bot list is a real atom, so a refusal can refresh it; the other reads are names.
+    const query = atom === null || typeof atom === "string" ? atom : "profiles";
     if (query) state.calls.push(query);
+    // An offline computer answers nothing. Like a real read, an answer keeps its identity.
+    const profiles = query === "profiles" && state.connected ? answerOf(state.bots) : null;
+    const refused = query === "profiles" ? state.cause : null;
     return {
-      data: query === "threads" ? { rows: [] } : query === "profiles" ? { bots: state.bots } : null,
+      data: query === "threads" ? { rows: [] } : query === "slack" ? state.slack : profiles,
+      successResult:
+        profiles === null || refused !== null || state.refreshed ? null : { value: profiles },
+      cause: refused,
       error: null,
-      isPending: false,
-      isSuccess: query !== null,
+      isPending: query === "profiles" && state.refreshed,
+      isSuccess: query !== null && refused === null,
       refresh: vi.fn(),
     };
   },
 }));
-vi.mock("../../state/channels", () => ({
-  channelEnvironment: {
-    listBots: () => "profiles",
-    listBotThreads: () => "threads",
-    slackSettings: () => "slack",
-    updateTaskView: {},
-  },
-}));
+const profilesRead = vi.hoisted(() => ({ atom: {} as object }));
+vi.mock("../../state/channels", async () => {
+  const { Atom, AsyncResult } = await import("effect/reactivity");
+  profilesRead.atom = Atom.make(AsyncResult.initial());
+  return {
+    channelEnvironment: {
+      listBots: () => profilesRead.atom,
+      listBotThreads: () => "threads",
+      slackSettings: () => "slack",
+      updateTaskView: {},
+    },
+  };
+});
 vi.mock("../../state/atom-registry", () => ({ appAtomRegistry: {} }));
+// Needs you's open asks read, refreshed when a computer refuses or leaves; idle here.
+vi.mock("./openAsksRead", async () => {
+  const { Atom, AsyncResult } = await import("effect/reactivity");
+  const idle = Atom.make(AsyncResult.initial());
+  return { openAsks: () => idle };
+});
+// The computers' presentations, empty unless a test links one.
+vi.mock("../../state/presentation", async () => {
+  const { Atom } = await import("effect/reactivity");
+  return { environmentPresentations: { presentationsAtom: Atom.make(new Map()) } };
+});
+// The app's computers. Each test's registry holds its own catalog value; "env" is listed unless a test says not.
+const catalog = vi.hoisted(() => ({
+  atom: null as null | import("effect/reactivity").Atom.Writable<unknown>,
+}));
+vi.mock("../../connection/catalog", async () => {
+  const { Atom } = await import("effect/reactivity");
+  catalog.atom = Atom.make<unknown>({
+    isReady: true,
+    entries: new Map(["env", "first", "second"].map((id) => [id, { enabled: true }])),
+  });
+  return { environmentCatalog: { catalogValueAtom: catalog.atom } };
+});
+import { environmentPresentations } from "../../state/presentation";
 import { useMobileBotRoster, useMobileGoatBotMember } from "./useMobileBotRoster";
+import { followKeptPerComputerCatalog, resetKeptPerComputerForTests } from "./useKeptPerComputer";
 
 let value: ReturnType<typeof useMobileBotRoster>;
 function Probe() {
@@ -63,6 +124,11 @@ afterEach(async () => {
   state.bots = [];
   state.connected = true;
   state.botRef = null;
+  state.environmentId = "env";
+  state.cause = null;
+  state.slack = null;
+  state.refreshed = false;
+  resetKeptPerComputerForTests();
 });
 
 it("queries only capabilities advertised by the selected bot environment, and never the bot's tasks", async () => {
@@ -75,7 +141,8 @@ it("queries only capabilities advertised by the selected bot environment, and ne
   state.capabilities = { goatBotProfiles: true, goatBotTaskThreads: true };
   await act(async () => root?.render(<Probe />));
   // The list holds bots only; each bot's tasks are read by its own home sheet.
-  expect(state.calls).toEqual(["profiles"]);
+  // (Each render asks again for the same read; keeping its answer for offline is one more render.)
+  expect(new Set(state.calls)).toEqual(new Set(["profiles"]));
 });
 
 it("names the main bot's chat with its renamed profile", async () => {
@@ -97,7 +164,7 @@ it("names the main bot's chat with its renamed profile", async () => {
   expect(named?.member?.name).toBe("Echo");
 });
 
-it("reads the main bot's name only while its computer is connected, as the roster does", async () => {
+it("reads no bot list while the computer is offline, for the main bot or a named member", async () => {
   state.capabilities = { goatBotProfiles: true, goatBotMembers: true };
   state.connected = false;
   // A saved home keeps its computer selected while it is offline.
@@ -109,7 +176,285 @@ it("reads the main bot's name only while its computer is connected, as the roste
   root = createRoot(document.createElement("div"));
   await act(async () => root?.render(<NameProbe />));
   expect(state.calls).toEqual([]);
-  // A named member is still looked up, as before.
   await act(async () => root?.render(<NameProbe botId="echo" />));
-  expect(state.calls).toContain("profiles");
+  expect(state.calls).toEqual([]);
+});
+
+const echoBots = [
+  { botId: "main", role: "main", name: "GOAT Bot", createdAt: "2026-11-01T00:00:00.000Z" },
+  { botId: "echo", role: "member", name: "Echo", createdAt: "2026-11-02T00:00:00.000Z" },
+];
+const memberNamesOf = (bots: typeof value.bots) =>
+  bots.flatMap((entry) => (entry.kind === "member" ? [entry.profile.name] : []));
+const memberNames = () => memberNamesOf(value.bots);
+
+it("keeps the bots listed while their computer is offline, and still knows it has members", async () => {
+  state.capabilities = { goatBotProfiles: true, goatBotMembers: true };
+  state.bots = echoBots;
+  // A saved bot keeps its computer selected while that computer is offline.
+  state.botRef = { environmentId: "env", threadId: "bot" };
+  root = createRoot(document.createElement("div"));
+  await act(async () => root?.render(<Probe />));
+  expect(memberNames()).toEqual(["Echo"]);
+  state.connected = false;
+  await act(async () => root?.render(<Probe />));
+  expect(memberNames()).toEqual(["Echo"]);
+  expect(value.supportsMembers).toBe(true);
+  expect(value.refreshBots).toBeNull();
+});
+
+it("a member chat opened for the first time while offline finds its bot in the list read before", async () => {
+  state.capabilities = { goatBotProfiles: true, goatBotMembers: true };
+  state.bots = echoBots;
+  root = createRoot(document.createElement("div"));
+  await act(async () => root?.render(<Probe />));
+  await act(async () => root?.unmount());
+  state.connected = false;
+  state.botRef = { environmentId: "env", threadId: "bot" };
+  let named: ReturnType<typeof useMobileGoatBotMember> | undefined;
+  function NameProbe() {
+    named = useMobileGoatBotMember("echo");
+    return null;
+  }
+  root = createRoot(document.createElement("div"));
+  await act(async () => root?.render(<NameProbe />));
+  expect(named?.member?.name).toBe("Echo");
+  expect(named?.missing).toBe(false);
+});
+
+it("never shows one computer's kept bots for another", async () => {
+  state.capabilities = { goatBotProfiles: true, goatBotMembers: true };
+  state.bots = echoBots;
+  state.environmentId = "first";
+  state.botRef = { environmentId: "first", threadId: "bot" };
+  root = createRoot(document.createElement("div"));
+  await act(async () => root?.render(<Probe />));
+  expect(memberNames()).toEqual(["Echo"]);
+  state.connected = false;
+  state.environmentId = "second";
+  state.botRef = { environmentId: "second", threadId: "bot" };
+  await act(async () => root?.render(<Probe />));
+  expect(memberNames()).toEqual([]);
+  state.environmentId = "first";
+  state.botRef = { environmentId: "first", threadId: "bot" };
+  await act(async () => root?.render(<Probe />));
+  expect(memberNames()).toEqual(["Echo"]);
+});
+
+it("forgets a computer's kept bots when it leaves the app, even removed while connected, so adding it again starts empty", async () => {
+  state.capabilities = { goatBotProfiles: true, goatBotMembers: true };
+  state.bots = echoBots;
+  state.botRef = { environmentId: "env", threadId: "bot" };
+  const registry = AtomRegistry.make();
+  // The app installs this with its registry; the test's own registry needs it too.
+  const stopFollowing = followKeptPerComputerCatalog(registry);
+  const listed = (ids: string[]) => ({
+    isReady: true,
+    entries: new Map(ids.map((id) => [id, { enabled: true }])),
+  });
+  registry.set(catalog.atom!, listed(["env"]));
+  root = createRoot(document.createElement("div"));
+  const rendered = () => (
+    <RegistryContext value={registry}>
+      <Probe />
+    </RegistryContext>
+  );
+  await act(async () => root?.render(rendered()));
+  expect(memberNames()).toEqual(["Echo"]);
+  // Removed while its live answer is still on screen: nothing writes it back.
+  await act(async () => registry.set(catalog.atom!, listed([])));
+  await act(async () => root?.render(rendered()));
+  state.connected = false;
+  await act(async () => root?.render(rendered()));
+  await act(async () => registry.set(catalog.atom!, listed(["env"])));
+  await act(async () => root?.render(rendered()));
+  expect(memberNames()).toEqual([]);
+  stopFollowing();
+});
+
+it("before a computer's capabilities are read, member support is unknown rather than missing", async () => {
+  state.connected = false;
+  root = createRoot(document.createElement("div"));
+  state.capabilities = undefined as unknown as Record<string, boolean>;
+  await act(async () => root?.render(<Probe />));
+  expect(value.membersUnknown).toBe(true);
+  expect(value.supportsMembers).toBe(false);
+});
+
+it("an answer already on its way to the kept list is not kept once its computer has left the app", async () => {
+  state.capabilities = { goatBotProfiles: true, goatBotMembers: true };
+  state.bots = echoBots;
+  state.botRef = { environmentId: "env", threadId: "bot" };
+  const registry = AtomRegistry.make();
+  // The app installs this with its registry; the test's own registry needs it too.
+  const stopFollowing = followKeptPerComputerCatalog(registry);
+  const listed = (ids: string[]) => ({
+    isReady: true,
+    entries: new Map(ids.map((id) => [id, { enabled: true }])),
+  });
+  registry.set(catalog.atom!, listed(["env"]));
+  // Removed after the roster rendered its answer but before that render's effects ran: layout
+  // effects run first, so this lands exactly in that gap.
+  function RemoveAfterRender() {
+    useLayoutEffect(() => {
+      state.refreshed = true;
+      registry.set(catalog.atom!, listed([]));
+    }, []);
+    return null;
+  }
+  root = createRoot(document.createElement("div"));
+  await act(async () =>
+    root?.render(
+      <RegistryContext value={registry}>
+        <Probe />
+        <RemoveAfterRender />
+      </RegistryContext>,
+    ),
+  );
+  state.connected = false;
+  registry.set(catalog.atom!, listed(["env"]));
+  await act(async () =>
+    root?.render(
+      <RegistryContext value={registry}>
+        <Probe />
+      </RegistryContext>,
+    ),
+  );
+  expect(memberNames()).toEqual([]);
+  stopFollowing();
+});
+
+it("an answer from before its computer was removed and added again is not kept", async () => {
+  state.capabilities = { goatBotProfiles: true, goatBotMembers: true };
+  state.bots = echoBots;
+  state.botRef = { environmentId: "env", threadId: "bot" };
+  const registry = AtomRegistry.make();
+  // The app installs this with its registry; the test's own registry needs it too.
+  const stopFollowing = followKeptPerComputerCatalog(registry);
+  const listed = (ids: string[]) => ({
+    isReady: true,
+    entries: new Map(ids.map((id) => [id, { enabled: true }])),
+  });
+  registry.set(catalog.atom!, listed(["env"]));
+  // Removed and added again after the roster rendered its answer, before that render's effects ran.
+  function RemoveAndReAddAfterRender() {
+    useLayoutEffect(() => {
+      state.refreshed = true;
+      registry.set(catalog.atom!, listed([]));
+      registry.set(catalog.atom!, listed(["env"]));
+    }, []);
+    return null;
+  }
+  root = createRoot(document.createElement("div"));
+  await act(async () =>
+    root?.render(
+      <RegistryContext value={registry}>
+        <Probe />
+        <RemoveAndReAddAfterRender />
+      </RegistryContext>,
+    ),
+  );
+  state.connected = false;
+  await act(async () =>
+    root?.render(
+      <RegistryContext value={registry}>
+        <Probe />
+      </RegistryContext>,
+    ),
+  );
+  expect(memberNames()).toEqual([]);
+  stopFollowing();
+});
+
+it("a refused bot list lists no bots in the same render it arrives", async () => {
+  state.capabilities = { goatBotProfiles: true, goatBotMembers: true };
+  state.bots = echoBots;
+  state.botRef = { environmentId: "env", threadId: "bot" };
+  const commits: Array<{ members: string[] }> = [];
+  function Committed() {
+    const roster = useMobileBotRoster();
+    const seen = { members: memberNamesOf(roster.bots) };
+    useLayoutEffect(() => {
+      commits.push(seen);
+    });
+    return null;
+  }
+  root = createRoot(document.createElement("div"));
+  await act(async () => root?.render(<Committed />));
+  expect(commits.at(-1)).toEqual({ members: ["Echo"] });
+  const before = commits.length;
+  state.cause = { _tag: "EnvironmentAuthorizationError", message: "Not allowed." };
+  await act(async () => root?.render(<Committed />));
+  // The first commit after the refused answer already says so.
+  expect(commits[before]).toEqual({ members: [] });
+});
+
+it("says nothing of Slack once the bot list is refused", async () => {
+  state.capabilities = { goatBotProfiles: true, goatBotMembers: true, slackChannel: true };
+  state.slack = [{ enabled: true }];
+  state.bots = echoBots;
+  state.botRef = { environmentId: "env", threadId: "bot" };
+  root = createRoot(document.createElement("div"));
+  await act(async () => root?.render(<Probe />));
+  expect(value.slackEnabled).toBe(true);
+  state.cause = { _tag: "EnvironmentAuthorizationError", message: "Not allowed." };
+  // As in the app, the refusing computer lists bots; it is not connected, so no other read runs.
+  const registry = AtomRegistry.make();
+  registry.set(
+    environmentPresentations.presentationsAtom as never,
+    new Map([
+      [
+        "env",
+        {
+          connection: { phase: "disconnected" },
+          serverConfig: { environment: { capabilities: state.capabilities } },
+        },
+      ],
+    ]),
+  );
+  await act(async () =>
+    root?.render(
+      <RegistryContext value={registry}>
+        <Probe />
+      </RegistryContext>,
+    ),
+  );
+  expect(value.slackEnabled).toBe(false);
+});
+
+it("a member's chat never says it is missing while its computer's bot list is being read again", async () => {
+  state.capabilities = { goatBotProfiles: true, goatBotMembers: true };
+  state.bots = echoBots;
+  state.botRef = { environmentId: "env", threadId: "bot" };
+  const registry = AtomRegistry.make();
+  const stopFollowing = followKeptPerComputerCatalog(registry);
+  registry.set(catalog.atom!, {
+    isReady: true,
+    entries: new Map([["env", { enabled: true }]]),
+  });
+  const said: boolean[] = [];
+  function MemberChat() {
+    said.push(useMobileGoatBotMember("echo").missing);
+    return null;
+  }
+  const draw = () =>
+    act(async () =>
+      root?.render(
+        <RegistryContext value={registry}>
+          <MemberChat />
+        </RegistryContext>,
+      ),
+    );
+  root = createRoot(document.createElement("div"));
+  await draw();
+  // Removed and added again: the list is read again, and its earlier answer shows marked waiting.
+  state.refreshed = true;
+  await act(async () => {
+    registry.set(catalog.atom!, { isReady: true, entries: new Map() });
+    registry.set(catalog.atom!, { isReady: true, entries: new Map([["env", { enabled: true }]]) });
+  });
+  state.refreshed = false;
+  await draw();
+  expect(said).not.toContain(true);
+  stopFollowing();
 });

@@ -10,6 +10,7 @@ import {
   squashAtomCommandFailure,
 } from "@goat/client-runtime/state/runtime";
 import type { PendingUserInputDraftAnswer } from "@goat/client-runtime/state/user-input-draft";
+import { userInputDraftKey } from "@goat/client-runtime/state/thread-requests";
 import {
   AuthOrchestrationOperateScope,
   type ProviderApprovalDecision,
@@ -18,6 +19,7 @@ import {
 import { useEffect, useRef, useState } from "react";
 
 import { appAtomRegistry } from "../../rpc/atomRegistry";
+import { usePendingUserInputAnswers } from "../../pendingUserInputAnswers";
 import { readEnvironmentScope } from "../../state/session";
 import { decisionInbox } from "../../state/decisionInbox";
 import { serverEnvironment } from "../../state/server";
@@ -38,11 +40,38 @@ function prune<A>(values: Record<string, A>, keep: (id: string) => boolean) {
   return kept.length === entries.length ? values : Object.fromEntries(kept);
 }
 
+function answersKey(item: Extract<DecisionItem, { kind: "user_input" }>) {
+  return userInputDraftKey(item.ref.environmentId, item.ref.threadId, item.request.requestId);
+}
+
+/** The form sends its seeded map; a suggested answer nobody touched is not the person's answer. */
+function withoutUntouchedSuggestions(
+  item: Extract<DecisionItem, { kind: "user_input" }>,
+  answers: QuestionDrafts,
+  shown: QuestionDrafts,
+): QuestionDrafts {
+  return Object.fromEntries(
+    Object.entries(answers).filter(([questionId, answer]) => {
+      if (Object.hasOwn(shown, questionId)) return true;
+      const suggestion = item.request.questions.find(
+        (question) => question.id === questionId,
+      )?.initialAnswer;
+      const keys = Object.keys(answer);
+      return !(
+        suggestion !== undefined &&
+        keys.length === 1 &&
+        keys[0] === "customAnswer" &&
+        answer.customAnswer === suggestion
+      );
+    }),
+  );
+}
+
 export function useDecisionInbox() {
   const snapshot = useAtomValue(decisionInbox.itemsAtom);
   const [skippedIds, setSkippedIds] = useState<string[]>([]);
   const [activeId, setActiveId] = useState<string | null>(null);
-  const [drafts, setDrafts] = useState<InboxDrafts>({});
+  const [localDrafts, setLocalDrafts] = useState<InboxDrafts>({});
   // Durable choices survive Skip like question drafts do, until the decision leaves the feed.
   const [decisionDrafts, setDecisionDrafts] = useState<Record<string, DecisionDraft>>({});
   const [submissions, setSubmissions] = useState<Record<string, Submission>>({});
@@ -58,6 +87,14 @@ export function useDecisionInbox() {
   });
   const ordered = orderDecisionQueue(snapshot.items, skippedIds);
   const current = ordered.find((item) => item.id === activeId) ?? ordered[0] ?? null;
+  // The thread composer keeps its answers in the same store, so either surface shows the other's.
+  const sharedAnswers = usePendingUserInputAnswers();
+  const drafts: InboxDrafts = { ...localDrafts };
+  for (const item of snapshot.items) {
+    if (item.kind !== "user_input") continue;
+    const shared = sharedAnswers[answersKey(item)];
+    if (shared) drafts[item.id] = { ...localDrafts[item.id], ...shared };
+  }
   // Initial partial results stay unpinned until loading finishes or the user acts.
   if ((!snapshot.isLoading || activeId !== null) && (current?.id ?? null) !== activeId)
     setActiveId(current?.id ?? null);
@@ -72,7 +109,20 @@ export function useDecisionInbox() {
 
   function setAnswers(id: string, answers: QuestionDrafts) {
     if (current?.id === id) setActiveId(id);
-    setDrafts((previous) => ({ ...previous, [id]: answers }));
+    const item = snapshot.items.find((candidate) => candidate.id === id);
+    const edited =
+      item?.kind === "user_input"
+        ? withoutUntouchedSuggestions(item, answers, drafts[id] ?? {})
+        : answers;
+    setLocalDrafts((previous) => ({ ...previous, [id]: edited }));
+    // Per question, so the composer's answers to the other questions stay; Stop returns them all
+    // to the thread's draft through the one shared rule.
+    if (item?.kind !== "user_input") return;
+    const key = answersKey(item);
+    usePendingUserInputAnswers.setState((previous) => ({
+      ...previous,
+      [key]: { ...previous[key], ...edited },
+    }));
   }
 
   function setDecisionDraft(id: string, draft: DecisionDraft) {
@@ -195,7 +245,7 @@ export function useDecisionInbox() {
       const next = previous.filter(keep);
       return next.length === previous.length ? previous : next;
     });
-    setDrafts((previous) => prune(previous, keep));
+    setLocalDrafts((previous) => prune(previous, keep));
     setDecisionDrafts((previous) => prune(previous, keep));
     if (keptSubmissions !== submissions) setSubmissions(keptSubmissions);
   }

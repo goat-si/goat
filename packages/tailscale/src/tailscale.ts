@@ -1,12 +1,15 @@
+import { ExecutionEnvironmentDescriptor } from "@goat/contracts";
 import { GOAT_ENVIRONMENT_PATH, LEGACY_ENVIRONMENT_PATH } from "@goat/contracts/legacyT3Names";
 import * as HostProcess from "@goat/shared/HostProcess";
+import * as NetService from "@goat/shared/Net";
 import * as Duration from "effect/Duration";
 import * as Effect from "effect/Effect";
 import * as Option from "effect/Option";
 import * as Schema from "effect/Schema";
 import * as Stream from "effect/Stream";
-import { HttpClient, HttpClientRequest } from "effect/http";
+import { HttpClient, HttpClientRequest, HttpClientResponse } from "effect/http";
 import { ChildProcessSpawner } from "effect/process";
+import { parseTailscaleServeRootHolders } from "./serveRootHolders.ts";
 import { spawnTailscale } from "./tailscaleExecutable.ts";
 
 export const DEFAULT_TAILSCALE_SERVE_PORT = 443;
@@ -25,7 +28,7 @@ const TAILSCALE_STATUS_TIMEOUT = Duration.millis(3_500);
  */
 const TAILSCALE_KILL_GRACE = Duration.millis(500);
 const TAILSCALE_SERVE_TIMEOUT = Duration.seconds(10);
-const TAILSCALE_PROBE_TIMEOUT = Duration.millis(2_500);
+export const TAILSCALE_PROBE_TIMEOUT = Duration.millis(2_500);
 
 const tailscaleCommandForPlatform = (platform: NodeJS.Platform): "tailscale" | "tailscale.exe" =>
   platform === "win32" ? "tailscale.exe" : "tailscale";
@@ -45,6 +48,7 @@ export const TailscaleStderrDiagnostic = Schema.Literals([
   "no-existing-handler",
   "not-logged-in",
   "permission-denied",
+  "unsupported-target",
   "unknown",
 ]);
 export type TailscaleStderrDiagnostic = typeof TailscaleStderrDiagnostic.Type;
@@ -55,6 +59,8 @@ const STDERR_DIAGNOSTIC_PATTERNS: ReadonlyArray<
   [/handler does not exist/i, "no-existing-handler"],
   [/not logged in|logged out|needs? login/i, "not-logged-in"],
   [/permission denied|access denied|must be root|operation not permitted/i, "permission-denied"],
+  // The macOS apps, and tailscaled without SO_MARK, proxy only to localhost, 127.0.0.1 and ::1.
+  [/doesn't support connecting to remote destinations/i, "unsupported-target"],
 ];
 
 const stderrDiagnosticOf = (stderr: string): TailscaleStderrDiagnostic | undefined => {
@@ -138,12 +144,18 @@ const TailscaleStatusSelf = Schema.Struct({
 });
 
 const TailscaleStatusJson = Schema.Struct({
+  BackendState: Schema.optional(Schema.Unknown),
   Self: Schema.optional(TailscaleStatusSelf),
 });
 
 export type TailscaleStatusJson = typeof TailscaleStatusJson.Type;
 
 export interface TailscaleStatus {
+  /**
+   * `tailscale down` keeps `Self` from the last netmap, so the DNS name alone
+   * does not mean the tailnet is reachable. `null` when the CLI omits BackendState.
+   */
+  readonly running: boolean | null;
   readonly magicDnsName: string | null;
   readonly tailnetIpv4Addresses: readonly string[];
   /**
@@ -213,6 +225,7 @@ export const parseTailscaleStatus = (
 
       const capMap = parsed.Self?.CapMap;
       return {
+        running: parsed.BackendState === undefined ? null : parsed.BackendState === "Running",
         magicDnsName: normalizeMagicDnsName(parsed),
         tailnetIpv4Addresses,
         httpsServeEnabled:
@@ -224,7 +237,7 @@ export const parseTailscaleStatus = (
   );
 
 const readTailscaleOutput = Effect.fn("tailscale.readTailscaleOutput")(function* (
-  subcommand: "status" | "debug",
+  subcommand: "status" | "serve" | "debug",
   args: readonly string[],
 ) {
   const hostPlatform = yield* HostProcess.Platform;
@@ -398,8 +411,12 @@ const runTailscaleCommand = Effect.fn("tailscale.runTailscaleCommand")(function*
     );
     const child = spawned.handle;
     commandContext.executable = spawned.executable;
-    const [stderr, exitCode] = yield* Effect.all(
-      [collectStderr(child.stderr), child.exitCode.pipe(Effect.map(Number))],
+    const [, stderr, exitCode] = yield* Effect.all(
+      [
+        Stream.runDrain(child.stdout),
+        collectStderr(child.stderr),
+        child.exitCode.pipe(Effect.map(Number)),
+      ],
       { concurrency: "unbounded" },
     ).pipe(
       Effect.mapError((cause) => new TailscaleCommandOutputError({ ...commandContext, cause })),
@@ -430,16 +447,35 @@ const runTailscaleCommand = Effect.fn("tailscale.runTailscaleCommand")(function*
   );
 });
 
-export const ensureTailscaleServe = (input: {
+export class TailscaleServeHttpsDisabledError extends Schema.TaggedError<TailscaleServeHttpsDisabledError>()(
+  "TailscaleServeHttpsDisabledError",
+  {},
+) {
+  override get message(): string {
+    return "Tailscale Serve needs HTTPS enabled on the tailnet. Enable HTTPS certificates at https://login.tailscale.com/admin/dns.";
+  }
+}
+
+export const ensureTailscaleServe = Effect.fn("tailscale.ensureTailscaleServe")(function* (input: {
   readonly localPort: number;
   readonly servePort?: number;
   readonly localHost?: string;
-}): Effect.Effect<void, TailscaleCommandError, ChildProcessSpawner.ChildProcessSpawner> => {
+}): Effect.fn.Return<
+  void,
+  TailscaleCommandError | TailscaleServeHttpsDisabledError,
+  ChildProcessSpawner.ChildProcessSpawner
+> {
+  // Without the capability `tailscale serve` prints an enablement notice and exits 0, or blocks on
+  // it, having configured nothing either way.
+  const status = yield* Effect.option(readTailscaleStatus);
+  if (Option.isSome(status) && status.value.httpsServeEnabled === false) {
+    return yield* new TailscaleServeHttpsDisabledError();
+  }
   const servePort = input.servePort ?? DEFAULT_TAILSCALE_SERVE_PORT;
   const localHost = input.localHost ?? "127.0.0.1";
   const args = ["serve", "--bg", `--https=${servePort}`, `http://${localHost}:${input.localPort}`];
-  return runTailscaleCommand(args, TAILSCALE_SERVE_TIMEOUT);
-};
+  return yield* runTailscaleCommand(args, TAILSCALE_SERVE_TIMEOUT);
+});
 
 export const disableTailscaleServe = Effect.fn("tailscale.disableTailscaleServe")(function* (
   input: {
@@ -452,6 +488,38 @@ export const disableTailscaleServe = Effect.fn("tailscale.disableTailscaleServe"
     TAILSCALE_SERVE_TIMEOUT,
   );
 });
+
+const readTailscaleServeRootHolders = (
+  servePort: number,
+  target: { readonly host: string; readonly port: number },
+) =>
+  readTailscaleOutput("serve", ["serve", "status", "--json"]).pipe(
+    Effect.flatMap((status) => {
+      const holders = parseTailscaleServeRootHolders(status, servePort, target);
+      return holders === undefined
+        ? Effect.fail(new TailscaleStatusParseError({ cause: "unreadable serve status" }))
+        : Effect.succeed(holders);
+    }),
+  );
+
+/**
+ * Who holds the root of `servePort`: nobody, the server at `target`, only dead loopback ports (an
+ * unclean exit leaves one), or another live server or app, whose route must be left alone.
+ */
+export const readTailscaleServeRootHolder = Effect.fn("tailscale.readTailscaleServeRootHolder")(
+  function* (servePort: number, target: { readonly host: string; readonly port: number }) {
+    const net = yield* NetService.NetService;
+    const holders = yield* readTailscaleServeRootHolders(servePort, target);
+    if (holders.length === 0) return "none" as const;
+    if (holders.some((holder) => holder.ours)) return "ours" as const;
+    const live = yield* Effect.forEach(holders, (holder) =>
+      holder.ours || holder.loopback === undefined
+        ? Effect.succeed(true)
+        : net.hasListenerOnHost(holder.loopback.port, holder.loopback.host),
+    );
+    return live.includes(true) ? ("other" as const) : ("dead" as const);
+  },
+);
 
 export type TailscaleHttpsEndpointClassification = "ok" | "refused" | "no-answer" | "not-goat";
 
@@ -481,35 +549,45 @@ const isConnectionRefused = (error: unknown): boolean => {
 };
 
 export const classifyTailscaleHttpsEndpoint = Effect.fn("tailscale.classifyTailscaleHttpsEndpoint")(
-  function* (input: { readonly baseUrl: string; readonly timeout?: Duration.Input }) {
+  function* (input: {
+    readonly baseUrl: string;
+    readonly environmentId: string;
+    readonly timeout?: Duration.Input;
+  }) {
     const client = yield* HttpClient.HttpClient;
     return yield* Effect.gen(function* () {
       const url = new URL(GOAT_ENVIRONMENT_PATH, input.baseUrl);
       const request = HttpClientRequest.get(url.toString());
-      const response = yield* client.execute(request);
-      return response.status === 404
-        ? yield* client.get(new URL(LEGACY_ENVIRONMENT_PATH, input.baseUrl).toString())
-        : response;
+      const first = yield* client.execute(request);
+      const response =
+        first.status === 404
+          ? yield* client.get(new URL(LEGACY_ENVIRONMENT_PATH, input.baseUrl).toString())
+          : first;
+      if (response.status < 200 || response.status >= 300) return "not-goat" as const;
+      // Another app or another GOAT server can hold the Serve port; only our own descriptor counts.
+      const descriptor = yield* HttpClientResponse.schemaBodyJson(ExecutionEnvironmentDescriptor)(
+        response,
+      ).pipe(Effect.option);
+      return Option.isSome(descriptor) && descriptor.value.environmentId === input.environmentId
+        ? ("ok" as const)
+        : ("not-goat" as const);
     }).pipe(
       Effect.timeoutOption(input.timeout ?? TAILSCALE_PROBE_TIMEOUT),
       Effect.match({
         onFailure: (error) =>
           isConnectionRefused(error) ? ("refused" as const) : ("no-answer" as const),
-        onSuccess: (response) =>
-          Option.match(response, {
-            onNone: () => "no-answer" as const,
-            onSome: (httpResponse) =>
-              httpResponse.status >= 200 && httpResponse.status < 300
-                ? ("ok" as const)
-                : ("not-goat" as const),
-          }),
+        onSuccess: Option.getOrElse(() => "no-answer" as const),
       }),
     );
   },
 );
 
 export const probeTailscaleHttpsEndpoint = Effect.fn("tailscale.probeTailscaleHttpsEndpoint")(
-  function* (input: { readonly baseUrl: string; readonly timeout?: Duration.Input }) {
+  function* (input: {
+    readonly baseUrl: string;
+    readonly environmentId: string;
+    readonly timeout?: Duration.Input;
+  }) {
     return (yield* classifyTailscaleHttpsEndpoint(input)) === "ok";
   },
 );

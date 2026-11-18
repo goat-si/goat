@@ -1,4 +1,7 @@
-import { OrchestratorMcpScheduledTask } from "./orchestratorMcpScheduledTask.ts";
+import {
+  OrchestratorMcpFreshSession,
+  OrchestratorMcpScheduledTask,
+} from "./orchestratorMcpScheduledTask.ts";
 export { OrchestratorMcpScheduledTask } from "./orchestratorMcpScheduledTask.ts";
 import * as Lineage from "./orchestratorMcpThreadLineage.ts";
 import {
@@ -7,6 +10,7 @@ import {
 } from "./orchestratorMcpThreadRun.ts";
 export * from "./orchestratorMcpThreadRun.ts";
 export * from "./orchestratorMcpThreadLineage.ts";
+export * from "./orchestratorMcpCapabilities.ts";
 import * as Effect from "effect/Effect";
 import * as Schema from "effect/Schema";
 import * as SchemaTransformation from "effect/SchemaTransformation";
@@ -38,6 +42,7 @@ import {
 } from "./providerPolicy.ts";
 import { ModelSelection } from "./modelSelection.ts";
 import { OrchestratorMcpRunFailure } from "./orchestratorMcpFailure.ts";
+import { OrchestratorMcpRunStop, OrchestratorMcpTaskForce } from "./orchestratorMcpStop.ts";
 import { HostPressureAdvice } from "./hostPressure.ts";
 import { OrchestratorMcpCloudTask } from "./orchestratorMcpCloudTask.ts";
 import { OrchestratorMcpReconcileFields } from "./orchestratorMcpReconcile.ts";
@@ -65,11 +70,7 @@ import {
   OrchestrationV2RunStatus,
   OrchestrationV2TurnItemStatus,
 } from "./orchestrationV2.ts";
-import {
-  ProviderOptionDescriptor,
-  ProviderOptionSelection,
-  ProviderOptionSelectionValue,
-} from "./model.ts";
+import { ProviderOptionSelection, ProviderOptionSelectionValue } from "./model.ts";
 import { ProviderDriverKind, ProviderInstanceId } from "./providerInstance.ts";
 import { GoatclawCeilingAdvice, PermissionProfile } from "./permissionProfiles.ts";
 
@@ -231,7 +232,7 @@ export const OrchestratorMcpDelegateTaskInput = Schema.Struct({
     }),
   ),
   timeoutMs: Schema.optional(Schema.Finite).annotate({
-    description: "Mode 'wait' only. Default 10 min. A timeout does not cancel the child.",
+    description: "Mode 'wait' only. Default 4 min. A timeout does not cancel the child.",
   }),
   clientRequestId: Schema.optional(OrchestratorMcpClientRequestId),
   runtimeMode: Schema.optional(
@@ -246,8 +247,9 @@ export type OrchestratorMcpDelegateTaskInput = typeof OrchestratorMcpDelegateTas
 
 // Set only on results for still-running tasks whose completion will wake the parent.
 export const ORCHESTRATOR_MCP_RUNNING_TASK_NEXT =
-  "Completion wakes this thread, so end your turn. Do not wait on it or poll it.";
-const OrchestratorMcpRunningTaskNext = Schema.Literal(ORCHESTRATOR_MCP_RUNNING_TASK_NEXT);
+  "Completion wakes this thread. Do not wait on it or poll it. Continue other work, and end your turn when none is left.";
+// A string, not a literal: linked environments on other versions send their own wording.
+const OrchestratorMcpRunningTaskNext = Schema.String;
 
 export const OrchestratorMcpDelegateTaskResult = Schema.Struct({
   cloudTask: Schema.optional(OrchestratorMcpCloudTask),
@@ -285,6 +287,7 @@ export const OrchestratorMcpDelegateTaskResult = Schema.Struct({
   ).annotate({
     description: "Oldest pending approval, or null. Ends a wait. Grants no approval rights.",
   }),
+  stop: Schema.optional(OrchestratorMcpRunStop),
   waitTimedOut: Schema.Boolean.annotate({
     description: "True only on the timed-out wait call. The child keeps running.",
   }),
@@ -341,15 +344,10 @@ export type OrchestratorMcpTaskStatusInput = typeof OrchestratorMcpTaskStatusInp
 export const OrchestratorMcpTaskCancelInput = Schema.Struct({
   taskId: NodeId,
   reason: Schema.optional(Schema.String.check(Schema.isMaxLength(2_000))),
+  force: OrchestratorMcpTaskForce,
   clientRequestId: Schema.optional(OrchestratorMcpClientRequestId),
 });
 export type OrchestratorMcpTaskCancelInput = typeof OrchestratorMcpTaskCancelInput.Type;
-
-export const OrchestratorMcpTaskCancelResult = Schema.Struct({
-  taskId: NodeId,
-  status: Schema.Literals(["cancel_requested", "completed", "failed", "cancelled", "interrupted"]),
-});
-export type OrchestratorMcpTaskCancelResult = typeof OrchestratorMcpTaskCancelResult.Type;
 
 export const OrchestratorMcpCreateThreadRequest = Schema.Struct({
   prompt: Schema.optional(OrchestratorMcpPrompt),
@@ -553,6 +551,14 @@ export const OrchestratorMcpThreadPullRequest = Schema.Struct({
 });
 export type OrchestratorMcpThreadPullRequest = typeof OrchestratorMcpThreadPullRequest.Type;
 
+export const OrchestratorMcpThreadBackgroundTask = Schema.Struct({
+  taskId: TrimmedNonEmptyString,
+  kind: Schema.Literals(["subagent", "command", "monitor", "background_task"]),
+  description: Schema.optional(TrimmedNonEmptyString),
+  awaited: Schema.optional(Schema.Literal(true)),
+  childThreadId: Schema.optional(ThreadId),
+});
+
 export const OrchestratorMcpThreadListItem = Schema.Struct({
   threadId: ThreadId,
   projectId: Schema.optional(ProjectId),
@@ -573,6 +579,8 @@ export const OrchestratorMcpThreadListItem = Schema.Struct({
   settledAt: Schema.NullOr(IsoDateTime),
   snoozed: Schema.Boolean,
   snoozedUntil: Schema.NullOr(IsoDateTime),
+  blockedOnThreadWait: Schema.optional(Schema.Boolean),
+  pendingBackgroundTasks: Schema.optional(Schema.Array(OrchestratorMcpThreadBackgroundTask)),
   parentThreadId: Schema.NullOr(ThreadId),
   relationshipToParent: Schema.NullOr(Schema.Literals(["fork", "subagent"])),
   itemCount: NonNegativeInt,
@@ -661,6 +669,7 @@ export const OrchestratorMcpThreadSearchMatch = Schema.Struct({
 export type OrchestratorMcpThreadSearchMatch = typeof OrchestratorMcpThreadSearchMatch.Type;
 
 export const OrchestratorMcpThreadSearchResult = Schema.Struct({
+  currentThreadId: Schema.optional(Schema.NullOr(ThreadId)),
   matches: Schema.Array(OrchestratorMcpThreadSearchMatch),
   nextCursor: Schema.NullOr(Schema.String),
   /** Whether an environment had more matching threads than one search scans. */
@@ -673,9 +682,8 @@ export const OrchestratorMcpThreadSearchResult = Schema.Struct({
   ),
 });
 export type OrchestratorMcpThreadSearchResult = typeof OrchestratorMcpThreadSearchResult.Type;
-// Codex hides `minimum` and `maximum` from the model, so a value above the maximum clamps on
-// decode instead of failing the call; pagination returns the rest. Values below 1 still fail:
-// 0 asks for nothing, and answering it with one item would be a different request.
+// Codex hides `minimum` and `maximum` from the model, so a value above the maximum clamps on decode
+// (pagination returns the rest). Below 1 still fails: 0 asks for nothing, so one item would differ.
 const clampedPositiveInt = (maximum: number) =>
   PositiveInt.pipe(
     Schema.decodeTo(
@@ -698,17 +706,18 @@ export const OrchestratorMcpThreadReadInput = Schema.Struct({
   }),
   tail: Schema.optional(clampedPositiveInt(50)).annotate({
     description:
-      'Only the last N items of the view, 1 to 50; tailStartPosition is the first one. Not with afterPosition or itemId. Example: {"threadId":"<id>","tail":3}',
+      'Only the last N items of the view, 1 to 50; tailStartPosition is the first one. Not with afterPosition, beforePosition or itemId. Example: {"threadId":"<id>","tail":3}',
   }),
-  afterPosition: Schema.optional(NonNegativeInt),
+  afterPosition: Schema.optional(Schema.Int.check(Schema.isGreaterThanOrEqualTo(-1))),
+  beforePosition: Schema.optional(NonNegativeInt),
   limit: Schema.optional(clampedPositiveInt(100)).annotate({
     description: "Max items, 1 to 100.",
   }),
   runLimit: Schema.optional(clampedPositiveInt(50)).annotate({
     description: "Max recent runs, 1 to 50.",
   }),
-  maxCharsPerItem: Schema.optional(clampedPositiveInt(50_000)).annotate({
-    description: "Max chars per item, 1 to 50000.",
+  maxCharsPerItem: Schema.optional(clampedPositiveInt(20_000)).annotate({
+    description: "Max chars per item, 1 to 20000.",
   }),
 });
 export type OrchestratorMcpThreadReadInput = typeof OrchestratorMcpThreadReadInput.Type;
@@ -742,6 +751,8 @@ export const OrchestratorMcpThreadDetail = Schema.Struct({
   settledAt: Schema.NullOr(IsoDateTime),
   snoozed: Schema.Boolean,
   snoozedUntil: Schema.NullOr(IsoDateTime),
+  blockedOnThreadWait: Schema.optional(Schema.Boolean),
+  pendingBackgroundTasks: Schema.optional(Schema.Array(OrchestratorMcpThreadBackgroundTask)),
   ...OrchestratorMcpReconcileFields.thread,
   createdAt: IsoDateTime,
   updatedAt: IsoDateTime,
@@ -773,6 +784,7 @@ export const OrchestratorMcpThreadTimelineItem = Schema.Struct({
 export type OrchestratorMcpThreadTimelineItem = typeof OrchestratorMcpThreadTimelineItem.Type;
 
 export const OrchestratorMcpThreadReadResult = Schema.Struct({
+  stop: Schema.optional(OrchestratorMcpRunStop),
   replicaStatus: Schema.optional(ThreadReplicaStatus),
   cloudTask: Schema.optional(OrchestratorMcpCloudTask),
   host: OrchestratorMcpResultHost,
@@ -781,6 +793,8 @@ export const OrchestratorMcpThreadReadResult = Schema.Struct({
   items: Schema.Array(OrchestratorMcpThreadTimelineItem),
   nextPosition: Schema.NullOr(NonNegativeInt),
   hasMore: Schema.Boolean,
+  /** null when nothing is older than the page. Missing from peers that only read forward. */
+  earlierPosition: Schema.optional(Schema.NullOr(NonNegativeInt)),
   /**
    * The latest run's structured result; null before the thread's first run.
    * Optional because hosts running an older GOAT do not send it.
@@ -842,6 +856,7 @@ export const OrchestratorMcpThreadWaitInput = Schema.Struct({
   runId: Schema.optional(RunId),
   timeoutMs: Schema.optional(Schema.Finite),
   ignoreRequestIds: Schema.optional(Schema.Array(RuntimeRequestId).check(Schema.isMaxLength(50))),
+  untilDelegatedWorkSettled: Schema.optional(Schema.Boolean),
 });
 export type OrchestratorMcpThreadWaitInput = typeof OrchestratorMcpThreadWaitInput.Type;
 
@@ -856,6 +871,10 @@ export const OrchestratorMcpThreadWaitResult = Schema.Struct({
   completedAt: Schema.optional(IsoDateTime),
   /** The waited run's structured result, once that run has ended. */
   result: Schema.optional(ThreadResult),
+  /** Present when the server honoured untilDelegatedWorkSettled: whether that work settled. */
+  delegatedWorkSettled: Schema.optional(Schema.Boolean),
+  /** Once delegated work settled: the run whose reply is the thread's answer, whoever sent it. */
+  resultRun: Schema.optional(Schema.Struct({ runId: RunId, status: OrchestratorMcpThreadStatus })),
   next: Schema.optional(OrchestratorMcpRunningTaskNext),
 });
 export type OrchestratorMcpThreadWaitResult = typeof OrchestratorMcpThreadWaitResult.Type;
@@ -873,6 +892,7 @@ export type OrchestratorMcpThreadStatusInput = typeof OrchestratorMcpThreadStatu
  * else, or one of the terminal run statuses.
  */
 export const OrchestratorMcpThreadStatusResult = Schema.Struct({
+  stop: Schema.optional(OrchestratorMcpRunStop),
   remoteUnavailable: Schema.optional(Schema.Boolean),
   replicaStatus: Schema.optional(ThreadReplicaStatus),
   cloudTask: Schema.optional(OrchestratorMcpCloudTask),
@@ -1017,75 +1037,6 @@ export const OrchestratorMcpThreadRetryResult = Schema.Struct({
 });
 export type OrchestratorMcpThreadRetryResult = typeof OrchestratorMcpThreadRetryResult.Type;
 
-export const OrchestratorMcpCapabilitiesInput = Schema.Struct({
-  search: Schema.optional(
-    TrimmedNonEmptyString.check(Schema.isMaxLength(200)).annotate({
-      description: "Match model ids and labels. Replaces the short list.",
-    }),
-  ),
-});
-export type OrchestratorMcpCapabilitiesInput = typeof OrchestratorMcpCapabilitiesInput.Type;
-
-export const OrchestratorMcpModelOption = Schema.Struct({
-  id: Schema.String,
-  values: Schema.Array(ProviderOptionSelectionValue),
-  default: Schema.optional(ProviderOptionSelectionValue),
-});
-export type OrchestratorMcpModelOption = typeof OrchestratorMcpModelOption.Type;
-
-export const OrchestratorMcpProviderCapability = Schema.Struct({
-  executionLocation: Schema.optional(Schema.Literals(["local", "cloud"])),
-  followUp: Schema.optional(
-    Schema.Struct({
-      supported: Schema.Boolean,
-      reason: Schema.optional(Schema.String.check(Schema.isMaxLength(1000))),
-    }),
-  ),
-  providerInstanceId: ProviderInstanceId,
-  driverKind: ProviderDriverKind,
-  displayName: Schema.NullOr(Schema.String),
-  models: Schema.Array(
-    Schema.Struct({
-      id: Schema.String,
-      /** Omitted when it only restates the id. A host on an older GOAT sends null. */
-      label: Schema.optional(Schema.NullOr(Schema.String)),
-      // A host on an older GOAT advertises full option descriptors. Remote delegation
-      // still reads its capabilities, so both shapes decode.
-      options: Schema.optional(
-        Schema.Array(Schema.Union([OrchestratorMcpModelOption, ProviderOptionDescriptor])),
-      ),
-    }),
-  ),
-  /** Models left out of `models`: unlisted visible models, or matches past the cap with `search`. */
-  omittedModels: Schema.optional(NonNegativeInt),
-  runtimeModes: Schema.optional(Schema.Array(RuntimeMode)),
-  canRunChildTask: Schema.Boolean,
-  canRunCrossProviderChildTask: Schema.Boolean,
-  constraints: Schema.Array(Schema.String),
-});
-export type OrchestratorMcpProviderCapability = typeof OrchestratorMcpProviderCapability.Type;
-
-export const OrchestratorMcpCapabilitiesResult = Schema.Struct({
-  parentThreadId: Schema.NullOr(ThreadId),
-  inheritedProviderInstanceId: Schema.NullOr(ProviderInstanceId),
-  inheritedModel: Schema.NullOr(Schema.String),
-  inheritedOptions: Schema.optional(Schema.Array(ProviderOptionSelection)),
-  runtimeMode: RuntimeMode,
-  interactionMode: ProviderInteractionMode,
-  providers: Schema.Array(OrchestratorMcpProviderCapability),
-  features: Schema.Struct({
-    appOwnedSubagents: Schema.Boolean,
-    asyncPolling: Schema.Boolean,
-    cancellation: Schema.Boolean,
-    batchThreadCreation: Schema.Boolean,
-    threadManagement: Schema.Boolean,
-    incrementalThreadRead: Schema.Boolean,
-    scheduledTasks: Schema.Boolean,
-    maxBatchThreads: Schema.Number,
-  }),
-});
-export type OrchestratorMcpCapabilitiesResult = typeof OrchestratorMcpCapabilitiesResult.Type;
-
 export const OrchestratorMcpScheduleTaskInput = Schema.Struct({
   projectId: OrchestratorMcpProjectTarget,
   prompt: OrchestratorMcpPrompt,
@@ -1095,31 +1046,16 @@ export const OrchestratorMcpScheduleTaskInput = Schema.Struct({
   enabled: Schema.optional(Schema.Boolean.annotate({ description: "Default true." })),
   bindToCurrentThread: Schema.optional(
     Schema.Boolean.annotate({
-      description: "Default true: runs post in this thread. False: new thread per run.",
+      description: "Post here, else new thread per run. Unset: true in own project, else false.",
     }),
   ),
+  freshSession: OrchestratorMcpFreshSession,
   clientRequestId: Schema.optional(OrchestratorMcpClientRequestId),
 });
 export type OrchestratorMcpScheduleTaskInput = typeof OrchestratorMcpScheduleTaskInput.Type;
 
 export const OrchestratorMcpScheduleTaskResult = OrchestratorMcpScheduledTask;
 export type OrchestratorMcpScheduleTaskResult = typeof OrchestratorMcpScheduleTaskResult.Type;
-
-export const OrchestratorMcpListScheduledTasksInput = Schema.Struct({
-  projectId: Schema.optional(
-    ProjectId.annotate({
-      description: "Default: your thread's project, or all outside a thread.",
-    }),
-  ),
-});
-export type OrchestratorMcpListScheduledTasksInput =
-  typeof OrchestratorMcpListScheduledTasksInput.Type;
-
-export const OrchestratorMcpListScheduledTasksResult = Schema.Struct({
-  tasks: Schema.Array(OrchestratorMcpScheduledTask),
-});
-export type OrchestratorMcpListScheduledTasksResult =
-  typeof OrchestratorMcpListScheduledTasksResult.Type;
 
 export const OrchestratorMcpUpdateScheduledTaskInput = Schema.Struct({
   scheduledTaskId: ScheduledTaskId,
@@ -1129,6 +1065,7 @@ export const OrchestratorMcpUpdateScheduledTaskInput = Schema.Struct({
   notificationPolicy: Schema.optional(ScheduledTaskNotificationPolicy),
   enabled: Schema.optional(Schema.Boolean),
   bindToCurrentThread: Schema.optional(Schema.Boolean),
+  freshSession: OrchestratorMcpFreshSession,
 });
 export type OrchestratorMcpUpdateScheduledTaskInput =
   typeof OrchestratorMcpUpdateScheduledTaskInput.Type;
@@ -1141,4 +1078,6 @@ export {
 export {
   OrchestratorMcpDeleteScheduledTaskInput,
   OrchestratorMcpDeleteScheduledTaskResult,
+  OrchestratorMcpListScheduledTasksInput,
+  OrchestratorMcpListScheduledTasksResult,
 } from "./orchestratorMcpScheduledTask.ts";

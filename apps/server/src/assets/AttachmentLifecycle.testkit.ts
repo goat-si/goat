@@ -1,3 +1,4 @@
+import * as NodeCrypto from "@effect/platform-node/NodeCrypto";
 import * as NodeServices from "@effect/platform-node/NodeServices";
 import * as Layer from "effect/Layer";
 import * as ServerConfig from "../config.ts";
@@ -6,13 +7,15 @@ import * as AttachmentFileLeases from "./AttachmentFileLeases.ts";
 import * as PendingAttachmentSweep from "./PendingAttachmentSweep.ts";
 
 export const layerFiles = Layer.merge(DocumentText.layer, AttachmentFileLeases.layer).pipe(
-  Layer.provideMerge(NodeServices.layer),
+  Layer.provideMerge(Layer.mergeAll(NodeServices.layer, NodeCrypto.layer)),
 );
 
 export const layerFilesAt = (cwd: string, prefix: string) =>
   layerFiles.pipe(
     Layer.provideMerge(
-      ServerConfig.layerTest(cwd, { prefix }).pipe(Layer.provide(NodeServices.layer)),
+      ServerConfig.layerTest(cwd, { prefix }).pipe(
+        Layer.provide(Layer.mergeAll(NodeServices.layer, NodeCrypto.layer)),
+      ),
     ),
   );
 

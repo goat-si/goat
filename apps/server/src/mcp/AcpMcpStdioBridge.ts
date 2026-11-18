@@ -23,6 +23,7 @@ export type AcpMcpBridgeErrorKind = "transport" | "http" | "protocol" | "rpc";
 export class AcpMcpBridgeError extends Error {
   readonly _tag = "AcpMcpBridgeError";
   readonly kind: AcpMcpBridgeErrorKind;
+  readonly stage?: "initialize" | undefined;
   readonly status: number | undefined;
   /** The JSON-RPC error code, for an rpc error that has one. */
   readonly rpcCode: number | undefined;
@@ -35,6 +36,7 @@ export class AcpMcpBridgeError extends Error {
     options?: {
       readonly cause?: unknown;
       readonly kind?: AcpMcpBridgeErrorKind;
+      readonly stage?: "initialize" | undefined;
       readonly status?: number;
       readonly rpcCode?: number;
       readonly rpcMessage?: string;
@@ -43,6 +45,7 @@ export class AcpMcpBridgeError extends Error {
   ) {
     super(message, options?.cause === undefined ? undefined : { cause: options.cause });
     this.kind = options?.kind ?? "transport";
+    this.stage = options?.stage;
     this.status = options?.status;
     this.rpcCode = options?.rpcCode;
     this.rpcMessage = options?.rpcMessage;
@@ -83,6 +86,12 @@ function protocolVersionOf(entry: unknown): string | null {
       ? (result as { readonly protocolVersion?: unknown }).protocolVersion
       : undefined;
   return typeof version === "string" && version.length > 0 ? version : null;
+}
+
+function replyToServerRequest(envelope: JsonRpcEnvelope): unknown {
+  return envelope.method === "ping"
+    ? { jsonrpc: "2.0", id: envelope.id, result: {} }
+    : { jsonrpc: "2.0", id: envelope.id, error: { code: -32601, message: "Method not found" } };
 }
 
 export interface AcpMcpToolCallOptions<E = never, R = never> {
@@ -141,10 +150,16 @@ function makeAcpMcpSender(options: {
         }),
       );
     }
-    const payloads = yield* Stream.runCollect(responsePayloads(response, bridgeError));
-    for (const payload of payloads) {
+    const payloads: Array<unknown> = [];
+    yield* Stream.runForEach(responsePayloads(response, bridgeError), (payload) => {
       protocolVersion = protocolVersionOf(payload) ?? protocolVersion;
-    }
+      const envelope = asEnvelope(payload);
+      if (envelope?.id !== undefined && typeof envelope.method === "string") {
+        return send(replyToServerRequest(envelope)).pipe(Effect.asVoid);
+      }
+      payloads.push(payload);
+      return Effect.void;
+    });
     return payloads;
   });
 
@@ -177,7 +192,10 @@ const initializeAcpMcpSession = Effect.fn("AcpMcpStdioBridge.initialize")(functi
   const initializeResponse = initialized.find((entry) => asEnvelope(entry)?.id === initializeId);
   if (initializeResponse === undefined || asEnvelope(initializeResponse)?.error !== undefined) {
     return yield* Effect.fail(
-      new AcpMcpBridgeError("GOAT MCP endpoint rejected initialization.", { kind: "protocol" }),
+      new AcpMcpBridgeError("GOAT MCP endpoint rejected initialization.", {
+        kind: "protocol",
+        stage: "initialize",
+      }),
     );
   }
   yield* send({ jsonrpc: "2.0", method: "notifications/initialized" });

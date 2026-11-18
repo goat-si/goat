@@ -32,7 +32,7 @@ import { writeFileStringAtomically } from "@goat/shared/atomicWrite";
 import * as Cause from "effect/Cause";
 import * as Clock from "effect/Clock";
 import * as Context from "effect/Context";
-import * as Crypto from "effect/Crypto";
+import * as SecureRandom from "effect/crypto/SecureRandom";
 import * as DateTime from "effect/DateTime";
 import * as Deferred from "effect/Deferred";
 import * as Effect from "effect/Effect";
@@ -65,7 +65,6 @@ import {
   type LaunchWatch,
   LaunchWatchDocument,
   launchWatchId,
-  type LaunchWatchTerminalStatus,
   type LaunchWatchWake,
   type LaunchWatchRunDetails,
   type LaunchWatchWebhookTarget,
@@ -86,6 +85,7 @@ import {
   watchExpired as expired,
 } from "./launchWatch.ts";
 import { quietEnd } from "./launchWatchEnds.ts";
+import { lostTrackWake, restartOnDefect, type StepResult } from "./launchWatchFollower.ts";
 import { isPermanentDispatchFailure, wakeThread } from "./threadWake.ts";
 
 /**
@@ -245,33 +245,6 @@ export const LAUNCH_WATCH_FILE = "thread-launch-watches.json";
  */
 export const LAUNCHERLESS_WATCH_FILE = "thread-launch-watches-launcherless.json";
 
-/** What one follower step learned about the run it follows. */
-type StepResult =
-  | {
-      readonly _tag: "Terminal";
-      readonly status: LaunchWatchTerminalStatus;
-      /**
-       * The run that ended: the followed one, or the running turn a queued
-       * message was promoted into, which carries on its work.
-       */
-      readonly runId: RunId;
-      /** When it ended, where the step could read it. */
-      readonly end?: string | null;
-    }
-  | {
-      readonly _tag: "Running";
-      readonly questions: ReadonlyArray<{ readonly id: string; readonly kind: string | null }>;
-      /** The run that asks them: a continuation or joined run of the followed one, else it. */
-      readonly askedRunId?: RunId;
-      readonly escalatesUserInput?: boolean;
-      readonly retryIfNoNewQuestions?: boolean;
-    }
-  | { readonly _tag: "RunMissing" }
-  | { readonly _tag: "Gone"; readonly reason: string }
-  | { readonly _tag: "LauncherGone" }
-  | { readonly _tag: "CallerChanged" }
-  | { readonly _tag: "Unreachable"; readonly error: string };
-
 const decodeDocument = Schema.decodeUnknownEffect(Schema.fromJsonString(LaunchWatchDocument));
 const encodeDocument = Schema.encodeEffect(Schema.fromJsonString(LaunchWatchDocument));
 const encodeReplicaPayload = Schema.encodeEffect(Schema.fromJsonString(ThreadReplicaPayload));
@@ -298,7 +271,7 @@ export const make = Effect.gen(function* () {
   const replicas = yield* ThreadReplicaService.ThreadReplicaService;
   const fs = yield* FileSystem.FileSystem;
   const path = yield* Path.Path;
-  const crypto = yield* Crypto.Crypto;
+  const random = yield* SecureRandom.SecureRandom;
   const layerScope = yield* Effect.scope;
   const lock = yield* Semaphore.make(1);
   const statePath = path.join(config.stateDir, LAUNCH_WATCH_FILE);
@@ -1366,7 +1339,7 @@ export const make = Effect.gen(function* () {
               message: `Retained checkpoint refused: ${invalid ?? "identity_mismatch"}.`,
             });
           const request = {
-            operationId: yield* crypto.randomUUIDv4().pipe(Effect.orDie),
+            operationId: yield* random.uuidV4().pipe(Effect.orDie),
             projectId: input.destinationProjectId,
             ...(input.modelSelection === undefined ? {} : { modelSelection: input.modelSelection }),
           };
@@ -1671,12 +1644,14 @@ export const make = Effect.gen(function* () {
         if (pause > 0) yield* Effect.sleep(pause);
       }
     }).pipe(
-      Effect.catchCause((cause) =>
-        Cause.hasInterruptsOnly(cause)
-          ? Effect.interrupt
-          : Effect.logError("launch watch follower stopped", { watchId, cause }).pipe(
-              Effect.andThen(locked(Effect.sync(() => releaseSlot(watchId, incarnation)))),
-            ),
+      restartOnDefect(watchId, () =>
+        locked(
+          Effect.suspend(() => {
+            releaseSlot(watchId, incarnation);
+            const watch = current(watchId, incarnation);
+            return watch === undefined ? Effect.void : deliver(watch, lostTrackWake(watch));
+          }),
+        ),
       ),
     );
 
@@ -1709,8 +1684,8 @@ export const make = Effect.gen(function* () {
   const incarnationFor = (id: string) => {
     const previous = watches.get(id)?.incarnation;
     return previous === undefined
-      ? crypto
-          .randomUUIDv4()
+      ? random
+          .uuidV4()
           .pipe(
             Effect.mapError(
               (cause) => new LaunchWatchStoreError({ message: "Could not start a watch.", cause }),

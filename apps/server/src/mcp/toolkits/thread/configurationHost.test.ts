@@ -217,7 +217,7 @@ const fixture = (
     },
   });
   const layer = McpHttpServer.layerThreadToolkit.pipe(
-    Layer.provideMerge(McpServer.McpServer.layer),
+    Layer.provideMerge(McpHttpServer.layerInProcessMcpServer),
     Layer.provide(McpToolAccessTestkit.layerPermissionProfilesOff),
     Layer.provide(layerNoFleetSync),
     Layer.provide(NodeCrypto.layer),
@@ -360,7 +360,7 @@ it.effect("routes configuration through the watched destination and replays its 
       expect(read.structuredContent).toMatchObject({ host, modelSelection: selection });
       expect(f.commands).toHaveLength(2);
     }).pipe(Effect.provide(f.layer));
-  }).pipe(Effect.provide(McpServer.McpServer.layer)),
+  }).pipe(Effect.provide(McpHttpServer.layerInProcessMcpServer)),
 );
 
 it.effect("distinguishes origin and destination denial before configuration writes", () =>
@@ -386,7 +386,7 @@ it.effect("distinguishes origin and destination denial before configuration writ
       expect(destination.counts().originAuthorizations).toBe(2);
       expect(destination.commands).toHaveLength(0);
     }).pipe(Effect.provide(destination.layer));
-  }).pipe(Effect.provide(McpServer.McpServer.layer)),
+  }).pipe(Effect.provide(McpHttpServer.layerInProcessMcpServer)),
 );
 
 it.effect.each([
@@ -435,7 +435,7 @@ it.effect.each([
       expect(f.counts().acceptedCommands).toBe(0);
       expect(f.counts().refreshCalls).toBe(testCase.refresh);
     }).pipe(Effect.provide(f.layer));
-  }).pipe(Effect.provide(McpServer.McpServer.layer)),
+  }).pipe(Effect.provide(McpHttpServer.layerInProcessMcpServer)),
 );
 
 it.effect("refreshes a model miss once and preserves empty-catalog custom models", () =>
@@ -461,7 +461,7 @@ it.effect("refreshes a model miss once and preserves empty-catalog custom models
       expect(result.isError).toBe(false);
       expect(empty.counts()).toMatchObject({ acceptedCommands: 1, refreshCalls: 0 });
     }).pipe(Effect.provide(empty.layer));
-  }).pipe(Effect.provide(McpServer.McpServer.layer)),
+  }).pipe(Effect.provide(McpHttpServer.layerInProcessMcpServer)),
 );
 
 it.effect("keeps rejected and cross-thread receipt failures without revalidating", () =>
@@ -501,7 +501,7 @@ it.effect("keeps rejected and cross-thread receipt failures without revalidating
       expect(conflict.counts().catalogReads).toBe(1);
       expect(conflict.counts().acceptedCommands).toBe(1);
     }).pipe(Effect.provide(conflict.layer));
-  }).pipe(Effect.provide(McpServer.McpServer.layer)),
+  }).pipe(Effect.provide(McpHttpServer.layerInProcessMcpServer)),
 );
 
 const listed = (withHost: boolean) => ({

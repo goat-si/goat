@@ -1,6 +1,7 @@
 import * as Redacted from "effect/Redacted";
 import * as Context from "effect/Context";
 import * as PlatformError from "effect/PlatformError";
+import * as NodeCrypto from "@effect/platform-node/NodeCrypto";
 import * as NodeServices from "@effect/platform-node/NodeServices";
 import { expect, it } from "@effect/vitest";
 import { vi } from "vite-plus/test";
@@ -38,14 +39,14 @@ const services = Layer.mergeAll(Auth.layer, Settings.layer).pipe(
 );
 const storage = Sqlite.layerMemory.pipe(
   Layer.provideMerge(Config.layerTest(process.cwd(), { prefix: "goat-connect-restart-test-" })),
-  Layer.provideMerge(NodeServices.layer),
+  Layer.provideMerge(Layer.mergeAll(NodeServices.layer, NodeCrypto.layer)),
 );
 const layer = Layer.mergeAll(Auth.layer, Settings.layer).pipe(
   Layer.provideMerge(Sqlite.layerMemory),
   Layer.provide(Secrets.layer),
   Layer.provide(Environment.layerIdentity),
   Layer.provideMerge(Config.layerTest(process.cwd(), { prefix: "goat-connect-hub-test-" })),
-  Layer.provideMerge(NodeServices.layer),
+  Layer.provideMerge(Layer.mergeAll(NodeServices.layer, NodeCrypto.layer)),
 );
 const request = (token: string) =>
   HttpServerRequest.fromWeb(

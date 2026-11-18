@@ -1,10 +1,14 @@
-import type { EnvironmentShellSummary } from "@goat/client-runtime/state/shell";
+import { EMPTY_SHELL_STATE, type EnvironmentShellSummary } from "@goat/client-runtime/state/shell";
 import { BearerConnectionProfile, BearerConnectionTarget } from "@goat/client-runtime/connection";
 import { EnvironmentId } from "@goat/contracts";
 import { describe, expect, it } from "@effect/vitest";
 import * as Option from "effect/Option";
 
-import { projectWorkspaceEnvironment, projectWorkspaceState } from "./workspaceModel";
+import {
+  isEnvironmentShellPending,
+  projectWorkspaceEnvironment,
+  projectWorkspaceState,
+} from "./workspaceModel";
 import type { EnvironmentPresentation } from "./environments";
 
 const ENVIRONMENT_ID = EnvironmentId.make("environment-1");
@@ -73,6 +77,15 @@ describe("mobile workspace projection", () => {
     expect(state.connectionState).toBe("offline");
     expect(state.networkStatus).toBe("offline");
     expect(state.hasReadyEnvironment).toBe(false);
+  });
+
+  it("waits for shell cache initialization and synchronization, but not completed reads", () => {
+    expect(isEnvironmentShellPending(EMPTY_SHELL_STATE)).toBe(true);
+    expect(isEnvironmentShellPending({ ...EMPTY_SHELL_STATE, status: "synchronizing" })).toBe(true);
+    expect(isEnvironmentShellPending({ ...EMPTY_SHELL_STATE, status: "cached" })).toBe(false);
+    expect(
+      isEnvironmentShellPending({ ...EMPTY_SHELL_STATE, error: Option.some("Cache failed.") }),
+    ).toBe(false);
   });
 
   it("keeps retained snapshots visible while reconnecting without claiming readiness", () => {

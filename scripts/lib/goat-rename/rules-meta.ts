@@ -318,7 +318,7 @@ export const TEST_TITLES: readonly (readonly [path: string, from: string, to: st
     "sends append launch arguments to Claude after the GOAT instructions",
   ],
   [
-    "apps/server/src/orchestration-v2/Adapters/CodexAdapterV2.test.ts",
+    "apps/server/src/orchestration-v2/Adapters/CodexAdapterV2.runtimePolicy.test.ts",
     "derives concrete Codex turn policies from every T3 runtime mode",
     "derives concrete Codex turn policies from every GOAT runtime mode",
   ],
@@ -388,7 +388,7 @@ export const TEST_TITLES: readonly (readonly [path: string, from: string, to: st
     "skips messages sent by automations, agents, and GOAT",
   ],
   [
-    "apps/web/src/components/files/projectFilesQueryState.test.tsx",
+    "apps/web/src/components/files/projectFilesQueryState.refresh.test.tsx",
     "keeps t3.json and the file tree loading until the file grant arrives",
     "keeps goat.json and the file tree loading until the file grant arrives",
   ],
@@ -515,12 +515,12 @@ export const TEST_TITLES: readonly (readonly [path: string, from: string, to: st
     "publishes a complete $format release in GOAT home and reuses it across installer instances",
   ],
   [
-    "apps/server/src/orchestration-v2/ProjectionStore.test.ts",
+    "apps/server/src/orchestration-v2/ProjectionStore.provenance.test.ts",
     "%s shells flag only an active turn blocked solely on T3 thread waits",
     "%s shells flag only an active turn blocked solely on GOAT thread waits",
   ],
   [
-    "apps/web/src/components/files/projectFilesQueryState.test.tsx",
+    "apps/web/src/components/files/projectFilesQueryState.refresh.test.tsx",
     "preserves cached t3.json defaults and scripts during a granted refresh while %s",
     "preserves cached goat.json defaults and scripts during a granted refresh while %s",
   ],

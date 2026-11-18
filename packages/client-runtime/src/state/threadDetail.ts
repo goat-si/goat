@@ -94,6 +94,26 @@ type AppThread = OrchestrationV2ThreadProjection["thread"];
 const structureTurnItems = new WeakMap<TurnItem, ThreadStructureTurnItem>();
 const structureVisibleTurnItems = new WeakMap<VisibleTurnItem, ThreadStructureVisibleTurnItem>();
 
+// Queued text, attachments and attribution all come from the message, so its identity covers them.
+function queueWorkflowStatesEqual(
+  left: ThreadQueueWorkflowState,
+  right: ThreadQueueWorkflowState,
+): boolean {
+  return (
+    left.activeRun === right.activeRun &&
+    left.isHeld === right.isHeld &&
+    left.canSendNow === right.canSendNow &&
+    left.canPromoteToSteer === right.canPromoteToSteer &&
+    left.canReorder === right.canReorder &&
+    left.queuedRuns.length === right.queuedRuns.length &&
+    left.queuedRuns.every(
+      (queued, index) =>
+        queued.run === right.queuedRuns[index]!.run &&
+        queued.message === right.queuedRuns[index]!.message,
+    )
+  );
+}
+
 function toThreadStructureTurnItem(item: TurnItem): ThreadStructureTurnItem {
   if (item.type !== "assistant_message" && item.type !== "reasoning") return item;
   let structure = structureTurnItems.get(item);
@@ -175,7 +195,11 @@ function sameProjectionArray<T>(
   if (previous === next) return true;
   if (previous.length !== next.length) return false;
   const replacedIndex = getProjectionArrayReplacementIndex(previous, next);
-  if (replacedIndex !== undefined) return same(previous[replacedIndex]!, next[replacedIndex]!);
+  if (replacedIndex !== undefined) {
+    const before = previous[replacedIndex];
+    const after = next[replacedIndex];
+    return before !== undefined && after !== undefined && same(before, after);
+  }
   return previous.every((item, index) => same(item, next[index]!));
 }
 
@@ -358,10 +382,14 @@ export function createEnvironmentThreadDetailAtoms<E>(
   // Holds while only streamed assistant text moves, so the timeline re-renders on structure;
   // each streaming message reads its text through assistantMessageTextAtom.
   const timelineVisibleTurnItemsAtomFamily = Atom.family((key: string) => {
+    let previousInput = EMPTY_VISIBLE_TURN_ITEMS;
     let previous = EMPTY_VISIBLE_TURN_ITEMS;
     return Atom.make((get) => {
       const next = get(visibleTurnItemsAtomFamily(key));
-      if (!sameApartFromStreamedAssistantText(previous, next)) previous = next;
+      // The held value differs from the latest input only by streamed text, and that relation is
+      // transitive, so comparing consecutive inputs decides the same while keeping their hint.
+      if (!sameApartFromStreamedAssistantText(previousInput, next)) previous = next;
+      previousInput = next;
       return previous;
     }).pipe(
       Atom.setIdleTTL(0),
@@ -370,12 +398,17 @@ export function createEnvironmentThreadDetailAtoms<E>(
   });
 
   const assistantMessageTextAtomFamily = Atom.family((key: string) => {
-    const separator = key.lastIndexOf("\u0000");
-    const thread = key.slice(0, separator);
-    const itemId = key.slice(separator + 1);
+    const itemSeparator = key.lastIndexOf("\u0000");
+    const sourceSeparator = key.lastIndexOf("\u0000", itemSeparator - 1);
+    const thread = key.slice(0, sourceSeparator);
+    const sourceThreadId = key.slice(sourceSeparator + 1, itemSeparator);
+    const itemId = key.slice(itemSeparator + 1);
     return Atom.make((get) => {
-      const item = get(visibleTurnItemsAtomFamily(thread)).find(
-        (visibleItem) => visibleItem.item.id === itemId,
+      // Streamed replies land on the newest rows. A merged history page can hold another
+      // source thread's row with the same item id, so the source thread is part of the match.
+      const item = get(visibleTurnItemsAtomFamily(thread)).findLast(
+        (visibleItem) =>
+          visibleItem.item.id === itemId && visibleItem.sourceThreadId === sourceThreadId,
       )?.item;
       return item?.type === "assistant_message" ? item.text : null;
     }).pipe(Atom.setIdleTTL(0), Atom.withLabel(`environment-thread-assistant-message-text:${key}`));
@@ -401,7 +434,8 @@ export function createEnvironmentThreadDetailAtoms<E>(
         projection.providerSessions !== previous.providerSessions ||
         projection.providerTurns !== previous.providerTurns
       ) {
-        value = deriveThreadQueueWorkflowState(projection);
+        const next = deriveThreadQueueWorkflowState(projection);
+        if (value === null || !queueWorkflowStatesEqual(value, next)) value = next;
         const { thread, runs, messages, providerThreads, providerSessions, providerTurns } =
           projection;
         previous = { thread, runs, messages, providerThreads, providerSessions, providerTurns };
@@ -503,8 +537,16 @@ export function createEnvironmentThreadDetailAtoms<E>(
         projection.messages !== previous?.messages
       ) {
         const { checkpoints, messages } = projection;
+        const next = deriveThreadCheckpointSummaries({ checkpoints, messages });
+        // The same checkpoints give the same summaries; messages only pick each assistant message.
+        if (
+          checkpoints !== previous?.checkpoints ||
+          next.some(
+            (summary, index) => summary.assistantMessageId !== value[index]?.assistantMessageId,
+          )
+        )
+          value = next;
         previous = { checkpoints, messages };
-        value = deriveThreadCheckpointSummaries(previous);
       }
       return value;
     }).pipe(Atom.setIdleTTL(0), Atom.withLabel(`environment-thread-checkpoint-summaries:${key}`));
@@ -635,8 +677,8 @@ export function createEnvironmentThreadDetailAtoms<E>(
       quietVisibleTurnItemsAtomFamily(threadKey(ref)),
     timelineVisibleTurnItemsAtom: (ref: ScopedThreadRef) =>
       timelineVisibleTurnItemsAtomFamily(threadKey(ref)),
-    assistantMessageTextAtom: (ref: ScopedThreadRef, itemId: string) =>
-      assistantMessageTextAtomFamily(`${threadKey(ref)}\u0000${itemId}`),
+    assistantMessageTextAtom: (ref: ScopedThreadRef, sourceThreadId: string, itemId: string) =>
+      assistantMessageTextAtomFamily(`${threadKey(ref)}\u0000${sourceThreadId}\u0000${itemId}`),
     statusAtom: (ref: ScopedThreadRef) => statusAtomFamily(threadKey(ref)),
     sequenceAtom: (ref: ScopedThreadRef) => sequenceAtomFamily(threadKey(ref)),
     errorAtom: (ref: ScopedThreadRef) => errorAtomFamily(threadKey(ref)),

@@ -1,8 +1,10 @@
+import * as NodeServices from "@effect/platform-node/NodeServices";
+import { resolveCommandPath } from "@goat/shared/shell";
 import * as HostProcess from "@goat/shared/HostProcess";
 import { resolveSelfInvocation, type SelfInvocation } from "@goat/shared/nodeRuntime";
 import { type OrchestrationV2ProviderCapabilities } from "@goat/contracts";
 import { FxSettings } from "../settings.ts";
-import type * as Crypto from "effect/Crypto";
+import type * as SecureRandom from "effect/crypto/SecureRandom";
 import * as Effect from "effect/Effect";
 import type * as FileSystem from "effect/FileSystem";
 import * as Option from "effect/Option";
@@ -153,6 +155,7 @@ export interface FxAdapterV2Options {
   readonly instanceId: Parameters<typeof makeAcpAdapterV2>[0]["instanceId"];
   readonly settings: FxSettings;
   readonly environment: NodeJS.ProcessEnv;
+  readonly currentEnvironment?: Effect.Effect<NodeJS.ProcessEnv>;
   readonly selfInvocation: SelfInvocation;
   /** fx's id for "Default", the model the provider snapshot read from `fx status`. */
   readonly defaultModel?: Effect.Effect<string | undefined>;
@@ -164,24 +167,45 @@ export interface FxAdapterV2Options {
   ) => Effect.Effect<
     AcpSessionRuntime.AcpSessionRuntime["Service"],
     EffectAcpErrors.AcpError,
-    ChildProcessSpawner.ChildProcessSpawner | Crypto.Crypto | Scope.Scope
+    ChildProcessSpawner.ChildProcessSpawner | SecureRandom.SecureRandom | Scope.Scope
   >;
   readonly assertComplete?: Effect.Effect<void, EffectAcpErrors.AcpError>;
+}
+
+interface FxSessionLaunch {
+  readonly environment: NodeJS.ProcessEnv;
+  readonly executable: string;
 }
 
 function makeFxAcpAdapterFlavor(options: FxAdapterV2Options): AcpAdapterV2Flavor {
   const makeRuntime =
     options.makeRuntime ??
-    (({ runtimePolicy: _runtimePolicy, processEnvironment, ...input }: AcpAdapterV2RuntimeInput) =>
-      makeFxAcpRuntime({
+    (({
+      runtimePolicy: _runtimePolicy,
+      processEnvironment,
+      ...input
+    }: AcpAdapterV2RuntimeInput) => {
+      const launch = input.sessionLaunch as FxSessionLaunch;
+      return makeFxAcpRuntime({
         ...input,
-        fxSettings: options.settings,
-        environment: { ...options.environment, ...processEnvironment },
-      }));
+        fxSettings: { ...options.settings, binaryPath: launch.executable },
+        environment: { ...launch.environment, ...processEnvironment },
+      });
+    });
   return {
     driver: FX_DRIVER_KIND,
     runtimeHarness: "fx",
     capabilities: FxProviderCapabilitiesV2,
+    resolveSessionLaunch: Effect.fn("FxAdapter.resolveSessionLaunch")(function* (
+      environment,
+      sessionEnvironment = environment,
+    ) {
+      const command = options.settings.binaryPath || "fx";
+      const executable = yield* resolveCommandPath(command, { env: environment }).pipe(
+        Effect.provide(NodeServices.layer),
+      );
+      return { environment: sessionEnvironment, executable: executable ?? command };
+    }),
     makeRuntime: (input) => makeRuntime(input).pipe(Effect.map(withFxSessionMode)),
     applyModelSelection: ({ runtime, modelSelection }) =>
       applyFxModelSelection(runtime, modelSelection, options.defaultModel).pipe(
@@ -201,6 +225,7 @@ export const makeFxAdapterV2 = Effect.fn("makeFxAdapterV2")(function* (
     instanceId: options.instanceId,
     flavor: makeFxAcpAdapterFlavor(options),
     selfInvocation: options.selfInvocation,
+    currentEnvironment: options.currentEnvironment ?? Effect.succeed(options.environment),
     ...(options.nativeLogging === undefined ? {} : { nativeLogging: options.nativeLogging }),
     ...(options.testHooks === undefined ? {} : { testHooks: options.testHooks }),
   });
@@ -208,7 +233,7 @@ export const makeFxAdapterV2 = Effect.fn("makeFxAdapterV2")(function* (
 
 export type FxAdapterV2DriverEnv =
   | ChildProcessSpawner.ChildProcessSpawner
-  | Crypto.Crypto
+  | SecureRandom.SecureRandom
   | FileSystem.FileSystem
   | IdAllocator.IdAllocatorV2
   | Path.Path
@@ -226,13 +251,17 @@ export const makeFxAdapterV2Driver = (
   create: Effect.fn("FxAdapterV2Driver.create")(
     function* (input: ProviderAdapterDriverCreateInput<FxSettings>) {
       const hostEnvironment = yield* HostProcess.Environment;
+      const currentEnvironment = Effect.suspend(() =>
+        mergeProviderInstanceEnvironment(input.environment, hostEnvironment),
+      ).pipe(Effect.provideService(HostProcess.HomeDirectory, yield* HostProcess.HomeDirectory));
       const selfInvocation = yield* resolveSelfInvocation();
       const providerEventLoggers = yield* ProviderEventLoggers.ProviderEventLoggers;
       const makeNativeLogger = yield* makeAcpNativeLoggerFactory();
       return yield* makeFxAdapterV2({
         instanceId: input.instanceId,
         settings: { ...input.config, enabled: input.enabled },
-        environment: yield* mergeProviderInstanceEnvironment(input.environment, hostEnvironment),
+        environment: { ...(yield* currentEnvironment) },
+        currentEnvironment,
         selfInvocation,
         defaultModel,
         nativeLogging: (threadId) =>

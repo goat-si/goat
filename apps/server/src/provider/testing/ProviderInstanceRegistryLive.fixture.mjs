@@ -34,6 +34,26 @@ lines.on("line", (line) => {
   if (message.request?.subtype === "get_usage") {
     const marker = process.env.GOAT_CLAUDE_RESET_MARKER;
     const usageFailsUntil = process.env.GOAT_CLAUDE_USAGE_FAILS_UNTIL;
+    const failOnceMarker = process.env.GOAT_CLAUDE_USAGE_FAIL_ONCE;
+    if (
+      marker &&
+      NodeFS.existsSync(marker) &&
+      failOnceMarker &&
+      !NodeFS.existsSync(failOnceMarker)
+    ) {
+      NodeFS.writeFileSync(failOnceMarker, "failed");
+      process.stdout.write(
+        JSON.stringify({
+          type: "control_response",
+          response: {
+            subtype: "error",
+            request_id: message.request_id,
+            error: "transient usage failure",
+          },
+        }) + "\n",
+      );
+      return;
+    }
     if (
       (usageFailsUntil && !NodeFS.existsSync(usageFailsUntil)) ||
       (process.env.GOAT_CLAUDE_USAGE_FAILS_AFTER_CLAIM && marker && NodeFS.existsSync(marker))
@@ -63,6 +83,40 @@ lines.on("line", (line) => {
               },
             },
           },
+        },
+      }) + "\n",
+    );
+    return;
+  }
+  if (message.request?.subtype === "get_settings" && process.env.GOAT_CLAUDE_SETTINGS_UNSUPPORTED) {
+    process.stdout.write(
+      JSON.stringify({
+        type: "control_response",
+        response: {
+          subtype: "error",
+          request_id: message.request_id,
+          error: "Unsupported control request subtype: get_settings",
+        },
+      }) + "\n",
+    );
+    return;
+  }
+  if (message.request?.subtype === "get_settings") {
+    const sources = JSON.parse(process.env.GOAT_CLAUDE_SETTINGS_SOURCES ?? "[]");
+    // Like Claude Code, `effective` is the last-writer merge, which hides per-source caps.
+    const effective = { modelSettings: {} };
+    for (const { settings } of sources) {
+      Object.assign(effective, settings, {
+        modelSettings: Object.assign(effective.modelSettings, settings.modelSettings),
+      });
+    }
+    process.stdout.write(
+      JSON.stringify({
+        type: "control_response",
+        response: {
+          subtype: "success",
+          request_id: message.request_id,
+          response: { effective, sources },
         },
       }) + "\n",
     );

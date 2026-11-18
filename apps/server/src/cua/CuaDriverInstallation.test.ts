@@ -1,9 +1,11 @@
+import * as NodeCrypto from "@effect/platform-node/NodeCrypto";
 import * as NodeServices from "@effect/platform-node/NodeServices";
 import { expect, it } from "@effect/vitest";
 import * as HostProcess from "@goat/shared/HostProcess";
-import * as Crypto from "effect/Crypto";
+import * as Digest from "effect/crypto/Digest";
 import * as Deferred from "effect/Deferred";
 import * as Effect from "effect/Effect";
+import * as Layer from "effect/Layer";
 import * as Fiber from "effect/Fiber";
 import * as Hex from "effect/encoding/Hex";
 import * as FileSystem from "effect/FileSystem";
@@ -98,7 +100,7 @@ const makeHarness = Effect.fn("test.makeCuaDriverInstallation")(function* (
 ) {
   const fs = yield* FileSystem.FileSystem;
   const path = yield* Path.Path;
-  const crypto = yield* Crypto.Crypto;
+  const digest = yield* Digest.Digest;
   const baseDir =
     options.baseDir ?? (yield* fs.makeTempDirectoryScoped({ prefix: "goat-cua-install-test-" }));
   const installRoot = path.join(baseDir, "tools", "cua-driver");
@@ -116,7 +118,7 @@ const makeHarness = Effect.fn("test.makeCuaDriverInstallation")(function* (
     format: fixture.format,
     url: `https://example.invalid/${archiveName}`,
     bytes: options.bytes ?? archive.byteLength,
-    sha256: options.sha256 ?? Hex.encode(yield* crypto.digest("SHA-256", archive)),
+    sha256: options.sha256 ?? Hex.encode(yield* digest.digest(Digest.sha256, archive)),
     executable: fixture.executable,
     requiredFiles: fixture.requiredFiles,
   };
@@ -200,7 +202,7 @@ const makeTarFixture = Effect.fn("test.makeTarFixture")(function* (options: {
     Effect.gen(function* () {
       if (!ChildProcess.isStandardCommand(command) || command.command !== "tar")
         return yield* Effect.die(new Error("Unexpected fixture command."));
-      const operation = command.args[0];
+      const operation = command.args.map(String)[0];
       const hang = faulty && operation === options.hang;
       const oversized = faulty && operation === options.oversized;
       if (hang || oversized) faulty = false;
@@ -217,7 +219,7 @@ const makeTarFixture = Effect.fn("test.makeTarFixture")(function* (options: {
           })
           .join("\n");
       if (!hang && operation === "-xzf") {
-        const destination = command.args[command.args.indexOf("-C") + 1];
+        const destination = command.args.map(String)[command.args.map(String).indexOf("-C") + 1];
         if (destination === undefined)
           return yield* Effect.die(new Error("Missing tar destination."));
         for (const file of releases[0].files) {
@@ -253,7 +255,7 @@ const makeTarFixture = Effect.fn("test.makeTarFixture")(function* (options: {
   return { spawner, started, interrupted, stopped };
 });
 
-it.layer(NodeServices.layer)("CuaDriverInstallation", (it) => {
+it.layer(Layer.mergeAll(NodeServices.layer, NodeCrypto.layer))("CuaDriverInstallation", (it) => {
   for (const hang of ["-tzf", "-tvzf", "-xzf"] as const)
     it.effect.skipIf(!tarHost)(
       `expires tar ${hang} without publishing and releases installation for retry`,

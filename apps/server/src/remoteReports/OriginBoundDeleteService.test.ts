@@ -81,7 +81,7 @@ const services = Layer.mergeAll(
 const served = McpHttpServer.toolkitRegistration(RemoteReportToolkit, reportHandlers).pipe(
   Layer.provide(OriginBoundDelete.layer),
   Layer.provideMerge(RemoteReportService.layer),
-  Layer.provideMerge(McpServer.McpServer.layer),
+  Layer.provideMerge(McpHttpServer.layerInProcessMcpServer),
   Layer.provideMerge(services),
   Layer.provide(NodeCryptoLayer.layer),
 );

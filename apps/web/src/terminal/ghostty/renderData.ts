@@ -1,0 +1,16 @@
+export const RENDER_DATA = {
+  cols: 1,
+  rows: 2,
+  dirty: 3,
+  rowIterator: 4,
+  background: 5,
+  foreground: 6,
+  cursor: 7,
+  cursorHasValue: 8,
+  cursorStyle: 10,
+  cursorVisible: 11,
+  cursorBlinking: 12,
+  cursorInViewport: 14,
+  cursorX: 15,
+  cursorY: 16,
+} as const;

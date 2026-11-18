@@ -42,7 +42,7 @@ describe("fixture seed lifetime", () => {
       );
       if (guarded._tag !== "StandardCommand") throw new Error("expected a standard command");
       // Detached like the Effect spawner, so the shell leads its own process group.
-      const shell = NodeChildProcess.spawn(guarded.command, [...guarded.args], {
+      const shell = NodeChildProcess.spawn(guarded.command, guarded.args.map(String), {
         detached: true,
         stdio: ["ignore", "pipe", "inherit"],
       });

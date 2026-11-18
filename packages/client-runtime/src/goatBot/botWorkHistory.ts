@@ -144,7 +144,7 @@ export function botWorkHistoryView(input: {
   const held = walk.entries.flatMap((entry) => listed.get(entry.task.task.taskId) ?? []);
   const heldIds = new Set(held.map((row) => row.task.taskId));
   const reported = JSON.stringify([
-    held.map((row) => [row.task, row.view, row.unread]),
+    held.map((row) => [row.task, row.view, row.unread, row.pullRequests, row.pullRequestsOmitted]),
     current.rows.filter((row) => row.kind === "coding" && heldIds.has(row.taskId)),
     (current.remoteWork ?? []).filter((item) => heldIds.has(item.taskId)),
   ]);

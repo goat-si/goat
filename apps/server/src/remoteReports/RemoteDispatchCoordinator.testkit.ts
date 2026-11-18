@@ -5,6 +5,7 @@ import {
   NodeId,
   RunId,
   type OrchestrationV2ServerCommand,
+  type OrchestrationV2Run,
   type OrchestrationV2Subagent,
   type OrchestrationV2ThreadShell,
   type RemoteReport,
@@ -17,15 +18,15 @@ import * as Effect from "effect/Effect";
 import * as Layer from "effect/Layer";
 import * as Queue from "effect/Queue";
 import * as SqlClient from "effect/sql/SqlClient";
-import Migration0062 from "../persistence/Migrations/081_RemoteReports.ts";
-import Migration0063 from "../persistence/Migrations/082_RemoteDispatches.ts";
-import Migration0065 from "../persistence/Migrations/084_RemoteDispatchQuestions.ts";
-import Migration0068 from "../persistence/Migrations/086_RemoteReportRelay.ts";
-import Migration0073 from "../persistence/Migrations/091_MemoryTaskGrantCeiling.ts";
-import Migration0089 from "../persistence/Migrations/104_RemoteDispatchObservation.ts";
-import Migration0101 from "../persistence/Migrations/113_RemoteReportInboxRunId.ts";
-import Migration0137 from "../persistence/Migrations/137_RemoteDispatchDeleteIntent.ts";
-import Migration0143 from "../persistence/Migrations/143_RemoteDispatchHostOutage.ts";
+import Migration0062 from "../persistence/Migrations/091_RemoteReports.ts";
+import Migration0063 from "../persistence/Migrations/092_RemoteDispatches.ts";
+import Migration0065 from "../persistence/Migrations/094_RemoteDispatchQuestions.ts";
+import Migration0068 from "../persistence/Migrations/096_RemoteReportRelay.ts";
+import Migration0073 from "../persistence/Migrations/101_MemoryTaskGrantCeiling.ts";
+import Migration0089 from "../persistence/Migrations/114_RemoteDispatchObservation.ts";
+import Migration0101 from "../persistence/Migrations/123_RemoteReportInboxRunId.ts";
+import Migration0137 from "../persistence/Migrations/147_RemoteDispatchDeleteIntent.ts";
+import Migration0143 from "../persistence/Migrations/153_RemoteDispatchHostOutage.ts";
 import * as LaunchWatchService from "../mcp/LaunchWatchService.ts";
 import * as Orchestrator from "../orchestration-v2/Orchestrator.ts";
 import * as Threads from "../orchestration-v2/ThreadManagementService.ts";
@@ -89,6 +90,7 @@ export const fixture = Effect.gen(function* () {
   const deleteKept = yield* Queue.unbounded<void>();
   const attemptedCommands: OrchestrationV2ServerCommand[] = [];
   const recordedTasks: OrchestrationV2Subagent[] = [];
+  const recordedRuns: OrchestrationV2Run[] = [];
   const unavailableProjections = new Set<ThreadId>();
   const refusedTasks = new Set<NodeId>();
   const refusedCommandTypes = new Set<OrchestrationV2ServerCommand["type"]>();
@@ -222,6 +224,7 @@ export const fixture = Effect.gen(function* () {
           ? Effect.fail(new Orchestrator.OrchestratorProjectionError({ threadId: id }))
           : Effect.succeed({
               ...idleThreadProjection(liveThreadShell(id)),
+              runs: recordedRuns,
               subagents: recordedTasks,
             }),
       getThreadShell: () => Effect.succeed(shell),
@@ -286,6 +289,7 @@ export const fixture = Effect.gen(function* () {
     attemptedCommands,
     refusedReviews,
     recordedTasks,
+    recordedRuns,
     unavailableProjections,
     refusedTasks,
     refusedCommandTypes,
@@ -330,3 +334,6 @@ export const fixture = Effect.gen(function* () {
   };
 });
 export const database = NodeSqliteClient.layer({ filename: ":memory:" });
+
+/** Once every drain has ended, the drain owners and row locks the coordinator still holds. */
+export { heldAfterDrains } from "./RemoteDispatchCoordinator.ts";

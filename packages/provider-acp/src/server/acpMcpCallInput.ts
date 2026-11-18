@@ -40,3 +40,13 @@ export function ompDeviceGoatToolCall(
   const input = acpMcpFallbackInput(rawInput.content);
   return { tool, ...(input === undefined ? {} : { input }) };
 }
+
+/** Hermes names GOAT's server editor_goat_<8 hex> and keeps GOAT's tool names. */
+export function hermesGoatTool(
+  server: string | undefined,
+  tool: string | undefined,
+): string | undefined {
+  return server && tool && /^editor_goat_[0-9a-f]{8}$/.test(server) && GOAT_MCP_TOOL_NAMES.has(tool)
+    ? tool
+    : undefined;
+}

@@ -21,9 +21,11 @@ import {
 } from "@goat/shared/devProxy";
 
 import { loadRepoEnv } from "../../scripts/lib/public-config";
+import { resolveTaggedSourceVersion } from "../../scripts/lib/tagged-source-version";
 import { thirdPartyLicensesPlugin } from "../../scripts/lib/third-party-licenses";
 import { tailwindPlugins } from "./vite/tailwind";
 import { warmBundledDevPlugin } from "./vite/warmBundledDev";
+import { formatAppDisplayName, resolveWebAppStageLabel } from "./src/branding.logic";
 
 const repoEnv = loadRepoEnv();
 Object.assign(process.env, repoEnv);
@@ -49,7 +51,8 @@ const configuredRelayTracingDataset = repoEnv.VITE_RELAY_OTLP_TRACES_DATASET?.tr
 const configuredRelayTracingToken = repoEnv.VITE_RELAY_OTLP_TRACES_TOKEN?.trim() || "";
 const configuredReleaseChannel =
   process.env.GOAT_BUILT_DEV === "1" ? "dev" : process.env.VITE_RELEASE_CHANNEL?.trim() || "";
-const configuredAppVersion = process.env.APP_VERSION?.trim() || pkg.version;
+// The release workflow builds the hosted app with latest or nightly.
+const configuredHostedAppChannel = process.env.VITE_HOSTED_APP_CHANNEL?.trim() || "";
 const configuredDesktopUpdateRepository = process.env.GOAT_DESKTOP_UPDATE_REPOSITORY?.trim() || "";
 const configuredHostedAppUrl = process.env.VITE_HOSTED_APP_URL?.trim() || undefined;
 const sourcemapEnv = process.env.GOAT_WEB_SOURCEMAP?.trim().toLowerCase();
@@ -60,6 +63,11 @@ const builtDev = process.env.GOAT_BUILT_DEV === "1";
 
 const bundledDevEnv = process.env.GOAT_BUNDLED_DEV?.trim().toLowerCase();
 const bundledDev = bundledDevEnv === "1" || bundledDevEnv === "true";
+
+// Bundled dev and `build --watch` pass Rolldown `exclude` but not Vite's default `ignored`, so
+// they watch node_modules. Those files are pnpm-store hardlinks shared by every worktree, so each
+// `vp i` or worktree removal elsewhere rebuilds every long-running server and leaks native memory.
+const rolldownWatchExclude = [/[\\/]node_modules[\\/]/];
 
 const buildSourcemap: boolean | "hidden" =
   sourcemapEnv === "0" || sourcemapEnv === "false"
@@ -292,6 +300,43 @@ function chunkCycleGuardPlugin(): Plugin {
   };
 }
 
+// Bundled dev never evicts emitted files from memory (vitejs/vite#23781), so hashed names keep
+// a copy of every changed chunk from every rebuild. Fixed names overwrite the previous copy.
+function bundledDevStableNamesPlugin(): Plugin {
+  return {
+    name: "goat:bundled-dev-stable-names",
+    apply: "serve",
+    outputOptions: (options) => ({
+      ...options,
+      chunkFileNames: "assets/[name].js",
+      assetFileNames: "assets/[name][extname]",
+    }),
+  };
+}
+
+// Stamps index.html's title with the name branding.ts resolves once the app
+// loads, so a tab opens on the right channel instead of flashing another's.
+// Desktop swaps in its injected branding from an inline script in index.html.
+function bootstrapTitlePlugin(): Plugin {
+  let development = false;
+  return {
+    name: "goat:bootstrap-title",
+    configResolved(config) {
+      // The same flag Vite exposes to the app as import.meta.env.DEV.
+      development = !config.isProduction;
+    },
+    transformIndexHtml(html) {
+      const stageLabel = resolveWebAppStageLabel({
+        VITE_HOSTED_APP_CHANNEL: configuredHostedAppChannel,
+        VITE_RELEASE_CHANNEL: configuredReleaseChannel,
+        DEV: development,
+      });
+      const title = formatAppDisplayName({ baseName: "GOAT", stageLabel });
+      return html.replace(/<title>[^<]*<\/title>/, `<title>${title}</title>`);
+    },
+  };
+}
+
 // Allow Tailnet hosts for sharing; Tailscale-controlled DNS prevents attacker rebinding.
 const configuredAllowedHosts = (process.env.GOAT_DEV_ALLOWED_HOSTS ?? "")
   .split(",")
@@ -299,7 +344,14 @@ const configuredAllowedHosts = (process.env.GOAT_DEV_ALLOWED_HOSTS ?? "")
   .filter((entry) => entry.length > 0);
 const allowedHosts = [".ts.net", ...configuredAllowedHosts];
 
-export default defineConfig(() => {
+export default defineConfig(({ command }) => {
+  // `vp dev` and `--built` dev pair this client with a server run from source, which reports the
+  // manifest version. Only a production build is paired with a packed server.
+  const configuredAppVersion =
+    process.env.APP_VERSION?.trim() ||
+    (command === "build" && !builtDev
+      ? resolveTaggedSourceVersion(`${import.meta.dirname}/../..`, pkg.version)
+      : pkg.version);
   return {
     run: {
       tasks: {
@@ -312,6 +364,7 @@ export default defineConfig(() => {
     },
     assetsInclude: ["**/*.wasm"],
     plugins: [
+      bootstrapTitlePlugin(),
       // Worker previews repeatedly fetch large WASM assets; loopback tests need no compression.
       process.env.VITEST ? undefined : devCompressionPlugin(),
       chunkCycleGuardPlugin(),
@@ -330,6 +383,7 @@ export default defineConfig(() => {
       react({ compiler: true }),
       tailwindPlugins(bundledDev),
       warmBundledDevPlugin(),
+      bundledDev ? bundledDevStableNamesPlugin() : undefined,
     ],
     optimizeDeps: {
       include: [
@@ -360,6 +414,7 @@ export default defineConfig(() => {
       ),
       "import.meta.env.VITE_RELAY_OTLP_TRACES_TOKEN": JSON.stringify(configuredRelayTracingToken),
       "import.meta.env.VITE_HOSTED_APP_URL": JSON.stringify(configuredHostedAppUrl ?? ""),
+      "import.meta.env.VITE_HOSTED_APP_CHANNEL": JSON.stringify(configuredHostedAppChannel),
       "import.meta.env.GOAT_DESKTOP_UPDATE_REPOSITORY": JSON.stringify(
         configuredDesktopUpdateRepository,
       ),
@@ -371,12 +426,6 @@ export default defineConfig(() => {
     },
     resolve: {
       tsconfigPaths: true,
-      alias: {
-        "@betteroffice/fonts-cjk": new URL(
-          "./src/components/files/office/fonts-cjk.ts",
-          import.meta.url,
-        ).pathname,
-      },
       dedupe: ["react", "react-dom"],
     },
     experimental: {
@@ -396,6 +445,7 @@ export default defineConfig(() => {
               clientFiles: ["./src/main.tsx"],
             },
           }),
+      watch: { exclude: rolldownWatchExclude },
       ...(devProxyTarget
         ? {
             // Share prefixes with the backend catch-all so the proxy and 404 lists cannot drift.
@@ -433,6 +483,7 @@ export default defineConfig(() => {
       emptyOutDir: true,
       manifest: true,
       sourcemap: buildSourcemap,
+      ...(builtDev ? { watch: { exclude: rolldownWatchExclude } } : {}),
       rolldownOptions: {
         output: {
           // PDF.js resolves decoder modules and ICC data relative to wasmUrl.

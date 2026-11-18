@@ -1,6 +1,14 @@
 // @effect-diagnostics nodeBuiltinImport:off -- The synchronous source guard reads repository files.
 import { assert, it } from "vite-plus/test";
+import { it as effectIt } from "@effect/vitest";
+import * as NodeServices from "@effect/platform-node/NodeServices";
+import {
+  makeLocalFileTracer,
+  type LocalSpanEvents,
+  type TraceRecord,
+} from "@goat/shared/observability";
 import * as Context from "effect/Context";
+import * as Effect from "effect/Effect";
 import * as Exit from "effect/Exit";
 import * as Option from "effect/Option";
 import * as Tracer from "effect/Tracer";
@@ -12,55 +20,96 @@ import { parseSync } from "vite-plus";
 import { HOT_SPANS, SQL_SPANS, makeLocalSpanPolicy } from "./tracePolicy.ts";
 
 const parent = Tracer.externalSpan({ traceId: "trace", spanId: "parent" });
-const span = (
-  name: string,
-  options: {
-    readonly root?: boolean;
-    readonly wait?: unknown;
-    readonly endNanos?: bigint;
-    readonly exit?: Exit.Exit<unknown, unknown>;
-    readonly events?: ReadonlyArray<string>;
-    readonly attributes?: Record<string, unknown>;
-    readonly unfinished?: boolean;
-    readonly parent?: Tracer.AnySpan;
-  } = {},
-) => {
-  const native = new Tracer.NativeSpan({
-    name,
-    parent: options.root ? Option.none() : Option.some(options.parent ?? parent),
-    annotations: Context.empty(),
-    links: [],
-    startTime: 0n,
-    kind: "internal",
-    sampled: true,
-  });
-  if ("wait" in options) native.attribute("db.lock_wait_ms", options.wait);
-  for (const [key, value] of Object.entries(options.attributes ?? {})) native.attribute(key, value);
-  for (const event of options.events ?? []) native.event(event, 0n, {});
-  if (!options.unfinished) native.end(options.endNanos ?? 1_000_000n, options.exit ?? Exit.void);
-  return native;
-};
+// The span GOAT writes: Effect 4.1 drops attributes set on an ended NativeSpan, LocalFileSpan keeps them.
+const localFileTracer = makeLocalFileTracer({
+  filePath: "",
+  maxBytes: 0,
+  maxFiles: 0,
+  batchWindowMs: 0,
+  sink: { filePath: "", push: () => {}, flush: Effect.void, close: () => Effect.void },
+}).pipe(Effect.provide(NodeServices.layer));
+const spansOf =
+  (tracer: Tracer.Tracer) =>
+  (
+    name: string,
+    options: {
+      readonly root?: boolean;
+      readonly wait?: unknown;
+      readonly endNanos?: bigint;
+      readonly exit?: Exit.Exit<unknown, unknown>;
+      readonly events?: ReadonlyArray<string>;
+      readonly attributes?: Record<string, unknown>;
+      readonly unfinished?: boolean;
+      readonly parent?: Tracer.AnySpan;
+    } = {},
+  ) => {
+    const native = tracer.span({
+      name,
+      parent: options.root ? Option.none() : Option.some(options.parent ?? parent),
+      root: options.root === true,
+      annotations: Context.empty(),
+      links: [],
+      startTime: 0n,
+      kind: "internal",
+      sampled: true,
+    }) as Tracer.Span & { readonly events: LocalSpanEvents };
+    if ("wait" in options) native.attribute("db.lock_wait_ms", options.wait);
+    for (const [key, value] of Object.entries(options.attributes ?? {}))
+      native.attribute(key, value);
+    for (const event of options.events ?? []) native.event(event, 0n, {});
+    if (!options.unfinished) native.end(options.endNanos ?? 1_000_000n, options.exit ?? Exit.void);
+    return native;
+  };
 const makeKeep = () => {
   const policy = makeLocalSpanPolicy();
-  return (native: Tracer.NativeSpan) => policy(native, native.events);
+  return (native: ReturnType<ReturnType<typeof spansOf>>) => policy(native, native.events);
 };
 
-it("keeps a fast parent when its recorded child ends first (#2465)", () => {
-  const keep = makeKeep();
-  const hotParent = span("SqliteWriter.send");
-  const child = span("child", { parent: hotParent });
-  assert.isTrue(keep(child));
-  assert.isTrue(keep(hotParent));
-});
+effectIt.effect("keeps a fast parent when its recorded child ends first (#2465)", () =>
+  Effect.gen(function* () {
+    const span = spansOf(yield* localFileTracer);
+    const keep = makeKeep();
+    const hotParent = span("SqliteWriter.send");
+    const child = span("child", { parent: hotParent });
+    assert.isTrue(keep(child));
+    assert.isTrue(keep(hotParent));
+  }),
+);
 
-it("marks a recorded child whose fast parent already ended (#2465)", () => {
-  const keep = makeKeep();
-  const hotParent = span("SqliteWriter.send");
-  const child = span("child", { parent: hotParent });
-  assert.isFalse(keep(hotParent));
-  assert.isTrue(keep(child));
-  assert.isTrue(child.attributes.get("trace.parent_omitted"));
-});
+effectIt.effect("marks a recorded child whose fast parent already ended (#2465)", () =>
+  Effect.gen(function* () {
+    const span = spansOf(yield* localFileTracer);
+    const keep = makeKeep();
+    const hotParent = span("SqliteWriter.send");
+    const child = span("child", { parent: hotParent });
+    assert.isFalse(keep(hotParent));
+    assert.isTrue(keep(child));
+    assert.isTrue(child.attributes.get("trace.parent_omitted"));
+    // The mark must also reach the record GOAT writes, which LocalFileSpan builds after the policy.
+    const records: Array<TraceRecord> = [];
+    const recording = spansOf(
+      yield* makeLocalFileTracer({
+        filePath: "",
+        maxBytes: 0,
+        maxFiles: 0,
+        batchWindowMs: 0,
+        shouldRecord: makeLocalSpanPolicy(),
+        sink: {
+          filePath: "",
+          push: (record) => records.push(record),
+          flush: Effect.void,
+          close: () => Effect.void,
+        },
+      }).pipe(Effect.provide(NodeServices.layer)),
+    );
+    recording("child", { parent: recording("SqliteWriter.send") });
+    assert.deepStrictEqual(
+      records.map((record) => record.name),
+      ["child"],
+    );
+    assert.isTrue(records[0]?.attributes["trace.parent_omitted"]);
+  }),
+);
 
 const productionSource = (file: string) =>
   !/(?:^|\/)(?:__tests__|__fixtures__|tests?|testing|testkits?|fixtures?|test[-_]?utils|[^/]*-testing)(?:\/|\.)/i.test(
@@ -181,49 +230,55 @@ it("keeps policy names aligned with span names in source (#2465)", () => {
   for (const name of SQL_SPANS) assert.isTrue(sqlNames.has(name), name);
 });
 
-it("leaves out only fast successful hot spans and uncontended SQL", () => {
-  const keep = makeKeep();
-  assert.isFalse(keep(span("SqliteWriter.send")));
-  assert.isFalse(keep(span("OpenCodexQuotaPool.routeOf")));
-  assert.isFalse(keep(span("sqlite", { wait: 0 })));
-  assert.isFalse(
-    keep(span("sql.transaction", { wait: 0.5, events: ["effect.sql.transaction.commit"] })),
-  );
-  assert.isFalse(
-    keep(span("sql.transaction", { wait: 0, events: ["effect.sql.transaction.savepoint"] })),
-  );
-});
+effectIt.effect("leaves out only fast successful hot spans and uncontended SQL", () =>
+  Effect.gen(function* () {
+    const span = spansOf(yield* localFileTracer);
+    const keep = makeKeep();
+    assert.isFalse(keep(span("SqliteWriter.send")));
+    assert.isFalse(keep(span("OpenCodexQuotaPool.routeOf")));
+    assert.isFalse(keep(span("sqlite", { wait: 0 })));
+    assert.isFalse(
+      keep(span("sql.transaction", { wait: 0.5, events: ["effect.sql.transaction.commit"] })),
+    );
+    assert.isFalse(
+      keep(span("sql.transaction", { wait: 0, events: ["effect.sql.transaction.savepoint"] })),
+    );
+  }),
+);
 
-it("keeps every span that carries evidence", () => {
-  const keep = makeKeep();
-  const kept = {
-    "an unlisted name": span("ProviderTurnStartService.start"),
-    "a slow hot span": span("SqliteWriter.send", { endNanos: 10_000_000n }),
-    "a failed hot span": span("SqliteWriter.send", { exit: Exit.fail("fixture") }),
-    "an interrupted hot span": span("SqliteWriter.send", {
-      exit: Exit.interrupt(),
-    }),
-    "a root hot span": span("SqliteWriter.send", { root: true }),
-    "a hot span with an event": span("SqliteWriter.send", { events: ["warning"] }),
-    "a hot span with a routine SQL event name": span("SqliteWriter.send", {
-      events: ["effect.sql.transaction.commit"],
-    }),
-    "a hot span with heap growth": span("SqliteWriter.send", {
-      attributes: { "memory.heap_growth_bytes": 20_000_000 },
-    }),
-    "an unfinished hot span": span("SqliteWriter.send", { unfinished: true }),
-    "a negative duration": span("SqliteWriter.send", { endNanos: -1n }),
-    "a rolled back transaction": span("sql.transaction", {
-      wait: 0,
-      events: ["effect.sql.transaction.rollback"],
-    }),
-    "a lock wait": span("sqlite", { wait: 1 }),
-    "a slow statement": span("sqlite", { wait: 0, endNanos: 10_000_000n }),
-    "a root statement": span("sqlite", { wait: 0, root: true }),
-    "a statement without a recorded wait": span("sqlite"),
-  };
-  for (const [label, native] of Object.entries(kept)) assert.isTrue(keep(native), label);
-  for (const wait of [NaN, Infinity, -1, "0", null]) {
-    assert.isTrue(keep(span("sqlite", { wait })), String(wait));
-  }
-});
+effectIt.effect("keeps every span that carries evidence", () =>
+  Effect.gen(function* () {
+    const span = spansOf(yield* localFileTracer);
+    const keep = makeKeep();
+    const kept = {
+      "an unlisted name": span("ProviderTurnStartService.start"),
+      "a slow hot span": span("SqliteWriter.send", { endNanos: 10_000_000n }),
+      "a failed hot span": span("SqliteWriter.send", { exit: Exit.fail("fixture") }),
+      "an interrupted hot span": span("SqliteWriter.send", {
+        exit: Exit.interrupt(),
+      }),
+      "a root hot span": span("SqliteWriter.send", { root: true }),
+      "a hot span with an event": span("SqliteWriter.send", { events: ["warning"] }),
+      "a hot span with a routine SQL event name": span("SqliteWriter.send", {
+        events: ["effect.sql.transaction.commit"],
+      }),
+      "a hot span with heap growth": span("SqliteWriter.send", {
+        attributes: { "memory.heap_growth_bytes": 20_000_000 },
+      }),
+      "an unfinished hot span": span("SqliteWriter.send", { unfinished: true }),
+      "a negative duration": span("SqliteWriter.send", { endNanos: -1n }),
+      "a rolled back transaction": span("sql.transaction", {
+        wait: 0,
+        events: ["effect.sql.transaction.rollback"],
+      }),
+      "a lock wait": span("sqlite", { wait: 1 }),
+      "a slow statement": span("sqlite", { wait: 0, endNanos: 10_000_000n }),
+      "a root statement": span("sqlite", { wait: 0, root: true }),
+      "a statement without a recorded wait": span("sqlite"),
+    };
+    for (const [label, native] of Object.entries(kept)) assert.isTrue(keep(native), label);
+    for (const wait of [NaN, Infinity, -1, "0", null]) {
+      assert.isTrue(keep(span("sqlite", { wait })), String(wait));
+    }
+  }),
+);

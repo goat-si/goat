@@ -1,3 +1,4 @@
+import { ChevronDownIcon, ChevronUpIcon, MinusIcon, PlusIcon } from "~/components/solar";
 import { ThreadDetailsControl } from "./ThreadDetailsControl";
 import type { EnvironmentId, ScopedThreadRef, ThreadPullRequestLink } from "@goat/contracts";
 import {
@@ -6,7 +7,6 @@ import {
   threadPullRequestKeyOf,
   visibleThreadPullRequests,
 } from "@goat/client-runtime/thread-pull-requests";
-import { ChevronDown, ChevronUp, Minus, Plus } from "~/components/solar/nodes";
 import { useState, type ComponentProps, type MouseEvent as ReactMouseEvent } from "react";
 
 import { sourceControlClients } from "@goat/client-runtime/source-control-clients";
@@ -16,7 +16,6 @@ import { useProjects } from "~/state/entities";
 import { threadEnvironment } from "~/state/threads";
 import { useAtomCommand } from "~/state/use-atom-command";
 
-import { MorphIcon } from "~/components/MorphIcon";
 import { useClientSettings } from "~/hooks/useSettings";
 import { linkedPullRequestSnapshotStatus, prStatusIndicator } from "../ThreadStatusIndicators";
 
@@ -28,12 +27,14 @@ function ThreadDetailsPrLinkRow({
   onOpen,
   onActed,
   onStopWatching,
+  composerTarget,
 }: {
   environmentId: EnvironmentId;
   link: ThreadPullRequestLink;
   onOpen: (event: ReactMouseEvent<HTMLElement>) => void;
   onActed?: (() => void) | undefined;
   onStopWatching?: (() => void) | undefined;
+  composerTarget?: ComponentProps<typeof ThreadDetailsPrRow>["composerTarget"];
 }) {
   const projects = useProjects();
   const parsed = sourceControlClients.parseChangeRequestUrl(link.url)?.link;
@@ -58,6 +59,7 @@ function ThreadDetailsPrLinkRow({
       openAriaLabel={link.url}
       onOpen={onOpen}
       onStopWatching={onStopWatching}
+      composerTarget={composerTarget}
       {...(onActed ? { onActed } : {})}
     />
   );
@@ -115,6 +117,7 @@ export function ThreadDetailsPrRows({
               onOpen={(event) => onOpenLink(event, link.url)}
               onActed={row.onActed}
               onStopWatching={stopWatching(link)}
+              composerTarget={row.composerTarget}
             />
           ))}
         </div>
@@ -127,11 +130,17 @@ export function ThreadDetailsPrRows({
         tone="muted"
         className="w-full active:scale-100"
       >
-        <MorphIcon
-          aria-hidden
-          className="size-4 shrink-0"
-          icon={expanded ? (redesign ? ChevronUp : Minus) : redesign ? ChevronDown : Plus}
-        />
+        {expanded ? (
+          redesign ? (
+            <ChevronUpIcon aria-hidden className="size-4 shrink-0" />
+          ) : (
+            <MinusIcon aria-hidden className="size-4 shrink-0" />
+          )
+        ) : redesign ? (
+          <ChevronDownIcon aria-hidden className="size-4 shrink-0" />
+        ) : (
+          <PlusIcon aria-hidden className="size-4 shrink-0" />
+        )}
         {expanded ? "Show less" : `Show ${rest.length} more`}
       </ThreadDetailsControl>
     </>

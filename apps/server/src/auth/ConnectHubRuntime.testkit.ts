@@ -1,3 +1,4 @@
+import * as NodeCrypto from "@effect/platform-node/NodeCrypto";
 import * as NodeServices from "@effect/platform-node/NodeServices";
 import * as Context from "effect/Context";
 import * as Deferred from "effect/Deferred";
@@ -22,7 +23,7 @@ import * as Sessions from "./SessionStore.ts";
 
 export const storage = Sqlite.layerMemory.pipe(
   Layer.provideMerge(Config.layerTest(process.cwd(), { prefix: "goat-connect-acceptance-" })),
-  Layer.provideMerge(NodeServices.layer),
+  Layer.provideMerge(Layer.mergeAll(NodeServices.layer, NodeCrypto.layer)),
 );
 const services = Layer.mergeAll(
   Layer.effect(Auth.EnvironmentAuth, Auth.make).pipe(Layer.provide(Policy.layer)),

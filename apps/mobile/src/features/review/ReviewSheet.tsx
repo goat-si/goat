@@ -46,7 +46,7 @@ import { useThreadProjection } from "../../state/use-thread-detail";
 import { useRemoteEnvironmentRuntime } from "../../state/use-remote-environment-registry";
 import { useAtomCommand } from "../../state/use-atom-command";
 import { useUniwindTheme } from "../../lib/useUniwindTheme";
-import { useThreadDraftForThread } from "../../state/use-thread-composer-state";
+import { useThreadDraftForThread } from "../../state/thread-draft-review";
 import { EnvironmentConnectionNotice } from "../connection/EnvironmentConnectionNotice";
 import { useAppearancePreferences } from "../settings/appearance/AppearancePreferencesProvider";
 import {
@@ -74,6 +74,7 @@ import { resolveSelectedReviewFileId } from "./reviewPaneSelection";
 import { buildReviewSectionMenu } from "./review-section-menu";
 import { reportShowcaseSceneRendered } from "../showcase/showcaseRenderSignal";
 import { useSelectWorkspaceDetail } from "../workspace/useSelectWorkspaceDetail";
+import { GitActionFailure } from "../threads/git/gitSheetComponents";
 
 function ReviewHeader(
   props: Parameters<typeof useReviewHeaderPresentation>[0] & {
@@ -732,6 +733,14 @@ function ReviewSheetContent(props: ReviewSheetProps) {
 
       <ScreenContent>
         <View className="flex-1 bg-sheet android:bg-sheet-solid">
+          {/* The Git menu's failures show here too; the thread's own banner is behind this screen. */}
+          <View
+            pointerEvents="box-none"
+            className="absolute inset-x-3 z-10"
+            style={{ top: topContentInset + 8 }}
+          >
+            <GitActionFailure thread={{ environmentId, threadId }} />
+          </View>
           {showConnectionNotice ? (
             <View className="flex-1" style={{ paddingTop: topContentInset }}>
               <EnvironmentConnectionNotice

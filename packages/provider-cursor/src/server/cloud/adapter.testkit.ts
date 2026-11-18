@@ -67,7 +67,9 @@ const selection = Schema.decodeSync(ModelSelection)({ provider: instanceId, mode
 const decodeAppThread = Schema.decodeEffect(OrchestrationV2AppThread);
 export const decodeAttachment = Schema.decodeEffect(ChatAttachment);
 
-export const harness = Effect.gen(function* () {
+export const makeHarness = Effect.fn("CursorCloudTest.makeHarness")(function* (
+  initialKey?: Effect.Effect<string, ProviderSetupError>,
+) {
   let release!: () => void;
   const gate = new Promise<void>((resolve) => {
     release = resolve;
@@ -166,8 +168,8 @@ export const harness = Effect.gen(function* () {
     checkAccess: () => Effect.void,
     readModels: () => Effect.succeed([]),
   });
-  const readKey = vi.fn((): Effect.Effect<string, ProviderSetupError> =>
-    Effect.succeed("key-fixture"),
+  const readKey = vi.fn(
+    (): Effect.Effect<string, ProviderSetupError> => initialKey ?? Effect.succeed("key-fixture"),
   );
   const adapter = yield* makeCursorCloudAdapter(instanceId, Effect.suspend(readKey)).pipe(
     Effect.provideService(CursorCloudSdk.CursorCloudSdk, sdk),
@@ -179,6 +181,7 @@ export const harness = Effect.gen(function* () {
     modelSelection: selection,
     runtimePolicy,
   });
+  readKey.mockClear();
   const thread = yield* runtime.ensureThread({
     threadId,
     modelSelection: selection,
@@ -272,3 +275,5 @@ export const harness = Effect.gen(function* () {
     },
   };
 });
+
+export const harness = makeHarness();

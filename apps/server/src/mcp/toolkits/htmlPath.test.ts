@@ -49,7 +49,7 @@ const client = McpSchema.McpServerClient.of({
 
 const layerTest = McpHttpServer.layerHtmlToolkit.pipe(
   Layer.provide(McpToolAccessTestkit.layerPermissionProfilesOff),
-  Layer.provideMerge(McpServer.McpServer.layer),
+  Layer.provideMerge(McpHttpServer.layerInProcessMcpServer),
   Layer.provide(McpProviderSessions.layer),
   Layer.provide(PreviewBrowser.layer),
   Layer.provide(ServerConfig.layerTest(process.cwd(), { prefix: "goat-mcp-html-path-" })),

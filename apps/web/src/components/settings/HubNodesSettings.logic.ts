@@ -14,6 +14,7 @@ export function savedHubNodeProfiles(
 
 export {
   canRemoveHubNode,
+  hubNodeClassView,
   hubNodeLastSeenLabel,
   hubNodeRemovalInput,
   hubNodeRouteLabel,

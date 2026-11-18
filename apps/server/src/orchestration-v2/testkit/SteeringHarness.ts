@@ -16,12 +16,12 @@ import * as Stream from "effect/Stream";
 import { CodexProviderCapabilitiesV2 } from "../Adapters/CodexAdapterV2.ts";
 import * as EffectWorker from "../EffectWorker.ts";
 import * as Orchestrator from "../Orchestrator.ts";
+import * as ThreadCommandExecutor from "../ThreadCommandExecutor.ts";
 import * as ProviderAdapterRegistry from "../ProviderAdapterRegistry.ts";
 import * as ProviderReplayHarness from "./ProviderReplayHarness.ts";
 import { checkpointWorkspace } from "@goat/provider-testing/replayWorkspace";
 import * as ProviderAdapter from "@goat/provider-core/server/ProviderAdapter";
 
-const driver = ProviderDriverKind.make("codex");
 const instanceId = ProviderInstanceId.make("codex");
 export const runSelection = {
   instanceId,
@@ -36,7 +36,13 @@ export const nextTurnSelectionHarness = Effect.fn("nextTurnSelectionHarness")(fu
   selectionNeedsRestart = false,
   threadOverride?: ThreadId,
   canSteer = true,
+  turnCapabilities: Partial<typeof CodexProviderCapabilitiesV2.turns> = {},
+  nativeGoals?: boolean,
+  onSteer: (
+    turn: ProviderAdapter.ProviderAdapterV2SteerInput,
+  ) => Effect.Effect<void, ProviderAdapter.ProviderAdapterV2Error> = () => Effect.void,
 ) {
+  const driver = ProviderDriverKind.make(nativeGoals === undefined ? "codex" : "opencode");
   const cwd = yield* checkpointWorkspace(name);
   const events = yield* Queue.unbounded<ProviderAdapter.ProviderAdapterV2Event>();
   const started: ProviderAdapter.ProviderAdapterV2TurnInput[] = [];
@@ -46,8 +52,10 @@ export const nextTurnSelectionHarness = Effect.fn("nextTurnSelectionHarness")(fu
     ...CodexProviderCapabilitiesV2,
     turns: {
       ...CodexProviderCapabilitiesV2.turns,
+      ...(nativeGoals === undefined ? {} : { supportsNativeGoals: nativeGoals }),
       supportsActiveSteering: canSteer,
       supportsSteeringByInterruptRestart: canRestart,
+      ...turnCapabilities,
     },
   };
   const adapter: ProviderAdapter.ProviderAdapterV2["Service"] = {
@@ -124,7 +132,7 @@ export const nextTurnSelectionHarness = Effect.fn("nextTurnSelectionHarness")(fu
         steerTurn: (turn) =>
           Effect.sync(() => {
             steered.push(turn.message.text);
-          }),
+          }).pipe(Effect.andThen(onSteer(turn))),
         interruptTurn: ({ providerTurnId }) =>
           Effect.sync(() => {
             interrupted.push(providerTurnId);
@@ -135,7 +143,21 @@ export const nextTurnSelectionHarness = Effect.fn("nextTurnSelectionHarness")(fu
                   (turn) =>
                     ProviderTurnId.make(`provider-turn:${turn.attemptId}`) === providerTurnId,
                 ),
-                (turn) => turnUpdated(turn, "interrupted"),
+                (turn) =>
+                  turnUpdated(turn, "interrupted").pipe(
+                    Effect.andThen(
+                      Queue.offer(events, {
+                        type: "turn.terminal",
+                        driver,
+                        providerThreadId: turn.providerThread.id,
+                        providerTurnId,
+                        runOrdinal: turn.runOrdinal,
+                        status: "interrupted",
+                        failure: null,
+                        threadDisposition: "reusable",
+                      }),
+                    ),
+                  ),
                 { discard: true },
               ),
             ),
@@ -192,6 +214,7 @@ export const nextTurnSelectionHarness = Effect.fn("nextTurnSelectionHarness")(fu
     });
     yield* worker.drain();
     yield* Fiber.join(running);
+    yield* (yield* ThreadCommandExecutor.ThreadCommandExecutor).withLock(threadId, Effect.void);
     return threadId;
   });
   return { adapter, cwd, events, started, steered, interrupted, layer, startFirstTurn };
@@ -200,8 +223,18 @@ export const nextTurnSelectionHarness = Effect.fn("nextTurnSelectionHarness")(fu
 export const goalHarness = Effect.fn("goalHarness")(function* (
   name: string,
   beforeCompaction: Effect.Effect<void> = Effect.void,
+  nativeGoals?: boolean,
 ) {
-  const harness = yield* nextTurnSelectionHarness(name, false, beforeCompaction);
+  const harness = yield* nextTurnSelectionHarness(
+    name,
+    false,
+    beforeCompaction,
+    false,
+    undefined,
+    true,
+    {},
+    nativeGoals,
+  );
   const send = Effect.fn("SteeringHarness.sendGoalMessage")(function* (
     id: string,
     text: string,

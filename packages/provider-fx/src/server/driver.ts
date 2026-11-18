@@ -1,7 +1,7 @@
 import { TextGenerationError } from "@goat/contracts";
 import { FxSettings } from "../settings.ts";
 import * as HostProcess from "@goat/shared/HostProcess";
-import type * as Crypto from "effect/Crypto";
+import type * as SecureRandom from "effect/crypto/SecureRandom";
 import * as Effect from "effect/Effect";
 import * as FileSystem from "effect/FileSystem";
 import * as Path from "effect/Path";
@@ -24,6 +24,7 @@ import {
 } from "@goat/provider-core/server/driver";
 import { withInstanceIdentity } from "@goat/provider-core/server/instanceIdentity";
 import { mergeProviderInstanceEnvironment } from "@goat/provider-core/server/instanceEnvironment";
+import { expandHomePath } from "@goat/provider-core/server/pathExpansion";
 import { discoverFxSkills } from "./skills.ts";
 import { makeManualOnlyProviderMaintenanceCapabilities } from "@goat/provider-core/server/maintenanceResolver";
 import {
@@ -63,7 +64,7 @@ const unsupportedTextGeneration: ProviderTextGeneration = (() => {
 export type FxDriverEnv =
   | FxAdapterV2DriverEnv
   | ChildProcessSpawner.ChildProcessSpawner
-  | Crypto.Crypto
+  | SecureRandom.SecureRandom
   | FileSystem.FileSystem
   | Path.Path
   | ProviderHost.ProviderHost;
@@ -87,10 +88,10 @@ export const FxDriver: ProviderDriver<FxSettings, FxDriverEnv> = {
     const spawner = yield* ChildProcessSpawner.ChildProcessSpawner;
     const fileSystem = yield* FileSystem.FileSystem;
     const path = yield* Path.Path;
-    const processEnv = yield* mergeProviderInstanceEnvironment(
-      environment,
-      yield* HostProcess.Environment,
-    );
+    const hostEnvironment = yield* HostProcess.Environment;
+    const currentEnvironment = Effect.suspend(() =>
+      mergeProviderInstanceEnvironment(environment, hostEnvironment),
+    ).pipe(Effect.provideService(HostProcess.HomeDirectory, yield* HostProcess.HomeDirectory));
     const continuationIdentity = defaultProviderContinuationIdentity({
       driverKind: FX_DRIVER_KIND,
       instanceId,
@@ -102,7 +103,11 @@ export const FxDriver: ProviderDriver<FxSettings, FxDriverEnv> = {
       accentColor,
       continuationGroupKey: continuationIdentity.continuationKey,
     });
-    const effectiveConfig = { ...config, enabled } satisfies FxSettings;
+    const effectiveConfig = {
+      ...config,
+      enabled,
+      binaryPath: expandHomePath(config.binaryPath, yield* HostProcess.HomeDirectory),
+    } satisfies FxSettings;
     const snapshotSettings = yield* makeProviderSnapshotSettingsSource(effectiveConfig);
     const snapshot = yield* makeManagedServerProvider<ProviderSnapshotSettings<FxSettings>>({
       resolveMaintenance: () => Effect.succeed(MAINTENANCE),
@@ -111,7 +116,8 @@ export const FxDriver: ProviderDriver<FxSettings, FxDriverEnv> = {
       haveSettingsChanged: haveProviderSnapshotSettingsChanged,
       initialSnapshot: (settings) =>
         buildInitialFxProviderSnapshot(settings.provider).pipe(Effect.map(stampIdentity)),
-      checkProvider: checkFxProviderStatus(effectiveConfig, processEnv).pipe(
+      checkProvider: currentEnvironment.pipe(
+        Effect.flatMap((env) => checkFxProviderStatus(effectiveConfig, env)),
         Effect.map(stampIdentity),
         Effect.provideService(ChildProcessSpawner.ChildProcessSpawner, spawner),
       ),
@@ -131,7 +137,14 @@ export const FxDriver: ProviderDriver<FxSettings, FxDriverEnv> = {
     const orchestrationAdapter = yield* makeFxAdapterV2Driver(
       snapshot.getSnapshot.pipe(Effect.map((current) => fxDefaultModelId(current.models))),
     )
-      .create({ instanceId, displayName, accentColor, environment, enabled, config })
+      .create({
+        instanceId,
+        displayName,
+        accentColor,
+        environment,
+        enabled,
+        config: effectiveConfig,
+      })
       .pipe(
         Effect.mapError(
           (cause) =>
@@ -157,7 +170,8 @@ export const FxDriver: ProviderDriver<FxSettings, FxDriverEnv> = {
           ? snapshot.getSnapshot
           : Effect.all([
               snapshot.getSnapshot,
-              discoverFxSkills({ cwd, environment: processEnv }).pipe(
+              currentEnvironment.pipe(
+                Effect.flatMap((env) => discoverFxSkills({ cwd, environment: env })),
                 Effect.provideService(FileSystem.FileSystem, fileSystem),
                 Effect.provideService(Path.Path, path),
               ),

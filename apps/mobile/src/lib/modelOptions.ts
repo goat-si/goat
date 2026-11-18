@@ -20,6 +20,7 @@ import {
   buildExplicitProviderOptionSelectionsFromDescriptors,
   getProviderOptionDescriptors,
 } from "@goat/shared/model";
+import { resolveProvidersForCwd } from "@goat/client-runtime/providerSkills";
 
 export function providerInstanceNameLabel(input: {
   readonly provider: string | null | undefined;
@@ -150,6 +151,16 @@ function normalizeSelectionOptions(
         instanceId: selection.instanceId,
         model: selection.model,
       };
+}
+
+/** The config as a project at `cwd` sees it, with that project's own provider models. */
+export function serverConfigForCwd<C extends GoatServerConfig | null | undefined>(
+  config: C,
+  cwd: string | null,
+): C {
+  if (!config) return config;
+  const providers = resolveProvidersForCwd(config.providers, cwd);
+  return providers === config.providers ? config : { ...config, providers };
 }
 
 /** Require explicit projectId or null so omissions cannot bypass project provider disablement. */

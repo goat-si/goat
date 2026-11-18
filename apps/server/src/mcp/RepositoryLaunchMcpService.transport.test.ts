@@ -2,6 +2,7 @@ import { layerNoFleetSync } from "../goatclaw/FleetSync.testkit.ts";
 import * as ServerSettings from "../serverSettings.ts";
 import * as UsageLimitSources from "../usage/UsageLimitSources.ts";
 import * as HubParity from "../hub/HubParity.ts";
+import * as NodeCrypto from "@effect/platform-node/NodeCrypto";
 import * as NodeServices from "@effect/platform-node/NodeServices";
 import { expect, it, vi } from "@effect/vitest";
 import { EnvironmentId } from "@goat/contracts";
@@ -152,7 +153,7 @@ it.effect(
         Layer.provide(ServerSettings.layerTest()),
         Layer.provide(ServerConfig.layerTest("/fixture", { prefix: "repository-diagnostic-" })),
         Layer.provide(FetchHttpClient.layer),
-        Layer.provide(NodeServices.layer),
+        Layer.provide(Layer.mergeAll(NodeServices.layer, NodeCrypto.layer)),
       );
       const dependencies = Layer.mergeAll(
         Layer.mock(HubParity.HubParity)({ latest: () => Effect.succeed(undefined) }),
@@ -200,7 +201,7 @@ it.effect(
         Layer.provideMerge(HostStatus.layer),
         Layer.provide(HostThreads.layer.pipe(Layer.provide(layerNoFleetSync))),
         Layer.provide(dependencies),
-        Layer.provide(NodeServices.layer),
+        Layer.provide(Layer.mergeAll(NodeServices.layer, NodeCrypto.layer)),
       );
       yield* Effect.gen(function* () {
         const launch = yield* Launch.RepositoryLaunchMcpService;

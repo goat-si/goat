@@ -1,5 +1,7 @@
 // @effect-diagnostics-next-line nodeBuiltinImport:off -- a temporary key name per creation.
 import * as NodeCrypto from "node:crypto";
+// @effect-diagnostics-next-line nodeBuiltinImport:off -- a chmod through a handle that refuses a symlink.
+import * as NodeFSP from "node:fs/promises";
 
 import { ServerConfig } from "../../config.ts";
 import * as Context from "effect/Context";
@@ -43,6 +45,25 @@ const machinePublicLine = (text: string) => {
   const line = type + " " + blob;
   return PUBLIC_LINE.test(line) ? line + " " + COMMENT : undefined;
 };
+
+/** Makes the key's folder 0700 through a handle opened without following a link, never a link's target. */
+const makePrivate = (directory: string) =>
+  Effect.tryPromise({
+    try: async () => {
+      const { O_RDONLY, O_DIRECTORY, O_NOFOLLOW } = NodeFSP.constants;
+      const handle = await NodeFSP.open(directory, O_RDONLY | O_DIRECTORY | O_NOFOLLOW);
+      try {
+        await handle.chmod(0o700);
+      } finally {
+        await handle.close();
+      }
+    },
+    catch: () =>
+      new MachineKeyError({
+        message:
+          "GOAT's machine key folder is a symlink or cannot be made private, so GOAT keeps no key there.",
+      }),
+  });
 
 /**
  * Makes the key with ssh-keygen in GOAT's state folder (0700), under a lock so two first uses make
@@ -91,7 +112,7 @@ export const make = Effect.fn("MachineKey.make")(function* (directory: string) {
           yield* Effect.ignore(fs.remove(path.join(directory, name)));
     if (!(yield* fs.exists(privateKeyFile))) {
       yield* fs.makeDirectory(directory, { recursive: true, mode: 0o700 });
-      yield* fs.chmod(directory, 0o700);
+      yield* makePrivate(directory);
       // The checked line belonged to the key that is gone.
       yield* Ref.set(verified, undefined);
       const temporary = privateKeyFile + ".new-" + NodeCrypto.randomUUID();

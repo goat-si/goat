@@ -1,4 +1,5 @@
 import * as McpProviderSessions from "@goat/provider-core/server/McpProviderSessions";
+import * as NodeCrypto from "@effect/platform-node/NodeCrypto";
 import * as NodeServices from "@effect/platform-node/NodeServices";
 import { assert, it } from "@effect/vitest";
 import {
@@ -155,7 +156,7 @@ const heldThread = (name: string) =>
       );
     const startReactor = RunStartHoldReactor.make.pipe(
       Effect.tap((reactor) => reactor.start),
-      Effect.provide(Layer.merge(survivors, NodeServices.layer)),
+      Effect.provide(Layer.merge(survivors, Layer.mergeAll(NodeServices.layer, NodeCrypto.layer))),
     );
     return {
       orchestrator,

@@ -47,6 +47,7 @@ export const withService = <A, E>(
       NodeCrypto.layer,
       ServerSettings.layerTest(),
       NodeServices.layer,
+      NodeCrypto.layer,
       Layer.succeed(
         ServerSecretStore.ServerSecretStore,
         ServerSecretStore.ServerSecretStore.of({

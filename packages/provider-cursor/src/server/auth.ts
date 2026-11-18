@@ -6,7 +6,7 @@ import {
 } from "@goat/contracts";
 import * as Cause from "effect/Cause";
 import * as Clock from "effect/Clock";
-import * as Crypto from "effect/Crypto";
+import * as SecureRandom from "effect/crypto/SecureRandom";
 import * as DateTime from "effect/DateTime";
 import * as Effect from "effect/Effect";
 import * as Exit from "effect/Exit";
@@ -18,10 +18,25 @@ import * as Semaphore from "effect/Semaphore";
 import * as Stream from "effect/Stream";
 import * as SubscriptionRef from "effect/SubscriptionRef";
 
-import { loadCursorSdk } from "./sdk.ts";
+import { isCursorSdkError, loadCursorSdk } from "./sdk.ts";
+import { cursorBackendIdentity } from "./sdkBackend.ts";
 import type { ProviderAuthController } from "@goat/provider-core/server/auth";
 
 const AUTH_TIMEOUT_MS = 300_000;
+const VERIFY_TIMEOUT_MS = 30_000;
+
+// The SDK has no code distinguishing these failures, so classify by its fixed message prefixes.
+const loginFailureDetail = (cause: unknown) => {
+  if (isCursorSdkError(cause, "CursorSdkError")) {
+    if (cause.message.startsWith("Login succeeded, but creating an SDK API key failed")) {
+      return "Cursor signed you in but could not create an API key. Your team's settings may restrict API keys: ask a team admin, or add CURSOR_API_KEY in provider settings.";
+    }
+    if (cause.message.startsWith("Login failed or timed out")) {
+      return "Cursor sign-in failed or timed out. Check that this machine can reach Cursor, then start sign-in again.";
+    }
+  }
+  return "Cursor sign-in failed. Start sign-in again.";
+};
 
 interface AuthFlow {
   readonly id: string;
@@ -32,11 +47,32 @@ interface AuthFlow {
 export interface CursorAuth {
   readonly controller: ProviderAuthController;
   readonly readApiKey: Effect.Effect<string | undefined, ProviderSetupError>;
+  /**
+   * The key for an environment holding `environmentKey` and `backendUrl`: its own key, else a
+   * stored sign-in made against that backend.
+   */
+  readonly readApiKeyFor: (
+    environmentKey: string | undefined,
+    backendUrl: string | undefined,
+  ) => Effect.Effect<string | undefined, ProviderSetupError>;
   readonly requireApiKey: Effect.Effect<string, ProviderSetupError>;
-  readonly usesApiKey: boolean;
-  readonly withAccess: <A, E, R>(
+  readonly requireApiKeyFor: (
+    environment: NodeJS.ProcessEnv,
+  ) => Effect.Effect<string, ProviderSetupError>;
+  readonly requireSessionApiKey: (
+    key: string | undefined,
+    backendUrl: string | undefined,
+  ) => Effect.Effect<string, ProviderSetupError>;
+  readonly validateSessionApiKey: (
+    key: string | undefined,
+    environmentKey: string | undefined,
+    backendUrl: string | undefined,
+  ) => Effect.Effect<void, ProviderSetupError>;
+  readonly usesApiKey: Effect.Effect<boolean>;
+  readonly withAccess: <A, E, R, E2 = never>(
     task: Effect.Effect<A, E, R>,
-  ) => Effect.Effect<A, E | ProviderSetupError, R | Scope.Scope>;
+    validate?: Effect.Effect<void, E2>,
+  ) => Effect.Effect<A, E | E2 | ProviderSetupError, R | Scope.Scope>;
 }
 
 export interface CursorAuthOptions {
@@ -44,15 +80,19 @@ export interface CursorAuthOptions {
   readonly displayName: string;
   readonly enabled: boolean;
   readonly apiKey?: string;
+  /** The key the instance's environment holds now; it outranks the one read at creation. */
+  readonly currentApiKey?: Effect.Effect<string | undefined>;
+  readonly currentBackend?: Effect.Effect<string>;
   readonly store: SdkCredentialStore;
   readonly credentialBinding?: NonNullable<ProviderAuthController["credentialBinding"]>;
+  readonly verifyKey: (key: string, backendUrl: string) => Effect.Effect<void, ProviderSetupError>;
   readonly onChanged: (signedIn: boolean) => Effect.Effect<void, ProviderSetupError>;
   readonly login?: (options: SdkLoginOptions) => Promise<SdkLoginResult>;
 }
 
 export const makeCursorAuth = Effect.fn("makeCursorAuth")(function* (options: CursorAuthOptions) {
   const scope = yield* Scope.Scope;
-  const crypto = yield* Crypto.Crypto;
+  const random = yield* SecureRandom.SecureRandom;
   const lock = yield* Semaphore.make(1);
   const configuredKey = options.apiKey?.trim() || undefined;
   const emptyState: ProviderAuthState = {
@@ -74,8 +114,11 @@ export const makeCursorAuth = Effect.fn("makeCursorAuth")(function* (options: Cu
       state: { ...current.state, ...patch },
     }));
 
-  const readApiKey = Effect.gen(function* () {
-    if (configuredKey) return configuredKey;
+  const readKey = Effect.fn("CursorAuth.readKey")(function* (
+    environmentKey: string | undefined,
+    backendUrl: string | undefined,
+  ) {
+    if (environmentKey) return environmentKey;
     const credentials = yield* Effect.tryPromise({
       try: () => options.store.load(),
       catch: (cause) =>
@@ -87,13 +130,28 @@ export const makeCursorAuth = Effect.fn("makeCursorAuth")(function* (options: Cu
         }),
     });
     const now = yield* Clock.currentTimeMillis;
+    // A sign-in's key belongs to the backend it was made against.
     return credentials &&
+      cursorBackendIdentity(credentials.backendUrl) === cursorBackendIdentity(backendUrl) &&
       (credentials.apiKeyExpiresAtMs === undefined || credentials.apiKeyExpiresAtMs > now)
       ? credentials.apiKey
       : undefined;
   });
+  const usesApiKey = (options.currentApiKey ?? Effect.succeed(configuredKey)).pipe(
+    Effect.map((key) => Boolean(key?.trim())),
+  );
+  const readApiKeyFor = (environmentKey: string | undefined, backendUrl: string | undefined) =>
+    readKey(environmentKey?.trim() || undefined, backendUrl);
+  const readApiKey = Effect.suspend(() =>
+    Effect.all([
+      options.currentApiKey ?? Effect.succeed(configuredKey),
+      options.currentBackend ?? Effect.undefined,
+    ]).pipe(Effect.flatMap(([key, backendUrl]) => readApiKeyFor(key, backendUrl))),
+  );
 
-  const requireApiKey = Effect.gen(function* () {
+  const requireKey = Effect.fn("CursorAuth.requireKey")(function* (
+    key: Effect.Effect<string | undefined, ProviderSetupError>,
+  ) {
     if (operation !== "idle") {
       return yield* new ProviderSetupError({
         instanceId: options.instanceId,
@@ -101,7 +159,7 @@ export const makeCursorAuth = Effect.fn("makeCursorAuth")(function* (options: Cu
         detail: "Cursor sign-in or sign-out is in progress. Try again after it finishes.",
       });
     }
-    const apiKey = yield* readApiKey;
+    const apiKey = yield* key;
     if (!apiKey) {
       return yield* new ProviderSetupError({
         instanceId: options.instanceId,
@@ -111,9 +169,26 @@ export const makeCursorAuth = Effect.fn("makeCursorAuth")(function* (options: Cu
     }
     return apiKey;
   });
+  const requireApiKey = requireKey(readApiKey);
+  const requireApiKeyFor = (environment: NodeJS.ProcessEnv) =>
+    requireKey(readApiKeyFor(environment.CURSOR_API_KEY, environment.CURSOR_BACKEND_URL));
+  const requireSessionApiKey = (key: string | undefined, backendUrl: string | undefined) =>
+    requireKey(readKey(key, backendUrl));
+  const validateSessionApiKey = Effect.fn("CursorAuth.validateSessionApiKey")(function* (
+    key: string | undefined,
+    environmentKey: string | undefined,
+    backendUrl: string | undefined,
+  ) {
+    if (environmentKey || (yield* readKey(undefined, backendUrl)) === key) return;
+    return yield* new ProviderSetupError({
+      instanceId: options.instanceId,
+      operation: "session",
+      detail: "The Cursor sign-in changed. Open a new session.",
+    });
+  });
 
   // Closing admission before draining these scopes prevents cached credentials surviving sign-out.
-  const withAccess: CursorAuth["withAccess"] = (task) =>
+  const withAccess: CursorAuth["withAccess"] = (task, validate) =>
     Effect.uninterruptibleMask((restore) =>
       Effect.gen(function* () {
         const parent = yield* Scope.Scope;
@@ -125,6 +200,7 @@ export const makeCursorAuth = Effect.fn("makeCursorAuth")(function* (options: Cu
                 operation: "session",
                 detail: "Cursor sign-in or sign-out is in progress. Try again after it finishes.",
               });
+            yield* validate ?? Effect.void;
             const child = yield* Scope.make();
             sessions.add(child);
             yield* Scope.addFinalizer(
@@ -189,9 +265,11 @@ export const makeCursorAuth = Effect.fn("makeCursorAuth")(function* (options: Cu
         Effect.forever,
         Effect.forkScoped,
       );
+      const backendUrl = yield* options.currentBackend ?? Effect.void;
       yield* Effect.tryPromise({
         try: (signal) =>
           (options.login ?? Cursor.auth.login)({
+            ...(backendUrl === undefined ? {} : { backendUrl }),
             openBrowser: false,
             store: pendingStore,
             signal,
@@ -204,7 +282,7 @@ export const makeCursorAuth = Effect.fn("makeCursorAuth")(function* (options: Cu
           new ProviderSetupError({
             instanceId: options.instanceId,
             operation: "start",
-            detail: "Cursor sign-in failed. Start sign-in again.",
+            detail: loginFailureDetail(cause),
             cause,
           }),
       });
@@ -217,12 +295,36 @@ export const makeCursorAuth = Effect.fn("makeCursorAuth")(function* (options: Cu
             authorizationUrl: null,
             message: "Checking Cursor sign-in.",
           });
-          yield* Effect.tryPromise({
+          const credentials = yield* Effect.tryPromise({
             try: async () => {
               const credentials = await pendingStore.load();
               if (!credentials) throw new Error("Cursor login did not return credentials");
-              await options.store.save(credentials);
+              return credentials;
             },
+            catch: (cause) =>
+              new ProviderSetupError({
+                instanceId: options.instanceId,
+                operation: "start",
+                detail: "Could not read the Cursor sign-in. Try again.",
+                cause,
+              }),
+          });
+          yield* options.verifyKey(credentials.apiKey, credentials.backendUrl).pipe(
+            Effect.timeoutOrElse({
+              duration: VERIFY_TIMEOUT_MS,
+              orElse: () =>
+                Effect.fail(
+                  new ProviderSetupError({
+                    instanceId: options.instanceId,
+                    operation: "start",
+                    detail: "Could not verify the Cursor browser sign-in. Try again.",
+                  }),
+                ),
+            }),
+            Effect.interruptible,
+          );
+          yield* Effect.tryPromise({
+            try: () => options.store.save(credentials),
             catch: (cause) =>
               new ProviderSetupError({
                 instanceId: options.instanceId,
@@ -251,7 +353,9 @@ export const makeCursorAuth = Effect.fn("makeCursorAuth")(function* (options: Cu
             phase: "succeeded",
             authorizationUrl: null,
             expiresAt: null,
-            message: "Signed in with Cursor.",
+            message: (yield* usesApiKey)
+              ? "Cursor sign-in saved, but CURSOR_API_KEY currently overrides it."
+              : "Signed in with Cursor.",
           });
         }).pipe(Effect.uninterruptible),
       );
@@ -270,6 +374,8 @@ export const makeCursorAuth = Effect.fn("makeCursorAuth")(function* (options: Cu
               }),
             ),
         }),
+        // The SDK's API-key error embeds server text, so only the fixed reason is logged.
+        Effect.tapError((error) => Effect.logWarning(`Cursor sign-in failed: ${error.detail}`)),
         Effect.exit,
         Effect.flatMap((result) =>
           lock.withPermits(1)(
@@ -325,7 +431,7 @@ export const makeCursorAuth = Effect.fn("makeCursorAuth")(function* (options: Cu
                 operation: "start",
                 detail: "Enable Cursor before signing in.",
               });
-            if (configuredKey)
+            if (yield* usesApiKey)
               return yield* new ProviderSetupError({
                 instanceId: options.instanceId,
                 operation: "start",
@@ -339,7 +445,7 @@ export const makeCursorAuth = Effect.fn("makeCursorAuth")(function* (options: Cu
                 operation: "start",
                 detail: "Cursor setup is already in progress.",
               });
-            const id = yield* crypto.randomUUIDv4().pipe(
+            const id = yield* random.uuidV4().pipe(
               Effect.mapError(
                 (cause) =>
                   new ProviderSetupError({
@@ -407,7 +513,7 @@ export const makeCursorAuth = Effect.fn("makeCursorAuth")(function* (options: Cu
         Effect.gen(function* () {
           const flow = yield* lock.withPermits(1)(
             Effect.gen(function* () {
-              if (configuredKey)
+              if (yield* usesApiKey)
                 return yield* new ProviderSetupError({
                   instanceId: options.instanceId,
                   operation: "logout",
@@ -507,8 +613,12 @@ export const makeCursorAuth = Effect.fn("makeCursorAuth")(function* (options: Cu
   return {
     controller,
     readApiKey,
+    readApiKeyFor,
     requireApiKey,
+    requireApiKeyFor,
+    requireSessionApiKey,
+    validateSessionApiKey,
     withAccess,
-    usesApiKey: configuredKey !== undefined,
+    usesApiKey,
   } satisfies CursorAuth;
 });

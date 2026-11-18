@@ -85,7 +85,7 @@ export const cleanupFixture = (
     yield* command(repo, ["add", "."]);
     yield* command(repo, ["commit", "-m", "initial"]);
     yield* fs.makeDirectory(config.worktreesDir, { recursive: true });
-    const worktree = path.join(config.worktreesDir, "feature");
+    const worktree = path.join(config.worktreesDir, "repo", "feature");
     yield* command(repo, ["worktree", "add", "-b", "feature", worktree]);
     let settings: import("@goat/contracts").ServerSettings = {
       ...DEFAULT_SERVER_SETTINGS,
@@ -362,7 +362,7 @@ export const pausedMeasurementFixture = (storageCleanup?: StorageCleanupSettings
   });
 export const cleanupTestLayer = GitVcsDriver.layer.pipe(
   Layer.provideMerge(ServerConfig.layerTest(process.cwd(), { prefix: "storage-cleanup-" })),
-  Layer.provideMerge(NodeServices.layer),
+  Layer.provideMerge(Layer.mergeAll(NodeServices.layer, NodeCrypto.layer)),
 );
 export const runCleanupTest = <A, E>(
   effect: Effect.Effect<
@@ -387,3 +387,29 @@ export const runCleanupTest = <A, E>(
     Effect.provide(cleanupTestLayer),
     Effect.scoped,
   );
+
+export const submoduleCleanupFixture = () =>
+  Effect.gen(function* () {
+    const fixture = yield* cleanupFixture();
+    const { command, repo, worktree } = fixture;
+    const submodule = `${worktree}/module`;
+    const child = `${submodule}/child`;
+    for (const [cwd, name] of [
+      [worktree, "module"],
+      [submodule, "child"],
+    ] as const) {
+      yield* command(cwd, ["-c", "protocol.file.allow=always", "submodule", "add", repo, name]);
+      yield* command(`${cwd}/${name}`, ["config", "user.name", "Cleanup test"]);
+      yield* command(`${cwd}/${name}`, ["config", "user.email", "cleanup@example.test"]);
+    }
+    const recordSubmodules = () =>
+      Effect.gen(function* () {
+        yield* command(submodule, ["commit", "-am", "record child"]);
+        yield* command(submodule, ["push", "origin", "HEAD:submodule"]);
+        yield* command(worktree, ["commit", "-am", "record module"]);
+        // Shipped to the project branch, so only the submodule rules decide.
+        yield* command(repo, ["merge", "--ff-only", "feature"]);
+      });
+    yield* recordSubmodules();
+    return { ...fixture, submodule, child, recordSubmodules };
+  });

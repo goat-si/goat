@@ -135,7 +135,7 @@ function getSelectedTraits(
 ) {
   const caps = getProviderModelCapabilities(models, model, provider, planModeEnabled);
   const modelIsUnavailable =
-    provider === "opencode" &&
+    (provider === "opencode" || provider === "cursor") &&
     !models.some((candidate) => candidate.slug === normalizeModelSlug(model, provider));
   const descriptors = modelIsUnavailable
     ? buildUnavailableModelOptionDescriptors(
@@ -924,7 +924,7 @@ function ComposerTraitsPicker({
                     <ToggleGroupItem
                       key={option.id}
                       value={option.id}
-                      className="flex-1"
+                      className="flex-auto"
                       {...(option.description ? { title: option.description } : {})}
                     >
                       {option.label}

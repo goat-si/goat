@@ -1,4 +1,5 @@
 import { layerNoFleetSync } from "../goatclaw/FleetSync.testkit.ts";
+import * as NodeCrypto from "@effect/platform-node/NodeCrypto";
 import * as NodeServices from "@effect/platform-node/NodeServices";
 import { assert, describe, it } from "@effect/vitest";
 import {
@@ -27,6 +28,7 @@ import {
 import * as DateTime from "effect/DateTime";
 import * as Effect from "effect/Effect";
 import * as Layer from "effect/Layer";
+import * as Option from "effect/Option";
 import * as ProviderAdapterRegistry from "../orchestration-v2/ProviderAdapterRegistry.ts";
 import * as ThreadLaunchService from "../orchestration-v2/ThreadLaunchService.ts";
 import * as ThreadManagementService from "../orchestration-v2/ThreadManagementService.ts";
@@ -133,13 +135,21 @@ const layerFor = (threads: Partial<ThreadManagementService.ThreadManagementServi
     Layer.provide(
       Layer.mergeAll(
         NodeServices.layer,
+        NodeCrypto.layer,
         ServerSettings.layerTest(),
         Layer.mock(ThreadManagementService.ThreadManagementService)(threads),
         Layer.mock(ProviderRegistry.ProviderRegistry)({ getProviders: Effect.succeed([]) }),
         Layer.mock(ProviderAdapterRegistry.ProviderAdapterRegistryV2)({
           list: () => Effect.succeed([]),
         }),
-        Layer.mock(ProjectService.ProjectService)({}),
+        Layer.mock(ProjectService.ProjectService)({
+          getById: (id) =>
+            Effect.succeed(
+              id === projectId || id === otherProjectId
+                ? Option.some({ id } as never)
+                : Option.none(),
+            ),
+        }),
         Layer.mock(SecretRequests.SecretRequests)({}),
         Layer.mock(ScheduledTaskService.ScheduledTaskService)({}),
       ),
@@ -147,6 +157,49 @@ const layerFor = (threads: Partial<ThreadManagementService.ThreadManagementServi
   );
 
 describe("goat_thread_list lineage", () => {
+  it.effect("refuses a project that does not exist", () =>
+    Effect.gen(function* () {
+      const service = yield* OrchestratorMcpService.OrchestratorMcpService;
+      const error = yield* service
+        .listThreads(scope, { projectId: ProjectId.make("project:missing") })
+        .pipe(Effect.flip);
+      assert.equal(error.code, "invalid_request");
+      assert.include(error.message, "not found");
+    }).pipe(
+      Effect.provide(
+        layerFor({
+          ...shellReads([]),
+          listProjectThreads: () => Effect.succeed([]),
+          getThreadRecords: () => Effect.succeed(parentProjection([])),
+        }),
+      ),
+    ),
+  );
+  it.effect("lists a thread awaiting background work as waiting", () => {
+    const waiting = finished(ThreadId.make("thread:awaiting"), {
+      activityRunStatus: null,
+      pendingBackgroundTasks: [{ taskId: "sleep-600", kind: "command", awaited: true }],
+    });
+    return Effect.gen(function* () {
+      const service = yield* OrchestratorMcpService.OrchestratorMcpService;
+      const result = yield* service.listThreads(scope, { projectId, statuses: ["waiting"] });
+      assert.deepEqual(
+        result.threads.map((thread) => [thread.threadId, thread.status]),
+        [[waiting.id, "waiting"]],
+      );
+      assert.deepEqual(result.threads[0]?.pendingBackgroundTasks, [
+        { taskId: "sleep-600", kind: "command", awaited: true },
+      ]);
+    }).pipe(
+      Effect.provide(
+        layerFor({
+          ...shellReads([waiting]),
+          listProjectThreads: () => Effect.succeed([waiting]),
+          getThreadRecords: () => Effect.succeed(parentProjection([])),
+        }),
+      ),
+    );
+  });
   // The caller launched a, b (in another project) and d, and forked c; b launched a thread that asks.
   const a = ThreadId.make("thread:lazy-a");
   const b = ThreadId.make("thread:lazy-b");
@@ -335,6 +388,17 @@ describe("goat_thread_list lineage", () => {
       assert.equal(error.code, "invalid_request");
     }).pipe(Effect.provide(layer)),
   );
+
+  it.effect("points a caller outside any thread at allProjects when it omits projectId", () =>
+    Effect.gen(function* () {
+      const service = yield* OrchestratorMcpService.OrchestratorMcpService;
+      const error = yield* service
+        .listThreads({ ...scope, thread: undefined }, {})
+        .pipe(Effect.flip);
+      assert.equal(error.code, "target_required");
+      assert.include(error.message, "allProjects");
+    }).pipe(Effect.provide(layer)),
+  );
 });
 
 describe("goat_thread_read summary and tail", () => {
@@ -389,7 +453,15 @@ describe("goat_thread_read summary and tail", () => {
         completedAt: now,
       },
     ],
-    contextTransfers: [],
+    // A thread's transfers include the results it sent, so the child holds the one it returned.
+    contextTransfers: [
+      {
+        type: "subagent_result",
+        sourceThreadId: childId,
+        targetThreadId: parentId,
+        sourcePoint: { runId: childRunId },
+      },
+    ],
     messages: [],
     subagents: [],
     providerThreads: [],
@@ -408,18 +480,7 @@ describe("goat_thread_read summary and tail", () => {
     visibility: "local",
     item: answer,
   };
-  // The parent recorded the child's result, so a read that returns it in full has seen it.
-  const parentWithResult = {
-    ...parentProjection([task]),
-    contextTransfers: [
-      {
-        type: "subagent_result",
-        sourceThreadId: childId,
-        targetThreadId: parentId,
-        sourcePoint: { runId: childRunId },
-      },
-    ],
-  } as unknown as OrchestrationV2ThreadProjection;
+  const parentWithResult = parentProjection([task]);
 
   const sent: Array<OrchestrationV2ServerCommand> = [];
   const makeLayer = (dispatched: Array<OrchestrationV2ServerCommand["type"]>) =>
@@ -566,7 +627,11 @@ describe("goat_thread_read through HostThreadsMcpService", () => {
     activeRunId: null,
     latestRunId: RunId.make("run:lazy-host"),
   } as const;
-  const read = (failResult: boolean, input: OrchestratorMcpThreadReadInput) => {
+  const read = (
+    failResult: boolean,
+    input: OrchestratorMcpThreadReadInput,
+    items: ReadonlyArray<unknown> = [],
+  ) => {
     const acknowledged: Array<unknown> = [];
     const layer = HostThreadsMcpService.layer.pipe(
       Layer.provide(
@@ -590,7 +655,7 @@ describe("goat_thread_read through HostThreadsMcpService", () => {
             Effect.succeed({
               thread: observed,
               recentRuns: [],
-              items: [],
+              items,
               nextPosition: null,
               hasMore: false,
             } as unknown as OrchestratorMcpThreadReadResult),
@@ -621,6 +686,38 @@ describe("goat_thread_read through HostThreadsMcpService", () => {
       assert.equal(result._tag, "Success");
       assert.deepEqual(acknowledged, acknowledges ? [[input, observed]] : []);
     }),
+  );
+
+  const item = (position: number, type: string, textTruncated: boolean) => ({
+    position,
+    sourceThreadId: childId,
+    itemId: "item-" + position,
+    runId: observed.latestRunId,
+    type,
+    text: "x".repeat(500),
+    textTruncated,
+    nextTextOffset: textTruncated ? 500 : null,
+  });
+
+  it.effect(
+    "a tail read that cuts the child's result leaves its completion wake to deliver it whole",
+    () =>
+      Effect.gen(function* () {
+        const input = { threadId: childId, tail: 2 };
+        const cut = yield* read(false, input, [
+          item(1, "command", false),
+          item(2, "assistant_message", true),
+        ]);
+        assert.deepEqual(cut.acknowledged, []);
+        const failed = yield* read(false, input, [item(1, "error", true)]);
+        assert.deepEqual(failed.acknowledged, []);
+        // Only an older item is cut; the result itself was shown whole.
+        const whole = yield* read(false, input, [
+          item(1, "assistant_message", true),
+          item(2, "assistant_message", false),
+        ]);
+        assert.deepEqual(whole.acknowledged, [[input, observed]]);
+      }),
   );
 
   it.effect("a summary read whose result fails leaves the completion delivery open", () =>

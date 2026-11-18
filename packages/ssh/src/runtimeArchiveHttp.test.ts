@@ -1,7 +1,9 @@
+import * as NodeCrypto from "@effect/platform-node/NodeCrypto";
 import * as NodeServices from "@effect/platform-node/NodeServices";
 import { assert, describe, it, vi } from "@effect/vitest";
 import { cliArchiveFileName, cliReleaseDownloadBaseUrl } from "@goat/shared/cliRelease";
 import * as Effect from "effect/Effect";
+import * as Layer from "effect/Layer";
 import * as FileSystem from "effect/FileSystem";
 import * as Result from "effect/Result";
 import * as Schema from "effect/Schema";
@@ -60,7 +62,7 @@ describe("public HTTPS SSH runtime supply", () => {
         assert.isTrue(cancelled);
         assert.isAtMost(reads, mode === "content-length" ? 1 : 258);
         assert.deepEqual(yield* fs.readDirectory(directory), []);
-      }).pipe(Effect.provide(NodeServices.layer), Effect.scoped),
+      }).pipe(Effect.provide(Layer.mergeAll(NodeServices.layer, NodeCrypto.layer)), Effect.scoped),
   );
 
   it.effect("verifies and caches public bytes; subsequent acquisition reads the cache", () =>
@@ -100,7 +102,7 @@ describe("public HTTPS SSH runtime supply", () => {
         (yield* fs.readDirectory(directory)).sort(),
         [asset, `${asset}.sha256`].sort(),
       );
-    }).pipe(Effect.provide(NodeServices.layer), Effect.scoped),
+    }).pipe(Effect.provide(Layer.mergeAll(NodeServices.layer, NodeCrypto.layer)), Effect.scoped),
   );
 
   it.effect("checksum mismatch publishes neither archive nor sidecar", () =>
@@ -116,7 +118,7 @@ describe("public HTTPS SSH runtime supply", () => {
       );
       assert.isTrue(Result.isFailure(result));
       assert.deepEqual(yield* fs.readDirectory(directory), []);
-    }).pipe(Effect.provide(NodeServices.layer), Effect.scoped),
+    }).pipe(Effect.provide(Layer.mergeAll(NodeServices.layer, NodeCrypto.layer)), Effect.scoped),
   );
 
   it.effect("a missing public asset is typed not-published", () =>
@@ -131,7 +133,7 @@ describe("public HTTPS SSH runtime supply", () => {
       ).pipe(Effect.flip);
       assert.isTrue(isNotPublished(error));
       assert.deepEqual(yield* fs.readDirectory(directory), []);
-    }).pipe(Effect.provide(NodeServices.layer), Effect.scoped),
+    }).pipe(Effect.provide(Layer.mergeAll(NodeServices.layer, NodeCrypto.layer)), Effect.scoped),
   );
 
   it.effect("network failure stays typed and leaves no published cache entry", () =>
@@ -148,7 +150,7 @@ describe("public HTTPS SSH runtime supply", () => {
       ).pipe(Effect.flip);
       assert.isTrue(isNetworkError(error));
       assert.deepEqual(yield* fs.readDirectory(directory), []);
-    }).pipe(Effect.provide(NodeServices.layer), Effect.scoped),
+    }).pipe(Effect.provide(Layer.mergeAll(NodeServices.layer, NodeCrypto.layer)), Effect.scoped),
   );
 
   it.effect("missing asset falls back to local gh before uploading verified bytes", () =>
@@ -189,6 +191,6 @@ describe("public HTTPS SSH runtime supply", () => {
       } finally {
         vi.unstubAllGlobals();
       }
-    }).pipe(Effect.provide(NodeServices.layer), Effect.scoped),
+    }).pipe(Effect.provide(Layer.mergeAll(NodeServices.layer, NodeCrypto.layer)), Effect.scoped),
   );
 });

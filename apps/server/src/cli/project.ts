@@ -8,7 +8,7 @@ import {
   ProjectId,
 } from "@goat/contracts";
 import * as Console from "effect/Console";
-import * as Crypto from "effect/Crypto";
+import * as SecureRandom from "effect/crypto/SecureRandom";
 import * as Duration from "effect/Duration";
 import * as Effect from "effect/Effect";
 import * as FileSystem from "effect/FileSystem";
@@ -38,7 +38,7 @@ import * as GoatProjectFileLoader from "../project/GoatProjectFileLoader.ts";
 import * as ServerSettings from "../serverSettings.ts";
 import {
   clearPersistedServerRuntimeState,
-  readPersistedServerRuntimeState,
+  readLiveServerRuntimeState,
 } from "../serverRuntimeState.ts";
 import * as WorkspacePaths from "../workspace/WorkspacePaths.ts";
 import { refuseInThread } from "./cliCredential.ts";
@@ -191,8 +191,8 @@ function projectCommandErrorFromLiveServerRequest(cause: unknown): ProjectComman
   return new ProjectLiveServerRequestError({ operation: "callLiveServer", cause });
 }
 
-const projectCommandUuid = Crypto.Crypto.pipe(
-  Effect.flatMap((crypto) => crypto.randomUUIDv4()),
+const projectCommandUuid = SecureRandom.SecureRandom.pipe(
+  Effect.flatMap((random) => random.uuidV4()),
   Effect.mapError(
     (cause) =>
       new ProjectCommandIdGenerationError({
@@ -214,6 +214,7 @@ const makeProjectCliRuntimeLayer = (layerProjectService: typeof RuntimeLayer.lay
     ),
     Layer.provideMerge(WorkspacePaths.layer),
     Layer.provideMerge(ServerSettings.layer.pipe(Layer.provide(ServerSecretStore.layer))),
+    // Built after acquireServerOwnership; layerCliConfig would contend with this process's own lock.
     Layer.provideMerge(SqlitePersistence.layerConfig),
   );
 
@@ -356,7 +357,7 @@ const tryResolveLiveProjectExecutionMode = Effect.fn("tryResolveLiveProjectExecu
     environmentAuth: EnvironmentAuth.EnvironmentAuth["Service"],
     config: ServerConfig.ServerConfig["Service"],
   ) {
-    const runtimeState = yield* readPersistedServerRuntimeState(config.serverRuntimeStatePath);
+    const runtimeState = yield* readLiveServerRuntimeState(config.serverRuntimeStatePath);
     if (Option.isNone(runtimeState)) {
       return Option.none<{ readonly origin: string }>();
     }
@@ -397,7 +398,7 @@ const runProjectMutation = Effect.fn("runProjectMutation")(function* (
   }) => Effect.Effect<
     string,
     Error,
-    | Crypto.Crypto
+    | SecureRandom.SecureRandom
     | FileSystem.FileSystem
     | HttpClient.HttpClient
     | Path.Path

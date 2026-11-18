@@ -507,6 +507,19 @@ index e6509355275596c451f9d082223cc16bfe504e1a..604dba0d90a2545910f8724a80205565
  	actions: Array<MenuAction>;
  	actionsHash: string; // just a workaround to make sure we don't have to manually compare MenuActions manually in C++ (since it's a struct and that's a pain)
  	title?: string;
+diff --git a/src/UIMenuView.android.tsx b/src/UIMenuView.android.tsx
+index 967e375..c5dcca8 100644
+--- a/src/UIMenuView.android.tsx
++++ b/src/UIMenuView.android.tsx
+@@ -24,7 +24,7 @@ const MenuComponent = forwardRef<MenuComponentRef, NativeMenuComponentProps>(
+ 						const command =
+ 							UIManager.getViewManagerConfig("MenuView").Commands.show;
+ 
+-						UIManager.dispatchViewManagerCommand(node, command, undefined);
++						UIManager.dispatchViewManagerCommand(node, command, []);
+ 					}
+ 				},
+ 			}),
 diff --git a/src/types.ts b/src/types.ts
 index 9c323d9c510e7359c83d4d6633affde673570632..5d5fdfb8b8235fcaa8295b85630443eaf5991a17 100644
 --- a/src/types.ts

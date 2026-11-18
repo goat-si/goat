@@ -16,7 +16,7 @@ import { isCloudExecution } from "@goat/provider-core/server/cloudTask";
 import { buildTemporaryWorktreeBranchName } from "@goat/shared/git";
 import * as Cause from "effect/Cause";
 import * as Context from "effect/Context";
-import * as Crypto from "effect/Crypto";
+import * as SecureRandom from "effect/crypto/SecureRandom";
 import * as Effect from "effect/Effect";
 import * as FileSystem from "effect/FileSystem";
 import * as Layer from "effect/Layer";
@@ -89,7 +89,7 @@ const make = Effect.gen(function* () {
   const setupScripts = yield* ProjectSetupScriptRunner.ProjectSetupScriptRunner;
   const vcsStatus = yield* VcsStatusBroadcaster.VcsStatusBroadcaster;
   const fileSystem = yield* FileSystem.FileSystem;
-  const crypto = yield* Crypto.Crypto;
+  const random = yield* SecureRandom.SecureRandom;
 
   // One in-flight fork per commandId, so a retry racing the first call cannot make a second checkout.
   // Both limits refuse before any Git work starts.
@@ -274,7 +274,7 @@ const make = Effect.gen(function* () {
         uncommitted: (dirty ?? "") === "" ? ("none" as const) : ("left" as const),
       };
     }
-    const snapshotRef = `refs/goat/snapshots/fork-${yield* crypto.randomUUIDv4().pipe(Effect.orDie)}`;
+    const snapshotRef = `refs/goat/snapshots/fork-${yield* random.uuidV4().pipe(Effect.orDie)}`;
     const snapshot = yield* snapshots
       .captureWorkspaceSnapshot({ cwd: sourceCwd, snapshotRef })
       .pipe(
@@ -326,7 +326,7 @@ const make = Effect.gen(function* () {
     workspace: Extract<OrchestrationV2ThreadForkWorkspace, { readonly type: "worktree" }>,
   ) {
     const { thread, project, sourceCwd } = yield* resolveSource(input);
-    const token = (yield* crypto.randomUUIDv4().pipe(Effect.orDie)).replaceAll("-", "");
+    const token = (yield* random.uuidV4().pipe(Effect.orDie)).replaceAll("-", "");
     const branch = workspace.branch ?? buildTemporaryWorktreeBranchName(() => token);
     const existing = yield* gitWorkflow.listLocalBranchNames(project.workspaceRoot).pipe(
       Effect.mapError((cause) =>

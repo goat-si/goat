@@ -152,6 +152,7 @@ export function formatSessionList(
     readonly json?: boolean;
   },
 ): string {
+  // This process holds no sockets, so it cannot know which sessions are connected.
   if (options?.json) {
     return `${JSON.stringify(
       sessions.map((session) => ({
@@ -160,7 +161,7 @@ export function formatSessionList(
         scopes: session.scopes,
         subject: session.subject,
         client: session.client,
-        connected: session.connected,
+        connected: null,
         issuedAt: toIsoString(session.issuedAt),
         expiresAt: toIsoString(session.expiresAt),
         lastConnectedAt: session.lastConnectedAt ? toIsoString(session.lastConnectedAt) : null,
@@ -178,7 +179,7 @@ export function formatSessionList(
     sessions
       .map((session) =>
         [
-          `${session.sessionId}${session.connected ? " connected" : ""}`,
+          session.sessionId,
           `  scopes: ${session.scopes.join(" ")}`,
           `  method: ${session.method}`,
           `  subject: ${session.subject}`,
@@ -190,6 +191,7 @@ export function formatSessionList(
           `  expires: ${toIsoString(session.expiresAt)}`,
         ].join(newline),
       )
-      .join(`${newline}${newline}`) + newline
+      .join(`${newline}${newline}`) +
+    `${newline}${newline}Connection state is known only to the running server; see Settings → Connections.${newline}`
   );
 }

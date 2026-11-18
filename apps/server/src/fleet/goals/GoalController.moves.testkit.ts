@@ -3,6 +3,7 @@
  * database file that a "restart" reopens. The worker runtime is scripted; the hosts answer
  * through a fake SshRemoteDispatch the Rescheduler calls. Shared by the move and drain tests.
  */
+import * as NodeCrypto from "@effect/platform-node/NodeCrypto";
 import * as NodeServices from "@effect/platform-node/NodeServices";
 import { expect } from "@effect/vitest";
 import { FleetGoalId, RunId, type RuntimeMode, ThreadId } from "@goat/contracts";
@@ -311,7 +312,9 @@ export const server = (fake: Fake, world: World, path: string) => {
       ServerSettings.ServerSettingsService.layerTest({ fleet: { controllerEnabled: true } }),
     ),
     Layer.provideMerge(
-      SqlitePersistence.layerFromPath(path).pipe(Layer.provide(NodeServices.layer)),
+      SqlitePersistence.layerFromPath(path).pipe(
+        Layer.provide(Layer.mergeAll(NodeServices.layer, NodeCrypto.layer)),
+      ),
     ),
   );
 };
@@ -323,7 +326,7 @@ export const databaseFile = Effect.gen(function* () {
     yield* fs.makeTempDirectoryScoped({ prefix: "goat-goal-moves-" }),
     "state.sqlite",
   );
-}).pipe(Effect.provide(NodeServices.layer));
+}).pipe(Effect.provide(Layer.mergeAll(NodeServices.layer, NodeCrypto.layer)));
 
 /** A goal on a folder, its workers on A or B, with the given limits. */
 export const goalWith = (id: string, limits: Partial<ReturnType<typeof testSpec>["limits"]> = {}) =>

@@ -57,9 +57,12 @@ The default selection includes every project with a conversation active within
 the import window (30 days by default), including folders that are not git
 repositories. Use the checkboxes, or "Select all" and "Select none", to change
 the selection. Linked worktrees of
-bare repositories can be offered as separate projects. Other linked git
-worktrees, Codex scratch directories under `Documents/Codex`, and anything under
-`Downloads` are not offered.
+bare repositories can be offered as separate projects. Conversations in other
+linked git worktrees count toward their main checkout, so a repository is
+offered even if you only worked in its worktrees. A conversation from a linked
+worktree continues in that worktree. When the worktree is outside GOAT's worktrees
+folder, deleting its thread or cleaning up worktrees leaves it in place. Codex scratch directories
+under `Documents/Codex`, and anything under `Downloads`, are not offered.
 
 A large or malformed history can reach the scan limit. GOAT keeps the
 projects it found and warns when projects or conversations may be missing.

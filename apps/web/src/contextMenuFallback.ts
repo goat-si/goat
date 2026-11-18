@@ -100,7 +100,7 @@ export function showContextMenuFallback<T extends string>(
       if (activeContextMenuDismiss === dismiss) {
         activeContextMenuDismiss = null;
       }
-      document.removeEventListener("keydown", onKeyDown);
+      window.removeEventListener("keydown", onKeyDown, true);
       document.removeEventListener("pointerdown", onPointerDown, true);
       document.removeEventListener("contextmenu", onContextMenu, true);
       document.removeEventListener("focusin", onFocusIn);
@@ -312,6 +312,17 @@ export function showContextMenuFallback<T extends string>(
         label.textContent = item.label;
         button.appendChild(label);
 
+        if (item.detail) {
+          // The comma gives screen readers a pause between label and detail.
+          button.setAttribute("aria-label", `${item.label}, ${item.detail}`);
+          const detail = document.createElement("span");
+          detail.className = "ms-auto shrink-0 ps-4 text-muted-foreground text-xs";
+          detail.style.cssText =
+            "margin-inline-start:auto;flex-shrink:0;padding-inline-start:1rem;color:var(--contrast-muted-foreground);font-size:0.75rem;";
+          detail.textContent = item.detail;
+          button.appendChild(detail);
+        }
+
         if (hasChildren) {
           button.setAttribute("aria-haspopup", "menu");
           button.setAttribute("aria-expanded", "false");
@@ -411,6 +422,13 @@ export function showContextMenuFallback<T extends string>(
       menu.addEventListener("mouseenter", () => {
         closeMenusFromLevel(level + 1);
       });
+      // Like a native menu, take thumb Back/Forward presses instead of letting Chromium
+      // run the app router's history underneath.
+      const swallowThumbButton = (event: MouseEvent) => {
+        if (event.button === 3 || event.button === 4) event.preventDefault();
+      };
+      menu.addEventListener("mousedown", swallowThumbButton);
+      menu.addEventListener("mouseup", swallowThumbButton);
 
       document.body.appendChild(menu);
       menuStack[level] = menu;
@@ -421,7 +439,8 @@ export function showContextMenuFallback<T extends string>(
       });
     };
 
-    document.addEventListener("keydown", onKeyDown);
+    // Ahead of any sheet or dialog around the menu's opener, so Escape closes only the menu.
+    window.addEventListener("keydown", onKeyDown, true);
     document.addEventListener("pointerdown", onPointerDown, true);
     document.addEventListener("contextmenu", onContextMenu, true);
     openMenu(items, position?.x ?? 0, position?.y ?? 0, 0);

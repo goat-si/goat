@@ -1,4 +1,5 @@
 // @effect-diagnostics nodeBuiltinImport:off - CLI integration exercises Node HTTP and filesystem boundaries.
+import * as NodeCrypto from "@effect/platform-node/NodeCrypto";
 import * as NodeServices from "@effect/platform-node/NodeServices";
 import { afterEach, assert, describe, expect, it } from "@effect/vitest";
 import { AuthStandardClientScopes, ORCHESTRATION_PROTOCOL_VERSION } from "@goat/contracts";
@@ -34,9 +35,13 @@ import {
 } from "../serverRuntimeState.ts";
 import { renderTerminalQrCode } from "../startupAccess.ts";
 import { resolveHostCliCommand } from "./invocation.ts";
-import { DevServerNotProxiableError, resolveTailscaleLocalTarget } from "./pair.ts";
+import {
+  DevServerNotProxiableError,
+  resolveTailscaleLocalTarget,
+  ServePortOccupiedError,
+} from "./pair.ts";
 
-const layerCliRuntime = Layer.mergeAll(NodeServices.layer, NetService.layer);
+const layerCliRuntime = Layer.mergeAll(NodeServices.layer, NodeCrypto.layer, NetService.layer);
 
 const baseState = {
   version: 1,
@@ -155,8 +160,8 @@ describe("goat pair", () => {
             Effect.gen(function* () {
               if (!ChildProcess.isStandardCommand(command))
                 return yield* Effect.die("Unexpected pipeline");
-              if (command.args[0] === "serve") {
-                const target = command.args.at(-1)!;
+              if (command.args[0] === "serve" && command.args[1] === "--bg") {
+                const target = String(command.args.at(-1));
                 const descriptor = yield* Effect.promise(async () =>
                   (await fetch(new URL("/.well-known/goat/environment", target))).json(),
                 );
@@ -210,7 +215,88 @@ describe("goat pair", () => {
           assert.include(output, "Pairing URL: https://pair-test.tail.ts.net/pair#token=");
         }),
       "::1",
-    ).pipe(Effect.provide(NodeServices.layer)),
+    ).pipe(Effect.provide(Layer.mergeAll(NodeServices.layer, NodeCrypto.layer))),
+  );
+
+  // The MagicDNS probe fails whenever the host cannot reach its own *.ts.net name,
+  // so it cannot be what decides that the port is free.
+  it.effect(
+    "leaves another app's Serve route alone when the host cannot reach its MagicDNS URL",
+    () =>
+      withDescriptorServer((origin) =>
+        // Another live app on loopback; a dead port's route may be taken back.
+        withDescriptorServer((otherAppOrigin) =>
+          Effect.gen(function* () {
+            const fetch = yield* FetchHttpClient.Fetch;
+            const tailscaleCalls: Array<ReadonlyArray<string>> = [];
+            const spawner = ChildProcessSpawner.make((command) => {
+              const { args } = command as unknown as { readonly args: ReadonlyArray<string> };
+              tailscaleCalls.push(args);
+              const stdout =
+                args[0] === "status"
+                  ? '{"BackendState":"Running","Self":{"DNSName":"host-a.tail.ts.net.","TailscaleIPs":["100.64.0.1"],"CapMap":{"https":null}}}'
+                  : args[0] === "serve" && args[1] === "status"
+                    ? JSON.stringify({
+                        TCP: { "443": { HTTPS: true } },
+                        Web: {
+                          "host-a.tail.ts.net:443": {
+                            Handlers: { "/": { Proxy: otherAppOrigin } },
+                          },
+                        },
+                      })
+                    : "";
+              return Effect.succeed(
+                ChildProcessSpawner.makeHandle({
+                  pid: ChildProcessSpawner.ProcessId(1),
+                  // A recorded takeover fails fast instead of waiting out the HTTPS retries.
+                  exitCode: Effect.succeed(
+                    ChildProcessSpawner.ExitCode(
+                      args[0] === "serve" && args[1] !== "status" ? 1 : 0,
+                    ),
+                  ),
+                  isRunning: Effect.succeed(false),
+                  kill: () => Effect.void,
+                  unref: Effect.succeed(Effect.void),
+                  stdin: Sink.drain,
+                  stdout: Stream.make(new TextEncoder().encode(stdout)),
+                  stderr: Stream.empty,
+                  all: Stream.empty,
+                  getInputFd: () => Sink.drain,
+                  getOutputFd: () => Stream.empty,
+                }),
+              );
+            });
+
+            const baseDir = makeTempDir("goat-pair-ts-held-");
+            yield* persistServerRuntimeState({
+              path: NodePath.join(baseDir, "userdata", "server-runtime.json"),
+              state: yield* makePersistedServerRuntimeState({
+                config: { host: "127.0.0.1", devUrl: undefined },
+                port: Number(new URL(origin).port),
+              }),
+            });
+
+            const exit = yield* runCli(["pair", "--base-dir", baseDir, "--tailscale"]).pipe(
+              Effect.provideService(ChildProcessSpawner.ChildProcessSpawner, spawner),
+              Effect.provideService(HostProcess.Platform, "linux"),
+              Effect.provideService(FetchHttpClient.Fetch, async (input, init) => {
+                if (String(input).startsWith(origin)) return fetch(input, init);
+                throw new TypeError("getaddrinfo ENOTFOUND host-a.tail.ts.net");
+              }),
+              Effect.exit,
+            );
+
+            assert.deepEqual(
+              tailscaleCalls.filter((args) => args[0] === "serve" && args[1] !== "status"),
+              [],
+            );
+            assert.isTrue(Exit.isFailure(exit));
+            if (Exit.isFailure(exit)) {
+              assert.instanceOf(Cause.squash(exit.cause), ServePortOccupiedError);
+            }
+          }),
+        ),
+      ).pipe(Effect.provide(layerCliRuntime)),
   );
 
   it.effect.each([false, true])("mints a token with legacy path fallback=%s", (legacyOnly) =>
@@ -266,7 +352,7 @@ describe("goat pair", () => {
       "127.0.0.1",
       legacyOnly,
     ).pipe(
-      Effect.provide(NodeServices.layer),
+      Effect.provide(Layer.mergeAll(NodeServices.layer, NodeCrypto.layer)),
       Effect.provideService(HostProcess.Environment, {
         ...process.env,
         [SERVICE_LAUNCHER_CONTEXT_ENV]: JSON.stringify({
@@ -301,7 +387,7 @@ describe("goat pair", () => {
 
         assert.include(output, "Pairing URL: http://localhost:5733/pair#token=");
       }),
-    ).pipe(Effect.provide(NodeServices.layer)),
+    ).pipe(Effect.provide(Layer.mergeAll(NodeServices.layer, NodeCrypto.layer))),
   );
 
   it.effect("ignores runtime state whose recorded pid is no longer alive", () =>
@@ -329,7 +415,7 @@ describe("goat pair", () => {
         const { command } = yield* resolveHostCliCommand("serve", ["--base-dir", baseDir]);
         assert.include(rendered, `\`${command}\``);
       }),
-    ).pipe(Effect.provide(NodeServices.layer)),
+    ).pipe(Effect.provide(Layer.mergeAll(NodeServices.layer, NodeCrypto.layer))),
   );
 
   // regression: #10516 minting opens the target database with this checkout's
@@ -369,7 +455,7 @@ describe("goat pair", () => {
           "server-runtime.json",
         ]);
       }),
-    ).pipe(Effect.provide(NodeServices.layer)),
+    ).pipe(Effect.provide(Layer.mergeAll(NodeServices.layer, NodeCrypto.layer))),
   );
 
   // regression: #15492 an older CLI minted into a V1 database the protocol 2
@@ -397,12 +483,13 @@ describe("goat pair", () => {
           assert.isTrue(Exit.isFailure(exit));
           if (Exit.isFailure(exit)) {
             assert.include(String(Cause.squash(exit.cause)), "GOAT_VERSION=0.0.45 sh");
+            assert.include(String(Cause.squash(exit.cause)), `goat pair --base-dir ${baseDir}`);
           }
         }),
       "127.0.0.1",
       false,
       { ...testDescriptor, serverVersion: "0.0.45", orchestrationProtocolVersion: 1 },
-    ).pipe(Effect.provide(NodeServices.layer)),
+    ).pipe(Effect.provide(Layer.mergeAll(NodeServices.layer, NodeCrypto.layer))),
   );
 
   // Without the capability `tailscale serve` blocks on an enablement URL, so
@@ -454,7 +541,7 @@ describe("goat pair", () => {
         assert.include(String(error), "https://login.tailscale.com/admin/dns");
         assert.deepEqual(tailscaleCalls, [["status", "--json"]]);
       }),
-    ).pipe(Effect.provide(NodeServices.layer)),
+    ).pipe(Effect.provide(Layer.mergeAll(NodeServices.layer, NodeCrypto.layer))),
   );
 
   it.effect("refuses a Windows-reserved Tailscale HTTPS port before publishing it", () =>
@@ -534,7 +621,69 @@ Start Port    End Port
           false,
         );
       }),
-    ).pipe(Effect.provide(NodeServices.layer)),
+    ).pipe(Effect.provide(Layer.mergeAll(NodeServices.layer, NodeCrypto.layer))),
+  );
+
+  // regression: #35517 - the macOS Tailscale apps refuse Serve targets other than
+  // localhost, 127.0.0.1 and ::1, so a specific bind needs an explanation.
+  it.effect("names the bind address when Tailscale refuses it as a Serve target", () =>
+    withDescriptorServer((origin) =>
+      Effect.gen(function* () {
+        const baseDir = makeTempDir("goat-pair-remote-");
+        yield* persistServerRuntimeState({
+          path: NodePath.join(baseDir, "userdata", "server-runtime.json"),
+          state: {
+            ...(yield* makePersistedServerRuntimeState({
+              config: { host: "127.0.0.2", devUrl: undefined },
+              port: Number(new URL(origin).port),
+            })),
+            origin,
+          },
+        });
+        const spawner = ChildProcessSpawner.make((command) => {
+          const { args } = command as unknown as { readonly args: ReadonlyArray<string> };
+          // `serve status` answers with the Serve config; only applying the route is refused.
+          const serve = args[0] === "serve" && args[1] === "--bg";
+          return Effect.succeed(
+            ChildProcessSpawner.makeHandle({
+              pid: ChildProcessSpawner.ProcessId(1),
+              exitCode: Effect.succeed(ChildProcessSpawner.ExitCode(serve ? 1 : 0)),
+              isRunning: Effect.succeed(false),
+              kill: () => Effect.void,
+              unref: Effect.succeed(Effect.void),
+              stdin: Sink.drain,
+              stdout: Stream.make(
+                new TextEncoder().encode(
+                  serve ? "" : '{"Self":{"DNSName":"pair-test.tail.ts.net."}}',
+                ),
+              ),
+              stderr: Stream.make(
+                new TextEncoder().encode(
+                  serve
+                    ? "Warning: the MacOS extension doesn't support connecting to remote destinations from non-default route\n"
+                    : "",
+                ),
+              ),
+              all: Stream.empty,
+              getInputFd: () => Sink.drain,
+              getOutputFd: () => Stream.empty,
+            }),
+          );
+        });
+
+        const error = yield* provideCliTestLayers(
+          runCli(["pair", "--base-dir", baseDir, "--tailscale"]).pipe(
+            Effect.provideService(ChildProcessSpawner.ChildProcessSpawner, spawner),
+            Effect.provideService(HostProcess.Platform, "darwin"),
+            Effect.flip,
+          ),
+        );
+
+        assert.include(String(error), "127.0.0.2");
+        assert.include(String(error), "--host 127.0.0.1");
+        assert.include(String(error), "--host 0.0.0.0");
+      }),
+    ).pipe(Effect.provide(Layer.mergeAll(NodeServices.layer, NodeCrypto.layer))),
   );
 });
 

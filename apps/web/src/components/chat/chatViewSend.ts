@@ -41,10 +41,11 @@ import {
   type ComposerSendSnapshot,
   readFileAsDataUrl,
   prepareRevertedMessageAttachments,
-  waitForRevertedMessage,
 } from "../ChatView.logic";
+import { waitForRevertedMessage } from "../threadRewindWait";
 import { readPreparedConnection } from "../../state/session";
 import { recallableComposerPrompt } from "./composerPromptHistory";
+import { notifyDirectAnnotationAttached } from "./composerSendNotices";
 
 // Kept per route so a send in flight, and the multiple-model selections, survive
 // ChatView remounting while the user navigates.
@@ -262,7 +263,8 @@ export function restoreComposerDraft(
 ): ComposerImageAttachment[] {
   const store = useComposerDraftStore.getState();
   const images = snapshot.images.map(cloneComposerImageForRetry);
-  store.setPrompt(draftTarget, snapshot.messageText);
+  store.setPrompt(draftTarget, snapshot.draftText);
+  store.setReplyTo(draftTarget, snapshot.replyTo);
   store.addImages(draftTarget, images);
   store.addFiles(draftTarget, snapshot.files);
   store.setTerminalContexts(draftTarget, snapshot.terminalContexts);
@@ -361,6 +363,17 @@ export function prepareTurnAttachments(input: {
         dataUrl: await readFileAsDataUrl(attachment.file),
         ...(attachment.source ? { source: attachment.source } : {}),
       };
+    }),
+  );
+}
+
+export function notifySendBusy(isDirect: boolean) {
+  if (isDirect) return notifyDirectAnnotationAttached(true);
+  toastManager.add(
+    stackedThreadToast({
+      type: "info",
+      title: "Still sending your previous message.",
+      description: "Send again once it goes through or fails.",
     }),
   );
 }

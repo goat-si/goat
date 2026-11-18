@@ -95,6 +95,11 @@ export interface MoveDeps {
     decisionId: string | undefined,
     steps: HubDeviceStep[],
   ) => Effect.Effect<HubDeviceMcpResult, OrchestratorMcpFailure | HubOcxError>;
+  /** Why a kept path may not route to the alias; the environment is identified when absent. */
+  readonly disposableRoute: (
+    alias: string,
+    environmentId?: string | null,
+  ) => Effect.Effect<string | undefined>;
 }
 
 const invalid = (message: string) =>
@@ -110,6 +115,8 @@ export const makeMove = (deps: MoveDeps) =>
     scope: McpInvocationScope,
     input: HubDeviceMoveInput,
     person?: HubPerson,
+    /** True once the caller stopped waiting; the move then never starts changing routing. */
+    stopped: Effect.Effect<boolean> = Effect.succeed(false),
   ) {
     const { fromAlias: from, toAlias: to } = input;
     if (from === to) return yield* invalid("fromAlias and toAlias must name different aliases.");
@@ -156,6 +163,11 @@ export const makeMove = (deps: MoveDeps) =>
       if (status === undefined) return deps.homeUnavailable(to, forbidden, steps);
       if (status.role === "child")
         return done("failed", "This machine is a Child and cannot be a Home.");
+      // A disposable machine's Pen alias is refused by name, before any network read.
+      for (const alias of [from, to]) {
+        const named = yield* deps.disposableRoute(alias, null);
+        if (named !== undefined) return done("failed", named);
+      }
       const fromEnvironment = yield* deps.ocx.identify(from);
       const toEnvironment = yield* deps.ocx.identify(to);
       if (fromEnvironment === undefined || toEnvironment === undefined)
@@ -165,6 +177,8 @@ export const makeMove = (deps: MoveDeps) =>
         );
       if (fromEnvironment !== toEnvironment)
         return done("failed", `${from} and ${to} name different machines, so this is not a move.`);
+      const machine = yield* deps.disposableRoute(from, fromEnvironment);
+      if (machine !== undefined) return done("failed", machine);
       // Target first: nothing at the old alias is touched for a target that is already linked.
       if (status.links.some((entry) => entry.alias === to))
         return done("failed", `${to} is already linked; nothing was changed.`);
@@ -228,9 +242,16 @@ export const makeMove = (deps: MoveDeps) =>
         offered.fingerprint,
         fromEnvironment,
       );
+      // A move whose caller is gone asks no one and changes nothing. One already changing routing
+      // is not interrupted by its caller leaving, but a later failure or a shutdown can still leave
+      // the device in no hub. Each check sits right before a side effect.
+      const refused = () =>
+        stop("Move stopped before changing anything: its caller stopped waiting.");
+      if (yield* stopped) return refused();
       if (input.decisionId !== undefined) yield* deps.approved(caller, input.decisionId, binding);
       else {
         const pin = yield* deps.ocx.pinnedFingerprint(to, offered.keyType);
+        if (yield* stopped) return refused();
         if (pin !== offered.fingerprint || !caller.owner) {
           const reason =
             pin !== offered.fingerprint
@@ -251,7 +272,12 @@ export const makeMove = (deps: MoveDeps) =>
           });
         }
       }
+      if (yield* stopped) return refused();
       yield* deps.audit(caller, to, "started", input.decisionId);
+      if (yield* stopped) {
+        yield* deps.audit(caller, to, "failed", input.decisionId);
+        return refused();
+      }
       mutating = true;
       if (record !== undefined) {
         const failure = yield* deps.leaveDevice(from, record.id, fromCaller.connection, steps);

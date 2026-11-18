@@ -1,4 +1,5 @@
 import React, { act, type ReactNode } from "react";
+import { RegistryContext } from "@effect/atom-react";
 import { createRoot } from "react-dom/client";
 import { afterEach, expect, it, vi } from "vite-plus/test";
 import {
@@ -9,6 +10,7 @@ import {
   ProviderInstanceId,
   ThreadId,
 } from "@goat/contracts";
+import { Atom, AtomRegistry } from "effect/reactivity";
 import * as Schema from "effect/Schema";
 
 vi.mock("react-native", () => ({
@@ -95,12 +97,35 @@ state.homeConfig = homeConfig;
 vi.mock("../../state/environments", () => ({
   useEnvironments: () => ({ presentationById: state.presentations }),
 }));
-vi.mock("../../state/channels", () => ({
-  channelEnvironment: { slackSettings: () => "slack", slackStatus: () => "slack-status" },
-}));
-vi.mock("@effect/atom-react", async () => {
-  const { AsyncResult } = await import("effect/reactivity");
-  return { useAtomValue: () => AsyncResult.initial() };
+// Reads nobody answers: Slack's pushed status, and the bot lists a refusal starts over.
+vi.mock("../../state/channels", async () => {
+  const { AsyncResult, Atom } = await import("effect/reactivity");
+  const idle = Atom.make(AsyncResult.initial());
+  return {
+    channelEnvironment: {
+      slackSettings: () => "slack",
+      slackStatus: () => idle,
+      listBots: () => idle,
+    },
+  };
+});
+vi.mock("./openAsksRead", async () => {
+  const { AsyncResult, Atom } = await import("effect/reactivity");
+  const idle = Atom.make(AsyncResult.initial());
+  return { openAsks: () => idle };
+});
+// The app's computers and their connections, which the refusal follower watches.
+vi.mock("../../connection/catalog", async () => {
+  const { Atom } = await import("effect/reactivity");
+  return {
+    environmentCatalog: {
+      catalogValueAtom: Atom.make<unknown>({ isReady: true, entries: new Map() }),
+    },
+  };
+});
+vi.mock("../../state/presentation", async () => {
+  const { Atom } = await import("effect/reactivity");
+  return { environmentPresentations: { presentationsAtom: Atom.make(new Map()) } };
 });
 vi.mock("../../state/query", () => ({
   useEnvironmentQuery: (key: string | null) =>
@@ -108,7 +133,10 @@ vi.mock("../../state/query", () => ({
 }));
 vi.mock("../../lib/clock", () => ({ useNowMinuteMs: () => Date.parse("2026-11-07T12:00:00Z") }));
 
+import { environmentCatalog } from "../../connection/catalog";
+import { environmentPresentations } from "../../state/presentation";
 import { MobileBotStatusCard } from "./MobileBotStatusCard";
+import { followKeptPerComputerCatalog, resetKeptPerComputerForTests } from "./useKeptPerComputer";
 
 const container = document.createElement("div");
 let root: ReturnType<typeof createRoot> | undefined;
@@ -127,21 +155,26 @@ const waiting = Schema.decodeUnknownSync(BotThreadRow)({
   mainMessagesSinceQuiet: 0,
 });
 
-async function render(props: Partial<React.ComponentProps<typeof MobileBotStatusCard>> = {}) {
+async function render(
+  props: Partial<React.ComponentProps<typeof MobileBotStatusCard>> = {},
+  registry: AtomRegistry.AtomRegistry = AtomRegistry.make(),
+) {
   root ??= createRoot(container);
   const onOpenTask = vi.fn();
   await act(async () =>
     root?.render(
-      <MobileBotStatusCard
-        environmentId={STUDIO}
-        member={null}
-        rows={[]}
-        refreshRows={state.refreshRows}
-        turnsWaiting={[]}
-        onOpenChat={state.openChat}
-        onOpenTask={onOpenTask}
-        {...props}
-      />,
+      <RegistryContext value={registry}>
+        <MobileBotStatusCard
+          environmentId={STUDIO}
+          member={null}
+          rows={[]}
+          refreshRows={state.refreshRows}
+          turnsWaiting={[]}
+          onOpenChat={state.openChat}
+          onOpenTask={onOpenTask}
+          {...props}
+        />
+      </RegistryContext>,
     ),
   );
   return onOpenTask;
@@ -149,6 +182,64 @@ async function render(props: Partial<React.ComponentProps<typeof MobileBotStatus
 
 const button = (label: string) =>
   [...container.querySelectorAll("button")].find((item) => item.textContent === label);
+
+const catalogAtom = environmentCatalog.catalogValueAtom as unknown as Atom.Writable<unknown>;
+const presentationsAtom = environmentPresentations.presentationsAtom as unknown as Atom.Writable<
+  ReadonlyMap<string, object>
+>;
+const listed = (ids: ReadonlyArray<string>) => ({
+  isReady: true,
+  entries: new Map(ids.map((id) => [id, { enabled: true }])),
+});
+const homeLink = (connection: object) => new Map([["env-studio", { connection }]]);
+const blocked = (reason: "authentication" | "permission") => ({
+  phase: "error",
+  failure: { kind: "blocked", reason },
+});
+
+/** The app's refusal follower over both computers, as installed when the app starts. */
+function following() {
+  resetKeptPerComputerForTests();
+  const registry = AtomRegistry.make();
+  const stop = followKeptPerComputerCatalog(registry);
+  registry.set(catalogAtom, listed(["env-studio", "env-laptop"]));
+  return { registry, [Symbol.dispose]: stop };
+}
+
+it.each(["authentication", "permission"] as const)(
+  "says the home did not accept this device after its connection is refused for %s (#3532)",
+  async (reason) => {
+    using follow = following();
+    state.homeConnected = false;
+    state.moveTarget = { environmentId: LAPTOP, label: "MacBook" };
+    state.changeHome.mockClear();
+    try {
+      follow.registry.set(presentationsAtom, homeLink(blocked(reason)));
+      // The sheet shows another machine; the card still names the home that refused.
+      await render({ environmentId: LAPTOP, rows: "unavailable" }, follow.registry);
+      expect(container.textContent).toContain("Not working");
+      expect(container.textContent).toContain("GOAT on Mac Studio did not accept this device");
+      expect(container.textContent).not.toContain("Home machine is offline");
+      expect(container.textContent).not.toContain("GPT-5.4");
+      await act(async () => button("Make MacBook the home")?.click());
+      expect(state.changeHome).toHaveBeenCalledWith(LAPTOP);
+    } finally {
+      state.moveTarget = null;
+    }
+  },
+);
+
+it("guard: a home that is only offline still says it is offline (#3532)", async () => {
+  using follow = following();
+  state.homeConnected = false;
+  follow.registry.set(
+    presentationsAtom,
+    homeLink({ phase: "error", failure: { kind: "transport", reason: "network" } }),
+  );
+  await render({ rows: "unavailable" }, follow.registry);
+  expect(container.textContent).toContain("Home machine is offline (Mac Studio)");
+  expect(container.textContent).not.toContain("did not accept this device");
+});
 
 it("says the home machine is offline and moves the bot where the viewer may write", async () => {
   state.homeConnected = false;

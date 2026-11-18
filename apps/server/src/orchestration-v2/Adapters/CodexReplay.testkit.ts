@@ -1,4 +1,5 @@
 import type * as CodexReplay from "effect-codex-app-server/replay";
+import * as Predicate from "effect/Predicate";
 import * as CodexAdapterV2 from "./CodexAdapterV2.ts";
 import packageJson from "../../../package.json" with { type: "json" };
 
@@ -121,7 +122,7 @@ export function codexReplayPreamble(input: {
           approvalPolicy: "never",
           approvalsReviewer: "user",
           sandboxPolicy: { type: "dangerFullAccess" },
-          summary: "detailed",
+          summary: "auto",
         },
       },
     },
@@ -192,4 +193,67 @@ export function codexTurnReportedIdle(
       frame: { method: "thread/status/changed", params: { threadId, status: { type: "idle" } } },
     },
   ];
+}
+
+const withRequestId = (
+  entry: CodexReplay.CodexAppServerReplayEntry,
+  id: number,
+): CodexReplay.CodexAppServerReplayEntry =>
+  entry.type !== "runtime_exit" && Predicate.isObject(entry.frame)
+    ? { ...entry, frame: { ...entry.frame, id } }
+    : entry;
+
+/** Every turn/start follows a config/read; inserts that exchange and shifts later client ids. */
+function withConfigReadBeforeTurnStart(
+  entries: ReadonlyArray<CodexReplay.CodexAppServerReplayEntry>,
+): Array<CodexReplay.CodexAppServerReplayEntry> {
+  const result: Array<CodexReplay.CodexAppServerReplayEntry> = [];
+  let offset = 0;
+  let clientIds = new Map<number, number>();
+  for (const entry of entries) {
+    const frame = entry.type === "runtime_exit" ? undefined : entry.frame;
+    if (!Predicate.isObject(frame) || typeof frame.id !== "number") {
+      result.push(entry);
+      continue;
+    }
+    if (entry.type === "expect_outbound" && typeof frame.method === "string") {
+      if (frame.method === "initialize") {
+        offset = 0;
+        clientIds = new Map();
+      }
+      if (frame.method === "turn/start") {
+        const id = frame.id + offset;
+        const params = Predicate.isObject(frame.params) ? frame.params : {};
+        result.push(
+          {
+            type: "expect_outbound",
+            label: "config/read",
+            frame: { id, method: "config/read", params: { cwd: params.cwd, includeLayers: false } },
+          },
+          {
+            type: "emit_inbound",
+            label: "config/read",
+            frame: { id, result: { config: {}, origins: {} } },
+          },
+        );
+        offset += 1;
+      }
+      clientIds.set(frame.id, frame.id + offset);
+      result.push(withRequestId(entry, frame.id + offset));
+      continue;
+    }
+    const mapped = clientIds.get(frame.id);
+    result.push(
+      entry.type === "emit_inbound" && frame.method === undefined && mapped !== undefined
+        ? withRequestId(entry, mapped)
+        : entry,
+    );
+  }
+  return result;
+}
+
+export function withConfigReads(
+  transcript: CodexReplay.CodexAppServerReplayTranscript,
+): CodexReplay.CodexAppServerReplayTranscript {
+  return { ...transcript, entries: withConfigReadBeforeTurnStart(transcript.entries) };
 }

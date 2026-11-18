@@ -146,13 +146,15 @@ it.layer(layerTest)("worktree branch allocation", (it) => {
       const { initialBranch } = yield* initRepoWithCommit(cwd);
       const driver = yield* GitVcsDriver.GitVcsDriver;
       const oid = yield* git(cwd, ["rev-parse", "HEAD"]);
-      for (let index = 0; index <= 100; index += 1) {
-        yield* git(cwd, [
-          "update-ref",
-          `refs/heads/${index === 0 ? "topic" : `topic-${index}`}`,
-          oid,
-        ]);
-      }
+      yield* driver.execute({
+        operation: "GitVcsDriver.test.createBranches",
+        cwd,
+        args: ["update-ref", "--stdin"],
+        stdin: Array.from(
+          { length: 101 },
+          (_, index) => `create refs/heads/${index === 0 ? "topic" : `topic-${index}`} ${oid}\n`,
+        ).join(""),
+      });
       const result = yield* driver
         .renameBranch({ cwd, oldBranch: initialBranch, newBranch: "topic" })
         .pipe(Effect.result);

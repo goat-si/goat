@@ -2,8 +2,10 @@ import { useNavigate } from "@tanstack/react-router";
 import { useAtomValue } from "@effect/atom-react";
 import {
   acknowledgeTaskRead,
+  botTaskWait,
   canSendToGoatBot,
   goatBotOpenQuestionPlaceholder,
+  goatBotTaskWait,
   isRetryableTaskStatus,
   presentTaskStatus,
   taskAttemptLabel,
@@ -29,9 +31,12 @@ import { goatBotHomeKey } from "./goatBotHomeRequest";
 import { useBotThreads } from "./useBotRoster";
 import { useGoatBotSession } from "./useGoatBotSession";
 import { focusTaskHeading, getTaskPaneFocus } from "./taskPaneFocus";
+import { GOAT_BOT_TASK_PANE_WIDTH } from "./goatBotLayout";
+import { useGoatBotHiddenChatNotice } from "./GoatBotHiddenChatNotice";
 import { useBotTaskLookup } from "./useBotTaskLookup";
 import { useAcknowledgeTaskRead } from "./useAcknowledgeTaskRead";
 import type { GoatBotLocalSubmission } from "./useGoatBotFollow";
+import { GoatBotTypedAnswersScope } from "./GoatBotTypedAnswers";
 
 export function GoatBotTaskPane({
   environmentId,
@@ -56,13 +61,14 @@ export function GoatBotTaskPane({
     edge: "left",
   });
   const taskFocus = getTaskPaneFocus();
+  const hiddenChat = useGoatBotHiddenChatNotice(narrow);
   const headingRef = useStableCallback((element: HTMLHeadingElement | null) =>
     focusTaskHeading(taskFocus, taskId, element),
   );
   const member = useGoatBotMember();
   const navigate = useNavigate();
   const botName = useGoatBotName();
-  const { rows, remoteWork, refresh, established, pending } = useBotThreads(
+  const { rows, remoteWork, refresh, established, pending, chips } = useBotThreads(
     environmentId,
     memberThreadsKey(member),
   );
@@ -78,6 +84,18 @@ export function GoatBotTaskPane({
   const task = listedTask ?? (found?.state === "known" ? found.row : undefined);
   const taskSummary =
     task?.kind === "task" ? task.task : found?.state === "unavailable" ? found.task : undefined;
+  const chip = chips.get(taskId);
+  // What Home's row and the bot's face say this task waits for; an unlisted task has no view.
+  const wait =
+    task?.kind === "task"
+      ? botTaskWait(task, chip)
+      : taskSummary
+        ? goatBotTaskWait({
+            status: taskSummary.status,
+            openQuestionCount: chip?.openQuestionCount ?? 0,
+            observed: chip?.observed,
+          })
+        : null;
   const sentFor = lookup.key;
   /** A completion counts only for the task it was sent for; another task's is dropped. */
   const finish = (sent: string) => {
@@ -97,6 +115,11 @@ export function GoatBotTaskPane({
   });
   const memberDeleted = member?.state === "deleted";
   const canSend = !memberDeleted && canSendToGoatBot(session.availability, session.canOperate);
+  // A draft belongs to the task and bot it was written for; opening another one empties the box.
+  const thread =
+    member?.sessionThreadId ??
+    (session.availability.kind === "ready" ? session.availability.bot.threadId : null);
+  const destination = `${environmentId}:${thread ?? ""}:${taskId}`;
   const timelineRows = session.rowsForTask(taskId);
   const sourceIdentity = session.source?.identity ?? null;
   const [local, setLocal] = useState<{
@@ -138,7 +161,8 @@ export function GoatBotTaskPane({
         narrow
           ? undefined
           : ({
-              width: `var(${RESIZABLE_WIDTH_PROPERTY})`,
+              // The stored width shows again when the row is wider.
+              width: GOAT_BOT_TASK_PANE_WIDTH,
               [RESIZABLE_WIDTH_PROPERTY]: `${width}px`,
             } as CSSProperties)
       }
@@ -155,12 +179,18 @@ export function GoatBotTaskPane({
           narrow && COLLAPSED_SIDEBAR_TITLEBAR_INSET_CLASS,
         )}
       >
-        <Button variant="ghost" size="sm" onClick={onClose}>
+        <Button
+          variant="ghost"
+          size="sm"
+          onClick={onClose}
+          aria-describedby={hiddenChat.describedBy}
+        >
           {narrow ? "Back to Tasks" : "Close"}
         </Button>
         <div
           className={
-            narrow ? "order-last flex min-w-0 w-full items-baseline gap-2" : "min-w-0 flex-1"
+            // The title keeps 5rem beside the actions; below that the actions wrap to a new line.
+            narrow ? "order-last flex min-w-0 w-full items-baseline gap-2" : "min-w-20 flex-1"
           }
         >
           <Tooltip>
@@ -168,6 +198,7 @@ export function GoatBotTaskPane({
               render={
                 <h2
                   key={taskId}
+                  data-goat-bot-task-heading
                   className="min-w-0 flex-1 truncate font-semibold"
                   tabIndex={-1}
                   ref={headingRef}
@@ -180,18 +211,20 @@ export function GoatBotTaskPane({
           </Tooltip>
           {taskSummary && (
             <p className="shrink-0 text-xs text-muted-foreground">
-              {found?.state === "unavailable" && taskSummary.status === "completed"
-                ? "Completed"
-                : presentTaskStatus(
-                    taskSummary.status,
-                    task?.kind === "task" ? task.view.doneAt : null,
-                  ).label}
+              {wait ??
+                (found?.state === "unavailable" && taskSummary.status === "completed"
+                  ? "Completed"
+                  : presentTaskStatus(
+                      taskSummary.status,
+                      task?.kind === "task" ? task.view.doneAt : null,
+                    ).label)}
               {taskAttemptLabel(taskSummary.generation)
                 ? ` · ${taskAttemptLabel(taskSummary.generation)}`
                 : ""}
             </p>
           )}
         </div>
+        {hiddenChat.notice}
         {task?.kind === "task" && (
           <>
             {session.supportsTaskRetry && isRetryableTaskStatus(task.task.status) ? (
@@ -348,38 +381,45 @@ export function GoatBotTaskPane({
         taskId={taskId}
       >
         <GoatBotStepsReader rows={timelineRows}>
-          <GoatBotTimeline
-            key={`${session.source?.identity ?? ""}:${taskId}`}
-            taskDetails
-            rows={timelineRows}
-            baselineIds={session.source?.baselineIds}
-            sourceIds={session.source?.sourceIds}
-            submissions={
-              local.taskId === taskId && local.sourceIdentity === sourceIdentity
-                ? local.submissions
-                : []
-            }
-            committedSends={session.source?.committedSends}
-            environmentId={environmentId}
-            onRetry={session.onRetryInput}
-            onDiscard={session.onDiscardInput}
-            onPick={
-              canSend
-                ? (text, answerTask, questionId) =>
-                    // A question id goes only with the task that asked it.
-                    send(
-                      text,
-                      [],
-                      answerTask === taskId && questionId !== undefined
-                        ? ChannelQuestionId.make(questionId)
-                        : undefined,
-                    )
-                : undefined
-            }
-          />
+          {/* Typed answers stay through a reconnect, while the bot's thread is unknown. */}
+          <GoatBotTypedAnswersScope
+            destination={thread === null ? null : destination}
+            visibleTurnItems={session.visibleTurnItems}
+          >
+            <GoatBotTimeline
+              key={`${session.source?.identity ?? ""}:${taskId}`}
+              taskDetails
+              rows={timelineRows}
+              baselineIds={session.source?.baselineIds}
+              sourceIds={session.source?.sourceIds}
+              submissions={
+                local.taskId === taskId && local.sourceIdentity === sourceIdentity
+                  ? local.submissions
+                  : []
+              }
+              committedSends={session.source?.committedSends}
+              environmentId={environmentId}
+              onRetry={session.onRetryInput}
+              onDiscard={session.onDiscardInput}
+              onPick={
+                canSend
+                  ? (text, answerTask, questionId) =>
+                      // A question id goes only with the task that asked it.
+                      send(
+                        text,
+                        [],
+                        answerTask === taskId && questionId !== undefined
+                          ? ChannelQuestionId.make(questionId)
+                          : undefined,
+                      )
+                  : undefined
+              }
+            />
+          </GoatBotTypedAnswersScope>
         </GoatBotStepsReader>
       </GoatBotStepsProvider>
       <GoatBotComposer
+        key={destination}
         disabled={!canSend}
         botName={botName}
         placeholder={

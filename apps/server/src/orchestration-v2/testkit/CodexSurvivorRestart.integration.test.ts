@@ -1,4 +1,5 @@
 import { assert, it } from "@effect/vitest";
+import * as NodeCrypto from "@effect/platform-node/NodeCrypto";
 import * as NodeServices from "@effect/platform-node/NodeServices";
 import {
   CommandId,
@@ -255,7 +256,9 @@ const runRestartScenario = (
       });
       const scenario = { name: "survivor-e2e", runtimePolicyOverride: { cwd: workspace } };
       const db = (file: string) =>
-        SqlitePersistence.layerFromPath(file).pipe(Layer.provide(NodeServices.layer));
+        SqlitePersistence.layerFromPath(file).pipe(
+          Layer.provide(Layer.mergeAll(NodeServices.layer, NodeCrypto.layer)),
+        );
       const sourceDbLayer = db(sourceDb);
       const crashDbLayer = db(crashDb);
       const waitFor = (
@@ -509,7 +512,11 @@ const runRestartScenario = (
           ),
         ),
       );
-    }).pipe(Effect.provide(Layer.merge(IdAllocator.layer, NodeServices.layer))),
+    }).pipe(
+      Effect.provide(
+        Layer.merge(IdAllocator.layer, Layer.mergeAll(NodeServices.layer, NodeCrypto.layer)),
+      ),
+    ),
   );
 
 it.effect(

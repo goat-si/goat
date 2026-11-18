@@ -1,5 +1,5 @@
 import { cliReleaseChannelOf, isPublishableCliReleaseVersion } from "@goat/shared/cliRelease";
-import * as Crypto from "effect/Crypto";
+import * as Digest from "effect/crypto/Digest";
 import * as Effect from "effect/Effect";
 import { compareExactServiceVersions } from "./serviceProtocol.ts";
 
@@ -68,9 +68,9 @@ export const rolloutBucket = Effect.fn("server.auto_update.rollout_bucket")(func
   environmentId: string,
   targetVersion: string,
 ) {
-  const crypto = yield* Crypto.Crypto;
-  const bytes = yield* crypto.digest(
-    "SHA-256",
+  const digest = yield* Digest.Digest;
+  const bytes = yield* digest.digest(
+    Digest.sha256,
     new TextEncoder().encode(`${environmentId}:${targetVersion}`),
   );
   return new DataView(bytes.buffer, bytes.byteOffset, bytes.byteLength).getUint32(0) % 100;

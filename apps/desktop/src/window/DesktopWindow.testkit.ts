@@ -1,3 +1,4 @@
+import * as NodeCrypto from "@effect/platform-node/NodeCrypto";
 import * as NodeServices from "@effect/platform-node/NodeServices";
 import * as Effect from "effect/Effect";
 import * as Layer from "effect/Layer";
@@ -23,6 +24,7 @@ import * as DesktopServerExposure from "../backend/DesktopServerExposure.ts";
 import * as DesktopWindow from "./DesktopWindow.ts";
 import * as DesktopWindowMaterial from "./material/DesktopWindowMaterial.ts";
 import * as PreviewManager from "../preview/Manager.ts";
+import * as DesktopPrimaryPaste from "../app/DesktopPrimaryPaste.ts";
 import * as PreviewPasskeys from "../preview/Passkeys.ts";
 
 const environmentInput = {
@@ -86,6 +88,7 @@ const layerDesktopEnvironment = DesktopEnvironment.layer(environmentInput).pipe(
   Layer.provide(
     Layer.mergeAll(
       NodeServices.layer,
+      NodeCrypto.layer,
       DesktopConfig.layerTest({
         GOAT_PORT: "3773",
         VITE_DEV_SERVER_URL: "http://127.0.0.1:5733",
@@ -118,6 +121,8 @@ export function layerTest(input: {
   readonly previewZoomReapplies?: number[];
   readonly onReveal?: (window: Electron.BrowserWindow) => void;
   readonly focusedWindow?: Electron.BrowserWindow;
+  readonly primaryPasteEnabled?: boolean;
+  readonly previewPasskeyBridgeEnabled?: boolean;
   readonly materialWindowOptions?: { readonly transparent?: true };
   readonly materialAttachOptions?: unknown[];
 }) {
@@ -224,8 +229,11 @@ export function layerTest(input: {
         } satisfies ElectronShell.ElectronShell["Service"]),
         layerElectronTheme,
         layerElectronWindow,
+        Layer.succeed(DesktopPrimaryPaste.DesktopPrimaryPaste, {
+          enabled: input.primaryPasteEnabled ?? true,
+        }),
         Layer.mock(PreviewPasskeys.PreviewPasskeys)({
-          bridgeEnabled: false,
+          bridgeEnabled: input.previewPasskeyBridgeEnabled ?? false,
           installSessionHandlers: () => {},
           attachGuest: () => () => {},
         }),
@@ -340,6 +348,7 @@ export const makeSplashScenario = (createOutcomes: readonly (Electron.BrowserWin
           } satisfies ElectronShell.ElectronShell["Service"]),
           layerElectronTheme,
           Layer.succeed(ElectronWindow.ElectronWindow, electronWindowShape),
+          Layer.succeed(DesktopPrimaryPaste.DesktopPrimaryPaste, { enabled: true }),
           Layer.mock(PreviewPasskeys.PreviewPasskeys)({
             bridgeEnabled: false,
             installSessionHandlers: () => {},

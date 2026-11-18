@@ -1,9 +1,11 @@
 import { assert, expect, it } from "@effect/vitest";
 import { vi } from "vite-plus/test";
 import * as Effect from "effect/Effect";
+import * as Layer from "effect/Layer";
 import * as Cause from "effect/Cause";
 import * as Console from "effect/Console";
 import * as Exit from "effect/Exit";
+import * as NodeCrypto from "@effect/platform-node/NodeCrypto";
 import * as NodeServices from "@effect/platform-node/NodeServices";
 import * as NetService from "@goat/shared/Net";
 import packageJson from "../package.json" with { type: "json" };
@@ -107,7 +109,7 @@ it.effect.each([
     const { runCliWithArgs } = yield* Effect.promise(() => import("./binCli.ts"));
     const expected = yield* runCliWithArgs(args).pipe(
       Effect.scoped,
-      Effect.provide([NodeServices.layer, NetService.layer]),
+      Effect.provide([Layer.mergeAll(NodeServices.layer, NodeCrypto.layer), NetService.layer]),
       Effect.provideService(Console.Console, console),
       Effect.exit,
     );

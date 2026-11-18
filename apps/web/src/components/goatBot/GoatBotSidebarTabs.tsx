@@ -27,6 +27,7 @@ import { Tooltip, TooltipPopup, TooltipTrigger } from "../ui/tooltip";
 import { GoatBotNeedsYou } from "./GoatBotNeedsYou";
 import { GoatBotSidebarRow } from "./GoatBotSidebarRow";
 import { GoatBotChildRows } from "./GoatBotChildRows";
+import { goatBotGovernedAtom } from "./goatBotGoverned";
 import { GoatBotMemberRoster } from "./GoatBotMemberRows";
 import { GoatBotNewBotStatus } from "./GoatBotNewBotStatus";
 import { openNewBotChat } from "./goatBotNewBotOpen";
@@ -87,7 +88,7 @@ export function GoatBotSidebarTabs() {
             main={roster[0]?.profile ?? null}
           />
           {environmentId && (
-            <GoatBotChildRows environmentId={environmentId} rows={rows} refresh={refresh} />
+            <LegacyBotChildRows environmentId={environmentId} rows={rows} refresh={refresh} />
           )}
           {environmentId && supportsMembers ? (
             <>
@@ -106,6 +107,11 @@ export function GoatBotSidebarTabs() {
       )}
     </>
   );
+}
+
+function LegacyBotChildRows(props: Parameters<typeof GoatBotChildRows>[0]) {
+  const governed = useAtomValue(goatBotGovernedAtom(props.environmentId));
+  return governed ? null : <GoatBotChildRows {...props} />;
 }
 
 function NewBotButton({

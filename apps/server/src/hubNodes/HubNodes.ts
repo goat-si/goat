@@ -34,6 +34,7 @@ import * as CloudMachineService from "../cloudMachines/CloudMachineService.ts";
 import * as SshRemoteDispatch from "../sshRemote/SshRemoteDispatch.ts";
 import * as ServerEnvironment from "../environment/ServerEnvironment.ts";
 import * as DisposableMachineStore from "../hub/disposable/DisposableMachineStore.ts";
+import * as DisposableRouteGuard from "../hub/disposable/DisposableRouteGuard.ts";
 import * as HubNodeRepository from "./HubNodeRepository.ts";
 import { mergeHubNodes } from "./merge.ts";
 import { PenManagedRoutes, type PenRouteBinding } from "./PenManagedRoutes.ts";
@@ -92,6 +93,18 @@ export class HubNodes extends Context.Service<
       { readonly added: ReadonlyArray<string>; readonly retry: boolean },
       HubNodesError
     >;
+    /**
+     * Why a kept-machine path may not add a route through this SSH alias: it is a disposable
+     * machine's Pen alias (or Pen's pen-<name> for one), the GOAT it reaches is one, or the ED25519
+     * sshd key it offers is one's pin. Undefined when it is kept or unknown.
+     */
+    readonly disposableRoute: (target: {
+      readonly alias: string;
+      /** False checks the alias and given key only, reading nothing from the network. */
+      readonly identify?: boolean;
+      /** False skips reading the offered key, for a caller whose preflight compared it already. */
+      readonly probeKey?: boolean;
+    }) => Effect.Effect<string | undefined>;
   }
 >()("goat/hubNodes/HubNodes") {}
 
@@ -114,6 +127,7 @@ export const make = Effect.gen(function* () {
   const penRoutes = yield* PenManagedRoutes;
   const http = yield* HttpClient.HttpClient;
   const disposableMachines = yield* DisposableMachineStore.DisposableMachineStore;
+  const guard = yield* DisposableRouteGuard.DisposableRouteGuard;
   const signals = yield* PubSub.sliding<void>(1);
   const lock = yield* Semaphore.make(1);
   // Orders cloud alias invalidation against check results, so a check that finishes after a
@@ -273,6 +287,17 @@ export const make = Effect.gen(function* () {
         );
   const add: HubNodes["Service"]["add"] = Effect.fn("HubNodes.add")(function* (input, options) {
     const before = yield* snapshot;
+    // Design section 6: a disposable machine is reached only through its own Pen route.
+    const refuseDisposable = (target: string, claim: DisposableRouteGuard.GuardInput) =>
+      guard
+        .refusal(claim, target)
+        .pipe(
+          Effect.flatMap((detail) =>
+            detail === undefined
+              ? Effect.void
+              : Effect.fail(new HubNodesError({ reason: "refused", detail })),
+          ),
+        );
     if (input.kind === "linked") {
       const result = yield* linked
         .link({
@@ -283,6 +308,7 @@ export const make = Effect.gen(function* () {
           clientName: "GOAT hub",
           label: input.label,
           beforeSave: options.beforeSave,
+          // LinkedHosts itself refuses a disposable machine's descriptor, before the code is spent.
           acceptDescriptor: (descriptor) =>
             descriptor.environmentId === before.hubEnvironmentId
               ? Effect.fail(
@@ -322,6 +348,7 @@ export const make = Effect.gen(function* () {
         reason: "refused",
         detail: "Cloud machine aliases are managed in Settings → Connections → Cloud machines.",
       });
+    yield* refuseDisposable(alias, { alias });
     const target = { alias, hostname: input.hostname, username: input.username, port: input.port };
     const identity = yield* ssh
       .identifyTarget({ ...target, hostname: target.hostname ?? alias })
@@ -336,6 +363,12 @@ export const make = Effect.gen(function* () {
         reason: "refused",
         detail: "The hub cannot add itself as a node.",
       });
+    // The ED25519 key negotiated at the alias, which the hub dials whatever hostname it is given;
+    // read, trusted or not, only while an open record has a pin.
+    yield* refuseDisposable(alias, {
+      environmentId: identity,
+      probe: { alias, username: target.username, port: target.port },
+    });
     if (identity === null && options.requireIdentity)
       return yield* new HubNodesError({
         reason: "invalid_request",
@@ -562,6 +595,18 @@ export const make = Effect.gen(function* () {
   const importProfiles: HubNodes["Service"]["importProfiles"] = Effect.fn(
     "HubNodes.importProfiles",
   )(function* (input) {
+    // A disposable machine is reached only through its own Pen route (design section 6); read before
+    // the transaction, which holds the database.
+    const claimed = new Set<string>();
+    if (input.catalog.state !== "locked")
+      for (const profile of input.catalog.profiles)
+        if (
+          (yield* guard.claim({
+            alias: profile.ssh.alias,
+            environmentId: profile.environmentId,
+          })) !== undefined
+        )
+          claimed.add(profile.ssh.alias);
     const result = yield* repository.transaction(
       Effect.gen(function* () {
         const previous = yield* repository.getImport;
@@ -585,6 +630,7 @@ export const make = Effect.gen(function* () {
           const alias = profile.ssh.alias;
           const routeId = `ssh:${alias}`;
           if (hasCloudMachineAliasPrefix(alias) || existing.has(routeId)) continue;
+          if (claimed.has(alias)) continue;
           yield* repository.upsertRegistration({
             routeId,
             environmentId: profile.environmentId,
@@ -714,6 +760,23 @@ export const make = Effect.gen(function* () {
         // A pass cut off between closing a route and forgetting it would leave it unguarded.
       }).pipe(Effect.uninterruptible),
     );
+  const disposableRoute: HubNodes["Service"]["disposableRoute"] = Effect.fn(
+    "HubNodes.disposableRoute",
+  )(function* ({ alias, identify, probeKey }) {
+    if (identify === false) return yield* guard.refusal({ alias }, alias);
+    return yield* guard.refusal(
+      {
+        alias,
+        // An alias GOAT cannot identify is judged by its name alone; hub.nodes.add identifies again.
+        identify: ssh
+          .identifyTarget({ alias, hostname: alias, username: null, port: null })
+          .pipe(Effect.orElseSucceed(() => null)),
+        ...(probeKey === false ? {} : { probe: { alias, username: null, port: null } }),
+      },
+      alias,
+    );
+  });
+
   return HubNodes.of({
     snapshot,
     changes,
@@ -724,7 +787,8 @@ export const make = Effect.gen(function* () {
     importProfiles,
     dismissNotice,
     reconcilePen,
+    disposableRoute,
   });
 });
 
-export const layer = Layer.effect(HubNodes, make);
+export const layer = Layer.effect(HubNodes, make).pipe(Layer.provide(DisposableRouteGuard.layer));

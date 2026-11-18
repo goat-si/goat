@@ -7,7 +7,9 @@ import { IncomingShareInbox } from "../sharing/incoming-share-inbox";
 import type { IncomingShareDraft } from "../sharing/incoming-share-model";
 import {
   getProjectScopeSelectionTarget,
+  isSameRepository,
   newTaskDestination,
+  newTaskFilteredProject,
   resolveDraftProjectSelection,
   resolveDraftShareTransfer,
   resolveEnvironmentProjectMatch,
@@ -79,6 +81,37 @@ describe("getProjectScopeSelectionTarget", () => {
   });
 });
 
+describe("newTaskFilteredProject", () => {
+  it("never starts in an archived copy of the filtered project", () => {
+    const mac = { ...makeProject("goat-app", "mac"), archivedAt: "2026-01-01T00:00:00.000Z" };
+    const server = makeProject("goat-app", "server");
+    expect(
+      newTaskFilteredProject(
+        makeScope([mac, server]),
+        null,
+        new Set([mac.environmentId, server.environmentId]),
+        { environmentId: "mac", projectId: "goat-app" },
+      ),
+    ).toEqual({ environmentId: "server", projectId: "goat-app" });
+  });
+
+  it("prefers the remembered copy of the filtered project", () => {
+    const mac = makeProject("goat-app", "mac");
+    const server = makeProject("goat-app", "server");
+    const connected = new Set([mac.environmentId, server.environmentId]);
+    const filtered = (last?: { readonly environmentId: string; readonly projectId: string }) =>
+      newTaskFilteredProject(makeScope([mac, server]), null, connected, last);
+    expect(filtered({ environmentId: "server", projectId: "goat-app" })).toEqual({
+      environmentId: "server",
+      projectId: "goat-app",
+    });
+    expect(filtered({ environmentId: "server", projectId: "other" })).toEqual({
+      environmentId: "mac",
+      projectId: "goat-app",
+    });
+  });
+});
+
 describe("resolveEnvironmentProjectMatch", () => {
   it("follows the same repository onto the target machine", () => {
     const selected = makeProject("t3code", "mac", {
@@ -89,6 +122,7 @@ describe("resolveEnvironmentProjectMatch", () => {
       makeProject("t3code-clone", "server", { repositoryKey: "github.com/sample-tools/goat" }),
     ];
     expect(resolveEnvironmentProjectMatch(target, selected)).toBe(target[1]);
+    expect(isSameRepository(target[1]!, selected)).toBe(true);
   });
 
   it("falls back to workspace basename, then title, for unindexed projects", () => {
@@ -98,6 +132,7 @@ describe("resolveEnvironmentProjectMatch", () => {
       makeProject("srv", "server", { workspaceRoot: "/home/me/t3code" }),
     ];
     expect(resolveEnvironmentProjectMatch(byBasename, selected)).toBe(byBasename[1]);
+    expect(isSameRepository(byBasename[1]!, selected)).toBe(false);
 
     const byTitle = [
       makeProject("other", "server"),
@@ -119,6 +154,7 @@ describe("resolveEnvironmentProjectMatch", () => {
     const unindexed = makeProject("unindexed", "server", { workspaceRoot: "/srv/t3code" });
     expect(resolveEnvironmentProjectMatch([fork, unindexed], selected)).toBe(unindexed);
     expect(resolveEnvironmentProjectMatch([fork], selected)).toBe(fork);
+    expect(isSameRepository(fork, selected)).toBe(false);
   });
 });
 
@@ -255,6 +291,7 @@ describe("new task project choice", () => {
       requestId: "request",
       useLastProject: true,
       currentProject: undefined,
+      filteredProject: undefined,
       lastProject: { environmentId: "environment", projectId: "first" },
     };
     expect(newTaskDestination(options)).toEqual({
@@ -269,11 +306,34 @@ describe("new task project choice", () => {
     expect(
       newTaskDestination({
         ...options,
+        currentProject: { environmentId: "other", projectId: "current" },
+        filteredProject: { environmentId: "environment", projectId: "first" },
+      }),
+    ).toEqual({ draft: { requestId: "request", environmentId: "other", projectId: "current" } });
+    expect(
+      newTaskDestination({
+        ...options,
         lastProject: { environmentId: "removed", projectId: "first" },
       }),
     ).toEqual({ draft: { requestId: "request" } });
     expect(newTaskDestination({ ...options, lastProject: undefined })).toEqual({
       draft: { requestId: "request" },
+    });
+  });
+
+  it("starts in the thread list's filtered project ahead of the remembered one", () => {
+    const projects = [makeProject("bravo"), makeProject("alpha")];
+    expect(
+      newTaskDestination({
+        projects,
+        requestId: "request",
+        useLastProject: true,
+        currentProject: undefined,
+        filteredProject: { environmentId: "environment", projectId: "alpha" },
+        lastProject: { environmentId: "environment", projectId: "bravo" },
+      }),
+    ).toEqual({
+      draft: { requestId: "request", environmentId: "environment", projectId: "alpha" },
     });
   });
 
@@ -284,6 +344,7 @@ describe("new task project choice", () => {
       requestId: "request",
       useLastProject: true,
       currentProject: undefined,
+      filteredProject: undefined,
       lastProject: { environmentId: "environment", projectId: "archived" },
     };
     expect(newTaskDestination(options)).toEqual({ draft: { requestId: "request" } });
@@ -304,6 +365,7 @@ describe("new task project choice", () => {
       requestId: "request",
       useLastProject: true,
       currentProject: undefined,
+      filteredProject: undefined,
       lastProject: { environmentId: "offline", projectId: "offline-copy" },
     };
     expect(newTaskDestination(options)).toEqual({

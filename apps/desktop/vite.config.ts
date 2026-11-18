@@ -10,6 +10,7 @@ import { loadRepoEnv } from "../../scripts/lib/public-config.ts";
 import { withDevElectronLaunch } from "./scripts/dev-electron-pack.ts";
 
 const repoEnv = loadRepoEnv();
+const domTests = ["src/preview/PickPreload.test.ts"];
 
 // Install only bundle externals; the server bundle already carries its dependency tree.
 const isMainProcessExternal = (id: string) =>
@@ -180,24 +181,47 @@ export default defineConfig({
     },
   ]),
   test: {
-    include: [...defaultInclude, "../../native/kde-snap-shot/src/*.test.ts"],
+    // The Windows lane runs workspace suites concurrently; filesystem-heavy
+    // desktop integration tests can exceed Vitest's 5 second default there.
+    testTimeout: 15_000,
+    projects: [
+      {
+        extends: true,
+        test: {
+          name: "unit",
+          include: [...defaultInclude, "../../native/kde-snap-shot/src/*.test.ts"],
+          exclude: ["**/node_modules/**", ...domTests],
+          setupFiles: [
+            "../../packages/shared/src/testing/longTempDir.ts",
+            "../../packages/shared/src/testing/providerEnv.ts",
+            "../../packages/shared/src/testing/gitEnv.setup.ts",
+          ],
+          globalSetup: [
+            "../../scripts/lib/node-runtime.ts",
+            "../../packages/shared/src/testing/gitConfigGuard.ts",
+          ],
+        },
+      },
+      {
+        extends: true,
+        test: {
+          name: "dom",
+          include: domTests,
+          // Guest preloads run in the page; these tests drive them against a DOM.
+          environment: "jsdom",
+          setupFiles: [
+            "../../packages/shared/src/testing/providerEnv.ts",
+            "../../packages/shared/src/testing/gitEnv.setup.ts",
+          ],
+          globalSetup: ["../../scripts/lib/node-runtime.ts"],
+        },
+      },
+    ],
     alias: [
       {
         find: /^electron$/,
         replacement: `${import.meta.dirname}/src/testing/electronStub.ts`,
       },
-    ],
-    // The Windows lane runs workspace suites concurrently; filesystem-heavy
-    // desktop integration tests can exceed Vitest's 5 second default there.
-    testTimeout: 15_000,
-    setupFiles: [
-      "../../packages/shared/src/testing/longTempDir.ts",
-      "../../packages/shared/src/testing/providerEnv.ts",
-      "../../packages/shared/src/testing/gitEnv.setup.ts",
-    ],
-    globalSetup: [
-      "../../scripts/lib/node-runtime.ts",
-      "../../packages/shared/src/testing/gitConfigGuard.ts",
     ],
   },
 });

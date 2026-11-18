@@ -1,14 +1,16 @@
+import * as NodeCrypto from "@effect/platform-node/NodeCrypto";
 import * as NodeServices from "@effect/platform-node/NodeServices";
 import { expect, it } from "@effect/vitest";
 import { EnvironmentId, ServerSettingsError } from "@goat/contracts";
 import * as Deferred from "effect/Deferred";
 import * as Effect from "effect/Effect";
+import * as Layer from "effect/Layer";
 import * as Fiber from "effect/Fiber";
 import * as TestClock from "effect/testing/TestClock";
 
 import { type ChildState, failureCode, fixture, home } from "./OpenCodexChildReady.testkit.ts";
 
-it.layer(NodeServices.layer)("OpenCodexChildReady", (it) => {
+it.layer(Layer.mergeAll(NodeServices.layer, NodeCrypto.layer))("OpenCodexChildReady", (it) => {
   it.effect("installs and checks OpenCodex before any Child link exists", () =>
     Effect.gen(function* () {
       const f = yield* fixture({ role: "standalone" });
@@ -87,6 +89,7 @@ it.layer(NodeServices.layer)("OpenCodexChildReady", (it) => {
       expect((yield* f.call("installCodex")).kind).toBe("ok");
       expect(f.resolveCalls.length).toBeGreaterThan(0);
       expect(f.resolveCalls.every((managedOnly) => managedOnly === true)).toBe(true);
+      expect(f.installUpdates).toEqual([false]);
     }),
   );
 

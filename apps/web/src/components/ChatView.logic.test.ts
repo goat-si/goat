@@ -21,7 +21,6 @@ import {
   deriveLockedProvider,
   hasServerAcknowledgedLocalDispatch,
   resolveDraftPromotionNavigationTarget,
-  waitForRevertedMessage,
   snapshotDraftContent,
   isDraftContentUnchanged,
   boundAttachmentIds,
@@ -30,6 +29,7 @@ import {
   snapshotComposerSend,
   withMessageContext,
 } from "./ChatView.logic";
+import { waitForRevertedMessage } from "./threadRewindWait";
 import { ensureInlineContextReferences } from "../lib/composerContextReferences";
 import { terminalContextReference } from "../lib/composerContextRecords";
 import {

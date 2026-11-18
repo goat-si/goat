@@ -1,6 +1,7 @@
 import { createMigratingDatabaseOpener } from "../lib/indexedDbMigration";
 import { computeDpopJwkThumbprint, DpopPublicJwk } from "@goat/shared/dpop";
-import * as Crypto from "effect/Crypto";
+import * as SecureRandom from "effect/crypto/SecureRandom";
+import * as Digest from "effect/crypto/Digest";
 import * as Data from "effect/Data";
 import * as Effect from "effect/Effect";
 import * as Layer from "effect/Layer";
@@ -25,18 +26,7 @@ const DPOP_KEY_STORE_NAME = "keys";
 const DPOP_KEY_ID = "relay-dpop-proof-key";
 const decodeDpopPublicJwk = Schema.decodeUnknownEffect(DpopPublicJwk);
 
-export const layer = Layer.succeed(
-  Crypto.Crypto,
-  Crypto.make({
-    randomBytes: (size) => globalThis.crypto.getRandomValues(new Uint8Array(size)),
-    digest: (algorithm, data) =>
-      Effect.promise(async () => {
-        const input = new Uint8Array(data.length);
-        input.set(data);
-        return new Uint8Array(await globalThis.crypto.subtle.digest(algorithm, input.buffer));
-      }),
-  }),
-);
+export const layer = Layer.mergeAll(SecureRandom.layerWebCrypto, Digest.layerWebCrypto);
 
 function dpopError(message: string, cause?: unknown) {
   return new BrowserDpopError({ message, ...(cause === undefined ? {} : { cause }) });
@@ -146,7 +136,7 @@ export const createBrowserDpopProof = Effect.fn("dpop.createBrowserDpopProof")(f
 }): Effect.fn.Return<
   { readonly proof: string; readonly thumbprint: string },
   BrowserDpopError,
-  Crypto.Crypto
+  SecureRandom.SecureRandom | Digest.Digest
 > {
   const proof = yield* DpopProof.createProof({
     method: input.method,

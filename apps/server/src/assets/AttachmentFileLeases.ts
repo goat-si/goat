@@ -23,7 +23,10 @@ export function attachmentIdForFile(file: string): string | undefined {
   const tail = suffix.join(".");
   if (tail === "part") return;
   const uuid = "[0-9a-f]{8}(?:-[0-9a-f]{4}){3}-[0-9a-f]{12}";
-  return new RegExp(`^[a-z0-9]{1,10}(?:\\.txt(?:\\.part)?|\\.${uuid}\\.part)?$`, "i").test(tail)
+  return new RegExp(
+    `^[a-z0-9]{1,10}(?:\\.txt(?:(?:\\.\\d+)?\\.part)?|\\.${uuid}\\.part)?$`,
+    "i",
+  ).test(tail)
     ? id
     : undefined;
 }

@@ -1,3 +1,4 @@
+import * as NodeCrypto from "@effect/platform-node/NodeCrypto";
 import * as NodeServices from "@effect/platform-node/NodeServices";
 import { assert, describe, it } from "@effect/vitest";
 import { ProviderInstanceId } from "@goat/contracts";
@@ -38,7 +39,8 @@ describe("CursorUsageAccounts", () => {
         return yield* accounts.scan({
           instances: ["one", "two", "three", "four"].map((key) => ({
             instanceId: ProviderInstanceId.make(`cursor-${key}`),
-            environment: { CURSOR_API_KEY: `${key}-key` },
+            config: {},
+            environment: [{ name: "CURSOR_API_KEY", value: `${key}-key`, sensitive: true }],
           })),
           keychainUsageEnabled: false,
           windowStartMs: 0,
@@ -58,7 +60,10 @@ describe("CursorUsageAccounts", () => {
       Effect.provide(
         Layer.provideMerge(
           CursorUsageAccounts.layer.pipe(Layer.provide(reader)),
-          Layer.provideMerge(TestProviderHost.layer(), NodeServices.layer),
+          Layer.provideMerge(
+            TestProviderHost.layer(),
+            Layer.mergeAll(NodeServices.layer, NodeCrypto.layer),
+          ),
         ),
       ),
     );

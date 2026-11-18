@@ -20,6 +20,7 @@ export const unusedManager = {
   forgetEnvironment: () => Effect.die("Unexpected forget"),
   disconnectEnvironment: () => Effect.void,
   revalidateTunnels: () => Effect.void,
+  closeAllTunnels: Effect.void,
   issueMcpClientSession: () => Effect.die("unexpected session"),
   issueClientSession: () => Effect.die("unexpected client session"),
   runRemoteScript: () => Effect.die("unexpected remote script"),

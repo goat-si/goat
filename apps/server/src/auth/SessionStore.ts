@@ -6,6 +6,8 @@ import {
   decodeWebSocketClaims,
 } from "./sessionClaims.ts";
 import * as CloudSessionFence from "./CloudSessionFence.ts";
+import * as DurableRevocations from "./DurableRevocations.ts";
+import * as SessionEndLatches from "./SessionEndLatches.ts";
 import * as PenMemberSessionFence from "./PenMemberSessionFence.ts";
 import {
   AuthSessionId,
@@ -13,6 +15,7 @@ import {
   AuthStandardClientScopes,
   type AuthClientMetadata,
   type AuthClientSession,
+  type AuthRevokeOthersKept,
   type AuthEnvironmentScope,
   type AuthWebSocketTicketUse,
   type ChildSetupPurpose,
@@ -21,14 +24,16 @@ import {
   type ServerAuthSessionMethod,
   type SessionPrincipalKind,
 } from "@goat/contracts";
+import * as Cause from "effect/Cause";
 import * as Context from "effect/Context";
-import * as Crypto from "effect/Crypto";
+import * as SecureRandom from "effect/crypto/SecureRandom";
 import * as DateTime from "effect/DateTime";
 import * as Duration from "effect/Duration";
 import * as Effect from "effect/Effect";
 import * as Layer from "effect/Layer";
 import * as PubSub from "effect/PubSub";
 import * as Ref from "effect/Ref";
+import type * as Scope from "effect/Scope";
 import * as Semaphore from "effect/Semaphore";
 import * as Schema from "effect/Schema";
 import * as Stream from "effect/Stream";
@@ -57,6 +62,7 @@ import {
   resolveSessionCookieName,
 } from "./utils.ts";
 import * as ChildSetupSession from "./childSetupSession.ts";
+import { REVOKE_OTHERS_KEEPS_DESKTOP } from "./revokeOthersKeeps.ts";
 import {
   createDefaultClientMetadata,
   toAuthClientSession,
@@ -154,16 +160,17 @@ export class SessionStore extends Context.Service<
       readonly principalKind?: SessionPrincipalKind;
       readonly penBinding?: AuthSessions.AuthSessionPenBinding;
     }) => Effect.Effect<IssuedSession, SessionCredentialInternalError>;
-    /**
-     * Token-free live authority; revocation and expiry are checked on every read. A memory read
-     * with no SQL or lock, so it is safe inside a SQL transaction. Covers sessions loaded at
-     * startup, issued here, or accepted by `verify`, including ones another process issued.
-     */
     readonly setPenMembersAdmitted: (view: ReadonlySet<string> | "closed") => Effect.Effect<void>;
     readonly listPenMemberSessions: Effect.Effect<
       ReadonlyArray<{ readonly sessionId: AuthSessionId; readonly penMemberNode: string }>
     >;
     readonly setCloudWithdrawalPending: (pending: boolean) => Effect.Effect<void>;
+    /**
+     * Token-free live authority: a memory read with no SQL or lock, so it is safe inside a SQL
+     * transaction. Covers sessions loaded at startup, issued here, or accepted by `verify`,
+     * including ones another process issued. Expiry and this process's revocations apply at
+     * once; another process's revocation applies at the next durable check, within 5 seconds.
+     */
     readonly readActiveScopes: (
       sessionId: AuthSessionId,
     ) => Effect.Effect<ReadonlyArray<AuthEnvironmentScope>, SessionCredentialError>;
@@ -205,12 +212,30 @@ export class SessionStore extends Context.Service<
     readonly awaitInvalidation: (
       sessionId: AuthSessionId,
     ) => Effect.Effect<void, SessionCredentialVerificationError>;
+    /**
+     * `verify` for one MCP request, recording its admission inside the verify fence: a removal of
+     * the session's grant (a revoke or a deleted row) cuts the request's calls, expiry never does.
+     * The admission is released when the request's scope closes, on every exit.
+     */
+    readonly admitMcpCall: (
+      token: string,
+      connection: ConnectionContext | undefined,
+    ) => Effect.Effect<
+      { readonly session: VerifiedSession; readonly sessionEnd: SessionEndLatches.SessionEnd },
+      SessionCredentialError,
+      Scope.Scope
+    >;
+    /** The MCP requests admitted and not yet ended; for diagnostics and tests. */
+    readonly admissionsInFlight: () => Effect.Effect<number>;
     readonly revoke: (
       sessionId: AuthSessionId,
     ) => Effect.Effect<boolean, SessionCredentialInternalError>;
     readonly revokeAllExcept: (
       sessionId: AuthSessionId,
-    ) => Effect.Effect<number, SessionCredentialInternalError>;
+    ) => Effect.Effect<
+      { readonly revokedCount: number; readonly kept: AuthRevokeOthersKept },
+      SessionCredentialInternalError
+    >;
     readonly markConnected: (sessionId: AuthSessionId) => Effect.Effect<void, never>;
     readonly markDisconnected: (sessionId: AuthSessionId) => Effect.Effect<void, never>;
     /**
@@ -235,7 +260,7 @@ const DEFAULT_WEBSOCKET_TOKEN_TTL = Duration.minutes(5);
 
 const isPenId = Schema.is(PenId);
 export const make = Effect.gen(function* () {
-  const crypto = yield* Crypto.Crypto;
+  const random = yield* SecureRandom.SecureRandom;
   const serverConfig = yield* ServerConfig.ServerConfig;
   const serverEnvironment = yield* ServerEnvironment.ServerEnvironmentIdentity;
   const secretStore = yield* ServerSecretStore.ServerSecretStore;
@@ -295,6 +320,8 @@ export const make = Effect.gen(function* () {
   type ActiveScopeState = {
     readonly records: ReadonlyMap<AuthSessionId, ActiveScopeRecord>;
     readonly removed: ReadonlyMap<AuthSessionId, number>;
+    /** The removals that cut calls (a revoke or a deleted row), fenced the same way. */
+    readonly cutFences: ReadonlyMap<AuthSessionId, number>;
     readonly removals: number;
     readonly verifying: ReadonlyMap<number, number>;
     readonly nextVerify: number;
@@ -307,6 +334,7 @@ export const make = Effect.gen(function* () {
       ]),
     ),
     removed: new Map(),
+    cutFences: new Map(),
     removals: 0,
     verifying: new Map(),
     nextVerify: 0,
@@ -339,22 +367,47 @@ export const make = Effect.gen(function* () {
     );
 
   let forgetPenSession: (sessionId: AuthSessionId) => Effect.Effect<void> = () => Effect.void;
-  const emitRemoved = (sessionId: AuthSessionId) =>
+  const sessionEnds = SessionEndLatches.make();
+
+  /**
+   * Removes the grants in one update, fenced against running verifies, then announces each. A
+   * revoke or a deleted row ("removed") also cuts the sessions' running MCP calls; expiry never does.
+   */
+  const removeGrants = (
+    sessionIds: ReadonlyArray<AuthSessionId>,
+    reason: "removed" | "expired" = "removed",
+  ) =>
     Ref.update(activeScopes, (current) => {
       const records = new Map(current.records);
-      records.delete(sessionId);
+      const removed = new Map(current.removed);
+      const cutFences = new Map(current.cutFences);
       const removals = current.removals + 1;
+      for (const sessionId of sessionIds) {
+        records.delete(sessionId);
+        removed.set(sessionId, removals);
+        if (reason === "removed") cutFences.set(sessionId, removals);
+      }
       return {
         ...current,
         records,
         removals,
-        removed: neededFences(new Map(current.removed).set(sessionId, removals), current.verifying),
+        removed: neededFences(removed, current.verifying),
+        cutFences: neededFences(cutFences, current.verifying),
       };
     }).pipe(
-      Effect.andThen(forgetPenSession(sessionId)),
-      Effect.andThen(PubSub.publish(changesPubSub, { type: "clientRemoved", sessionId })),
+      Effect.andThen(Effect.forEach(sessionIds, (sessionId) => forgetPenSession(sessionId), { discard: true })),
+      Effect.andThen(reason === "removed" ? sessionEnds.cut(sessionIds) : Effect.void),
+      Effect.andThen(
+        PubSub.publishAll(
+          changesPubSub,
+          sessionIds.map((sessionId) => ({ type: "clientRemoved", sessionId }) as const),
+        ),
+      ),
       Effect.asVoid,
+      // A removed grant always cuts its calls; an interrupt must not land between the two.
+      Effect.uninterruptible,
     );
+  const emitRemoved = (sessionId: AuthSessionId) => removeGrants([sessionId]);
 
   const cloudFence = yield* CloudSessionFence.make(activeScopeRows, emitRemoved);
   const penFence = yield* PenMemberSessionFence.make(
@@ -374,6 +427,31 @@ export const make = Effect.gen(function* () {
   forgetPenSession = penFence.forget;
   penSessionDenied = penFence.denied;
 
+  /** Ends sessions whose rows are already revoked or gone. Callers hold authorityLock. */
+  const settleEnded = (sessionIds: ReadonlyArray<AuthSessionId>) =>
+    Ref.update(connectedSessionsRef, (current) => {
+      const next = new Map(current);
+      for (const sessionId of sessionIds) next.delete(sessionId);
+      return next;
+    }).pipe(Effect.andThen(removeGrants(sessionIds)));
+  const liveSessionIds = Effect.map(
+    Effect.all([Ref.get(activeScopes), Ref.get(connectedSessionsRef)]),
+    ([scopes, connected]) => [...new Set([...scopes.records.keys(), ...connected.keys()])],
+  );
+  const isLive = (sessionId: AuthSessionId) =>
+    Effect.map(liveSessionIds, (live) => live.includes(sessionId));
+  const pruneExpired = Effect.flatMap(DateTime.now, (now) =>
+    Ref.update(activeScopes, (current) => ({
+      ...current,
+      records: withoutExpired(current.records, now.epochMilliseconds),
+    })),
+  );
+  yield* DurableRevocations.start({
+    repository: authSessions,
+    liveIds: Effect.andThen(pruneExpired, liveSessionIds),
+    settle: (ended) => authorityLock.withPermit(settleEnded(ended).pipe(Effect.uninterruptible)),
+  });
+
   /** Registers a running verify; yields its ticket and the removal count it started at. */
   const beginVerify = Ref.modify(activeScopes, (current) => {
     const ticket = current.nextVerify;
@@ -390,7 +468,12 @@ export const make = Effect.gen(function* () {
     Ref.update(activeScopes, (current) => {
       const verifying = new Map(current.verifying);
       verifying.delete(ticket);
-      return { ...current, verifying, removed: neededFences(current.removed, verifying) };
+      return {
+        ...current,
+        verifying,
+        removed: neededFences(current.removed, verifying),
+        cutFences: neededFences(current.cutFences, verifying),
+      };
     });
 
   /**
@@ -444,6 +527,7 @@ export const make = Effect.gen(function* () {
         lastConnectedAt: row.value.lastConnectedAt,
         connected,
         principalKind: row.value.principalKind,
+        penBound: row.value.penBinding !== null,
       }),
     );
   });
@@ -548,7 +632,19 @@ export const make = Effect.gen(function* () {
     }).pipe(
       Effect.flatMap(() => loadActiveSession(sessionId)),
       Effect.flatMap((session) =>
-        Option.isSome(session) ? emitUpsert(session.value) : emitRemoved(sessionId),
+        Option.isSome(session)
+          ? emitUpsert(session.value)
+          : // A row still unrevoked ended by expiring when its last connection closed: no cut.
+            authSessions
+              .getById({ sessionId })
+              .pipe(
+                Effect.flatMap((row) =>
+                  removeGrants(
+                    [sessionId],
+                    Option.isSome(row) && row.value.revokedAt === null ? "expired" : "removed",
+                  ),
+                ),
+              ),
       ),
       Effect.catchCause((cause) =>
         Effect.logError("Failed to publish disconnected-session auth update.").pipe(
@@ -565,8 +661,8 @@ export const make = Effect.gen(function* () {
   const issue: SessionStore["Service"]["issue"] = Effect.fn("SessionStore.issue")(
     function* (input) {
       const sessionId = AuthSessionId.make(
-        yield* crypto
-          .randomUUIDv4()
+        yield* random
+          .uuidV4()
           .pipe(Effect.mapError((cause) => new SessionCredentialIssueError({ cause }))),
       );
       const issuedAt = yield* DateTime.now;
@@ -697,6 +793,7 @@ export const make = Effect.gen(function* () {
           lastConnectedAt: null,
           connected: false,
           principalKind,
+          penBound: input?.penBinding !== undefined,
         }),
       );
 
@@ -869,6 +966,29 @@ export const make = Effect.gen(function* () {
       ({ ticket }) => endVerify(ticket),
     ).pipe(Effect.withSpan("SessionStore.verify"));
 
+  // The admission is recorded before the fence is read, both before the verify ends: a removal
+  // either marks the recorded admission or is still fenced here, so none is missed.
+  const admitMcpCall: SessionStore["Service"]["admitMcpCall"] = (token, connection) =>
+    Effect.acquireUseRelease(
+      beginVerify,
+      ({ startedAt }) =>
+        Effect.gen(function* () {
+          const session = yield* verifyToken(token, startedAt);
+          yield* cloudFence.guard(session);
+          yield* penFence.guard(session);
+          yield* admitBinding(session, connection);
+          // Recorded and bound to the request's scope in one step, so no exit can skip the release.
+          const admitted = yield* Effect.acquireRelease(
+            Effect.sync(() => sessionEnds.admit(session.sessionId)),
+            (admission) => admission.sessionEnd.release,
+          );
+          const fenced = (yield* Ref.get(activeScopes)).cutFences.get(session.sessionId);
+          if (fenced !== undefined && fenced > startedAt) admitted.markRemoved();
+          return { session, sessionEnd: admitted.sessionEnd };
+        }),
+      ({ ticket }) => endVerify(ticket),
+    ).pipe(Effect.withSpan("SessionStore.admitMcpCall"));
+
   const encodeWsClaims = Schema.encodeEffect(Schema.fromJsonString(WebSocketClaims));
   const issueWebSocketToken: SessionStore["Service"]["issueWebSocketToken"] = Effect.fn(
     "SessionStore.issueWebSocketToken",
@@ -1024,6 +1144,7 @@ export const make = Effect.gen(function* () {
           lastConnectedAt: row.lastConnectedAt,
           connected: connectedSessions.has(row.sessionId),
           principalKind: row.principalKind,
+          penBound: row.penBinding !== null,
         }),
       );
     },
@@ -1039,15 +1160,10 @@ export const make = Effect.gen(function* () {
           revokedAt,
         })
         .pipe(Effect.mapError((cause) => new SessionRevocationError({ sessionId, cause })));
-      if (revoked) {
-        yield* Ref.update(connectedSessionsRef, (current) => {
-          const next = new Map(current);
-          next.delete(sessionId);
-          return next;
-        });
-        yield* emitRemoved(sessionId);
-      }
-      return revoked;
+      // Matching no row while still live here means another process already ended it.
+      const ended = revoked || (yield* isLive(sessionId));
+      if (ended) yield* settleEnded([sessionId]);
+      return ended;
     },
   );
 
@@ -1055,34 +1171,51 @@ export const make = Effect.gen(function* () {
     "SessionStore.revokeAllExcept",
   )(function* (sessionId) {
     const revokedAt = yield* DateTime.now;
-    const revokedSessionIds = yield* authSessions
+    const { revoked, kept } = yield* authSessions
       .revokeAllExcept({
         currentSessionId: sessionId,
         revokedAt,
+        keep: REVOKE_OTHERS_KEEPS_DESKTOP,
       })
       .pipe(
         Effect.mapError(
           (cause) => new OtherSessionsRevocationError({ currentSessionId: sessionId, cause }),
         ),
       );
-    if (revokedSessionIds.length > 0) {
-      yield* Ref.update(connectedSessionsRef, (current) => {
-        const next = new Map(current);
-        for (const revokedSessionId of revokedSessionIds) {
-          next.delete(revokedSessionId);
-        }
-        return next;
-      });
-      yield* Effect.forEach(
-        revokedSessionIds,
-        (revokedSessionId) => emitRemoved(revokedSessionId),
-        {
-          concurrency: "unbounded",
-          discard: true,
-        },
+    const classified = new Set([sessionId, ...revoked, ...kept.map((row) => row.sessionId)]);
+    const live = yield* liveSessionIds;
+    yield* settleEnded(revoked);
+    // A live id the press neither revoked nor kept was ended elsewhere earlier or added after its
+    // transaction; only its row may end it. Unreadable rows wait for the durable check.
+    const unclassified = live.filter((id) => !classified.has(id));
+    if (unclassified.length > 0) {
+      yield* authSessions.listUnrevoked({ sessionIds: unclassified }).pipe(
+        Effect.flatMap((rows) => {
+          const unrevoked = new Set(rows);
+          return settleEnded(unclassified.filter((id) => !unrevoked.has(id)));
+        }),
+        // The press is uninterruptible, so a cause here is a failure or a defect.
+        Effect.catchCause((cause) =>
+          Effect.logWarning("Revoke others left sessions it could not read to the next check", {
+            // A bounded category only, as in DurableRevocations.
+            reason: Option.getOrElse(
+              Option.map(Cause.findErrorOption(cause), (error) => error._tag),
+              () => "defect",
+            ),
+          }),
+        ),
       );
     }
-    return revokedSessionIds.length;
+    // Counted as the list shows rows: unexpired, or expired but still connected.
+    const connected = yield* Ref.get(connectedSessionsRef);
+    const shown = kept.filter(
+      (row) =>
+        row.expiresAt.epochMilliseconds > revokedAt.epochMilliseconds ||
+        connected.has(row.sessionId),
+    );
+    const count = (kind: (typeof kept)[number]["kind"]) =>
+      shown.filter((row) => row.kind === kind).length;
+    return { revokedCount: revoked.length, kept: { desktop: count("desktop"), pen: count("pen") } };
   });
 
   const awaitInvalidation = Effect.fn(function* (sessionId: AuthSessionId) {
@@ -1179,6 +1312,8 @@ export const make = Effect.gen(function* () {
       ),
     listActive,
     awaitInvalidation,
+    admitMcpCall: (token, connection) => admitMcpCall(token, connection),
+    admissionsInFlight: () => sessionEnds.inFlight,
     get streamChanges() {
       return Stream.fromPubSub(changesPubSub);
     },

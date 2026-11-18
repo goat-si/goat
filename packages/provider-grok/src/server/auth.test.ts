@@ -1,3 +1,4 @@
+import * as NodeCrypto from "@effect/platform-node/NodeCrypto";
 import * as NodeServices from "@effect/platform-node/NodeServices";
 import { expect, it } from "@effect/vitest";
 import {
@@ -25,7 +26,7 @@ import {
 } from "./auth.ts";
 
 const layer = TestProviderHost.layer({ runBackgroundWork: false }).pipe(
-  Layer.provideMerge(NodeServices.layer),
+  Layer.provideMerge(Layer.mergeAll(NodeServices.layer, NodeCrypto.layer)),
 );
 
 const instanceId = ProviderInstanceId.make("grok-personal");
@@ -98,7 +99,8 @@ it.layer(layer)("GrokAuth", (it) => {
       const auth = yield* makeGrokAuth({
         instanceId,
         enabled: true,
-        hasEnvironmentKey: false,
+        currentEnvironment: Effect.succeed({}),
+        verifyKey: () => Effect.void,
         onChanged: () => Effect.void,
       });
       const started = yield* auth.controller.start(owner);
@@ -152,7 +154,8 @@ it.layer(layer)("GrokAuth", (it) => {
       const auth = yield* makeGrokAuth({
         instanceId: emptyId,
         enabled: true,
-        hasEnvironmentKey: false,
+        currentEnvironment: Effect.succeed({}),
+        verifyKey: () => Effect.void,
         onChanged: (expectAuthenticated) =>
           expectAuthenticated
             ? Effect.fail(
@@ -189,12 +192,74 @@ it.layer(layer)("GrokAuth", (it) => {
     }).pipe(Effect.scoped),
   );
 
+  it.effect("checks the current environment before sign-in and again before saving", () =>
+    Effect.gen(function* () {
+      const host = { XAI_API_KEY: "" };
+      const auth = yield* makeGrokAuth({
+        instanceId: envId,
+        enabled: true,
+        currentEnvironment: Effect.sync(() => host),
+        verifyKey: () => Effect.void,
+        onChanged: () => Effect.void,
+      });
+      host.XAI_API_KEY = "later-host-key";
+      yield* auth.controller.start(owner);
+      const failed = yield* auth.controller.subscribe(owner).pipe(
+        Stream.filter((state) => state.phase === "waiting" || state.phase === "failed"),
+        Stream.runHead,
+        Effect.map(Option.getOrThrow),
+      );
+      expect(failed.phase).toBe("failed");
+      expect(failed.message).toContain("XAI_API_KEY");
+      host.XAI_API_KEY = "";
+      const started = yield* auth.controller.start(owner);
+      yield* phase(auth.controller, "waiting");
+      host.XAI_API_KEY = "overriding-key";
+      yield* auth.controller.respond!(owner, {
+        instanceId: envId,
+        flowId: started.flowId!,
+        interactionId: "api-key",
+        response: { type: "credentials", values: { apiKey: secret } },
+      });
+      const overridden = yield* phase(auth.controller, "failed");
+      expect(overridden.message).toContain("XAI_API_KEY");
+      expect(Option.isNone(yield* storedBytes(envId))).toBe(true);
+    }).pipe(Effect.scoped),
+  );
+
+  it.effect("verifies the submitted key before reporting it saved", () =>
+    Effect.gen(function* () {
+      const verified: string[] = [];
+      const auth = yield* makeGrokAuth({
+        instanceId: otherId,
+        enabled: true,
+        currentEnvironment: Effect.succeed({}),
+        verifyKey: (key: string) =>
+          Effect.sync(() => {
+            verified.push(key);
+          }),
+        onChanged: () => Effect.void,
+      });
+      const started = yield* auth.controller.start(owner);
+      yield* phase(auth.controller, "waiting");
+      yield* auth.controller.respond!(owner, {
+        instanceId: otherId,
+        flowId: started.flowId!,
+        interactionId: "api-key",
+        response: { type: "credentials", values: { apiKey: secret } },
+      });
+      yield* phase(auth.controller, "succeeded");
+      expect(verified).toEqual([secret]);
+    }).pipe(Effect.scoped),
+  );
+
   it.effect("refuses browser-style sign-in when XAI_API_KEY is already set", () =>
     Effect.gen(function* () {
       const auth = yield* makeGrokAuth({
         instanceId: envId,
         enabled: true,
-        hasEnvironmentKey: true,
+        currentEnvironment: Effect.succeed({ XAI_API_KEY: "environment-key" }),
+        verifyKey: () => Effect.void,
         onChanged: () => Effect.void,
       });
       yield* auth.controller.start(owner);

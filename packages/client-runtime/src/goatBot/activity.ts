@@ -172,8 +172,15 @@ export function goatBotActivity(input: {
   };
 }
 
+/** What says whether a task waits on the person: a chip, or a list row with its chip's needs. */
+export interface GoatBotTaskNeeds {
+  readonly status: ChannelTaskChip["status"];
+  readonly openQuestionCount: number;
+  readonly observed?: ChannelTaskChip["observed"] | undefined;
+}
+
 function attention(
-  chip: ChannelTaskChip,
+  chip: GoatBotTaskNeeds,
 ): { readonly text: string; readonly state: "waiting" | "paused" } | null {
   const needsYou = chip.observed?.needsYou ?? [];
   const has = (kind: (typeof needsYou)[number]["kind"]) =>
@@ -188,9 +195,35 @@ function attention(
   return chip.status === "waiting_input" ? waiting("Waiting for you") : null;
 }
 
-/** Whether a task waits on the person, by its status or by what its work asks them. */
-export function goatBotTaskWaitsOnPerson(chip: ChannelTaskChip): boolean {
-  return attention(chip) !== null;
+/**
+ * What a task waits on the person for, in the activity line's words, or null. Going work waits on
+ * anything it asks; finished or failed work only on an approval still open. The face, Home's Work
+ * and Machines read this, so none of them calls a waiting task working.
+ */
+export function goatBotTaskWait(task: GoatBotTaskNeeds): string | null {
+  if (OUTSTANDING.has(task.status)) return attention(task)?.text ?? null;
+  return (task.status === "completed" || task.status === "failed") &&
+    task.observed?.needsYou.some((item) => item.kind === "approval") === true
+    ? "Waiting for your approval"
+    : null;
+}
+
+export function goatBotTaskWaitsOnPerson(task: GoatBotTaskNeeds): boolean {
+  return goatBotTaskWait(task) !== null;
+}
+
+/** The newest chip of each task in a conversation, the record its cards and face read. */
+export function goatBotNewestTaskChips(
+  items: ReadonlyArray<Pick<OrchestrationV2ProjectedTurnItem, "item">>,
+): ReadonlyMap<ChannelTaskChip["taskId"], ChannelTaskChip> {
+  const chips = new Map<ChannelTaskChip["taskId"], ChannelTaskChip>();
+  for (const { item } of items) {
+    if (item.type !== "notification" || item.ledgerTask === undefined) continue;
+    const previous = chips.get(item.ledgerTask.taskId);
+    if (previous === undefined || item.ledgerTask.taskVersion > previous.taskVersion)
+      chips.set(item.ledgerTask.taskId, item.ledgerTask);
+  }
+  return chips;
 }
 
 function requestText(kind: string, blocking: boolean | undefined): string | null {

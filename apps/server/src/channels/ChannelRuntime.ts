@@ -106,6 +106,7 @@ const make = Effect.gen(function* () {
   const owner = "channel-owner:" + NodeCrypto.randomUUID();
   const receptionSlots = yield* Semaphore.make(RECEPTION_CONCURRENCY);
   const inFlight = yield* Ref.make(new Map<ChannelInputId, Fiber.Fiber<void, unknown>>());
+  const forwardCycle = yield* Ref.make({ cursor: 0, end: 0 });
   const scope = yield* Effect.scope;
 
   const claim = Effect.gen(function* () {
@@ -284,6 +285,22 @@ const make = Effect.gen(function* () {
     const waiting = (yield* ledger.listTasksByStatus(["received", "dispatching"])).toSorted(
       (left, right) => left.task.createdAt.localeCompare(right.task.createdAt),
     );
+    // One task's failure must not end the pass; a lost owner does, since no later write could commit.
+    const perTask = (taskId: string, step: Effect.Effect<void, ChannelLedger.ChannelLedgerError>) =>
+      step.pipe(
+        Effect.tapError((error) =>
+          Effect.logWarning("channel task step failed", {
+            taskId,
+            reason: error.reason,
+            detail: error.detail,
+          }),
+        ),
+        Effect.as(1),
+        Effect.catchIf(
+          (error) => error.reason !== "ownership_lost",
+          () => Effect.succeed(0),
+        ),
+      );
     for (const stored of waiting) {
       // The acknowledgement goes out before the work starts: while its delivery could still
       // reach the person, the task waits at received until that delivery settles.
@@ -301,17 +318,25 @@ const make = Effect.gen(function* () {
             : hasUnsettledChannelDelivery(sql, stored.task.originInputId);
         if (yield* unsettled) continue;
       }
-      yield* dispatcher.dispatch(stored.task.taskId, owner);
-      started += 1;
+      started += yield* perTask(stored.task.taskId, dispatcher.dispatch(stored.task.taskId, owner));
     }
     yield* sessionFirst.observe(owner);
-    for (const pending of yield* ledger.listPendingForwards(50)) {
-      yield* dispatcher.forward(pending, owner);
+    const cycle = yield* Ref.get(forwardCycle);
+    const end = cycle.cursor === 0 ? yield* ledger.lastPendingForwardSequence() : cycle.end;
+    const forwards = yield* ledger.listPendingForwards(50, cycle.cursor, end);
+    // Every forward pending when a cycle starts is read during that cycle.
+    for (const pending of forwards) {
+      started += yield* perTask(pending.event.taskId, dispatcher.forward(pending, owner));
+    }
+    const last = forwards.at(-1)?.sequence ?? 0;
+    if (forwards.length < 50 || last >= end) {
+      yield* Ref.set(forwardCycle, { cursor: 0, end: 0 });
+    } else {
+      yield* Ref.set(forwardCycle, { cursor: last, end });
       started += 1;
     }
     for (const pending of yield* ledger.listPendingNarrations(50)) {
-      yield* reception.narrate(pending, owner);
-      started += 1;
+      started += yield* perTask(pending.event.taskId, reception.narrate(pending, owner));
     }
     // Child-work records settle against their destinations in the same pass, so capacity freed
     // by a finished child is visible before worker reports check completion holds or admit more.

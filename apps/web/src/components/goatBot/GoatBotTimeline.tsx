@@ -11,13 +11,7 @@ import {
 import { ChannelTaskId, type EnvironmentId } from "@goat/contracts";
 import { Link } from "@tanstack/react-router";
 import { flushSync } from "react-dom";
-import {
-  ArrowUpLeftIcon,
-  ChevronDownIcon,
-  CopyIcon,
-  CircleAlertIcon,
-  XIcon,
-} from "~/components/solar";
+import { ArrowUpLeftIcon, ChevronDownIcon, CircleAlertIcon, XIcon } from "~/components/solar";
 import {
   createContext,
   type UIEvent,
@@ -30,7 +24,6 @@ import {
   useSyncExternalStore,
 } from "react";
 
-import { useCopyToClipboard } from "~/hooks/useCopyToClipboard";
 import { Button } from "../ui/button";
 import { Tooltip, TooltipPopup, TooltipTrigger } from "../ui/tooltip";
 import { usePrimarySettings } from "~/hooks/useSettings";
@@ -41,6 +34,7 @@ import { observeResize } from "~/lib/observeResize";
 import { formatShortTimestamp } from "~/timestampFormat";
 
 import { MemorySettingsEntry } from "../settings/MemorySettings";
+import { focusGoatBotRow } from "./goatBotRunRow";
 import { GoatBotLinkedText } from "./GoatBotLinkedText";
 import { GoatBotReplyFiles } from "./GoatBotReplyFiles";
 import {
@@ -58,6 +52,7 @@ import { GoatBotStepsContext, GoatBotStepsMark } from "./GoatBotStepsLine";
 import { GoatBotTaskChip } from "./GoatBotTaskChip";
 import { recordTaskOpener, getTaskPaneFocus } from "./taskPaneFocus";
 import { useGoatBotFollow, type GoatBotLocalSubmission } from "./useGoatBotFollow";
+import { GoatBotReplyCopy } from "./GoatBotReplyCopy";
 
 /** How close to the bottom still counts as "following" new messages. */
 const FOLLOW_THRESHOLD_PX = 48;
@@ -95,12 +90,14 @@ export function GoatBotTimeline({
   sourceIds,
   submissions = NO_SUBMISSIONS,
   committedSends,
+  onExposure,
 }: {
   readonly rows: ReadonlyArray<GoatBotRow>;
   readonly baselineIds?: ReadonlySet<string> | null | undefined;
   readonly sourceIds?: ReadonlySet<string> | undefined;
   readonly submissions?: ReadonlyArray<GoatBotLocalSubmission> | undefined;
   readonly committedSends?: ReadonlyMap<string, string> | undefined;
+  readonly onExposure?: ((rows: ReadonlyArray<GoatBotRow>) => void) | undefined;
   /** When the person last read this chat, read once at open; newer rows get a "New" divider. */
   readonly unreadSince?: string | null | undefined;
   readonly taskDetails?: boolean;
@@ -116,10 +113,19 @@ export function GoatBotTimeline({
   /** How to open, by id, a routine an event line names; undefined when it no longer exists. */
   readonly onOpenRoutine?: ((routineId: string) => (() => void) | undefined) | undefined;
   readonly onDiscard?: ((clientKey: string) => void) | undefined;
-  /** Sends a question's choice as the user's answer; absent while the bot can't take messages. */
-  readonly onPick?: ((answer: string, taskId?: string, questionId?: string) => void) | undefined;
+  /** Sends a question's answer and says whether it went in; absent while the bot can't take messages. */
+  readonly onPick?:
+    | ((answer: string, taskId?: string, questionId?: string) => boolean | void)
+    | undefined;
 }) {
-  const { copyToClipboard } = useCopyToClipboard();
+  const lastCopy = useRef<{ clear: () => void } | null>(null);
+  const selectCopy = useStableCallback((owner: { clear: () => void }) => {
+    lastCopy.current?.clear();
+    lastCopy.current = owner;
+  });
+  const releaseCopy = useStableCallback((owner: { clear: () => void }) => {
+    if (lastCopy.current === owner) lastCopy.current = null;
+  });
   const normalize = (text: string) => text.replace(/\s+/g, " ").trim();
   const timestampFormat = usePrimarySettings((settings) => settings.timestampFormat);
   const member = useGoatBotMember();
@@ -164,6 +170,7 @@ export function GoatBotTimeline({
     sourceIds,
     submissions,
     committedSends,
+    onExposure,
     scrollRef,
     listRef,
     followingRef,
@@ -383,13 +390,7 @@ export function GoatBotTimeline({
                     <button
                       type="button"
                       className={style}
-                      onClick={() => {
-                        const element = Array.from(
-                          listRef.current?.querySelectorAll<HTMLElement>("[data-bot-row]") ?? [],
-                        ).find((node) => node.dataset.botRow === source.id);
-                        element?.scrollIntoView({ block: "center" });
-                        element?.focus({ preventScroll: true });
-                      }}
+                      onClick={() => focusGoatBotRow(listRef.current, source.id)}
                     >
                       {goatBotPreviewText(row.quote)}
                     </button>
@@ -546,22 +547,7 @@ export function GoatBotTimeline({
                     <TooltipPopup>Reply</TooltipPopup>
                   </Tooltip>
                 ) : null}
-                <Tooltip>
-                  <TooltipTrigger
-                    render={
-                      <Button
-                        type="button"
-                        variant="ghost"
-                        size="icon-xs"
-                        aria-label="Copy"
-                        onClick={() => copyToClipboard(row.text, undefined)}
-                      />
-                    }
-                  >
-                    <CopyIcon className="size-4" />
-                  </TooltipTrigger>
-                  <TooltipPopup>Copy</TooltipPopup>
-                </Tooltip>
+                <GoatBotReplyCopy text={row.text} select={selectCopy} release={releaseCopy} />
               </div>
             </div>
             <GoatBotReplyFiles text={row.text} />

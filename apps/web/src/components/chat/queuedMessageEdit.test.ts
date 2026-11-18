@@ -1,5 +1,6 @@
 import { EnvironmentId, ThreadId } from "@goat/contracts";
 import { scopeThreadRef } from "@goat/client-runtime/environment";
+import { threadContextRecord } from "../../lib/composerContextRecords";
 import { beforeEach, describe, expect, it } from "vite-plus/test";
 import {
   DraftId,
@@ -88,6 +89,27 @@ describe("queued message file edits", () => {
     expect(store.getComposerDraft(threadTarget)?.prompt).toBe("Original message");
     expect(store.getComposerDraft(threadTarget)?.files).toEqual([file]);
     expect(store.getComposerDraft(editTarget)).toBeNull();
+  });
+
+  it("removes a kept edit draft that held a thread mention", async () => {
+    const store = useComposerDraftStore.getState();
+    store.setPrompt(editTarget, "Edited message");
+    const mention = threadContextRecord(
+      scopeThreadRef(environmentId, ThreadId.make("thread:other")),
+      "Other",
+    );
+    store.setThreadContexts(editTarget, [mention]);
+    const prompt = store.getComposerDraft(editTarget)?.prompt;
+    expect(
+      await recoverQueuedMessageEdit({
+        editTarget,
+        threadTarget,
+        originalText: "Original message",
+      }),
+    ).toBe("kept");
+    expect(store.getComposerDraft(editTarget)).toBeNull();
+    expect(store.getComposerDraft(threadTarget)?.threadContexts).toEqual([mention]);
+    expect(store.getComposerDraft(threadTarget)?.prompt).toBe(prompt);
   });
 
   it("recovers text and the remaining original attachment when a run starts after removal", async () => {

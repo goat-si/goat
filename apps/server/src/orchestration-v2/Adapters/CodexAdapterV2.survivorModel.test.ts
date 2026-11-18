@@ -1,4 +1,5 @@
 import { assert, it } from "@effect/vitest";
+import * as NodeCrypto from "@effect/platform-node/NodeCrypto";
 import * as NodeServices from "@effect/platform-node/NodeServices";
 import {
   CodexSettings,
@@ -16,7 +17,7 @@ import * as CodexClient from "effect-codex-app-server/client";
 import * as CodexReplay from "effect-codex-app-server/replay";
 import * as Cause from "effect/Cause";
 import * as Context from "effect/Context";
-import * as Crypto from "effect/Crypto";
+import * as Digest from "effect/crypto/Digest";
 import * as DateTime from "effect/DateTime";
 import * as Effect from "effect/Effect";
 import * as Exit from "effect/Exit";
@@ -42,12 +43,14 @@ import {
   makeCodexReplayTranscript,
   makeCodexReplayTurn,
 } from "./CodexReplay.testkit.ts";
+import { withConfigReads } from "./CodexReplay.testkit.ts";
 
 const layerTest = Layer.mergeAll(
   MemoryDerivedCache.layer,
   IdAllocator.layer,
   McpProviderSessions.layer,
   NodeServices.layer,
+  NodeCrypto.layer,
 );
 const decodeCodexSettings = Schema.decodeEffect(CodexSettings);
 
@@ -86,7 +89,7 @@ it.effect("a restart continuation with no survivor to adopt is model-checked bef
         3,
       ),
     });
-    const driver = yield* CodexReplay.makeReplayDriver(transcript);
+    const driver = yield* CodexReplay.makeReplayDriver(withConfigReads(transcript));
     const requests: Array<string> = [];
     // The turn's model reached GOAT's list after this process read its catalog.
     const offered: Array<ServerProviderModel> = [];
@@ -130,7 +133,7 @@ it.effect("a restart continuation with no survivor to adopt is model-checked bef
             ),
           ),
       },
-      crypto: yield* Crypto.Crypto,
+      digest: yield* Digest.Digest,
       fileSystem: yield* FileSystem.FileSystem,
       idAllocator: yield* IdAllocator.IdAllocatorV2,
       serverConfig: yield* makeReplayServerConfig(scenario).pipe(Effect.orDie),
@@ -228,7 +231,7 @@ it.effect(
           prompt: "x",
         }).slice(0, 3),
       });
-      const driver = yield* CodexReplay.makeReplayDriver(transcript);
+      const driver = yield* CodexReplay.makeReplayDriver(withConfigReads(transcript));
       const adapter = yield* CodexAdapter.makeCodexAdapterV2({
         instanceId: CodexAdapter.CODEX_DEFAULT_INSTANCE_ID,
         settings: yield* decodeCodexSettings({}),
@@ -254,7 +257,7 @@ it.effect(
               Effect.orDie,
             ),
         },
-        crypto: yield* Crypto.Crypto,
+        digest: yield* Digest.Digest,
         fileSystem: fs,
         idAllocator: yield* IdAllocator.IdAllocatorV2,
         serverConfig: yield* makeReplayServerConfig(scenario).pipe(Effect.orDie),

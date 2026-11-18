@@ -1,3 +1,4 @@
+import * as NodeCrypto from "@effect/platform-node/NodeCrypto";
 import * as NodeServices from "@effect/platform-node/NodeServices";
 import { afterEach, assert, describe, it } from "@effect/vitest";
 import {
@@ -10,8 +11,9 @@ import {
   releaseRuntimeManifest,
   runtimeManifestAssetName,
 } from "@goat/shared/runtimeManifest";
-import * as Crypto from "effect/Crypto";
+import * as Digest from "effect/crypto/Digest";
 import * as Effect from "effect/Effect";
+import * as Layer from "effect/Layer";
 import * as Hex from "effect/encoding/Hex";
 import { TestClock } from "effect/testing";
 
@@ -30,7 +32,7 @@ interface Release {
 /** A stub of goat-releases: the paged index plus each release's SHA256SUMS and manifest. */
 const releases = (pages: ReadonlyArray<ReadonlyArray<Release>>) =>
   Effect.gen(function* () {
-    const crypto = yield* Crypto.Crypto;
+    const digest = yield* Digest.Digest;
     const routes = new Map<string, string>();
     pages.forEach((page, index) =>
       routes.set(
@@ -62,7 +64,9 @@ const releases = (pages: ReadonlyArray<ReadonlyArray<Release>>) =>
           new Map([[asset, "a".repeat(64)]]),
         ),
       );
-      const sha = Hex.encode(yield* crypto.digest("SHA-256", new TextEncoder().encode(manifest)));
+      const sha = Hex.encode(
+        yield* digest.digest(Digest.sha256, new TextEncoder().encode(manifest)),
+      );
       const base = cliReleaseDownloadBaseUrl(release.version);
       routes.set(`${base}/${runtimeManifestAssetName(release.version)}`, manifest);
       routes.set(
@@ -100,7 +104,7 @@ describe("published runtime search", () => {
         assert.equal(result.found.version, "0.1.0-nightly.20261001.100");
         assert.isDefined(result.found.manifest);
       }
-    }).pipe(Effect.provide(NodeServices.layer)),
+    }).pipe(Effect.provide(Layer.mergeAll(NodeServices.layer, NodeCrypto.layer))),
   );
 
   it.effect("offers the newest pre-manifest release only while its channel has no manifest", () =>
@@ -112,7 +116,7 @@ describe("published runtime search", () => {
       assert.isTrue("found" in result && result.found.version === "0.1.0-nightly.20261019.194");
       assert.isTrue("found" in result && result.found.manifest === undefined);
       assert.deepEqual(requested, [cliReleaseIndexPageUrl(1)]);
-    }).pipe(Effect.provide(NodeServices.layer)),
+    }).pipe(Effect.provide(Layer.mergeAll(NodeServices.layer, NodeCrypto.layer))),
   );
 
   it.effect("falls back from nightly to stable, and says when only a newer app would do", () =>
@@ -132,7 +136,7 @@ describe("published runtime search", () => {
         [{ version: "0.1.0-nightly.20261020.300", manifest: "newer" }],
       ]);
       assert.deepInclude(yield* find(newerOnly.fetchImpl), { miss: "client-too-old" });
-    }).pipe(Effect.provide(NodeServices.layer)),
+    }).pipe(Effect.provide(Layer.mergeAll(NodeServices.layer, NodeCrypto.layer))),
   );
 
   it.effect("waits out GitHub's rate limit before reading the index again", () =>
@@ -152,6 +156,6 @@ describe("published runtime search", () => {
       yield* TestClock.adjust("6 minutes");
       yield* find(fetchImpl);
       assert.equal(calls, 2);
-    }).pipe(Effect.provide(NodeServices.layer)),
+    }).pipe(Effect.provide(Layer.mergeAll(NodeServices.layer, NodeCrypto.layer))),
   );
 });

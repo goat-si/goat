@@ -4,7 +4,7 @@ import { installPermissionUpdateNotice } from "./features/connection/permissionU
 import * as Linking from "expo-linking";
 import * as SplashScreen from "expo-splash-screen";
 import { requireNativeModule } from "expo";
-import { useEffect } from "react";
+import { useEffect, useRef, useState } from "react";
 import { Platform, StatusBar } from "react-native";
 import { GestureHandlerRootView } from "react-native-gesture-handler";
 import { KeyboardProvider } from "react-native-keyboard-controller";
@@ -15,7 +15,7 @@ import {
   getStateFromPath,
 } from "@react-navigation/native";
 
-import { RegistryContext } from "@effect/atom-react";
+import { RegistryContext, useAtomValue } from "@effect/atom-react";
 import { ProjectChipIconRasterizer } from "./native/ProjectChipIconImages";
 import { ThreadArrangementHost } from "./features/threads/ThreadArrangementSheet";
 import * as Dialog from "./components/ui/Dialog";
@@ -28,9 +28,10 @@ import {
 } from "./features/settings/appearance/AppearancePreferencesProvider";
 import { RootStack } from "./Stack";
 import { appAtomRegistry } from "./state/atom-registry";
+import { followKeptPerComputerCatalog } from "./features/goat-bot/useKeptPerComputer";
 import { subscribeComposerDraftModelReconciliation } from "./state/use-composer-drafts";
 import { environmentThreadShells, threadEnvironment } from "./state/threads";
-import { environmentShell } from "./state/shell";
+import { environmentShell, shellCachesReadAtom } from "./state/shell";
 import { OverlayPortalHost } from "./components/ui/OverlayPortal";
 import {
   shouldHandleAppLink,
@@ -50,7 +51,16 @@ import { useUiRuntimeMemoryWarningGc } from "./lib/useUiRuntimeMemoryWarningGc";
 import { SubscriptionUsageCoordinator } from "./widgets/SubscriptionUsageCoordinator";
 import { VoiceInputProvider } from "./features/voice-input/VoiceInputProvider";
 import { GlobalVoiceInputControl } from "./features/voice-input/GlobalVoiceInputControl";
-import { restoreSettingsLinkState } from "./features/settings/settings-navigation";
+import {
+  launchSplashHomeRowsPending,
+  settleLaunchSplashHomeRows,
+  splashCanHide,
+  useLaunchSplashHomeRowsPending,
+} from "./features/home/home-launch-splash";
+import {
+  restoreSettingsLinkState,
+  settingsLinkAction,
+} from "./features/settings/settings-navigation";
 import {
   hydrateWorkspaceSelections,
   launchWorkspaceURL,
@@ -81,14 +91,16 @@ const appLinking = {
   getActionFromState: (
     state: Parameters<typeof getActionFromState>[0],
     options: Parameters<typeof getActionFromState>[1],
-  ): ReturnType<typeof getActionFromState> =>
-    // Our router handles the selection; React Navigation's type only lists its own actions.
-    (workspaceDetailLinkAction(state) as ReturnType<typeof getActionFromState>) ??
-    pairingFormLinkAction(
-      state,
-      navigationRef.isReady() ? navigationRef.getRootState() : undefined,
-    ) ??
-    getActionFromState(state, options),
+  ): ReturnType<typeof getActionFromState> => {
+    const current = navigationRef.isReady() ? navigationRef.getRootState() : undefined;
+    return (
+      // Our router handles the selection; React Navigation's type only lists its own actions.
+      (workspaceDetailLinkAction(state) as ReturnType<typeof getActionFromState>) ??
+      pairingFormLinkAction(state, current) ??
+      settingsLinkAction(state, current) ??
+      getActionFromState(state, options)
+    );
+  },
   getStateFromPath: (path: string, options: Parameters<typeof getStateFromPath>[1]) =>
     takeScheduledTaskNewLink(
       restoreSettingsLinkState(
@@ -106,17 +118,43 @@ const appServiceDisposers = [
   installPermissionUpdateNotice(),
   installThreadOutboxDelivery(),
   installComposerAttachmentUploads(),
+  followKeptPerComputerCatalog(appAtomRegistry),
 ];
 disposeOnFoundationReplace(typeof module === "undefined" ? undefined : module.hot, () => {
   for (const dispose of appServiceDisposers) dispose();
 });
 
+// Cached shells are local reads that end in a fraction of this time; the limit keeps a failed
+// read, or a list that does not lay out, from holding the splash screen.
+const SPLASH_WAIT_MS = 1_500;
+
 function SplashScreenCoordinator() {
   const { isReady } = useAppearancePreferences();
+  const shellCachesRead = useAtomValue(shellCachesReadAtom);
+  const homeRowsPending = useLaunchSplashHomeRowsPending();
+  const [waitEnded, setWaitEnded] = useState(false);
+  const hidden = useRef(false);
+
+  // oxlint-disable-next-line goat/react-effect-budget -- bounds how long the native splash screen waits for cached shells and their rows
+  useEffect(() => {
+    const timer = setTimeout(() => setWaitEnded(true), SPLASH_WAIT_MS);
+    return () => clearTimeout(timer);
+  }, []);
 
   useEffect(() => {
-    if (isReady) void SplashScreen.hide();
-  }, [isReady]);
+    const canHide = splashCanHide({
+      preferencesReady: isReady,
+      shellCachesRead,
+      // Home holds the splash in a layout effect of the commit that gives it rows. That can be
+      // this commit, after this render read the store.
+      homeRowsPending: homeRowsPending || launchSplashHomeRowsPending(),
+      waitEnded,
+    });
+    if (!canHide || hidden.current) return;
+    hidden.current = true;
+    settleLaunchSplashHomeRows();
+    void SplashScreen.hide();
+  }, [isReady, shellCachesRead, homeRowsPending, waitEnded]);
 
   return null;
 }
@@ -177,6 +215,9 @@ function AppContent() {
                       onReady={() => {
                         const state = navigationRef.getRootState();
                         recordWorkspaceSelections(state);
+                        // A launch that opens another route has no Home rows for the splash to wait for.
+                        if (state && state.routes[state.index]?.name !== "Home")
+                          settleLaunchSplashHomeRows();
                         if (state) {
                           pruneNewTaskFlowStates(state);
                           pruneNewTaskBranchCheckouts(state);
@@ -185,6 +226,9 @@ function AppContent() {
                       theme={navigationTheme}
                       onStateChange={(state) => {
                         recordWorkspaceSelections(state);
+                        // A launch that opens another route has no Home rows for the splash to wait for.
+                        if (state && state.routes[state.index]?.name !== "Home")
+                          settleLaunchSplashHomeRows();
                         if (state) {
                           pruneNewTaskFlowStates(state);
                           pruneNewTaskBranchCheckouts(state);

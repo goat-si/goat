@@ -1,4 +1,6 @@
+import * as NodeCrypto from "@effect/platform-node/NodeCrypto";
 import * as NodeServices from "@effect/platform-node/NodeServices";
+import * as Layer from "effect/Layer";
 import { expect, it } from "@effect/vitest";
 import { EnvironmentId, ProviderInstanceId, ThreadId } from "@goat/contracts";
 import * as Deferred from "effect/Deferred";
@@ -6,7 +8,6 @@ import * as Effect from "effect/Effect";
 import * as Fiber from "effect/Fiber";
 import * as FileSystem from "effect/FileSystem";
 import { HttpServer } from "effect/http";
-import * as Layer from "effect/Layer";
 import * as NetAddress from "effect/net/NetAddress";
 import * as ServerEnvironment from "../environment/ServerEnvironment.ts";
 import type * as McpInvocationContext from "./McpInvocationContext.ts";
@@ -34,7 +35,7 @@ const makeRegistry = (now: () => number, httpServer = fakeHttpServer) =>
     .pipe(
       Effect.provideService(HttpServer.HttpServer, httpServer),
       Effect.provideService(ServerEnvironment.ServerEnvironment, fakeEnvironment),
-      Effect.provide(NodeServices.layer),
+      Effect.provide(Layer.mergeAll(NodeServices.layer, NodeCrypto.layer)),
     );
 
 it.effect("stores only a token hash, resolves the bearer token, and revokes by thread", () =>
@@ -253,7 +254,7 @@ it.effect(
       expect(yield* registry.currentMemoryPolicy!(last.config.providerSessionId)).toEqual(current);
       yield* registry.revokeProviderSession(last.config.providerSessionId);
       expect(yield* registry.currentMemoryPolicy!(last.config.providerSessionId)).toBeUndefined();
-    }).pipe(Effect.provide(NodeServices.layer)),
+    }).pipe(Effect.provide(Layer.mergeAll(NodeServices.layer, NodeCrypto.layer))),
 );
 it.effect("only a trusted touch restores an expired token with its original scope", () =>
   Effect.gen(function* () {
@@ -718,7 +719,7 @@ it.effect(
 
       const directories = yield* issueBoth;
       for (const directory of directories) expect(yield* fileSystem.exists(directory!)).toBe(false);
-    }).pipe(Effect.provide(NodeServices.layer)),
+    }).pipe(Effect.provide(Layer.mergeAll(NodeServices.layer, NodeCrypto.layer))),
 );
 
 it.effect("tells a token from an earlier server run apart from an unknown one", () =>

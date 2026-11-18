@@ -143,7 +143,7 @@ const renameRacingTheUser = (threadId: ThreadId, userRaises: boolean) =>
       Effect.provide(
         McpHttpServer.toolkitRegistration(RenameToolkit, handlers).pipe(
           Layer.provide(layerPermissionProfilesOff),
-          Layer.provideMerge(McpServer.McpServer.layer),
+          Layer.provideMerge(McpHttpServer.layerInProcessMcpServer),
         ),
       ),
     );

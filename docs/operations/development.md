@@ -10,7 +10,9 @@ own `engines.node` stays wider because the desktop app runs it on Electron's Nod
 When `vp env current` reports `Mode system_first`, `vp` runs the `node` on `PATH` instead. If that is
 another major or older than the pin, `vp run dev` and `vp test` stop with a message naming the pinned release.
 Run `vp env on node` to let `vp` manage Node again, or prefix one command with
-`vp env exec --node <pinned version> --`. From the repository root:
+`vp env exec --node <pinned version> --package-manager <packageManager> --` (omit
+`--package-manager` before vite-plus 0.3.1; from 0.3.1 on it keeps a `system_first`
+package manager directory from shadowing the pinned Node). From the repository root:
 
 ```sh
 vp i
@@ -28,8 +30,29 @@ A new worktree sets itself up. When `git worktree add` creates a checkout, the
 `.vite-hooks/post-checkout` hook runs `node scripts/setup-worktree.ts` in it, whether GOAT, Codex,
 or an agent ran git. Setup installs dependencies, links the main checkout's env files, and warms the
 web dependency cache, so the command returns with a ready worktree, usually within a minute.
-When `vp` is not on `PATH`, setup installs with `pnpm install --frozen-lockfile`, then
-`npx vite-plus`, and prints which tool it ran.
+
+Setup needs the Node release pinned in root `package.json` (or a later release of the same major).
+With another Node, setup uses `vp env exec` to rerun under the pin only with vite-plus 0.2.2 or later
+(passing `--package-manager` from 0.3.1 on, when vite-plus added package-manager shims and the flag,
+so a `system_first` package manager directory does not shadow the pinned Node).
+The [0.2.2 release notes](https://github.com/voidzero-dev/vite-plus/releases/tag/v0.2.2) describe
+verification of Node's clearsigned `SHASUMS256.txt.asc` against the bundled release keyring before
+checking the archive's SHA-256; unsigned sources such as some musl builds and custom mirrors fall
+back to checksum-only verification. The [vite-plus guide](https://github.com/voidzero-dev/vite-plus/blob/main/docs/guide/env.md#nodejs-signature-verification)
+describes custom mirrors set with `VP_NODE_DIST_MIRROR` and `VP_NODE_SKIP_SIGNATURE_VERIFY`, which
+bypasses the signature check but still checks SHA-256 and prints a warning. Setup refuses the rerun
+when the latter is set to [any non-empty value](https://github.com/voidzero-dev/vite-plus/blob/main/rfcs/verify-node-shasums-signature.md#escape-hatch-skipping-signature-verification).
+
+A machine with unsupported Node and vp older than 0.2.2, including some Cursor cloud VMs, stops
+setup instead of downloading through npx. Run `vp upgrade` or install the supported Node from
+nodejs.org, fnm, or volta, then run `node scripts/setup-worktree.ts` again. On Windows, unsupported
+Node always stops before the rerun. Set `GOAT_SETUP_NO_NODE_DOWNLOAD=1` to prevent setup from
+fetching Node; the installer can still fetch packages it lacks.
+
+Setup installs dependencies with `vp i --frozen-lockfile`. Without vp it uses pnpm already on PATH
+without checking its version; a Corepack shim may fetch the pinned pnpm when invoked. If neither
+installer is available, or a Corepack shim's launcher is missing, install [vp](../../README.md#install-vp)
+or the pnpm release named in `packageManager` and rerun setup.
 
 Git reads the hook from the checkout that runs `git worktree add`, so that checkout needs one
 `vp i` first. Set `GOAT_WORKTREE_SETUP=0` to skip setup for a throwaway checkout. For a worktree
@@ -143,7 +166,7 @@ Leave `VITE_HTTP_URL` and `VITE_WS_URL` unset. Vite proxies the backend through 
 origin so the same build works over localhost and remote connections.
 
 Shared runs enable bundled dev to avoid a network round trip for each import level.
-`GOAT_BUNDLED_DEV=0` opts out when debugging bundler differences. Two reload traps matter
+`GOAT_BUNDLED_DEV=0` opts out when debugging bundler differences. These traps matter
 when changing this setup:
 
 - The web entry must dynamically import the app so React refresh initializes before application
@@ -153,6 +176,9 @@ when changing this setup:
 - The app and its routes are lazy chunks, built on first request. A plugin pre-bundles the
   startup chain when the server starts. Renaming or moving a startup route or the app entry
   silently drops it from that list.
+- Bundled dev and `--built` hand Rolldown its own watcher, which skips Vite's default
+  `node_modules` ignore. Those files are pnpm-store hardlinks, so another worktree's install or
+  removal rebuilds every long-running server and leaks memory. Keep `node_modules` excluded.
 
 The workarounds live in the [web entry](../../apps/web/src/bootstrap.ts),
 [Tailwind plugin](../../apps/web/vite/tailwind.ts), and

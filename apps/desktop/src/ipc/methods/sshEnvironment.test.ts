@@ -1,3 +1,4 @@
+import * as NodeCrypto from "@effect/platform-node/NodeCrypto";
 import * as NodeServices from "@effect/platform-node/NodeServices";
 import { assert, describe, it } from "@effect/vitest";
 import * as DesktopEnvironment from "../../app/DesktopEnvironment.ts";
@@ -59,7 +60,7 @@ const desktopAt = (home: string) =>
         homeDirectory: home,
       } as DesktopEnvironment.DesktopEnvironment["Service"]),
     ),
-  ).pipe(Layer.provideMerge(NodeServices.layer));
+  ).pipe(Layer.provideMerge(Layer.mergeAll(NodeServices.layer, NodeCrypto.layer)));
 
 function jsonResponse(request: HttpClientRequest.HttpClientRequest, body: unknown, status = 200) {
   return HttpClientResponse.fromWeb(
@@ -93,6 +94,7 @@ const unusedSshService = {
   disconnectEnvironment: () => Effect.die("unexpected disconnect"),
   revalidateTunnels: Effect.die("unexpected revalidation"),
   issuePenMemberSession: () => Effect.die("unexpected Pen session"),
+  closeAllTunnels: Effect.die("unexpected tunnel close"),
 } satisfies DesktopSshEnvironment.DesktopSshEnvironment["Service"];
 
 const penNode = "a".repeat(26);
@@ -353,6 +355,7 @@ describe("SSH runtime IPC", () => {
         forgetEnvironment: () => Effect.die("Unexpected forget"),
         disconnectEnvironment: () => Effect.void,
         revalidateTunnels: () => Effect.void,
+        closeAllTunnels: Effect.void,
         issueMcpClientSession: () => Effect.die("unexpected MCP session"),
         issueClientSession: () => Effect.die("unexpected client session"),
         runRemoteScript: () => Effect.die("unexpected remote script"),
@@ -518,6 +521,7 @@ describe("SSH environment IPC", () => {
             disconnectEnvironment: () => Effect.die("unused"),
             revalidateTunnels: Effect.die("unused"),
             issuePenMemberSession: () => Effect.die("unused"),
+            closeAllTunnels: Effect.die("unused"),
             ensureEnvironment: (receivedTarget, options) =>
               Effect.sync(() => {
                 const { onPreparationProgress, onPreparationAdmission, ...nativeOptions } =
@@ -786,7 +790,7 @@ describe("cloud machine guard", () => {
         const home = yield* fs.makeTempDirectoryScoped({ prefix: "goat-desktop-cloud-test-" });
         return yield* use(home, fs).pipe(Effect.provide(desktopAt(home)));
       }),
-    ).pipe(Effect.provide(NodeServices.layer));
+    ).pipe(Effect.provide(Layer.mergeAll(NodeServices.layer, NodeCrypto.layer)));
 
   it.effect("refuses a cloud machine this computer's server has not readied recently", () =>
     withHome((home, fs) =>

@@ -1,3 +1,4 @@
+import * as NodeCrypto from "@effect/platform-node/NodeCrypto";
 import * as NodeServices from "@effect/platform-node/NodeServices";
 import { FxSettings } from "@goat/provider-fx/settings";
 import { FX_ACP_CANCEL_BEHAVIOR, FX_DRIVER_KIND, makeFxAdapterV2 } from "@goat/provider-fx/testing";
@@ -30,7 +31,9 @@ function layerFxProviderAdapterRegistryReplay(
   transcript: AcpReplayTranscript,
   options: { readonly replayGate?: ProviderReplayGate } = {},
 ) {
-  const layerHost = TestProviderHost.layer().pipe(Layer.provide(NodeServices.layer));
+  const layerHost = TestProviderHost.layer().pipe(
+    Layer.provide(Layer.mergeAll(NodeServices.layer, NodeCrypto.layer)),
+  );
 
   return ProviderAdapterRegistry.layerFromAdaptersEffect(
     Effect.gen(function* () {
@@ -75,7 +78,9 @@ function layerFxProviderAdapterRegistryReplay(
       return [adapter];
     }),
   ).pipe(
-    Layer.provide(Layer.mergeAll(layerHost, NodeServices.layer, IdAllocator.layer)),
+    Layer.provide(
+      Layer.mergeAll(layerHost, NodeServices.layer, NodeCrypto.layer, IdAllocator.layer),
+    ),
     Layer.merge(
       Layer.effectDiscard(
         Effect.addFinalizer(() => Effect.sync(() => options.replayGate?.releaseAll())),

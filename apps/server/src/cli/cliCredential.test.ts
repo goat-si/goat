@@ -1,4 +1,5 @@
 // @effect-diagnostics nodeBuiltinImport:off - CLI integration reads the temp state directory.
+import * as NodeCrypto from "@effect/platform-node/NodeCrypto";
 import * as NodeServices from "@effect/platform-node/NodeServices";
 import { assert, describe, expect, it, vi } from "@effect/vitest";
 import * as NetService from "@goat/shared/Net";
@@ -15,6 +16,10 @@ import * as NodePath from "node:path";
 
 import { cli } from "../binCli.ts";
 import { signOut } from "./login.ts";
+import {
+  makePersistedServerRuntimeState,
+  persistServerRuntimeState,
+} from "../serverRuntimeState.ts";
 import {
   type CliLogin,
   type StoredLogin,
@@ -82,6 +87,7 @@ const runCliUnstubbed = (args: ReadonlyArray<string>, env: Record<string, string
     Effect.provide(
       Layer.mergeAll(
         NodeServices.layer,
+        NodeCrypto.layer,
         NetService.layer,
         TestConsole.layer,
         ConfigProvider.layer(ConfigProvider.fromEnv({ env })),
@@ -252,7 +258,58 @@ describe("goat thread", () => {
   );
 });
 
+it.effect("stored login never sends its token to a dead server's former port", () =>
+  Effect.gen(function* () {
+    const baseDir = yield* tempBaseDir;
+    const stateDir = NodePath.join(baseDir, "userdata");
+    NodeFS.mkdirSync(stateDir, { recursive: true });
+    NodeFS.writeFileSync(
+      NodePath.join(stateDir, "cli-login.json"),
+      JSON.stringify(login("2030-01-01T00:00:00.000Z")),
+    );
+    const state = yield* makePersistedServerRuntimeState({
+      config: { host: "127.0.0.1", devUrl: undefined },
+      port: 3773,
+    });
+    yield* persistServerRuntimeState({
+      path: NodePath.join(stateDir, "server-runtime.json"),
+      state: { ...state, pid: 4_194_305 },
+    });
+    using fetch = vi
+      .spyOn(globalThis, "fetch")
+      .mockImplementation(async () => new Response(null, { status: 401 }));
+    const error = yield* runCli([
+      "thread",
+      "list",
+      "--base-dir",
+      baseDir,
+      "--project",
+      "proj-1",
+    ]).pipe(Effect.flip);
+    expect(error).toMatchObject({ reason: "server_not_running" });
+    expect(fetch).not.toHaveBeenCalled();
+  }).pipe(Effect.scoped, Effect.provide(Layer.mergeAll(NodeServices.layer, NodeCrypto.layer))),
+);
+
 describe("goat login", () => {
+  it.effect(
+    "the session listing reports connection state as unknown, since only the running server knows it",
+    () =>
+      Effect.gen(function* () {
+        const baseDir = yield* tempBaseDir;
+        yield* runCli(["auth", "session", "issue", "--base-dir", baseDir, "--json"]);
+        yield* runCli(["auth", "session", "list", "--base-dir", baseDir, "--json"]);
+        const listed = JSON.parse(String((yield* TestConsole.logLines).at(-1))) as ReadonlyArray<{
+          readonly connected: unknown;
+        }>;
+        expect(listed.map((session) => session.connected)).toEqual([null]);
+
+        yield* runCli(["auth", "session", "list", "--base-dir", baseDir]);
+        expect((yield* TestConsole.logLines).map(String).join("\n")).toContain(
+          "Connection state is known only to the running server; see Settings → Connections.",
+        );
+      }).pipe(Effect.scoped),
+  );
   it.effect(
     "stores one private mcp-client session, replaces it on relogin, and revokes it on logout",
     () =>
@@ -307,6 +364,6 @@ describe("goat login", () => {
       expect(yield* signOut(() => Effect.succeed(true), paths)).toBe("signed_out");
       expect(NodeFS.existsSync(file)).toBe(false);
       expect(yield* signOut(() => Effect.succeed(true), paths)).toBe("not_signed_in");
-    }).pipe(Effect.scoped, Effect.provide(NodeServices.layer)),
+    }).pipe(Effect.scoped, Effect.provide(Layer.mergeAll(NodeServices.layer, NodeCrypto.layer))),
   );
 });

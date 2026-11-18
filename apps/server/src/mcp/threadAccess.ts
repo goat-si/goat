@@ -1,4 +1,7 @@
-import type { ProjectionRecordField } from "../orchestration-v2/ProjectionStore.ts";
+import type {
+  ProjectionRecordField,
+  ProjectionRecordFilter,
+} from "../orchestration-v2/ProjectionStore.ts";
 import {
   CommandId,
   type EnvironmentAuthorizationError,
@@ -10,7 +13,7 @@ import {
   type ThreadId,
   type OrchestrationV2ThreadShell,
 } from "@goat/contracts";
-import * as Crypto from "effect/Crypto";
+import * as SecureRandom from "effect/crypto/SecureRandom";
 import * as Effect from "effect/Effect";
 import * as Option from "effect/Option";
 
@@ -34,25 +37,30 @@ export const reauthorizationFailure = (
     ? error
     : new OrchestratorMcpFailure({ code: "capability_denied", message: error.message });
 export const dispatchFailure = (
-  error: OrchestratorV2Error | ThreadManagement.ThreadManagementProviderInstanceDisabledError,
+  error:
+    | OrchestratorV2Error
+    | ThreadManagement.ThreadManagementProviderInstanceDisabledError
+    | ThreadManagement.ThreadManagementWorktreeUnrestorableError,
 ) =>
-  error._tag === "OrchestratorCommandPreviouslyRejectedError"
-    ? new OrchestratorMcpFailure({
-        code: "invalid_request",
-        message: Array.from(error.detail).slice(0, 1000).join(""),
-      })
-    : error._tag === "OrchestratorQuestionAlreadyAnsweredError" ||
-        error._tag === "ThreadManagementProviderInstanceDisabledError"
-      ? new OrchestratorMcpFailure({ code: "invalid_request", message: error.message })
-      : (error._tag === "OrchestratorDispatchError" ||
-            error._tag === "OrchestratorCommandRejectedError") &&
-          typeof error.cause === "string" &&
-          error.cause.length > 0
-        ? new OrchestratorMcpFailure({
-            code: "orchestration_error",
-            message: Array.from(error.cause).slice(0, 1000).join(""),
-          })
-        : unavailable();
+  error._tag === "ThreadManagementWorktreeUnrestorableError"
+    ? new OrchestratorMcpFailure({ code: "thread_not_sendable", message: error.message })
+    : error._tag === "OrchestratorCommandPreviouslyRejectedError"
+      ? new OrchestratorMcpFailure({
+          code: "invalid_request",
+          message: Array.from(error.detail).slice(0, 1000).join(""),
+        })
+      : error._tag === "OrchestratorQuestionAlreadyAnsweredError" ||
+          error._tag === "ThreadManagementProviderInstanceDisabledError"
+        ? new OrchestratorMcpFailure({ code: "invalid_request", message: error.message })
+        : (error._tag === "OrchestratorDispatchError" ||
+              error._tag === "OrchestratorCommandRejectedError") &&
+            typeof error.cause === "string" &&
+            error.cause.length > 0
+          ? new OrchestratorMcpFailure({
+              code: "orchestration_error",
+              message: Array.from(error.cause).slice(0, 1000).join(""),
+            })
+          : unavailable();
 
 export interface CallerLimits {
   readonly runtimeMode: RuntimeMode;
@@ -167,6 +175,7 @@ export const readThread = Effect.fn("mcp.readThread")(function* <
   threadId?: ThreadId,
   fields: ReadonlyArray<K> = [],
   turnItemTypes: ReadonlyArray<OrchestrationV2TurnItem["type"]> = ["user_input_request"],
+  filter?: ProjectionRecordFilter,
 ) {
   const context = yield* readCaller();
   const targetId = yield* resolveThreadId(context, threadId);
@@ -181,6 +190,7 @@ export const readThread = Effect.fn("mcp.readThread")(function* <
   const projection = yield* context.threads
     .getProjectThreadRecords({ projectId: shell.projectId, threadId: targetId }, fields, {
       turnItemTypes,
+      ...filter,
     })
     .pipe(
       Effect.mapError((error) =>
@@ -199,6 +209,6 @@ export const newCommandId = Effect.fn("mcp.newCommandId")(function* () {
   const held = yield* Effect.serviceOption(LifecycleAdmissionReceipt);
   const receiptId = Option.isNone(held) ? undefined : yield* held.value.held;
   if (receiptId !== undefined) return CommandId.make(`mcp:${receiptId}`);
-  const crypto = yield* Crypto.Crypto;
-  return CommandId.make(`mcp:${yield* crypto.randomUUIDv4().pipe(Effect.orDie)}`);
+  const random = yield* SecureRandom.SecureRandom;
+  return CommandId.make(`mcp:${yield* random.uuidV4().pipe(Effect.orDie)}`);
 });

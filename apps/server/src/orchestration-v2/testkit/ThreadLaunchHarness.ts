@@ -1,3 +1,4 @@
+import * as NodeCrypto from "@effect/platform-node/NodeCrypto";
 import * as NodeServices from "@effect/platform-node/NodeServices";
 import { projectId, modelSelection } from "./threadLaunchInput.ts";
 import * as WorktreeSetupTracker from "../../project/WorktreeSetupTracker.ts";
@@ -102,6 +103,7 @@ interface HarnessOptions {
   readonly generateTitle?: TextGeneration.TextGeneration["Service"]["generateThreadTitle"];
   readonly generateBranchName?: TextGeneration.TextGeneration["Service"]["generateBranchName"];
   readonly serverSettings?: Parameters<typeof ServerSettings.layerTest>[0];
+  readonly getLaunchSettings?: ServerSettings.ServerSettingsService["Service"]["getSettings"];
   readonly providers?: ReadonlyArray<ServerProvider>;
   readonly git?: Partial<GitWorkflow.GitWorkflowService["Service"]>;
   /** Folders that are gone from this machine. Without it, folders are not checked. */
@@ -181,12 +183,15 @@ export function makeHarness(options: HarnessOptions = {}) {
               : Option.none(),
         ),
       getByWorkspaceRoot: () => Effect.succeed(Option.some(project)),
+      workspaceScanDirectory: () => Effect.die("unused"),
       snapshot: Effect.die("unused"),
       awaitRepositoryIdentity: () => Effect.die("unused"),
       getShell: () => Effect.die("unused"),
       listShells: () => Effect.die("unused"),
     }),
     Layer.mock(GitWorkflow.GitWorkflowService)({
+      currentBranch: () => Effect.succeed(null),
+      repositoryRoot: () => Effect.succeed(project.workspaceRoot),
       createWorktree,
       renameBranch,
       resolveWorktreeBaseRemote: () => Effect.succeed({ remoteName: "origin", branchName: "main" }),
@@ -196,6 +201,7 @@ export function makeHarness(options: HarnessOptions = {}) {
       fetchRemote: options.fetchRemote ?? (() => Effect.void),
       hasCommit: options.hasCommit ?? (() => Effect.succeed(false)),
       inspectExistingBranch: () => Effect.succeed(null),
+      listLocalBranchNames: () => Effect.succeed([]),
       remoteExists: options.remoteExists ?? (() => Effect.succeed(true)),
       remoteBranchExists: () => Effect.succeed(true),
       removeWorktree,
@@ -237,6 +243,7 @@ export function makeHarness(options: HarnessOptions = {}) {
   const layerLaunch = ThreadLaunch.layer.pipe(
     Layer.provide(
       Layer.mergeAll(
+        layerOrchestrator,
         layerRegistry,
         layerExternalServices,
         prepared === undefined && options.launchEvents === undefined
@@ -265,6 +272,11 @@ export function makeHarness(options: HarnessOptions = {}) {
             ).pipe(Layer.provide(layerThreadManagement)),
         layerReceipts,
         IdAllocator.layer,
+        options.getLaunchSettings === undefined
+          ? Layer.empty
+          : Layer.mock(ServerSettings.ServerSettingsService)({
+              getSettings: options.getLaunchSettings,
+            }),
       ),
     ),
   );
@@ -275,6 +287,7 @@ export function makeHarness(options: HarnessOptions = {}) {
           ? Option.some({
               projectId,
               title: project.title,
+              hasCustomTitle: false,
               workspaceRoot: project.workspaceRoot,
               defaultModelSelection: project.defaultModelSelection,
               defaultThreadEnvMode: null,
@@ -294,7 +307,7 @@ export function makeHarness(options: HarnessOptions = {}) {
   const layerTitleRegeneration = ThreadTitleRegeneration.layer.pipe(
     Layer.provide(
       Layer.mergeAll(layerThreadManagement, layerProjectedProjects, layerExternalServices).pipe(
-        Layer.provideMerge(NodeServices.layer),
+        Layer.provideMerge(Layer.mergeAll(NodeServices.layer, NodeCrypto.layer)),
       ),
     ),
   );

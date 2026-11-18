@@ -24,7 +24,8 @@ import {
 } from "@goat/ssh/errors";
 import * as SshTunnel from "@goat/ssh/tunnel";
 import * as Context from "effect/Context";
-import type * as Crypto from "effect/Crypto";
+import type * as Digest from "effect/crypto/Digest";
+import type * as SecureRandom from "effect/crypto/SecureRandom";
 import * as Effect from "effect/Effect";
 import * as FileSystem from "effect/FileSystem";
 import * as Layer from "effect/Layer";
@@ -36,7 +37,8 @@ import * as DesktopSshPasswordPrompts from "./DesktopSshPasswordPrompts.ts";
 
 export type DesktopSshEnvironmentRuntimeServices =
   | ChildProcessSpawner.ChildProcessSpawner
-  | Crypto.Crypto
+  | Digest.Digest
+  | SecureRandom.SecureRandom
   | FileSystem.FileSystem
   | Path.Path
   | HttpClient.HttpClient
@@ -105,6 +107,7 @@ export class DesktopSshEnvironment extends Context.Service<
     ) => Effect.Effect<void, DesktopSshEnvironmentOperationError>;
     /** Closes open SSH forwards that stopped answering, for example after sleep. */
     readonly revalidateTunnels: Effect.Effect<void>;
+    readonly closeAllTunnels: Effect.Effect<void>;
   }
 >()("@goat/desktop/ssh/DesktopSshEnvironment") {}
 
@@ -351,6 +354,7 @@ export const make = Effect.gen(function* () {
         Effect.provide(runtimeContext),
         Effect.withSpan("desktop.ssh.revalidateTunnels"),
       ),
+    closeAllTunnels: manager.closeAllTunnels,
   });
 });
 

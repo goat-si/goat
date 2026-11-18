@@ -62,6 +62,7 @@ import {
 import {
   dispatchingQueuedMessageIdAtom,
   editingQueuedMessageIdsAtom,
+  retryingQueuedMessageIdsAtom,
   threadOutboxShellStatusesAtom,
 } from "./use-thread-outbox";
 import { clearThreadComposerError, setThreadComposerError } from "./thread-composer-error";
@@ -133,7 +134,20 @@ export function logThreadOutboxUploadFailure(
   }
 }
 
+export function setQueuedMessageRetrying(queuedMessageId: MessageId, retrying: boolean): void {
+  const { [queuedMessageId]: current, ...others } = appAtomRegistry.get(
+    retryingQueuedMessageIdsAtom,
+  );
+  if ((current === true) === retrying) return;
+  appAtomRegistry.set(
+    retryingQueuedMessageIdsAtom,
+    retrying ? { ...others, [queuedMessageId]: true } : others,
+  );
+}
+
 export function beginDispatchingQueuedMessage(queuedMessageId: MessageId): void {
+  // An attempt in flight is sending, even while its retry count is kept.
+  setQueuedMessageRetrying(queuedMessageId, false);
   appAtomRegistry.set(dispatchingQueuedMessageIdAtom, queuedMessageId);
 }
 

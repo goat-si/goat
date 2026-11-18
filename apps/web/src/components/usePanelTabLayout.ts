@@ -133,7 +133,8 @@ export function usePanelTabLayout(input: {
     const handleWheel = (event: WheelEvent) => {
       if (event.ctrlKey) return;
       release();
-      let delta = Math.abs(event.deltaX) > Math.abs(event.deltaY) ? event.deltaX : event.deltaY;
+      if (Math.abs(event.deltaX) >= Math.abs(event.deltaY)) return;
+      let delta = event.deltaY;
       if (event.deltaMode === WheelEvent.DOM_DELTA_LINE) delta *= 16;
       if (event.deltaMode === WheelEvent.DOM_DELTA_PAGE) delta *= viewport.clientWidth;
       const before = viewport.scrollLeft;

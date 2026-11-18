@@ -26,7 +26,7 @@ import {
   type SlackChannelSettingsErrorReason,
 } from "@goat/contracts";
 import * as Clock from "effect/Clock";
-import * as Crypto from "effect/Crypto";
+import * as SecureRandom from "effect/crypto/SecureRandom";
 import * as Effect from "effect/Effect";
 import * as Exit from "effect/Exit";
 import * as FileSystem from "effect/FileSystem";
@@ -124,7 +124,7 @@ interface State {
 export const make = Effect.gen(function* () {
   const fs = yield* FileSystem.FileSystem;
   const path = yield* Path.Path;
-  const crypto = yield* Crypto.Crypto;
+  const random = yield* SecureRandom.SecureRandom;
   const config = yield* ServerConfig.ServerConfig;
   const secrets = yield* ServerSecretStore.ServerSecretStore;
   const sdk = yield* SlackSdk.SlackSdk;
@@ -167,7 +167,7 @@ export const make = Effect.gen(function* () {
   const writeConnections = (connections: ReadonlyArray<StoredConnection>) =>
     Effect.gen(function* () {
       const contents = yield* encodeSettingsFile({ version: 1, connections });
-      const tempPath = `${settingsPath}.${yield* crypto.randomUUIDv4()}.tmp`;
+      const tempPath = `${settingsPath}.${yield* random.uuidV4()}.tmp`;
       yield* fs.makeDirectory(config.stateDir, { recursive: true });
       yield* Effect.gen(function* () {
         yield* fs.writeFileString(tempPath, `${contents}\n`, { mode: 0o600 });
@@ -357,12 +357,13 @@ export const make = Effect.gen(function* () {
       ),
     );
 
-  const newConnectionId = crypto.randomUUIDv4().pipe(
-    Effect.map((uuid) =>
-      SlackChannelConnectionId.make(`slack-${uuid.replaceAll("-", "").slice(0, 12)}`),
-    ),
-    Effect.catch(persistenceFailed("generate-id")),
-  );
+  const newConnectionId = random
+    .uuidV4()
+    .pipe(
+      Effect.map((uuid) =>
+        SlackChannelConnectionId.make(`slack-${uuid.replaceAll("-", "").slice(0, 12)}`),
+      ),
+    );
 
   /** Disables and stops the connection before its credentials change. */
   const stopForCredentialChange = disable;

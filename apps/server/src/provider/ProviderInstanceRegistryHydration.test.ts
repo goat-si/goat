@@ -8,6 +8,7 @@ import * as Fiber from "effect/Fiber";
 import * as FileSystem from "effect/FileSystem";
 import * as Layer from "effect/Layer";
 import * as Path from "effect/Path";
+import * as NodeCrypto from "@effect/platform-node/NodeCrypto";
 import * as NodeServices from "@effect/platform-node/NodeServices";
 import * as ServerConfig from "../config.ts";
 import * as Routes from "./CodexRouteService.ts";
@@ -94,7 +95,7 @@ describe("seedDevReplayInstance", () => {
               },
             },
           }),
-        ).pipe(Layer.provideMerge(NodeServices.layer)),
+        ).pipe(Layer.provideMerge(Layer.mergeAll(NodeServices.layer, NodeCrypto.layer))),
       ),
     );
 
@@ -210,7 +211,7 @@ describe("dev replay hydration", () => {
     }).pipe(
       Effect.provide(
         ServerConfig.layerTest(process.cwd(), { prefix: "goat-dev-replay-hydration-" }).pipe(
-          Layer.provideMerge(NodeServices.layer),
+          Layer.provideMerge(Layer.mergeAll(NodeServices.layer, NodeCrypto.layer)),
         ),
       ),
     );

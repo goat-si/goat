@@ -62,3 +62,23 @@ export function textFromUnknown(value: unknown): string | undefined {
   }
   return undefined;
 }
+
+/** Appends text to an ACP tool content list, extending its last text block when it has one. */
+export function appendToolContentText(content: unknown, text: string): unknown[] {
+  const next: unknown[] = Array.isArray(content) ? [...content] : [];
+  const last = unknownRecord(next.at(-1));
+  const lastContent = unknownRecord(last?.content);
+  if (
+    last?.type === "content" &&
+    lastContent?.type === "text" &&
+    typeof lastContent.text === "string"
+  ) {
+    next[next.length - 1] = {
+      ...last,
+      content: { ...lastContent, text: `${lastContent.text}${text}` },
+    };
+  } else {
+    next.push({ type: "content", content: { type: "text", text } });
+  }
+  return next;
+}

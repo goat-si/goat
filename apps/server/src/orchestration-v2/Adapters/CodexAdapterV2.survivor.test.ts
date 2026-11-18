@@ -1,5 +1,4 @@
 import { assert, it } from "@effect/vitest";
-import * as NodeServices from "@effect/platform-node/NodeServices";
 import {
   CodexSettings,
   ProviderSessionId,
@@ -9,10 +8,9 @@ import {
   ThreadId,
 } from "@goat/contracts";
 import * as IdAllocator from "@goat/provider-core/server/IdAllocator";
-import * as McpProviderSessions from "@goat/provider-core/server/McpProviderSessions";
 import * as CodexClient from "effect-codex-app-server/client";
 import * as CodexReplay from "effect-codex-app-server/replay";
-import * as Crypto from "effect/Crypto";
+import * as Digest from "effect/crypto/Digest";
 import * as Context from "effect/Context";
 import * as ProviderAdapter from "@goat/provider-core/server/ProviderAdapter";
 import * as DateTime from "effect/DateTime";
@@ -26,7 +24,6 @@ import * as Deferred from "effect/Deferred";
 import * as Fiber from "effect/Fiber";
 import * as TestClock from "effect/testing/TestClock";
 import * as CodexErrors from "effect-codex-app-server/errors";
-import * as MemoryDerivedCache from "../../memory/MemoryDerivedCache.ts";
 import * as CodexSurvivors from "../../provider/CodexSurvivors.ts";
 import { CodexDetachedAppServerError } from "../../provider/CodexDetachedAppServer.ts";
 import { makeLocalCommandHarness } from "../ProviderTurnStartService.localCommand.testkit.ts";
@@ -35,6 +32,7 @@ import {
   codexReplayPreamble,
   makeCodexReplayTranscript,
   makeCodexReplayTurn,
+  withConfigReads,
 } from "./CodexReplay.testkit.ts";
 import {
   CODEX_TEST_MODEL_SELECTION,
@@ -44,13 +42,8 @@ import {
   makeCodexThreadGoal,
   makeReplayServerConfig,
 } from "./CodexAdapterV2.testkit.ts";
+import { layerTest } from "./CodexAdapterV2.survivor.testkit.ts";
 
-const layerTest = Layer.mergeAll(
-  MemoryDerivedCache.layer,
-  IdAllocator.layer,
-  McpProviderSessions.layer,
-  NodeServices.layer,
-);
 const decodeCodexSettings = Schema.decodeEffect(CodexSettings);
 
 const runScenario = (
@@ -114,7 +107,7 @@ const runScenario = (
         prompt: "unused",
       }).slice(0, 3),
     });
-    const driver = yield* CodexReplay.makeReplayDriver(transcript);
+    const driver = yield* CodexReplay.makeReplayDriver(withConfigReads(transcript));
     const requests: string[] = [];
     const notifications = new Map<string, Array<(payload: unknown) => Effect.Effect<void>>>();
     const stopMode = mode.startsWith("stop-");
@@ -447,7 +440,7 @@ const runScenario = (
             ),
           ),
       },
-      crypto: yield* Crypto.Crypto,
+      digest: yield* Digest.Digest,
       fileSystem: yield* FileSystem.FileSystem,
       idAllocator: yield* IdAllocator.IdAllocatorV2,
       serverConfig: yield* makeReplayServerConfig(scenario).pipe(Effect.orDie),

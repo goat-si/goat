@@ -233,8 +233,10 @@ export const stateMessage = (
       };
     case "unknown":
       return {
-        message: "GOAT cannot tell yet whether the invite admitted the machine.",
-        nextAction: "Refresh the machine list later; GOAT asks Pen again each time.",
+        message:
+          "GOAT cannot tell whether the invite admitted the machine; it asks Pen again on each pass. If Pen lost the invite or saved no admit, a person can Release the attach in Settings → Hub on web or desktop once the invite has expired, which frees its slot if Pen shows the machine did not join.",
+        nextAction:
+          "Refresh the machine list later, or ask a person to release the attach in Settings → Hub on web or desktop once its invite expired.",
       };
     case "paused":
       // Paused covers both a join after the attach lost its authority and a withdrawal in flight.
