@@ -3,8 +3,8 @@
 The mobile v5 stack uses a committed tarball from
 [GOAT's Screens fork](https://github.com/goat-si/react-native-screens/tree/t3-v5.0.0-t3.51),
 which GOAT owns. It was forked from PixPMusic's fork and keeps its branches and tags.
-GOAT's numbers can skip one of upstream's: 5.0.0-t3.51 is GOAT's 5.0.0-t3.49 plus upstream's
-5.0.0-t3.50, which is a different build, so GOAT does not reuse that number.
+GOAT's tags can skip one of upstream's: `t3-v5.0.0-t3.51` is GOAT's `t3-v5.0.0-t3.49` plus
+upstream's `t3-v5.0.0-t3.50`, a different build, so GOAT does not reuse that number.
 The fork owns the integration changes; the app does not patch this package.
 Each archive includes compiled JavaScript, declarations, native source and
 `t3-fork.json` recording its version, source commit and upstream base.
