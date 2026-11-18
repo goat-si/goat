@@ -1,3 +1,4 @@
+import { PullRequestDiffCommitMenu } from "./PullRequestDiffCommitMenu";
 import { useWordWrap } from "~/hooks/useWordWrap";
 import { reviewThreadsByPath } from "./pullRequestThreadsByPath";
 import { capitalizeTerm, sourceControlClients } from "@goat/client-runtime/source-control-clients";
@@ -87,7 +88,6 @@ import {
   DropdownMenu,
   DropdownMenuCheckboxItem,
   DropdownMenuContent,
-  DropdownMenuItem,
   DropdownMenuRadioGroup,
   DropdownMenuRadioItem,
   DropdownMenuSeparator,
@@ -928,8 +928,6 @@ function PullRequestCodeTab({
     </div>
   );
 
-  const selectedCommit = orderedCommits.find((entry) => entry.oid === commit);
-  const scopeLabel = selectedCommit ? selectedCommit.messageHeadline : "All commits";
   const changeIgnoreWhitespace = (next: boolean) => {
     setIgnoreWhitespace(next);
     setDraft(null);
@@ -938,53 +936,13 @@ function PullRequestCodeTab({
   const toolbar = (
     <div data-glass-layer className={DIFF_SURFACE_TOOLBAR_CLASS}>
       <div className="flex min-w-0 flex-1 items-center gap-3">
-        {orderedCommits.length > 0 ? (
-          <DropdownMenu>
-            <DropdownMenuTrigger
-              render={<Button size="xs" variant="secondary" />}
-              className="min-w-0 max-w-64"
-              aria-label={`Diff scope: ${scopeLabel}`}
-            >
-              <span className="truncate">{scopeLabel}</span>
-              <ChevronDownIcon className="size-3.5 shrink-0 opacity-70" />
-            </DropdownMenuTrigger>
-            <DropdownMenuContent align="start" className="max-w-[min(28rem,calc(100vw-2rem))]">
-              <DropdownMenuRadioGroup
-                value={commit ?? "all"}
-                onValueChange={(value) => onSelectedCommitChange(value === "all" ? null : value)}
-              >
-                <DropdownMenuRadioItem value="all" closeOnClick>
-                  <span>All commits</span>
-                </DropdownMenuRadioItem>
-                {orderedCommits.slice(0, visibleCommitCount).map((entry) => (
-                  <DropdownMenuRadioItem key={entry.oid} value={entry.oid} closeOnClick>
-                    <span className="flex items-center gap-2">
-                      <Tooltip>
-                        <TooltipTrigger
-                          render={<span className="min-w-0 truncate">{entry.messageHeadline}</span>}
-                        />
-                        <TooltipPopup side="top">{entry.messageHeadline}</TooltipPopup>
-                      </Tooltip>
-                      <span className="ml-auto shrink-0 font-mono text-xs text-muted-foreground">
-                        {entry.oid.slice(0, 7)}
-                      </span>
-                    </span>
-                  </DropdownMenuRadioItem>
-                ))}
-              </DropdownMenuRadioGroup>
-              {orderedCommits.length > visibleCommitCount ? (
-                <DropdownMenuItem
-                  closeOnClick={false}
-                  onClick={() => setVisibleCommitCount((count) => count + COMMIT_PAGE_SIZE)}
-                >
-                  <span className="text-muted-foreground">
-                    Show more ({orderedCommits.length - visibleCommitCount} left)
-                  </span>
-                </DropdownMenuItem>
-              ) : null}
-            </DropdownMenuContent>
-          </DropdownMenu>
-        ) : null}
+        <PullRequestDiffCommitMenu
+          commits={orderedCommits}
+          commit={commit}
+          visibleCommitCount={visibleCommitCount}
+          onSelectedCommitChange={onSelectedCommitChange}
+          onShowMore={() => setVisibleCommitCount((count) => count + COMMIT_PAGE_SIZE)}
+        />
         <PullRequestMetaLine>
           <span className="shrink-0 tabular-nums">
             {files.length} {files.length === 1 ? "file" : "files"}
