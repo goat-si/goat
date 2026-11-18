@@ -640,3 +640,12 @@ NOT RUN (fix round): providerProcesses.test.ts's three Linux cases, the new grou
 
 K5 against it: the pushed head 50e90aaac349a2fe5f23124b3429327060d3b9d7 (git ls-remote) is the head the second gate ran on; no commit landed after it. That run's summary lists every step as pass (format, lint, knip 1/2 and 2/2, graphql, agent surface audit, agent context budget, typecheck 17 packages, test 305 files: 3905 passed | 5 skipped). The script's exit code itself was not captured (the shell session that held the echo had ended); check-changed.ts exits nonzero only when a step fails, and none did.
 
+
+### Rule IV (coordinator 01:14:39 UTC, verbatim)
+
+> IV. STANDING RULE, every lane, from now: before READY, every apps/server test file the lane added or changed is run once from apps/server with GOAT_TEST_TMP_GUARD=fail (CI sets it, check:changed does not), and the READY report says so. The ps check in its own step first, as before.
+
+K5 at 50e90aaac349a2fe5f23124b3429327060d3b9d7 (unchanged; the fix-delta review reads this head). ps checked in its own step first: N10's vitest was running, I waited, the second ps showed none. Then from apps/server, GOAT_TEST_TMP_GUARD=fail vp test run with the eight apps/server test files the lane added or changed (git diff --name-only 259883c788...HEAD): ClaudeAgentSdkQueryRunner, ClaudeDescendants, ClaudeLiveSelection, ClaudeSteerSelection, ClaudeLiveEffort.integration, LiveModelSelection, agentScope, providerProcesses. Exit 0: Test Files 8 passed, Tests 57 passed | 3 skipped (the three Linux providerProcesses cases).
+
+Time note: the lane coordinator's "01:15 UTC" on the READY rule relay above was written without a clock (lane coordinator, 01:17 UTC); the real send time is in the thread log. The content stands. No git stash was used in this lane; git stash list holds no entry naming K5 or its branch.
+
