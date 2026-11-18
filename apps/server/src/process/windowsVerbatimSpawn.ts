@@ -2,16 +2,22 @@
 import * as NodeChildProcess from "node:child_process";
 import { guardChild } from "@goat/shared/errorGuards";
 import * as Context from "effect/Context";
+import * as Data from "effect/Data";
 import * as Effect from "effect/Effect";
+
+class WindowsVerbatimSpawnError extends Data.TaggedError("WindowsVerbatimSpawnError")<{
+  readonly cause: unknown;
+}> {}
 
 export type WindowsVerbatimSpawner = (
   command: string,
   args: ReadonlyArray<string>,
   env: NodeJS.ProcessEnv,
-) => Effect.Effect<void, Error>;
+) => Effect.Effect<void, WindowsVerbatimSpawnError>;
 
 const spawnDetachedVerbatim: WindowsVerbatimSpawner = (command, args, env) =>
-  Effect.callback<void, Error>((resume) => {
+  Effect.callback<void, WindowsVerbatimSpawnError>((resume) => {
+    const fail = (cause: unknown) => resume(new WindowsVerbatimSpawnError({ cause }));
     try {
       const child = guardChild(
         NodeChildProcess.spawn(command, args, {
@@ -20,14 +26,14 @@ const spawnDetachedVerbatim: WindowsVerbatimSpawner = (command, args, env) =>
           stdio: "ignore",
           windowsVerbatimArguments: true,
         }),
-        (error) => resume(Effect.fail(error)),
+        fail,
       );
       child.once("spawn", () => {
         child.unref();
         resume(Effect.void);
       });
     } catch (error) {
-      resume(Effect.fail(error instanceof Error ? error : new Error("Explorer spawn failed")));
+      fail(error);
     }
   });
 

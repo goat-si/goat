@@ -280,7 +280,8 @@ it.effect.each([
           spawnResult: (command) => {
             if (!command.command.endsWith("reg.exe")) return undefined;
             if (replacement === "error") return { exitCode: 1 };
-            const verb = replacement && command.args[1]?.includes("\\Folder\\") ? "open" : "none";
+            const folderKey = command.args[1] === "HKCR\\Folder\\shell";
+            const verb = replacement === "Folder" && folderKey ? "open" : "none";
             return { stdout: `    (Default)    REG_SZ    ${verb}\r\n` };
           },
         }),
