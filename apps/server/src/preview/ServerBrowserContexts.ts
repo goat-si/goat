@@ -27,6 +27,7 @@ interface Options {
   readonly diagnose?: (executable: string, cause: unknown) => Promise<unknown>;
   readonly env?: NodeJS.ProcessEnv;
   readonly platform?: NodeJS.Platform;
+  readonly chromeVersion?: string;
   readonly idleBrowserMs?: number;
   readonly onContextClose?: (context: BrowserContext) => void;
 }
@@ -35,6 +36,22 @@ const UA_PLATFORMS: Partial<Record<NodeJS.Platform, string>> = {
   darwin: "macOS",
   linux: "Linux",
   win32: "Windows",
+};
+
+const UA_SYSTEMS: Partial<Record<NodeJS.Platform, string>> = {
+  darwin: "Macintosh; Intel Mac OS X 10_15_7",
+  linux: "X11; Linux x86_64",
+  win32: "Windows NT 10.0; Win64; x64",
+};
+
+const chromeToken = (major: string) => `Chrome/${major}.0.0.0`;
+
+const chromeUserAgent = (version: string | undefined, platform: NodeJS.Platform) => {
+  const major = version?.split(".")[0];
+  const system = UA_SYSTEMS[platform];
+  return major && system
+    ? `Mozilla/5.0 (${system}) AppleWebKit/537.36 (KHTML, like Gecko) ${chromeToken(major)} Safari/537.36`
+    : undefined;
 };
 
 const CHROME_VERSION = /(?:Headless)?Chrome\/((\d+)[\d.]*)/;
@@ -93,7 +110,7 @@ const chromeIdentity = (
   return {
     // A desktop tab's Electron UA also names the app and Electron; Chrome's names neither.
     userAgent: headlessUserAgent
-      .replace(version[0], `Chrome/${major}.0.0.0`)
+      .replace(version[0], chromeToken(major))
       .replace(/ (?:GOAT\w*|Electron)\/\S+/g, ""),
     userAgentMetadata: {
       brands: brands((value) => value),
@@ -146,6 +163,7 @@ export class ServerBrowserContexts {
     const env = this.options.env ?? process.env;
     const platform = this.options.platform ?? HostProcess.Platform.defaultValue();
     const useGpu = gpuLaunchEnabled(platform, env);
+    const userAgent = chromeUserAgent(this.options.chromeVersion, platform);
     return {
       executablePath,
       env,
@@ -154,6 +172,7 @@ export class ServerBrowserContexts {
         ...(useGpu ? [] : ["--disable-gpu"]),
         "--force-device-scale-factor=2",
         "--disable-blink-features=AutomationControlled",
+        ...(userAgent ? [`--user-agent=${userAgent}`] : []),
       ],
       ignoreDefaultArgs: [
         "--enable-automation",

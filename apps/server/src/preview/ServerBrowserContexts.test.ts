@@ -1,9 +1,12 @@
 // @effect-diagnostics nodeBuiltinImport:off - Hands a real file on disk to a real desktop browser.
 import * as NodeEvents from "node:events";
 import * as NodeFS from "node:fs";
+import * as NodeHttp from "node:http";
 import * as NodeOS from "node:os";
 import * as NodePath from "node:path";
 
+import * as HostProcess from "@goat/shared/HostProcess";
+import { guardErrors } from "@goat/shared/errorGuards";
 import { INCOGNITO_BROWSER_PROFILE_ID } from "@goat/contracts";
 import {
   chromium,
@@ -22,6 +25,7 @@ const launches = vi.hoisted(() => ({
   mkdir: vi.fn().mockResolvedValue(undefined),
   rm: vi.fn().mockResolvedValue(undefined),
 }));
+const launchChromium = chromium.launch.bind(chromium);
 const launchPersistentChromium = chromium.launchPersistentContext.bind(chromium);
 vi.spyOn(chromium, "launch").mockImplementation(launches.launch);
 vi.spyOn(chromium, "launchPersistentContext").mockImplementation(launches.persistent);
@@ -549,4 +553,63 @@ describe("presentAsChrome", () => {
       NodeFS.rmSync(directory, { recursive: true, force: true });
     }
   });
+});
+
+it("sends one Chrome user agent from the page and from a service worker request", async () => {
+  const listen = Promise.withResolvers<void>();
+  const server = guardErrors(
+    NodeHttp.createServer((request, response) => {
+      if (request.url === "/worker.js") {
+        response.writeHead(200, { "content-type": "text/javascript" }).end(`
+          addEventListener("message", event => {
+            event.waitUntil(fetch("/identity").then(response => response.text()).then(ua => event.ports[0].postMessage(ua)));
+          });
+        `);
+      } else if (request.url === "/identity") {
+        response.end(request.headers["user-agent"]);
+      } else {
+        response.writeHead(200, { "content-type": "text/html" }).end("<!doctype html>");
+      }
+    }),
+    listen.reject,
+  );
+  server.listen(0, "127.0.0.1", listen.resolve);
+  await listen.promise;
+  const address = server.address();
+  if (!address || typeof address === "string") throw new Error("Test server has no TCP address");
+  const probe = await launchChromium();
+  const version = probe.version();
+  await probe.close();
+  launches.launch.mockImplementation(({ executablePath: _path, ...bundled } = {}) =>
+    launchChromium(bundled),
+  );
+  const pool = new ServerBrowserContexts({
+    ...options(),
+    env: { GOAT_SERVER_BROWSER_SANDBOX: "0", GOAT_SERVER_BROWSER_GPU: "0" },
+    chromeVersion: version,
+  });
+  try {
+    const context = await pool.contextFor(INCOGNITO_BROWSER_PROFILE_ID);
+    const page = await context.newPage();
+    const platform = HostProcess.Platform.defaultValue();
+    await presentAsChrome(await context.newCDPSession(page), {
+      platform,
+      arch: HostProcess.Architecture.defaultValue(),
+    });
+    await page.goto(`http://127.0.0.1:${address.port}/`);
+    const [pageAgent, workerAgent] = (await page.evaluate(`(async () => {
+      await navigator.serviceWorker.register("/worker.js");
+      const active = (await navigator.serviceWorker.ready).active;
+      const channel = new MessageChannel();
+      const fromWorker = new Promise((resolve) => { channel.port1.onmessage = event => resolve(event.data); });
+      active.postMessage("identity", [channel.port2]);
+      return [await fetch("/identity").then(response => response.text()), await fromWorker];
+    })()`)) as [string, string];
+    expect(pageAgent).toContain(`Chrome/${version.split(".")[0]}.0.0.0`);
+    expect(workerAgent).toBe(pageAgent);
+  } finally {
+    await pool.close();
+    server.closeAllConnections();
+    await new Promise<void>((resolve) => server.close(() => resolve()));
+  }
 });
