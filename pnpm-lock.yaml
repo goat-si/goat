@@ -490,6 +490,9 @@ importers:
       '@goat/contracts':
         specifier: workspace:*
         version: link:../../packages/contracts
+      '@goat/pen-protocol':
+        specifier: workspace:*
+        version: link:../../packages/pen-protocol
       '@goat/shared':
         specifier: workspace:*
         version: link:../../packages/shared
@@ -2590,6 +2593,9 @@ importers:
       '@goat/contracts':
         specifier: workspace:*
         version: link:../contracts
+      '@goat/pen-protocol':
+        specifier: workspace:*
+        version: link:../pen-protocol
       '@goat/shared':
         specifier: workspace:*
         version: link:../shared

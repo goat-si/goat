@@ -16,18 +16,13 @@ import {
   failingAfterWork,
   fresh,
   goatNames,
+  laterGoatRows,
   history,
   isDatabaseNewerThanBuildError,
   schema,
   seedOldGoatLedger,
   seedUserData,
   snapshot,
-  hubFloorRow,
-  scopeVersionRow,
-  compactMoveReceiptsRow,
-  originCatchupRow,
-  saveSuggestionsRow,
-  threadLineageRow,
   UPSTREAM_80S,
   userData,
 } from "./reconcileGoatMigrationIds.testkit.ts";
@@ -42,7 +37,7 @@ describe("GOAT migrations after upstream 080-089", () => {
       );
       assert.isTrue(goatNames.every((name) => currentRow(name)[0] >= 90));
       assert.deepStrictEqual(currentRow("ServerActivityIndexes"), [90, "ServerActivityIndexes"]);
-      assert.deepStrictEqual(migrationManifest.at(-1), originCatchupRow);
+      assert.deepStrictEqual(migrationManifest.at(-1), [164, "MemoryOriginCatchup"]);
       assert.deepStrictEqual(yield* history, migrationManifest);
       assert.deepStrictEqual(yield* runMigrations(), []);
     }).pipe(Effect.provide(NodeSqliteClient.layer({ filename: ":memory:" }))),
@@ -65,6 +60,7 @@ describe("GOAT migrations after upstream 080-089", () => {
           [90, "ServerActivityIndexes"],
           [156, "DisposableMachineRequests"],
           [157, "DisposableMachineEnrollment"],
+          [158, "AuthSessionPenMember"],
         ]);
         assert.deepStrictEqual(yield* userData, before);
         assert.deepStrictEqual(yield* runMigrations(), []);
@@ -88,12 +84,7 @@ describe("GOAT migrations after upstream 080-089", () => {
       assert.deepStrictEqual(yield* reconcileGoatMigrationIds(migrationEntries), UPSTREAM_80S);
       assert.deepStrictEqual(yield* runMigrations(), [
         currentRow("DisposableMachineEnrollment"),
-        threadLineageRow,
-        saveSuggestionsRow,
-        hubFloorRow,
-        scopeVersionRow,
-        compactMoveReceiptsRow,
-        originCatchupRow,
+        ...laterGoatRows,
       ]);
       assert.deepStrictEqual(yield* history, migrationManifest);
     }).pipe(Effect.provide(NodeSqliteClient.layer({ filename: ":memory:" }))),
@@ -150,7 +141,7 @@ describe("GOAT migrations after upstream 080-089", () => {
         // The previous build's manifest: no upstream 080-089, GOAT ten ids lower.
         const upstream80s = new Set(UPSTREAM_80S.map(([, name]) => name));
         const previousEntries = migrationEntries.flatMap(([id, name, migration]) =>
-          upstream80s.has(name) || id >= threadLineageRow[0]
+          upstream80s.has(name) || id > 157
             ? []
             : [[GOAT_MIGRATION_NAMES.has(name) ? id - 10 : id, name, migration] as const],
         );
@@ -187,7 +178,7 @@ describe("GOAT migrations after upstream 080-089", () => {
         assert.strictEqual(at089._tag, "MigrationError");
         assert.deepStrictEqual(
           yield* history,
-          migrationManifest.filter(([id]) => id !== 89 && id < threadLineageRow[0]),
+          migrationManifest.filter(([id]) => id !== 89 && id <= 157),
         );
         assert.deepStrictEqual(
           yield* sql`SELECT name FROM sqlite_master WHERE name IN (
@@ -198,12 +189,7 @@ describe("GOAT migrations after upstream 080-089", () => {
         );
         assert.deepStrictEqual(yield* runMigrations(), [
           ...UPSTREAM_80S.slice(-1),
-          threadLineageRow,
-          saveSuggestionsRow,
-          hubFloorRow,
-          scopeVersionRow,
-          compactMoveReceiptsRow,
-          originCatchupRow,
+          ...laterGoatRows,
         ]);
         assert.deepStrictEqual(yield* snapshot, yield* fresh);
         assert.deepStrictEqual(yield* userData, data);
@@ -216,15 +202,7 @@ describe("GOAT migrations after upstream 080-089", () => {
       for (const [id, , migration] of migrationEntries) {
         if (id >= 80 && id <= 89) yield* migration;
       }
-      assert.deepStrictEqual(yield* runMigrations(), [
-        ...UPSTREAM_80S,
-        threadLineageRow,
-        saveSuggestionsRow,
-        hubFloorRow,
-        scopeVersionRow,
-        compactMoveReceiptsRow,
-        originCatchupRow,
-      ]);
+      assert.deepStrictEqual(yield* runMigrations(), [...UPSTREAM_80S, ...laterGoatRows]);
       assert.deepStrictEqual(yield* history, migrationManifest);
       const before = yield* schema;
       for (const [id, , migration] of migrationEntries) {
@@ -279,10 +257,8 @@ describe("hasPendingMigrations", () => {
         // Negate first so no row collides with another while the block moves up by ten.
         yield* sql`UPDATE effect_sql_migrations SET migration_id = -migration_id WHERE name IN ${sql.in(goatNames)}`;
         yield* sql`UPDATE effect_sql_migrations SET migration_id = 10 - migration_id WHERE migration_id < 0`;
-        assert.deepStrictEqual((yield* history).at(-1), [
-          originCatchupRow[0] + 10,
-          originCatchupRow[1],
-        ]);
+        const [lastId, lastName] = currentRow(goatNames.at(-1) ?? "");
+        assert.deepStrictEqual((yield* history).at(-1), [lastId + 10, lastName]);
         assert.isTrue(yield* hasPendingMigrations());
         // reconcileGoatMigrationIds moves them back: a write the CLI must not make under a server.
         assert.deepStrictEqual(yield* runMigrations(), []);

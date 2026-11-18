@@ -55,14 +55,14 @@ describe("runMigrations database ahead of this build", () => {
       }).pipe(Effect.provide(NodeSqliteClient.layer({ filename: ":memory:" }))),
   );
 
-  it.effect("the 157 build refuses a migrated 158 memory database", () =>
+  it.effect("the 158 build refuses a migrated 159 memory database", () =>
     Effect.gen(function* () {
-      assert.deepStrictEqual((yield* runMigrations({ toMigrationInclusive: 158 })).at(-1), [
-        158,
+      assert.deepStrictEqual((yield* runMigrations({ toMigrationInclusive: 159 })).at(-1), [
+        159,
         "MemoryThreadLineage",
       ]);
-      const manifest157 = migrationEntries.filter(([id]) => id <= 157);
-      const failure = yield* Effect.flip(assertMemoryMigrationsCompatible(manifest157));
+      const manifest158 = migrationEntries.filter(([id]) => id <= 158);
+      const failure = yield* Effect.flip(assertMemoryMigrationsCompatible(manifest158));
       assert.strictEqual(failure._tag, "MigrationError");
       if (failure._tag !== "MigrationError") return;
       assert.strictEqual(failure.kind, "BadState");
@@ -70,24 +70,11 @@ describe("runMigrations database ahead of this build", () => {
     }).pipe(Effect.provide(NodeSqliteClient.layer({ filename: ":memory:" }))),
   );
 
-  it.effect("the 159 build refuses a migrated 160 hub floor database", () =>
-    Effect.gen(function* () {
-      assert.deepStrictEqual((yield* runMigrations({ toMigrationInclusive: 160 })).at(-1), [
-        160,
-        "MemoryHubFloor",
-      ]);
-      const manifest159 = migrationEntries.filter(([id]) => id <= 159);
-      const failure = yield* Effect.flip(assertMemoryMigrationsCompatible(manifest159));
-      assert.strictEqual(failure._tag, "MigrationError");
-      assert.include(failure.message, "Unreleased memory DB is incompatible");
-    }).pipe(Effect.provide(NodeSqliteClient.layer({ filename: ":memory:" }))),
-  );
-
-  it.effect("the 160 build refuses a migrated scope-version database", () =>
+  it.effect("the 160 build refuses a migrated 161 hub floor database", () =>
     Effect.gen(function* () {
       assert.deepStrictEqual((yield* runMigrations({ toMigrationInclusive: 161 })).at(-1), [
         161,
-        "MemoryScopeVersion",
+        "MemoryHubFloor",
       ]);
       const manifest160 = migrationEntries.filter(([id]) => id <= 160);
       const failure = yield* Effect.flip(assertMemoryMigrationsCompatible(manifest160));
@@ -96,10 +83,23 @@ describe("runMigrations database ahead of this build", () => {
     }).pipe(Effect.provide(NodeSqliteClient.layer({ filename: ":memory:" }))),
   );
 
+  it.effect("the 161 build refuses a migrated scope-version database", () =>
+    Effect.gen(function* () {
+      assert.deepStrictEqual((yield* runMigrations({ toMigrationInclusive: 162 })).at(-1), [
+        162,
+        "MemoryScopeVersion",
+      ]);
+      const manifest161 = migrationEntries.filter(([id]) => id <= 161);
+      const failure = yield* Effect.flip(assertMemoryMigrationsCompatible(manifest161));
+      assert.strictEqual(failure._tag, "MigrationError");
+      assert.include(failure.message, "Unreleased memory DB is incompatible");
+    }).pipe(Effect.provide(NodeSqliteClient.layer({ filename: ":memory:" }))),
+  );
+
   it.effect("repairs only the kind byte of historical compact move receipts", () =>
     Effect.gen(function* () {
       const sql = yield* SqlClient.SqlClient;
-      yield* runMigrations({ toMigrationInclusive: 161 });
+      yield* runMigrations({ toMigrationInclusive: 162 });
       yield* sql`INSERT INTO memory_compact_receipts
         (space,operation_id,operation_digest,hub_sequence,receipt_json,compact_json,compact_blob)
         VALUES
@@ -119,15 +119,15 @@ describe("runMigrations database ahead of this build", () => {
   );
 
   it.effect(
-    "migration 160 preserves suggestion forget generations and backfills the hub watermark",
+    "migration 161 preserves suggestion forget generations and backfills the hub watermark",
     () =>
       Effect.gen(function* () {
         const sql = yield* SqlClient.SqlClient;
-        yield* runMigrations({ toMigrationInclusive: 159 });
+        yield* runMigrations({ toMigrationInclusive: 160 });
         yield* sql`INSERT INTO memory_space_counters(space,forget_generation) VALUES ('synthetic',7)`;
         yield* sql`INSERT INTO memory_hub_retention(space,checkpoint_sequence) VALUES ('synthetic',11)`;
-        assert.deepStrictEqual(yield* runMigrations({ toMigrationInclusive: 160 }), [
-          [160, "MemoryHubFloor"],
+        assert.deepStrictEqual(yield* runMigrations({ toMigrationInclusive: 161 }), [
+          [161, "MemoryHubFloor"],
         ]);
         assert.deepStrictEqual(
           yield* sql`SELECT forget_generation,last_forget_sequence FROM memory_space_counters WHERE space='synthetic'`,

@@ -28,12 +28,12 @@ const seed = Effect.fn("MemoryThreadLineage.test.seed")(function* (
 it.effect("backfills lineage states and ordered revisions from the outbox", () =>
   Effect.gen(function* () {
     const sql = yield* SqlClient.SqlClient;
-    yield* runMigrations({ toMigrationInclusive: 157 });
+    yield* runMigrations({ toMigrationInclusive: 158 });
     yield* seed("a", "tracked");
     yield* seed("b", "unknown", []);
     yield* seed("c", "overflow");
-    assert.deepStrictEqual(yield* runMigrations({ toMigrationInclusive: 158 }), [
-      [158, "MemoryThreadLineage"],
+    assert.deepStrictEqual(yield* runMigrations({ toMigrationInclusive: 159 }), [
+      [159, "MemoryThreadLineage"],
     ]);
     assert.deepStrictEqual(
       yield* sql`SELECT thread_id,space,state,count FROM memory_thread_lineages ORDER BY thread_id`,
@@ -55,16 +55,16 @@ it.effect("backfills lineage states and ordered revisions from the outbox", () =
 it.effect("rejects malformed lineage without echoing its contents or removing old rows", () =>
   Effect.gen(function* () {
     const sql = yield* SqlClient.SqlClient;
-    yield* runMigrations({ toMigrationInclusive: 157 });
+    yield* runMigrations({ toMigrationInclusive: 158 });
     yield* seed("a", "tracked");
     yield* seed("b", "private-marker");
-    const error = yield* Effect.flip(runMigrations({ toMigrationInclusive: 158 }));
+    const error = yield* Effect.flip(runMigrations({ toMigrationInclusive: 159 }));
     assert.notInclude(error.message, "private-marker");
     assert.lengthOf(yield* sql`SELECT id FROM memory_outbox`, 2);
     assert.lengthOf(
       yield* sql`SELECT name FROM sqlite_master WHERE name='memory_thread_lineages'`,
       0,
     );
-    assert.lengthOf(yield* sql`SELECT name FROM effect_sql_migrations WHERE migration_id=158`, 0);
+    assert.lengthOf(yield* sql`SELECT name FROM effect_sql_migrations WHERE migration_id=159`, 0);
   }).pipe(Effect.provide(NodeSqliteClient.layer({ filename: ":memory:" }))),
 );

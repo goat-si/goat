@@ -174,6 +174,18 @@ describe("memory reliability ledger before migration 158 AuthSessionPenMember", 
         assert.deepStrictEqual(yield* snapshot, before);
       }).pipe(Effect.provide(NodeSqliteClient.layer({ filename: ":memory:" }))),
   );
+
+  it.effect("rejects a gap in the old memory ledger without changing it", () =>
+    Effect.gen(function* () {
+      yield* seedGoatLedger(prePenMemberMemoryNames, 158);
+      const sql = yield* SqlClient.SqlClient;
+      yield* sql`DELETE FROM effect_sql_migrations WHERE name = 'MemorySaveSuggestions'`;
+      const before = yield* snapshot;
+      const failure = yield* Effect.flip(runMigrations());
+      assert.include(failure.message, "Unreleased memory DB is incompatible");
+      assert.deepStrictEqual(yield* snapshot, before);
+    }).pipe(Effect.provide(NodeSqliteClient.layer({ filename: ":memory:" }))),
+  );
 });
 
 describe("GOAT migration ids", () => {
@@ -635,8 +647,11 @@ describe("upgrading a nightly 256 ledger past upstream 068", () => {
       );
       assert.deepStrictEqual(yield* runMigrations(), migrationManifest);
       assert.deepStrictEqual(
-        migrationManifest.find(([id]) => id === 158),
-        [158, "MemoryThreadLineage"],
+        migrationManifest.filter(([id]) => id >= 158),
+        [
+          [158, "AuthSessionPenMember"],
+          ...prePenMemberMemoryNames.map((name, index) => [159 + index, name]),
+        ],
       );
       const sql = yield* SqlClient.SqlClient;
       assert.lengthOf(
