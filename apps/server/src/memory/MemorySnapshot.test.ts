@@ -585,6 +585,67 @@ it.effect.each(survivorCases)(
   },
 );
 
+it.effect("delivering 9 plus 92 revisions records all 101 without overflowing", () => {
+  const f = fixture();
+  return Effect.gen(function* () {
+    yield* project;
+    const service = yield* Service.MemoryService;
+    const store = yield* Store.MemoryStore;
+    const snapshots = yield* Snapshot.MemorySnapshot;
+    const thread = { environmentId, threadId };
+    const earlier = Array.from({ length: 9 }, (_, n) => M.MemoryRevisionId.make(id(8000 + n)));
+    yield* store.appendThreadLineage(thread, space, earlier);
+    const dependencies: M.MemoryRevisionId[] = [];
+    for (let n = 8100; n < 8191; n++) {
+      const source = input(n, {
+        kind: "thread",
+        thread: { environmentId, threadId: M.ThreadId.make("source-thread") },
+      });
+      yield* service.upsert(source, Effect.void);
+      dependencies.push((yield* store.loadAggregate(space, source.memoryId)).heads[0]!);
+    }
+    const delivered = input(8191);
+    yield* service.upsert(
+      {
+        ...delivered,
+        payload: { ...delivered.payload, derivedFromMemoryRevisions: dependencies },
+      },
+      Effect.void,
+    );
+    const snapshot = yield* snapshots.forThread(threadId, f.policy(), f.currentPolicy);
+    assert.deepStrictEqual(
+      snapshot?.items.map((item) => item.memoryId),
+      [delivered.memoryId],
+    );
+    const lineage = yield* store.readThreadLineage(thread, space);
+    assert.strictEqual(lineage.state, "tracked");
+    assert.deepStrictEqual(lineage.revisions, [
+      ...earlier,
+      snapshot!.items[0]!.revisionId,
+      ...dependencies,
+    ]);
+  }).pipe(Effect.provide(f.live));
+});
+
+it.effect("keeps the first 1000 distinct revisions and only overflows on a new revision", () => {
+  const f = fixture();
+  return Effect.gen(function* () {
+    const store = yield* Store.MemoryStore;
+    const thread = { environmentId, threadId };
+    const revisions = Array.from({ length: 1001 }, (_, n) => M.MemoryRevisionId.make(id(7000 + n)));
+    yield* store.appendThreadLineage(thread, space, revisions.slice(0, 999));
+    yield* store.appendThreadLineage(thread, space, revisions.slice(998, 1000));
+    yield* store.appendThreadLineage(thread, space, revisions.slice(990, 1000));
+    const full = yield* store.readThreadLineage(thread, space);
+    assert.strictEqual(full.state, "tracked");
+    assert.deepStrictEqual(full.revisions, revisions.slice(0, 1000));
+    yield* store.appendThreadLineage(thread, space, revisions.slice(999));
+    const overflow = yield* store.readThreadLineage(thread, space);
+    assert.strictEqual(overflow.state, "overflow");
+    assert.deepStrictEqual(overflow.revisions, revisions.slice(0, 1000));
+  }).pipe(Effect.provide(f.live));
+});
+
 it.effect(
   "r3 cumulative admission uses one row and at most one changed write, fences derivatives on overflow and cleans on deletion",
   () => {
