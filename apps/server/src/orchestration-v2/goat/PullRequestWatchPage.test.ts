@@ -58,4 +58,24 @@ it.layer(layer)("pull request sweep cursor", (it) => {
       assert.isUndefined(restarted.after);
     }),
   );
+
+  it.effect("reuses the staging path left by an interrupted cursor write", () =>
+    Effect.gen(function* () {
+      const fs = yield* FileSystem.FileSystem;
+      const path = yield* Path.Path;
+      const { stateDir } = yield* ServerConfig.ServerConfig;
+      const filePath = path.join(stateDir, "pull-request-watch-cursor");
+      const stagingPath = `${filePath}.staging`;
+      yield* fs.writeFileString(filePath, watchKey("watch-11"));
+      yield* fs.writeFileString(stagingPath, watchKey("watch-22"));
+
+      const cursor = yield* makeWatchSweepCursor;
+      assert.equal(cursor.after, watchKey("watch-11"));
+      yield* cursor.complete(watchKey("watch-33"));
+
+      assert.isFalse(yield* fs.exists(stagingPath));
+      const restarted = yield* makeWatchSweepCursor;
+      assert.equal(restarted.after, watchKey("watch-33"));
+    }),
+  );
 });

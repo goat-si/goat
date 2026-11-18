@@ -109,7 +109,12 @@ export const makeWatchSweepCursor = Effect.gen(function* () {
       next = undefined;
     }
     if (next === saved) return;
-    yield* writeFileStringAtomically({ filePath, contents: next ?? "" }).pipe(
+    // The server owns stateDir exclusively and the reactor serializes sweeps.
+    yield* writeFileStringAtomically({
+      filePath,
+      contents: next ?? "",
+      reuseStagingFile: true,
+    }).pipe(
       Effect.provideService(FileSystem.FileSystem, fs),
       Effect.provideService(Path.Path, path),
       Effect.tap(() =>
