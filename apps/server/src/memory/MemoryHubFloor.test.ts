@@ -310,10 +310,29 @@ describe("memory hub floor", () => {
             assert.deepStrictEqual(moved.identity?.scope, scope);
             assert.strictEqual(moved.identity?.scopeVersion, 1);
             assert.deepStrictEqual(moved.heads, [first.revision.revisionId]);
-            assert.deepStrictEqual(
-              (yield* local.readWorkOperation(`sync:${space}:${editId}`))?.kind,
-              "upsert",
+            const pendingEdit = yield* local.readWorkOperation(`sync:${space}:${editId}`);
+            if (pendingEdit?.kind !== "upsert") throw new Error("Expected the pending edit");
+            assert.deepStrictEqual(pendingEdit.revision.scope, first.revision.scope);
+            assert.include((yield* push(pendingEdit)).receipts[0], {
+              outcome: "rejected",
+              failureCode: "identity_mismatch",
+            });
+            const history = yield* replica.history(
+              {
+                memorySpaceId: space,
+                memoryId: first.memoryId,
+                limit: 10,
+              },
+              Effect.void,
             );
+            const original = history.revisions.find(
+              ({ revision }) => revision.revisionId === first.revision.revisionId,
+            );
+            const unaccepted = history.revisions.find(
+              ({ revision }) => revision.revisionId === pendingEdit.revision.revisionId,
+            );
+            assert.deepStrictEqual(original?.payload, first.payload);
+            assert.isNull(unaccepted?.payload);
             assert.deepStrictEqual(
               (yield* replica.list(
                 {
