@@ -137,7 +137,7 @@ it.effect.each([
   [2, "elicitation/create"],
 ] as const)(
   "rejects a URL elicitation the client did not advertise on wire v%s (%s)",
-  (wireVersion, method) =>
+  ([wireVersion, method]) =>
     Effect.gen(function* () {
       const { stdio, input, output } = yield* makeInMemoryStdio();
       const acp = yield* AcpClient.make(stdio);
