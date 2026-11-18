@@ -345,9 +345,11 @@ export const makeUpsert = (deps: {
       "pendingSync" in result.receipt &&
       result.receipt.pendingSync &&
       result.receipt.revisionId === null;
+    let stagedOperationId: M.MemoryOperationId | undefined;
     return yield* Effect.gen(function* () {
       const staged = yield* stage;
       if (!deps.submitFloorWrite || !waiting(staged)) return staged;
+      stagedOperationId = input.operationId;
       yield* permit;
       yield* deps.submitFloorWrite;
       const settled = yield* stage;
@@ -367,7 +369,14 @@ export const makeUpsert = (deps: {
             code === "hub_unavailable" ||
             code === "source_invalidated"
           )
-            return deps.onRefusedSave({ ...candidate, reason: code }, permit);
+            return deps.onRefusedSave(
+              {
+                ...candidate,
+                reason: code,
+                ...(code === "hub_unavailable" && stagedOperationId ? { stagedOperationId } : {}),
+              },
+              permit,
+            );
         }
         return Effect.void;
       }),
