@@ -37,11 +37,13 @@ describe("document extraction concurrency", () => {
         yield* Effect.gen(function* () {
           const documents = yield* DocumentText.DocumentText;
           const leaving = yield* documents.ensure(first!).pipe(Effect.forkChild);
-          const staying = yield* documents.ensure(first!).pipe(Effect.forkChild);
           const freed = yield* documents.ensure(second!).pipe(Effect.forkChild);
           expect(new Set([yield* Queue.take(started), yield* Queue.take(started)])).toEqual(
             new Set([first, second]),
           );
+          const staying = yield* documents
+            .ensure(first!)
+            .pipe(Effect.forkChild({ startImmediately: true }));
           const waiting = yield* documents.ensure(third!).pipe(Effect.forkChild);
           yield* Fiber.interrupt(leaving);
           if (outcome === "interrupted") yield* Fiber.interrupt(freed);
@@ -63,6 +65,8 @@ describe("document extraction concurrency", () => {
           Effect.provide(Layer.fresh(DocumentText.layer)),
           Effect.provideService(FileSystem.FileSystem, {
             ...fs,
+            // The immediate fork can suspend in the shared lookup after this synchronous probe.
+            exists: (file) => Effect.sync(() => NodeFS.existsSync(file)),
             stat: (file) =>
               Effect.gen(function* () {
                 yield* Queue.offer(started, file);
