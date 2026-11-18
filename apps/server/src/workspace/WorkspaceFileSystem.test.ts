@@ -2,7 +2,6 @@
 import * as NodeFSP from "node:fs/promises";
 
 import * as NodePath from "@effect/platform-node/NodePath";
-import * as NodeServices from "@goat/shared/testing/nodeServicesWithCrypto";
 import { afterEach, describe, expect, it } from "@effect/vitest";
 import { vi } from "vite-plus/test";
 import * as HostProcess from "@goat/shared/HostProcess";
@@ -14,12 +13,16 @@ import * as Path from "effect/Path";
 import * as NodeChildProcess from "node:child_process";
 import * as NodeFS from "node:fs";
 import * as ServerConfig from "../config.ts";
-import * as VcsDriverRegistry from "../vcs/VcsDriverRegistry.ts";
-import * as VcsProcess from "../vcs/VcsProcess.ts";
 import * as KnownWorkspaces from "./KnownWorkspaces.ts";
 import * as WorkspaceEntries from "./WorkspaceEntries.ts";
 import * as WorkspaceFileSystem from "./WorkspaceFileSystem.ts";
 import * as WorkspacePaths from "./WorkspacePaths.ts";
+import {
+  layerKnownWorkspacesTest,
+  layerTest,
+  makeTempDir,
+  UNKNOWN_WORKSPACE_PREFIX,
+} from "./WorkspaceFileSystem.testkit.ts";
 
 vi.mock("node:fs/promises", async (importOriginal) => {
   const actual = await importOriginal<typeof NodeFSP>();
@@ -40,40 +43,6 @@ const injectShortReads = Effect.fn("injectShortReads")(function* (target: string
     return handle;
   });
   yield* Effect.addFinalizer(() => Effect.sync(() => open.mockImplementation(native.open)));
-});
-
-const UNKNOWN_WORKSPACE_PREFIX = "t3code-unknown-workspace-";
-const layerKnownWorkspacesTest = Layer.mock(KnownWorkspaces.KnownWorkspaces)({
-  assertContains: (cwd) =>
-    cwd.includes(UNKNOWN_WORKSPACE_PREFIX)
-      ? Effect.fail(new KnownWorkspaces.UnknownWorkspaceError({ cwd }))
-      : Effect.void,
-});
-
-const layerProject = WorkspaceFileSystem.layer.pipe(
-  Layer.provide(layerKnownWorkspacesTest),
-  Layer.provide(WorkspacePaths.layer),
-  Layer.provide(WorkspaceEntries.layer.pipe(Layer.provide(WorkspacePaths.layer))),
-);
-
-const layerTest = Layer.empty.pipe(
-  Layer.provideMerge(layerProject),
-  Layer.provideMerge(WorkspaceEntries.layer.pipe(Layer.provide(WorkspacePaths.layer))),
-  Layer.provideMerge(WorkspacePaths.layer),
-  Layer.provideMerge(VcsDriverRegistry.layer.pipe(Layer.provide(VcsProcess.layer))),
-  Layer.provideMerge(
-    ServerConfig.ServerConfig.layerTest(process.cwd(), {
-      prefix: "goat-workspace-files-test-",
-    }),
-  ),
-  Layer.provideMerge(NodeServices.layer),
-);
-
-const makeTempDir = Effect.gen(function* () {
-  const fileSystem = yield* FileSystem.FileSystem;
-  return yield* fileSystem.makeTempDirectoryScoped({
-    prefix: "goat-workspace-files-",
-  });
 });
 
 const writeTextFile = Effect.fn("writeTextFile")(function* (
