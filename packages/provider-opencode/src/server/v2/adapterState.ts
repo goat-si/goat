@@ -3,6 +3,7 @@ import type { OpenCodeEvent } from "@opencode/client/effect";
 import type {
   OrchestrationV2AppThread,
   OrchestrationV2ExecutionNode,
+  OrchestrationV2Notification,
   OrchestrationV2ProviderFailure,
   OrchestrationV2ProviderRetry,
   OrchestrationV2ProviderThread,
@@ -108,7 +109,7 @@ export interface Wake {
   readonly messageId: MessageId | undefined;
   readonly events: Array<OpenCode2Client.OpenCode2StreamEvent>;
   running: boolean;
-  readonly reports: Array<BackgroundWorkReport>;
+  readonly notification: OrchestrationV2Notification | null;
   readonly detail: string | null;
   dropped: boolean;
   readonly after: string | undefined;
@@ -191,6 +192,7 @@ export interface ThreadState {
       readonly inboxId: string;
       readonly childId: string;
       readonly report: BackgroundWorkReport;
+      readonly runId?: RunId;
       readonly text: string;
     }
   >;

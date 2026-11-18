@@ -1,3 +1,8 @@
+import {
+  backgroundWorkNotification,
+  type BackgroundWorkReport,
+} from "@goat/provider-core/server/notification";
+import type { RunId } from "@goat/contracts";
 export const reportOutcome = (state: string | undefined) =>
   state === "completed"
     ? ("completed" as const)
@@ -20,3 +25,18 @@ export const sessionGrantLabel = (action: string, save: ReadonlyArray<string>) =
   save.every((pattern) => pattern === "*")
     ? `Allow every ${action} request this session`
     : `Allow ${save.join(", ")} this session`;
+
+export function wakeReportNotification(
+  entries: ReadonlyArray<{
+    readonly report: BackgroundWorkReport;
+    readonly runId?: RunId;
+  }>,
+) {
+  const notification = backgroundWorkNotification(entries.map((entry) => entry.report));
+  const runId = entries[0]?.runId;
+  return notification === null ||
+    runId === undefined ||
+    entries.some((entry) => entry.runId !== runId)
+    ? notification
+    : { ...notification, aboutRunId: runId };
+}
