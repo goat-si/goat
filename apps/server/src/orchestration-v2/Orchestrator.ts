@@ -6,7 +6,10 @@ import { isHistoryArchiveOnlyUpdate, withoutHistoryArchive } from "./goat/Histor
 import { makeReleaseFinishedDelegate } from "./goat/ReleaseFinishedDelegate.ts";
 import * as KeyedLock from "@goat/shared/KeyedLock";
 import { runsBehindSteerFollowUp, steerFollowUpQueuePosition } from "./steerFollowUpQueue.ts";
-import { pendingThreadTitleGenerationEffect } from "./threadTitleGenerationEffect.ts";
+import {
+  hasTitleSetBeforeFirstMessage,
+  pendingThreadTitleGenerationEffect,
+} from "./threadTitleGenerationEffect.ts";
 import { WORKSPACE_PREPARATION_INPUT, withoutPreparationResult } from "./preparationItem.ts";
 import { threadHasUnfinishedWork } from "./threadUnfinishedWork.ts";
 import { usageLimitHoldsQueue, usageLimitHoldsQueuedRuns } from "./usageLimitQueue.ts";
@@ -5365,6 +5368,7 @@ const makeOrchestrator = Effect.fn("orchestrationV2.Orchestrator.layer")(functio
     if (
       !isNativeMaintenanceCommand(command) &&
       ((command.titleSeed !== undefined &&
+        !hasTitleSetBeforeFirstMessage(projection.thread, command.titleSeed) &&
         (yield* projectionStore
           .getMessageCount(command.threadId)
           .pipe(mapDispatchError(command))) === 0) ||

@@ -1,4 +1,4 @@
-import type { CommandId, MessageId, ThreadId } from "@goat/contracts";
+import type { CommandId, MessageId, OrchestrationV2AppThread, ThreadId } from "@goat/contracts";
 
 import type { PendingOrchestrationEffectV2 } from "./EffectOutbox.ts";
 
@@ -15,4 +15,19 @@ export function pendingThreadTitleGenerationEffect(
     threadId,
     request: { type: "thread-title.generate", kind },
   };
+}
+
+export const placeholderThreadTitle = (parentTitle: string, index: number): string =>
+  `${parentTitle} thread ${index + 1}`;
+
+export function hasTitleSetBeforeFirstMessage(thread: OrchestrationV2AppThread, titleSeed: string) {
+  const title = thread.title.trim();
+  return (
+    thread.forkedFrom === null &&
+    thread.lineage.sideChat !== true &&
+    title.length > 0 &&
+    title !== "New thread" &&
+    !/ thread \d+$/u.test(title) &&
+    title !== titleSeed.trim()
+  );
 }
