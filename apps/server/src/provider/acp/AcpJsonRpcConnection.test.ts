@@ -8,7 +8,7 @@ import * as Exit from "effect/Exit";
 import * as Fiber from "effect/Fiber";
 import * as Scope from "effect/Scope";
 import * as Stream from "effect/Stream";
-import { ChildProcessSpawner } from "effect/process";
+import { ChildProcess, ChildProcessSpawner } from "effect/process";
 import { describe, expect } from "vite-plus/test";
 import * as AcpSessionRuntime from "@goat/provider-acp/server/AcpSessionRuntime";
 import { AgentScope } from "@goat/shared/AgentScope";
@@ -20,6 +20,36 @@ import {
 } from "./AcpJsonRpcConnection.testkit.ts";
 
 describe("AcpSessionRuntime", () => {
+  it.effect("detaches owned ACP processes on POSIX hosts but not on Windows", () =>
+    Effect.gen(function* () {
+      for (const [platform, expected] of [
+        ["win32", false],
+        ["linux", true],
+      ] as const) {
+        let detached: boolean | undefined;
+        yield* AcpSessionRuntime.make({
+          spawn: { command: "acp-agent", args: [] },
+          cwd: process.cwd(),
+          clientInfo: { name: "test", version: "1" },
+          ownDetachedProcessGroup: true,
+          processGroupPlatform: platform,
+        }).pipe(
+          Effect.provideService(HostProcess.Platform, platform),
+          Effect.provideService(
+            ChildProcessSpawner.ChildProcessSpawner,
+            ChildProcessSpawner.make((command) => {
+              if (ChildProcess.isStandardCommand(command)) detached = command.options.detached;
+              return Effect.die("spawn stopped by test");
+            }),
+          ),
+          Effect.scoped,
+          Effect.exit,
+        );
+        assert.equal(detached, expected, platform);
+      }
+    }).pipe(Effect.provide(NodeServices.layer)),
+  );
+
   it.effect.each(["session/new", "session/resume"] as const)(
     "buffers root metadata while %s startup is still pending",
     (setupMethod) =>
