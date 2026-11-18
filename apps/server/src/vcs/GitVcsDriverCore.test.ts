@@ -1030,11 +1030,14 @@ it.layer(layerTest)("GitVcsDriver core integration", (it) => {
           const locales: Array<CommandLine.Word | undefined> = [];
           const delegate = yield* ChildProcessSpawner.ChildProcessSpawner;
           const spawner = ChildProcessSpawner.make((command) => {
-            if (
-              ChildProcess.isStandardCommand(command) &&
-              (command.args.includes("worktree") || command.args[0] === "checkout")
-            ) {
-              locales.push(command.options.env?.LANGUAGE);
+            if (ChildProcess.isStandardCommand(command)) {
+              const { args } = command;
+              const worktreeIndex = args.indexOf("worktree");
+              const isWorktreeAdd =
+                worktreeIndex >= 0 && args[worktreeIndex + 1] === "add" && !args.includes("-h");
+              if (args[0] === "checkout" || isWorktreeAdd) {
+                locales.push(command.options.env?.LANGUAGE);
+              }
             }
             return delegate.spawn(command);
           });
