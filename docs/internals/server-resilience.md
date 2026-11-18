@@ -50,6 +50,7 @@ left to decide about rejections; another `uncaughtException` listener never keep
 | `WS_CLOSED_CONNECTING`      | message "WebSocket was closed before the connection was established", no `code`, unheard event | `ws` raises it only after its owner closed a still-connecting socket, emitted on a later tick.                                                                |
 | Cursor closed exec stream   | rejection named `WriteIterableClosedError` with message "WritableIterable is closed"           | The SDK refuses the write as its first statement because the exec already ended; nothing was written.                                                         |
 | Cursor ended request stream | rejection named `ConnectError` with code `10` and cause code `ERR_STREAM_WRITE_AFTER_END`      | The SDK request body has ended; its final write cannot be delivered.                                                                                          |
+| Cursor stall detector       | rejection named `AbortError` with an `onStall` frame in the Cursor SDK                         | The SDK already aborted the stalled request. Its detached promise rejects during teardown.                                                                    |
 
 Reviewed and refused:
 

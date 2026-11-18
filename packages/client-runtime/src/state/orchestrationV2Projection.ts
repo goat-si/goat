@@ -13,6 +13,7 @@ import {
 } from "@goat/shared/orchestrationV2DedupedBodies";
 import {
   createOrchestrationV2TurnItemVisibility,
+  CURSOR_TASK_SAVED_ITEM_PREFIX,
   isOrchestrationV2TurnItemVisible,
 } from "@goat/shared/orchestrationV2Timeline";
 
@@ -151,6 +152,14 @@ function shouldDropMissingPartialTurnItem(
     return false;
   }
   if (item.runId === null) {
+    if (
+      item.type === "assistant_message" &&
+      item.nativeItemRef?.driver === "cursor" &&
+      item.nativeItemRef.nativeId?.startsWith(CURSOR_TASK_SAVED_ITEM_PREFIX)
+    ) {
+      const oldest = oldestLocalTurnOrdinal(projection.visibleTurnItems);
+      return oldest !== null && item.ordinal < oldest;
+    }
     return isBelowPartialWindow(projection, item, latestLocalTurnOrdinal);
   }
   // A queued run keeps the ordinal it got when queued, so a steer sent later
