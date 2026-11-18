@@ -671,8 +671,7 @@ exec "$GOAT_RUNTIME_DIR/goat" "$@"
 `;
 
 const REMOTE_LAUNCH_SCRIPT = `set -eu
-${SHARED_HOME_UPDATE_WAIT}goat_wait_shared_home_update
-cd "$HOME" 2>/dev/null || cd /
+@@GOAT_SHARED_HOME_UPDATE_WAIT@@cd "$HOME" 2>/dev/null || cd /
 @@GOAT_NODE_ENV_SCRIPT@@
 STATE_KEY="$1"
 STATE_DIR="$HOME/.goat/ssh-launch/$STATE_KEY"
@@ -926,8 +925,7 @@ while [ -z "$REMOTE_PORT" ]; do
     fi
     exit 1
   fi
-  goat_wait_shared_home_update
-  recheck_selected_before_use
+@@GOAT_SHARED_HOME_UPDATE_RECHECK@@  recheck_selected_before_use
   if [ "$LIVE_STATUS" != none ]; then
     printf 'A server appeared before launch; reconnect without replacing it.\\n' >&2; exit 1
   fi
@@ -1177,8 +1175,13 @@ export function buildRemoteLaunchScript(
   selection = requestedRuntime(input),
   reconnect = false,
   captureBaseline = false,
+  waitForDesktopUpdate = false,
 ): string {
   return applyScriptPlaceholders(REMOTE_LAUNCH_SCRIPT, {
+    GOAT_SHARED_HOME_UPDATE_WAIT: waitForDesktopUpdate
+      ? SHARED_HOME_UPDATE_WAIT + "goat_wait_shared_home_update\n"
+      : "",
+    GOAT_SHARED_HOME_UPDATE_RECHECK: waitForDesktopUpdate ? "  goat_wait_shared_home_update\n" : "",
     GOAT_ARCHIVE_MODE: isNodeScriptRunner(input) ? "0" : "1",
     GOAT_NODE_SCRIPT_PATH: shellSingleQuote(input?.nodeScriptPath?.trim() || ""),
     GOAT_OWNED_IDENTITY: REMOTE_OWNED_IDENTITY_SCRIPT,
@@ -1306,7 +1309,7 @@ fi`
 }
 reconnect_launch() {
 sh -s -- "$1" "\${OWNER:-}" <<'GOAT_RECONNECT_LAUNCH_SCRIPT'
-${buildRemoteLaunchScript(selected.runner, expectedProbe === undefined ? selected : { ...selected, mayUpgradeOwnedServer: false }, expectedProbe !== undefined, expectedProbe === undefined)}
+${buildRemoteLaunchScript(selected.runner, expectedProbe === undefined ? selected : { ...selected, mayUpgradeOwnedServer: false }, expectedProbe !== undefined, expectedProbe === undefined, true)}
 GOAT_RECONNECT_LAUNCH_SCRIPT
 }
 ${
@@ -1314,7 +1317,7 @@ ${
     ? `if [ "$reconnect_successor" = 1 ]; then
 reconnect_launch() {
 sh -s -- "$1" "$OWNER" <<'GOAT_RECONNECT_SUCCESSOR_SCRIPT'
-${buildRemoteLaunchScript(successor.runner, successor, true)}
+${buildRemoteLaunchScript(successor.runner, successor, true, false, true)}
 GOAT_RECONNECT_SUCCESSOR_SCRIPT
 }
 fi`
@@ -1406,7 +1409,7 @@ export const launchOrReuseRemoteServer = Effect.fn("ssh/tunnel.launchOrReuseRemo
                 : remoteLoginLaunchArgs(stateKey),
             stdin:
               isNodeScriptRunner(selected.runner) || selected.hostPlatform === "win32"
-                ? buildRemoteLaunchScript(selected.runner, selected)
+                ? buildRemoteLaunchScript(selected.runner, selected, false, false, true)
                 : buildReconnectLaunchScript(selected, expectedProbe),
             timeoutStage: "runtime-launch",
             timeoutMs: isNodeScriptRunner(selected.runner)

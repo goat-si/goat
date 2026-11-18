@@ -35,6 +35,7 @@ describe("real manager preparation sharing", () => {
         if ("type" in second) return yield* Effect.die("Expected a ready attachment");
         assert.isNull(second.target.port);
         assert.deepEqual(f.forwardedPorts, ["2222", "2223"]);
+        assert.isTrue(f.state.sharedHomeWait);
         assert.equal(f.count.forwards, 2);
       }).pipe(Effect.provide(f.layer), Effect.scoped);
     }).pipe(Effect.provide(Layer.mergeAll(NodeServices.layer, NodeCrypto.layer)), Effect.scoped),

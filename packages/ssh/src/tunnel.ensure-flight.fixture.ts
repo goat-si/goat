@@ -37,6 +37,7 @@ export const makeEnsureFlightFixture = Effect.gen(function* () {
     forwardAlive: true,
     pairingFails: false,
     launchFails: false,
+    sharedHomeWait: false,
     holdPairing: false,
     holdUpload: true,
     configuredPort: uploadTarget.port as number,
@@ -98,6 +99,7 @@ export const makeEnsureFlightFixture = Effect.gen(function* () {
       }
       if (isRemoteLaunch(command.args.map(String))) {
         count.launches++;
+        state.sharedHomeWait = script.includes("\ngoat_wait_shared_home_update\n");
         if (state.launchFails)
           return {
             ...makeSuccessfulProcess(""),
