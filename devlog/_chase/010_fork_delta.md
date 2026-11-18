@@ -243,6 +243,12 @@ G13 `goat-copy`, G14 `launch-watch`.
 - 경로: `packages/source-control-github/src/server/gitHubPullRequestEvents.ts`, `apps/server/src/orchestration-v2/PullRequestWatchReactor.ts`, `apps/server/src/orchestration-v2/goat/PullRequestEventFeeds.ts`, `apps/server/src/pullRequest/PullRequestService.ts`
 - 정책: upstream `4e1be34436`·`e0d6aadb88`을 GitHub 앱 로그인(`0c80751701`, 받지 않음) 대신 GOAT 호스트 자격 증명으로 받았다. upstream이 `gitHubPullRequestEvents.ts`나 `PullRequestWatchReactor.ts`를 바꾸면 그 변경을 받은 뒤 다음을 다시 얹는다. 일시 정지는 자격 증명 지문(토큰의 해시)으로 묶는다. 구독 응답 표: 401·403·그 밖의 4xx는 그 자격 증명 1시간, 404는 그 PR 1시간, 422는 10분, 429와 5xx는 기존 경로. 스트림이 429가 아닌 4xx로 답하면 피드를 멈추고 그 PR을 1시간 정지한다. 정지 확인과 구독 POST는 한 permit 세마포어 안에서 돈다. `events_url`이 `https://api.github.com` 밖이거나 본문이 풀리지 않으면 id로 DELETE하고 정지한다. SSE는 `Sse.makeParser`로 읽어 `retry:`를 무시하고 10 MiB 상한을 지킨다. DELETE는 5초, 스트림 헤더는 45초 기한이다. 피드 상한 64, 20초 settle(`Stream.debounce`), 상한 선택은 GOAT 모듈 `goat/PullRequestEventFeeds.ts`에 있고 reactor에는 import 한 줄과 `follow`가 남는다. 상한은 이벤트 피드가 있는 공급자의 PR만 센다(`PullRequestService.followsChanges`, upstream `changes` 옆의 GOAT 메서드). 이유와 시험은 lane 기록 `devlog/_chase/261114_lanes/next-N16.md`에 있다.
 
+### `pr-watch-wakes` PR watch 깨우기와 thread 읽기의 watch 상태
+
+- 커밋: #3700 (사이클 261114 next3 통합 PR, lane K1)
+- 경로: `apps/server/src/orchestration-v2/goat/PullRequestWatchWakes.ts`, `apps/server/src/orchestration-v2/goat/PullRequestDigest.ts`, `apps/server/src/orchestration-v2/goat/PullRequestWatchSync.ts`, `apps/server/src/orchestration-v2/PullRequestWatchReactor.ts`, `packages/contracts/src/pullRequestWatchSync.ts`, `packages/contracts/src/orchestratorMcpThreadPullRequest.ts`
+- 정책: upstream `0af2d21647`·`1de3c3c68c`의 알림 source stamp(`pullRequest`, `otherPullRequests`, `section`)는 받지 않는다. GOAT는 깨우기 message id에 PR, check head, 끝난 watch 표시를 담아 바뀌는 순간 큐의 깨우기를 버리거나 고쳐 쓰고, 한 pass에서 바뀐 여러 PR은 내부 명령의 `others[]`로 묶어 PR별 notice가 든 digest 하나로 보낸다. upstream이 stamp 경로를 바꾸면 그 변경은 받지 않고 같은 규칙을 message id 경로에 얹는다. thread 읽기 PR 항목의 `watching`·`watchStartedAt`(upstream `1df9c91230`)은 upstream과 달리 optional이다. CLI(`apps/server/src/cli/thread.ts`)와 다른 호스트를 읽는 fleet health(`apps/server/src/fleet/health/Health.ts`)가 더 오래된 서버의 결과를 엄격한 schema로 풀기 때문이다. upstream `072254ddd3`의 baseline에서 check와 승인 알림은 따로 끝난다(`apps/server/src/orchestration-v2/pullRequestWatch.ts`). 승인 조회에 실패한 fork PR은 한 번의 조회에서 head SHA와 실제 check를 함께 읽을 때까지 check baseline을 유지한다. 첫 실제 check가 이미 실패했다면 기록만 한다. 이후 같은 head에서 새로 실패한 check는 깨우고, 승인 알림은 조회가 될 때까지 baseline에 남는다.
+
 ### `remote-reports` 원격 보고와 원격 위임
 
 - 커밋: #5 #10 #6

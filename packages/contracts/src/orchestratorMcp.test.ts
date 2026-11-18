@@ -11,10 +11,10 @@ import {
   OrchestratorMcpThreadReadResult,
   OrchestratorMcpThreadSearchResult,
   OrchestratorMcpThreadStatus,
-  OrchestratorMcpThreadPullRequest,
   OrchestratorMcpThreadSearchMatch,
   OrchestratorMcpThreadTimelineItem,
 } from "./orchestratorMcp.ts";
+import { OrchestratorMcpThreadPullRequest } from "./orchestratorMcpThreadPullRequest.ts";
 import { OrchestratorMcpCloudTask } from "./orchestratorMcpCloudTask.ts";
 import { ThreadReplicaStatus } from "./threadReplica.ts";
 import { ThreadResult } from "./threadResult.ts";
@@ -853,6 +853,23 @@ it("decodes a running-task next written by another version", () => {
       next,
     }).next,
   ).toBe(next);
+});
+
+it("contract: a thread read's pull request entry from an older server, without watch state, still decodes", () => {
+  // The CLI and fleet health decode thread reads from servers that may predate the watch fields.
+  const decode = Schema.decodeUnknownSync(OrchestratorMcpThreadPullRequest);
+  const older = {
+    host: "github.com",
+    repository: "acme/web",
+    number: 1,
+    url: "https://github.com/acme/web/pull/1",
+    source: "agent",
+    state: "open",
+  };
+  expect(decode(older)).toEqual(older);
+  expect(
+    decode({ ...older, watching: true, watchStartedAt: "2026-08-04T11:30:00.000Z" }),
+  ).toMatchObject({ watching: true, watchStartedAt: "2026-08-04T11:30:00.000Z" });
 });
 
 it("decodes a running-task next in a newer host's wording", () => {

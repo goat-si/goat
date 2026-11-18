@@ -189,13 +189,10 @@ import {
   makePullRequestAutoWatch,
   newPullRequestWatch,
   syncedPullRequestWatch,
+  withoutChecksAnswer,
 } from "./goat/PullRequestAutoWatch.ts";
-import {
-  endingWakeText,
-  pullRequestWatchNote,
-  takeHeldPullRequestContext,
-} from "./goat/PullRequestDigest.ts";
-import { pullRequestWakeMuted, pullRequestWakesEnd } from "./goat/PullRequestWatchWakes.ts";
+import { takeHeldPullRequestContext } from "./goat/PullRequestDigest.ts";
+import { makePullRequestWatchSync } from "./goat/PullRequestWatchSync.ts";
 import {
   cancelledBeforeStart,
   continuationFailedBeforePrompt,
@@ -2583,85 +2580,21 @@ const makeOrchestrator = Effect.fn("orchestrationV2.Orchestrator.layer")(functio
     });
   });
 
-  // Recheck under the lock after reading the host. Record the watch first so wake events carry it.
-  const dispatchPullRequestWatchSync = Effect.fn("orchestrationV2.dispatch.pullRequestWatchSync")(
-    function* (
-      command: Extract<
-        OrchestrationV2ServerCommand,
-        { readonly type: "thread.pull-request-watch.sync" }
-      >,
-      events: Ref.Ref<Array<OrchestrationV2DomainEvent>>,
-      effects: Ref.Ref<Array<PendingOrchestrationEffectV2>>,
-    ) {
-      const thread = yield* projectionStore
-        .getThread(command.threadId)
-        .pipe(
-          Effect.mapError(
-            (cause) => new OrchestratorProjectionError({ threadId: command.threadId, cause }),
-          ),
-        );
-      const key = normalizeThreadPullRequestKey(command);
-      const link = threadPullRequestsOf(thread).find(
-        (candidate) =>
-          candidate.source !== "stack-dismissed" && threadPullRequestKeysEqual(candidate, key),
-      );
-      if (
-        link?.watch?.startedAt !== command.startedAt ||
-        (command.wake && pullRequestWakeMuted(thread, link, command.watch !== null))
-      ) {
-        return yield* new OrchestratorDispatchError({
-          commandId: command.commandId,
-          commandType: command.type,
-          cause:
-            "The watch ended, its thread settled, or the pull request merged while it was read.",
-        });
-      }
-      yield* dispatchThreadMutation(command, events, effects);
-      if (command.dropQueuedWakes === true) yield* dropQueuedPullRequestWakes(command, events);
-      else if (command.watch?.headSha != null && command.watch.headSha !== link.watch.headSha)
-        yield* dropQueuedPullRequestWakes(command, events, command.watch.headSha);
-      if (command.wake === undefined) {
-        if (command.note === undefined) return;
-        // Kept as context: the timeline shows it, and no turn starts.
-        const ordinal = yield* projectionStore
-          .getNextTurnItemOrdinal(command.threadId)
-          .pipe(
-            Effect.mapError(
-              (cause) => new OrchestratorProjectionError({ threadId: command.threadId, cause }),
-            ),
-          );
-        const note = pullRequestWatchNote(command, command.note, ordinal, yield* DateTime.now);
-        yield* emit(events, command)(note);
-        return;
-      }
-      yield* dispatchMessage(
-        {
-          type: "message.dispatch",
-          commandId: command.commandId,
-          threadId: command.threadId,
-          messageId: command.wake.messageId,
-          // An ending watch tells what it kept, as stored now rather than when the host was read.
-          text:
-            command.watch === null
-              ? endingWakeText(command.wake.text, link.watch, command.endedWatch)
-              : command.wake.text,
-          notification: command.wake.notification,
-          attachments: [],
-          dispatchMode: { type: "queue_after_active" },
-          createdBy: "agent",
-          creationSource: "server",
-        },
-        events,
-        effects,
-      );
-    },
-  );
-
-  const { dropQueuedPullRequestWakes } = makePullRequestWakeDrops({
+  const { dropQueuedPullRequestWakes, settleQueuedPullRequestWakes } = makePullRequestWakeDrops({
     projectionStore,
     emit,
     dispatchQueuedRunCancel: (command, events) => dispatchQueuedRunCancel(command, events),
     OrchestratorProjectionError,
+  });
+  const { dispatchPullRequestWatchSync } = makePullRequestWatchSync({
+    projectionStore,
+    emit,
+    dispatchThreadMutation: (command, events, effects) =>
+      dispatchThreadMutation(command, events, effects),
+    dispatchMessage: (command, events, effects) => dispatchMessage(command, events, effects),
+    dropQueuedPullRequestWakes,
+    OrchestratorProjectionError,
+    OrchestratorDispatchError,
   });
 
   const { shouldAutoWatchPullRequest } = makePullRequestAutoWatch({
@@ -2718,6 +2651,7 @@ const makeOrchestrator = Effect.fn("orchestrationV2.Orchestrator.layer")(functio
           | "thread.pull-request-link.sync"
           | "thread.pull-request.watch"
           | "thread.pull-request-watch.sync"
+          | "thread.pull-request-watch.checks-reopen"
           | "thread.pull-request.sync"
           | "thread.title.regeneration.complete"
           | "thread.title.regeneration.complete.internal"
@@ -3507,6 +3441,18 @@ const makeOrchestrator = Effect.fn("orchestrationV2.Orchestrator.layer")(functio
             updatedAt: command.type === "thread.pull-request-link.sync" ? thread.updatedAt : now,
           };
         }
+        case "thread.pull-request-watch.checks-reopen": {
+          const linked = threadPullRequestsOf(thread);
+          if (!linked.some((link) => link.watch?.checksPending !== undefined)) return thread;
+          return {
+            ...thread,
+            pullRequests: linked.map((link) =>
+              link.watch?.checksPending === undefined
+                ? link
+                : { ...link, watch: withoutChecksAnswer(link.watch) },
+            ),
+          };
+        }
         case "thread.pull-request.watch":
         case "thread.pull-request-watch.sync": {
           const key = normalizeThreadPullRequestKey(command);
@@ -3547,7 +3493,11 @@ const makeOrchestrator = Effect.fn("orchestrationV2.Orchestrator.layer")(functio
                   ? undefined
                   : // Whether the watch is automatic is the thread's call, not the reader's: a
                     // watch_pull_request that landed during the read keeps its watch explicit.
-                    syncedPullRequestWatch(existing.watch, command.watch)
+                    syncedPullRequestWatch(
+                      existing.watch,
+                      command.watch,
+                      command.checksPendingBefore,
+                    )
                 : existing.watch
               : !command.watching
                 ? undefined
@@ -3634,6 +3584,8 @@ const makeOrchestrator = Effect.fn("orchestrationV2.Orchestrator.layer")(functio
           };
       }
     })();
+    if (command.type === "thread.pull-request-watch.checks-reopen" && updatedThread === thread)
+      return;
     if (
       command.type === "thread.pull-request-link.sync" ||
       command.type === "thread.pull-request-watch.sync"
@@ -3689,6 +3641,7 @@ const makeOrchestrator = Effect.fn("orchestrationV2.Orchestrator.layer")(functio
         case "thread.pull-request.unlink":
         case "thread.pull-request.watch":
         case "thread.pull-request.sync":
+        case "thread.pull-request-watch.checks-reopen":
           return "thread.pull-request-synced" as const;
         case "thread.runtime-mode.set":
           return "thread.runtime-mode-updated" as const;
@@ -12367,10 +12320,13 @@ const makeOrchestrator = Effect.fn("orchestrationV2.Orchestrator.layer")(functio
       case "thread.pull-request.unlink":
       case "thread.pull-request-link.sync":
         yield* dispatchThreadMutation(command, events, effects);
-        if (pullRequestWakesEnd(command)) yield* dropQueuedPullRequestWakes(command, events);
+        yield* settleQueuedPullRequestWakes(command, events);
         break;
       case "thread.pull-request-watch.sync":
         yield* dispatchPullRequestWatchSync(command, events, effects);
+        break;
+      case "thread.pull-request-watch.checks-reopen":
+        yield* dispatchThreadMutation(command, events, effects);
         break;
       case "thread.guest-share.open":
       case "thread.guest-share.redeem":
@@ -12722,6 +12678,8 @@ const makeOrchestrator = Effect.fn("orchestrationV2.Orchestrator.layer")(functio
           command.type === "delegated_task.remote.progress" ||
           command.type === "delegated_task.remote.result" ||
           command.type === "thread.background-work.settle" ||
+          // A read can answer a watch again before a push's reopen lands; nothing is left to clear.
+          command.type === "thread.pull-request-watch.checks-reopen" ||
           command.type === "thread.interrupt.unresponsive" ||
           command.type === "thread.stop" ||
           command.type === "subagent.stop" ||
