@@ -4,7 +4,7 @@ import { cn } from "~/lib/utils";
  * Stands in for a page from a Pen route: the route's URL carries its capability, and a page's
  * scripts can read their own URL, so no page from one runs in a frame until it has a URL without.
  */
-export function PenFrameNotice(props: { readonly className?: string }) {
+export function PenFrameNotice(props: { readonly className?: string | undefined }) {
   return (
     <p
       className={cn(

@@ -24,6 +24,12 @@ describe("HtmlRenderDocument", () => {
         .toBeVisible();
       expect(document.querySelector("iframe")).toBeNull();
     }
+    // Chat renders an agent's HTML through HtmlRenderDocument itself, inline and full screen.
+    await using screen = await render(<HtmlRenderDocument src={src} title="Report" />);
+    await expect
+      .element(screen.getByText("Pages from a machine reached through Pen can't run here yet."))
+      .toBeVisible();
+    expect(document.querySelector("iframe")).toBeNull();
   });
 
   it("reports the page's first height and ignores messages from other windows", async () => {

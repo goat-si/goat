@@ -286,6 +286,8 @@ export function HtmlRenderDocument(props: {
     window.addEventListener("message", onMessage);
     return () => window.removeEventListener("message", onMessage);
   }, []);
+  // Chat renders through here directly: a page would run with the Pen capability in its URL.
+  if (isPenRouteUrl(props.src)) return <PenFrameNotice className={props.className} />;
   return (
     <>
       <iframe
