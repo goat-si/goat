@@ -109,3 +109,48 @@ describe("CJK emphasis in native Markdown", () => {
     );
   });
 });
+
+it("renders a user's typed indentation as spaces and tabs without changing list or code structure", async () => {
+  const source = [
+    "   Plan",
+    "   **Step**",
+    "\tDetail",
+    "",
+    "- item",
+    "    more",
+    "",
+    "    ```txt",
+    "    code",
+    "    ```",
+  ].join("\n");
+  const renderUser = async (preserveIndentation: boolean) =>
+    parseMarkdown(
+      markdownForNativeRendering(source, ENRICHED_INLINE_FILE_LINK_REGEX, preserveIndentation),
+      { ...MOBILE_FLAGS, hardSoftBreaks: true },
+    );
+  const user = await renderUser(true);
+  const assistant = await renderUser(false);
+  expect(inline(user)).toContain("   Plan");
+  expect(inline(user)).toContain("   <b>Step</b>");
+  expect(inline(user)).toContain("\tDetail");
+  expect(inline(user)).toContain("  more");
+  expect(user.children?.map((node) => node.type)).toEqual(
+    assistant.children?.map((node) => node.type),
+  );
+  expect(inline(user.children![1]!)).toContain("code");
+  expect(inline(assistant)).not.toContain("   Plan");
+});
+
+it.each([
+  ["https://example.com", "https://example.com"],
+  ["www.example.com", "http://www.example.com"],
+  ["person@example.com", "mailto:person@example.com"],
+])("keeps an indented native autolink to %s", async (label, href) => {
+  const markdown = markdownForNativeRendering(
+    `Plan\n ${label}.`,
+    ENRICHED_INLINE_FILE_LINK_REGEX,
+    true,
+  );
+  const document = await parseMarkdown(markdown, { ...MOBILE_FLAGS, hardSoftBreaks: true });
+  expect(inline(document)).toBe(`Plan <a ${href}>${label}</a>.`);
+});

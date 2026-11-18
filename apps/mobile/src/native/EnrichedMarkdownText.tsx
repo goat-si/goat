@@ -107,7 +107,11 @@ export function MobileEnrichedMarkdownText(props: SelectableMarkdownTextProps) {
     }
     if (!fileEmbedLabel) {
       return {
-        markdown: markdownForNativeRendering(props.markdown, ENRICHED_INLINE_FILE_LINK_REGEX),
+        markdown: markdownForNativeRendering(
+          props.markdown,
+          ENRICHED_INLINE_FILE_LINK_REGEX,
+          props.preserveLeadingWhitespace,
+        ),
         fileHrefs: new Set<string>(),
       };
     }
@@ -117,7 +121,12 @@ export function MobileEnrichedMarkdownText(props: SelectableMarkdownTextProps) {
     );
     const files = markdownWithFileEmbeds(content, fileEmbedLabel);
     return { ...files, markdown: markdownWithTableBreaks(files.markdown) };
-  }, [props.markdown, props.preserveMarkdownSource, fileEmbedLabel]);
+  }, [
+    props.markdown,
+    props.preserveMarkdownSource,
+    props.preserveLeadingWhitespace,
+    fileEmbedLabel,
+  ]);
   const [parsedLinkUrls, setParsedLinkUrls] = useState<ReadonlyArray<string>>([]);
   const onLinksChange = useCallback((links: MarkdownLinkOccurrence[]) => {
     const urls = [...new Set(links.map((link) => link.url))];
@@ -316,7 +325,7 @@ export function MobileEnrichedMarkdownText(props: SelectableMarkdownTextProps) {
             selectionHandleColor={props.textStyle.selectionHandleColor}
             md4cFlags={{
               latexMath: mathRenderingEnabled,
-              hardSoftBreaks: props.preserveSoftBreaks ?? false,
+              hardSoftBreaks: !!(props.preserveSoftBreaks || props.preserveLeadingWhitespace),
               admonitions: true,
               preserveWindowsPaths: true,
             }}
