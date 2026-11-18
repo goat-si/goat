@@ -21,8 +21,8 @@ const layer = Auth.layer.pipe(
   Layer.provideMerge(Sqlite.layerMemory),
   Layer.provide(Secrets.layer),
   Layer.provide(Environment.layerIdentity),
-  Layer.provide(Config.layerTest(process.cwd(), { prefix: "goat-pen-member-sessions-" })),
-  Layer.provide(Layer.mergeAll(NodeServices.layer, NodeCrypto.layer)),
+  Layer.provideMerge(Config.layerTest(process.cwd(), { prefix: "goat-pen-member-sessions-" })),
+  Layer.provideMerge(Layer.mergeAll(NodeServices.layer, NodeCrypto.layer)),
 );
 
 const id = (letter: string) => letter.repeat(26);
@@ -172,5 +172,37 @@ it.effect("an outage or a departure the newest view hides still ends what it end
         Effect.orElseSucceed(() => false),
       ),
     ).toBe(true);
+  }).pipe(Effect.provide(layer)),
+);
+
+it.effect("a departure a restart cut short is still revoked once this machine is back", () =>
+  Effect.gen(function* () {
+    const sessions = yield* SessionStore;
+    const follower = (view: PenMembershipView) =>
+      PenMemberSessions.make().pipe(
+        Effect.provideService(PenMembershipWatch, {
+          current: Effect.succeed(view),
+          changes: Stream.never,
+          marks: Effect.succeed({ closed: 0, left: 0 }),
+        }),
+      );
+    const before = yield* follower(ready("a"));
+    yield* before.apply(ready("a"));
+    const a = yield* sessions.issue({ penMemberNode: id("a") });
+    const works = sessions.verify(a.token, MAIN_LISTENER).pipe(
+      Effect.as(true),
+      Effect.orElseSucceed(() => false),
+    );
+    expect(yield* works).toBe(true);
+    // The server stopped before it saw the departure; this machine joined again as a new node.
+    const view = ready("a");
+    const rejoined: PenMembershipView =
+      view.kind === "ready" ? { ...view, snapshot: { ...view.snapshot, self: id("t") } } : view;
+    yield* follower(rejoined);
+    expect(yield* works).toBe(false);
+    const after = yield* follower(rejoined);
+    yield* after.apply(rejoined);
+    expect(yield* works).toBe(false);
+    expect(yield* sessions.listPenMemberSessions).toEqual([]);
   }).pipe(Effect.provide(layer)),
 );

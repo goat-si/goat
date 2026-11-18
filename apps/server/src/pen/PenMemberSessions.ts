@@ -5,6 +5,7 @@ import * as Schedule from "effect/Schedule";
 import * as Stream from "effect/Stream";
 
 import { SessionStore } from "../auth/SessionStore.ts";
+import * as PenDepartureRecord from "./PenDepartureRecord.ts";
 import { PenMembershipWatch, type PenMembershipMarks } from "./PenMembershipWatch.ts";
 
 const RETRY = { schedule: Schedule.exponential("1 second"), times: 6 };
@@ -22,12 +23,24 @@ const membersOf = (view: PenMembershipView) =>
 export const make = Effect.fn("PenMemberSessions.make")(function* () {
   const sessions = yield* SessionStore;
   const watch = yield* PenMembershipWatch;
+  const record = yield* PenDepartureRecord.make();
   // What this follower has acted on. Starts at zero, so a departure before it started counts.
   let handled: PenMembershipMarks = { closed: 0, left: 0 };
+  // From an earlier run: a departure it had not finished revoking, or the membership it settled.
+  let pending = record.initial !== undefined && "left" in record.initial;
+  let identity =
+    record.initial !== undefined && "mesh" in record.initial ? record.initial : undefined;
+  // A rejoin under the same node across a restart that lost the departure is not caught here.
+  const departed = (view: PenMembershipView, marks: PenMembershipMarks) =>
+    pending ||
+    marks.left !== handled.left ||
+    (view.kind === "ready" &&
+      identity !== undefined &&
+      (identity.mesh !== view.snapshot.mesh || identity.self !== view.snapshot.self));
   // A departure not yet revoked keeps the fence closed, whatever the newest view says.
   const admission = Effect.gen(function* () {
     const view = yield* watch.current;
-    if ((yield* watch.marks).left !== handled.left) return "closed" as const;
+    if (departed(view, yield* watch.marks)) return "closed" as const;
     return view.kind === "ready" ? membersOf(view) : ("closed" as const);
   });
   yield* sessions.followPenMembers(admission);
@@ -47,7 +60,12 @@ export const make = Effect.fn("PenMemberSessions.make")(function* () {
     yield* sessions.followPenMembers(admission);
     handled = { ...handled, closed: marks.closed };
     // Leaving the mesh revokes what members held, even if this machine has joined again since.
-    const left = marks.left !== handled.left;
+    const left = departed(view, marks);
+    // Written before revoking, so a restart before it finishes still revokes.
+    if (left && !pending) {
+      pending = true;
+      yield* record.write({ left: true });
+    }
     if (view.kind === "unavailable" && !left) return;
     const revoked = yield* revokeUnless(left ? new Set<string>() : membersOf(view)).pipe(
       // A list that could not be read arrives as a defect; it is retried like any failure.
@@ -61,8 +79,16 @@ export const make = Effect.fn("PenMemberSessions.make")(function* () {
       ),
     );
     // Kept until done, so a later view (or an interrupted cleanup) revokes them again.
-    if (!revoked || !left) return;
+    if (!revoked) return;
+    const settled =
+      view.kind === "ready" ? { mesh: view.snapshot.mesh, self: view.snapshot.self } : undefined;
+    if (left || settled?.mesh !== identity?.mesh || settled?.self !== identity?.self) {
+      identity = settled;
+      yield* record.write(settled);
+    }
+    if (!left) return;
     handled = { ...handled, left: marks.left };
+    pending = false;
     yield* sessions.followPenMembers(admission);
   });
   return { apply };
