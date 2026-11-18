@@ -74,7 +74,7 @@ const fixture = () => {
 };
 
 describe("guardPenManaged", () => {
-  it("keeps production SSH manager acquisition at one boundary", () => {
+  it("keeps production SSH manager acquisition behind the Pen guard", () => {
     const root = NodePath.join(import.meta.dirname, "..");
     const sources = (directory: string): string[] =>
       NodeFS.readdirSync(directory, { withFileTypes: true }).flatMap((entry) => {
@@ -86,11 +86,12 @@ describe("guardPenManaged", () => {
           ? [path]
           : [];
       });
-    const occurrences = sources(root).flatMap((path) => {
-      const text = NodeFS.readFileSync(path, "utf8");
-      return [...text.matchAll(/yield\*\s+SshTunnel\.SshEnvironmentManager\b/gu)].map(() => path);
-    });
-    expect(occurrences).toEqual([NodePath.join(root, "sshRemote", "SshRemoteDispatch.ts")]);
+    // Any value use of the service (an import, an alias, a yield) counts; building its layer and
+    // naming its type do not.
+    const occurrences = sources(root).filter((path) =>
+      /\bSshEnvironmentManager\b(?!\s*\[|\.layer\b)/u.test(NodeFS.readFileSync(path, "utf8")),
+    );
+    expect(occurrences).toEqual([NodePath.join(root, "sshRemote", "penManagedSsh.ts")]);
   });
   it.effect("uses existing runtimes and member issuance only after admission", () =>
     Effect.gen(function* () {
