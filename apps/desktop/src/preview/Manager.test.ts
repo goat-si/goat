@@ -1162,6 +1162,43 @@ describe("PreviewManager", () => {
     ),
   );
 
+  effectIt.effect.each([true, false])(
+    "writes final pixels after paint or its deadline: %s",
+    (confirmed) =>
+      withManager((manager) =>
+        Effect.gen(function* () {
+          const paint = Promise.withResolvers<void>();
+          const image = (pixels: string) => ({
+            toPNG: () => Buffer.from(pixels),
+            toJPEG: () => Buffer.from(pixels),
+            getSize: () => ({ width: 100, height: 80 }),
+          });
+          const wc = makeTestPreviewWebContents(
+            vi.fn().mockResolvedValueOnce(image("warmup")).mockResolvedValue(image("fresh")),
+          );
+          vi.mocked(wc.debugger.sendCommand).mockImplementation(async (method) => {
+            if (method === "Page.getFrameTree") return { frameTree: { frame: { id: "main" } } };
+            if (method === "Page.createIsolatedWorld") return { executionContextId: 7 };
+            if (method === "Runtime.evaluate") await paint.promise;
+            return { result: { value: true } };
+          });
+          fromId.mockReturnValue(wc);
+          yield* manager.createTab("tab_still");
+          yield* manager.registerWebview("tab_still", wc.id);
+          const pending = yield* manager.captureScreenshot("tab_still").pipe(Effect.forkChild);
+          yield* TestClock.adjust(0);
+          expect(wc.setBackgroundThrottling.mock.calls).toEqual([[false]]);
+          expect(writeFile).not.toHaveBeenCalled();
+          if (confirmed) paint.resolve();
+          else yield* TestClock.adjust(1_000);
+          const saved = yield* Fiber.join(pending);
+          paint.resolve();
+          expect(writeFile).toHaveBeenCalledWith(saved.path, Buffer.from("fresh"));
+          expect(wc.setBackgroundThrottling.mock.calls).toEqual([[false], [true]]);
+        }),
+      ),
+  );
+
   effectIt.effect("preserves both screenshots of the same site in the same millisecond", () =>
     withManager((manager) =>
       Effect.gen(function* () {
@@ -1175,6 +1212,8 @@ describe("PreviewManager", () => {
         const capturePage = vi
           .fn<() => Promise<ReturnType<typeof pngImage>>>()
           .mockResolvedValueOnce(pngImage(firstPng))
+          .mockResolvedValueOnce(pngImage(firstPng))
+          .mockResolvedValueOnce(pngImage(secondPng))
           .mockResolvedValueOnce(pngImage(secondPng));
         fromId.mockReturnValue(makeTestPreviewWebContents(capturePage));
         yield* manager.createTab("tab_1");

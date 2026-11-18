@@ -1,3 +1,4 @@
+import { confirmPreviewPaint } from "./confirmPreviewPaint.ts";
 import { isPreviewInputSignal } from "./previewInputSignal.ts";
 import {
   fitPictureInPictureContentSize,
@@ -188,7 +189,7 @@ interface ManagedListeners {
   readonly webContents: Electron.WebContents;
 }
 
-type FrameCaptureConsumer = "picture-in-picture" | "recording";
+type FrameCaptureConsumer = "picture-in-picture" | "recording" | symbol;
 
 interface FrameCaptureSession {
   readonly recordingInputOptions?: RecordingInputOptions;
@@ -2274,19 +2275,39 @@ const makeNativeOperations = Effect.fn("PreviewManager.makeOperations")(function
     tabId: string,
   ) {
     const wc = yield* requireWebContents(tabId);
-    const [createdAt, millis, image] = yield* Effect.all([
-      currentIso,
-      currentMillis,
-      capturePageWithRetry(
-        {
-          operation: "captureScreenshot.capturePage",
-          tabId,
-          webContentsId: wc.id,
-        },
-        tabId,
-        wc,
-      ),
-    ]);
+    const errorContext = {
+      operation: "captureScreenshot.capturePage",
+      tabId,
+      webContentsId: wc.id,
+    };
+    const capture = capturePageWithRetry(errorContext, tabId, wc);
+    const consumer = Symbol("still-image");
+    const image = yield* Effect.acquireUseRelease(
+      startFrameCapture(tabId, consumer),
+      () =>
+        Effect.gen(function* () {
+          const control = (yield* SynchronizedRef.get(controlSessionsRef)).get(wc.id);
+          const [confirmed] = yield* Effect.all(
+            [
+              confirmPreviewPaint(control?.debugger),
+              capture.pipe(
+                Effect.catch((cause) =>
+                  Effect.logWarning("Preview screenshot warmup failed", { tabId, cause }),
+                ),
+              ),
+            ],
+            { concurrency: 2 },
+          );
+          if (!confirmed)
+            yield* Effect.logWarning(
+              "Saving available preview pixels because fresh paint could not be confirmed",
+              { tabId },
+            );
+          return yield* capture;
+        }),
+      () => stopFrameCapture(tabId, consumer),
+    );
+    const [createdAt, millis] = yield* Effect.all([currentIso, currentMillis]);
     const uuid = yield* random.uuidV4();
     const id = `browser-screenshot-${artifactSiteSlug(wc.getURL())}-${millis.toString(36)}-${uuid.slice(0, 8)}`;
     const artifactPath = path.join(resolvedArtifactDirectory, `${id}.png`);
