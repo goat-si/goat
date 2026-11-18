@@ -219,6 +219,8 @@ it.effect.each([
   "error-before-launch",
   "resume",
   "resume-busy-before-link",
+  "resume-error-before-link",
+  "resume-detached-error-before-link",
   "outcome-capacity",
   "overflow",
   "large-output",
@@ -231,7 +233,11 @@ it.effect.each([
     const push = (event: unknown) => Effect.promise(() => nativeEvents.push(event));
     const root = "ses_root";
     const child = "ses_child";
-    const resumed = ending === "resume" || ending === "resume-busy-before-link";
+    const errorBeforeLink =
+      ending === "resume-error-before-link" || ending === "resume-detached-error-before-link";
+    const resumed = ending === "resume" || ending === "resume-busy-before-link" || errorBeforeLink;
+    const previousMode =
+      resumed && ending !== "resume-detached-error-before-link" ? "foreground" : "detached";
     const atCapacity =
       ending === "capacity" || ending === "capacity-started" || ending === "capacity-error";
     let promptId = "";
@@ -334,14 +340,16 @@ it.effect.each([
         yield* push(childError("UnknownError", `unbound-${index}`));
       }
     } else {
-      yield* push(taskPart("running", child, resumed ? "foreground" : "detached"));
+      yield* push(taskPart("running", child, previousMode));
       yield* push(created(child));
       if (ending === "error-before-launch") yield* push(childError("UnknownError"));
       if (resumed) {
         yield* push(status(child, "busy"));
         yield* push(status(child, "idle"));
-        yield* push(taskPart("completed", child, "foreground"));
-        if (ending === "resume-busy-before-link") yield* push(status(child, "busy"));
+        yield* push(taskPart("completed", child, previousMode));
+        if (ending === "resume-busy-before-link" || errorBeforeLink)
+          yield* push(status(child, "busy"));
+        if (errorBeforeLink) yield* push(childError("UnknownError"));
         yield* push(taskPart("running", child, "resume"));
         if (ending === "resume") yield* push(status(child, "busy"));
       }
@@ -401,7 +409,7 @@ it.effect.each([
               "running",
               "completed",
               "running",
-              "running",
+              errorBeforeLink ? "failed" : "running",
               ...(ending === "resume-busy-before-link" ? ["failed"] : []),
             ]
           : ["idle"],

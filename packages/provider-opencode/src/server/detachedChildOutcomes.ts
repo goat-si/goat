@@ -30,13 +30,13 @@ export function makeDetachedChildOutcomes(
       busy: boolean,
     ): OpenCodeChildExecution {
       const resumed = previous !== undefined || resumesSession;
-      const observedStart = busy && previous?.startedAfterTerminal === true;
-      const outcome = resumed ? undefined : outcomes.get(sessionId);
-      if (previous !== undefined) delete previous.startedAfterTerminal;
+      const pendingResume = previous?.pendingResume;
+      const outcome = resumed ? pendingResume?.outcome : outcomes.get(sessionId);
+      if (previous !== undefined) delete previous.pendingResume;
       outcomes.delete(sessionId);
       return {
         resumed,
-        awaitingStart: resumed ? !observedStart : !busy,
+        awaitingStart: resumed ? pendingResume === undefined : !busy,
         outcome,
       };
     },
@@ -46,7 +46,7 @@ export function makeDetachedChildOutcomes(
     isUnstarted: (sessionId: string) => unstarted.has(sessionId),
     clearUnstarted: (sessionId: string) => unstarted.delete(sessionId),
     start(execution: OpenCodeChildExecution | undefined) {
-      if (execution?.outcome !== undefined) execution.startedAfterTerminal = true;
+      if (execution?.outcome !== undefined) execution.pendingResume ??= {};
       else if (execution !== undefined) execution.awaitingStart = false;
     },
     observe(
@@ -55,6 +55,11 @@ export function makeDetachedChildOutcomes(
       execution?: OpenCodeChildExecution,
       finalized = false,
     ) {
+      if (execution?.pendingResume !== undefined) {
+        execution.pendingResume.outcome ??=
+          !finalized && isStopping(sessionId) ? "interrupted" : status;
+        return;
+      }
       if (execution?.awaitingStart && !finalized && (status === "completed" || execution.resumed))
         return;
       const prior = execution === undefined ? outcomes.get(sessionId) : execution.outcome;

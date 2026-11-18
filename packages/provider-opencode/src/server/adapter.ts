@@ -1230,7 +1230,11 @@ export const makeOpenCodeAdapterV2 = Effect.fn("makeOpenCodeAdapterV2")(function
           finalized?: OpenCodeSubagentContext,
         ) {
           const context = finalized ?? subagentsByChildSessionId.get(sessionId);
-          if (context?.launchOutcome !== undefined) return;
+          if (
+            context?.launchOutcome !== undefined &&
+            context.childExecution?.pendingResume === undefined
+          )
+            return;
           const outcome = childOutcomes.observe(
             sessionId,
             status,
