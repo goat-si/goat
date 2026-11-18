@@ -1,3 +1,9 @@
+import * as Context from "effect/Context";
+import { suggestionForgetGeneration } from "./store/SaveSuggestions.ts";
+import * as Deferred from "effect/Deferred";
+import * as Fiber from "effect/Fiber";
+import * as Sync from "./MemorySyncService.ts";
+import * as Member from "./MemorySyncService.testkit.ts";
 import { decodeLegacyPushResult, decodeLegacyUpsert } from "./testkit/FrozenMemoryV1.ts";
 import { makeMemorySaveSuggestions } from "./MemorySaveSuggestions.ts";
 import { scanReplicaMemory } from "./testkit/ScanReplicaMemory.ts";
@@ -493,6 +499,118 @@ describe("memory hub floor", () => {
           });
         }).pipe(Effect.provide(Layer.fresh(core)));
       }).pipe(checkUsage, Effect.provide(live), enabled),
+  );
+
+  it.effect("a local forget after push discovery removes an unsent incomplete acceptance", () =>
+    Effect.gen(function* () {
+      yield* seed;
+      const hub = yield* Hub.MemoryHubService;
+      const sql = yield* SqlClient.SqlClient;
+      const member = principal(Member.local);
+      yield* sql`UPDATE memory_hub_members SET environment=${Member.local} WHERE environment=${otherEnv}`;
+      yield* hub.pull(advertise, principal());
+      const source = newMemory(91);
+      yield* hub.push({ ...pushInput(source), features }, principal());
+      yield* (yield* Compactor.MemoryCompactor).compact(principal());
+      const pushed: M.MemoryOperation[] = [];
+      const client = Member.peer({
+        join: (_connection, input) => hub.join({ ...input, features }, member).pipe(Effect.orDie),
+        pull: (_connection, input) => hub.pull({ ...input, features }, member).pipe(Effect.orDie),
+        push: (_connection, input) => {
+          pushed.push(...input.operations);
+          return hub.push({ ...input, features }, member).pipe(Effect.orDie);
+        },
+      });
+      const found = yield* Deferred.make<void>();
+      const resume = yield* Deferred.make<void>();
+      const draft = newMemory(92);
+      const wrapStore = (store: Store.MemoryStore["Service"]) => ({
+        ...store,
+        readEligibleOutbox: (...args: Parameters<typeof store.readEligibleOutbox>) =>
+          store
+            .readEligibleOutbox(...args)
+            .pipe(
+              Effect.tap((rows) =>
+                rows.some((row) => row.work.memoryId === draft.memoryId)
+                  ? Deferred.succeed(found, undefined).pipe(Effect.andThen(Deferred.await(resume)))
+                  : Effect.void,
+              ),
+            ),
+      });
+      const memberContext = yield* Layer.build(
+        Layer.fresh(
+          Member.fixture(client, undefined, undefined, undefined, undefined, undefined, wrapStore),
+        ),
+      );
+      yield* Effect.gen(function* () {
+        const store = Context.get(memberContext, Store.MemoryStore);
+        const service = Context.get(memberContext, Service.MemoryService);
+        const memberSql = Context.get(memberContext, SqlClient.SqlClient);
+        const sync = Context.get(memberContext, Sync.MemorySyncService);
+        yield* sync.syncOnce;
+        assert.include(yield* sync.readLocalReadiness(), { bootstrap: "ready" });
+        assert.isUndefined((yield* store.loadAggregate(space, draft.memoryId)).identity);
+        const suggestions = makeMemorySaveSuggestions({
+          sql: memberSql,
+          store,
+          requireSharing: () => Effect.void,
+          stableUuid: Service.memoryStableUuid,
+        });
+        yield* suggestions.onRefusedSave(
+          {
+            input: {
+              memorySpaceId: space,
+              memoryId: draft.memoryId,
+              operationId: draft.operationId,
+              expectedHeads: [],
+              scope: draft.revision.scope,
+              assertionKind: "inference",
+              baseBoundary: null,
+              payload: draft.payload,
+            },
+            thread: { environmentId: Member.local, threadId: M.ThreadId.make("synthetic-origin") },
+            reason: "thread_lineage_incomplete",
+            knownRevisions: [],
+            lineageComplete: false,
+            forgetGeneration: yield* suggestionForgetGeneration(space).pipe(
+              Effect.provideService(SqlClient.SqlClient, memberSql),
+            ),
+          },
+          Effect.void,
+        );
+        assert.lengthOf(yield* suggestions.listMetadata({ memorySpaceId: space }, Effect.void), 1);
+        assert.deepStrictEqual(
+          yield* service.acceptSuggestion(
+            { memorySpaceId: space, suggestionId: draft.memoryId },
+            Effect.void,
+          ),
+          { status: "pending" },
+        );
+        const inFlight = yield* Effect.forkScoped(sync.syncOnce);
+        yield* Deferred.await(found);
+        yield* service.forget(
+          {
+            memorySpaceId: space,
+            memoryId: source.memoryId,
+            operationId: M.MemoryOperationId.make(id(19000)),
+            expectedHeads: [source.revision.revisionId],
+          },
+          Effect.void,
+        );
+        yield* Deferred.succeed(resume, undefined);
+        yield* Fiber.join(inFlight);
+        assert.isFalse(pushed.some((op) => op.memoryId === draft.memoryId));
+        assert.deepStrictEqual(
+          yield* memberSql`SELECT 1 FROM memory_payloads WHERE space=${space} AND memory_id=${draft.memoryId}`,
+          [],
+        );
+        yield* sync.syncOnce;
+        assert.isTrue(pushed.some((op) => op.kind === "forget" && op.memoryId === source.memoryId));
+        yield* sync.shutdown;
+      });
+      const store = yield* Store.MemoryStore;
+      assert.isUndefined((yield* store.loadAggregate(space, newMemory(92).memoryId)).item);
+    }).pipe(checkUsage, Effect.provide(live), enabled),
   );
 
   it.effect("replicates unverified provenance in the tail and checkpoint", () =>
