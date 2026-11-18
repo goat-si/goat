@@ -6,22 +6,26 @@ import {
 import type { ChatImageAttachment } from "../../types";
 import {
   COMPOSER_CONTEXT_CLIPBOARD_MIME,
-  encodeComposerContextClipboardHtml,
   encodeComposerContextFragment,
 } from "@goat/shared/composerContextClipboard";
 
 import { readMediaPng } from "../media/mediaContent";
+import { fingerprintSnapshotPng, snapshotClipboardHtml } from "../snapshotClipboardFingerprint";
 
 export async function copySnapshot(src: string, text: string, fragment: string): Promise<void> {
   if (!navigator.clipboard?.write || typeof ClipboardItem === "undefined") {
     throw new Error("Snapshot copying requires a secure browser connection.");
   }
+  const png = readMediaPng(src);
   const formats = {
-    "image/png": readMediaPng(src),
+    "image/png": png,
     "text/plain": new Blob([text], { type: "text/plain" }),
-    "text/html": new Blob([encodeComposerContextClipboardHtml(text, fragment)], {
-      type: "text/html",
-    }),
+    "text/html": png.then(
+      async (image) =>
+        new Blob([snapshotClipboardHtml(text, fragment, await fingerprintSnapshotPng(image))], {
+          type: "text/html",
+        }),
+    ),
   };
   // Start writing within the click gesture, before the image fetch or decode completes.
   try {

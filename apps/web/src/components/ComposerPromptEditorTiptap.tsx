@@ -133,7 +133,12 @@ import type { AssistantCitationSourceAnchor } from "~/lib/assistantTextSelection
 import { ComposerCodeBlockNodeView } from "./chat/ComposerCodeBlockNodeView";
 import { resolveAssistantCitationCommentDismissal } from "./chat/assistantCitationCommentDismissal";
 import { composerCodeBlockHighlight } from "./composerCodeBlockHighlight";
-import { importPastedComposerText, readEditorPasteText } from "./composerInlineTokenPaste";
+import {
+  importPastedComposerText,
+  readPastedPlainText,
+  readSnapshotPngPaste,
+} from "./composerInlineTokenPaste";
+import { fingerprintSnapshotPng } from "./snapshotClipboardFingerprint";
 import { didComposerSelectionChangeVisibly } from "./composerSelection";
 import type { ComposerDraftContextRecords } from "./composerContextPresentation";
 
@@ -190,7 +195,10 @@ export interface ComposerPromptEditorProps {
   onCitationSubmitAndSend?: () => boolean;
   /** Saves unsaved citation text into replacedValue when a controlled rewrite replaces the document. */
   onCitationDraftSave?: (replacedValue: string, savedValue: string) => void;
-  onPaste: (event: React.ClipboardEvent<HTMLElement>, editorAcceptsSnapshot?: boolean) => void;
+  onPaste: (
+    event: React.ClipboardEvent<HTMLElement>,
+    importSnapshot?: (ownsDestination: () => boolean) => Promise<boolean>,
+  ) => void;
   editorRef: React.RefObject<ComposerPromptEditorHandle | null>;
 }
 
@@ -853,6 +861,98 @@ function ComposerPromptEditorTiptapInner(
     "aria-placeholder": placeholder,
   };
 
+  const pasteComposerText = (view: EditorView, clipboardData: Pick<DataTransfer, "getData">) => {
+    const pastedText = readPastedPlainText(clipboardData);
+    if (!pastedText) return false;
+    const importFragment = !literalText && readCallbacks().importContextFragment;
+    // Paste verbatim inside fences; markdown parsing would split blocks and create unsupported chips.
+    if (isInCodeBlock(view)) {
+      const { from, to } = view.state.selection;
+      view.dispatch(
+        markAsClipboardEdit(
+          view.state.tr.insertText(pastedText, from, to),
+          "paste",
+        ).scrollIntoView(),
+      );
+      return true;
+    }
+    // Shown Markdown source is parsed when the caret leaves, so paste one line into it as text.
+    const sourceType = view.state.schema.marks[MARKDOWN_SOURCE_MARK];
+    const { from: pasteFrom, to: pasteTo, $from: $pasteFrom } = view.state.selection;
+    if (
+      sourceType?.isInSet($pasteFrom.marks()) &&
+      !pastedText.includes("\n") &&
+      collectComposerPromptInlineTokens(`${pastedText}\n`).length === 0
+    ) {
+      view.dispatch(
+        markAsClipboardEdit(
+          view.state.tr.insertText(pastedText, pasteFrom, pasteTo),
+          "paste",
+        ).scrollIntoView(),
+      );
+      return true;
+    }
+    let text = importFragment
+      ? importPastedComposerText(clipboardData, importFragment)
+      : pastedText;
+    const tokens = literalText ? [] : collectComposerPromptInlineTokens(`${text}\n`);
+    const isChip = (token: (typeof tokens)[number] | undefined) =>
+      token?.type === "mention" || (token?.type === "skill" && skillLabelFor(token.value) !== null);
+    const lastToken = tokens.at(-1);
+    if (isChip(lastToken) && lastToken?.end === text.length) {
+      text += " ";
+    }
+    if (isChip(tokens[0]) && tokens[0]?.start === 0) {
+      const map = serializeEditorDoc(view.state.doc);
+      const offset = flatToMarkdown(map, pmToFlat(map, view.state.selection.from));
+      if (offset > 0 && !/\s/.test(map.value[offset - 1]!)) text = ` ${text}`;
+    }
+    const { $from } = view.state.selection;
+    const lineBefore = $from.parent.textBetween(0, $from.parentOffset, undefined, "\uFFFC");
+    const literalLength = literalText
+      ? 0
+      : pastedPathQueryLength(lineBefore, text, readCallbacks().isPathQueryActive?.());
+    const editorInstance = (view.dom as TiptapEditorHTMLElement).editor;
+    if (editorInstance) {
+      const $paste = view.state.selection.$from;
+      const nested = ["listItem", "taskItem", "blockquote"].some((name) =>
+        hasAncestor($paste, name),
+      );
+      insertMarkdownParagraphs(
+        text,
+        skillLabelFor,
+        { styling: richText, blocks: !nested, literalText, literalLength },
+        (content) => {
+          editorInstance
+            .chain()
+            .command(({ tr }) => {
+              markAsClipboardEdit(tr, "paste");
+              return true;
+            })
+            // Pasted chips and lines would split shown Markdown, so parse it first.
+            .command(collapseShownMarkdownSource)
+            .insertContent(content)
+            .command(({ tr }) => {
+              // Move after a pasted rule so the next keystroke cannot replace it; add a trailing line
+              // if needed.
+              const { selection } = tr;
+              if (!(selection instanceof NodeSelection) || !selection.node.isBlock) {
+                return true;
+              }
+              if (!tr.doc.resolve(selection.to).nodeAfter?.isTextblock) {
+                tr.insert(selection.to, tr.doc.type.schema.nodes.paragraph!.create());
+              }
+              tr.setSelection(TextSelection.create(tr.doc, selection.to + 1));
+              return true;
+            })
+            .run();
+        },
+      );
+      scrollTiptapCaretIntoView(editorInstance);
+    }
+    return true;
+  };
+
   const editor = useEditor(
     {
       extensions: richText ? RICH_TEXT_EXTENSIONS : PLAIN_TEXT_EXTENSIONS,
@@ -1141,100 +1241,10 @@ function ComposerPromptEditorTiptapInner(
           return true;
         },
         handlePaste: (view, event) => {
-          const clipboardData = event.clipboardData;
-          const importFragment = !literalText && readCallbacks().importContextFragment;
-          const codeBlock = isInCodeBlock(view);
-          const pastedText =
-            clipboardData && readEditorPasteText(clipboardData, !!importFragment && !codeBlock);
-          if (!clipboardData || !pastedText) return false;
-          event.preventDefault();
-          // Paste verbatim inside fences; markdown parsing would split blocks and create unsupported chips.
-          if (codeBlock) {
-            const { from, to } = view.state.selection;
-            view.dispatch(
-              markAsClipboardEdit(
-                view.state.tr.insertText(pastedText, from, to),
-                "paste",
-              ).scrollIntoView(),
-            );
-            return true;
-          }
-          // Shown Markdown source is parsed when the caret leaves, so paste one line into it as text.
-          const sourceType = view.state.schema.marks[MARKDOWN_SOURCE_MARK];
-          const { from: pasteFrom, to: pasteTo, $from: $pasteFrom } = view.state.selection;
-          if (
-            sourceType?.isInSet($pasteFrom.marks()) &&
-            !pastedText.includes("\n") &&
-            collectComposerPromptInlineTokens(`${pastedText}\n`).length === 0
-          ) {
-            view.dispatch(
-              markAsClipboardEdit(
-                view.state.tr.insertText(pastedText, pasteFrom, pasteTo),
-                "paste",
-              ).scrollIntoView(),
-            );
-            return true;
-          }
-          let text = importFragment
-            ? importPastedComposerText(clipboardData, importFragment)
-            : pastedText;
-          const tokens = literalText ? [] : collectComposerPromptInlineTokens(`${text}\n`);
-          const isChip = (token: (typeof tokens)[number] | undefined) =>
-            token?.type === "mention" ||
-            (token?.type === "skill" && skillLabelFor(token.value) !== null);
-          const lastToken = tokens.at(-1);
-          if (isChip(lastToken) && lastToken?.end === text.length) {
-            text += " ";
-          }
-          if (isChip(tokens[0]) && tokens[0]?.start === 0) {
-            const map = serializeEditorDoc(view.state.doc);
-            const offset = flatToMarkdown(map, pmToFlat(map, view.state.selection.from));
-            if (offset > 0 && !/\s/.test(map.value[offset - 1]!)) text = ` ${text}`;
-          }
-          const { $from } = view.state.selection;
-          const lineBefore = $from.parent.textBetween(0, $from.parentOffset, undefined, "\uFFFC");
-          const literalLength = literalText
-            ? 0
-            : pastedPathQueryLength(lineBefore, text, readCallbacks().isPathQueryActive?.());
-          const editorInstance = (view.dom as TiptapEditorHTMLElement).editor;
-          if (editorInstance) {
-            const $paste = view.state.selection.$from;
-            const nested = ["listItem", "taskItem", "blockquote"].some((name) =>
-              hasAncestor($paste, name),
-            );
-            insertMarkdownParagraphs(
-              text,
-              skillLabelFor,
-              { styling: richText, blocks: !nested, literalText, literalLength },
-              (content) => {
-                editorInstance
-                  .chain()
-                  .command(({ tr }) => {
-                    markAsClipboardEdit(tr, "paste");
-                    return true;
-                  })
-                  // Pasted chips and lines would split shown Markdown, so parse it first.
-                  .command(collapseShownMarkdownSource)
-                  .insertContent(content)
-                  .command(({ tr }) => {
-                    // Move after a pasted rule so the next keystroke cannot replace it; add a trailing line
-                    // if needed.
-                    const { selection } = tr;
-                    if (!(selection instanceof NodeSelection) || !selection.node.isBlock) {
-                      return true;
-                    }
-                    if (!tr.doc.resolve(selection.to).nodeAfter?.isTextblock) {
-                      tr.insert(selection.to, tr.doc.type.schema.nodes.paragraph!.create());
-                    }
-                    tr.setSelection(TextSelection.create(tr.doc, selection.to + 1));
-                    return true;
-                  })
-                  .run();
-              },
-            );
-            scrollTiptapCaretIntoView(editorInstance);
-          }
-          return true;
+          const clipboard = event.clipboardData;
+          return (
+            clipboard !== null && clipboard.files.length === 0 && pasteComposerText(view, clipboard)
+          );
         },
       },
       onUpdate: ({ editor: updated, transaction }) => {
@@ -1543,6 +1553,33 @@ function ComposerPromptEditorTiptapInner(
     [editor, focusAt, literalText, readSnapshot],
   );
 
+  const capturePaste = (event: React.ClipboardEvent<HTMLElement>) => {
+    const view = mountedEditorView(editor);
+    const snapshot =
+      !literalText && importContextFragment && view?.editable && !isInCodeBlock(view)
+        ? readSnapshotPngPaste(event.clipboardData)
+        : null;
+    if (!view || !snapshot) {
+      onPaste(event);
+      return;
+    }
+    const { doc, selection } = view.state;
+    onPaste(event, async (ownsDestination) => {
+      const fingerprint = await fingerprintSnapshotPng(snapshot.file);
+      if (
+        fingerprint !== snapshot.fingerprint ||
+        view.isDestroyed ||
+        !view.editable ||
+        view.state.doc !== doc ||
+        !view.state.selection.eq(selection) ||
+        !readCallbacks().importContextFragment ||
+        !ownsDestination()
+      )
+        return false;
+      return pasteComposerText(view, snapshot.clipboardData);
+    });
+  };
+
   const handleCopyCut = (event: React.ClipboardEvent, cut: boolean) => {
     const build = buildContextClipboardFragment;
     if (!editor || (cut && !editor.isEditable)) return;
@@ -1620,13 +1657,7 @@ function ComposerPromptEditorTiptapInner(
               }}
               onKeyUp={(event) => onPageScrollKeyUp?.(event.key)}
               onBlur={onPageScrollRelease}
-              onPasteCapture={(event) => {
-                const view = mountedEditorView(editor);
-                onPaste(
-                  event,
-                  !literalText && !!importContextFragment && view !== null && !isInCodeBlock(view),
-                );
-              }}
+              onPasteCapture={capturePaste}
               onCopyCapture={(event) => handleCopyCut(event, false)}
               onCutCapture={(event) => handleCopyCut(event, true)}
             />

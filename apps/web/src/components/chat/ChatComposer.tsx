@@ -6,11 +6,7 @@ import { DESKTOP_PASTE_AS_TEXT_EVENT } from "../../lib/desktopPasteAsText";
 import { runtimeModeConfig, runtimeModeOptions as runtimeModes } from "./runtimeModeConfig";
 import { usePrimaryEnvironmentId } from "../../state/environments";
 import { useRightPanelStore } from "~/rightPanelStore";
-import {
-  hasPastedSnapshot,
-  importPastedComposerText,
-  readPastedComposerContext,
-} from "../composerInlineTokenPaste";
+import { importPastedComposerText, readPastedComposerContext } from "../composerInlineTokenPaste";
 import {
   questionAttachmentDraftId,
   trackOpenQuestionAttachmentDraft,
@@ -157,6 +153,7 @@ import {
 import {
   type ComposerCitationCommentRequest,
   type ComposerPromptEditorHandle,
+  type ComposerPromptEditorProps,
   ComposerPromptEditor,
 } from "../ComposerPromptEditor";
 import {
@@ -2695,14 +2692,10 @@ export const ChatComposer = memo(function ChatComposer(props: ChatComposerProps)
     focus: focusComposer,
   });
 
-  const onComposerPaste = (
-    event: React.ClipboardEvent<HTMLElement>,
-    editorAcceptsSnapshot?: boolean,
-  ) => {
+  const onComposerPaste: ComposerPromptEditorProps["onPaste"] = (event, importSnapshot) => {
     const { files, folders } = splitTransferredFiles(event.clipboardData);
     const plainText = event.clipboardData.getData("text/plain");
     const bypassAutoAttachment = consumePasteAsTextShortcut(pasteAsTextShortcutUntilRef);
-    if (editorAcceptsSnapshot && hasPastedSnapshot(event.clipboardData)) return;
     if (
       folders.length > 0 ||
       (activeThreadId &&
@@ -2713,7 +2706,25 @@ export const ChatComposer = memo(function ChatComposer(props: ChatComposerProps)
       event.stopPropagation();
       if (folders.length > 0) addComposerFoldersStable(folders);
       if (files.length > 0) {
-        void addComposerAttachments(files, { skipImageInlineChip: bypassAutoAttachment });
+        const addFiles = () =>
+          addComposerAttachments(files, { skipImageInlineChip: bypassAutoAttachment });
+        if (importSnapshot && folders.length === 0) {
+          const ownsDestination = () => attachmentTargetKeyRef.current === attachmentTargetKey;
+          void importSnapshot(ownsDestination).then((imported) => {
+            if (imported) return;
+            if (ownsDestination()) {
+              void addFiles();
+            } else {
+              toastManager.add({
+                type: "error",
+                title: "Paste interrupted",
+                description: "The attachment draft changed during paste. Paste the image again.",
+              });
+            }
+          });
+        } else {
+          void addFiles();
+        }
       }
       return;
     }

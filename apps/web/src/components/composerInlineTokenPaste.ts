@@ -6,8 +6,9 @@ import {
   formatComposerContextReference,
   replaceComposerContextReferences,
 } from "@goat/shared/composerContextReferences";
+import { readSnapshotClipboardWrapper } from "./snapshotClipboardFingerprint";
 
-function readPastedPlainText(clipboardData: Pick<DataTransfer, "getData">): string {
+export function readPastedPlainText(clipboardData: Pick<DataTransfer, "getData">): string {
   return clipboardData.getData("text/plain").replace(/\r\n?/g, "\n");
 }
 
@@ -64,16 +65,25 @@ export function importPastedComposerText(
   return text;
 }
 
-export function hasPastedSnapshot(clipboardData: Pick<DataTransfer, "getData" | "files">): boolean {
-  if (clipboardData.files.length !== 1 || clipboardData.files[0]?.type !== "image/png")
-    return false;
+export function readSnapshotPngPaste(clipboard: Pick<DataTransfer, "getData" | "files">) {
+  const file = clipboard.files[0];
+  if (clipboard.files.length !== 1 || file?.type !== "image/png") return null;
+
+  const wrapper = readSnapshotClipboardWrapper(clipboard.getData("text/html"));
+  if (!wrapper) return null;
+  const text = clipboard.getData("text/plain");
+  const clipboardData = {
+    getData: (type: string) =>
+      type === "text/plain" ? text : type === "text/html" ? wrapper.html : "",
+  };
   const records = readPastedComposerContext(clipboardData)?.records;
   const record = records?.length === 1 ? records[0] : undefined;
-  return record?.kind === "image" && !("payload" in record) && record.source?.kind === "snap-shot";
-}
-
-export function readEditorPasteText(clipboardData: DataTransfer, acceptsSnapshot: boolean): string {
-  if (clipboardData.files.length > 0 && !(acceptsSnapshot && hasPastedSnapshot(clipboardData)))
-    return "";
-  return readPastedPlainText(clipboardData);
+  if (
+    record?.kind !== "image" ||
+    "payload" in record ||
+    record.source?.kind !== "snap-shot" ||
+    text !== formatComposerContextReference(record)
+  )
+    return null;
+  return { file, clipboardData, fingerprint: wrapper.fingerprint };
 }
