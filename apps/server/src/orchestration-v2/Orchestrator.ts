@@ -1,3 +1,4 @@
+import { makeNextTurnItemOrdinal } from "./TurnItemOrdinal.ts";
 import { threadCreateMessage } from "./threadCreateMessage.ts";
 import { contextHandoffTurnItem } from "./ContextHandoffTurnItem.ts";
 import { retainedUserItemFailures } from "./goat/RetainedQueuedInput.ts";
@@ -611,21 +612,10 @@ const makeOrchestrator = Effect.fn("orchestrationV2.Orchestrator.layer")(functio
   const projectionStore = yield* ProjectionStoreV2;
   const effectOutbox = yield* EffectOutbox.EffectOutboxV2;
   const botDirectory = yield* ChannelBotDirectory.ChannelBotDirectory;
-  const nextTurnItemOrdinal = (
-    projection: Pick<OrchestrationV2ThreadProjection, "thread"> &
-      Partial<Pick<OrchestrationV2ThreadProjection, "turnItems">>,
-  ) =>
-    projectionStore.getNextTurnItemOrdinal(projection.thread.id).pipe(
-      Effect.mapError(
-        (cause) => new OrchestratorProjectionError({ threadId: projection.thread.id, cause }),
-      ),
-      Effect.map((next) =>
-        (projection.turnItems ?? []).reduce(
-          (ordinal, item) => Math.max(ordinal, item.ordinal + 1),
-          next,
-        ),
-      ),
-    );
+  const nextTurnItemOrdinal = makeNextTurnItemOrdinal(
+    projectionStore.getNextTurnItemOrdinal,
+    (threadId, cause) => new OrchestratorProjectionError({ threadId, cause }),
+  );
 
   const fileSystem = yield* FileSystem.FileSystem;
   const path = yield* Path.Path;

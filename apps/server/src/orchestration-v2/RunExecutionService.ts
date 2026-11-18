@@ -1,3 +1,4 @@
+import { providerTurnOperation } from "./RunExecutionTurnOperation.ts";
 import { captureRunBaseline, type RunBaselineInput } from "./RunExecutionBaseline.ts";
 import { backgroundCapableTurnItemTypes } from "./InheritedBackgroundTurnItems.ts";
 export { selectInheritedBackgroundTurnItems } from "./InheritedBackgroundTurnItems.ts";
@@ -1910,42 +1911,7 @@ export const layer: Layer.Layer<
           return;
         }
 
-        const {
-          message: _savedPrompt,
-          cloudLaunchSource: _launchCheckout,
-          ...attachInput
-        } = turnInput;
-        const startTurn =
-          input.reattach === true
-            ? (input.session.resumeTurn?.({
-                ...attachInput,
-                cloudTask: input.providerThread.cloudTask!,
-              }) ??
-              Effect.fail(
-                new ProviderAdapter.ProviderAdapterTurnStartError({
-                  driver: input.session.driver,
-                  threadId: input.run.threadId,
-                  providerThreadId: input.providerThread.id,
-                  runId: input.run.id,
-                  cause:
-                    "This cloud provider cannot reattach observation. Open the saved task link.",
-                }),
-              ))
-            : compact
-              ? (input.session.compactThread?.(turnInput) ??
-                Effect.fail(
-                  new ProviderAdapter.ProviderAdapterTurnStartError({
-                    driver: input.session.driver,
-                    threadId: input.run.threadId,
-                    providerThreadId: input.providerThread.id,
-                    runId: input.run.id,
-                    cause: new ProviderAdapter.ProviderCompactionUnsupportedError({
-                      driver: input.session.driver,
-                      providerThreadId: input.providerThread.id,
-                    }),
-                  }),
-                ))
-              : input.session.startTurn(turnInput);
+        const startTurn = providerTurnOperation(input, turnInput, compact);
         yield* Effect.andThen(
           shouldStart,
           startTurn.pipe(
