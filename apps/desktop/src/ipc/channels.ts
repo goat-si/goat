@@ -42,6 +42,7 @@ export const GET_RELAY_TELEMETRY_ENABLED_CHANNEL = "desktop:get-relay-telemetry-
 export const GET_SYSTEM_LOCALE_CHANNEL = "desktop:get-system-locale";
 export const GET_PRIMARY_PASTE_ENABLED_CHANNEL = "desktop:get-primary-paste-enabled";
 export const GET_LOCAL_ENVIRONMENT_BOOTSTRAPS_CHANNEL = "desktop:get-local-environment-bootstraps";
+export const GET_HOST_ENVIRONMENT_ID_CHANNEL = "desktop:get-host-environment-id";
 export const GET_LOCAL_ENVIRONMENT_ENABLED_CHANNEL = "desktop:get-local-environment-enabled";
 export const SET_LOCAL_ENVIRONMENT_ENABLED_CHANNEL = "desktop:set-local-environment-enabled";
 export const GET_HEADLESS_SERVER_ATTACH_ENABLED_CHANNEL =
@@ -143,6 +144,9 @@ export const PREVIEW_RECORDING_FRAME_CHANNEL = "desktop:preview-recording-frame"
 export const PREVIEW_STATE_CHANGE_CHANNEL = "desktop:preview-state-change";
 export const PREVIEW_POINTER_EVENT_CHANNEL = "desktop:preview-pointer-event";
 export const PREVIEW_SERVER_TAB_CAPTURE_CHANNEL = "desktop:preview-server-tab-capture";
+export const PREVIEW_FIND_CHANNEL = "desktop:preview-find";
+export const PREVIEW_STOP_FIND_CHANNEL = "desktop:preview-stop-find";
+export const PREVIEW_FIND_RESULT_CHANNEL = "desktop:preview-find-result";
 export const PREVIEW_OPEN_LINK_CHANNEL = "desktop:preview-open-link";
 
 export const MAC_PERMISSION_HELPER_CHANNEL = "desktop:mac-permission-helper";

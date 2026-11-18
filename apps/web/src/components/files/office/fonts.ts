@@ -11,7 +11,7 @@ import {
 import { callDeadlineMs, waitOutsideDeadline } from "./worker-rpc";
 
 // Every face loads from the app's own files, so no font request leaves the machine. The engines draw only with the
-// faces they are handed, never the system's, so CJK text needs the `@betteroffice/fonts-cjk` faces to show at all.
+// faces they are handed, never the system's, so previews use the bundled last-resort face when an optional CJK asset is missing.
 
 /** The faces Word substitutes for a document's fonts: metric-compatible ones first, then Word's own fallbacks. */
 export function wordFonts(): BundledFontProvider {
@@ -51,7 +51,7 @@ export function sheetFace(family: string, bold: boolean, italic: boolean) {
  * caches, which every worker shares, serve the files to the next. A download pauses every pending call's deadline and
  * has its own: CJK faces of 4 to 12 MB must not fail a preview on a slow link, and a stalled one must not hang it.
  */
-export function loadFace(face: BundledFontFace) {
+export function loadFace(face: BundledFontFace, office: "word" | "powerpoint" = "word") {
   const bound =
     callDeadlineMs + Math.ceil((face.byteLength / slowestFontLinkBytesPerSecond) * 1000);
 
@@ -66,9 +66,20 @@ export function loadFace(face: BundledFontFace) {
           ),
         bound,
       );
-      loadBundledFontBytes(face)
-        .then(resolve, reject)
-        .finally(() => clearTimeout(timer));
+      const bytes = loadBundledFontBytes(face);
+      const available = face.script?.startsWith("cjk-")
+        ? bytes.catch(() =>
+            loadBundledFontBytes(
+              resolveLastResortFace(
+                face.family,
+                face.weight === 700,
+                face.style === "italic",
+                office,
+              ),
+            ),
+          )
+        : bytes;
+      available.then(resolve, reject).finally(() => clearTimeout(timer));
     }),
   );
 }

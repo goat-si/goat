@@ -61,6 +61,10 @@ it("refreshes on resume, connection changes and intervals without recommitting t
       for (const listener of fixture.listeners) listener();
     });
     expect(fixture.refresh).toHaveBeenCalledTimes(1);
+    expect(fixture.refresh).toHaveBeenCalledWith({
+      environmentId: "remote",
+      input: { omitProviders: true },
+    });
     await act(async () =>
       appAtomRegistry.set(
         presentations,

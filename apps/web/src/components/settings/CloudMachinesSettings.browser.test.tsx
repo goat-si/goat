@@ -139,6 +139,24 @@ function mountAndConnect() {
     yield* actEffect(report(progress));
   });
 }
+it.effect("registers the cloud alias without pinning the resolved SSH port", () =>
+  Effect.gen(function* () {
+    Object.defineProperty(window, "desktopBridge", {
+      configurable: true,
+      value: {
+        resolveSshHost: async (alias: string) => ({
+          alias,
+          hostname: "example.invalid",
+          username: "ubuntu",
+          port: 2222,
+        }),
+      },
+    });
+    yield* mountAndConnect();
+    expect(state.connect.mock.calls[0]?.[0].target.port).toBeNull();
+  }),
+);
+
 it.effect(
   "shows provision phases, clears terminal immediately, and drops neutral supersession without a toast",
   () =>

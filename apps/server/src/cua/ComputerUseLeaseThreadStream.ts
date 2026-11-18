@@ -78,11 +78,16 @@ export const threadLeaseUpdates = (input: {
         credential?.threadId === input.threadId ? credential : undefined,
       ).pipe(Effect.withSpan("ComputerUseLeaseThreadStream.authorized", PER_SIGNAL_READ));
       // Credential expiry publishes nothing, so a quiet stream wakes for it on its own.
-      const until = (at: number) =>
-        Clock.currentTimeMillis.pipe(Effect.flatMap((now) => Effect.sleep(Math.max(0, at - now))));
+      const until = Effect.fn("ComputerUseLeaseThreadStream.until")(function* (
+        wallAt: number,
+        monotonicAt: number,
+      ) {
+        const wallNow = yield* Clock.currentTimeMillis;
+        const monotonicNow = Number((yield* Clock.monotonicTimeNanos) / 1_000_000n);
+        yield* Effect.sleep(Math.max(0, Math.min(wallAt - wallNow, monotonicAt - monotonicNow)));
+      });
       for (;;) {
-        const credential = yield* authorized;
-        if (credential === undefined) {
+        if ((yield* authorized) === undefined) {
           yield* Queue.offer(queue, { state: "ended", reason: "unauthorized" });
           return yield* Queue.end(queue);
         }
@@ -105,7 +110,8 @@ export const threadLeaseUpdates = (input: {
                 })),
               );
         // controlState can suspend on grant reads. A revocation during that read must win.
-        if ((yield* authorized) === undefined) {
+        const credential = yield* authorized;
+        if (credential === undefined) {
           yield* Queue.offer(queue, { state: "ended", reason: "unauthorized" });
           return yield* Queue.end(queue);
         }
@@ -145,7 +151,10 @@ export const threadLeaseUpdates = (input: {
           previous = undefined;
           if (!waiting) yield* Queue.offer(queue, { state: "waiting" });
           waiting = true;
-          yield* Effect.raceFirst(Queue.take(wake), until(credential.recheckAt));
+          yield* Effect.raceFirst(
+            Queue.take(wake),
+            until(credential.recheckAt, credential.recheckAtMonotonicMs),
+          );
           continue;
         }
         previous = current.controlId;
@@ -196,7 +205,7 @@ export const threadLeaseUpdates = (input: {
           value._tag === "active" ? Math.min(deadline, value.wakeAt) : deadline,
           credential.recheckAt,
         );
-        yield* Effect.raceFirst(Queue.take(wake), until(wakeAt));
+        yield* Effect.raceFirst(Queue.take(wake), until(wakeAt, credential.recheckAtMonotonicMs));
       }
     }),
   );

@@ -6,6 +6,7 @@ export const ANNOTATION_THEME_CHANNEL = "preview:annotation-theme";
 export const ANNOTATION_SEND_ENABLED_CHANNEL = "preview:annotation-send-enabled";
 export const ANNOTATION_VOICE_EVENT_CHANNEL = "preview:annotation-voice-event";
 export const ANNOTATION_VOICE_STATE_CHANNEL = "preview:annotation-voice-state";
+export const PAGE_UNHANDLED_SHORTCUT_CHANNEL = "preview:page-unhandled-shortcut";
 export const HUMAN_INPUT_CHANNEL = "preview:human-input";
 // Sent to the hosting <webview> element (ipc-message). The web app mirrors this
 // literal in HostedBrowserWebview because it cannot import from the desktop app.

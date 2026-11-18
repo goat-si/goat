@@ -1,6 +1,13 @@
 import JSZip from "jszip";
 import { expect, it, vi } from "vite-plus/test";
-import type { DisplayPage, GlyphRunPrimitive } from "@betteroffice/docx/layout/render";
+import {
+  GlyphCache,
+  rasterizeDisplayPageToBackBuffer,
+  type DisplayPage,
+  type GlyphRunPrimitive,
+} from "@betteroffice/docx/layout/render";
+import { createYrsSession } from "@betteroffice/docx/yrs";
+import { wordFonts } from "./fonts";
 import { openWordDocument } from "./word-document";
 import { withWholeMissingGlyphs } from "./word-glyphs";
 
@@ -82,3 +89,105 @@ it("joins missing glyphs only across runs styled alike, with clusters into the j
   expect(joined?.glyphs.map((glyph) => glyph.cluster)).toEqual([0, 3]);
   expect(outlined).toMatchObject({ text: "ษ", textOutline: true });
 });
+
+it("paints readable Japanese when the missing CJK asset returns the app shell", async () => {
+  const text = "日本語";
+  const fallbackFamily = "MS Gothic";
+  // The canvas gets a three-glyph Noto Sans JP subset under the Word family name.
+  const fallbackUrl = new URL(
+    "../../../../test/fixtures/fonts/word-preview-japanese.woff",
+    import.meta.url,
+  );
+  const fallback = await new FontFace(fallbackFamily, `url("${fallbackUrl.href}")`).load();
+  document.fonts.add(fallback);
+  using _fallback = {
+    [Symbol.dispose]: () => document.fonts.delete(fallback),
+  };
+  const zip = await JSZip.loadAsync(await document_());
+  zip.file(
+    "word/document.xml",
+    `<w:document ${ns}><w:body><w:p><w:r><w:rPr><w:rFonts w:ascii="${fallbackFamily}" w:hAnsi="${fallbackFamily}" w:eastAsia="${fallbackFamily}"/><w:lang w:eastAsia="ja-JP"/><w:sz w:val="48"/><w:color w:val="B03A22"/></w:rPr><w:t>${text}</w:t></w:r></w:p><w:sectPr><w:pgSz w:w="12240" w:h="15840"/><w:pgMar w:top="1440" w:right="1440" w:bottom="1440" w:left="1440"/></w:sectPr></w:body></w:document>`,
+  );
+  const fetchAsset = globalThis.fetch;
+  const missing: string[] = [];
+  using _fetch = vi.spyOn(globalThis, "fetch").mockImplementation((input, init) => {
+    const url = String(input);
+    if (!/Noto(?:Sans|Serif).*\.otf$/u.test(url)) return fetchAsset(input, init);
+    missing.push(url);
+    // The packaged static route serves index.html for missing assets.
+    return Promise.resolve(
+      new Response('<!doctype html><html><title>GOAT</title><div id="root"></div></html>', {
+        status: 200,
+        headers: { "Content-Type": "text/html; charset=utf-8" },
+      }),
+    );
+  });
+  const opened = await openWordDocument(
+    await zip.generateAsync({ type: "uint8array" }),
+    document.fonts,
+  );
+  const drawText = OffscreenCanvasRenderingContext2D.prototype.fillText;
+  const paintedFonts: string[] = [];
+  using fillText = vi
+    .spyOn(OffscreenCanvasRenderingContext2D.prototype, "fillText")
+    .mockImplementation(function (this: OffscreenCanvasRenderingContext2D, ...args) {
+      paintedFonts.push(this.font);
+      drawText.apply(this, args);
+    });
+  const page = await opened.paint(0, 1, 1, new AbortController().signal);
+
+  expect(missing.some((url) => url.includes("NotoSansJP-Regular"))).toBe(true);
+  if (!page) throw new Error("Word preview did not produce a page");
+  try {
+    const { bitmap } = page;
+    const context = new OffscreenCanvas(bitmap.width, bitmap.height).getContext("2d")!;
+    context.drawImage(bitmap, 0, 0);
+    const pixels = context.getImageData(0, 0, bitmap.width, bitmap.height);
+    const actualStrokes = maxInkStrokes(pixels);
+    expect(actualStrokes).toBeGreaterThan(0);
+    expect(fillText.mock.calls.map(([painted]) => painted).join("")).toContain(text);
+    expect(paintedFonts.every((font) => font.includes(fallbackFamily))).toBe(true);
+
+    const layoutPage = opened.pages()[0];
+    if (!layoutPage) throw new Error("Expected the Japanese page's layout");
+    const missingControl = await rasterizeMissingGlyphs(layoutPage, bitmap.width, bitmap.height);
+    const controlStrokes = maxInkStrokes(missingControl);
+    expect(controlStrokes).toBeGreaterThan(0);
+    // Even hollow replacement boxes contribute at most two strokes per character.
+    expect(actualStrokes).toBeGreaterThan(Math.max(controlStrokes, [...text].length * 2));
+  } finally {
+    page.bitmap.close();
+  }
+});
+
+async function rasterizeMissingGlyphs(page: DisplayPage, width: number, height: number) {
+  const latinBytes = await wordFonts().resolve("Arial", false, false)?.();
+  if (!latinBytes) throw new Error("Expected a Latin-only face for the missing-glyph control");
+  const session = await createYrsSession();
+  try {
+    const font = session.registerFont(new Uint8Array(latinBytes));
+    // Draw the same layout using the Latin font's glyph zero, bypassing the canvas font fallback.
+    const glyphCache = new GlyphCache({ provider: () => session.outlineGlyphJson(font, 0) });
+    const control = new OffscreenCanvas(width, height);
+    await rasterizeDisplayPageToBackBuffer(control, page, { glyphCache }, 1, 1);
+    return control.getContext("2d")!.getImageData(0, 0, width, height);
+  } finally {
+    session.destroy();
+  }
+}
+
+function maxInkStrokes({ data, width, height }: ImageData) {
+  let max = 0;
+  for (let y = 0; y < height; y++) {
+    let strokes = 0;
+    let inInk = false;
+    for (let x = 0; x < width; x++) {
+      const i = (y * width + x) * 4;
+      const ink = data[i]! > data[i + 1]! + 60 && data[i + 3]! > 200;
+      if (ink && !inInk) strokes++;
+      inInk = ink;
+    }
+    max = Math.max(max, strokes);
+  }
+  return max;
+}

@@ -660,7 +660,7 @@ describe("Codex computer use attachment", () => {
               frame: {
                 id: 3,
                 method: "thread/fork",
-                params: { threadId: f.nativeThreadId, ...params },
+                params: { threadId: f.nativeThreadId, excludeTurns: true, ...params },
               },
             },
             f.answer(3, forked),
