@@ -1,3 +1,6 @@
+import { validateCheckpointClosureCapacity } from "./MemoryDependencies.ts";
+import { requireMemoryTailFit } from "./MemoryTailAdmission.ts";
+import { checkConflictDependencies } from "./MemoryConflictDependencies.ts";
 // @effect-diagnostics-next-line nodeBuiltinImport:off -- stable server-owned submission IDs.
 import * as NodeCrypto from "node:crypto";
 import * as M from "@goat/contracts";
@@ -150,7 +153,6 @@ const decodePull = Schema.decodeUnknownEffect(M.MemoryHubPullResult);
 const decodeSource = Schema.decodeUnknownEffect(M.MemorySourceReadOutcome);
 const decodeGenerated = Schema.decodeUnknownEffect(M.ResolveMemoryConflictExecutionResult);
 const decodeResolveInput = Schema.decodeUnknownEffect(M.ResolveMemoryConflictInput);
-const decodeLineagePayload = Schema.decodeUnknownEffect(M.MemoryPayload);
 const decodeSubmission = Schema.decodeUnknownEffect(M.MemoryHubApplyResolutionInput);
 const encodePush = Schema.encodeEffect(Schema.fromJsonString(M.MemoryHubPushInput));
 const HELD_CLAIM_DEFER_MS = 60_000;
@@ -555,7 +557,6 @@ const make = Effect.gen(function* () {
           }),
         ),
       );
-
       yield* ensureEpoch(r.settings.memoryHubVersion);
       if (
         renewed.memorySpaceId !== current.memorySpaceId ||
@@ -657,21 +658,11 @@ const make = Effect.gen(function* () {
         const dependencies = [
           ...new Set([...row.ticket.conflictHeadSet, ...inheritedDependencies]),
         ];
-        // Check the existing payload codec's dependency/byte bounds before generation.
-        const lineage = yield* decodeLineagePayload({
-          text: "lineage admission",
-          evidence: [],
-          derivedFromMemoryRevisions: dependencies,
-        }).pipe(Effect.mapError(() => new M.MemoryHubError({ code: "invalid_output" })));
-        const recheckDependencies = Service.validateSummaryDependencies(
-          row.ticket.memorySpaceId,
-          {
-            ...lineage,
-            derivedFromMemoryRevisions: inheritedDependencies.filter(
-              (id) => !row.ticket.conflictHeadSet.includes(id),
-            ),
-          },
-          { memoryId: row.ticket.memoryId, revisions: dependencies },
+        const recheckDependencies = checkConflictDependencies(
+          store,
+          row.ticket,
+          inheritedDependencies,
+          dependencies,
         ).pipe(Effect.provideService(SqlClient.SqlClient, sql));
         yield* recheckDependencies;
         const input = yield* decodeResolveInput({
@@ -696,6 +687,7 @@ const make = Effect.gen(function* () {
         yield* ensureEpoch(r.settings.memoryHubVersion);
         yield* eligibility(row.ticket);
         generationAttempted = true;
+        yield* recheckDependencies;
         const holdKey = yield* hold.keyFor(input.modelSelection);
         const generated = yield* Effect.scoped(
           Effect.gen(function* () {
@@ -809,6 +801,9 @@ const make = Effect.gen(function* () {
             resolutionPayload: { resolutionId, judgment: trusted.result.judgment },
           },
         }).pipe(Effect.mapError(() => new M.MemoryHubError({ code: "invalid_output" })));
+        if (submission.operation.kind !== "resolve")
+          return yield* new M.MemoryHubError({ code: "invalid_output" });
+        yield* requireMemoryTailFit(submission.operation);
         row = yield* store.transact(
           Effect.gen(function* () {
             yield* recheckDependencies;
@@ -1366,6 +1361,9 @@ const make = Effect.gen(function* () {
               expectedSnapshotToken: state.snapshotToken!,
               expectedCheckpointSequence: state.checkpointSequence,
             };
+            yield* validateCheckpointClosureCapacity(page).pipe(
+              Effect.provideService(SqlClient.SqlClient, sql),
+            );
             yield* store.installCheckpointPage({ ...stage, page });
             if (page.bootstrapComplete) {
               yield* store.completeCheckpoint({

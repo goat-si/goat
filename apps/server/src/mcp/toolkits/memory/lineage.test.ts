@@ -13,6 +13,7 @@ import * as Settings from "../../../serverSettings.ts";
 import { liveThreadShell } from "../../McpToolAccess.testkit.ts";
 import * as Service from "../../../memory/MemoryService.ts";
 import * as Store from "../../../memory/MemoryStore.ts";
+import { MemoryRefusedSaveHook } from "../../../memory/MemoryRemember.ts";
 import * as Fixture from "./handlers.testkit.ts";
 import {
   appOwnedTaskResultEvents,
@@ -189,7 +190,7 @@ it.effect.each(["fork", "import", "transfer", "overflow"] as const)(
         yield* store.appendThreadLineage(
           ref(),
           Fixture.space,
-          Array.from({ length: 101 }, (_, n) => M.MemoryRevisionId.make(Fixture.id(17000 + n))),
+          Array.from({ length: 1001 }, (_, n) => M.MemoryRevisionId.make(Fixture.id(17000 + n))),
         );
       else {
         const payload =
@@ -216,8 +217,7 @@ it.effect.each(["fork", "import", "transfer", "overflow"] as const)(
         expect(result.result.isError).toBe(true);
         expect(result.body).toMatchObject({
           code: "thread_lineage_incomplete",
-          guidance:
-            "This conversation has incomplete memory provenance and cannot save new memories. Start a new conversation to save this memory.",
+          guidance: M.MEMORY_LINEAGE_GUIDANCE,
         });
       }
       expect(yield* counts).toEqual(before);
@@ -246,7 +246,7 @@ it.effect("r5 writer transaction observes lineage changed while upsert waits", (
           yield* store.appendThreadLineage(
             ref(),
             Fixture.space,
-            Array.from({ length: 101 }, (_, n) => M.MemoryRevisionId.make(Fixture.id(18000 + n))),
+            Array.from({ length: 1001 }, (_, n) => M.MemoryRevisionId.make(Fixture.id(18000 + n))),
           );
         }),
       )
@@ -291,7 +291,7 @@ it.effect.each(["memory_read", "memory_list", "memory_search", "memory_history"]
         new Set([a.revision, b.revision]),
       );
       const sql = yield* SqlClient.SqlClient;
-      expect(yield* sql`SELECT 1 FROM memory_outbox WHERE space='_worker'`).toHaveLength(1);
+      expect(yield* sql`SELECT 1 FROM memory_thread_lineages`).toHaveLength(1);
     }).pipe(Effect.provide(Fixture.layer)),
 );
 
@@ -302,7 +302,7 @@ it.effect("r5 read recording fails closed and metadata-only reads leave no linea
     const store = yield* Store.MemoryStore;
     const service = yield* Service.MemoryService;
     const a = yield* seed(20000);
-    yield* sql`CREATE TRIGGER fail_lineage BEFORE INSERT ON memory_outbox WHEN NEW.space='_worker' BEGIN SELECT RAISE(ABORT,'synthetic failure'); END`;
+    yield* sql`CREATE TRIGGER fail_lineage BEFORE INSERT ON memory_thread_lineage_revisions BEGIN SELECT RAISE(ABORT,'synthetic failure'); END`;
     const failed = yield* Fixture.call(
       "memory_read",
       { memorySpaceId: Fixture.space, memoryId: a.input.memoryId },
@@ -327,13 +327,13 @@ it.effect("r5 read recording fails closed and metadata-only reads leave no linea
         caller(),
       )).result.isError,
     ).not.toBe(true);
-    expect(yield* sql`SELECT 1 FROM memory_outbox WHERE space='_worker'`).toHaveLength(0);
+    expect(yield* sql`SELECT 1 FROM memory_thread_lineages`).toHaveLength(0);
     expect((yield* store.readThreadLineage(ref(), Fixture.space)).revisions).toEqual([]);
   }).pipe(Effect.provide(Fixture.layer)),
 );
 
 it.effect(
-  "r5 101st read persists sticky overflow but returns body; unknown read preserves fence",
+  "r5 1001st read persists sticky overflow but returns body; unknown read preserves fence",
   () =>
     Effect.gen(function* () {
       yield* setup;
@@ -342,12 +342,12 @@ it.effect(
       yield* store.appendThreadLineage(
         ref(),
         Fixture.space,
-        Array.from({ length: 100 }, (_, n) => M.MemoryRevisionId.make(Fixture.id(22000 + n))),
+        Array.from({ length: 1000 }, (_, n) => M.MemoryRevisionId.make(Fixture.id(22000 + n))),
       );
       const input = { memorySpaceId: Fixture.space, memoryId: a.input.memoryId };
       expect((yield* Fixture.call("memory_read", input, caller())).result.isError).not.toBe(true);
       expect((yield* store.readThreadLineage(ref(), Fixture.space)).state).toBe("overflow");
-      expect((yield* store.readThreadLineage(ref(), Fixture.space)).revisions).toHaveLength(100);
+      expect((yield* store.readThreadLineage(ref(), Fixture.space)).revisions).toHaveLength(1000);
       expect((yield* Fixture.call("memory_upsert", Fixture.upsert(), caller())).body).toMatchObject(
         { code: "thread_lineage_incomplete" },
       );
@@ -457,11 +457,11 @@ const appendLineage = (
   });
 it.effect.each([
   {
-    name: "own and child lineage past 100 revisions",
+    name: "own and child lineage past 1000 revisions",
     state: "overflow",
     arrange: Effect.all([
-      appendLineage(ref(), Fixture.space, revisions(26000, 60)),
-      appendLineage(taskChild, Fixture.space, revisions(26100, 50)),
+      appendLineage(ref(), Fixture.space, revisions(26000, 600)),
+      appendLineage(taskChild, Fixture.space, revisions(27000, 500)),
       linkTask(ref().threadId, taskChild.threadId),
     ]),
   },
@@ -469,7 +469,7 @@ it.effect.each([
     name: "an overflowed child",
     state: "overflow",
     arrange: Effect.all([
-      appendLineage(taskChild, Fixture.space, revisions(26200, 101)),
+      appendLineage(taskChild, Fixture.space, revisions(26200, 1001)),
       linkTask(ref().threadId, taskChild.threadId),
     ]),
   },
@@ -500,5 +500,281 @@ it.effect.each([
     expect(saved.result.isError).toBe(true);
     expect(saved.body).toMatchObject({ code: "thread_lineage_incomplete" });
     expect(yield* counts).toEqual(before);
+  }).pipe(Effect.provide(Fixture.layer)),
+);
+
+const rememberSetup = Effect.gen(function* () {
+  yield* setup;
+  const sql = yield* SqlClient.SqlClient;
+  yield* sql`ALTER TABLE orchestration_events ADD COLUMN event_id TEXT`;
+  yield* sql`ALTER TABLE orchestration_events ADD COLUMN sequence INTEGER`;
+  yield* sql`ALTER TABLE orchestration_v2_projection_messages ADD COLUMN thread_id TEXT`;
+});
+const remember = (text: string) =>
+  Fixture.call("goat_memory_remember", { scope: "user", text }, caller());
+
+it.effect("remember offers a refused wide save to the suggestion hook", () => {
+  const offered: Parameters<MemoryRefusedSaveHook["Service"]["onRefusedSave"]>[0][] = [];
+  const hook = Layer.succeed(MemoryRefusedSaveHook, {
+    onRefusedSave: (candidate) =>
+      Effect.sync(() => {
+        offered.push(candidate);
+      }),
+  });
+  return Effect.gen(function* () {
+    yield* rememberSetup;
+    yield* appendLineage(ref(), Fixture.space, revisions(31000, 101));
+    expect((yield* remember("offer these words")).body).toMatchObject({
+      code: "hub_upgrade_required",
+    });
+    expect(offered).toMatchObject([
+      {
+        thread: ref(),
+        reason: "hub_upgrade_required",
+        input: { payload: { text: "offer these words" } },
+      },
+    ]);
+  }).pipe(Effect.provide(Fixture.layer.pipe(Layer.provide(hook))));
+});
+
+it.effect("remember with 101 sources on the old floor asks for a hub upgrade", () =>
+  Effect.gen(function* () {
+    yield* rememberSetup;
+    yield* appendLineage(ref(), Fixture.space, revisions(31000, 101));
+    const before = yield* counts;
+    const result = yield* remember("synthetic candidate");
+    expect(result.result.isError).toBe(true);
+    expect(result.body).toMatchObject({ code: "hub_upgrade_required" });
+    expect(yield* counts).toEqual(before);
+  }).pipe(Effect.provide(Fixture.layer)),
+);
+
+it.effect.each([101, 1000])(
+  "remember on the new floor preserves %s sources through edits and forget",
+  (size) =>
+    Effect.gen(function* () {
+      yield* rememberSetup;
+      const sql = yield* SqlClient.SqlClient;
+      const service = yield* Service.MemoryService;
+      const store = yield* Store.MemoryStore;
+      yield* sql`INSERT INTO memory_space_features VALUES (${Fixture.space},1000,0)`;
+      const sources = yield* Effect.forEach(
+        Array.from({ length: size }, (_, n) => 32000 + n),
+        (n) => seed(n),
+      );
+      yield* appendLineage(
+        ref(),
+        Fixture.space,
+        sources.map((source) => source.revision),
+      );
+      if (size === 1000) {
+        yield* rememberFromActiveRun("Write a wide synthetic memory down.", person);
+        yield* appendLineage(ref(), Fixture.space, revisions(35600, 1));
+        expect((yield* store.readThreadLineage(ref(), Fixture.space)).state).toBe("overflow");
+      }
+      const saved = yield* remember("a wide synthetic memory");
+      expect(saved.result.isError).not.toBe(true);
+      const row = (yield* sql<{ memory_id: string }>`
+      SELECT p.memory_id FROM memory_payloads p WHERE json_extract(p.body_json,'$.text')='a wide synthetic memory'`)[0]!;
+      const memoryId = M.MemoryId.make(row.memory_id);
+      const before = yield* store.loadAggregate(Fixture.space, memoryId);
+      expect(before.revisions[0]?.payload?.derivedFromMemoryRevisions).toEqual(
+        sources.map((source) => source.revision),
+      );
+      const projected = yield* service.read(
+        { memorySpaceId: Fixture.space, memoryId, includeMarks: true },
+        Effect.void,
+      );
+      expect(projected.marks).toEqual(
+        size === 1000
+          ? { originThreadId: ref().threadId, provenance: "unverified" }
+          : { originThreadId: ref().threadId },
+      );
+      const list = yield* service.list(
+        {
+          memorySpaceId: Fixture.space,
+          limit: 5,
+          includeQuarantined: false,
+          includeMarks: true,
+          cursor: sources.at(-1)!.input.memoryId,
+        },
+        Effect.void,
+      );
+      expect(list.items).toEqual([projected]);
+      const history = yield* service.history(
+        {
+          memorySpaceId: Fixture.space,
+          memoryId,
+          includeMarks: true,
+          limit: 5,
+        },
+        Effect.void,
+      );
+      expect(history.revisions[0]?.payload?.derivedFromMemoryRevisions).toHaveLength(size);
+      const legacy = yield* service.read({ memorySpaceId: Fixture.space, memoryId }, Effect.void);
+      expect(legacy.status).toBe("active");
+      if (legacy.status !== "active") throw new Error("expected wide active memory");
+      expect(legacy.payload.derivedFromMemoryRevisions).toEqual([]);
+      yield* service.upsert(
+        {
+          ...Fixture.upsert(36098),
+          memoryId,
+          expectedHeads: [legacy.revision.revisionId],
+          payload: { ...legacy.payload, text: "a legacy Settings edit" },
+        },
+        Effect.void,
+      );
+      const edited = yield* store.loadAggregate(Fixture.space, memoryId);
+      expect(
+        edited.revisions.find((r) => r.revision.revisionId === edited.heads[0])?.payload
+          ?.derivedFromMemoryRevisions,
+      ).toEqual(sources.map((source) => source.revision));
+      const last = sources.at(-1)!;
+      yield* service.forget(
+        {
+          memorySpaceId: Fixture.space,
+          memoryId: last.input.memoryId,
+          operationId: M.MemoryOperationId.make(Fixture.id(36099)),
+          expectedHeads: [last.revision],
+        },
+        Effect.void,
+      );
+      const after = yield* store.loadAggregate(Fixture.space, memoryId);
+      expect(after.item?.status).toBe("blocked");
+      expect(after.item).toMatchObject({ failureCode: "source_invalidated" });
+      expect(after.revisions.every((entry) => entry.payload === null)).toBe(true);
+    }).pipe(Effect.provide(Fixture.layer)),
+);
+
+const rememberFromActiveRun = Effect.fn("test.rememberFromActiveRun")(function* (
+  text: string,
+  origin: {
+    createdBy: string;
+    creationSource: string;
+    ingress?: string | undefined;
+    scheduledTaskId?: string;
+    senderThreadId?: string;
+  },
+) {
+  const sql = yield* SqlClient.SqlClient;
+  const messageId = "synthetic-root";
+  const threadId = ref().threadId;
+  const timestamp = "2026-01-01T00:00:00.000Z";
+  yield* sql`UPDATE orchestration_v2_projection_runs SET payload_json=json_set(payload_json,'$.userMessageId',${messageId})`;
+  yield* sql`INSERT INTO orchestration_v2_projection_messages (message_id,role,thread_id,payload_json)
+    VALUES (${messageId},'user',${threadId},${JSON.stringify({
+      ...origin,
+      id: messageId,
+      threadId,
+      runId: "run:mcp-test",
+      nodeId: null,
+      role: "user",
+      text,
+      attachments: [],
+      streaming: false,
+      createdAt: timestamp,
+      updatedAt: timestamp,
+    })})`;
+});
+const person = { createdBy: "user", creationSource: "web", ingress: "person" } as const;
+const prepareRefusedLineage = Effect.gen(function* () {
+  yield* rememberSetup;
+  const sql = yield* SqlClient.SqlClient;
+  yield* sql`INSERT INTO memory_space_features VALUES (${Fixture.space},1000,0)`;
+  yield* sql`INSERT INTO memory_thread_lineages VALUES (${ref().environmentId},${ref().threadId},${Fixture.space},'overflow',0)`;
+});
+
+it.effect("an overflowed thread can save only the person's own words as unverified", () =>
+  Effect.gen(function* () {
+    yield* prepareRefusedLineage;
+    yield* rememberFromActiveRun("Don't remember cafe\u0301   on Saturday.", person);
+    const refused = yield* remember("coffee on Saturday");
+    expect(refused.body).toMatchObject({ code: "thread_lineage_incomplete" });
+    const saved = yield* remember("café on Saturday");
+    expect(saved.result.isError).not.toBe(true);
+    const sql = yield* SqlClient.SqlClient;
+    expect(yield* sql`SELECT provenance FROM memory_revision_marks`).toEqual([
+      { provenance: "unverified" },
+    ]);
+    expect(yield* sql`SELECT environment_id,thread_id FROM memory_origins`).toEqual([
+      { environment_id: ref().environmentId, thread_id: ref().threadId },
+    ]);
+    expect((yield* remember("café on Saturday")).body).toMatchObject({
+      code: "thread_lineage_incomplete",
+    });
+    yield* sql`UPDATE orchestration_v2_projection_runs SET status='completed'`;
+    expect((yield* remember("on Saturday")).body).toMatchObject({
+      code: "thread_lineage_incomplete",
+    });
+  }).pipe(Effect.provide(Fixture.layer)),
+);
+
+it.effect.each([
+  { ...person, ingress: undefined },
+  { ...person, createdBy: "agent" },
+  { ...person, creationSource: "server" },
+  { ...person, creationSource: "slack" },
+  { ...person, scheduledTaskId: "schedule" },
+  { ...person, senderThreadId: "thread:sender" },
+] as const)("refuses same-text recall from an untrusted root (%j)", (origin) =>
+  Effect.gen(function* () {
+    yield* prepareRefusedLineage;
+    yield* rememberFromActiveRun("coffee on Saturday", origin);
+    expect((yield* remember("on Saturday")).body).toMatchObject({
+      code: "thread_lineage_incomplete",
+    });
+    expect(yield* counts).toEqual([{ events: 0, payloads: 0, outbox: 0 }]);
+  }).pipe(Effect.provide(Fixture.layer)),
+);
+
+it.effect("explicitly reading an unverified body makes the reader lineage unknown", () =>
+  Effect.gen(function* () {
+    yield* setup;
+    const sql = yield* SqlClient.SqlClient;
+    const store = yield* Store.MemoryStore;
+    const source = yield* seed(34000);
+    yield* sql`INSERT INTO memory_revision_marks VALUES (${Fixture.space},${source.revision},'unverified')`;
+    const read = yield* Fixture.call(
+      "memory_read",
+      { memorySpaceId: Fixture.space, memoryId: source.input.memoryId },
+      caller(),
+    );
+    expect(read.result.isError).not.toBe(true);
+    expect(yield* store.readThreadLineage(ref(), Fixture.space)).toEqual({
+      state: "unknown",
+      revisions: [source.revision],
+    });
+  }).pipe(Effect.provide(Fixture.layer)),
+);
+
+it.effect("memory projections expose marks only when requested", () =>
+  Effect.gen(function* () {
+    yield* setup;
+    const sql = yield* SqlClient.SqlClient;
+    const service = yield* Service.MemoryService;
+    const source = yield* seed(35000);
+    yield* sql`INSERT INTO memory_revision_marks VALUES (${Fixture.space},${source.revision},'unverified')`;
+    yield* sql`INSERT INTO memory_origins VALUES (${Fixture.space},${source.input.memoryId},${ref().environmentId},${ref().threadId})`;
+    const input = { memorySpaceId: Fixture.space, memoryId: source.input.memoryId };
+    const legacy = yield* service.read(input, Effect.void);
+    expect(legacy).not.toHaveProperty("marks");
+    const projected = yield* service.read({ ...input, includeMarks: true }, Effect.void);
+    const marks = { provenance: "unverified", originThreadId: ref().threadId };
+    expect(projected).toEqual({ ...legacy, marks });
+    const list = yield* service.list(
+      {
+        memorySpaceId: input.memorySpaceId,
+        includeQuarantined: false,
+        limit: 10,
+        includeMarks: true,
+      },
+      Effect.void,
+    );
+    expect(list.items).toEqual([projected]);
+    const history = yield* service.history(
+      { ...input, limit: 10, includeMarks: true },
+      Effect.void,
+    );
+    expect(history.revisions[0]).toMatchObject({ marks });
   }).pipe(Effect.provide(Fixture.layer)),
 );

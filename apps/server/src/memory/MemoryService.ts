@@ -14,7 +14,12 @@ import * as RepositoryResolver from "../project/RepositoryIdentityResolver.ts";
 import * as SqlClient from "effect/sql/SqlClient";
 import * as Environment from "../environment/ServerEnvironment.ts";
 import * as Store from "./MemoryStore.ts";
-import { normalizeMemoryDependencies, validateSummaryDependencies } from "./MemoryDependencies.ts";
+import {
+  closureCap,
+  normalizeMemoryDependencies,
+  requireClosureCapacity,
+  validateSummaryDependencies,
+} from "./MemoryDependencies.ts";
 import { Transaction as StoreTransaction } from "./store/StoreModel.ts";
 import * as Settings from "../serverSettings.ts";
 import {
@@ -30,9 +35,17 @@ import type {
 import * as Quota from "./MemoryQuotaService.ts";
 import { checkedHistoryPage, checkedPage } from "./memoryDiagnostics.ts";
 import { decideMemoryOperation, memoryOperationDigest } from "./MemoryDecider.ts";
-import { redactMemoryText, scanMemoryValue } from "./MemorySecretScanner.ts";
+import { scanMemoryValue } from "./MemorySecretScanner.ts";
 import { makeCommitSummary, type SummaryCommit } from "./MemorySummaryCommit.ts";
-import { makeRemember, type MemoryRememberScopeUnavailable } from "./MemoryRemember.ts";
+import { makeUpsert } from "./MemoryUpsert.ts";
+import {
+  makeRemember,
+  MemoryRefusedSaveHook,
+  type MemoryRememberScopeUnavailable,
+} from "./MemoryRemember.ts";
+import { makeMemoryViewProjection } from "./MemoryViewProjection.ts";
+import { requireMemoryTailFit } from "./MemoryTailAdmission.ts";
+import { markUnverified } from "./MemoryRevisionMarks.ts";
 
 export class MemoryAccessError extends Schema.TaggedError<MemoryAccessError>()(
   "MemoryAccessError",
@@ -293,7 +306,6 @@ const encodeBindingUpdate = Schema.encodeSync(
   Schema.fromJsonString(M.MemoryProjectBindingUpdateInput),
 );
 const decodeChanges = Schema.decodeUnknownEffect(M.MemoryChangesInput);
-const decodeUpsert = Schema.decodeUnknownEffect(M.MemoryUpsertInput);
 const decodeForget = Schema.decodeUnknownEffect(M.MemoryForgetInput);
 const decodeRevert = Schema.decodeUnknownEffect(M.MemoryRevertResolutionInput);
 const decodeRead = Schema.decodeUnknownEffect(M.MemoryReadInput);
@@ -583,6 +595,15 @@ const make = Effect.fnUntraced(function* (
             )
           )
             return old;
+        }
+        if (op.kind !== "forget") {
+          yield* requireClosureCapacity(
+            op.payload.derivedFromMemoryRevisions.length,
+            yield* closureCap(op.memorySpaceId).pipe(
+              Effect.provideService(SqlClient.SqlClient, sql),
+            ),
+          );
+          if (admission.kind === "localIntent") yield* requireMemoryTailFit(op);
         }
         // The decider needs the DAG, head/restored payloads, and only the reverted resolution.
         const current = yield* store.loadAggregate(
@@ -949,6 +970,13 @@ const make = Effect.fnUntraced(function* (
             return yield* new Store.MemoryStoreConflict({ code: "revision_changed" });
           if (receipt.receipt.outcome === "rejected")
             return yield* new Store.MemoryStoreConflict({ code: "invalid_output" });
+          if (
+            alias &&
+            !(yield* store.areAutomaticallyUsable(batch.memorySpaceId, [alias.revision.revisionId]))
+          )
+            yield* markUnverified(batch.memorySpaceId, operation.revision.revisionId).pipe(
+              Effect.provideService(SqlClient.SqlClient, sql),
+            );
           // Parent-aware intent records the frozen operation, unlike the initial-only local draft materializer.
           yield* store.enqueueWork({
             id: `import:${environmentId}:${batch.operationId}:${selection.operationId}`,
@@ -1146,126 +1174,28 @@ const make = Effect.fnUntraced(function* (
       revisions.add(pair.revision.revisionId);
       for (const id of closed.derivedFromMemoryRevisions) revisions.add(id);
     }
-    yield* store.appendThreadLineage(thread, space, [...revisions]);
+    const bodies = pairs
+      .filter((pair) => pair.payload !== null)
+      .map((pair) => pair.revision.revisionId);
+    const unknown = !(yield* store.areAutomaticallyUsable(space, bodies));
+    if (!(yield* store.appendThreadLineage(thread, space, [...revisions], unknown)))
+      return yield* new Store.MemoryStoreConflict({ code: "space_mismatch" });
   });
-  const upsert = Effect.fn("MemoryService.upsert")(function* (
-    input: M.MemoryUpsertInput,
-    permit: Permit,
-    sourceThread?: M.ScopedThreadRef,
-  ) {
-    const value = yield* decode(decodeUpsert(input, strict));
-    return yield* store.transact(
-      Effect.gen(function* () {
-        yield* permit;
-        yield* requireSharing(value.memorySpaceId);
-        yield* requireCaller(sourceThread);
-        const requestDigest = hash(
-          yield* decode(
-            Schema.encodeEffect(
-              Schema.fromJsonString(
-                Schema.Struct({
-                  input: M.MemoryUpsertInput,
-                  caller: Schema.NullOr(M.ScopedThreadRef),
-                }),
-              ),
-            )({ input: value, caller: sourceThread ?? null }),
-          ),
-        );
-        const prior = yield* store.receipt(value.memorySpaceId, value.operationId);
-        if (prior) {
-          const rows = yield* query(sql<{
-            request_digest: string | null;
-            origin_environment_id: string;
-          }>`
-            SELECT json_extract(compact_json,'$.upsertRequestDigest') AS request_digest,
-              json_extract(compact_json,'$.originEnvironmentId') AS origin_environment_id
-            FROM memory_compact_receipts WHERE space=${value.memorySpaceId} AND operation_id=${value.operationId}
-            UNION ALL SELECT json_extract(metadata_json,'$.revision.provenance.upsertRequestDigest') AS request_digest,origin_environment_id
-            FROM memory_events WHERE memory_space_id=${value.memorySpaceId} AND operation_id=${value.operationId} LIMIT 1`);
-          if (
-            rows[0]?.origin_environment_id !== environmentId ||
-            rows[0]?.request_digest !== requestDigest
-          )
-            return yield* new Store.MemoryStoreConflict({ code: "operation_id_reused" });
-          // Receipt recovery precedes the new-write lineage fence and dependency reads.
-          // Never reconstruct the first operation with today's context or revive its body.
-          if (!("hubSequence" in prior.receipt)) return prior;
-          const acknowledged = prior.receipt;
-          const receipt: M.MemoryMutationReceipt = {
-            operationId: acknowledged.operationId,
-            memoryId: acknowledged.memoryId,
-            outcome: acknowledged.outcome,
-            revisionId:
-              acknowledged.outcome === "rejected"
-                ? null
-                : M.MemoryRevisionId.make(
-                    memoryStableUuid(`${value.memorySpaceId}:${value.operationId}:revision`),
-                  ),
-            pendingSync: false,
-            ...(acknowledged.failureCode ? { failureCode: acknowledged.failureCode } : {}),
-            ...(acknowledged.capacity ? { capacity: acknowledged.capacity } : {}),
-            ...(acknowledged.forgetExpansion
-              ? { forgetExpansion: acknowledged.forgetExpansion }
-              : {}),
-            ...(acknowledged.forgetRetryOf ? { forgetRetryOf: acknowledged.forgetRetryOf } : {}),
-          };
-          return { operationDigest: prior.operationDigest, receipt };
-        }
-        yield* requireScope(value.scope);
-        const lineage = yield* requireCompleteLineage(value.memorySpaceId, sourceThread);
-        const revisionId = M.MemoryRevisionId.make(
-          memoryStableUuid(`${value.memorySpaceId}:${value.operationId}:revision`),
-        );
-        let payload: M.MemoryPayload = yield* normalizeMemoryDependencies(
-          value.memorySpaceId,
-          redactMemoryText(value.payload),
-        ).pipe(Effect.provideService(SqlClient.SqlClient, sql));
-        if (lineage) {
-          payload = yield* decode(
-            decodeSummaryPayload(
-              {
-                ...payload,
-                derivedFromMemoryRevisions: [
-                  ...new Set([...payload.derivedFromMemoryRevisions, ...lineage.revisions]),
-                ],
-              },
-              strict,
-            ),
-          );
-          yield* validateSummaryDependencies(value.memorySpaceId, payload).pipe(
-            Effect.provideService(SqlClient.SqlClient, sql),
-          );
-        }
-        const op: M.MemoryOperation = {
-          protocolVersion: 1,
-          kind: "upsert",
-          memorySpaceId: value.memorySpaceId,
-          memoryId: value.memoryId,
-          operationId: value.operationId,
-          originEnvironmentId: environmentId,
-          expectedHeads: value.expectedHeads,
-
-          revision: {
-            memorySpaceId: value.memorySpaceId,
-            memoryId: value.memoryId,
-            operationId: value.operationId,
-            revisionId,
-            payloadRef: revisionId,
-            parents: value.expectedHeads,
-            scope: value.scope,
-            assertionKind: value.assertionKind,
-            provenance: { environmentId, upsertRequestDigest: requestDigest },
-            createdAtUtc: M.MemoryUtcTimestamp.make(
-              DateTime.formatIso(DateTime.makeUnsafe(yield* Clock.currentTimeMillis)),
-            ),
-          },
-          payload,
-        };
-        return yield* apply(op, Store.localIntent, permit);
-      }),
-    );
-  }, Quota.withStoreReclaim(environmentId));
+  const upsert = makeUpsert({
+    sql,
+    store,
+    environmentId,
+    requireSharing,
+    requireCaller,
+    requireScope,
+    apply,
+    stableUuid: memoryStableUuid,
+    hash,
+  });
+  const refusedSave = yield* Effect.serviceOption(MemoryRefusedSaveHook);
   const remember = makeRemember({
+    onRefusedSave:
+      refusedSave._tag === "Some" ? refusedSave.value.onRefusedSave : () => Effect.void,
     sql,
     environmentId,
     store,
@@ -1608,35 +1538,46 @@ const make = Effect.fnUntraced(function* (
         );
         if (!original?.payload || !resolution.inputRevisionIds.includes(value.restoredRevisionId))
           return yield* refuse("revision_changed");
+        yield* validateSummaryDependencies(value.memorySpaceId, original.payload).pipe(
+          Effect.provideService(SqlClient.SqlClient, sql),
+        );
         const revisionId = M.MemoryRevisionId.make(memoryStableUuid(`${value.operationId}:revert`));
-        yield* store.stageRevertIntent({
-          requestDigest: hash(encodeRevert(value)),
-          operation: {
-            protocolVersion: 1,
-            kind: "revert",
-            memorySpaceId: value.memorySpaceId,
-            memoryId: value.memoryId,
+        const operation = {
+          protocolVersion: 1 as const,
+          kind: "revert" as const,
+          memorySpaceId: value.memorySpaceId,
+          memoryId: value.memoryId,
+          operationId: value.operationId,
+          originEnvironmentId: environmentId,
+          expectedHeads: value.expectedHeads,
+          revertsResolutionId: value.resolutionId,
+          restoredRevisionId: value.restoredRevisionId,
+          payload: original.payload,
+          revision: {
+            ...original.revision,
+            revisionId,
             operationId: value.operationId,
-            originEnvironmentId: environmentId,
-            expectedHeads: value.expectedHeads,
-            revertsResolutionId: value.resolutionId,
-            restoredRevisionId: value.restoredRevisionId,
-            payload: original.payload,
-            revision: {
-              ...original.revision,
-              revisionId,
-              operationId: value.operationId,
-              parents: value.expectedHeads,
-              payloadRef: revisionId,
-              provenance: { environmentId },
-              createdAtUtc: M.MemoryUtcTimestamp.make(DateTime.formatIso(DateTime.makeUnsafe(now))),
-            },
+            parents: value.expectedHeads,
+            payloadRef: revisionId,
+            provenance: { environmentId },
+            createdAtUtc: M.MemoryUtcTimestamp.make(DateTime.formatIso(DateTime.makeUnsafe(now))),
           },
-        });
+        };
+        yield* requireMemoryTailFit(operation);
+        yield* store.stageRevertIntent({ requestDigest: hash(encodeRevert(value)), operation });
+        if (
+          !(yield* store.areAutomaticallyUsable(value.memorySpaceId, [
+            original.revision.revisionId,
+          ]))
+        )
+          yield* markUnverified(value.memorySpaceId, revisionId).pipe(
+            Effect.provideService(SqlClient.SqlClient, sql),
+          );
         return { ...result, status: "pending" as const };
       }),
     );
   });
+  const viewProjection = makeMemoryViewProjection(sql);
   const read = Effect.fn("MemoryService.read")(function* (
     input: M.MemoryReadInput,
     permit: Permit,
@@ -1655,7 +1596,7 @@ const make = Effect.fnUntraced(function* (
           sourceThread,
           current.item.status === "active" ? [current.item] : [],
         );
-        return current.item;
+        return yield* viewProjection.item(current.item, value.includeMarks);
       }),
     );
   });
@@ -1751,25 +1692,29 @@ const make = Effect.fnUntraced(function* (
             : items.length === input.limit
               ? (items.at(-1)?.memoryId ?? null)
               : null;
-        if (!("query" in input)) {
+        let visible = yield* Effect.forEach(items, (item) =>
+          viewProjection.item(item, input.includeMarks),
+        );
+        if (!("query" in input) || input.includeMarks) {
           let bytes = 2048;
-          const bounded: M.MemoryItem[] = [];
-          for (const item of items) {
+          for (const [index, item] of visible.entries()) {
             const encoded = yield* query(encodePageItem(item));
             const size = new TextEncoder().encode(encoded).length + 1;
             if (bytes + size > M.MEMORY_PAGE_MAX_UTF8_BYTES) {
-              if (!bounded.length)
-                return yield* new Store.MemoryStoreConflict({ code: "payload_too_large" });
-              nextCursor = bounded.at(-1)!.memoryId;
+              const last = visible[index - 1]?.memoryId;
+              if (!last) return yield* new Store.MemoryStoreConflict({ code: "payload_too_large" });
+              nextCursor = binding ? M.encodeMemorySearchCursor(binding, last) : last;
+              items = items.slice(0, index);
+              visible = visible.slice(0, index);
               break;
             }
             bytes += size;
-            bounded.push(item);
           }
-          items = bounded;
         }
-        if ("includeQuarantined" in input && !input.includeQuarantined)
-          items = items.filter((i) => i.status !== "quarantined");
+        if ("includeQuarantined" in input && !input.includeQuarantined) {
+          items = items.filter((item) => item.status !== "quarantined");
+          visible = visible.filter((item) => item.status !== "quarantined");
+        }
         const rows = yield* query(
           sql<{
             watermark: number;
@@ -1792,7 +1737,7 @@ const make = Effect.fnUntraced(function* (
         );
         return yield* checkedPage(
           {
-            items,
+            items: visible,
             projectionWatermark: state.watermark,
             nextCursor,
             ...("query" in input
@@ -1813,7 +1758,7 @@ const make = Effect.fnUntraced(function* (
                 }
               : {}),
           },
-          items,
+          visible,
         );
       }),
     );
@@ -1851,7 +1796,7 @@ const make = Effect.fnUntraced(function* (
             resolutionInputsFor: value.resolutionInputsFor,
           });
           yield* permit;
-          yield* consume(value.memorySpaceId, sourceThread, result.page.revisions);
+          yield* consume(value.memorySpaceId, sourceThread, result.consumed);
           return result.page;
         }
         const { page, consumed } = yield* store.historyPage(value, current.item, environmentId);
@@ -1913,6 +1858,29 @@ const make = Effect.fnUntraced(function* (
       return yield* new Store.MemoryStoreConflict({ code: "unsupported_operation" });
     yield* store.transact(store.enqueueWork(work));
   });
+  const automaticallyUsableCandidates = Effect.fn("MemoryService.automaticCandidates")(function* (
+    space: M.MemorySpaceId,
+    items: readonly M.MemoryItem[],
+  ) {
+    const selected: M.MemoryContextCandidate[] = [];
+    for (const item of items) {
+      if (
+        item.status !== "active" ||
+        item.localAvailability.exposure !== "visible" ||
+        !(yield* store.areAutomaticallyUsable(space, [item.revision.revisionId]))
+      )
+        continue;
+      selected.push({
+        memoryId: item.memoryId,
+        revisionId: item.revision.revisionId,
+        scope: item.scope,
+        provenance: item.revision.provenance,
+        assertionKind: item.revision.assertionKind,
+        text: item.payload.text,
+      });
+    }
+    return selected;
+  });
   const readContextCandidates = Effect.fn("MemoryService.readContextCandidates")(function* (
     input: M.MemoryListInput,
     permit: Permit,
@@ -1922,20 +1890,7 @@ const make = Effect.fnUntraced(function* (
       memorySpaceId: input.memorySpaceId,
       projectionWatermark: result.projectionWatermark,
       nextCursor: result.nextCursor,
-      items: result.items.flatMap((i) =>
-        i.status === "active" && i.localAvailability.exposure === "visible"
-          ? [
-              {
-                memoryId: i.memoryId,
-                revisionId: i.revision.revisionId,
-                scope: i.scope,
-                provenance: i.revision.provenance,
-                assertionKind: i.revision.assertionKind,
-                text: i.payload.text,
-              },
-            ]
-          : [],
-      ),
+      items: yield* automaticallyUsableCandidates(input.memorySpaceId, result.items),
     };
   });
   const readContextRevisions = Effect.fn("MemoryService.readContextRevisions")(function* (
@@ -1961,20 +1916,7 @@ const make = Effect.fnUntraced(function* (
           memorySpaceId: space,
           projectionWatermark: rows[0]?.watermark ?? 0,
           nextCursor: null,
-          items: items.flatMap((i) =>
-            i.status === "active" && i.localAvailability.exposure === "visible"
-              ? [
-                  {
-                    memoryId: i.memoryId,
-                    revisionId: i.revision.revisionId,
-                    scope: i.scope,
-                    provenance: i.revision.provenance,
-                    assertionKind: i.revision.assertionKind,
-                    text: i.payload.text,
-                  },
-                ]
-              : [],
-          ),
+          items: yield* automaticallyUsableCandidates(space, items),
         };
       }),
     );
@@ -2222,10 +2164,16 @@ const make = Effect.fnUntraced(function* (
         );
         if (inputs.length !== op.expectedHeads.length || inputs.some((pair) => !pair.payload))
           return yield* new Store.MemoryStoreConflict({ code: "missing_parent" });
+        if (!(yield* store.areAutomaticallyUsable(op.memorySpaceId, op.expectedHeads)))
+          return yield* new Store.MemoryStoreConflict({ code: "source_invalidated" });
         const inherited = inputs.flatMap((pair) => pair.payload!.derivedFromMemoryRevisions);
         const dependencies = [...new Set([...op.expectedHeads, ...inherited])];
         // Recompute from authoritative payloads inside the admission transaction. A
         // member may neither omit inherited lineage nor race an external forget.
+        yield* requireClosureCapacity(
+          dependencies.length,
+          yield* closureCap(op.memorySpaceId).pipe(Effect.provideService(SqlClient.SqlClient, sql)),
+        );
         const payload = yield* decode(
           decodeSummaryPayload({ ...op.payload, derivedFromMemoryRevisions: dependencies }, strict),
         );

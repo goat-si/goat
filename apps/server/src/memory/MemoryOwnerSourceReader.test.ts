@@ -17,7 +17,7 @@ import * as Environment from "../environment/ServerEnvironment.ts";
 import * as Repository from "../project/RepositoryIdentityResolver.ts";
 import * as Settings from "../serverSettings.ts";
 import migration from "../persistence/Migrations/098_Memory.ts";
-import hubMigration from "../persistence/Migrations/099_MemoryHubSync.ts";
+import hubMigration from "./testkit/MemoryHubTestMigration.ts";
 import lineageMigration from "../persistence/Migrations/102_MemoryImportLineage.ts";
 import checkpointMigration from "../persistence/Migrations/103_MemoryCheckpointAccounting.ts";
 import revisionSizeMigration from "../persistence/Migrations/115_MemoryRevisionCheckpointSize.ts";

@@ -14,3 +14,8 @@ export type OrchestrationV2CreationSource = typeof OrchestrationV2CreationSource
 
 export const OrchestrationV2ThreadHistoryOrigin = Schema.Literals(["native", "v1_import"]);
 export type OrchestrationV2ThreadHistoryOrigin = typeof OrchestrationV2ThreadHistoryOrigin.Type;
+
+export const OrchestrationV2CreationFields = {
+  createdBy: OrchestrationV2Actor,
+  creationSource: OrchestrationV2CreationSource,
+} as const;

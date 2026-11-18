@@ -8,7 +8,7 @@ import * as Layer from "effect/Layer";
 import * as SqlClient from "effect/sql/SqlClient";
 import * as TestClock from "effect/testing/TestClock";
 import migration from "../persistence/Migrations/098_Memory.ts";
-import hubMigration from "../persistence/Migrations/099_MemoryHubSync.ts";
+import hubMigration from "./testkit/MemoryHubTestMigration.ts";
 import lineageMigration from "../persistence/Migrations/102_MemoryImportLineage.ts";
 import checkpointMigration from "../persistence/Migrations/103_MemoryCheckpointAccounting.ts";
 import revisionSizeMigration from "../persistence/Migrations/115_MemoryRevisionCheckpointSize.ts";
@@ -357,9 +357,12 @@ describe("r4 authoritative lineage", () => {
           const overflow = yield* service
             .upsert(input(201, [hundred]), Effect.void)
             .pipe(Effect.flip);
-          assert.strictEqual(overflow._tag, "MemoryStoreConflict");
-          if (overflow._tag === "MemoryStoreConflict")
-            assert.strictEqual(overflow.code, "invalid_output");
+          assert.strictEqual(overflow._tag, "MemoryCapacityError");
+          if (overflow._tag === "MemoryCapacityError") {
+            assert.strictEqual(overflow.dimension, "dependencies");
+            assert.strictEqual(overflow.current, 101);
+            assert.strictEqual(overflow.limit, 100);
+          }
           assert.isUndefined(yield* store.receipt(space, input(201).operationId));
         }),
       ),

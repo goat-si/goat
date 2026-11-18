@@ -10,6 +10,7 @@ import * as SqlClient from "effect/sql/SqlClient";
 import packageJson from "../../package.json" with { type: "json" };
 import { DatabaseNewerThanBuildError } from "./Errors.ts";
 import { migrationEntries, runMigrations } from "./Migrations.ts";
+import { assertMemoryMigrationsCompatible } from "./reconcileGoatMigrationIds.ts";
 
 const isDatabaseNewerThanBuildError = Schema.is(DatabaseNewerThanBuildError);
 
@@ -52,6 +53,18 @@ describe("runMigrations database ahead of this build", () => {
           `This database was upgraded by a newer GOAT build; GOAT ${packageJson.version} cannot open it. Start that newer build, or update GOAT. Unknown migrations: FutureUpstreamMigration.`,
         );
       }).pipe(Effect.provide(NodeSqliteClient.layer({ filename: ":memory:" }))),
+  );
+
+  it.effect("the 157 build refuses a migrated 158 memory database", () =>
+    Effect.gen(function* () {
+      assert.deepStrictEqual((yield* runMigrations()).at(-1), [158, "MemoryThreadLineage"]);
+      const manifest157 = migrationEntries.filter(([id]) => id <= 157);
+      const failure = yield* Effect.flip(assertMemoryMigrationsCompatible(manifest157));
+      assert.strictEqual(failure._tag, "MigrationError");
+      if (failure._tag !== "MigrationError") return;
+      assert.strictEqual(failure.kind, "BadState");
+      assert.include(failure.message, "Unreleased memory DB is incompatible");
+    }).pipe(Effect.provide(NodeSqliteClient.layer({ filename: ":memory:" }))),
   );
 
   it.effect("keeps MigrationError when a failing ledger only contains known names", () =>

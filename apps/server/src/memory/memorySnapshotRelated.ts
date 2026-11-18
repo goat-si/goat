@@ -2,6 +2,7 @@ import * as M from "@goat/contracts";
 import * as Effect from "effect/Effect";
 import * as Schema from "effect/Schema";
 import * as SqlClient from "effect/sql/SqlClient";
+import { relatedExposureCap } from "./MemoryDependencies.ts";
 import { matchingTerms } from "./MemoryRecall.ts";
 import type * as Store from "./MemoryStore.ts";
 import { scopeKey } from "./store/StoreCodecs.ts";
@@ -68,6 +69,9 @@ export const selectRelated = Effect.fn("MemorySnapshot.selectRelated")(function*
       const keys = yield* relatedKeysFor(store, sql, space, own, project);
       if (!keys.size) return empty;
       const selection = yield* store.recallCandidates(space, [...keys.keys()], match);
+      const limit = yield* relatedExposureCap(space).pipe(
+        Effect.provideService(SqlClient.SqlClient, sql),
+      );
       const revisions = new Set(lineage.revisions);
       const result: M.MemoryContextCandidate[] = [];
       for (const candidate of selection.candidates) {
@@ -95,11 +99,15 @@ export const selectRelated = Effect.fn("MemorySnapshot.selectRelated")(function*
         const pair = aggregate.revisions.find(
           (entry) => entry.revision.revisionId === item.revision.revisionId,
         );
-        if (!pair?.payload || matchingTerms(pair.payload.text, terms).length / terms.length < 0.34)
+        if (
+          !pair?.payload ||
+          !(yield* store.areAutomaticallyUsable(space, [pair.revision.revisionId])) ||
+          matchingTerms(pair.payload.text, terms).length / terms.length < 0.34
+        )
           continue;
         const closure = [pair.revision.revisionId, ...pair.payload.derivedFromMemoryRevisions];
         const next = new Set([...revisions, ...closure]);
-        if (next.size > 80) continue;
+        if (next.size > limit) continue;
         result.push({
           memoryId: item.memoryId,
           revisionId: pair.revision.revisionId,

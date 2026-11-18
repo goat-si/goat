@@ -1,4 +1,5 @@
 import * as M from "@goat/contracts";
+import * as Context from "effect/Context";
 import * as Effect from "effect/Effect";
 import * as Schema from "effect/Schema";
 import type * as SqlClient from "effect/sql/SqlClient";
@@ -11,6 +12,21 @@ export class MemoryRememberScopeUnavailable extends Schema.TaggedError<MemoryRem
   "MemoryRememberScopeUnavailable",
   { scope: Schema.Literals(["project", "thread"]) },
 ) {}
+
+export class MemoryRefusedSaveHook extends Context.Service<
+  MemoryRefusedSaveHook,
+  {
+    readonly onRefusedSave: (candidate: {
+      readonly input: M.MemoryUpsertInput;
+      readonly thread: M.ScopedThreadRef;
+      readonly reason:
+        | "thread_lineage_incomplete"
+        | "hub_upgrade_required"
+        | "capacity_exceeded"
+        | "source_invalidated";
+    }) => Effect.Effect<void, MemoryServiceError>;
+  }
+>()("goat/memory/MemoryRemember/MemoryRefusedSaveHook") {}
 
 const encodeProjectKey = Schema.encodeSync(Schema.fromJsonString(M.MemoryProjectKey));
 const scopeKey = (scope: M.MemoryScope) =>
@@ -37,7 +53,9 @@ export const makeRemember = (deps: {
     input: M.MemoryUpsertInput,
     permit: Effect.Effect<void, MemoryAccessError>,
     sourceThread?: M.ScopedThreadRef,
+    remember?: { readonly allowUnverified: boolean },
   ) => Effect.Effect<Store.StoredReceipt, MemoryServiceError>;
+  readonly onRefusedSave: MemoryRefusedSaveHook["Service"]["onRefusedSave"];
   readonly stableUuid: (text: string) => string;
 }) =>
   Effect.fn("MemoryService.remember")(function* (
@@ -105,18 +123,44 @@ export const makeRemember = (deps: {
         `remember-op:${space}:${memoryId}:${current.heads.join(",")}:${scopeKey(scope)}:${watermark?.throughSequence ?? ""}:${input.text}`,
       ),
     );
-    return yield* deps.upsert(
-      {
-        memorySpaceId: space,
-        operationId,
-        memoryId,
-        expectedHeads: current.heads,
-        scope,
-        assertionKind: evidence.length > 0 ? "fact" : "inference",
-        payload: { text: input.text, evidence, derivedFromMemoryRevisions: [] },
-        baseBoundary: null,
-      },
-      permit,
-      sourceThread,
-    );
+    const candidate: M.MemoryUpsertInput = {
+      memorySpaceId: space,
+      operationId,
+      memoryId,
+      expectedHeads: current.heads,
+      scope,
+      assertionKind: evidence.length > 0 ? "fact" : "inference",
+      payload: { text: input.text, evidence, derivedFromMemoryRevisions: [] },
+      baseBoundary: null,
+    };
+    return yield* deps
+      .upsert(candidate, permit, sourceThread, {
+        allowUnverified: input.memoryId === undefined,
+      })
+      .pipe(
+        Effect.tapError((error) => {
+          if (!sourceThread) return Effect.void;
+          if (
+            error._tag === "MemoryCapacityError" &&
+            (error.dimension === "dependencies" || error.dimension === "payload_bytes")
+          )
+            return deps.onRefusedSave({
+              input: candidate,
+              thread: sourceThread,
+              reason: "capacity_exceeded",
+            });
+          if (
+            error._tag === "MemoryStoreConflict" &&
+            (error.code === "thread_lineage_incomplete" ||
+              error.code === "hub_upgrade_required" ||
+              error.code === "source_invalidated")
+          )
+            return deps.onRefusedSave({
+              input: candidate,
+              thread: sourceThread,
+              reason: error.code,
+            });
+          return Effect.void;
+        }),
+      );
   });

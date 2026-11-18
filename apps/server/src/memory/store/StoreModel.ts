@@ -135,19 +135,7 @@ export const ThreadHookMetadata = Schema.Struct({
   kind: Schema.Literal("threadHook"),
   watermark: Schema.Int.check(Schema.makeFilter((n) => n >= 0)),
 });
-// One body-free cumulative set per native context owner, never one receipt per run.
-export const ThreadLineageMetadata = Schema.Struct({
-  kind: Schema.Literal("threadLineage"),
-  sourceThread: M.ScopedThreadRef,
-  memorySpaceId: M.MemorySpaceId,
-  state: Schema.Literals(["tracked", "unknown", "overflow"]),
-  revisions: Schema.Array(M.MemoryRevisionId).check(Schema.isMaxLength(100)),
-});
-export type ThreadLineage = typeof ThreadLineageMetadata.Type;
-export const threadLineageId = (thread: M.ScopedThreadRef) =>
-  `memory:thread-lineage:${JSON.stringify([thread.environmentId, thread.threadId])}`;
 export const WorkMetadata = Schema.Union([
-  ThreadLineageMetadata,
   ThreadHookMetadata,
   Metadata,
   LocalIntentMetadata,

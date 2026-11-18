@@ -7,7 +7,7 @@ import * as Stream from "effect/Stream";
 import * as SqlClient from "effect/sql/SqlClient";
 import * as NodeSqliteClient from "@goat/shared/nodeSqliteClient";
 import migration from "../../persistence/Migrations/098_Memory.ts";
-import hubMigration from "../../persistence/Migrations/099_MemoryHubSync.ts";
+import hubMigration from "../testkit/MemoryHubTestMigration.ts";
 import searchMigration from "../../persistence/Migrations/100_MemorySearchCounters.ts";
 import checkpointMigration from "../../persistence/Migrations/103_MemoryCheckpointAccounting.ts";
 import revisionSizeMigration from "../../persistence/Migrations/115_MemoryRevisionCheckpointSize.ts";

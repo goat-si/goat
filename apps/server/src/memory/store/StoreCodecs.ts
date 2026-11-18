@@ -24,7 +24,6 @@ import {
   Receipt,
   StoredTicketRowSchema,
   ThreadHookMetadata,
-  ThreadLineageMetadata,
   WorkMetadata,
   digest,
   hashText,
@@ -61,7 +60,6 @@ export const resolutionReasonsCodec = codec(Schema.Array(M.MemoryDeferredReason)
 export const hubReceiptCodec = codec(M.MemoryHubReceipt);
 export const decodeFailureEnvironment = Schema.decodeUnknownEffect(M.EnvironmentId);
 export const threadHookCodec = codec(ThreadHookMetadata);
-export const threadLineageCodec = codec(ThreadLineageMetadata);
 export const deferredRowCodec = codec(DeferredRow);
 export const decodeLocalIntent = Schema.decodeUnknownEffect(LocalMemoryIntent);
 export const localMetadataCodec = codec(LocalIntentMetadata);

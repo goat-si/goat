@@ -1,6 +1,7 @@
 import { assert, it } from "@effect/vitest";
 import * as M from "@goat/contracts";
 import * as Clock from "effect/Clock";
+import * as DateTime from "effect/DateTime";
 import * as Effect from "effect/Effect";
 import * as Exit from "effect/Exit";
 import * as Layer from "effect/Layer";
@@ -8,7 +9,7 @@ import * as Schema from "effect/Schema";
 import * as SqlClient from "effect/sql/SqlClient";
 import * as NodeSqliteClient from "@goat/shared/nodeSqliteClient";
 import migration from "../persistence/Migrations/098_Memory.ts";
-import hubMigration from "../persistence/Migrations/099_MemoryHubSync.ts";
+import hubMigration from "./testkit/MemoryHubTestMigration.ts";
 import searchMigration from "../persistence/Migrations/100_MemorySearchCounters.ts";
 import lineageMigration from "../persistence/Migrations/102_MemoryImportLineage.ts";
 import checkpointMigration from "../persistence/Migrations/103_MemoryCheckpointAccounting.ts";
@@ -20,6 +21,7 @@ import adminMigration from "../persistence/Migrations/109_MemoryHubAdministered.
 import lifecycleMigration from "../persistence/Migrations/110_MemoryCheckpointLifecycle.ts";
 import revisionSizeMigration from "../persistence/Migrations/115_MemoryRevisionCheckpointSize.ts";
 import { CHECKPOINT_PULL_MAX_BYTES, FORGET_RECORDS_MAX_BYTES } from "./MemoryCheckpointBound.ts";
+import { requireMemoryTailFit } from "./MemoryTailAdmission.ts";
 import { encodeCheckpointRecord } from "./MemoryCheckpointInventory.ts";
 import { decideMemoryOperation, memoryOperationDigest } from "./MemoryDecider.ts";
 import { scanMemoryValue } from "./MemorySecretScanner.ts";
@@ -570,4 +572,291 @@ it.effect(
       const result = yield* hub.push(HubKit.pushInput(op), HubKit.principal());
       assert.strictEqual(result.receipts[0]?.outcome, "deleted");
     }).pipe(Effect.provide(HubKit.live)),
+);
+
+const encodePayload = Schema.encodeSync(Schema.fromJsonString(M.MemoryPayload));
+const encodePush = Schema.encodeSync(Schema.fromJsonString(M.MemoryHubPushInput));
+const decodeCheckpointPage = Schema.decodeUnknownSync(
+  Schema.fromJsonString(M.MemoryHubCheckpointPage),
+);
+
+it.effect("packs a maximal-body 1000-source save in a push, tail, and real checkpoint", () =>
+  Effect.gen(function* () {
+    const store = yield* Store.MemoryStore;
+    const sql = yield* SqlClient.SqlClient;
+    yield* join;
+    yield* sql`INSERT INTO memory_space_features VALUES (${space},1000,0)`;
+    const base = upsert({ memory: 9000, operation: 9001, text: "synthetic", messages: [] });
+    if (base.kind !== "upsert") throw new Error("expected fixture upsert");
+    const sourceWatermark = {
+      fromEventId: M.EventId.make("from-" + "f".repeat(507)),
+      toEventId: M.EventId.make("to-" + "t".repeat(509)),
+      throughSequence: Number.MAX_SAFE_INTEGER,
+    };
+    const payload = {
+      text: "z".repeat(M.MEMORY_BODY_MAX_UTF8_BYTES),
+      evidence: [
+        {
+          origin: "thread" as const,
+          sourceThread: thread,
+          watermark: sourceWatermark,
+          messageIds: [],
+        },
+      ],
+      derivedFromMemoryRevisions: Array.from({ length: 1000 }, (_, n) =>
+        M.MemoryRevisionId.make(id(10000 + n)),
+      ),
+    };
+    const operation = { ...base, payload };
+    const payloadBytes = utf8(encodePayload(payload));
+    const pushBytes = utf8(
+      encodePush({
+        protocolVersion: 1,
+        memorySpaceId: space,
+        environmentId: env,
+        operations: [operation],
+      }),
+    );
+    const tailBytes = yield* requireMemoryTailFit(operation);
+    assert.isAtMost(payloadBytes, M.MEMORY_PAYLOAD_MAX_UTF8_BYTES);
+    assert.isAtMost(pushBytes, 256 * 1024);
+    assert.isAtMost(tailBytes, M.MEMORY_TAIL_ADMISSION_BYTES);
+    const resolutionId = M.MemoryResolutionId.make(id(9100));
+    const heads = payload.derivedFromMemoryRevisions.slice(0, 2);
+    const appliedAtUtc = operation.revision.createdAtUtc;
+    const revertDeadlineUtc = M.MemoryUtcTimestamp.make(
+      DateTime.formatIso(DateTime.makeUnsafe(Date.parse(appliedAtUtc) + M.MEMORY_REVERT_WINDOW_MS)),
+    );
+    const variants: Exclude<M.MemoryOperation, { kind: "forget" }>[] = [
+      operation,
+      {
+        ...operation,
+        kind: "revert",
+        expectedHeads: heads.slice(0, 1),
+        revision: { ...operation.revision, parents: heads.slice(0, 1) },
+        revertsResolutionId: resolutionId,
+        restoredRevisionId: payload.derivedFromMemoryRevisions[2]!,
+      },
+      {
+        ...operation,
+        kind: "resolve",
+        expectedHeads: heads,
+        revision: { ...operation.revision, parents: heads },
+        conflictId: M.MemoryConflictId.make(id(9101)),
+        fencingToken: 1,
+        resolution: {
+          resolutionId,
+          memorySpaceId: space,
+          memoryId: operation.memoryId,
+          inputRevisionIds: heads,
+          inputPayloadRefs: heads,
+          judgmentRef: resolutionId,
+          requestedModelSelection: {
+            instanceId: M.ProviderInstanceId.make("codex"),
+            model: "fixture",
+          },
+          effectiveProvider: M.ProviderDriverKind.make("codex"),
+          effectiveModel: "fixture",
+          resolvingEnvironmentId: env,
+          fencingToken: 1,
+          resultRevisionId: operation.revision.revisionId,
+          appliedAtUtc,
+          revertDeadlineUtc,
+        },
+        resolutionPayload: { resolutionId, judgment: "synthetic judgment" },
+      },
+    ];
+    for (const variant of variants) {
+      const size = yield* requireMemoryTailFit(variant);
+      const atSize = (extra: number) => ({
+        ...variant,
+        payload: {
+          ...variant.payload,
+          evidence: [
+            {
+              ...payload.evidence[0]!,
+              watermark: {
+                ...sourceWatermark,
+                fromEventId: M.EventId.make(
+                  sourceWatermark.fromEventId +
+                    "e".repeat(M.MEMORY_TAIL_ADMISSION_BYTES - size + extra),
+                ),
+              },
+            },
+          ],
+        },
+      });
+      assert.strictEqual(
+        yield* requireMemoryTailFit(atSize(0)),
+        M.MEMORY_TAIL_ADMISSION_BYTES,
+        variant.kind,
+      );
+      const tooWide = yield* Effect.flip(requireMemoryTailFit(atSize(1)));
+      assert.strictEqual(tooWide.dimension, "payload_bytes", variant.kind);
+      assert.strictEqual(tooWide.current, M.MEMORY_TAIL_ADMISSION_BYTES + 1, variant.kind);
+    }
+    yield* admit(operation);
+    const tail = yield* store.transact(
+      store.readHubTailTx({
+        memorySpaceId: space,
+        afterSequence: 0,
+        highWatermark: null,
+        limit: 100,
+        maxBytes: M.MEMORY_PAGE_MAX_UTF8_BYTES,
+      }),
+    );
+    assert.lengthOf(tail.entries, 1);
+    yield* snapshot("wide-save");
+    const persisted = (yield* sql<{ body_bytes: number; dependency_bytes: number }>`
+      SELECT length(CAST(body_json AS BLOB)) AS body_bytes, length(CAST(dependencies_json AS BLOB)) AS dependency_bytes
+      FROM memory_payloads WHERE space=${space} AND memory_id=${operation.memoryId}`)[0]!;
+    const counters = yield* store.counters(space);
+    assert.strictEqual(
+      counters.find((r) => r.dimension === "usage_payload_bytes")?.value,
+      persisted.body_bytes,
+    );
+    assert.strictEqual(
+      counters.find((r) => r.dimension === "usage_dependency_bytes")?.value,
+      persisted.dependency_bytes,
+    );
+    const pages = yield* sql<{
+      metadata_json: string;
+    }>`SELECT metadata_json FROM memory_inbox_pending
+      WHERE space=${space} AND reason='hub_snapshot' ORDER BY page_ordinal`;
+    assert.lengthOf(pages, 1);
+    const serialized = pages[0]!.metadata_json;
+    const checkpoint = decodeCheckpointPage(serialized);
+    assert.deepStrictEqual(
+      checkpoint.revisions[0]?.payload?.derivedFromMemoryRevisions,
+      payload.derivedFromMemoryRevisions,
+    );
+    assert.isAtMost(utf8(serialized), CHECKPOINT_PULL_MAX_BYTES);
+    const time = M.MEMORY_LOG_RETENTION_MS;
+    const authority: Store.HubAuthority = {
+      principal: {
+        memorySpaceId: space,
+        environmentId: env,
+        credentialVersion: 1,
+        scopes: ["memory:sync"],
+      },
+      now: Effect.succeed(time),
+      reauthorize: Effect.void,
+    };
+    const handle = yield* store.transact(
+      store.prepareHubCheckpointTx({
+        authority,
+        checkpointId: "wide-save",
+        snapshotToken: "wide-save-token",
+        hubEnvironmentId: env,
+      }),
+    );
+    yield* store.transact(
+      store.publishCheckpointAndFloorTx({
+        memorySpaceId: space,
+        checkpointId: handle.checkpointId,
+        expectedFloor: 0,
+        nextFloor: handle.checkpointSequence,
+        now: time,
+      }),
+    );
+    const compacted = yield* store.transact(
+      store.compactEligibleHistoryTx({
+        memorySpaceId: space,
+        expectedFloor: handle.checkpointSequence,
+        now: time,
+        limit: 10,
+      }),
+    );
+    assert.isAbove(compacted.removedRows, 0);
+    const pinned = yield* store.transact(
+      store.readHubCheckpointPageTx({
+        authority,
+        snapshotToken: handle.snapshotToken,
+        cursor: null,
+      }),
+    );
+    assert.deepStrictEqual(pinned.revisions[0]?.payload, payload);
+    yield* Effect.logInfo("wide memory bytes", {
+      payloadBytes,
+      pushBytes,
+      tailBytes,
+      checkpointBytes: utf8(serialized),
+      ...persisted,
+    });
+  }).pipe(Effect.provide(layer)),
+);
+
+it.effect.each([1, 101])("bootstrap forget redacts a dependent with %s sources", (count) =>
+  Effect.gen(function* () {
+    yield* join;
+    const sql = yield* SqlClient.SqlClient;
+    const sources: M.MemoryRevisionId[] = [];
+    for (let n = 12000; n < 12000 + count; n++) {
+      const source = upsert({
+        memory: n,
+        operation: n,
+        text: `synthetic source ${n}`,
+        messages: [],
+      });
+      if (source.kind !== "upsert") throw new Error("expected source upsert");
+      yield* admit(source);
+      sources.push(source.revision.revisionId);
+    }
+    const target = upsert({
+      memory: 13000,
+      operation: 13000,
+      text: "synthetic dependent",
+      messages: [],
+    });
+    if (target.kind !== "upsert") throw new Error("expected dependent upsert");
+    yield* admit({
+      ...target,
+      payload: { ...target.payload, derivedFromMemoryRevisions: sources },
+    });
+    yield* snapshot("bootstrap-forget");
+    const rows = yield* sql<{
+      metadata_json: string;
+    }>`SELECT metadata_json FROM memory_inbox_pending
+      WHERE space=${space} AND reason='hub_snapshot' ORDER BY page_ordinal`;
+    const pages = rows.map((row) => decodeCheckpointPage(row.metadata_json));
+    const first = pages[0]!;
+    const stage = {
+      memorySpaceId: space,
+      hubEnvironmentId: env,
+      checkpointId: "fixture-bootstrap",
+      expectedSnapshotToken: "fixture-snapshot",
+      expectedCheckpointSequence: first.checkpointSequence,
+    };
+    yield* Effect.gen(function* () {
+      const member = yield* Store.MemoryStore;
+      const memberSql = yield* SqlClient.SqlClient;
+      yield* member.transact(
+        member.advanceBootstrapTx({
+          ...stage,
+          expectedState: "unbound",
+          nextState: "staging",
+          snapshotToken: stage.expectedSnapshotToken,
+          checkpointSequence: first.checkpointSequence,
+          nextCursor: null,
+        }),
+      );
+      for (const page of pages) yield* member.installCheckpointPage({ ...stage, page });
+      const bodies = memberSql`SELECT payload_ref FROM memory_payloads WHERE space=${space} AND memory_id=${target.memoryId}`;
+      assert.lengthOf(yield* bodies, 1);
+      const removal = forget(11999 + count, 13001, []);
+      const decision = decideMemoryOperation(
+        yield* member.loadAggregate(space, removal.memoryId),
+        removal,
+        Store.localIntent,
+        scanMemoryValue(removal),
+      );
+      yield* member.apply(decision);
+      yield* member.completeCheckpoint({ ...stage, pageCount: pages.length });
+      assert.lengthOf(yield* bodies, 0);
+      assert.strictEqual(
+        (yield* member.loadAggregate(space, target.memoryId)).item?.status,
+        "blocked",
+      );
+    }).pipe(Effect.provide(Layer.fresh(layer)));
+  }).pipe(Effect.provide(layer)),
 );

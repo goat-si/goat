@@ -614,7 +614,7 @@ it.effect(
           Fixture.space,
         )).revisions,
       ).toEqual((yield* store.loadAggregate(Fixture.space, input.memoryId)).heads);
-      yield* sql`CREATE TRIGGER fail_lineage BEFORE INSERT ON memory_outbox WHEN NEW.space='_worker' BEGIN SELECT RAISE(ABORT,'synthetic failure'); END`;
+      yield* sql`CREATE TRIGGER fail_lineage BEFORE INSERT ON memory_thread_lineage_revisions BEGIN SELECT RAISE(ABORT,'synthetic failure'); END`;
       const failed = yield* Fixture.call("goat_memory_source_read", input, failedCaller);
       expect(failed.result.isError).toBe(true);
       expect(JSON.stringify(failed.body)).not.toContain("synthetic original");
