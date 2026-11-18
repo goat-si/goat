@@ -6,7 +6,7 @@ import {
   CommandId,
   type GoatclawCeilingAdvice,
   isOrchestrationV2WorkActive,
-  MessageId,
+  type MessageId,
   ModelSelection,
   NodeId,
   ORCHESTRATOR_MCP_RUNNING_TASK_NEXT,
@@ -39,7 +39,7 @@ import {
   type ScheduledTask,
   type ScheduledTaskUpsertInput,
   type ServerProvider,
-  ThreadId,
+  type ThreadId,
 } from "@goat/contracts";
 import { derive } from "@goat/provider-core/server/IdAllocator";
 import { latestProviderTurnForAttempt } from "@goat/contracts";
@@ -127,7 +127,12 @@ import {
 import * as SecretRequests from "../secrets/SecretRequests.ts";
 import { makeRequestSecret } from "./SecretRequestTool.ts";
 import { acceptRemoteSender, withRemoteSender } from "./remoteSender.ts";
-import { stableCommandId, stablePart } from "./stableCommandId.ts";
+import {
+  stableCommandId,
+  stableMessageId,
+  stableOperationMessageId,
+  stableThreadId,
+} from "./stableCommandId.ts";
 import { makeContinueReviewTask } from "./reviewContinuation.ts";
 import { makeRemoteTaskTargets } from "./goat/RemoteTaskTargets.ts";
 import { runStop, STOP_TURN_ITEM_TYPES, statusFromShell, threadRun } from "./threadStatus.ts";
@@ -533,54 +538,6 @@ export function resolveInteractionMode(
         ),
       )
     : Effect.succeed(resolved);
-}
-
-function stableThreadId(input: {
-  readonly scope: McpInvocationScope;
-  readonly requestKey: string;
-  readonly index: number;
-}): ThreadId {
-  return ThreadId.make(
-    [
-      "thread",
-      "mcp",
-      stablePart(input.scope.requestNamespace),
-      stablePart(input.requestKey),
-      String(input.index),
-    ].join(":"),
-  );
-}
-
-function stableMessageId(input: {
-  readonly scope: McpInvocationScope;
-  readonly requestKey: string;
-  readonly index: number;
-}): MessageId {
-  return MessageId.make(
-    [
-      "message",
-      "mcp",
-      stablePart(input.scope.requestNamespace),
-      stablePart(input.requestKey),
-      String(input.index),
-    ].join(":"),
-  );
-}
-
-function stableOperationMessageId(input: {
-  readonly scope: McpInvocationScope;
-  readonly requestKey: string;
-  readonly operation: string;
-}): MessageId {
-  return MessageId.make(
-    [
-      "message",
-      "mcp",
-      stablePart(input.scope.requestNamespace),
-      stablePart(input.operation),
-      stablePart(input.requestKey),
-    ].join(":"),
-  );
 }
 
 const make = Effect.gen(function* () {
