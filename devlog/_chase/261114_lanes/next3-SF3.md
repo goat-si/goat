@@ -559,3 +559,25 @@ SF3 advanced from `51fcc5f7fb410c2b0e845071d9763e5d355f33a2` to `13313a9f35973db
 - NOT RUN: installed-client walkthrough, live provider turns, older-client pairing, integration PR CI, and repo-wide suites.
 
 SF3 READY at `13313a9f35973db9ed5ac20244d379b09601cddf`, verified on the remote lane branch after a normal fast-forward push.
+
+## 2026-11-18 UTC — SF3 integration merge after round 8 approval
+
+Merged integration `78bcbf193331327e4b88e65e522ceb318b67db14` into the reviewed SF3 head `13313a9f35973db9ed5ac20244d379b09601cddf` as `52d36673845d566b367ba7e2aa0b71b4a527e929`. The automatic merge reported the five expected conflicts.
+
+- `apps/server/src/orchestration-v2/ThreadLaunchService.ts` imports and re-exports the extracted launch errors from their respective modules. It preserves the incoming launch, retry, and submodule progress paths and passes SF3's project context to branch-name generation.
+- `apps/server/src/orchestration-v2/runtimeLayer.testkit.ts` keeps the integration services for project enrichment, document text, and workspace paths alongside SF3's typed text generation fixture.
+- `apps/server/src/provider/ProviderRegistry.ts` keeps watcher retirement, source identity checks at the snapshot commit, and revocation-aware refresh responses. The same commit invalidates cwd catalogs when their catalog basis changes and preserves the basis check on concurrent workspace scans.
+- `docs/internals/agent-surface-audit.md` was regenerated with `vp run agent-surface:audit`. `vp run agent-surface:check` exited 0.
+- `oxlint-plugin-goat/code-budgets.json` was reconciled using the stricter conflicting limits and the repository's lowering generator. All 321 recorded line limits matched the merged files and none rose above the integration allowances. `GitManager.ts` is 3,043 lines, `ThreadLaunchService.ts` is 1,408, and `ProviderRegistry.ts` is 995 within its 1,000-line default.
+
+The merged lockfile changed, so `vp i` ran and exited 0. `git diff --check 78bcbf193331327e4b88e65e522ceb318b67db14...HEAD` passed.
+
+The incoming `ProviderWorkspaceSnapshots.test.ts` fixture also needed the typed runner. The first focused run reported 55 passes and three cwd-catalog failures at the missing memory capability. All 58 cases passed once the fixture supplied the existing typed runner.
+
+- `GOAT_TEST_TMP_GUARD=fail vp run check:changed origin/chase/t3-261114-next3` exited 1. All non-test steps passed, including 42 package typechecks. Vitest reported 9,562 passed, 16 failed, and 1 skipped across 435 files.
+- The whole-file run covered every changed test from either parent and the launch, fixture, and provider catalog companions. `GOAT_TEST_TMP_GUARD=fail vp exec node scripts/run-changed-vitest.ts` exited 1. Vitest reported 7,999 passed, 17 failed, and 29 skipped across 529 files. `vp exec node --test` passed all 74 tests in the remaining file.
+- Both Vitest runs matched all 16 round 11 Grok titles and the eight missing-Node diagnostic lines. [Grok baseline #3425](https://github.com/goat-si/goat/issues/3425)
+- The whole-file run also timed out at 120 seconds in the native linked-worktree removal case in `VcsStatusBroadcaster.watch.test.ts`. The complete guarded watcher suite reproduced the failure on the merge, with eight other cases passing. On the exact integration parent `78bcbf19333`, the whole suite timed out on native checkout detection, and a targeted run timed out on the same linked-worktree removal case as the merge. The watcher test and implementation are unchanged by this merge.
+- NOT RUN: installed-client walkthroughs, live provider turns, older-client pairing, integration PR CI, repo-wide suites, and the fresh merge review.
+
+SF3 READY at `52d36673845d566b367ba7e2aa0b71b4a527e929`, verified on the remote lane branch after a normal fast-forward push.
