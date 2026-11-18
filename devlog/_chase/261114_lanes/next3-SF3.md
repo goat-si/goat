@@ -535,3 +535,27 @@ The following refusals depend on a specific request, lease, or live helper. The 
 - NOT RUN: installed-client walkthrough, live provider turns, older-client pairing, integration PR CI, and repo-wide suites.
 
 SF3 READY at `e9fc3617dbf17916a8ba286ed3f5c928f0caebdc`, verified on the remote lane branch after a normal fast-forward push.
+
+## 2026-11-18 UTC — independent review fix round 10
+
+SF3 advanced from `e9fc3617dbf17916a8ba286ed3f5c928f0caebdc` to `51fcc5f7fb410c2b0e845071d9763e5d355f33a2` on `chase/t3-261114-next3-sf3-providers`.
+
+- `02ee3e7fe76649d6e3d883a39e105f8795c896f3` made a sandbox refusal clear both Cursor memory capabilities. New summaries and new conflicts select the fallback from the moment the refusal is recorded. The registry also broadcasts the change and rejects superseded flags from a concurrent health check.
+- `51fcc5f7fb410c2b0e845071d9763e5d355f33a2` separated provider health reads from memory preflights for ordinary text generation. The regression cases for both the saved route and the fallback entered the memory preflight and failed before the fix.
+- The Cursor regression reproduced missing publication, stale routing before publication, and stale flags at a concurrent refresh commit. The focused provider and client selection passed 280 tests across 13 files on the pushed head.
+- `vp run check:changed origin/chase/t3-261114-next3` passed all non-test steps, including 42 package typechecks. The gate exited 1 with 9,414 tests passing, one skipped, and 16 failing. All 16 Grok test titles and eight missing-Node diagnostic lines matched round 9. [Grok baseline #3425](https://github.com/goat-si/goat/issues/3425)
+- NOT RUN: installed-client walkthrough, live provider turns, older-client pairing, integration PR CI, and repo-wide suites.
+
+SF3 READY at `51fcc5f7fb410c2b0e845071d9763e5d355f33a2`, verified on the remote lane branch after a normal fast-forward push.
+
+## 2026-11-18 UTC — independent review fix round 11
+
+SF3 advanced from `51fcc5f7fb410c2b0e845071d9763e5d355f33a2` to `13313a9f35973db9ed5ac20244d379b09601cddf` on `chase/t3-261114-next3-sf3-providers`. The round 6 findings remained closed.
+
+- P2, `ed459d9db1b90232bb8db9e859806744594ca01b`. The registry interrupts the merged snapshot watcher on unregister or replacement and checks the originating instance when it commits a row. `vp test run apps/server/src/provider/ProviderRegistryRetired.test.ts` first exited 1 with 1 failure and 1 pass. After unregistering Cursor and observing its removal, the refusal republished the row. The regression now observes the watcher close and the registry stay empty.
+- P3, `13313a9f35973db9ed5ac20244d379b09601cddf`. The refresh response reads the current revocation-aware registry view after cache I/O. `vp test run apps/server/src/provider/ProviderRegistryCursorRefresh.test.ts` first exited 1 with 1 failure and 2 passes. The new case suspended the cache write after the row committed and observed false/false on the stream. The refresh reply still returned true/true before this fix. The earlier before-commit case remains covered.
+- `GOAT_TEST_TMP_GUARD=fail vp test run` passed 81 tests across eight focused registry and memory admission suites. `git diff --check origin/chase/t3-261114-next3...HEAD` passed.
+- `vp run check:changed origin/chase/t3-261114-next3` ran on `13313a9f35973db9ed5ac20244d379b09601cddf` with integration ref `d4dfd457571834bb2c3c85984e64f5abd4af0e5d` and merge base `2c0e0002a996ec5d46c708919be5a43f579176fa`. Every non-test check passed, including 42 package typechecks. The gate exited 1. Of 9,433 tests across 421 files, 9,416 passed, 16 failed, and one was skipped. The 16 failing Grok test titles and eight `exec: node: not found` diagnostic lines matched round 10. [Grok baseline #3425](https://github.com/goat-si/goat/issues/3425)
+- NOT RUN: installed-client walkthrough, live provider turns, older-client pairing, integration PR CI, and repo-wide suites.
+
+SF3 READY at `13313a9f35973db9ed5ac20244d379b09601cddf`, verified on the remote lane branch after a normal fast-forward push.
