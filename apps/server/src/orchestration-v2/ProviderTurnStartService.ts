@@ -1,4 +1,5 @@
 import { rejectedCodexHistory, pendingBackgroundFailure } from "./goat/RejectedCodexHistory.ts";
+import { isImportedNativeSession } from "./ProviderContextBoundaries.ts";
 import { makeCloudStartFailureHandler } from "./goat/CloudStartFailure.ts";
 import { makeFailedStartSettlement } from "./goat/FailedStartSettlement.ts";
 import { ensureSafeNativeFork } from "./goat/BusyForkSource.ts";
@@ -927,6 +928,7 @@ export const layer: Layer.Layer<
           const pending = yield* pendingBackgroundFailure(session, providerThread, run);
           if (pending) return yield* loadFromProvider(Effect.fail(pending));
         }
+        const importedNativeSession = isImportedNativeSession(projection, providerThread);
         const resumed = yield* Effect.result(
           brokenNativeThread || uncertainDelivery || nativeSessionLacksKeptTurns || rejectedHistory
             ? Effect.fail(
@@ -947,6 +949,7 @@ export const layer: Layer.Layer<
                 threadId: projection.thread.id,
                 modelSelection: run.modelSelection,
                 runtimePolicy: resolvedRuntimePolicy,
+                importedNativeSession,
               }),
         );
         if (resumed._tag === "Success") {

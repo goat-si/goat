@@ -1,3 +1,4 @@
+import { claudeTurnCursor, isSyntheticClaudeTurnId } from "./ClaudeTurnCursor.ts";
 import { makeClaudeAppContextDelivery } from "./ClaudeAppContext.ts";
 import {
   CLAUDE_ATTACHMENT_MAX_BYTES,
@@ -939,18 +940,6 @@ const getNativeThreadId = Effect.fnUntraced(function* (
   }
   return nativeThreadId;
 });
-
-const isSyntheticClaudeTurnId = (nativeTurnId: string): boolean => nativeTurnId.startsWith("turn:");
-
-const claudeTurnCursor = (turn: OrchestrationV2ProviderTurn): string | null => {
-  const ref = turn.nativeTurnRef;
-  return ref !== null &&
-    ref.driver === CLAUDE_PROVIDER &&
-    ref.nativeId !== null &&
-    !isSyntheticClaudeTurnId(ref.nativeId)
-    ? ref.nativeId
-    : null;
-};
 
 const isTerminalProviderTurn = (turn: OrchestrationV2ProviderTurn): boolean =>
   turn.status === "completed" ||
@@ -10274,7 +10263,10 @@ export const makeClaudeAdapterV2 = Effect.fn("makeClaudeAdapterV2")(function* (
               ),
           ),
           resumeThread: Effect.fn("ClaudeAdapterV2.resumeThread")(
-            function* (threadInput: { readonly providerThread: OrchestrationV2ProviderThread }) {
+            function* (threadInput: {
+              readonly providerThread: OrchestrationV2ProviderThread;
+              readonly importedNativeSession?: boolean;
+            }) {
               const nativeThreadId = threadInput.providerThread.nativeThreadRef?.nativeId;
               if (
                 nativeThreadId !== undefined &&
@@ -10292,7 +10284,11 @@ export const makeClaudeAdapterV2 = Effect.fn("makeClaudeAdapterV2")(function* (
                 const transcript = yield* claudeTranscriptState(nativeThreadId).pipe(
                   Effect.orElseSucceed(() => "missing" as const),
                 );
-                if (transcript === "empty") {
+                // Opening a missing imported session would start an empty one under its id.
+                if (
+                  transcript === "empty" ||
+                  (transcript === "missing" && threadInput.importedNativeSession === true)
+                ) {
                   return yield* new ProviderAdapter.ProviderAdapterProtocolError({
                     driver: CLAUDE_PROVIDER,
                     detail: `Claude session ${nativeThreadId} has no conversation to resume.`,

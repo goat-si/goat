@@ -5716,16 +5716,8 @@ const makeOrchestrator = Effect.fn("orchestrationV2.Orchestrator.layer")(functio
     if (held !== undefined)
       projection = yield* getProjectionWithPendingEvents(command.threadId, events);
     const startText = held?.text ?? dispatchText;
-    // A message the user sends from a client means they are back, so the
-    // queue a stop or a restart held runs again, in its order, rather than
-    // waiting for a Resume.
-    // Continuations and scheduled tasks the server sends for them are not
-    // them coming back. Starting the queue still re-holds it for a failed
-    // provider or a usage limit; a queue held after worktree setup failed
-    // keeps its hold until a worktree exists, even once later messages have
-    // run, since its messages would start in the project checkout.
     // Client messages resume held queues; server continuations and scheduled tasks do not.
-    // Provider failure or usage limits re-hold the queue.
+    // Provider failure or usage limits re-hold it; a worktree-setup hold waits for a worktree.
     const worktreeSetupUnresolved = worktreeSetupPending(projection);
     const sentByUserFromClient =
       command.steerFollowUpOfRunId === undefined &&
@@ -6868,6 +6860,7 @@ const makeOrchestrator = Effect.fn("orchestrationV2.Orchestrator.layer")(functio
     const legacyImportRecoveryHandoff =
       isProviderSwitch &&
       !canResumeAcrossInstances &&
+      ensuredProviderThread.nativeThreadRef?.strength !== "strong" &&
       latestCompletedRun === undefined &&
       legacyImportItems.length > 0
         ? yield* contextHandoffService
