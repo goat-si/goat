@@ -108,14 +108,17 @@ describe("memory shared operations", () => {
         );
       };
       const provider = fromRunner("fixture", legacy, {
-        memoryRunner: withMemoryExecution(
-          {
-            providerInstanceId: selection.instanceId,
-            environmentId: M.EnvironmentId.make("owner"),
-          },
-          M.ProviderDriverKind.make("codex"),
-          selected,
-        ),
+        memory: {
+          capabilities: Effect.succeed({ summary: true, conflict: true }),
+          run: withMemoryExecution(
+            {
+              providerInstanceId: selection.instanceId,
+              environmentId: M.EnvironmentId.make("owner"),
+            },
+            M.ProviderDriverKind.make("codex"),
+            selected,
+          ),
+        },
       });
       yield* provider.resolveMemoryConflict!(conflict);
       yield* provider.generateMemorySummary!(summary);
@@ -140,14 +143,17 @@ describe("memory shared operations", () => {
           ),
         );
       const provider = fromRunner("fixture", legacy, {
-        memoryRunner: withMemoryExecution(
-          {
-            providerInstanceId: selection.instanceId,
-            environmentId: M.EnvironmentId.make("owner"),
-          },
-          M.ProviderDriverKind.make("codex"),
-          selected,
-        ),
+        memory: {
+          capabilities: Effect.succeed({ summary: true, conflict: true }),
+          run: withMemoryExecution(
+            {
+              providerInstanceId: selection.instanceId,
+              environmentId: M.EnvironmentId.make("owner"),
+            },
+            M.ProviderDriverKind.make("codex"),
+            selected,
+          ),
+        },
       });
       expect((yield* Effect.exit(provider.resolveMemoryConflict!(conflict)))._tag).toBe("Failure");
       expect((yield* Effect.exit(provider.generateMemorySummary!(summary)))._tag).toBe("Failure");
@@ -205,14 +211,17 @@ describe("memory shared operations", () => {
           ),
         );
       const provider = fromRunner("fixture", legacy, {
-        memoryRunner: withMemoryExecution(
-          {
-            providerInstanceId: selection.instanceId,
-            environmentId: M.EnvironmentId.make("owner"),
-          },
-          M.ProviderDriverKind.make("codex"),
-          selected,
-        ),
+        memory: {
+          capabilities: Effect.succeed({ summary: true, conflict: true }),
+          run: withMemoryExecution(
+            {
+              providerInstanceId: selection.instanceId,
+              environmentId: M.EnvironmentId.make("owner"),
+            },
+            M.ProviderDriverKind.make("codex"),
+            selected,
+          ),
+        },
       });
       const generated = yield* provider.generateMemorySummary!(input);
       expect(generated.result?.evidence).toEqual([
@@ -250,14 +259,17 @@ describe("memory shared operations", () => {
             );
         const generate = (summaryAnswer: unknown) =>
           fromRunner("fixture", legacy, {
-            memoryRunner: withMemoryExecution(
-              {
-                providerInstanceId: selection.instanceId,
-                environmentId: M.EnvironmentId.make("owner"),
-              },
-              M.ProviderDriverKind.make("codex"),
-              answer(summaryAnswer),
-            ),
+            memory: {
+              capabilities: Effect.succeed({ summary: true, conflict: true }),
+              run: withMemoryExecution(
+                {
+                  providerInstanceId: selection.instanceId,
+                  environmentId: M.EnvironmentId.make("owner"),
+                },
+                M.ProviderDriverKind.make("codex"),
+                answer(summaryAnswer),
+              ),
+            },
           }).generateMemorySummary!(summary);
         expect((yield* generate(null)).result).toBeNull();
         const prose = (text: string) => ({ text, assertionKind: "inference", evidence: [] });
@@ -284,22 +296,21 @@ describe("memory shared operations", () => {
           expect((yield* generate(prose(content))).result?.text).toBe(content);
       }),
   );
-  it.effect("absent memoryRunner never invokes the legacy runner", () =>
+  it.effect("refuses both memory operations without a memory runner", () =>
     Effect.gen(function* () {
-      let calls = 0;
-      const run: Runner = (request) => {
-        calls++;
-        return legacy(request);
-      };
-      const provider = fromRunner("fixture", run);
-      expect((yield* Effect.exit(provider.resolveMemoryConflict!(conflict)))._tag).toBe("Failure");
-      expect((yield* Effect.exit(provider.generateMemorySummary!(summary)))._tag).toBe("Failure");
-      expect(calls).toBe(0);
+      const provider = fromRunner("fixture", legacy, { memory: false });
+      expect(yield* provider.memoryCapabilities).toEqual({ summary: false, conflict: false });
+      expect((yield* Effect.flip(provider.resolveMemoryConflict(conflict))).cause).toMatchObject({
+        code: "unsupported_operation",
+      });
+      expect((yield* Effect.flip(provider.generateMemorySummary(summary))).cause).toMatchObject({
+        code: "unsupported_operation",
+      });
     }),
   );
   it.effect("keeps existing generation results compatible", () =>
     Effect.gen(function* () {
-      const provider = fromRunner("fixture", legacy);
+      const provider = fromRunner("fixture", legacy, { memory: false });
       expect(
         yield* provider.generateThreadTitle({
           cwd: "scratch",
@@ -323,8 +334,10 @@ describe("memory shared operations", () => {
 // regression: #23726 a reply that echoes the schema key replaced the seed title with "title"
 it.effect("fails a thread title reply that is only the schema key", () =>
   Effect.gen(function* () {
-    const textGeneration = fromRunner("Stub", (request) =>
-      decodeJsonReply(request, "Stub", '{"title":"title","needsRefinement":false}'),
+    const textGeneration = fromRunner(
+      "Stub",
+      (request) => decodeJsonReply(request, "Stub", '{"title":"title","needsRefinement":false}'),
+      { memory: false },
     );
 
     const outcome = yield* textGeneration

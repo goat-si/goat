@@ -5,6 +5,7 @@ import {
   sessionGrantsScope,
   type SessionGrantInput,
 } from "@goat/contracts";
+import { scoreQueryMatch } from "@goat/shared/searchRanking";
 import { Atom } from "effect/reactivity";
 
 import type {
@@ -74,15 +75,49 @@ export function filterFilesystemBrowseEntries(
   entries: ReadonlyArray<FilesystemBrowseEntry>,
   query: string,
 ) {
+  // macOS Finder stores names decomposed (NFD), while typed text is composed (NFC).
+  const normalizedQuery = query.normalize("NFC");
   const lowerQuery = query.toLowerCase();
+  const lowerNormalizedQuery = normalizedQuery.toLowerCase();
   const showHidden = query.startsWith(".");
-  const visibleEntries = entries.filter(
-    (entry) =>
-      entry.name.toLowerCase().startsWith(lowerQuery) &&
-      (showHidden || !entry.name.startsWith(".")),
+  const candidates = entries.filter((entry) => showHidden || !entry.name.startsWith("."));
+  const ranking = {
+    exactBase: 0,
+    prefixBase: 1000,
+    boundaryBase: 2000,
+    includesBase: 3000,
+    fuzzyBase: 4000,
+    boundaryMarkers: [" ", "-", "_", "."],
+  };
+  const visibleEntries =
+    lowerQuery === ""
+      ? candidates
+      : candidates
+          .flatMap((entry) => {
+            const raw = entry.name.toLowerCase();
+            const normalized = entry.name.normalize("NFC").toLowerCase();
+            const rawScore = scoreQueryMatch({ ...ranking, value: raw, query: lowerQuery });
+            const normalizedScore =
+              raw === normalized && lowerQuery === lowerNormalizedQuery
+                ? rawScore
+                : scoreQueryMatch({
+                    ...ranking,
+                    value: normalized,
+                    query: lowerNormalizedQuery,
+                  });
+            const score = Math.min(rawScore ?? Infinity, normalizedScore ?? Infinity);
+            return score === Infinity ? [] : [{ entry, score }];
+          })
+          .sort((left, right) => left.score - right.score)
+          .map(({ entry }) => entry);
+  const normalizedMatches = visibleEntries.filter(
+    (entry) => entry.name.normalize("NFC") === normalizedQuery,
   );
   const exactEntry =
-    query.length > 0 ? (visibleEntries.find((entry) => entry.name === query) ?? null) : null;
+    query.length > 0
+      ? (visibleEntries.find((entry) => entry.name === query) ??
+        (normalizedMatches.length === 1 ? normalizedMatches[0] : null))
+      : null;
 
   return { visibleEntries, exactEntry };
 }
@@ -92,7 +127,14 @@ export function getFilesystemBrowseTabCompletion(
   visibleEntries: ReadonlyArray<FilesystemBrowseEntry>,
   filterQuery: string,
 ): { readonly name: string; readonly isComplete: boolean } | null {
-  const [first, ...rest] = visibleEntries;
+  const lowerQuery = filterQuery.toLowerCase();
+  const lowerNormalizedQuery = filterQuery.normalize("NFC").toLowerCase();
+  const prefixEntries = visibleEntries.filter(
+    (entry) =>
+      entry.name.toLowerCase().startsWith(lowerQuery) ||
+      entry.name.normalize("NFC").toLowerCase().startsWith(lowerNormalizedQuery),
+  );
+  const [first, ...rest] = prefixEntries;
   if (first === undefined) return null;
   if (rest.length === 0) return { name: first.name, isComplete: true };
   let prefix = Array.from(first.name);
@@ -108,8 +150,8 @@ export function getFilesystemBrowseTabCompletion(
   }
   const name = prefix.join("");
   const lowerName = name.toLowerCase();
-  return lowerName.length > filterQuery.toLowerCase().length &&
-    visibleEntries.every((entry) => entry.name.toLowerCase().startsWith(lowerName))
+  return lowerName.length > lowerQuery.length &&
+    prefixEntries.every((entry) => entry.name.toLowerCase().startsWith(lowerName))
     ? { name, isComplete: false }
     : null;
 }

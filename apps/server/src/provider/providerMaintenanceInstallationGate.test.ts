@@ -1,3 +1,4 @@
+import { noMemoryGeneration } from "@goat/provider-core/server/memoryGenerationRunner";
 import { assert, it } from "@effect/vitest";
 import { ProviderInstanceId } from "@goat/contracts";
 import type { ProviderInstance } from "@goat/provider-core/server/driver";
@@ -42,7 +43,8 @@ it.effect("holds text generation for an instance until its update finishes", () 
       enabled: true,
       snapshot: { getSnapshot: Effect.succeed(baseProvider) } as ProviderInstance["snapshot"],
       orchestrationAdapter: {} as ProviderInstance["orchestrationAdapter"],
-      textGeneration: TextGeneration.TextGeneration.of({
+      textGeneration: {
+        ...noMemoryGeneration,
         generateCommitMessage: () => Effect.die("unused"),
         generatePrContent: () => Effect.die("unused"),
         generateBranchName: () => Effect.die("unused"),
@@ -52,7 +54,7 @@ it.effect("holds text generation for an instance until its update finishes", () 
             log.push("text generation spawned provider");
             return { title: "Generated title" };
           }),
-      }),
+      },
     };
     const textGeneration = yield* TextGeneration.make.pipe(
       Effect.provide(

@@ -12,6 +12,8 @@ import type {
   TextGenerationError,
 } from "@goat/contracts";
 import type * as Effect from "effect/Effect";
+import type * as Stream from "effect/Stream";
+import type { MemoryGenerationCapabilities } from "@goat/shared/memoryGenerationCapabilities";
 
 import type { TextGenerationPolicy } from "./textGenerationPolicy.ts";
 import type { ThreadTitleForkSource } from "./textGenerationPrompts.ts";
@@ -113,11 +115,11 @@ export type ReviewGuideGenerationResult = Omit<
 >;
 
 /** Commit, change request, branch, title, review guide, and channel reception generation backed by one provider instance. */
-export interface ProviderTextGeneration {
-  readonly resolveMemoryConflict?: (
+export interface TextGenerationOperations {
+  readonly resolveMemoryConflict: (
     input: ResolveMemoryConflictInput,
   ) => Effect.Effect<ResolveMemoryConflictExecutionResult, TextGenerationError>;
-  readonly generateMemorySummary?: (
+  readonly generateMemorySummary: (
     input: GenerateMemorySummaryInput,
   ) => Effect.Effect<GenerateMemorySummaryOutcome, TextGenerationError>;
   /**
@@ -151,6 +153,15 @@ export interface ProviderTextGeneration {
   readonly generateReviewGuide: (
     input: ReviewGuideGenerationInput,
   ) => Effect.Effect<ReviewGuideGenerationResult, TextGenerationError>;
+}
+
+export interface ProviderTextGeneration extends TextGenerationOperations {
+  readonly memoryCapabilities: Effect.Effect<MemoryGenerationCapabilities>;
+  /** Permanent for the lifetime of the provider runtime. */
+  readonly memoryRevocation?: {
+    readonly isRevoked: () => boolean;
+    readonly changes: Stream.Stream<void>;
+  };
 }
 
 export type {

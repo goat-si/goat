@@ -9,7 +9,7 @@ import * as Schema from "effect/Schema";
 import { createModelSelection } from "@goat/shared/model";
 import { CodexSettings, ProviderInstanceId, ProviderSetupError } from "@goat/contracts";
 import * as ServerConfig from "../config.ts";
-import * as TextGeneration from "./TextGeneration.ts";
+import type { ProviderTextGeneration } from "@goat/provider-core/server/textGeneration";
 import { makeCodexTextGeneration } from "./CodexTextGeneration.ts";
 import { writeFakeCli } from "@goat/provider-testing/fakeCli";
 
@@ -221,7 +221,7 @@ export function withFakeCodexEnv<A, E, R>(
     managedRuntime?: boolean | ProviderSetupError;
     memoryRunnerContext?: import("@goat/provider-core/server/memoryGenerationRunner").MemoryGenerationRunnerContext;
   },
-  effectFn: (textGeneration: TextGeneration.TextGeneration["Service"]) => Effect.Effect<A, E, R>,
+  effectFn: (textGeneration: ProviderTextGeneration) => Effect.Effect<A, E, R>,
 ) {
   return Effect.gen(function* () {
     const fs = yield* FileSystem.FileSystem;

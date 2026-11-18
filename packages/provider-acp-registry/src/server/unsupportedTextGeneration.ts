@@ -1,3 +1,4 @@
+import { noMemoryGeneration } from "@goat/provider-core/server/memoryGenerationRunner";
 import { TextGenerationError } from "@goat/contracts";
 import type { ProviderTextGeneration } from "@goat/provider-core/server/textGeneration";
 import * as Effect from "effect/Effect";
@@ -11,6 +12,7 @@ export const makeUnsupportedTextGeneration = (): ProviderTextGeneration => {
       }),
     );
   return {
+    ...noMemoryGeneration,
     generateCommitMessage: () => unsupported("generateCommitMessage"),
     generatePrContent: () => unsupported("generatePrContent"),
     generateBranchName: () => unsupported("generateBranchName"),

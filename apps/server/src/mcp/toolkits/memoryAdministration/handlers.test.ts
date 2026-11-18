@@ -1,12 +1,46 @@
 import { expect, it } from "@effect/vitest";
 import * as M from "@goat/contracts";
+import { agentSurfaceRegistry } from "@goat/contracts/agentSurface";
+import { listedToolName } from "@goat/contracts/agentSurface/resolve";
 import * as Effect from "effect/Effect";
+import * as Layer from "effect/Layer";
 import * as Schema from "effect/Schema";
 import * as SqlClient from "effect/sql/SqlClient";
 import { McpServer } from "effect/ai";
 import * as Fixture from "../memory/handlers.testkit.ts";
+import { ProviderRegistry } from "../../../provider/ProviderRegistry.ts";
 const decodeDisabled = Schema.decodeUnknownEffect(M.MemoryHubDisableResult);
 const decodeSettings = Schema.decodeUnknownEffect(M.MemorySettingsView);
+
+it.effect("adds memory model availability only to opted-in settings reads", () =>
+  Effect.gen(function* () {
+    const server = yield* McpServer.McpServer;
+    const readName = listedToolName(agentSurfaceRegistry["memory.settings_read"]);
+    const read = server.tools.find(({ tool }) => tool.name === readName);
+    expect(read?.tool.inputSchema.properties).toHaveProperty("includeModelAvailability");
+    expect(read?.tool.inputSchema.required ?? []).not.toContain("includeModelAvailability");
+    const legacy = yield* decodeSettings((yield* Fixture.call("memory_settings_get", {})).body);
+    expect(legacy).toMatchObject({
+      enabled: true,
+      hub: { mode: "disabled", version: 0 },
+      model: { selection: { instanceId: "codex", model: "gpt-6-luna" }, automatic: true },
+    });
+    const update = yield* Fixture.call(
+      "memory_settings_update",
+      { requestId: Fixture.id(40), enabled: false },
+      Fixture.scope(["memory:read", "settings:write"]),
+    );
+    expect(update.body).toEqual({ ...legacy, enabled: false });
+    const optedIn = yield* Fixture.call("memory_settings_get", { includeModelAvailability: true });
+    expect(optedIn.body).toEqual({ ...legacy, enabled: false, modelAvailable: false });
+  }).pipe(
+    Effect.provide(
+      Fixture.layer.pipe(
+        Layer.provide(Layer.mock(ProviderRegistry)({ getProviders: Effect.succeed([]) })),
+      ),
+    ),
+  ),
+);
 it.effect(
   "reads defaults and updates generation, model and hub sharing with settings authority",
   () =>

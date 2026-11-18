@@ -13,6 +13,7 @@ import * as Path from "effect/Path";
 
 import * as VcsProcess from "../vcs/VcsProcess.ts";
 import { type IgnoreDecision, type IgnoreFile, parseIgnoreFile } from "./IgnorePatterns.ts";
+import { readIgnoreFile } from "./workspaceIgnoreFiles.ts";
 
 const trimDirectorySeparator = (input: string) =>
   input.endsWith("/") ? input.slice(0, -1) : input;
@@ -25,87 +26,94 @@ const SYMLINK_RESCAN_WAIT = "5 millis";
 // Small pages let searches run between the directory listing's native calls.
 const SYMLINK_DIRECTORY_PAGE_SIZE = 1_000;
 
-interface ScannedDirectory {
-  readonly directory: string;
-  readonly links: ReadonlyArray<ProjectEntry>;
-  /** Every symlink in the folder, including ones dropped for leaving the workspace. */
-  readonly linkPaths: ReadonlyArray<string>;
-  /** A nested repository (or the workspace's own), whose ignore rules own what is below it. */
-  readonly isRepository: boolean;
-  readonly ignoreFile: string | undefined;
+const MAX_DIRECTORIES = 4_096;
+const MAX_DIRENTS = 50_000;
+const MAX_LINKS = 4_096;
+const MAX_PATH_BYTES = 4 * 1024 * 1024;
+const MAX_IGNORE_BYTES = 256 * 1024;
+
+function makeScanBudget() {
+  let dirents = MAX_DIRENTS;
+  let links = MAX_LINKS;
+  let pathBytes = MAX_PATH_BYTES;
+  let truncated = false;
+  return {
+    truncate: () => {
+      truncated = true;
+    },
+    isTruncated: () => truncated,
+    takePath: (path: string) => {
+      pathBytes -= Buffer.byteLength(path);
+      if (pathBytes >= 0) return true;
+      truncated = true;
+      return false;
+    },
+    takeDirent: (isLink: boolean) => {
+      if (dirents > 0 && (!isLink || links > 0)) {
+        dirents -= 1;
+        if (isLink) links -= 1;
+        return true;
+      }
+      truncated = true;
+      return false;
+    },
+    canReadDirectory: () => dirents > 0 && pathBytes > 0,
+  };
 }
 
 const joinEntryPath = (directory: string, name: string) =>
   directory ? `${directory}/${name}` : name;
 
-/**
- * fff skips symlinks, and `followSymlinks` drops file links, dedupes folder links, and walks out
- * of the workspace. So links are read from the folders fff already indexed (ignore rules applied),
- * without descending into them, and kept only when they resolve inside the workspace.
- */
-const scanDirectory = Effect.fn("WorkspaceSearchIndex.scanDirectory")(function* (
-  fileSystem: FileSystem.FileSystem,
-  path: Path.Path,
-  cwd: string,
-  root: string,
-  directory: string,
-) {
-  // Effect's readDirectory returns bare names; one lstat per child would cost far more.
-  const children = yield* Effect.promise(() =>
-    NodeFSP.readdir(path.join(cwd, directory), { withFileTypes: true }).catch(() => []),
-  );
-  const links: ProjectEntry[] = [];
-  const linkPaths: string[] = [];
-  let isRepository = false;
-  let ignoreFile: string | undefined;
-  for (const child of children) {
-    if (child.name === ".git") isRepository = true;
-    if (child.name === ".ignore" && child.isFile()) {
-      ignoreFile = yield* fileSystem
-        .readFileString(path.join(cwd, directory, child.name))
-        .pipe(Effect.orElseSucceed(() => undefined));
-    }
-    if (!child.isSymbolicLink()) continue;
-    const entryPath = joinEntryPath(directory, child.name);
-    linkPaths.push(entryPath);
-    const absolutePath = path.join(cwd, entryPath);
-    const target = yield* Effect.all([
-      fileSystem.realPath(absolutePath),
-      fileSystem.stat(absolutePath),
-    ]).pipe(Effect.orElseSucceed(() => undefined));
-    if (!target) continue;
-    const relative = path.relative(root, target[0]);
-    if (
-      relative === ".." ||
-      relative.startsWith(`..${path.sep}`) ||
-      path.isAbsolute(relative) ||
-      relative.split(path.sep).includes(".git") ||
-      (target[1].type !== "Directory" && target[1].type !== "File")
-    ) {
-      continue;
-    }
-    links.push({ path: entryPath, kind: target[1].type === "Directory" ? "directory" : "file" });
+function* ancestors(path: string) {
+  let end = path.lastIndexOf("/");
+  while (end > 0) {
+    yield path.slice(0, end);
+    end = path.lastIndexOf("/", end - 1);
   }
-  return { directory, links, linkPaths, isRepository, ignoreFile } satisfies ScannedDirectory;
-});
+  yield "";
+}
 
-/** Whether `entryPath` is `directory` itself or below it. */
-const isWithin = (entryPath: string, directory: string) =>
-  directory === "" || entryPath.startsWith(`${directory}/`);
+async function readDirectoryLinks(
+  absolutePath: string,
+  directory: string,
+  budget: ReturnType<typeof makeScanBudget>,
+) {
+  const links: string[] = [];
+  let isRepository = false;
+  let hasIgnoreFile = false;
+  let complete = false;
+  if (!budget.canReadDirectory()) {
+    budget.truncate();
+  } else {
+    try {
+      // A watcher may have indexed a symlinked directory since the initial crawl.
+      if ((await NodeFSP.realpath(absolutePath)) === absolutePath) {
+        const dir = await NodeFSP.opendir(absolutePath);
+        complete = true;
+        for await (const child of dir) {
+          const isLink = child.isSymbolicLink();
+          const name = isLink ? joinEntryPath(directory, child.name) : child.name;
+          if (!budget.takeDirent(isLink) || !budget.takePath(name)) {
+            complete = false;
+            break;
+          }
+          if (isLink) links.push(name);
+          if (child.name === ".git") isRepository = true;
+          if (child.name === ".ignore" && child.isFile()) hasIgnoreFile = true;
+        }
+      }
+    } catch {
+      complete = false;
+    }
+  }
+  return { directory, links, isRepository, hasIgnoreFile, complete };
+}
 
-/**
- * fff reads `.ignore` files alongside git's rules, and like ripgrep the nearest one that matches
- * decides, ahead of any `.gitignore`. `ignoreFiles` is ordered deepest folder first.
- */
-function decideByIgnoreFiles(
-  entry: ProjectEntry,
-  ignoreFiles: ReadonlyArray<{ readonly directory: string; readonly file: IgnoreFile }>,
-): IgnoreDecision | undefined {
-  for (const { directory, file } of ignoreFiles) {
-    if (!isWithin(entry.path, directory) || entry.path === directory) continue;
+function decideByIgnoreFiles(entry: ProjectEntry, ignoreFiles: ReadonlyMap<string, IgnoreFile>) {
+  for (const directory of ancestors(entry.path)) {
     const relative = directory ? entry.path.slice(directory.length + 1) : entry.path;
-    // Like git and ripgrep, a link is never a folder to a folder-only rule, whatever it targets.
-    const decision = file.decide(relative, false);
+    // A link is never a folder to a folder-only rule, whatever it targets.
+    const decision = ignoreFiles.get(directory)?.decide(relative, false);
     if (decision) return decision;
   }
   return undefined;
@@ -175,15 +183,16 @@ export const makeSymlinkScan = Effect.fn("WorkspaceSearchIndex.makeSymlinkScan")
   const root = yield* fileSystem.realPath(cwd).pipe(Effect.orElseSucceed(() => cwd));
 
   const listIndexedDirectories = Effect.fn("WorkspaceSearchIndex.listIndexedDirectories")(
-    function* () {
+    function* (budget: ReturnType<typeof makeScanBudget>) {
       const directories: string[] = [];
       // fff's pageIndex is an offset into the results, not a page number.
-      for (let pageIndex = 0; ; pageIndex += SYMLINK_DIRECTORY_PAGE_SIZE) {
+      for (let pageIndex = 0; pageIndex < MAX_DIRECTORIES;) {
+        const pageSize = Math.min(SYMLINK_DIRECTORY_PAGE_SIZE, MAX_DIRECTORIES - pageIndex);
         const result = yield* Effect.promise(async () => {
           try {
             return await finder.directorySearchAsync("", {
               pageIndex,
-              pageSize: SYMLINK_DIRECTORY_PAGE_SIZE,
+              pageSize,
             });
           } catch {
             return undefined;
@@ -192,10 +201,17 @@ export const makeSymlinkScan = Effect.fn("WorkspaceSearchIndex.makeSymlinkScan")
         if (!result?.ok) return directories;
         for (const item of result.value.items) {
           const directory = trimDirectorySeparator(input.toPosix(item.relativePath));
+          if (path.isAbsolute(directory) || directory.split("/").includes("..")) continue;
+          if (!budget.takePath(directory)) return directories;
           if (directory) directories.push(directory);
         }
-        if (result.value.items.length < SYMLINK_DIRECTORY_PAGE_SIZE) return directories;
+        pageIndex += result.value.items.length;
+        if (pageIndex >= result.value.totalMatched || result.value.items.length < pageSize) {
+          return directories;
+        }
       }
+      budget.truncate();
+      return directories;
     },
   );
 
@@ -248,36 +264,91 @@ export const makeSymlinkScan = Effect.fn("WorkspaceSearchIndex.makeSymlinkScan")
 
   const scanSymlinkEntries = Effect.fn("WorkspaceSearchIndex.scanSymlinkEntries")(function* () {
     const indexComplete = !(yield* input.isScanning);
-    const directories = yield* listIndexedDirectories();
+    const budget = makeScanBudget();
+    const directories = yield* listIndexedDirectories(budget);
     const scanned = yield* Effect.forEach(
       ["", ...directories],
-      (directory) => scanDirectory(fileSystem, path, cwd, root, directory),
+      (directory) =>
+        Effect.promise(() => readDirectoryLinks(path.join(root, directory), directory, budget)),
       { concurrency: SYMLINK_SCAN_CONCURRENCY },
     );
-    const candidates = scanned.flatMap((directory) => directory.links);
-    const linkPaths = new Set(scanned.flatMap((directory) => directory.linkPaths));
-    if (candidates.length === 0) return { entries: candidates, linkPaths, indexComplete };
+    const linkPaths = new Set(scanned.flatMap((directory) => directory.links));
+    const coveredDirectories = new Set(
+      scanned.filter((entry) => entry.complete).map((entry) => entry.directory),
+    );
+    const ignoreFiles = new Map<string, IgnoreFile>();
+    const unavailableRules = new Set<string>();
+    let ignoreBytes = MAX_IGNORE_BYTES;
+    for (const entry of scanned) {
+      if (!entry.complete || !entry.hasIgnoreFile) continue;
+      const contents = yield* Effect.tryPromise(() =>
+        readIgnoreFile(path.join(root, entry.directory, ".ignore"), ignoreBytes),
+      ).pipe(Effect.orElseSucceed(() => "unavailable" as const));
+      if (contents === "unavailable") {
+        unavailableRules.add(entry.directory);
+        budget.truncate();
+      } else if (contents) {
+        ignoreBytes -= contents.length;
+        ignoreFiles.set(entry.directory, parseIgnoreFile(contents.toString()));
+      }
+    }
+    const resultInfo = {
+      linkPaths,
+      indexComplete,
+      coveredDirectories,
+      truncated: budget.isTruncated(),
+    };
+    if (linkPaths.size === 0) return { entries: [], ...resultInfo };
 
-    const ignoreFiles = scanned
-      .flatMap(({ directory, ignoreFile }) =>
-        ignoreFile === undefined ? [] : [{ directory, file: parseIgnoreFile(ignoreFile) }],
-      )
-      .toSorted((left, right) => right.directory.length - left.directory.length);
-    const decisions = new Map(
+    const candidateLinks = scanned.flatMap((directory) =>
+      directory.complete ? directory.links : [],
+    );
+    const candidates = (yield* Effect.forEach(
+      candidateLinks,
+      (entryPath) =>
+        Effect.gen(function* () {
+          for (const parent of ancestors(entryPath)) {
+            if (unavailableRules.has(parent) || !coveredDirectories.has(parent)) return undefined;
+          }
+          const absolutePath = path.join(root, entryPath);
+          const target = yield* fileSystem.realPath(absolutePath).pipe(Effect.option);
+          if (Option.isNone(target)) return undefined;
+          const relative = path.relative(root, target.value);
+          if (
+            relative === ".." ||
+            relative.startsWith(`..${path.sep}`) ||
+            path.isAbsolute(relative) ||
+            relative.split(path.sep).includes(".git")
+          )
+            return undefined;
+          const stat = yield* fileSystem.stat(target.value).pipe(Effect.option);
+          if (
+            Option.isNone(stat) ||
+            (stat.value.type !== "Directory" && stat.value.type !== "File")
+          ) {
+            return undefined;
+          }
+          return {
+            path: entryPath,
+            kind: stat.value.type === "Directory" ? "directory" : "file",
+          } satisfies ProjectEntry;
+        }),
+      { concurrency: SYMLINK_SCAN_CONCURRENCY },
+    )).filter((entry) => entry !== undefined);
+    const decisions = new Map<string, IgnoreDecision | undefined>(
       candidates.map((entry) => [entry.path, decideByIgnoreFiles(entry, ignoreFiles)]),
     );
-    const repositories = [
-      "",
-      ...scanned.flatMap(({ directory, isRepository }) =>
-        isRepository && directory ? [directory] : [],
-      ),
-    ].toSorted((left, right) => right.length - left.length);
+    const repositories = new Set(
+      scanned.filter((entry) => entry.isRepository).map((entry) => entry.directory),
+    );
     const entriesByRepository = Map.groupBy(
       candidates.filter((entry) => decisions.get(entry.path) === undefined),
-      (entry) =>
-        repositories.find(
-          (repository) => isWithin(entry.path, repository) && entry.path !== repository,
-        ) ?? "",
+      (entry) => {
+        for (const directory of ancestors(entry.path)) {
+          if (repositories.has(directory)) return directory;
+        }
+        return "";
+      },
     );
     const ignored = new Set(
       (yield* Effect.forEach(
@@ -292,8 +363,7 @@ export const makeSymlinkScan = Effect.fn("WorkspaceSearchIndex.makeSymlinkScan")
           ? !ignored.has(entry.path)
           : decisions.get(entry.path) === "included",
       ),
-      linkPaths,
-      indexComplete,
+      ...resultInfo,
     };
   });
 
@@ -387,8 +457,33 @@ export const makeSymlinkScan = Effect.fn("WorkspaceSearchIndex.makeSymlinkScan")
       // Git's ignore rules hide a link the same way searchVisible hides the files it indexes.
       entries: result.entries.filter((entry) => !input.isIgnored(entry.path)),
       linkPaths: result.linkPaths,
+      truncated: result.truncated,
+      coveredDirectories: result.coveredDirectories,
     };
   });
 
-  return { listSymlinkEntries, invalidateSymlinkScan };
+  const filterIndexed = Effect.fn("WorkspaceSearchIndex.filterUnscannedSymlinks")(function* (
+    entries: ReadonlyArray<ProjectEntry>,
+    scan: Effect.Success<ReturnType<typeof listSymlinkEntries>>,
+  ) {
+    return yield* Effect.filter(
+      entries,
+      (entry) => {
+        if (path.isAbsolute(entry.path) || entry.path.split("/").includes("..")) {
+          return Effect.succeed(false);
+        }
+        const parent = entry.path.slice(0, Math.max(entry.path.lastIndexOf("/"), 0));
+        if (scan.coveredDirectories.has(parent) || scan.linkPaths.has(entry.path))
+          return Effect.succeed(true);
+        const absolutePath = path.join(root, entry.path);
+        return fileSystem.realPath(absolutePath).pipe(
+          Effect.map((resolved) => resolved === absolutePath),
+          Effect.orElseSucceed(() => false),
+        );
+      },
+      { concurrency: SYMLINK_SCAN_CONCURRENCY },
+    );
+  });
+
+  return { listSymlinkEntries, invalidateSymlinkScan, filterIndexed };
 });
