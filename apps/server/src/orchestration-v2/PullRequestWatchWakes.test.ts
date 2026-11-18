@@ -455,13 +455,14 @@ describe("pull request watch wakes", () => {
       expect(texts.join("\n")).toContain("The branch now conflicts with dev.");
     }).pipe(Effect.provide(layerTest)),
   );
-  it.effect.each(["closed", "comment-limit"] as const)(
+  it.effect.each(["closed", "unreadable", "comment-limit"] as const)(
     "a re-watch takes back the %s notice the last watch queued, and a review comment read in the ending pass reaches the agent after a re-watch",
     (ending) =>
       Effect.gen(function* () {
         const name = `rewatch-${ending}`;
         const { orchestrator, threadId, link, watch } = yield* watchWithQueuedWake(name);
         const remark = "- Review comment from alice on src/app.ts: please rename this.";
+        const kept = "Also kept as context without waking you: #7: 1 comment from bob";
         yield* orchestrator.dispatch({
           type: "thread.pull-request-watch.sync",
           commandId: CommandId.make(`pr-wakes-${name}-end`),
@@ -469,13 +470,17 @@ describe("pull request watch wakes", () => {
           ...key,
           startedAt: watch.startedAt,
           watch: null,
-          ...(ending === "closed" ? { dropQueuedWakes: true as const } : { endedWatch: watch }),
+          ...(ending === "comment-limit"
+            ? { endedWatch: watch }
+            : { dropQueuedWakes: true as const }),
           wake: {
             messageId: pullRequestWakeMessageId(link, `${name}-end`, undefined, true),
             text:
               ending === "closed"
-                ? "Pull request #7 was closed, so GOAT stopped watching it."
-                : `Update on pull request #7 (${url}), which GOAT is watching for you:\n${remark}\n\nGOAT stopped watching after 10 comment-only updates in a row.`,
+                ? `Pull request #7 (${url}) was closed, so GOAT stopped watching it.\n\n${kept}`
+                : ending === "unreadable"
+                  ? `GOAT stopped watching pull request #7 (${url}) because it failed to read it from the host 8 times in a row.\n\n${kept}`
+                  : `Update on pull request #7 (${url}), which GOAT is watching for you:\n${remark}\n\nGOAT stopped watching after 10 comment-only updates in a row.`,
             notification: { ...notification, outcome: "updated", summary: "#7: stopped watching" },
           },
         });
@@ -495,7 +500,8 @@ describe("pull request watch wakes", () => {
           .map((run) => messages.find((message) => message.id === run.userMessageId)?.text ?? "")
           .join("\n");
         expect(queued).not.toContain("stopped watching");
-        if (ending === "comment-limit") expect(queued).toContain(remark);
+        // News only the ending notice carried still reaches the agent.
+        expect(queued).toContain(ending === "comment-limit" ? remark : kept);
       }).pipe(Effect.provide(layerTest)),
   );
 });

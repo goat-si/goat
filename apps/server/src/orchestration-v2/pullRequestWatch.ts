@@ -14,20 +14,23 @@ import * as DateTime from "effect/DateTime";
 /** Bounds consecutive comment-only wakes to stop bot reply loops; check, conflict, or push news resets it. */
 export const PULL_REQUEST_WATCH_WAKE_LIMIT = 10;
 const EXHAUSTED_LINE = `GOAT stopped watching after ${PULL_REQUEST_WATCH_WAKE_LIMIT} comment-only updates in a row.`;
-// The close and unreadable endings the reactor writes carry no news of their own.
+// The close and unreadable endings the reactor writes carry no news of their own, only kept context.
 const BARE_ENDING =
   /^(Pull request #\d+ .*was closed, so GOAT stopped watching it\.|GOAT stopped watching pull request #\d+ )/u;
+const HELD_CONTEXT = "Also kept as context without waking you: ";
 
 /**
  * The ending wake a watch left queued, as a new watch on the pull request tells it: a comment-limit
- * ending keeps its news with the watching close instead of its stop line, and a bare close or
- * unreadable ending has nothing left to tell (undefined).
+ * ending keeps its news with the watching close instead of its stop line; a bare close or
+ * unreadable ending keeps only the context it carried, or has nothing left to tell (undefined).
  */
 export function resumedWakeText(text: string): string | undefined {
   const lines = text.split("\n");
   const stop = lines.findIndex((line) => line.startsWith(EXHAUSTED_LINE));
   if (stop !== -1) return lines.with(stop, watchingClosing()).join("\n");
-  return BARE_ENDING.test(text) ? undefined : text;
+  if (!BARE_ENDING.test(text)) return text;
+  const kept = text.indexOf(`\n\n${HELD_CONTEXT}`);
+  return kept === -1 ? undefined : `${text.slice(kept + 2)}\n\n${watchingClosing()}`;
 }
 
 const watchingClosing = () =>
@@ -566,7 +569,7 @@ export function withHeldContext(
 ): string {
   return heldContext === undefined || heldContext.length === 0
     ? text
-    : `${text}\n\nAlso kept as context without waking you: ${heldContext.join("; ")}`;
+    : `${text}\n\n${HELD_CONTEXT}${heldContext.join("; ")}`;
 }
 
 function pullRequestWatchMessage(input: {
