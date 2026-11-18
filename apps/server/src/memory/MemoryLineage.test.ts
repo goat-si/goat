@@ -1,3 +1,4 @@
+import { appOwnedTaskResultEvents } from "./threadProvenance.testkit.ts";
 import * as Settings from "../serverSettings.ts";
 import { assert, describe, it } from "@effect/vitest";
 import * as M from "@goat/contracts";
@@ -601,3 +602,39 @@ describe("r4 authoritative lineage", () => {
       ),
   );
 });
+
+it.effect(
+  "bounds child-result history while preserving lineage collected before the scan limit",
+  () =>
+    Effect.scoped(
+      Effect.gen(function* () {
+        const { store, sql } = yield* makeEnvironment(memberId);
+        const early = M.ThreadId.make("synthetic-early-child");
+        const late = M.ThreadId.make("synthetic-late-child");
+        const earlyRevision = M.MemoryRevisionId.make(id(9901));
+        const lateRevision = M.MemoryRevisionId.make(id(9902));
+        for (const [child, revision] of [
+          [early, earlyRevision],
+          [late, lateRevision],
+        ] as const)
+          yield* store.appendThreadLineage({ ...thread, threadId: child }, space, [revision]);
+        const insertChild = Effect.fn("test.insertChild")(function* (child: M.ThreadId) {
+          for (const event of appOwnedTaskResultEvents(thread.threadId, child))
+            yield* sql`INSERT INTO orchestration_events VALUES (2,'thread',${event.streamId},${event.type},${event.payloadJson})`;
+        });
+        yield* insertChild(early);
+        const transfer = JSON.stringify({
+          type: "subagent_result",
+          targetThreadId: thread.threadId,
+          sourceThreadId: "synthetic-unlinked-child",
+        });
+        yield* sql`INSERT INTO orchestration_events VALUES (2,'thread',${thread.threadId},'context-transfer.created',${transfer})`;
+        yield* sql`WITH RECURSIVE copies(n) AS (VALUES (1) UNION ALL SELECT n+1 FROM copies WHERE n<1000)
+      INSERT INTO orchestration_events SELECT t.* FROM orchestration_events t, copies
+      WHERE t.event_type='context-transfer.created' AND json_extract(t.payload_json,'$.sourceThreadId')=${early}`;
+        yield* insertChild(late);
+        const lineage = yield* store.readThreadLineage(thread, space);
+        assert.deepStrictEqual(lineage, { state: "unknown", revisions: [earlyRevision] });
+      }),
+    ),
+);
