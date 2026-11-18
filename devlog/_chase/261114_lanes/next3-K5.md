@@ -661,3 +661,11 @@ K5's imports in test files that exist on dev (git diff 8c59f73519 HEAD):
   after (lines 34-36): `import { spawnClaudeProcessGroup } from "./ClaudeProcessSpawn.ts";` / `import { claudeProcessExitFailure } from "./ClaudeQueryRunnerErrors.ts";` / blank line
   The name is used once, at line 717, inside the appended GOAT case "a CLI that exits during boot reports its exit, not a start-up timeout"; no existing case runs against it. Asked of the coordinator because the rule names an existing import line, and this one is new.
 
+
+### Coordinator 01:20:03 UTC on the new import line (verbatim, the part for K5)
+
+> RULE 3, the 01:17 rule II covers a NEW import statement on the same terms as a name added to an existing line: only appended cases or appended helpers use what it imports, it imports a real module (no fake, no mock, no replacement of something an existing case reads), the import has no effect at load time that an existing case could see (no vi.mock beside it, no module that registers or patches something when loaded), and no existing title, body, setup value or expectation changes. The lane quotes the added statements in its record; the fresh review lists them. Whether the name sits on an existing line or a new one makes no difference, so K5 does NOT move its import.
+> CONFIRMED under it, on your account and the lanes' records (NOT READ by me; …): … K5's claudeProcessExitFailure in ClaudeAgentSdkQueryRunner.test.ts. Both heads stay put.
+
+Load-time check: ClaudeQueryRunnerErrors.ts imports only effect/Cause and effect/Schema and declares classes, guards and two functions; nothing registers or patches on load, and no vi.mock was added beside the import (the file's one vi.mock, of @anthropic-ai/claude-agent-sdk, is on dev). The import stays as is.
+
