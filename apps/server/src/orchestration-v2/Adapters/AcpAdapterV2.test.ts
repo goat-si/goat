@@ -3439,7 +3439,7 @@ describe("AcpAdapterV2", () => {
             toolCallId: "unknown-permission-tool",
             title: "Unknown permission kind",
           },
-          options: [{ optionId: "allow-once", name: "Allow once", kind: "allow_once" }],
+          options: [{ optionId: " opaque-choice ", name: "Allow once", kind: "allow_once" }],
         },
         { requestId: "unknown-permission-request", method: "session/request_permission" },
       ).pipe(Effect.forkScoped);
@@ -3461,7 +3461,9 @@ describe("AcpAdapterV2", () => {
       const responseFiber = yield* runtime
         .respondToRuntimeRequest({ requestId: pending.runtimeRequest.id, decision: "accept" })
         .pipe(Effect.forkScoped);
-      assert.equal((yield* Fiber.join(permissionFiber)).outcome.outcome, "selected");
+      const permission = yield* Fiber.join(permissionFiber);
+      assert.equal(permission.outcome.outcome, "selected");
+      assert.deepEqual(permission.outcome, { outcome: "selected", optionId: " opaque-choice " });
       if (runtimeInput?.onOutgoingResponse === undefined) {
         return yield* Effect.die("ACP runtime must expose native response acknowledgements");
       }
