@@ -507,7 +507,7 @@ export function ThreadSwipeable(props: ThreadSwipeableProps) {
           overshootRight
           renderRightActions={renderRightActions}
           rightThreshold={actionsWidth * 0.42}
-          simultaneousWith={props.simultaneousWith}
+          simultaneousWith={Platform.OS === "ios" ? props.simultaneousWith : undefined}
         >
           {
             /* oxlint-disable react/refs -- The render callback receives a close/open handler; only invoking that handler accesses the ref. */
