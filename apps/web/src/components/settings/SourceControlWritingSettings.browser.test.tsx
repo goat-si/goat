@@ -13,11 +13,12 @@ import type { ScopedSettingsPatch } from "./scopedSettings";
 type WritingStyle = typeof DEFAULT_UNIFIED_SETTINGS.sourceControlWritingStyle;
 const state = vi.hoisted(() => ({
   styles: [] as WritingStyle[],
-  reviewGuideSettings: null as UnifiedSettings | null,
+  scopedSettings: null as UnifiedSettings | null,
   providers: [] as ServerProvider[],
   updateSettings: vi.fn<(patch: ScopedSettingsPatch) => void>(),
 }));
 const environmentId = EnvironmentId.make("source-control-settings");
+const environment = { environmentId, serverConfig: {} };
 
 vi.mock(import("@tanstack/react-router"), async (original) => ({
   ...(await original()),
@@ -26,7 +27,7 @@ vi.mock(import("@tanstack/react-router"), async (original) => ({
 vi.mock(import("./useScopedSettings"), async (original) => ({
   ...(await original()),
   useScopedSettings: (() =>
-    state.reviewGuideSettings ?? {
+    state.scopedSettings ?? {
       ...DEFAULT_UNIFIED_SETTINGS,
       sourceControlWritingStyle: state.styles[0],
     }) as never,
@@ -39,16 +40,19 @@ vi.mock(import("./SettingsScopeContext"), async (original) => ({
   ...(await original()),
   useSettingsScope: (() => ({
     scope: { kind: "all", environmentIds: [] },
-    environment: state.reviewGuideSettings ? { environmentId, serverConfig: {} } : null,
-    connectedEnvironments: state.reviewGuideSettings ? [{ environmentId }] : [],
-    targets: state.styles.map((style) => ({
-      settings: { ...DEFAULT_UNIFIED_SETTINGS, sourceControlWritingStyle: style },
-    })),
+    environment: state.scopedSettings ? environment : null,
+    connectedEnvironments: state.scopedSettings ? [{ environmentId }] : [],
+    targets: state.scopedSettings
+      ? [{ environmentId, projectId: null, settings: state.scopedSettings }]
+      : state.styles.map((style) => ({
+          settings: { ...DEFAULT_UNIFIED_SETTINGS, sourceControlWritingStyle: style },
+        })),
     target: null,
   })) as never,
 }));
 vi.mock(import("../../state/environments"), async (original) => ({
   ...(await original()),
+  useEnvironments: (() => ({ environments: [environment] })) as never,
   useEnvironmentProviders: () => new Map([[environmentId, state.providers]]),
 }));
 vi.mock(import("./settingsLayout"), async (original) => ({
@@ -76,7 +80,7 @@ const content = () => (
 );
 
 async function setup() {
-  state.reviewGuideSettings = null;
+  state.scopedSettings = null;
   state.providers = [];
   state.styles = [
     {
@@ -129,7 +133,7 @@ it.each(["API writer fallback", "saved text generation model"])(
     const api = createModelSelection(ProviderInstanceId.make("text-api"), "api-model");
     state.styles = [];
     state.providers = [codex];
-    state.reviewGuideSettings = {
+    state.scopedSettings = {
       ...DEFAULT_UNIFIED_SETTINGS,
       reviewGuidesEnabled: true,
       reviewGuideModelSelection: createModelSelection(
@@ -162,3 +166,39 @@ it.each(["API writer fallback", "saved text generation model"])(
     await expect.element(page.getByRole("option", { name: /luna/i })).not.toBeInTheDocument();
   },
 );
+
+function setupHiddenWriter(separate: boolean) {
+  const codex = provider({ instanceId: "codex", models: ["gpt-6-astra", "gpt-6-luna"] });
+  const selection = createModelSelection(codex.instanceId, "gpt-6-luna");
+  state.updateSettings.mockReset();
+  state.styles = [];
+  state.providers = [codex];
+  state.scopedSettings = {
+    ...DEFAULT_UNIFIED_SETTINGS,
+    textGenerationModelSelection: selection,
+    sourceControlWriterModelSelection: separate ? selection : null,
+    providerModelPreferences: {
+      [codex.instanceId]: { hiddenModels: [selection.model], modelOrder: [] },
+    },
+  };
+  return selection;
+}
+
+it("shows the saved source control writer model while hiding it from the menu", async () => {
+  setupHiddenWriter(true);
+  await using screen = await render(content());
+  const trigger = screen.getByRole("button", { name: "Source control writer model", exact: true });
+  await expect.element(trigger).toHaveTextContent("gpt-6-luna");
+  await trigger.click();
+  await expect.element(page.getByRole("option", { name: /astra/i })).toBeVisible();
+  await expect.element(page.getByRole("option", { name: /luna/i })).not.toBeInTheDocument();
+});
+
+it("copies the hidden text generation model when enabling a separate writer model", async () => {
+  const selection = setupHiddenWriter(false);
+  await using screen = await render(content());
+  await screen.getByRole("switch", { name: "Use a separate source control writer model" }).click();
+  expect(state.updateSettings).toHaveBeenCalledWith({
+    sourceControlWriterModelSelection: selection,
+  });
+});

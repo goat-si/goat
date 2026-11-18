@@ -423,6 +423,7 @@ export function SourceControlWritingSettingsSection() {
                     const reason = writerModelDisabledReason(
                       defaultModelSelection.instanceId,
                       defaultModelSelection.model,
+                      { includeHidden: true },
                     );
                     if (reason) {
                       toastManager.add({
@@ -546,6 +547,7 @@ export function SourceControlWritingSettingsSection() {
                       const reason = writerModelDisabledReason(
                         activeSelection.instanceId,
                         activeSelection.model,
+                        { includeHidden: true },
                       );
                       if (reason) {
                         toastManager.add({

@@ -21,7 +21,11 @@ export function useScopedModelDisabledReason(
   const { targets } = useSettingsScope();
   const { environments } = useEnvironments();
   const providersByEnvironment = useEnvironmentProviders();
-  return (instanceId: ProviderInstanceId, model: string): string | null => {
+  return (
+    instanceId: ProviderInstanceId,
+    model: string,
+    { includeHidden = false }: { includeHidden?: boolean } = {},
+  ): string | null => {
     const sourceEntry = entries.find((entry) => entry.instanceId === instanceId);
     for (const candidate of targets) {
       const environment = environments.find(
@@ -37,8 +41,9 @@ export function useScopedModelDisabledReason(
       const optionsForInstance = textGeneration
         ? getTextGenerationModelOptionsByInstance
         : getCustomModelOptionsByInstance;
+      const merged = mergeEnvironmentSettings(candidate.settings, settings);
       const options = optionsForInstance(
-        mergeEnvironmentSettings(candidate.settings, settings),
+        includeHidden ? { ...merged, providerModelPreferences: {} } : merged,
         providers,
       ).get(instanceId);
       if (
