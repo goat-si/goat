@@ -1,6 +1,5 @@
 import type { EnvironmentId, PullRequestReviewPosition } from "@goat/contracts";
 import type { SelectedLineRange } from "@pierre/diffs";
-import { useState } from "react";
 import { DiffCommentAnnotation } from "../diffs/DiffCommentAnnotation";
 import type { PullRequestCompletionScope } from "./PullRequestMarkdownTextarea";
 import { getReviewPositionAnchor } from "./PullRequestReviewAnnotation";
@@ -17,12 +16,15 @@ export interface DraftAnchor {
   readonly position: PullRequestReviewPosition;
   readonly startPosition?: PullRequestReviewPosition;
   readonly range: SelectedLineRange;
+  readonly openedHeadSha: string | undefined;
   readonly sourceRevision?: PendingReviewComment["sourceRevision"];
   readonly moving?: PendingReviewComment | undefined;
 }
 
 export function PullRequestInlineDraft({
   draft,
+  text,
+  onTextChange,
   environmentId,
   reviewKey,
   completionScope,
@@ -31,6 +33,8 @@ export function PullRequestInlineDraft({
   onClose,
 }: {
   readonly draft: DraftAnchor;
+  readonly text: string;
+  readonly onTextChange: (text: string) => void;
   readonly environmentId: EnvironmentId;
   readonly reviewKey: string;
   readonly completionScope: PullRequestCompletionScope | null;
@@ -38,7 +42,6 @@ export function PullRequestInlineDraft({
   readonly onAddToAgent?: ((body: string) => void) | undefined;
   readonly onClose: () => void;
 }) {
-  const [text, setText] = useState(draft.moving?.body ?? "");
   const queueComment = (body: string) => {
     if (!canComment) {
       onAddToAgent?.(body);
@@ -65,7 +68,7 @@ export function PullRequestInlineDraft({
       kind="draft"
       rangeLabel={draft.path + ":" + getReviewPositionAnchor(draft.position).line}
       text={text}
-      onTextChange={setText}
+      onTextChange={onTextChange}
       completionScope={canComment ? completionScope : null}
       submitLabel={
         canComment ? (draft.moving ? "Move comment here" : "Add to review") : "Add to agent"

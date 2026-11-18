@@ -599,3 +599,41 @@ it("blocks queued withheld-line review after a force-push", async () => {
     }),
   );
 });
+
+it("preserves an open inline draft across a force-push until the reader re-anchors it", async () => {
+  setup();
+  mocks.withheld = true;
+  const original = reviewableWithheldDetail();
+  const pushed = reviewableWithheldDetail("b".repeat(40));
+  const container = document.createElement("div");
+  container.className = "flex h-[700px] w-[900px]";
+  await using screen = await render(tab(0, null, null, original), { container });
+  const load = screen.getByRole("button", { name: "Load file diff" });
+  const editor = screen.getByRole("textbox", { name: /Comment on lines/ });
+  await userEvent.click(screen.getByRole("button", { name: "Expand diff" }));
+  await userEvent.click(load);
+  await expect.element(screen.getByText("beforePush()", { exact: true })).toBeVisible();
+  await openWithheldDraft(container);
+  await userEvent.fill(editor, "An unsent note on this line");
+
+  await screen.rerender(tab(0, null, null, pushed));
+  const parked = screen.getByRole("region", { name: "Stale inline draft" });
+  const reanchor = parked.getByRole("button", { name: "Re-anchor draft" });
+  await expect.element(parked.getByText("An unsent note on this line")).toBeVisible();
+  await expect.element(reanchor).toBeDisabled();
+  await expect.element(editor).not.toBeInTheDocument();
+  await expect
+    .element(screen.getByRole("button", { name: "Add to review" }))
+    .not.toBeInTheDocument();
+
+  mocks.withheldHeadSha = pushed.headSha;
+  await screen.rerender(tab(1, null, null, pushed));
+  await expect.element(reanchor).toBeEnabled();
+  await expect.element(editor).not.toBeInTheDocument();
+  await userEvent.click(reanchor);
+  await userEvent.click(load);
+  await expect.element(screen.getByText("afterPush()", { exact: true })).toBeVisible();
+  await openWithheldDraft(container);
+  await expect.element(editor).toHaveValue("An unsent note on this line");
+  await expect.element(parked).not.toBeInTheDocument();
+});

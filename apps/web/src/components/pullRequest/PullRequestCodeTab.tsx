@@ -130,6 +130,7 @@ import {
 } from "./pullRequestCodeAnnotations";
 import { PullRequestInlineDraft, type DraftAnchor } from "./PullRequestInlineDraft";
 import { PullRequestStaleReviewComments } from "./PullRequestStaleReviewComments";
+import { PullRequestStaleInlineDraft } from "./PullRequestStaleInlineDraft";
 
 export interface PullRequestAgentSelectionInput {
   readonly comment: ReviewCommentContext;
@@ -199,6 +200,14 @@ function PullRequestCodeTab({
     range: SelectedLineRange;
   } | null>(null);
   const [draft, setDraft] = useState<DraftAnchor | null>(null);
+  const [draftText, setDraftText] = useState("");
+  const [reanchoringDraft, setReanchoringDraft] = useState(false);
+  const closeDraft = () => {
+    setDraft(null);
+    setDraftText("");
+    setReanchoringDraft(false);
+    setSelectedLines(null);
+  };
   const [movingCommentId, setMovingCommentId] = useState<string | null>(null);
   const [threadPending, setThreadPending] = useState(false);
   const [orphansOpen, setOrphansOpen] = useState(false);
@@ -223,8 +232,7 @@ function PullRequestCodeTab({
     setStateScopeKey(scopeKey);
     setLastViewedFileKey(null);
     setMovingCommentId(null);
-    setDraft(null);
-    setSelectedLines(null);
+    closeDraft();
     setToggledFiles(new Set());
     setFoldOverride(null);
     setVisibleCommitCount(COMMIT_PAGE_SIZE);
@@ -351,10 +359,15 @@ function PullRequestCodeTab({
   const withheldReadable =
     firstPage?.withheldFilesReadable === true &&
     (commit !== null || (revision !== undefined && !staleRevision));
-  if (staleRevision && (draft !== null || selectedLines !== null)) {
-    setDraft(null);
-    setSelectedLines(null);
-  }
+  const draftStale =
+    draft !== null &&
+    (staleRevision ||
+      draft.openedHeadSha !== detail.headSha ||
+      (draft.sourceRevision?.baseSha !== undefined &&
+        revision !== undefined &&
+        draft.sourceRevision.baseSha !== revision.baseSha));
+  if ((staleRevision || draftStale) && selectedLines !== null) setSelectedLines(null);
+  if (draftStale && draftText.length === 0) closeDraft();
   const withheld = useWithheldPullRequestFiles(
     { environmentId, input: { ...reference, ...(commit === null ? { revision } : { commit }) } },
     withheldReadable,
@@ -404,6 +417,7 @@ function PullRequestCodeTab({
   const rangeComments = hostReview.rangeComment === true;
   const canSelectLines =
     canReviewCurrentDiff && (review.inlineComment || onAddToAgentSelection !== undefined);
+  const canStartDraft = canSelectLines && (draft === null || (draftStale && reanchoringDraft));
   const testFileCount = loadedFiles.filter((file) =>
     isTestChangedFile(resolveFileDiffPath(file)),
   ).length;
@@ -469,7 +483,7 @@ function PullRequestCodeTab({
         groupAt(anchor.side, anchor.line).pending.push(comment);
       }
     }
-    if (draft?.fileKey === fileKey) {
+    if (!draftStale && draft?.fileKey === fileKey) {
       const anchor = getReviewPositionAnchor(draft.position);
       groupAt(anchor.side, anchor.line).draft = true;
     }
@@ -644,7 +658,7 @@ function PullRequestCodeTab({
     range: SelectedLineRange | null,
     context: { item: CodeViewItem<ReviewAnnotationGroup> },
   ) => {
-    if (!range || !canSelectLines || withheld.waiting) return;
+    if (!range || !canStartDraft || withheld.waiting) return;
     const item = context.item;
     if (item.type !== "diff") return;
     const file = files.find((candidate) => fileRenderKey(candidate) === item.id);
@@ -659,15 +673,22 @@ function PullRequestCodeTab({
     const anchor =
       (sourceFile && resolveDiffReviewAnchor(sourceFile, range, rangeComments)) ??
       resolveDiffReviewAnchor(file, range, rangeComments);
-    if (anchor === null || (movingComment && (!canCommentOnLines || !detail.headSha))) return;
-    const sourceRevision =
-      withheld.identities.has(file) || movingComment
-        ? (revision ?? (detail.headSha ? { headSha: detail.headSha } : undefined))
-        : undefined;
+    const moving = movingComment ?? (reanchoringDraft ? draft?.moving : undefined);
+    if (anchor === null || (moving && (!canCommentOnLines || !detail.headSha))) return;
+    const needsRevision =
+      withheld.identities.has(file) ||
+      moving ||
+      (reanchoringDraft && draft?.sourceRevision !== undefined);
+    const sourceRevision = needsRevision
+      ? (revision ?? (detail.headSha ? { headSha: detail.headSha } : undefined))
+      : undefined;
+    if (!reanchoringDraft) setDraftText(moving?.body ?? "");
     setMovingCommentId(null);
+    setReanchoringDraft(false);
     setDraft({
       sourceRevision,
-      moving: movingComment,
+      moving,
+      openedHeadSha: detail.headSha,
       fileKey: item.id,
       path,
       oldPath: previousPath === path ? null : previousPath,
@@ -694,8 +715,7 @@ function PullRequestCodeTab({
             range: anchor.range,
             text,
           });
-    setDraft(null);
-    setSelectedLines(null);
+    closeDraft();
     if (comment !== null) onFinish(comment);
   };
 
@@ -778,8 +798,8 @@ function PullRequestCodeTab({
             new Error("Unchanged lines are unavailable in a file with shortened lines."),
           )
         : loadDiffFiles(file),
-    enableGutterUtility: canSelectLines && draft === null,
-    enableLineSelection: canSelectLines && draft === null,
+    enableGutterUtility: canStartDraft,
+    enableLineSelection: canStartDraft,
     onGutterUtilityClick: beginComment,
     onLineSelectionEnd: beginComment,
     onPostRender: codeViewReveal.flush,
@@ -898,9 +918,11 @@ function PullRequestCodeTab({
           onRemove={() => removeComment(reviewKey, comment.id)}
         />
       ))}
-      {annotation.metadata.draft && draft && canSelectLines ? (
+      {annotation.metadata.draft && draft && !draftStale && canSelectLines ? (
         <PullRequestInlineDraft
           draft={draft}
+          text={draftText}
+          onTextChange={setDraftText}
           environmentId={environmentId}
           reviewKey={reviewKey}
           completionScope={completionScope}
@@ -912,10 +934,7 @@ function PullRequestCodeTab({
                 onAddToAgentSelection({ comment, request: body }),
               ))
           }
-          onClose={() => {
-            setDraft(null);
-            setSelectedLines(null);
-          }}
+          onClose={closeDraft}
         />
       ) : null}
     </div>
@@ -923,8 +942,7 @@ function PullRequestCodeTab({
 
   const changeIgnoreWhitespace = (next: boolean) => {
     setIgnoreWhitespace(next);
-    setDraft(null);
-    setSelectedLines(null);
+    if (!draftStale) closeDraft();
   };
   const toolbar = (
     <div data-glass-layer className={DIFF_SURFACE_TOOLBAR_CLASS}>
@@ -1237,10 +1255,21 @@ function PullRequestCodeTab({
       onCancel={() => setMovingCommentId(null)}
     />
   );
+  const staleComposer =
+    draftStale && draftText.length > 0 ? (
+      <PullRequestStaleInlineDraft
+        text={draftText}
+        reanchoring={reanchoringDraft}
+        canReanchor={canSelectLines}
+        onReanchor={() => setReanchoringDraft(true)}
+        onDiscard={closeDraft}
+      />
+    ) : null;
   const withToolbar = (body: ReactNode) => (
     <div className="flex h-full min-h-0 flex-col">
       {toolbar}
       {reviewRecovery}
+      {staleComposer}
       <div ref={scrollerRef} className="min-h-0 flex-1 overflow-auto">
         {body}
       </div>
@@ -1287,6 +1316,7 @@ function PullRequestCodeTab({
     <div className="flex h-full min-h-0 flex-col">
       {toolbar}
       {reviewRecovery}
+      {staleComposer}
       {orphanFiles.size > 0 ? (
         <div className="shrink-0 border-b border-border/60">
           <Collapsible open={orphansOpen} onOpenChange={setOrphansOpen}>
