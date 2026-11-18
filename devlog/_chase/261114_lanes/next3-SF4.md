@@ -87,3 +87,44 @@ The table quotes the changed expected operand at each assertion in the four file
 | `reconcileGoatMigrationIds.upstream080.test.ts:252` | `[167, "DisposableMachineEnrollment"]` | `[168, "ScheduledTaskFirstBindIntent"]` |
 | `reconcileV2PreviewMigration.test.ts:174` | `[157, "DisposableMachineEnrollment"]` | `[157, "DisposableMachineEnrollment"], [158, "ScheduledTaskFirstBindIntent"]` |
 | `reconcileV2PreviewMigration.test.ts:356` | `[157, "DisposableMachineEnrollment"]` | `[157, "DisposableMachineEnrollment"], [158, "ScheduledTaskFirstBindIntent"]` |
+
+## READY · 2026-11-18
+
+The coordinator approved pinning the historical crash trigger to `DisposableMachineEnrollment`. The crash still occurs during the ledger-move transaction, before migration 158 runs.
+
+`apps/server/src/persistence/reconcileGoatMigrationIds.resume.test.ts:235`:
+
+```diff
+-      yield* killWhenRecording(goatNames.at(-1) ?? "");
++      yield* killWhenRecording("DisposableMachineEnrollment");
+```
+
+The 16 ledger assertion quotes are in the preceding section. The unpublished assertion commit was amended to include the one approved trigger edit. Migration 158 remains SF4's id.
+
+- GOAT-authored fix for #3581: `c776171a80c6991ef0dbdb959793da4de3b99ed4`.
+- Approved assertion and fixture follow-up: `9760e895a3734773512bfbea55fb66f24a864aa1`.
+- Merged TF1 integration head: `6def29ca359f546e50dcd731a6364e3f0d575545`. Fetch and merge exited 0. `ort` merged cleanly. The lockfile diff was empty.
+- Lane merge and plain-pushed head: `84e9336ee74c168ebcaff5acdbb1e19c78dc045a`.
+
+From `apps/server`, `GOAT_TEST_TMP_GUARD=fail vp test run --reporter=default` with these 12 whole files exited 0. All 240 tests passed.
+
+| File under `apps/server/src/` | Passed |
+| --- | ---: |
+| `persistence/reconcileGoatMigrationIds.resume.test.ts` | 50 |
+| `persistence/reconcileGoatMigrationIds.test.ts` | 33 |
+| `persistence/reconcileGoatMigrationIds.upstream080.test.ts` | 14 |
+| `persistence/reconcileV2PreviewMigration.test.ts` | 7 |
+| `persistence/Migrations.test.ts` | 10 |
+| `persistence/Migrations.databaseAhead.test.ts` | 2 |
+| `scheduledTasks/ScheduledTaskService.threadMode.test.ts` | 18 |
+| `scheduledTasks/ScheduledTaskRuns.test.ts` | 13 |
+| `scheduledTasks/ScheduledTaskService.test.ts` | 8 |
+| `scheduledTasks/ScheduledTaskService.webhook.test.ts` | 54 |
+| `scheduledTasks/ScheduledTaskService.botRoutine.test.ts` | 13 |
+| `orchestration-v2/ScheduledTaskOutcomes.integration.test.ts` | 18 |
+
+The separate pre-gate `ps` check found no other verifier in this worktree. From the repository root, `vp run check:changed origin/chase/t3-261114-next3` exited 0 against 11 lane files. Rename check, format, lint, GraphQL, agent context budget, agent surface audit, both Knip passes and both package typechecks passed. Vitest selected 232 files in apps/server. 230 files passed and 2 were skipped. 2,790 tests passed, 4 were skipped and zero failed. No test was skipped by SF4.
+
+Limits: A crash before initial-message acceptance can leave an empty thread because thread creation commits earlier.
+
+NOT RUN: P1 real-client pass, lane CI, independent review, repository-wide checks.
