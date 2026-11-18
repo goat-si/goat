@@ -633,3 +633,10 @@ Existing dev test files this fix round touched: none (ClaudeAgentSdkQueryRunner.
 
 NOT RUN (fix round): providerProcesses.test.ts's three Linux cases, the new group case included (goat-ci lane=server on 50e90aaac3); the P3-3 failure states; a real Claude turn; the startup barrier against a real systemd user manager.
 
+
+### READY rule, coordinator 2026-11-18 00:45:31 UTC (relayed 01:15 UTC), verbatim
+
+> "From now on for every lane: READY means the gate exited 0 on the pushed head, or the report names each failure with the same failure shown at the integration head."
+
+K5 against it: the pushed head 50e90aaac349a2fe5f23124b3429327060d3b9d7 (git ls-remote) is the head the second gate ran on; no commit landed after it. That run's summary lists every step as pass (format, lint, knip 1/2 and 2/2, graphql, agent surface audit, agent context budget, typecheck 17 packages, test 305 files: 3905 passed | 5 skipped). The script's exit code itself was not captured (the shell session that held the echo had ended); check-changed.ts exits nonzero only when a step fails, and none did.
+
