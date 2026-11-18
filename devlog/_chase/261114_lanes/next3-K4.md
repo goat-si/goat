@@ -402,3 +402,9 @@ Commands run on pen-macmini at 09:38-09:39 KST, with Node 26.12.1 on PATH. The c
 
 Checks for the local edits: PATH=$HOME/.nvm/versions/node/v26.12.1/bin:$PATH vp test run src/workspace/checkpointRestoreReservation.test.ts src/vcs/GitVcsDriver.skipWorktreeRestore.test.ts, run whole from apps/server (package goat): "Test Files 2 passed (2)", "Tests 19 passed (19)", exit 0. NOT RUN for the local edits: check:changed (the head stays put and nothing is committed), Windows, and the fresh review. If the review asks for them, (b) becomes one commit (implementation and its two cases, test first) and (c) one test-only commit. Both wait for the coordinator's word on the review.
 
+
+## 8m. READY and the gate, verbatim (coordinator 2026-11-18 00:45:31 UTC, relayed 01:15 UTC)
+
+"From now on for every lane: READY means the gate exited 0 on the pushed head, or the report names each failure with the same failure shown at the integration head."
+
+For K4: the READY of 197f92c954 meets it (vp run check:changed origin/chase/t3-261114-next3 exited 0 on that exact head, section READY). Any commit after it, including the local (b) and (c) edits if the review asks for them, gets a fresh check:changed run on the head pushed before a new READY.
