@@ -157,3 +157,59 @@ it.live.each([
       }),
     ),
 );
+
+// Only deleted paths lose their flags: a kept file someone flagged by hand stays as it was. One
+// update-index keeps only its last flag, and git drops a hand-set skip-worktree inside sparse
+// patterns, so "s" is set one flag at a time in a worktree without them.
+it.live.each([
+  { tag: "s", flags: ["--skip-worktree", "--assume-unchanged"], sparseAgain: false },
+  { tag: "h", flags: ["--assume-unchanged"], sparseAgain: true },
+] as const)("restoring a deletion leaves the flags of a kept file tagged $tag", (input) =>
+  runCleanupTest(
+    Effect.gen(function* () {
+      const { tag, flags, sparseAgain } = input;
+      const { service, fs, repo, worktree, command } = yield* cleanupFixture({
+        ...DEFAULT_SERVER_SETTINGS.storageCleanup,
+        ...LEGACY_WORKTREE_RULES,
+        worktreeAfterDays: 8,
+        worktreeSnapshotChanges: true,
+        worktreeKeepWhen: "uncommitted-changes",
+      });
+      const sparse = (cwd: string) =>
+        command(cwd, ["sparse-checkout", "set", "--no-cone", "/.gitignore"]);
+      yield* sparse(worktree);
+      const original = (yield* command(repo, ["show", "feature:tracked.txt"])).stdout;
+      yield* fs.writeFileString(`${worktree}/tracked.txt`, original);
+      yield* command(worktree, ["update-index", "--no-skip-worktree", "--", "tracked.txt"]);
+      yield* fs.remove(`${worktree}/tracked.txt`);
+      const report = yield* service.runNow;
+      expect(report.entries[0]).toMatchObject({ outcome: "removed" });
+      const ref =
+        (yield* command(repo, [
+          "for-each-ref",
+          "--format=%(refname)",
+          "refs/goat/snapshots",
+        ])).stdout
+          .trim()
+          .split("\n")[0] ?? "";
+      const snapshotSha = (yield* command(repo, ["rev-parse", ref])).stdout.trim();
+      const headSha = (yield* command(repo, ["rev-parse", `${ref}^1`])).stdout.trim();
+      yield* command(repo, ["worktree", "add", worktree, "feature"]);
+      if (sparseAgain) yield* sparse(worktree);
+      yield* command(worktree, ["update-index", "--assume-unchanged", "--", "tracked.txt"]);
+      for (const flag of flags)
+        yield* command(worktree, ["update-index", flag, "--", ".gitignore"]);
+      const kept = command(worktree, ["ls-files", "-v", "--", ".gitignore"]);
+      expect((yield* kept).stdout).toBe(`${tag} .gitignore\n`);
+      yield* applySnapshotToWorktree({ cwd: worktree, snapshotSha });
+      yield* verifyRestoredWorktree({
+        cwd: worktree,
+        branch: "feature",
+        expectedHead: headSha,
+        snapshot: snapshotSha,
+      });
+      expect((yield* command(worktree, ["status", "--porcelain"])).stdout).toBe(" D tracked.txt\n");
+      expect((yield* kept).stdout).toBe(`${tag} .gitignore\n`);
+    }),
+  ),
+);
