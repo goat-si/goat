@@ -1,3 +1,4 @@
+import { makeEventJournalCatchUp, makeEventJournalTail } from "./eventJournalTail.ts";
 import { makeDelegatedCompletionUpdater } from "./goat/DelegatedCompletionMerge.ts";
 import { makeScheduledTaskAppender as makeTaskAppender } from "./ScheduledTaskCompletionBatch.ts";
 import * as ScheduledTaskRuns from "../scheduledTasks/ScheduledTaskRuns.ts";
@@ -9,7 +10,6 @@ import {
   OrchestrationV2StoredEvent,
   RuntimeRequestId,
   NodeId,
-  ThreadId,
 } from "@goat/contracts";
 import * as Context from "effect/Context";
 import * as DateTime from "effect/DateTime";
@@ -80,6 +80,7 @@ const layerBase: Layer.Layer<
     const projectionStore = yield* ProjectionStore.ProjectionStoreV2;
     const projectStore = yield* ProjectStore.ProjectStoreV2;
     const turnItemPositions = yield* TurnItemPositionStore.TurnItemPositionStoreV2;
+    const journal = yield* makeEventJournalTail;
     const liveEvents = yield* PubSub.unbounded<OrchestrationV2StoredEvent>();
     const liveEventsByType = new Map<
       OrchestrationV2DomainEvent["type"],
@@ -88,6 +89,7 @@ const layerBase: Layer.Layer<
     const publishLiveEvents =
       /* This helper runs for individual orchestration events; the enclosing operation owns the span. */
       Effect.fnUntraced(function* (events: ReadonlyArray<OrchestrationV2StoredEvent>) {
+        yield* journal.publish(events);
         yield* PubSub.publishAll(liveEvents, events);
         for (const [type, pubsub] of liveEventsByType) {
           yield* PubSub.publishAll(
@@ -775,53 +777,28 @@ const layerBase: Layer.Layer<
       );
     });
 
-    const catchUp = (input: {
-      readonly afterSequence: number;
-      readonly throughSequence: number;
-      readonly threadId?: ThreadId;
-      readonly eventType?: OrchestrationV2DomainEvent["type"];
-    }): Stream.Stream<OrchestrationV2StoredEvent, unknown> => {
-      const pageSize = 256;
-      const loop = (afterSequence: number): Stream.Stream<OrchestrationV2StoredEvent, unknown> =>
-        Stream.unwrap(
-          eventStore
-            .read({
-              afterSequence,
-              throughSequence: input.throughSequence,
-              ...(input.threadId === undefined ? {} : { threadId: input.threadId }),
-              ...(input.eventType === undefined ? {} : { eventType: input.eventType }),
-              limit: pageSize,
-            })
-            .pipe(
-              Stream.runCollect,
-              Effect.map((chunk) => Array.from(chunk)),
-              Effect.map((events) => {
-                if (events.length === 0) {
-                  return Stream.empty;
-                }
-                const current = Stream.fromIterable(events);
-                const last = events.at(-1)?.sequence ?? input.throughSequence;
-                return events.length < pageSize || last >= input.throughSequence
-                  ? current
-                  : Stream.concat(current, loop(last));
-              }),
-            ),
-        );
-      return loop(input.afterSequence);
-    };
+    const catchUp = makeEventJournalCatchUp(eventStore);
     const stream = (input?: Parameters<EventSinkV2Shape["stream"]>[0]) => {
       const afterSequence = input?.afterSequence ?? 0;
       const matches = (stored: OrchestrationV2StoredEvent) =>
         (input?.threadId === undefined || stored.event.threadId === input.threadId) &&
         (input?.eventType === undefined || stored.event.type === input.eventType);
-      const replay = (throughSequence: number) =>
+      const replayRange = (afterSequence: number, throughSequence: number) =>
         catchUp({
           afterSequence,
           throughSequence,
           ...(input?.threadId === undefined ? {} : { threadId: input.threadId }),
           ...(input?.eventType === undefined ? {} : { eventType: input.eventType }),
         }).pipe(Stream.filter(matches));
+      const replay = (through: number) => replayRange(afterSequence, through);
       if (input?.throughSequence !== undefined) return replay(input.throughSequence);
+      if (input?.journal === true)
+        return journal.stream({
+          afterSequence,
+          latestSequence: eventStore.latestSequence(),
+          onSubscribed: input.onSubscribed,
+          replay: replayRange,
+        });
       return Stream.unwrap(
         Effect.gen(function* () {
           let pubsub = liveEvents;

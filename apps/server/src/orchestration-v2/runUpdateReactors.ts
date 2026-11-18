@@ -55,6 +55,7 @@ export const runUpdateReactors = Effect.fn("Orchestrator.runUpdateReactors")(fun
     readonly eventType: EventType;
     readonly threadId?: ThreadId;
     readonly throughSequence?: number;
+    readonly journal?: boolean;
   }) => Stream.Stream<OrchestrationV2StoredEvent, E, R>;
   readonly handleRun: (event: OrchestrationV2StoredEvent) => Effect.Effect<unknown, never, R2>;
   readonly handleChild: (
@@ -92,7 +93,8 @@ export const runUpdateReactors = Effect.fn("Orchestrator.runUpdateReactors")(fun
       runResumableReactor(
         `Orchestrator.${eventType}`,
         input.afterSequence,
-        (afterSequence) => input.stream({ afterSequence, eventType }).pipe(Stream.filter(relevant)),
+        (afterSequence) =>
+          input.stream({ afterSequence, eventType, journal: true }).pipe(Stream.filter(relevant)),
         (stored) =>
           reactions.enqueue(stored.event.threadId, eventType, stored.sequence, react(stored)),
       ),

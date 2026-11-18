@@ -428,6 +428,7 @@ const make = Effect.gen(function* () {
             sink
               .stream({
                 afterSequence: cursor,
+                journal: true,
                 eventType: "runtime-request.updated",
                 onSubscribed: Deferred.succeed(requestsReady, undefined).pipe(Effect.asVoid),
               })
@@ -444,6 +445,7 @@ const make = Effect.gen(function* () {
             sink
               .stream({
                 afterSequence: cursor,
+                journal: true,
                 eventType: "turn-item.updated",
                 onSubscribed: Deferred.succeed(itemsReady, undefined).pipe(Effect.asVoid),
               })

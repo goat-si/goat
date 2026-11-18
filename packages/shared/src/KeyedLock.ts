@@ -57,17 +57,22 @@ export const make = Effect.fn("KeyedLock.make")(function* <Key>(): Effect.fn.Ret
   } satisfies KeyedLock<Key>;
 });
 
-/** Bounded admission with FIFO execution per key. Producers can defer before the global wait. */
+/** Bounded FIFO admission. A backlog on active keys leaves room for new keys. */
 export const makeRunner = Effect.fn("KeyedLock.makeRunner")(function* <Key>(perKey = 128) {
   const lock = yield* make<Key>();
   const active = yield* Semaphore.make(16);
-  const admitted = yield* Semaphore.make(128);
   const fibers = yield* FiberSet.make<void>();
   const counts = new Map<Key, number>();
+  let total = 0;
   let changed = Deferred.makeUnsafe<void>();
 
+  const canAdmit = (key: Key, limit = perKey) => {
+    const count = counts.get(key) ?? 0;
+    return count < limit && total < (count === 0 ? 128 : 112);
+  };
   const releaseKey = (key: Key) =>
     Effect.suspend(() => {
+      total--;
       const remaining = (counts.get(key) ?? 1) - 1;
       if (remaining === 0) counts.delete(key);
       else counts.set(key, remaining);
@@ -77,28 +82,18 @@ export const makeRunner = Effect.fn("KeyedLock.makeRunner")(function* <Key>(perK
     });
 
   const tryRun = <R>(key: Key, effect: Effect.Effect<unknown, never, R>, limit = perKey) =>
-    Effect.uninterruptibleMask((restore) =>
+    Effect.uninterruptible(
       Effect.suspend(() => {
-        const count = counts.get(key) ?? 0;
-        if (count >= limit) return Effect.succeed(false);
-        counts.set(key, count + 1);
-        return restore(admitted.take(1)).pipe(
-          Effect.onInterrupt(() => releaseKey(key)),
-          Effect.andThen(
-            FiberSet.run(
-              fibers,
-              lock
-                .withLock(key, active.withPermit(effect))
-                .pipe(
-                  Effect.asVoid,
-                  Effect.interruptible,
-                  Effect.ensuring(admitted.release(1).pipe(Effect.andThen(releaseKey(key)))),
-                ),
-              { startImmediately: true },
-            ),
-          ),
-          Effect.as(true),
-        );
+        if (!canAdmit(key, limit)) return Effect.succeed(false);
+        total++;
+        counts.set(key, (counts.get(key) ?? 0) + 1);
+        return FiberSet.run(
+          fibers,
+          lock
+            .withLock(key, active.withPermit(effect))
+            .pipe(Effect.asVoid, Effect.interruptible, Effect.ensuring(releaseKey(key))),
+          { startImmediately: true },
+        ).pipe(Effect.as(true));
       }),
     );
 
@@ -106,23 +101,22 @@ export const makeRunner = Effect.fn("KeyedLock.makeRunner")(function* <Key>(perK
   const run = <R>(
     key: Key,
     effect: Effect.Effect<unknown, never, R>,
-    limit = perKey,
   ): Effect.Effect<void, never, R> =>
     Effect.suspend(() => {
       const capacityChanged = awaitChange();
-      return tryRun(key, effect, limit).pipe(
+      return tryRun(key, effect).pipe(
         Effect.flatMap((accepted) =>
-          accepted ? Effect.void : capacityChanged.pipe(Effect.andThen(run(key, effect, limit))),
+          accepted ? Effect.void : capacityChanged.pipe(Effect.andThen(run(key, effect))),
         ),
       );
     });
 
   return {
-    run: <R>(key: Key, effect: Effect.Effect<unknown, never, R>) => run(key, effect),
+    run,
     tryRun: <R>(key: Key, effect: Effect.Effect<unknown, never, R>) => tryRun(key, effect),
-    runOverflow: <R>(key: Key, replay: Effect.Effect<unknown, never, R>) =>
-      run(key, replay, perKey + 1),
-    canAdmit: (key: Key) => (counts.get(key) ?? 0) < perKey,
+    tryRunOverflow: <R>(key: Key, replay: Effect.Effect<unknown, never, R>) =>
+      tryRun(key, replay, perKey + 1),
+    canAdmit: (key: Key) => canAdmit(key),
     awaitChange,
   };
 });
