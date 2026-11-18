@@ -9,8 +9,20 @@ import {
   GOAT_MIGRATION_NAMES,
   reconcileGoatMigrationIds,
 } from "./reconcileGoatMigrationIds.ts";
-import { migrationEntries, migrationManifest, runMigrations } from "./Migrations.ts";
-import { failingAfterWork, fresh, schema, snapshot } from "./reconcileGoatMigrationIds.testkit.ts";
+import {
+  hasPendingMigrations,
+  migrationEntries,
+  migrationManifest,
+  runMigrations,
+} from "./Migrations.ts";
+import {
+  failingAfterWork,
+  fresh,
+  schema,
+  seedUserData,
+  snapshot,
+  userData,
+} from "./reconcileGoatMigrationIds.testkit.ts";
 
 // GOAT builds record GOAT's own migrations right after the last upstream one they knew:
 // at 61 before the sync that added PullRequestReviewGuides, at 62 before the one that
@@ -114,6 +126,55 @@ const preMemoryGoatNames = [
   "RemoteReportRelay",
   "ProjectionTurnItemRequestIndex",
 ];
+
+const prePenMemberMemoryNames = [
+  "MemoryThreadLineage",
+  "MemorySaveSuggestions",
+  "MemoryHubFloor",
+  "MemoryScopeVersion",
+  "MemoryCompactMoveReceipts",
+  "MemoryOriginCatchup",
+];
+
+describe("memory reliability ledger before migration 158 AuthSessionPenMember", () => {
+  it.effect.each([1, prePenMemberMemoryNames.length])(
+    "preserves data and applies Pen member auth once when %s old memory migrations ran",
+    (count) =>
+      Effect.gen(function* () {
+        const recorded = prePenMemberMemoryNames.slice(0, count);
+        yield* seedGoatLedger(recorded, 158);
+        assert.deepStrictEqual(
+          (yield* history).slice(-count),
+          recorded.map((name, index) => [158 + index, name]),
+        );
+        yield* seedUserData;
+        const data = yield* userData;
+
+        assert.deepStrictEqual(yield* runMigrations(), [
+          [158, "AuthSessionPenMember"],
+          ...prePenMemberMemoryNames.slice(count).map((name, index) => [159 + count + index, name]),
+        ]);
+        assert.deepStrictEqual(yield* snapshot, yield* fresh);
+        assert.deepStrictEqual(yield* userData, data);
+        assert.isFalse(yield* hasPendingMigrations());
+        assert.deepStrictEqual(yield* runMigrations(), []);
+      }).pipe(Effect.provide(NodeSqliteClient.layer({ filename: ":memory:" }))),
+  );
+
+  it.effect(
+    "rolls back the ledger move and Pen member schema together if migration 158 fails",
+    () =>
+      Effect.gen(function* () {
+        yield* seedGoatLedger(prePenMemberMemoryNames, 158);
+        const before = yield* snapshot;
+        const failure = yield* Effect.flip(reconcileGoatMigrationIds(yield* failingAfterWork(158)));
+        if (failure._tag !== "MigrationError") return yield* failure;
+        assert.strictEqual(failure.kind, "Failed");
+        assert.include(failure.message, "158_AuthSessionPenMember");
+        assert.deepStrictEqual(yield* snapshot, before);
+      }).pipe(Effect.provide(NodeSqliteClient.layer({ filename: ":memory:" }))),
+  );
+});
 
 describe("GOAT migration ids", () => {
   it.effect("moves the released 79-133 ledger and applies upstream 079 once", () =>
