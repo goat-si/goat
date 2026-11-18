@@ -1,6 +1,6 @@
 import { MemoryOperationId } from "@goat/contracts";
 import { squashAtomCommandFailure } from "@goat/client-runtime/state/runtime";
-import { TextInput, View } from "react-native";
+import { Modal, TextInput, View } from "react-native";
 import * as Crypto from "expo-crypto";
 import { AppText as Text } from "../../components/ui/AppText";
 import { SettingsActionRow } from "./components/SettingsActionRow";
@@ -44,5 +44,30 @@ export function Field(props: {
         className="rounded-lg border border-border p-3 text-foreground"
       />
     </View>
+  );
+}
+
+export function MemoryConfirmation({
+  title,
+  message,
+  label,
+  onConfirm,
+  onClose,
+}: {
+  title: string;
+  message: string;
+  label: string;
+  onConfirm: () => void;
+  onClose: () => void;
+}) {
+  return (
+    <Modal visible transparent animationType="none" onRequestClose={onClose}>
+      <View className="flex-1 justify-center bg-screen p-6" accessibilityViewIsModal>
+        <Copy>{title}</Copy>
+        <Copy>{message}</Copy>
+        <Action label="Cancel" onPress={onClose} />
+        <Action label={label} tone="danger" onPress={onConfirm} />
+      </View>
+    </Modal>
   );
 }

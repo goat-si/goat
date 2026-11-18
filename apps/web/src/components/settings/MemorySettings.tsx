@@ -55,6 +55,7 @@ import { useEnvironmentSettings } from "../../hooks/useSettings";
 import { useEnvironment, useEnvironments } from "../../state/environments";
 import { resolveMemoryModelSelection } from "@goat/shared/serverSettings";
 import { useProjects } from "../../state/entities";
+import { memorySaveMessage } from "@goat/client-runtime/state/memory";
 import {
   readEnvironmentScope,
   readPreparedConnection,
@@ -599,6 +600,9 @@ function ScopedMemoryRecords({
               scopeLabel={scopeLabel ?? memoryScopeLabel(scope)}
               environmentId={environmentId}
               memorySpaceId={memorySpaceId}
+              onSaveSettled={(status) =>
+                status === "pending" && setNotice(memorySaveMessage.pending)
+              }
               onClose={() => {
                 setAdding(false);
                 page.refresh();
@@ -853,7 +857,7 @@ export function MemoryDetails({
               <Button
                 size="sm"
                 variant="ghost"
-                disabled={edit.start !== null}
+                disabled={edit.start !== null || edit.needsReview || edit.ownRequest === "pending"}
                 onClick={() => edit.begin(item)}
               >
                 Edit
@@ -892,6 +896,14 @@ export function MemoryDetails({
         <div ref={detailsRef} tabIndex={-1} aria-label="Memory details" className="space-y-3">
           {read.error || history.error ? <p role="alert">{read.error ?? history.error}</p> : null}
           {edit.notice ? <p role="status">{edit.notice}</p> : null}
+          {!edit.start && edit.saveStatus && memorySaveMessage[edit.saveStatus] ? (
+            <p role="status">{memorySaveMessage[edit.saveStatus]}</p>
+          ) : null}
+          {!edit.start && edit.needsReview && canWrite ? (
+            <Button size="sm" variant="outline" onClick={edit.reviewLatest}>
+              Review latest memory
+            </Button>
+          ) : null}
           {item ? (
             <>
               {item.status !== "active" ? (
@@ -905,7 +917,12 @@ export function MemoryDetails({
                 {presentMemoryItem(item).syncLabel} {presentMemoryItem(item).cleanupLabel}
               </p>
               {item.status === "active" ? (
-                <p className="whitespace-pre-wrap break-words">{item.payload.text}</p>
+                <>
+                  <p className="whitespace-pre-wrap break-words">{item.payload.text}</p>
+                  {edit.reviewing && edit.ownRequest !== "pending" ? (
+                    <p>Current revision: {item.revision.revisionId}</p>
+                  ) : null}
+                </>
               ) : null}
             </>
           ) : (
@@ -919,6 +936,7 @@ export function MemoryDetails({
               start={edit.start}
               seedText={item?.status === "active" ? item.payload.text : undefined}
               {...edit.editorEvents}
+              onReviewLatest={edit.reviewLatest}
               onClose={edit.close}
             />
           ) : null}

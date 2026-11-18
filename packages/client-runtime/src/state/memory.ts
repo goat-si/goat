@@ -3,6 +3,8 @@ import {
   type MemoryChangeSignal,
   type MemoryId,
   type MemoryItem,
+  type MemoryMutationReceipt,
+  MemoryRpcError,
   type MemoryRevisionId,
   type MemorySpaceId,
   WS_METHODS,
@@ -34,6 +36,46 @@ import {
   followStreamInEnvironment,
 } from "./runtime.ts";
 import { createEnvironmentSessionAtoms } from "./session.ts";
+
+export function memorySaveStatus(result: AsyncResult.AsyncResult<MemoryMutationReceipt, unknown>) {
+  if (result._tag === "Success") {
+    const receipt = result.value;
+    switch (receipt.outcome) {
+      case "rejected":
+        return receipt.failureCode === "revision_changed" ? "stale" : "refused";
+      case "conflicted":
+      case "deleted":
+        return receipt.outcome;
+      case "accepted":
+      case "noop":
+        return receipt.pendingSync ? "pending" : "accepted";
+    }
+  }
+  if (result._tag === "Failure") {
+    const error = Option.getOrNull(Cause.findErrorOption(result.cause));
+    if (error instanceof MemoryRpcError) {
+      if (error.code === "revision_changed") return "stale";
+      if (error.code !== "unavailable") return "refused";
+    }
+  }
+  return "uncertain";
+}
+
+export type MemorySaveStatus = ReturnType<typeof memorySaveStatus>;
+
+export function memorySaveNeedsReview(status: MemorySaveStatus | null) {
+  return status === "stale" || status === "conflicted" || status === "deleted";
+}
+
+export const memorySaveMessage: Readonly<Record<MemorySaveStatus, string | null>> = {
+  accepted: null,
+  pending: "Save submitted for sync.",
+  stale: "This memory changed before your save.",
+  conflicted: "The save conflicted with another revision.",
+  deleted: "This memory was deleted before the save applied.",
+  refused: "Memory update failed. The request was refused.",
+  uncertain: "The save could not be confirmed. Retry uses the same request.",
+};
 
 export interface MemoryExposure {
   readonly ready: boolean;

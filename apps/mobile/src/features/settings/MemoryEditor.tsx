@@ -2,19 +2,29 @@ import { RegistryContext, useAtomSet, useAtomValue } from "@effect/atom-react";
 import {
   type EnvironmentId,
   MemoryId,
+  type MemoryItem,
   type MemoryOperationId,
   type MemoryScope,
   type MemorySpaceId,
 } from "@goat/contracts";
 import { memoryScopeLabel } from "@goat/client-runtime/memory-browsing";
-import { AsyncResult } from "effect/reactivity";
+import {
+  memorySaveMessage,
+  memorySaveNeedsReview,
+  memorySaveStatus,
+  type MemorySaveStatus,
+} from "@goat/client-runtime/state/memory";
 import { useContext, useEffect, useEffectEvent, useMemo, useRef, useState } from "react";
 import * as Crypto from "expo-crypto";
 import { ScreenScrollView } from "../../components/ui/ScreenScrollView";
 import { memoryEnvironment as memory } from "../../state/memory";
 import { useAtomCommand } from "../../state/use-atom-command";
-import { Action, Copy, Field, failureMessage, operationId } from "./memoryScreenParts";
-import { memoryDraftId, type MemoryEditStart } from "./useMemoryEditSession";
+import { Action, Copy, Field, operationId } from "./memoryScreenParts";
+import {
+  memoryDraftId,
+  type MemoryEditStart,
+  type useMemoryEditSession,
+} from "./useMemoryEditSession";
 
 /** Edits an existing memory from start, or writes a new one when there is no start. */
 export function MemoryEditor({
@@ -29,6 +39,7 @@ export function MemoryEditor({
   onTextChange,
   onSaveStart,
   onSaveSettled,
+  onReviewLatest,
   onClose,
 }: {
   readonly environmentId: EnvironmentId;
@@ -44,7 +55,8 @@ export function MemoryEditor({
   readonly masked?: boolean;
   readonly onTextChange?: (text: string) => void;
   readonly onSaveStart?: () => void;
-  readonly onSaveSettled?: (accepted: boolean) => void;
+  readonly onSaveSettled?: (status: MemorySaveStatus) => void;
+  readonly onReviewLatest?: () => void;
   readonly onClose: () => void;
 }) {
   const registry = useContext(RegistryContext);
@@ -61,11 +73,13 @@ export function MemoryEditor({
   const text = useAtomValue(draftAtom);
   const setDraft = useAtomSet(draftAtom);
   const allowed = useAtomValue(memory.upsert.permissionAtom(environmentId));
-  const upsert = useAtomCommand(memory.upsert);
+  const upsert = useAtomCommand(memory.upsert, { reportFailure: false });
   const [pending, setPending] = useState(false);
-  const [error, setError] = useState<string | null>(null);
+  const [status, setStatus] = useState<MemorySaveStatus | null>(null);
+  const error = status && memorySaveMessage[status];
+  const needsReview = memorySaveNeedsReview(status);
+  const retry = status === "uncertain";
   const intent = useRef<MemoryOperationId | null>(null);
-  const [retry, setRetry] = useState(false);
   const busy = useRef(false);
   const mounted = useRef(true);
   const seed = useEffectEvent(() =>
@@ -86,6 +100,7 @@ export function MemoryEditor({
     const current = registry.get(draftAtom);
     if (
       masked ||
+      needsReview ||
       !edited ||
       !current?.trim() ||
       busy.current ||
@@ -96,7 +111,7 @@ export function MemoryEditor({
     const requested = intent.current;
     busy.current = true;
     setPending(true);
-    setError(null);
+    setStatus(null);
     onSaveStart?.();
     // The command reports a failed request in its result; it does not throw.
     const result = await upsert({
@@ -121,19 +136,11 @@ export function MemoryEditor({
     if (!mounted.current) return;
     setPending(false);
     if (!registry.get(memory.upsert.permissionAtom(environmentId))) return;
-    if (AsyncResult.isSuccess(result)) {
-      setError(
-        `Request ${result.value.outcome}${result.value.pendingSync ? " · Propagation pending" : ""}`,
-      );
-      intent.current = null;
-      const accepted = result.value.outcome === "accepted" || result.value.outcome === "noop";
-      onSaveSettled?.(accepted);
-      if (accepted) onClose();
-    } else if (AsyncResult.isFailure(result)) {
-      onSaveSettled?.(false);
-      setRetry(true);
-      setError(`${failureMessage(result)} Retry uses the same request.`);
-    }
+    const settled = memorySaveStatus(result);
+    if (settled !== "uncertain") intent.current = null;
+    setStatus(settled);
+    onSaveSettled?.(settled);
+    if (settled === "accepted" || settled === "pending") onClose();
   }
   return (
     <ScreenScrollView contentInsetAdjustmentBehavior="automatic">
@@ -150,17 +157,44 @@ export function MemoryEditor({
               setDraft({ text: value, memoryIds: start ? [id] : [] });
               onTextChange?.(value);
             }}
-            disabled={masked || pending || retry || !allowed}
+            disabled={masked || pending || retry || needsReview || !allowed}
             multiline
           />
-          <Action
-            label={retry ? "Retry save request" : "Save memory"}
-            onPress={() => void save()}
-            disabled={!allowed || pending || masked || !edited || !text?.trim()}
-          />
+          {needsReview ? (
+            onReviewLatest && <Action label="Review latest memory" onPress={onReviewLatest} />
+          ) : (
+            <Action
+              label={retry ? "Retry save request" : "Save memory"}
+              onPress={() => void save()}
+              disabled={!allowed || pending || masked || !edited || !text?.trim()}
+            />
+          )}
         </>
       )}
       {error ? <Copy>{error}</Copy> : null}
     </ScreenScrollView>
+  );
+}
+
+export function MemoryEditRecovery({
+  session,
+  item,
+  canWrite,
+}: {
+  session: ReturnType<typeof useMemoryEditSession>;
+  item: MemoryItem | null;
+  canWrite: boolean;
+}) {
+  const message = session.saveStatus && memorySaveMessage[session.saveStatus];
+  return (
+    <>
+      {message ? <Copy>{message}</Copy> : null}
+      {session.needsReview && canWrite ? (
+        <Action label="Review latest memory" onPress={session.reviewLatest} />
+      ) : null}
+      {session.reviewing && session.ownRequest !== "pending" && item?.status === "active" ? (
+        <Copy>Current revision: {item.revision.revisionId}</Copy>
+      ) : null}
+    </>
   );
 }

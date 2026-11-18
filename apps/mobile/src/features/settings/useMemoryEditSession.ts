@@ -6,7 +6,12 @@ import type {
   MemoryScope,
   MemorySpaceId,
 } from "@goat/contracts";
-import { memoryBodyGap, type MemoryExposure } from "@goat/client-runtime/state/memory";
+import {
+  memoryBodyGap,
+  memorySaveNeedsReview,
+  type MemoryExposure,
+  type MemorySaveStatus,
+} from "@goat/client-runtime/state/memory";
 import { useState } from "react";
 import { memoryEnvironment as memory } from "../../state/memory";
 
@@ -72,6 +77,9 @@ export function useMemoryEditSession({
   // The person's own save, or a read this view asked for, until the next body arrives.
   const [own, setOwn] = useState<"save" | "pending" | null>(null);
   const [notice, setNotice] = useState<string | null>(null);
+  const [saveStatus, setSaveStatus] = useState<MemorySaveStatus | null>(null);
+  const [reviewing, setReviewing] = useState(false);
+  const needsReview = memorySaveNeedsReview(saveStatus);
   if ((item && own === "pending") || (!start && own === "save")) setOwn(null);
   if (
     start &&
@@ -92,9 +100,23 @@ export function useMemoryEditSession({
     gap,
     start,
     notice,
+    saveStatus,
+    needsReview,
+    reviewing,
+    reviewLatest() {
+      setStart(null);
+      setReviewing(true);
+      setSaveStatus(null);
+      setNotice(null);
+      setOwn("pending");
+      refresh();
+    },
     seenBody: seen !== null,
     ownRequest: own,
     begin(visible: ActiveMemoryItem) {
+      if (start || needsReview || (reviewing && own === "pending")) return;
+      setReviewing(false);
+      setSaveStatus(null);
       setStart({
         memoryId: visible.memoryId,
         revisionId: visible.revision.revisionId,
@@ -125,7 +147,10 @@ export function useMemoryEditSession({
               : "differs",
         ),
       onSaveStart: () => setOwn("save"),
-      onSaveSettled: (accepted: boolean) => setOwn(accepted ? "pending" : null),
+      onSaveSettled: (status: MemorySaveStatus) => {
+        setSaveStatus(status);
+        setOwn(status === "accepted" || status === "pending" ? "pending" : null);
+      },
     },
   };
 }

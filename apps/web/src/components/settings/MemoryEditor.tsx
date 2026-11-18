@@ -8,7 +8,14 @@ import {
   type MemorySpaceId,
 } from "@goat/contracts";
 import { memoryScopeLabel } from "@goat/client-runtime/memory-browsing";
-import { memoryBodyGap, type MemoryExposure } from "@goat/client-runtime/state/memory";
+import {
+  memoryBodyGap,
+  memorySaveNeedsReview,
+  memorySaveStatus,
+  memorySaveMessage,
+  type MemoryExposure,
+  type MemorySaveStatus,
+} from "@goat/client-runtime/state/memory";
 import { useContext, useEffect, useEffectEvent, useRef, useState } from "react";
 import { randomUUID } from "../../lib/utils";
 import { memoryEnvironment } from "../../state/memory";
@@ -74,6 +81,9 @@ export function useMemoryEditSession({
   // The person's own save, or a read this view asked for, until the next body arrives.
   const [own, setOwn] = useState<"save" | "pending" | null>(null);
   const [notice, setNotice] = useState<string | null>(null);
+  const [saveStatus, setSaveStatus] = useState<MemorySaveStatus | null>(null);
+  const [reviewing, setReviewing] = useState(false);
+  const needsReview = memorySaveNeedsReview(saveStatus);
   if ((reply !== null && own === "pending") || (!start && own === "save")) setOwn(null);
   const changedRevision =
     start !== null && item?.status === "active" && item.revision.revisionId !== start.revisionId;
@@ -105,11 +115,23 @@ export function useMemoryEditSession({
     gap,
     start,
     notice,
+    saveStatus,
+    needsReview,
+    reviewing,
+    reviewLatest() {
+      setStart(null);
+      setReviewing(true);
+      setSaveStatus(null);
+      setNotice(null);
+      setOwn("pending");
+      refresh();
+    },
     seenBody: seen !== null,
     ownRequest: own,
     begin(visible: ActiveMemoryItem) {
-      // An open edit keeps its starting revision and its edited state until it closes.
-      if (start) return;
+      if (start || needsReview || (reviewing && own === "pending")) return;
+      setReviewing(false);
+      setSaveStatus(null);
       setStart({
         memoryId: visible.memoryId,
         revisionId: visible.revision.revisionId,
@@ -141,7 +163,10 @@ export function useMemoryEditSession({
               : "differs",
         ),
       onSaveStart: () => setOwn("save"),
-      onSaveSettled: (accepted: boolean) => setOwn(accepted ? "pending" : null),
+      onSaveSettled: (status: MemorySaveStatus) => {
+        setSaveStatus(status);
+        setOwn(status === "accepted" || status === "pending" ? "pending" : null);
+      },
     },
   };
 }
@@ -192,6 +217,7 @@ export function MemoryEditor({
   onTextChange,
   onSaveStart,
   onSaveSettled,
+  onReviewLatest,
   onClose,
 }: {
   environmentId: EnvironmentId;
@@ -207,13 +233,16 @@ export function MemoryEditor({
   masked?: boolean;
   onTextChange?: (text: string) => void;
   onSaveStart?: () => void;
-  onSaveSettled?: (accepted: boolean) => void;
+  onSaveSettled?: (status: MemorySaveStatus) => void;
+  onReviewLatest?: () => void;
   onClose: () => void;
 }) {
   const [id] = useState(() => start?.memoryId ?? MemoryId.make(randomUUID()));
   const [operationId, setOperationId] = useState<MemoryOperationId | null>(null);
   const [busy, setBusy] = useState(false);
-  const [error, setError] = useState<string | null>(null);
+  const [status, setStatus] = useState<MemorySaveStatus | null>(null);
+  const needsReview = memorySaveNeedsReview(status);
+  const error = status && memorySaveMessage[status];
   const draft = memoryEnvironment.draftAtom({
     environmentId,
     input: { memorySpaceId },
@@ -259,6 +288,7 @@ export function MemoryEditor({
         event.preventDefault();
         if (
           busy ||
+          needsReview ||
           masked ||
           !edited ||
           !text?.trim() ||
@@ -268,6 +298,7 @@ export function MemoryEditor({
         const intentId = operationId ?? MemoryOperationId.make(randomUUID());
         setOperationId(intentId);
         setBusy(true);
+        setStatus(null);
         onSaveStart?.();
         const result = await upsert({
           environmentId,
@@ -292,27 +323,35 @@ export function MemoryEditor({
         )
           return;
         setBusy(false);
-        const accepted = result._tag === "Success" && result.value.outcome !== "rejected";
-        onSaveSettled?.(accepted);
-        if (accepted) onClose();
-        else
-          setError("Memory update failed. Retry the same request or close the editor and reload.");
+        const settled = memorySaveStatus(result);
+        if (settled !== "uncertain") setOperationId(null);
+        setStatus(settled);
+        onSaveSettled?.(settled);
+        if (settled === "accepted" || settled === "pending") onClose();
       }}
     >
       <p>Save to: {scopeLabel ?? memoryScopeLabel(start?.scope ?? scope)}</p>
       <Textarea
         aria-label="Memory text"
         value={masked ? "" : (text ?? "")}
-        disabled={masked || busy || operationId !== null}
+        disabled={masked || busy || needsReview || operationId !== null}
         onChange={(event) => {
           setText({ text: event.currentTarget.value, memoryIds: start ? [id] : [] });
           onTextChange?.(event.currentTarget.value);
         }}
       />
       {error ? <p role="alert">{error}</p> : null}
-      <Button type="submit" size="sm" disabled={busy || masked || !edited || !text?.trim()}>
-        {operationId ? "Retry memory request" : "Save memory"}
-      </Button>
+      {needsReview ? (
+        onReviewLatest && (
+          <Button type="button" size="sm" onClick={onReviewLatest}>
+            Review latest memory
+          </Button>
+        )
+      ) : (
+        <Button type="submit" size="sm" disabled={busy || masked || !edited || !text?.trim()}>
+          {operationId ? "Retry memory request" : "Save memory"}
+        </Button>
+      )}
       <Button type="button" size="sm" variant="ghost" disabled={busy} onClick={onClose}>
         Cancel
       </Button>

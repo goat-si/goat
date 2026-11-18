@@ -49,7 +49,7 @@ import {
 import { AsyncResult } from "effect/reactivity";
 import * as Option from "effect/Option";
 import { useCallback, useContext, useEffect, useMemo, useRef, useState } from "react";
-import { AppState, Modal, FlatList, Pressable, View } from "react-native";
+import { AppState, FlatList, Pressable, View } from "react-native";
 import { AppText as Text } from "../../components/ui/AppText";
 import { Menu } from "../../components/ui/Menu";
 import { ScreenScrollView } from "../../components/ui/ScreenScrollView";
@@ -68,8 +68,16 @@ import { MemoryProjectPicker } from "./MemoryProjectPicker";
 import { MemoryAdministration } from "./MemorySharingSettings";
 import { SettingsSwitchRow } from "./components/SettingsSwitchRow";
 import { SettingsRow } from "./components/SettingsRow";
-import { Action, Copy, Field, failureMessage, operationId } from "./memoryScreenParts";
-import { MemoryEditor } from "./MemoryEditor";
+import {
+  Action,
+  Copy,
+  Field,
+  failureMessage,
+  operationId,
+  MemoryConfirmation,
+} from "./memoryScreenParts";
+import { MemoryEditor, MemoryEditRecovery } from "./MemoryEditor";
+import { memorySaveMessage } from "@goat/client-runtime/state/memory";
 import { memoryBodyGapNotice, useMemoryEditSession } from "./useMemoryEditSession";
 import {
   memoryExpectedHeads,
@@ -113,31 +121,6 @@ function useMemoryLifetime(environmentId: EnvironmentId) {
     );
   };
 }
-function MemoryConfirmation({
-  title,
-  message,
-  label,
-  onConfirm,
-  onClose,
-}: {
-  title: string;
-  message: string;
-  label: string;
-  onConfirm: () => void;
-  onClose: () => void;
-}) {
-  return (
-    <Modal visible transparent animationType="none" onRequestClose={onClose}>
-      <View className="flex-1 justify-center bg-screen p-6" accessibilityViewIsModal>
-        <Copy>{title}</Copy>
-        <Copy>{message}</Copy>
-        <Action label="Cancel" onPress={onClose} />
-        <Action label={label} tone="danger" onPress={onConfirm} />
-      </View>
-    </Modal>
-  );
-}
-
 /** Same explicit destination in Settings, native headers, palette and Bot reports. */
 export function useMemoryNavigation(
   environmentId: EnvironmentId | null,
@@ -744,6 +727,7 @@ function ScopedMemoryBrowser({
           projects.find((project) => project.id === params.project?.projectId)?.title ??
           memoryScopeLabel(scope)
         }
+        onSaveSettled={(status) => status === "pending" && setNotice(memorySaveMessage.pending)}
         onClose={() => {
           setCreating(false);
           registry.refresh(atom);
@@ -1092,6 +1076,7 @@ function MemoryDetails({
         start={session.start}
         seedText={item?.status === "active" ? item.payload.text : undefined}
         {...session.editor}
+        onReviewLatest={session.reviewLatest}
         onClose={() => {
           session.close();
           registry.refresh(readAtom);
@@ -1103,6 +1088,7 @@ function MemoryDetails({
       <Action label="Close details" onPress={onClose} />
       {notice ? <Copy>{notice}</Copy> : null}
       {session.notice ? <Copy>{session.notice}</Copy> : null}
+      <MemoryEditRecovery session={session} item={item} canWrite={canWrite && memoryEnabled} />
       {item ? (
         <>
           <Copy>
@@ -1121,7 +1107,7 @@ function MemoryDetails({
               </Copy>
               <Action
                 label="Edit"
-                disabled={!canWrite || !memoryEnabled || pending}
+                disabled={!canWrite || !memoryEnabled || pending || session.needsReview}
                 onPress={() => session.begin(item)}
               />
               {item.payload.evidence.map((evidence) =>
