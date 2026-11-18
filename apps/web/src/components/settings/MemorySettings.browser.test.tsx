@@ -13,7 +13,7 @@ import {
   legacyMemoryCapabilities,
   suggestionMemoryCapabilities,
   suggestionScenario,
-} from "@goat/client-runtime/state/memory-suggestions-fixtures";
+} from "../../test/memorySuggestionsFixture";
 import { memoryImportTestLocks } from "../../test/memoryImportLocks";
 import { MemoryHubDiagnosticsSettings } from "./MemoryHubDiagnosticsSettings";
 import { MemoryRunAccessLabel } from "./MemoryRunAccessLabel";

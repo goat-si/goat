@@ -14,7 +14,7 @@ export const suggestionMemoryCapabilities = {
 } as const;
 
 // Recorded from the save-suggestion and hub services against a synthetic in-memory store.
-export const suggestionScenario = Schema.decodeUnknownSync(
+export const suggestionScenario = Schema.decodeSync(
   Schema.Struct({
     refused: MemorySuggestionList,
     accept: MemorySuggestionAcceptResult,

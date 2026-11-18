@@ -1,5 +1,5 @@
 import { act } from "react";
-import { suggestionScenario } from "@goat/client-runtime/state/memory-suggestions-fixtures";
+import { suggestionScenario } from "../../../../web/src/test/memorySuggestionsFixture";
 import { MemoryHistoryPage, WS_METHODS } from "@goat/contracts";
 import * as Schema from "effect/Schema";
 import {
@@ -10,6 +10,12 @@ import {
   nativeSyncStatus,
   type NativeMemoryHarness,
 } from "../../testing/memoryNativeHarness";
+
+export {
+  legacyMemoryCapabilities,
+  suggestionMemoryCapabilities,
+  suggestionScenario,
+} from "../../../../web/src/test/memorySuggestionsFixture";
 
 const originalId = "00000000-0000-4000-8000-000000000003";
 const resolutionId = "00000000-0000-4000-8000-000000000006";

@@ -1,16 +1,14 @@
 import {
   importFixtureSourceId as sourceId,
+  legacyMemoryCapabilities,
   mockDismissibleSuggestion,
   mockMemoryImport,
   mockStagedSuggestion,
   replaySuggestionChange,
   revertHistory,
-} from "./MemoryRouteFixtures";
-import {
-  legacyMemoryCapabilities,
   suggestionMemoryCapabilities,
   suggestionScenario,
-} from "@goat/client-runtime/state/memory-suggestions-fixtures";
+} from "./MemoryRouteFixtures";
 import { act } from "react";
 import { afterEach, describe, expect, it, vi } from "vite-plus/test";
 import {
