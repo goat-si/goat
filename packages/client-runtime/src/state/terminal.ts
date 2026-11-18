@@ -24,7 +24,12 @@ import {
   runAtomCommand,
 } from "./runtime.ts";
 import type { EnvironmentRegistry } from "../connection/registry.ts";
-import { subscribe, subscribeDynamic, type EnvironmentRpcInput } from "../rpc/client.ts";
+import {
+  requestGuarded,
+  subscribe,
+  subscribeDynamic,
+  type EnvironmentRpcInput,
+} from "../rpc/client.ts";
 import {
   applyTerminalAttachStreamEvent,
   applyTerminalMetadataStreamEvent,
@@ -69,12 +74,13 @@ export function createTerminalEnvironmentAtoms<R, E>(
       subscribe: (input: EnvironmentRpcInput<typeof WS_METHODS.terminalAttach>) => {
         // Retry an unanswered first attach unchanged so it can still open the shell.
         let replied = false;
+        const request = {
+          ...input,
+          terminalErrorMessage: true as const,
+          maxHistoryBytes: DEFAULT_MAX_TERMINAL_BUFFER_BYTES,
+        };
         return subscribeDynamic(WS_METHODS.terminalAttach, () =>
-          Effect.sync(() => ({
-            ...input,
-            ...(replied ? { resume: true } : {}),
-            maxHistoryBytes: DEFAULT_MAX_TERMINAL_BUFFER_BYTES,
-          })),
+          Effect.sync(() => (replied ? { ...request, resume: true } : request)),
         ).pipe(
           Stream.onFirst(() =>
             Effect.sync(() => {
@@ -101,6 +107,8 @@ export function createTerminalEnvironmentAtoms<R, E>(
     open: createEnvironmentRpcCommand(runtime, {
       label: "environment-data:terminal:open",
       tag: WS_METHODS.terminalOpen,
+      execute: (input) =>
+        requestGuarded(WS_METHODS.terminalOpen, { ...input, terminalErrorMessage: true }),
       scheduler: lifecycleScheduler,
       concurrency: lifecycleConcurrency,
     }),
@@ -123,6 +131,8 @@ export function createTerminalEnvironmentAtoms<R, E>(
     restart: createEnvironmentRpcCommand(runtime, {
       label: "environment-data:terminal:restart",
       tag: WS_METHODS.terminalRestart,
+      execute: (input) =>
+        requestGuarded(WS_METHODS.terminalRestart, { ...input, terminalErrorMessage: true }),
       scheduler: lifecycleScheduler,
       concurrency: lifecycleConcurrency,
     }),
