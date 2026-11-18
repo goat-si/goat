@@ -1,3 +1,5 @@
+import { makeMemorySaveSuggestions } from "./MemorySaveSuggestions.ts";
+import { suggestionForgetGeneration } from "./store/SaveSuggestions.ts";
 import { appOwnedTaskResultEvents } from "./threadProvenance.testkit.ts";
 import * as Settings from "../serverSettings.ts";
 import { assert, describe, it } from "@effect/vitest";
@@ -635,6 +637,142 @@ it.effect(
         yield* insertChild(late);
         const lineage = yield* store.readThreadLineage(thread, space);
         assert.deepStrictEqual(lineage, { state: "unknown", revisions: [earlyRevision] });
+      }),
+    ),
+);
+
+it.effect(
+  "floor-2 remember and suggestion acceptance settle with a pinned, body-pruned dependency",
+  () =>
+    Effect.scoped(
+      Effect.gen(function* () {
+        yield* TestClock.setTime(at);
+        const { service, store, sql } = yield* makeEnvironment(memberId);
+        yield* enroll(sql);
+        yield* store.transact(store.learnHubFloor(space, at));
+        yield* sql`ALTER TABLE orchestration_events ADD COLUMN event_id TEXT`;
+        yield* sql`ALTER TABLE orchestration_events ADD COLUMN sequence INTEGER`;
+        const savedSource = input(601);
+        const admit = (op: M.MemoryOperation) =>
+          service.admitHubOperation({ authority: authority(memberId, at), operation: op });
+        yield* service.upsert(savedSource, Effect.void);
+        const oldest = yield* operation(store, savedSource);
+        assert.propertyVal(yield* admit(oldest), "outcome", "accepted");
+        yield* store.appendThreadLineage(thread, space, [oldest.revision.revisionId]);
+        const edit = {
+          ...savedSource,
+          operationId: M.MemoryOperationId.make(id(99001)),
+          expectedHeads: [oldest.revision.revisionId],
+          payload: { ...savedSource.payload, text: "synthetic replacement" },
+        };
+        yield* service.upsert(edit, Effect.void);
+        const newest = yield* operation(store, edit);
+        assert.propertyVal(yield* admit(newest), "outcome", "accepted");
+        const gcAt = at + 2 * M.MEMORY_LOG_RETENTION_MS;
+        const checkpoint = yield* store.transact(
+          store.prepareHubCheckpointTx({
+            authority: authority(memberId, gcAt),
+            checkpointId: "pinned-source",
+            snapshotToken: "pinned-source",
+            hubEnvironmentId: memberId,
+          }),
+        );
+        yield* store.transact(
+          store.publishCheckpointAndFloorTx({
+            memorySpaceId: space,
+            checkpointId: "pinned-source",
+            expectedFloor: 0,
+            nextFloor: checkpoint.checkpointSequence,
+            now: gcAt,
+          }),
+        );
+        yield* store.transact(
+          store.compactEligibleHistoryTx({
+            memorySpaceId: space,
+            expectedFloor: checkpoint.checkpointSequence,
+            now: gcAt + M.MEMORY_CHECKPOINT_TOKEN_TTL_MS,
+            limit: 100,
+          }),
+        );
+        const history = yield* store.loadAggregate(space, oldest.memoryId, {
+          revisionIds: [oldest.revision.revisionId],
+        });
+        assert.isNull(
+          history.revisions.find((pair) => pair.revision.revisionId === oldest.revision.revisionId)
+            ?.payload,
+        );
+
+        const revisions = [oldest.revision.revisionId];
+        for (let n = 700; n < 800; n++) {
+          const source = input(n);
+          yield* service.upsert(source, Effect.void);
+          revisions.push((yield* operation(store, source)).revision.revisionId);
+        }
+        yield* store.appendThreadLineage(thread, space, revisions);
+        const remembered = yield* service.remember(
+          { memorySpaceId: space, scope: "user", text: "synthetic remembered text" },
+          Effect.void,
+          thread,
+        );
+        const rememberOp = yield* store.readWorkOperation(
+          `sync:${space}:${remembered.receipt.operationId}`,
+        );
+        if (!rememberOp || rememberOp.kind !== "upsert")
+          throw new Error("Expected a staged remember");
+        const suggestions = makeMemorySaveSuggestions({
+          sql,
+          store,
+          requireSharing: () => Effect.void,
+          stableUuid: Service.memoryStableUuid,
+        });
+        const suggestion = input(800);
+        yield* suggestions.onRefusedSave(
+          {
+            input: suggestion,
+            thread,
+            reason: "hub_unavailable",
+            knownRevisions: revisions,
+            lineageComplete: true,
+            forgetGeneration: yield* suggestionForgetGeneration(space).pipe(
+              Effect.provideService(SqlClient.SqlClient, sql),
+            ),
+          },
+          Effect.void,
+        );
+        assert.deepStrictEqual(
+          yield* service.acceptSuggestion(
+            { memorySpaceId: space, suggestionId: suggestion.memoryId },
+            Effect.void,
+          ),
+          { status: "pending" },
+        );
+        const [row] = yield* sql<{
+          accept_operation_id: string;
+        }>`SELECT accept_operation_id FROM memory_save_suggestions WHERE id=${suggestion.memoryId}`;
+        const acceptOp = yield* store.readWorkOperation(
+          `sync:${space}:${row?.accept_operation_id}`,
+        );
+        if (!acceptOp || acceptOp.kind !== "upsert")
+          throw new Error("Expected a staged acceptance");
+        for (const op of [rememberOp, acceptOp]) {
+          assert.sameMembers(op.payload.derivedFromMemoryRevisions, revisions);
+          assert.propertyVal(yield* admit(op), "outcome", "accepted");
+        }
+        yield* service.forget(
+          {
+            memorySpaceId: space,
+            memoryId: savedSource.memoryId,
+            operationId: M.MemoryOperationId.make(id(99002)),
+            expectedHeads: [newest.revision.revisionId],
+          },
+          Effect.void,
+        );
+        for (const op of [rememberOp, acceptOp])
+          assert.propertyVal(
+            (yield* store.loadAggregate(space, op.memoryId)).item,
+            "status",
+            "blocked",
+          );
       }),
     ),
 );
