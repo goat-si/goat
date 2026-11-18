@@ -29,8 +29,7 @@ const PREPARED_UPDATE_TTL = Duration.minutes(5);
 
 interface PreparedUpdate {
   readonly requestId: string;
-  readonly channel: DesktopTelemetryRequestDesktopUpdate["channel"];
-  readonly targetVersion: DesktopTelemetryRequestDesktopUpdate["targetVersion"];
+  readonly channel: DesktopUpdateState["channel"];
   readonly downloadedVersion: string;
   readonly status: "prepared" | "committing" | "failed";
   readonly failureReason?: string;
@@ -172,8 +171,7 @@ export const listen: Effect.Effect<
           const state = yield* updates.getState;
           if (
             prepared.value.status === "prepared" &&
-            prepared.value.channel === request.channel &&
-            prepared.value.targetVersion === request.targetVersion &&
+            prepared.value.channel === state.channel &&
             state.downloadedVersion === prepared.value.downloadedVersion
           ) {
             yield* publishReport(
@@ -259,8 +257,7 @@ export const listen: Effect.Effect<
                 preparedUpdateRef,
                 Option.some({
                   requestId: request.requestId,
-                  channel: request.channel,
-                  targetVersion: request.targetVersion,
+                  channel: state.channel,
                   downloadedVersion: state.downloadedVersion,
                   status: "prepared",
                   expiresAt:

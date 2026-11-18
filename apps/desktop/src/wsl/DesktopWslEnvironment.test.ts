@@ -18,7 +18,7 @@ import * as FileSystem from "effect/FileSystem";
 import * as Layer from "effect/Layer";
 import * as Path from "effect/Path";
 import { ChildProcess, ChildProcessSpawner } from "effect/process";
-import * as DesktopEnvironment from "../app/DesktopEnvironment.ts";
+import { layerEnvironment } from "../backend/DesktopBackendConfiguration.testkit.ts";
 import {
   DesktopWslEnvironment,
   layer as layerWsl,
@@ -264,7 +264,7 @@ describe.skipIf(posixShellRunner === null)("WSL runtime install script (executed
     };
   };
 
-  const probeFixture = () =>
+  const probeFixture = (fixture: ReturnType<typeof createFixture>) =>
     runShell(
       [
         `export HOME=${sh(`${fixture.work}/home`)}`,
@@ -296,7 +296,7 @@ describe.skipIf(posixShellRunner === null)("WSL runtime install script (executed
     );
     expect(setup.status, setup.stderr).toBe(0);
 
-    const probe = probeFixture();
+    const probe = probeFixture(fixture);
 
     expect(probe.status, probe.stderr).toBe(0);
     const resolvedPath = parseResolvedPath(probe.stdout);
@@ -646,12 +646,7 @@ it.live("streams the archive into the selected distro when wslpath cannot transl
     ).pipe(
       Effect.provide(
         layerWsl.pipe(
-          Layer.provide(
-            Layer.mergeAll(
-              fakeWsl,
-              Layer.mock(DesktopEnvironment.DesktopEnvironment, { platform: "win32", path }),
-            ),
-          ),
+          Layer.provide(Layer.mergeAll(fakeWsl, layerEnvironment(root, { platform: "win32" }))),
         ),
       ),
     );

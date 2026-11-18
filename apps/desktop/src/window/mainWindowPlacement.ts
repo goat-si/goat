@@ -6,7 +6,7 @@ type DisplayBounds = DesktopWindowBounds.DisplayBounds;
 export const MIN_MAIN_WINDOW_WIDTH = DesktopAppSettings.MIN_MAIN_WINDOW_SIZE.width;
 export const MIN_MAIN_WINDOW_HEIGHT = DesktopAppSettings.MIN_MAIN_WINDOW_SIZE.height;
 
-export function getOverlapArea(left: DisplayBounds, right: DisplayBounds): number {
+function getOverlapArea(left: DisplayBounds, right: DisplayBounds): number {
   const overlapWidth = Math.max(
     0,
     Math.min(left.x + left.width, right.x + right.width) - Math.max(left.x, right.x),
@@ -33,7 +33,7 @@ function getAxisGap(
   return 0;
 }
 
-export function getDisplayDistanceSquared(
+function getDisplayDistanceSquared(
   windowBounds: DesktopAppSettings.DesktopWindowBounds,
   displayBounds: DisplayBounds,
 ): number {
@@ -53,7 +53,7 @@ function clampCoordinate(value: number, start: number, available: number, size: 
   return Math.min(Math.max(Math.round(value), minimum), maximum);
 }
 
-export function clampWindowBoundsToDisplay(
+function clampWindowBoundsToDisplay(
   windowBounds: DesktopAppSettings.DesktopWindowBounds,
   displayBounds: DisplayBounds,
 ): DesktopAppSettings.DesktopWindowBounds {
