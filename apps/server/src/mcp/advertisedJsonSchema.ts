@@ -87,12 +87,27 @@ const mergeTaggedObjects = (branches: ReadonlyArray<Json>): JsonObject | undefin
   };
 };
 
+// Go's RE2, which Antigravity checks every tool schema with, has no \u escape, and RegExp.source
+// writes U+2028 and U+2029 that way. A raw character means the same in every engine.
+const portablePattern = (pattern: string) =>
+  pattern.replace(
+    /(?<!\\)((?:\\\\)*)\\u([0-9a-fA-F]{4})/g,
+    (escape, backslashes: string, hex: string) => {
+      const code = Number.parseInt(hex, 16);
+      return code < 0x80 ? escape : backslashes + String.fromCharCode(code);
+    },
+  );
+
 const compact = (schema: Json): Json => {
   if (Array.isArray(schema)) return schema.map(compact);
   if (!Predicate.isObject(schema)) return schema;
   let result: JsonObject = {};
   for (const [key, value] of Object.entries(schema)) {
     if (key === "additionalProperties" && value === true) continue;
+    if (key === "pattern" && typeof value === "string") {
+      result[key] = portablePattern(value);
+      continue;
+    }
     if (["enum", "const", "default", "examples"].includes(key)) {
       result[key] = value;
       continue;
