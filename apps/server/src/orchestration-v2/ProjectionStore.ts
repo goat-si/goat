@@ -1,3 +1,4 @@
+import { upsertProviderThreadProjection } from "./projectionProviderThread.ts";
 import { parentClosed } from "./goat/LimitRecoveryParent.ts";
 import * as ThreadNewestRun from "./goat/ThreadNewestRun.ts";
 import { replayActivityBlockers, selectThreadRecords } from "./goat/ProjectionStoreMemoryReads.ts";
@@ -1611,49 +1612,12 @@ export const layer: Layer.Layer<ProjectionStoreV2, never, SqlClient.SqlClient> =
             case "provider-thread.updated": {
               const payloadJson = yield* encodeProviderThreadPayload(event.payload);
               const payload = parseEncodedPayload(payloadJson);
-              yield* sql`
-              INSERT INTO orchestration_v2_projection_provider_threads (
-                provider_thread_id,
-                thread_id,
-                owner_node_id,
-                provider,
-                driver,
-                provider_instance_id,
-                provider_session_id,
-                status,
-                first_run_ordinal,
-                last_run_ordinal,
-                updated_at,
-                payload_json
-              )
-              VALUES (
-                ${event.payload.id},
-                ${event.payload.appThreadId},
-                ${event.payload.ownerNodeId},
-                ${event.payload.providerInstanceId},
-                ${event.payload.driver},
-                ${event.payload.providerInstanceId},
-                ${event.payload.providerSessionId},
-                ${event.payload.status},
-                ${event.payload.firstRunOrdinal},
-                ${event.payload.lastRunOrdinal},
-                ${stringField(payload, "updatedAt")},
-                ${payloadJson}
-              )
-              ON CONFLICT(provider_thread_id)
-              DO UPDATE SET
-                thread_id = excluded.thread_id,
-                owner_node_id = excluded.owner_node_id,
-                provider = excluded.provider,
-                driver = excluded.driver,
-                provider_instance_id = excluded.provider_instance_id,
-                provider_session_id = excluded.provider_session_id,
-                status = excluded.status,
-                first_run_ordinal = excluded.first_run_ordinal,
-                last_run_ordinal = excluded.last_run_ordinal,
-                updated_at = excluded.updated_at,
-                payload_json = excluded.payload_json
-            `;
+              yield* upsertProviderThreadProjection(
+                sql,
+                event.payload,
+                payloadJson,
+                stringField(payload, "updatedAt"),
+              );
               if (
                 event.payload.appThreadId !== null &&
                 !isQueuedProviderThreadPlaceholder(event.payload)
