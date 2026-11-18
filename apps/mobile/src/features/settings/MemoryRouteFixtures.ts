@@ -258,6 +258,12 @@ export async function exerciseMemoryMove(
             return pending.response;
           if ((!batch && ids.length === 2) || (input.memoryId === uncertainId && ids.length === 1))
             return Effect.die(new Error("Synthetic lost acknowledgement"));
+          if (batch && input.memoryId === completedId)
+            harness.responses.set(WS_METHODS.memoryList, () => ({
+              items: items.filter(({ memoryId }) => memoryId !== completedId),
+              nextCursor: null,
+              projectionWatermark: 2,
+            }));
           if (input.memoryId === (batch ? uncertainId : nativeId))
             harness.responses.set(WS_METHODS.memoryList, () => ({
               items: [],
@@ -290,6 +296,7 @@ export async function exerciseMemoryMove(
     };
     await submit();
     const firstNotice = view.container.textContent;
+    if (batch) expect.soft(firstNotice).toContain("Memory 00000212 · Moved.");
     if (typeof batch === "string") {
       expect.soft(firstNotice).not.toContain("Synthetic move item 211 ·");
       await submit();

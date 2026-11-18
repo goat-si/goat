@@ -187,6 +187,15 @@ export async function exerciseMemoryMove({
     }
     if ((!batch && ids.length === 2) || (input.memoryId === id(211) && ids.length === 1))
       return { _tag: "Failure", cause: Cause.die(new Error("Synthetic lost acknowledgement")) };
+    if (batch && input.memoryId === id(212))
+      state.queries.set(
+        "list",
+        Option.some({
+          items: items.filter(({ memoryId }) => memoryId !== input.memoryId),
+          projectionWatermark: 2,
+          nextCursor: null,
+        }),
+      );
     if (input.memoryId === (batch ? id(211) : activeItem.memoryId))
       state.queries.set(
         "list",
@@ -222,7 +231,9 @@ export async function exerciseMemoryMove({
     await click(label);
   };
   await submit();
+  if (batch) await render();
   const firstNotice = container.textContent ?? "";
+  if (batch) expect.soft(firstNotice).toContain("Memory 00000212 · Moved.");
   if (typeof batch === "string") {
     expect
       .soft(
