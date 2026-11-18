@@ -111,6 +111,14 @@ it("keeps a typed answer where the thread returns unsent answers from", async ()
   expect(appAtomRegistry.get(userInputDraftsByRequestKeyAtom)[key]?.q?.customAnswer).toBe("Purple");
 });
 
+it("drops its answer from that store once the answer is sent", async () => {
+  await typeAnswer("Purple");
+  await act(async () => inbox().onSubmit());
+  expect(fixture.userInput).toHaveBeenCalledOnce();
+  const key = userInputDraftKey(item.ref.environmentId, item.ref.threadId, requestId);
+  expect(appAtomRegistry.get(userInputDraftsByRequestKeyAtom)[key]).toBeUndefined();
+});
+
 it("opens the thread's side chat for /side and sends no answer", async () => {
   await typeAnswer("/side why?");
   await act(async () => inbox().onSubmit());
