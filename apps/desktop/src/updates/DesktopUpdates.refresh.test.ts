@@ -17,6 +17,7 @@ it.effect("keeps a same-version offer visible and queues a download behind the r
         Effect.andThen(Deferred.await(finishCheck)),
         Effect.andThen(Effect.sync(() => harness.emit("update-available", { version: "1.2.4" }))),
       ),
+      downloadUpdate: Effect.sync(() => harness.emit("update-downloaded", { version: "1.2.4" })),
     });
     yield* Effect.gen(function* () {
       const updates = yield* DesktopUpdates.DesktopUpdates;
@@ -61,6 +62,7 @@ it.effect.each(["new offer", "no offer", "failed check"] as const)(
       }),
       downloadUpdate: Effect.sync(() => {
         downloaded = candidate;
+        harness.emit("update-downloaded", { version: candidate });
       }),
     });
     return Effect.gen(function* () {
@@ -252,3 +254,76 @@ it.effect("keeps the retained download when the selected feed offers an older re
     assert.equal(harness.quitAndInstalls(), 1);
   }).pipe(Effect.provide(harness.layer), Effect.scoped);
 });
+
+it.effect.each(["recorded", "missing"] as const)(
+  "holds a manual download reservation through matching persistence: %s",
+  (persistence) =>
+    Effect.gen(function* () {
+      const nativeDownloadFinished = yield* Deferred.make<void>();
+      const recording = yield* Deferred.make<void>();
+      const releaseRecord = yield* Deferred.make<void>();
+      const harness = makeHarness({
+        downloadUpdate: Deferred.succeed(nativeDownloadFinished, undefined).pipe(Effect.asVoid),
+        beforeSetPendingUpdate: Deferred.succeed(recording, undefined).pipe(
+          Effect.andThen(Deferred.await(releaseRecord)),
+        ),
+      });
+      yield* Effect.gen(function* () {
+        const updates = yield* DesktopUpdates.DesktopUpdates;
+        yield* updates.configure;
+        harness.emit("update-available", { version: "1.2.4" });
+        yield* flushCallbacks;
+        const download = yield* updates.download.pipe(Effect.forkScoped);
+        yield* Deferred.await(nativeDownloadFinished);
+        yield* TestClock.adjust("1 second");
+        assert.isTrue(yield* updates.isActionActive);
+        assert.isUndefined(download.pollUnsafe());
+        harness.emit("update-downloaded", { version: "1.2.5" });
+        yield* flushCallbacks;
+        assert.isFalse(yield* Deferred.isDone(recording));
+        assert.isFalse((yield* updates.check("manual")).checked);
+        if (persistence === "recorded") {
+          harness.emit("update-downloaded", { version: "1.2.4" });
+          yield* Deferred.await(recording);
+          assert.isUndefined(download.pollUnsafe());
+          yield* Deferred.succeed(releaseRecord, undefined);
+          const result = yield* Fiber.join(download);
+          assert.isTrue(result.completed);
+          assert.equal(result.state.pendingUpdate?.version, "1.2.4");
+        } else {
+          yield* TestClock.adjust("90 seconds");
+          assert.isDefined(download.pollUnsafe());
+          const result = yield* Fiber.join(download);
+          assert.isFalse(result.completed);
+          assert.equal(result.state.errorContext, "download");
+          assert.isTrue(result.state.canRetry);
+          assert.isFalse(yield* updates.isActionActive);
+          assert.isTrue((yield* updates.check("manual")).checked);
+        }
+      }).pipe(Effect.provide(harness.layer), Effect.scoped);
+    }),
+);
+
+it.effect(
+  "releases an automatic download with a retryable error when persistence never arrives",
+  () =>
+    Effect.gen(function* () {
+      const nativeDownloadFinished = yield* Deferred.make<void>();
+      const harness = makeHarness({
+        installPolicy: "install-on-quit",
+        downloadUpdate: Deferred.succeed(nativeDownloadFinished, undefined).pipe(Effect.asVoid),
+      });
+      yield* Effect.gen(function* () {
+        const updates = yield* DesktopUpdates.DesktopUpdates;
+        yield* updates.configure;
+        harness.emit("update-available", { version: "1.2.4" });
+        yield* Deferred.await(nativeDownloadFinished);
+        yield* TestClock.adjust("91 seconds");
+        const state = yield* updates.getState;
+        assert.equal(state.errorContext, "download");
+        assert.isTrue(state.canRetry);
+        assert.isFalse(yield* updates.isActionActive);
+        assert.equal(harness.downloadCount(), 1);
+      }).pipe(Effect.provide(harness.layer), Effect.scoped);
+    }),
+);

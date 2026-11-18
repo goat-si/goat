@@ -12,7 +12,7 @@ import * as ElectronShell from "../electron/ElectronShell.ts";
 import * as ElectronTheme from "../electron/ElectronTheme.ts";
 import * as ElectronWindow from "../electron/ElectronWindow.ts";
 import * as DesktopUpdates from "../updates/DesktopUpdates.ts";
-import { isPersistedDownload, waitForPersistedDownload } from "../updates/updateTransfer.ts";
+import { isPersistedDownload } from "../updates/updateTransfer.ts";
 import type { BackendStartupFailure } from "../backend/DesktopBackendManager.ts";
 import * as DesktopEnvironment from "./DesktopEnvironment.ts";
 import * as DesktopObservability from "./DesktopObservability.ts";
@@ -114,50 +114,29 @@ export const listen: Effect.Effect<
       case "update": {
         if (current._tag !== "Update") return;
         yield* Ref.set(actionMessageRef, null);
-        yield* Effect.scoped(
-          Effect.gen(function* () {
-            // Electron's download promise can finish before pending-update persistence publishes state.
-            const { latest, changes } = yield* updates.subscribe;
-            let version = current.version;
-            if (latest.downloadedVersion !== version) {
-              const download = yield* updates.download;
-              if (!download.completed) {
-                yield* showActionMessage(
-                  download.state.message ?? "GOAT could not download the update. Try again.",
-                );
-                return;
-              }
-              const target = download.state.availableVersion;
-              const settled =
-                target === null
-                  ? Option.none()
-                  : yield* waitForPersistedDownload(
-                      download.state.channel,
-                      target,
-                      download.state,
-                      changes,
-                    );
-              if (
-                target === null ||
-                Option.isNone(settled) ||
-                !isPersistedDownload(settled.value, download.state.channel, target)
-              ) {
-                yield* showActionMessage(
-                  Option.getOrUndefined(settled)?.message ??
-                    "GOAT could not prepare the downloaded update. Try again.",
-                );
-                return;
-              }
-              version = target;
-            }
-            const install = yield* updates.installPrepared(version, { waitForCheck: true });
-            if (!install.accepted || install.failed) {
-              yield* showActionMessage(
-                install.state.message ?? "GOAT could not start installing the update. Try again.",
-              );
-            }
-          }),
-        );
+        const latest = yield* updates.getState;
+        let version = current.version;
+        if (latest.downloadedVersion !== version) {
+          const download = yield* updates.download;
+          const target = download.state.downloadedVersion;
+          if (
+            !download.completed ||
+            target === null ||
+            !isPersistedDownload(download.state, download.state.channel, target)
+          ) {
+            yield* showActionMessage(
+              download.state.message ?? "GOAT could not download the update. Try again.",
+            );
+            return;
+          }
+          version = target;
+        }
+        const install = yield* updates.installPrepared(version, { waitForCheck: true });
+        if (!install.accepted || install.failed) {
+          yield* showActionMessage(
+            install.state.message ?? "GOAT could not start installing the update. Try again.",
+          );
+        }
         return;
       }
       case "reinstall":

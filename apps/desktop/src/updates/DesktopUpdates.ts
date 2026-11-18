@@ -502,55 +502,72 @@ export const make = Effect.gen(function* () {
       recoveryStatus: null,
     }));
 
-  const downloadUnderReservation = Effect.fn("desktop.updates.downloadUnderReservation")(
-    function* () {
-      const state = yield* Ref.get(updateStateRef);
-      return yield* Effect.gen(function* () {
-        yield* Ref.set(attemptedGeneration, yield* Ref.get(availabilityGeneration));
-        yield* updateState(reduceDesktopUpdateStateOnDownloadStart);
-        yield* electronUpdater.setDisableDifferentialDownload(
-          isArm64HostRunningIntelBuild(environment.runtimeInfo),
+  const downloadUnderReservation = Effect.fn("desktop.updates.downloadUnderReservation")(function* (
+    state: DesktopUpdateState,
+  ) {
+    const { availableVersion: version, channel } = state;
+    if (version === null) return { accepted: true, completed: false };
+    return yield* Effect.gen(function* () {
+      const subscription = yield* PubSub.subscribe(stateChanges);
+      yield* Ref.set(attemptedGeneration, yield* Ref.get(availabilityGeneration));
+      yield* updateState(reduceDesktopUpdateStateOnDownloadStart);
+      yield* electronUpdater.setDisableDifferentialDownload(
+        isArm64HostRunningIntelBuild(environment.runtimeInfo),
+      );
+      yield* logUpdaterInfo("downloading update");
+      yield* electronUpdater.downloadUpdate;
+      const settled = yield* waitForPersistedDownload(
+        channel,
+        version,
+        yield* Ref.get(updateStateRef),
+        Stream.fromSubscription(subscription),
+      );
+      if (Option.isNone(settled))
+        yield* recordDownloadFailure(
+          "Could not confirm the downloaded update. Retry the download.",
+          "error",
         );
-        yield* logUpdaterInfo("downloading update");
-        yield* electronUpdater.downloadUpdate;
-        return { accepted: true, completed: true };
-      }).pipe(
-        Effect.catchTags({
-          ElectronUpdaterDownloadUpdateError: Effect.fn("desktop.updates.handleDownloadFailure")(
-            function* (error) {
-              yield* recordDownloadFailure(downloadFailureMessage(error.cause));
-              yield* logUpdaterError(error.message, {
-                errorTag: error._tag,
-                cause: describeUpdateErrorCause(error.cause),
-                channel: error.channel,
-              });
-              return { accepted: true, completed: false };
-            },
-          ),
-        }),
-        Effect.onInterrupt(() =>
-          updateState((current) => (current.status === "downloading" ? state : current)).pipe(
-            Effect.asVoid,
-          ),
-        ),
-        Effect.catchCause((cause) => {
-          if (Cause.hasInterruptsOnly(cause)) {
-            return Effect.failCause(cause);
-          }
-          const error = new DesktopUpdateUnexpectedActionError({ action: "download", cause });
-          return Effect.gen(function* () {
-            yield* recordDownloadFailure(error.message);
+      return {
+        accepted: true,
+        completed: Option.isSome(settled) && isPersistedDownload(settled.value, channel, version),
+      };
+    }).pipe(
+      Effect.scoped,
+      Effect.catchTags({
+        ElectronUpdaterDownloadUpdateError: Effect.fn("desktop.updates.handleDownloadFailure")(
+          function* (error) {
+            yield* recordDownloadFailure(downloadFailureMessage(error.cause));
             yield* logUpdaterError(error.message, {
               errorTag: error._tag,
               cause: describeUpdateErrorCause(error.cause),
-              action: error.action,
+              channel: error.channel,
             });
             return { accepted: true, completed: false };
+          },
+        ),
+      }),
+      Effect.onInterrupt(() =>
+        updateState((current) => (current.status === "downloading" ? state : current)).pipe(
+          Effect.asVoid,
+        ),
+      ),
+      Effect.catchCause((cause) => {
+        if (Cause.hasInterruptsOnly(cause)) {
+          return Effect.failCause(cause);
+        }
+        const error = new DesktopUpdateUnexpectedActionError({ action: "download", cause });
+        return Effect.gen(function* () {
+          yield* recordDownloadFailure(error.message);
+          yield* logUpdaterError(error.message, {
+            errorTag: error._tag,
+            cause: describeUpdateErrorCause(error.cause),
+            action: error.action,
           });
-        }),
-      );
-    },
-  );
+          return { accepted: true, completed: false };
+        });
+      }),
+    );
+  });
 
   const downloadAvailableUpdate = Effect.fn("desktop.updates.downloadAvailableUpdate")(function* (
     automatic = false,
@@ -594,7 +611,7 @@ export const make = Effect.gen(function* () {
       const current = yield* Ref.get(updateStateRef);
       const result =
         refreshed && hasDownloadOffer(current) && !(yield* Ref.get(desktopState.quitting))
-          ? yield* downloadUnderReservation()
+          ? yield* downloadUnderReservation(current)
           : { accepted: true, completed: false };
       return { ...result, state: yield* Ref.get(updateStateRef) };
     }).pipe(Effect.ensuring(finishUpdateAction("download")));
@@ -807,25 +824,8 @@ export const make = Effect.gen(function* () {
       const replacement = current.status === "available" ? current.availableVersion : null;
       let version = retainedVersion;
       if (replacement !== null) {
-        const subscription = yield* PubSub.subscribe(stateChanges);
-        const result = yield* downloadUnderReservation();
+        const result = yield* downloadUnderReservation(current);
         if (!result.completed) return { ...result, failed: true };
-        const settled = yield* waitForPersistedDownload(
-          retained.channel,
-          replacement,
-          yield* Ref.get(updateStateRef),
-          Stream.fromSubscription(subscription),
-        );
-        if (Option.isNone(settled))
-          yield* recordDownloadFailure(
-            "Could not confirm the downloaded update. Retry the download.",
-          );
-        if (
-          Option.isNone(settled) ||
-          !isPersistedDownload(settled.value, retained.channel, replacement)
-        ) {
-          return { accepted: true, completed: false, failed: true };
-        }
         version = replacement;
       }
       return yield* installDownloadedUpdate(version, {

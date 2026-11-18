@@ -449,6 +449,30 @@ describe("DesktopRemoteUpdates", () => {
     );
   });
 
+  it.effect("terminates remote preparation when the download never persists", () => {
+    const nativeDownloadFinished = Deferred.makeUnsafe<void>();
+    const harness = makeHarness({
+      downloadUpdate: Deferred.succeed(nativeDownloadFinished, undefined).pipe(Effect.asVoid),
+    });
+    return runRemoteUpdatesTest(harness, ({ reports, requests }) =>
+      Effect.gen(function* () {
+        harness.emit("update-available", { version: "1.2.4" });
+        yield* settle;
+        yield* Queue.offer(requests, request("missing-persistence"));
+        yield* Deferred.await(nativeDownloadFinished);
+        yield* TestClock.adjust("91 seconds");
+        yield* settle;
+        const report = terminalReports(reports).find(
+          (report) => report.requestId === "missing-persistence",
+        );
+        assert.equal(report?.outcome, "failed");
+        assert.include(report?.reason, "Could not confirm the downloaded update");
+        assert.equal(harness.downloadCount(), 1);
+        assert.equal(harness.quitAndInstalls(), 0);
+      }),
+    );
+  });
+
   it.effect("waits for the download reservation before reporting prepared", () => {
     const releaseDownload = Deferred.makeUnsafe<void>();
     const harness = makeHarness({ downloadUpdate: Deferred.await(releaseDownload) });

@@ -314,7 +314,7 @@ effectIt.effect.each([
     Effect.gen(function* () {
       const persistenceStarted = yield* Deferred.make<void>();
       const releasePersistence = yield* Deferred.make<void>();
-      const downloadReturned = yield* Deferred.make<void>();
+      const nativeDownloadReturned = yield* Deferred.make<void>();
       const installerReached = yield* Deferred.make<void>();
       const downloadVersion = newerOffer ? "1.2.5" : "1.2.4";
       const updaterHarness = makeUpdatesHarness({
@@ -336,7 +336,11 @@ effectIt.effect.each([
           : {}),
         downloadUpdate: Effect.sync(() => {
           updaterHarness.emit("update-downloaded", { version: downloadVersion });
-        }).pipe(Effect.andThen(Deferred.await(persistenceStarted))),
+        }).pipe(
+          Effect.andThen(Deferred.await(persistenceStarted)),
+          Effect.andThen(Deferred.succeed(nativeDownloadReturned, undefined)),
+          Effect.asVoid,
+        ),
         quitAndInstall: Deferred.succeed(installerReached, undefined).pipe(Effect.asVoid),
       });
       yield* Effect.gen(function* () {
@@ -362,9 +366,6 @@ effectIt.effect.each([
                   Deferred.succeed(harness.checked, undefined).pipe(
                     Effect.as({ checked: true, state: available }),
                   ),
-                download: updates.download.pipe(
-                  Effect.tap(() => Deferred.succeed(downloadReturned, undefined)),
-                ),
               }),
             ),
           );
@@ -376,7 +377,7 @@ effectIt.effect.each([
           yield* Effect.promise(() => harness.rendered.promise);
           yield* Deferred.await(harness.checked);
           harness.click("update");
-          yield* Deferred.await(downloadReturned);
+          yield* Deferred.await(nativeDownloadReturned);
           assert.isNull((yield* updates.getState).downloadedVersion);
           assert.equal(updaterHarness.quitAndInstalls(), 0);
           yield* Deferred.succeed(releasePersistence, undefined);
