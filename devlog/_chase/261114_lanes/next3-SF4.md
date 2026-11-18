@@ -128,3 +128,49 @@ The separate pre-gate `ps` check found no other verifier in this worktree. From 
 Limits: A crash before initial-message acceptance can leave an empty thread because thread creation commits earlier.
 
 NOT RUN: P1 real-client pass, lane CI, independent review, repository-wide checks.
+
+## Fix round 1 · plan and prior art
+
+Base `84e9336ee74c168ebcaff5acdbb1e19c78dc045a`. C4 safety review for the change to scheduled dispatch admission. GOAT already holds queued sends when worktree setup fails and the thread has no worktree. The existing executed-run helper expressly skips runs cancelled before start, so the startup-cancelled preparation needs its own refusal for scheduled sends. [Existing send guard](https://github.com/goat-si/goat/blob/84e9336ee74c168ebcaff5acdbb1e19c78dc045a/apps/server/src/orchestration-v2/Orchestrator.ts#L5754-L5766) and [executed-run filter](https://github.com/goat-si/goat/blob/84e9336ee74c168ebcaff5acdbb1e19c78dc045a/packages/shared/src/orchestrationV2ThreadError.ts#L55-L65).
+
+Reject the bound scheduled dispatch against the Orchestrator's current projection before it admits provider work. Keep the existing atomic bind and expose the refusal through the firing's existing error field. New and old clients continue to read the same response and run receipt shape in either direction. No migration or persisted field is added. Restart recovery must keep the binding, refuse a new firing with an actionable reason and open zero providers in the checkout. Initial launches and sends with a worktree remain eligible. Pin P3 to a separate commit containing the test title and comment only.
+
+## Fix round 1 · READY
+
+Pushed lane head `6e1b2ec5e46ce11aa12d3ead4bb49ff377e9d584` on top of reviewed `84e9336ee74c168ebcaff5acdbb1e19c78dc045a`. The checked integration ref was `6def29ca359f546e50dcd731a6364e3f0d575545`, already an ancestor. No integration merge was needed.
+
+- P1 `bb7d2e5429501e4c24de69bf58ab637972e1fc41` rejects subsequent scheduled sends when worktree preparation was cancelled before start and the thread has no attached worktree. It checks the current Orchestrator projection before command admission. Initial `defer_start` messages are eligible for preparation, and the first thread binding survives startup recovery. The next firing reports that the operator can attach a worktree or recreate the automation with a new worktree.
+- P3 `6e1b2ec5e46ce11aa12d3ead4bb49ff377e9d584` changes the retained test title and comment only. The before-acceptance cases at the earlier test stay separate.
+
+`apps/server/src/scheduledTasks/ScheduledTaskService.threadMode.test.ts:302` before/after:
+
+```diff
+-it.effect("a first run whose thread was deleted before it bound removes the task", () =>
++it.effect("removes a task when its first thread is observed deleted after acceptance", () =>
+-    // Deleted before the binding landed, so its cleanup found no task to remove.
++    // The shell lookup after acceptance observes the thread as deleted.
+```
+
+Fail-first from `apps/server`: `GOAT_TEST_TMP_GUARD=fail vp test run --reporter=default src/orchestration-v2/ScheduledTaskOutcomes.integration.test.ts` ran the whole file on the reviewed production sources with the new test. It exited 1 with 18 passes and 1 failure. The test adapter logged one provider-open attempt with the temporary project checkout as its working directory after real startup recovery. On the fixed tree the same test saw zero provider opens, the same task binding, a failed firing with actionable text, and only the first cancelled run.
+
+From `apps/server`, the guarded focused command `GOAT_TEST_TMP_GUARD=fail vp test run --reporter=default` with the nine whole files below exited 0. All 307 tests passed.
+
+| File under `apps/server/src/` | Passed |
+| --- | ---: |
+| `orchestration-v2/ScheduledTaskOutcomes.integration.test.ts` | 19 |
+| `orchestration-v2/runtimeLayer.test.ts` | 176 |
+| `orchestration-v2/runtimeLayer.queueResume.test.ts` | 1 |
+| `orchestration-v2/ThreadManagementService.worktreeSend.test.ts` | 5 |
+| `scheduledTasks/ScheduledTaskService.threadMode.test.ts` | 18 |
+| `scheduledTasks/ScheduledTaskRuns.test.ts` | 13 |
+| `scheduledTasks/ScheduledTaskService.test.ts` | 8 |
+| `scheduledTasks/ScheduledTaskService.webhook.test.ts` | 54 |
+| `scheduledTasks/ScheduledTaskService.botRoutine.test.ts` | 13 |
+
+Standalone server `vp run typecheck` exited 0 on the final head. After a separate `ps` check showed the worktree idle, `vp run check:changed origin/chase/t3-261114-next3` exited 0 for 14 files. Rename check, format, lint, GraphQL, agent context budget, agent surface audit, both Knip passes and both package typechecks passed. Vitest reported 462 files passed, 2 skipped, 5,496 tests passed, 4 skipped and zero failures.
+
+The remote integration tip advanced during verification. A fetched snapshot of `061fd0fee904c2abaada9efb5cfdb9ea58b18919` gave a clean `git merge-tree --write-tree` with the pushed lane head (exit 0). The common ancestor remained `6def29ca359f546e50dcd731a6364e3f0d575545`.
+
+Limits: A crash before initial-message acceptance can leave an empty thread because thread creation commits earlier.
+
+NOT RUN: P1 real-client pass, lane CI, independent fix-round review, repository-wide checks.
