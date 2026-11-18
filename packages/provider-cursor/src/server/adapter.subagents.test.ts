@@ -587,3 +587,48 @@ it.effect("extends a closed partial assistant step on the same child item and me
     ),
   ),
 );
+
+it.effect(
+  "applies a saved exit code to the existing child command when live completion carries no result",
+  () =>
+    Effect.gen(function* () {
+      const toolCall = { type: "shell" as const, args: { command: "exit 7" } };
+      const { events, childThreadId } = yield* runCursorTaskTurn(
+        [
+          { type: "tool-call-started", modelCallId: "nested", callId: "shell", toolCall },
+          { type: "tool-call-completed", modelCallId: "nested", callId: "shell", toolCall },
+        ],
+        [
+          {
+            toolCall: {
+              toolCallId: "shell",
+              shellToolCall: {
+                args: toolCall.args,
+                result: { success: { exitCode: 7, stdout: "before exit", stderr: "failed" } },
+              },
+            },
+          },
+        ],
+      );
+      const items = events.flatMap((event) =>
+        event.type === "turn_item.updated" &&
+        event.turnItem.threadId === childThreadId &&
+        event.turnItem.type === "command_execution"
+          ? [event.turnItem]
+          : [],
+      );
+      const first = items[0];
+      const final = items.at(-1);
+      assert.isDefined(first);
+      assert.isDefined(final);
+      assert.deepEqual([...new Set(items.map((item) => item.id))], [first.id]);
+      assert.equal(final.status, "failed");
+      assert.equal(final.exitCode, 7);
+      assert.equal(final.output, "before exit\nfailed");
+    }).pipe(
+      Effect.scoped,
+      Effect.provide(
+        Layer.mergeAll(NodeServices.layer, IdAllocator.layer, McpProviderSessions.layer),
+      ),
+    ),
+);

@@ -126,7 +126,8 @@ export function makeCursorTaskProjection({
         ) {
           return;
         }
-        const completed = nested.type === "tool-call-completed";
+        const completed =
+          nested.type === "tool-call-completed" && nested.toolCall.result !== undefined;
         const active =
           existing ??
           makeTool(
