@@ -356,3 +356,14 @@ K10 note under II: the lane's other value-import line of this kind is packages/s
 
 ps first in its own step (another lane's vp test, then a typecheck, then a vp test ran; I waited until ps showed none). From apps/server: GOAT_TEST_TMP_GUARD=fail vp test run on every apps/server test file in the lane's diff against c995c5427a: the lane's own ThreadFamilyLookup.auth.test.ts, CodexAdapterV2.messagePhase.test.ts, ThreadFamilyLookup.test.ts, and T1c's two merged files ThreadWorkspaceService.setupLockOrder.test.ts and Manager.leaseOrder.test.ts: 5 files, 50 tests passed, exit 0.
 
+
+## Coordinator, 2026-11-18 01:20:03 UTC, verbatim (relayed 01:20:24 UTC)
+
+RULE 3, the 01:17 rule II covers a NEW import statement on the same terms as a name added to an existing line: only appended cases or appended helpers use what it imports, it imports a real module (no fake, no mock, no replacement of something an existing case reads), the import has no effect at load time that an existing case could see (no vi.mock beside it, no module that registers or patches something when loaded), and no existing title, body, setup value or expectation changes. The lane quotes the added statements in its record; the fresh review lists them. Whether the name sits on an existing line or a new one makes no difference, so K5 does NOT move its import.
+
+K10's full list under II and this rule (git diff c995c5427a c31dfe1c41, every test file that existed at the cut; added import lines only): no NEW import statement in any existing test file. Names added to an existing import line, each used only by appended describes or cases, each from a real module, no vi.mock added:
+- packages/client-runtime/src/state/threadLineageLookup.test.ts: before "import { createThreadLineageLookup } from \"./threadLineageLookup.ts\";", after "import { createThreadLineageLookup, THREAD_LINK_LOOKUP_CACHE } from \"./threadLineageLookup.ts\";" (confirmed by the coordinator at 01:17:54).
+- packages/shared/src/threadLinks.test.ts: the import from "./threadLinks.ts" gains "threadLinkIds," and "threadLinkIdsCacheCharacters," (used only by the appended describe "thread link scan cache").
+- apps/web/src/workspaceBasenameLookup.test.ts (R7, 867101a41d and efd048fc51, already in the first review's delta): the import from "@goat/client-runtime/workspace-basename-lookup" gains "pickProjectLinkMatch,", "pickWorkspaceLinkMatch," and "workspaceLinkLookupQuery," (used only by the appended describe "chat file links an agent shortened"; 61 lines added, 0 removed).
+(apps/server/src/terminal/Manager.leaseOrder.test.ts's "import * as Cause" is T1c's, from the integration merge, not K10's.)
+
