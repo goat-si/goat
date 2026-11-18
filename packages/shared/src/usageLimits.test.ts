@@ -544,7 +544,7 @@ describe("pools", () => {
     ]);
   });
 
-  it("keys a hub account without an email by hub, so two environments on one hub share it", () => {
+  it("keeps a hub account without a verified login separate per environment", () => {
     const seat = {
       id: "claude-team-seat.json",
       driver: claude,
