@@ -66,154 +66,176 @@ it.effect.each([{ withMemory: false }, { withMemory: true }])(
     }).pipe(Effect.provide(f.live));
   },
 );
-it.effect("injects strong related-thread matches after the current thread", () => {
-  const f = fixture({ message: "카카오톡 입력창" });
-  return Effect.gen(function* () {
-    const sql = yield* SqlClient.SqlClient;
-    const store = yield* Store.MemoryStore;
-    const service = yield* Service.MemoryService;
-    const snapshot = yield* Snapshot.MemorySnapshot;
-    yield* project;
-    const key = { kind: "explicit" as const, sharedProjectId: "shared" };
-    yield* store.putProjectBinding(
-      {
-        memorySpaceId: space,
-        project: { environmentId, projectId },
-        projectKey: key,
-        repositoryKey: null,
-        version: 1,
-      },
-      null,
-      0,
-    );
-    const other = M.ThreadId.make("related");
-    const otherProject = M.ProjectId.make("related-project");
-    yield* store.putProjectBinding(
-      {
-        memorySpaceId: space,
-        project: { environmentId, projectId: otherProject },
-        projectKey: key,
-        repositoryKey: null,
-        version: 1,
-      },
-      null,
-      0,
-    );
-    yield* sql`INSERT INTO orchestration_v2_projection_threads (thread_id,project_id,title,default_provider,runtime_mode,interaction_mode,created_at,updated_at,payload_json) VALUES (${other},${otherProject},'related','codex','default','default','2026-01-01','2026-01-01','{}')`;
-    yield* service.upsert(
-      input(2, { kind: "thread", thread: { environmentId, threadId } }),
-      Effect.void,
-    );
-    for (const n of [3, 4, 5, 6]) {
-      const related = {
-        ...input(n, { kind: "thread", thread: { environmentId, threadId: other } }),
-        payload: { text: "카카오톡 입력창", evidence: [], derivedFromMemoryRevisions: [] },
-      };
-      yield* service.upsert(related, Effect.void);
-      const aggregate = yield* store.loadAggregate(space, related.memoryId);
-      if (aggregate.item?.status !== "active") throw new Error("fixture item is not active");
-      yield* store.index({
-        memorySpaceId: space,
-        memoryId: related.memoryId,
-        revisionId: aggregate.item.revision.revisionId,
-        generation: aggregate.generation,
-      });
-    }
-    const foreignProject = M.ProjectId.make("foreign-project");
-    const foreignThread = M.ThreadId.make("foreign-thread");
-    yield* store.putProjectBinding(
-      {
-        memorySpaceId: space,
-        project: { environmentId, projectId: foreignProject },
-        projectKey: { kind: "explicit", sharedProjectId: "foreign" },
-        repositoryKey: null,
-        version: 1,
-      },
-      null,
-      0,
-    );
-    yield* sql`INSERT INTO orchestration_v2_projection_threads (thread_id,project_id,title,default_provider,runtime_mode,interaction_mode,created_at,updated_at,payload_json) VALUES (${foreignThread},${foreignProject},'foreign','codex','default','default','2026-01-01','2026-01-01','{}')`;
-    const otherEnvironment = M.EnvironmentId.make("other-environment");
-    const foreignService = yield* Service.MemoryService.pipe(
-      Effect.provide(
-        Layer.fresh(Service.layer).pipe(
-          Layer.provide(
-            Layer.succeed(Environment.ServerEnvironmentIdentity, {
-              getEnvironmentId: Effect.succeed(otherEnvironment),
-            }),
-          ),
-          Layer.provide(
-            Layer.mock(Repository.RepositoryIdentityResolver)({
-              resolve: () => Effect.succeed(null),
-            }),
+it.effect.each([false, true])(
+  "injects eligible strong related-thread matches (mark=%s)",
+  (mark) => {
+    const f = fixture({ message: "카카오톡 입력창" });
+    return Effect.gen(function* () {
+      const sql = yield* SqlClient.SqlClient;
+      const store = yield* Store.MemoryStore;
+      const service = yield* Service.MemoryService;
+      const snapshot = yield* Snapshot.MemorySnapshot;
+      yield* project;
+      const key = { kind: "explicit" as const, sharedProjectId: "shared" };
+      yield* store.putProjectBinding(
+        {
+          memorySpaceId: space,
+          project: { environmentId, projectId },
+          projectKey: key,
+          repositoryKey: null,
+          version: 1,
+        },
+        null,
+        0,
+      );
+      const other = M.ThreadId.make("related");
+      const otherProject = M.ProjectId.make("related-project");
+      yield* store.putProjectBinding(
+        {
+          memorySpaceId: space,
+          project: { environmentId, projectId: otherProject },
+          projectKey: key,
+          repositoryKey: null,
+          version: 1,
+        },
+        null,
+        0,
+      );
+      yield* sql`INSERT INTO orchestration_v2_projection_threads (thread_id,project_id,title,default_provider,runtime_mode,interaction_mode,created_at,updated_at,payload_json) VALUES (${other},${otherProject},'related','codex','default','default','2026-01-01','2026-01-01','{}')`;
+      yield* service.upsert(
+        input(2, { kind: "thread", thread: { environmentId, threadId } }),
+        Effect.void,
+      );
+      for (const n of [3, 4, 5, 6]) {
+        const related = {
+          ...input(n, { kind: "thread", thread: { environmentId, threadId: other } }),
+          payload: { text: "카카오톡 입력창", evidence: [], derivedFromMemoryRevisions: [] },
+        };
+        yield* service.upsert(related, Effect.void);
+        const aggregate = yield* store.loadAggregate(space, related.memoryId);
+        if (aggregate.item?.status !== "active") throw new Error("fixture item is not active");
+        yield* store.index({
+          memorySpaceId: space,
+          memoryId: related.memoryId,
+          revisionId: aggregate.item.revision.revisionId,
+          generation: aggregate.generation,
+        });
+      }
+      const foreignProject = M.ProjectId.make("foreign-project");
+      const foreignThread = M.ThreadId.make("foreign-thread");
+      yield* store.putProjectBinding(
+        {
+          memorySpaceId: space,
+          project: { environmentId, projectId: foreignProject },
+          projectKey: { kind: "explicit", sharedProjectId: "foreign" },
+          repositoryKey: null,
+          version: 1,
+        },
+        null,
+        0,
+      );
+      yield* sql`INSERT INTO orchestration_v2_projection_threads (thread_id,project_id,title,default_provider,runtime_mode,interaction_mode,created_at,updated_at,payload_json) VALUES (${foreignThread},${foreignProject},'foreign','codex','default','default','2026-01-01','2026-01-01','{}')`;
+      const otherEnvironment = M.EnvironmentId.make("other-environment");
+      const foreignService = yield* Service.MemoryService.pipe(
+        Effect.provide(
+          Layer.fresh(Service.layer).pipe(
+            Layer.provide(
+              Layer.succeed(Environment.ServerEnvironmentIdentity, {
+                getEnvironmentId: Effect.succeed(otherEnvironment),
+              }),
+            ),
+            Layer.provide(
+              Layer.mock(Repository.RepositoryIdentityResolver)({
+                resolve: () => Effect.succeed(null),
+              }),
+            ),
           ),
         ),
-      ),
-    );
-    for (const [n, thread] of [
-      [7, { environmentId, threadId: foreignThread }],
-      [8, { environmentId: otherEnvironment, threadId: other }],
-    ] as const) {
-      const foreign = {
-        ...input(n, { kind: "thread", thread }),
-        payload: { text: "카카오톡 입력창", evidence: [], derivedFromMemoryRevisions: [] },
-      };
-      yield* (n === 8 ? foreignService : service).upsert(foreign, Effect.void);
-      const aggregate = yield* store.loadAggregate(space, foreign.memoryId);
-      if (aggregate.item?.status !== "active") throw new Error("fixture item is not active");
-      yield* store.index({
-        memorySpaceId: space,
-        memoryId: foreign.memoryId,
-        revisionId: aggregate.item.revision.revisionId,
-        generation: aggregate.generation,
-      });
-    }
-    const withoutAuthority = { grant: "read" as const, policyEpoch: 1 };
-    const baseOnly = yield* snapshot.forThread(
-      threadId,
-      withoutAuthority,
-      Effect.succeed(withoutAuthority),
-    );
-    assert.isUndefined(baseOnly);
-    for (const [text, role] of [
-      ["unrelated search", "user"],
-      ["카카오톡 apple banana cherry", "user"],
-      ["카카오톡 입력창", "assistant"],
-      ["", "user"],
-    ] as const) {
-      f.setMessage(text, role);
-      const result = yield* snapshot.forThread(threadId, f.policy(), f.currentPolicy);
+      );
+      for (const [n, thread] of [
+        [7, { environmentId, threadId: foreignThread }],
+        [8, { environmentId: otherEnvironment, threadId: other }],
+      ] as const) {
+        const foreign = {
+          ...input(n, { kind: "thread", thread }),
+          payload: { text: "카카오톡 입력창", evidence: [], derivedFromMemoryRevisions: [] },
+        };
+        yield* (n === 8 ? foreignService : service).upsert(foreign, Effect.void);
+        const aggregate = yield* store.loadAggregate(space, foreign.memoryId);
+        if (aggregate.item?.status !== "active") throw new Error("fixture item is not active");
+        yield* store.index({
+          memorySpaceId: space,
+          memoryId: foreign.memoryId,
+          revisionId: aggregate.item.revision.revisionId,
+          generation: aggregate.generation,
+        });
+      }
+      const withoutAuthority = { grant: "read" as const, policyEpoch: 1 };
+      const baseOnly = yield* snapshot.forThread(
+        threadId,
+        withoutAuthority,
+        Effect.succeed(withoutAuthority),
+      );
+      assert.isUndefined(baseOnly);
+      for (const [text, role] of [
+        ["unrelated search", "user"],
+        ["카카오톡 apple banana cherry", "user"],
+        ["카카오톡 입력창", "assistant"],
+        ["", "user"],
+      ] as const) {
+        f.setMessage(text, role);
+        const result = yield* snapshot.forThread(threadId, f.policy(), f.currentPolicy);
+        assert.deepStrictEqual(
+          result?.items.map((item) => item.memoryId),
+          [id(2)],
+        );
+      }
+      f.setMessage("카카오톡 입력창");
+      const first = yield* snapshot.forThread(threadId, f.policy(), f.currentPolicy);
+      const selected = yield* snapshot.forThread(threadId, f.policy(), f.currentPolicy);
+      assert.strictEqual(selected?.renderedText, first?.renderedText);
       assert.deepStrictEqual(
-        result?.items.map((item) => item.memoryId),
+        selected?.items.map((item) => item.memoryId),
+        [id(2), id(3), id(4), id(5)],
+      );
+      if (mark) {
+        for (const entry of selected?.items.slice(0, 2) ?? [])
+          yield* sql`INSERT INTO memory_revision_marks VALUES (${space},${entry.revisionId},'unverified')`;
+        const restored = yield* snapshot.revalidate(
+          selected!,
+          { threadId, runId },
+          f.currentPolicy,
+        );
+        assert.deepStrictEqual(
+          restored?.items.map((item) => item.memoryId),
+          [id(4), id(5)],
+        );
+        const fresh = yield* snapshot.forThread(threadId, f.policy(), f.currentPolicy);
+        assert.deepStrictEqual(
+          fresh?.items.map((item) => item.memoryId),
+          [id(4), id(5), id(6)],
+        );
+        return;
+      }
+      yield* store.putProjectBinding(
+        {
+          memorySpaceId: space,
+          project: { environmentId, projectId: otherProject },
+          projectKey: { kind: "explicit", sharedProjectId: "different" },
+          repositoryKey: null,
+          version: 2,
+        },
+        1,
+        0,
+      );
+      const restored = yield* snapshot.revalidate(selected!, { threadId, runId }, f.currentPolicy);
+      assert.deepStrictEqual(
+        restored?.items.map((item) => item.memoryId),
         [id(2)],
       );
-    }
-    f.setMessage("카카오톡 입력창");
-    const first = yield* snapshot.forThread(threadId, f.policy(), f.currentPolicy);
-    const selected = yield* snapshot.forThread(threadId, f.policy(), f.currentPolicy);
-    assert.strictEqual(selected?.renderedText, first?.renderedText);
-    assert.deepStrictEqual(
-      selected?.items.map((item) => item.memoryId),
-      [id(2), id(3), id(4), id(5)],
-    );
-    yield* store.putProjectBinding(
-      {
-        memorySpaceId: space,
-        project: { environmentId, projectId: otherProject },
-        projectKey: { kind: "explicit", sharedProjectId: "different" },
-        repositoryKey: null,
-        version: 2,
-      },
-      1,
-      0,
-    );
-    const restored = yield* snapshot.revalidate(selected!, { threadId, runId }, f.currentPolicy);
-    assert.deepStrictEqual(
-      restored?.items.map((item) => item.memoryId),
-      [id(2)],
-    );
-  }).pipe(Effect.provide(f.live));
-});
+    }).pipe(Effect.provide(f.live));
+  },
+);
 it.effect.each(["none", "plain", "dependencies", "related-dependencies"] as const)(
   "limits related injection to the full lineage union with $0 base",
   (base) => {
