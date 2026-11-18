@@ -174,3 +174,39 @@ The remote integration tip advanced during verification. A fetched snapshot of `
 Limits: A crash before initial-message acceptance can leave an empty thread because thread creation commits earlier.
 
 NOT RUN: P1 real-client pass, lane CI, independent fix-round review, repository-wide checks.
+
+## Fix round 2 · plan and prior art
+
+Reviewed base `6e1b2ec5e46ce11aa12d3ead4bb49ff377e9d584`. Existing active-turn refusals skip the rejected-receipt write so the phone outbox can retry the same command id after the thread state changes. Failed relay firings already release their delivery claims and retry admission under the same firing id, so the scheduled worktree refusal should use the same receipt policy while preserving its failure text. [Active-turn refusal](https://github.com/goat-si/goat/blob/6e1b2ec5e46ce11aa12d3ead4bb49ff377e9d584/apps/server/src/orchestration-v2/goat/ActiveTurnRefusals.ts#L36-L43) and [webhook failure bookkeeping](https://github.com/goat-si/goat/blob/6e1b2ec5e46ce11aa12d3ead4bb49ff377e9d584/apps/server/src/scheduledTasks/ScheduledTaskService.ts#L1633-L1643).
+
+The guard can attribute cancellation using the durable user message referenced by the run. Scheduled firing attribution already uses that message identity, including when it resolves a stored firing after a restart. Keep the lookup limited to candidate messages on the thread so compacted histories still preserve the guard's scope. [Scheduled firing attribution](https://github.com/goat-si/goat/blob/6e1b2ec5e46ce11aa12d3ead4bb49ff377e9d584/apps/server/src/scheduledTasks/ScheduledTaskRuns.ts#L237-L268).
+
+Both fixes are server-side. The command error's transient refusal tag stays internal, and the firing receipt and error text use the existing payload in both client and server version directions. No migration is required. Verify whole-file fail-first runs for same-id relay retry and unrelated automation, preserve the previously verified restart refusal, and check dedupe only after durable acceptance.
+
+## Fix round 2 · READY
+
+Pushed and verified `86c44dbf7aedec3f1bc4a735fc597e60f1cfdf47` on `chase/t3-261114-next3-sf4`, from reviewed `6e1b2ec5e46ce11aa12d3ead4bb49ff377e9d584`. P2 was already committed at resume. The previous process stopped during typecheck with a union-narrowing error in the new test. P3 resumed from the worktree and the saved fail-first evidence.
+
+- P2 `d31a2347e884ef819d8d2dd1b97e2627bf47deee`: the actionable worktree refusal leaves the failed firing and skips the rejected command receipt. The relay can retry the same delivery and command id after attachment. Once accepted, a duplicate delivery leaves the run list and firing count unchanged.
+- P3 `86c44dbf7aedec3f1bc4a735fc597e60f1cfdf47`: the guard matches cancelled-before-start preparations to the originating user message's scheduled task id. It reads only the candidate messages so compaction of the dispatch projection does not remove the attribution. This commit also narrows the relay result's discriminant in the P2 test for TypeScript. Its runtime assertions are unchanged.
+
+Fail-first commands ran from `apps/server` with `GOAT_TEST_TMP_GUARD=fail vp test run --reporter=default src/orchestration-v2/ScheduledTaskOutcomes.integration.test.ts`. P2 failed on the reviewed head because the firing still reported `failed` after attachment (exit 1, 19 passed, 1 failed). P3 failed on the P2 commit because an unrelated local automation's firing reported `failed` (exit 1, 20 passed, 1 failed). P2's intermediate rerun exited 0 with 20 passed.
+
+On the final tree, server `vp run typecheck` exited 0. The final focused server run used `GOAT_TEST_TMP_GUARD=fail vp test run --reporter=default` on eight whole files and exited 0. All 160 passed.
+
+| File under `apps/server/src/` | Passed |
+| --- | ---: |
+| `orchestration-v2/ScheduledTaskOutcomes.integration.test.ts` | 21 |
+| `orchestration-v2/Orchestrator.activeTurnRefusals.test.ts` | 28 |
+| `orchestration-v2/ThreadManagementService.worktreeSend.test.ts` | 5 |
+| `scheduledTasks/ScheduledTaskService.threadMode.test.ts` | 18 |
+| `scheduledTasks/ScheduledTaskRuns.test.ts` | 13 |
+| `scheduledTasks/ScheduledTaskService.test.ts` | 8 |
+| `scheduledTasks/ScheduledTaskService.webhook.test.ts` | 54 |
+| `scheduledTasks/ScheduledTaskService.botRoutine.test.ts` | 13 |
+
+After an idle-worktree process check, `vp run check:changed origin/chase/t3-261114-next3` exited 0 for 15 lane files. Rename check, format, lint, GraphQL, agent context budget, agent surface audit, both Knip passes, and both package typechecks passed. Vitest selected 464 server files. 462 passed and 2 were skipped. 5,498 tests passed, 4 were skipped, and zero failed.
+
+The gate started with the integration ref at `061fd0fee904c2abaada9efb5cfdb9ea58b18919`. The live tip was `258239d88f0c5df1ef43d787957007d1775f823d` at push. `git merge-tree --write-tree` exited 0 and the merge base remained `6def29ca359f546e50dcd731a6364e3f0d575545`. The lane stayed on the reviewed ancestry.
+
+NOT RUN: P1 real-client pass, lane CI, independent fix-round review, repository-wide checks.
