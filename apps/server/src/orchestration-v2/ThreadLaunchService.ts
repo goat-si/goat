@@ -16,7 +16,11 @@ export {
   type ThreadLaunchResult,
   type ThreadLaunchWorkspaceStrategy,
 } from "./threadLaunchTypes.ts";
-import { makeWorktreePreflight, type WorktreePreflightError } from "./WorktreePreflight.ts";
+import {
+  makeWorktreePreflight,
+  ThreadLaunchBaseRefError,
+  type WorktreePreflightError,
+} from "./WorktreePreflight.ts";
 export {
   ThreadLaunchBaseRefError,
   ThreadLaunchBranchError,
@@ -389,8 +393,9 @@ const make = Effect.gen(function* () {
             })
             .pipe(Effect.mapError(mapError(input, "update-thread", threadId)));
         }
-        let startRef = input.workspaceStrategy.baseRef;
-        let baseRefName = input.workspaceStrategy.baseRef;
+        const requestedBaseRef = input.workspaceStrategy.baseRef;
+        let startRef = requestedBaseRef;
+        let baseRefName = requestedBaseRef;
         const remote =
           input.workspaceStrategy.startFromOrigin === true
             ? yield* git
@@ -500,7 +505,25 @@ const make = Effect.gen(function* () {
               },
             },
           )
-          .pipe(Effect.mapError(mapError(input, "provision-worktree", threadId)));
+          .pipe(
+            Effect.mapError((cause) =>
+              mapError(
+                input,
+                "provision-worktree",
+                threadId,
+              )(
+                cause.reason === "ref_not_found"
+                  ? new ThreadLaunchBaseRefError({
+                      projectId: project.id,
+                      projectTitle: project.title,
+                      workspaceRoot: project.workspaceRoot,
+                      baseRef: requestedBaseRef,
+                      cause,
+                    })
+                  : cause,
+              ),
+            ),
+          );
         worktreePath = worktree.worktree.path;
         branch = worktree.worktree.refName;
         yield* note(`Worktree ready at ${worktreePath} on branch ${branch}.`);

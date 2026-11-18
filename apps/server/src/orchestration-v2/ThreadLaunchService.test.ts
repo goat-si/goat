@@ -608,6 +608,40 @@ it.effect("fetches the origin base from the remote it already resolved", () => {
   }).pipe(Effect.provide(harness.layer));
 });
 
+it.effect("names the requested missing base when provisioning fails", () => {
+  const harness = makeHarness({
+    fetchWorktreeBaseCommit: () =>
+      Effect.succeed({ commitSha: "fetched-then-gone", remoteRefName: "origin/release" }),
+    createWorktree: () =>
+      Effect.fail(
+        new GitCommandError({
+          operation: "GitVcsDriver.createWorktree",
+          command: "git",
+          cwd: project.workspaceRoot,
+          reason: "ref_not_found",
+          detail: "Git could not resolve the checkout target.",
+        }),
+      ),
+  });
+  return Effect.gen(function* () {
+    const launches = yield* ThreadLaunch.ThreadLaunchService;
+    const launched = yield* launches.launch(
+      launchInput({
+        command: "command:launch:missing-provision-base",
+        thread: "thread:launch:missing-provision-base",
+        message: "Start a worktree",
+        workspace: { type: "worktree", baseRef: "release", startFromOrigin: true },
+      }),
+    );
+    const projection = yield* preparationSettled(launched.threadId);
+    assert.equal(projection.runs[0]?.status, "failed");
+    assert.include(
+      projection.turnItems.find((item) => item.type === "error")?.failure.message ?? "",
+      'Base ref "release" does not resolve to a commit',
+    );
+  }).pipe(Effect.provide(harness.layer));
+});
+
 it.effect("shows the fetch diagnosis when preparing a worktree from origin fails", () => {
   const detail =
     "Git could not authenticate with the remote. Check Git credentials or SSH access on the server, then retry.";
