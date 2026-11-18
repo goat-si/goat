@@ -457,22 +457,22 @@ const legacyInheritedBlocks = (["full-access", "approval-required"] as const).ma
   ),
 );
 
-function inheritedPrefixLength(
+function withoutInheritedChildRules(
   rules: PermissionRuleset,
   parentBases: ReadonlyArray<PermissionRuleset>,
-): number {
-  const blocks = [
-    ...legacyInheritedBlocks,
-    ...parentBases.flatMap((base) => [base, inheritedChildRules(base)]),
-  ];
+): PermissionRuleset {
+  const verifiedBlocks = parentBases.flatMap((base) => [base, inheritedChildRules(base)]);
+  const leadingBlocks = [...legacyInheritedBlocks, ...verifiedBlocks];
+  const unmatched: PermissionRuleset = [];
   let offset = 0;
   while (offset < rules.length) {
     let matched = 0;
-    for (const block of blocks) {
+    const leading = unmatched.length === 0;
+    for (const block of leading ? leadingBlocks : verifiedBlocks) {
       if (block.length > matched && startsWithRules(rules, block, offset)) matched = block.length;
     }
-    // A complete legacy restricted block needs its directory grant to identify it as inherited.
-    if (startsWithRules(rules, legacyScopedInheritedPrefix, offset)) {
+    // Only verified parent blocks can be removed after a native rule interrupts the prefix.
+    if (leading && startsWithRules(rules, legacyScopedInheritedPrefix, offset)) {
       let end = offset + legacyScopedInheritedPrefix.length;
       while (end < rules.length) {
         const rule = rules[end];
@@ -487,10 +487,14 @@ function inheritedPrefixLength(
       if (end > offset + legacyScopedInheritedPrefix.length)
         matched = Math.max(matched, end - offset);
     }
-    if (matched === 0) break;
-    offset += matched;
+    if (matched > 0) {
+      offset += matched;
+    } else {
+      const rule = rules[offset++];
+      if (rule !== undefined) unmatched.push(rule);
+    }
   }
-  return offset;
+  return unmatched;
 }
 
 export function openCodeInstalledChildPermission(
@@ -502,11 +506,14 @@ export function openCodeInstalledChildPermission(
   const installed = openCodeInstalledPermission(runtimePolicy, session.metadata);
   const { base: recorded, permission } = readOpenCodeSessionPermission(session);
   const previous = withOpenCodeSubagentDeny(permission, openCodeOwnsSubagentDeny(session), false);
-  const nativeOffset = recorded?.length ?? inheritedPrefixLength(previous, previousParentBases);
+  const nativeRules =
+    recorded === undefined
+      ? withoutInheritedChildRules(previous, previousParentBases)
+      : previous.slice(recorded.length);
   const seen = new Set<string>();
   const nativeDenies: PermissionRuleset = [];
   let discardedAllows = 0;
-  for (const rule of previous.slice(nativeOffset)) {
+  for (const rule of nativeRules) {
     const key = permissionRuleKey(rule);
     if (seen.has(key)) continue;
     seen.add(key);
