@@ -1912,7 +1912,12 @@ export const layer: Layer.Layer<
           return;
         }
 
-        const startTurn = providerTurnOperation(input, turnInput, compact);
+        const startTurn = providerTurnOperation(
+          input,
+          turnInput,
+          compact,
+          input.reattach === true ? { cloudTask: input.providerThread.cloudTask! } : null,
+        );
         yield* Effect.andThen(
           shouldStart,
           startTurn.pipe(

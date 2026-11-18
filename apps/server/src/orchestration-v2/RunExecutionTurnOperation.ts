@@ -1,3 +1,4 @@
+import type { OrchestrationV2CloudTask } from "@goat/contracts";
 import * as ProviderAdapter from "@goat/provider-core/server/ProviderAdapter";
 import * as Effect from "effect/Effect";
 import type { RunExecutionServiceV2StartRootRunInput } from "./RunExecutionService.ts";
@@ -6,6 +7,7 @@ export function providerTurnOperation(
   input: RunExecutionServiceV2StartRootRunInput,
   turnInput: ProviderAdapter.ProviderAdapterV2TurnInput,
   compact: boolean,
+  cloudObservation: { readonly cloudTask: OrchestrationV2CloudTask } | null,
 ) {
   const { session, providerThread, run } = input;
   const fail = (cause: unknown) =>
@@ -18,11 +20,10 @@ export function providerTurnOperation(
         cause,
       }),
     );
-  if (input.reattach === true) {
+  if (cloudObservation !== null) {
     const { message: _message, cloudLaunchSource: _source, ...attachInput } = turnInput;
-    const { cloudTask } = providerThread;
     return (
-      (cloudTask === undefined ? undefined : session.resumeTurn?.({ ...attachInput, cloudTask })) ??
+      session.resumeTurn?.({ ...attachInput, ...cloudObservation }) ??
       fail("This cloud provider cannot reattach observation. Open the saved task link.")
     );
   }
