@@ -1,4 +1,4 @@
-import { isPenRunCommand, isRouteUser } from "../penSshRoute.ts";
+import { isPenRunCommand, isRouteUser } from "@goat/ssh/penRoute";
 
 /** What GOAT recorded for a disposable machine's route at attach step 3. */
 export interface DisposableRoute {

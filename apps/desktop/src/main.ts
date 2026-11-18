@@ -69,6 +69,7 @@ import * as DesktopPreReadyFileSystem from "./app/DesktopPreReadyFileSystem.ts";
 import * as DesktopPreReadyPlatform from "./app/DesktopPreReadyPlatform.ts";
 import * as DesktopShellEnvironment from "./shell/DesktopShellEnvironment.ts";
 import * as DesktopSshEnvironment from "./ssh/DesktopSshEnvironment.ts";
+import * as DesktopPenMembers from "./pen/DesktopPenMembers.ts";
 import { DESKTOP_BUILD_COMMIT_TIME } from "./ssh/buildCommitTime.ts";
 import { resolveDesktopSshCliRunner } from "./ssh/desktopSshCliRunner.ts";
 import * as DesktopSshPasswordPrompts from "./ssh/DesktopSshPasswordPrompts.ts";
@@ -235,7 +236,7 @@ const layerDesktopFoundation = Layer.mergeAll(
   DesktopRendererHistory.layer,
 ).pipe(Layer.provideMerge(ElectronSafeStorage.layer), Layer.provideMerge(layerDesktopEnvironment));
 
-const layerDesktopSsh = layerDesktopSshEnvironment.pipe(
+const layerDesktopSsh = Layer.mergeAll(layerDesktopSshEnvironment, DesktopPenMembers.layer).pipe(
   Layer.provideMerge(DesktopSshPasswordPrompts.layer()),
 );
 

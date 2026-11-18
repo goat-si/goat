@@ -4,6 +4,7 @@ import { expect, it } from "vite-plus/test";
 import {
   matchComposerThreadItems,
   composerThreadHosts,
+  composerThreadSearchEnvironments,
   type ComposerThreadCandidate,
 } from "./composerThreadItems.ts";
 
@@ -58,6 +59,9 @@ it("admits only mounted online linked routes with unambiguous identity", () => {
     ...composerThreadHosts({ nodes, mounted: new Set([remote, other]), sshHosts: ssh }),
   ]).toEqual([[remote, "same"]]);
   const routes = composerThreadHosts({ nodes, mounted: new Set([remote, other]), sshHosts: ssh });
+  expect(composerThreadSearchEnvironments(environmentId, routes)).toEqual([environmentId, remote]);
+  expect(composerThreadSearchEnvironments(remote, routes)).toEqual([remote]);
+  expect(composerThreadSearchEnvironments(null, routes)).toEqual([]);
   expect(routes.allows(remote, "same")).toBe(true);
   expect(routes.allows(remote, "build")).toBe(true);
   expect(routes.resolve("build")).toBe(remote);
@@ -112,6 +116,17 @@ it("admits only mounted online linked routes with unambiguous identity", () => {
       sshHosts: new Map(),
     }).allows(remote, "build"),
   ).toBe(false);
+});
+
+it("keeps remote title search off a mounted desktop environment with only a saved SSH alias", () => {
+  const remote = EnvironmentId.make("saved-desktop-ssh");
+  const hosts = composerThreadHosts({
+    nodes: [],
+    mounted: new Set([environmentId, remote]),
+    sshHosts: new Map([[remote, "saved-box"]]),
+  });
+  expect(hosts.get(remote)).toBe("saved-box");
+  expect(composerThreadSearchEnvironments(environmentId, hosts)).toEqual([environmentId]);
 });
 
 function shell(

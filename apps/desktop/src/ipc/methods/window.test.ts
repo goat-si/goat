@@ -8,15 +8,22 @@ import * as Layer from "effect/Layer";
 import * as Option from "effect/Option";
 import { vi } from "vite-plus/test";
 
-import type { DesktopEnvironmentBootstrap } from "@goat/contracts";
+import {
+  EDITORS,
+  REMOTE_CAPABLE_EDITOR_IDS,
+  type DesktopEnvironmentBootstrap,
+} from "@goat/contracts";
+import { resolveEditorCommand } from "@goat/shared/editor";
 
-const { focusedWebContents, ownerWindow } = vi.hoisted(() => ({
+const { focusedWebContents, ownerWindow, popup } = vi.hoisted(() => ({
   focusedWebContents: vi.fn(),
   ownerWindow: vi.fn(),
+  popup: vi.fn(),
 }));
 vi.mock("electron", () => ({
   webContents: { getFocusedWebContents: focusedWebContents },
   BrowserWindow: { fromWebContents: ownerWindow },
+  Menu: { buildFromTemplate: () => ({ popup }) },
 }));
 
 import * as DesktopBackendConfiguration from "../../backend/DesktopBackendConfiguration.ts";
@@ -24,13 +31,17 @@ import * as DesktopBackendManager from "../../backend/DesktopBackendManager.ts";
 import * as DesktopBackendPool from "../../backend/DesktopBackendPool.ts";
 import * as DesktopHeadlessServer from "../../backend/DesktopHeadlessServer.ts";
 import * as DesktopAppSettings from "../../settings/DesktopAppSettings.ts";
+import * as DesktopWslEnvironment from "../../wsl/DesktopWslEnvironment.ts";
+import { toLocalBackendPath } from "./folderPaths.ts";
 import * as ElectronDialog from "../../electron/ElectronDialog.ts";
+import * as ElectronMenu from "../../electron/ElectronMenu.ts";
 import * as ElectronWindow from "../../electron/ElectronWindow.ts";
 import {
   getLocalEnvironmentBootstraps,
   getRelayTelemetryEnabled,
   pickProjectFavicon,
   probeRemoteEditors,
+  showContextMenu,
   syncHtmlFullscreen,
 } from "./window.ts";
 
@@ -214,6 +225,73 @@ describe("getLocalEnvironmentBootstraps", () => {
       const result = yield* getLocalEnvironmentBootstraps.handler();
       assert.deepEqual(result, []);
     }).pipe(Effect.provide(bootstrapsLayer([stoppedInstance])));
+  });
+});
+
+describe("toLocalBackendPath", () => {
+  it.effect("uses the running WSL distro and rejects paths owned by another backend", () =>
+    Effect.gen(function* () {
+      const convert = vi.fn(() => Option.some("/drives/c/Work $draft"));
+      const primary = { ...defaultWslInstance, id: DesktopBackendManager.PRIMARY_INSTANCE_ID };
+      const convertDrop = (backendId: string, path: string) =>
+        toLocalBackendPath
+          .handler({ backendId, path })
+          .pipe(
+            Effect.provide(
+              Layer.mergeAll(
+                bootstrapsLayer([defaultWslInstance, primary]),
+                DesktopAppSettings.layerTest(),
+                DesktopWslEnvironment.layerTest({ windowsToWslPath: convert }),
+              ),
+            ),
+            Effect.provideService(HostProcess.Platform, "win32"),
+          );
+
+      assert.equal(yield* convertDrop("primary", "C:\\Work $draft"), "/drives/c/Work $draft");
+      assert.deepEqual(convert.mock.calls, [["Ubuntu", "C:\\Work $draft"]]);
+      assert.equal(
+        yield* convertDrop("wsl:default", "\\\\wsl.localhost\\ubuntu\\home\\dev"),
+        "/home/dev",
+      );
+      assert.isNull(yield* convertDrop("wsl:default", "\\\\wsl$\\Debian\\home\\dev"));
+      assert.isNull(yield* convertDrop("wsl:default", "\\\\remote\\share"));
+      assert.isNull(yield* convertDrop("missing-backend", "C:\\Work"));
+      assert.isNull(yield* convertDrop("wsl:default", "relative\\Work"));
+      assert.lengthOf(convert.mock.calls, 1);
+    }),
+  );
+});
+
+describe("showContextMenu", () => {
+  it.effect("passes keyboard origin to Electron and accepts requests from old preload", () => {
+    const window = { id: 7, webContents: { getZoomFactor: () => 2 } } as Electron.BrowserWindow;
+    return Effect.gen(function* () {
+      popup
+        .mockReset()
+        .mockImplementation((options: Electron.PopupOptions) => options.callback?.());
+      const items = [{ id: "copy", label: "Copy link" }];
+      yield* showContextMenu.handler({ items, source: "keyboard", position: { x: 5, y: 8 } });
+      assert.equal(popup.mock.lastCall?.[0].sourceType, "keyboard");
+      assert.equal(popup.mock.lastCall?.[0].x, 10);
+      assert.equal(popup.mock.lastCall?.[0].y, 16);
+
+      yield* showContextMenu.handler({ items });
+      assert.isUndefined(popup.mock.lastCall?.[0].sourceType);
+      const refused = yield* showContextMenu
+        .handler({ items, source: "unknown" })
+        .pipe(Effect.exit);
+      assert.equal(refused._tag, "Failure");
+      assert.lengthOf(popup.mock.calls, 2);
+    }).pipe(
+      Effect.provide(
+        Layer.mergeAll(
+          Layer.effect(ElectronMenu.ElectronMenu, ElectronMenu.make),
+          Layer.mock(ElectronWindow.ElectronWindow)({
+            focusedMainOrFirst: Effect.succeedSome(window),
+          }),
+        ),
+      ),
+    );
   });
 });
 
@@ -450,3 +528,108 @@ it.effect.skipIf(HostProcess.Platform.defaultValue() === "win32")(
       assert.include(editors, "webstorm");
     }).pipe(Effect.scoped, Effect.provide(NodeServices.layer)),
 );
+
+describe("probeRemoteEditors PATH scan", () => {
+  const platform = HostProcess.Platform.defaultValue();
+  const launcherName = (command: string) => (platform === "win32" ? `${command}.cmd` : command);
+
+  const makeFakePath = Effect.fnUntraced(function* () {
+    const fs = yield* FileSystem.FileSystem;
+    const path = yield* Path.Path;
+    const root = yield* fs.makeTempDirectoryScoped({ prefix: "goat-probe-path-" });
+    const dirs = ["a", "b", "c", "d"].map((name) => path.join(root, name));
+    for (const dir of dirs) yield* fs.makeDirectory(dir, { recursive: true });
+    // Launchers in different PATH directories, deliberately not in REMOTE_CAPABLE_EDITOR_IDS order.
+    for (const [dir, command] of [
+      [dirs[2]!, "webstorm"],
+      [dirs[0]!, "cursor"],
+      [dirs[3]!, "code"],
+      [dirs[1]!, "zeditor"],
+    ] as const) {
+      const file = path.join(dir, launcherName(command));
+      yield* fs.writeFileString(file, "#!/bin/sh\n");
+      if (platform !== "win32") yield* fs.chmod(file, 0o755);
+    }
+    return {
+      root,
+      env: {
+        HOME: root,
+        USERPROFILE: root,
+        PATH: dirs.join(platform === "win32" ? ";" : ":"),
+        PATHEXT: ".COM;.EXE;.BAT;.CMD",
+      },
+    };
+  });
+
+  const countingFileSystem = (counter: { stat: number; reads: Map<string, number> }) =>
+    Layer.effect(
+      FileSystem.FileSystem,
+      Effect.gen(function* () {
+        const fs = yield* FileSystem.FileSystem;
+        return FileSystem.FileSystem.of({
+          ...fs,
+          stat: (target) => {
+            counter.stat += 1;
+            return fs.stat(target);
+          },
+          readDirectory: (target, options) => {
+            counter.reads.set(target, (counter.reads.get(target) ?? 0) + 1);
+            return fs.readDirectory(target, options);
+          },
+        });
+      }),
+    ).pipe(Layer.provideMerge(NodeServices.layer));
+
+  const serialReference = (env: Record<string, string>) =>
+    Effect.gen(function* () {
+      const available: Array<string> = [];
+      for (const editorId of REMOTE_CAPABLE_EDITOR_IDS) {
+        const editor = EDITORS.find((candidate) => candidate.id === editorId);
+        if (editor && Option.isSome(yield* resolveEditorCommand(editor, env))) {
+          available.push(editorId);
+        }
+      }
+      return available;
+    });
+
+  it.effect("reads each PATH directory once instead of stat-ing every candidate per editor", () =>
+    Effect.gen(function* () {
+      const { env: baseEnv } = yield* makeFakePath();
+      const delimiter = platform === "win32" ? ";" : ":";
+      const uncachedCounter = { stat: 0, reads: new Map<string, number>() };
+      const cachedCounter = { stat: 0, reads: new Map<string, number>() };
+      const uncachedEnv = { ...baseEnv, PATH: `${baseEnv.PATH}${delimiter}${baseEnv.HOME}x1` };
+      const cachedEnv = { ...baseEnv, PATH: `${baseEnv.PATH}${delimiter}${baseEnv.HOME}x2` };
+      const uncached = yield* serialReference(uncachedEnv).pipe(
+        Effect.provide(countingFileSystem(uncachedCounter)),
+      );
+      const cached = yield* probeRemoteEditors
+        .handler(undefined)
+        .pipe(
+          Effect.provideService(HostProcess.Environment, cachedEnv),
+          Effect.provideService(HostProcess.Platform, platform),
+          Effect.provide(countingFileSystem(cachedCounter)),
+        );
+      // The host can add editors from app folders the fixture can't redirect (e.g. /Applications).
+      const fixtureEditors = ["cursor", "vscode", "zed", "webstorm"];
+      assert.deepStrictEqual(
+        uncached.filter((id) => fixtureEditors.includes(id)),
+        fixtureEditors,
+      );
+      assert.deepStrictEqual(cached, uncached);
+      assert.isAbove(uncachedCounter.stat, 0);
+      // On every platform the probe lists each PATH directory at most once. Only PATH entries count:
+      // resolveEditorCommand also reads app folders such as /Applications on macOS.
+      const pathReads = cachedEnv.PATH.split(delimiter)
+        .filter((entry) => entry.length > 0)
+        .map((entry) => cachedCounter.reads.get(entry) ?? 0);
+      assert.isAbove(Math.max(...pathReads), 0);
+      assert.isAtMost(Math.max(...pathReads), 1);
+      // Without the listings, Windows stats every PATH entry x PATHEXT candidate for each editor;
+      // elsewhere there is no PATHEXT, so the stat count is about the same either way.
+      if (platform === "win32") {
+        assert.isBelow(cachedCounter.stat, uncachedCounter.stat / 2);
+      }
+    }).pipe(Effect.scoped, Effect.provide(NodeServices.layer)),
+  );
+});

@@ -12,10 +12,20 @@ export {
 import { systemdManager } from "./systemdManager.ts";
 import { BootServiceBaseDirUnsupportedError, systemdUnsafeValue } from "./systemdPath.ts";
 import {
+  BootServiceUnsupportedError,
+  BootServiceCommandError,
+  BootServiceInstallError,
+  BootServicePrerequisiteError,
+  BootServiceUpdatePendingError,
+  BootServiceDowngradeRefusedError,
+  type BootServiceProblem,
+  type BootServiceError,
+} from "./bootServiceErrors.ts";
+export * from "./bootServiceErrors.ts";
+import {
+  bootServiceBaseDirOf,
   escapeSystemdSpecifiers,
-  unescapeXmlText,
   quoteSystemdValue,
-  unquoteSystemdValue,
 } from "./systemdValues.ts";
 import * as HostProcess from "@goat/shared/HostProcess";
 import * as Clock from "effect/Clock";
@@ -50,16 +60,18 @@ import {
   SERVICE_LAUNCHER_PROTOCOL,
   SERVICE_RESTART_PENDING_FILE,
   SERVICE_STATE_FILE,
+  SERVICE_UNIT_ENV as BOOT_SERVICE_UNIT_ENV,
   compareExactServiceVersions,
   parseServiceState,
   serviceStateActiveVersion,
   serviceStateHasPendingUpdate,
   type ServiceState,
 } from "./serviceProtocol.ts";
+import { acquireServiceSelectionLock } from "./serviceSelectionLock.ts";
+import { makeBootServiceUnitOwnership, type OwnedLegacyUnit } from "./bootServiceUnitOwnership.ts";
 
 const plistFileOf = (names: BootServiceNames) => `${names.launchdLabel}.plist`;
 
-const BOOT_SERVICE_UNIT_ENV = "GOAT_BOOT_SERVICE_UNIT";
 const BOOT_SERVICE_HOME_ENV = "GOAT_HOME";
 /**
  * Units carry both spellings: the launcher may start a retained server version built
@@ -68,17 +80,7 @@ const BOOT_SERVICE_HOME_ENV = "GOAT_HOME";
 const bootServiceEnvNames = (name: string) => [name, legacyEnvName(name) ?? name] as const;
 export const BOOT_SERVICE_LOG_FILE = "boot-service.log";
 
-export function bootServiceBaseDirOf(contents: string): string | undefined {
-  const homeNames = bootServiceEnvNames(BOOT_SERVICE_HOME_ENV).join("|");
-  const systemd = new RegExp(`^Environment=(?:${homeNames})=(.*)$`, "m").exec(contents)?.[1];
-  if (systemd !== undefined) return unquoteSystemdValue(systemd.trim());
-  const plist = new RegExp(`<key>(?:${homeNames})</key>\\s*<string>([^<]*)</string>`).exec(
-    contents,
-  )?.[1];
-  return plist === undefined ? undefined : unescapeXmlText(plist);
-}
-
-export { bootServiceProgramOf } from "./systemdValues.ts";
+export { bootServiceBaseDirOf, bootServiceProgramOf } from "./systemdValues.ts";
 
 export interface BootServicePlan {
   readonly program: ReadonlyArray<string>;
@@ -269,11 +271,6 @@ export interface BootServiceManager {
   readonly finalize: ReadonlyArray<BootServiceStep>;
 }
 
-interface OwnedLegacyUnit {
-  readonly manager: BootServiceManager;
-  readonly contents: string;
-}
-
 function launchdManager(input: {
   readonly path: Path.Path;
   readonly homeDir: string;
@@ -384,107 +381,6 @@ function selectBootServiceManager(input: {
   }
   return undefined;
 }
-
-export class BootServiceUnsupportedError extends Schema.TaggedError<BootServiceUnsupportedError>()(
-  "BootServiceUnsupportedError",
-  { platform: Schema.String },
-) {
-  override get message(): string {
-    return `Background setup supports Linux with systemd and macOS with launchd; this machine reports '${this.platform}'.`;
-  }
-}
-
-export class BootServiceCommandError extends Schema.TaggedError<BootServiceCommandError>()(
-  "BootServiceCommandError",
-  {
-    step: Schema.String,
-    exitCode: Schema.optional(Schema.Number),
-    stdoutLength: Schema.optional(Schema.Number),
-    stderrLength: Schema.optional(Schema.Number),
-    cause: Schema.optional(Schema.Defect()),
-  },
-) {
-  override get message(): string {
-    return this.exitCode === undefined
-      ? `Background setup failed while ${this.step}.`
-      : `Background setup failed while ${this.step} (exit code ${this.exitCode}).`;
-  }
-}
-
-export class BootServiceInstallError extends Schema.TaggedError<BootServiceInstallError>()(
-  "BootServiceInstallError",
-  { cause: Schema.Defect() },
-) {
-  override get message(): string {
-    return "Could not set up the GOAT background service.";
-  }
-}
-
-const BootServiceProblem = Schema.Literals([
-  "user-manager-unavailable",
-  "linger-unavailable",
-  "linger-disabled",
-  "service-disabled",
-  "service-stopped",
-  "restart-pending",
-]);
-type BootServiceProblem = typeof BootServiceProblem.Type;
-
-export function formatBootServiceProblem(problem: BootServiceProblem): string {
-  switch (problem) {
-    case "user-manager-unavailable":
-      return "Cannot reach the systemd user manager. Run `systemctl --user status` in a login session for the service user. Install your distribution's systemd user-session support if it is missing; do not run GOAT with sudo.";
-    case "linger-unavailable":
-      return 'Cannot check whether this user can run services after logout. Run `loginctl show-user "$(id -un)" --property=Linger` and check that systemd-logind is available.';
-    case "linger-disabled":
-      return 'Lingering is disabled. GOAT will stop when your last login session ends and will not start at boot. Run `sudo loginctl enable-linger "$(id -un)"` on this machine, then retry the service command as your normal user.';
-    case "service-disabled":
-      return "The service is not enabled to start automatically. Run `goat service install` to repair it.";
-    case "service-stopped":
-      return "The service is not running. Check the service log and `systemctl --user status goat.service`, then run `goat service install`.";
-    case "restart-pending":
-      return "A newer version is installed but the service is still running the previous one. Run `goat service restart` to switch.";
-  }
-}
-
-export class BootServicePrerequisiteError extends Schema.TaggedError<BootServicePrerequisiteError>()(
-  "BootServicePrerequisiteError",
-  { problem: BootServiceProblem, cause: Schema.optional(Schema.Defect()) },
-) {
-  override get message(): string {
-    return `[${this.problem}] ${formatBootServiceProblem(this.problem)}`;
-  }
-}
-
-export class BootServiceUpdatePendingError extends Schema.TaggedError<BootServiceUpdatePendingError>()(
-  "BootServiceUpdatePendingError",
-  {},
-) {
-  override get message(): string {
-    return "A remote server update is still pending. Wait for it to finish, then retry.";
-  }
-}
-
-export class BootServiceDowngradeRefusedError extends Schema.TaggedError<BootServiceDowngradeRefusedError>()(
-  "BootServiceDowngradeRefusedError",
-  {
-    installedVersion: Schema.String,
-    targetVersion: Schema.String,
-  },
-) {
-  override get message(): string {
-    return `Refusing to replace goat@${this.installedVersion} with older goat@${this.targetVersion}. Run the command again with --allow-downgrade to continue.`;
-  }
-}
-
-export type BootServiceError =
-  | BootServiceUnsupportedError
-  | BootServiceBaseDirUnsupportedError
-  | BootServiceCommandError
-  | BootServiceInstallError
-  | BootServicePrerequisiteError
-  | BootServiceUpdatePendingError
-  | BootServiceDowngradeRefusedError;
 
 export interface BootServiceStatus {
   readonly supported: boolean;
@@ -630,6 +526,15 @@ export const make = Effect.fn("cloud.boot_service.make")(function* (input: {
   const logPath = path.join(input.logsDir, BOOT_SERVICE_LOG_FILE);
   const statePath = path.join(input.baseDir, "runtime", SERVICE_STATE_FILE);
   const restartPendingPath = path.join(input.baseDir, "runtime", SERVICE_RESTART_PENDING_FILE);
+  const withSelectionLock = <A, E, R>(selectionPath: string, operation: Effect.Effect<A, E, R>) =>
+    Effect.acquireUseRelease(
+      Effect.tryPromise({
+        try: () => acquireServiceSelectionLock(selectionPath),
+        catch: (cause) => new BootServiceInstallError({ cause }),
+      }),
+      () => operation,
+      (release) => Effect.sync(release),
+    );
   const writeDurably = (filePath: string, contents: string) =>
     Effect.scoped(
       Effect.gen(function* () {
@@ -782,36 +687,10 @@ export const make = Effect.fn("cloud.boot_service.make")(function* (input: {
     if (remaining[0]) return yield* new BootServicePrerequisiteError({ problem: remaining[0] });
   });
 
-  /**
-   * A unit installed under the legacy names that serves this GOAT home. One
-   * that serves another home is upstream T3 Code's or another install's, and
-   * is never touched.
-   */
-  const servesThisHome = (baseDir: string | undefined) =>
-    baseDir !== undefined && path.resolve(baseDir) === path.resolve(input.baseDir);
-
-  const readOwnedLegacyUnit = Effect.gen(function* () {
-    if (legacyManager === undefined) return Option.none<OwnedLegacyUnit>();
-    const contents = yield* fs.readFileString(legacyManager.unitPath).pipe(Effect.option);
-    if (Option.isNone(contents)) return Option.none<OwnedLegacyUnit>();
-    const servedBaseDir = bootServiceBaseDirOf(contents.value);
-    return servesThisHome(servedBaseDir)
-      ? Option.some<OwnedLegacyUnit>({ manager: legacyManager, contents: contents.value })
-      : Option.none<OwnedLegacyUnit>();
-  });
-
-  /**
-   * `goat.service` is one unit per user. A file that serves another home belongs
-   * to that home; this command must not stop, replace, or report it as ours.
-   */
-  const readCurrentUnit = Effect.gen(function* () {
-    const contents = yield* fs.readFileString(unitPath).pipe(Effect.option);
-    if (Option.isNone(contents)) return { _tag: "Absent" as const };
-    const servedBaseDir = bootServiceBaseDirOf(contents.value);
-    return servesThisHome(servedBaseDir)
-      ? { _tag: "Owned" as const, contents: contents.value }
-      : { _tag: "Foreign" as const, baseDir: servedBaseDir };
-  });
+  const { servesThisHome, readUnit, readLegacyUnit, checkInstallDestination, checkUnitOwner } =
+    makeBootServiceUnitOwnership(fs, path, input.baseDir);
+  const readCurrentUnit = Effect.suspend(() => readUnit(unitPath));
+  const readOwnedLegacyUnit = Effect.suspend(() => readLegacyUnit(legacyManager));
 
   const runtimeStatePath = path.join(input.baseDir, "userdata", "server-runtime.json");
 
@@ -838,8 +717,16 @@ export const make = Effect.fn("cloud.boot_service.make")(function* (input: {
       return "pending";
     });
 
-  /** Resolves once the new unit's server answers the environment descriptor. */
-  const awaitServiceAnswer = (manager: BootServiceManager, begunAt: number) =>
+  // The launcher can change the selection during startup to finish a rollback.
+  const selectedVersion = fs.readFileString(statePath).pipe(
+    Effect.map(serviceStateActiveVersion),
+    Effect.orElseSucceed(() => undefined),
+  );
+  const awaitServiceAnswer = (
+    manager: BootServiceManager,
+    begunAt: number,
+    expectedVersion: Effect.Effect<string | undefined> = Effect.succeed(input.cliVersion),
+  ) =>
     Effect.gen(function* () {
       const deadline = begunAt + Duration.toMillis(SERVICE_READY_TIMEOUT);
       const giveUp = new BootServiceCommandError({ step: "waiting for the service to answer" });
@@ -850,8 +737,9 @@ export const make = Effect.fn("cloud.boot_service.make")(function* (input: {
         if (
           Option.isSome(runtime) &&
           runtime.value.serviceManaged === true &&
-          runtime.value.serverVersion === input.cliVersion &&
-          Date.parse(runtime.value.startedAt) >= begunAt
+          Date.parse(runtime.value.startedAt) >= begunAt &&
+          runtime.value.serverVersion !== undefined &&
+          runtime.value.serverVersion === (yield* expectedVersion)
         ) {
           const requestUrl = yield* Effect.try({
             try: () => new URL(GOAT_ENVIRONMENT_PATH, runtime.value.origin).href,
@@ -866,7 +754,10 @@ export const make = Effect.fn("cloud.boot_service.make")(function* (input: {
                 Effect.timeout(Duration.seconds(1)),
                 Effect.option,
               );
-            if (Option.isSome(reported) && reported.value.serverVersion === input.cliVersion) {
+            if (
+              Option.isSome(reported) &&
+              reported.value.serverVersion === runtime.value.serverVersion
+            ) {
               return;
             }
           }
@@ -913,13 +804,8 @@ export const make = Effect.fn("cloud.boot_service.make")(function* (input: {
     let manager = yield* requireManager;
     if (manager.kind === "systemd" && systemdUnsafeValue(plan))
       return yield* new BootServiceBaseDirUnsupportedError({ baseDir: input.baseDir });
-    let current = yield* readCurrentUnit;
-    if (current._tag === "Foreign") {
-      return yield* new BootServiceCommandError({
-        step: `the service for this user belongs to ${current.baseDir ?? "another GOAT home"}`,
-      });
-    }
-    let currentInstalled = current._tag === "Owned";
+    const readInstallStatus = readCurrentUnit.pipe(Effect.flatMap(checkUnitOwner));
+    let currentInstalled = yield* readInstallStatus;
     yield* fs
       .makeDirectory(input.logsDir, { recursive: true })
       .pipe(Effect.mapError((cause) => new BootServiceInstallError({ cause })));
@@ -954,12 +840,7 @@ export const make = Effect.fn("cloud.boot_service.make")(function* (input: {
         manager = yield* requireManager;
         unitPath = manager.unitPath;
         plan = { ...plan, unitPath };
-        current = yield* readCurrentUnit;
-        if (current._tag === "Foreign")
-          return yield* new BootServiceCommandError({
-            step: `the service for this user belongs to ${current.baseDir ?? "another GOAT home"}`,
-          });
-        currentInstalled = current._tag === "Owned";
+        currentInstalled = yield* readInstallStatus;
       }
     }
 
@@ -1055,32 +936,53 @@ export const make = Effect.fn("cloud.boot_service.make")(function* (input: {
       if (Option.isSome(legacy)) yield* runSteps(legacy.value.manager.stop);
     }
 
+    let destinationRejected = false;
     let wroteSelection = false;
     let selectionState: Option.Option<string> = Option.none();
     let selectionPending: Option.Option<string> = Option.none();
-    const restoreSelection = Effect.gen(function* () {
-      if (!wroteSelection) return;
-      if (Option.isSome(selectionState)) {
-        yield* writeDurably(statePath, selectionState.value);
-      } else {
-        yield* fs.remove(statePath, { force: true }).pipe(Effect.ignore);
-      }
-      if (Option.isSome(selectionPending)) {
-        yield* fs.writeFileString(restartPendingPath, selectionPending.value, { mode: 0o600 });
-      } else {
-        yield* fs.remove(restartPendingPath, { force: true }).pipe(Effect.ignore);
-      }
-    }).pipe(Effect.ignore);
+    const restoreSelection = withSelectionLock(
+      statePath,
+      Effect.gen(function* () {
+        if (!wroteSelection) return;
+        if (Option.isSome(selectionState)) {
+          yield* writeDurably(statePath, selectionState.value);
+        } else {
+          yield* fs.remove(statePath, { force: true }).pipe(Effect.ignore);
+        }
+        if (Option.isSome(selectionPending)) {
+          yield* fs.writeFileString(restartPendingPath, selectionPending.value, { mode: 0o600 });
+        } else {
+          yield* fs.remove(restartPendingPath, { force: true }).pipe(Effect.ignore);
+        }
+      }),
+    ).pipe(Effect.ignore);
 
-    yield* Effect.gen(function* () {
-      if (installed) {
-        const previousStateText = yield* fs.readFileString(statePath).pipe(Effect.option);
-        if (Option.isSome(previousStateText)) {
-          if (serviceStateHasPendingUpdate(previousStateText.value)) {
-            return yield* new BootServiceUpdatePendingError();
-          }
-          // Read the final version after stopping the launcher; a remote update may finish after the status check.
-          const installedVersion = serviceStateActiveVersion(previousStateText.value);
+    // State lease, then the unit's; the launcher never holds both, and manager stop and start run
+    // outside them, since stopping a launcher that waits on a lease would deadlock.
+    const selectInstall = Effect.gen(function* () {
+      const destinationOwned = yield* checkInstallDestination(target.unitPath).pipe(
+        Effect.tapError(() =>
+          Effect.sync(() => {
+            destinationRejected = true;
+          }),
+        ),
+      );
+      const previousStateText = yield* fs.readFileString(statePath).pipe(Effect.option);
+      if (Option.isSome(previousStateText)) {
+        // Read the final version after stopping the launcher; a remote update may finish after the status check.
+        const installedVersion = serviceStateActiveVersion(previousStateText.value);
+        if (serviceStateHasPendingUpdate(previousStateText.value)) {
+          const unitPresent = yield* fs.exists(target.unitPath);
+          const quote = (word: string) => `'${word.replaceAll("'", "'\\''")}'`;
+          return yield* new BootServiceUpdatePendingError(
+            !unitPresent && installedVersion !== undefined
+              ? {
+                  recoveryCommand: `GOAT_HOME=${quote(input.baseDir)} ${quote(pinnedRuntimePaths(path, input.baseDir, installedVersion, platform).entryPath)} __service-launcher`,
+                }
+              : {},
+          );
+        }
+        if (installed || destinationOwned) {
           if (
             installedVersion !== undefined &&
             options?.allowDowngrade !== true &&
@@ -1121,20 +1023,43 @@ export const make = Effect.fn("cloud.boot_service.make")(function* (input: {
         }
       }
       yield* writeDurably(target.unitPath, target.render(plan));
+    });
 
-      if (start) {
-        if (Option.isSome(legacy)) yield* retireLegacyUnit(legacy.value);
-        const begunAt = yield* Clock.currentTimeMillis;
-        yield* runSteps(manager.activate);
-        yield* awaitServiceAnswer(manager, begunAt);
-        yield* fs.remove(restartPendingPath, { force: true });
-      }
-    }).pipe(
+    yield* withSelectionLock(statePath, withSelectionLock(target.unitPath, selectInstall)).pipe(
+      Effect.andThen(
+        Effect.gen(function* () {
+          if (!start) return;
+          if (Option.isSome(legacy)) yield* retireLegacyUnit(legacy.value);
+          const begunAt = yield* Clock.currentTimeMillis;
+          yield* runSteps(manager.activate);
+          yield* awaitServiceAnswer(manager, begunAt);
+          yield* withSelectionLock(
+            statePath,
+            Effect.gen(function* () {
+              // A concurrent install with a deferred restart may now be waiting for a newer start.
+              const selected = parseServiceState(yield* fs.readFileString(statePath));
+              if (selected?.activeVersion === input.cliVersion && selected.update === undefined) {
+                yield* fs.remove(restartPendingPath, { force: true });
+              }
+            }),
+          );
+        }),
+      ),
       Effect.mapError((cause) =>
         cause._tag === "PlatformError" ? new BootServiceInstallError({ cause }) : cause,
       ),
       Effect.tapError(() => {
         if (!start) return Effect.void;
+        if (destinationRejected) {
+          return readOwnedLegacyUnit.pipe(
+            Effect.flatMap(
+              Option.match({
+                onNone: () => Effect.void,
+                onSome: ({ manager }) => runSteps(manager.restart).pipe(Effect.ignore),
+              }),
+            ),
+          );
+        }
         if (currentInstalled) return runSteps(manager.restart).pipe(Effect.ignore);
         // The legacy launcher reads activeVersion at startup. Put the previous
         // selection back before it starts, or it clears the marker and runs
@@ -1161,7 +1086,7 @@ export const make = Effect.fn("cloud.boot_service.make")(function* (input: {
         yield* writeDurably(unitPath, migrateLegacyBootServiceUnit(legacy.value.contents));
         yield* retireLegacyUnit(legacy.value);
         yield* runSteps(manager.activate);
-        yield* awaitServiceAnswer(manager, begunAt);
+        yield* awaitServiceAnswer(manager, begunAt, selectedVersion);
       }).pipe(Effect.tapError(() => reinstateLegacyUnit(manager, legacy.value)));
       yield* fs.remove(restartPendingPath, { force: true });
       return "restarted" as const;
@@ -1184,7 +1109,7 @@ export const make = Effect.fn("cloud.boot_service.make")(function* (input: {
       : Effect.void;
     yield* retireLeftover.pipe(
       Effect.andThen(runSteps(manager.activate)),
-      Effect.andThen(awaitServiceAnswer(manager, begunAt)),
+      Effect.andThen(awaitServiceAnswer(manager, begunAt, selectedVersion)),
       Effect.tapError(() => runSteps(manager.restart).pipe(Effect.ignore)),
     );
     yield* fs.remove(restartPendingPath, { force: true });

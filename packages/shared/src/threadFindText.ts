@@ -209,8 +209,12 @@ function markdownThreadFindText(
       node.tagName === "code" || node.tagName === "a"
         ? false
         : inlineSkills || node.tagName === "p" || node.tagName === "li";
-    for (const child of node.children ?? [])
+    const children = node.children ?? [];
+    for (const [index, child] of children.entries()) {
+      if (child.type === "text" && child.value === "\n" && children[index - 1]?.tagName === "br")
+        continue;
       visit(child, inPre || node.tagName === "pre", renderSkills);
+    }
     if (block) flush();
   };
   visit(tree);

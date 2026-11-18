@@ -146,6 +146,7 @@ export class ConnectionBlockedError extends Schema.TaggedError<ConnectionBlocked
     ...ConnectionFailureFields,
 
     serverUpdateRequired: Schema.optionalKey(Schema.Boolean),
+    existingRuntimeRequired: Schema.optionalKey(Schema.Boolean),
     localProxyUnavailable: Schema.optionalKey(Schema.Boolean),
     /** This browser's own server said its cookie session is gone; its hub nodes are unknown. */
     sessionEnded: Schema.optionalKey(Schema.Boolean),
@@ -219,6 +220,7 @@ export interface PreparedConnection {
   readonly label: string;
   readonly httpBaseUrl: string;
   readonly socketUrl: string;
+  readonly hubVcsBranchSupported?: boolean;
   readonly httpAuthorization: PreparedHttpAuthorization | null;
   readonly target: ConnectionTarget;
 }

@@ -21,11 +21,12 @@ function composerCommandMenuPositionsEqual(
 export function ComposerCommandMenuLayer(props: {
   anchor: HTMLElement | null;
   children: ReactNode;
+  canOverflowTop?: boolean;
 }) {
+  const { anchor, canOverflowTop } = props;
   const [position, setPosition] = useState<ComposerCommandMenuPosition | null>(null);
 
   useLayoutEffect(() => {
-    const anchor = props.anchor;
     if (!anchor) return;
 
     const updatePosition = () => {
@@ -46,10 +47,18 @@ export function ComposerCommandMenuLayer(props: {
         return;
       }
       const composerOverlap = rootFontSizePx + 1;
+      const spaceAbove = rect.top + composerOverlap;
+      const preferredBottom = window.innerHeight - spaceAbove;
+      const preferredHeight = Math.max(96, spaceAbove - 24);
+      const maxHeight = canOverflowTop
+        ? preferredHeight
+        : Math.min(preferredHeight, window.innerHeight);
       const next = {
-        bottom: window.innerHeight - rect.top - composerOverlap,
+        bottom: canOverflowTop
+          ? preferredBottom
+          : Math.min(preferredBottom, window.innerHeight - maxHeight),
         left: rect.left + drawerInset,
-        maxHeight: Math.max(96, rect.top - 24 + composerOverlap),
+        maxHeight,
         width,
       };
       setPosition((current) =>
@@ -72,9 +81,9 @@ export function ComposerCommandMenuLayer(props: {
       window.removeEventListener("resize", updatePosition);
       window.removeEventListener("scroll", updatePosition, true);
     };
-  }, [props.anchor]);
+  }, [anchor, canOverflowTop]);
 
-  if (!props.anchor || !position) return null;
+  if (!anchor || !position) return null;
 
   return createPortal(
     <div

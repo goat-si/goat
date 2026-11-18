@@ -376,10 +376,10 @@ export function ConnectionsNewRouteScreen({
         keyboardShouldPersistTaps="handled"
         showsVerticalScrollIndicator={false}
         className="flex-1"
-        contentInset={{ bottom: Math.max(insets.bottom, 18) + 18 }}
         contentContainerStyle={{
           paddingHorizontal: 16,
           paddingTop: 4,
+          paddingBottom: Math.max(insets.bottom, 18) + 18,
         }}
       >
         <View collapsable={false} className="gap-6.5">

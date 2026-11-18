@@ -1,3 +1,14 @@
+import {
+  flushMicrotasks,
+  makeChangeSignal,
+  makeFaviconWebContents as makeFaviconFixture,
+  makeSourcePng,
+  makeTestHostWebContents,
+  makeTestPictureInPictureWindow,
+  makeTestPreviewWebContents as makeGuestFixture,
+  type TestCapturedPreviewImage,
+  unusedCapture,
+} from "./Manager.testkit.ts";
 import { it as effectIt } from "@effect/vitest";
 import * as NodeCrypto from "@effect/platform-node/NodeCrypto";
 import type {
@@ -87,6 +98,9 @@ vi.mock("electron", () => ({
   },
 }));
 
+const makeFaviconWebContents = makeFaviconFixture(webviewSend);
+const makeTestPreviewWebContents = makeGuestFixture(webviewSend);
+
 const layerBrowserSession = Layer.succeed(
   BrowserSession.BrowserSession,
   BrowserSession.BrowserSession.of({
@@ -157,94 +171,6 @@ const withManager = <A>(
     return yield* use(manager);
   }).pipe(Effect.provide(managerLayer(platform)), Effect.scoped);
 
-interface TestCapturedPreviewImage {
-  readonly toJPEG: () => Buffer;
-  readonly toBitmap?: () => Buffer;
-  readonly getSize: () => { readonly width: number; readonly height: number };
-}
-
-type TestDisplayMediaHandler = (
-  request: { readonly frame: { readonly frameTreeNodeId: number } | null },
-  callback: (streams: { video?: unknown }) => void,
-) => void;
-
-interface TestHostWebContents {
-  readonly id: number;
-  readonly mainFrame: { readonly frameTreeNodeId: number };
-  readonly executeJavaScript: ReturnType<typeof vi.fn>;
-  readonly isDestroyed: () => boolean;
-  readonly session: {
-    readonly setDisplayMediaRequestHandler: ReturnType<typeof vi.fn>;
-  };
-  readonly displayMediaHandler: () => TestDisplayMediaHandler | undefined;
-}
-
-type TestPreviewWebContents = Electron.WebContents & {
-  readonly setBackgroundThrottling: ReturnType<typeof vi.fn<(enabled: boolean) => void>>;
-};
-
-const makeTestHostWebContents = (): TestHostWebContents => {
-  let handler: TestDisplayMediaHandler | undefined;
-  return {
-    id: 7,
-    mainFrame: { frameTreeNodeId: 7 },
-    executeJavaScript: vi.fn(async () => true),
-    isDestroyed: () => false,
-    session: {
-      setDisplayMediaRequestHandler: vi.fn((next: TestDisplayMediaHandler) => {
-        handler = next;
-      }),
-    },
-    displayMediaHandler: () => handler,
-  };
-};
-
-const makeTestPreviewWebContents = (
-  capturePage: () => Promise<TestCapturedPreviewImage>,
-  id = 42,
-  hostWebContents: TestHostWebContents = makeTestHostWebContents(),
-) => {
-  const setBackgroundThrottling = vi.fn<(enabled: boolean) => void>();
-  return {
-    id,
-    mainFrame: { routingId: id },
-    hostWebContents,
-    executeJavaScript: vi.fn(async () => ({ width: 1280, height: 720 })),
-    isDestroyed: () => false,
-    getType: () => "webview",
-    getURL: () => "https://example.com",
-    getTitle: () => "Example",
-    isLoadingMainFrame: () => false,
-    isDevToolsOpened: () => false,
-    reload: vi.fn(),
-    loadURL: vi.fn(async () => undefined),
-    getZoomFactor: () => 1,
-    setZoomFactor: vi.fn(),
-    setAudioMuted: vi.fn(),
-    setBackgroundThrottling,
-    isCurrentlyAudible: () => false,
-    on: vi.fn(),
-    off: vi.fn(),
-    ipc: { on: vi.fn(), off: vi.fn() },
-    send: webviewSend,
-    navigationHistory: { canGoBack: () => false, canGoForward: () => false },
-    setIgnoreMenuShortcuts: vi.fn(),
-    setWindowOpenHandler: vi.fn(),
-    debugger: {
-      isAttached: () => false,
-      attach: vi.fn(),
-      sendCommand: vi.fn(async () => undefined),
-      on: vi.fn(),
-      off: vi.fn(),
-    },
-    capturePage,
-  } as unknown as TestPreviewWebContents;
-};
-
-const unusedCapture = async (): Promise<TestCapturedPreviewImage> => {
-  throw new Error("This test captures no page.");
-};
-
 const setupRecordingRaceTabs = (manager: PreviewManager.PreviewManager["Service"]) =>
   Effect.gen(function* () {
     const capturePage = vi.fn(async () => ({
@@ -281,181 +207,6 @@ const setupRecordingRaceTabs = (manager: PreviewManager.PreviewManager["Service"
     };
   });
 
-const TEST_FAVICON = "data:image/png;base64,cG5n";
-
-const makeSourcePng = (width = 1, height = 1): Buffer => {
-  const buffer = Buffer.alloc(24);
-  Buffer.from([137, 80, 78, 71, 13, 10, 26, 10]).copy(buffer);
-  buffer.writeUInt32BE(width, 16);
-  buffer.writeUInt32BE(height, 20);
-  return buffer;
-};
-
-const makeFaviconWebContents = (options?: {
-  readonly changes?: ChangeSignal;
-  readonly fetch?: (url: string, init?: RequestInit) => Promise<Response>;
-  readonly id?: number;
-  readonly rasterize?: (code: string) => Promise<unknown>;
-  readonly url?: string;
-}) => {
-  const sourcePng = makeSourcePng();
-  const listeners = new Map<string, (...args: never[]) => void>();
-  let currentUrl = options?.url ?? "http://localhost:3200/";
-  let destroyed = false;
-  let loading = false;
-  const fetchImpl =
-    options?.fetch ??
-    (async () =>
-      new Response(new Uint8Array(sourcePng), {
-        headers: { "content-type": "image/png" },
-      }));
-  const fetch = vi.fn((url: string, init?: RequestInit) => {
-    const response = fetchImpl(url, init);
-    options?.changes?.notify();
-    return response;
-  });
-  const executeJavaScriptInIsolatedWorld = vi.fn(
-    (_worldId: number, scripts: ReadonlyArray<{ readonly code: string }>) => {
-      const result = options?.rasterize
-        ? options.rasterize(scripts[0]?.code ?? "")
-        : Promise.resolve(TEST_FAVICON);
-      options?.changes?.notify();
-      return result;
-    },
-  );
-  const reload = vi.fn();
-  const loadURL = vi.fn(async (url: string) => {
-    currentUrl = url;
-  });
-  const off = vi.fn();
-  const debuggerOff = vi.fn();
-  const webContents = {
-    id: options?.id ?? 42,
-    isDestroyed: () => destroyed,
-    getType: () => "webview",
-    getURL: () => currentUrl,
-    getTitle: () => "Preview",
-    isLoadingMainFrame: () => loading,
-    isDevToolsOpened: () => false,
-    getZoomFactor: () => 1,
-    setZoomFactor: vi.fn(),
-    setAudioMuted: vi.fn(),
-    isCurrentlyAudible: () => false,
-    reload,
-    reloadIgnoringCache: vi.fn(),
-    loadURL,
-    on: vi.fn((event: string, listener: (...args: never[]) => void) => {
-      listeners.set(event, listener);
-    }),
-    off,
-    ipc: { on: vi.fn(), off: vi.fn() },
-    send: webviewSend,
-    session: { fetch },
-    navigationHistory: { canGoBack: () => false, canGoForward: () => false },
-    isFocused: vi.fn(() => true),
-    focusedFrame: {} as object | null,
-    setIgnoreMenuShortcuts: vi.fn(),
-    setWindowOpenHandler: vi.fn(),
-    executeJavaScriptInIsolatedWorld,
-    debugger: {
-      isAttached: () => false,
-      attach: vi.fn(),
-      sendCommand: vi.fn(async () => undefined),
-      on: vi.fn(),
-      off: debuggerOff,
-    },
-  };
-  return {
-    executeJavaScriptInIsolatedWorld,
-    fetch,
-    debuggerOff,
-    listeners,
-    loadURL,
-    off,
-    reload,
-    setDestroyed: (value: boolean) => {
-      destroyed = value;
-    },
-    setLoading: (value: boolean) => {
-      loading = value;
-    },
-    setUrl: (url: string) => {
-      currentUrl = url;
-    },
-    webContents: webContents as never,
-  };
-};
-
-// Electron mocks and state subscribers call `notify`, so a wait re-checks its
-// predicate exactly when the state it reads changes.
-const makeChangeSignal = () => {
-  const waiters = new Set<() => void>();
-  return {
-    notify: () => {
-      for (const wake of waiters) wake();
-    },
-    until: (predicate: () => boolean) =>
-      Effect.callback<void>((resume) => {
-        if (predicate()) return resume(Effect.void);
-        const wake = () => {
-          if (!predicate()) return;
-          waiters.delete(wake);
-          resume(Effect.void);
-        };
-        waiters.add(wake);
-        return Effect.sync(() => void waiters.delete(wake));
-      }),
-  };
-};
-type ChangeSignal = ReturnType<typeof makeChangeSignal>;
-
-// Favicon captures run detached from the Electron listener, so asserting that
-// one published nothing can only give its promise chain a fixed number of turns.
-const flushMicrotasks = function* () {
-  for (let turn = 0; turn < 30; turn++) yield* Effect.promise(() => Promise.resolve());
-};
-
-const makeTestPictureInPictureWindow = (loadURL: () => Promise<void> = async () => undefined) => {
-  const listeners = new Map<string, () => void>();
-  const webContentsListeners = new Map<string, () => void>();
-  const send = vi.fn();
-  let destroyed = false;
-  const webContents = {
-    on: vi.fn((event: string, listener: () => void) => {
-      webContentsListeners.set(event, listener);
-    }),
-    off: vi.fn((event: string) => {
-      webContentsListeners.delete(event);
-    }),
-    send,
-  };
-  const pictureInPictureWindow = {
-    isDestroyed: vi.fn(() => destroyed),
-    once: vi.fn((event: string, listener: () => void) => {
-      listeners.set(event, listener);
-    }),
-    setAlwaysOnTop: vi.fn(),
-    setVisibleOnAllWorkspaces: vi.fn(),
-    setAspectRatio: vi.fn(),
-    getContentSize: vi.fn(() => [480, 320]),
-    setContentSize: vi.fn(),
-    loadURL: vi.fn(loadURL),
-    showInactive: vi.fn(() => {
-      if (destroyed) throw new Error("Picture-in-picture window is closed.");
-    }),
-    close: vi.fn(() => {
-      if (destroyed) return;
-      destroyed = true;
-      listeners.get("closed")?.();
-    }),
-    get webContents() {
-      if (destroyed) throw new Error("Picture-in-picture window is closed.");
-      return webContents;
-    },
-  };
-  return { pictureInPictureWindow, send, webContentsListeners };
-};
-
 describe("PreviewManager", () => {
   beforeEach(() => {
     browserWindowConstructor.mockReset();
@@ -471,6 +222,32 @@ describe("PreviewManager", () => {
     createFromPath.mockClear();
     webviewSend.mockClear();
   });
+
+  effectIt.effect("preserves recording artifacts saved in the same millisecond", () =>
+    withManager((manager) =>
+      Effect.gen(function* () {
+        const stored = new Map<string, Uint8Array>();
+        const save = (path: string, bytes: Uint8Array) => {
+          stored.set(path, Uint8Array.from(bytes));
+          return undefined;
+        };
+        writeFile.mockImplementationOnce(save).mockImplementationOnce(save);
+        const firstBytes = new Uint8Array([1, 2, 3]);
+        const secondBytes = new Uint8Array([4, 5, 6]);
+        const [first, second] = yield* Effect.all(
+          [
+            manager.saveRecording("tab_first", "video/webm", firstBytes),
+            manager.saveRecording("tab_second", "video/webm", secondBytes),
+          ],
+          { concurrency: "unbounded" },
+        );
+
+        expect(first.path).not.toBe(second.path);
+        expect(stored.get(first.path)).toEqual(firstBytes);
+        expect(stored.get(second.path)).toEqual(secondBytes);
+      }),
+    ),
+  );
 
   effectIt.effect(
     "retains blank, POST and nested noopener journeys through the installed handler",
@@ -1385,6 +1162,111 @@ describe("PreviewManager", () => {
     ),
   );
 
+  effectIt.effect.each([
+    "navigate",
+    "reload",
+    "goBack",
+    "goForward",
+    "refresh",
+    "hardReload",
+  ] as const)("%s stops a page script that never yields before it navigates", (operation) =>
+    withManager((manager) =>
+      Effect.gen(function* () {
+        const preview = makeFaviconWebContents();
+        // As in Chromium: the hung renderer answers nothing, and a terminate reaches it only
+        // while no navigation is pending.
+        let stopped = false;
+        const probed = yield* Deferred.make<void>();
+        const navigatedAfterStop: Array<boolean> = [];
+        const navigated = () => {
+          navigatedAfterStop.push(stopped);
+        };
+        const sendCommand = async (method: string) => {
+          if (method === "Runtime.evaluate") {
+            Deferred.doneUnsafe(probed, Effect.void);
+            await new Promise(() => {});
+          }
+          if (method === "Runtime.terminateExecution") stopped = true;
+        };
+        Object.assign(preview.webContents, {
+          getURL: () => "http://localhost:5173/busy",
+          reload: navigated,
+          reloadIgnoringCache: navigated,
+          loadURL: async () => navigated(),
+          navigationHistory: {
+            canGoBack: () => true,
+            canGoForward: () => true,
+            goBack: navigated,
+            goForward: navigated,
+          },
+          debugger: {
+            isAttached: () => false,
+            attach: vi.fn(),
+            sendCommand,
+            on: vi.fn(),
+            off: vi.fn(),
+          },
+        });
+        fromId.mockReturnValue(preview.webContents);
+        yield* manager.createTab("tab_busy");
+        yield* manager.registerWebview("tab_busy", 42);
+
+        const leaving = yield* (
+          operation === "navigate"
+            ? manager.navigate("tab_busy", "http://localhost:5173/next")
+            : operation === "reload"
+              ? manager.navigate("tab_busy", "http://localhost:5173/busy")
+              : manager[operation]("tab_busy")
+        ).pipe(Effect.forkChild);
+        const probing = yield* Effect.raceFirst(
+          Deferred.await(probed).pipe(Effect.as(true)),
+          Fiber.await(leaving).pipe(Effect.as(false)),
+        );
+        if (probing) yield* TestClock.adjust(1_000);
+        yield* Fiber.join(leaving);
+
+        expect(navigatedAfterStop).toEqual([true]);
+      }),
+    ),
+  );
+
+  effectIt.effect.each([true, false])(
+    "writes final pixels after paint or its deadline: %s",
+    (confirmed) =>
+      withManager((manager) =>
+        Effect.gen(function* () {
+          const paint = Promise.withResolvers<void>();
+          const image = (pixels: string) => ({
+            toPNG: () => Buffer.from(pixels),
+            toJPEG: () => Buffer.from(pixels),
+            getSize: () => ({ width: 100, height: 80 }),
+          });
+          const wc = makeTestPreviewWebContents(
+            vi.fn().mockResolvedValueOnce(image("warmup")).mockResolvedValue(image("fresh")),
+          );
+          vi.mocked(wc.debugger.sendCommand).mockImplementation(async (method) => {
+            if (method === "Page.getFrameTree") return { frameTree: { frame: { id: "main" } } };
+            if (method === "Page.createIsolatedWorld") return { executionContextId: 7 };
+            if (method === "Runtime.evaluate") await paint.promise;
+            return { result: { value: true } };
+          });
+          fromId.mockReturnValue(wc);
+          yield* manager.createTab("tab_still");
+          yield* manager.registerWebview("tab_still", wc.id);
+          const pending = yield* manager.captureScreenshot("tab_still").pipe(Effect.forkChild);
+          yield* TestClock.adjust(0);
+          expect(wc.setBackgroundThrottling.mock.calls).toEqual([[false]]);
+          expect(writeFile).not.toHaveBeenCalled();
+          if (confirmed) paint.resolve();
+          else yield* TestClock.adjust(1_000);
+          const saved = yield* Fiber.join(pending);
+          paint.resolve();
+          expect(writeFile).toHaveBeenCalledWith(saved.path, Buffer.from("fresh"));
+          expect(wc.setBackgroundThrottling.mock.calls).toEqual([[false], [true]]);
+        }),
+      ),
+  );
+
   effectIt.effect("preserves both screenshots of the same site in the same millisecond", () =>
     withManager((manager) =>
       Effect.gen(function* () {
@@ -1398,6 +1280,8 @@ describe("PreviewManager", () => {
         const capturePage = vi
           .fn<() => Promise<ReturnType<typeof pngImage>>>()
           .mockResolvedValueOnce(pngImage(firstPng))
+          .mockResolvedValueOnce(pngImage(firstPng))
+          .mockResolvedValueOnce(pngImage(secondPng))
           .mockResolvedValueOnce(pngImage(secondPng));
         fromId.mockReturnValue(makeTestPreviewWebContents(capturePage));
         yield* manager.createTab("tab_1");
@@ -1956,6 +1840,116 @@ describe("PreviewManager", () => {
         expect(grants).toEqual([{ video: { routingId: 42 } }]);
 
         yield* manager.stopRecording("tab_race_b");
+      }),
+    ),
+  );
+
+  effectIt.effect(
+    "publishes human ownership only on transitions while retaining every recording press",
+    () =>
+      withManager((manager) =>
+        Effect.gen(function* () {
+          let humanInput: ((input: unknown) => void) | undefined;
+          const contents = makeTestPreviewWebContents(async () => ({
+            toJPEG: () => Buffer.from("frame"),
+            getSize: () => ({ width: 800, height: 600 }),
+          }));
+          contents.ipc.on = (channel, callback) => {
+            if (channel === "preview:human-input")
+              humanInput = (input) => callback({} as Electron.IpcMainEvent, input);
+            return contents.ipc;
+          };
+          fromId.mockReturnValue(contents);
+          yield* manager.createTab("tab_human");
+          yield* manager.registerWebview("tab_human", 42);
+          yield* manager.startRecording("tab_human", {
+            showKeyPresses: true,
+            showMousePresses: true,
+          });
+          const controllers: string[] = [];
+          const feedback = yield* Queue.unbounded<void>();
+          webviewSend.mockImplementation((channel) => {
+            if (channel === "preview:recording-controller") Queue.offerUnsafe(feedback, undefined);
+          });
+          yield* manager.subscribeStateChanges((_tabId, state) =>
+            Effect.sync(() => {
+              controllers.push(state.controller);
+            }),
+          );
+          for (const press of [
+            { kind: "pointer", x: 10, y: 20, button: 0 },
+            { kind: "pointer", x: 30, y: 40, button: 0 },
+            { kind: "key", key: "a", code: "KeyA" },
+          ]) {
+            humanInput?.(press);
+            yield* Queue.take(feedback);
+          }
+          expect(controllers).toEqual(["human"]);
+          expect(
+            webviewSend.mock.calls.filter(
+              ([channel]) => channel === "preview:recording-controller",
+            ),
+          ).toEqual([
+            ["preview:recording-controller", "human", { x: 10, y: 20 }],
+            ["preview:recording-controller", "human", { x: 30, y: 40 }],
+            ["preview:recording-controller", "human", undefined],
+          ]);
+          yield* TestClock.adjust(750);
+          expect(controllers).toEqual(["human", "none"]);
+        }),
+      ),
+  );
+
+  effectIt.effect("keeps human ownership until the last input's idle deadline", () =>
+    withManager((manager) =>
+      Effect.gen(function* () {
+        let humanInput: ((input: unknown) => void) | undefined;
+        const contents = makeTestPreviewWebContents(async () => ({
+          toJPEG: () => Buffer.from("frame"),
+          getSize: () => ({ width: 800, height: 600 }),
+        }));
+        contents.ipc.on = (channel, callback) => {
+          if (channel === "preview:human-input")
+            humanInput = (input) => callback({} as Electron.IpcMainEvent, input);
+          return contents.ipc;
+        };
+        fromId.mockReturnValue(contents);
+        yield* manager.createTab("tab_idle");
+        yield* manager.registerWebview("tab_idle", 42);
+        const controllers: string[] = [];
+        yield* manager.subscribeStateChanges((_tabId, state) =>
+          Effect.sync(() => {
+            controllers.push(state.controller);
+          }),
+        );
+        const press = () => humanInput?.({ kind: "key", key: "a", code: "KeyA" });
+        press();
+        yield* TestClock.adjust(500);
+        press();
+        yield* TestClock.adjust(749);
+        expect(controllers).toEqual(["human"]);
+        yield* TestClock.adjust(1);
+        expect(controllers).toEqual(["human", "none"]);
+
+        press();
+        yield* TestClock.adjust(500);
+        const staleInput = humanInput;
+        const replacement = makeTestPreviewWebContents(
+          async () => ({
+            toJPEG: () => Buffer.from("frame"),
+            getSize: () => ({ width: 800, height: 600 }),
+          }),
+          43,
+        );
+        replacement.ipc.on = contents.ipc.on;
+        contents.isDestroyed = () => true;
+        fromId.mockImplementation((id) => (id === 43 ? replacement : null));
+        yield* manager.registerWebview("tab_idle", 43);
+        expect(controllers.at(-1)).toBe("none");
+        const count = controllers.length;
+        staleInput?.({ kind: "key", key: "b", code: "KeyB" });
+        yield* TestClock.adjust(750);
+        expect(controllers).toHaveLength(count);
       }),
     ),
   );

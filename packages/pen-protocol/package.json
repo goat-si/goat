@@ -8,6 +8,7 @@
     "./login": "./src/login.ts",
     "./service": "./src/service.ts",
     "./ready": "./src/ready.ts",
+    "./snapshot": "./src/snapshot.ts",
     "./client/errors": "./src/client/errors.ts",
     "./client/runtime": "./src/client/runtime.ts",
     "./client/bytes": "./src/client/bytes.ts",

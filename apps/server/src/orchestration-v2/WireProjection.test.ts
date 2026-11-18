@@ -25,6 +25,7 @@ import { describe, expect, it } from "@effect/vitest";
 import * as DateTime from "effect/DateTime";
 import * as Schema from "effect/Schema";
 
+import { idleThreadProjection, liveThreadShell } from "../mcp/McpToolAccess.testkit.ts";
 import { coalesceLiveUpdatedEvents } from "./ThreadLiveEventCoalescer.ts";
 import {
   boundFileChangeForStorage,
@@ -891,6 +892,18 @@ describe("live body deduper", () => {
     const filesTotal = { count: 250, additions: 500, deletions: 250 };
     expect(payloadOf(record!)).toMatchObject({ files: files.slice(0, 200), filesTotal });
     expect(payloadOf(card!)).toMatchObject({ files: [], filesOmitted: true, filesTotal });
+  });
+
+  it("ships a reply whole when a replacement snapshot removes the original message", () => {
+    const first = message(1, "streamed reply");
+    const replacement: OrchestrationV2ThreadStreamItem = {
+      kind: "snapshot",
+      snapshotSequence: 2,
+      projection: idleThreadProjection(liveThreadShell(base.threadId)),
+    };
+    const later = reply(3, "streamed reply");
+    const sent = [first, replacement, later].map(makeLiveBodyDeduper());
+    expect(payloadOf(sent[2]!)).toMatchObject({ text: "streamed reply" });
   });
 
   it("ships a reply whole when its message arrives after it", () => {

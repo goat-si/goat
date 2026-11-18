@@ -18,6 +18,7 @@ import {
   goatNames,
   history,
   isDatabaseNewerThanBuildError,
+  laterGoatRows,
   schema,
   seedOldGoatLedger,
   seedUserData,
@@ -36,7 +37,10 @@ describe("GOAT migrations after upstream 080-089", () => {
       );
       assert.isTrue(goatNames.every((name) => currentRow(name)[0] >= 90));
       assert.deepStrictEqual(currentRow("ServerActivityIndexes"), [90, "ServerActivityIndexes"]);
-      assert.deepStrictEqual(migrationManifest.at(-1), [157, "DisposableMachineEnrollment"]);
+      assert.deepStrictEqual(migrationManifest.slice(-2), [
+        [158, "AuthSessionPenMember"],
+        [159, "ScheduledTaskFirstBindIntent"],
+      ]);
       assert.deepStrictEqual(yield* history, migrationManifest);
       assert.deepStrictEqual(yield* runMigrations(), []);
     }).pipe(Effect.provide(NodeSqliteClient.layer({ filename: ":memory:" }))),
@@ -59,6 +63,8 @@ describe("GOAT migrations after upstream 080-089", () => {
           [90, "ServerActivityIndexes"],
           [156, "DisposableMachineRequests"],
           [157, "DisposableMachineEnrollment"],
+          [158, "AuthSessionPenMember"],
+          [159, "ScheduledTaskFirstBindIntent"],
         ]);
         assert.deepStrictEqual(yield* userData, before);
         assert.deepStrictEqual(yield* runMigrations(), []);
@@ -76,11 +82,28 @@ describe("GOAT migrations after upstream 080-089", () => {
     }).pipe(Effect.provide(NodeSqliteClient.layer({ filename: ":memory:" }))),
   );
 
+  it.effect("a dev nightly ledger at 158 keeps its Pen migration and applies only 159", () =>
+    Effect.gen(function* () {
+      yield* runMigrations({ toMigrationInclusive: 158 });
+      const nightlyLedger = yield* history;
+      assert.deepStrictEqual(nightlyLedger.at(-1), [158, "AuthSessionPenMember"]);
+      assert.isTrue(yield* hasPendingMigrations());
+      assert.deepStrictEqual(yield* reconcileGoatMigrationIds(migrationEntries), []);
+      assert.deepStrictEqual(yield* history, nightlyLedger);
+      assert.deepStrictEqual(yield* runMigrations(), [[159, "ScheduledTaskFirstBindIntent"]]);
+      assert.deepStrictEqual(yield* snapshot, yield* fresh);
+      assert.isFalse(yield* hasPendingMigrations());
+    }).pipe(Effect.provide(NodeSqliteClient.layer({ filename: ":memory:" }))),
+  );
+
   it.effect("an upgrade stopped after reconciliation resumes with the remaining migrations", () =>
     Effect.gen(function* () {
       yield* seedOldGoatLedger(146);
       assert.deepStrictEqual(yield* reconcileGoatMigrationIds(migrationEntries), UPSTREAM_80S);
-      assert.deepStrictEqual(yield* runMigrations(), [currentRow("DisposableMachineEnrollment")]);
+      assert.deepStrictEqual(yield* runMigrations(), [
+        currentRow("DisposableMachineEnrollment"),
+        ...laterGoatRows,
+      ]);
       assert.deepStrictEqual(yield* history, migrationManifest);
     }).pipe(Effect.provide(NodeSqliteClient.layer({ filename: ":memory:" }))),
   );
@@ -173,7 +196,7 @@ describe("GOAT migrations after upstream 080-089", () => {
         assert.strictEqual(at089._tag, "MigrationError");
         assert.deepStrictEqual(
           yield* history,
-          migrationManifest.filter(([id]) => id !== 89),
+          migrationManifest.filter(([id]) => id !== 89 && id <= 157),
         );
         assert.deepStrictEqual(
           yield* sql`SELECT name FROM sqlite_master WHERE name IN (
@@ -182,7 +205,10 @@ describe("GOAT migrations after upstream 080-089", () => {
             'orchestration_v2_projection_runs_run_status_idx')`,
           [],
         );
-        assert.deepStrictEqual(yield* runMigrations(), UPSTREAM_80S.slice(-1));
+        assert.deepStrictEqual(yield* runMigrations(), [
+          ...UPSTREAM_80S.slice(-1),
+          ...laterGoatRows,
+        ]);
         assert.deepStrictEqual(yield* snapshot, yield* fresh);
         assert.deepStrictEqual(yield* userData, data);
       }).pipe(Effect.provide(NodeSqliteClient.layer({ filename: ":memory:" }))),
@@ -194,7 +220,7 @@ describe("GOAT migrations after upstream 080-089", () => {
       for (const [id, , migration] of migrationEntries) {
         if (id >= 80 && id <= 89) yield* migration;
       }
-      assert.deepStrictEqual(yield* runMigrations(), UPSTREAM_80S);
+      assert.deepStrictEqual(yield* runMigrations(), [...UPSTREAM_80S, ...laterGoatRows]);
       assert.deepStrictEqual(yield* history, migrationManifest);
       const before = yield* schema;
       for (const [id, , migration] of migrationEntries) {
@@ -249,7 +275,8 @@ describe("hasPendingMigrations", () => {
         // Negate first so no row collides with another while the block moves up by ten.
         yield* sql`UPDATE effect_sql_migrations SET migration_id = -migration_id WHERE name IN ${sql.in(goatNames)}`;
         yield* sql`UPDATE effect_sql_migrations SET migration_id = 10 - migration_id WHERE migration_id < 0`;
-        assert.deepStrictEqual((yield* history).at(-1), [167, "DisposableMachineEnrollment"]);
+        const [lastId, lastName] = currentRow(goatNames.at(-1) ?? "");
+        assert.deepStrictEqual((yield* history).at(-1), [lastId + 10, lastName]);
         assert.isTrue(yield* hasPendingMigrations());
         // reconcileGoatMigrationIds moves them back: a write the CLI must not make under a server.
         assert.deepStrictEqual(yield* runMigrations(), []);

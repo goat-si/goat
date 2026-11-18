@@ -43,7 +43,7 @@ import {
   readSafeSqliteInteger,
 } from "./sqliteCheckpointWorker.ts";
 
-import { classifyError, toleratingFinishedRollback } from "./nodeSqliteErrors.ts";
+import { classifyError, sqliteRollback } from "./nodeSqliteErrors.ts";
 import { makeWriter } from "./nodeSqliteWriter.ts";
 import { hasLargeBinding, sqliteParameters } from "./nodeSqliteParameters.ts";
 import { waitForWalRecovery } from "./nodeSqliteWalRecovery.ts";
@@ -1163,7 +1163,7 @@ const make = Effect.fn("makeWithDatabase")(function* (
                   ) {
                     annotateAcquired(fiber, acquired(target, clock, start), ownerAtWaitStart);
                   }
-                  return use(connection);
+                  return Effect.flatMap(sqliteRollback.recoverConnection(connection), use);
                 });
               if ("pool" in target) return target.pool.use(useConnection);
               const useOwnedConnection = Effect.onExit(useConnection(target.connection), () =>
@@ -1254,10 +1254,9 @@ const make = Effect.fn("makeWithDatabase")(function* (
 
   const client = yield* Client.make({
     driver: "node:sqlite",
-    acquirer: transactionAcquirer,
+    ...sqliteRollback.transactionControls(transactionAcquirer),
     borrower,
     compiler,
-    transactionAcquirer: Effect.map(transactionAcquirer, toleratingFinishedRollback),
     // BEGIN IMMEDIATE avoids read-then-write SQLITE_BUSY_SNAPSHOT, which busy_timeout cannot resolve.
     beginTransaction: options.readonly === true ? "BEGIN" : "BEGIN IMMEDIATE",
     spanAttributes: [

@@ -20,9 +20,10 @@ export function makeCapacity<T extends CapacityTab>(options: {
   readonly pending: Map<string, { readonly agentId: string | null }>;
   readonly isShown: (tab: T) => boolean;
   readonly isActive: (threadId: ThreadId) => Effect.Effect<boolean>;
-  readonly drop: (tab: T) => void;
+  readonly drop: (tab: T) => Effect.Effect<void>;
   readonly now: () => number;
 }) {
+  const reclaiming = new Set<T>();
   const opening = () =>
     [...options.pending.entries()]
       .filter(([key]) => !options.tabs.has(key))
@@ -39,6 +40,7 @@ export function makeCapacity<T extends CapacityTab>(options: {
     [...options.tabs.values()].filter(
       (tab) =>
         tab.control.agentId !== null &&
+        !reclaiming.has(tab) &&
         !visible(tab) &&
         tab.usedAt < options.now() - Limits.AGENT_TAB_IDLE_MS &&
         tab.control.controller === null &&
@@ -54,14 +56,23 @@ export function makeCapacity<T extends CapacityTab>(options: {
     if (!serverFull() || agentFull(id)) return;
     for (const tab of idle().sort((a, b) => a.usedAt - b.usedAt)) {
       if (yield* options.isActive(tab.threadId)) continue;
-      if (serverFull() && !agentFull(id) && idle().includes(tab)) options.drop(tab);
+      if (serverFull() && !agentFull(id) && idle().includes(tab)) {
+        reclaiming.add(tab);
+        yield* options.drop(tab).pipe(
+          Effect.ensuring(
+            Effect.sync(() => {
+              reclaiming.delete(tab);
+            }),
+          ),
+        );
+      }
       return;
     }
   });
   const closeIdle = Effect.gen(function* () {
     for (const tab of idle()) {
       if (tab.desktop === null && !(yield* options.isActive(tab.threadId)) && idle().includes(tab))
-        options.drop(tab);
+        yield* options.drop(tab);
     }
   });
   return { atLimit: (id: string) => serverFull() || agentFull(id), reclaim, closeIdle, visible };

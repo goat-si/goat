@@ -236,9 +236,10 @@ export function ServerUpdateAction({
       toastManager.add({
         type: "success",
         title: "Update instructions copied",
-        description: installation
-          ? `On ${serverLabel}: ${instructions}`
-          : `Run \`${instructions}\` on ${serverLabel}, then restart GOAT with your usual options.`,
+        description:
+          installation !== undefined && installation.kind !== "goat-launcher"
+            ? `On ${serverLabel}: ${instructions}`
+            : `Run \`${instructions}\` on ${serverLabel}, then restart GOAT with your usual options.`,
       });
     },
     onError: (error) => {

@@ -95,6 +95,12 @@ export function hasThreadLinks(markdown: string): boolean {
 const THREAD_LINK_IDS_CACHE_CHARACTERS = 200_000;
 const threadLinkIdsCache = new Map<string, ReadonlyArray<ThreadId>>();
 let threadLinkIdsCachedCharacters = 0;
+// A text over the bound gets one slot of its own, so the latest long message is scanned once.
+let latestLongThreadLinkText: { readonly markdown: string; readonly ids: ReadonlyArray<ThreadId> } =
+  {
+    markdown: "",
+    ids: [],
+  };
 
 export function threadLinkIdsCacheCharacters(): number {
   return threadLinkIdsCachedCharacters;
@@ -105,8 +111,12 @@ export function threadLinkIds(markdown: string): ReadonlyArray<ThreadId> {
   if (!hasThreadLinks(markdown)) return [];
   const cached = threadLinkIdsCache.get(markdown);
   if (cached !== undefined) return cached;
+  if (latestLongThreadLinkText.markdown === markdown) return latestLongThreadLinkText.ids;
   const ids = scanThreadLinkIds(markdown);
-  if (markdown.length > THREAD_LINK_IDS_CACHE_CHARACTERS) return ids;
+  if (markdown.length > THREAD_LINK_IDS_CACHE_CHARACTERS) {
+    latestLongThreadLinkText = { markdown, ids };
+    return ids;
+  }
   for (const oldest of threadLinkIdsCache.keys()) {
     if (threadLinkIdsCachedCharacters + markdown.length <= THREAD_LINK_IDS_CACHE_CHARACTERS) break;
     threadLinkIdsCache.delete(oldest);
