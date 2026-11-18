@@ -1591,7 +1591,7 @@ index 40e87cda8c9bc79a889e5542f29af429a24b24d4..d48d7d1bd76822f3ffdb0e8919f20625
        recycleItems,
        refreshControl: refreshControlElement ? stylePaddingTopState > 0 ? React2.cloneElement(refreshControlElement, {
 diff --git a/react-native.web.js b/react-native.web.js
-index 914d2dafaafa001c9ab6791a0a0581659295e333..dad2ba6f93cde752f8277ded19a128d53b4b87c3 100644
+index 914d2dafaafa001c9ab6791a0a0581659295e333..28095ec26cfbf6efe9e1ca3825a0ed2b21954a77 100644
 --- a/react-native.web.js
 +++ b/react-native.web.js
 @@ -2869,7 +2869,9 @@ function abortBootstrapInitialScroll(ctx) {
@@ -1605,7 +1605,23 @@ index 914d2dafaafa001c9ab6791a0a0581659295e333..dad2ba6f93cde752f8277ded19a128d5
        target: initialScroll,
        waitForCompletionFrame: Platform.OS === "web"
      });
-@@ -5651,6 +5653,18 @@ var ContainerSlot = typedMemo(function ContainerSlot2(props) {
+@@ -5413,12 +5415,11 @@ function processContainerLayout({ containerId, ctx, rectangle, ref, state }) {
+   const shouldDeferWebShrinkLayoutUpdate = !isInMVCPActiveMode(listState) && previousSize !== void 0 && size + 1 < previousSize;
+   if (shouldDeferWebShrinkLayoutUpdate) {
+     scheduleWebShrinkMeasurement(state, () => {
+-      var _a4;
+       if (state.itemKey === currentItemKey) {
+         const element = ref.current;
+-        const rect = (_a4 = element == null ? void 0 : element.getBoundingClientRect) == null ? void 0 : _a4.call(element);
+-        if (rect) {
+-          layout = { height: rect.height, width: rect.width };
++        if (element) {
++          // Match ResizeObserver's layout box even when an ancestor is transformed.
++          layout = { height: element.offsetHeight, width: element.offsetWidth };
+         }
+         applyLayout();
+       }
+@@ -5651,6 +5652,18 @@ var ContainerSlot = typedMemo(function ContainerSlot2(props) {
  });
  
  // src/utils/reordering.ts
@@ -1624,7 +1640,7 @@ index 914d2dafaafa001c9ab6791a0a0581659295e333..dad2ba6f93cde752f8277ded19a128d5
  function sortDOMElements(container, indexByElement) {
    const elements = Array.from(container.children);
    if (elements.length <= 1) return elements;
-@@ -5690,9 +5704,9 @@ function sortDOMElements(container, indexByElement) {
+@@ -5690,9 +5703,9 @@ function sortDOMElements(container, indexByElement) {
          }
        }
        if (nextStableElement) {
@@ -1637,7 +1653,7 @@ index 914d2dafaafa001c9ab6791a0a0581659295e333..dad2ba6f93cde752f8277ded19a128d5
      }
    }
 diff --git a/react-native.web.mjs b/react-native.web.mjs
-index 95465f2ab89ce41a10553f58af83618f7310e83c..ad6c5fd75a582d344813f031bf78795d79076b5b 100644
+index 95465f2ab89ce41a10553f58af83618f7310e83c..7d1065d1b80c6a5f26b1d0e68757be20f644ecef 100644
 --- a/react-native.web.mjs
 +++ b/react-native.web.mjs
 @@ -2848,7 +2848,9 @@ function abortBootstrapInitialScroll(ctx) {
@@ -1651,7 +1667,23 @@ index 95465f2ab89ce41a10553f58af83618f7310e83c..ad6c5fd75a582d344813f031bf78795d
        target: initialScroll,
        waitForCompletionFrame: Platform.OS === "web"
      });
-@@ -5630,6 +5632,18 @@ var ContainerSlot = typedMemo(function ContainerSlot2(props) {
+@@ -5392,12 +5394,11 @@ function processContainerLayout({ containerId, ctx, rectangle, ref, state }) {
+   const shouldDeferWebShrinkLayoutUpdate = !isInMVCPActiveMode(listState) && previousSize !== void 0 && size + 1 < previousSize;
+   if (shouldDeferWebShrinkLayoutUpdate) {
+     scheduleWebShrinkMeasurement(state, () => {
+-      var _a4;
+       if (state.itemKey === currentItemKey) {
+         const element = ref.current;
+-        const rect = (_a4 = element == null ? void 0 : element.getBoundingClientRect) == null ? void 0 : _a4.call(element);
+-        if (rect) {
+-          layout = { height: rect.height, width: rect.width };
++        if (element) {
++          // Match ResizeObserver's layout box even when an ancestor is transformed.
++          layout = { height: element.offsetHeight, width: element.offsetWidth };
+         }
+         applyLayout();
+       }
+@@ -5630,6 +5631,18 @@ var ContainerSlot = typedMemo(function ContainerSlot2(props) {
  });
  
  // src/utils/reordering.ts
@@ -1670,7 +1702,7 @@ index 95465f2ab89ce41a10553f58af83618f7310e83c..ad6c5fd75a582d344813f031bf78795d
  function sortDOMElements(container, indexByElement) {
    const elements = Array.from(container.children);
    if (elements.length <= 1) return elements;
-@@ -5669,9 +5683,9 @@ function sortDOMElements(container, indexByElement) {
+@@ -5669,9 +5682,9 @@ function sortDOMElements(container, indexByElement) {
          }
        }
        if (nextStableElement) {
@@ -1683,7 +1715,7 @@ index 95465f2ab89ce41a10553f58af83618f7310e83c..ad6c5fd75a582d344813f031bf78795d
      }
    }
 diff --git a/react.js b/react.js
-index 914d2dafaafa001c9ab6791a0a0581659295e333..a085fd207c0416facfbdd54f2fba044545830f46 100644
+index 914d2dafaafa001c9ab6791a0a0581659295e333..81fdadeed0dedb1d57dfe979c9c40b7cb1a09a7b 100644
 --- a/react.js
 +++ b/react.js
 @@ -1908,6 +1908,10 @@ function updateScroll(ctx, newScroll, forceUpdate, options) {
@@ -1855,7 +1887,23 @@ index 914d2dafaafa001c9ab6791a0a0581659295e333..a085fd207c0416facfbdd54f2fba0445
      }
    }, [ctx, containerLayoutEpoch]);
    return children;
-@@ -5651,6 +5695,18 @@ var ContainerSlot = typedMemo(function ContainerSlot2(props) {
+@@ -5413,12 +5457,11 @@ function processContainerLayout({ containerId, ctx, rectangle, ref, state }) {
+   const shouldDeferWebShrinkLayoutUpdate = !isInMVCPActiveMode(listState) && previousSize !== void 0 && size + 1 < previousSize;
+   if (shouldDeferWebShrinkLayoutUpdate) {
+     scheduleWebShrinkMeasurement(state, () => {
+-      var _a4;
+       if (state.itemKey === currentItemKey) {
+         const element = ref.current;
+-        const rect = (_a4 = element == null ? void 0 : element.getBoundingClientRect) == null ? void 0 : _a4.call(element);
+-        if (rect) {
+-          layout = { height: rect.height, width: rect.width };
++        if (element) {
++          // Match ResizeObserver's layout box even when an ancestor is transformed.
++          layout = { height: element.offsetHeight, width: element.offsetWidth };
+         }
+         applyLayout();
+       }
+@@ -5651,6 +5694,18 @@ var ContainerSlot = typedMemo(function ContainerSlot2(props) {
  });
  
  // src/utils/reordering.ts
@@ -1874,7 +1922,7 @@ index 914d2dafaafa001c9ab6791a0a0581659295e333..a085fd207c0416facfbdd54f2fba0445
  function sortDOMElements(container, indexByElement) {
    const elements = Array.from(container.children);
    if (elements.length <= 1) return elements;
-@@ -5690,9 +5746,9 @@ function sortDOMElements(container, indexByElement) {
+@@ -5690,9 +5745,9 @@ function sortDOMElements(container, indexByElement) {
          }
        }
        if (nextStableElement) {
@@ -1886,7 +1934,7 @@ index 914d2dafaafa001c9ab6791a0a0581659295e333..a085fd207c0416facfbdd54f2fba0445
        }
      }
    }
-@@ -5734,37 +5790,55 @@ function findLIS(arr) {
+@@ -5734,37 +5789,55 @@ function findLIS(arr) {
  }
  
  // src/hooks/useDOMOrder.ts
@@ -1968,7 +2016,7 @@ index 914d2dafaafa001c9ab6791a0a0581659295e333..a085fd207c0416facfbdd54f2fba0445
  }
  function useFreshDataTransitionVisibility(readyToRender, transitionEpoch) {
    const [completedTransitionEpoch, setCompletedTransitionEpoch] = React3.useState(transitionEpoch);
-@@ -6446,8 +6520,8 @@ function ScrollAdjust() {
+@@ -6446,8 +6519,8 @@ function ScrollAdjust() {
                window.getComputedStyle(contentNode)[axis.paddingEndProp]
              );
              const temporaryPaddingEnd = `${(currentPaddingEnd || 0) + pad}px`;
@@ -1979,7 +2027,7 @@ index 914d2dafaafa001c9ab6791a0a0581659295e333..a085fd207c0416facfbdd54f2fba0445
              scrollBy();
              if (resetPaddingRafRef.current !== void 0) {
 diff --git a/react.mjs b/react.mjs
-index 95465f2ab89ce41a10553f58af83618f7310e83c..0f649c7b517620c9439a7ff7648ab5e4f7f98853 100644
+index 95465f2ab89ce41a10553f58af83618f7310e83c..d3e9ea553987c7165b01e06d9e78bb8465198e33 100644
 --- a/react.mjs
 +++ b/react.mjs
 @@ -1887,6 +1887,10 @@ function updateScroll(ctx, newScroll, forceUpdate, options) {
@@ -2151,7 +2199,23 @@ index 95465f2ab89ce41a10553f58af83618f7310e83c..0f649c7b517620c9439a7ff7648ab5e4
      }
    }, [ctx, containerLayoutEpoch]);
    return children;
-@@ -5630,6 +5674,18 @@ var ContainerSlot = typedMemo(function ContainerSlot2(props) {
+@@ -5392,12 +5436,11 @@ function processContainerLayout({ containerId, ctx, rectangle, ref, state }) {
+   const shouldDeferWebShrinkLayoutUpdate = !isInMVCPActiveMode(listState) && previousSize !== void 0 && size + 1 < previousSize;
+   if (shouldDeferWebShrinkLayoutUpdate) {
+     scheduleWebShrinkMeasurement(state, () => {
+-      var _a4;
+       if (state.itemKey === currentItemKey) {
+         const element = ref.current;
+-        const rect = (_a4 = element == null ? void 0 : element.getBoundingClientRect) == null ? void 0 : _a4.call(element);
+-        if (rect) {
+-          layout = { height: rect.height, width: rect.width };
++        if (element) {
++          // Match ResizeObserver's layout box even when an ancestor is transformed.
++          layout = { height: element.offsetHeight, width: element.offsetWidth };
+         }
+         applyLayout();
+       }
+@@ -5630,6 +5673,18 @@ var ContainerSlot = typedMemo(function ContainerSlot2(props) {
  });
  
  // src/utils/reordering.ts
@@ -2170,7 +2234,7 @@ index 95465f2ab89ce41a10553f58af83618f7310e83c..0f649c7b517620c9439a7ff7648ab5e4
  function sortDOMElements(container, indexByElement) {
    const elements = Array.from(container.children);
    if (elements.length <= 1) return elements;
-@@ -5669,9 +5725,9 @@ function sortDOMElements(container, indexByElement) {
+@@ -5669,9 +5724,9 @@ function sortDOMElements(container, indexByElement) {
          }
        }
        if (nextStableElement) {
@@ -2182,7 +2246,7 @@ index 95465f2ab89ce41a10553f58af83618f7310e83c..0f649c7b517620c9439a7ff7648ab5e4
        }
      }
    }
-@@ -5713,37 +5769,55 @@ function findLIS(arr) {
+@@ -5713,37 +5768,55 @@ function findLIS(arr) {
  }
  
  // src/hooks/useDOMOrder.ts
@@ -2264,7 +2328,7 @@ index 95465f2ab89ce41a10553f58af83618f7310e83c..0f649c7b517620c9439a7ff7648ab5e4
  }
  function useFreshDataTransitionVisibility(readyToRender, transitionEpoch) {
    const [completedTransitionEpoch, setCompletedTransitionEpoch] = useState(transitionEpoch);
-@@ -6425,8 +6499,8 @@ function ScrollAdjust() {
+@@ -6425,8 +6498,8 @@ function ScrollAdjust() {
                window.getComputedStyle(contentNode)[axis.paddingEndProp]
              );
              const temporaryPaddingEnd = `${(currentPaddingEnd || 0) + pad}px`;
