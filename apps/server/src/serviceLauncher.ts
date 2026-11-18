@@ -40,6 +40,7 @@ import {
   databaseRestorePending,
   discardDatabaseBackup,
   launcherOwner,
+  markDatabaseRollback,
   ownerLockDir,
   pathExists,
   restoreDatabaseBackup,
@@ -872,9 +873,10 @@ export class Launcher {
       await terminateChild(child.process);
     }
     if (
-      await this.#deferForDiskSpace(pending.fromVersion, pending.dbPath, () =>
+      (await markDatabaseRollback(this.#baseDir, pending)) &&
+      (await this.#deferForDiskSpace(pending.fromVersion, pending.dbPath, () =>
         this.#returnToPrevious(pending, status, reason),
-      )
+      ))
     )
       return;
     const restore = await restoreDatabaseBackup(this.#baseDir, pending);

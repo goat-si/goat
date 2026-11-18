@@ -207,6 +207,16 @@ async function writeMarker(backupDir: string, marker: string): Promise<void> {
   }
 }
 
+export async function markDatabaseRollback(
+  baseDir: string,
+  pending: PendingServiceUpdate,
+): Promise<boolean> {
+  const backupDir = databaseBackupDir(baseDir, pending.id);
+  if (!(await pathExists(backupDir))) return false;
+  await writeMarker(backupDir, ROLLBACK_MARKER);
+  return true;
+}
+
 // Resolve symlink targets even if a crashed cp -c left the final target missing.
 export async function restoreTarget(path: string): Promise<string> {
   let current = path;
@@ -237,8 +247,7 @@ export async function restoreDatabaseBackup(
   pending: PendingServiceUpdate,
 ): Promise<"restored" | "busy" | "kept"> {
   const backupDir = databaseBackupDir(baseDir, pending.id);
-  if (!(await pathExists(backupDir))) return "restored";
-  await writeMarker(backupDir, ROLLBACK_MARKER);
+  if (!(await markDatabaseRollback(baseDir, pending))) return "restored";
 
   const lock = tryAcquireServerOwnerLock(ownerLockDir(pending), launcherOwner(pending.id));
   if (lock === undefined) return "busy";

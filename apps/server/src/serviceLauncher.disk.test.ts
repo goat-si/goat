@@ -111,7 +111,7 @@ process.send("candidate");
       yield* Effect.addFinalizer(() => Effect.promise(() => launcher.stop("SIGTERM")));
       return { launcher, running };
     });
-    return { fs, dbPath, statePath, targetDir, start, notice };
+    return { fs, dbPath, statePath, targetDir, start, notice, notices };
   });
 
 it.layer(NodeServices.layer)("service update disk headroom", (it) => {
@@ -147,5 +147,41 @@ it.layer(NodeServices.layer)("service update disk headroom", (it) => {
         assert.isNull(active.signalCode);
         assert.isTrue(active.connected);
       }),
+  );
+
+  it.effect("recovers rollback after restarting a launcher parked for disk space", () =>
+    Effect.gen(function* () {
+      const f = yield* makeFixture(true);
+      let free = headroom;
+      const parked = Promise.withResolvers<"disk-hold">();
+      const first = yield* f.start({
+        startupSpaceProbe: async () => free,
+        writeDiagnostic: () => parked.resolve("disk-hold"),
+      });
+      const candidate = yield* Effect.promise(() => f.notice("candidate").promise);
+      free = 0;
+      candidate.send("fail");
+      assert.equal(
+        yield* Effect.promise(() => Promise.race([parked.promise, first.running])),
+        "disk-hold",
+      );
+      yield* Effect.promise(() => first.launcher.stop("SIGTERM"));
+      yield* Effect.promise(() => first.running);
+
+      f.notices.delete("candidate");
+      const recovered = yield* f.start({ startupSpaceProbe: async () => headroom });
+      const restarted = yield* Effect.promise(() =>
+        Promise.race([
+          f.notice("active").promise.then(() => "active"),
+          f.notice("candidate").promise.then(() => "candidate"),
+          recovered.running,
+        ]),
+      );
+      assert.equal(restarted, "active");
+      assert.equal(yield* f.fs.readFileString(f.dbPath), "before trial");
+      const state = yield* Effect.promise(() => readServiceState(f.statePath));
+      assert.equal(state.activeVersion, "1.0.0");
+      assert.equal(state.update?.status, "failed");
+    }),
   );
 });
