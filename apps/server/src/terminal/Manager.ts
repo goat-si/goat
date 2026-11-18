@@ -28,8 +28,10 @@ import {
   type TerminalHistoryPersistenceCursor,
 } from "./BoundedTerminalHistory.ts";
 import {
+  initializeTerminalHistory,
   readTerminalHistoryTail,
   TERMINAL_HISTORY_COMPACTION_NOTICE,
+  writeCompactedTerminalHistory,
 } from "./terminalHistoryFile.ts";
 import {
   neutralizeInheritedHistory,
@@ -931,7 +933,7 @@ export const makeWithOptions = Effect.fn("TerminalManager.makeWithOptions")(func
   const registerTerminalProcesses = options.registerTerminalProcesses ?? (() => Effect.void);
   const unregisterTerminal = options.unregisterTerminal ?? (() => Effect.void);
 
-  yield* fileSystem.makeDirectory(logsDir, { recursive: true }).pipe(Effect.orDie);
+  yield* initializeTerminalHistory(fileSystem, path, logsDir);
 
   const managerStateRef = yield* SynchronizedRef.make<TerminalManagerState>({
     sessions: new Map(),
@@ -1331,15 +1333,13 @@ export const makeWithOptions = Effect.fn("TerminalManager.makeWithOptions")(func
       const history = new BoundedTerminalHistory(historyLineLimit, raw, historyByteLimit);
       const capped = history.value();
       if (migrating || truncated || capped !== raw) {
-        const write = Effect.gen(function* () {
-          const temporaryPath = yield* fileSystem.makeTempFileScoped({
-            directory: logsDir,
-            prefix: ".history-",
-          });
-          yield* fileSystem.writeFileString(temporaryPath, capped);
-          yield* fileSystem.rename(temporaryPath, nextPath);
-        }).pipe(
-          Effect.scoped,
+        const write = writeCompactedTerminalHistory(
+          fileSystem,
+          path,
+          logsDir,
+          nextPath,
+          capped,
+        ).pipe(
           Effect.mapError(
             (cause) =>
               new TerminalHistoryError({

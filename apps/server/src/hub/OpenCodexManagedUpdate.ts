@@ -100,7 +100,7 @@ const make = Effect.gen(function* () {
     undefined,
   );
   const state = yield* Ref.make<State>({ members: [], failedTargets: {} });
-  // A person's check and the scheduler's must never open two windows at once.
+  // Hold checking through every window step: a concurrent check can reload equal state with a new identity.
   const checking = yield* Semaphore.make(1);
   const stateLock = yield* Semaphore.make(1);
   const retainedHome = yield* Ref.make<AdmissionOwnership>("none");

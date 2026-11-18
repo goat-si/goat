@@ -199,7 +199,7 @@ G13 `goat-copy`, G14 `launch-watch`.
 - 커밋: #1587
 - 경로: `package.json`, `apps/server/package.json`, `packages/shared/src/nodeSqliteClient.ts`, `apps/server/vite.config.ts`, `scripts/dev-runtime-archive.ts`, `.github/workflows/{release-desktop,goat-nightly}.yml`
 - 정책: 루트 `engines.node`(정확한 `26.12.1`)가 개발·CI·SEA Node의 정본이다. upstream도 정확한 값을 쓰므로 버전 충돌은 GOAT가 정한 값을 둔다. 서버 `engines.node`와 `NODE_SQLITE_RUNTIME_RANGE`는 `^24.16.0 || >=26.1.0`으로 upstream `^22.16 || ^23.11 || >=24.10`과 다르다 (#1015, 데스크톱이 Electron 44의 Node 24.22.1에서 서버를 돌린다). upstream이 `nodeSqliteClient.ts`를 바꾸면 받고 이 범위 검사와 아래 rollback 훅만 다시 얹는다. upstream의 네이티브 SEA 빌드 guard는 받지 않는다 (`dev-runtime-archive`가 다른 SEA Node를 고른다). 고정 이전 커밋을 빌드하는 실행 파일 단계의 workflow revision fallback은 유지한다 ([10.011](./_fin/10/10.011_t3_chase_node_pin.md)).
-- Effect 4.1 (261114 N3, #3519): `nodeSqliteClient.ts`의 `transactionAcquirer: Effect.map(transactionAcquirer, toleratingFinishedRollback)` 한 줄(:1260)과 그 import도 GOAT 차이다. 헬퍼는 GOAT 파일 `nodeSqliteErrors.ts`에 있다. SQLite가 이미 transaction 전체를 rollback한 뒤 보낸 ROLLBACK의 "no transaction is active"만 무시해서, 쓰기의 원래 SqlError가 호출자에게 간다. Effect 4.1은 실패와 defect가 섞인 cause를 `catch`로 복구하지 않으므로, 이 훅이 없으면 그 쓰기가 defect로 끝나고 채널 전송이 두 번 갈 수 있다.
+- Effect 4.1 (261114 N3, #3519, #3640): `nodeSqliteErrors.ts`의 `sqliteRollback.transactionControls`를 SQL 클라이언트 생성 옵션으로 넘긴다. 트랜잭션 본문이나 COMMIT이 실패하면 같은 연결에서 롤백한다. SQLite가 이미 트랜잭션을 끝냈으면 정리된 상태로 본다. 롤백도 실패하면 이를 기록하고 연결을 격리해 원래 오류가 호출자에게 간다. 일반 문장의 `borrower`와 트랜잭션·예약 연결의 `acquirer`는 각각 lease를 잡은 뒤 `recoverConnection`으로 정리를 마쳐야 연결을 쓸 수 있다. upstream의 SQL 클라이언트 변경을 받을 때 트랜잭션 옵션과 두 lease 경로를 유지한다.
 
 ### `office-archive-split` Office 미리보기의 upstream 코드 옮김
 
