@@ -3,7 +3,7 @@ import {
   AVAILABLE_CONNECTION_STATE,
   type ConnectionDiagnosis,
   connectionDiagnosisText,
-  connectionRoutes,
+  shownRoutes,
   hasRelayRoute,
   presentConnectionDiagnosis,
 } from "@goat/client-runtime/connection";
@@ -33,7 +33,7 @@ export function useConnectionDiagnosis(environment: EnvironmentPresentation) {
     () => AVAILABLE_CONNECTION_STATE,
   );
   const relayStatus = useRelayEnvironmentDiscovery().environments.get(environmentId)?.status;
-  const routes = connectionRoutes(environment.entry);
+  const routes = shownRoutes(environment.entry);
   const relayOnly = routes.length === 1 && hasRelayRoute(environment.entry);
   const phase = environment.connection.phase;
   const diagnosis =

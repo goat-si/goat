@@ -58,7 +58,7 @@ import {
 import {
   RelayConnectionRegistration,
   RelayConnectionTarget,
-  connectionRoutes,
+  shownRoutes,
   environmentMcpUrl,
   hasSavedBearerRoute,
   connectionAttemptRunning,
@@ -346,7 +346,7 @@ function SavedBackendListRow({
     environment.serverConfig ??
       (lastDescriptor === undefined ? null : { environment: lastDescriptor }),
   );
-  const routeCount = connectionRoutes(environment.entry).length;
+  const routeCount = shownRoutes(environment.entry).length;
   const subtitleText = [
     environmentTransportLabel(environment, connectedTarget),
     diagnosis ? null : resumingServerUpdate ? "Restarting" : status.text,

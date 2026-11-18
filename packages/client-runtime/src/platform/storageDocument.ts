@@ -302,14 +302,16 @@ const penSlots = (field: unknown) =>
   Array.isArray(field) ? field.length : field === undefined ? 0 : Number.POSITIVE_INFINITY;
 // Only a record naming a Pen member is kept: the registry keeps the first route of an id, so a
 // Pen record with another route's id would hide that route.
+const decodePenTargetValue = Schema.decodeUnknownOption(PenConnectionTarget);
+const decodePenProfileValue = Schema.decodeUnknownOption(PenConnectionProfile);
 const decodePenTarget = (taken: ReadonlySet<string>) => (value: unknown) =>
   Option.filter(
-    Schema.decodeUnknownOption(PenConnectionTarget)(value),
+    decodePenTargetValue(value),
     (target) => isPenConnectionId(target.connectionId) && !taken.has(target.connectionId),
   );
 const decodePenProfile = (taken: ReadonlySet<string>) => (value: unknown) =>
   Option.filter(
-    Schema.decodeUnknownOption(PenConnectionProfile)(value),
+    decodePenProfileValue(value),
     (profile) => penProfilePin(profile) !== undefined && !taken.has(profile.connectionId),
   );
 const encodePenTarget = Schema.encodeSync(PenConnectionTarget);

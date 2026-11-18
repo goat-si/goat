@@ -16,7 +16,6 @@ import { environmentMismatchError, mapRemoteEnvironmentError } from "./errors.ts
 import {
   ConnectionBlockedError,
   ConnectionTransientError,
-  penConnectionId,
   type PreparedConnection,
 } from "./model.ts";
 import { PenMembership } from "./penMembership.ts";

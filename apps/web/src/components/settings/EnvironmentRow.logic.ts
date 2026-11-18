@@ -5,6 +5,7 @@ import {
   connectionRouteLabel,
   penRouteOwner,
   connectionRoutes,
+  shownRoutes,
   usableRoutes,
   type ConnectionCatalogEntry,
   type ConnectionRoute,
@@ -49,10 +50,10 @@ export function environmentTransportLabel(
   if (entry.target._tag === "PrimaryConnectionTarget") return "This machine";
   if (isGoatConnectUnavailable(entry))
     return `${GOAT_CONNECT_COMING_SOON.title} · ${GOAT_CONNECT_COMING_SOON.status}`;
-  const routes = isGoatConnectEnabled() ? connectionRoutes(entry) : usableRoutes(entry);
+  const routes = isGoatConnectEnabled() ? shownRoutes(entry) : usableRoutes(entry);
   if (
     routes.length > 1 ||
-    (!isGoatConnectEnabled() && routes.length === 1 && connectionRoutes(entry).length > 1)
+    (!isGoatConnectEnabled() && routes.length === 1 && shownRoutes(entry).length > 1)
   ) {
     const active =
       activeTarget === null
