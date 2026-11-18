@@ -8,6 +8,7 @@ import {
   mergeOpenCodeResumePermission,
   openCodeInstalledChildPermission,
   openCodeOwnsSubagentDeny,
+  openCodeRecordedPermissionBase,
   openCodeResumePermissionDiffers,
   withOpenCodeSubagentDeny,
 } from "./permissionRules.ts";
@@ -78,6 +79,7 @@ export const refreshOpenCodeChildPermissions = Effect.fn("OpenCode.refreshChildP
     readonly children: Iterable<OpenCodeDenyThread>;
     readonly policy: ProviderAdapter.ProviderAdapterV2RuntimePolicy;
     readonly subagentsOff: boolean;
+    readonly previousParentBase: PermissionRuleset | undefined;
     readonly listNativeChildren?: (
       id: string,
     ) => Effect.Effect<ReadonlyArray<Session>, OpenCodeRuntimeError>;
@@ -107,9 +109,9 @@ export const refreshOpenCodeChildPermissions = Effect.fn("OpenCode.refreshChildP
     const list = input.listNativeChildren;
     if (list === undefined) return;
     const seen = new Set([input.root.nativeSessionId]);
-    const pending = [input.root.nativeSessionId];
-    for (let id = pending.pop(); id !== undefined; id = pending.pop()) {
-      for (const child of yield* list(id)) {
+    const pending = [{ id: input.root.nativeSessionId, base: input.previousParentBase }];
+    for (let parent = pending.pop(); parent !== undefined; parent = pending.pop()) {
+      for (const child of yield* list(parent.id)) {
         if (seen.has(child.id)) continue;
         if (seen.size >= 1024) {
           return yield* new OpenCodeRuntimeError({
@@ -118,13 +120,14 @@ export const refreshOpenCodeChildPermissions = Effect.fn("OpenCode.refreshChildP
           });
         }
         seen.add(child.id);
-        pending.push(child.id);
+        pending.push({ id: child.id, base: openCodeRecordedPermissionBase(child) });
         if (known.has(child.id)) continue;
         const merged = openCodeInstalledChildPermission(
           child,
           input.policy,
           input.subagentsOff,
           true,
+          parent.base,
         );
         if (openCodeResumePermissionDiffers(child, merged)) {
           yield* input.update(child.id, {

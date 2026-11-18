@@ -170,6 +170,9 @@ function permissionRuleEquals(
   );
 }
 
+const inheritedChildRules = (rules: PermissionRuleset) =>
+  rules.filter((rule) => rule.permission === "external_directory" || rule.action === "deny");
+
 /** Children inherit only deny/external-directory rules; restore parent policy while retaining agent restrictions. */
 export function openCodeChildPermissionRules(
   runtimePolicy: ProviderAdapter.ProviderAdapterV2RuntimePolicy,
@@ -177,9 +180,7 @@ export function openCodeChildPermissionRules(
   subagentsOff = false,
 ): PermissionRuleset {
   const parentRules = openCodePermissionRules(runtimePolicy);
-  const inheritedRules = parentRules.filter(
-    (rule) => rule.permission === "external_directory" || rule.action === "deny",
-  );
+  const inheritedRules = inheritedChildRules(parentRules);
   const childSpecificRules = nativeChildRules.filter(
     (childRule) =>
       !inheritedRules.some((inheritedRule) => permissionRuleEquals(childRule, inheritedRule)),
@@ -266,6 +267,13 @@ const storedPermissionBase = (metadata: { readonly [key: string]: unknown } | un
   return rules;
 };
 
+export function openCodeRecordedPermissionBase(
+  session: Parameters<typeof mergeOpenCodeResumePermission>[0],
+): PermissionRuleset | undefined {
+  const base = storedPermissionBase(session.metadata);
+  return base !== undefined && startsWithRules(session.permission ?? [], base) ? base : undefined;
+}
+
 const isWritableRootPattern = (pattern: string) =>
   pattern.endsWith("/*") && !pattern.slice(0, -2).includes("*");
 
@@ -344,30 +352,42 @@ export function openCodeInstalledChildPermission(
   runtimePolicy: ProviderAdapter.ProviderAdapterV2RuntimePolicy,
   subagentsOff: boolean,
   resumed: boolean,
+  previousParentBase?: PermissionRuleset,
 ): OpenCodeResumePermission {
   const installed = openCodeInstalledPermission(runtimePolicy, session.metadata);
-  const previous = session.permission ?? [];
-  const recorded = storedPermissionBase(session.metadata);
-  if (recorded !== undefined && startsWithRules(previous, recorded)) {
-    return mergeOpenCodeResumePermission(session, runtimePolicy, subagentsOff);
-  }
+  const previous = withOpenCodeSubagentDeny(
+    session.permission ?? [],
+    openCodeOwnsSubagentDeny(session),
+    false,
+  );
+  const recorded = openCodeRecordedPermissionBase(session);
   const full = { permission: "*", pattern: "*", action: "allow" } as const;
   const external = { ...full, permission: "external_directory" };
-  const legacyBaseLength =
-    !resumed || !startsWithRules(previous, [full])
-      ? 0
-      : startsWithRules(previous, [full, external])
-        ? 2
-        : 1;
+  const inherited = previousParentBase === undefined ? [] : inheritedChildRules(previousParentBase);
+  const baseLength =
+    recorded?.length ??
+    (resumed && startsWithRules(previous, [full, external])
+      ? 2
+      : resumed && startsWithRules(previous, [full])
+        ? 1
+        : startsWithRules(previous, inherited)
+          ? inherited.length
+          : 0);
+  const allowsExternal =
+    installed.permission.findLast(
+      (rule) =>
+        rule.pattern === "*" &&
+        (rule.permission === "*" || rule.permission === "external_directory"),
+    )?.action === "allow";
+  // A child can persist the inherited allow before its first GOAT update.
+  const kept = previous
+    .slice(baseLength)
+    .filter((rule) => allowsExternal || !permissionRuleEquals(rule, external));
   return {
     permission:
-      legacyBaseLength > 0
-        ? withOpenCodeSubagentDeny(
-            [...installed.permission, ...previous.slice(legacyBaseLength)],
-            false,
-            subagentsOff,
-          )
-        : openCodeChildPermissionRules(runtimePolicy, previous, subagentsOff),
+      !resumed && baseLength === 0
+        ? openCodeChildPermissionRules(runtimePolicy, kept, subagentsOff)
+        : withOpenCodeSubagentDeny([...installed.permission, ...kept], false, subagentsOff),
     metadata: { ...installed.metadata, [OPENCODE_GOAT_SUBAGENT_DENY_KEY]: subagentsOff },
     subagentsDenied: subagentsOff,
   };

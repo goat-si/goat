@@ -137,17 +137,53 @@ describe("OpenCode resumed task subagents", () => {
   );
 });
 
-it.effect.each(["in-memory", "in-memory-reattached", "persisted", "legacy", "refused"] as const)(
+it.effect.each([
+  "in-memory",
+  "in-memory-reattached",
+  "persisted",
+  "legacy",
+  "refused",
+  "inherited-approval",
+  "inherited-restricted",
+  "inherited-verified",
+] as const)(
   "replaces the %s child permission base before submitting a downgraded prompt",
   (previous) =>
     Effect.gen(function* () {
       const root = "permission-root";
       const child = "permission-child";
       const full = runtimePolicy("full-access");
-      const restricted = runtimePolicy("approval-required");
-      const fullBase = openCodePermissionRules(full);
+      const previousPolicy =
+        previous === "inherited-verified"
+          ? runtimePolicy("full-access", {
+              approvalPolicy: "never",
+              sandboxPolicy: {
+                type: "workspaceWrite",
+                writableRoots: ["/old-root"],
+                networkAccess: false,
+              },
+            })
+          : full;
+      const restricted = runtimePolicy(
+        "approval-required",
+        previous === "inherited-restricted" ? { approvalPolicy: "never" } : {},
+      );
+      const fullBase = openCodePermissionRules(previousPolicy);
       const knownChild = previous === "in-memory" || previous === "in-memory-reattached";
       const nativeDeny = { permission: "bash", pattern: "git push *", action: "deny" } as const;
+      const inherited = previous.startsWith("inherited-");
+      const nativeDenies: PermissionRuleset = inherited
+        ? [
+            { permission: "todowrite", pattern: "*", action: "deny" },
+            { permission: "task", pattern: "*", action: "deny" },
+          ]
+        : [nativeDeny];
+      // Native task creation stores the inherited subset followed by child tool denies.
+      const priorRules = inherited
+        ? fullBase.filter(
+            (rule) => rule.permission === "external_directory" || rule.action === "deny",
+          )
+        : fullBase;
       const childSession: {
         id: string;
         parentID: string;
@@ -157,7 +193,7 @@ it.effect.each(["in-memory", "in-memory-reattached", "persisted", "legacy", "ref
       } = {
         id: child,
         parentID: root,
-        permission: knownChild ? [nativeDeny] : [...fullBase, nativeDeny],
+        permission: knownChild ? nativeDenies : [...priorRules, ...nativeDenies],
         metadata: {
           owner: "native",
           ...(previous === "persisted" ? { goatPermissionBase: fullBase } : {}),
@@ -166,7 +202,13 @@ it.effect.each(["in-memory", "in-memory-reattached", "persisted", "legacy", "ref
       };
       const nativeEvents = asyncEventStream();
       const push = (event: unknown) => Effect.promise(() => nativeEvents.push(event));
-      const rootSession = { id: root, time: { created: 1, updated: 1 } };
+      const rootSession = {
+        id: root,
+        time: { created: 1, updated: 1 },
+        ...(previous === "inherited-verified"
+          ? { permission: fullBase, metadata: { goatPermissionBase: fullBase } }
+          : {}),
+      };
       const submitted: PermissionRuleset[] = [];
       let childWrites = 0;
       let listedChild: typeof childSession | undefined;
@@ -249,8 +291,11 @@ it.effect.each(["in-memory", "in-memory-reattached", "persisted", "legacy", "ref
       yield* started;
       assert.equal(childWrites, knownChild ? 2 : 1);
       const atPrompt = submitted.at(-1) ?? [];
-      assert.equal(permissionAction(atPrompt, "external_directory"), "ask");
-      assert.deepEqual(atPrompt, [...openCodePermissionRules(restricted), nativeDeny]);
+      assert.equal(
+        permissionAction(atPrompt, "external_directory"),
+        previous === "inherited-restricted" ? "deny" : "ask",
+      );
+      assert.deepEqual(atPrompt, [...openCodePermissionRules(restricted), ...nativeDenies]);
       assert.deepEqual(
         childSession.metadata.goatPermissionBase,
         openCodePermissionRules(restricted),

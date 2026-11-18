@@ -40,6 +40,7 @@ import {
   openCodeInstalledPermission,
   openCodePermissionRules,
   openCodePermissionRulesEqual,
+  openCodeRecordedPermissionBase,
   openCodePermissionRequestKind,
 } from "./permissionRules.ts";
 import {
@@ -920,6 +921,7 @@ export const makeOpenCodeAdapterV2 = Effect.fn("makeOpenCodeAdapterV2")(function
               turn.runtimePolicy,
               state.subagentsDenied,
               recordString(input, "task_id") === childSessionId || threads.has(childSessionId),
+              openCodeRecordedPermissionBase(state),
             );
             yield* updatePermission(childSessionId, {
               permission: installed.permission,
@@ -2576,7 +2578,7 @@ export const makeOpenCodeAdapterV2 = Effect.fn("makeOpenCodeAdapterV2")(function
 
         const resumedChildPolicies = new WeakMap<
           OpenCodeThreadState,
-          { base: PermissionRuleset; subagentsOff: boolean } | null
+          { base: PermissionRuleset | undefined; subagentsOff?: boolean }
         >();
         const listNativeChildren = (id: string) =>
           sdkCall("session.children", { sessionID: id }, (signal) =>
@@ -2624,15 +2626,16 @@ export const makeOpenCodeAdapterV2 = Effect.fn("makeOpenCodeAdapterV2")(function
           const previous = resumedChildPolicies.get(state);
           const base = openCodePermissionRules(runtimePolicy);
           const scan =
-            previous === null ||
-            (previous !== undefined &&
-              (previous.subagentsOff !== subagentsOff ||
-                !openCodePermissionRulesEqual(previous.base, base)));
+            previous !== undefined &&
+            (previous.subagentsOff !== subagentsOff ||
+              previous.base === undefined ||
+              !openCodePermissionRulesEqual(previous.base, base));
           yield* refreshOpenCodeChildPermissions({
             root: state,
             children: threads.values(),
             policy: runtimePolicy,
             subagentsOff,
+            previousParentBase: previous?.base,
             ...(scan ? { listNativeChildren } : {}),
             update: updatePermission,
           });
@@ -2924,7 +2927,9 @@ export const makeOpenCodeAdapterV2 = Effect.fn("makeOpenCodeAdapterV2")(function
                 failure: "pending",
                 update: updatePermission,
               });
-              resumedChildPolicies.set(state, null);
+              resumedChildPolicies.set(state, {
+                base: openCodeRecordedPermissionBase(nativeSession),
+              });
               return providerThread;
             },
             (effect, threadInput) =>
