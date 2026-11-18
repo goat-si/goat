@@ -35,10 +35,11 @@ import { navigationBlocked } from "~/lib/navigationHolds";
 import { useBotRoster } from "./useBotRoster";
 import { useGoatBotHome } from "./useGoatBotHome";
 import { useGoatBotEnabled } from "./useGoatBotSession";
+import { useGoatBotOffered } from "./useGoatBotOffered";
 import { useNewBotSlot } from "./useNewBotSlot";
 
 export function useBotSidebarSelected() {
-  const { enabled } = useGoatBotEnabled();
+  const enabled = useGoatBotOffered();
   const mode = useGlobalAgentStore(selectGlobalAgentMode);
   return enabled && mode === "bot";
 }

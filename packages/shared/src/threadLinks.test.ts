@@ -6,6 +6,8 @@ import {
   parseThreadLinkHref,
   relabelThreadLinks,
   resolveThreadLinkRef,
+  threadLinkIds,
+  threadLinkIdsCacheCharacters,
 } from "./threadLinks.ts";
 
 const ref = (environmentId: string, threadId = "chat-1") => ({
@@ -167,5 +169,18 @@ describe("thread links", () => {
   it("formats a label that would otherwise break the Markdown link", () => {
     expect(formatThreadLink("t1", "Fix [ci] \\ build")).toBe("[Fix ci build](goat-thread://v1/t1)");
     expect(formatThreadLink("t1", " ] ")).toBe("[t1](goat-thread://v1/t1)");
+  });
+});
+
+describe("thread link scan cache", () => {
+  it("holds a bounded number of characters while a long message streams", () => {
+    const message = `See [the fix](goat-thread://v1/fix-1). ${"스트리밍 중인 긴 답변입니다. ".repeat(6_000)}`;
+    for (let length = 40; length <= message.length; length += 72) {
+      expect(threadLinkIds(message.slice(0, length))).toEqual([ThreadId.make("fix-1")]);
+    }
+    expect(threadLinkIds(message)).toEqual([ThreadId.make("fix-1")]);
+    expect(threadLinkIdsCacheCharacters()).toBeLessThanOrEqual(200_000);
+    const short = "[a](goat-thread://v1/a) and [b](goat-thread://v1/b)";
+    expect(threadLinkIds(short)).toBe(threadLinkIds(short));
   });
 });
