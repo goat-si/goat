@@ -143,6 +143,12 @@ contextBridge.exposeInMainWorld("desktopBridge", {
   getRelayTelemetryEnabled: () =>
     ipcRenderer.sendSync(IpcChannels.GET_RELAY_TELEMETRY_ENABLED_CHANNEL) === true,
   getPathForFile: (file: File) => webUtils.getPathForFile(file),
+  ...(clientPlatform === "darwin"
+    ? {
+        startFileDrag: (input: Parameters<NonNullable<DesktopBridge["startFileDrag"]>>[0]) =>
+          ipcRenderer.invoke(IpcChannels.START_FILE_DRAG_CHANNEL, input),
+      }
+    : {}),
   getClientPlatform: () => clientPlatform,
   setNotificationBadge: (badge) =>
     ipcRenderer.invoke(IpcChannels.SET_NOTIFICATION_BADGE_CHANNEL, badge),

@@ -1,3 +1,4 @@
+export const START_FILE_DRAG_CHANNEL = "desktop:start-file-drag";
 export const PICK_FOLDER_CHANNEL = "desktop:pick-folder";
 export const TO_LOCAL_BACKEND_PATH_CHANNEL = "desktop:to-local-backend-path";
 export const SET_NOTIFICATION_BADGE_CHANNEL = "desktop:set-notification-badge";

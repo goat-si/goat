@@ -8,6 +8,7 @@ import type { ContextMenuSource, EnvironmentId, ScopedThreadRef } from "@goat/co
 import { memo, type CSSProperties, type MouseEvent as ReactMouseEvent } from "react";
 
 import { contextMenuSourceOf } from "../../contextMenuSource";
+import { useNativeFileDrag } from "../../useNativeFileDrag";
 import { readLocalApi } from "../../localApi";
 import { cn } from "../../lib/utils";
 import { shouldOpenMarkdownFileLinkInEditor } from "../../markdown-links";
@@ -71,6 +72,10 @@ export const MarkdownFileLink = memo(function MarkdownFileLink({
   revealLabel,
   resolveCopyPaths,
 }: MarkdownFileLinkProps) {
+  const nativeFileDrag = useNativeFileDrag(
+    environmentId,
+    async () => (await resolveCopyPaths()).fullPath,
+  );
   const handleOpenInEditor = () => {
     if (!onOpen) {
       return;
@@ -348,6 +353,7 @@ export const MarkdownFileLink = memo(function MarkdownFileLink({
         render={
           hasPrimaryAction ? (
             <ContextChip
+              {...nativeFileDrag}
               kind="mention"
               dir="ltr"
               render={<a href={href} />}
@@ -378,6 +384,7 @@ export const MarkdownFileLink = memo(function MarkdownFileLink({
             </ContextChip>
           ) : (
             <ContextChip
+              {...nativeFileDrag}
               kind="mention"
               dir="ltr"
               render={<button type="button" />}

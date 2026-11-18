@@ -16,6 +16,7 @@ import { useRightPanelStore } from "../rightPanelStore";
 
 const state = vi.hoisted(() => ({
   allowed: true,
+  primaryEnvironmentId: null as EnvironmentId | null,
   listeners: new Set<() => void>(),
   openEditor: vi.fn(),
   updateMetadata: vi.fn(),
@@ -42,6 +43,11 @@ vi.mock(import("../state/use-atom-command"), async (original) => {
         : state.openEditor) as never,
   };
 });
+vi.mock(import("../state/environments"), async (original) => ({
+  ...(await original()),
+  usePrimaryEnvironmentId: () => state.primaryEnvironmentId,
+  readPrimaryEnvironmentId: () => state.primaryEnvironmentId,
+}));
 vi.mock(import("../state/session"), async (original) => {
   const { useSyncExternalStore } = await import("react");
   const readEnvironmentScope = (id: EnvironmentId | null, scope: AuthEnvironmentScope) =>
@@ -134,6 +140,7 @@ const serverConfig = {
 function setup() {
   using stack = new DisposableStack();
   state.allowed = true;
+  state.primaryEnvironmentId = null;
   state.listeners.clear();
   state.linkedPullRequest = null;
   state.openEditor.mockReset().mockResolvedValue(AsyncResult.success(undefined));
@@ -359,3 +366,41 @@ it("preserves keyboard activation of a file-options button", async () => {
   await userEvent.click(button);
   await vi.waitFor(() => expect(state.choose.mock.lastCall?.[2]).toBe("mouse"));
 });
+
+it.each([
+  ["a local file", true, true, true],
+  ["a remote file", false, true, true],
+  ["an old preload", true, false, true],
+  ["a revoked file action", true, true, false],
+] as const)(
+  "offers Finder drag only for authorized local chips (%s)",
+  async (_, local, modern, allowed) => {
+    using _setup = setup();
+    using _platform = vi.spyOn(navigator, "platform", "get").mockReturnValue("MacIntel");
+    using bridge = new DisposableStack();
+    state.primaryEnvironmentId = local
+      ? threadRef.environmentId
+      : EnvironmentId.make("another-host");
+    state.allowed = allowed;
+    const startFileDrag = vi.fn().mockResolvedValue(true);
+    vi.stubGlobal("desktopBridge", modern ? { startFileDrag } : {});
+    bridge.defer(() => vi.unstubAllGlobals());
+
+    await using screen = await renderMarkdown("[Readme](docs/readme.md)");
+    const chip = screen.container.querySelector(".chat-markdown-file-link")!;
+    const drag = new DragEvent("dragstart", { bubbles: true, cancelable: true });
+    await act(async () => chip.dispatchEvent(drag));
+    if (local && modern && allowed) {
+      expect(drag.defaultPrevented).toBe(true);
+      await vi.waitFor(() =>
+        expect(startFileDrag).toHaveBeenCalledWith({
+          environmentId: threadRef.environmentId,
+          path: "/work/docs/readme.md",
+        }),
+      );
+    } else {
+      expect(chip.getAttribute("draggable")).toBeNull();
+      expect(startFileDrag).not.toHaveBeenCalled();
+    }
+  },
+);

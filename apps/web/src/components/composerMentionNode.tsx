@@ -3,6 +3,7 @@ import { ReactNodeViewRenderer, NodeViewWrapper, type NodeViewProps } from "@tip
 import { use, type CSSProperties } from "react";
 
 import { basenameOfPath, documentIconColorForFileName } from "~/pierre-icons";
+import { useNativeMentionDrag } from "../useNativeFileDrag";
 import { ContextChip } from "./ContextChip";
 import { FileTagChipContent } from "./chat/FileTagChip";
 import { WorkspaceEntryTooltip } from "./chat/WorkspaceEntryIcon";
@@ -40,9 +41,11 @@ export const ComposerMentionExtension = Node.create({
 function ComposerMentionNodeView({ node }: NodeViewProps) {
   const actions = use(ComposerContextActionsContext);
   const path = (node.attrs.path as string) ?? "";
+  const nativeFileDrag = useNativeMentionDrag(actions.environmentId, path, actions.cwd);
   const accent = documentIconColorForFileName(path);
   const chip = (
     <ContextChip
+      {...nativeFileDrag}
       kind="mention"
       style={accent ? ({ "--context-chip-accent": accent } as CSSProperties) : undefined}
       dir="ltr"
