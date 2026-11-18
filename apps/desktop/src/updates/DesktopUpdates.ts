@@ -1,3 +1,5 @@
+import { makeUpdateInstallRecord } from "./updateInstallRecord.ts";
+export { DESKTOP_UPDATE_INSTALL_RECORD_FILE } from "./updateInstallRecord.ts";
 import { makeUpdateRestartMarkers } from "./updateRestartMarkers.ts";
 import {
   DesktopUpdateChannelSchema,
@@ -64,7 +66,7 @@ import {
 } from "./updateFailures.ts";
 import { resolveDefaultDesktopUpdateChannel } from "./updateChannels.ts";
 import {
-  classifyDesktopUpdateInstallation,
+  inspectDesktopUpdateInstallation,
   getDesktopUpdateInstallationMessage,
 } from "./updateInstallation.ts";
 import {
@@ -78,7 +80,6 @@ import {
   reduceDesktopUpdateStateOnInstallFailure,
   reduceDesktopUpdateStateOnNoUpdate,
   reduceDesktopUpdateStateOnUpdateAvailable,
-  resolveNotAppliedInstallVersion,
   shouldBroadcastDownloadProgress,
 } from "./updateMachine.ts";
 
@@ -105,13 +106,6 @@ const UpdateInfo = Schema.Struct({
 const DownloadProgressInfo = Schema.Struct({
   percent: Schema.Number,
 });
-export const DESKTOP_UPDATE_INSTALL_RECORD_FILE = "desktop-update-install.json";
-const DesktopUpdateInstallRecord = Schema.fromJsonString(
-  Schema.Struct({ fromVersion: Schema.String, targetVersion: Schema.String }),
-);
-const decodeInstallRecord = Schema.decodeUnknownEffect(DesktopUpdateInstallRecord);
-const encodeInstallRecord = Schema.encodeEffect(DesktopUpdateInstallRecord);
-
 const decodeUpdateInfo = Schema.decodeUnknownEffect(UpdateInfo);
 const decodeDownloadProgressInfo = Schema.decodeUnknownEffect(DownloadProgressInfo);
 
@@ -201,35 +195,7 @@ export const make = Effect.gen(function* () {
   const fileSystem = yield* FileSystem.FileSystem;
   const desktopSettings = yield* DesktopAppSettings.DesktopAppSettings;
 
-  const installationReason = yield* Effect.gen(function* () {
-    if (environment.platform !== "darwin" || !environment.isPackaged) return null;
-    // Electron's app path points inside the bundle (usually app.asar), not at the bundle.
-    const bundlePath = environment.appPath.match(/^(.*?\.app)(?:\/|$)/)?.[1];
-    if (!bundlePath) return null;
-    const writability = (path: string) =>
-      fileSystem.access(path, { writable: true }).pipe(
-        Effect.match({
-          onSuccess: () => "writable" as const,
-          // access(2) reports EROFS only for a read-only filesystem, such as a mounted disk
-          // image; a plain permission failure on a writable disk still allows an admin install.
-          onFailure: (error) =>
-            (error.reason as { cause?: { code?: unknown } }).cause?.code === "EROFS"
-              ? ("read-only" as const)
-              : ("denied" as const),
-        }),
-      );
-    const [bundle, parent] = yield* Effect.all([
-      writability(bundlePath),
-      writability(environment.path.dirname(bundlePath)),
-    ]);
-    return classifyDesktopUpdateInstallation({
-      platform: environment.platform,
-      appBundlePath: bundlePath,
-      bundleWritable: bundle === "writable",
-      parentWritable: parent === "writable",
-      readOnlyVolume: bundle === "read-only" || parent === "read-only",
-    });
-  });
+  const installationReason = yield* inspectDesktopUpdateInstallation;
   const installationMessage = installationReason
     ? getDesktopUpdateInstallationMessage(installationReason)
     : null;
@@ -624,33 +590,8 @@ export const make = Effect.gen(function* () {
     removeTunnelRestartMarker,
   } = yield* makeUpdateRestartMarkers();
 
-  const installRecordPath = environment.path.join(
-    updateRestartMarkerDir,
-    DESKTOP_UPDATE_INSTALL_RECORD_FILE,
-  );
-  const writeInstallRecord = (targetVersion: string) =>
-    encodeInstallRecord({ fromVersion: environment.appVersion, targetVersion }).pipe(
-      Effect.flatMap((text) => fileSystem.writeFileString(installRecordPath, text)),
-      Effect.catch((error) =>
-        logUpdaterWarning("Could not record the update install.", { errorTag: error._tag }),
-      ),
-    );
-  const removeInstallRecord = fileSystem
-    .remove(installRecordPath, { force: true })
-    .pipe(Effect.ignore);
-
-  const readNotAppliedInstallVersion = fileSystem.readFileString(installRecordPath).pipe(
-    Effect.flatMap(decodeInstallRecord),
-    Effect.option,
-    Effect.map((record) =>
-      Option.flatMap(record, (value) =>
-        Option.fromNullishOr(resolveNotAppliedInstallVersion(value, environment.appVersion)),
-      ),
-    ),
-    Effect.tap((notAppliedVersion) =>
-      Option.isNone(notAppliedVersion) ? removeInstallRecord : Effect.void,
-    ),
-  );
+  const { writeInstallRecord, removeInstallRecord, readNotAppliedInstallVersion } =
+    yield* makeUpdateInstallRecord(updateRestartMarkerDir);
 
   const baseUpdateState = (channel: DesktopUpdateChannel, disabledReason: Option.Option<string>) =>
     Effect.gen(function* () {
