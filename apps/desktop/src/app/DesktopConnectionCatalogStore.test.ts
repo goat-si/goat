@@ -238,24 +238,30 @@ describe("DesktopConnectionCatalogStore", () => {
     ),
   );
 
-  it.effect("serves a catalog whose shared list holds a Pen record this build cannot read", () =>
-    withStore(
-      Effect.gen(function* () {
-        const store = yield* DesktopConnectionCatalogStore.DesktopConnectionCatalogStore;
-        const valid = JSON.parse(VALID_CATALOG);
-        // A broken or newer writer left a Pen record where this build keeps none; the pairings stay.
-        const catalog = JSON.stringify({
-          ...valid,
-          targets: [
-            ...valid.targets,
-            { _tag: "PenConnectionTarget", environmentId: "e", label: "Pen", connectionId: 7 },
-          ],
-        });
-        assert.isTrue(yield* store.set(catalog, null));
-        const restarted = yield* DesktopConnectionCatalogStore.make;
-        assert.deepStrictEqual(yield* restarted.get, Option.some(catalog));
-      }),
-    ),
+  it.effect.each(["shared", "hub"] as const)(
+    "serves a catalog whose %s list holds a Pen record this build cannot read",
+    (list) =>
+      withStore(
+        Effect.gen(function* () {
+          const store = yield* DesktopConnectionCatalogStore.DesktopConnectionCatalogStore;
+          const valid = JSON.parse(VALID_CATALOG);
+          // A broken or newer writer left a Pen record where this build keeps none; the pairings stay.
+          const broken = {
+            _tag: "PenConnectionTarget",
+            environmentId: "e",
+            label: "Pen",
+            connectionId: 7,
+          };
+          const catalog = JSON.stringify(
+            list === "shared"
+              ? { ...valid, targets: [...valid.targets, broken] }
+              : { ...valid, hubProxyTargets: [{ index: 0, value: broken }] },
+          );
+          assert.isTrue(yield* store.set(catalog, null));
+          const restarted = yield* DesktopConnectionCatalogStore.make;
+          assert.deepStrictEqual(yield* restarted.get, Option.some(catalog));
+        }),
+      ),
   );
 
   it.effect("rejects stale additions and deletions across independent stores", () =>

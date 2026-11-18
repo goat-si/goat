@@ -31,7 +31,9 @@ import {
   useRef,
   useState,
 } from "react";
+import { isPenRouteUrl } from "@goat/shared/penRouteUrl";
 import { FileSurfaceLoading } from "./fileSurfaceChrome";
+import { PenFrameNotice } from "./PenFrameNotice";
 
 import { useOpenLink } from "~/browser/useOpenLink";
 import { ExpandedImageDialog } from "~/components/chat/ExpandedImageDialog";
@@ -100,6 +102,8 @@ export function BrowserDocumentFrame(props: {
   readonly pdfViewState?: PdfReadingPosition | undefined;
 }) {
   const key = props.documentKey ?? props.src;
+  // A PDF renders in GOAT's own viewer; any other page would run with the Pen capability in its URL.
+  if (!props.pdf && isPenRouteUrl(props.src)) return <PenFrameNotice className="min-h-0 flex-1" />;
   return props.pdf ? (
     <Suspense fallback={<FileSurfaceLoading />}>
       <PdfFilePreview

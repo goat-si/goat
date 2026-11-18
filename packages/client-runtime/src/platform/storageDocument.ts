@@ -323,16 +323,16 @@ export function putRemoteDpopTokenInCatalog(
   };
 }
 
-// Each Pen record decodes on its own, so one this build cannot read is dropped instead of
-// failing the catalog. A record with a readable index keeps its slot until all are placed.
-const decodePenRecord = Schema.decodeUnknownOption(
+// Each hub and Pen record decodes on its own, so one this build cannot read is dropped instead
+// of failing the catalog. A record with a readable index keeps its slot until all are placed.
+const decodeExtensionRecord = Schema.decodeUnknownOption(
   Schema.Struct({ index: Schema.Number, value: Schema.Unknown }),
 );
-const penRecords = <A>(decode: (value: unknown) => Option.Option<A>, field: unknown) =>
+const extensionRecords = <A>(decode: (value: unknown) => Option.Option<A>, field: unknown) =>
   Array.isArray(field)
     ? field.flatMap((record) =>
         Option.toArray(
-          Option.map(decodePenRecord(record), ({ index, value }) => ({
+          Option.map(decodeExtensionRecord(record), ({ index, value }) => ({
             index,
             value: Option.getOrUndefined(decode(value)),
           })),
@@ -340,7 +340,7 @@ const penRecords = <A>(decode: (value: unknown) => Option.Option<A>, field: unkn
       )
     : [];
 // A field that is not a list hides how many slots it held, so nothing is out of range then.
-const penSlots = (field: unknown) =>
+const extensionSlots = (field: unknown) =>
   Array.isArray(field) ? field.length : field === undefined ? 0 : Number.POSITIVE_INFINITY;
 // Only a record naming a Pen member is kept: the registry keeps the first route of an id, so a
 // Pen record with another route's id would hide that route.
@@ -358,28 +358,18 @@ const decodePenProfile = (taken: ReadonlySet<string>) => (value: unknown) =>
   );
 const encodePenTarget = Schema.encodeSync(PenConnectionTarget);
 const encodePenProfile = Schema.encodeSync(PenConnectionProfile);
+const decodeHubTarget = Schema.decodeUnknownOption(HubProxyConnectionTarget);
+const decodeHubProfile = Schema.decodeUnknownOption(HubProxyConnectionProfile);
+const encodeHubTarget = Schema.encodeSync(HubProxyConnectionTarget);
+const encodeHubProfile = Schema.encodeSync(HubProxyConnectionProfile);
 // Keep legacy arrays readable by older clients: an unknown tagged route would make
 // them discard the entire catalog, including unrelated pairing credentials.
 const ConnectionCatalogStorageDocument = Schema.Struct({
   ...ConnectionCatalogDocument.fields,
   penTargets: Schema.optionalKey(Schema.Unknown),
   penProfiles: Schema.optionalKey(Schema.Unknown),
-  hubProxyTargets: Schema.optionalKey(
-    Schema.Array(
-      Schema.Struct({
-        index: Schema.Number,
-        value: HubProxyConnectionTarget,
-      }),
-    ),
-  ),
-  hubProxyProfiles: Schema.optionalKey(
-    Schema.Array(
-      Schema.Struct({
-        index: Schema.Number,
-        value: HubProxyConnectionProfile,
-      }),
-    ),
-  ),
+  hubProxyTargets: Schema.optionalKey(Schema.Unknown),
+  hubProxyProfiles: Schema.optionalKey(Schema.Unknown),
 });
 const ConnectionCatalogStorageJson = Schema.fromJsonString(ConnectionCatalogStorageDocument);
 const decodeStorageDocument = Schema.decodeUnknownEffect(ConnectionCatalogStorageJson);
@@ -395,7 +385,9 @@ function mergeExtensions<A>(
   // Slots of dropped records count, so a record written after one is still in range.
   const total = legacy.length + extensions.length + dropped;
   const seen = new Set<number>();
-  const placed = extensions
+  // A record that decoded claims its index before a dropped one's placeholder can.
+  const placed = [...extensions]
+    .sort((a, b) => Number(a.value === undefined) - Number(b.value === undefined))
     .filter(({ index }) => {
       if (!Number.isSafeInteger(index) || index < 0 || index >= total || seen.has(index))
         return false;
@@ -446,9 +438,19 @@ export const decodeConnectionCatalogStorage = (raw: string) =>
     Effect.map((stored) => {
       const { hubProxyTargets, hubProxyProfiles, penTargets, penProfiles, ...document } = stored;
       // Hub records are placed among what an older client reads, then Pen records among all.
-      const baseTargets = mergeExtensions(document.targets, hubProxyTargets ?? [], 0);
-      const baseProfiles = mergeExtensions(document.profiles, hubProxyProfiles ?? [], 0);
-      const targets = penRecords(
+      const hubTargets = extensionRecords(decodeHubTarget, hubProxyTargets);
+      const hubProfiles = extensionRecords(decodeHubProfile, hubProxyProfiles);
+      const baseTargets = mergeExtensions(
+        document.targets,
+        hubTargets,
+        extensionSlots(hubProxyTargets) - hubTargets.length,
+      );
+      const baseProfiles = mergeExtensions(
+        document.profiles,
+        hubProfiles,
+        extensionSlots(hubProxyProfiles) - hubProfiles.length,
+      );
+      const targets = extensionRecords(
         decodePenTarget(
           new Set(
             baseTargets.flatMap((target) =>
@@ -458,14 +460,18 @@ export const decodeConnectionCatalogStorage = (raw: string) =>
         ),
         penTargets,
       );
-      const profiles = penRecords(
+      const profiles = extensionRecords(
         decodePenProfile(new Set(baseProfiles.map((profile) => profile.connectionId))),
         penProfiles,
       );
       return pairPenRoutes({
         ...document,
-        targets: mergeExtensions(baseTargets, targets, penSlots(penTargets) - targets.length),
-        profiles: mergeExtensions(baseProfiles, profiles, penSlots(penProfiles) - profiles.length),
+        targets: mergeExtensions(baseTargets, targets, extensionSlots(penTargets) - targets.length),
+        profiles: mergeExtensions(
+          baseProfiles,
+          profiles,
+          extensionSlots(penProfiles) - profiles.length,
+        ),
       } satisfies ConnectionCatalogDocument);
     }),
   );
@@ -486,10 +492,10 @@ export const encodeConnectionCatalogStorage = (document: ConnectionCatalogDocume
         profile._tag !== "HubProxyConnectionProfile" && profile._tag !== "PenConnectionProfile",
     ),
     hubProxyTargets: withoutPen.targets.flatMap((value, index) =>
-      value._tag === "HubProxyConnectionTarget" ? [{ index, value }] : [],
+      value._tag === "HubProxyConnectionTarget" ? [{ index, value: encodeHubTarget(value) }] : [],
     ),
     hubProxyProfiles: withoutPen.profiles.flatMap((value, index) =>
-      value._tag === "HubProxyConnectionProfile" ? [{ index, value }] : [],
+      value._tag === "HubProxyConnectionProfile" ? [{ index, value: encodeHubProfile(value) }] : [],
     ),
     penTargets: document.targets.flatMap((value, index) =>
       value._tag === "PenConnectionTarget" ? [{ index, value: encodePenTarget(value) }] : [],

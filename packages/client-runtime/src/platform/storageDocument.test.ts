@@ -799,4 +799,44 @@ describe("Pen storage compatibility", () => {
     const next = removeConnectionFromCatalog(document, ENVIRONMENT_ID);
     expect(next.profiles.map((value) => value.environmentId)).toEqual([other]);
   });
+  it.effect("a record that did not decode never takes the slot of one that did", () =>
+    Effect.gen(function* () {
+      const decoded = yield* decodeConnectionCatalogStorage(
+        JSON.stringify({
+          ...legacy,
+          penTargets: [
+            { index: 0, value: { ...penTarget, connectionId: 7 } },
+            { index: 0, value: penTarget },
+          ],
+          penProfiles: [{ index: 0, value: penProfile }],
+        }),
+      );
+      expect(decoded.targets.map((value) => value._tag)).toEqual([
+        "PenConnectionTarget",
+        "BearerConnectionTarget",
+      ]);
+    }),
+  );
+  it.effect("a record of the wrong kind in the hub list is dropped alone", () =>
+    Effect.gen(function* () {
+      const decoded = yield* decodeConnectionCatalogStorage(
+        JSON.stringify({
+          ...legacy,
+          hubProxyTargets: [
+            { index: 0, value: penTarget },
+            { index: 2, value: hubTarget },
+          ],
+          hubProxyProfiles: [{ index: 0, value: null }],
+        }),
+      );
+      expect(decoded.targets.map((value) => value._tag)).toEqual([
+        "BearerConnectionTarget",
+        "HubProxyConnectionTarget",
+      ]);
+      expect(decoded.credentials).toEqual(legacy.credentials);
+      // What this build writes reads back the same.
+      const encoded = yield* encodeConnectionCatalogStorage(decoded);
+      expect(yield* decodeConnectionCatalogStorage(encoded)).toEqual(decoded);
+    }),
+  );
 });

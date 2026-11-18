@@ -54,7 +54,7 @@ describe("mobile connection catalog storage", () => {
     }),
   );
 
-  it.effect.each(["the Pen field", "the shared list"] as const)(
+  it.effect.each(["the Pen field", "the shared list", "the hub list"] as const)(
     "a Pen record the client cannot read in %s keeps the catalog and its pairings",
     (place) =>
       Effect.gen(function* () {
@@ -83,7 +83,9 @@ describe("mobile connection catalog storage", () => {
           JSON.stringify(
             place === "the Pen field"
               ? { ...saved, penTargets: [null] }
-              : { ...saved, targets: [...saved.targets, broken] },
+              : place === "the hub list"
+                ? { ...saved, hubProxyTargets: [{ index: 0, value: broken }] }
+                : { ...saved, targets: [...saved.targets, broken] },
           ),
         );
         expect(Option.getOrNull(yield* (yield* store()).get("desk"))?.token).toBe("kept");
