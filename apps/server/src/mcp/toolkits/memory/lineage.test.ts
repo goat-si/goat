@@ -566,3 +566,101 @@ it.effect("remember with 101 sources on the new floor persists every edge for fo
     expect(after.revisions.every((entry) => entry.payload === null)).toBe(true);
   }).pipe(Effect.provide(Fixture.layer)),
 );
+
+const rememberFromActiveRun = Effect.fn("test.rememberFromActiveRun")(function* (
+  text: string,
+  origin: {
+    createdBy: string;
+    creationSource: string;
+    ingress?: string;
+    scheduledTaskId?: string;
+    senderThreadId?: string;
+  },
+) {
+  const sql = yield* SqlClient.SqlClient;
+  const messageId = "synthetic-root";
+  const threadId = ref().threadId;
+  const timestamp = "2026-01-01T00:00:00.000Z";
+  yield* sql`UPDATE orchestration_v2_projection_runs SET payload_json=json_set(payload_json,'$.userMessageId',${messageId})`;
+  yield* sql`INSERT INTO orchestration_v2_projection_messages (message_id,role,thread_id,payload_json)
+    VALUES (${messageId},'user',${threadId},${JSON.stringify({
+      ...origin,
+      id: messageId,
+      threadId,
+      runId: "run:mcp-test",
+      nodeId: null,
+      role: "user",
+      text,
+      attachments: [],
+      streaming: false,
+      createdAt: timestamp,
+      updatedAt: timestamp,
+    })})`;
+});
+const person = { createdBy: "user", creationSource: "web", ingress: "person" } as const;
+const prepareRefusedLineage = Effect.gen(function* () {
+  yield* rememberSetup;
+  const sql = yield* SqlClient.SqlClient;
+  yield* sql`INSERT INTO memory_space_features VALUES (${Fixture.space},1000,0)`;
+  yield* sql`INSERT INTO memory_thread_lineages VALUES (${ref().environmentId},${ref().threadId},${Fixture.space},'overflow',0)`;
+});
+
+it.effect("an overflowed thread can save only the person's own words as unverified", () =>
+  Effect.gen(function* () {
+    yield* prepareRefusedLineage;
+    yield* rememberFromActiveRun("Don't remember cafe\u0301   on Saturday.", person);
+    const refused = yield* remember("coffee on Saturday");
+    expect(refused.body).toMatchObject({ code: "thread_lineage_incomplete" });
+    const saved = yield* remember("café on Saturday");
+    expect(saved.result.isError).not.toBe(true);
+    const sql = yield* SqlClient.SqlClient;
+    expect(yield* sql`SELECT provenance FROM memory_revision_marks`).toEqual([
+      { provenance: "unverified" },
+    ]);
+    expect(yield* sql`SELECT environment_id,thread_id FROM memory_origins`).toEqual([
+      { environment_id: ref().environmentId, thread_id: ref().threadId },
+    ]);
+    yield* sql`UPDATE orchestration_v2_projection_runs SET status='completed'`;
+    expect((yield* remember("on Saturday")).body).toMatchObject({
+      code: "thread_lineage_incomplete",
+    });
+  }).pipe(Effect.provide(Fixture.layer)),
+);
+
+it.effect.each([
+  { ...person, ingress: undefined },
+  { ...person, createdBy: "agent" },
+  { ...person, creationSource: "server" },
+  { ...person, creationSource: "slack" },
+  { ...person, scheduledTaskId: "schedule" },
+  { ...person, senderThreadId: "thread:sender" },
+] as const)("refuses same-text recall from an untrusted root (%j)", (origin) =>
+  Effect.gen(function* () {
+    yield* prepareRefusedLineage;
+    yield* rememberFromActiveRun("coffee on Saturday", origin);
+    expect((yield* remember("on Saturday")).body).toMatchObject({
+      code: "thread_lineage_incomplete",
+    });
+    expect(yield* counts).toEqual([{ events: 0, payloads: 0, outbox: 0 }]);
+  }).pipe(Effect.provide(Fixture.layer)),
+);
+
+it.effect("explicitly reading an unverified body makes the reader lineage unknown", () =>
+  Effect.gen(function* () {
+    yield* setup;
+    const sql = yield* SqlClient.SqlClient;
+    const store = yield* Store.MemoryStore;
+    const source = yield* seed(34000);
+    yield* sql`INSERT INTO memory_revision_marks VALUES (${Fixture.space},${source.revision},'unverified')`;
+    const read = yield* Fixture.call(
+      "memory_read",
+      { memorySpaceId: Fixture.space, memoryId: source.input.memoryId },
+      caller(),
+    );
+    expect(read.result.isError).not.toBe(true);
+    expect(yield* store.readThreadLineage(ref(), Fixture.space)).toEqual({
+      state: "unknown",
+      revisions: [source.revision],
+    });
+  }).pipe(Effect.provide(Fixture.layer)),
+);
