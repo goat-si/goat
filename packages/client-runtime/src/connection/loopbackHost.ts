@@ -61,6 +61,10 @@ export function isLoopbackEntry(entry: ConnectionCatalogEntry): boolean {
   );
 }
 
+/** How many routes a connect tries: a Pen route the closed gate hides is never tried. */
+export const triedRoutes = (entry: ConnectionCatalogEntry) =>
+  Math.max(1, shownRoutes(entry).length);
+
 /** A setup or silence budget, raised to the local allowance for this device's own server. */
 export function loopbackBudgetMs(loopback: boolean, remoteBudgetMs: number): number {
   return loopback ? Math.max(remoteBudgetMs, LOOPBACK_SILENCE_TIMEOUT_MS) : remoteBudgetMs;
