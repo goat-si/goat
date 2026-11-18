@@ -1,3 +1,4 @@
+import * as Fiber from "effect/Fiber";
 import * as ThreadCommandExecutor from "./ThreadCommandExecutor.ts";
 import { rootAppThread } from "./RunExecutionService.compactCases.ts";
 import { registerCompactUnsupportedCase } from "./RunExecutionService.compactCases.ts";
@@ -1151,6 +1152,7 @@ it.effect.each(["fails", "completes after opening the session"] as const)(
       const providerStarts = yield* Ref.make(0);
       const capturing = yield* Deferred.make<void>();
       const sessionOpened = yield* Deferred.make<void>();
+      const captured = yield* Deferred.make<void>();
       const writes = yield* Ref.make<
         ReadonlyArray<{
           events: ReadonlyArray<OrchestrationV2DomainEvent>;
@@ -1168,6 +1170,7 @@ it.effect.each(["fails", "completes after opening the session"] as const)(
                 scenario !== "fails"
                   ? Deferred.succeed(capturing, undefined).pipe(
                       Effect.andThen(Deferred.await(sessionOpened)),
+                      Effect.andThen(Deferred.succeed(captured, undefined)),
                     )
                   : Effect.fail(
                       new CheckpointService.CheckpointBaselineCaptureError({
@@ -1204,9 +1207,8 @@ it.effect.each(["fails", "completes after opening the session"] as const)(
         if (baseline !== undefined) {
           yield* Deferred.await(capturing);
           assert.equal(yield* Ref.get(providerStarts), 0);
-          yield* Deferred.succeed(sessionOpened, undefined);
         }
-        yield* runExecution.startRootRun({
+        const started = runExecution.startRootRun({
           ...(baseline === undefined ? {} : { baseline }),
           commandId: CommandId.make("command:run-execution-baseline-failure"),
           appThread: rootAppThread(threadId),
@@ -1215,7 +1217,7 @@ it.effect.each(["fails", "completes after opening the session"] as const)(
             events: Stream.never,
             startTurn: () =>
               Effect.gen(function* () {
-                if (scenario !== "fails") assert.isTrue(yield* Deferred.isDone(sessionOpened));
+                if (scenario !== "fails") assert.isTrue(yield* Deferred.isDone(captured));
                 yield* Ref.update(providerStarts, (count) => count + 1);
               }),
           } as unknown as ProviderAdapter.ProviderAdapterV2SessionRuntime,
@@ -1252,6 +1254,12 @@ it.effect.each(["fails", "completes after opening the session"] as const)(
             },
           },
         });
+        if (baseline === undefined) yield* started;
+        else {
+          const prompting = yield* Effect.forkChild(started, { startImmediately: true });
+          yield* Deferred.succeed(sessionOpened, undefined);
+          yield* Fiber.join(prompting);
+        }
       }).pipe(Effect.provide(layerTest));
 
       assert.equal(yield* Ref.get(providerStarts), 1);

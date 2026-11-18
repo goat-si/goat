@@ -485,6 +485,7 @@ export function makeLocalCommandHarness(input: {
           }),
       ),
     ensureThread: fallbackEnsureThread,
+    ...(input.manualResume?.supported === true ? { resumeInterruptedTurn: () => Effect.void } : {}),
   };
   const settleTurnStart = vi.fn(
     (_turn: { readonly threadId: ThreadId; readonly runId: RunId }) => Effect.void,
