@@ -443,8 +443,7 @@ const openEdit = Effect.fn(function* (typed: boolean) {
   const change = Effect.fn(function* (kind: "upsert" | "invalidate", reply: MemoryItem) {
     yield* Queue.offer(h.signals, signal(kind));
     const reread = yield* Queue.take(h.reads);
-    // The decision waits for the reread: the draft is unchanged while it is pending.
-    expect(h.registry.get(h.edit)).toBe(text);
+    expect(h.registry.get(h.edit)).toBe("");
     yield* Deferred.succeed(reread, reply);
     yield* waitFor(h.registry, body, isStatus(reply.status));
   });
@@ -527,7 +526,7 @@ it.effect("a reread that never answers purges an edited draft when it times out"
       const h = yield* openEdit(true);
       yield* Queue.offer(h.signals, signal("upsert"));
       yield* Queue.take(h.reads);
-      expect(h.registry.get(h.edit)).toBe(h.text);
+      expect(h.registry.get(h.edit)).toBe("");
       yield* TestClock.adjust("1 minute");
       yield* waitFor(h.registry, h.edit, (text) => text === null);
       expect(h.registry.get(h.edit)).toBeNull();
@@ -575,7 +574,7 @@ it.effect(
         expect(h.registry.get(h.edit)).toBe(h.text);
         yield* Queue.offer(h.signals, signal("upsert"));
         yield* Queue.take(h.reads);
-        expect(h.registry.get(h.edit)).toBe(h.text);
+        expect(h.registry.get(h.edit)).toBe("");
         yield* TestClock.adjust("60 seconds");
         yield* waitFor(h.registry, h.edit, (text) => text === null);
         expect(h.registry.get(h.edit)).toBeNull();
@@ -644,7 +643,7 @@ it.effect("a read opened after a collection is the one the draft's decision is w
       yield* Queue.offer(h.signals, signal("upsert"));
       yield* waitFor(h.registry, h.exposure, (state) => state !== seen);
       // Only the draft holds the read now, through its decision.
-      expect(h.registry.get(h.edit)).toBe("Synthetic memory, edited");
+      expect(h.registry.get(h.edit)).toBe("");
       yield* collectGarbage;
       const requests = yield* answerReads(h.reads, item);
       const body = Atom.make((get) =>

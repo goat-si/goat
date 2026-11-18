@@ -581,7 +581,8 @@ export function createMemoryEnvironmentAtoms<R, E>(
         // by its reread: only the revision the edit started from keeps the draft.
         if (draft.start && memoryId && gaps.length === 1 && gaps[0] === "changed") {
           const reply = get(read.reply({ environmentId, input: { ...input, memoryId } }));
-          if (reply === null) return draft.text;
+          // Keep the draft for the decision, but withhold its text until the reread answers.
+          if (reply === null) return "";
           const seen = Option.isSome(reply)
             ? memoryRereadOfRevision(reply.value, draft.start.revisionId)
             : "other";

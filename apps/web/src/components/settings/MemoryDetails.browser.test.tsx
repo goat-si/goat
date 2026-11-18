@@ -235,6 +235,8 @@ function signal(
   if (purge) registry.set(editDraft(), null);
   expire();
 }
+const saveButton = (screen: Screen) =>
+  [...screen.container.querySelectorAll("button")].find((b) => b.textContent === "Save memory");
 const memoryText = (screen: Screen) =>
   screen.container.querySelector<HTMLTextAreaElement>('[aria-label="Memory text"]');
 async function click(screen: Screen, label: string) {
@@ -463,7 +465,7 @@ it("keeps an edited draft open through its own save's hub confirmation and the s
   await type(screen, "Synthetic original, edited");
   // The shared reread found the same revision held for this device's re-scan: the draft stays.
   await update(() => signal(registry, "upsert", id(2), { purge: false }));
-  expect(memoryText(screen)?.value).toBe("Synthetic original, edited");
+  expect(memoryText(screen)?.value).toBe("");
   await update(() => state.queries.set("read", Option.some(heldForScan)));
   expect(memoryText(screen)?.value).toBe("Synthetic original, edited");
   await update(() => {
@@ -506,11 +508,9 @@ it("offers Save only once the draft differs from the memory", async () => {
   const registry = setup();
   await using screen = await renderDetails(registry);
   await click(screen, "Edit");
-  const saveButton = () =>
-    [...screen.container.querySelectorAll("button")].find((b) => b.textContent === "Save memory");
-  expect(saveButton()?.disabled).toBe(true);
+  expect(saveButton(screen)?.disabled).toBe(true);
   await type(screen, "Synthetic original, edited");
-  expect(saveButton()?.disabled).toBe(false);
+  expect(saveButton(screen)?.disabled).toBe(false);
 });
 it("masks an untouched editor while the reread after a change is pending", async () => {
   const registry = setup();
@@ -526,14 +526,51 @@ it("masks an untouched editor while the reread after a change is pending", async
   expect(memoryText(screen)?.disabled).toBe(false);
 });
 
-it("keeps an edited draft visible and editable while the reread after a change is pending", async () => {
+it("masks an edited copy while a pending forget is read, then closes the edit when the hold is confirmed", async () => {
   const registry = setup();
   await using screen = await renderDetails(registry);
   await click(screen, "Edit");
-  await type(screen, "Synthetic original, edited");
+  await type(screen, "Synthetic original!");
+  await update(() => {
+    state.readPending = true;
+    signal(registry, "invalidate", id(2), { purge: false });
+  });
+  expect(memoryText(screen)?.value).toBe("");
+  expect(memoryText(screen)?.disabled).toBe(true);
+  expect(saveButton(screen)?.disabled).toBe(true);
+  expect(screen.container.textContent).not.toContain("Synthetic original");
+  await save(screen);
+  expect(state.calls).not.toHaveBeenCalled();
+
+  await update(() => {
+    state.readPending = false;
+    registry.set(editDraft(), null);
+    state.queries.set(
+      "read",
+      Option.some(
+        decodeItem({
+          ...heldForScan,
+          failureCode: "forget_pending",
+          localAvailability: { ...heldForScan.localAvailability, reasons: ["forget_pending"] },
+        }),
+      ),
+    );
+  });
+  expect(memoryText(screen)).toBeNull();
+  expect(screen.container.textContent).not.toContain("Synthetic original");
+  expect(screen.container.textContent).toContain(CHANGED_LINE);
+});
+
+it("restores edited text and Save when the reread confirms the same visible revision", async () => {
+  const registry = setup();
+  await using screen = await renderDetails(registry);
+  await click(screen, "Edit");
+  await type(screen, "Synthetic original!");
   await update(() => signal(registry, "upsert", id(2), { purge: false }));
-  expect(memoryText(screen)?.value).toBe("Synthetic original, edited");
-  expect(memoryText(screen)?.disabled).toBe(false);
+  expect(memoryText(screen)?.value).toBe("");
+  await update(() => state.queries.set("read", Option.some(original)));
+  expect(memoryText(screen)?.value).toBe("Synthetic original!");
+  expect(saveButton(screen)?.disabled).toBe(false);
 });
 it("chosen behaviour: when the reread after a change never answers, the edited draft closes with the version line", async () => {
   const registry = setup();
@@ -541,7 +578,7 @@ it("chosen behaviour: when the reread after a change never answers, the edited d
   await click(screen, "Edit");
   await type(screen, "Synthetic original, edited");
   await update(() => signal(registry, "upsert", id(2), { purge: false }));
-  expect(memoryText(screen)?.value).toBe("Synthetic original, edited");
+  expect(memoryText(screen)?.value).toBe("");
   // The shared draft discards itself when the reread's 60-second request ends unanswered.
   await update(() => registry.set(editDraft(), null));
   expect(memoryText(screen)).toBeNull();
@@ -594,7 +631,7 @@ it.each([
   { outcome: "accepted", line: false },
   { outcome: "rejected", line: true },
 ])(
-  "a hold during an in-flight save keeps the typed text disabled until the reread settles, then empty; the reply ($outcome) closes the editor",
+  "a hold during an in-flight save hides the typed text immediately; the reply ($outcome) closes the editor",
   async ({ outcome, line }) => {
     const registry = setup();
     let reply!: (value: unknown) => void;
@@ -603,9 +640,8 @@ it.each([
     await click(screen, "Edit");
     await type(screen, "Synthetic original, edited");
     await save(screen);
-    // The hold empties the read; the shared reread is pending, so the draft is unchanged.
     await update(() => signal(registry, "invalidate", id(2), { purge: false }));
-    expect(memoryText(screen)?.value).toBe("Synthetic original, edited");
+    expect(memoryText(screen)?.value).toBe("");
     expect(memoryText(screen)?.disabled).toBe(true);
     // The reread shows the hold: the shared draft discards the typing; the save keeps its form.
     await update(() => {
