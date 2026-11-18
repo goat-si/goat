@@ -5,7 +5,11 @@ import * as FileSystem from "effect/FileSystem";
 import * as Option from "effect/Option";
 import * as Path from "effect/Path";
 
-import { pinnedRuntimePaths, pinnedRuntimeVersionsDir } from "./pinnedRuntime.ts";
+import {
+  launcherOwnsVersionsDir,
+  pinnedRuntimePaths,
+  pinnedRuntimeVersionsDir,
+} from "./pinnedRuntime.ts";
 
 /**
  * After this start committed a remote update, moves the goat symlinks that point into this
@@ -39,21 +43,26 @@ export const repointCommittedLaunchers = Effect.fn("cloud.repoint_committed_laun
       }
     }
     const versionsDir = pinnedRuntimeVersionsDir(path, input.baseDir);
+    const realVersionsDir = yield* fs.realPath(versionsDir).pipe(Effect.option);
+    if (Option.isNone(realVersionsDir)) return;
     const target = pinnedRuntimePaths(path, input.baseDir, input.targetVersion, platform);
+    const destination = yield* fs.realPath(target.entryPath).pipe(Effect.option);
+    if (
+      Option.isNone(destination) ||
+      !launcherOwnsVersionsDir(path, realVersionsDir.value, destination.value)
+    )
+      return;
     for (const launcher of candidates) {
       yield* Effect.scoped(
         Effect.gen(function* () {
           const linkTarget = yield* fs.readLink(launcher).pipe(Effect.option);
           if (Option.isNone(linkTarget)) return;
-          const relative = path.relative(
-            versionsDir,
-            path.resolve(path.dirname(launcher), linkTarget.value),
-          );
+          const lexicalTarget = path.resolve(path.dirname(launcher), linkTarget.value);
+          if (!launcherOwnsVersionsDir(path, versionsDir, lexicalTarget)) return;
+          const resolved = yield* fs.realPath(launcher).pipe(Effect.option);
           if (
-            relative.length === 0 ||
-            relative === ".." ||
-            relative.startsWith(".." + path.sep) ||
-            path.isAbsolute(relative)
+            Option.isNone(resolved) ||
+            !launcherOwnsVersionsDir(path, realVersionsDir.value, resolved.value)
           )
             return;
           // A new link renamed over the old one, so the command never disappears.

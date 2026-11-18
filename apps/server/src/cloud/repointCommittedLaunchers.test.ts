@@ -55,4 +55,38 @@ it.layer(NodeServices.layer)("goat command after a committed remote update", (it
       assert.deepEqual(yield* fs.readDirectory(path.dirname(recordedLink)), ["goat"]);
     }),
   );
+
+  it.effect(
+    "leaves a recorded goat link alone when its version directory belongs to another home",
+    () =>
+      Effect.gen(function* () {
+        const fs = yield* FileSystem.FileSystem;
+        const path = yield* Path.Path;
+        const root = yield* fs.realPath(
+          yield* fs.makeTempDirectoryScoped({ prefix: "goat-repoint-" }),
+        );
+        const baseDir = path.join(root, "home-a");
+        const versions = path.join(baseDir, "runtime/goat/versions");
+        const anotherVersion = path.join(root, "home-b/runtime/goat/versions/1.0.0");
+        const launcher = path.join(root, "goat");
+        const aliasedVersion = path.join(versions, "1.0.0");
+        const originalTarget = path.join(aliasedVersion, "goat");
+        yield* fs.makeDirectory(anotherVersion, { recursive: true });
+        yield* fs.writeFileString(path.join(anotherVersion, "goat"), "", { mode: 0o755 });
+        yield* fs.makeDirectory(path.join(versions, "1.1.0"), { recursive: true });
+        yield* fs.writeFileString(path.join(versions, "1.1.0/goat"), "", { mode: 0o755 });
+        yield* fs.symlink(anotherVersion, aliasedVersion);
+        yield* fs.symlink(originalTarget, launcher);
+        yield* fs.writeFileString(path.join(baseDir, "runtime/launchers"), `${launcher}\n`);
+
+        yield* repointCommittedLaunchers({ baseDir, targetVersion: "1.1.0" }).pipe(
+          Effect.provideService(HostProcess.Platform, "linux"),
+          Effect.provideService(HostProcess.HomeDirectory, root),
+          Effect.provideService(HostProcess.Environment, { PATH: "" }),
+        );
+
+        assert.equal(yield* fs.readLink(launcher), originalTarget);
+        assert.equal(yield* fs.realPath(launcher), path.join(anotherVersion, "goat"));
+      }),
+  );
 });
