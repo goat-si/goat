@@ -56,6 +56,8 @@ export interface ActiveOpenCodeTurn {
   nextItemOrdinal: number;
   nativeUserMessageId: string | null;
   admissionMessageId: string | null;
+  priorWakePromptIds?: Set<string>;
+  priorWakeSettled?: Deferred.Deferred<void>;
   interrupted: boolean;
   finalized: boolean;
   contextOverflow: OrchestrationV2ProviderFailure | null;
