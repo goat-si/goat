@@ -4,7 +4,12 @@ import * as Effect from "effect/Effect";
 import * as Layer from "effect/Layer";
 import * as Option from "effect/Option";
 import * as SubscriptionRef from "effect/SubscriptionRef";
-import { PrimaryConnectionTarget } from "../connection/model.ts";
+import {
+  AVAILABLE_CONNECTION_STATE,
+  PrimaryConnectionTarget,
+  type PreparedConnection,
+  type SupervisorConnectionState,
+} from "../connection/model.ts";
 import { EnvironmentSupervisor } from "../connection/supervisor.ts";
 import type { WsRpcProtocolClient } from "./protocol.ts";
 import type { RpcSession } from "./session.ts";
@@ -39,12 +44,27 @@ it.effect("sends stage-only only to the connection that advertises server update
         throw new Error("Unexpected subscription");
       },
     });
-    const session = yield* SubscriptionRef.make(Option.some(connection(false)));
+    const session = yield* SubscriptionRef.make<Option.Option<RpcSession>>(
+      Option.some(connection(false)),
+    );
+    const state = yield* SubscriptionRef.make<SupervisorConnectionState>(
+      AVAILABLE_CONNECTION_STATE,
+    );
+    const prepared = yield* SubscriptionRef.make<Option.Option<PreparedConnection>>(Option.none());
+    const supervisor = Layer.succeed(EnvironmentSupervisor, {
+      target,
+      session,
+      state,
+      prepared,
+      connect: Effect.void,
+      disconnect: Effect.void,
+      retryNow: Effect.void,
+    });
     const call = (
       input: Parameters<WsRpcProtocolClient[typeof WS_METHODS.serverUpdateServer]>[0],
     ) =>
       requestGuarded(WS_METHODS.serverUpdateServer, input).pipe(
-        Effect.provide(Layer.mock(EnvironmentSupervisor, { target, session })),
+        Effect.provide(supervisor),
         Effect.provideService(RpcPermissionGuard, { authorize: () => Effect.void }),
       );
 
