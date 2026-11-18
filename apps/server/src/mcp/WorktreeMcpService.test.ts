@@ -570,64 +570,47 @@ describe("goat_worktree_handoff", () => {
     });
   });
 
-  it.effect("removes the created worktree when the thread update dies with a defect", () => {
+  it.effect("preserves the created worktree when the thread update dies with a defect", () => {
     const harness = makeHarness({ dispatchDies: true });
     return Effect.gen(function* () {
       const exit = yield* Effect.exit(runHandoff(harness, { branch: "feature/dispatch-defect" }));
       expectTypedFailure(exit, { _tag: "WorktreeMcpFailure", code: "operation_failed" });
-      expect(harness.removeWorktree).toHaveBeenCalledWith({
-        cwd: workspaceRoot,
-        path: "/worktrees/project/feature/dispatch-defect",
-        force: true,
-      });
+      expect(harness.removeWorktree).not.toHaveBeenCalled();
     });
   });
 
-  it.effect("re-checks attachment after creating the worktree and backs out on a race", () => {
-    const harness = makeHarness({ threadAttachedOnRecheck: true });
-    return Effect.gen(function* () {
-      const exit = yield* Effect.exit(runHandoff(harness, { branch: "feature/raced" }));
-      expectTypedFailure(exit, { _tag: "WorktreeMcpFailure", code: "already_in_worktree" });
-      expect(harness.createWorktree).toHaveBeenCalledTimes(1);
-      expect(harness.removeWorktree).toHaveBeenCalledWith({
-        cwd: workspaceRoot,
-        path: "/worktrees/project/feature/raced",
-        force: true,
+  it.effect(
+    "re-checks attachment after creating the worktree and keeps the unbound checkout on a race",
+    () => {
+      const harness = makeHarness({ threadAttachedOnRecheck: true });
+      return Effect.gen(function* () {
+        const exit = yield* Effect.exit(runHandoff(harness, { branch: "feature/raced" }));
+        expectTypedFailure(exit, { _tag: "WorktreeMcpFailure", code: "already_in_worktree" });
+        expect(harness.createWorktree).toHaveBeenCalledTimes(1);
+        expect(harness.removeWorktree).not.toHaveBeenCalled();
+        expect(harness.deleteLocalBranch).not.toHaveBeenCalled();
+        expect(harness.dispatch).not.toHaveBeenCalled();
       });
-      expect(harness.deleteLocalBranch).toHaveBeenCalledWith({
-        cwd: workspaceRoot,
-        refName: "feature/raced",
-        force: true,
-      });
-      expect(harness.dispatch).not.toHaveBeenCalled();
-    });
-  });
+    },
+  );
 
-  it.effect("removes the created worktree when the recheck read fails", () => {
+  it.effect("preserves the created worktree when the recheck read fails", () => {
     const harness = makeHarness({ threadReadFailsOnRecheck: true });
     return Effect.gen(function* () {
       const exit = yield* Effect.exit(runHandoff(harness, { branch: "feature/recheck-fails" }));
       expectTypedFailure(exit, { _tag: "WorktreeMcpFailure", code: "operation_failed" });
-      expect(harness.removeWorktree).toHaveBeenCalledWith({
-        cwd: workspaceRoot,
-        path: "/worktrees/project/feature/recheck-fails",
-        force: true,
-      });
+      expect(harness.removeWorktree).not.toHaveBeenCalled();
       expect(harness.dispatch).not.toHaveBeenCalled();
     });
   });
 
-  it.effect("backs out when the thread is archived during worktree creation", () => {
+  it.effect("preserves the checkout when the thread is archived during worktree creation", () => {
     const harness = makeHarness({ threadArchivedOnRecheck: true });
     return Effect.gen(function* () {
       const exit = yield* Effect.exit(runHandoff(harness, { branch: "feature/archived-race" }));
       expectTypedFailure(exit, { _tag: "WorktreeMcpFailure", code: "invalid_request" });
       expect(harness.dispatch).not.toHaveBeenCalled();
-      expect(harness.removeWorktree).toHaveBeenCalledWith({
-        cwd: workspaceRoot,
-        path: "/worktrees/project/feature/archived-race",
-        force: true,
-      });
+      expect(harness.removeWorktree).not.toHaveBeenCalled();
     });
   });
 
