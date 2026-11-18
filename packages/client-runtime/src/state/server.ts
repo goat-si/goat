@@ -1291,6 +1291,10 @@ export function createServerEnvironmentAtoms<R, E>(
       staleTimeMs: 15_000,
       refreshTrigger: ({ environmentId }) => computerUseRefreshAtom(environmentId),
     }),
+    stageServerUpdate: createEnvironmentRpcCommand(runtime, {
+      label: "environment-data:server:stage-update",
+      tag: WS_METHODS.serverUpdateServer,
+    }),
     updateStateAtom,
     settingsValueAtom,
     usageModelFilterAtom,

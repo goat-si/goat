@@ -239,6 +239,27 @@ function memoryHistoryDispatchInput(input: MemoryHistoryInput, refusedReverts: b
   return legacyInput;
 }
 
+const requireServerUpdateStaging = Effect.fn("EnvironmentRpc.requireServerUpdateStaging")(
+  function* (tag: string, input: unknown, session: RpcSession) {
+    if (
+      (tag !== WS_METHODS.serverUpdateServer &&
+        tag !== WS_METHODS.serverUpdateServerWithProgress) ||
+      typeof input !== "object" ||
+      input === null ||
+      !("stageOnly" in input) ||
+      input.stageOnly !== true
+    )
+      return;
+    const { target } = yield* EnvironmentSupervisor.EnvironmentSupervisor;
+    const unsupported = new EnvironmentRpcUnavailableError({
+      environmentId: target.environmentId,
+      message: "Server update staging is unavailable on this environment.",
+    });
+    const config = yield* session.initialConfig.pipe(Effect.mapError(() => unsupported));
+    if (config.environment.capabilities.serverUpdateStaging !== true) return yield* unsupported;
+  },
+);
+
 export const requestGuarded = Effect.fn("EnvironmentRpc.request")(function* <
   TTag extends EnvironmentUnaryRpcTag,
 >(tag: TTag, input: EnvironmentRpcInput<TTag>) {
@@ -249,6 +270,7 @@ export const requestGuarded = Effect.fn("EnvironmentRpc.request")(function* <
   });
   const session = yield* currentSession();
   yield* authorizeRequest(tag, input);
+  yield* requireServerUpdateStaging(tag, input, session);
   let dispatchInput = input;
   if (tag.startsWith("memory.") || tag.startsWith("siteNotes.")) {
     const config = yield* session.initialConfig.pipe(
@@ -361,6 +383,7 @@ export function runStreamGuarded<TTag extends EnvironmentStreamCommandRpcTag>(
   return Stream.unwrap(
     authorizeRequest(tag, input).pipe(
       Effect.andThen(currentSession()),
+      Effect.tap((session) => requireServerUpdateStaging(tag, input, session)),
       Effect.map((session) => {
         const method = (session.client as EnvironmentProtocolClient)[tag] as (
           input: EnvironmentRpcInput<TTag>,

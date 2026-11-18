@@ -283,9 +283,24 @@ export function useUpdateEverything(
       const remote = Promise.all([
         ...chosenServers.map(async (server) => {
           const key = server.environmentId;
+          const stage =
+            server.selfUpdate === "boot-service" &&
+            (runningThreads.get(key) ?? 0) > 0 &&
+            machines.find((machine) => machine.environmentId === key)?.serverConfig?.environment
+              .capabilities.serverUpdateStaging === true
+              ? serverEnvironment.stageServerUpdate
+                  .run(appAtomRegistry, {
+                    environmentId: key,
+                    input: { targetVersion: server.targetVersion, stageOnly: true },
+                  })
+                  .catch(() => undefined)
+              : undefined;
           const outcome = runWhenIdle({
             idle: () => waitForIdleMachine(key, server.environmentId),
-            attempt: () => updateServer(server, { quiet: true, whenIdle: true }),
+            attempt: async () => {
+              await stage;
+              return updateServer(server, { quiet: true, whenIdle: true });
+            },
             isBusy: isBusyRefusal,
             retryLater: () => waitToRetryBusyMachine(key, BUSY_RETRY_MS),
           }).then((result) => {

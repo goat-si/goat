@@ -21,6 +21,10 @@ Each install records the verified archive digest and the executable's SHA-256 in
 reuses an install only while its executable still matches and otherwise installs again
 from the release with `SHA256SUMS`.
 
+A client can stage an exact boot-service release while it waits for idle. It must
+check the staging capability on the connection that sends the request, since
+an older server can ignore the optional flag and activate the update immediately.
+
 Boot-service updates without `confirmReplacement: true` refuse while the server is
 busy. This includes older clients that omit the field. Admission closes and idle is
 checked again after staging; thread continuation is recovery intent, not consent to
