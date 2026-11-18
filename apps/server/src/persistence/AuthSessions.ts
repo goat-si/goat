@@ -301,7 +301,7 @@ function toPersistenceSqlOrDecodeError(
   correlation?: PersistenceErrorCorrelation,
 ) {
   return (cause: unknown): AuthSessionRepositoryError =>
-    cause instanceof PersistenceSqlError
+    Schema.is(PersistenceSqlError)(cause)
       ? cause
       : Schema.isSchemaError(cause)
         ? PersistenceDecodeError.fromSchemaError(decodeOperation, cause, correlation)
