@@ -72,18 +72,18 @@ export function resolveRemoteOpenState(input: {
     if (hostname !== null && isLoopbackHostname(hostname)) {
       return LOCAL_EXEC;
     }
-  } else if (isDesktopLocalConnectionTarget(target)) {
-    return LOCAL_EXEC;
   }
 
-  if (
-    input.isDesktopRenderer &&
-    target._tag === "BearerConnectionTarget" &&
-    target.environmentId === input.hostEnvironmentId &&
-    input.bearerHttpBaseUrl !== undefined
-  ) {
-    const hostname = parseHostname(input.bearerHttpBaseUrl);
-    if (hostname !== null && isLoopbackHostname(hostname)) return DESKTOP_SERVICE_EXEC;
+  if (target._tag === "BearerConnectionTarget") {
+    if (
+      input.isDesktopRenderer &&
+      target.environmentId === input.hostEnvironmentId &&
+      input.bearerHttpBaseUrl !== undefined
+    ) {
+      const hostname = parseHostname(input.bearerHttpBaseUrl);
+      if (hostname !== null && isLoopbackHostname(hostname)) return DESKTOP_SERVICE_EXEC;
+    }
+    if (isDesktopLocalConnectionTarget(target)) return LOCAL_EXEC;
   }
 
   if (input.sshTarget !== null && input.sshTarget.alias.length > 0) {

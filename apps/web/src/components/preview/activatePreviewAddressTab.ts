@@ -1,4 +1,5 @@
-import { scopedThreadKey, type ScopedThreadRef } from "@goat/client-runtime/environment";
+import { scopedThreadKey } from "@goat/client-runtime/environment";
+import type { ScopedThreadRef } from "@goat/contracts";
 import { readThreadPreviewState, setActivePreviewTab } from "~/previewStateStore";
 import { useRightPanelStore } from "~/rightPanelStore";
 
