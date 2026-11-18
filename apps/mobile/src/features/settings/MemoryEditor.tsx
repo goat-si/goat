@@ -185,10 +185,9 @@ export function MemoryEditRecovery({
   item: MemoryItem | null;
   canWrite: boolean;
 }) {
-  const message = session.saveStatus && memorySaveMessage[session.saveStatus];
   return (
     <>
-      {message ? <Copy>{message}</Copy> : null}
+      {session.saveMessage ? <Copy>{session.saveMessage}</Copy> : null}
       {session.needsReview && canWrite ? (
         <Action label="Review latest memory" onPress={session.reviewLatest} />
       ) : null}

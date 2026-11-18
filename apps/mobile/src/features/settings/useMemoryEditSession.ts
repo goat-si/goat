@@ -8,6 +8,7 @@ import type {
 } from "@goat/contracts";
 import {
   memoryBodyGap,
+  memorySaveMessage,
   memorySaveNeedsReview,
   type MemoryExposure,
   type MemorySaveStatus,
@@ -100,7 +101,7 @@ export function useMemoryEditSession({
     gap,
     start,
     notice,
-    saveStatus,
+    saveMessage: saveStatus && memorySaveMessage[saveStatus],
     needsReview,
     reviewing,
     reviewLatest() {
