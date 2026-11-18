@@ -29,6 +29,7 @@ const MAX_LOST_TRANSPORT_RESENDS = 2;
 // requests, so a session still current and connected after this grace is a live one whose
 // reply was lost (a frame the client could not parse), and the same command goes again on it.
 const SAME_SESSION_RESEND_GRACE = Duration.seconds(5);
+const MESSAGE_ATTEMPT_WAIT_BOUND_MS = Duration.toMillis(Duration.seconds(60));
 // Past this the person gets the draft back instead of a send that never ends.
 const LOST_MESSAGE_WAIT_BOUND = Duration.minutes(10);
 
@@ -37,9 +38,13 @@ export const dispatchMessage = Effect.fn("EnvironmentCommands.dispatchMessage")(
   command: Extract<OrchestrationV2Command, { type: "message.dispatch" }>,
 ) {
   const supervisor = yield* EnvironmentSupervisor.EnvironmentSupervisor;
+  const unconfirmed = new EnvironmentRpcUnavailableError({
+    environmentId: supervisor.target.environmentId,
+    message: `${supervisor.target.label} did not confirm the message within 10 minutes. It may not have been sent.`,
+  });
   // Pinned: the session the frame went out on is the one a replacement is compared with.
   let attemptSession = Option.none<RpcSession>();
-  const attempt = currentSession().pipe(
+  const send = currentSession().pipe(
     Effect.tap((session) =>
       Effect.sync(() => {
         attemptSession = Option.some(session);
@@ -48,8 +53,10 @@ export const dispatchMessage = Effect.fn("EnvironmentCommands.dispatchMessage")(
     Effect.flatMap((session) =>
       requestInSession(session, ORCHESTRATION_V2_WS_METHODS.dispatchCommand, command),
     ),
+  );
+  const attempt = send.pipe(
     Effect.timeoutOrElse({
-      duration: "60 seconds",
+      duration: Duration.millis(MESSAGE_ATTEMPT_WAIT_BOUND_MS),
       orElse: () =>
         Effect.fail(
           new EnvironmentRpcUnavailableError({
@@ -63,7 +70,19 @@ export const dispatchMessage = Effect.fn("EnvironmentCommands.dispatchMessage")(
   let deadline: number | undefined;
   for (let resends = 0; ; resends += 1) {
     attemptSession = Option.none();
-    const exit = yield* Effect.exit(attempt);
+    const remaining =
+      deadline === undefined ? Infinity : deadline - (yield* Clock.currentTimeMillis);
+    if (remaining <= 0) return yield* unconfirmed;
+    const exit = yield* Effect.exit(
+      remaining <= MESSAGE_ATTEMPT_WAIT_BOUND_MS
+        ? send.pipe(
+            Effect.timeoutOrElse({
+              duration: Duration.millis(remaining),
+              orElse: () => Effect.fail(unconfirmed),
+            }),
+          )
+        : attempt,
+    );
     if (Exit.isSuccess(exit)) return exit.value;
     // Closing the session interrupts the request, which can beat the protocol error.
     const lostTransport =
@@ -103,12 +122,7 @@ export const dispatchMessage = Effect.fn("EnvironmentCommands.dispatchMessage")(
         ),
       ),
     ]).pipe(Effect.timeoutOption(Duration.millis(Math.max(0, deadline - now))));
-    if (Option.isNone(replacement)) {
-      return yield* new EnvironmentRpcUnavailableError({
-        environmentId: supervisor.target.environmentId,
-        message: `${supervisor.target.label} did not confirm the message within 10 minutes. It may not have been sent.`,
-      });
-    }
+    if (Option.isNone(replacement)) return yield* unconfirmed;
     if (Option.isNone(replacement.value)) return yield* exit;
   }
 });

@@ -360,6 +360,69 @@ describe("message dispatch after socket loss", () => {
       }).pipe(Effect.provide(layerTestRandom)),
   );
 
+  it.effect("interrupts a resend still in flight when the ten-minute deadline expires", () =>
+    Effect.gen(function* () {
+      const commands: OrchestrationV2Command[] = [];
+      const supervisor = yield* makeSupervisor(commands);
+      const healthySession = Option.getOrThrow(yield* SubscriptionRef.get(supervisor.session));
+      const firstAttemptLost = yield* Deferred.make<void>();
+      const resendStarted = yield* Deferred.make<void>();
+      const resendEnded = yield* Deferred.make<void>();
+      const lostClient = {
+        ...healthySession.client,
+        [ORCHESTRATION_V2_WS_METHODS.dispatchCommand]: (command: OrchestrationV2Command) =>
+          Effect.gen(function* () {
+            commands.push(command);
+            yield* SubscriptionRef.set(supervisor.session, Option.none());
+            yield* SubscriptionRef.set(supervisor.state, {
+              ...CONNECTED_STATE,
+              phase: "backoff" as const,
+            });
+            yield* Deferred.succeed(firstAttemptLost, undefined);
+            return yield* socketClosed();
+          }),
+      } as unknown as WsRpcProtocolClient;
+      yield* SubscriptionRef.set(
+        supervisor.session,
+        Option.some({ ...healthySession, client: lostClient }),
+      );
+
+      const send = yield* startThreadTurn(message("slow-resend")).pipe(
+        Effect.provideService(EnvironmentSupervisor.EnvironmentSupervisor, supervisor),
+        Effect.forkChild,
+      );
+      yield* Deferred.await(firstAttemptLost);
+      yield* TestClock.adjust("590 seconds");
+      const slowClient = {
+        ...healthySession.client,
+        [ORCHESTRATION_V2_WS_METHODS.dispatchCommand]: (command: OrchestrationV2Command) =>
+          Effect.gen(function* () {
+            commands.push(command);
+            yield* Deferred.succeed(resendStarted, undefined);
+            return yield* Effect.never;
+          }).pipe(Effect.ensuring(Deferred.succeed(resendEnded, undefined))),
+      } as unknown as WsRpcProtocolClient;
+      yield* SubscriptionRef.set(
+        supervisor.session,
+        Option.some({ ...healthySession, client: slowClient }),
+      );
+      yield* Deferred.await(resendStarted);
+      yield* TestClock.adjust("9 seconds");
+      expect(send.pollUnsafe()).toBeUndefined();
+      yield* TestClock.adjust("1 second");
+
+      expect(send.pollUnsafe()).toBeDefined();
+      const error = yield* Fiber.join(send).pipe(Effect.flip);
+      expect(error._tag).toBe("EnvironmentRpcUnavailableError");
+      expect(error.message).toContain("within 10 minutes. It may not have been sent.");
+      yield* Deferred.await(resendEnded);
+      expect(commands.map((command) => command.commandId)).toEqual([
+        "command-slow-resend",
+        "command-slow-resend",
+      ]);
+    }).pipe(Effect.provide(layerTestRandom)),
+  );
+
   it.effect("gives up on a lost message when the connection is blocked", () =>
     Effect.gen(function* () {
       const commands: OrchestrationV2Command[] = [];
