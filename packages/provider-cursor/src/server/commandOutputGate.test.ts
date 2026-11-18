@@ -9,8 +9,8 @@ import { makeCommandOutputGate } from "./commandOutputGate.ts";
 
 const driver = ProviderDriverKind.make("cursor");
 const threadId = ThreadId.make("thread-output-gate");
-const delta = (chunk: string): ProviderAdapter.ProviderAdapterV2Event => ({
-  type: "command_output.delta",
+const delta = (chunk: string) => ({
+  type: "command_output.delta" as const,
   driver,
   threadId,
   itemId: TurnItemId.make("item-output-gate"),
@@ -37,7 +37,7 @@ it.effect("a flood waits for the reader and the count is back at zero after a dr
   Effect.gen(function* () {
     const { queue, gate } = yield* setup;
     const producer = yield* Effect.forEach(["aaaa", "bbbb", "cccc", "dddd"], (chunk) =>
-      gate.offer(queue, delta(chunk), chunk, () => false),
+      gate.offer(queue, delta(chunk), () => false),
     ).pipe(Effect.forkScoped({ startImmediately: true }));
     assert.equal(gate.queued(), 8);
     assert.isUndefined(producer.pollUnsafe());
@@ -58,9 +58,9 @@ it.effect.each(["stop", "close"] as const)(
     Effect.gen(function* () {
       const { queue, gate } = yield* setup;
       let stopped = false;
-      yield* gate.offer(queue, delta("aaaaaaaa"), "aaaaaaaa", () => stopped);
+      yield* gate.offer(queue, delta("aaaaaaaa"), () => stopped);
       const waiting = yield* gate
-        .offer(queue, delta("bbbb"), "bbbb", () => stopped)
+        .offer(queue, delta("bbbb"), () => stopped)
         .pipe(Effect.forkScoped({ startImmediately: true }));
       assert.isUndefined(waiting.pollUnsafe());
       if (how === "stop") {
@@ -78,9 +78,9 @@ it.effect("a waiting delta never reaches the reader after its turn's completion"
   Effect.gen(function* () {
     const { queue, gate } = yield* setup;
     let finalized = false;
-    yield* gate.offer(queue, delta("aaaaaaaa"), "aaaaaaaa", () => finalized);
+    yield* gate.offer(queue, delta("aaaaaaaa"), () => finalized);
     const waiting = yield* gate
-      .offer(queue, delta("late"), "late", () => finalized)
+      .offer(queue, delta("late"), () => finalized)
       .pipe(Effect.forkScoped({ startImmediately: true }));
     finalized = true;
     yield* gate.wakeAll;
@@ -101,10 +101,10 @@ it.effect("a stalled reader bounds the number of tiny deltas independently of th
     const gate = yield* makeCommandOutputGate();
     const event = delta("x");
     for (let index = 0; index < 1024; index++) {
-      yield* gate.offer(queue, event, "x", () => false);
+      yield* gate.offer(queue, event, () => false);
     }
     const producer = yield* gate
-      .offer(queue, event, "x", () => false)
+      .offer(queue, event, () => false)
       .pipe(Effect.forkScoped({ startImmediately: true }));
     assert.equal(yield* Queue.size(queue), 1024);
     assert.isUndefined(producer.pollUnsafe());
@@ -112,4 +112,25 @@ it.effect("a stalled reader bounds the number of tiny deltas independently of th
     yield* Fiber.join(producer);
     assert.equal(yield* Queue.size(queue), 1024);
   }).pipe(Effect.scoped),
+);
+
+it.effect(
+  "bounds an oversized delta to the queue's character budget and charges its queued length",
+  () =>
+    Effect.gen(function* () {
+      const { queue, gate } = yield* setup;
+      const oversized = "prefix:0123456789";
+      assert.isTrue(yield* gate.offer(queue, delta(oversized), () => false));
+      const next = yield* gate
+        .offer(queue, delta("x"), () => false)
+        .pipe(Effect.forkScoped({ startImmediately: true }));
+      assert.isUndefined(next.pollUnsafe());
+      const charged = gate.queued();
+      const event = yield* gate.take(queue);
+      assert.equal(event.type === "command_output.delta" ? event.chunk : null, "0123456789");
+      assert.equal(charged, 10);
+      assert.isTrue(yield* Fiber.join(next));
+      yield* gate.take(queue);
+      assert.equal(gate.queued(), 0);
+    }).pipe(Effect.scoped),
 );

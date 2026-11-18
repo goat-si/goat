@@ -7,6 +7,11 @@ import * as Queue from "effect/Queue";
 const COMMAND_OUTPUT_QUEUE_CHARS = 4 * 1024 * 1024;
 const COMMAND_OUTPUT_QUEUE_EVENTS = 1024;
 
+type CommandOutputDelta = Extract<
+  ProviderAdapter.ProviderAdapterV2Event,
+  { readonly type: "command_output.delta" }
+>;
+
 /**
  * Bounds live command output waiting in an adapter's event queue. A delta past the bound waits
  * until the reader takes earlier output; once its turn stops or the session closes it is dropped,
@@ -24,20 +29,20 @@ export const makeCommandOutputGate = Effect.fnUntraced(function* (
     wake = yield* Deferred.make<void>();
     yield* Deferred.succeed(woken, undefined);
   });
-  const charge = (chunk: string) => Math.min(chunk.length, capacity);
   return {
     queued: () => queued,
     /** Offers the delta once it fits; false when it was dropped because its turn stopped. */
-    offer: Effect.fnUntraced(function* <A>(
-      queue: Queue.Queue<A>,
-      event: A,
-      chunk: string,
+    offer: Effect.fnUntraced(function* (
+      queue: Queue.Queue<ProviderAdapter.ProviderAdapterV2Event>,
+      input: CommandOutputDelta,
       stopped: () => boolean,
     ) {
+      const event =
+        input.chunk.length <= capacity ? input : { ...input, chunk: input.chunk.slice(-capacity) };
       while (true) {
         if (closed || stopped()) return false;
-        if (queuedEvents < COMMAND_OUTPUT_QUEUE_EVENTS && queued + charge(chunk) <= capacity) {
-          queued += charge(chunk);
+        if (queuedEvents < COMMAND_OUTPUT_QUEUE_EVENTS && queued + event.chunk.length <= capacity) {
+          queued += event.chunk.length;
           queuedEvents++;
           yield* Queue.offer(queue, event);
           return true;
@@ -51,7 +56,7 @@ export const makeCommandOutputGate = Effect.fnUntraced(function* (
         Effect.tap((event) =>
           Effect.suspend(() => {
             if (event.type !== "command_output.delta") return Effect.void;
-            queued -= charge(event.chunk);
+            queued -= event.chunk.length;
             queuedEvents--;
             return wakeAll;
           }),

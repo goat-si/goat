@@ -1378,7 +1378,6 @@ export const makeCursorAdapterV2 = Effect.fn("makeCursorAdapterV2")(function* (
                   }),
                   chunk,
                 },
-                chunk,
                 () => context.interrupted || context.finalized,
               );
               return;
