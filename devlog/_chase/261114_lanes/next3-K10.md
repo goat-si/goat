@@ -332,3 +332,27 @@ NOT RUN: goat-ci (the coordinator dispatches it); any real client (P1, the revie
 Rule: do not use git stash; a stash entry of your own is applied by its exact ref after checking its message names your branch, and said in the record; never drop entries that are not yours.
 K10: the fix round used no stash (fail-first runs copied the file to /tmp and back, or mutated and restored with git checkout of that one file). git stash list showed one entry naming this branch: 81c9cb3d8cdc63c3ce797ac8295003e92df017ae, "WIP on chase/t3-261114-next3-k10-web-timeline: c995c5427a ...", made 2026-11-18 06:41 KST in this worktree during goat#3689 (the nine translation catalogs only). Its nine files equal the lane's goat#3689 commit f8478a99ef byte for byte (git diff --stat stash@{0} f8478a99ef empty for de, en, es, fr, ja, ko, pt-BR, ru, zh), so nothing in it was unapplied. I dropped that one entry by exact ref after checking its sha, so no other lane can pop it. The lint-staged automatic backups in the list were not touched.
 
+
+Time correction (lane coordinator, 01:17 UTC): the no-stash rule above was sent at about 00:55-01:16 UTC, not "about 02:00 UTC"; the real send time comes from the thread log. Content stands.
+
+## Coordinator, 2026-11-18 01:14:39 UTC, sections III (K10) and IV, verbatim (relayed)
+
+- K10 at c31dfe1c417595a4460bd7e7ff70509591dc897b: READY read from the record (gate exit 0 on the pushed head). quick 44213593387 dispatched. RULED, the mobile zen finding: upstream's keep list STAYS (no production line), the case pins today's behaviour with its comment; the reviewer checks the premise that under zen every pending approval, question and secret request stays visible and answerable somewhere. Brief next3-K10-fix-c31dfe1c.md.
+
+IV. STANDING RULE, every lane, from now: before READY, every apps/server test file the lane added or changed is run once from apps/server with GOAT_TEST_TMP_GUARD=fail (CI sets it, check:changed does not), and the READY report says so. The ps check in its own step first, as before.
+
+## Coordinator, 2026-11-18 01:17:54 UTC, sections II, V and III, verbatim (relayed 01:18:19 UTC)
+
+II. RULE 3, standing rule extended (beside the 00:35:17 rule), every lane: a VALUE import added to an existing import line of an existing test file needs no word from me when only appended cases or appended helpers use the new names and no existing title, body, setup value or expectation changes. The lane quotes the line before and after in its record; the fresh review lists it. An import that changes what an existing case runs against (a different module, a fake in place of a real service) still comes to me.
+CONFIRMED under it, READ BY ME (git diff against 259883c788): K4's two lines in ThreadSettlementService.cache-test-cases.ts at 197f92c954 ({ expect, it } gains assert; { DEFAULT_SERVER_SETTINGS } gains ThreadId; 104 lines added, 2 removed, the new names used from line 277 on) and K10's one line in threadLineageLookup.test.ts at c31dfe1c41 (the import gains THREAD_LINK_LOOKUP_CACHE; 178 added, 1 removed).
+
+V. The stash incident: closed, noted. "No git stash in any lane" stands as a rule; a lane that needs to set work aside commits it on its own branch locally.
+
+III. K10: the mobile zen decision was ruled in my 01:14:39 message, section III: upstream's keep list STAYS, no production line, the case pins today's behaviour. The fix-delta reviewer checks that every pending approval, question and secret request stays visible and answerable under zen; if one does not, that reopens it. The hand-made scheduleTask with queueMicrotask in the P3-4 case is noted for the reviewer's report.
+
+K10 note under II: the lane's other value-import line of this kind is packages/shared/src/threadLinks.test.ts (the existing import list gains threadLinkIds and threadLinkIdsCacheCharacters, used only by the appended "thread link scan cache" describe; quoted in the fix-round section above).
+
+## Rule IV run on c31dfe1c41 (head unchanged)
+
+ps first in its own step (another lane's vp test, then a typecheck, then a vp test ran; I waited until ps showed none). From apps/server: GOAT_TEST_TMP_GUARD=fail vp test run on every apps/server test file in the lane's diff against c995c5427a: the lane's own ThreadFamilyLookup.auth.test.ts, CodexAdapterV2.messagePhase.test.ts, ThreadFamilyLookup.test.ts, and T1c's two merged files ThreadWorkspaceService.setupLockOrder.test.ts and Manager.leaseOrder.test.ts: 5 files, 50 tests passed, exit 0.
+
