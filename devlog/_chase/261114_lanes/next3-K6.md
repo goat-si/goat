@@ -1182,3 +1182,77 @@ NOT RUN: The 24 browser selectors below and the browser and render projects on t
 NOT RUN: Real web, desktop, iOS and Android client passes, separate old client/server binaries, and an actual downgrade. Client compatibility used missing-capability fixtures.
 
 NOT RUN: GitHub CI, full repo suites, builds, and release smoke. CI remains on integration PR #3700.
+
+
+## K6 fix round 3
+
+b20bbc595d deferred from K6 to the new-range queue/steer lane; reasons:
+
+- Startup recovery strands a promoted Steer.
+- Interrupt-and-restart starts work after the target ends.
+- Re-executing the effect can deliver a message already restored.
+- The mobile outbox loses the target attempt.
+
+K6 head on pen-lidge is `49fc6bd82cf67631afadbbbc92e1ce468ab325b6`.
+
+| Reverted | Revert | Scope |
+| --- | --- | --- |
+| `a8b0e8fd57` | `5f32d624ab97da89cbd97a76ef6e8581336e629a` | Capability and client negotiation across web, desktop's shared web UI, and mobile. |
+| `13d9848acc` | `c60961aa1b1ecb0c08a99933935c8096f4a2d07f` | Bounded deferred Steer subscription and its overflow test. |
+| `b685e2bc0e` | `504d8cc8f3a32d6d78b57fa971dad098702f0deb` | Missed Steer restoration and its effect extraction. Reapplied the pinned-schedule model selection from `0b2415b003` in the restored `EffectWorker.ts:298` handler. |
+| `1a167449d1` | `49fc6bd82cf67631afadbbbc92e1ce468ab325b6` | Deferred attempts, delivery, UI and tests. The shared workflow assertion returns to the pre-port behavior, with the exact title from `fe30ed5f48`. |
+
+K6 retains upstream `beb528ce4d` via `105adb36a6`, the pinned-schedule fix and its tests from `0b2415b003`, round-one commits `6019dd07a3`, `fe4941cfcc` and `f142c36811`, and the title from `fe30ed5f48`. Existing active Steer and Send now remain available under their pre-port rules.
+
+The rollback removes `steerWhenReadyAttemptId`, `setupSteering`, `deferredSteer` and `deferred-steer.restore`. The only origin branch containing the feature commits is K6. Both `origin/dev` at `f155e561a0` and `origin/chase/t3-261114-next3` at `061fd0fee9` exclude the port and none of the 29 origin version tags contains it. Released databases have no writer for those fields. The lane worktree has no persistent test database and the deferred cases ran in a scoped fixture database (`apps/server/src/orchestration-v2/testkit/ProviderReplayHarness.ts:158)). No data migration is needed.
+
+### Rule 3 ruling
+
+Both existing cases use this same assertion block, with the existing wake policies `always` and `settled_only`. A direct comparison found all three assertions identical in each case. The new cancelled-case conditional leaves the completion wake value unchanged for both existing inputs.
+
+Before, `6019dd07a3^`, `DelegatedCompletionDelivery.test.ts:1782` and `:1794`. Title: “delivers a continued review round's result to its parent, wake %s”.
+
+```ts
+assert.deepInclude(round, {
+  role: "review",
+  continuedFrom: child.taskId,
+  status: "completed",
+});
+assert.equal(round.completionDelivery?.state, "claimed");
+assert.equal(next.delegatedCompletion?.parentRunId, parentRunId);
+```
+
+After, `DelegatedReviewCompletion.test.ts:332` and `:344`. Title: “settles a continued review round with delivery %s”.
+
+```ts
+assert.deepInclude(round, {
+  role: "review",
+  continuedFrom: child.taskId,
+  status: "completed",
+});
+assert.equal(round.completionDelivery?.state, "claimed");
+assert.equal(next.delegatedCompletion?.parentRunId, parentRunId);
+```
+
+### Verification
+
+- Guarded server command from `apps/server`: `GOAT_TEST_TMP_GUARD=fail vp test run --maxWorkers=3` with all 13 surviving server test files changed in the lane or restored by the reverts. Exit 0, 13 files and 281 tests passed. Suites were `transferBudgetV2.integration.test.ts`, `ServerEnvironment.test.ts`, `TaskCancelNativeSubagent.integration.test.ts`, `DelegatedCompletionDelivery.test.ts`, `DelegatedReviewCompletion.test.ts`, `ProviderRuntimeRecoveryStreaming.test.ts`, `ScheduledQueuedSelection.integration.test.ts`, `UsageLimitRestart.test.ts`, `WireProjection.test.ts`, `LegacyV1ThreadImporter.test.ts`, `runtimeLayer.dataPlane.test.ts`, `runtimeLayer.test.ts` and `ws.liveProjection.test.ts`.
+- `vp test run --maxWorkers=2` ran the whole `threadOutboxDelivery.permissions.test.ts`, `use-thread-composer-state.redirect.test.ts`, `ChatView.logic.test.ts` and `threadWorkflows.test.ts` files. Exit 0, 4 files and 114 tests passed.
+- Guarded steering and event sink boundary checks passed. `SteeringDeclined.integration.test.ts`, `SteeringCompletion.integration.test.ts`, `ProviderTurnControlService.test.ts` and `EventSink.test.ts` exited 0 with 62 tests. `backgroundSupervision.test.ts` exited 0 with 8 tests.
+- `GOAT_TEST_TMP_GUARD=fail node scripts/check-changed.ts origin/chase/t3-261114-next3` checked 42 changed files from merge base `2c0e0002a9`. The same server-only browser and render exclusions removed five of 572 Vitest selectors. Format, lint, GraphQL generation, both Knip passes, both audits and all 38 package typechecks passed. The gate exited 1 with 566 passed files and one failed file. It reported 7,063 passed tests, three skipped and one failed. The sole failure at `storageCleanupShipping.test.ts:211` had identical reason lines to the round-two integration-baseline run at `6def29ca35` on Git 2.43.0. The test expected “Couldn't refresh origin/main” and received “Default branch is unavailable.” The shipping test and implementation are byte-identical to that baseline.
+- K6 was pushed with an ordinary fast-forward. The remote lane head was verified at `49fc6bd82cf67631afadbbbc92e1ce468ab325b6`.
+
+### NOT RUN
+
+NOT RUN: Server-only gate exclusions and the restored redirect browser suite.
+
+- `apps/web/src/components/ThreadRouteView.browser.test.tsx`
+- `apps/web/src/components/ThreadRouteView.forkFamily.browser.test.tsx`
+- `apps/web/src/components/chat/useQueuedRunEdit.browser.test.tsx`
+- `apps/web/src/components/goatBot/GoatBotChatView.sync.browser.test.tsx`
+- `apps/web/src/components/sidebar/useBotThreadKeys.browser.test.tsx`
+- `apps/web/src/components/chat/useComposerSend.redirect.browser.test.tsx`
+
+NOT RUN: Browser and render projects, real web, desktop, and mobile clients, separate older binaries, and downgrade testing. The reverted mobile setup-Steer browser suite was removed with its feature.
+
+NOT RUN: Lane CI, full CI suites, builds, and release smoke.
