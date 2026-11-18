@@ -1,4 +1,4 @@
-import { persistRevisionMarks } from "../MemoryRevisionMarks.ts";
+import { persistRevisionMarks, recordMemoryOrigin } from "../MemoryRevisionMarks.ts";
 import * as SqlClient from "effect/sql/SqlClient";
 import * as M from "@goat/contracts";
 import * as Effect from "effect/Effect";
@@ -185,11 +185,18 @@ export const makeCheckpoints = (
         const last = pages.at(-1)!;
         const checkpointWatermark = yield* nextWatermark(input.memorySpaceId);
         for (const page of pages) {
-          for (const identity of page.identities)
+          for (const identity of page.identities) {
+            if (identity.origin)
+              yield* recordMemoryOrigin(
+                input.memorySpaceId,
+                identity.memoryId,
+                identity.origin,
+              ).pipe(Effect.provideService(SqlClient.SqlClient, sql));
             yield* stored(
               "checkpoint-identity",
               sql`INSERT INTO memory_identity_ledger (space,memory_id,identity_json,fence_json,reserve_bytes) VALUES (${input.memorySpaceId},${identity.memoryId},${yield* identityCodec.encode(identity)},${yield* fenceCodec.encode(page.fences.find((f) => f.memoryId === identity.memoryId) ?? { memorySpaceId: input.memorySpaceId, memoryId: identity.memoryId, highestFencingToken: 0, activeLease: null })},${M.MEMORY_IDENTITY_CORE_MAX_BYTES}) ON CONFLICT(space,memory_id) DO NOTHING`,
             );
+          }
           for (const fence of page.fences)
             yield* stored(
               "checkpoint-fence",

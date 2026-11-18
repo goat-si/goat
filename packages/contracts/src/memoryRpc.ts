@@ -114,7 +114,7 @@ export const WsMemoryHubDiagnosticsRpc = Rpc.make(MEMORY_WS_METHODS.memoryHubDia
   error: MemoryRpcErrors,
 });
 export const WsMemoryUpsertRpc = Rpc.make(MEMORY_WS_METHODS.memoryUpsert, {
-  payload: Memory.MemoryUpsertInput,
+  payload: Memory.MemoryUpsertRpcInput,
   success: Memory.MemoryMutationReceipt,
   error: MemoryRpcErrors,
 });
@@ -134,7 +134,7 @@ const WsMemorySuggestionsDismissRpc = Rpc.make(MEMORY_WS_METHODS.memorySuggestio
   error: MemoryRpcErrors,
 });
 export const WsMemoryForgetRpc = Rpc.make(MEMORY_WS_METHODS.memoryForget, {
-  payload: Memory.MemoryForgetInput,
+  payload: Memory.MemoryForgetRpcInput,
   success: Memory.MemoryMutationReceipt,
   error: MemoryRpcErrors,
 });

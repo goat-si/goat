@@ -3,13 +3,15 @@ import * as Clock from "effect/Clock";
 import * as Effect from "effect/Effect";
 import * as Schema from "effect/Schema";
 import * as SqlClient from "effect/sql/SqlClient";
+import { validateSummaryDependencies } from "./MemoryDependencies.ts";
 import type { MemoryRefusedSaveHook } from "./MemoryRemember.ts";
 import { redactMemoryText, scanMemoryValue } from "./MemorySecretScanner.ts";
 import type { MemoryAccessError } from "./MemoryService.ts";
 import * as Store from "./MemoryStore.ts";
 import type { makeUpsert } from "./MemoryUpsert.ts";
+import { floorWriteId } from "./store/FloorWrites.ts";
 import { suggestionForgetGeneration } from "./store/SaveSuggestions.ts";
-import { scopeCodec, stored, codec } from "./store/StoreCodecs.ts";
+import { scopeCodec, stored, codec, hubReceiptCodec } from "./store/StoreCodecs.ts";
 
 const revisionsCodec = codec(
   Schema.Array(M.MemoryRevisionId).check(Schema.isMaxLength(M.MEMORY_DERIVED_REVISIONS_MAX)),
@@ -54,7 +56,8 @@ export const makeMemorySaveSuggestions = ({
   const onRefusedSave: MemoryRefusedSaveHook["Service"]["onRefusedSave"] = Effect.fn(
     "MemorySuggestions.onRefusedSave",
   )(function* (candidate, permit) {
-    const { input, thread, reason, knownRevisions, lineageComplete, forgetGeneration } = candidate;
+    const { input, thread, knownRevisions, lineageComplete, forgetGeneration, stagedOperationId } =
+      candidate;
     const {
       memorySpaceId: space,
       memoryId: id,
@@ -62,7 +65,7 @@ export const makeMemorySaveSuggestions = ({
       payload: { text },
     } = input;
     if (
-      reason === "source_invalidated" ||
+      candidate.reason === "source_invalidated" ||
       knownRevisions.length > M.MEMORY_DERIVED_REVISIONS_MAX ||
       scanMemoryValue(text).kind !== "allowed" ||
       redactMemoryText({ text }).text !== text
@@ -77,6 +80,41 @@ export const makeMemorySaveSuggestions = ({
         if ((yield* readGeneration(space)) !== forgetGeneration) return;
         const current = yield* store.loadAggregate(space, id, {}, {});
         if (current.identity || current.tombstone) return;
+        const validOwners = yield* validateSummaryDependencies(
+          space,
+          { ...input.payload, derivedFromMemoryRevisions: knownRevisions },
+          undefined,
+          M.MEMORY_DERIVED_REVISIONS_MAX,
+        ).pipe(
+          Effect.provideService(SqlClient.SqlClient, sql),
+          Effect.as(true),
+          Effect.catchTags({
+            MemoryStoreConflict: (error) =>
+              error.code === "source_invalidated" ? Effect.succeed(false) : Effect.fail(error),
+          }),
+        );
+        if (!validOwners) return;
+        let accepting: M.MemoryOperationId | null = null;
+        let reason: M.MemoryFailureCode = candidate.reason;
+        if (stagedOperationId) {
+          const [row] = yield* stored(
+            "suggestion-original-operation",
+            sql<{ status: string; completed_receipt_json: string | null }>`
+            SELECT status,completed_receipt_json FROM memory_outbox WHERE id=${floorWriteId(space, stagedOperationId)}`,
+          );
+          if (!row || row.status === "cancelled") return;
+          if (row.completed_receipt_json) {
+            const receipt = yield* stored(
+              "suggestion-original-receipt",
+              hubReceiptCodec.decode(row.completed_receipt_json, strict),
+            );
+            if (receipt.outcome !== "rejected" || receipt.failureCode === "source_invalidated")
+              return;
+            reason = receipt.failureCode ?? "invalid_output";
+          } else if (["pending", "retry", "running"].includes(row.status)) {
+            accepting = stagedOperationId;
+          } else return;
+        }
         const now = yield* Clock.currentTimeMillis;
         yield* stored(
           "suggestion-expire-space",
@@ -87,10 +125,13 @@ export const makeMemorySaveSuggestions = ({
           sql`
           INSERT INTO memory_save_suggestions
             (id, space, origin_environment_id, origin_thread_id, text, scope_json, derived_json,
-              lineage_complete, reason, forget_generation, created_at, expires_at)
+              lineage_complete, reason, forget_generation, created_at, expires_at, state, accept_operation_id)
           VALUES (${id},${space},${thread.environmentId},${thread.threadId},${text},${encodedScope},${derived},
-            ${Number(lineageComplete)},${reason},${forgetGeneration},${now},${now + M.MEMORY_SAVE_SUGGESTION_TTL_MS})
-          ON CONFLICT(id) DO NOTHING`,
+            ${Number(lineageComplete)},${reason},${forgetGeneration},${now},${now + M.MEMORY_SAVE_SUGGESTION_TTL_MS},
+            ${accepting ? "accepting" : "pending"},${accepting})
+          ON CONFLICT(id) DO UPDATE SET state='accepting',accept_operation_id=excluded.accept_operation_id,
+            derived_json=excluded.derived_json,lineage_complete=excluded.lineage_complete,reason=excluded.reason
+          WHERE memory_save_suggestions.state='pending' AND excluded.state='accepting'`,
         );
         yield* stored(
           "suggestion-evict",
@@ -227,6 +268,11 @@ export const makeMemorySaveSuggestions = ({
             yield* dismissRow(space, id);
             return { status: "accepted" as const };
           }
+          yield* stored(
+            "suggestion-outbox-fence",
+            sql`UPDATE memory_outbox SET metadata_json=json_set(metadata_json,'$.acceptanceGeneration',${row.forget_generation})
+                WHERE id=${floorWriteId(space, operationId)}`,
+          );
           yield* stored(
             "suggestion-accepting",
             sql`UPDATE memory_save_suggestions

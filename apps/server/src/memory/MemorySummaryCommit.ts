@@ -78,6 +78,7 @@ export const makeCommitSummary = (deps: {
     op: M.MemoryOperation,
     admission: Store.MemoryAdmissionContext,
     permit: Effect.Effect<void>,
+    summaryPrerequisite?: M.MemoryRevisionId,
   ) => Effect.Effect<Store.StoredReceipt, MemoryServiceError>;
   readonly validateDependencies: (
     space: M.MemorySpaceId,
@@ -99,6 +100,7 @@ export const makeCommitSummary = (deps: {
     commit: SummaryCommit,
     summaryRevision: M.MemoryRevisionId,
     summaryDependencies: ReadonlyArray<M.MemoryRevisionId>,
+    staged = false,
   ) {
     const promotions = commit.promotions;
     const meta = commit.work.metadata;
@@ -153,7 +155,7 @@ export const makeCommitSummary = (deps: {
           (owner?.environmentId !== thread.environmentId || owner.threadId !== thread.threadId)
         )
           return;
-        if (!(yield* store.areAutomaticallyUsable(space, [summaryRevision]))) return;
+        if (!staged && !(yield* store.areAutomaticallyUsable(space, [summaryRevision]))) return;
         if (head && !promotions.replace) return;
         const dependencies = [...new Set([summaryRevision, ...summaryDependencies])];
         yield* requireClosureCapacity(
@@ -170,11 +172,17 @@ export const makeCommitSummary = (deps: {
             strict,
           ),
         );
-        yield* deps.validateDependencies(space, payload);
+        yield* deps.validateDependencies(
+          space,
+          staged ? { ...payload, derivedFromMemoryRevisions: summaryDependencies } : payload,
+        );
         yield* apply(
           {
             protocolVersion: 1,
             kind: "upsert",
+            ...(dependencies.length > M.MEMORY_DERIVED_REVISIONS_MAX_V1
+              ? { closedLineage: true as const }
+              : {}),
             memorySpaceId: space,
             memoryId,
             operationId,
@@ -204,6 +212,7 @@ export const makeCommitSummary = (deps: {
           },
           Store.localIntent,
           Effect.void,
+          staged ? summaryRevision : undefined,
         );
       });
       // Inside the summary's transaction this is a savepoint: a refused promotion rolls back alone.
@@ -310,6 +319,9 @@ export const makeCommitSummary = (deps: {
           {
             protocolVersion: 1,
             kind: "upsert",
+            ...(dependencies.length > M.MEMORY_DERIVED_REVISIONS_MAX_V1
+              ? { closedLineage: true as const }
+              : {}),
             memorySpaceId: space,
             memoryId,
             operationId: meta.operationId,
@@ -340,7 +352,11 @@ export const makeCommitSummary = (deps: {
           Store.localIntent,
           Effect.void,
         );
-        yield* promote(input, meta.revisionId, payload.derivedFromMemoryRevisions);
+        const staged =
+          "pendingSync" in receipt.receipt &&
+          receipt.receipt.pendingSync &&
+          receipt.receipt.revisionId === null;
+        yield* promote(input, meta.revisionId, payload.derivedFromMemoryRevisions, staged);
         if (!(yield* store.completeSummaryWork(work)))
           return yield* new Store.MemoryStoreConflict({ code: "attempt_expired" });
         return receipt;

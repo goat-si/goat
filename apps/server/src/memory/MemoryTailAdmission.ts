@@ -60,3 +60,16 @@ export const requireMemoryTailFit = Effect.fn("MemoryService.requireTailFit")(
       ),
   }),
 );
+
+export const projectPushReceipt = (
+  receipt: M.MemoryHubReceipt,
+  features?: readonly M.MemoryFloor2Feature[],
+) => {
+  if (M.supportsMemoryFloor2(features)) return receipt;
+  const { capacity, ...rest } = receipt;
+  if (capacity?.dimension === "payload_bytes")
+    return { ...rest, failureCode: "payload_too_large" as const };
+  if (capacity?.dimension === "dependencies")
+    return { ...rest, failureCode: "invalid_output" as const };
+  return receipt;
+};

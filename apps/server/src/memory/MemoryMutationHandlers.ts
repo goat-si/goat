@@ -1,12 +1,13 @@
 import {
   WS_METHODS,
   MemoryMutationReceipt,
-  type MemoryUpsertInput,
-  type MemoryForgetInput,
+  MemoryRpcError,
+  type MemoryUpsertRpcInput,
+  type MemoryForgetRpcInput,
   type MemorySuggestionActionInput,
   type MemorySuggestionsInput,
 } from "@goat/contracts";
-import { memoryError } from "../mcp/toolkits/memory/handlers.ts";
+import { memoryError, memoryLegacyError } from "../mcp/toolkits/memory/handlers.ts";
 import * as Effect from "effect/Effect";
 import { canResolveHumanStep, sessionResolver } from "../handoffs/HumanStepAuthority.ts";
 import { MemoryAccessError, type MemoryService } from "./MemoryService.ts";
@@ -22,6 +23,15 @@ const personMemorySuggestionPermit = (
 
 const decodeReceipt = Schema.decodeUnknownEffect(MemoryMutationReceipt);
 
+const legacyReceipt = (receipt: typeof MemoryMutationReceipt.Type) => {
+  const { capacity, failureCode, ...rest } = receipt;
+  if (!failureCode) return receipt;
+  const legacy = memoryLegacyError(
+    new MemoryRpcError({ code: failureCode, ...(capacity ? { capacity } : {}) }),
+  );
+  return legacy.code === failureCode ? receipt : { ...rest, failureCode: legacy.code };
+};
+
 export const makeMemoryMutationHandlers = (
   memory: MemoryService["Service"],
   session: Parameters<typeof sessionResolver>[0],
@@ -31,15 +41,23 @@ export const makeMemoryMutationHandlers = (
   const readPermit = personMemorySuggestionPermit(session, read);
   const writePermit = personMemorySuggestionPermit(session, write);
   return {
-    [WS_METHODS.memoryUpsert]: (input: MemoryUpsertInput) =>
+    [WS_METHODS.memoryUpsert]: ({
+      includeFailureDetails,
+      ...input
+    }: typeof MemoryUpsertRpcInput.Type) =>
       memory.upsert(input, write).pipe(
         Effect.flatMap((stored) => decodeReceipt(stored.receipt)),
-        Effect.mapError(memoryError),
+        Effect.map(includeFailureDetails ? (receipt) => receipt : legacyReceipt),
+        Effect.mapError(includeFailureDetails ? memoryError : memoryLegacyError),
       ),
-    [WS_METHODS.memoryForget]: (input: MemoryForgetInput) =>
+    [WS_METHODS.memoryForget]: ({
+      includeFailureDetails,
+      ...input
+    }: typeof MemoryForgetRpcInput.Type) =>
       memory.forget(input, write).pipe(
         Effect.flatMap((stored) => decodeReceipt(stored.receipt)),
-        Effect.mapError(memoryError),
+        Effect.map(includeFailureDetails ? (receipt) => receipt : legacyReceipt),
+        Effect.mapError(includeFailureDetails ? memoryError : memoryLegacyError),
       ),
     [WS_METHODS.memorySuggestionsList]: (input: MemorySuggestionsInput) =>
       memory.listSuggestions(input, readPermit).pipe(Effect.mapError(memoryError)),
