@@ -1,6 +1,7 @@
 import { assert, describe, it } from "@effect/vitest";
 import type { PenSnapshot, PenWatchStale } from "@goat/pen-protocol/snapshot";
 import type { PenMembershipView } from "@goat/ssh/penMembershipWatch";
+import * as Deferred from "effect/Deferred";
 import * as Effect from "effect/Effect";
 import * as Fiber from "effect/Fiber";
 import * as Stream from "effect/Stream";
@@ -81,6 +82,30 @@ describe("PenMembershipWatch", () => {
       h.watches[1]?.onStale("connect");
       yield* TestClock.adjust(0);
       assert.deepEqual(yield* h.watch.current, { kind: "not-member" });
+    }).pipe(Effect.scoped),
+  );
+
+  it.effect("a reader that falls behind gets the newest view, never a backlog", () =>
+    Effect.gen(function* () {
+      const h = yield* harness;
+      const gate = yield* Deferred.make<void>();
+      const reader = yield* h.watch.changes.pipe(
+        Stream.mapEffect((view) => Deferred.await(gate).pipe(Effect.as(view))),
+        Stream.take(2),
+        Stream.runCollect,
+        Effect.forkChild,
+      );
+      yield* TestClock.adjust(0);
+      // The reader is held on its first view while three more arrive.
+      for (const letters of [["a"], ["a", "b"], ["a", "b", "c"]]) {
+        h.watches[0]?.onSnapshot(snapshot(letters.length, ...letters));
+        yield* TestClock.adjust(0);
+      }
+      yield* Deferred.succeed(gate, undefined);
+      assert.deepEqual(kinds([...(yield* Fiber.join(reader))]), [
+        "unavailable",
+        "box-s,box-a,box-b,box-c",
+      ]);
     }).pipe(Effect.scoped),
   );
 

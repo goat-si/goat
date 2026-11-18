@@ -11,7 +11,7 @@ import * as Effect from "effect/Effect";
 import * as FileSystem from "effect/FileSystem";
 import * as Layer from "effect/Layer";
 import * as Stream from "effect/Stream";
-import * as SubscriptionRef from "effect/SubscriptionRef";
+import * as PubSub from "effect/PubSub";
 
 /**
  * This server's one watch on its local Pen membership, shared by everything that follows it, so
@@ -30,17 +30,19 @@ export class PenMembershipWatch extends Context.Service<
 
 export const make = Effect.fn("PenMembershipWatch.make")(function* (source: PenMembershipSource) {
   let current: PenMembershipView = { kind: "unavailable", reason: "stale" };
-  const published = yield* SubscriptionRef.make<PenMembershipView>(current);
+  // One view per reader, newest wins: a reader that falls behind never holds a backlog.
+  const published = yield* PubSub.sliding<PenMembershipView>({ capacity: 1, replay: 1 });
+  yield* PubSub.publish(published, current);
   yield* followPenMembership(
     source,
     (view) => {
       current = view;
     },
-    (view) => SubscriptionRef.set(published, view),
+    (view) => PubSub.publish(published, view).pipe(Effect.asVoid),
   ).pipe(Effect.forkScoped);
   return PenMembershipWatch.of({
     current: Effect.sync(() => current),
-    changes: SubscriptionRef.changes(published),
+    changes: Stream.fromPubSub(published),
   });
 });
 
