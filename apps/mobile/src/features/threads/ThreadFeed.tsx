@@ -157,7 +157,11 @@ import {
 } from "../../native/SelectableMarkdownText";
 
 import { AppText as Text } from "../../components/ui/AppText";
-import { ThreadFeedLoadEarlierControl } from "./ThreadFeedLoadEarlierControl";
+import {
+  ThreadFeedLoadEarlierControl,
+  type ThreadFeedHistoryControls,
+} from "./ThreadFeedLoadEarlierControl";
+export type { ThreadFeedHistoryControls } from "./ThreadFeedLoadEarlierControl";
 import { ThreadFeedPlaceholder } from "./ThreadFeedPlaceholder";
 import { ThreadFeedReplyProbe } from "./ThreadFeedReplyProbe";
 import { VideoPreviewModal, type VideoPreviewSource } from "../../components/VideoPreviewModal";
@@ -296,16 +300,6 @@ const FRESH_ENTRY_WINDOW_MS = 3_000;
 function isFreshTimestamp(input: string): boolean {
   const timestamp = Date.parse(input);
   return Number.isFinite(timestamp) && Date.now() - timestamp < FRESH_ENTRY_WINDOW_MS;
-}
-
-export interface ThreadFeedHistoryControls {
-  readonly hasMoreHistory: boolean;
-  readonly loading: boolean;
-  readonly error: string | null;
-  readonly onLoadEarlier: () => void;
-  /** Loads earlier history down to the entry, in one request. */
-  /** Resolves whether that load brought history in; a failure ends a message jump. */
-  readonly onLoadThrough: (entryId: string) => Promise<boolean>;
 }
 
 export interface ThreadFeedHandle {

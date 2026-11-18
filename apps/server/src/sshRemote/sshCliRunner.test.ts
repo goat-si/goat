@@ -14,3 +14,23 @@ it.effect("the server runner names its own build as its own runtime version", ()
     assert.equal(runner.archiveVersion, packageJson.version);
   }),
 );
+
+it.effect("uses the serving client's own assets only for bundled SSH archives", () =>
+  Effect.gen(function* () {
+    for (const bundled of [false, true]) {
+      const environment = bundled
+        ? { GOAT_SSH_BUNDLED_RUNTIME_ARCHIVE_DIR: "/fixture/bundle" }
+        : {};
+      const runner = yield* resolveSshCliRunner("/fixture/home", "/fixture/client").pipe(
+        Effect.provideService(
+          ConfigProvider.ConfigProvider,
+          ConfigProvider.fromEnvRecord(environment),
+        ),
+      );
+      assert.equal(
+        runner.bundledFontAssetDirectory,
+        bundled ? "/fixture/client/assets" : undefined,
+      );
+    }
+  }),
+);

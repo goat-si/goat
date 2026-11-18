@@ -22,7 +22,7 @@ export const resolveDesktopSshCliRunner = (
   >,
   archiveOptions: Pick<
     RemoteGoatRunnerOptions,
-    "archiveDirectory" | "bundledArchiveDirectory" | "releaseBaseUrl"
+    "archiveDirectory" | "bundledArchiveDirectory" | "bundledFontAssetDirectory" | "releaseBaseUrl"
   >,
   serverPackage: { readonly version: string; readonly engines: { readonly node: string } },
   buildCommitTime?: number,

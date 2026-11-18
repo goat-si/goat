@@ -306,6 +306,7 @@ export const ExecutionEnvironmentCapabilities = Schema.Struct({
   slackChannelAccess: Schema.optionalKey(Schema.Boolean),
   /** Publishes a pull request refresh when linked-thread answers change; older servers need polling. */
   linkedThreadRefreshes: Schema.optionalKey(Schema.Boolean),
+  revisionBoundPullRequestReviews: Schema.optionalKey(Schema.Boolean),
 });
 export type ExecutionEnvironmentCapabilities = typeof ExecutionEnvironmentCapabilities.Type;
 
