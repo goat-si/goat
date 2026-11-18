@@ -1659,7 +1659,12 @@ const make = Effect.gen(function* () {
                   force: reveal === true,
                 }),
               );
-              shown = awaitRevealedViewer(tab, reveal, deadlineMs);
+              shown = awaitRevealedViewer(tab, reveal, deadlineMs, (timeout) =>
+                desktopChannel.awaitShown && desktopChannel.isShown?.(tab) === false
+                  ? runPromise(desktopChannel.awaitShown(tab, timeout), { signal: actionSignal })
+                  : Promise.resolve(false),
+              );
+              void shown.catch(constVoid);
             }
             await checkOpenBlocked(
               () => blockedTabs.assertTab(tab, request.runId, url),
