@@ -95,7 +95,7 @@ export function runtimeArchiveUploadScript(
     }
     installer = installer.replace(
       anchor,
-      () => `  if ! (
+      () => `  if [ -n "${"$"}{GOAT_SSH_UPLOADED_FONTS:-}" ] && ! (
     set -e
     assets="$GOAT_STAGING/client/assets"
     [ -d "$assets" ] && [ ! -L "$GOAT_STAGING/client" ] && [ ! -L "$assets" ] || exit 1
@@ -116,7 +116,11 @@ ${anchor}`,
     ? `cat > "$archive" || :
 [ "$(wc -c < "$archive")" -ge ${fonts.archiveBytes} ]
 export GOAT_SSH_UPLOADED_FONTS="$upload_dir/fonts.tar.gz"
-tail -c +${fonts.archiveBytes + 1} "$archive" > "$GOAT_SSH_UPLOADED_FONTS" || :
+if ! tail -c +${fonts.archiveBytes + 1} "$archive" > "$GOAT_SSH_UPLOADED_FONTS"; then
+  rm -f "$GOAT_SSH_UPLOADED_FONTS" || :
+  unset GOAT_SSH_UPLOADED_FONTS
+  printf '%s\\n' 'Could not split optional SSH runtime fonts.' >&2
+fi
 dd bs=1 seek=${fonts.archiveBytes} count=0 of="$archive" 2>/dev/null`
     : 'cat > "$archive"';
   return `set -eu

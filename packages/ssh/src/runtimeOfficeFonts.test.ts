@@ -8,9 +8,10 @@ import * as FileSystem from "effect/FileSystem";
 import * as Hex from "effect/encoding/Hex";
 import * as Layer from "effect/Layer";
 import * as Path from "effect/Path";
+import * as Stream from "effect/Stream";
 import { ChildProcess, ChildProcessSpawner } from "effect/process";
 
-import { readBundledOfficeFonts } from "./runtimeOfficeFonts.ts";
+import { readBundledOfficeFonts, runtimeArchiveUploadScript } from "./runtimeOfficeFonts.ts";
 
 describe.skipIf(HostProcess.Platform.defaultValue() === "win32")("bundled font inputs", () => {
   it.effect.each([
@@ -69,3 +70,41 @@ describe.skipIf(HostProcess.Platform.defaultValue() === "win32")("bundled font i
     }).pipe(Effect.provide(Layer.mergeAll(NodeServices.layer, NodeCrypto.layer)), Effect.scoped),
   );
 });
+
+it.live.skipIf(HostProcess.Platform.defaultValue() === "win32")(
+  "discards failed font split output before starting the runtime installer",
+  () =>
+    Effect.gen(function* () {
+      const fs = yield* FileSystem.FileSystem;
+      const path = yield* Path.Path;
+      const spawner = yield* ChildProcessSpawner.ChildProcessSpawner;
+      const home = yield* fs.makeTempDirectoryScoped({ prefix: "goat-ssh-font-split-" });
+      const bin = path.join(home, "bin");
+      yield* fs.makeDirectory(bin);
+      yield* fs.writeFileString(path.join(bin, "tail"), "#!/bin/sh\nprintf partial\nexit 1\n", {
+        mode: 0o700,
+      });
+      const installer = `set -eu
+archive="$GOAT_SSH_UPLOADED_ARCHIVE"
+[ "$(cat "$archive")" = "runtime" ]
+[ ! -e "${"$"}{archive%/*}/fonts.tar.gz" ] || { printf 'partial font output survived\\n'; exit 31; }
+GOAT_STAGING="$HOME/staging"
+GOAT_ARCHIVE="fixture.tar.gz"
+  rm -f "$GOAT_STAGING/$GOAT_ARCHIVE" "$GOAT_STAGING/SHA256SUMS"
+printf 'install completed\\n'
+`;
+      const script = runtimeArchiveUploadScript(installer, "bundle", {
+        archiveBytes: "runtime".length,
+        sha256: "0".repeat(64),
+      });
+      const child = yield* spawner.spawn(
+        ChildProcess.make("/bin/sh", ["-c", script], {
+          env: { HOME: home, PATH: `${bin}:/usr/bin:/bin` },
+          stdin: { stream: Stream.make(new TextEncoder().encode("runtimefont")), endOnDone: true },
+        }),
+      );
+      const stdout = yield* child.stdout.pipe(Stream.decodeText(), Stream.mkString);
+      assert.equal(Number(yield* child.exitCode), 0, stdout.trim());
+      assert.equal(stdout, "install completed\n");
+    }).pipe(Effect.provide(NodeServices.layer), Effect.scoped),
+);
