@@ -3,6 +3,10 @@
   "private": true,
   "type": "module",
   "exports": {
+    "./memoryGenerationCapabilities": {
+      "types": "./src/memoryGenerationCapabilities.ts",
+      "import": "./src/memoryGenerationCapabilities.ts"
+    },
     "./forkInScope": {
       "types": "./src/forkInScope.ts",
       "import": "./src/forkInScope.ts"

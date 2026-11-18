@@ -117,7 +117,6 @@ export interface GitRemoteStatusDetails {
   behindCount: number;
   aheadOfDefaultCount: number;
 }
-
 export interface GitPreparedCommitContext {
   stagedSummary: string;
   stagedPatch: string;
@@ -133,7 +132,6 @@ export interface ExecuteGitProgress {
     durationMs: number | null;
   }) => Effect.Effect<void, never>;
 }
-
 export interface CreateWorktreeProgress {
   /** Git refuses existing paths; claimed paths belong to this call and can be removed on cancel. */
   readonly onWorktreeOwnership?: (ownership: WorktreePreparationOwnership) => Effect.Effect<void>;
@@ -202,7 +200,6 @@ export interface CreateWorktreeOptions {
    */
   readonly skipSetupHook?: boolean;
 }
-
 export interface GitCommitProgress {
   readonly onOutputLine?: (input: {
     stream: "stdout" | "stderr";

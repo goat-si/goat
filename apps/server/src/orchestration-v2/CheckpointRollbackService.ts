@@ -3,6 +3,7 @@ import { restartRequiredIn } from "./ProviderSessionRetirement.ts";
 import {
   CheckpointId,
   CheckpointScopeId,
+  type GitCommandError,
   latestProviderTurnForAttempt,
   type OrchestrationV2DomainEvent,
   ProviderThreadId,

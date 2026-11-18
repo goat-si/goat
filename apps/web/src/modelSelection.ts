@@ -1,7 +1,6 @@
 import { resolveModelShortName } from "@goat/client-runtime/model-short-name";
 import {
   DEFAULT_TEXT_GENERATION_MODEL,
-  DEFAULT_TEXT_GENERATION_MODEL_BY_PROVIDER,
   defaultInstanceIdForDriver,
   type ModelSelection,
   type ProjectId,
@@ -19,7 +18,7 @@ import {
 } from "@goat/shared/model";
 import { getComposerProviderState } from "./components/chat/composerProviderState";
 import { type ClientSettings, UnifiedSettings } from "@goat/contracts/settings";
-import { resolveModelPreferences } from "@goat/shared/serverSettings";
+import { resolveModelPreferences, resolveTextGenerationRoute } from "@goat/shared/serverSettings";
 import * as Arr from "effect/Array";
 import * as Equal from "effect/Equal";
 import * as Result from "effect/Result";
@@ -419,54 +418,35 @@ export function selectsPlanAgent(options: ModelSelection["options"]): boolean {
 export function resolveAppModelSelectionState(
   settings: UnifiedSettings,
   providers: ReadonlyArray<ServerProvider>,
+  projectId: ProjectId | null = null,
+  now: number = Date.now(),
 ): ModelSelection {
   const selection = settings.textGenerationModelSelection ?? {
     instanceId: DEFAULT_TEXT_GENERATION_INSTANCE_ID,
     model: DEFAULT_TEXT_GENERATION_MODEL,
   };
+  const route = resolveTextGenerationRoute(settings, selection, providers, projectId, now);
+  if (route.reason === "no_fallback") return NO_PROVIDER_MODEL_SELECTION;
+  const { instanceId, model, options } = route.selection;
   if (
-    Object.hasOwn(settings.textGenerators, selection.instanceId) &&
-    settings.textGenerators[selection.instanceId]?.enabled === true
-  )
-    return selection;
-  const supportedProviders = providers.filter(
-    (provider) => provider.supportsTextGeneration !== false,
-  );
-  const entries = deriveProviderInstanceEntries(supportedProviders);
-  const selectedEntry = entries.find(
-    (entry) => entry.instanceId === selection.instanceId && entry.enabled && entry.isAvailable,
-  );
-  const entry =
-    selectedEntry ?? entries.find((candidate) => candidate.enabled && candidate.isAvailable);
-  if (entry) {
-    const selectedModel = selectedEntry ? selection.model : null;
-    // Use the cheap generation default; the catalog default is the expensive chat flagship.
-    const options = getTextGenerationModelOptionsForInstance(settings, entry);
-    const model =
-      resolveSelectableModel(entry.driverKind, selectedModel, options) ??
-      resolveSelectableModel(
-        entry.driverKind,
-        DEFAULT_TEXT_GENERATION_MODEL_BY_PROVIDER[entry.driverKind],
-        options,
-      ) ??
-      options.find((option) => option.isDefault)?.slug ??
-      options[0]?.slug ??
-      entry.models.find((model) => model.supportsTextGeneration !== false)?.slug ??
-      DEFAULT_TEXT_GENERATION_MODEL_BY_PROVIDER[entry.driverKind];
-    if (!model) {
-      return createModelSelection(entry.instanceId, "", []);
-    }
-    const provider = entry.driverKind;
-    const { modelOptionsForDispatch } = getComposerProviderState({
-      provider,
-      model,
-      models: entry.models,
-      modelOptions: selectedEntry ? selection.options : undefined,
-      planModeEnabled: settings.planModeEnabled || selectsPlanAgent(selection.options),
-    });
-
-    return createModelSelection(entry.instanceId, model, modelOptionsForDispatch);
+    Object.hasOwn(settings.textGenerators, instanceId) &&
+    settings.textGenerators[instanceId]?.enabled === true
+  ) {
+    return route.selection;
   }
+  const entry = deriveProviderInstanceEntries(providers).find(
+    (candidate) => candidate.instanceId === instanceId,
+  );
+  if (!entry) return NO_PROVIDER_MODEL_SELECTION;
 
-  return NO_PROVIDER_MODEL_SELECTION;
+  if (!model) return createModelSelection(instanceId, "");
+
+  const { modelOptionsForDispatch } = getComposerProviderState({
+    provider: entry.driverKind,
+    model,
+    models: entry.models,
+    modelOptions: options,
+    planModeEnabled: settings.planModeEnabled || selectsPlanAgent(selection.options),
+  });
+  return createModelSelection(instanceId, model, modelOptionsForDispatch);
 }

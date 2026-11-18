@@ -42,7 +42,6 @@ import {
   type VcsStatusRemoteResult,
   VcsStatusResult,
   ModelSelection,
-  type OrchestrationV2TurnItem,
   type ProjectId,
   SourceControlProviderError,
   type SourceControlWritingStyleSettings,
@@ -73,6 +72,7 @@ import {
   selectHistory,
 } from "@goat/provider-core/server/handoffBudget";
 import * as TextGeneration from "../textGeneration/TextGeneration.ts";
+import { limitCommandOutput, limitContext } from "./promptContextLimits.ts";
 import {
   conventionalCommitsTextGenerationPolicy,
   customTextGenerationPolicy,
@@ -134,6 +134,7 @@ export type GitBranchPullRequest = NonNullable<VcsStatusResult["pr"]> & {
 interface SourceControlTextGenerationSettings {
   readonly modelSelection: ModelSelection;
   readonly style: SourceControlWritingStyleSettings;
+  readonly projectId: ProjectId | null;
 }
 
 export class GitManager extends Context.Service<
@@ -200,7 +201,6 @@ const PR_LOOKUP_NO_OPEN_PR_CACHE_TTL = Duration.minutes(5);
 const PR_LOOKUP_CACHE_CAPACITY = 2_048;
 const BRANCH_PR_LOOKUP_CONCURRENCY = 4;
 const PR_THREAD_CONTEXT_BYTES = 16_000;
-const PR_THREAD_COMMAND_OUTPUT_CHARS = 2_000;
 const isSourceControlProviderError = Schema.is(SourceControlProviderError);
 
 type StripProgressContext<T> = T extends any ? Omit<T, "actionId" | "cwd" | "action"> : never;
@@ -306,18 +306,6 @@ function toPullRequestInfo(summary: ChangeRequest): PullRequestInfo {
       ? { headRepositoryOwnerLogin: summary.headRepositoryOwnerLogin }
       : {}),
   };
-}
-
-function limitContext(value: string, maxChars: number): string {
-  if (value.length <= maxChars) return value;
-  return `${value.slice(0, maxChars)}\n\n[truncated]`;
-}
-
-// Preserve command evidence when selectHistory drops oversized items; test verdicts are at the tail.
-function limitCommandOutput(item: OrchestrationV2TurnItem): OrchestrationV2TurnItem {
-  if (item.type !== "command_execution" || item.output === undefined) return item;
-  if (item.output.length <= PR_THREAD_COMMAND_OUTPUT_CHARS) return item;
-  return { ...item, output: `[truncated]\n${item.output.slice(-PR_THREAD_COMMAND_OUTPUT_CHARS)}` };
 }
 
 function headBranchProbe(
@@ -1872,7 +1860,10 @@ export const make = Effect.gen(function* () {
           ...(policy ? { policy } : {}),
           modelSelection: input.settings.modelSelection,
         })
-        .pipe(Effect.map((result) => sanitizeCommitMessage(result)));
+        .pipe(
+          Effect.provideService(TextGeneration.TextGenerationProject, input.settings.projectId),
+          Effect.map((result) => sanitizeCommitMessage(result)),
+        );
 
       return {
         subject: generated.subject,
@@ -2090,18 +2081,20 @@ export const make = Effect.gen(function* () {
         : undefined;
     const threadContext = yield* readThreadContext(threadId);
 
-    const generated = yield* textGeneration.generatePrContent({
-      cwd,
-      baseBranch,
-      headBranch: headContext.headBranch,
-      commitSummary: limitContext(rangeContext.commitSummary, 20_000),
-      diffSummary: limitContext(rangeContext.diffSummary, 20_000),
-      diffPatch: limitContext(rangeContext.diffPatch, 60_000),
-      ...(changeRequestTemplate ? { changeRequestTemplate } : {}),
-      ...(threadContext ? { threadContext } : {}),
-      ...(policy ? { policy } : {}),
-      modelSelection: settings.modelSelection,
-    });
+    const generated = yield* textGeneration
+      .generatePrContent({
+        cwd,
+        baseBranch,
+        headBranch: headContext.headBranch,
+        commitSummary: limitContext(rangeContext.commitSummary, 20_000),
+        diffSummary: limitContext(rangeContext.diffSummary, 20_000),
+        diffPatch: limitContext(rangeContext.diffPatch, 60_000),
+        ...(changeRequestTemplate ? { changeRequestTemplate } : {}),
+        ...(threadContext ? { threadContext } : {}),
+        ...(policy ? { policy } : {}),
+        modelSelection: settings.modelSelection,
+      })
+      .pipe(Effect.provideService(TextGeneration.TextGenerationProject, settings.projectId));
 
     const bodyFile = path.join(
       tempDir,
@@ -2876,6 +2869,7 @@ export const make = Effect.gen(function* () {
               ? Effect.succeed({
                   modelSelection: settings.textGenerationModelSelection,
                   style: settings.sourceControlWritingStyle,
+                  projectId,
                 })
               : providerRegistry.getProviders.pipe(
                   Effect.map((providers) => ({
@@ -2885,6 +2879,7 @@ export const make = Effect.gen(function* () {
                       projectId,
                     ),
                     style: settings.sourceControlWritingStyle,
+                    projectId,
                   })),
                 ),
           ),

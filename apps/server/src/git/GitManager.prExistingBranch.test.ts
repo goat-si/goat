@@ -1,3 +1,4 @@
+import { GitVcsDriver } from "../vcs/GitVcsDriver.ts";
 import { ThreadId } from "@goat/contracts";
 // @effect-diagnostics nodeBuiltinImport:off
 import * as NodeFS from "node:fs";
@@ -82,6 +83,7 @@ it.layer(layerGitManagerTest)("GitManager existing PR branches", (it) => {
             { mode: 0o755 },
           );
         }
+        const git = yield* GitVcsDriver;
         let setups = 0;
         const { manager } = yield* makeManager({
           setupScriptRunner: {
@@ -94,7 +96,7 @@ it.layer(layerGitManagerTest)("GitManager existing PR branches", (it) => {
                   );
                 }
                 return { status: "no-script" as const };
-              }),
+              }).pipe(Effect.provideService(GitVcsDriver, git)),
           },
           providerScenario: {
             pullRequest: {

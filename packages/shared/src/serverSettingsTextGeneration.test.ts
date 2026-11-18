@@ -46,20 +46,80 @@ const piProvider = (model: Partial<ServerProviderModel>) =>
     skills: [],
   }) satisfies ServerProvider;
 
-it.each([
-  ["writer", resolveSourceControlWriterModelSelection],
-  ["review guide", resolveReviewGuideModelSelection],
-  [
-    "memory",
-    (input: typeof settings, providers: ReadonlyArray<ServerProvider>) =>
-      resolveMemoryModelSelection(input, providers),
-  ],
-] as const)(
-  "the %s selection skips a model its provider cannot use for text generation, and keeps it when an older server omits the flag",
-  (_label, resolve) => {
-    expect(resolve(settings, [piProvider({ supportsTextGeneration: false })], null)).toEqual(
-      settings.textGenerationModelSelection,
-    );
-    expect(resolve(settings, [piProvider({})], null)).toEqual(extensionModel);
+it("the writer skips a session-only model and accepts an older snapshot without a capability flag", () => {
+  expect(
+    resolveSourceControlWriterModelSelection(
+      settings,
+      [piProvider({ supportsTextGeneration: false })],
+      null,
+    ),
+  ).toEqual(settings.textGenerationModelSelection);
+  expect(resolveSourceControlWriterModelSelection(settings, [piProvider({})], null)).toEqual(
+    extensionModel,
+  );
+});
+
+it("legacy Pi snapshots are ineligible for memory and guides", () => {
+  const capable = [piProvider({})];
+  expect(resolveMemoryModelSelection(settings, capable, 0)).toBeNull();
+  expect(resolveReviewGuideModelSelection(settings, capable, null, 0)).toBeNull();
+});
+
+it.each([{ modelRoute: "opencodex" }, { serverUrl: "https://opencode.example" }])(
+  "legacy OpenCode snapshots use the configured route %j for both memory operations",
+  (config) => {
+    const openCode = createModelSelection(ProviderInstanceId.make("opencode"), "openai/gpt-5");
+    const codex = settings.textGenerationModelSelection;
+    const snapshots = [
+      {
+        ...piProvider({}),
+        instanceId: openCode.instanceId,
+        driver: ProviderDriverKind.make("opencode"),
+        models: [],
+      },
+      {
+        ...piProvider({}),
+        instanceId: codex.instanceId,
+        driver: ProviderDriverKind.make("codex"),
+        models: [],
+      },
+    ];
+    const configured = {
+      ...settings,
+      memoryModelSelection: openCode,
+      providerInstances: {
+        [openCode.instanceId]: {
+          driver: ProviderDriverKind.make("opencode"),
+          enabled: true,
+          config,
+        },
+      },
+    };
+    for (const operation of ["summary", "conflict"] as const) {
+      expect(resolveMemoryModelSelection(configured, snapshots, 0, operation)).toEqual(codex);
+    }
   },
 );
+
+it("summary and conflict routes each require their own memory operation", () => {
+  const claude = createModelSelection(ProviderInstanceId.make("claudeAgent"), "claude-haiku-5-5");
+  const summaryOnly = {
+    ...piProvider({}),
+    instanceId: claude.instanceId,
+    driver: ProviderDriverKind.make("claudeAgent"),
+    models: [],
+    memoryGeneration: { summary: true, conflict: false },
+  };
+  const codex = settings.textGenerationModelSelection;
+  const conflictOnly = {
+    ...piProvider({}),
+    instanceId: codex.instanceId,
+    driver: ProviderDriverKind.make("codex"),
+    models: [],
+    memoryGeneration: { summary: false, conflict: true },
+  };
+  const providers = [summaryOnly, conflictOnly];
+  expect(resolveMemoryModelSelection(settings, providers, 0)).toEqual(claude);
+  expect(resolveMemoryModelSelection(settings, providers, 0, "conflict")).toEqual(codex);
+  expect(resolveMemoryModelSelection(settings, [summaryOnly], 0, "conflict")).toBeNull();
+});

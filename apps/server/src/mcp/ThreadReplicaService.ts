@@ -501,7 +501,7 @@ const make = Effect.gen(function* () {
             }).pipe(Effect.mapError(() => refused("worktree_identity_mismatch")));
             // Only this operation's verified checkout is reset; captured changes remain uncommitted.
             yield* script(
-              `set -eu\ncd ${quote(worktreePath)}\n[ "$(git rev-parse HEAD)" = ${quote(input.replica.commitOid)} ]\ngit -c core.hooksPath=/dev/null reset --mixed ${quote(input.replica.headOid)} >/dev/null\n`,
+              `set -eu\ncd ${quote(worktreePath)}\n[ "$(git symbolic-ref --quiet HEAD)" = ${quote(`refs/heads/${branch}`)} ]\n[ "$(git rev-parse HEAD)" = ${quote(input.replica.commitOid)} ]\ngit -c core.hooksPath=/dev/null reset --mixed ${quote(input.replica.headOid)} >/dev/null\n`,
             );
             yield* allowed(authorize);
           }).pipe(Effect.result);

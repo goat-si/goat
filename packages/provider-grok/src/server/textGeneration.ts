@@ -15,6 +15,7 @@ import type * as EffectAcpErrors from "effect-acp/errors";
 import { ProviderDriverKind, TextGenerationError } from "@goat/contracts";
 import {
   MemoryGenerationRunnerError,
+  memoryRunnerCapabilities,
   withMemoryExecution,
   type MemoryGenerationRunnerContext,
 } from "@goat/provider-core/server/memoryGenerationRunner";
@@ -28,6 +29,7 @@ import {
   currentGrokReasoningEffortFromSessionSetup,
   makeGrokAcpRuntime,
   resolveGrokAcpBaseModelId,
+  checkGrokMemoryIsolation,
   requireGrokMemoryIsolation,
 } from "./acpSupport.ts";
 
@@ -49,14 +51,13 @@ export const makeGrokTextGeneration = Effect.fn("makeGrokTextGeneration")(functi
   const path = yield* Path.Path;
   const random = yield* SecureRandom.SecureRandom;
   const commandSpawner = yield* ChildProcessSpawner.ChildProcessSpawner;
+  const currentEnvironment = options.resolveEnvironment ?? Effect.succeed(baseEnvironment);
 
   const runGrokSelected = Effect.fn("GrokTextGeneration.runGrokJson")(
     function* <S extends Schema.Top>(request: TextGenerationOperations.Request<S>) {
       const { operation, cwd, prompt, modelSelection } = request;
       const memory = TextGenerationOperations.isMemoryOperation(operation);
-      const environment = options.resolveEnvironment
-        ? yield* options.resolveEnvironment
-        : baseEnvironment;
+      const environment = yield* currentEnvironment;
       const isolated = memory
         ? yield* requireGrokMemoryIsolation(operation, environment).pipe(
             Effect.provideService(FileSystem.FileSystem, fs),
@@ -294,11 +295,23 @@ export const makeGrokTextGeneration = Effect.fn("makeGrokTextGeneration")(functi
       runGrokSelected(request).pipe(Effect.map((selected) => selected.result)),
     ),
     {
-      memoryRunner: withMemoryExecution(
-        options.memoryRunnerContext,
-        ProviderDriverKind.make("grok"),
-        runGrokSelected,
-      ),
+      memory: {
+        capabilities: memoryRunnerCapabilities("grok", options.memoryRunnerContext, {
+          available: currentEnvironment.pipe(
+            Effect.flatMap((environment) =>
+              checkGrokMemoryIsolation("generateMemorySummary", environment),
+            ),
+            Effect.provideService(FileSystem.FileSystem, fs),
+            Effect.provideService(Path.Path, path),
+            Effect.isSuccess,
+          ),
+        }),
+        run: withMemoryExecution(
+          options.memoryRunnerContext,
+          ProviderDriverKind.make("grok"),
+          runGrokSelected,
+        ),
+      },
     },
   );
 });

@@ -14,6 +14,7 @@ import { browserClientOs, type BrowserIdentity } from "~/connection/clientMetada
 import { isDesktopLocalConnectionTarget } from "~/connection/desktopLocal";
 import { isLoopbackHostname } from "~/environments/primary/target";
 import { useLocalStorage } from "~/hooks/useLocalStorage";
+import { hostEnvironmentIdAtom } from "~/state/desktopHostEnvironment";
 import { environmentPresentations } from "~/state/presentation";
 
 export interface RemoteOpenHost {
@@ -23,7 +24,7 @@ export interface RemoteOpenHost {
 }
 
 export type RemoteOpenState =
-  | { readonly mode: "local-exec" }
+  | { readonly mode: "local-exec"; readonly desktopService?: true }
   | { readonly mode: "remote-links"; readonly host: RemoteOpenHost }
   | { readonly mode: "remote-unavailable" };
 
@@ -35,6 +36,7 @@ export interface RemoteOpenResolution {
 }
 
 const LOCAL_EXEC: RemoteOpenState = { mode: "local-exec" };
+const DESKTOP_SERVICE_EXEC: RemoteOpenState = { mode: "local-exec", desktopService: true };
 const REMOTE_UNAVAILABLE: RemoteOpenState = { mode: "remote-unavailable" };
 const UNRESOLVED_REMOTE_OPEN: RemoteOpenResolution = {
   state: LOCAL_EXEC,
@@ -54,6 +56,8 @@ export function resolveRemoteOpenState(input: {
   readonly sshTarget: { readonly alias: string; readonly username: string | null } | null;
   readonly remoteOpenTargets: ReadonlyArray<RemoteOpenTarget> | undefined;
   readonly isDesktopRenderer: boolean;
+  readonly hostEnvironmentId?: string | null;
+  readonly bearerHttpBaseUrl?: string;
 }): RemoteOpenState {
   const { target } = input;
   if (target === null) {
@@ -68,8 +72,18 @@ export function resolveRemoteOpenState(input: {
     if (hostname !== null && isLoopbackHostname(hostname)) {
       return LOCAL_EXEC;
     }
-  } else if (isDesktopLocalConnectionTarget(target)) {
-    return LOCAL_EXEC;
+  }
+
+  if (target._tag === "BearerConnectionTarget") {
+    if (
+      input.isDesktopRenderer &&
+      target.environmentId === input.hostEnvironmentId &&
+      input.bearerHttpBaseUrl !== undefined
+    ) {
+      const hostname = parseHostname(input.bearerHttpBaseUrl);
+      if (hostname !== null && isLoopbackHostname(hostname)) return DESKTOP_SERVICE_EXEC;
+    }
+    if (isDesktopLocalConnectionTarget(target)) return LOCAL_EXEC;
   }
 
   if (input.sshTarget !== null && input.sshTarget.alias.length > 0) {
@@ -97,6 +111,8 @@ export function resolveRemoteOpenState(input: {
 
 function remoteOpenStatesEqual(previous: RemoteOpenState, next: RemoteOpenState): boolean {
   if (previous.mode !== next.mode) return false;
+  if (previous.mode === "local-exec" && next.mode === "local-exec")
+    return previous.desktopService === next.desktopService;
   if (previous.mode !== "remote-links" || next.mode !== "remote-links") return true;
   return (
     previous.host.kind === next.host.kind &&
@@ -121,6 +137,10 @@ const remoteOpenResolutionAtom = Atom.family((environmentId: EnvironmentId) =>
           profile !== null && profile._tag === "SshConnectionProfile" ? profile.target : null,
         remoteOpenTargets: presentation?.serverConfig?.remoteOpenTargets,
         isDesktopRenderer: window.desktopBridge !== undefined,
+        hostEnvironmentId: get(hostEnvironmentIdAtom),
+        ...(profile?._tag === "BearerConnectionProfile"
+          ? { bearerHttpBaseUrl: profile.httpBaseUrl }
+          : {}),
       }),
       isResolved: true,
     };

@@ -1,4 +1,5 @@
-import type { ToolActivityNativeAppReference } from "@goat/contracts";
+import { expandHomePath } from "@goat/provider-core/server/pathExpansion";
+import type { NativeAppIconReference } from "@goat/contracts";
 import * as Cache from "effect/Cache";
 import * as Cause from "effect/Cause";
 import * as Digest from "effect/crypto/Digest";
@@ -28,16 +29,16 @@ const RESOLUTION_CACHE_MAX_ENTRIES = 256;
 export class NativeAppIconResolver extends Context.Service<
   NativeAppIconResolver,
   {
-    readonly resolve: (app: ToolActivityNativeAppReference) => Effect.Effect<string | null>;
+    readonly resolve: (app: NativeAppIconReference) => Effect.Effect<string | null>;
   }
 >()("goat/assets/NativeAppIconResolver") {}
 
-function appCacheKey(app: ToolActivityNativeAppReference): string {
+function appCacheKey(app: NativeAppIconReference): string {
   return JSON.stringify(app);
 }
 
-function appFromCacheKey(key: string): ToolActivityNativeAppReference {
-  return JSON.parse(key) as ToolActivityNativeAppReference;
+function appFromCacheKey(key: string): NativeAppIconReference {
+  return JSON.parse(key) as NativeAppIconReference;
 }
 
 const existingFile = Effect.fn("NativeAppIconResolver.existingFile")(function* (filePath: string) {
@@ -91,9 +92,14 @@ function containsControlCharacter(value: string): boolean {
 }
 
 const resolveApplicationPath = Effect.fn("NativeAppIconResolver.resolveApplicationPath")(function* (
-  app: ToolActivityNativeAppReference,
+  app: NativeAppIconReference,
 ) {
   const path = yield* Path.Path;
+  if (app._tag === "app-path") {
+    if (containsControlCharacter(app.path)) return null;
+    const absolutePath = expandHomePath(app.path, yield* HostProcess.HomeDirectory);
+    return path.isAbsolute(absolutePath) && absolutePath.endsWith(".app") ? absolutePath : null;
+  }
   const query =
     app._tag === "app-id"
       ? `kMDItemCFBundleIdentifier == '${app.appId}'`
@@ -131,7 +137,7 @@ const resolveApplicationPath = Effect.fn("NativeAppIconResolver.resolveApplicati
 });
 
 const resolveNativeAppIconUncached = Effect.fn("NativeAppIconResolver.resolveUncached")(function* (
-  app: ToolActivityNativeAppReference,
+  app: NativeAppIconReference,
 ) {
   const fileSystem = yield* FileSystem.FileSystem;
   const path = yield* Path.Path;
@@ -242,7 +248,7 @@ export const make = Effect.gen(function* () {
     );
 
   const resolveAttempt = Effect.fn("NativeAppIconResolver.resolve")(function* (
-    app: ToolActivityNativeAppReference,
+    app: NativeAppIconReference,
   ) {
     if (
       hostPlatform !== "darwin" ||

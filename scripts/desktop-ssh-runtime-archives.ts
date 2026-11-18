@@ -155,6 +155,15 @@ export const stageSshRuntimeArchivesWithManifests = Effect.fn(
     version: input.version,
     requireAll: input.requireAll,
   });
+  const sourceEntries = new Set(yield* fs.readDirectory(input.sourceDirectory));
+  const preTrimmed = archives.find(({ fileName }) =>
+    sourceEntries.has(fileName + OFFICE_CJK_FONT_MANIFEST_SUFFIX),
+  );
+  if (preTrimmed) {
+    return yield* new SshRuntimeArchiveValidationError({
+      message: `${preTrimmed.fileName} in ${input.sourceDirectory} has already been trimmed for desktop packaging. Supply the full CLI archive instead.`,
+    });
+  }
   yield* fs.makeDirectory(input.destinationDirectory, { recursive: true });
   const sharedFonts = new Map<string, { sha256: string; bytes: bigint }>();
   let removedFontBytes = 0n;

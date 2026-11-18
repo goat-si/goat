@@ -237,6 +237,7 @@ export const ExecutionEnvironmentCapabilities = Schema.Struct({
   ignoredFileSearch: Schema.optionalKey(Schema.Boolean),
   environmentIcon: Schema.optionalKey(Schema.Boolean),
   desktopAppUpdate: Schema.optionalKey(Schema.Boolean),
+  keepAwakeWhileAgentsWork: Schema.optionalKey(Schema.Boolean),
   /** Subscribe to command output only when advertised; older servers never send it. */
   commandOutputStreaming: Schema.optionalKey(Schema.Boolean),
   /** Hosts headless Chromium tabs streamed over /api/preview-stream for clients without a local runtime. */
@@ -246,6 +247,7 @@ export const ExecutionEnvironmentCapabilities = Schema.Struct({
   replyToResponse: Schema.optionalKey(Schema.Boolean),
   /** Server browser viewers' stopLoading input cancels a loading page; older servers ignore it. */
   serverBrowserStopLoading: Schema.optionalKey(Schema.Boolean),
+  nativeServerBrowserStopLoading: Schema.optionalKey(Schema.Boolean),
   /** Server exposes the bounded SSH runtime activity probe. */
   sshActivity: Schema.optionalKey(Schema.Boolean),
   /** Server proxies its nodes' APIs below `/hub/nodes` for clients holding `hub:proxy`. */

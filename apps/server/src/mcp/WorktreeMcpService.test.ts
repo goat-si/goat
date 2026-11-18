@@ -463,7 +463,7 @@ describe("goat_worktree_handoff", () => {
       const harness = makeHarness({
         git: {
           verifyManagedCheckout: (input) =>
-            verifyManagedCheckout(input).pipe(
+            verifyManagedCheckout({ ...input, projectCwd: cwd }).pipe(
               Effect.mapError(
                 (cause) =>
                   new GitCommandError({

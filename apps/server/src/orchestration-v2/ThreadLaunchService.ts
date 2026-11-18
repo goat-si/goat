@@ -1,7 +1,6 @@
 import type { WorktreePreparationOwnership } from "../vcs/worktreePreparationOwnership.ts";
 import { savedWorktreeFallback } from "./savedWorktreeFallback.ts";
 import {
-  ThreadLaunchWorkspaceMissingError,
   type PreparationInput,
   type ThreadLaunchInitialMessage,
   type ThreadLaunchInput,
@@ -10,7 +9,6 @@ import {
   type ThreadLaunchWorkspaceStrategy,
 } from "./threadLaunchTypes.ts";
 export {
-  ThreadLaunchWorkspaceMissingError,
   type ThreadLaunchInitialMessage,
   type ThreadLaunchInput,
   type ThreadLaunchPreparationInput,
@@ -69,6 +67,8 @@ import * as ProviderAdapters from "./ProviderAdapterRegistry.ts";
 import { isCloudExecution } from "@goat/provider-core/server/cloudTask";
 import * as ServerSettings from "../serverSettings.ts";
 import * as TextGeneration from "../textGeneration/TextGeneration.ts";
+import { ThreadLaunchWorkspaceMissingError } from "./threadLaunchWorkspaceMissing.ts";
+export { ThreadLaunchWorkspaceMissingError } from "./threadLaunchWorkspaceMissing.ts";
 import * as WorkspacePaths from "../workspace/WorkspacePaths.ts";
 import * as EventSink from "./EventSink.ts";
 import * as CommandReceiptStore from "./CommandReceiptStore.ts";
@@ -367,6 +367,7 @@ const make = Effect.gen(function* () {
                     }),
                   ),
               }),
+              Effect.provideService(TextGeneration.TextGenerationProject, input.projectId),
               Effect.map((result) => ({
                 branch: result.branch,
                 exactName: settings.branchNamingMode === "custom",
@@ -467,7 +468,7 @@ const make = Effect.gen(function* () {
           ).pipe(Effect.mapError(mapError(input, "provision-worktree", threadId)));
           if (fallback !== null) {
             ({ startRef, baseRefName } = fallback);
-            if (baseRefName.startsWith("refs/remotes/")) pinnedHead = startRef;
+            if (startRef !== "HEAD") pinnedHead = startRef;
             fallbackDetail = `Saved base ${requestedBaseRef} is missing. Using ${baseRefName}.`;
             yield* note(fallbackDetail);
             yield* setupTracker.update(threadId, (snapshot) => ({

@@ -137,7 +137,7 @@ export const makeRestorePending = Effect.gen(function* () {
       );
       return content === null ? null : yield* decode(content);
     },
-    (effect, worktreePath) =>
+    (effect, worktreePath, _projectCwd) =>
       effect.pipe(Effect.mapError((cause) => new RestorePendingError({ worktreePath, cause }))),
   );
   return {

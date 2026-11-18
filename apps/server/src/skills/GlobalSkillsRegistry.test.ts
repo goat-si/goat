@@ -1,3 +1,4 @@
+import { fromRunner } from "@goat/provider-core/server/textGenerationOperations";
 import { describe, expect, it } from "@effect/vitest";
 import * as NodeServices from "@effect/platform-node/NodeServices";
 import {
@@ -57,7 +58,7 @@ const instance = {
   },
   snapshotForCwd: () => Effect.succeed(provider),
   orchestrationAdapter: {} as ProviderInstance["orchestrationAdapter"],
-  textGeneration: {} as ProviderInstance["textGeneration"],
+  textGeneration: fromRunner("fixture", () => Effect.die("Unexpected generation.")),
 } satisfies ProviderInstance;
 
 describe("global skill provider publication", () => {

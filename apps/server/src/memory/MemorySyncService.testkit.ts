@@ -1,3 +1,4 @@
+import { noMemoryGeneration } from "@goat/provider-core/server/memoryGenerationRunner";
 import * as M from "@goat/contracts";
 import * as NodeSqliteClient from "@goat/shared/nodeSqliteClient";
 import * as Effect from "effect/Effect";
@@ -224,6 +225,7 @@ export const peer = (
 };
 export const realGeneration = (overrides: Partial<Generation.TextGeneration["Service"]>) => {
   const provider = Generation.TextGeneration.of({
+    ...noMemoryGeneration,
     generateCommitMessage: () => Effect.die("unexpected fixture operation"),
     generatePrContent: () => Effect.die("unexpected fixture operation"),
     generateBranchName: () => Effect.die("unexpected fixture operation"),
@@ -246,7 +248,7 @@ export const realGeneration = (overrides: Partial<Generation.TextGeneration["Ser
             enabled: true,
             snapshot: {} as ProviderInstance["snapshot"],
             orchestrationAdapter: {} as ProviderInstance["orchestrationAdapter"],
-            textGeneration: provider,
+            textGeneration: { ...noMemoryGeneration, ...provider },
           } satisfies ProviderInstance),
       }),
     ),

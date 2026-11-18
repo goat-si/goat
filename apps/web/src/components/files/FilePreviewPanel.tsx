@@ -56,11 +56,11 @@ import { lazy, Suspense, useEffect, useRef, useState } from "react";
 
 import { isBrowserPreviewFile, openFileInPreview } from "~/browser/openFileInPreview";
 import { useAssetUrlRefresh, useAssetUrlState } from "~/assets/assetUrls";
+import { useFileOpenInTarget } from "~/components/chat/OpenInPicker.logic";
 import { OpenInPicker } from "~/components/chat/OpenInPicker";
 import { MediaVideoPlayer } from "~/components/media/MediaVideoPlayer";
 import { MediaImagePreview } from "~/components/media/MediaImagePreview";
 import { MediaActions, type MediaActionSource } from "~/components/media/MediaActions";
-import { useRemoteOpenState } from "~/remoteOpen";
 import { useClientSettings } from "~/hooks/useSettings";
 import { useTheme } from "~/hooks/useTheme";
 import { getLocalStorageItem, setLocalStorageItem, useLocalStorage } from "~/hooks/useLocalStorage";
@@ -1008,7 +1008,7 @@ export default function FilePreviewPanel({
   const wordWrap = wordWrapOverride ?? defaultWordWrap;
   const canOperatePreview = useEnvironmentScope(environmentId, AuthPreviewOperateScope);
   const primaryEnvironmentId = usePrimaryEnvironmentId();
-  const remoteOpenState = useRemoteOpenState(environmentId);
+  const canOpenIn = useFileOpenInTarget(environmentId, primaryEnvironmentId);
   const serverConfig = useAtomValue(serverEnvironment.configValueAtom(environmentId));
   const environmentHttpBaseUrl = useEnvironmentHttpBaseUrl(environmentId);
   const previewAvailable = usePreviewAvailable(environmentId);
@@ -1294,12 +1294,11 @@ export default function FilePreviewPanel({
             readResult={isMedia || isPdf ? null : file.data}
             onRefresh={refreshOpenFile}
           />
-          {absolutePath &&
-          (environmentId === primaryEnvironmentId || remoteOpenState.mode !== "local-exec") ? (
+          {absolutePath && canOpenIn ? (
             <OpenInPicker
               environmentId={environmentId}
               keybindings={keybindings}
-              availableEditors={availableEditors}
+              availableEditors={serverConfig?.availableEditors ?? availableEditors}
               enableShortcut={openInShortcutEnabled}
               openInCwd={absolutePath}
               openInCwdIsFile={file.isFile}

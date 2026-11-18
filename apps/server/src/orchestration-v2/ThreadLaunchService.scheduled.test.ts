@@ -1,3 +1,4 @@
+import * as Stream from "effect/Stream";
 import { GitCommandError } from "@goat/contracts";
 import * as WorktreeSetupTracker from "../project/WorktreeSetupTracker.ts";
 import { preparationSettled } from "./testkit/preparationSettled.ts";
@@ -342,7 +343,17 @@ it.effect("a scheduled preparation retry refuses a replaced checkout before star
       threadId: launch.threadId,
       runId: run.id,
     });
-    const retried = yield* preparationSettled(launch.threadId);
+    const threads = yield* ThreadManagement.ThreadManagementService;
+    yield* threads.streamStoredEventsFrom({ threadId: launch.threadId }).pipe(
+      Stream.filter(
+        (event) =>
+          (event.commandId === "launch:scheduled-replaced:retry:fail" ||
+            event.commandId === "launch:scheduled-replaced:retry:release") &&
+          event.event.type === "run.updated",
+      ),
+      Stream.runHead,
+    );
+    const retried = yield* threads.getThreadProjection(launch.threadId);
     assert.equal(retried.runs[0]?.status, "failed");
     assert.equal(harness.runSetup.mock.calls.length, 1);
   }).pipe(Effect.provide(harness.layer));

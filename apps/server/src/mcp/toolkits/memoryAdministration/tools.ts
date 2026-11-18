@@ -57,7 +57,7 @@ export const MemoryAdministrationToolkit = Toolkit.make(
   Tool.dynamic(agentSurfaceRegistry["memory.settings_read"].name, {
     description: agentSurfaceRegistry["memory.settings_read"].description,
     parameters: memoryInputSchema(M.MemorySettingsGetInput),
-    success: M.MemorySettingsView,
+    success: M.MemorySettingsViewWithAvailability,
     failure: Schema.Union([M.MemoryRpcError, M.OrchestratorMcpFailure]),
     failureMode: "return",
   })

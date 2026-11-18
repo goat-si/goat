@@ -44,6 +44,9 @@ const runId = RunId.make("completed-run");
 const projectId = ProjectId.make("project");
 const encodeCheckpoint = Schema.encodeSync(OrchestrationV2CheckpointJson);
 const decodeCheckpoint = Schema.decodeUnknownSync(OrchestrationV2CheckpointJson);
+const checkpointJson = Schema.fromJsonString(OrchestrationV2CheckpointJson);
+const persistedCheckpoint = (checkpoint: OrchestrationV2Checkpoint) =>
+  Schema.decodeSync(checkpointJson)(Schema.encodeSync(checkpointJson)(checkpoint));
 const modelSelection = {
   instanceId: ProviderInstanceId.make("codex"),
   model: "test-model",
@@ -157,7 +160,7 @@ const fixture = Effect.gen(function* () {
   let projection = {
     thread: sourceThread,
     runs: [{ id: runId, ordinal: 1, status: "completed", checkpointId, modelSelection }],
-    checkpoints: [decodeCheckpoint(JSON.parse(JSON.stringify(encodeCheckpoint(checkpoint))))],
+    checkpoints: [persistedCheckpoint(checkpoint)],
     visibleTurnItems: [
       {
         item: { type: "user_message", runId, text: "Implement the requested fix", updatedAt: now },
@@ -191,7 +194,7 @@ const fixture = Effect.gen(function* () {
       Effect.sync(() => {
         projection = {
           ...projection,
-          checkpoints: [decodeCheckpoint(JSON.parse(JSON.stringify(encodeCheckpoint(produced))))],
+          checkpoints: [persistedCheckpoint(produced)],
         };
       }),
     ),
