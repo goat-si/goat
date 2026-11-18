@@ -9133,74 +9133,57 @@ export const makeClaudeAdapterV2 = Effect.fn("makeClaudeAdapterV2")(function* (
             existing.nativeThreadId === nativeThreadId &&
             existing.queryPolicyKey === queryPolicyKey &&
             !existing.stopping;
-          const readLaunchSettings = readClaudeLaunchArgSettings({
-            settings: adapterOptions.settings,
-            cwd,
-            fileSystem,
-            path,
-          });
-          let launchArgSettings = reuseLaunchSettings
-            ? existing.launchArgSettings
-            : yield* readLaunchSettings;
-          let catalog = yield* routeModelCatalog(
-            modelCatalog,
-            cwd,
-            launchArgSettings,
-            launch.environment,
-          );
-          let compiledSelection = compileClaudeModelSelection(turnInput.modelSelection, catalog);
-          if (
-            existing !== null &&
-            existing.nativeThreadId === nativeThreadId &&
-            existing.queryPolicyKey === queryPolicyKey &&
-            !existing.stopping &&
-            existing.selection.queryIdentity !== compiledSelection.queryIdentity &&
-            canApplyClaudeSelectionLive(existing.selection, compiledSelection) &&
-            (existing.selection.apiModelId === compiledSelection.apiModelId ||
-              existing.openedPermissionMode === queryPolicy.permissionMode)
-          ) {
-            yield* applyClaudeSelectionLive(existing, compiledSelection);
-          }
-          if (
-            existing !== null &&
-            existing.nativeThreadId === nativeThreadId &&
-            existing.queryPolicyKey === queryPolicyKey &&
-            !existing.stopping &&
-            existing.selection.queryIdentity === compiledSelection.queryIdentity
-          ) {
-            // Enabling or disabling computer use reaches a live process here,
-            // without replacing it (background work would block that).
+          if (reuseLaunchSettings) {
+            const routed = yield* routeModelCatalog(
+              modelCatalog,
+              cwd,
+              existing.launchArgSettings,
+              launch.environment,
+            );
+            const selection = compileClaudeModelSelection(turnInput.modelSelection, routed);
             if (
-              existing.mcpCredentialId !== mcpSession?.providerSessionId ||
-              existing.cuaDriverKey !== cuaKey
+              existing.selection.queryIdentity !== selection.queryIdentity &&
+              canApplyClaudeSelectionLive(existing.selection, selection) &&
+              (existing.selection.apiModelId === selection.apiModelId ||
+                existing.openedPermissionMode === queryPolicy.permissionMode)
             ) {
-              if (!existing.query.setMcpServers)
-                return yield* queryRunnerError(
-                  "MCP credential refresh unavailable.",
-                  "setMcpServers",
-                );
-              yield* existing.query.setMcpServers(mcpOverrides.mcpServers ?? {});
-              existing.mcpCredentialId = mcpSession?.providerSessionId;
-              existing.cuaDriverKey = cuaKey;
+              yield* applyClaudeSelectionLive(existing, selection);
             }
-            // A denied ExitPlanMode leaves Claude in plan mode. Restore only from plan:
-            // Auto/default may reflect a policy restriction that forbids restoring bypass.
-            if (existing.permissionMode === "plan" && existing.openedPermissionMode !== "plan") {
-              existing.permissionMode = yield* existing.query
-                .setPermissionMode(existing.openedPermissionMode)
-                .pipe(
-                  Effect.as(existing.openedPermissionMode),
-                  Effect.catchTags({
-                    ClaudeAgentSdkQueryRunnerError: (error) =>
-                      existing.openedPermissionMode === "bypassPermissions"
-                        ? existing.query
-                            .setPermissionMode("default")
-                            .pipe(Effect.as("default" as const))
-                        : Effect.fail(error),
-                  }),
-                );
+            if (existing.selection.queryIdentity === selection.queryIdentity) {
+              // Enabling or disabling computer use reaches a live process here,
+              // without replacing it (background work would block that).
+              if (
+                existing.mcpCredentialId !== mcpSession?.providerSessionId ||
+                existing.cuaDriverKey !== cuaKey
+              ) {
+                if (!existing.query.setMcpServers)
+                  return yield* queryRunnerError(
+                    "MCP credential refresh unavailable.",
+                    "setMcpServers",
+                  );
+                yield* existing.query.setMcpServers(mcpOverrides.mcpServers ?? {});
+                existing.mcpCredentialId = mcpSession?.providerSessionId;
+                existing.cuaDriverKey = cuaKey;
+              }
+              // A denied ExitPlanMode leaves Claude in plan mode. Restore only from plan:
+              // Auto/default may reflect a policy restriction that forbids restoring bypass.
+              if (existing.permissionMode === "plan" && existing.openedPermissionMode !== "plan") {
+                existing.permissionMode = yield* existing.query
+                  .setPermissionMode(existing.openedPermissionMode)
+                  .pipe(
+                    Effect.as(existing.openedPermissionMode),
+                    Effect.catchTags({
+                      ClaudeAgentSdkQueryRunnerError: (error) =>
+                        existing.openedPermissionMode === "bypassPermissions"
+                          ? existing.query
+                              .setPermissionMode("default")
+                              .pipe(Effect.as("default" as const))
+                          : Effect.fail(error),
+                    }),
+                  );
+              }
+              return existing;
             }
-            return existing;
           }
 
           // Replacing this thread's process kills its background work, even with a new native identity.
@@ -9214,23 +9197,24 @@ export const makeClaudeAdapterV2 = Effect.fn("makeClaudeAdapterV2")(function* (
             return yield* new ClaudeBackgroundWorkBlocksQueryReplacementError();
           }
 
-          // Read before closing the live process so a bad path leaves it running.
-          const appendSystemPromptFileText = yield* readClaudeAppendSystemPromptFile({
-            settings: adapterOptions.settings,
-            cwd: turnInput.runtimePolicy.cwd,
-            fileSystem,
-            path,
-          });
-          if (reuseLaunchSettings) {
-            launchArgSettings = yield* readLaunchSettings;
-            catalog = yield* routeModelCatalog(
-              modelCatalog,
-              cwd,
-              launchArgSettings,
-              launch.environment,
-            );
-            compiledSelection = compileClaudeModelSelection(turnInput.modelSelection, catalog);
-          }
+          // Read before closing the live process. Append errors retain priority over settings errors.
+          const launchArgInput = { settings: adapterOptions.settings, cwd, fileSystem, path };
+          const [appendResult, settingsResult] = yield* Effect.all(
+            [
+              Effect.result(readClaudeAppendSystemPromptFile(launchArgInput)),
+              Effect.result(readClaudeLaunchArgSettings(launchArgInput)),
+            ],
+            { concurrency: 2 },
+          );
+          const appendSystemPromptFileText = yield* Effect.fromResult(appendResult);
+          const launchArgSettings = yield* Effect.fromResult(settingsResult);
+          const catalog = yield* routeModelCatalog(
+            modelCatalog,
+            cwd,
+            launchArgSettings,
+            launch.environment,
+          );
+          const compiledSelection = compileClaudeModelSelection(turnInput.modelSelection, catalog);
           const closedExistingNativeThreadId = existing !== null ? existing.nativeThreadId : null;
           clearedNativeSessions.delete(nativeThreadId);
           if (existing !== null) {

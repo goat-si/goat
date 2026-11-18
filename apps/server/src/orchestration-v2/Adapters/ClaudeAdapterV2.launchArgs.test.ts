@@ -288,6 +288,13 @@ describe("ClaudeAdapterV2 append-system-prompt-file launch argument", () => {
   // regression: #20413 malformed append-system-prompt launch args fail before a query opens
   it.effect.each([
     [
+      "--append-system-prompt-file missing.md --settings other-missing.json",
+      (cwd: string) =>
+        new ClaudeAdapterV2.ClaudeAppendSystemPromptFileError({
+          path: NodePath.join(cwd, "missing.md"),
+        }).message,
+    ],
+    [
       "--append-system-prompt-file missing.md",
       (cwd: string) =>
         new ClaudeAdapterV2.ClaudeAppendSystemPromptFileError({
