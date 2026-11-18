@@ -16,7 +16,7 @@ export const defaultPrincipalKind = (subject: string): SessionPrincipalKind =>
   subject === MCP_CLIENT_SUBJECT ? "outside_client" : "person";
 
 /** Why a requested session shape is refused, or undefined when it is valid. */
-export const issueShapeRefusal = (
+const issueShapeRefusal = (
   subject: string,
   kind: SessionPrincipalKind,
   binding: AuthSessionPenBinding | undefined,

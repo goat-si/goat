@@ -109,7 +109,6 @@ export type SessionCredentialChange =
 
 export * from "./sessionStoreErrors.ts";
 import {
-  SessionBindingRefusedError,
   MalformedSessionTokenError,
   InvalidSessionTokenSignatureError,
   InvalidSessionTokenPayloadError,

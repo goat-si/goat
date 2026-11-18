@@ -28,7 +28,6 @@ import {
   type AuthWebSocketTicketResult,
   type AuthWebSocketTicketUse,
   type ChildSetupPurpose,
-  type RuntimeMode,
   type SessionPrincipalKind,
 } from "@goat/contracts";
 import { encodeOAuthScope } from "@goat/shared/oauthScope";

@@ -15,11 +15,9 @@ const membersOf = (view: PenMembershipView) =>
     : new Set<string>();
 
 /**
- * Keeps the sessions other Pen members hold on this server in step with this machine's Pen
- * membership. The fence in SessionStore is the enforcement, starts closed and reads the watch's
- * newest view at every check; this publishes what changed and revokes for good what a departed
- * member held. Pen being down closes the fence and revokes nothing, so the same sessions work
- * again when the member list returns.
+ * Points SessionStore's member fence (closed until then) at the watch's newest view, publishes
+ * what each view changed and revokes for good what a departed member held. Pen being down closes
+ * the fence and revokes nothing, so the same sessions work again when the member list returns.
  */
 export const make = Effect.fn("PenMemberSessions.make")(function* () {
   const sessions = yield* SessionStore;

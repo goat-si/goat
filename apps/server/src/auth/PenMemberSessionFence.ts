@@ -211,7 +211,7 @@ export const forStore = (
 export type StorePenMembers = ReturnType<typeof forStore>;
 
 /** The unrevoked, unexpired member sessions stored here. */
-export const listMemberSessions = Effect.fn("PenMemberSessionFence.listMemberSessions")(function* (
+const listMemberSessions = Effect.fn("PenMemberSessionFence.listMemberSessions")(function* (
   repository: AuthSessions.AuthSessionRepository["Service"],
 ) {
   const rows = yield* repository.listActive({ now: yield* DateTime.now });

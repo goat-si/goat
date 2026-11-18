@@ -21,7 +21,7 @@ export const layerCloudMachines = CloudMachineService.layerWithoutDependencies.p
  * them) and HubNodes (which writes them). Dispatch reads it as a reference whose default refuses
  * every Pen alias, so a build without this provide reaches no Pen machine instead of an unguarded one.
  */
-export const layerPenRoutes = PenManagedRoutes.layer.pipe(
+const layerPenRoutes = PenManagedRoutes.layer.pipe(
   Layer.provide(PenMembershipWatch.layer),
   Layer.provide(HubNodeRepository.layer),
 );
