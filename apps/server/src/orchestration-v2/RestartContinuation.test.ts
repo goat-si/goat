@@ -965,10 +965,10 @@ it("backs off twice from a continuation the provider never took, then lets it fa
   const first = failedStart("run:retry-1", runId);
   const second = failedStart("run:retry-2", first.id);
   const third = failedStart("run:retry-3", second.id);
-  const projection = (failureClass = "provider_error", providerTurns = base.providerTurns) =>
+  const projection = (failureClass = "provider_error", inputDelivery = "unsent") =>
     ({
       runs: [{ ...base.runs[0]!, status: "cancelled" }, first, second, third],
-      providerTurns,
+      attempts: [first, second, third].map((run) => ({ id: run.activeAttemptId, inputDelivery })),
       turnItems: [first, second, third].map((run) => ({
         id: `error:${run.id}`,
         type: "error",
@@ -988,12 +988,7 @@ it("backs off twice from a continuation the provider never took, then lets it fa
     assert.isUndefined(continuationStartRetryDelayMs(first, projection(failureClass)));
   // Once the provider took the prompt, starting again would repeat the turn.
   assert.isUndefined(
-    continuationStartRetryDelayMs(
-      first,
-      projection("provider_error", [
-        { ...base.providerTurns[0]!, runAttemptId: first.activeAttemptId, status: "failed" },
-      ] as never),
-    ),
+    continuationStartRetryDelayMs(first, projection("provider_error", "accepted")),
   );
 });
 
@@ -1008,10 +1003,15 @@ it.effect("continues again after a continuation fails before its prompt", () =>
       status: "failed",
       restartContinuationOfRunId: runId,
     };
-    const dispatches = yield* continuationDispatches(
-      { ...cut, runs: [...cut.runs, failedStart] } as unknown as OrchestrationV2ThreadProjection,
-      failedStart.id,
-    );
+    const projection = {
+      ...cut,
+      runs: [...cut.runs, failedStart],
+    } as OrchestrationV2ThreadProjection;
+    assert.deepEqual(yield* continuationDispatches(projection, failedStart.id), []);
+    const attempts = [
+      { id: failedStart.activeAttemptId, inputDelivery: "unsent" },
+    ] as typeof cut.attempts;
+    const dispatches = yield* continuationDispatches({ ...projection, attempts }, failedStart.id);
     assert.deepEqual(
       dispatches.map((command) => command.restartContinuationOfRunId),
       [failedStart.id],

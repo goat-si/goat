@@ -1974,7 +1974,7 @@ const makeOrchestrator = Effect.fn("orchestrationV2.Orchestrator.layer")(functio
   ) {
     const projection = yield* projectionStore.getThreadRecords(
       threadId,
-      ["runs", "providerTurns", "turnItems"],
+      ["runs", "attempts", "turnItems"],
       { turnItemTypes: ["error"], turnItemRunIds: [runId] },
     );
     const run = projection.runs.find((candidate) => candidate.id === runId);
@@ -5166,7 +5166,7 @@ const makeOrchestrator = Effect.fn("orchestrationV2.Orchestrator.layer")(functio
         !source ||
         !(
           isRestartContinuationSource(source, projection.providerTurns) ||
-          continuationFailedBeforePrompt(source, projection.providerTurns)
+          continuationFailedBeforePrompt(source, projection.attempts)
         ) ||
         projection.thread.archivedAt !== null ||
         projection.thread.deletedAt !== null ||
