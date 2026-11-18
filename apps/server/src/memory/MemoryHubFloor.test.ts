@@ -1,3 +1,4 @@
+import { makeMemorySaveSuggestions } from "./MemorySaveSuggestions.ts";
 import { scanReplicaMemory } from "./testkit/ScanReplicaMemory.ts";
 import { assert, describe, it } from "@effect/vitest";
 import * as M from "@goat/contracts";
@@ -336,6 +337,113 @@ describe("memory hub floor", () => {
         });
       }).pipe(Effect.provide(Layer.fresh(core)));
     }).pipe(checkUsage, Effect.provide(live), enabled),
+  );
+
+  it.effect(
+    "a remote forget refuses stale suggestion acceptance and the ordered pull purges it",
+    () =>
+      Effect.gen(function* () {
+        yield* seed;
+        const hub = yield* Hub.MemoryHubService;
+        const source = newMemory(14);
+        yield* hub.push(pushInput(source), principal());
+        yield* hub.pull(advertise, principal());
+        const peer = principal(otherEnv);
+        const initial = yield* hub.pull({ ...advertise, environmentId: otherEnv }, peer);
+        assert.strictEqual(initial.derivedCap, 1000);
+        yield* Effect.gen(function* () {
+          const service = yield* Service.MemoryService;
+          const store = yield* Store.MemoryStore;
+          const sql = yield* SqlClient.SqlClient;
+          const suggestions = makeMemorySaveSuggestions({
+            sql,
+            store,
+            requireSharing: () => Effect.void,
+            stableUuid: Service.memoryStableUuid,
+          });
+          const receive = (page: M.MemoryHubPullResult, expectedSequence: number) =>
+            service.receiveHubPage({
+              memorySpaceId: space,
+              hubEnvironmentId: hubEnv,
+              localEnvironmentId: hubEnv,
+              page,
+              expectedSequence,
+              reauthorize: Effect.void,
+            });
+          yield* receive(initial, 0);
+          const op = newMemory(15);
+          yield* suggestions.onRefusedSave(
+            {
+              input: {
+                memorySpaceId: space,
+                memoryId: op.memoryId,
+                operationId: op.operationId,
+                expectedHeads: [],
+                scope: op.revision.scope,
+                assertionKind: op.revision.assertionKind,
+                baseBoundary: null,
+                payload: op.payload,
+              },
+              thread: { environmentId: hubEnv, threadId: M.ThreadId.make("stale-origin") },
+              reason: "thread_lineage_incomplete",
+              knownRevisions: [],
+              lineageComplete: false,
+              forgetGeneration: 0,
+            },
+            Effect.void,
+          );
+          const forgotten = yield* hub.push(
+            { ...pushInput(forget(source)), features, environmentId: otherEnv },
+            peer,
+          );
+          assert.include(forgotten.receipts[0], { outcome: "deleted" });
+          const target = { memorySpaceId: space, suggestionId: op.memoryId };
+          assert.deepStrictEqual(yield* service.acceptSuggestion(target, Effect.void), {
+            status: "pending",
+          });
+          assert.isUndefined((yield* store.loadAggregate(space, op.memoryId)).item);
+          const [attempt] = yield* sql<{ accept_operation_id: string }>`
+          SELECT accept_operation_id FROM memory_save_suggestions WHERE id=${op.memoryId}`;
+          if (!attempt) throw new Error("Expected a frozen acceptance");
+          const workId = `sync:${space}:${attempt.accept_operation_id}`;
+          const queued = yield* store.readWorkOperation(workId);
+          if (!queued || queued.kind !== "upsert") throw new Error("Expected a staged acceptance");
+          assert.strictEqual(queued.forgetFence, initial.throughSequence);
+          const pushed = yield* hub.push({ ...pushInput(queued), features }, principal());
+          const receipt = pushed.receipts[0]!;
+          assert.include(receipt, { outcome: "rejected", failureCode: "source_invalidated" });
+          yield* service.settleHubAcknowledgement({
+            memorySpaceId: space,
+            hubEnvironmentId: hubEnv,
+            localEnvironmentId: hubEnv,
+            workId,
+            receipt,
+            operation: {
+              operationId: queued.operationId,
+              operationDigest: memoryOperationDigest(queued),
+            },
+            reauthorize: Effect.void,
+          });
+          assert.include(
+            (yield* service.listSuggestionMetadata({ memorySpaceId: space }, Effect.void))[0],
+            { suggestionId: op.memoryId, state: "accepting" },
+          );
+          const tail = yield* hub.pull(
+            { ...advertise, afterSequence: initial.throughSequence },
+            principal(),
+          );
+          yield* receive(tail, initial.throughSequence);
+          assert.deepStrictEqual(
+            yield* service.listSuggestionMetadata({ memorySpaceId: space }, Effect.void),
+            [],
+          );
+          assert.isUndefined((yield* store.loadAggregate(space, op.memoryId)).item);
+          assert.deepStrictEqual(yield* service.acceptSuggestion(target, Effect.void), {
+            status: "refused",
+            reason: "source_invalidated",
+          });
+        }).pipe(Effect.provide(Layer.fresh(core)));
+      }).pipe(checkUsage, Effect.provide(live), enabled),
   );
 
   it.effect("replicates unverified provenance in the tail and checkpoint", () =>
