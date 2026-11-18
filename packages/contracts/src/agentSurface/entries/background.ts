@@ -8,9 +8,9 @@ export const backgroundEntries = {
     toolkit: "orchestrator",
     summary: "Wait on background work",
     description:
-      "Keep this thread in Working while background work runs. Pass its task ID after starting it. Not for work left running (dev server, watcher). waiting=false clears. Does not stop the task. Claude only.",
+      "Keep this thread in Working while background work runs. Pass its task ID after starting it. Not for work left running (dev server, watcher). waiting=false clears. Does not stop the task. Claude and OpenCode 2.",
     guide:
-      "Use after starting a background command, Monitor, or subagent this turn waits on, such as tests or a build. The thread shows Working until the task finishes or waiting=false clears it, and the result wakes this thread. Unknown task IDs come back in unmatched; a wait that matches none of its IDs fails and registers nothing.",
+      "Use after starting work this turn waits on, such as tests or a build. Claude supports background commands, Monitors, and subagents. OpenCode 2 supports background shells. The thread shows Working until the task finishes or waiting=false clears it, and the result wakes this thread. Unknown task IDs come back in unmatched; a wait that matches none of its IDs fails and registers nothing.",
     idempotencyReason:
       "Sets the awaited flag on the named background tasks of the caller's own thread; repeating the same call leaves the same flags.",
     effect: "write",

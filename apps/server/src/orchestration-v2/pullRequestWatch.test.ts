@@ -701,6 +701,71 @@ describe("evaluatePullRequestWatch", () => {
     const silent = detail({ capabilities: capabilities(false), checks: [] });
     assert.isTrue(anHourLater(watch(), silent).every((kinds) => kinds.length === 0));
   });
+
+  it("a new watch reads again before letting go when the last one saw checks running", () => {
+    // A finished answer may be an older head's, so only a running one carries over.
+    const again = (checksPending: boolean) =>
+      newPullRequestWatch(STARTED, false, watch({ checksPending })).checksPending;
+    assert.isTrue(again(true));
+    assert.isUndefined(again(false));
+  });
+
+  it("counts checks as pending until every one, a review bot's included, has finished", () => {
+    const pending = (checks: ReadonlyArray<PullRequestCheck>, from = watch()) =>
+      evaluate(from, detail({ checks }), noRemarks).next.checksPending;
+    const ci = { ...check("test", "success"), required: true };
+    assert.isTrue(pending([ci, check("CodeRabbit", "pending")]));
+    assert.isFalse(pending([ci, check("CodeRabbit", "success")]));
+    assert.isFalse(pending([ci, check("CodeRabbit", "failure")]));
+    assert.isFalse(pending([ci, check("deploy", "action-required")]));
+    // A failed read keeps the last answer, as does one with only an unreadable approval check.
+    assert.isFalse(pending([], watch({ headSha: "aaaaaaaaaa", checksPending: false })));
+    const unreadable = { ...check("approvals", "action-required"), placeholder: true };
+    assert.isTrue(pending([unreadable], watch({ headSha: "aaaaaaaaaa", checksPending: true })));
+  });
+
+  it("waits a while for a new head's checks on every host", () => {
+    const pushed = (checksAlwaysReport: boolean) =>
+      evaluate(
+        watch({ headSha: "aaaaaaaaaa", checksPending: false }),
+        detail({
+          headSha: "bbbbbbbbbb",
+          capabilities: capabilities(checksAlwaysReport),
+          checks: [],
+        }),
+        noRemarks,
+      ).next.checksPending;
+    assert.isTrue(pushed(true));
+    assert.isTrue(pushed(false));
+
+    // Once the no-checks window passes, the watch stops waiting for them.
+    for (const checksAlwaysReport of [true, false]) {
+      let current = watch({ headSha: "aaaaaaaaaa" });
+      for (const minute of [0, 20]) {
+        current = evaluate(
+          current,
+          detail({
+            headSha: "bbbbbbbbbb",
+            capabilities: capabilities(checksAlwaysReport),
+            checks: [],
+          }),
+          noRemarks,
+          { ...context(), now: minute * 60_000 },
+        ).next;
+      }
+      assert.isFalse(current.checksPending);
+    }
+
+    // A watch with no answer waits on an empty list only while the no-checks clock runs.
+    const unanswered = (checksAwaitedSince: string | null) =>
+      evaluate(
+        watch({ headSha: "bbbbbbbbbb", checksAwaitedSince }),
+        detail({ headSha: "bbbbbbbbbb", checks: [] }),
+        noRemarks,
+      ).next.checksPending;
+    assert.isFalse(unanswered(null));
+    assert.isTrue(unanswered(STARTED));
+  });
 });
 
 describe("pull request watch policy", () => {

@@ -21,7 +21,11 @@ import {
   type NativeStackTypeBag,
 } from "@react-navigation/native-stack";
 import { use, useCallback, useRef, useState, type ComponentProps } from "react";
-import { WorkspaceSlotOptionsContext, slotScreenOptions } from "./v5-workspace-context";
+import {
+  NativeWorkspaceTabActivityContext,
+  WorkspaceSlotOptionsContext,
+  slotScreenOptions,
+} from "./v5-workspace-context";
 import { StyleSheet, View } from "react-native";
 import { Stack } from "react-native-screens";
 import { NativeScrollEdgeEffectsContext } from "./NativeScrollViewMarker";
@@ -61,14 +65,17 @@ export function V5CardStackView(
   const { preventedRoutes } = usePreventRemoveContext();
   // Options a screen set inside this workspace tab slot, over its route's.
   const slot = use(WorkspaceSlotOptionsContext);
+  const isTabActive = use(NativeWorkspaceTabActivityContext)?.isActive;
   const nativePopSource = useRef<string | null>(null);
+  // Back reveals the card beneath; a full-screen presentation covers the card without revealing one.
+  const cardRevealed = useRef(false);
   const { onNativePopChange } = props;
   const setNativePopSource = useCallback(
     (key: string | null) => {
       nativePopSource.current = key;
-      onNativePopChange?.(key);
+      if (isTabActive?.() !== false) onNativePopChange?.(key);
     },
-    [onNativePopChange],
+    [isTabActive, onNativePopChange],
   );
   const [screens, setScreens] = useState({
     completedNativeDismissals: new Set<string>(),
@@ -132,10 +139,11 @@ export function V5CardStackView(
         };
       });
       if (nativePopSource.current === key) setNativePopSource(null);
+      if (isTabActive?.() === false) return;
       const action = nativeStackPopAction(state, key);
       if (action) props.navigation.dispatch(action);
     },
-    [props.navigation, setNativePopSource, setScreens],
+    [isTabActive, props.navigation, setNativePopSource, setScreens],
   );
   const removeDismissed = useCallback(
     (key: string) => {
@@ -177,7 +185,8 @@ export function V5CardStackView(
                 if (preventedRoutes[route.key]?.preventRemove) descriptor.navigation.goBack();
               }}
               onWillAppear={() => {
-                if (index === 0) props.onRootVisibilityChange?.(true);
+                cardRevealed.current = true;
+                if (index === 0 && isTabActive?.() !== false) props.onRootVisibilityChange?.(true);
                 props.navigation.emit({
                   type: "transitionStart",
                   target: route.key,
@@ -185,6 +194,7 @@ export function V5CardStackView(
                 });
               }}
               onDidAppear={() => {
+                if (isTabActive?.() === false) return;
                 const source = nativePopSource.current;
                 if (source === route.key) {
                   setNativePopSource(null);
@@ -216,9 +226,11 @@ export function V5CardStackView(
               }}
               onWillDisappear={() => {
                 if (index === 0) props.onRootVisibilityChange?.(false);
+                if (isTabActive?.() === false) return;
                 const state = props.navigation.getState();
                 // Only native Back leaves the disappearing card active; JS navigation already changed history.
                 if (state.index > 0 && state.routes[state.index]?.key === route.key) {
+                  cardRevealed.current = false;
                   setNativePopSource(route.key);
                 }
                 props.navigation.emit({
@@ -227,13 +239,16 @@ export function V5CardStackView(
                   data: { closing: true },
                 });
               }}
-              onDidDisappear={() =>
+              onDidDisappear={() => {
+                if (nativePopSource.current === route.key && !cardRevealed.current) {
+                  setNativePopSource(null);
+                }
                 props.navigation.emit({
                   type: "transitionEnd",
                   target: route.key,
                   data: { closing: true },
-                })
-              }
+                });
+              }}
             >
               <NavigationContext value={descriptor.navigation}>
                 <NavigationRouteContext value={descriptor.route}>

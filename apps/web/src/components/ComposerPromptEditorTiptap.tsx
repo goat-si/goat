@@ -1,5 +1,8 @@
-import { ComposerChipSelectionExtension } from "./composerChipSelection";
-import { documentIconColorForFileName } from "~/pierre-icons";
+import {
+  CHIP_NODE_SELECTION_CLASS_NAME,
+  ComposerChipSelectionExtension,
+} from "./composerChipSelection";
+import { ComposerMentionExtension } from "./composerMentionNode";
 import { ComposerModelExtension } from "./chat/composerModelNode";
 import { isProviderSkillUserInvocable } from "@goat/client-runtime/providerSkills";
 import { formatProviderSkillDisplayName } from "@goat/shared/inlineSkills";
@@ -40,7 +43,6 @@ import {
   useRef,
   useState,
   useSyncExternalStore,
-  type CSSProperties,
   type KeyboardEvent as ReactKeyboardEvent,
   type RefObject,
 } from "react";
@@ -117,22 +119,17 @@ import { isThreadNavigationShortcut } from "~/keybindings";
 import { appAtomRegistry } from "~/rpc/atomRegistry";
 import { primaryServerKeybindingsAtom } from "~/state/server";
 import { hasCommandForKeyDown } from "~/shortcuts/dispatcher";
-import { basenameOfPath } from "~/pierre-icons";
-import { WorkspaceEntryTooltip } from "./chat/WorkspaceEntryIcon";
-import { FileTagChipContent } from "./chat/FileTagChip";
 import { SkillChipIcon } from "./chat/SkillInlineText";
 import { AssistantCitationChip } from "./chat/AssistantCitationChip";
 import { getTimelinePageScrollKey } from "./chat/pageScrollController";
 import { ContextChipPopover } from "./contextChipParts";
 import { Button } from "./ui/button";
-import { ContextChip } from "./ContextChip";
 import {
   ComposerContextActionsContext,
   ComposerContextReferenceChip,
   ComposerContextRecordsContext,
 } from "./composerContextPresentation";
 import type { AssistantCitationSourceAnchor } from "~/lib/assistantTextSelection";
-import { Tooltip, TooltipPopup, TooltipTrigger } from "./ui/tooltip";
 import { ComposerCodeBlockNodeView } from "./chat/ComposerCodeBlockNodeView";
 import { resolveAssistantCitationCommentDismissal } from "./chat/assistantCitationCommentDismissal";
 import { composerCodeBlockHighlight } from "./composerCodeBlockHighlight";
@@ -240,77 +237,6 @@ const SURROUND_CLOSE: Record<string, string> = {
   "*": "*",
   _: "_",
 };
-
-function resolvedThemeFromDocument(): "light" | "dark" {
-  return document.documentElement.classList.contains("dark") ? "dark" : "light";
-}
-
-const CHIP_NODE_SELECTION_CLASS_NAME =
-  "relative inline select-none data-[composer-chip-selected]:after:pointer-events-none data-[composer-chip-selected]:after:absolute data-[composer-chip-selected]:after:inset-0 data-[composer-chip-selected]:after:rounded-sm data-[composer-chip-selected]:after:bg-[Highlight] data-[composer-chip-selected]:after:opacity-30 data-[composer-chip-selected]:after:content-['']";
-
-const ComposerMentionExtension = Node.create({
-  name: "composer-mention",
-  group: "inline",
-  inline: true,
-  atom: true,
-  selectable: true,
-  addAttributes() {
-    return {
-      path: { default: "" },
-      source: { default: "" },
-    };
-  },
-  parseHTML() {
-    return [{ tag: "span[data-composer-mention]" }];
-  },
-  renderHTML({ HTMLAttributes }) {
-    return ["span", { "data-composer-mention": "", ...HTMLAttributes }];
-  },
-  addNodeView() {
-    return ReactNodeViewRenderer(ComposerMentionNodeView);
-  },
-});
-
-function ComposerMentionNodeView({ node }: NodeViewProps) {
-  const actions = use(ComposerContextActionsContext);
-  const path = (node.attrs.path as string) ?? "";
-  const accent = documentIconColorForFileName(path);
-  const chip = (
-    <ContextChip
-      kind="mention"
-      style={accent ? ({ "--context-chip-accent": accent } as CSSProperties) : undefined}
-      dir="ltr"
-      render={<button type="button" />}
-      onClick={() => actions.openMention(path)}
-      aria-label={`Preview ${path}`}
-      contentEditable={false}
-      spellCheck={false}
-      data-composer-mention-chip="true"
-    >
-      <FileTagChipContent
-        path={path}
-        environmentId={actions.environmentId}
-        cwd={actions.cwd}
-        label={basenameOfPath(path)}
-        theme={resolvedThemeFromDocument()}
-      />
-    </ContextChip>
-  );
-  return (
-    <NodeViewWrapper as="span" className={CHIP_NODE_SELECTION_CLASS_NAME}>
-      <Tooltip>
-        <TooltipTrigger render={chip} />
-        <TooltipPopup side="top">
-          <WorkspaceEntryTooltip
-            path={path}
-            environmentId={actions.environmentId}
-            cwd={actions.cwd}
-          />
-        </TooltipPopup>
-      </Tooltip>
-    </NodeViewWrapper>
-  );
-}
 
 const ComposerSkillExtension = Node.create({
   name: "composer-skill",

@@ -78,6 +78,7 @@ export const GOAT_MIGRATION_NAMES: ReadonlySet<string> = new Set([
   "DisposableMachines",
   "DisposableMachineRequests",
   "DisposableMachineEnrollment",
+  "ScheduledTaskFirstBindIntent",
 ]);
 
 type MigrationEntry<E> = readonly [

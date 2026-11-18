@@ -663,3 +663,17 @@ describe("SessionControl", () => {
     control.assertNoHumanControl();
   });
 });
+
+it("keeps agent input fenced when a renderer crashes under a human controller", async () => {
+  const control = new SessionControl("agent");
+  await control.take("viewer");
+  const oldAuthority = control.authority;
+  await control.close({ preserveHandoff: true });
+  const replacement = control.replacement(() => {});
+  expect(replacement.authority).toBeGreaterThan(oldAuthority);
+  await expect(replacement.agent("agent", async () => "typed")).rejects.toMatchObject({
+    reason: "stopped",
+  });
+  replacement.resumeAgents();
+  await expect(replacement.agent("agent", async () => "resumed")).resolves.toBe("resumed");
+});

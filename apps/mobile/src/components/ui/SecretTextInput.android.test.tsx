@@ -63,3 +63,51 @@ it("uses the native field when the binary has it, and reports its focus", async 
   nativeProps.onInputFocus();
   expect(props.onFocus).toHaveBeenCalledOnce();
 });
+
+it("masks the native field when it stops being editable and when the window loses focus", async () => {
+  // The real eye and AppState for this case only; the cases above stub the eye.
+  const blur: Array<() => void> = [];
+  vi.resetModules();
+  vi.doUnmock("./SecretRevealButton");
+  vi.doMock("react-native", () => ({
+    View: ({ children }: { children?: ReactNode }) => <div>{children}</div>,
+    processColor: () => 1,
+    useWindowDimensions: () => ({ fontScale: 1 }),
+    Pressable: (button: { accessibilityLabel?: string; onPress?: () => void }) => (
+      <button aria-label={button.accessibilityLabel} onClick={button.onPress} />
+    ),
+    AppState: {
+      addEventListener: (event: string, listener: () => void) => {
+        if (event === "blur") blur.push(listener);
+        return { remove: () => blur.splice(blur.indexOf(listener), 1) };
+      },
+    },
+  }));
+  vi.doMock("./AppSymbol", () => ({ SymbolView: () => null }));
+  state.native.mockClear();
+  vi.stubGlobal("expo", { getViewConfig: () => ({ validAttributes: {} }) });
+  const { SecretTextInput } = await import("./SecretTextInput.android");
+  const container = document.createElement("div");
+  const root = createRoot(container);
+  const revealed = () =>
+    (state.native.mock.lastCall?.[0] as { revealed?: boolean } | undefined)?.revealed;
+  const show = () =>
+    container.querySelector<HTMLButtonElement>('button[aria-label="Show secret"]')!.click();
+  try {
+    await act(async () => root.render(<SecretTextInput {...props} />));
+    await act(async () => show());
+    expect(revealed()).toBe(true);
+    await act(async () => root.render(<SecretTextInput {...props} editable={false} />));
+    expect(revealed()).toBe(false);
+    await act(async () => root.render(<SecretTextInput {...props} />));
+    await act(async () => show());
+    expect(revealed()).toBe(true);
+    await act(async () => blur.forEach((listener) => listener()));
+    expect(revealed()).toBe(false);
+  } finally {
+    await act(async () => root.unmount());
+    vi.unstubAllGlobals();
+    vi.doUnmock("react-native");
+    vi.doUnmock("./AppSymbol");
+  }
+});

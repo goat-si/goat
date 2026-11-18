@@ -68,17 +68,16 @@ export const make = Effect.fn("ProviderProcesses.make")(function* (
   const hostname = NodeOS.hostname();
   const controller =
     options.controller ?? AcpSessionRuntime.makePosixProcessTreeController(platform);
+  const notReaped = (cause: unknown, file?: string) =>
+    Effect.logWarning("Provider survivors of a previous server will not be reaped", {
+      ...(file === undefined ? {} : { file }),
+      cause: String(cause),
+    });
   const boot = yield* Effect.try(() => {
     const id = NodeFS.readFileSync(options.bootIdPath ?? LINUX_BOOT_ID, "utf8").trim();
     NodeFS.mkdirSync(directory, { recursive: true });
     return id;
-  }).pipe(
-    Effect.catch((cause) =>
-      Effect.logWarning("Provider survivors of a previous server will not be reaped", {
-        cause: String(cause),
-      }).pipe(Effect.as(undefined)),
-    ),
-  );
+  }).pipe(Effect.catch((cause) => notReaped(cause).pipe(Effect.as(undefined))));
   if (boot === undefined) return ProviderProcesses.defaultValue();
   const identity = (pid: number) => {
     const observed = controller.identity(pid);
@@ -132,8 +131,12 @@ export const make = Effect.fn("ProviderProcesses.make")(function* (
   // Only immutable per-launch records are shared between server instances. A
   // live owner's records belong to that server, even when it uses this home.
   const files = yield* Effect.try(() => NodeFS.readdirSync(directory)).pipe(
-    Effect.orElseSucceed((): ReadonlyArray<string> => []),
+    Effect.catch((cause) => notReaped(cause).pipe(Effect.as<ReadonlyArray<string>>([]))),
   );
+  const removeRecord = (recordPath: string, file: string) =>
+    Effect.try(() => NodeFS.rmSync(recordPath, { force: true })).pipe(
+      Effect.catch((cause) => notReaped(cause, file)),
+    );
   const reaped: Array<{
     readonly file: string;
     readonly recordPath: string;
@@ -152,7 +155,7 @@ export const make = Effect.fn("ProviderProcesses.make")(function* (
     }
     // A CLI whose record was never renamed was still gated and exited when its server died.
     if (pending) {
-      yield* tryQuietly(() => NodeFS.rmSync(recordPath, { force: true }));
+      yield* removeRecord(recordPath, file);
       continue;
     }
     const survivors = record.processes.filter(
@@ -183,7 +186,7 @@ export const make = Effect.fn("ProviderProcesses.make")(function* (
       yield* Effect.logWarning("Could not stop a provider left by a previous server", { file });
       continue;
     }
-    yield* tryQuietly(() => NodeFS.rmSync(recordPath, { force: true }));
+    yield* removeRecord(recordPath, file);
   }
 
   return {

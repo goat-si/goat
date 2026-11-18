@@ -11,6 +11,7 @@ import {
 } from "@goat/contracts";
 import * as Option from "effect/Option";
 import * as Schema from "effect/Schema";
+import { markdownLinksStartingBefore } from "./markdownLinkPrefix.ts";
 
 const CITATION_PROTOCOL = `${GOAT_CITATION_LINK_PROTOCOL}:`;
 const CITATION_HREF_PREFIX = `${CITATION_PROTOCOL}//v1/`;
@@ -128,10 +129,14 @@ export function serializeAssistantCitation(citation: AssistantCitation): string 
   return `[Assistant quote](${formatAssistantCitationHref(citation)})`;
 }
 
-export function collectAssistantCitations(text: string) {
+export function collectAssistantCitations(text: string, limit?: number) {
   const citations: { citation: AssistantCitation; source: string; start: number; end: number }[] =
     [];
-  for (const match of text.matchAll(CITATION_LINK)) {
+  const matches =
+    limit === undefined
+      ? text.matchAll(CITATION_LINK)
+      : markdownLinksStartingBefore(text, CITATION_LINK, limit);
+  for (const match of matches) {
     const citation = parseAssistantCitationHref(match[1]!);
     if (!citation) continue;
     citations.push({

@@ -416,7 +416,6 @@ const ConversationTimeline = memo(function ConversationTimeline({
   const disclosureAnchorKeyRef = useRef<string | null>(null);
   const disclosureSettleFrameRef = useRef<number | null>(null);
   const disclosureSettleSecondFrameRef = useRef<number | null>(null);
-  const normalizedFindQuery = findQuery.trim();
   const findActive = findExpanded;
 
   const disclosureCollapsedRef = useRef(false);
@@ -1225,7 +1224,7 @@ const ConversationTimeline = memo(function ConversationTimeline({
     historyControls,
     entries: timelineEntries,
     container: timelineViewportElement,
-    query: normalizedFindQuery,
+    query: findQuery,
     match: activeFindMatch,
     navigationId: findNavigationId,
     rowIndex: activeFindMatch ? rows.findIndex((row) => row.id === activeFindMatch.entryId) : -1,

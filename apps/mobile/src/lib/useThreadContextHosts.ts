@@ -1,4 +1,4 @@
-import { composerThreadHosts } from "@goat/client-runtime/composerThreadItems";
+import { ComposerThreadHosts, composerThreadHosts } from "@goat/client-runtime/composerThreadItems";
 import type { EnvironmentId } from "@goat/contracts";
 import { useAtomValue } from "@effect/atom-react";
 import { Atom } from "effect/reactivity";
@@ -18,8 +18,7 @@ export function useThreadContextHosts(environmentId: EnvironmentId | null) {
   const snapshot = useEnvironmentQuery(
     environmentId === null ? null : serverEnvironment.hubNodesLive({ environmentId, input: {} }),
   ).data;
-  if (!snapshot || snapshot.hubEnvironmentId !== environmentId)
-    return new Map<EnvironmentId, string>();
+  if (!snapshot || snapshot.hubEnvironmentId !== environmentId) return new ComposerThreadHosts();
   const sshHosts = new Map<EnvironmentId, string>();
   for (const node of snapshot.nodes) {
     if (node.environmentId === null || node.status === "offline") continue;

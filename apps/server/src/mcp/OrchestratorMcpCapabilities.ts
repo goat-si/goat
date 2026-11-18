@@ -1,9 +1,12 @@
 import {
   OrchestratorMcpCapabilitiesResult,
+  type OrchestratorMcpModelOption,
+  type ProviderOptionDescriptor,
   type RuntimeMode,
   type ServerProvider,
   type ServerProviderModel,
 } from "@goat/contracts";
+import { getProviderOptionCurrentValue } from "@goat/shared/model";
 import * as Effect from "effect/Effect";
 import * as Option from "effect/Option";
 import * as Schema from "effect/Schema";
@@ -117,3 +120,16 @@ export const readAdvertisedModel = <E, R>(
         ),
       ),
     );
+
+/** Option ids and allowed values are all a delegating agent needs; labels are UI copy. */
+export function capabilityModelOption(
+  descriptor: ProviderOptionDescriptor,
+): OrchestratorMcpModelOption {
+  const defaultValue = getProviderOptionCurrentValue(descriptor);
+  return {
+    id: descriptor.id,
+    values:
+      descriptor.type === "boolean" ? [false, true] : descriptor.options.map((choice) => choice.id),
+    ...(defaultValue === undefined ? {} : { default: defaultValue }),
+  };
+}

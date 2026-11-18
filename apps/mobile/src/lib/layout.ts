@@ -12,6 +12,8 @@ export const SPLIT_LAYOUT_MIN_HEIGHT = 600;
 export const SPLIT_SIDEBAR_MIN_WIDTH = 280;
 const SPLIT_SIDEBAR_DEFAULT_MAX_WIDTH = 380;
 
+const DUO_PORTRAIT_SIDEBAR_WIDTH = 350;
+
 export const AUXILIARY_PANE_MIN_CONTENT_WIDTH = 960;
 export const CHAT_CONTENT_MAX_WIDTH = 960;
 // Limit Android reading width for wide foldables and keyboard-open split views.
@@ -143,14 +145,21 @@ export function deriveLayout(input: {
       region.x - metrics.safeArea.left >= SPLIT_SIDEBAR_MIN_WIDTH &&
       width - region.x - region.width - metrics.safeArea.right >= 320,
   );
+  const portraitDuo =
+    input.nativeWorkspace === true && metrics?.hasHinge === true && width < height;
   return {
     variant: "split",
     usesSplitView: true,
-    primarySidebarOverlaysContent:
-      input.nativeWorkspace === true && metrics?.hasHinge === true && width < height,
+    primarySidebarOverlaysContent: portraitDuo,
     listPaneWidth:
       division?.x ??
-      clamp(Math.round(width * 0.32), SPLIT_SIDEBAR_MIN_WIDTH, SPLIT_SIDEBAR_DEFAULT_MAX_WIDTH),
+      (portraitDuo
+        ? Math.min(DUO_PORTRAIT_SIDEBAR_WIDTH, usableWidth - NATIVE_INSPECTOR_MIN_MAIN_WIDTH)
+        : clamp(
+            Math.round(width * 0.32),
+            SPLIT_SIDEBAR_MIN_WIDTH,
+            SPLIT_SIDEBAR_DEFAULT_MAX_WIDTH,
+          )),
     ...(division ? { listPaneGap: division.width } : {}),
     shellPadding: 0,
   };
