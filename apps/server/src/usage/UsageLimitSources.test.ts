@@ -118,6 +118,7 @@ it.effect("keeps a refused account's last reading within its hub and login", () 
   let refused = true;
   let workspace: string | undefined = "login-a";
   let percent = 78;
+  let includeClaude = false;
   let onFailedRedemption: Effect.Effect<void> | undefined;
   const http = HttpClient.make((request) =>
     Effect.gen(function* () {
@@ -135,12 +136,24 @@ it.effect("keeps a refused account's last reading within its hub and login", () 
                   ? { email: "first@example.com", id_token: { chatgpt_account_id: workspace } }
                   : {}),
               },
+              ...(includeClaude
+                ? [{ id: "claude.json", auth_index: "b", provider: "claude" }]
+                : []),
             ],
           }),
         );
       }
       const body =
         request.body._tag === "Uint8Array" ? new TextDecoder().decode(request.body.body) : "";
+      if (body.includes("api.anthropic.com")) {
+        return HttpClientResponse.fromWeb(
+          request,
+          Response.json({
+            status_code: 200,
+            body: JSON.stringify({ five_hour: { utilization: 100, resets_at: at(3) } }),
+          }),
+        );
+      }
       if (path.endsWith("/reset-quota")) {
         return HttpClientResponse.fromWeb(request, Response.json({}));
       }
@@ -291,6 +304,27 @@ it.effect("keeps a refused account's last reading within its hub and login", () 
     expect(rotated?.accounts[0]?.usageLimits).toMatchObject(unreadable);
     expect(rotated?.error).toBeUndefined();
     expect(JSON.stringify(rotated)).not.toContain("rotated-fixture-key");
+
+    includeClaude = true;
+    refused = false;
+    percent = 100;
+    yield* read;
+    refused = true;
+    const resetAt = (driver: "claudeAgent" | "codex") =>
+      UsageLimitSources.UsageLimitResetFallback.pipe(
+        Effect.flatMap((fallback) =>
+          fallback.resetAt(ProviderDriverKind.make(driver), "http://hub.test:8317", null),
+        ),
+        Effect.provide(
+          UsageLimitSources.layerResetFallback.pipe(
+            Layer.provide(Layer.succeed(UsageLimitSources.UsageLimitSources, sources)),
+          ),
+        ),
+      );
+    expect(yield* resetAt("claudeAgent")).toBe(at(3));
+    expect(yield* resetAt("codex")).toBeNull();
+    expect((yield* sources.current)[0]?.error).toContain("Showing the last reading.");
+    expect((yield* sources.current)[0]?.accounts[0]?.usageLimits.windows[0]?.usedPercent).toBe(100);
   }).pipe(
     Effect.provide([
       ServerSettings.layerTest({ usageLimitSources: { [sourceId]: config } }),
@@ -401,6 +435,7 @@ const resetFallback = (
     Layer.provide(
       Layer.mock(UsageLimitSources.UsageLimitSources)({
         current: Effect.sync(current),
+        currentForReset: Effect.sync(() => ({ snapshots: current(), refusedAccounts: new Map() })),
         refresh: Effect.suspend(refresh),
       }),
     ),
