@@ -98,7 +98,10 @@ function xml(source: string, extension: string): XmlNode {
     const parent = stack.at(-1);
     if (node === undefined || parent === undefined) throw new Error("Invalid XML nesting");
     if (odf && (node.name === "p" || node.name === "h")) collapseOdfWhitespace(node);
-    if (extension === ".docx" && node.name === "del") {
+    if (
+      (extension === ".docx" && node.name === "del") ||
+      (odf && node.name === "annotation" && parent.name !== "semantics")
+    ) {
       parent.children.pop();
       return;
     }
