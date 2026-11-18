@@ -1477,11 +1477,9 @@ export const layer: Layer.Layer<
             event.turnItem.streaming &&
             !reservedHeldTurnItemIds.has(event.turnItem.id)
           ) {
-            yield* turnItemPositions.allocate({
-              threadId: event.turnItem.threadId,
-              turnItemId: event.turnItem.id,
-              runId: event.turnItem.runId,
-            });
+            yield* turnItemPositions.allocate(
+              TurnItemPositionStore.positionRequest(event.turnItem),
+            );
             reservedHeldTurnItemIds.add(event.turnItem.id);
           }
           if (event.type === "provider_thread.updated") {

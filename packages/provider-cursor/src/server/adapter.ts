@@ -829,48 +829,12 @@ export const makeCursorAdapterV2 = Effect.fn("makeCursorAdapterV2")(function* (
           });
 
           if (input.completed && !subagent.resultProjected) {
-            const unstreamedResult = yield* completeTaskWork(
+            yield* completeTaskWork(
               subagent,
               toolCallsFromConversationSteps(result?.conversationSteps ?? []),
               task.status,
               resultParts,
             );
-            if (unstreamedResult.length > 0) {
-              const resultNativeId = `${nativeItemId}:result`;
-              const resultArtifacts = makeSubagentConversationArtifacts({
-                messageId: idAllocator.derive.messageFromProviderItem({
-                  driver: CursorAgentSdk.CURSOR_PROVIDER,
-                  nativeItemId: resultNativeId,
-                }),
-                turnItemId: idAllocator.derive.turnItemFromProviderItem({
-                  driver: CursorAgentSdk.CURSOR_PROVIDER,
-                  nativeItemId: resultNativeId,
-                }),
-                threadId: childThreadId,
-                rootNodeId: childRootNodeId,
-                providerThreadId: null,
-                providerTurnId: null,
-                nativeItemRef: {
-                  driver: CursorAgentSdk.CURSOR_PROVIDER,
-                  nativeId: resultNativeId,
-                  strength: "weak",
-                },
-                role: "assistant",
-                text: unstreamedResult,
-                ordinal: ++subagent.nextChildOrdinal,
-                now,
-              });
-              yield* emitProviderEvent({
-                type: "message.updated",
-                driver: CursorAgentSdk.CURSOR_PROVIDER,
-                message: resultArtifacts.message,
-              });
-              yield* emitProviderEvent({
-                type: "turn_item.updated",
-                driver: CursorAgentSdk.CURSOR_PROVIDER,
-                turnItem: resultArtifacts.turnItem,
-              });
-            }
             subagent.resultProjected = true;
           }
         });

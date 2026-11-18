@@ -1,5 +1,6 @@
 import type { InteractionUpdate, ToolCall } from "@cursor/sdk";
 import { isOrchestrationV2WorkActive, type OrchestrationV2Subagent } from "@goat/contracts";
+import { CURSOR_TASK_SAVED_ITEM_PREFIX } from "@goat/shared/orchestrationV2Timeline";
 import * as DateTime from "effect/DateTime";
 import * as Effect from "effect/Effect";
 import type {
@@ -14,6 +15,9 @@ import type { makeCursorTurnProjection } from "./turnProjection.ts";
 
 const MAX_LIVE_TASK_TOOLS = 512;
 const MAX_LIVE_TASK_TEXT_SEGMENTS = 512;
+const MAX_SAVED_TASK_TEXT_SEGMENTS = 512;
+// Reserve room for all aligned backfill steps before any one live item.
+const TASK_LIVE_ORDINAL_STRIDE = MAX_SAVED_TASK_TEXT_SEGMENTS + 1;
 
 export function makeTaskProjectionState(): CursorTaskProjectionState {
   return {
@@ -40,39 +44,63 @@ function childToolId(subagent: ActiveCursorSubagent, callId: string): string {
   return `${subagent.callId}:child-tool:${callId}`;
 }
 
-interface ExactStepMatch {
-  readonly liveIndex: number;
-  readonly savedIndex: number;
-  readonly length: number;
-  readonly previous: ExactStepMatch | undefined;
-}
-
-function exactStepMatches(live: ReadonlyArray<string>, saved: ReadonlyArray<string>) {
-  const liveTexts = new Set(live);
-  // Track the longest ordered chain of exact matches with a frontier bounded by the live steps.
-  const best = new Array<ExactStepMatch | undefined>(live.length + 1);
-  for (const [savedIndex, part] of saved.entries()) {
-    const text = part.trim();
-    if (!liveTexts.has(text)) continue;
-    let diagonal: ExactStepMatch | undefined;
-    for (const [liveIndex, liveText] of live.entries()) {
-      const above = best[liveIndex + 1];
-      const left = best[liveIndex];
-      const existing = (left?.length ?? 0) > (above?.length ?? 0) ? left : above;
-      const length = (diagonal?.length ?? 0) + 1;
-      best[liveIndex + 1] =
-        text === liveText && length > (existing?.length ?? 0)
-          ? { liveIndex, savedIndex, length, previous: diagonal }
-          : existing;
-      diagonal = above;
+function alignTaskAssistantSteps(live: ReadonlyArray<string>, saved: ReadonlyArray<string>) {
+  if (live.length === 0 || saved.length === 0) return [];
+  const prefixes = live.map((text) => text.trimStart());
+  const liveText = prefixes.map((text) => text.trimEnd());
+  const savedText = saved.map((text) => text.trimStart());
+  // At most 512 × 512 cells. One byte per decision and one live-sized score row.
+  const decisions = new Uint8Array(saved.length * live.length);
+  const scores = new Array<bigint>(live.length + 1).fill(0n);
+  const skipLiveItem = 1;
+  const matchStep = 2;
+  // Saved-index bits break ties lexicographically after match count and exact-match count.
+  const exactWeight = 1n << BigInt(saved.length);
+  const matchWeight = exactWeight * BigInt(live.length + 1);
+  for (let savedIndex = saved.length - 1; savedIndex >= 0; savedIndex--) {
+    const text = savedText[savedIndex] ?? "";
+    const trimmed = text.trimEnd();
+    const savedWeight = 1n << BigInt(saved.length - 1 - savedIndex);
+    let diagonal = 0n;
+    for (let liveIndex = live.length - 1; liveIndex >= 0; liveIndex--) {
+      const skipSaved = scores[liveIndex] ?? 0n;
+      const skipLive = scores[liveIndex + 1] ?? 0n;
+      const cell = savedIndex * live.length + liveIndex;
+      let best = skipSaved;
+      if (skipLive > best) {
+        best = skipLive;
+        decisions[cell] = skipLiveItem;
+      }
+      const prefix = prefixes[liveIndex];
+      const exact = trimmed === liveText[liveIndex];
+      if (exact || (prefix && text.startsWith(prefix))) {
+        const matched = diagonal + matchWeight + (exact ? exactWeight : 0n) + savedWeight;
+        if (matched >= best) {
+          best = matched;
+          decisions[cell] = matchStep;
+        }
+      }
+      scores[liveIndex] = best;
+      diagonal = skipSaved;
     }
-    if (best.at(-1)?.length === live.length) break;
   }
-  const matches: ExactStepMatch[] = [];
-  for (let match = best.at(-1); match !== undefined; match = match.previous) {
-    matches.push(match);
+
+  const matches: Array<{ readonly liveIndex: number; readonly savedIndex: number }> = [];
+  let liveIndex = 0;
+  let savedIndex = 0;
+  while (liveIndex < live.length && savedIndex < saved.length) {
+    const decision = decisions[savedIndex * live.length + liveIndex];
+    if (decision === matchStep) {
+      matches.push({ liveIndex, savedIndex });
+      liveIndex++;
+      savedIndex++;
+    } else if (decision === skipLiveItem) {
+      liveIndex++;
+    } else {
+      savedIndex++;
+    }
   }
-  return matches.reverse();
+  return matches;
 }
 
 export function makeCursorTaskProjection({
@@ -105,7 +133,7 @@ export function makeCursorTaskProjection({
       stream.current = {
         nativeItemId: `${subagent.childThreadId}:${kind}:${++stream.nextSegment}`,
         startedAt: yield* DateTime.now,
-        ordinal: ++subagent.nextChildOrdinal,
+        ordinal: (subagent.nextChildOrdinal += TASK_LIVE_ORDINAL_STRIDE),
         text: "",
       };
       if (kind === "assistant") state.assistantSegments.push(stream.current);
@@ -121,11 +149,12 @@ export function makeCursorTaskProjection({
     nativeId: string,
     toolCall: ToolCall,
     startedAt: DateTime.Utc,
+    ordinal: number,
   ): ActiveCursorToolCall => ({
     callId: nativeId,
     toolCall,
     target: childTarget(subagent),
-    ordinal: ++subagent.nextChildOrdinal,
+    ordinal,
     startedAt,
     streamedOutput: "",
   });
@@ -170,6 +199,7 @@ export function makeCursorTaskProjection({
             childToolId(subagent, nested.callId),
             nested.toolCall,
             yield* DateTime.now,
+            (subagent.nextChildOrdinal += TASK_LIVE_ORDINAL_STRIDE),
           );
         active.toolCall = nested.toolCall;
         state.tools.set(nested.callId, completed ? null : active);
@@ -189,37 +219,38 @@ export function makeCursorTaskProjection({
   ) {
     const state = subagent.projection;
     const target = childTarget(subagent);
-    const unstreamed: string[] = [];
-    const prefixes = state.assistantSegments.map((segment) => segment.text.trimStart());
-    const exact = exactStepMatches(
-      prefixes.map((text) => text.trimEnd()),
-      resultParts,
+    const saved = resultParts.slice(0, MAX_SAVED_TASK_TEXT_SEGMENTS);
+    const matches = alignTaskAssistantSteps(
+      state.assistantSegments.map((segment) => segment.text),
+      saved,
     );
-    let nextExactIndex = 0;
-    let nextSegmentIndex = 0;
-    for (const [savedIndex, part] of resultParts.entries()) {
-      const anchor = exact[nextExactIndex];
-      if (anchor?.savedIndex === savedIndex) {
-        nextExactIndex++;
-        nextSegmentIndex = anchor.liveIndex + 1;
-        continue;
+    const now = yield* DateTime.now;
+    const emitSaved = (savedIndex: number, text: string, ordinal: number) =>
+      emitAssistant(
+        target,
+        {
+          nativeItemId: `${CURSOR_TASK_SAVED_ITEM_PREFIX}${subagent.childThreadId}:${savedIndex}`,
+          text,
+          ordinal,
+          startedAt: now,
+        },
+        true,
+      );
+    let savedIndex = 0;
+    for (const match of matches) {
+      const segment = state.assistantSegments[match.liveIndex];
+      const text = saved[match.savedIndex];
+      if (segment === undefined || text === undefined) continue;
+      for (; savedIndex < match.savedIndex; savedIndex++) {
+        const part = saved[savedIndex];
+        if (part !== undefined) {
+          yield* emitSaved(savedIndex, part, segment.ordinal - (match.savedIndex - savedIndex));
+        }
       }
-
-      const saved = part.trimStart();
-      const end = anchor?.liveIndex ?? prefixes.length;
-      let index = nextSegmentIndex;
-      for (; index < end; index++) {
-        const prefix = prefixes[index];
-        if (prefix && saved.startsWith(prefix)) break;
-      }
-      const match = index < end ? state.assistantSegments[index] : undefined;
-      if (match === undefined) {
-        unstreamed.push(part);
-        continue;
-      }
-      nextSegmentIndex = index + 1;
-      match.text = part;
-      if (match !== state.assistant.current) yield* emitAssistant(target, match, true);
+      savedIndex++;
+      if (segment.text === text) continue;
+      segment.text = text;
+      if (segment !== state.assistant.current) yield* emitAssistant(target, segment, true);
     }
     yield* completeText(subagent);
     state.assistantSegments.length = 0;
@@ -243,10 +274,26 @@ export function makeCursorTaskProjection({
 
     const startedAt = subagent.task.startedAt ?? (yield* DateTime.now);
     for (const [callId, toolCall] of savedByCall) {
-      const active = makeTool(subagent, childToolId(subagent, callId), toolCall, startedAt);
+      const active = makeTool(
+        subagent,
+        childToolId(subagent, callId),
+        toolCall,
+        startedAt,
+        ++subagent.nextChildOrdinal,
+      );
       yield* emitToolArtifacts({ active, completed: true });
     }
-    return unstreamed.join("\n");
+    for (; savedIndex < saved.length; savedIndex++) {
+      const part = saved[savedIndex];
+      if (part !== undefined) yield* emitSaved(savedIndex, part, ++subagent.nextChildOrdinal);
+    }
+    if (resultParts.length > saved.length) {
+      yield* emitSaved(
+        saved.length,
+        resultParts.slice(saved.length).join("\n"),
+        ++subagent.nextChildOrdinal,
+      );
+    }
   });
 
   return { handleTaskUpdate, completeTaskWork };

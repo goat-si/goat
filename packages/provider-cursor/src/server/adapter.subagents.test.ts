@@ -672,9 +672,11 @@ it.effect.each([
       "Close the dashboard.",
     ],
     final: [
+      ["Check status. Open the dashboard first.", null],
       ["Inspect logs.", 0],
+      ["Read the alert.", null],
       ["Check status.", 1],
-      ["Check status. Open the dashboard first.\nRead the alert.\nClose the dashboard.", null],
+      ["Close the dashboard.", null],
     ],
   },
   {
@@ -703,9 +705,37 @@ it.effect.each([
     saved: ["Check status.", "Check status.", "Inspect logs.", "Check status."],
     final: [
       ["Check status.", 0],
+      ["Check status.", null],
       ["Inspect logs.", 1],
       ["Check status.", 2],
-      ["Check status.", null],
+    ],
+  },
+  {
+    name: "two early partial matches before a later exact match",
+    live: ["Build", "Check stat"],
+    saved: ["Build the image.", "Check status.", "Build"],
+    final: [
+      ["Build the image.", 0],
+      ["Check status.", 1],
+      ["Build", null],
+    ],
+  },
+  {
+    name: "an exact match tied on match count with an earlier prefix",
+    live: ["Build"],
+    saved: ["Build the image.", "Build"],
+    final: [
+      ["Build the image.", null],
+      ["Build", 0],
+    ],
+  },
+  {
+    name: "an earlier saved step tied with a later prefix",
+    live: ["Build"],
+    saved: ["Build the image.", "Build the package."],
+    final: [
+      ["Build the image.", 0],
+      ["Build the package.", null],
     ],
   },
   {
