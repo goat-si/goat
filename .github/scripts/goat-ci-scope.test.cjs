@@ -791,6 +791,14 @@ describe("planRun", () => {
     assert.match(step, /computer-use-linux-smoke\.ts/);
   });
 
+  it("runs the Windows archive installer suite when the installer changes", async () => {
+    const file = "scripts/install-windows.test.ts";
+    assert.ok(WINDOWS_SUITES.some((prefix) => file.startsWith(prefix)));
+    assert.ok(
+      (await plan(pr(), labels([]), ["scripts/install.ps1"])).tasks.includes("test-windows"),
+    );
+  });
+
   it("filters the Windows job by suites that each still select a test file", () => {
     const tests = listWorkspaceFiles(root).filter((file) => /\.test\.[cm]?[jt]sx?$/.test(file));
     for (const suite of WINDOWS_SUITES)
