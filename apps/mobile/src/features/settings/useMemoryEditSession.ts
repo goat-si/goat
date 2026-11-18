@@ -137,8 +137,7 @@ export function useMemoryEditSession({
     },
     editor: {
       edited: edited !== "no",
-      // An untouched editor shows the body, so it is masked like the read-only view during a reread.
-      masked: own !== "save" && gap === "changed" && edited === "no",
+      masked: gap === "changed",
       onTextChange: (text: string) =>
         setEdited((previous) =>
           previous === "kept" || item?.status !== "active"

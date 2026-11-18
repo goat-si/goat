@@ -420,7 +420,7 @@ it.each(["refused", "failed"] as const)(
     });
     expect(field()?.value).toBe("Typed before the save was turned down");
     const reread = await changeSignal("invalidate");
-    expect(field()?.value).toBe("Typed before the save was turned down");
+    expect(field()?.value).toBe("");
     await act(async () => {
       await reread.succeed(held("secret_detected"));
     });
