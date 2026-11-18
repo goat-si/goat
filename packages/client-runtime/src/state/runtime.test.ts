@@ -45,6 +45,7 @@ import {
   TestQueryError,
   queryConnectionState,
   makeEnvironmentQueryHarness,
+  legacyTerminalAttachClient,
   readEnvironmentQuery,
   mountEnvironmentQuery,
 } from "./runtimeTestSupport.ts";
@@ -277,13 +278,7 @@ describe("environment query lifecycle", () => {
       const inputs = yield* Queue.unbounded<TerminalAttachInput>();
       const events = yield* Queue.unbounded<TerminalAttachStreamEvent>();
       const received = yield* Deferred.make<void>();
-      const client = {
-        [WS_METHODS.terminalAttach]: (input: TerminalAttachInput) =>
-          Stream.fromEffect(Queue.offer(inputs, input)).pipe(
-            Stream.drain,
-            Stream.concat(Stream.fromQueue(events)),
-          ),
-      } as unknown as RpcSession.RpcSession["client"];
+      const client = legacyTerminalAttachClient(inputs, events);
       const firstSession = { ...QUERY_RPC_SESSION, client };
       yield* SubscriptionRef.set(harness.supervisorSession, Option.some(firstSession));
       const input = {

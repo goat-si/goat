@@ -1,8 +1,14 @@
 import { createMemoryHistory } from "@tanstack/react-router";
 import { scopeThreadRef } from "@goat/client-runtime/environment";
-import { ThreadId } from "@goat/contracts";
+import {
+  AuthTerminalOperateScope,
+  TerminalCwdNotFoundError,
+  ThreadId,
+  WS_METHODS,
+} from "@goat/contracts";
 import { DEFAULT_CLIENT_SETTINGS } from "@goat/contracts/settings";
 import type * as Context from "effect/Context";
+import * as Effect from "effect/Effect";
 import { expect, it, vi } from "vite-plus/test";
 import { page } from "vite-plus/test/browser";
 
@@ -11,11 +17,13 @@ import { AppRoot } from "~/AppRoot";
 import "~/components/ChatView";
 import { __setClientSettingsForTests } from "~/hooks/useSettings";
 import { getRouter } from "~/router";
+import { readEnvironmentScope } from "~/state/session";
 import { loadGhosttyRuntime } from "~/terminal/ghostty/runtime";
 import { useTerminalUiStateStore } from "~/terminalUiStateStore";
 import {
   ENVIRONMENT_ID,
   installFakeEnvironment,
+  rpcRequests,
   threadWithHistory,
   type FakeDriver,
 } from "../../test/fakeEnvironment";
@@ -36,14 +44,17 @@ vi.mock(import("~/rpc/requestLatencyState"), async (original) => ({
   trackRpcRequestSent: () => {},
 }));
 
-it("entering a thread on a touch tablet focuses its open drawer terminal and never the composer", async () => {
+it("a tablet focuses the drawer terminal on thread entry and shows a failed new terminal open", async () => {
   const realMatchMedia = window.matchMedia.bind(window);
   using _touch = vi
     .spyOn(window, "matchMedia")
     .mockImplementation((query) => realMatchMedia(query === "(pointer: coarse)" ? "all" : query));
   const first = threadWithHistory("thread-terminal-touch-a", 1);
   const second = threadWithHistory("thread-terminal-touch-b", 1);
-  using _environment = installFakeEnvironment([first, second]);
+  const rejected = new TerminalCwdNotFoundError({ cwd: "/missing/worktree" });
+  using _environment = installFakeEnvironment([first, second], {
+    rpc: { [WS_METHODS.terminalOpen]: () => Effect.fail(rejected) },
+  });
   // The drawer terminal takes focus only once Ghostty's WebAssembly has loaded.
   await loadGhosttyRuntime();
   // iPad Pro 11 in landscape: the desktop layout, above max-sm.
@@ -77,4 +88,15 @@ it("entering a thread on a touch tablet focuses its open drawer terminal and nev
     expect(document.activeElement?.closest('[data-terminal-owner="drawer"]')).not.toBeNull(),
   );
   expect(document.activeElement).not.toBe(composer.element());
+
+  await vi.waitFor(() =>
+    expect(readEnvironmentScope(ENVIRONMENT_ID, AuthTerminalOperateScope)).toBe(true),
+  );
+  await page.getByRole("button", { name: /^New Terminal/i }).click();
+  await vi.waitFor(() =>
+    expect(rpcRequests(WS_METHODS.terminalOpen)).toContainEqual(
+      expect.objectContaining({ threadId: second.id, terminalErrorMessage: true }),
+    ),
+  );
+  await expect.element(page.getByText(rejected.message)).toBeVisible();
 });
