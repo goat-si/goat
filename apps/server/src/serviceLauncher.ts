@@ -42,6 +42,7 @@ import {
   discardDatabaseBackup,
   launcherOwner,
   markTrialStarted,
+  markUntrackedDatabaseOwner,
   ownerLockDir,
   pathExists,
   restoreDatabaseBackup,
@@ -824,7 +825,9 @@ export class Launcher {
     if (this.#stopRequested || this.#timer === undefined || this.#child !== null) return;
     const update = this.#state.update;
     const pending = update?.status === "pending" ? update : undefined;
-    const owned = await stateDirOwned(this.#baseDir);
+    const owned = await stateDirOwned(
+      pending === undefined ? NodePath.join(this.#baseDir, "userdata") : ownerLockDir(pending),
+    );
     // A stop during the probe clears the timer.
     if (this.#timer === undefined) return;
     // A relaunching desktop app frees the home for a few seconds; leave it that gap.
@@ -832,14 +835,20 @@ export class Launcher {
     if (owned) {
       const since = this.#ownerBusySince;
       if (pending === undefined || since === undefined) return;
+      const trialStarted = await trialMayHaveStarted(this.#baseDir, pending.id);
+      if (trialStarted) await markUntrackedDatabaseOwner(this.#baseDir, pending.id);
       if (this.#now() - since < STATE_DIR_OWNER_BOUND_MS) return;
       this.#ownerBusySince = undefined;
       const gaveUp =
         "[service-launcher] The GOAT home stayed owned by another server for 10 minutes; the update failed (db-owner-busy).\n";
       // A target that may have opened the database goes through the normal rollback.
-      if (await trialMayHaveStarted(this.#baseDir, pending.id)) {
-        process.stderr.write(gaveUp);
+      if (trialStarted) {
         await this.#returnToPrevious(pending, "failed", "db-owner-busy");
+        process.stderr.write(
+          this.#state.update?.status === "pending"
+            ? "[service-launcher] The GOAT home stayed owned by another server for 10 minutes. Rollback is waiting for the GOAT home to become free.\n"
+            : gaveUp,
+        );
         return;
       }
       await discardDatabaseBackup(this.#baseDir, pending.id).catch(() => undefined);
@@ -890,8 +899,8 @@ export class Launcher {
     }
     const restore = await restoreDatabaseBackup(this.#baseDir, pending);
     if (restore === "busy") {
-      // Another server owns the userdata. Starting the previous version would
-      // skip the restore, so retry until the lock frees up.
+      // Starting the previous version while the home is owned would skip the restore.
+      if (this.#stopRequested) return;
       this.#clearTimer();
       this.#timer = setTimeout(
         () => this.#enqueue(() => this.#returnToPrevious(pending, status, reason)),

@@ -158,14 +158,29 @@ it.layer(NodeServices.layer)("a pending update while another server owns the hom
     }),
   );
 
-  it.effect("at the bound keeps a backup a trial may have used and rolls back through it", () =>
+  it.effect("at the bound waits for a legacy owner and preserves its writes and the backup", () =>
     Effect.gen(function* () {
       const s = yield* scenario({ trialStarted: true });
+      const pending = (yield* Effect.promise(() => readServiceState(s.statePath))).update;
+      assert.equal(pending?.status, "pending");
+      const backup = NodePath.join(s.root, "runtime", "db-backup", pending?.id ?? "");
+      yield* s.fs.writeFileString(s.dbPath, "database the legacy server wrote");
+      s.clock.now = BOUND_MS;
+      const decision = yield* Effect.promise(() =>
+        Promise.race([
+          s.observed
+            .line("Rollback is waiting for the GOAT home to become free.")
+            .then(() => "waiting"),
+          s.running.then(() => "restarted while owned"),
+        ]),
+      );
+      assert.equal(decision, "waiting");
       assert.equal(
         (yield* Effect.promise(() => readServiceState(s.statePath))).update?.status,
         "pending",
       );
-      s.clock.now = BOUND_MS;
+      assert.equal(yield* s.fs.readFileString(s.dbPath), "database the legacy server wrote");
+      s.release();
       assert.include(
         String(yield* Effect.promise(() => s.running)),
         "Active child exited unexpectedly (0)",
@@ -177,9 +192,13 @@ it.layer(NodeServices.layer)("a pending update while another server owns the hom
       const state = yield* Effect.promise(() => readServiceState(s.statePath));
       assert.deepEqual(
         state.update?.status === "failed" ? [state.update.status, state.update.reason] : [],
-        ["failed", "db-owner-busy"],
+        ["failed", "db-owner-busy;db-kept-for-other-server"],
       );
-      assert.equal(yield* s.fs.readFileString(s.dbPath), "database before the update");
+      assert.equal(yield* s.fs.readFileString(s.dbPath), "database the legacy server wrote");
+      assert.equal(
+        yield* s.fs.readFileString(NodePath.join(backup, "database")),
+        "database before the update",
+      );
     }),
   );
 });

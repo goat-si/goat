@@ -8,11 +8,13 @@ import * as NodePath from "node:path";
 
 import type { PendingServiceUpdate } from "./cloud/serviceProtocol.ts";
 import { tryAcquireServerOwnerLock } from "./serverOwnerLockFile.ts";
+import { livePreLockServerOwner, tryAcquireLegacyServerOwnerLock } from "./serviceLauncherOwner.ts";
 
 const DB_FILE_SUFFIXES = ["", "-wal", "-shm"] as const;
 const RESTORE_MARKER = ".restore-pending";
 const ROLLBACK_MARKER = ".rollback-pending";
 const TRIAL_MARKER = ".trial-started";
+const UNTRACKED_OWNER_MARKER = ".untracked-owner";
 const OWNER_GENERATION_FILE = "owner-generation";
 
 // Owner tags in the server-owner.lock generation log. Only these two may own
@@ -196,7 +198,8 @@ export async function databaseRestorePending(
   const backupDir = databaseBackupDir(baseDir, pending.id);
   return (
     (await pathExists(NodePath.join(backupDir, ROLLBACK_MARKER))) ||
-    (await pathExists(NodePath.join(backupDir, RESTORE_MARKER)))
+    (await pathExists(NodePath.join(backupDir, RESTORE_MARKER))) ||
+    (await pathExists(NodePath.join(backupDir, UNTRACKED_OWNER_MARKER)))
   );
 }
 
@@ -211,6 +214,11 @@ async function writeMarker(backupDir: string, marker: string): Promise<void> {
     }
     await syncDirectory(backupDir);
   }
+}
+
+export async function markUntrackedDatabaseOwner(baseDir: string, updateId: string): Promise<void> {
+  const backupDir = databaseBackupDir(baseDir, updateId);
+  if (await pathExists(backupDir)) await writeMarker(backupDir, UNTRACKED_OWNER_MARKER);
 }
 
 // Resolve symlink targets even if a crashed cp -c left the final target missing.
@@ -236,7 +244,7 @@ async function restoreTarget(path: string): Promise<string> {
   throw new Error(`Too many symbolic links resolving ${path}.`);
 }
 
-// Restores the backup under server-owner.lock. `busy`: another process holds the lock and the
+// Restores the backup under both ownership locks. `busy`: another server owns the home and the
 // rollback stays pending. `kept`: a server other than this update's launcher and trial owned the
 // data since the backup, so its writes win. A started copy leaves the live files partial, so later
 // attempts finish it regardless; retryable after any crash while the backup remains.
@@ -248,9 +256,18 @@ export async function restoreDatabaseBackup(
   if (!(await pathExists(backupDir))) return "restored";
   await writeMarker(backupDir, ROLLBACK_MARKER);
 
-  const lock = tryAcquireServerOwnerLock(ownerLockDir(pending), launcherOwner(pending.id));
+  const stateDir = ownerLockDir(pending);
+  const lock = tryAcquireServerOwnerLock(stateDir, launcherOwner(pending.id));
   if (lock === undefined) return "busy";
+  let releaseLegacy: (() => void) | undefined;
   try {
+    releaseLegacy = tryAcquireLegacyServerOwnerLock(stateDir);
+    if (releaseLegacy === undefined || (await livePreLockServerOwner(stateDir))) {
+      await markUntrackedDatabaseOwner(baseDir, pending.id);
+      return "busy";
+    }
+    if (await pathExists(NodePath.join(backupDir, UNTRACKED_OWNER_MARKER))) return "kept";
+
     if (!(await pathExists(NodePath.join(backupDir, RESTORE_MARKER)))) {
       const recorded = await NodeFSP.readFile(
         NodePath.join(backupDir, OWNER_GENERATION_FILE),
@@ -298,6 +315,7 @@ export async function restoreDatabaseBackup(
     await syncDirectory(backupDir);
     return "restored";
   } finally {
+    releaseLegacy?.();
     lock.release();
   }
 }
@@ -305,6 +323,7 @@ export async function restoreDatabaseBackup(
 export async function discardDatabaseBackup(baseDir: string, updateId: string): Promise<void> {
   const backupDir = databaseBackupDir(baseDir, updateId);
   if (!(await pathExists(backupDir))) return;
+  if (await pathExists(NodePath.join(backupDir, UNTRACKED_OWNER_MARKER))) return;
   await NodeFSP.rm(backupDir, { recursive: true, force: true });
   await syncDirectory(NodePath.dirname(backupDir));
 }

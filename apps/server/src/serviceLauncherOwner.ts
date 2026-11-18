@@ -10,22 +10,35 @@ import {
   legacyOwnerStartTimeCommand,
 } from "./legacyServerOwner.ts";
 
-/** True while another server holds the ownership lock or a live pre-lock server recorded itself. */
-export async function stateDirOwned(baseDir: string): Promise<boolean> {
-  const stateDir = NodePath.join(baseDir, "userdata");
-  let db: NodeSqlite.DatabaseSync | undefined;
+/** Hold the SQLite lock used by servers that predate the generation log. */
+export function tryAcquireLegacyServerOwnerLock(stateDir: string): (() => void) | undefined {
+  const db = new NodeSqlite.DatabaseSync(NodePath.join(stateDir, "server-owner.sqlite"));
   try {
-    db = new NodeSqlite.DatabaseSync(NodePath.join(stateDir, "server-owner.sqlite"));
-    db.exec("PRAGMA busy_timeout = 0; BEGIN EXCLUSIVE; ROLLBACK;");
+    db.exec("PRAGMA busy_timeout = 0; BEGIN EXCLUSIVE;");
   } catch (cause) {
-    const busy =
+    db.close();
+    if (
       cause instanceof Error &&
-      (("errcode" in cause && cause.errcode === 5) || cause.message === "database is locked");
-    // Other failures are server startup's to report.
-    return busy;
-  } finally {
-    db?.close();
+      (("errcode" in cause && cause.errcode === 5) || cause.message === "database is locked")
+    )
+      return undefined;
+    throw cause;
   }
+  return () => db.close();
+}
+
+export async function stateDirOwned(stateDir: string): Promise<boolean> {
+  try {
+    const release = tryAcquireLegacyServerOwnerLock(stateDir);
+    if (release === undefined) return true;
+    release();
+  } catch {
+    // Lock errors other than a competing holder are server startup's to report.
+  }
+  return livePreLockServerOwner(stateDir);
+}
+
+export async function livePreLockServerOwner(stateDir: string): Promise<boolean> {
   let record: unknown;
   try {
     record = JSON.parse(
