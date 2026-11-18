@@ -338,3 +338,18 @@ Compatibility retains the opt-in keys, old-server full catalogs, and existing re
 ## K7b-2 fix round 2
 
 The coordinator accepted P2-a and P2-b against `2dc724e37d`. P2-a exercises an exhausted refresh with unchanged snapshot status and then a changed digest. The mounted refresh watches the digest and restores the bounded budget. An active request still settles through the existing completion and cooldown path. P2-b exercises an installation update whose machine commands, skills and digest are unchanged but whose cwd scan has changed. The server cache and in-flight publication check and the client workspace cache use installed state, reported version and optional installed CLI version. Legacy clients and servers use the same wire shape and auth rules. Separate fail-first commits, guarded server tests, changed-files gate and plain push. Native P1 remains with the coordinator.
+
+### K7b-2 fix round 2 READY
+
+Head `d2167acc0cf9f2636cf71b2b4ce9506d6019665a`. Two commits on the previously reviewed `2dc724e37d` head. The merge-tree against integration `cf1e3679e3` was clean.
+
+| Finding | Commit | Change and fail-first evidence |
+| --- | --- | --- |
+| P2-a | `ece163f057e4d3d77c5b2b835bcdfc68fb012c0f` | The cwd refresh watches the current digest even when the snapshot stays absent or pending. A new digest renews its bounded retry budget and releases an exhausted request marker. The existing in-flight completion path remains covered. The new case first stayed at three requests after the digest changed, then passed with another bounded set of three. A health-only update leaves the budget exhausted. |
+| P2-b | `d2167acc0cf9f2636cf71b2b4ce9506d6019665a` | The server reuses and publishes cwd snapshots only for the matching installation, reported version and optional installed CLI version. The client keys its cwd snapshots on the same fields from the reply and applies them when config agrees. The server regression first returned the previous cwd command even though the installed CLI version changed and the machine digest stayed equal. The three client cases first retained the stale cwd snapshot across a change in each installation field. |
+
+The config and RPC schemas keep their existing fields and auth behavior. The machine catalog digest still covers machine commands and skills. Existing test expectations were preserved.
+
+- `GOAT_TEST_TMP_GUARD=fail vp run check:changed origin/chase/t3-261114-next3` exited 0 on the published head. Typecheck passed for 38 packages. Tests passed across 245 files, with 1,076 server tests and 3,073 workspace tests, 4,149 total.
+- From apps/server, `GOAT_TEST_TMP_GUARD=fail vp test run src/ws.providerCatalog.test.ts src/provider/ProviderWorkspaceSnapshots.test.ts src/provider/ProviderRegistry.test.ts src/skills/GlobalSkillsRegistry.test.ts` exited 0, 69 passed. From root, `vp test run packages/client-runtime/src/providerSkills.test.ts packages/client-runtime/src/state/serverConfigProjection.catalogs.test.ts packages/client-runtime/src/state/server.test.ts packages/contracts/src/providerCatalogCompatibility.test.ts apps/mobile/src/widgets/useSubscriptionUsage.test.tsx apps/mobile/src/features/threads/use-thread-transcript-skills.test.tsx` exited 0, 81 passed.
+- P1 remains mobile launch and reconnect, composer catalogs, widget refresh, and cold connected subagent transcript links. NOT RUN: native or other live-client passes, older binaries, GOAT Connect, slow-link or seeded payload remeasurement, GitHub CI, full builds and suites. The K7b-1 cut waits for the coordinator's merge.
