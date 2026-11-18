@@ -1,3 +1,4 @@
+import { makeServerBrowserControls } from "./ServerBrowserControls.ts";
 import { BROWSER_TITLE_LIMIT, makeBrowserTitleWatcher } from "./browserTitleWatcher.ts";
 import { makeSaveDownload } from "./saveBrowserDownload.ts";
 import { stopUnresponsiveScript } from "./stopUnresponsiveScript.ts";
@@ -318,10 +319,7 @@ const make = Effect.gen(function* () {
       };
     }
   >();
-  const findControlTab = (threadId: string, tabId: string) => {
-    const key = tabKey(threadId, tabId);
-    return pendingTabs.get(key)?.recovery ?? tabs.get(key);
-  };
+  const browserControls = makeServerBrowserControls(tabs, pendingTabs);
   const screen = ServerBrowserScreen.makeSurface<ServerTab>(
     (threadId, tabId) => tabs.get(tabKey(threadId, tabId)),
     (key, cursor) => runFork(desktopChannel.cursorState?.(key, cursor) ?? Effect.void),
@@ -336,7 +334,7 @@ const make = Effect.gen(function* () {
         )
         .catch(constVoid);
     },
-    findControlTab,
+    browserControls.find,
   );
   const sessionChanges = yield* PubSub.sliding<void>(1);
   const closedPendingTabs = new Set<string>();
@@ -553,6 +551,7 @@ const make = Effect.gen(function* () {
     const control = tab.control.replacement(() => {
       if (page) ServerBrowserPage.invalidateRefs(page);
     });
+    browserControls.rememberStop(key, control);
     const recovery = {
       threadId: tab.threadId,
       tabId: tab.tabId,
@@ -625,12 +624,13 @@ const make = Effect.gen(function* () {
 
   const createTab = (snapshot: PreviewSessionSnapshot, replaced?: ServerTab): Promise<ServerTab> =>
     withTabSetupCleanup(async (opened) => {
-      const adopted = adoptedPages.get(tabKey(snapshot.threadId, snapshot.tabId));
+      const key = tabKey(snapshot.threadId, snapshot.tabId);
+      const adopted = adoptedPages.get(key);
       const openSignal = adopted
         ? adopted.signal
         : openRuns.signal(snapshot.threadId, snapshot.automationOwner);
       openSignal?.throwIfAborted();
-      adoptedPages.delete(tabKey(snapshot.threadId, snapshot.tabId));
+      adoptedPages.delete(key);
       if (adopted) opened.push(() => adopted.close().catch(popupCloseFailure(adopted.page)));
       const desktop =
         adopted === undefined &&
@@ -687,14 +687,14 @@ const make = Effect.gen(function* () {
       openSignal?.throwIfAborted();
       page.setDefaultTimeout(NAVIGATION_TIMEOUT_MS);
       page.setDefaultNavigationTimeout(NAVIGATION_TIMEOUT_MS);
-      const recovery =
-        replaced && pendingTabs.get(tabKey(snapshot.threadId, snapshot.tabId))?.recovery;
+      const recovery = replaced && pendingTabs.get(key)?.recovery;
       recovery?.bindPage(page);
       const control =
         recovery?.control ??
         new SessionControl(snapshot.automationOwner ?? null, () =>
           ServerBrowserPage.invalidateRefs(page),
         );
+      browserControls.restoreStop(key, control);
       opened.push(() => control.close());
       control.onDispatchCut(inputFence(cdp));
       const diagnostics = new ServerBrowserDiagnostics(
@@ -902,7 +902,6 @@ const make = Effect.gen(function* () {
         .catch(constVoid);
       openSignal?.throwIfAborted();
       setupSignal = undefined;
-      const key = tabKey(tab.threadId, tab.tabId);
       if (closedPendingTabs.has(key)) {
         if (desktop && tab.dialog === null) await unloadDesktopTab(tab);
         throw new ServerBrowserTabNotFoundError({ threadId: tab.threadId, tabId: tab.tabId });
@@ -2128,15 +2127,18 @@ const make = Effect.gen(function* () {
       }
       const key = tabKey(event.threadId, event.tabId);
       const tab = tabs.get(key);
-      if (event.type === "closed" && !tab && pendingTabs.has(key)) closedPendingTabs.add(key);
-      if (!tab) return;
       if (event.type === "closed") {
+        browserControls.close(key);
+        if (!tab) {
+          if (pendingTabs.has(key)) closedPendingTabs.add(key);
+          return;
+        }
         closedSessions.add(key);
         dropTab(tab, false);
         closedSessions.delete(key);
         return;
       }
-      if (event.type === "resized") {
+      if (event.type === "resized" && tab) {
         // Desktop tabs only record the setting, so status need not wait behind an agent action.
         if (tab.desktop) tab.setting = event.snapshot.viewport ?? FILL_PREVIEW_VIEWPORT;
         await tab.control
@@ -2635,20 +2637,8 @@ const make = Effect.gen(function* () {
     sessions: Effect.promise(() => Promise.all([...tabs.values()].map(browserSessionView))),
     sessionChanges: Stream.fromPubSub(sessionChanges),
     ...screen.service,
-    stopAllAgents: Effect.sync(() => {
-      for (const [key, tab] of tabs) {
-        if (!pendingTabs.get(key)?.recovery) tab.control.stopAgents();
-      }
-      for (const { recovery } of pendingTabs.values()) recovery?.control.stopAgents();
-    }),
-    controlSession: (input) =>
-      Effect.sync(() => {
-        const tab = findControlTab(input.threadId, input.tabId);
-        if (!tab) return false;
-        if (input.control === "stop") tab.control.stopAgents();
-        else tab.control.resumeAgents();
-        return true;
-      }),
+    stopAllAgents: browserControls.stopAllAgents,
+    controlSession: browserControls.controlSession,
   });
 });
 

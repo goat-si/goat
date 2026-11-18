@@ -337,7 +337,7 @@ export const crashRenderer = Effect.fn("TestBrowser.crashRenderer")(function* (
   browser: ServerBrowser.ServerBrowser["Service"],
   tabId: string,
   url: string,
-  duringRecovery: "plain" | "stopAll" | "settle",
+  duringRecovery: "plain" | "stopAll" | "settle" | "failed",
 ) {
   const replacement = makePageContext({
     initialNavigation: () => undefined,
@@ -352,9 +352,10 @@ export const crashRenderer = Effect.fn("TestBrowser.crashRenderer")(function* (
   replacement.page.setViewportSize.mockImplementationOnce(async () => {
     paused.resolve();
     await resume.promise;
+    if (duringRecovery === "failed") throw new Error("Replacement renderer setup failed");
   });
   const key = { threadId: scope.thread.threadId, tabId };
-  if (duringRecovery !== "plain") {
+  if (duringRecovery === "stopAll" || duringRecovery === "settle") {
     expect(
       yield* (
         browser.requestHandoff?.({
@@ -371,9 +372,26 @@ export const crashRenderer = Effect.fn("TestBrowser.crashRenderer")(function* (
   yield* Effect.promise(() => paused.promise);
   if (duringRecovery === "stopAll") yield* browser.stopAllAgents;
   if (duringRecovery === "settle") yield* browser.endHandoff?.(key) ?? Effect.void;
+  const applied =
+    duringRecovery === "failed"
+      ? yield* browser.controlSession({ ...key, control: "stop" })
+      : undefined;
   resume.resolve();
   yield* Fiber.join(crash);
 
+  if (duringRecovery === "failed") {
+    expect(applied).toBe(true);
+    expect((yield* browser.sessions).find((session) => session.tabId === tabId)).toBeUndefined();
+    yield* browser.attachViewer(viewerInput(tabId, true));
+    expect((yield* browser.sessions).find((session) => session.tabId === tabId)).toMatchObject({
+      agentStopped: true,
+    });
+    expect(yield* browser.controlSession({ ...key, control: "handBack" })).toBe(true);
+    expect((yield* browser.sessions).find((session) => session.tabId === tabId)).toMatchObject({
+      agentStopped: false,
+    });
+    return replacement;
+  }
   const sessions = yield* browser.sessions;
   if (duringRecovery !== "plain") {
     expect(sessions.find((session) => session.tabId === tabId)).toMatchObject({

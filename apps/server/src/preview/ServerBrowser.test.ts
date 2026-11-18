@@ -2536,7 +2536,7 @@ it.effect("keeps a tab's zoom when its viewer resizes", () =>
   ).pipe(Effect.provide(layer)),
 );
 
-it.effect.each(["plain", "stopAll", "settle"] as const)(
+it.effect.each(["plain", "stopAll", "settle", "failed"] as const)(
   "a crashed tab stays open and preserves control during recovery: %s",
   (duringRecovery) =>
     Effect.scoped(
@@ -2544,6 +2544,7 @@ it.effect.each(["plain", "stopAll", "settle"] as const)(
         const { browser, broker, tabId } = yield* ready;
         const url = `https://example.com/app?${"a".repeat(3000)}`;
         const replacement = yield* crashRenderer(contexts[0]!, browser, tabId, url, duringRecovery);
+        if (duringRecovery === "failed") return;
         expect(replacement.newPage).toHaveBeenCalled();
         const status = yield* broker.invoke<PreviewAutomationStatus>({
           scope,
