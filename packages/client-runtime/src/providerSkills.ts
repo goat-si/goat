@@ -286,6 +286,7 @@ const WORKSPACE_SNAPSHOT_RETRY_COOLDOWN_MS = 10_000;
 const WORKSPACE_SNAPSHOT_MAX_ATTEMPTS = 3;
 
 export interface ProviderWorkspaceSnapshotRefreshState {
+  readonly catalogDigest: string | undefined;
   /**
    * When the last scan was requested. A request inside the TTL is not
    * repeated, so a client clock ahead of the server's cannot loop rescans.
@@ -301,6 +302,7 @@ export interface ProviderWorkspaceSnapshotRefreshState {
 }
 
 const initialProviderWorkspaceSnapshotRefreshState: ProviderWorkspaceSnapshotRefreshState = {
+  catalogDigest: undefined,
   requestedAt: null,
   retryNotBefore: null,
   failedAttempts: 0,
@@ -326,19 +328,26 @@ function planProviderWorkspaceSnapshotRefresh(
   const hasSnapshot = hasCompleteProviderWorkspaceSnapshot(provider, cwd);
   const snapshot = provider && resolveProviderWorkspaceSnapshot(provider, cwd);
   const pending = Boolean(snapshot && isProviderWorkspaceSnapshotPending(snapshot));
-  // Losing a snapshot (the server dropped it) lifts both the TTL and the retry
-  // cooldown so the scan happens at once.
+  const catalogDigest = provider?.catalogDigest;
+  const digestChanged = previous.catalogDigest !== catalogDigest;
   const lost = previous.hadSnapshot && !hasSnapshot;
-  const requestedAt = lost ? null : previous.requestedAt;
+  const resetBudget = lost || digestChanged;
+  // A digest change can release an exhausted scan without duplicating an in-flight request.
+  const requestedAt =
+    lost || (digestChanged && previous.failedAttempts >= WORKSPACE_SNAPSHOT_MAX_ATTEMPTS)
+      ? null
+      : previous.requestedAt;
   const retryNotBefore =
-    lost || (previous.retryNotBefore !== null && now >= previous.retryNotBefore)
+    resetBudget || (previous.retryNotBefore !== null && now >= previous.retryNotBefore)
       ? null
       : previous.retryNotBefore;
   const state = {
+    catalogDigest,
     requestedAt,
     retryNotBefore,
     failedAttempts:
-      lost || (requestedAt !== null && now - requestedAt >= PROVIDER_WORKSPACE_SNAPSHOT_TTL_MS)
+      resetBudget ||
+      (requestedAt !== null && now - requestedAt >= PROVIDER_WORKSPACE_SNAPSHOT_TTL_MS)
         ? 0
         : previous.failedAttempts,
     hadSnapshot: hasSnapshot,
@@ -355,15 +364,14 @@ function planProviderWorkspaceSnapshotRefresh(
   return {
     state,
     refresh: false,
-    recheckAt:
-      !current && (pending || provider?.catalogDigest !== undefined) ? retryNotBefore : null,
+    recheckAt: !current && (pending || catalogDigest !== undefined) ? retryNotBefore : null,
   };
 }
 
 /**
  * A scan that failed, or finished without a complete snapshot, cools down
  * before retrying. After the last attempt the request marker stays, so only
- * the TTL (or a snapshot loss) lets the next scan through.
+ * the TTL, a snapshot loss, or a digest change lets the next scan through.
  */
 function failProviderWorkspaceSnapshotRefresh(
   state: ProviderWorkspaceSnapshotRefreshState,
@@ -444,12 +452,16 @@ export function createProviderWorkspaceSnapshotRefreshAtomFamily(input: {
     const statusAtom = Atom.make((get) =>
       resolveWorkspaceSnapshotStatus(findProvider(get(input.providers(environmentId))), cwd),
     ).pipe(Atom.withLabel(`provider-workspace-snapshot-status:${key}`));
+    const digestAtom = Atom.make(
+      (get) => findProvider(get(input.providers(environmentId)))?.catalogDigest,
+    ).pipe(Atom.withLabel(`provider-workspace-snapshot-digest:${key}`));
     type Update = (
       state: ProviderWorkspaceSnapshotRefreshState,
     ) => ProviderWorkspaceSnapshotRefreshState;
     const refreshAtom: Atom.Writable<ProviderWorkspaceSnapshotRefreshState, Update> = Atom.writable(
       (get): ProviderWorkspaceSnapshotRefreshState => {
         get(statusAtom);
+        get(digestAtom);
         // `once`: unrelated provider updates must not trigger a check.
         const provider = findProvider(get.once(input.providers(environmentId)));
         // @effect-diagnostics-next-line globalDate:off
