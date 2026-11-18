@@ -1,6 +1,6 @@
 import { act } from "react";
 import { afterEach, expect, it, vi } from "vite-plus/test";
-import { WS_METHODS, MemoryItem, type MemoryUpsertInput } from "@goat/contracts";
+import { WS_METHODS, MemoryItem, MemoryRpcError, type MemoryUpsertInput } from "@goat/contracts";
 import * as Option from "effect/Option";
 import * as Schema from "effect/Schema";
 import {
@@ -377,5 +377,56 @@ it.each(["refused", "failed"] as const)(
     expect(field()).toBeNull();
     expect(text()).toContain(CLOSED_LINE);
     expect(text()).not.toContain("Typed before the save was turned down");
+  },
+);
+
+it.each(["rpc", "receipt"])("reviews a fresh revision after a stale save (%s)", async (kind) => {
+  await openEditor("Stale draft");
+  const { save, input } = await saveHeld();
+  await act(async () => {
+    if (kind === "rpc") await save.fail(new MemoryRpcError({ code: "revision_changed" }));
+    else await save.succeed(reject(input));
+  });
+  expect(text()).toContain("This memory changed before your save.");
+  expect(text()).not.toContain("Retry save request");
+  expect(h.calls.filter((call) => call.method === WS_METHODS.memoryUpsert)).toHaveLength(1);
+
+  h.responses.set(WS_METHODS.memoryRead, () => savedElsewhere);
+  await view.click("Review latest memory");
+  await answered();
+  if (savedElsewhere.status !== "active") throw new Error("Active fixture required");
+  const head = savedElsewhere.revision.revisionId;
+  expect(text()).toContain("Saved on another device");
+  expect(text()).toContain(`Current revision: ${head}`);
+  expect(field()).toBeNull();
+  await view.click("Edit");
+  await view.type("Memory text", "Edit after review");
+  h.responses.set(WS_METHODS.memoryUpsert, accept);
+  await view.click("Save memory");
+
+  const writes = h.calls.filter((call) => call.method === WS_METHODS.memoryUpsert);
+  expect(writes).toHaveLength(2);
+  expect(writes[1]?.input).toMatchObject({ expectedHeads: [head] });
+  expect((writes[1]!.input as MemoryUpsertInput).operationId).not.toBe(
+    (writes[0]!.input as MemoryUpsertInput).operationId,
+  );
+});
+it.each([
+  ["conflicted", false, "The save conflicted with another revision."],
+  ["deleted", false, "This memory was deleted before the save applied."],
+  ["accepted", true, "Save submitted for sync."],
+] as const)(
+  "reports the %s save receipt with pending sync %s",
+  async (outcome, pendingSync, message) => {
+    await openEditor("Typed update");
+    h.responses.set(WS_METHODS.memoryUpsert, (input) => ({
+      ...accept(input),
+      outcome,
+      pendingSync,
+    }));
+    await view.click("Save memory");
+    expect(text()).toContain(message);
+    expect(text()).not.toContain("Retry save request");
+    expect(field() !== null).toBe(!pendingSync);
   },
 );

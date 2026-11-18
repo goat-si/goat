@@ -1,6 +1,13 @@
 import { RegistryContext } from "@effect/atom-react";
-import { EnvironmentId, MemoryItem, MemoryRevision, MemorySpaceId } from "@goat/contracts";
+import {
+  EnvironmentId,
+  MemoryItem,
+  MemoryRpcError,
+  MemoryRevision,
+  MemorySpaceId,
+} from "@goat/contracts";
 import { emptyMemoryExposure } from "@goat/client-runtime/state/memory";
+import * as Cause from "effect/Cause";
 import * as Option from "effect/Option";
 import * as Schema from "effect/Schema";
 import { AtomRegistry } from "effect/reactivity";
@@ -696,3 +703,55 @@ it("keeps an untouched edit mounted while the refresh after a revert settles", a
   expect(memoryText(screen)).toBeNull();
   expect(screen.container.textContent).toContain("Synthetic original, saved");
 });
+
+it.each(["rpc", "receipt"])("reviews a fresh revision after a stale save (%s)", async (kind) => {
+  const registry = setup();
+  state.upsert = async () =>
+    kind === "rpc"
+      ? { _tag: "Failure", cause: Cause.fail(new MemoryRpcError({ code: "revision_changed" })) }
+      : { _tag: "Success", value: { outcome: "rejected", failureCode: "revision_changed" } };
+  await using screen = await renderDetails(registry);
+  await click(screen, "Edit");
+  await type(screen, "Stale draft");
+  await save(screen);
+  expect(screen.container.textContent).toContain("This memory changed before your save.");
+  await save(screen);
+  expect(state.calls).toHaveBeenCalledTimes(1);
+
+  state.refresh.mockImplementation(() => state.queries.set("read", Option.some(saved)));
+  await click(screen, "Review latest memory");
+  expect(screen.container.textContent).toContain("Synthetic original, saved");
+  expect(screen.container.textContent).toContain(`Current revision: ${id(6)}`);
+  expect(memoryText(screen)).toBeNull();
+  await click(screen, "Edit");
+  await type(screen, "Edit after review");
+  state.upsert = async () => ({
+    _tag: "Success",
+    value: { outcome: "accepted", pendingSync: false },
+  });
+  await save(screen);
+
+  expect(state.calls).toHaveBeenCalledTimes(2);
+  expect(state.calls.mock.calls[1]?.[0].input.expectedHeads).toEqual([id(6)]);
+  expect(state.calls.mock.calls[1]?.[0].input.operationId).not.toBe(
+    state.calls.mock.calls[0]?.[0].input.operationId,
+  );
+});
+it.each([
+  ["conflicted", false, "The save conflicted with another revision."],
+  ["deleted", false, "This memory was deleted before the save applied."],
+  ["accepted", true, "Save submitted for sync."],
+] as const)(
+  "reports the %s save receipt with pending sync %s",
+  async (outcome, pendingSync, message) => {
+    const registry = setup();
+    state.upsert = async () => ({ _tag: "Success", value: { outcome, pendingSync } });
+    await using screen = await renderDetails(registry);
+    await click(screen, "Edit");
+    await type(screen, "Typed update");
+    await save(screen);
+    expect(screen.container.textContent).toContain(message);
+    expect(screen.container.textContent).not.toContain("Retry memory request");
+    expect(memoryText(screen) !== null).toBe(!pendingSync);
+  },
+);
