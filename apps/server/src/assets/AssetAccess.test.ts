@@ -23,9 +23,15 @@ import { vi } from "vite-plus/test";
 import * as ServerConfig from "../config.ts";
 import { assetFileResponse } from "../http.ts";
 import * as WorkspacePaths from "../workspace/WorkspacePaths.ts";
-import { ASSET_ROUTE_PREFIX, issueAssetUrl, resolveAsset } from "./AssetAccess.ts";
+import {
+  ASSET_ROUTE_PREFIX,
+  issueAssetUrl,
+  resolveAsset,
+  resolveVerifiedAsset,
+} from "./AssetAccess.ts";
 import {
   layerTest,
+  scopedMediaFixture,
   oversizedScreenshotItem,
   screenshotItem,
   screenshotPng,
@@ -873,6 +879,40 @@ describe("AssetAccess", () => {
         }
       }
     }).pipe(Effect.provide(layerTest)),
+  );
+  it.effect.skipIf(!symlinksSupported)(
+    "rejects a scoped media file replaced by a symlink after validation",
+    () =>
+      Effect.gen(function* () {
+        const { fs, token, media, replacement, mediaPath } = yield* scopedMediaFixture();
+        const good = yield* resolveVerifiedAsset(token, "clip.mp4");
+        if (good?.asset.kind !== "file" || good.file === undefined)
+          throw new Error("Expected a guarded file");
+        const ranged = HttpServerResponse.toWeb(
+          yield* assetFileResponse({ ...good.asset, file: good.file }, "bytes=0-7"),
+        );
+        expect(ranged.status).toBe(206);
+        expect(yield* Effect.promise(() => ranged.text())).toBe("original");
+        let changed = false;
+        const filesystem = FileSystem.FileSystem.of({
+          ...fs,
+          stat: Effect.fn(function* (filePath) {
+            const info = yield* fs.stat(filePath);
+            if (filePath === mediaPath && !changed) {
+              changed = true;
+              yield* fs.remove(media);
+              yield* fs.symlink(replacement, media);
+            }
+            return info;
+          }),
+        });
+        expect(
+          yield* resolveVerifiedAsset(token, "clip.mp4").pipe(
+            Effect.provideService(FileSystem.FileSystem, filesystem),
+          ),
+        ).toBeNull();
+        expect(changed).toBe(true);
+      }).pipe(Effect.provide(layerTest)),
   );
   it.effect("rejects workspace files outside the authorized root", () =>
     Effect.gen(function* () {

@@ -44,7 +44,6 @@ import * as Hex from "effect/encoding/Hex";
 import * as FileSystem from "effect/FileSystem";
 import * as Option from "effect/Option";
 import * as Path from "effect/Path";
-import * as PlatformError from "effect/PlatformError";
 import * as Schema from "effect/Schema";
 import * as Stream from "effect/Stream";
 
@@ -64,6 +63,12 @@ import { extractIcnsPng } from "./icns.ts";
 import { openMediaFile, readMediaFileHeader, type OpenMediaFile } from "./MediaFile.ts";
 import * as HostProcess from "@goat/shared/HostProcess";
 
+import {
+  openScopedWorkspaceAsset,
+  optionOnNotFound,
+  resolveCanonicalWorkspaceFile,
+  resolveCanonicalWorkspaceFileForRequest,
+} from "./workspaceAssetFile.ts";
 import { PREVIEW_ASSET_EXTENSIONS } from "./previewAssetExtensions.ts";
 
 export const ASSET_ROUTE_PREFIX = "/api/assets";
@@ -196,17 +201,6 @@ function decodeRelativePath(value: string): string | null {
   }
 }
 
-const optionOnNotFound = <A, R>(
-  effect: Effect.Effect<A, PlatformError.PlatformError, R>,
-): Effect.Effect<Option.Option<A>, PlatformError.PlatformError, R> =>
-  effect.pipe(
-    Effect.asSome,
-    Effect.catchTags({
-      PlatformError: (error) =>
-        error.reason._tag === "NotFound" ? Effect.succeed(Option.none<A>()) : Effect.fail(error),
-    }),
-  );
-
 export const readMcpAppHtml = Effect.fn("AssetAccess.readMcpAppHtml")(function* (filePath: string) {
   const fileSystem = yield* FileSystem.FileSystem;
   // Allow space for stored CSP tags, but bound reads if the attachment grows after minting.
@@ -269,50 +263,6 @@ const resolveCanonicalFile = Effect.fn("AssetAccess.resolveCanonicalFile")(funct
   const isServerInternalPath = yield* makeIsServerInternalPath;
   return (yield* isServerInternalPath(canonicalFile.value)) ? null : canonicalFile.value;
 });
-
-const resolveCanonicalWorkspaceFile = Effect.fn("AssetAccess.resolveCanonicalWorkspaceFile")(
-  function* (input: { readonly workspaceRoot: string; readonly relativePath: string }) {
-    const fileSystem = yield* FileSystem.FileSystem;
-    const workspacePaths = yield* WorkspacePaths.WorkspacePaths;
-    const resolved = yield* workspacePaths.resolveRelativePathWithinRoot(input).pipe(
-      Effect.asSome,
-      Effect.catchTags({
-        WorkspacePathOutsideRootError: () => Effect.succeedNone,
-      }),
-    );
-    if (Option.isNone(resolved)) return null;
-
-    const [canonicalRoot, canonicalFile] = yield* Effect.all([
-      optionOnNotFound(fileSystem.realPath(input.workspaceRoot)),
-      optionOnNotFound(fileSystem.realPath(resolved.value.absolutePath)),
-    ]);
-    if (Option.isNone(canonicalRoot) || Option.isNone(canonicalFile)) return null;
-
-    const path = yield* Path.Path;
-    const relative = path.relative(canonicalRoot.value, canonicalFile.value);
-    if (relative === "" || relative.startsWith("..") || path.isAbsolute(relative)) return null;
-
-    const info = yield* optionOnNotFound(fileSystem.stat(canonicalFile.value));
-    if (Option.isNone(info) || info.value.type !== "File") return null;
-    const isServerInternalPath = yield* makeIsServerInternalPath;
-    return (yield* isServerInternalPath(canonicalFile.value)) ? null : canonicalFile.value;
-  },
-);
-
-const resolveCanonicalWorkspaceFileForRequest = (input: {
-  readonly workspaceRoot: string;
-  readonly relativePath: string;
-}) =>
-  resolveCanonicalWorkspaceFile(input).pipe(
-    Effect.tapError((cause) =>
-      Effect.logError("Failed to resolve canonical asset path.", {
-        workspaceRoot: input.workspaceRoot,
-        relativePath: input.relativePath,
-        cause,
-      }),
-    ),
-    Effect.orElseSucceed(() => null),
-  );
 
 const HEADER_IMAGE_EXTENSIONS = new Set([".png", ".jpg", ".jpeg", ".gif", ".webp"]);
 
@@ -1029,11 +979,10 @@ const resolveClaims = Effect.fn("AssetAccess.resolveClaims")(function* (
   }
   const joinedRelativePath =
     claims.baseRelativePath === "." ? decodedPath : path.join(claims.baseRelativePath, decodedPath);
-  const workspaceFile = yield* resolveCanonicalWorkspaceFileForRequest({
+  return yield* openScopedWorkspaceAsset({
     workspaceRoot: claims.workspaceRoot,
     relativePath: joinedRelativePath,
   });
-  return workspaceFile ? ({ kind: "file", path: workspaceFile } satisfies ResolvedAsset) : null;
 });
 
 export const resolveVerifiedAsset = Effect.fn("AssetAccess.resolveAsset")(function* (
@@ -1051,7 +1000,10 @@ export const resolveVerifiedAsset = Effect.fn("AssetAccess.resolveAsset")(functi
   const claims = Option.getOrNull(decodeAssetClaims(openAssetClaims(payload, signingSecret)));
   if (!claims || claims.expiresAt <= (yield* Clock.currentTimeMillis)) return null;
   const asset = yield* resolveClaims(claims, relativePath);
-  return asset === null ? null : { asset, expiresAt: claims.expiresAt };
+  if (asset === null) return null;
+  return "asset" in asset
+    ? { ...asset, expiresAt: claims.expiresAt }
+    : { asset, file: undefined, expiresAt: claims.expiresAt };
 });
 
 export const resolveAsset = (token: string, relativePath: string) =>
