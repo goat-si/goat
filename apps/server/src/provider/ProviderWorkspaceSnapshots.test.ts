@@ -1,6 +1,11 @@
 import * as NodeServices from "@effect/platform-node/NodeServices";
 import { assert, describe, it } from "@effect/vitest";
-import { ProviderDriverKind, ProviderInstanceId, ServerProvider } from "@goat/contracts";
+import {
+  ProviderDriverKind,
+  ProviderInstanceId,
+  ServerProvider,
+  WS_METHODS,
+} from "@goat/contracts";
 import type {
   ProviderInstance,
   ProviderWorkspaceSnapshot,
@@ -8,8 +13,10 @@ import type {
 import { makeManualOnlyProviderMaintenanceCapabilities } from "@goat/provider-core/server/maintenanceResolver";
 import * as ProviderLatestVersions from "@goat/provider-core/server/ProviderLatestVersions";
 import { COMPACT_SLASH_COMMAND } from "@goat/provider-core/server/snapshotProbe";
+import * as Deferred from "effect/Deferred";
 import * as Effect from "effect/Effect";
 import * as Exit from "effect/Exit";
+import * as Fiber from "effect/Fiber";
 import * as Layer from "effect/Layer";
 import * as PubSub from "effect/PubSub";
 import * as Ref from "effect/Ref";
@@ -18,6 +25,7 @@ import * as Scope from "effect/Scope";
 import * as Stream from "effect/Stream";
 
 import * as ServerConfig from "../config.ts";
+import { makeProviderCatalogRpc } from "../wsProviderCatalog.testkit.ts";
 import * as ModelManifest from "./ModelManifest.ts";
 import * as ProviderInstanceRegistry from "./ProviderInstanceRegistry.ts";
 import * as ProviderRegistry from "./ProviderRegistry.ts";
@@ -376,3 +384,203 @@ it.layer(Layer.mergeAll(NodeServices.layer, ModelManifest.layerTest, ProviderLat
     );
   },
 );
+
+it.effect("the next cwd refresh rescans after a machine command or skill changes", () =>
+  Effect.gen(function* () {
+    const { registry, machine, scan } = yield* makeWorkspaceCatalogRegistry();
+    const cwd = "/workspace";
+    const { instanceId } = catalogProvider;
+    const client = yield* makeProviderCatalogRpc({
+      providers: [catalogProvider],
+      cwdProviders: new Set([instanceId]),
+      refreshWorkspaceSnapshot: registry.refreshWorkspaceSnapshot,
+    });
+    const refresh = () =>
+      client[WS_METHODS.serverRefreshProviders]({
+        instanceId,
+        cwd,
+        workspaceSnapshotsOnDemand: true,
+        providerCatalogsOnDemand: true,
+        machineCatalog: true,
+      });
+    const initial = yield* refresh();
+    assert.deepStrictEqual(initial.providers[0]?.workspaceSnapshots?.[0]?.slashCommands, [
+      { name: "old" },
+    ]);
+
+    const updated = { ...catalogProvider, slashCommands: [{ name: "new" }] };
+    yield* Ref.set(machine, updated);
+    yield* Ref.set(scan, Effect.succeed(updated));
+    yield* registry.refreshInstance(catalogProvider.instanceId);
+    const afterCommandChange = yield* refresh();
+    assert.deepStrictEqual(
+      afterCommandChange.providers[0]?.workspaceSnapshots?.[0]?.slashCommands,
+      updated.slashCommands,
+    );
+    assert.notStrictEqual(
+      afterCommandChange.providers[0]?.catalogDigest,
+      initial.providers[0]?.catalogDigest,
+    );
+
+    const updatedSkills = {
+      ...updated,
+      skills: [{ name: "new", path: "/workspace/SKILL.md", enabled: true }],
+    };
+    yield* Ref.set(machine, updatedSkills);
+    yield* Ref.set(scan, Effect.succeed(updatedSkills));
+    yield* registry.refreshInstance(catalogProvider.instanceId);
+    const afterSkillChange = yield* refresh();
+    assert.deepStrictEqual(
+      afterSkillChange.providers[0]?.workspaceSnapshots?.[0]?.skills,
+      updatedSkills.skills,
+    );
+    assert.notStrictEqual(
+      afterSkillChange.providers[0]?.catalogDigest,
+      afterCommandChange.providers[0]?.catalogDigest,
+    );
+  }),
+);
+
+it.effect("a new installed CLI version refreshes the cwd reply with the same machine digest", () =>
+  Effect.gen(function* () {
+    const { registry, machine, scan } = yield* makeWorkspaceCatalogRegistry();
+    const { instanceId, version } = catalogProvider;
+    const client = yield* makeProviderCatalogRpc({
+      providers: [catalogProvider],
+      cwdProviders: new Set([instanceId]),
+      refreshWorkspaceSnapshot: registry.refreshWorkspaceSnapshot,
+    });
+    const refresh = () =>
+      client[WS_METHODS.serverRefreshProviders]({
+        instanceId,
+        cwd: "/workspace",
+        workspaceSnapshotsOnDemand: true,
+        providerCatalogsOnDemand: true,
+        machineCatalog: true,
+      });
+    const installed = { ...catalogProvider, installedVersion: version };
+    yield* Ref.set(machine, installed);
+    yield* registry.refreshInstance(instanceId);
+    yield* Ref.set(
+      scan,
+      Effect.succeed({ ...installed, slashCommands: [{ name: "before-update" }] }),
+    );
+    const initial = (yield* refresh()).providers[0];
+    assert.isString(initial?.catalogDigest);
+    assert.deepStrictEqual(initial?.workspaceSnapshots?.[0]?.slashCommands, [
+      { name: "before-update" },
+    ]);
+
+    const upgraded = { ...installed, installedVersion: "2.1.0" };
+    yield* Ref.set(machine, upgraded);
+    yield* registry.refreshInstance(instanceId);
+    yield* Ref.set(
+      scan,
+      Effect.succeed({ ...upgraded, slashCommands: [{ name: "after-update" }] }),
+    );
+
+    const current = (yield* refresh()).providers[0];
+    assert.strictEqual(current?.version, initial?.version);
+    assert.strictEqual(current?.catalogDigest, initial?.catalogDigest);
+    assert.strictEqual(current?.installedVersion, "2.1.0");
+    assert.deepStrictEqual(current?.workspaceSnapshots?.[0]?.slashCommands, [
+      { name: "after-update" },
+    ]);
+  }),
+);
+
+it.effect("a first cwd scan cannot publish after its machine catalog changed", () =>
+  Effect.gen(function* () {
+    const { registry, machine, scan } = yield* makeWorkspaceCatalogRegistry();
+    const started = yield* Deferred.make<void>();
+    const release = yield* Deferred.make<void>();
+    const cwd = "/workspace";
+    const refresh = () =>
+      registry.refreshWorkspaceSnapshot({ instanceId: catalogProvider.instanceId, cwd });
+    yield* Ref.set(
+      scan,
+      Deferred.succeed(started, undefined).pipe(
+        Effect.andThen(Deferred.await(release)),
+        Effect.as(catalogProvider),
+      ),
+    );
+    const request = yield* refresh().pipe(Effect.forkChild);
+    yield* Deferred.await(started);
+    const updated = { ...catalogProvider, slashCommands: [{ name: "new" }] };
+    yield* Ref.set(machine, updated);
+    yield* registry.refreshInstance(catalogProvider.instanceId);
+    yield* Deferred.succeed(release, undefined);
+    const outdated = yield* Fiber.join(request);
+    assert.isUndefined(outdated[0]?.workspaceSnapshots?.find((snapshot) => snapshot.cwd === cwd));
+
+    yield* Ref.set(scan, Effect.succeed(updated));
+    const current = yield* refresh();
+    assert.deepStrictEqual(
+      current[0]?.workspaceSnapshots?.[0]?.slashCommands,
+      updated.slashCommands,
+    );
+  }),
+);
+
+const catalogProvider = {
+  instanceId: ProviderInstanceId.make("opencode"),
+  driver: ProviderDriverKind.make("opencode"),
+  status: "ready",
+  enabled: true,
+  installed: true,
+  auth: { status: "authenticated" },
+  checkedAt: "2026-06-10T00:00:00.000Z",
+  version: "2.0.0",
+  models: [],
+  slashCommands: [{ name: "old" }],
+  skills: [],
+} as const satisfies ServerProvider;
+
+const makeWorkspaceCatalogRegistry = Effect.fn("makeWorkspaceCatalogRegistry")(function* () {
+  const { instanceId, driver } = catalogProvider;
+  const machine = yield* Ref.make<ServerProvider>(catalogProvider);
+  const scan = yield* Ref.make<Effect.Effect<ProviderWorkspaceSnapshot>>(
+    Effect.succeed(catalogProvider),
+  );
+  const instance: ProviderInstance = {
+    instanceId,
+    driverKind: driver,
+    continuationIdentity: { driverKind: driver, continuationKey: "opencode:instance:opencode" },
+    displayName: undefined,
+    enabled: true,
+    snapshot: {
+      resolveMaintenance: () =>
+        Effect.succeed(
+          makeManualOnlyProviderMaintenanceCapabilities({ provider: driver, packageName: null }),
+        ),
+      getSnapshot: Ref.get(machine),
+      refresh: Ref.get(machine),
+      streamChanges: Stream.empty,
+      applyUsageLimits: () => Effect.void,
+    },
+    snapshotForCwd: () => Ref.get(scan).pipe(Effect.flatten),
+    orchestrationAdapter: {} as ProviderInstance["orchestrationAdapter"],
+    textGeneration: {} as ProviderInstance["textGeneration"],
+  };
+  const services = yield* Layer.build(
+    ProviderRegistry.layer.pipe(
+      Layer.provideMerge(
+        Layer.succeed(ProviderInstanceRegistry.ProviderInstanceRegistry, {
+          getInstance: (id) => Effect.succeed(id === instanceId ? instance : undefined),
+          listInstances: Effect.succeed([instance]),
+          listUnavailable: Effect.succeed([]),
+          streamChanges: Stream.empty,
+          subscribeChanges: Effect.flatMap(PubSub.unbounded<void>(), PubSub.subscribe),
+        }),
+      ),
+      Layer.provideMerge(
+        ServerConfig.layerTest(process.cwd(), { prefix: "goat-workspace-catalog-" }),
+      ),
+      Layer.provideMerge(
+        Layer.mergeAll(NodeServices.layer, ModelManifest.layerTest, ProviderLatestVersions.layer),
+      ),
+    ),
+  );
+  const registry = yield* ProviderRegistry.ProviderRegistry.pipe(Effect.provideContext(services));
+  return { registry, machine, scan };
+});

@@ -1,6 +1,6 @@
-import { LIVE_ACTIVITY_ROW_ID, thinkingRow, type ThinkingRow } from "./threadThinkingRow";
+import { LIVE_ACTIVITY_ROW_ID, thinkingRow } from "./threadThinkingRow";
 export { LIVE_ACTIVITY_ROW_ID } from "./threadThinkingRow";
-import { itemIcon, type ThreadActivityIcon } from "./threadActivityIcons";
+import { itemIcon } from "./threadActivityIcons";
 import { itemPreview } from "./threadItemPreview";
 import {
   setPendingUserInputCustomAnswer as setSharedCustomAnswer,
@@ -17,10 +17,7 @@ import { formatSubagentDisplayTitle } from "@goat/client-runtime/state/subagent-
 import { isLiveSubagentTurnItem } from "@goat/client-runtime/state/subagentRuntime";
 import { extractToolActivityPresentation } from "@goat/client-runtime/work-log/tool-presentation";
 import { providerErrorPresentation } from "@goat/client-runtime/work-log/provider-error";
-import {
-  fileChangeGroupLineCounts,
-  type WorkLogLineCounts,
-} from "@goat/client-runtime/work-log/line-counts";
+import { fileChangeGroupLineCounts } from "@goat/client-runtime/work-log/line-counts";
 import {
   turnItemDetailRevision,
   turnItemHasDetail,
@@ -41,31 +38,20 @@ import {
   toolGroupSummaryKind,
   workEntriesViewedImagePaths,
   workEntryCommandActions,
-  type ToolGroupSummaryKind,
   type WorkLogPresentationEntry,
   type WorkLogToolLifecycleStatus,
 } from "@goat/client-runtime/work-log/presentation";
 import {
   resolveGoatMcpItemCall,
   resolveGoatMcpToolPresentation,
-  type GoatMcpToolLogo,
   type GoatMcpToolPresentation,
 } from "@goat/shared/goatMcpToolPresentation";
 import type {
-  ChatAttachment,
-  MessageId,
-  OrchestrationV2Actor,
-  OrchestrationV2CreationSource,
   OrchestrationV2ExecutionNode,
-  OrchestrationMessageContext,
   OrchestrationV2ProjectedTurnItem,
   OrchestrationV2RunAttempt,
-  OrchestrationV2RunStatus,
   OrchestrationV2TurnItem,
-  OrchestrationV2UserMessageInputIntent,
   RunAttemptId,
-  ScheduledTaskId,
-  TurnItemId,
 } from "@goat/contracts";
 import { idleCompactionOf, isCompactionCommandMessage, RunId, ThreadId } from "@goat/contracts";
 import {
@@ -84,8 +70,6 @@ import {
   compactWorkEntryText,
   WORK_LOG_LABEL_MAX_LENGTH,
 } from "./workEntryRowLabel";
-import type { HtmlRenderReference } from "@goat/shared/htmlRender";
-import type { McpAppReference } from "@goat/shared/mcpApp";
 import { htmlRenderFromToolItem, mcpAppFromToolItem } from "@goat/shared/toolOutput";
 import * as DateTime from "effect/DateTime";
 import { groupAdjacentActivities } from "./threadActivityGroups";
@@ -110,160 +94,24 @@ export {
 export type PendingApproval = ThreadPendingApproval;
 export type PendingUserInput = ThreadPendingUserInput;
 
-export interface ThreadFeedActivity {
-  readonly id: string;
-  readonly createdAt: string;
-  readonly runId: RunId | null;
-  readonly attemptId: RunAttemptId | null;
-  readonly summary: string;
-  readonly detail: string | null;
-  readonly canExpand: boolean;
-  readonly fetchesDetail: boolean;
-  readonly getFullDetail: () => string | null;
-  readonly getCopyText: () => string;
-  readonly icon: ThreadActivityIcon;
-  readonly logo: GoatMcpToolLogo | null;
-  readonly toolLike: boolean;
-  readonly prominent: boolean;
-  readonly status: "success" | "failure" | "neutral" | null;
-  readonly lifecycleStatus: WorkLogToolLifecycleStatus;
-  readonly workEntry: WorkLogPresentationEntry;
-  readonly groupedToolDetail?: boolean;
-  readonly live?: boolean;
-  /** Lone calls carry the group header's label and id until a second call joins. */
-  readonly groupStandIn?: { readonly groupId: string; readonly label: string };
-  readonly projectedItem: OrchestrationV2ProjectedTurnItem;
-}
-
-export interface ThreadFeedMessage {
-  readonly context?: import("@goat/contracts").OrchestrationMessageContext | undefined;
-  readonly id: MessageId;
-  readonly role: "user" | "assistant";
-  readonly text: string;
-  readonly attachments: ReadonlyArray<ChatAttachment>;
-  readonly runId: RunId | null;
-  readonly streaming: boolean;
-  readonly inputIntent?: OrchestrationV2UserMessageInputIntent;
-  readonly createdBy?: OrchestrationV2Actor;
-  readonly creationSource?: OrchestrationV2CreationSource;
-  readonly scheduledTaskId?: ScheduledTaskId;
-  readonly senderThreadId?: ThreadId;
-  readonly idleCompaction?: import("@goat/contracts").OrchestrationV2IdleCompaction;
-  readonly visibility: OrchestrationV2ProjectedTurnItem["visibility"];
-  readonly sourceThreadId: ThreadId;
-  readonly createdAt: string;
-  readonly updatedAt: string;
-  readonly projectedItem?: OrchestrationV2ProjectedTurnItem;
-  readonly checkpointSummary?: ThreadCheckpointSummary;
-}
-
-export interface LocalThreadMessage {
-  readonly id: MessageId;
-  readonly role: string;
-  readonly text: string;
-  readonly context?: OrchestrationMessageContext | undefined;
-  readonly attachments?: ReadonlyArray<ChatAttachment> | undefined;
-  readonly streaming: boolean;
-  readonly createdAt: string;
-  readonly updatedAt: string;
-}
-
-export type RawThreadFeedEntry =
-  | {
-      readonly type: "message";
-      readonly id: string;
-      readonly createdAt: string;
-      readonly message: ThreadFeedMessage;
-    }
-  | {
-      readonly type: "activity";
-      readonly id: string;
-      readonly createdAt: string;
-      readonly runId: RunId | null;
-      readonly activity: ThreadFeedActivity;
-    }
-  | {
-      readonly type: "html-render";
-      readonly id: string;
-      readonly createdAt: string;
-      readonly runId: RunId | null;
-      readonly render: HtmlRenderReference;
-    }
-  | {
-      readonly type: "mcp-app";
-      readonly id: string;
-      readonly createdAt: string;
-      readonly runId: RunId | null;
-      /** The thread and item that own the app; a fork's inherited app is its source's. */
-      readonly sourceThreadId: ThreadId;
-      readonly itemId: TurnItemId;
-      readonly revision: string;
-      readonly app: McpAppReference;
-    };
-
-export type ThreadFeedEntry = ThreadFeedEntryContent & {
-  readonly continuesWorkLog?: boolean;
-  readonly checkpointSummary?: ThreadCheckpointSummary;
-};
-
-type ThreadFeedEntryContent =
-  | Extract<RawThreadFeedEntry, { type: "message" | "html-render" | "mcp-app" }>
-  | {
-      readonly type: "activity-group";
-      readonly id: string;
-      readonly createdAt: string;
-      readonly runId: RunId | null;
-      readonly activities: ReadonlyArray<ThreadFeedActivity>;
-    }
-  | {
-      readonly type: "work-toggle";
-      readonly id: string;
-      readonly createdAt: string;
-      readonly runId: RunId | null;
-      readonly groupId: string;
-      readonly hiddenCount: number;
-      readonly expanded: boolean;
-      readonly summary: string;
-      readonly summaryKind: ToolGroupSummaryKind;
-      readonly toolSurface?: WorkLogPresentationEntry["toolSurface"];
-      readonly toolIcon?: WorkLogPresentationEntry["toolIcon"];
-      readonly summaryToolIcon?: "browser" | "device" | "t3-code" | "pull-request";
-      readonly hasFailure: boolean;
-      /** Total lines added and removed, for a settled group of edits that all reported counts. */
-      readonly lineCounts?: WorkLogLineCounts;
-      readonly live: boolean;
-      readonly shimmer: boolean;
-      readonly thought?: string;
-    }
-  | {
-      /** Images the agent opened in the tool group above, kept visible while the group is collapsed. */
-      readonly type: "viewed-images";
-      readonly id: string;
-      readonly createdAt: string;
-      readonly runId: RunId | null;
-      readonly paths: ReadonlyArray<string>;
-    }
-  | {
-      readonly type: "run-fold";
-      readonly deferredWorkItemIds?: ReadonlyArray<string>;
-      readonly id: string;
-      readonly createdAt: string;
-      readonly runId: RunId;
-      readonly label: string;
-      readonly expanded: boolean;
-    }
-  | ThinkingRow;
-
-export interface ThreadFeedLatestRun {
-  readonly runId: RunId;
-  readonly status: OrchestrationV2RunStatus;
-  readonly startedAt: string | null;
-  readonly completedAt: string | null;
-  readonly turnEnded?: boolean;
-  readonly providerStartingLabel?: string;
-}
-
-export type ThreadFeedActivityGroup = Extract<ThreadFeedEntry, { readonly type: "activity-group" }>;
+import type {
+  ThreadFeedActivity,
+  ThreadFeedMessage,
+  LocalThreadMessage,
+  RawThreadFeedEntry,
+  ThreadFeedEntry,
+  ThreadFeedLatestRun,
+  ThreadFeedActivityGroup,
+} from "./threadActivityTypes";
+export type {
+  ThreadFeedActivity,
+  ThreadFeedMessage,
+  LocalThreadMessage,
+  RawThreadFeedEntry,
+  ThreadFeedEntry,
+  ThreadFeedLatestRun,
+  ThreadFeedActivityGroup,
+} from "./threadActivityTypes";
 
 // Immutable source rows let retained history keep its identities while the active item streams.
 const projectedEntriesCache = new WeakMap<

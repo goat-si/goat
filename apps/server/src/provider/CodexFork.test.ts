@@ -42,3 +42,24 @@ it.effect("unarchives only an archived source and retries the fork", () =>
     assert.deepEqual(calls, ["fork"]);
   }),
 );
+
+it.effect("fork requests ask only for metadata and keep their source boundary", () =>
+  Effect.gen(function* () {
+    const calls: unknown[] = [];
+    const client = {
+      request: (method: string, params: unknown) =>
+        Effect.sync(() => {
+          calls.push({ method, params });
+          return { thread: { id: "forked", turns: [] } };
+        }),
+    } as unknown as CodexClient.CodexAppServerClient["Service"];
+    const result = yield* forkCodexThread(client, { threadId: "source", lastTurnId: "boundary" });
+    assert.equal(result.thread.id, "forked");
+    assert.deepEqual(calls, [
+      {
+        method: "thread/fork",
+        params: { threadId: "source", lastTurnId: "boundary", excludeTurns: true },
+      },
+    ]);
+  }),
+);

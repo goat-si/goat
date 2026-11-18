@@ -253,6 +253,27 @@ function memoryHistoryDispatchInput(input: MemoryHistoryInput, refusedReverts: b
   return legacyInput;
 }
 
+const requireServerUpdateStaging = Effect.fn("EnvironmentRpc.requireServerUpdateStaging")(
+  function* (tag: string, input: unknown, session: RpcSession) {
+    if (
+      (tag !== WS_METHODS.serverUpdateServer &&
+        tag !== WS_METHODS.serverUpdateServerWithProgress) ||
+      typeof input !== "object" ||
+      input === null ||
+      !("stageOnly" in input) ||
+      input.stageOnly !== true
+    )
+      return;
+    const { target } = yield* EnvironmentSupervisor.EnvironmentSupervisor;
+    const unsupported = new EnvironmentRpcUnavailableError({
+      environmentId: target.environmentId,
+      message: "Server update staging is unavailable on this environment.",
+    });
+    const config = yield* session.initialConfig.pipe(Effect.mapError(() => unsupported));
+    if (config.environment.capabilities.serverUpdateStaging !== true) return yield* unsupported;
+  },
+);
+
 export const requestGuarded = <TTag extends EnvironmentUnaryRpcTag>(
   tag: TTag,
   input: EnvironmentRpcInput<TTag>,
@@ -268,6 +289,7 @@ export const requestInSession = Effect.fn("EnvironmentRpc.request")(function* <
     "rpc.method": tag,
   });
   yield* authorizeRequest(tag, input);
+  yield* requireServerUpdateStaging(tag, input, session);
   let dispatchInput = input;
   if (tag.startsWith("memory.") || tag.startsWith("siteNotes.")) {
     const config = yield* session.initialConfig.pipe(
@@ -388,13 +410,20 @@ export function runStreamInSession<TTag extends EnvironmentStreamCommandRpcTag>(
   input: EnvironmentRpcInput<TTag>,
 ): Stream.Stream<
   EnvironmentRpcStreamValue<TTag>,
-  EnvironmentRpcStreamFailure<TTag> | EnvironmentAuthorizationError,
+  | EnvironmentRpcStreamFailure<TTag>
+  | EnvironmentRpcUnavailableError
+  | EnvironmentAuthorizationError,
   EnvironmentSupervisor.EnvironmentSupervisor
 > {
   const method = (session.client as EnvironmentProtocolClient)[tag] as (
     input: EnvironmentRpcInput<TTag>,
   ) => Stream.Stream<EnvironmentRpcStreamValue<TTag>, EnvironmentRpcStreamFailure<TTag>>;
-  return Stream.unwrap(authorizeRequest(tag, input).pipe(Effect.map(() => method(input)))).pipe(
+  return Stream.unwrap(
+    authorizeRequest(tag, input).pipe(
+      Effect.andThen(requireServerUpdateStaging(tag, input, session)),
+      Effect.map(() => method(input)),
+    ),
+  ).pipe(
     Stream.withSpan("EnvironmentRpc.runStream", {
       attributes: { "rpc.method": tag },
     }),

@@ -458,3 +458,39 @@ export const lateChildPrefix = () => {
     rootFinished: entries.slice(rootCompleted - 1, rootCompleted + 1),
   };
 };
+
+export const codexReplayThreadResult = (input: {
+  readonly nativeThreadId: string;
+  readonly forkedFromId: string | null;
+}) => ({
+  thread: {
+    id: input.nativeThreadId,
+    sessionId: input.nativeThreadId,
+    forkedFromId: input.forkedFromId,
+    preview: "",
+    ephemeral: false,
+    modelProvider: "openai",
+    createdAt: 1782622440,
+    updatedAt: 1782622440,
+    status: { type: "idle" },
+    path: `/tmp/${input.nativeThreadId}.jsonl`,
+    cwd: "/workspace",
+    cliVersion: "0.144.0",
+    source: "vscode",
+    threadSource: null,
+    agentNickname: null,
+    agentRole: null,
+    gitInfo: null,
+    name: null,
+    turns: [],
+  },
+  model: "gpt-5.4",
+  modelProvider: "openai",
+  serviceTier: null,
+  cwd: "/workspace",
+  instructionSources: [],
+  approvalPolicy: "on-request",
+  approvalsReviewer: "user",
+  sandbox: { type: "workspaceWrite", writableRoots: [], networkAccess: false },
+  reasoningEffort: "medium",
+});

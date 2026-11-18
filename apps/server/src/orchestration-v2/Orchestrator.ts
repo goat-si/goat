@@ -59,6 +59,7 @@ import { automaticMessageIds as automaticIds } from "./ProjectionMessageLookup.t
 import { makeSessionHasBackgroundWork, partitionSwitchSessions } from "./SessionBackgroundWork.ts";
 import {
   orchestratorPullRequestSnapshot,
+  threadPullRequestLinksEqual,
   type PullRequestSnapshotReader,
 } from "./pullRequestSnapshot.ts";
 import { survivorQueuedRuns } from "./goat/CodexSurvivorQueuedRuns.ts";
@@ -139,7 +140,6 @@ import {
   type ProviderSessionId,
   RunId,
   RuntimeMode,
-  ThreadLinkedPullRequest,
   ThreadId,
   TurnItemId,
 } from "@goat/contracts";
@@ -581,8 +581,6 @@ export class OrchestratorV2 extends Context.Service<OrchestratorV2, Orchestrator
 ) {}
 
 export { isSeparateTurnCommand } from "./SeparateTurnCommand.ts";
-
-const threadPullRequestLinksEqual = Schema.toEquivalence(Schema.NullOr(ThreadLinkedPullRequest));
 
 const RUNTIME_REQUEST_DELIVERY_FAILED_MESSAGE =
   "GOAT could not confirm that your answer reached the agent. If the run stays stuck, stop it and try again.";
@@ -6192,6 +6190,7 @@ const makeOrchestrator = Effect.fn("orchestrationV2.Orchestrator.layer")(functio
           nativeThreadId: `pending:${runId}`,
         });
       const legacyImportHandoff = shouldPrepareLegacyImportHandoff({
+        providerThread: reusableProviderThread,
         historyOrigin: projection.thread.historyOrigin,
         hasCompletedRun: latestCompletedRun !== undefined,
         legacyImportItemCount: legacyImportItems.length,

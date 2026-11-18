@@ -1,9 +1,9 @@
+import { providerWorkspaceRefreshKey } from "../providerWorkspaceRefreshKey.ts";
 import { processResourceHistoryOptions } from "./serverResourceHistory.ts";
 import {
   type EnvironmentId,
   type ProviderInstanceId,
   type ServerConfig,
-  type ServerConfigStreamEvent,
   type ServerLifecycleWelcomePayload,
   type ServerLifecycleStreamReadyEvent,
   type ServerProviderWorkspaceSnapshot,
@@ -18,7 +18,6 @@ import * as Deferred from "effect/Deferred";
 import * as Effect from "effect/Effect";
 import * as Exit from "effect/Exit";
 import * as Option from "effect/Option";
-import * as Queue from "effect/Queue";
 import * as Ref from "effect/Ref";
 import * as Result from "effect/Result";
 import * as Stream from "effect/Stream";
@@ -38,9 +37,7 @@ import {
 import * as EnvironmentRegistry from "../connection/registry.ts";
 import * as EnvironmentSupervisor from "../connection/supervisor.ts";
 import { createProviderAuthCommands } from "./providerAuthCommands.ts";
-import { safeErrorLogAttributes } from "../errors/safeLog.ts";
 import * as Persistence from "../platform/persistence.ts";
-import { runCachePersistence } from "./cachePersistence.ts";
 import { createDecisionEnvironmentAtoms } from "./decisionRpc.ts";
 import { createHubMachinesAtoms } from "./hubMachines.ts";
 import { createHubDeviceCommands } from "./hubDeviceCommands.ts";
@@ -60,14 +57,17 @@ import type { RpcSession } from "../rpc/session.ts";
 import { followStreamInEnvironment } from "./runtime.ts";
 import { createOpenCodexSyncAtoms } from "./opencodexSync.ts";
 import { createStorageEnvironmentAtoms } from "./storage.ts";
-import {
-  applyServerConfigProjection,
-  reuseUnchanged,
-  type ServerConfigProjection,
-  withoutEnvironmentThemes,
-} from "./serverConfigProjection.ts";
+import { reuseUnchanged, type ServerConfigProjection } from "./serverConfigProjection.ts";
 
 import {
+  serverConfigStateChanges,
+  type ServerConfigSubscriptionOptions,
+} from "./serverConfigState.ts";
+
+import type { FetchedMachineCatalog } from "./serverProviderCatalog.ts";
+
+import {
+  type ServerUpdateTarget,
   SERVER_UPDATE_RESUME_TIMEOUT,
   ServerUpdateResumeTimeoutError,
   isLegacyUpdateHandoffLoss,
@@ -83,6 +83,10 @@ import {
   waitForDesktopUpdateTarget,
 } from "./serverUpdate.ts";
 
+export {
+  makeEnvironmentServerConfigState,
+  type ServerConfigSubscriptionOptions,
+} from "./serverConfigState.ts";
 export type { ServerConfigProjection } from "./serverConfigProjection.ts";
 export * from "./serverUpdate.ts";
 
@@ -104,11 +108,6 @@ export type ServerUpdateState =
       readonly message: string;
     };
 
-export interface ServerUpdateTarget {
-  readonly environmentId: EnvironmentId;
-  readonly input: EnvironmentRpcInput<typeof WS_METHODS.serverUpdateServer>;
-}
-
 export const IDLE_SERVER_UPDATE_STATE: ServerUpdateState = { status: "idle" };
 const EMPTY_SERVER_UPDATE_STATE_ATOM = Atom.make<ServerUpdateState>(IDLE_SERVER_UPDATE_STATE).pipe(
   Atom.withLabel("environment-data:server:update-state:empty"),
@@ -118,181 +117,6 @@ export const serverUpdateStateAtom = Atom.family((environmentId: EnvironmentId) 
     Atom.withLabel(`environment-data:server:update-state:${environmentId}`),
   ),
 );
-
-const cachedConfigSnapshotEvent = (config: ServerConfig): ServerConfigStreamEvent => ({
-  version: 1,
-  type: "snapshot",
-  config,
-});
-
-export interface ServerConfigSubscriptionOptions {
-  readonly environmentThemes?: boolean;
-  readonly usageLimitSources?: boolean;
-  readonly usageLimitsCommand?: boolean;
-}
-
-// Configs are JSON-shaped. Missing and undefined object fields persist identically.
-function sameCacheValue(previous: unknown, next: unknown): boolean {
-  if (previous === next) return true;
-  if (
-    previous === null ||
-    next === null ||
-    typeof previous !== "object" ||
-    typeof next !== "object"
-  ) {
-    return false;
-  }
-  if (Array.isArray(previous) || Array.isArray(next)) {
-    if (!Array.isArray(previous) || !Array.isArray(next) || previous.length !== next.length) {
-      return false;
-    }
-    for (let index = 0; index < previous.length; index += 1) {
-      if (!sameCacheValue(previous[index], next[index])) return false;
-    }
-    return true;
-  }
-  if (
-    Object.getPrototypeOf(previous) !== Object.prototype ||
-    Object.getPrototypeOf(next) !== Object.prototype
-  ) {
-    return false;
-  }
-  const before = previous as Record<string, unknown>;
-  const after = next as Record<string, unknown>;
-  return (
-    Object.keys(before).every((key) =>
-      sameCacheValue(before[key], Object.hasOwn(after, key) ? after[key] : undefined),
-    ) && Object.keys(after).every((key) => Object.hasOwn(before, key) || after[key] === undefined)
-  );
-}
-
-export const makeEnvironmentServerConfigState = Effect.fn("EnvironmentServerConfigState.make")(
-  function* (subscription: ServerConfigSubscriptionOptions) {
-    const supervisor = yield* EnvironmentSupervisor.EnvironmentSupervisor;
-    const cache = yield* Persistence.EnvironmentCacheStore;
-    const environmentId = supervisor.target.environmentId;
-    const cachedConfig = yield* cache.loadServerConfig(environmentId).pipe(
-      Effect.catch((error) =>
-        Effect.logWarning("Could not load cached server configuration.").pipe(
-          Effect.annotateLogs({
-            environmentId,
-            ...safeErrorLogAttributes(error),
-          }),
-          Effect.as(Option.none<ServerConfig>()),
-        ),
-      ),
-    );
-    const state = yield* SubscriptionRef.make<Option.Option<ServerConfigProjection>>(
-      Option.map(cachedConfig, (cached) => ({
-        config: withoutEnvironmentThemes(cached),
-        latestEvent: cachedConfigSnapshotEvent(withoutEnvironmentThemes(cached)),
-        source: "cache" as const,
-      })),
-    );
-    const persistence = yield* Queue.sliding<ServerConfig>(1);
-    const pendingPersistence = yield* Ref.make<Option.Option<ServerConfig>>(Option.none());
-    let lastPersisted: ServerConfig | undefined;
-
-    const persist = Effect.fn("EnvironmentServerConfigState.persist")(function* (
-      config: ServerConfig,
-    ) {
-      // A cached stall would read as a fresh freeze on the next launch, and a cached hold would
-      // offer to resume automation before the live server says whether it is still held.
-      const {
-        environmentThemes: _themes,
-        usageLimitSources: _sources,
-        lastEventLoopStall: _stall,
-        automationHold: _hold,
-        ...cacheable
-      } = config;
-      if (lastPersisted !== undefined && sameCacheValue(lastPersisted, cacheable)) {
-        return true;
-      }
-      const saved = yield* cache.saveServerConfig(environmentId, cacheable).pipe(
-        Effect.as(true),
-        Effect.catch((error) =>
-          Effect.logWarning("Could not persist cached server configuration.").pipe(
-            Effect.annotateLogs({
-              environmentId,
-              ...safeErrorLogAttributes(error),
-            }),
-            Effect.as(false),
-          ),
-        ),
-      );
-      if (saved) lastPersisted = cacheable;
-      return saved;
-    });
-
-    const persistPending = Effect.fn("EnvironmentServerConfigState.persistPending")(function* (
-      config: ServerConfig,
-    ) {
-      if (!(yield* persist(config))) {
-        return;
-      }
-      yield* Ref.update(pendingPersistence, (pending) =>
-        Option.isSome(pending) && pending.value === config ? Option.none() : pending,
-      );
-    });
-
-    yield* Effect.addFinalizer(() =>
-      Ref.get(pendingPersistence).pipe(
-        Effect.flatMap(
-          Option.match({
-            onNone: () => Effect.void,
-            onSome: (config) => persist(config).pipe(Effect.asVoid),
-          }),
-        ),
-      ),
-    );
-
-    yield* runCachePersistence(persistence, persistPending).pipe(Effect.forkScoped);
-
-    yield* subscribe(WS_METHODS.subscribeServerConfig, {
-      ...(subscription.environmentThemes === true ? { environmentThemes: true } : {}),
-      ...(subscription.usageLimitSources === true ? { usageLimitSources: true } : {}),
-      ...(subscription.usageLimitsCommand === true ? { usageLimitsCommand: true } : {}),
-    }).pipe(
-      Stream.runForEach((event) =>
-        Effect.gen(function* () {
-          const next = applyServerConfigProjection(yield* SubscriptionRef.get(state), event);
-          if (Option.isNone(next)) {
-            return;
-          }
-          yield* Ref.set(pendingPersistence, Option.some(next.value.config));
-          yield* SubscriptionRef.set(state, next);
-          yield* Queue.offer(persistence, next.value.config);
-        }),
-      ),
-      Effect.forkScoped,
-    );
-
-    return state;
-  },
-);
-
-function serverConfigStateChanges(
-  environmentId: EnvironmentId,
-  subscription: ServerConfigSubscriptionOptions,
-) {
-  return followStreamInEnvironment(
-    environmentId,
-    Stream.unwrap(
-      makeEnvironmentServerConfigState(subscription).pipe(
-        Effect.map((state) =>
-          SubscriptionRef.changes(state).pipe(
-            Stream.filterMap((projection) =>
-              Option.match(projection, {
-                onNone: () => Result.failVoid,
-                onSome: (value) => Result.succeed(value),
-              }),
-            ),
-          ),
-        ),
-      ),
-    ),
-  );
-}
 
 export function applyServerWelcomeEvent(
   current: EnvironmentServerWelcomeState,
@@ -425,17 +249,18 @@ export function resolveServerConfigValue(
 
 type ServerProviderEntry = ServerConfig["providers"][number];
 
-/**
- * The provider-wide fields a workspace snapshot builds on. A live session, a sign-out, or a
- * /usage-limits change shows up here, so a snapshot fetched before it no longer applies.
- */
-const snapshotBasis = (provider: ServerProviderEntry | undefined) =>
-  provider && {
+function snapshotBasis(provider: ServerProviderEntry | undefined, reply?: ServerProviderEntry) {
+  if (!provider) return undefined;
+  // A cwd reply carries the observed installation but omits the machine models.
+  return {
     enabled: provider.enabled,
+    refreshKey: providerWorkspaceRefreshKey(provider, reply),
     models: provider.models,
-    slashCommands: provider.slashCommands,
-    skills: provider.skills,
+    ...(reply?.catalogDigest === undefined && provider.catalogDigest === undefined
+      ? { slashCommands: provider.slashCommands, skills: provider.skills }
+      : {}),
   };
+}
 
 interface FetchedWorkspaceSnapshot {
   readonly instanceId: ProviderInstanceId;
@@ -482,10 +307,9 @@ export function recordFetchedWorkspaceSnapshot(
   providers: ServerConfig["providers"],
   configProvider: ServerProviderEntry | undefined,
 ): ReadonlyArray<FetchedWorkspaceSnapshot> {
-  const basis = snapshotBasis(configProvider);
-  const snapshot = providers
-    .find((provider) => provider.instanceId === input.instanceId)
-    ?.workspaceSnapshots?.find((candidate) => candidate.cwd === input.cwd);
+  const reply = providers.find((provider) => provider.instanceId === input.instanceId);
+  const basis = snapshotBasis(configProvider, reply);
+  const snapshot = reply?.workspaceSnapshots?.find((candidate) => candidate.cwd === input.cwd);
   const stored = current.find(
     (entry) => entry.instanceId === input.instanceId && entry.snapshot.cwd === input.cwd,
   );
@@ -515,13 +339,10 @@ export function createServerEnvironmentAtoms<R, E>(
     EnvironmentRegistry.EnvironmentRegistry | Persistence.EnvironmentCacheStore | R,
     E
   >,
-  options: {
+  options: ServerConfigSubscriptionOptions & {
     readonly initialConfigValueAtom: (
       environmentId: EnvironmentId,
     ) => Atom.Atom<ServerConfig | null>;
-    readonly environmentThemes?: boolean;
-    readonly usageLimitSources?: boolean;
-    readonly usageLimitsCommand?: boolean;
   },
 ) {
   const configScheduler = createAtomCommandScheduler();
@@ -530,14 +351,22 @@ export function createServerEnvironmentAtoms<R, E>(
     mode: "serial" as const,
     key: ({ environmentId }: { readonly environmentId: string }) => environmentId,
   };
+  const fetchedMachineCatalogsAtom = Atom.family((environmentId: EnvironmentId) =>
+    Atom.make<ReadonlyArray<FetchedMachineCatalog>>([]).pipe(
+      Atom.keepAlive,
+      Atom.withLabel(`environment-data:server:fetched-machine-catalogs:${environmentId}`),
+    ),
+  );
   const configProjectionFamily = Atom.family((environmentId: EnvironmentId) =>
     runtime
-      .atom(
-        serverConfigStateChanges(environmentId, {
-          ...(options.environmentThemes === true ? { environmentThemes: true } : {}),
-          ...(options.usageLimitSources === true ? { usageLimitSources: true } : {}),
-          ...(options.usageLimitsCommand === true ? { usageLimitsCommand: true } : {}),
-        }),
+      .atom((get) =>
+        serverConfigStateChanges(
+          environmentId,
+          options,
+          options.providerCatalogDigests === true
+            ? AtomRegistry.toStream(get.registry, fetchedMachineCatalogsAtom(environmentId))
+            : Stream.empty,
+        ),
       )
       .pipe(
         Atom.setIdleTTL(5 * 60_000),
@@ -1110,6 +939,10 @@ export function createServerEnvironmentAtoms<R, E>(
       staleTimeMs: 15_000,
       refreshTrigger: ({ environmentId }) => computerUseRefreshAtom(environmentId),
     }),
+    stageServerUpdate: createEnvironmentRpcCommand(runtime, {
+      label: "environment-data:server:stage-update",
+      tag: WS_METHODS.serverUpdateServer,
+    }),
     updateStateAtom,
     settingsValueAtom,
     usageModelFilterAtom,
@@ -1291,24 +1124,53 @@ export function createServerEnvironmentAtoms<R, E>(
     refreshProviders: createEnvironmentRpcCommand(runtime, {
       label: "environment-data:server:refresh-providers",
       tag: WS_METHODS.serverRefreshProviders,
-      execute: (input) =>
-        requestGuarded(WS_METHODS.serverRefreshProviders, {
+      onStart: ({ environmentId, input }, registry) =>
+        input.cwd === undefined
+          ? undefined
+          : registry
+              .get(configValueAtom(environmentId))
+              ?.providers.find((provider) => provider.instanceId === input.instanceId),
+      execute: (input, registry, environmentId) => {
+        const provider =
+          input.cwd === undefined
+            ? undefined
+            : registry
+                .get(configValueAtom(environmentId))
+                ?.providers.find((candidate) => candidate.instanceId === input.instanceId);
+        return requestGuarded(WS_METHODS.serverRefreshProviders, {
           ...input,
           workspaceSnapshotsOnDemand: true,
           ...(options.usageLimitsCommand === true ? { usageLimitsCommand: true } : {}),
-        }),
-      onSuccess: ({ environmentId, input }, registry, result) =>
+          ...(options.providerCatalogsOnDemand === true ? { providerCatalogsOnDemand: true } : {}),
+          ...(provider?.catalogDigest !== undefined &&
+          provider.loadedCatalogDigest !== provider.catalogDigest
+            ? { machineCatalog: true }
+            : {}),
+        });
+      },
+      onSuccess: ({ environmentId, input }, registry, result, configProvider) =>
         Effect.sync(() => {
           const { instanceId, cwd } = input;
           if (instanceId === undefined || cwd === undefined) return;
+          const refreshed = result.providers.find((provider) => provider.instanceId === instanceId);
+          if (refreshed?.catalogDigest !== undefined) {
+            const catalog: FetchedMachineCatalog = {
+              instanceId,
+              digest: refreshed.catalogDigest,
+              slashCommands: refreshed.slashCommands,
+              skills: refreshed.skills,
+            };
+            registry.update(fetchedMachineCatalogsAtom(environmentId), (current) => [
+              ...current.filter((entry) => entry.instanceId !== instanceId),
+              catalog,
+            ]);
+          }
           registry.update(fetchedWorkspaceSnapshotsAtom(environmentId), (current) =>
             recordFetchedWorkspaceSnapshot(
               current,
               { instanceId, cwd, fresh: input.fresh === true },
               result.providers,
-              registry
-                .get(configValueAtom(environmentId))
-                ?.providers.find((provider) => provider.instanceId === instanceId),
+              configProvider,
             ),
           );
         }),
@@ -1322,6 +1184,7 @@ export function createServerEnvironmentAtoms<R, E>(
             input.fresh ?? false,
             input.refreshModels ?? false,
             input.modelCatalogOnly ?? false,
+            input.omitProviders ?? false,
           ]),
       },
     }),

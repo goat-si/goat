@@ -8,8 +8,10 @@ import * as FileSystem from "effect/FileSystem";
 import * as Option from "effect/Option";
 import * as Queue from "effect/Queue";
 import * as Scope from "effect/Scope";
+import * as Scheduler from "effect/Scheduler";
 import * as Stream from "effect/Stream";
 import * as TestClock from "effect/testing/TestClock";
+import * as Tracer from "effect/Tracer";
 import * as VcsStatusBroadcaster from "./VcsStatusBroadcaster.ts";
 import {
   baseLocalStatus,
@@ -240,6 +242,95 @@ describe("VcsStatusBroadcaster branch status", () => {
       state.currentLocalStatus = { ...baseLocalStatus, refName: "feature/latest" };
       yield* broadcaster.refreshBranchStatus({ cwd: "/repo" });
       assert.deepEqual(yield* branches, [{ refName: "feature/latest", isRepo: true }]);
+    }).pipe(Effect.provide(layerTestFor(state)));
+  });
+
+  it.effect(
+    "a newer HEAD prevents an in-flight detailed refresh from publishing old totals",
+    () => {
+      const state = newState();
+      return Effect.gen(function* () {
+        const broadcaster = yield* VcsStatusBroadcaster.VcsStatusBroadcaster;
+        const details = yield* Stream.toPull(
+          broadcaster.streamStatus({ cwd: "/repo", includeRemote: false }),
+        );
+        yield* details;
+        const reading = yield* Deferred.make<void>();
+        const resume = yield* Deferred.make<void>();
+        state.currentLocalStatus = {
+          ...baseLocalStatus,
+          workingTree: { files: [], insertions: 1, deletions: 0 },
+        };
+        state.beforeLocalStatus = Deferred.succeed(reading, undefined).pipe(
+          Effect.andThen(Deferred.await(resume)),
+        );
+        const refresh = yield* broadcaster.refreshLocalStatus("/repo").pipe(Effect.forkScoped);
+        yield* Deferred.await(reading);
+
+        const next = { ...baseLocalStatus, refName: "feature/next" };
+        state.currentLocalStatus = next;
+        state.beforeLocalStatus = Effect.void;
+        assert.deepEqual(yield* broadcaster.refreshBranchStatus({ cwd: "/repo" }), {
+          refName: next.refName,
+          isRepo: true,
+        });
+        yield* Deferred.succeed(resume, undefined);
+
+        assert.deepEqual(yield* Fiber.join(refresh), next);
+        assert.deepEqual(yield* details, [{ _tag: "localUpdated", local: next }]);
+      }).pipe(Effect.provide(layerTestFor(state)));
+    },
+  );
+
+  it.effect("enqueues accepted detail before a newer HEAD can be published", () => {
+    const state = newState();
+    return Effect.gen(function* () {
+      const broadcaster = yield* VcsStatusBroadcaster.VcsStatusBroadcaster;
+      const branches = yield* Stream.toPull(broadcaster.streamBranchStatus({ cwd: "/repo" }));
+      yield* branches;
+      const details = yield* Stream.toPull(
+        broadcaster.streamStatus({ cwd: "/repo", includeRemote: false }),
+      );
+      yield* details;
+
+      const paused = yield* Deferred.make<() => void>();
+      let hold = false;
+      const defaults = new Scheduler.MixedScheduler();
+      const scheduler = new Scheduler.MixedScheduler("async", (run) => {
+        if (!hold) return defaults.setImmediate(run);
+        Deferred.doneUnsafe(paused, Effect.succeed(run));
+        return () => {};
+      });
+      scheduler.shouldYield = (fiber) => hold || defaults.shouldYield(fiber);
+      const tracer = Tracer.make({
+        span: (options) => {
+          if (options.name === "VcsStatusBroadcaster.publishBranch") hold = true;
+          return new Tracer.NativeSpan(options);
+        },
+      });
+      const old = { ...baseLocalStatus, hasWorkingTreeChanges: true };
+      state.currentLocalStatus = old;
+      const refresh = yield* broadcaster
+        .refreshLocalStatus("/repo")
+        .pipe(
+          Effect.withTracer(tracer),
+          Effect.provideService(Scheduler.Scheduler, scheduler),
+          Effect.forkScoped({ startImmediately: true }),
+        );
+      const resume = yield* Deferred.await(paused);
+      const detail = yield* details.pipe(Effect.forkScoped({ startImmediately: true }));
+      const enqueuedBeforeCheckout = detail.pollUnsafe();
+
+      state.currentLocalStatus = { ...baseLocalStatus, refName: "feature/next" };
+      yield* broadcaster.refreshBranchStatus({ cwd: "/repo" });
+      assert.deepEqual(yield* branches, [{ refName: "feature/next", isRepo: true }]);
+      hold = false;
+      resume();
+      yield* Fiber.join(refresh);
+      assert.deepEqual(
+        enqueuedBeforeCheckout,
+        Exit.succeed([{ _tag: "localUpdated", local: old }]),
+      );
     }).pipe(Effect.provide(layerTestFor(state)));
   });
 

@@ -149,6 +149,7 @@ export const AcpRegistrySession = Schema.Struct({
   title: Schema.NullOr(Schema.String.check(Schema.isMaxLength(1_024))),
   updatedAt: Schema.NullOr(Schema.String.check(Schema.isMaxLength(128))),
   importedThreadId: Schema.NullOr(ThreadId),
+  nativeHistoryPending: Schema.optionalKey(Schema.Boolean),
 });
 export type AcpRegistrySession = typeof AcpRegistrySession.Type;
 
@@ -191,6 +192,8 @@ export type AcpRegistryImportSessionInput = typeof AcpRegistryImportSessionInput
 export const AcpRegistryImportSessionResult = Schema.Struct({
   threadId: ThreadId,
   imported: Schema.Boolean,
+  nativeHistoryPending: Schema.optionalKey(Schema.Boolean),
+  nativeHistoryError: Schema.optionalKey(Schema.String.check(Schema.isMaxLength(512))),
 });
 export type AcpRegistryImportSessionResult = typeof AcpRegistryImportSessionResult.Type;
 
