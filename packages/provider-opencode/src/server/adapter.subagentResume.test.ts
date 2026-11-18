@@ -496,3 +496,216 @@ it.effect.each([
       Effect.scoped,
     ),
 );
+
+const scopedDirectoryPolicy = (path: string) =>
+  runtimePolicy("auto-accept-edits", {
+    approvalPolicy: "never",
+    sandboxPolicy: { type: "workspaceWrite", writableRoots: [path], networkAccess: false },
+  });
+
+const childPermissionModes = [
+  {
+    mode: "approval-required",
+    policy: runtimePolicy("approval-required"),
+    directory: "ask",
+    old: "ask",
+  },
+  {
+    mode: "auto-accept-edits",
+    policy: runtimePolicy("auto-accept-edits"),
+    directory: "ask",
+    old: "ask",
+  },
+  { mode: "auto", policy: runtimePolicy("auto"), directory: "ask", old: "ask" },
+  { mode: "full-access", policy: runtimePolicy("full-access"), directory: "allow", old: "allow" },
+  {
+    mode: "workspace-write",
+    policy: scopedDirectoryPolicy("/new-root"),
+    directory: "allow",
+    old: "deny",
+  },
+  {
+    mode: "read-only",
+    policy: runtimePolicy("full-access", {
+      approvalPolicy: "never",
+      sandboxPolicy: { type: "readOnly", networkAccess: false },
+    }),
+    directory: "deny",
+    old: "deny",
+  },
+  {
+    mode: "read-only-full",
+    policy: runtimePolicy("full-access", {
+      approvalPolicy: "never",
+      sandboxPolicy: { type: "readOnly", access: { type: "fullAccess" }, networkAccess: false },
+    }),
+    directory: "allow",
+    old: "allow",
+  },
+  {
+    mode: "external-sandbox",
+    policy: runtimePolicy("full-access", {
+      approvalPolicy: "never",
+      sandboxPolicy: { type: "externalSandbox", networkAccess: false },
+    }),
+    directory: "allow",
+    old: "allow",
+  },
+] as const;
+
+const childPermissionRows = childPermissionModes.flatMap((mode) =>
+  [1, 2, 3].flatMap((bases) =>
+    Array.from({ length: bases }, (_, createdAfter) =>
+      (["none", "restart", "retry"] as const).flatMap((interruption) =>
+        [false, true].map((marked) => ({ ...mode, bases, createdAfter, interruption, marked })),
+      ),
+    ).flat(),
+  ),
+);
+
+it.effect.each(childPermissionRows)(
+  "applies $mode after $bases parent bases, child born after $createdAfter appends, $interruption, marked=$marked",
+  ({ policy, directory, old, bases, createdAfter, interruption, marked }) =>
+    Effect.gen(function* () {
+      const root = "matrix-root";
+      const parent = "matrix-parent";
+      const child = "matrix-child";
+      const time = { created: 1, updated: 1 };
+      const history = [
+        scopedDirectoryPolicy("/old-root"),
+        scopedDirectoryPolicy("/middle-root"),
+        scopedDirectoryPolicy("/later-root"),
+      ]
+        .slice(0, bases)
+        .map(openCodePermissionRules);
+      const currentBase = openCodePermissionRules(policy);
+      const latest = history.at(-1)!;
+      const creationBase = history[createdAfter]!;
+      const nativeDenies: PermissionRuleset = [
+        { permission: "task", pattern: "*", action: "deny" },
+        { permission: "read", pattern: "/workspace/private/*", action: "deny" },
+      ];
+      const inherited = history
+        .slice(0, createdAfter + 1)
+        .flat()
+        .filter((rule) => rule.permission === "external_directory" || rule.action === "deny");
+
+      type Session = {
+        id: string;
+        parentID?: string;
+        permission: PermissionRuleset;
+        metadata?: Record<string, unknown>;
+        time: typeof time;
+      };
+      const restored = interruption === "restart";
+      const parentRules =
+        restored && bases === 1
+          ? currentBase
+          : [...history.flat(), ...(restored ? currentBase : [])];
+      const parentMetadata = {
+        goatPermissionBase: restored ? currentBase : latest,
+        ...(restored && bases > 1 ? { goatPreviousPermissionBases: history } : {}),
+      };
+      const sessions = new Map<string, Session>([
+        [root, { id: root, time, permission: parentRules, metadata: parentMetadata }],
+        [
+          parent,
+          { id: parent, parentID: root, time, permission: parentRules, metadata: parentMetadata },
+        ],
+        [
+          child,
+          {
+            id: child,
+            parentID: parent,
+            time,
+            permission: marked
+              ? [
+                  ...inherited,
+                  ...creationBase,
+                  ...nativeDenies,
+                  { permission: "read", pattern: "/workspace/private/*", action: "allow" },
+                ]
+              : [...inherited, ...nativeDenies],
+            ...(marked ? { metadata: { goatPermissionBase: creationBase } } : {}),
+          },
+        ],
+      ]);
+      const stored = (id: string) => {
+        const session = sessions.get(id);
+        if (session === undefined) throw new Error(`Unexpected test session ${id}`);
+        return session;
+      };
+      let failSubtree = interruption === "retry";
+      const submitted: PermissionRuleset[] = [];
+      const harness = yield* makeOpenCodeRuntimeHarness("child-policy-matrix", root, {
+        event: { subscribe: async () => ({ stream: asyncEventStream().stream }) },
+        session: {
+          create: async () => ({ data: stored(root) }),
+          get: async ({ sessionID }: { sessionID: string }) => ({ data: stored(sessionID) }),
+          children: async ({ sessionID }: { sessionID: string }) => {
+            if (sessionID === parent && failSubtree) {
+              failSubtree = false;
+              throw new Error("OpenCode could not list this subtree");
+            }
+            return {
+              data: [...sessions.values()].filter((session) => session.parentID === sessionID),
+            };
+          },
+          update: async (input: {
+            sessionID: string;
+            permission?: PermissionRuleset;
+            metadata?: Record<string, unknown>;
+          }) => {
+            const prior = stored(input.sessionID);
+            const next = {
+              ...prior,
+              permission: [...prior.permission, ...(input.permission ?? [])],
+              ...(input.metadata === undefined ? {} : { metadata: input.metadata }),
+            };
+            sessions.set(input.sessionID, next);
+            return { data: next };
+          },
+          promptAsync: async () => {
+            submitted.push(stored(child).permission);
+            return { data: true };
+          },
+          abort: async () => ({ data: true }),
+        },
+      });
+      const resumed = yield* harness.runtime.resumeThread({
+        providerThread: harness.providerThread,
+        threadId: harness.threadId,
+        runtimePolicy: policy,
+      });
+      const start = harness.startTurn("Resume the child", resumed, policy);
+      if (interruption === "retry") {
+        assert.isTrue(Exit.isFailure(yield* Effect.exit(start)));
+        assert.deepEqual(stored(parent).metadata?.goatPermissionBase, currentBase);
+        assert.isEmpty(submitted);
+      }
+      yield* start;
+      assert.lengthOf(submitted, 1);
+      const rules = submitted[0]!;
+      const action = (permission: string, path: string) =>
+        rules.findLast(
+          (rule) =>
+            (rule.permission === "*" || rule.permission === permission) &&
+            (rule.pattern === "*" ||
+              rule.pattern === path ||
+              (rule.pattern.endsWith("/*") && path.startsWith(rule.pattern.slice(0, -1)))),
+        )?.action;
+      assert.deepEqual(
+        [
+          action("external_directory", "/new-root/file"),
+          action("external_directory", "/old-root/file"),
+          action("read", "/workspace/file"),
+          action("read", "/workspace/private/file"),
+        ],
+        [directory, old, "allow", "deny"],
+        "current directory, previous directory, workspace read, child-native deny",
+      );
+    }).pipe(
+      Effect.provide(Layer.merge(IdAllocator.layer, McpProviderSessions.layer)),
+      Effect.scoped,
+    ),
+);
