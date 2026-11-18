@@ -635,6 +635,10 @@
       "types": "./src/hostClassification.ts",
       "import": "./src/hostClassification.ts"
     },
+    "./officeCjkFontAssets": {
+      "types": "./src/officeCjkFontAssets.ts",
+      "import": "./src/officeCjkFontAssets.ts"
+    },
     "./cliRelease": {
       "types": "./src/cliRelease.ts",
       "import": "./src/cliRelease.ts"
@@ -642,6 +646,10 @@
     "./runtimeManifest": {
       "types": "./src/runtimeManifest.ts",
       "import": "./src/runtimeManifest.ts"
+    },
+    "./diffCutLines": {
+      "types": "./src/diffCutLines.ts",
+      "import": "./src/diffCutLines.ts"
     },
     "./gitPatchPath": {
       "types": "./src/gitPatchPath.ts",

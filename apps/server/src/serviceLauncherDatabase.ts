@@ -274,7 +274,7 @@ export function databaseRecoveryRequired(
     `Database recovery required for ${pending.dbPath}. ${reason} ` +
       `The live files and any snapshot files at ${databaseBackupDir(baseDir, pending.id)} were kept. ` +
       `After verifying the live files, acknowledge recovery at ${phasePath(baseDir, pending.id)}. ` +
-      "Follow the recovery steps at https://github.com/goat-si/goat/blob/dev/docs/user/updating.md#recover-an-interrupted-database-restore",
+      "Follow the recovery steps at https://trygoat.ai/docs/user/updating#recover-an-interrupted-database-restore",
   );
 }
 

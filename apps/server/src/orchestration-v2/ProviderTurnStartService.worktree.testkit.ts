@@ -109,6 +109,7 @@ export function makeWorktreeStartHarness(
         Layer.mock(TurnItemPositionStore.TurnItemPositionStoreV2)({}),
         Layer.succeed(FileSystem.FileSystem, {
           exists: () => Effect.succeed(false),
+          stat: () => Effect.succeed({ type: "Directory" }),
           realPath: (target: string) =>
             normalize(target) in realPaths
               ? Effect.succeed(realPaths[normalize(target)])

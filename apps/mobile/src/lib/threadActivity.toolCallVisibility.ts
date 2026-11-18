@@ -10,7 +10,7 @@ import type {
   ThreadFeedActivityGroup,
   ThreadFeedEntry,
   ThreadFeedMessage,
-} from "./threadActivity";
+} from "./threadActivityTypes";
 import { compactWorkEntryText } from "./workEntryRowLabel";
 
 export interface ThreadFeedDisplay {

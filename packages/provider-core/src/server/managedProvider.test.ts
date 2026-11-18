@@ -1,7 +1,6 @@
 import * as Queue from "effect/Queue";
 import { describe, it, assert } from "@effect/vitest";
 import {
-  DEFAULT_SERVER_SETTINGS,
   ProviderDriverKind,
   ProviderInstanceId,
   ServerSettingsError,
@@ -18,7 +17,7 @@ import * as Ref from "effect/Ref";
 import * as Stream from "effect/Stream";
 import * as TestClock from "effect/testing/TestClock";
 
-import * as ProviderHost from "./ProviderHost.ts";
+import { layerProviderHost } from "./managedProvider.testkit.ts";
 import { makeManagedServerProvider } from "./managedProvider.ts";
 
 const emptyCapabilities = createModelCapabilities({ optionDescriptors: [] });
@@ -97,33 +96,6 @@ const refreshedSnapshotSecond: ServerProvider = {
   checkedAt: "2026-04-10T00:00:03.000Z",
   message: "Refreshed provider availability again.",
 };
-
-function layerProviderHost(input: {
-  readonly runBackgroundWork: boolean;
-  readonly settings?: Pick<ProviderHost.ProviderHost["Service"], "settings">["settings"];
-}) {
-  return Layer.succeed(
-    ProviderHost.ProviderHost,
-    ProviderHost.ProviderHost.of({
-      paths: {
-        cwd: process.cwd(),
-        baseDir: "/t3",
-        stateDir: "/t3/userdata",
-        providerStatusCacheDir: "/t3/caches",
-        attachmentsDir: "/t3/userdata/attachments",
-      },
-      settings: input.settings ?? {
-        get: Effect.succeed(DEFAULT_SERVER_SETTINGS),
-        withSnapshot: (use) => use(DEFAULT_SERVER_SETTINGS),
-        changes: Stream.empty,
-        subscribe: Effect.succeed(Stream.empty),
-      },
-      shouldRunBackgroundWork: () => Effect.succeed(input.runBackgroundWork),
-      resolveAttachmentPath: () => null,
-      credentials: () => Effect.die("unused"),
-    }),
-  );
-}
 
 const layerAlwaysRunTest = layerProviderHost({ runBackgroundWork: true });
 
@@ -293,6 +265,49 @@ describe("makeManagedServerProvider", () => {
           assert.strictEqual(yield* Ref.get(checkCalls), 1);
         }),
       ).pipe(Effect.provide(layerAlwaysRunTest)),
+  );
+
+  it.effect("holds the first provider check until server startup finishes", () =>
+    Effect.gen(function* () {
+      const serverReady = yield* Deferred.make<void>();
+      const checkStarted = yield* Deferred.make<void>();
+      const checkCalls = yield* Ref.make(0);
+      yield* Effect.scoped(
+        Effect.gen(function* () {
+          const provider = yield* makeManagedServerProvider<TestSettings>({
+            resolveMaintenance: () => Effect.succeed(maintenanceCapabilities),
+            getSettings: Effect.succeed({ enabled: true }),
+            streamSettings: Stream.empty,
+            haveSettingsChanged: (previous, next) => previous.enabled !== next.enabled,
+            initialSnapshot: () => Effect.succeed(initialSnapshot),
+            checkProvider: Ref.update(checkCalls, (count) => count + 1).pipe(
+              Effect.andThen(Deferred.succeed(checkStarted, undefined)),
+              Effect.as(refreshedSnapshot),
+            ),
+            refreshInterval: "1 hour",
+          });
+
+          yield* TestClock.adjust("10 seconds");
+          assert.strictEqual(yield* Ref.get(checkCalls), 0);
+          assert.deepStrictEqual(yield* provider.getSnapshot, initialSnapshot);
+          assert.isTrue(yield* provider.isAwaitingFirstCheck ?? Effect.succeed(false));
+
+          yield* Deferred.succeed(serverReady, undefined);
+          yield* Deferred.await(checkStarted);
+          assert.strictEqual(yield* Ref.get(checkCalls), 1);
+        }),
+      ).pipe(
+        Effect.provide(
+          Layer.mergeAll(
+            layerProviderHost({
+              runBackgroundWork: false,
+              awaitServerReady: Deferred.await(serverReady),
+            }),
+            TestClock.layer(),
+          ),
+        ),
+      );
+    }),
   );
 
   it.effect("skips periodic provider refreshes without foreground provider-status demand", () =>

@@ -284,7 +284,7 @@ const make = Effect.gen(function* () {
             input,
             "uncommitted_unsupported",
             "The uncommitted changes could not be copied. Fork without them, or commit them first.",
-            { retainedWorktreePath: worktreePath, cause },
+            { cause },
           ),
         ),
       );
@@ -397,7 +397,7 @@ const make = Effect.gen(function* () {
                 input,
                 "uncommitted_unsupported",
                 "The uncommitted changes could not be copied. Fork without them, or commit them first.",
-                { cause },
+                { retainedWorktreePath: worktreePath, cause },
               ),
             ),
           );
