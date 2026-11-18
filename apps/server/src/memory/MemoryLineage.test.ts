@@ -46,7 +46,10 @@ const input = (n: number, deps: readonly M.MemoryRevisionId[] = []): M.MemoryUps
   payload: { text: `synthetic lineage ${n}`, evidence: [], derivedFromMemoryRevisions: deps },
   baseBoundary: null,
 });
-const makeEnvironment = Effect.fnUntraced(function* (environmentId: M.EnvironmentId) {
+const makeEnvironment = Effect.fnUntraced(function* (
+  environmentId: M.EnvironmentId,
+  serviceLayer = Service.layer,
+) {
   const database = Layer.effectDiscard(
     migration.pipe(
       Effect.andThen(hubMigration),
@@ -59,7 +62,7 @@ const makeEnvironment = Effect.fnUntraced(function* (environmentId: M.Environmen
       Effect.andThen(revertMigration),
     ),
   ).pipe(Layer.provideMerge(NodeSqliteClient.layer({ filename: ":memory:" })));
-  const core = Layer.merge(Service.layer, Maintenance.layer).pipe(
+  const core = Layer.merge(serviceLayer, Maintenance.layer).pipe(
     Layer.provideMerge(
       Layer.succeed(Settings.MemoryHubCommittedSettings, {
         read: Effect.succeed({
@@ -773,6 +776,112 @@ it.effect(
             "status",
             "blocked",
           );
+      }),
+    ),
+);
+
+it.effect.each(["lost ACK", "unavailable before admission"] as const)(
+  "an uncertain remember waits for its original operation after %s",
+  (scenario) =>
+    Effect.scoped(
+      Effect.gen(function* () {
+        yield* TestClock.setTime(at);
+        const hub = yield* makeEnvironment(hubId);
+        yield* enroll(hub.sql);
+        const admit = (op: M.MemoryOperation) =>
+          hub.service.admitHubOperation({ authority: authority(), operation: op });
+        let submit: Effect.Effect<void, Service.MemoryServiceError> = Effect.void;
+        const e = yield* makeEnvironment(
+          memberId,
+          Service.layerWithSourceReadAuthority(
+            () => Effect.fail(new Service.MemoryAccessError({ code: "unavailable" })),
+            Effect.suspend(() => submit),
+          ),
+        );
+        yield* e.sql`ALTER TABLE orchestration_events ADD COLUMN event_id TEXT`;
+        yield* e.sql`ALTER TABLE orchestration_events ADD COLUMN sequence INTEGER`;
+        const revisions: M.MemoryRevisionId[] = [];
+        for (let n = 10000; n < 10101; n++) {
+          const source = input(n);
+          yield* e.service.upsert(source, Effect.void);
+          const op = yield* operation(e.store, source);
+          assert.propertyVal(yield* admit(op), "outcome", "accepted");
+          revisions.push(op.revision.revisionId);
+        }
+        yield* e.store.transact(e.store.learnHubFloor(space, at));
+        yield* e.store.appendThreadLineage(thread, space, revisions);
+        const readOriginal = Effect.gen(function* () {
+          const [row] = yield* e.sql<{
+            id: string;
+          }>`SELECT id FROM memory_outbox WHERE json_extract(metadata_json,'$.authorityFirst') IS NOT NULL`;
+          if (!row) throw new Error("Expected the original staged operation");
+          const op = yield* e.store.readWorkOperation(row.id);
+          if (!op || op.kind !== "upsert") throw new Error("Expected a staged upsert");
+          return { workId: row.id, op };
+        });
+        if (scenario === "lost ACK") {
+          yield* hub.store.transact(hub.store.learnHubFloor(space, at));
+          submit = readOriginal.pipe(
+            Effect.flatMap(({ op }) => admit(op)),
+            Effect.orDie,
+            Effect.asVoid,
+          );
+        } else submit = Effect.fail(new Store.MemoryStoreConflict({ code: "hub_unavailable" }));
+        const failure = yield* Effect.flip(
+          e.service.remember(
+            { memorySpaceId: space, scope: "user", text: "synthetic uncertain save" },
+            Effect.void,
+            thread,
+          ),
+        );
+        assert.propertyVal(failure, "code", "hub_unavailable");
+        const { workId, op } = yield* readOriginal;
+        const address = { memorySpaceId: space, suggestionId: op.memoryId };
+        const waiting = yield* e.service.listSuggestions({ memorySpaceId: space }, Effect.void);
+        assert.lengthOf(waiting, 1);
+        assert.include(waiting[0], { suggestionId: op.memoryId, state: "accepting" });
+        assert.deepStrictEqual(yield* e.service.acceptSuggestion(address, Effect.void), {
+          status: "pending",
+        });
+        assert.lengthOf(
+          yield* e.sql`SELECT id FROM memory_outbox WHERE memory_id=${op.memoryId}`,
+          1,
+        );
+        const receipt = yield* admit(op);
+        yield* e.service.settleHubAcknowledgement({
+          memorySpaceId: space,
+          hubEnvironmentId: hubId,
+          localEnvironmentId: memberId,
+          workId,
+          receipt,
+          operation: { operationId: op.operationId, operationDigest: receipt.operationDigest },
+          reauthorize: Effect.void,
+        });
+        const remaining = yield* e.service.listSuggestions({ memorySpaceId: space }, Effect.void);
+        if (scenario === "lost ACK") {
+          assert.propertyVal(receipt, "outcome", "accepted");
+          assert.isEmpty(remaining);
+          assert.lengthOf(
+            yield* hub.sql`SELECT 1 FROM memory_hub_operations WHERE operation_id=${op.operationId}`,
+            1,
+          );
+          return;
+        }
+        assert.include(receipt, { outcome: "rejected", failureCode: "hub_upgrade_required" });
+        assert.lengthOf(remaining, 1);
+        assert.include(remaining[0], { state: "pending", reason: "hub_upgrade_required" });
+        yield* hub.store.transact(hub.store.learnHubFloor(space, at));
+        for (let attempt = 0; attempt < 2; attempt++)
+          assert.deepStrictEqual(yield* e.service.acceptSuggestion(address, Effect.void), {
+            status: "pending",
+          });
+        const attempts = yield* e.sql<{
+          id: string;
+        }>`SELECT id FROM memory_outbox WHERE memory_id=${op.memoryId} AND id!=${workId}`;
+        assert.lengthOf(attempts, 1);
+        const retry = yield* e.store.readWorkOperation(attempts[0]!.id);
+        if (!retry) throw new Error("Expected an acceptance retry");
+        assert.propertyVal(yield* admit(retry), "outcome", "accepted");
       }),
     ),
 );
