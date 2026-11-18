@@ -1,3 +1,4 @@
+import { canCacheDiff, diffCacheEvictions } from "./pullRequestDiffCache.ts";
 import { withRateLimitBackoff } from "./pullRequestRateLimit.ts";
 import { gatherReferencePages, rankFilterOptions } from "./pullRequestFilterRanking.ts";
 import { toPullRequestSummary, matchesFilterRepository } from "./pullRequestSummary.ts";
@@ -169,23 +170,6 @@ const LIST_CACHE_CAPACITY = 64;
 const LIST_STATS_CACHE_CAPACITY = 32;
 const DETAIL_CACHE_CAPACITY = 128;
 const DIFF_CACHE_CAPACITY = 128;
-// Each holder stays within this UTF-16 patch budget as well as its entry-count bound.
-const DIFF_CACHE_PATCH_BUDGET_BYTES = 32 * 1024 * 1024;
-const canCacheDiff = (value: PullRequestDiffResult) =>
-  value.patch.length * 2 <= DIFF_CACHE_PATCH_BUDGET_BYTES;
-const diffCacheEvictions = (entries: Iterable<readonly [string, PullRequestDiffResult]>) => {
-  let bytes = 0;
-  const evictions: string[] = [];
-  for (const [key, value] of Array.from(entries).toReversed()) {
-    const size = value.patch.length * 2;
-    if (bytes + size > DIFF_CACHE_PATCH_BUDGET_BYTES) {
-      evictions.push(key);
-    } else {
-      bytes += size;
-    }
-  }
-  return evictions;
-};
 const FILES_VIEWED_CACHE_CAPACITY = 128;
 const VIEWER_CACHE_CAPACITY = 32;
 

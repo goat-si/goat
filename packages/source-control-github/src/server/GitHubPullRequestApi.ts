@@ -1,10 +1,22 @@
 import {
+  decodeWith,
+  readError,
+  GitHubDiffCommitError,
+  type GitHubDiffCursorError,
+  type GitHubPullRequestReadError,
+} from "./gitHubPullRequestReadErrors.ts";
+export {
+  GitHubDiffCommitError,
+  GitHubDiffCursorError,
+  GitHubPullRequestReadError,
+} from "./gitHubPullRequestReadErrors.ts";
+import { DIFF_TIMEOUT, makeGitHubPullRequestDiff } from "./gitHubPullRequestDiff.ts";
+import {
   toReviewerCandidates,
   type GitHubReviewerCandidateInput,
 } from "./gitHubReviewerCandidates.ts";
 import {
   parseRepositorySelector,
-  diffCursorPage,
   isCommitSha,
   decodeRevisionRefs,
   decodeMergeBase,
@@ -30,7 +42,6 @@ import { runGitHubStackAction, type GitHubStackActionError } from "./githubStack
 import * as Cache from "effect/Cache";
 import * as Context from "effect/Context";
 import * as Clock from "effect/Clock";
-import * as Duration from "effect/Duration";
 import * as Effect from "effect/Effect";
 import * as FileSystem from "effect/FileSystem";
 import * as Layer from "effect/Layer";
@@ -89,7 +100,6 @@ import * as SourceControlRateLimit from "@goat/source-control-core/server/Source
 import {
   buildReviewSubmission,
   buildReviewerRequest,
-  decodeCommitFilesJson,
   pullRequestChecksFromContexts,
   decodeWorkflowRunsJson,
   type GitHubPullRequestCore,
@@ -122,7 +132,6 @@ import {
   toReviewThreadPage,
   toStackMembership,
   toViewerPermissions,
-  decodePullRequestFilesJson,
   decodePullRequestStacksJson,
   buildLabelRequest,
   PULL_REQUEST_SEARCH_MAX_ROWS,
@@ -149,19 +158,6 @@ import type {
 import { LIST_STATES, type GitHubPullRequestListPage } from "./gitHubPullRequestListStates.ts";
 import { decodeUnfinishedWorkflowRunsJson } from "./gitHubWorkflowRunsJson.ts";
 
-export class GitHubPullRequestReadError extends Schema.TaggedError<GitHubPullRequestReadError>()(
-  "GitHubPullRequestReadError",
-  {
-    cwd: Schema.String,
-    operation: Schema.String,
-    cause: Schema.Defect(),
-  },
-) {
-  override get message(): string {
-    return `GitHub returned an unreadable ${this.operation} response.`;
-  }
-}
-
 export class GitHubViewerLoginUnavailableError extends Schema.TaggedError<GitHubViewerLoginUnavailableError>()(
   "GitHubViewerLoginUnavailableError",
   {
@@ -183,28 +179,6 @@ export class GitHubPullRequestUpdatedAtUnavailableError extends Schema.TaggedErr
 ) {
   override get message(): string {
     return `Pull request ${this.repository}#${this.number} reported no update time.`;
-  }
-}
-
-export class GitHubDiffCursorError extends Schema.TaggedError<GitHubDiffCursorError>()(
-  "GitHubDiffCursorError",
-  {
-    cwd: Schema.String,
-  },
-) {
-  override get message(): string {
-    return "The diff cursor was not one this pull request handed out.";
-  }
-}
-
-export class GitHubDiffCommitError extends Schema.TaggedError<GitHubDiffCommitError>()(
-  "GitHubDiffCommitError",
-  {
-    cwd: Schema.String,
-  },
-) {
-  override get message(): string {
-    return "The named commit was not a commit sha.";
   }
 }
 
@@ -333,14 +307,10 @@ const isGraphQlClientError = (error: unknown): error is GraphQLClientError.Graph
 
 const { isNotFoundOnly } = GitHubGraphQlClient;
 
-/** A large pull request can produce a multi-megabyte patch; past this it is truncated. */
-const DIFF_MAX_OUTPUT_BYTES = 8 * 1024 * 1024;
-const DIFF_TIMEOUT = Duration.seconds(60);
 const DIFF_FILE_MAX_OUTPUT_BYTES = 1024 * 1024;
 
 const PULL_REQUEST_FALLBACK_MAX_ROWS = 1_000;
 
-const DIFF_FILES_PAGE_SIZE = 100;
 const FILES_VIEWED_MAX_PAGES = 5;
 const FILES_VIEWED_PER_REQUEST = 100;
 
@@ -859,9 +829,6 @@ export const make = Effect.gen(function* () {
       Effect.map(({ accountId, viewer }) => ({ accountId, viewer })),
     );
 
-  const readError = (cwd: string, operation: string, cause: unknown) =>
-    new GitHubPullRequestReadError({ cwd, operation, cause });
-
   const graphql =
     (input: {
       readonly cwd: string;
@@ -994,18 +961,6 @@ export const make = Effect.gen(function* () {
       .pipe(graphql({ ...input, allowReserve: true }), Effect.map(isSubjectOfPullRequest));
   };
 
-  const decodeWith = <A>(
-    cwd: string,
-    operation: string,
-    decode: (raw: string) => Result.Result<A, unknown>,
-    raw: string,
-  ): Effect.Effect<A, GitHubPullRequestReadError> => {
-    const decoded = decode(raw.trim());
-    return Result.isSuccess(decoded)
-      ? Effect.succeed(decoded.success)
-      : Effect.fail(readError(cwd, operation, decoded.failure));
-  };
-
   /** A REST read whose JSON answer is decoded the same way. */
   const restRead = <A>(input: RestReadInput<A>): Effect.Effect<A, GitHubPullRequestApiError> =>
     api
@@ -1058,61 +1013,6 @@ export const make = Effect.gen(function* () {
       : Cache.invalidate(validators, key);
     return decoded;
   });
-
-  const diffFilesPage = (input: {
-    readonly cwd: string;
-    readonly repository: string;
-    readonly host: string;
-    readonly number: number;
-    readonly page: number;
-    readonly commit?: string | undefined;
-  }): Effect.Effect<GitHubPullRequestDiffSlice, GitHubPullRequestApiError> => {
-    const { owner, name } = parseRepositorySelector(input.repository);
-    const paging = `per_page=${DIFF_FILES_PAGE_SIZE}&page=${input.page}`;
-    return api
-      .rest({
-        host: input.host,
-        operation: "getPullRequestDiff",
-        path:
-          input.commit === undefined
-            ? `repos/${owner}/${name}/pulls/${input.number}/files?${paging}`
-            : `repos/${owner}/${name}/commits/${input.commit}?${paging}`,
-        maxResponseBytes: DIFF_MAX_OUTPUT_BYTES,
-        timeout: DIFF_TIMEOUT,
-      })
-      .pipe(
-        Effect.flatMap((response) => {
-          // Byte-truncated responses are unparseable JSON prefixes.
-          if (response.truncated) {
-            return Effect.fail(
-              readError(
-                input.cwd,
-                "getPullRequestDiff",
-                new Error(`Page ${input.page} of the changed files was too large to read.`),
-              ),
-            );
-          }
-          return decodeWith(
-            input.cwd,
-            "getPullRequestDiff",
-            input.commit === undefined ? decodePullRequestFilesJson : decodeCommitFilesJson,
-            response.body,
-          );
-        }),
-        Effect.map((files) => {
-          // Use raw row counts so malformed files cannot prematurely end pagination.
-          const morePages = files.rawCount >= DIFF_FILES_PAGE_SIZE;
-          return {
-            patch: files.patch,
-            truncated: files.truncated,
-            nextCursor: morePages ? String(input.page + 1) : null,
-            ...(files.omittedFileStats.length === 0
-              ? {}
-              : { omittedFileStats: files.omittedFileStats }),
-          };
-        }),
-      );
-  };
 
   const getPullRequestDiffFileContents: GitHubPullRequestApi["Service"]["getPullRequestDiffFileContents"] =
     Effect.fn("GitHubPullRequestApi.getPullRequestDiffFileContents")(function* (input) {
@@ -1950,50 +1850,7 @@ export const make = Effect.gen(function* () {
       },
     ),
 
-    getPullRequestDiff: Effect.fn("GitHubPullRequestApi.getPullRequestDiff")(function (input) {
-      const filesPage = (page: number) =>
-        diffFilesPage({
-          cwd: input.cwd,
-          repository: input.repository,
-          host: input.host,
-          number: input.number,
-          page,
-          ...(input.commit === undefined ? {} : { commit: input.commit }),
-        });
-      if (input.commit !== undefined && !isCommitSha(input.commit)) {
-        return Effect.fail(new GitHubDiffCommitError({ cwd: input.cwd }));
-      }
-      if (input.cursor !== undefined) {
-        const page = diffCursorPage(input.cursor);
-        return page === null
-          ? Effect.fail(new GitHubDiffCursorError({ cwd: input.cwd }))
-          : filesPage(page);
-      }
-      if (input.commit !== undefined) {
-        return filesPage(1);
-      }
-      const { owner, name } = parseRepositorySelector(input.repository);
-      return api
-        .rest({
-          host: input.host,
-          operation: "getPullRequestDiff",
-          path: `repos/${owner}/${name}/pulls/${input.number}`,
-          accept: "application/vnd.github.diff",
-          maxResponseBytes: DIFF_MAX_OUTPUT_BYTES,
-          timeout: DIFF_TIMEOUT,
-        })
-        .pipe(
-          Effect.flatMap((response) =>
-            response.truncated
-              ? filesPage(1)
-              : Effect.succeed({ patch: response.body, truncated: false, nextCursor: null }),
-          ),
-          // Above 300 changed files, GitHub returns 406; use the paged files API.
-          Effect.catchTags({
-            GitHubApiResponseError: (error) => filesPage(1).pipe(Effect.mapError(() => error)),
-          }),
-        );
-    }),
+    getPullRequestDiff: makeGitHubPullRequestDiff(api),
 
     getPullRequestDiffFileContents,
 
