@@ -25,6 +25,8 @@ import { exchangePenResponse, mintPenSession } from "./penUpstream.ts";
 const MINT_DEADLINE_MS = 30_000;
 const UPGRADE_REFUSAL_BODY_CAP = 64 * 1024;
 const EARLY_UPGRADE_BYTES = 64 * 1024;
+// Requests held while a session is minted, before any dial limit applies to them.
+const MINT_WAITERS = { route: 32, socket: 4, total: 256 } as const;
 
 interface Route {
   readonly pin: DesktopPenPin;
@@ -37,6 +39,7 @@ interface Route {
   readonly waiting: Array<{ resolve: () => void; reject: (error: Error) => void }>;
   closed: boolean;
   active: number;
+  minting: number;
   token?: { token: string; expiresAt: number } | undefined;
   flight?: Promise<{ token: string; expiresAt: number }> | undefined;
 }
@@ -180,9 +183,13 @@ export function makePenGateway(deps: Dependencies) {
     route.releasing.set(pipe, done);
     return done;
   };
+  const cachedToken = (route: Route) =>
+    route.token && route.token.expiresAt > (deps.now ?? Date.now)() + 60_000
+      ? route.token
+      : undefined;
   const token = async (route: Route) => {
-    if (route.token && route.token.expiresAt > (deps.now ?? Date.now)() + 60_000)
-      return route.token;
+    const cached = cachedToken(route);
+    if (cached) return cached;
     route.flight ??= (async () => {
       // One deadline for the whole mint, so requests waiting on it are answered.
       const deadline = new AbortController();
@@ -208,6 +215,30 @@ export function makePenGateway(deps: Dependencies) {
       route.flight = undefined;
     });
     return route.flight;
+  };
+  let mintWaiters = 0;
+  const mintWaitersBySocket = new WeakMap<NodeStream.Duplex, number>();
+  /** The route's session, refusing ("busy") a request past any waiting limit. */
+  const awaitToken = async (route: Route, socket: NodeStream.Duplex, signal: AbortSignal) => {
+    const cached = cachedToken(route);
+    if (cached) return cached;
+    const held = mintWaitersBySocket.get(socket) ?? 0;
+    if (
+      route.minting >= MINT_WAITERS.route ||
+      held >= MINT_WAITERS.socket ||
+      mintWaiters >= MINT_WAITERS.total
+    )
+      throw new Error("busy");
+    route.minting++;
+    mintWaiters++;
+    mintWaitersBySocket.set(socket, held + 1);
+    try {
+      return await untilAborted(() => token(route), signal);
+    } finally {
+      route.minting--;
+      mintWaiters--;
+      mintWaitersBySocket.set(socket, (mintWaitersBySocket.get(socket) ?? 1) - 1);
+    }
   };
   const handle = async (req: NodeHttp.IncomingMessage, res: NodeHttp.ServerResponse) => {
     const decision = decidePenGatewayRequest({
@@ -251,7 +282,7 @@ export function makePenGateway(deps: Dependencies) {
       }
       const session = isPublicPenDescriptor(req.method ?? "", decision.path)
         ? undefined
-        : await untilAborted(() => token(route), controller.signal);
+        : await awaitToken(route, req.socket, controller.signal);
       if (res.destroyed) return;
       const pipe = await dial(route, controller.signal);
       if (res.destroyed) {
@@ -396,7 +427,7 @@ export function makePenGateway(deps: Dependencies) {
     try {
       if ((await deps.membership.requireMember(route.pin)) !== "member")
         return refuse(503, decision.responseHeaders);
-      const session = await untilAborted(() => token(route), controller.signal);
+      const session = await awaitToken(route, socket, controller.signal);
       pipe = await dial(route, controller.signal);
       // Until the socket owns the pipe, a client that leaves must not leave its child behind.
       const dialed = pipe;
@@ -566,6 +597,7 @@ export function makePenGateway(deps: Dependencies) {
             waiting: [],
             closed: false,
             active: 0,
+            minting: 0,
           };
           routes.set(routeKey, route);
         }
