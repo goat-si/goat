@@ -297,9 +297,10 @@ export const layerExecutor: Layer.Layer<
                     if (message === undefined || run === undefined) return yield* error;
                     const modelSelection =
                       effect.request.pinnedScheduleSelection ??
-                      (error.steerDeclined ? effect.request.modelSelection : undefined) ??
+                      (error.steerDeclined && message.followsThreadSelection !== true
+                        ? effect.request.modelSelection
+                        : undefined) ??
                       (message.delegatedCompletion === undefined ? undefined : run.modelSelection);
-                    // Notifications must be queued messages.
                     const queued =
                       message.delegatedCompletion !== undefined ||
                       message.notification !== undefined ||

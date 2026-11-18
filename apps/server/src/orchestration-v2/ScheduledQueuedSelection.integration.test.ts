@@ -121,13 +121,17 @@ it.effect.each(["bound", "pinned", "legacy", "fresh_session", "promoted"] as con
     ),
 );
 
-it.effect.each(["pinned", "bound"] as const)(
-  "retains a %s schedule's model binding when the provider declines its promotion",
-  (binding) =>
+it.effect.each(
+  (["pinned", "bound"] as const).flatMap((binding) =>
+    (["agent", "user"] as const).map((createdBy) => ({ binding, createdBy })),
+  ),
+)(
+  "retains a $binding $createdBy schedule's model binding when the provider declines its promotion",
+  ({ binding, createdBy }) =>
     Effect.scoped(
       Effect.gen(function* () {
         const { started, layer, startFirstTurn } = yield* nextTurnSelectionHarness(
-          `scheduled-declined-${binding}`,
+          `scheduled-declined-${binding}-${createdBy}`,
           false,
           Effect.void,
           false,
@@ -160,8 +164,8 @@ it.effect.each(["pinned", "bound"] as const)(
             ...(binding === "pinned" ? { modelSelection: runSelection } : {}),
             dispatchMode: { type: "queue_after_active" },
             scheduledTaskId: ScheduledTaskId.make("schedule:declined"),
-            createdBy: "agent",
-            creationSource: "server",
+            createdBy,
+            creationSource: createdBy === "agent" ? "server" : "web",
           });
           const before = yield* orchestrator.getThreadProjection(threadId);
           const active = before.runs.find((run) => run.status === "running");
