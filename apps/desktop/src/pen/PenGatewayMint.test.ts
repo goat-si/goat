@@ -7,11 +7,21 @@ import { fakeChild, pin } from "./penGateway.testkit.ts";
 
 describe("Pen gateway session mint", () => {
   it("answers requests past the waiting limit at once while a mint is stalled", async () => {
+    let mints = 0;
+    let mintEnded = false;
     const gateway = makePenGateway({
       membership: { requireMember: async () => "member", subscribe: () => () => {} },
       resolvePenBinary: async () => "/pen",
       // The member never answers the mint, so every private request waits for it.
-      spawn: () => fakeChild(),
+      spawn: () => {
+        const child = fakeChild((request) => {
+          if (request.startsWith("POST /api/pen/session")) mints++;
+        });
+        child.once("exit", () => {
+          mintEnded = true;
+        });
+        return child;
+      },
       randomBytes: () => Buffer.alloc(32, 1),
       appOrigins: ["goat://app"],
     });
@@ -37,6 +47,8 @@ describe("Pen gateway session mint", () => {
       });
       await refused;
       expect(statuses).toEqual(Array.from({ length: 8 }, () => 503));
+      // Refused by the limit, not by the mint giving up: the one mint is still waiting.
+      expect([mints, mintEnded]).toEqual([1, false]);
       agent.destroy();
     } finally {
       await gateway.dispose();
