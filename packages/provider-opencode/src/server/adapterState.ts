@@ -84,6 +84,7 @@ export interface OpenCodeSubagentContext {
   childProviderThreadId: OrchestrationV2ProviderThread["id"] | null;
   model: string | null;
   result: string | null;
+  launch: ToolPart | null;
 }
 
 export interface OpenCodeThreadState {

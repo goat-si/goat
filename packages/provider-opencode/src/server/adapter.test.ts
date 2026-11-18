@@ -634,8 +634,8 @@ describe("OpenCodeAdapterV2", () => {
       }
       yield* harness.startTurn();
       const terminal = yield* harness.runtime.events.pipe(
-        Stream.filter((event) => event.type === "turn.terminal"),
-        Stream.runHead,
+        Stream.takeUntil((event) => event.type === "turn.terminal"),
+        Stream.runCollect,
         Effect.forkScoped,
       );
       const taskPart = (status: "running" | "completed") => ({
@@ -685,15 +685,33 @@ describe("OpenCodeAdapterV2", () => {
           info: { id: child, parentID: root, time: { created: 2, updated: 2 } },
         },
       });
-      yield* push(status(child, "busy"));
       yield* push(taskPart("completed"));
       yield* push(status(root, "idle"));
-      assert.equal(Option.getOrUndefined(yield* Fiber.join(terminal))?.status, "completed");
+      const rootEvents = yield* Fiber.join(terminal);
+      const rootTerminal = rootEvents.find((event) => event.type === "turn.terminal");
+      assert.equal(rootTerminal?.status, "completed");
+      assert.deepEqual(
+        rootEvents.flatMap((event) =>
+          event.type === "subagent.updated" ? [event.subagent.status] : [],
+        ),
+        ["running", "running"],
+      );
       assert.isTrue(yield* hasPendingBackgroundWork, "the running child must pin idle release");
 
+      const finished = yield* harness.runtime.events.pipe(
+        Stream.filter((event) => event.type === "subagent.updated"),
+        Stream.runHead,
+        Effect.forkScoped,
+      );
+      yield* push(status(child, "busy"));
       yield* push(status(child, "idle"));
       yield* push({ type: "session.idle", properties: { sessionID: child } });
       assert.isFalse(yield* hasPendingBackgroundWork, "an idle child must not pin idle release");
+      const childEvent = Option.getOrUndefined(yield* Fiber.join(finished));
+      assert.equal(
+        childEvent?.type === "subagent.updated" ? childEvent.subagent.status : null,
+        "completed",
+      );
     }).pipe(
       Effect.provide(Layer.merge(IdAllocator.layer, McpProviderSessions.layer)),
       Effect.scoped,
