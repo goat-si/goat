@@ -692,3 +692,35 @@ it.effect("explicitly reading an unverified body makes the reader lineage unknow
     });
   }).pipe(Effect.provide(Fixture.layer)),
 );
+
+it.effect("memory projections expose marks only when requested", () =>
+  Effect.gen(function* () {
+    yield* setup;
+    const sql = yield* SqlClient.SqlClient;
+    const service = yield* Service.MemoryService;
+    const source = yield* seed(35000);
+    yield* sql`INSERT INTO memory_revision_marks VALUES (${Fixture.space},${source.revision},'unverified')`;
+    yield* sql`INSERT INTO memory_origins VALUES (${Fixture.space},${source.input.memoryId},${ref().environmentId},${ref().threadId})`;
+    const input = { memorySpaceId: Fixture.space, memoryId: source.input.memoryId };
+    const legacy = yield* service.read(input, Effect.void);
+    expect(legacy).not.toHaveProperty("marks");
+    const projected = yield* service.read({ ...input, includeMarks: true }, Effect.void);
+    const marks = { provenance: "unverified", originThreadId: ref().threadId };
+    expect(projected).toEqual({ ...legacy, marks });
+    const list = yield* service.list(
+      {
+        memorySpaceId: input.memorySpaceId,
+        includeQuarantined: false,
+        limit: 10,
+        includeMarks: true,
+      },
+      Effect.void,
+    );
+    expect(list.items).toEqual([projected]);
+    const history = yield* service.history(
+      { ...input, limit: 10, includeMarks: true },
+      Effect.void,
+    );
+    expect(history.revisions[0]).toMatchObject({ marks });
+  }).pipe(Effect.provide(Fixture.layer)),
+);
