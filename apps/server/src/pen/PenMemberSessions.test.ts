@@ -159,8 +159,18 @@ it.effect("an outage or a departure the newest view hides still ends what it end
     expect(yield* works).toBe(true);
     // This machine left the mesh and joined again: what members held before is revoked for good.
     marks.left += 1;
+    // Closed from the moment the watch recorded it, before any revocation has run.
+    expect(yield* works).toBe(false);
     yield* apply(ready("a"));
     expect(yield* works).toBe(false);
     expect(yield* sessions.listPenMemberSessions).toEqual([]);
+    // Once revoked, the members of the mesh it joined again sign in as usual.
+    const fresh = yield* sessions.issue({ penMemberNode: id("a") });
+    expect(
+      yield* sessions.verify(fresh.token, MAIN_LISTENER).pipe(
+        Effect.as(true),
+        Effect.orElseSucceed(() => false),
+      ),
+    ).toBe(true);
   }).pipe(Effect.provide(layer)),
 );

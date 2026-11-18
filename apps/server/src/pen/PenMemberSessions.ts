@@ -22,9 +22,14 @@ const membersOf = (view: PenMembershipView) =>
 export const make = Effect.fn("PenMemberSessions.make")(function* () {
   const sessions = yield* SessionStore;
   const watch = yield* PenMembershipWatch;
-  const admission = watch.current.pipe(
-    Effect.map((view) => (view.kind === "ready" ? membersOf(view) : ("closed" as const))),
-  );
+  // What this follower has acted on. Starts at zero, so a departure before it started counts.
+  let handled: PenMembershipMarks = { closed: 0, left: 0 };
+  // A departure not yet revoked keeps the fence closed, whatever the newest view says.
+  const admission = Effect.gen(function* () {
+    const view = yield* watch.current;
+    if ((yield* watch.marks).left !== handled.left) return "closed" as const;
+    return view.kind === "ready" ? membersOf(view) : ("closed" as const);
+  });
   yield* sessions.followPenMembers(admission);
 
   const revokeUnless = Effect.fn("PenMemberSessions.revokeUnless")(function* (
@@ -34,8 +39,6 @@ export const make = Effect.fn("PenMemberSessions.make")(function* () {
       if (!members.has(session.penMemberNode)) yield* sessions.revoke(session.sessionId);
   });
 
-  // What this follower has acted on. Starts at zero, so a departure before it started counts.
-  let handled: PenMembershipMarks = { closed: 0, left: 0 };
   const apply = Effect.fn("PenMemberSessions.apply")(function* (view: PenMembershipView) {
     const marks = yield* watch.marks;
     // An outage the newest view hides still closes what was open: announce closed, then reopen.
@@ -50,13 +53,17 @@ export const make = Effect.fn("PenMemberSessions.make")(function* () {
       // A list that could not be read arrives as a defect; it is retried like any failure.
       Effect.sandbox,
       Effect.retry(RETRY),
+      // After a departure the fence stays closed until this succeeds, so it keeps trying.
+      left ? Effect.retry({ schedule: Schedule.spaced("1 minute") }) : (effect) => effect,
       Effect.as(true),
       Effect.catchCause((cause) =>
         Effect.logWarning("pen.memberSessions.cleanup.failed", cause).pipe(Effect.as(false)),
       ),
     );
     // Kept until done, so a later view (or an interrupted cleanup) revokes them again.
-    if (revoked) handled = { ...handled, left: marks.left };
+    if (!revoked || !left) return;
+    handled = { ...handled, left: marks.left };
+    yield* sessions.followPenMembers(admission);
   });
   return { apply };
 });
