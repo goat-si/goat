@@ -1,3 +1,4 @@
+import type { MemoryImportLineageRecord, MemoryProjectKey, MemoryScope } from "./memory.ts";
 import * as Schema from "effect/Schema";
 import * as SchemaParser from "effect/SchemaParser";
 import * as SchemaAST from "effect/SchemaAST";
@@ -62,3 +63,29 @@ export const strictMakeOptions = (options?: Schema.MakeOptions): Schema.MakeOpti
   disableChecks: false,
   parseOptions: { ...options?.parseOptions, onExcessProperty: "error", disableChecks: false },
 });
+
+// Explicit tuples make duplicate identity independent of JSON property insertion order.
+const importProjectKey = (v: MemoryProjectKey) =>
+  v.kind === "repository" ? [v.kind, v.groupingKey] : [v.kind, v.sharedProjectId];
+export const importScopeKey = (v: MemoryScope) =>
+  v.kind === "user"
+    ? [v.kind]
+    : v.kind === "project"
+      ? [v.kind, importProjectKey(v.projectKey)]
+      : [
+          v.kind,
+          v.thread.environmentId,
+          v.thread.threadId,
+          v.projectKey === undefined ? null : importProjectKey(v.projectKey),
+        ];
+/** Shared canonical key for ledger union, duplicate validation and checkpoint pagination. */
+
+export const memoryImportLineageRecordKey = (v: MemoryImportLineageRecord): string =>
+  JSON.stringify([
+    v.memorySpaceId,
+    v.memoryId,
+    v.kind,
+    v.kind === "sourceKey"
+      ? [v.sourceKey.environmentId, v.sourceKey.sourceId, v.sourceKey.sourceItemKey]
+      : [importScopeKey(v.content.scope), v.content.assertionKind, v.content.contentFingerprint],
+  ]);

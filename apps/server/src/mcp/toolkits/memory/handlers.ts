@@ -327,6 +327,14 @@ const handlers = {
         )
         .pipe(
           Effect.catchTags({
+            MemoryRememberMoveRequiresNoText: () =>
+              Effect.fail(
+                new M.OrchestratorMcpFailure({
+                  code: "invalid_request",
+                  message:
+                    "Move this memory by sending memoryId and the new scope without text. Send a separate request to edit the text.",
+                }),
+              ),
             MemoryRememberScopeUnavailable: (error) =>
               Effect.fail(
                 new M.OrchestratorMcpFailure({

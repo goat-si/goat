@@ -1,9 +1,11 @@
+import { MemoryForgetControl } from "./MemoryForgetControl";
 import {
   id,
   item,
   decodeRevert,
   revision,
   activeItem,
+  exerciseMemoryMove,
   resolution,
   entry,
   retained,
@@ -158,6 +160,7 @@ vi.mock("../../state/memory", async () => {
           "hubReconcile",
           "upsert",
           "forget",
+          "move",
           "acceptSuggestion",
           "dismissSuggestion",
           "revertResolution",
@@ -293,12 +296,7 @@ vi.mock(
 );
 vi.mock("@tanstack/react-router", () => ({ useNavigate: () => state.navigate }));
 import { RegistryContext } from "@effect/atom-react";
-import {
-  MemorySettings,
-  MemoryForgetControl,
-  MemoryAdministration,
-  MemoryRevertControl,
-} from "./MemorySettings";
+import { MemorySettings, MemoryAdministration, MemoryRevertControl } from "./MemorySettings";
 import { validateMemorySettingsSearch } from "./MemorySettings.logic";
 import { settingsContentScopeKey } from "./settingsScopeNavigation";
 let root: Root;
@@ -2703,6 +2701,8 @@ it("confirms a memory selection once and reports each result while the conversat
   expect(container.querySelectorAll('input[aria-label^="Select memory"]:checked')).toHaveLength(1);
 });
 
+it("moves a memory from its details and refreshes the old scope", () =>
+  exerciseMemoryMove({ state, success, supportedScreen, click, chooseOption, container }));
 it("shows a refused save as pending through acceptance and marks only the published memory", async () => {
   const { refused, accept, accepting, unpublished, settled, published } = suggestionScenario;
   state.queries.set("list", Option.some(unpublished));

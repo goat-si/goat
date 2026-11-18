@@ -126,7 +126,7 @@ export const makeHubWrite = (
       });
     yield* stored(
       "hub-append-finalize",
-      sql`UPDATE memory_hub_operations SET entry_json=${json},payload_ref=${op.kind === "forget" ? null : op.revision.payloadRef} WHERE hub_sequence=${hubSequence}`,
+      sql`UPDATE memory_hub_operations SET entry_json=${json},payload_ref=${M.isMemoryRevisionOperation(op) ? op.revision.payloadRef : null} WHERE hub_sequence=${hubSequence}`,
     );
     if (op.kind === "forget" && input.outcome === "deleted")
       yield* stored(
@@ -145,7 +145,9 @@ export const makeHubWrite = (
         : {}),
       receipt,
       revisionId:
-        op.kind === "forget" || input.outcome === "rejected" ? null : op.revision.revisionId,
+        M.isMemoryRevisionOperation(op) && input.outcome !== "rejected"
+          ? op.revision.revisionId
+          : null,
       resolutionId:
         op.kind === "resolve"
           ? op.resolution.resolutionId

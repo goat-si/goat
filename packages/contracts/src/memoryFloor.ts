@@ -1,5 +1,5 @@
 import * as Schema from "effect/Schema";
-import type { MemoryOperation } from "./memory.ts";
+import { isMemoryRevisionOperation, type MemoryOperation } from "./memory.ts";
 import { MEMORY_DERIVED_REVISIONS_MAX_V1 } from "./memoryLimits.ts";
 
 export const MEMORY_FLOOR_2 = ["derivedCap1000", "revisionMarks", "scopeMoves"] as const;
@@ -10,9 +10,10 @@ export const supportsMemoryFloor2 = (features: readonly MemoryFloor2Feature[] | 
   features?.length === MEMORY_FLOOR_2.length && MEMORY_FLOOR_2.every((f) => features.includes(f));
 
 export const requiresMemoryFloor2 = (operation: MemoryOperation) =>
-  operation.kind !== "forget" &&
-  (operation.payload.derivedFromMemoryRevisions.length > MEMORY_DERIVED_REVISIONS_MAX_V1 ||
-    (operation.kind === "upsert" && operation.closedLineage === true) ||
-    operation.revision.provenance.unverified === true ||
-    operation.revision.provenance.originThreadId !== undefined ||
-    operation.forgetFence !== undefined);
+  operation.kind === "move" ||
+  (isMemoryRevisionOperation(operation) &&
+    (operation.payload.derivedFromMemoryRevisions.length > MEMORY_DERIVED_REVISIONS_MAX_V1 ||
+      (operation.kind === "upsert" && operation.closedLineage === true) ||
+      operation.revision.provenance.unverified === true ||
+      operation.revision.provenance.originThreadId !== undefined ||
+      operation.forgetFence !== undefined));

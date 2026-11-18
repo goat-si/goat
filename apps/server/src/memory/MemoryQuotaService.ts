@@ -137,7 +137,9 @@ const make = Effect.gen(function* () {
         const scope =
           op.kind === "forget"
             ? (current.identity?.scope ?? { kind: "user" as const })
-            : op.revision.scope;
+            : op.kind === "move"
+              ? op.toScope
+              : op.revision.scope;
         const usage = yield* store.usage(op.memorySpaceId, scope);
         const charges: Store.MemoryQuotaCharge[] = [];
         const charge = (
@@ -160,7 +162,7 @@ const make = Effect.gen(function* () {
           op.kind === "forget" && current.tombstone === undefined && current.identity !== undefined;
         const heldReservation = yield* store.readForgetReservation(op.memorySpaceId, op.memoryId);
         const neededReservation =
-          op.kind !== "forget" && !current.tombstone
+          M.isMemoryRevisionOperation(op) && !current.tombstone
             ? yield* store.firstForgetReservation(op)
             : heldReservation;
         const oldLive = current.item !== undefined && current.item.status !== "forgotten";
@@ -171,14 +173,13 @@ const make = Effect.gen(function* () {
           operationId: op.operationId,
           memoryId: op.memoryId,
           outcome: op.kind === "forget" ? ("deleted" as const) : ("accepted" as const),
-          revisionId: op.kind === "forget" ? null : op.revision.revisionId,
+          revisionId: M.isMemoryRevisionOperation(op) ? op.revision.revisionId : null,
           pendingSync: input.admission.kind === "localIntent",
         };
         const receiptBytes = utf8(yield* receiptJson(receipt).pipe(Effect.mapError(storageError)));
-        const payloadBytes =
-          op.kind === "forget"
-            ? 0
-            : utf8(yield* payloadJson(op.payload).pipe(Effect.mapError(storageError)));
+        const payloadBytes = !M.isMemoryRevisionOperation(op)
+          ? 0
+          : utf8(yield* payloadJson(op.payload).pipe(Effect.mapError(storageError)));
         const oldPayloadBytes = yield* Effect.reduce(
           [
             ...new Map(
@@ -193,7 +194,7 @@ const make = Effect.gen(function* () {
           () => 0,
           (sum, pair) => Effect.map(payloadJson(pair.payload!), (json) => sum + utf8(json)),
         ).pipe(Effect.mapError(storageError));
-        if (input.admission.kind === "localIntent" && op.kind !== "forget") {
+        if (input.admission.kind === "localIntent" && M.isMemoryRevisionOperation(op)) {
           const brake = yield* store.ftsState(input.environmentId);
           if (brake.state === "braked")
             return yield* new Store.MemoryCapacityError({
@@ -287,12 +288,18 @@ const make = Effect.gen(function* () {
             M.MEMORY_PERMANENT_METADATA_MAX_BYTES,
           );
         } else {
+          const revision =
+            op.kind === "move"
+              ? current.item?.status === "active"
+                ? current.item.revision
+                : undefined
+              : op.revision;
           const scopeDimension =
             scope.kind === "user"
               ? "user_items"
               : scope.kind === "project"
                 ? "project_items"
-                : op.revision.provenance.sourceThread
+                : revision?.provenance.sourceThread
                   ? "thread_summaries"
                   : "thread_items";
           const scopeLimit =
@@ -310,7 +317,7 @@ const make = Effect.gen(function* () {
               : scopeDimension === "thread_items"
                 ? usage.scopeExplicit
                 : usage.scopeItems,
-            addedLive,
+            op.kind === "move" ? 1 : addedLive,
             scopeLimit,
             scope.kind === "user"
               ? "user"
@@ -330,13 +337,14 @@ const make = Effect.gen(function* () {
           charge(
             "live_payload_bytes",
             usage.liveBytes,
-            payloadBytes - oldPayloadBytes,
+            op.kind === "move" ? 0 : payloadBytes - oldPayloadBytes,
             M.MEMORY_LIVE_MAX_PAYLOAD_BYTES,
           );
           charge(
             "history",
             usage.historyBytes,
-            (op.kind === "upsert" && op.revision.payloadRef !== op.revision.revisionId
+            (op.kind === "move" ||
+            (op.kind === "upsert" && op.revision.payloadRef !== op.revision.revisionId)
               ? 0
               : oldPayloadBytes) +
               (op.kind === "resolve"
@@ -411,6 +419,7 @@ const make = Effect.gen(function* () {
           yield* permit;
           const op = decision.operation;
           const replay = yield* store.receipt(op.memorySpaceId, op.operationId);
+          if (op.kind === "move") return yield* store.apply(decision);
           if (replay) {
             if (
               replay.operationDigest !== decision.operationDigest &&
@@ -437,7 +446,9 @@ const make = Effect.gen(function* () {
             aggregate.identity ?? {
               memorySpaceId: op.memorySpaceId,
               memoryId: op.memoryId,
-              scope: op.kind === "forget" ? { kind: "user" as const } : op.revision.scope,
+              scope: M.isMemoryRevisionOperation(op)
+                ? op.revision.scope
+                : { kind: "user" as const },
               creatingEnvironmentId: op.originEnvironmentId,
               createOperationId: op.operationId,
               createdAtUtc:

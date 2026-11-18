@@ -1,3 +1,5 @@
+import * as Clock from "effect/Clock";
+import { rewriteMemoryScope, retireScopeSnapshots } from "./ScopeMoves.ts";
 import { persistRevisionMarks } from "../MemoryRevisionMarks.ts";
 import * as SqlClient from "effect/sql/SqlClient";
 import * as M from "@goat/contracts";
@@ -105,7 +107,7 @@ export const makeApplyDecision = (
         if (reconnect) {
           if (
             decision.admission.kind !== "approvedReplica" ||
-            op.kind === "forget" ||
+            !M.isMemoryRevisionOperation(op) ||
             !old ||
             !("hubSequence" in old.receipt) ||
             old.receipt.hubSequence === null ||
@@ -183,15 +185,25 @@ export const makeApplyDecision = (
         )
           return yield* new MemoryStoreConflict({ code: "unsupported_protocol" });
         const accepted = outcome.outcome !== "rejected";
-        if (accepted && !decision.pending && !tombstones.length && op.kind !== "forget") {
+        if (
+          accepted &&
+          !decision.pending &&
+          !tombstones.length &&
+          M.isMemoryRevisionOperation(op)
+        ) {
           const r = op.revision;
           yield* stored(
             "replaced-payload",
             sql`UPDATE memory_payloads SET replaced_at=${Date.parse(r.createdAtUtc)},purge_eligible_after=${Date.parse(r.createdAtUtc) + M.MEMORY_REPLACED_PAYLOAD_RETENTION_MS} WHERE space=${op.memorySpaceId} AND memory_id=${op.memoryId} AND payload_ref!=${r.payloadRef} AND payload_ref IN (SELECT payload_ref FROM memory_revisions WHERE space=${op.memorySpaceId} AND revision_id IN (SELECT value FROM json_each(${yield* headsCodec.encode(r.parents)})))`,
           );
         }
-        if (!reconnect && accepted && !tombstones.length && op.kind !== "forget") {
-          const r = op.revision;
+        if (!reconnect && accepted && !tombstones.length && M.isMemoryRevisionOperation(op)) {
+          const r =
+            decision.admission.kind === "approvedReplica" &&
+            decision.item &&
+            decision.item.status !== "forgotten"
+              ? { ...op.revision, scope: decision.item.scope }
+              : op.revision;
           const existing = yield* stored(
             "revision-identity",
             sql<{
@@ -260,6 +272,18 @@ export const makeApplyDecision = (
             );
           }
         }
+        if (
+          accepted &&
+          decision.admission.kind === "approvedReplica" &&
+          M.isMemoryRevisionOperation(op)
+        )
+          yield* stored(
+            "approved-scope-revision",
+            sql`
+            UPDATE memory_revisions SET scope_move_held=0 WHERE space=${op.memorySpaceId}
+              AND revision_id=${op.revision.revisionId} AND operation_id=${op.operationId}
+              AND scope_move_held=1`,
+          );
         const eventMetadata = yield* stored("metadata-codec", metadataCodec.encode(metadataOf(op)));
         const eventReceipt = yield* stored("receipt-codec", receiptCodec.encode(outcome));
         if (!reconnect && !old)
@@ -267,12 +291,12 @@ export const makeApplyDecision = (
             "event",
             sql<{
               sequence: number;
-            }>`INSERT INTO memory_events (protocol_version,memory_space_id,memory_id,operation_id,kind,origin_environment_id,operation_digest,metadata_json,receipt_json,created_at) VALUES (1,${op.memorySpaceId},${op.memoryId},${op.operationId},${op.kind},${op.originEnvironmentId},${decision.operationDigest},${eventMetadata},${eventReceipt},${op.kind === "forget" ? Date.parse(op.tombstone.deletedAtUtc) : Date.parse(op.revision.createdAtUtc)}) RETURNING sequence`,
+            }>`INSERT INTO memory_events (protocol_version,memory_space_id,memory_id,operation_id,kind,origin_environment_id,operation_digest,metadata_json,receipt_json,created_at) VALUES (1,${op.memorySpaceId},${op.memoryId},${op.operationId},${op.kind},${op.originEnvironmentId},${decision.operationDigest},${eventMetadata},${eventReceipt},${op.kind === "forget" ? Date.parse(op.tombstone.deletedAtUtc) : op.kind === "move" ? yield* Clock.currentTimeMillis : Date.parse(op.revision.createdAtUtc)}) RETURNING sequence`,
           );
         const watermark = yield* nextWatermark(op.memorySpaceId);
         // Every accepted revision renews the reservation: later evidence must stay deletable.
         const reservation =
-          !reconnect && accepted && !tombstones.length && op.kind !== "forget"
+          !reconnect && accepted && !tombstones.length && M.isMemoryRevisionOperation(op)
             ? yield* reservationForRevisions(
                 op,
                 (yield* loadAggregate(
@@ -295,7 +319,7 @@ export const makeApplyDecision = (
             sql`INSERT INTO memory_identity_ledger (space,memory_id,identity_json,fence_json,reserve_bytes,reserve_keys) VALUES (${op.memorySpaceId},${op.memoryId},${yield* identityCodec.encode(decision.identity)},${yield* fenceCodec.encode(decision.fence ?? { memorySpaceId: op.memorySpaceId, memoryId: op.memoryId, highestFencingToken: 0, activeLease: null })},${M.MEMORY_IDENTITY_CORE_MAX_BYTES + reservation.bytes},${reservation.keys}) ON CONFLICT(space,memory_id) DO UPDATE SET reserve_bytes=max(memory_identity_ledger.reserve_bytes,excluded.reserve_bytes),reserve_keys=max(memory_identity_ledger.reserve_keys,excluded.reserve_keys) WHERE NOT EXISTS (SELECT 1 FROM memory_tombstones t WHERE t.space=excluded.space AND t.memory_id=excluded.memory_id)`,
           );
         }
-        if (!reconnect && accepted && !tombstones.length && op.kind !== "forget")
+        if (!reconnect && accepted && !tombstones.length && M.isMemoryRevisionOperation(op))
           yield* persistRevisionMarks(op.revision).pipe(
             Effect.provideService(SqlClient.SqlClient, sql),
           );
@@ -304,9 +328,19 @@ export const makeApplyDecision = (
           decision.admission.kind !== "localIntent" &&
           (decision.admission.kind === "approvedReplica" ||
             (!decision.pending && !tombstones.length)) &&
-          op.kind !== "forget"
+          M.isMemoryRevisionOperation(op)
         ) {
           yield* unionImportLineageTx(lineageForRevision(op.revision), decision.admission);
+        }
+        if (op.kind === "move" && accepted && !tombstones.length && decision.movedIdentity) {
+          yield* rewriteMemoryScope(
+            { sql, readItem, putItem },
+            decision.movedIdentity,
+            watermark,
+            op.expectedHeads,
+          );
+          if (decision.admission.kind === "hubAdmission")
+            yield* retireScopeSnapshots(sql, op.memorySpaceId);
         }
         if (accepted && op.kind === "forget") {
           const t = op.tombstone;
@@ -338,7 +372,12 @@ export const makeApplyDecision = (
             "settle-forget",
             sql`DELETE FROM memory_pending_forget_intents WHERE space=${op.memorySpaceId} AND memory_id=${op.memoryId}`,
           );
-        } else if (accepted && !tombstones.length && decision.item) {
+        } else if (
+          accepted &&
+          !tombstones.length &&
+          decision.item &&
+          M.isMemoryRevisionOperation(op)
+        ) {
           const projected =
             decision.admission.kind === "approvedReplica" && decision.item.status !== "forgotten"
               ? {
@@ -360,12 +399,9 @@ export const makeApplyDecision = (
                         kind: "scanner" as const,
                         state: "pending" as const,
                         reason: "scanner_pending" as const,
-                        revisionId: op.kind !== "forget" ? op.revision.revisionId : null,
+                        revisionId: op.revision.revisionId,
                         generation: 0,
-                        sinceAtUtc:
-                          op.kind !== "forget"
-                            ? op.revision.createdAtUtc
-                            : op.tombstone.deletedAtUtc,
+                        sinceAtUtc: op.revision.createdAtUtc,
                       },
                     ],
                   },
@@ -383,12 +419,7 @@ export const makeApplyDecision = (
                   localAvailability: projected.localAvailability,
                 }
               : projected;
-          yield* putItem(
-            held,
-            decision.heads ??
-              (op.kind !== "forget" ? [op.revision.revisionId] : (state?.heads ?? [])),
-            watermark,
-          );
+          yield* putItem(held, decision.heads ?? [op.revision.revisionId], watermark);
         }
         if (accepted && decision.conflict && !tombstones.length) {
           const c = decision.conflict;
@@ -417,7 +448,7 @@ export const makeApplyDecision = (
             kind: "sync",
             status: "pending",
             metadata: metadataOf(op),
-            payloadRef: op.kind === "forget" ? null : op.revision.payloadRef,
+            payloadRef: M.isMemoryRevisionOperation(op) ? op.revision.payloadRef : null,
             attempt: 0,
             nextAttemptAt: 0,
             claimedBy: null,
@@ -437,7 +468,7 @@ export const makeApplyDecision = (
             sql`INSERT INTO memory_report_outbox (report_id,space,memory_id,operation_id,resolution_id,attempt_id,resolving_environment_id,outcome,state,created_at,report_kind,attempts_known) VALUES (${reportId},${op.memorySpaceId},${op.memoryId},${op.operationId},${resolutionId},${op.kind === "resolve" ? op.operationId : null},${op.originEnvironmentId},${op.kind === "resolve" ? "resolved" : "reverted"},'pending',${Date.parse(op.revision.createdAtUtc)},${op.kind === "resolve" ? "resolve" : "revert"},1) ON CONFLICT(report_id) DO NOTHING`,
           );
         }
-        if (decision.pending && accepted && op.kind !== "forget" && !tombstones.length)
+        if (decision.pending && accepted && M.isMemoryRevisionOperation(op) && !tombstones.length)
           yield* stored(
             "park-approved",
             sql`INSERT INTO memory_inbox_pending (space,pending_key,record_kind,operation_id,memory_id,operation_digest,missing_parents_json,reason,hub_sequence,metadata_json,payload_ref) VALUES (${op.memorySpaceId},${`operation:${op.operationId}`},'operation',${op.operationId},${op.memoryId},${decision.operationDigest},${yield* headsCodec.encode(decision.pending.missingParents)},${decision.pending.reason},${"hubSequence" in outcome ? outcome.hubSequence : null},${eventMetadata},${op.revision.payloadRef}) ON CONFLICT(space,pending_key) DO UPDATE SET missing_parents_json=excluded.missing_parents_json,reason=excluded.reason`,

@@ -83,6 +83,19 @@ describe("runMigrations database ahead of this build", () => {
     }).pipe(Effect.provide(NodeSqliteClient.layer({ filename: ":memory:" }))),
   );
 
+  it.effect("the 160 build refuses a migrated scope-version database", () =>
+    Effect.gen(function* () {
+      assert.deepStrictEqual((yield* runMigrations({ toMigrationInclusive: 161 })).at(-1), [
+        161,
+        "MemoryScopeVersion",
+      ]);
+      const manifest160 = migrationEntries.filter(([id]) => id <= 160);
+      const failure = yield* Effect.flip(assertMemoryMigrationsCompatible(manifest160));
+      assert.strictEqual(failure._tag, "MigrationError");
+      assert.include(failure.message, "Unreleased memory DB is incompatible");
+    }).pipe(Effect.provide(NodeSqliteClient.layer({ filename: ":memory:" }))),
+  );
+
   it.effect(
     "migration 160 preserves suggestion forget generations and backfills the hub watermark",
     () =>

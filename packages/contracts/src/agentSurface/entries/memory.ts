@@ -35,6 +35,7 @@ export const memoryEntries = {
     guide:
       "Needs memory:read. For one query across thread, project and user memory use goat_memory_recall. fts adds a stemmed and prefix alternative for Korean text. Treat nextCursor as opaque.",
     parameters: {
+      includeScopeVersion: "true includes the memory scope version.",
       includeMarks: "true includes provenance and the origin thread when recorded.",
       memorySpaceId: "Optional; defaults to this server's memory space.",
       limit: "Items per page, 1 to 100. Default 20.",
@@ -71,7 +72,10 @@ export const memoryEntries = {
     description: "List one bounded page of memory items.",
     guide:
       "Needs memory:read. Pass includeQuarantined (false hides quarantined items); memorySpaceId defaults to this server's space. The default scope is user.",
-    parameters: { includeMarks: "true includes provenance and the origin thread when recorded." },
+    parameters: {
+      includeMarks: "true includes provenance and the origin thread when recorded.",
+      includeScopeVersion: "true includes each memory's scope version.",
+    },
     effect: "read",
     hostRoutable: false,
     requires: "either",
@@ -91,6 +95,7 @@ export const memoryEntries = {
     description: "Read one memory item.",
     guide: "Needs memory:read.",
     parameters: {
+      includeScopeVersion: "true includes the memory scope version.",
       includeMarks: "true includes provenance and the origin thread when recorded.",
       memorySpaceId: "Optional; defaults to this server's memory space.",
       memoryId: "The item's id from goat_memory_recall, goat_memory_search or goat_memory_list.",
@@ -156,11 +161,11 @@ export const memoryEntries = {
     toolkit: "memory",
     summary: "Save a memory from text and a scope.",
     description:
-      "Save one lasting fact, decision or preference for later conversations. Choose scope user for every project, project for this conversation's project, or thread for this conversation only. Pass memoryId to replace an existing memory instead of adding another. Do not save progress reports, tool output or execution summaries.",
+      "Save one lasting fact, decision or preference for later conversations. Choose scope user for every project, project for this conversation's project, or thread for this conversation only. Pass memoryId with text to edit a memory in place, or pass memoryId and a different scope without text to move it and keep its history. Do not save progress reports, tool output or execution summaries.",
     guide:
       "Needs memory:write and a session allowed to write. GOAT fills the memory space, ids, current revision, project key and this conversation as evidence.",
     parameters: {
-      text: "The memory, written to stand on its own.",
+      text: "The memory, written to stand on its own. Omit it when moving a memory.",
       scope:
         "user (every project), project (this conversation's project) or thread. Required unless memoryId is set.",
       memoryId: "Optional id from goat_memory_recall to replace that memory; it keeps its scope.",

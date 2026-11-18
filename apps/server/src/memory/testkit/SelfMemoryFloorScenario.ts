@@ -3,7 +3,6 @@ import { assert } from "@effect/vitest";
 import * as Effect from "effect/Effect";
 import * as Layer from "effect/Layer";
 import * as Context from "effect/Context";
-import { MemoryFloor2Enabled } from "../MemoryFloor.ts";
 import * as Hub from "../MemoryHubService.ts";
 import * as Store from "../MemoryStore.ts";
 import * as Service from "../MemoryService.ts";
@@ -16,9 +15,7 @@ export const runSelfWideSave = Effect.fn("test.runSelfWideSave")(function* (
   local: M.EnvironmentId,
 ) {
   yield* (yield* Sync.MemorySyncService).shutdown;
-  const restarted = yield* Layer.build(Layer.fresh(Sync.layer)).pipe(
-    Effect.provideService(MemoryFloor2Enabled, true),
-  );
+  const restarted = yield* Layer.build(Layer.fresh(Sync.layer));
   const sync = Context.get(restarted, Sync.MemorySyncService);
   const store = yield* Store.MemoryStore;
   const service = yield* Service.MemoryService;
@@ -121,5 +118,34 @@ export const runSelfWideSave = Effect.fn("test.runSelfWideSave")(function* (
   const after = yield* store.loadAggregate(space, input.memoryId);
   assert.include(after.item, { status: "blocked", failureCode: "source_invalidated" });
   assert.isTrue(after.revisions.every((pair) => pair.payload === null));
+  const next = sources[1];
+  if (!next) throw new Error("Expected a second source");
+  const scope = {
+    kind: "thread",
+    thread: {
+      environmentId: local,
+      threadId: M.ThreadId.make("synthetic-move-thread"),
+    },
+  } as const;
+  const move = yield* service.remember(
+    {
+      memorySpaceId: space,
+      memoryId: next.memoryId,
+      scope: "thread",
+    },
+    Effect.void,
+    scope.thread,
+  );
+  assert.include(move.receipt, { pendingSync: true, revisionId: null });
+  assert.deepStrictEqual(
+    (yield* store.loadAggregate(space, next.memoryId)).identity?.scope,
+    next.revision.scope,
+  );
+  yield* sync.syncOnce;
+  const moved = yield* store.loadAggregate(space, next.memoryId);
+  assert.deepStrictEqual(moved.identity?.scope, scope);
+  assert.deepStrictEqual(moved.revisions, [
+    { revision: { ...next.revision, scope }, payload: next.payload },
+  ]);
   yield* sync.shutdown;
 });

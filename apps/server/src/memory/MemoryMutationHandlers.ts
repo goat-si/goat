@@ -4,6 +4,7 @@ import {
   MemoryRpcError,
   type MemoryUpsertRpcInput,
   type MemoryForgetRpcInput,
+  type MemoryMoveInput,
   type MemorySuggestionActionInput,
   type MemorySuggestionsInput,
 } from "@goat/contracts";
@@ -49,6 +50,11 @@ export const makeMemoryMutationHandlers = (
         Effect.flatMap((stored) => decodeReceipt(stored.receipt)),
         Effect.map(includeFailureDetails ? (receipt) => receipt : legacyReceipt),
         Effect.mapError(includeFailureDetails ? memoryError : memoryLegacyError),
+      ),
+    [WS_METHODS.memoryMove]: (input: MemoryMoveInput) =>
+      memory.move(input, write).pipe(
+        Effect.flatMap((stored) => decodeReceipt(stored.receipt)),
+        Effect.mapError(memoryError),
       ),
     [WS_METHODS.memoryForget]: ({
       includeFailureDetails,

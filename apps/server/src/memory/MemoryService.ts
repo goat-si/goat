@@ -1,3 +1,4 @@
+import { makeMoveMemory } from "./MemoryMove.ts";
 import { makeHubAcknowledgement } from "./MemoryHubAcknowledgement.ts";
 import { makeMemoryForget, type ForgetRequest } from "./MemoryForget.ts";
 import {
@@ -49,6 +50,7 @@ import {
   makeRemember,
   MemoryRefusedSaveHook,
   type MemoryRememberScopeUnavailable,
+  type MemoryRememberMoveRequiresNoText,
 } from "./MemoryRemember.ts";
 import { makeMemoryViewProjection } from "./MemoryViewProjection.ts";
 import { requireMemoryTailFit } from "./MemoryTailAdmission.ts";
@@ -218,11 +220,18 @@ export class MemoryService extends Context.Service<
       acceptance: MemorySuggestionAcceptance,
       permit: Permit,
     ) => Effect.Effect<Store.StoredReceipt, MemoryServiceError>;
+    readonly move: (
+      input: M.MemoryMoveInput,
+      permit: Permit,
+    ) => Effect.Effect<Store.StoredReceipt, MemoryServiceError>;
     readonly remember: (
       input: M.MemoryRememberInput & { readonly memorySpaceId: M.MemorySpaceId },
       permit: Permit,
       sourceThread?: M.ScopedThreadRef,
-    ) => Effect.Effect<Store.StoredReceipt, MemoryServiceError | MemoryRememberScopeUnavailable>;
+    ) => Effect.Effect<
+      Store.StoredReceipt,
+      MemoryServiceError | MemoryRememberScopeUnavailable | MemoryRememberMoveRequiresNoText
+    >;
     readonly retryForgetExpansion: (
       intent: Store.PendingForgetIntent,
     ) => Effect.Effect<void, MemoryServiceError>;
@@ -564,7 +573,7 @@ const make = Effect.fnUntraced(function* (
       catch: (cause) => (isConflict(cause) ? cause : invalid()),
     });
   const requireImportNotSuppressed = Effect.fnUntraced(function* (op: M.MemoryOperation) {
-    if (op.kind === "forget" || !op.revision.provenance.importSource) return;
+    if (!M.isMemoryRevisionOperation(op) || !op.revision.provenance.importSource) return;
     const source = op.revision.provenance.importSource;
     const keys = [
       {
@@ -620,7 +629,7 @@ const make = Effect.fnUntraced(function* (
           )
             return old;
         }
-        if (op.kind !== "forget") {
+        if (M.isMemoryRevisionOperation(op)) {
           yield* requireClosureCapacity(
             op.payload.derivedFromMemoryRevisions.length,
             yield* closureCap(op.memorySpaceId).pipe(
@@ -636,7 +645,7 @@ const make = Effect.fnUntraced(function* (
           op.kind === "forget"
             ? {}
             : { heads: true, revisionIds: op.kind === "revert" ? [op.restoredRevisionId] : [] },
-          op.kind === "forget"
+          !M.isMemoryRevisionOperation(op)
             ? {}
             : {
                 ...(op.kind === "revert" ? { resolutionId: op.revertsResolutionId } : {}),
@@ -649,7 +658,13 @@ const make = Effect.fnUntraced(function* (
         if (admission.kind !== "approvedReplica" && current.pendingForget && op.kind !== "forget")
           return yield* new Store.MemoryStoreConflict({ code: "forget_pending" });
         let ancestry: Store.MemoryAncestry | undefined;
-        if (op.kind !== "forget") {
+        if (op.kind === "move" && admission.kind !== "approvedReplica") {
+          yield* requireScope(op.fromScope);
+          yield* requireScope(op.toScope);
+          if (!(yield* store.hubFloorActive(op.memorySpaceId)))
+            return yield* new Store.MemoryStoreConflict({ code: "hub_upgrade_required" });
+        }
+        if (M.isMemoryRevisionOperation(op)) {
           if (admission.kind !== "approvedReplica") yield* requireScope(op.revision.scope);
           ancestry = yield* store.readAncestry(op.memorySpaceId, op.memoryId, op.revision.parents);
           if (ancestry.parents.some((p) => p.status === "crossMemory"))
@@ -664,7 +679,7 @@ const make = Effect.fnUntraced(function* (
         const decision = yield* decide(current, op, admission, approval, ancestry);
         if (
           admission.kind === "localIntent" &&
-          op.kind === "upsert" &&
+          (op.kind === "upsert" || op.kind === "move") &&
           M.requiresMemoryFloor2(op)
         ) {
           if (!(yield* store.hubFloorActive(op.memorySpaceId)))
@@ -1177,7 +1192,7 @@ const make = Effect.fnUntraced(function* (
           ...input.assignment,
           environmentId,
         });
-        if (materialized.operation.kind !== "forget") {
+        if (M.isMemoryRevisionOperation(materialized.operation)) {
           const payload = yield* normalizeMemoryDependencies(
             materialized.operation.memorySpaceId,
             materialized.operation.payload,
@@ -1258,12 +1273,21 @@ const make = Effect.fnUntraced(function* (
     stableUuid: memoryStableUuid,
     hash,
   });
+  const move = makeMoveMemory({
+    store,
+    sql,
+    environmentId,
+    apply,
+    requireSharing,
+    ...(submitFloorWrite ? { submitFloorWrite } : {}),
+  });
   const remember = makeRemember({
     sql,
     environmentId,
     store,
     resolveProjectKey,
     upsert,
+    move,
     stableUuid: memoryStableUuid,
   });
   const forget = makeMemoryForget({
@@ -1479,7 +1503,11 @@ const make = Effect.fnUntraced(function* (
           sourceThread,
           current.item.status === "active" ? [current.item] : [],
         );
-        return yield* viewProjection.item(current.item, value.includeMarks);
+        return yield* viewProjection.item(
+          current.item,
+          value.includeMarks,
+          value.includeScopeVersion,
+        );
       }),
     );
   });
@@ -1581,9 +1609,9 @@ const make = Effect.fnUntraced(function* (
               : null;
         let nextCursor = continuation ? encodeCursor(continuation) : null;
         let visible = yield* Effect.forEach(items, (item) =>
-          viewProjection.item(item, input.includeMarks),
+          viewProjection.item(item, input.includeMarks, input.includeScopeVersion),
         );
-        if (!("query" in input) || input.includeMarks) {
+        if (!("query" in input) || input.includeMarks || input.includeScopeVersion) {
           let bytes = 2048;
           for (const [index, item] of visible.entries()) {
             const encoded = yield* query(encodePageItem(item));
@@ -1697,7 +1725,7 @@ const make = Effect.fnUntraced(function* (
   const reconnectParked = Effect.fn("MemoryService.reconnectParked")(function* (
     op: M.MemoryOperation,
   ) {
-    if (op.kind === "forget") return false;
+    if (!M.isMemoryRevisionOperation(op)) return false;
     return yield* store.transact(
       Effect.gen(function* () {
         const current = yield* store.loadAggregate(
@@ -1759,7 +1787,10 @@ const make = Effect.fnUntraced(function* (
         !(yield* store.areAutomaticallyUsable(space, [item.revision.revisionId]))
       )
         continue;
+      const [identity] = yield* query(sql<{ scope_version: number }>`
+        SELECT scope_version FROM memory_identity_ledger WHERE space=${space} AND memory_id=${item.memoryId}`);
       selected.push({
+        ...(identity?.scope_version ? { scopeVersion: identity.scope_version } : {}),
         memoryId: item.memoryId,
         revisionId: item.revision.revisionId,
         scope: item.scope,
@@ -1850,6 +1881,7 @@ const make = Effect.fnUntraced(function* (
       if (input.messageIds.every((id) => evidence.has(id)))
         return {
           generation: aggregate.generation,
+          scopeVersion: aggregate.identity?.scopeVersion,
           sourceWatermark: provenance.sourceWatermark,
           pair,
         };
@@ -1871,6 +1903,7 @@ const make = Effect.fnUntraced(function* (
             ...value,
             protocolVersion: 1 as const,
             sourceWatermark: locator.sourceWatermark,
+            ...(locator.scopeVersion === undefined ? {} : { scopeVersion: locator.scopeVersion }),
             requestId: M.MemorySourceReadRequestId.make(
               memoryStableUuid(`${environmentId}:${locator.generation}:${encoded}`),
             ),
@@ -1901,6 +1934,7 @@ const make = Effect.fnUntraced(function* (
         });
         if (
           locator.generation !== input.request.generation ||
+          locator.scopeVersion !== request.scopeVersion ||
           (yield* decode(encodeSourceWatermark(locator.sourceWatermark))) !==
             (yield* decode(encodeSourceWatermark(request.sourceWatermark)))
         )
@@ -2015,7 +2049,7 @@ const make = Effect.fnUntraced(function* (
                   ? [op.restoredRevisionId]
                   : [],
           },
-      op.kind === "forget"
+      !M.isMemoryRevisionOperation(op)
         ? {}
         : {
             ...(op.kind === "revert" ? { resolutionId: op.revertsResolutionId } : {}),
@@ -2028,12 +2062,12 @@ const make = Effect.fnUntraced(function* (
     // Only the read-only semantic decision is caught; every subsequent write can fail the outer transaction.
     const prepared = yield* Effect.gen(function* () {
       if (
-        op.kind !== "forget" &&
+        M.isMemoryRevisionOperation(op) &&
         (op.forgetFence !== undefined || op.revision.provenance.unverified)
       )
         yield* store.checkForgetFence(op.memorySpaceId, op.forgetFence);
       if (
-        op.kind !== "forget" &&
+        M.isMemoryRevisionOperation(op) &&
         op.revision.provenance.originThreadId &&
         (op.revision.provenance.environmentId !== op.originEnvironmentId ||
           (current.identity && current.identity.creatingEnvironmentId !== op.originEnvironmentId) ||
@@ -2043,7 +2077,7 @@ const make = Effect.fnUntraced(function* (
         return yield* new M.MemoryHubError({ code: "identity_mismatch" });
       if (
         active &&
-        op.kind !== "forget" &&
+        M.isMemoryRevisionOperation(op) &&
         op.kind !== "resolve" &&
         !op.revision.provenance.unverified &&
         !(yield* store.areAutomaticallyUsable(
@@ -2052,6 +2086,13 @@ const make = Effect.fnUntraced(function* (
         ))
       )
         return yield* new Store.MemoryStoreConflict({ code: "source_invalidated" });
+      if (
+        op.kind === "move" &&
+        [op.fromScope, op.toScope].some(
+          (scope) => scope.kind === "thread" && scope.thread.environmentId !== member.environmentId,
+        )
+      )
+        return yield* new M.MemoryHubError({ code: "identity_mismatch" });
       yield* requireImportNotSuppressed(op);
       if (op.kind !== "forget" && current.pendingForget)
         return yield* new Store.MemoryStoreConflict({ code: "forget_pending" });
@@ -2130,7 +2171,7 @@ const make = Effect.fnUntraced(function* (
         yield* validateSummaryDependencies(op.memorySpaceId, op.payload).pipe(
           Effect.provideService(SqlClient.SqlClient, sql),
         );
-      else if (op.kind !== "forget") {
+      else if (M.isMemoryRevisionOperation(op)) {
         const normalized = yield* normalizeMemoryDependencies(
           op.memorySpaceId,
           op.payload,
@@ -2145,10 +2186,9 @@ const make = Effect.fnUntraced(function* (
         )
           return yield* invalid();
       }
-      const ancestry =
-        op.kind === "forget"
-          ? undefined
-          : yield* store.readAncestry(op.memorySpaceId, op.memoryId, op.revision.parents);
+      const ancestry = !M.isMemoryRevisionOperation(op)
+        ? undefined
+        : yield* store.readAncestry(op.memorySpaceId, op.memoryId, op.revision.parents);
       const decision = yield* Effect.try({
         try: () =>
           decideMemoryOperation(
@@ -2431,6 +2471,7 @@ const make = Effect.fnUntraced(function* (
     upsert,
     acceptSuggestionWrite: stageAcceptedSuggestion,
     remember,
+    move,
     forget,
     listSuggestions: suggestionStore.list,
     listSuggestionMetadata: suggestionStore.listMetadata,

@@ -1,3 +1,5 @@
+import * as Schema from "effect/Schema";
+import * as M from "./index.ts";
 import { expect, it } from "vite-plus/test";
 import { MemoryFailureCode } from "./memory.ts";
 
@@ -41,4 +43,31 @@ it("preserves the stored failure-code ordinals from memory protocol V1", () => {
     "hub_upgrade_required",
     "hub_unavailable",
   ]);
+});
+
+const strict = Schema.decodeUnknownSync(M.MemoryOperation, { onExcessProperty: "error" });
+const id = (n = 1) => `00000000-0000-4000-8000-${String(n).padStart(12, "0")}`;
+const thread = { environmentId: "env", threadId: "thread" };
+
+it("encodes moves without a body and only at the negotiated floor", () => {
+  const value = {
+    protocolVersion: 1,
+    kind: "move",
+    operationId: id(4),
+    memorySpaceId: id(),
+    originEnvironmentId: thread.environmentId,
+    memoryId: id(2),
+    expectedHeads: [id(3)],
+    expectedScopeVersion: 7,
+    fromScope: { kind: "user" },
+    toScope: { kind: "thread", thread },
+  };
+  const move = strict(value);
+  expect(M.decodeMemoryOperation(M.encodeMemoryOperation(move))).toEqual(move);
+  expect(JSON.parse(M.encodeMemoryOperation(move))).toEqual(value);
+  expect(JSON.parse(M.encodeMemoryEventMetadata(move))).toEqual(value);
+  expect(M.requiresMemoryFloor2(move)).toBe(true);
+  expect(() => strict({ ...value, payload: { text: "Synthetic" } })).toThrow();
+  expect(() => strict({ ...value, toScope: value.fromScope })).toThrow();
+  expect(() => strict({ ...value, expectedScopeVersion: -1 })).toThrow();
 });

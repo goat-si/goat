@@ -112,6 +112,9 @@ export const selectRelated = Effect.fn("MemorySnapshot.selectRelated")(function*
           memoryId: item.memoryId,
           revisionId: pair.revision.revisionId,
           scope: item.scope,
+          ...(aggregate.identity?.scopeVersion
+            ? { scopeVersion: aggregate.identity.scopeVersion }
+            : {}),
           provenance: pair.revision.provenance,
           assertionKind: pair.revision.assertionKind,
           text: pair.payload.text,

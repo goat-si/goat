@@ -24,11 +24,13 @@ export function MemoryScopeSettings({
   environmentId,
   memorySpaceId,
   disabled = false,
+  bindingControls = true,
   onChange,
 }: {
   environmentId: EnvironmentId;
   memorySpaceId: MemorySpaceId;
   disabled?: boolean;
+  bindingControls?: boolean;
   onChange: (selection: MemoryScopeSelection | null) => void;
 }) {
   const registry = useContext(RegistryContext);
@@ -193,30 +195,32 @@ export function MemoryScopeSettings({
                   : "No repository identity available"}
             </p>
           ) : null}
-          <div className="flex flex-wrap gap-2">
-            <Button
-              size="sm"
-              variant="outline"
-              disabled={disabled || busy || !canUpdate || !binding}
-              onClick={() =>
-                setConfirm(
-                  binding?.projectKey?.kind === "explicit" ? "useRepository" : "setExplicit",
-                )
-              }
-            >
-              {binding?.projectKey?.kind === "explicit"
-                ? "Use repository identity"
-                : "Create dedicated shared project"}
-            </Button>
-            <Button
-              size="sm"
-              variant="ghost"
-              disabled={disabled || busy}
-              onClick={() => setReload((v) => v + 1)}
-            >
-              Reload binding
-            </Button>
-          </div>
+          {bindingControls ? (
+            <div className="flex flex-wrap gap-2">
+              <Button
+                size="sm"
+                variant="outline"
+                disabled={disabled || busy || !canUpdate || !binding}
+                onClick={() =>
+                  setConfirm(
+                    binding?.projectKey?.kind === "explicit" ? "useRepository" : "setExplicit",
+                  )
+                }
+              >
+                {binding?.projectKey?.kind === "explicit"
+                  ? "Use repository identity"
+                  : "Create dedicated shared project"}
+              </Button>
+              <Button
+                size="sm"
+                variant="ghost"
+                disabled={disabled || busy}
+                onClick={() => setReload((v) => v + 1)}
+              >
+                Reload binding
+              </Button>
+            </div>
+          ) : null}
           {confirm ? (
             <div className="space-y-3" role="group" aria-label="Confirm project binding">
               <p className="text-xs leading-normal text-muted-foreground/80">

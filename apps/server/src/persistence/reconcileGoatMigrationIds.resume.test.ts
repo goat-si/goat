@@ -25,6 +25,7 @@ import {
   fresh,
   shiftMigrations,
   hubFloorRow,
+  scopeVersionRow,
   saveSuggestionsRow,
   threadLineageRow,
   history,
@@ -262,6 +263,7 @@ describe.each(databases)("the GOAT id shift on a %s database", (_kind, database)
         threadLineageRow,
         saveSuggestionsRow,
         hubFloorRow,
+        scopeVersionRow,
       ]);
       assert.deepStrictEqual(yield* onRestart(reopen, snapshot), yield* fresh);
       assert.deepStrictEqual(yield* onRestart(reopen, userData), data);
@@ -284,6 +286,7 @@ describe.each(databases)("the GOAT id shift on a %s database", (_kind, database)
         threadLineageRow,
         saveSuggestionsRow,
         hubFloorRow,
+        scopeVersionRow,
       ]);
       assert.deepStrictEqual(yield* onRestart(reopen, snapshot), yield* fresh);
     }).pipe(provide);
@@ -310,6 +313,7 @@ describe.each(databases)("the GOAT id shift on a %s database", (_kind, database)
         threadLineageRow,
         saveSuggestionsRow,
         hubFloorRow,
+        scopeVersionRow,
       ]);
       assert.deepStrictEqual(yield* onRestart(reopen, snapshot), yield* fresh);
     }).pipe(provide);
@@ -386,6 +390,7 @@ describe.each(databases)("the GOAT id shift on a %s database", (_kind, database)
         threadLineageRow,
         saveSuggestionsRow,
         hubFloorRow,
+        scopeVersionRow,
       ]);
       const expected = yield* fresh;
       assert.deepStrictEqual(yield* onRestart(reopen, snapshot), {
@@ -401,7 +406,7 @@ describe.each(databases)("the GOAT id shift on a %s database", (_kind, database)
       Effect.asVoid(runMigrations()),
       [61, 61],
       "61_PullRequestReviewGuides",
-      hubFloorRow[0],
+      scopeVersionRow[0],
     ],
     [
       "a ledger from before the shift that lost row 72",

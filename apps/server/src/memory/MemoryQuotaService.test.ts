@@ -1,3 +1,4 @@
+import { decodeV1MemoryOperation as decodeOperation } from "./testkit/DecodeV1MemoryOperation.ts";
 import { checkUsage } from "./MemoryUsageScan.testkit.ts";
 import { checkpointLedgerFixture } from "./MemoryCheckpoint.testkit.ts";
 import { assert, describe, it } from "@effect/vitest";
@@ -28,7 +29,6 @@ const env = M.EnvironmentId.make("fixture");
 const now = "2026-10-14T00:00:00.000Z";
 const hash = "a".repeat(64);
 const encodeSuppression = Schema.encodeEffect(Schema.fromJsonString(M.MemorySuppressionRecord));
-const decodeOperation = Schema.decodeUnknownSync(M.MemoryOperation);
 const operation = (n = 3) =>
   decodeOperation({
     protocolVersion: 1,
@@ -479,7 +479,7 @@ describe("MemoryQuotaService", () => {
       assert.deepStrictEqual(yield* quota.commit(request, env, Effect.void), result);
       assert.deepStrictEqual(
         yield* quota.commit(
-          { ...decision(additional), operationDigest: expansion.operationDigest },
+          { ...decision(decodeOperation(additional)), operationDigest: expansion.operationDigest },
           env,
           Effect.void,
         ),

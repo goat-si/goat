@@ -1,3 +1,4 @@
+import { decodeV1MemoryOperation as decodeOperation } from "./testkit/DecodeV1MemoryOperation.ts";
 import { assert, describe, it } from "@effect/vitest";
 import type { MemoryStoreReclaimResult } from "./MemoryStoreReclaim.ts";
 import { memoryFailure } from "../mcp/toolkits/memory/handlers.ts";
@@ -33,7 +34,6 @@ const memory = M.MemoryId.make(id(2));
 const env = M.EnvironmentId.make("fixture");
 const now = "2026-10-14T00:00:00.000Z";
 const hash = "a".repeat(64);
-const decodeOperation = Schema.decodeUnknownSync(M.MemoryOperation);
 const operation = (n = 3) =>
   decodeOperation({
     protocolVersion: 1,

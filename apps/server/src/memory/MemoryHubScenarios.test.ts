@@ -1,3 +1,4 @@
+import { moveFloorCapabilities } from "./testkit/MemoryHubProtocolFixtures.ts";
 import { watchedEvents } from "../testUtils/watchedEvents.testkit.ts";
 import { assert, describe, it } from "@effect/vitest";
 import * as M from "@goat/contracts";
@@ -839,19 +840,7 @@ describe("Memory hub assembled HTTP scenarios", () => {
       );
       const enabled = yield* descriptor;
       assert.strictEqual(enabled.capabilities.memoryHubProtocolVersion, 1);
-      assert.deepStrictEqual(enabled.capabilities.memory, {
-        protocolVersion: 1,
-        refusedReverts: true,
-        resolutionInputs: true,
-        retainedLocalSpace: true,
-        provenanceProjection: true,
-        derivedCap: 1000,
-        originFilter: true,
-        saveSuggestions: true,
-        generationHold: true,
-        hubDiagnostics: true,
-        siteNotes: true,
-      });
+      assert.deepStrictEqual(enabled.capabilities.memory, moveFloorCapabilities);
       yield* s.configure("disabled");
       const disabled = yield* descriptor;
       assert.strictEqual(disabled.environmentId, enabled.environmentId);
