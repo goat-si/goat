@@ -22,6 +22,8 @@ const CHUNK_WRITE_LENGTH = 1 << 20;
 export const writeFileStringAtomically = (input: {
   readonly filePath: string;
   readonly contents: string | Iterable<string>;
+  /** Requires an exclusive writer and reserves the resolved destination's `.staging` sibling. */
+  readonly reuseStagingFile?: true;
 }) =>
   Effect.scoped(
     Effect.gen(function* () {
@@ -32,24 +34,36 @@ export const writeFileStringAtomically = (input: {
       const targetDirectory = path.dirname(targetPath);
 
       yield* fs.makeDirectory(targetDirectory, { recursive: true });
+      const stagingOptions = input.reuseStagingFile
+        ? ({ flag: "wx", mode: 0o600 } as const)
+        : undefined;
+      const stagingPath = `${targetPath}.staging`;
       // Cleanup failure must not fail a write that already landed.
-      const tempDirectory = yield* Effect.acquireRelease(
-        fs.makeTempDirectory({
-          directory: targetDirectory,
-          prefix: `${path.basename(targetPath)}.`,
-        }),
-        (directory) => fs.remove(directory, { recursive: true }).pipe(Effect.ignore({ log: true })),
-      );
-      const tempPath = path.join(tempDirectory, "contents.tmp");
+      const tempPath = stagingOptions
+        ? yield* Effect.acquireRelease(
+            fs.remove(stagingPath, { force: true }).pipe(Effect.as(stagingPath)),
+            (file) => fs.remove(file, { force: true }).pipe(Effect.ignore({ log: true })),
+          )
+        : path.join(
+            yield* Effect.acquireRelease(
+              fs.makeTempDirectory({
+                directory: targetDirectory,
+                prefix: `${path.basename(targetPath)}.`,
+              }),
+              (directory) =>
+                fs.remove(directory, { recursive: true }).pipe(Effect.ignore({ log: true })),
+            ),
+            "contents.tmp",
+          );
 
       const contents = input.contents;
       if (typeof contents === "string") {
-        yield* fs.writeFileString(tempPath, contents);
+        yield* fs.writeFileString(tempPath, contents, stagingOptions);
       } else {
         // Closed before the rename, which Windows refuses for open files.
         yield* Effect.scoped(
           Effect.gen(function* () {
-            const file = yield* fs.open(tempPath, { flag: "w" });
+            const file = yield* fs.open(tempPath, stagingOptions ?? { flag: "w" });
             const encoder = new TextEncoder();
             let batch: string[] = [];
             let batchLength = 0;

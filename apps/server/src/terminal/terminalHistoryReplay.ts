@@ -139,7 +139,7 @@ function c1Effect(codePoint: number): C1Effect | undefined {
   return next === undefined ? undefined : { next, query, safe };
 }
 
-// BEL ends only OSC; inside DCS, PM and APC it is payload. Non-ASCII is the reverse: libghostty
+// BEL ends only OSC; inside DCS, SOS, PM and APC it is payload. Non-ASCII is the reverse: libghostty
 // keeps it inside OSC, while a C1 byte in it ends the other strings.
 function findStringEnd(
   input: string,
@@ -210,7 +210,9 @@ const SWALLOWING = "swallowing:";
 function swallowedKind(sequence: string): string {
   const introducer = sequence.charAt(1);
   if (introducer === "]" || introducer === "[") return introducer;
-  return introducer === "P" || introducer === "^" || introducer === "_" ? "P" : "E";
+  return introducer === "P" || introducer === "X" || introducer === "^" || introducer === "_"
+    ? "P"
+    : "E";
 }
 
 // An ESC may begin ST, and a high surrogate may begin a code point that acts as a C1 control.
@@ -383,6 +385,7 @@ function sanitizeChunk(
       if (
         nextCodePoint === 0x5d ||
         nextCodePoint === 0x50 ||
+        nextCodePoint === 0x58 ||
         nextCodePoint === 0x5e ||
         nextCodePoint === 0x5f
       ) {

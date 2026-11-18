@@ -1,3 +1,4 @@
+import { parseAgentSessionTranscript } from "./AgentSessionTranscriptParser.ts";
 import * as NodeServices from "@effect/platform-node/NodeServices";
 import { expect, it } from "@effect/vitest";
 import { ProviderDriverKind, ProviderInstanceId } from "@goat/contracts";
@@ -186,7 +187,7 @@ it("titles a Codex event after the request that follows injected setup blocks", 
     '<in-app-browser-context source="ambient-ui-state">\nTab\n</in-app-browser-context>',
     "Fix the import titles",
   ].join("\n");
-  const thread = AgentSessionScanner.parseAgentSessionTranscript({
+  const thread = parseAgentSessionTranscript({
     contents: [
       encodeTranscriptRecord({ type: "session_meta", payload: { id: "codex-session" } }),
       encodeTranscriptRecord({
