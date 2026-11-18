@@ -1,4 +1,10 @@
-import { CommandId, type MessageId, type OrchestrationV2ThreadProjection } from "@goat/contracts";
+import * as KeyedLock from "@goat/shared/KeyedLock";
+import {
+  CommandId,
+  type MessageId,
+  type ThreadId,
+  type OrchestrationV2ThreadProjection,
+} from "@goat/contracts";
 import * as Effect from "effect/Effect";
 import * as Layer from "effect/Layer";
 import * as Option from "effect/Option";
@@ -288,52 +294,59 @@ export const layer = Layer.effectDiscard(
       },
     );
 
+    const continuations = yield* KeyedLock.makeRunner<ThreadId>();
     yield* AutomationHold.awaitRelease.pipe(
       Effect.andThen(requests.take),
       Effect.flatMap((request) =>
-        dispatchContinuation(request).pipe(
-          Effect.catchCause((cause) =>
-            Effect.gen(function* () {
-              yield* Effect.logWarning("orchestration-v2.provider-continuation.dispatch-failed", {
-                threadId: request.threadId,
-                providerThreadId: request.providerThreadId,
-                cause,
-              });
-              if (request.delegatedCompletion !== undefined) {
-                const completion = request.delegatedCompletion;
-                const retryKey = delegatedCompletionRetryKey(request, completion);
-                const retryDelay = yield* nextRetryDelay(retryKey);
-                yield* Effect.gen(function* () {
-                  yield* Effect.sleep(`${retryDelay} millis`);
-                  const projection = yield* threads.getThreadRecords(
-                    request.threadId,
-                    ["messages", "runs", "providerTurns"],
-                    {
-                      messageIds:
-                        request.delegatedCompletion === undefined
-                          ? []
-                          : [request.delegatedCompletion.messageId],
-                    },
+        continuations.run(
+          request.threadId,
+          dispatchContinuation(request).pipe(
+            Effect.catchCause((cause) =>
+              Effect.gen(function* () {
+                yield* Effect.logWarning("orchestration-v2.provider-continuation.dispatch-failed", {
+                  threadId: request.threadId,
+                  providerThreadId: request.providerThreadId,
+                  cause,
+                });
+                if (request.delegatedCompletion !== undefined) {
+                  const completion = request.delegatedCompletion;
+                  const retryKey = delegatedCompletionRetryKey(request, completion);
+                  const retryDelay = yield* nextRetryDelay(retryKey);
+                  yield* Effect.gen(function* () {
+                    yield* Effect.sleep(`${retryDelay} millis`);
+                    const projection = yield* threads.getThreadRecords(
+                      request.threadId,
+                      ["messages", "runs", "providerTurns"],
+                      {
+                        messageIds:
+                          request.delegatedCompletion === undefined
+                            ? []
+                            : [request.delegatedCompletion.messageId],
+                      },
+                    );
+                    if (currentDelegatedCompletionDelivery(projection, completion) !== undefined) {
+                      yield* requests.offer(request);
+                    } else {
+                      yield* clearRetryAttempt(retryKey);
+                    }
+                  }).pipe(
+                    Effect.catchCause((retryCause) =>
+                      Effect.logWarning(
+                        "orchestration-v2.provider-continuation.retry-check-failed",
+                        {
+                          threadId: request.threadId,
+                          providerThreadId: request.providerThreadId,
+                          cause: retryCause,
+                        },
+                      ).pipe(Effect.andThen(requests.offer(request))),
+                    ),
+                    Effect.forkScoped,
                   );
-                  if (currentDelegatedCompletionDelivery(projection, completion) !== undefined) {
-                    yield* requests.offer(request);
-                  } else {
-                    yield* clearRetryAttempt(retryKey);
-                  }
-                }).pipe(
-                  Effect.catchCause((retryCause) =>
-                    Effect.logWarning("orchestration-v2.provider-continuation.retry-check-failed", {
-                      threadId: request.threadId,
-                      providerThreadId: request.providerThreadId,
-                      cause: retryCause,
-                    }).pipe(Effect.andThen(requests.offer(request))),
-                  ),
-                  Effect.forkScoped,
-                );
-              } else if (request.clearIfCurrent !== undefined) {
-                yield* request.clearIfCurrent();
-              }
-            }),
+                } else if (request.clearIfCurrent !== undefined) {
+                  yield* request.clearIfCurrent();
+                }
+              }),
+            ),
           ),
         ),
       ),

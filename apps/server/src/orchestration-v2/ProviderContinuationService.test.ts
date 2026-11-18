@@ -133,6 +133,41 @@ it.effect("does not dispatch continuations while held and dispatches after relea
 );
 
 describe("ProviderContinuationService", () => {
+  it.effect("dispatches independent wakes while keeping one thread FIFO", () =>
+    Effect.gen(function* () {
+      const dispatched = yield* Queue.unbounded<unknown>();
+      const entered = yield* Deferred.make<void>();
+      const release = yield* Deferred.make<void>();
+      const otherThreadId = ThreadId.make("thread-independent-continuation");
+      const first = request(
+        (effect) =>
+          Deferred.succeed(entered, undefined).pipe(
+            Effect.andThen(Deferred.await(release)),
+            Effect.andThen(effect),
+            Effect.map(Option.some),
+          ),
+        "First wake",
+      );
+      yield* Effect.gen(function* () {
+        const requests = yield* ProviderContinuationRequests.ProviderContinuationRequests;
+        yield* requests.offer(first);
+        yield* Deferred.await(entered);
+        yield* requests.offer(request(undefined, "Second wake"));
+        yield* requests.offer({ ...request(), threadId: otherThreadId });
+        assert.containSubset(yield* Queue.take(dispatched), { threadId: otherThreadId });
+        assert.equal(yield* Queue.size(dispatched), 0);
+        yield* Deferred.succeed(release, undefined);
+        assert.containSubset(yield* Queue.take(dispatched), { threadId, text: "First wake" });
+        assert.containSubset(yield* Queue.take(dispatched), { threadId, text: "Second wake" });
+      }).pipe(
+        Effect.provide(
+          layerTest({ dispatched, getThreadRecords: () => Effect.succeed(projection) }),
+        ),
+        Effect.scoped,
+      );
+    }),
+  );
+
   it.effect("recovers an unaccepted persisted steer using the same delivery identity", () =>
     Effect.gen(function* () {
       const dispatched = yield* Queue.unbounded<unknown>();

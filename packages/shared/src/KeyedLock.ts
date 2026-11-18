@@ -1,4 +1,5 @@
 import * as Effect from "effect/Effect";
+import * as FiberSet from "effect/FiberSet";
 import * as Ref from "effect/Ref";
 import * as Semaphore from "effect/Semaphore";
 
@@ -53,4 +54,30 @@ export const make = Effect.fn("KeyedLock.make")(function* <Key>(): Effect.fn.Ret
       ),
     activeKeys: Effect.map(Ref.get(locks), (current) => Array.from(current.keys())),
   } satisfies KeyedLock<Key>;
+});
+
+/** Bounded admission with FIFO execution per key for callers submitting work in order. */
+export const makeRunner = Effect.fn("KeyedLock.makeRunner")(function* <Key>() {
+  const lock = yield* make<Key>();
+  const active = yield* Semaphore.make(16);
+  const admitted = yield* Semaphore.make(128);
+  const fibers = yield* FiberSet.make<void>();
+
+  const run = <R>(key: Key, effect: Effect.Effect<unknown, never, R>) =>
+    Effect.uninterruptibleMask((restore) =>
+      restore(admitted.take(1)).pipe(
+        Effect.andThen(
+          FiberSet.run(
+            fibers,
+            lock
+              .withLock(key, active.withPermit(effect))
+              .pipe(Effect.asVoid, Effect.interruptible, Effect.ensuring(admitted.release(1))),
+            { startImmediately: true },
+          ),
+        ),
+        Effect.asVoid,
+      ),
+    );
+
+  return { run };
 });
