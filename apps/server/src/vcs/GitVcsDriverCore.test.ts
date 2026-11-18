@@ -4045,6 +4045,18 @@ it.layer(layerTest)("GitVcsDriver core integration", (it) => {
         const fileSystem = yield* FileSystem.FileSystem;
         const pathService = yield* Path.Path;
 
+        const previousAllowedProtocol = process.env.GIT_ALLOW_PROTOCOL;
+        process.env.GIT_ALLOW_PROTOCOL = "file";
+        yield* Effect.addFinalizer(() =>
+          Effect.sync(() => {
+            if (previousAllowedProtocol === undefined) {
+              delete process.env.GIT_ALLOW_PROTOCOL;
+            } else {
+              process.env.GIT_ALLOW_PROTOCOL = previousAllowedProtocol;
+            }
+          }),
+        );
+
         const cwd = yield* makeTmpDir();
         const { initialBranch } = yield* initRepoWithCommit(cwd);
         const healthy = yield* makeTmpDir("healthy-submodule-");
@@ -4052,15 +4064,7 @@ it.layer(layerTest)("GitVcsDriver core integration", (it) => {
         yield* writeTextFile(healthy, "healthy.txt", "ready");
         yield* git(healthy, ["add", "."]);
         yield* git(healthy, ["commit", "-m", "add file"]);
-        yield* git(cwd, ["config", "protocol.file.allow", "always"]);
-        yield* git(cwd, [
-          "-c",
-          "protocol.file.allow=always",
-          "submodule",
-          "add",
-          healthy,
-          "healthy",
-        ]);
+        yield* git(cwd, ["submodule", "add", healthy, "healthy"]);
         const gitmodules = yield* fileSystem.readFileString(pathService.join(cwd, ".gitmodules"));
         yield* writeTextFile(
           cwd,
@@ -6099,7 +6103,7 @@ it.effect("SSH workspace push propagates key-auth refusal", () =>
   }).pipe(Effect.scoped, Effect.provide(layerTest)),
 );
 
-it.effect("preserves a rewritten checkout head under the GOAT pre-refresh ref", () =>
+it.effect("keeps a divergent checkout at its current head", () =>
   Effect.gen(function* () {
     const driver = yield* GitVcsDriver.GitVcsDriver;
     const cwd = yield* makeTmpDir();
@@ -6112,11 +6116,9 @@ it.effect("preserves a rewritten checkout head under the GOAT pre-refresh ref", 
     const result = yield* driver.refreshCheckedOutBranch({
       cwd,
       targetCommit: target,
-      resetWhenHeadCommit: previous,
     });
-    assert.isTrue(result.moved);
-    assert.equal(yield* git(cwd, ["rev-parse", "refs/goat/pre-refresh"]), previous);
-    assert.equal(yield* git(cwd, ["rev-parse", "HEAD"]), target);
+    assert.deepEqual(result, { headCommit: previous, moved: false, onTarget: false });
+    assert.equal(yield* git(cwd, ["rev-parse", "HEAD"]), previous);
   }).pipe(Effect.provide(layerTest)),
 );
 

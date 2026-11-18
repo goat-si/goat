@@ -100,7 +100,6 @@ import {
   createComposerPersistStorage,
   type ComposerPersistState,
 } from "./composerDraftPersistStorage";
-import { useShallow } from "zustand/react/shallow";
 import {
   replaceComposerContextReferences,
   toComposerContextId,
@@ -608,11 +607,6 @@ export interface ComposerDraftStoreState extends PreviewTabDraftActions {
   moveComposerPromptAndImages: (from: ComposerThreadTarget, to: ComposerThreadTarget) => void;
 }
 
-interface ComposerDraftModelState {
-  activeProvider: ProviderInstanceId | null;
-  modelSelectionByProvider: Partial<Record<ProviderInstanceId, ModelSelection>>;
-}
-
 function cloneModelSelection(selection: ModelSelection): DeepMutable<ModelSelection> {
   return {
     ...selection,
@@ -689,11 +683,6 @@ Object.freeze(EMPTY_REVIEW_COMMENTS);
 Object.freeze(EMPTY_THREAD_CONTEXTS);
 const EMPTY_MODEL_SELECTION_BY_PROVIDER: Partial<Record<ProviderDriverKind, ModelSelection>> =
   Object.freeze({});
-const EMPTY_COMPOSER_DRAFT_MODEL_STATE = Object.freeze<ComposerDraftModelState>({
-  activeProvider: null,
-  modelSelectionByProvider: EMPTY_MODEL_SELECTION_BY_PROVIDER,
-});
-
 const EMPTY_THREAD_DRAFT = Object.freeze<ComposerThreadDraftState>({
   prompt: "",
   images: EMPTY_IMAGES,
@@ -2966,10 +2955,9 @@ const composerDraftStore = create<ComposerDraftStoreState>()(
             return;
           }
           const instanceKey = options?.instanceId ?? defaultInstanceIdForDriver(normalizedProvider);
+          const shownModel = normalizeCustomModelSlug(options?.model);
           const fallbackModel =
-            normalizeCustomModelSlug(options?.model) ??
-            DEFAULT_MODEL_BY_PROVIDER[normalizedProvider] ??
-            DEFAULT_MODEL;
+            shownModel ?? DEFAULT_MODEL_BY_PROVIDER[normalizedProvider] ?? DEFAULT_MODEL;
           const providerOpts =
             nextProviderOptions && nextProviderOptions.length > 0 ? nextProviderOptions : undefined;
 
@@ -2981,7 +2969,7 @@ const composerDraftStore = create<ComposerDraftStoreState>()(
             const currentForProvider = nextMap[instanceKey];
             nextMap[instanceKey] = createModelSelection(
               instanceKey,
-              currentForProvider?.model ?? fallbackModel,
+              shownModel ?? currentForProvider?.model ?? fallbackModel,
               providerOpts,
             );
 
@@ -2994,32 +2982,27 @@ const composerDraftStore = create<ComposerDraftStoreState>()(
                 nextStickyMap[instanceKey] ??
                 base.modelSelectionByProvider[instanceKey] ??
                 createModelSelection(instanceKey, fallbackModel);
-              const rememberedModel = normalizeCustomModelSlug(options?.model) ?? stickyBase.model;
-              if (providerOpts) {
+              const rememberedModel = shownModel ?? stickyBase.model;
+              if (
+                rememberedModel === stickyBase.model &&
+                (providerOpts || stickyBase.options?.length)
+              ) {
                 nextStickyMap[instanceKey] = createModelSelection(
                   instanceKey,
                   stickyBase.model,
                   providerOpts,
                 );
-                nextOptionsByModel = {
-                  ...state.stickyOptionsByModelByProvider,
-                  [instanceKey]: {
-                    ...state.stickyOptionsByModelByProvider[instanceKey],
-                    [rememberedModel]: providerOpts,
-                  },
-                };
-              } else if ((stickyBase.options?.length ?? 0) > 0) {
-                const { options: _, ...rest } = stickyBase;
-                nextStickyMap[instanceKey] = rest as ModelSelection;
-                const rememberedByModel = {
-                  ...state.stickyOptionsByModelByProvider[instanceKey],
-                };
-                delete rememberedByModel[rememberedModel];
-                nextOptionsByModel = {
-                  ...state.stickyOptionsByModelByProvider,
-                  [instanceKey]: rememberedByModel,
-                };
               }
+              const rememberedByModel = { ...state.stickyOptionsByModelByProvider[instanceKey] };
+              if (providerOpts) {
+                rememberedByModel[rememberedModel] = providerOpts;
+              } else {
+                delete rememberedByModel[rememberedModel];
+              }
+              nextOptionsByModel = {
+                ...state.stickyOptionsByModelByProvider,
+                [instanceKey]: rememberedByModel,
+              };
               nextStickyActiveProvider = options.instanceId
                 ? instanceKey
                 : (base.activeProvider ?? instanceKey);
@@ -4268,22 +4251,6 @@ export function useComposerThreadDraft(threadRef: ComposerThreadTarget): Compose
 export function useThreadHasUnsentDraft(threadRef: ScopedThreadRef): boolean {
   return useComposerDraftStore((state) =>
     composerDraftHasUserContent(getComposerDraftState(state, threadRef)),
-  );
-}
-
-export function useComposerDraftModelState(
-  threadRef: ComposerThreadTarget,
-): ComposerDraftModelState {
-  return useComposerDraftStore(
-    useShallow((state) => {
-      const draft = getComposerDraftState(state, threadRef);
-      return draft
-        ? {
-            activeProvider: draft.activeProvider,
-            modelSelectionByProvider: draft.modelSelectionByProvider,
-          }
-        : EMPTY_COMPOSER_DRAFT_MODEL_STATE;
-    }),
   );
 }
 

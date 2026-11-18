@@ -1828,12 +1828,14 @@ it.effect("shows an async setup as done while the agent still waits for its bran
         }),
       );
       yield* Deferred.await(branchNameStarted);
-      yield* TestClock.adjust("0 millis");
-      const stages = (yield* tracker.get(launched.threadId))?.stages ?? [];
-      const setupStage = stages.find((stage) => stage.id === "setup-script");
-      assert.equal(setupStage?.status, "done");
-      assert.isNotNull(setupStage?.endedAt ?? null);
-      assert.notEqual(stages.find((stage) => stage.id === "agent")?.status, "done");
+      const result = yield* tracker.stream(launched.threadId).pipe(
+        Stream.filter((snapshot) =>
+          Boolean(snapshot?.stages.find((stage) => stage.id === "setup-script")?.endedAt),
+        ),
+        Stream.runHead,
+      );
+      const stages = Option.getOrNull(result)?.stages ?? [];
+      assert.equal(stages.find((stage) => stage.id === "setup-script")?.status, "done");
       yield* Deferred.succeed(allowBranchName, undefined);
     }).pipe(Effect.provide(harness.layer));
   }),

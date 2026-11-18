@@ -1,14 +1,14 @@
+import { savedWorktreeFallback } from "./savedWorktreeFallback.ts";
 import {
-  ThreadLaunchError,
   ThreadLaunchWorkspaceMissingError,
   type PreparationInput,
+  type ThreadLaunchInitialMessage,
   type ThreadLaunchInput,
   type ThreadLaunchPreparationInput,
   type ThreadLaunchResult,
   type ThreadLaunchWorkspaceStrategy,
 } from "./threadLaunchTypes.ts";
 export {
-  ThreadLaunchError,
   ThreadLaunchWorkspaceMissingError,
   type ThreadLaunchInitialMessage,
   type ThreadLaunchInput,
@@ -51,7 +51,6 @@ import * as Fiber from "effect/Fiber";
 import * as Layer from "effect/Layer";
 import * as Option from "effect/Option";
 import * as Ref from "effect/Ref";
-import * as Schema from "effect/Schema";
 import * as Scope from "effect/Scope";
 import {
   buildTemporaryWorktreeBranchName,
@@ -84,7 +83,13 @@ import {
   withPreparationLog,
 } from "./preparationLog.ts";
 import { confirmLaunchStep } from "./goat/LaunchConfirm.ts";
-import { classifyPreparationFailure } from "./goat/PreparationFailure.ts";
+import { checkedOutTo, submoduleProgress } from "./goat/worktreeSubmoduleProgress.ts";
+import {
+  failureDetail,
+  preparationFailureClass,
+  ThreadLaunchError,
+} from "./goat/ThreadLaunchError.ts";
+export { preparationFailureClass, ThreadLaunchError } from "./goat/ThreadLaunchError.ts";
 import { makeLaunchCommandSlots } from "./goat/launchCommandSlots.ts";
 import {
   preparationRunStopped,
@@ -130,20 +135,6 @@ export class ThreadLaunchService extends Context.Service<
     readonly prepareRun: (input: ThreadLaunchPreparationInput) => Effect.Effect<void>;
   }
 >()("goat/orchestration-v2/ThreadLaunchService") {}
-
-const isThreadLaunchError = Schema.is(ThreadLaunchError);
-
-function failureDetail(error: unknown): string {
-  if (isThreadLaunchError(error)) {
-    const cause = error.cause;
-    const detail = cause instanceof Error ? cause.message : String(cause);
-    return `Workspace preparation failed during ${error.operation.replaceAll("-", " ")}: ${detail}`;
-  }
-  return `Workspace preparation failed: ${error instanceof Error ? error.message : String(error)}`;
-}
-
-export const preparationFailureClass = (error: unknown) =>
-  classifyPreparationFailure(isThreadLaunchError(error) ? error.cause : error);
 
 const make = Effect.gen(function* () {
   const projects = yield* ProjectService.ProjectService;
@@ -265,39 +256,6 @@ const make = Effect.gen(function* () {
     startWorktreesFromOrigin,
   });
 
-  const savedWorktreeFallback = Effect.fn("ThreadLaunchService.savedWorktreeFallback")(function* (
-    cwd: string,
-    startFromOrigin: boolean,
-    preferredRemote: string | undefined,
-    note: (line: string) => Effect.Effect<void>,
-  ) {
-    if (startFromOrigin) {
-      const fetched = yield* git.resolveWorktreeFallbackRemote(cwd, preferredRemote).pipe(
-        Effect.flatMap((remote) =>
-          remote === null
-            ? Effect.succeed(null)
-            : git.fetchWorktreeBaseCommit({
-                cwd,
-                refName: remote.branchName,
-                remote,
-                onOutputLine: note,
-              }),
-        ),
-        Effect.catch((error) =>
-          note(`Could not fetch the default branch: ${error.detail}`).pipe(Effect.as(null)),
-        ),
-      );
-      if (fetched !== null)
-        return {
-          startRef: fetched.commitSha,
-          baseRefName: `refs/remotes/${fetched.remoteRefName}`,
-        };
-    }
-    return (yield* git.hasCommit({ cwd, refName: "HEAD" }))
-      ? { startRef: "HEAD", baseRefName: (yield* git.currentBranch(cwd)) ?? "HEAD" }
-      : null;
-  });
-
   const prepareInBackground = Effect.fn("ThreadLaunchService.prepareInBackground")(function* (
     input: PreparationInput,
     threadId: ThreadId,
@@ -352,7 +310,7 @@ const make = Effect.gen(function* () {
         threadId,
         branch: input.workspaceStrategy.branch ?? null,
         baseRef: input.workspaceStrategy.baseRef,
-        stages: ["fetch", "checkout", "setup-script", "agent"],
+        stages: ["fetch", "checkout", "submodules", "setup-script", "agent"],
         fiber: yield* Effect.fiber,
       });
     } else if (reused !== undefined) {
@@ -454,17 +412,21 @@ const make = Effect.gen(function* () {
             .pipe(Effect.mapError(mapError(input, "update-thread", threadId)));
         }
         const requestedBaseRef = input.workspaceStrategy.baseRef;
+        const startFromOrigin =
+          input.workspaceStrategy.startFromOrigin ??
+          (yield* startWorktreesFromOrigin(input.projectId).pipe(
+            Effect.mapError(mapError(input, "provision-worktree", threadId)),
+          ));
         let startRef = requestedBaseRef;
         let baseRefName = requestedBaseRef;
-        const remote =
-          input.workspaceStrategy.startFromOrigin === true
-            ? yield* git
-                .resolveWorktreeBaseRemote({
-                  cwd: project.workspaceRoot,
-                  refName: input.workspaceStrategy.baseRef,
-                })
-                .pipe(Effect.mapError(mapError(input, "provision-worktree", threadId)))
-            : null;
+        const remote = startFromOrigin
+          ? yield* git
+              .resolveWorktreeBaseRemote({
+                cwd: project.workspaceRoot,
+                refName: input.workspaceStrategy.baseRef,
+              })
+              .pipe(Effect.mapError(mapError(input, "provision-worktree", threadId)))
+          : null;
         const shouldFetch = remote !== null;
         let fetched = false;
         yield* setupTracker.stageStatus(threadId, "fetch", shouldFetch ? "running" : "skipped");
@@ -487,23 +449,12 @@ const make = Effect.gen(function* () {
             );
           }
         }
-        if (
-          input.initialMessage?.scheduledTaskId !== undefined &&
-          !fetched &&
-          !requestedBaseRef.startsWith(":") &&
-          !(yield* git
-            .hasCommit({
-              cwd: project.workspaceRoot,
-              refName: requestedBaseRef === "-" ? "@{-1}" : requestedBaseRef,
-            })
-            .pipe(Effect.mapError(mapError(input, "provision-worktree", threadId)))) &&
-          !(yield* git
-            .hasRefNamed({ cwd: project.workspaceRoot, refName: requestedBaseRef })
-            .pipe(Effect.mapError(mapError(input, "provision-worktree", threadId))))
-        ) {
+        if (input.initialMessage?.scheduledTaskId !== undefined && !fetched) {
           const fallback = yield* savedWorktreeFallback(
+            git,
             project.workspaceRoot,
-            input.workspaceStrategy.startFromOrigin === true,
+            requestedBaseRef,
+            startFromOrigin,
             remote?.remoteName,
             note,
           ).pipe(Effect.mapError(mapError(input, "provision-worktree", threadId)));
@@ -573,6 +524,7 @@ const make = Effect.gen(function* () {
                   Effect.sync(() => {
                     worktreesDirectoryNotice = `Used the default folder: ${configured} ${describeWorktreesDirectoryUnavailable(unavailable.reason)}`;
                   }),
+                ...submoduleProgress(setupTracker, threadId),
                 onCheckoutProgress: (progress) =>
                   setupTracker.stage(threadId, "checkout", { percent: progress.percent }),
                 onHookStarted: (hookName) =>
@@ -628,7 +580,7 @@ const make = Effect.gen(function* () {
         if (existingBranchNotice !== null) {
           yield* Effect.logInfo(existingBranchNotice, { threadId, worktreePath });
         }
-        yield* setupTracker.update(threadId, (snapshot) => ({ ...snapshot, worktreePath, branch }));
+        yield* setupTracker.update(threadId, checkedOutTo(worktreePath, branch));
         const checkoutWarning = worktreesDirectoryNotice ?? hookStallNotice;
         yield* checkoutWarning === null
           ? setupTracker.stageStatus(
@@ -1175,17 +1127,15 @@ const make = Effect.gen(function* () {
           yield* validateReusableThread(input, candidateThreadId);
         }
 
+        const requested = input.workspaceStrategy;
         const requestedStrategy =
-          !replay &&
-          input.workspaceStrategy.type === "worktree" &&
-          input.workspaceStrategy.startFromOrigin === undefined
-            ? {
-                ...input.workspaceStrategy,
-                startFromOrigin: yield* startWorktreesFromOrigin(input.projectId).pipe(
-                  Effect.mapError(mapError(input, "provision-worktree", candidateThreadId)),
-                ),
-              }
-            : input.workspaceStrategy;
+          !replay && requested.type === "worktree" && requested.startFromOrigin === undefined
+            ? yield* startWorktreesFromOrigin(input.projectId).pipe(
+                Effect.map((startFromOrigin) => ({ ...requested, startFromOrigin })),
+                // Let durable preparation report a settings read failure in the thread.
+                Effect.orElseSucceed(() => requested),
+              )
+            : requested;
         const workspaceStrategy: ThreadLaunchWorkspaceStrategy =
           !cloud && input.workspaceStrategy.type === "root" && Option.isNone(launchReceipt)
             ? Option.match(

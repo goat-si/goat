@@ -24,6 +24,7 @@ export interface ThreadFindLocalSelection {
 export interface ThreadFindState {
   readonly threadKey: string | null;
   readonly query: string;
+  readonly positionQuery?: string | undefined;
   readonly offset: number;
   readonly start: ThreadFindStart | undefined;
   readonly focusRequestId: number;
@@ -85,14 +86,14 @@ function announceOpening(previous: ThreadFindState, threadKey: string): void {
 export function openThreadFind(threadKey: string): void {
   const previous = useThreadFindStore.getState();
   const current = previous.threadKey === threadKey ? previous : CLOSED_THREAD_FIND;
-  const query = current.query.trim();
-  const start = query ? readThreadFindPosition(threadKey, query) : undefined;
+  const query = current.positionQuery ?? current.query.trim();
+  const start = query.trim() ? readThreadFindPosition(threadKey, query) : undefined;
   announceOpening(previous, threadKey);
   useThreadFindStore.setState({
     ...current,
     threadKey,
     focusRequestId: previous.focusRequestId + 1,
-    ...(query
+    ...(query.trim()
       ? {
           start,
           offset: 0,
@@ -121,6 +122,7 @@ export function openThreadFindOnQuery(threadKey: string, find: PendingThreadFind
     ...(previous.threadKey === threadKey ? previous : CLOSED_THREAD_FIND),
     threadKey,
     query: find.query,
+    positionQuery: undefined,
     offset: 0,
     start: find.start,
     localSelection: null,
@@ -130,10 +132,15 @@ export function openThreadFindOnQuery(threadKey: string, find: PendingThreadFind
   });
 }
 
-export function setThreadFindQuery(threadKey: string, query: string): void {
-  const start = readThreadFindPosition(threadKey, query.trim());
+export function setThreadFindQuery(
+  threadKey: string,
+  query: string,
+  positionQuery = query.trim(),
+): void {
+  const start = readThreadFindPosition(threadKey, positionQuery.trim() ? positionQuery : "");
   useThreadFindStore.setState((previous) => ({
     query,
+    positionQuery,
     offset: 0,
     start,
     localSelection: null,

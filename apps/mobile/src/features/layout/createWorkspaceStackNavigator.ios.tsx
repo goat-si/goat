@@ -37,6 +37,12 @@ import { EnvironmentId, ThreadId } from "@goat/contracts";
 import { scopedThreadKey } from "../../lib/scopedEntities";
 import { WorkspaceTabsProvider, useWorkspaceTabs } from "../workspace/WorkspaceTabsContext";
 import { WorkspaceNativeTabs } from "../workspace/WorkspaceNativeTabs.ios";
+import { workspaceTabPage } from "../workspace/workspace-tab-navigation";
+import {
+  currentWorkspaceSelections,
+  workspaceSelectionCheck,
+} from "../workspace/workspace-selection-store";
+import { withKnownPullRequestSummary } from "../../state/use-thread-pr";
 import { workspaceUsesColumns } from "../workspace/workspace-tabs-state";
 import { isSettingsRoute, settingsOpenIn } from "../settings/settings-navigation";
 import { isNewTaskRoute, workspaceRoutesOf } from "./workspace-overlay-routes";
@@ -72,6 +78,7 @@ import {
   NativePrimaryColumnContext,
   NativeWorkspaceInspectorContext,
   NativeWorkspaceModeContext,
+  NativeWorkspaceTabActivityContext,
   WorkspaceSlotOptionsContext,
   slotScreenOptions,
 } from "../../native/v5-workspace-context";
@@ -96,7 +103,10 @@ function ColumnScreen(props: {
   readonly selectedThreadKey?: string | null;
   readonly selectedPullRequestKey?: string | null;
   readonly onDismiss: (routeKey: string, native: boolean) => void;
-  readonly onAppearance: (type: "willAppear" | "didAppear" | "willDisappear", key: string) => void;
+  readonly onAppearance: (
+    type: "willAppear" | "didAppear" | "willDisappear" | "didDisappear",
+    key: string,
+  ) => void;
   readonly onCompose?: () => void;
   readonly navigation: ViewProps["navigation"];
 }) {
@@ -141,9 +151,10 @@ function ColumnScreen(props: {
         props.onAppearance("willDisappear", key);
         props.navigation.emit({ type: "transitionStart", target: key, data: { closing: true } });
       }}
-      onDidDisappear={() =>
-        props.navigation.emit({ type: "transitionEnd", target: key, data: { closing: true } })
-      }
+      onDidDisappear={() => {
+        props.onAppearance("didDisappear", key);
+        props.navigation.emit({ type: "transitionEnd", target: key, data: { closing: true } });
+      }}
     >
       <NavigationContext value={descriptor.navigation}>
         <NavigationRouteContext value={descriptor.route}>
@@ -235,6 +246,10 @@ function WorkspaceColumns(
   }
 
   const workspaceTabs = useWorkspaceTabs();
+  const tabActivity = use(NativeWorkspaceTabActivityContext);
+  const isTabActive = tabActivity?.isActive;
+  const ownsInspector = tabActivity?.active ?? true;
+  const inspectorVisible = ownsInspector && inspector.visible;
   const selectedTab = workspaceTabs?.state.selectedTab;
   const settingsOpen = workspaceTabs?.settingsOpen ?? false;
   const openNewTask = startNewTask;
@@ -281,19 +296,19 @@ function WorkspaceColumns(
         routes: current.routes.filter((route) => route.key !== key),
         completed: new Set([...current.completed, key]),
       }));
-      if (native) {
+      if (native && (isTabActive?.() ?? true)) {
         const state = props.navigation.getState();
         const action = nativeWorkspacePopAction(state, key);
         if (action) props.navigation.dispatch(action);
       }
     },
-    [props.navigation],
+    [isTabActive, props.navigation],
   );
   const followCollapsedSplit = (
-    type: "willAppear" | "didAppear" | "willDisappear",
+    type: "willAppear" | "didAppear" | "willDisappear" | "didDisappear",
     key: string,
   ) => {
-    if (!collapsed.current || layout.usesSplitView) return;
+    if (!collapsed.current || layout.usesSplitView || isTabActive?.() === false) return;
     const transition = collapsedSplitTransition(
       collapsedColumn.current,
       { type, key },
@@ -313,6 +328,7 @@ function WorkspaceColumns(
 
   const primary = props.descriptors[props.primary.key];
   if (!primary) return null;
+  const primaryColumnWidth = (layout.listPaneWidth ?? 320) + (layout.listPaneGap ?? 0) / 2;
   return (
     <Split.Host
       ref={hostRef}
@@ -329,10 +345,11 @@ function WorkspaceColumns(
       onCollapse={() => {
         collapsed.current = true;
         collapsedColumn.current = { visible: compactColumn, leaving: null };
-        setNativelyPoppingWorkspaceRoute(null);
+        if (isTabActive?.() !== false) setNativelyPoppingWorkspaceRoute(null);
       }}
       onExpand={() => {
         collapsed.current = false;
+        if (isTabActive?.() === false) return;
         setNativelyPoppingWorkspaceRoute(null);
         // Native callbacks can outlive the render that created them, so decide from the live
         // router state. An expanded split has columns, so its tab gets a page beside the list.
@@ -360,20 +377,26 @@ function WorkspaceColumns(
             )
       }
       onDisplayModeWillChange={({ nativeEvent }) => {
-        if (!layout.primarySidebarOverlaysContent) return;
+        if (!layout.primarySidebarOverlaysContent || isTabActive?.() === false) return;
         if (nativeEvent.nextDisplayMode === "oneOverSecondary") setPrimarySidebarVisible(true);
         else if (nativeEvent.nextDisplayMode === "secondaryOnly") setPrimarySidebarVisible(false);
       }}
       displayModeButtonVisibility="never"
       presentsWithGesture
-      showInspector={inspector.visible}
-      onInspectorHide={() => {
-        if (inspector.visible) toggleAuxiliaryPane();
-      }}
+      showInspector={inspectorVisible}
+      onInspectorHide={
+        inspectorVisible
+          ? () => {
+              if (isTabActive?.() !== false) toggleAuxiliaryPane();
+            }
+          : undefined
+      }
       columnMetrics={{
-        minimumPrimaryColumnWidth: 280,
-        maximumPrimaryColumnWidth: Math.max(380, layout.listPaneWidth ?? 0),
-        preferredPrimaryColumnWidthOrFraction: layout.listPaneWidth ?? 320,
+        minimumPrimaryColumnWidth: layout.primarySidebarOverlaysContent ? primaryColumnWidth : 280,
+        maximumPrimaryColumnWidth: layout.primarySidebarOverlaysContent
+          ? primaryColumnWidth
+          : Math.max(380, primaryColumnWidth),
+        preferredPrimaryColumnWidthOrFraction: primaryColumnWidth,
         minimumSecondaryColumnWidth: 320,
         // UIKit can retain its automatic width despite a new preference; constrain both edges.
         minimumInspectorColumnWidth: inspectorWidth,
@@ -447,48 +470,50 @@ function WorkspaceColumns(
         <Split.HeaderConfig hidden />
         {/* Inspector panes host their own native stacks, which UIKit insets for the Duo's
             vertical bar wherever they sit, so each pane insets its own content instead. */}
-        <ColumnContent insetHorizontally={false}>
-          <View className="flex-1 bg-screen">
-            {inspector.render?.()}
-            {inspector.visible ? (
-              <GestureHandlerRootView
-                style={[StyleSheet.absoluteFill, { zIndex: 100 }]}
-                pointerEvents="box-none"
-                collapsable={false}
-              >
-                <SafeAreaView
-                  style={{ flex: 1 }}
-                  edges={["left", "right"]}
+        {ownsInspector ? (
+          <ColumnContent insetHorizontally={false}>
+            <View className="flex-1 bg-screen">
+              {inspector.render?.()}
+              {inspectorVisible ? (
+                <GestureHandlerRootView
+                  style={[StyleSheet.absoluteFill, { zIndex: 100 }]}
                   pointerEvents="box-none"
+                  collapsable={false}
                 >
-                  <View className="flex-1" pointerEvents="box-none">
-                    <View
-                      className="absolute inset-y-0 left-0 w-[22px] flex-row"
-                      pointerEvents="box-none"
-                    >
-                      <WorkspacePaneDivider
-                        accessibilityLabel="Resize inspector"
-                        currentWidth={inspectorWidth}
-                        resizeDirection={-1}
-                        onResizeStart={() => {
-                          resizeStartWidth.current = inspectorWidth;
-                        }}
-                        onResizeBy={(delta) => {
-                          const width = nativeInspectorColumnWidth({
-                            viewportWidth,
-                            horizontalSafeArea,
-                            fraction: (resizeStartWidth.current + delta) / viewportWidth,
-                          });
-                          inspector.setWidthFraction(width / viewportWidth);
-                        }}
-                      />
+                  <SafeAreaView
+                    style={{ flex: 1 }}
+                    edges={["left", "right"]}
+                    pointerEvents="box-none"
+                  >
+                    <View className="flex-1" pointerEvents="box-none">
+                      <View
+                        className="absolute inset-y-0 left-0 w-[22px] flex-row"
+                        pointerEvents="box-none"
+                      >
+                        <WorkspacePaneDivider
+                          accessibilityLabel="Resize inspector"
+                          currentWidth={inspectorWidth}
+                          resizeDirection={-1}
+                          onResizeStart={() => {
+                            resizeStartWidth.current = inspectorWidth;
+                          }}
+                          onResizeBy={(delta) => {
+                            const width = nativeInspectorColumnWidth({
+                              viewportWidth,
+                              horizontalSafeArea,
+                              fraction: (resizeStartWidth.current + delta) / viewportWidth,
+                            });
+                            inspector.setWidthFraction(width / viewportWidth);
+                          }}
+                        />
+                      </View>
                     </View>
-                  </View>
-                </SafeAreaView>
-              </GestureHandlerRootView>
-            ) : null}
-          </View>
-        </ColumnContent>
+                  </SafeAreaView>
+                </GestureHandlerRootView>
+              ) : null}
+            </View>
+          </ColumnContent>
+        ) : null}
       </Split.Inspector>
     </Split.Host>
   );
@@ -496,7 +521,6 @@ function WorkspaceColumns(
 
 function WorkspaceStackView(props: ViewProps & { readonly nativeColumns: boolean }) {
   const { layout } = useAdaptiveWorkspaceLayout();
-  const workspace = useWorkspaceTabs()!;
   // Native dismiss commits the route pop after the transition. Restore the dock
   // when the primary screen starts appearing, including interactive back gestures.
   const [primaryVisible, setPrimaryVisible] = useState(false);
@@ -521,7 +545,6 @@ function WorkspaceStackView(props: ViewProps & { readonly nativeColumns: boolean
   const descriptors = props.descriptors;
   const baseRoute = { key: `${props.state.key}:workspace`, name: "Workspace" };
   const visibleRoute = projection.detail.at(-1) ?? primaryRoute;
-  const workspacePage = !workspaceUsesColumns(workspace.state.selectedTab, workspace.settingsOpen);
   const baseDescriptor: Descriptor = {
     ...primaryDescriptor,
     navigation: props.descriptors[visibleRoute.key]!.navigation,
@@ -531,35 +554,60 @@ function WorkspaceStackView(props: ViewProps & { readonly nativeColumns: boolean
     render: () => (
       <WorkspaceNativeTabs
         hidden={
-          !workspacePage &&
           projection.detail.length > 0 &&
           !primaryVisible &&
           !layout.usesSplitView &&
           (metrics?.verticalBarEdge ?? "none") === "none"
         }
       >
-        {props.nativeColumns && !workspacePage ? (
-          <WorkspaceColumns
-            {...props}
-            descriptors={descriptors}
-            primary={primaryRoute}
-            detail={projection.detail}
-            presentationVisible={presentationVisible}
-          />
-        ) : (
-          <V5CardStackView
-            {...props}
-            onRootVisibilityChange={setPrimaryVisible}
-            onNativePopChange={setNativelyPoppingWorkspaceRoute}
-            descriptors={descriptors}
-            state={{
-              ...props.state,
-              routes: [primaryRoute, ...projection.detail],
-              index: projection.detail.length,
-              preloadedRoutes: [],
-            }}
-          />
-        )}
+        {(slotWorkspace, prewarming) => {
+          const usesColumns = workspaceUsesColumns(
+            slotWorkspace.state.selectedTab,
+            slotWorkspace.settingsOpen,
+          );
+          const destination = slotWorkspace.settingsOpen
+            ? "settings"
+            : slotWorkspace.state.selectedTab;
+          const page = prewarming
+            ? workspaceTabPage(
+                { routes: [primaryRoute] },
+                destination,
+                currentWorkspaceSelections(),
+                {
+                  columns: layout.usesSplitView,
+                  check: workspaceSelectionCheck,
+                  seedPullRequest: withKnownPullRequestSummary,
+                },
+              )
+            : undefined;
+          const detail = prewarming ? (page ? [page] : []) : projection.detail;
+          const slotDescriptors =
+            page && !descriptors[page.key]
+              ? { ...descriptors, [page.key]: props.describe(page, true) }
+              : descriptors;
+          return props.nativeColumns && usesColumns ? (
+            <WorkspaceColumns
+              {...props}
+              descriptors={slotDescriptors}
+              primary={primaryRoute}
+              detail={detail}
+              presentationVisible={presentationVisible && !prewarming}
+            />
+          ) : (
+            <V5CardStackView
+              {...props}
+              onRootVisibilityChange={setPrimaryVisible}
+              onNativePopChange={setNativelyPoppingWorkspaceRoute}
+              descriptors={slotDescriptors}
+              state={{
+                ...props.state,
+                routes: [primaryRoute, ...detail],
+                index: detail.length,
+                preloadedRoutes: [],
+              }}
+            />
+          );
+        }}
       </WorkspaceNativeTabs>
     ),
   };

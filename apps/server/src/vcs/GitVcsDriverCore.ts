@@ -3,7 +3,9 @@ import { createTrace2Monitor } from "./gitTrace2Monitor.ts";
 export { splitNullSeparatedGitStdoutPaths } from "./gitStdoutPaths.ts";
 import {
   parseDefaultBranchFromRemoteHeadRef,
+  remoteHeadRefArgs,
   resolvePrimaryDefaultBranch,
+  servedRemoteBranch,
 } from "./primaryDefaultBranch.ts";
 import { checkConflictMarkers } from "./commitConflictMarkers.ts";
 import { gitCommandContext } from "./gitCommandContext.ts";
@@ -28,7 +30,6 @@ import {
   rangeStatArgs,
   rangePatchArgs,
 } from "./gitGeneratedContextArgs.ts";
-import { GOAT_PRE_REFRESH_REF } from "@goat/contracts/legacyT3Names";
 import * as Cache from "effect/Cache";
 import * as Cause from "effect/Cause";
 import * as Clock from "effect/Clock";
@@ -51,7 +52,6 @@ import * as Stream from "effect/Stream";
 import {
   describeWorktreesDirectoryUnavailable,
   GitCommandError,
-  type GitCommandFailureReason,
   GOAT_PROJECT_FILE_NAME,
   type ReviewDiffFileContentsInput,
   type ReviewDiffPreviewInput,
@@ -118,6 +118,7 @@ import { splitNullSeparatedGitStdoutPaths } from "./gitStdoutPaths.ts";
 import { failedUntrackedListing, makeUntrackedTotalsBackoff } from "./untrackedTotalsBackoff.ts";
 import { commitContextObjects, mergeHeadExists } from "./commitContextObjects.ts";
 import { isMissingGitCwdError, isNonRepositoryGitStderr } from "./gitNonRepository.ts";
+import { classifyGitFailure, gitFailureDetail } from "./gitFailureClassification.ts";
 import { localTrackingDestination } from "./localTrackingDestination.ts";
 
 const DEFAULT_TIMEOUT_MS = 30_000;
@@ -363,85 +364,6 @@ function parseUpstreamRefWithRemoteNames(
     remoteName: parsed.remoteName,
     branchName: parsed.branchName,
   };
-}
-
-// Stderr can echo credentials from argv/URLs; classify fixed patterns without exposing matched text.
-const GIT_FAILURE_REASON_PATTERNS: ReadonlyArray<readonly [RegExp, GitCommandFailureReason]> = [
-  [/would clobber existing tag/i, "tag_would_be_clobbered"],
-  [/is already (?:used by worktree at|checked out at)/i, "branch_checked_out_in_worktree"],
-  [/a branch named .+ already exists/i, "branch_already_exists"],
-  [/'refs\/[^'\n]+' exists; cannot create 'refs\//i, "ref_name_conflict"],
-  [
-    /(?:authentication failed|could not read Username|could not read Password|permission denied \([a-z-]+(?:,[a-z-]+)*\)|permission denied, please try again)/i,
-    "authentication_failed",
-  ],
-  [/host key verification failed/i, "host_key_unverified"],
-  [
-    /(?:could not read from remote repository|does not appear to be a git repository|repository .+ not found)/i,
-    "remote_unreachable",
-  ],
-  // Unquoted already-exists errors also describe ref/tag collisions; require quoted paths.
-  [/fatal: '[^']+' already exists|destination path .+ already exists/i, "path_already_exists"],
-  // Ambiguous revision/path and pathspec failures can name files, so omit them.
-  // Anchor to a diagnostic line to avoid matching quoted paths in other errors.
-  [
-    /^fatal: (?:invalid reference: |not a valid object name|needed a single revision|bad revision |'.+' is not a commit and a branch '.+' cannot be created from it)/im,
-    "ref_not_found",
-  ],
-  // `[remote rejected]` is only printed for a push. The remote's explanation
-  // follows in parentheses; it is server text, so it is never quoted.
-  [/^[ \t]*![ \t]+\[remote rejected\]/im, "push_rejected_by_remote"],
-  // A fetch into a diverged local branch prints the same `[rejected]` line, but
-  // only a push goes on to report "failed to push some refs".
-  [
-    /^[ \t]*![ \t]+\[rejected\][^\n]*\((?:non-fast-forward|fetch first)\)[\s\S]*^error: failed to push some refs/im,
-    "push_rejected_non_fast_forward",
-  ],
-];
-
-// Reasons the user can act on get a sentence in place of the generic detail.
-const GIT_FAILURE_REASON_DETAILS: Partial<Record<GitCommandFailureReason, string>> = {
-  push_rejected_by_remote:
-    "The remote rejected the push. Push this branch from a terminal to see the server's message.",
-  push_rejected_non_fast_forward:
-    "The remote has commits this branch doesn't have. Pull or rebase, then push again.",
-};
-
-function gitFailureDetail(reason: GitCommandFailureReason | null): string {
-  return (
-    (reason === null ? undefined : GIT_FAILURE_REASON_DETAILS[reason]) ??
-    "Git command exited with a non-zero status."
-  );
-}
-
-// Existing non-commit objects share the missing-ref fatal diagnostic; Git
-// distinguishes them with a separate error line.
-const GIT_NOT_A_COMMIT_PATTERN = /^error: .+(?:, not a commit|expected commit type)/im;
-
-// Trust only Git's diagnostic prefixes: local hooks can write indistinguishable text.
-// Exclude `remote:` too, since it prefixes remote hook output as well as server diagnostics.
-const GIT_DIAGNOSTIC_LINE_PATTERN = /^(?:fatal|error):|^!\s|^\s+!\s/;
-// SSH credential refusals are unprefixed; Git's later generic error would otherwise misclassify them as unreachable.
-const SSH_TRANSPORT_REFUSAL_PATTERN =
-  /Permission denied \((?:publickey|password|keyboard-interactive)|Permission denied, please try again|Host key verification failed/i;
-
-function classifyGitFailure(stderr: string): GitCommandFailureReason | null {
-  const diagnostics = stderr
-    .split(/\r?\n/)
-    .filter(
-      (line) =>
-        GIT_DIAGNOSTIC_LINE_PATTERN.test(line) ||
-        (!line.startsWith("remote:") && SSH_TRANSPORT_REFUSAL_PATTERN.test(line)),
-    )
-    .join("\n");
-  if (diagnostics.length === 0) return null;
-  if (isNonRepositoryGitStderr(diagnostics)) return "not_a_repository";
-  for (const [pattern, reason] of GIT_FAILURE_REASON_PATTERNS) {
-    if (!pattern.test(diagnostics)) continue;
-    if (reason === "ref_not_found" && GIT_NOT_A_COMMIT_PATTERN.test(diagnostics)) continue;
-    return reason;
-  }
-  return null;
 }
 
 // `--short` and `--abbrev-ref` print `heads/<name>` when a tag shares the branch's name, so
@@ -1348,12 +1270,9 @@ export const makeGitVcsDriverCore = Effect.fn("makeGitVcsDriverCore")(function* 
     cwd: string,
     remoteName: string,
   ): Effect.Effect<string | null, GitCommandError> =>
-    executeGit(
-      "GitVcsDriver.resolveDefaultBranchName",
-      cwd,
-      ["symbolic-ref", `refs/remotes/${remoteName}/HEAD`],
-      { allowNonZeroExit: true },
-    ).pipe(
+    executeGit("GitVcsDriver.resolveDefaultBranchName", cwd, remoteHeadRefArgs(remoteName), {
+      allowNonZeroExit: true,
+    }).pipe(
       Effect.map((result) => {
         if (result.exitCode !== 0) {
           return null;
@@ -3390,7 +3309,7 @@ export const makeGitVcsDriverCore = Effect.fn("makeGitVcsDriverCore")(function* 
         executeGit(
           "GitVcsDriver.listRefs.defaultRef",
           fetchCwd,
-          [...gitDirArgs, "symbolic-ref", "refs/remotes/origin/HEAD"],
+          [...gitDirArgs, ...remoteHeadRefArgs("origin")],
           {
             timeoutMs: 5_000,
             allowNonZeroExit: true,
@@ -3418,7 +3337,7 @@ export const makeGitVcsDriverCore = Effect.fn("makeGitVcsDriverCore")(function* 
     }
     const defaultBranch =
       defaultRefResult.exitCode === 0
-        ? defaultRefResult.stdout.trim().replace(/^refs\/remotes\/origin\//, "")
+        ? parseDefaultBranchFromRemoteHeadRef(defaultRefResult.stdout, "origin")
         : null;
     const parsedWorktreeEntries =
       worktreeListResult.exitCode === 0
@@ -4284,12 +4203,14 @@ export const makeGitVcsDriverCore = Effect.fn("makeGitVcsDriverCore")(function* 
         runGit(
           "GitVcsDriver.createWorktree.updateSubmodules",
           worktreePath,
-          ["submodule", "update", "--init", ...args],
+          ["submodule", "update", "--init", ...(onSubmoduleLine ? ["--progress"] : []), ...args],
           {
             timeoutMs: null,
             ...(onSubmoduleLine
               ? {
                   env: { LANGUAGE: "C" },
+                  appendTruncationMarker: true,
+                  keepLineCallbacksAfterTruncation: true,
                   progress: { onStdoutLine: onSubmoduleLine, onStderrLine: onSubmoduleLine },
                 }
               : {}),
@@ -4458,28 +4379,14 @@ export const makeGitVcsDriverCore = Effect.fn("makeGitVcsDriverCore")(function* 
         ["merge-base", "--is-ancestor", headCommit, input.targetCommit],
         { allowNonZeroExit: true },
       ).pipe(Effect.map((result) => result.exitCode === 0));
-      // Rewritten heads require reset; allow only clean checkouts still at the pre-fetch upstream commit.
-      if (!isAncestor && headCommit !== input.resetWhenHeadCommit) {
-        return { headCommit, moved: false, onTarget: false };
-      }
-
       if (!isAncestor) {
-        // Retain the reset-away commit; rewritten remote heads no longer provide a path back.
-        yield* executeGit(
-          "GitVcsDriver.refreshCheckedOutBranch.keepPrevious",
-          input.cwd,
-          ["update-ref", GOAT_PRE_REFRESH_REF, headCommit],
-          { fallbackErrorDetail: "git failed to record the previous checkout commit" },
-        );
+        return { headCommit, moved: false, onTarget: false };
       }
 
       yield* executeGit(
         "GitVcsDriver.refreshCheckedOutBranch.move",
         input.cwd,
-        // reset --merge refuses tracked edits racing our cleanliness check, preserving work like --ff-only does.
-        isAncestor
-          ? ["merge", "--ff-only", input.targetCommit]
-          : ["reset", "--merge", input.targetCommit],
+        ["merge", "--ff-only", "--no-overwrite-ignore", input.targetCommit],
         {
           // Killing a slow checkout partway through strands a half-updated working tree.
           timeoutMs: null,
@@ -4623,12 +4530,9 @@ export const makeGitVcsDriverCore = Effect.fn("makeGitVcsDriverCore")(function* 
         remoteName: "origin",
         branchName: refName,
       };
-      return remoteNames.includes(remoteName) &&
-        branchName !== "HEAD" &&
-        !branchName.startsWith("-") &&
-        !/[\x00-\x20\x7f~^:?*[\]\\]|\.\.|@\{/.test(branchName)
-        ? { remoteName, branchName }
-        : null;
+      if (branchName.startsWith("-") || /[\x00-\x20\x7f~^:?*[\]\\]|\.\.|@\{/.test(branchName))
+        return null;
+      return servedRemoteBranch(remoteNames, { remoteName, branchName });
     });
 
   /**

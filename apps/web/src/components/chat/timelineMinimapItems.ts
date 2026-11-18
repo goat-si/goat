@@ -1,4 +1,9 @@
-import { isAttachmentOnlyBootstrapPrompt } from "@goat/shared/composerContextReferences";
+import type { AssistantCitation } from "@goat/contracts";
+import { collectAssistantCitations } from "@goat/shared/assistantCitations";
+import {
+  collectComposerContextReferences,
+  isAttachmentOnlyBootstrapPrompt,
+} from "@goat/shared/composerContextReferences";
 import type { Nodes } from "mdast";
 import remarkCjkFriendly from "remark-cjk-friendly/parseOnly";
 import remarkGfm from "remark-gfm";
@@ -59,6 +64,11 @@ const markdownPreviewParser = unified()
   .use(remarkGfm)
   .use(remarkCjkFriendly)
   .freeze();
+const userMarkdownPreviewParser = unified()
+  .use(remarkParse)
+  .use(remarkGfm, { singleTilde: false })
+  .use(remarkCjkFriendly)
+  .freeze();
 
 const INLINE_PARENT_TYPES = new Set<Nodes["type"]>([
   "paragraph",
@@ -71,8 +81,9 @@ const INLINE_PARENT_TYPES = new Set<Nodes["type"]>([
   "linkReference",
 ]);
 
-function markdownNodeText(node: Nodes): string {
+function markdownNodeText(node: Nodes, userMessage = false): string {
   if (node.type === "html") {
+    if (userMessage) return node.value;
     return node.value
       .replace(/<!--[\s\S]*?(?:-->|$)/g, "")
       .replace(/<\/?([a-z][\w-]*)(?:[^"'<>]|"[^"]*"|'[^']*')*>/gi, (_, tag: string) =>
@@ -88,7 +99,7 @@ function markdownNodeText(node: Nodes): string {
   if (node.type === "image" || node.type === "imageReference") return node.alt ?? "";
   if (!("children" in node)) return "";
   const separator = INLINE_PARENT_TYPES.has(node.type) ? "" : " ";
-  return node.children.map(markdownNodeText).join(separator);
+  return node.children.map((child) => markdownNodeText(child, userMessage)).join(separator);
 }
 
 /** Markdown as one line of the text it renders, without markup or link targets. */
@@ -96,9 +107,64 @@ export function markdownPlainText(markdown: string): string {
   return markdownNodeText(markdownPreviewParser.parse(markdown)).replace(/\s+/g, " ").trim();
 }
 
-function compactMinimapPreview(text: string | null | undefined) {
-  const compact = text?.replace(/\s+/g, " ").trim() ?? "";
-  return compact.length > 0 ? compact : null;
+const MINIMAP_PREFIX_LENGTH = 1_500;
+
+function markdownMinimapPreview(markdown: string | null) {
+  // The tooltip only shows a few lines, including while assistant text is streaming.
+  return markdown === null
+    ? null
+    : markdownPlainText(markdown.slice(0, MINIMAP_PREFIX_LENGTH)) || null;
+}
+
+function sliceCitationText(text: string, limit: number): string {
+  const lastCodePoint = text.codePointAt(limit - 1) ?? 0;
+  return text.slice(0, lastCodePoint > 0xffff ? limit - 1 : limit);
+}
+
+function citationPreviewLabel(citation: AssistantCitation, limit: number): string {
+  const quote = sliceCitationText(citation.text, limit);
+  const commentPrefix = " Comment: ";
+  const remaining = limit - quote.length - commentPrefix.length;
+  return citation.comment === undefined || remaining <= 0
+    ? quote
+    : quote + commentPrefix + sliceCitationText(citation.comment, remaining);
+}
+
+function expandUserPreviewTokens(markdown: string) {
+  const tokens = [
+    ...collectComposerContextReferences(markdown, MINIMAP_PREFIX_LENGTH).map(
+      ({ start, end, label }) => ({
+        start,
+        end,
+        label,
+      }),
+    ),
+    ...collectAssistantCitations(markdown, MINIMAP_PREFIX_LENGTH),
+  ].sort((a, b) => a.start - b.start);
+  let expanded = "";
+  let offset = 0;
+  for (const token of tokens) {
+    const { start, end } = token;
+    if (start < offset) continue;
+    expanded += markdown.slice(offset, start);
+    const label =
+      "citation" in token
+        ? citationPreviewLabel(token.citation, Math.max(0, MINIMAP_PREFIX_LENGTH - expanded.length))
+        : token.label;
+    const literal = label.replace(/\s+/g, " ").replace(/[!-\/:-@[-`{-~]/g, "\\$&");
+    expanded += literal;
+    offset = end;
+  }
+  return expanded + markdown.slice(offset, MINIMAP_PREFIX_LENGTH);
+}
+
+function userMinimapPreview(markdown: string | null) {
+  if (markdown === null) return null;
+  const expanded = expandUserPreviewTokens(markdown);
+  return (
+    markdownNodeText(userMarkdownPreviewParser.parse(expanded), true).replace(/\s+/g, " ").trim() ||
+    null
+  );
 }
 
 export function resolveTimelineMinimapPreview(
@@ -108,12 +174,7 @@ export function resolveTimelineMinimapPreview(
     ? null
     : {
         ...item,
-        userText: compactMinimapPreview(item.userText),
-        // The tooltip shows three lines; bound parsing work while long responses stream.
-        assistantText: compactMinimapPreview(
-          item.assistantText === null
-            ? null
-            : markdownNodeText(markdownPreviewParser.parse(item.assistantText.slice(0, 1_500))),
-        ),
+        userText: userMinimapPreview(item.userText),
+        assistantText: markdownMinimapPreview(item.assistantText),
       };
 }

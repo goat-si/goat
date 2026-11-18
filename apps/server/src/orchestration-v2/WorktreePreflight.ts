@@ -1,4 +1,4 @@
-import { ProjectId } from "@goat/contracts";
+import { ProjectId, type ServerSettingsError } from "@goat/contracts";
 import { isTemporaryWorktreeBranch } from "@goat/shared/git";
 import { normalizeProjectPathForComparison } from "@goat/shared/path";
 import * as Effect from "effect/Effect";
@@ -94,7 +94,7 @@ export function makeWorktreePreflight({
   git: GitWorkflow.GitWorkflowService["Service"];
   receipts: CommandReceiptStore.CommandReceiptStoreV2["Service"];
   managedFolders: ManagedProjectFolders.ManagedProjectFolders["Service"];
-  startWorktreesFromOrigin: (projectId: ProjectId) => Effect.Effect<boolean, unknown>;
+  startWorktreesFromOrigin: (projectId: ProjectId) => Effect.Effect<boolean, ServerSettingsError>;
 }) {
   const checkWorktreeBase: ThreadLaunchService["Service"]["checkWorktreeBase"] = Effect.fn(
     "ThreadLaunchService.checkWorktreeBase",
@@ -187,11 +187,15 @@ export function makeWorktreePreflight({
       // `git worktree add` reads `-` as the previous checkout.
       if (yield* git.hasCommit({ cwd, refName: baseRef === "-" ? "@{-1}" : baseRef }))
         return undefined;
-      if (
-        (strategy.startFromOrigin ?? (yield* startWorktreesFromOrigin(input.projectId))) &&
-        (yield* git.resolveWorktreeBaseRemote({ cwd, refName: baseRef })) !== null
-      )
-        return undefined;
+      if (strategy.startFromOrigin ?? (yield* startWorktreesFromOrigin(input.projectId))) {
+        const remote = yield* git.resolveWorktreeBaseRemote({ cwd, refName: baseRef });
+        // The remote may have deleted the branch; ask it rather than trusting the name.
+        if (
+          remote !== null &&
+          (yield* git.fetchWorktreeBaseCommit({ cwd, refName: baseRef, remote })) !== null
+        )
+          return undefined;
+      }
       // git worktree add accepts remote-tracking branches; let Git decide when any matching ref exists.
       if (yield* git.hasRefNamed({ cwd, refName: baseRef })) return undefined;
       return (yield* git.hasCommit({ cwd, refName: "HEAD" })) ? project : undefined;

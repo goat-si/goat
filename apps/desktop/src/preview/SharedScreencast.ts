@@ -1,20 +1,10 @@
-/**
- * One debugger screencast shared by every relay session that asked for frames.
- *
- * Electron gives a webContents one debugger session, so each viewer's
- * `Page.startScreencast` would otherwise replace the others' and its stop would
- * end their frames. Chromium also counts acks per screencast rather than per
- * frame, so the page gets one ack per frame, once every viewer it reached has
- * sent its own.
- */
-
+// Every viewer shares one Electron debugger screencast. Chromium counts one native ACK per frame.
 type ScreencastParams = Record<string, unknown>;
 type ViewerRequest = { readonly params: ScreencastParams; readonly token: object };
 
-interface PendingFrame {
-  readonly sessionId: unknown;
-  readonly owers: Set<string>;
-}
+type FrameParams = ScreencastParams & { readonly sessionId: number };
+
+const MAX_HELD_NATIVE_FRAMES = 8;
 
 const number = (value: unknown) => (typeof value === "number" ? value : undefined);
 
@@ -46,8 +36,7 @@ export interface SharedScreencast {
   readonly stop: (viewer: string) => Promise<void>;
   /** Lets go of a viewer that left without stopping, such as a detached session. */
   readonly leave: (viewer: string) => void;
-  /** The viewers a frame goes to. */
-  readonly frame: (params: { readonly sessionId?: unknown }) => ReadonlyArray<string>;
+  readonly frame: (params: ScreencastParams) => void;
   readonly ack: (viewer: string, sessionId: unknown) => void;
   /** Ends the screencast for every viewer, as when the relay connection closes. */
   readonly close: () => void;
@@ -55,9 +44,17 @@ export interface SharedScreencast {
 
 export function createSharedScreencast(
   send: (method: string, params: ScreencastParams) => Promise<unknown>,
+  deliver: (viewer: string, frame: FrameParams) => void,
 ): SharedScreencast {
   const viewers = new Map<string, ViewerRequest>();
-  let pending: Array<PendingFrame> = [];
+  const outstanding = new Map<string, number>();
+  const skipped = new Map<string, FrameParams>();
+  const heldNative: number[] = [];
+  const clear = () => {
+    outstanding.clear();
+    skipped.clear();
+    heldNative.length = 0;
+  };
   /** What Chromium runs now; null while stopped. */
   let running: ScreencastParams | null = null;
   let stopping = false;
@@ -66,15 +63,25 @@ export function createSharedScreencast(
   let queue: Promise<void> = Promise.resolve();
   let syncsInFlight = 0;
 
-  const ackPage = (frame: PendingFrame) =>
-    void send("Page.screencastFrameAck", { sessionId: frame.sessionId }).catch(() => undefined);
+  const ackPage = (sessionId: number) =>
+    void send("Page.screencastFrameAck", { sessionId }).catch(() => undefined);
 
-  const release = (viewer: string) => {
-    pending = pending.filter((frame) => {
-      if (!frame.owers.delete(viewer) || frame.owers.size > 0) return true;
-      ackPage(frame);
-      return false;
-    });
+  const sendFrame = (viewer: string, frame: FrameParams) => {
+    outstanding.set(viewer, frame.sessionId);
+    deliver(viewer, frame);
+  };
+
+  const releaseUnusedCredits = () => {
+    if (skipped.size === 0) for (const id of heldNative.splice(0)) ackPage(id);
+  };
+
+  const remove = (viewer: string, retainDelivery = false) => {
+    const removed = viewers.delete(viewer);
+    skipped.delete(viewer);
+    // A stop in one viewer can leave the shared native run and its frame IDs alive.
+    if (!retainDelivery) outstanding.delete(viewer);
+    releaseUnusedCredits();
+    return removed;
   };
 
   const apply = async () => {
@@ -89,7 +96,7 @@ export function createSharedScreencast(
     // screencast starts its own ack count, so frames still owed need none.
     if (running !== null) {
       stopping = true;
-      pending = [];
+      clear();
       try {
         await send("Page.stopScreencast", {});
         running = null;
@@ -102,7 +109,7 @@ export function createSharedScreencast(
       }
     }
     if (wanted === null) return;
-    pending = [];
+    clear();
     await send("Page.startScreencast", wanted);
     running = wanted;
   };
@@ -118,8 +125,7 @@ export function createSharedScreencast(
   };
 
   const leave = (viewer: string) => {
-    if (!viewers.delete(viewer)) return;
-    release(viewer);
+    if (!remove(viewer)) return;
     void sync().catch(() => undefined);
   };
 
@@ -133,41 +139,59 @@ export function createSharedScreencast(
       } catch (cause) {
         if (viewers.get(viewer)?.token === token) {
           if (previous) viewers.set(viewer, previous);
-          else viewers.delete(viewer);
+          else remove(viewer);
           await sync().catch(() => undefined);
         }
         throw cause;
       }
     },
     stop: (viewer) => {
-      viewers.delete(viewer);
-      release(viewer);
+      remove(viewer, true);
       return sync();
     },
     leave,
     frame: (params) => {
-      if (stopping) return [];
+      const sessionId = params["sessionId"];
+      if (stopping || typeof sessionId !== "number") return;
       if (viewers.size === 0) {
         // A failed last stop leaves Chromium streaming. A frame is its retry signal.
         if (running !== null && syncsInFlight === 0) void sync().catch(() => undefined);
-        return [];
+        return;
       }
-      pending.push({ sessionId: params.sessionId, owers: new Set(viewers.keys()) });
-      return [...viewers.keys()];
+      const frame = { ...params, sessionId };
+      let delivered = false;
+      for (const viewer of viewers.keys()) {
+        if (outstanding.has(viewer)) skipped.set(viewer, frame);
+        else {
+          sendFrame(viewer, frame);
+          delivered = true;
+        }
+      }
+      if (delivered) ackPage(sessionId);
+      else {
+        if (heldNative.length === MAX_HELD_NATIVE_FRAMES) {
+          const oldest = heldNative.shift();
+          if (oldest !== undefined) ackPage(oldest);
+        }
+        heldNative.push(sessionId);
+      }
     },
     ack: (viewer, sessionId) => {
-      const frame = pending.find(
-        (candidate) => candidate.sessionId === sessionId && candidate.owers.has(viewer),
-      );
-      if (!frame) return;
-      frame.owers.delete(viewer);
-      if (frame.owers.size > 0) return;
-      pending = pending.filter((candidate) => candidate !== frame);
-      ackPage(frame);
+      const sent = outstanding.get(viewer);
+      if (sent === undefined || sent !== sessionId) return;
+      outstanding.delete(viewer);
+      const latest = skipped.get(viewer);
+      if (latest) {
+        skipped.delete(viewer);
+        sendFrame(viewer, latest);
+        const native = heldNative.shift();
+        if (native !== undefined) ackPage(native);
+      }
+      releaseUnusedCredits();
     },
     close: () => {
       viewers.clear();
-      pending = [];
+      clear();
       void sync().catch(() => undefined);
     },
   };

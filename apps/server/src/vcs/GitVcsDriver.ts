@@ -48,8 +48,12 @@ import {
   materializeWorkspaceSnapshot,
   type MaterializeWorkspaceSnapshotInput,
 } from "./GitWorkspaceSnapshotMaterialize.ts";
+import { makeListAuthoredPaths } from "./checkpointAuthoredPaths.ts";
+import { restoreCheckpointFiles } from "./checkpointSkipWorktreeRestore.ts";
+import * as CheckpointTurnStart from "./checkpointTurnStart.ts";
 import { chunkPathsForGitCheckIgnore } from "./gitCheckIgnoreChunks.ts";
 import { parseGitRemoteVerboseOutput } from "./gitRemoteParsing.ts";
+import { WORKSPACE_FILES_MAX_OUTPUT_BYTES } from "./gitStdoutPaths.ts";
 
 export interface ExecuteGitInput {
   readonly operation: string;
@@ -280,8 +284,6 @@ export interface GitResolveCommitResult {
 export interface GitRefreshCheckedOutBranchInput {
   cwd: string;
   targetCommit: string;
-  /** Pre-fetch upstream commit; resetting away is safe only if HEAD stayed here. */
-  resetWhenHeadCommit?: string | null | undefined;
 }
 
 export interface GitRefreshCheckedOutBranchResult {
@@ -527,7 +529,6 @@ export class GitVcsDriver extends Context.Service<
   } & import("./GitSharedConfig.ts").SharedConfigDriver
 >()("goat/vcs/GitVcsDriver") {}
 
-const WORKSPACE_FILES_MAX_OUTPUT_BYTES = 16 * 1024 * 1024;
 const FLAGGED_INDEX_ENTRIES_MAX_BYTES = 1024 * 1024;
 const CHECKPOINT_RECOVERY_MAX_CANDIDATES = 64;
 const CHECKPOINT_RECOVERY_TIMEOUT = "5 seconds";
@@ -888,6 +889,7 @@ export const makeVcsDriverShape = Effect.fn("makeGitVcsDriverShape")(function* (
     readonly cwd: string;
     readonly ref: string;
     readonly strict: boolean;
+    readonly previousCheckpointRef?: VcsDriver.VcsCaptureCheckpointInput["previousCheckpointRef"];
   }): Effect.fn.Return<GitWorkspaceSnapshotResult, VcsError | GitWorkspaceSnapshotError> {
     const operation = VcsProcess.CHECKPOINT_CAPTURE_OPERATION;
     const readUntracked = Effect.fn("GitVcsDriver.snapshot.readUntracked")(function* () {
@@ -934,6 +936,12 @@ export const makeVcsDriverShape = Effect.fn("makeGitVcsDriverShape")(function* (
     return yield* Effect.gen(function* () {
       const capturedHead = yield* resolveHeadCommit(input.cwd);
       const headExists = capturedHead !== null;
+      // Read pinned to the same HEAD, so a switch landing while files are staged is the next one's.
+      const headMoves =
+        headExists && !input.strict
+          ? yield* CheckpointTurnStart.readHeadMoves(execute, input.cwd)
+          : [];
+      const headMark = CheckpointTurnStart.headMarkFor(headMoves, capturedHead);
       const untrackedBefore = input.strict ? yield* readUntracked() : [];
       if (input.strict) {
         if (!headExists)
@@ -1391,8 +1399,20 @@ export const makeVcsDriverShape = Effect.fn("makeGitVcsDriverShape")(function* (
         !/(?:^|\0)160000 /u.test(treeEntries.stdout);
       const message = input.strict
         ? `goat snapshot ref=${input.ref}`
-        : `goat checkpoint ref=${input.ref}`;
-      // HEAD is the parent so listAuthoredPaths can see how HEAD moved between checkpoints.
+        : `goat checkpoint ref=${input.ref}${CheckpointTurnStart.headMarkTrailer(headMark)}`;
+      const turnStart = yield* CheckpointTurnStart.buildTurnStart({
+        execute,
+        operation,
+        cwd: input.cwd,
+        checkpointRef: input.ref,
+        previousCheckpointRef: input.previousCheckpointRef,
+        headMark,
+        headMoves,
+        indexConfig,
+        durableWrite,
+        commitEnv,
+      });
+      // HEAD is the first parent so listAuthoredPaths can see how HEAD moved between checkpoints.
       const commitTreeResult = yield* execute({
         operation,
         cwd: input.cwd,
@@ -1401,6 +1421,7 @@ export const makeVcsDriverShape = Effect.fn("makeGitVcsDriverShape")(function* (
           "commit-tree",
           treeOid,
           ...(capturedHead === null ? [] : ["-p", capturedHead]),
+          ...(turnStart === null ? [] : ["-p", turnStart]),
           "-m",
           message,
         ],
@@ -1477,6 +1498,7 @@ export const makeVcsDriverShape = Effect.fn("makeGitVcsDriverShape")(function* (
         cwd: input.cwd,
         ref: input.checkpointRef,
         strict: false,
+        previousCheckpointRef: input.previousCheckpointRef,
       }).pipe(
         Effect.map(({ commitOid, complete }) => ({ commitOid, complete })),
         Effect.mapError((error) =>
@@ -1517,20 +1539,8 @@ export const makeVcsDriverShape = Effect.fn("makeGitVcsDriverShape")(function* (
       });
       // An empty index and checkpoint have nothing for git restore's pathspec to match.
       if (tracked.stdout.length > 0) {
-        yield* execute({
-          operation,
-          cwd: input.cwd,
-          args: [
-            ...longPaths,
-            "restore",
-            "--source",
-            commitOid,
-            "--worktree",
-            "--staged",
-            "--",
-            ".",
-          ],
-        });
+        const restoreInput = { execute, vcsProcess, operation, cwd: input.cwd, commitOid };
+        yield* restoreCheckpointFiles({ ...restoreInput, longPaths });
       }
       // Restoring away the last tracked file can remove a nested workspace directory.
       const recreateWorkspace = fileSystem.makeDirectory(input.cwd, { recursive: true }).pipe(
@@ -1594,15 +1604,13 @@ export const makeVcsDriverShape = Effect.fn("makeGitVcsDriverShape")(function* (
         "checkpoint.fallback_from_to_head": input.fallbackFromToHead,
       });
 
-      let fromRevision: string = input.fromCheckpointRef;
+      let fromRevision = yield* CheckpointTurnStart.resolveTurnStart(execute, input);
       if (input.fallbackFromToHead === true) {
         const resolvedFromCommit = yield* resolveCheckpointCommit(
           input.cwd,
           input.fromCheckpointRef,
         );
-        if (resolvedFromCommit) {
-          fromRevision = resolvedFromCommit;
-        } else {
+        if (!resolvedFromCommit) {
           const headCommit = yield* resolveHeadCommit(input.cwd);
           if (!headCommit) {
             return yield* new VcsProcessExitError({
@@ -1659,63 +1667,7 @@ export const makeVcsDriverShape = Effect.fn("makeGitVcsDriverShape")(function* (
       return result.stdout;
     }),
 
-    listAuthoredPaths: Effect.fn("GitVcsDriver.checkpoints.listAuthoredPaths")(function* (input) {
-      const operation = "GitVcsDriver.checkpoints.listAuthoredPaths";
-      const heads = yield* execute({
-        operation,
-        cwd: input.cwd,
-        args: [
-          "log",
-          "--no-walk=unsorted",
-          "--format=%P %ct",
-          `${input.fromCheckpointRef}^{commit}`,
-          `${input.toCheckpointRef}^{commit}`,
-        ],
-      });
-      const [fromLine = "", toLine = ""] = heads.stdout.trimEnd().split("\n");
-      const [startHead = "", capturedAt = ""] = fromLine.split(" ");
-      const [endHead = ""] = toLine.split(" ");
-      if (startHead === "" || endHead === "" || startHead === endHead) {
-        return null;
-      }
-
-      const listPaths = (args: ReadonlyArray<string>) =>
-        execute({
-          operation,
-          cwd: input.cwd,
-          args: [
-            "-c",
-            "diff.relative=false",
-            // log.showSignature prints verification text into the path list.
-            "-c",
-            "log.showSignature=false",
-            ...args,
-            "--name-only",
-            "-z",
-            "--no-renames",
-            "--no-ext-diff",
-          ],
-          maxOutputBytes: VcsDriver.CHECKPOINT_DIFF_MAX_OUTPUT_BYTES,
-          outputMode: "error",
-        }).pipe(Effect.map((result) => result.stdout.split("\0")));
-      // Remerge diffs retain merge conflict fixes while excluding clean upstream changes.
-      const pathLists = yield* Effect.all(
-        [
-          listPaths(["diff", startHead, `${input.fromCheckpointRef}^{commit}`]),
-          listPaths(["diff", endHead, `${input.toCheckpointRef}^{commit}`]),
-          listPaths(["log", "--format=", "--diff-merges=remerge", `${endHead}..${startHead}`]),
-          listPaths([
-            "log",
-            "--format=",
-            "--diff-merges=remerge",
-            `--since=@${capturedAt}`,
-            `${startHead}..${endHead}`,
-          ]),
-        ],
-        { concurrency: "unbounded" },
-      );
-      return new Set(pathLists.flat().filter((path) => path.length > 0));
-    }),
+    listAuthoredPaths: makeListAuthoredPaths(execute),
 
     deleteCheckpointRefs: Effect.fn("GitVcsDriver.checkpoints.deleteCheckpointRefs")(
       function* (input) {

@@ -106,7 +106,7 @@ export const makeSetAsideFolder = Effect.gen(function* () {
     ).pipe(
       Effect.onError(() =>
         restoreEntries(workspace, setAsidePath).pipe(
-          Effect.tap((back) => {
+          Effect.map((back) => {
             if (back) held.path = null;
           }),
         ),
