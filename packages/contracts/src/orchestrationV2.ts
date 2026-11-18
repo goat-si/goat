@@ -317,80 +317,14 @@ export const OrchestrationV2ContextTransfer = Schema.Struct({
 });
 export type OrchestrationV2ContextTransfer = typeof OrchestrationV2ContextTransfer.Type;
 
-export const OrchestrationV2CloudSourceRestriction = Schema.Literals([
-  "published-ref",
-  "clean-pushed-sha",
-  "project-folder",
-]);
-export type OrchestrationV2CloudSourceRestriction =
-  typeof OrchestrationV2CloudSourceRestriction.Type;
-
-export const OrchestrationV2SessionCapabilities = Schema.Struct({
-  sourceRestriction: Schema.optional(OrchestrationV2CloudSourceRestriction).pipe(
-    Schema.withDecodingDefault(Effect.succeed("published-ref" as const)),
-  ),
-  executionLocation: Schema.optional(Schema.Literals(["local", "cloud"])).pipe(
-    Schema.withDecodingDefault(Effect.succeed("local" as const)),
-  ),
-  followUp: Schema.optional(
-    Schema.Struct({
-      supported: Schema.Boolean,
-      reason: Schema.optional(Schema.String),
-    }),
-  ).pipe(Schema.withDecodingDefault(Effect.succeed({ supported: true }))),
-  supportsMultipleProviderThreadsPerSession: Schema.Boolean,
-  supportsModelSwitchInSession: Schema.Boolean,
-  supportsProviderSwitchingViaHandoff: Schema.Boolean,
-  supportsRuntimeModeSwitchInSession: Schema.Boolean,
-  pendingRequestsSurviveRestart: Schema.Boolean,
-});
-export type OrchestrationV2SessionCapabilities = typeof OrchestrationV2SessionCapabilities.Type;
-
-export const OrchestrationV2ThreadCapabilities = Schema.Struct({
-  canCreateEmptyThread: Schema.Boolean,
-  canReadThreadSnapshot: Schema.Boolean,
-  canRollbackThread: Schema.Boolean,
-  canForkThread: Schema.Boolean,
-  canForkFromTurn: Schema.Boolean,
-  canForkFromSubagentThread: Schema.Boolean,
-  exposesNativeThreadId: Schema.Boolean,
-  /** Native fork starts the new provider thread in the target thread's cwd. */
-  forkHonorsTargetCwd: Schema.optionalKey(Schema.Boolean),
-});
-export type OrchestrationV2ThreadCapabilities = typeof OrchestrationV2ThreadCapabilities.Type;
-
-export const OrchestrationV2TurnCapabilities = Schema.Struct({
-  supportsNativeGoals: Schema.optional(Schema.Boolean),
-  exposesNativeTurnId: Schema.Boolean,
-  emitsTurnStarted: Schema.Boolean,
-  emitsTurnCompleted: Schema.Boolean,
-  supportsInterrupt: Schema.Boolean,
-  supportsActiveSteering: Schema.Boolean,
-  // Some native steering mechanisms cancel pending tools before consuming the message.
-  activeSteeringInterruptsTools: Schema.optional(Schema.Boolean),
-  // Some take text only, so a steer with attachments restarts the turn instead.
-  activeSteeringAcceptsAttachments: Schema.optional(Schema.Boolean),
-  // Only where a steer leaves a running automatic compaction intact; otherwise clients queue.
-  activeSteeringDuringCompaction: Schema.optional(Schema.Boolean),
-  supportsSteeringByInterruptRestart: Schema.Boolean,
-  supportsQueuedMessages: Schema.Boolean,
-  terminalStatusQuality: Schema.Literals(["strong", "weak", "none"]),
-});
-export type OrchestrationV2TurnCapabilities = typeof OrchestrationV2TurnCapabilities.Type;
-
-export const OrchestrationV2StreamingCapabilities = Schema.Struct({
-  streamsAssistantText: Schema.Boolean,
-  streamsReasoning: Schema.Boolean,
-  streamsToolOutput: Schema.Boolean,
-  streamsPlanText: Schema.Boolean,
-  emitsMessageCompleted: Schema.Boolean,
-});
-export type OrchestrationV2StreamingCapabilities = typeof OrchestrationV2StreamingCapabilities.Type;
-
 export * from "./providerCapabilityParts.ts";
 export * from "./assistantMessagePhase.ts";
 import { AssistantMessagePhase } from "./assistantMessagePhase.ts";
 import {
+  OrchestrationV2SessionCapabilities,
+  OrchestrationV2StreamingCapabilities,
+  OrchestrationV2ThreadCapabilities,
+  OrchestrationV2TurnCapabilities,
   OrchestrationV2ToolCapabilities,
   OrchestrationV2ApprovalCapabilities,
   OrchestrationV2PlanningCapabilities,
