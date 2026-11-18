@@ -1,6 +1,7 @@
 import {
   AuthOrchestrationReadScope,
   AuthSessionId,
+  RpcScopeAuthorization,
   WsSubscribeServerConfigRpc,
   WsServerRefreshProvidersRpc,
   type AuthEnvironmentScope,
@@ -138,7 +139,9 @@ export function makeProviderCatalogRpc(options: {
       );
     }).pipe(Effect.provideContext(sources));
     return yield* RpcTest.makeClient(
-      RpcGroup.make(WsSubscribeServerConfigRpc, WsServerRefreshProvidersRpc),
+      RpcGroup.make(WsSubscribeServerConfigRpc, WsServerRefreshProvidersRpc).middleware(
+        RpcScopeAuthorization,
+      ),
     ).pipe(Effect.provideContext(handlers), Effect.provide(RpcAuthorization.layer(scopes)));
   });
 }

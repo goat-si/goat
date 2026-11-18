@@ -126,3 +126,50 @@ it.effect("digest subscribers get lists on demand and a matching digest on the c
     assert.deepEqual(refreshed?.workspaceSnapshots, [local.workspaceSnapshots[0]]);
   }).pipe(Effect.scoped),
 );
+
+it.effect(
+  "an omitted machine refresh reply still refreshes and a cwd reply still carries the workspace",
+  () =>
+    Effect.gen(function* () {
+      const { local } = makeCatalogFixture();
+      let refreshes = 0;
+      const client = yield* makeProviderCatalogRpc({
+        providers: [local],
+        cwdProviders: new Set([local.instanceId]),
+        recordRefresh: () => {
+          refreshes++;
+        },
+      });
+      const refresh = client[WS_METHODS.serverRefreshProviders];
+      assert.deepEqual((yield* refresh({})).providers, [local]);
+      assert.deepEqual(yield* refresh({ omitProviders: true }), { providers: [] });
+      assert.equal(refreshes, 2);
+      const cwd = yield* refresh({
+        instanceId: local.instanceId,
+        cwd: "/a",
+        workspaceSnapshotsOnDemand: true,
+        omitProviders: true,
+      });
+      assert.deepEqual(cwd.providers[0]?.workspaceSnapshots, [local.workspaceSnapshots[0]]);
+    }).pipe(Effect.scoped),
+);
+
+it.effect("an omitted provider reply requires the same authorization as a full reply", () =>
+  Effect.gen(function* () {
+    const { local } = makeCatalogFixture();
+    let refreshes = 0;
+    const client = yield* makeProviderCatalogRpc({
+      providers: [local],
+      cwdProviders: new Set([local.instanceId]),
+      scopes: [],
+      recordRefresh: () => {
+        refreshes++;
+      },
+    });
+    const denied = yield* client[WS_METHODS.serverRefreshProviders]({ omitProviders: true }).pipe(
+      Effect.flip,
+    );
+    assert.equal(denied._tag, "EnvironmentAuthorizationError");
+    assert.equal(refreshes, 0);
+  }).pipe(Effect.scoped),
+);

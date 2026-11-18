@@ -2320,6 +2320,12 @@ export const layerWsRpc = (
                 providers = yield* providerRegistry.refreshInstance(instance.instanceId);
               }
             }
+            if (
+              input.omitProviders === true &&
+              (input.instanceId === undefined || input.cwd === undefined)
+            ) {
+              return { providers: [] };
+            }
             const projected = yield* usageLimitSources.projectProviders(providers);
             if (input.workspaceSnapshotsOnDemand !== true) return { providers: projected };
             const commandProviders =

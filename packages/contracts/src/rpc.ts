@@ -855,6 +855,8 @@ export const WsServerRefreshProvidersRpc = Rpc.make(WS_METHODS.serverRefreshProv
     providerCatalogsOnDemand: Schema.optional(Schema.Boolean),
     /** Include the machine catalog names and digest with the cwd snapshot. */
     machineCatalog: Schema.optional(Schema.Boolean),
+    /** For a machine refresh, deliver the updated providers through the config stream only. */
+    omitProviders: Schema.optional(Schema.Boolean),
     /** As on `subscribeServerConfig`: add /usage-limits to the replied snapshot. */
     usageLimitsCommand: Schema.optional(Schema.Boolean),
   }),
