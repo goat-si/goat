@@ -13,8 +13,10 @@ function composerFileLinkBasename(path: string): string {
   return separatorIndex >= 0 ? path.slice(separatorIndex + 1) : path;
 }
 
+// Emphasis markers too: `__init__.py` would otherwise render as bold "init.py",
+// which no longer matches the path, so the label shows beside the chip.
 function escapeMarkdownLinkLabel(label: string): string {
-  return label.replaceAll("\\", "\\\\").replaceAll("[", "\\[").replaceAll("]", "\\]");
+  return label.replace(/[\\[\]*_]/g, "\\$&");
 }
 
 function encodeMarkdownLinkDestination(path: string): string {
@@ -63,6 +65,19 @@ export function isCurrencyAmountQuery(query: string): boolean {
   return /^\.?[0-9][0-9,._]*(?:[kKmMbBtT]|[eE][0-9]+)?[.,;:!?)]*$/.test(query);
 }
 
+export function detectComposerPullRequestTrigger(token: string, cursor: number) {
+  if (/^[@\p{Sc}]/u.test(token)) return null;
+  const match = /(?:^|\p{Ps})#([\p{L}\p{N}][\p{L}\p{N}_-]*)?$/u.exec(token);
+  if (!match) return null;
+  const query = match[1] ?? "";
+  return {
+    kind: "pull-request" as const,
+    query,
+    rangeStart: cursor - query.length - 1,
+    rangeEnd: cursor,
+  };
+}
+
 export function detectComposerTrigger(
   text: string,
   cursorInput: number,
@@ -86,14 +101,8 @@ export function detectComposerTrigger(
       rangeEnd: cursor,
     };
   }
-  const pullRequestMatch = /^#([\p{L}\p{N}][\p{L}\p{N}_-]*)?$/u.exec(token);
-  if (pullRequestMatch)
-    return {
-      kind: "pull-request",
-      query: pullRequestMatch[1] ?? "",
-      rangeStart: tokenStart,
-      rangeEnd: cursor,
-    };
+  const pullRequestTrigger = detectComposerPullRequestTrigger(token, cursor);
+  if (pullRequestTrigger) return pullRequestTrigger;
   const skillPrefix = /^\p{Sc}/u.exec(token);
   if (skillPrefix) {
     if (isCurrencyAmountQuery(token.slice(skillPrefix[0].length))) return null;

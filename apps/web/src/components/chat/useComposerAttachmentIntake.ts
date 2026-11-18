@@ -14,7 +14,6 @@ import {
   type ComposerFileAttachment,
   type ComposerImageAttachment,
   type DraftId,
-  composerFileMatchesReattachMarker,
   composerFileNeedsReattach,
 } from "../../composerDraftStore";
 import { type ComposerPromptEditorHandle } from "../ComposerPromptEditor";
@@ -27,6 +26,7 @@ import {
   classifyComposerAttachmentFile,
   composerFileAttachmentMimeType,
   normalizeComposerImageFileMimeType,
+  composerFileMatchesReattachMarker,
 } from "./composerAttachmentFiles";
 import {
   fileAttachmentTooLargeMessage,

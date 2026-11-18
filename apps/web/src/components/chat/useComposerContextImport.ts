@@ -1,3 +1,4 @@
+import { composerFileMatchesReattachMarker } from "./composerAttachmentFiles";
 import { ConnectionBlockedError, ConnectionTransientError } from "@goat/client-runtime/connection";
 import { EnvironmentRpcUnavailableError } from "@goat/client-runtime/rpc";
 import * as Cause from "effect/Cause";
@@ -14,7 +15,6 @@ import {
   type ComposerFileAttachment,
   type ComposerImageAttachment,
   type DraftId,
-  composerFileMatchesReattachMarker,
   composerFileNeedsReattach,
   useComposerDraftStore,
 } from "../../composerDraftStore";
@@ -238,6 +238,7 @@ export function useComposerContextImport(input: {
             sizeBytes: file.size,
             previewUrl: URL.createObjectURL(file),
             file,
+            ...(record.source ? { source: record.source } : {}),
           },
         ],
         {
