@@ -1,5 +1,6 @@
 import * as NodeServices from "@effect/platform-node/NodeServices";
 import { assert, it } from "@effect/vitest";
+import { expect } from "vite-plus/test";
 import * as HostProcess from "@goat/shared/HostProcess";
 import * as Effect from "effect/Effect";
 import * as FileSystem from "effect/FileSystem";
@@ -9,6 +10,36 @@ import { listClaudeDiscoveryDirectory } from "../provider/claudeDiscoveryBudget.
 import { makeClaudePrivateSettingsSweep } from "./ClaudePrivateSettings.ts";
 
 it.layer(NodeServices.layer)("Claude settings sweep", (it) => {
+  it.effect("reaps stale private Claude settings and keeps live launches", () =>
+    Effect.gen(function* () {
+      const fs = yield* FileSystem.FileSystem;
+      const root = yield* fs.makeTempDirectoryScoped();
+      const stale = `${root}/goat-claude-settings-abc123`;
+      const dead = `${root}/goat-claude-settings-p2147483647-def456`;
+      const live = `${root}/goat-claude-settings-p${process.pid}-ghi789`;
+      const fresh = `${root}/goat-claude-settings-p2147483647-jkl012`;
+      const unrelated = `${root}/something-else`;
+      const now = Date.parse("2026-10-17T06:00:00Z");
+      yield* TestClock.setTime(now);
+      for (const directory of [stale, dead, live, fresh, unrelated]) {
+        yield* fs.makeDirectory(directory);
+        yield* fs.writeFileString(`${directory}/settings.json`, "{}");
+        const timestamp = directory === fresh ? now / 1000 : 1;
+        yield* fs.utimes(directory, timestamp, timestamp);
+      }
+      const sweep = yield* makeClaudePrivateSettingsSweep(
+        yield* Path.Path,
+        yield* HostProcess.UserId,
+      );
+      yield* sweep(root);
+      expect(yield* fs.exists(stale)).toBe(false);
+      expect(yield* fs.exists(dead)).toBe(false);
+      for (const directory of [live, fresh, unrelated]) {
+        expect(yield* fs.exists(`${directory}/settings.json`)).toBe(true);
+      }
+    }),
+  );
+
   it.effect("reaches stale settings beyond the first page without removing live settings", () =>
     Effect.gen(function* () {
       const fs = yield* FileSystem.FileSystem;

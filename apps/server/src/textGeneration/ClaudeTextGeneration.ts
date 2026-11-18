@@ -181,6 +181,22 @@ export const makeClaudeTextGeneration = Effect.fn("makeClaudeTextGeneration")(fu
   const platform = yield* HostProcess.Platform;
   const home = yield* HostProcess.HomeDirectory;
   const sweepSettings = yield* makeClaudePrivateSettingsSweep(path, yield* HostProcess.UserId);
+  const runnerScope = yield* Effect.scope;
+  let sweepRunning = false;
+  const scheduleSettingsSweep = Effect.fn("ClaudeTextGeneration.scheduleSettingsSweep")(function* (
+    root: string,
+  ) {
+    if (sweepRunning) return;
+    sweepRunning = true;
+    yield* sweepSettings(root).pipe(
+      Effect.ensuring(
+        Effect.sync(() => {
+          sweepRunning = false;
+        }),
+      ),
+      Effect.forkIn(runnerScope, { uninterruptible: false }),
+    );
+  }, Effect.uninterruptible);
   const resolveClaudeEnvironment = (
     Effect.isEffect(environment) ? environment : Effect.succeed(environment)
   ).pipe(
@@ -341,7 +357,7 @@ export const makeClaudeTextGeneration = Effect.fn("makeClaudeTextGeneration")(fu
         const directory = yield* fileSystem.makeTempDirectoryScoped({
           prefix: `${CLAUDE_SETTINGS_TEMP_PREFIX}p${process.pid}-`,
         });
-        yield* sweepSettings(path.dirname(directory));
+        yield* scheduleSettingsSweep(path.dirname(directory));
         const file = path.join(directory, "settings.json");
         yield* fileSystem.writeFileString(file, settingsJson, { flag: "wx", mode: 0o600 });
         yield* fileSystem.chmod(file, 0o600);
