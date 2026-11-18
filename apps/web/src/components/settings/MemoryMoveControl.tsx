@@ -1,5 +1,10 @@
 import { RegistryContext, useAtomValue } from "@effect/atom-react";
-import { MemoryOperationId, type EnvironmentId, type MemorySpaceId } from "@goat/contracts";
+import {
+  MemoryOperationId,
+  type EnvironmentId,
+  type MemoryId,
+  type MemorySpaceId,
+} from "@goat/contracts";
 import {
   canSubmitMemoryMove,
   memoryMoveOutcomeMessage,
@@ -19,12 +24,14 @@ export function MemoryMoveControl({
   environmentId,
   memorySpaceId,
   candidates,
+  admitted,
   isCurrent,
   onMoved,
 }: {
   environmentId: EnvironmentId;
   memorySpaceId: MemorySpaceId;
   candidates: readonly MemoryMoveCandidate[];
+  admitted?: ReadonlySet<MemoryId>;
   isCurrent?: (candidate: MemoryMoveCandidate) => boolean;
   onMoved: (allMoved: boolean) => void;
 }) {
@@ -38,7 +45,9 @@ export function MemoryMoveControl({
   const [attempts, setAttempts] = useState<MemoryMoveAttempts>(() => new Map());
   if (!allowed || !candidates.length) return null;
   const rows = memoryMoveRows(environmentId, candidates, selection?.scope, attempts);
-  const eligible = rows.filter(canSubmitMemoryMove).length;
+  const eligible = rows.filter(
+    (row) => canSubmitMemoryMove(row) && (!admitted || admitted.has(row.input.memoryId)),
+  ).length;
   async function submit() {
     const permitted = () => registry.get(permission);
     if (busy || !eligible || !permitted()) return;

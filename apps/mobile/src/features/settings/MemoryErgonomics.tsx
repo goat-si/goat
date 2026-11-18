@@ -151,6 +151,12 @@ export function useMobileMemoryBatch(
     });
     refresh();
   }
+  const moves = [...state.selected.values()].flatMap(({ move }) => (move ? [move] : []));
+  const admitted = new Set(
+    moves
+      .filter((candidate) => memoryMoveCandidateCurrent(candidate, items))
+      .map(({ memoryId }) => memoryId),
+  );
   return {
     selecting: allowed && state.selecting,
     row: (item: MemoryItem) =>
@@ -175,9 +181,8 @@ export function useMobileMemoryBatch(
           <MobileMemoryMoveControl
             environmentId={environmentId}
             memorySpaceId={memorySpaceId}
-            candidates={[...state.selected.values()].flatMap(({ move }) =>
-              move && memoryMoveCandidateCurrent(move, items) ? [move] : [],
-            )}
+            candidates={moves}
+            admitted={admitted}
             isCurrent={(candidate) => memoryMoveCandidateCurrent(candidate, readItems())}
             onMoved={(allMoved) => {
               if (allMoved) set(emptyBatch(key));

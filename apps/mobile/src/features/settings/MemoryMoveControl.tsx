@@ -1,5 +1,5 @@
 import { RegistryContext, useAtomValue } from "@effect/atom-react";
-import type { EnvironmentId, MemoryScope, MemorySpaceId } from "@goat/contracts";
+import type { EnvironmentId, MemoryId, MemoryScope, MemorySpaceId } from "@goat/contracts";
 import {
   memoryProjectScope,
   canSubmitMemoryMove,
@@ -22,12 +22,14 @@ export function MobileMemoryMoveControl({
   environmentId,
   memorySpaceId,
   candidates,
+  admitted,
   isCurrent,
   onMoved,
 }: {
   environmentId: EnvironmentId;
   memorySpaceId: MemorySpaceId;
   candidates: readonly MemoryMoveCandidate[];
+  admitted?: ReadonlySet<MemoryId>;
   isCurrent?: (candidate: MemoryMoveCandidate) => boolean;
   onMoved: (allMoved: boolean) => void;
 }) {
@@ -89,7 +91,9 @@ export function MobileMemoryMoveControl({
     else setMessage("This project has no memory scope.");
   }
   const rows = memoryMoveRows(environmentId, candidates, destination?.scope, attempts);
-  const eligible = rows.filter(canSubmitMemoryMove).length;
+  const eligible = rows.filter(
+    (row) => canSubmitMemoryMove(row) && (!admitted || admitted.has(row.input.memoryId)),
+  ).length;
   async function submit() {
     const permitted = () => live() && registry.get(permission);
     if (!eligible || busy || !permitted()) return;
