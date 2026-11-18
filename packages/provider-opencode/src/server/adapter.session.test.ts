@@ -222,6 +222,7 @@ it.effect.each([
   "overflow",
   "large-output",
   "capacity",
+  "capacity-error",
 ] as const)("keeps a detached task running until child %s", (ending) =>
   Effect.gen(function* () {
     const nativeEvents = asyncEventStream();
@@ -340,7 +341,7 @@ it.effect.each([
       }
     }
     yield* push(taskPart("completed", child, ending === "resume" ? "resume" : "detached"));
-    if (ending === "capacity") {
+    if (ending === "capacity" || ending === "capacity-error") {
       for (let index = 0; index < 128; index++) {
         const id = `ses_child_${index}`;
         yield* push(created(id));
@@ -351,13 +352,30 @@ it.effect.each([
     const rootEvents = yield* Fiber.join(terminal);
     const rootTerminal = rootEvents.find((event) => event.type === "turn.terminal");
     assert.equal(rootTerminal?.status, "completed");
-    if (ending === "capacity") {
+    if (ending === "capacity" || ending === "capacity-error") {
       const projected = new Map(
         rootEvents.flatMap((event) =>
-          event.type === "subagent.updated" ? [[event.subagent.id, event.subagent.status]] : [],
+          event.type === "subagent.updated" ? [[event.subagent.id, event.subagent] as const] : [],
         ),
       );
-      assert.deepEqual([...projected.values()], ["interrupted", ...Array(128).fill("running")]);
+      const oldest = projected.values().next().value;
+      assert.deepEqual(
+        [...projected.values()].map(({ status }) => status),
+        ["idle", ...Array(128).fill("running")],
+      );
+      assert.equal(oldest?.result, "Tracking lost. Outcome unknown.");
+      if (oldest === undefined) return yield* Effect.die("The evicted card was not projected.");
+      if (ending === "capacity-error") yield* push(childError("UnknownError"));
+      else yield* push(status(child, "idle"));
+      nativeEvents.close();
+      const late = yield* harness.runtime.events.pipe(Stream.runCollect);
+      const confirmed = late.find(
+        (event) => event.type === "subagent.updated" && event.subagent.id === oldest.id,
+      );
+      assert.equal(
+        confirmed?.type === "subagent.updated" ? confirmed.subagent.status : undefined,
+        ending === "capacity-error" ? "failed" : "completed",
+      );
       return;
     }
     if (ending === "outcome-capacity" || ending === "resume") {
@@ -368,6 +386,10 @@ it.effect.each([
       );
       if (ending === "outcome-capacity") {
         assert.equal(projected.at(-1)?.subagent.result, "Tracking lost. Outcome unknown.");
+        yield* push(status(child, "idle"));
+        nativeEvents.close();
+        const late = yield* harness.runtime.events.pipe(Stream.runCollect);
+        assert.isFalse(late.some((event) => event.type === "subagent.updated"));
       }
       return;
     }

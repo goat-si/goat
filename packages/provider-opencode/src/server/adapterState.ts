@@ -85,11 +85,13 @@ export interface OpenCodeSubagentContext {
   childProviderThreadId: OrchestrationV2ProviderThread["id"] | null;
   model: string | null;
   result: string | null;
+  detached?: boolean;
   launchOutcome?: TerminalTurnStatus;
   childExecution?: OpenCodeChildExecution;
 }
 
 export interface OpenCodeChildExecution {
+  readonly resumed: boolean;
   awaitingStart: boolean;
   outcome?: TerminalTurnStatus | undefined;
 }

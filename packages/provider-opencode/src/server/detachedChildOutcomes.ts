@@ -12,6 +12,7 @@ export function makeDetachedChildOutcomes(
   parentOf: (sessionId: string) => OpenCodeThreadState | undefined,
 ) {
   const outcomes = new Map<string, TerminalTurnStatus>();
+  const unstarted = new Set<string>();
   const stops = new Map<string, number>();
   const isStopping = (sessionId: string) => {
     for (let parent = parentOf(sessionId); parent; parent = parent.parentSubagent?.parentState) {
@@ -22,11 +23,17 @@ export function makeDetachedChildOutcomes(
 
   return {
     isStopping,
-    claim(sessionId: string, resumed: boolean): OpenCodeChildExecution {
+    claim(sessionId: string, resumed: boolean, busy: boolean): OpenCodeChildExecution {
       const outcome = resumed ? undefined : outcomes.get(sessionId);
       outcomes.delete(sessionId);
-      return { awaitingStart: resumed, outcome };
+      return { resumed, awaitingStart: resumed || !(busy || unstarted.has(sessionId)), outcome };
     },
+    created(sessionId: string, execution: OpenCodeChildExecution | undefined, busy: boolean) {
+      if (execution !== undefined && !execution.resumed) execution.awaitingStart = false;
+      if (!busy && unstarted.size < MAX_UNCORRELATED_OUTCOMES) unstarted.add(sessionId);
+    },
+    isUnstarted: (sessionId: string) => unstarted.has(sessionId),
+    clearUnstarted: (sessionId: string) => unstarted.delete(sessionId),
     start(execution: OpenCodeChildExecution | undefined) {
       if (execution !== undefined) execution.awaitingStart = false;
     },
@@ -36,7 +43,8 @@ export function makeDetachedChildOutcomes(
       execution?: OpenCodeChildExecution,
       finalized = false,
     ) {
-      if (execution?.awaitingStart && !finalized) return;
+      if (execution?.awaitingStart && !finalized && (status === "completed" || execution.resumed))
+        return;
       const prior = execution === undefined ? outcomes.get(sessionId) : execution.outcome;
       const outcome = finalized
         ? status
@@ -51,6 +59,9 @@ export function makeDetachedChildOutcomes(
       }
       outcomes.set(sessionId, outcome);
       return outcome;
+    },
+    stoppedBeforeLaunch(execution: OpenCodeChildExecution | undefined) {
+      if (execution !== undefined) execution.outcome = "interrupted";
     },
     withStop<A, E, R>(sessionId: string, stop: Effect.Effect<A, E, R>) {
       return Effect.acquireUseRelease(
@@ -67,7 +78,7 @@ export function makeDetachedChildOutcomes(
   };
 }
 
-export function isChildCallUnder(context: OpenCodeSubagentContext, sessionId: string): boolean {
+function isChildCallUnder(context: OpenCodeSubagentContext, sessionId: string): boolean {
   for (
     let owner: OpenCodeThreadState | undefined = context.parentState;
     owner;
@@ -76,4 +87,10 @@ export function isChildCallUnder(context: OpenCodeSubagentContext, sessionId: st
     if (owner.nativeSessionId === sessionId) return true;
   }
   return false;
+}
+
+export function* childCallsToStop(contexts: Iterable<OpenCodeSubagentContext>, sessionId: string) {
+  for (const context of contexts) {
+    if (context.launchOutcome === undefined && isChildCallUnder(context, sessionId)) yield context;
+  }
 }
