@@ -128,6 +128,7 @@ export const nextTurnSelectionHarness = Effect.fn("nextTurnSelectionHarness")(fu
           }),
         resumeThread: ({ providerThread }) => Effect.succeed(providerThread),
         startTurn,
+        resumeInterruptedTurn: (input) => startTurn(ProviderAdapter.resumeTurnInput(input)),
         compactThread: (turn) => beforeCompaction.pipe(Effect.andThen(startTurn(turn))),
         steerTurn: (turn) =>
           Effect.sync(() => {
