@@ -28,8 +28,10 @@ import {
   type TerminalHistoryPersistenceCursor,
 } from "./BoundedTerminalHistory.ts";
 import {
+  initializeTerminalHistory,
   readTerminalHistoryTail,
   TERMINAL_HISTORY_COMPACTION_NOTICE,
+  writeCompactedTerminalHistory,
 } from "./terminalHistoryFile.ts";
 import {
   neutralizeInheritedHistory,
@@ -131,6 +133,8 @@ import { ThreadId } from "@goat/contracts";
 import { terminalOutputStream } from "./OutputProtocol.ts";
 import { makeFolderReplacedNotifier } from "./folderReplacedTerminals.ts";
 import { enqueueProcessEvent } from "./processEventQueue.ts";
+import { normalizeChildCommandName } from "./childCommandName.ts";
+import { retainedAttachListener as retained } from "./retainedAttachHistory.ts";
 
 export {
   TerminalCwdError,
@@ -411,23 +415,6 @@ interface TerminalManagerState {
 function truncateTerminalWireLabel(value: string): string {
   if (value.length <= MAX_TERMINAL_LABEL_LENGTH) return value;
   return value.slice(0, MAX_TERMINAL_LABEL_LENGTH);
-}
-
-function normalizeChildCommandName(raw: string, platform: NodeJS.Platform): string | null {
-  let trimmed = raw.trim();
-  if (trimmed.length === 0) return null;
-  if (
-    (trimmed.startsWith("[") && trimmed.endsWith("]")) ||
-    (trimmed.startsWith("(") && trimmed.endsWith(")"))
-  ) {
-    trimmed = trimmed.slice(1, -1).trim();
-  }
-  // Process names and macOS `comm` paths can contain spaces ("Google Chrome").
-  const separators = platform === "win32" ? /[\\/]/ : /\//;
-  const base = (trimmed.split(separators).at(-1) ?? trimmed).trim();
-  const withoutExe =
-    platform === "win32" && base.toLowerCase().endsWith(".exe") ? base.slice(0, -4) : base;
-  return withoutExe.length > 0 ? withoutExe : null;
 }
 
 function terminalWireLabel(session: TerminalSessionState): string {
@@ -920,7 +907,7 @@ export const makeWithOptions = Effect.fn("TerminalManager.makeWithOptions")(func
   const registerTerminalProcesses = options.registerTerminalProcesses ?? (() => Effect.void);
   const unregisterTerminal = options.unregisterTerminal ?? (() => Effect.void);
 
-  yield* fileSystem.makeDirectory(logsDir, { recursive: true }).pipe(Effect.orDie);
+  yield* initializeTerminalHistory(fileSystem, path, logsDir);
 
   const managerStateRef = yield* SynchronizedRef.make<TerminalManagerState>({
     sessions: new Map(),
@@ -1320,15 +1307,13 @@ export const makeWithOptions = Effect.fn("TerminalManager.makeWithOptions")(func
       const history = new BoundedTerminalHistory(historyLineLimit, raw, historyByteLimit);
       const capped = history.value();
       if (migrating || truncated || capped !== raw) {
-        const write = Effect.gen(function* () {
-          const temporaryPath = yield* fileSystem.makeTempFileScoped({
-            directory: logsDir,
-            prefix: ".history-",
-          });
-          yield* fileSystem.writeFileString(temporaryPath, capped);
-          yield* fileSystem.rename(temporaryPath, nextPath);
-        }).pipe(
-          Effect.scoped,
+        const write = writeCompactedTerminalHistory(
+          fileSystem,
+          path,
+          logsDir,
+          nextPath,
+          capped,
+        ).pipe(
           Effect.mapError(
             (cause) =>
               new TerminalHistoryError({
@@ -2619,8 +2604,10 @@ export const makeWithOptions = Effect.fn("TerminalManager.makeWithOptions")(func
       ).pipe(
         Effect.as(
           terminalOutputStream(
-            (listener, registerCleanup) => attachStream(input, listener, registerCleanup, viewerId),
-            (listener, registerCleanup) => resyncStream(input, listener, registerCleanup),
+            (listener, registerCleanup) =>
+              attachStream(input, retained(input, listener), registerCleanup, viewerId),
+            (listener, registerCleanup) =>
+              resyncStream(input, retained(input, listener), registerCleanup),
           ),
         ),
       ),

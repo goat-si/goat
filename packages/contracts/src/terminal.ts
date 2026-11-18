@@ -93,6 +93,41 @@ export function terminalSequenceEnd(state: number, text: string): number {
   return index;
 }
 
+const historyEncoder = new TextEncoder();
+// A BOM at a retained chunk boundary is terminal data, not an encoding marker.
+const historyDecoder = new TextDecoder("utf-8", { ignoreBOM: true });
+
+/** The final `maxBytes` of UTF-8 a client retains, starting at a code point boundary. */
+export function retainedTerminalHistory(history: string, maxBytes: number): string {
+  if (maxBytes <= 0) {
+    return "";
+  }
+
+  const encoded = historyEncoder.encode(history);
+  if (encoded.byteLength <= maxBytes) {
+    return history;
+  }
+
+  let start = encoded.byteLength - maxBytes;
+  while (start < encoded.length) {
+    const byte = encoded[start];
+    if (byte === undefined || (byte & 0b1100_0000) !== 0b1000_0000) {
+      break;
+    }
+    start += 1;
+  }
+
+  const retained = historyDecoder.decode(encoded.subarray(start));
+  // A cut inside a control sequence would replay the rest of it as text.
+  const state = terminalSequenceStateAfter(
+    TERMINAL_SEQUENCE_GROUND,
+    history,
+    0,
+    history.length - retained.length,
+  );
+  return retained.slice(terminalSequenceEnd(state, retained));
+}
+
 const TrimmedNonEmptyStringSchema = TrimmedNonEmptyString;
 const TerminalColsSchema = Schema.Int.check(Schema.isGreaterThanOrEqualTo(1)).check(
   Schema.isLessThanOrEqualTo(1000),
@@ -145,6 +180,8 @@ export const TerminalAttachInput = Schema.Struct({
   restartIfNotRunning: Schema.optional(Schema.Boolean),
   // Resubscriptions preserve stopped terminals; unknown IDs recover after a server restart.
   resume: Schema.optional(Schema.Boolean),
+  // Snapshots carry only the history a client this bounded keeps; older servers ignore it.
+  maxHistoryBytes: Schema.optional(Schema.Int.check(Schema.isGreaterThanOrEqualTo(0))),
 });
 export type TerminalAttachInput = typeof TerminalAttachInput.Type;
 

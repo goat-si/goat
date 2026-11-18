@@ -218,6 +218,12 @@ describe("tool-call visibility", () => {
           attachmentsByQuestionId: {},
         },
       },
+      {
+        ...base("asking", 3, "pending"),
+        type: "user_input_request",
+        requestId: RuntimeRequestId.make("asking"),
+        questions: [],
+      },
       { ...base("error", 4, "failed"), type: "error", failure },
       { ...base("runtime-error", 5, "completed"), type: "error", failure },
       {
@@ -259,7 +265,12 @@ describe("tool-call visibility", () => {
         () => new Set(),
       ).map(kept);
       expect(shown, toolCallVisibility).toEqual(
-        allIds.filter((id) => !String(id).includes("passed")),
+        allIds.filter(
+          (id) =>
+            !String(id).includes("passed") &&
+            // Zen leaves the open question to ComposerPendingUserInputPanel above the composer.
+            !(toolCallVisibility === "zen" && String(id).includes("asking")),
+        ),
       );
     }
 
