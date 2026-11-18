@@ -1,5 +1,14 @@
 import { assert, it } from "@effect/vitest";
-import { RunId, ThreadId, TurnItemId } from "@goat/contracts";
+import {
+  MessageId,
+  NodeId,
+  ProviderDriverKind,
+  RunId,
+  ThreadId,
+  TurnItemId,
+} from "@goat/contracts";
+import { makeSubagentConversationArtifacts } from "@goat/provider-core/server/subagentProjection";
+import * as DateTime from "effect/DateTime";
 import * as Effect from "effect/Effect";
 import * as Layer from "effect/Layer";
 import * as SqlClient from "effect/sql/SqlClient";
@@ -75,5 +84,35 @@ it.effect("places a run-start item ahead of the run's items, then appends once t
     assert.isAbove(recovery, 1_999_999);
     assert.equal(yield* allocate("item:retry-recovery", "run_start"), message + 1);
     assert.equal(yield* allocate("item:reply"), message + 2);
+  }).pipe(Effect.provide(layerTest)),
+);
+
+it.effect("inserts a saved Cursor Task step between its reserved live neighbours", () =>
+  Effect.gen(function* () {
+    const positions = yield* TurnItemPositionStore.TurnItemPositionStoreV2;
+    const threadId = ThreadId.make("thread:subagent:cursor-position");
+    const cursor = ProviderDriverKind.make("cursor");
+    const row = (id: string, ordinal: number) =>
+      makeSubagentConversationArtifacts({
+        messageId: MessageId.make(id),
+        turnItemId: TurnItemId.make(id),
+        threadId,
+        rootNodeId: NodeId.make("cursor-child-root"),
+        providerThreadId: null,
+        providerTurnId: null,
+        nativeItemRef: { driver: cursor, nativeId: id, strength: "weak" },
+        role: "assistant",
+        text: id,
+        ordinal,
+        now: DateTime.makeUnsafe("2026-06-20T00:00:00.000Z"),
+      }).turnItem;
+    const before = row("before", 613);
+    const after = row("after", 1126);
+    const saved = row("cursor-task-saved:fixture:1", 1125);
+    assert.equal((yield* positions.normalize(before)).ordinal, before.ordinal);
+    assert.equal((yield* positions.normalize(after)).ordinal, after.ordinal);
+    assert.equal((yield* positions.normalize(saved)).ordinal, saved.ordinal);
+    assert.equal((yield* positions.normalize({ ...before, ordinal: 1 })).ordinal, before.ordinal);
+    assert.equal((yield* positions.normalize(row("collision", after.ordinal))).ordinal, 1127);
   }).pipe(Effect.provide(layerTest)),
 );

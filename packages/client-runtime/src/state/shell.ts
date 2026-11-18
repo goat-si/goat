@@ -1,6 +1,7 @@
 import {
   ORCHESTRATION_V2_WS_METHODS,
   type EnvironmentId,
+  type ExecutionEnvironmentDescriptor,
   type OrchestrationV2ShellSnapshot,
   type OrchestrationV2ShellStreamItem,
   type OrchestrationV2ThreadShell,
@@ -11,7 +12,9 @@ import {
 import { watchHubProxySnapshot } from "./hubProxySnapshot.ts";
 import * as DateTime from "effect/DateTime";
 import * as Cause from "effect/Cause";
+import * as Clock from "effect/Clock";
 import * as Effect from "effect/Effect";
+import * as Exit from "effect/Exit";
 import * as Fiber from "effect/Fiber";
 import * as Option from "effect/Option";
 import * as Queue from "effect/Queue";
@@ -19,10 +22,11 @@ import * as Ref from "effect/Ref";
 import * as Semaphore from "effect/Semaphore";
 import * as Stream from "effect/Stream";
 import * as SubscriptionRef from "effect/SubscriptionRef";
+import * as SynchronizedRef from "effect/SynchronizedRef";
 import { AsyncResult, Atom } from "effect/reactivity";
 
 import * as EnvironmentRegistry from "../connection/registry.ts";
-import { connectionProjectionPhase } from "../connection/model.ts";
+import { connectionProjectionPhase, type PreparedConnection } from "../connection/model.ts";
 import * as EnvironmentSupervisor from "../connection/supervisor.ts";
 import * as ConnectionWakeups from "../connection/wakeups.ts";
 import { safeErrorLogAttributes } from "../errors/safeLog.ts";
@@ -88,6 +92,84 @@ function withoutDeferredPullRequests(value: DeferredShellSnapshot): Orchestratio
 
 const SHELL_SYNCHRONIZATION_ERROR_MESSAGE = "Could not synchronize environment data.";
 
+const CACHE_RESUME_MAX_AGE_MILLIS = 12 * 60 * 60 * 1000;
+type ShellOriginIdentity = Omit<Persistence.ShellCacheOrigin, "snapshotAt">;
+
+function sameShellIdentity(left: ShellOriginIdentity, right: ShellOriginIdentity | null): boolean {
+  return (
+    right !== null &&
+    left.instanceId === right.instanceId &&
+    left.serverVersion === right.serverVersion &&
+    left.databaseMigration === right.databaseMigration &&
+    left.omitIdleSubagents === right.omitIdleSubagents &&
+    left.omitOlderSettled === right.omitOlderSettled
+  );
+}
+
+function canResumeFrom(
+  origin: Persistence.ShellCacheOrigin | undefined,
+  identity: ShellOriginIdentity | null,
+  now: number,
+): boolean {
+  if (origin === undefined) return false;
+  const age = now - origin.snapshotAt;
+  return age >= 0 && age < CACHE_RESUME_MAX_AGE_MILLIS && sameShellIdentity(origin, identity);
+}
+
+function shellIdentity(
+  descriptor: ExecutionEnvironmentDescriptor | undefined,
+  flags: { readonly shellThreadFamilies?: boolean; readonly shellOlderSettled?: boolean },
+): ShellOriginIdentity | null {
+  if (!descriptor?.instanceId || !descriptor.serverVersion) return null;
+  const omitIdleSubagents = flags.shellThreadFamilies === true;
+  return {
+    instanceId: descriptor.instanceId,
+    serverVersion: descriptor.serverVersion,
+    databaseMigration: descriptor.databaseMigration ?? null,
+    omitIdleSubagents,
+    omitOlderSettled: omitIdleSubagents && flags.shellOlderSettled === true,
+  };
+}
+
+function canReadShellEarly(prepared: PreparedConnection): boolean {
+  if (prepared.httpAuthorization === null) {
+    if (prepared.target._tag !== "PrimaryConnectionTarget") return false;
+  } else if (prepared.target._tag !== "HubProxyConnectionTarget") {
+    return true;
+  }
+  try {
+    const http = new URL(prepared.httpBaseUrl);
+    const socket = new URL(prepared.socketUrl);
+    http.protocol = http.protocol === "https:" ? "wss:" : "ws:";
+    return (
+      http.origin === socket.origin && socket.pathname === `${http.pathname.replace(/\/$/, "")}/ws`
+    );
+  } catch {
+    return false;
+  }
+}
+
+interface EarlyShellLoad {
+  readonly prepared: PreparedConnection;
+  readonly identity: ShellOriginIdentity;
+  readonly fiber: Fiber.Fiber<Option.Option<ShellSnapshotLoader.ShellHttpAnswer>>;
+  readonly claimed: boolean;
+}
+
+function samePreparedConnection(left: PreparedConnection, right: PreparedConnection): boolean {
+  return (
+    left.target === right.target &&
+    left.httpBaseUrl === right.httpBaseUrl &&
+    left.socketUrl === right.socketUrl &&
+    left.descriptor === right.descriptor
+  );
+}
+
+interface LiveShell {
+  readonly snapshot: OrchestrationV2ShellSnapshot;
+  readonly origin: Persistence.ShellCacheOrigin | undefined;
+}
+
 export const makeEnvironmentShellState = Effect.fn("EnvironmentShellState.make")(function* () {
   const supervisor = yield* EnvironmentSupervisor.EnvironmentSupervisor;
   const cache = yield* Persistence.EnvironmentCacheStore;
@@ -101,14 +183,16 @@ export const makeEnvironmentShellState = Effect.fn("EnvironmentShellState.make")
           environmentId,
           ...safeErrorLogAttributes(error),
         }),
-        Effect.as(Option.none<DeferredShellSnapshot>()),
+        Effect.as(Option.none<Persistence.CachedShellSnapshot>()),
       ),
     ),
   );
   const cachedMeta = yield* cache
     .loadShellMeta(environmentId)
     .pipe(Effect.catch(() => Effect.succeedNone));
-  const cachedSnapshot = Option.map(cached, withoutDeferredPullRequests);
+  const cachedSnapshot = Option.map(cached, ({ origin: _origin, ...rows }) =>
+    withoutDeferredPullRequests(rows),
+  );
   const state = yield* SubscriptionRef.make<EnvironmentShellState>({
     ...EMPTY_SHELL_STATE,
     snapshot: cachedSnapshot,
@@ -117,15 +201,14 @@ export const makeEnvironmentShellState = Effect.fn("EnvironmentShellState.make")
   });
   const awaitingCompletion = yield* Ref.make(false);
   const lastAuthoritativeSession = yield* Ref.make<RpcSession | null>(null);
-  const authoritativeOmission = yield* Ref.make<string | null>(null);
-  const sessionOmissions = new WeakMap<RpcSession, string | null>();
-  const latestLiveSnapshot = yield* Ref.make<Option.Option<OrchestrationV2ShellSnapshot>>(
-    Option.none(),
-  );
+  const sessionOrigins = new WeakMap<RpcSession, ShellOriginIdentity | null>();
+  const origin = yield* Ref.make(Option.getOrUndefined(cached)?.origin);
+  const reloadRequests = yield* Queue.sliding<void>(1);
+  const latestLiveSnapshot = yield* Ref.make<Option.Option<LiveShell>>(Option.none());
   const persistence = yield* Queue.sliding<OrchestrationV2ShellSnapshot>(1);
 
   const persistenceLock = yield* Semaphore.make(1);
-  let lastPersisted: OrchestrationV2ShellSnapshot | undefined;
+  let lastPersisted: LiveShell | undefined;
   // Rows still waiting for their deferred pull request links, which must not be saved:
   // the cache would keep them without links until the next server refresh.
   let pendingLinkRows: ReadonlySet<OrchestrationV2ThreadShell> = new Set();
@@ -135,22 +218,24 @@ export const makeEnvironmentShellState = Effect.fn("EnvironmentShellState.make")
     while (true) {
       const latest = yield* Ref.get(latestLiveSnapshot);
       if (Option.isNone(latest) || latest.value === lastPersisted) return;
-      if (latest.value.threads.some((thread) => pendingLinkRows.has(thread))) return;
-      const snapshot = latest.value;
+      const { snapshot, origin } = latest.value;
+      if (snapshot.threads.some((thread) => pendingLinkRows.has(thread))) return;
       if (
         lastPersisted !== undefined &&
-        snapshot.snapshotSequence >= lastPersisted.snapshotSequence &&
-        snapshot.schemaVersion === lastPersisted.schemaVersion &&
-        snapshot.projects === lastPersisted.projects &&
-        snapshot.threads === lastPersisted.threads &&
-        snapshot.archivedThreads === lastPersisted.archivedThreads
+        origin === lastPersisted.origin &&
+        snapshot.snapshotSequence >= lastPersisted.snapshot.snapshotSequence &&
+        snapshot.schemaVersion === lastPersisted.snapshot.schemaVersion &&
+        snapshot.projects === lastPersisted.snapshot.projects &&
+        snapshot.threads === lastPersisted.snapshot.threads &&
+        snapshot.archivedThreads === lastPersisted.snapshot.archivedThreads &&
+        snapshot.olderSettled === lastPersisted.snapshot.olderSettled
       ) {
         // Keep the live cursor without rewriting the rows. Remember it here too so a
         // later authoritative reset to a lower sequence still reaches the cache.
-        lastPersisted = snapshot;
+        lastPersisted = latest.value;
         return;
       }
-      const saved = yield* cache.saveShell(environmentId, snapshot).pipe(
+      const saved = yield* cache.saveShell(environmentId, snapshot, origin).pipe(
         Effect.as(true),
         Effect.catch((error) =>
           Effect.logWarning("Could not persist environment shell cache.").pipe(
@@ -172,7 +257,7 @@ export const makeEnvironmentShellState = Effect.fn("EnvironmentShellState.make")
           ),
         );
       yield* SubscriptionRef.update(state, (current) => ({ ...current, meta }));
-      lastPersisted = snapshot;
+      lastPersisted = latest.value;
       if (!flush) return;
     }
   }, persistenceLock.withPermit);
@@ -238,6 +323,7 @@ export const makeEnvironmentShellState = Effect.fn("EnvironmentShellState.make")
     let waiting = yield* Ref.get(awaitingCompletion);
     let next = initial;
     let receivedSnapshot = false;
+    let refused = false;
     let deltas: Array<ShellStreamEvent> = [];
     const flushDeltas = () => {
       if (deltas.length > 0 && Option.isSome(next.snapshot)) {
@@ -271,6 +357,10 @@ export const makeEnvironmentShellState = Effect.fn("EnvironmentShellState.make")
     };
     for (const [producerSession, item] of items) {
       if (Option.isNone(currentSession) || producerSession !== currentSession.value) continue;
+      if (item.kind === "snapshot-required") {
+        refused = true;
+        continue;
+      }
       if (item.kind !== "snapshot" && item.kind !== "synchronized") {
         deltas.push(item);
         continue;
@@ -280,7 +370,13 @@ export const makeEnvironmentShellState = Effect.fn("EnvironmentShellState.make")
       if (item.kind === "synchronized") {
         waiting = false;
         if (Option.isSome(next.snapshot)) {
-          next = { ...next, status: "live", error: Option.none() };
+          next = {
+            ...next,
+            status: "live",
+            error: Option.none(),
+            generation: next.generation === 0 ? ++lastShellGeneration : next.generation,
+            authoritativeSession: producerSession,
+          };
         }
         continue;
       }
@@ -303,24 +399,45 @@ export const makeEnvironmentShellState = Effect.fn("EnvironmentShellState.make")
       };
     }
     flushDeltas();
+    if (refused) {
+      yield* Ref.set(origin, undefined);
+      yield* Ref.set(lastAuthoritativeSession, null);
+      yield* Queue.offer(reloadRequests, undefined);
+      return;
+    }
     yield* Ref.set(awaitingCompletion, waiting);
     if (next === initial) return;
+    const session = next.authoritativeSession;
+    if (session !== null) {
+      yield* Ref.set(lastAuthoritativeSession, session);
+      if (receivedSnapshot) {
+        const identity = sessionOrigins.get(session);
+        yield* Ref.set(
+          origin,
+          identity == null
+            ? undefined
+            : {
+                ...identity,
+                snapshotAt: yield* Clock.currentTimeMillis,
+              },
+        );
+      }
+    }
     if (pendingLinkIds !== undefined && Option.isSome(next.snapshot)) {
       pendingLinkRows = new Set(
         next.snapshot.value.threads.filter((thread) => pendingLinkIds.has(thread.id)),
       );
     }
     if (Option.isSome(next.snapshot)) {
-      yield* Ref.set(latestLiveSnapshot, next.snapshot);
+      yield* Ref.set(
+        latestLiveSnapshot,
+        Option.some({
+          snapshot: next.snapshot.value,
+          origin: yield* Ref.get(origin),
+        }),
+      );
     }
     yield* SubscriptionRef.set(state, next);
-    if (receivedSnapshot) {
-      const session = next.authoritativeSession;
-      if (session !== null) {
-        yield* Ref.set(lastAuthoritativeSession, session);
-        yield* Ref.set(authoritativeOmission, sessionOmissions.get(session) ?? null);
-      }
-    }
     if (next.snapshot !== initial.snapshot && Option.isSome(next.snapshot)) {
       yield* Queue.offer(persistence, next.snapshot.value);
     }
@@ -349,7 +466,14 @@ export const makeEnvironmentShellState = Effect.fn("EnvironmentShellState.make")
         Effect.catch((error) => Effect.logWarning("Could not persist a hub snapshot.", { error })),
       ),
     );
-    yield* SubscriptionRef.set(state, { ...current, snapshot: Option.some(snapshot), meta });
+    yield* Ref.set(origin, undefined);
+    yield* Ref.set(lastAuthoritativeSession, null);
+    yield* SubscriptionRef.set(state, {
+      ...current,
+      snapshot: Option.some(snapshot),
+      authoritativeSession: null,
+      meta,
+    });
     return true;
   }, snapshotWriteLock.withPermit);
 
@@ -410,15 +534,88 @@ export const makeEnvironmentShellState = Effect.fn("EnvironmentShellState.make")
       pendingLinkRows = new Set();
       const live = yield* Ref.get(latestLiveSnapshot);
       if (Option.isNone(live)) return;
-      const latest = Option.isSome(filled) ? filled : live;
-      yield* Ref.set(latestLiveSnapshot, latest);
-      yield* Queue.offer(persistence, latest.value);
+      const snapshot = Option.getOrElse(filled, () => live.value.snapshot);
+      yield* Ref.set(latestLiveSnapshot, Option.some({ snapshot, origin: live.value.origin }));
+      yield* Queue.offer(persistence, snapshot);
     },
     (effect) => snapshotWriteLock.withPermit(effect),
   );
   if (Option.isSome(cached) && Option.isSome(cachedSnapshot)) {
     yield* fillDeferredPullRequests(cached.value, cachedSnapshot.value);
   }
+
+  const heldShellCursor = Effect.fnUntraced(function* (
+    identity: ShellOriginIdentity | null,
+    session?: RpcSession,
+  ) {
+    const held = Option.getOrUndefined((yield* SubscriptionRef.get(state)).snapshot);
+    if (held === undefined) return undefined;
+    const sameLegacySession =
+      identity === null &&
+      session !== undefined &&
+      (yield* Ref.get(lastAuthoritativeSession)) === session;
+    return sameLegacySession ||
+      canResumeFrom(yield* Ref.get(origin), identity, yield* Clock.currentTimeMillis)
+      ? held.snapshotSequence
+      : undefined;
+  });
+
+  const readShell = Effect.fn("EnvironmentShellState.readOverHttp")(function* (
+    prepared: PreparedConnection,
+    omitIdleSubagents: boolean,
+    omitOlderSettled: boolean,
+    identity: ShellOriginIdentity | null,
+  ) {
+    const resumeFrom = yield* snapshotWriteLock.withPermit(heldShellCursor(identity));
+    return yield* snapshotLoader.load(prepared, {
+      omitIdleSubagents,
+      omitOlderSettled,
+      ...(resumeFrom === undefined ? {} : { resumeFrom }),
+    });
+  });
+
+  const earlyLoad = yield* SynchronizedRef.make<EarlyShellLoad | null>(null);
+  const useEarlyLoad = (prepared: PreparedConnection | null, claim: boolean) =>
+    SynchronizedRef.modifyEffect(
+      earlyLoad,
+      Effect.fnUntraced(function* (current) {
+        if (
+          current !== null &&
+          prepared !== null &&
+          samePreparedConnection(current.prepared, prepared)
+        ) {
+          if (current.claimed && current.fiber.pollUnsafe() !== undefined)
+            return [null, null] as const;
+          return claim
+            ? ([current, { ...current, claimed: true }] as const)
+            : ([current, current] as const);
+        }
+        if (current !== null) yield* Fiber.interrupt(current.fiber);
+        if (prepared === null || !canReadShellEarly(prepared)) return [null, null] as const;
+        const descriptor = prepared.descriptor;
+        if (descriptor?.capabilities.shellThreadFamilies === undefined)
+          return [null, null] as const;
+        const identity = shellIdentity(descriptor, descriptor.capabilities);
+        if (identity === null) return [null, null] as const;
+        const fiber = yield* readShell(
+          prepared,
+          identity.omitIdleSubagents,
+          identity.omitOlderSettled,
+          identity,
+        ).pipe(Effect.forkIn(stateScope));
+        const next = { prepared, identity, fiber, claimed: claim };
+        return [next, next] as const;
+      }),
+    ).pipe(Effect.uninterruptible);
+
+  yield* SubscriptionRef.changes(supervisor.prepared).pipe(
+    Stream.runForEach(() =>
+      SubscriptionRef.get(supervisor.prepared).pipe(
+        Effect.flatMap((prepared) => useEarlyLoad(Option.getOrNull(prepared), false)),
+      ),
+    ),
+    Effect.forkScoped,
+  );
 
   const foregroundResubscriptions = Option.match(wakeups, {
     onNone: () => Stream.never,
@@ -431,108 +628,131 @@ export const makeEnvironmentShellState = Effect.fn("EnvironmentShellState.make")
     subscribeDynamicWithSession(
       ORCHESTRATION_V2_WS_METHODS.subscribeShell,
       Effect.fn("EnvironmentShellState.makeSubscribeInput")(function* (session) {
-        const { supportsCompletionMarker, omitIdleSubagents, omitOlderSettled, omissionKey } =
+        const { supportsCompletionMarker, omitIdleSubagents, omitOlderSettled, identity } =
           yield* session.initialConfig.pipe(
             Effect.map((config) => {
               const omitIdleSubagents = config.shellThreadFamilies === true;
               const omitOlderSettled = config.shellOlderSettled === true && omitIdleSubagents;
-              const version = config.environment?.serverVersion;
-              const instanceId = config.environment?.instanceId;
               return {
                 supportsCompletionMarker: config.shellResumeCompletionMarker === true,
                 omitIdleSubagents,
                 omitOlderSettled,
-                omissionKey:
-                  version && instanceId
-                    ? JSON.stringify([omitIdleSubagents, omitOlderSettled, version, instanceId])
-                    : null,
+                identity: shellIdentity(config.environment, config),
               };
             }),
             Effect.orElseSucceed(() => ({
               supportsCompletionMarker: false,
               omitIdleSubagents: false,
               omitOlderSettled: false,
-              omissionKey: null,
+              identity: null,
             })),
           );
-        sessionOmissions.set(session, omissionKey);
+        sessionOrigins.set(session, identity);
         yield* Ref.set(awaitingCompletion, supportsCompletionMarker);
         yield* setSynchronizing;
 
-        // Server restarts can rewrite projections without events, so only resume across sessions on the same instance.
-        const hasAuthoritativeSnapshot =
-          (yield* Ref.get(lastAuthoritativeSession)) === session ||
-          (omissionKey !== null && (yield* Ref.get(authoritativeOmission)) === omissionKey);
-        let canResume = hasAuthoritativeSnapshot;
-        let current = yield* SubscriptionRef.get(state);
-        if (!hasAuthoritativeSnapshot || Option.isNone(current.snapshot)) {
-          const prepared = yield* SubscriptionRef.get(supervisor.prepared).pipe(
-            Effect.flatMap(
-              Option.match({
-                onSome: Effect.succeed,
-                onNone: () =>
-                  SubscriptionRef.changes(supervisor.prepared).pipe(
-                    Stream.filter(Option.isSome),
-                    Stream.map((value) => value.value),
-                    Stream.runHead,
-                    Effect.map(Option.getOrThrow),
-                  ),
-              }),
-            ),
-          );
-          // HTTP and the socket must agree, or omitted children would return through the socket.
-          const httpSnapshot = yield* snapshotLoader.load(prepared, {
-            omitIdleSubagents,
-            omitOlderSettled,
-          });
-          if (Option.isSome(httpSnapshot)) {
-            yield* cancelActiveFill;
-            const previous = yield* SubscriptionRef.get(state);
-            const snapshot = reuseUnchangedThreadShells(
-              Option.getOrNull(previous.snapshot),
-              withoutDeferredPullRequests(httpSnapshot.value),
+        const hadResumeCursor =
+          (yield* snapshotWriteLock.withPermit(heldShellCursor(identity, session))) !== undefined;
+        const early = yield* useEarlyLoad(
+          Option.getOrNull(yield* SubscriptionRef.get(supervisor.prepared)),
+          true,
+        );
+        let loaded = Option.none<ShellSnapshotLoader.ShellHttpAnswer>();
+        if (early !== null && sameShellIdentity(early.identity, identity)) {
+          const wait = Fiber.await(early.fiber);
+          if (hadResumeCursor) {
+            const answered = yield* wait.pipe(Effect.timeoutOption("3 seconds"));
+            if (Option.isSome(answered) && Exit.isSuccess(answered.value))
+              loaded = answered.value.value;
+            if (Option.isNone(answered)) yield* Fiber.interrupt(early.fiber);
+          } else {
+            const answered = yield* wait;
+            if (Exit.isSuccess(answered)) loaded = answered.value;
+          }
+        } else {
+          if (early !== null) yield* Fiber.interrupt(early.fiber);
+          if (!hadResumeCursor) {
+            const prepared = yield* SubscriptionRef.get(supervisor.prepared).pipe(
+              Effect.flatMap(
+                Option.match({
+                  onSome: Effect.succeed,
+                  onNone: () =>
+                    SubscriptionRef.changes(supervisor.prepared).pipe(
+                      Stream.filter(Option.isSome),
+                      Stream.map((value) => value.value),
+                      Stream.runHead,
+                      Effect.map(Option.getOrThrow),
+                    ),
+                }),
+              ),
             );
-            const pendingLinkIds = new Set(
-              httpSnapshot.value.loadPullRequests === undefined
-                ? []
-                : httpSnapshot.value.threads.map((thread) => thread.id),
-            );
-            yield* applyItems([[session, { kind: "snapshot", snapshot }]], pendingLinkIds);
-            canResume = true;
-            current = yield* SubscriptionRef.get(state);
-            if (Option.isSome(current.snapshot)) {
-              yield* fillDeferredPullRequests(httpSnapshot.value, current.snapshot.value);
-            }
+            loaded = yield* readShell(prepared, omitIdleSubagents, omitOlderSettled, identity);
           }
         }
+        const answer = Option.getOrUndefined(loaded);
+        const unverifiedHttp =
+          answer !== undefined && (identity === null || answer.instanceId !== identity.instanceId);
+        let appliedHttpSnapshot = false;
+        let knownProjectIdentities: string | undefined;
+        if (answer !== undefined && !unverifiedHttp && !("resumable" in answer)) {
+          const { instanceId: _instanceId, projectIdentities, ...deferred } = answer;
+          yield* cancelActiveFill;
+          const previous = yield* SubscriptionRef.get(state);
+          const snapshot = reuseUnchangedThreadShells(
+            Option.getOrNull(previous.snapshot),
+            withoutDeferredPullRequests(deferred),
+          );
+          const pendingLinkIds = new Set(
+            deferred.loadPullRequests === undefined
+              ? []
+              : deferred.threads.map((thread) => thread.id),
+          );
+          yield* applyItems([[session, { kind: "snapshot", snapshot }]], pendingLinkIds);
+          const current = yield* SubscriptionRef.get(state);
+          if (current.authoritativeSession === session && Option.isSome(current.snapshot)) {
+            yield* fillDeferredPullRequests(deferred, current.snapshot.value);
+            appliedHttpSnapshot = true;
+          }
+          knownProjectIdentities = projectIdentities;
+        }
 
-        const omission = {
-          ...(omitIdleSubagents ? { omitIdleSubagents: true as const } : {}),
-          ...(omitOlderSettled ? { omitOlderSettled: true as const } : {}),
-        };
-        if (!canResume || Option.isNone(current.snapshot)) {
-          return {
-            ...omission,
-            ...(supportsCompletionMarker ? { requestCompletionMarker: true as const } : {}),
-          };
-        }
-        if (!supportsCompletionMarker) {
-          yield* SubscriptionRef.update(state, (value) => ({
-            ...value,
-            status: "live" as const,
-            error: Option.none(),
-          }));
-        }
-        return {
-          afterSequence: current.snapshot.value.snapshotSequence,
-          ...omission,
-          ...(supportsCompletionMarker ? { requestCompletionMarker: true as const } : {}),
-        };
+        return yield* snapshotWriteLock.withPermit(
+          Effect.gen(function* () {
+            const options = {
+              ...(omitIdleSubagents ? { omitIdleSubagents: true as const } : {}),
+              ...(omitOlderSettled ? { omitOlderSettled: true as const } : {}),
+              ...(supportsCompletionMarker ? { requestCompletionMarker: true as const } : {}),
+            };
+            if (unverifiedHttp) {
+              yield* Ref.set(origin, undefined);
+              yield* Ref.set(lastAuthoritativeSession, null);
+              return options;
+            }
+            const afterSequence = yield* heldShellCursor(identity, session);
+            if (afterSequence === undefined) return options;
+
+            // Once the cursor is chosen, hub hydration must leave its rows in place.
+            yield* Ref.set(lastAuthoritativeSession, session);
+            if (!supportsCompletionMarker) {
+              yield* SubscriptionRef.update(state, (value) => ({
+                ...value,
+                status: "live" as const,
+                error: Option.none(),
+              }));
+            }
+            return {
+              ...options,
+              afterSequence,
+              ...(appliedHttpSnapshot ? {} : { httpSnapshotFallback: true as const }),
+              ...(knownProjectIdentities === undefined ? {} : { knownProjectIdentities }),
+            };
+          }),
+        );
       }),
       {
         onExpectedFailure: (cause) => setStreamError(Cause.squash(cause)),
         retryExpectedFailureAfter: "250 millis",
-        resubscribe: foregroundResubscriptions,
+        resubscribe: Stream.merge(foregroundResubscriptions, Stream.fromQueue(reloadRequests)),
       },
     ).pipe(Stream.runForEachArray((items) => applyItems(items))),
   );

@@ -164,6 +164,34 @@ describe("renderCliShim", () => {
       }),
   );
 
+  effectIt.effect("leaves a dangling user launcher link untouched", () => {
+    const root = tempRoot();
+    const layer = DesktopEnvironment.layer({
+      dirname: "/repo/apps/desktop/dist-electron",
+      homeDirectory: root,
+      platform: "darwin",
+      processArch: "arm64",
+      appVersion: "1.2.3",
+      appPath: "/install/app.asar",
+      isPackaged: true,
+      resourcesPath: "/install",
+      runningUnderArm64Translation: false,
+    }).pipe(Layer.provideMerge(Layer.mergeAll(NodeServices.layer, DesktopConfig.layerTest({}))));
+    return Effect.gen(function* () {
+      const environment = yield* DesktopEnvironment.DesktopEnvironment;
+      const shim = launcherPath(environment);
+      const target = NodePath.join(root, "user-launcher");
+      NodeFS.mkdirSync(NodePath.dirname(shim), { recursive: true });
+      NodeFS.symlinkSync(target, shim, "file");
+
+      yield* install;
+
+      expect(NodeFS.lstatSync(shim).isSymbolicLink()).toBe(true);
+      expect(NodeFS.readlinkSync(shim)).toBe(target);
+      expect(NodeFS.existsSync(target)).toBe(false);
+    }).pipe(Effect.provide(layer));
+  });
+
   effectIt.effect(
     "keeps a launcher per channel, each in its channel's GOAT home (#1091, #1009)",
     () =>

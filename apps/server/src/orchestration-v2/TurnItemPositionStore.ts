@@ -16,12 +16,29 @@ export class TurnItemPositionStoreError extends Schema.TaggedError<TurnItemPosit
 
 const isTurnItemPositionStoreError = Schema.is(TurnItemPositionStoreError);
 
+export function positionRequest(item: OrchestrationV2TurnItem) {
+  const cursorTaskItem =
+    item.runId === null &&
+    item.providerThreadId === null &&
+    item.providerTurnId === null &&
+    item.nativeItemRef?.driver === "cursor" &&
+    (item.threadId.startsWith("thread:subagent:") ||
+      item.threadId.startsWith("thread:provider:cursor:native-thread:"));
+  return {
+    threadId: item.threadId,
+    turnItemId: item.id,
+    runId: item.runId,
+    ...(cursorTaskItem ? { preferredOrdinal: item.ordinal } : {}),
+  };
+}
+
 export interface TurnItemPositionStoreV2Shape {
   readonly allocate: (input: {
     readonly threadId: ThreadId;
     readonly turnItemId: TurnItemId;
     readonly runId: RunId | null;
     readonly runOrdinal?: number;
+    readonly preferredOrdinal?: number;
     // `run_start` takes the run's unused first slot, ahead of its items, and appends once it is taken.
     readonly placement?: "append" | "run_start";
   }) => Effect.Effect<number, TurnItemPositionStoreError>;
@@ -49,6 +66,7 @@ export const layer: Layer.Layer<TurnItemPositionStoreV2, never, SqlClient.SqlCli
           turnItemId,
           runId,
           runOrdinal: suppliedRunOrdinal,
+          preferredOrdinal,
           placement = "append",
         }) {
           const existing = yield* sql<{ readonly ordinal: number }>`
@@ -71,16 +89,23 @@ export const layer: Layer.Layer<TurnItemPositionStoreV2, never, SqlClient.SqlCli
           const runOrdinal = suppliedRunOrdinal ?? runRows[0]?.ordinal ?? null;
           const lowerBound = runOrdinal === null ? 0 : runOrdinal * 1_000_000;
           const upperBound = runOrdinal === null ? 999_999 : lowerBound + 999_999;
+          const append = sql`COALESCE(MAX(ordinal), ${lowerBound}) + 1`;
+          const position =
+            preferredOrdinal !== undefined &&
+            Number.isSafeInteger(preferredOrdinal) &&
+            preferredOrdinal > lowerBound &&
+            preferredOrdinal <= upperBound
+              ? sql`CASE WHEN MAX(CASE WHEN ordinal = ${preferredOrdinal} THEN 1 ELSE 0 END) = 1
+                    THEN ${append} ELSE ${preferredOrdinal} END`
+              : placement === "run_start"
+                ? sql`CASE WHEN COALESCE(MIN(ordinal), ${upperBound}) > ${lowerBound} THEN ${lowerBound} ELSE MAX(ordinal) + 1 END`
+                : append;
           yield* sql`
           INSERT INTO orchestration_v2_turn_item_positions (thread_id, turn_item_id, ordinal)
           SELECT
             ${threadId},
             ${turnItemId},
-            ${
-              placement === "run_start"
-                ? sql`CASE WHEN COALESCE(MIN(ordinal), ${upperBound}) > ${lowerBound} THEN ${lowerBound} ELSE MAX(ordinal) + 1 END`
-                : sql`COALESCE(MAX(ordinal), ${lowerBound}) + 1`
-            }
+            ${position}
           FROM orchestration_v2_turn_item_positions
           WHERE thread_id = ${threadId}
             AND ordinal >= ${lowerBound}
@@ -118,9 +143,7 @@ export const layer: Layer.Layer<TurnItemPositionStoreV2, never, SqlClient.SqlCli
       // Per-event normalization shares the enclosing orchestration span.
       normalize: Effect.fnUntraced(function* (item, runOrdinal) {
         return yield* allocate({
-          threadId: item.threadId,
-          turnItemId: item.id,
-          runId: item.runId,
+          ...positionRequest(item),
           ...(runOrdinal === undefined ? {} : { runOrdinal }),
         }).pipe(Effect.map((ordinal) => (item.ordinal === ordinal ? item : { ...item, ordinal })));
       }),

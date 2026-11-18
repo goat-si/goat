@@ -122,6 +122,11 @@ export const selectThreadRecords = <K extends ProjectionRecordField>(
         (filter?.omitSettledLeafNodes !== true || !isSettledLeafNode(node, projection.runs)),
     ),
     subagents: projection.subagents.filter((task) => {
+      if (
+        filter?.subagentChildThreadId !== undefined &&
+        task.childThreadId !== filter.subagentChildThreadId
+      )
+        return false;
       if (filter?.subagentIds !== undefined && !filter.subagentIds.includes(task.id)) return false;
       if (
         filter?.subagentRunIds !== undefined &&

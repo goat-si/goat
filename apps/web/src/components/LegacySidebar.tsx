@@ -150,6 +150,7 @@ import {
   getArm64IntelBuildWarningDescription,
   getDesktopUpdateActionError,
   getDesktopUpdateInstallConfirmationMessage,
+  getDesktopUpdateInstallError,
   isDesktopUpdateButtonDisabled,
   resolveDesktopUpdateButtonAction,
   shouldShowArm64IntelBuildWarning,
@@ -3782,8 +3783,7 @@ export default function LegacySidebar({ routeReveal }: { routeReveal: SidebarRou
       void bridge
         .installUpdate()
         .then((result) => {
-          if (!shouldToastDesktopUpdateActionResult(result)) return;
-          const actionError = getDesktopUpdateActionError(result);
+          const actionError = getDesktopUpdateInstallError(result);
           if (!actionError) return;
           toastManager.add(
             stackedThreadToast({
