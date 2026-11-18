@@ -28,6 +28,17 @@ describe("createCodeViewFileReveal", () => {
     expect(view.scrolls).toEqual([{ type: "item", id: "a", align: "start" }]);
   });
 
+  it("positions a folded file header before its contents open", () => {
+    const reveal = createCodeViewFileReveal();
+    const view = viewer(["a"]);
+    view.collapsed.add("a");
+    reveal.attach(view);
+
+    reveal.request("a");
+
+    expect(view.scrolls).toEqual([{ type: "item", id: "a", align: "start" }]);
+  });
+
   it("positions a line range only once its folded file opens", () => {
     const reveal = createCodeViewFileReveal();
     const view = viewer(["a"]);

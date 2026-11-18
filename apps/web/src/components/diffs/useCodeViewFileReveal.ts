@@ -77,10 +77,12 @@ export function createCodeViewFileReveal() {
   } | null = null;
   const flush = () => {
     if (pending === null || viewer === null) return;
-    const item = viewer.getItem(pending.id);
-    if (!viewer.getInstance() || item === undefined || isCollapsed(item)) return;
     const instance = viewer.getInstance();
-    const renderedItems = isRevealInstance(instance) ? instance.getRenderedItems() : undefined;
+    const item = viewer.getItem(pending.id);
+    if (!instance || item === undefined) return;
+    if (pending.range && isCollapsed(item)) return;
+    const renderedItems =
+      pending.range && isRevealInstance(instance) ? instance.getRenderedItems() : undefined;
     if (pending.range && renderedItems) {
       const rendered = renderedItems.find((entry) => entry.id === pending?.id);
       if (!rendered) {
