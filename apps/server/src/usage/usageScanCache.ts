@@ -10,7 +10,7 @@ import { CLAUDE_SYNTHETIC_MODEL } from "../provider/Drivers/claudeUsage.ts";
 import { mergeUsageCopies } from "./usageAggregation.ts";
 import { GUARD_LENGTH, type TranscriptParsePosition } from "./usageTranscriptReader.ts";
 
-const USAGE_SCAN_CACHE_VERSION = 15 as const;
+const USAGE_SCAN_CACHE_VERSION = 17 as const;
 const SPEED_COMPATIBLE_SINCE_VERSION = 4;
 
 /**
@@ -18,8 +18,10 @@ const SPEED_COMPATIBLE_SINCE_VERSION = 4;
  * replace it, dropping saved usage for deleted transcripts. Separate files keep
  * the newer one; older files are removed once it is saved.
  */
-export const SCAN_CACHE_FILE_NAME = "usage-scan-cache-v15.json";
+export const SCAN_CACHE_FILE_NAME = "usage-scan-cache-v17.json";
 export const LEGACY_SCAN_CACHE_FILE_NAMES = [
+  "usage-scan-cache-v16.json",
+  "usage-scan-cache-v15.json",
   "usage-scan-cache-v14.json",
   "usage-scan-cache-v13.json",
   "usage-scan-cache-v12.json",
@@ -275,7 +277,15 @@ export function decodeScanCache(
         ...(version >= 7 && unresolvedServiceTierTurnId != null
           ? { unresolvedServiceTierTurnId }
           : {}),
-        dedupeKey: typeof dedupeKey === "string" ? dedupeKey : null,
+        dedupeKey:
+          typeof dedupeKey !== "string"
+            ? null
+            : provider === "grok" &&
+                version < 17 &&
+                dedupeKey.endsWith(`:${model}`) &&
+                !dedupeKey.endsWith(`:${timestampMs}:${model}`)
+              ? `${dedupeKey.slice(0, -model.length)}${timestampMs}:${model}`
+              : dedupeKey,
       });
     }
     return records;
@@ -314,15 +324,15 @@ export function decodeScanCache(
     // v15 repairs skipped Codex requests whose counters rewound; clean v14 entries stay served.
     const legacy =
       (entry.p === "claude" && version < 13) ||
+      (entry.p === "grok" && version < 17) ||
       (format.state !== undefined &&
         (version < 6 ||
           (entry.p === "codex" && (version < 14 || (version < 15 && malformedRecords > 0)))));
     // A corrupt state disqualifies the entry: resuming with it would attach
     // appended usage to the wrong model or replay fork-copied history.
     if (!legacy && !isValidState.get(entry.p)?.(entry.cs)) continue;
-    // Before v15 the state lacks the latest snapshot time that keeps a re-emitted older snapshot
-    // from billing twice, so a grown file re-parses whole instead of resuming.
-    const resumable = !legacy && !(entry.p === "codex" && version < 15);
+    // A baseline dated before v16 may predate the last snapshot and count its replay again.
+    const resumable = !legacy && !(entry.p === "codex" && version < 16);
 
     const provider = entry.p;
     const records = decodeRecords(entry.r, provider);
