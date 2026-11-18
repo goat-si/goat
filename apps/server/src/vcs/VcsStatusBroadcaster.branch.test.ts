@@ -9,6 +9,7 @@ import * as Option from "effect/Option";
 import * as Queue from "effect/Queue";
 import * as Scope from "effect/Scope";
 import * as Stream from "effect/Stream";
+import * as TestClock from "effect/testing/TestClock";
 import * as VcsStatusBroadcaster from "./VcsStatusBroadcaster.ts";
 import {
   baseLocalStatus,
@@ -434,5 +435,34 @@ it.effect("does not replay older queued branches after a new subscriber snapshot
     yield* b.refreshBranchStatus({ cwd: "/repo" });
     assert.deepEqual(yield* Queue.take(values), { refName: "latest", isRepo: true });
     yield* Fiber.join(subscriber);
+  }).pipe(Effect.provide(layerTestFor(state)), Effect.scoped);
+});
+
+it.effect("a fresh branch subscriber sees HEAD while a detailed read is still pending", () => {
+  const state = newState();
+  return Effect.gen(function* () {
+    const b = yield* VcsStatusBroadcaster.VcsStatusBroadcaster;
+    const reading = yield* Deferred.make<void>();
+    const resume = yield* Deferred.make<void>();
+    state.beforeLocalStatus = Deferred.succeed(reading, undefined).pipe(
+      Effect.andThen(Deferred.await(resume)),
+    );
+    const details = yield* Stream.runHead(
+      b.streamStatus({ cwd: "/repo", includeRemote: false }),
+    ).pipe(Effect.forkScoped);
+    yield* Deferred.await(reading);
+    state.currentLocalStatus = { ...baseLocalStatus, refName: "new-head" };
+    const branch = yield* Stream.runHead(b.streamBranchStatus({ cwd: "/repo" })).pipe(
+      Effect.forkScoped({ startImmediately: true }),
+    );
+    yield* TestClock.adjust(0);
+    assert.deepEqual(
+      branch.pollUnsafe(),
+      Exit.succeed(Option.some({ refName: "new-head", isRepo: true })),
+    );
+    assert.isUndefined(details.pollUnsafe());
+    state.beforeLocalStatus = Effect.void;
+    yield* Deferred.succeed(resume, undefined);
+    yield* Fiber.join(details);
   }).pipe(Effect.provide(layerTestFor(state)), Effect.scoped);
 });

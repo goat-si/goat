@@ -869,7 +869,12 @@ export const make = Effect.gen(function* () {
         const cwd = yield* withFileSystem(normalizeCwd(input.cwd));
         const subscription = yield* branchUpdates.subscribe(cwd);
         yield* watchCheckout(cwd);
-        const branch = yield* refreshBranchStatusCore(cwd);
+        const { observation, refName, isRepo } = yield* readHeadBranch(cwd);
+        yield* publishBranch(cwd, { refName, isRepo }, observation);
+        const branch = branchUpdates.latest(cwd) ?? { refName, isRepo, revision: 0 };
+        if (detailedSubscribers.has(cwd) || (yield* getCachedStatus(cwd))?.local) {
+          yield* requestBranchReconciliation(cwd);
+        }
         return Stream.concat(
           Stream.make({ refName: branch.refName, isRepo: branch.isRepo }),
           Stream.fromSubscription(subscription).pipe(
