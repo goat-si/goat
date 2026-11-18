@@ -47,6 +47,7 @@ import {
   type BackupSpaceProbe,
 } from "./serviceLauncherDatabase.ts";
 import { smokeProbe } from "./serviceLauncherSmokeProbe.ts";
+import { boundServiceLog, SERVICE_LOG_CHECK_INTERVAL_MS, serviceLogPath } from "./serviceLog.ts";
 import {
   replaceFileDurably,
   repointServiceUnit,
@@ -253,10 +254,22 @@ export class Launcher {
     const onSigint = () => void this.stop("SIGINT");
     process.once("SIGTERM", onSigterm);
     process.once("SIGINT", onSigint);
+    let logTimer: NodeJS.Timeout | undefined;
     try {
-      this.#enqueue(() => this.#recover());
+      this.#enqueue(async () => {
+        const logPath = await serviceLogPath(this.#serviceUnit);
+        if (logPath !== undefined) {
+          await boundServiceLog(logPath);
+          logTimer = setInterval(
+            () => void boundServiceLog(logPath),
+            SERVICE_LOG_CHECK_INTERVAL_MS,
+          ).unref();
+        }
+        await this.#recover();
+      });
       await this.#completion.promise;
     } finally {
+      clearInterval(logTimer);
       process.off("SIGTERM", onSigterm);
       process.off("SIGINT", onSigint);
     }
