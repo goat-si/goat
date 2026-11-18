@@ -1,6 +1,13 @@
 import JSZip from "jszip";
 import { expect, it, vi } from "vite-plus/test";
-import type { DisplayPage, GlyphRunPrimitive } from "@betteroffice/docx/layout/render";
+import {
+  GlyphCache,
+  rasterizeDisplayPageToBackBuffer,
+  type DisplayPage,
+  type GlyphRunPrimitive,
+} from "@betteroffice/docx/layout/render";
+import { createYrsSession } from "@betteroffice/docx/yrs";
+import { wordFonts } from "./fonts";
 import { openWordDocument } from "./word-document";
 import { withWholeMissingGlyphs } from "./word-glyphs";
 
@@ -117,14 +124,51 @@ it("paints readable Japanese when the missing CJK asset returns the app shell", 
     const { bitmap } = page;
     const context = new OffscreenCanvas(bitmap.width, bitmap.height).getContext("2d")!;
     context.drawImage(bitmap, 0, 0);
-    const pixels = context.getImageData(0, 0, bitmap.width, bitmap.height).data;
-    const hasTextInk = pixels.some(
-      (red, index) =>
-        index % 4 === 0 && red > (pixels[index + 1] ?? 0) + 60 && (pixels[index + 3] ?? 0) > 200,
-    );
-    expect(hasTextInk).toBe(true);
+    const pixels = context.getImageData(0, 0, bitmap.width, bitmap.height);
+    const actualStrokes = maxInkStrokes(pixels);
+    expect(actualStrokes).toBeGreaterThan(0);
     expect(fillText.mock.calls.map(([painted]) => painted).join("")).toContain(text);
+
+    const layoutPage = opened.pages()[0];
+    if (!layoutPage) throw new Error("Expected the Japanese page's layout");
+    const missingControl = await rasterizeMissingGlyphs(layoutPage, bitmap.width, bitmap.height);
+    const controlStrokes = maxInkStrokes(missingControl);
+    expect(controlStrokes).toBeGreaterThan(0);
+    // Even hollow replacement boxes contribute at most two strokes per character.
+    expect(actualStrokes).toBeGreaterThan(Math.max(controlStrokes, [...text].length * 2));
   } finally {
     page.bitmap.close();
   }
 });
+
+async function rasterizeMissingGlyphs(page: DisplayPage, width: number, height: number) {
+  const latinBytes = await wordFonts().resolve("Arial", false, false)?.();
+  if (!latinBytes) throw new Error("Expected a Latin-only face for the missing-glyph control");
+  const session = await createYrsSession();
+  try {
+    const font = session.registerFont(new Uint8Array(latinBytes));
+    // Draw the same layout using the Latin font's glyph zero, bypassing the canvas font fallback.
+    const glyphCache = new GlyphCache({ provider: () => session.outlineGlyphJson(font, 0) });
+    const control = new OffscreenCanvas(width, height);
+    await rasterizeDisplayPageToBackBuffer(control, page, { glyphCache }, 1, 1);
+    return control.getContext("2d")!.getImageData(0, 0, width, height);
+  } finally {
+    session.destroy();
+  }
+}
+
+function maxInkStrokes({ data, width, height }: ImageData) {
+  let max = 0;
+  for (let y = 0; y < height; y++) {
+    let strokes = 0;
+    let inInk = false;
+    for (let x = 0; x < width; x++) {
+      const i = (y * width + x) * 4;
+      const ink = data[i]! > data[i + 1]! + 60 && data[i + 3]! > 200;
+      if (ink && !inInk) strokes++;
+      inInk = ink;
+    }
+    max = Math.max(max, strokes);
+  }
+  return max;
+}
