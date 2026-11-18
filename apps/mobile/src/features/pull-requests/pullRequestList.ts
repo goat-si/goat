@@ -207,21 +207,29 @@ export function retainPullRequestStatsAnswers(
     : next;
 }
 
+interface PullRequestProjectOrderGroup {
+  readonly memberProjectRefs: readonly ScopedProjectRef[];
+  readonly pinned?: boolean;
+  readonly archived?: boolean;
+}
+
 export function pullRequestProjectOrderIsEqual(
-  previous: readonly { readonly memberProjectRefs: readonly ScopedProjectRef[] }[],
-  next: readonly { readonly memberProjectRefs: readonly ScopedProjectRef[] }[],
+  previous: readonly PullRequestProjectOrderGroup[],
+  next: readonly PullRequestProjectOrderGroup[],
 ) {
   return (
     previous.length === next.length &&
     previous.every((group, index) => {
-      const members = next[index]?.memberProjectRefs;
+      const candidate = next[index];
       return (
-        members !== undefined &&
-        group.memberProjectRefs.length === members.length &&
+        candidate !== undefined &&
+        group.pinned === candidate.pinned &&
+        group.archived === candidate.archived &&
+        group.memberProjectRefs.length === candidate.memberProjectRefs.length &&
         group.memberProjectRefs.every(
           (ref, member) =>
-            ref.environmentId === members[member]?.environmentId &&
-            ref.projectId === members[member]?.projectId,
+            ref.environmentId === candidate.memberProjectRefs[member]?.environmentId &&
+            ref.projectId === candidate.memberProjectRefs[member]?.projectId,
         )
       );
     })

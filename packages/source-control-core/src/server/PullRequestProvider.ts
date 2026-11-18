@@ -1,3 +1,4 @@
+import type { PullRequestDiffInput, PullRequestSubmitReviewInput } from "@goat/contracts";
 import * as Effect from "effect/Effect";
 import * as Schema from "effect/Schema";
 import type * as Stream from "effect/Stream";
@@ -230,6 +231,8 @@ export interface ProviderDiffSlice {
   readonly truncated: boolean;
   readonly nextCursor: string | null;
   readonly omittedFileStats?: ReadonlyArray<PullRequestOmittedFileStat>;
+  readonly withheldFilesReadable?: boolean;
+  readonly revision?: PullRequestDiffInput["revision"];
 }
 
 export interface ProviderDiffFileContents {
@@ -442,6 +445,8 @@ export interface PullRequestProviderApi {
       readonly number: number;
       readonly cursor?: string | undefined;
       readonly commit?: string | undefined;
+      readonly path?: string | undefined;
+      readonly revision?: PullRequestDiffInput["revision"];
     },
   ) => Effect.Effect<ProviderDiffSlice, PullRequestProviderError>;
 
@@ -534,6 +539,7 @@ export interface PullRequestProviderApi {
       readonly number: number;
       readonly verdict: PullRequestReviewVerdict;
       readonly body: string;
+      readonly revision?: PullRequestSubmitReviewInput["revision"];
       readonly comments: ReadonlyArray<PullRequestReviewCommentDraft>;
     },
   ) => Effect.Effect<void, PullRequestProviderError>;

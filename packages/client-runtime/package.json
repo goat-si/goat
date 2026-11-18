@@ -796,12 +796,16 @@
     "@pierre/diffs": "catalog:",
     "effect": "catalog:",
     "jszip": "3.10.1",
+    "remark-gfm": "catalog:",
+    "remark-parse": "catalog:",
     "three": "0.180.0",
-    "unbash": "^5.0.0"
+    "unbash": "^5.0.0",
+    "unified": "catalog:"
   },
   "devDependencies": {
     "@effect/vitest": "catalog:",
     "@goat/pen-protocol": "workspace:*",
+    "@types/mdast": "catalog:",
     "@types/three": "0.180.0",
     "vite-plus": "catalog:"
   }

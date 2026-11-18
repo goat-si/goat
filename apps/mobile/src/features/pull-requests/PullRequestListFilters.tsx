@@ -59,7 +59,11 @@ const sidebarProjectOrderFamily = Atom.family((mode: SidebarProjectGroupingMode)
       threads: get(environmentThreadShells.threadShellsAtom),
       pendingTasks: [],
       projectSortOrder: "updated_at",
-    }).map((scope) => ({ memberProjectRefs: scope.projectRefs })),
+    }).map((scope) => ({
+      memberProjectRefs: scope.projectRefs,
+      pinned: scope.pinned,
+      archived: scope.archived,
+    })),
   ).pipe(Atom.withEquality(pullRequestProjectOrderIsEqual)),
 );
 

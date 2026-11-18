@@ -4,6 +4,7 @@ import type {
   ThreadId,
   ThreadPullRequestKey,
 } from "@goat/contracts";
+import type { EnvironmentThreadShell } from "./state/models.ts";
 import { normalizeThreadPullRequestKey } from "./threadPullRequests.ts";
 
 type LinkingCapabilities = Pick<
@@ -17,6 +18,17 @@ export function threadPullRequestLinkMode(capabilities: LinkingCapabilities | nu
     : capabilities?.threadPullRequestLinking === true
       ? "single"
       : "unsupported";
+}
+
+export function canStartThreadPullRequestWatch(
+  thread: Pick<EnvironmentThreadShell, "archivedAt" | "settledAt" | "settledOverride" | "lineage">,
+): boolean {
+  return (
+    thread.archivedAt === null &&
+    thread.settledAt === null &&
+    thread.settledOverride !== "settled" &&
+    thread.lineage.relationshipToParent !== "subagent"
+  );
 }
 
 export function planThreadPullRequestMutation({
