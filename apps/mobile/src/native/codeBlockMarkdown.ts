@@ -69,6 +69,11 @@ export function fenceHighlightable(code: string, openCode: string | null): boole
   return code.length <= MAX_CHAT_HIGHLIGHT_CHARACTERS && openCode?.trimEnd() !== code.trimEnd();
 }
 
+/** The open fence's code while the message streams; a finished message's unclosed fence is done. */
+export function streamingFenceCode(markdown: string, streaming: boolean): string | null {
+  return streaming ? openFenceCode(markdown) : null;
+}
+
 type CodeFenceRenderer =
   | { readonly kind: "mermaid" }
   | { readonly kind: "math" }

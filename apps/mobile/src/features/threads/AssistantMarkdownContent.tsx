@@ -17,6 +17,7 @@ import {
 
 export const AssistantMarkdownContent = memo(function AssistantMarkdownContent(props: {
   readonly markdown: string;
+  readonly streaming?: boolean | undefined;
   readonly environmentId: EnvironmentId;
   readonly markdownStyles: MarkdownStyleSet;
   readonly linkHandlers: MarkdownLinkHandlers;
@@ -36,6 +37,7 @@ export const AssistantMarkdownContent = memo(function AssistantMarkdownContent(p
   return (
     <AssistantMarkdownBlocks
       markdown={liveMarkdown}
+      streaming={props.streaming}
       iconSubtleColor={iconSubtleColor}
       markdownStyles={props.markdownStyles}
       linkHandlers={linkHandlers}

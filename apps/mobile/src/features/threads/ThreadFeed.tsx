@@ -1575,6 +1575,7 @@ function renderFeedEntry(
           <MarkdownImageAvailableWidthContext value={props.markdownContentWidth}>
             <AssistantMarkdownContent
               markdown={renderedText}
+              streaming={message.streaming}
               environmentId={props.environmentId}
               markdownStyles={styles}
               linkHandlers={props.markdownLinkHandlers}
