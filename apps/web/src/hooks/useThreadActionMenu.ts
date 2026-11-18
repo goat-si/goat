@@ -25,6 +25,7 @@ import {
   threadActionRequiresOperate,
   type ThreadActionMenuId,
 } from "../components/threadActionMenu.logic";
+import { titleRegenerationToast } from "../components/threadTitleRegenerationToast";
 import { stackedThreadToast, toastManager } from "../components/ui/toast";
 import { threadEnvironment } from "../state/threads";
 import { useOrchestrationCommand } from "../state/use-orchestration-command";
@@ -104,7 +105,7 @@ export function useThreadActionMenu(input: {
     markThreadUnread,
     turnThreadIntoProject,
   } = useThreadActions();
-  const updateThreadMetadata = useOrchestrationCommand(threadEnvironment.updateMetadata, {
+  const regenerateThreadTitle = useOrchestrationCommand(threadEnvironment.regenerateTitle, {
     reportFailure: false,
   });
   const handleNewThread = useNewThreadHandler();
@@ -272,15 +273,17 @@ export function useThreadActionMenu(input: {
         case "rename":
           onStartRename();
           return;
-        case "regenerate-title":
+        case "regenerate-title": {
           if (isRegeneratingTitle) return;
-          await reportFailure("Failed to regenerate thread title", () =>
-            updateThreadMetadata({
+          const toast = titleRegenerationToast([
+            await regenerateThreadTitle({
               environmentId: threadRef.environmentId,
-              input: { threadId: threadRef.threadId, regenerateTitle: true },
+              input: { threadId: threadRef.threadId },
             }),
-          );
+          ]);
+          if (toast) toastManager.add(toast);
           return;
+        }
         case "mark-unread":
           markThreadUnread(threadRef);
           return;

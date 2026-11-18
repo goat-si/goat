@@ -1,4 +1,5 @@
 import { retainedUserItemFailures } from "./goat/RetainedQueuedInput.ts";
+import { OrchestratorThreadAboveModeLimitError } from "./OrchestratorModeLimitError.ts";
 import { commandThreadId } from "./commandThreadId.ts";
 import { guardArchiveDelegates } from "./goat/ArchiveDelegatedGuard.ts";
 import { isHistoryArchiveOnlyUpdate, withoutHistoryArchive } from "./goat/HistoryArchive.ts";
@@ -398,20 +399,7 @@ export class OrchestratorSubagentThreadReadOnlyError extends Schema.TaggedError<
   }
 }
 
-export class OrchestratorThreadAboveModeLimitError extends Schema.TaggedError<OrchestratorThreadAboveModeLimitError>()(
-  "OrchestratorThreadAboveModeLimitError",
-  {
-    commandId: CommandId,
-    threadId: ThreadId,
-    mode: Schema.Literals(["runtime", "interaction"]),
-    runtimeMode: RuntimeMode,
-    interactionMode: ProviderInteractionMode,
-  },
-) {
-  override get message(): string {
-    return `Thread ${this.threadId} now runs in ${this.runtimeMode}/${this.interactionMode} mode, above what this caller may change.`;
-  }
-}
+export { OrchestratorThreadAboveModeLimitError } from "./OrchestratorModeLimitError.ts";
 
 export const OrchestratorV2Error = Schema.Union([
   RuntimeAdmission.ServerDrainingError,
@@ -2732,6 +2720,7 @@ const makeOrchestrator = Effect.fn("orchestrationV2.Orchestrator.layer")(functio
           | "thread.pull-request-watch.sync"
           | "thread.pull-request.sync"
           | "thread.title.regeneration.complete"
+          | "thread.title.regeneration.complete.internal"
           | "thread.runtime-mode.set"
           | "thread.interaction-mode.set"
           | "thread.model-selection.set"
@@ -3617,14 +3606,20 @@ const makeOrchestrator = Effect.fn("orchestrationV2.Orchestrator.layer")(functio
             updatedAt: thread.updatedAt,
           };
         case "thread.title.regeneration.complete":
-          return thread.titleRegeneration?.requestId === command.requestId
-            ? {
-                ...thread,
-                ...(command.title === undefined ? {} : { title: command.title }),
-                titleRegeneration: null,
-                updatedAt: now,
-              }
-            : thread;
+        case "thread.title.regeneration.complete.internal": {
+          if (thread.titleRegeneration?.requestId !== command.requestId) return thread;
+          const outcome =
+            command.type === "thread.title.regeneration.complete.internal" ? command.outcome : null;
+          return {
+            ...thread,
+            ...(command.title === undefined ? {} : { title: command.title }),
+            ...(outcome && {
+              lastTitleRegeneration: { ...outcome, requestId: command.requestId, completedAt: now },
+            }),
+            titleRegeneration: null,
+            updatedAt: now,
+          };
+        }
         case "thread.runtime-mode.set":
           return { ...thread, runtimeMode: command.runtimeMode, updatedAt: now };
         case "thread.interaction-mode.set":
@@ -3688,6 +3683,7 @@ const makeOrchestrator = Effect.fn("orchestrationV2.Orchestrator.layer")(functio
           return "thread.marked-unread" as const;
         case "thread.metadata.update":
         case "thread.title.regeneration.complete":
+        case "thread.title.regeneration.complete.internal":
           return "thread.metadata-updated" as const;
         case "thread.pull-request.link":
         case "thread.pull-request.unlink":
@@ -12351,6 +12347,7 @@ const makeOrchestrator = Effect.fn("orchestrationV2.Orchestrator.layer")(functio
       case "thread.pull-request.link":
       case "thread.pull-request.sync":
       case "thread.title.regeneration.complete":
+      case "thread.title.regeneration.complete.internal":
       case "thread.runtime-mode.set":
       case "thread.interaction-mode.set":
       case "thread.model-selection.set":

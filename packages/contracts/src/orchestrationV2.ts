@@ -139,6 +139,12 @@ import {
   ToolActivitySource,
 } from "./providerRuntime.ts";
 import { ThreadTokenUsageSnapshot } from "./providerRuntime.ts";
+import {
+  OrchestrationV2LastTitleRegeneration,
+  OrchestrationV2LastTitleRegenerationJson,
+  ThreadTitleRegenerationCompleteCommand,
+  ThreadTitleRegenerationOutcome,
+} from "./threadTitle.ts";
 
 export * from "./providerReplay.ts";
 const OrchestrationV2CreationFields = {
@@ -540,6 +546,7 @@ export const OrchestrationV2AppThread = Schema.Struct({
       }),
     ),
   ),
+  lastTitleRegeneration: Schema.optional(Schema.NullOr(OrchestrationV2LastTitleRegeneration)),
   rollbackRequestId: Schema.optional(CommandId),
   rollbackFailure: Schema.optional(
     Schema.NullOr(
@@ -580,36 +587,7 @@ export function isCompactionCommandMessage(message: CompactionMessageFields): bo
   );
 }
 
-export type OrchestrationV2GoalCommand =
-  | { readonly type: "show" }
-  | { readonly type: "clear" }
-  | { readonly type: "pause" }
-  | { readonly type: "resume" }
-  | { readonly type: "set"; readonly objective: string };
-
-/** Reads a `/goal` control message. Messages with attachments are ordinary prompts. */
-export function parseGoalCommand(message: {
-  readonly text: string;
-  readonly attachments?: ReadonlyArray<unknown> | undefined;
-}): OrchestrationV2GoalCommand | null {
-  if ((message.attachments?.length ?? 0) > 0) return null;
-  const match = /^\/goal(?:\s+([\s\S]*))?$/u.exec(message.text.trim());
-  if (match === null) return null;
-  const argument = (match[1] ?? "").trim();
-  switch (argument.toLowerCase()) {
-    case "":
-    case "edit":
-      return { type: "show" };
-    case "clear":
-      return { type: "clear" };
-    case "pause":
-      return { type: "pause" };
-    case "resume":
-      return { type: "resume" };
-    default:
-      return { type: "set", objective: argument };
-  }
-}
+export { parseGoalCommand, type OrchestrationV2GoalCommand } from "./goalCommand.ts";
 
 /** Why GOAT sent this `/compact` on its own, or undefined for one someone asked for. */
 export function idleCompactionOf(
@@ -2036,6 +2014,8 @@ export const OrchestrationV2PendingRuntimeRequestSummary = Schema.Struct({
   createdAt: Schema.DateTimeUtc,
   /** False for async questions the run keeps working past. Absent from older servers. */
   blocking: Schema.optional(Schema.Boolean),
+  /** Secret and handoff cards: only the user can answer them, never a coordinating agent. */
+  userOnly: Schema.optional(Schema.Boolean),
   /** Set when the request is a waiting human handoff; older servers omit it. */
   handoff: Schema.optionalKey(Schema.Struct({ kind: HandoffKind, title: Schema.String })),
 });
@@ -2155,6 +2135,7 @@ export const OrchestrationV2ThreadShell = Schema.Struct({
       }),
     ),
   ),
+  lastTitleRegeneration: Schema.optional(Schema.NullOr(OrchestrationV2LastTitleRegeneration)),
   deletedAt: Schema.NullOr(Schema.DateTimeUtc),
 });
 export type OrchestrationV2ThreadShell = typeof OrchestrationV2ThreadShell.Type;
@@ -2287,6 +2268,7 @@ export const OrchestrationV2AppThreadJson = OrchestrationV2AppThread.mapFields((
       }),
     ),
   ),
+  lastTitleRegeneration: Schema.optional(Schema.NullOr(OrchestrationV2LastTitleRegenerationJson)),
   deletedAt: Schema.NullOr(Schema.DateTimeUtcFromString),
 }));
 export type OrchestrationV2AppThreadJson = typeof OrchestrationV2AppThreadJson.Type;
@@ -2742,6 +2724,7 @@ export const OrchestrationV2ThreadShellJson = OrchestrationV2ThreadShell.mapFiel
       }),
     ),
   ),
+  lastTitleRegeneration: Schema.optional(Schema.NullOr(OrchestrationV2LastTitleRegenerationJson)),
   deletedAt: Schema.NullOr(Schema.DateTimeUtcFromString),
 }));
 export type OrchestrationV2ThreadShellJson = typeof OrchestrationV2ThreadShellJson.Type;
@@ -3152,13 +3135,7 @@ export const OrchestrationV2Command = Schema.Union([
     branchPullRequest: Schema.NullOr(ThreadLinkedPullRequest),
     linkedPullRequest: Schema.optional(ThreadLinkedPullRequest),
   }),
-  Schema.Struct({
-    type: Schema.Literal("thread.title.regeneration.complete"),
-    commandId: CommandId,
-    threadId: ThreadId,
-    requestId: CommandId,
-    title: Schema.optional(TrimmedNonEmptyString),
-  }),
+  ThreadTitleRegenerationCompleteCommand,
   Schema.Struct({
     type: Schema.Literal("thread.runtime-mode.set"),
     commandId: CommandId,
@@ -3454,6 +3431,11 @@ export type OrchestrationV2Command = typeof OrchestrationV2Command.Type;
 // Excluded from dispatchCommand so only the server can send these.
 const OrchestrationV2InternalCommand = Schema.Union([
   OrchestrationV2ReviewContinueCommand,
+  Schema.Struct({
+    ...ThreadTitleRegenerationCompleteCommand.fields,
+    type: Schema.Literal("thread.title.regeneration.complete.internal"),
+    outcome: Schema.optional(ThreadTitleRegenerationOutcome),
+  }),
   // Guest share commands the server issues after checking GOAT Connect and the guest token.
   Schema.Struct({
     type: Schema.Literal("thread.guest-share.open"),

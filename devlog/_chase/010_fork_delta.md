@@ -152,6 +152,12 @@ G13 `goat-copy`, G14 `launch-watch`.
 - 경로: `apps/web/src/components`
 - 정책: upstream 우선, GOAT 동작만 다시 얹는다.
 
+### `message-resend-bound` 소켓을 잃은 메시지의 재전송 끝
+
+- 커밋: #3700 (사이클 261114 next3, K7 수정 라운드)
+- 경로: `packages/client-runtime/src/operations/dispatch.ts`
+- 정책: upstream 962eeefa03은 소켓을 잃은 메시지를 같은 commandId로 다시 보내되, 새 세션이 오거나 연결이 끝날 때까지 기한 없이 기다린다. GOAT는 두 가지를 더한다. 세션이 그대로이고 연결이 살아 있는 채로 5초가 지나면 같은 세션으로 다시 보낸다. 클라이언트가 읽지 못한 프레임은 대기 중 요청만 실패시키고 소켓은 열어 두므로, 그대로 두면 끝나지 않는다. 그리고 기다림 전체에 10분 상한을 둔다. 넘으면 보내기를 포기하고, 메시지가 가지 않았을 수 있다는 오류와 함께 초안을 되돌린다. 다시 보내는 횟수는 upstream과 같이 두 번까지다. upstream이 이 루프를 바꾸면 받고 두 갈래를 다시 얹는다.
+
 ### `mcp-auth-middleware` /mcp 인증 middleware는 GOAT 파일에
 
 - 커밋: #3519 (사이클 261114 다음 PR, lane N3)
@@ -272,6 +278,12 @@ G13 `goat-copy`, G14 `launch-watch`.
 - 경로: `apps/server/src/persistence/Migrations*`, `ProjectionStore.ts`, `apps/server/src/http.ts`, `packages/contracts/src/environment*`
 - 정책: 아래 마이그레이션 규칙.
 
+### `server-update-tests` 서버 업데이트 테스트 파일
+
+- 커밋: #3700 (사이클 261114 next3, K7 행 4)
+- 경로: `packages/client-runtime/src/state/{server.updateResume.test.ts,serverUpdate.ts,server.test.ts}`
+- 정책: upstream `state/server.test.ts`의 서버 업데이트 묶음("accepted server update recovery", "launcher update resume")은 GOAT에서 `serverUpdate.ts` 옆 `server.updateResume.test.ts`에 있다. `server.ts`가 예산에 닿아 업데이트 도우미를 `serverUpdate.ts`로 옮겼고, 테스트가 모듈을 따라갔다. upstream이 이 두 묶음을 고치면 그 hunk를 이 파일에 적용한다. 나머지 `server.test.ts` 변경은 그대로 받는다.
+
 ### `session-ended-check` 쿠키 탭의 끝난 세션 판별
 
 - 커밋: #3592
@@ -289,11 +301,29 @@ G13 `goat-copy`, G14 `launch-watch`.
 - 경로: `packages/ssh/src/tunnel.ts`, `apps/server/src/sshRemote`, `apps/server/src/cli/{sshHelper,sshRuntimeHelperCommands,sshRuntimeProbes,sshRuntimeSupervisor}.ts`, `apps/server/src/mcp/toolkits/ssh`, `apps/desktop/src/ssh`
 - 정책: GOAT가 `tunnel.ts`를 크게 다시 썼다. upstream ssh 변경은 의도를 GOAT 코드에 손으로 옮긴다. 충돌 위험이 가장 높다. upstream의 설치 lock 수정(#20059, uutils mkdir)은 GOAT lock이 rename으로 게시해 해당 없으므로 받지 않았다 (사이클 261020). `__ssh-helper`의 GOAT 하위 명령은 `cli/sshRuntimeProbes.ts`(protocol, activity, compat, drain 등)와 `cli/sshRuntimeSupervisor.ts`(supervise)에 있고 `cli/sshRuntimeHelperCommands.ts`가 목록과 export를 모은다. `cli/sshHelper.ts`는 upstream에 import, 하위 명령 spread, re-export만 더한다(#827). re-export는 tunnel fixture가 `sshHelper.ts`를 URL로 불러오거나 묶기 때문에 남긴다. upstream이 `sshHelper.ts`를 바꾸면 upstream을 받고 이 세 줄을 다시 얹는다.
 
+### `terminal-retained-history` 터미널 attach 기록 자르기
+
+- 커밋: #3700 (사이클 261114 next3, K7 행 9)
+- 경로: `packages/contracts/src/terminal.ts`, `packages/client-runtime/src/state/terminalOutput.ts`, `apps/server/src/terminal/{retainedAttachHistory,Manager}.ts`
+- 정책: upstream c9f0caca1b의 `retainedTerminalHistory`는 바이트로만 자른다. GOAT의 같은 함수는 자른 자리가 제어 시퀀스 안이면 그 시퀀스의 나머지도 버린다. 클라이언트 `trimBufferToBytes`에 있던 GOAT 동작을 그대로 옮겼다. 서버가 upstream 방식으로 자르면 클라이언트는 시퀀스 중간에서 시작하는 기록을 받고, 그것을 알아챌 수 없어 나머지를 글자로 찍는다. upstream이 이 함수를 바꾸면 바이트 자르기만 받고 시퀀스 단계는 남긴다. `Manager.ts`에는 `attachOutputStream`의 두 listener를 `retainedAttachHistory.ts`로 감싸는 줄과 import 하나만 둔다.
+
+### `thread-apply-defect-resume` 적용하다 깨진 스레드 구독은 새 스냅샷으로
+
+- 커밋: #3700 (사이클 261114 next3, K7 수정 라운드)
+- 경로: `packages/client-runtime/src/state/{threads,threadSubscriptionRecovery}.ts`
+- 정책: upstream de21fbcff3은 이벤트를 적용하다 defect가 나면 구독을 다시 연다. 하지만 커서(`lastSequence`)는 적용 전에 이미 앞으로 가 있어서, 다시 열 때 적용하지 못한 묶음을 건너뛴 채 이어 받는다. GOAT는 그 재시작 뒤 첫 구독에서 `afterSequence`를 빼서 새 스냅샷으로 상태를 바꾼다. 커서 쓰기를 적용 뒤로 옮기지 않은 이유: 그러면 같은 묶음을 다시 받아 같은 곳에서 또 깨진다. upstream이 이 복구를 바꾸면 받고 이 플래그를 다시 얹는다.
+
 ### `thread-link-lookup` 불러오지 않은 스레드 링크의 제목과 프로젝트
 
 - 커밋: next3 K10 (upstream 23e3465ec6)
 - 경로: `packages/contracts/src/threadFamilyLookup.ts`, `apps/server/src/orchestration-v2/ThreadFamilyLookup.ts`, `packages/client-runtime/src/state/threadLineageLookup.ts`, `apps/web/src/state/threadLinkLookup.ts`, `apps/mobile/src/state/threadLinkLookup.ts`
 - 정책: upstream의 `orchestration.getThreadLinkMetadata` RPC와 `threadLinkMetadata` capability는 들이지 않는다. GOAT는 같은 답을 `getThreadFamily`의 lookupOnly 읽기(`lookupTitles` 옆 `lookupProjectIds`, 100개 한도)로 주고, 한 메시지의 링크를 한 번의 paged 읽기로 묻는다. 다음 사이클은 upstream의 그 메서드와 이를 쓰는 변경을 이 읽기로 대신한다고 표시하고 포트하지 않는다. upstream의 환경을 담은 링크와 그 도달 검사(1c3d5f7e82)는 GOAT 링크가 스레드 id만 담는 동안 해당 없다.
+
+### `title-regeneration-failure-text` 제목 다시 만들기 실패 문구
+
+- 커밋: #3700 (사이클 261114 next3, K7 수정 라운드)
+- 경로: `apps/server/src/orchestration-v2/ThreadTitleRegenerationService.ts`
+- 정책: upstream 1c9ea568a1은 실패 결과에 공급자 `TextGenerationError.detail`의 마지막 줄을 담는다. CLI라면 그 줄은 stderr나 stdout 원문이라 요청 id, 가린 키 조각, 되풀이된 대화 등 무엇이든 될 수 있고, GOAT에서는 저장된 이벤트, 셸, 토스트, MCP 스레드 상세까지 간다. 계획은 오늘 이상의 공급자 문구를 내보내지 않는다고 했다. 그래서 GOAT는 서버가 쓴 문장만 저장한다: 이미 있는 고정 문장(프로젝트 없음, 메시지 없음, 2분 초과)과, 그 밖의 실패에는 "Title generation failed.". 원문은 마스킹된 서버 로그에만 남는다. upstream이 이 실패 문구를 바꾸면 받고 이 규칙을 다시 얹는다.
 
 ## 깨끗하게 머지되고도 깨지는 것
 

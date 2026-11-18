@@ -41,8 +41,28 @@ const emptyShellSnapshot = {
 } as OrchestrationV2ShellSnapshot;
 
 describe("subagent shell events", () => {
-  const stored = (threadId: string, type: string) =>
-    ({ event: { threadId, type } }) as ApplicationStoredEvent;
+  const stored = (threadId: string, type: string, itemType = "command_execution") =>
+    ({ event: { threadId, type, payload: { type: itemType } } }) as ApplicationStoredEvent;
+
+  it("keeps subagent turn-item updates that can start or end a user-only wait", () => {
+    const subagents = new Set(["child"]);
+    for (const itemType of ["secret_request", "human_handoff"]) {
+      expect(
+        shouldPublishShellApplicationEvent(
+          stored("child", "turn-item.updated", itemType),
+          subagents,
+        ),
+      ).toBe(true);
+    }
+    for (const itemType of ["command_execution", "user_message", "assistant_message"]) {
+      expect(
+        shouldPublishShellApplicationEvent(
+          stored("child", "turn-item.updated", itemType),
+          subagents,
+        ),
+      ).toBe(false);
+    }
+  });
 
   it("keeps regular threads and subagent state changes while omitting subagent transcript updates", () => {
     const subagents = new Set(["child"]);
@@ -301,7 +321,13 @@ describe("omitIdleSubagentShells", () => {
     expect(omitted.threads.map((thread) => thread.id)).toEqual(["root"]);
     expect(
       shouldPublishShellApplicationEvent(
-        { event: { threadId: "idle", type: "turn-item.updated" } } as ApplicationStoredEvent,
+        {
+          event: {
+            threadId: "idle",
+            type: "turn-item.updated",
+            payload: { type: "command_execution" },
+          },
+        } as ApplicationStoredEvent,
         new Set(omitted.subagentThreadIds),
       ),
     ).toBe(false);

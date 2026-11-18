@@ -768,6 +768,63 @@ it("decodes list, detail and search replies across peer versions", () => {
   }
 });
 
+const decodeThreadReadResult = Schema.decodeUnknownSync(OrchestratorMcpThreadReadResult);
+const decodePreviousThreadReadResult = Schema.decodeUnknownSync(
+  PreviousOrchestratorMcpThreadReadResult,
+);
+
+it("decodes a thread read from an older host without lastTitleRegeneration, and a newer one with it", () => {
+  const detail = {
+    threadId: "thread-1",
+    projectId: "project-1",
+    title: "Example",
+    createdBy: "user",
+    creationSource: "web",
+    status: "idle",
+    latestRunId: null,
+    activeRunId: null,
+    providerInstanceId: "codex",
+    model: "model",
+    runtimeMode: "full-access",
+    interactionMode: "default",
+    linkedPullRequest: null,
+    titleRegeneration: null,
+    branch: null,
+    worktreePath: null,
+    parentThreadId: null,
+    relationshipToParent: null,
+    runCount: 0,
+    itemCount: 0,
+    pendingRequestCount: 0,
+    archived: false,
+    settled: false,
+    settledAt: null,
+    snoozed: false,
+    snoozedUntil: null,
+    createdAt: "2026-01-01T00:00:00.000Z",
+    updatedAt: "2026-01-01T00:00:00.000Z",
+  };
+  const olderReply = {
+    thread: detail,
+    recentRuns: [],
+    items: [],
+    nextPosition: null,
+    hasMore: false,
+  };
+  const lastTitleRegeneration = {
+    status: "failed",
+    message: "model unavailable",
+    requestId: "command-1",
+    completedAt: "2026-01-01T00:01:00.000Z",
+  };
+  const newReply = { ...olderReply, thread: { ...detail, lastTitleRegeneration } };
+  expect(decodeThreadReadResult(olderReply).thread.lastTitleRegeneration).toBeUndefined();
+  expect(decodeThreadReadResult(newReply).thread.lastTitleRegeneration).toEqual(
+    lastTitleRegeneration,
+  );
+  expect(() => decodePreviousThreadReadResult(newReply)).not.toThrow();
+});
+
 it("thread reads start at the oldest item with afterPosition -1 and page back with beforePosition", () => {
   const decode = Schema.decodeUnknownSync(OrchestratorMcpThreadReadInput);
   expect(decode({ threadId: "thread-1", afterPosition: -1 }).afterPosition).toBe(-1);
