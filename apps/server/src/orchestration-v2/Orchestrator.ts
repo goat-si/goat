@@ -44,6 +44,8 @@ import {
   hasLiveRun,
   isTerminalDelegatedTaskStatus,
   delegatedTaskTerminalStatus,
+  makeScheduledWorktreeGuard,
+  latestFailedWorktreeRun,
   worktreeSetupPending,
 } from "./goat/OrchestratorRunState.ts";
 import type { ProjectionAwarenessReader } from "./ProjectionAwareness.ts";
@@ -274,7 +276,7 @@ import { makeHumanHandoffs } from "./goat/HumanHandoffs.ts";
 import { makeThreadRecordDispatches } from "./goat/ThreadRecordDispatches.ts";
 import { makeStaleQuestionWakes } from "./goat/StaleQuestionWake.ts";
 import { releaseStopHolds } from "./goat/StopHoldRelease.ts";
-import { activeTurnRefusal, endsTurn, isActiveTurnRefusal } from "./goat/ActiveTurnRefusals.ts";
+import { activeTurnRefusal, endsTurn, isRetryableRefusal } from "./goat/ActiveTurnRefusals.ts";
 import {
   makeEndNativeSubagentTrees,
   nativeSubagentRef,
@@ -318,7 +320,7 @@ export class OrchestratorDispatchError extends Schema.TaggedError<OrchestratorDi
     commandId: CommandId,
     commandType: Schema.String,
     cause: Schema.optional(Schema.Defect()),
-    refusal: Schema.optional(Schema.Literal("active_turn")),
+    refusal: Schema.optional(Schema.Literals(["active_turn", "scheduled_worktree"])),
   },
 ) {
   override get message(): string {
@@ -5007,6 +5009,7 @@ const makeOrchestrator = Effect.fn("orchestrationV2.Orchestrator.layer")(functio
     mapDispatchError,
     OrchestratorDispatchError,
   });
+  const checkWorktreeSend = makeScheduledWorktreeGuard(projectionStore, OrchestratorDispatchError);
 
   const dispatchMessage = Effect.fn("Orchestrator.dispatchMessage")(function* (
     command: Extract<OrchestrationV2Command, { readonly type: "message.dispatch" }>,
@@ -5035,6 +5038,7 @@ const makeOrchestrator = Effect.fn("orchestrationV2.Orchestrator.layer")(functio
           }
         : undefined,
     );
+    yield* checkWorktreeSend(command, projection);
     let steerFollowUpAfterStop = false;
     if (command.steerFollowUpOfRunId !== undefined) {
       const source = projection.runs.find((run) => run.id === command.steerFollowUpOfRunId);
@@ -5703,14 +5707,10 @@ const makeOrchestrator = Effect.fn("orchestrationV2.Orchestrator.layer")(functio
     // A message queued during worktree setup can arrive after that setup failed
     // without a worktree. It waits, held, like the messages queued before the
     // failure, instead of starting in the project checkout.
-    const latestRun = latestExecutedRun(projection.runs);
     const worktreeMissingRun =
       activeRun === undefined &&
-      (dispatchMode.type === "queue_after_active" || dispatchMode.type === "start_immediately") &&
-      (latestRun?.status === "failed" || latestRun?.status === "interrupted") &&
-      latestRun.workspacePreparation?.type === "worktree" &&
-      projection.thread.worktreePath === null
-        ? latestRun
+      (dispatchMode.type === "queue_after_active" || dispatchMode.type === "start_immediately")
+        ? latestFailedWorktreeRun(projection)
         : undefined;
     const queueBehindRun =
       activeRun && survivorQueued.has(activeRun.id)
@@ -12694,7 +12694,7 @@ const makeOrchestrator = Effect.fn("orchestrationV2.Orchestrator.layer")(functio
       ),
       Effect.catch((cause) =>
         Effect.gen(function* () {
-          if (cause._tag === "OrchestratorThreadAboveModeLimitError" || isActiveTurnRefusal(cause))
+          if (cause._tag === "OrchestratorThreadAboveModeLimitError" || isRetryableRefusal(cause))
             return yield* cause;
           const rejectedAt = yield* DateTime.now;
           const receipt = yield* eventSink

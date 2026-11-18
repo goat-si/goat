@@ -1,4 +1,8 @@
-import { TerminalCwdStatError, TerminalSessionLookupError } from "@goat/contracts";
+import {
+  TerminalCwdStatError,
+  TerminalRequestError,
+  TerminalSessionLookupError,
+} from "@goat/contracts";
 import * as Context from "effect/Context";
 import * as Data from "effect/Data";
 import * as Effect from "effect/Effect";
@@ -48,24 +52,32 @@ export const refuseMovedWorktree = (
     readonly threadId: string;
     readonly terminalId: string;
     readonly worktreePath?: string | null | undefined;
+    readonly terminalErrorMessage?: true | undefined;
   },
 ) => {
   const requested = request.worktreePath;
   if (!requested) return Effect.void;
+  const reject = (message: string) =>
+    Effect.fail(
+      request.terminalErrorMessage === true
+        ? new TerminalRequestError({ message })
+        : new TerminalCwdStatError({ cwd: requested, cause: new Error(message) }),
+    );
   const check = worktrees.current(request.threadId).pipe(
     Effect.catch((error) =>
       Effect.logWarning("A waiting terminal was not started: its thread's worktree is unreadable", {
         threadId: request.threadId,
         requested,
         cause: error.cause,
-      }).pipe(
-        Effect.andThen(
-          Effect.fail(new TerminalCwdStatError({ cwd: requested, cause: new Error(UNREAD) })),
-        ),
-      ),
+      }).pipe(Effect.andThen(reject(UNREAD))),
     ),
     Effect.flatMap(
-      (current): Effect.Effect<void, TerminalCwdStatError | TerminalSessionLookupError> => {
+      (
+        current,
+      ): Effect.Effect<
+        void,
+        TerminalRequestError | TerminalCwdStatError | TerminalSessionLookupError
+      > => {
         if (Option.isNone(current))
           return Effect.fail(
             new TerminalSessionLookupError({
@@ -79,11 +91,7 @@ export const refuseMovedWorktree = (
         return Effect.logWarning(
           "A waiting terminal was not started: its thread moved to another worktree",
           { threadId: request.threadId, requested, current: current.value },
-        ).pipe(
-          Effect.andThen(
-            Effect.fail(new TerminalCwdStatError({ cwd: requested, cause: new Error(MOVED) })),
-          ),
-        );
+        ).pipe(Effect.andThen(reject(MOVED)));
       },
     ),
   );

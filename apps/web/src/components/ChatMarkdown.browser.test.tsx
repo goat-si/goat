@@ -2,6 +2,7 @@ import { getSyntaxHighlighterPromise } from "~/lib/syntaxHighlighting";
 import { EnvironmentId, ThreadId } from "@goat/contracts";
 import { AsyncResult } from "effect/reactivity";
 import { type ReactElement } from "react";
+import remarkGfm from "remark-gfm";
 import { describe, expect, it, vi } from "vite-plus/test";
 import { page, userEvent } from "vite-plus/test/browser";
 
@@ -15,7 +16,10 @@ import {
   useRightPanelStore,
 } from "../rightPanelStore";
 import { setMarkdownTaskChecked } from "@goat/shared/markdownTaskList";
-import { remarkEnableOrderedListNumbers } from "@goat/shared/markdownPipeline";
+import {
+  CHAT_USER_MARKDOWN_REMARK_PLUGINS,
+  remarkEnableOrderedListNumbers,
+} from "@goat/shared/markdownPipeline";
 
 const { workspaceSearch, filesystemMetadata } = vi.hoisted(() => ({
   workspaceSearch: vi.fn(),
@@ -657,6 +661,56 @@ describe("ChatMarkdown alert copy", () => {
     );
     expect(select(labelText, bodyText, "Back up".length)).toBe("Warning\n\nBack up");
   });
+});
+
+describe("ChatMarkdown user indentation copy", () => {
+  it.each([
+    { text: "   Plan\nnext" },
+    { text: "Plan\n            Deep\n                        Deeper" },
+    { text: "Plan\n\tTabbed\n \t Mixed" },
+    { text: "- item\n    more\n      deeper\n- next" },
+    { text: "Plan\n   Step one\n        Detail a", from: "Step one" },
+  ])(
+    "copies and selects user lines the same whether their typed indentation shows: $text",
+    async (copy) => {
+      setup();
+      const copied = async (extraRemarkPlugins: typeof CHAT_USER_MARKDOWN_REMARK_PLUGINS) => {
+        await using screen = await renderText(copy.text, {
+          className: "user-message-markdown",
+          lineBreaks: true,
+          parseRawHtml: false,
+          extraRemarkPlugins,
+        });
+        const markdown = screen.container.querySelector<HTMLElement>(".chat-markdown");
+        const shown = markdown?.innerText;
+        const range = document.createRange();
+        range.selectNodeContents(screen.container);
+        if (copy.from) {
+          const walker = document.createTreeWalker(screen.container, NodeFilter.SHOW_TEXT);
+          let line = walker.nextNode();
+          while (line && !line.textContent!.includes(copy.from)) line = walker.nextNode();
+          // Start mid-line, three characters into the line's text.
+          range.setStart(line!, line!.textContent!.indexOf(copy.from) + 3);
+        }
+        const selection = window.getSelection()!;
+        selection.removeAllRanges();
+        selection.addRange(range);
+        // A drag or anything else that reads the selection gets its text, not the copy payload.
+        return {
+          shown,
+          clipboard: {
+            payload: chatMarkdownClipboardPayload(selection),
+            selected: selection.toString(),
+          },
+        };
+      };
+      const shown = await copied(CHAT_USER_MARKDOWN_REMARK_PLUGINS);
+      // The user pipeline as it was before typed indentation was shown.
+      const baseline = await copied([[remarkGfm, { singleTilde: false }]]);
+      expect(shown.shown).not.toBe(baseline.shown);
+      expect(shown.clipboard).toEqual(baseline.clipboard);
+    },
+  );
 });
 
 describe("ChatMarkdown file chip tooltips", () => {

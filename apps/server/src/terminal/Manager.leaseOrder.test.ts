@@ -1,6 +1,6 @@
 import * as NodeServices from "@goat/shared/testing/nodeServicesWithCrypto";
 import { assert, it } from "@effect/vitest";
-import { ProviderInstanceId, type TerminalAttachStreamEvent } from "@goat/contracts";
+import { ProviderInstanceId, type TerminalAttachStreamEvent, TerminalError } from "@goat/contracts";
 import * as McpProviderSessions from "@goat/provider-core/server/McpProviderSessions";
 import * as Cause from "effect/Cause";
 import * as Deferred from "effect/Deferred";
@@ -11,6 +11,7 @@ import * as FileSystem from "effect/FileSystem";
 import * as Layer from "effect/Layer";
 import * as Option from "effect/Option";
 import * as Path from "effect/Path";
+import * as Schema from "effect/Schema";
 
 import * as ProcessRunner from "../processRunner.ts";
 import {
@@ -50,6 +51,9 @@ const heldFolder = Effect.gen(function* () {
     ).pipe(Effect.forkChild);
   return { cwd, other, held, release, events, hold };
 });
+
+const encodeTerminalError = Schema.encodeSync(TerminalError);
+const decodeTerminalError = Schema.decodeUnknownSync(TerminalError);
 
 const leaseFree = (cwd: string) =>
   tryWithWorkspaceLease(cwd, Effect.void).pipe(Effect.map(Option.isSome));
@@ -650,6 +654,44 @@ it.layer(
         if (error._tag === "TerminalCwdStatError") assert.strictEqual(error.cwd, folder.cwd);
         assert.deepEqual(ptyAdapter.spawnInputs, []);
       }),
+  );
+
+  it.effect.each([
+    ["moved", Effect.succeedSome("/elsewhere"), "This thread moved to another worktree"],
+    [
+      "unreadable",
+      Effect.fail(new TerminalThreadWorktreeError({ cause: "private diagnostic" })),
+      "GOAT could not read the thread's worktree",
+    ],
+  ] as const)("reports why an opted-in open refused to start: %s", ([, current, reason]) =>
+    Effect.gen(function* () {
+      const folder = yield* heldFolder;
+      const fs = yield* FileSystem.FileSystem;
+      const ptyAdapter = new FakePtyAdapter();
+      const manager = yield* TerminalManager.makeWithOptions({
+        logsDir: yield* fs.makeTempDirectoryScoped({ prefix: "goat-terminal-logs-" }),
+        ptyAdapter,
+        processKillGraceMs: 1,
+        threadWorktree: { current: () => current },
+      });
+      const request = {
+        ...openInput({ cwd: folder.cwd, worktreePath: folder.cwd }),
+        terminalErrorMessage: true as const,
+      };
+      const holder = yield* folder.hold(Effect.void);
+      yield* Deferred.await(folder.held);
+      const opened = yield* Effect.flip(manager.open(request)).pipe(
+        Effect.forkChild({ startImmediately: true }),
+      );
+      yield* Deferred.succeed(folder.release, undefined);
+      yield* Fiber.join(holder);
+      const wire = encodeTerminalError(yield* Fiber.join(opened));
+      const error = decodeTerminalError(wire);
+      assert.strictEqual(error._tag, "TerminalRequestError");
+      assert.include(error.message, reason);
+      assert.notInclude(error.message, "private diagnostic");
+      assert.deepEqual(ptyAdapter.spawnInputs, []);
+    }),
   );
 
   it.effect(

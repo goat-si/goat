@@ -42,3 +42,12 @@ export const ContextMenuItemSchema: Schema.Codec<ContextMenuItemSchemaType> = Sc
     ),
   ),
 });
+
+export const ContextMenuSourceSchema = Schema.Literals(["mouse", "keyboard"]);
+export type ContextMenuSource = typeof ContextMenuSourceSchema.Type;
+
+export type ContextMenuShow = <T extends string>(
+  items: readonly ContextMenuItem<T>[],
+  position?: { x: number; y: number },
+  source?: ContextMenuSource,
+) => Promise<T | null>;

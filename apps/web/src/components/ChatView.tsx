@@ -3450,7 +3450,7 @@ export default function ChatView(props: ChatViewProps) {
           <ThreadFindCanvas
             findOptions={{
               skills: timelineSkills,
-              progressive: serverConfig?.threadFindProgressive === true,
+              serverConfig: serverConfig ?? undefined,
               thread: activeThreadRef,
               enabled: threadFindEnabled,
             }}

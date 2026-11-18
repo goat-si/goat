@@ -6,6 +6,9 @@ import type {
   ScopedThreadRef,
 } from "@goat/contracts";
 
+import { rendersServerTabNatively } from "~/browser/previewRuntime";
+import { appAtomRegistry } from "~/rpc/atomRegistry";
+import { primaryEnvironmentIdAtom } from "~/state/primaryEnvironment";
 import { useClosedViewStore } from "~/closedViewStore";
 import { beginPreviewSessionClose, cancelPreviewSessionClose } from "~/previewStateStore";
 
@@ -22,14 +25,22 @@ interface ClosePreviewSessionInput<E> {
 export async function closePreviewSession<E>(
   input: ClosePreviewSessionInput<E>,
 ): Promise<AtomCommandResult<void, E>> {
-  beginPreviewSessionClose(input.threadRef, input.tabId);
+  const keepMounted = rendersServerTabNatively(
+    input.threadRef.environmentId,
+    appAtomRegistry.get(primaryEnvironmentIdAtom),
+    input.snapshot,
+  );
+  if (!keepMounted) beginPreviewSessionClose(input.threadRef, input.tabId);
   const result = await input.closePreview({
     environmentId: input.threadRef.environmentId,
     input: { threadId: input.threadRef.threadId, tabId: input.tabId },
   });
   if (result._tag === "Failure") {
-    cancelPreviewSessionClose(input.threadRef, input.snapshot, input.tabId);
-  } else if (input.snapshot) {
+    if (!keepMounted) cancelPreviewSessionClose(input.threadRef, input.snapshot, input.tabId);
+    return result;
+  }
+  if (keepMounted) beginPreviewSessionClose(input.threadRef, input.tabId);
+  if (input.snapshot) {
     useClosedViewStore.getState().remember({
       kind: "browser",
       threadRef: input.threadRef,

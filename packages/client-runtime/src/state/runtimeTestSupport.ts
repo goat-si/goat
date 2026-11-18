@@ -1,9 +1,16 @@
-import { EnvironmentId } from "@goat/contracts";
+import {
+  EnvironmentId,
+  TerminalAttachInput,
+  type TerminalAttachStreamEvent,
+  WS_METHODS,
+} from "@goat/contracts";
 import * as Effect from "effect/Effect";
 import * as Layer from "effect/Layer";
 import * as Option from "effect/Option";
+import * as Queue from "effect/Queue";
 import * as Schema from "effect/Schema";
 import * as Stream from "effect/Stream";
+import * as Struct from "effect/Struct";
 import * as SubscriptionRef from "effect/SubscriptionRef";
 import { AsyncResult, Atom, AtomRegistry } from "effect/reactivity";
 import {
@@ -28,6 +35,23 @@ export const QUERY_ENVIRONMENT = new PrimaryConnectionTarget({
 });
 
 export const QUERY_RPC_SESSION = {} as RpcSession.RpcSession;
+
+const decodeLegacyTerminalAttach = Schema.decodeUnknownSync(
+  TerminalAttachInput.mapFields(Struct.omit(["terminalErrorMessage"])),
+);
+
+export function legacyTerminalAttachClient(
+  inputs: Queue.Queue<TerminalAttachInput>,
+  events: Queue.Queue<TerminalAttachStreamEvent>,
+): RpcSession.RpcSession["client"] {
+  return {
+    [WS_METHODS.terminalAttach]: (input: TerminalAttachInput) =>
+      Stream.fromEffect(Queue.offer(inputs, decodeLegacyTerminalAttach(input))).pipe(
+        Stream.drain,
+        Stream.concat(Stream.fromQueue(events)),
+      ),
+  } as unknown as RpcSession.RpcSession["client"];
+}
 
 export class TestQueryError extends Schema.TaggedError<TestQueryError>()("TestQueryError", {
   message: Schema.String,

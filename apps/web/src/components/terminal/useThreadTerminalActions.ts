@@ -15,8 +15,10 @@ import { useProject, useQuietThreadShell } from "../../state/entities";
 import { readEnvironmentScope } from "../../state/session";
 import { terminalEnvironment } from "../../state/terminal";
 import { useKnownTerminalSessions } from "../../state/terminalSessions";
+import { formatEnvironmentQueryError } from "../../state/query";
 import { useAtomCommand } from "../../state/use-atom-command";
 import { selectThreadTerminalUiState, useTerminalUiStateStore } from "../../terminalUiStateStore";
+import { toastManager } from "../ui/toast";
 
 /** Where a new terminal starts. Omitted fields fall back to the thread's project and worktree. */
 export interface TerminalLaunchLocation {
@@ -88,6 +90,7 @@ export function useThreadTerminalActions(threadRef: ScopedThreadRef | null) {
     readonly location?: TerminalLaunchLocation | null;
     readonly extraEnv?: Record<string, string>;
     readonly stopOnSettle?: boolean;
+    readonly reportOpenFailure?: boolean;
     readonly size?: { readonly cols: number; readonly rows: number };
   }) => {
     if (!threadRef || !canWrite() || !project) return null;
@@ -110,6 +113,19 @@ export function useThreadTerminalActions(threadRef: ScopedThreadRef | null) {
         ...input.size,
         ...(input.stopOnSettle !== undefined ? { stopOnSettle: input.stopOnSettle } : {}),
       },
+    }).then((settled) => {
+      if (
+        input.reportOpenFailure !== false &&
+        settled._tag === "Failure" &&
+        !isAtomCommandInterrupted(settled)
+      ) {
+        toastManager.add({
+          type: "error",
+          title: "Could not open terminal",
+          description: formatEnvironmentQueryError(settled.cause),
+        });
+      }
+      return settled;
     });
     return { terminalId, result };
   };

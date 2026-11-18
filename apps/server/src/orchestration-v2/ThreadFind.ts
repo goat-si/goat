@@ -24,6 +24,12 @@ import {
   type ProjectionStoreV2Error,
 } from "./ProjectionStore.ts";
 
+export const serverCapabilities = {
+  threadFind: true,
+  threadFindProgressive: true,
+  threadFindLiteralQuery: true,
+} as const;
+
 interface FindRow {
   readonly position: number;
   readonly visibility: OrchestrationV2ProjectedTurnItem["visibility"];

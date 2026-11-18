@@ -357,17 +357,16 @@ export const make = Effect.gen(function* () {
       });
     const auth = yield* hubAuth.value.resolve(profile);
     const descriptorPath = "/.well-known/goat/environment";
-    const { descriptor, relaySupportUrl } = yield* requestHubProxyJson(
+    let relaySupportUrl: string | undefined;
+    const descriptor = yield* requestHubProxyJson(
       auth,
       profile.nodeId,
       descriptorPath,
-      (input, { headers, url }) =>
-        decodeHubDescriptor(input).pipe(
-          Effect.map((descriptor) => ({
-            descriptor,
-            relaySupportUrl: headers[HUB_PROXY_VCS_BRANCH_HEADER] === "1" ? url : undefined,
-          })),
-        ),
+      decodeHubDescriptor,
+      "GET",
+      (headers, url) => {
+        if (headers[HUB_PROXY_VCS_BRANCH_HEADER] === "1") relaySupportUrl = url;
+      },
     );
     if (descriptor.environmentId !== entry.target.environmentId)
       return yield* environmentMismatchError({

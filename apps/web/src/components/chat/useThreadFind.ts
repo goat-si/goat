@@ -1,5 +1,9 @@
 import type { InlineSkill } from "@goat/shared/inlineSkills";
-import type { OrchestrationV2SearchThreadResult, ScopedThreadRef } from "@goat/contracts";
+import type {
+  OrchestrationV2SearchThreadResult,
+  ScopedThreadRef,
+  ServerConfig,
+} from "@goat/contracts";
 import { scopedThreadKey } from "@goat/client-runtime/environment";
 import { useEffect, useEffectEvent, useRef, useState } from "react";
 import { orchestrationEnvironment } from "~/state/orchestration";
@@ -22,12 +26,12 @@ const EMPTY_SKILLS: readonly InlineSkill[] = [];
 export function useThreadFind({
   thread,
   enabled,
-  progressive = false,
+  serverConfig,
   skills = EMPTY_SKILLS,
 }: {
   thread: ScopedThreadRef | null;
   enabled: boolean;
-  progressive?: boolean;
+  serverConfig?: Pick<ServerConfig, "threadFindProgressive" | "threadFindLiteralQuery"> | undefined;
   skills?: readonly InlineSkill[];
 }) {
   // Read here rather than passed in: a streamed delta re-renders only the find
@@ -40,6 +44,10 @@ export function useThreadFind({
   const isOpen = useThreadFindOpen(thread, enabled);
   const stored = useThreadFindStore();
   const state = isOpen ? stored : CLOSED_THREAD_FIND;
+  const progressive = serverConfig?.threadFindProgressive === true;
+  const literal = serverConfig?.threadFindLiteralQuery === true;
+  const trimmedQuery = state.query.trim();
+  const query = literal && trimmedQuery ? state.query : trimmedQuery;
   const setState = (update: (previous: ThreadFindState) => Partial<ThreadFindState>) =>
     useThreadFindStore.setState((previous) =>
       previous.threadKey === threadKey ? update(previous) : previous,
@@ -47,7 +55,7 @@ export function useThreadFind({
 
   const remote = useServerResults(
     isOpen ? thread : null,
-    state.query,
+    query,
     state.offset,
     state.requestId,
     state.start,
@@ -73,7 +81,7 @@ export function useThreadFind({
   const counting = remote.data?.complete === false;
   const navigationId = localSelection?.navigationId ?? remote.navigationId;
   const findExpanded = isOpen && state.query.trim().length > 0;
-  const findQuery = isOpen && remote.data?.match ? state.query : "";
+  const findQuery = isOpen && remote.data?.match ? query : "";
   const nextTimeline: TimelineFields = {
     findOpen: isOpen,
     findExpanded,
@@ -214,7 +222,8 @@ export function useThreadFind({
       focusRequestId: state.focusRequestId,
       onRetry: remote.refresh,
       onQueryChange: (query: string) => {
-        if (threadKey !== null) setThreadFindQuery(threadKey, query);
+        if (threadKey !== null)
+          setThreadFindQuery(threadKey, query, literal ? query : query.trim());
       },
       onNext: () => step(1),
       onPrevious: () => step(-1),
@@ -272,12 +281,11 @@ function useServerResults(
   progressive: boolean,
 ) {
   const skillLabels = skills.map(({ name, displayName }) => ({ name, displayName }));
-  const normalizedQuery = query.trim();
-  const debouncedQuery = useDebouncedValue(normalizedQuery, 100);
+  const debouncedQuery = useDebouncedValue(query, 100);
   const environmentId = thread?.environmentId;
   const threadId = thread?.threadId;
   const target =
-    environmentId && threadId && debouncedQuery && normalizedQuery === debouncedQuery
+    environmentId && threadId && debouncedQuery && query === debouncedQuery
       ? {
           environmentId,
           input: {
@@ -301,7 +309,7 @@ function useServerResults(
   }
   const result = useEnvironmentQuery(atom);
   const key = thread
-    ? JSON.stringify([thread.environmentId, thread.threadId, normalizedQuery, skillLabels])
+    ? JSON.stringify([thread.environmentId, thread.threadId, query, skillLabels])
     : null;
   const [previous, setPrevious] = useState({
     key,
@@ -326,9 +334,7 @@ function useServerResults(
     data: key === previous.key && !result.error ? previous.data : null,
     navigationId: previous.navigationId,
     isPending:
-      thread !== null &&
-      normalizedQuery.length > 0 &&
-      (normalizedQuery !== debouncedQuery || result.isPending),
+      thread !== null && query.length > 0 && (query !== debouncedQuery || result.isPending),
   };
 }
 

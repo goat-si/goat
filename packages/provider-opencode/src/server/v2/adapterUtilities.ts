@@ -118,10 +118,22 @@ const isWakeTurn = (turn: OrchestrationV2ProviderTurn) =>
   turn.nativeTurnRef?.nativeId?.includes(":wake:") === true;
 
 // OpenCode's claude-agent reports a spent Claude plan as provider.unknown with Claude's own text.
-export const claudeUsageLimit = (message: string | undefined) =>
+const claudeUsageLimit = (message: string | undefined) =>
   message !== undefined && /^You've hit your [^\n·]*\blimit\b/.test(message)
     ? { resetAt: /\bResets at (\d{4}-\d\d-\d\dT[\d:.]+Z)\.?\s*$/.exec(message)?.[1] ?? null }
     : undefined;
+
+export function providerUsageLimit(error: {
+  readonly type: string;
+  readonly status?: number | undefined;
+  readonly message: string;
+}) {
+  if (error.status === 402) return undefined;
+  if (error.type === "provider.quota" || error.type === "provider.rate-limit") {
+    return { resetAt: null };
+  }
+  return error.type === "provider.unknown" ? claudeUsageLimit(error.message) : undefined;
+}
 
 export const promptOf = (turn: OrchestrationV2ProviderTurn) => {
   const nativeId = turn.nativeTurnRef?.nativeId;

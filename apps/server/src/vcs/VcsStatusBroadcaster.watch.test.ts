@@ -175,11 +175,7 @@ describe("VCS HEAD watchers", () => {
 
   it.effect("a checkout read that fails while index.lock is held retries until it succeeds", () =>
     Effect.gen(function* () {
-      const fs = yield* FileSystem.FileSystem;
-      const path = yield* Path.Path;
-      const gitDir = yield* fs.makeTempDirectoryScoped({ prefix: "vcs-head-watch-" });
-      const headPath = path.join(gitDir, "HEAD");
-      yield* fs.writeFileString(headPath, "ref: refs/heads/main\n");
+      const native = fakeNativeWatch();
       const failed = yield* Deferred.make<void>();
       const state = {
         currentLocalStatus: { ...baseLocalStatus, isDefaultRef: true, refName: "main" },
@@ -188,7 +184,11 @@ describe("VCS HEAD watchers", () => {
         remoteStatusCalls: 0,
         localInvalidationCalls: 0,
         remoteInvalidationCalls: 0,
-        headPath,
+        headPath: "/repo/.git/HEAD",
+        fileSystem: FileSystem.makeNoop({
+          realPath: (target) => Effect.succeed(target),
+          exists: () => Effect.succeed(true),
+        }),
         failLocalStatus: false,
         onLocalStatusFailure: Deferred.succeed(failed, undefined).pipe(Effect.asVoid),
       };
@@ -212,9 +212,7 @@ describe("VCS HEAD watchers", () => {
         // A terminal commit holds index.lock across the checkout, so the HEAD event's read fails.
         state.failLocalStatus = true;
         state.currentLocalStatus = { ...baseLocalStatus, isDefaultRef: false, refName: "repro" };
-        const lockPath = path.join(gitDir, "HEAD.lock");
-        yield* fs.writeFileString(lockPath, "ref: refs/heads/repro\n");
-        yield* fs.rename(lockPath, headPath);
+        native.notify("rename", "HEAD");
         yield* Deferred.await(failed);
         const failedCalls = state.localStatusCalls;
 
@@ -223,8 +221,12 @@ describe("VCS HEAD watchers", () => {
         yield* TestClock.adjust(Duration.seconds(30));
         yield* Deferred.await(checkedOut);
         assert.strictEqual(state.localStatusCalls, failedCalls + 1);
-      }).pipe(Effect.provide(layerTestFor(state)), Effect.scoped);
-    }).pipe(Effect.provide(NodeServices.layer), Effect.scoped),
+      }).pipe(
+        Effect.provide(layerTestFor(state)),
+        Effect.provideService(NativeHeadWatch, native.startWatch),
+        Effect.scoped,
+      );
+    }),
   );
 
   it.effect("subscribers share one HEAD watch that ends with the last of them", () =>
