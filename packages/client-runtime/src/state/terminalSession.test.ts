@@ -1,6 +1,11 @@
 import { describe, expect, it } from "vite-plus/test";
 
-import { EnvironmentId, TerminalSessionSnapshot, ThreadId } from "@goat/contracts";
+import {
+  EnvironmentId,
+  retainedTerminalHistory,
+  TerminalSessionSnapshot,
+  ThreadId,
+} from "@goat/contracts";
 
 import {
   applyTerminalAttachStreamEvent,
@@ -120,6 +125,14 @@ describe("terminal session reducers", () => {
 
     expect(terminalOutputText(state.output)).toBe("\uFEFFtail");
     expect(state.output.retainedBytes).toBe(7);
+    const serverTail = retainedTerminalHistory("discard﻿tail", 7);
+    expect(
+      applyTerminalAttachStreamEvent(
+        EMPTY_TERMINAL_BUFFER_STATE,
+        { type: "snapshot", snapshot: { ...BASE_SNAPSHOT, history: serverTail } },
+        7,
+      ),
+    ).toEqual(state);
   });
 
   it("trims whole Unicode code points from a partially retained chunk", () => {

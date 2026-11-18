@@ -119,6 +119,13 @@ it("asks for separate secrets while retaining login and payment card handoffs", 
   expect(handoff.guide).toContain("request kind card");
 });
 
+it("contract: watching a pull request that is already failing tells the agent to read its checks first", () => {
+  // A new watch records the checks and conflicts already there without waking the agent.
+  const watch = agentSurfaceRegistry["pull_request.watch"];
+  expect(watch.description).toContain("goat_pull_request_read (checks and mergeability)");
+  expect(watch.description).toContain("already failing");
+});
+
 describe("agent surface grammar", () => {
   it("declares screen run as a thread-scoped write with non-replayable input", () => {
     const screen = agentSurfaceRegistry["surface.screen_run"];

@@ -190,6 +190,117 @@ describe("v2 thread shell lists", () => {
     registry.dispose();
   });
 
+  it("flags the parent while a live subagent waits on a secret card", () => {
+    const { registry, threads, snapshotAtom } = makeHarness();
+    const root = v2ThreadShell;
+    const child = {
+      ...root,
+      id: ThreadId.make("child"),
+      creationSource: "mcp" as const,
+      status: "running" as const,
+      activityRunStatus: "running" as const,
+      lineage: {
+        ...root.lineage,
+        parentThreadId: root.id,
+        relationshipToParent: "subagent" as const,
+      },
+      pendingRuntimeRequest: {
+        id: RuntimeRequestId.make("secret-card"),
+        kind: "user_input" as const,
+        createdAt: v2Now,
+        blocking: true,
+        userOnly: true,
+      },
+    };
+    registry.set(snapshotAtom(environmentId), { ...v2ShellSnapshot, threads: [root, child] });
+    expect(
+      registry.get(threads.threadShellAtom({ environmentId, threadId: root.id }))
+        ?.pendingSubagentRequest,
+    ).toBe("user_input");
+    registry.dispose();
+  });
+
+  it("keeps the parent at Input needed while a finished subagent's handoff card is still pending", () => {
+    const { registry, threads, snapshotAtom } = makeHarness();
+    const root = v2ThreadShell;
+    const child = {
+      ...root,
+      id: ThreadId.make("child"),
+      creationSource: "mcp" as const,
+      status: "idle" as const,
+      activityRunStatus: null,
+      lineage: {
+        ...root.lineage,
+        parentThreadId: root.id,
+        relationshipToParent: "subagent" as const,
+      },
+      pendingRuntimeRequest: {
+        id: RuntimeRequestId.make("handoff-card"),
+        kind: "user_input" as const,
+        createdAt: v2Now,
+        blocking: true,
+        userOnly: true,
+      },
+    };
+    registry.set(snapshotAtom(environmentId), { ...v2ShellSnapshot, threads: [root, child] });
+    expect(
+      registry.get(threads.threadShellAtom({ environmentId, threadId: root.id }))
+        ?.pendingSubagentRequest,
+    ).toBe("user_input");
+    registry.dispose();
+  });
+
+  it.each([
+    { status: "running", activityRunStatus: "running" },
+    { status: "completed", activityRunStatus: null },
+  ] as const)("shows a $status child's approval handoff on the parent and in detail", (run) => {
+    const { registry, threads, snapshotAtom } = makeHarness();
+    const root = v2ThreadShell;
+    const child: OrchestrationV2ThreadShell = {
+      ...root,
+      ...run,
+      id: ThreadId.make("approval-child"),
+      creationSource: "mcp",
+      lineage: {
+        ...root.lineage,
+        parentThreadId: root.id,
+        relationshipToParent: "subagent",
+      },
+      pendingRuntimeRequest: {
+        id: RuntimeRequestId.make("approval-handoff"),
+        kind: "user_input",
+        createdAt: v2Now,
+        blocking: true,
+        userOnly: true,
+        handoff: { kind: "approval", title: "Approve handoff" },
+      },
+    };
+    const ref = { environmentId, threadId: root.id };
+    const parent = threads.threadShellAtom(ref);
+    const inputs = threads.childThreadInputsAtom(ref);
+    const disposeParent = registry.mount(parent);
+    const disposeInputs = registry.mount(inputs);
+    registry.set(snapshotAtom(environmentId), { ...v2ShellSnapshot, threads: [root, child] });
+
+    const asking = registry.get(inputs);
+    expect({
+      parentRequest: registry.get(parent)?.pendingSubagentRequest,
+      detailChildIds: asking.map((thread) => thread.id),
+    }).toEqual({ parentRequest: "approval", detailChildIds: [child.id] });
+    expect(childThreadInputsTitle(asking)).toBe("Subagent needs approval");
+    expect(childThreadRequestsTitle(asking)).toBe("Subagent needs approval");
+
+    registry.set(snapshotAtom(environmentId), {
+      ...v2ShellSnapshot,
+      threads: [root, { ...child, pendingRuntimeRequest: null }],
+    });
+    expect(registry.get(parent)?.pendingSubagentRequest).toBeNull();
+    expect(registry.get(inputs)).toEqual([]);
+    disposeInputs();
+    disposeParent();
+    registry.dispose();
+  });
+
   it("brings a parent back from Working while a nested subagent waits for approval", () => {
     const { registry, threads, snapshotAtom } = makeHarness();
     const child = {
