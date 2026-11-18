@@ -35,6 +35,7 @@ export const restoreCheckpointFiles = Effect.fn("GitVcsDriver.checkpoints.restor
       args: [...restore, ...(sparseCheckout ? [] : ["--ignore-skip-worktree-bits"]), "--", "."],
     });
     if (!sparseCheckout) return;
+    let step = "ls-files --sparse";
     const manual = yield* Effect.gen(function* () {
       const skipped: string[] = [];
       let recordStart = true;
@@ -74,6 +75,7 @@ export const restoreCheckpointFiles = Effect.fn("GitVcsDriver.checkpoints.restor
       });
       if (skipped.length === 0) return skipped;
       const stdin = skipped.join("\0") + "\0";
+      step = "sparse-checkout check-rules";
       // check-rules echoes a subset of its input, so the input size bounds its output.
       const rules = yield* execute({
         operation,
@@ -86,7 +88,12 @@ export const restoreCheckpointFiles = Effect.fn("GitVcsDriver.checkpoints.restor
       return rules.stdout.split("\0").filter((entry) => entry.length > 0);
     }).pipe(
       // A Git without ls-files --sparse or check-rules keeps the plain restore's result.
-      Effect.orElseSucceed((): string[] => []),
+      Effect.catch(() =>
+        Effect.logWarning("Checkpoint restore left hand-flagged sparse files as they were", {
+          cwd,
+          step,
+        }).pipe(Effect.as<string[]>([])),
+      ),
     );
     if (manual.length === 0) return;
     yield* execute({
