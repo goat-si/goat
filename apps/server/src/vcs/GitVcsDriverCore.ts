@@ -3920,9 +3920,7 @@ export const makeGitVcsDriverCore = Effect.fn("makeGitVcsDriverCore")(function* 
       existing === "added" ? (newBranch ?? input.refName) : input.refName,
     ];
     const onCheckoutProgress = progress?.onCheckoutProgress;
-    const pathExisted = yield* fileSystem
-      .exists(worktreePath)
-      .pipe(Effect.orElseSucceed(() => true));
+    const pathExisted = yield* fileSystem.exists(targetPath).pipe(Effect.orElseSucceed(() => true));
     const registration = Effect.fn("GitVcsDriver.createWorktree.registration")(function* () {
       if (lockReason === null) return;
       const physicalPath = yield* fileSystem
@@ -3958,79 +3956,6 @@ export const makeGitVcsDriverCore = Effect.fn("makeGitVcsDriverCore")(function* 
         }),
       ),
     );
-    const expectedHead =
-      existing === "reused"
-        ? null
-        : yield* executeGit(
-            "GitVcsDriver.createWorktree.startCommit",
-            input.cwd,
-            [
-              "rev-parse",
-              "--verify",
-              "--end-of-options",
-              `${input.refName === "-" ? "@{-1}" : input.refName}^{commit}`,
-            ],
-            { allowNonZeroExit: true },
-          ).pipe(Effect.map((result) => (result.exitCode === 0 ? result.stdout.trim() : null)));
-    const rollback = Effect.fn("GitVcsDriver.createWorktree.rollback")(
-      function* (branch: string | null) {
-        // A lock added after checkout cannot prove nobody reused it during the add.
-        if (!lockOnAdd || expectedHead === null) return false;
-        const removed = yield* tryWithWorkspaceSubtree(
-          targetPath,
-          Effect.gen(function* () {
-            const owned = yield* registration();
-            if (
-              owned === undefined ||
-              owned.head !== expectedHead ||
-              (branch !== null && owned.branch !== `refs/heads/${branch}`)
-            )
-              return false;
-            const status = yield* runGitStdout(
-              "GitVcsDriver.createWorktree.rollbackStatus",
-              owned.path,
-              [
-                "status",
-                "--porcelain",
-                "--untracked-files=all",
-                "--ignored=matching",
-                "--ignore-submodules=none",
-              ],
-            );
-            if (status !== "") return false;
-            const confirmed = yield* registration();
-            if (confirmed?.head !== expectedHead || confirmed.branch !== owned.branch) return false;
-            yield* unlock(confirmed.path);
-            yield* removeWorktree({ cwd: input.cwd, path: confirmed.path, force: true });
-            if (pathExisted) yield* fileSystem.makeDirectory(targetPath, { recursive: true });
-            if (newBranch !== undefined && existingTip === null && owned.branch !== undefined) {
-              yield* runGit("GitVcsDriver.createWorktree.rollbackBranch", input.cwd, [
-                "update-ref",
-                "-d",
-                owned.branch,
-                expectedHead,
-              ]).pipe(
-                Effect.catch((cause) =>
-                  Effect.logWarning("kept the abandoned worktree branch", {
-                    branch: owned.branch,
-                    cause,
-                  }),
-                ),
-              );
-            }
-            return true;
-          }),
-        );
-        return Option.getOrElse(removed, () => false);
-      },
-      Effect.catchCause((cause) =>
-        Effect.logWarning("worktree add rollback kept the checkout", {
-          worktreePath: targetPath,
-          cause,
-        }).pipe(Effect.as(false)),
-      ),
-    );
-
     if (hostPlatform === "win32" && existing !== "reused") {
       yield* applyWindowsCheckoutSettings(input.cwd);
     }
@@ -4215,7 +4140,6 @@ export const makeGitVcsDriverCore = Effect.fn("makeGitVcsDriverCore")(function* 
               if (progress?.onWorktreeOwnership !== undefined) {
                 yield* progress.onWorktreeOwnership({
                   path: targetPath,
-                  rollback,
                   release: release(),
                 });
                 transferred = true;
@@ -4223,7 +4147,21 @@ export const makeGitVcsDriverCore = Effect.fn("makeGitVcsDriverCore")(function* 
             }),
           ),
         ),
-        Effect.onError(() => (transferred ? Effect.void : rollback(newBranch ?? null))),
+        Effect.catch((error) =>
+          registration().pipe(
+            Effect.option,
+            Effect.flatMap((owned) =>
+              Option.getOrUndefined(owned) === undefined
+                ? Effect.fail(error)
+                : Effect.fail(
+                    new GitCommandError({
+                      ...error,
+                      detail: `${error.detail}. The unfinished checkout and branch were kept at ${targetPath}.`,
+                    }),
+                  ),
+            ),
+          ),
+        ),
         Effect.ensuring(Effect.suspend(() => (transferred ? Effect.void : release()))),
       );
 
@@ -5135,7 +5073,6 @@ export const makeGitVcsDriverCore = Effect.fn("makeGitVcsDriverCore")(function* 
           return [
             {
               path: path.resolve(cwd, worktree.slice("worktree ".length)),
-              head: fields.find((field) => field.startsWith("HEAD "))?.slice("HEAD ".length),
               branch: fields.find((field) => field.startsWith("branch "))?.slice("branch ".length),
               prunable: fields.some((field) => field.startsWith("prunable")),
               lockReason: fields

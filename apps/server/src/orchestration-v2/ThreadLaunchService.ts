@@ -304,12 +304,10 @@ const make = Effect.gen(function* () {
       ownership = null;
       return release;
     }).pipe(Effect.uninterruptible);
-    // Only a branch this launch created is deleted on rollback; a reused one predates it.
-    let ownedBranch: string | null = null;
     let setupTerminalId: string | null = null;
     let workspaceRecorded = false;
     let runReleased = false;
-    // Stop background renames before forgetting worktrees; completed renames record them again.
+    // A cancelled preparation must stop its background rename.
     let branchRename: Fiber.Fiber<unknown> | null = null;
     if (input.workspaceStrategy.type === "worktree") {
       yield* setupTracker.begin({
@@ -526,7 +524,6 @@ const make = Effect.gen(function* () {
                 onWorktreeOwnership: (claimed) =>
                   Effect.sync(() => {
                     ownership = claimed;
-                    ownedBranch = branch;
                   }),
                 onExistingBranch: (outcome) =>
                   Effect.sync(() => {
@@ -627,24 +624,13 @@ const make = Effect.gen(function* () {
         const worktreeCwd = worktreePath;
         branchRename = yield* generateBranchNameFor(worktreeCwd, initialMessage).pipe(
           Effect.flatMap(({ branch: newBranch, exactName }) =>
-            git
-              .renameBranch({
+            Effect.gen(function* () {
+              const renamed = yield* git.renameBranch({
                 cwd: worktreeCwd,
                 oldBranch,
                 newBranch,
                 ...(exactName ? { exactName: true } : {}),
-              })
-              .pipe(
-                Effect.tap((renamed) =>
-                  Effect.sync(() => {
-                    if (ownedBranch === oldBranch) ownedBranch = renamed.branch;
-                  }),
-                ),
-                Effect.uninterruptible,
-              ),
-          ),
-          Effect.flatMap((renamed) =>
-            Effect.gen(function* () {
+              });
               yield* threads
                 .dispatch({
                   type: "thread.metadata.update",
@@ -652,7 +638,6 @@ const make = Effect.gen(function* () {
                   threadId,
                   branch: renamed.branch,
                   expectedBranch: oldBranch,
-                  // A late rename must not restore a worktree removed by setup cancellation.
                   expectedWorktreePath: worktreeCwd,
                 })
                 .pipe(
@@ -663,6 +648,11 @@ const make = Effect.gen(function* () {
                     }),
                   ),
                 );
+              return renamed;
+            }).pipe(Effect.uninterruptible),
+          ),
+          Effect.flatMap((renamed) =>
+            Effect.gen(function* () {
               // Update parents first so children inherit names; reread each pass for newly updated descendants.
               const visited = new Set([threadId]);
               while (true) {
@@ -839,33 +829,28 @@ const make = Effect.gen(function* () {
           const cancelled =
             Cause.hasInterruptsOnly(cause) ||
             (yield* preparationRunStopped(threads, threadId, runId));
-          yield* setupTracker.finish(
-            threadId,
-            cancelled ? "cancelled" : "failed",
-            cancelled ? null : failureDetail(Cause.squash(cause)),
-          );
           if (cancelled && setupTerminalId)
             yield* terminals
               .close({ threadId, terminalId: setupTerminalId, deleteHistory: true })
               .pipe(Effect.ignore);
           if (
-            !tracked ||
-            ownership === null ||
-            !((cancelled && !runReleased) || !workspaceRecorded)
-          )
-            return;
-          if (branchRename !== null) yield* Fiber.interrupt(branchRename);
-          if (yield* ownership.rollback(ownedBranch)) {
-            yield* threads
-              .dispatch({
-                type: "thread.metadata.update",
-                commandId: CommandId.make(`${input.commandId}:cancel-workspace`),
-                threadId,
-                worktreePath: null,
-                branch: null,
-              })
-              .pipe(Effect.ignore);
+            tracked &&
+            ownership !== null &&
+            ((cancelled && !runReleased) || !workspaceRecorded)
+          ) {
+            if (branchRename !== null) yield* Fiber.interrupt(branchRename);
+            yield* setupTracker.stageStatus(
+              threadId,
+              "checkout",
+              "warning",
+              `The unfinished checkout and branch were kept at ${ownership.path}.`,
+            );
           }
+          yield* setupTracker.finish(
+            threadId,
+            cancelled ? "cancelled" : "failed",
+            cancelled ? null : failureDetail(Cause.squash(cause)),
+          );
         }),
       ),
       Effect.ensuring(releaseOwnership),

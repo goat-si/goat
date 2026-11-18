@@ -4753,7 +4753,6 @@ it.layer(layerTest)("GitVcsDriver core integration", (it) => {
         assert.include(refused.detail, "still being prepared");
         yield* writeTextFile(input.path, "notes.txt", "keep");
         const ownership = yield* Deferred.await(owner);
-        assert.isFalse(yield* ownership.rollback(input.newRefName));
         const fs = yield* FileSystem.FileSystem;
         const notes = path.join(input.path, "notes.txt");
         assert.equal(yield* fs.readFileString(notes), "keep");
@@ -4800,7 +4799,7 @@ it.layer(layerTest)("GitVcsDriver core integration", (it) => {
       }),
     );
 
-    it.effect("rolls back an owned registration in a pre-existing empty destination", () =>
+    it.effect("keeps a failed owned checkout in a previously empty destination", () =>
       Effect.gen(function* () {
         const cwd = yield* makeTmpDir();
         const { initialBranch } = yield* initRepoWithCommit(cwd);
@@ -4828,12 +4827,17 @@ it.layer(layerTest)("GitVcsDriver core integration", (it) => {
           }),
         );
 
-        assert.equal(yield* git(cwd, ["branch", "--list", "feature/owned-registration"]), "");
-        assert.notInclude(yield* git(cwd, ["worktree", "list", "--porcelain"]), destination);
+        assert.equal(
+          yield* git(destination, ["branch", "--show-current"]),
+          "feature/owned-registration",
+        );
+        const registrations = yield* git(cwd, ["worktree", "list", "--porcelain"]);
+        assert.include(registrations, destination);
+        assert.notInclude(registrations, "goat-create-");
       }),
     );
 
-    it.effect("rolls back the branch and worktree when adding the worktree fails", () =>
+    it.effect("reuses a clean branch and checkout after a failed add", () =>
       Effect.gen(function* () {
         const cwd = yield* makeTmpDir();
         const { initialBranch } = yield* initRepoWithCommit(cwd);
@@ -4854,9 +4858,9 @@ it.layer(layerTest)("GitVcsDriver core integration", (it) => {
 
         yield* Effect.flip(driver.createWorktree(request, { reuseExistingBranch: true }));
 
-        assert.equal(yield* git(cwd, ["branch", "--list", "feature/partial"]), "");
-        assert.notInclude(yield* git(cwd, ["worktree", "list", "--porcelain"]), "partial");
-        assert.equal(yield* fs.exists(worktreePath), false);
+        assert.equal(yield* git(worktreePath, ["branch", "--show-current"]), "feature/partial");
+        assert.include(yield* git(cwd, ["worktree", "list", "--porcelain"]), worktreePath);
+        assert.equal(yield* fs.exists(worktreePath), true);
 
         yield* fs.remove(hook);
         const retried = yield* driver.createWorktree(request, { reuseExistingBranch: true });

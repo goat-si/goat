@@ -42,13 +42,11 @@ it.effect("cancels tracked setup before provider work is released", () =>
       assert.equal((yield* tracker.get(launched.threadId))?.phase, "cancelled");
       const projection = yield* threads.getThreadProjection(launched.threadId);
       assert.equal(projection.runs[0]?.status, "failed");
-      assert.isNull(projection.thread.worktreePath);
-      assert.isNull(projection.thread.branch);
+      assert.equal(projection.thread.worktreePath, "/repo-worktrees/feature");
+      assert.equal(projection.thread.branch, "generated-branch");
       assert.isEmpty(yield* outbox.listByCommandId(CommandId.make(`${input.commandId}:release`)));
-      assert.deepStrictEqual(
-        harness.deleteLocalBranch.mock.calls.map(([call]) => call.refName),
-        ["generated-branch"],
-      );
+      assert.isEmpty(harness.removeWorktree.mock.calls);
+      assert.isEmpty(harness.deleteLocalBranch.mock.calls);
     }).pipe(Effect.provide(harness.layer));
   }),
 );
@@ -106,12 +104,6 @@ const prepareAfterFailedWatch = (name: string, stopDuringRetry: boolean) =>
         Stream.runHead,
       );
       const phase = Option.getOrNull(finished)?.phase;
-      if (phase === "cancelled") {
-        yield* threads.streamStoredEventsFrom({ threadId: launched.threadId }).pipe(
-          Stream.filter((stored) => stored.commandId?.endsWith(":cancel-workspace") === true),
-          Stream.runHead,
-        );
-      }
       return {
         phase,
         projection: yield* threads.getThreadProjection(launched.threadId),
@@ -129,12 +121,12 @@ it.effect("keeps preparing a worktree when its cancellation watch fails once", (
   }),
 );
 
-it.effect("undoes the worktree when the run stops while its failed watch waits to retry", () =>
+it.effect("keeps the checkout when the run stops while its failed watch waits to retry", () =>
   Effect.gen(function* () {
     const result = yield* prepareAfterFailedWatch("watch-fails-then-stop", true);
     assert.equal(result.phase, "cancelled");
     assert.equal(result.projection.runs[0]?.status, "interrupted");
-    assert.isNull(result.projection.thread.worktreePath);
-    assert.equal(result.removed, 1);
+    assert.equal(result.projection.thread.worktreePath, "/repo-worktrees/feature");
+    assert.equal(result.removed, 0);
   }),
 );

@@ -4,6 +4,7 @@ import * as Exit from "effect/Exit";
 import * as FileSystem from "effect/FileSystem";
 import * as Path from "effect/Path";
 import type { PlatformError } from "effect/PlatformError";
+import { removeEmptyDirectory } from "../../vcs/removeEmptyDirectory.ts";
 
 // `git worktree remove` skips pnpm junctions on Windows, leaving these behind without a checkout.
 const LEFTOVER_ENTRIES = new Set(["node_modules", ".next"]);
@@ -21,18 +22,24 @@ export const makeSetAsideFolder = Effect.gen(function* () {
   const fs = yield* FileSystem.FileSystem;
   const path = yield* Path.Path;
   /** Whether the folder is back in place; when not, its files stay in the set-aside sibling. */
-  const putBack = (worktreePath: string, setAsidePath: string) =>
-    fs.remove(worktreePath, { recursive: true, force: true }).pipe(
-      Effect.andThen(fs.rename(setAsidePath, worktreePath)),
-      Effect.as(true),
-      Effect.catchCause((cause) =>
-        Effect.logWarning("a worktree folder stayed set aside after a failed checkout", {
-          worktreePath,
-          setAsidePath,
-          cause,
-        }).pipe(Effect.as(false)),
+  const putBack = Effect.fn("WorktreeSetAside.putBack")(
+    function* (worktreePath: string, setAsidePath: string) {
+      if ((yield* fs.exists(worktreePath)) && !(yield* removeEmptyDirectory(worktreePath)))
+        return false;
+      yield* fs.rename(setAsidePath, worktreePath);
+      return true;
+    },
+    (effect, worktreePath, setAsidePath) =>
+      effect.pipe(
+        Effect.catchCause((cause) =>
+          Effect.logWarning("a worktree folder stayed set aside after a failed checkout", {
+            worktreePath,
+            setAsidePath,
+            cause,
+          }).pipe(Effect.as(false)),
+        ),
       ),
-    );
+  );
   /** What sits at the path when its `.git` link is gone; errors count as a healthy checkout. */
   const contents = (worktreePath: string) =>
     Effect.all([fs.exists(worktreePath), fs.exists(path.join(worktreePath, ".git"))]).pipe(

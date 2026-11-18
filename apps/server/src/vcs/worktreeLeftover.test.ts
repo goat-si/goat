@@ -39,7 +39,7 @@ it.layer(layerTest)("generated worktree paths", (it) => {
       assert.deepEqual(yield* fs.readDirectory(created.worktree.path), ["notes.txt"]);
     }),
   );
-  it.effect("removes checkout files before Git drops rollback metadata on Windows", () =>
+  it.effect("keeps a failed Windows checkout without invoking Git removal", () =>
     Effect.gen(function* () {
       const cwd = yield* makeTmpDir();
       const { initialBranch } = yield* initRepoWithCommit(cwd);
@@ -75,8 +75,76 @@ it.layer(layerTest)("generated worktree paths", (it) => {
           newRefName: "feature/windows-rollback",
         }),
       ).pipe(Effect.provideService(HostProcess.Platform, "win32"));
-      assert.deepEqual(removedByGit, [false]);
-      assert.isFalse(yield* fs.exists(destination));
+      assert.isEmpty(removedByGit);
+      assert.isTrue(yield* fs.exists(path.join(destination, ".git")));
+    }),
+  );
+  it.effect("preserves a real checkout edit hidden by assume-unchanged when its hook fails", () =>
+    Effect.gen(function* () {
+      const cwd = yield* makeTmpDir();
+      const { initialBranch } = yield* initRepoWithCommit(cwd);
+      const driver = yield* GitVcsDriver.GitVcsDriver;
+      const fs = yield* FileSystem.FileSystem;
+      const path = yield* Path.Path;
+      const destination = path.join(yield* makeTmpDir(), "hidden-edit");
+      const hook = ".git/hooks/post-checkout";
+      yield* writeTextFile(
+        cwd,
+        hook,
+        "#!/bin/sh\ngit update-index --assume-unchanged README.md\nprintf keep > README.md\nexit 1\n",
+      );
+      yield* fs.chmod(path.join(cwd, hook), 0o755);
+      yield* Effect.flip(
+        driver.createWorktree({
+          cwd,
+          path: destination,
+          refName: initialBranch,
+          newRefName: "feature/hidden",
+        }),
+      );
+      assert.equal(yield* fs.readFileString(path.join(destination, "README.md")), "keep");
+      assert.equal(yield* git(destination, ["status", "--porcelain"]), "");
+      assert.equal(yield* git(destination, ["branch", "--show-current"]), "feature/hidden");
+    }),
+  );
+
+  it.effect("keeps a file written just before Git unlocks a failed checkout", () =>
+    Effect.gen(function* () {
+      const cwd = yield* makeTmpDir();
+      const { initialBranch } = yield* initRepoWithCommit(cwd);
+      const fs = yield* FileSystem.FileSystem;
+      const path = yield* Path.Path;
+      const destination = path.join(yield* makeTmpDir(), "late-edit");
+      const hook = ".git/hooks/post-checkout";
+      yield* writeTextFile(cwd, hook, "#!/bin/sh\nexit 1\n");
+      yield* fs.chmod(path.join(cwd, hook), 0o755);
+      const delegate = yield* ChildProcessSpawner.ChildProcessSpawner;
+      const spawner = ChildProcessSpawner.make((command) =>
+        Effect.gen(function* () {
+          if (
+            ChildProcess.isStandardCommand(command) &&
+            command.args.includes("worktree") &&
+            command.args.includes("unlock")
+          ) {
+            yield* fs.writeFileString(path.join(destination, "late.txt"), "keep");
+          }
+          return yield* delegate.spawn(command);
+        }),
+      );
+      const driver = yield* makeGitVcsDriverCore().pipe(
+        Effect.provideService(ChildProcessSpawner.ChildProcessSpawner, spawner),
+        Effect.provide(layerServerConfig),
+      );
+      yield* Effect.flip(
+        driver.createWorktree({
+          cwd,
+          path: destination,
+          refName: initialBranch,
+          newRefName: "feature/late",
+        }),
+      );
+      assert.equal(yield* fs.readFileString(path.join(destination, "late.txt")), "keep");
+      assert.equal(yield* git(destination, ["branch", "--show-current"]), "feature/late");
     }),
   );
 });

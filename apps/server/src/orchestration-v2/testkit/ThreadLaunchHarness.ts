@@ -155,19 +155,6 @@ export function makeHarness(options: HarnessOptions = {}) {
           options?.progress?.onWorktreeOwnership?.({
             path,
             release: Effect.void,
-            rollback: (branch) =>
-              removeWorktree({ cwd: input.cwd, path, force: true }).pipe(
-                Effect.andThen(
-                  branch === null
-                    ? Effect.void
-                    : deleteLocalBranch({
-                        cwd: input.cwd,
-                        refName: branch,
-                        force: true,
-                      }),
-                ),
-                Effect.as(true),
-              ),
           }) ?? Effect.void
         ).pipe(
           Effect.as({ worktree: { path, refName: input.newRefName, headSha: "abc" } } as never),

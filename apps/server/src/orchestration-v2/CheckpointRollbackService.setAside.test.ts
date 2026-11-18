@@ -126,6 +126,7 @@ const rollBackOverLeftover = (row: Row) =>
                   .readDirectory(worktreePath)
                   .pipe(Effect.orElseSucceed((): ReadonlyArray<string> => []));
                 assert.deepEqual(entries, []);
+                if (createFails) return yield* Effect.die("the branch is gone");
                 yield* fileSystem
                   .makeDirectory(path.join(worktreePath, ".git"), { recursive: true })
                   .pipe(Effect.orDie);
@@ -134,7 +135,6 @@ const rollBackOverLeftover = (row: Row) =>
                   yield* fileSystem.chmod(path.dirname(worktreePath), 0o555).pipe(Effect.orDie);
                   return yield* Effect.fail(new Error("the branch is gone") as never);
                 }
-                if (createFails) return yield* Effect.die("the branch is gone");
                 return {} as never;
               }),
           }),
