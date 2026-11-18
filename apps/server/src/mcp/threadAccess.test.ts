@@ -25,8 +25,8 @@ const client: McpInvocationContext.McpInvocationScope = {
   issuedAt: 1,
 };
 
-const readBare = (existing: ReadonlyArray<ThreadId>) =>
-  readThread(bareId).pipe(
+const readBare = (existing: ReadonlyArray<ThreadId>, threadId = bareId) =>
+  readThread(threadId).pipe(
     Effect.flip,
     Effect.provideService(McpInvocationContext.McpInvocationContext, client),
     Effect.provide(
@@ -119,5 +119,17 @@ it.effect("does not look up a corrected id when the session has lost read author
     );
     expect(error.code).toBe("thread_not_found");
     expect(error.message).toBe("The thread was not found.");
+  }),
+);
+
+it.effect("suggests the encoded delegated-task thread and keeps malformed IDs as misses", () =>
+  Effect.gen(function* () {
+    const commandId = `command:mcp:${bareId}:delegate-task:review`;
+    const encoded = ThreadId.make(`thread:delegated-task:${encodeURIComponent(commandId)}`);
+    const error = yield* readBare([encoded], ThreadId.make(`thread:delegated-task:${commandId}`));
+    expect(error.code).toBe("thread_not_found");
+    expect(error.message).toContain(`\`${encoded}\``);
+    const malformed = yield* readBare([], ThreadId.make("thread:delegated-task:\ud800"));
+    expect(malformed.message).toBe("The thread was not found.");
   }),
 );
