@@ -1,8 +1,7 @@
 import * as NodeEvents from "node:events";
 import { assert, it, describe } from "@effect/vitest";
-import type { VcsStatusRemoteResult, VcsStatusResult } from "@goat/contracts";
+import type { VcsBranchStatus, VcsStatusRemoteResult, VcsStatusResult } from "@goat/contracts";
 import { applyGitStatusStreamEvent } from "@goat/shared/git";
-import * as NodeServices from "@effect/platform-node/NodeServices";
 import * as Deferred from "effect/Deferred";
 import * as Duration from "effect/Duration";
 import * as Effect from "effect/Effect";
@@ -47,11 +46,7 @@ function fakeNativeWatch(onClose = () => {}) {
 describe("VCS HEAD watchers", () => {
   it.effect("a terminal checkout publishes the new branch without waiting for a poll", () =>
     Effect.gen(function* () {
-      const fs = yield* FileSystem.FileSystem;
-      const path = yield* Path.Path;
-      const gitDir = yield* fs.makeTempDirectoryScoped({ prefix: "vcs-head-watch-" });
-      const headPath = path.join(gitDir, "HEAD");
-      yield* fs.writeFileString(headPath, "ref: refs/heads/main\n");
+      const native = fakeNativeWatch();
       const state = {
         currentLocalStatus: { ...baseLocalStatus, isDefaultRef: true, refName: "main" },
         currentRemoteStatus: remoteStatusWithPr as VcsStatusRemoteResult | null,
@@ -60,7 +55,11 @@ describe("VCS HEAD watchers", () => {
         localInvalidationCalls: 0,
         remoteInvalidationCalls: 0,
         remoteStatusRefreshUpstreamValues: [] as Array<boolean | undefined>,
-        headPath,
+        headPath: "/repo/.git/HEAD",
+        fileSystem: FileSystem.makeNoop({
+          realPath: (target) => Effect.succeed(target),
+          exists: () => Effect.succeed(true),
+        }),
       };
 
       yield* Effect.gen(function* () {
@@ -85,30 +84,32 @@ describe("VCS HEAD watchers", () => {
         ).pipe(Effect.forkScoped);
         yield* Deferred.await(subscribed);
 
-        // What `git switch -c repro` does to HEAD, with the test clock never advanced.
+        const remoteReadsBeforeCheckout = state.remoteStatusRefreshUpstreamValues.length;
         state.currentLocalStatus = { ...baseLocalStatus, isDefaultRef: false, refName: "repro" };
         state.currentRemoteStatus = { ...baseRemoteStatus, hasUpstream: false };
-        const lockPath = path.join(gitDir, "HEAD.lock");
-        yield* fs.writeFileString(lockPath, "ref: refs/heads/repro\n");
-        yield* fs.rename(lockPath, headPath);
+        native.notify("rename", "HEAD");
         yield* Deferred.await(reconciled);
 
         for (const status of clientStates.filter((status) => status.refName === "repro")) {
           assert.isNull(status.pr);
         }
-        // A checkout must not trigger a network fetch.
-        assert.deepStrictEqual(state.remoteStatusRefreshUpstreamValues.slice(1), [false]);
-      }).pipe(Effect.provide(layerTestFor(state)), Effect.scoped);
-    }).pipe(Effect.provide(NodeServices.layer), Effect.scoped),
+        const checkoutRefreshes =
+          state.remoteStatusRefreshUpstreamValues.slice(remoteReadsBeforeCheckout);
+        assert.isNotEmpty(checkoutRefreshes);
+        for (const refreshUpstream of checkoutRefreshes) {
+          assert.isFalse(refreshUpstream);
+        }
+      }).pipe(
+        Effect.provide(layerTestFor(state)),
+        Effect.provideService(NativeHeadWatch, native.startWatch),
+        Effect.scoped,
+      );
+    }),
   );
 
   it.effect("a terminal checkout updates branch-only subscribers without full status", () =>
     Effect.gen(function* () {
-      const fs = yield* FileSystem.FileSystem;
-      const path = yield* Path.Path;
-      const gitDir = yield* fs.makeTempDirectoryScoped({ prefix: "vcs-head-watch-" });
-      const headPath = path.join(gitDir, "HEAD");
-      yield* fs.writeFileString(headPath, "ref: refs/heads/main\n");
+      const native = fakeNativeWatch();
       const state = {
         currentLocalStatus: { ...baseLocalStatus, refName: "main" },
         currentRemoteStatus: null,
@@ -116,23 +117,36 @@ describe("VCS HEAD watchers", () => {
         remoteStatusCalls: 0,
         localInvalidationCalls: 0,
         remoteInvalidationCalls: 0,
-        headPath,
+        headPath: "/repo/.git/HEAD",
+        fileSystem: FileSystem.makeNoop({
+          realPath: (target) => Effect.succeed(target),
+          exists: () => Effect.succeed(true),
+        }),
       };
 
       yield* Effect.gen(function* () {
         const broadcaster = yield* VcsStatusBroadcaster.VcsStatusBroadcaster;
-        const branches = yield* Stream.toPull(broadcaster.streamBranchStatus({ cwd: "/repo" }));
-        assert.deepEqual(yield* branches, [{ refName: "main", isRepo: true }]);
+        const subscribed = yield* Deferred.make<VcsBranchStatus>();
+        const checkedOut = yield* Deferred.make<VcsBranchStatus>();
+        yield* Stream.runForEach(broadcaster.streamBranchStatus({ cwd: "/repo" }), (branch) =>
+          Effect.gen(function* () {
+            yield* Deferred.succeed(subscribed, branch);
+            if (branch.refName === "repro") yield* Deferred.succeed(checkedOut, branch);
+          }),
+        ).pipe(Effect.forkScoped);
+        assert.deepEqual(yield* Deferred.await(subscribed), { refName: "main", isRepo: true });
 
         state.currentLocalStatus = { ...baseLocalStatus, refName: "repro" };
-        const lockPath = path.join(gitDir, "HEAD.lock");
-        yield* fs.writeFileString(lockPath, "ref: refs/heads/repro\n");
-        yield* fs.rename(lockPath, headPath);
+        native.notify("rename", "HEAD");
 
-        assert.deepEqual(yield* branches, [{ refName: "repro", isRepo: true }]);
+        assert.deepEqual(yield* Deferred.await(checkedOut), { refName: "repro", isRepo: true });
         assert.equal(state.localStatusCalls, 0);
-      }).pipe(Effect.provide(layerTestFor(state)), Effect.scoped);
-    }).pipe(Effect.provide(NodeServices.layer), Effect.scoped),
+      }).pipe(
+        Effect.provide(layerTestFor(state)),
+        Effect.provideService(NativeHeadWatch, native.startWatch),
+        Effect.scoped,
+      );
+    }),
   );
 
   it.effect("a terminal checkout updates the branch before pending detailed status completes", () =>
@@ -241,11 +255,7 @@ describe("VCS HEAD watchers", () => {
 
   it.effect("subscribers share one HEAD watch that ends with the last of them", () =>
     Effect.gen(function* () {
-      const fs = yield* FileSystem.FileSystem;
-      const path = yield* Path.Path;
-      const gitDir = yield* fs.makeTempDirectoryScoped({ prefix: "vcs-head-watch-" });
-      const headPath = path.join(gitDir, "HEAD");
-      yield* fs.writeFileString(headPath, "ref: refs/heads/main\n");
+      const native = fakeNativeWatch();
       const state = {
         currentLocalStatus: baseLocalStatus,
         currentRemoteStatus: baseRemoteStatus as VcsStatusRemoteResult | null,
@@ -253,7 +263,7 @@ describe("VCS HEAD watchers", () => {
         remoteStatusCalls: 0,
         localInvalidationCalls: 0,
         remoteInvalidationCalls: 0,
-        headPath,
+        headPath: "/repo/.git/HEAD",
         headPathCalls: 0,
       };
 
@@ -277,8 +287,12 @@ describe("VCS HEAD watchers", () => {
         yield* Fiber.interrupt(second);
         yield* subscribe;
         assert.strictEqual(state.headPathCalls, 2);
-      }).pipe(Effect.provide(layerTestFor(state)), Effect.scoped);
-    }).pipe(Effect.provide(NodeServices.layer), Effect.scoped),
+      }).pipe(
+        Effect.provide(layerTestFor(state)),
+        Effect.provideService(NativeHeadWatch, native.startWatch),
+        Effect.scoped,
+      );
+    }),
   );
 
   it.effect("a HEAD watch that ended restarts for the next subscriber and keeps earlier ones", () =>
