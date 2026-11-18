@@ -212,7 +212,6 @@ function providerSession(input: {
   };
 }
 
-// Cursor results can omit output; retain more streamed fallback than the persisted tail.
 // After a turn ends, a retryable error can resume an older checkpoint and report failure despite an answer.
 const CURSOR_RESUME_NO_PROGRESS_MESSAGE =
   "Agent turn stopped after repeated resume attempts made no progress";

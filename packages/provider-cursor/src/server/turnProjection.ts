@@ -23,6 +23,7 @@ import {
 } from "./toolPresentation.ts";
 import type { makeTaskTextSnapshots } from "./taskTextSnapshots.ts";
 
+// Cursor results can omit output; retain more streamed fallback than the persisted tail.
 export const MAX_CURSOR_STREAMED_OUTPUT_CHARS = 256 * 1024;
 
 export function makeCursorTurnProjection(
