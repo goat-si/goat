@@ -447,7 +447,8 @@ const make = Effect.gen(function* () {
           if (path === null) return yield* uploadFailed;
           yield* fileSystem.makeDirectory(attachmentsDir, { recursive: true });
           stored.push(attachment);
-          yield* fileSystem.copyFile(uploads[index]!.path, path);
+          // The filesystem callback can finish after interruption, so rollback must wait for it.
+          yield* fileSystem.copyFile(uploads[index]!.path, path).pipe(Effect.uninterruptible);
           yield* documents.ensure(path);
         }).pipe(Effect.mapError(() => uploadFailed)),
       { discard: true },

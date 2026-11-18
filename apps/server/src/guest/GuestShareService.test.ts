@@ -12,6 +12,7 @@ import {
   TurnItemId,
 } from "@goat/contracts";
 import * as DateTime from "effect/DateTime";
+import * as Deferred from "effect/Deferred";
 import * as Effect from "effect/Effect";
 import * as Exit from "effect/Exit";
 import * as FileSystem from "effect/FileSystem";
@@ -537,6 +538,66 @@ it.effect("extracts a guest document into a host-side attachment sidecar", () =>
     const { path } = yield* guestShares.attachment(session, message!.attachments![0]!.id);
     assert.equal(yield* (yield* FileSystem.FileSystem).readFileString(`${path}.txt`), "Available");
   }).pipe(Effect.scoped, Effect.provide(layerTest)),
+);
+
+it.effect("cleans up guest attachments and extracted text after cancelling a pending copy", () =>
+  Effect.gen(function* () {
+    const copying = yield* Deferred.make<{ from: string; to: string }>();
+    const copied = yield* Deferred.make<void>();
+    let copies = 0;
+    let rollbackStarted = false;
+    const layerCopyTest = makeLayerTest(
+      GuestShareService.layer.pipe(
+        Layer.provide(
+          Layer.effect(
+            FileSystem.FileSystem,
+            Effect.map(FileSystem.FileSystem, (fs) => ({
+              ...fs,
+              copyFile: (from, to) =>
+                Effect.suspend(() =>
+                  ++copies === 2
+                    ? Deferred.succeed(copying, { from, to }).pipe(
+                        Effect.andThen(Deferred.await(copied)),
+                      )
+                    : fs.copyFile(from, to),
+                ),
+              remove: (path, options) =>
+                Effect.sync(() => {
+                  rollbackStarted = true;
+                }).pipe(Effect.andThen(fs.remove(path, options))),
+            })),
+          ),
+        ),
+      ),
+    );
+    yield* Effect.gen(function* () {
+      const { guestShares, session, shareId } = yield* joinedGuest;
+      const fs = yield* FileSystem.FileSystem;
+      const uploads = yield* uploadsOf([guestDocument, guestDocument]);
+      const submission = yield* guestShares
+        .submit(session, { shareId, text: "" }, uploads)
+        .pipe(Effect.forkChild);
+      const { from, to } = yield* Effect.raceFirst(
+        Deferred.await(copying),
+        Fiber.join(submission).pipe(
+          Effect.andThen(Effect.die("Submission finished before the second copy")),
+        ),
+      );
+      assert.isTrue((yield* storedFiles).some((path) => path.endsWith(".rtf.txt")));
+
+      const cancelling = yield* Fiber.interrupt(submission).pipe(
+        Effect.forkChild({ startImmediately: true }),
+      );
+      // The filesystem callback can finish after cancellation and its rollback.
+      if (rollbackStarted) yield* Fiber.join(cancelling);
+      yield* fs.copyFile(from, to);
+      yield* Deferred.succeed(copied, undefined);
+      yield* Fiber.join(cancelling);
+
+      assert.deepEqual(yield* storedFiles, []);
+      assert.deepEqual(yield* waitingMessages, []);
+    }).pipe(Effect.provide(layerCopyTest));
+  }).pipe(Effect.scoped),
 );
 
 it.effect("caps the bytes of files waiting in one share", () => {
