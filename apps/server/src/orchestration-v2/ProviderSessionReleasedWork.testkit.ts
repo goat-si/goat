@@ -184,9 +184,13 @@ export function registerReleasedBackgroundWorkChecks({
       };
     });
 
-  it.effect.each([false, true])(
-    "settles released workflow members without touching the replacement (during drain: %s)",
-    (duringDrain) =>
+  it.effect.each([
+    { duringDrain: false, legacy: false },
+    { duringDrain: true, legacy: false },
+    { duringDrain: true, legacy: true },
+  ])(
+    "settles released workflow members without touching the replacement (during drain: $duringDrain, legacy card: $legacy)",
+    ({ duringDrain, legacy }) =>
       Effect.gen(function* () {
         const state = yield* Ref.make(emptyState);
         const beforeUnchangedWrite = yield* Ref.make<Effect.Effect<void>>(Effect.void);
@@ -205,7 +209,7 @@ export function registerReleasedBackgroundWorkChecks({
                 fixtureName: `release-child-${index}`,
                 projectId: yield* idAllocator.allocate.project({ fixtureName: "release-child" }),
               });
-              const nativeId = `agent-${index}`;
+              const nativeId = legacy && index === 0 ? "dev-server" : `agent-${index}`;
               const allocateNode = (nativeItemId: string) =>
                 idAllocator.derive.nodeFromProviderItem({ driver: CODEX_DRIVER, nativeItemId });
               const id = allocateNode(nativeId);
@@ -267,7 +271,7 @@ export function registerReleasedBackgroundWorkChecks({
                       id: TurnItemId.make(`turn-item:${nativeId}`),
                       subagentId: id,
                       nodeId: id,
-                      providerThreadId: owner.id,
+                      providerThreadId: legacy && index === 0 ? null : owner.id,
                       providerTurnId: null,
                       nativeItemRef: nativeTaskRef,
                       parentItemId: null,

@@ -227,6 +227,10 @@ export const makeReleasedBackgroundWork = ({
         ),
       );
       if (owner === undefined) return { ...projection, subagents: [], itemsBySubagent };
+      const soleProviderThread =
+        projection.providerThreads.filter(
+          (thread) => thread.providerInstanceId === owner.providerInstanceId,
+        ).length === 1;
       const subagents = yield* Effect.filter(projection.subagents, (subagent) =>
         Effect.gen(function* () {
           if (
@@ -236,36 +240,27 @@ export const makeReleasedBackgroundWork = ({
           )
             return false;
           const item = itemsBySubagent.get(subagent.id);
+          // Older rows can predate provider-thread attribution on the task card.
+          const nativeTaskId = subagent.nativeTaskRef?.nativeId;
+          const ownsCard =
+            item?.providerThreadId != null
+              ? item.providerThreadId === providerThreadId
+              : (nativeTaskId != null && taskIds.has(nativeTaskId)) || soleProviderThread;
+          if (!ownsCard) return false;
+
           const interrupted = interruptedWorkflows.get(subagent.id);
           if (subagent.status === "interrupted" && interrupted !== undefined) {
             if (interrupted.task !== (yield* ProjectionStore.encodeSubagentPayload(subagent)))
               return false;
-            if (item !== undefined) {
-              return (
-                item.providerThreadId === providerThreadId &&
-                interrupted.card === (yield* ProjectionStore.encodeTurnItemPayload(item))
-              );
-            }
-            return interrupted.card === undefined;
+            const card =
+              item === undefined ? undefined : yield* ProjectionStore.encodeTurnItemPayload(item);
+            return interrupted.card === card;
           }
-          if (
-            !isOrchestrationV2WorkActive(subagent.status) ||
-            DateTime.isGreaterThan(subagent.updatedAt, releasedAt)
-          )
-            return false;
-          if (item?.providerThreadId != null) {
-            return (
-              item.providerThreadId === providerThreadId &&
-              DateTime.isLessThanOrEqualTo(item.updatedAt, releasedAt)
-            );
-          }
-          // Older rows can predate provider-thread attribution on the task card.
-          const nativeTaskId = subagent.nativeTaskRef?.nativeId;
           return (
-            (nativeTaskId != null && taskIds.has(nativeTaskId)) ||
-            projection.providerThreads.filter(
-              (thread) => thread.providerInstanceId === owner.providerInstanceId,
-            ).length === 1
+            isOrchestrationV2WorkActive(subagent.status) &&
+            DateTime.isLessThanOrEqualTo(subagent.updatedAt, releasedAt) &&
+            (item?.providerThreadId == null ||
+              DateTime.isLessThanOrEqualTo(item.updatedAt, releasedAt))
           );
         }),
       );
