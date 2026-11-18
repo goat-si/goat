@@ -1,3 +1,4 @@
+import { runRememberOriginFixture } from "./testkit/RememberOriginFixture.ts";
 import { MemoryFloor2Enabled } from "./MemoryFloor.ts";
 import { scanReplicaMemory } from "./testkit/ScanReplicaMemory.ts";
 import * as RecallFixture from "./MemoryRecall.ts";
@@ -961,4 +962,14 @@ it.effect("negotiated conversation origins survive edits, compaction, and paged 
       );
     }).pipe(Effect.provide(Layer.fresh(core)));
   }).pipe(checkUsage, Effect.provide(live), Effect.provideService(MemoryFloor2Enabled, true)),
+);
+
+it.effect.each(["pre-activation", "offline floor-2"] as const)(
+  "replicates origins from %s narrow remembers through real sync and a fresh bootstrap",
+  (scenario) =>
+    runRememberOriginFixture(scenario).pipe(
+      checkUsage,
+      Effect.provide(live),
+      Effect.provideService(MemoryFloor2Enabled, true),
+    ),
 );
