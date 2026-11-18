@@ -282,26 +282,28 @@ export function putRemoteDpopTokenInCatalog(
 
 // Keep legacy arrays readable by older clients: an unknown tagged route would make
 // them discard the entire catalog, including unrelated pairing credentials.
-const PenRecord = Schema.Struct({ index: Schema.Number, value: Schema.Unknown });
+// A Pen field is read as anything and each record on its own: a field or record this build
+// cannot read is dropped instead of failing the catalog. Its slot still counts when the
+// records around it are placed (penSlots).
 const penRecords = <A>(
-  decode: (value: unknown) => Option.Option<A>,
-  records: ReadonlyArray<typeof PenRecord.Type>,
-) =>
-  records.flatMap(({ index, value }) =>
-    Option.match(decode(value), {
-      onNone: () => [],
-      onSome: (decoded) => [{ index, value: decoded }],
-    }),
-  );
-const decodePenTarget = Schema.decodeUnknownOption(PenConnectionTarget);
-const decodePenProfile = Schema.decodeUnknownOption(PenConnectionProfile);
+  decode: (value: unknown) => Option.Option<{ readonly index: number; readonly value: A }>,
+  field: unknown,
+) => (Array.isArray(field) ? field.flatMap((record) => Option.toArray(decode(record))) : []);
+// A field that is not a list hides how many slots it held, so nothing is out of range then.
+const penSlots = (field: unknown) =>
+  Array.isArray(field) ? field.length : field === undefined ? 0 : Number.POSITIVE_INFINITY;
+const decodePenTarget = Schema.decodeUnknownOption(
+  Schema.Struct({ index: Schema.Number, value: PenConnectionTarget }),
+);
+const decodePenProfile = Schema.decodeUnknownOption(
+  Schema.Struct({ index: Schema.Number, value: PenConnectionProfile }),
+);
 const encodePenTarget = Schema.encodeSync(PenConnectionTarget);
 const encodePenProfile = Schema.encodeSync(PenConnectionProfile);
 const ConnectionCatalogStorageDocument = Schema.Struct({
   ...ConnectionCatalogDocument.fields,
-  // Each Pen record decodes on its own (penRecords): one this build cannot read is dropped.
-  penTargets: Schema.optionalKey(Schema.Array(PenRecord)),
-  penProfiles: Schema.optionalKey(Schema.Array(PenRecord)),
+  penTargets: Schema.optionalKey(Schema.Unknown),
+  penProfiles: Schema.optionalKey(Schema.Unknown),
   hubProxyTargets: Schema.optionalKey(
     Schema.Array(
       Schema.Struct({
@@ -328,8 +330,10 @@ const encodeStorageDocument = Schema.encodeEffect(ConnectionCatalogStorageJson);
 function mergeExtensions<A>(
   legacy: ReadonlyArray<A>,
   extensions: ReadonlyArray<{ readonly index: number; readonly value: A }>,
+  dropped: number,
 ): ReadonlyArray<A> {
-  const total = legacy.length + extensions.length;
+  // Slots of dropped records count, so a record written after one is still in range.
+  const total = legacy.length + extensions.length + dropped;
   const seen = new Set<number>();
   const placed = extensions
     .filter(({ index }) => {
@@ -348,15 +352,21 @@ export const decodeConnectionCatalogStorage = (raw: string) =>
   decodeStorageDocument(raw).pipe(
     Effect.map((stored) => {
       const { hubProxyTargets, hubProxyProfiles, penTargets, penProfiles, ...document } = stored;
-      const targets = mergeExtensions(document.targets, [
-        ...(hubProxyTargets ?? []),
-        ...penRecords(decodePenTarget, penTargets ?? []),
-      ]);
-      const profiles = mergeExtensions(document.profiles, [
-        ...(hubProxyProfiles ?? []),
-        ...penRecords(decodePenProfile, penProfiles ?? []),
-      ]);
-      return { ...document, targets, profiles } satisfies ConnectionCatalogDocument;
+      const targets = penRecords(decodePenTarget, penTargets);
+      const profiles = penRecords(decodePenProfile, penProfiles);
+      return {
+        ...document,
+        targets: mergeExtensions(
+          document.targets,
+          [...(hubProxyTargets ?? []), ...targets],
+          penSlots(penTargets) - targets.length,
+        ),
+        profiles: mergeExtensions(
+          document.profiles,
+          [...(hubProxyProfiles ?? []), ...profiles],
+          penSlots(penProfiles) - profiles.length,
+        ),
+      } satisfies ConnectionCatalogDocument;
     }),
   );
 

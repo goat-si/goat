@@ -618,6 +618,32 @@ describe("Pen storage compatibility", () => {
         }
       }),
   );
+  it.effect(
+    "a Pen field or record of the wrong shape is dropped and every other record stays",
+    () =>
+      Effect.gen(function* () {
+        for (const penTargets of [[null], [{ value: penTarget }], "not a list", { 0: penTarget }]) {
+          const bad = { ...JSON.parse(raw()), penTargets };
+          const decoded = yield* decodeConnectionCatalogStorage(JSON.stringify(bad));
+          expect(decoded.targets.map((value) => value._tag)).toEqual([
+            "BearerConnectionTarget",
+            "HubProxyConnectionTarget",
+          ]);
+          expect(decoded.credentials).toEqual(legacy.credentials);
+        }
+      }),
+  );
+  it.effect("a dropped Pen record keeps the hub record placed after it", () =>
+    Effect.gen(function* () {
+      const bad = JSON.parse(raw());
+      bad.penTargets[0].value = { ...penTarget, connectionId: 7 };
+      const decoded = yield* decodeConnectionCatalogStorage(JSON.stringify(bad));
+      expect(decoded.targets.map((value) => value._tag)).toEqual([
+        "BearerConnectionTarget",
+        "HubProxyConnectionTarget",
+      ]);
+    }),
+  );
   it.effect("a Pen record that does not decode is dropped and the rest of the catalog stays", () =>
     Effect.gen(function* () {
       const bad = JSON.parse(raw());
