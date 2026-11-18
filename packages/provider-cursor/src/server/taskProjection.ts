@@ -153,30 +153,25 @@ export function makeCursorTaskProjection({
     resultParts: ReadonlyArray<string>,
   ) {
     const state = subagent.projection;
-    const unmatched = new Set(state.assistantSegments);
-    const missing = resultParts.filter((part) => {
-      const text = part.trim();
-      const match = unmatched.values().find((segment) => segment.text.trim() === text);
-      return match === undefined || !unmatched.delete(match);
-    });
     const target = childTarget(subagent);
     const unstreamed: string[] = [];
-    for (const part of missing) {
+    let nextSegmentIndex = 0;
+    for (const part of resultParts) {
       const saved = part.trimStart();
-      let match;
-      let matchLength = 0;
-      for (const segment of unmatched) {
+      const index = state.assistantSegments.findIndex((segment, index) => {
+        if (index < nextSegmentIndex) return false;
         const prefix = segment.text.trimStart();
-        if (prefix.length > matchLength && saved.startsWith(prefix)) {
-          match = segment;
-          matchLength = prefix.length;
-        }
-      }
+        return (
+          prefix.length > 0 && (saved.startsWith(prefix) || saved.trimEnd() === prefix.trimEnd())
+        );
+      });
+      const match = state.assistantSegments[index];
       if (match === undefined) {
         unstreamed.push(part);
         continue;
       }
-      unmatched.delete(match);
+      nextSegmentIndex = index + 1;
+      if (match.text.trim() === saved.trimEnd()) continue;
       match.text = part;
       if (match !== state.assistant.current) yield* emitAssistant(target, match, true);
     }

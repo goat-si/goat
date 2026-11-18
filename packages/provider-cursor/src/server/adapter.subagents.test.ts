@@ -632,3 +632,46 @@ it.effect(
       ),
     ),
 );
+
+it.effect("keeps saved assistant steps in live item order when closed prefixes overlap", () =>
+  Effect.gen(function* () {
+    const compile = "Build with cache: compile.";
+    const validate = "Build with cache: validate.";
+    const { events, childThreadId } = yield* runCursorTaskTurn(
+      [
+        { type: "text-delta", text: "Build" },
+        { type: "step-completed", stepId: 1, stepDurationMs: 1 },
+        { type: "text-delta", text: "Build with cache" },
+        { type: "step-completed", stepId: 2, stepDurationMs: 1 },
+      ],
+      [{ assistantMessage: { text: compile } }, { assistantMessage: { text: validate } }],
+    );
+    const items = events.flatMap((event) =>
+      event.type === "turn_item.updated" &&
+      event.turnItem.threadId === childThreadId &&
+      event.turnItem.type === "assistant_message"
+        ? [event.turnItem]
+        : [],
+    );
+    const liveIds = items
+      .filter((item) => item.streaming)
+      .sort((left, right) => left.ordinal - right.ordinal)
+      .map((item) => item.id);
+    assert.lengthOf(liveIds, 2);
+    const final = Array.from(new Map(items.map((item) => [item.id, item])).values()).sort(
+      (left, right) => left.ordinal - right.ordinal,
+    );
+    assert.deepEqual(
+      final.map((item) => [item.id, item.text]),
+      [
+        [liveIds[0], compile],
+        [liveIds[1], validate],
+      ],
+    );
+  }).pipe(
+    Effect.scoped,
+    Effect.provide(
+      Layer.mergeAll(NodeServices.layer, IdAllocator.layer, McpProviderSessions.layer),
+    ),
+  ),
+);
