@@ -13,10 +13,15 @@ import * as Fiber from "effect/Fiber";
 import * as Layer from "effect/Layer";
 import * as Option from "effect/Option";
 import * as Stream from "effect/Stream";
+import * as TestClock from "effect/testing/TestClock";
 import * as IdAllocator from "@goat/provider-core/server/IdAllocator";
 import * as McpProviderSessions from "@goat/provider-core/server/McpProviderSessions";
 import * as Continuations from "@goat/provider-core/server/ProviderContinuationRequests";
-import { asyncEventStream, makeOpenCodeRuntimeHarness } from "./adapter.harness.testkit.ts";
+import {
+  asyncEventStream,
+  makeOpenCodeRuntimeHarness,
+  promiseGate,
+} from "./adapter.harness.testkit.ts";
 
 it.effect("holds a retiring session while a child session runs, until OpenCode says it ended", () =>
   Effect.gen(function* () {
@@ -117,6 +122,7 @@ it.effect.each([
   "end-without-starting",
   "stream-ended",
   "buffer-limit",
+  "replay-timeout",
 ] as const)("adopts OpenCode's native background work when %s", (ending) =>
   Effect.gen(function* () {
     const root = "background-root";
@@ -136,8 +142,25 @@ it.effect.each([
     const prompts: string[] = [];
     const aborts: string[] = [];
     const offers: Continuations.ProviderContinuationRequest[] = [];
+    const catalogStarted = promiseGate<void>();
+    const toolLookupStarted = promiseGate<void>();
+    const toolLookup = promiseGate<{ data: Record<string, unknown> }>();
+    let catalogSignal: AbortSignal | undefined;
     const harness = yield* makeOpenCodeRuntimeHarness("background", root, {
       event: { subscribe: async () => ({ stream: nativeEvents.stream }) },
+      provider: {
+        list: (_input: unknown, options: { signal: AbortSignal }) => {
+          catalogSignal = options.signal;
+          catalogStarted.resolve();
+          return promiseGate<never>().promise;
+        },
+      },
+      mcp: {
+        status: () => {
+          toolLookupStarted.resolve();
+          return toolLookup.promise;
+        },
+      },
       session: {
         create: async () => ({ data: { id: root, time: { created: 1, updated: 1 } } }),
         promptAsync: async (input: { messageID: string }) => {
@@ -195,6 +218,79 @@ it.effect.each([
       });
       yield* push(status("idle"));
     });
+    if (ending === "replay-timeout") {
+      yield* push({
+        type: "message.part.updated",
+        properties: {
+          part: {
+            id: "wake-tool",
+            type: "tool",
+            tool: "example_tool",
+            sessionID: root,
+            messageID: "wake-answer",
+            callID: "wake-call",
+            state: { status: "running", input: {}, time: { start: 2 } },
+          },
+        },
+      });
+      yield* push({
+        type: "message.updated",
+        properties: {
+          sessionID: root,
+          info: {
+            id: "wake-answer",
+            role: "assistant",
+            sessionID: root,
+            parentID: "wake-prompt",
+            time: { created: 2 },
+          },
+        },
+      });
+      yield* push({
+        type: "message.part.updated",
+        properties: {
+          part: {
+            type: "step-finish",
+            id: "wake-step",
+            sessionID: root,
+            messageID: "wake-answer",
+            reason: "stop",
+            tokens: { input: 10, output: 5, reasoning: 0, cache: { read: 0, write: 0 } },
+          },
+        },
+      });
+      yield* finish;
+      const replaying = yield* harness
+        .startTurn("", harness.providerThread, harness.policy, {
+          runId: RunId.make("background-run"),
+          runOrdinal: 2,
+          providerTurnOrdinal: 2,
+          attemptId: RunAttemptId.make("background-attempt"),
+          message: {
+            messageId: offer.messageId!,
+            createdBy: "agent",
+            creationSource: "provider",
+            text: "",
+            attachments: [],
+          },
+        })
+        .pipe(Effect.exit, Effect.forkScoped);
+      yield* Effect.promise(() => toolLookupStarted.promise);
+      yield* TestClock.adjust("500 millis");
+      toolLookup.resolve({ data: {} });
+      yield* Effect.promise(() => catalogStarted.promise);
+      yield* TestClock.adjust("9500 millis");
+      assert.isTrue(Exit.isFailure(yield* Fiber.join(replaying)));
+      assert.isTrue(catalogSignal?.aborted, "replay interrupts the optional catalog read");
+      nativeEvents.close();
+      const events = yield* harness.runtime.events.pipe(Stream.runCollect);
+      assert.deepEqual(
+        events.filter((event) => event.type === "turn.terminal").map((event) => event.runOrdinal),
+        [2],
+        "the wake publishes its terminal exactly once before the stream closes",
+      );
+      return;
+    }
     if (ending === "stop" || ending === "end-without-starting") {
       if (ending === "stop") {
         yield* harness.runtime.interruptTurn({

@@ -1541,112 +1541,129 @@ export const makeOpenCodeAdapterV2 = Effect.fn("makeOpenCodeAdapterV2")(function
             readonly threadDisposition?: "reusable" | "broken";
           },
         ) {
-          if (turn.finalized) return;
-          if (!turn.isRoot && childOutcomes.isStopping(state.nativeSessionId))
-            status = "interrupted";
-          if (nativeStreamFailure !== null) {
-            status = "failed";
-            terminal = { failure: nativeStreamFailure, threadDisposition: "broken" };
-          }
-          let lastError = sessionEntity.lastError;
-          if (status === "completed" && turn.contextOverflow !== null) {
-            status = "failed";
-            terminal = { failure: turn.contextOverflow };
-            lastError = turn.contextOverflow.message;
-          }
-          turn.finalized = true;
-          if (turn.priorWakeSettled !== undefined)
-            yield* Deferred.succeed(turn.priorWakeSettled, undefined);
-          const completedAt = yield* DateTime.now;
-          for (const part of turn.parts.values()) {
-            if (part.type === "text" || part.type === "reasoning") {
-              yield* emitTextPart(state, turn, part, true);
-            }
-          }
-          for (const pending of Array.from(pendingRequests.values())) {
-            if (
-              pending.turn.providerTurnId === turn.providerTurnId ||
-              pending.nativeSessionId === state.nativeSessionId
-            ) {
-              yield* resolveRuntimeRequest(pending.nativeRequestId, "cancelled");
-            }
-          }
-          const parsedModel = OpenCodeRuntime.parseOpenCodeModelSlug(turn.modelSelection.model);
-          const catalogModel =
-            status === "completed" && turn.usage.lastStep !== null && parsedModel !== null
-              ? yield* readOpenCodeCatalogModel(client, parsedModel, undefined, variantCache)
-              : variantCache.get(turn.modelSelection.model.trim());
-          yield* emitProviderTurn(state, turn, status, completedAt, catalogModel?.contextWindow);
-          const threadDisposition = terminal?.threadDisposition ?? "reusable";
-          yield* updateProviderThread(state, {
-            status: turn.isRoot ? "active" : threadDisposition === "broken" ? "error" : "idle",
-            nativeConversationHeadRef:
-              turn.nativeUserMessageId === null
-                ? state.providerThread.nativeConversationHeadRef
-                : providerRef(turn.nativeUserMessageId, "weak"),
-          });
-          state.activeTurn = null;
-          if (!turn.isRoot) {
-            yield* emitProviderEvent({
-              type: "node.updated",
-              driver: OPENCODE_PROVIDER,
-              node: {
-                id: turn.rootNodeId,
-                threadId: turn.threadId,
-                runId: null,
-                parentNodeId: null,
-                rootNodeId: turn.rootNodeId,
-                kind: "root_turn",
-                status,
-                countsForRun: false,
-                providerThreadId: state.providerThread.id,
-                providerTurnId: turn.providerTurnId,
-                nativeItemRef: providerRef(state.nativeSessionId),
-                runtimeRequestId: null,
-                checkpointScopeId: null,
-                startedAt: turn.startedAt,
-                completedAt,
-              },
-            });
-            if (terminal?.threadDisposition !== "broken")
-              yield* concludeChild(state.nativeSessionId, status, turn.childCall);
-            return;
-          }
-          const anotherTurnIsActive = Array.from(threads.values()).some(
-            (candidate) => candidate.activeTurn?.isRoot === true,
-          );
-          yield* updateProviderSession(
-            anotherTurnIsActive ? "running" : status === "failed" ? "error" : "ready",
-            status === "failed" ? lastError : null,
-          );
-          yield* emitProviderEvent(
-            status === "failed"
-              ? {
-                  type: "turn.terminal",
-                  driver: OPENCODE_PROVIDER,
-                  providerThreadId: turn.providerThreadId,
-                  providerTurnId: turn.providerTurnId,
-                  runOrdinal: turn.runOrdinal,
-                  failureItemOrdinal: itemOrdinal(turn, `terminal-failure:${turn.providerTurnId}`),
-                  status,
-                  failure:
-                    terminal?.failure ??
-                    makeProviderFailure({
-                      message: sessionEntity.lastError ?? undefined,
-                      class: "provider_error",
-                    }),
-                  threadDisposition,
+          // Once claimed, terminal publication must finish even if the replay deadline expires.
+          yield* Effect.uninterruptibleMask((restore) =>
+            Effect.gen(function* () {
+              if (turn.finalized) return;
+              if (!turn.isRoot && childOutcomes.isStopping(state.nativeSessionId))
+                status = "interrupted";
+              if (nativeStreamFailure !== null) {
+                status = "failed";
+                terminal = { failure: nativeStreamFailure, threadDisposition: "broken" };
+              }
+              let lastError = sessionEntity.lastError;
+              if (status === "completed" && turn.contextOverflow !== null) {
+                status = "failed";
+                terminal = { failure: turn.contextOverflow };
+                lastError = turn.contextOverflow.message;
+              }
+              turn.finalized = true;
+              if (turn.priorWakeSettled !== undefined)
+                yield* Deferred.succeed(turn.priorWakeSettled, undefined);
+              const completedAt = yield* DateTime.now;
+              for (const part of turn.parts.values()) {
+                if (part.type === "text" || part.type === "reasoning") {
+                  yield* emitTextPart(state, turn, part, true);
                 }
-              : {
-                  type: "turn.terminal",
+              }
+              for (const pending of Array.from(pendingRequests.values())) {
+                if (
+                  pending.turn.providerTurnId === turn.providerTurnId ||
+                  pending.nativeSessionId === state.nativeSessionId
+                ) {
+                  yield* resolveRuntimeRequest(pending.nativeRequestId, "cancelled");
+                }
+              }
+              const parsedModel = OpenCodeRuntime.parseOpenCodeModelSlug(turn.modelSelection.model);
+              let catalogModel = variantCache.get(turn.modelSelection.model.trim());
+              if (status === "completed" && turn.usage.lastStep !== null && parsedModel !== null) {
+                const read = yield* restore(
+                  readOpenCodeCatalogModel(client, parsedModel, undefined, variantCache),
+                ).pipe(Effect.exit);
+                if (Exit.isSuccess(read)) catalogModel = read.value;
+              }
+              yield* emitProviderTurn(
+                state,
+                turn,
+                status,
+                completedAt,
+                catalogModel?.contextWindow,
+              );
+              const threadDisposition = terminal?.threadDisposition ?? "reusable";
+              yield* updateProviderThread(state, {
+                status: turn.isRoot ? "active" : threadDisposition === "broken" ? "error" : "idle",
+                nativeConversationHeadRef:
+                  turn.nativeUserMessageId === null
+                    ? state.providerThread.nativeConversationHeadRef
+                    : providerRef(turn.nativeUserMessageId, "weak"),
+              });
+              state.activeTurn = null;
+              if (!turn.isRoot) {
+                yield* emitProviderEvent({
+                  type: "node.updated",
                   driver: OPENCODE_PROVIDER,
-                  providerThreadId: turn.providerThreadId,
-                  providerTurnId: turn.providerTurnId,
-                  runOrdinal: turn.runOrdinal,
-                  status,
-                  failure: null,
-                  threadDisposition,
-                },
+                  node: {
+                    id: turn.rootNodeId,
+                    threadId: turn.threadId,
+                    runId: null,
+                    parentNodeId: null,
+                    rootNodeId: turn.rootNodeId,
+                    kind: "root_turn",
+                    status,
+                    countsForRun: false,
+                    providerThreadId: state.providerThread.id,
+                    providerTurnId: turn.providerTurnId,
+                    nativeItemRef: providerRef(state.nativeSessionId),
+                    runtimeRequestId: null,
+                    checkpointScopeId: null,
+                    startedAt: turn.startedAt,
+                    completedAt,
+                  },
+                });
+                if (terminal?.threadDisposition !== "broken")
+                  yield* concludeChild(state.nativeSessionId, status, turn.childCall);
+                return;
+              }
+              const anotherTurnIsActive = Array.from(threads.values()).some(
+                (candidate) => candidate.activeTurn?.isRoot === true,
+              );
+              yield* updateProviderSession(
+                anotherTurnIsActive ? "running" : status === "failed" ? "error" : "ready",
+                status === "failed" ? lastError : null,
+              );
+              yield* emitProviderEvent(
+                status === "failed"
+                  ? {
+                      type: "turn.terminal",
+                      driver: OPENCODE_PROVIDER,
+                      providerThreadId: turn.providerThreadId,
+                      providerTurnId: turn.providerTurnId,
+                      runOrdinal: turn.runOrdinal,
+                      failureItemOrdinal: itemOrdinal(
+                        turn,
+                        `terminal-failure:${turn.providerTurnId}`,
+                      ),
+                      status,
+                      failure:
+                        terminal?.failure ??
+                        makeProviderFailure({
+                          message: sessionEntity.lastError ?? undefined,
+                          class: "provider_error",
+                        }),
+                      threadDisposition,
+                    }
+                  : {
+                      type: "turn.terminal",
+                      driver: OPENCODE_PROVIDER,
+                      providerThreadId: turn.providerThreadId,
+                      providerTurnId: turn.providerTurnId,
+                      runOrdinal: turn.runOrdinal,
+                      status,
+                      failure: null,
+                      threadDisposition,
+                    },
+              );
+            }),
           );
         });
 
