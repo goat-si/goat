@@ -1908,6 +1908,12 @@ it("loads a font attachment through the lazy preview", async () => {
 });
 
 it("toggles a Mermaid attachment between diagram and source through the lazy preview", async () => {
+  // Cold preview and flowchart chunks can outlast waitFor on CI.
+  await Promise.all([
+    import("./MermaidFilePreview"),
+    import("./MermaidViewer"),
+    import("pele/lazy").then((pele) => pele.load("flowchart")),
+  ]);
   const text = "flowchart LR\nA --> B";
   const file = new Blob([text], { type: "text/vnd.mermaid" });
   await using screen = await render(
