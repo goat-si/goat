@@ -150,7 +150,7 @@ export function useSettingsEnvironmentFilter() {
       selectAll: () => setSelectedIds(null),
       toggleEnvironment: (environmentId: EnvironmentId) =>
         setSelectedIds((current) =>
-          toggleSettingsEnvironment(current, availableTargets, environmentId),
+          toggleSettingsEnvironment(current, availableTargets, environmentId, environments),
         ),
       focusEnvironment: (environmentId: EnvironmentId) => {
         selectProject(null);
@@ -158,6 +158,7 @@ export function useSettingsEnvironmentFilter() {
       },
     }),
     [
+      environments,
       availableTargets,
       selectedTargets,
       selectedIds,

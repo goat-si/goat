@@ -1,3 +1,4 @@
+import type { SubagentAnswer } from "./subagentReports.ts";
 import type { OpenCodeEvent } from "@opencode/client/effect";
 import type {
   OrchestrationV2AppThread,
@@ -39,6 +40,8 @@ export interface ActiveTurn {
   readonly input: TurnOwner;
   providerTurn: OrchestrationV2ProviderTurn;
   readonly texts: Map<string, OpenBlock>;
+  answer: SubagentAnswer | undefined;
+  closingText: OpenBlock | undefined;
   readonly tools: Map<string, { readonly name: string; input: Record<string, unknown> }>;
   readonly startedAt: Map<string, DateTime.Utc>;
   readonly ordinals: Map<string, number>;
@@ -72,6 +75,7 @@ export interface ActiveTurn {
   unsent: boolean;
   readonly steers: Set<string>;
   readonly settledInbox: Set<string>;
+  readonly takenPages: Set<string>;
   heldEnd: TurnTerminal | undefined;
   awaitingStart: boolean;
   /** Scope child tool IDs because model-generated IDs can repeat parent IDs. */
@@ -81,6 +85,7 @@ export interface ActiveTurn {
 
 export interface SubagentCall {
   readonly toolId: string;
+  readonly assistantMessageId: string;
   readonly nativeId: string;
   readonly state: ThreadState;
   readonly turn: ActiveTurn;
@@ -91,7 +96,8 @@ export interface SubagentCall {
   agent: string | undefined;
   model: string | null;
   background: boolean;
-  joined: SubagentCall | undefined;
+  run: number | undefined;
+  ambiguousExecutions?: { remaining: number };
   child: ThreadState | undefined;
   status: OrchestrationV2Subagent["status"];
   result: string | null;
@@ -173,6 +179,7 @@ export interface ThreadState {
         call: SubagentCall;
         readonly appThread: OrchestrationV2AppThread;
         turns: number;
+        readonly fresh: boolean;
         prompt: string | undefined;
         queued: string | undefined;
       }

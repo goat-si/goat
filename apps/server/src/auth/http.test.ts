@@ -1,3 +1,5 @@
+// @effect-diagnostics nodeBuiltinImport:off -- inject native SQL failures at the HTTP boundary.
+import * as NodeSqlite from "node:sqlite";
 import {
   LEGACY_SESSION_COOKIE_NAME,
   LEGACY_DEV_SESSION_COOKIE_PREFIX,
@@ -23,6 +25,7 @@ import * as HttpPlatform from "effect/http/HttpPlatform";
 import * as HttpApiBuilder from "effect/http-api/HttpApiBuilder";
 import * as HttpApi from "effect/http-api/HttpApi";
 import * as HttpRouter from "effect/http/HttpRouter";
+import { vi } from "vite-plus/test";
 
 import * as ServerConfig from "../config.ts";
 import * as ServerEnvironment from "../environment/ServerEnvironment.ts";
@@ -53,6 +56,7 @@ const layerEnvironmentAuth = EnvironmentAuth.layer.pipe(
   Layer.provide(ServerEnvironment.layerIdentity),
   Layer.provide(layerConfig),
 );
+
 const layerRoutes = HttpApiBuilder.layer(AuthTestApi).pipe(
   Layer.provide(AuthHttp.layer),
   Layer.provide(AuthHttp.layerAuthenticatedAuth),
@@ -224,5 +228,69 @@ it.effect.each(["DPoP", "dpop"])("challenges a refused %s request with DPoP", (s
         }),
       (environment) => Effect.promise(() => environment.dispose()),
     );
+  }).pipe(Effect.provide(Layer.mergeAll(NodeServices.layer, NodeCrypto.layer))),
+);
+
+it.effect("returns the revocation error reason and trace when SQL and rollback both fail", () =>
+  Effect.gen(function* () {
+    const random = yield* SecureRandom.SecureRandom;
+    const secretStorage = yield* Layer.build(
+      ServerSecretStore.layer.pipe(Layer.provide(layerConfig)),
+    );
+    const requestContext = Context.add(secretStorage, SecureRandom.SecureRandom, random);
+    const environment = yield* Effect.acquireRelease(
+      Effect.sync(() =>
+        onMainListenerWeb(HttpRouter.toWebHandler(layerRoutes, { disableLogger: true })),
+      ),
+      (environment) => Effect.promise(() => environment.dispose()),
+    );
+    const session = yield* Effect.promise(() =>
+      environment.handler(
+        postJson("/api/auth/browser-session", { credential: DEV_TOKEN }),
+        requestContext,
+      ),
+    );
+    expect(session.status).toBe(200);
+    const cookie =
+      session.headers
+        .getSetCookie()
+        .find((value) => value.startsWith("goat_dev_session_"))
+        ?.split(";", 1)[0] ?? "";
+    const revoke = () =>
+      environment.handler(
+        new Request("http://127.0.0.1/api/auth/clients/revoke-others", {
+          method: "POST",
+          headers: { cookie },
+        }),
+        requestContext,
+      );
+    const prepare = NodeSqlite.DatabaseSync.prototype.prepare;
+    let blockRollback = true;
+    let rollbacks = 0;
+    using _prepare = vi
+      .spyOn(NodeSqlite.DatabaseSync.prototype, "prepare")
+      .mockImplementation(function (this: NodeSqlite.DatabaseSync, statement) {
+        if (blockRollback && statement === "ROLLBACK") {
+          rollbacks++;
+          throw new Error("rollback unavailable");
+        }
+        if (
+          blockRollback &&
+          /UPDATE auth_sessions\s+SET revoked_at[\s\S]*RETURNING session_id/.test(statement)
+        ) {
+          throw new Error("revoke update unavailable");
+        }
+        return prepare.call(this, statement);
+      });
+    const response = yield* Effect.promise(revoke);
+    expect(rollbacks).toBe(1);
+    expect(response.status).toBe(500);
+    expect(yield* Effect.promise(() => response.json())).toMatchObject({
+      code: "internal_error",
+      reason: "client_session_revoke_failed",
+      traceId: expect.stringMatching(/^[0-9a-f]+$/),
+    });
+    blockRollback = false;
+    expect((yield* Effect.promise(revoke)).status).toBe(200);
   }).pipe(Effect.provide(Layer.mergeAll(NodeServices.layer, NodeCrypto.layer))),
 );

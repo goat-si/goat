@@ -183,11 +183,15 @@ export function makeWorktreePreflight({
     }
     if (localBase) return;
     const unresolved = yield* Effect.gen(function* () {
-      if (
-        strategy.startFromOrigin === true &&
-        (yield* git.resolveWorktreeBaseRemote({ cwd, refName: baseRef })) !== null
-      )
-        return undefined;
+      if (strategy.startFromOrigin === true) {
+        const remote = yield* git.resolveWorktreeBaseRemote({ cwd, refName: baseRef });
+        // The remote may have deleted the branch since the local ref was last fetched.
+        if (
+          remote !== null &&
+          (yield* git.fetchWorktreeBaseCommit({ cwd, refName: baseRef, remote })) !== null
+        )
+          return undefined;
+      }
       // git worktree add accepts remote-tracking branches; let Git decide when any matching ref exists.
       if (yield* git.hasRefNamed({ cwd, refName: baseRef })) return undefined;
       return yield* git.hasCommit({ cwd, refName: "HEAD" });

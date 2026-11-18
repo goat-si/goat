@@ -78,7 +78,7 @@ it.effect("reentry is only for the same folder and the same kind of lease, when 
   }),
 );
 
-it.effect("only the holder and fibers it forks while holding can enter its lease", () =>
+it.effect("only the holder's own fiber can enter its lease", () =>
   Effect.gen(function* () {
     const cwd = "/lease-reentry/visibility";
     const events: Array<string> = [];
@@ -176,74 +176,57 @@ it.effect("two holders of one folder never overlap, reentrant sections included"
   }),
 );
 
-it.effect("a holder that finishes keeps the folder until its forked reentrant section leaves", () =>
+// goat#3681: a fork outliving the holder's call would hold the release up, so forks never reenter.
+it.effect("a marked fork that asks during the hold enters only after the holder releases", () =>
   Effect.gen(function* () {
-    const cwd = "/lease-reentry/drain";
+    const cwd = "/lease-reentry/marked-fork";
     const events: Array<string> = [];
-    const entered = yield* Deferred.make<void>();
-    const leave = yield* Deferred.make<void>();
-    const bodyEnded = yield* Deferred.make<void>();
-    const holder = yield* withWorkspaceLease(
+    const child = yield* withWorkspaceLease(
       cwd,
       Effect.gen(function* () {
-        yield* reuseHeldWorkspaceLease(
+        // Runs until it waits; it would enter at once if a marked fork could reenter.
+        const forked = yield* reuseHeldWorkspaceLease(
           withWorkspaceLease(
             cwd,
-            Deferred.succeed(entered, undefined).pipe(
-              Effect.andThen(Deferred.await(leave)),
-              Effect.ensuring(Effect.sync(() => events.push("child left"))),
-            ),
+            Effect.sync(() => events.push("child entered")),
           ),
-        ).pipe(Effect.forkDetach);
-        yield* Deferred.await(entered);
-      }).pipe(Effect.ensuring(Deferred.succeed(bodyEnded, undefined))),
-    ).pipe(Effect.andThen(Effect.sync(() => events.push("holder released"))), Effect.forkChild);
-    yield* Deferred.await(bodyEnded);
-    yield* Deferred.succeed(leave, undefined);
-    yield* Fiber.join(holder);
-    assert.deepEqual(events, ["child left", "holder released"]);
+        ).pipe(Effect.forkChild({ startImmediately: true }));
+        events.push("holder end");
+        return forked;
+      }),
+    );
+    yield* Fiber.join(child);
+    assert.deepEqual(events, ["holder end", "child entered"]);
     assert.isTrue(yield* free(cwd));
   }),
 );
 
-it.effect("the holder's release waits for a reentrant section still running, then frees once", () =>
+it.effect("a holder interrupted inside its own reentrant section frees the folder once", () =>
   Effect.gen(function* () {
-    const cwd = "/lease-reentry/in-flight";
+    const cwd = "/lease-reentry/interrupted";
     const events: Array<string> = [];
     const entered = yield* Deferred.make<void>();
-    const leave = yield* Deferred.make<void>();
-    const bodyEnded = yield* Deferred.make<void>();
-    let child: Fiber.Fiber<void, WorkspaceLeaseUnavailableError> | undefined;
     const holder = yield* withWorkspaceLease(
       cwd,
-      Effect.gen(function* () {
-        child = yield* reuseHeldWorkspaceLease(
-          withWorkspaceLease(
-            cwd,
-            Deferred.succeed(entered, undefined).pipe(
-              Effect.andThen(Deferred.await(leave)),
-              Effect.ensuring(Effect.sync(() => events.push("child left"))),
-            ),
+      reuseHeldWorkspaceLease(
+        withWorkspaceLease(
+          cwd,
+          Deferred.succeed(entered, undefined).pipe(
+            Effect.andThen(Effect.never),
+            Effect.ensuring(Effect.sync(() => events.push("section left"))),
           ),
-        ).pipe(Effect.forkDetach);
-        yield* Deferred.await(entered);
-        return yield* Effect.never;
-      }).pipe(Effect.ensuring(Deferred.succeed(bodyEnded, undefined))),
+        ),
+      ),
     ).pipe(Effect.forkChild);
     yield* Deferred.await(entered);
-    const interrupted = yield* Fiber.interrupt(holder).pipe(Effect.forkChild);
-    yield* Deferred.await(bodyEnded);
-    // The next holder gets the folder only after the interrupted holder's child has left.
+    assert.isFalse(yield* free(cwd));
+    yield* Fiber.interrupt(holder);
     const next = yield* withWorkspaceLease(
       cwd,
       Effect.sync(() => events.push("next entered")),
     ).pipe(Effect.forkChild);
-    assert.isFalse(yield* free(cwd));
-    yield* Deferred.succeed(leave, undefined);
-    yield* Fiber.join(child ?? (yield* Effect.die("not forked")));
-    yield* Fiber.join(interrupted);
     yield* Fiber.join(next);
-    assert.deepEqual(events, ["child left", "next entered"]);
+    assert.deepEqual(events, ["section left", "next entered"]);
     // Released exactly once: one holder at a time still.
     const again = yield* Deferred.make<void>();
     const done = yield* Deferred.make<void>();
@@ -259,7 +242,7 @@ it.effect("the holder's release waits for a reentrant section still running, the
   }),
 );
 
-it.effect("a fiber forked during a hold enters only after the holder ends unless marked", () =>
+it.effect("a fiber forked during a hold enters only after the holder ends", () =>
   Effect.gen(function* () {
     const cwd = "/lease-reentry/opt-in";
     const events: Array<string> = [];

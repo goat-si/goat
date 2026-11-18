@@ -48,7 +48,14 @@ export const makeRunInputDelivery = Effect.fn("RunExecutionService.makeInputDeli
         }),
     ),
   );
-  const accepted = yield* Effect.cached(write("accepted").pipe(Effect.asVoid));
+  const accepted = yield* Effect.cached(
+    write("accepted").pipe(
+      Effect.asVoid,
+      Effect.catch(() =>
+        Effect.logWarning("Provider input acceptance could not be recorded.", { runId: run.id }),
+      ),
+    ),
+  );
   return {
     begin: () => write("ambiguous"),
     accepted: () => accepted,

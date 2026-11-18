@@ -9,6 +9,7 @@ import {
 import { legacyInitialMessageCommandId, threadCreateMessage } from "./threadCreateMessage.ts";
 import { contextHandoffTurnItem } from "./ContextHandoffTurnItem.ts";
 import { retainedUserItemFailures } from "./goat/RetainedQueuedInput.ts";
+import { OrchestratorThreadAboveModeLimitError } from "./OrchestratorModeLimitError.ts";
 import { commandThreadId } from "./commandThreadId.ts";
 import { guardArchiveDelegates } from "./goat/ArchiveDelegatedGuard.ts";
 import { isHistoryArchiveOnlyUpdate, withoutHistoryArchive } from "./goat/HistoryArchive.ts";
@@ -56,6 +57,8 @@ import {
   hasLiveRun,
   isTerminalDelegatedTaskStatus,
   delegatedTaskTerminalStatus,
+  makeScheduledWorktreeGuard,
+  latestFailedWorktreeRun,
   worktreeSetupPending,
 } from "./goat/OrchestratorRunState.ts";
 import type { ProjectionAwarenessReader } from "./ProjectionAwareness.ts";
@@ -201,13 +204,10 @@ import {
   makePullRequestAutoWatch,
   newPullRequestWatch,
   syncedPullRequestWatch,
+  withoutChecksAnswer,
 } from "./goat/PullRequestAutoWatch.ts";
-import {
-  endingWakeText,
-  pullRequestWatchNote,
-  takeHeldPullRequestContext,
-} from "./goat/PullRequestDigest.ts";
-import { pullRequestWakeMuted, pullRequestWakesEnd } from "./goat/PullRequestWatchWakes.ts";
+import { takeHeldPullRequestContext } from "./goat/PullRequestDigest.ts";
+import { makePullRequestWatchSync } from "./goat/PullRequestWatchSync.ts";
 import {
   cancelledBeforeStart,
   continuationFailedBeforePrompt,
@@ -289,7 +289,7 @@ import { makeHumanHandoffs } from "./goat/HumanHandoffs.ts";
 import { makeThreadRecordDispatches } from "./goat/ThreadRecordDispatches.ts";
 import { makeStaleQuestionWakes } from "./goat/StaleQuestionWake.ts";
 import { releaseStopHolds } from "./goat/StopHoldRelease.ts";
-import { activeTurnRefusal, endsTurn, isActiveTurnRefusal } from "./goat/ActiveTurnRefusals.ts";
+import { activeTurnRefusal, endsTurn, isRetryableRefusal } from "./goat/ActiveTurnRefusals.ts";
 import {
   makeEndNativeSubagentTrees,
   nativeSubagentRef,
@@ -333,7 +333,7 @@ export class OrchestratorDispatchError extends Schema.TaggedError<OrchestratorDi
     commandId: CommandId,
     commandType: Schema.String,
     cause: Schema.optional(Schema.Defect()),
-    refusal: Schema.optional(Schema.Literal("active_turn")),
+    refusal: Schema.optional(Schema.Literals(["active_turn", "scheduled_worktree"])),
   },
 ) {
   override get message(): string {
@@ -411,20 +411,7 @@ export class OrchestratorSubagentThreadReadOnlyError extends Schema.TaggedError<
   }
 }
 
-export class OrchestratorThreadAboveModeLimitError extends Schema.TaggedError<OrchestratorThreadAboveModeLimitError>()(
-  "OrchestratorThreadAboveModeLimitError",
-  {
-    commandId: CommandId,
-    threadId: ThreadId,
-    mode: Schema.Literals(["runtime", "interaction"]),
-    runtimeMode: RuntimeMode,
-    interactionMode: ProviderInteractionMode,
-  },
-) {
-  override get message(): string {
-    return `Thread ${this.threadId} now runs in ${this.runtimeMode}/${this.interactionMode} mode, above what this caller may change.`;
-  }
-}
+export { OrchestratorThreadAboveModeLimitError } from "./OrchestratorModeLimitError.ts";
 
 export const OrchestratorV2Error = Schema.Union([
   RuntimeAdmission.ServerDrainingError,
@@ -2567,85 +2554,21 @@ const makeOrchestrator = Effect.fn("orchestrationV2.Orchestrator.layer")(functio
     });
   });
 
-  // Recheck under the lock after reading the host. Record the watch first so wake events carry it.
-  const dispatchPullRequestWatchSync = Effect.fn("orchestrationV2.dispatch.pullRequestWatchSync")(
-    function* (
-      command: Extract<
-        OrchestrationV2ServerCommand,
-        { readonly type: "thread.pull-request-watch.sync" }
-      >,
-      events: Ref.Ref<Array<OrchestrationV2DomainEvent>>,
-      effects: Ref.Ref<Array<PendingOrchestrationEffectV2>>,
-    ) {
-      const thread = yield* projectionStore
-        .getThread(command.threadId)
-        .pipe(
-          Effect.mapError(
-            (cause) => new OrchestratorProjectionError({ threadId: command.threadId, cause }),
-          ),
-        );
-      const key = normalizeThreadPullRequestKey(command);
-      const link = threadPullRequestsOf(thread).find(
-        (candidate) =>
-          candidate.source !== "stack-dismissed" && threadPullRequestKeysEqual(candidate, key),
-      );
-      if (
-        link?.watch?.startedAt !== command.startedAt ||
-        (command.wake && pullRequestWakeMuted(thread, link, command.watch !== null))
-      ) {
-        return yield* new OrchestratorDispatchError({
-          commandId: command.commandId,
-          commandType: command.type,
-          cause:
-            "The watch ended, its thread settled, or the pull request merged while it was read.",
-        });
-      }
-      yield* dispatchThreadMutation(command, events, effects);
-      if (command.dropQueuedWakes === true) yield* dropQueuedPullRequestWakes(command, events);
-      else if (command.watch?.headSha != null && command.watch.headSha !== link.watch.headSha)
-        yield* dropQueuedPullRequestWakes(command, events, command.watch.headSha);
-      if (command.wake === undefined) {
-        if (command.note === undefined) return;
-        // Kept as context: the timeline shows it, and no turn starts.
-        const ordinal = yield* projectionStore
-          .getNextTurnItemOrdinal(command.threadId)
-          .pipe(
-            Effect.mapError(
-              (cause) => new OrchestratorProjectionError({ threadId: command.threadId, cause }),
-            ),
-          );
-        const note = pullRequestWatchNote(command, command.note, ordinal, yield* DateTime.now);
-        yield* emit(events, command)(note);
-        return;
-      }
-      yield* dispatchMessage(
-        {
-          type: "message.dispatch",
-          commandId: command.commandId,
-          threadId: command.threadId,
-          messageId: command.wake.messageId,
-          // An ending watch tells what it kept, as stored now rather than when the host was read.
-          text:
-            command.watch === null
-              ? endingWakeText(command.wake.text, link.watch, command.endedWatch)
-              : command.wake.text,
-          notification: command.wake.notification,
-          attachments: [],
-          dispatchMode: { type: "queue_after_active" },
-          createdBy: "agent",
-          creationSource: "server",
-        },
-        events,
-        effects,
-      );
-    },
-  );
-
-  const { dropQueuedPullRequestWakes } = makePullRequestWakeDrops({
+  const { dropQueuedPullRequestWakes, settleQueuedPullRequestWakes } = makePullRequestWakeDrops({
     projectionStore,
     emit,
     dispatchQueuedRunCancel: (command, events) => dispatchQueuedRunCancel(command, events),
     OrchestratorProjectionError,
+  });
+  const { dispatchPullRequestWatchSync } = makePullRequestWatchSync({
+    projectionStore,
+    emit,
+    dispatchThreadMutation: (command, events, effects) =>
+      dispatchThreadMutation(command, events, effects),
+    dispatchMessage: (command, events, effects) => dispatchMessage(command, events, effects),
+    dropQueuedPullRequestWakes,
+    OrchestratorProjectionError,
+    OrchestratorDispatchError,
   });
 
   const { shouldAutoWatchPullRequest } = makePullRequestAutoWatch({
@@ -2702,8 +2625,10 @@ const makeOrchestrator = Effect.fn("orchestrationV2.Orchestrator.layer")(functio
           | "thread.pull-request-link.sync"
           | "thread.pull-request.watch"
           | "thread.pull-request-watch.sync"
+          | "thread.pull-request-watch.checks-reopen"
           | "thread.pull-request.sync"
           | "thread.title.regeneration.complete"
+          | "thread.title.regeneration.complete.internal"
           | "thread.runtime-mode.set"
           | "thread.interaction-mode.set"
           | "thread.model-selection.set"
@@ -3490,6 +3415,18 @@ const makeOrchestrator = Effect.fn("orchestrationV2.Orchestrator.layer")(functio
             updatedAt: command.type === "thread.pull-request-link.sync" ? thread.updatedAt : now,
           };
         }
+        case "thread.pull-request-watch.checks-reopen": {
+          const linked = threadPullRequestsOf(thread);
+          if (!linked.some((link) => link.watch?.checksPending !== undefined)) return thread;
+          return {
+            ...thread,
+            pullRequests: linked.map((link) =>
+              link.watch?.checksPending === undefined
+                ? link
+                : { ...link, watch: withoutChecksAnswer(link.watch) },
+            ),
+          };
+        }
         case "thread.pull-request.watch":
         case "thread.pull-request-watch.sync": {
           const key = normalizeThreadPullRequestKey(command);
@@ -3530,7 +3467,11 @@ const makeOrchestrator = Effect.fn("orchestrationV2.Orchestrator.layer")(functio
                   ? undefined
                   : // Whether the watch is automatic is the thread's call, not the reader's: a
                     // watch_pull_request that landed during the read keeps its watch explicit.
-                    syncedPullRequestWatch(existing.watch, command.watch)
+                    syncedPullRequestWatch(
+                      existing.watch,
+                      command.watch,
+                      command.checksPendingBefore,
+                    )
                 : existing.watch
               : !command.watching
                 ? undefined
@@ -3589,14 +3530,20 @@ const makeOrchestrator = Effect.fn("orchestrationV2.Orchestrator.layer")(functio
             updatedAt: thread.updatedAt,
           };
         case "thread.title.regeneration.complete":
-          return thread.titleRegeneration?.requestId === command.requestId
-            ? {
-                ...thread,
-                ...(command.title === undefined ? {} : { title: command.title }),
-                titleRegeneration: null,
-                updatedAt: now,
-              }
-            : thread;
+        case "thread.title.regeneration.complete.internal": {
+          if (thread.titleRegeneration?.requestId !== command.requestId) return thread;
+          const outcome =
+            command.type === "thread.title.regeneration.complete.internal" ? command.outcome : null;
+          return {
+            ...thread,
+            ...(command.title === undefined ? {} : { title: command.title }),
+            ...(outcome && {
+              lastTitleRegeneration: { ...outcome, requestId: command.requestId, completedAt: now },
+            }),
+            titleRegeneration: null,
+            updatedAt: now,
+          };
+        }
         case "thread.runtime-mode.set":
           return { ...thread, runtimeMode: command.runtimeMode, updatedAt: now };
         case "thread.interaction-mode.set":
@@ -3611,6 +3558,8 @@ const makeOrchestrator = Effect.fn("orchestrationV2.Orchestrator.layer")(functio
           };
       }
     })();
+    if (command.type === "thread.pull-request-watch.checks-reopen" && updatedThread === thread)
+      return;
     if (
       command.type === "thread.pull-request-link.sync" ||
       command.type === "thread.pull-request-watch.sync"
@@ -3660,11 +3609,13 @@ const makeOrchestrator = Effect.fn("orchestrationV2.Orchestrator.layer")(functio
           return "thread.marked-unread" as const;
         case "thread.metadata.update":
         case "thread.title.regeneration.complete":
+        case "thread.title.regeneration.complete.internal":
           return "thread.metadata-updated" as const;
         case "thread.pull-request.link":
         case "thread.pull-request.unlink":
         case "thread.pull-request.watch":
         case "thread.pull-request.sync":
+        case "thread.pull-request-watch.checks-reopen":
           return "thread.pull-request-synced" as const;
         case "thread.runtime-mode.set":
           return "thread.runtime-mode-updated" as const;
@@ -5059,6 +5010,7 @@ const makeOrchestrator = Effect.fn("orchestrationV2.Orchestrator.layer")(functio
     mapDispatchError,
     OrchestratorDispatchError,
   });
+  const checkWorktreeSend = makeScheduledWorktreeGuard(projectionStore, OrchestratorDispatchError);
 
   const dispatchMessage = Effect.fn("Orchestrator.dispatchMessage")(function* (
     command: Extract<OrchestrationV2Command, { readonly type: "message.dispatch" }>,
@@ -5088,6 +5040,7 @@ const makeOrchestrator = Effect.fn("orchestrationV2.Orchestrator.layer")(functio
           }
         : undefined,
     );
+    yield* checkWorktreeSend(command, projection);
     let steerFollowUpAfterStop = false;
     if (command.steerFollowUpOfRunId !== undefined) {
       const source = projection.runs.find((run) => run.id === command.steerFollowUpOfRunId);
@@ -5761,14 +5714,10 @@ const makeOrchestrator = Effect.fn("orchestrationV2.Orchestrator.layer")(functio
     // A message queued during worktree setup can arrive after that setup failed
     // without a worktree. It waits, held, like the messages queued before the
     // failure, instead of starting in the project checkout.
-    const latestRun = latestExecutedRun(projection.runs);
     const worktreeMissingRun =
       activeRun === undefined &&
-      (dispatchMode.type === "queue_after_active" || dispatchMode.type === "start_immediately") &&
-      (latestRun?.status === "failed" || latestRun?.status === "interrupted") &&
-      latestRun.workspacePreparation?.type === "worktree" &&
-      projection.thread.worktreePath === null
-        ? latestRun
+      (dispatchMode.type === "queue_after_active" || dispatchMode.type === "start_immediately")
+        ? latestFailedWorktreeRun(projection)
         : undefined;
     const queueBehindRun =
       activeRun && survivorQueued.has(activeRun.id)
@@ -12344,6 +12293,7 @@ const makeOrchestrator = Effect.fn("orchestrationV2.Orchestrator.layer")(functio
       case "thread.pull-request.link":
       case "thread.pull-request.sync":
       case "thread.title.regeneration.complete":
+      case "thread.title.regeneration.complete.internal":
       case "thread.runtime-mode.set":
       case "thread.interaction-mode.set":
       case "thread.model-selection.set":
@@ -12363,10 +12313,13 @@ const makeOrchestrator = Effect.fn("orchestrationV2.Orchestrator.layer")(functio
       case "thread.pull-request.unlink":
       case "thread.pull-request-link.sync":
         yield* dispatchThreadMutation(command, events, effects);
-        if (pullRequestWakesEnd(command)) yield* dropQueuedPullRequestWakes(command, events);
+        yield* settleQueuedPullRequestWakes(command, events);
         break;
       case "thread.pull-request-watch.sync":
         yield* dispatchPullRequestWatchSync(command, events, effects);
+        break;
+      case "thread.pull-request-watch.checks-reopen":
+        yield* dispatchThreadMutation(command, events, effects);
         break;
       case "thread.guest-share.open":
       case "thread.guest-share.redeem":
@@ -12719,6 +12672,8 @@ const makeOrchestrator = Effect.fn("orchestrationV2.Orchestrator.layer")(functio
           command.type === "delegated_task.remote.progress" ||
           command.type === "delegated_task.remote.result" ||
           command.type === "thread.background-work.settle" ||
+          // A read can answer a watch again before a push's reopen lands; nothing is left to clear.
+          command.type === "thread.pull-request-watch.checks-reopen" ||
           command.type === "thread.interrupt.unresponsive" ||
           command.type === "thread.stop" ||
           command.type === "subagent.stop" ||
@@ -12733,7 +12688,7 @@ const makeOrchestrator = Effect.fn("orchestrationV2.Orchestrator.layer")(functio
       ),
       Effect.catch((cause) =>
         Effect.gen(function* () {
-          if (cause._tag === "OrchestratorThreadAboveModeLimitError" || isActiveTurnRefusal(cause))
+          if (cause._tag === "OrchestratorThreadAboveModeLimitError" || isRetryableRefusal(cause))
             return yield* cause;
           const rejectedAt = yield* DateTime.now;
           const receipt = yield* eventSink

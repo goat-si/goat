@@ -5,6 +5,6 @@ export class WorkspaceLeaseBusyError extends Schema.TaggedError<WorkspaceLeaseBu
   {},
 ) {
   override get message(): string {
-    return "Workspace is busy with checkout removal or preparation.";
+    return "Workspace is busy with a file restore, checkout removal or preparation.";
   }
 }

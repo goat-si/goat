@@ -1,4 +1,6 @@
 import * as QuickActions from "expo-quick-actions";
+import { useAtomValue } from "@effect/atom-react";
+import { Atom } from "effect/reactivity";
 import { useEffect, useMemo, useRef, useState } from "react";
 import { Platform } from "react-native";
 import { useLinkTo, type NavigationState } from "@react-navigation/native";
@@ -8,13 +10,21 @@ import {
   saveRecentThreadShortcuts,
   type RecentThreadShortcut,
 } from "../../persistence/imperative";
+import { environmentCatalog } from "../../connection/catalog";
 import { useThreadShell } from "../../state/entities";
 import {
   activeThreadRef,
   buildShortcutActions,
   shortcutHref,
-  withRecentThreadShortcut,
+  reconcileRecentThreadShortcuts,
 } from "./appShortcuts";
+
+const knownEnvironmentsAtom =
+  Platform.OS === "android"
+    ? environmentCatalog.catalogValueAtom.pipe(
+        Atom.map((catalog) => (catalog.isReady ? new Set<string>(catalog.entries.keys()) : null)),
+      )
+    : Atom.make<ReadonlySet<string> | null>(null);
 
 export function useAppShortcuts(state: NavigationState): void {
   useShortcutNavigation();
@@ -53,9 +63,11 @@ function useRecentThreadShortcutSync(state: NavigationState): void {
   );
   const threadShell = useThreadShell(threadRef);
   // Wait for persisted recents before recording visits, or cold starts overwrite older entries.
-  const [recents, setRecents] = useState<ReadonlyArray<RecentThreadShortcut> | null>(null);
-  // Do not persist failed-load fallbacks; only a real visit makes the list authoritative.
-  const persistableRef = useRef(false);
+  const [snapshot, setSnapshot] = useState<{
+    readonly threads: readonly RecentThreadShortcut[];
+    readonly persistable: boolean;
+  } | null>(null);
+  const knownEnvironments = useAtomValue(knownEnvironmentsAtom);
   // Serialize saves so older lists cannot overwrite newer ones.
   const saveQueueRef = useRef<Promise<unknown>>(Promise.resolve());
 
@@ -68,14 +80,13 @@ function useRecentThreadShortcutSync(state: NavigationState): void {
     void loadRecentThreadShortcuts()
       .then((threads) => {
         if (!cancelled) {
-          persistableRef.current = true;
-          setRecents(threads);
+          setSnapshot({ threads, persistable: true });
         }
       })
       .catch((error) => {
         console.warn("[app-shortcuts] failed to load recent threads", error);
         if (!cancelled) {
-          setRecents([]);
+          setSnapshot({ threads: [], persistable: false });
         }
       });
     return () => {
@@ -83,43 +94,24 @@ function useRecentThreadShortcutSync(state: NavigationState): void {
     };
   }, []);
 
-  const loaded = recents !== null;
-  const environmentId = threadRef?.environmentId ?? null;
-  const threadId = threadRef?.threadId ?? null;
-  const title = threadShell?.title ?? "";
+  if (snapshot && knownEnvironments) {
+    const active = threadRef ? { ...threadRef, title: threadShell?.title ?? "" } : null;
+    const threads = reconcileRecentThreadShortcuts(snapshot.threads, active, knownEnvironments);
+    if (threads !== snapshot.threads) setSnapshot({ threads, persistable: true });
+  }
+  const ready = knownEnvironments !== null;
   useEffect(() => {
-    if (!loaded || environmentId === null || threadId === null) {
-      return;
-    }
-
-    setRecents((current) => {
-      if (current === null) {
-        return current;
+    if (!snapshot || !ready) return;
+    const { threads, persistable } = snapshot;
+    saveQueueRef.current = saveQueueRef.current.then(async () => {
+      if (persistable) {
+        await saveRecentThreadShortcuts(threads).catch((error) => {
+          console.warn("[app-shortcuts] failed to persist recent threads", error);
+        });
       }
-      const next = withRecentThreadShortcut(current, { environmentId, threadId, title });
-      if (next !== current) {
-        persistableRef.current = true;
-      }
-      return next;
+      await QuickActions.setItems(buildShortcutActions(threads)).catch((error) => {
+        console.warn("[app-shortcuts] failed to update launcher shortcuts", error);
+      });
     });
-  }, [loaded, environmentId, threadId, title]);
-
-  useEffect(() => {
-    if (recents === null) {
-      return;
-    }
-
-    if (persistableRef.current) {
-      saveQueueRef.current = saveQueueRef.current.then(
-        () =>
-          saveRecentThreadShortcuts(recents).catch((error) => {
-            console.warn("[app-shortcuts] failed to persist recent threads", error);
-          }),
-        () => undefined,
-      );
-    }
-    void QuickActions.setItems(buildShortcutActions(recents)).catch((error) => {
-      console.warn("[app-shortcuts] failed to update launcher shortcuts", error);
-    });
-  }, [recents]);
+  }, [snapshot, ready]);
 }

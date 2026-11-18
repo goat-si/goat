@@ -12,6 +12,7 @@ export interface ForkHistoryPage {
   readonly before?: Pick<OrchestrationV2TurnItem, "ordinal" | "id"> | undefined;
   readonly throughRunOrdinal?: number;
   readonly includeImported: boolean;
+  readonly includeDeltaMetadata?: boolean;
   readonly visibleOnly?: boolean;
   readonly excludeItemId?: TurnItemId | undefined;
   readonly maxBytes: number;
@@ -29,6 +30,8 @@ export const FORK_HISTORY_TYPES = [
 ] satisfies ReadonlyArray<OrchestrationV2TurnItem["type"]>;
 
 const historyTypes = new Set<OrchestrationV2TurnItem["type"]>(FORK_HISTORY_TYPES);
+const deltaHistoryTypes = [...FORK_HISTORY_TYPES, "checkpoint", "handoff"] as const;
+const deltaTypes = new Set<OrchestrationV2TurnItem["type"]>(deltaHistoryTypes);
 
 export const readForkHistoryPage = (
   sql: SqlClient.SqlClient,
@@ -39,7 +42,7 @@ export const readForkHistoryPage = (
   SELECT item.payload_json FROM orchestration_v2_projection_turn_items AS item
   LEFT JOIN orchestration_v2_projection_runs AS run ON run.run_id = item.run_id
   WHERE item.thread_id = ${threadId}
-    AND item.type IN ${sql.in(FORK_HISTORY_TYPES)}
+    AND item.type IN ${sql.in(page.includeDeltaMetadata ? deltaHistoryTypes : FORK_HISTORY_TYPES)}
     AND ${page.before === undefined ? sql`1` : sql`(item.ordinal, item.turn_item_id) < (${page.before.ordinal}, ${page.before.id})`}
     AND ${page.excludeItemId === undefined ? sql`1` : sql`item.turn_item_id <> ${page.excludeItemId}`}
     AND length(CAST(item.payload_json AS BLOB)) + 1 <= ${page.maxBytes}
@@ -95,10 +98,11 @@ export function selectMemoryHistory(
     page.visibleOnly === true
       ? createOrchestrationV2TurnItemVisibility({ ...projection, items: projection.turnItems })
       : () => true;
+  const types = page.includeDeltaMetadata ? deltaTypes : historyTypes;
   return projection.turnItems
     .filter(
       (item) =>
-        historyTypes.has(item.type) &&
+        types.has(item.type) &&
         item.id !== page.excludeItemId &&
         visible(item) &&
         (item.runId === null

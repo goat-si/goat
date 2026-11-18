@@ -1,3 +1,8 @@
+import * as NodeServices from "@effect/platform-node/NodeServices";
+import * as FileSystem from "effect/FileSystem";
+import * as Path from "effect/Path";
+import * as TestClock from "effect/testing/TestClock";
+import { layerScannerTest } from "./AgentSessionScanner.testkit.ts";
 import { expect, it } from "@effect/vitest";
 import {
   AgentSessionImportSource,
@@ -175,8 +180,9 @@ const seedOwner = Effect.fn(function* (
 });
 
 const makeImporter = Effect.fn(function* (
-  candidates: ReadonlyArray<ReturnType<typeof candidate>>,
+  candidates: ReadonlyArray<AgentSessionScanner.AgentSessionRecentThread>,
   beforeTransaction: Effect.Effect<void> = Effect.void,
+  realScan?: { workspaceRoot: string; scanner: AgentSessionScanner.AgentSessionScanner["Service"] },
 ) {
   const sql = yield* SqlClient.SqlClient;
   const events = yield* EventStore.EventStoreV2;
@@ -217,15 +223,17 @@ const makeImporter = Effect.fn(function* (
             ProviderSessionRuntime.ProviderSessionRuntimeRepository,
             yield* ProviderSessionRuntime.ProviderSessionRuntimeRepository,
           ),
-          Layer.mock(AgentSessionScanner.AgentSessionScanner)({
-            recentThreads: () => Stream.fromIterable(candidates),
-          }),
+          realScan === undefined
+            ? Layer.mock(AgentSessionScanner.AgentSessionScanner)({
+                recentThreads: () => Stream.fromIterable(candidates),
+              })
+            : Layer.succeed(AgentSessionScanner.AgentSessionScanner, realScan.scanner),
           Layer.mock(ProjectService.ProjectService)({
             getById: () =>
               Effect.succeedSome({
                 id: projectId,
                 title: "Project",
-                workspaceRoot: "/workspace/project",
+                workspaceRoot: realScan?.workspaceRoot ?? "/workspace/project",
                 defaultModelSelection: null,
                 scripts: [],
                 createdAt: timestamp,
@@ -413,8 +421,8 @@ it.effect(
       expect(yield* runtimes.list()).toEqual([]);
       yield* sql`DROP TRIGGER fail_runtime`;
 
-      expect(yield* importer.run).toEqual({ importedCount: 1, skippedCount: 0 });
-      expect(yield* importer.run).toEqual({ importedCount: 1, skippedCount: 0 });
+      expect(yield* importer.run).toEqual({ importedCount: 0, skippedCount: 0 });
+      expect(yield* importer.run).toEqual({ importedCount: 0, skippedCount: 0 });
       expect(yield* events.read({ threadId }).pipe(Stream.runCollect)).toEqual(committed);
       expect(importer.published).toHaveLength(6);
       expect(
@@ -428,6 +436,95 @@ it.effect(
         runtimePayload: { importedTranscripts: [source.source] },
       });
     }).pipe(Effect.scoped, Effect.provide(persistence)),
+);
+
+it.effect("counts only new threads when re-importing cached and recovered transcripts", () =>
+  Effect.gen(function* () {
+    const events = yield* EventStore.EventStoreV2;
+    const runtimes = yield* ProviderSessionRuntime.ProviderSessionRuntimeRepository;
+    const cached = candidate(
+      CLAUDE_MODEL_SELECTION,
+      "020e7f00-dce6-406b-8ec6-ed90498945d6",
+      "claudeAgent",
+    );
+    const recovered = candidate(CODEX_MODEL_SELECTION, "recovered");
+    recovered.thread.messages = recovered.thread.messages.map((message) =>
+      message.role === "assistant"
+        ? { ...message, createdAt: "2026-09-01T09:59:00.000Z" }
+        : message,
+    );
+    const initial = yield* makeImporter([cached, recovered]);
+    expect(yield* initial.run).toEqual({ importedCount: 2, skippedCount: 0 });
+    const before = yield* events.read({ threadId: importId(recovered) }).pipe(Stream.runCollect);
+    // The file changed on disk but still holds the imported messages.
+    recovered.source.size += 100;
+    recovered.source.mtimeMs += 1;
+    const duplicate = { ...recovered.source, filePath: "/tmp/duplicate.jsonl" };
+    const fresh = candidate(CODEX_MODEL_SELECTION, "fresh");
+    const repeated = yield* makeImporter([
+      { _tag: "AlreadyImported", source: cached.source },
+      recovered,
+      { _tag: "Duplicate", source: duplicate, messages: recovered.thread.messages },
+      {
+        _tag: "Duplicate",
+        source: { ...duplicate, filePath: "/tmp/different.jsonl" },
+        messages: recovered.thread.messages.map((message) => ({
+          ...message,
+          text: message.text + " ",
+        })),
+      },
+      fresh,
+      { _tag: "Skipped" },
+    ]);
+
+    expect(yield* repeated.run).toEqual({ importedCount: 1, skippedCount: 1 });
+    expect(yield* events.read({ threadId: importId(recovered) }).pipe(Stream.runCollect)).toEqual(
+      before,
+    );
+    expect(
+      new Set(
+        repeated.published.flatMap((stored) => ("event" in stored ? [stored.event.threadId] : [])),
+      ),
+    ).toEqual(new Set([importId(fresh)]));
+    const row = Option.getOrThrow(yield* runtimes.getByThreadId({ threadId: importId(recovered) }));
+    expect(Option.getOrThrow(decodeImport(row.runtimePayload)).importedTranscripts).toEqual([
+      recovered.source,
+      duplicate,
+    ]);
+  }).pipe(Effect.scoped, Effect.provide(persistence)),
+);
+
+it.effect("does not certify new native history after a partial import retry", () =>
+  Effect.gen(function* () {
+    const sql = yield* SqlClient.SqlClient;
+    const projections = yield* ProjectionStore.ProjectionStoreV2;
+    const runtimes = yield* ProviderSessionRuntime.ProviderSessionRuntimeRepository;
+    const original = candidate(CODEX_MODEL_SELECTION, "partial-retry");
+    const threadId = importId(original);
+    const importer = yield* makeImporter([original]);
+    yield* sql`CREATE TEMP TRIGGER fail_runtime BEFORE INSERT ON provider_session_runtime BEGIN SELECT RAISE(ABORT, 'test runtime failure'); END`;
+    expect(yield* importer.run).toEqual({ importedCount: 0, skippedCount: 1 });
+    yield* sql`DROP TRIGGER fail_runtime`;
+    expect(yield* runtimes.list()).toEqual([]);
+    const continued = candidate(CODEX_MODEL_SELECTION, original.source.providerSessionId);
+    continued.source.size = 200;
+    continued.source.mtimeMs = 3;
+    continued.thread.messages.push(
+      { role: "user", text: "Continue outside GOAT", createdAt: timestamp },
+      { role: "assistant", text: "Native continuation", createdAt: timestamp },
+    );
+    // The thread holds only the original messages, so the continued transcript stays unrecorded.
+    expect(yield* (yield* makeImporter([continued])).run).toEqual({
+      importedCount: 0,
+      skippedCount: 1,
+    });
+    expect(yield* runtimes.list()).toEqual([]);
+    expect(
+      (yield* projections.getThreadRecords(threadId, ["messages"])).messages.map(
+        (message) => message.text,
+      ),
+    ).toEqual(["Fix it", "Fixed"]);
+  }).pipe(Effect.scoped, Effect.provide(persistence)),
 );
 
 it.effect("does not record a changed transcript as imported without its new messages", () =>
@@ -468,5 +565,104 @@ it.effect("does not record a changed transcript as imported without its new mess
       recordsChangedTranscript: recorded?.some((source) => source.size === 200) ?? false,
       showsNewMessages: texts.includes("Continued"),
     }).not.toEqual({ recordsChangedTranscript: true, showsNewMessages: false });
+  }).pipe(Effect.scoped, Effect.provide(persistence)),
+);
+
+it.effect("repeated imports reach linked-worktree sessions behind the scan budget", () =>
+  Effect.gen(function* () {
+    const fs = yield* FileSystem.FileSystem;
+    const path = yield* Path.Path;
+    const root = yield* fs.makeTempDirectoryScoped({ prefix: "goat-import-worktree-budget-" });
+    const repo = path.join(root, "repo");
+    const worktree = path.join(root, "feature");
+    const worktreeGitDir = path.join(repo, ".git", "worktrees", "feature");
+    yield* fs.makeDirectory(worktreeGitDir, { recursive: true });
+    yield* fs.makeDirectory(worktree);
+    yield* fs.writeFileString(path.join(repo, ".git", "config"), "[core]\n");
+    yield* fs.writeFileString(path.join(worktreeGitDir, "commondir"), "../..\n");
+    yield* fs.writeFileString(path.join(worktreeGitDir, "HEAD"), "ref: refs/heads/feature\n");
+    yield* fs.writeFileString(path.join(worktree, ".git"), `gitdir: ${worktreeGitDir}\n`);
+
+    const claudeHome = path.join(root, "claude");
+    const codexHome = path.join(root, "codex");
+    const sessions = path.join(codexHome, "sessions", "2026", "09", "01");
+    yield* fs.makeDirectory(sessions, { recursive: true });
+    const nowMs = DateTime.toEpochMillis(now);
+    yield* TestClock.setTime(nowMs);
+    // One more session than the 100-transcript scan budget, all run in the linked worktree.
+    for (let index = 0; index < 101; index++) {
+      const file = path.join(sessions, `rollout-${String(index).padStart(3, "0")}.jsonl`);
+      const records = [
+        { type: "session_meta", payload: { id: `session-${index}`, cwd: worktree } },
+        { type: "event_msg", payload: { type: "user_message", message: `Request ${index}` } },
+        {
+          type: "response_item",
+          payload: {
+            type: "message",
+            role: "assistant",
+            content: [{ type: "output_text", text: "Done" }],
+          },
+        },
+      ];
+      yield* fs.writeFileString(
+        file,
+        records.map((record) => JSON.stringify(record) + "\n").join(""),
+      );
+      const modifiedAtSeconds = nowMs / 1000 - (index + 1);
+      yield* fs.utimes(file, modifiedAtSeconds, modifiedAtSeconds);
+    }
+
+    const scannerContext = yield* Layer.build(
+      layerScannerTest({ claudeHomePath: claudeHome, codexHomePath: codexHome }),
+    );
+    const importer = yield* makeImporter([], Effect.void, {
+      workspaceRoot: repo,
+      scanner: Context.get(scannerContext, AgentSessionScanner.AgentSessionScanner),
+    });
+
+    expect(yield* importer.run).toEqual({ importedCount: 100, skippedCount: 1 });
+    expect(yield* importer.run).toEqual({ importedCount: 1, skippedCount: 0 });
+    const oldest = yield* ProjectionStore.ProjectionStoreV2.pipe(
+      Effect.flatMap((projections) =>
+        projections.getThread(ThreadId.make("import:codex:session-100")),
+      ),
+    );
+    expect(oldest.worktreePath).toBe(worktree);
+  }).pipe(Effect.scoped, Effect.provide(Layer.merge(persistence, NodeServices.layer))),
+);
+it.effect("tolerates a missing transcript owner but propagates failed ownership reads", () =>
+  Effect.gen(function* () {
+    const sql = yield* SqlClient.SqlClient;
+    const runtimes = yield* ProviderSessionRuntime.ProviderSessionRuntimeRepository;
+    const source = candidate(CODEX_MODEL_SELECTION, "ownership-read");
+    const threadId = importId(source);
+    yield* runtimes.upsert({
+      threadId: ThreadId.make("missing-owner"),
+      providerName: "codex",
+      providerInstanceId: source.source.providerInstanceId,
+      adapterKey: "codex",
+      runtimeMode: "full-access",
+      status: "stopped",
+      lastSeenAt: timestamp,
+      resumeCursor: null,
+      runtimePayload: { importedTranscripts: [source.source] },
+    });
+    yield* runtimes.recordImportedTranscript({
+      threadId: ThreadId.make("missing-owner"),
+      source: source.source,
+    });
+    const importer = yield* makeImporter([source]);
+    expect(yield* importer.run).toEqual({ importedCount: 1, skippedCount: 0 });
+
+    yield* sql`UPDATE orchestration_v2_projection_threads SET payload_json = '{}' WHERE thread_id = ${threadId}`;
+    expect(yield* Effect.flip(importer.run)).toMatchObject({
+      _tag: "AgentSessionScanError",
+      operation: "read-projects",
+      cause: {
+        _tag: "OrchestratorProjectionError",
+        threadId,
+        cause: { _tag: "ProjectionStoreReadError" },
+      },
+    });
   }).pipe(Effect.scoped, Effect.provide(persistence)),
 );

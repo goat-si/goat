@@ -15,6 +15,57 @@ const EMPTY_CAPABILITIES: ModelCapabilities = createModelCapabilities({
 });
 const DEFAULT_DRIVER_KIND = ProviderDriverKind.make("codex");
 
+const RUNTIME_MODEL_CATALOG_DRIVERS: ReadonlySet<string> = new Set([
+  "opencode",
+  "antigravity",
+  "cursor",
+  "cursorCloud",
+  "pi",
+  "omo",
+  "acpRegistry",
+  "fx",
+  "grok",
+  "muse",
+]);
+
+export function hasRuntimeModelCatalog(provider: ProviderDriverKind): boolean {
+  return RUNTIME_MODEL_CATALOG_DRIVERS.has(provider);
+}
+
+export function isRuntimeModelDefaultAlias(
+  provider: ProviderDriverKind,
+  model: string | null | undefined,
+): boolean {
+  switch (provider) {
+    case "antigravity":
+    case "grok":
+      return model === DEFAULT_MODEL_BY_PROVIDER[provider];
+    case "acpRegistry":
+    case "pi":
+    case "omo":
+    case "fx":
+    case "muse":
+      return model === "default";
+    default:
+      return false;
+  }
+}
+
+export function keepsUnavailableModelOptions(
+  provider: ProviderDriverKind,
+  model: string | null | undefined,
+  models: ReadonlyArray<ServerProviderModel>,
+): boolean {
+  return (
+    typeof model === "string" &&
+    model.trim().length > 0 &&
+    provider !== "antigravity" &&
+    hasRuntimeModelCatalog(provider) &&
+    !isRuntimeModelDefaultAlias(provider, model) &&
+    resolveSelectableModel(provider, model, models) === null
+  );
+}
+
 export function formatProviderDriverKindLabel(provider: ProviderDriverKind): string {
   return provider
     .replace(/([a-z])([A-Z])/g, "$1 $2")

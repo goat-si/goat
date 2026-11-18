@@ -2,7 +2,11 @@ import type { EnvironmentProject, EnvironmentThreadShell } from "@goat/client-ru
 import { EnvironmentId, ProjectId, ProviderInstanceId, ThreadId } from "@goat/contracts";
 import { describe, expect, it } from "vite-plus/test";
 
-import { buildHomeProjectScopes, findHomeProjectScope } from "./homeThreadList";
+import {
+  buildHomeProjectScopes,
+  findHomeProjectScope,
+  homeProjectFilterOptions,
+} from "./homeThreadList";
 import { makeThreadShellFixture } from "../../test-fixtures";
 import { buildThreadListV2Items } from "../threads/threadListV2";
 
@@ -42,6 +46,32 @@ function makeThread(
 }
 
 describe("home project scopes", () => {
+  it("offers active projects first and excludes archived groups", () => {
+    const environmentId = EnvironmentId.make("local");
+    const projects = ["Alpha", "Beta", "Charlie"].map((title) =>
+      makeProject({ environmentId, id: ProjectId.make(title), title }),
+    );
+    const scopes = buildHomeProjectScopes({
+      projects,
+      environmentId,
+      projectGroupingMode: "separate",
+    }).map((scope) => ({ ...scope, archived: scope.title === "Charlie" }));
+    const threads = projects.map(({ id, title }, index) =>
+      makeThread({
+        id: ThreadId.make(title),
+        environmentId,
+        projectId: id,
+        title,
+        updatedAt: `2026-06-0${index + 2}T00:00:00.000Z`,
+      }),
+    );
+
+    expect(homeProjectFilterOptions(scopes, threads).map(({ label }) => label)).toEqual([
+      "Beta",
+      "Alpha",
+    ]);
+  });
+
   it("filters threads across both scratch hosts while retaining the selected environment boundary", () => {
     const localEnvironmentId = EnvironmentId.make("local");
     const remoteEnvironmentId = EnvironmentId.make("remote");

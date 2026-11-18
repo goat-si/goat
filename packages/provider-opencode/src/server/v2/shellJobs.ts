@@ -33,6 +33,7 @@ interface TrackedShell {
   tool?: { name: string; input: Record<string, unknown> };
   command: string;
   running: boolean;
+  awaited?: boolean;
   stopping?: boolean;
   output: string;
   cursor: number;
@@ -233,6 +234,10 @@ export const makeShellJobs = (deps: ShellJobDeps) => {
               }),
           command: info.command,
           running: true,
+          awaited:
+            state.providerThread.pendingBackgroundTasks?.some(
+              (task) => task.taskId === info.id && task.kind === "command" && task.awaited === true,
+            ) === true,
           output: "",
           cursor: 0,
         });
@@ -453,6 +458,7 @@ export const makeShellJobs = (deps: ShellJobDeps) => {
         taskId,
         kind: "command" as const,
         description: shell.command,
+        ...(shell.awaited === true ? { awaited: true } : {}),
         ...(shell.state.subagent === undefined
           ? {}
           : { parentTaskId: shell.state.subagent.call.nativeId }),
@@ -466,6 +472,26 @@ export const makeShellJobs = (deps: ShellJobDeps) => {
       for (const [id] of runningFor(state))
         yield* lock.withPermit(stopShell(id)).pipe(Effect.ignore({ log: true }));
     }),
+    awaitTasks: Effect.fn("OpenCode2Adapter.awaitBackgroundTasks")(function* (
+      state: ThreadState | undefined,
+      taskIds: ReadonlyArray<string>,
+      awaited: boolean,
+    ) {
+      if (state === undefined) return { matched: [] };
+      const owned = new Set(sessionsOf(state));
+      const matched: string[] = [];
+      const changed = new Set<ThreadState>();
+      for (const id of new Set(taskIds)) {
+        const shell = shells.get(id);
+        if (shell === undefined || !shell.running || !owned.has(shell.state)) continue;
+        matched.push(id);
+        if ((shell.awaited === true) === awaited) continue;
+        shell.awaited = awaited;
+        changed.add(shell.state);
+      }
+      for (const owner of changed) yield* syncRosterAncestors(owner);
+      return { matched };
+    }, lock.withPermit),
     /** Stops one owned shell; false when the task is not a shell this thread owns. */
     stopTask: (state: ThreadState | undefined, taskId: string) => {
       const shell = shells.get(taskId);

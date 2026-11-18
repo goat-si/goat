@@ -5,6 +5,7 @@ import type { RecentThreadShortcut } from "../../persistence/imperative";
 import {
   activeThreadRef,
   buildShortcutActions,
+  reconcileRecentThreadShortcuts,
   shortcutHref,
   withRecentThreadShortcut,
 } from "./appShortcuts";
@@ -27,6 +28,16 @@ describe("withRecentThreadShortcut", () => {
     const current = [thread("a", "Fix the build")];
     const next = withRecentThreadShortcut(current, thread("a", ""));
     expect(next).toBe(current);
+  });
+});
+
+describe("recent shortcuts after an environment is removed", () => {
+  it("drops stored shortcuts and ignores an open thread from the removed environment", () => {
+    const kept = thread("keep");
+    const removed = thread("gone");
+    const known = new Set([kept.environmentId]);
+    expect(reconcileRecentThreadShortcuts([removed, kept], removed, known)).toEqual([kept]);
+    expect(reconcileRecentThreadShortcuts([kept], removed, known)).toEqual([kept]);
   });
 });
 

@@ -8,7 +8,7 @@ import type * as DateTime from "effect/DateTime";
 import * as Effect from "effect/Effect";
 import * as Schema from "effect/Schema";
 import type * as SqlClient from "effect/sql/SqlClient";
-import type { EventSinkV2Shape } from "./EventSinkShape.ts";
+import { EventSinkWriteError, type EventSinkV2Shape } from "./EventSinkShape.ts";
 
 export type InputDelivery = NonNullable<OrchestrationV2RunAttempt["inputDelivery"]>;
 
@@ -44,7 +44,10 @@ export const withAttemptDeliveryEvent = Effect.fn("EventSink.withAttemptDelivery
     `;
   const row = rows[0];
   if (row === undefined)
-    return yield* Effect.fail(new Error("Active attempt missing at provider input admission."));
+    return yield* new EventSinkWriteError({
+      eventCount: 0,
+      cause: "Active attempt missing at provider input admission.",
+    });
   const attempt = yield* decodeAttempt(row.payload_json);
   if (
     attempt.inputDelivery === "accepted" ||

@@ -176,6 +176,7 @@ export function makeReadHandoffItems<E>(
       runIds?.filter((id) => id !== null),
       {
         includeImported: runIds === undefined || runIds.includes(null),
+        includeDeltaMetadata: true,
       },
       historyBudget(),
     ).pipe(Effect.mapError((cause) => mapError(threadId, cause)));

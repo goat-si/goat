@@ -268,11 +268,14 @@ function GitOverviewSheetContent(props: GitOverviewSheetProps) {
       className="flex-1 android:bg-sheet-solid ios:bg-screen"
       contentInsetAdjustmentBehavior={Platform.OS === "ios" ? "automatic" : "never"}
       showsVerticalScrollIndicator={false}
-      contentInset={{ bottom: Math.max(insets.bottom, 18) + 18 }}
+      contentInset={
+        Platform.OS === "ios" ? { bottom: Math.max(insets.bottom, 18) + 18 } : undefined
+      }
       contentContainerStyle={{
         paddingHorizontal: Platform.OS === "android" ? 8 : isInspector ? 12 : 20,
         paddingTop: 8,
         gap: Platform.OS === "android" ? 8 : 14,
+        paddingBottom: Platform.OS === "android" ? Math.max(insets.bottom, 18) + 18 : undefined,
       }}
       refreshControl={
         Platform.OS === "ios" || isInspector ? (
