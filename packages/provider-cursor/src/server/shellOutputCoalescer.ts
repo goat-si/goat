@@ -1,3 +1,5 @@
+import { copyOutputTail } from "./copyOutputTail.ts";
+
 /** Shell output a run holds while a dispatch is in flight; older output beyond it is dropped. */
 const MAX_PENDING_SHELL_CHARS = 256 * 1024;
 const MAX_PENDING_SHELL_ENTRIES = 64;
@@ -68,7 +70,10 @@ export function makeShellOutputCoalescer(
       const excess = pendingChars - MAX_PENDING_SHELL_CHARS;
       if (pending.length <= MAX_PENDING_SHELL_ENTRIES && excess < size(oldest)) {
         const data = oldest.event.value.data as string;
-        pending[0] = { ...oldest, event: { ...oldest.event, value: { data: data.slice(excess) } } };
+        pending[0] = {
+          ...oldest,
+          event: { ...oldest.event, value: { data: copyOutputTail(data, data.length - excess) } },
+        };
         pendingChars -= excess;
       } else {
         pending.shift();

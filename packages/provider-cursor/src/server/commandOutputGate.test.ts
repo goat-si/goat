@@ -1,9 +1,12 @@
 import { assert, it } from "@effect/vitest";
+import * as NodeServices from "@effect/platform-node/NodeServices";
+import * as NodeURL from "node:url";
 import { ProviderDriverKind, ThreadId, TurnItemId } from "@goat/contracts";
 import type * as ProviderAdapter from "@goat/provider-core/server/ProviderAdapter";
 import * as Effect from "effect/Effect";
 import * as Fiber from "effect/Fiber";
 import * as Queue from "effect/Queue";
+import { ChildProcess, ChildProcessSpawner } from "effect/process";
 
 import { makeCommandOutputGate } from "./commandOutputGate.ts";
 
@@ -32,6 +35,21 @@ const setup = Effect.gen(function* () {
   const gate = yield* makeCommandOutputGate(10);
   return { queue, gate };
 });
+
+it.live.each(["command", "shell"])(
+  "releases the oversized input behind a queued %s tail",
+  (queue) =>
+    Effect.gen(function* () {
+      const fixture = NodeURL.fileURLToPath(
+        new URL("./test/cursorOutputStorage.mjs", import.meta.url),
+      );
+      const spawner = yield* ChildProcessSpawner.ChildProcessSpawner;
+      const child = yield* spawner.spawn(
+        ChildProcess.make(process.execPath, ["--expose-gc", fixture, queue], { stderr: "inherit" }),
+      );
+      assert.equal(yield* child.exitCode, 0);
+    }).pipe(Effect.scoped, Effect.provide(NodeServices.layer)),
+);
 
 it.effect("a flood waits for the reader and the count is back at zero after a drain", () =>
   Effect.gen(function* () {
@@ -119,7 +137,7 @@ it.effect(
   () =>
     Effect.gen(function* () {
       const { queue, gate } = yield* setup;
-      const oversized = "prefix:0123456789";
+      const oversized = "prefix:01234567\ud8009";
       assert.isTrue(yield* gate.offer(queue, delta(oversized), () => false));
       const next = yield* gate
         .offer(queue, delta("x"), () => false)
@@ -127,7 +145,7 @@ it.effect(
       assert.isUndefined(next.pollUnsafe());
       const charged = gate.queued();
       const event = yield* gate.take(queue);
-      assert.equal(event.type === "command_output.delta" ? event.chunk : null, "0123456789");
+      assert.equal(event.type === "command_output.delta" ? event.chunk : null, "01234567\ud8009");
       assert.equal(charged, 10);
       assert.isTrue(yield* Fiber.join(next));
       yield* gate.take(queue);
