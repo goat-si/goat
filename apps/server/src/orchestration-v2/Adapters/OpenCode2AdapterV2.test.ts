@@ -1061,6 +1061,162 @@ it.layer(McpProviderSessions.layer)("OpenCode2 adapter", (it) => {
     }).pipe(Effect.scoped),
   );
 
+  it.effect.each([false, true])(
+    "settles a failed background subagent with recovered child=%s",
+    (recoveredChild) =>
+      Effect.gen(function* () {
+        const ids = yield* IdAllocator.IdAllocatorV2.pipe(Effect.provide(IdAllocator.layer));
+        const childThreadId = ids.derive.subagentThread({
+          driver: OPENCODE_PROVIDER,
+          nativeThreadId: CHILD,
+          providerInstanceId: instanceId,
+        });
+        const childProviderThread = {
+          ...providerThread(yield* DateTime.now),
+          id: ids.derive.providerThread({
+            driver: OPENCODE_PROVIDER,
+            nativeThreadId: CHILD,
+            providerInstanceId: instanceId,
+          }),
+          appThreadId: childThreadId,
+          nativeThreadRef: {
+            driver: OPENCODE_PROVIDER,
+            nativeId: CHILD,
+            strength: "strong" as const,
+          },
+        };
+        const shell = {
+          id: "sh_old_child",
+          command: "echo done",
+          status: "exited",
+          exit: 0,
+          cwd: WORK,
+          shell: "/bin/sh",
+          file: "/remote/output",
+          metadata: { sessionID: CHILD },
+          time: { started: 1, completed: 2 },
+        };
+        const response = (data: unknown) => ({ location: { directory: WORK }, data });
+        const { runtime, thread } = yield* resumed(
+          [
+            ...(recoveredChild
+              ? [
+                  out("session.get", { sessionID: CHILD }),
+                  replyData("session.get", sessionInfo({ id: CHILD })),
+                  out("permission.list", { sessionID: CHILD }),
+                  replyData("permission.list", []),
+                  out("session.form.list", { sessionID: CHILD }),
+                  replyData("session.form.list", []),
+                  out("shell.list", "<any>"),
+                  reply("shell.list", response([shell])),
+                  out("shell.get", { id: shell.id }),
+                  reply("shell.get", response(shell)),
+                  out("shell.output", { id: shell.id }),
+                  reply(
+                    "shell.output",
+                    response({ output: "done", cursor: 4, size: 4, truncated: false }),
+                  ),
+                  out("session.update", { sessionID: CHILD, permissions: "<any>" }),
+                  reply("session.update", null),
+                ]
+              : []),
+            ...launchedAndRunning,
+            // The parent turn ends, and the background child fails: it reports
+            // nothing back, so its call has to end with the failure.
+            event("session.execution.succeeded", { sessionID: SESSION }),
+            event("session.execution.failed", {
+              sessionID: CHILD,
+              error: { type: "provider.quota", message: "Rate limit exceeded." },
+            }),
+          ],
+          recoveredChild ? { version: "2.2.1" } : undefined,
+        );
+        if (recoveredChild)
+          yield* runtime.resumeThread({
+            providerThread: childProviderThread,
+            threadId: childThreadId,
+            modelSelection: bigPickle,
+            runtimePolicy: policy(),
+          });
+        const childUpdates: Array<
+          Extract<ProviderAdapter.ProviderAdapterV2Event, { type: "provider_thread.updated" }>
+        > = [];
+        const watch = yield* watchCalls(
+          {
+            ...runtime,
+            events: runtime.events.pipe(
+              Stream.tap((event) =>
+                Effect.sync(() => {
+                  if (
+                    event.type === "provider_thread.updated" &&
+                    event.providerThread.id === childProviderThread.id &&
+                    event.providerThread.ownerNodeId !== null
+                  )
+                    childUpdates.push(event);
+                }),
+              ),
+            ),
+          },
+          thread,
+        );
+        yield* runtime.startTurn(withLineage(thread));
+        yield* watch.until(
+          () => watch.calls.get("Sleep")?.status === "failed" && watch.state.roster?.length === 0,
+        );
+        assert.includeMembers(
+          childUpdates.map((event) => event.providerThread.status),
+          ["active", "idle"],
+        );
+        assert.isFalse(
+          childUpdates.some((event) => event.sessionScoped === true),
+          "reattached child status must route through the parent run",
+        );
+        assert.deepEqual(watch.state.roster, []);
+        assert.isFalse(yield* runtime.hasPendingBackgroundWorkForThread!(thread));
+      }).pipe(Effect.scoped),
+  );
+
+  it.effect("settles the background call a foreground call joined to a failed child", () =>
+    Effect.gen(function* () {
+      const again = { sessionID: SESSION, assistantMessageID: "msg_assistant", id: "call-again" };
+      const { runtime, thread } = yield* resumed([
+        ...launchedAndRunning,
+        // A foreground call joins the running background child. It is only
+        // marked background once its own tool call returns, so the child can
+        // fail while this call is still the foreground one.
+        event("session.tool.input.started", { ...again, name: "subagent" }),
+        event("session.tool.called", {
+          ...again,
+          name: "subagent",
+          input: { description: "Again", prompt: "also this", sessionID: CHILD },
+          executed: false,
+        }),
+        event("session.tool.progress", {
+          ...again,
+          metadata: { sessionID: CHILD, status: "running" },
+        }),
+        out("session.update", { sessionID: CHILD, permissions: "<any>" }),
+        reply("session.update", null),
+        // The child fails while the joined call is still the foreground one.
+        event("session.execution.failed", {
+          sessionID: CHILD,
+          error: { type: "provider.quota", message: "Rate limit exceeded." },
+        }),
+        event("session.execution.succeeded", { sessionID: SESSION }),
+      ]);
+      const watch = yield* watchCalls(runtime, thread);
+      yield* runtime.startTurn(withLineage(thread));
+      yield* watch.until(
+        () =>
+          watch.calls.get("Sleep")?.status === "failed" &&
+          watch.calls.get("Again")?.status === "failed" &&
+          watch.state.roster?.length === 0,
+      );
+      assert.deepEqual(watch.state.roster, []);
+      assert.isFalse(yield* runtime.hasPendingBackgroundWorkForThread!(thread));
+    }).pipe(Effect.scoped),
+  );
+
   it.effect("settles skipped calls from their own answers when a later child report arrives", () =>
     Effect.gen(function* () {
       const answer = (text: string, run: number) =>
@@ -2933,12 +3089,33 @@ it.layer(McpProviderSessions.layer)("OpenCode2 adapter", (it) => {
           event("session.execution.succeeded", { sessionID: SESSION }),
           out("session.form.cancel", { sessionID: CHILD, formID: form.id, message: "<string>" }),
           reply("session.form.cancel", null),
+          event("session.execution.succeeded", { sessionID: CHILD }),
+          childReport("msg_dismissed_child", "Continued without an answer."),
         ]);
-        const requested = yield* requestOf(runtime).pipe(Effect.forkScoped);
+        const ended = yield* runtime.events.pipe(
+          Stream.takeUntil((event) => event.type === "turn.terminal"),
+          Stream.runCollect,
+          Effect.forkScoped,
+        );
         yield* runtime.startTurn(withLineage(thread));
-        const request = yield* Fiber.join(requested);
-        yield* runtime.respondToRuntimeRequest({ requestId: request!.id, decision });
-      }),
+        const request = (yield* Fiber.join(ended)).find(
+          (event) => event.type === "runtime_request.updated",
+        );
+        if (request === undefined) return yield* Effect.die("The child question was not shown.");
+        const result = yield* runtime.events.pipe(
+          Stream.filter(
+            (event) => event.type === "subagent.updated" && event.subagent.status === "completed",
+          ),
+          Stream.runHead,
+          Effect.forkScoped,
+        );
+        yield* runtime.respondToRuntimeRequest({ requestId: request.runtimeRequest.id, decision });
+        const child = Option.getOrUndefined(yield* Fiber.join(result));
+        assert.equal(
+          child?.type === "subagent.updated" ? child.subagent.result : null,
+          "Continued without an answer.",
+        );
+      }).pipe(Effect.scoped),
   );
 
   it.effect("keeps a background child's requests when its parent stops during reconciliation", () =>
