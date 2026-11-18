@@ -1,6 +1,7 @@
 import { assert, it } from "@effect/vitest";
 import {
   type OrchestrationV2ProviderThread,
+  type OrchestrationV2Subagent,
   type OrchestrationV2TurnItem,
   TurnItemId,
 } from "@goat/contracts";
@@ -181,6 +182,129 @@ export function registerReleasedBackgroundWorkChecks({
         toolCallStatus,
       };
     });
+
+  it.effect(
+    "settles a released native child and leaves the replacement session's child active",
+    () =>
+      Effect.gen(function* () {
+        const state = yield* Ref.make(emptyState);
+        yield* Effect.gen(function* () {
+          const manager = yield* ProviderSessionManager.ProviderSessionManagerV2;
+          const eventSink = yield* EventSink.EventSinkV2;
+          const projectionStore = yield* ProjectionStore.ProjectionStoreV2;
+          const idAllocator = yield* IdAllocator.IdAllocatorV2;
+          const { threadId, providerSessionId, providerThreads } =
+            yield* openSessionWithBackgroundCommand("provider-session-release-native-child");
+          const now = yield* DateTime.now;
+          const runId = idAllocator.derive.run({ threadId, ordinal: 1 });
+          const children = yield* Effect.forEach(providerThreads, (owner, index) =>
+            Effect.gen(function* () {
+              const childThreadId = yield* idAllocator.allocate.thread({
+                fixtureName: `release-child-${index}`,
+                projectId: yield* idAllocator.allocate.project({ fixtureName: "release-child" }),
+              });
+              const nativeId = `agent-${index}`;
+              const allocateNode = (nativeItemId: string) =>
+                idAllocator.derive.nodeFromProviderItem({ driver: CODEX_DRIVER, nativeItemId });
+              const id = allocateNode(nativeId);
+              const root = allocateNode(`root-${nativeId}`);
+              const nativeTaskRef = { driver: CODEX_DRIVER, nativeId, strength: "strong" } as const;
+              const subagent: OrchestrationV2Subagent = {
+                id,
+                threadId,
+                runId,
+                childThreadId,
+                nativeTaskRef,
+                parentNodeId: idAllocator.derive.rootNode({ runId }),
+                origin: "provider_native",
+                createdBy: "agent",
+                driver: CODEX_DRIVER,
+                providerInstanceId: modelSelection.instanceId,
+                providerThreadId: null,
+                prompt: "Work in the background",
+                title: null,
+                model: null,
+                status: "running",
+                result: null,
+                startedAt: now,
+                completedAt: null,
+                updatedAt: now,
+              };
+              yield* eventSink.write({
+                events: [
+                  yield* makeThreadCreatedEvent({ idAllocator, threadId: childThreadId, now }),
+                  {
+                    id: yield* idAllocator.allocate.event({ threadId }),
+                    type: "subagent.updated",
+                    threadId,
+                    occurredAt: now,
+                    payload: subagent,
+                  },
+                  {
+                    id: yield* idAllocator.allocate.event({ threadId }),
+                    type: "turn-item.updated",
+                    threadId,
+                    occurredAt: now,
+                    payload: {
+                      ...subagent,
+                      type: "subagent",
+                      id: TurnItemId.make(`turn-item:${nativeId}`),
+                      subagentId: id,
+                      nodeId: id,
+                      providerThreadId: owner.id,
+                      providerTurnId: null,
+                      nativeItemRef: nativeTaskRef,
+                      parentItemId: null,
+                      ordinal: index + 1,
+                    },
+                  },
+                  {
+                    id: yield* idAllocator.allocate.event({ threadId: childThreadId }),
+                    type: "node.updated",
+                    threadId: childThreadId,
+                    occurredAt: now,
+                    payload: {
+                      id: root,
+                      threadId: childThreadId,
+                      rootNodeId: root,
+                      runId: null,
+                      parentNodeId: null,
+                      kind: "root_turn",
+                      status: "running",
+                      countsForRun: false,
+                      providerThreadId: null,
+                      providerTurnId: null,
+                      nativeItemRef: nativeTaskRef,
+                      runtimeRequestId: null,
+                      checkpointScopeId: null,
+                      startedAt: now,
+                      completedAt: null,
+                    },
+                  },
+                ],
+              });
+              return { id, root, childThreadId };
+            }),
+          );
+          yield* manager.close(providerSessionId);
+          const parent = yield* projectionStore.getThreadProjection(threadId);
+          const status = yield* Effect.forEach(children, ({ id, root, childThreadId }) =>
+            projectionStore
+              .getThreadRecords(childThreadId, ["nodes"])
+              .pipe(
+                Effect.map(({ nodes }) => [
+                  parent.subagents.find((row) => row.id === id)?.status,
+                  nodes.find((row) => row.id === root)?.status,
+                ]),
+              ),
+          );
+          assert.deepStrictEqual(status, [
+            ["interrupted", "interrupted"],
+            ["running", "running"],
+          ]);
+        }).pipe(Effect.provide(layerTest({ state, capabilities: ExclusiveCapabilities })));
+      }),
+  );
 
   // regression: a worktree handoff left its tool call running, so the thread stayed Waiting
   it.effect.each(["detach", "stream failure", "provider stop", "early close"] as const)(

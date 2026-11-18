@@ -1,17 +1,16 @@
 import type { OrchestrationV2DomainEvent } from "@goat/contracts";
 import * as Effect from "effect/Effect";
 import type * as SqlClient from "effect/sql/SqlClient";
-import type * as SqlError from "effect/sql/SqlError";
 import * as ProjectionStore from "./ProjectionStore.ts";
 import { EventSinkWriteError, type EventSinkV2Shape } from "./EventSinkShape.ts";
 
 export function makeEventSinkComparePayloadWrites<A, E>(
   sql: SqlClient.SqlClient["Service"],
-  writeIfStoredPayloadMatches: (
-    read: Effect.Effect<ReadonlyArray<{ readonly payload_json: string }>, SqlError.SqlError>,
+  writeIfStoredPayloadMatches: <ReadError>(
+    read: Effect.Effect<ReadonlyArray<{ readonly payload_json: string }>, ReadError>,
     expected: string,
     events: ReadonlyArray<OrchestrationV2DomainEvent>,
-  ) => Effect.Effect<A, E>,
+  ) => Effect.Effect<A, E | ReadError>,
 ) {
   const writeIfProviderThreadUnchangedEffect = Effect.fn(
     "orchestrationV2.EventSink.writeIfProviderThreadUnchanged",
@@ -53,6 +52,46 @@ export function makeEventSinkComparePayloadWrites<A, E>(
     );
   });
 
+  const writeIfReleasedSubagentUnchanged = Effect.fn(
+    "orchestrationV2.EventSink.writeIfReleasedSubagentUnchanged",
+  )(function* (input: Parameters<EventSinkV2Shape["writeIfReleasedSubagentUnchanged"]>[0]) {
+    const expected = yield* ProjectionStore.encodeSubagentPayload(input.expected);
+    const matches = Effect.gen(function* () {
+      const owner = yield* sql<{ readonly payload_json: string }>`
+        SELECT s.payload_json
+        FROM orchestration_v2_projection_subagents s
+        JOIN orchestration_v2_projection_provider_threads p ON p.thread_id = s.thread_id
+        WHERE s.subagent_id = ${input.expected.id}
+          AND p.provider_thread_id = ${input.providerThreadId}
+          AND p.provider_session_id = ${input.providerSessionId}
+      `;
+      if (owner[0]?.payload_json !== expected) return [];
+      for (const node of input.nodes) {
+        const rows = yield* sql<{ readonly payload_json: string }>`
+          SELECT payload_json FROM orchestration_v2_projection_nodes WHERE node_id = ${node.id}
+        `;
+        if (rows[0]?.payload_json !== (yield* ProjectionStore.encodeNodePayload(node))) return [];
+      }
+      for (const turn of input.turns) {
+        const rows = yield* sql<{ readonly payload_json: string }>`
+          SELECT payload_json FROM orchestration_v2_projection_provider_turns
+          WHERE provider_turn_id = ${turn.id}
+        `;
+        if (rows[0]?.payload_json !== (yield* ProjectionStore.encodeProviderTurnPayload(turn)))
+          return [];
+      }
+      for (const item of input.items) {
+        const rows = yield* sql<{ readonly payload_json: string }>`
+          SELECT payload_json FROM orchestration_v2_projection_turn_items WHERE turn_item_id = ${item.id}
+        `;
+        if (rows[0]?.payload_json !== (yield* ProjectionStore.encodeTurnItemPayload(item)))
+          return [];
+      }
+      return owner;
+    });
+    return yield* writeIfStoredPayloadMatches(matches, expected, input.events);
+  });
+
   return {
     writeIfProviderThreadUnchanged: (input) =>
       writeIfProviderThreadUnchangedEffect(input).pipe(
@@ -62,6 +101,14 @@ export function makeEventSinkComparePayloadWrites<A, E>(
       ),
     writeIfTurnItemUnchanged: (input) =>
       writeIfTurnItemUnchangedEffect(input).pipe(
+        Effect.mapError(
+          (cause) => new EventSinkWriteError({ eventCount: input.events.length, cause }),
+        ),
+      ),
+    writeIfReleasedSubagentUnchanged: (
+      input: Parameters<EventSinkV2Shape["writeIfReleasedSubagentUnchanged"]>[0],
+    ) =>
+      writeIfReleasedSubagentUnchanged(input).pipe(
         Effect.mapError(
           (cause) => new EventSinkWriteError({ eventCount: input.events.length, cause }),
         ),

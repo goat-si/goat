@@ -953,10 +953,10 @@ const encodeRestartCancelledBackgroundWork = Schema.encodeEffect(
 const encodeRunAttemptPayload = Schema.encodeEffect(
   Schema.fromJsonString(OrchestrationV2RunAttemptJsonSchema),
 );
-const encodeNodePayload = Schema.encodeEffect(
+export const encodeNodePayload = Schema.encodeEffect(
   Schema.fromJsonString(OrchestrationV2ExecutionNodeJsonSchema),
 );
-const encodeSubagentPayload = Schema.encodeEffect(
+export const encodeSubagentPayload = Schema.encodeEffect(
   Schema.fromJsonString(OrchestrationV2SubagentJsonSchema),
 );
 const encodeProviderSessionPayload = Schema.encodeEffect(
@@ -965,7 +965,7 @@ const encodeProviderSessionPayload = Schema.encodeEffect(
 export const encodeProviderThreadPayload = Schema.encodeEffect(
   Schema.fromJsonString(OrchestrationV2ProviderThreadJsonSchema),
 );
-const encodeProviderTurnPayload = Schema.encodeEffect(
+export const encodeProviderTurnPayload = Schema.encodeEffect(
   Schema.fromJsonString(OrchestrationV2ProviderTurnJsonSchema),
 );
 const encodeRuntimeRequestPayload = Schema.encodeEffect(
