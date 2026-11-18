@@ -2,11 +2,16 @@ import type { DesktopUpdateChannel, DesktopUpdateState } from "@goat/contracts";
 import * as Effect from "effect/Effect";
 import * as Exit from "effect/Exit";
 import * as Option from "effect/Option";
+import * as Schema from "effect/Schema";
 import * as Stream from "effect/Stream";
 
 import type * as ElectronUpdater from "../electron/ElectronUpdater.ts";
 import type * as DesktopAppSettings from "../settings/DesktopAppSettings.ts";
 import { DesktopUpdateCheckTimeoutError, UPDATE_CHECK_TIMEOUT } from "./updateFailures.ts";
+
+export const decodeDownloadProgressInfo = Schema.decodeUnknownEffect(
+  Schema.Struct({ percent: Schema.Number }),
+);
 
 export const checkDesktopUpdateFeed = (
   updater: ElectronUpdater.ElectronUpdater["Service"],
@@ -47,6 +52,10 @@ export function makeUpdateFeedCapture() {
       }),
   };
 }
+
+export const hasInstallableDownload = (state: DesktopUpdateState) =>
+  state.status === "downloaded" ||
+  (state.status === "error" && (state.errorContext === null || state.errorContext === "install"));
 
 export const hasDownloadOffer = (state: DesktopUpdateState) =>
   state.availableVersion !== null &&

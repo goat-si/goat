@@ -2,7 +2,9 @@ import { makeUpdateInstallRecord } from "./updateInstallRecord.ts";
 export { DESKTOP_UPDATE_INSTALL_RECORD_FILE } from "./updateInstallRecord.ts";
 import {
   checkDesktopUpdateFeed,
+  decodeDownloadProgressInfo,
   hasDownloadOffer,
+  hasInstallableDownload,
   isPersistedDownload,
   makeUpdateDownloadAttempts,
   makeUpdateFeedCapture,
@@ -87,10 +89,6 @@ import {
   shouldBroadcastDownloadProgress,
 } from "./updateMachine.ts";
 
-const hasInstallableDownload = (state: DesktopUpdateState) =>
-  state.status === "downloaded" ||
-  (state.status === "error" && (state.errorContext === null || state.errorContext === "install"));
-
 const AUTO_UPDATE_STARTUP_DELAY = "15 seconds";
 const AUTO_UPDATE_POLL_INTERVAL = "4 hours";
 // Remote installs (DesktopRemoteUpdates) must answer within the server's commit budget, so
@@ -111,11 +109,7 @@ const UpdateInfo = Schema.Struct({
   releaseDate: Schema.optional(Schema.String),
 });
 
-const DownloadProgressInfo = Schema.Struct({
-  percent: Schema.Number,
-});
 const decodeUpdateInfo = Schema.decodeUnknownEffect(UpdateInfo);
-const decodeDownloadProgressInfo = Schema.decodeUnknownEffect(DownloadProgressInfo);
 
 const currentIsoTimestamp = DateTime.now.pipe(Effect.map(DateTime.formatIso));
 
@@ -1134,16 +1128,20 @@ export const make = Effect.gen(function* () {
 
   const handleDownloadProgress = Effect.fn("desktop.updates.handleDownloadProgress")(function* (
     raw: unknown,
+    attempt: NonNullable<ReturnType<typeof downloadAttempts.capture>>,
   ) {
     yield* decodeDownloadProgressInfo(raw).pipe(
       Effect.flatMap(
         Effect.fn("desktop.updates.applyDownloadProgress")(function* (progress) {
           const percent = Math.floor(progress.percent);
-          yield* updateState((state) =>
-            shouldBroadcastDownloadProgress(state, progress.percent) || state.message !== null
+          const state = yield* updateState((state) =>
+            downloadAttempts.isCurrent(attempt) &&
+            state.status === "downloading" &&
+            (shouldBroadcastDownloadProgress(state, progress.percent) || state.message !== null)
               ? reduceDesktopUpdateStateOnDownloadProgress(state, progress.percent)
               : state,
           );
+          if (!downloadAttempts.isCurrent(attempt) || state.status !== "downloading") return;
           const milestone = percent - (percent % 10);
           const lastLoggedMilestone = yield* Ref.get(lastLoggedDownloadMilestoneRef);
           if (milestone > lastLoggedMilestone) {
@@ -1341,7 +1339,8 @@ export const make = Effect.gen(function* () {
         runEffect(handleUpdaterError(error, detail));
       });
       yield* electronUpdater.on("download-progress", (progress: unknown) => {
-        runEffect(handleDownloadProgress(progress));
+        const attempt = downloadAttempts.capture();
+        if (attempt !== null) runEffect(handleDownloadProgress(progress, attempt));
       });
       yield* electronUpdater.on("update-downloaded", (info: unknown) => {
         runEffect(handleUpdateDownloaded(info, downloadAttempts.capture()));

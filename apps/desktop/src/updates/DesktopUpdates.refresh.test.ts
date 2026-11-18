@@ -430,3 +430,40 @@ it.effect("publishes a retryable install refresh timeout and keeps the downloade
     }).pipe(Effect.provide(harness.layer), Effect.scoped);
   }),
 );
+
+it.effect("admits a check and retry after cancellation and late native download events", () =>
+  Effect.gen(function* () {
+    const firstDownloadStarted = yield* Deferred.make<void>();
+    let downloads = 0;
+    const harness = makeHarness({
+      checkForUpdates: Effect.sync(() => harness.emit("update-available", { version: "1.2.4" })),
+      downloadUpdate: Effect.suspend(() =>
+        ++downloads === 1
+          ? Deferred.succeed(firstDownloadStarted, undefined).pipe(Effect.andThen(Effect.never))
+          : Effect.sync(() => harness.emit("update-downloaded", { version: "1.2.4" })),
+      ),
+    });
+    yield* Effect.gen(function* () {
+      const updates = yield* DesktopUpdates.DesktopUpdates;
+      yield* updates.configure;
+      yield* updates.check("manual");
+      const download = yield* updates.download.pipe(Effect.forkScoped);
+      yield* Deferred.await(firstDownloadStarted);
+      harness.emit("download-progress", { percent: 20 });
+      yield* TestClock.adjust("1 second");
+      assert.equal((yield* updates.getState).downloadPercent, 20);
+
+      yield* Fiber.interrupt(download);
+      assert.equal((yield* updates.getState).status, "available");
+      harness.emit("download-progress", { percent: 80 });
+      harness.emit("update-downloaded", { version: "1.2.4" });
+      yield* TestClock.adjust("1 second");
+
+      assert.isFalse(yield* updates.isActionActive);
+      assert.isTrue((yield* updates.check("manual")).checked);
+      assert.isNull((yield* updates.getState).downloadedVersion);
+      assert.isTrue((yield* updates.download).completed);
+      assert.equal((yield* updates.getState).downloadedVersion, "1.2.4");
+    }).pipe(Effect.provide(harness.layer), Effect.scoped);
+  }),
+);
