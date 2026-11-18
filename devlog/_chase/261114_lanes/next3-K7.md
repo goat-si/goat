@@ -1518,3 +1518,14 @@ K7: the fix round used neither (no type-only import or provide was added to an e
 
 K7 used git stash once, before this rule: "k7-row8-wip" on chase/t3-261114-next3-k7-client-protocol, while dropping the unused claim 8 move-out commit. It was popped at once ("Dropped refs/stash@{0}"). `git stash list` on pen-macbookpro2 is now empty (0 entries), so no entry of mine or anyone else's remains. The fail-first runs since then saved diffs to /tmp patch files or file copies and re-applied them; from now on, only that or a scratch branch.
 
+
+## Coordinator, 2026-11-18 01:14:39 UTC, III (K7 line) and IV, verbatim
+
+III. K7 at 3f390d30282777a5880ba861f7031c1ae98e8e35: READY accepted (gate exit 0 on the pushed head). quick 44213593271 dispatched. Brief next3-K7-fix-3f390d30.md; its first item is whether a resent message can be applied twice by the server. The second integration merge still waits for K10.
+
+IV. STANDING RULE, every lane, from now: before READY, every apps/server test file the lane added or changed is run once from apps/server with GOAT_TEST_TMP_GUARD=fail (CI sets it, check:changed does not), and the READY report says so. The ps check in its own step first, as before.
+
+## K7 under IV (on the pushed head 3f390d3028, run after its READY; the head is unchanged)
+
+ps check first, in its own step: no vitest, tsc, check-changed or build process running; load 2.79. Then, from apps/server: `GOAT_TEST_TMP_GUARD=fail vp test run` on every apps/server test file the lane added or changed (`git diff --name-only --diff-filter=AM c995c5427a...HEAD`): orchestration-v2/Orchestrator.messageReceiptReplay.test.ts, ProjectionPendingRequest.test.ts, ShellStream.test.ts, ThreadTitleRegenerationService.test.ts, relay/AgentAwarenessRelay.userWait.test.ts and terminal/Manager.retainedHistory.test.ts. Exit 0: 6 files, 48 tests passed. The next READY (after the second integration merge) runs it again.
+
