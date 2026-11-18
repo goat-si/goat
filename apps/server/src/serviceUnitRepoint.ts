@@ -16,7 +16,7 @@ import {
 } from "./cloud/serviceProtocol.ts";
 import { acquireServiceSelectionLock } from "./cloud/serviceSelectionLock.ts";
 import { bootServiceBaseDirOf, systemdUnitDirectoryOf } from "./cloud/systemdValues.ts";
-import { syncDirectory } from "./serviceLauncherDatabase.ts";
+import { syncDirectory } from "./serviceLauncherCopy.ts";
 
 export interface ServiceUnit {
   readonly path: string;

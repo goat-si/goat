@@ -1,5 +1,5 @@
 // @effect-diagnostics nodeBuiltinImport:off - fake runtimes and unit files are plain files.
-import { writeFakeRuntime } from "./serviceLauncher.testkit.ts";
+import { readDatabaseLabel, seedDatabase, writeFakeRuntime } from "./serviceLauncher.testkit.ts";
 import * as NodeServices from "@effect/platform-node/NodeServices";
 import { assert, it } from "@effect/vitest";
 import * as Effect from "effect/Effect";
@@ -11,9 +11,7 @@ import {
   SERVICE_LAUNCHER_PROTOCOL,
   type ServiceState,
 } from "./cloud/serviceProtocol.ts";
-import { tryAcquireServerOwnerLock } from "./serverOwnerLockFile.ts";
 import { Launcher, readServiceState, writeServiceState } from "./serviceLauncher.ts";
-import { backupDatabaseOnce, launcherOwner } from "./serviceLauncherDatabase.ts";
 import { repointServiceUnitContents, type ServiceUnit } from "./serviceUnitRepoint.ts";
 
 const update = { id: "update-1", fromVersion: "1.0.0", targetVersion: "1.1.0" } as const;
@@ -110,7 +108,7 @@ it("points a unit or launch agent at the selected runtime, never at an older one
 
 it.layer(NodeServices.layer)("launcher selection and unit", (it) => {
   it.effect(
-    "a probation rollback under a restarted new launcher starts the protocol-3 runtime it returns to",
+    "verified manual recovery during probation starts the selected protocol-3 runtime",
     () =>
       Effect.gen(function* () {
         // The service restarted during probation, so the unit already runs the new launcher.
@@ -123,22 +121,11 @@ it.layer(NodeServices.layer)("launcher selection and unit", (it) => {
         const stateDir = home.path.join(home.root, "userdata");
         const dbPath = home.path.join(stateDir, "state.sqlite");
         yield* home.fs.makeDirectory(stateDir);
-        yield* home.fs.writeFileString(dbPath, "before trial");
-        const lock = tryAcquireServerOwnerLock(stateDir, launcherOwner(update.id));
-        assert.isDefined(lock);
-        try {
-          yield* Effect.promise(() =>
-            backupDatabaseOnce(
-              home.root,
-              { ...update, status: "pending", dbPath },
-              lock.generation,
-              new AbortController().signal,
-            ),
-          );
-        } finally {
-          lock.release();
-        }
-        yield* home.fs.writeFileString(dbPath, "after trial");
+        seedDatabase(dbPath, "before trial");
+        yield* home.fs.writeFileString(
+          home.path.join(home.root, "runtime", "db-update-update-1.phase"),
+          "keep-live\n",
+        );
         yield* Effect.promise(() =>
           writeServiceState(home.statePath, {
             ...committed,
@@ -151,7 +138,7 @@ it.layer(NodeServices.layer)("launcher selection and unit", (it) => {
         const state = yield* runUntilActiveExits(home.root, home.statePath);
         assert.equal(state.activeVersion, "1.0.0");
         assert.equal(state.update?.status, "rolled-back");
-        assert.equal(yield* home.fs.readFileString(dbPath), "before trial");
+        assert.equal(readDatabaseLabel(dbPath), "before trial");
         assert.equal(yield* home.fs.readFileString(marker), "started");
         // Durable state stays readable by a protocol-3 launcher.
         assert.equal(JSON.parse(yield* home.fs.readFileString(home.statePath)).protocol, 3);

@@ -108,7 +108,11 @@ process.exit(0);`,
       yield* Effect.promise(() => running);
       assert.equal(spawnedChildren.length, count);
       assert.deepEqual(yield* Effect.promise(() => readServiceState(statePath)), pending);
-      assert.isFalse(yield* fs.exists(path.join(root, "runtime", "db-backup", "update-1.staging")));
+      assert.isTrue(yield* fs.exists(path.join(root, "runtime", "db-backup", "update-1.staging")));
+      assert.equal(
+        yield* fs.readFileString(path.join(root, "runtime", "db-update-update-1.phase")),
+        "trial\n",
+      );
     }),
   );
 

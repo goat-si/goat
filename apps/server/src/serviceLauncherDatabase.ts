@@ -1,33 +1,32 @@
 // @effect-diagnostics nodeBuiltinImport:off
 // The launcher's database backup and restore; Node built-ins only, like the launcher itself.
-import { copyDatabaseFile, runCp } from "./serviceLauncherCopy.ts";
+import { copyDatabaseFile, runCp, syncDirectory } from "./serviceLauncherCopy.ts";
 import * as NodeCrypto from "node:crypto";
 import * as NodeFS from "node:fs";
 import * as NodeFSP from "node:fs/promises";
 import * as NodePath from "node:path";
+import * as NodeSqlite from "node:sqlite";
+import * as NodeURL from "node:url";
 
 import type { PendingServiceUpdate } from "./cloud/serviceProtocol.ts";
-import { tryAcquireServerOwnerLock } from "./serverOwnerLockFile.ts";
+import { serverOwnerLogFileIdentity, tryAcquireServerOwnerLock } from "./serverOwnerLockFile.ts";
+import { replaceFileDurably } from "./serviceUnitRepoint.ts";
 import { livePreLockServerOwner, tryAcquireLegacyServerOwnerLock } from "./serviceLauncherOwner.ts";
 
 const DB_FILE_SUFFIXES = ["", "-wal", "-shm"] as const;
-const RESTORE_MARKER = ".restore-pending";
-const ROLLBACK_MARKER = ".rollback-pending";
-const TRIAL_MARKER = ".trial-started";
 const UNTRACKED_OWNER_MARKER = ".untracked-owner";
-const OWNER_GENERATION_FILE = "owner-generation";
+type DatabaseSuffix = (typeof DB_FILE_SUFFIXES)[number];
 
 // Owner tags in the server-owner.lock generation log. Only these may own
 // the userdata between an update's backup and its restore.
-export const launcherOwner = (updateId: string) => `service-launcher:${updateId}`;
+const launcherOwner = (updateId: string) => `service-launcher:${updateId}`;
 const trialOwner = (updateId: string) => `service-trial:${updateId}`;
-const probationOwner = (updateId: string) => `service-probation:${updateId}`;
 export const ownerLockDir = (pending: PendingServiceUpdate) => NodePath.dirname(pending.dbPath);
 
 const databaseBackupDir = (baseDir: string, updateId: string) =>
   NodePath.join(baseDir, "runtime", "db-backup", updateId);
 
-const databaseBackupFile = (backupDir: string, suffix: (typeof DB_FILE_SUFFIXES)[number]) =>
+const databaseBackupFile = (backupDir: string, suffix: DatabaseSuffix) =>
   NodePath.join(backupDir, suffix === "" ? "database" : `database${suffix}`);
 
 export async function pathExists(target: string): Promise<boolean> {
@@ -45,18 +44,6 @@ async function syncFile(filePath: string): Promise<void> {
   const handle = await NodeFSP.open(filePath, "r+");
   try {
     await handle.sync();
-  } finally {
-    await handle.close();
-  }
-}
-
-// Fsync makes renames durable; Windows returns EPERM and NTFS journals them itself.
-export async function syncDirectory(directory: string): Promise<void> {
-  const handle = await NodeFSP.open(directory, "r");
-  try {
-    await handle.sync();
-  } catch (error) {
-    if ((error as NodeJS.ErrnoException).code !== "EPERM") throw error;
   } finally {
     await handle.close();
   }
@@ -148,75 +135,92 @@ export async function databaseBackupBlocker(
   return `Not enough free disk space to back up the database before updating: ${gb(needed)} GB needed, ${gb(free)} GB free. Free up disk space and try again. The server was not stopped.`;
 }
 
-/**
- * Snapshots the database once per update before the first trial, while the
- * caller holds server-owner.lock at `generation`. A completed backup is never
- * overwritten because a restarted launcher may be looking at database writes
- * from an earlier attempt by the same trial.
- */
-export async function backupDatabaseOnce(
+const phasePath = (baseDir: string, updateId: string) =>
+  NodePath.join(baseDir, "runtime", `db-update-${encodeURIComponent(updateId)}.phase`);
+
+export async function databasePhase(baseDir: string, updateId: string) {
+  try {
+    const file = phasePath(baseDir, updateId);
+    if (await pathExists(file)) {
+      const phase = (await NodeFSP.readFile(file, "utf8")).trim();
+      if (phase === "trial" || phase === "restore" || phase === "keep-live") return phase;
+      return "unknown";
+    }
+    const backupDir = databaseBackupDir(baseDir, updateId);
+    return (await pathExists(backupDir)) || (await pathExists(`${backupDir}.staging`))
+      ? "unknown"
+      : "fresh";
+  } catch {
+    return "unknown";
+  }
+}
+
+export interface DatabaseSnapshot {
+  readonly updateId: string;
+  readonly generation: number;
+  readonly identity: string;
+  readonly logFile: string;
+  readonly files: ReadonlySet<DatabaseSuffix>;
+}
+
+export async function backupDatabase(
   baseDir: string,
   pending: PendingServiceUpdate,
-  generation: number,
   signal: AbortSignal,
-): Promise<void> {
+): Promise<DatabaseSnapshot | undefined> {
   signal.throwIfAborted();
-  const backupDir = databaseBackupDir(baseDir, pending.id);
-  if (await pathExists(backupDir)) return;
-
-  const stagingDir = `${backupDir}.staging`;
-  await NodeFSP.rm(stagingDir, { recursive: true, force: true });
-  await NodeFSP.mkdir(stagingDir, { recursive: true, mode: 0o700 });
+  const stateDir = ownerLockDir(pending);
+  const lock = tryAcquireServerOwnerLock(stateDir, launcherOwner(pending.id));
+  if (lock === undefined) return undefined;
+  let releaseLegacy: (() => void) | undefined;
   try {
-    // SQLite keeps -wal and -shm beside the resolved database file, not beside a symlink to it.
+    releaseLegacy = tryAcquireLegacyServerOwnerLock(stateDir);
+    if (releaseLegacy === undefined || (await livePreLockServerOwner(stateDir))) return undefined;
+    if ((await databasePhase(baseDir, pending.id)) !== "fresh") {
+      throw databaseRecoveryRequired(
+        baseDir,
+        pending,
+        "This update already has database artifacts.",
+      );
+    }
+    const identity = NodeCrypto.randomUUID();
+    const logFile = serverOwnerLogFileIdentity(stateDir);
+    lock.writeSnapshotIdentity(identity);
+    await replaceFileDurably(phasePath(baseDir, pending.id), "trial\n");
+
+    const backupDir = databaseBackupDir(baseDir, pending.id);
+    const stagingDir = `${backupDir}.staging`;
+    await NodeFSP.mkdir(stagingDir, { recursive: true, mode: 0o700 });
+    const files = new Set<DatabaseSuffix>();
     const mainTarget = await restoreTarget(pending.dbPath);
     for (const suffix of DB_FILE_SUFFIXES) {
       signal.throwIfAborted();
-      const source = suffix === "" ? pending.dbPath : `${mainTarget}${suffix}`;
+      const source = `${mainTarget}${suffix}`;
       if (suffix !== "" && !(await pathExists(source))) continue;
       const destination = databaseBackupFile(stagingDir, suffix);
       await copyDatabaseFile(source, destination, signal);
       await syncFile(destination);
+      files.add(suffix);
     }
     signal.throwIfAborted();
-    const generationPath = NodePath.join(stagingDir, OWNER_GENERATION_FILE);
-    await NodeFSP.writeFile(generationPath, `${generation}\n`, { mode: 0o600 });
-    await syncFile(generationPath);
     await syncDirectory(stagingDir);
     await NodeFSP.rename(stagingDir, backupDir);
     await syncDirectory(NodePath.dirname(backupDir));
-  } catch (cause) {
-    await NodeFSP.rm(stagingDir, { recursive: true, force: true }).catch(() => undefined);
-    throw cause;
-  }
-}
-
-/** A rollback was decided, or its restore started, and recovery must finish it. */
-export async function databaseRestorePending(
-  baseDir: string,
-  pending: PendingServiceUpdate,
-): Promise<boolean> {
-  const backupDir = databaseBackupDir(baseDir, pending.id);
-  return (
-    (await pathExists(NodePath.join(backupDir, ROLLBACK_MARKER))) ||
-    (await pathExists(NodePath.join(backupDir, RESTORE_MARKER))) ||
-    (await pathExists(NodePath.join(backupDir, UNTRACKED_OWNER_MARKER)))
-  );
-}
-
-async function writeMarker(backupDir: string, marker: string): Promise<void> {
-  const handle = await NodeFSP.open(NodePath.join(backupDir, marker), "a", 0o600);
-  try {
-    await handle.sync();
+    return { updateId: pending.id, generation: lock.generation, identity, logFile, files };
   } finally {
-    await handle.close();
+    try {
+      releaseLegacy?.();
+    } finally {
+      lock.release();
+    }
   }
-  await syncDirectory(backupDir);
 }
 
 export async function markUntrackedDatabaseOwner(baseDir: string, updateId: string): Promise<void> {
   const backupDir = databaseBackupDir(baseDir, updateId);
-  if (await pathExists(backupDir)) await writeMarker(backupDir, UNTRACKED_OWNER_MARKER);
+  if (await pathExists(backupDir)) {
+    await replaceFileDurably(NodePath.join(backupDir, UNTRACKED_OWNER_MARKER), "");
+  }
 }
 
 // Resolve symlink targets even if a crashed cp -c left the final target missing.
@@ -242,121 +246,202 @@ async function restoreTarget(path: string): Promise<string> {
   throw new Error(`Too many symbolic links resolving ${path}.`);
 }
 
-function databaseRecoveryRequired(dbPath: string, backupDir: string, reason: string): Error {
+export function databaseRecoveryRequired(
+  baseDir: string,
+  pending: PendingServiceUpdate,
+  reason: string,
+): Error {
   return new Error(
-    `Database recovery required for ${dbPath}. ${reason} ` +
-      `The live files and any snapshot files at ${backupDir} were kept. ` +
+    `Database recovery required for ${pending.dbPath}. ${reason} ` +
+      `The live files and any snapshot files at ${databaseBackupDir(baseDir, pending.id)} were kept. ` +
+      `After verifying the live files, acknowledge recovery at ${phasePath(baseDir, pending.id)}. ` +
       "Follow the recovery steps at https://github.com/goat-si/goat/blob/dev/docs/user/updating.md#recover-an-interrupted-database-restore",
   );
 }
 
-// An interrupted restore with uncertain ownership leaves both copies for manual recovery.
-export async function restoreDatabaseBackup(
+async function fileDigest(path: string): Promise<string> {
+  const hash = NodeCrypto.createHash("sha256");
+  const file = await NodeFSP.open(path, "r");
+  try {
+    const chunk = Buffer.alloc(1024 * 1024);
+    while (true) {
+      const { bytesRead } = await file.read(chunk);
+      if (bytesRead === 0) return hash.digest("hex");
+      hash.update(chunk.subarray(0, bytesRead));
+    }
+  } finally {
+    await file.close();
+  }
+}
+
+async function matchesSnapshot(
+  live: string,
+  backupDir: string,
+  expected: ReadonlySet<DatabaseSuffix>,
+): Promise<boolean> {
+  const backupFiles = new Set(await NodeFSP.readdir(backupDir));
+  for (const suffix of DB_FILE_SUFFIXES) {
+    const source = databaseBackupFile(backupDir, suffix);
+    const target = `${live}${suffix}`;
+    if (backupFiles.delete(NodePath.basename(source)) !== expected.has(suffix)) return false;
+    if ((await pathExists(target)) !== expected.has(suffix)) return false;
+    if (!expected.has(suffix)) continue;
+    const [saved, current] = await Promise.all([NodeFSP.lstat(source), NodeFSP.stat(target)]);
+    if (!saved.isFile() || !current.isFile() || saved.size !== current.size) return false;
+    if (saved.dev === current.dev && saved.ino === current.ino) return false;
+    const [left, right] = await Promise.all([fileDigest(source), fileDigest(target)]);
+    if (left !== right) return false;
+  }
+  return backupFiles.size === 0;
+}
+
+async function usableDatabase(file: string): Promise<boolean> {
+  let scratch: string | undefined;
+  try {
+    const stat = await NodeFSP.stat(file);
+    if (!stat.isFile() || stat.size < 512 || (await pathExists(`${file}-journal`))) return false;
+    const shm = await NodeFSP.stat(`${file}-shm`).catch((cause: unknown) => {
+      if ((cause as NodeJS.ErrnoException).code === "ENOENT") return undefined;
+      throw cause;
+    });
+    if (shm !== undefined && (!shm.isFile() || shm.size === 0 || shm.size % 32768 !== 0)) {
+      return false;
+    }
+    const walPath = `${file}-wal`;
+    let uri = NodeURL.pathToFileURL(file);
+    if (await pathExists(walPath)) {
+      const walSize = await NodeFSP.stat(walPath);
+      if (!walSize.isFile()) return false;
+      if (walSize.size > 0) {
+        const header = Buffer.alloc(32);
+        const wal = await NodeFSP.open(walPath, "r");
+        try {
+          if ((await wal.read(header)).bytesRead !== header.length) return false;
+        } finally {
+          await wal.close();
+        }
+        const magic = header.readUInt32BE(0);
+        const pageSize = header.readUInt32BE(8);
+        if (
+          (magic !== 0x377f0682 && magic !== 0x377f0683) ||
+          pageSize < 512 ||
+          pageSize > 65536 ||
+          (pageSize & (pageSize - 1)) !== 0 ||
+          (walSize.size - header.length) % (pageSize + 24) !== 0
+        ) {
+          return false;
+        }
+      }
+      // SQLite may create or rewrite the WAL index even on a read-only connection.
+      scratch = await NodeFSP.mkdtemp(NodePath.join(NodePath.dirname(file), ".goat-db-check-"));
+      const copy = NodePath.join(scratch, "database");
+      const clone = NodeFS.constants.COPYFILE_FICLONE;
+      await NodeFSP.copyFile(file, copy, clone);
+      await NodeFSP.copyFile(walPath, `${copy}-wal`, clone);
+      uri = NodeURL.pathToFileURL(copy);
+    } else {
+      uri.searchParams.set("immutable", "1");
+    }
+    using db = new NodeSqlite.DatabaseSync(uri.href, { readOnly: true });
+    return db.prepare("PRAGMA quick_check(1)").get()?.quick_check === "ok";
+  } catch {
+    return false;
+  } finally {
+    if (scratch !== undefined) await NodeFSP.rm(scratch, { recursive: true, force: true });
+  }
+}
+
+export async function selectDatabaseRollback(
   baseDir: string,
   pending: PendingServiceUpdate,
-  snapshotRequired = false,
-): Promise<"restored" | "busy" | "kept"> {
+  snapshot: DatabaseSnapshot | undefined,
+  snapshotRequired: boolean,
+  select: () => Promise<void>,
+): Promise<"done" | "busy"> {
   const backupDir = databaseBackupDir(baseDir, pending.id);
-  if (!(await pathExists(backupDir))) {
-    if (!snapshotRequired) return "restored";
-    await NodeFSP.mkdir(backupDir, { recursive: true, mode: 0o700 });
-    await syncDirectory(NodePath.dirname(backupDir));
-  }
-  await writeMarker(backupDir, ROLLBACK_MARKER);
-
-  const restoreStarted = await pathExists(NodePath.join(backupDir, RESTORE_MARKER));
-  const untrackedOwner = await pathExists(NodePath.join(backupDir, UNTRACKED_OWNER_MARKER));
-  if (
-    !(untrackedOwner && !restoreStarted) &&
-    !(await pathExists(databaseBackupFile(backupDir, "")))
-  ) {
-    await writeMarker(backupDir, RESTORE_MARKER);
-    await writeMarker(backupDir, UNTRACKED_OWNER_MARKER);
-    throw databaseRecoveryRequired(pending.dbPath, backupDir, "The database snapshot is missing.");
+  const phase = await databasePhase(baseDir, pending.id);
+  const requireRecovery = (reason: string) => databaseRecoveryRequired(baseDir, pending, reason);
+  const canKeep = phase === "keep-live" || (phase === "fresh" && !snapshotRequired);
+  if (!canKeep && (phase !== "trial" || snapshot?.updateId !== pending.id)) {
+    throw requireRecovery("No continuous ownership proof is available for this database update.");
   }
 
   const stateDir = ownerLockDir(pending);
   const owner = launcherOwner(pending.id);
-  const lock = tryAcquireServerOwnerLock(stateDir, owner);
-  if (lock === undefined) return "busy";
+  let lock: ReturnType<typeof tryAcquireServerOwnerLock>;
+  try {
+    lock = tryAcquireServerOwnerLock(stateDir, owner);
+  } catch {
+    throw requireRecovery("The database ownership log could not be opened.");
+  }
+  if (lock === undefined) {
+    if (canKeep) return "busy";
+    throw requireRecovery("Another process holds the database ownership log.");
+  }
   let releaseLegacy: (() => void) | undefined;
   try {
-    releaseLegacy = tryAcquireLegacyServerOwnerLock(stateDir);
+    try {
+      releaseLegacy = tryAcquireLegacyServerOwnerLock(stateDir);
+    } catch {
+      throw requireRecovery("The legacy database ownership lock could not be opened.");
+    }
     if (releaseLegacy === undefined || (await livePreLockServerOwner(stateDir))) {
-      await markUntrackedDatabaseOwner(baseDir, pending.id);
-      return "busy";
+      if (canKeep) return "busy";
+      throw requireRecovery("A legacy server is using the database.");
     }
-    const recorded = await NodeFSP.readFile(
-      NodePath.join(backupDir, OWNER_GENERATION_FILE),
-      "utf8",
-    ).catch(() => "");
-    const generation = Number(recorded);
-    const owners =
-      Number.isSafeInteger(generation) && generation > 0 && generation < lock.generation
-        ? lock.ownersSince(generation - 1)
-        : [];
-    const ours = new Set([owner, trialOwner(pending.id), probationOwner(pending.id)]);
-    // The backup generation itself must be present even if the lock file was recreated.
-    if (
-      untrackedOwner ||
-      owners[0] !== owner ||
-      owners.length !== lock.generation - generation + 1 ||
-      owners.some((recordedOwner) => !ours.has(recordedOwner))
-    ) {
-      if (!restoreStarted) return "kept";
-      if (!untrackedOwner) await writeMarker(backupDir, UNTRACKED_OWNER_MARKER);
-      throw databaseRecoveryRequired(
-        pending.dbPath,
-        backupDir,
-        "Another server may have used the home during an interrupted restore.",
-      );
-    }
-    if (!restoreStarted) await writeMarker(backupDir, RESTORE_MARKER);
-    const directories = new Set([NodePath.dirname(pending.dbPath)]);
-    // SQLite keeps -wal and -shm beside the resolved database file, not beside a symlink to it.
-    const mainTarget = await restoreTarget(pending.dbPath);
-    for (const suffix of DB_FILE_SUFFIXES) {
-      const livePath = suffix === "" ? pending.dbPath : `${mainTarget}${suffix}`;
-      if (livePath !== `${pending.dbPath}${suffix}`) {
-        await NodeFSP.rm(`${pending.dbPath}${suffix}`, { force: true });
+    const live = await restoreTarget(pending.dbPath).catch(() => undefined);
+    if (live === undefined) throw requireRecovery("The live SQLite path could not be resolved.");
+    if (!canKeep && snapshot !== undefined) {
+      let continuous = false;
+      try {
+        const distance = lock.generation - snapshot.generation;
+        if (
+          (distance === 1 || distance === 2) &&
+          lock.snapshotIdentity() === snapshot.identity &&
+          serverOwnerLogFileIdentity(stateDir) === snapshot.logFile
+        ) {
+          const owners = lock.ownersSince(snapshot.generation - 1);
+          continuous =
+            owners.length === distance + 1 &&
+            owners[0] === owner &&
+            owners.at(-1) === owner &&
+            (distance === 1 || owners[1] === trialOwner(pending.id));
+        }
+      } catch {
+        // A damaged or replaced log cannot authorize snapshot deletion.
       }
-      const source = databaseBackupFile(backupDir, suffix);
-      if (suffix === "" || (await pathExists(source))) {
-        // Restore through the link: cloning replaces its destination.
-        const target = await restoreTarget(livePath);
-        await copyDatabaseFile(source, target);
-        await syncFile(target);
-        directories.add(NodePath.dirname(target));
-      } else {
-        await NodeFSP.rm(livePath, { force: true });
+      if (!continuous) {
+        throw requireRecovery("The original database ownership history could not be verified.");
+      }
+
+      // Legacy SQLite-only owners leave no log entry, so changed bytes have unknown provenance.
+      if (!(await matchesSnapshot(live, backupDir, snapshot.files).catch(() => false))) {
+        throw requireRecovery(
+          "The live and snapshot files differ, or part of the snapshot is missing.",
+        );
       }
     }
-    for (const directory of directories) await syncDirectory(directory);
-    // A completed copy goes back to the ownership check if the launcher
-    // crashes before recording the rollback, so a server that writes after
-    // this point is never overwritten by a second copy.
-    await NodeFSP.rm(NodePath.join(backupDir, RESTORE_MARKER), { force: true });
-    await syncDirectory(backupDir);
-    return "restored";
+    if (!(await usableDatabase(live)))
+      throw requireRecovery("The live SQLite file set is unusable.");
+    if (!canKeep) {
+      // The live files already match the verified snapshot; only the runtime selection needs restoring.
+      await replaceFileDurably(phasePath(baseDir, pending.id), "restore\n");
+    }
+    await select();
+    if (!canKeep) {
+      await NodeFSP.rm(backupDir, { recursive: true });
+      await syncDirectory(NodePath.dirname(backupDir));
+    }
+    if (phase !== "fresh") {
+      await NodeFSP.rm(phasePath(baseDir, pending.id));
+      await syncDirectory(NodePath.join(baseDir, "runtime"));
+    }
+    return "done";
   } finally {
-    releaseLegacy?.();
-    lock.release();
+    try {
+      releaseLegacy?.();
+    } finally {
+      lock.release();
+    }
   }
-}
-
-export async function discardDatabaseBackup(baseDir: string, updateId: string): Promise<void> {
-  const backupDir = databaseBackupDir(baseDir, updateId);
-  if (!(await pathExists(backupDir))) return;
-  if (await pathExists(NodePath.join(backupDir, UNTRACKED_OWNER_MARKER))) return;
-  await NodeFSP.rm(backupDir, { recursive: true, force: true });
-  await syncDirectory(NodePath.dirname(backupDir));
-}
-
-/** Written before a trial starts, so a later decision knows the target may have opened the data. */
-export async function markTrialStarted(baseDir: string, updateId: string): Promise<void> {
-  await writeMarker(databaseBackupDir(baseDir, updateId), TRIAL_MARKER);
-}
-
-export function trialMayHaveStarted(baseDir: string, updateId: string): Promise<boolean> {
-  return pathExists(NodePath.join(databaseBackupDir(baseDir, updateId), TRIAL_MARKER));
 }

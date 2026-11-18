@@ -199,9 +199,12 @@ directory and pair with the running server.
 ### Recover an interrupted database restore
 
 If the service log says **Database recovery required**, it gives the paths to
-the live database and the pre-update snapshot directory. The live files may be
-incomplete or contain newer writes. If the snapshot is missing, use a verified
-copy of the live database or another verified backup.
+the live database, the pre-update snapshot directory, and the recovery
+acknowledgement file. The launcher stops when an update was interrupted or
+when it cannot verify that going back to the previous release preserves the
+database. The live files may be incomplete or contain newer writes. If the
+snapshot is missing, use a verified copy of the live database or another
+verified backup.
 
 1. Stop every server using that home, including the background service. On
    Linux, run `systemctl --user stop goat.service`. On macOS, run
@@ -209,16 +212,22 @@ copy of the live database or another verified backup.
    or agent name if it differs.
 2. Make separate copies of any remaining snapshot files and the live SQLite files
    (the database and any `-wal` and `-shm` files) before changing anything.
+   Save any files in the sibling snapshot directory ending in `.staging` too.
 3. Put a complete, verified SQLite file set that the previous GOAT release can
    open at the live path. To restore the pre-update snapshot, copy `database`
    and any `database-wal` and `database-shm` files to the corresponding live
    names. Remove stale live sidecars that are absent from the snapshot. If the
    live database is a symlink, copy to its target and place the sidecars beside
    the target.
-4. Run `sync` after the live files are in place. Remove only the
-   `.restore-pending` marker from the snapshot directory, then run
-   `goat service restart` for that home. The service starts the previous
-   version and retains any remaining snapshot files.
+4. Run `sync` after the live files are in place. Write a single line containing
+   `keep-live` to the acknowledgement file printed in the service log. Run
+   `sync` again, then run `goat service restart` for that home. The launcher
+   checks the live file set before starting the previous version and retains
+   any remaining snapshot files.
+
+Snapshots can also remain after a successful update. Once you have verified
+the active database and made a separate backup, you can remove snapshots from
+completed updates that you no longer need.
 
 ## Update providers
 

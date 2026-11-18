@@ -34,19 +34,16 @@ import {
   SERVICE_STOP_MARKER_FILE,
 } from "./cloud/serviceProtocol.ts";
 import { acquireServiceSelectionLock } from "./cloud/serviceSelectionLock.ts";
-import { tryAcquireServerOwnerLock } from "./serverOwnerLockFile.ts";
 import {
-  backupDatabaseOnce,
+  backupDatabase,
   databaseBackupBlocker,
-  databaseRestorePending,
-  discardDatabaseBackup,
-  launcherOwner,
-  markTrialStarted,
+  databasePhase,
+  databaseRecoveryRequired,
   markUntrackedDatabaseOwner,
   ownerLockDir,
   pathExists,
-  restoreDatabaseBackup,
-  trialMayHaveStarted,
+  selectDatabaseRollback,
+  type DatabaseSnapshot,
   type BackupSpaceProbe,
 } from "./serviceLauncherDatabase.ts";
 import { stateDirOwner } from "./serviceLauncherOwner.ts";
@@ -237,6 +234,7 @@ export class Launcher {
   readonly #stateDirOwnerPollMs: number;
   #stateDirFreeProbes = 0;
   #ownerBusySince: number | undefined;
+  #snapshot: DatabaseSnapshot | undefined;
 
   constructor(
     baseDir: string,
@@ -369,61 +367,30 @@ export class Launcher {
     // Clear old stop markers to preserve future tunnels; clear restart-pending only for the awaited version to avoid CLI races.
     await NodeFSP.rm(stopMarkerPath(this.#baseDir), { force: true }).catch(() => undefined);
     await this.#clearRestartPending();
-    const update = this.#state.update;
-    if (update?.status !== "pending") {
-      const probation = this.#state.probation;
-      if (update?.status === "committed" && probation !== undefined) {
-        if (
-          probation.rollbackReason !== undefined ||
-          (await databaseRestorePending(this.#baseDir, {
-            ...update,
-            status: "pending",
-            dbPath: probation.dbPath,
-          }))
-        ) {
-          await this.#returnToPrevious(
-            { ...update, status: "pending", dbPath: probation.dbPath },
-            "rolled-back",
-            probation.rollbackReason ?? "rollback-interrupted",
-          );
-          return;
-        }
-        await this.#resumeProbation();
-        if (this.#state.probation !== undefined) {
-          // A target that cannot even start must roll back now. Failing to the service manager
-          // instead would repeat until the deadline passes and the snapshot is discarded.
-          try {
-            await this.#startChild(this.#state.activeVersion, "active", update);
-          } catch {
-            this.#clearTimer();
-            await this.#returnToPrevious(
-              { ...update, status: "pending", dbPath: probation.dbPath },
-              "rolled-back",
-              "probation-start-failed",
-            );
-          }
-          return;
-        }
-      } else if (update !== undefined) {
-        await discardDatabaseBackup(this.#baseDir, update.id).catch(() => undefined);
-      }
-      try {
-        await this.#startChild(this.#state.activeVersion, "active", update);
-      } finally {
-        // Each start after a finished update retries: an earlier repoint or reload may have failed.
-        if (update !== undefined) await this.#repointServiceUnit(this.#state.activeVersion);
+    const { update, probation } = this.#state;
+    if (update?.status === "committed" && probation !== undefined) {
+      await this.#returnToPrevious(
+        { ...update, status: "pending", dbPath: probation.dbPath },
+        "rolled-back",
+        probation.rollbackReason ?? "rollback-interrupted",
+      );
+      return;
+    }
+    if (update?.status === "pending") {
+      if ((await databasePhase(this.#baseDir, update.id)) !== "fresh") {
+        await this.#returnToPrevious(update, "failed", "rollback-interrupted");
+      } else if (!(await runtimeExists(this.#baseDir, update.targetVersion))) {
+        await this.#returnToPrevious(update, "failed", "target-runtime-missing");
+      } else {
+        await this.#startTrial(update);
       }
       return;
     }
-    if (await databaseRestorePending(this.#baseDir, update)) {
-      await this.#returnToPrevious(update, "failed", "rollback-interrupted");
-      return;
+    try {
+      await this.#startChild(this.#state.activeVersion, "active", update);
+    } finally {
+      if (update !== undefined) await this.#repointServiceUnit(this.#state.activeVersion);
     }
-    if (!(await runtimeExists(this.#baseDir, update.targetVersion))) {
-      await this.#returnToPrevious(update, "failed", "target-runtime-missing");
-      return;
-    }
-    await this.#startTrial(update);
   }
 
   async #clearRestartPending(): Promise<void> {
@@ -453,31 +420,22 @@ export class Launcher {
   }
 
   async #startTrial(pending: PendingServiceUpdate): Promise<void> {
-    // The previous child is dead here. Holding server-owner.lock keeps every
-    // other server out while the three SQLite files are copied.
-    let lock: ReturnType<typeof tryAcquireServerOwnerLock>;
     try {
-      lock = tryAcquireServerOwnerLock(ownerLockDir(pending), launcherOwner(pending.id));
-    } catch {
-      await this.#returnToPrevious(pending, "failed", "db-backup-failed");
-      return;
+      this.#snapshot = await backupDatabase(this.#baseDir, pending, this.#stopSignal.signal);
+    } catch (cause) {
+      if (this.#stopRequested) return;
+      throw databaseRecoveryRequired(
+        this.#baseDir,
+        pending,
+        `Could not complete the snapshot: ${String(cause)}`,
+      );
     }
-    if (lock === undefined) {
+    if (this.#stopRequested) return;
+    if (this.#snapshot === undefined) {
       await this.#returnToPrevious(pending, "failed", "db-owner-busy");
       return;
     }
     try {
-      await backupDatabaseOnce(this.#baseDir, pending, lock.generation, this.#stopSignal.signal);
-    } catch {
-      lock.release();
-      if (this.#stopRequested) return;
-      await this.#returnToPrevious(pending, "failed", "db-backup-failed");
-      return;
-    }
-    lock.release();
-    if (this.#stopRequested) return;
-    try {
-      await markTrialStarted(this.#baseDir, pending.id);
       await this.#startChild(pending.targetVersion, "trial", pending);
     } catch {
       await this.#returnToPrevious(pending, "failed", "candidate-start-failed");
@@ -694,7 +652,7 @@ export class Launcher {
   }
 
   async #resumeProbation(): Promise<void> {
-    if (this.#stopping || this.#stopRequested || this.#done) return;
+    if (this.#stopping || this.#stopRequested || this.#done || this.#child === null) return;
     const probation = this.#state.probation;
     // A deadline callback already queued before cancellation must not erase a rollback.
     if (probation === undefined || probation.rollbackReason !== undefined) return;
@@ -717,9 +675,7 @@ export class Launcher {
     // The exit transition may still be queued behind a durable write at the deadline.
     if (this.#child?.exitedAt !== undefined && this.#child.exitedAt < probation.deadline) return;
     await this.#selectState(next);
-    if (next.update !== undefined) {
-      await discardDatabaseBackup(this.#baseDir, next.update.id).catch(() => undefined);
-    }
+    this.#snapshot = undefined;
   }
 
   async #handlePreparedTimeout(child: ManagedChild): Promise<void> {
@@ -740,8 +696,12 @@ export class Launcher {
     this.#child = null;
     if (code === STATE_DIR_OWNED_EXIT_CODE) {
       const pending = this.#state.update;
-      if (child.role === "trial" && pending?.status === "pending") {
+      if (
+        pending !== undefined &&
+        (child.role === "trial" || this.#state.probation !== undefined)
+      ) {
         // Exit 78 alone cannot tell us whether the owner was in the generation log.
+        this.#snapshot = undefined;
         await markUntrackedDatabaseOwner(this.#baseDir, pending.id);
       }
       await this.#idleWhileRefused("state-dir-owned");
@@ -801,13 +761,19 @@ export class Launcher {
     this.#clearTimer();
     const pending = this.#state.update;
     if (pending?.status === "pending" && reason === "database-ahead") {
+      if ((await databasePhase(this.#baseDir, pending.id)) !== "fresh") {
+        throw databaseRecoveryRequired(
+          this.#baseDir,
+          pending,
+          "The running version refused the database.",
+        );
+      }
       const next: ServiceState = {
         ...this.#state,
         activeVersion: pending.fromVersion,
         update: terminalUpdate({ pending, status: "failed", reason }),
       };
       await this.#selectState(next);
-      await discardDatabaseBackup(this.#baseDir, pending.id).catch(() => undefined);
       await this.#repointServiceUnit(next.activeVersion);
     }
     if (pending?.status === "pending" && reason === "state-dir-owned") {
@@ -852,31 +818,20 @@ export class Launcher {
     if (owner !== undefined) {
       const since = this.#ownerBusySince;
       if (pending === undefined || since === undefined) return;
-      const trialStarted = await trialMayHaveStarted(this.#baseDir, pending.id);
-      if (owner === "untracked") {
-        await markUntrackedDatabaseOwner(this.#baseDir, pending.id);
-      }
+      const trialStarted = (await databasePhase(this.#baseDir, pending.id)) !== "fresh";
+      if (trialStarted) this.#snapshot = undefined;
       if (this.#now() - since < STATE_DIR_OWNER_BOUND_MS) return;
       this.#ownerBusySince = undefined;
       const gaveUp =
         "[service-launcher] The GOAT home stayed owned by another server for 10 minutes; the update failed (db-owner-busy).\n";
-      // A target that may have opened the database goes through the normal rollback.
       if (trialStarted) {
-        await this.#returnToPrevious(pending, "failed", "db-owner-busy");
-        process.stderr.write(
-          this.#state.update?.status === "pending"
-            ? "[service-launcher] The GOAT home stayed owned by another server for 10 minutes. Rollback is waiting for the GOAT home to become free.\n"
-            : gaveUp,
+        throw databaseRecoveryRequired(
+          this.#baseDir,
+          pending,
+          "Another owner was observed after the snapshot.",
         );
-        return;
       }
-      await discardDatabaseBackup(this.#baseDir, pending.id).catch(() => undefined);
-      await this.#selectState({
-        ...this.#state,
-        activeVersion: pending.fromVersion,
-        update: terminalUpdate({ pending, status: "failed", reason: "db-owner-busy" }),
-      });
-      await this.#repointServiceUnit(pending.fromVersion);
+      await this.#returnToPrevious(pending, "failed", "db-owner-busy");
       process.stderr.write(gaveUp);
       return;
     }
@@ -885,18 +840,21 @@ export class Launcher {
     this.#ownerBusySince = undefined;
     process.stderr.write("[service-launcher] The GOAT home is free again. Starting the server.\n");
     if (pending === undefined) {
+      const probation = this.#state.probation;
+      if (update?.status === "committed" && probation !== undefined) {
+        throw databaseRecoveryRequired(
+          this.#baseDir,
+          { ...update, status: "pending", dbPath: probation.dbPath },
+          "Another owner was observed during probation.",
+        );
+      }
       await this.#startChild(this.#state.activeVersion, "active", update);
       return;
     }
-    if (
-      (await trialMayHaveStarted(this.#baseDir, pending.id)) ||
-      (await databaseRestorePending(this.#baseDir, pending))
-    ) {
+    if ((await databasePhase(this.#baseDir, pending.id)) !== "fresh") {
       await this.#returnToPrevious(pending, "failed", "state-dir-owned");
       return;
     }
-    // The other server may have written since any backup; the trial takes a fresh one.
-    await discardDatabaseBackup(this.#baseDir, pending.id).catch(() => undefined);
     await this.#startTrial(pending);
   }
 
@@ -907,46 +865,30 @@ export class Launcher {
     child?: ManagedChild,
   ): Promise<void> {
     this.#clearTimer();
-    if (this.#state.probation !== undefined) {
-      // Recovery must finish this rollback even if the lock stays busy past the deadline.
-      const next = {
-        ...this.#state,
-        probation: { ...this.#state.probation, rollbackReason: reason },
-      };
-      await this.#selectState(next);
-    }
     if (child !== undefined) {
       this.#child = null;
       await terminateChild(child.process);
     }
-    const restore = await restoreDatabaseBackup(
+    const outcome = terminalUpdate({ pending, status, reason });
+    const { probation, ...state } = this.#state;
+    const next: ServiceState = { ...state, activeVersion: pending.fromVersion, update: outcome };
+    const selection = await selectDatabaseRollback(
       this.#baseDir,
       pending,
-      this.#state.probation !== undefined,
+      this.#snapshot,
+      probation !== undefined,
+      () => this.#selectState(next),
     );
-    if (restore === "busy") {
-      // Starting the previous version while the home is owned would skip the restore.
-      if (this.#stopRequested) return;
-      this.#clearTimer();
-      this.#timer = setTimeout(
-        () => this.#enqueue(() => this.#returnToPrevious(pending, status, reason)),
-        RESTORE_RETRY_MS,
-      );
+    if (selection === "busy") {
+      if (!this.#stopRequested) {
+        this.#timer = setTimeout(
+          () => this.#enqueue(() => this.#returnToPrevious(pending, status, reason)),
+          Math.min(RESTORE_RETRY_MS, this.#stateDirOwnerPollMs),
+        );
+      }
       return;
     }
-    const outcome = terminalUpdate({
-      pending,
-      status,
-      reason: restore === "kept" ? `${reason};db-kept-for-other-server` : reason,
-    });
-    const { probation: _probation, ...state } = this.#state;
-    const next: ServiceState = {
-      ...state,
-      activeVersion: pending.fromVersion,
-      update: outcome,
-    };
-    await this.#selectState(next);
-    await discardDatabaseBackup(this.#baseDir, pending.id).catch(() => undefined);
+    this.#snapshot = undefined;
     try {
       await this.#startChild(next.activeVersion, "active", outcome);
     } finally {

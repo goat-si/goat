@@ -27,8 +27,8 @@ const makeLinkedDatabase = Effect.gen(function* () {
   return { root, databasePath, databaseFile };
 });
 
-/** Runs an update whose 1.0.0 and 1.1.0 runtimes run the given sources until the rollback ends. */
-const runRolledBackUpdate = (input: {
+/** Runs an update until the trial or restarted previous runtime exits. */
+const runUpdate = (input: {
   readonly root: string;
   readonly databasePath: string;
   readonly activeOnStop: string;
@@ -43,7 +43,6 @@ import { DatabaseSync } from "node:sqlite";
 const dbPath = ${JSON.stringify(input.databasePath)};
 const context = JSON.parse(process.env.GOAT_SERVICE_LAUNCHER_CONTEXT);
 if (context.update?.status === "pending") {
-  const db = new DatabaseSync(dbPath);
   ${input.trial}
 } else if (context.update === undefined) {
   const db = new DatabaseSync(dbPath);
@@ -72,13 +71,9 @@ if (context.update?.status === "pending") {
       input.root,
       yield* Effect.promise(() => readServiceState(statePath)),
     );
-    yield* Effect.promise(() =>
-      launcher.run().then(
-        () => Promise.reject(new Error("launcher unexpectedly completed")),
-        () => Promise.resolve(),
-      ),
-    );
-    return yield* Effect.promise(() => readServiceState(statePath));
+    const outcome = yield* Effect.promise(() => launcher.run().catch(String));
+    const state = yield* Effect.promise(() => readServiceState(statePath));
+    return { outcome, state };
   });
 
 const readEvents = (databasePath: string) => {
@@ -93,35 +88,44 @@ const readEvents = (databasePath: string) => {
 };
 
 it.layer(NodeServices.layer)("rollback of a symlinked database", (it) => {
-  it.effect("drops the failed trial's WAL beside the link's target, so the rollback holds", () =>
+  it.effect("preserves both copies when a failed trial changed the linked WAL", () =>
     Effect.gen(function* () {
       const fs = yield* FileSystem.FileSystem;
       const { root, databasePath, databaseFile } = yield* makeLinkedDatabase;
-      const state = yield* runRolledBackUpdate({
+      const { outcome, state } = yield* runUpdate({
         root,
         databasePath,
         // A clean close checkpoints and removes the WAL, so the backup holds every write.
         activeOnStop: "db.close(); process.exit(0);",
         // The trial dies with its write still only in the WAL.
         trial:
-          "db.exec(\"PRAGMA wal_autocheckpoint = 0; INSERT INTO events VALUES ('trial');\"); process.exit(1);",
+          "const db = new DatabaseSync(dbPath); db.exec(\"PRAGMA wal_autocheckpoint = 0; INSERT INTO events VALUES ('trial');\"); process.exit(1);",
       });
-      assert.equal(state.update?.status, "rolled-back");
-      assert.isFalse(yield* fs.exists(`${databaseFile}-wal`));
-      assert.deepEqual(readEvents(databasePath), { integrity: "ok", payloads: ["seed", "served"] });
+      assert.include(String(outcome), "Database recovery required");
+      assert.equal(state.update?.status, "pending");
+      assert.isTrue(yield* fs.exists(`${databaseFile}-wal`));
+      assert.deepEqual(readEvents(databasePath), {
+        integrity: "ok",
+        payloads: ["seed", "served", "trial"],
+      });
+      const path = yield* Path.Path;
+      assert.isDefined(state.update?.id);
+      const snapshot = path.join(root, "runtime", "db-backup", state.update.id, "database");
+      assert.deepEqual(readEvents(snapshot), { integrity: "ok", payloads: ["seed", "served"] });
     }),
   );
 
   it.effect("keeps writes the server left in the WAL beside the link's target", () =>
     Effect.gen(function* () {
       const { root, databasePath } = yield* makeLinkedDatabase;
-      const state = yield* runRolledBackUpdate({
+      const { outcome, state } = yield* runUpdate({
         root,
         databasePath,
         // Exiting without a close leaves the committed 'served' row only in the WAL.
         activeOnStop: "process.exit(0);",
         trial: "process.exit(1);",
       });
+      assert.include(String(outcome), "Active child exited unexpectedly");
       assert.equal(state.update?.status, "rolled-back");
       assert.deepEqual(readEvents(databasePath), { integrity: "ok", payloads: ["seed", "served"] });
     }),
