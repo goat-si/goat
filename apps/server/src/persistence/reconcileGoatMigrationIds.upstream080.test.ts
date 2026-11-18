@@ -24,6 +24,8 @@ import {
   snapshot,
   hubFloorRow,
   scopeVersionRow,
+  compactMoveReceiptsRow,
+  originCatchupRow,
   saveSuggestionsRow,
   threadLineageRow,
   UPSTREAM_80S,
@@ -40,7 +42,7 @@ describe("GOAT migrations after upstream 080-089", () => {
       );
       assert.isTrue(goatNames.every((name) => currentRow(name)[0] >= 90));
       assert.deepStrictEqual(currentRow("ServerActivityIndexes"), [90, "ServerActivityIndexes"]);
-      assert.deepStrictEqual(migrationManifest.at(-1), scopeVersionRow);
+      assert.deepStrictEqual(migrationManifest.at(-1), originCatchupRow);
       assert.deepStrictEqual(yield* history, migrationManifest);
       assert.deepStrictEqual(yield* runMigrations(), []);
     }).pipe(Effect.provide(NodeSqliteClient.layer({ filename: ":memory:" }))),
@@ -90,6 +92,8 @@ describe("GOAT migrations after upstream 080-089", () => {
         saveSuggestionsRow,
         hubFloorRow,
         scopeVersionRow,
+        compactMoveReceiptsRow,
+        originCatchupRow,
       ]);
       assert.deepStrictEqual(yield* history, migrationManifest);
     }).pipe(Effect.provide(NodeSqliteClient.layer({ filename: ":memory:" }))),
@@ -198,6 +202,8 @@ describe("GOAT migrations after upstream 080-089", () => {
           saveSuggestionsRow,
           hubFloorRow,
           scopeVersionRow,
+          compactMoveReceiptsRow,
+          originCatchupRow,
         ]);
         assert.deepStrictEqual(yield* snapshot, yield* fresh);
         assert.deepStrictEqual(yield* userData, data);
@@ -216,6 +222,8 @@ describe("GOAT migrations after upstream 080-089", () => {
         saveSuggestionsRow,
         hubFloorRow,
         scopeVersionRow,
+        compactMoveReceiptsRow,
+        originCatchupRow,
       ]);
       assert.deepStrictEqual(yield* history, migrationManifest);
       const before = yield* schema;
@@ -272,8 +280,8 @@ describe("hasPendingMigrations", () => {
         yield* sql`UPDATE effect_sql_migrations SET migration_id = -migration_id WHERE name IN ${sql.in(goatNames)}`;
         yield* sql`UPDATE effect_sql_migrations SET migration_id = 10 - migration_id WHERE migration_id < 0`;
         assert.deepStrictEqual((yield* history).at(-1), [
-          scopeVersionRow[0] + 10,
-          scopeVersionRow[1],
+          originCatchupRow[0] + 10,
+          originCatchupRow[1],
         ]);
         assert.isTrue(yield* hasPendingMigrations());
         // reconcileGoatMigrationIds moves them back: a write the CLI must not make under a server.
