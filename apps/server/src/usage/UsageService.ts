@@ -31,7 +31,12 @@ import type { BuiltInUsageReadersEnv } from "../provider/builtInDrivers.ts";
 import type { UsageRecord } from "@goat/provider-core/server/usage";
 import { canonicalModelFilter, resolveModelAliases, UsageAggregator } from "./usageAggregation.ts";
 import { createOverrideRateTable, parseRateTable, type RateTable } from "./usagePricing.ts";
-import { listTranscriptFiles, readDirectoryVolumeId } from "./usageTranscriptReader.ts";
+import {
+  DESKTOP_HOST_SCOPE_ENV,
+  listTranscriptFiles,
+  readDirectoryVolumeId,
+  readPhysicalSourceId,
+} from "./usageTranscriptReader.ts";
 import {
   decodeScanCache,
   LEGACY_SCAN_CACHE_FILE_NAMES,
@@ -94,6 +99,12 @@ export const make = Effect.gen(function* () {
   const settingsService = yield* ServerSettings.ServerSettingsService;
   const httpClient = yield* HttpClient.HttpClient;
   const hostEnvironment = yield* HostProcess.Environment;
+  const hostPlatform = yield* HostProcess.Platform;
+  const desktopHostScope = hostEnvironment[DESKTOP_HOST_SCOPE_ENV];
+  const physicalSourceIdentity = (dir: string) =>
+    Effect.promise(() => readPhysicalSourceId(dir, desktopHostScope, hostPlatform)).pipe(
+      Effect.map((id) => (id === undefined ? {} : { physicalSourceId: id })),
+    );
   const readerContext = yield* Effect.context<BuiltInUsageReadersEnv>();
 
   const fileCache: ScanCache = new Map();
@@ -362,15 +373,16 @@ export const make = Effect.gen(function* () {
     fromMemory: boolean,
   ) {
     const { provider, format, dir, volumeId, fileName } = source;
+    const identity = { provider, dir, volumeId, ...(yield* physicalSourceIdentity(dir)) };
     const exists = yield* fileSystem
       .exists(dir)
       .pipe(Effect.catchCause(() => Effect.succeed(false)));
     if (!exists) {
       cover(source, windowStartMs);
-      return { provider, dir, volumeId, files: null } satisfies ScannedDir;
+      return { ...identity, files: null } satisfies ScannedDir;
     }
     // scanSummary aggregates the saved files, as it does for a deleted directory.
-    if (fromMemory) return { provider, dir, volumeId, files: [] } satisfies ScannedDir;
+    if (fromMemory) return { ...identity, files: [] } satisfies ScannedDir;
     const { files, walked, failedPaths } = yield* Effect.promise(() =>
       listTranscriptFiles(dir, windowStartMs, fileName === undefined ? undefined : { fileName }),
     );
@@ -411,9 +423,7 @@ export const make = Effect.gen(function* () {
       "usage.files_parsed": read.filter((file) => file.update !== undefined).length,
     });
     return {
-      provider,
-      dir,
-      volumeId,
+      ...identity,
       files: parsedFiles,
       walked,
       ...(unread > 0
@@ -444,13 +454,17 @@ export const make = Effect.gen(function* () {
             Effect.forEach(sources, ({ volumeId, ...source }) =>
               Effect.map(
                 volumeId === undefined
-                  ? Effect.promise(() => readDirectoryVolumeId(source.dir))
-                  : Effect.succeed(volumeId),
-                (resolved): ScannedDir => ({
+                  ? Effect.all({
+                      volumeId: Effect.promise(() => readDirectoryVolumeId(source.dir)),
+                      physical: physicalSourceIdentity(source.dir),
+                    })
+                  : Effect.succeed({ volumeId, physical: {} }),
+                (identity): ScannedDir => ({
                   ...source,
                   files: source.files?.map((file) => ({ ...file, malformedRecords: 0 })) ?? null,
                   provider: reader.provider,
-                  volumeId: resolved,
+                  volumeId: identity.volumeId,
+                  ...identity.physical,
                 }),
               ),
             ),
@@ -683,7 +697,18 @@ export const make = Effect.gen(function* () {
 
     for (const [
       index,
-      { provider, dir, volumeId, files, status, message, action, refreshing, hostId: sourceHostId },
+      {
+        provider,
+        dir,
+        volumeId,
+        physicalSourceId,
+        files,
+        status,
+        message,
+        action,
+        refreshing,
+        hostId: sourceHostId,
+      },
     ] of scannedDirs.entries()) {
       let scannedFiles = 0;
       let skippedFiles = 0;
@@ -730,7 +755,13 @@ export const make = Effect.gen(function* () {
       const sourceMessage =
         message ?? (files === null ? "No transcript directory on this environment." : null);
       sources.push({
-        fingerprint: { hostId: sourceHostId ?? hostId, provider, resolvedHomePath: dir, volumeId },
+        fingerprint: {
+          hostId: sourceHostId ?? hostId,
+          provider,
+          resolvedHomePath: dir,
+          volumeId,
+          ...(physicalSourceId === undefined ? {} : { physicalSourceId }),
+        },
         status:
           files === null && scannedFiles === 0
             ? "missing"

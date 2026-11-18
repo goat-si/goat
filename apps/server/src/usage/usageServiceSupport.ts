@@ -111,6 +111,7 @@ export interface ScannedDir {
   readonly provider: UsageProviderKind;
   readonly dir: string;
   readonly volumeId: string;
+  readonly physicalSourceId?: string;
   readonly hostId?: string;
   readonly status?: UsageSource["status"];
   readonly message?: string;
