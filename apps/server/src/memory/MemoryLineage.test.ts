@@ -357,9 +357,12 @@ describe("r4 authoritative lineage", () => {
           const overflow = yield* service
             .upsert(input(201, [hundred]), Effect.void)
             .pipe(Effect.flip);
-          assert.strictEqual(overflow._tag, "MemoryStoreConflict");
-          if (overflow._tag === "MemoryStoreConflict")
-            assert.strictEqual(overflow.code, "invalid_output");
+          assert.strictEqual(overflow._tag, "MemoryCapacityError");
+          if (overflow._tag === "MemoryCapacityError") {
+            assert.strictEqual(overflow.dimension, "dependencies");
+            assert.strictEqual(overflow.current, 101);
+            assert.strictEqual(overflow.limit, 100);
+          }
           assert.isUndefined(yield* store.receipt(space, input(201).operationId));
         }),
       ),

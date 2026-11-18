@@ -620,28 +620,80 @@ it.effect("packs a maximal-body 1000-source save in a push, tail, and real check
     assert.isAtMost(payloadBytes, M.MEMORY_PAYLOAD_MAX_UTF8_BYTES);
     assert.isAtMost(pushBytes, 256 * 1024);
     assert.isAtMost(tailBytes, M.MEMORY_TAIL_ADMISSION_BYTES);
-    const atSize = (extra: number) => ({
-      ...operation,
-      payload: {
-        ...payload,
-        evidence: [
-          {
-            ...payload.evidence[0]!,
-            watermark: {
-              ...sourceWatermark,
-              fromEventId: M.EventId.make(
-                sourceWatermark.fromEventId +
-                  "e".repeat(M.MEMORY_TAIL_ADMISSION_BYTES - tailBytes + extra),
-              ),
-            },
-          },
-        ],
+    const resolutionId = M.MemoryResolutionId.make(id(9100));
+    const heads = payload.derivedFromMemoryRevisions.slice(0, 2);
+    const appliedAtUtc = operation.revision.createdAtUtc;
+    const revertDeadlineUtc = M.MemoryUtcTimestamp.make(
+      new Date(Date.parse(appliedAtUtc) + M.MEMORY_REVERT_WINDOW_MS).toISOString(),
+    );
+    const variants: Exclude<M.MemoryOperation, { kind: "forget" }>[] = [
+      operation,
+      {
+        ...operation,
+        kind: "revert",
+        expectedHeads: heads.slice(0, 1),
+        revision: { ...operation.revision, parents: heads.slice(0, 1) },
+        revertsResolutionId: resolutionId,
+        restoredRevisionId: payload.derivedFromMemoryRevisions[2]!,
       },
-    });
-    assert.strictEqual(yield* requireMemoryTailFit(atSize(0)), M.MEMORY_TAIL_ADMISSION_BYTES);
-    const tooWide = yield* Effect.flip(requireMemoryTailFit(atSize(1)));
-    assert.strictEqual(tooWide.dimension, "payload_bytes");
-    assert.strictEqual(tooWide.current, M.MEMORY_TAIL_ADMISSION_BYTES + 1);
+      {
+        ...operation,
+        kind: "resolve",
+        expectedHeads: heads,
+        revision: { ...operation.revision, parents: heads },
+        conflictId: M.MemoryConflictId.make(id(9101)),
+        fencingToken: 1,
+        resolution: {
+          resolutionId,
+          memorySpaceId: space,
+          memoryId: operation.memoryId,
+          inputRevisionIds: heads,
+          inputPayloadRefs: heads,
+          judgmentRef: resolutionId,
+          requestedModelSelection: {
+            instanceId: M.ProviderInstanceId.make("codex"),
+            model: "fixture",
+          },
+          effectiveProvider: "codex",
+          effectiveModel: "fixture",
+          resolvingEnvironmentId: env,
+          fencingToken: 1,
+          resultRevisionId: operation.revision.revisionId,
+          appliedAtUtc,
+          revertDeadlineUtc,
+        },
+        resolutionPayload: { resolutionId, judgment: "synthetic judgment" },
+      },
+    ];
+    for (const variant of variants) {
+      const size = yield* requireMemoryTailFit(variant);
+      const atSize = (extra: number) => ({
+        ...variant,
+        payload: {
+          ...variant.payload,
+          evidence: [
+            {
+              ...payload.evidence[0]!,
+              watermark: {
+                ...sourceWatermark,
+                fromEventId: M.EventId.make(
+                  sourceWatermark.fromEventId +
+                    "e".repeat(M.MEMORY_TAIL_ADMISSION_BYTES - size + extra),
+                ),
+              },
+            },
+          ],
+        },
+      });
+      assert.strictEqual(
+        yield* requireMemoryTailFit(atSize(0)),
+        M.MEMORY_TAIL_ADMISSION_BYTES,
+        variant.kind,
+      );
+      const tooWide = yield* Effect.flip(requireMemoryTailFit(atSize(1)));
+      assert.strictEqual(tooWide.dimension, "payload_bytes", variant.kind);
+      assert.strictEqual(tooWide.current, M.MEMORY_TAIL_ADMISSION_BYTES + 1, variant.kind);
+    }
     yield* admit(operation);
     const tail = yield* store.transact(
       store.readHubTailTx({

@@ -1,4 +1,4 @@
-import { expect, it } from "vitest";
+import { expect, it } from "vite-plus/test";
 import { MemoryFailureCode } from "./memory.ts";
 
 it("preserves the stored failure-code ordinals from memory protocol V1", () => {

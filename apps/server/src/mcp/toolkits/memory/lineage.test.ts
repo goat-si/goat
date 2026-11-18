@@ -590,6 +590,27 @@ it.effect.each([101, 1000])(
           ? { originThreadId: ref().threadId, provenance: "unverified" }
           : { originThreadId: ref().threadId },
       );
+      const list = yield* service.list(
+        {
+          memorySpaceId: Fixture.space,
+          limit: 5,
+          includeQuarantined: false,
+          includeMarks: true,
+          cursor: sources.at(-1)!.input.memoryId,
+        },
+        Effect.void,
+      );
+      expect(list.items).toEqual([projected]);
+      const history = yield* service.history(
+        {
+          memorySpaceId: Fixture.space,
+          memoryId,
+          includeMarks: true,
+          limit: 5,
+        },
+        Effect.void,
+      );
+      expect(history.revisions[0]?.payload?.derivedFromMemoryRevisions).toHaveLength(size);
       const legacy = yield* service.read({ memorySpaceId: Fixture.space, memoryId }, Effect.void);
       expect(legacy.status).toBe("active");
       if (legacy.status !== "active") throw new Error("expected wide active memory");
