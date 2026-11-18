@@ -429,3 +429,21 @@ Captured the actual JSON bodies from the guarded replayable-shell route test, in
 | Reviewed K7b-1 `ab42f18f6271d57bdbe1947d9791beff9f588d37` | Both succeeded and ignored the field. | Both succeeded with `resumable: true`; adding the field did not affect acceptance. |
 
 No earlier decoder reported an excess-property error. The snapshot-only clients always reach the full-reply branch and can decode its new field. Clients that already opt into resumability by sending `resumeFrom` decode both replies. The updated client rejects an HTTP response with missing or mismatched instance ID and requests a complete socket snapshot. No extra request flag was needed.
+
+### K7b-1 fix round 1 READY
+
+Head `fcec40f77f1ae779578471cd511a7d343f12d6bc` on `chase/t3-261114-next3-k7b`. Five commits above reviewed head `ab42f18f62` on Node 26.12.1.
+
+| Finding | Commit | Fix and regression |
+| --- | --- | --- |
+| P2-1 | `608873a640a53f278995359bf3da38be7a883403` | Re-read the shell rows, origin and cursor under the existing write lock after waiting for early HTTP. Once a cursor is selected, Hub hydration leaves its rows in place. The deferred regression first sent cursor 19 after Hub replacement, then opened a full socket snapshot. |
+| P2-2 | `fcec40f77f1ae779578471cd511a7d343f12d6bc` | Both successful shell HTTP shapes include the serving process ID. Missing or different ID takes the full socket path. Fail-first cases used HTTP replies before validating their serving identity; the final regression covers both success shapes and checks that only the socket snapshot is saved with an origin. The HTTP server scope denial remains 403. Historic cross-decode results are above. |
+| P2-3 | `1a186d5f67c860f772fa76a0f1b1e84a114ad656` | Hub requests with `resumeFrom` leave offline storage alone. Before the fix the probe overwrote the full offline shell with its resumable body. |
+| P3 | `0fffea579caac015d73d7beacdce788c1b546012` | The cookie-authenticated primary can begin during socket setup when the HTTP base and socket match. Before the fix the connected cookie case started zero reads before socket open. An unrelated socket origin still starts none. |
+| Descriptor cap | `67f98edc9dbdd7f7934e2cfa2a41e79a6d8c221c` | A distinct 65th checked address evicts the oldest entry. The regression previously reused that address rather than reading it again. The bearer cache retains its own behavior. |
+
+The old exact HTTP assertion changed by explicit Rule 3 approval. Existing client assertions stayed in place, with shell and thread-family HTTP fixtures supplying the serving identity. The downgrade matrix proved no excess-property rejection, so no extra request flag was added.
+
+- `GOAT_TEST_TMP_GUARD=fail vp run check:changed origin/chase/t3-261114-next3` used merge base `d4dfd4575718` and exited 0. Format, lint, Knip, server GraphQL, agent audits, and typecheck across 38 packages passed. Of 633 selected files, the server had 5,144 passes and four existing skips and the workspace had 6,371 passes. Total 11,515 passed, zero failed. The first full pass found one older mock missing a serving ID in shell-reconnect.test.ts. Its reply fixture now reports the active server, preserving all assertions. That isolated file passed before the final full rerun.
+- All 30 changed test files passed whole on the published head. From apps/server, `GOAT_TEST_TMP_GUARD=fail vp test run` on eight changed files exited 0, 69 passed. From root, `vp test run` on 22 changed workspace files exited 0, 270 passed. Plain push advanced `ab42f18f62` to `fcec40f77f`.
+- P1 owed: Hub offline shell preservation after resume, split HTTP/socket endpoint and restart behavior, and early cookie-authenticated web loads, in addition to the previous native and remote rows. NOT RUN: live-client or native P1, old binaries, live GOAT Connect, slow-link timings, GitHub CI, full suites/builds. The four existing gate skips remain in the two memory growth files and cloud/autoUpdate.test.ts. The coordinator owns C4 review and merge.
