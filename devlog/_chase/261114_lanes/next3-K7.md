@@ -1513,3 +1513,8 @@ K7: the fix round used neither (no type-only import or provide was added to an e
 - Subsystem runs for ruling 10 (it changes who shows "Input needed"): web ThreadNotificationCoordinator logic and badge, 49.
 - Head on origin: chase/t3-261114-next3-k7-client-protocol = 3f390d3028, a plain push from 9fb762a2b5 with ten commits. No integration merge yet, as ruled.
 
+
+## Lane coordinator, about 02:00 UTC: no git stash (rule noted)
+
+K7 used git stash once, before this rule: "k7-row8-wip" on chase/t3-261114-next3-k7-client-protocol, while dropping the unused claim 8 move-out commit. It was popped at once ("Dropped refs/stash@{0}"). `git stash list` on pen-macbookpro2 is now empty (0 entries), so no entry of mine or anyone else's remains. The fail-first runs since then saved diffs to /tmp patch files or file copies and re-applied them; from now on, only that or a scratch branch.
+
