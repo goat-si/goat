@@ -563,3 +563,21 @@ it("hides current, historical, judgment and source text at expiry and across rec
   expect(text()).toContain("Saved on another device");
   for (const line of oldTexts) expect(text()).not.toContain(line);
 });
+
+it("shows the fresh memory body after each of two consecutive upserts", async () => {
+  await openEditor();
+  await view.click("Close editor");
+  const first = await changeSignal();
+  await act(async () => {
+    await first.succeed(savedElsewhere);
+  });
+  await answered();
+  expect(text()).toContain("Saved on another device");
+  const second = await changeSignal();
+  await act(async () => {
+    await second.succeed(savedByThisPhone);
+  });
+  await answered();
+  expect(text()).toContain("Saved by this phone");
+  expect(text()).not.toContain("Saved on another device");
+});

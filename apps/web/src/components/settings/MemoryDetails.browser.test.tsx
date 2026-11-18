@@ -876,3 +876,25 @@ it("hides newer historical, judgment and source text as soon as the current body
   expect(screen.container.textContent).toContain("Synthetic original, saved");
   for (const value of bodyText.slice(1)) expect(screen.container.textContent).not.toContain(value);
 });
+
+it("retries an unconfirmed save using the original operation and payload", async () => {
+  const registry = setup();
+  state.upsert = async () => ({
+    _tag: "Failure",
+    cause: Cause.fail(new Error("Synthetic lost reply")),
+  });
+  await using screen = await renderDetails(registry);
+  await click(screen, "Edit");
+  await type(screen, "Typed once");
+  await save(screen);
+  expect(screen.container.textContent).toContain("The save could not be confirmed.");
+  expect(memoryText(screen)?.disabled).toBe(true);
+  state.upsert = async () => ({
+    _tag: "Success",
+    value: { outcome: "accepted", pendingSync: false },
+  });
+  await click(screen, "Retry memory request");
+  expect(state.calls).toHaveBeenCalledTimes(2);
+  expect(state.calls.mock.calls[1]?.[0]).toEqual(state.calls.mock.calls[0]?.[0]);
+  expect(memoryText(screen)).toBeNull();
+});
