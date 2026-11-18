@@ -294,6 +294,44 @@ describe("evaluatePullRequestWatch on a watch awaiting its baseline", () => {
     assert.deepEqual(evaluate(baseline.next, populated, noRemarks).changes, []);
   });
 
+  it("baselines a fork only once a single read shows both the head and real checks", () => {
+    const unavailable = { ...check("Workflow approval status", "pending"), placeholder: true };
+    const pending = evaluate(
+      watch({ awaitingBaseline: "all" }),
+      detail({ headSha: undefined, checks: [check("test", "pending"), unavailable] }),
+      noRemarks,
+    );
+    const head = evaluate(pending.next, detail({ checks: [unavailable] }), noRemarks);
+    assert.deepEqual(pending.changes, []);
+    assert.deepEqual(head.changes, []);
+
+    const failed = check("test", "failure");
+    const baseline = evaluate(head.next, detail({ checks: [failed] }), noRemarks);
+    assert.deepEqual(baseline.changes, []);
+    assert.deepEqual(baseline.next.failedChecks, ["test"]);
+
+    const approvalStillUnavailable = evaluate(
+      head.next,
+      detail({ checks: [failed, unavailable] }),
+      noRemarks,
+    );
+    assert.deepEqual(approvalStillUnavailable.changes, []);
+    const newlyFailed = check("lint", "failure");
+    const approval = { ...check("CI", "action-required"), url: run(1) };
+    const available = evaluate(
+      approvalStillUnavailable.next,
+      detail({ checks: [failed, newlyFailed, approval] }),
+      noRemarks,
+    );
+    assert.deepEqual(available.changes, [{ kind: "checks-failed", failed: [newlyFailed] }]);
+    const newApproval = { ...approval, url: run(2) };
+    assert.deepEqual(
+      evaluate(available.next, detail({ checks: [failed, newlyFailed, newApproval] }), noRemarks)
+        .changes,
+      [{ kind: "checks-awaiting-approval", checks: [newApproval] }],
+    );
+  });
+
   it("reports pending advisory checks finishing after a required-check baseline", () => {
     const initial = detail({
       checks: [{ ...check("test", "success"), required: true }, check("bot", "pending")],

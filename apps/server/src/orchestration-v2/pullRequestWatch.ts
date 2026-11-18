@@ -233,11 +233,18 @@ export function evaluatePullRequestWatch(
   // Only a head never read with checks waits for them; a legacy watch's clock starts at its next
   // push. CI can register late on any host, so every host waits, but running out of time is news
   // only where a host always reports checks: elsewhere an empty list can mean there are none.
-  const awaitedBefore =
-    headMoved || watch.awaitingBaseline === "all"
-      ? DateTime.formatIso(DateTime.makeUnsafe(context.now))
-      : (watch.checksAwaitedSince ?? null);
-  let checksAwaitedSince = checks.length > 0 ? null : awaitedBefore;
+  const newBaseline = headMoved || watch.awaitingBaseline === "all";
+  // With approval data missing, only checks read together with their head settle the baseline.
+  const partialBaseline =
+    checksBaseline && unread && (detail.headSha === undefined || checks.length === 0);
+  const awaitedBefore = newBaseline ? null : watch.checksAwaitedSince;
+  let checksAwaitedSince =
+    checks.length > 0 && !partialBaseline
+      ? null
+      : (awaitedBefore ??
+        (newBaseline || partialBaseline
+          ? DateTime.formatIso(DateTime.makeUnsafe(context.now))
+          : null));
   const awaitedMs = checksAwaitedSince === null ? 0 : context.now - Date.parse(checksAwaitedSince);
   if (!unread && awaitedMs >= PULL_REQUEST_WATCH_NO_CHECKS_MS) {
     if (detail.capabilities.checksAlwaysReport === true) {
