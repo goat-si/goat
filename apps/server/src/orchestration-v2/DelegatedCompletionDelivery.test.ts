@@ -3,6 +3,7 @@ import {
   runEvent,
   seedRestartCancelledChild,
   seedUnheldFollowup,
+  recoverChildWithIndependentParentWake,
 } from "./DelegatedCompletionDelivery.testkit.ts";
 import { derive } from "@goat/provider-core/server/IdAllocator";
 import { assert, it, vi } from "@effect/vitest";
@@ -1256,6 +1257,13 @@ it.layer(Layer.merge(layerTest, ProviderContinuationRequests.layer))(
         const child = yield* orchestrator.getThreadProjection(childThreadId);
         assert.equal(child.runs.at(-1)?.status, "queued");
         assert.isTrue(child.runs.at(-1)?.queueHeld);
+      }),
+    );
+
+    it.effect("re-offers only the parent run that owns the recovering child", () =>
+      Effect.gen(function* () {
+        const wake = yield* recoverChildWithIndependentParentWake();
+        assert.equal(wake.delegatedCompletion?.parentRunId, "run:reoffer:owner");
       }),
     );
 

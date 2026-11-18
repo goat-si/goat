@@ -11970,10 +11970,11 @@ const makeOrchestrator = Effect.fn("orchestrationV2.Orchestrator.layer")(functio
     )
       return;
     const progress = delegatedTaskProgress(childControls);
-    const parent = yield* projectionStore.getThreadRecords(parentThreadId, [
-      "subagents",
-      "contextTransfers",
-    ]);
+    const parent = yield* projectionStore.getThreadRecords(
+      parentThreadId,
+      ["subagents", "contextTransfers"],
+      { subagentChildThreadId: childThreadId },
+    );
     for (const task of parent.subagents) {
       if (
         task.origin !== "app_owned" ||
@@ -13230,14 +13231,24 @@ const makeOrchestrator = Effect.fn("orchestrationV2.Orchestrator.layer")(functio
         return;
       yield* threadDispatch.withLock(
         parentThreadId,
-        offerDelegatedCompletionDeliveries(parentThreadId).pipe(
-          Effect.andThen(
-            finalizeAppOwnedSubagent(
-              threadId,
-              sourceRunId === undefined ? undefined : { settledContinuationOf: sourceRunId },
+        Effect.gen(function* () {
+          const { subagents } = yield* projectionStore.getThreadRecords(
+            parentThreadId,
+            ["subagents"],
+            { subagentChildThreadId: threadId },
+          );
+          const owners = new Set(
+            subagents.flatMap((task) =>
+              task.origin === "app_owned" && task.runId !== null ? [task.runId] : [],
             ),
-          ),
-        ),
+          );
+          for (const owner of owners)
+            yield* offerDelegatedCompletionDelivery(parentThreadId, owner);
+          yield* finalizeAppOwnedSubagent(
+            threadId,
+            sourceRunId === undefined ? undefined : { settledContinuationOf: sourceRunId },
+          );
+        }),
       );
     },
     (effect, threadId, _options) =>

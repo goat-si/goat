@@ -1,3 +1,4 @@
+import * as ProviderContinuationRequests from "@goat/provider-core/server/ProviderContinuationRequests";
 import * as SourceControlProviderRegistry from "../sourceControl/SourceControlProviderRegistry.ts";
 import * as McpProviderSessions from "@goat/provider-core/server/McpProviderSessions";
 import * as NodeCrypto from "@effect/platform-node/NodeCrypto";
@@ -597,4 +598,63 @@ export const seedUnheldFollowup = Effect.fn("seedUnheldFollowup")(function* () {
     ],
   });
   return { sink, orchestrator, threadId, taskId, childThreadId: child.childThreadId };
+});
+
+export const recoverChildWithIndependentParentWake = Effect.fn(
+  "recoverChildWithIndependentParentWake",
+)(function* () {
+  const sink = yield* EventSink.EventSinkV2;
+  const orchestrator = yield* Orchestrator.OrchestratorV2;
+  const requests = yield* ProviderContinuationRequests.ProviderContinuationRequests;
+  const now = yield* DateTime.now;
+  const threadId = ThreadId.make("thread:reoffer");
+  const projectId = ProjectId.make("project:reoffer");
+  const unrelatedRunId = RunId.make("run:reoffer:unrelated");
+  const ownerRunId = RunId.make("run:reoffer:owner");
+  const unrelatedTaskId = NodeId.make("node:reoffer:unrelated");
+  const rootNodeId = NodeId.make("node:reoffer:owner");
+  yield* seedParentWithTerminalTask({
+    threadId,
+    projectId,
+    rootNodeId,
+    runId: unrelatedRunId,
+    taskId: unrelatedTaskId,
+    deliveryState: "claimed",
+    deliveryTaskIds: [unrelatedTaskId],
+    completionWake: "always",
+    now,
+  });
+  const child = yield* seedRestartCancelledChild({
+    parentThreadId: threadId,
+    projectId,
+    parentRunId: ownerRunId,
+    rootNodeId,
+    name: "reoffer-child",
+    completionWake: "always",
+    continuationPending: false,
+    now,
+  });
+  const owner = runEvent({
+    threadId,
+    runId: ownerRunId,
+    ordinal: 2,
+    status: "completed",
+    now,
+    providerThreadId: parentProviderThreadId(threadId),
+    delegatedCompletion: {
+      disposition: "open",
+      nextGeneration: 2,
+      delivery: {
+        generation: 1,
+        messageId: MessageId.make("message:reoffer:owner"),
+        taskIds: [child.taskId],
+      },
+    },
+  });
+  yield* sink.write({ commandId: reconcileCommandId("reoffer-owner"), events: [owner] });
+  const control = yield* orchestrator.getThreadProjection(child.childThreadId);
+  const sourceRun = control.runs.at(-1);
+  if (sourceRun === undefined) return yield* Effect.die("Child run missing");
+  yield* orchestrator.recoverDelegatedTask(child.childThreadId, { sourceRunId: sourceRun.id });
+  return yield* requests.take;
 });
