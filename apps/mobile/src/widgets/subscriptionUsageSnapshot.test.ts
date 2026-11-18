@@ -134,6 +134,59 @@ describe("subscription widget snapshots", () => {
     expect(new Set(before?.map(({ name }) => name))).toEqual(new Set(["RE", "RE2"]));
     expect(breakdown(later, earlier)).toEqual(before?.toReversed());
   });
+  it.each(["distinct logins", "no login identity"] as const)(
+    "keeps each Proxy account's reading across environments with reused IDs and %s",
+    (identity) => {
+      const breakdown = (firstReset: string, secondReset: string) =>
+        buildSubscriptionUsageSnapshot(
+          new Map(
+            [
+              { env: "env-a", label: "Alpha", usedPercent: 20, resetsAt: firstReset },
+              { env: "env-b", label: "Bravo", usedPercent: 70, resetsAt: secondReset },
+            ].map(({ env, label, usedPercent, resetsAt }) => [
+              EnvironmentId.make(env),
+              {
+                entry: { target: { label: env } },
+                serverConfig: {
+                  providers: [],
+                  usageLimitSources: [
+                    {
+                      id: UsageLimitSourceId.make("hub"),
+                      kind: "cliproxy" as const,
+                      label: "Hub",
+                      checkedAt,
+                      accounts: [
+                        {
+                          id: "seat.json",
+                          driver: ProviderDriverKind.make("codex"),
+                          label,
+                          ...(identity === "distinct logins"
+                            ? { email: `${env}@example.com` }
+                            : {}),
+                          usageLimits: {
+                            checkedAt,
+                            windows: [{ ...window, usedPercent, resetsAt }],
+                          },
+                        },
+                      ],
+                    },
+                  ],
+                },
+              },
+            ]),
+          ),
+          deepLink,
+          6,
+          true,
+        ).providers[0]?.windows[0]?.accounts;
+      const earlier = "2026-09-05T12:08:00.000Z";
+      const later = "2026-09-05T12:12:00.000Z";
+      const alpha = { name: "Alpha", remaining: 80 };
+      const bravo = { name: "Bravo", remaining: 30 };
+      expect(breakdown(earlier, later)).toEqual([alpha, bravo]);
+      expect(breakdown(later, earlier)).toEqual([bravo, alpha]);
+    },
+  );
   it("uses upstream deduplication for a native account also present in a proxy hub", () => {
     const input = new Map([
       [
