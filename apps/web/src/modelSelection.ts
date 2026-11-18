@@ -435,37 +435,37 @@ export function resolveAppModelSelectionState(
     return selection;
   const route = resolveTextGenerationRoute(settings, selection, providers, null, Date.now());
   if (route.reason === "no_fallback") return NO_PROVIDER_MODEL_SELECTION;
+  const { instanceId, options } = route.selection;
   const entry = deriveProviderInstanceEntries(providers).find(
-    (candidate) => candidate.instanceId === route.selection.instanceId,
+    (candidate) => candidate.instanceId === instanceId,
   );
-  if (entry) {
-    const options = getTextGenerationModelOptionsForInstance(settings, entry);
-    const model =
-      route.reason === "saved"
-        ? (resolveSelectableModel(entry.driverKind, selection.model, options) ??
-          resolveSelectableModel(
-            entry.driverKind,
-            DEFAULT_TEXT_GENERATION_MODEL_BY_PROVIDER[entry.driverKind],
-            options,
-          ) ??
-          options.find((option) => option.isDefault)?.slug ??
-          options[0]?.slug ??
-          route.selection.model)
-        : route.selection.model;
-    if (!model) {
-      return createModelSelection(entry.instanceId, "", []);
-    }
-    const provider = entry.driverKind;
-    const { modelOptionsForDispatch } = getComposerProviderState({
-      provider,
-      model,
-      models: entry.models,
-      modelOptions: route.reason === "saved" ? selection.options : undefined,
-      planModeEnabled: settings.planModeEnabled || selectsPlanAgent(selection.options),
-    });
+  if (!entry) return NO_PROVIDER_MODEL_SELECTION;
 
-    return createModelSelection(entry.instanceId, model, modelOptionsForDispatch);
+  let model = route.selection.model;
+  if (route.reason === "saved") {
+    const catalog = getTextGenerationModelOptionsForInstance(
+      { ...settings, providerModelPreferences: {} },
+      entry,
+    );
+    model =
+      resolveSelectableModel(entry.driverKind, model, catalog) ??
+      resolveSelectableModel(
+        entry.driverKind,
+        DEFAULT_TEXT_GENERATION_MODEL_BY_PROVIDER[entry.driverKind],
+        catalog,
+      ) ??
+      catalog.find((option) => option.isDefault)?.slug ??
+      catalog[0]?.slug ??
+      model;
   }
+  if (!model) return createModelSelection(instanceId, "");
 
-  return NO_PROVIDER_MODEL_SELECTION;
+  const { modelOptionsForDispatch } = getComposerProviderState({
+    provider: entry.driverKind,
+    model,
+    models: entry.models,
+    modelOptions: options,
+    planModeEnabled: settings.planModeEnabled || selectsPlanAgent(selection.options),
+  });
+  return createModelSelection(instanceId, model, modelOptionsForDispatch);
 }
