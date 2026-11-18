@@ -1,3 +1,4 @@
+import { migrationManifest } from "../persistence/Migrations.ts";
 import {
   EnvironmentId,
   MESSAGE_NAMED_BUILTIN_SKILLS,
@@ -236,6 +237,7 @@ export const make = Effect.gen(function* () {
   // The effective state, read after startup applied the dev SSH policy.
   const devSshOn = serverConfig.devUrl !== undefined && (yield* sshHostsRefusal) === undefined;
 
+  const latestMigration = migrationManifest.at(-1)?.[0];
   const descriptor: ExecutionEnvironmentDescriptor = {
     connectAuthPolicyVersion: 1,
     environmentId,
@@ -247,6 +249,7 @@ export const make = Effect.gen(function* () {
     },
     serverVersion: packageJson.version,
     instanceId,
+    ...(latestMigration === undefined ? {} : { databaseMigration: latestMigration }),
     ...(machineId === null ? {} : { machineId }),
     ...(machineUserId === null ? {} : { machineUserId }),
     ...(machineInstallId === null ? {} : { machineInstallId }),

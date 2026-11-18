@@ -334,6 +334,7 @@ export const ExecutionEnvironmentDescriptor = Schema.Struct({
   protocol: Schema.optionalKey(RuntimeProtocolRanges),
   /** New for every server start. A replacement request names it so it never hits a successor. */
   instanceId: Schema.optionalKey(TrimmedNonEmptyString),
+  databaseMigration: Schema.optionalKey(Schema.Int),
   /**
    * The same for every GOAT server on one machine, whatever its base directory, so clients
    * draw them as one machine. A hash of the OS machine identifier, absent when the OS hides it

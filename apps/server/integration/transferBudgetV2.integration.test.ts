@@ -121,7 +121,9 @@ const CLIENT_SHELL_SUBSCRIPTION = {
   requestCompletionMarker: true,
   omitIdleSubagents: true,
   omitOlderSettled: true,
-} satisfies Required<Omit<OrchestrationV2SubscribeShellInput, "afterSequence">>;
+} satisfies Required<
+  Omit<OrchestrationV2SubscribeShellInput, "afterSequence" | "httpSnapshotFallback">
+>;
 const query = (optIns: Readonly<Record<string, string>>) => new URLSearchParams(optIns).toString();
 const CLIENT_BOUNDED_QUERY = query(CLIENT_BOUNDED_OPT_INS);
 const CLIENT_HISTORY_QUERY = query(CLIENT_HISTORY_OPT_INS);
