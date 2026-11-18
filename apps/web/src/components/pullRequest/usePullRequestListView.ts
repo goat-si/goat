@@ -61,6 +61,7 @@ const SEARCH_DEBOUNCE_MS = 250;
 export function usePullRequestScope(
   search: PullRequestsSearch,
   hostAvailability: PullRequestHostAvailability,
+  author: PullRequestListFilters["author"],
 ) {
   const { environments } = useEnvironments();
   const allProjects = useProjects();
@@ -135,7 +136,9 @@ export function usePullRequestScope(
     return pullRequestProjectQueries(projects, queryEnvironmentIds, availability);
   };
   const environmentQueries = queriesFor(
-    pullRequestListMayFallBack(search) ? hostAvailability : undefined,
+    pullRequestListMayFallBack({ involvement: search.involvement, author })
+      ? hostAvailability
+      : undefined,
   );
   // What the page reads once a refresh forgets host reads; refresh must refetch these too.
   const preferredEnvironmentQueries = queriesFor();
@@ -189,6 +192,9 @@ export function usePullRequestScope(
     queryEnvironmentIds,
     environmentQueries,
     preferredEnvironmentQueries,
+    baselineEnvironmentQueries: pullRequestListMayFallBack(search)
+      ? environmentQueries
+      : preferredEnvironmentQueries,
     assignmentKey,
     linkedSelection,
     expectedHosts,

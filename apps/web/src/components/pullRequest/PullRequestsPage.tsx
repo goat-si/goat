@@ -137,6 +137,21 @@ export function PullRequestsPage() {
   const navigate = useNavigate({ from: "/pull-requests" });
   const keybindings = useAtomValue(primaryServerKeybindingsAtom);
   const hostReads = usePullRequestHostReads();
+  const typedQuery = (search.q ?? "").trim();
+  const [filtersOpen, setFiltersOpen] = useState(false);
+  const {
+    sentQuery,
+    submitQuery,
+    querySettled,
+    typedParsed,
+    sentParsed,
+    menuFilters,
+    menuFiltered,
+    filters,
+    hasFilters,
+    localFilters,
+    hasLocalFilters,
+  } = usePullRequestQueryFilters(search, typedQuery);
   const {
     capableEnvironments,
     scopedEnvironmentId,
@@ -152,11 +167,12 @@ export function PullRequestsPage() {
     queryEnvironmentIds,
     environmentQueries,
     preferredEnvironmentQueries,
+    baselineEnvironmentQueries,
     assignmentKey,
     linkedSelection,
     expectedHosts,
     projectsKnown,
-  } = usePullRequestScope(search, hostReads.hostReads);
+  } = usePullRequestScope(search, hostReads.hostReads, filters.author);
   const rightPanelRef = capableEnvironments.length === 0 ? null : PULL_REQUESTS_PANEL_REF;
   const openPanelPullRequestUrl = useOpenPanelPullRequestUrl(rightPanelRef);
   const rightPanelState = useRightPanelStore((state) =>
@@ -239,21 +255,6 @@ export function PullRequestsPage() {
     updateSearch(patch);
   };
 
-  const typedQuery = (search.q ?? "").trim();
-  const [filtersOpen, setFiltersOpen] = useState(false);
-  const {
-    sentQuery,
-    submitQuery,
-    querySettled,
-    typedParsed,
-    sentParsed,
-    menuFilters,
-    menuFiltered,
-    filters,
-    hasFilters,
-    localFilters,
-    hasLocalFilters,
-  } = usePullRequestQueryFilters(search, typedQuery);
   const turnRefreshes = usePullRequestTurnRefreshes([
     ...new Set(environmentQueries.map(({ environmentId }) => environmentId)),
   ]);
@@ -316,7 +317,7 @@ export function PullRequestsPage() {
       ...listScope,
       ...(menuFiltered ? { filters: menuFilters } : {}),
     });
-  const baselineTargets = baselineTargetsFor(environmentQueries);
+  const baselineTargets = baselineTargetsFor(baselineEnvironmentQueries);
   const baselineQuery = usePullRequestList(baselineTargets);
   hostReads.observe(baselineQuery.observations, listQuery.observations);
   const baselineEmpty =

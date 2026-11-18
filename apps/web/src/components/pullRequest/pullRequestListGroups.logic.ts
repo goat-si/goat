@@ -6,6 +6,7 @@ import type {
 
 import type { PullRequestTabStatusSeed } from "~/components/RightPanelTab";
 import { pullRequestSurfaceId } from "~/rightPanelStore";
+import { pullRequestListMayFallBack } from "./pullRequestProjectAssignment.logic";
 import {
   comparePullRequestsByRecency,
   filterPullRequestsByInvolvement,
@@ -62,8 +63,10 @@ export function pullRequestGroups({
     providers.flatMap((provider) => (provider.searchesOnHost ? [provider.host] : [])),
   );
 
+  const mayUseFallback = pullRequestListMayFallBack({ involvement, author: localFilters.author });
   const narrowRows = (rows: ReadonlyArray<EnvironmentPullRequestEntry>) => {
-    const involvementEntries = filterPullRequestsByInvolvement(rows, viewers, involvement);
+    const scoped = mayUseFallback ? rows : rows.filter(isPreferredEntry);
+    const involvementEntries = filterPullRequestsByInvolvement(scoped, viewers, involvement);
     return hasLocalFilters
       ? involvementEntries.filter((entry) =>
           matchesPullRequestFilters(entry, localFilters, pullRequestEntryViewer(entry, viewers)),
