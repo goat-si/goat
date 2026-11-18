@@ -92,12 +92,17 @@ it.effect(
           ["hubProxyProfiles", lostProfiles],
           ["penProfiles", lostProfiles],
         ] as const) {
-          const records = stored[field] ?? [];
+          // What the encoder wrote: every value names its route by connectionId.
+          const records: Array<{ index?: unknown; value: unknown; connectionId: string }> = (
+            stored[field] ?? []
+          ).map((record: { index: number; value: { connectionId: string } }) =>
+            Object.assign(record, { connectionId: record.value.connectionId }),
+          );
           for (const record of records) {
             if (random() > 0.3) continue;
             // Another record's index: both are valid, only their order is open.
             const indexed = records.filter(
-              (other: { index?: unknown }) =>
+              (other: { index?: unknown }): other is { index: number } =>
                 other !== record && typeof other.index === "number" && other.index >= 0,
             );
             if (random() < 0.25 && indexed.length > 0) {
@@ -105,7 +110,7 @@ it.effect(
               positionLost = true;
               continue;
             }
-            lost.add(record.value.connectionId);
+            lost.add(record.connectionId);
             const damage = pick(["no value", "wrong kind", "bad index", "no index"] as const);
             if (damage === "no value") record.value = null;
             else if (damage === "wrong kind")
