@@ -179,9 +179,14 @@ const command = Effect.fn("nativeClient.command")(function* (
   args: string[],
   inherit = false,
   cwd?: string,
+  withoutEnvironment: ReadonlyArray<string> = [],
 ) {
   const spawner = yield* ChildProcessSpawner.ChildProcessSpawner;
-  const environment = yield* HostProcess.Environment;
+  const environment = Object.fromEntries(
+    Object.entries(yield* HostProcess.Environment).filter(
+      ([name]) => !withoutEnvironment.includes(name),
+    ),
+  );
   const log = inherit ? yield* BuildLog : null;
   const spawn = yield* resolveSpawnCommand(program === "adb" ? yield* resolveAdb : program, args);
   const child = yield* spawner.spawn(
@@ -902,6 +907,7 @@ const installIntoSession = Effect.fn("nativeClient.installIntoSession")(function
   session: string,
   abi: string,
   metro: string | undefined,
+  config: string | undefined,
 ) {
   const started = yield* Clock.currentTimeMillis;
   const path = yield* Path.Path;
@@ -912,6 +918,11 @@ const installIntoSession = Effect.fn("nativeClient.installIntoSession")(function
   );
   // agent-device scopes session ownership to the workspace (working directory) it runs in.
   const workspace = yield* HostProcess.WorkingDirectory;
+  const target = ["--session", session, ...(config ? ["--config", config] : [])];
+  // Shell daemon credentials override the gateway config and may belong to another lease.
+  const withoutEnvironment = config
+    ? ["AGENT_DEVICE_DAEMON_BASE_URL", "AGENT_DEVICE_DAEMON_AUTH_TOKEN", "AGENT_DEVICE_CONFIG"]
+    : [];
   const deviceAbi = platform === "android" ? abi : null;
   const task = deviceAbi ? `native-client:android-${deviceAbi}` : `native-client:${platform}`;
   const current = yield* fingerprint(platform);
@@ -922,17 +933,10 @@ const installIntoSession = Effect.fn("nativeClient.installIntoSession")(function
   const downloadOnDevice = source
     ? command(
         node,
-        [
-          agentDevice,
-          "install-from-source",
-          source.url,
-          "--header",
-          source.header,
-          "--session",
-          session,
-        ],
+        [agentDevice, "install-from-source", source.url, "--header", source.header, ...target],
         true,
         workspace,
+        withoutEnvironment,
       ).pipe(
         Effect.as(true),
         Effect.catch((error) =>
@@ -954,9 +958,10 @@ const installIntoSession = Effect.fn("nativeClient.installIntoSession")(function
         yield* Console.error(`Installing into agent-device session ${session}...`);
         yield* command(
           node,
-          [agentDevice, "install", bundleId, local.file, "--session", session],
+          [agentDevice, "install", bundleId, local.file, ...target],
           true,
           workspace,
+          withoutEnvironment,
         );
         return local;
       });
@@ -969,11 +974,11 @@ const installIntoSession = Effect.fn("nativeClient.installIntoSession")(function
         "open",
         bundleId,
         `t3code-dev://expo-development-client/?url=${url}&disableOnboarding=1&disableFab=1&disableAutoLaunch=1`,
-        "--session",
-        session,
+        ...target,
       ],
       true,
       workspace,
+      withoutEnvironment,
     );
   }
   yield* reportTelemetry(
@@ -1017,6 +1022,12 @@ const main = Command.make(
       Flag.withDescription("With --session, open the dev client against this Metro URL."),
       Flag.optional,
     ),
+    config: Flag.String("config").pipe(
+      Flag.withDescription(
+        "With --session, use the agent-device --config returned in device.open targetArgs for pooled devices.",
+      ),
+      Flag.optional,
+    ),
     prepare: Flag.Boolean("prepare").pipe(
       Flag.withDescription(
         "Fetch or build the client for this checkout without a device (Android: for --abi). Run it before leasing a device: a build can outlast the lease.",
@@ -1031,6 +1042,7 @@ const main = Command.make(
     session,
     abi: sessionAbi,
     metro,
+    config,
     prepare,
   }) {
     const started = yield* Clock.currentTimeMillis;
@@ -1073,6 +1085,7 @@ const main = Command.make(
         session.value,
         sessionAbi,
         Option.getOrUndefined(metro),
+        Option.getOrUndefined(config),
       );
     }
     const target = yield* resolveDevice(platform, Option.getOrUndefined(requested));
