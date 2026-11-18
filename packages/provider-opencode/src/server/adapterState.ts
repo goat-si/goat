@@ -85,6 +85,7 @@ export interface OpenCodeSubagentContext {
   model: string | null;
   result: string | null;
   launch: ToolPart | null;
+  launchOutcome?: TerminalTurnStatus;
 }
 
 export interface OpenCodeThreadState {
