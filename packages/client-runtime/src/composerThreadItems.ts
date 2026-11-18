@@ -8,6 +8,16 @@ const COMPOSER_THREAD_RESULT_LIMIT = 5;
 
 export class ComposerThreadHosts extends Map<EnvironmentId, string> {
   private readonly aliases = new Map<string, EnvironmentId>();
+  private readonly onlineRouteEnvironments = new Set<EnvironmentId>();
+
+  allowOnlineRoute(id: EnvironmentId, host: string) {
+    this.allow(id, host);
+    this.onlineRouteEnvironments.add(id);
+  }
+  hasOnlineRoute(id: EnvironmentId): boolean {
+    return this.onlineRouteEnvironments.has(id);
+  }
+
   allow(id: EnvironmentId, host: string) {
     this.aliases.set(host, id);
   }
@@ -60,7 +70,7 @@ export function composerThreadHosts(input: {
             ? route.target.alias
             : null;
       if (host === null || !safe(host, id)) continue;
-      result.allow(id, host);
+      result.allowOnlineRoute(id, host);
       if (route.target.kind === "linked" && !result.has(id)) result.set(id, host);
     }
   }
@@ -69,10 +79,16 @@ export function composerThreadHosts(input: {
 
 export function composerThreadSearchEnvironments(
   environmentId: EnvironmentId | null,
-  reachableHosts: ReadonlyMap<EnvironmentId, string>,
+  reachableHosts: ComposerThreadHosts,
 ): ReadonlyArray<EnvironmentId> {
   if (environmentId === null) return [];
-  return [environmentId, ...Array.from(reachableHosts.keys()).filter((id) => id !== environmentId)];
+  // A saved desktop SSH alias can resolve a context link without verifying a search destination.
+  return [
+    environmentId,
+    ...Array.from(reachableHosts.keys()).filter(
+      (id) => id !== environmentId && reachableHosts.hasOnlineRoute(id),
+    ),
+  ];
 }
 
 export type ComposerThreadCandidate = ThreadSearchShell &

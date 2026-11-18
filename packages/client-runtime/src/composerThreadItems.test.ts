@@ -118,6 +118,17 @@ it("admits only mounted online linked routes with unambiguous identity", () => {
   ).toBe(false);
 });
 
+it("keeps remote title search off a mounted desktop environment with only a saved SSH alias", () => {
+  const remote = EnvironmentId.make("saved-desktop-ssh");
+  const hosts = composerThreadHosts({
+    nodes: [],
+    mounted: new Set([environmentId, remote]),
+    sshHosts: new Map([[remote, "saved-box"]]),
+  });
+  expect(hosts.get(remote)).toBe("saved-box");
+  expect(composerThreadSearchEnvironments(environmentId, hosts)).toEqual([environmentId]);
+});
+
 function shell(
   id: string,
   title: string,
