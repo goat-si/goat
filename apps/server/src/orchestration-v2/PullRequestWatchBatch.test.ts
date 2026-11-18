@@ -219,6 +219,56 @@ describe("pull request watch wakes from one pass", () => {
       }).pipe(Effect.scoped, Effect.provide(layerTest)),
   );
 
+  it.effect(
+    "a merge recorded during one pull request's read leaves the other's wake to go alone",
+    () =>
+      Effect.gen(function* () {
+        const { orchestrator, threadId, projectId } = yield* threadWatching(
+          "pr-batch-merged",
+          [21, 22],
+        );
+        // The link still holds its watch, so only the mute check can refuse #22's news.
+        const merge22 = orchestrator
+          .dispatch({
+            type: "thread.pull-request-link.sync",
+            commandId: CommandId.make("pr-batch-merged-22"),
+            threadId,
+            host: "github.com",
+            repository: "goat-si/goat",
+            number: 22,
+            snapshot: {
+              state: "merged",
+              title: "Watched pull request",
+              headBranch: "feature",
+              baseBranch: "main",
+              isDraft: false,
+              updatedAt: "2026-10-02T12:00:00.000Z",
+              syncedAt: "2026-10-02T12:00:00.000Z",
+            },
+            stack: null,
+          })
+          .pipe(Effect.orDie, Effect.asVoid);
+        const reactor = yield* PullRequestWatchReactor.make.pipe(
+          Effect.provide(
+            hostWithNewComments(projectId, {
+              onRead: (number) => (number === 22 ? merge22 : Effect.void),
+            }),
+          ),
+        );
+        yield* reactor.sweep;
+        const { runs, messages } = yield* orchestrator.getThreadRecords(threadId, [
+          "runs",
+          "messages",
+        ]);
+        const texts = runs.map(
+          (run) => messages.find((message) => message.id === run.userMessageId)?.text ?? "",
+        );
+        assert.equal(texts.length, 1);
+        assert.include(texts[0], "#21 (round 0)");
+        assert.notInclude(texts[0], "#22");
+      }).pipe(Effect.scoped, Effect.provide(layerTest)),
+  );
+
   it.effect("a busy thread folds a later pass's wakes into its queued digest one notice each", () =>
     Effect.gen(function* () {
       const { orchestrator, threadId, projectId } = yield* threadWatching(
