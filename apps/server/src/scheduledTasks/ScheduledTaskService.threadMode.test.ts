@@ -299,9 +299,9 @@ it.effect("a fresh-session task launches one thread, then starts each later run 
   }).pipe(Effect.provide(SqlitePersistence.layerMemory)),
 );
 
-it.effect("a first run whose thread was deleted before it bound removes the task", () =>
+it.effect("removes a task when its first thread is observed deleted after acceptance", () =>
   Effect.gen(function* () {
-    // Deleted before the binding landed, so its cleanup found no task to remove.
+    // The shell lookup after acceptance observes the thread as deleted.
     const { layer } = yield* harness({ threadDeleted: true });
     yield* Effect.gen(function* () {
       const service = yield* ScheduledTaskService.ScheduledTaskService;
