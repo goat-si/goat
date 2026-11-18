@@ -60,6 +60,8 @@ describe("runMigrations database ahead of this build", () => {
       assert.deepStrictEqual((yield* runMigrations()).at(-1), [158, "MemoryThreadLineage"]);
       const manifest157 = migrationEntries.filter(([id]) => id <= 157);
       const failure = yield* Effect.flip(assertMemoryMigrationsCompatible(manifest157));
+      assert.strictEqual(failure._tag, "MigrationError");
+      if (failure._tag !== "MigrationError") return;
       assert.strictEqual(failure.kind, "BadState");
       assert.include(failure.message, "Unreleased memory DB is incompatible");
     }).pipe(Effect.provide(NodeSqliteClient.layer({ filename: ":memory:" }))),

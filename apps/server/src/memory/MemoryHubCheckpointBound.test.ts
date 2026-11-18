@@ -1,6 +1,7 @@
 import { assert, it } from "@effect/vitest";
 import * as M from "@goat/contracts";
 import * as Clock from "effect/Clock";
+import * as DateTime from "effect/DateTime";
 import * as Effect from "effect/Effect";
 import * as Exit from "effect/Exit";
 import * as Layer from "effect/Layer";
@@ -624,7 +625,7 @@ it.effect("packs a maximal-body 1000-source save in a push, tail, and real check
     const heads = payload.derivedFromMemoryRevisions.slice(0, 2);
     const appliedAtUtc = operation.revision.createdAtUtc;
     const revertDeadlineUtc = M.MemoryUtcTimestamp.make(
-      new Date(Date.parse(appliedAtUtc) + M.MEMORY_REVERT_WINDOW_MS).toISOString(),
+      DateTime.formatIso(DateTime.makeUnsafe(Date.parse(appliedAtUtc) + M.MEMORY_REVERT_WINDOW_MS)),
     );
     const variants: Exclude<M.MemoryOperation, { kind: "forget" }>[] = [
       operation,
@@ -654,7 +655,7 @@ it.effect("packs a maximal-body 1000-source save in a push, tail, and real check
             instanceId: M.ProviderInstanceId.make("codex"),
             model: "fixture",
           },
-          effectiveProvider: "codex",
+          effectiveProvider: M.ProviderDriverKind.make("codex"),
           effectiveModel: "fixture",
           resolvingEnvironmentId: env,
           fencingToken: 1,
@@ -775,7 +776,7 @@ it.effect("packs a maximal-body 1000-source save in a push, tail, and real check
       }),
     );
     assert.deepStrictEqual(pinned.revisions[0]?.payload, payload);
-    console.info("wide memory bytes", {
+    yield* Effect.logInfo("wide memory bytes", {
       payloadBytes,
       pushBytes,
       tailBytes,

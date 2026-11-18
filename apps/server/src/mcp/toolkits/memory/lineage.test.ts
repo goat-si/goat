@@ -651,7 +651,7 @@ const rememberFromActiveRun = Effect.fn("test.rememberFromActiveRun")(function* 
   origin: {
     createdBy: string;
     creationSource: string;
-    ingress?: string;
+    ingress?: string | undefined;
     scheduledTaskId?: string;
     senderThreadId?: string;
   },
