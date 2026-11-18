@@ -49,3 +49,41 @@ Migration 158 is idempotent even when replayed outside its ledger. A fixture mad
 P1 for #3581: use Replay in a scratch project. Open an automation set to one thread, run it, restart GOAT, and run it again. The two run links should open the same thread. In the fresh-session mode the second run opens a new provider session in that thread. A new-thread automation still gives separate threads.
 
 NOT RUN: final integration merge, rerun after ledger assertion updates, P1 real-client pass, lane CI, independent review, repository-wide checks.
+
+## 2026-11-18 ruling follow-up · BLOCKED
+
+The coordinator approved the migration 158 assertion changes in the four existing suites and reserved all setup and title changes. SF4 owns migration 158. The coordinator will allocate upstream 092–098 after 158.
+
+The new local commit is c6e1e7fc3bf553ec569c4de04c463dc258e25ac2. The published lane head remains c776171a80c6991ef0dbdb959793da4de3b99ed4. `git fetch origin` and `git merge origin/chase/t3-261114-next3` both exited 0. The merge reported `Already up to date.` at integration tip 2c0e0002a996ec5d46c708919be5a43f579176fa.
+
+The in-memory and on-disk instances of `a kill inside the ledger move leaves the old ledger whole` still fail. The fixture seeds the historical ledger through 147. Its unchanged `killWhenRecording(goatNames.at(-1) ?? "")` now resolves to `ScheduledTaskFirstBindIntent`, after the ledger move. Pinning it to `killWhenRecording("DisposableMachineEnrollment")` would retain the original injected failure at the ledger-move transaction. Approval for that one source line is pending.
+
+- From `apps/server`, the four full persistence files with `GOAT_TEST_TMP_GUARD=fail vp test run --reporter=default` exited 1. 102 passed and 2 failed. `reconcileGoatMigrationIds.resume.test.ts` 48/50, `reconcileGoatMigrationIds.test.ts` 33/33, `reconcileGoatMigrationIds.upstream080.test.ts` 14/14, `reconcileV2PreviewMigration.test.ts` 7/7.
+- From `apps/server`, the six full scheduler and outcome files listed above with `GOAT_TEST_TMP_GUARD=fail vp test run --reporter=default` exited 0. Thread modes 18/18, firing store 13/13, service 8/8, webhooks 54/54, bot routines 13/13, outcome integration 18/18. Format and lint hooks passed after the test commands completed.
+
+Limits: A crash before initial-message acceptance can leave an empty thread because thread creation commits earlier.
+
+NOT RUN: changed-files gate rerun pending the crash fixture ruling, lane push for this follow-up, P1, lane CI, independent review, repository-wide checks.
+
+### Rule 3 assertion quotes
+
+The table quotes the changed expected operand at each assertion in the four files under `apps/server/src/persistence/`. Line numbers refer to c776171a80c, before the update. The preview migration arrays are quoted at their tail. The diagnostic row quotes the string the parameterized assertion expects.
+
+| File and original line | Before | After |
+| --- | --- | --- |
+| `reconcileGoatMigrationIds.resume.test.ts:252` | `goatNames.map(currentRow)` | `goatNames.map(currentRow).filter(([id]) => id !== 158)` |
+| `reconcileGoatMigrationIds.resume.test.ts:257` | `UPSTREAM_80S.slice(1)` | `[...UPSTREAM_80S.slice(1), [158, "ScheduledTaskFirstBindIntent"]]` |
+| `reconcileGoatMigrationIds.resume.test.ts:274` | `UPSTREAM_80S.slice(3)` | `[...UPSTREAM_80S.slice(3), [158, "ScheduledTaskFirstBindIntent"]]` |
+| `reconcileGoatMigrationIds.resume.test.ts:295` | `UPSTREAM_80S.slice(5)` | `[...UPSTREAM_80S.slice(5), [158, "ScheduledTaskFirstBindIntent"]]` |
+| `reconcileGoatMigrationIds.resume.test.ts:361` | `goatNames.map(currentRow)` | `goatNames.map(currentRow).filter(([id]) => id !== 158)` |
+| `reconcileGoatMigrationIds.resume.test.ts:366` | `UPSTREAM_80S.slice(1)` | `[...UPSTREAM_80S.slice(1), [158, "ScheduledTaskFirstBindIntent"]]` |
+| `reconcileGoatMigrationIds.resume.test.ts:381` | `highest recorded id (157)` | `highest recorded id (158)` |
+| `reconcileGoatMigrationIds.test.ts:576` | `[157, "DisposableMachineEnrollment"]` | `[158, "ScheduledTaskFirstBindIntent"]` |
+| `reconcileGoatMigrationIds.upstream080.test.ts:39` | `[157, "DisposableMachineEnrollment"]` | `[158, "ScheduledTaskFirstBindIntent"]` |
+| `reconcileGoatMigrationIds.upstream080.test.ts:83` | `[currentRow("DisposableMachineEnrollment")]` | `[currentRow("DisposableMachineEnrollment"), [158, "ScheduledTaskFirstBindIntent"]]` |
+| `reconcileGoatMigrationIds.upstream080.test.ts:176` | `migrationManifest.filter(([id]) => id !== 89)` | `migrationManifest.filter(([id]) => id !== 89 && id !== 158)` |
+| `reconcileGoatMigrationIds.upstream080.test.ts:185` | `UPSTREAM_80S.slice(-1)` | `[...UPSTREAM_80S.slice(-1), [158, "ScheduledTaskFirstBindIntent"]]` |
+| `reconcileGoatMigrationIds.upstream080.test.ts:197` | `UPSTREAM_80S` | `[...UPSTREAM_80S, [158, "ScheduledTaskFirstBindIntent"]]` |
+| `reconcileGoatMigrationIds.upstream080.test.ts:252` | `[167, "DisposableMachineEnrollment"]` | `[168, "ScheduledTaskFirstBindIntent"]` |
+| `reconcileV2PreviewMigration.test.ts:174` | `[157, "DisposableMachineEnrollment"]` | `[157, "DisposableMachineEnrollment"], [158, "ScheduledTaskFirstBindIntent"]` |
+| `reconcileV2PreviewMigration.test.ts:356` | `[157, "DisposableMachineEnrollment"]` | `[157, "DisposableMachineEnrollment"], [158, "ScheduledTaskFirstBindIntent"]` |
