@@ -3,6 +3,7 @@ import * as Effect from "effect/Effect";
 import * as Exit from "effect/Exit";
 import * as FileSystem from "effect/FileSystem";
 import * as Path from "effect/Path";
+import type { PlatformError } from "effect/PlatformError";
 
 // `git worktree remove` skips pnpm junctions on Windows, leaving these behind without a checkout.
 const LEFTOVER_ENTRIES = new Set(["node_modules", ".next"]);
@@ -61,6 +62,59 @@ export const makeSetAsideFolder = Effect.gen(function* () {
       ),
       Effect.orElseSucceed(() => "checkout" as const),
     );
+  const restoreEntries = Effect.fn("WorktreeSetAside.restoreEntries")(
+    function* (workspace: string, setAsidePath: string) {
+      const entries = yield* fs.readDirectory(setAsidePath);
+      const target = yield* fs.readDirectory(workspace);
+      for (const entry of entries) {
+        if (target.includes(entry)) return false;
+      }
+      for (const entry of entries) {
+        yield* fs.rename(path.join(setAsidePath, entry), path.join(workspace, entry));
+      }
+      yield* fs.remove(setAsidePath);
+      return true;
+    },
+    Effect.catch((cause) =>
+      Effect.logWarning("worktree leftovers stayed in their set-aside folder", {
+        cause,
+      }).pipe(Effect.as(false)),
+    ),
+  );
+
+  const moveEntries = Effect.fn("WorktreeSetAside.moveEntries")(function* (
+    workspace: string,
+    error: PlatformError,
+    held: { path: string | null },
+  ) {
+    if (
+      (error.reason._tag !== "Busy" && error.reason._tag !== "PermissionDenied") ||
+      (yield* contents(workspace)) !== "leftovers"
+    )
+      return yield* error;
+    const entries = yield* fs.readDirectory(workspace);
+    if (entries.some((entry) => !LEFTOVER_ENTRIES.has(entry))) return yield* error;
+    const setAsidePath = yield* fs.makeTempDirectory({
+      directory: path.dirname(workspace),
+      prefix: `${path.basename(workspace)}-set-aside-`,
+    });
+    held.path = setAsidePath;
+    yield* Effect.forEach(
+      entries,
+      (entry) => fs.rename(path.join(workspace, entry), path.join(setAsidePath, entry)),
+      { discard: true },
+    ).pipe(
+      Effect.onError(() =>
+        restoreEntries(workspace, setAsidePath).pipe(
+          Effect.tap((back) => {
+            if (back) held.path = null;
+          }),
+        ),
+      ),
+    );
+    return { setAsidePath, movedEntries: true };
+  });
+
   return {
     /** Present without its `.git` link and holding something; Git takes an empty folder as it is. */
     lostCheckout: (worktreePath: string) =>
@@ -88,15 +142,22 @@ export const makeSetAsideFolder = Effect.gen(function* () {
             `${path.basename(worktreePath)}-set-aside-${stamp}`,
           );
           // Rename refuses a target that holds files, so nothing already there is replaced.
-          yield* fs.rename(worktreePath, setAsidePath);
-          held.path = setAsidePath;
-          return setAsidePath;
+          return yield* fs.rename(worktreePath, setAsidePath).pipe(
+            Effect.map(() => {
+              held.path = setAsidePath;
+              return { setAsidePath, movedEntries: false };
+            }),
+            Effect.catch((error) => moveEntries(worktreePath, error, held)),
+          );
         }),
-        (setAsidePath) => Effect.map(recreate, (result) => ({ result, setAsidePath })),
-        (setAsidePath, exit) =>
+        ({ setAsidePath }) => Effect.map(recreate, (result) => ({ result, setAsidePath })),
+        ({ setAsidePath, movedEntries }, exit) =>
           Exit.isSuccess(exit)
             ? Effect.void
-            : putBack(worktreePath, setAsidePath).pipe(
+            : (movedEntries
+                ? restoreEntries(worktreePath, setAsidePath)
+                : putBack(worktreePath, setAsidePath)
+              ).pipe(
                 Effect.map((back) => {
                   if (back) held.path = null;
                 }),

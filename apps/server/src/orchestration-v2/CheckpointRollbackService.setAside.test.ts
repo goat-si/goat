@@ -1,3 +1,5 @@
+import * as PlatformError from "effect/PlatformError";
+import { makeSetAsideFolder } from "./goat/setAsideFolder.ts";
 import * as NodeServices from "@effect/platform-node/NodeServices";
 import { assert, it } from "@effect/vitest";
 import {
@@ -278,4 +280,53 @@ it.effect.each<Row & { readonly name: string; readonly rollsBack: boolean }>([
     assert.equal(inPlace, "keep");
     assert.deepEqual(notices, []);
   }),
+);
+
+it.effect.each([false, true])(
+  "preserves a busy outer folder during set-aside (restore fails: %s)",
+  (fails) =>
+    Effect.gen(function* () {
+      const fs = yield* FileSystem.FileSystem;
+      const path = yield* Path.Path;
+      const parent = yield* fs.makeTempDirectoryScoped({ prefix: "goat-busy-worktree-" });
+      const workspace = path.join(parent, "worktree");
+      const leftovers = path.join(workspace, "node_modules");
+      yield* fs.makeDirectory(leftovers, { recursive: true });
+      yield* fs.writeFileString(path.join(leftovers, "keep.txt"), "keep");
+      const identity = (yield* fs.stat(workspace)).ino;
+      const busyFs = {
+        ...fs,
+        rename: (from: string, to: string) =>
+          from === workspace
+            ? Effect.fail(
+                PlatformError.systemError({ _tag: "Busy", module: "FileSystem", method: "rename" }),
+              )
+            : fs.rename(from, to),
+      };
+      const setAside = yield* makeSetAsideFolder.pipe(
+        Effect.provideService(FileSystem.FileSystem, busyFs),
+      );
+      const restored = yield* setAside
+        .around(
+          workspace,
+          Effect.gen(function* () {
+            assert.deepEqual(yield* fs.readDirectory(workspace), []);
+            if (fails) return yield* Effect.fail("recreate failed");
+          }),
+        )
+        .pipe(Effect.result);
+      assert.deepEqual((yield* fs.stat(workspace)).ino, identity);
+      if (restored._tag === "Failure") {
+        assert.equal(restored.failure, "recreate failed");
+        assert.equal(yield* fs.readFileString(path.join(leftovers, "keep.txt")), "keep");
+      } else {
+        assert.equal(
+          yield* fs.readFileString(
+            path.join(restored.success.setAsidePath, "node_modules", "keep.txt"),
+          ),
+          "keep",
+        );
+      }
+      assert.equal(restored._tag, fails ? "Failure" : "Success");
+    }).pipe(Effect.provide(NodeServices.layer)),
 );
