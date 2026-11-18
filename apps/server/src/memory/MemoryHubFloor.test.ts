@@ -943,6 +943,7 @@ it.effect.each(["new", "backfilled"] as const)(
       assert.propertyVal(forgotten.receipts[0], "outcome", "deleted");
       yield* Effect.gen(function* () {
         const store = yield* Store.MemoryStore;
+        const replicaSql = yield* SqlClient.SqlClient;
         const service = yield* Service.MemoryService;
         const receive = (expectedSequence: number, page: M.MemoryHubPullResult) =>
           service.receiveHubPage({
@@ -971,6 +972,10 @@ it.effect.each(["new", "backfilled"] as const)(
           });
           assert.equal(yield* store.readCursor(space, hubEnv), tail.throughSequence);
           assert.equal(yield* store.readOriginCursor(space, hubEnv), 0);
+          yield* replicaSql`UPDATE memory_sync_cursors SET bootstrap_state='staging' WHERE space=${space}`;
+          yield* receive(after, tail);
+          assert.isUndefined((yield* store.loadAggregate(space, exact.memoryId)).identity?.origin);
+          yield* replicaSql`UPDATE memory_sync_cursors SET bootstrap_state='ready' WHERE space=${space}`;
         }
         yield* receive(after, tail);
         assert.equal(yield* store.readOriginCursor(space, hubEnv), originPage.throughSequence);
