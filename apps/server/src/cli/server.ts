@@ -2,6 +2,7 @@ import * as HostProcess from "@goat/shared/HostProcess";
 import { installProcessErrorNet } from "@goat/shared/processErrorNet";
 import * as Cause from "effect/Cause";
 import * as Clock from "effect/Clock";
+import * as Duration from "effect/Duration";
 import * as Effect from "effect/Effect";
 import * as Exit from "effect/Exit";
 import * as FileSystem from "effect/FileSystem";
@@ -26,6 +27,7 @@ import {
   SSH_REPLACEMENT_ID_ENV,
 } from "../serverOwnerLock.ts";
 import * as ProcessRunner from "../processRunner.ts";
+import { markUntrackedDatabaseOwner } from "../serviceLauncherDatabase.ts";
 import * as AutomaticPort from "./automaticPort.ts";
 import { installServerOutputHandlers } from "./serverOutput.ts";
 import { type CliServerFlags, resolveServerConfig, sharedServerCommandFlags } from "./config.ts";
@@ -75,6 +77,12 @@ const runServerCommand = Effect.fn("server.runServerCommand")(function* (
   yield* ensureServerMachineNonce(yield* serverMachineNonceDirectory(config));
   // An invalid context fails later in ServiceLauncherClient; it must not make startup wait.
   const launcherContext = launcherContextFromEnvironment(environment[SERVICE_LAUNCHER_CONTEXT_ENV]);
+  const managedTrial =
+    launcherContext?.trialOwnerRefusal === true &&
+    launcherContext.update?.status === "pending" &&
+    launcherContext.update.targetVersion === launcherContext.childVersion
+      ? launcherContext.update
+      : undefined;
   const sshReplacementId = environment[SSH_REPLACEMENT_ID_ENV]?.trim() || undefined;
   return yield* Effect.scoped(
     Effect.gen(function* () {
@@ -109,7 +117,8 @@ const runServerCommand = Effect.fn("server.runServerCommand")(function* (
           sshReplacementId,
         }),
         serverRuntimeStatePath: config.serverRuntimeStatePath,
-        waitForOwner: launcherContext !== undefined,
+        waitForOwner: launcherContext !== undefined && managedTrial === undefined,
+        ...(managedTrial === undefined ? {} : { handoffGrace: Duration.zero }),
       });
       // Other GOAT servers on this machine bind the same checkouts; removal must see their work.
       yield* holdWorkspaceLeaseRegistry();
@@ -143,9 +152,21 @@ const runServerCommand = Effect.fn("server.runServerCommand")(function* (
     }),
   ).pipe(
     Effect.catchTags({
-      ServerOwnerConflictError: (error) =>
-        Effect.fail(new CliError.UserError({ cause: error.message })),
+      ServerOwnerConflictError: (error): Effect.Effect<never, typeof error | CliError.UserError> =>
+        Effect.fail(
+          managedTrial === undefined ? new CliError.UserError({ cause: error.message }) : error,
+        ),
     }),
+    Effect.tapErrorTag("ServerAlreadyRunningError", () =>
+      managedTrial === undefined
+        ? Effect.void
+        : Effect.tryPromise(() => markUntrackedDatabaseOwner(config.baseDir, managedTrial.id)).pipe(
+            Effect.catch((error) =>
+              Effect.logError("Could not record the trial's ownership refusal", error),
+            ),
+            Effect.uninterruptible,
+          ),
+    ),
   );
 });
 

@@ -324,6 +324,30 @@ describe("native pasted image cleanup", () => {
     expect(files.get(uri)?.deleted).toBe(true);
   });
 
+  it("preserves GIF bytes and cleans up only its native paste copy", async () => {
+    const nativeGif = "file:///app/tmp/t3-composer-paste/animation.gif";
+    const photoLibraryGif = "file:///app/photos/animation.gif";
+    const unrelatedFile = "file:///app/tmp/t3-composer-paste/other.txt";
+    const base64 = "R0lGODlhAQABAIAAAAAAAP///ywAAAAAAQABAAACAUwAOw==";
+    for (const uri of [nativeGif, photoLibraryGif, unrelatedFile]) {
+      files.set(uri, { base64, deleted: false });
+    }
+
+    const { attachments } = await convertPastedImagesToAttachments({
+      uris: [nativeGif, photoLibraryGif, unrelatedFile],
+      existingCount: PROVIDER_SEND_TURN_MAX_ATTACHMENTS - 2,
+    });
+
+    expect(attachments[0]).toMatchObject({
+      name: "pasted-image.gif",
+      mimeType: "image/gif",
+      dataUrl: `data:image/gif;base64,${base64}`,
+    });
+    expect(files.get(nativeGif)?.deleted).toBe(true);
+    expect(files.get(photoLibraryGif)?.deleted).toBe(false);
+    expect(files.get(unrelatedFile)?.deleted).toBe(false);
+  });
+
   it("deletes rejected and overflow owned files without deleting user-owned files", async () => {
     const rejected =
       "file:///private/var/mobile/Containers/Data/Application/app/tmp/t3-composer-paste/bad.png";

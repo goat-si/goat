@@ -68,6 +68,10 @@ export const recoverUsageLimit = Effect.fn("ProviderRuntimeRecovery.recoverUsage
         },
       });
     }
-    return { events, itemIds: new Set(items.map((item) => item.id)) };
+    return {
+      events,
+      itemIds: new Set(items.map((item) => item.id)),
+      unsentRunIds: new Set(unsent.map((run) => run.id)),
+    };
   },
 );

@@ -54,13 +54,15 @@ describe.skipIf(HostProcess.Platform.defaultValue() !== "linux")(
         const fileSystem = yield* FileSystem.FileSystem;
         const path = yield* Path.Path;
         const dir = yield* fileSystem.makeTempDirectoryScoped({ prefix: "t3-appimage-install-" });
-        const appImagePath = path.join(dir, "T3-Code.AppImage");
-        const stagedPath = path.join(dir, "T3-Code-1.0.1.AppImage");
+        const appImagePath = path.join(dir, "T3-Code-1.0.0.AppImage");
+        const stagedPath = path.join(dir, "staged", "T3-Code.AppImage");
         const fdReportPath = path.join(dir, "relaunched-fds.txt");
+        const previousPathReport = path.join(dir, "previous-path.txt");
+        yield* fileSystem.makeDirectory(path.dirname(stagedPath));
         yield* fileSystem.writeFileString(appImagePath, "old AppImage");
         yield* fileSystem.writeFileString(
           stagedPath,
-          `#!/bin/sh\nls /proc/self/fd > '${fdReportPath}'\n`,
+          `#!/bin/sh\nls /proc/self/fd > '${fdReportPath}'\nprintf '%s' "$GOAT_APPIMAGE_PREVIOUS_PATH" > '${previousPathReport}'\n`,
         );
         yield* fileSystem.chmod(stagedPath, 0o755);
 
@@ -105,6 +107,8 @@ describe.skipIf(HostProcess.Platform.defaultValue() !== "linux")(
         const electronUpdater = yield* ElectronUpdater.ElectronUpdater;
         yield* electronUpdater.quitAndInstall({ isSilent: true, isForceRunAfter: true });
         yield* Deferred.await(relaunched);
+
+        assert.equal(yield* fileSystem.readFileString(previousPathReport), appImagePath);
 
         const descriptors = (yield* fileSystem.readFileString(fdReportPath)).trim().split("\n");
         assert.notInclude(
