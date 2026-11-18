@@ -8,7 +8,6 @@ import * as Clock from "effect/Clock";
 import * as Effect from "effect/Effect";
 import * as FileSystem from "effect/FileSystem";
 import * as Option from "effect/Option";
-import * as Ref from "effect/Ref";
 import * as DesktopEnvironment from "../app/DesktopEnvironment.ts";
 import * as DesktopObservability from "../app/DesktopObservability.ts";
 
@@ -22,7 +21,6 @@ export const makeUpdateRestartMarkers = Effect.fn("desktop.updates.makeRestartMa
     const directory = path.join(baseDir, "runtime");
     const tunnelHandoff = path.join(directory, DESKTOP_UPDATE_RESTART_MARKER_FILE);
     const sharedHomeMarker = path.join(directory, SHARED_HOME_DESKTOP_UPDATE_MARKER);
-    const written = yield* Ref.make<string | undefined>(undefined);
     const processMarker = `${sharedHomeMarker}.${process.pid}.next`;
 
     const write = Effect.fn("desktop.updates.writeRestartMarkers")(
@@ -44,11 +42,12 @@ export const makeUpdateRestartMarkers = Effect.fn("desktop.updates.makeRestartMa
         const now = yield* Clock.currentTimeMillis;
         const expiry = Math.floor(now / 1000) + SHARED_HOME_DESKTOP_UPDATE_TTL_SECONDS;
         const value = `${expiry} ${process.pid}-${now}\n`;
-        yield* fs.writeFileString(processMarker, value).pipe(
-          Effect.andThen(fs.rename(processMarker, sharedHomeMarker)),
-          Effect.tap(() => Ref.set(written, value)),
-          Effect.ensuring(fs.remove(processMarker, { force: true }).pipe(Effect.ignore)),
-        );
+        yield* fs
+          .writeFileString(processMarker, value)
+          .pipe(
+            Effect.andThen(fs.rename(processMarker, sharedHomeMarker)),
+            Effect.ensuring(fs.remove(processMarker, { force: true }).pipe(Effect.ignore)),
+          );
       },
       Effect.tapError((error) =>
         logWarning("Could not write the desktop update handoff marker.", { errorTag: error._tag }),
@@ -56,20 +55,11 @@ export const makeUpdateRestartMarkers = Effect.fn("desktop.updates.makeRestartMa
       Effect.ignore,
     );
 
-    const remove = Effect.fn("desktop.updates.removeRestartMarkers")(function* () {
-      yield* fs.remove(tunnelHandoff, { force: true }).pipe(Effect.ignore);
-      const value = yield* Ref.getAndSet(written, undefined);
-      if (value === undefined) return;
-      const current = yield* fs.readFileString(sharedHomeMarker).pipe(Effect.option);
-      if (Option.isSome(current) && current.value === value) {
-        yield* fs.remove(sharedHomeMarker, { force: true }).pipe(Effect.ignore);
-      }
-    });
-
     return {
       directory,
       writeUpdateRestartMarker: write(),
-      removeUpdateRestartMarker: remove(),
+      // SSH honors the shared marker until a fresh runtime record appears or the marker expires.
+      removeTunnelRestartMarker: fs.remove(tunnelHandoff, { force: true }).pipe(Effect.ignore),
     };
   },
 );

@@ -644,7 +644,7 @@ export const make = Effect.gen(function* () {
   const {
     directory: updateRestartMarkerDir,
     writeUpdateRestartMarker,
-    removeUpdateRestartMarker,
+    removeTunnelRestartMarker,
   } = yield* makeUpdateRestartMarkers();
 
   const installRecordPath = environment.path.join(
@@ -695,7 +695,7 @@ export const make = Effect.gen(function* () {
       finishUpdateAction("install"),
       Ref.set(desktopState.quitting, false),
       Ref.set(installRunningBackendsRef, []),
-      removeUpdateRestartMarker,
+      removeTunnelRestartMarker,
       removeInstallRecord,
     ],
     { discard: true },
@@ -712,7 +712,7 @@ export const make = Effect.gen(function* () {
     if (!ownsRecovery) return;
 
     yield* Ref.set(desktopState.quitting, false);
-    yield* removeUpdateRestartMarker;
+    yield* removeTunnelRestartMarker;
     yield* removeInstallRecord;
     yield* Effect.gen(function* () {
       const runningInstances = yield* Ref.getAndSet(installRunningBackendsRef, []);
