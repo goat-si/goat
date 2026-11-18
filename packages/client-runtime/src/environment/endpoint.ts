@@ -10,7 +10,12 @@ const HUB_NODE_ROUTE = new RegExp(`^.*?${HUB_PROXY_ROUTE_PREFIX}/[^/]+`);
  * keep using the origin root.
  */
 export const environmentRoutePrefix = (url: URL): string =>
-  url.pathname.match(PEN_ROUTE_PATH)?.[0] ?? url.pathname.match(HUB_NODE_ROUTE)?.[0] ?? "";
+  url.pathname.match(HUB_NODE_ROUTE)?.[0] ??
+  // Pen routes are served only by the desktop's loopback gateway.
+  (url.protocol === "http:" && url.hostname === "127.0.0.1"
+    ? url.pathname.match(PEN_ROUTE_PATH)?.[0]
+    : undefined) ??
+  "";
 
 export const environmentEndpointUrl = (httpBaseUrl: string, pathname: string): string => {
   const url = new URL(httpBaseUrl);

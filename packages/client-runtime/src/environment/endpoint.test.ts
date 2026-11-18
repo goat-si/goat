@@ -37,15 +37,20 @@ describe("Pen route URL builders", () => {
   });
 
   it("accepts exactly 43 base64url characters and preserves hub prefixes", () => {
-    expect(environmentRoutePrefix(new URL(`http://localhost/pen-route/${"_".repeat(43)}`))).toBe(
+    expect(environmentRoutePrefix(new URL(`http://127.0.0.1/pen-route/${"_".repeat(43)}`))).toBe(
       `/pen-route/${"_".repeat(43)}`,
     );
     for (const length of [42, 44]) {
       expect(
-        environmentRoutePrefix(new URL(`http://localhost/pen-route/${"a".repeat(length)}/ws`)),
+        environmentRoutePrefix(new URL(`http://127.0.0.1/pen-route/${"a".repeat(length)}/ws`)),
       ).toBe("");
     }
-    expect(environmentRoutePrefix(new URL(`http://localhost/other${prefix}/ws`))).toBe("");
+    expect(environmentRoutePrefix(new URL(`http://127.0.0.1/other${prefix}/ws`))).toBe("");
+    // Only the desktop's loopback gateway serves Pen routes; a hub deployment keeps its node path.
+    expect(environmentRoutePrefix(new URL(`https://hub.example.test${prefix}/ws`))).toBe("");
+    expect(environmentEndpointUrl(`https://hub.example.test${prefix}/hub/nodes/n/`, "/api/x")).toBe(
+      `https://hub.example.test${prefix}/hub/nodes/n/api/x`,
+    );
     expect(environmentRoutePrefix(new URL("http://localhost/deploy/hub/nodes/node-1/api"))).toBe(
       "/deploy/hub/nodes/node-1",
     );
