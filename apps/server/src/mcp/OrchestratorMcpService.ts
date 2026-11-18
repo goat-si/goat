@@ -1,3 +1,5 @@
+import { DelegatedTaskCancellation } from "../orchestration-v2/goat/DelegatedTaskCancellation.ts";
+import { taskPrompt, threadTitle } from "./goat/ThreadCreationText.ts";
 import * as FleetSync from "../goatclaw/FleetSync.ts";
 import * as Profiles from "../goatclaw/PermissionProfiles.ts";
 import {
@@ -16,7 +18,6 @@ import {
   OrchestratorMcpCapabilitiesResult,
   type OrchestratorMcpCreatedThread,
   type OrchestratorMcpThreadTimelineItem,
-  type OrchestratorMcpModelOption,
   type OrchestratorMcpDelegateTaskInput,
   type OrchestratorMcpDelegateTaskResult,
   OrchestratorMcpFailure,
@@ -44,7 +45,7 @@ import {
 } from "@goat/contracts";
 import { derive } from "@goat/provider-core/server/IdAllocator";
 import { latestProviderTurnForAttempt } from "@goat/contracts";
-import { getProviderOptionCurrentValue, withLegacyUltracodeEffort } from "@goat/shared/model";
+import { withLegacyUltracodeEffort } from "@goat/shared/model";
 import { runRanAfter } from "@goat/shared/orchestrationV2ThreadError";
 import { withTurnCapabilities } from "@goat/shared/turnCapabilities";
 import * as Clock from "effect/Clock";
@@ -81,7 +82,7 @@ import { forceModeRefusal, forceStopRemoteTask } from "../remoteReports/remoteTa
 import * as SshRemoteDispatch from "../sshRemote/SshRemoteDispatch.ts";
 import { cloudTaskForRun } from "./cloudTaskView.ts";
 import { hostFailure } from "./hostFailure.ts";
-import { listCapabilityModels } from "./OrchestratorMcpCapabilities.ts";
+import { capabilityModelOption, listCapabilityModels } from "./OrchestratorMcpCapabilities.ts";
 import { providerConstraints, providerForCaller } from "./ProviderConstraints.ts";
 import { overrideOptionSelections } from "./modelOptionOverrides.ts";
 import { advertisedModel } from "./ModelSelectionValidation.ts";
@@ -254,17 +255,6 @@ function agentStopReason(reason: string | undefined): string {
 
 function errorMessage(error: unknown): string {
   return error instanceof Error ? error.message : String(error);
-}
-
-/** Option ids and allowed values are all a delegating agent needs; labels are UI copy. */
-function capabilityModelOption(descriptor: ProviderOptionDescriptor): OrchestratorMcpModelOption {
-  const defaultValue = getProviderOptionCurrentValue(descriptor);
-  return {
-    id: descriptor.id,
-    values:
-      descriptor.type === "boolean" ? [false, true] : descriptor.options.map((choice) => choice.id),
-    ...(defaultValue === undefined ? {} : { default: defaultValue }),
-  };
 }
 
 /** Reads a remote host's advertised options in either the current or the older descriptor shape. */
@@ -625,30 +615,6 @@ function stableOperationMessageId(input: {
       stablePart(input.requestKey),
     ].join(":"),
   );
-}
-
-function threadTitle(input: {
-  readonly parentTitle: string;
-  readonly prompt: string | undefined;
-  readonly title: string | undefined;
-  readonly index: number;
-}): string {
-  const detail = input.title?.trim() || input.prompt?.trim();
-  if (!detail) return `${input.parentTitle} thread ${input.index + 1}`;
-  if (detail.length <= 80) return detail;
-  let end = 77;
-  const previous = detail.charCodeAt(end - 1);
-  const next = detail.charCodeAt(end);
-  if (previous >= 0xd800 && previous <= 0xdbff && next >= 0xdc00 && next <= 0xdfff) {
-    end -= 1;
-  }
-  return `${detail.slice(0, end)}...`;
-}
-
-function taskPrompt(input: OrchestratorMcpDelegateTaskInput): string {
-  return input.role === undefined || input.role === "general"
-    ? input.task
-    : `Act as the ${input.role} sub-agent for this task.\n\n${input.task}`;
 }
 
 const make = Effect.gen(function* () {
@@ -1347,6 +1313,7 @@ const make = Effect.gen(function* () {
         .pipe(Effect.mapError(threadManagementFailure)));
     const workState =
       task.result !== null ? "result_available" : heldForRestart ? "working" : taskWorkState;
+    const runStatus = taskStatusForRun(taskResultRun ?? childRun);
     const status =
       task.result !== null
         ? taskStatusForRun(
@@ -1358,8 +1325,12 @@ const make = Effect.gen(function* () {
               : childRun,
           )
         : workState === "result_available"
-          ? taskStatusForRun(taskResultRun ?? childRun)
-          : taskStatusForRun(taskResultRun ?? childRun) === "queued"
+          ? task.cancelledRunId !== undefined &&
+            task.cancelledRunId === (taskResultRun ?? childRun)?.id &&
+            runStatus === "completed"
+            ? "interrupted"
+            : runStatus
+          : runStatus === "queued"
             ? "queued"
             : "running";
     const latestRun = ThreadManagementService.latestRun(childControls);
@@ -2925,6 +2896,16 @@ const make = Effect.gen(function* () {
       const stopChild = Effect.gen(function* () {
         const commandId = stableCommandId({ scope, requestKey: key, operation: "cancel-task" });
         const reason = agentStopReason(input.reason);
+        const stopDescendants = Effect.suspend(() =>
+          threadManagement.stopDelegatedTasks({
+            threadId: childThreadId,
+            commandId,
+            reason,
+            stopCascadeFrom: scope.thread.threadId,
+          }),
+        );
+        const backgroundOnly =
+          current.workState === "waiting_for_children" && current.cloudTask === undefined;
         yield* threadManagement
           .dispatch({
             type: "thread.stop",
@@ -2935,6 +2916,17 @@ const make = Effect.gen(function* () {
             stopCascadeFrom: scope.thread.threadId,
           })
           .pipe(
+            Effect.provideService(
+              DelegatedTaskCancellation,
+              backgroundOnly
+                ? {
+                    commandId,
+                    parentThreadId: scope.thread.threadId,
+                    taskId: input.taskId,
+                    stopDescendants,
+                  }
+                : undefined,
+            ),
             Effect.mapError((error) =>
               failure(
                 "task_not_cancellable",
@@ -2946,14 +2938,8 @@ const make = Effect.gen(function* () {
               ),
             ),
           );
-        yield* threadManagement
-          .stopDelegatedTasks({
-            threadId: childThreadId,
-            commandId,
-            reason,
-            stopCascadeFrom: scope.thread.threadId,
-          })
-          .pipe(
+        if (!backgroundOnly)
+          yield* stopDescendants.pipe(
             Effect.mapError((error) =>
               failure(
                 "task_not_cancellable",
@@ -3423,6 +3409,7 @@ const make = Effect.gen(function* () {
         timeline.totalItems,
         shell,
         yield* Clock.currentTimeMillis,
+        input.afterPosition === undefined && input.itemId === undefined,
       );
       const recentRuns = target.runs
         .toSorted((left, right) => right.ordinal - left.ordinal)

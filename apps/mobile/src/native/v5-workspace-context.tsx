@@ -25,6 +25,7 @@ export function slotScreenOptions<Options extends object>(
 /** Retained tabs must not update another tab's navigation options. */
 export const NativeWorkspaceTabActivityContext = createContext<{
   readonly active: boolean;
+  readonly prewarming?: boolean;
   readonly isActive: () => boolean;
 } | null>(null);
 export const NativePrimaryColumnContext = createContext<{

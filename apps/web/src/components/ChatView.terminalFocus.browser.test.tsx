@@ -1,8 +1,14 @@
 import { createMemoryHistory } from "@tanstack/react-router";
 import { scopeThreadRef } from "@goat/client-runtime/environment";
-import { ThreadId } from "@goat/contracts";
+import {
+  AuthTerminalOperateScope,
+  TerminalRequestError,
+  ThreadId,
+  WS_METHODS,
+} from "@goat/contracts";
 import { DEFAULT_CLIENT_SETTINGS } from "@goat/contracts/settings";
 import type * as Context from "effect/Context";
+import * as Effect from "effect/Effect";
 import { expect, it, vi } from "vite-plus/test";
 import { page } from "vite-plus/test/browser";
 
@@ -11,11 +17,13 @@ import { AppRoot } from "~/AppRoot";
 import "~/components/ChatView";
 import { __setClientSettingsForTests } from "~/hooks/useSettings";
 import { getRouter } from "~/router";
+import { readEnvironmentScope } from "~/state/session";
 import { loadGhosttyRuntime } from "~/terminal/ghostty/runtime";
 import { useTerminalUiStateStore } from "~/terminalUiStateStore";
 import {
   ENVIRONMENT_ID,
   installFakeEnvironment,
+  rpcRequests,
   threadWithHistory,
   type FakeDriver,
 } from "../../test/fakeEnvironment";
@@ -77,4 +85,43 @@ it("entering a thread on a touch tablet focuses its open drawer terminal and nev
     expect(document.activeElement?.closest('[data-terminal-owner="drawer"]')).not.toBeNull(),
   );
   expect(document.activeElement).not.toBe(composer.element());
+});
+
+it("shows the server's open error while terminal attachment is still pending", async () => {
+  const first = threadWithHistory("thread-terminal-touch-a", 1);
+  const second = threadWithHistory("thread-terminal-touch-b", 1);
+  const rejected = new TerminalRequestError({
+    message: "This thread moved to another worktree. Open the terminal again.",
+  });
+  using _environment = installFakeEnvironment([first, second], {
+    rpc: { [WS_METHODS.terminalOpen]: () => Effect.fail(rejected) },
+  });
+  await page.viewport(1194, 834);
+  __setClientSettingsForTests({
+    ...DEFAULT_CLIENT_SETTINGS,
+    onboardingCompletedAt: "2026-01-01T00:00:00.000Z",
+  });
+  useTerminalUiStateStore
+    .getState()
+    .setTerminalOpen(scopeThreadRef(ENVIRONMENT_ID, ThreadId.make(first.id)), true);
+  const router = getRouter(
+    createMemoryHistory({ initialEntries: [`/${ENVIRONMENT_ID}/${first.id}`] }),
+  );
+  await router.load();
+  await using _app = await render(<AppRoot router={router} />, {
+    // AppRoot brings its own router.
+    router: false,
+  });
+  await expect.element(page.getByText(`Answer 0 for ${first.id}.`)).toBeVisible();
+
+  await vi.waitFor(() =>
+    expect(readEnvironmentScope(ENVIRONMENT_ID, AuthTerminalOperateScope)).toBe(true),
+  );
+  await page.getByRole("button", { name: /^New Terminal/i }).click();
+  await vi.waitFor(() =>
+    expect(rpcRequests(WS_METHODS.terminalOpen)).toContainEqual(
+      expect.objectContaining({ threadId: first.id, terminalErrorMessage: true }),
+    ),
+  );
+  await expect.element(page.getByText(rejected.message)).toBeVisible();
 });

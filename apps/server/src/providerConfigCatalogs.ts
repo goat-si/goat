@@ -28,9 +28,9 @@ export type ProviderConfigProjection = (
 
 export function makeProviderConfigProjection(
   input: {
-    readonly workspaceSnapshotsOnDemand?: boolean;
-    readonly providerCatalogsOnDemand?: boolean;
-    readonly providerCatalogDigests?: boolean;
+    readonly workspaceSnapshotsOnDemand?: boolean | undefined;
+    readonly providerCatalogsOnDemand?: boolean | undefined;
+    readonly providerCatalogDigests?: boolean | undefined;
   },
   instances: ProviderInstanceRegistry["Service"]["listInstances"],
 ): ProviderConfigProjection {

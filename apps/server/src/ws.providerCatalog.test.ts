@@ -6,7 +6,7 @@ import { makeProviderCatalogRpc } from "./wsProviderCatalog.testkit.ts";
 import { makeWorkspaceProviderFixture } from "./wsProviderFixture.testkit.ts";
 
 function makeCatalogFixture() {
-  const { provider } = makeWorkspaceProviderFixture();
+  const { provider, snapshotFor } = makeWorkspaceProviderFixture();
   const local = {
     ...provider,
     slashCommands: [{ name: "machine-command", description: "Command help" }],
@@ -25,7 +25,7 @@ function makeCatalogFixture() {
     driver: ProviderDriverKind.make("acpRegistry"),
     instanceId: ProviderInstanceId.make("acpRegistry_test"),
   };
-  return { local, registryAgent };
+  return { local, registryAgent, snapshotA: snapshotFor("/a", provider.checkedAt) };
 }
 
 it.effect("on-demand catalogs keep names and labels only for providers that scan a cwd", () =>
@@ -92,7 +92,7 @@ it.effect("a missing cwd scan returns the machine catalog as a pending workspace
 
 it.effect("digest subscribers get lists on demand and a matching digest on the cwd reply", () =>
   Effect.gen(function* () {
-    const { local, registryAgent } = makeCatalogFixture();
+    const { local, registryAgent, snapshotA } = makeCatalogFixture();
     const client = yield* makeProviderCatalogRpc({
       providers: [local, registryAgent],
       cwdProviders: new Set([local.instanceId]),
@@ -123,7 +123,7 @@ it.effect("digest subscribers get lists on demand and a matching digest on the c
     const [refreshed] = reply.providers;
     assert.equal(refreshed?.catalogDigest, digested?.catalogDigest);
     assert.deepEqual(refreshed?.slashCommands, [{ name: "machine-command" }]);
-    assert.deepEqual(refreshed?.workspaceSnapshots, [local.workspaceSnapshots[0]]);
+    assert.deepEqual(refreshed?.workspaceSnapshots, [snapshotA]);
   }).pipe(Effect.scoped),
 );
 
@@ -131,7 +131,7 @@ it.effect(
   "an omitted machine refresh reply still refreshes and a cwd reply still carries the workspace",
   () =>
     Effect.gen(function* () {
-      const { local } = makeCatalogFixture();
+      const { local, snapshotA } = makeCatalogFixture();
       let refreshes = 0;
       const client = yield* makeProviderCatalogRpc({
         providers: [local],
@@ -150,7 +150,7 @@ it.effect(
         workspaceSnapshotsOnDemand: true,
         omitProviders: true,
       });
-      assert.deepEqual(cwd.providers[0]?.workspaceSnapshots, [local.workspaceSnapshots[0]]);
+      assert.deepEqual(cwd.providers[0]?.workspaceSnapshots, [snapshotA]);
     }).pipe(Effect.scoped),
 );
 

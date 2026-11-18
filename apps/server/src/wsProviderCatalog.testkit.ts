@@ -47,7 +47,7 @@ export function makeProviderCatalogRpc(options: {
         ...(options.cwdProviders.has(provider.instanceId)
           ? { snapshotForCwd: () => Effect.die("unexpected provider scan") }
           : {}),
-      }) as ProviderInstance,
+      }) as unknown as ProviderInstance,
   );
   return Effect.gen(function* () {
     const sources = yield* Layer.build(

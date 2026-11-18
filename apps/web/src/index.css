@@ -2313,6 +2313,11 @@ code {
   list-style-type: decimal;
 }
 
+.chat-markdown.user-message-markdown [data-leading-whitespace] {
+  white-space: pre-wrap;
+  user-select: none;
+}
+
 .chat-markdown li + li {
   margin-top: 0.25rem;
 }

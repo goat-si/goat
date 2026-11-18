@@ -101,6 +101,7 @@ function ArtifactTemplateCard(props: {
 // Folds split first, so an artifact card inside a fold stays inside it.
 export function AssistantMarkdownBlocks(props: {
   readonly markdown: string;
+  readonly streaming?: boolean | undefined;
   /** The reply's reference definitions, passed down by the enclosing fold. */
   readonly definitions?: ReadonlyArray<string> | undefined;
   readonly iconSubtleColor: string;
@@ -159,6 +160,7 @@ export function AssistantMarkdownBlocks(props: {
           )}
           skills={props.skills}
           textStyle={props.markdownStyles.nativeTextStyle}
+          streaming={props.streaming}
           {...props.linkHandlers}
           renderImage={props.renderImage}
         />

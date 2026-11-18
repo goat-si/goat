@@ -4,18 +4,26 @@ import { RunId } from "@goat/contracts";
 import * as Tracer from "effect/Tracer";
 import * as Schema from "effect/Schema";
 import { ScheduledTaskRun } from "@goat/contracts";
-import { assert, it } from "@effect/vitest";
+import { assert, it, vi } from "@effect/vitest";
+import * as McpProviderSessions from "@goat/provider-core/server/McpProviderSessions";
+import {
+  ProviderAdapterOpenSessionError,
+  type ProviderAdapterV2OpenSessionInput,
+} from "@goat/provider-core/server/ProviderAdapter";
 import {
   CommandId,
   EventId,
   MessageId,
   ScheduledTaskError,
   ScheduledTaskId,
+  ThreadId,
   TurnItemId,
   type OrchestrationV2Run,
+  type ScheduledTaskUpsertInput,
 } from "@goat/contracts";
 import * as NodeCrypto from "@effect/platform-node/NodeCrypto";
 import * as DateTime from "effect/DateTime";
+import * as FileSystem from "effect/FileSystem";
 import * as Deferred from "effect/Deferred";
 import * as Effect from "effect/Effect";
 import * as Layer from "effect/Layer";
@@ -24,16 +32,39 @@ import * as Stream from "effect/Stream";
 import * as SqlClient from "effect/sql/SqlClient";
 import * as Sqlite from "../persistence/Sqlite.ts";
 import * as Folders from "../project/ManagedProjectFolders.ts";
+import * as McpSessionRegistryTestkit from "../mcp/McpSessionRegistry.testkit.ts";
+import * as ProviderInstanceRegistry from "../provider/ProviderInstanceRegistry.ts";
 import * as Scheduler from "../scheduling/Scheduler.ts";
+import * as NodeServices from "@effect/platform-node/NodeServices";
 import * as Secrets from "../secrets/SecretRequests.ts";
+import * as ServerSettings from "../serverSettings.ts";
 import * as Tasks from "../scheduledTasks/ScheduledTaskService.ts";
 import * as Runs from "../scheduledTasks/ScheduledTaskRuns.ts";
-import { layerSink, syntheticLaunch } from "../scheduledTasks/ScheduledRunFixture.testkit.ts";
+import {
+  layerSink,
+  requestFor,
+  syntheticLaunch,
+  waitForSpan,
+} from "../scheduledTasks/ScheduledRunFixture.testkit.ts";
 import { projectId, modelSelection } from "./testkit/threadLaunchInput.ts";
 import * as Launch from "./ThreadLaunchService.ts";
 import * as Threads from "./ThreadManagementService.ts";
 import * as EventSink from "./EventSink.ts";
+import * as EffectWorker from "./EffectWorker.ts";
+import * as Orchestrator from "./Orchestrator.ts";
+import * as ProjectStore from "./ProjectStore.ts";
 import * as Projections from "./ProjectionStore.ts";
+import * as Recovery from "./ProviderRuntimeRecoveryService.ts";
+import * as RuntimeLayer from "./runtimeLayer.ts";
+import {
+  layerCheckpointStoreTest,
+  layerGitWorkflowTest,
+  layerPlatformTest,
+  layerProjectServiceTest,
+  layerServerConfig,
+  layerTestProviderInstanceRegistry,
+  seedProject,
+} from "./runtimeLayer.testkit.ts";
 
 const harness = () => {
   const launch = Layer.unwrap(
@@ -70,7 +101,9 @@ const harness = () => {
     Layer.provideMerge(Sqlite.layerMemory),
   );
 };
-const create = Effect.fn("ScheduledOutcomesTest.create")(function* () {
+const create = Effect.fn("ScheduledOutcomesTest.create")(function* (
+  overrides: Partial<ScheduledTaskUpsertInput> = {},
+) {
   const tasks = yield* Tasks.ScheduledTaskService;
   return (yield* tasks.upsert({
     id: ScheduledTaskId.make("task"),
@@ -86,6 +119,7 @@ const create = Effect.fn("ScheduledOutcomesTest.create")(function* () {
     interactionMode: "default",
     createdBy: "user",
     creationSource: "web",
+    ...overrides,
   })).task;
 });
 const update = Effect.fn("ScheduledOutcomesTest.update")(function* (
@@ -112,6 +146,286 @@ const update = Effect.fn("ScheduledOutcomesTest.update")(function* (
     ],
   });
 });
+
+const worktreeAutomationHarness = () => {
+  const providerCwds: Array<string | null> = [];
+  const threadId = ThreadId.make("automation-preparation-interrupted");
+  const providers = Layer.effect(
+    ProviderInstanceRegistry.ProviderInstanceRegistry,
+    Effect.gen(function* () {
+      const registry = yield* ProviderInstanceRegistry.ProviderInstanceRegistry;
+      const instance = yield* registry.getInstance(modelSelection.instanceId);
+      if (instance === undefined) return yield* Effect.die("Missing fixture provider.");
+      const observed = {
+        ...instance,
+        orchestrationAdapter: {
+          ...instance.orchestrationAdapter,
+          openSession: Effect.fn("ScheduledOutcomesTest.observeProviderStart")(function* (
+            request: ProviderAdapterV2OpenSessionInput,
+          ) {
+            providerCwds.push(request.runtimePolicy.cwd);
+            return yield* new ProviderAdapterOpenSessionError({
+              driver: instance.driverKind,
+              providerSessionId: request.providerSessionId,
+            });
+          }),
+        },
+      } satisfies typeof instance;
+      return {
+        ...registry,
+        getInstance: (id) =>
+          id === observed.instanceId ? Effect.succeed(observed) : registry.getInstance(id),
+      };
+    }),
+  ).pipe(Layer.provide(layerTestProviderInstanceRegistry));
+  const runtime = Layer.mergeAll(RuntimeLayer.layer, ProjectStore.layer, Projections.layer).pipe(
+    Layer.provide(McpSessionRegistryTestkit.layer),
+    Layer.provide(McpProviderSessions.layer),
+    Layer.provideMerge(Sqlite.layerMemory),
+    Layer.provide(layerCheckpointStoreTest),
+    Layer.provide(layerServerConfig),
+    Layer.provide(ServerSettings.layerTest()),
+    Layer.provide(providers),
+    Layer.provide(layerGitWorkflowTest),
+    Layer.provide(layerProjectServiceTest),
+    Layer.provide(layerPlatformTest),
+  );
+  const launch = Layer.unwrap(
+    Effect.gen(function* () {
+      const orchestrator = yield* Orchestrator.OrchestratorV2;
+      return Layer.mock(Launch.ThreadLaunchService)({
+        launch: Effect.fn("ScheduledOutcomesTest.acceptBeforeWorkspacePreparation")(function* (
+          input: Launch.ThreadLaunchInput,
+        ) {
+          const initial = input.initialMessage;
+          if (initial?.messageId === undefined)
+            return yield* Effect.die("Missing scheduled message id.");
+          yield* orchestrator.dispatch({
+            type: "thread.create",
+            commandId: CommandId.make("automation-create"),
+            threadId,
+            projectId: input.projectId,
+            title: input.title,
+            modelSelection: input.modelSelection,
+            runtimeMode: input.runtimeMode,
+            interactionMode: input.interactionMode,
+            branch: null,
+            worktreePath: null,
+            createdBy: input.createdBy,
+            creationSource: input.creationSource,
+          });
+          const accepted = yield* orchestrator.dispatch({
+            type: "message.dispatch",
+            commandId: CommandId.make("automation-initial-message"),
+            threadId,
+            ...initial,
+            messageId: initial.messageId,
+            dispatchMode: { type: "defer_start", workspaceStrategy: input.workspaceStrategy },
+            createdBy: input.createdBy,
+            creationSource: input.creationSource,
+          });
+          return {
+            threadId,
+            projection: yield* orchestrator.getThreadProjection(threadId),
+            resumed: false,
+            sequence: accepted.sequence,
+          };
+        }, Effect.orDie),
+      });
+    }),
+  );
+  const tasksLayer = Tasks.layer.pipe(
+    Layer.provide(
+      Layer.mergeAll(
+        launch,
+        Layer.mock(Folders.ManagedProjectFolders)({
+          namedProjectsRoot: "/projects",
+          isScratchProject: () => Effect.succeed(false),
+        }),
+        Layer.mock(Secrets.SecretRequests)({}),
+        NodeCrypto.layer,
+        Scheduler.layer,
+      ),
+    ),
+  );
+  const prepareInterruptedAutomation = Effect.fn(
+    "ScheduledOutcomesTest.prepareInterruptedAutomation",
+  )(function* () {
+    const orchestrator = yield* Orchestrator.OrchestratorV2;
+    const recovery = yield* Recovery.ProviderRuntimeRecoveryService;
+    const fs = yield* FileSystem.FileSystem;
+    const projectCheckout = yield* fs.makeTempDirectoryScoped({ prefix: "automation-project-" });
+    yield* seedProject({
+      projectId,
+      title: "Automation project",
+      workspaceRoot: projectCheckout,
+      defaultModelSelection: modelSelection,
+      createdAt: DateTime.formatIso(yield* DateTime.now),
+    });
+    const taskId = yield* Effect.gen(function* () {
+      const tasks = yield* Tasks.ScheduledTaskService;
+      const task = yield* create({
+        threadMode: "continue",
+        workspaceStrategy: { type: "worktree", baseRef: "main" },
+      });
+      const first = yield* tasks.runNow({ id: task.id });
+      assert.equal(first.task.threadId, threadId);
+      assert.equal(
+        (yield* orchestrator.getThreadProjection(threadId)).runs[0]?.status,
+        "preparing",
+      );
+      return task.id;
+    }).pipe(Effect.provide(tasksLayer));
+    yield* recovery.reconcile("startup");
+    const recovered = yield* orchestrator.getThreadProjection(threadId);
+    assert.isNull(recovered.thread.worktreePath);
+    assert.deepInclude(recovered.runs[0], {
+      status: "cancelled",
+      terminationCause: { kind: "server_restart" },
+      workspacePreparation: { type: "worktree", baseRef: "main" },
+    });
+    return taskId;
+  });
+  return {
+    layer: Layer.merge(runtime, NodeServices.layer),
+    tasksLayer,
+    prepareInterruptedAutomation,
+    threadId,
+    providerCwds,
+  };
+};
+
+it.effect("a restarted worktree automation never opens a provider in the project checkout", () => {
+  const { layer, tasksLayer, prepareInterruptedAutomation, threadId, providerCwds } =
+    worktreeAutomationHarness();
+  return Effect.gen(function* () {
+    const orchestrator = yield* Orchestrator.OrchestratorV2;
+    const worker = yield* EffectWorker.OrchestrationEffectWorkerV2;
+    const taskId = yield* prepareInterruptedAutomation();
+    yield* TestClock.adjust("1 second");
+    const second = yield* Effect.gen(function* () {
+      const tasks = yield* Tasks.ScheduledTaskService;
+      return yield* tasks.runNow({ id: taskId });
+    }).pipe(Effect.provide(Layer.fresh(tasksLayer)));
+    yield* worker.drain();
+
+    assert.isEmpty(providerCwds, "no provider should open in the project checkout");
+    assert.equal(second.task.threadId, threadId);
+    assert.equal(second.task.lastRun?.dispatchStatus, "failed");
+    assert.include(second.task.lastRunError, "Attach a worktree");
+    assert.lengthOf((yield* orchestrator.getThreadProjection(threadId)).runs, 1);
+  }).pipe(Effect.provide(layer));
+});
+
+it.effect.each([
+  { refusal: "a missing worktree", lookupFailure: undefined },
+  { refusal: "a failed message lookup", lookupFailure: "Transient candidate-message read failure" },
+])(
+  "a relay webhook refused due to $refusal succeeds with the same delivery after attachment",
+  ({ lookupFailure }) => {
+    const { layer, tasksLayer, prepareInterruptedAutomation, threadId } =
+      worktreeAutomationHarness();
+    return Effect.gen(function* () {
+      yield* prepareInterruptedAutomation();
+      const orchestrator = yield* Orchestrator.OrchestratorV2;
+      const threads = yield* Threads.ThreadManagementService;
+      const fs = yield* FileSystem.FileSystem;
+      const worktreePath = yield* fs.makeTempDirectoryScoped({ prefix: "automation-worktree-" });
+      yield* Effect.gen(function* () {
+        const tasks = yield* Tasks.ScheduledTaskService;
+        const task = yield* create({
+          enabled: true,
+          schedule: { type: "webhook" },
+          threadId,
+          threadMode: "continue",
+        });
+        const projections = yield* Projections.ProjectionStoreV2;
+        using _lookup =
+          lookupFailure === undefined
+            ? undefined
+            : vi
+                .spyOn(projections, "getMessagesById")
+                .mockImplementationOnce((threadId) =>
+                  Effect.fail(
+                    new Projections.ProjectionStoreReadError({ threadId, cause: lookupFailure }),
+                  ),
+                );
+        const request = requestFor(task, { relayDeliveryId: "relay:worktree-refused" });
+        const fire = waitForSpan(
+          tasks.triggerWebhook(request),
+          "ScheduledTaskService.runWebhookDelivery",
+        );
+        const firstDelivery = yield* fire;
+        assert.equal(firstDelivery._tag, "accepted");
+        const failed = (yield* tasks.list()).tasks.find(({ id }) => id === task.id);
+        assert.equal(failed?.lastRun?.dispatchStatus, "failed");
+        if (lookupFailure === undefined) {
+          assert.include(failed?.lastRunError ?? "", "Attach a worktree");
+        } else {
+          assert.equal(failed?.lastRunError, lookupFailure);
+        }
+        const firingId = failed?.lastRun?.firingId;
+        if (firingId === undefined) return yield* Effect.die("Missing refused firing.");
+        const refusedReceipt = yield* threads.receiptStatus(firingId);
+
+        yield* orchestrator.dispatch({
+          type: "thread.metadata.update",
+          commandId: CommandId.make("attach-automation-worktree"),
+          threadId,
+          worktreePath,
+          expectedWorktreePath: null,
+        });
+        const retried = yield* fire;
+        assert.deepEqual(retried, firstDelivery);
+        if (retried._tag !== "accepted") return yield* Effect.die("Relay retry was not admitted.");
+        const accepted = (yield* tasks.list()).tasks.find(({ id }) => id === task.id);
+        assert.equal(accepted?.lastRun?.dispatchStatus, "accepted");
+        assert.equal(accepted?.lastRun?.firingId, firingId);
+        assert.isNull(refusedReceipt);
+        assert.isNull(accepted?.lastRunError);
+        const runs = (yield* orchestrator.getThreadProjection(threadId)).runs;
+        assert.lengthOf(runs, 2);
+
+        const duplicate = yield* tasks.triggerWebhook(request);
+        assert.deepEqual(duplicate, { ...retried, outcome: "duplicate" });
+        const after = (yield* tasks.list()).tasks.find(({ id }) => id === task.id);
+        assert.equal(after?.runCount, accepted?.runCount);
+        assert.deepEqual((yield* orchestrator.getThreadProjection(threadId)).runs, runs);
+      }).pipe(Effect.provide(Layer.fresh(tasksLayer)));
+    }).pipe(Effect.provide(layer));
+  },
+);
+it.effect(
+  "a local automation can use a thread with another task's cancelled worktree setup",
+  () => {
+    const { layer, tasksLayer, prepareInterruptedAutomation, threadId } =
+      worktreeAutomationHarness();
+    return Effect.gen(function* () {
+      yield* prepareInterruptedAutomation();
+      const orchestrator = yield* Orchestrator.OrchestratorV2;
+      const result = yield* Effect.gen(function* () {
+        const tasks = yield* Tasks.ScheduledTaskService;
+        const task = yield* create({
+          id: ScheduledTaskId.make("local-automation"),
+          threadId,
+          threadMode: "continue",
+        });
+        return yield* tasks.runNow({ id: task.id });
+      }).pipe(Effect.provide(Layer.fresh(tasksLayer)));
+
+      assert.equal(result.task.lastRun?.dispatchStatus, "accepted");
+      assert.equal(result.threadId, threadId);
+      const projection = yield* orchestrator.getThreadProjection(threadId);
+      assert.isNull(projection.thread.worktreePath);
+      assert.lengthOf(projection.runs, 2);
+      const message = projection.messages.find(
+        ({ scheduledTaskId }) => scheduledTaskId === result.task.id,
+      );
+      assert.equal(message?.runId, result.task.lastRun?.runId);
+    }).pipe(Effect.provide(layer));
+  },
+);
+
 it.effect.each(["completed", "failed", "interrupted", "cancelled", "rolled_back"] as const)(
   "commits %s with the exact firing and publishes it through the shared task subscription",
   (status) =>

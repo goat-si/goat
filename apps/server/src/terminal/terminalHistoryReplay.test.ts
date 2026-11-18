@@ -45,6 +45,7 @@ it.each([
   ["an OSC ended by BEL", "\u001b]1337;File=:", "QUJD", "\u0007"],
   ["an OSC ended by ST", "\u001b]52;c;", "QUJD", "\u001b\\"],
   ["a DCS ended by ST", "\u001bPq", "#0;2;0;0;0~", "\u001b\\"],
+  ["an SOS ended by ST", "\u001bX", "hidden", "\u001b\\"],
   ["a CSI ended by its final byte", "\u001b[", "1;", "m"],
 ])(
   "swallows the rest of %s past the pending cap, then keeps what follows",
@@ -59,11 +60,20 @@ it.each([
 it.each([
   ["OSC", "\u001b]1337;File=:", "QUJD"],
   ["DCS", "\u001bPq", "#0;2;0;0;0~"],
+  ["SOS", "\u001bX", "hidden"],
 ])("ends a swallowed %s at an ST split across chunks", (_, start, unit) => {
   const history = historyFeed();
   history.feed("before", ...overCap(start, unit), unit + "\u001b", "\\after\n");
   expect(history.visible).toBe("beforeafter\n");
   expect(history.pending).toBe("");
+});
+
+it("holds a split SOS including a query-shaped payload until ST", () => {
+  const history = historyFeed();
+  history.feed("before\u001bX5n");
+  expect(history.visible).toBe("before");
+  history.feed("hidden\u001b", "\\after");
+  expect(history.visible).toBe("before\u001bX5nhidden\u001b\\after");
 });
 
 it("keeps the sequence that an ESC starts after a swallowed one, also across chunks", () => {
