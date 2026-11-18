@@ -443,15 +443,15 @@ const make = Effect.gen(function* () {
   const reportLoaded = async (tab: ServerTab) => {
     const url = tab.page.url();
     // Chromium's error page loads after `requestfailed` and must not clear LoadFailed.
-    if (tab.closing || tab.loadError || url === "about:blank" || url.startsWith("chrome-error://"))
-      return;
+    if (tab.closing || url === "about:blank" || url.startsWith("chrome-error://")) return;
     // A navigation that starts and fails during the title read leaves the URL unchanged.
     const document = tab.documentGeneration;
+    const loadError = tab.loadError;
     const title = (await tab.page.title().catch(() => "")).slice(0, BROWSER_TITLE_LIMIT);
     if (
       tab.closing ||
       tab.documentGeneration !== document ||
-      tab.loadError ||
+      tab.loadError !== loadError ||
       tab.loading ||
       tab.page.url() !== url
     )
@@ -461,7 +461,7 @@ const make = Effect.gen(function* () {
       url: ServerBrowserPage.withoutDataPayload(url).slice(0, 2048),
       title,
     });
-    await tab.titleWatcher.watch(document, title, () => reportLoaded(tab));
+    if (!loadError) await tab.titleWatcher.watch(document, title, () => reportLoaded(tab));
   };
 
   const reportLiveTabs = () => {
