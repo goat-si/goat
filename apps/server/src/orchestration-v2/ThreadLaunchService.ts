@@ -1,3 +1,4 @@
+import { acceptWorktreeBase } from "./goat/acceptWorktreeBase.ts";
 import type { WorktreePreparationOwnership } from "../vcs/worktreePreparationOwnership.ts";
 import { savedWorktreeFallback } from "./savedWorktreeFallback.ts";
 import {
@@ -405,34 +406,24 @@ const make = Effect.gen(function* () {
           ? input.workspaceStrategy.worktreePath
           : null;
       if (input.workspaceStrategy.type === "worktree") {
-        if (runId !== null) {
-          yield* threads
-            .dispatch({
-              type: "prepared-run.progress",
-              commandId: CommandId.make(`${input.commandId}:progress:worktree`),
-              threadId,
-              runId,
-              phase: "worktree",
-            })
-            .pipe(Effect.mapError(mapError(input, "update-thread", threadId)));
-        }
         const requestedBaseRef = input.workspaceStrategy.baseRef;
         const startFromOrigin =
           input.workspaceStrategy.startFromOrigin ??
           (yield* startWorktreesFromOrigin(input.projectId).pipe(
             Effect.mapError(mapError(input, "provision-worktree", threadId)),
           ));
-        let startRef = requestedBaseRef;
-        let pinnedHead: string | undefined;
-        let baseRefName = requestedBaseRef;
-        const remote = startFromOrigin
-          ? yield* git
-              .resolveWorktreeBaseRemote({
-                cwd: project.workspaceRoot,
-                refName: input.workspaceStrategy.baseRef,
-              })
-              .pipe(Effect.mapError(mapError(input, "provision-worktree", threadId)))
-          : null;
+        let startRef = input.basePin?.commitSha ?? requestedBaseRef;
+        let pinnedHead = input.basePin?.commitSha;
+        let baseRefName = input.basePin?.baseRefName ?? requestedBaseRef;
+        const remote =
+          input.basePin === undefined && startFromOrigin
+            ? yield* git
+                .resolveWorktreeBaseRemote({
+                  cwd: project.workspaceRoot,
+                  refName: input.workspaceStrategy.baseRef,
+                })
+                .pipe(Effect.mapError(mapError(input, "provision-worktree", threadId)))
+            : null;
         const shouldFetch = remote !== null;
         let fetched = false;
         let fallbackDetail: string | null = null;
@@ -457,7 +448,11 @@ const make = Effect.gen(function* () {
             );
           }
         }
-        if (input.initialMessage?.scheduledTaskId !== undefined && !fetched) {
+        if (
+          input.basePin === undefined &&
+          input.initialMessage?.scheduledTaskId !== undefined &&
+          !fetched
+        ) {
           const fallback = yield* savedWorktreeFallback(
             git,
             project.workspaceRoot,
@@ -482,6 +477,19 @@ const make = Effect.gen(function* () {
         } else if (shouldFetch) {
           yield* setupTracker.stageStatus(threadId, "fetch", "done");
         }
+        const base = yield* acceptWorktreeBase({
+          git,
+          threads,
+          project,
+          requestedBaseRef,
+          startRef,
+          baseRefName,
+          pinnedHead,
+          commandId: input.commandId,
+          threadId,
+          runId,
+          alreadyPinned: input.basePin !== undefined,
+        }).pipe(Effect.mapError(mapError(input, "provision-worktree", threadId)));
         if (branch !== null && (generatedTemporaryBranch || isTemporaryWorktreeBranch(branch))) {
           const parts = branch.split("/");
           for (let depth = 1; depth < parts.length; depth++) {
@@ -586,7 +594,7 @@ const make = Effect.gen(function* () {
             projectCwd: project.workspaceRoot,
             worktreePath: worktree.worktree.path,
             branch: branch!,
-            expectedHead: pinnedHead,
+            expectedHead: base.commitSha,
           })
           .pipe(Effect.mapError(mapError(input, "provision-worktree", threadId)));
         worktreePath = worktree.worktree.path;
@@ -730,7 +738,12 @@ const make = Effect.gen(function* () {
       }
       if (reused !== undefined && worktreePath !== null && branch !== null) {
         yield* git
-          .verifyManagedCheckout({ projectCwd: project.workspaceRoot, worktreePath, branch })
+          .verifyManagedCheckout({
+            projectCwd: project.workspaceRoot,
+            worktreePath,
+            branch,
+            expectedHead: input.basePin?.commitSha,
+          })
           .pipe(Effect.mapError(mapError(input, "provision-worktree", threadId)));
       }
       yield* setupTracker.stageStatus(threadId, "setup-script", "running");
@@ -1357,6 +1370,9 @@ const make = Effect.gen(function* () {
         projectId: thread.projectId,
         modelSelection: run.modelSelection,
         workspaceStrategy: reuse?.strategy ?? workspacePreparation,
+        ...(run.workspacePreparationBasePin === undefined
+          ? {}
+          : { basePin: run.workspacePreparationBasePin }),
         ...(reuse === null ? {} : { reusedWorktree: reuse.reusedWorktree }),
         ...(message === undefined
           ? {}

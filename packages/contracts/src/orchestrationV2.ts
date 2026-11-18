@@ -1,3 +1,11 @@
+import {
+  OrchestrationV2ThreadLaunchWorkspaceStrategy,
+  WorktreePreparationBasePin,
+} from "./worktreePreparation.ts";
+export {
+  OrchestrationV2ThreadLaunchWorkspaceStrategy,
+  type WorktreePreparationBasePin,
+} from "./worktreePreparation.ts";
 export * from "./orchestrationV2WorkflowFileErrors.ts";
 export { isOrchestrationV2WorkActive } from "./orchestrationV2WorkActive.ts";
 import { PiExtensionStatuses } from "./piExtensionStatus.ts";
@@ -667,26 +675,6 @@ export const OrchestrationV2RunBackgroundWorkCancelled = Schema.Struct({
 export type OrchestrationV2RunBackgroundWorkCancelled =
   typeof OrchestrationV2RunBackgroundWorkCancelled.Type;
 
-export const OrchestrationV2ThreadLaunchWorkspaceStrategy = Schema.Union([
-  Schema.Struct({
-    type: Schema.Literal("root"),
-    branch: Schema.optional(TrimmedNonEmptyString),
-  }),
-  Schema.Struct({
-    type: Schema.Literal("existing_worktree"),
-    worktreePath: TrimmedNonEmptyString,
-    branch: Schema.optional(TrimmedNonEmptyString),
-  }),
-  Schema.Struct({
-    type: Schema.Literal("worktree"),
-    baseRef: TrimmedNonEmptyString,
-    branch: Schema.optional(TrimmedNonEmptyString),
-    startFromOrigin: Schema.optional(Schema.Boolean),
-  }),
-]);
-export type OrchestrationV2ThreadLaunchWorkspaceStrategy =
-  typeof OrchestrationV2ThreadLaunchWorkspaceStrategy.Type;
-
 export const ORCHESTRATION_V2_WORKSPACE_PREPARATION_FAILURE_CODE = "workspace_preparation_failed";
 
 /** Another Codex turn on the thread that a starting run must wait for. */
@@ -742,6 +730,7 @@ export const OrchestrationV2Run = Schema.Struct({
   ),
   delegatedCompletion: Schema.optional(OrchestrationV2DelegatedCompletionCohort),
   workspacePreparation: Schema.optional(OrchestrationV2ThreadLaunchWorkspaceStrategy),
+  workspacePreparationBasePin: Schema.optional(WorktreePreparationBasePin),
   /** Starts a new provider conversation; earlier runs stay visible but never reach the provider. */
   freshContext: Schema.optional(Schema.Boolean),
 });
@@ -3462,6 +3451,13 @@ export type OrchestrationV2Command = typeof OrchestrationV2Command.Type;
 
 // Excluded from dispatchCommand so only the server can send these.
 const OrchestrationV2InternalCommand = Schema.Union([
+  Schema.Struct({
+    type: Schema.Literal("prepared-run.pin-base"),
+    commandId: CommandId,
+    threadId: ThreadId,
+    runId: RunId,
+    basePin: WorktreePreparationBasePin,
+  }),
   OrchestrationV2ReviewContinueCommand,
   Schema.Struct({
     ...ThreadTitleRegenerationCompleteCommand.fields,

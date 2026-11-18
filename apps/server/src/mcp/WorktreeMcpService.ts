@@ -238,6 +238,15 @@ const make = Effect.gen(function* () {
       }
     }
 
+    const expectedHead = startedFromOrigin
+      ? worktreeBaseRef
+      : (yield* gitWorkflow
+          .resolveCommit({
+            cwd: projectCwd,
+            revision: worktreeBaseRef,
+          })
+          .pipe(asOperationFailed("Unable to resolve the worktree base"))).commitSha;
+
     const ids = yield* handoffIds(scope);
 
     // Mask interruption after worktree creation through setup; binding can detach and interrupt the caller.
@@ -286,7 +295,7 @@ const make = Effect.gen(function* () {
               projectCwd,
               worktreePath,
               branch: input.branch,
-              expectedHead: startedFromOrigin ? worktreeBaseRef : undefined,
+              expectedHead,
             })
             .pipe(asOperationFailed("Unable to verify the new worktree"));
           return yield* threadManagement

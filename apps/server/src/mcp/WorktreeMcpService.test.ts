@@ -308,6 +308,7 @@ const makeHarness = (options: HarnessOptions = {}) => {
           listLocalBranchNames,
           localStatus,
           verifyManagedCheckout: () => Effect.void,
+          resolveCommit: ({ revision }) => Effect.succeed({ commitSha: revision }),
           fetchWorktreeBaseCommit,
           createWorktree,
           removeWorktree,
@@ -583,6 +584,37 @@ describe("goat_worktree_handoff", () => {
       const result = yield* runHandoff(harness, { branch: "feature/project-origin" });
       expect(harness.fetchWorktreeBaseCommit).toHaveBeenCalled();
       expect(result.startedFromOrigin).toBe(true);
+    });
+  });
+
+  it.effect("refuses local HEAD drift before binding or setup", () => {
+    const harness = makeHarness({
+      git: {
+        resolveCommit: () => Effect.succeed({ commitSha: "initial-local-head" }),
+        verifyManagedCheckout: ({ expectedHead }) =>
+          expectedHead === "initial-local-head"
+            ? Effect.fail(
+                new GitCommandError({
+                  operation: "verifyManagedCheckout",
+                  command: "git",
+                  cwd: workspaceRoot,
+                  detail: "checkout HEAD changed",
+                }),
+              )
+            : Effect.void,
+      },
+    });
+    return Effect.gen(function* () {
+      const exit = yield* Effect.exit(
+        runHandoff(harness, {
+          branch: "feature/local-hook",
+          startFromOrigin: false,
+          continuationPrompt: "Continue",
+        }),
+      );
+      expectTypedFailure(exit, { _tag: "WorktreeMcpFailure", code: "operation_failed" });
+      expect(harness.dispatch).not.toHaveBeenCalled();
+      expect(harness.runForThread).not.toHaveBeenCalled();
     });
   });
 

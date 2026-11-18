@@ -4350,11 +4350,13 @@ export const makeGitVcsDriverCore = Effect.fn("makeGitVcsDriverCore")(function* 
   const resolveCommit: GitVcsDriver.GitVcsDriver["Service"]["resolveCommit"] = Effect.fn(
     "resolveCommit",
   )(function* (input) {
-    const commitSha = yield* runGitStdout("GitVcsDriver.resolveCommit", input.cwd, [
-      "rev-parse",
-      "--verify",
-      `${input.revision}^{commit}`,
-    ]).pipe(Effect.map((stdout) => stdout.trim()));
+    const revision = input.revision === "-" ? "@{-1}" : input.revision;
+    const commit = revision.startsWith(":/") ? revision : `${revision}^{commit}`;
+    const commitSha = (yield* executeGitWithStableDiagnostics(
+      "GitVcsDriver.resolveCommit",
+      input.cwd,
+      ["rev-parse", "--verify", "--end-of-options", commit],
+    )).stdout.trim();
 
     return { commitSha };
   });

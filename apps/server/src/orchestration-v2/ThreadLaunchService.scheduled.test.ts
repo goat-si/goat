@@ -358,3 +358,89 @@ it.effect("a scheduled preparation retry refuses a replaced checkout before star
     assert.equal(harness.runSetup.mock.calls.length, 1);
   }).pipe(Effect.provide(harness.layer));
 });
+
+it.effect.each(["first checkout", "retry"] as const)(
+  "uses the accepted local commit to reject HEAD drift during $case",
+  (scenario) => {
+    const retry = scenario === "retry";
+    let liveHead = retry ? "initial-local-head" : "advanced-head";
+    let baseHead = "initial-local-head";
+    let setupCalls = 0;
+    const harness = makeHarness({
+      git: {
+        resolveCommit: () => Effect.succeed({ commitSha: baseHead }),
+        verifyManagedCheckout: ({ expectedHead, projectCwd }) =>
+          expectedHead !== undefined && expectedHead !== liveHead
+            ? Effect.fail(
+                new GitCommandError({
+                  operation: "verifyManagedCheckout",
+                  command: "git worktree",
+                  cwd: projectCwd,
+                  detail: "checkout HEAD changed",
+                }),
+              )
+            : Effect.void,
+      },
+      runSetup: () =>
+        Effect.sync(() =>
+          ++setupCalls === 1 && retry
+            ? {
+                status: "started" as const,
+                terminalId: "test",
+                scriptName: "Setup",
+                scriptCommand: "false",
+                cwd: "/repo-worktrees/feature",
+                scriptId: "setup",
+                async: false,
+                completion: Effect.succeed({ exitCode: 1, durationMs: 0 }),
+              }
+            : { status: "no-script" as const },
+        ),
+    });
+    return Effect.gen(function* () {
+      const launches = yield* ThreadLaunch.ThreadLaunchService;
+      const launch = yield* launches.launch(
+        launchInput({
+          command: "launch:local-pin",
+          thread: "thread:local-pin",
+          message: "Start",
+          workspace: {
+            type: "worktree",
+            baseRef: "main",
+            startFromOrigin: false,
+            branch: "feature/fixture",
+          },
+        }),
+      );
+      const first = yield* preparationSettled(launch.threadId);
+      assert.equal(first.runs[0]?.status, "failed");
+      assert.deepInclude(first.runs[0]?.workspacePreparationBasePin, {
+        commitSha: "initial-local-head",
+        baseRefName: "main",
+      });
+      if (retry) {
+        const run = first.runs[0];
+        if (run === undefined) return assert.fail("Expected prepared run");
+        liveHead = baseHead = "advanced-head";
+        yield* launches.retryPreparation({
+          commandId: CommandId.make("launch:local-pin:retry"),
+          threadId: launch.threadId,
+          runId: run.id,
+        });
+        const threads = yield* ThreadManagement.ThreadManagementService;
+        yield* threads.streamStoredEventsFrom({ threadId: launch.threadId }).pipe(
+          Stream.filter(
+            (event) =>
+              event.event.type === "run.updated" &&
+              (event.commandId === "launch:local-pin:retry:fail" ||
+                event.commandId === "launch:local-pin:retry:release"),
+          ),
+          Stream.runHead,
+        );
+        const result = yield* threads.getThreadProjection(launch.threadId);
+        assert.equal(result.runs[0]?.status, "failed");
+      }
+      assert.equal(harness.runSetup.mock.calls.length, retry ? 1 : 0);
+    }).pipe(Effect.provide(harness.layer));
+  },
+);

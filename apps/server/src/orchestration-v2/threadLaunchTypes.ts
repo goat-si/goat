@@ -85,6 +85,7 @@ export type PreparationInput = Pick<
   ThreadLaunchInput,
   "commandId" | "projectId" | "workspaceStrategy" | "initialMessage" | "modelSelection"
 > & {
+  readonly basePin?: import("@goat/contracts").WorktreePreparationBasePin;
   readonly reusedWorktree?: { readonly baseRef: string };
 };
 
