@@ -372,3 +372,7 @@ RULED:
 Lane coordinator's note with it: the hold on installs and branch switches runs 00:20 to 00:35 UTC; (b) starts after 00:35 with ps checked first.
 
 My miss, stated: the plan named the config entry and my port of 35bda28117 left it out; the fallback I added hid it, and the existing name check (scripts/mobile-native-names.test.ts) only checks names that are listed, never classes that are missing from the list.
+
+## 29. Standing rule 3 extension (coordinator 2026-11-18 00:35:17 UTC, relayed 00:40), quoted beside IV
+
+"Standing rule from now, so this needs no round trip again: a type-only import added to an existing test file, and a layer provided to an existing case because the code under test gained a dependency, need no word from me when the commit changes no title, body, setup value or expectation of that case; the lane quotes the before and after in its record and the fresh review lists them. A provide that replaces or fakes a service the case's assertions read still comes to me."
