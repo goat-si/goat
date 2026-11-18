@@ -71,8 +71,9 @@ export const make = Effect.fn("PenHubNodes.make")(function* (input: {
     const mine = ++revision;
     const isCurrent = () => revision === mine;
     const stored = yield* settings.getSettings.pipe(Effect.option);
-    // Unreadable settings or a Pen that is down say nothing about who left: change nothing.
-    if (stored._tag === "None" || view.kind === "unavailable") return;
+    if (stored._tag === "None") return;
+    // A Pen that is down says nothing about who left, but the setting off empties the list anyway.
+    if (stored.value.penHubNodes && view.kind === "unavailable") return;
     const enabled = stored.value.penHubNodes && view.kind === "ready";
     for (const [round, delay] of [undefined, ...RETRY_DELAYS].entries()) {
       if (delay !== undefined) yield* Effect.sleep(delay);

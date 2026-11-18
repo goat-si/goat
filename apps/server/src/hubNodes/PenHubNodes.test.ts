@@ -316,6 +316,9 @@ const reconciler = (enabled = true) =>
     const f = yield* fixture;
     const pinned = new Map<string, string>();
     const inspected: string[] = [];
+    const settings = yield* ServerSettingsService.pipe(
+      Effect.provide(ServerSettingsService.layerTest({ penHubNodes: enabled })),
+    );
     const { pass } = yield* PenHubNodes.make({
       inspect: (name) =>
         Effect.try({
@@ -339,7 +342,7 @@ const reconciler = (enabled = true) =>
       Effect.provide(
         Layer.mergeAll(
           Layer.succeed(HubNodes.HubNodes, f.service),
-          ServerSettingsService.layerTest({ penHubNodes: enabled }),
+          Layer.succeed(ServerSettingsService, settings),
         ),
       ),
     );
@@ -351,7 +354,7 @@ const reconciler = (enabled = true) =>
         yield* TestClock.adjust("2 seconds");
         yield* Fiber.join(running);
       });
-    return { ...f, show, pass, pinned, inspected, unreadable };
+    return { ...f, show, pass, pinned, inspected, unreadable, settings };
   });
 const reconcile = <A, E>(
   body: (f: Effect.Success<ReturnType<typeof reconciler>>) => Effect.Effect<A, E, never>,
@@ -404,6 +407,20 @@ describe("PenHubNodes", () => {
           expect(inspected).toEqual([]);
         }),
       false,
+    ),
+  );
+
+  it.effect("turning the setting off empties the list even while Pen is down", () =>
+    reconcile(({ show, pinned, rows, settings, state }) =>
+      Effect.gen(function* () {
+        pinned.set(alias("a"), key("a"));
+        yield* show(ready(["a", "a"]));
+        expect((yield* rows).length).toBe(1);
+        yield* settings.updateSettings({ penHubNodes: false });
+        yield* show({ kind: "unavailable", reason: "daemon-down" });
+        expect(yield* rows).toEqual([]);
+        expect(state.held.size).toBe(0);
+      }),
     ),
   );
 
