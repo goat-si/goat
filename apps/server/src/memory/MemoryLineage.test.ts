@@ -826,6 +826,7 @@ it.effect.each([
   "lost ACK",
   "unavailable before admission",
   "an existing pending suggestion",
+  "acceptance starts first",
 ] as const)("an uncertain remember waits for its original operation after %s", (scenario) =>
   Effect.scoped(
     Effect.gen(function* () {
@@ -858,7 +859,8 @@ it.effect.each([
         scope: "user" as const,
         text: "synthetic uncertain save",
       };
-      const existing = scenario === "an existing pending suggestion";
+      const acceptFirst = scenario === "acceptance starts first";
+      const existing = scenario === "an existing pending suggestion" || acceptFirst;
       if (existing) {
         const before = yield* e.service.remember(request, Effect.void, thread).pipe(Effect.flip);
         assert.propertyVal(before, "code", "hub_upgrade_required");
@@ -877,7 +879,7 @@ it.effect.each([
         if (!op || op.kind !== "upsert") throw new Error("Expected a staged upsert");
         return { workId: row.id, op };
       });
-      if (scenario === "lost ACK") {
+      if (scenario === "lost ACK" || acceptFirst) {
         yield* hub.store.transact(hub.store.learnHubFloor(space, at));
         submit = readOriginal.pipe(
           Effect.flatMap(({ op }) => admit(op)),
@@ -893,7 +895,27 @@ it.effect.each([
           Effect.andThen(submit),
         );
       const attempt = e.service.remember(request, Effect.void, thread).pipe(Effect.flip);
-      if (existing) {
+      if (acceptFirst) {
+        const [suggestion] = yield* e.service.listSuggestions(
+          { memorySpaceId: space },
+          Effect.void,
+        );
+        if (!suggestion) throw new Error("Expected a pending suggestion");
+        assert.deepStrictEqual(
+          yield* e.service.acceptSuggestion(
+            { memorySpaceId: space, suggestionId: suggestion.suggestionId },
+            Effect.void,
+          ),
+          { status: "pending" },
+        );
+        const inFlight = yield* Effect.forkScoped(attempt);
+        yield* Deferred.await(entered);
+        const rows =
+          yield* e.sql`SELECT id FROM memory_outbox WHERE memory_id=${suggestion.suggestionId}`;
+        yield* Deferred.succeed(released, undefined);
+        assert.propertyVal(yield* Fiber.join(inFlight), "code", "hub_unavailable");
+        assert.lengthOf(rows, 1);
+      } else if (existing) {
         const inFlight = yield* Effect.forkScoped(attempt);
         yield* Deferred.await(entered);
         const { op } = yield* readOriginal;
@@ -926,7 +948,7 @@ it.effect.each([
         reauthorize: Effect.void,
       });
       const remaining = yield* e.service.listSuggestions({ memorySpaceId: space }, Effect.void);
-      if (scenario === "lost ACK") {
+      if (scenario === "lost ACK" || acceptFirst) {
         assert.propertyVal(receipt, "outcome", "accepted");
         assert.isEmpty(remaining);
         assert.lengthOf(

@@ -1,7 +1,10 @@
 import { expect } from "vite-plus/test";
 import * as Option from "effect/Option";
+import * as Cause from "effect/Cause";
 import {
   MemoryItem,
+  MemoryRpcError,
+  type MemoryMoveInput,
   MemoryRevision,
   MemoryResolution,
   MemoryResolutionPayload,
@@ -25,6 +28,7 @@ export const item = Schema.decodeSync(MemoryItem)({
     cleanupPending: false,
   },
 });
+const decodeItem = Schema.decodeSync(MemoryItem);
 const decodeRevision = Schema.decodeSync(MemoryRevision);
 export const decodeRevert = Schema.decodeUnknownSync(MemoryRevertResult);
 export const revision = (n: number) =>
@@ -94,7 +98,11 @@ export async function exerciseMemoryMove({
   click,
   chooseOption,
   container,
+  batch,
+  select,
 }: {
+  batch: boolean;
+  select: (button: HTMLInputElement) => Promise<void>;
   container: HTMLElement;
   state: {
     threads: { id: string; title: string; environmentId: string }[];
@@ -116,26 +124,99 @@ export async function exerciseMemoryMove({
   state.threads = [
     { id: "move-thread", title: "Move conversation", environmentId: "remote-owner" },
   ];
-  state.queries.set(
-    "list",
-    Option.some({ items: [activeItem], projectionWatermark: 1, nextCursor: null }),
-  );
+  if (activeItem.status !== "active") throw new Error("Expected an active fixture");
+  const items = batch
+    ? [
+        activeItem,
+        ...[211, 212].map((n) =>
+          decodeItem({
+            ...activeItem,
+            memoryId: id(n),
+            revision: {
+              ...activeItem.revision,
+              memoryId: id(n),
+              revisionId: id(n + 10),
+              payloadRef: id(n + 10),
+            },
+            payload: { ...activeItem.payload, text: `Synthetic move item ${n}` },
+          }),
+        ),
+      ]
+    : [activeItem];
+  state.queries.set("list", Option.some({ items, projectionWatermark: 1, nextCursor: null }));
+  const attempts = new Map<string, string[]>();
   state.executors.set("move", async (target) => {
+    const { input } = target as { input: MemoryMoveInput };
+    const ids = attempts.get(input.memoryId) ?? [];
+    ids.push(input.operationId);
+    attempts.set(input.memoryId, ids);
     state.calls(target);
-    state.queries.set("list", Option.some({ items: [], projectionWatermark: 2, nextCursor: null }));
-    return success({ outcome: "accepted", pendingSync: false });
+    if (input.memoryId === activeItem.memoryId && ids.length === 1)
+      return {
+        _tag: "Failure",
+        cause: Cause.fail(
+          new MemoryRpcError({
+            code: "capacity_exceeded",
+            capacity: {
+              code: "capacity_exceeded",
+              dimension: "thread_items",
+              current: 2,
+              limit: 1,
+              reclaimable: 0,
+            },
+          }),
+        ),
+      };
+    if ((!batch && ids.length === 2) || (input.memoryId === id(211) && ids.length === 1))
+      return { _tag: "Failure", cause: Cause.die(new Error("Synthetic lost acknowledgement")) };
+    if (input.memoryId === (batch ? id(211) : activeItem.memoryId))
+      state.queries.set(
+        "list",
+        Option.some({ items: [], projectionWatermark: 2, nextCursor: null }),
+      );
+    return success({
+      operationId: input.operationId,
+      memoryId: input.memoryId,
+      revisionId: null,
+      outcome: "accepted",
+      pendingSync: false,
+    });
   });
-  const { render } = await supportedScreen(true, false, false, {
+  const { render } = await supportedScreen(!batch, false, false, {
     protocolVersion: 1,
     scopeMoves: true,
   });
-  expect(
-    [...container.querySelectorAll("button")].some((button) => button.textContent === "Open"),
-  ).toBe(true);
+  if (batch) {
+    await click("Select memories");
+    for (const checkbox of container.querySelectorAll<HTMLInputElement>(
+      'input[aria-label^="Select "]',
+    ))
+      await select(checkbox);
+  }
   await click("Move to…");
   await chooseOption("Memory scope", "thread", '[aria-label="Move memories"]');
   await chooseOption("Memory thread", "move-thread", '[aria-label="Move memories"]');
-  await click("Move memory");
+  const submit = async () => {
+    const label = [...container.querySelectorAll("button")].find((button) =>
+      /^Move (?:memory|\d+ memories)$/.test(button.textContent ?? ""),
+    )?.textContent;
+    if (!label) throw new Error("Expected a move action");
+    await click(label);
+  };
+  await submit();
+  const firstNotice = container.textContent ?? "";
+  await submit();
+  if (!batch) await submit();
+  const capacity = attempts.get(activeItem.memoryId) ?? [];
+  expect(capacity).toHaveLength(batch ? 2 : 3);
+  expect(capacity[1]).not.toBe(capacity[0]);
+  if (batch) {
+    const uncertain = attempts.get(id(211)) ?? [];
+    expect(uncertain).toHaveLength(2);
+    expect(uncertain[1]).toBe(uncertain[0]);
+    expect(attempts.get(id(212))).toHaveLength(1);
+  } else expect(capacity[2]).toBe(capacity[1]);
+  expect(firstNotice).toContain("destination is full");
   expect(state.calls).toHaveBeenCalledWith(
     expect.objectContaining({
       input: expect.objectContaining({

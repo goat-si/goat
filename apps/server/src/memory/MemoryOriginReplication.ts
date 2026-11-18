@@ -1,5 +1,6 @@
 import * as M from "@goat/contracts";
 import * as Effect from "effect/Effect";
+import * as Schema from "effect/Schema";
 import * as SqlClient from "effect/sql/SqlClient";
 import type * as Client from "./MemoryHubClient.ts";
 import type * as Hub from "./MemoryHubService.ts";
@@ -28,7 +29,7 @@ const applyMemoryOriginUpdatesTx = Effect.fn("MemoryStore.applyOriginUpdatesTx")
 ) {
   yield* Transaction;
   const { memorySpaceId: space, environmentId } = input;
-  let changed = false;
+  const changed: M.MemoryId[] = [];
   for (const { memoryId, createOperationId, threadId } of updates) {
     const settled = yield* stored(
       "memory-origin-settled",
@@ -41,7 +42,7 @@ const applyMemoryOriginUpdatesTx = Effect.fn("MemoryStore.applyOriginUpdatesTx")
       { environmentId, threadId },
       createOperationId,
     ).pipe(Effect.provideService(SqlClient.SqlClient, sql));
-    changed ||= recorded;
+    if (recorded) changed.push(memoryId);
   }
   return changed;
 });
@@ -49,15 +50,57 @@ const applyMemoryOriginUpdatesTx = Effect.fn("MemoryStore.applyOriginUpdatesTx")
 export const publishMemoryOriginUpdatesTx = Effect.fn("MemoryStore.publishOriginUpdatesTx")(
   function* (...args: Parameters<typeof applyMemoryOriginUpdatesTx>) {
     const [sql, { memorySpaceId }] = args;
-    if (yield* applyMemoryOriginUpdatesTx(...args))
-      // A new join needs the latest identity metadata. Existing handles keep their pinned pages.
+    const changed = yield* applyMemoryOriginUpdatesTx(...args);
+    if (changed.length === 0) return;
+    for (const memoryId of changed) {
       yield* stored(
-        "memory-origin-stale-checkpoint",
-        sql`UPDATE memory_hub_retention SET checkpoint_id=NULL
-          WHERE space=${memorySpaceId} AND checkpoint_id IS NOT NULL`,
+        "memory-origin-next-sequence",
+        sql`INSERT INTO memory_space_counters(space,forget_generation,origin_update_sequence)
+          VALUES (${memorySpaceId},0,1)
+          ON CONFLICT(space) DO UPDATE SET origin_update_sequence=origin_update_sequence+1`,
       );
+      yield* stored(
+        "memory-origin-publish",
+        sql`UPDATE memory_origins SET origin_sequence=(
+          SELECT origin_update_sequence FROM memory_space_counters WHERE space=${memorySpaceId}
+        ) WHERE space=${memorySpaceId} AND memory_id=${memoryId}`,
+      );
+    }
+    // A new join needs the latest identity metadata. Existing handles keep their pinned pages.
+    yield* stored(
+      "memory-origin-stale-checkpoint",
+      sql`UPDATE memory_hub_retention SET checkpoint_id=NULL
+        WHERE space=${memorySpaceId} AND checkpoint_id IS NOT NULL`,
+    );
   },
 );
+
+const encodePull = Schema.encodeEffect(Schema.fromJsonString(M.MemoryHubPullResult));
+
+export const withOriginCatchupPage = Effect.fn("MemoryHubService.attachOriginPage")(function* (
+  store: Pick<Store.MemoryStore["Service"], "readOriginPageTx">,
+  request: M.MemoryHubPullInput,
+  tail: M.MemoryHubPullResult,
+) {
+  if (
+    !tail.derivedCap ||
+    tail.hasMore ||
+    request.afterOriginSequence === undefined ||
+    !M.supportsMemoryFloor2(request.features)
+  )
+    return tail;
+  // Origin updates can describe creations after a pinned log watermark.
+  if (request.highWatermark === undefined) {
+    const originPage = yield* store.readOriginPageTx(
+      request.memorySpaceId,
+      request.afterOriginSequence,
+    );
+    const combined = { ...tail, originPage };
+    if (yield* Effect.isSuccess(encodePull(combined))) return combined;
+  }
+  const pending = { ...tail, originCatchupPending: true as const };
+  return (yield* Effect.isSuccess(encodePull(pending))) ? pending : tail;
+});
 
 type Route = {
   readonly space: M.MemorySpaceId | null;

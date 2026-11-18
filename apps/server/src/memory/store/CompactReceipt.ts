@@ -3,6 +3,8 @@ import * as DateTime from "effect/DateTime";
 import * as Schema from "effect/Schema";
 import { strict } from "./StoreModel.ts";
 
+const operationKinds = ["upsert", "forget", "resolve", "revert", "move"] as const;
+
 /** Fixed-width UUID/digest fields; environment strings are admitted once in the SQL dictionary. */
 export function encodeCompactReceipt(
   record: M.MemoryCompactReceipt,
@@ -26,7 +28,7 @@ export function encodeCompactReceipt(
   const hash = (value: string) => {
     for (const pair of value.match(/../g) ?? []) byte(parseInt(pair, 16));
   };
-  byte(["upsert", "forget", "resolve", "revert"].indexOf(record.operationKind));
+  byte(operationKinds.indexOf(record.operationKind));
   byte(["accepted", "conflicted", "deleted", "rejected"].indexOf(record.receipt.outcome));
   uuid(record.receipt.operationId);
   uuid(record.receipt.memoryId);
@@ -116,7 +118,7 @@ export function decodeCompactReceipt(
     const hex = Array.from({ length: 16 }, () => byte().toString(16).padStart(2, "0")).join("");
     return `${hex.slice(0, 8)}-${hex.slice(8, 12)}-${hex.slice(12, 16)}-${hex.slice(16, 20)}-${hex.slice(20)}`;
   };
-  const operationKind = ["upsert", "forget", "resolve", "revert"][byte()];
+  const operationKind = operationKinds[byte()];
   const outcome = ["accepted", "conflicted", "deleted", "rejected"][byte()];
   const operationId = uuid(),
     memoryId = uuid(),

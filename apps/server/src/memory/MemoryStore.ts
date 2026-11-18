@@ -1,3 +1,4 @@
+import { makeOriginCatchup } from "./store/OriginCatchup.ts";
 import { areAutomaticallyUsable } from "./MemoryRevisionMarks.ts";
 import { makeThreadLineage } from "./store/ThreadLineage.ts";
 import * as Context from "effect/Context";
@@ -481,6 +482,7 @@ const make = Effect.gen(function* () {
     readAncestry: (space, id, parents) => transact(readAncestry(space, id, parents)),
     withReceivedCursor,
     readCursor,
+    ...makeOriginCatchup(kernel),
     readOperation,
     readWorkOperation,
     pendingReceived,

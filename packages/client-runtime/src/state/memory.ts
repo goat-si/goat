@@ -58,7 +58,7 @@ export function memorySaveStatus(result: AsyncResult.AsyncResult<MemoryMutationR
     const error = Option.getOrNull(Cause.findErrorOption(result.cause));
     if (isMemoryRpcError(error)) {
       if (error.code === "revision_changed") return "stale";
-      if (error.code !== "unavailable") return "refused";
+      if (error.code !== "unavailable" && error.code !== "hub_unavailable") return "refused";
     }
   }
   return "uncertain";

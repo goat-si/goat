@@ -5,10 +5,12 @@ import suggestionsMigration from "../../persistence/Migrations/159_MemorySaveSug
 import floorMigration from "../../persistence/Migrations/160_MemoryHubFloor.ts";
 
 import moveMigration from "../../persistence/Migrations/161_MemoryScopeVersion.ts";
+import originCatchupMigration from "../../persistence/Migrations/163_MemoryOriginCatchup.ts";
 
 export default hubMigration.pipe(
   Effect.andThen(threadLineageMigration),
   Effect.andThen(suggestionsMigration),
   Effect.andThen(floorMigration),
   Effect.andThen(moveMigration),
+  Effect.andThen(originCatchupMigration),
 );

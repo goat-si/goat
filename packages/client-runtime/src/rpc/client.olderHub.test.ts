@@ -148,4 +148,54 @@ describe("environment RPC against an older hub", () => {
           });
       }),
   );
+  it.effect.each([false, true])(
+    "negotiates scope move and read fields on the destination: %s",
+    (supported) =>
+      Effect.gen(function* () {
+        const memorySpaceId = MemorySpaceId.make("00000000-0000-4000-8000-000000000001");
+        const memoryId = MemoryId.make("00000000-0000-4000-8000-000000000002");
+        const wire: unknown[] = [];
+        const receive = (input: unknown) => {
+          wire.push(input);
+          return Effect.void;
+        };
+        const client = {
+          [WS_METHODS.memoryRead]: receive,
+          [WS_METHODS.memoryMove]: receive,
+        } as unknown as WsRpcProtocolClient;
+        const supervisor = yield* supervisorFor(client, {
+          environment: { capabilities: { memory: { protocolVersion: 1, scopeMoves: supported } } },
+        } as ServerConfig);
+        const provide = Effect.provideService(
+          EnvironmentSupervisor.EnvironmentSupervisor,
+          supervisor,
+        );
+        const permit = Effect.provideService(RpcPermissionGuard, { authorize: () => Effect.void });
+        const read = { memorySpaceId, memoryId };
+        const move = {
+          ...read,
+          operationId: MemoryOperationId.make("00000000-0000-4000-8000-000000000003"),
+          expectedHeads: [],
+          expectedScopeVersion: 0,
+          fromScope: { kind: "user" as const },
+          toScope: { kind: "user" as const },
+        };
+        yield* requestGuarded(WS_METHODS.memoryRead, { ...read, includeScopeVersion: true }).pipe(
+          provide,
+          permit,
+        );
+        const result = yield* requestGuarded(WS_METHODS.memoryMove, move).pipe(
+          provide,
+          permit,
+          Effect.result,
+        );
+        expect(wire).toEqual(supported ? [{ ...read, includeScopeVersion: true }, move] : [read]);
+        if (supported) expect(result._tag).toBe("Success");
+        else
+          expect(result).toMatchObject({
+            _tag: "Failure",
+            failure: { _tag: "EnvironmentRpcUnavailableError" },
+          });
+      }),
+  );
 });

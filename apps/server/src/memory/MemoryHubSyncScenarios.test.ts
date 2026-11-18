@@ -1,3 +1,4 @@
+import { movedSourceScenario } from "./testkit/MovedSourceScenario.ts";
 import { availableSourceReply } from "./testkit/MemoryHubProtocolFixtures.ts";
 import { assert, it } from "@effect/vitest";
 import * as M from "@goat/contracts";
@@ -1373,7 +1374,7 @@ const sourceFixture = (ownerIsHub = false) =>
       sourceOperation: op,
     };
   });
-
+export type SourceFixture = Effect.Success<ReturnType<typeof sourceFixture>>;
 it.effect.each([false, true])(
   `scenario g: reads original on its owner, consumes transient body (owner=hub %s)`,
   (localOwner) =>
@@ -1412,6 +1413,10 @@ it.effect.each([false, true])(
           }),
         );
     }).pipe(Effect.provide(NodeServices.layer)),
+);
+
+it.effect("a move to an owner thread fences original reads by the former shared audience", () =>
+  sourceFixture().pipe(Effect.flatMap(movedSourceScenario), Effect.provide(NodeServices.layer)),
 );
 
 it.effect.each([false, true])(

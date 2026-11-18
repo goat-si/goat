@@ -1,5 +1,5 @@
 import { makeMemoryOriginReplication } from "./MemoryOriginReplication.ts";
-import { checkAcceptanceDispatch } from "./store/SaveSuggestions.ts";
+import { checkSyncDispatch } from "./store/SaveSuggestions.ts";
 import { makePullMemoryTail } from "./MemoryPullTail.ts";
 import { MemoryFloor2Enabled, memoryFloorAdvertisement } from "./MemoryFloor.ts";
 import { validateCheckpointClosureCapacity } from "./MemoryDependencies.ts";
@@ -35,7 +35,7 @@ import * as Hold from "./MemoryGenerationHold.ts";
 import * as Quota from "./MemoryQuotaService.ts";
 import { matchesMemoryOperationDigest, memoryOperationDigest } from "./MemoryDecider.ts";
 import { redacted, scanMemoryValue } from "./MemorySecretScanner.ts";
-import { failureCode, holdClass, transient } from "./MemorySyncErrors.ts";
+import { failureCode, holdClass, refusedSync, transient } from "./MemorySyncErrors.ts";
 import * as OwnerSource from "./MemoryOwnerSourceReader.ts";
 
 type Error = Hub.MemoryHubServiceError;
@@ -764,6 +764,7 @@ const make = Effect.gen(function* () {
             memoryId: row.ticket.memoryId,
             expectedHeads: row.ticket.conflictHeadSet,
             kind: "resolve",
+            ...(snapshot.scopeVersion ? { expectedScopeVersion: snapshot.scopeVersion } : {}),
             conflictId: row.ticket.conflictId,
             fencingToken: row.ticket.fencingToken,
             revision: {
@@ -1669,7 +1670,7 @@ const make = Effect.gen(function* () {
       const result = yield* Effect.result(
         Effect.gen(function* () {
           yield* ensureEpoch(r.settings.memoryHubVersion);
-          const prepare = checkAcceptanceDispatch(sql, acquired, input, candidate.work.metadata);
+          const prepare = checkSyncDispatch(sql, acquired, input, candidate.work.metadata);
           const ack = yield* (
             r.connection
               ? client.push(r.connection, input, prepare)
@@ -1677,8 +1678,7 @@ const make = Effect.gen(function* () {
           ).pipe(
             Effect.catchTags({
               MemoryHubError: (error) =>
-                M.requiresMemoryFloor2(operation) &&
-                (error.code === "unsupported_protocol" || error.code === "hub_upgrade_required")
+                refusedSync(operation, error.code)
                   ? Effect.succeed({
                       receipts: [
                         {

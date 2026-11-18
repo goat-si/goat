@@ -1,5 +1,12 @@
 import {
   repositoryGroupingKeyOf,
+  MemoryRpcError,
+  type EnvironmentId,
+  type MemoryFailureCode,
+  type MemoryId,
+  type MemoryMoveInput,
+  type MemoryMutationReceipt,
+  type MemoryOperationId,
   type MemoryListInput,
   type MemoryPage,
   type MemoryProjectBinding,
@@ -7,6 +14,10 @@ import {
   type MemorySearchInput,
   type RepositoryIdentity,
 } from "@goat/contracts";
+import * as Cause from "effect/Cause";
+import * as Option from "effect/Option";
+import * as Schema from "effect/Schema";
+import type { AsyncResult } from "effect/reactivity";
 
 // Indexed phrase search works at every supported scope size, unlike bounded substring scans.
 const MEMORY_SEARCH_MODE = "fts" satisfies MemorySearchInput["mode"];
@@ -79,10 +90,9 @@ export function memoryForgetRequest(
   };
 }
 
-export type MemoryMoveCandidate = Omit<
-  import("@goat/contracts").MemoryMoveInput,
-  "operationId" | "toScope"
->;
+export type MemoryMoveCandidate = Omit<MemoryMoveInput, "operationId" | "toScope"> & {
+  readonly label: string;
+};
 
 export function memoryMoveCandidate(
   item: import("@goat/contracts").MemoryItem,
@@ -100,10 +110,11 @@ export function memoryMoveCandidate(
     expectedHeads: [item.revision.revisionId],
     expectedScopeVersion: item.scopeVersion ?? 0,
     fromScope: item.scope,
+    label: item.payload.text.slice(0, 80),
   };
 }
 
-export function sameMemoryScope(left: MemoryScope, right: MemoryScope): boolean {
+function sameMemoryScope(left: MemoryScope, right: MemoryScope): boolean {
   if (left.kind === "user") return right.kind === "user";
   if (left.kind === "thread")
     return (
@@ -117,4 +128,115 @@ export function sameMemoryScope(left: MemoryScope, right: MemoryScope): boolean 
   return a.kind === "explicit"
     ? b.kind === "explicit" && a.sharedProjectId === b.sharedProjectId
     : b.kind === "repository" && a.groupingKey === b.groupingKey;
+}
+
+type MemoryMoveOutcome =
+  | { readonly status: "moved" }
+  | { readonly status: "uncertain"; readonly operationId: MemoryOperationId }
+  | { readonly status: "stale" }
+  | { readonly status: "refused"; readonly code: MemoryFailureCode | undefined };
+
+type MemoryMoveAttempt = {
+  readonly key: string;
+  readonly outcome: MemoryMoveOutcome;
+};
+export type MemoryMoveAttempts = ReadonlyMap<MemoryId, MemoryMoveAttempt>;
+
+export function memoryMoveRows(
+  environmentId: EnvironmentId,
+  candidates: readonly MemoryMoveCandidate[],
+  destination: MemoryScope | undefined,
+  attempts: MemoryMoveAttempts,
+) {
+  if (!destination) return [];
+  return candidates
+    .filter(({ fromScope }) => !sameMemoryScope(fromScope, destination))
+    .map(({ label, ...input }) => {
+      const key = JSON.stringify([environmentId, destination, input]);
+      const prior = attempts.get(input.memoryId);
+      return {
+        label,
+        input: { ...input, toScope: destination },
+        key,
+        outcome: prior?.key === key ? prior.outcome : undefined,
+      };
+    });
+}
+
+type MoveRow = ReturnType<typeof memoryMoveRows>[number];
+const isRpcError = Schema.is(MemoryRpcError);
+
+export function canSubmitMemoryMove({ outcome }: MoveRow) {
+  return outcome?.status !== "moved" && outcome?.status !== "stale";
+}
+
+function moveOutcome(
+  result: AsyncResult.AsyncResult<MemoryMutationReceipt, unknown>,
+  operationId: MemoryOperationId,
+): MemoryMoveOutcome {
+  let code: MemoryFailureCode | undefined;
+  if (result._tag === "Success") {
+    if (result.value.outcome === "accepted")
+      return result.value.pendingSync ? { status: "uncertain", operationId } : { status: "moved" };
+    code = result.value.failureCode;
+  } else if (result._tag === "Failure") {
+    const error = Option.getOrNull(Cause.findErrorOption(result.cause));
+    if (!isRpcError(error) || error.code === "hub_unavailable" || error.code === "storage_failed")
+      return { status: "uncertain", operationId };
+    code = error.code;
+  } else return { status: "uncertain", operationId };
+  return code === "revision_changed" || code === "identity_mismatch"
+    ? { status: "stale" }
+    : { status: "refused", code };
+}
+
+export async function submitMemoryMoves(
+  rows: readonly MoveRow[],
+  createOperationId: () => MemoryOperationId,
+  call: (
+    input: MemoryMoveInput,
+  ) => Promise<AsyncResult.AsyncResult<MemoryMutationReceipt, unknown>>,
+  allowed: () => boolean,
+) {
+  const attempts = new Map<MemoryId, MemoryMoveAttempt>();
+  let refresh = false;
+  for (const { input, key, outcome: prior } of rows) {
+    if (prior) attempts.set(input.memoryId, { key, outcome: prior });
+    if (!allowed() || prior?.status === "moved" || prior?.status === "stale") continue;
+    const operationId = prior?.status === "uncertain" ? prior.operationId : createOperationId();
+    const outcome = moveOutcome(await call({ ...input, operationId }), operationId);
+    attempts.set(input.memoryId, { key, outcome });
+    refresh ||= outcome.status === "moved" || outcome.status === "stale";
+  }
+  return {
+    attempts,
+    refresh,
+    allMoved: rows.every(({ input }) => attempts.get(input.memoryId)?.outcome.status === "moved"),
+  };
+}
+
+export function memoryMoveOutcomeMessage(outcome: MemoryMoveOutcome): string {
+  switch (outcome.status) {
+    case "moved":
+      return "Moved.";
+    case "uncertain":
+      return "Could not confirm the move. Retry uses the same request.";
+    case "stale":
+      return "The memory changed. Refresh or select it again before moving it.";
+    case "refused":
+      switch (outcome.code) {
+        case "capacity_exceeded":
+          return "The destination is full.";
+        case "not_found":
+        case "source_invalidated":
+          return "The destination is no longer available.";
+        case "hub_upgrade_required":
+          return "Update the memory hub and its members before moving memories.";
+        case "forget_pending":
+        case "forgotten":
+          return "The memory was forgotten or is waiting to be forgotten.";
+        default:
+          return "The memory could not be moved.";
+      }
+  }
 }

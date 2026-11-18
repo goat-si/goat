@@ -5,11 +5,11 @@ import type * as SqlClient from "effect/sql/SqlClient";
 import { memoryOperationDigest } from "./MemoryDecider.ts";
 import type { MemoryAccessError, MemoryServiceError } from "./MemoryService.ts";
 import * as Store from "./MemoryStore.ts";
-import { floorWriteId } from "./store/FloorWrites.ts";
+import { floorWriteId, type FloorWriteMetadata } from "./store/FloorWrites.ts";
+import { findMoveBinding, moveScopesCurrent } from "./store/ScopeMoves.ts";
 import { hubReceiptCodec, stored } from "./store/StoreCodecs.ts";
 
 type Permit = Effect.Effect<void, MemoryAccessError>;
-const encodeProject = Schema.encodeSync(Schema.fromJsonString(M.MemoryProjectKey));
 const decodeOperation = Schema.decodeUnknownEffect(M.MemoryOperation);
 
 export const makeMoveMemory = (deps: {
@@ -18,8 +18,8 @@ export const makeMoveMemory = (deps: {
   environmentId: M.EnvironmentId;
   apply: (
     operation: M.MemoryOperation,
-    admission: Store.MemoryAdmissionContext,
     permit: Permit,
+    metadata?: FloorWriteMetadata,
   ) => Effect.Effect<Store.StoredReceipt, MemoryServiceError>;
   requireSharing: (space: M.MemorySpaceId) => Effect.Effect<void, MemoryAccessError>;
   submitFloorWrite?: Effect.Effect<void, MemoryServiceError>;
@@ -61,17 +61,13 @@ export const makeMoveMemory = (deps: {
     if (pending?.status === "cancelled")
       return yield* new Store.MemoryStoreConflict({ code: "source_invalidated" });
     if (!pending && !old) {
-      if (op.toScope.kind === "project") {
-        const bound = yield* stored(
-          "move-project-binding",
-          sql`
-          SELECT 1 FROM memory_project_bindings
-          WHERE memory_space_id=${op.memorySpaceId} AND environment_id=${deps.environmentId}
-            AND project_key_json=${encodeProject(op.toScope.projectKey)} LIMIT 1`,
-        );
-        if (!bound.length) return yield* new Store.MemoryStoreConflict({ code: "not_found" });
-      }
-      yield* deps.apply(op, Store.localIntent, permit);
+      if (!(yield* store.hubFloorActive(op.memorySpaceId)))
+        return yield* new Store.MemoryStoreConflict({ code: "hub_upgrade_required" });
+      const moveBinding =
+        op.toScope.kind === "project" ? yield* findMoveBinding(sql, op, op.toScope) : undefined;
+      if (!(yield* moveScopesCurrent(sql, op, moveBinding)))
+        return yield* new Store.MemoryStoreConflict({ code: "not_found" });
+      yield* deps.apply(op, permit, moveBinding ? { moveBinding } : undefined);
     }
     return {
       operationDigest: digest,

@@ -24,10 +24,16 @@ export type PromotionPrerequisite = {
   };
 };
 
+export type FloorWriteMetadata =
+  | PromotionPrerequisite
+  | {
+      readonly moveBinding: { readonly projectId: M.ProjectId; readonly version: number };
+    };
+
 export interface FloorWriteStore {
   readonly stageFloorWrite: (
     operation: Extract<M.MemoryOperation, { kind: "upsert" | "move" }>,
-    promotion?: PromotionPrerequisite,
+    extra?: FloorWriteMetadata,
   ) => InTx<void, MemoryCapacityError | MemoryStorageError>;
 }
 
@@ -37,14 +43,14 @@ export const makeFloorWrites = (
 ) => {
   const stageFloorWrite: FloorWriteStore["stageFloorWrite"] = Effect.fn(
     "MemoryStore.stageFloorWrite",
-  )(function* (operation, promotion) {
+  )(function* (operation, extra) {
     yield* Transaction;
     const { memorySpaceId: space, memoryId, operationId } = operation;
     const body = operation.kind === "upsert" ? yield* payloadCodec.encode(operation.payload) : "";
     const metadata = {
       ...metadataOf(operation),
       authorityFirst: memoryOperationDigest(operation),
-      ...promotion,
+      ...extra,
     };
     const [usage] = yield* stored(
       "floor-stage-budget",

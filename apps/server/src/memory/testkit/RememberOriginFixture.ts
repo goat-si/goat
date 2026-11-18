@@ -23,7 +23,7 @@ import {
 import { scanReplicaMemory } from "./ScanReplicaMemory.ts";
 
 export const runRememberOriginFixture = Effect.fn("test.runRememberOriginFixture")(function* (
-  scenario: "pre-activation" | "offline floor-2",
+  scenario: "pre-activation" | "offline floor-2" | "already ready",
 ) {
   yield* seed;
   const hub = yield* Hub.MemoryHubService;
@@ -70,6 +70,15 @@ export const runRememberOriginFixture = Effect.fn("test.runRememberOriginFixture
     environmentId: Member.local,
     threadId: M.ThreadId.make("synthetic-writer-conversation"),
   };
+  const replica = Member.fixture(peerFor(memberEnv), undefined, false, false, memberEnv);
+  const readyPeer = scenario === "already ready" ? yield* Layer.build(Layer.fresh(replica)) : null;
+  if (readyPeer)
+    yield* Effect.gen(function* () {
+      yield* Member.ready;
+      const sync = yield* Sync.MemorySyncService;
+      yield* sync.syncOnce;
+      assert.propertyVal(yield* sync.readLocalReadiness(), "bootstrap", "ready");
+    }).pipe(Effect.provide(readyPeer));
   const writer = Member.fixture(peerFor(Member.local), undefined, false, false, Member.local);
   const attempts = yield* Effect.gen(function* () {
     const sync = yield* Sync.MemorySyncService;
@@ -106,6 +115,18 @@ export const runRememberOriginFixture = Effect.fn("test.runRememberOriginFixture
       return [op];
     }
     yield* activate;
+    if (scenario === "already ready") {
+      const saved = yield* remember("Synthetic narrow save after the peer joined");
+      yield* sync.syncOnce;
+      assert.deepStrictEqual(
+        (yield* service.list(
+          { memorySpaceId: space, origin, limit: 10, includeQuarantined: false },
+          Effect.void,
+        )).items.map(({ memoryId }) => memoryId),
+        [saved.memoryId],
+      );
+      return [saved];
+    }
     const sources = Array.from({ length: 100 }, (_, n) => {
       const op = operation(30100 + n);
       const memoryId = M.MemoryId.make(id(30300 + n));
@@ -203,8 +224,7 @@ export const runRememberOriginFixture = Effect.fn("test.runRememberOriginFixture
     yield* compactor.compact(principal());
   }
 
-  const replica = Member.fixture(peerFor(memberEnv), undefined, false, false, memberEnv);
-  yield* Effect.gen(function* () {
+  const checkReplica = Effect.gen(function* () {
     const sync = yield* Sync.MemorySyncService;
     const service = yield* Service.MemoryService;
     yield* sync.syncOnce;
@@ -223,5 +243,7 @@ export const runRememberOriginFixture = Effect.fn("test.runRememberOriginFixture
       page.items.map(({ memoryId }) => memoryId),
       attempts.map(({ memoryId }) => memoryId),
     );
-  }).pipe(Effect.provide(Layer.fresh(replica)));
+  });
+  if (readyPeer) yield* checkReplica.pipe(Effect.provide(readyPeer));
+  else yield* checkReplica.pipe(Effect.provide(Layer.fresh(replica)));
 });

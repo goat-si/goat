@@ -1,12 +1,14 @@
 import { RegistryContext, useAtomValue } from "@effect/atom-react";
+import { MemoryOperationId, type EnvironmentId, type MemorySpaceId } from "@goat/contracts";
 import {
-  MemoryOperationId,
-  type EnvironmentId,
-  type MemoryMoveInput,
-  type MemorySpaceId,
-} from "@goat/contracts";
-import { sameMemoryScope, type MemoryMoveCandidate } from "@goat/client-runtime/memory-browsing";
-import { useContext, useRef, useState } from "react";
+  canSubmitMemoryMove,
+  memoryMoveOutcomeMessage,
+  memoryMoveRows,
+  submitMemoryMoves,
+  type MemoryMoveAttempts,
+  type MemoryMoveCandidate,
+} from "@goat/client-runtime/memory-browsing";
+import { useContext, useState } from "react";
 import { randomUUID } from "../../lib/utils";
 import { memoryEnvironment as memory } from "../../state/memory";
 import { useAtomCommand } from "../../state/use-atom-command";
@@ -27,48 +29,29 @@ export function MemoryMoveControl({
   const registry = useContext(RegistryContext);
   const permission = memory.move.permissionAtom(environmentId);
   const allowed = useAtomValue(permission);
-  const move = useAtomCommand(memory.move);
+  const move = useAtomCommand(memory.move, { reportFailure: false, reportDefect: false });
   const [open, setOpen] = useState(false);
   const [selection, setSelection] = useState<MemoryScopeSelection | null>(null);
   const [busy, setBusy] = useState(false);
-  const [failed, setFailed] = useState(0);
-  const attempt = useRef<{ key: string; requests: readonly MemoryMoveInput[] } | null>(null);
+  const [attempts, setAttempts] = useState<MemoryMoveAttempts>(() => new Map());
   if (!allowed || !candidates.length) return null;
-  const destination = selection?.scope;
-  const eligible = destination
-    ? candidates.filter((item) => !sameMemoryScope(item.fromScope, destination))
-    : [];
+  const rows = memoryMoveRows(environmentId, candidates, selection?.scope, attempts);
+  const eligible = rows.filter(canSubmitMemoryMove).length;
   async function submit() {
-    if (busy || !destination || !eligible.length || !registry.get(permission)) return;
-    const key = JSON.stringify([destination, eligible]);
-    if (attempt.current?.key !== key)
-      attempt.current = {
-        key,
-        requests: eligible.map((input) => ({
-          ...input,
-          operationId: MemoryOperationId.make(randomUUID()),
-          toScope: destination,
-        })),
-      };
+    const permitted = () => registry.get(permission);
+    if (busy || !eligible || !permitted()) return;
     setBusy(true);
-    const failures: MemoryMoveInput[] = [];
-    const { requests } = attempt.current;
-    for (const input of requests) {
-      if (!registry.get(permission)) break;
-      const result = await move({ environmentId, input });
-      if (
-        result._tag !== "Success" ||
-        result.value.outcome !== "accepted" ||
-        result.value.pendingSync
-      )
-        failures.push(input);
-    }
+    const result = await submitMemoryMoves(
+      rows,
+      () => MemoryOperationId.make(randomUUID()),
+      (input) => move({ environmentId, input }),
+      permitted,
+    );
     setBusy(false);
-    if (!registry.get(permission)) return;
-    attempt.current = failures.length ? { key, requests: failures } : null;
-    setFailed(failures.length);
-    if (failures.length === 0) setOpen(false);
-    if (failures.length < requests.length) onMoved(failures.length === 0);
+    setAttempts(result.attempts);
+    if (!permitted()) return;
+    if (result.allMoved) setOpen(false);
+    if (result.refresh) onMoved(result.allMoved);
   }
   return open ? (
     <div className="space-y-2" role="group" aria-label="Move memories">
@@ -80,8 +63,8 @@ export function MemoryMoveControl({
         onChange={setSelection}
       />
       <div className="flex flex-wrap gap-2">
-        <Button size="sm" disabled={busy || !eligible.length} onClick={() => void submit()}>
-          {eligible.length > 1 ? `Move ${eligible.length} memories` : "Move memory"}
+        <Button size="sm" disabled={busy || !eligible} onClick={() => void submit()}>
+          {eligible > 1 ? `Move ${eligible} memories` : "Move memory"}
         </Button>
         <Button
           size="sm"
@@ -90,17 +73,22 @@ export function MemoryMoveControl({
           onClick={() => {
             setOpen(false);
             setSelection(null);
-            setFailed(0);
           }}
         >
           Cancel
         </Button>
       </div>
-      {failed ? (
-        <p role="status">
-          Could not confirm the move for {failed} {failed === 1 ? "memory" : "memories"}.
-        </p>
-      ) : null}
+      <div role="status">
+        {rows.map(
+          ({ input, label, outcome }) =>
+            outcome && (
+              <p key={input.memoryId}>
+                {rows.length > 1 ? `${label} · ` : ""}
+                {memoryMoveOutcomeMessage(outcome)}
+              </p>
+            ),
+        )}
+      </div>
     </div>
   ) : (
     <Button size="sm" variant="outline" onClick={() => setOpen(true)}>

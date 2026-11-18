@@ -1,3 +1,4 @@
+import { withOriginCatchupPage } from "./MemoryOriginReplication.ts";
 import { prepareJoinRetention } from "./MemoryJoinRetention.ts";
 import { projectPushReceipt } from "./MemoryTailAdmission.ts";
 import { MemoryHubSettingsSnapshot, readSettingsView } from "./MemoryHubSettings.ts";
@@ -241,7 +242,7 @@ export const make = Effect.gen(function* () {
               ...tail,
               upgradeRequiredMembers: yield* store.blockingMembers(request.memorySpaceId),
             };
-          return { ...tail, ...floor };
+          return yield* withOriginCatchupPage(store, request, { ...tail, ...floor });
         }),
       );
     },

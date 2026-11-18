@@ -802,7 +802,7 @@ it.effect("memory projections expose marks only when requested", () =>
     const service = yield* Service.MemoryService;
     const source = yield* seed(35000);
     yield* sql`INSERT INTO memory_revision_marks VALUES (${Fixture.space},${source.revision},'unverified')`;
-    yield* sql`INSERT INTO memory_origins VALUES (${Fixture.space},${source.input.memoryId},${ref().environmentId},${ref().threadId})`;
+    yield* sql`INSERT INTO memory_origins(space,memory_id,environment_id,thread_id) VALUES (${Fixture.space},${source.input.memoryId},${ref().environmentId},${ref().threadId})`;
     const input = { memorySpaceId: Fixture.space, memoryId: source.input.memoryId };
     const legacy = yield* service.read(input, Effect.void);
     expect(legacy).not.toHaveProperty("marks");

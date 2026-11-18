@@ -270,6 +270,7 @@ export const make = Effect.gen(function* () {
         scopeMoves: true,
         originFilter: true,
         originUpdates: true,
+        originCatchup: true,
         saveSuggestions: true,
         mutationFailureDetails: true,
         generationHold: true,

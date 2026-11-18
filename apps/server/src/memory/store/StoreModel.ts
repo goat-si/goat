@@ -96,6 +96,12 @@ export const Metadata = Schema.Struct({
   toScope: Schema.optionalKey(M.MemoryScope),
   expectedScopeVersion: Schema.optionalKey(Schema.Int),
   acceptanceGeneration: Schema.optionalKey(Schema.Int),
+  moveBinding: Schema.optionalKey(
+    Schema.Struct({
+      projectId: M.ProjectId,
+      version: M.NonNegativeInt,
+    }),
+  ),
   summaryPrerequisite: Schema.optionalKey(M.MemoryRevisionId),
   promotionBinding: Schema.optionalKey(
     Schema.Struct({
@@ -255,6 +261,7 @@ export type ResolutionSnapshot = {
   readonly memoryId: M.MemoryId;
   readonly status: M.MemoryItem["status"] | null;
   readonly heads: readonly M.MemoryRevisionId[];
+  readonly scopeVersion?: number;
   readonly generation: number;
   readonly reasons: M.MemoryLocalAvailability["reasons"];
   readonly tombstone: boolean;

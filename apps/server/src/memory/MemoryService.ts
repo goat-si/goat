@@ -29,7 +29,7 @@ import {
   requireClosureCapacity,
   validateSummaryDependencies,
 } from "./MemoryDependencies.ts";
-import type { PromotionPrerequisite } from "./store/FloorWrites.ts";
+import type { FloorWriteMetadata } from "./store/FloorWrites.ts";
 import { Transaction as StoreTransaction } from "./store/StoreModel.ts";
 import * as Settings from "../serverSettings.ts";
 import {
@@ -134,6 +134,7 @@ export class MemoryService extends Context.Service<
     readonly prepareSourceRead: (
       input: M.MemoryReadSourceInput,
       permit: Permit,
+      requesterEnvironmentId?: M.EnvironmentId,
     ) => Effect.Effect<ValidatedSourceRequest, MemoryServiceError>;
     readonly validateSourceOutcome: (
       input: { request: ValidatedSourceRequest; outcome: M.MemorySourceReadOutcome },
@@ -177,6 +178,7 @@ export class MemoryService extends Context.Service<
       hubEnvironmentId: M.EnvironmentId;
       localEnvironmentId: M.EnvironmentId;
       expectedSequence: number;
+      afterOriginSequence?: number;
       page: M.MemoryHubPullResult;
       reauthorize: Permit;
     }) => Effect.Effect<readonly Store.Settlement[], MemoryServiceError>;
@@ -560,8 +562,8 @@ const make = Effect.fnUntraced(function* (
     const stream = yield* store.changes(value.memorySpaceId);
     return stream.pipe(Stream.tap(() => permit));
   });
-  const requireScope = (scope: M.MemoryScope) =>
-    scope.kind === "thread" && scope.thread.environmentId !== environmentId
+  const requireScope = (scope: M.MemoryScope, requester = environmentId) =>
+    scope.kind === "thread" && scope.thread.environmentId !== requester
       ? Effect.fail(new MemoryAccessError({ code: "identity_mismatch" }))
       : Effect.void;
   const decide = (
@@ -617,7 +619,7 @@ const make = Effect.fnUntraced(function* (
     admission: Store.MemoryAdmissionContext,
     permit: Permit,
     approval?: M.MemoryHubReceipt,
-    promotion?: PromotionPrerequisite,
+    floorMetadata?: FloorWriteMetadata,
   ) {
     const digest =
       approval?.operationDigest ??
@@ -693,13 +695,13 @@ const make = Effect.fnUntraced(function* (
         if (
           admission.kind === "localIntent" &&
           (op.kind === "upsert" || op.kind === "move") &&
-          M.requiresMemoryFloor2(op)
+          (op.kind === "move" || M.requiresMemoryLineageFloor2(op))
         ) {
           if (!(yield* store.hubFloorActive(op.memorySpaceId)))
             return yield* new Store.MemoryStoreConflict({ code: "hub_upgrade_required" });
           return yield* quota.withAdmission(
             { operation: op, admission, environmentId, receipt: decision.receipt },
-            Effect.andThen(permit, store.stageFloorWrite(op, promotion)).pipe(
+            Effect.andThen(permit, store.stageFloorWrite(op, floorMetadata)).pipe(
               Effect.as({
                 operationDigest: digest,
                 receipt: { ...decision.receipt, revisionId: null, pendingSync: true },
@@ -1012,6 +1014,9 @@ const make = Effect.fnUntraced(function* (
               {
                 protocolVersion: 1,
                 kind: "upsert",
+                ...(current.identity?.scopeVersion
+                  ? { expectedScopeVersion: current.identity.scopeVersion }
+                  : {}),
                 ...(forgetFence === undefined ? {} : { forgetFence }),
                 memorySpaceId: batch.memorySpaceId,
                 memoryId: next.memoryId,
@@ -1290,7 +1295,7 @@ const make = Effect.fnUntraced(function* (
     store,
     sql,
     environmentId,
-    apply,
+    apply: (op, permit, metadata) => apply(op, Store.localIntent, permit, undefined, metadata),
     requireSharing,
     ...(submitFloorWrite ? { submitFloorWrite } : {}),
   });
@@ -1473,6 +1478,9 @@ const make = Effect.fnUntraced(function* (
           protocolVersion: 1 as const,
           ...(forgetFence === undefined ? {} : { forgetFence }),
           kind: "revert" as const,
+          ...(current.identity?.scopeVersion
+            ? { expectedScopeVersion: current.identity.scopeVersion }
+            : {}),
           memorySpaceId: value.memorySpaceId,
           memoryId: value.memoryId,
           operationId: value.operationId,
@@ -1856,6 +1864,7 @@ const make = Effect.fnUntraced(function* (
   });
   const sourceLocator = Effect.fn("MemoryService.sourceLocator")(function* (
     input: M.MemoryReadSourceInput,
+    requesterEnvironmentId = environmentId,
   ) {
     const aggregate = yield* store.loadAggregate(
       input.memorySpaceId,
@@ -1865,8 +1874,13 @@ const make = Effect.fnUntraced(function* (
     );
     if (aggregate.tombstone || aggregate.pendingForget)
       return yield* new Store.MemoryStoreConflict({ code: "forgotten" });
-    if (!aggregate.item || aggregate.item.localAvailability.exposure !== "visible")
+    if (
+      !aggregate.identity ||
+      !aggregate.item ||
+      aggregate.item.localAvailability.exposure !== "visible"
+    )
       return yield* new Store.MemoryStoreConflict({ code: "source_invalidated" });
+    yield* requireScope(aggregate.identity.scope, requesterEnvironmentId);
     const thread = yield* decode(encodeSourceThread(input.sourceThread));
     for (const pair of aggregate.revisions) {
       const provenance = pair.revision.provenance;
@@ -1894,7 +1908,7 @@ const make = Effect.fnUntraced(function* (
       if (input.messageIds.every((id) => evidence.has(id)))
         return {
           generation: aggregate.generation,
-          scopeVersion: aggregate.identity?.scopeVersion,
+          scopeVersion: aggregate.identity.scopeVersion,
           sourceWatermark: provenance.sourceWatermark,
           pair,
         };
@@ -1903,12 +1917,12 @@ const make = Effect.fnUntraced(function* (
   });
   const prepareSourceRead: MemoryService["Service"]["prepareSourceRead"] = Effect.fn(
     "MemoryService.prepareSourceRead",
-  )(function* (input, permit) {
+  )(function* (input, permit, requesterEnvironmentId) {
     const value = yield* decode(decodeReadSource(input, strict));
     return yield* store.transact(
       Effect.gen(function* () {
         yield* permit;
-        const locator = yield* sourceLocator(value);
+        const locator = yield* sourceLocator(value, requesterEnvironmentId);
         const encoded = yield* decode(encodeReadSource(value));
         return {
           generation: locator.generation,
@@ -2445,16 +2459,29 @@ const make = Effect.fnUntraced(function* (
         if (page.derivedCap)
           yield* store.learnHubFloor(input.memorySpaceId, yield* Clock.currentTimeMillis);
         const current = yield* store.readCursor(input.memorySpaceId, input.hubEnvironmentId);
-        if (current >= page.throughSequence) return [];
-        return yield* store.withReceivedCursor(
-          {
-            memorySpaceId: input.memorySpaceId,
-            hubEnvironmentId: input.hubEnvironmentId,
-            expectedSequence: input.expectedSequence,
-            afterSequence: page.throughSequence,
-          },
-          Effect.forEach(page.entries, (entry) => settleHubEntryTx({ ...input, entry })),
-        );
+        const settled =
+          current >= page.throughSequence
+            ? []
+            : yield* store.withReceivedCursor(
+                {
+                  memorySpaceId: input.memorySpaceId,
+                  hubEnvironmentId: input.hubEnvironmentId,
+                  expectedSequence: input.expectedSequence,
+                  afterSequence: page.throughSequence,
+                },
+                Effect.forEach(page.entries, (entry) => settleHubEntryTx({ ...input, entry })),
+              );
+        if (page.originPage) {
+          if (input.afterOriginSequence === undefined)
+            return yield* new Store.MemoryStoreConflict({ code: "invalid_cursor" });
+          yield* store.receiveOriginPageTx(
+            input.memorySpaceId,
+            input.hubEnvironmentId,
+            input.afterOriginSequence,
+            page.originPage,
+          );
+        }
+        return settled;
       }),
     );
   });

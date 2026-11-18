@@ -10,6 +10,7 @@ import * as Effect from "effect/Effect";
 import * as SqlClient from "effect/sql/SqlClient";
 import type { MemoryWork, SyncWorkOwner } from "./StoreModel.ts";
 import { stored } from "./StoreCodecs.ts";
+import { moveScopesCurrent } from "./ScopeMoves.ts";
 
 export const suggestionForgetGeneration = Effect.fn("MemorySuggestions.forgetGeneration")(
   function* (space: M.MemorySpaceId) {
@@ -21,6 +22,23 @@ export const suggestionForgetGeneration = Effect.fn("MemorySuggestions.forgetGen
       }>`SELECT forget_generation FROM memory_space_counters WHERE space=${space}`,
     );
     return row?.forget_generation ?? 0;
+  },
+);
+
+export const acceptingSuggestionOperation = Effect.fn("MemorySuggestions.acceptingOperation")(
+  function* (
+    sql: SqlClient.SqlClient,
+    space: M.MemorySpaceId,
+    memoryId: M.MemoryId,
+    origin: M.ScopedThreadRef,
+  ) {
+    const [row] = yield* stored(
+      "suggestion-accepting-operation",
+      sql<{ accept_operation_id: M.MemoryOperationId }>`SELECT accept_operation_id
+      FROM memory_save_suggestions WHERE space=${space} AND id=${memoryId} AND state='accepting'
+        AND origin_environment_id=${origin.environmentId} AND origin_thread_id=${origin.threadId}`,
+    );
+    return row?.accept_operation_id;
   },
 );
 
@@ -52,7 +70,7 @@ export const acceptanceGenerationMatches = (sql: SqlClient.SqlClient) =>
       coalesce((SELECT forget_generation FROM memory_space_counters c
         WHERE c.space=memory_outbox.space),0))`;
 
-export const checkAcceptanceDispatch = Effect.fn("MemorySuggestions.checkDispatch")(function* (
+export const checkSyncDispatch = Effect.fn("MemoryStore.checkSyncDispatch")(function* (
   sql: SqlClient.SqlClient,
   owner: SyncWorkOwner,
   input: M.MemoryHubPushInput,
@@ -62,8 +80,9 @@ export const checkAcceptanceDispatch = Effect.fn("MemorySuggestions.checkDispatc
   const boundSuggestion = "acceptanceGeneration" in metadata;
   const operation = input.operations[0];
   if (
-    operation?.kind !== "upsert" ||
-    (!promotion && !boundSuggestion && operation.forgetFence === undefined)
+    operation?.kind !== "move" &&
+    (operation?.kind !== "upsert" ||
+      (!promotion && !boundSuggestion && operation.forgetFence === undefined))
   )
     return input;
   const now = yield* Clock.currentTimeMillis;
@@ -76,7 +95,14 @@ export const checkAcceptanceDispatch = Effect.fn("MemorySuggestions.checkDispatc
       AND ${promotionPrerequisiteReady(sql, "memory_outbox")} AND ${promotionBindingCurrent(sql)}`,
   ).pipe(Effect.mapError(() => new M.MemoryHubError({ code: "storage_failed" })));
   if (!rows.length) return yield* new M.MemoryHubError({ code: "source_invalidated" });
-  if (promotion)
+  if (operation.kind === "move") {
+    const binding = "moveBinding" in metadata ? metadata.moveBinding : undefined;
+    const current = yield* moveScopesCurrent(sql, operation, binding).pipe(
+      Effect.mapError(() => new M.MemoryHubError({ code: "storage_failed" })),
+    );
+    if (!current) return yield* new M.MemoryHubError({ code: "source_invalidated" });
+  }
+  if (promotion && operation.kind === "upsert")
     yield* validateSummaryDependencies(operation.memorySpaceId, operation.payload).pipe(
       Effect.provideService(SqlClient.SqlClient, sql),
       Effect.mapError(

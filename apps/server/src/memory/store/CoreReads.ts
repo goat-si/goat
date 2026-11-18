@@ -223,10 +223,11 @@ export const makeCoreReads = (kernel: Pick<StoreKernel, "sql" | "transact">) => 
         heads_json: string | null;
         generation: number | null;
         reasons_json: string | null;
+        scope_version: number | null;
         fence_json: string | null;
         tombstone: number;
         pending_forget: number;
-      }>`SELECT i.status,i.heads_json,i.generation,json_extract(i.availability_json,'$.reasons') AS reasons_json,l.fence_json,
+      }>`SELECT i.status,i.heads_json,i.generation,json_extract(i.availability_json,'$.reasons') AS reasons_json,l.fence_json,l.scope_version,
       EXISTS(SELECT 1 FROM memory_tombstones t WHERE t.space=${space} AND t.memory_id=${memoryId}) AS tombstone,
       EXISTS(SELECT 1 FROM memory_pending_forget_intents p WHERE p.space=${space} AND p.memory_id=${memoryId}) AS pending_forget
       FROM (SELECT 1) LEFT JOIN memory_items i ON i.space=${space} AND i.memory_id=${memoryId}
@@ -239,6 +240,7 @@ export const makeCoreReads = (kernel: Pick<StoreKernel, "sql" | "transact">) => 
       status: row.status,
       heads: row.heads_json ? yield* headsCodec.decode(row.heads_json, strict) : [],
       generation: row.generation ?? 0,
+      ...(row.scope_version ? { scopeVersion: row.scope_version } : {}),
       reasons: row.reasons_json
         ? yield* resolutionReasonsCodec.decode(row.reasons_json, strict)
         : [],
@@ -691,6 +693,7 @@ export const makeCoreReads = (kernel: Pick<StoreKernel, "sql" | "transact">) => 
       acceptanceGeneration: _acceptance,
       summaryPrerequisite: _summary,
       promotionBinding: _project,
+      moveBinding: _moveBinding,
       ...metadata
     } = work.metadata;
     return yield* operationFromMetadata(metadata);

@@ -319,16 +319,19 @@ export const requestGuarded = Effect.fn("EnvironmentRpc.request")(function* <
     ) {
       const {
         includeMarks: _marks,
+        includeScopeVersion,
         origin,
         ...legacyInput
       } = dispatchInput as object & {
         readonly includeMarks?: true;
+        readonly includeScopeVersion?: true;
         readonly origin?: import("@goat/contracts").ScopedThreadRef;
       };
       dispatchInput = {
         ...legacyInput,
         ...(memoryCapabilities?.provenanceProjection ? { includeMarks: true as const } : {}),
         ...(memoryCapabilities?.originFilter && origin ? { origin } : {}),
+        ...(memoryCapabilities?.scopeMoves && includeScopeVersion ? { includeScopeVersion } : {}),
       } as EnvironmentRpcInput<TTag>;
     }
     if (
@@ -338,6 +341,7 @@ export const requestGuarded = Effect.fn("EnvironmentRpc.request")(function* <
         config.environment.capabilities.memory?.resolutionInputs !== true) ||
       ((tag === WS_METHODS.memoryHubDiagnostics || tag === WS_METHODS.memoryHubReconcile) &&
         config.environment.capabilities.memory?.hubDiagnostics !== true) ||
+      (tag === WS_METHODS.memoryMove && memoryCapabilities?.scopeMoves !== true) ||
       (tag.startsWith("memory.suggestions.") && memoryCapabilities?.saveSuggestions !== true) ||
       (tag === WS_METHODS.memoryImportProvider &&
         config.environment.capabilities.memory?.importProvider !== true) ||

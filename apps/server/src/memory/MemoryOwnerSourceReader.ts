@@ -172,7 +172,11 @@ const make = Effect.gen(function* () {
           limit: request.limit,
           ...(request.cursor === undefined ? {} : { cursor: request.cursor }),
         };
-        const before = yield* service.prepareSourceRead(input, fence);
+        const before = yield* service.prepareSourceRead(
+          input,
+          fence,
+          request.requesterEnvironmentId,
+        );
         if (
           before.request.scopeVersion !== request.scopeVersion ||
           encodeWatermark(before.request.sourceWatermark) !==
@@ -240,7 +244,11 @@ const make = Effect.gen(function* () {
           Effect.mapError(() => new Store.MemoryStoreConflict({ code: "payload_too_large" })),
         );
         yield* query(encodeOutcome(checked));
-        const after = yield* service.prepareSourceRead(input, fence);
+        const after = yield* service.prepareSourceRead(
+          input,
+          fence,
+          request.requesterEnvironmentId,
+        );
         if (
           before.generation !== after.generation ||
           encodeWatermark(after.request.sourceWatermark) !==
@@ -263,13 +271,21 @@ const make = Effect.gen(function* () {
       limit: request.limit,
       ...(request.cursor === undefined ? {} : { cursor: request.cursor }),
     };
-    const before = yield* service.prepareSourceRead(input, reauthorize);
+    const before = yield* service.prepareSourceRead(
+      input,
+      reauthorize,
+      request.requesterEnvironmentId,
+    );
     const outcome = yield* readCommitted(request, reauthorize);
     // Re-run bounded source SQL in a fresh transaction after transport preparation,
     // including every retry. The closure lasts only for this in-flight response.
     const validate = Effect.gen(function* () {
       const current = yield* readCommitted(request, reauthorize);
-      const after = yield* service.prepareSourceRead(input, reauthorize);
+      const after = yield* service.prepareSourceRead(
+        input,
+        reauthorize,
+        request.requesterEnvironmentId,
+      );
       if (
         before.generation !== after.generation ||
         (yield* query(encodeOutcome(current))) !== (yield* query(encodeOutcome(outcome)))

@@ -96,6 +96,28 @@ describe("runMigrations database ahead of this build", () => {
     }).pipe(Effect.provide(NodeSqliteClient.layer({ filename: ":memory:" }))),
   );
 
+  it.effect("repairs only the kind byte of historical compact move receipts", () =>
+    Effect.gen(function* () {
+      const sql = yield* SqlClient.SqlClient;
+      yield* runMigrations({ toMigrationInclusive: 161 });
+      yield* sql`INSERT INTO memory_compact_receipts
+        (space,operation_id,operation_digest,hub_sequence,receipt_json,compact_json,compact_blob)
+        VALUES
+          ('synthetic','old-move','d',1,'{}','{"operationKind":"move"}',X'02FF0000AFFE00'),
+          ('synthetic','old-upsert','d',2,'{}','{"operationKind":"upsert"}',X'02000000AFFE00'),
+          ('synthetic','new-move','d',3,'{}','{"operationKind":"move"}',X'02040300AFFE00')`;
+      yield* runMigrations();
+      assert.deepStrictEqual(
+        yield* sql`SELECT operation_id,hex(compact_blob) AS binary FROM memory_compact_receipts ORDER BY hub_sequence`,
+        [
+          { operation_id: "old-move", binary: "02040000AFFE00" },
+          { operation_id: "old-upsert", binary: "02000000AFFE00" },
+          { operation_id: "new-move", binary: "02040300AFFE00" },
+        ],
+      );
+    }).pipe(Effect.provide(NodeSqliteClient.layer({ filename: ":memory:" }))),
+  );
+
   it.effect(
     "migration 160 preserves suggestion forget generations and backfills the hub watermark",
     () =>
