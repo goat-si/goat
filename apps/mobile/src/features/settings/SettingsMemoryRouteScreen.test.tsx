@@ -1,4 +1,16 @@
-import { revertHistory } from "./MemoryRouteFixtures";
+import {
+  importFixtureSourceId as sourceId,
+  mockDismissibleSuggestion,
+  mockMemoryImport,
+  mockStagedSuggestion,
+  replaySuggestionChange,
+  revertHistory,
+} from "./MemoryRouteFixtures";
+import {
+  legacyMemoryCapabilities,
+  suggestionMemoryCapabilities,
+  suggestionScenario,
+} from "@goat/client-runtime/state/memory-suggestions-fixtures";
 import { act } from "react";
 import { afterEach, describe, expect, it, vi } from "vite-plus/test";
 import {
@@ -1164,63 +1176,10 @@ it("keeps dozens of native projects behind one menu row", async () => {
 describe("native WP6 Settings commands", () => {
   const importCalls = () =>
     h.calls.filter((call) => call.method === WS_METHODS.memoryImportProvider);
-  const sourceId = "00000000-0000-4000-8000-000000000025";
   function setupImport(count = 1) {
     h = createNativeMemoryHarness();
     h.grant(["memory:read", "memory:write", "filesystem:read", "settings:write"]);
-    h.responses.set(WS_METHODS.memoryImportProvider, (value) => {
-      const input = value as {
-        action: string;
-        operationId: string;
-        items: Array<{ sourceItemKey: string }>;
-      };
-      if (input.action === "discover")
-        return {
-          action: "discover",
-          sources: [
-            {
-              sourceId,
-              format: "codex",
-              parserVersion: "1",
-              profile: "private-profile",
-              label: "/private/path",
-            },
-          ],
-        };
-      if (input.action === "preview")
-        return {
-          action: "preview",
-          sourceId,
-          sessionId: "synthetic-session",
-          items: Array.from({ length: count }, (_, index) => ({
-            sourceItemKey: `key-${index}`,
-            sourceFingerprint: "a".repeat(64),
-            byteCount: 10,
-            mappingRequired: true,
-            title: `Import memory ${index + 1}`,
-          })),
-        };
-      return {
-        action: input.action,
-        receipt: {
-          operationId: input.operationId,
-          sourceId,
-          sessionId: "synthetic-session",
-          sessionNewItems: 1,
-          sessionBodyBytes: 10,
-          state: "completed",
-          items:
-            input.items?.map((item) => ({
-              sourceItemKey: item.sourceItemKey,
-              outcome: "created",
-              memoryId: null,
-              revisionId: null,
-            })) ?? [],
-          remaining: 0,
-        },
-        syncStatus: nativeSyncStatus,
-      };
-    });
+    mockMemoryImport(h, count);
   }
   async function show(
     params: Parameters<typeof SettingsMemoryRouteScreen>[0]["route"]["params"] = {
@@ -2207,33 +2166,75 @@ it.each([false, true])("keeps native legacy revert with incomplete page=%s", asy
   }
 });
 
-it("reviews save suggestions and shows the provenance badge in Memory Settings", async () => {
-  const suggestion = {
-    suggestionId: nativeId,
-    text: "Synthetic words to review",
-    state: "pending",
-    reason: "thread_lineage_incomplete",
-    lineageComplete: false,
-  };
+it("shows a refused save as pending through acceptance and marks only the published memory", async () => {
+  const { refused } = suggestionScenario;
+  await mount(undefined, mockStagedSuggestion, suggestionMemoryCapabilities);
+  expect(view.container.textContent).toContain(refused[0]?.text);
+  expect(view.container.textContent).not.toContain("Provenance unverified");
+  await view.click("Accept");
+  expect(h.calls.find(({ method }) => method === WS_METHODS.memorySuggestionsAccept)).toMatchObject(
+    {
+      environmentId: nativeEnv,
+      input: { memorySpaceId: nativeSpace, suggestionId: refused[0]?.suggestionId },
+    },
+  );
+  expect(view.container.textContent).toContain("Waiting for the memory hub");
+  expect(view.container.textContent).toContain(refused[0]?.text);
+  expect(view.container.textContent).not.toContain("Provenance unverified");
+  expect(
+    [...view.container.querySelectorAll("button")].find((b) => b.textContent === "Accept")
+      ?.disabled,
+  ).toBe(true);
+
+  await replaySuggestionChange(h, "upsert");
+  expect(h.calls.findLast(({ method }) => method === WS_METHODS.memoryList)?.input).toHaveProperty(
+    "includeMarks",
+    true,
+  );
+  expect(view.container.textContent).toContain(refused[0]?.text);
+  expect(view.container.textContent).toContain("Provenance unverified");
+  expect(view.container.textContent).toContain("No pending suggestions");
+  expect(view.container.textContent).not.toContain("Waiting for the memory hub");
+});
+
+it("removes dismissed suggestions and removes remaining suggestions when a forget is projected", async () => {
+  const { dismissible, forgettable } = suggestionScenario;
+  await mount(undefined, mockDismissibleSuggestion, suggestionMemoryCapabilities);
+  expect(view.container.textContent).toContain(dismissible[0]?.text);
+  await view.click("Dismiss");
+  expect(
+    h.calls.find(({ method }) => method === WS_METHODS.memorySuggestionsDismiss),
+  ).toMatchObject({
+    environmentId: nativeEnv,
+    input: { memorySpaceId: nativeSpace, suggestionId: dismissible[0]?.suggestionId },
+  });
+  expect(view.container.textContent).toContain("No pending suggestions");
+  expect(view.container.textContent).not.toContain(dismissible[0]?.text);
+
+  h.responses.set(WS_METHODS.memorySuggestionsList, () => forgettable);
+  await view.click("Show suggestions");
+  expect(view.container.textContent).toContain(forgettable[0]?.text);
+  await replaySuggestionChange(h, "forget");
+  expect(view.container.textContent).toContain("Forgotten memory");
+  expect(view.container.textContent).not.toContain(forgettable[0]?.text);
+});
+
+it("does not render or request suggestions from the legacy memory destination", async () => {
+  const { refused, legacyPage } = suggestionScenario;
   await mount(
     undefined,
-    (fixture) => {
-      fixture.responses.set(WS_METHODS.memorySuggestionsList, () => [suggestion]);
-      fixture.responses.set(WS_METHODS.memorySuggestionsAccept, () => {
-        fixture.responses.set(WS_METHODS.memorySuggestionsList, () => []);
-        fixture.responses.set(WS_METHODS.memoryList, () => ({
-          items: [{ ...nativeItem, marks: { provenance: "unverified" } }],
-          projectionWatermark: 2,
-          nextCursor: null,
-        }));
-        return { status: "accepted" };
+    (harness) => {
+      harness.responses.set(WS_METHODS.memoryList, (input) => {
+        expect(input).not.toHaveProperty("includeMarks");
+        return legacyPage;
       });
+      harness.responses.set(WS_METHODS.memorySuggestionsList, () => refused);
     },
-    { protocolVersion: 1, saveSuggestions: true, originFilter: true, provenanceProjection: true },
+    legacyMemoryCapabilities,
   );
-  expect(view.container.textContent).toContain(suggestion.text);
-  await view.click("Accept");
-  expect(view.container.textContent).toContain("Memory saved");
-  expect(view.container.textContent).toContain("Provenance unverified");
-  expect(view.container.textContent).not.toContain(suggestion.text);
+  expect(view.container.textContent).toContain("Remember something");
+  expect(view.container.textContent).not.toMatch(
+    /Show suggestions|Accept|Dismiss|Provenance unverified/,
+  );
+  expect(h.calls.some(({ method }) => method.startsWith("memory.suggestions."))).toBe(false);
 });

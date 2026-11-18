@@ -567,6 +567,10 @@
       "types": "./src/state/launchFold.ts",
       "default": "./src/state/launchFold.ts"
     },
+    "./state/memory-suggestions-fixtures": {
+      "types": "./src/state/memorySuggestions.fixtures.ts",
+      "default": "./src/state/memorySuggestions.fixtures.ts"
+    },
     "./state/launch-fold-fixtures": {
       "types": "./src/state/launchFold.fixtures.ts",
       "default": "./src/state/launchFold.fixtures.ts"

@@ -9,20 +9,20 @@ import {
   retained,
   payload,
 } from "./MemorySettings.browser.fixtures";
+import {
+  legacyMemoryCapabilities,
+  suggestionMemoryCapabilities,
+  suggestionScenario,
+} from "@goat/client-runtime/state/memory-suggestions-fixtures";
 import { memoryImportTestLocks } from "../../test/memoryImportLocks";
 import { MemoryHubDiagnosticsSettings } from "./MemoryHubDiagnosticsSettings";
 import { MemoryRunAccessLabel } from "./MemoryRunAccessLabel";
 import { memorySyncFixture } from "../../test/memorySyncFixture";
 import { readyMemoryExposure, withMemorySignal } from "../../test/memoryExposureFixture";
-import { act, Children, isValidElement, useSyncExternalStore, type ReactNode } from "react";
+import { act, useSyncExternalStore, type ReactNode } from "react";
 import { createRoot, type Root } from "react-dom/client";
 import { afterEach, beforeEach, expect, it, vi } from "vite-plus/test";
-import {
-  EnvironmentId,
-  MemoryItem,
-  type MemoryHistoryPage,
-  MemoryUpsertInput,
-} from "@goat/contracts";
+import { EnvironmentId, type MemoryHistoryPage, MemoryUpsertInput } from "@goat/contracts";
 import * as Schema from "effect/Schema";
 import * as Option from "effect/Option";
 const encodeUpsert = Schema.encodeSync(MemoryUpsertInput);
@@ -275,125 +275,22 @@ vi.mock("../../state/session", async (original) => ({
     return state.allowed;
   },
 }));
-vi.mock("@legendapp/list/react", () => ({
-  LegendList: ({
-    data,
-    renderItem,
-  }: {
-    data: MemoryItem[];
-    renderItem: (input: { item: MemoryItem }) => ReactNode;
-  }) => (
-    <div>
-      {data.map((item) => (
-        <div key={item.memoryId}>{renderItem({ item })}</div>
-      ))}
-    </div>
-  ),
-}));
-vi.mock("./MemoryScopePicker", () => ({
-  MemoryScopePicker: ({
-    items,
-    value,
-    onChange,
-    label,
-    disabled,
-  }: {
-    items: { id: string; title: string }[];
-    value: string | null;
-    onChange: (id: string) => void;
-    label: string;
-    disabled: boolean;
-  }) => (
-    <select
-      aria-label={label}
-      value={value ?? ""}
-      disabled={disabled}
-      onChange={(event) => onChange(event.target.value)}
-    >
-      <option value="">Choose</option>
-      {items.map((item) => (
-        <option key={item.id} value={item.id}>
-          {item.title}
-        </option>
-      ))}
-    </select>
-  ),
-}));
-vi.mock("../ui/select", () => ({
-  Select: ({
-    children,
-    value,
-    onValueChange,
-    disabled,
-  }: {
-    children: ReactNode;
-    value: string | null;
-    onValueChange: (id: string) => void;
-    disabled: boolean;
-  }) => {
-    const trigger = Children.toArray(children).find(
-      (child) => isValidElement<{ "aria-label"?: string }>(child) && child.props["aria-label"],
-    );
-    return (
-      <select
-        aria-label={
-          isValidElement<{ "aria-label"?: string }>(trigger)
-            ? trigger.props["aria-label"]
-            : undefined
-        }
-        value={value ?? ""}
-        disabled={disabled}
-        onChange={(e) => onValueChange(e.currentTarget.value)}
-      >
-        <option value="">Choose a device</option>
-        {children}
-      </select>
-    );
-  },
-  SelectTrigger: () => null,
-  SelectValue: () => null,
-  SelectPopup: ({ children }: { children: ReactNode }) => <>{children}</>,
-  SelectItem: ({
-    children,
-    value,
-    disabled,
-  }: {
-    children: ReactNode;
-    value: string;
-    disabled?: boolean;
-  }) => (
-    <option value={value} disabled={disabled}>
-      {children}
-    </option>
-  ),
-}));
-vi.mock("./settingsLayout", () => ({
-  SettingsRow: ({
-    title,
-    description,
-    status,
-    control,
-    children,
-  }: {
-    title?: ReactNode;
-    description?: ReactNode;
-    status?: ReactNode;
-    control?: ReactNode;
-    children?: ReactNode;
-  }) => (
-    <div data-test-row>
-      {title}
-      {description}
-      {status}
-      {control}
-      {children}
-    </div>
-  ),
-  SettingsPageContainer: ({ children }: { children: ReactNode }) => <div>{children}</div>,
-  SettingsSection: ({ children, id }: { children: ReactNode; id?: string }) => (
-    <section id={id}>{children}</section>
-  ),
-}));
+vi.mock(
+  "@legendapp/list/react",
+  async () => (await import("./MemorySettings.browser.mockComponents")).legendListMock,
+);
+vi.mock(
+  "./MemoryScopePicker",
+  async () => (await import("./MemorySettings.browser.mockComponents")).scopePickerMock,
+);
+vi.mock(
+  "../ui/select",
+  async () => (await import("./MemorySettings.browser.mockComponents")).selectMock,
+);
+vi.mock(
+  "./settingsLayout",
+  async () => (await import("./MemorySettings.browser.mockComponents")).settingsLayoutMock,
+);
 vi.mock("@tanstack/react-router", () => ({ useNavigate: () => state.navigate }));
 import { RegistryContext } from "@effect/atom-react";
 import {
@@ -833,7 +730,12 @@ const ownerView = (version: number, requester: string) => ({
     removals: [],
   },
 });
-async function supportedScreen(withDetails = true, followNavigation = false, originFilter = false) {
+async function supportedScreen(
+  withDetails = true,
+  followNavigation = false,
+  originFilter = false,
+  memoryCapabilities = legacyMemoryCapabilities,
+) {
   const { AtomRegistry } = await import("effect/reactivity");
   const registry = AtomRegistry.make();
   const get = registry.get.bind(registry);
@@ -848,7 +750,7 @@ async function supportedScreen(withDetails = true, followNavigation = false, ori
   state.environment = {
     serverConfig: {
       environment: {
-        capabilities: { memory: { protocolVersion: 1, resolutionInputs: true, originFilter } },
+        capabilities: { memory: { ...memoryCapabilities, resolutionInputs: true, originFilter } },
       },
     },
   };
@@ -2799,4 +2701,92 @@ it("confirms a memory selection once and reports each result while the conversat
   expect(container.textContent?.match(/· Forgotten/g)).toHaveLength(2);
   expect(container.textContent).toContain("· Failed · unavailable");
   expect(container.querySelectorAll('input[aria-label^="Select memory"]:checked')).toHaveLength(1);
+});
+
+it("shows a refused save as pending through acceptance and marks only the published memory", async () => {
+  const { refused, accept, accepting, unpublished, settled, published } = suggestionScenario;
+  state.queries.set("list", Option.some(unpublished));
+  state.queries.set("suggestions", Option.some(refused));
+  state.executors.set("acceptSuggestion", async (request) => {
+    state.calls(request);
+    state.queries.set("suggestions", Option.some(accepting));
+    return success(accept);
+  });
+  const { render } = await supportedScreen(false, false, false, suggestionMemoryCapabilities);
+  expect(container.textContent).toContain(refused[0]?.text);
+  expect(container.textContent).not.toContain("Provenance unverified");
+  await click("Accept");
+  await render();
+  expect(state.calls).toHaveBeenCalledWith({
+    environmentId: envId,
+    input: { memorySpaceId: spaceId, suggestionId: refused[0]?.suggestionId },
+  });
+  expect(container.textContent).toContain("Waiting for the memory hub");
+  expect(container.textContent).toContain(refused[0]?.text);
+  expect(container.textContent).not.toContain("Provenance unverified");
+  expect(
+    [...container.querySelectorAll("button")].find((b) => b.textContent === "Accept")?.disabled,
+  ).toBe(true);
+
+  state.queries.set("list", Option.some(published));
+  state.queries.set("suggestions", Option.some(settled));
+  await render();
+  expect(container.textContent).toContain(refused[0]?.text);
+  expect(container.textContent).toContain("Provenance unverified");
+  expect(container.textContent).toContain("No pending suggestions");
+  expect(container.textContent).not.toContain("Waiting for the memory hub");
+});
+
+it("removes dismissed suggestions and removes remaining suggestions when a forget is projected", async () => {
+  const { dismissible, dismiss, dismissed, published, forgettable, forgotten, afterForget } =
+    suggestionScenario;
+  state.queries.set("list", Option.some(published));
+  state.queries.set("suggestions", Option.some(dismissible));
+  state.executors.set("dismissSuggestion", async (request) => {
+    state.calls(request);
+    state.queries.set("suggestions", Option.some(dismissed));
+    return success(dismiss);
+  });
+  const { render } = await supportedScreen(false, false, false, suggestionMemoryCapabilities);
+  expect(container.textContent).toContain(dismissible[0]?.text);
+  await click("Dismiss");
+  await render();
+  expect(state.calls).toHaveBeenCalledWith({
+    environmentId: envId,
+    input: { memorySpaceId: spaceId, suggestionId: dismissible[0]?.suggestionId },
+  });
+  expect(container.textContent).toContain("No pending suggestions");
+  expect(container.textContent).not.toContain(dismissible[0]?.text);
+
+  state.queries.set("suggestions", Option.some(forgettable));
+  await render();
+  expect(container.textContent).toContain(forgettable[0]?.text);
+  state.exposure = withMemorySignal(
+    state.exposure,
+    spaceId,
+    "forget",
+    published.items[0]!.memoryId,
+  );
+  state.queries.set("list", Option.some(afterForget));
+  state.queries.set("suggestions", Option.some(forgotten));
+  await render();
+  expect(container.textContent).toContain("Forgotten memory");
+  expect(container.textContent).not.toContain(forgettable[0]?.text);
+});
+
+it("does not render or request suggestions from the legacy memory destination", async () => {
+  const { refused, legacyPage } = suggestionScenario;
+  state.queries.set("list", Option.some(legacyPage));
+  state.queries.set("suggestions", Option.some(refused));
+  await supportedScreen(false, false, false, legacyMemoryCapabilities);
+  expect(container.textContent).toContain("Remember something");
+  expect(container.textContent).not.toMatch(
+    /Show suggestions|Accept|Dismiss|Provenance unverified/,
+  );
+  expect(state.requests.some(({ label }) => label === "suggestions")).toBe(false);
+  expect(state.calls).not.toHaveBeenCalledWith(
+    expect.objectContaining({
+      input: expect.objectContaining({ suggestionId: refused[0]?.suggestionId }),
+    }),
+  );
 });

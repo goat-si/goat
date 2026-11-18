@@ -1,6 +1,15 @@
-import { MemoryHistoryPage } from "@goat/contracts";
+import { act } from "react";
+import { suggestionScenario } from "@goat/client-runtime/state/memory-suggestions-fixtures";
+import { MemoryHistoryPage, WS_METHODS } from "@goat/contracts";
 import * as Schema from "effect/Schema";
-import { nativeSpace, nativeId, nativeEnv, nativeItem } from "../../testing/memoryNativeHarness";
+import {
+  nativeSpace,
+  nativeId,
+  nativeEnv,
+  nativeItem,
+  nativeSyncStatus,
+  type NativeMemoryHarness,
+} from "../../testing/memoryNativeHarness";
 
 const originalId = "00000000-0000-4000-8000-000000000003";
 const resolutionId = "00000000-0000-4000-8000-000000000006";
@@ -42,5 +51,105 @@ export function revertHistory() {
     revertResults: [],
     localAvailability: nativeItem.localAvailability,
     nextCursor: null,
+  });
+}
+
+export const importFixtureSourceId = "00000000-0000-4000-8000-000000000025";
+
+export function mockMemoryImport(harness: NativeMemoryHarness, count: number) {
+  harness.responses.set(WS_METHODS.memoryImportProvider, (value) => {
+    const input = value as {
+      action: string;
+      operationId: string;
+      items: Array<{ sourceItemKey: string }>;
+    };
+    if (input.action === "discover")
+      return {
+        action: "discover",
+        sources: [
+          {
+            sourceId: importFixtureSourceId,
+            format: "codex",
+            parserVersion: "1",
+            profile: "private-profile",
+            label: "/private/path",
+          },
+        ],
+      };
+    if (input.action === "preview")
+      return {
+        action: "preview",
+        sourceId: importFixtureSourceId,
+        sessionId: "synthetic-session",
+        items: Array.from({ length: count }, (_, index) => ({
+          sourceItemKey: `key-${index}`,
+          sourceFingerprint: "a".repeat(64),
+          byteCount: 10,
+          mappingRequired: true,
+          title: `Import memory ${index + 1}`,
+        })),
+      };
+    return {
+      action: input.action,
+      receipt: {
+        operationId: input.operationId,
+        sourceId: importFixtureSourceId,
+        sessionId: "synthetic-session",
+        sessionNewItems: 1,
+        sessionBodyBytes: 10,
+        state: "completed",
+        items:
+          input.items?.map((item) => ({
+            sourceItemKey: item.sourceItemKey,
+            outcome: "created",
+            memoryId: null,
+            revisionId: null,
+          })) ?? [],
+        remaining: 0,
+      },
+      syncStatus: nativeSyncStatus,
+    };
+  });
+}
+
+export function mockStagedSuggestion(harness: NativeMemoryHarness) {
+  const { refused, accept, accepting, unpublished } = suggestionScenario;
+  harness.responses.set(WS_METHODS.memoryList, () => unpublished);
+  harness.responses.set(WS_METHODS.memorySuggestionsList, () => refused);
+  harness.responses.set(WS_METHODS.memorySuggestionsAccept, () => {
+    harness.responses.set(WS_METHODS.memorySuggestionsList, () => accepting);
+    return accept;
+  });
+}
+
+export function mockDismissibleSuggestion(harness: NativeMemoryHarness) {
+  const { dismissible, dismiss, dismissed, published } = suggestionScenario;
+  harness.responses.set(WS_METHODS.memoryList, () => published);
+  harness.responses.set(WS_METHODS.memorySuggestionsList, () => dismissible);
+  harness.responses.set(WS_METHODS.memorySuggestionsDismiss, () => {
+    harness.responses.set(WS_METHODS.memorySuggestionsList, () => dismissed);
+    return dismiss;
+  });
+}
+
+export async function replaySuggestionChange(
+  harness: NativeMemoryHarness,
+  kind: "upsert" | "forget",
+) {
+  const { settled, published, forgotten, afterForget } = suggestionScenario;
+  const [memory] = published.items;
+  if (!memory) throw new Error("Expected a published fixture memory");
+  const page = kind === "upsert" ? published : afterForget;
+  harness.responses.set(WS_METHODS.memoryList, () => page);
+  harness.responses.set(WS_METHODS.memorySuggestionsList, () =>
+    kind === "upsert" ? settled : forgotten,
+  );
+  await act(async () => {
+    await harness.signal({
+      kind,
+      memorySpaceId: nativeSpace,
+      memoryId: memory.memoryId,
+      projectionWatermark: page.projectionWatermark,
+    });
   });
 }
