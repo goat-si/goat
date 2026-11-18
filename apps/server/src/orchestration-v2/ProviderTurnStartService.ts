@@ -1073,7 +1073,7 @@ export const layer: Layer.Layer<
         sameNativeThread,
         handoffUsage,
         deliveredItemIds,
-        acceptedAttempts,
+        nativeHistoryAttempts,
         nativeInputRunIds,
         legacyInputRunIds,
       } = handoffContext;
@@ -1393,7 +1393,7 @@ export const layer: Layer.Layer<
           nativeInputRunIds.size > 0 ||
           (legacyInputRunIds.size > 0 &&
             sameNativeThread &&
-            !acceptedAttempts.some((source) => source.nativeThreadId !== undefined)),
+            !nativeHistoryAttempts.some((source) => source.nativeThreadId !== undefined)),
         shouldStartProviderTurn: runControls.shouldStartProviderTurn,
         shouldFinalizeRun: runControls.shouldFinalizeRun,
         hasWorkspaceMoved: runControls.hasWorkspaceMoved,

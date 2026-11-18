@@ -51,14 +51,14 @@ export const makeRunInputDelivery = Effect.fn("RunExecutionService.makeInputDeli
     ),
   );
   const acknowledge = Effect.fn("RunExecutionService.acknowledgeInputDelivery")(
-    function* (inherited = false) {
+    function* (inherited: boolean) {
       yield* write("accepted", inherited);
     },
     Effect.catch(() =>
       Effect.logWarning("Provider input acceptance could not be recorded.", { runId: run.id }),
     ),
   );
-  const accepted = yield* Effect.cached(acknowledge());
+  const accepted = yield* Effect.cached(acknowledge(false));
   const submitted = yield* Ref.make(false);
   const begin = write("ambiguous").pipe(
     Effect.tap((admitted) => (admitted ? Ref.set(submitted, true) : Effect.void)),

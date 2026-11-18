@@ -1289,6 +1289,7 @@ describe("orchestration v2 provider switching", () => {
               capturedTurns,
               refuseStarts,
               refusalCause,
+              refuseAfterSubmitFence: recovery === "ambiguous",
               failResumeOnce,
               ...(recovery === "inject" ? { injectedHistory } : {}),
               nativeThreadGeneration: generation,
@@ -1345,9 +1346,10 @@ describe("orchestration v2 provider switching", () => {
               worktreePath: null,
             });
             assert.equal(yield* run(1), "completed");
-            yield* Ref.set(refuseStarts, 2);
+            const recoveredAt = recovery === "ambiguous" ? 3 : 4;
+            yield* Ref.set(refuseStarts, recoveredAt - 2);
             assert.equal(yield* run(2), "failed");
-            assert.equal(yield* run(3), "failed");
+            if (recoveredAt === 4) assert.equal(yield* run(3), "failed");
             if (recovery === "lost") {
               const sessionId = (yield* orchestrator.getThreadProjection(threadId))
                 .providerThreads[0]?.providerSessionId;
@@ -1362,7 +1364,7 @@ describe("orchestration v2 provider switching", () => {
               yield* worker.drain();
               yield* Ref.set(failResumeOnce, true);
             }
-            assert.equal(yield* run(4), "completed");
+            assert.equal(yield* run(recoveredAt), "completed");
 
             const turns = yield* Ref.get(capturedTurns);
             assert.equal(turns.length, 2);
@@ -1370,10 +1372,15 @@ describe("orchestration v2 provider switching", () => {
             if (recovery !== "lost")
               assert.equal(turns[1]?.nativeThreadId, turns[0]?.nativeThreadId);
             const delivered = `${turns[1]?.text}${JSON.stringify(yield* Ref.get(injectedHistory))}`;
-            assert.include(delivered, "Request 2");
-            assert.include(delivered, "Request 3");
-            assert.deepEqual(turns[1]?.attachments, [missedImage]);
-            assert.equal(yield* run(5), "completed");
+            if (recovery === "ambiguous") {
+              assert.notInclude(delivered, "Request 2");
+              assert.deepEqual(turns[1]?.attachments, []);
+            } else {
+              assert.include(delivered, "Request 2");
+              assert.include(delivered, "Request 3");
+              assert.deepEqual(turns[1]?.attachments, [missedImage]);
+            }
+            assert.equal(yield* run(recoveredAt + 1), "completed");
             assert.deepEqual((yield* Ref.get(capturedTurns)).at(-1)?.attachments, []);
           }).pipe(
             Effect.provide(

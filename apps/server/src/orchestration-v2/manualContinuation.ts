@@ -1,3 +1,4 @@
+import { indexRunInputDelivery } from "./inputDeliveryEvidence.ts";
 import { MAX_CONTINUATION_CHAIN } from "./ContinuationChain.ts";
 import type { OrchestrationV2Run, OrchestrationV2ThreadProjection } from "@goat/contracts";
 
@@ -15,12 +16,7 @@ export function manualContinuationDelivery(
   let sourceId = run?.manualContinuationOfRunId;
   if (sourceId === undefined) return { type: "native" };
   const runs = new Map(projection.runs.map((source) => [source.id, source]));
-  const attempts = new Map<OrchestrationV2Run["id"], Array<History["attempts"][number]>>();
-  for (const attempt of projection.attempts) {
-    const owned = attempts.get(attempt.runId) ?? [];
-    owned.push(attempt);
-    attempts.set(attempt.runId, owned);
-  }
+  const evidence = indexRunInputDelivery(projection.attempts);
   const visited = new Set<OrchestrationV2Run["id"]>();
   while (
     sourceId !== undefined &&
@@ -29,23 +25,12 @@ export function manualContinuationDelivery(
   ) {
     visited.add(sourceId);
     const source = runs.get(sourceId);
-    const owned = attempts.get(sourceId);
-    if (source === undefined || owned === undefined) break;
-    const replacement = owned.reduce(
-      (latest, attempt) =>
-        attempt.reason === "steering_restart" ? Math.max(latest, attempt.attemptOrdinal) : latest,
-      0,
-    );
-    const inputAttempts = owned.filter((attempt) => attempt.attemptOrdinal >= replacement);
-    if (inputAttempts.some((attempt) => attempt.inputDelivery === "accepted"))
-      return { type: "native" };
-    if (
-      inputAttempts.length === 0 ||
-      inputAttempts.some((attempt) => attempt.inputDelivery !== "unsent")
-    )
-      break;
-    if (replacement === 0 && source.restartContinuationOfRunId !== undefined) break;
-    if (replacement !== 0 || source.manualContinuationOfRunId === undefined)
+    const input = evidence.get(sourceId);
+    if (source === undefined || input === undefined) break;
+    if (input.delivery === "accepted") return { type: "native" };
+    if (input.delivery !== "unsent") break;
+    if (!input.replaced && source.restartContinuationOfRunId !== undefined) break;
+    if (input.replaced || source.manualContinuationOfRunId === undefined)
       return { type: "replay", source };
     sourceId = source.manualContinuationOfRunId;
   }

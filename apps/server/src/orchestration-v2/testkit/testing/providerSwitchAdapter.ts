@@ -52,6 +52,7 @@ export function makeTestAdapter(input: {
   readonly injectedHistory?: Ref.Ref<ReadonlyArray<unknown>>;
   readonly failStartOnce?: Ref.Ref<boolean>;
   readonly refuseStarts?: Ref.Ref<number>;
+  readonly refuseAfterSubmitFence?: boolean;
   readonly refusalCause?: unknown;
   readonly failInjectionOnce?: Ref.Ref<boolean>;
   readonly nativeThreadGeneration?: Ref.Ref<number>;
@@ -111,6 +112,7 @@ export function makeTestAdapter(input: {
       };
 
       const runtime: ProviderAdapter.ProviderAdapterV2SessionRuntime = {
+        tracksInputDelivery: true,
         instanceId: input.instanceId,
         driver: input.driver,
         providerSessionId: sessionInput.providerSessionId,
@@ -216,7 +218,9 @@ export function makeTestAdapter(input: {
           if (
             input.refuseStarts !== undefined &&
             (yield* Ref.getAndUpdate(input.refuseStarts, (left) => Math.max(0, left - 1))) > 0
-          )
+          ) {
+            if (input.refuseAfterSubmitFence)
+              yield* turnInput.inputDelivery?.begin() ?? Effect.void;
             return yield* new ProviderAdapter.ProviderAdapterTurnStartError({
               driver: input.driver,
               threadId: turnInput.threadId,
@@ -224,6 +228,9 @@ export function makeTestAdapter(input: {
               runId: turnInput.runId,
               cause: input.refusalCause ?? new ClaudeBackgroundWorkBlocksQueryReplacementError(),
             });
+          }
+          if (turnInput.inputDelivery && !(yield* turnInput.inputDelivery.begin())) return;
+          yield* turnInput.inputDelivery?.accepted() ?? Effect.void;
           yield* Effect.yieldNow;
           yield* Ref.update(input.capturedTurns, (turns) => [
             ...turns,

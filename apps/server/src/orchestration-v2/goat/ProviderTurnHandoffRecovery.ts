@@ -112,15 +112,17 @@ export const makeProviderTurnHandoffRecovery = Effect.gen(function* () {
         ...deliveredItemIds,
         ...settledHandoffs.flatMap((handoff) => handoff.delivery?.omittedItemIds ?? []),
       ]);
-      const deliveredAttemptIds = new Set(
+      const recordedTurnAttemptIds = new Set(
         projection.providerTurns.map((turn) => turn.runAttemptId),
       );
-      const acceptedAttempts = projection.attempts.filter(
+      const nativeHistoryAttempts = projection.attempts.filter(
         (source) =>
-          source.providerThreadId === providerThread.id && deliveredAttemptIds.has(source.id),
+          source.providerThreadId === providerThread.id &&
+          source.inputDelivery !== "unsent" &&
+          (source.inputDelivery === "accepted" || recordedTurnAttemptIds.has(source.id)),
       );
       const nativeInputRunIds = new Set(
-        acceptedAttempts
+        nativeHistoryAttempts
           .filter(
             (source) =>
               source.nativeThreadId !== undefined &&
@@ -129,7 +131,7 @@ export const makeProviderTurnHandoffRecovery = Effect.gen(function* () {
           .map((source) => source.runId),
       );
       const legacyInputRunIds = new Set(
-        acceptedAttempts
+        nativeHistoryAttempts
           .filter((source) => source.nativeThreadId === undefined)
           .map((source) => source.runId),
       );
@@ -181,7 +183,7 @@ export const makeProviderTurnHandoffRecovery = Effect.gen(function* () {
         ...loadedProviderThread,
         contextUsage: handoffUsage,
       };
-      const missedRuns = missedTurnInputRuns(projection, run, deliveredAttemptIds).filter(
+      const missedRuns = missedTurnInputRuns(projection, run).filter(
         (source) => source.id !== replayedRunId,
       );
       const missedRunIds = new Set(missedRuns.map((source) => source.id));
@@ -190,7 +192,7 @@ export const makeProviderTurnHandoffRecovery = Effect.gen(function* () {
         handoffUsage,
         deliveredItemIds,
         coveredItemIds,
-        acceptedAttempts,
+        nativeHistoryAttempts,
         nativeInputRunIds,
         legacyInputRunIds,
         missedRuns,
@@ -215,12 +217,12 @@ export const makeProviderTurnHandoffRecovery = Effect.gen(function* () {
     };
     const prepareRetryHandoff = Effect.fn("ProviderTurnStartService.prepareRetryHandoff")(
       function* (context: ReturnType<typeof handoffContextForThread>) {
-        const { missedRunIds, coveredItemIds, missedRuns, acceptedAttempts, resumeFellBack } =
-          context;
+        const { missedRunIds, coveredItemIds, missedRuns, resumeFellBack } = context;
         const missedHistory =
           missedRunIds.size === 0 || (resumeFellBack && !carriesImages)
             ? []
             : yield* projectionStore.getTurnStartHistory(threadId, [...missedRunIds]);
+        const missedMessageIds = new Set(missedRuns.map((source) => source.userMessageId));
         // A fresh session's full recovery summary already includes the missed text.
         const missedItems = resumeFellBack
           ? []
@@ -229,6 +231,7 @@ export const makeProviderTurnHandoffRecovery = Effect.gen(function* () {
                 item.runId !== null &&
                 missedRunIds.has(item.runId) &&
                 !coveredItemIds.has(item.id) &&
+                (item.type !== "user_message" || missedMessageIds.has(item.messageId)) &&
                 historicalMessage(item) !== null,
             );
         const firstMissedRun = missedRuns[0];
@@ -260,7 +263,6 @@ export const makeProviderTurnHandoffRecovery = Effect.gen(function* () {
               projection,
               history: missedHistory,
               missedRuns,
-              acceptedAttempts,
               run,
               attachments,
               goalDriver,
