@@ -633,18 +633,95 @@ it.effect(
     ),
 );
 
-it.effect("keeps saved assistant steps in live item order when closed prefixes overlap", () =>
+it.effect.each([
+  {
+    name: "exact steps",
+    live: ["Inspect logs.", "Check status."],
+    saved: ["Inspect logs.", "Check status."],
+    final: [
+      ["Inspect logs.", 0],
+      ["Check status.", 1],
+    ],
+  },
+  {
+    name: "partial steps",
+    live: ["Inspect log", "Check stat"],
+    saved: ["Inspect logs.", "Check status."],
+    final: [
+      ["Inspect logs.", 0],
+      ["Check status.", 1],
+    ],
+  },
+  {
+    name: "overlapping prefixes",
+    live: ["Build", "Build with cache"],
+    saved: ["Build with cache: compile.", "Build with cache: validate."],
+    final: [
+      ["Build with cache: compile.", 0],
+      ["Build with cache: validate.", 1],
+    ],
+  },
+  {
+    name: "saved-only steps before, between, and after live steps",
+    live: ["Inspect logs.", "Check status."],
+    saved: [
+      "Check status. Open the dashboard first.",
+      "Inspect logs.",
+      "Read the alert.",
+      "Check status.",
+      "Close the dashboard.",
+    ],
+    final: [
+      ["Inspect logs.", 0],
+      ["Check status.", 1],
+      ["Check status. Open the dashboard first.\nRead the alert.\nClose the dashboard.", null],
+    ],
+  },
+  {
+    name: "partial steps around an exact anchor",
+    live: ["Build", "Check status.", "Finish"],
+    saved: ["Build image.", "Check status.", "Finish review."],
+    final: [
+      ["Build image.", 0],
+      ["Check status.", 1],
+      ["Finish review.", 2],
+    ],
+  },
+  {
+    name: "live-only steps around an exact anchor",
+    live: ["Starting.", "Check status.", "Done."],
+    saved: ["Check status."],
+    final: [
+      ["Starting.", 0],
+      ["Check status.", 1],
+      ["Done.", 2],
+    ],
+  },
+  {
+    name: "duplicate saved steps",
+    live: ["Check status.", "Inspect logs.", "Check status."],
+    saved: ["Check status.", "Check status.", "Inspect logs.", "Check status."],
+    final: [
+      ["Check status.", 0],
+      ["Inspect logs.", 1],
+      ["Check status.", 2],
+      ["Check status.", null],
+    ],
+  },
+  {
+    name: "a saved step with no live stream",
+    live: [],
+    saved: ["Inspect logs."],
+    final: [["Inspect logs.", null]],
+  },
+])("preserves final child item order and identity for $name", ({ live, saved, final }) =>
   Effect.gen(function* () {
-    const compile = "Build with cache: compile.";
-    const validate = "Build with cache: validate.";
     const { events, childThreadId } = yield* runCursorTaskTurn(
-      [
-        { type: "text-delta", text: "Build" },
-        { type: "step-completed", stepId: 1, stepDurationMs: 1 },
-        { type: "text-delta", text: "Build with cache" },
-        { type: "step-completed", stepId: 2, stepDurationMs: 1 },
-      ],
-      [{ assistantMessage: { text: compile } }, { assistantMessage: { text: validate } }],
+      live.flatMap((text, index): CursorTaskUpdate[] => [
+        { type: "text-delta", text },
+        { type: "step-completed", stepId: index + 1, stepDurationMs: 1 },
+      ]),
+      saved.map((text) => ({ assistantMessage: { text } })),
     );
     const items = events.flatMap((event) =>
       event.type === "turn_item.updated" &&
@@ -657,16 +734,16 @@ it.effect("keeps saved assistant steps in live item order when closed prefixes o
       .filter((item) => item.streaming)
       .sort((left, right) => left.ordinal - right.ordinal)
       .map((item) => item.id);
-    assert.lengthOf(liveIds, 2);
-    const final = Array.from(new Map(items.map((item) => [item.id, item])).values()).sort(
+    assert.lengthOf(liveIds, live.length);
+    const settled = Array.from(new Map(items.map((item) => [item.id, item])).values()).sort(
       (left, right) => left.ordinal - right.ordinal,
     );
     assert.deepEqual(
-      final.map((item) => [item.id, item.text]),
-      [
-        [liveIds[0], compile],
-        [liveIds[1], validate],
-      ],
+      settled.map((item) => {
+        const originalIndex = liveIds.indexOf(item.id);
+        return [item.text, originalIndex < 0 ? null : originalIndex];
+      }),
+      final,
     );
   }).pipe(
     Effect.scoped,

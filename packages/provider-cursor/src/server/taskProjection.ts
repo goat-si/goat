@@ -40,6 +40,41 @@ function childToolId(subagent: ActiveCursorSubagent, callId: string): string {
   return `${subagent.callId}:child-tool:${callId}`;
 }
 
+interface ExactStepMatch {
+  readonly liveIndex: number;
+  readonly savedIndex: number;
+  readonly length: number;
+  readonly previous: ExactStepMatch | undefined;
+}
+
+function exactStepMatches(live: ReadonlyArray<string>, saved: ReadonlyArray<string>) {
+  const liveTexts = new Set(live);
+  // Track the longest ordered chain of exact matches with a frontier bounded by the live steps.
+  const best = new Array<ExactStepMatch | undefined>(live.length + 1);
+  for (const [savedIndex, part] of saved.entries()) {
+    const text = part.trim();
+    if (!liveTexts.has(text)) continue;
+    let diagonal: ExactStepMatch | undefined;
+    for (const [liveIndex, liveText] of live.entries()) {
+      const above = best[liveIndex + 1];
+      const left = best[liveIndex];
+      const existing = (left?.length ?? 0) > (above?.length ?? 0) ? left : above;
+      const length = (diagonal?.length ?? 0) + 1;
+      best[liveIndex + 1] =
+        text === liveText && length > (existing?.length ?? 0)
+          ? { liveIndex, savedIndex, length, previous: diagonal }
+          : existing;
+      diagonal = above;
+    }
+    if (best.at(-1)?.length === live.length) break;
+  }
+  const matches: ExactStepMatch[] = [];
+  for (let match = best.at(-1); match !== undefined; match = match.previous) {
+    matches.push(match);
+  }
+  return matches.reverse();
+}
+
 export function makeCursorTaskProjection({
   emitAssistant,
   emitReasoning,
@@ -155,23 +190,34 @@ export function makeCursorTaskProjection({
     const state = subagent.projection;
     const target = childTarget(subagent);
     const unstreamed: string[] = [];
+    const prefixes = state.assistantSegments.map((segment) => segment.text.trimStart());
+    const exact = exactStepMatches(
+      prefixes.map((text) => text.trimEnd()),
+      resultParts,
+    );
+    let nextExactIndex = 0;
     let nextSegmentIndex = 0;
-    for (const part of resultParts) {
+    for (const [savedIndex, part] of resultParts.entries()) {
+      const anchor = exact[nextExactIndex];
+      if (anchor?.savedIndex === savedIndex) {
+        nextExactIndex++;
+        nextSegmentIndex = anchor.liveIndex + 1;
+        continue;
+      }
+
       const saved = part.trimStart();
-      const index = state.assistantSegments.findIndex((segment, index) => {
-        if (index < nextSegmentIndex) return false;
-        const prefix = segment.text.trimStart();
-        return (
-          prefix.length > 0 && (saved.startsWith(prefix) || saved.trimEnd() === prefix.trimEnd())
-        );
-      });
-      const match = state.assistantSegments[index];
+      const end = anchor?.liveIndex ?? prefixes.length;
+      let index = nextSegmentIndex;
+      for (; index < end; index++) {
+        const prefix = prefixes[index];
+        if (prefix && saved.startsWith(prefix)) break;
+      }
+      const match = index < end ? state.assistantSegments[index] : undefined;
       if (match === undefined) {
         unstreamed.push(part);
         continue;
       }
       nextSegmentIndex = index + 1;
-      if (match.text.trim() === saved.trimEnd()) continue;
       match.text = part;
       if (match !== state.assistant.current) yield* emitAssistant(target, match, true);
     }
