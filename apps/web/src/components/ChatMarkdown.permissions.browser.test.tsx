@@ -229,7 +229,10 @@ it.each(["[Docs](https://example.com/docs)", "[Readme](docs/readme.md)"])(
   "tells the native menu for %s whether the keyboard opened it",
   async (text) => {
     using _setup = setup();
-    using _bridge = stubGlobal("desktopBridge", { showContextMenu: state.choose });
+    using _bridge = stubGlobal("desktopBridge", {
+      showContextMenu: state.choose,
+      getLocalEnvironmentBootstraps: () => [],
+    });
     await using screen = await renderMarkdown(text);
     // On macOS Shift+F10 does not generate Chromium's keyboard contextmenu.
     await act(async () => {
