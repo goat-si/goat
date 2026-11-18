@@ -550,14 +550,52 @@ describe("Pen storage compatibility", () => {
     hubConnectionId: "primary",
     nodeId: "n",
   };
+  // Hub indexes count the records an older client reads; Pen indexes count every record.
   const raw = () =>
     JSON.stringify({
       ...legacy,
       penTargets: [{ index: 0, value: penTarget }],
       penProfiles: [{ index: 2, value: penProfile }],
-      hubProxyTargets: [{ index: 2, value: hubTarget }],
+      hubProxyTargets: [{ index: 1, value: hubTarget }],
       hubProxyProfiles: [{ index: 0, value: hubProfile }],
     });
+  /** [Pen, Hub, Bearer] as this build stores it. */
+  const penFirst = Effect.gen(function* () {
+    const decoded = yield* decodeConnectionCatalogStorage(
+      JSON.stringify({
+        ...legacy,
+        penTargets: [{ index: 0, value: penTarget }],
+        hubProxyTargets: [{ index: 0, value: hubTarget }],
+      }),
+    );
+    expect(decoded.targets.map((v) => v._tag)).toEqual([
+      "PenConnectionTarget",
+      "HubProxyConnectionTarget",
+      "BearerConnectionTarget",
+    ]);
+    return JSON.parse(yield* encodeConnectionCatalogStorage(decoded));
+  });
+  it.effect("a client that cannot read Pen records keeps the hub and bearer order", () =>
+    Effect.gen(function* () {
+      const { penTargets: _targets, penProfiles: _profiles, ...older } = yield* penFirst;
+      const decoded = yield* decodeConnectionCatalogStorage(JSON.stringify(older));
+      expect(decoded.targets.map((v) => v._tag)).toEqual([
+        "HubProxyConnectionTarget",
+        "BearerConnectionTarget",
+      ]);
+    }),
+  );
+  it.effect("a damaged Pen record keeps the hub and bearer order", () =>
+    Effect.gen(function* () {
+      const stored = yield* penFirst;
+      stored.penTargets[0].value = { ...penTarget, connectionId: 7 };
+      const decoded = yield* decodeConnectionCatalogStorage(JSON.stringify(stored));
+      expect(decoded.targets.map((v) => v._tag)).toEqual([
+        "HubProxyConnectionTarget",
+        "BearerConnectionTarget",
+      ]);
+    }),
+  );
 
   it.effect("interleaved hub and Pen extensions round-trip in original order", () =>
     Effect.gen(function* () {
@@ -606,11 +644,13 @@ describe("Pen storage compatibility", () => {
     "a Pen record with an unusable or duplicate index is dropped and the paired records stay",
     () =>
       Effect.gen(function* () {
-        for (const index of [-1, 1.5, 4, 2]) {
+        for (const index of [-1, 1.5, 4, "duplicate"] as const) {
           const bad = JSON.parse(raw());
-          bad.penTargets[0].index = index;
+          if (index === "duplicate") bad.penTargets = [bad.penTargets[0], bad.penTargets[0]];
+          else bad.penTargets[0].index = index;
           const decoded = yield* decodeConnectionCatalogStorage(JSON.stringify(bad));
           expect(decoded.targets.map((value) => value._tag)).toEqual([
+            ...(index === "duplicate" ? ["PenConnectionTarget"] : []),
             "BearerConnectionTarget",
             "HubProxyConnectionTarget",
           ]);

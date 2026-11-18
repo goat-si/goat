@@ -353,24 +353,29 @@ export const decodeConnectionCatalogStorage = (raw: string) =>
       const { hubProxyTargets, hubProxyProfiles, penTargets, penProfiles, ...document } = stored;
       const targets = penRecords(decodePenTarget, penTargets);
       const profiles = penRecords(decodePenProfile, penProfiles);
+      // Hub records are placed among what an older client reads, then Pen records among all.
       return {
         ...document,
         targets: mergeExtensions(
-          document.targets,
-          [...(hubProxyTargets ?? []), ...targets],
+          mergeExtensions(document.targets, hubProxyTargets ?? [], 0),
+          targets,
           penSlots(penTargets) - targets.length,
         ),
         profiles: mergeExtensions(
-          document.profiles,
-          [...(hubProxyProfiles ?? []), ...profiles],
+          mergeExtensions(document.profiles, hubProxyProfiles ?? [], 0),
+          profiles,
           penSlots(penProfiles) - profiles.length,
         ),
       } satisfies ConnectionCatalogDocument;
     }),
   );
 
-export const encodeConnectionCatalogStorage = (document: ConnectionCatalogDocument) =>
-  encodeStorageDocument({
+export const encodeConnectionCatalogStorage = (document: ConnectionCatalogDocument) => {
+  const withoutPen = {
+    targets: document.targets.filter((target) => target._tag !== "PenConnectionTarget"),
+    profiles: document.profiles.filter((profile) => profile._tag !== "PenConnectionProfile"),
+  };
+  return encodeStorageDocument({
     ...document,
     targets: document.targets.filter(
       (target) =>
@@ -380,10 +385,10 @@ export const encodeConnectionCatalogStorage = (document: ConnectionCatalogDocume
       (profile) =>
         profile._tag !== "HubProxyConnectionProfile" && profile._tag !== "PenConnectionProfile",
     ),
-    hubProxyTargets: document.targets.flatMap((value, index) =>
+    hubProxyTargets: withoutPen.targets.flatMap((value, index) =>
       value._tag === "HubProxyConnectionTarget" ? [{ index, value }] : [],
     ),
-    hubProxyProfiles: document.profiles.flatMap((value, index) =>
+    hubProxyProfiles: withoutPen.profiles.flatMap((value, index) =>
       value._tag === "HubProxyConnectionProfile" ? [{ index, value }] : [],
     ),
     penTargets: document.targets.flatMap((value, index) =>
@@ -393,6 +398,7 @@ export const encodeConnectionCatalogStorage = (document: ConnectionCatalogDocume
       value._tag === "PenConnectionProfile" ? [{ index, value: encodePenProfile(value) }] : [],
     ),
   });
+};
 
 export function isFutureConnectionCatalog(raw: string): boolean {
   try {
