@@ -1,6 +1,7 @@
 import * as Fiber from "effect/Fiber";
 import * as Option from "effect/Option";
 import * as Stream from "effect/Stream";
+import * as TestClock from "effect/testing/TestClock";
 import { OpenCodeSettings } from "../settings.ts";
 // @effect-diagnostics-next-line nodeBuiltinImport:off - Exercise HTTP authentication with the real SDK.
 import * as NodeHttp from "node:http";
@@ -213,6 +214,99 @@ it.live.each([true, false])("opens an authenticated OpenCode session (external=%
       McpProviderSessions.layer,
     ]),
   ),
+);
+
+it.effect.each(["root-running", "root-settled", "child-timeout"] as const)(
+  "classifies an unanswered root abort when %s",
+  (scenario) =>
+    Effect.gen(function* () {
+      const events = asyncEventStream();
+      const root = { id: "root", time: { created: 1, updated: 1 } };
+      const rootAbort = promiseGate<AbortSignal>();
+      const childAbort = promiseGate<AbortSignal>();
+      const unanswered = promiseGate<never>();
+      const harness = yield* makeOpenCodeRuntimeHarness(
+        `stop-${scenario}`,
+        root.id,
+        {
+          event: {
+            subscribe: async (_: unknown, { signal }: { signal: AbortSignal }) => {
+              signal.addEventListener("abort", () => events.close(), { once: true });
+              return { stream: events.stream };
+            },
+          },
+          session: {
+            create: async () => ({ data: root }),
+            get: async () => ({ data: root }),
+            messages: async () => ({ data: [] }),
+            promptAsync: async () => ({ data: true }),
+            children: async ({ sessionID }: { sessionID: string }) => ({
+              data: sessionID === root.id ? [{ id: "child" }] : [],
+            }),
+            abort: async (
+              { sessionID }: { sessionID: string },
+              { signal }: { signal: AbortSignal },
+            ) => {
+              if (sessionID === root.id) {
+                rootAbort.resolve(signal);
+                return unanswered.promise;
+              }
+              childAbort.resolve(signal);
+              return scenario === "child-timeout" ? unanswered.promise : { data: true };
+            },
+          },
+        },
+        { external: false },
+      );
+      yield* harness.startTurn();
+      const { providerThread, runtime } = harness;
+      const { providerTurns } = yield* runtime.readThreadSnapshot({ providerThread });
+      const turn = providerTurns.at(-1)!;
+      const stop = yield* runtime
+        .interruptTurn({ providerThread, providerTurnId: turn.id, requestRuntimeRestart: true })
+        .pipe(Effect.result, Effect.forkScoped);
+      const rootSignal = yield* Effect.promise(() => rootAbort.promise);
+
+      if (scenario !== "root-running") {
+        yield* Effect.promise(() =>
+          events.push({
+            type: "session.status",
+            properties: { sessionID: root.id, status: { type: "idle" } },
+          }),
+        );
+      }
+      yield* TestClock.adjust("10 seconds");
+      const childSignal = yield* Effect.promise(() => childAbort.promise);
+      assert.isTrue(rootSignal.aborted);
+      if (scenario === "child-timeout") {
+        yield* TestClock.adjust("10 seconds");
+        assert.isTrue(childSignal.aborted);
+      }
+      const result = yield* Fiber.join(stop);
+      if (scenario === "root-running") {
+        assert.nestedInclude(result, {
+          "failure._tag": "ProviderAdapterInterruptTimeoutError",
+          "failure.providerThreadId": providerThread.id,
+          "failure.providerTurnId": turn.id,
+          "failure.timeoutMs": 10_000,
+        });
+      } else if (scenario === "child-timeout") {
+        assert.nestedInclude(result, {
+          "failure._tag": "ProviderAdapterInterruptError",
+          "failure.cause._tag": "TimeoutError",
+        });
+      } else {
+        assert.equal(result._tag, "Success");
+      }
+      const stopped = yield* runtime.readThreadSnapshot({ providerThread });
+      assert.equal(
+        stopped.providerTurns.at(-1)?.status,
+        scenario === "root-running" ? "running" : "interrupted",
+      );
+    }).pipe(
+      Effect.provide(Layer.merge(IdAllocator.layer, McpProviderSessions.layer)),
+      Effect.scoped,
+    ),
 );
 
 it.effect.each([
