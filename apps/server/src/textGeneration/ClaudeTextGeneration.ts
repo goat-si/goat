@@ -328,6 +328,24 @@ export const makeClaudeTextGeneration = Effect.fn("makeClaudeTextGeneration")(fu
                 ),
               )
           : cwd;
+      const settingsPath = yield* Effect.gen(function* () {
+        const directory = yield* fileSystem.makeTempDirectoryScoped({
+          prefix: "goat-claude-settings-",
+        });
+        const file = path.join(directory, "settings.json");
+        yield* fileSystem.writeFileString(file, settingsJson, { flag: "wx", mode: 0o600 });
+        yield* fileSystem.chmod(file, 0o600);
+        return file;
+      }).pipe(
+        Effect.mapError((cause) =>
+          normalizeCliError(
+            "claude",
+            operation,
+            cause,
+            "Failed to prepare private Claude settings",
+          ),
+        ),
+      );
       const managedMcpConfig = yield* hasClaudeManagedMcpConfig();
       const spawnCommand = yield* resolveSpawnCommand(
         claudeSettings.binaryPath || "claude",
@@ -344,7 +362,7 @@ export const makeClaudeTextGeneration = Effect.fn("makeClaudeTextGeneration")(fu
           effectiveModel,
           ...(cliEffort ? ["--effort", cliEffort] : []),
           "--settings",
-          settingsJson,
+          settingsPath,
           ...(investigate
             ? [
                 "--tools",

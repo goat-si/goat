@@ -97,14 +97,15 @@ it.layer(layerClaudeTextGenerationTest)("ClaudeTextGeneration", (it) => {
       Effect.gen(function* () {
         const fs = yield* FileSystem.FileSystem;
         const cwd = yield* fs.makeTempDirectoryScoped();
-        const custom = '{"disableAllHooks":false,"env":{"ANTHROPIC_VERTEX_PROJECT_ID":"fixture"}}';
+        const custom = '{"disableAllHooks":false,"env":{"ANTHROPIC_API_KEY":"fixture-api-key"}}';
         if (source === "relative file") yield* fs.writeFileString(`${cwd}/settings.json`, custom);
         const valid = source === "inline" || source === "relative file";
         const result = yield* withFakeClaudeEnv(
           {
             output: JSON.stringify({ structured_output: { title: "Fixture title" } }),
-            argsMustContain: '"ANTHROPIC_VERTEX_PROJECT_ID":"fixture"',
-            argsMustNotContain: '"disableAllHooks":false',
+            settingsMustContain: '"ANTHROPIC_API_KEY":"fixture-api-key"',
+            argsMustNotContain: "fixture-api-key",
+            expectPrivateSettings: valid,
             expectSpawnCount: valid ? 1 : 0,
             claudeConfig: {
               launchArgs:
@@ -535,7 +536,7 @@ it.layer(layerClaudeTextGenerationTest)("ClaudeTextGeneration", (it) => {
               : { summary: memoryOutput },
         }),
         memoryRunnerContext: memoryContext,
-        argsMustContain: '--settings {"disableAllHooks":true,"alwaysThinkingEnabled":false}',
+        settingsMustContain: '"alwaysThinkingEnabled":false',
       },
       (generation) =>
         Effect.gen(function* () {
@@ -808,7 +809,8 @@ it.layer(layerClaudeTextGenerationTest)("ClaudeTextGeneration", (it) => {
               body: "Body",
             },
           }),
-          argsMustContain: `--model ${SYNTHETIC_CLAUDE_CAPABLE_MODEL}[expanded] --effort max --settings {"disableAllHooks":true,"fastMode":true}`,
+          argsMustContain: `--model ${SYNTHETIC_CLAUDE_CAPABLE_MODEL}[expanded] --effort max --settings`,
+          settingsMustContain: '"fastMode":true',
           claudeConfig: { customModels: [SYNTHETIC_CLAUDE_COLLIDING_ALIAS] },
         },
         (textGeneration) =>

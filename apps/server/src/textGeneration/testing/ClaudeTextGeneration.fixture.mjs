@@ -49,8 +49,19 @@ if (process.env.GOAT_FAKE_CLAUDE_SPAWN_MARKER) {
   }
 }
 const settingsIndex = argv.indexOf("--settings");
-if (settingsIndex === -1 || JSON.parse(argv[settingsIndex + 1]).disableAllHooks !== true) {
+const settingsArg = argv[settingsIndex + 1];
+if (settingsIndex === -1 || settingsArg === undefined) fail("missing Claude settings", 10);
+if (process.env.GOAT_FAKE_CLAUDE_CHECK_SETTINGS_MODE === "1") {
+  if ((NodeFS.statSync(settingsArg).mode & 0o777) !== 0o600) {
+    fail("settings file must have mode 0600", 10);
+  }
+}
+const settingsJson = NodeFS.readFileSync(settingsArg, "utf8");
+if (JSON.parse(settingsJson).disableAllHooks !== true)
   fail("text generation must disable hooks", 10);
+const settingsMustContain = process.env.GOAT_FAKE_CLAUDE_SETTINGS_MUST_CONTAIN;
+if (settingsMustContain && !settingsJson.includes(settingsMustContain)) {
+  fail("settings missing expected content", 10);
 }
 const cwdMustNotBe = process.env.GOAT_FAKE_CLAUDE_CWD_MUST_NOT_BE;
 if (cwdMustNotBe && NodeFS.realpathSync(process.cwd()) === NodeFS.realpathSync(cwdMustNotBe)) {

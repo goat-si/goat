@@ -295,10 +295,15 @@ it.effect("pins Home in the Claude text generation and capability probe launches
       PINNED,
     );
 
-    const spawned: Array<ReadonlyArray<string>> = [];
+    const fileSystem = yield* FileSystem.FileSystem;
+    let settingsJson = "{}";
     const spawner = ChildProcessSpawner.make((command) =>
-      Effect.sync(() => {
-        if (ChildProcess.isStandardCommand(command)) spawned.push(command.args.map(String));
+      Effect.gen(function* () {
+        if (ChildProcess.isStandardCommand(command)) {
+          const args = command.args.map(String);
+          const file = args[args.indexOf("--settings") + 1];
+          if (file !== undefined) settingsJson = yield* fileSystem.readFileString(file);
+        }
         return ChildProcessSpawner.makeHandle({
           pid: ChildProcessSpawner.ProcessId(999_999_998),
           exitCode: Effect.succeed(ChildProcessSpawner.ExitCode(1)),
@@ -332,8 +337,6 @@ it.effect("pins Home in the Claude text generation and capability probe launches
         modelSelection: MODEL,
       })
       .pipe(Effect.provideService(ChildProcessSpawner.ChildProcessSpawner, spawner), Effect.ignore);
-    const args = spawned[0] ?? [];
-    const settingsJson = args[args.indexOf("--settings") + 1] ?? "{}";
     assert.deepInclude(JSON.parse(settingsJson).env ?? {}, PINNED);
     assert.equal(JSON.parse(settingsJson).env?.ANTHROPIC_VERTEX_PROJECT_ID, "fixture");
     assert.isTrue(JSON.parse(settingsJson).disableAllHooks);

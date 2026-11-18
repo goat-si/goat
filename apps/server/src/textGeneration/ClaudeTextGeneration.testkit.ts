@@ -53,6 +53,10 @@ export const registryOutput = (key: string, settings: string, type = "REG_SZ") =
   `\n${key.replace("HKLM", "HKEY_LOCAL_MACHINE").replace("HKCU", "HKEY_CURRENT_USER")}\n    Settings    ${type}    ${settings}\n`;
 export const emptyRegistryQuery = (key: string) => Effect.succeed(registryOutput(key, "{}"));
 
+const decodeFixtureArgv = Schema.decodeUnknownSync(
+  Schema.fromJsonString(Schema.Array(Schema.String)),
+);
+
 export function withFakeClaudeEnv<A, E, R>(
   input: {
     memoryRunnerContext?: import("@goat/provider-core/server/memoryGenerationRunner").MemoryGenerationRunnerContext;
@@ -75,6 +79,8 @@ export function withFakeClaudeEnv<A, E, R>(
     exitCode?: number;
     stderr?: string;
     argsMustContain?: string;
+    settingsMustContain?: string;
+    expectPrivateSettings?: boolean;
     argsMustNotContain?: string;
     stdinMustContain?: string;
     configDirMustBe?: string;
@@ -99,6 +105,9 @@ export function withFakeClaudeEnv<A, E, R>(
       GOAT_FAKE_CLAUDE_OUTPUT: input.output,
       GOAT_FAKE_CLAUDE_EXIT_CODE: input.exitCode === undefined ? undefined : String(input.exitCode),
       GOAT_FAKE_CLAUDE_STDERR: input.stderr,
+      GOAT_FAKE_CLAUDE_SETTINGS_MUST_CONTAIN: input.settingsMustContain,
+      GOAT_FAKE_CLAUDE_CHECK_SETTINGS_MODE:
+        input.expectPrivateSettings && pathDelimiter !== ";" ? "1" : undefined,
       GOAT_FAKE_CLAUDE_ARGS_MUST_CONTAIN: input.argsMustContain,
       GOAT_FAKE_CLAUDE_ARGS_MUST_NOT_CONTAIN: input.argsMustNotContain,
       GOAT_FAKE_CLAUDE_STDIN_MUST_CONTAIN: input.stdinMustContain,
@@ -185,7 +194,16 @@ export function withFakeClaudeEnv<A, E, R>(
       expect(yield* fs.exists(`${tempDir}/attempts`)).toBe(false);
     } else if (input.expectSpawnCount !== undefined) {
       const attempts = yield* fs.readFileString(`${tempDir}/attempts`);
-      expect(attempts.trim().split("\n")).toHaveLength(input.expectSpawnCount);
+      const lines = attempts.trim().split("\n");
+      expect(lines).toHaveLength(input.expectSpawnCount);
+      if (input.expectPrivateSettings) {
+        for (const line of lines) {
+          const argv = decodeFixtureArgv(line);
+          const settingsPath = argv[argv.indexOf("--settings") + 1];
+          expect(settingsPath).toBeDefined();
+          if (settingsPath !== undefined) expect(yield* fs.exists(settingsPath)).toBe(false);
+        }
+      }
     }
     if (input.expectNoSpawn) expect(yield* fs.exists(`${tempDir}/spawned`)).toBe(false);
     if (input.expectSpawn) expect(yield* fs.exists(`${tempDir}/spawned`)).toBe(true);
