@@ -8,10 +8,16 @@ const state = vi.hoisted(() => ({
   answer: vi.fn(),
   appState: [] as Array<(next: string) => void>,
   blur: [] as Array<() => void>,
+  os: "android",
 }));
 vi.mock("@effect/atom-react", () => ({ useAtomValue: (atom: unknown) => atom }));
 vi.mock("react-native", () => ({
   View: ({ children }: { children?: ReactNode }) => <div>{children}</div>,
+  Platform: {
+    get OS() {
+      return state.os;
+    },
+  },
   Pressable: (props: {
     children?: ReactNode;
     accessibilityLabel?: string;
@@ -24,6 +30,9 @@ vi.mock("react-native", () => ({
   ),
   AppState: {
     addEventListener: (event: string, listener: (next: string) => void) => {
+      // As React Native: iOS's AppState emits no focus events and refuses the subscription.
+      if (event === "blur" && state.os === "ios")
+        throw new Error("appStateFocusChange is not a supported event type for RCTAppState");
       const list = event === "blur" ? state.blur : state.appState;
       list.push(listener as never);
       return { remove: () => list.splice(list.indexOf(listener as never), 1) };
@@ -81,10 +90,11 @@ const item = {
   secretStatus: "pending",
 };
 
-async function renderRevealed() {
+async function renderRevealed(os = "android") {
   vi.stubGlobal("IS_REACT_ACT_ENVIRONMENT", true);
   state.appState.length = 0;
   state.blur.length = 0;
+  state.os = os;
   const container = document.createElement("div");
   const root = createRoot(container);
   await act(() =>
@@ -157,6 +167,16 @@ it("masks a revealed secret when the window loses focus to the app switcher", as
   const { root, field } = await renderRevealed();
   try {
     await act(() => state.blur.forEach((listener) => listener()));
+    expect(field().type).toBe("password");
+  } finally {
+    act(() => root.unmount());
+  }
+});
+
+it("reveals and masks on iOS, which has no window focus events", async () => {
+  const { root, field } = await renderRevealed("ios");
+  try {
+    await act(() => state.appState.forEach((listener) => listener("inactive")));
     expect(field().type).toBe("password");
   } finally {
     act(() => root.unmount());
