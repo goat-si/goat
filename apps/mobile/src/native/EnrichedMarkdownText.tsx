@@ -31,8 +31,8 @@ import {
   type MarkdownLinkOccurrence,
   type MarkdownStyle,
 } from "react-native-enriched-markdown";
-import { codeFenceRenderer } from "./codeBlockMarkdown";
-import { HighlightedCodeBlock } from "./HighlightedCodeBlock";
+import { codeFenceRenderer, openFenceCode } from "./codeBlockMarkdown";
+import { HighlightedCodeBlock, OpenFenceCodeContext } from "./HighlightedCodeBlock";
 import { MermaidCodeBlock } from "./MermaidCodeBlock";
 import type { SelectableMarkdownTextProps } from "./SelectableMarkdownText.types";
 
@@ -265,6 +265,7 @@ export function MobileEnrichedMarkdownText(props: SelectableMarkdownTextProps) {
         .find((key) => key !== null) ?? ""
     );
   }, [props.markdown, resolveImageSource]);
+  const openCode = useMemo(() => openFenceCode(markdown), [markdown]);
   const renderMarkdown = (openAndroidMenu?: () => void) => {
     const onLinkLongPress =
       Platform.OS === "android" && props.fileContextMenu
@@ -292,43 +293,45 @@ export function MobileEnrichedMarkdownText(props: SelectableMarkdownTextProps) {
           marginBottom: props.marginBottom,
         }}
       >
-        <EnrichedMarkdownText
-          key={imageRouteKey}
-          markdown={markdown}
-          markdownStyle={markdownStyle}
-          writingDirection={props.writingDirection}
-          onLinksChange={onLinksChange}
-          renderers={renderers}
-          resolveImageSource={resolveNativeImageSource}
-          onImagePress={
-            props.onImagePress || props.onLinkPress
-              ? ({ url }) => (props.onImagePress ?? props.onLinkPress)?.(url)
-              : undefined
-          }
-          linkRecognition={linkRecognition}
-          containerStyle={{ flexShrink: 1, minWidth: 0 }}
-          flavor="github"
-          selectable
-          selectionClipboard={selectionClipboard}
-          selectionColor={props.textStyle.selectionColor}
-          selectionHandleColor={props.textStyle.selectionHandleColor}
-          md4cFlags={{
-            latexMath: mathRenderingEnabled,
-            hardSoftBreaks: props.preserveSoftBreaks ?? false,
-            admonitions: true,
-            preserveWindowsPaths: true,
-          }}
-          enableTaskListItemToggle={props.onTaskListItemPress !== undefined}
-          onTaskListItemPress={props.onTaskListItemPress}
-          enableCodeBlockWrapToggle
-          spoilerOverlay="solid"
-          onLinkPress={
-            props.onLinkPress || props.onImagePress ? ({ url }) => onLinkPress(url) : undefined
-          }
-          onLinkLongPress={onLinkLongPress}
-          linkContextMenuItems={linkContextMenuItems}
-          linkPillContent={linkPillContent}
-        />
+        <OpenFenceCodeContext value={openCode}>
+          <EnrichedMarkdownText
+            key={imageRouteKey}
+            markdown={markdown}
+            markdownStyle={markdownStyle}
+            writingDirection={props.writingDirection}
+            onLinksChange={onLinksChange}
+            renderers={renderers}
+            resolveImageSource={resolveNativeImageSource}
+            onImagePress={
+              props.onImagePress || props.onLinkPress
+                ? ({ url }) => (props.onImagePress ?? props.onLinkPress)?.(url)
+                : undefined
+            }
+            linkRecognition={linkRecognition}
+            containerStyle={{ flexShrink: 1, minWidth: 0 }}
+            flavor="github"
+            selectable
+            selectionClipboard={selectionClipboard}
+            selectionColor={props.textStyle.selectionColor}
+            selectionHandleColor={props.textStyle.selectionHandleColor}
+            md4cFlags={{
+              latexMath: mathRenderingEnabled,
+              hardSoftBreaks: props.preserveSoftBreaks ?? false,
+              admonitions: true,
+              preserveWindowsPaths: true,
+            }}
+            enableTaskListItemToggle={props.onTaskListItemPress !== undefined}
+            onTaskListItemPress={props.onTaskListItemPress}
+            enableCodeBlockWrapToggle
+            spoilerOverlay="solid"
+            onLinkPress={
+              props.onLinkPress || props.onImagePress ? ({ url }) => onLinkPress(url) : undefined
+            }
+            onLinkLongPress={onLinkLongPress}
+            linkContextMenuItems={linkContextMenuItems}
+            linkPillContent={linkPillContent}
+          />
+        </OpenFenceCodeContext>
       </View>
     );
   };

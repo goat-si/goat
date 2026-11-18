@@ -1,4 +1,4 @@
-import { useState } from "react";
+import { createContext, useContext, useState } from "react";
 import { Pressable, ScrollView, Text } from "react-native";
 import type { MarkdownStyle } from "react-native-enriched-markdown";
 
@@ -7,8 +7,14 @@ import { useMarkdownCodeHighlight } from "../features/threads/markdownCodeHighli
 import { copyTextWithHaptic } from "../lib/copyTextWithHaptic";
 import type { HighlightScheme } from "../lib/highlights";
 import { CodeBlockFrame, CodeBlockHeaderButton } from "./CodeBlockFrame";
-import { fencedCodeMarkdown } from "./codeBlockMarkdown";
+import { fenceHighlightable, fencedCodeMarkdown } from "./codeBlockMarkdown";
 import type { NativeMarkdownTextStyle } from "./SelectableMarkdownText.types";
+
+/**
+ * The code of the fence a streaming message leaves open, from its markdown text. A context, so
+ * the markdown renderers stay the same functions and the library keeps its rendered blocks.
+ */
+export const OpenFenceCodeContext = createContext<string | null>(null);
 
 // Header names from enriched-markdown's CodeBlockLanguages.cpp that are not the fence capitalized.
 const FENCE_DISPLAY_NAMES: Readonly<Record<string, string>> = {
@@ -39,7 +45,7 @@ export function HighlightedCodeBlock(props: {
   readonly code: string;
   readonly fence: string;
   readonly language: string;
-  /** False only while the library withholds an unclosed fence (`streamingAnimation`, which GOAT never enables, so always true today); highlighting waits for it. */
+  /** False while the library withholds an unclosed fence (`streamingAnimation`, never enabled here). */
   readonly complete: boolean;
   readonly scheme: HighlightScheme;
   readonly textStyle: NativeMarkdownTextStyle;
@@ -47,11 +53,13 @@ export function HighlightedCodeBlock(props: {
 }) {
   const { code, codeStyle, textStyle } = props;
   const [wrapped, setWrapped] = useState(false);
+  // A fence still streaming, or too large to colour, shows plain until it is finished.
+  const highlightable = fenceHighlightable(code, useContext(OpenFenceCodeContext));
   const lines = useMarkdownCodeHighlight({
     code,
     language: props.language,
     theme: props.scheme,
-    enabled: props.complete,
+    enabled: props.complete && highlightable,
   });
   const fence = props.fence.toLowerCase();
   let offset = 0;
