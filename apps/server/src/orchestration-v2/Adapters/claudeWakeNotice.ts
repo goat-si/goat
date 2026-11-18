@@ -161,6 +161,7 @@ export function claudeScheduledWakes(rootIsIdle: Effect.Effect<boolean>) {
   // mode change; replacing the process cancels it, and that clears this record too.
   const scheduleWakeupCalls = new Set<string>();
   const scheduledWakeupsByNativeThread = new Map<string, number>();
+  const possibleScheduledWakeStarts = new WeakSet<SDKMessage>();
   // Native threads whose current turn Claude started by itself inside the early-fire margin.
   const possibleEarlyWakeNativeThreads = new Set<string>();
   const trackClaudeScheduledWakeup = Effect.fnUntraced(function* (
@@ -171,6 +172,9 @@ export function claudeScheduledWakes(rootIsIdle: Effect.Effect<boolean>) {
       const scheduledFor = scheduledWakeupsByNativeThread.get(nativeThreadId);
       if (scheduledFor === undefined) return;
       const now = DateTime.toEpochMillis(yield* DateTime.now);
+      if (now >= scheduledFor - CLAUDE_SCHEDULED_WAKEUP_EARLY_FIRE_MARGIN_MS) {
+        possibleScheduledWakeStarts.add(message);
+      }
       if (now >= scheduledFor) {
         scheduledWakeupsByNativeThread.delete(nativeThreadId);
       } else if (
@@ -214,10 +218,32 @@ export function claudeScheduledWakes(rootIsIdle: Effect.Effect<boolean>) {
       scheduledWakeupsByNativeThread.delete(nativeThreadId);
     }
   });
-  const forgetScheduledWake = (nativeThreadId: string) => {
+  const forgetScheduledWake = (nativeThreadId: string, discardEarlyStart = false) => {
     scheduledWakeupsByNativeThread.delete(nativeThreadId);
     scheduleWakeupCalls.clear();
-    possibleEarlyWakeNativeThreads.delete(nativeThreadId);
+    if (discardEarlyStart) possibleEarlyWakeNativeThreads.delete(nativeThreadId);
   };
-  return { scheduledWakeupsByNativeThread, trackClaudeScheduledWakeup, forgetScheduledWake };
+  return {
+    scheduledWakeupsByNativeThread,
+    trackClaudeScheduledWakeup,
+    forgetScheduledWake,
+    possibleScheduledWakeStarts,
+  };
+}
+
+export const claudeMonitorProgressNotification = () =>
+  backgroundWorkNotification([{ kind: "monitor", outcome: "updated" }]);
+
+export function isClaudeMonitorEventWake(
+  messages: ReadonlyArray<SDKMessage>,
+  monitorStarts: WeakSet<SDKMessage>,
+  isLifecycleResult: (message: SDKMessage) => boolean,
+): boolean {
+  const startIndex = messages.findIndex(isClaudeTurnStartMessage);
+  const start = messages[startIndex];
+  if (start === undefined || !monitorStarts.has(start)) return false;
+  const result = messages
+    .slice(startIndex + 1)
+    .find((message) => message.type === "result" && !isLifecycleResult(message));
+  return result === undefined || isClaudeTaskNotificationOriginResult(result);
 }

@@ -6871,6 +6871,67 @@ describe("ClaudeAdapterV2 background wake turns", () => {
     ),
   );
 
+  it.effect("separates a Monitor progress wake from the terminal wake buffered behind it", () =>
+    Effect.scoped(
+      Effect.gen(function* () {
+        const harness = yield* makeWakeHarness;
+        const now = yield* DateTime.now;
+        let sequence = 999;
+        const uuid = () => `00000000-0000-4000-8000-${String(++sequence).padStart(12, "0")}`;
+        const monitor = monitorFrames(0, uuid);
+        const start = (ordinal: number) =>
+          harness.runtime.startTurn(
+            makeClaudeTestTurnInput({
+              threadId: harness.threadId,
+              providerThread: harness.providerThread,
+              now,
+              attachments: [],
+              attemptId: RunAttemptId.make(`attempt-monitor-split-${ordinal}`),
+              text: ordinal === 1 ? "Monitor the deploy" : "Background activity",
+              providerTurnOrdinal: ordinal,
+              ...(ordinal === 1
+                ? {}
+                : { messageCreatedBy: "agent", messageCreationSource: "provider" }),
+            }),
+          );
+        yield* start(1);
+        for (const frame of monitor.start) yield* harness.offerAndWait(frame);
+        yield* harness.offerAndWait(makeResultFrame({ uuid: uuid(), result: "Watching." }));
+        yield* Queue.take(harness.terminalReceipts);
+        yield* harness.offerAndWait(wakeTurnInit);
+        const progress = yield* Queue.take(harness.continuationReceipts);
+        assert.equal(progress.notification?.source.kind, "monitor");
+        assert.equal(progress.notification?.outcome, "updated");
+        yield* harness.offerAndWait(
+          makeResultFrame({
+            uuid: uuid(),
+            result: "Deploy started.",
+            origin: { kind: "task-notification" },
+          }),
+        );
+        yield* harness.offerAndWait(monitor.end);
+        yield* harness.offerAndWait(claudeSdkFrame({ ...wakeTurnInit, uuid: uuid() }));
+        yield* harness.offerAndWait(
+          makeAssistantTextFrame({ uuid: uuid(), text: "Deploy completed." }),
+        );
+        yield* harness.offerAndWait(
+          makeResultFrame({
+            uuid: uuid(),
+            result: "Deploy completed.",
+            origin: { kind: "task-notification" },
+          }),
+        );
+        yield* start(2);
+        yield* Queue.take(harness.terminalReceipts);
+        const terminal = yield* Queue.take(harness.continuationReceipts);
+        assert.equal(terminal.notification?.source.kind, "monitor");
+        assert.equal(terminal.notification?.outcome, "completed");
+        yield* start(3);
+        assert.equal((yield* Queue.take(harness.terminalReceipts)).status, "completed");
+      }).pipe(Effect.provide(layerAdapterTest)),
+    ),
+  );
+
   it.effect("keeps a running Claude monitor typed after many newer monitors end", () =>
     Effect.scoped(
       Effect.gen(function* () {
