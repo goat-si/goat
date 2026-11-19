@@ -1,6 +1,8 @@
 import * as Effect from "effect/Effect";
 import type { GitHubPullRequestListPage } from "./gitHubPullRequestListStates.ts";
 
+const MAX_COLLECTED_PAGES = 100;
+
 /**
  * Pages of up to a hundred until `rows` have arrived or GitHub has no more. Each page asks
  * for only the rows still missing, so the last one does not overshoot.
@@ -21,7 +23,12 @@ export const collectGitHubPages = Effect.fn("GitHubPullRequestApi.collect")(func
     const next = read.endCursor;
     if (next === null) break;
     // `truncated` also covers a cursor GitHub repeated before `rows` arrived.
-    if (seen.has(next) || countRows(pages) >= rows) {
+    if (
+      read.rawCount === 0 ||
+      pages.length >= MAX_COLLECTED_PAGES ||
+      seen.has(next) ||
+      countRows(pages) >= rows
+    ) {
       truncated = true;
       break;
     }
