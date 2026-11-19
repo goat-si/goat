@@ -18,6 +18,8 @@ export interface LiveSpeechTransport {
   readonly cancel: (streamId: string) => Promise<void>;
 }
 
+export const LIVE_SPEECH_CANCEL_WAIT_MS = 5_000;
+
 export async function startLiveSpeechSession(options: {
   readonly transport: LiveSpeechTransport;
   readonly locale: string;
@@ -38,6 +40,7 @@ export async function startLiveSpeechSession(options: {
   let sequence = 0;
   let revision = -1;
   let inFlight: Promise<void> | null = null;
+  let cleanup: Promise<void> = Promise.resolve();
   let unsubscribe: (() => void) | undefined;
   let resolveFinal: (text: string | null) => void = () => {};
   const final = new Promise<string | null>((resolve) => {
@@ -49,22 +52,33 @@ export async function startLiveSpeechSession(options: {
     unsubscribe = undefined;
   };
   const cancelRemote = () => {
-    if (options.canSend()) void options.transport.cancel(streamId).catch(() => {});
+    if (!options.canSend()) return Promise.resolve();
+    let timer: ReturnType<typeof setTimeout> | undefined;
+    const deadline = new Promise<void>((resolve) => {
+      timer = setTimeout(resolve, LIVE_SPEECH_CANCEL_WAIT_MS);
+    });
+    let request: Promise<void>;
+    try {
+      request = options.transport.cancel(streamId).catch(() => {});
+    } catch {
+      request = Promise.resolve();
+    }
+    return Promise.race([request, deadline]).finally(() => clearTimeout(timer));
   };
   function fail() {
     if (!active) return;
     active = false;
+    cleanup = cancelRemote();
     resolveFinal(null);
     dispose();
-    cancelRemote();
     options.onFailure();
   }
   function cancel() {
     if (!active) return;
     active = false;
+    cleanup = cancelRemote();
     resolveFinal(null);
     dispose();
-    cancelRemote();
   }
   const onEvent = (event: SpeechStreamEvent) => {
     if (!active) return;
@@ -120,7 +134,10 @@ export async function startLiveSpeechSession(options: {
       return pending;
     },
     async finish() {
-      if (!active) return null;
+      if (!active) {
+        await cleanup;
+        return null;
+      }
       if (inFlight) await inFlight;
       if (!active || !options.canSend()) {
         fail();
@@ -132,7 +149,9 @@ export async function startLiveSpeechSession(options: {
       } catch {
         fail();
       }
-      return await final;
+      const text = await final;
+      if (text === null) await cleanup;
+      return text;
     },
     cancel,
   };

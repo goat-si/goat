@@ -23,7 +23,7 @@ import {
 import * as Effect from "effect/Effect";
 import * as Stream from "effect/Stream";
 import { connectionAtomRuntime } from "../connection/runtime";
-import type { LiveSpeechTransport } from "../speech/liveSpeechSession";
+import { LIVE_SPEECH_CANCEL_WAIT_MS, type LiveSpeechTransport } from "../speech/liveSpeechSession";
 import { appAtomRegistry } from "./atomRegistry";
 
 type Pinned<T> = T & {
@@ -213,12 +213,18 @@ export function createLiveSpeechTransport(
       );
     },
     async cancel(streamId) {
-      value(
-        await cancel.run(appAtomRegistry, {
-          environmentId,
-          input: { streamId, session: requireSession(), canSend },
-        }),
-      );
+      const controller = new AbortController();
+      const timer = setTimeout(() => controller.abort(), LIVE_SPEECH_CANCEL_WAIT_MS);
+      try {
+        value(
+          await cancel.run(appAtomRegistry, {
+            environmentId,
+            input: { streamId, session: requireSession(), canSend, signal: controller.signal },
+          }),
+        );
+      } finally {
+        clearTimeout(timer);
+      }
     },
     async subscribe(streamId, onEvent, onDisconnect, signal) {
       const controller = new AbortController();

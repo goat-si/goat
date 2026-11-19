@@ -10,6 +10,7 @@ import * as Effect from "effect/Effect";
 import * as Clock from "effect/Clock";
 import * as Cause from "effect/Cause";
 import * as Duration from "effect/Duration";
+import * as Deferred from "effect/Deferred";
 import * as Exit from "effect/Exit";
 import * as Fiber from "effect/Fiber";
 import * as Queue from "effect/Queue";
@@ -66,14 +67,28 @@ export const make = Effect.gen(function* () {
   let session: Session | undefined;
   let starting = false;
   let closed = false;
-  let lastCancelledId: string | undefined;
+  let lastClosedId: string | undefined;
+  let closing: { readonly id: string; readonly done: Deferred.Deferred<void> } | undefined;
   const close = Effect.fnUntraced(function* () {
     const current = session;
-    session = undefined;
-    if (current) {
-      yield* Scope.close(current.timerScope, Exit.void);
-      yield* Scope.close(current.scope, Exit.void);
+    if (!current) {
+      if (closing) yield* Deferred.await(closing.done);
+      return;
     }
+    const done = Deferred.makeUnsafe<void>();
+    session = undefined;
+    lastClosedId = current.id;
+    closing = { id: current.id, done };
+    yield* Effect.uninterruptible(
+      Scope.close(current.timerScope, Exit.void).pipe(
+        Effect.ensuring(Scope.close(current.scope, Exit.void)),
+        Effect.ensuring(
+          Effect.sync(() => {
+            if (closing?.done === done) closing = undefined;
+          }).pipe(Effect.andThen(Deferred.succeed(done, undefined))),
+        ),
+      ),
+    );
   });
   yield* Effect.addFinalizer(() =>
     Effect.sync(() => {
@@ -120,96 +135,106 @@ export const make = Effect.gen(function* () {
   return {
     start: Effect.fn("SpeechStreamConnection.start")(function* (language?: string) {
       if (closed) return yield* new SpeechStreamError({ code: "expired" });
-      if (starting || session) return yield* new SpeechStreamError({ code: "busy" });
+      if (starting || session || closing) return yield* new SpeechStreamError({ code: "busy" });
       starting = true;
-      const scope = yield* Scope.make();
-      const loading = yield* Effect.gen(function* () {
-        const worker = yield* speech.startStream(language);
-        const changes = yield* speech.configurationChanges;
-        const revision = yield* speech.configurationRevision;
-        const configuration = yield* speech.configuration;
-        return { worker, configuration, changes, revision };
-      }).pipe(Scope.provide(scope), Effect.forkIn(connectionScope));
-      const result = yield* Fiber.await(loading).pipe(
-        Effect.onInterrupt(() =>
-          Fiber.interrupt(loading).pipe(
-            Effect.andThen(Scope.close(scope, Exit.void)),
-            Effect.tap(() =>
-              Effect.sync(() => {
-                starting = false;
-              }),
+      const scope = yield* Scope.fork(connectionScope);
+      return yield* Effect.gen(function* () {
+        const loading = yield* Effect.gen(function* () {
+          const worker = yield* speech.startStream(language);
+          const changes = yield* speech.configurationChanges;
+          const revision = yield* speech.configurationRevision;
+          const configuration = yield* speech.configuration;
+          return { worker, configuration, changes, revision };
+        }).pipe(Scope.provide(scope), Effect.forkIn(connectionScope));
+        const result = yield* Fiber.await(loading).pipe(
+          Effect.onInterrupt(() =>
+            Fiber.interrupt(loading).pipe(
+              Effect.andThen(Scope.close(scope, Exit.void)),
+              Effect.tap(() =>
+                Effect.sync(() => {
+                  starting = false;
+                }),
+              ),
             ),
           ),
-        ),
-      );
-      starting = false;
-      if (Exit.isFailure(result) || closed) {
-        yield* Scope.close(scope, Exit.void);
-        const failure = Exit.isFailure(result)
-          ? Option.getOrUndefined(Cause.findErrorOption(result.cause))
-          : undefined;
-        return yield* new SpeechStreamError({
-          code:
-            failure?.cause === "Speech is busy."
-              ? "busy"
-              : isSpeechInferenceError(failure?.cause) && failure.cause.code === "unsupported"
-                ? "unsupported"
-                : "failed",
-        });
-      }
-      if (
-        result.value.worker.configuration.modelId !== result.value.configuration.modelId ||
-        result.value.worker.configuration.acceleration !== result.value.configuration.acceleration
-      ) {
-        yield* Scope.close(scope, Exit.void);
-        return yield* new SpeechStreamError({ code: "failed" });
-      }
-      const current: Session = {
-        id: NodeCrypto.randomUUID(),
-        scope,
-        worker: result.value.worker,
-        timerScope: yield* Scope.make(),
-        events: yield* Queue.sliding<Event>(1),
-        sequence: 0,
-        revision: -1,
-        bytes: 0,
-        busy: false,
-        subscribed: false,
-        lastAudioAt: yield* Clock.currentTimeMillis,
-      };
-      session = current;
-      yield* result.value.changes.pipe(
-        Stream.filter(
-          (next) =>
-            next.revision > result.value.revision ||
-            next.modelId !== result.value.configuration.modelId ||
-            next.acceleration !== result.value.configuration.acceleration,
-        ),
-        Stream.take(1),
-        Stream.runForEach(() => Effect.forkIn(failCurrent(current, "failed"), connectionScope)),
-        Effect.forkIn(current.timerScope),
-      );
-      const expire = Effect.gen(function* () {
-        if (session !== current) return;
-        yield* Effect.forkIn(failCurrent(current, "expired"), connectionScope);
-      });
-      const idle = Effect.fnUntraced(function* (): Effect.fn.Return<void> {
-        const now = yield* Clock.currentTimeMillis;
-        const remaining = Math.max(0, STREAM_IDLE_TIMEOUT_MS - (now - current.lastAudioAt));
-        if (remaining === 0) return yield* expire;
-        yield* Effect.sleep(Duration.millis(remaining));
-        return yield* idle();
-      });
-      yield* Effect.forkIn(idle(), current.timerScope);
-      yield* Effect.forkIn(
-        Effect.sleep(STREAM_MAX_DURATION).pipe(
-          Effect.andThen(
-            Effect.forkIn(finish(current.id).pipe(Effect.catch(() => expire)), connectionScope),
+        );
+        starting = false;
+        if (Exit.isFailure(result) || closed) {
+          yield* Scope.close(scope, Exit.void);
+          const failure = Exit.isFailure(result)
+            ? Option.getOrUndefined(Cause.findErrorOption(result.cause))
+            : undefined;
+          return yield* new SpeechStreamError({
+            code:
+              failure?.cause === "Speech is busy."
+                ? "busy"
+                : isSpeechInferenceError(failure?.cause) && failure.cause.code === "unsupported"
+                  ? "unsupported"
+                  : "failed",
+          });
+        }
+        if (
+          result.value.worker.configuration.modelId !== result.value.configuration.modelId ||
+          result.value.worker.configuration.acceleration !== result.value.configuration.acceleration
+        ) {
+          yield* Scope.close(scope, Exit.void);
+          return yield* new SpeechStreamError({ code: "failed" });
+        }
+        const current: Session = {
+          id: NodeCrypto.randomUUID(),
+          scope,
+          worker: result.value.worker,
+          timerScope: yield* Scope.fork(scope),
+          events: yield* Queue.sliding<Event>(1),
+          sequence: 0,
+          revision: -1,
+          bytes: 0,
+          busy: false,
+          subscribed: false,
+          lastAudioAt: yield* Clock.currentTimeMillis,
+        };
+        session = current;
+        yield* result.value.changes.pipe(
+          Stream.filter(
+            (next) =>
+              next.revision > result.value.revision ||
+              next.modelId !== result.value.configuration.modelId ||
+              next.acceleration !== result.value.configuration.acceleration,
           ),
+          Stream.take(1),
+          Stream.runForEach(() => Effect.forkIn(failCurrent(current, "failed"), connectionScope)),
+          Effect.forkIn(current.timerScope),
+        );
+        const expire = Effect.gen(function* () {
+          if (session !== current) return;
+          yield* Effect.forkIn(failCurrent(current, "expired"), connectionScope);
+        });
+        const idle = Effect.fnUntraced(function* (): Effect.fn.Return<void> {
+          const now = yield* Clock.currentTimeMillis;
+          const remaining = Math.max(0, STREAM_IDLE_TIMEOUT_MS - (now - current.lastAudioAt));
+          if (remaining === 0) return yield* expire;
+          yield* Effect.sleep(Duration.millis(remaining));
+          return yield* idle();
+        });
+        yield* Effect.forkIn(idle(), current.timerScope);
+        yield* Effect.forkIn(
+          Effect.sleep(STREAM_MAX_DURATION).pipe(
+            Effect.andThen(
+              Effect.forkIn(finish(current.id).pipe(Effect.catch(() => expire)), connectionScope),
+            ),
+          ),
+          current.timerScope,
+        );
+        return { streamId: current.id };
+      }).pipe(
+        Effect.onError(() =>
+          Effect.gen(function* () {
+            starting = false;
+            if (session?.scope === scope) yield* close();
+            else yield* Scope.close(scope, Exit.void);
+          }),
         ),
-        current.timerScope,
       );
-      return { streamId: current.id };
     }),
     feed: Effect.fnUntraced(function* (input: SpeechStreamFeed) {
       const current = yield* find(input.streamId);
@@ -295,9 +320,9 @@ export const make = Effect.gen(function* () {
       );
     },
     cancel: Effect.fn("SpeechStreamConnection.cancel")(function* (id: string) {
-      if (lastCancelledId === id) return;
+      if (closing?.id === id) return yield* Deferred.await(closing.done);
+      if (lastClosedId === id) return;
       const current = yield* find(id);
-      lastCancelledId = id;
       yield* close();
       yield* Queue.offer(current.events, { type: "error", code: "cancelled" });
     }),

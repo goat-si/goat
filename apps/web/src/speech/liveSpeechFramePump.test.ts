@@ -100,3 +100,36 @@ it("falls back when finishing a live stream rejects", async () => {
   expect(await pump.finish()).toBeNull();
   expect(failed).toHaveBeenCalledOnce();
 });
+
+it("waits for a failed live session to release its worker before batch fallback", async () => {
+  const frameReceived = deferred<void>();
+  const allowRelease = deferred<void>();
+  let fail: () => void = () => {};
+  let released = false;
+  const pump = new LiveSpeechFramePump(
+    async (_signal, onFailure) => {
+      fail = onFailure;
+      return {
+        feed: async () => {
+          frameReceived.resolve();
+        },
+        finish: async () => {
+          await allowRelease.promise;
+          released = true;
+          return null;
+        },
+        cancel: () => {},
+      };
+    },
+    () => {},
+  );
+  pump.push(new Uint8Array([1, 0]));
+  await frameReceived.promise;
+  fail();
+  const finishing = pump.finish().then((text) => {
+    expect(released).toBe(true);
+    return text;
+  });
+  allowRelease.resolve();
+  expect(await finishing).toBeNull();
+});

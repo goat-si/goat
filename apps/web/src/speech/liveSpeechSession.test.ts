@@ -71,6 +71,75 @@ it("keeps the preview and falls back when the websocket disconnects", async () =
   expect(await session?.finish()).toBeNull();
 });
 
+it("waits for live cancellation before allowing batch fallback", async () => {
+  let disconnect: (() => void) | undefined;
+  const allowRelease = deferred();
+  let released = false;
+  const transport: LiveSpeechTransport = {
+    start: vi.fn(async () => ({ streamId: "fixture" })),
+    subscribe: vi.fn(async (_id, _onEvent, onDisconnect) => {
+      disconnect = onDisconnect;
+      return () => {};
+    }),
+    feed: vi.fn(async () => {}),
+    finish: vi.fn(async () => {}),
+    cancel: vi.fn(async () => {
+      await allowRelease.promise;
+      released = true;
+    }),
+  };
+  const session = await startLiveSpeechSession({
+    transport,
+    locale: "en",
+    canSend: () => true,
+    onPreview: () => {},
+    onFailure: () => {},
+  });
+  if (!session) throw new Error("stream unavailable");
+  disconnect?.();
+  const finishing = session.finish().then((text) => {
+    expect(released).toBe(true);
+    return text;
+  });
+  allowRelease.resolve();
+  expect(await finishing).toBeNull();
+});
+
+it("does not hold batch fallback indefinitely when cancellation is unresponsive", async () => {
+  vi.useFakeTimers();
+  try {
+    let disconnect: (() => void) | undefined;
+    const transport: LiveSpeechTransport = {
+      start: vi.fn(async () => ({ streamId: "fixture" })),
+      subscribe: vi.fn(async (_id, _onEvent, onDisconnect) => {
+        disconnect = onDisconnect;
+        return () => {};
+      }),
+      feed: vi.fn(async () => {}),
+      finish: vi.fn(async () => {}),
+      cancel: vi.fn(() => new Promise<void>(() => {})),
+    };
+    const session = await startLiveSpeechSession({
+      transport,
+      locale: "en",
+      canSend: () => true,
+      onPreview: () => {},
+      onFailure: () => {},
+    });
+    if (!session) throw new Error("stream unavailable");
+    disconnect?.();
+    let completed = false;
+    const finishing = session.finish().then(() => {
+      completed = true;
+    });
+    await vi.advanceTimersByTimeAsync(5_000);
+    expect(completed).toBe(true);
+    await finishing;
+  } finally {
+    vi.useRealTimers();
+  }
+});
+
 it("does not send another frame after the device grant is revoked", async () => {
   let allowed = true;
   const transport: LiveSpeechTransport = {

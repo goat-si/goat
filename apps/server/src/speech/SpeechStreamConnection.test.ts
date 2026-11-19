@@ -400,6 +400,129 @@ it.effect("closes the subscription and treats repeated cancellation as a no-op",
   ),
 );
 
+it.effect("acknowledges cancellation after the transcript subscriber has closed", () =>
+  Effect.scoped(
+    Effect.gen(function* () {
+      const received = yield* Deferred.make<void>();
+      let released = false;
+      const speech = speechLayer({
+        startStream: () =>
+          Effect.acquireRelease(
+            Effect.succeed({
+              feed: () =>
+                Effect.succeed({ revision: 1, text: { committed: "hello", tentative: "" } }),
+              finish: Effect.succeed(""),
+            }),
+            () =>
+              Effect.sync(() => {
+                released = true;
+              }),
+          ),
+      });
+      yield* Effect.gen(function* () {
+        const connection = yield* SpeechStreamConnection.make;
+        const { streamId } = yield* connection.start();
+        const subscriber = yield* connection.events(streamId).pipe(
+          Stream.runForEach(() => Deferred.succeed(received, undefined)),
+          Effect.forkChild,
+        );
+        yield* connection.feed({ streamId, sequence: 0, audioBase64: "AAA=" });
+        yield* Deferred.await(received);
+        yield* Fiber.interrupt(subscriber);
+        expect(released).toBe(true);
+        expect(yield* Effect.result(connection.cancel(streamId))).toMatchObject({
+          _tag: "Success",
+        });
+      }).pipe(Effect.provide(speech));
+    }),
+  ),
+);
+
+it.effect("waits for a closing worker before acknowledging cancellation", () =>
+  Effect.scoped(
+    Effect.gen(function* () {
+      const received = yield* Deferred.make<void>();
+      const releasing = yield* Deferred.make<void>();
+      const allowRelease = yield* Deferred.make<void>();
+      const cancelStarted = yield* Deferred.make<void>();
+      const cancelDone = yield* Deferred.make<void>();
+      const speech = speechLayer({
+        startStream: () =>
+          Effect.acquireRelease(
+            Effect.succeed({
+              feed: () =>
+                Effect.succeed({ revision: 1, text: { committed: "hello", tentative: "" } }),
+              finish: Effect.succeed(""),
+            }),
+            () =>
+              Deferred.succeed(releasing, undefined).pipe(
+                Effect.andThen(Deferred.await(allowRelease)),
+              ),
+          ),
+      });
+      yield* Effect.gen(function* () {
+        const connection = yield* SpeechStreamConnection.make;
+        const { streamId } = yield* connection.start();
+        const subscriber = yield* connection.events(streamId).pipe(
+          Stream.runForEach(() => Deferred.succeed(received, undefined)),
+          Effect.forkChild,
+        );
+        yield* connection.feed({ streamId, sequence: 0, audioBase64: "AAA=" });
+        yield* Deferred.await(received);
+        const ending = yield* Fiber.interrupt(subscriber).pipe(Effect.forkChild);
+        yield* Deferred.await(releasing);
+        const cancelling = yield* Deferred.succeed(cancelStarted, undefined).pipe(
+          Effect.andThen(connection.cancel(streamId)),
+          Effect.result,
+          Effect.ensuring(Deferred.succeed(cancelDone, undefined)),
+          Effect.forkChild,
+        );
+        yield* Deferred.await(cancelStarted);
+        yield* TestClock.adjust("1 millis");
+        expect(yield* Deferred.isDone(cancelDone)).toBe(false);
+        yield* Deferred.succeed(allowRelease, undefined);
+        expect(yield* Fiber.join(cancelling)).toMatchObject({ _tag: "Success" });
+        yield* Fiber.join(ending);
+      }).pipe(Effect.ensuring(Deferred.succeed(allowRelease, undefined)), Effect.provide(speech));
+    }),
+  ),
+);
+
+it.effect("releases the worker even if a settings watcher fails during cleanup", () =>
+  Effect.scoped(
+    Effect.gen(function* () {
+      const watching = yield* Deferred.make<void>();
+      let released = false;
+      const speech = speechLayer({
+        configurationChanges: Effect.succeed(
+          Stream.fromEffect(Deferred.succeed(watching, undefined)).pipe(
+            Stream.flatMap(() => Stream.never),
+            Stream.ensuring(Effect.die("watcher cleanup failed")),
+          ),
+        ),
+        startStream: () =>
+          Effect.acquireRelease(
+            Effect.succeed({
+              feed: () => Effect.succeed({ revision: 0, text: null }),
+              finish: Effect.succeed(""),
+            }),
+            () =>
+              Effect.sync(() => {
+                released = true;
+              }),
+          ),
+      });
+      yield* Effect.gen(function* () {
+        const connection = yield* SpeechStreamConnection.make;
+        const { streamId } = yield* connection.start();
+        yield* Deferred.await(watching);
+        yield* Effect.exit(connection.cancel(streamId));
+        expect(released).toBe(true);
+      }).pipe(Effect.provide(speech));
+    }),
+  ),
+);
+
 it.effect("rejects a second subscriber to the same transcript", () =>
   Effect.scoped(
     Effect.gen(function* () {

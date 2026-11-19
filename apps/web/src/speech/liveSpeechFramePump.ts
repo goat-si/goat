@@ -96,6 +96,14 @@ export class LiveSpeechFramePump {
       this.cancel();
       return null;
     }
+    if (this.state === "failed" && this.session) {
+      try {
+        await this.session.finish();
+      } catch {
+        return null;
+      }
+      return null;
+    }
     if (this.state !== "ready" || !this.session) return null;
     if (this.draining) {
       try {
