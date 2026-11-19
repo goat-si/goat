@@ -31,6 +31,7 @@ const reactTests = [
   "src/features/threads/ComposerSlot.test.tsx",
   "src/features/review/ReviewCommentComposerSheet.test.tsx",
   "src/features/pull-requests/usePullRequestList.test.tsx",
+  "src/features/pull-requests/usePullRequestList.pending.test.tsx",
   "src/features/pull-requests/usePullRequestActivityFilter.test.tsx",
   "src/features/threads/new-task-flow-provider.test.tsx",
   "src/features/threads/git/GitBranchesSheet.occupancy.test.tsx",

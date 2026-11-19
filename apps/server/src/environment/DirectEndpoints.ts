@@ -78,7 +78,12 @@ export function resolveBoundEndpoints(input: {
             !(input.platform === "win32" && WINDOWS_HOST_ADAPTER_MAC.test(entry.mac)),
         )
         .map((entry) => entry.address)
-    : [input.host!].filter(isAdvertisableAddress);
+    : input.host === undefined
+      ? []
+      : [input.host].filter(
+          (address) =>
+            isAdvertisableAddress(address) || (NodeNet.isIPv6(address) && isTailnetHost(address)),
+        );
   return [...new Set(addresses)]
     .filter((address) => !input.onCloudVm || tailscaleAddresses.has(address))
     .map((address) => ({

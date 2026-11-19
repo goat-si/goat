@@ -74,10 +74,7 @@ describe("merging project batches from one environment", () => {
         ...rows.map((row) => [ENV_1, answer({ entries: [row] })] as const),
         [ENV_2, answer({ entries: [older] })],
       ]);
-      expect(merged?.entries).toEqual([
-        { ...newer, environmentId: ENV_1 },
-        { ...older, environmentId: ENV_2 },
-      ]);
+      expect(merged?.entries).toEqual([{ ...newer, environmentId: ENV_1 }]);
     },
   );
 

@@ -197,7 +197,7 @@ import * as FleetPressure from "./fleet/pressure/PressureNudger.ts";
 import * as FleetPlacement from "./fleet/resources/Placement.ts";
 import * as ServerHttp from "./http.ts";
 import * as RuntimeSessionRoute from "./runtimeSessionRoute.ts";
-import { withUntracedRequests } from "./http.ts";
+import { withRootRequestSpans, withUntracedRequests } from "./http.ts";
 import { createGuardedHttpServer } from "./httpResponseErrorGuard.ts";
 import * as HubProxyHttp from "./hubProxy/http.ts";
 import * as HubProxyNodes from "./hubProxy/HubProxyNodes.ts";
@@ -1182,6 +1182,7 @@ const layerMakeServer = Layer.unwrap(
       routerConfig: HTTP_ROUTER_CONFIG,
     }).pipe(
       withUntracedRequests,
+      withRootRequestSpans,
       Layer.tap(() => Deferred.succeed(routesReady, undefined).pipe(Effect.orDie)),
     );
     const layerServerApplication = Layer.mergeAll(

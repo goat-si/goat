@@ -3,6 +3,14 @@
   "private": true,
   "type": "module",
   "exports": {
+    "./pairingCode": {
+      "types": "./src/pairingCode.ts",
+      "import": "./src/pairingCode.ts"
+    },
+    "./png": {
+      "types": "./src/png.ts",
+      "import": "./src/png.ts"
+    },
     "./parseUrl": {
       "types": "./src/parseUrl.ts",
       "import": "./src/parseUrl.ts"

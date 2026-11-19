@@ -69,7 +69,7 @@ import {
   resolveCanonicalWorkspaceFile,
   resolveCanonicalWorkspaceFileForRequest,
 } from "./workspaceAssetFile.ts";
-import { PREVIEW_ASSET_EXTENSIONS } from "./previewAssetExtensions.ts";
+import { isPreviewDependencyPath } from "./previewAssetExtensions.ts";
 
 export const ASSET_ROUTE_PREFIX = "/api/assets";
 
@@ -968,20 +968,13 @@ const resolveClaims = Effect.fn("AssetAccess.resolveClaims")(function* (
       ? ({ kind: "file", path: exactWorkspaceFile } satisfies ResolvedAsset)
       : null;
   }
-  const segments = decodedPath.split(/[\\/]/);
-  if (
-    decodedPath.length === 0 ||
-    decodedPath.includes("\0") ||
-    segments.some((segment) => segment === "." || segment === ".." || segment.startsWith(".")) ||
-    !PREVIEW_ASSET_EXTENSIONS.has(path.extname(decodedPath).toLowerCase())
-  ) {
-    return null;
-  }
+  if (!isPreviewDependencyPath(decodedPath, path)) return null;
   const joinedRelativePath =
     claims.baseRelativePath === "." ? decodedPath : path.join(claims.baseRelativePath, decodedPath);
   return yield* openScopedWorkspaceAsset({
     workspaceRoot: claims.workspaceRoot,
     relativePath: joinedRelativePath,
+    previewDependency: true,
   });
 });
 

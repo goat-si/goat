@@ -10,7 +10,9 @@ import * as Layer from "effect/Layer";
 import * as Schema from "effect/Schema";
 import * as Tracer from "effect/Tracer";
 import { Tool, Toolkit } from "effect/ai";
-import { HttpBody, HttpClient, HttpRouter } from "effect/http";
+import { HttpBody, HttpClient, HttpClientRequest, HttpRouter } from "effect/http";
+import * as ServerConfig from "../config.ts";
+import * as ServerHttp from "../http.ts";
 import * as McpHttpServer from "./McpHttpServer.ts";
 import * as McpInvocationContext from "./McpInvocationContext.ts";
 import * as McpSessionRegistry from "./McpSessionRegistry.ts";
@@ -84,6 +86,8 @@ it.effect("admits provider and OAuth client credentials and points only clients 
           }),
         ).pipe(Layer.provide(McpToolAccessTestkit.layerPermissionProfilesOff)),
       ).pipe(
+        Layer.provide(ServerHttp.layerBrowserApiCors),
+        Layer.provide(ServerConfig.layerTest(process.cwd(), { prefix: "goat-mcp-origin-" })),
         Layer.provide(
           Layer.mock(McpSessionRegistry.McpSessionRegistry)({
             explainRefusal: () => Effect.succeed({ reason: "unknown" as const }),
@@ -183,6 +187,27 @@ it.effect("admits provider and OAuth client credentials and points only clients 
         traced.spans.slice(beforeRejection).filter((span) => span.name.startsWith("mcp.tool.")),
       ).toEqual([]);
       expect(deadProvider.headers["www-authenticate"]).toBe('Bearer error="invalid_token"');
+      const originRequest = (method: "POST" | "OPTIONS", origin: string | undefined) =>
+        httpClient.execute(
+          HttpClientRequest.make(method)("/mcp", {
+            headers: {
+              host: "goat.example.test",
+              "x-forwarded-host": "goat.example.test",
+              ...(origin ? { origin } : {}),
+              "access-control-request-method": "POST",
+            },
+          }),
+        );
+      expect((yield* originRequest("POST", undefined)).status).toBe(401);
+      expect((yield* originRequest("POST", "http://goat.example.test")).status).toBe(401);
+      expect((yield* originRequest("POST", "goat://app")).status).toBe(401);
+      const desktopPreflight = yield* originRequest("OPTIONS", "goat://app");
+      expect(desktopPreflight.status).toBe(204);
+      expect(desktopPreflight.headers["access-control-allow-origin"]).toBe("goat://app");
+      const desktopResponse = yield* originRequest("POST", "goat://app");
+      expect(desktopResponse.headers["access-control-allow-origin"]).toBe("goat://app");
+      expect((yield* originRequest("POST", "https://foreign.invalid")).status).toBe(403);
+      expect((yield* originRequest("OPTIONS", "https://foreign.invalid")).status).toBe(403);
     }),
   ).pipe(Effect.provide(layerTestLoopback)),
 );

@@ -28,6 +28,11 @@ vi.mock(import("../../state/server"), async (original) => {
   };
 });
 
+vi.mock(import("../../state/session"), async (original) => ({
+  ...(await original()),
+  useEnvironmentScope: () => true,
+}));
+
 import { useUpdateEnvironmentSettings } from "../../hooks/useSettings";
 import { UsageProviderSettings } from "./UsageProviderSettings";
 
@@ -78,4 +83,26 @@ it("repairs a saved hub reference without discarding it before replacement", asy
       }),
     },
   });
+});
+
+it("shows that a cleared hub key needs re-entry", async () => {
+  vi.mocked(useUpdateEnvironmentSettings).mockReturnValue(vi.fn());
+  const sources = decodeSettings({
+    usageLimitSources: {
+      hub: { kind: "cliproxy", url: "https://hub.example", managementKey: "", enabled: true },
+    },
+  }).usageLimitSources;
+  await using screen = await render(
+    <UsageProviderSettings
+      environmentId={EnvironmentId.make("fixture")}
+      environmentLabel="Fixture"
+      sources={sources}
+      cursorKeychainUsageEnabled={false}
+      readOnly={false}
+    />,
+  );
+  await expect
+    .element(screen.getByText("Management key not set. Re-enter it for this address."))
+    .toBeVisible();
+  await expect.element(screen.getByLabelText("Replacement management key")).toBeVisible();
 });

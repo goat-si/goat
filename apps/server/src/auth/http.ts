@@ -40,7 +40,7 @@ import { hubProxyDelegationRefusal } from "./hubProxyDelegation.ts";
 import { ServerSettingsService } from "../serverSettings.ts";
 import { traceAuthenticatedRelayRequest, traceRelayRequest } from "../cloud/traceRelayRequest.ts";
 import { legacyScopedSessionCookieName, deriveAuthClientMetadata } from "./utils.ts";
-import { verifyRequestDpopProof } from "./dpop.ts";
+import { checkRequestDpopProof } from "./dpop.ts";
 import { requestUrl } from "../requestUrl.ts";
 
 const CREDENTIAL_RESPONSE_HEADERS = {
@@ -206,13 +206,23 @@ export const failEnvironmentInternal =
     return yield* new EnvironmentInternalError({ code: "internal_error", reason, traceId });
   });
 
-const appendSessionCookie = (cookieName: string, token: string, expiresAt: DateTime.DateTime) =>
+const sessionCookieOptions = (request: HttpServerRequest.HttpServerRequest) => ({
+  httpOnly: true,
+  path: "/",
+  sameSite: "lax" as const,
+  secure: Option.exists(requestUrl(request), (url) => url.protocol === "https:"),
+});
+
+const appendSessionCookie = (
+  request: HttpServerRequest.HttpServerRequest,
+  cookieName: string,
+  token: string,
+  expiresAt: DateTime.DateTime,
+) =>
   Effect.fromResult(
     Cookies.set(Cookies.empty, cookieName, token, {
+      ...sessionCookieOptions(request),
       expires: DateTime.toDate(expiresAt),
-      httpOnly: true,
-      path: "/",
-      sameSite: "lax",
     }),
   ).pipe(
     Effect.catch(() => failEnvironmentInternal("browser_session_cookie_failed")),
@@ -292,7 +302,12 @@ export const layer = HttpApiBuilder.group(
               result.sessionMethod === "browser-session-cookie" &&
               result.expiresAt
             ) {
-              yield* appendSessionCookie(sessions.cookieName, credential.token, result.expiresAt);
+              yield* appendSessionCookie(
+                request,
+                sessions.cookieName,
+                credential.token,
+                result.expiresAt,
+              );
               yield* appendCredentialResponseHeaders;
             }
             return result;
@@ -325,10 +340,8 @@ export const layer = HttpApiBuilder.group(
             const cookieName = result.cookieName ?? sessions.cookieName;
             const selectedCookie = yield* Effect.fromResult(
               Cookies.set(Cookies.empty, cookieName, result.sessionToken, {
+                ...sessionCookieOptions(request),
                 expires: DateTime.toDate(result.response.expiresAt),
-                httpOnly: true,
-                path: "/",
-                sameSite: "lax",
               }),
             ).pipe(Effect.catch(() => failEnvironmentInternal("browser_session_cookie_failed")));
             let sessionCookies = selectedCookie;
@@ -341,9 +354,7 @@ export const layer = HttpApiBuilder.group(
                 if (name === undefined) continue;
                 sessionCookies = yield* Effect.fromResult(
                   Cookies.expireCookie(sessionCookies, name, {
-                    httpOnly: true,
-                    path: "/",
-                    sameSite: "lax",
+                    ...sessionCookieOptions(request),
                   }),
                 ).pipe(
                   Effect.catch(() => failEnvironmentInternal("browser_session_cookie_failed")),
@@ -381,8 +392,8 @@ export const layer = HttpApiBuilder.group(
             if (requestedScopes === null || requestedScopes?.length === 0) {
               return yield* failEnvironmentInvalidRequest("invalid_scope");
             }
-            const proofKeyThumbprint = args.headers.dpop
-              ? yield* verifyRequestDpopProof({ request }).pipe(
+            const proof = args.headers.dpop
+              ? yield* checkRequestDpopProof({ request }).pipe(
                   Effect.catchIf(EnvironmentAuth.isServerAuthCredentialError, (error) =>
                     appendDpopChallengeHeader.pipe(
                       Effect.andThen(
@@ -413,7 +424,7 @@ export const layer = HttpApiBuilder.group(
                   ...(args.payload.client_os ? { os: args.payload.client_os } : {}),
                 },
               }),
-              proofKeyThumbprint ? { proofKeyThumbprint } : undefined,
+              proof ? { proofKeyThumbprint: proof.thumbprint } : undefined,
             );
           },
           traceRelayRequest,

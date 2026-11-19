@@ -186,7 +186,7 @@ function resolveCompletionShell(shell: string): CompletionShell | null {
 const utf8 = new TextEncoder();
 // Canonical TTY input (before a line editor starts reading) caps a line below 1 KiB on Linux.
 const POSIX_MAX_LINE_BYTES = 1_023;
-const POSIX_APPEND = '__t3_command="$__t3_command"';
+const POSIX_APPEND = '__goat_command="$__goat_command"';
 
 function encodePosixScript(text: string): string {
   let encoded = "";
@@ -208,13 +208,13 @@ function wrapPosixCommand(command: string, sentinel: string): string {
   const normalized = command.replace(/\r\n/g, "\n");
   // The `_` suffix keeps trailing newlines; the subshell contains exits and syntax errors.
   const evaluate = (payload: string) =>
-    `( __t3_command=$(printf '%b_' ${payload}); eval "\${__t3_command%_}" ); printf '\\n${sentinel}%s\\n' "$?"`;
+    `( __goat_command=$(printf '%b_' ${payload}); eval "\${__goat_command%_}" ); printf '\\n${sentinel}%s\\n' "$?"`;
   const inline = evaluate(`'${encodePosixScript(normalized)}'`);
   if (utf8.encode(` ${inline}\r`).byteLength <= POSIX_MAX_LINE_BYTES) return inline;
 
   const maxChunkBytes = POSIX_MAX_LINE_BYTES - utf8.encode(` ${POSIX_APPEND}''\r`).byteLength;
   const lines: string[] = [];
-  let prefix = "__t3_command=";
+  let prefix = "__goat_command=";
   let chunk = "";
   let chunkBytes = 0;
   for (const character of normalized) {
@@ -229,7 +229,7 @@ function wrapPosixCommand(command: string, sentinel: string): string {
     chunk += encoded;
     chunkBytes += bytes;
   }
-  lines.push(`${prefix}'${chunk}'`, `${evaluate('"$__t3_command"')}; unset __t3_command`);
+  lines.push(`${prefix}'${chunk}'`, `${evaluate('"$__goat_command"')}; unset __goat_command`);
   // The leading space gives every line the history suppression a short command gets.
   return lines.join("\r ");
 }

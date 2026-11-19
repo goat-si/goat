@@ -75,9 +75,9 @@ export function makeSubmoduleRemoval<E>(deps: {
             "rev-list",
             "--max-count=1",
             "HEAD",
-            "--exclude=refs/t3/checkpoints/*",
+            "--exclude=refs/t3/checkpoints/*", // goat-rename: legacy: checkpoint refs written before the rename
             "--exclude=refs/goat/checkpoints/*",
-            "--exclude=refs/t3/orchestration-v2/checkpoints/*",
+            "--exclude=refs/t3/orchestration-v2/checkpoints/*", // goat-rename: legacy: checkpoint refs written before the rename
             "--exclude=refs/goat/orchestration-v2/checkpoints/*",
             "--all",
             "--reflog",

@@ -867,7 +867,7 @@ export function registerPiToolChecks({
       const fake = yield* makeFakePi;
       yield* openRuntime(fake);
       assert.equal(fake.lastSpawn().env.GOAT_THREAD_ID, THREAD_ID);
-      assert.equal(fake.lastSpawn().env.T3CODE_THREAD_ID, THREAD_ID);
+      assert.equal(fake.lastSpawn().env.T3CODE_THREAD_ID, THREAD_ID); // goat-rename: legacy
     }).pipe(Effect.scoped, Effect.provide(layerTest)),
   );
   it.effect("attaches image preview paths to completed Pi reads", () =>

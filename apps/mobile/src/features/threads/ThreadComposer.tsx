@@ -60,6 +60,7 @@ import { scopeProjectRef } from "@goat/client-runtime/environment";
 import { AppText as Text } from "../../components/ui/AppText";
 import { ComposerAttachmentButton } from "./ComposerAttachmentButton";
 import { ComposerNotices } from "./ComposerNotices";
+import { ThreadOperateNotice } from "./ThreadOperateNotice";
 import {
   ComposerAttachmentStrip,
   ComposerAttachmentThumbnail,
@@ -1047,11 +1048,10 @@ export const ThreadComposer = function ThreadComposer(props: ThreadComposerProps
           </Animated.View>
         </ComposerSurface>
 
-        {props.connectionState === "connected" && !props.canOperateThread ? (
-          <Text className="pt-2 text-xs text-foreground-muted">
-            This connection cannot control this task. You can still edit your draft.
-          </Text>
-        ) : null}
+        <ThreadOperateNotice
+          environmentId={props.environmentId}
+          connected={props.connectionState === "connected"}
+        />
       </Animated.View>
 
       <VideoPreviewModal source={previewVideo} onRequestClose={closePreview} />

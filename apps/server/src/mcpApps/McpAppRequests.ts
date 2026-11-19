@@ -21,9 +21,10 @@ import * as Predicate from "effect/Predicate";
 import * as Schema from "effect/Schema";
 
 import * as Orchestrator from "../orchestration-v2/Orchestrator.ts";
-import type * as ProviderAdapter from "@goat/provider-core/server/ProviderAdapter";
+import * as ProviderAdapter from "@goat/provider-core/server/ProviderAdapter";
 import * as ProviderSessionManager from "../orchestration-v2/ProviderSessionManager.ts";
 import * as ThreadManagementService from "../orchestration-v2/ThreadManagementService.ts";
+import * as RuntimePolicy from "../orchestration-v2/RuntimePolicy.ts";
 import * as McpAppModelContext from "./McpAppModelContext.ts";
 
 /** Reports stopped sessions without starting them; app views must not spend provider turns. */
@@ -60,6 +61,7 @@ const make = Effect.gen(function* () {
   const orchestrator = yield* Orchestrator.OrchestratorV2;
   const threadManagement = yield* ThreadManagementService.ThreadManagementService;
   const providerSessions = yield* ProviderSessionManager.ProviderSessionManagerV2;
+  const runtimePolicy = yield* RuntimePolicy.RuntimePolicyV2;
   const modelContext = yield* McpAppModelContext.McpAppModelContext;
 
   const fail = (threadId: ThreadId, reason: McpAppRequestError["reason"], cause?: unknown) =>
@@ -102,7 +104,27 @@ const make = Effect.gen(function* () {
     if (runtime === undefined) return yield* fail(input.threadId, "session-stopped");
     const mcpApps: ProviderAdapter.ProviderAdapterV2McpApps | undefined = runtime.mcpApps;
     if (mcpApps === undefined) return yield* fail(input.threadId, "provider-unsupported");
-    return { app, providerThread, mcpApps };
+    const resolveRuntime: ProviderAdapter.ProviderAdapterV2McpRuntime = Effect.gen(function* () {
+      const { thread } = yield* threadManagement.getThreadRecords(input.threadId, []);
+      if (thread.modelSelection == null) return undefined;
+      return {
+        modelSelection: thread.modelSelection,
+        runtimePolicy: yield* runtimePolicy.resolve({
+          thread,
+          modelSelection: thread.modelSelection,
+        }),
+      };
+    }).pipe(
+      Effect.mapError(
+        (cause) =>
+          new ProviderAdapter.ProviderAdapterProtocolError({
+            driver: providerThread.driver,
+            detail: "Failed to resolve current MCP app runtime",
+            cause,
+          }),
+      ),
+    );
+    return { app, providerThread, mcpApps, resolveRuntime };
   });
 
   const findTool = Effect.fn("McpAppRequests.findTool")(function* (
@@ -111,7 +133,11 @@ const make = Effect.gen(function* () {
     name: string,
   ) {
     const tools = yield* resolved.mcpApps
-      .listTools({ providerThread: resolved.providerThread, server: resolved.app.server })
+      .listTools({
+        providerThread: resolved.providerThread,
+        server: resolved.app.server,
+        resolveRuntime: resolved.resolveRuntime,
+      })
       .pipe(Effect.mapError((cause) => fail(threadId, "request-failed", cause)));
     return tools.find((tool) => tool.name === name);
   });
@@ -141,6 +167,7 @@ const make = Effect.gen(function* () {
         server: resolved.app.server,
         tool: input.name,
         arguments: input.arguments,
+        resolveRuntime: resolved.resolveRuntime,
       })
       .pipe(Effect.mapError((cause) => fail(input.threadId, "request-failed", cause)));
   });
@@ -154,6 +181,7 @@ const make = Effect.gen(function* () {
         providerThread: resolved.providerThread,
         server: resolved.app.server,
         uri: input.uri,
+        resolveRuntime: resolved.resolveRuntime,
       })
       .pipe(Effect.mapError((cause) => fail(input.threadId, "request-failed", cause)));
   });

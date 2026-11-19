@@ -79,6 +79,7 @@ vi.mock("../../state/server", () => ({
   },
 }));
 vi.mock("../../state/use-atom-command", () => ({ useAtomCommand: () => state.answer }));
+vi.mock("../../state/session", () => ({ useEnvironmentScope: () => true }));
 import { SecretRequestCard } from "./SecretRequestCard";
 
 const item = {

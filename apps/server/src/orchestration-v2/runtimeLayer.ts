@@ -433,6 +433,7 @@ const layerMcpAppRequestsProvided = McpAppRequests.layer.pipe(
       layerOrchestratorProvided,
       layerThreadManagementProvided,
       layerProviderSessionManagerProvided,
+      layerRuntimePolicyProvided,
     ),
   ),
 );

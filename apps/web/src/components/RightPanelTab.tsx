@@ -1,4 +1,5 @@
 import type { SourceControlProviderKind } from "@goat/contracts";
+import { pullRequestTabReference } from "./pullRequestTabReference";
 import type { EnvironmentThreadShell } from "@goat/client-runtime/state/shell";
 import { useProjects, useServerConfigs, useThreadShells } from "~/state/entities";
 import { visibleThreadPullRequests } from "@goat/shared/threadPullRequests";
@@ -251,11 +252,7 @@ function PullRequestSurfaceIcon({
           },
         }),
   ).data;
-  const reference = {
-    projectId: surface.projectId as ProjectId,
-    repository: surface.repository,
-    number: surface.number,
-  };
+  const reference = pullRequestTabReference(surface);
   const sharedSummary = useSharedPullRequestSummary(resolvedEnvironmentId, reference);
   const status = linkedSnapshot ?? newestPullRequestSummary(detail, sharedSummary) ?? seed ?? null;
   if (status === null) {

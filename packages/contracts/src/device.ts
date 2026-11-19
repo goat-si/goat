@@ -529,10 +529,14 @@ export class DeviceOperationError extends Schema.TaggedError<DeviceOperationErro
       "hub_rejected",
     ]),
     exitCode: Schema.optional(Schema.Number),
+    recovery: Schema.optional(Schema.Literal("npm_not_found")),
     cause: Schema.Defect(),
   },
 ) {
   override get message(): string {
+    if (this.recovery === "npm_not_found") {
+      return `Device ${this.operation} failed: Device support needs npm on the GOAT server's PATH. Install npm, restart GOAT, then retry.`;
+    }
     const explanation = {
       command_failed: `The device command failed${this.exitCode === undefined ? "" : ` (exit code ${this.exitCode})`}.`,
       request_failed: "Could not communicate with device support. Try refreshing devices.",
