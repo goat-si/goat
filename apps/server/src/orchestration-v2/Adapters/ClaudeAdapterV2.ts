@@ -96,6 +96,7 @@ import {
 import { sealAssistantTextEvent } from "./AssistantTextBoundary.ts";
 import { isGoatBotSessionThreadId, isGoatSkillName } from "@goat/contracts";
 import {
+  claudeLaunchArgParseOptions,
   readClaudeAppendSystemPromptFile,
   readClaudeLaunchArgSettings,
 } from "./ClaudeLaunchArgs.ts";
@@ -625,7 +626,9 @@ export function makeClaudeQueryOptions(input: {
     "append-system-prompt-file": _launchArgAppendSystemPromptFile,
     settings: _launchArgSettings,
     ...extraArgs
-  } = input.settings === undefined ? {} : parseCliArgs(input.settings.launchArgs).flags;
+  } = input.settings === undefined
+    ? {}
+    : parseCliArgs(input.settings.launchArgs, claudeLaunchArgParseOptions).flags;
   // Claude Code overwrites its CLI append text with the SDK's initialize
   // appendSystemPrompt, so launch-argument text has to travel in that value.
   // The CLI puts file text before inline text and trims one trailing newline.
