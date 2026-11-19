@@ -24,10 +24,11 @@ import {
   filePreviewGallery,
   filePreviewKey,
   filePreviewName,
+  filePreviewSourceIdentifier,
   pdfActionsSource,
 } from "../lib/filePreviewGallery";
 import { FilePreviewGallery } from "./FilePreviewGallery";
-import { FilePreview } from "./FilePreview";
+import { FilePreview, supportsProgressiveFilePreview } from "./FilePreview";
 import type {
   FilePreviewItem,
   FilePreviewSource,
@@ -52,7 +53,8 @@ function remotePreviewFailureMessage(error: unknown): string {
 
 function PreviewItemResolver(props: {
   readonly source: FilePreviewItem;
-  readonly onResolved: (source: ResolvedFilePreviewSource) => void;
+  readonly onResolved: (source: ResolvedFilePreviewSource | null) => void;
+  readonly progressive: boolean;
   readonly onRequestClose: () => void;
   readonly onOpenError?: (error: unknown) => void;
 }) {
@@ -67,6 +69,10 @@ function PreviewItemResolver(props: {
   const [uri, setUri] = useState<string | null>("uri" in source ? source.uri : null);
   const onRequestClose = useEffectEvent(props.onRequestClose);
   const onResolutionError = useEffectEvent((error: unknown, fallbackMessage: string) => {
+    if (props.progressive) {
+      props.onResolved(null);
+      return;
+    }
     if (props.onOpenError) props.onOpenError(error);
     else Dialog.alert("Could not open preview", fallbackMessage);
     onRequestClose();
@@ -135,11 +141,13 @@ function ResolvedFilePreview(props: {
 }) {
   // Freeze the group at opening; streaming messages and URL refreshes must not reopen the viewer.
   const [items] = useState(() => filePreviewGallery(props.source, []));
-  const [resolved, setResolved] = useState<Record<string, ResolvedFilePreviewSource>>({});
-  const onResolved = useCallback((item: ResolvedFilePreviewSource, key: string) => {
+  const progressive = props.source.kind === "image" && supportsProgressiveFilePreview();
+  const [resolved, setResolved] = useState<Record<string, ResolvedFilePreviewSource | null>>({});
+  const onResolved = useCallback((item: ResolvedFilePreviewSource | null, key: string) => {
     setResolved((current) => ({ ...current, [key]: item }));
   }, []);
-  const selected = resolved[filePreviewKey(props.source)];
+  const selectedKey = filePreviewKey(props.source);
+  const selected = resolved[selectedKey];
   const gallery = useMemo(
     () =>
       items.flatMap((item) => {
@@ -148,7 +156,22 @@ function ResolvedFilePreview(props: {
       }),
     [items, resolved],
   );
-  const ready = selected && gallery.length === items.length;
+  const viewerSource = progressive
+    ? {
+        kind: "image" as const,
+        selectedIndex: items.findIndex((item) => filePreviewKey(item) === selectedKey),
+        images: items.map((item) => {
+          const value = resolved[filePreviewKey(item)];
+          return {
+            name: filePreviewName(item),
+            sourceIdentifier: filePreviewSourceIdentifier(item),
+            uri: value === null ? null : (value?.uri ?? ("uri" in item ? item.uri : undefined)),
+          };
+        }),
+      }
+    : selected && gallery.length === items.length
+      ? { ...selected, gallery }
+      : null;
   const onOpenError = (error: unknown) => {
     if (props.onOpenError) return props.onOpenError(error);
     Dialog.alert("Could not open preview", nativeViewerErrorMessage(error), [
@@ -181,14 +204,15 @@ function ResolvedFilePreview(props: {
         <PreviewItemResolver
           key={filePreviewKey(item)}
           source={item}
+          progressive={progressive}
           onResolved={(value) => onResolved(value, filePreviewKey(item))}
           onRequestClose={props.onRequestClose}
           onOpenError={props.onOpenError}
         />
       ))}
-      {ready ? (
+      {viewerSource ? (
         <FilePreview
-          source={{ ...selected, gallery }}
+          source={viewerSource}
           onRequestClose={props.onRequestClose}
           onOpenError={onOpenError}
           onPresent={props.onPresent}

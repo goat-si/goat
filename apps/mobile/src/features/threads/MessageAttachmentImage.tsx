@@ -1,6 +1,6 @@
 import type { EnvironmentId } from "@goat/contracts";
 import { Image as ExpoImage } from "expo-image";
-import { useId, useMemo, useRef } from "react";
+import { useMemo, useRef } from "react";
 import { Pressable, View } from "react-native";
 import { useResolveClassNames } from "uniwind";
 
@@ -9,6 +9,7 @@ import type { FilePreviewSource } from "../../components/FilePreviewModal";
 import { AppActivityIndicator } from "../../components/ui/AppActivityIndicator";
 import { PresentationSource } from "../../components/ui/NativePresentation";
 import { assetImageSource } from "../../lib/assetImageSource";
+import { filePreviewSourceIdentifier } from "../../lib/filePreviewGallery";
 import { useAssetUrl, useRefreshAssetUrl } from "../../state/assets";
 
 export function MessageAttachmentImage(props: {
@@ -20,7 +21,6 @@ export function MessageAttachmentImage(props: {
   readonly onPressPreview: (source: FilePreviewSource) => void;
 }) {
   const withGallery = useFilePreviewGallery();
-  const sourceIdentifier = useId();
   const resource = useMemo(
     () => ({
       _tag: "attachment" as const,
@@ -30,6 +30,11 @@ export function MessageAttachmentImage(props: {
     }),
     [props.attachmentId, props.name, props.mimeType],
   );
+  const sourceIdentifier = filePreviewSourceIdentifier({
+    kind: "image",
+    environmentId: props.environmentId,
+    resource,
+  });
   const uri = useAssetUrl(props.environmentId, resource);
   const refreshAssetUrl = useRefreshAssetUrl(props.environmentId, resource);
   const retriedImage = useRef(false);

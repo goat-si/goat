@@ -1,8 +1,8 @@
 import * as Dialog from "./ui/Dialog";
 import { requireNativeModule } from "expo";
-import { useEffect, useEffectEvent, useId } from "react";
+import { useEffect, useEffectEvent, useId, useRef, useState } from "react";
 
-import type { ResolvedFilePreviewSource } from "./FilePreviewModal.types";
+import type { FilePreviewViewerProps } from "./FilePreviewModal.types";
 
 const NativeControls = requireNativeModule<{
   presentFile(
@@ -12,23 +12,24 @@ const NativeControls = requireNativeModule<{
     identifier: string,
   ): Promise<void>;
   presentFiles(
-    uris: readonly string[],
+    uris: readonly (string | null)[],
     names: readonly string[],
     selectedIndex: number,
     sourceIdentifiers: readonly string[],
     identifier: string,
   ): Promise<void>;
+  updateFile?(identifier: string, index: number, uri: string | null): Promise<void>;
   dismissFile(identifier: string): Promise<void>;
   isFilePreviewFinished?(identifier: string): boolean;
 }>("GoatNativeControls");
 
-function NativeFilePreview(props: {
-  readonly source: ResolvedFilePreviewSource;
-  readonly onRequestClose: () => void;
-  readonly onOpenError?: (error: unknown) => void;
-  readonly onPresent?: (isFinished: () => boolean) => void;
-}) {
-  const { uri, name, sourceIdentifier, gallery } = props.source;
+export function supportsProgressiveFilePreview() {
+  return typeof NativeControls.updateFile === "function";
+}
+
+export function FilePreview(props: FilePreviewViewerProps) {
+  const [presented] = useState(props.source);
+  const delivered = useRef<(string | null | undefined)[]>([]);
   const identifier = useId();
   const onRequestClose = useEffectEvent(props.onRequestClose);
   const onPresent = useEffectEvent((isFinished: () => boolean) => props.onPresent?.(isFinished));
@@ -39,19 +40,34 @@ function NativeFilePreview(props: {
 
   useEffect(() => {
     let canceled = false;
-    const presentation =
-      gallery && gallery.length > 1
-        ? NativeControls.presentFiles(
-            gallery.map((item) => item.uri),
-            gallery.map((item) => item.name ?? "Preview"),
-            Math.max(
-              0,
-              gallery.findIndex((item) => item.uri === uri),
-            ),
-            gallery.map((item) => item.sourceIdentifier ?? ""),
-            identifier,
-          )
-        : NativeControls.presentFile(uri, name ?? "Preview", sourceIdentifier ?? "", identifier);
+    let presentation: Promise<void>;
+    if ("images" in presented) {
+      const { images, selectedIndex } = presented;
+      const initialUrls = images.map(({ uri }) => uri ?? null);
+      delivered.current = images.map(({ uri }) => uri ?? undefined);
+      presentation = NativeControls.presentFiles(
+        initialUrls,
+        images.map(({ name }) => name),
+        selectedIndex,
+        images.map(({ sourceIdentifier }) => sourceIdentifier),
+        identifier,
+      );
+    } else {
+      const { uri, name, sourceIdentifier, gallery } = presented;
+      presentation =
+        gallery && gallery.length > 1
+          ? NativeControls.presentFiles(
+              gallery.map((item) => item.uri),
+              gallery.map((item) => item.name ?? "Preview"),
+              Math.max(
+                0,
+                gallery.findIndex((item) => item.uri === uri),
+              ),
+              gallery.map((item) => item.sourceIdentifier ?? ""),
+              identifier,
+            )
+          : NativeControls.presentFile(uri, name ?? "Preview", sourceIdentifier ?? "", identifier);
+    }
     onPresent(() => NativeControls.isFilePreviewFinished?.(identifier) === true);
     void presentation
       .catch((error: unknown) => {
@@ -64,16 +80,18 @@ function NativeFilePreview(props: {
       canceled = true;
       void NativeControls.dismissFile(identifier).catch(() => undefined);
     };
-  }, [uri, name, sourceIdentifier, identifier, gallery]);
+  }, [identifier, presented]);
+
+  const { source } = props;
+  // oxlint-disable-next-line goat/react-effect-budget -- Deliver newly resolved URLs to the open UIKit viewer.
+  useEffect(() => {
+    if (!("images" in source)) return;
+    source.images.forEach(({ uri }, index) => {
+      if (uri === undefined || delivered.current[index] === uri) return;
+      delivered.current[index] = uri;
+      void NativeControls.updateFile?.(identifier, index, uri).catch(() => undefined);
+    });
+  }, [identifier, source]);
 
   return null;
-}
-
-export function FilePreview(props: {
-  readonly source: ResolvedFilePreviewSource;
-  readonly onRequestClose: () => void;
-  readonly onOpenError?: (error: unknown) => void;
-  readonly onPresent?: (isFinished: () => boolean) => void;
-}) {
-  return <NativeFilePreview {...props} />;
 }
