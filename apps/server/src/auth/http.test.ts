@@ -407,6 +407,34 @@ it.live("checks token-endpoint DPoP proofs without writing replay state", () =>
           );
           expect(badProof.status).toBe(401);
           expect(badProof.headers.get("www-authenticate")).toBe("DPoP");
+          const expired = await environment.handler(
+            tokenRequest(DEV_TOKEN, key.sign({ method: "POST", url, token: "", iat: iat - 600 })),
+            requestContext,
+          );
+          expect(expired.status).toBe(401);
+          const expiredProxy = await environment.handler(
+            new Request(url, {
+              method: "POST",
+              headers: {
+                host: "127.0.0.1",
+                "x-forwarded-proto": "https",
+                dpop: key.sign({
+                  method: "POST",
+                  url: "https://127.0.0.1/oauth/token",
+                  token: "",
+                  iat: iat - 600,
+                }),
+              },
+              body: new URLSearchParams({
+                grant_type: AuthTokenExchangeGrantType,
+                subject_token: DEV_TOKEN,
+                subject_token_type: AuthEnvironmentBootstrapTokenType,
+                requested_token_type: AuthAccessTokenType,
+              }),
+            }),
+            requestContext,
+          );
+          expect(expiredProxy.status).toBe(401);
           expect(written).toEqual([]);
         }),
       (environment) => Effect.promise(() => environment.dispose()),
