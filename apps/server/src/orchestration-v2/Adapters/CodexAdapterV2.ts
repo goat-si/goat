@@ -7,6 +7,7 @@ import {
   codexPlanStepStatus,
 } from "./CodexItemProjection.ts";
 import { withCodexMcpReload } from "./CodexMcpReload.ts";
+import { trackCodexWebSearch } from "./CodexWebSearchTracker.ts";
 import {
   type CodexWebSearchItem,
   trimText,
@@ -177,7 +178,7 @@ import { resolveAttachmentPath, resolveAttachmentPathById } from "../../attachme
 import { ServerConfig } from "../../config.ts";
 import { expandHomePath } from "@goat/provider-core/server/pathExpansion";
 import {
-  canAutoApproveMcpElicitation,
+  autoApproveMcpElicitation,
   describeMcpElicitation,
   toMcpElicitationResponse,
 } from "../../provider/CodexMcpElicitation.ts";
@@ -4532,7 +4533,7 @@ export const makeCodexAdapterV2 = Effect.fn("makeCodexAdapterV2")(function* (
               return;
             }
 
-            context.runningWebSearchItems.set(payload.item.id, payload.item);
+            trackCodexWebSearch(context.runningWebSearchItems, payload.item);
             const artifacts = yield* buildWebSearchArtifacts({
               context,
               item: payload.item,
@@ -5132,16 +5133,6 @@ export const makeCodexAdapterV2 = Effect.fn("makeCodexAdapterV2")(function* (
 
         yield* client.handleServerRequest("mcpServer/elicitation/request", (payload) =>
           Effect.gen(function* () {
-            const acceptance = toMcpElicitationResponse(payload, "accept");
-            if (acceptance.action !== "accept") {
-              yield* Effect.logWarning("Cancelled an unsupported MCP elicitation.", {
-                serverName: payload.serverName,
-                mode: payload.mode,
-              });
-              return {
-                action: "cancel",
-              } satisfies CodexSchema.McpServerElicitationRequestResponse;
-            }
             const context =
               payload.turnId === undefined || payload.turnId === null
                 ? yield* awaitRegisteredTurn(findActiveTurnByNativeThreadId(payload.threadId))
@@ -5157,10 +5148,11 @@ export const makeCodexAdapterV2 = Effect.fn("makeCodexAdapterV2")(function* (
             }
 
             if (context.input.runtimePolicy.runtimeMode === "full-access") {
-              return canAutoApproveMcpElicitation(payload)
-                ? acceptance
-                : ({ action: "cancel" } satisfies CodexSchema.McpServerElicitationRequestResponse);
+              return autoApproveMcpElicitation(payload);
             }
+
+            if (toMcpElicitationResponse(payload, "accept").action !== "accept")
+              return { action: "cancel" } satisfies CodexSchema.McpServerElicitationRequestResponse;
 
             const nativeRequestId =
               payload.mode === "url"

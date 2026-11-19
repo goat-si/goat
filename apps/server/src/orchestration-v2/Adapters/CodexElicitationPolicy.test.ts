@@ -39,6 +39,38 @@ it.effect.each([
     approval: false,
   },
   {
+    name: "always only",
+    mode: "full-access",
+    form: "always",
+    context: true,
+    expected: "cancel",
+    approval: false,
+  },
+  {
+    name: "non scope enum",
+    mode: "full-access",
+    form: "nonscope",
+    context: true,
+    expected: "cancel",
+    approval: false,
+  },
+  {
+    name: "required remember",
+    mode: "full-access",
+    form: "remember",
+    context: true,
+    expected: "accept",
+    approval: false,
+  },
+  {
+    name: "defaulted input",
+    mode: "full-access",
+    form: "defaulted",
+    context: true,
+    expected: "accept",
+    approval: false,
+  },
+  {
     name: "ordinary approval",
     mode: "auto-accept-edits",
     form: "fillable",
@@ -95,7 +127,35 @@ it.effect.each([
               properties: { approval: { type: "string", enum: ["once", "always"] } },
               required: ["approval"],
             }
-          : { type: "object", properties: { email: { type: "string" } }, required: ["email"] };
+          : scenario.form === "always"
+            ? {
+                type: "object",
+                properties: { approval: { type: "string", enum: ["always"] } },
+                required: ["approval"],
+              }
+            : scenario.form === "nonscope"
+              ? {
+                  type: "object",
+                  properties: { choice: { type: "string", enum: ["allow", "deny"] } },
+                  required: ["choice"],
+                }
+              : scenario.form === "remember"
+                ? {
+                    type: "object",
+                    properties: { remember: { type: "boolean" } },
+                    required: ["remember"],
+                  }
+                : scenario.form === "defaulted"
+                  ? {
+                      type: "object",
+                      properties: { email: { type: "string", default: "chosen@example.test" } },
+                      required: ["email"],
+                    }
+                  : {
+                      type: "object",
+                      properties: { email: { type: "string" } },
+                      required: ["email"],
+                    };
       const harness = yield* makeCodexReplayHarness(
         makeCodexReplayTranscript({
           scenario: scenario.name,
@@ -122,7 +182,15 @@ it.effect.each([
                 id: 20,
                 result:
                   scenario.expected === "accept"
-                    ? { action: "accept", content: { approval: "once" } }
+                    ? {
+                        action: "accept",
+                        content:
+                          scenario.form === "remember"
+                            ? { remember: false }
+                            : scenario.form === "defaulted"
+                              ? { email: "chosen@example.test" }
+                              : { approval: "once" },
+                      }
                     : { action: "cancel" },
               },
             },
