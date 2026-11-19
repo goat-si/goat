@@ -1,3 +1,4 @@
+import { originOf } from "./bitbucketOrigin.ts";
 import * as Clock from "effect/Clock";
 import * as Config from "effect/Config";
 import * as Context from "effect/Context";
@@ -603,14 +604,6 @@ function authFromCredential(credential: BitbucketCredential | null): SourceContr
       "Add a Bitbucket token in Settings → Source Control, or set the GOAT_BITBUCKET_* environment variables on the server.",
     ),
   };
-}
-
-function originOf(value: string): string | null {
-  try {
-    return new URL(value).origin;
-  } catch {
-    return null;
-  }
 }
 
 const responseError = Effect.fn("BitbucketApi.responseError")(function* (
