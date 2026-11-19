@@ -1874,7 +1874,7 @@ const withoutMemoryBody = (input: ProviderAdapter.ProviderAdapterV2TurnInput) =>
 
 interface ActiveClaudeTurnContext {
   retryBudgetFailure?: OrchestrationV2ProviderFailure;
-  unansweredRequestSince?: DateTime.Utc;
+  unansweredRequestSince?: DateTime.Utc | undefined;
   readonly autoCompactWindow: string;
   readonly queryPolicy: ClaudeRuntimeQueryPolicy;
   input: ProviderAdapter.ProviderAdapterV2TurnInput;
