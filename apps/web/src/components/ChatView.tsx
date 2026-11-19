@@ -301,7 +301,6 @@ import type { ExpandedImagePreview } from "./chat/ExpandedImagePreview";
 import { ThreadDetailsPanel } from "./chat/ThreadDetailsPanel";
 import { SideChatSurface } from "./sideChat/SideChatSurface";
 import { canOpenSideChat } from "./sideChat/sideChat.logic";
-
 import { NoActiveThreadState } from "./NoActiveThreadState";
 import {
   resolveEffectiveEnvMode,
@@ -4182,6 +4181,7 @@ export default function ChatView(props: ChatViewProps) {
       <RevertConfirmHost
         threadKey={routeThreadKey}
         checkpoints={serverProjection?.checkpoints}
+        worktreePath={activeThread?.worktreePath ?? null}
         onConfirm={onConfirmRevertStable}
       />
       <LinkPullRequestDialogHost />
