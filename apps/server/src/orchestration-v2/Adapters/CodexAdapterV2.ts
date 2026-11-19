@@ -7037,7 +7037,11 @@ export const makeCodexAdapterV2 = Effect.fn("makeCodexAdapterV2")(function* (
                   runtimePolicy: threadInput.runtimePolicy,
                 }).pipe(
                   Effect.flatMap((runtime) =>
-                    startCodexThread(client, threadInput.threadId, runtime.params).pipe(
+                    startCodexThread(
+                      client,
+                      threadInput.isAppOwnedDelegated === true,
+                      runtime.params,
+                    ).pipe(
                       Effect.tap((response) =>
                         Effect.sync(() => {
                           threadStatuses.record(response.thread.id, response.thread.status.type);

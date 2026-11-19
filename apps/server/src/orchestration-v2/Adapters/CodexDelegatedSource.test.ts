@@ -75,6 +75,7 @@ it.effect("marks allocator-issued delegated threads without marking ordinary thr
       });
       yield* harness.runtime.ensureThread({
         threadId,
+        isAppOwnedDelegated: true,
         modelSelection: CODEX_TEST_MODEL_SELECTION,
         runtimePolicy: CODEX_TEST_RUNTIME_POLICY,
       });
@@ -154,10 +155,54 @@ it.effect.each([-32602, -32600])(
         });
         const thread = yield* harness.runtime.ensureThread({
           threadId,
+          isAppOwnedDelegated: true,
           modelSelection: CODEX_TEST_MODEL_SELECTION,
           runtimePolicy: CODEX_TEST_RUNTIME_POLICY,
         });
         assert.equal(thread.appThreadId, threadId);
       }),
     ).pipe(Effect.provide(layer)),
+);
+
+it.effect("does not mark a caller-supplied delegated-looking thread id as a subagent", () =>
+  Effect.scoped(
+    Effect.gen(function* () {
+      const preamble = codexReplayPreamble({
+        nativeThreadId: "parent",
+        nativeTurnId: "unused",
+        prompt: "unused",
+      }).slice(0, 5);
+      const ordinary = codexReplayPreamble({
+        nativeThreadId: "ordinary",
+        nativeTurnId: "unused",
+        prompt: "unused",
+      })
+        .slice(3, 5)
+        .map((entry) => withReplayRequestId(entry, 3))
+        .map((entry) =>
+          entry.type === "expect_outbound" &&
+          Predicate.isObject(entry.frame) &&
+          Predicate.isObject(entry.frame.params)
+            ? {
+                ...entry,
+                frame: {
+                  ...entry.frame,
+                  params: { ...entry.frame.params, cwd: "/workspace", model: "gpt-5.4" },
+                },
+              }
+            : entry,
+        );
+      const harness = yield* makeCodexReplayHarness(
+        makeCodexReplayTranscript({
+          scenario: "spoofed-delegated-prefix",
+          entries: [...preamble, ...ordinary],
+        }),
+      );
+      yield* harness.runtime.ensureThread({
+        threadId: ThreadId.make("thread:delegated-task:caller-controlled"),
+        modelSelection: CODEX_TEST_MODEL_SELECTION,
+        runtimePolicy: CODEX_TEST_RUNTIME_POLICY,
+      });
+    }),
+  ).pipe(Effect.provide(layer)),
 );

@@ -31,6 +31,14 @@ it.effect.each([
     approval: false,
   },
   {
+    name: "upstream Safari access",
+    mode: "full-access",
+    form: "safari",
+    context: true,
+    expected: "accept",
+    approval: false,
+  },
+  {
     name: "unsupported required input",
     mode: "full-access",
     form: "unsupported",
@@ -59,13 +67,53 @@ it.effect.each([
     mode: "full-access",
     form: "remember",
     context: true,
-    expected: "accept",
+    expected: "cancel",
     approval: false,
   },
   {
     name: "defaulted input",
     mode: "full-access",
     form: "defaulted",
+    context: true,
+    expected: "cancel",
+    approval: false,
+  },
+  {
+    name: "duration default always",
+    mode: "full-access",
+    form: "duration",
+    context: true,
+    expected: "cancel",
+    approval: false,
+  },
+  {
+    name: "save approval default true",
+    mode: "full-access",
+    form: "save",
+    context: true,
+    expected: "cancel",
+    approval: false,
+  },
+  {
+    name: "backup frequency",
+    mode: "full-access",
+    form: "frequency",
+    context: true,
+    expected: "cancel",
+    approval: false,
+  },
+  {
+    name: "extra field",
+    mode: "full-access",
+    form: "extra",
+    context: true,
+    expected: "cancel",
+    approval: false,
+  },
+  {
+    name: "pure confirmation",
+    mode: "full-access",
+    form: "confirm",
     context: true,
     expected: "accept",
     approval: false,
@@ -121,41 +169,106 @@ it.effect.each([
         },
       );
       const schema =
-        scenario.form === "fillable"
+        scenario.form === "safari"
           ? {
               type: "object",
-              properties: { approval: { type: "string", enum: ["once", "always"] } },
+              properties: {
+                approval: {
+                  type: "string",
+                  oneOf: [
+                    { const: "once", title: "Allow once" },
+                    { const: "session", title: "Allow for this session" },
+                    { const: "always", title: "Always allow Safari" },
+                  ],
+                },
+              },
               required: ["approval"],
             }
-          : scenario.form === "always"
-            ? {
-                type: "object",
-                properties: { approval: { type: "string", enum: ["always"] } },
-                required: ["approval"],
-              }
-            : scenario.form === "nonscope"
+          : scenario.form === "confirm"
+            ? { type: "object", properties: {}, required: [] }
+            : scenario.form === "duration"
               ? {
                   type: "object",
-                  properties: { choice: { type: "string", enum: ["allow", "deny"] } },
-                  required: ["choice"],
+                  properties: {
+                    duration: {
+                      type: "string",
+                      title: "Duration",
+                      enum: ["once", "always"],
+                      default: "always",
+                    },
+                  },
+                  required: ["duration"],
                 }
-              : scenario.form === "remember"
+              : scenario.form === "save"
                 ? {
                     type: "object",
-                    properties: { remember: { type: "boolean" } },
-                    required: ["remember"],
+                    properties: {
+                      save: {
+                        type: "boolean",
+                        title: "Save this approval for later",
+                        default: true,
+                      },
+                    },
+                    required: ["save"],
                   }
-                : scenario.form === "defaulted"
+                : scenario.form === "frequency"
                   ? {
                       type: "object",
-                      properties: { email: { type: "string", default: "chosen@example.test" } },
-                      required: ["email"],
+                      properties: {
+                        frequency: {
+                          type: "string",
+                          title: "Frequency of backups",
+                          enum: ["once", "always"],
+                        },
+                      },
+                      required: ["frequency"],
                     }
-                  : {
-                      type: "object",
-                      properties: { email: { type: "string" } },
-                      required: ["email"],
-                    };
+                  : scenario.form === "extra"
+                    ? {
+                        type: "object",
+                        properties: {
+                          approval: { type: "string", enum: ["once", "always"] },
+                          extra: { type: "string" },
+                        },
+                        required: ["approval"],
+                      }
+                    : scenario.form === "fillable"
+                      ? {
+                          type: "object",
+                          properties: { approval: { type: "string", enum: ["once", "always"] } },
+                          required: ["approval"],
+                        }
+                      : scenario.form === "always"
+                        ? {
+                            type: "object",
+                            properties: { approval: { type: "string", enum: ["always"] } },
+                            required: ["approval"],
+                          }
+                        : scenario.form === "nonscope"
+                          ? {
+                              type: "object",
+                              properties: { choice: { type: "string", enum: ["allow", "deny"] } },
+                              required: ["choice"],
+                            }
+                          : scenario.form === "remember"
+                            ? {
+                                type: "object",
+                                properties: { remember: { type: "boolean" } },
+                                required: ["remember"],
+                              }
+                            : scenario.form === "defaulted"
+                              ? {
+                                  type: "object",
+                                  properties: {
+                                    email: { type: "string", default: "chosen@example.test" },
+                                  },
+                                  required: ["email"],
+                                }
+                              : {
+                                  type: "object",
+                                  properties: { email: { type: "string" } },
+                                  required: ["email"],
+                                };
       const harness = yield* makeCodexReplayHarness(
         makeCodexReplayTranscript({
           scenario: scenario.name,
@@ -184,12 +297,7 @@ it.effect.each([
                   scenario.expected === "accept"
                     ? {
                         action: "accept",
-                        content:
-                          scenario.form === "remember"
-                            ? { remember: false }
-                            : scenario.form === "defaulted"
-                              ? { email: "chosen@example.test" }
-                              : { approval: "once" },
+                        content: scenario.form === "confirm" ? {} : { approval: "once" },
                       }
                     : { action: "cancel" },
               },

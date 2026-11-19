@@ -40,3 +40,58 @@ it("rejects persistent defaults and ambiguous scope choices", () => {
     }),
   );
 });
+
+it("only auto-accepts exact known schemas or an empty confirmation", () => {
+  const approve = (requestedSchema: unknown) =>
+    canAutoApproveMcpElicitation({ mode: "form", requestedSchema });
+  assert.isTrue(
+    approve({
+      type: "object",
+      properties: { approval: { type: "string", enum: ["once", "always"] } },
+      required: ["approval"],
+    }),
+  );
+  assert.isTrue(approve({ type: "object", properties: {}, required: [] }));
+  assert.isFalse(
+    approve({
+      type: "object",
+      properties: {
+        duration: {
+          type: "string",
+          title: "Duration",
+          enum: ["once", "always"],
+          default: "always",
+        },
+      },
+      required: ["duration"],
+    }),
+  );
+  assert.isFalse(
+    approve({
+      type: "object",
+      properties: {
+        save: { type: "boolean", title: "Save this approval for later", default: true },
+      },
+      required: ["save"],
+    }),
+  );
+  assert.isFalse(
+    approve({
+      type: "object",
+      properties: {
+        frequency: { type: "string", title: "Frequency of backups", enum: ["once", "always"] },
+      },
+      required: ["frequency"],
+    }),
+  );
+  assert.isFalse(
+    approve({
+      type: "object",
+      properties: {
+        approval: { type: "string", enum: ["once", "always"] },
+        extra: { type: "string" },
+      },
+      required: ["approval"],
+    }),
+  );
+});

@@ -1,3 +1,4 @@
+import * as NodeUtil from "node:util";
 import type { ProviderApprovalDecision, ProviderApprovalOption } from "@goat/contracts";
 import * as Schema from "effect/Schema";
 import type * as EffectCodexSchema from "effect-codex-app-server/schema";
@@ -104,75 +105,47 @@ function mcpElicitationFieldOptions(field: typeof McpElicitationFormField.Type) 
   }));
 }
 
-function scopeRank(value: string): number | undefined {
-  const normalized = value
-    .trim()
-    .toLowerCase()
-    .replace(/[\s-]+/g, "_");
-  if (/^(?:once|once_only|one_time|this_time|allow_once|approve_once)$/.test(normalized)) return 0;
-  if (/^(?:session|this_session|allow_session|allow_for_session)$/.test(normalized)) return 1;
-  if (/^(?:always|permanent|forever|persistent|allow_always)$/.test(normalized)) return 2;
-  return undefined;
-}
+// This schema is the browser access request in upstream 96290af4e0d.
+const CODEX_BROWSER_ACCESS_SCHEMA = {
+  type: "object",
+  properties: { approval: { type: "string", enum: ["once", "always"] } },
+  required: ["approval"],
+} as const;
+const CODEX_SAFARI_ACCESS_SCHEMA = {
+  type: "object",
+  properties: {
+    approval: {
+      type: "string",
+      oneOf: [
+        { const: "once", title: "Allow once" },
+        { const: "session", title: "Allow for this session" },
+        { const: "always", title: "Always allow Safari" },
+      ],
+    },
+  },
+  required: ["approval"],
+} as const;
+const EMPTY_CONFIRM_SCHEMAS = [
+  { type: "object", properties: {} },
+  { type: "object", properties: {}, required: [] },
+] as const;
 
 export function autoApproveMcpElicitation(
   payload: McpElicitationResponseInput,
 ): EffectCodexSchema.McpServerElicitationRequestResponse {
   if (payload.mode !== "form") return { action: "cancel" };
-  const form = mcpElicitationFormFields(payload);
-  if (form === undefined) return { action: "cancel" };
-  if ((form.required?.length ?? 0) > 128) return { action: "cancel" };
-  const content: Record<string, Schema.Json> = {};
-  const fields = form.properties ?? {};
-  let count = 0;
-  for (const key in fields) {
-    if (!Object.hasOwn(fields, key)) continue;
-    if (++count > 128) return { action: "cancel" };
-    const field = fields[key];
-    if (field === undefined) return { action: "cancel" };
-    if ((field.oneOf?.length ?? field.enum?.length ?? 0) > 128) return { action: "cancel" };
-    const required = form.required?.includes(key) === true;
-    const options = mcpElicitationFieldOptions(field);
-    const ranks = options.map((option) => scopeRank(option.value));
-    const scopeChoice = options.length > 0 && ranks.every((rank) => rank !== undefined);
-    const persistence =
-      field.type === "boolean" &&
-      /(?:remember|persist|always|permanent)/i.test(
-        `${key} ${field.title ?? ""} ${field.description ?? ""}`,
-      );
-    if (field.default !== undefined) {
-      if (persistence && field.default !== false) return { action: "cancel" };
-      if (
-        typeof field.default === "string" &&
-        scopeRank(field.default) === 2 &&
-        /(?:scope|persist|remember|approval|access|allow)/i.test(
-          `${key} ${field.title ?? ""} ${field.description ?? ""}`,
-        )
-      )
-        return { action: "cancel" };
-      if (scopeChoice) {
-        const defaultRank =
-          typeof field.default === "string" ? scopeRank(field.default) : undefined;
-        if (
-          defaultRank === undefined ||
-          defaultRank === 2 ||
-          defaultRank !== Math.min(...ranks.map((rank) => rank ?? 2))
-        )
-          return { action: "cancel" };
-      }
-      content[key] = field.default;
-    } else if (required && persistence) {
-      content[key] = false;
-    } else if (required && scopeChoice) {
-      const best = Math.min(...ranks.map((rank) => rank ?? 2));
-      const matches = options.filter((_, index) => ranks[index] === best);
-      if (best === 2 || matches.length !== 1 || matches[0] === undefined)
-        return { action: "cancel" };
-      content[key] = matches[0].value;
-    } else if (required) return { action: "cancel" };
-  }
-  if (form.required?.some((key) => !Object.hasOwn(content, key))) return { action: "cancel" };
-  return { action: "accept", content };
+  if (
+    NodeUtil.isDeepStrictEqual(payload.requestedSchema, CODEX_BROWSER_ACCESS_SCHEMA) ||
+    NodeUtil.isDeepStrictEqual(payload.requestedSchema, CODEX_SAFARI_ACCESS_SCHEMA)
+  )
+    return { action: "accept", content: { approval: "once" } };
+  if (
+    EMPTY_CONFIRM_SCHEMAS.some((schema) =>
+      NodeUtil.isDeepStrictEqual(payload.requestedSchema, schema),
+    )
+  )
+    return { action: "accept", content: {} };
+  return { action: "cancel" };
 }
 
 function isMcpElicitationPersistenceField(
