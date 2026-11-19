@@ -93,13 +93,74 @@ function traceSafeExit(exit: Exit.Exit<unknown, unknown>): Exit.Exit<unknown, un
   );
 }
 
+const RELAY_SPAN_NAMES = new Set([
+  "environment.relay.request",
+  "EnvironmentAuth.authenticateHttpRequest",
+  "relay.connection.attempt",
+  "clientRuntime.managedRelay.authorize",
+  "clientRuntime.managedRelay.connectEnvironment",
+  "clientRuntime.managedRelay.cooldown",
+  "clientRuntime.managedRelay.createEnvironmentLinkChallenge",
+  "clientRuntime.managedRelay.deleteAccount",
+  "clientRuntime.managedRelay.exchangeAccessToken",
+  "clientRuntime.managedRelay.getAccountDeletion",
+  "clientRuntime.managedRelay.getAgentActivitySnapshot",
+  "clientRuntime.managedRelay.getEnvironmentStatus",
+  "clientRuntime.managedRelay.invalidateAccessToken",
+  "clientRuntime.managedRelay.linkEnvironment",
+  "clientRuntime.managedRelay.listDevices",
+  "clientRuntime.managedRelay.listEnvironments",
+  "clientRuntime.managedRelay.obtainAccessToken",
+  "clientRuntime.managedRelay.readmitKey",
+  "clientRuntime.managedRelay.registerDevice",
+  "clientRuntime.managedRelay.registerLiveActivity",
+  "clientRuntime.managedRelay.resetTokenCache",
+  "clientRuntime.managedRelay.tokenCacheCriticalSection",
+  "clientRuntime.managedRelay.unlinkEnvironment",
+  "clientRuntime.managedRelay.unregisterDevice",
+  "clientRuntime.managedRelayAccount.make",
+  "clientRuntime.managedRelaySession.deregisterEnvironment",
+  "clientRuntime.managedRelaySession.readClerkToken",
+]);
+const RELAY_NUMERIC_ATTRIBUTES = new Set([
+  "http.response.status_code",
+  "http.status_code",
+  "connection.attempt",
+  "connection.generation",
+  "connection.retry.failure_count",
+  "connection.retry.delay_ms",
+]);
+
+function isSafeRelayAttribute(key: string, value: unknown): boolean {
+  return (
+    (RELAY_NUMERIC_ATTRIBUTES.has(key) && typeof value === "number" && Number.isFinite(value)) ||
+    (key === "url.scheme" && (value === "http" || value === "https"))
+  );
+}
+
 export function nonInterferingTracer(delegate: Tracer.Tracer): Tracer.Tracer {
   return Tracer.make({
     span(options) {
-      const span = delegate.span(options);
+      const span = delegate.span({
+        ...options,
+        name: RELAY_SPAN_NAMES.has(options.name) ? options.name : "relay.operation",
+        links: options.links.map((link) => ({ ...link, attributes: {} })),
+      });
+      const attribute = span.attribute.bind(span);
+      const addLinks = span.addLinks.bind(span);
+      span.attribute = (key, value) => {
+        if (isSafeRelayAttribute(key, value)) attribute(key, value);
+      };
+      span.event = () => {};
+      span.addLinks = (links) => addLinks(links.map((link) => ({ ...link, attributes: {} })));
       const end = span.end.bind(span);
       span.end = (endTime, exit) => {
         try {
+          if (span.attributes instanceof Map) {
+            for (const [key, value] of span.attributes) {
+              if (!isSafeRelayAttribute(key, value)) span.attributes.delete(key);
+            }
+          }
           end(endTime, traceSafeExit(exit));
         } catch {}
       };

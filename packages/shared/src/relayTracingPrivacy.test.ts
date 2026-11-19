@@ -36,3 +36,49 @@ it.effect("exports relay failures without secret-bearing messages, names or stac
     expect(text).not.toContain("secret-");
   }),
 );
+
+it.effect("drops unrecognized attributes even on child spans", () =>
+  Effect.gen(function* () {
+    const spans: Tracer.NativeSpan[] = [];
+    const collector = Tracer.make({
+      span: (options) => {
+        const span = new Tracer.NativeSpan(options);
+        spans.push(span);
+        return span;
+      },
+    });
+    yield* Effect.gen(function* () {
+      yield* Effect.annotateCurrentSpan({
+        "unexpected.secret": "sentinel-id",
+        "environment.id": "sentinel-id",
+        "http.response.status_code": 200,
+      });
+      const span = yield* Effect.currentSpan;
+      if (span.attributes instanceof Map) span.attributes.set("direct.secret", "sentinel-id");
+      span.event("sentinel-id", 0n, { "unexpected.secret": "sentinel-id" });
+      span.addLinks([
+        {
+          span: Tracer.externalSpan({
+            spanId: "1234567890abcdef",
+            traceId: "1234567890abcdef1234567890abcdef",
+          }),
+          attributes: { secret: "sentinel-id" },
+        },
+      ]);
+      yield* Effect.void.pipe(
+        Effect.withSpan("sentinel-id", {
+          attributes: { "url.full": "https://relay.test/sentinel-id" },
+        }),
+      );
+    }).pipe(Effect.withSpan("relay.parent"), Effect.withTracer(nonInterferingTracer(collector)));
+    expect(spans.map((span) => JSON.stringify([...span.attributes])).join("\n")).not.toContain(
+      "sentinel-id",
+    );
+    expect(spans[0]?.attributes.get("http.response.status_code")).toBe(200);
+    expect(spans.map((span) => span.name)).not.toContain("sentinel-id");
+    expect(spans.flatMap((span) => span.events)).toEqual([]);
+    expect(
+      JSON.stringify(spans.flatMap((span) => span.links).map((link) => link.attributes)),
+    ).not.toContain("sentinel-id");
+  }),
+);
