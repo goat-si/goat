@@ -120,9 +120,9 @@ export const makeMemorySaveSuggestions = ({
           "suggestion-expire-space",
           sql`DELETE FROM memory_save_suggestions WHERE space=${space} AND expires_at<=${now}`,
         );
-        yield* stored(
+        const [linked] = yield* stored(
           "suggestion-insert",
-          sql`
+          sql<{ forget_generation: number }>`
           INSERT INTO memory_save_suggestions
             (id, space, origin_environment_id, origin_thread_id, text, scope_json, derived_json,
               lineage_complete, reason, forget_generation, created_at, expires_at, state, accept_operation_id)
@@ -133,8 +133,19 @@ export const makeMemorySaveSuggestions = ({
             < ${M.MEMORY_SAVE_SUGGESTION_MAX_ITEMS}
           ON CONFLICT(id) DO UPDATE SET state='accepting',accept_operation_id=excluded.accept_operation_id,
             derived_json=excluded.derived_json,lineage_complete=excluded.lineage_complete,reason=excluded.reason
-          WHERE memory_save_suggestions.state='pending' AND excluded.state='accepting'`,
+          WHERE memory_save_suggestions.space=excluded.space
+            AND memory_save_suggestions.origin_environment_id=excluded.origin_environment_id
+            AND memory_save_suggestions.origin_thread_id=excluded.origin_thread_id
+            AND memory_save_suggestions.forget_generation=excluded.forget_generation
+            AND memory_save_suggestions.state='pending' AND excluded.state='accepting'
+          RETURNING forget_generation`,
         );
+        if (accepting && linked)
+          yield* stored(
+            "suggestion-outbox-fence",
+            sql`UPDATE memory_outbox SET metadata_json=json_set(metadata_json,'$.acceptanceGeneration',${linked.forget_generation})
+              WHERE id=${floorWriteId(space, accepting)}`,
+          );
         yield* stored(
           "suggestion-evict",
           sql`DELETE FROM memory_save_suggestions WHERE id IN (
