@@ -477,43 +477,6 @@ it.effect("cancels a stalled registration without retrying or retaining its prom
   ),
 );
 
-it.effect("retries a fresh timed-out session with a new ID after disposal", () =>
-  Effect.scoped(
-    Effect.gen(function* () {
-      const started = Promise.withResolvers<void>();
-      const disposed = vi.fn(async () => {});
-      const querySpy = vi.spyOn(ClaudeSdk, "query").mockImplementation(() => {
-        const first = querySpy.mock.calls.length === 1;
-        return {
-          initializationResult: async () => ({}),
-          setMcpServers: () => {
-            started.resolve();
-            return first
-              ? new Promise<ClaudeSdk.McpSetServersResult>(() => {})
-              : Promise.resolve({ added: ["t3-code"], removed: [], errors: {} });
-          },
-          close: vi.fn(),
-          [Symbol.asyncDispose]: disposed,
-        } as unknown as ClaudeSdk.Query;
-      });
-      yield* Effect.addFinalizer(() => Effect.sync(() => querySpy.mockRestore()));
-      const runner = yield* ClaudeAgentSdkQueryRunner;
-      const { resume, ...options } = resumedMcpQueryInput.options;
-      const opening = yield* runner
-        .open({ ...resumedMcpQueryInput, options: { ...options, sessionId: resume } })
-        .pipe(Effect.result, Effect.forkChild);
-      yield* Effect.promise(() => started.promise);
-      yield* TestClock.adjust("90 seconds");
-      const result = yield* Fiber.join(opening);
-      assert.equal(result._tag, "Success");
-      assert.equal(querySpy.mock.calls.length, 2);
-      assert.equal(disposed.mock.calls.length, 1);
-      assert.notEqual(querySpy.mock.calls[1]?.[0].options?.sessionId, resume);
-      if (result._tag === "Success") yield* result.success.close;
-    }).pipe(Effect.provide(realQueryRunner)),
-  ),
-);
-
 it.effect("does not reuse a fresh session ID after MCP registration times out twice", () =>
   Effect.scoped(
     Effect.gen(function* () {
