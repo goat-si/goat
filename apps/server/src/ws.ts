@@ -1,4 +1,5 @@
 import { shouldUseBoundedThreadSnapshot } from "./orchestration-v2/boundedThreadSnapshot.ts";
+import { mapCheckpointStorageError } from "./vcs/checkpointStorageError.ts";
 import { enrichProjectShells } from "./project/enrichProjectShells.ts";
 import { vcsStatusHandlers } from "./vcs/vcsStatusHandlers.ts";
 import { makeMemoryMutationHandlers } from "./memory/MemoryMutationHandlers.ts";
@@ -2986,9 +2987,14 @@ export const layerWsRpc = (
         [WS_METHODS.sshWorkspaceLaunch]: (input) => sshWorkspace.launch(input),
         [WS_METHODS.sshWorkspaceFetchBack]: (input) => sshWorkspace.fetchBack(input),
         [WS_METHODS.vcsInit]: (input) =>
-          vcsProvisioning.initRepository(input).pipe(Effect.tap(() => refreshGitStatus(input.cwd))),
-        [WS_METHODS.reviewGetDiffPreview]: (input) => review.getDiffPreview(input),
-        [WS_METHODS.reviewGetDiffFileContents]: (input) => review.getDiffFileContents(input),
+          vcsProvisioning.initRepository(input).pipe(
+            Effect.mapError(mapCheckpointStorageError),
+            Effect.tap(() => refreshGitStatus(input.cwd)),
+          ),
+        [WS_METHODS.reviewGetDiffPreview]: (input) =>
+          review.getDiffPreview(input).pipe(Effect.mapError(mapCheckpointStorageError)),
+        [WS_METHODS.reviewGetDiffFileContents]: (input) =>
+          review.getDiffFileContents(input).pipe(Effect.mapError(mapCheckpointStorageError)),
         ...(yield* terminalWorkspaceRpcHandlers(terminalViewerId)),
         [WS_METHODS.terminalWrite]: (input) => terminalManager.write(input),
         [WS_METHODS.terminalResize]: (input, metadata) =>

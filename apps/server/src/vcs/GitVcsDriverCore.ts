@@ -1,3 +1,4 @@
+import { parsePorcelainPath } from "./gitPorcelainPath.ts";
 import { uniqueCommitsProblem, existingBranchConflictDetail } from "./existingBranchConflict.ts";
 export { uniqueCommitsProblem, existingBranchConflictDetail } from "./existingBranchConflict.ts";
 import { worktreeCreationHolder, worktreeCreationReason } from "./worktreeCreationLock.ts";
@@ -240,23 +241,6 @@ interface ExecuteGitOptions {
   progress?: GitVcsDriver.ExecuteGitProgress | undefined;
   writesSharedConfig?: boolean | undefined;
   retryConfigLock?: boolean | undefined;
-}
-
-// Space-separated fields precede the path in each porcelain v2 record type. The path itself
-// may contain spaces, so it is everything after them.
-const PORCELAIN_V2_FIELDS_BEFORE_PATH: Record<string, number> = {
-  "1": 8,
-  "2": 9,
-  u: 10,
-  "?": 1,
-  "!": 1,
-};
-
-function parsePorcelainPath(record: string): string | null {
-  const fieldsBeforePath = PORCELAIN_V2_FIELDS_BEFORE_PATH[record[0] ?? ""];
-  if (fieldsBeforePath === undefined) return null;
-  const filePath = record.split(" ").slice(fieldsBeforePath).join(" ");
-  return filePath.length > 0 ? filePath : null;
 }
 
 const gitSupportsPathspecFromFile = (versionOutput: string): boolean => {
@@ -1638,11 +1622,21 @@ export const makeGitVcsDriverCore = Effect.fn("makeGitVcsDriverCore")(function* 
     options?: GitVcsDriver.GitLocalStatusOptions,
   ) {
     const includeDivergence = options?.includeDivergence !== false;
+    const untrackedConfig = yield* runGitStdout(
+      "GitVcsDriver.status.untrackedConfig",
+      cwd,
+      ["config", "--get", "status.showUntrackedFiles"],
+      true,
+    ).pipe(Effect.orElseSucceed(() => "no"));
+    const hidden = !["", "normal", "all", "true", "yes", "on", "1"].includes(
+      untrackedConfig.trim().toLowerCase(),
+    );
     const statusArgs = [
       "status",
       "--porcelain=2",
       "--branch",
       "-z",
+      ...(hidden ? ["--untracked-files=normal"] : []),
       ...(includeDivergence ? [] : ["--no-ahead-behind"]),
     ];
     const indexResult = yield* executeGitWithStableDiagnostics(
@@ -4772,14 +4766,20 @@ export const makeGitVcsDriverCore = Effect.fn("makeGitVcsDriverCore")(function* 
 
   const fetchRemoteTrackingBranch: GitVcsDriver.GitVcsDriver["Service"]["fetchRemoteTrackingBranch"] =
     Effect.fn("fetchRemoteTrackingBranch")(function* (input) {
-      yield* runGit("GitVcsDriver.fetchRemoteTrackingBranch", input.cwd, [
-        "fetch",
-        "--quiet",
-        "--no-tags",
-        "--",
-        input.remoteName,
-        `+refs/heads/${input.remoteBranch}:refs/remotes/${input.remoteName}/${input.remoteBranch}`,
-      ]);
+      yield* runGit(
+        "GitVcsDriver.fetchRemoteTrackingBranch",
+        input.cwd,
+        [
+          "fetch",
+          "--quiet",
+          "--no-tags",
+          "--no-auto-gc",
+          "--",
+          input.remoteName,
+          `+refs/heads/${input.remoteBranch}:refs/remotes/${input.remoteName}/${input.remoteBranch}`,
+        ],
+        { timeoutMs: FETCH_REMOTE_TIMEOUT_MS },
+      );
     });
 
   const setBranchUpstream: GitVcsDriver.GitVcsDriver["Service"]["setBranchUpstream"] = Effect.fn(

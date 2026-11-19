@@ -1,3 +1,9 @@
+import {
+  makeResolveGitCommonDir,
+  makeResolveCheckpointCommit,
+  makeResolveHeadCommit,
+} from "./checkpointGitCommonDir.ts";
+import { recreateCheckpointWorkspace } from "./checkpointWorkspace.ts";
 import type { GitPushResult, GitPushTarget } from "./gitPushTypes.ts";
 export type { GitPushResult, GitPushTarget } from "./gitPushTypes.ts";
 import type { WorktreePreparationOwnership } from "./worktreePreparationOwnership.ts";
@@ -6,11 +12,13 @@ import * as Context from "effect/Context";
 import * as SecureRandom from "effect/crypto/SecureRandom";
 import * as DateTime from "effect/DateTime";
 import * as Effect from "effect/Effect";
+import * as Exit from "effect/Exit";
 import * as FileSystem from "effect/FileSystem";
 import * as Layer from "effect/Layer";
 import * as Option from "effect/Option";
 import * as Path from "effect/Path";
 import * as Schema from "effect/Schema";
+import type * as Scope from "effect/Scope";
 import { ChildProcessSpawner } from "effect/process";
 
 import {
@@ -39,7 +47,9 @@ import {
   type WorktreeSubmodules,
 } from "@goat/contracts";
 import * as HostProcess from "@goat/shared/HostProcess";
-import { checkpointCommitResult, workTreeProbeResult } from "./gitRepositoryProbe.ts";
+import { privateCheckpointObjects } from "./checkpointPrivateObjects.ts";
+import { mapCheckpointStorageError } from "./checkpointStorageError.ts";
+import { workTreeProbeResult } from "./gitRepositoryProbe.ts";
 import {
   makeGitVcsDriverCore,
   PATCH_RENDER_PREFIX_ARGS,
@@ -63,6 +73,7 @@ export interface ExecuteGitInput {
   readonly cwd: string;
   readonly args: ReadonlyArray<string>;
   readonly stdin?: string;
+  readonly onSpawn?: () => void;
   readonly env?: NodeJS.ProcessEnv;
   readonly allowNonZeroExit?: boolean;
   readonly timeoutMs?: number | null;
@@ -544,6 +555,7 @@ const gitCommand = Effect.fn("GitVcsDriver.gitCommand")(
     args: ReadonlyArray<string>,
     options?: {
       readonly stdin?: string;
+      readonly onSpawn?: () => void;
       readonly env?: NodeJS.ProcessEnv;
       readonly allowNonZeroExit?: boolean;
       readonly timeoutMs?: number;
@@ -559,6 +571,7 @@ const gitCommand = Effect.fn("GitVcsDriver.gitCommand")(
       cwd,
       spawnCwd: globalThis.process.cwd(),
       ...(options?.stdin !== undefined ? { stdin: options.stdin } : {}),
+      ...(options?.onSpawn !== undefined ? { onSpawn: options.onSpawn } : {}),
       ...(options?.env !== undefined ? { env: options.env } : {}),
       ...(options?.allowNonZeroExit !== undefined
         ? { allowNonZeroExit: options.allowNonZeroExit }
@@ -614,6 +627,7 @@ export const makeVcsDriverShape = Effect.fn("makeGitVcsDriverShape")(function* (
   const execute: VcsDriver.VcsDriver["Service"]["execute"] = (input) =>
     gitCommand(vcsProcess, input.operation, input.cwd, input.args, {
       ...(input.stdin !== undefined ? { stdin: input.stdin } : {}),
+      ...(input.onSpawn !== undefined ? { onSpawn: input.onSpawn } : {}),
       ...(input.env !== undefined ? { env: input.env } : {}),
       ...(input.allowNonZeroExit !== undefined ? { allowNonZeroExit: input.allowNonZeroExit } : {}),
       ...(input.timeoutMs !== undefined ? { timeoutMs: input.timeoutMs } : {}),
@@ -806,21 +820,7 @@ export const makeVcsDriverShape = Effect.fn("makeGitVcsDriverShape")(function* (
       maxOutputBytes: 64 * 1024,
     }).pipe(Effect.asVoid);
 
-  const resolveHeadCommit = (cwd: string) =>
-    execute({
-      operation: "GitVcsDriver.checkpoints.resolveHeadCommit",
-      cwd,
-      args: ["rev-parse", "--verify", "--quiet", "HEAD^{commit}"],
-      allowNonZeroExit: true,
-    }).pipe(
-      Effect.map((result) => {
-        if (result.exitCode !== 0) {
-          return null;
-        }
-        const commit = result.stdout.trim();
-        return commit.length > 0 ? commit : null;
-      }),
-    );
+  const resolveHeadCommit = makeResolveHeadCommit(execute);
 
   const hasHeadCommit = (cwd: string, env?: NodeJS.ProcessEnv) =>
     execute({
@@ -831,29 +831,9 @@ export const makeVcsDriverShape = Effect.fn("makeGitVcsDriverShape")(function* (
       ...(env !== undefined ? { env } : {}),
     }).pipe(Effect.map((result) => result.exitCode === 0));
 
-  const resolveCheckpointCommit = (cwd: string, checkpointRef: string) =>
-    execute({
-      operation: "GitVcsDriver.checkpoints.resolveCheckpointCommit",
-      cwd,
-      args: ["rev-parse", "--verify", "--quiet", `${checkpointRef}^{commit}`],
-      env: { LC_ALL: "C" },
-      allowNonZeroExit: true,
-    }).pipe(Effect.flatMap((result) => checkpointCommitResult(cwd, result)));
+  const resolveCheckpointCommit = makeResolveCheckpointCommit(execute);
 
-  // Git reports relative paths from the physical cwd, which can differ from a symlink.
-  const resolveGitCommonDir = Effect.fn("GitVcsDriver.resolveGitCommonDir")(function* (
-    cwd: string,
-  ) {
-    const result = yield* execute({
-      operation: "GitVcsDriver.checkpoints.resolveGitCommonDir",
-      cwd,
-      args: ["rev-parse", "--git-common-dir"],
-    });
-    const gitCommonDir = result.stdout.trim();
-    if (path.isAbsolute(gitCommonDir)) return gitCommonDir;
-    const physicalCwd = yield* fileSystem.realPath(cwd).pipe(Effect.orElseSucceed(() => cwd));
-    return path.resolve(physicalCwd, gitCommonDir);
-  });
+  const resolveGitCommonDir = makeResolveGitCommonDir(execute, fileSystem, path);
 
   // Git defaults and macOS writeout-only can leave empty refs after crashes; flush before publication.
   // Set fsync first: Git 2.36 ignores unknown batch without resetting the method.
@@ -878,8 +858,14 @@ export const makeVcsDriverShape = Effect.fn("makeGitVcsDriverShape")(function* (
     readonly ref: string;
     readonly strict: boolean;
     readonly previousCheckpointRef?: VcsDriver.VcsCaptureCheckpointInput["previousCheckpointRef"];
-  }): Effect.fn.Return<GitWorkspaceSnapshotResult, VcsError | GitWorkspaceSnapshotError> {
+  }): Effect.fn.Return<
+    GitWorkspaceSnapshotResult,
+    VcsError | GitWorkspaceSnapshotError,
+    Scope.Scope
+  > {
     const operation = VcsProcess.CHECKPOINT_CAPTURE_OPERATION;
+    // Git batch fsync nests a temporary object store and can lose private bulk packs.
+    const privateDurableWrite = [...durableWrite, "-c", "core.fsyncMethod=fsync"];
     const readUntracked = Effect.fn("GitVcsDriver.snapshot.readUntracked")(function* () {
       const paths = yield* execute({
         operation,
@@ -906,7 +892,15 @@ export const makeVcsDriverShape = Effect.fn("makeGitVcsDriverShape")(function* (
     const gitCommonDir = yield* resolveGitCommonDir(input.cwd);
     const indexId = yield* random.uuidV4().pipe(Effect.orDie);
     const tempIndexPath = path.join(gitCommonDir, `goat-checkpoint-index-${indexId}`);
+    const { env: objectEnv, publish } = yield* privateCheckpointObjects(
+      fileSystem,
+      path,
+      gitCommonDir,
+      input.cwd,
+      operation,
+    ).pipe(Effect.mapError(mapCheckpointStorageError));
     const commitEnv: NodeJS.ProcessEnv = {
+      ...objectEnv,
       GIT_INDEX_FILE: tempIndexPath,
       GIT_AUTHOR_NAME: "GOAT",
       GIT_AUTHOR_EMAIL: "checkpoint@goat.invalid",
@@ -1258,7 +1252,7 @@ export const makeVcsDriverShape = Effect.fn("makeGitVcsDriverShape")(function* (
               args: [
                 "--literal-pathspecs",
                 ...indexConfig,
-                ...durableWrite,
+                ...privateDurableWrite,
                 ...stageConfig,
                 "add",
                 ...(sparseCheckout ? ["--sparse"] : []),
@@ -1280,7 +1274,7 @@ export const makeVcsDriverShape = Effect.fn("makeGitVcsDriverShape")(function* (
           // Preserve absent skipped entries, but capture present nonignored files outside the cone.
           args: [
             ...indexConfig,
-            ...durableWrite,
+            ...privateDurableWrite,
             ...stageConfig,
             "add",
             ...(sparseCheckout ? ["--sparse"] : []),
@@ -1328,6 +1322,7 @@ export const makeVcsDriverShape = Effect.fn("makeGitVcsDriverShape")(function* (
                     GIT_COMMON_DIR: undefined,
                     GIT_INDEX_FILE: undefined,
                     GIT_OBJECT_DIRECTORY: undefined,
+                    GIT_QUARANTINE_PATH: undefined,
                     GIT_ALTERNATE_OBJECT_DIRECTORIES: undefined,
                   };
                   const exclusions: Array<string> = [];
@@ -1358,7 +1353,7 @@ export const makeVcsDriverShape = Effect.fn("makeGitVcsDriverShape")(function* (
       const writeTreeResult = yield* execute({
         operation,
         cwd: input.cwd,
-        args: [...indexConfig, ...durableWrite, "write-tree"],
+        args: [...indexConfig, ...privateDurableWrite, "write-tree"],
         env: commitEnv,
       });
       const treeOid = writeTreeResult.stdout.trim();
@@ -1379,6 +1374,7 @@ export const makeVcsDriverShape = Effect.fn("makeGitVcsDriverShape")(function* (
         operation,
         cwd: input.cwd,
         args: ["ls-tree", "-r", "-z", treeOid],
+        env: commitEnv,
         maxOutputBytes: WORKSPACE_FILES_MAX_OUTPUT_BYTES,
       });
       const complete =
@@ -1397,7 +1393,7 @@ export const makeVcsDriverShape = Effect.fn("makeGitVcsDriverShape")(function* (
         headMark,
         headMoves,
         indexConfig,
-        durableWrite,
+        durableWrite: privateDurableWrite,
         commitEnv,
       });
       // HEAD is the first parent so listAuthoredPaths can see how HEAD moved between checkpoints.
@@ -1405,7 +1401,7 @@ export const makeVcsDriverShape = Effect.fn("makeGitVcsDriverShape")(function* (
         operation,
         cwd: input.cwd,
         args: [
-          ...durableWrite,
+          ...privateDurableWrite,
           "commit-tree",
           treeOid,
           ...(capturedHead === null ? [] : ["-p", capturedHead]),
@@ -1434,6 +1430,7 @@ export const makeVcsDriverShape = Effect.fn("makeGitVcsDriverShape")(function* (
             operation,
             cwd: input.cwd,
             args: ["ls-tree", "-r", "--name-only", "-z", treeOid],
+            env: commitEnv,
             maxOutputBytes: WORKSPACE_FILES_MAX_OUTPUT_BYTES,
           })
         : undefined;
@@ -1445,12 +1442,13 @@ export const makeVcsDriverShape = Effect.fn("makeGitVcsDriverShape")(function* (
       const addedUntrackedPaths = [...new Set([...untrackedBefore, ...untrackedAfter])].filter(
         (name) => capturedPaths.has(name),
       );
+      yield* publish().pipe(Effect.mapError(mapCheckpointStorageError));
       if (input.strict) {
         // Hold HEAD's ref lock through publication so the captured parent stays current.
         const published = yield* execute({
           operation,
           cwd: input.cwd,
-          args: [...durableWrite, "update-ref", "--stdin"],
+          args: [...privateDurableWrite, "update-ref", "--stdin"],
           stdin: `start\nverify HEAD ${capturedHead}\ncreate ${input.ref} ${commitOid}\nprepare\ncommit\n`,
           allowNonZeroExit: true,
         });
@@ -1473,12 +1471,12 @@ export const makeVcsDriverShape = Effect.fn("makeGitVcsDriverShape")(function* (
         yield* execute({
           operation,
           cwd: input.cwd,
-          args: [...durableWrite, "update-ref", input.ref, commitOid],
+          args: [...privateDurableWrite, "update-ref", input.ref, commitOid],
         });
       }
       return { snapshotRef: input.ref, commitOid, addedUntrackedPaths, complete };
     }).pipe(Effect.ensuring(cleanupTempIndex));
-  });
+  }, Effect.scoped);
 
   const checkpoints: VcsDriver.VcsCheckpointOps = {
     captureCheckpoint: (input) =>
@@ -1525,29 +1523,34 @@ export const makeVcsDriverShape = Effect.fn("makeGitVcsDriverShape")(function* (
         cwd: input.cwd,
         args: ["ls-files", "--cached", `--with-tree=${commitOid}`, "-z", "--", "."],
       });
-      // An empty index and checkpoint have nothing for git restore's pathspec to match.
-      if (tracked.stdout.length > 0) {
-        const restoreInput = { execute, vcsProcess, operation, cwd: input.cwd, commitOid };
-        yield* restoreCheckpointFiles({ ...restoreInput, longPaths });
-      }
-      // Restoring away the last tracked file can remove a nested workspace directory.
-      const recreateWorkspace = fileSystem.makeDirectory(input.cwd, { recursive: true }).pipe(
-        Effect.mapError(
-          (cause) =>
-            new VcsProcessExitError({
-              operation,
-              command: "git restore",
-              cwd: input.cwd,
-              exitCode: 0,
-              detail: `Could not recreate the checkpoint workspace: ${cause.message}`,
-            }),
+      const recreateWorkspace = recreateCheckpointWorkspace(fileSystem, input.cwd, operation);
+      const resetIndex = recreateWorkspace.pipe(
+        Effect.andThen(
+          execute({
+            operation,
+            cwd: input.cwd,
+            args: [...longPaths, "reset", "--quiet", "--", "."],
+          }),
         ),
       );
+      let mutationStarted = false;
+      const onSpawn = () => {
+        mutationStarted = true;
+      };
+      yield* Effect.addFinalizer((exit) =>
+        mutationStarted && Exit.hasInterrupts(exit) ? resetIndex.pipe(Effect.ignore) : Effect.void,
+      );
+      // An empty index and checkpoint have nothing for git restore's pathspec to match.
+      if (tracked.stdout.length > 0) {
+        const restoreInput = { execute, vcsProcess, operation, cwd: input.cwd, commitOid, onSpawn };
+        yield* restoreCheckpointFiles({ ...restoreInput, longPaths });
+      }
       yield* recreateWorkspace;
       const cleaned = yield* execute({
         operation,
         cwd: input.cwd,
         args: [...longPaths, "clean", "-fd", "--", "."],
+        onSpawn,
         allowNonZeroExit: true,
       });
       if (cleaned.exitCode !== 0) {
@@ -1569,16 +1572,10 @@ export const makeVcsDriverShape = Effect.fn("makeGitVcsDriverShape")(function* (
           });
       }
       // On Windows the same clean can remove './' and exit 0.
-      yield* recreateWorkspace;
-
-      yield* execute({
-        operation,
-        cwd: input.cwd,
-        args: [...longPaths, "reset", "--quiet", "--", "."],
-      });
+      yield* resetIndex;
 
       return true;
-    }),
+    }, Effect.scoped),
 
     diffCheckpoints: Effect.fn("GitVcsDriver.checkpoints.diffCheckpoints")(function* (input) {
       const operation = "GitVcsDriver.checkpoints.diffCheckpoints";
