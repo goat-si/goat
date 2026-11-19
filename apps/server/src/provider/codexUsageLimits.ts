@@ -279,12 +279,13 @@ export function codexMessageResetAt(
   const expectedYear = monthIndex === undefined ? today.year : Number(year);
   const expectedMonth = monthIndex === undefined ? today.month : monthIndex + 1;
   const expectedDay = monthIndex === undefined ? today.day : Number(day);
+  const expectedHour = (Number(hour) % 12) + (meridiem === "PM" ? 12 : 0);
   const reset = DateTime.makeZoned(
     {
       year: expectedYear,
       month: expectedMonth,
       day: expectedDay,
-      hour: (Number(hour) % 12) + (meridiem === "PM" ? 12 : 0),
+      hour: expectedHour,
       minute: Number(minute),
     },
     // The repeated hour at a DST fall-back takes its later instant so a resume never fires early.
@@ -292,7 +293,13 @@ export function codexMessageResetAt(
   );
   if (Option.isNone(reset)) return null;
   const actual = DateTime.toParts(reset.value);
-  if (actual.year !== expectedYear || actual.month !== expectedMonth || actual.day !== expectedDay)
+  if (
+    actual.year !== expectedYear ||
+    actual.month !== expectedMonth ||
+    actual.day !== expectedDay ||
+    actual.hour !== expectedHour ||
+    actual.minute !== Number(minute)
+  )
     return null;
   // Codex drops the seconds, so the next minute is the first one past the reset.
   const resetAt = DateTime.add(reset.value, { minutes: 1 });

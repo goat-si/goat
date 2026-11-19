@@ -32,6 +32,15 @@ describe("Codex text reset times", () => {
       ),
     ).toBe("2026-11-01T06:31:00.000Z");
   });
+  it("rejects a nonexistent local time during a DST spring transition", () => {
+    expect(
+      codexMessageResetAt(
+        "Try again at Mar 8th, 2026 2:30 AM.",
+        DateTime.makeUnsafe("2026-03-08T05:00:00Z"),
+        DateTime.zoneMakeNamedUnsafe("America/New_York"),
+      ),
+    ).toBeNull();
+  });
   it("uses the Codex process time zone", () => {
     expect(DateTime.zoneToString(codexTimeZone({ TZ: ":Asia/Dhaka" }))).toBe("Asia/Dhaka");
   });
