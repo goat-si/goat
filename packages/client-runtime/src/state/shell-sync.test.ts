@@ -582,8 +582,8 @@ describe("environment shell synchronization", () => {
       yield* SubscriptionRef.set(supervisorState, {
         ...AVAILABLE_CONNECTION_STATE,
         desired: false,
-        network: "online",
-        phase: "available",
+        network: "online" as const,
+        phase: "available" as const,
         attempt: 2,
         generation: 2,
       });
@@ -714,8 +714,8 @@ describe("environment shell synchronization", () => {
       yield* SubscriptionRef.set(supervisorState, {
         ...AVAILABLE_CONNECTION_STATE,
         desired: false,
-        network: "online",
-        phase: "available",
+        network: "online" as const,
+        phase: "available" as const,
         attempt: 1,
         generation: 1,
       });
