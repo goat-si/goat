@@ -138,13 +138,10 @@ export function insertRoute(
   routes: ReadonlyArray<ConnectionRoute>,
   route: ConnectionRoute,
   { aheadOfSameKind = false }: { readonly aheadOfSameKind?: boolean } = {},
-  policy: PenViewerPolicy = { enabled: PEN_VIEWER_ENABLED },
 ): ReadonlyArray<ConnectionRoute> {
   const kind = connectionRouteKind(route);
   const rank = ROUTE_KIND_RANK[kind];
-  // Placed among the shown routes: a Pen route the closed gate hides keeps its slot.
   const index = routes.findIndex((existing) => {
-    if (!routeIsShown(existing, policy)) return false;
     const existingKind = connectionRouteKind(existing);
     return ROUTE_KIND_RANK[existingKind] > rank || (aheadOfSameKind && existingKind === kind);
   });
@@ -500,38 +497,12 @@ export function pendingRouteOrder(
   return pending.some((id, index) => id !== savedIds[index]) ? pending : null;
 }
 
-/** The saved routes a route editor shows: a Pen route stays stored but hidden while closed. */
-export function shownRoutes(
-  entry: ConnectionCatalogEntry,
-  policy: PenViewerPolicy = { enabled: PEN_VIEWER_ENABLED },
-): ReadonlyArray<ConnectionRoute> {
-  return connectionRoutes(entry).filter((route) => routeIsShown(route, policy));
-}
-
+/** Whether the Pen viewer gate lets a saved route into the live registry: a Pen route only when open. */
 export function routeIsShown(
   route: Pick<ConnectionRoute, "target">,
   policy: PenViewerPolicy = { enabled: PEN_VIEWER_ENABLED },
 ): boolean {
   return route.target._tag !== "PenConnectionTarget" || policy.enabled;
-}
-
-/** A new order of the shown routes as a whole saved order, each hidden route in its place. */
-export function routeOrderKeepingHidden(
-  savedIds: ReadonlyArray<string>,
-  shownOrder: ReadonlyArray<string>,
-): ReadonlyArray<string> {
-  const shown = new Set(shownOrder);
-  let next = 0;
-  return savedIds.map((id) => (shown.has(id) ? (shownOrder[next++] ?? id) : id));
-}
-
-/** The relay is the machine's one route; a Pen route the closed gate hides is none. */
-export function relayIsOnlyRoute(
-  entry: ConnectionCatalogEntry,
-  policy: PenViewerPolicy = { enabled: PEN_VIEWER_ENABLED },
-): boolean {
-  const routes = shownRoutes(entry, policy);
-  return routes.length === 1 && routes[0]?.target._tag === "RelayConnectionTarget";
 }
 
 export function removedWithRelay(entry: ConnectionCatalogEntry): boolean {

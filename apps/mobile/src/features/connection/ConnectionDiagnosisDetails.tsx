@@ -3,7 +3,7 @@ import {
   AVAILABLE_CONNECTION_STATE,
   type ConnectionDiagnosis,
   connectionDiagnosisText,
-  shownRoutes,
+  connectionRoutes,
   hasRelayRoute,
   presentConnectionDiagnosis,
   type EnvironmentPresentation,
@@ -36,7 +36,7 @@ export function useConnectionDiagnosis(
   const phase = presentation.connection.phase;
   if (phase === "connected" || phase === "unsupported") return { diagnosis: null, state };
   const relayOnly =
-    shownRoutes(presentation.entry).length === 1 && hasRelayRoute(presentation.entry);
+    connectionRoutes(presentation.entry).length === 1 && hasRelayRoute(presentation.entry);
   const diagnosis = presentConnectionDiagnosis({
     hostLabel: presentation.entry.target.label,
     state,

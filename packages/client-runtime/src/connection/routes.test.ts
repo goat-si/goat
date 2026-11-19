@@ -32,13 +32,10 @@ import {
   mergeLearnedRoutes,
   pendingRouteOrder,
   penRouteConnectionId,
-  relayIsOnlyRoute,
   penRouteOwner,
   removedWithRelay,
-  routeOrderKeepingHidden,
   routesAfterRemoving,
   sendsTokenInClear,
-  shownRoutes,
   upsertRoute,
   usableRoutes,
 } from "./routes.ts";
@@ -150,32 +147,6 @@ describe("connection routes", () => {
     expect(pendingRouteOrder(dragged, ["tailnet", "lan"])).toBeNull();
     expect(pendingRouteOrder(dragged, ["lan", "public"])).toBeNull();
     expect(pendingRouteOrder(dragged, ["lan", "tailnet", "public"])).toBeNull();
-  });
-
-  it("hides a Pen route while its gate is closed and keeps it in place when the others move", () => {
-    const pen: ConnectionRoute = {
-      target: new PenConnectionTarget({
-        environmentId: ENVIRONMENT_ID,
-        label: "Pen",
-        connectionId: "pen:m:n",
-      }),
-      profile: Option.none(),
-    };
-    const entry: ConnectionCatalogEntry = {
-      enabled: true,
-      target: LAN.target,
-      profile: LAN.profile,
-      alternateRoutes: [pen, TAILNET],
-    };
-    const ids = (routes: ReadonlyArray<ConnectionRoute>) =>
-      routes.map((route) => connectionRouteId(route.target));
-    const saved = ids([LAN, pen, TAILNET]);
-    expect(ids(shownRoutes(entry, { enabled: false }))).toEqual(ids([LAN, TAILNET]));
-    expect(ids(shownRoutes(entry, { enabled: true }))).toEqual(saved);
-    // Dragging tailnet first must still list the hidden Pen route, where it was.
-    expect(routeOrderKeepingHidden(saved, ids([TAILNET, LAN]))).toEqual(ids([TAILNET, pen, LAN]));
-    // A new route takes its place among the shown routes; the hidden one does not move it ahead.
-    expect(ids(insertRoute([pen, LAN], TAILNET))).toEqual(ids([pen, LAN, TAILNET]));
   });
 });
 
@@ -529,25 +500,9 @@ describe("pull request routing trust beside a Pen route", () => {
   const lanOnly: ConnectionCatalogEntry = { enabled: true, ...LAN };
   const withPen: ConnectionCatalogEntry = { ...lanOnly, alternateRoutes: [pen] };
 
-  it("keeps the trust a person gave while the gate hides the Pen route", () => {
-    const key = pullRequestRoutingConnectionKey(lanOnly);
+  it("asks again once a Pen route is added, naming the member it pins", () => {
+    const key = pullRequestRoutingConnectionKey(withPen);
     expect(key).not.toBeNull();
-    expect(pullRequestRoutingConnectionKey(withPen)).toBe(key);
-  });
-
-  it("asks again once the Pen route is usable, naming the member it pins", () => {
-    const open = pullRequestRoutingConnectionKey(withPen, { enabled: true });
-    expect(open).not.toBeNull();
-    expect(open).not.toBe(pullRequestRoutingConnectionKey(lanOnly, { enabled: true }));
-  });
-
-  it("leaves a relay the only route while the gate hides the Pen route beside it", () => {
-    const relayOnly: ConnectionCatalogEntry = { enabled: true, ...RELAY };
-    expect(relayIsOnlyRoute(relayOnly)).toBe(true);
-    expect(relayIsOnlyRoute({ ...relayOnly, alternateRoutes: [pen] })).toBe(true);
-    expect(relayIsOnlyRoute({ ...relayOnly, alternateRoutes: [pen] }, { enabled: true })).toBe(
-      false,
-    );
-    expect(relayIsOnlyRoute({ ...relayOnly, alternateRoutes: [LAN] })).toBe(false);
+    expect(key).not.toBe(pullRequestRoutingConnectionKey(lanOnly));
   });
 });

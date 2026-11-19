@@ -4,8 +4,6 @@ import {
   PenConnectionProfile,
   PenConnectionTarget,
   RelayConnectionTarget,
-  SshConnectionProfile,
-  SshConnectionTarget,
   type ConnectionCatalogEntry,
   type ConnectionRoute,
 } from "@goat/client-runtime/connection";
@@ -56,9 +54,8 @@ function present(entry: ConnectionCatalogEntry): EnvironmentPresentation {
 const comingSoon = `${GOAT_CONNECT_COMING_SOON.title} · ${GOAT_CONNECT_COMING_SOON.status}`;
 
 describe("saved Connect routes while disabled", () => {
-  it("labels a machine by the route it shows when a hidden Pen route is stored first", () => {
+  it("labels a machine reached only through Pen as Pen", () => {
     const penId = `pen:mmmmmmmmmmmmmmmmmmmmmmmmmm:nnnnnnnnnnnnnnnnnnnnnnnnnn`;
-    const sshId = "ssh:saved:box";
     const entry: ConnectionCatalogEntry = {
       enabled: true,
       target: new PenConnectionTarget({
@@ -76,27 +73,8 @@ describe("saved Connect routes while disabled", () => {
           noisePub: "kkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkk",
         }),
       ),
-      alternateRoutes: [
-        {
-          target: new SshConnectionTarget({
-            environmentId,
-            label: "Saved machine",
-            connectionId: sshId,
-          }),
-          profile: Option.some(
-            new SshConnectionProfile({
-              environmentId,
-              label: "Saved machine",
-              connectionId: sshId,
-              target: { alias: "box", hostname: "box", username: "me", port: null },
-            }),
-          ),
-        },
-      ],
     };
-    expect(environmentTransportLabel(present(entry))).toBe("SSH me@box");
-    // A machine reached only through Pen reads as Pen, not as a generic remote link.
-    expect(environmentTransportLabel(present({ ...entry, alternateRoutes: [] }))).toBe("Pen");
+    expect(environmentTransportLabel(present(entry))).toBe("Pen");
   });
   it("retains relay-only entries with coming-soon labels and excludes them from onboarding", () => {
     const entry = { ...relay, enabled: true };

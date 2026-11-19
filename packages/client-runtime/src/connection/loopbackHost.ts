@@ -4,7 +4,7 @@ import * as Duration from "effect/Duration";
 
 import type { ConnectionCatalogEntry } from "./catalog.ts";
 import type { ConnectionTarget } from "./model.ts";
-import { routeHttpBaseUrl, shownRoutes } from "./routes.ts";
+import { connectionRoutes, routeHttpBaseUrl } from "./routes.ts";
 
 /**
  * How long this device's own GOAT server may stay silent before a request or socket gives up on
@@ -49,21 +49,13 @@ export function directRequestTimeout(
     : {};
 }
 
-/** Every route of the entry reaches this device's own server; a Pen route the gate hides is none. */
+/** Every route of the entry reaches this device's own server. */
 export function isLoopbackEntry(entry: ConnectionCatalogEntry): boolean {
-  const routes = shownRoutes(entry);
-  return (
-    routes.length > 0 &&
-    routes.every((route) => {
-      const httpBaseUrl = routeHttpBaseUrl(route);
-      return httpBaseUrl !== null && isLocalServerConnection(route.target, httpBaseUrl);
-    })
-  );
+  return connectionRoutes(entry).every((route) => {
+    const httpBaseUrl = routeHttpBaseUrl(route);
+    return httpBaseUrl !== null && isLocalServerConnection(route.target, httpBaseUrl);
+  });
 }
-
-/** How many routes a connect tries: a Pen route the closed gate hides is never tried. */
-export const triedRoutes = (entry: ConnectionCatalogEntry) =>
-  Math.max(1, shownRoutes(entry).length);
 
 /** A setup or silence budget, raised to the local allowance for this device's own server. */
 export function loopbackBudgetMs(loopback: boolean, remoteBudgetMs: number): number {

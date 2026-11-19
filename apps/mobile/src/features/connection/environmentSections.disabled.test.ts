@@ -3,8 +3,6 @@ import { EnvironmentId } from "@goat/contracts";
 import {
   BearerConnectionProfile,
   BearerConnectionTarget,
-  PenConnectionProfile,
-  PenConnectionTarget,
   RelayConnectionTarget,
   type ConnectionCatalogEntry,
 } from "@goat/client-runtime/connection";
@@ -65,22 +63,6 @@ describe("default-off retained mobile environments", () => {
     expect(
       isGoatConnectOnlyEnvironment({ ...relay, alternateRoutes: [bearer("t3-connect")] }),
     ).toBe(true);
-    // A stored Pen route the closed gate hides is no other way in.
-    const penId = "pen:mmmmmmmmmmmmmmmmmmmmmmmmmm:nnnnnnnnnnnnnnnnnnnnnnnnnn";
-    const pen = {
-      target: new PenConnectionTarget({ environmentId, label: "Saved", connectionId: penId }),
-      profile: Option.some(
-        new PenConnectionProfile({
-          environmentId,
-          label: "Saved",
-          connectionId: penId,
-          meshId: "mmmmmmmmmmmmmmmmmmmmmmmmmm",
-          nodeId: "nnnnnnnnnnnnnnnnnnnnnnnnnn",
-          noisePub: "kkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkk",
-        }),
-      ),
-    };
-    expect(isGoatConnectOnlyEnvironment({ ...relay, alternateRoutes: [pen] })).toBe(true);
   });
 
   it("keeps ordinary bearer and mixed direct routes usable", () => {

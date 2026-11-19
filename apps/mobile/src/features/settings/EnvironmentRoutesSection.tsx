@@ -11,8 +11,6 @@ import {
   connectionRoutes,
   isLearned,
   pendingRouteOrder,
-  routeOrderKeepingHidden,
-  shownRoutes,
 } from "@goat/client-runtime/connection";
 import { type EnvironmentId, sessionGrantsScope } from "@goat/contracts";
 import {
@@ -70,11 +68,7 @@ export function EnvironmentRoutesSection({
   const reorder = useAtomCommand(environmentCatalog.reorderRoutes, "route reorder");
   const removeRoute = useAtomCommand(environmentCatalog.removeRoute, "route removal");
   const [editing, setEditing] = useState(false);
-  const allIds =
-    entry === undefined
-      ? []
-      : connectionRoutes(entry).map((route) => connectionRouteId(route.target));
-  const saved = entry === undefined ? [] : shownRoutes(entry);
+  const saved = entry === undefined ? [] : connectionRoutes(entry);
   const savedIds = saved.map((route) => connectionRouteId(route.target));
   const [pending, setPending] = useState<ReadonlyArray<string> | null>(null);
   const shownPending = pendingRouteOrder(pending, savedIds);
@@ -96,11 +90,9 @@ export function EnvironmentRoutesSection({
 
   const commit = (next: ReadonlyArray<string>) => {
     setPending(next);
-    void reorder({ environmentId, routeIds: routeOrderKeepingHidden(allIds, next) }).then(
-      (result) => {
-        if (result._tag === "Failure") setPending(null);
-      },
-    );
+    void reorder({ environmentId, routeIds: next }).then((result) => {
+      if (result._tag === "Failure") setPending(null);
+    });
   };
   const move = (from: number, to: number) => {
     if (to < 0 || to >= order.length || from === to) return;

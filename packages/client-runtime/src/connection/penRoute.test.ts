@@ -42,10 +42,11 @@ describe("Pen routes", () => {
       target: new SshConnectionTarget({ environmentId, label: "SSH", connectionId: "ssh" }),
       profile: Option.none(),
     };
-    const open = { enabled: true };
-    expect(
-      insertRoute(insertRoute([hub], pen, {}, open), ssh, {}, open).map(connectionRouteKind),
-    ).toEqual(["ssh", "pen", "hub-proxy"]);
+    expect(insertRoute(insertRoute([hub], pen), ssh).map(connectionRouteKind)).toEqual([
+      "ssh",
+      "pen",
+      "hub-proxy",
+    ]);
   });
   it("closed viewer gate excludes persisted Pen routes", () => {
     expect(usableRoutes({ ...pen, enabled: true })).toEqual([]);

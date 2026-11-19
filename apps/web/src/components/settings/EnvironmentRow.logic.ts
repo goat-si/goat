@@ -5,7 +5,6 @@ import {
   connectionRouteLabel,
   penRouteOwner,
   connectionRoutes,
-  shownRoutes,
   usableRoutes,
   type ConnectionCatalogEntry,
   type ConnectionRoute,
@@ -50,10 +49,10 @@ export function environmentTransportLabel(
   if (entry.target._tag === "PrimaryConnectionTarget") return "This machine";
   if (isGoatConnectUnavailable(entry))
     return `${GOAT_CONNECT_COMING_SOON.title} · ${GOAT_CONNECT_COMING_SOON.status}`;
-  const routes = isGoatConnectEnabled() ? shownRoutes(entry) : usableRoutes(entry);
+  const routes = isGoatConnectEnabled() ? connectionRoutes(entry) : usableRoutes(entry);
   if (
     routes.length > 1 ||
-    (!isGoatConnectEnabled() && routes.length === 1 && shownRoutes(entry).length > 1)
+    (!isGoatConnectEnabled() && routes.length === 1 && connectionRoutes(entry).length > 1)
   ) {
     const active =
       activeTarget === null
@@ -68,8 +67,7 @@ export function environmentTransportLabel(
         : `via ${connectionRouteLabel(active)}`;
   }
   if (environment.relayManaged && isGoatConnectEnabled()) return "GOAT Connect";
-  // The one route shown: a stored Pen route the closed gate hides does not name the machine.
-  const { target, profile } = shownRoutes(entry)[0] ?? entry;
+  const { target, profile } = entry;
   // Already reads "via <hub>".
   if (target._tag === "HubProxyConnectionTarget" && routes[0] !== undefined)
     return connectionRouteLabel(routes[0]);

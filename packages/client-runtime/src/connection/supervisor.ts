@@ -36,7 +36,7 @@ import * as RpcSession from "../rpc/session.ts";
 import { safeErrorLogAttributes } from "../errors/safeLog.ts";
 import { NETWORK_BLOCKING_HINT } from "../errors/network.ts";
 import * as ConnectionWakeups from "./wakeups.ts";
-import { isLoopbackEntry, loopbackBudgetMs, retryDelayMs, triedRoutes } from "./loopbackHost.ts";
+import { isLoopbackEntry, loopbackBudgetMs, retryDelayMs } from "./loopbackHost.ts";
 import { SYNCHRONIZATION_TIMEOUT } from "./synchronization.ts";
 import {
   connectionRouteId,
@@ -922,7 +922,7 @@ export const make = Effect.fn("EnvironmentSupervisor.make")(function* (
       // each route that reaches synchronizing adds its own snapshot budget, so
       // a route that fails late does not eat the next route's time.
       Effect.gen(function* () {
-        const routeCount = triedRoutes(yield* Ref.get(currentEntry));
+        const routeCount = connectionRoutes(yield* Ref.get(currentEntry)).length;
         while (true) {
           const progress = yield* Ref.get(establishmentProgress);
           // Slow successes say nothing about an attempt whose host has not answered yet.

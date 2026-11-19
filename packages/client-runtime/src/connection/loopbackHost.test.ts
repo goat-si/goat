@@ -7,23 +7,14 @@ import * as TestClock from "effect/testing/TestClock";
 
 import { fetchRemoteEnvironmentDescriptor } from "../environment/descriptor.ts";
 import * as RpcHttp from "../rpc/http.ts";
-import {
-  BearerConnectionProfile,
-  PenConnectionProfile,
-  type ConnectionCatalogEntry,
-} from "./catalog.ts";
+import { BearerConnectionProfile, type ConnectionCatalogEntry } from "./catalog.ts";
 import {
   directRequestTimeout,
   isLoopbackEntry,
   isLocalServerConnection,
   retryDelayMs,
 } from "./loopbackHost.ts";
-import {
-  BearerConnectionTarget,
-  PenConnectionTarget,
-  PrimaryConnectionTarget,
-  SshConnectionTarget,
-} from "./model.ts";
+import { BearerConnectionTarget, PrimaryConnectionTarget, SshConnectionTarget } from "./model.ts";
 
 const environmentId = EnvironmentId.make("environment-1");
 const local = "http://127.0.0.1:3773";
@@ -73,28 +64,6 @@ describe("loopback hosts", () => {
         ],
       }),
     ).toBe(false);
-    // A stored Pen route the closed gate hides is no way to another machine.
-    const penId = "pen:mmmmmmmmmmmmmmmmmmmmmmmmmm:nnnnnnnnnnnnnnnnnnnnnnnnnn";
-    expect(
-      isLoopbackEntry({
-        ...entry,
-        alternateRoutes: [
-          {
-            target: new PenConnectionTarget({ environmentId, label: "Mac", connectionId: penId }),
-            profile: Option.some(
-              new PenConnectionProfile({
-                environmentId,
-                label: "Mac",
-                connectionId: penId,
-                meshId: "mmmmmmmmmmmmmmmmmmmmmmmmmm",
-                nodeId: "nnnnnnnnnnnnnnnnnnnnnnnnnn",
-                noisePub: "kkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkk",
-              }),
-            ),
-          },
-        ],
-      }),
-    ).toBe(true);
   });
 
   it("retries this device's own server within seconds however many attempts failed", () => {
