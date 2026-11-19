@@ -2789,6 +2789,7 @@ export default function ChatView(props: ChatViewProps) {
     }
   });
   useChatShortcuts({
+    embedded,
     enabled: activeThreadId !== null && !backgroundThread,
     keybindings,
     scriptKeybindings,
