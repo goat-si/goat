@@ -1,4 +1,5 @@
 import * as Exit from "effect/Exit";
+import * as Deferred from "effect/Deferred";
 // @effect-diagnostics preferSchemaOverJson:off
 import * as Effect from "effect/Effect";
 import * as Semaphore from "effect/Semaphore";
@@ -77,6 +78,7 @@ export interface AcpMcpOverAcpBridge {
   readonly disconnect: (
     request: AcpSchema.DisconnectMcpRequest,
   ) => Effect.Effect<AcpSchema.DisconnectMcpResponse, AcpMcpOverAcpError>;
+  readonly stopCalls: Effect.Effect<void>;
   readonly dispose: Effect.Effect<void>;
 }
 
@@ -85,6 +87,7 @@ export const makeAcpMcpOverAcpBridge = Effect.fn("AcpMcpOverAcpBridge.make")(fun
 ): Effect.fn.Return<AcpMcpOverAcpBridge> {
   const fetchImplementation = options.fetchImplementation ?? fetch;
   const connections = yield* Effect.sync(() => new Map<string, Connection>());
+  let callsStopped = yield* Deferred.make<void>();
 
   const connectionFor = (connectionId: string, markClosing = false) =>
     Effect.suspend(() => {
@@ -104,7 +107,7 @@ export const makeAcpMcpOverAcpBridge = Effect.fn("AcpMcpOverAcpBridge.make")(fun
       connection.protocolVersion === null ? connection.mutex.withPermits(1)(effect) : effect,
     );
 
-  const send = (
+  const sendNow = (
     connection: Connection,
     message: unknown,
   ): Effect.Effect<ReadonlyArray<unknown>, AcpMcpOverAcpError> =>
@@ -150,6 +153,16 @@ export const makeAcpMcpOverAcpBridge = Effect.fn("AcpMcpOverAcpBridge.make")(fun
         }
         return payloads;
       }).pipe(Effect.mapError(bridgeError)),
+    );
+
+  const send = (connection: Connection, message: unknown) =>
+    Effect.suspend(() =>
+      Effect.raceFirst(
+        sendNow(connection, message),
+        Deferred.await(callsStopped).pipe(
+          Effect.andThen(Effect.fail(new AcpMcpOverAcpError("The MCP call was stopped."))),
+        ),
+      ),
     );
 
   const disconnect = Effect.fn("mcpOverAcpBridge.disconnect")(function* (
@@ -250,6 +263,11 @@ export const makeAcpMcpOverAcpBridge = Effect.fn("AcpMcpOverAcpBridge.make")(fun
       });
     }),
     disconnect,
+    stopCalls: Effect.suspend(() => {
+      const stopped = callsStopped;
+      callsStopped = Deferred.makeUnsafe();
+      return Deferred.succeed(stopped, undefined);
+    }).pipe(Effect.asVoid),
     dispose: Effect.suspend(() =>
       Effect.forEach(
         [...connections.keys()],

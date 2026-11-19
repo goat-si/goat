@@ -4,15 +4,18 @@ import * as Stream from "effect/Stream";
 
 const MAX_SSE_EVENT_SIZE = 8 * 1024 * 1024;
 
-async function* sseDataLines(response: Response): AsyncGenerator<string> {
-  if (response.body === null) return;
+async function* sseDataLines(
+  reader: ReadableStreamDefaultReader<Uint8Array>,
+): AsyncGenerator<string> {
   const decoder = new TextDecoder();
   let line = "";
   let dataLines: string[] = [];
   let eventSize = 0;
   let afterCR = false;
-  for await (const chunk of response.body) {
-    const text = decoder.decode(chunk as Uint8Array, { stream: true });
+  while (true) {
+    const { done, value } = await reader.read();
+    if (done) return;
+    const text = decoder.decode(value, { stream: true });
     let start = 0;
     if (afterCR && text.length > 0) {
       if (text[0] === "\n") start = 1;
@@ -57,9 +60,20 @@ export function responsePayloads<E>(
   const separator = contentType.indexOf(";");
   const mediaType = (separator < 0 ? contentType : contentType.slice(0, separator)).trim();
   if (mediaType.toLowerCase() === "text/event-stream") {
-    return Stream.fromAsyncIterable(sseDataLines(response), onError).pipe(
-      Stream.mapEffect((data) => Effect.try({ try: () => JSON.parse(data), catch: onError })),
-    );
+    const body = response.body;
+    if (body === null) return Stream.empty;
+    return Stream.unwrap(
+      Effect.acquireRelease(
+        Effect.sync(() => body.getReader()),
+        (reader) =>
+          Effect.promise(() =>
+            reader
+              .cancel()
+              .catch(() => undefined)
+              .then(() => reader.releaseLock()),
+          ),
+      ).pipe(Effect.map((reader) => Stream.fromAsyncIterable(sseDataLines(reader), onError))),
+    ).pipe(Stream.mapEffect((data) => Effect.try({ try: () => JSON.parse(data), catch: onError })));
   }
   return Stream.unwrap(
     Effect.tryPromise({ try: () => response.text(), catch: onError }).pipe(
