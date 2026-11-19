@@ -3571,7 +3571,7 @@ export const makeGitVcsDriverCore = Effect.fn("makeGitVcsDriverCore")(function* 
           ? normalizeProjectPathForComparison(worktreePath)
           : worktreePath) === worktreeRoot;
 
-      // The snapshot misses a branch created outside T3 Code until it refreshes. An unborn HEAD
+      // The snapshot misses a branch created outside GOAT until it refreshes. An unborn HEAD
       // names a branch with no ref yet, so the ref must exist before it is listed.
       const currentBranchUnlisted =
         currentBranch !== null && !snapshot.localBranches.some((ref) => ref.name === currentBranch);

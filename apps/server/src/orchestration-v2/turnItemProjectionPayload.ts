@@ -19,7 +19,7 @@ export function isInlineWorkOutput(payloadJson: string): boolean {
   return (
     payload.includes("htmlrender") ||
     payload.includes("goatmcpapp") ||
-    payload.includes("t3mcpapp") ||
+    payload.includes("t3mcpapp") || // goat-rename: legacy: payloads recorded before the rename
     payload.includes('"viewedimagepath"') ||
     /"toolname":"[\s\S]*delegate.task"/i.test(payloadJson) ||
     payload.endsWith(SENT_MESSAGE_MARKER.toLowerCase())

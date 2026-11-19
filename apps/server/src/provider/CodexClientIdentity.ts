@@ -1,7 +1,7 @@
 import type * as CodexSchema from "effect-codex-app-server/schema";
 import packageJson from "../../package.json" with { type: "json" };
 
-const CODEX_CLIENT_NAME = "T3 Code";
+const CODEX_CLIENT_NAME = "T3 Code"; // goat-rename: legacy: Codex picks its model catalog by originator name
 
 /** Set originator at spawn; the pre-initialize refresh otherwise overwrites shared cache with plain-CLI models. */
 export const codexAppServerEnvironment = (

@@ -709,6 +709,7 @@ export const KEEP_RULES: readonly KeepRule[] = [
     pattern: /t3\.|t3-antigravity-browser-preflight/g,
     scope: (path) =>
       path === "packages/provider-pi/src/server/adapter.ts" ||
+      path === "packages/provider-pi/src/server/earlyNativeWork.ts" ||
       path === "packages/provider-testing/src/replayWorkspace.ts" ||
       path.endsWith("antigravityAuthSupport.ts"),
     reason:
