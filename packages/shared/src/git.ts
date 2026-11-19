@@ -8,6 +8,7 @@ import type {
 } from "@goat/contracts";
 import * as Arr from "effect/Array";
 import * as Result from "effect/Result";
+import { foldLatinDiacritics } from "./path.ts";
 
 import {
   LEGACY_WORKTREE_BRANCH_PREFIX,
@@ -24,9 +25,7 @@ const TEMP_WORKTREE_BRANCH_PATTERN = new RegExp(
 );
 
 export function sanitizeBranchFragment(raw: string): string {
-  const normalized = raw
-    .normalize("NFKD")
-    .replace(/[̀-ͯ]/g, "")
+  const normalized = foldLatinDiacritics(raw)
     .trim()
     .toLowerCase()
     .replace(/['"`]/g, "")
