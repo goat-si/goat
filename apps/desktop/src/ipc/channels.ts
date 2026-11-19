@@ -160,6 +160,7 @@ export const REVEAL_CUA_GRANT_TARGET_CHANNEL = "desktop:reveal-cua-grant-target"
 
 export const CHECK_SYSTEM_PERMISSION_CHANNEL = "desktop:check-system-permission";
 export const REQUEST_MICROPHONE_ACCESS_CHANNEL = "desktop:request-microphone-access";
+export const RESTART_AUDIO_SERVICE_CHANNEL = "desktop:restart-audio-service";
 
 export const PREVIEW_RECORDING_INPUT_CHANNEL = "desktop:preview-recording-input";
 

@@ -8,6 +8,7 @@ import * as Path from "effect/Path";
 import { beforeEach, vi } from "vite-plus/test";
 
 import * as ProcessRunner from "../processRunner.ts";
+import { sourceControlDefinitions } from "../sourceControl/sourceControlDefinitions.ts";
 import * as RepositoryIdentityResolver from "./RepositoryIdentityResolver.ts";
 
 const normalizePathSeparators = (value: string) => value.replaceAll("\\", "/");
@@ -73,6 +74,30 @@ it.layer(NodeServices.layer)("RepositoryIdentityResolverLive", (it) => {
       expect(identity?.canonicalKey).toBe("github.com/acme/project");
       expect(identity?.provider).toBe("github");
       expect(identity?.displayName).toBe("acme/project");
+    }).pipe(Effect.provide(RepositoryIdentityResolver.layer)),
+  );
+
+  it.effect("keeps a literal .git in an Azure DevOps repository name", () =>
+    Effect.gen(function* () {
+      const fileSystem = yield* FileSystem.FileSystem;
+      const cwd = yield* fileSystem.makeTempDirectoryScoped({
+        prefix: "t3-repository-identity-azure-git-suffix-test-",
+      });
+
+      yield* git(cwd, ["init"]);
+      yield* git(cwd, [
+        "remote",
+        "add",
+        "origin",
+        "https://dev.azure.com/Acme/Platform/_git/Tool.git",
+      ]);
+
+      const resolver = yield* RepositoryIdentityResolver.RepositoryIdentityResolver;
+      const identity = yield* resolver.resolve(cwd);
+
+      expect(identity?.displayName).toBe("Acme/Platform/_git/Tool.git");
+      expect(identity?.name).toBe("Tool.git");
+      expect(sourceControlDefinitions.repositorySelector(identity)).toBe("Tool.git");
     }).pipe(Effect.provide(RepositoryIdentityResolver.layer)),
   );
 

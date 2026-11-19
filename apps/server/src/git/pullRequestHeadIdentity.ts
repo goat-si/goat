@@ -1,3 +1,4 @@
+import * as SourceControlProvider from "@goat/source-control-core/server/SourceControlProvider";
 import type {
   BranchHeadContext,
   PullRequestHeadRemoteInfo,
@@ -126,4 +127,19 @@ export function matchesBranchHeadContext(
   }
 
   return true;
+}
+
+export function parseRepositoryNameWithOwnerFromRemoteUrl(
+  url: string | null,
+  provider?: Pick<
+    SourceControlProvider.SourceControlProvider["Service"],
+    "repositoryNameFromRemoteUrl"
+  >,
+): string | null {
+  const trimmed = url?.trim() ?? "";
+  if (trimmed.length === 0) return null;
+  return (
+    provider?.repositoryNameFromRemoteUrl?.(trimmed) ??
+    SourceControlProvider.repositoryPathFromRemoteUrl(trimmed)
+  );
 }

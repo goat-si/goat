@@ -69,6 +69,7 @@ import {
   openSystemSettings,
   checkSystemPermission,
   requestMicrophoneAccess,
+  restartAudioService,
   pasteAsText,
   probeRemoteEditors,
   revealWindow,
@@ -190,6 +191,7 @@ export const installDesktopIpcHandlers = Effect.fn("desktop.ipc.installHandlers"
   yield* ipc.handle(openSystemSettings);
   yield* ipc.handle(checkSystemPermission);
   yield* ipc.handle(requestMicrophoneAccess);
+  yield* ipc.handle(restartAudioService);
   yield* ipc.handle(restartCuaDriver);
   yield* ipc.handle(verifyCuaDriver);
   yield* ipc.handle(checkCuaGrants);

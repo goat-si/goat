@@ -1,16 +1,15 @@
 import {
-  ClientSurface,
   ClientConnectionMethod,
   ClientDeviceType,
   ClientOs,
+  ClientSurface,
   ClientWebDeployment,
   type OrchestrationClientOrigin,
 } from "@goat/contracts";
-import * as Option from "effect/Option";
 import * as Schema from "effect/Schema";
-import type * as HttpServerRequest from "effect/http/HttpServerRequest";
+import * as Option from "effect/Option";
+import { HttpServerRequest } from "effect/http";
 import { requestUrl } from "./requestUrl.ts";
-
 const isClientSurface = Schema.is(ClientSurface);
 const isClientConnectionMethod = Schema.is(ClientConnectionMethod);
 const isClientDeviceType = Schema.is(ClientDeviceType);

@@ -208,3 +208,32 @@ it.effect("removes copies left by a killed start, but not one that is still runn
     Effect.ensuring(Effect.sync(() => NodeFS.rmSync(directory, { recursive: true, force: true }))),
   );
 });
+
+it.effect("creates an incremental-vacuum snapshot without changing the legacy source", () => {
+  const directory = NodeFS.mkdtempSync(NodePath.join(NodeOS.tmpdir(), "goat-v2-vacuum-"));
+  const sourcePath = NodePath.join(directory, "state.sqlite");
+  const destinationPath = NodePath.join(directory, "statev2.sqlite");
+  return Effect.gen(function* () {
+    const source = new NodeSqlite.DatabaseSync(sourcePath);
+    try {
+      source.exec(
+        "PRAGMA auto_vacuum=NONE; CREATE TABLE messages(text TEXT); INSERT INTO messages VALUES ('retained')",
+      );
+      assert.equal(source.prepare("PRAGMA auto_vacuum").get()?.auto_vacuum, 0);
+      yield* initializeV2Database(destinationPath);
+      const copy = new NodeSqlite.DatabaseSync(destinationPath, { readOnly: true });
+      try {
+        assert.equal(copy.prepare("PRAGMA auto_vacuum").get()?.auto_vacuum, 2);
+        assert.equal(copy.prepare("SELECT text FROM messages").get()?.text, "retained");
+        assert.equal(source.prepare("PRAGMA auto_vacuum").get()?.auto_vacuum, 0);
+      } finally {
+        copy.close();
+      }
+    } finally {
+      source.close();
+    }
+  }).pipe(
+    Effect.provide(NodeServices.layer),
+    Effect.ensuring(Effect.sync(() => NodeFS.rmSync(directory, { recursive: true, force: true }))),
+  );
+});

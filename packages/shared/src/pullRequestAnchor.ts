@@ -37,9 +37,10 @@ function normalizePullRequestCommentAnchor(anchor: string): string {
   );
 }
 
-// GitHub pull request tabs and their GitLab merge request equivalents.
+// GitHub pull request tabs and their GitLab merge request equivalents. Forgejo and Gitea spell the
+// path `/pulls/`.
 function pullRequestPathTab(pathname: string): PullRequestAnchor | null {
-  const tab = /\/(?:pull|-\/merge_requests)\/\d+\/([a-z]+)(?:\/(.*))?$/i.exec(pathname);
+  const tab = /\/(?:pulls?|-\/merge_requests)\/\d+\/([a-z]+)(?:\/(.*))?$/i.exec(pathname);
   const rest = tab?.[2] ?? "";
   switch (tab?.[1]?.toLowerCase()) {
     case "files":
@@ -156,7 +157,7 @@ export function pullRequestDiffPathMatches(digest: string, path: string): boolea
 export function pullRequestLinkCommit(url: string | null | undefined): string | null {
   if (!url) return null;
   try {
-    return /\/pull\/\d+\/commits\/([a-f0-9]{40})\/?$/i.exec(new URL(url).pathname)?.[1] ?? null;
+    return /\/pulls?\/\d+\/commits\/([a-f0-9]{40})\/?$/i.exec(new URL(url).pathname)?.[1] ?? null;
   } catch {
     return null;
   }

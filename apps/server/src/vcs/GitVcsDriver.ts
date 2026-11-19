@@ -4,6 +4,8 @@ import {
   makeResolveHeadCommit,
 } from "./checkpointGitCommonDir.ts";
 import { recreateCheckpointWorkspace } from "./checkpointWorkspace.ts";
+import type { GitPushResult, GitPushTarget } from "./gitPushTypes.ts";
+export type { GitPushResult, GitPushTarget } from "./gitPushTypes.ts";
 import type { WorktreePreparationOwnership } from "./worktreePreparationOwnership.ts";
 import * as NodeBuffer from "node:buffer";
 import * as Context from "effect/Context";
@@ -244,19 +246,6 @@ export interface GitDeleteLocalBranchInput {
   readonly cwd: string;
   readonly refName: string;
   readonly force?: boolean;
-}
-
-export interface GitPushResult {
-  status: "pushed" | "skipped_up_to_date";
-  branch: string;
-  upstreamBranch?: string | undefined;
-  setUpstream?: boolean | undefined;
-}
-
-/** Where `pushCurrentBranch` would send the checked-out branch. */
-export interface GitPushTarget {
-  remoteName: string;
-  branchName: string;
 }
 
 export interface GitRangeContext {

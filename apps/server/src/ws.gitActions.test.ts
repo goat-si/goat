@@ -207,3 +207,39 @@ it.effect("removing a worktree tells its own status subscribers it is no longer 
     }),
   ),
 );
+
+it.effect("a checkout reports a local publication failure through the RPC", () =>
+  withRpcSources(
+    Effect.gen(function* () {
+      const failure = new GitManagerError({
+        operation: "status",
+        cwd: "/repo",
+        detail: "local refresh failed",
+      });
+      const { server, exits } = yield* serveGitRpc(
+        Layer.mergeAll(
+          Layer.mock(GitWorkflowService.GitWorkflowService)({
+            switchRef: () => Effect.succeed({ refName: "feature" }),
+          }),
+          Layer.mock(VcsStatusBroadcaster.VcsStatusBroadcaster)({
+            refreshAfterCheckout: () => Effect.fail(failure),
+          }),
+        ),
+      );
+      yield* server.write(0, {
+        _tag: "Request",
+        id: RpcMessage.RequestId("checkout"),
+        tag: WS_METHODS.vcsSwitchRef,
+        payload: { cwd: "/repo", refName: "feature" },
+        headers: Headers.empty,
+      });
+      const exit = yield* Queue.take(exits);
+      assert.isTrue(Exit.isFailure(exit));
+      if (Exit.isFailure(exit)) {
+        const error = Cause.squash(exit.cause);
+        assert.propertyVal(error, "_tag", "GitCommandError");
+        assert.propertyVal(error, "detail", "Checkout completed, but Git status refresh failed.");
+      }
+    }),
+  ),
+);

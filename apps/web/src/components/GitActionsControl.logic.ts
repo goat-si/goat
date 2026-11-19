@@ -400,13 +400,19 @@ export function resolveDefaultBranchActionDialogCopy(input: {
   };
 }
 
-/** Clean trees cannot create feature branches because the server derives names from uncommitted changes. */
+/** The server names a feature branch from the commit it makes, so the action must commit changes. */
 export function resolveFeatureBranchUnavailableReason(input: {
+  action: DefaultBranchConfirmableAction;
   branchName: string;
   hasWorkingTreeChanges: boolean;
 }): string | null {
-  if (input.hasWorkingTreeChanges) return null;
-  return `There are no changes to commit, so a feature branch can't be named. Create a branch yourself or continue on ${input.branchName}.`;
+  if (!input.hasWorkingTreeChanges) {
+    return `There are no changes to commit, so a feature branch can't be named. Create a branch yourself or continue on ${input.branchName}.`;
+  }
+  if (input.action === "push" || input.action === "create_pr") {
+    return `This action doesn't commit your changes, so a feature branch can't be named. Create a branch yourself or continue on ${input.branchName}.`;
+  }
+  return null;
 }
 
 export function resolveThreadBranchUpdate(
@@ -598,9 +604,6 @@ export function getMenuActionDisabledReason({
     if (!hasBranch) {
       return "Detached HEAD: check out a branch before pushing.";
     }
-    if (hasChanges) {
-      return "Commit or stash local changes before pushing.";
-    }
     if (isBehind) {
       return "Branch is behind upstream. Pull/rebase before pushing.";
     }
@@ -627,3 +630,15 @@ export function getMenuActionDisabledReason({
   }
   return `Create ${terminology.singular} is currently unavailable.`;
 }
+
+export const COMMIT_DIALOG_TITLE = "Commit changes";
+export const COMMIT_DIALOG_DESCRIPTION =
+  "Review and confirm your commit. Leave the message blank to auto-generate one.";
+
+export const GIT_STATUS_WINDOW_REFRESH_DEBOUNCE_MS = 250;
+
+export const RUNNING_SOURCE_CONTROL_ACTIONS = [
+  "runStackedAction",
+  "pull",
+  "publishRepository",
+] as const;

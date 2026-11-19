@@ -1,3 +1,4 @@
+import { registerPiToolChecks } from "./test/toolChecks.ts";
 import { registerPiExtensionStatusChecks } from "./extensionStatusChecks.testkit.ts";
 import { registerPiPromptAckChecks } from "./test/promptAckChecks.ts";
 import { assert, describe, it } from "@effect/vitest";
@@ -284,6 +285,17 @@ export const startTurn = Effect.fnUntraced(function* (
 });
 
 describe("PiAdapterV2", () => {
+  registerPiToolChecks({
+    SESSION_ID,
+    makeFakePi,
+    makeAdapter,
+    openRuntime,
+    startTurn,
+    THREAD_ID,
+    modelSelection,
+    runtimePolicy,
+    layerTest,
+  });
   registerPiPromptAckChecks({
     makeFakePi,
     openRuntime,
@@ -1461,6 +1473,7 @@ describe("PiAdapterV2", () => {
         modelSelection: modelSelection("default"),
         runtimePolicy,
       });
+      fake.queueState({ sessionFile: "/fake/other-session.jsonl" });
       fake.vetoNextSwitch();
       yield* runtime.resumeThread({ providerThread }).pipe(Effect.flip);
       const replacement = yield* runtime.ensureThread({
@@ -1524,6 +1537,7 @@ describe("PiAdapterV2", () => {
         runtimePolicy,
       });
       fake.deferNextLifecycle("switch_session");
+      fake.queueState({ sessionFile: "/fake/other-session.jsonl" });
       const resumed = yield* runtime.resumeThread({ providerThread }).pipe(Effect.forkChild);
       yield* fake.takeRequest("switch_session");
       yield* Fiber.interrupt(resumed);
@@ -2018,69 +2032,6 @@ describe("PiAdapterV2", () => {
           kind: "integration",
         });
         assert.deepEqual(event.turnItem.input, { city: "Berlin" });
-      }
-    }).pipe(Effect.scoped, Effect.provide(layerTest)),
-  );
-
-  it.effect("nests tools called through another tool under their caller", () =>
-    Effect.gen(function* () {
-      const fake = yield* makeFakePi;
-      const { runtime, takeEvent } = yield* openRuntime(fake);
-      const providerThread = yield* runtime.ensureThread({
-        threadId: THREAD_ID,
-        modelSelection: modelSelection("default"),
-        runtimePolicy,
-      });
-      yield* startTurn(runtime, providerThread);
-      yield* fake.takeRequest("prompt");
-      yield* fake.emit({ type: "agent_start" });
-      const takeToolEvents = Effect.fnUntraced(function* (toolCallId: string) {
-        const node = yield* takeEvent(
-          (event) =>
-            event.type === "node.updated" && event.node.nativeItemRef?.nativeId === toolCallId,
-        );
-        const item = yield* takeEvent(
-          (event) =>
-            event.type === "turn_item.updated" &&
-            event.turnItem.nativeItemRef?.nativeId === toolCallId,
-        );
-        if (node.type !== "node.updated" || item.type !== "turn_item.updated")
-          return yield* Effect.die("Expected tool node and item events");
-        return { node: node.node, item: item.turnItem };
-      });
-
-      yield* fake.emit({
-        type: "tool_execution_start",
-        toolCallId: "call_code",
-        toolName: "codemode",
-        args: { code: "await read({ path: 'a.ts' })" },
-      });
-      const caller = yield* takeToolEvents("call_code");
-      assert.equal(caller.node.parentNodeId, caller.node.rootNodeId);
-      assert.isNull(caller.item.parentItemId);
-
-      // Pi tags every phase, so an update that arrives before its start still nests.
-      const phases = [
-        { type: "tool_execution_update", partialResult: { content: [] }, status: "running" },
-        { type: "tool_execution_start", args: { path: "a.ts" }, status: "running" },
-        {
-          type: "tool_execution_end",
-          isError: true,
-          result: { content: [{ type: "text", text: "ENOENT" }] },
-          status: "failed",
-        },
-      ] as const;
-      for (const { status, ...phase } of phases) {
-        yield* fake.emit({
-          ...phase,
-          toolCallId: "call_code/1",
-          toolName: "read",
-          parentToolCallId: "call_code",
-        });
-        const nested = yield* takeToolEvents("call_code/1");
-        assert.equal(nested.node.status, status);
-        assert.equal(nested.node.parentNodeId, caller.node.id);
-        assert.equal(nested.item.parentItemId, caller.item.id);
       }
     }).pipe(Effect.scoped, Effect.provide(layerTest)),
   );
