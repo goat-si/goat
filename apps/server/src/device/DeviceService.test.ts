@@ -38,7 +38,7 @@ const decodeJson = Schema.decodeUnknownSync(Schema.fromJsonString(Schema.Unknown
 const decodeBootError = Schema.decodeUnknownSync(Schema.fromJsonString(DeviceBootError));
 const encodeBootError = Schema.encodeSync(Schema.fromJsonString(DeviceBootError));
 
-import { fixture } from "./DeviceService.testkit.ts";
+import { fixture, minimalPng } from "./DeviceService.testkit.ts";
 
 describe("device setup consent", () => {
   it.effect("exposes daemon startup diagnostics through agent readiness and host status", () =>
@@ -324,7 +324,7 @@ describe("device discovery after server restart", () => {
       expect((yield* service.state).devices).toEqual([]);
       const capture = yield* service.screenshot({ deviceId: DeviceId.make("Pixel_API_35") });
       expect(capture.device.id).toBe("Pixel_API_35");
-      expect(Array.from(capture.png)).toEqual([137, 80, 78, 71]);
+      expect(capture.png).toEqual(minimalPng);
       expect(requests.some((url) => url.endsWith("/api/devices"))).toBe(true);
     }).pipe(Effect.scoped),
   );

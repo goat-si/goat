@@ -10,6 +10,25 @@ import * as DeviceHost from "./DeviceHost.ts";
 import * as DeviceService from "./DeviceService.ts";
 import { makeDeviceHubOperations } from "./DeviceHubOperations.ts";
 
+const pngChunk = (type: string, length: number) => {
+  const chunk = new Uint8Array(12 + length);
+  new DataView(chunk.buffer).setUint32(0, length);
+  chunk.set(new TextEncoder().encode(type), 4);
+  return chunk;
+};
+export const minimalPng = Uint8Array.from([
+  137,
+  80,
+  78,
+  71,
+  13,
+  10,
+  26,
+  10,
+  ...pngChunk("IHDR", 13),
+  ...pngChunk("IEND", 0),
+]);
+
 export const fixture = Effect.fn("fixture")(function* (
   onBoot: Effect.Effect<void> = Effect.void,
   bootError?: string | { error?: string; errors?: Array<{ message: string; error?: string }> },
@@ -31,13 +50,14 @@ export const fixture = Effect.fn("fixture")(function* (
   const discoveryErrors = yield* Ref.make<Array<{ message: string; error?: string }>>([]);
   const androidAvailable = yield* Ref.make(true);
   const encoderResult = yield* Ref.make({ code: 0, stdout: " V....D libx264", stderr: "" });
+  const screenshotBody = yield* Ref.make(minimalPng);
   let booted = false;
   let shutDown = false;
   const http = HttpClient.make((request) =>
     Effect.gen(function* () {
       requests.push(request.url);
       if (request.url.includes("/api/screenshot")) {
-        return HttpClientResponse.fromWeb(request, new Response(new Uint8Array([137, 80, 78, 71])));
+        return HttpClientResponse.fromWeb(request, new Response(yield* Ref.get(screenshotBody)));
       }
       if (request.url.endsWith("/shutdown")) {
         shutDown = true;
@@ -217,6 +237,7 @@ export const fixture = Effect.fn("fixture")(function* (
     settings,
     devices,
     encoderResult,
+    screenshotBody,
     discoveryErrors,
     androidAvailable,
     endDevice,

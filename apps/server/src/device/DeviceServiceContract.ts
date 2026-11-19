@@ -95,4 +95,5 @@ export class DeviceService extends Context.Service<
     /** Ends the thread's device sessions and their agent-device sessions; devices keep running. */
     readonly releaseThread: (threadId: ThreadId) => Effect.Effect<void, DeviceError>;
   }
+  // @effect-diagnostics-next-line deterministicKeys:off -- Preserve the service key across the move.
 >()("goat/device/DeviceService") {}

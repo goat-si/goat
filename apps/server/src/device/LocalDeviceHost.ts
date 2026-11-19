@@ -111,9 +111,7 @@ const platformReason = Effect.fn("LocalDeviceHost.platformReason")(function* (
   }
   const sdk = yield* androidSdk;
   if (!sdk.root)
-    return "Android SDK was not found. Install it with Android Studio or set ANDROID_HOME to your SDK directory.";
-  if (!sdk.adb)
-    return `Android SDK Platform-Tools are missing from ${sdk.root}. Install them in Android Studio's SDK Manager.`;
+    return "Android SDK Platform-Tools were not found. Install them with Android Studio or set ANDROID_HOME to your SDK directory.";
   if (!sdk.emulator)
     return `Android Emulator is missing from ${sdk.root}. Install it in Android Studio's SDK Manager.`;
   if (!sdk.avdmanager) {
@@ -131,7 +129,6 @@ const androidSdk = Effect.gen(function* () {
   const platform = yield* HostProcess.Platform;
   const windows = platform === "win32";
   const home = environment.HOME ?? environment.USERPROFILE ?? "";
-  const explicit = environment.ANDROID_HOME?.trim() || environment.ANDROID_SDK_ROOT?.trim();
   const exists = (file: string) => fs.exists(file).pipe(Effect.orElseSucceed(() => false));
   const adbBinary = windows ? "adb.exe" : "adb";
   const avdmanagerBinary = windows ? "avdmanager.bat" : "avdmanager";
@@ -140,7 +137,7 @@ const androidSdk = Effect.gen(function* () {
     const emulator = yield* exists(
       path.join(root, "emulator", windows ? "emulator.exe" : "emulator"),
     );
-    if (!explicit && !adb && !emulator) return null;
+    if (!adb) return null;
     const avdmanager = yield* exists(
       path.join(root, "cmdline-tools", "latest", "bin", avdmanagerBinary),
     );
@@ -148,23 +145,27 @@ const androidSdk = Effect.gen(function* () {
       !avdmanager && (yield* exists(path.join(root, "tools", "bin", avdmanagerBinary)));
     return { root, adb, emulator, avdmanager, legacyAvdmanager };
   });
-  const candidates = explicit
-    ? [explicit]
-    : [
-        path.join(home, "Library", "Android", "sdk"),
-        path.join(home, "Android", "Sdk"),
-        path.join(
-          environment.LOCALAPPDATA ?? path.join(home, "AppData", "Local"),
-          "Android",
-          "Sdk",
-        ),
-      ];
+  const candidates = [
+    environment.ANDROID_HOME?.trim(),
+    environment.ANDROID_SDK_ROOT?.trim(),
+    path.join(home, "Library", "Android", "sdk"),
+    path.join(home, "Android", "Sdk"),
+    path.join(environment.LOCALAPPDATA ?? path.join(home, "AppData", "Local"), "Android", "Sdk"),
+  ];
+  const skipped: string[] = [];
   for (const root of candidates) {
+    if (!root) continue;
     const sdk = yield* inspect(root);
-    if (sdk) return sdk;
+    if (sdk) {
+      yield* Effect.logInfo(
+        `Android SDK selected: ${root}; skipped: ${skipped.join(", ") || "none"}`,
+      );
+      return sdk;
+    }
+    skipped.push(`${root} (${(yield* exists(root)) ? "no platform-tools" : "missing dir"})`);
   }
   // PATH entries can be slow to stat (network shares), so only consult them after the standard locations miss.
-  if (!explicit) {
+  {
     const searchPath = environment.PATH ?? environment.Path ?? "";
     for (const directory of searchPath.split(windows ? ";" : ":")) {
       if (!directory) continue;
@@ -172,9 +173,15 @@ const androidSdk = Effect.gen(function* () {
       if (!(yield* exists(adb))) continue;
       const resolved = yield* fs.realPath(adb).pipe(Effect.orElseSucceed(() => adb));
       const sdk = yield* inspect(path.dirname(path.dirname(resolved)));
-      if (sdk) return sdk;
+      if (sdk) {
+        yield* Effect.logInfo(
+          `Android SDK selected: ${sdk.root}; skipped: ${skipped.join(", ") || "none"}`,
+        );
+        return sdk;
+      }
     }
   }
+  yield* Effect.logInfo(`Android SDK unavailable; skipped: ${skipped.join(", ") || "none"}`);
   return { root: null, adb: false, emulator: false, avdmanager: false, legacyAvdmanager: false };
 });
 

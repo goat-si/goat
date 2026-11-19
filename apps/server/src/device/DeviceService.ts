@@ -1,3 +1,4 @@
+import { extractPng } from "@goat/shared/png";
 import { withHostStatus } from "./DeviceDiscoveryState.ts";
 import {
   type DeviceCloseInput,
@@ -646,7 +647,16 @@ export const makeWithHosts = Effect.fn("DeviceService.makeWithHosts")(function* 
   const screenshot: DeviceService["Service"]["screenshot"] = Effect.fn("DeviceService.screenshot")(
     function* (input) {
       const { ready, device } = yield* resolveDevice(input.hostId, input.deviceId);
-      return { device, png: yield* ready.devices.screenshot(device) };
+      const bytes = yield* ready.devices.screenshot(device);
+      const png = extractPng(bytes);
+      if (png === undefined) {
+        return yield* new DeviceOperationError({
+          operation: "screenshot",
+          reason: "hub_rejected",
+          cause: `The hub returned ${bytes.length} bytes without a complete PNG.`,
+        });
+      }
+      return { device, png };
     },
   );
 

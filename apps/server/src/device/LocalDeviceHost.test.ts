@@ -288,7 +288,9 @@ describe("AgentDevice startup", () => {
       const fs = yield* FileSystem.FileSystem;
       const root = yield* fs.makeTempDirectoryScoped({ prefix: "goat-device-sdk-" });
       yield* fs.makeDirectory(`${root}/emulator`, { recursive: true });
+      yield* fs.makeDirectory(`${root}/platform-tools`, { recursive: true });
       yield* fs.writeFileString(`${root}/emulator/emulator`, "");
+      yield* fs.writeFileString(`${root}/platform-tools/adb`, "");
       const environment: NodeJS.ProcessEnv = { HOME: root, PATH: "" };
       const { host, runs } = yield* agentFixture(
         (dir) =>

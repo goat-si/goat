@@ -42,7 +42,7 @@ const decodeSimulators = Schema.decodeUnknownEffect(
 );
 export type NativeClientRecord = typeof NativeClientRecord.Type;
 export type NativeClientStatus = "compatible" | "missing" | "unknown" | "stale";
-import { NativeClientError, resolveAdb } from "./lib/mobile-native-adb.ts";
+import { NativeClientError, resolveAdb, androidSdk } from "./lib/mobile-native-adb.ts";
 export { NativeClientError, resolveAdb } from "./lib/mobile-native-adb.ts";
 
 export function clientStatus(
@@ -172,12 +172,14 @@ const command = Effect.fn("nativeClient.command")(function* (
   );
   const log = inherit ? yield* BuildLog : null;
   const spawn = yield* resolveSpawnCommand(program === "adb" ? yield* resolveAdb : program, args);
+  const sdk = yield* androidSdk;
   const child = yield* spawner.spawn(
     ChildProcess.make(spawn.command, spawn.args, {
       shell: spawn.shell,
       cwd: cwd ?? (yield* roots).mobile,
       env: {
         ...environment,
+        ...(sdk ? { ANDROID_HOME: sdk } : {}),
         APP_VARIANT: "development",
         MOBILE_VERSION_POLICY: "appVersion",
         GOAT_IOS_PERSONAL_TEAM: "0",
