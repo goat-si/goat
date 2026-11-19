@@ -1,3 +1,4 @@
+// @effect-diagnostics nodeBuiltinImport:off -- These tests execute bounded POSIX shell submissions.
 import * as NodeChildProcess from "node:child_process";
 import * as HostProcess from "@goat/shared/HostProcess";
 import * as NodeCrypto from "@effect/platform-node/NodeCrypto";
