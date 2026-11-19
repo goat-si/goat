@@ -471,8 +471,9 @@ callable ([toolListing.ts](../../apps/server/src/mcp/toolListing.ts)). Both list
 `available.now` refuses for the caller, except that a profile that does not resolve hides
 nothing, because a client keeps its listing for the session. The server setting
 `agentToolListing` picks the listing of the agents GOAT runs: `full` (every other tool) or `core` (entries whose registry `listing` is `core`); core entries carry
-`_meta["anthropic/alwaysLoad"]` in both, so harnesses that defer tools keep them resident. Every
-tool stays callable by each of its names. The default is `core` (D21), `full` is the rollback for
+`_meta["anthropic/alwaysLoad"]` in both, so harnesses that defer tools keep them resident. The Claude prompt introduces `prompt` entries.
+`tools/list` omits them, and `goat_describe` shows them only to Claude threads.
+Every tool stays callable by each of its names, subject to its normal access checks. The default is `core` (D21), `full` is the rollback for
 a harness that regresses, and a change to the setting or to the goatclaw policy sends
 `notifications/tools/list_changed`.
 [context-budget.ts](../../scripts/agent-surface/context-budget.ts) measures what each harness
@@ -884,9 +885,9 @@ Composed runs add their `evalRunId` to each step. Spans are named
 **Now.** [agent-surface-audit.md](./agent-surface-audit.md) is generated from the
 registries, and goat-ci's check task runs `pnpm agent-surface:check`, so a change that
 moves the registry, a toolkit, or a cited line fails until `pnpm agent-surface:audit`
-regenerates the page. The server serves `/llms.txt`, one line per registry path
-([llms.ts](../../packages/contracts/src/agentSurface/llms.ts)). Without a credential it
-lists every path; with a credential `/mcp` accepts, it drops paths that credential's kind
+regenerates the page. The server serves `/llms.txt`, an index of registry paths
+that omits prompt-only entries ([llms.ts](../../packages/contracts/src/agentSurface/llms.ts)).
+With a credential `/mcp` accepts, it also drops paths that credential's kind
 cannot reach (thread-only, client-only, and writes for a read-only client). Permission
 profiles are still checked only when a tool runs. Tool reference prose is still
 hand-written in
@@ -941,8 +942,8 @@ Windows ([DesktopCliCommand.ts](../../apps/desktop/src/app/DesktopCliCommand.ts)
 [install guide](../user/install.md#the-goat-command)). Bare `goat` runs the
 server; the subcommands are operator tools.
 
-**Now.** `goat describe`, `goat call`, and a `goat <resource> <verb>` command for every
-registry path run before the operator CLI loads
+**Now.** `goat describe`, `goat call`, and generated `goat <resource> <verb>` commands
+run before the operator CLI loads. Prompt-only paths remain available through explicit `goat call`
 ([agentSurfaceCommand.ts](../../apps/server/src/cli/agentSurfaceCommand.ts)). Each sends one
 `goat_call` to the origin's `/mcp`, so a call through the CLI gets the same argument refusal,
 access checks, goatclaw gate, and host routing as a direct one; `--host` is only the call's

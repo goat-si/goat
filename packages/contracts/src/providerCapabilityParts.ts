@@ -76,6 +76,8 @@ export const OrchestrationV2SessionCapabilities = Schema.Struct({
       reason: Schema.optional(Schema.String),
     }),
   ).pipe(Schema.withDecodingDefault(Effect.succeed({ supported: true }))),
+  /** Whether this session controls the lifetime of its native process. */
+  ownsProcess: Schema.optionalKey(Schema.Boolean),
   supportsMultipleProviderThreadsPerSession: Schema.Boolean,
   supportsModelSwitchInSession: Schema.Boolean,
   supportsProviderSwitchingViaHandoff: Schema.Boolean,

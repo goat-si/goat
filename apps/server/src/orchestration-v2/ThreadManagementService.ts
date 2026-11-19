@@ -63,7 +63,7 @@ import { projectedRowEncodedBytes } from "./threadHistoryPaging.ts";
 import * as ProviderSessionManager from "./ProviderSessionManager.ts";
 import * as ThreadCommandExecutor from "./ThreadCommandExecutor.ts";
 import * as WorktreeSendCheck from "./goat/WorktreeSendCheck.ts";
-import { runsInCloud, tearDownForceStoppedRun } from "./ForceStopTeardown.ts";
+import { checkForceStopTarget, tearDownForceStoppedRun } from "./ForceStopTeardown.ts";
 import { DispatchModeLimit, exceededDispatchModeLimit } from "./DispatchModeLimit.ts";
 import { projectTranscriptRowForClient, projectTurnItemForDetail } from "./WireProjection.ts";
 import * as LegacyV1ThreadImporter from "./legacy/LegacyV1ThreadImporter.ts";
@@ -1821,18 +1821,7 @@ const make = Effect.gen(function* () {
                   current === undefined || run.ordinal > current.ordinal ? run : current,
                 undefined,
               );
-          if (input.runId !== undefined && input.runId !== target?.id) {
-            return yield* new OrchestrationV2ForceStopThreadError({
-              threadId: input.threadId,
-              reason: "superseded",
-            });
-          }
-          if (runsInCloud(records, input.threadId)) {
-            return yield* new OrchestrationV2ForceStopThreadError({
-              threadId: input.threadId,
-              reason: "cloud",
-            });
-          }
+          yield* checkForceStopTarget(sessions, input, records, target);
           if (recheck !== undefined) yield* recheck(target);
           // Shared scopes are never tracked per thread, so this only kills the thread's own agent.
           const killed = yield* agentScope.kill(input.threadId);

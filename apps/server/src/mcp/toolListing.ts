@@ -1,3 +1,4 @@
+import { isDiscoverableOutsidePrompt } from "@goat/contracts/agentSurface";
 import {
   AGENT_TOOL_LISTING_HEADER,
   AGENT_TOOL_LISTING_META_KEY,
@@ -72,6 +73,7 @@ const listedTools = (
     if (!isRecord(tool) || typeof tool.name !== "string") return [tool];
     const entry = resolveAgentSurfaceEntry(tool.name);
     if (entry === undefined) return [tool];
+    if (!isDiscoverableOutsidePrompt(entry)) return [];
     if (!availability(entry, scope, true, profile, listing.host ?? {}).now) return [];
     const tier = "listing" in entry ? entry.listing : undefined;
     const visible =

@@ -274,4 +274,58 @@ export const replayCases: ReadonlyArray<ReplayCase> = [
     prompt: "I'm heading out for a bit. Tell me what failed when it's done.",
     expect: { maxCalls: { "background.wait": 1, Bash: 3 }, notCalls: ["ScheduleWakeup"] },
   },
+  {
+    id: "draft-before-question-sent-in-full",
+    upstreamId: "draft-before-question-sent-in-full",
+    harness: "claude",
+    role: "top",
+    experience: "Claude may summarize a full draft that precedes a tool call.",
+    priorTurns: [],
+    prompt:
+      "Draft a reply thanking Dana for the new renewal price and asking if we can move the renewal to January 15. Sign it Morgan. Show me the whole draft, then use a question card to ask whether to send it as written or shorten it.",
+    expect: {
+      calls: [{ tool: "message.show", args: { message: "~Morgan" } }, { tool: "AskUserQuestion" }],
+      order: ["message.show", "AskUserQuestion"],
+    },
+  },
+  {
+    id: "control-draft-as-final-reply",
+    upstreamId: "control-draft-as-final-reply",
+    harness: "claude",
+    role: "top",
+    experience: "A draft that ends the turn can go directly in the final reply.",
+    priorTurns: [],
+    prompt: "Draft a full reply thanking Dana for the new renewal price. Sign it Morgan.",
+    expect: { notCalls: ["message.show"], textMust: ["Morgan"] },
+  },
+  {
+    id: "control-progress-updates-stay-text",
+    upstreamId: "control-progress-updates-stay-text",
+    harness: "claude",
+    role: "top",
+    experience: "Ordinary work updates stay compact.",
+    priorTurns: [],
+    prompt: "A renewal-price test in src/price.test.ts fails. Find the cause and fix it.",
+    expect: { notCalls: ["message.show"] },
+  },
+  {
+    id: "answer-before-bookkeeping-call",
+    upstreamId: "answer-before-bookkeeping-call",
+    harness: "claude",
+    role: "top",
+    experience: "A bookkeeping call can turn preceding answer text into a summary.",
+    priorTurns: [
+      {
+        role: "user",
+        text: "The dev server listens on port 4817 by default. Set PORT to choose another port.",
+      },
+    ],
+    prompt:
+      "Which port does the dev server use and how do I change it? Run scripts/log-question.sh port to record that I asked.",
+    expect: {
+      calls: [{ tool: "Bash", args: { command: "~log-question.sh" } }],
+      notCalls: ["message.show"],
+      textMust: ["4817", "PORT"],
+    },
+  },
 ];

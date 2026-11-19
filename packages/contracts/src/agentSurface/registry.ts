@@ -18,6 +18,7 @@ import { htmlEntries } from "./entries/html.ts";
 import { hubEntries } from "./entries/hub.ts";
 import { lifecycleEntries } from "./entries/lifecycle.ts";
 import { memoryEntries } from "./entries/memory.ts";
+import { messageEntries } from "./entries/message.ts";
 import { noteEntries } from "./entries/note.ts";
 import { operationEntries } from "./entries/operation.ts";
 import { originEntries } from "./entries/origin.ts";
@@ -45,6 +46,7 @@ import { workflowEntries } from "./entries/workflow.ts";
 import { worktreeEntries } from "./entries/worktree.ts";
 import { workspaceEntries } from "./entries/workspace.ts";
 import { terminalEntries } from "./entries/terminal.ts";
+import type { AgentSurfaceEntry } from "./types.ts";
 
 export type {
   AgentSurfaceCapability,
@@ -76,6 +78,7 @@ export const agentSurfaceRegistry = {
   ...fallbackChainEntries,
   ...htmlEntries,
   ...memoryEntries,
+  ...messageEntries,
   ...providerEntries,
   ...taskEntries,
   ...reviewFindingsEntries,
@@ -106,6 +109,9 @@ export const agentSurfaceRegistry = {
 
 export type AgentSurfacePath = keyof typeof agentSurfaceRegistry;
 export type AgentSurfaceRegistryEntry = (typeof agentSurfaceRegistry)[AgentSurfacePath];
+
+export const isDiscoverableOutsidePrompt = (entry: Pick<AgentSurfaceEntry, "name" | "listing">) =>
+  entry.listing !== "prompt";
 
 export {
   SETTINGS_ACCESS,

@@ -70,7 +70,18 @@ import {
   compactWorkEntryText,
   WORK_LOG_LABEL_MAX_LENGTH,
 } from "./workEntryRowLabel";
-import { htmlRenderFromToolItem, mcpAppFromToolItem } from "@goat/shared/toolOutput";
+import {
+  htmlRenderFromToolItem,
+  mcpAppFromToolItem,
+  sentMessageFromToolItem,
+} from "@goat/shared/toolOutput";
+import {
+  setsEqual,
+  checkpointSummariesEqual,
+  mapsEqual,
+  setMapsEqual,
+  firstChangedIndex,
+} from "./threadFeedCacheEquality";
 import * as DateTime from "effect/DateTime";
 import { groupAdjacentActivities } from "./threadActivityGroups";
 import {
@@ -666,7 +677,10 @@ function feedEntryFoldRunId(entry: ThreadFeedEntry, runlessKey: RunId | null): R
   if (entry.type === "message") {
     return entry.message.role === "assistant" ? (entry.message.runId ?? runlessKey) : null;
   }
-  return entry.type === "activity-group" || entry.type === "html-render" || entry.type === "mcp-app"
+  return entry.type === "activity-group" ||
+    entry.type === "html-render" ||
+    entry.type === "sent-message" ||
+    entry.type === "mcp-app"
     ? (entry.runId ?? runlessKey)
     : null;
 }
@@ -780,6 +794,7 @@ function deriveThreadFeedRunFolds(
             entry.id !== terminalAssistantId &&
             !(entry.type === "message" && retainedAnswerIds.has(entry.message.id)) &&
             entry.type !== "html-render" &&
+            entry.type !== "sent-message" &&
             entry.type !== "mcp-app" &&
             entry.id !== visibleCompactionId &&
             !(
@@ -1635,64 +1650,6 @@ export function createThreadFeedCache(): ThreadFeedCache {
   return { feedBuild: null, presentation: null };
 }
 
-function setsEqual<T>(left: ReadonlySet<T>, right: ReadonlySet<T>): boolean {
-  if (left.size !== right.size) return false;
-  for (const value of left) if (!right.has(value)) return false;
-  return true;
-}
-
-// Summaries are re-derived whenever messages change, including streamed text,
-// so a new array often holds the same checkpoints.
-function checkpointSummariesEqual(
-  left: ReadonlyArray<ThreadCheckpointSummary> | undefined,
-  right: ReadonlyArray<ThreadCheckpointSummary> | undefined,
-): boolean {
-  if (left === right) return true;
-  if (left === undefined || right === undefined || left.length !== right.length) return false;
-  return left.every((summary, index) => {
-    const other = right[index]!;
-    return (
-      summary.checkpointId === other.checkpointId &&
-      summary.scopeId === other.scopeId &&
-      summary.runId === other.runId &&
-      summary.checkpointTurnCount === other.checkpointTurnCount &&
-      summary.checkpointRef === other.checkpointRef &&
-      summary.completedAt === other.completedAt &&
-      summary.status === other.status &&
-      summary.files === other.files &&
-      summary.assistantMessageId === other.assistantMessageId
-    );
-  });
-}
-
-function mapsEqual<K, V>(left: ReadonlyMap<K, V>, right: ReadonlyMap<K, V>): boolean {
-  if (left.size !== right.size) return false;
-  for (const [key, value] of left) {
-    if (!right.has(key) || right.get(key) !== value) return false;
-  }
-  return true;
-}
-
-function setMapsEqual<K, V>(
-  left: ReadonlyMap<K, ReadonlySet<V>>,
-  right: ReadonlyMap<K, ReadonlySet<V>>,
-): boolean {
-  if (left.size !== right.size) return false;
-  for (const [key, values] of left) {
-    const other = right.get(key);
-    if (other === undefined || !setsEqual(values, other)) return false;
-  }
-  return true;
-}
-
-/** Index of the first entry that differs, or the shorter length when one extends the other. */
-function firstChangedIndex<T>(previous: ReadonlyArray<T>, next: ReadonlyArray<T>): number {
-  const limit = Math.min(previous.length, next.length);
-  let index = 0;
-  while (index < limit && previous[index] === next[index]) index += 1;
-  return index;
-}
-
 export function buildThreadFeed(
   visibleTurnItems: ReadonlyArray<OrchestrationV2ProjectedTurnItem>,
   options?: {
@@ -1803,6 +1760,20 @@ export function buildThreadFeed(
         createdAt,
         runId: item.runId,
         render,
+      };
+      projectedEntriesCache.set(row, { attemptId, entries: [entry] });
+      entries.push(entry);
+      entryRows.push(index);
+      continue;
+    }
+    const sentMessage = item.type === "dynamic_tool" ? sentMessageFromToolItem(item) : undefined;
+    if (sentMessage !== undefined) {
+      const entry: RawThreadFeedEntry = {
+        type: "sent-message",
+        id: `sent-message:${row.visibility}:${row.sourceThreadId}:${row.sourceItemId}`,
+        createdAt,
+        runId: item.runId,
+        text: sentMessage,
       };
       projectedEntriesCache.set(row, { attemptId, entries: [entry] });
       entries.push(entry);

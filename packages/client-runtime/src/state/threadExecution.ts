@@ -552,7 +552,7 @@ const BACKGROUND_WORK_KINDS: Record<
 };
 
 export interface RunStopPresentation {
-  /** `unresponsive`: the provider did not confirm the stop in time, so Force stop is offered. */
+  /** `unresponsive` means the provider did not confirm the stop in time. */
   readonly state: "stopping" | "unresponsive";
   readonly runId: ThreadStructure["runs"][number]["id"];
   readonly requestedAt: string;
@@ -560,6 +560,7 @@ export interface RunStopPresentation {
   readonly background: boolean;
   /** A vendor-run agent: only its provider can stop it, so Force stop is never offered. */
   readonly cloud: boolean;
+  readonly forceStopSupported: boolean;
 }
 
 /** What stopping a held turn does besides ending it; shown before a person confirms. */
@@ -612,7 +613,8 @@ export function presentRunStartHold(
  * already ended, only an unanswered Stop of its background work counts.
  */
 export function presentRunStop(
-  projection: Pick<ThreadStructure, "runs" | "turnItems" | "providerThreads">,
+  projection: Pick<ThreadStructure, "runs" | "turnItems" | "providerThreads"> &
+    Partial<Pick<ThreadStructure, "providerSessions">>,
 ): RunStopPresentation | null {
   let active: ThreadStructure["runs"][number] | null = null;
   let latest: ThreadStructure["runs"][number] | null = null;
@@ -638,14 +640,26 @@ export function presentRunStop(
   }
   if (request === undefined || (active === null && request.unresponsiveAt === undefined))
     return null;
+  const providerThread = projection.providerThreads.find(
+    (thread) => thread.id === run.providerThreadId,
+  );
+  const cloud = providerThread?.cloudTask !== undefined;
+  const forceStopSupported =
+    !cloud &&
+    (providerThread?.driver !== "opencode" ||
+      projection.providerSessions?.some(
+        (session) =>
+          session.id === providerThread.providerSessionId &&
+          session.status !== "stopped" &&
+          session.capabilities.sessions.ownsProcess === true,
+      ) === true);
   return {
     state: request.unresponsiveAt === undefined ? "stopping" : "unresponsive",
     runId: run.id,
     requestedAt: DateTime.formatIso(request.startedAt ?? request.updatedAt),
     background: active === null,
-    cloud: projection.providerThreads.some(
-      (thread) => thread.id === run.providerThreadId && thread.cloudTask !== undefined,
-    ),
+    cloud,
+    forceStopSupported,
   };
 }
 

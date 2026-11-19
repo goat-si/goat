@@ -1,5 +1,6 @@
 import type { Event as OpenCodeEvent } from "@opencode-ai/sdk/v2";
 import type { MessageId, OrchestrationV2ProviderThread } from "@goat/contracts";
+import type { ProviderAdapterInterruptTimeoutError } from "@goat/provider-core/server/ProviderAdapter";
 import type { ProviderContinuationRequest } from "@goat/provider-core/server/ProviderContinuationRequests";
 import * as Deferred from "effect/Deferred";
 import * as Effect from "effect/Effect";
@@ -31,6 +32,11 @@ interface BackgroundTurn {
   offered: boolean;
   cancelling: boolean;
 }
+
+type ResolveRootStop<E> = (
+  abort: Effect.Effect<unknown, E>,
+  isSettled: () => boolean,
+) => Effect.Effect<unknown, E | ProviderAdapterInterruptTimeoutError>;
 
 export function openCodeWorkSessionId(event: OpenCodeEvent): string | undefined {
   switch (event.type) {
@@ -70,7 +76,7 @@ export function makeOpenCodeBackgroundTurns<
   readonly abortRoot: (state: State) => Effect.Effect<unknown, RootError>;
   readonly cleanup: (
     state: State,
-    rootAbort: Effect.Effect<unknown, RootError>,
+    rootAbort: Effect.Effect<unknown, RootError | ProviderAdapterInterruptTimeoutError>,
   ) => Effect.Effect<void, CleanupError>;
   readonly breakSession: (detail: string) => Effect.Effect<void>;
 }) {
@@ -90,7 +96,11 @@ export function makeOpenCodeBackgroundTurns<
   });
 
   const cancel = Effect.fn("OpenCode.cancelBackgroundTurn")(
-    function* (state: State, wake: BackgroundTurn) {
+    function* (
+      state: State,
+      wake: BackgroundTurn,
+      resolveRootStop: ResolveRootStop<RootError> | undefined,
+    ) {
       if (options.isClosed() || held.get(state) !== wake) return;
       wake.cancelling = true;
       const admitted = yield* Deferred.await(wake.admission).pipe(
@@ -106,7 +116,8 @@ export function makeOpenCodeBackgroundTurns<
             ),
           )
         : Effect.void;
-      yield* options.cleanup(state, rootAbort).pipe(
+      const rootStop = resolveRootStop?.(rootAbort, () => Deferred.isDoneUnsafe(wake.settled));
+      yield* options.cleanup(state, rootStop ?? rootAbort).pipe(
         Effect.tapError(() =>
           Effect.gen(function* () {
             if (rootAbortFailed && !(yield* Deferred.isDone(wake.settled))) {
@@ -118,7 +129,7 @@ export function makeOpenCodeBackgroundTurns<
         ),
       );
     },
-    (effect, state, wake) => effect.pipe(Effect.ensuring(discard(state, wake))),
+    (effect, state, wake, _resolveRootStop) => effect.pipe(Effect.ensuring(discard(state, wake))),
   );
 
   const offer = (
@@ -127,7 +138,7 @@ export function makeOpenCodeBackgroundTurns<
     threadId: NonNullable<OrchestrationV2ProviderThread["appThreadId"]>,
   ) => {
     const cancelIfCurrent = () =>
-      lifecycle.withPermit(cancel(state, wake)).pipe(Effect.ignore({ log: true }));
+      lifecycle.withPermit(cancel(state, wake, undefined)).pipe(Effect.ignore({ log: true }));
     return options.offer({
       threadId,
       providerThreadId: state.providerThread.id,
@@ -259,16 +270,24 @@ export function makeOpenCodeBackgroundTurns<
     take,
     awaitAdmission,
     close: () => Effect.forEach(held, ([state, wake]) => discard(state, wake), { discard: true }),
-    stop: Effect.fn("OpenCode.stopBackgroundTurn")(function* (state: State) {
+    stop: Effect.fn("OpenCode.stopBackgroundTurn")(function* (
+      state: State,
+      resolveRootStop: ResolveRootStop<RootError>,
+    ) {
       const wake = held.get(state);
-      yield* wake === undefined ? options.cleanup(state, Effect.void) : cancel(state, wake);
+      yield* wake === undefined
+        ? options.cleanup(
+            state,
+            resolveRootStop(Effect.void, () => true),
+          )
+        : cancel(state, wake, resolveRootStop);
     }),
     stopIfCurrent: (state: State, messageId: MessageId) =>
       lifecycle.withPermit(
         Effect.suspend(() => {
           const wake = held.get(state);
           return wake?.messageId === messageId
-            ? cancel(state, wake).pipe(Effect.ignore({ log: true }))
+            ? cancel(state, wake, undefined).pipe(Effect.ignore({ log: true }))
             : Effect.void;
         }),
       ),

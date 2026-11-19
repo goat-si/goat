@@ -75,7 +75,7 @@ describe("Claude approval of GOAT tools", () => {
     const memory = { read: true, write: true, source: true };
     for (const entry of Object.values(agentSurfaceRegistry)) {
       const tool = listedToolName(entry);
-      if (tool === "goat_background_wait") continue;
+      if (tool === "goat_background_wait" || tool === "goat_message_show") continue;
       for (const [toolName, toolInput] of [
         [`mcp__goat__${tool}`, {}],
         [GOAT_CALL, { path: tool, args: {} }],
@@ -162,4 +162,21 @@ describe("Claude approval of GOAT tools", () => {
       expect(called, `${tool} ${readOnlySandbox} through goat_call`).toBe(expected);
     }
   });
+});
+
+it("allows Claude to show a message throughout Plan mode and in a read-only sandbox", () => {
+  for (const readOnlySandbox of [true, false]) {
+    expect(decide("goat_message_show", readOnlySandbox)).toEqual({
+      direct: "allow",
+      called: "allow",
+    });
+    expect(
+      claudeGoatToolDecision({
+        toolName: GOAT_CALL,
+        toolInput: { path: "message.show", args: { message: "Draft" } },
+        readOnlySandbox,
+        memory: undefined,
+      }),
+    ).toBe("allow");
+  }
 });
