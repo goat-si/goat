@@ -100,23 +100,23 @@ export interface SettingsSearchAvailability {
 
 export const SETTINGS_SECTION_LABELS: Readonly<Record<SettingsPath, string>> = {
   "/settings/diagnostics": msg("Diagnostics"),
-  "/settings/projects": "Project",
+  "/settings/projects": msg("Project"),
   "/settings/general": msg("General"),
   "/settings/appearance": msg("Appearance"),
   "/settings/keybindings": msg("Keybindings"),
   "/settings/snap-shot": msg("SnapShots"),
   "/settings/providers": msg("Providers"),
-  "/settings/memory": "Memory",
-  "/settings/integrations": "Integrations",
+  "/settings/memory": msg("Memory"),
+  "/settings/integrations": msg("Integrations"),
   "/settings/goat-bot": "GOAT Bot",
-  "/settings/decision-inbox": "Decision Inbox",
-  "/settings/hub": "Hub",
+  "/settings/decision-inbox": msg("Decision Inbox"),
+  "/settings/hub": msg("Hub"),
   "/settings/scheduled-tasks": msg("Scheduled tasks"),
   "/settings/source-control": msg("Source control"),
-  "/settings/storage": "Storage",
+  "/settings/storage": msg("Storage"),
   "/settings/connections": msg("Connections"),
-  "/settings/beta": "Beta",
-  "/settings/archived": "Archived Threads",
+  "/settings/beta": msg("Beta"),
+  "/settings/archived": msg("Archived Threads"),
 };
 
 export function keybindingSearchAnchorId<Command extends KeybindingCommand>(command: Command) {

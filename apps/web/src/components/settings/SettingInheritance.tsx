@@ -1,3 +1,4 @@
+import { useGT } from "gt-react";
 import {
   GOAT_PROJECT_FILE_NAME,
   DEFAULT_SERVER_SETTINGS,
@@ -185,13 +186,17 @@ export function SettingInheritance({
   overridingProjects?: readonly SettingOverridingProject[];
   onClearOverrides?: (entries: readonly ProjectOverrideEntry[]) => void;
 }) {
+  const gt = useGT();
   const scopeContext = useOptionalSettingsScope();
   const key = keys[0];
   if (!key || targets.length === 0) return null;
   const hasMultipleEnvironments = new Set(targets.map((target) => target.environmentId)).size > 1;
   const overrideSummary =
     overridingProjects.length > 0
-      ? `${summary} · ${overridingProjects.length} project ${overridingProjects.length === 1 ? "override" : "overrides"}`
+      ? gt("{summary} · {count, plural, one {# project override} other {# project overrides}}", {
+          summary,
+          count: overridingProjects.length,
+        })
       : summary;
   const chains = targets.flatMap((target) => {
     const environment = environments.find(
@@ -253,7 +258,9 @@ export function SettingInheritance({
                 <Button
                   size="icon-micro"
                   variant="ghost-muted"
-                  aria-label={`${overrideSummary}. Show where this value comes from`}
+                  aria-label={gt("{summary}. Show where this value comes from", {
+                    summary: overrideSummary,
+                  })}
                 />
               }
             />
@@ -291,7 +298,11 @@ export function SettingInheritance({
                         layer.effective ? "font-medium text-foreground" : "text-muted-foreground",
                       )}
                     >
-                      {layer.key === "environment" ? "Environment" : layer.label}
+                      {layer.key === "environment"
+                        ? gt("Environment")
+                        : layer.key === "t3.json"
+                          ? layer.label
+                          : gt(layer.label)}
                     </span>
                     <span
                       className={cn(
@@ -303,7 +314,9 @@ export function SettingInheritance({
                             : "text-muted-foreground/60",
                       )}
                     >
-                      <span className="max-w-32 truncate">{layer.value}</span>
+                      <span className="max-w-32 truncate">
+                        {layer.set ? layer.value : gt("Inherits")}
+                      </span>
                       {layer.effective ? (
                         <CheckIcon aria-hidden className="size-3.5 shrink-0 text-primary" />
                       ) : (
@@ -344,8 +357,10 @@ export function SettingInheritance({
                           </span>
                           <span className="text-xs text-muted-foreground">
                             {winningLayer?.key === "environment"
-                              ? "Environment"
-                              : winningLayer?.label}
+                              ? gt("Environment")
+                              : winningLayer?.key === "t3.json"
+                                ? winningLayer.label
+                                : winningLayer && gt(winningLayer.label)}
                           </span>
                           <ChevronRightIcon
                             aria-hidden
@@ -378,7 +393,7 @@ export function SettingInheritance({
                     {chain}
                     {hasMultipleEnvironments ? (
                       <p className="px-2 pt-1.5 text-xs text-muted-foreground">
-                        Same on all machines
+                        {gt("Same on all machines")}
                       </p>
                     ) : null}
                   </>
@@ -397,14 +412,14 @@ export function SettingInheritance({
                             aria-hidden
                             className="size-3 [[data-panel-open]_&]:rotate-90"
                           />
-                          Overridden by
+                          {gt("Overridden by")}
                         </CollapsibleTrigger>
                       ) : (
-                        <span>Overridden by</span>
+                        <span>{gt("Overridden by")}</span>
                       )}
                       {onClearOverrides ? (
                         <InlineButton onClick={() => onClearOverrides(overriding)}>
-                          Reset {overriding.length === 1 ? "it" : "all"}
+                          {overriding.length === 1 ? gt("Reset") : gt("Reset all")}
                         </InlineButton>
                       ) : null}
                     </div>

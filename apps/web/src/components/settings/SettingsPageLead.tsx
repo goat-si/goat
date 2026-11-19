@@ -1,3 +1,4 @@
+import { useMessages } from "gt-react";
 import { Link, useLocation } from "@tanstack/react-router";
 import { Fragment } from "react";
 
@@ -11,16 +12,17 @@ function settingsPath(pathname: string): SettingsPath | null {
 
 /** Names the page for assistive tech and says in one line what it holds. */
 export function SettingsPageLead() {
+  const m = useMessages();
   const pathname = useLocation({ select: (location) => location.pathname });
   const path = settingsPath(pathname);
   if (path === null) return null;
   const lead = SETTINGS_PAGE_LEADS[path];
   return (
     <>
-      <h1 className="sr-only">{SETTINGS_SECTION_LABELS[path]}</h1>
+      <h1 className="sr-only">{m(SETTINGS_SECTION_LABELS[path])}</h1>
       {lead ? (
         <p className="max-w-[80ch] px-3 text-sm text-pretty text-muted-foreground sm:px-4">
-          {lead.text}
+          {m(lead.text)}
           {lead.related?.length ? (
             <>
               {" "}
