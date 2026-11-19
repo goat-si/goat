@@ -105,7 +105,19 @@ const makePiFamilyDriver = (
       const httpClient = yield* HttpClient.HttpClient;
       const latestVersions = yield* ProviderLatestVersions.ProviderLatestVersions;
       const host = yield* ProviderHost.ProviderHost;
-      const { cwd } = host.paths;
+      const probeCwd = pathService.join(host.paths.providerStatusCacheDir, "pi-status-probe");
+      if (enabled)
+        yield* fileSystem.makeDirectory(probeCwd, { recursive: true, mode: 0o700 }).pipe(
+          Effect.mapError(
+            (cause) =>
+              new ProviderDriverError({
+                driver: DRIVER_KIND,
+                instanceId,
+                detail: `Failed to create ${profile.displayName} health probe directory.`,
+                cause,
+              }),
+          ),
+        );
       const hostEnvironment = yield* HostProcess.Environment;
       const home = yield* HostProcess.HomeDirectory;
       const currentEnvironment = Effect.suspend(() =>
@@ -203,7 +215,7 @@ const makePiFamilyDriver = (
       );
 
       const checkProvider = currentEnvironment.pipe(
-        Effect.flatMap((env) => checkPiProviderStatus(effectiveConfig, env, cwd, profile)),
+        Effect.flatMap((env) => checkPiProviderStatus(effectiveConfig, env, probeCwd, profile)),
         Effect.map(stampIdentity),
         Effect.provideService(ChildProcessSpawner.ChildProcessSpawner, spawner),
       );
