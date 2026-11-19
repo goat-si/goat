@@ -41,7 +41,13 @@ const nestedCallClient = Effect.gen(function* () {
     protocolVersion,
     clientCapabilities,
     clientInfo,
-    initializePayload: { protocolVersion, capabilities: clientCapabilities, clientInfo },
+    // Effect reads a nested call's request metadata from here, as for a stateful session.
+    initializePayload: {
+      protocolVersion,
+      capabilities: clientCapabilities,
+      clientInfo,
+      ...(requestMetadata === undefined ? {} : { _meta: requestMetadata }),
+    },
     requestMetadata,
     getClient: Effect.die(new Error(`MCP ${protocolVersion} has no server-to-client channel`)),
   });
@@ -119,12 +125,10 @@ export const listedToolCall = (
 };
 
 /**
- * Runs an authenticated /mcp request with a legacy tool name resolved to the listed one, so the
- * call reaches the registered handle with its argument refusal, access checks and analytics.
- * Effect's MCP core guards tools/list and tools/call with one visibility check, so a tool cannot
- * be hidden from the list and still be callable; the name is resolved before the core sees it
- * instead. A protocol that routes on an Mcp-Name header would need that header rewritten too;
- * /mcp serves 2025-06-18, which has none.
+ * Resolves a legacy tool name to the listed one before Effect's MCP core sees the request, since
+ * one visibility check guards both tools/list and tools/call. The call keeps its argument
+ * refusal, access checks and analytics. The Mcp-Name header 2026-07-28 callers send is not
+ * rewritten yet, so a legacy name over that protocol is still refused.
  */
 export const withServedToolNames =
   /* The auth middleware's span already covers each request. */

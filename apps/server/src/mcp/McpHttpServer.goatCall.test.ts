@@ -156,7 +156,7 @@ const callInSession = Effect.fnUntraced(function* (client: HttpClient.HttpClient
 it.effect.each([
   ["2026-07-28", callStateless],
   ["2025-06-18", callInSession],
-] as const)("goat_call dispatches over /mcp with protocol %s", ([, call]) =>
+] as const)("goat_call dispatches over /mcp with protocol %s (#3754)", ([, call]) =>
   Effect.scoped(
     Effect.gen(function* () {
       yield* HttpRouter.serve(layerServer, { disableListenLog: true, disableLogger: true }).pipe(
