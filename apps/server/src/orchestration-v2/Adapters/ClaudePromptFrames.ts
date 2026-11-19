@@ -27,3 +27,24 @@ export function claudeFrameToolUseIds(message: SDKMessage): ReadonlyArray<string
   }
   return ids;
 }
+
+export function claudeEchoedPromptUuids(message: SDKMessage): ReadonlyArray<string> {
+  const uuids = Reflect.get(message, "user_message_uuids");
+  if (Array.isArray(uuids)) {
+    return uuids.filter((uuid): uuid is string => typeof uuid === "string");
+  }
+  const uuid = Reflect.get(message, "user_message_uuid");
+  return typeof uuid === "string" ? [uuid] : [];
+}
+
+export function claudePromptLifecycle(
+  message: SDKMessage,
+): { readonly uuid: string; readonly state: string } | null {
+  const type: unknown = Reflect.get(message, "type");
+  if (type !== "command_lifecycle") return null;
+  const uuid: unknown = Reflect.get(message, "command_uuid");
+  const state: unknown = Reflect.get(message, "state");
+  return typeof uuid === "string" && typeof state === "string" ? { uuid, state } : null;
+}
+
+// Without an echo, non-human origin proves a foreign turn only on CLIs known to echo prompts.
