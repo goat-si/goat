@@ -118,11 +118,15 @@ export function resolveTimelineMinimapVisibleRange(state: {
 
 export function isTimelineMinimapRowVisible(
   rowIndex: number,
+  nextRowIndex: number | undefined,
   visibleStart: number | null | undefined,
   visibleEnd: number | null | undefined,
 ): boolean {
   return (
-    visibleStart != null && visibleEnd != null && rowIndex >= visibleStart && rowIndex <= visibleEnd
+    visibleStart != null &&
+    visibleEnd != null &&
+    rowIndex <= visibleEnd &&
+    (nextRowIndex === undefined || nextRowIndex > visibleStart)
   );
 }
 
