@@ -1,6 +1,7 @@
 import { SourceControlProviderKind } from "@goat/contracts";
 import * as DateTime from "effect/DateTime";
 import * as Effect from "effect/Effect";
+import { GRAPHQL_STATES, type PullRequestListState } from "./gitHubPullRequestStates.ts";
 import * as FileSystem from "effect/FileSystem";
 import {
   GraphQL,
@@ -325,17 +326,6 @@ function repositoryCloneUrls(
 
 const decodeViewerLogin = decodeJsonResult(Schema.Struct({ login: TrimmedNonEmptyString }));
 
-type PullRequestListState = "open" | "closed" | "merged" | "all";
-
-const GRAPHQL_STATES: Record<
-  PullRequestListState,
-  NonNullable<PullRequestsByHead.Variables["states"]>
-> = {
-  open: ["OPEN"],
-  closed: ["CLOSED"],
-  merged: ["MERGED"],
-  all: ["OPEN", "CLOSED", "MERGED"],
-};
 /** 50 lookups keeps responses near 0.5s at the same one-point cost as 100. */
 const HEAD_LOOKUPS_PER_DOCUMENT = 50;
 /** Git reads stagger background lookups by ~300ms; gather batches before spending quota. */
