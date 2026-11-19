@@ -1,3 +1,4 @@
+import { button, input } from "./connectionTestSelectors";
 import * as Cause from "effect/Cause";
 import { isMacPlatform } from "@goat/shared/keybindings";
 import * as Option from "effect/Option";
@@ -193,21 +194,6 @@ afterEach(() => {
   state.sshHosts = null;
   delete (window as { desktopBridge?: unknown }).desktopBridge;
 });
-
-function button(name: string, scope: ParentNode = document) {
-  const match = [...scope.querySelectorAll("button")].find(
-    (element) =>
-      element.getAttribute("aria-label") === name || element.textContent?.trim() === name,
-  );
-  if (!match) throw new Error(`No button named ${name}`);
-  return match;
-}
-
-function input(placeholder: string) {
-  const match = document.querySelector<HTMLInputElement>(`input[placeholder="${placeholder}"]`);
-  if (!match) throw new Error(`No input with placeholder ${placeholder}`);
-  return match;
-}
 
 function type(element: HTMLInputElement, value: string) {
   const setValue = Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, "value")!.set!;
