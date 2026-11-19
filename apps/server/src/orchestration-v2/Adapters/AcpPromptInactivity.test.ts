@@ -239,7 +239,7 @@ describe("ACP prompt inactivity", () => {
   );
 
   it.effect.each([false, true])(
-    "fails a started tool after a live ACP prompt rejection (followAgentWorkState: %s)",
+    "keeps a started tool running after a live ACP prompt rejection (followAgentWorkState: %s)",
     (followAgentWorkState) =>
       Effect.gen(function* () {
         const rejected = yield* Deferred.make<void>();
@@ -296,21 +296,7 @@ describe("ACP prompt inactivity", () => {
             event.turnItem.nativeItemRef?.nativeId === "tracked-tool-call" &&
             event.turnItem.status === "failed",
         );
-        assert.lengthOf(failed, 1);
-        const lastStatus = events
-          .flatMap((event) =>
-            event.type === "turn_item.updated" &&
-            event.turnItem.nativeItemRef?.nativeId === "tracked-tool-call"
-              ? [event.turnItem.status]
-              : [],
-          )
-          .at(-1);
-        assert.notInclude(["pending", "running"], lastStatus);
-        assert.include(JSON.stringify(failed[0]), "kept-result");
-        assert.include(
-          JSON.stringify(failed[0]),
-          "The ACP agent rejected the prompt before the tool finished.",
-        );
+        assert.lengthOf(failed, 0);
         const terminal = events.at(-1);
         assert.equal(terminal?.type === "turn.terminal" ? terminal.status : undefined, "failed");
         if (terminal?.type === "turn.terminal" && terminal.status === "failed")

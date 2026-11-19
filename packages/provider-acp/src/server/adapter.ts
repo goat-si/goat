@@ -6548,13 +6548,14 @@ export const makeAcpAdapterV2 = Effect.fn("makeAcpAdapterV2")(function* (
 
         const terminalizeOpenForegroundTools = Effect.fnUntraced(function* (
           context: ActiveAcpTurn,
-          status: "completed" | "failed" = "completed",
+          status: "completed" | "failed" | "pending_failed" = "completed",
           reason?: string,
         ) {
           for (const tool of context.tools.values()) {
+            if (status === "pending_failed" && tool.status !== "pending") continue;
             if (!acpCompletedTurnShouldTerminalizeTool(tool, { ...flavor, extractSubagentUpdate }))
               continue;
-            yield* emitTool(context, tool, status, reason);
+            yield* emitTool(context, tool, status === "pending_failed" ? "failed" : status, reason);
           }
         });
 
@@ -7571,7 +7572,7 @@ export const makeAcpAdapterV2 = Effect.fn("makeAcpAdapterV2")(function* (
                     if (!interrupted) {
                       yield* terminalizeOpenForegroundTools(
                         context,
-                        "failed",
+                        agentAnswered ? "pending_failed" : "failed",
                         agentAnswered
                           ? "The ACP agent rejected the prompt before the tool finished."
                           : undefined,
