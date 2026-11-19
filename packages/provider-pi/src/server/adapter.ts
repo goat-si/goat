@@ -1,3 +1,4 @@
+import { startPiConnection } from "./startConnection.ts";
 import { makeAsyncSubagents } from "./asyncSubagents.ts";
 import type {
   PiStreamItemState,
@@ -80,12 +81,10 @@ import { makeProviderFailure, makeProviderRetryTurnItem } from "@goat/provider-c
 import { turnScopedSelectionTransition } from "@goat/provider-core/server/selectionTransition";
 import {
   findReportedPiModel,
-  makePiRpcConnection,
   resolvePiModelSlug,
   piRecordField as recordField,
   piRecordNumber as recordNumber,
   piRecordString as recordString,
-  type PiRpcConnection,
   type PiRpcRecord,
 } from "./rpc.ts";
 import {
@@ -194,43 +193,17 @@ export const makePiAdapterV2 = Effect.fn("makePiAdapterV2")(function* (
         screenSkillGatePath: gates.screenSkillPath,
         subagentGatePath: gates.subagentsPath,
       });
-      const scopedLaunch = yield* agentScope.wrap({
-        command: options.settings.binaryPath || profile.defaultBinary,
-        args: launch.args,
-        name: profile.driver,
-        threadId: input.threadId,
-        env: launch.env,
-      });
-      // Finalizers run in reverse order: reap detached work after terminating Pi.
-      const scopeUnit = scopedLaunch.unit;
-      const stopScope =
-        scopeUnit === undefined ? Effect.void : yield* Effect.cached(agentScope.stop(scopeUnit));
-      yield* Effect.addFinalizer(() => stopScope);
-      const connection: PiRpcConnection = yield* makePiRpcConnection({
-        threadId: input.threadId,
-        command: scopedLaunch.command,
-        args: scopedLaunch.args,
+      const connection = yield* startPiConnection({
+        launch,
+        options,
+        profile,
+        input,
         cwd,
-        env: launch.env,
-      }).pipe(
-        Effect.provideService(ChildProcessSpawner.ChildProcessSpawner, spawner),
-        Effect.provideService(AgentScope, agentScope),
-        Effect.mapError(
-          (cause) =>
-            new ProviderAdapter.ProviderAdapterOpenSessionError({
-              driver,
-              providerSessionId: input.providerSessionId,
-              cause,
-            }),
-        ),
-      );
-      // Detached children can keep stdout open after Pi exits.
-      if (scopeUnit !== undefined) {
-        yield* connection.exited.pipe(
-          Effect.matchEffect({ onFailure: () => stopScope, onSuccess: () => stopScope }),
-          Effect.forkIn(scope),
-        );
-      }
+        agentScope,
+        spawner,
+        driver,
+        scope,
+      });
       const now = yield* DateTime.now;
       let sessionEntity: OrchestrationV2ProviderSession = {
         id: input.providerSessionId,
