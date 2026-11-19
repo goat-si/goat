@@ -1,3 +1,7 @@
+import {
+  makeProviderSessionEventSubscription,
+  type ProviderSessionEventSignal,
+} from "./providerSessionEventSubscription.ts";
 import { detachedThreadField, releasedThreadIds } from "./providerSessionReleasedThreads.ts";
 import {
   makeReleasedBackgroundWork,
@@ -161,13 +165,6 @@ interface IdleThreadUnload {
   readonly generation: number;
   readonly fiber: Fiber.Fiber<void, never> | null;
 }
-
-type ProviderSessionEventSignal =
-  | { readonly type: "event"; readonly event: ProviderAdapter.ProviderAdapterV2Event }
-  | {
-      readonly type: "failure";
-      readonly cause: Cause.Cause<ProviderAdapter.ProviderAdapterV2Error>;
-    };
 
 export interface ProviderSessionManagerV2LayerOptions {
   readonly idleTimeoutMs?: number;
@@ -1894,53 +1891,6 @@ export const layerWithOptions = (
           ),
         );
 
-      const makeEventSubscription = Effect.fn("ProviderSessionManager.makeEventSubscription")(
-        function* (
-          subscribers: Ref.Ref<
-            ReadonlyMap<number, Queue.Queue<ProviderSessionEventSignal, Cause.Done>>
-          >,
-        ): Effect.fn.Return<ProviderAdapter.ProviderAdapterV2EventSubscription> {
-          const queue = yield* Queue.unbounded<ProviderSessionEventSignal, Cause.Done>();
-          const subscriberId = yield* Ref.getAndUpdate(nextSubscriberId, (value) => value + 1);
-          yield* Ref.update(subscribers, (current) => {
-            const updated = new Map(current);
-            updated.set(subscriberId, queue);
-            return updated;
-          });
-          const close = Ref.modify(subscribers, (current) => {
-            if (!current.has(subscriberId)) {
-              return [false, current] as const;
-            }
-            const updated = new Map(current);
-            updated.delete(subscriberId);
-            return [true, updated] as const;
-          }).pipe(
-            Effect.flatMap((removed) =>
-              removed
-                ? Queue.clear(queue).pipe(Effect.andThen(Queue.end(queue)), Effect.asVoid)
-                : Effect.void,
-            ),
-            // Detached so the consumer's run failure is not ordered behind release cleanup.
-            Effect.andThen(
-              Effect.suspend(() => {
-                const cleanup = subscriberReleaseCleanup.get(queue);
-                subscriberReleaseCleanup.delete(queue);
-                return cleanup === undefined ? Effect.void : Effect.forkDetach(cleanup);
-              }),
-            ),
-          );
-          const events = Stream.fromQueue(queue).pipe(
-            Stream.mapEffect((signal) =>
-              signal.type === "event"
-                ? Effect.succeed(signal.event)
-                : Effect.failCause(signal.cause),
-            ),
-            Stream.ensuring(close),
-          );
-          return { events, close } satisfies ProviderAdapter.ProviderAdapterV2EventSubscription;
-        },
-      );
-
       const decorateRuntime = (
         runtime: ProviderAdapter.ProviderAdapterV2SessionRuntime,
         eventSubscribers: Ref.Ref<
@@ -1948,7 +1898,11 @@ export const layerWithOptions = (
         >,
       ): ProviderAdapter.ProviderAdapterV2SessionRuntime => {
         const providerSessionId = runtime.providerSessionId;
-        const subscribeEvents = makeEventSubscription(eventSubscribers);
+        const subscribeEvents = makeProviderSessionEventSubscription(
+          eventSubscribers,
+          nextSubscriberId,
+          subscriberReleaseCleanup,
+        );
         const trackTurn = (
           input: Pick<
             ProviderAdapter.ProviderAdapterV2TurnInput,
