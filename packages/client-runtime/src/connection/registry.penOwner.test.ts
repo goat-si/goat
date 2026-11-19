@@ -1,6 +1,7 @@
 import { EnvironmentId } from "@goat/contracts";
 import { expect, it } from "@effect/vitest";
 import * as Effect from "effect/Effect";
+import * as Option from "effect/Option";
 import * as Ref from "effect/Ref";
 import * as SubscriptionRef from "effect/SubscriptionRef";
 import { vi } from "vite-plus/test";
@@ -103,4 +104,46 @@ it.effect("a Pen registration the catalog refuses leaves the trust given to the 
       Effect.scoped,
     );
   }),
+);
+
+it.effect(
+  "a person's routing change made while a refused Pen registration was pending stands",
+  () =>
+    Effect.gen(function* () {
+      const answered = EnvironmentId.make("answered");
+      const bearer = new BearerConnectionTarget({
+        environmentId: answered,
+        label: "Box",
+        connectionId: "bearer-answered",
+      });
+      const bearerProfile = new BearerConnectionProfile({
+        environmentId: answered,
+        label: "Box",
+        connectionId: bearer.connectionId,
+        httpBaseUrl: "https://box.example.test",
+        wsBaseUrl: "wss://box.example.test",
+      });
+      const permissions = yield* makePullRequestRoutingPermissions({
+        read: Effect.succeed([]),
+        write: () => Effect.void,
+      });
+      const listed = { target: bearer, profile: Option.some(bearerProfile), enabled: true };
+      yield* permissions.set(listed, "read-write");
+      const harness = yield* makeHarness([bearer], [bearerProfile], [], {
+        // While the catalog write is pending the person turns routing off; the catalog refuses.
+        beforeRegistrationRegister: () => permissions.set(listed, "off").pipe(Effect.orDie),
+        refuseRegistration: (registration) => registration._tag === "PenConnectionRegistration",
+      });
+      yield* Effect.gen(function* () {
+        const registry = yield* EnvironmentRegistry.EnvironmentRegistry;
+        expect(yield* registry.register(new PenConnectionRegistration(routeOf(answered)))).toBe(
+          false,
+        );
+        expect(yield* permissions.get(listed)).toBe("off");
+      }).pipe(
+        Effect.provide(harness.layer),
+        Effect.provideService(PullRequestRoutingPermissions, permissions),
+        Effect.scoped,
+      );
+    }),
 );

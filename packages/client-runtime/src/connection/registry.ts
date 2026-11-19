@@ -464,7 +464,7 @@ export const make = Effect.gen(function* () {
         }
         const previous = (yield* SubscriptionRef.get(entries)).get(environmentId);
         let entry = registered;
-        let restoreTrust: Effect.Effect<void> = Effect.void;
+        let addressesChanged = false;
         if (previous !== undefined) {
           const existing = connectionRoutes(previous);
           if (
@@ -484,26 +484,20 @@ export const make = Effect.gen(function* () {
               connectionRouteId(existing.target) === connectionRouteId(route.target),
           );
           const next = withRoutes(previous, upsertRoute(routes, route));
-          if (next.addressesChanged) {
-            const prior = yield* pullRequestRoutingPermissions.get(previous);
-            yield* forgetRoutingTrust(environmentId, "register-connection");
-            if (prior !== "off")
-              restoreTrust = pullRequestRoutingPermissions
-                .set(previous, prior)
-                .pipe(
-                  Effect.catch((error) =>
-                    Effect.logWarning("Could not restore pull request routing trust.", { error }),
-                  ),
-                );
-          }
+          addressesChanged = next.addressesChanged;
           entry = next.entry;
         }
         // The newest catalog may refuse it (a Pen route another environment saved meanwhile);
-        // then nothing changed, and the trust given to the saved routes stands.
-        if (!(yield* registrations.register(registration, persistedRoutes(entry)))) {
-          yield* restoreTrust;
-          return false;
-        }
+        // then nothing changed, so the trust given to the saved routes is left alone.
+        if (!(yield* registrations.register(registration, persistedRoutes(entry)))) return false;
+        // Trust is keyed by the saved routes, so a stale one never covers the new routes; a
+        // failed clean-up is logged rather than leaving the catalog and the live list apart.
+        if (addressesChanged)
+          yield* forgetRoutingTrust(environmentId, "register-connection").pipe(
+            Effect.catch((error) =>
+              Effect.logWarning("Could not clear pull request routing trust.", { error }),
+            ),
+          );
         yield* Ref.update(persistedEnvironmentIds, (current) =>
           new Set(current).add(environmentId),
         );
