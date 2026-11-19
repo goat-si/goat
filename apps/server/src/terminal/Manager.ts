@@ -1,3 +1,4 @@
+import { terminateTerminal } from "./terminateTerminal.ts";
 import {
   shouldPublishTerminalMetadataEvent,
   terminalEventToAttachEvent,
@@ -1122,7 +1123,7 @@ export const makeWithOptions = Effect.fn("TerminalManager.makeWithOptions")(func
     });
     yield* Effect.gen(function* () {
       const terminated = yield* Effect.try({
-        try: () => process.kill("SIGTERM"),
+        try: () => terminateTerminal(process, platform),
         catch: (cause) =>
           new TerminalProcessSignalError({
             cause,
