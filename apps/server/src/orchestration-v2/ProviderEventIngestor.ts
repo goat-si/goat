@@ -831,6 +831,15 @@ export const layer: Layer.Layer<
                 Effect.catchTags({
                   ProjectionStoreThreadNotFoundError: () => Effect.succeed(null),
                 }),
+                Effect.mapError(
+                  (cause) =>
+                    new ProviderEventNormalizeError({
+                      providerSessionId: input.providerSessionId,
+                      threadId: input.threadId,
+                      providerEvent: input.event,
+                      cause,
+                    }),
+                ),
               );
               if (current !== null && current.title !== "New thread") {
                 yield* Effect.logDebug("Skipped an automatic provider title for a named thread.");

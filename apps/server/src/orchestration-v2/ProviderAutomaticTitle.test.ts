@@ -14,6 +14,7 @@ import * as ProviderEventIngestor from "./ProviderEventIngestor.ts";
 import * as ThreadCommandExecutor from "./ThreadCommandExecutor.ts";
 
 const instances = Layer.mock(ProviderInstanceRegistry.ProviderInstanceRegistry)({
+  // @effect-diagnostics-next-line effectSucceedWithVoid:off -- The registry returns an optional instance.
   getInstance: () => Effect.succeed(undefined),
 });
 const dependencies = Layer.mergeAll(

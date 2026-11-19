@@ -6694,8 +6694,8 @@ export const makeClaudeAdapterV2 = Effect.fn("makeClaudeAdapterV2")(function* (
 
           const message = input.message;
           if (
-            message.type === "system" &&
-            Reflect.get(message, "subtype") === "session_title_changed"
+            Reflect.get(message as object, "type") === "system" &&
+            Reflect.get(message as object, "subtype") === "session_title_changed"
           ) {
             const title = claudeReportedSessionTitle(message);
             if (title === undefined) {
