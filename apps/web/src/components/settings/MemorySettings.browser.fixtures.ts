@@ -1,4 +1,4 @@
-import { expect } from "vite-plus/test";
+import { expect, vi } from "vite-plus/test";
 import * as Option from "effect/Option";
 import * as Cause from "effect/Cause";
 import {
@@ -12,6 +12,27 @@ import {
   type MemoryHistoryPage,
 } from "@goat/contracts";
 import * as Schema from "effect/Schema";
+import { act } from "react";
+
+export async function checkVirtualizedMemorySelection(
+  container: HTMLElement,
+  click: (label: string) => Promise<void>,
+) {
+  const openButtons = () =>
+    [...container.querySelectorAll("button")].filter((button) => button.textContent === "Open");
+  await vi.waitFor(() => expect(openButtons()).toHaveLength(2));
+  await click("Select memories");
+  expect(container.textContent).toContain("Done selecting");
+  const checkboxes = container.querySelectorAll<HTMLInputElement>(
+    'input[type="checkbox"][aria-label^="Select memory"]',
+  );
+  expect(checkboxes).toHaveLength(2);
+  expect(openButtons()).toHaveLength(0);
+  for (const checkbox of checkboxes) await act(async () => checkbox.click());
+  expect(container.textContent).toContain("Forget 2");
+  expect(container.textContent).toContain("Move to…");
+  expect(container.querySelectorAll('input[aria-label^="Select memory"]:checked')).toHaveLength(2);
+}
 
 export const id = (n: number) => `00000000-0000-4000-8000-${String(n).padStart(12, "0")}`;
 export const item = Schema.decodeSync(MemoryItem)({

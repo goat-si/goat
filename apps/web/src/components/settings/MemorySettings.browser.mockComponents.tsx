@@ -1,21 +1,5 @@
-import type { MemoryItem } from "@goat/contracts";
 import { Children, isValidElement, type ReactNode } from "react";
 
-export const legendListMock = {
-  LegendList: ({
-    data,
-    renderItem,
-  }: {
-    data: MemoryItem[];
-    renderItem: (input: { item: MemoryItem }) => ReactNode;
-  }) => (
-    <div>
-      {data.map((item) => (
-        <div key={item.memoryId}>{renderItem({ item })}</div>
-      ))}
-    </div>
-  ),
-};
 export const scopePickerMock = {
   MemoryScopePicker: ({
     items,
