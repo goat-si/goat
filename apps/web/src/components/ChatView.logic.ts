@@ -1115,7 +1115,9 @@ export function shouldRefocusComposerOnWindowFocus(
   activeElement:
     | (Pick<Element, "tagName" | "closest" | "getAttribute"> & { isContentEditable?: boolean })
     | null,
+  selection: Pick<Selection, "isCollapsed"> | null = null,
 ): boolean {
+  if (selection !== null && !selection.isCollapsed) return false;
   if (activeElement === null || activeElement.tagName === "BODY") return true;
   if (
     activeElement.tagName === "INPUT" ||

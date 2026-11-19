@@ -117,7 +117,9 @@ export function turnItemWorkLogEntry(row: OrchestrationV2ProjectedTurnItem): Tur
           (item.changes !== undefined && item.changes.length > 1
             ? `Changed ${item.changes.length} files`
             : `Changed ${item.fileName}`),
-        changedFiles: item.changes?.map((change) => change.path) ?? [item.fileName],
+        changedFiles: item.changes?.length
+          ? item.changes.map((change) => change.path)
+          : [item.fileName],
         toolTitle: title ?? "File change",
         toolData: item,
       };

@@ -1,4 +1,4 @@
-import { scopeThreadRef } from "@goat/client-runtime/environment";
+import { scopeThreadRef, scopedThreadKey } from "@goat/client-runtime/environment";
 import {
   isAtomCommandInterrupted,
   squashAtomCommandFailure,
@@ -38,6 +38,7 @@ import { ComposerBanner } from "./ComposerBanner";
 import { Button } from "../ui/button";
 import { toastManager } from "../ui/toast";
 import { Tooltip, TooltipPopup, TooltipTrigger } from "../ui/tooltip";
+import { openExpandedImagePreview } from "./ExpandedImageDialog";
 
 export interface EditQueuedRunRequest {
   readonly runId: RunId;
@@ -425,8 +426,32 @@ export function QueuedRunsControl({
                     {item.thumbnails.length > 0 ? (
                       <span className="flex shrink-0 items-center gap-0.5">
                         {item.thumbnails.map((thumbnail) => (
-                          <span
+                          <button
                             key={thumbnail.key}
+                            type="button"
+                            aria-label={`Preview ${thumbnail.name}`}
+                            disabled={!thumbnail.url}
+                            onClick={() => {
+                              const available = item.thumbnails.filter(
+                                (image) => image.url !== null,
+                              );
+                              const index = available.findIndex(
+                                (image) => image.key === thumbnail.key,
+                              );
+                              if (index < 0) return;
+                              openExpandedImagePreview(
+                                scopedThreadKey(
+                                  scopeThreadRef(props.environmentId, props.threadId),
+                                ),
+                                {
+                                  images: available.map((image) => ({
+                                    src: image.url,
+                                    name: image.name,
+                                  })),
+                                  index,
+                                },
+                              );
+                            }}
                             className="size-4 overflow-hidden rounded border border-border/70 bg-background"
                           >
                             {thumbnail.url ? (
@@ -441,7 +466,7 @@ export function QueuedRunsControl({
                                 className="block size-full bg-muted/60"
                               />
                             )}
-                          </span>
+                          </button>
                         ))}
                       </span>
                     ) : null}

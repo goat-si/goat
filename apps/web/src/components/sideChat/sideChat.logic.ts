@@ -1,6 +1,9 @@
 import { isSideChatThread } from "@goat/contracts";
 import type { EnvironmentThreadShell } from "@goat/client-runtime/state/shell";
 import type { ScopedThreadRef } from "@goat/contracts";
+import { scopeThreadRef, scopedThreadKey } from "@goat/client-runtime/environment";
+import { useRightPanelStore } from "../../rightPanelStore";
+import { useSideChatStore } from "./sideChatStore";
 
 export { parseSideChatCommand } from "@goat/client-runtime/state/unsent-question-answers";
 
@@ -11,6 +14,7 @@ export { parseSideChatCommand } from "@goat/client-runtime/state/unsent-question
 export function findSideChatThread(
   shells: ReadonlyArray<EnvironmentThreadShell>,
   parent: ScopedThreadRef,
+  selected?: ScopedThreadRef["threadId"] | null,
 ): EnvironmentThreadShell | null {
   let latest: EnvironmentThreadShell | null = null;
   for (const shell of shells) {
@@ -21,9 +25,21 @@ export function findSideChatThread(
       shell.deletedAt !== null
     )
       continue;
+    if (shell.id === selected) return shell;
     if (latest === null || shell.createdAt > latest.createdAt) latest = shell;
   }
   return latest;
+}
+
+export function resolveSideChatOpen(
+  ref: ScopedThreadRef,
+  thread: { readonly sideChatOf?: ScopedThreadRef["threadId"] | null | undefined } | null,
+): ScopedThreadRef {
+  if (!thread?.sideChatOf) return ref;
+  const parent = scopeThreadRef(ref.environmentId, thread.sideChatOf);
+  useSideChatStore.getState().selectSideChat(scopedThreadKey(parent), ref.threadId);
+  useRightPanelStore.getState().open(parent, "side-chat");
+  return parent;
 }
 
 export function canOpenSideChat(

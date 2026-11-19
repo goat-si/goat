@@ -1,6 +1,7 @@
 import * as DateTime from "effect/DateTime";
 import { describe, expect, it } from "vite-plus/test";
-import { subagentCardDetail, subagentCardElapsed } from "./subagent-card-presentation";
+import { subagentCardDetail } from "@goat/client-runtime/state/subagent-display";
+import { subagentCardElapsed } from "./subagent-card-presentation";
 
 describe("subagent card", () => {
   it.each([

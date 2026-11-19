@@ -178,7 +178,6 @@ import { previewRuntimeTabId } from "../browser/previewRuntimeTabId";
 import { ThreadPreviewMiniPlayer } from "./preview/ThreadPreviewMiniPlayer";
 import { PreviewSessionSync } from "./preview/PreviewSessionSync";
 import { getConfiguredPreviewUrls } from "./preview/previewEmptyStateLogic";
-
 import {
   previewMiniPlayerSourceKey,
   selectThreadPreviewMiniPlayer,
@@ -190,7 +189,7 @@ import { GuestPendingMessages } from "./chat/GuestShareControls";
 import { useDeviceState } from "~/state/device";
 import { BranchToolbar, type BranchToolbarHandle } from "./BranchToolbar";
 import { makeWorkspaceFileDropHandlers } from "./chat/workspaceFileDrop";
-import { isEditableFocused } from "../lib/editableFocus";
+import { isEditableFocused, preventMiddleClickPasteOutsideEditable } from "../lib/editableFocus";
 import { DEFAULT_RESOLVED_KEYBINDINGS } from "@goat/shared/keybindings";
 import { shortcutLabelForCommand } from "../keybindings";
 import { cn, newMessageId } from "~/lib/utils";
@@ -301,7 +300,6 @@ import type { ExpandedImagePreview } from "./chat/ExpandedImagePreview";
 import { ThreadDetailsPanel } from "./chat/ThreadDetailsPanel";
 import { SideChatSurface } from "./sideChat/SideChatSurface";
 import { canOpenSideChat } from "./sideChat/sideChat.logic";
-
 import { NoActiveThreadState } from "./NoActiveThreadState";
 import {
   resolveEffectiveEnvMode,
@@ -329,7 +327,6 @@ import { useThreadLinkedPullRequest } from "./pullRequest/useThreadLinkedPullReq
 import { useProactivePanels } from "../hooks/useProactivePanels";
 import { useIncrementalTimelineEntries } from "../hooks/useIncrementalTimelineEntries";
 import { useRightPanelSurfaceClose } from "../hooks/useRightPanelSurfaceClose";
-
 import type { ComposerBannerStackItem } from "./chat/ComposerBannerStack";
 import { ComposerSurface } from "./chat/ComposerSurface";
 import { resolveThreadSyncPhase } from "../threadSync";
@@ -399,17 +396,14 @@ import { SshThreadHandoffDialog } from "./chat/SshThreadHandoffDialog";
 import { buildThreadRouteParams } from "../threadRoutes";
 import { findSavedSshWorktreeOption } from "../lib/sshWorktree";
 import { isGlobalAgentThread } from "../globalAgentRoute";
-import { savedSshWorktreeOptions } from "../lib/sshWorktree";
-import { sshThreadHandoffBlockReason } from "../lib/sshWorktree";
-import { sshWorktreeSelectionBlockReason } from "../lib/sshWorktree";
-import { sshWorktreeSendBlockReason } from "../lib/sshWorktree";
+import { savedSshWorktreeOptions, sshThreadHandoffBlockReason } from "../lib/sshWorktree";
+import { sshWorktreeSelectionBlockReason, sshWorktreeSendBlockReason } from "../lib/sshWorktree";
 import { subscribeSshThreadHandoff } from "./chat/sshThreadHandoffActionBus";
 import { useBrowserHistoryProject } from "../hooks/useBrowserHistoryProject";
 import { useGlobalAgentStore } from "../globalAgentStore";
 import type { DraftSshDestination } from "../composerDraftStore";
 
 const sshWorkspaceLaunchCommand = vcsEnvironment.sshWorkspaceLaunch;
-
 const EMPTY_PROVIDERS: ServerProvider[] = [];
 const EMPTY_PROVIDER_MODELS: ServerProvider["models"] = [];
 const EMPTY_USAGE_LIMIT_SOURCES: UsageLimitSourceSnapshots = [];
@@ -1493,6 +1487,7 @@ export default function ChatView(props: ChatViewProps) {
   });
   const isWorking =
     phase === "running" ||
+    phase === "connecting" ||
     isSendBusy ||
     isConnecting ||
     isCompacting ||
@@ -2244,7 +2239,8 @@ export default function ChatView(props: ChatViewProps) {
         frame = window.requestAnimationFrame(() => {
           frame = null;
           if (document.querySelector("[data-mcp-app-fullscreen]") !== null) return;
-          if (shouldRefocusComposerOnWindowFocus(document.activeElement)) focusComposerStable();
+          if (shouldRefocusComposerOnWindowFocus(document.activeElement, getSelection()))
+            focusComposerStable();
         });
       });
     };
@@ -3383,6 +3379,7 @@ export default function ChatView(props: ChatViewProps) {
         data-chat-column-maximized-away={rightPanelMaximized ? "true" : "false"}
         data-chat-column
         inert={rightPanelMaximized}
+        onMouseUp={preventMiddleClickPasteOutsideEditable}
       >
         {embedded ? null : (
           <header
@@ -3421,7 +3418,9 @@ export default function ChatView(props: ChatViewProps) {
               parentThreadLink={parentThreadLink}
               launcherThreadLink={launcherThreadLink}
               onOpenThread={onOpenRelatedThreadStable}
-              onOpenScopedThread={onOpenScopedThread}
+              onOpenScopedThread={(ref) =>
+                void onOpenRelatedThreadStable(ref.threadId, { environmentId: ref.environmentId })
+              }
               rightPanelOpen={inlineRightPanelOwnsTitleBar}
               onNewThreadInProject={handleNewThreadInActiveProjectStable}
               {...(threadFindEnabled ? { onFindInThread: openThreadFindStable } : {})}
@@ -4182,6 +4181,7 @@ export default function ChatView(props: ChatViewProps) {
       <RevertConfirmHost
         threadKey={routeThreadKey}
         checkpoints={serverProjection?.checkpoints}
+        worktreePath={activeThread?.worktreePath ?? null}
         onConfirm={onConfirmRevertStable}
       />
       <LinkPullRequestDialogHost />
