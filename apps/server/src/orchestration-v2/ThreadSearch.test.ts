@@ -962,3 +962,29 @@ it.effect("starts snippets a few words before the match so one line shows it", (
     assert.equal(snippet(`${"word ".repeat(20)}needle`, "needle"), "…word word word word needle");
   }),
 );
+
+it.layer(layerTest)("ThreadSearch accent prefix", (it) => {
+  it.effect("finds Latin short prefixes across accents with and without the index", () =>
+    Effect.gen(function* () {
+      const projections = yield* ProjectionStore.ProjectionStoreV2;
+      const search = yield* ThreadSearch.ThreadSearch;
+      const sql = yield* SqlClient.SqlClient;
+      const project = ProjectId.make("project:accent-prefix");
+      const target = ThreadId.make("thread:accent-prefix");
+      yield* createProject(project);
+      yield* Effect.forEach(
+        [thread(target, project), message(target, "accent", "user", "École fermée à Lyon")],
+        projections.apply,
+        { discard: true },
+      );
+      for (const indexed of [true, false]) {
+        if (!indexed) yield* sql`DROP TABLE orchestration_v2_message_search`;
+        assert.deepEqual(
+          (yield* search.search({ query: "fermée ec" })).matches.map((m) => m.threadId),
+          [target],
+        );
+        assert.deepEqual((yield* search.search({ query: "fermée ce" })).matches, []);
+      }
+    }),
+  );
+});
