@@ -26,8 +26,9 @@ const SHARED_INLINE_PREFIXES = ["--config=", "-c=", "--enable=", "--disable=", "
 const filterLaunchArgs = (args: ReadonlyArray<string>, exec: boolean) => {
   const kept: Array<string> = [];
   for (let index = 0; index < args.length; index++) {
-    const arg = args[index];
-    if (arg === undefined) continue;
+    const rawArg = args[index];
+    if (rawArg === undefined) continue;
+    const arg = rawArg.replace(/^(-[cp])(?=[^=])/u, "$1=");
     if (exec && (arg === "--strict-config" || arg === "--oss")) kept.push(arg);
     else if (SHARED_VALUE_FLAGS.has(arg) || (exec && arg === "--local-provider")) {
       const value = args[index + 1];

@@ -52,6 +52,12 @@ it("keeps local provider flags for exec and filters them from mcp list", () => {
 });
 
 describe("codexExecLaunchArgs", () => {
+  it("keeps compact config and profile options", () => {
+    NodeAssert.deepStrictEqual(codexExecLaunchArgs("-pwork -cmodel_provider=ollama"), [
+      "-p=work",
+      "-c=model_provider=ollama",
+    ]);
+  });
   it("drops hook enabling flags while retaining routing arguments", () => {
     NodeAssert.deepStrictEqual(
       codexExecLaunchArgs(
