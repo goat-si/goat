@@ -1,3 +1,5 @@
+import { discoverOtherHomes } from "./AgentSessionOtherDiscovery.ts";
+import { discoverClaudeHomes } from "./AgentSessionClaudeDiscovery.ts";
 import type { AgentSessionRecentThread, AgentSessionSource } from "./AgentSessionScannerTypes.ts";
 export type {
   AgentSessionThreadMessage,
@@ -40,10 +42,7 @@ import {
   isCompressedTranscript,
   makeTranscriptChunkReader,
 } from "./AgentSessionTranscriptChunks.ts";
-import {
-  makeTranscriptDiscovery,
-  type TranscriptCandidate,
-} from "./AgentSessionTranscriptDiscovery.ts";
+import type { TranscriptCandidate } from "./AgentSessionTranscriptDiscovery.ts";
 import * as NodeOS from "node:os";
 
 import {
@@ -492,8 +491,6 @@ export const make = Effect.gen(function* () {
     );
   });
 
-  const { discoverClaudeTranscripts, discoverCodexTranscripts, discoverPiTranscripts } =
-    makeTranscriptDiscovery({ fileSystem, path });
   const transcriptChunkReader = makeTranscriptChunkReader(fileSystem);
 
   const groupTranscriptsByCwd = Effect.fn("AgentSessionScanner.groupTranscriptsByCwd")(function* (
@@ -686,23 +683,23 @@ export const make = Effect.gen(function* () {
       if (source === "codex") collectedCodexCwdByThread = codexState?.cwdByThread ?? null;
 
       const transcriptCandidates: Array<TranscriptCandidate> = [];
-      const baseOperationBudget = Math.floor(
-        MAX_DISCOVERY_OPERATIONS_PER_SOURCE / Math.max(1, homes.length),
-      );
-      const extraOperationBudgets = MAX_DISCOVERY_OPERATIONS_PER_SOURCE % Math.max(1, homes.length);
-      for (const [index, home] of homes.entries()) {
-        const operationBudget = baseOperationBudget + (index < extraOperationBudgets ? 1 : 0);
-        if (operationBudget === 0) {
-          truncated = true;
-          continue;
-        }
-        const discover =
-          source === "claudeAgent"
-            ? discoverClaudeTranscripts
-            : source === "codex"
-              ? discoverCodexTranscripts
-              : discoverPiTranscripts;
-        const discovered = yield* discover(home.homePath, home.providerInstanceId, operationBudget);
+      if (source === "claudeAgent") {
+        const discovered = yield* discoverClaudeHomes({
+          fileSystem,
+          path,
+          homes,
+          operationBudget: MAX_DISCOVERY_OPERATIONS_PER_SOURCE,
+        });
+        truncated ||= discovered.truncated;
+        transcriptCandidates.push(...discovered.transcripts);
+      } else {
+        const discovered = yield* discoverOtherHomes({
+          source,
+          fileSystem,
+          path,
+          homes,
+          operationBudget: MAX_DISCOVERY_OPERATIONS_PER_SOURCE,
+        });
         truncated ||= discovered.truncated;
         transcriptCandidates.push(...discovered.transcripts);
       }
