@@ -777,8 +777,10 @@ export const make = Effect.fn("EnvironmentSupervisor.make")(function* (
         case "DisconnectRequested":
           return false;
         case "RetryRequested":
-          yield* Ref.set(resetRetryState, true);
-          if (next.attemptSequence === sequence) return false;
+          if (next.attemptSequence === sequence) {
+            yield* Ref.set(resetRetryState, true);
+            return false;
+          }
           break;
         case "NetworkChanged":
           if (target._tag === "PrimaryConnectionTarget") {
@@ -1203,7 +1205,8 @@ export const make = Effect.fn("EnvironmentSupervisor.make")(function* (
       for (const next of pendingSignals) {
         handleSignal(next);
       }
-      if (yield* Ref.getAndSet(resetRetryState, false)) {
+      const retryRequested = yield* Ref.getAndSet(resetRetryState, false);
+      if (retryRequested) {
         failureCount = 0;
         latestFailure = null;
         pendingRetry = Option.none();
@@ -1227,7 +1230,8 @@ export const make = Effect.fn("EnvironmentSupervisor.make")(function* (
         handleSignal(yield* waitForSignal);
         continue;
       }
-      if (currentIntent.network === "offline" && !replacing) {
+      const ignoreOffline = replacing || retryRequested;
+      if (currentIntent.network === "offline" && !ignoreOffline) {
         yield* clearLease;
         yield* setState(offlineState(currentIntent, generation, failureCount + 1, latestFailure));
         handleSignal(yield* waitForSignal);
@@ -1242,7 +1246,7 @@ export const make = Effect.fn("EnvironmentSupervisor.make")(function* (
           nextGeneration,
           latestFailure,
           pendingRetry,
-          replacing,
+          ignoreOffline,
           setupContinuation,
         ),
       );
