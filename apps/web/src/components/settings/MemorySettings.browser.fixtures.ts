@@ -17,7 +17,15 @@ import { act } from "react";
 export async function checkVirtualizedMemorySelection(
   container: HTMLElement,
   click: (label: string) => Promise<void>,
+  queries: Map<string, unknown>,
+  supportedScreen: Parameters<typeof exerciseMemoryMove>[0]["supportedScreen"],
 ) {
+  const items = [21, 22].map((n) => ({ ...activeItem, memoryId: id(n) }));
+  queries.set("list", Option.some({ items, projectionWatermark: 1, nextCursor: null }));
+  const { render } = await supportedScreen(false, false, true, {
+    protocolVersion: 1,
+    scopeMoves: true,
+  });
   const openButtons = () =>
     [...container.querySelectorAll("button")].filter((button) => button.textContent === "Open");
   await vi.waitFor(() => expect(openButtons()).toHaveLength(2));
@@ -32,6 +40,12 @@ export async function checkVirtualizedMemorySelection(
   expect(container.textContent).toContain("Forget 2");
   expect(container.textContent).toContain("Move to…");
   expect(container.querySelectorAll('input[aria-label^="Select memory"]:checked')).toHaveLength(2);
+  expect(checkboxes[0]?.closest("[data-test-row]")?.textContent).toContain("Synthetic original");
+  queries.set("list", Option.none());
+  await render();
+  expect(container.textContent).not.toContain("Synthetic original");
+  expect(container.textContent).toContain("Memory 00000021 · Text hidden");
+  expect(container.textContent).toContain("Memory 00000022 · Text hidden");
 }
 
 export const id = (n: number) => `00000000-0000-4000-8000-${String(n).padStart(12, "0")}`;

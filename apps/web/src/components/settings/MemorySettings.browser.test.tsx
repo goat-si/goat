@@ -2650,10 +2650,7 @@ it("shows automatically initialized memory as on and usable without an enable ac
 });
 
 it("switches the virtualized memory rows to checkboxes and enables bulk actions", async () => {
-  const items = [21, 22].map((n) => ({ ...activeItem, memoryId: id(n) }));
-  state.queries.set("list", Option.some({ items, projectionWatermark: 1, nextCursor: null }));
-  await supportedScreen(false, false, true, { protocolVersion: 1, scopeMoves: true });
-  await checkVirtualizedMemorySelection(container, click);
+  await checkVirtualizedMemorySelection(container, click, state.queries, supportedScreen);
 });
 
 it("confirms a memory selection once and reports each result while the conversation filter remains active", async () => {

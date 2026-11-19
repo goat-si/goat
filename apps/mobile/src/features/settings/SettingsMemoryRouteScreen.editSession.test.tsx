@@ -128,6 +128,18 @@ it("shows the conversation picker's unfiltered value before opening the menu", a
   await mountMemoryScreen({ protocolVersion: 1, originFilter: true });
   expect(text()).toContain("Saved from conversation · Any conversation");
 });
+
+it("shows a selected memory's live preview and hides it when the list body expires", async () => {
+  vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
+  await mountMemoryScreen({ protocolVersion: 1, originFilter: true });
+  await view.click("Select memories");
+  await view.click("Select memory 00000002");
+  expect.soft(text()).toContain("Synthetic memory body");
+  expect(text()).toContain("Forget 1");
+  await act(() => vi.advanceTimersByTimeAsync(61_000));
+  expect(text()).not.toContain("Synthetic memory body");
+  expect(text()).toContain("Memory 00000002 · Text hidden");
+});
 const saveButton = () =>
   Array.from(view.container.querySelectorAll("button")).find(
     (button) => button.textContent === "Save memory",
