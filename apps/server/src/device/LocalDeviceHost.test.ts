@@ -54,6 +54,7 @@ const agentFixture = Effect.fn("agentFixture")(function* (
     readonly plainStop?: ProcessRunner.ProcessRunOutput;
     readonly previousDaemon?: typeof LocalDeviceHost.__testing.AgentDeviceDaemonFile.Type;
     readonly onDaemonStop?: () => Effect.Effect<void>;
+    readonly environment?: NodeJS.ProcessEnv;
   } = {},
 ) {
   const fs = yield* FileSystem.FileSystem;
@@ -86,7 +87,10 @@ const agentFixture = Effect.fn("agentFixture")(function* (
         options.net ? Layer.succeed(NetService.NetService, options.net) : NetService.layer,
       ),
     ),
-    Effect.provideService(HostProcess.Environment, { HOME: baseDir, PATH: "" }),
+    Effect.provideService(
+      HostProcess.Environment,
+      options.environment ?? { HOME: baseDir, PATH: "" },
+    ),
     Effect.provideService(HostProcess.IsExecutable, false),
     Effect.provideService(HostProcess.Platform, "darwin"),
     Effect.provideService(
@@ -279,6 +283,34 @@ it.effect("does not replace a hub superseded during replacement retry backoff", 
 );
 
 describe("AgentDevice startup", () => {
+  it.effect("uses the SDK selected after device host creation", () =>
+    Effect.gen(function* () {
+      const fs = yield* FileSystem.FileSystem;
+      const root = yield* fs.makeTempDirectoryScoped({ prefix: "goat-device-sdk-" });
+      yield* fs.makeDirectory(`${root}/emulator`, { recursive: true });
+      yield* fs.writeFileString(`${root}/emulator/emulator`, "");
+      const environment: NodeJS.ProcessEnv = { HOME: root, PATH: "" };
+      const { host, runs } = yield* agentFixture(
+        (dir) =>
+          fs
+            .writeFileString(
+              `${dir}/daemon.json`,
+              JSON.stringify({ httpPort: 12345, token: "token" }),
+            )
+            .pipe(Effect.orDie, Effect.as(processOutput(0))),
+        processOutput(0),
+        undefined,
+        { environment },
+      );
+      environment.ANDROID_HOME = root;
+      const ready = yield* host.ensureAgentReady(() => Effect.void);
+      yield* ready.run("emulator", ["-list-avds"]);
+      expect(runs.find((run) => run.args.includes("-list-avds"))?.command).toBe(
+        `${root}/emulator/emulator`,
+      );
+    }).pipe(Effect.scoped, Effect.provide(NodeServices.layer)),
+  );
+
   it.effect("restarts a cached daemon that no longer answers its health check", () =>
     Effect.gen(function* () {
       const fs = yield* FileSystem.FileSystem;

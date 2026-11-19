@@ -268,8 +268,15 @@ export const make = Effect.fn("LocalDeviceHost.make")(function* () {
   const environment = yield* HostProcess.Environment;
   const workingDirectory = yield* HostProcess.WorkingDirectory;
   const hostPlatform = yield* HostProcess.Platform;
-  const sdk = yield* androidSdk;
-  const hostEnvironment = deviceHostEnvironment(environment, sdk.root, hostPlatform, path);
+  const currentSdk = androidSdk.pipe(
+    Effect.provideService(FileSystem.FileSystem, fs),
+    Effect.provideService(Path.Path, path),
+    Effect.provideService(HostProcess.Environment, environment),
+    Effect.provideService(HostProcess.Platform, hostPlatform),
+  );
+  const currentHostEnvironment = currentSdk.pipe(
+    Effect.map((sdk) => deviceHostEnvironment(environment, sdk.root, hostPlatform, path)),
+  );
   const startLock = yield* Semaphore.make(1);
   const runningRef = yield* Ref.make<RunningHost | null>(null);
   const restartDelayRef = yield* Ref.make(0);
@@ -431,7 +438,7 @@ export const make = Effect.fn("LocalDeviceHost.make")(function* () {
               shell: false,
               stdout: "pipe",
               stderr: "pipe",
-              env: yield* hubEnvironment(hostEnvironment).pipe(
+              env: yield* hubEnvironment(yield* currentHostEnvironment).pipe(
                 Effect.provideService(FileSystem.FileSystem, fs),
                 Effect.provideService(Path.Path, path),
                 Effect.provideService(ProcessRunner.ProcessRunner, runner),
@@ -533,7 +540,7 @@ export const make = Effect.fn("LocalDeviceHost.make")(function* () {
     yield* fs.makeDirectory(stateDir, { recursive: true }).pipe(Effect.ignore);
     const existing = yield* readDaemonFile().pipe(Effect.option);
     const daemonEnvironment: NodeJS.ProcessEnv = {
-      ...hostEnvironment,
+      ...(yield* currentHostEnvironment),
       AGENT_DEVICE_STATE_DIR: stateDir,
       AGENT_DEVICE_DAEMON_SERVER_MODE: "http",
       // Disable the five-minute idle timeout; the server owns shutdown.
@@ -639,20 +646,24 @@ export const make = Effect.fn("LocalDeviceHost.make")(function* () {
     agentTool: { readonly entryPath: string; readonly nodePath: string },
     clean: boolean,
   ) =>
-    runner.run({
-      command: agentTool.nodePath,
-      args: [
-        agentTool.entryPath,
-        "daemon",
-        "stop",
-        ...(clean ? ["--clean"] : []),
-        "--state-dir",
-        agentDeviceStateDir(path, config.stateDir),
-      ],
-      env: { ...hostEnvironment, AGENT_DEVICE_NO_UPDATE_NOTIFIER: "1" },
-      timeout: Duration.seconds(10),
-      timeoutBehavior: "timedOutResult",
-    });
+    currentHostEnvironment.pipe(
+      Effect.flatMap((hostEnvironment) =>
+        runner.run({
+          command: agentTool.nodePath,
+          args: [
+            agentTool.entryPath,
+            "daemon",
+            "stop",
+            ...(clean ? ["--clean"] : []),
+            "--state-dir",
+            agentDeviceStateDir(path, config.stateDir),
+          ],
+          env: { ...hostEnvironment, AGENT_DEVICE_NO_UPDATE_NOTIFIER: "1" },
+          timeout: Duration.seconds(10),
+          timeoutBehavior: "timedOutResult",
+        }),
+      ),
+    );
 
   // A plain stop leaves the daemon's XCTest runners running for reuse; --clean ends them. agent-device
   // refuses --clean for a daemon it cannot prove is its own, so a plain stop still follows.
@@ -679,7 +690,10 @@ export const make = Effect.fn("LocalDeviceHost.make")(function* () {
         Effect.orElseSucceed(() => null),
       );
       if (!entryPath) return;
-      const nodePath = yield* resolveNodeExecutable("Local device support", hostEnvironment).pipe(
+      const nodePath = yield* resolveNodeExecutable(
+        "Local device support",
+        yield* currentHostEnvironment,
+      ).pipe(
         Effect.provideService(FileSystem.FileSystem, fs),
         Effect.provideService(Path.Path, path),
         Effect.provideService(HostProcess.Platform, hostPlatform),
@@ -718,7 +732,10 @@ export const make = Effect.fn("LocalDeviceHost.make")(function* () {
       if (alive) return running;
       yield* Ref.set(runningRef, null);
     }
-    const nodePath = yield* resolveNodeExecutable("Local device support", hostEnvironment).pipe(
+    const nodePath = yield* resolveNodeExecutable(
+      "Local device support",
+      yield* currentHostEnvironment,
+    ).pipe(
       Effect.provideService(FileSystem.FileSystem, fs),
       Effect.provideService(Path.Path, path),
       Effect.provideService(HostProcess.Platform, hostPlatform),
@@ -851,34 +868,35 @@ export const make = Effect.fn("LocalDeviceHost.make")(function* () {
   };
 
   const run: DeviceHost.DeviceHostReady["run"] = (command, args, options) =>
-    runner
-      .run({
-        command:
-          command === "emulator" && sdk.root
-            ? path.join(
-                sdk.root,
-                "emulator",
-                hostPlatform === "win32" ? "emulator.exe" : "emulator",
-              )
-            : command,
-        args,
-        cwd: workingDirectory,
-        env: hostEnvironment,
-        timeout: Duration.millis(options?.timeoutMs ?? 20_000),
-        timeoutBehavior: "timedOutResult",
-        ...(options?.stdin === undefined ? {} : { stdin: options.stdin }),
-        ...(options?.maxOutputBytes === undefined
-          ? {}
-          : { maxOutputBytes: options.maxOutputBytes }),
-      })
-      .pipe(
-        Effect.map((result) => ({
-          stdout: result.stdout,
-          stderr: result.stderr,
-          code: result.timedOut ? 124 : Number(result.code ?? 127),
-        })),
-        Effect.catch((cause) => Effect.succeed({ stdout: "", stderr: String(cause), code: 127 })),
-      );
+    currentSdk.pipe(
+      Effect.flatMap((sdk) =>
+        runner.run({
+          command:
+            command === "emulator" && sdk.root
+              ? path.join(
+                  sdk.root,
+                  "emulator",
+                  hostPlatform === "win32" ? "emulator.exe" : "emulator",
+                )
+              : command,
+          args,
+          cwd: workingDirectory,
+          env: deviceHostEnvironment(environment, sdk.root, hostPlatform, path),
+          timeout: Duration.millis(options?.timeoutMs ?? 20_000),
+          timeoutBehavior: "timedOutResult",
+          ...(options?.stdin === undefined ? {} : { stdin: options.stdin }),
+          ...(options?.maxOutputBytes === undefined
+            ? {}
+            : { maxOutputBytes: options.maxOutputBytes }),
+        }),
+      ),
+      Effect.map((result) => ({
+        stdout: result.stdout,
+        stderr: result.stderr,
+        code: result.timedOut ? 124 : Number(result.code ?? 127),
+      })),
+      Effect.catch((cause) => Effect.succeed({ stdout: "", stderr: String(cause), code: 127 })),
+    );
 
   const toReady = (running: RunningHost): DeviceHost.DeviceHostReady => ({
     hub: { origin: running.hub.origin } satisfies DeviceHost.DeviceHubEndpoint,
