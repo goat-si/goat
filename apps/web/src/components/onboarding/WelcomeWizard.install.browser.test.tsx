@@ -74,7 +74,7 @@ vi.mock(import("../ThreadTerminalDrawer"), async (original) => ({
 }));
 vi.mock(import("../settings/ChatGptWelcomeCoordinator"), async (original) => ({
   ...(await original()),
-  ChatGptWelcomeCoordinator: () => null,
+  ChatGptWelcomeCoordinator: () => <></>,
 }));
 
 import { appAtomRegistry } from "../../rpc/atomRegistry";
