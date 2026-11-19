@@ -66,8 +66,14 @@ export const makeWorktreeShipping = (
     const fetched = yield* git
       .fetchRemoteTrackingBranch({ cwd, remoteName: remote, remoteBranch: branch })
       .pipe(Effect.result);
-    if (fetched._tag === "Failure")
-      return { unknown: `couldn't refresh ${remote}/${branch}, ${UNCONFIRMED}` };
+    if (fetched._tag === "Failure") {
+      const detail = fetched.failure.detail;
+      return {
+        unknown: detail.startsWith("Git found a broken local ref.")
+          ? detail
+          : `couldn't refresh ${remote}/${branch}, ${UNCONFIRMED}`,
+      };
+    }
     return { remote, branch, ref: `refs/remotes/${remote}/${branch}` };
   });
 
