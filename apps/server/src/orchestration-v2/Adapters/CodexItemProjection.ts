@@ -1,3 +1,5 @@
+import type { OrchestrationV2ProviderTurn } from "@goat/contracts";
+import type * as ProviderAdapter from "@goat/provider-core/server/ProviderAdapter";
 import type { OrchestrationV2ExecutionNode, OrchestrationV2TurnItem } from "@goat/contracts";
 import type * as CodexSchema from "effect-codex-app-server/schema";
 
@@ -32,5 +34,23 @@ export function codexItemStatus(status: "inProgress" | "completed" | "failed" | 
         turnItem: "cancelled",
         completed: true,
       };
+  }
+}
+
+export function providerTurnStatusToTerminal(
+  status: OrchestrationV2ProviderTurn["status"],
+): Extract<ProviderAdapter.ProviderAdapterV2Event, { type: "turn.terminal" }>["status"] {
+  switch (status) {
+    case "completed":
+      return "completed";
+    case "interrupted":
+      return "interrupted";
+    case "failed":
+      return "failed";
+    case "cancelled":
+      return "cancelled";
+    case "pending":
+    case "running":
+      return "failed";
   }
 }

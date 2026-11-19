@@ -1,4 +1,4 @@
-import { codexItemStatus, codexUserMessageText } from "./CodexItemProjection.ts";
+import { codexItemStatus, codexUserMessageText, providerTurnStatusToTerminal } from "./CodexItemProjection.ts";
 import { type CodexWebSearchItem, trimText, webSearchPatterns } from "./CodexWebSearch.ts";
 import { parseCodexRetryProgress } from "./CodexRetryProgress.ts";
 import { makeCodexMcpStartup } from "./CodexMcpStartup.ts";
@@ -307,24 +307,6 @@ export function codexTimestamp(seconds: number | null | undefined): DateTime.Utc
   return seconds === null || seconds === undefined
     ? DateTime.nowUnsafe()
     : DateTime.makeUnsafe(seconds * 1000);
-}
-
-function providerTurnStatusToTerminal(
-  status: OrchestrationV2ProviderTurn["status"],
-): Extract<ProviderAdapter.ProviderAdapterV2Event, { type: "turn.terminal" }>["status"] {
-  switch (status) {
-    case "completed":
-      return "completed";
-    case "interrupted":
-      return "interrupted";
-    case "failed":
-      return "failed";
-    case "cancelled":
-      return "cancelled";
-    case "pending":
-    case "running":
-      return "failed";
-  }
 }
 
 /**
