@@ -52,6 +52,15 @@ it("keeps local provider flags for exec and filters them from mcp list", () => {
 });
 
 describe("codexExecLaunchArgs", () => {
+  it("drops hook enabling flags while retaining routing arguments", () => {
+    NodeAssert.deepStrictEqual(
+      codexExecLaunchArgs(
+        "--enable hooks --enable=hooks --enable codex_hooks --enable=codex_hooks --enable foo --disable hooks",
+        ["-c", "model_provider=trusted"],
+      ),
+      ["--enable", "foo", "--disable", "hooks", "-c", "model_provider=trusted"],
+    );
+  });
   it("keeps shared codex flags and omits app-server-only flags", () => {
     NodeAssert.deepStrictEqual(
       codexExecLaunchArgs('--strict-config --enable foo --listen off --config model="gpt 5"'),
