@@ -62,6 +62,34 @@ export function resolveThreadListStatus(thread: ThreadListStatusInput): ThreadLi
   return "ready";
 }
 
+export function hasUnseenRunFailure(thread: {
+  readonly latestRun?: {
+    readonly status: string;
+    readonly completedAt?: string | null;
+    readonly startedAt?: string | null;
+    readonly requestedAt?: string | null;
+  } | null;
+  readonly lastVisitedAt?: string | null | undefined;
+}): boolean {
+  const run = thread.latestRun;
+  if (run?.status !== "failed") return false;
+  if (!thread.lastVisitedAt) return true;
+  const failedAt = Date.parse(run.completedAt ?? run.startedAt ?? run.requestedAt ?? "");
+  const visitedAt = Date.parse(thread.lastVisitedAt);
+  return Number.isNaN(failedAt) || Number.isNaN(visitedAt) || failedAt > visitedAt;
+}
+
+export function resolveThreadListRowStatus(
+  thread: ThreadListStatusInput & Parameters<typeof hasUnseenRunFailure>[0],
+): ThreadListStatus {
+  const status = resolveThreadListStatus(thread);
+  return status === "failed" &&
+    thread.latestRun?.status === "failed" &&
+    !hasUnseenRunFailure(thread)
+    ? "ready"
+    : status;
+}
+
 /** What the window title says the open thread is doing, in the words its announcer uses. */
 export function resolveWindowTitleThreadStatus(thread: ThreadListStatusInput): string | null {
   // A guest waiting doesn't hide that the agent is still working.

@@ -85,7 +85,7 @@ import {
   hasUnseenCompletion,
   resolveSidebarRowAccessibility,
   type SidebarDropVerb,
-  resolveSidebarThreadStatus,
+  resolveSidebarRowStatus,
   resolveThreadLastVisitedAt,
   shouldRecedeSidebarThread,
   isSidebarThreadWoke,
@@ -578,7 +578,10 @@ export const SidebarThreadRow = memo(function SidebarThreadRow(props: SidebarThr
     : null;
 
   const isUnread = hasUnseenCompletion({ ...thread, lastVisitedAt });
-  const status = resolveSidebarThreadStatus(withSidebarChildRequest(thread, props.childAttention));
+  const status = resolveSidebarRowStatus({
+    ...withSidebarChildRequest(thread, props.childAttention),
+    lastVisitedAt,
+  });
   // Wake attention is independent of lifecycle and clears at its visited
   // watermark. A malformed visit cannot silently acknowledge a wake.
   const isWoke = isSidebarThreadWoke(props.wokeAt, lastVisitedAt);

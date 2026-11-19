@@ -1,3 +1,4 @@
+import { resolveThreadListRowStatus } from "@goat/client-runtime/state/thread-list-priority";
 import { ThreadRowMenu } from "./thread-row-menu";
 import { usePendingDraftBranch } from "./use-pending-draft-branch";
 import { copyThreadShell } from "../../lib/copyThreadReference";
@@ -439,7 +440,8 @@ export const ThreadListV2Row = memo(function ThreadListV2Row(props: {
   const selected = props.selected === true;
   const rowAppearance = getThreadListV2RowAppearance(theme, sidebarPane, selected);
 
-  const status = liftedThreadListV2Status(resolveThreadListV2Status(thread), props.lift);
+  const rawStatus = resolveThreadListV2Status(thread);
+  const status = liftedThreadListV2Status(resolveThreadListRowStatus(thread), props.lift);
   const isUnread =
     status === "ready" && (threadHasUnseenCompletion(thread) || props.lift === "unseen");
   const markableUnread = canMarkThreadUnread(thread);
@@ -946,7 +948,7 @@ export const ThreadListV2Row = memo(function ThreadListV2Row(props: {
               : rowAppearance.tertiaryIconTintClassName
           }
         />
-        {(status === "failed" || status === "limited") && thread.runtime?.lastError ? (
+        {(rawStatus === "failed" || rawStatus === "limited") && thread.runtime?.lastError ? (
           <Text
             className={cn(
               "flex-1 text-xs",
