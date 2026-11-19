@@ -808,3 +808,161 @@ describe("queued delivery timing", () => {
     expect(remaining()).toEqual([]);
   });
 });
+
+describe("bounded queued upload retries", () => {
+  it("stops after five failed upload attempts and keeps the queued message visible", async () => {
+    setOperateGrant("secondary", true);
+    vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout", "Date"] });
+    state.cleanups.push(() => vi.useRealTimers());
+    const queued = message();
+    await state.manager.enqueue(queued);
+    state.prepare.mockRejectedValue(new Error("Socket is not connected"));
+    await runDrain();
+    await vi.advanceTimersByTimeAsync(120_000);
+    expect(state.prepare).toHaveBeenCalledTimes(5);
+    expect(remaining()).toEqual([queued]);
+    expect(appAtomRegistry.get(queuedMessageWaitReasonsAtom)[queued.messageId]).toBeDefined();
+    expect(vi.getTimerCount()).toBe(0);
+  });
+
+  it("removes its retry timer when the queued message disappears", async () => {
+    setOperateGrant("secondary", true);
+    vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout", "Date"] });
+    state.cleanups.push(() => vi.useRealTimers());
+    const queued = message();
+    await state.manager.enqueue(queued);
+    state.prepare.mockRejectedValue(new Error("Socket is not connected"));
+    await runDrain();
+    expect(vi.getTimerCount()).toBe(1);
+    await state.manager.remove(queued);
+    expect(vi.getTimerCount()).toBe(0);
+  });
+});
+
+it("manual retry after exhaustion starts another upload and sends after recovery", async () => {
+  const { retryQueuedMessage } = await import("./threadOutboxRetryRequests");
+  setOperateGrant("secondary", true);
+  vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout", "Date"] });
+  state.cleanups.push(() => vi.useRealTimers());
+  const queued = message();
+  await state.manager.enqueue(queued);
+  state.prepare.mockRejectedValue(new Error("Socket is not connected"));
+  await runDrain();
+  await vi.advanceTimersByTimeAsync(120_000);
+  expect(state.prepare).toHaveBeenCalledTimes(5);
+  state.prepare.mockImplementation(async ({ attachments }) => ({
+    status: "ready",
+    attachments: [],
+    draftAttachments: attachments,
+    pendingAttachmentIds: [],
+  }));
+  const settled = Promise.withResolvers<void>();
+  const release = appAtomRegistry.subscribe(dispatchingQueuedMessageIdAtom, (id) => {
+    if (id === null) settled.resolve();
+  });
+  retryQueuedMessage(queued.messageId);
+  await settled.promise.finally(release);
+  expect(state.prepare).toHaveBeenCalledTimes(6);
+  expect(remaining()).toEqual([]);
+});
+
+it("does not recreate a retry timer when an in-flight removed message fails", async () => {
+  setOperateGrant("secondary", true);
+  vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout", "Date"] });
+  state.cleanups.push(() => vi.useRealTimers());
+  const started = Promise.withResolvers<void>();
+  const failed = Promise.withResolvers<never>();
+  const queued = message();
+  await state.manager.enqueue(queued);
+  state.prepare.mockImplementation(() => {
+    started.resolve();
+    return failed.promise;
+  });
+  const delivered = runDrain();
+  await started.promise;
+  await state.manager.remove(queued);
+  failed.reject(new Error("Socket is not connected"));
+  await delivered;
+  expect(vi.getTimerCount()).toBe(0);
+  expect(appAtomRegistry.get(queuedMessageWaitReasonsAtom)[queued.messageId]).toBeUndefined();
+});
+
+it("limits persistent native upload failures to five and permits manual recovery", async () => {
+  const { retryQueuedMessage } = await import("./threadOutboxRetryRequests");
+  setOperateGrant("secondary", true);
+  vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout", "Date"] });
+  state.cleanups.push(() => vi.useRealTimers());
+  const attachment = {
+    id: "file",
+    type: "image" as const,
+    name: "file.png",
+    mimeType: "image/png",
+    sizeBytes: 3,
+    fileUri: "file:///file.png",
+    previewUri: "file:///file.png",
+  };
+  const queued = message({ attachments: [attachment] });
+  const nativeUpload = vi.fn().mockRejectedValue(new Error("Socket is not connected"));
+  state.prepare.mockImplementation(async ({ attachments }) => {
+    await nativeUpload();
+    return {
+      status: "ready",
+      attachments: [],
+      draftAttachments: attachments,
+      pendingAttachmentIds: [],
+    };
+  });
+  await state.manager.enqueue(queued);
+  await runDrain();
+  await vi.advanceTimersByTimeAsync(120_000);
+  expect(nativeUpload).toHaveBeenCalledTimes(5);
+  expect(remaining()).toEqual([queued]);
+  expect(appAtomRegistry.get(queuedMessageWaitReasonsAtom)[queued.messageId]).toBeDefined();
+  nativeUpload.mockResolvedValue("uploaded");
+  const settled = Promise.withResolvers<void>();
+  const release = appAtomRegistry.subscribe(dispatchingQueuedMessageIdAtom, (id) => {
+    if (id === null) settled.resolve();
+  });
+  retryQueuedMessage(queued.messageId);
+  await settled.promise.finally(release);
+  expect(nativeUpload).toHaveBeenCalledTimes(6);
+  expect(remaining()).toEqual([]);
+});
+
+it("sends after a transient upload failure on the next automatic attempt", async () => {
+  setOperateGrant("secondary", true);
+  vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout", "Date"] });
+  state.cleanups.push(() => vi.useRealTimers());
+  const queued = message();
+  await state.manager.enqueue(queued);
+  state.prepare.mockRejectedValueOnce(new Error("Socket is not connected"));
+  await runDrain();
+  await vi.advanceTimersByTimeAsync(threadOutboxRetryDelayMs(1));
+  expect(state.prepare).toHaveBeenCalledTimes(2);
+  expect(state.start).toHaveBeenCalledOnce();
+  expect(remaining()).toEqual([]);
+});
+
+it("reconnect resets the upload attempt limit", async () => {
+  setOperateGrant("secondary", true);
+  vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout", "Date"] });
+  state.cleanups.push(() => vi.useRealTimers());
+  const environments = workspaceConnections.environmentsAtom as unknown as Atom.Writable<
+    ReadonlyArray<{ environmentId: string; connectionState: string }>
+  >;
+  const connected = [{ environmentId: "secondary", connectionState: "connected" }];
+  state.cleanups.push(() => appAtomRegistry.set(environments, connected));
+  const queued = message();
+  await state.manager.enqueue(queued);
+  state.prepare.mockRejectedValue(new Error("Socket is not connected"));
+  await runDrain();
+  await vi.advanceTimersByTimeAsync(120_000);
+  expect(state.prepare).toHaveBeenCalledTimes(5);
+  appAtomRegistry.set(environments, [
+    { environmentId: "secondary", connectionState: "disconnected" },
+  ]);
+  appAtomRegistry.set(environments, connected);
+  await vi.advanceTimersByTimeAsync(120_000);
+  expect(state.prepare).toHaveBeenCalledTimes(10);
+  expect(remaining()).toEqual([queued]);
+});
