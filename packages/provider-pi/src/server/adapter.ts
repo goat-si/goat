@@ -38,7 +38,6 @@ import { piSubagentOutput } from "./subagentOutput.ts";
 import { awaitPromptAcknowledgment } from "./promptAcknowledgment.ts";
 import { piForkBoundary, piForkEntry, type PiForkBoundary } from "./forkBoundary.ts";
 import { piQuestion, piUiResponse } from "./extensionDialog.ts";
-import * as HostProcess from "@goat/shared/HostProcess";
 import { AgentScope } from "@goat/shared/AgentScope";
 import { getModelSelectionStringOptionValue } from "@goat/shared/model";
 import {
@@ -67,7 +66,6 @@ import * as FileSystem from "effect/FileSystem";
 import * as Fiber from "effect/Fiber";
 import * as FiberMap from "effect/FiberMap";
 import * as Queue from "effect/Queue";
-import * as Schema from "effect/Schema";
 import * as Semaphore from "effect/Semaphore";
 import * as Stream from "effect/Stream";
 import * as ChildProcessSpawner from "effect/process/ChildProcessSpawner";
@@ -78,15 +76,9 @@ import * as McpProviderSessions from "@goat/provider-core/server/McpProviderSess
 import { openPiTurnGates, writePiTurnGates } from "./turnGates.ts";
 import * as Scope from "effect/Scope";
 import { parsePiCompactCommand } from "./commands.ts";
-import { mergeProviderInstanceEnvironment } from "@goat/provider-core/server/instanceEnvironment";
 import * as IdAllocator from "@goat/provider-core/server/IdAllocator";
 import * as ProviderAdapter from "@goat/provider-core/server/ProviderAdapter";
 import * as ProviderContinuationRequests from "@goat/provider-core/server/ProviderContinuationRequests";
-import {
-  ProviderAdapterDriverCreateError,
-  type ProviderAdapterDriver,
-  type ProviderAdapterDriverCreateInput,
-} from "@goat/provider-core/server/adapterDriver";
 import { makeProviderFailure, makeProviderRetryTurnItem } from "@goat/provider-core/server/failure";
 import { turnScopedSelectionTransition } from "@goat/provider-core/server/selectionTransition";
 import {
@@ -3409,50 +3401,8 @@ export const makePiAdapterV2 = Effect.fn("makePiAdapterV2")(function* (
   });
 });
 
-export type PiAdapterV2DriverEnv =
-  | ChildProcessSpawner.ChildProcessSpawner
-  | FileSystem.FileSystem
-  | Path.Path
-  | IdAllocator.IdAllocatorV2
-  | McpProviderSessions.McpProviderSessions
-  | ProviderHost.ProviderHost;
-
-export const makePiAdapterV2Driver = (
-  profile: PiRuntimeProfile,
-  settingsSchema: Schema.Codec<PiSettings, unknown>,
-): ProviderAdapterDriver<PiSettings, PiAdapterV2DriverEnv> => ({
-  driverKind: ProviderDriverKind.make(profile.driver),
-  configSchema: settingsSchema,
-  defaultConfig: (): PiSettings => Schema.decodeSync(settingsSchema)({}),
-  create: Effect.fn("PiAdapterV2Driver.create")(
-    function* (input: ProviderAdapterDriverCreateInput<PiSettings>) {
-      const hostEnvironment = yield* HostProcess.Environment;
-      const continuationRequests = yield* ProviderContinuationRequests.ProviderContinuationRequests;
-      const home = yield* HostProcess.HomeDirectory;
-      const currentEnvironment = Effect.suspend(() =>
-        mergeProviderInstanceEnvironment(input.environment, hostEnvironment),
-      ).pipe(Effect.provideService(HostProcess.HomeDirectory, home));
-      return yield* makePiAdapterV2({
-        instanceId: input.instanceId,
-        profile,
-        settings: { ...input.config, enabled: input.enabled },
-        environment: yield* currentEnvironment,
-        currentEnvironment,
-        continuationRequests,
-      });
-    },
-    (effect, input) =>
-      effect.pipe(
-        Effect.mapError(
-          (cause) =>
-            new ProviderAdapterDriverCreateError({
-              driver: ProviderDriverKind.make(profile.driver),
-              instanceId: input.instanceId,
-              detail: `Failed to create ${profile.displayName} adapter.`,
-              cause,
-            }),
-        ),
-      ),
-  ),
-});
-export const PiAdapterV2Driver = makePiAdapterV2Driver(PI_PROFILE, PiSettings);
+export {
+  makePiAdapterV2Driver,
+  PiAdapterV2Driver,
+  type PiAdapterV2DriverEnv,
+} from "./adapterDriver.ts";
