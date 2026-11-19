@@ -12,7 +12,7 @@ final class GoatNativeImageViewer: NSObject {
   private var titles: [String] = []
   private var urls: [URL?] = []
   /// The original bytes on disk, kept for sharing.
-  private var files: [URL?] = []
+  private var files: [GoatImageOriginal?] = []
   private var placeholders: [UIImage?] = []
   private var preparations = GoatImagePreparationQueue()
   private var loads: [Int: Task<Void, Never>] = [:]
@@ -84,7 +84,7 @@ final class GoatNativeImageViewer: NSObject {
     finish()
   }
 
-  private func file(at index: Int) -> URL? {
+  private func file(at index: Int) -> GoatImageOriginal? {
     files.indices.contains(index) ? files[index] : nil
   }
 
@@ -120,12 +120,12 @@ final class GoatNativeImageViewer: NSObject {
         startPreparations()
       }
       do {
-        let file = try await GoatNativeFilePresentation.prepareFile(url: url, title: title)
-        guard !closing, !Task.isCancelled else { Self.remove(file); return }
-        if let previous = files[index] { Self.remove(previous) }
-        files[index] = file
+        let url = try await GoatNativeFilePresentation.prepareFile(url: url, title: title)
+        let original = GoatImageOriginal(url: url)
+        guard !closing, !Task.isCancelled else { return }
+        files[index] = original
         decoded.remove(index)
-        if file.pathExtension.lowercased() == "svg" {
+        if url.pathExtension.lowercased() == "svg" {
           controller?.offerSVGPreview(at: index)
         } else if isNearCurrent(index) {
           decode(index)
@@ -154,7 +154,7 @@ final class GoatNativeImageViewer: NSObject {
   private func isNearCurrent(_ index: Int) -> Bool { abs(index - currentIndex) <= 1 }
 
   private func decode(_ index: Int) {
-    guard !closing, let file = file(at: index), file.pathExtension.lowercased() != "svg",
+    guard !closing, let file = file(at: index), file.url.pathExtension.lowercased() != "svg",
       !decoded.contains(index), decodes[index] == nil
     else { return }
     let previous = decodeQueue
@@ -166,15 +166,14 @@ final class GoatNativeImageViewer: NSObject {
         // Paged away and back while this run waited: it was cancelled, so the page asks again.
         if !settled, !closing, isNearCurrent(index), !decoded.contains(index) { decode(index) }
       }
-      guard !closing, !Task.isCancelled, isNearCurrent(index), files[index] == file else { return }
-      let image = await Self.decodeOffMain(file)
-      guard !closing, !Task.isCancelled, isNearCurrent(index), files[index] == file else { return }
+      guard !closing, !Task.isCancelled, isNearCurrent(index), files[index] === file else { return }
+      let image = await Self.decodeOffMain(file.url)
+      guard !closing, !Task.isCancelled, isNearCurrent(index), files[index] === file else { return }
       settled = true
       if let image {
         decoded.insert(index)
         controller?.setImage(image, at: index, full: true)
       } else {
-        Self.remove(file)
         files[index] = nil
         controller?.setFailed(at: index, retryable: true)
       }
@@ -195,16 +194,11 @@ final class GoatNativeImageViewer: NSObject {
     finished = true
     stopWork()
     decodeQueue = nil
-    for file in files.compactMap({ $0 }) { Self.remove(file) }
     files.removeAll()
     controller = nil
     DispatchQueue.main.async { [completion] in completion(nil) }
     // After queueing the completion, so a new presentation JS starts on seeing this lands behind it.
     onFinish()
-  }
-
-  private static func remove(_ file: URL) {
-    try? FileManager.default.removeItem(at: file.deletingLastPathComponent())
   }
 
   /// The decoded image a thumbnail already shows, uncropped, or a snapshot of a view that draws one.

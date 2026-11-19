@@ -1,4 +1,3 @@
-import ImageIO
 import Photos
 import QuickLook
 import UIKit
@@ -225,7 +224,7 @@ final class GoatImageViewerNavigation: UINavigationController {
 
 final class GoatImageViewerController: UIViewController, UIScrollViewDelegate, UIGestureRecognizerDelegate {
   var sourceView: (Int) -> UIView? = { _ in nil }
-  var fileForPage: (Int) -> URL? = { _ in nil }
+  var fileForPage: (Int) -> GoatImageOriginal? = { _ in nil }
   var onRetry: (Int) -> Void = { _ in }
   var onPageChange: (Int) -> Void = { _ in }
   var onClosing: () -> Void = {}
@@ -245,6 +244,7 @@ final class GoatImageViewerController: UIViewController, UIScrollViewDelegate, U
   private var transitioning = true
   private var closeRequested = false
   private var closing = false
+  private var saving = false
   private var laidOutSize = CGSize.zero
   private var isLayingOut = false
   private lazy var saveItem = UIBarButtonItem(
@@ -390,15 +390,15 @@ final class GoatImageViewerController: UIViewController, UIScrollViewDelegate, U
 
   private func updateActions() {
     let ready = pages[safe: currentIndex]?.isFull == true
-    saveItem.isEnabled = ready
-    shareItem.isEnabled = ready || fileForPage(currentIndex)?.pathExtension.lowercased() == "svg"
+    saveItem.isEnabled = ready && !saving
+    shareItem.isEnabled = ready || fileForPage(currentIndex)?.url.pathExtension.lowercased() == "svg"
   }
 
   private func previewSVG(at index: Int) {
     guard index == currentIndex, !transitioning, presentedViewController == nil,
-      let file = fileForPage(index)
+      let original = fileForPage(index)
     else { return }
-    guard QLPreviewController.canPreview(file as NSURL) else {
+    guard QLPreviewController.canPreview(original.url as NSURL) else {
       let alert = UIAlertController(
         title: "Could not preview SVG", message: "Use Share to open the original in another app.",
         preferredStyle: .alert)
@@ -406,7 +406,7 @@ final class GoatImageViewerController: UIViewController, UIScrollViewDelegate, U
       present(alert, animated: true)
       return
     }
-    present(GoatSVGPreviewController(file: file), animated: true)
+    present(GoatSVGPreviewController(original: original), animated: true)
   }
 
   // MARK: Transitions
@@ -618,44 +618,47 @@ final class GoatImageViewerController: UIViewController, UIScrollViewDelegate, U
   // MARK: Share, keyboard and accessibility
 
   private func save() {
-    let image = pages[currentIndex].isFull ? pages[currentIndex].image : nil
-    // Original bytes keep the format and metadata; an SVG only has its rendered image. The copy
-    // belongs to this save, since closing the viewer deletes its files before Photos may read them.
-    let original = fileForPage(currentIndex).flatMap { file -> URL? in
-      guard file.pathExtension.lowercased() != "svg", let source = CGImageSourceCreateWithURL(file as CFURL, nil), CGImageSourceGetCount(source) > 0 else { return nil }
-      let copy = FileManager.default.temporaryDirectory.appendingPathComponent("goat-save-\(UUID().uuidString)")
-        .appendingPathComponent(file.lastPathComponent)
-      do {
-        try FileManager.default.createDirectory(at: copy.deletingLastPathComponent(), withIntermediateDirectories: true)
-        try FileManager.default.copyItem(at: file, to: copy)
-        return copy
-      } catch {
-        return nil
+    guard !saving, pages[currentIndex].isFull, let image = pages[currentIndex].image else { return }
+    let original = fileForPage(currentIndex)
+    saving = true
+    updateActions()
+    Task { [weak self] in
+      let copy = await Task.detached(priority: .userInitiated) {
+        original?.copyForPhotos()
+      }.value
+      Self.saveToPhotos(original: copy, image: image) { [weak self] message in
+        DispatchQueue.main.async {
+          guard let self else { return }
+          self.saving = false
+          self.updateActions()
+          guard !self.closeRequested, self.viewIfLoaded?.window != nil else { return }
+          if let message { self.showSaveError(message) } else { self.confirmSaved() }
+        }
       }
     }
-    guard original != nil || image != nil else { return }
-    let cleanUp = { if let original { try? FileManager.default.removeItem(at: original.deletingLastPathComponent()) } }
-    PHPhotoLibrary.requestAuthorization(for: .addOnly) { [weak self] status in
+  }
+
+  nonisolated private static func saveToPhotos(
+    original: URL?, image: UIImage, completion: @escaping @Sendable (String?) -> Void
+  ) {
+    let cleanUp: @Sendable () -> Void = {
+      if let original { try? FileManager.default.removeItem(at: original.deletingLastPathComponent()) }
+    }
+    PHPhotoLibrary.requestAuthorization(for: .addOnly) { status in
       guard status == .authorized || status == .limited else {
         cleanUp()
-        DispatchQueue.main.async { self?.showSaveError("Allow GOAT to add photos in Settings.") }
+        completion("Allow GOAT to add photos in Settings.")
         return
       }
       PHPhotoLibrary.shared().performChanges({
         if let original {
           PHAssetCreationRequest.forAsset().addResource(with: .photo, fileURL: original, options: nil)
-        } else if let image {
+        } else {
           PHAssetChangeRequest.creationRequestForAsset(from: image)
         }
       }, completionHandler: { saved, error in
         cleanUp()
-        DispatchQueue.main.async {
-          if saved {
-            self?.confirmSaved()
-          } else {
-            self?.showSaveError(error?.localizedDescription ?? "Photos could not save this image.")
-          }
-        }
+        completion(saved ? nil : error?.localizedDescription ?? "Photos could not save this image.")
       })
     }
   }
@@ -677,9 +680,13 @@ final class GoatImageViewerController: UIViewController, UIScrollViewDelegate, U
 
   private func share() {
     let page = pages[currentIndex]
-    let item: Any? = fileForPage(currentIndex) ?? (page.isFull ? page.image : nil)
+    let original = fileForPage(currentIndex)
+    let item: Any? = original?.url ?? (page.isFull ? page.image : nil)
     guard let item else { return }
     let sheet = UIActivityViewController(activityItems: [item], applicationActivities: nil)
+    sheet.completionWithItemsHandler = { [original] _, _, _, _ in
+      withExtendedLifetime(original) {}
+    }
     sheet.popoverPresentationController?.sourceItem = shareItem
     present(sheet, animated: true)
   }
@@ -721,10 +728,10 @@ final class GoatImageViewerController: UIViewController, UIScrollViewDelegate, U
 
 
 private final class GoatSVGPreviewController: QLPreviewController, QLPreviewControllerDataSource {
-  private let file: URL
+  private let original: GoatImageOriginal
 
-  init(file: URL) {
-    self.file = file
+  init(original: GoatImageOriginal) {
+    self.original = original
     super.init(nibName: nil, bundle: nil)
     dataSource = self
   }
@@ -735,6 +742,6 @@ private final class GoatSVGPreviewController: QLPreviewController, QLPreviewCont
   func numberOfPreviewItems(in controller: QLPreviewController) -> Int { 1 }
 
   func previewController(_ controller: QLPreviewController, previewItemAt index: Int) -> QLPreviewItem {
-    file as NSURL
+    original.url as NSURL
   }
 }
