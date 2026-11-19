@@ -1874,6 +1874,7 @@ const withoutMemoryBody = (input: ProviderAdapter.ProviderAdapterV2TurnInput) =>
 
 interface ActiveClaudeTurnContext {
   retryBudgetFailure?: OrchestrationV2ProviderFailure;
+  unansweredRequestSince?: DateTime.Utc;
   readonly autoCompactWindow: string;
   readonly queryPolicy: ClaudeRuntimeQueryPolicy;
   input: ProviderAdapter.ProviderAdapterV2TurnInput;
@@ -2620,6 +2621,7 @@ export const makeClaudeAdapterV2 = Effect.fn("makeClaudeAdapterV2")(function* (
       function* (input: ProviderAdapter.ProviderAdapterV2OpenSessionInput) {
         const sessionScope = yield* Effect.scope;
         const providerRetryTimers = makeProviderRetryTimers(sessionScope);
+        const unansweredTimers = makeProviderRetryTimers(sessionScope);
         const now = yield* DateTime.now;
         const session = providerSession({
           providerSessionId: input.providerSessionId,
@@ -5537,6 +5539,7 @@ export const makeClaudeAdapterV2 = Effect.fn("makeClaudeAdapterV2")(function* (
               ? { ...requested, status: "failed" as const, failure: retryFailure }
               : requested;
           yield* providerRetryTimers.cancel(input.context.providerTurnId);
+          yield* unansweredTimers.cancel(input.context.providerTurnId);
           if (input.context.memoryRelease) yield* input.context.memoryRelease;
           input.context.steersClosed = true;
           yield* reasoningDeltas.flushTurn(input.context.nativeTurnId);
@@ -6080,43 +6083,67 @@ export const makeClaudeAdapterV2 = Effect.fn("makeClaudeAdapterV2")(function* (
           }
         });
 
+        const failStalledTurn = Effect.fn("ClaudeAdapterV2.failStalledTurn")(function* (
+          context: ActiveClaudeTurnContext,
+          failure: OrchestrationV2ProviderFailure,
+        ) {
+          const live = yield* Ref.get(queryContext);
+          if (
+            live === null ||
+            live.lastTurn !== context ||
+            (yield* Ref.get(activeTurn)) !== context ||
+            (yield* Ref.get(interruptedTurns)).has(context.providerTurnId)
+          )
+            return;
+          context.retryBudgetFailure = failure;
+          yield* interruptTurn({
+            providerThread: context.input.providerThread,
+            providerTurnId: context.providerTurnId,
+          }).pipe(
+            Effect.timeoutOption(CLAUDE_STOP_CONFIRM_TIMEOUT_MS),
+            Effect.catch((cause) =>
+              Effect.logWarning("orchestration-v2.claude-retry-budget-stop-failed", { cause }),
+            ),
+          );
+          if ((yield* Ref.get(activeTurn)) !== context) return;
+          const ownsQuery = yield* Ref.modify(queryContext, (current) =>
+            current === live ? [true, null] : [false, current],
+          );
+          if (!ownsQuery) return;
+          live.stopping = true;
+          yield* live.query.close.pipe(
+            Effect.timeoutOption(CLAUDE_STOP_CONFIRM_TIMEOUT_MS),
+            Effect.ignore,
+          );
+          yield* finalizeActiveTurnAfterQueryExit(live);
+          yield* endSubagentCallsOfClosedQuery(live.nativeThreadId, "interrupted");
+          yield* Deferred.succeed(live.closed, undefined);
+        });
+
         const failExpiredProviderRetry = Effect.fn("ClaudeAdapterV2.failExpiredProviderRetry")(
           function* (context: ActiveClaudeTurnContext, startedAt: DateTime.Utc) {
-            const live = yield* Ref.get(queryContext);
             const retry = (yield* Ref.get(providerRetries)).get(context.providerTurnId);
-            if (
-              live === null ||
-              live.lastTurn !== context ||
-              retry?.startedAt !== startedAt ||
-              (yield* Ref.get(activeTurn)) !== context ||
-              (yield* Ref.get(interruptedTurns)).has(context.providerTurnId)
-            )
-              return;
-            context.retryBudgetFailure = { ...retry.failure, retryable: false };
-            yield* interruptTurn({
-              providerThread: context.input.providerThread,
-              providerTurnId: context.providerTurnId,
-            }).pipe(
-              Effect.timeoutOption(CLAUDE_STOP_CONFIRM_TIMEOUT_MS),
-              Effect.catch((cause) =>
-                Effect.logWarning("orchestration-v2.claude-retry-budget-stop-failed", { cause }),
-              ),
-            );
-            if ((yield* Ref.get(activeTurn)) !== context) return;
-            const ownsQuery = yield* Ref.modify(queryContext, (current) =>
-              current === live ? [true, null] : [false, current],
-            );
-            if (!ownsQuery) return;
-            live.stopping = true;
-            yield* live.query.close.pipe(
-              Effect.timeoutOption(CLAUDE_STOP_CONFIRM_TIMEOUT_MS),
-              Effect.ignore,
-            );
-            yield* finalizeActiveTurnAfterQueryExit(live);
-            yield* endSubagentCallsOfClosedQuery(live.nativeThreadId, "interrupted");
-            yield* Deferred.succeed(live.closed, undefined);
+            if (retry?.startedAt !== startedAt) return;
+            yield* failStalledTurn(context, { ...retry.failure, retryable: false });
           },
         );
+
+        const failUnansweredRequest = Effect.fn("ClaudeAdapterV2.failUnansweredRequest")(function* (
+          context: ActiveClaudeTurnContext,
+          since: DateTime.Utc,
+        ) {
+          if (context.unansweredRequestSince !== since) return;
+          yield* failStalledTurn(
+            context,
+            makeProviderFailure({
+              class: "transport_error",
+              code: "claude_request_unanswered",
+              message:
+                "Claude sent nothing for 10 minutes. The API or a gateway in front of it is not responding.",
+              retryable: false,
+            }),
+          );
+        });
 
         const applyWorkflowProgressWithoutTurn = Effect.fnUntraced(function* (message: SDKMessage) {
           if (message.type !== "system" || message.subtype !== "task_progress") return;
@@ -6924,6 +6951,32 @@ export const makeClaudeAdapterV2 = Effect.fn("makeClaudeAdapterV2")(function* (
               yield* bufferWakeMessage({ nativeThreadId: liveQuery.nativeThreadId, message });
             }
             return;
+          }
+          if (context === (yield* Ref.get(activeTurn))) {
+            const lifecycle = claudePromptLifecycle(message);
+            if (
+              (message.type === "system" &&
+                message.subtype === "status" &&
+                message.status === "requesting") ||
+              (lifecycle?.state === "started" && lifecycle.uuid === context.promptUuid)
+            ) {
+              const since = yield* DateTime.now;
+              context.unansweredRequestSince = since;
+              yield* unansweredTimers.start(
+                context.providerTurnId,
+                failUnansweredRequest(context, since),
+              );
+            } else if (
+              Reflect.get(message, "parent_tool_use_id") == null &&
+              !(
+                message.type === "system" &&
+                message.subtype.startsWith("task_") &&
+                !(message.subtype === "task_started" && (message.spawn_depth ?? 1) <= 1)
+              )
+            ) {
+              context.unansweredRequestSince = undefined;
+              yield* unansweredTimers.cancel(context.providerTurnId);
+            }
           }
           const focusedPlugin = claudeFocusRequestedPanePlugin(message);
           if (focusedPlugin !== null && context === (yield* Ref.get(activeTurn))) {
