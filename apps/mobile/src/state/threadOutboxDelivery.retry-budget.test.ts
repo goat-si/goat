@@ -309,3 +309,31 @@ describe("upload retry budget across deferrals", () => {
     expect(remaining()).toEqual([queued]);
   });
 });
+
+it("delivers to a busy thread and clears its prior upload-failure count", async () => {
+  setOperateGrant("secondary", true);
+  vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout", "Date"] });
+  state.cleanups.push(() => vi.useRealTimers());
+  const queued = message();
+  await state.manager.enqueue(queued);
+  state.prepare.mockRejectedValue(new Error("Socket is not connected"));
+  await runDrain();
+  await vi.advanceTimersByTimeAsync(7_000);
+  expect(state.prepare).toHaveBeenCalledTimes(4);
+  state.prepare.mockImplementation(async ({ attachments }) => ({
+    status: "ready",
+    attachments: [],
+    draftAttachments: attachments,
+    pendingAttachmentIds: [],
+  }));
+  appAtomRegistry.set(state.threadShells, [{ ...state.thread, runtime: { status: "running" } }]);
+  await vi.advanceTimersByTimeAsync(8_000);
+  expect(state.start).toHaveBeenCalledOnce();
+  expect(remaining()).toEqual([]);
+  state.prepare.mockRejectedValue(new Error("Socket is not connected"));
+  await state.manager.enqueue(queued);
+  await vi.advanceTimersByTimeAsync(120_000);
+  expect(state.prepare).toHaveBeenCalledTimes(10);
+  expect(remaining()).toEqual([queued]);
+  expect(appAtomRegistry.get(queuedMessageWaitReasonsAtom)[queued.messageId]).toBeDefined();
+});

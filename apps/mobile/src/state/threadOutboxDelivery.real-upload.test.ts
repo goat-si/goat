@@ -298,3 +298,61 @@ it("parks after five real shared preparation transfers fail", async () => {
   expect(appAtomRegistry.get(queuedMessageWaitReasonsAtom)[queued.messageId]).toBeDefined();
   expect(vi.getTimerCount()).toBe(0);
 });
+
+it.each(["editor", "missing"] as const)(
+  "keeps the five-transfer limit across a %s deferral in the real upload path",
+  async (kind) => {
+    setOperateGrant("secondary", true);
+    vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout", "Date"] });
+    state.cleanups.push(() => vi.useRealTimers());
+    state.nativeTransfer.mockReset().mockRejectedValue(new Error("Socket is not connected"));
+    const photo = {
+      id: "photo",
+      type: "image" as const,
+      name: "photo.png",
+      mimeType: "image/png",
+      sizeBytes: 3,
+      dataUrl: "data:image/png;base64,YWJj",
+      previewUri: "data:image/png;base64,YWJj",
+    };
+    const queued = message({ attachments: [photo] });
+    await state.manager.enqueue(queued);
+    await runDrain();
+    await vi.advanceTimersByTimeAsync(7_000);
+    expect(state.nativeTransfer).toHaveBeenCalledTimes(4);
+    const gate = Promise.withResolvers<boolean>();
+    const started = Promise.withResolvers<void>();
+    const confirm = vi.spyOn(state.manager, "confirmQueued").mockImplementationOnce(() => {
+      started.resolve();
+      return gate.promise;
+    });
+    vi.advanceTimersByTime(8_000);
+    await started.promise;
+    const { threadOutboxShellStatusesAtom } = await import("./use-thread-outbox");
+    const statuses = threadOutboxShellStatusesAtom as unknown as Atom.Writable<Map<string, string>>;
+    if (kind === "editor")
+      appAtomRegistry.set(editingQueuedMessageIdsAtom, { [queued.messageId]: true });
+    else {
+      appAtomRegistry.set(statuses, new Map([["secondary", "syncing"]]));
+      appAtomRegistry.set(state.threadShells, []);
+    }
+    const settled = Promise.withResolvers<void>();
+    const release = appAtomRegistry.subscribe(dispatchingQueuedMessageIdAtom, (id) => {
+      if (id === null) settled.resolve();
+    });
+    gate.resolve(true);
+    await settled.promise.finally(release);
+    expect(state.nativeTransfer).toHaveBeenCalledTimes(4);
+    confirm.mockRestore();
+    if (kind === "editor") appAtomRegistry.set(editingQueuedMessageIdsAtom, {});
+    else {
+      appAtomRegistry.set(state.threadShells, [state.thread]);
+      appAtomRegistry.set(statuses, new Map([["secondary", "live"]]));
+    }
+    await vi.advanceTimersByTimeAsync(120_000);
+    expect(state.nativeTransfer).toHaveBeenCalledTimes(5);
+    expect(remaining()).toEqual([queued]);
+    expect(appAtomRegistry.get(queuedMessageWaitReasonsAtom)[queued.messageId]).toBeDefined();
+    expect(vi.getTimerCount()).toBe(0);
+  },
+);
