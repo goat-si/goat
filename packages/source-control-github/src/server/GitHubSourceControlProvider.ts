@@ -66,6 +66,7 @@ import { readFirstFetchUrl } from "@goat/source-control-core/server/firstFetchUr
 import { readSourceControlHostSettings } from "@goat/source-control-core/shared/definition";
 
 import * as GitHubClient from "../shared/definition.ts";
+import { makeGhProcess } from "./gitHubCliProcess.ts";
 import {
   PullRequestByNumber,
   PullRequestNode,
@@ -219,7 +220,7 @@ function environmentTokenVariable(environment: NodeJS.ProcessEnv): string | null
 export const makeDiscovery = Effect.gen(function* () {
   const api = yield* GitHubRest.GitHubRest;
   const sourceControlHost = yield* SourceControlHost.SourceControlHost;
-  const process = sourceControlHost.process;
+  const process = yield* makeGhProcess;
   const environment = yield* HostProcess.Environment;
 
   return {
