@@ -17,6 +17,7 @@ import type {
 import { isTemporaryWorktreeBranch } from "@goat/shared/git";
 import type { ChangeRequestTerminology } from "@goat/client-runtime/source-control-clients";
 import {
+  canCreateChangeRequest,
   changeRequestTerminologyFor,
   type DefaultBranchActionDialogCopy,
   type DefaultBranchConfirmableAction,
@@ -139,6 +140,7 @@ export function buildMenuItems(
     gitStatus.aheadCount > 0 &&
     (gitStatus.hasUpstream || canPushWithoutUpstream);
   const canCreatePr =
+    canCreateChangeRequest(gitStatus) &&
     !isBusy &&
     hasBranch &&
     !hasOpenPr &&
@@ -250,7 +252,7 @@ export function resolveQuickAction(
     if (isBehind || (!gitStatus.hasUpstream && !hasPrimaryRemote)) {
       return { label: "Commit", disabled: false, kind: "run_action", action: "commit" };
     }
-    if (hasOpenPr || isDefaultRef) {
+    if (hasOpenPr || isDefaultRef || !canCreateChangeRequest(gitStatus)) {
       return { label: "Commit & push", disabled: false, kind: "run_action", action: "commit_push" };
     }
     return {
@@ -285,7 +287,7 @@ export function resolveQuickAction(
         hint: "No local commits to push.",
       };
     }
-    if (hasOpenPr || isDefaultRef) {
+    if (hasOpenPr || isDefaultRef || !canCreateChangeRequest(gitStatus)) {
       return {
         label: "Push",
         disabled: false,
@@ -319,7 +321,7 @@ export function resolveQuickAction(
   }
 
   if (isAhead) {
-    if (hasOpenPr || isDefaultRef) {
+    if (hasOpenPr || isDefaultRef || !canCreateChangeRequest(gitStatus)) {
       return {
         label: "Push",
         disabled: false,
@@ -344,7 +346,7 @@ export function resolveQuickAction(
     };
   }
 
-  if (hasDefaultBranchDelta && !isDefaultRef) {
+  if (hasDefaultBranchDelta && !isDefaultRef && canCreateChangeRequest(gitStatus)) {
     return {
       label: `Create ${terminology.shortLabel}`,
       disabled: false,
