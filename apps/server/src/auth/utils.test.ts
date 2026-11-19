@@ -7,6 +7,22 @@ import {
 } from "./utils.ts";
 
 describe("deriveAuthClientMetadata", () => {
+  it.each([
+    { peer: "127.0.0.5", forwarded: "198.51.100.2, 100.64.1.2", expected: "100.64.1.2" },
+    { peer: "::1", forwarded: "198.51.100.2, junk", expected: "::1" },
+    { peer: "192.168.1.2", forwarded: "100.64.1.2", expected: "192.168.1.2" },
+  ])(
+    "only trusts the final forwarded IP from loopback ($peer)",
+    ({ peer, forwarded, expected }) => {
+      const metadata = deriveAuthClientMetadata({
+        request: {
+          headers: { "x-forwarded-for": forwarded },
+          source: { socket: { remoteAddress: peer } },
+        } as never,
+      });
+      expect(metadata.ipAddress).toBe(expected);
+    },
+  );
   it("labels Electron user agents as Electron instead of Chrome", () => {
     const metadata = deriveAuthClientMetadata({
       request: {
