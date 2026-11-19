@@ -620,6 +620,7 @@ export const AntigravityDriver: ProviderDriver<
                 discoverAntigravitySkills({
                   cwd,
                   userHome: resolveAntigravityUserHome(platform, environment, homeDirectory),
+                  profileDirectory,
                 }),
               ),
               Effect.provideService(FileSystem.FileSystem, fileSystem),
