@@ -535,5 +535,12 @@
   "3b50d0053c320a55": "Guarda la búsqueda, los filtros y el orden en este dispositivo.",
   "01c75f010cf6228f": "Nombre de la vista",
   "00ad8aeed0a6c461": "Cancelar",
-  "762fcce45b65eea9": "Guardar"
+  "762fcce45b65eea9": "Guardar",
+  "8252a0671efcf3db": "Algunas vistas guardadas no se muestran.",
+  "b4e500761b847d4e": "No se pudieron leer las vistas guardadas.",
+  "203e6f2fb15eb502": "Borrar vistas guardadas",
+  "39b3e751b2026cf1": "¿Borrar las vistas guardadas?",
+  "8a79ebeceb89b809": "Esto elimina las vistas guardadas que no se pueden leer.",
+  "1e6c081708cf5864": "Límite alcanzado, elimina una vista primero",
+  "79c3a969207c8760": "Esta vista supera la longitud permitida para un campo."
 }

@@ -1,13 +1,18 @@
 import { BookmarkIcon, CheckIcon, ChevronDownIcon, PlusIcon } from "~/components/solar";
 import { useId, useState } from "react";
 import { msg, useMessages } from "gt-react";
+import * as Schema from "effect/Schema";
 import {
   PULL_REQUEST_VIEW_NAME_MAX_LENGTH,
   PULL_REQUEST_SAVED_VIEWS_MAX_COUNT,
   pullRequestViewNameError,
 } from "@goat/client-runtime/pull-request-saved-views";
 
-import { getLocalStorageItem, useLocalStorage } from "../../hooks/useLocalStorage";
+import {
+  getLocalStorageItem,
+  LocalStorageOperationError,
+  useLocalStorage,
+} from "../../hooks/useLocalStorage";
 import { randomUUID } from "../../lib/utils";
 import { Button } from "../ui/button";
 import {
@@ -38,6 +43,8 @@ import {
   type PullRequestSavedView,
 } from "./pullRequestSavedViews";
 
+const isLocalStorageError = Schema.is(LocalStorageOperationError);
+
 export function PullRequestSavedViewsMenu({
   preferences,
   onApply,
@@ -55,6 +62,13 @@ export function PullRequestSavedViewsMenu({
   const atViewLimit =
     views.length >= PULL_REQUEST_SAVED_VIEWS_MAX_COUNT ||
     rawViews.length > PULL_REQUEST_SAVED_VIEWS_MAX_COUNT;
+  let unreadable = false;
+  try {
+    getLocalStorageItem(PULL_REQUEST_SAVED_VIEWS_KEY, PullRequestSavedViews);
+  } catch (error) {
+    unreadable = isLocalStorageError(error) && error.operation === "decode";
+  }
+  const [clearing, setClearing] = useState(false);
   const [selectedId, setSelectedId] = useState<string | null>(null);
   const [editor, setEditor] = useState<{ id?: string; name: string } | null>(null);
   const inputId = useId();
@@ -80,20 +94,31 @@ export function PullRequestSavedViewsMenu({
     try {
       const current =
         getLocalStorageItem(PULL_REQUEST_SAVED_VIEWS_KEY, PullRequestSavedViews) ?? [];
-      if (current.length > PULL_REQUEST_SAVED_VIEWS_MAX_COUNT)
-        throw new Error("Too many saved views");
-      const written = update(decodeSavedViews(current));
-      if (!written.every(isSavedView)) throw new Error("Invalid saved view");
-      if (written.length > PULL_REQUEST_SAVED_VIEWS_MAX_COUNT)
-        throw new Error("Too many saved views");
+      const visible = decodeSavedViews(current);
+      const updated = update(visible);
+      if (!updated.every(isSavedView)) {
+        toastManager.add({
+          type: "error",
+          title: m(msg("This view exceeds the allowed field length.")),
+        });
+        return false;
+      }
+      if (updated.length > visible.length && current.length >= PULL_REQUEST_SAVED_VIEWS_MAX_COUNT) {
+        toastManager.add({ type: "error", title: m(msg("Limit reached, delete a view first")) });
+        return false;
+      }
+      const written = [...updated, ...current.slice(PULL_REQUEST_SAVED_VIEWS_MAX_COUNT)];
       setViews(written);
       if (
         JSON.stringify(getLocalStorageItem(PULL_REQUEST_SAVED_VIEWS_KEY, PullRequestSavedViews)) ===
         JSON.stringify(written)
       )
         return true;
-    } catch {
-      // A failed read must not overwrite the stored value.
+    } catch (error) {
+      if (isLocalStorageError(error) && error.operation === "decode") {
+        toastManager.add({ type: "error", title: m(msg("Saved views could not be read.")) });
+        return false;
+      }
     }
     toastManager.add({
       type: "error",
@@ -156,6 +181,15 @@ export function PullRequestSavedViewsMenu({
           <TooltipPopup>{selectedView?.name ?? m(msg("Saved pull request views"))}</TooltipPopup>
         </Tooltip>
         <MenuPopup align="start">
+          {unreadable ? (
+            <>
+              <MenuItem disabled>{m(msg("Saved views could not be read."))}</MenuItem>
+              <MenuItem onClick={() => setClearing(true)}>{m(msg("Clear saved views"))}</MenuItem>
+            </>
+          ) : null}
+          {rawViews.length > PULL_REQUEST_SAVED_VIEWS_MAX_COUNT ? (
+            <MenuItem disabled>{m(msg("Some saved views are not shown."))}</MenuItem>
+          ) : null}
           {views.map((view) => (
             <Tooltip key={view.id}>
               <TooltipTrigger
@@ -189,7 +223,13 @@ export function PullRequestSavedViewsMenu({
             }
           >
             <PlusIcon aria-hidden />
-            {atViewLimit ? m(msg("Maximum of 50 saved views")) : m(msg("Save current view…"))}
+            {atViewLimit ? (
+              <>
+                {m(msg("Maximum of 50 saved views"))} {m(msg("Limit reached, delete a view first"))}
+              </>
+            ) : (
+              m(msg("Save current view…"))
+            )}
           </MenuItem>
           {selectedView ? (
             <>
@@ -224,6 +264,47 @@ export function PullRequestSavedViewsMenu({
           ) : null}
         </MenuPopup>
       </Menu>
+      <Dialog open={clearing} onOpenChange={setClearing}>
+        <DialogPopup>
+          <DialogHeader>
+            <DialogTitle>{m(msg("Clear saved views?"))}</DialogTitle>
+            <DialogDescription>
+              {m(msg("This removes the unreadable saved views."))}
+            </DialogDescription>
+          </DialogHeader>
+          <DialogFooter>
+            <Button variant="outline" onClick={() => setClearing(false)}>
+              {m(msg("Cancel"))}
+            </Button>
+            <Button
+              onClick={() => {
+                setViews([]);
+                try {
+                  const saved = getLocalStorageItem(
+                    PULL_REQUEST_SAVED_VIEWS_KEY,
+                    PullRequestSavedViews,
+                  );
+                  if (saved?.length !== 0) throw new Error("Clear failed");
+                  setSelectedId(null);
+                  setClearing(false);
+                } catch {
+                  toastManager.add({
+                    type: "error",
+                    title: m(msg("Could not save PR views")),
+                    description: m(
+                      msg(
+                        "Local storage is unavailable or full. Try again after freeing space or allowing storage.",
+                      ),
+                    ),
+                  });
+                }
+              }}
+            >
+              {m(msg("Clear saved views"))}
+            </Button>
+          </DialogFooter>
+        </DialogPopup>
+      </Dialog>
       <Dialog
         open={editor !== null}
         onOpenChange={(open) => {

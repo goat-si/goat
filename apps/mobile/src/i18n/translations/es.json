@@ -49,5 +49,13 @@
   "22f08ba80504e5b7": "Cambiar nombre de la vista…",
   "0a76a3d58c4446c3": "Eliminar vista",
   "3d00009e7093eb1c": "Vistas",
-  "d8bdcfa1a6af8e2d": "Vistas guardadas de solicitudes de extracción"
+  "d8bdcfa1a6af8e2d": "Vistas guardadas de solicitudes de extracción",
+  "8252a0671efcf3db": "Algunas vistas guardadas no se muestran.",
+  "b4e500761b847d4e": "No se pudieron leer las vistas guardadas.",
+  "203e6f2fb15eb502": "Borrar vistas guardadas",
+  "39b3e751b2026cf1": "¿Borrar las vistas guardadas?",
+  "8a79ebeceb89b809": "Esto elimina las vistas guardadas que no se pueden leer.",
+  "1e6c081708cf5864": "Límite alcanzado, elimina una vista primero",
+  "00ad8aeed0a6c461": "Cancelar",
+  "79c3a969207c8760": "Esta vista supera la longitud permitida para un campo."
 }

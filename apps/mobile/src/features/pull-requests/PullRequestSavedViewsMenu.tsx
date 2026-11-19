@@ -6,7 +6,10 @@ import { useState } from "react";
 import { Alert } from "react-native";
 import { I18nProvider, useGT } from "../../i18n/I18nProvider";
 
-import { prompt as showTextInputDialog } from "../../components/ui/Dialog";
+import {
+  confirm as showConfirmation,
+  prompt as showTextInputDialog,
+} from "../../components/ui/Dialog";
 import type { MenuProps } from "../../components/ui/Menu.types";
 import { uuidv4 } from "../../lib/uuid";
 import type { PullRequestSavedView } from "../../persistence/mobile-preferences";
@@ -33,7 +36,7 @@ function TranslatedSavedViewsMenu({
   onApply: (view: PullRequestSavedView) => Promise<void>;
 }) {
   const gt = useGT();
-  const { views, ready, update } = usePullRequestSavedViews();
+  const { views, ready, update, status } = usePullRequestSavedViews();
   const [selectedId, setSelectedId] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
   const selectedView =
@@ -111,6 +114,25 @@ function TranslatedSavedViewsMenu({
   }
 
   const actions: MenuProps["actions"] = [
+    ...(status === "overflow"
+      ? [
+          {
+            id: "overflow-notice",
+            title: gt("Some saved views are not shown."),
+            attributes: { disabled: true },
+          },
+        ]
+      : []),
+    ...(status === "unreadable"
+      ? [
+          {
+            id: "unreadable-notice",
+            title: gt("Saved views could not be read."),
+            attributes: { disabled: true },
+          },
+          { id: "clear", title: gt("Clear saved views"), attributes: { destructive: true } },
+        ]
+      : []),
     ...views.map((view) => ({
       id: `apply:${view.id}`,
       title: view.name,
@@ -120,9 +142,11 @@ function TranslatedSavedViewsMenu({
       id: "save",
       title:
         views.length >= PULL_REQUEST_SAVED_VIEWS_MAX_COUNT
-          ? gt("Maximum of 50 saved views")
+          ? gt("Limit reached, delete a view first")
           : gt("Save current view…"),
-      attributes: { disabled: views.length >= PULL_REQUEST_SAVED_VIEWS_MAX_COUNT },
+      attributes: {
+        disabled: status === "unreadable" || views.length >= PULL_REQUEST_SAVED_VIEWS_MAX_COUNT,
+      },
     },
     ...(selectedView
       ? [
@@ -152,7 +176,20 @@ function TranslatedSavedViewsMenu({
           void applyView(view);
           return;
         }
-        if (id === "save") editName();
+        if (id === "clear")
+          showConfirmation({
+            title: gt("Clear saved views?"),
+            message: gt("This removes the unreadable saved views."),
+            cancelText: gt("Cancel"),
+            confirmText: gt("Clear saved views"),
+            destructive: true,
+            onConfirm: () => {
+              void persist(() => []).then((saved) => {
+                if (saved) setSelectedId(null);
+              });
+            },
+          });
+        else if (id === "save") editName();
         else if (id === "rename" && selectedView) editName(selectedView);
         else if (id === "update" && selectedView)
           void persist((current) =>

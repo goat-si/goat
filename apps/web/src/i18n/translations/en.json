@@ -535,5 +535,12 @@
   "3b50d0053c320a55": "Save your search, filters, and sort order on this device.",
   "01c75f010cf6228f": "View name",
   "00ad8aeed0a6c461": "Cancel",
-  "762fcce45b65eea9": "Save"
+  "762fcce45b65eea9": "Save",
+  "8252a0671efcf3db": "Some saved views are not shown.",
+  "b4e500761b847d4e": "Saved views could not be read.",
+  "203e6f2fb15eb502": "Clear saved views",
+  "39b3e751b2026cf1": "Clear saved views?",
+  "8a79ebeceb89b809": "This removes the unreadable saved views.",
+  "1e6c081708cf5864": "Limit reached, delete a view first",
+  "79c3a969207c8760": "This view exceeds the allowed field length."
 }

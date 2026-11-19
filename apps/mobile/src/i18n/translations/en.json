@@ -49,5 +49,13 @@
   "22f08ba80504e5b7": "Rename view…",
   "0a76a3d58c4446c3": "Delete view",
   "3d00009e7093eb1c": "Views",
-  "d8bdcfa1a6af8e2d": "Saved pull request views"
+  "d8bdcfa1a6af8e2d": "Saved pull request views",
+  "8252a0671efcf3db": "Some saved views are not shown.",
+  "b4e500761b847d4e": "Saved views could not be read.",
+  "203e6f2fb15eb502": "Clear saved views",
+  "39b3e751b2026cf1": "Clear saved views?",
+  "8a79ebeceb89b809": "This removes the unreadable saved views.",
+  "1e6c081708cf5864": "Limit reached, delete a view first",
+  "00ad8aeed0a6c461": "Cancel",
+  "79c3a969207c8760": "This view exceeds the allowed field length."
 }

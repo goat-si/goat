@@ -67,6 +67,7 @@ const reactTests = [
   "src/components/PdfFilePreview.test.tsx",
   "src/features/cloud/CloudAuthProvider.disabled.test.tsx",
   "src/features/cloud/AccountDeletionSection.test.tsx",
+  "src/features/pull-requests/PullRequestSavedViewsMenu.recovery.test.tsx",
   "src/features/cloud/CloudAuthProvider.test.ts",
   "src/features/cloud/cloudAccountService.test.tsx",
   "src/features/connection/ConnectionsNewRouteScreen.test.tsx",

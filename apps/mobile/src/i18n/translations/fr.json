@@ -49,5 +49,13 @@
   "22f08ba80504e5b7": "Renommer la vue…",
   "0a76a3d58c4446c3": "Supprimer la vue",
   "3d00009e7093eb1c": "Vues",
-  "d8bdcfa1a6af8e2d": "Vues enregistrées des demandes de fusion"
+  "d8bdcfa1a6af8e2d": "Vues enregistrées des demandes de fusion",
+  "8252a0671efcf3db": "Certaines vues enregistrées ne sont pas affichées.",
+  "b4e500761b847d4e": "Impossible de lire les vues enregistrées.",
+  "203e6f2fb15eb502": "Effacer les vues enregistrées",
+  "39b3e751b2026cf1": "Effacer les vues enregistrées ?",
+  "8a79ebeceb89b809": "Les vues enregistrées illisibles seront supprimées.",
+  "1e6c081708cf5864": "Limite atteinte, supprimez d’abord une vue",
+  "00ad8aeed0a6c461": "Annuler",
+  "79c3a969207c8760": "Cette vue dépasse la longueur autorisée pour un champ."
 }
