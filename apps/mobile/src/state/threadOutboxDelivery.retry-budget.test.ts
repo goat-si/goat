@@ -236,6 +236,39 @@ afterEach(() => {
   state.cleanups.splice(0).forEach((cleanup) => cleanup());
 });
 
+it("releases a removed thread's delivery slot for a newly queued message", async () => {
+  setOperateGrant("secondary", true);
+  const first = message();
+  await state.manager.enqueue(first);
+  const upload = Promise.withResolvers<{
+    status: "ready";
+    attachments: [];
+    draftAttachments: [];
+    pendingAttachmentIds: [];
+  }>();
+  state.prepare.mockImplementationOnce(() => upload.promise);
+  startDelivery();
+  try {
+    await vi.waitFor(() => expect(state.prepare).toHaveBeenCalledOnce());
+    await state.manager.remove(first);
+    await state.manager.enqueue(
+      message({
+        messageId: MessageId.make("replacement-message"),
+        commandId: CommandId.make("replacement-command"),
+      }),
+    );
+    await vi.waitFor(() => expect(state.start).toHaveBeenCalledOnce());
+    expect(state.start.mock.calls[0]?.[0].input.message.messageId).toBe("replacement-message");
+  } finally {
+    upload.resolve({
+      status: "ready",
+      attachments: [],
+      draftAttachments: [],
+      pendingAttachmentIds: [],
+    });
+  }
+});
+
 describe("upload retry budget across deferrals", () => {
   it("keeps its retry budget when a removed environment is added again", async () => {
     const { workspaceConnections } = await import("./workspace");
