@@ -93,6 +93,11 @@ function setup(
 }
 
 describe("composer voice controller", () => {
+  it("does not request PCM streaming for batch-only recording", async () => {
+    using session = setup();
+    await session.controller.start();
+    expect(session.startRecording.mock.calls[0]?.[0].onPcmFrame).toBeUndefined();
+  });
   it("keeps a live preview and commits the full batch transcript after live failure", async () => {
     chooseEnvironmentSpeech(EnvironmentId.make("voice-env-a"));
     const grant = readEnvironmentSpeechGrant();

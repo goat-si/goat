@@ -17,6 +17,10 @@ export class LiveSpeechFramePump {
   private draining: Promise<void> | null = null;
   private state: "starting" | "ready" | "failed" | "cancelled" | "finishing" = "starting";
 
+  get active() {
+    return this.state === "starting" || this.state === "ready";
+  }
+
   constructor(
     start: (signal: AbortSignal, onFailure: () => void) => Promise<LiveSpeechFrameSession | null>,
     private readonly onFailure: () => void,

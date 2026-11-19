@@ -133,6 +133,21 @@ describe("browser microphone lifecycle", () => {
     await mic.recorder.cancelRecording();
     expect(onPcmFrame).toHaveBeenCalledOnce();
   });
+
+  it("stops encoding live PCM after the stream falls back to batch", async () => {
+    await using mic = fakeMicrophone();
+    const onPcmFrame = vi.fn();
+    let active = true;
+    const start = mic.recorder.startRecording({ onPcmFrame, shouldEncodePcm: () => active });
+    mic.permission.resolve(mic.stream);
+    await start;
+    mic.frame(new Float32Array(48_000).fill(0.25));
+    expect(onPcmFrame).toHaveBeenCalledOnce();
+    active = false;
+    mic.frame(new Float32Array(48_000).fill(0.25));
+    await mic.recorder.stopRecording();
+    expect(onPcmFrame).toHaveBeenCalledOnce();
+  });
   it("drops only initial digital silence, downmixes, streams WAV and releases all resources on stop", async () => {
     await using mic = fakeMicrophone();
     const onStreamingChunk = vi.fn();

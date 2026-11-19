@@ -96,6 +96,7 @@ export interface VoiceRecordingPayload {
 export interface VoiceRecordingOptions {
   readonly onStreamingChunk?: (payload: VoiceRecordingPayload) => void;
   readonly onPcmFrame?: (frame: Uint8Array) => void;
+  readonly shouldEncodePcm?: () => boolean;
   readonly onLimitReached?: () => void;
   /** A recording that started but then failed, such as one that never received sound. */
   readonly onError?: (error: VoiceMicrophoneError) => void;
@@ -116,7 +117,7 @@ interface RecorderRuntime {
   readonly processor: ScriptProcessorNode;
   readonly gain: GainNode;
   readonly chunks: Float32Array[];
-  readonly pcmEncoder: StreamingPcmEncoder | null;
+  pcmEncoder: StreamingPcmEncoder | null;
   streamingChunks: Float32Array[];
   streamingSamples: number;
   sampleCount: number;
@@ -280,6 +281,7 @@ export class BrowserVoiceRecorder {
         runtime.hasAudioSignal = true;
         runtime.chunks.push(mono);
         runtime.sampleCount += mono.length;
+        if (options.shouldEncodePcm?.() === false) runtime.pcmEncoder = null;
         runtime.pcmEncoder?.push(mono);
         if (options.onStreamingChunk) {
           runtime.streamingChunks.push(mono);

@@ -234,9 +234,14 @@ export class ComposerVoiceController {
       .catch(() => undefined);
     try {
       await this.dependencies.startRecording({
-        onPcmFrame: (frame) => {
-          if (generation === this.generation) this.livePump?.push(frame);
-        },
+        ...(this.livePump
+          ? {
+              shouldEncodePcm: () => this.livePump?.active === true,
+              onPcmFrame: (frame: Uint8Array) => {
+                if (generation === this.generation) this.livePump?.push(frame);
+              },
+            }
+          : {}),
         onStreamingChunk: (payload) => {
           if (!target.localModelGrant && generation === this.generation)
             this.enqueuePreview(payload);
