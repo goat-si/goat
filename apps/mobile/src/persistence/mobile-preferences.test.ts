@@ -163,3 +163,63 @@ it.effect("keeps PR activity visibility across a restart and rejects malformed s
     expect(Reflect.get(yield* loadFresh, "pullRequestActivityVisibility")).toBeUndefined();
   }),
 );
+
+it.effect("limits saved view count and field length on write", () =>
+  Effect.gen(function* () {
+    const view = {
+      id: "id",
+      name: "view",
+      environmentId: null,
+      query: "x".repeat(201),
+      controls: {
+        state: "open" as const,
+        involvement: "all" as const,
+        filters: {},
+        sort: "updated" as const,
+      },
+    };
+    const store = yield* MobilePreferences.make();
+    expect((yield* Effect.result(store.savePatch({ pullRequestSavedViews: [view] })))._tag).toBe(
+      "Failure",
+    );
+    expect(
+      (yield* Effect.result(
+        store.savePatch({
+          pullRequestSavedViews: Array.from({ length: 51 }, () => ({ ...view, query: "" })),
+        }),
+      ))._tag,
+    ).toBe("Failure");
+  }).pipe(Effect.provide(storeLayer)),
+);
+
+it.effect("keeps valid saved views across a read and a later save when another is malformed", () =>
+  Effect.gen(function* () {
+    const view = {
+      id: "valid",
+      name: "Kept",
+      environmentId: null,
+      query: "",
+      controls: {
+        state: "open" as const,
+        involvement: "all" as const,
+        filters: {},
+        sort: "updated" as const,
+      },
+    };
+    yield* seedStoredPreferences({
+      pullRequestSavedViews: [view, { ...view, query: "x".repeat(201) }],
+    });
+    const store = yield* MobilePreferences.make();
+    expect((yield* store.load).pullRequestSavedViews).toEqual([view]);
+    yield* store.savePatch({ followUpBehavior: "queue" });
+    expect((yield* store.load).pullRequestSavedViews).toEqual([view]);
+  }).pipe(Effect.provide(storeLayer)),
+);
+
+it.effect("does not overwrite unreadable saved-view data when another setting changes", () =>
+  Effect.gen(function* () {
+    yield* seedStoredPreferences({ pullRequestSavedViews: "unreadable", language: "en" });
+    const store = yield* MobilePreferences.make();
+    expect((yield* Effect.result(store.savePatch({ language: "ko" })))._tag).toBe("Failure");
+  }).pipe(Effect.provide(storeLayer)),
+);

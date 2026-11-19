@@ -5,7 +5,11 @@ import * as Option from "effect/Option";
 import * as Ref from "effect/Ref";
 import * as Schema from "effect/Schema";
 import * as Semaphore from "effect/Semaphore";
-import { PullRequestSavedViewIdentity } from "@goat/client-runtime/pull-request-saved-views";
+import {
+  PULL_REQUEST_SAVED_VIEWS_MAX_COUNT,
+  PULL_REQUEST_VIEW_FIELD_MAX_LENGTH,
+  PullRequestSavedViewIdentity,
+} from "@goat/client-runtime/pull-request-saved-views";
 import {
   ChannelBotRef,
   EnvironmentId,
@@ -43,9 +47,19 @@ export type PullRequestListControls = typeof PullRequestListControls.Type;
 
 export const PullRequestSavedView = Schema.Struct({
   ...PullRequestSavedViewIdentity.fields,
-  environmentId: Schema.NullOr(Schema.String),
-  controls: PullRequestListControls,
-  query: Schema.String,
+  environmentId: Schema.NullOr(
+    Schema.String.check(Schema.isMaxLength(PULL_REQUEST_VIEW_FIELD_MAX_LENGTH)),
+  ),
+  controls: Schema.Struct({
+    ...PullRequestListControls.fields,
+    projectId: Schema.optional(
+      Schema.String.check(Schema.isMaxLength(PULL_REQUEST_VIEW_FIELD_MAX_LENGTH)),
+    ),
+    projectEnvironmentId: Schema.optional(
+      Schema.String.check(Schema.isMaxLength(PULL_REQUEST_VIEW_FIELD_MAX_LENGTH)),
+    ),
+  }),
+  query: Schema.String.check(Schema.isMaxLength(PULL_REQUEST_VIEW_FIELD_MAX_LENGTH)),
 });
 export type PullRequestSavedView = typeof PullRequestSavedView.Type;
 const isPullRequestSavedView = Schema.is(PullRequestSavedView);
@@ -430,7 +444,13 @@ function sanitizePreferences(parsed: Preferences): Preferences {
     preferences.workspaceSelections = parsed.workspaceSelections;
   }
   if (Array.isArray(parsed.pullRequestSavedViews)) {
-    preferences.pullRequestSavedViews = parsed.pullRequestSavedViews.filter(isPullRequestSavedView);
+    preferences.pullRequestSavedViews = parsed.pullRequestSavedViews
+      .slice(0, PULL_REQUEST_SAVED_VIEWS_MAX_COUNT)
+      .filter((view) => {
+        if (isPullRequestSavedView(view)) return true;
+        console.debug("Discarding malformed saved pull request view");
+        return false;
+      });
   }
   return preferences;
 }
@@ -439,6 +459,7 @@ export const make = Effect.fn("MobilePreferencesStore.make")(function* () {
   const database = yield* MobileDatabase.MobileDatabase;
   const secureStorage = yield* MobileSecureStorage.MobileSecureStorage;
   const lock = yield* Semaphore.make(1);
+  let unreadableSavedViews = false;
   const lastUpdatedAt = yield* Ref.make(0);
 
   const parsePayload = (raw: string | null): Preferences | null => {
@@ -599,6 +620,10 @@ export const make = Effect.fn("MobilePreferencesStore.make")(function* () {
       }
     }
 
+    const rawViews = parsed?.pullRequestSavedViews;
+    unreadableSavedViews =
+      rawViews !== undefined &&
+      (!Array.isArray(rawViews) || rawViews.length > PULL_REQUEST_SAVED_VIEWS_MAX_COUNT);
     return parsed === null ? {} : sanitizePreferences(parsed);
   });
 
@@ -611,10 +636,23 @@ export const make = Effect.fn("MobilePreferencesStore.make")(function* () {
       .withPermits(1)(
         Effect.gen(function* () {
           const current = yield* loadUnlocked;
+          if (unreadableSavedViews)
+            return yield* new MobilePreferencesSaveError({
+              cause: "Unreadable saved pull request views",
+            });
           const patch = yield* Effect.try({
             try: () => transform(current),
             catch: (cause) => new MobilePreferencesSaveError({ cause }),
           });
+          if (
+            patch.pullRequestSavedViews !== undefined &&
+            (patch.pullRequestSavedViews.length > PULL_REQUEST_SAVED_VIEWS_MAX_COUNT ||
+              !patch.pullRequestSavedViews.every(isPullRequestSavedView))
+          ) {
+            return yield* new MobilePreferencesSaveError({
+              cause: "Invalid saved pull request views",
+            });
+          }
           const next: Preferences = { ...current, ...patch };
           const payload = yield* encode(PREFERENCES_KEY, next);
           yield* saveJson(payload);

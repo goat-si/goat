@@ -1,9 +1,14 @@
 import * as Schema from "effect/Schema";
 
 export const PULL_REQUEST_VIEW_NAME_MAX_LENGTH = 80;
+export const PULL_REQUEST_SAVED_VIEWS_MAX_COUNT = 50;
+export const PULL_REQUEST_VIEW_FIELD_MAX_LENGTH = 200;
 
 export const PullRequestSavedViewIdentity = Schema.Struct({
-  id: Schema.String.check(Schema.isMinLength(1)),
+  id: Schema.String.check(
+    Schema.isMinLength(1),
+    Schema.isMaxLength(PULL_REQUEST_VIEW_FIELD_MAX_LENGTH),
+  ),
   name: Schema.String.check(
     Schema.isMinLength(1),
     Schema.isMaxLength(PULL_REQUEST_VIEW_NAME_MAX_LENGTH),
