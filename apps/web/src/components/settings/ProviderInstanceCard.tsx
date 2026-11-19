@@ -1,3 +1,4 @@
+import { nextConfigBlobWithValue } from "./ProviderConfigValue";
 import {
   openCodexRouteSummary,
   resolveProviderInstanceDisplayName,
@@ -128,18 +129,6 @@ function readConfigString(config: unknown, key: string): string | null {
   if (config === null || typeof config !== "object") return null;
   const value = (config as Record<string, unknown>)[key];
   return typeof value === "string" && value.trim().length > 0 ? value.trim() : null;
-}
-
-/** Preserve explicit empty arrays/objects; clearing a custom list differs from selecting driver defaults. */
-function nextConfigBlobWithValue(
-  config: unknown,
-  key: string,
-  value: unknown,
-): Record<string, unknown> {
-  const base: Record<string, unknown> =
-    config !== null && typeof config === "object" ? { ...(config as Record<string, unknown>) } : {};
-  base[key] = value;
-  return base;
 }
 
 export function deriveProviderModelsForDisplay(input: {
