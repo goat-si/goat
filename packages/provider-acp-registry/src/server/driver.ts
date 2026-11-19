@@ -3,13 +3,11 @@ import {
   ProviderDriverKind,
   resolveOfficialAcpRegistryIconUrl,
   type AcpRegistryOperationError,
-  type AcpRegistryProbeModel,
   type ServerProvider,
   type ServerProviderModel,
 } from "@goat/contracts";
 import { AcpRegistrySettings } from "../settings.ts";
 import * as HostProcess from "@goat/shared/HostProcess";
-import { createModelCapabilities } from "@goat/shared/model";
 import * as Clock from "effect/Clock";
 import * as Digest from "effect/crypto/Digest";
 import * as SecureRandom from "effect/crypto/SecureRandom";
@@ -33,10 +31,7 @@ import {
   type ProviderDriver,
   type ProviderInstance,
 } from "@goat/provider-core/server/driver";
-import {
-  providerModelsFromSettings,
-  providerProbeEnvironment,
-} from "@goat/provider-core/server/snapshotProbe";
+import { providerProbeEnvironment } from "@goat/provider-core/server/snapshotProbe";
 import { makeManualOnlyProviderMaintenanceCapabilities } from "@goat/provider-core/server/maintenanceResolver";
 import {
   haveProviderSnapshotSettingsChanged,
@@ -58,6 +53,7 @@ import {
 } from "./probe.ts";
 import * as AcpRegistrySupport from "./AcpRegistrySupport.ts";
 import { probeFingerprint } from "./probeFingerprint.ts";
+import { modelsFromDiscovery } from "./discoveredModels.ts";
 import { makeAcpRegistryLearnedModels, type LearnedModelsCheck } from "./learnedModels.ts";
 import { environmentText, untilEnvironmentHolds } from "./environmentCheck.ts";
 import {
@@ -73,79 +69,10 @@ const DRIVER_KIND = ProviderDriverKind.make("acpRegistry");
 const decodeSettings = Schema.decodeSync(AcpRegistrySettings);
 // Cache only successful authenticated probes so sign-in changes remain visible.
 const PROBE_SUCCESS_TTL_MS = 15 * 60 * 1_000;
-const EMPTY_CAPABILITIES = createModelCapabilities({ optionDescriptors: [] });
 const MAINTENANCE = makeManualOnlyProviderMaintenanceCapabilities({
   provider: DRIVER_KIND,
   packageName: null,
 });
-
-function modelsFromDiscovery(
-  discovery:
-    | Pick<
-        AcpRegistryLiveConfiguration,
-        "models" | "currentModelId" | "configOptions" | "modelOptionIds"
-      >
-    | undefined,
-  customModels: ReadonlyArray<string>,
-  previousModels: ReadonlyArray<ServerProviderModel> = [],
-): ReadonlyArray<ServerProviderModel> {
-  const discovered = discovery?.models ?? [];
-  const capabilities =
-    discovery === undefined || discovery.configOptions.length === 0
-      ? EMPTY_CAPABILITIES
-      : createModelCapabilities({ optionDescriptors: discovery.configOptions });
-  const modelOptionIds = new Set(discovery?.modelOptionIds ?? []);
-  const shared = (discovery?.configOptions ?? []).filter(
-    (descriptor) => !modelOptionIds.has(descriptor.id),
-  );
-  const sharedIds = new Set(shared.map((descriptor) => descriptor.id));
-  const capabilitiesFor = ({ id: slug, reasoningEffort }: AcpRegistryProbeModel) => {
-    const isCurrent = slug === discovery?.currentModelId;
-    if (isCurrent && reasoningEffort === undefined) return capabilities;
-    const inherited = isCurrent
-      ? (capabilities.optionDescriptors ?? [])
-      : [
-          ...shared,
-          ...(
-            previousModels.find((model) => model.slug === slug)?.capabilities?.optionDescriptors ??
-            []
-          ).filter((descriptor) => !sharedIds.has(descriptor.id)),
-        ];
-    const optionDescriptors =
-      reasoningEffort === undefined
-        ? inherited
-        : [
-            ...inherited.filter(
-              (descriptor) =>
-                descriptor.id !== reasoningEffort?.id &&
-                !(descriptor.type === "select" && descriptor.role === "reasoning"),
-            ),
-            ...(reasoningEffort === null ? [] : [reasoningEffort]),
-          ];
-    return optionDescriptors.length === 0
-      ? EMPTY_CAPABILITIES
-      : createModelCapabilities({ optionDescriptors });
-  };
-  const builtInModels: ReadonlyArray<ServerProviderModel> =
-    discovered.length === 0
-      ? [
-          {
-            slug: "default",
-            name: "Default",
-            isCustom: false,
-            isDefault: true,
-            capabilities,
-          },
-        ]
-      : discovered.map((model) => ({
-          slug: model.id,
-          name: model.name,
-          isCustom: false,
-          ...(model.id === discovery?.currentModelId ? { isDefault: true } : {}),
-          capabilities: capabilitiesFor(model),
-        }));
-  return providerModelsFromSettings(builtInModels, customModels, capabilities);
-}
 
 interface SnapshotIdentity {
   readonly instanceId: ProviderInstance["instanceId"];
