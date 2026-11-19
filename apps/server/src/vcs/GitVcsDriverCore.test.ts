@@ -1359,7 +1359,13 @@ it.layer(layerTest)("GitVcsDriver core integration", (it) => {
         const unstaged = (yield* driver.getReviewDiffPreview({ cwd, scope: "unstaged" }))
           .sources[0]!;
         assert.deepStrictEqual(unstaged.files, [
-          { path: "renamed.md", previousPath: null, additions: 0, deletions: 1 },
+          {
+            path: "renamed.md",
+            previousPath: null,
+            additions: 0,
+            deletions: 1,
+            changeType: "deleted",
+          },
         ]);
         assert.deepStrictEqual(
           yield* driver.getReviewDiffFileContents(
@@ -1401,7 +1407,7 @@ it.layer(layerTest)("GitVcsDriver core integration", (it) => {
         const unstaged = (yield* driver.getReviewDiffPreview({ cwd, scope: "unstaged" }))
           .sources[0]!;
         assert.deepStrictEqual(unstaged.files, [
-          { path: "README.md", previousPath: null, additions: 1, deletions: 0 },
+          { path: "README.md", previousPath: null, additions: 1, deletions: 0, changeType: "new" },
         ]);
         assert.deepStrictEqual(
           yield* driver.getReviewDiffFileContents(
@@ -1941,9 +1947,27 @@ it.layer(layerTest)("GitVcsDriver core integration", (it) => {
           { path: "z-last.txt", previousPath: null, additions: 1, deletions: 0, changeType: "new" },
         ]);
         assert.deepStrictEqual(dirty.files, [
-          { path: "a-large.txt", previousPath: null, additions: 4000, deletions: 4000 },
-          { path: "untracked.txt", previousPath: null, additions: 4000, deletions: 0 },
-          { path: "z-last.txt", previousPath: null, additions: 1, deletions: 1 },
+          {
+            path: "a-large.txt",
+            previousPath: null,
+            additions: 4000,
+            deletions: 4000,
+            changeType: "change",
+          },
+          {
+            path: "untracked.txt",
+            previousPath: null,
+            additions: 4000,
+            deletions: 0,
+            changeType: "new",
+          },
+          {
+            path: "z-last.txt",
+            previousPath: null,
+            additions: 1,
+            deletions: 1,
+            changeType: "change",
+          },
         ]);
       }),
     );
@@ -2011,6 +2035,7 @@ it.layer(layerTest)("GitVcsDriver core integration", (it) => {
           previousPath: null,
           additions: 0,
           deletions: 0,
+          changeType: "new",
         });
         if ((yield* HostProcess.Platform) !== "win32") {
           assert.deepInclude(branch.files ?? [], {
@@ -2195,8 +2220,14 @@ it.layer(layerTest)("GitVcsDriver core integration", (it) => {
         const dirty = yield* driver.getReviewDiffPreview({ cwd, baseRef: initialBranch });
         const changes = dirty.sources.find((source) => source.kind === "branch-range")!;
         assert.deepStrictEqual(changes.files, [
-          { path: "README.md", previousPath: null, additions: 2, deletions: 0 },
-          { path: "new.txt", previousPath: null, additions: 1, deletions: 0 },
+          {
+            path: "README.md",
+            previousPath: null,
+            additions: 2,
+            deletions: 0,
+            changeType: "change",
+          },
+          { path: "new.txt", previousPath: null, additions: 1, deletions: 0, changeType: "new" },
         ]);
         assert.strictEqual(changes.diff.match(/^diff --git a\/README\.md /gm)?.length, 1);
         assert.include(changes.diff, "+dirty");
@@ -2316,8 +2347,20 @@ it.layer(layerTest)("GitVcsDriver core integration", (it) => {
           const changes = preview.sources.find((source) => source.kind === "branch-range")!;
           assert.strictEqual(changes.baseRef, "refs/remotes/upstream/main");
           assert.deepStrictEqual(changes.files, [
-            { path: "feature.txt", previousPath: null, additions: 1, deletions: 0 },
-            { path: "upstream.txt", previousPath: null, additions: 1, deletions: 1 },
+            {
+              path: "feature.txt",
+              previousPath: null,
+              additions: 1,
+              deletions: 0,
+              changeType: "new",
+            },
+            {
+              path: "upstream.txt",
+              previousPath: null,
+              additions: 1,
+              deletions: 1,
+              changeType: "change",
+            },
           ]);
           const contents = yield* driver.getReviewDiffFileContents(
             makeReviewDiffFileContentsInput(cwd, {
