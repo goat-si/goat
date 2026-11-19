@@ -60,7 +60,12 @@ export function answersClaudeRequest(
   if (echoed.length > 0 && !echoed.some((uuid) => uuid === promptUuid || steerUuids.has(uuid)))
     return false;
   if (message.type === "system") {
-    return message.subtype === "task_started" && (message.spawn_depth ?? 1) <= 1;
+    return (
+      message.subtype === "task_started" &&
+      message.is_backgrounded !== true &&
+      message.task_type !== "local_bash" &&
+      (message.spawn_depth ?? 1) <= 1
+    );
   }
   if (
     message.type !== "assistant" &&
