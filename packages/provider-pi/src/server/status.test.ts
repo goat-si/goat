@@ -127,6 +127,7 @@ const piDiscoverySpawner = (
   extensionFreeInventory: unknown = inventory,
   onExtensionFreeModelRequest: Effect.Effect<void> = Effect.void,
   options: {
+    readonly startupDialog?: boolean;
     readonly version?: string;
     readonly state?: unknown;
     readonly authCheck?: string | undefined;
@@ -149,6 +150,17 @@ const piDiscoverySpawner = (
           ? Effect.die(`Unexpected pi ${args.join(" ")}`)
           : Effect.succeed(processHandle({ stdout: options.authCheck, exitCode: 1 }));
       }
+      if (
+        options.startupDialog === true &&
+        !args.includes("--no-extensions") &&
+        !args.includes("--no-approve")
+      ) {
+        return Effect.succeed(
+          processHandle({
+            stdout: `${encodeJsonLine({ type: "extension_ui_request", method: "select", id: "trust" })}\n`,
+          }),
+        );
+      }
       if (args.includes("--no-extensions") && extensionFreeInventory === exitsWithoutExtensions) {
         return Effect.succeed(
           processHandle({ stderr: 'Error: Unknown provider "demo".', exitCode: 1 }),
@@ -170,6 +182,54 @@ const settings = {
 } as const;
 
 describe("PiProvider", () => {
+  it.effect.each([undefined, OMO_PROFILE])(
+    "retries blocked discovery without project trust for profile %s",
+    (profile) =>
+      Effect.gen(function* () {
+        const launches: string[][] = [];
+        const spawner = yield* piDiscoverySpawner(
+          { models: [{ provider: "anthropic", id: "claude-opus" }] },
+          undefined,
+          undefined,
+          {
+            startupDialog: true,
+            version: profile === undefined ? "0.84.3" : "5.1.40",
+            observe: (command) => {
+              launches.push([...command.args]);
+            },
+          },
+        );
+        const result = yield* checkPiProviderStatus(settings, undefined, undefined, profile).pipe(
+          Effect.provideService(ChildProcessSpawner.ChildProcessSpawner, spawner),
+        );
+        assert.include(
+          result.models.map((model) => model.slug),
+          "anthropic/claude-opus",
+        );
+        assert.equal(launches.filter((args) => args.includes("--no-approve")).length, 1);
+      }).pipe(Effect.provide(NodeServices.layer)),
+  );
+
+  it.effect.each(["--approve", "-a", "--no-approve", "-na"])(
+    "preserves explicit project trust flag %s",
+    (flag) =>
+      Effect.gen(function* () {
+        const launches: string[][] = [];
+        const spawner = yield* piDiscoverySpawner({ models: [] }, undefined, undefined, {
+          startupDialog: true,
+          observe: (command) => {
+            launches.push([...command.args]);
+          },
+        });
+        yield* checkPiProviderStatus({ ...settings, launchArgs: flag }).pipe(
+          Effect.provideService(ChildProcessSpawner.ChildProcessSpawner, spawner),
+        );
+        assert.isFalse(
+          launches.some((args) => args.includes("--no-approve") && flag !== "--no-approve"),
+        );
+      }).pipe(Effect.provide(NodeServices.layer)),
+  );
+
   it.effect("does not pass inherited GOAT session credentials to any Pi or OmO probe process", () =>
     Effect.gen(function* () {
       for (const profile of [undefined, OMO_PROFILE]) {
