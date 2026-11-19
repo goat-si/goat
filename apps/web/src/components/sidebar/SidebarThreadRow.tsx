@@ -893,7 +893,6 @@ export const SidebarThreadRow = memo(function SidebarThreadRow(props: SidebarThr
     />
   ) : (
     <span
-      aria-hidden
       className={cn(
         "min-w-0 flex-1 text-start text-sm transition-opacity motion-reduce:transition-none",
         shouldRecede ? "font-normal" : "font-medium",
@@ -925,7 +924,6 @@ export const SidebarThreadRow = memo(function SidebarThreadRow(props: SidebarThr
       {thread.title}
     </span>
   );
-  const accessibleTitle = isRenaming ? null : <span className="sr-only">{thread.title}</span>;
   // A cloud run names the outside agent that launched it; GOAT Bot marks the coding it sent.
   const originLabel = threadOriginLabel(thread.source);
   const externalLauncherBadge = originLabel ? (
@@ -1050,7 +1048,6 @@ export const SidebarThreadRow = memo(function SidebarThreadRow(props: SidebarThr
               />
             }
           >
-            {accessibleTitle}
             <span
               className={cn(
                 "flex shrink-0 items-center transition-opacity",
@@ -1221,7 +1218,6 @@ export const SidebarThreadRow = memo(function SidebarThreadRow(props: SidebarThr
             />
           }
         >
-          {accessibleTitle}
           <div className="relative z-10 h-[3.375rem] px-(--sidebar-row-content-inset) py-(--sidebar-content-inset)">
             <div className="flex h-5 min-w-0 items-center gap-1.5">
               {providerEntry ? (
