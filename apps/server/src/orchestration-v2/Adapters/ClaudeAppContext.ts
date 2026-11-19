@@ -2,6 +2,7 @@ import type { SDKUserMessage } from "@anthropic-ai/claude-agent-sdk";
 import { ProviderDriverKind } from "@goat/contracts";
 import * as ProviderAdapter from "@goat/provider-core/server/ProviderAdapter";
 import * as Effect from "effect/Effect";
+import { encodeClaudeJson } from "./ClaudeAgentSdkQueryRunner.ts";
 import type { reserveClaudePdfBudget } from "./ClaudeAttachmentBudget.ts";
 
 const MAX_APP_CONTEXT_SESSIONS = 64;
@@ -31,7 +32,7 @@ export function makeClaudeAppContextDelivery() {
         .replaceAll("<", "&lt;")
         .replaceAll(">", "&gt;");
       const block = { type: "text" as const, text: `<external_${key}>${text}</external_${key}>` };
-      bytes += Buffer.byteLength(JSON.stringify(block)) + 1;
+      bytes += Buffer.byteLength(encodeClaudeJson(block)) + 1;
       if (blocks.length >= MAX_APP_CONTEXT_ENTRIES || bytes > MAX_APP_CONTEXT_BYTES) {
         return yield* new ProviderAdapter.ProviderAdapterProtocolError({
           driver: ProviderDriverKind.make("claudeAgent"),

@@ -1,7 +1,7 @@
 import * as Effect from "effect/Effect";
 
 export const CLAUDE_ATTACHMENT_MAX_BYTES = 28 * 1024 * 1024;
-const CLAUDE_ATTACHMENT_MAX_PAGES = 100;
+export const CLAUDE_ATTACHMENT_MAX_PAGES = 100;
 
 export const makeClaudeAttachmentBudget = (used?: { pagesUsed: number; bytesUsed: number }) => ({
   committed: { pages: used?.pagesUsed ?? 0, bytes: used?.bytesUsed ?? 0 },

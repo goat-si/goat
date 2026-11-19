@@ -1,6 +1,7 @@
 import { makeClaudeAppContextDelivery } from "./ClaudeAppContext.ts";
 import {
   CLAUDE_ATTACHMENT_MAX_BYTES,
+  CLAUDE_ATTACHMENT_MAX_PAGES,
   makeClaudeAttachmentBudget,
   reserveClaudePdfBudget,
 } from "./ClaudeAttachmentBudget.ts";
