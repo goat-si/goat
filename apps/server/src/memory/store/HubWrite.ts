@@ -211,7 +211,11 @@ export const makeHubWrite = (
         "hub-tail",
         sql<{
           entry_json: string;
-        }>`SELECT entry_json FROM memory_hub_operations WHERE space=${input.memorySpaceId} AND hub_sequence>${input.afterSequence} AND hub_sequence<=${highWatermark} ORDER BY hub_sequence LIMIT ${Math.max(1, Math.min(input.limit, M.MEMORY_PAGE_MAX_ITEMS)) + 1}`,
+          scope_version: number | null;
+        }>`SELECT o.entry_json,i.scope_version FROM memory_hub_operations o
+          LEFT JOIN memory_identity_ledger i ON i.space=o.space AND i.memory_id=o.memory_id
+          WHERE o.space=${input.memorySpaceId} AND o.hub_sequence>${input.afterSequence} AND o.hub_sequence<=${highWatermark}
+          ORDER BY o.hub_sequence LIMIT ${Math.max(1, Math.min(input.limit, M.MEMORY_PAGE_MAX_ITEMS)) + 1}`,
       );
       const entries: M.MemoryHubEntry[] = [];
       const maxBytes = Math.min(input.maxBytes, 262144);
@@ -230,6 +234,12 @@ export const makeHubWrite = (
           }),
         ).length;
         if (size > maxBytes) break;
+        if (
+          entry.kind === "operation" &&
+          M.isMemoryRevisionOperation(entry.operation) &&
+          (entry.operation.expectedScopeVersion ?? 0) < (row.scope_version ?? 0)
+        )
+          return yield* new M.MemoryHubError({ code: "cursor_expired" });
         entries.push(entry);
       }
       if (rows.length && entries.length === 0)
