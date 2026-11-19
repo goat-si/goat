@@ -211,7 +211,7 @@ describe("environment RPC against an older hub", () => {
       else if (capabilities.scopeMoves)
         expect(recovery).toMatchObject({
           _tag: "Failure",
-          failure: { _tag: "MemoryRpcError", code: "unsupported_protocol" },
+          failure: { _tag: "EnvironmentRpcUnavailableError", reason: "move_receipt_unsupported" },
         });
     }),
   );

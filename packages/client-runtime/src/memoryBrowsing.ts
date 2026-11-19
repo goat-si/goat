@@ -19,6 +19,7 @@ import * as Cause from "effect/Cause";
 import * as Option from "effect/Option";
 import * as Schema from "effect/Schema";
 import type { AsyncResult } from "effect/reactivity";
+import { EnvironmentRpcUnavailableError } from "./rpc/client.ts";
 
 // Indexed phrase search works at every supported scope size, unlike bounded substring scans.
 const MEMORY_SEARCH_MODE = "fts" satisfies MemorySearchInput["mode"];
@@ -193,6 +194,7 @@ export function memoryMoveRows(
 
 type MoveRow = ReturnType<typeof memoryMoveRows>[number];
 const isRpcError = Schema.is(MemoryRpcError);
+const isUnavailable = Schema.is(EnvironmentRpcUnavailableError);
 
 export function canSubmitMemoryMove({ outcome }: MoveRow, current: boolean) {
   return (
@@ -213,16 +215,14 @@ function moveOutcome(
     code = result.value.failureCode;
   } else if (result._tag === "Failure") {
     const error = Option.getOrNull(Cause.findErrorOption(result.cause));
+    if (receiptOnly && isUnavailable(error) && error.reason === "move_receipt_unsupported")
+      return { status: "uncertain", operationId, receiptCheck: "unsupported" };
     if (!isRpcError(error) || error.code === "hub_unavailable" || error.code === "storage_failed")
       return { status: "uncertain", operationId };
     code = error.code;
   } else return { status: "uncertain", operationId };
-  if (receiptOnly && (code === "move_receipt_missing" || code === "unsupported_protocol"))
-    return {
-      status: "uncertain",
-      operationId,
-      receiptCheck: code === "move_receipt_missing" ? "missing" : "unsupported",
-    };
+  if (receiptOnly && code === "move_receipt_missing")
+    return { status: "uncertain", operationId, receiptCheck: "missing" };
   return code === "revision_changed" || code === "identity_mismatch"
     ? { status: "stale" }
     : { status: "refused", code };

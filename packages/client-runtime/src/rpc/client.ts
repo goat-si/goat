@@ -41,6 +41,7 @@ export class EnvironmentRpcUnavailableError extends Schema.TaggedError<Environme
   {
     environmentId: Schema.String,
     message: Schema.String,
+    reason: Schema.optionalKey(Schema.Literal("move_receipt_unsupported")),
   },
 ) {}
 
@@ -307,7 +308,11 @@ export const requestGuarded = Effect.fn("EnvironmentRpc.request")(function* <
       "receiptFor" in (input as MemoryMoveRequest) &&
       memoryCapabilities.scopeMoveReceipts !== true
     ) {
-      return yield* new MemoryRpcError({ code: "unsupported_protocol" });
+      return yield* new EnvironmentRpcUnavailableError({
+        environmentId: supervisor.target.environmentId,
+        message: "Move receipt recovery is unavailable on this environment.",
+        reason: "move_receipt_unsupported",
+      });
     }
     if (tag === WS_METHODS.memoryUpsert || tag === WS_METHODS.memoryForget) {
       const { includeFailureDetails: _hint, ...legacyInput } = dispatchInput as object & {
