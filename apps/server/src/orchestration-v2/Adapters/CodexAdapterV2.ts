@@ -5138,7 +5138,9 @@ export const makeCodexAdapterV2 = Effect.fn("makeCodexAdapterV2")(function* (
             }
 
             if (context.input.runtimePolicy.runtimeMode === "full-access") {
-              return canAutoApproveMcpElicitation(payload) ? acceptance : { action: "cancel" };
+              return canAutoApproveMcpElicitation(payload)
+                ? acceptance
+                : ({ action: "cancel" } satisfies CodexSchema.McpServerElicitationRequestResponse);
             }
 
             const nativeRequestId =
