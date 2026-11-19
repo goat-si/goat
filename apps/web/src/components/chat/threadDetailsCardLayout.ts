@@ -16,12 +16,14 @@ export function resolveThreadDetailsCardDensity(
 
 export function resolveThreadDetailsCardLayout({
   container,
+  narrowestWidth = container.width,
   lane,
   frame,
   overlapsDetailsCard = false,
   topInset = 0,
 }: {
   container: { width: number; height: number };
+  narrowestWidth?: number | undefined;
   lane: { padding: number; minChatWidth: number };
   frame: PreviewMiniPlayerFrame | null;
   overlapsDetailsCard?: boolean;
@@ -30,7 +32,15 @@ export function resolveThreadDetailsCardLayout({
   const gap = THREAD_DETAILS_CARD_GAP;
   const width = THREAD_DETAILS_CARD_WIDTH;
   const x = container.width - width - gap;
-  if (x - DETAILS_CARD_CLEARANCE - lane.padding < lane.minChatWidth) return null;
+  if (
+    Math.min(narrowestWidth, container.width) -
+      width -
+      gap -
+      DETAILS_CARD_CLEARANCE -
+      lane.padding <
+    lane.minChatWidth
+  )
+    return null;
   const y = gap + topInset;
   const height =
     overlapsDetailsCard && frame && frame.x + frame.width > x - gap && frame.x < x + width + gap
