@@ -77,7 +77,7 @@ export function nextRemoteDesktopUpdateStep(
     return { action: "done", outcome: "up-to-date" };
   }
   if (state.status === "error") {
-    if (attempts.checks === 0) {
+    if (attempts.checks === 0 && !(attempts.downloads > 0 && state.errorContext === "download")) {
       return { action: "check" };
     }
     return {

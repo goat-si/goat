@@ -265,3 +265,26 @@ it.effect("becomes ready from the child control stream while HTTP probes stall",
     assert.isTrue(wasReady);
   }).pipe(Effect.scoped, Effect.provide(TestClock.layer())),
 );
+
+it.effect(
+  "uses HTTP readiness for an older backend without a control-stream readiness record",
+  () =>
+    Effect.gen(function* () {
+      const ready = yield* Deferred.make<void>();
+      const exit = yield* Deferred.make<ChildProcessSpawner.ExitCode>();
+      const processLayer = Layer.succeed(
+        ChildProcessSpawner.ChildProcessSpawner,
+        ChildProcessSpawner.make(() =>
+          Effect.succeed(makeProcess({ exitCode: Deferred.await(exit) })),
+        ),
+      );
+      const fiber = yield* DesktopBackendProcess.runBackendProcess({
+        ...baseConfig,
+        desktopTelemetryStream: Stream.empty,
+        onReady: () => Deferred.succeed(ready, undefined).pipe(Effect.asVoid),
+      }).pipe(Effect.provide(Layer.merge(processLayer, http)), Effect.forkScoped);
+      yield* Deferred.await(ready);
+      yield* Deferred.succeed(exit, ChildProcessSpawner.ExitCode(0));
+      yield* Fiber.join(fiber);
+    }).pipe(Effect.scoped),
+);

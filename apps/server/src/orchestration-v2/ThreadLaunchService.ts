@@ -505,7 +505,7 @@ const make = Effect.gen(function* () {
           git,
           threads,
           project,
-          requestedBaseRef,
+          workspaceStrategy: input.workspaceStrategy,
           startRef,
           baseRefName,
           pinnedHead,

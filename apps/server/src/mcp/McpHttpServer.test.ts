@@ -1235,22 +1235,22 @@ it.effect("serves llms.txt whole without a credential and filtered with one", ()
               .map((line) => line.slice(2, line.indexOf(":"))),
           );
         });
-
       const all = yield* paths();
-      expect(all.size).toBe(Object.keys(agentSurfaceRegistry).length);
-
+      expect(all.size).toBe(
+        Object.values(agentSurfaceRegistry).filter(
+          (entry) => !("listing" in entry && entry.listing === "prompt"),
+        ).length,
+      );
       const thread = yield* paths("threadToken");
+      expect([all, thread].map((paths) => paths.has("message.show"))).toEqual([false, false]);
       expect(thread.has("device.screenshot")).toBe(true);
       expect(thread.has("permission_profile.sync")).toBe(false);
-
       const client = yield* paths("client.full");
       expect(client.has("permission_profile.sync")).toBe(true);
       expect(client.has("device.screenshot")).toBe(false);
-
       const reader = yield* paths("client.readonly");
       expect(reader.has("decision.list")).toBe(true);
       expect(reader.has("decision.request")).toBe(false);
-
       const refused = yield* httpClient.get("/llms.txt", {
         headers: { authorization: "Bearer stale.token" },
       });

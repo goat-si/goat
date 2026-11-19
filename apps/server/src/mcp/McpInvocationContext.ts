@@ -7,6 +7,7 @@ import {
   McpCapabilityUnavailableError,
   OrchestratorMcpFailure,
   PreviewAutomationUnavailableError,
+  type ProviderDriverKind,
   type ProviderInstanceId,
   type RuntimeMode,
   type RunId,
@@ -37,6 +38,7 @@ export interface McpThreadCaller {
   readonly runId?: RunId;
   readonly providerSessionId: string;
   readonly providerInstanceId: ProviderInstanceId;
+  readonly providerDriver?: ProviderDriverKind | undefined;
   /** A delegated child task; its parent owns the work it hands back. */
   readonly subagent?: boolean;
 }

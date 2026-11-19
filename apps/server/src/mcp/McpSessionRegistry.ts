@@ -4,6 +4,7 @@ import {
   ThreadId,
   type AuthEnvironmentScope,
   type MemoryTaskGrantCeiling,
+  type ProviderDriverKind,
   type RunId,
   type ScreenBindingHints,
 } from "@goat/contracts";
@@ -46,6 +47,7 @@ export interface McpCredentialRequest {
   readonly threadId: ThreadId;
   readonly runId?: RunId;
   readonly providerInstanceId: ProviderInstanceId;
+  readonly providerDriver?: ProviderDriverKind | undefined;
   /** False omits the preview capability wherever the token is honored. Defaults to full access. */
   readonly browserToolsAvailable?: boolean;
   readonly capabilities?: ReadonlySet<McpInvocationContext.McpCapability>;
@@ -456,6 +458,7 @@ const makeWithOptions = Effect.fn("McpSessionRegistry.make")(function* (
             ...(request.runId === undefined ? {} : { runId: request.runId }),
             providerSessionId,
             providerInstanceId: ProviderInstanceId.make(request.providerInstanceId),
+            providerDriver: request.providerDriver,
             subagent: request.subagent === true,
           },
           client: undefined,

@@ -1,15 +1,21 @@
 import { CommandId, type Project, type RunId, type ThreadId } from "@goat/contracts";
 import * as Effect from "effect/Effect";
+import * as Data from "effect/Data";
 import type { GitWorkflowService } from "../../git/GitWorkflowService.ts";
 import type { ThreadManagementService } from "../ThreadManagementService.ts";
+import type { ThreadLaunchWorkspaceStrategy } from "../threadLaunchTypes.ts";
 import { ThreadLaunchBaseRefError } from "../WorktreePreflight.ts";
+
+class MissingWorktreeBasePin extends Data.TaggedError("MissingWorktreeBasePin")<{
+  readonly message: string;
+}> {}
 
 export const acceptWorktreeBase = Effect.fn("ThreadLaunchService.acceptWorktreeBase")(
   function* (input: {
     git: GitWorkflowService["Service"];
     threads: ThreadManagementService["Service"];
     project: Project;
-    requestedBaseRef: string;
+    workspaceStrategy: Extract<ThreadLaunchWorkspaceStrategy, { type: "worktree" }>;
     startRef: string;
     baseRefName: string;
     pinnedHead: string | undefined;
@@ -34,7 +40,7 @@ export const acceptWorktreeBase = Effect.fn("ThreadLaunchService.acceptWorktreeB
                   projectId: project.id,
                   projectTitle: project.title,
                   workspaceRoot: project.workspaceRoot,
-                  baseRef: input.requestedBaseRef,
+                  baseRef: input.workspaceStrategy.baseRef,
                   cause,
                 })
               : cause,
@@ -58,16 +64,23 @@ export const acceptWorktreeBase = Effect.fn("ThreadLaunchService.acceptWorktreeB
       yield* threads.dispatch(
         input.alreadyPinned
           ? { ...identity, type: "prepared-run.progress", phase: "worktree" }
-          : { ...identity, type: "prepared-run.pin-base", basePin: pin },
+          : {
+              ...identity,
+              type: "prepared-run.pin-base",
+              basePin: pin,
+              workspaceStrategy: input.workspaceStrategy,
+            },
       );
       const { runs } = yield* threads.getThreadRecords(input.threadId, ["runs"], {
         runIds: [runId],
       });
-      const persisted = runs.find((run) => run.id === runId)?.workspacePreparationBasePin;
+      const persisted = runs.find(
+        (run) => run.id === runId && run.status === "preparing",
+      )?.workspacePreparationBasePin;
       if (persisted === undefined) {
-        return yield* Effect.fail(
-          new Error(`No accepted worktree base was recorded for run ${runId}.`),
-        );
+        return yield* new MissingWorktreeBasePin({
+          message: `No accepted worktree base was recorded for run ${runId}.`,
+        });
       }
       return persisted;
     }

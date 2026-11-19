@@ -9014,7 +9014,7 @@ const makeOrchestrator = Effect.fn("orchestrationV2.Orchestrator.layer")(functio
       const now = yield* DateTime.now;
       if (
         command.type === "prepared-run.pin-base" &&
-        state.run.workspacePreparation?.type === "worktree" &&
+        (state.run.workspacePreparation ?? command.workspaceStrategy)?.type === "worktree" &&
         state.run.workspacePreparationBasePin === undefined
       ) {
         yield* emit(
@@ -9027,7 +9027,11 @@ const makeOrchestrator = Effect.fn("orchestrationV2.Orchestrator.layer")(functio
           nodeId: state.rootNode.id,
           providerInstanceId: state.run.providerInstanceId,
           occurredAt: now,
-          payload: { ...state.run, workspacePreparationBasePin: command.basePin },
+          payload: {
+            ...state.run,
+            workspacePreparation: state.run.workspacePreparation ?? command.workspaceStrategy,
+            workspacePreparationBasePin: command.basePin,
+          },
         });
       }
       yield* emit(

@@ -33,6 +33,7 @@ import * as DesktopApp from "./DesktopApp.ts";
 import * as DesktopAppActivation from "./DesktopAppActivation.ts";
 import * as DesktopAppIdentity from "./DesktopAppIdentity.ts";
 import * as DesktopClerk from "./DesktopClerk.ts";
+import { MARKER } from "./DesktopCliShim.ts";
 import * as DesktopEnvironment from "./DesktopEnvironment.ts";
 import * as DesktopLegacyLocalStorage from "./DesktopLegacyLocalStorage.ts";
 import * as DesktopLifecycle from "./DesktopLifecycle.ts";
@@ -80,236 +81,282 @@ import * as ElectronWindow from "../electron/ElectronWindow.ts";
 import * as MacPermissions from "../permissions/MacPermissions.ts";
 import * as PreviewManager from "../preview/Manager.ts";
 
-it.effect.each([false, true])(
-  "stops backends before history and completes shutdown, stop defect=%s",
-  (stopDefect) =>
-    Effect.gen(function* () {
-      const registrationStarted = yield* Deferred.make<void>();
-      const releaseRegistration = yield* Deferred.make<void>();
-      const registrationStopped = yield* Deferred.make<void>();
-      const windowStarted = yield* Deferred.make<void>();
-      const firstStopStarted = yield* Deferred.make<void>();
-      const secondStopStarted = yield* Deferred.make<void>();
-      const releaseStops = yield* Deferred.make<void>();
-      const historyStarted = yield* Deferred.make<void>();
-      const releaseHistory = yield* Deferred.make<void>();
-      const quitting = yield* Ref.make(false);
-      const stopReason = yield* Ref.make<"quit" | "relaunch">("quit");
-      const events: string[] = [];
-      const record = (event: string) =>
-        Effect.sync(() => {
-          events.push(event);
-        });
-      const runApp = DesktopApp.program
-        .pipe(
-          Effect.provide(NodeCrypto.layer),
-          Effect.provideService(DesktopAppIdentity.DesktopAppIdentity, {
-            resolveUserDataPath: Effect.succeed("/isolated/userdata"),
-            configure: record("identity"),
-          } as DesktopAppIdentity.DesktopAppIdentity["Service"]),
-          Effect.provideService(ElectronApp.ElectronApp, {
-            setPath: () => Effect.void,
-            whenReady: record("ready"),
-          } as unknown as ElectronApp.ElectronApp["Service"]),
-          Effect.provideService(ElectronDialog.ElectronDialog, {
-            showErrorBox: () => Effect.die("unexpected fatal startup error"),
-          } as unknown as ElectronDialog.ElectronDialog["Service"]),
-          Effect.provideService(DesktopEnvironment.DesktopEnvironment, {
-            branding: { stageLabel: "" },
-            platform: "linux",
-            isDevelopment: false,
-            isPackaged: true,
-            stateDir: "/isolated/userdata",
-            configuredBackendPort: Option.some(3773),
-            defaultDesktopSettings: { serverExposureMode: "local-only" },
-          } as unknown as DesktopEnvironment.DesktopEnvironment["Service"]),
-          Effect.provideService(DesktopPreReadyPlatform.DesktopPreReadyElectronOptions, {
-            linux: null,
-            linuxPasswordStoreCommandLine: "basic",
+it.effect.each([
+  {
+    name: "stops backends before history and completes shutdown",
+    stopDefect: false,
+    localEnabled: true,
+  },
+  { name: "completes shutdown after a backend stop defect", stopDefect: true, localEnabled: true },
+  {
+    name: "refreshes the internal launcher when the local environment is disabled",
+    stopDefect: false,
+    localEnabled: false,
+  },
+])("$name", ({ stopDefect, localEnabled }) =>
+  Effect.gen(function* () {
+    const registrationStarted = yield* Deferred.make<void>();
+    const releaseRegistration = yield* Deferred.make<void>();
+    const registrationStopped = yield* Deferred.make<void>();
+    const windowStarted = yield* Deferred.make<void>();
+    const firstStopStarted = yield* Deferred.make<void>();
+    const secondStopStarted = yield* Deferred.make<void>();
+    const releaseStops = yield* Deferred.make<void>();
+    const historyStarted = yield* Deferred.make<void>();
+    const releaseHistory = yield* Deferred.make<void>();
+    const quitting = yield* Ref.make(false);
+    const stopReason = yield* Ref.make<"quit" | "relaunch">("quit");
+    const events: string[] = [];
+    const path = yield* Path.Path;
+    const shim = "/isolated/goat/bin/goat";
+    const files = new Map([[shim, `# ${MARKER}\nexec /previous/GOAT`]]);
+    const record = (event: string) =>
+      Effect.sync(() => {
+        events.push(event);
+      });
+    const runApp = DesktopApp.program
+      .pipe(
+        Effect.provide(NodeCrypto.layer),
+        Effect.provideService(DesktopAppIdentity.DesktopAppIdentity, {
+          resolveUserDataPath: Effect.succeed("/isolated/userdata"),
+          configure: record("identity"),
+        } as DesktopAppIdentity.DesktopAppIdentity["Service"]),
+        Effect.provideService(ElectronApp.ElectronApp, {
+          setPath: () => Effect.void,
+          whenReady: record("ready"),
+        } as unknown as ElectronApp.ElectronApp["Service"]),
+        Effect.provideService(ElectronDialog.ElectronDialog, {
+          showErrorBox: () => Effect.die("unexpected fatal startup error"),
+        } as unknown as ElectronDialog.ElectronDialog["Service"]),
+        Effect.provideService(DesktopEnvironment.DesktopEnvironment, {
+          branding: { stageLabel: "" },
+          platform: "linux",
+          isDevelopment: false,
+          isPackaged: true,
+          stateDir: "/isolated/userdata",
+          baseDir: "/isolated/goat",
+          serverRoot: "/current/GOAT/resources/server",
+          appImagePath: Option.none(),
+          path,
+          configuredBackendPort: Option.some(3773),
+          defaultDesktopSettings: { serverExposureMode: "local-only" },
+        } as unknown as DesktopEnvironment.DesktopEnvironment["Service"]),
+        Effect.provideService(DesktopPreReadyPlatform.DesktopPreReadyElectronOptions, {
+          linux: null,
+          linuxPasswordStoreCommandLine: "basic",
+        }),
+        Effect.provideService(DesktopShellEnvironment.DesktopShellEnvironment, {
+          installIntoProcess: Effect.succeed(true),
+          awaitDiscovery: Effect.succeed(true),
+          updates: Stream.empty,
+        }),
+        Effect.provideService(DesktopAppSettings.DesktopAppSettings, {
+          load: Effect.void,
+          get: Effect.succeed({
+            localEnvironmentEnabled: localEnabled,
+            serverExposureMode: "local-only",
           }),
-          Effect.provideService(DesktopShellEnvironment.DesktopShellEnvironment, {
-            installIntoProcess: Effect.succeed(true),
-            awaitDiscovery: Effect.succeed(true),
-            updates: Stream.empty,
-          }),
-          Effect.provideService(DesktopAppSettings.DesktopAppSettings, {
-            load: Effect.void,
-            get: Effect.succeed({
-              localEnvironmentEnabled: true,
-              serverExposureMode: "local-only",
-            }),
-          } as unknown as DesktopAppSettings.DesktopAppSettings["Service"]),
-          Effect.provideService(DesktopLifecycle.DesktopLifecycle, {
-            register: Effect.void,
-            relaunch: () => Effect.void,
-          }),
-          Effect.provideService(DesktopClerk.DesktopClerk, {
-            configure: Effect.void,
-          } as DesktopClerk.DesktopClerk["Service"]),
-          Effect.provideService(ElectronSafeStorage.ElectronSafeStorage, {
-            selectedStorageBackend: Effect.succeedNone,
-          } as unknown as ElectronSafeStorage.ElectronSafeStorage["Service"]),
-          Effect.provideService(PreviewPasskeys.PreviewPasskeys, {
-            configure: Effect.void,
-          } as PreviewPasskeys.PreviewPasskeys["Service"]),
-          Effect.provideService(DesktopApplicationMenu.DesktopApplicationMenu, {
-            configure: Effect.void,
-          }),
-          Effect.provideService(DesktopUpdates.DesktopUpdates, {
-            configure: Effect.void,
-          } as unknown as DesktopUpdates.DesktopUpdates["Service"]),
-          Effect.provideService(DesktopLinuxUrlHandler.DesktopLinuxUrlHandler, {
-            register: Deferred.succeed(registrationStarted, undefined).pipe(
-              Effect.andThen(Deferred.await(releaseRegistration)),
-              Effect.ensuring(Deferred.succeed(registrationStopped, undefined)),
-            ),
-          }),
-        )
-        .pipe(
-          Effect.provideService(ElectronProtocol.ElectronProtocol, {
-            registerDesktopProtocol: () => Effect.void,
-          } as unknown as ElectronProtocol.ElectronProtocol["Service"]),
-          Effect.provideService(DesktopLegacyLocalStorage.DesktopLegacyLocalStorage, {
-            load: () => Effect.void,
-          } as unknown as DesktopLegacyLocalStorage.DesktopLegacyLocalStorage["Service"]),
-          Effect.provideService(DesktopSnapShot.DesktopSnapShot, {
-            initialize: Effect.void,
-          } as DesktopSnapShot.DesktopSnapShot["Service"]),
-          Effect.provideService(DesktopState.DesktopState, {
-            quitting,
-            stopReason,
-          } as DesktopState.DesktopState["Service"]),
-          Effect.provideService(DesktopWindow.DesktopWindow, {
-            ensureMain: record("window").pipe(
+        } as unknown as DesktopAppSettings.DesktopAppSettings["Service"]),
+        Effect.provideService(DesktopLifecycle.DesktopLifecycle, {
+          register: Effect.void,
+          relaunch: () => Effect.void,
+        }),
+        Effect.provideService(DesktopClerk.DesktopClerk, {
+          configure: Effect.void,
+        } as DesktopClerk.DesktopClerk["Service"]),
+        Effect.provideService(ElectronSafeStorage.ElectronSafeStorage, {
+          selectedStorageBackend: Effect.succeedNone,
+        } as unknown as ElectronSafeStorage.ElectronSafeStorage["Service"]),
+        Effect.provideService(PreviewPasskeys.PreviewPasskeys, {
+          configure: Effect.void,
+        } as PreviewPasskeys.PreviewPasskeys["Service"]),
+        Effect.provideService(DesktopApplicationMenu.DesktopApplicationMenu, {
+          configure: Effect.void,
+        }),
+        Effect.provideService(DesktopUpdates.DesktopUpdates, {
+          configure: Effect.void,
+        } as unknown as DesktopUpdates.DesktopUpdates["Service"]),
+        Effect.provideService(DesktopLinuxUrlHandler.DesktopLinuxUrlHandler, {
+          register: Deferred.succeed(registrationStarted, undefined).pipe(
+            Effect.andThen(Deferred.await(releaseRegistration)),
+            Effect.ensuring(Deferred.succeed(registrationStopped, undefined)),
+          ),
+        }),
+      )
+      .pipe(
+        Effect.provideService(ElectronProtocol.ElectronProtocol, {
+          registerDesktopProtocol: () => Effect.void,
+        } as unknown as ElectronProtocol.ElectronProtocol["Service"]),
+        Effect.provideService(DesktopLegacyLocalStorage.DesktopLegacyLocalStorage, {
+          load: () => Effect.void,
+        } as unknown as DesktopLegacyLocalStorage.DesktopLegacyLocalStorage["Service"]),
+        Effect.provideService(DesktopSnapShot.DesktopSnapShot, {
+          initialize: Effect.void,
+        } as DesktopSnapShot.DesktopSnapShot["Service"]),
+        Effect.provideService(DesktopState.DesktopState, {
+          quitting,
+          stopReason,
+        } as DesktopState.DesktopState["Service"]),
+        Effect.provideService(DesktopWindow.DesktopWindow, {
+          ensureMain: record("window").pipe(
+            Effect.andThen(Deferred.succeed(windowStarted, undefined)),
+          ),
+          createMainIfBackendReady: record("remote-only window").pipe(
+            Effect.andThen(Deferred.succeed(windowStarted, undefined)),
+          ),
+        } as unknown as DesktopWindow.DesktopWindow["Service"]),
+        Effect.provideService(DesktopBackendPool.DesktopBackendPool, {
+          primary: Effect.succeed({
+            start: record("backend").pipe(
               Effect.andThen(Deferred.succeed(windowStarted, undefined)),
             ),
-          } as unknown as DesktopWindow.DesktopWindow["Service"]),
-          Effect.provideService(DesktopBackendPool.DesktopBackendPool, {
-            primary: Effect.succeed({
-              start: record("backend").pipe(
-                Effect.andThen(Deferred.succeed(windowStarted, undefined)),
-              ),
-              currentConfig: Effect.succeedSome({ preflightFailure: Option.none() }),
-            }),
-            list: Effect.succeed([
-              {
-                stop: () =>
-                  Deferred.succeed(firstStopStarted, undefined).pipe(
-                    Effect.andThen(Deferred.await(releaseStops)),
-                    Effect.andThen(stopDefect ? Effect.die("stop defect") : Effect.void),
-                  ),
-              },
-              {
-                stop: () =>
-                  Deferred.succeed(secondStopStarted, undefined).pipe(
-                    Effect.andThen(Deferred.await(releaseStops)),
-                  ),
-              },
-            ]),
-          } as unknown as DesktopBackendPool.DesktopBackendPool["Service"]),
-          Effect.provideService(DesktopServerExposure.DesktopServerExposure, {
-            configureFromSettings: () => Effect.succeed({ mode: "local-only" }),
-            backendConfig: Effect.succeed({ httpBaseUrl: new URL("http://127.0.0.1:3773") }),
-          } as unknown as DesktopServerExposure.DesktopServerExposure["Service"]),
-          Effect.provideService(DesktopWslBackend.DesktopWslBackend, {
-            reconcile: Effect.void,
-          } as DesktopWslBackend.DesktopWslBackend["Service"]),
-          Effect.provideService(DesktopAppActivation.DesktopAppActivation, {
-            start: Effect.void,
-          } as unknown as DesktopAppActivation.DesktopAppActivation["Service"]),
-          Effect.provideService(DesktopRendererHistory.DesktopRendererHistory, {
-            shutdown: Deferred.succeed(historyStarted, undefined).pipe(
-              Effect.andThen(Deferred.await(releaseHistory)),
-              Effect.asVoid,
-            ),
-          } as DesktopRendererHistory.DesktopRendererHistory["Service"]),
-        );
-      const app = yield* runApp.pipe(
-        Effect.provide(
-          Layer.mergeAll(
-            Layer.mock(BrowserSession.BrowserSession, { isPartition: () => false }),
-            Layer.mock(DesktopAssets.DesktopAssets, {}),
-            Layer.mock(DesktopBrowserHost.DesktopBrowserHost, {
-              attach: () => {
-                throw new Error("unexpected attach");
-              },
-              detach: () => {
-                throw new Error("unexpected detach");
-              },
-              setShown: () => {},
-              setCaptureDrawn: () => {},
-              loadFailed: () => {},
-              humanStartedDownload: () => false,
-              agentLedPage: () => false,
-              placeDownload: () => false,
-            }),
-            Layer.mock(DesktopHeadlessServer.DesktopHeadlessServer, {}),
-            Layer.mock(DesktopWindowMaterial.DesktopWindowMaterial, {}),
-            Layer.mock(BrowserImport.BrowserImport, {}),
-            Layer.mock(ChildProcessSpawner.ChildProcessSpawner, {}),
-            Layer.mock(DesktopBackendConfiguration.DesktopBackendConfiguration, {}),
-            Layer.mock(DesktopCliCommand.DesktopCliCommand, {}),
-            Layer.mock(DesktopClientSettings.DesktopClientSettings, {}),
-            Layer.mock(DesktopConnectionCatalogStore.DesktopConnectionCatalogStore, {}),
-            Layer.mock(DesktopIpc.DesktopIpc, {}),
-            Layer.mock(DesktopLocalEnvironmentAuth.DesktopLocalEnvironmentAuth, {}),
-            Layer.succeed(MediaPermissions.MediaPermissions, {
-              installOnDefaultSession: Effect.void,
-            } as MediaPermissions.MediaPermissions["Service"]),
-            Layer.succeed(DesktopRendererOriginMigration.DesktopRendererOriginMigration, {
-              run: () => Effect.void,
-            } as DesktopRendererOriginMigration.DesktopRendererOriginMigration["Service"]),
-            Layer.succeed(DesktopSafeStorageKeyMigration.DesktopSafeStorageKeyMigration, {
-              run: () => Effect.void,
-            } as DesktopSafeStorageKeyMigration.DesktopSafeStorageKeyMigration["Service"]),
-            Layer.mock(DesktopCuaDriver.DesktopCuaDriver, { listen: Effect.void }),
-            Layer.succeed(DesktopPrimaryPaste.DesktopPrimaryPaste, { enabled: true }),
-            Layer.mock(DesktopSshEnvironment.DesktopSshEnvironment, {}),
-            Layer.mock(DesktopSshPasswordPrompts.DesktopSshPasswordPrompts, {}),
-            Layer.mock(DesktopTelemetryPublisher.DesktopTelemetryPublisher, {}),
-            Layer.mock(DesktopWebLinks.DesktopWebLinks, {}),
-            Layer.mock(DesktopWslEnvironment.DesktopWslEnvironment, {}),
-            Layer.mock(ElectronMenu.ElectronMenu, {}),
-            Layer.mock(ElectronShell.ElectronShell, {}),
-            Layer.mock(ElectronTheme.ElectronTheme, {}),
-            Layer.mock(ElectronWindow.ElectronWindow, {}),
-            Layer.mock(MacPermissions.MacPermissions, {}),
-            Layer.mock(PreviewManager.PreviewManager, {
-              isBrowserPartition: () => {
-                throw new Error("unexpected browser partition lookup");
-              },
-            }),
-            FileSystem.layerNoop({}),
-            Layer.mock(NetService.NetService, {}),
-            Path.layer,
-            Layer.succeed(
-              HttpClient.HttpClient,
-              HttpClient.make(() => Effect.die("unexpected HTTP request")),
-            ),
+            currentConfig: Effect.succeedSome({ preflightFailure: Option.none() }),
+          }),
+          list: Effect.succeed([
+            {
+              stop: () =>
+                Deferred.succeed(firstStopStarted, undefined).pipe(
+                  Effect.andThen(Deferred.await(releaseStops)),
+                  Effect.andThen(stopDefect ? Effect.die("stop defect") : Effect.void),
+                ),
+            },
+            {
+              stop: () =>
+                Deferred.succeed(secondStopStarted, undefined).pipe(
+                  Effect.andThen(Deferred.await(releaseStops)),
+                ),
+            },
+          ]),
+        } as unknown as DesktopBackendPool.DesktopBackendPool["Service"]),
+        Effect.provideService(DesktopServerExposure.DesktopServerExposure, {
+          configureFromSettings: () => Effect.succeed({ mode: "local-only" }),
+          backendConfig: Effect.succeed({ httpBaseUrl: new URL("http://127.0.0.1:3773") }),
+        } as unknown as DesktopServerExposure.DesktopServerExposure["Service"]),
+        Effect.provideService(DesktopWslBackend.DesktopWslBackend, {
+          reconcile: Effect.void,
+        } as DesktopWslBackend.DesktopWslBackend["Service"]),
+        Effect.provideService(DesktopAppActivation.DesktopAppActivation, {
+          start: Effect.void,
+        } as unknown as DesktopAppActivation.DesktopAppActivation["Service"]),
+        Effect.provideService(DesktopRendererHistory.DesktopRendererHistory, {
+          shutdown: Deferred.succeed(historyStarted, undefined).pipe(
+            Effect.andThen(Deferred.await(releaseHistory)),
+            Effect.asVoid,
+          ),
+        } as DesktopRendererHistory.DesktopRendererHistory["Service"]),
+      );
+    const app = yield* runApp.pipe(
+      Effect.provide(
+        Layer.mergeAll(
+          Layer.mock(BrowserSession.BrowserSession, { isPartition: () => false }),
+          Layer.mock(DesktopAssets.DesktopAssets, {}),
+          Layer.mock(DesktopBrowserHost.DesktopBrowserHost, {
+            attach: () => {
+              throw new Error("unexpected attach");
+            },
+            detach: () => {
+              throw new Error("unexpected detach");
+            },
+            setShown: () => {},
+            setCaptureDrawn: () => {},
+            loadFailed: () => {},
+            humanStartedDownload: () => false,
+            agentLedPage: () => false,
+            placeDownload: () => false,
+          }),
+          Layer.mock(DesktopHeadlessServer.DesktopHeadlessServer, {}),
+          Layer.mock(DesktopWindowMaterial.DesktopWindowMaterial, {}),
+          Layer.mock(BrowserImport.BrowserImport, {}),
+          Layer.mock(ChildProcessSpawner.ChildProcessSpawner, {}),
+          Layer.mock(DesktopBackendConfiguration.DesktopBackendConfiguration, {}),
+          Layer.mock(DesktopCliCommand.DesktopCliCommand, {}),
+          Layer.mock(DesktopClientSettings.DesktopClientSettings, {}),
+          Layer.mock(DesktopConnectionCatalogStore.DesktopConnectionCatalogStore, {}),
+          Layer.mock(DesktopIpc.DesktopIpc, {}),
+          Layer.mock(DesktopLocalEnvironmentAuth.DesktopLocalEnvironmentAuth, {}),
+          Layer.succeed(MediaPermissions.MediaPermissions, {
+            installOnDefaultSession: Effect.void,
+          } as MediaPermissions.MediaPermissions["Service"]),
+          Layer.succeed(DesktopRendererOriginMigration.DesktopRendererOriginMigration, {
+            run: () => Effect.void,
+          } as DesktopRendererOriginMigration.DesktopRendererOriginMigration["Service"]),
+          Layer.succeed(DesktopSafeStorageKeyMigration.DesktopSafeStorageKeyMigration, {
+            run: () => Effect.void,
+          } as DesktopSafeStorageKeyMigration.DesktopSafeStorageKeyMigration["Service"]),
+          Layer.mock(DesktopCuaDriver.DesktopCuaDriver, { listen: Effect.void }),
+          Layer.succeed(DesktopPrimaryPaste.DesktopPrimaryPaste, { enabled: true }),
+          Layer.mock(DesktopSshEnvironment.DesktopSshEnvironment, {}),
+          Layer.mock(DesktopSshPasswordPrompts.DesktopSshPasswordPrompts, {}),
+          Layer.mock(DesktopTelemetryPublisher.DesktopTelemetryPublisher, {}),
+          Layer.mock(DesktopWebLinks.DesktopWebLinks, {}),
+          Layer.mock(DesktopWslEnvironment.DesktopWslEnvironment, {}),
+          Layer.mock(ElectronMenu.ElectronMenu, {}),
+          Layer.mock(ElectronShell.ElectronShell, {}),
+          Layer.mock(ElectronTheme.ElectronTheme, {}),
+          Layer.mock(ElectronWindow.ElectronWindow, {}),
+          Layer.mock(MacPermissions.MacPermissions, {}),
+          Layer.mock(PreviewManager.PreviewManager, {
+            isBrowserPartition: () => {
+              throw new Error("unexpected browser partition lookup");
+            },
+          }),
+          FileSystem.layerNoop({
+            lstat: (file) =>
+              file === shim
+                ? Effect.succeed({ type: "File" } as FileSystem.File.Info)
+                : Effect.die("unexpected lstat"),
+            readFileString: (file) =>
+              file === shim ? Effect.succeed(files.get(shim) ?? "") : Effect.die("unexpected read"),
+            makeDirectory: () => Effect.void,
+            writeFileString: (file, content) =>
+              Effect.sync(() => {
+                files.set(file, content);
+              }),
+            rename: (from, to) =>
+              Effect.sync(() => {
+                const content = files.get(from);
+                if (content === undefined) throw new Error("Missing staged launcher");
+                files.set(to, content);
+                files.delete(from);
+              }),
+          }),
+          Layer.mock(NetService.NetService, {}),
+          Path.layer,
+          Layer.succeed(
+            HttpClient.HttpClient,
+            HttpClient.make(() => Effect.die("unexpected HTTP request")),
           ),
         ),
-        Effect.forkScoped,
-      );
-      yield* Deferred.await(registrationStarted);
-      yield* Effect.raceFirst(
-        Deferred.await(windowStarted),
-        Fiber.join(app).pipe(Effect.andThen(Effect.die("app stopped before backend started"))),
-      );
+      ),
+      Effect.forkScoped,
+    );
+    yield* Deferred.await(registrationStarted);
+    yield* Effect.raceFirst(
+      Deferred.await(windowStarted),
+      Fiber.join(app).pipe(Effect.andThen(Effect.die("app stopped before backend started"))),
+    );
+    if (localEnabled) {
       assert.deepEqual(events, ["identity", "ready", "identity", "backend"]);
-      assert.isFalse(yield* Deferred.isDone(registrationStopped));
-      const shutdown = yield* DesktopShutdown.DesktopShutdown;
-      yield* shutdown.request;
-      yield* Deferred.await(firstStopStarted);
-      yield* Deferred.await(secondStopStarted);
-      assert.isFalse(yield* Deferred.isDone(historyStarted));
-      assert.isFalse(yield* shutdown.isComplete);
-      yield* Deferred.succeed(releaseStops, undefined);
-      yield* Deferred.await(historyStarted);
-      assert.isFalse(yield* shutdown.isComplete);
-      yield* Deferred.succeed(releaseHistory, undefined);
-      const result = yield* Fiber.await(app);
-      assert.equal(Exit.isFailure(result), stopDefect);
-      assert.isTrue(yield* shutdown.isComplete);
-      assert.isTrue(yield* Deferred.isDone(registrationStopped));
-    }).pipe(Effect.provide(DesktopShutdown.layer)),
+    }
+    const launcherAtStartup = files.get(shim);
+    assert.isFalse(yield* Deferred.isDone(registrationStopped));
+    const shutdown = yield* DesktopShutdown.DesktopShutdown;
+    yield* shutdown.request;
+    yield* Deferred.await(firstStopStarted);
+    yield* Deferred.await(secondStopStarted);
+    assert.isFalse(yield* Deferred.isDone(historyStarted));
+    assert.isFalse(yield* shutdown.isComplete);
+    yield* Deferred.succeed(releaseStops, undefined);
+    yield* Deferred.await(historyStarted);
+    assert.isFalse(yield* shutdown.isComplete);
+    yield* Deferred.succeed(releaseHistory, undefined);
+    const result = yield* Fiber.await(app);
+    assert.equal(Exit.isFailure(result), stopDefect);
+    assert.isTrue(yield* shutdown.isComplete);
+    assert.isTrue(yield* Deferred.isDone(registrationStopped));
+    if (!localEnabled) {
+      assert.deepEqual(events, ["identity", "ready", "identity", "remote-only window"]);
+      assert.include(launcherAtStartup, "/current/GOAT/resources/server");
+    }
+  }).pipe(Effect.provide(Layer.mergeAll(DesktopShutdown.layer, Path.layer))),
 );

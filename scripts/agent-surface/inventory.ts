@@ -469,11 +469,16 @@ export async function collectTools(): Promise<{
     const entry = resolve.resolveAgentSurfaceEntry(name);
     return entry !== undefined && resolve.deduplicatesClientRequestId(entry);
   };
-  const { agentSurfaceRegistry } = (await importFile(
+  const { agentSurfaceRegistry, isDiscoverableOutsidePrompt } = (await importFile(
     NodePath.join(repoRoot, "packages/contracts/src/agentSurface/registry.ts"),
-  )) as { agentSurfaceRegistry: Record<string, { name: string; toolkit: string }> };
+  )) as {
+    agentSurfaceRegistry: Record<string, { name: string; toolkit: string }>;
+    isDiscoverableOutsidePrompt: (entry: { name: string }) => boolean;
+  };
   const registered = new Map(
-    Object.values(agentSurfaceRegistry).map((entry) => [entry.name, entry.toolkit]),
+    Object.values(agentSurfaceRegistry)
+      .filter(isDiscoverableOutsidePrompt)
+      .map((entry) => [entry.name, entry.toolkit]),
   );
   const catalog = await loadServedCatalog();
   let served: ReadonlyMap<string, JsonSchema>;

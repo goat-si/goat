@@ -161,12 +161,22 @@ export const install = Effect.gen(function* () {
   const content = renderCliShim({ target, shimPath, goatHome: environment.baseDir });
 
   return yield* Effect.gen(function* () {
-    const existing = yield* fs.readFileString(shimPath).pipe(Effect.option);
-    if (Option.isSome(existing) && !existing.value.includes(MARKER)) {
-      yield* logWarning("leaving a goat launcher the app did not write", { shimPath });
-      return Option.none<string>();
+    const info = yield* fs.lstat(shimPath).pipe(
+      Effect.asSome,
+      Effect.catchIf(
+        (error) => error.reason._tag === "NotFound",
+        () => Effect.succeedNone,
+      ),
+    );
+    let existing: string | undefined;
+    if (Option.isSome(info)) {
+      if (info.value.type === "File") existing = yield* fs.readFileString(shimPath);
+      if (!existing?.includes(MARKER)) {
+        yield* logWarning("leaving a goat launcher the app did not write", { shimPath });
+        return Option.none<string>();
+      }
     }
-    if (Option.getOrUndefined(existing) !== content) {
+    if (existing !== content) {
       yield* fs.makeDirectory(path.dirname(shimPath), { recursive: true });
       const staging = `${shimPath}.${process.pid}.tmp`;
       yield* fs.writeFileString(staging, content, { mode: 0o755 });

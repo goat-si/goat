@@ -492,7 +492,7 @@ it.effect(
         },
         createWorktree: (input, options) =>
           Effect.gen(function* () {
-            if (!(yield* fs.exists(worktreePath)))
+            if (!(yield* fs.exists(worktreePath).pipe(Effect.orDie)))
               yield* git(cwd, ["commit", "--allow-empty", "-m", "base advanced"]);
             return yield* driver.createWorktree({ ...input, cwd, path: worktreePath }, options);
           }),

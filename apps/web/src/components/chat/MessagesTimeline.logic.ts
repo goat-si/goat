@@ -9,7 +9,6 @@ import { shallow } from "zustand/vanilla/shallow";
 import { claudeResumeCompactionAge } from "@goat/shared/claudeCompaction";
 import { IDLE_COMPACTING_LABELS, IDLE_COMPACTION_TITLES } from "@goat/client-runtime/user-message";
 import type { HandoffTimelineRun } from "@goat/client-runtime/handoff";
-import { renderCodexDirectivesForCopy } from "@goat/shared/codexMarkdownDirectives";
 import {
   commandDisplayText,
   commandProgramName,
@@ -113,7 +112,8 @@ export function timelineEntryRunId(entry: TimelineEntry): RunId | null {
   if (entry.kind === "proposed-plan") {
     return entry.proposedPlan.runId;
   }
-  if (entry.kind === "html-render" || entry.kind === "mcp-app") return entry.runId;
+  if (entry.kind === "html-render" || entry.kind === "mcp-app" || entry.kind === "sent-message")
+    return entry.runId;
   return entry.kind === "work" ? (entry.entry.runId ?? null) : null;
 }
 
@@ -685,6 +685,7 @@ type MessagesTimelineRowContent =
       createdAt: string;
       htmlRender: HtmlRenderReference;
     }
+  | Extract<TimelineEntry, { kind: "sent-message" }>
   | {
       kind: "mcp-app";
       id: string;
@@ -723,6 +724,8 @@ function workGroupId(timelineEntryId: string): string {
   return `work-group:${timelineEntryId}`;
 }
 
+export { resolveAssistantMessageCopyState } from "./assistantMessageCopyState";
+
 export type TimelineToolPresentation = GoatMcpToolPresentation;
 
 function expandedWorkGroupRow(
@@ -748,23 +751,6 @@ function viewedImagesRows(
   return paths.length === 0
     ? []
     : [{ kind: "viewed-images", id: `${groupId}:viewed-images`, createdAt, paths }];
-}
-
-export function resolveAssistantMessageCopyState({
-  text,
-  showCopyButton,
-  streaming,
-}: {
-  text: string | null;
-  showCopyButton: boolean;
-  streaming: boolean;
-}) {
-  const hasText = text !== null && text.trim().length > 0;
-  const visible = showCopyButton && hasText && !streaming;
-  return {
-    text: hasText ? (visible ? renderCodexDirectivesForCopy(text) : text) : null,
-    visible,
-  };
 }
 
 interface TurnFold {
@@ -927,6 +913,7 @@ function liveSubagentCardEntryIds(entries: ReadonlyArray<TimelineEntry>): Readon
 
 function timelineEntryFoldRunId(entry: TimelineEntry, runlessKey: RunId | null): RunId | null {
   if (entry.kind === "work" && entry.entry.itemType === "system_notice") return null;
+  if (entry.kind === "sent-message") return entry.runId ?? runlessKey;
   if (entry.kind === "message" && entry.message.role === "assistant") {
     return entry.message.runId ?? runlessKey;
   }
@@ -1945,6 +1932,11 @@ export function deriveMessagesTimelineRows(input: {
       continue;
     }
 
+    if (timelineEntry.kind === "sent-message") {
+      nextRows.push(timelineEntry);
+      continue;
+    }
+
     if (timelineEntry.kind === "html-render") {
       nextRows.push({
         kind: "html-render",
@@ -2352,6 +2344,11 @@ function isRowUnchanged(a: MessagesTimelineRow, b: MessagesTimelineRow): boolean
         a.paths.length === bv.paths.length &&
         a.paths.every((path, index) => path === bv.paths[index])
       );
+    }
+
+    case "sent-message": {
+      const next = b as typeof a;
+      return a.createdAt === next.createdAt && a.text === next.text;
     }
 
     case "html-render": {

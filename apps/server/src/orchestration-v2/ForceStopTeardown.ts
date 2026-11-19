@@ -1,8 +1,11 @@
-import type {
-  OrchestrationV2Run,
-  OrchestrationV2ThreadProjection,
-  ProviderSessionId,
-  ThreadId,
+import {
+  OrchestrationV2ForceStopThreadError,
+  type OrchestrationV2ForceStopThreadInput,
+  type OrchestrationV2ProviderThread,
+  type OrchestrationV2Run,
+  type OrchestrationV2ThreadProjection,
+  type ProviderSessionId,
+  type ThreadId,
 } from "@goat/contracts";
 import * as Effect from "effect/Effect";
 import * as Fiber from "effect/Fiber";
@@ -30,7 +33,7 @@ const ownsSession = (run: OrchestrationV2Run) =>
  * A cloud agent runs at its vendor. Releasing its session only closes GOAT's observer, which
  * would report the work stopped while it continues, so Force stop leaves it to the cloud Stop.
  */
-export const runsInCloud = (
+const runsInCloud = (
   records: Pick<OrchestrationV2ThreadProjection, "providerThreads">,
   threadId: ThreadId,
 ) =>
@@ -38,6 +41,44 @@ export const runsInCloud = (
     (providerThread) =>
       providerThread.appThreadId === threadId && providerThread.cloudTask !== undefined,
   );
+
+const ownsForceStopProcess = Effect.fn("ForceStopTeardown.ownsProcess")(function* (
+  sessions: ProviderSessionManager.ProviderSessionManagerV2["Service"],
+  thread: OrchestrationV2ProviderThread,
+) {
+  if (thread.driver !== "opencode") return true;
+  if (thread.providerSessionId == null) return false;
+  const runtime = yield* sessions.get(thread.providerSessionId);
+  return Option.getOrUndefined(runtime)?.providerSession.capabilities.sessions.ownsProcess === true;
+});
+
+export const checkForceStopTarget = Effect.fn("ForceStopTeardown.checkTarget")(function* (
+  sessions: ProviderSessionManager.ProviderSessionManagerV2["Service"],
+  input: OrchestrationV2ForceStopThreadInput,
+  records: Pick<OrchestrationV2ThreadProjection, "thread" | "providerThreads">,
+  target: OrchestrationV2Run | undefined,
+) {
+  if (input.runId !== undefined && input.runId !== target?.id) {
+    return yield* new OrchestrationV2ForceStopThreadError({
+      threadId: input.threadId,
+      reason: "superseded",
+    });
+  }
+  if (runsInCloud(records, input.threadId)) {
+    return yield* new OrchestrationV2ForceStopThreadError({
+      threadId: input.threadId,
+      reason: "cloud",
+    });
+  }
+  const providerThreadId = target?.providerThreadId ?? records.thread.activeProviderThreadId;
+  const providerThread = records.providerThreads.find((thread) => thread.id === providerThreadId);
+  if (providerThread !== undefined && !(yield* ownsForceStopProcess(sessions, providerThread))) {
+    return yield* new OrchestrationV2ForceStopThreadError({
+      threadId: input.threadId,
+      cause: "GOAT could not verify ownership of the OpenCode server process for this run.",
+    });
+  }
+});
 
 /**
  * Force stop's session teardown, bound to the run it was requested for. It holds the thread
@@ -83,10 +124,13 @@ export const tearDownForceStoppedRun = Effect.fn("ForceStopTeardown.tearDown")(f
       let shared = false;
       let releasing = false;
       const sharedWith = new Set<ThreadId>();
-      for (const providerSessionId of new Set(
-        own.flatMap((thread) => thread.providerSessionId ?? []),
-      )) {
+      const checkedSessions = new Set<ProviderSessionId>();
+      for (const thread of own) {
+        const { providerSessionId } = thread;
+        if (providerSessionId == null || checkedSessions.has(providerSessionId)) continue;
+        checkedSessions.add(providerSessionId);
         if (!(yield* sessions.isLive(providerSessionId))) continue;
+        if (!(yield* ownsForceStopProcess(sessions, thread))) continue;
         const others = yield* sessions.otherWorkingThreads({ providerSessionId, threadId });
         for (const other of others) sharedWith.add(other);
         if (others.length > 0) {

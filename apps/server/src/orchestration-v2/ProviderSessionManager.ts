@@ -96,6 +96,7 @@ import {
 } from "./ProviderSessionManagerErrors.ts";
 import { prepareScreenTurn, sameScreenBindingHints } from "./ScreenSkills.ts";
 import { instanceUrlOpener } from "../urlOpener/UrlOpenerShim.ts";
+import { interruptWithWatchdog } from "./ProviderStopWatchdog.ts";
 
 import type {
   ProviderMemoryPrepareInput,
@@ -110,8 +111,7 @@ export type {
 const DEFAULT_IDLE_TIMEOUT_MS = 30 * 60 * 1000;
 const DEFAULT_MAX_IDLE_PIN_MS = 4 * 60 * 60 * 1000;
 const RELEASE_SCOPE_CLOSE_TIMEOUT_MS = 30 * 1000;
-/** Past adapters' own 10 s stop fallbacks, so they settle first when the provider answers at all. */
-export const PROVIDER_INTERRUPT_TIMEOUT_MS = 15 * 1000;
+export { PROVIDER_INTERRUPT_TIMEOUT_MS } from "./ProviderStopWatchdog.ts";
 
 const busyTurnPrefix = (providerThreadId: ProviderThreadId) => `${providerThreadId}#`;
 const busyTurnKey = (providerThreadId: ProviderThreadId, runOrdinal: number) =>
@@ -2157,23 +2157,7 @@ export const layerWithOptions = (
           // A provider starved of memory can stop answering, so no caller may wait on it unbounded.
           interruptTurn: (input) =>
             observeActivity(providerSessionId, touchActivity(providerSessionId)).pipe(
-              Effect.andThen(
-                runtime.interruptTurn(input).pipe(
-                  Effect.timeoutOrElse({
-                    duration: PROVIDER_INTERRUPT_TIMEOUT_MS,
-                    orElse: () =>
-                      Effect.fail(
-                        new ProviderAdapter.ProviderAdapterInterruptTimeoutError({
-                          driver: runtime.driver,
-                          providerThreadId: input.providerThread.id,
-                          providerTurnId: input.providerTurnId,
-                          timeoutMs: PROVIDER_INTERRUPT_TIMEOUT_MS,
-                        }),
-                      ),
-                  }),
-                  turnMetrics("interrupt"),
-                ),
-              ),
+              Effect.andThen(interruptWithWatchdog(runtime, input).pipe(turnMetrics("interrupt"))),
             ),
           respondToRuntimeRequest: (input) =>
             observeActivity(providerSessionId, touchActivity(providerSessionId)).pipe(

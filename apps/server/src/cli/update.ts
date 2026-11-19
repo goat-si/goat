@@ -27,7 +27,6 @@ import { bootServiceRuntimeReferences } from "../cloud/bootServiceRuntimeReferen
 import {
   ensurePinnedRuntimeInstalled,
   launcherOwnsVersionsDir,
-  pinnedRuntimeCommand,
   PinnedRuntimeInstallError,
   pinnedRuntimePaths,
   pinnedRuntimeVersionsDir,
@@ -37,6 +36,7 @@ import {
   windowsShimTarget,
 } from "../cloud/pinnedRuntime.ts";
 export { resolveLauncherPath } from "../cloud/pinnedRuntime.ts";
+import { runStagedServicePreflight } from "../cloud/servicePreflight.ts";
 import { compareExactServiceVersions, isExactServiceVersion } from "../cloud/serviceProtocol.ts";
 import * as ProcessRunner from "../processRunner.ts";
 import { isProcessAlive, readPersistedServerRuntimeState } from "../serverRuntimeState.ts";
@@ -363,6 +363,7 @@ export const updateCommand = Command.make("update", {
       return yield* runUpdate({
         baseDir: config.baseDir,
         logsDir: config.logsDir,
+        databasePath: config.dbPath,
         serverRuntimeStatePath: config.serverRuntimeStatePath,
         channel: Option.getOrUndefined(flags.channel),
         requestedVersion: Option.getOrUndefined(flags.version),
@@ -440,9 +441,10 @@ export function backgroundServiceRunningMessage(
   return `  Background service still running ${running}. Run \`goat service restart\` when you are ready to switch it to ${targetVersion}.`;
 }
 
-const runUpdate = Effect.fn("cli.update.run")(function* (input: {
+export const runUpdate = Effect.fn("cli.update.run")(function* (input: {
   readonly baseDir: string;
   readonly logsDir: string;
+  readonly databasePath: string;
   readonly serverRuntimeStatePath: string;
   readonly channel: CliReleaseChannel | undefined;
   readonly requestedVersion: string | undefined;
@@ -586,31 +588,32 @@ const runUpdate = Effect.fn("cli.update.run")(function* (input: {
     platform,
     arch,
     releaseBaseUrl: environment[CLI_RELEASE_BASE_URL_ENV]?.trim() || undefined,
-    validate: (paths) =>
-      runner
-        .run({
-          command: pinnedRuntimeCommand(paths).command,
-          args: [...pinnedRuntimeCommand(paths).args, "--version"],
-          timeout: Duration.seconds(30),
-        })
-        .pipe(
-          Effect.mapError(
-            (cause) =>
-              new PinnedRuntimeInstallError({ step: "verifying the downloaded goat", cause }),
-          ),
-          Effect.flatMap((result) =>
-            result.code === 0 && /\bv(\S+)\s*$/.exec(result.stdout)?.[1] === targetVersion
-              ? Effect.void
-              : Effect.fail(
-                  new PinnedRuntimeInstallError({
-                    step: "verifying the downloaded goat",
-                    exitCode: Number(result.code),
-                  }),
-                ),
-          ),
-        ),
+    validate: (runtime) =>
+      runStagedServicePreflight({
+        runner,
+        runtime,
+        targetVersion,
+        databasePath: input.databasePath,
+        requireDatabaseCheck: true,
+      }),
   }).pipe(
     Effect.ensuring(Effect.sync(progress.finish)),
+    Effect.catchTags({
+      PinnedRuntimePreflightBlockedError: (error) =>
+        Effect.fail(new CliUpdateError({ reason: error.reason })),
+    }),
+    Effect.catchIf(
+      (error): error is PinnedRuntimeInstallError & { readonly exitCode: number } =>
+        error._tag === "PinnedRuntimeInstallError" &&
+        error.step === "running the staged service preflight" &&
+        error.exitCode !== undefined,
+      (error) =>
+        Effect.fail(
+          new CliUpdateError({
+            reason: `goat@${targetVersion} could not confirm it supports this database (its check exited with code ${error.exitCode}), so GOAT did not switch to it.`,
+          }),
+        ),
+    ),
     Effect.catchIf(
       (error): error is PinnedRuntimeInstallError =>
         error._tag === "PinnedRuntimeInstallError" &&

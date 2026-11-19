@@ -34,6 +34,7 @@ export interface ReplayExpectation {
 export interface ReplayCase {
   readonly id: string;
   readonly upstreamId: string;
+  readonly harness?: "claude";
   readonly role: "top" | "delegated-child";
   readonly experience: string;
   readonly priorTurns: ReadonlyArray<{

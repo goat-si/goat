@@ -3407,6 +3407,7 @@ const OrchestrationV2InternalCommand = Schema.Union([
     threadId: ThreadId,
     runId: RunId,
     basePin: WorktreePreparationBasePin,
+    workspaceStrategy: Schema.optional(OrchestrationV2ThreadLaunchWorkspaceStrategy),
   }),
   OrchestrationV2ReviewContinueCommand,
   Schema.Struct({

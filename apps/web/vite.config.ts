@@ -140,6 +140,7 @@ const browserTestProject = {
       "vite-plus/test/browser",
       "@base-ui/react/autocomplete",
       "@effect/vitest",
+      "@legendapp/list/react-native",
       "zustand/vanilla",
       "saxes",
       "@betteroffice/docx/editor",
