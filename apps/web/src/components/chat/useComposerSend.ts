@@ -1351,7 +1351,9 @@ export function useComposerSend(input: ComposerSendInput) {
           ? scopeThreadRef(environmentId, threadIdForSend)
           : null;
       if (backgroundThreadRef) beginBackgroundDraftSubmissionByRef(backgroundThreadRef);
-      const checkoutPullRequestUrl = isLocalDraftThread ? checkoutLink.read(draftId) : null;
+      const checkoutPullRequestUrl = isLocalDraftThread
+        ? checkoutLink.read(draftId, activeThreadBranch)
+        : null;
       const startPromise = startThreadTurn({
         environmentId,
         input: {

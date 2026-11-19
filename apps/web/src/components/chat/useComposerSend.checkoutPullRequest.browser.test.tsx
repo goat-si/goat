@@ -295,3 +295,127 @@ it.each([
     }
   }
 });
+
+it("keeps a replacement checkout's pull request off a single-model send already uploading", async () => {
+  await using fixture = await setupSshComposer();
+  const { EnvironmentId, ProjectId } = await import("@goat/contracts");
+  const { scopeProjectRef } = await import("@goat/client-runtime/environment");
+  const { AsyncResult } = await import("effect/reactivity");
+  const { DraftId, useComposerDraftStore } = await import("~/composerDraftStore");
+  const { appAtomRegistry } = await import("~/rpc/atomRegistry");
+  const { environmentPresentations } = await import("~/state/presentation");
+  const { makeThreadFixture } = await import("~/test-fixtures");
+  const { usePullRequestLinking } = await import("../../hooks/usePullRequestLinking");
+  const { runAttachmentUploadCycle } = await import("@goat/client-runtime/state/attachments");
+
+  const environmentId = EnvironmentId.make("redirect-env");
+  const projectId = ProjectId.make("project");
+  const threadId = ThreadId.make("redirect-thread");
+  const draftId = DraftId.make("single-checkout-upload");
+  const branch = "feature";
+  const worktreePath = "/worktrees/feature";
+  const store = useComposerDraftStore.getState();
+  store.setProjectDraftThreadId(scopeProjectRef(environmentId, projectId), draftId, {
+    threadId,
+    branch,
+    worktreePath,
+    envMode: "worktree",
+    checkoutPullRequest: { url: "https://github.com/org/repo/pull/1", branch },
+  });
+
+  const changeLink = vi.fn().mockResolvedValue(undefined);
+  const linking = vi.mocked(usePullRequestLinking);
+  linking.mockReturnValue({
+    mode: "multiple",
+    canLink: () => true,
+    isLinked: () => false,
+    changeLink,
+  });
+  using _linking = { [Symbol.dispose]: () => linking.mockRestore() };
+
+  const uploadStarted = deferred<void>();
+  const upload = deferred<AttachmentUploadCycleResult>();
+  const uploadCycle = vi.mocked(runAttachmentUploadCycle).mockImplementation(() => {
+    uploadStarted.resolve();
+    return upload.promise;
+  });
+  using _upload = {
+    [Symbol.dispose]() {
+      upload.resolve({ status: "cancelled", attachmentId: null });
+      uploadCycle.mockRestore();
+    },
+  };
+  const get = vi.mocked(appAtomRegistry.get);
+  const prior = get.getMockImplementation()!;
+  get.mockImplementation(((atom: unknown) =>
+    atom === environmentPresentations.presentationsAtom
+      ? new Map([
+          [
+            environmentId,
+            {
+              serverConfig: { environment: { capabilities: { attachmentUploads: true } } },
+            },
+          ],
+        ])
+      : prior(atom as never)) as never);
+  using _registry = {
+    [Symbol.dispose]: () => {
+      get.mockImplementation(prior);
+    },
+  };
+
+  const file = new File(["image"], "picture.png", { type: "image/png" });
+  const sender = await renderCheckoutSend(fixture, {
+    input: {
+      activeThread: makeThreadFixture({
+        id: threadId,
+        environmentId,
+        projectId,
+        branch,
+        worktreePath,
+      }),
+      activeProject: { id: projectId, environmentId, workspaceRoot: "/repo" },
+      draftId,
+      draftThread: store.getDraftSession(draftId),
+      composerDraftTarget: draftId,
+      routeThreadKey: draftId,
+      currentRouteThreadKeyRef: { current: draftId },
+      activeThreadBranch: branch,
+      sendEnvMode: "worktree",
+    },
+    sendContext: {
+      images: [
+        {
+          type: "image",
+          id: "single-checkout-picture",
+          name: file.name,
+          mimeType: file.type,
+          sizeBytes: file.size,
+          file,
+          previewUrl: "blob:single-checkout-picture",
+        },
+      ],
+    },
+  });
+  state.normal.mockResolvedValue(AsyncResult.success({ sequence: 1 }));
+
+  const sending = sender.send();
+  await Promise.race([uploadStarted.promise, sending]);
+  expect(uploadCycle).toHaveBeenCalledOnce();
+  expect(state.normal).not.toHaveBeenCalled();
+  store.setDraftThreadContext(draftId, {
+    branch: "other-feature",
+    worktreePath: "/worktrees/other-feature",
+    checkoutPullRequest: { url: "https://github.com/org/repo/pull/2", branch: "other-feature" },
+  });
+  upload.resolve({ status: "uploaded", attachmentId: "uploaded-picture" });
+  await sending;
+
+  expect(sender.errors.filter(Boolean)).toEqual([]);
+  expect(state.normal).toHaveBeenCalledOnce();
+  expect(state.normal.mock.calls[0]?.[0].input.bootstrap.createThread).toMatchObject({
+    branch,
+    worktreePath,
+  });
+  expect(changeLink).not.toHaveBeenCalled();
+});

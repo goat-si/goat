@@ -11,11 +11,11 @@ import { usePullRequestLinking } from "../../hooks/usePullRequestLinking";
 export function useLinkCheckoutPullRequest(environmentId: EnvironmentId) {
   const linking = usePullRequestLinking(environmentId);
   return {
-    /** The pull request to link, read from the live draft; null when it does not apply. */
-    read: (draftId: DraftId | null, worktreeBase?: string) => {
-      if (draftId === null) return null;
+    /** The pull request on the live draft that matches the branch being dispatched. */
+    read: (draftId: DraftId | null, dispatchedBranch: string | null) => {
+      if (draftId === null || dispatchedBranch === null) return null;
       const draft = useComposerDraftStore.getState().getDraftSession(draftId);
-      if (worktreeBase !== undefined && draft?.branch !== worktreeBase) return null;
+      if (draft?.branch !== dispatchedBranch) return null;
       return checkoutPullRequestUrlToLink(draft);
     },
     /** Best effort: the thread already exists, so a failed link is only logged. */
