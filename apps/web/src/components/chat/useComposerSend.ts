@@ -1,4 +1,5 @@
 import { usePendingApprovalRefs } from "./usePendingApprovalRefs";
+import { usePreviewAnnotationLimit } from "./usePreviewAnnotationLimit";
 import {
   mergeDirectPreviewAnnotation,
   shouldDockDraftHeroForSubmission,
@@ -143,6 +144,7 @@ const ENVIRONMENT_UNAVAILABLE_SEND_TOAST_TRAIL_SIZE = 3;
  * when it fails.
  */
 export function useComposerSend(input: ComposerSendInput) {
+  const exceedsAnnotationLimit = usePreviewAnnotationLimit();
   const {
     isCloudThread,
     activeThreadRef,
@@ -339,6 +341,8 @@ export function useComposerSend(input: ComposerSendInput) {
       return;
     }
     const sendCtx = composerRef.current?.getSendContext();
+    if (exceedsAnnotationLimit(sendCtx?.previewAnnotations ?? [], directAnnotation?.annotation))
+      return;
     if (activePendingProgress && sendCtx?.answeringPendingUserInput !== false) {
       const sideChat = {
         progress: activePendingProgress,

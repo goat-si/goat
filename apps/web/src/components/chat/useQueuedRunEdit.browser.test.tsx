@@ -720,6 +720,45 @@ describe("useQueuedRunEdit", () => {
     expect(readAttachmentUpload(file.id)).toBeUndefined();
   });
 
+  it.each([8000, 8001] as const)("keeps a queued annotation at length %i safe", async (length) => {
+    const { hook } = setup();
+    mocks.editQueuedRun.mockResolvedValue({ _tag: "Success" });
+    await using _screen = await render(view(THREAD_A, "queued", hook));
+    await beginChangedEdit(hook);
+    const target = requireHook(hook).draftTarget;
+    const annotation = {
+      id: "annotation",
+      pageUrl: "https://example.test",
+      pageTitle: null,
+      comment: "x".repeat(length),
+      elements: [],
+      regions: [],
+      strokes: [],
+      styleChanges: [],
+      screenshot: null,
+      createdAt: "2026-01-01T00:00:00.000Z",
+    };
+    await act(() => useComposerDraftStore.getState().addPreviewAnnotation(target, annotation));
+    const error = vi.fn();
+    await act(() =>
+      requireHook(hook).saveEdit(
+        { ...savedContent("changed"), previewAnnotations: [annotation] },
+        error,
+      ),
+    );
+    if (length === 8000) expect(mocks.editQueuedRun).toHaveBeenCalledOnce();
+    else {
+      expect(mocks.editQueuedRun).not.toHaveBeenCalled();
+      expect(error).toHaveBeenCalledWith(
+        THREAD_A.threadId,
+        "Annotation comments must be 8,000 characters or fewer.",
+      );
+      expect(
+        useComposerDraftStore.getState().getComposerDraft(target)?.previewAnnotations[0]?.comment,
+      ).toHaveLength(8001);
+    }
+  });
+
   it("leaves a newer edit alone when a save from before navigation finishes", async () => {
     const { hook } = setup();
     let finishSave: (result: { readonly _tag: "Success" }) => void = () => {};

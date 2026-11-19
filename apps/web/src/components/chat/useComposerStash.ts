@@ -1,3 +1,5 @@
+import { msg, useMessages } from "gt-react";
+import { COMPOSER_CONTEXT_PREVIEW_COMMENT_MAX_CHARS } from "@goat/contracts";
 import { composerFileDedupKey, composerFileMatchesReattachMarker } from "./composerAttachmentFiles";
 import type { ChatComposerProps } from "./ChatComposer";
 import {
@@ -96,6 +98,7 @@ export function useComposerStash(input: {
   ) => ReadonlyMap<string, string>;
   readonly expandMobileComposer: () => void;
 }) {
+  const m = useMessages();
   const {
     environmentId,
     composerDraftTarget,
@@ -445,6 +448,18 @@ export function useComposerStash(input: {
   const deleteStashEntryStable = useStableCallback(deleteStashEntry);
 
   const stashCurrentPrompt = async () => {
+    if (
+      composerPreviewAnnotations.some(
+        (annotation) =>
+          annotation.comment.trim().length > COMPOSER_CONTEXT_PREVIEW_COMMENT_MAX_CHARS,
+      )
+    ) {
+      toastManager.add({
+        type: "error",
+        title: m(msg("Annotation comments must be 8,000 characters or fewer.")),
+      });
+      return;
+    }
     // Stashing clears the draft. A pasted attachment still downloading would then land in the
     // emptied composer instead of travelling with the entry it belongs to.
     if (pendingDraftWork.has(attachmentTargetKey)) {

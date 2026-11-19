@@ -1,3 +1,4 @@
+import { msg, useMessages } from "gt-react";
 import { queuedRunEditDraftKey } from "../../queuedRunEditDraftId";
 import { useAtomValue } from "@effect/atom-react";
 import {
@@ -9,6 +10,7 @@ import type { ThreadStructure } from "@goat/client-runtime/state/shell";
 import type { PendingThreadRequests } from "@goat/client-runtime/state/thread-requests";
 import {
   PROVIDER_SEND_TURN_MAX_ATTACHMENTS,
+  COMPOSER_CONTEXT_PREVIEW_COMMENT_MAX_CHARS,
   type ChatAttachment,
   type ComposerContextRecord,
   type EnvironmentId,
@@ -219,6 +221,7 @@ export function useQueuedRunEdit(input: {
   readonly promptRef: { current: string };
   readonly composerRef: RefObject<ChatComposerHandle | null>;
 }) {
+  const m = useMessages();
   const {
     environmentId,
     routeThreadRef,
@@ -387,6 +390,18 @@ export function useQueuedRunEdit(input: {
     setThreadError: (threadId: ThreadId, error: string | null) => void,
   ) => {
     if (editing === null || isSaving) return;
+    if (
+      content.previewAnnotations.some(
+        (annotation) =>
+          annotation.comment.trim().length > COMPOSER_CONTEXT_PREVIEW_COMMENT_MAX_CHARS,
+      )
+    ) {
+      setThreadError(
+        editing.threadId,
+        m(msg("Annotation comments must be 8,000 characters or fewer.")),
+      );
+      return;
+    }
     const newAttachments = [...content.images, ...content.files];
     if (
       editing.existingAttachments.length + newAttachments.length >
