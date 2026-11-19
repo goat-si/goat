@@ -542,7 +542,7 @@ function ThreadDetailBody(
         unresponsive,
         label: unresponsive ? "Not responding to Stop" : "Stopping…",
         action:
-          unresponsive && canForceStop && !runStop.cloud
+          unresponsive && canForceStop && runStop.forceStopSupported
             ? {
                 label: forceStoppingKey === selectedThreadKey ? "Force stopping..." : "Force stop",
                 accessibilityLabel: "Force stop the agent",

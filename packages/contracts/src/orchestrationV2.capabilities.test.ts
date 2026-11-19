@@ -177,3 +177,26 @@ it("an older peer accepts a snapshot that advertises supportsNativeGoals and dro
     );
   }
 });
+
+it("round-trips process ownership and accepts capability snapshots in both upgrade directions", () => {
+  const sessionFields = { ...OrchestrationV2ProviderCapabilities.fields.sessions.fields };
+  Reflect.deleteProperty(sessionFields, "ownsProcess");
+  const decodeOlderPeer = Schema.decodeUnknownSync(
+    Schema.Struct({
+      ...OrchestrationV2ProviderCapabilities.fields,
+      sessions: Schema.Struct(sessionFields),
+    }),
+  );
+  const legacy = decodeOrchestrationV2ProviderCapabilities(legacyCapabilities);
+  expect(legacy.sessions).not.toHaveProperty("ownsProcess");
+  for (const ownsProcess of [false, true]) {
+    const snapshot = {
+      ...legacyCapabilities,
+      sessions: { ...legacyCapabilities.sessions, ownsProcess },
+    };
+    expect(decodeOlderPeer(snapshot).sessions).toEqual(legacy.sessions);
+    expect(decodeOrchestrationV2ProviderCapabilities(snapshot).sessions).toMatchObject({
+      ownsProcess,
+    });
+  }
+});

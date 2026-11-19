@@ -77,7 +77,7 @@ const registered = catalog.pipe(
 
 it("gives every entry a unique path, listed name and resolvable schema reference", () => {
   // Includes upload/report receipts, origin binding and force stop, OpenCodex sync, Child setup, storage tools, fill_secret, sign_in_state, site notes, browser claims, memory recall, the bot list, the session notes change, handoff withdraw, hub device move, hub device routes and hub machine attach, reissue and list, preview stop.
-  expect(entries).toHaveLength(308);
+  expect(entries).toHaveLength(309);
   expect(new Set(entries.map((entry) => entry.name)).size).toBe(entries.length);
   expect(new Set(entries.map(listedToolName)).size).toBe(entries.length);
   // 75 shipped names off the path grammar plus five whose verb D11 normalized.
@@ -706,6 +706,7 @@ it.effect("lists canonical names and keeps legacy names callable, unlisted and d
     const forThreads = entries.filter(
       (e) =>
         e.requires !== "client" &&
+        !("listing" in e && e.listing === "prompt") &&
         e.verb !== "screen_run" &&
         e.resource !== "workspace" &&
         e.resource !== "terminal",
@@ -785,7 +786,15 @@ it.effect("goat_describe answers at three depths with availability for this call
     const resources = (
       surface.resources as ReadonlyArray<{ resource: string; verbs: string[] }>
     ).map(({ resource }) => resource);
-    expect(resources).toEqual([...new Set(entries.map((entry) => entry.resource))].sort());
+    expect(resources).toEqual(
+      [
+        ...new Set(
+          entries
+            .filter((entry) => !("listing" in entry && entry.listing === "prompt"))
+            .map((entry) => entry.resource),
+        ),
+      ].sort(),
+    );
 
     const threadResource = yield* describe(thread, "thread");
     expect(

@@ -107,6 +107,13 @@ export type RawThreadFeedEntry =
       readonly render: HtmlRenderReference;
     }
   | {
+      readonly type: "sent-message";
+      readonly id: string;
+      readonly createdAt: string;
+      readonly runId: RunId | null;
+      readonly text: string;
+    }
+  | {
       readonly type: "mcp-app";
       readonly id: string;
       readonly createdAt: string;
@@ -124,7 +131,7 @@ export type ThreadFeedEntry = ThreadFeedEntryContent & {
 };
 
 type ThreadFeedEntryContent =
-  | Extract<RawThreadFeedEntry, { type: "message" | "html-render" | "mcp-app" }>
+  | Extract<RawThreadFeedEntry, { type: "message" | "html-render" | "sent-message" | "mcp-app" }>
   | {
       readonly type: "activity-group";
       readonly id: string;
