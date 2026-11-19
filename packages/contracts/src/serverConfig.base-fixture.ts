@@ -64,11 +64,6 @@ export const ServerWorktreeCheckoutHealth = Schema.Struct({
 });
 export type ServerWorktreeCheckoutHealth = typeof ServerWorktreeCheckoutHealth.Type;
 
-/** The elevated PowerShell command that excludes the worktree folder from Defender scans. */
-export function defenderExclusionCommand(directory: string): string {
-  return `Add-MpPreference -ExclusionPath '${directory.replaceAll("'", "''")}'`;
-}
-
 export const ServerProviderAuth = Schema.Struct({
   status: ServerProviderAuthStatus,
   type: Schema.optional(TrimmedNonEmptyString),
@@ -150,22 +145,6 @@ export const ServerProviderWorkspaceSnapshot = Schema.Struct({
   modelsPending: Schema.optional(Schema.Boolean),
 });
 export type ServerProviderWorkspaceSnapshot = typeof ServerProviderWorkspaceSnapshot.Type;
-
-export const PROVIDER_WORKSPACE_SNAPSHOT_TTL_MS = 5 * 60_000;
-
-export function isProviderWorkspaceSnapshotCurrent(
-  snapshot: Pick<ServerProviderWorkspaceSnapshot, "checkedAt">,
-  nowMs: number,
-): boolean {
-  return nowMs - Date.parse(snapshot.checkedAt) < PROVIDER_WORKSPACE_SNAPSHOT_TTL_MS;
-}
-
-/** A pending snapshot keeps what it found before and is rescanned before its TTL. */
-export function isProviderWorkspaceSnapshotPending(
-  snapshot: Pick<ServerProviderWorkspaceSnapshot, "slashCommandsPending" | "modelsPending">,
-): boolean {
-  return snapshot.slashCommandsPending === true || snapshot.modelsPending === true;
-}
 
 /** Unavailable snapshots must set installed and enabled false. */
 export const ServerProviderAvailability = Schema.Literals(["available", "unavailable"]);
@@ -311,17 +290,6 @@ export type ServerProvider = typeof ServerProvider.Type;
 
 export const ServerProviders = ForwardCompatibleArray(ServerProvider);
 export type ServerProviders = typeof ServerProviders.Type;
-
-export const isProviderAvailable = (snapshot: ServerProvider): boolean =>
-  snapshot.availability !== "unavailable";
-
-/** Legacy producers omit this field and support text generation. */
-export const isProviderTextGenerationCapable = (snapshot: ServerProvider): boolean =>
-  snapshot.supportsTextGeneration !== false;
-
-/** A model the provider runs in sessions only, such as a Pi extension model. Absent means supported. */
-export const isModelTextGenerationCapable = (snapshot: ServerProvider, model: string): boolean =>
-  snapshot.models.find((candidate) => candidate.slug === model)?.supportsTextGeneration !== false;
 
 export const OtlpEndpointSource = Schema.Literals(["environment", "bootstrap", "settings"]);
 export type OtlpEndpointSource = typeof OtlpEndpointSource.Type;
@@ -483,13 +451,6 @@ export const EnvironmentTheme = Schema.Struct({
   ...environmentThemeFields,
 });
 export type EnvironmentTheme = typeof EnvironmentTheme.Type;
-
-export function environmentThemeFileHasColors(file: EnvironmentThemeFile): boolean {
-  return (
-    (file.canvas !== undefined && file.accent !== undefined) ||
-    (file.colors !== undefined && Object.keys(file.colors).length > 0)
-  );
-}
 
 /** tailnet means this machine's Tailscale interface; other private addresses are lan. */
 export const ServerDirectEndpointKind = Schema.Literals(["lan", "tailnet"]);
