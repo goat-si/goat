@@ -53,7 +53,9 @@ export const runRememberOriginFixture = Effect.fn("test.runRememberOriginFixture
           )
           .pipe(
             Effect.map((result) => ({ ...result, hubEnvironmentId: connection.hubEnvironmentId })),
-            Effect.orDie,
+            Effect.catch((error) =>
+              error instanceof M.MemoryHubError ? Effect.fail(error) : Effect.die(error),
+            ),
           ),
       pull: (_connection, input) => {
         if (refuseOriginPull && member === memberEnv && input.afterOriginSequence !== undefined)
@@ -278,14 +280,18 @@ export const runRememberOriginFixture = Effect.fn("test.runRememberOriginFixture
   if (scenario === "pre-activation") {
     yield* TestClock.adjust(M.MEMORY_LOG_RETENTION_MS + M.MEMORY_REPLACED_PAYLOAD_RETENTION_MS + 1);
     yield* compactor.compact(principal());
-  } else if (scenario === "offline floor-2") {
-    yield* compactor.compactIfNeeded(principal());
   }
 
   const checkReplica = Effect.gen(function* () {
     const sync = yield* Sync.MemorySyncService;
     const service = yield* Service.MemoryService;
     refuseOriginPull = scenario === "already ready";
+    if (scenario === "offline floor-2") {
+      const failure = yield* sync.syncOnce.pipe(Effect.flip);
+      assert.propertyVal(failure, "code", "bootstrap_required");
+      yield* compactor.compactIfNeeded(principal());
+      yield* TestClock.adjust("1 second");
+    }
     yield* sync.syncOnce;
     assert.propertyVal(yield* sync.readLocalReadiness(), "bootstrap", "ready");
     if (forgotten) {
