@@ -1119,7 +1119,6 @@ const layerMakeServer = Layer.unwrap(
     // fixPath rewrites PATH, so pin the launcher the shell chose before it does.
     const invokedAs = (yield* resolveLauncherPath) ?? (yield* HostProcess.InvokedAs);
     yield* fixPath({ shellEnvironmentPrepared: config.shellEnvironmentPrepared });
-
     const layerHttpListening = Layer.effectDiscard(
       Effect.gen(function* () {
         yield* HttpServer.HttpServer;
