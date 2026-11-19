@@ -91,8 +91,8 @@ describe("AntigravityAdapterV2 flavor", () => {
     assert.equal(launch?.prompt, "Read README.md");
   });
 
-  it("does not invent native Antigravity compaction support", () => {
-    assert.isFalse(flavor.supportsCompaction);
+  it("only offers compaction advertised by Antigravity", () => {
+    assert.isTrue(flavor.compactViaAdvertisedCommand);
   });
 
   it("routes interaction_* permission requests to the question card", () => {
