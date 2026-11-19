@@ -178,7 +178,6 @@ import { previewRuntimeTabId } from "../browser/previewRuntimeTabId";
 import { ThreadPreviewMiniPlayer } from "./preview/ThreadPreviewMiniPlayer";
 import { PreviewSessionSync } from "./preview/PreviewSessionSync";
 import { getConfiguredPreviewUrls } from "./preview/previewEmptyStateLogic";
-
 import {
   previewMiniPlayerSourceKey,
   selectThreadPreviewMiniPlayer,
@@ -1491,6 +1490,7 @@ export default function ChatView(props: ChatViewProps) {
   });
   const isWorking =
     phase === "running" ||
+    phase === "connecting" ||
     isSendBusy ||
     isConnecting ||
     isCompacting ||

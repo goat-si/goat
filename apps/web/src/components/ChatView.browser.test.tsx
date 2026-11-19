@@ -69,6 +69,28 @@ it("suppresses middle-click paste on chat space while preserving editable and li
   expect(link.dispatchEvent(middleUp())).toBe(true);
 });
 
+it.each(["preparing", "starting", "queued"] as const)(
+  "shows work in progress for a persisted %s run",
+  async (status) => {
+    const thread = threadWithHistory(`thread-${status}`, 1);
+    const run = { ...thread.runs[0]!, status };
+    using _environment = installFakeEnvironment([
+      { ...thread, runs: [run], shell: { status, activeRunId: run.id } },
+    ]);
+    __setClientSettingsForTests({
+      ...DEFAULT_CLIENT_SETTINGS,
+      onboardingCompletedAt: "2026-01-01T00:00:00.000Z",
+    });
+    const router = getRouter(
+      createMemoryHistory({ initialEntries: [`/${ENVIRONMENT_ID}/${thread.id}`] }),
+    );
+    await router.load();
+    await using _app = await render(<AppRoot router={router} />, { router: false });
+    await expect.element(page.getByTestId("composer-editor")).toBeVisible();
+    expect(_app.container.innerText).toMatch(/Setting up worktree|Working/);
+  },
+);
+
 it("a new draft does not load its reserved thread before the server lists it", async () => {
   using _environment = installFakeEnvironment([]);
   using fetchSpy = vi.spyOn(globalThis, "fetch");
