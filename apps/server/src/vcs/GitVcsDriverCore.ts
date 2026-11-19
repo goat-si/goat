@@ -1,3 +1,8 @@
+import {
+  branchNameFromHeadRef,
+  isUnbornHeadStderr,
+  isMissingWorktreeStderr,
+} from "./gitStatusParsing.ts";
 import { makeResolvePublishBranchName } from "./gitPublishBranchName.ts";
 import {
   makeRemoteRefContainsHead,
@@ -284,32 +289,6 @@ function parseUpstreamRefWithRemoteNames(
     remoteName: parsed.remoteName,
     branchName: parsed.branchName,
   };
-}
-
-// `--short` and `--abbrev-ref` print `heads/<name>` when a tag shares the branch's name, so
-// branch reads take the full ref and strip the prefix themselves.
-function branchNameFromHeadRef(value: string): string | null {
-  const ref = value.trim();
-  return ref.startsWith("refs/heads/") && ref.length > "refs/heads/".length
-    ? ref.slice("refs/heads/".length)
-    : null;
-}
-
-function isUnbornHeadStderr(stderr: string): boolean {
-  const normalized = stderr.toLowerCase();
-  return (
-    normalized.includes("bad revision 'head'") ||
-    (normalized.includes("unknown revision") && normalized.includes("path not in the working tree"))
-  );
-}
-
-// Git reports missing worktree registrations and registered-but-deleted paths differently.
-function isMissingWorktreeStderr(stderr: string): boolean {
-  const normalized = stderr.toLowerCase();
-  return (
-    normalized.includes("is not a working tree") ||
-    normalized.includes("cannot remove working tree")
-  );
 }
 
 const GIT_CHECKOUT_PROGRESS_LINE = /Updating files:\s+(\d+)%\s+\((\d+)\/(\d+)\)/;
