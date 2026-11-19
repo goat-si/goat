@@ -58,6 +58,7 @@ import {
   feedOwnedApprovalThreads,
   notificationAttention,
   createThreadNotificationGate,
+  isSnoozedForNotification,
   type ThreadNotificationKind,
   type ThreadNotificationObservation,
 } from "./ThreadNotificationCoordinator.logic";
@@ -520,6 +521,7 @@ export function startThreadNotifications(
     for (const [prior, state] of changed) {
       entry.gate.observe(state.thread.id, prior, state, {
         archived: state.thread.archivedAt !== null,
+        snoozed: isSnoozedForNotification(state.thread, state.completedAt, Date.now()),
         quiet:
           state.raw.latestRunStopRequested === true ||
           state.thread.latestRun?.completionNotification === "silent",
