@@ -19,6 +19,56 @@ export const dispatchError = (
     : new McpSchema.InternalError({ message: error.message });
 
 /**
+ * The client a nested call runs as. A stateful request carries its own `McpServerClient`. A
+ * 2026-07-28 request has no session, so Effect provides only `McpRequestContext`, yet
+ * `McpServer.callTool` still reads an `McpServerClient`; this one is built from the request and
+ * has no reverse channel, which no GOAT tool uses.
+ */
+const nestedCallClient = Effect.gen(function* () {
+  const client = yield* Effect.serviceOption(McpSchema.McpServerClient);
+  if (Option.isSome(client)) return client.value;
+  const request = yield* Effect.serviceOption(McpSchema.McpRequestContext);
+  if (Option.isNone(request)) {
+    return yield* Effect.die(new Error("Nested MCP tool call outside an MCP request"));
+  }
+  const { clientId, clientCapabilities, requestMetadata } = request.value;
+  // Effect types this field as a stateful version; the nested call keeps the request's own.
+  const protocolVersion = request.value
+    .protocolVersion as McpSchema.McpServerClient["Service"]["protocolVersion"];
+  const clientInfo = request.value.clientInfo ?? { name: "unknown", version: "unknown" };
+  return McpSchema.McpServerClient.of({
+    clientId,
+    protocolVersion,
+    clientCapabilities,
+    clientInfo,
+    // Effect reads a nested call's request metadata from here, as for a stateful session.
+    initializePayload: {
+      protocolVersion,
+      capabilities: clientCapabilities,
+      clientInfo,
+      ...(requestMetadata === undefined ? {} : { _meta: requestMetadata }),
+    },
+    requestMetadata,
+    getClient: Effect.die(new Error(`MCP ${protocolVersion} has no server-to-client channel`)),
+  });
+});
+
+/**
+ * Runs a nested `McpServer.callTool` as the request's own client, failing with the two errors
+ * dispatch callers handle.
+ */
+export const asNestedCall = <A>(
+  callTool: Effect.Effect<
+    A,
+    McpSchema.InvalidParams | McpSchema.InternalError | McpSchema.McpErrorBase,
+    McpSchema.McpServerClient
+  >,
+) =>
+  Effect.flatMap(nestedCallClient, (client) =>
+    Effect.provideService(callTool, McpSchema.McpServerClient, client),
+  ).pipe(Effect.mapError(dispatchError));
+
+/**
  * Calls registered tools by name through the same handle /mcp serves, so each
  * call keeps its own argument refusal and McpToolAccess checks. McpHttpServer
  * builds it, since only it may hold Effect's McpServer.
@@ -75,12 +125,10 @@ export const listedToolCall = (
 };
 
 /**
- * Runs an authenticated /mcp request with a legacy tool name resolved to the listed one, so the
- * call reaches the registered handle with its argument refusal, access checks and analytics.
- * Effect's MCP core guards tools/list and tools/call with one visibility check, so a tool cannot
- * be hidden from the list and still be callable; the name is resolved before the core sees it
- * instead. A protocol that routes on an Mcp-Name header would need that header rewritten too;
- * /mcp serves 2025-06-18, which has none.
+ * Resolves a legacy tool name to the listed one before Effect's MCP core sees the request, since
+ * one visibility check guards both tools/list and tools/call. The call keeps its argument
+ * refusal, access checks and analytics. The Mcp-Name header 2026-07-28 callers send is not
+ * rewritten yet, so a legacy name over that protocol is still refused.
  */
 export const withServedToolNames =
   /* The auth middleware's span already covers each request. */

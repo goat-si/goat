@@ -23,7 +23,7 @@ import * as AgentTerminal from "./AgentTerminalMcpService.ts";
 import { TerminalToolkit } from "./toolkits/terminal/tools.ts";
 import * as TerminalHandlers from "./toolkits/terminal/handlers.ts";
 import {
-  dispatchError,
+  asNestedCall,
   listedRegistration,
   registeredToolName,
   ToolDispatch,
@@ -781,10 +781,9 @@ const layerToolDispatch = Layer.effect(
     const server = yield* McpServer.McpServer;
     return ToolDispatch.of({
       // Callers may name a tool as it shipped; the server registers it under its listed name.
+      // A 2026-07-28 request brings no McpServerClient of its own; asNestedCall supplies it.
       call: (name, args) =>
-        server
-          .callTool({ name: registeredToolName(name), arguments: args })
-          .pipe(Effect.mapError(dispatchError)),
+        asNestedCall(server.callTool({ name: registeredToolName(name), arguments: args })),
       served: (name) =>
         server.tools.find(({ tool }) => tool.name === registeredToolName(name))?.tool,
     });
