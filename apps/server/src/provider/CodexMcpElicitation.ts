@@ -90,6 +90,13 @@ function mcpElicitationFormFields(payload: McpElicitationResponseInput) {
   return payload.requestedSchema;
 }
 
+export function canAutoApproveMcpElicitation(payload: McpElicitationResponseInput): boolean {
+  return (
+    mcpElicitationFormFields(payload) !== undefined &&
+    toMcpElicitationResponse(payload, "accept").action === "accept"
+  );
+}
+
 function mcpElicitationFieldOptions(field: typeof McpElicitationFormField.Type) {
   if (field.oneOf) {
     return field.oneOf.map((option) => ({ value: option.const, label: option.title }));

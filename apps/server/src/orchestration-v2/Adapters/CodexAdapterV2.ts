@@ -164,6 +164,7 @@ import { resolveAttachmentPath, resolveAttachmentPathById } from "../../attachme
 import { ServerConfig } from "../../config.ts";
 import { expandHomePath } from "@goat/provider-core/server/pathExpansion";
 import {
+  canAutoApproveMcpElicitation,
   describeMcpElicitation,
   toMcpElicitationResponse,
 } from "../../provider/CodexMcpElicitation.ts";
@@ -1604,17 +1605,21 @@ export const makeCodexAdapterV2 = Effect.fn("makeCodexAdapterV2")(function* (
           });
 
         // Streaming updates repeatedly await this context, including retries before registration.
-        const awaitActiveTurn = Effect.fnUntraced(function* (
-          nativeTurnId: string,
+        const awaitRegisteredTurn = Effect.fnUntraced(function* (
+          lookup: Effect.Effect<ActiveCodexTurnContext | undefined>,
           attemptsRemaining = 1_000,
         ): Effect.fn.Return<ActiveCodexTurnContext | undefined> {
-          const context = (yield* Ref.get(activeTurns)).get(nativeTurnId);
+          const context = yield* lookup;
           if (context !== undefined || attemptsRemaining <= 0) {
             return context;
           }
           yield* Effect.yieldNow;
-          return yield* awaitActiveTurn(nativeTurnId, attemptsRemaining - 1);
+          return yield* awaitRegisteredTurn(lookup, attemptsRemaining - 1);
         });
+        const awaitActiveTurn = (nativeTurnId: string) =>
+          awaitRegisteredTurn(
+            Ref.get(activeTurns).pipe(Effect.map((turns) => turns.get(nativeTurnId))),
+          );
 
         const resolveItemEventContext =
           /* Provider events include streaming deltas; avoid a span for each update. */
@@ -5108,27 +5113,32 @@ export const makeCodexAdapterV2 = Effect.fn("makeCodexAdapterV2")(function* (
 
         yield* client.handleServerRequest("mcpServer/elicitation/request", (payload) =>
           Effect.gen(function* () {
-            if (toMcpElicitationResponse(payload, "accept").action !== "accept") {
-              yield* Effect.logWarning("Declined an unsupported MCP elicitation.", {
+            const acceptance = toMcpElicitationResponse(payload, "accept");
+            if (acceptance.action !== "accept") {
+              yield* Effect.logWarning("Cancelled an unsupported MCP elicitation.", {
                 serverName: payload.serverName,
                 mode: payload.mode,
               });
               return {
-                action: "decline",
+                action: "cancel",
               } satisfies CodexSchema.McpServerElicitationRequestResponse;
             }
             const context =
               payload.turnId === undefined || payload.turnId === null
-                ? undefined
+                ? yield* awaitRegisteredTurn(findActiveTurnByNativeThreadId(payload.threadId))
                 : yield* awaitActiveTurn(payload.turnId);
             if (context === undefined) {
               yield* Effect.logWarning(
-                "Declined an MCP elicitation without an active Codex turn context.",
+                "Cancelled an MCP elicitation without an active Codex turn context.",
                 { serverName: payload.serverName },
               );
               return {
-                action: "decline",
+                action: "cancel",
               } satisfies CodexSchema.McpServerElicitationRequestResponse;
+            }
+
+            if (context.input.runtimePolicy.runtimeMode === "full-access") {
+              return canAutoApproveMcpElicitation(payload) ? acceptance : { action: "cancel" };
             }
 
             const nativeRequestId =
