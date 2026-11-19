@@ -101,7 +101,7 @@ import {
   formatReadToolLabel,
   formatSearchToolLabel,
 } from "@goat/shared/toolActivity";
-import { isWindowsAbsolutePath } from "@goat/shared/path";
+import { isHostPath } from "@goat/shared/path";
 import {
   attachTurnThreadCards,
   turnThreadTargetsEqual,
@@ -258,7 +258,7 @@ export function workEntryReadOutput(
       workEntryReadRawPaths(entry as WorkLogEntry)
         .map((path) => {
           const trimmed = path.trim().replaceAll("\\", "/");
-          if (!workspaceRoot || trimmed.startsWith("/") || isWindowsAbsolutePath(trimmed)) {
+          if (!workspaceRoot || isHostPath(trimmed)) {
             return trimmed;
           }
           const root = workspaceRoot.replaceAll("\\", "/").replace(/\/+$/, "");

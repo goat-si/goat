@@ -32,6 +32,7 @@ import {
   deriveMessagesTimelineRowsWithState,
   type MessagesTimelineRow,
   workEntryDisplayLabel,
+  workEntryReadOutput,
   liveWorkEntryLabel,
 } from "./MessagesTimeline.logic";
 
@@ -4351,5 +4352,16 @@ describe("cloud run card rows", () => {
     );
     expect(cardIndex).toBeGreaterThanOrEqual(0);
     expect(cardIndex).toBe(messageIndex - 1);
+  });
+});
+
+describe("workEntryReadOutput", () => {
+  it("keeps home paths as written while resolving workspace paths", () => {
+    expect(
+      workEntryReadOutput(
+        { changedFiles: ["src/app.ts", "~/.claude/CLAUDE.md", "~\\.gitconfig"] },
+        "/workspace/goat",
+      ),
+    ).toBe("/workspace/goat/src/app.ts\n~/.claude/CLAUDE.md\n~/.gitconfig");
   });
 });
