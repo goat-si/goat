@@ -172,7 +172,7 @@ Available context keys are `terminalFocus`, `terminalOpen`, `previewFocus`,
 `previewOpen`, `rightPanelOpen`, `modelPickerOpen`, `usagePageOpen`, `notesPageOpen`,
 `composerFocus`, `draftThreadRoute`, `turnRunning`, `editableFocus`, `fileViewFocus`,
 `fileTreeFocus`, `isWeb`, and `isDesktop`.
-`rightPanelOpen` applies to `rightPanel.new` while the right panel is open. Its default
+In a thread, `rightPanelOpen` is true while its right panel is open. The default
 `mod+t` also requires `!terminalFocus` and opens the new-tab menu.
 `draftThreadRoute` is true in a new thread, including a restored draft, before you
 send its first message.

@@ -525,6 +525,7 @@ export function installFakeEnvironment(
   fixtures: ReadonlyArray<FakeThread>,
   options?: {
     extraProjects?: ReadonlyArray<Pick<OrchestrationProjectShell, "id" | "title">>;
+    keybindings?: ServerConfig["keybindings"];
     providers?: ReadonlyArray<unknown>;
     capabilities?: Partial<ServerConfig["environment"]["capabilities"]>;
     onCommand?: (command: OrchestrationV2Command) => Promise<{ sequence: number }>;
@@ -547,6 +548,7 @@ export function installFakeEnvironment(
   requests = [];
   currentServerConfig = {
     ...serverConfig,
+    keybindings: options?.keybindings ?? serverConfig.keybindings,
     ...(threads.some((thread) => thread.olderSettled) ? { shellThreadFamilies: true } : {}),
     providers: options?.providers
       ? options.providers.map((provider) => decodeServerProvider(provider))
