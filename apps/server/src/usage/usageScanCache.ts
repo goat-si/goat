@@ -108,34 +108,43 @@ function intern(table: string[], index: Map<string, number>, value: string): num
   return next;
 }
 
-function serializeFile(entry: CachedFile, tables: InternTables): SerializedFile {
-  const serializeRecord = (record: UsageRecord): SerializedRecord => [
-    record.timestampMs,
-    intern(tables.models, tables.modelIndex, record.model),
-    intern(tables.sessions, tables.sessionIndex, record.sessionId),
-    record.totals.uncachedInputTokens,
-    record.totals.cachedInputTokens,
-    record.totals.cacheCreationTokens,
-    record.totals.outputTokens,
-    record.totals.reasoningTokens,
-    record.dedupeKey,
-    record.reportedCostUsd,
-    SPEEDS.indexOf(record.speed),
-    record.rateModel === undefined
-      ? null
-      : intern(tables.models, tables.modelIndex, record.rateModel),
-    ...(record.cacheCreation1hTokens !== undefined
-      ? ([record.unresolvedServiceTierTurnId ?? null, record.cacheCreation1hTokens] as const)
-      : record.unresolvedServiceTierTurnId !== undefined
-        ? ([record.unresolvedServiceTierTurnId] as const)
-        : ([] as const)),
-  ];
+interface InternNames {
+  readonly model: (value: string) => number;
+  readonly session: (value: string) => number;
+}
+
+const inMemoryNames = (tables: InternTables): InternNames => ({
+  model: (value) => intern(tables.models, tables.modelIndex, value),
+  session: (value) => intern(tables.sessions, tables.sessionIndex, value),
+});
+
+const serializeRecord = (record: UsageRecord, names: InternNames): SerializedRecord => [
+  record.timestampMs,
+  names.model(record.model),
+  names.session(record.sessionId),
+  record.totals.uncachedInputTokens,
+  record.totals.cachedInputTokens,
+  record.totals.cacheCreationTokens,
+  record.totals.outputTokens,
+  record.totals.reasoningTokens,
+  record.dedupeKey,
+  record.reportedCostUsd,
+  SPEEDS.indexOf(record.speed),
+  record.rateModel === undefined ? null : names.model(record.rateModel),
+  ...(record.cacheCreation1hTokens !== undefined
+    ? ([record.unresolvedServiceTierTurnId ?? null, record.cacheCreation1hTokens] as const)
+    : record.unresolvedServiceTierTurnId !== undefined
+      ? ([record.unresolvedServiceTierTurnId] as const)
+      : ([] as const)),
+];
+
+function serializeFile(entry: CachedFile, names: InternNames): SerializedFile {
   return {
     s: entry.size,
     m: entry.mtimeMs,
     p: entry.provider,
-    r: entry.records.map(serializeRecord),
-    t: entry.tailRecords.map(serializeRecord),
+    r: entry.records.map((record) => serializeRecord(record, names)),
+    t: entry.tailRecords.map((record) => serializeRecord(record, names)),
     mr: entry.malformedRecords,
     o: entry.position.resumeOffset,
     gl: entry.position.guardLength,
@@ -147,7 +156,8 @@ function serializeFile(entry: CachedFile, tables: InternTables): SerializedFile 
 export function encodeScanCache(cache: ScanCache): SerializedCache {
   const tables = makeInternTables();
   const files: Record<string, SerializedFile> = {};
-  for (const [path, entry] of cache) files[path] = serializeFile(entry, tables);
+  const names = inMemoryNames(tables);
+  for (const [path, entry] of cache) files[path] = serializeFile(entry, names);
   return {
     version: USAGE_SCAN_CACHE_VERSION,
     models: tables.models,
@@ -162,10 +172,11 @@ export function makeScanCacheWriter(): (
   extra: Readonly<Record<string, unknown>>,
 ) => Iterable<string> {
   const tables = makeInternTables();
+  const names = inMemoryNames(tables);
   function* encode(entries: readonly (readonly [string, CachedFile])[], extra: object) {
     yield '{"files":{';
     for (const [index, [path, entry]] of entries.entries()) {
-      yield `${index === 0 ? "" : ","}${JSON.stringify(path)}:${JSON.stringify(serializeFile(entry, tables))}`;
+      yield `${index === 0 ? "" : ","}${JSON.stringify(path)}:${JSON.stringify(serializeFile(entry, names))}`;
     }
     // Encoded after the files, which may have added to the intern tables.
     const tail = JSON.stringify({
@@ -180,6 +191,57 @@ export function makeScanCacheWriter(): (
   return (cache, extra) => encode([...cache], extra);
 }
 
+export function* encodeScanCachePages(
+  entries: Iterable<readonly [string, CachedFile]>,
+  extra: Readonly<Record<string, unknown>>,
+  names: InternNames,
+  strings: (section: "models" | "sessions") => Iterable<string>,
+) {
+  yield '{"files":{';
+  let separator = "";
+  for (const [path, entry] of entries) {
+    const {
+      r: _records,
+      t: _tail,
+      ...header
+    } = serializeFile({ ...entry, records: [], tailRecords: [] }, names);
+    yield `${separator}${JSON.stringify(path)}:${JSON.stringify(header).slice(0, -1)}`;
+    for (const [key, list] of [
+      ["r", entry.records],
+      ["t", entry.tailRecords],
+    ] as const) {
+      yield `,"${key}":[`;
+      let rowSeparator = "";
+      for (const record of list) {
+        yield rowSeparator + JSON.stringify(serializeRecord(record, names));
+        rowSeparator = ",";
+      }
+      yield "]";
+    }
+    yield "}";
+    separator = ",";
+  }
+  yield "}";
+  for (const [key, value] of Object.entries({ ...extra, version: USAGE_SCAN_CACHE_VERSION })) {
+    yield `,${JSON.stringify(key)}:${JSON.stringify(value)}`;
+  }
+  for (const section of ["models", "sessions"] as const) {
+    yield `,"${section}":[`;
+    separator = "";
+    for (const name of strings(section)) {
+      yield separator + JSON.stringify(name);
+      separator = ",";
+    }
+    yield "]";
+  }
+  yield "}";
+}
+
+export const isScanCacheVersion = (version: unknown): version is number =>
+  typeof version === "number" &&
+  version >= SPEED_COMPATIBLE_SINCE_VERSION &&
+  version <= USAGE_SCAN_CACHE_VERSION;
+
 function isRecordArray(value: unknown): value is readonly unknown[] {
   return Array.isArray(value);
 }
@@ -189,18 +251,11 @@ export function decodeScanCache(
   formats: ReadonlyMap<UsageProviderKind, TranscriptUsageFormat<unknown>>,
 ): ScanCache {
   const cache: ScanCache = new Map();
-  const isValidState = makeStateValidators(formats);
   if (typeof document !== "object" || document === null) return cache;
 
   const root = document as Partial<SerializedCache>;
   const version = root.version;
-  if (
-    typeof version !== "number" ||
-    version < SPEED_COMPATIBLE_SINCE_VERSION ||
-    version > USAGE_SCAN_CACHE_VERSION
-  ) {
-    return cache;
-  }
+  if (!isScanCacheVersion(version)) return cache;
   if (!isRecordArray(root.models) || !isRecordArray(root.sessions)) return cache;
   if (typeof root.files !== "object" || root.files === null) return cache;
 
@@ -209,6 +264,30 @@ export function decodeScanCache(
   const models = root.models as readonly string[];
   const sessions = root.sessions as readonly string[];
 
+  const decode = scanCacheEntryDecoder(
+    version,
+    {
+      model: (index) => models[index],
+      session: (index) => sessions[index],
+    },
+    formats,
+  );
+  for (const [path, raw] of Object.entries(root.files)) {
+    const entry = decode(raw);
+    if (entry !== undefined) cache.set(path, entry);
+  }
+  return cache;
+}
+
+export function scanCacheEntryDecoder(
+  version: number,
+  names: {
+    model: (index: number) => string | undefined;
+    session: (index: number) => string | undefined;
+  },
+  formats: ReadonlyMap<UsageProviderKind, TranscriptUsageFormat<unknown>>,
+): (raw: unknown) => CachedFile | undefined {
+  const isValidState = makeStateValidators(formats);
   // Reject entire corrupt entries; partial survivors would appear warm and hide usage until the file changes.
   const decodeRecords = (
     rows: readonly unknown[],
@@ -235,8 +314,9 @@ export function decodeScanCache(
       ] = row as SerializedRecord;
       const speed = typeof speedIndex === "number" ? SPEEDS[speedIndex] : undefined;
 
-      const model = typeof modelIndex === "number" ? models[modelIndex] : undefined;
-      const rateModel = typeof rateModelIndex === "number" ? models[rateModelIndex] : undefined;
+      const model = typeof modelIndex === "number" ? names.model(modelIndex) : undefined;
+      const rateModel =
+        typeof rateModelIndex === "number" ? names.model(rateModelIndex) : undefined;
       if (
         typeof timestampMs !== "number" ||
         !Number.isFinite(timestampMs) ||
@@ -263,7 +343,8 @@ export function decodeScanCache(
         timestampMs,
         model,
         ...(rateModel === undefined ? {} : { rateModel }),
-        sessionId: (typeof sessionIndex === "number" ? sessions[sessionIndex] : undefined) ?? "",
+        sessionId:
+          (typeof sessionIndex === "number" ? names.session(sessionIndex) : undefined) ?? "",
         totals: {
           uncachedInputTokens: uncached,
           cachedInputTokens: cached,
@@ -291,16 +372,16 @@ export function decodeScanCache(
     return records;
   };
 
-  for (const [path, raw] of Object.entries(root.files)) {
-    if (typeof raw !== "object" || raw === null) continue;
+  return (raw) => {
+    if (typeof raw !== "object" || raw === null) return undefined;
     const entry = raw as Partial<SerializedFile>;
-    if (typeof entry.s !== "number" || typeof entry.m !== "number") continue;
-    if (entry.p === undefined) continue;
+    if (typeof entry.s !== "number" || typeof entry.m !== "number") return undefined;
+    if (entry.p === undefined) return undefined;
     const format = formats.get(entry.p);
-    if (format === undefined) continue;
-    if (!isRecordArray(entry.r) || !isRecordArray(entry.t)) continue;
+    if (format === undefined) return undefined;
+    if (!isRecordArray(entry.r) || !isRecordArray(entry.t)) return undefined;
     const malformedRecords = entry.mr === undefined ? 0 : entry.mr;
-    if (!Number.isSafeInteger(malformedRecords) || malformedRecords < 0) continue;
+    if (!Number.isSafeInteger(malformedRecords) || malformedRecords < 0) return undefined;
     // Position fields feed byte offsets and a Buffer allocation in the reader,
     // so anything outside their real ranges must reject the entry: a bogus
     // guard length would otherwise fail every parse of the file, silently
@@ -317,7 +398,7 @@ export function decodeScanCache(
       typeof entry.gh !== "number" ||
       !Number.isFinite(entry.gh)
     ) {
-      continue;
+      return undefined;
     }
     // Keep history for deleted rollouts, but re-parse incompatible reducer state.
     // v13 adds Claude 1-hour cache writes; v14 uses Codex request ledgers.
@@ -330,16 +411,16 @@ export function decodeScanCache(
           (entry.p === "codex" && (version < 14 || (version < 15 && malformedRecords > 0)))));
     // A corrupt state disqualifies the entry: resuming with it would attach
     // appended usage to the wrong model or replay fork-copied history.
-    if (!legacy && !isValidState.get(entry.p)?.(entry.cs)) continue;
+    if (!legacy && !isValidState.get(entry.p)?.(entry.cs)) return undefined;
     // A baseline dated before v16 may predate the last snapshot and count its replay again.
     const resumable = !legacy && !(entry.p === "codex" && version < 16);
 
     const provider = entry.p;
     const records = decodeRecords(entry.r, provider);
     const tailRecords = decodeRecords(entry.t, provider);
-    if (records === null || tailRecords === null) continue;
+    if (records === null || tailRecords === null) return undefined;
 
-    cache.set(path, {
+    return {
       size: legacy ? -1 : entry.s,
       mtimeMs: entry.m,
       provider,
@@ -354,10 +435,8 @@ export function decodeScanCache(
             state: entry.cs,
           }
         : { resumeOffset: 0, guardLength: 0, guardHash: 0, state: null },
-    });
-  }
-
-  return cache;
+    };
+  };
 }
 
 function makeStateValidators(
@@ -372,17 +451,6 @@ function makeStateValidators(
       ] as const;
     }),
   );
-}
-
-export function pruneScanCache(cache: ScanCache, retentionCutoffMs: number): number {
-  let removed = 0;
-  for (const [path, entry] of cache) {
-    if (entry.mtimeMs < retentionCutoffMs) {
-      cache.delete(path);
-      removed += 1;
-    }
-  }
-  return removed;
 }
 
 /** Pass only newline-terminated records: an unterminated tail can still change, so the aggregator merges it per scan. */

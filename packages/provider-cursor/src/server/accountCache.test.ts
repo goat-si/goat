@@ -23,6 +23,28 @@ const record = (timestampMs: number): UsageRecord => ({
 });
 
 describe("cursorAccountCache", () => {
+  it("bounds an initial or long-offline backfill independently of unlimited retention", () => {
+    const now = 20_000 * DAY_MS;
+    const expected = { sinceMs: now - 92 * DAY_MS, untilMs: now };
+    const old = {
+      accountKey: "a",
+      sinceMs: 0,
+      untilMs: now - 200 * DAY_MS,
+      fetchedAtMs: now - 200 * DAY_MS,
+      records: [record(now - 201 * DAY_MS)],
+    };
+    assert.deepStrictEqual(cursorFetchRange(undefined, 0, now), expected);
+    const range = cursorFetchRange(old, 0, now);
+    assert.deepStrictEqual(range, expected);
+    const { cache } = mergeCursorFetch(old, "a", range, [record(now - DAY_MS)], now, 0);
+    assert.deepEqual(
+      cache.records.map(({ timestampMs }) => timestampMs),
+      [now - 201 * DAY_MS, now - DAY_MS],
+    );
+    assert.isFalse(isCursorCacheFresh(cache, now, now - 100 * DAY_MS));
+    assert.isTrue(isCursorCacheFresh(cache, now, expected.sinceMs));
+  });
+
   it("refetches everything once the cache no longer reaches the retention start", () => {
     const cache = {
       accountKey: "a",

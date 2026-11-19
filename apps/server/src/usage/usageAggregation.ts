@@ -49,6 +49,7 @@ const QUARTER_HOUR_MS = 15 * 60 * 1000;
 const HOUR_MS = 60 * 60 * 1000;
 
 interface MutableBucket {
+  readonly id: number;
   totals: { -readonly [K in keyof UsageTokenTotals]: number };
   costUsd: number;
   cacheSavingsUsd: number;
@@ -75,6 +76,7 @@ export interface AggregateOptions {
   readonly resolution?: UsageResolution;
   readonly sinceTimeMs?: number;
   readonly untilTimeMs?: number;
+  readonly contributions?: UsageContributions;
 }
 
 export function mapUsageModel(
@@ -225,16 +227,24 @@ function smallestGrokCopy(held: UsageRecord, copy: UsageRecord): UsageRecord {
   };
 }
 
-interface Contribution {
-  record: UsageRecord;
+export interface UsageContribution {
+  readonly record: UsageRecord;
   /** Null when the first copy fell outside the window. */
-  readonly bucket: MutableBucket | null;
+  readonly bucketId: number | null;
+}
+
+export interface UsageContributions {
+  get(key: string): UsageContribution | undefined;
+  set(key: string, value: UsageContribution): unknown;
+  values(): Iterable<UsageContribution>;
+  clear(): void;
 }
 
 /** Deduplicates across the whole scan; Claude copies records into resumed/forked transcripts. */
 export class UsageAggregator {
   readonly #buckets = new Map<string, MutableBucket>();
-  readonly #seen = new Map<string, Contribution>();
+  readonly #bucketsById: MutableBucket[] = [];
+  readonly #seen: UsageContributions;
   readonly #toDay: (timestampMs: number) => string;
   readonly #hourlyWindow: { readonly sinceTimeMs: number; readonly untilTimeMs: number } | null;
   readonly #options: AggregateOptions;
@@ -251,6 +261,7 @@ export class UsageAggregator {
 
   constructor(options: AggregateOptions) {
     this.#options = options;
+    this.#seen = options.contributions ?? new Map();
     this.#toDay = makeDayFormatter(options.timeZone);
     if (options.resolution === "hour") {
       if (options.sinceTimeMs === undefined || options.untilTimeMs === undefined) {
@@ -272,18 +283,20 @@ export class UsageAggregator {
       const held = this.#seen.get(record.dedupeKey);
       if (held !== undefined) {
         this.#duplicatesDropped += 1;
-        if (held.bucket !== null) {
-          held.record =
+        if (held.bucketId !== null) {
+          const merged =
             record.provider === "grok"
               ? smallestGrokCopy(held.record, record)
               : mergeUsageCopies(held.record, record);
+          if (merged !== held.record) this.#seen.set(record.dedupeKey, { ...held, record: merged });
         }
         return false;
       }
     }
 
     const bucket = this.#placeInWindow(record, sourcePath ?? "");
-    if (record.dedupeKey !== null) this.#seen.set(record.dedupeKey, { record, bucket });
+    if (record.dedupeKey !== null)
+      this.#seen.set(record.dedupeKey, { record, bucketId: bucket?.id ?? null });
     if (bucket === null) {
       this.#outOfWindow += 1;
       return false;
@@ -387,6 +400,7 @@ export class UsageAggregator {
     let bucket = this.#buckets.get(key);
     if (bucket === undefined) {
       bucket = {
+        id: this.#bucketsById.length,
         totals: { ...EMPTY_TOTALS },
         costUsd: 0,
         cacheSavingsUsd: 0,
@@ -401,14 +415,16 @@ export class UsageAggregator {
         sessions: new Set<string>(),
       };
       this.#buckets.set(key, bucket);
+      this.#bucketsById.push(bucket);
     }
     this.#lastBucket = { day, hourIndex, provider, model, source, bucket };
     return bucket;
   }
 
   finish(): AggregateResult {
-    for (const { record, bucket } of this.#seen.values()) {
-      if (bucket !== null) this.#accumulate(bucket, record);
+    for (const { record, bucketId } of this.#seen.values()) {
+      const bucket = bucketId === null ? undefined : this.#bucketsById[bucketId];
+      if (bucket !== undefined) this.#accumulate(bucket, record);
     }
     this.#seen.clear();
     const buckets: UsageBucket[] = [];

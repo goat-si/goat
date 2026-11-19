@@ -4,6 +4,7 @@ import { assert, describe, it } from "@effect/vitest";
 import { ProviderInstanceId } from "@goat/contracts";
 import type { UsageRecord } from "@goat/provider-core/server/usage";
 import * as TestProviderHost from "@goat/provider-testing/TestProviderHost";
+import * as Clock from "effect/Clock";
 import * as Deferred from "effect/Deferred";
 import * as Effect from "effect/Effect";
 import * as Fiber from "effect/Fiber";
@@ -147,6 +148,53 @@ describe("CursorUsageAccounts", () => {
       );
     },
   );
+
+  it.effect("does not refetch a bounded window when the clock advances during enrollment", () => {
+    let requests = 0;
+    const reader = Layer.succeed(CursorAccountReader.CursorAccountReader, {
+      read: () =>
+        Effect.sync(() => {
+          requests++;
+          return { accountKey: "account", records: [], missing: false, error: null };
+        }),
+    });
+    return Effect.gen(function* () {
+      const accounts = yield* CursorUsageAccounts.CursorUsageAccounts;
+      const clock = yield* Clock.Clock;
+      let now = 200 * 86400000;
+      yield* accounts
+        .scan({
+          instances: [
+            {
+              instanceId: ProviderInstanceId.make("cursor"),
+              config: {},
+              environment: [{ name: "CURSOR_API_KEY", value: "test-key", sensitive: true }],
+            },
+          ],
+          keychainUsageEnabled: false,
+          windowStartMs: 0,
+          retentionCutoffMs: 0,
+          awaitRefresh: true,
+        })
+        .pipe(
+          Effect.provideService(Clock.Clock, {
+            ...clock,
+            currentTimeMillis: Effect.sync(() => now++),
+          }),
+        );
+      assert.equal(requests, 1);
+    }).pipe(
+      Effect.provide(
+        Layer.provideMerge(
+          CursorUsageAccounts.layer.pipe(Layer.provide(reader)),
+          Layer.provideMerge(
+            TestProviderHost.layer(),
+            Layer.mergeAll(NodeServices.layer, NodeCrypto.layer),
+          ),
+        ),
+      ),
+    );
+  });
 
   it.effect("runs at most two account refreshes at once and settles all of them", () => {
     let inFlight = 0;

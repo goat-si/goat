@@ -21,6 +21,7 @@ import * as Layer from "effect/Layer";
 import * as Option from "effect/Option";
 import * as Path from "effect/Path";
 import * as Semaphore from "effect/Semaphore";
+import * as Scope from "effect/Scope";
 import { HttpClient, HttpClientResponse } from "effect/http";
 
 import { writeFileStringAtomically } from "@goat/shared/atomicWrite";
@@ -48,20 +49,14 @@ import {
   readDirectoryVolumeId,
   readPhysicalSourceId,
 } from "./usageTranscriptReader.ts";
-import {
-  decodeScanCache,
-  LEGACY_SCAN_CACHE_FILE_NAMES,
-  makeScanCacheWriter,
-  pruneScanCache,
-  SCAN_CACHE_FILE_NAME,
-  type ScanCache,
-} from "./usageScanCache.ts";
+import { LEGACY_SCAN_CACHE_FILE_NAMES, SCAN_CACHE_FILE_NAME } from "./usageScanCache.ts";
+import { UsageHistoryPages } from "./usageHistoryPages.ts";
+import { InvalidUsageCache, loadScanCachePages } from "./usageCacheStream.ts";
 import { dropArchivedOriginals } from "./usageArchiveCache.ts";
 import {
   CachedSource,
   decodeCachedSources,
   decodeRatesCache,
-  decodeScanCacheFile,
   encodeRatesCache,
   encodeUsageRecordKey,
   isLaterRead,
@@ -105,6 +100,7 @@ export class UsageService extends Context.Service<
 >()("goat/usage/UsageService") {}
 
 export const make = Effect.gen(function* () {
+  const serviceScope = yield* Scope.Scope;
   const fileSystem = yield* FileSystem.FileSystem;
   const path = yield* Path.Path;
   const config = yield* ServerConfig.ServerConfig;
@@ -119,7 +115,7 @@ export const make = Effect.gen(function* () {
     );
   const readerContext = yield* Effect.context<BuiltInUsageReadersEnv>();
 
-  const fileCache: ScanCache = new Map();
+  const fileCache = new UsageHistoryPages();
   // Reads from concurrent windows can still hold the original record after it is corrected.
   const resolvedRecords = new WeakMap<UsageRecord, UsageRecord>();
   const correctedRecord = (record: UsageRecord) => resolvedRecords.get(record) ?? record;
@@ -289,12 +285,12 @@ export const make = Effect.gen(function* () {
           .pipe(Effect.orElseSucceed(() => previous?.dir ?? directory));
         const currentVolumeId = yield* Effect.promise(() => readDirectoryVolumeId(dir));
         const hasRetainedHistory = fileCache
-          .entries()
+          .metadata()
           .some(
             ([filePath, entry]) =>
               entry.provider === provider &&
               entry.mtimeMs >= retentionCutoffMs &&
-              (entry.records.length + entry.tailRecords.length > 0 || entry.malformedRecords > 0) &&
+              (entry.records > 0 || entry.malformedRecords > 0) &&
               isWithinDirectory(filePath, dir),
           );
         const volumeId =
@@ -324,9 +320,19 @@ export const make = Effect.gen(function* () {
   const ensureScanCacheLoaded = yield* Effect.cached(
     Effect.gen(function* () {
       const readDocument = (filePath: string) =>
-        fileSystem.readFileString(filePath).pipe(
-          Effect.flatMap((raw) => decodeScanCacheFile(raw)),
-          Effect.catchCause(() => Effect.succeed(null)),
+        Effect.tryPromise({
+          try: () => loadScanCachePages(filePath, fileCache, transcriptFormats),
+          catch: (cause) =>
+            new UsageReadError({
+              reason: "scanFailed",
+              detail: "Could not read the saved usage cache.",
+              cause,
+            }),
+        }).pipe(
+          Effect.catchIf(
+            (error) => error.cause instanceof InvalidUsageCache,
+            (cause) => Effect.logWarning(cause.detail, { cause }).pipe(Effect.as(null)),
+          ),
         );
       let document = yield* readDocument(scanCachePath);
       const current = document !== null;
@@ -336,17 +342,11 @@ export const make = Effect.gen(function* () {
         cacheDirty = document !== null;
       }
       if (document === null) return;
-      const decoded = decodeScanCache(document, transcriptFormats);
-      for (const [path, entry] of decoded) fileCache.set(path, entry);
-      const saved = (document as { readonly files?: unknown }).files;
-      const complete =
-        typeof saved === "object" && saved !== null && Object.keys(saved).length === decoded.size;
-      const sources = decodeCachedSources(document);
+      const sources = decodeCachedSources(document.metadata);
       if (Option.isSome(sources)) {
         for (const [key, source] of Object.entries(sources.value.sources))
           sourceCache.set(key, source);
-        // Coverage describes the saved files, so it needs every one, in this version's format.
-        if (current && complete && fileCache.size > 0) {
+        if (current && document.complete && fileCache.size > 0) {
           for (const [key, since] of Object.entries(sources.value.coveredSince ?? {}))
             coveredSince.set(key, since);
         }
@@ -354,7 +354,6 @@ export const make = Effect.gen(function* () {
     }),
   );
 
-  const writeScanCache = makeScanCacheWriter();
   // Serialize writes so concurrently finished window scans cannot overwrite newer snapshots.
   const persistLock = yield* Semaphore.make(1);
 
@@ -365,13 +364,16 @@ export const make = Effect.gen(function* () {
   const persistCaches = Effect.gen(function* () {
     if (cacheDirty) {
       cacheDirty = false;
-      yield* Effect.sync(() =>
-        writeScanCache(fileCache, {
-          sources: Object.fromEntries(sourceCache),
-          coveredSince: Object.fromEntries(coveredSince),
-        }),
+      yield* Effect.acquireUseRelease(
+        Effect.sync(() =>
+          fileCache.writeSnapshot({
+            sources: Object.fromEntries(sourceCache),
+            coveredSince: Object.fromEntries(coveredSince),
+          }),
+        ),
+        (snapshot) => writeCacheFile(scanCachePath, snapshot.contents),
+        (snapshot) => Effect.sync(snapshot.release),
       ).pipe(
-        Effect.flatMap((contents) => writeCacheFile(scanCachePath, contents)),
         Effect.andThen(
           Effect.suspend(() => {
             if (supersededFilesRemoved) return Effect.void;
@@ -398,7 +400,9 @@ export const make = Effect.gen(function* () {
   const awaitPersisted = Effect.suspend(() => Fiber.awaitAll([...pendingPersists])).pipe(
     Effect.asVoid,
   );
-  yield* Effect.addFinalizer(() => awaitPersisted);
+  yield* Effect.addFinalizer(() =>
+    awaitPersisted.pipe(Effect.ensuring(Effect.sync(() => fileCache.close()))),
+  );
 
   const readFileRecords = makeFileRecordReader(fileCache, resolvedRecords, correctedRecord);
 
@@ -647,35 +651,43 @@ export const make = Effect.gen(function* () {
         return within;
       };
     };
+    const knownFiles = yield* Effect.acquireRelease(
+      Effect.sync(() => fileCache.snapshot()),
+      (snapshot) => Effect.sync(snapshot.release),
+    );
     const filesByDir = scannedDirs.map(({ provider, dir, files }) => {
-      const retainedFiles = [...(files ?? [])];
-      const livePaths = new Set(retainedFiles.map((file) => file.path));
+      const liveFiles = files ?? [];
+      const livePaths = new Set(liveFiles.map((file) => file.path));
       const isRetained = withinDir(dir);
-      for (const [filePath, entry] of fileCache) {
-        if (
-          entry.provider !== provider ||
-          entry.mtimeMs < retainedSinceMs ||
-          livePaths.has(filePath) ||
-          !isRetained(filePath)
-        )
-          continue;
-        retainedFiles.push({
-          path: filePath,
-          records:
-            entry.tailRecords.length === 0
-              ? entry.records
-              : [...entry.records, ...entry.tailRecords],
-          malformedRecords: entry.malformedRecords,
-        });
-      }
-      return retainedFiles;
+      return {
+        *[Symbol.iterator]() {
+          yield* liveFiles;
+          for (const [filePath, entry, version] of knownFiles.entries(
+            (filePath, meta) =>
+              meta.provider === provider &&
+              meta.mtimeMs >= retainedSinceMs &&
+              !livePaths.has(filePath) &&
+              isRetained(filePath),
+          )) {
+            yield {
+              path: filePath,
+              historyPage: { entry, version },
+              records:
+                entry.tailRecords.length === 0
+                  ? entry.records
+                  : [...entry.records, ...entry.tailRecords],
+              malformedRecords: entry.malformedRecords,
+            };
+          }
+        },
+      };
     });
     // Usage two transcripts share counts in the first one, so saved files take the order an exact
     // scan reads them in: walked files in walk order, then the directory's deleted files.
     for (const { provider, dir, walked } of fromMemory ? [] : scannedDirs) {
       if (walked === undefined) continue;
       const within = withinDir(dir);
-      const saved = [...fileCache];
+      const saved = [...fileCache.metadata()];
       const slots = saved.flatMap(([filePath, entry], index) =>
         entry.provider === provider && within(filePath) ? [index] : [],
       );
@@ -695,8 +707,7 @@ export const make = Effect.gen(function* () {
         if (member !== undefined) ordered[slot] = member;
       }
       if (ordered.every(([filePath], index) => filePath === saved[index]?.[0])) continue;
-      fileCache.clear();
-      for (const [filePath, entry] of ordered) fileCache.set(filePath, entry);
+      fileCache.setOrder(ordered.map(([filePath]) => filePath));
       cacheDirty = true;
     }
     const windowEndMs =
@@ -729,7 +740,10 @@ export const make = Effect.gen(function* () {
     }
 
     const summaryPricing = pricing();
+    const contributions = fileCache.contributions();
+    yield* Effect.addFinalizer(() => Effect.sync(contributions.clear));
     const aggregator = new UsageAggregator({
+      contributions,
       timeZone: input.timeZone,
       sinceDay: input.sinceDay,
       untilDay: input.untilDay,
@@ -742,54 +756,56 @@ export const make = Effect.gen(function* () {
       ...(input.modelFilter === undefined ? {} : { modelFilter: input.modelFilter }),
     });
 
-    let resolvedAny = false;
-    for (const { reader } of transcriptReaders) {
-      if (reader.resolveServiceTiers === undefined || fromMemory) continue;
-      const pending = new Set<UsageRecord>();
-      for (const [index, files] of filesByDir.entries()) {
-        if (scannedDirs[index]?.provider !== reader.provider) continue;
-        for (const file of files) {
-          for (const raw of file.records) {
-            const record = correctedRecord(raw);
-            if (
-              record.provider === reader.provider &&
-              record.unresolvedServiceTierTurnId !== undefined &&
-              record.timestampMs >= windowStartMs &&
-              record.timestampMs < windowEndMs
-            ) {
-              pending.add(record);
-            }
-          }
-        }
-      }
-      if (pending.size === 0) continue;
-      const resolved = yield* reader
-        .resolveServiceTiers([...pending])
-        .pipe(Effect.provideContext(readerContext));
-      for (const [record, speed] of resolved) {
-        const { unresolvedServiceTierTurnId: _turnId, ...rest } = record;
-        resolvedRecords.set(record, { ...rest, speed });
-        resolvedAny = true;
-      }
-    }
-    if (resolvedAny) {
-      for (const [filePath, entry] of fileCache) {
-        const records = correctedBatch(entry.records);
-        const tailRecords = correctedBatch(entry.tailRecords);
-        if (records === entry.records && tailRecords === entry.tailRecords) continue;
-        // Update the current entry by identity; a slow resolver cannot restore an older file.
-        fileCache.set(filePath, { ...entry, records, tailRecords });
-        cacheDirty = true;
-      }
-    }
-    const crossFileSessions = sharedSessions(filesByDir.flat());
+    const crossFileSessions = sharedSessions(Iterator.from(filesByDir).flatMap((files) => files));
 
     const scans = resolveSourceOwners(scannedDirs, filesByDir);
+    const tierReaders = fromMemory ? [] : transcriptReaders.map(({ reader }) => reader);
     const counted = new Set<number>();
     const sessions = new Map<number, Set<string>>();
     for (const { source, files, ownerIndex } of scans) {
       const ownerPath = scannedDirs[ownerIndex]?.dir ?? source.dir;
+      const resolveTiers = tierReaders.find(
+        (reader) => reader.provider === source.provider,
+      )?.resolveServiceTiers;
       for (const file of files) {
+        if (resolveTiers !== undefined) {
+          const version = file.historyPage?.version ?? fileCache.version(file.path);
+          const saved = file.historyPage?.entry ?? fileCache.get(file.path);
+          const resolve = (pending: readonly UsageRecord[]) =>
+            resolveTiers(pending).pipe(
+              Effect.provideContext(readerContext),
+              Effect.map((resolved) => {
+                for (const [record, speed] of resolved) {
+                  const { unresolvedServiceTierTurnId: _turnId, ...rest } = record;
+                  resolvedRecords.set(record, { ...rest, speed });
+                }
+              }),
+            );
+          let pending: UsageRecord[] = [];
+          for (const raw of file.records) {
+            const record = correctedRecord(raw);
+            if (
+              record.unresolvedServiceTierTurnId === undefined ||
+              record.timestampMs < windowStartMs ||
+              record.timestampMs >= windowEndMs
+            )
+              continue;
+            pending.push(record);
+            if (pending.length === 256) {
+              yield* resolve(pending);
+              pending = [];
+            }
+          }
+          if (pending.length > 0) yield* resolve(pending);
+          if (saved !== undefined && fileCache.version(file.path) === version) {
+            const records = correctedBatch(saved.records);
+            const tailRecords = correctedBatch(saved.tailRecords);
+            if (records !== saved.records || tailRecords !== saved.tailRecords) {
+              fileCache.set(file.path, { ...saved, records, tailRecords });
+              cacheDirty = true;
+            }
+          }
+        }
         const eventOccurrences = new Map<string, number>();
         for (const rawRecord of file.records) {
           const record = correctedRecord(rawRecord);
@@ -822,7 +838,7 @@ export const make = Effect.gen(function* () {
     }
 
     const sources = scans.map(
-      ({ source, files, status, scannedFiles, malformedRecords }, index): UsageSource => {
+      ({ source, status, scannedFiles, skippedFiles, malformedRecords }, index): UsageSource => {
         const {
           provider,
           dir,
@@ -845,7 +861,7 @@ export const make = Effect.gen(function* () {
           },
           status,
           scannedFiles,
-          skippedFiles: files.length - scannedFiles,
+          skippedFiles,
           malformedRecords,
           distinctSessions: sessions.get(index)?.size ?? 0,
           message:
@@ -862,10 +878,13 @@ export const make = Effect.gen(function* () {
       },
     );
 
-    if (fileCache.values().some((entry) => entry.mtimeMs < retentionCutoffMs)) {
+    if (fileCache.metadata().some(([, entry]) => entry.mtimeMs < retentionCutoffMs)) {
       yield* historyPruneGuard(retention)((authorized) =>
         Effect.sync(() => {
-          if (!authorized || pruneScanCache(fileCache, retentionCutoffMs) === 0) return;
+          if (!authorized) return;
+          for (const [filePath, entry] of fileCache.metadata()) {
+            if (entry.mtimeMs < retentionCutoffMs) fileCache.delete(filePath);
+          }
           cacheDirty = true;
           for (const [key, since] of coveredSince) {
             if (since < retentionCutoffMs) coveredSince.set(key, retentionCutoffMs);
@@ -891,7 +910,7 @@ export const make = Effect.gen(function* () {
       ...(input.modelFilter === undefined ? {} : { modelFilter: input.modelFilter }),
     } satisfies UsageSummary;
     return { summary, fromMemory };
-  });
+  }, Effect.scoped);
 
   const readWindow = Effect.fn("UsageService.readWindow")(function* (
     input: UsageSummaryInput,
@@ -951,7 +970,7 @@ export const make = Effect.gen(function* () {
               Effect.andThen(Deferred.done(created, exit)),
             ),
           ),
-          Effect.forkDetach,
+          Effect.forkIn(serviceScope),
         );
         return created;
       }),

@@ -67,7 +67,9 @@ update model pricing.
 GOAT keeps cached usage for 92 days by default. Set `usageHistoryRetentionDays` in the
 server's `settings.json` to a positive number of days or `"unlimited"`. After the cache
 prunes an entry whose original log is gone, that entry cannot be restored by increasing
-retention. The Usage page still uses its usual date ranges.
+retention. The Usage page still uses its usual date ranges. GOAT fetches at most the latest
+92 days of Cursor account history per backfill, while retention also applies to older readings
+it has already saved.
 
 ## Set custom model prices
 

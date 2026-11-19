@@ -6,12 +6,14 @@ import * as DateTime from "effect/DateTime";
 import * as Deferred from "effect/Deferred";
 import * as Effect from "effect/Effect";
 import * as Fiber from "effect/Fiber";
+import * as FileSystem from "effect/FileSystem";
 import * as TestClock from "effect/testing/TestClock";
 import * as NodeFSP from "node:fs/promises";
 import * as ServerSettings from "../serverSettings.ts";
 import { totalOutputTokens } from "./UsageAssertions.testkit.ts";
 import * as UsageService from "./UsageService.ts";
 import type * as Main from "./UsageService.test.ts";
+import { SCAN_CACHE_FILE_NAME } from "./usageScanCache.ts";
 import { WINDOW } from "./usageUnpriced.testkit.ts";
 
 export function registerUsageRetentionTests(
@@ -19,6 +21,61 @@ export function registerUsageRetentionTests(
   layerService: typeof Main.layerService,
   claudeLine: typeof Main.claudeLine,
 ) {
+  it.effect("replays retained history without reading the whole cache document into memory", () =>
+    Effect.gen(function* () {
+      const { transcript, settings, home } = yield* setup;
+      const now = Date.parse("2026-08-02T12:00:00Z");
+      yield* TestClock.setTime(now);
+      const timestamp = now - 180 * 86400000;
+      const window = { ...WINDOW, sinceDay: UsageDay.make("2026-01-01") };
+      const retainedRecords = 16_384;
+      const at = DateTime.formatIso(DateTime.makeUnsafe(timestamp));
+      yield* Effect.promise(async () => {
+        await NodeFSP.writeFile(
+          transcript,
+          Array.from({ length: retainedRecords }, (_, i) =>
+            claudeLine(i, 1).replace("2026-08-01T10:00:00Z", at),
+          ).join(""),
+        );
+        await NodeFSP.utimes(transcript, timestamp / 1000, timestamp / 1000);
+      });
+      yield* Effect.gen(function* () {
+        const service = yield* UsageService.make;
+        assert.strictEqual(totalOutputTokens(yield* service.readSummary(window)), retainedRecords);
+        yield* service.awaitPersisted;
+        yield* Effect.promise(() => NodeFSP.unlink(transcript));
+
+        const fs = yield* FileSystem.FileSystem;
+        const wholeReads: string[] = [];
+        const restarted = yield* UsageService.make.pipe(
+          Effect.provideService(
+            FileSystem.FileSystem,
+            FileSystem.FileSystem.of({
+              ...fs,
+              readFileString: (path, encoding) => {
+                if (path.endsWith(SCAN_CACHE_FILE_NAME)) wholeReads.push(path);
+                return fs.readFileString(path, encoding);
+              },
+            }),
+          ),
+        );
+        assert.strictEqual(
+          totalOutputTokens(yield* restarted.readSummary(window)),
+          retainedRecords,
+        );
+        assert.deepEqual(wholeReads, []);
+      }).pipe(
+        Effect.provide(
+          layerService({
+            prefix: "usage-paged-retention",
+            home,
+            settings: { ...settings, usageHistoryRetentionDays: "unlimited" },
+          }),
+        ),
+      );
+    }),
+  );
+
   it.effect.each([
     { label: "the default 92 days", retention: undefined, expected: 1 },
     { label: "unlimited", retention: "unlimited" as const, expected: 15 },

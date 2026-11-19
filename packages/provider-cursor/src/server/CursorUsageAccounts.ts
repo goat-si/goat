@@ -18,6 +18,7 @@ import * as Semaphore from "effect/Semaphore";
 import {
   CURSOR_ACCOUNT_CACHE_FILE_NAME,
   CURSOR_ACCOUNT_TTL_MS,
+  cursorFetchFloor,
   cursorFetchRange,
   decodeCursorAccountCaches,
   encodeCursorAccountCaches,
@@ -112,9 +113,9 @@ const make = Effect.gen(function* () {
     credential: CursorCredentialSource,
     credentialKey: string,
     retentionStartMs: number,
+    nowMs: number,
     withHistoryPruneGuard: UsageHistoryPruneGuard | undefined,
   ) {
-    const nowMs = yield* Clock.currentTimeMillis;
     const fetchMissing = (cache: CursorAccountCache | undefined) => {
       const range = cursorFetchRange(cache, retentionStartMs, nowMs);
       return accountReader
@@ -170,6 +171,7 @@ const make = Effect.gen(function* () {
     credential: CursorCredentialSource,
     credentialKey: string,
     retentionStartMs: number,
+    nowMs: number,
     withHistoryPruneGuard: UsageHistoryPruneGuard | undefined,
   ) =>
     // Enroll and fork atomically so interruption cannot strand a registered refresh.
@@ -184,6 +186,7 @@ const make = Effect.gen(function* () {
           credential,
           credentialKey,
           retentionStartMs,
+          nowMs,
           withHistoryPruneGuard,
         ).pipe(
           Effect.catchCause(() =>
@@ -237,28 +240,31 @@ const make = Effect.gen(function* () {
             )}`
           : "keychain";
     const nowMs = yield* Clock.currentTimeMillis;
+    const fetchFloor = cursorFetchFloor(nowMs, retentionStartMs);
     const recentFailure = failures.get(credentialKey);
     let refreshing = false;
     if (
       (recentFailure === undefined || nowMs - recentFailure.atMs >= CURSOR_ACCOUNT_TTL_MS) &&
-      !isCursorCacheFresh(caches.get(credentialKey), nowMs, retentionStartMs)
+      !isCursorCacheFresh(caches.get(credentialKey), nowMs, fetchFloor)
     ) {
       const refresh = yield* startRefresh(
         credential,
         credentialKey,
         retentionStartMs,
+        nowMs,
         withHistoryPruneGuard,
       );
       if (awaitRefresh) {
         yield* Deferred.await(refresh);
         if (
           !failures.has(credentialKey) &&
-          !isCursorCacheFresh(caches.get(credentialKey), nowMs, retentionStartMs)
+          !isCursorCacheFresh(caches.get(credentialKey), nowMs, fetchFloor)
         ) {
           const retry = yield* startRefresh(
             credential,
             credentialKey,
             retentionStartMs,
+            nowMs,
             withHistoryPruneGuard,
           );
           yield* Deferred.await(retry);

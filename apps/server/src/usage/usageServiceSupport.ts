@@ -28,7 +28,6 @@ import {
   LEGACY_SCAN_CACHE_FILE_NAMES,
   SCAN_CACHE_FILE_NAME,
   type CachedFile,
-  type ScanCache,
 } from "./usageScanCache.ts";
 
 const STALE_TEMP_DIRECTORY_MS = 60 * 60 * 1000;
@@ -76,7 +75,6 @@ export const encodeRatesCache = Schema.encodeEffect(
 export const ScanCacheJson = Schema.fromJsonString(
   Schema.Unknown as unknown as Schema.Codec<unknown>,
 );
-export const decodeScanCacheFile = Schema.decodeUnknownEffect(ScanCacheJson);
 export const encodeUsageRecordKey = Schema.encodeSync(ScanCacheJson);
 export const CachedSource = Schema.Struct({ dir: Schema.String, volumeId: Schema.String });
 
@@ -92,11 +90,13 @@ export const sharedSessionProviders: ReadonlySet<UsageProviderKind> = new Set(
 
 // Only shared sessions need cross-file dedupe; per-file occurrence counts make other keys unique.
 export function sharedSessions(
-  files: readonly { readonly records: readonly UsageRecord[] }[],
+  files: Iterable<{ readonly records: readonly UsageRecord[] }>,
 ): ReadonlySet<string> {
   const firstFile = new Map<string, number>();
   const shared = new Set<string>();
-  for (const [index, file] of files.entries()) {
+  let index = 0;
+  for (const file of files) {
+    index++;
     let previous = "";
     for (const { provider, sessionId } of file.records) {
       if (!sharedSessionProviders.has(provider) || sessionId === previous || sessionId.length === 0)
@@ -130,6 +130,7 @@ export interface ScannedDir {
         readonly path: string;
         readonly records: readonly UsageRecord[];
         readonly malformedRecords: number;
+        readonly historyPage?: { readonly entry: CachedFile; readonly version: number };
       }[]
     | null;
   /** Every transcript path the walk listed, in walk order, whatever its mtime. */
@@ -144,15 +145,17 @@ const sourceRank = { ok: 0, partial: 1, failed: 2, missing: 3 } satisfies Record
 
 export function resolveSourceOwners(
   sources: readonly ScannedDir[],
-  filesByDir: readonly NonNullable<ScannedDir["files"]>[],
+  filesByDir: readonly Iterable<NonNullable<ScannedDir["files"]>[number]>[],
 ) {
   const owners = new Map<string, { index: number; status: UsageSource["status"] }>();
   const scans = sources.map((source, index) => {
     const files = filesByDir[index] ?? [];
     let scannedFiles = 0;
+    let skippedFiles = 0;
     let malformedRecords = 0;
     for (const file of files) {
       if (file.records.length > 0) scannedFiles++;
+      else skippedFiles++;
       malformedRecords += file.malformedRecords;
     }
     const status =
@@ -171,7 +174,7 @@ export function resolveSourceOwners(
         owners.set(key, { index, status });
       }
     }
-    return { source, files, status, scannedFiles, malformedRecords, key };
+    return { source, files, status, scannedFiles, skippedFiles, malformedRecords, key };
   });
   return scans.map(({ key, ...scan }, index) => ({
     ...scan,
@@ -288,7 +291,7 @@ export function makeSupersededCacheRemover(
 }
 
 export function makeFileRecordReader(
-  fileCache: ScanCache,
+  fileCache: { get(path: string): CachedFile | undefined },
   resolvedRecords: WeakMap<UsageRecord, UsageRecord>,
   correctedRecord: (record: UsageRecord) => UsageRecord,
 ) {
