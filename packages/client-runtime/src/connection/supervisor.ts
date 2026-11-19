@@ -8,7 +8,7 @@ import { exitUnlessInterrupted } from "./exitUnlessInterrupted.ts";
 import type { EstablishmentProgress, SetupPreparation } from "./establishmentProgress.ts";
 import { makeConnectedLeaseMonitor } from "./connectedLease.ts";
 import type { DesktopSshPreparationProgress } from "@goat/contracts";
-import { withRelayClientTracing } from "@goat/shared/relayTracing";
+import { withLocalTracing, withRelayClientTracing } from "@goat/shared/relayTracing";
 import * as Cause from "effect/Cause";
 import * as Clock from "effect/Clock";
 import * as Context from "effect/Context";
@@ -693,7 +693,7 @@ export const make = Effect.fn("EnvironmentSupervisor.make")(function* (
           onSome: (retry) => retry.failureCount,
         }),
       });
-      return yield* effect.pipe(Effect.onExit(annotateAttemptOutcome));
+      return yield* withLocalTracing(effect).pipe(Effect.onExit(annotateAttemptOutcome));
     }).pipe(Effect.withSpan("relay.connection.attempt", { root: true }));
 
     return Option.match(pendingRetry, {
