@@ -1,3 +1,4 @@
+import { ProviderDriverKind } from "@goat/contracts";
 import type { OrchestrationV2PlanStep } from "@goat/contracts";
 import type { OrchestrationV2ProviderTurn } from "@goat/contracts";
 import type * as ProviderAdapter from "@goat/provider-core/server/ProviderAdapter";
@@ -67,4 +68,12 @@ export function codexPlanStepStatus(
     case "pending":
       return "pending";
   }
+}
+
+export function codexNativeItemRef(nativeItemId: string) {
+  return {
+    driver: ProviderDriverKind.make("codex"),
+    nativeId: nativeItemId,
+    strength: "strong" as const,
+  };
 }

@@ -1,4 +1,4 @@
-import { codexItemStatus, codexUserMessageText, providerTurnStatusToTerminal, codexPlanStepStatus } from "./CodexItemProjection.ts";
+import { codexItemStatus, codexNativeItemRef, codexUserMessageText, providerTurnStatusToTerminal, codexPlanStepStatus } from "./CodexItemProjection.ts";
 import { type CodexWebSearchItem, trimText, webSearchPatterns } from "./CodexWebSearch.ts";
 import { parseCodexRetryProgress } from "./CodexRetryProgress.ts";
 import { makeCodexMcpStartup } from "./CodexMcpStartup.ts";
@@ -362,14 +362,6 @@ const projectCodexDynamicToolItem = Effect.fn("CodexAdapterV2.projectDynamicTool
   };
   return output === undefined ? projection : { ...projection, output };
 });
-
-function codexNativeItemRef(nativeItemId: string) {
-  return {
-    driver: CODEX_PROVIDER,
-    nativeId: nativeItemId,
-    strength: "strong" as const,
-  };
-}
 
 function nonEmptyText(value: string | null | undefined, fallback: string): string {
   return trimText(value) ?? fallback;
