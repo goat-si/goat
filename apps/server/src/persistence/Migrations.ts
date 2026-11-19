@@ -181,6 +181,7 @@ import Migration0166 from "./Migrations/166_ScheduledTaskFirstBindIntent.ts";
 import Migration0167 from "./Migrations/167_QueuedTurnInputIndexJsonValid.ts";
 import Migration0168 from "./Migrations/168_TurnItemMessageOrdinalIndex.ts";
 import Migration0169 from "./Migrations/169_TurnItemInlineWorkOutput.ts";
+import Migration0170 from "./Migrations/170_RepairStaleTitleRegeneration.ts";
 import Migration0131 from "./Migrations/131_NotificationCursorRepair.ts";
 import Migration0133 from "./Migrations/133_McpEvalJournal.ts";
 import Migration0134 from "./Migrations/134_DecisionRoutes.ts";
@@ -360,6 +361,7 @@ export const migrationEntries = [
   [167, "QueuedTurnInputIndexJsonValid", Migration0167],
   [168, "TurnItemMessageOrdinalIndex", Migration0168],
   [169, "TurnItemInlineWorkOutput", Migration0169],
+  [170, "RepairStaleTitleRegeneration", Migration0170],
 ] as const;
 
 export const migrationManifest = migrationEntries.map(([id, name]) => [id, name] as const);
