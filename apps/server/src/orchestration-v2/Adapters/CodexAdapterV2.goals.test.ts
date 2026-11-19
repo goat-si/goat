@@ -15,6 +15,7 @@ import { assert, describe, it } from "@effect/vitest";
 import * as CodexReplay from "effect-codex-app-server/replay";
 import * as DateTime from "effect/DateTime";
 import * as Effect from "effect/Effect";
+import * as Exit from "effect/Exit";
 import * as Predicate from "effect/Predicate";
 import * as Layer from "effect/Layer";
 
@@ -105,6 +106,93 @@ describe("CodexAdapterV2 post-settle continuation", () => {
       events.flatMap((event) =>
         event.type === "provider_thread.updated" ? [event.providerThread.goal?.status ?? null] : [],
       );
+
+    it.effect.each(["decoded", "undecodable"] as const)(
+      "pauses a goal turn Codex starts on a resumed thread whose response is %s",
+      (resumeResponse) =>
+        Effect.gen(function* () {
+          const transcript = makeCodexReplayTranscript({
+            scenario: "goal-turn-after-resume",
+            entries: [
+              ...sessionStart,
+              ...request(
+                3,
+                "thread/resume",
+                {
+                  threadId: nativeThreadId,
+                  excludeTurns: true,
+                  config: CodexAdapterV2.CODEX_THREAD_CONFIG,
+                },
+                resumeResponse === "decoded"
+                  ? { thread: { id: nativeThreadId, updatedAt: 1782622450 } }
+                  : { thread: { id: nativeThreadId } },
+              ),
+              notification("goal resumed", "thread/goal/updated", {
+                threadId: nativeThreadId,
+                turnId: null,
+                goal: codexGoal("active", 10),
+              }),
+              notification("goal continuation", "turn/started", {
+                threadId: nativeThreadId,
+                turn: makeCodexReplayTurn({ id: "orphan-goal-turn", status: "inProgress" }),
+              }),
+              ...request(
+                4,
+                "thread/goal/set",
+                { threadId: nativeThreadId, status: "paused" },
+                { goal: codexGoal("paused", 10) },
+              ),
+              ...request(
+                5,
+                "turn/interrupt",
+                { threadId: nativeThreadId, turnId: "orphan-goal-turn" },
+                {},
+              ),
+              notification("interrupted", "turn/completed", {
+                threadId: nativeThreadId,
+                turn: makeCodexReplayTurn({ id: "orphan-goal-turn", status: "interrupted" }),
+              }),
+            ],
+          });
+          const requests: Array<[string, unknown]> = [];
+          const interrupted = yield* Deferred.make<void>();
+          const harness = yield* makeCodexReplayHarness(
+            transcript,
+            () => Effect.void,
+            (method, params) =>
+              Effect.sync(() => {
+                requests.push([method, params]);
+              }).pipe(
+                Effect.andThen(
+                  method === "turn/interrupt"
+                    ? Deferred.succeed(interrupted, undefined)
+                    : Effect.void,
+                ),
+              ),
+          );
+          const resumed = yield* harness.runtime
+            .resumeThread({
+              providerThread: harness.providerThread,
+              modelSelection: CODEX_TEST_MODEL_SELECTION,
+              runtimePolicy: CODEX_TEST_RUNTIME_POLICY,
+            })
+            .pipe(Effect.exit);
+          assert.equal(Exit.isSuccess(resumed), resumeResponse === "decoded");
+          yield* Deferred.await(interrupted);
+          const goalStatuses = () =>
+            harness.events.flatMap((event) =>
+              event.type === "provider_thread.updated"
+                ? [event.providerThread.goal?.status ?? null]
+                : [],
+            );
+          yield* harness.awaitUntil(() => goalStatuses().length > 0, "goal update");
+          assert.deepEqual(goalStatuses(), ["active"]);
+          assert.deepEqual(requests.slice(-2), [
+            ["thread/goal/set", { threadId: nativeThreadId, status: "paused" }],
+            ["turn/interrupt", { threadId: nativeThreadId, turnId: "orphan-goal-turn" }],
+          ]);
+        }).pipe(Effect.scoped, Effect.provide(layerAdapterTest)),
+    );
 
     it.effect("keeps a /goal run open across the turns Codex continues on its own", () =>
       Effect.gen(function* () {

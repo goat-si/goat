@@ -7100,7 +7100,19 @@ export const makeCodexAdapterV2 = Effect.fn("makeCodexAdapterV2")(function* (
                 excludeTurns: true,
                 ...(heldElsewhere ? {} : resumedRuntime.params),
               });
-              const response = yield* resume.pipe(Effect.flatMap(decodeCodexResumeMetadata));
+              const previousRoot = rootProviderThreads.get(nativeThreadId);
+              rootProviderThreads.set(nativeThreadId, threadInput.providerThread);
+              goalUpdatesHeld.add(nativeThreadId);
+              const response = yield* resume.pipe(
+                Effect.flatMap(decodeCodexResumeMetadata),
+                Effect.onError(() =>
+                  Effect.suspend(() => {
+                    if (previousRoot !== undefined)
+                      rootProviderThreads.set(nativeThreadId, previousRoot);
+                    return releaseGoalUpdates(nativeThreadId);
+                  }),
+                ),
+              );
               // As after thread/start: an unreported thread could never reload until its next turn.
               if (response.thread.status)
                 threadStatuses.record(response.thread.id, response.thread.status.type);
@@ -7108,7 +7120,7 @@ export const makeCodexAdapterV2 = Effect.fn("makeCodexAdapterV2")(function* (
               if (heldElsewhere) foreignConfigThreads.add(nativeThreadId);
               else if (!held) recordLoaded(nativeThreadId, resumedRuntime, resumedMcp);
               // The first turn writes the post-resume goal snapshot if changed.
-              return {
+              const resumed = {
                 ...threadInput.providerThread,
                 providerSessionId: input.providerSessionId,
                 providerInstanceId: adapterOptions.instanceId,
@@ -7121,6 +7133,9 @@ export const makeCodexAdapterV2 = Effect.fn("makeCodexAdapterV2")(function* (
                 nativeConversationHeadRef: threadInput.providerThread.nativeConversationHeadRef,
                 updatedAt: codexTimestamp(response.thread.updatedAt),
               } satisfies OrchestrationV2ProviderThread;
+              rootProviderThreads.set(nativeThreadId, resumed);
+              yield* releaseGoalUpdates(nativeThreadId);
+              return rootProviderThreads.get(nativeThreadId) ?? resumed;
             },
             (effect, threadInput) =>
               effect.pipe(
