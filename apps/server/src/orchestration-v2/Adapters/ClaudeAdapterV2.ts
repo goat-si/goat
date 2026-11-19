@@ -87,6 +87,7 @@ import { buildAssistantArtifacts } from "./ClaudeAssistantArtifacts.ts";
 import { makeClaudeEventQueue } from "./ClaudeEventQueue.ts";
 import {
   claudeWritesUpdatesAsThinking,
+  isClaudeLocalCommandEcho,
   normalizeClaudeResultText,
   makeClaudeAssistantTextProjector,
 } from "./ClaudeAssistantText.ts";
@@ -6968,6 +6969,7 @@ export const makeClaudeAdapterV2 = Effect.fn("makeClaudeAdapterV2")(function* (
             (yield* Ref.get(activeTurn)) ??
             (yield* settledTurnForSubagentFrame(liveQuery.nativeThreadId, message));
           if (context === null) {
+            if (isClaudeLocalCommandEcho(message)) return;
             yield* applyWorkflowProgressWithoutTurn(message);
             // Buffer wake evidence before clearing the task from the roster.
             if (message.type === "system" && message.subtype === "task_notification") {

@@ -2,6 +2,12 @@ import type { SDKAssistantMessage, SDKMessage } from "@anthropic-ai/claude-agent
 import type * as DateTime from "effect/DateTime";
 
 type StreamEvent = Extract<SDKMessage, { type: "stream_event" }>["event"];
+
+export function isClaudeLocalCommandEcho(message: SDKMessage): boolean {
+  if (message.type !== "user" || !("isReplay" in message) || !message.isReplay) return false;
+  const content = message.message.content;
+  return typeof content === "string" && content.startsWith("<local-command-stdout>");
+}
 type ToolUse = Extract<SDKAssistantMessage["message"]["content"][number], { type: "tool_use" }>;
 interface TextUpdate {
   readonly nativeItemId: string;
