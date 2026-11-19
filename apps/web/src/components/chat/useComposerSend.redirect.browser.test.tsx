@@ -346,3 +346,17 @@ it("a plan follow-up with a reply that fails to send puts the reply back with it
   expect(draft?.prompt).toBe("Stop that and list the files instead.");
   expect(draft?.replyTo?.contextId).toBe("response_m9");
 });
+
+it("opens a side chat without declining the pending approval", async () => {
+  await using fixture = await setupSshComposer();
+  const redirect = await redirectSend(fixture, {
+    composerMode: "full-access",
+    refuse: false,
+    input: { sideChatAvailable: true },
+  });
+  const { useSideChatStore } = await import("../sideChat/sideChatStore");
+  redirect.promptRef.current = "/side question";
+  await redirect.send();
+  expect(useSideChatStore.getState().pendingPrompts["redirect"]).toBe("question");
+  expect(redirect.calls).toEqual([]);
+});

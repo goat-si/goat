@@ -1,3 +1,4 @@
+import { parseSideChatCommand } from "./sideChatCommand";
 import { COMPOSER_ATTACHMENT_ENTERING, INLINE_EDITOR_MIN_WIDTH } from "./composerVisualConstants";
 export { COMPOSER_COLLAPSED_CHROME } from "./composerVisualConstants";
 import { composerAttachmentUploadKey } from "../../lib/composerAttachmentUploadQueue";
@@ -253,6 +254,7 @@ export const ThreadComposer = function ThreadComposer(props: ThreadComposerProps
   const sendPresentation = resolveComposerSendPresentation({
     editingQueuedMessage: queuedEdit !== null,
     running: props.activeThreadBusy,
+    localCommand: queuedEdit === null && parseSideChatCommand(draftMessage) !== null,
     canSteer: props.canSteerActiveTurn,
     followUpBehavior: props.followUpBehavior,
     deliveryDeferred:

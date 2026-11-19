@@ -32,3 +32,18 @@ describe("resolveComposerSendPresentation", () => {
     expect(presentation.offersFollowUpChoice).toBe(false);
   });
 });
+
+it("shows Send for a local side chat while a turn is running", () => {
+  expect(
+    resolveComposerSendPresentation({ ...idle, running: true, localCommand: true }).label,
+  ).toBe("Send");
+  expect(
+    resolveComposerSendPresentation({
+      ...idle,
+      running: true,
+      canSteer: true,
+      followUpBehavior: "steer",
+      localCommand: false,
+    }).label,
+  ).toBe("Steer");
+});

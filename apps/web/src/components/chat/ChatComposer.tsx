@@ -1,3 +1,4 @@
+import { composerSideChatIsLocal } from "./composerSideChatPresentation";
 import { consumePasteAsTextShortcut } from "./consumePasteAsTextShortcut";
 import { useMessages } from "gt-react";
 import { useComposerTypingGuard } from "./useComposerTypingGuard";
@@ -3738,7 +3739,15 @@ export const ChatComposer = memo(function ChatComposer(props: ChatComposerProps)
                     compact={isComposerResting || isComposerPrimaryActionsCompact}
                     canOperateThread={canOperateThread}
                     pendingAction={pendingPrimaryAction}
-                    isRunning={phase === "running"}
+                    isRunning={
+                      phase === "running" &&
+                      !composerSideChatIsLocal(
+                        prompt,
+                        sideChatAvailable,
+                        composerDraft,
+                        attachmentDraft,
+                      )
+                    }
                     canInterrupt={canInterrupt}
                     runId={activeThread?.runtime?.activeRunId ?? null}
                     followUpBehavior={followUpBehavior}
