@@ -12,6 +12,7 @@ import { DraftId, useComposerDraftStore } from "../composerDraftStore";
 import { appAtomRegistry } from "../rpc/atomRegistry";
 import { primaryServerKeybindingsAtom } from "../state/server";
 import { compileResolvedKeybindingsConfig } from "@goat/shared/keybindings";
+import { Atom } from "effect/reactivity";
 
 vi.mock("../components/preview/findAvailability", { spy: true });
 vi.mock("../state/session", { spy: true });
@@ -70,9 +71,12 @@ describe("chat route commands", () => {
     useComposerDraftStore
       .getState()
       .setProjectDraftThreadId({ environmentId: first, projectId }, draftId);
-    const original = appAtomRegistry.get(primaryServerKeybindingsAtom);
+    const keybindingsAtom = primaryServerKeybindingsAtom as Atom.Writable<
+      ReturnType<typeof compileResolvedKeybindingsConfig>
+    >;
+    const original = appAtomRegistry.get(keybindingsAtom);
     appAtomRegistry.set(
-      primaryServerKeybindingsAtom,
+      keybindingsAtom,
       compileResolvedKeybindingsConfig([{ key: "r", command: "preview.refresh" }]),
     );
     const { router } = routerAt([
@@ -83,7 +87,7 @@ describe("chat route commands", () => {
     const scope = vi.mocked(readEnvironmentScope).mockImplementation((id) => id === first);
     using stack = new DisposableStack();
     stack.defer(() => scope.mockRestore());
-    stack.defer(() => appAtomRegistry.set(primaryServerKeybindingsAtom, original));
+    stack.defer(() => appAtomRegistry.set(keybindingsAtom, original));
     stack.defer(() => useComposerDraftStore.getState().clearDraftThread(draftId));
     stack.defer(subscribePreviewAction(onPreviewAction));
     stack.defer(installChatRouteCommands(router));

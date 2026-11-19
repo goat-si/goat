@@ -28,7 +28,6 @@ import {
   type FakeDriver,
 } from "../../test/fakeEnvironment";
 import { act, fakeTimers, render } from "../../test/render";
-import "../index.css";
 
 // The socket is the only fake layer; see test/appScenarios.renders.tsx.
 vi.mock("../../../../packages/client-runtime/src/connection/driver.ts", async (importOriginal) => {
@@ -46,6 +45,10 @@ vi.mock(import("~/rpc/requestLatencyState"), async (original) => ({
 }));
 
 it("opens a side chat as a full thread when its dedicated button is used", async () => {
+  const style = document.createElement("style");
+  style.textContent = "[data-base-ui-inert] { pointer-events: none; }";
+  document.head.append(style);
+  using _style = { [Symbol.dispose]: () => style.remove() };
   const parent = threadWithHistory("side-parent", 1);
   const side = threadWithHistory("side-child", 1);
   using _environment = installFakeEnvironment([

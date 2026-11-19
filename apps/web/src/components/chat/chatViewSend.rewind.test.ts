@@ -6,7 +6,7 @@ import { expect, it, vi } from "vite-plus/test";
 
 vi.mock(import("../../state/session"), async (original) => ({
   ...(await original()),
-  readPreparedConnection: () => ({ httpBaseUrl: "http://localhost" }),
+  readPreparedConnection: (() => ({ httpBaseUrl: "http://localhost" })) as never,
 }));
 
 import { appAtomRegistry } from "../../rpc/atomRegistry";
