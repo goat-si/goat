@@ -1832,7 +1832,7 @@ export const make = Effect.gen(function* () {
         })
         .pipe(
           Effect.provideService(TextGeneration.TextGenerationProject, input.settings.projectId),
-          Effect.map((result) => sanitizeCommitMessage(result)),
+          Effect.map((result) => sanitizeCommitMessage(result, policy?.kind)),
         );
 
       return {
