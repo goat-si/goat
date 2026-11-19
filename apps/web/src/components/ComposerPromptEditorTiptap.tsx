@@ -1,3 +1,4 @@
+import { revealComposerCaret } from "./revealComposerCaret";
 import { caretLineRect } from "./composerCaretLineRect";
 import {
   CHIP_NODE_SELECTION_CLASS_NAME,
@@ -1386,6 +1387,12 @@ function ComposerPromptEditorTiptapInner(
     selectMarkdownOffset(mountedEditor, normalizedExpandedCursor);
     const map = serializeEditorDoc(mountedEditor.state.doc);
     if (isFocused) scrollTiptapCaretIntoView(mountedEditor);
+    else if (initialSelection) {
+      window.requestAnimationFrame(() => {
+        const view = mountedEditorView(mountedEditor);
+        if (view) revealComposerCaret(view);
+      });
+    }
     if (pendingCitation) {
       citationRequestRef.current = null;
       const target = map.runs.find(
