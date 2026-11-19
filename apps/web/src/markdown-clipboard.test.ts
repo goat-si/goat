@@ -11,6 +11,17 @@ import {
   serializeAssistantCitation,
 } from "@goat/shared/assistantCitations";
 import { markdownMathRanges, parseMarkdownWithMath } from "@goat/shared/markdownMath";
+import {
+  CHAT_MARKDOWN_REMARK_PLUGINS,
+  CHAT_USER_MARKDOWN_REMARK_PLUGINS,
+} from "@goat/shared/markdownPipeline";
+import { unified } from "unified";
+import remarkParse from "remark-parse";
+
+const userMarkdown = unified()
+  .use(remarkParse)
+  .use(CHAT_MARKDOWN_REMARK_PLUGINS)
+  .use(CHAT_USER_MARKDOWN_REMARK_PLUGINS);
 
 const TEXT_NODE = 3;
 const ELEMENT_NODE = 1;
@@ -142,6 +153,41 @@ function renderedCodeBlock(lines: ReadonlyArray<string>): FakeElement {
 }
 
 describe("serializeRenderedMarkdownFragment", () => {
+  it.each([
+    ["array[index]", "https://example.com"],
+    ["first_last@example.com", "mailto:first_last@example.com"],
+  ])("round trips a literal link label %s", (label, href) => {
+    const anchor = new FakeElement("A", [], { href }).append(new FakeText(label));
+    const paragraph = userMarkdown.parse(
+      serializeRenderedMarkdownFragment(asNode(new FakeElement("DIV").append(anchor))),
+    ).children[0];
+    expect(paragraph).toMatchObject({
+      type: "paragraph",
+      children: [{ type: "link", url: href, children: [{ type: "text", value: label }] }],
+    });
+  });
+  it("does not preserve an unsafe link destination when copying", () => {
+    const anchor = new FakeElement("A", [], { href: "javascript:alert(1)" }).append(
+      new FakeText("unsafe"),
+    );
+    const paragraph = userMarkdown.parse(
+      serializeRenderedMarkdownFragment(asNode(new FakeElement("DIV").append(anchor))),
+    ).children[0];
+    expect(paragraph).toMatchObject({
+      type: "paragraph",
+      children: [{ type: "text", value: "unsafe" }],
+    });
+  });
+  it.each([
+    String.raw`see C:\me\.t3\shot.png`,
+    "C:/work/_build/out.txt",
+    "a*word*b and a_word_b; ~~literal~~",
+  ])("copies literal prose through the composer parser: %s", (value) => {
+    const container = new FakeElement("DIV").append(new FakeText(value));
+    const paragraph = userMarkdown.parse(serializeRenderedMarkdownFragment(asNode(container)))
+      .children[0];
+    expect(paragraph).toMatchObject({ type: "paragraph", children: [{ type: "text", value }] });
+  });
   it("copies a popover context reference once, without its details or nested label", () => {
     const reference = "[Review comment](t3-context://v1/review-comment/review-1)";
     const container = new FakeElement("DIV").append(
