@@ -18,6 +18,13 @@ export const VOICE_STREAM_SAMPLE_RATE_HZ = 16_000;
 export const VOICE_STREAM_MAX_AUDIO_BYTES = 9_600_000;
 export const VOICE_STREAM_MAX_CHUNK_BYTES = 32 * 1024;
 export const VOICE_STREAM_MAX_CHUNK_BASE64_CHARS = Math.ceil(VOICE_STREAM_MAX_CHUNK_BYTES / 3) * 4;
+export const SPEECH_STREAM_WS_METHODS = {
+  start: "speech.stream.start",
+  feed: "speech.stream.feed",
+  finish: "speech.stream.finish",
+  cancel: "speech.stream.cancel",
+  events: "speech.stream.events",
+} as const;
 
 export const SpeechStreamFeed = Schema.Struct({
   streamId: TrimmedNonEmptyString.check(Schema.isMaxLength(128)),
