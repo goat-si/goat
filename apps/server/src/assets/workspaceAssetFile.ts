@@ -6,10 +6,12 @@ import type * as PlatformError from "effect/PlatformError";
 import { makeIsServerInternalPath } from "../auth/serverInternalPaths.ts";
 import * as WorkspacePaths from "../workspace/WorkspacePaths.ts";
 import { openMediaFile } from "./MediaFile.ts";
+import { isPreviewDependencyPath } from "./previewAssetExtensions.ts";
 
 interface WorkspaceFilePath {
   readonly workspaceRoot: string;
   readonly relativePath: string;
+  readonly previewDependency?: true;
 }
 
 export const optionOnNotFound = <A, R>(
@@ -44,6 +46,7 @@ const inspectCanonicalWorkspaceFile = Effect.fn("AssetAccess.resolveCanonicalWor
     const path = yield* Path.Path;
     const relative = path.relative(canonicalRoot.value, canonicalFile.value);
     if (relative === "" || relative.startsWith("..") || path.isAbsolute(relative)) return null;
+    if (input.previewDependency && !isPreviewDependencyPath(relative, path)) return null;
 
     const info = yield* optionOnNotFound(fileSystem.stat(canonicalFile.value));
     if (Option.isNone(info) || info.value.type !== "File") return null;
