@@ -139,3 +139,42 @@ Review r2 blocked `712a7c8848958f54a5fded97d55eb5c147cd53fa` on the public agent
 - **READY.** Plain fast-forward push from `712a7c8848958f54a5fded97d55eb5c147cd53fa` to the tested head on `chase/t3-261114-next3-k12`. Verified the remote lane head.
 
 NOT RUN: lane CI, the four gate-skipped cases, live Claude and model evaluation, and integrated real-client and mixed-version P1 captures.
+
+## K12 review round 4
+
+Review r3 blocked `1b419cde1954bd1bc4a169685ace4312a4d446e5` on locally generated CLI help. Merged integration `bb35c19e1e5f9ad227416bff7bc668bc4db71414` once in `454b66f59a7d0d6944c4d3365c1ea36dc5290291`. The lockfile changed and `vp i` exited 0. The merged ProjectionStore budget is 8,804 lines, as measured by `wc -l`.
+
+`2653dc5c2bb06564bba633dbb0f97ab5398796a4` uses `isDiscoverableOutsidePrompt` beside the registry. The generated CLI uses one filtered resource/verb table, including for exact verb help and the notes on operator help. No existing CLI snapshot or expectation changed. The two CLI regressions are new cases.
+
+### Registry consumer audit
+
+The audit searched direct registry imports, Object.values/entries/keys and aliased enumeration, the resolver callers, CLI help/completion entry points, MCP resources and list responses, and the docs and skill generation paths.
+
+| Consumer | Treatment |
+| --- | --- |
+| `apps/server/src/cli/agentSurfaceCommand.ts` generated resources, verb help, operator verb notes, and generated shorthands | filtered |
+| `packages/contracts/src/agentSurface/llms.ts` and `apps/server/src/mcp/llmsTxtResponse.ts` | filtered for every credential kind and anonymous requests |
+| `apps/server/src/mcp/toolkits/agentSurface/describe.ts` resource inventory, resource lists, search, nearest paths, exact and batch lookups | filtered for non-Claude callers. Claude's provider-driver catalog retains the prompt tier |
+| `apps/server/src/mcp/toolkits/agentSurface/search.ts` and `hostDescribe.ts` | filtered through the supplied local catalog or the destination's credential-scoped describe response |
+| `apps/server/src/mcp/toolListing.ts` and the `McpHttpServer.ts` transport, JSON and SSE | filtered for all tool-listing tiers |
+| `scripts/agent-surface/inventory.ts` output, `audit.ts` generator and `docs/internals/agent-surface-audit.md` | filtered. The inventory command printed 308 entries with no `message.show` or `goat_message_show` |
+| `scripts/agent-surface/context-budget.ts` and the replay/eval listing tooling | filtered via the actual HTTP `tools/list` response from `servedCatalog.ts` |
+| `packages/contracts/src/agentSurface/resolve.ts`, `apps/server/src/mcp/ToolDispatch.ts` and agent-surface `handlers.ts` / `dispatchEnvelope.ts` | dispatch-only, unchanged. Includes explicit MCP `goat_call` and path/tool aliases |
+| `apps/server/src/cli/agentSurfaceCommand.ts` explicit `goat call` and `acp-mcp-call`, plus `agentSurfaceCli.ts` forwarding | dispatch-only, unchanged |
+| `apps/server/src/mcp/ToolAdmission.ts`, `ToolAdmissionSettlement.ts`, `McpToolAccess.ts`, reservation refusals and tool registration/schema lookup | dispatch-only, unchanged |
+| `packages/provider-pi/src/server/mcpExtensionSource.ts` generated read-target map, Claude's tool permission lookups in `goatMcpToolNames.ts`, and client tool-result presentation | dispatch-only, unchanged. Pi's advertised tools still come from filtered `tools/list` |
+| `scripts/agent-surface/listedNames.ts`, `cliDrift.ts`, `smoke.ts`, and the in-process registration catalog in `servedCatalog.ts` | dispatch-only, unchanged. These resolve explicit names, check existing calls or inspect registered schemas. They do not feed unfiltered entries into discovery output |
+| MCP `resources/list` and resource templates | No agent-surface registry enumeration found |
+| `binMain.ts` / `binCli.ts` operator help, wizard and completion generation | No agent-surface registry enumeration in the operator command tree. Generated operator verb notes use the filtered table above |
+| Docs and skill sources | No additional registry-driven generator found. The indexed reference is the filtered generated audit above. Claude prompt text is the intended discovery path |
+
+### Receipts
+
+- Whole `agentSurfaceCommand.test.ts` first exited 1 with 11 passed and both new tests failed. Resource help listed `show`; verb help printed the path, tool name and description. It then passed 13/13, including explicit `goat call message.show` routing. Real CLI probes for `message --help` and `message show --help` returned general help with no prompt-only details. Public verb help for `pull-request comment --help` still printed its path.
+- Node 26.12.1 guarded whole server run from `apps/server` exited 0 with 212 passed across 13 files: CLI command 13, CLI transport 8, MCP HTTP 27, agent surface 23, harness listing 7, tool listing 16, discovery 7, host describe 18, message toolkit 3, Claude tool permissions 10, mid-turn projection 1, wire projection 36, and ThreadStop 43.
+- Focused workspace run exited 0 with 84 passed across six files: audit 4, replay 18, registry 15, Pi extension 45, web mid-turn 1 and mobile mid-turn 1.
+- The real `goat --completions bash` output contained no prompt-only command or description. `vp run agent-surface:context-budget-check` exited 0. The core listing stayed at two tools and 4,061 model-facing bytes. Claude measured 6,138 instruction bytes and 10,199 first-prompt bytes.
+- `vp run check:changed origin/chase/t3-261114-next3` exited 0 at `2653dc5c2bb06564bba633dbb0f97ab5398796a4`, based on `bb35c19e1e5f9ad227416bff7bc668bc4db71414`. Format, lint, GraphQL, both Knip steps, agent-surface audit, context budget and typecheck across 39 packages passed. Server: 485 files, 6,638 passed and four skipped. Workspace: 97 files, 5,037 passed. Total: 582 files, 11,675 passed, zero failed and four skipped. The gate reported an input-fingerprint change and did not cache its result. The tracked tree remained clean at the same commit.
+- **READY.** Plain fast-forward push from `1b419cde1954bd1bc4a169685ace4312a4d446e5` on the lane branch. The remote head matched the tested commit.
+
+NOT RUN: lane CI, three opt-in HTML browser cases, one Windows-only update case, live Claude and model evaluation, and integrated real-client and mixed-version P1 captures.
