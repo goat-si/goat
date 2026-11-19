@@ -1,7 +1,7 @@
 import * as HttpServerRespondable from "effect/http/HttpServerRespondable";
 import * as HttpServerResponse from "effect/http/HttpServerResponse";
 import * as Schema from "effect/Schema";
-import { ThreadId, TrimmedNonEmptyString } from "./baseSchemas.ts";
+import { NonNegativeInt, ThreadId, TrimmedNonEmptyString } from "./baseSchemas.ts";
 import { ProviderInstanceId } from "./providerInstance.ts";
 
 export const VOICE_TRANSCRIBE_PATH = "/api/voice/transcribe" as const;
@@ -14,6 +14,21 @@ export const VOICE_TRANSCRIPTION_MAX_PROMPT_CHARS = 16_384;
 export const VOICE_TRANSCRIPTION_MAX_REQUEST_BODY_BYTES = 22 * 1024 * 1024;
 export const VOICE_PREWARM_MAX_REQUEST_BODY_BYTES = 16 * 1024;
 export const VOICE_TRANSCRIPTION_MAX_RESPONSE_BYTES = 1024 * 1024;
+export const VOICE_STREAM_SAMPLE_RATE_HZ = 16_000;
+export const VOICE_STREAM_MAX_AUDIO_BYTES = 9_600_000;
+export const VOICE_STREAM_MAX_CHUNK_BYTES = 32 * 1024;
+export const VOICE_STREAM_MAX_CHUNK_BASE64_CHARS = Math.ceil(VOICE_STREAM_MAX_CHUNK_BYTES / 3) * 4;
+
+export const SpeechStreamFeed = Schema.Struct({
+  streamId: TrimmedNonEmptyString.check(Schema.isMaxLength(128)),
+  sequence: NonNegativeInt,
+  audioBase64: Schema.String.check(
+    Schema.isMinLength(4),
+    Schema.isMaxLength(VOICE_STREAM_MAX_CHUNK_BASE64_CHARS),
+    Schema.isPattern(/^(?:[A-Za-z0-9+/]{4})*(?:[A-Za-z0-9+/]{2}==|[A-Za-z0-9+/]{3}=)?$/u),
+  ),
+});
+export type SpeechStreamFeed = typeof SpeechStreamFeed.Type;
 
 export const VoiceTranscriptionRouteKind = Schema.Literals(["opencodex", "chatgpt-session"]);
 export type VoiceTranscriptionRouteKind = typeof VoiceTranscriptionRouteKind.Type;
