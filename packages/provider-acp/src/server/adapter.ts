@@ -1,3 +1,4 @@
+import { sendPromptWhenIdle } from "./promptWhenIdle.ts";
 import { makeAcpWakeBuffer } from "./wakeBuffer.ts";
 import {
   acpBackendWebSearch,
@@ -222,36 +223,6 @@ const ACP_DEFERRED_FINALIZE_DEBOUNCE: Duration.Input = "3000 millis";
  */
 const ACP_TEXT_FLUSH_INTERVAL: Duration.Input = "50 millis";
 const ACP_SUBAGENT_TEXT_FLUSH_INTERVAL: Duration.Input = "400 millis";
-const ACP_BUSY_PROMPT_RETRY_INTERVAL: Duration.Input = "1 second";
-
-// pi-agent-core agents (oh-my-pi) end a turn while background work runs and reject
-// prompts until it finishes; the prompt is resent rather than failing the turn.
-function isAgentBusyPromptError(error: EffectAcpErrors.AcpError): boolean {
-  return (
-    error._tag === "AcpRequestError" && error.errorMessage.startsWith("Agent is already processing")
-  );
-}
-
-function sendPromptWhenIdle<A>(
-  turn: { readonly interrupted: boolean; readonly finalized: boolean },
-  prompt: () => Effect.Effect<A, EffectAcpErrors.AcpError>,
-): Effect.Effect<A, EffectAcpErrors.AcpError> {
-  const stopped = () => turn.interrupted || turn.finalized;
-  return prompt().pipe(
-    Effect.catchIf(
-      (error) => isAgentBusyPromptError(error) && !stopped(),
-      (error) =>
-        Effect.sleep(ACP_BUSY_PROMPT_RETRY_INTERVAL).pipe(
-          Effect.andThen(
-            Effect.suspend(() =>
-              stopped() ? Effect.fail(error) : sendPromptWhenIdle(turn, prompt),
-            ),
-          ),
-        ),
-    ),
-  );
-}
-
 // Output of the running prompt. Session metadata and unknown updates do not reset its timeout.
 
 class AcpModelSelectionError extends Schema.TaggedError<AcpModelSelectionError>()(
