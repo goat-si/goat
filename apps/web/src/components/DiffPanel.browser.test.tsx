@@ -55,6 +55,7 @@ vi.mock("~/state/vcs", () => ({
 }));
 vi.mock("~/state/entities", () => ({
   useQuietThreadShell: () => state.thread,
+  readThreadShell: () => state.thread,
   useProject: () => ({ workspaceRoot: "/project", repositoryIdentity: null }),
   useThreadCheckpointSummaries: () => state.checkpoints,
   useQuietThreadVisibleTurnItems: () => [],
