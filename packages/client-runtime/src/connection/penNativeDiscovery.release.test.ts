@@ -1,6 +1,8 @@
 import { EnvironmentId } from "@goat/contracts";
 import { expect, it } from "@effect/vitest";
+import * as Deferred from "effect/Deferred";
 import * as Effect from "effect/Effect";
+import * as Fiber from "effect/Fiber";
 import * as Option from "effect/Option";
 import * as Stream from "effect/Stream";
 import * as SubscriptionRef from "effect/SubscriptionRef";
@@ -59,8 +61,12 @@ const discover = <E>(
   ) => Effect.Effect<void, E, HttpClient.HttpClient>,
   options: {
     readonly initial: ReadonlyMap<EnvironmentId, ConnectionCatalogEntry>;
-    readonly descriptor: "ok" | "unreachable";
+    readonly descriptor: "ok" | "unreachable" | "hangs";
     readonly register: "ok" | "fails";
+    readonly opening?: {
+      readonly started: Deferred.Deferred<void>;
+      readonly done: Deferred.Deferred<void>;
+    };
   },
 ) =>
   Effect.gen(function* () {
@@ -106,10 +112,16 @@ const discover = <E>(
         PenRouteGateway,
         Option.some({
           open: () =>
-            Effect.succeed({
-              kind: "open" as const,
-              httpBaseUrl: `http://127.0.0.1/pen-route/${"a".repeat(43)}`,
-              socketUrl: "ws://127.0.0.1/ws",
+            Effect.gen(function* () {
+              if (options.opening !== undefined) {
+                yield* Deferred.succeed(options.opening.started, undefined);
+                yield* Deferred.await(options.opening.done);
+              }
+              return {
+                kind: "open" as const,
+                httpBaseUrl: `http://127.0.0.1/pen-route/${"a".repeat(43)}`,
+                socketUrl: "ws://127.0.0.1/ws",
+              };
             }),
           close: (closing) => Effect.sync(() => void closed.push(closing.nodeId)),
         }),
@@ -117,18 +129,20 @@ const discover = <E>(
       Effect.provideService(
         HttpClient.HttpClient,
         HttpClient.make((request) =>
-          Effect.succeed(
-            HttpClientResponse.fromWeb(
-              request,
-              options.descriptor === "ok"
-                ? Response.json({
-                    environmentId: "other",
-                    label: "Node",
-                    platform: { os: "darwin", arch: "arm64" },
-                    serverVersion: "1.0.0",
-                    capabilities: { repositoryIdentity: true },
-                  })
-                : new Response("bad gateway", { status: 502 }),
+          (options.descriptor === "hangs" ? Effect.never : Effect.void).pipe(
+            Effect.as(
+              HttpClientResponse.fromWeb(
+                request,
+                options.descriptor === "ok"
+                  ? Response.json({
+                      environmentId: "other",
+                      label: "Node",
+                      platform: { os: "darwin", arch: "arm64" },
+                      serverVersion: "1.0.0",
+                      capabilities: { repositoryIdentity: true },
+                    })
+                  : new Response("bad gateway", { status: 502 }),
+              ),
             ),
           ),
         ),
@@ -174,5 +188,24 @@ it.effect("a link a saved route holds stays open when discovery cannot reach the
       register: "ok",
     });
     expect(closed).toEqual([]);
+  }),
+);
+
+it.effect("a discovery cut short while the link opens still gives the link back", () =>
+  Effect.gen(function* () {
+    const opening = { started: yield* Deferred.make<void>(), done: yield* Deferred.make<void>() };
+    const closed = yield* discover(
+      (discovery) =>
+        Effect.gen(function* () {
+          const passing = yield* Effect.forkChild(discovery.pass(ready));
+          yield* Deferred.await(opening.started);
+          // A newer member list interrupts the pass while the gateway is still opening the link.
+          const interrupting = yield* Effect.forkChild(Fiber.interrupt(passing));
+          yield* Deferred.succeed(opening.done, undefined);
+          yield* Fiber.join(interrupting);
+        }),
+      { initial: new Map(), descriptor: "hangs", register: "ok", opening },
+    );
+    expect(closed).toEqual([pin.nodeId]);
   }),
 );

@@ -8,6 +8,7 @@ import {
   BearerConnectionProfile,
   BearerConnectionRegistration,
   PenConnectionProfile,
+  PenConnectionRegistration,
 } from "./catalog.ts";
 import { BearerConnectionTarget, PenConnectionTarget } from "./model.ts";
 import { ConnectionPersistenceError } from "../platform/persistence.ts";
@@ -203,6 +204,27 @@ it.effect("a failed save leaves the hidden Pen route where the saved routes have
         second,
         BEARER_TARGET,
         pen,
+      ]);
+    }).pipe(Effect.provide(harness.layer), Effect.scoped);
+  }),
+);
+
+it.effect("the registry refuses a Pen route while the gate is closed", () =>
+  Effect.gen(function* () {
+    const harness = yield* makeHarness([BEARER_TARGET], [BEARER_PROFILE]);
+    yield* Effect.gen(function* () {
+      const registry = yield* EnvironmentRegistry.EnvironmentRegistry;
+      expect(
+        yield* registry.register(
+          new PenConnectionRegistration({ target: pen, profile: penProfile }),
+        ),
+      ).toBe(false);
+      const live = (yield* SubscriptionRef.get(registry.entries)).get(environmentId);
+      expect(live === undefined ? [] : connectionRoutes(live).map((route) => route.target)).toEqual(
+        [BEARER_TARGET],
+      );
+      expect(routesOf(yield* Ref.get(harness.storedTargets), environmentId)).toEqual([
+        BEARER_TARGET,
       ]);
     }).pipe(Effect.provide(harness.layer), Effect.scoped);
   }),

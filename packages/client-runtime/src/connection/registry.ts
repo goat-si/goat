@@ -62,6 +62,7 @@ import {
   findRouteToSameAddress,
   hasSavedBearerRoute,
   mergeLearnedRoutes,
+  routeIsShown,
   routesAfterRemoving,
   upsertRoute,
   type ReportedEndpoint,
@@ -473,6 +474,8 @@ export const make = Effect.gen(function* () {
     return yield* withLeaseLock(
       environmentId,
       Effect.gen(function* () {
+        // A Pen route the closed gate holds back is never saved or shown through here.
+        if (!routeIsShown(route)) return false;
         if ((yield* Ref.get(platformEnvironmentIds)).has(environmentId)) {
           return false;
         }

@@ -114,10 +114,11 @@ export const makePenNativeDiscovery = Effect.fn("PenNativeDiscovery.make")(funct
           if (Option.isNone(latestBeforeOpen) || !penPinIsCurrent(latestBeforeOpen.value, pin))
             return;
           openedPins.set(pinKey(pin), pin);
-          const opened = yield* activeGateway.open(pin).pipe(Effect.uninterruptible);
-          if (opened.kind !== "open") return;
           // However this ends, a link no saved route holds afterwards is given back.
-          yield* Effect.addFinalizer(() => releaseUnheld(pin));
+          const opened = yield* Effect.acquireRelease(activeGateway.open(pin), () =>
+            releaseUnheld(pin),
+          );
+          if (opened.kind !== "open") return;
           const descriptor = yield* fetchRemoteEnvironmentDescriptor({
             httpBaseUrl: opened.httpBaseUrl,
           }).pipe(
