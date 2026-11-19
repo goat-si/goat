@@ -19,6 +19,8 @@ it.effect("returns a typed provider start failure when a runtime omits its sessi
     });
     const failure = yield* Effect.flip(harness.start);
     expect(failure._tag).toBe("ProviderTurnStartError");
+    expect(failure.message).toContain("codex");
+    expect(failure.message).toContain("did not report its session details");
     expect(String(failure.cause)).toContain("codex");
     expect(String(failure.cause)).toContain("providerSession");
     expect(harness.fallbackEnsureThread).not.toHaveBeenCalled();

@@ -6,10 +6,12 @@ import type {
 import { ProviderTurnStartError } from "../ProviderTurnStartTypes.ts";
 
 export function missingProviderSession(runId: RunId, driver: string) {
-  return new ProviderTurnStartError({
+  const error = new ProviderTurnStartError({
     runId,
     cause: `Provider ${driver} omitted providerSession metadata.`,
   });
+  error.message = `The ${driver} runtime did not report its session details, so the turn could not start.`;
+  return error;
 }
 
 export function hasPendingHandoff(
