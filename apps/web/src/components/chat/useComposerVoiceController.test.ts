@@ -113,6 +113,20 @@ describe("composer voice controller", () => {
     expect(session.readDraft().text).toBe("hello world");
     chooseEnvironmentSpeech(null);
   });
+
+  it("keeps explicitly batch-only dictation on the full recording path", async () => {
+    chooseEnvironmentSpeech(EnvironmentId.make("voice-env-a"));
+    const grant = readEnvironmentSpeechGrant();
+    if (!grant) throw new Error("Grant was not stored");
+    const startLive = vi.fn(async () => null);
+    using session = setup({ localModelGrant: grant, liveEnabled: false }, { startLive });
+    await session.controller.start();
+    expect(startLive).not.toHaveBeenCalled();
+    expect(await session.controller.confirm()).toBe(true);
+    expect(session.transcribe).toHaveBeenCalledOnce();
+    expect(session.readDraft().text).toBe("hello world");
+    chooseEnvironmentSpeech(null);
+  });
   it("keeps a live preview and commits the full batch transcript after live failure", async () => {
     chooseEnvironmentSpeech(EnvironmentId.make("voice-env-a"));
     const grant = readEnvironmentSpeechGrant();
