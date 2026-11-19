@@ -1,6 +1,7 @@
 import * as NodeServices from "@effect/platform-node/NodeServices";
 import { assert, it, vi } from "@effect/vitest";
 import * as Effect from "effect/Effect";
+import * as FileSystem from "effect/FileSystem";
 import * as Layer from "effect/Layer";
 import * as Result from "effect/Result";
 import * as HostProcess from "@goat/shared/HostProcess";
@@ -23,19 +24,22 @@ it.effect("passes a leading-at create title literally to az", () => {
     Layer.succeed(HostProcess.Platform, "linux"),
   );
   return Effect.gen(function* () {
+    const fs = yield* FileSystem.FileSystem;
+    const bodyFile = yield* fs.makeTempFileScoped({ prefix: "goat-azure-test-body-" });
+    yield* fs.writeFileString(bodyFile, "@/etc/hosts");
     const az = yield* AzureDevOpsCli.AzureDevOpsCli;
     yield* az.createPullRequest({
       cwd: "/repo",
       baseBranch: "main",
       headSelector: "feature",
       title: "@/etc/hosts",
-      bodyFile: "/tmp/body.md",
+      bodyFile,
     });
     const call = run.mock.calls.at(-1)?.[0];
     assert.equal(call?.stdin, "@/etc/hosts");
     assert.isTrue(call?.args.includes("--title=@-") ?? false);
     assert.isFalse(call?.args.includes("@/etc/hosts") ?? true);
-  }).pipe(Effect.provide(AzureDevOpsCli.layer.pipe(Layer.provide(support))));
+  }).pipe(Effect.provide(AzureDevOpsCli.layer.pipe(Layer.provideMerge(support))), Effect.scoped);
 });
 
 it.effect("create preserves empty and multiline text without rereading the body as a path", () => {
@@ -59,6 +63,9 @@ it.effect("create preserves empty and multiline text without rereading the body 
     Layer.succeed(HostProcess.Platform, "linux"),
   );
   return Effect.gen(function* () {
+    const fs = yield* FileSystem.FileSystem;
+    const bodyFile = yield* fs.makeTempFileScoped({ prefix: "goat-azure-test-body-" });
+    yield* fs.writeFileString(bodyFile, "@/etc/hosts");
     const az = yield* AzureDevOpsCli.AzureDevOpsCli;
     for (const title of ["", "first\nsecond", "@/etc/hosts"]) {
       yield* az.createPullRequest({
@@ -66,15 +73,16 @@ it.effect("create preserves empty and multiline text without rereading the body 
         baseBranch: "main",
         headSelector: "feature",
         title,
-        bodyFile: "/tmp/body.md",
+        bodyFile,
       });
     }
     assert.deepStrictEqual(
       sent,
       ["", "first\nsecond", "@/etc/hosts"].map((title) => ({ title, body: "@/etc/hosts" })),
     );
-    assert.deepStrictEqual(reads, ["/tmp/body.md", "/tmp/body.md", "/tmp/body.md"]);
-  }).pipe(Effect.provide(AzureDevOpsCli.layer.pipe(Layer.provide(support))));
+    assert.equal(reads.length, 3);
+    for (const read of reads) assert.isFalse(yield* fs.exists(read));
+  }).pipe(Effect.provide(AzureDevOpsCli.layer.pipe(Layer.provideMerge(support))), Effect.scoped);
 });
 
 layer("literal update", (it) => {
