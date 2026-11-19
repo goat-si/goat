@@ -1,4 +1,5 @@
 import { readProviderCustomModels, writeProviderCustomModels } from "./ProviderAcpCustomModels";
+import { useCustomModelSaves } from "./useCustomModelSaves";
 import {
   openCodexRouteSummary,
   resolveProviderInstanceDisplayName,
@@ -43,7 +44,6 @@ import { type CustomModelDefinition } from "@goat/shared/model";
 import { cn } from "../../lib/utils";
 import { useCopyToClipboard } from "../../hooks/useCopyToClipboard";
 import { useClientSettings } from "../../hooks/useSettings";
-import { useStableCallback } from "../../hooks/useStableCallback";
 import { normalizeProviderAccentColor } from "../../providerInstances";
 import { Badge } from "../ui/badge";
 import { Button } from "../ui/button";
@@ -756,10 +756,34 @@ export function ProviderInstanceCard({
   const driverKind: ProviderDriverKind | null = isProviderDriverKind(instance.driver)
     ? instance.driver
     : null;
-  const customModels = readProviderCustomModels(
+  const storedCustomModels = readProviderCustomModels(
     instance.driver,
     instance.config,
     liveProvider?.supportsStructuredCustomModels === true,
+  );
+  const [customModels, updateCustomModels] = useCustomModelSaves(
+    storedCustomModels,
+    (next) => {
+      const nextConfig = writeProviderCustomModels(
+        instance.driver,
+        instance.config,
+        next,
+        liveProvider?.supportsStructuredCustomModels === true,
+      );
+      const { config: _omit, ...rest } = instance;
+      return onUpdate({ ...rest, config: nextConfig } as ProviderInstanceConfig);
+    },
+    (next) =>
+      readProviderCustomModels(
+        instance.driver,
+        writeProviderCustomModels(
+          instance.driver,
+          instance.config,
+          next,
+          liveProvider?.supportsStructuredCustomModels === true,
+        ),
+        liveProvider?.supportsStructuredCustomModels === true,
+      ),
   );
   const modelsForDisplay = deriveProviderModelsForDisplay({
     liveModels: liveProvider?.models,
@@ -801,17 +825,6 @@ export function ProviderInstanceCard({
         : (rest as ProviderInstanceConfig),
     );
   };
-
-  const updateCustomModels = useStableCallback((next: ReadonlyArray<CustomModelDefinition>) => {
-    const nextConfig = writeProviderCustomModels(
-      instance.driver,
-      instance.config,
-      next,
-      liveProvider?.supportsStructuredCustomModels === true,
-    );
-    const { config: _omit, ...rest } = instance;
-    return onUpdate({ ...rest, config: nextConfig } as ProviderInstanceConfig);
-  });
 
   const updateEnvironment = (environment: ReadonlyArray<ProviderInstanceEnvironmentVariable>) => {
     const cleaned = environment.filter((variable) => variable.name.trim().length > 0);
