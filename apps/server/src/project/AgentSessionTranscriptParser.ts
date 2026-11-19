@@ -106,7 +106,10 @@ const CODEX_TITLE_PREAMBLE =
   /^(?:\s*(?:<(recommended_plugins|environment_context|user_instructions|INSTRUCTIONS|in-app-browser-context|external_codex_apps_open_page)(?:\s[^>]*)?>[\s\S]*?<\/\1>|# AGENTS\.md instructions\b[^\n]*|## My request for Codex:))+/;
 
 function deriveTitle(source: AgentSessionSource, text: string): string | undefined {
-  const request = source === "codex" ? text.replace(CODEX_TITLE_PREAMBLE, "") : text;
+  const request = (source === "codex" ? text.replace(CODEX_TITLE_PREAMBLE, "") : text).replace(
+    /^\s*<wake(?:\s[^>]*)?>([\s\S]*?)(?:<\/wake>|$)/,
+    "$1",
+  );
   return request.trim().split("\n")[0]?.slice(0, 100).trim() || undefined;
 }
 
