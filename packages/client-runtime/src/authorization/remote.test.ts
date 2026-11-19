@@ -76,6 +76,25 @@ const expectFetchCall = (
 };
 
 describe("remote environment authorization", () => {
+  it.effect("sends grouped pairing codes compactly to older servers", () =>
+    Effect.gen(function* () {
+      const fetch = recordedFetch(
+        Response.json({
+          access_token: "token",
+          issued_token_type: "urn:ietf:params:oauth:token-type:access_token",
+          token_type: "Bearer",
+          expires_in: 3600,
+          scope: "orchestration:read",
+        }),
+      );
+      yield* bootstrapRemoteBearerSession({
+        httpBaseUrl: "https://remote.example.com/",
+        credential: "abcd-efgh-jkmn",
+      }).pipe(provideRemoteHttp(fetch.fetchFn));
+      const body = fetch.calls[0]?.[1].body;
+      expect(new TextDecoder().decode(body as Uint8Array)).toContain("subject_token=ABCDEFGHJKMN");
+    }),
+  );
   it.effect("exchanges managed credentials and admits websocket requests with DPoP", () =>
     Effect.gen(function* () {
       const fetch = recordedFetch(

@@ -1,3 +1,4 @@
+import { normalizePairingCode } from "@goat/shared/pairingCode";
 import {
   AuthStandardClientScopes,
   type AuthEnvironmentScope,
@@ -274,11 +275,6 @@ const PAIRING_TOKEN_ALPHABET = "23456789ABCDEFGHJKLMNPQRSTUVWXYZ";
 const PAIRING_TOKEN_LENGTH = 12;
 const PAIRING_TOKEN_REJECTION_LIMIT =
   Math.floor(256 / PAIRING_TOKEN_ALPHABET.length) * PAIRING_TOKEN_ALPHABET.length;
-
-const PAIRING_TOKEN_PATTERN = new RegExp(
-  `^[${PAIRING_TOKEN_ALPHABET}]{${PAIRING_TOKEN_LENGTH}}$`,
-  "i",
-);
 
 const make = Effect.gen(function* () {
   const random = yield* SecureRandom.SecureRandom;
@@ -567,10 +563,7 @@ const make = Effect.gen(function* () {
         return yield* seededResult.error;
       }
 
-      // Only credentials in the issued pairing-code format are case-insensitive.
-      const pairingCredential = PAIRING_TOKEN_PATTERN.test(credential)
-        ? credential.toUpperCase()
-        : credential;
+      const pairingCredential = normalizePairingCode(credential);
 
       // Check scopes in the UPDATE so rejected requests cannot spend one-time links.
       const consumed = yield* pairingLinks
