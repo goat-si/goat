@@ -7,6 +7,7 @@ import { assert, it } from "@effect/vitest";
 import * as Deferred from "effect/Deferred";
 import * as Effect from "effect/Effect";
 import * as Fiber from "effect/Fiber";
+import * as Layer from "effect/Layer";
 import * as ProcessRunner from "./processRunner.ts";
 import { makeTempDir } from "./git/testkit/fileFixtures.ts";
 
@@ -42,5 +43,5 @@ it.live("interrupting a blocked stdin write terminates the child and cleans its 
       }),
     );
     assert.isFalse(NodeFS.existsSync(removedDirectory));
-  }).pipe(Effect.provide(ProcessRunner.layer), Effect.provide(NodeServices.layer)),
+  }).pipe(Effect.provide(ProcessRunner.layer.pipe(Layer.provideMerge(NodeServices.layer)))),
 );

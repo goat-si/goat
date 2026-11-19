@@ -5,6 +5,7 @@ import * as NodeProcess from "node:process";
 import * as NodeServices from "@effect/platform-node/NodeServices";
 import { assert, it } from "@effect/vitest";
 import * as Effect from "effect/Effect";
+import * as Layer from "effect/Layer";
 import * as Result from "effect/Result";
 import * as ProcessRunner from "./processRunner.ts";
 import { makeTempDir } from "./git/testkit/fileFixtures.ts";
@@ -31,5 +32,8 @@ it.live("closes the child scope when a process rejects its stdin", () =>
     if (Result.isFailure(result)) assert.equal(result.failure._tag, "ProcessStdinError");
     const pid = Number(NodeFS.readFileSync(marker, "utf8"));
     assert.throws(() => NodeProcess.kill(pid, 0));
-  }).pipe(Effect.provide(ProcessRunner.layer), Effect.provide(NodeServices.layer), Effect.scoped),
+  }).pipe(
+    Effect.provide(ProcessRunner.layer.pipe(Layer.provideMerge(NodeServices.layer))),
+    Effect.scoped,
+  ),
 );

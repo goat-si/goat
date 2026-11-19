@@ -2,6 +2,7 @@ import * as NodeServices from "@effect/platform-node/NodeServices";
 import { expect, it } from "@effect/vitest";
 import * as Effect from "effect/Effect";
 import * as FileSystem from "effect/FileSystem";
+import * as Layer from "effect/Layer";
 import * as Path from "effect/Path";
 import * as HostProcess from "@goat/shared/HostProcess";
 import * as ProcessRunner from "../processRunner.ts";
@@ -33,6 +34,6 @@ it.layer(NodeServices.layer)("repository paths with line breaks", (it) => {
       const resolver = yield* RepositoryIdentityResolver.RepositoryIdentityResolver;
       const identity = yield* resolver.resolve(root);
       expect(identity?.rootPath).toBe(yield* fs.realPath(root));
-    }).pipe(Effect.provide(ProcessRunner.layer), Effect.provide(RepositoryIdentityResolver.layer)),
+    }).pipe(Effect.provide(Layer.merge(ProcessRunner.layer, RepositoryIdentityResolver.layer))),
   );
 });
