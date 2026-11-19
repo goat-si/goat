@@ -82,4 +82,50 @@ export function registerPiToolChecks({
       }
     }).pipe(Effect.scoped, Effect.provide(layerTest)),
   );
+  it.effect("emits only new shell output from repeated Pi snapshots", () =>
+    Effect.gen(function* () {
+      const fake = yield* makeFakePi;
+      const { runtime, takeEvent } = yield* openRuntime(fake);
+      const providerThread = yield* runtime.ensureThread({
+        threadId: THREAD_ID,
+        modelSelection: modelSelection("default"),
+        runtimePolicy,
+      });
+      yield* startTurn(runtime, providerThread);
+      yield* fake.takeRequest("prompt");
+      yield* fake.emit({ type: "agent_start" });
+      yield* fake.emit({
+        type: "tool_execution_start",
+        toolCallId: "shell-delta",
+        toolName: "bash",
+        args: { command: "echo hello" },
+      });
+      yield* takeEvent(
+        (event) =>
+          event.type === "turn_item.updated" && event.turnItem.type === "command_execution",
+      );
+      for (const [text, totalBytes, expected] of [
+        ["hel", undefined, "hel"],
+        ["hello", undefined, "lo"],
+        ["lo\n\u00e9!", 9, "\n\u00e9!"],
+      ] as const) {
+        yield* fake.emit({
+          type: "tool_execution_update",
+          toolCallId: "shell-delta",
+          toolName: "bash",
+          partialResult: {
+            content: [{ type: "text", text }],
+            ...(totalBytes === undefined ? {} : { details: { truncation: { totalBytes } } }),
+          },
+        });
+        const event = yield* takeEvent(
+          (event) =>
+            event.type === "command_output.delta" ||
+            (event.type === "turn_item.updated" && event.turnItem.type === "command_execution"),
+        );
+        assert.equal(event.type, "command_output.delta");
+        if (event.type === "command_output.delta") assert.equal(event.chunk, expected);
+      }
+    }).pipe(Effect.scoped, Effect.provide(layerTest)),
+  );
 }

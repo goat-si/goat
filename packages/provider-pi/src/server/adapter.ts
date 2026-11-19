@@ -1,5 +1,6 @@
 import { piThreadSnapshot } from "./threadSnapshot.ts";
 import { piApprovalRequestKind } from "./approvalRequestKind.ts";
+import { commandOutputDelta } from "./commandOutputDelta.ts";
 import { compactionTitle, type PiCompactionStatus } from "./compactionTitle.ts";
 import { PiProviderCapabilitiesV2, piToolOutput } from "./piToolOutput.ts";
 import * as NodeUtil from "node:util";
@@ -131,6 +132,7 @@ interface ActivePiTurn {
   readonly streamItems: Map<string, PiStreamItemState>;
   readonly toolArgs: Map<string, unknown>;
   readonly toolStartedAt: Map<string, DateTime.Utc>;
+  readonly commandOutputBytes: Map<string, number>;
   interrupted: boolean;
   nativeAborted: boolean;
   sawAgentActivity: boolean;
@@ -999,6 +1001,25 @@ export const makePiAdapterV2 = Effect.fn("makePiAdapterV2")(function* (
         // Pi tags every phase of a call made through ctx.executeTool, such as from a codemode script.
         const parentToolCallId = recordString(event, "parentToolCallId");
         if (toolCallId === undefined) return;
+        if (phase === "update" && (toolName === "bash" || toolName === "powershell")) {
+          const chunk = commandOutputDelta(
+            turn.commandOutputBytes,
+            toolCallId,
+            event["partialResult"],
+          );
+          if (chunk)
+            yield* emit({
+              type: "command_output.delta",
+              driver,
+              threadId: turn.turnInput.threadId,
+              itemId: idAllocator.derive.turnItemFromProviderItem({
+                driver,
+                nativeItemId: toolCallId,
+              }),
+              chunk,
+            });
+          return;
+        }
         if (phase === "start") {
           turn.toolArgs.set(toolCallId, event["args"]);
         }
@@ -2724,6 +2745,7 @@ export const makePiAdapterV2 = Effect.fn("makePiAdapterV2")(function* (
               streamItems: new Map(),
               toolArgs: new Map(),
               toolStartedAt: new Map(),
+              commandOutputBytes: new Map(),
               interrupted: false,
               nativeAborted: false,
               sawAgentActivity: false,
