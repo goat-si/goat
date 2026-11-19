@@ -128,3 +128,47 @@ describe("desktop Codex callback helper", () => {
     ).rejects.toThrow("accept failed");
   });
 });
+
+it("releases the callback port when cancelled while browser launch is still pending", async ({
+  onTestFinished,
+}) => {
+  const authorizationUrl = request(await freePort());
+  const opening = Promise.withResolvers<boolean>();
+  onTestFinished(() => opening.resolve(true));
+  await expect(
+    receiveCodexAuthCallback(authorizationUrl, () => {
+      cancelCodexAuthCallback(authorizationUrl);
+      return opening.promise;
+    }),
+  ).rejects.toThrow("cancelled");
+  expect(
+    await receiveCodexAuthCallback(authorizationUrl, async () => {
+      await fetch(callback(authorizationUrl));
+      return true;
+    }),
+  ).toBe(callback(authorizationUrl));
+});
+
+it("aborts a pending browser launch when its caller is interrupted", async ({ onTestFinished }) => {
+  const authorizationUrl = request(await freePort());
+  const abort = new AbortController();
+  const opening = Promise.withResolvers<boolean>();
+  onTestFinished(() => opening.resolve(true));
+  await expect(
+    receiveCodexAuthCallback(
+      authorizationUrl,
+      () => {
+        abort.abort();
+        return opening.promise;
+      },
+      undefined,
+      abort.signal,
+    ),
+  ).rejects.toThrow("cancelled");
+  expect(
+    await receiveCodexAuthCallback(authorizationUrl, async () => {
+      await fetch(callback(authorizationUrl));
+      return true;
+    }),
+  ).toBe(callback(authorizationUrl));
+});

@@ -1,5 +1,8 @@
 import { useAtomValue } from "@effect/atom-react";
-import { createEnvironmentSessionAtoms } from "@goat/client-runtime/state/session";
+import {
+  createEnvironmentSessionAtoms,
+  sessionDeniesScope,
+} from "@goat/client-runtime/state/session";
 import {
   type AuthEnvironmentScope,
   type AuthSessionState,
@@ -35,6 +38,18 @@ export function useEnvironmentScope(
       ? EMPTY_SESSION_STATE_ATOM
       : environmentSession.sessionStateAtom(environmentId),
     (result) => sessionHasScope(result, scope),
+  );
+}
+
+export function useEnvironmentScopeDenied(
+  environmentId: EnvironmentId | null,
+  scope: AuthEnvironmentScope,
+): boolean {
+  return useAtomValue(
+    environmentId === null
+      ? EMPTY_SESSION_STATE_ATOM
+      : environmentSession.sessionStateAtom(environmentId),
+    (result) => sessionDeniesScope(result, scope),
   );
 }
 

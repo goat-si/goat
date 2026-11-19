@@ -89,6 +89,7 @@ vi.mock(
   "../../components/ui/SecretTextInput",
   async () => await import("../../components/ui/SecretTextInput.android"),
 );
+vi.mock("../../state/session", () => ({ useEnvironmentScope: () => true }));
 import { SecretRequestCard } from "./SecretRequestCard";
 
 const item = {

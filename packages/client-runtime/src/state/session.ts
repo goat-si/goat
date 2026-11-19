@@ -1,4 +1,15 @@
-import type { AuthSessionState, EnvironmentId, ServerConfig } from "@goat/contracts";
+import {
+  AuthSessionState,
+  EnvironmentAuthInvalidError,
+  EnvironmentScopeRequiredError,
+  EnvironmentOperationForbiddenError,
+  sessionGrantsScope,
+  type AuthEnvironmentScope,
+  type EnvironmentId,
+  type ServerConfig,
+} from "@goat/contracts";
+import * as Cause from "effect/Cause";
+import * as Schema from "effect/Schema";
 import * as Data from "effect/Data";
 import * as Effect from "effect/Effect";
 import * as Option from "effect/Option";
@@ -41,6 +52,38 @@ const DEFAULT_SESSION_STATE_TIMEOUT_MS = 6_000;
 const MAX_SESSION_STATE_TIMEOUT_MS = 60_000;
 const SESSION_STATE_RETRY_BASE_MS = 2_000;
 const SESSION_STATE_RETRY_MAX_MS = 60_000;
+
+const isSessionRejectionError = Schema.is(
+  Schema.Union([
+    EnvironmentAuthInvalidError,
+    EnvironmentScopeRequiredError,
+    EnvironmentOperationForbiddenError,
+  ]),
+);
+const isSessionResponse = Schema.is(AuthSessionState);
+const isUndeclaredStatusError = Schema.is(
+  Schema.TaggedStruct("RemoteEnvironmentAuthUndeclaredStatusError", { status: Schema.Number }),
+);
+const isAuthFetchError = Schema.is(
+  Schema.TaggedStruct("RemoteEnvironmentAuthFetchError", { cause: Schema.Unknown }),
+);
+
+export function sessionDeniesScope(
+  result: AsyncResult.AsyncResult<AuthSessionState, unknown>,
+  scope: AuthEnvironmentScope,
+): boolean {
+  if (result._tag === "Success") {
+    const session = result.value;
+    if (!session.authenticated) return true;
+    if (session.scopes === undefined && session.permissions === undefined) return false;
+    return !sessionGrantsScope(session, scope);
+  }
+  if (result._tag !== "Failure") return false;
+  const error = Option.getOrNull(Cause.findErrorOption(result.cause));
+  if (isUndeclaredStatusError(error)) return error.status === 401 || error.status === 403;
+  if (isAuthFetchError(error)) return isSessionResponse(error.cause) && !error.cause.authenticated;
+  return isSessionRejectionError(error);
+}
 
 export const fetchEnvironmentSessionState = Effect.fn(
   "clientRuntime.state.fetchEnvironmentSessionState",

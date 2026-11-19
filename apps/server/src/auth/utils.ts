@@ -6,6 +6,7 @@ import type {
 import type * as HttpServerRequest from "effect/http/HttpServerRequest";
 // @effect-diagnostics-next-line nodeBuiltinImport:off -- Effect's Crypto has no createHmac or timingSafeEqual.
 import * as NodeCrypto from "node:crypto";
+import * as NodeNet from "node:net";
 import * as Base64Url from "effect/encoding/Base64Url";
 import * as Result from "effect/Result";
 
@@ -161,12 +162,19 @@ function readRemoteAddressFromSource(source: unknown): string | undefined {
   return normalizeIpAddress(candidate.socket?.remoteAddress ?? candidate.remoteAddress);
 }
 
+function resolveClientIpAddress(request: HttpServerRequest.HttpServerRequest): string | undefined {
+  const peer = readRemoteAddressFromSource(request.source);
+  if (!peer || !((NodeNet.isIPv4(peer) && peer.startsWith("127.")) || peer === "::1")) return peer;
+  const forwarded = normalizeIpAddress(request.headers["x-forwarded-for"]?.split(",").at(-1));
+  return forwarded && NodeNet.isIP(forwarded) !== 0 ? forwarded : peer;
+}
+
 export function deriveAuthClientMetadata(input: {
   readonly request: HttpServerRequest.HttpServerRequest;
   readonly presented?: AuthClientPresentationMetadata;
 }): AuthClientMetadata {
   const userAgent = normalizeNonEmptyString(input.request.headers["user-agent"]);
-  const ipAddress = readRemoteAddressFromSource(input.request.source);
+  const ipAddress = resolveClientIpAddress(input.request);
   const os = input.presented?.os ?? inferOs(userAgent);
   const browser = inferBrowser(userAgent);
   return {

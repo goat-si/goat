@@ -77,8 +77,8 @@ it("reuses one resolved read across repeated GitHub, GitCafe and Bitbucket crede
   const resolve = makeSecretResolver(read);
   for (const [kind, host] of [
     ["github", "github.com"],
-    ["gitcafe", undefined],
-    ["bitbucket", undefined],
+    ["gitcafe", "git.cafe"],
+    ["bitbucket", "api.bitbucket.org"],
   ] as const) {
     for (let index = 0; index < 2; index++) {
       await resolveHostSecrets(settings, kind, host, (ref) =>
@@ -102,4 +102,48 @@ it("rejects empty values returned for saved credential references", async () => 
   await expect(
     resolveHostSecrets(settings, "github", "github.com", async () => "  "),
   ).rejects.toThrow("Could not resolve source control credential");
+});
+
+it("binds legacy source-control references to their declared hosts", async () => {
+  const reference = { provider: "vault", reference: "op://work/item/token" };
+  const settings = decodeSettings({
+    sourceControlHosts: {
+      gitcafe: { token: reference },
+      bitbucket: { accessToken: reference },
+      github: { tokens: { "github.com": reference } },
+    },
+  });
+  const read = vi.fn().mockResolvedValue("fixture");
+  expect(
+    (await resolveHostSecrets(settings, "gitcafe", "git.cafe", read)).sourceControlHosts.gitcafe
+      ?.token,
+  ).toBe("fixture");
+  expect(
+    (await resolveHostSecrets(settings, "bitbucket", "api.bitbucket.org", read)).sourceControlHosts
+      .bitbucket?.accessToken,
+  ).toBe("fixture");
+  expect(
+    (await resolveHostSecrets(settings, "bitbucket", "api.internal", read, ["api.internal"]))
+      .sourceControlHosts.bitbucket?.accessToken,
+  ).toBe("fixture");
+  await expect(
+    resolveHostSecrets(settings, "gitcafe", "staging.git.cafe", read),
+  ).rejects.toMatchObject({ _tag: "SourceControlCredentialDestinationError" });
+  await expect(
+    resolveHostSecrets(settings, "bitbucket", "bitbucket.internal", read),
+  ).rejects.toMatchObject({
+    _tag: "SourceControlCredentialDestinationError",
+    host: "bitbucket.internal",
+  });
+  await expect(resolveHostSecrets(settings, "gitcafe", undefined, read)).rejects.toMatchObject({
+    _tag: "SourceControlCredentialDestinationError",
+  });
+  expect(
+    (await resolveHostSecrets(settings, "github", "github.com", read)).sourceControlHosts.github
+      ?.tokens,
+  ).toEqual({ "github.com": "fixture" });
+  expect(
+    (await resolveHostSecrets(settings, "github", "other.example", read)).sourceControlHosts.github
+      ?.tokens,
+  ).toEqual({ "github.com": "" });
 });

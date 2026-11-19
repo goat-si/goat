@@ -281,7 +281,10 @@ export const layerWithOptions = (
                 return {
                   workspaceTerminalScopes: noWorkspaceScopes,
                   browser: browserOverridden ? false : settings.enableAgentBrowserAccess,
-                  device: deviceOverridden ? false : settings.enableAgentDeviceAccess,
+                  device:
+                    settings.enableDeviceSupport &&
+                    !deviceOverridden &&
+                    settings.enableAgentDeviceAccess,
                 };
             }
             const effective = resolveProjectSettings(settings, thread.projectId).settings;
@@ -291,7 +294,7 @@ export const layerWithOptions = (
                 readOnly,
               ),
               browser: effective.enableAgentBrowserAccess,
-              device: effective.enableAgentDeviceAccess,
+              device: settings.enableDeviceSupport && effective.enableAgentDeviceAccess,
             };
           }).pipe(
             Effect.catch((cause) =>

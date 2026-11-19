@@ -1,3 +1,4 @@
+import { normalizePairingCode } from "@goat/shared/pairingCode";
 import type {
   AuthBrowserSessionResult,
   AuthClientMetadata,
@@ -227,7 +228,11 @@ async function exchangeBootstrapCredential(credential: string): Promise<AuthBrow
     try {
       return await runPrimaryHttp(
         PrimaryEnvironmentHttpClient.pipe(
-          Effect.flatMap((client) => client.auth.browserSession({ payload: { credential } })),
+          Effect.flatMap((client) =>
+            client.auth.browserSession({
+              payload: { credential: normalizePairingCode(credential) },
+            }),
+          ),
         ),
       );
     } catch (error) {

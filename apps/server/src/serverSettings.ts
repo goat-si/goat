@@ -1,3 +1,4 @@
+import { clearRetargetedSettingsSecrets } from "./settingsSecretDestinations.ts";
 import * as ServerSettingsWatcher from "./serverSettingsWatcher.ts";
 import * as NodeUtil from "node:util";
 import * as ConnectHubSettings from "./auth/ConnectHubSettings.ts";
@@ -1890,7 +1891,10 @@ const make = Effect.gen(function* () {
           cause: parseFailure.value,
         });
       }
-      const updated = yield* withDisposableStamp(update)(current);
+      const updated = clearRetargetedSettingsSecrets(
+        current,
+        yield* withDisposableStamp(update)(current),
+      );
       for (const [id, provider] of Object.entries(updated.secretProviders)) {
         if (
           !NodeUtil.isDeepStrictEqual(

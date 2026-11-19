@@ -16,6 +16,10 @@ vi.mock("../../state/server", () => ({
   },
 }));
 vi.mock("../../state/use-atom-command", () => ({ useAtomCommand: () => state.answer }));
+vi.mock(import("../../state/session"), async (original) => ({
+  ...(await original()),
+  useEnvironmentScope: () => true,
+}));
 import { SecretRequestCard } from "./SecretRequestCard";
 
 it("requires a username and masked password before saving a login", async () => {

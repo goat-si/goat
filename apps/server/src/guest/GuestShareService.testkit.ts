@@ -5,12 +5,18 @@ import type * as ProviderAdapter from "@goat/provider-core/server/ProviderAdapte
 import { assert } from "@effect/vitest";
 import {
   CommandId,
+  EventId,
+  MessageId,
+  TurnItemId,
+  type OrchestrationV2TurnItem,
   ProjectId,
   ProviderDriverKind,
   ProviderInstanceId,
   ThreadId,
 } from "@goat/contracts";
 import * as Effect from "effect/Effect";
+import * as DateTime from "effect/DateTime";
+import * as EventSink from "../orchestration-v2/EventSink.ts";
 import * as FileSystem from "effect/FileSystem";
 import * as Layer from "effect/Layer";
 import * as Ref from "effect/Ref";
@@ -168,3 +174,68 @@ export const joinedGuest = Effect.gen(function* () {
   });
   return { ...shared, session, shareId };
 });
+
+const ownerRun = Effect.gen(function* () {
+  const orchestrator = yield* Orchestrator.OrchestratorV2;
+  yield* orchestrator.dispatch({
+    type: "message.dispatch",
+    commandId: CommandId.make("owner-message-for-command"),
+    threadId,
+    messageId: MessageId.make("message:command"),
+    text: "Build it",
+    attachments: [],
+    dispatchMode: { type: "defer_start" },
+    createdBy: "user",
+    creationSource: "web",
+  });
+  const { runs } = (yield* orchestrator.getThreadSnapshotWindow(threadId, { rowLimit: 10 }))
+    .projection;
+  return runs[0]?.id ?? (yield* Effect.die("Expected an owner run"));
+});
+
+export const writeItem = (
+  id: string,
+  fields:
+    | Pick<
+        Extract<OrchestrationV2TurnItem, { type: "command_execution" }>,
+        "type" | "status" | "input" | "output"
+      >
+    | Pick<
+        Extract<OrchestrationV2TurnItem, { type: "file_change" }>,
+        "type" | "status" | "fileName" | "diffStr" | "oldStr" | "newStr"
+      >,
+) =>
+  Effect.gen(function* () {
+    const runId = yield* ownerRun;
+    const eventSink = yield* EventSink.EventSinkV2;
+    const now = yield* DateTime.now;
+    yield* eventSink.write({
+      events: [
+        {
+          id: EventId.make(`event:${id}`),
+          type: "turn-item.updated",
+          threadId,
+          driver: ProviderDriverKind.make("codex"),
+          providerInstanceId: instanceId,
+          occurredAt: now,
+          payload: {
+            id: TurnItemId.make(id),
+            threadId,
+            runId,
+            nodeId: null,
+            providerThreadId: null,
+            providerTurnId: null,
+            nativeItemRef: null,
+            parentItemId: null,
+            ordinal: 1,
+            title: null,
+            startedAt: now,
+            completedAt: fields.status === "running" ? null : now,
+            updatedAt: now,
+            ...fields,
+          },
+        },
+      ],
+    });
+    return TurnItemId.make(id);
+  });

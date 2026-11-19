@@ -1,4 +1,5 @@
 import { WORKSPACE_BROWSER_PREVIEW_EXTENSIONS } from "@goat/shared/filePreview";
+import type * as Path from "effect/Path";
 
 export const PREVIEW_ASSET_EXTENSIONS = new Set([
   ...WORKSPACE_BROWSER_PREVIEW_EXTENSIONS,
@@ -31,3 +32,9 @@ export const PREVIEW_ASSET_EXTENSIONS = new Set([
   ".woff",
   ".woff2",
 ]);
+
+export const isPreviewDependencyPath = (filePath: string, path: Path.Path) =>
+  filePath.length > 0 &&
+  !filePath.includes("\0") &&
+  !filePath.split(/[\\/]/).some((segment) => segment.startsWith(".")) &&
+  PREVIEW_ASSET_EXTENSIONS.has(path.extname(filePath).toLowerCase());

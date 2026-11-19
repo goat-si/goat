@@ -5,6 +5,9 @@ import type * as Types from "effect/Types";
 import { HttpRouter, HttpServerRequest, HttpServerResponse } from "effect/http";
 
 import { connectionOf } from "../auth/connectionContext.ts";
+import { isBrowserOriginAllowed } from "../auth/browserOrigin.ts";
+import * as ServerConfig from "../config.ts";
+import { DESKTOP_RENDERER_ORIGINS } from "../httpCors.ts";
 import { parseBearerToken } from "../auth/EnvironmentAuth.ts";
 import * as Profiles from "../goatclaw/PermissionProfiles.ts";
 import { requestUrl } from "../requestUrl.ts";
@@ -86,6 +89,12 @@ export const makeMcpAuthMiddleware = Effect.gen(function* () {
   const clients = yield* Effect.serviceOption(McpClientAuthenticator);
   const listing = listingSetting(yield* Effect.serviceOption(Settings.ServerSettingsService));
   const permissions = yield* Effect.serviceOption(Profiles.PermissionProfiles);
+  const config = yield* Effect.serviceOption(ServerConfig.ServerConfig);
+  const trustedOrigins = new Set<string>([
+    ...DESKTOP_RENDERER_ORIGINS,
+    ...(Option.isSome(config) && config.value.devUrl ? [config.value.devUrl.origin] : []),
+    ...(Option.isSome(config) ? config.value.devAllowedOrigins : []),
+  ]);
   const authenticateRequest = Effect.fn("McpHttpServer.authenticateRequest")(function* (
     request: HttpServerRequest.HttpServerRequest,
   ) {
@@ -147,14 +156,33 @@ export const makeMcpAuthMiddleware = Effect.gen(function* () {
   });
   // The HTTP span covers the downstream tool call.
   return Effect.fnUntraced(function* (httpEffect) {
-    const invocation = yield* authenticateRequest(yield* HttpServerRequest.HttpServerRequest);
-    if (HttpServerResponse.isHttpServerResponse(invocation)) return invocation;
+    const request = yield* HttpServerRequest.HttpServerRequest;
+    if (!isBrowserOriginAllowed(request, trustedOrigins))
+      return HttpServerResponse.empty({ status: 403 });
+    const origin = request.headers.origin;
+    const cors = (response: HttpServerResponse.HttpServerResponse) =>
+      origin === undefined
+        ? response
+        : HttpServerResponse.setHeaders(response, {
+            "access-control-allow-origin": origin,
+            "access-control-allow-credentials": "true",
+            "access-control-allow-methods": "GET, POST, DELETE, OPTIONS",
+            "access-control-allow-headers":
+              "authorization, content-type, mcp-session-id, mcp-protocol-version, last-event-id",
+            "access-control-expose-headers": "mcp-session-id, mcp-protocol-version",
+            vary: "Origin",
+          });
+    if (origin !== undefined && request.method === "OPTIONS")
+      return cors(HttpServerResponse.empty({ status: 204 }));
+    const invocation = yield* authenticateRequest(request);
+    if (HttpServerResponse.isHttpServerResponse(invocation)) return cors(invocation);
     return yield* withCallerListing(
       listing,
       permissions,
     )(withServedToolNames(httpEffect)).pipe(
       Effect.provideService(McpInvocationContext.McpInvocationContext, invocation),
       Effect.map(normalizeMcpHttpResponse),
+      Effect.map(cors),
     );
   }) satisfies McpAuthMiddleware;
 }).pipe(Effect.withSpan("McpHttpServer.makeAuthMiddleware"));
