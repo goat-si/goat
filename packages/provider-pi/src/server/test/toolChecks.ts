@@ -1,4 +1,5 @@
 import { OrchestrationV2UserInputQuestion } from "@goat/contracts";
+import * as TestClock from "effect/testing/TestClock";
 import * as Queue from "effect/Queue";
 import * as Stream from "effect/Stream";
 import type * as ProviderAdapter from "@goat/provider-core/server/ProviderAdapter";
@@ -41,6 +42,56 @@ export function registerPiToolChecks({
   runtimePolicy: typeof Fixture.runtimePolicy;
   layerTest: typeof Fixture.layerTest;
 }) {
+  it.effect("replaces a restarted reasoning block, including a published empty replacement", () =>
+    Effect.gen(function* () {
+      const fake = yield* makeFakePi;
+      const { runtime, takeEvent } = yield* openRuntime(fake);
+      const providerThread = yield* runtime.ensureThread({
+        threadId: THREAD_ID,
+        modelSelection: modelSelection("default"),
+        runtimePolicy,
+      });
+      yield* startTurn(runtime, providerThread);
+      yield* fake.takeRequest("prompt");
+      yield* fake.emit({ type: "agent_start" });
+      yield* fake.emit({ type: "message_start", message: { role: "assistant" } });
+      const thinking = (event: Record<string, unknown>) =>
+        fake.emit({ type: "message_update", assistantMessageEvent: { contentIndex: 0, ...event } });
+      yield* thinking({ type: "thinking_start" });
+      yield* thinking({ type: "thinking_delta", delta: "abandoned" });
+      yield* thinking({ type: "thinking_start" });
+      yield* thinking({ type: "thinking_delta", delta: "replacement" });
+      yield* fake.emit({
+        type: "tool_execution_start",
+        toolCallId: "barrier",
+        toolName: "read",
+        args: {},
+      });
+      yield* takeEvent(
+        (event) =>
+          event.type === "node.updated" && event.node.nativeItemRef?.nativeId === "barrier",
+      );
+      yield* TestClock.adjust("50 millis");
+      const published = yield* takeEvent(
+        (event) => event.type === "turn_item.updated" && event.turnItem.type === "reasoning",
+      );
+      if (published.type !== "turn_item.updated" || published.turnItem.type !== "reasoning")
+        return assert.fail("expected reasoning");
+      assert.equal(published.turnItem.text, "replacement");
+      yield* thinking({ type: "thinking_start" });
+      yield* thinking({ type: "thinking_end" });
+      const completed = yield* takeEvent(
+        (event) =>
+          event.type === "turn_item.updated" &&
+          event.turnItem.type === "reasoning" &&
+          event.turnItem.status === "completed",
+      );
+      if (completed.type !== "turn_item.updated" || completed.turnItem.type !== "reasoning")
+        return assert.fail("expected completed reasoning");
+      assert.equal(completed.turnItem.text, "");
+    }).pipe(Effect.scoped, Effect.provide(layerTest)),
+  );
+
   /* oxlint-disable goat/no-em-dash-copy -- Matches Pi extension protocol values. */
   it.effect("renders an ask_user_question select from the tool call's structured question", () =>
     Effect.gen(function* () {

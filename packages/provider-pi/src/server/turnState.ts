@@ -21,6 +21,7 @@ export interface PiStreamItemState {
   text: string;
   completed: boolean;
   flushScheduled: boolean;
+  published: boolean;
   readonly startedAt: DateTime.Utc;
 }
 export interface ActivePiTurn {
