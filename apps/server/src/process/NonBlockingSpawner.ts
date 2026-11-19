@@ -6,6 +6,7 @@ import { envTrampoline, supportsEnvChdir } from "@goat/shared/envTrampoline";
 import * as HostProcess from "@goat/shared/HostProcess";
 import * as Clock from "effect/Clock";
 import * as Effect from "effect/Effect";
+import * as FileSystem from "effect/FileSystem";
 import * as Layer from "effect/Layer";
 import * as Path from "effect/Path";
 import * as PlatformError from "effect/PlatformError";
@@ -13,6 +14,7 @@ import * as Redacted from "effect/Redacted";
 import * as ChildProcess from "effect/process/ChildProcess";
 import * as ChildProcessSpawner from "effect/process/ChildProcessSpawner";
 import * as CommandLine from "effect/process/CommandLine";
+import * as SpawnWorker from "./SpawnWorker.ts";
 
 // libuv's _PATH_DEFPATH, searched when the child environment has no PATH.
 const DEFAULT_PATH = "/usr/bin:/bin";
@@ -202,4 +204,15 @@ const make = Effect.gen(function* () {
  * On Linux with GNU `env`, replaces the provided `ChildProcessSpawner` with one that never
  * hands libuv a cwd or a PATH search; elsewhere it passes the provided one through.
  */
-export const layer = Layer.effect(ChildProcessSpawner.ChildProcessSpawner, make);
+export const layer = Layer.unwrap(
+  Effect.gen(function* (): Effect.fn.Return<
+    Layer.Layer<
+      ChildProcessSpawner.ChildProcessSpawner,
+      never,
+      ChildProcessSpawner.ChildProcessSpawner | FileSystem.FileSystem | Path.Path
+    >
+  > {
+    if ((yield* HostProcess.Platform) === "win32") return SpawnWorker.layer;
+    return Layer.effect(ChildProcessSpawner.ChildProcessSpawner, make);
+  }),
+);

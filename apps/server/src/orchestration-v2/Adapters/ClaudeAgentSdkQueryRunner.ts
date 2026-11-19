@@ -14,14 +14,13 @@ import {
   type SDKMessage,
   type SDKUserMessage,
 } from "@anthropic-ai/claude-agent-sdk";
-// @effect-diagnostics-next-line nodeBuiltinImport:off -- the SDK's spawned CLI is a Node ChildProcess.
-import * as NodeChildProcess from "node:child_process";
 import { spawnClaudeProcessGroup, spawnClaudeWindowsProcess } from "./ClaudeProcessSpawn.ts";
+import { watchClaudeProcess } from "./ClaudeProcessSpawn.ts";
 import { makeClaudeDescendantSampler, readClaudeProcessTable } from "./ClaudeDescendants.ts";
 import * as ProcessRunner from "../../processRunner.ts";
 import * as ProviderProcesses from "../../process/providerProcesses.ts";
 import { lastClaudeTranscriptModel } from "./ClaudeForkedSkillModel.ts";
-import { AgentScope, nodeChildAgentProcess } from "@goat/shared/AgentScope";
+import { AgentScope } from "@goat/shared/AgentScope";
 import * as HostProcess from "@goat/shared/HostProcess";
 import {
   type OrchestrationV2ProviderSession,
@@ -589,11 +588,9 @@ export const layerQueryRunner: Layer.Layer<
           const spawnClaudeCodeProcess = (spawnOptions: ClaudeSpawnOptions) => {
             const child = spawnProcess(spawnOptions);
             spawnedProcess = child;
-            const watched =
-              child instanceof NodeChildProcess.ChildProcess
-                ? nodeChildAgentProcess(child)
-                : undefined;
-            if (watched) runFork(agentScope.watch({ process: watched, threadId: input.threadId }));
+            watchClaudeProcess(child, (process) =>
+              runFork(agentScope.watch({ process, threadId: input.threadId })),
+            );
             processExited = child.exitCode !== null || child.signalCode != null;
             processExit = new Promise<void>((resolve) => {
               if (processExited) resolve();

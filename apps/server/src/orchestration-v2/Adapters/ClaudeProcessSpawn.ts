@@ -3,7 +3,9 @@ import * as NodeChildProcess from "node:child_process";
 
 import type { SpawnOptions, SpawnedProcess } from "@anthropic-ai/claude-agent-sdk";
 import { signalProcessGroup } from "@goat/provider-core/server/processGroup";
-import { guardChild } from "@goat/shared/errorGuards";
+import { guardChild, guardErrors } from "@goat/shared/errorGuards";
+import * as SpawnWorker from "../../process/SpawnWorker.ts";
+import { nodeChildAgentProcess, type AgentProcess } from "@goat/shared/AgentScope";
 
 // fd 4 gates the launch until the server has recorded the process it is about to become.
 const CLAUDE_GROUP_WATCH_SCRIPT = [
@@ -80,17 +82,29 @@ export function spawnClaudeWindowsProcess(
   options: SpawnOptions,
   onStderr: (chunk: string) => void,
 ): SpawnedProcess {
-  const child = guardChild(
-    NodeChildProcess.spawn(options.command, options.args, {
+  const child = guardErrors(
+    SpawnWorker.spawnPiped(options.command, options.args, {
       cwd: options.cwd,
       env: options.env,
       signal: options.signal,
       windowsHide: true,
-      stdio: ["pipe", "pipe", "pipe"],
     }),
     // The SDK reports the CLI exit after any broken pipe ends the process.
     () => child.kill("SIGKILL"),
   );
   child.stderr.setEncoding("utf8").on("data", onStderr);
   return child;
+}
+
+export function watchClaudeProcess(child: SpawnedProcess, watch: (process: AgentProcess) => void) {
+  if (child instanceof NodeChildProcess.ChildProcess) {
+    const process = nodeChildAgentProcess(child);
+    if (process) watch(process);
+    return;
+  }
+  if (!SpawnWorker.isWorkerChild(child)) return;
+  child.once("spawn", () => {
+    const process = nodeChildAgentProcess(child);
+    if (process) watch(process);
+  });
 }
