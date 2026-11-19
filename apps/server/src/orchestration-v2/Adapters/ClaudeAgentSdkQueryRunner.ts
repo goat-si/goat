@@ -55,14 +55,12 @@ import {
 import * as ProviderEventLoggers from "@goat/provider-core/server/ProviderEventLoggers";
 import * as ProviderAdapter from "@goat/provider-core/server/ProviderAdapter";
 import {
-  CLAUDE_ROOT_REFUSAL,
   CLAUDE_CONVERSATION_NOT_FOUND,
-  ClaudeConversationNotFoundError,
   ClaudeAgentSdkQueryRunnerError,
-  ClaudeCodeRootRefusalError,
   ClaudeMcpRegistrationTimeoutError,
   isClaudeMcpRegistrationTimeoutError,
   queryRunnerError,
+  claudeStreamFailure,
 } from "./ClaudeQueryRunnerErrors.ts";
 export {
   ClaudeAgentSdkQueryRunnerError,
@@ -692,16 +690,13 @@ export const layerQueryRunner: Layer.Layer<
               Effect.gen(function* () {
                 if (!answered)
                   yield* Effect.promise(() => stderrClosed).pipe(Effect.timeoutOption("1 second"));
-                const refusedRoot = !answered && stderrTail.includes(CLAUDE_ROOT_REFUSAL);
-                return yield* queryRunnerError(
-                  refusedRoot
-                    ? new ClaudeCodeRootRefusalError({ cause })
-                    : conversationMissing ||
-                        (!answered && stderrTail.includes(CLAUDE_CONVERSATION_NOT_FOUND))
-                      ? new ClaudeConversationNotFoundError({ cause })
-                      : cause,
-                  "fromAsyncIterable",
-                );
+                return yield* yield* claudeStreamFailure({
+                  cause,
+                  answered,
+                  conversationMissing,
+                  stderr: stderrTail,
+                  threadId: input.threadId,
+                });
               }),
             ),
           ),

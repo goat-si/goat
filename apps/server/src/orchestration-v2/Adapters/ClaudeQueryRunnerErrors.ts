@@ -1,3 +1,5 @@
+import * as Effect from "effect/Effect";
+import { providerProcessExitGuidance } from "@goat/provider-core/server/failure";
 import * as Cause from "effect/Cause";
 import * as Schema from "effect/Schema";
 
@@ -74,22 +76,70 @@ export function queryRunnerError(cause: unknown, method: string): ClaudeAgentSdk
     : new ClaudeAgentSdkQueryRunnerError({ cause, method });
 }
 
+export class ClaudeCodeStartupExitError extends Schema.TaggedError<ClaudeCodeStartupExitError>()(
+  "ClaudeCodeStartupExitError",
+  { status: Schema.String, guidance: Schema.String, cause: Schema.Defect() },
+) {
+  override get message(): string {
+    return `${this.status} before it started. ${this.guidance}`;
+  }
+}
+
 const CLAUDE_PROCESS_EXIT_ERROR_CLASSES: ReadonlySet<unknown> = new Set([
   "process_killed_by_signal",
   "process_exited_nonzero",
 ]);
+
+export function claudeProcessExit(sdkError: unknown): { status: string; code: string } | undefined {
+  if (typeof sdkError !== "object" || sdkError === null) return undefined;
+  const { errorClass, telemetryMessage } = sdkError as Record<string, unknown>;
+  return typeof errorClass === "string" &&
+    CLAUDE_PROCESS_EXIT_ERROR_CLASSES.has(errorClass) &&
+    typeof telemetryMessage === "string"
+    ? { status: telemetryMessage, code: errorClass }
+    : undefined;
+}
 
 // The SDK's exit Error appends Claude's stderr tail to `message`; `telemetryMessage` omits it.
 export function claudeProcessExitFailure(
   cause: Cause.Cause<ClaudeAgentSdkQueryRunnerError>,
 ): { readonly message: string; readonly code: string } | undefined {
   const error = Cause.squash(cause);
-  const sdkError = isClaudeAgentSdkQueryRunnerError(error) ? error.cause : error;
-  if (typeof sdkError !== "object" || sdkError === null) return undefined;
-  const { errorClass, telemetryMessage } = sdkError as Record<string, unknown>;
-  return typeof errorClass === "string" &&
-    CLAUDE_PROCESS_EXIT_ERROR_CLASSES.has(errorClass) &&
-    typeof telemetryMessage === "string"
-    ? { message: `${telemetryMessage}.`, code: errorClass }
-    : undefined;
+  const nested = isClaudeAgentSdkQueryRunnerError(error) ? error.cause : error;
+  const startup = nested instanceof ClaudeCodeStartupExitError ? nested : undefined;
+  const exit = claudeProcessExit(startup?.cause ?? nested);
+  return exit === undefined
+    ? undefined
+    : { message: startup?.message ?? `${exit.status}.`, code: exit.code };
 }
+
+export const claudeStreamFailure = Effect.fn("Claude.streamFailure")(function* (input: {
+  cause: unknown;
+  answered: boolean;
+  conversationMissing: boolean;
+  stderr: string;
+  threadId: string;
+}) {
+  const { cause, answered, conversationMissing, stderr, threadId } = input;
+  const startupExit = answered ? undefined : claudeProcessExit(cause);
+  if (startupExit !== undefined)
+    yield* Effect.logWarning("orchestration-v2.claude-startup-exit", {
+      threadId,
+      status: startupExit.status,
+      stderr,
+    });
+  return queryRunnerError(
+    !answered && stderr.includes(CLAUDE_ROOT_REFUSAL)
+      ? new ClaudeCodeRootRefusalError({ cause })
+      : conversationMissing || (!answered && stderr.includes(CLAUDE_CONVERSATION_NOT_FOUND))
+        ? new ClaudeConversationNotFoundError({ cause })
+        : startupExit !== undefined
+          ? new ClaudeCodeStartupExitError({
+              status: startupExit.status,
+              guidance: providerProcessExitGuidance(stderr),
+              cause,
+            })
+          : cause,
+    "fromAsyncIterable",
+  );
+});
