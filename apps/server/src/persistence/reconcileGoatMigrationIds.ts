@@ -91,6 +91,7 @@ export const GOAT_MIGRATION_NAMES: ReadonlySet<string> = new Set([
   "DisposableMachineEnrollment",
   PEN_MEMBER_MIGRATION_NAME,
   ...prePenMemberMemoryNames,
+  "MemorySuggestionQuota",
 ]);
 
 type MigrationEntry<E> = readonly [

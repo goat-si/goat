@@ -658,6 +658,7 @@ describe("upgrading a nightly 256 ledger past upstream 068", () => {
           [162, "MemoryScopeVersion"],
           [163, "MemoryCompactMoveReceipts"],
           [164, "MemoryOriginCatchup"],
+          [165, "MemorySuggestionQuota"],
         ],
       );
       const sql = yield* SqlClient.SqlClient;
