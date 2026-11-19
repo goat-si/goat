@@ -23,6 +23,8 @@ import { cn } from "~/lib/utils";
 import { useOpenPrLink } from "~/lib/openPullRequestLink";
 import { noteDraftWorkspacePick } from "~/lib/draftWorkspacePicks";
 import {
+  COMMIT_DIALOG_TITLE,
+  COMMIT_DIALOG_DESCRIPTION,
   buildMenuItems,
   getMenuActionDisabledReason,
   GIT_ACTION_SUCCESS_VISIBLE_MS,
@@ -143,10 +145,6 @@ interface RunGitActionWithToastInput {
 const GIT_STATUS_WINDOW_REFRESH_DEBOUNCE_MS = 250;
 
 const RUNNING_SOURCE_CONTROL_ACTIONS = ["runStackedAction", "pull", "publishRepository"] as const;
-
-const COMMIT_DIALOG_TITLE = "Commit changes";
-const COMMIT_DIALOG_DESCRIPTION =
-  "Review and confirm your commit. Leave the message blank to auto-generate one.";
 
 export default function GitActionsControl({
   presentation = "toolbar",

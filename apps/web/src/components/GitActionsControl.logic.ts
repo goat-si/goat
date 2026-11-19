@@ -624,3 +624,7 @@ export function getMenuActionDisabledReason({
   }
   return `Create ${terminology.singular} is currently unavailable.`;
 }
+
+export const COMMIT_DIALOG_TITLE = "Commit changes";
+export const COMMIT_DIALOG_DESCRIPTION =
+  "Review and confirm your commit. Leave the message blank to auto-generate one.";
