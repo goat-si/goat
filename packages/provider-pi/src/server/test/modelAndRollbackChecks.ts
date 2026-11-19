@@ -13,6 +13,7 @@ import * as Schema from "effect/Schema";
 import * as Stream from "effect/Stream";
 
 import { PI_PROVIDER } from "../adapter.ts";
+import { PiCustomAnswers } from "../extensionDialog.ts";
 import type * as Fixture from "../adapter.test.ts";
 import type * as FakePiModule from "./fakePi.ts";
 
@@ -225,6 +226,78 @@ export function registerPiModelAndRollbackChecks({
           );
         }
       }).pipe(Effect.scoped, Effect.provide(layerTest)),
+  );
+
+  /* oxlint-enable goat/no-em-dash-copy */
+  /* oxlint-disable goat/no-em-dash-copy -- Matches the Pi extension protocol. */
+  it.effect("releases the shared custom-answer budget when a Pi session closes", () =>
+    Effect.gen(function* () {
+      const holders = Array.from({ length: 4 }, () => new PiCustomAnswers());
+      yield* Effect.addFinalizer(() =>
+        Effect.sync(() => {
+          for (const holder of holders) holder.clear();
+        }),
+      );
+      const route = (prefix: string) => ({
+        lines: [],
+        sentinel: "1. Type something.",
+        followUpTitlePrefix: prefix,
+      });
+      for (const [index, holder] of holders.entries())
+        for (let i = 0; i < (index === 3 ? 63 : 64); i++)
+          assert.isNotNull(holder.route(route(`q-${index}-${i}`), { value: "held" }));
+      const probe = holders[3];
+      if (probe === undefined) return assert.fail("missing holder");
+      yield* Effect.scoped(
+        Effect.gen(function* () {
+          const fake = yield* makeFakePi;
+          const { runtime, takeEvent } = yield* openRuntime(fake);
+          const providerThread = yield* runtime.ensureThread({
+            threadId: THREAD_ID,
+            modelSelection: modelSelection("default"),
+            runtimePolicy,
+          });
+          yield* startTurn(runtime, providerThread);
+          yield* fake.takeRequest("prompt");
+          yield* fake.emit({
+            type: "tool_execution_start",
+            toolCallId: "ask",
+            toolName: "ask_user_question",
+            args: {
+              questions: [
+                {
+                  question: "Close?",
+                  options: [
+                    { label: "Yes", description: "Go" },
+                    { label: "No", description: "Stop" },
+                  ],
+                },
+              ],
+            },
+          });
+          yield* fake.emit({
+            type: "extension_ui_request",
+            method: "select",
+            id: "close-test",
+            title: "Close?",
+            options: ["1. Yes \u2014 Go", "2. No \u2014 Stop", "3. Type something."],
+          });
+          const event = yield* takeEvent(
+            (event) =>
+              event.type === "turn_item.updated" && event.turnItem.type === "user_input_request",
+          );
+          if (event.type !== "turn_item.updated" || event.turnItem.type !== "user_input_request")
+            return assert.fail("expected request");
+          yield* runtime.respondToRuntimeRequest({
+            requestId: event.turnItem.requestId,
+            answers: { "close-test": "custom" },
+          });
+          yield* fake.takeRequest("extension_ui_response");
+          assert.isNull(probe.route(route("overflow"), { value: "held" }));
+        }),
+      );
+      assert.isNotNull(probe.route(route("released"), { value: "held" }));
+    }).pipe(Effect.scoped, Effect.provide(layerTest)),
   );
 
   /* oxlint-enable goat/no-em-dash-copy */
