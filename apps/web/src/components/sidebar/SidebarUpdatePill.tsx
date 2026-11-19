@@ -549,7 +549,9 @@ function SidebarUpdateControl({ placement }: { placement: SidebarUpdatePlacement
         </PopoverPopup>
       </Popover>
     ) : (
-      <SidebarMenuItem className="ml-auto flex min-w-0 flex-1">{runningControl}</SidebarMenuItem>
+      <SidebarMenuItem className="@container/sidebar-update ml-auto flex min-w-8 flex-1">
+        {runningControl}
+      </SidebarMenuItem>
     );
   }
 
