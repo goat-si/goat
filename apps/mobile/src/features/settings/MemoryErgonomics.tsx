@@ -49,14 +49,14 @@ export function MobileMemoryOriginPicker({
   );
   const linked = fromLink && !conversations.some((thread) => thread.id === fromLink.threadId);
   const items = [
-    { id: "all", title: "All conversations" },
+    { id: "all", title: "Any conversation" },
     ...(linked ? [{ id: fromLink.threadId, title: "This conversation" }] : []),
     ...conversations.map((thread) => ({
       id: thread.id,
       title: thread.id === fromLink?.threadId ? "This conversation" : thread.title,
     })),
   ];
-  const title = items.find((item) => item.id === origin?.threadId)?.title ?? "All conversations";
+  const title = items.find((item) => item.id === origin?.threadId)?.title ?? "Any conversation";
   return (
     <Menu
       actions={items}

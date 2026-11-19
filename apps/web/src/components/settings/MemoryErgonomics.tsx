@@ -66,7 +66,7 @@ export function MemoryOriginPicker({
       title="Saved from conversation"
       control={
         <Select
-          value={origin?.threadId ?? ""}
+          value={origin?.threadId ?? null}
           onValueChange={(threadId) => {
             const thread = conversations.find((conversation) => conversation.id === threadId);
             onChange(
@@ -79,10 +79,10 @@ export function MemoryOriginPicker({
           }}
         >
           <SelectTrigger aria-label="Saved from conversation">
-            <SelectValue />
+            <SelectValue placeholder="Any conversation" />
           </SelectTrigger>
           <SelectPopup>
-            <SelectItem value="">All conversations</SelectItem>
+            <SelectItem value="">Any conversation</SelectItem>
             {linked ? <SelectItem value={fromLink.threadId}>This conversation</SelectItem> : null}
             {conversations.map((thread) => (
               <SelectItem key={thread.id} value={thread.id}>
