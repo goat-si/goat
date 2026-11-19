@@ -215,7 +215,7 @@ import { readDraftSnapshot, useChatComposerVoiceController } from "./useComposer
 import { ComposerPendingApprovalPanel } from "./ComposerPendingApprovalPanel";
 import { ComposerPendingUserInputPanel } from "./ComposerPendingUserInputPanel";
 import { ComposerPlanFollowUpBanner } from "./ComposerPlanFollowUpBanner";
-import { resolveComposerMenuActiveItemId } from "./composerMenuHighlight";
+import { resolveComposerMenuActiveItemId, nudgeComposerMenuItem } from "./composerMenuHighlight";
 import { buildPullRequestReferenceContext } from "../pullRequest/pullRequestDetail.logic";
 import { getComposerPromptInjectionState, getComposerReasoningStep } from "./composerProviderState";
 import { readPromptUltrathink } from "./TraitsPicker";
@@ -1962,15 +1962,9 @@ export const ChatComposer = memo(function ChatComposer(props: ChatComposerProps)
 
   const nudgeComposerMenuHighlight = (key: "ArrowDown" | "ArrowUp") => {
     if (composerMenuItems.length === 0) return;
-    const highlightedIndex = composerMenuItems.findIndex(
-      (item) => item.id === composerHighlightedItemId,
+    setComposerHighlightedItemId(
+      nudgeComposerMenuItem(composerMenuItems, composerHighlightedItemId, key),
     );
-    const normalizedIndex = highlightedIndex >= 0 ? highlightedIndex : key === "ArrowDown" ? -1 : 0;
-    const offset = key === "ArrowDown" ? 1 : -1;
-    const nextIndex =
-      (normalizedIndex + offset + composerMenuItems.length) % composerMenuItems.length;
-    const nextItem = composerMenuItems[nextIndex];
-    setComposerHighlightedItemId(nextItem?.id ?? null);
   };
 
   const blurMobileComposerAfterSend = () => {
