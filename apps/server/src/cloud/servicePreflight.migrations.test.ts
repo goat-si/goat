@@ -9,12 +9,13 @@ import * as NodeSqlite from "node:sqlite";
 
 import { migrationManifest, runMigrations } from "../persistence/Migrations.ts";
 import { GOAT_MIGRATION_NAMES } from "../persistence/reconcileGoatMigrationIds.ts";
+import { FIXTURE_LEDGER_GOAT_END } from "../persistence/reconcileGoatMigrationIds.testkit.ts";
 import { runServicePreflight } from "./servicePreflight.ts";
 import { SERVICE_LAUNCHER_PROTOCOL } from "./serviceProtocol.ts";
 
 const upstream = migrationManifest.filter(([, name]) => !GOAT_MIGRATION_NAMES.has(name));
-const goatNames = migrationManifest.flatMap(([, name]) =>
-  GOAT_MIGRATION_NAMES.has(name) ? [name] : [],
+const goatNames = migrationManifest.flatMap(([id, name]) =>
+  GOAT_MIGRATION_NAMES.has(name) && id <= FIXTURE_LEDGER_GOAT_END ? [name] : [],
 );
 
 const writeLedger = (databasePath: string, rows: ReadonlyArray<readonly [number, string]>) => {

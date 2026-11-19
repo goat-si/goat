@@ -16,6 +16,7 @@ import {
   runMigrations,
 } from "./Migrations.ts";
 import {
+  FIXTURE_LEDGER_GOAT_END,
   failingAfterWork,
   fresh,
   schema,
@@ -54,8 +55,8 @@ const history = Effect.gen(function* () {
   return rows.map((row) => [row.migration_id, row.name] as const);
 });
 
-const goatNames = migrationEntries.flatMap(([, name]) =>
-  GOAT_MIGRATION_NAMES.has(name) ? [name] : [],
+const goatNames = migrationEntries.flatMap(([id, name]) =>
+  GOAT_MIGRATION_NAMES.has(name) && id <= FIXTURE_LEDGER_GOAT_END ? [name] : [],
 );
 
 const hasReviewGuides = Effect.gen(function* () {
@@ -157,11 +158,7 @@ describe("memory reliability ledger before migration 158 AuthSessionPenMember", 
             .map((name, index) => [159 + count + index, name] as const),
           [165, "MemorySuggestionQuota"],
           [166, "ScheduledTaskFirstBindIntent"],
-          [167, "QueuedTurnInputIndexJsonValid"],
-          [168, "TurnItemMessageOrdinalIndex"],
-          [169, "TurnItemInlineWorkOutput"],
-          [170, "RepairStaleTitleRegeneration"],
-          [175, "AcpSessionOwnerIndex"],
+          ...migrationManifest.filter(([id]) => id > FIXTURE_LEDGER_GOAT_END),
         ]);
         assert.deepStrictEqual(yield* snapshot, yield* fresh);
         assert.deepStrictEqual(yield* userData, data);
@@ -670,11 +667,7 @@ describe("upgrading a nightly 256 ledger past upstream 068", () => {
           [164, "MemoryOriginCatchup"],
           [165, "MemorySuggestionQuota"],
           [166, "ScheduledTaskFirstBindIntent"],
-          [167, "QueuedTurnInputIndexJsonValid"],
-          [168, "TurnItemMessageOrdinalIndex"],
-          [169, "TurnItemInlineWorkOutput"],
-          [170, "RepairStaleTitleRegeneration"],
-          [175, "AcpSessionOwnerIndex"],
+          ...migrationManifest.filter(([id]) => id > FIXTURE_LEDGER_GOAT_END),
         ],
       );
       const sql = yield* SqlClient.SqlClient;

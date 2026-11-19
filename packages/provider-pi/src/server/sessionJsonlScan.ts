@@ -19,7 +19,7 @@ interface Entry {
   readonly timestamp: number | null;
 }
 
-export const scanSessionJsonl = Effect.fnUntraced(function* (
+const scanSessionJsonl = Effect.fnUntraced(function* (
   fs: FileSystem.FileSystem,
   file: string,
   visit: (entry: Entry) => void,

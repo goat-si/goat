@@ -110,7 +110,7 @@ describe("connection driver with Connect disabled", () => {
         expect(isConnectionRouteEnabled(route)).toBe(false);
         expect(usableRoutes(saved)).toEqual([]);
         expect(yield* driver.checkRoute(saved, route)).toBe("silent");
-        expect(yield* driver.preflight(saved, route)).toBe(false);
+        expect(yield* driver.preflight(saved, route)).toBe("silent");
         const failure = yield* driver.connect(saved, () => Effect.void).pipe(Effect.flip);
         expect(failure).toMatchObject({
           _tag: "ConnectionBlockedError",

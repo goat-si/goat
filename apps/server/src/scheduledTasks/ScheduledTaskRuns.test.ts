@@ -138,7 +138,9 @@ it.effect("a failed first-bind migration rolls back its column and can rerun", (
       { name: "MemorySuggestionQuota" },
     ]);
     yield* sql`ALTER TABLE test_scheduled_tasks RENAME TO scheduled_tasks`;
-    assert.deepEqual(yield* runMigrations(), [[166, "ScheduledTaskFirstBindIntent"]]);
+    assert.deepEqual(yield* runMigrations({ toMigrationInclusive: 166 }), [
+      [166, "ScheduledTaskFirstBindIntent"],
+    ]);
     yield* firstBindMigration;
   }).pipe(Effect.provide(NodeSqliteClient.layer({ filename: ":memory:" }))),
 );

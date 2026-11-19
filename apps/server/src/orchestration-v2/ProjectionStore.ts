@@ -3320,8 +3320,14 @@ export const layer: Layer.Layer<ProjectionStoreV2, never, SqlClient.SqlClient> =
             SELECT json_extract(payload_json, '$.messageId') AS message_id, MIN(ordinal) AS ordinal
             FROM orchestration_v2_projection_turn_items
             WHERE thread_id = ${threadId}
-              AND type IN ('user_message', 'assistant_message') AND json_valid(payload_json)
-              ${loadedMessageIds === undefined ? sql`` : sql`AND json_extract(payload_json, '$.messageId') IN (SELECT value FROM json_each(${encodeIdList(loadedMessageIds)}))`}
+              AND type IN ('user_message', 'assistant_message')
+              ${
+                // Only per-ID lookups match the message ordinal index; a broad read through it
+                // fetches every message row, so "= 1" keeps that guard off the index's WHERE.
+                loadedMessageIds === undefined
+                  ? sql`AND json_valid(payload_json) = 1`
+                  : sql`AND json_valid(payload_json) AND json_extract(payload_json, '$.messageId') IN (SELECT value FROM json_each(${encodeIdList(loadedMessageIds)}))`
+              }
             GROUP BY json_extract(payload_json, '$.messageId')
           `;
           for (const row of rows) messageOrdinals.set(row.message_id, row.ordinal);

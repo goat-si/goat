@@ -4,7 +4,7 @@ import * as Effect from "effect/Effect";
 import * as Schema from "effect/Schema";
 
 const encodePayload = Schema.encodeEffect(Schema.fromJsonString(OrchestrationV2TurnItemJson));
-export const SENT_MESSAGE_MARKER = ',"persistentSentMessage":true}';
+const SENT_MESSAGE_MARKER = ',"persistentSentMessage":true}';
 
 export function encodeTurnItemPayload(item: OrchestrationV2TurnItem) {
   const encoded = encodePayload(item);

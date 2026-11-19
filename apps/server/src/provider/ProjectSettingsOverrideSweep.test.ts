@@ -28,7 +28,10 @@ it.effect(
         Layer.mergeAll(
           ServerSettings.layerTest(),
           Layer.mock(ProjectStore.ProjectStoreV2)({
-            listShells: () => Effect.succeed([{ id: ProjectId.make("project:live") }] as never),
+            list: () =>
+              Effect.succeed([
+                { projectId: ProjectId.make("project:live"), deletedAt: null },
+              ] as never),
           }),
         ),
       ),

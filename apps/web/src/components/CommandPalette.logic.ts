@@ -404,7 +404,7 @@ export type BuildThreadActionItemsThread = Pick<
     updatedAt: string;
   };
 
-export function isPaletteListedThread(
+function isPaletteListedThread(
   thread: Pick<SidebarThreadSummary, "lineage" | "sideChatOf">,
 ): boolean {
   return !isSidebarSubagentThread(thread) && thread.sideChatOf == null;

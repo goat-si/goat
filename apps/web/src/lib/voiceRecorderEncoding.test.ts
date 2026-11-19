@@ -144,17 +144,33 @@ describe("browser microphone lifecycle", () => {
 
   it("releases the microphone immediately when cancelled while its audio context is resuming", async () => {
     await using mic = fakeMicrophone();
+    const resuming = deferred<void>();
     const resumed = deferred<void>();
-    mic.context.resume.mockImplementation(() => resumed.promise);
+    mic.context.resume.mockImplementation(() => {
+      resuming.resolve();
+      return resumed.promise;
+    });
     const start = mic.recorder.startRecording().catch((error: unknown) => error);
     mic.permission.resolve(mic.stream);
-    await mic.permission.promise;
+    await resuming.promise;
     await mic.recorder.cancelRecording();
     expect(mic.stop).toHaveBeenCalledOnce();
     expect(mic.context.close).toHaveBeenCalledOnce();
     resumed.resolve();
     expect(isVoiceRecordingCancelledError(await start)).toBe(true);
     expect(mic.stop).toHaveBeenCalledOnce();
+  });
+
+  it("releases a microphone whose grant is still settling when cancelled, without an audio context", async () => {
+    await using mic = fakeMicrophone();
+    const start = mic.recorder.startRecording().catch((error: unknown) => error);
+    mic.permission.resolve(mic.stream);
+    await mic.permission.promise;
+    await mic.recorder.cancelRecording();
+    expect(isVoiceRecordingCancelledError(await start)).toBe(true);
+    expect(mic.stop).toHaveBeenCalledOnce();
+    expect(mic.context.resume).not.toHaveBeenCalled();
+    expect(mic.recorder.getSnapshot()).toMatchObject({ isStarting: false, isRecording: false });
   });
 
   it("retains at most 160 waveform levels and stops publishing after cancellation", async () => {
