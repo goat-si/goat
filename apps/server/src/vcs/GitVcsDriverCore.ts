@@ -4760,19 +4760,49 @@ export const makeGitVcsDriverCore = Effect.fn("makeGitVcsDriverCore")(function* 
       ]);
     });
 
-  const setBranchUpstream: GitVcsDriver.GitVcsDriver["Service"]["setBranchUpstream"] = (input) =>
-    runGit(
-      "GitVcsDriver.setBranchUpstream",
-      input.cwd,
-      [
-        "branch",
-        "--set-upstream-to",
-        `${input.remoteName}/${input.remoteBranch}`,
-        "--",
-        input.branch,
-      ],
-      { writesSharedConfig: true, retryConfigLock: true, env: { LC_ALL: "C" } },
+  const setBranchUpstream: GitVcsDriver.GitVcsDriver["Service"]["setBranchUpstream"] = Effect.fn(
+    "setBranchUpstream",
+  )(function* (input) {
+    const args = [
+      "branch",
+      "--set-upstream-to",
+      `refs/remotes/${input.remoteName}/${input.remoteBranch}`,
+      "--",
+      input.branch,
+    ];
+    yield* withSharedConfigWrite(
+      sharedConfigRepository(input.cwd),
+      Effect.gen(function* () {
+        const result = yield* executeGitWithStableDiagnostics(
+          "GitVcsDriver.setBranchUpstream",
+          input.cwd,
+          args,
+          { allowNonZeroExit: true, retryConfigLock: true },
+        );
+        if (result.exitCode === 0) return;
+        if (
+          /^fatal: cannot set up tracking information; starting point '.+' is not a branch$/m.test(
+            result.stderr,
+          )
+        ) {
+          yield* executeGitWithStableDiagnostics(
+            "GitVcsDriver.setBranchUpstream.addFetchMapping",
+            input.cwd,
+            [
+              "config",
+              "--add",
+              `remote.${input.remoteName}.fetch`,
+              `+refs/heads/${input.remoteBranch}*:refs/remotes/${input.remoteName}/${input.remoteBranch}*`,
+            ],
+            { retryConfigLock: true },
+          );
+        }
+        yield* executeGitWithStableDiagnostics("GitVcsDriver.setBranchUpstream", input.cwd, args, {
+          retryConfigLock: true,
+        });
+      }),
     );
+  });
 
   const writeConfigValue: GitVcsDriver.GitVcsDriver["Service"]["writeConfigValue"] = (input) =>
     runGit("GitVcsDriver.writeConfigValue", input.cwd, ["config", input.key, input.value], {
