@@ -62,8 +62,7 @@ describe("negotiated memory scope moves", () => {
         fromScope: scope,
         toScope: { kind: "user" },
       } satisfies M.MemoryMoveInput;
-      const lookup = (input: M.MemoryMoveInput) =>
-        service.move({ receiptFor: input } as unknown as M.MemoryMoveInput, Effect.void);
+      const lookup = (input: M.MemoryMoveInput) => service.move({ receiptFor: input }, Effect.void);
       assert.isFalse(isLegacyMoveInput({ receiptFor: request }));
       assert.include(yield* lookup(request).pipe(Effect.flip), { code: "revision_changed" });
       assert.isUndefined(yield* store.readWork(`sync:${space}:${request.operationId}`));

@@ -45,8 +45,8 @@ export function MemoryMoveControl({
   const [attempts, setAttempts] = useState<MemoryMoveAttempts>(() => new Map());
   if (!allowed || !candidates.length) return null;
   const rows = memoryMoveRows(environmentId, candidates, selection?.scope, attempts);
-  const eligible = rows.filter(
-    (row) => canSubmitMemoryMove(row) && (!admitted || admitted.has(row.input.memoryId)),
+  const eligible = rows.filter((row) =>
+    canSubmitMemoryMove(row, !admitted || admitted.has(row.input.memoryId)),
   ).length;
   async function submit() {
     const permitted = () => registry.get(permission);
@@ -56,7 +56,8 @@ export function MemoryMoveControl({
       rows,
       () => MemoryOperationId.make(randomUUID()),
       (input) => move({ environmentId, input }),
-      (candidate) => permitted() && (isCurrent?.(candidate) ?? true),
+      permitted,
+      (candidate) => isCurrent?.(candidate) ?? true,
     );
     setBusy(false);
     setAttempts(result.attempts);

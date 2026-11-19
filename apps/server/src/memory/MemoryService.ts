@@ -234,7 +234,7 @@ export class MemoryService extends Context.Service<
       permit: Permit,
     ) => Effect.Effect<Store.StoredReceipt, MemoryServiceError>;
     readonly move: (
-      input: M.MemoryMoveInput,
+      input: M.MemoryMoveRequest,
       permit: Permit,
     ) => Effect.Effect<Store.StoredReceipt, MemoryServiceError>;
     readonly remember: (

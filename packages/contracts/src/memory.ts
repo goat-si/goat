@@ -594,6 +594,11 @@ export const MemoryMoveInput = struct({
   toScope: MemoryScope,
 });
 export type MemoryMoveInput = typeof MemoryMoveInput.Type;
+export const MemoryMoveRequest = Schema.Union([
+  MemoryMoveInput,
+  struct({ receiptFor: MemoryMoveInput }),
+]);
+export type MemoryMoveRequest = typeof MemoryMoveRequest.Type;
 export const MemoryRevisionMarks = struct({
   provenance: Schema.optionalKey(Schema.Literal("unverified")),
   originThreadId: Schema.optionalKey(ThreadId),

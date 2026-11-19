@@ -28,6 +28,7 @@ export const makeMoveMemory = (deps: {
   const stage = Effect.fn("MemoryService.stageMove")(function* (
     op: M.MemoryMoveOperation,
     permit: Permit,
+    receiptOnly: boolean,
   ) {
     yield* permit;
     yield* deps.requireSharing(op.memorySpaceId);
@@ -61,6 +62,7 @@ export const makeMoveMemory = (deps: {
     if (pending?.status === "cancelled")
       return yield* new Store.MemoryStoreConflict({ code: "source_invalidated" });
     if (!pending && !old) {
+      if (receiptOnly) return yield* new Store.MemoryStoreConflict({ code: "revision_changed" });
       if (!(yield* store.hubFloorActive(op.memorySpaceId)))
         return yield* new Store.MemoryStoreConflict({ code: "hub_upgrade_required" });
       const moveBinding =
@@ -76,19 +78,25 @@ export const makeMoveMemory = (deps: {
         memoryId: op.memoryId,
         outcome: "accepted" as const,
         revisionId: null,
-        pendingSync: !old,
+        pendingSync: !old && !(receiptOnly && terminal?.outcome === "accepted"),
       },
     };
   });
-  return Effect.fn("MemoryService.move")(function* (input: M.MemoryMoveInput, permit: Permit) {
+  return Effect.fn("MemoryService.move")(function* (input: M.MemoryMoveRequest, permit: Permit) {
+    const receiptOnly = "receiptFor" in input;
     const op = yield* decodeOperation(
-      { ...input, kind: "move", protocolVersion: 1, originEnvironmentId: deps.environmentId },
+      {
+        ...(receiptOnly ? input.receiptFor : input),
+        kind: "move",
+        protocolVersion: 1,
+        originEnvironmentId: deps.environmentId,
+      },
       { onExcessProperty: "error" },
     ).pipe(Effect.mapError(() => new Store.MemoryStoreConflict({ code: "invalid_output" })));
     if (op.kind !== "move") return yield* new Store.MemoryStoreConflict({ code: "invalid_output" });
-    const request = store.transact(stage(op, permit));
+    const request = store.transact(stage(op, permit, receiptOnly));
     const result = yield* request;
-    if (!result.receipt.pendingSync || !deps.submitFloorWrite) return result;
+    if (receiptOnly || !result.receipt.pendingSync || !deps.submitFloorWrite) return result;
     yield* permit;
     yield* deps.submitFloorWrite;
     const settled = yield* request;

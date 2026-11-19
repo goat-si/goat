@@ -91,8 +91,8 @@ export function MobileMemoryMoveControl({
     else setMessage("This project has no memory scope.");
   }
   const rows = memoryMoveRows(environmentId, candidates, destination?.scope, attempts);
-  const eligible = rows.filter(
-    (row) => canSubmitMemoryMove(row) && (!admitted || admitted.has(row.input.memoryId)),
+  const eligible = rows.filter((row) =>
+    canSubmitMemoryMove(row, !admitted || admitted.has(row.input.memoryId)),
   ).length;
   async function submit() {
     const permitted = () => live() && registry.get(permission);
@@ -102,7 +102,8 @@ export function MobileMemoryMoveControl({
       rows,
       operationId,
       (input) => move({ environmentId, input }),
-      (candidate) => permitted() && (isCurrent?.(candidate) ?? true),
+      permitted,
+      (candidate) => isCurrent?.(candidate) ?? true,
     );
     if (!live()) return;
     setBusy(false);

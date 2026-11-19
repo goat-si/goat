@@ -135,7 +135,7 @@ const WsMemorySuggestionsDismissRpc = Rpc.make(MEMORY_WS_METHODS.memorySuggestio
   error: MemoryRpcErrors,
 });
 const WsMemoryMoveRpc = Rpc.make(MEMORY_WS_METHODS.memoryMove, {
-  payload: Memory.MemoryMoveInput,
+  payload: Memory.MemoryMoveRequest,
   success: Memory.MemoryMutationReceipt,
   error: MemoryRpcErrors,
 });

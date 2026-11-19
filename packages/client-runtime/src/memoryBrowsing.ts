@@ -5,6 +5,7 @@ import {
   type MemoryFailureCode,
   type MemoryId,
   type MemoryMoveInput,
+  type MemoryMoveRequest,
   type MemoryMutationReceipt,
   type MemoryOperationId,
   type MemoryListInput,
@@ -179,8 +180,11 @@ export function memoryMoveRows(
 type MoveRow = ReturnType<typeof memoryMoveRows>[number];
 const isRpcError = Schema.is(MemoryRpcError);
 
-export function canSubmitMemoryMove({ outcome }: MoveRow) {
-  return outcome?.status !== "moved" && outcome?.status !== "stale";
+export function canSubmitMemoryMove({ outcome }: MoveRow, current: boolean) {
+  return (
+    outcome?.status === "uncertain" ||
+    (current && outcome?.status !== "moved" && outcome?.status !== "stale")
+  );
 }
 
 function moveOutcome(
@@ -207,17 +211,25 @@ export async function submitMemoryMoves(
   rows: readonly MoveRow[],
   createOperationId: () => MemoryOperationId,
   call: (
-    input: MemoryMoveInput,
+    input: MemoryMoveRequest,
   ) => Promise<AsyncResult.AsyncResult<MemoryMutationReceipt, unknown>>,
-  allowed: (candidate: MemoryMoveCandidate) => boolean,
+  permitted: () => boolean,
+  isCurrent: (candidate: MemoryMoveCandidate) => boolean,
 ) {
   const attempts = new Map<MemoryId, MemoryMoveAttempt>();
   let refresh = false;
-  for (const { input, key, outcome: prior } of rows) {
+  for (const row of rows) {
+    const { input, key, outcome: prior } = row;
     if (prior) attempts.set(input.memoryId, { key, outcome: prior });
-    if (!allowed(input) || prior?.status === "moved" || prior?.status === "stale") continue;
+    if (!permitted()) continue;
+    const current = isCurrent(input);
+    if (!canSubmitMemoryMove(row, current)) continue;
     const operationId = prior?.status === "uncertain" ? prior.operationId : createOperationId();
-    const outcome = moveOutcome(await call({ ...input, operationId }), operationId);
+    const request = { ...input, operationId };
+    const outcome = moveOutcome(
+      await call(current ? request : { receiptFor: request }),
+      operationId,
+    );
     attempts.set(input.memoryId, { key, outcome });
     refresh ||= outcome.status === "moved" || outcome.status === "stale";
   }
