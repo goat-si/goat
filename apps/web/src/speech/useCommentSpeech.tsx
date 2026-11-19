@@ -9,6 +9,9 @@ import { useEnvironmentScope, usePreparedConnection } from "../state/session";
 import { useEnvironment } from "../state/environments";
 import { useEnvironmentSpeechGrant } from "./voiceConsent";
 import { useClientSettings } from "../hooks/useSettings";
+import { useAtomValue } from "@effect/atom-react";
+import { serverEnvironment } from "../state/server";
+import { liveSpeechAvailable } from "./liveSpeechPreference";
 
 export function useCommentSpeech(input: {
   environmentId: EnvironmentId;
@@ -22,6 +25,8 @@ export function useCommentSpeech(input: {
   const transcribeAfterStop = useClientSettings((settings) => settings.speechTranscribeAfterStop);
   const selected = grant;
   const destinationId = selected?.environmentId ?? input.environmentId;
+  const config = useAtomValue(serverEnvironment.configValueAtom(destinationId));
+  const settings = useAtomValue(serverEnvironment.settingsValueAtom(destinationId));
   const destinationLabel = useEnvironment(destinationId)?.label ?? "the selected environment";
   const hasScope = useEnvironmentScope(destinationId, AuthOrchestrationOperateScope);
   const connection = usePreparedConnection(destinationId);
@@ -36,7 +41,7 @@ export function useCommentSpeech(input: {
     locale: typeof navigator === "undefined" ? "en-US" : navigator.language || "en-US",
     route: { kind: "environment", environmentId: destinationId },
     localModelGrant: selected,
-    liveEnabled: !transcribeAfterStop,
+    liveEnabled: !transcribeAfterStop && liveSpeechAvailable(config, settings?.speech.modelId),
     enabled:
       selected !== null && hasScope && Option.isSome(connection) && !proxied && !input.disabled,
     readDraft: () => {
