@@ -2953,9 +2953,19 @@ export const layerWsRpc = (
             ),
           ),
         [WS_METHODS.vcsCreateRef]: (input) =>
-          gitWorkflow.createRef(input).pipe(Effect.tap(() => refreshGitStatus(input.cwd))),
+          gitWorkflow
+            .createRef(input)
+            .pipe(
+              Effect.tap(() =>
+                input.switchRef
+                  ? vcsStatusBroadcaster.refreshAfterCheckout(input.cwd)
+                  : refreshGitStatus(input.cwd),
+              ),
+            ),
         [WS_METHODS.vcsSwitchRef]: (input) =>
-          gitWorkflow.switchRef(input).pipe(Effect.tap(() => refreshGitStatus(input.cwd))),
+          gitWorkflow
+            .switchRef(input)
+            .pipe(Effect.tap(() => vcsStatusBroadcaster.refreshAfterCheckout(input.cwd))),
         [WS_METHODS.sshHostStatus]: (input) => sshHostSetup.status(input),
         [WS_METHODS.sshHostHandoffProgress]: (input) =>
           sshHostSetup.handoffProgress(input, { kind: "client", sessionId: currentSessionId }),
