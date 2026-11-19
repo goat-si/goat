@@ -554,6 +554,34 @@ describe("ChatMarkdown workspace file opens", () => {
 });
 
 describe("ChatMarkdown skill chips", () => {
+  it("closes skill details after opening its instructions", async () => {
+    setup();
+    const threadRef = {
+      environmentId: EnvironmentId.make("workspace"),
+      threadId: ThreadId.make("thread"),
+    };
+    const previous = useRightPanelStore.getState();
+    using _restorePanels = { [Symbol.dispose]: () => useRightPanelStore.setState(previous) };
+    await using screen = await renderText("Run $review now", {
+      threadRef,
+      skills: [
+        {
+          name: "review",
+          displayName: "Review",
+          description: "Reviews the current branch.",
+          path: "/skills/review/SKILL.md",
+          enabled: true,
+        },
+      ],
+    });
+    await userEvent.click(screen.getByRole("button", { name: "Skill Review. Show details" }));
+    await expect.element(page.getByText("Reviews the current branch.")).toBeVisible();
+    await userEvent.click(page.getByRole("button", { name: "View instructions" }));
+    await expect.element(page.getByText("Reviews the current branch.")).not.toBeInTheDocument();
+    expect(
+      selectActiveRightPanelSurface(useRightPanelStore.getState().byThreadKey, threadRef),
+    ).toMatchObject({ kind: "file", relativePath: "/skills/review/SKILL.md" });
+  });
   it("shows the skill's details and opens its instructions", async () => {
     setup();
     const threadRef = {
