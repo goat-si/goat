@@ -22,7 +22,9 @@ import {
   useEffect,
   useEffectEvent,
   useImperativeHandle,
+  useLayoutEffect,
   useOptimistic,
+  useRef,
   useState,
   useTransition,
   type MouseEvent as ReactMouseEvent,
@@ -137,6 +139,7 @@ export function BranchToolbarBranchSelector({
   const switchRef = useAtomCommand(vcsEnvironment.switchRef, {
     reportFailure: false,
   });
+  const readRefs = useAtomCommand(vcsEnvironment.readRefs, { reportFailure: false });
   const refreshLocalStatusForPicker = useAtomCommand(vcsEnvironment.refreshLocalStatusForPicker, {
     reportFailure: false,
   });
@@ -381,6 +384,23 @@ export function BranchToolbarBranchSelector({
         ? queriedActiveBranch.isRemote === true
         : null;
   const [isBranchActionPending, startBranchActionTransition] = useTransition();
+  const selectionId = useRef(0);
+  const selectionContext = useRef("");
+  const contextKey = JSON.stringify([
+    environmentId,
+    threadId,
+    draftId,
+    activeProjectCwd,
+    branchCwd,
+  ]);
+  // oxlint-disable-next-line goat/react-effect-budget -- cancel pending ref reads when the selection context changes.
+  useLayoutEffect(() => {
+    selectionContext.current = contextKey;
+    return () => {
+      selectionId.current++;
+      selectionContext.current = "";
+    };
+  }, [contextKey]);
   const totalBranchCount = branchRefState.data?.totalCount ?? 0;
   const branchStatusText = isInitialBranchesLoadPending
     ? "Loading refs..."
@@ -447,17 +467,36 @@ export function BranchToolbarBranchSelector({
     });
   };
 
-  const selectBranch = (refName: VcsRef) => {
+  const selectBranch = async (listedRef: VcsRef) => {
     if (sshSelected) return;
     if (!canUpdateThreadBranch || !branchCwd || !activeProjectCwd || isBranchActionPending) return;
 
-    const latest = readLatestThreadState();
+    const id = ++selectionId.current;
+    const context = selectionContext.current;
+    let latest = readLatestThreadState();
     if (isSelectingWorktreeBase) {
       if (latest.worktreePath) return;
-      setThreadBranch(refName.name, null);
+      setThreadBranch(listedRef.name, null);
       setIsBranchMenuOpen(false);
       onComposerFocusRequest?.();
       return;
+    }
+    setIsBranchMenuOpen(false);
+    onComposerFocusRequest?.();
+    let refName = listedRef;
+    if (listedRef.worktreePath) {
+      const result = await readRefs({
+        environmentId,
+        input: { cwd: listedRef.worktreePath, query: listedRef.name, refKind: "local", limit: 1 },
+      });
+      if (id !== selectionId.current || context !== selectionContext.current) return;
+      const confirmed =
+        result._tag === "Success" &&
+        result.value.refs.some(
+          (ref) => ref.name === listedRef.name && !ref.isRemote && ref.current,
+        );
+      if (!confirmed) refName = { ...listedRef, worktreePath: null };
+      latest = readLatestThreadState();
     }
     const selectionTarget = resolveBranchSelectionTarget({
       activeProjectCwd,
@@ -477,17 +516,12 @@ export function BranchToolbarBranchSelector({
 
     if (shouldReuseSelectedWorktree(selectionTarget, canWriteSourceControl)) {
       setThreadBranch(refName.name, selectionTarget.nextWorktreePath);
-      setIsBranchMenuOpen(false);
-      onComposerFocusRequest?.();
       return;
     }
 
     const selectedBranchName = refName.isRemote
       ? deriveLocalBranchNameFromRemoteRef(refName.name)
       : refName.name;
-
-    setIsBranchMenuOpen(false);
-    onComposerFocusRequest?.();
 
     runBranchAction(async () => {
       const previousBranch = resolvedActiveBranch;
@@ -553,6 +587,7 @@ export function BranchToolbarBranchSelector({
     if (!canChangeThreadBranch) return;
     const name = sanitizeNewRefName(rawName);
     if (!branchCwd || !name || isBranchActionPending) return;
+    selectionId.current++;
 
     setIsBranchMenuOpen(false);
     onComposerFocusRequest?.();
@@ -727,6 +762,7 @@ export function BranchToolbarBranchSelector({
   function selectPickerItem(itemValue: string) {
     if (sshSelected) return;
     if (itemValue === checkoutPullRequestItemValue && prReference && onCheckoutPullRequestRequest) {
+      selectionId.current++;
       handleOpenChange(false);
       onComposerFocusRequest?.();
       onCheckoutPullRequestRequest(prReference);
@@ -734,7 +770,7 @@ export function BranchToolbarBranchSelector({
       createRef(trimmedBranchQuery);
     } else {
       const refName = branchByName.get(itemValue);
-      if (refName) selectBranch(refName);
+      if (refName) void selectBranch(refName);
     }
   }
 
