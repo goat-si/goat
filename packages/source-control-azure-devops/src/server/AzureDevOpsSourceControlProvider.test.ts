@@ -1,3 +1,8 @@
+// @effect-diagnostics nodeBuiltinImport:off
+import * as NodeFS from "node:fs";
+import * as NodeOS from "node:os";
+import * as NodePath from "node:path";
+import * as NodeChildProcess from "node:child_process";
 import * as NodeServices from "@effect/platform-node/NodeServices";
 import { SourceControlProviderKind } from "@goat/contracts";
 import type * as SourceControlHost from "@goat/source-control-core/server/SourceControlHost";
@@ -240,9 +245,19 @@ it.effect("checks out from the selected Azure remote when another remote appears
     NodeServices.layer,
   );
   return Effect.gen(function* () {
+    const cwd = yield* Effect.acquireRelease(
+      Effect.sync(() => NodeFS.mkdtempSync(NodePath.join(NodeOS.tmpdir(), "goat-azure-remotes-"))),
+      (dir) => Effect.sync(() => NodeFS.rmSync(dir, { recursive: true, force: true })),
+    );
+    const git = (...args: string[]) =>
+      NodeChildProcess.execFileSync("git", ["-C", cwd, ...args], { encoding: "utf8" }).trim();
+    git("init", "-q");
+    for (const remote of remotes) git("remote", "add", remote.name, remote.url);
+    assert.deepStrictEqual(git("remote").split("\n"), ["origin", "upstream"]);
+    const selectedUrl = git("remote", "get-url", selected.name);
     const provider = yield* AzureDevOpsSourceControlProvider.make;
     yield* provider.checkoutChangeRequest({
-      cwd: "/repo",
+      cwd,
       reference: "42",
       context: {
         provider: {
@@ -251,11 +266,61 @@ it.effect("checks out from the selected Azure remote when another remote appears
           baseUrl: "https://dev.azure.com",
         },
         remoteName: selected.name,
-        remoteUrl: selected.url,
+        remoteUrl: selectedUrl,
       },
     });
     assert.include(commands[0] ?? [], "--organization=https://dev.azure.com/selected");
     assert.include(commands[0] ?? [], "--project=two");
     assert.deepStrictEqual(fetched, ["upstream/feature/x"]);
-  }).pipe(Effect.provide(AzureDevOpsCli.layer.pipe(Layer.provideMerge(support))));
+  }).pipe(Effect.scoped, Effect.provide(AzureDevOpsCli.layer.pipe(Layer.provideMerge(support))));
 });
+
+it.effect(
+  "refuses to fetch when the PR belongs to a different repository on the selected project",
+  () => {
+    const fetched: string[] = [];
+    const host = TestSourceControlHost.layer({
+      git: {
+        fetchRemoteBranch: (input) => {
+          fetched.push(input.remoteName);
+          return Effect.void;
+        },
+      },
+    });
+    const cli = Layer.mock(AzureDevOpsCli.AzureDevOpsCli)({
+      getPullRequest: () =>
+        Effect.succeed({
+          number: 42,
+          title: "Other repository",
+          url: "https://dev.azure.com/selected/two/_git/other/pullrequest/42",
+          baseRefName: "main",
+          headRefName: "feature/x",
+          state: "open",
+          isCrossRepository: false,
+          closedAt: null,
+          mergedAt: null,
+          updatedAt: Option.none(),
+        }),
+    });
+    return Effect.gen(function* () {
+      const provider = yield* AzureDevOpsSourceControlProvider.make;
+      const result = yield* provider
+        .checkoutChangeRequest({
+          cwd: "/repo",
+          reference: "42",
+          context: {
+            provider: {
+              kind: SourceControlProviderKind.make("azure-devops"),
+              name: "Azure DevOps",
+              baseUrl: "https://dev.azure.com",
+            },
+            remoteName: "upstream",
+            remoteUrl: "https://dev.azure.com/selected/two/_git/repo",
+          },
+        })
+        .pipe(Effect.result);
+      assert.isTrue(result._tag === "Failure");
+      assert.deepStrictEqual(fetched, []);
+    }).pipe(Effect.provide(Layer.mergeAll(host, cli)));
+  },
+);

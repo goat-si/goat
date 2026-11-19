@@ -325,6 +325,25 @@ export const make = Effect.gen(function* () {
           organization: remote.organization,
           project: remote.project,
         });
+        const prUrl = URL.parse(pullRequest.url);
+        const repositoryPath = prUrl?.pathname.match(
+          /^(.*\/_git\/[^/]+)\/pullrequest\/\d+\/?$/i,
+        )?.[1];
+        const prRepository =
+          prUrl && repositoryPath ? remoteRepository(`${prUrl.origin}${repositoryPath}`) : null;
+        if (
+          prRepository === null ||
+          prRepository.organization?.toLowerCase() !== remote.organization.toLowerCase() ||
+          prRepository.project?.toLowerCase() !== remote.project.toLowerCase() ||
+          prRepository.name.toLowerCase() !== remote.name.toLowerCase()
+        ) {
+          return yield* new SourceControlProviderError({
+            provider: SourceControlProviderKind.make("azure-devops"),
+            operation: "checkoutChangeRequest",
+            cwd: input.cwd,
+            detail: "Pull request does not belong to the selected Azure remote.",
+          });
+        }
         if (pullRequest.isCrossRepository)
           return yield* new SourceControlProviderError({
             provider: SourceControlProviderKind.make("azure-devops"),
