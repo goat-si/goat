@@ -6,6 +6,7 @@ import {
 import { AMBIGUOUS_RESUME_MESSAGE, manualContinuationDelivery } from "./manualContinuation.ts";
 import { makeMemoryRefreshFactory } from "./goat/MemoryRefreshFactory.ts";
 import { makeNativeForkRecovery } from "./goat/NativeForkRecovery.ts";
+import { nativeSessionMissesKeptTurns } from "./goat/NativeSessionKeptTurns.ts";
 import { ProviderTurnStartError } from "./ProviderTurnStartTypes.ts";
 import type { ProviderTurnStartServiceV2Shape } from "./ProviderTurnStartTypes.ts";
 import * as Context from "effect/Context";
@@ -138,9 +139,7 @@ export const layer: Layer.Layer<
     const cloudSources = yield* Effect.serviceOption(CloudSource.CloudTaskSourceService);
     const explainOpenFailure = yield* openFailureExplainer;
     const makeRunControls = makeProviderRunControls(projectionStore, idAllocator);
-
     const makeRefreshMemoryContext = yield* makeMemoryRefreshFactory;
-
     const start = Effect.fn("orchestrationV2.providerTurnStart.start")(function* (input: {
       readonly threadId: ThreadId;
       readonly runId: RunId;
@@ -445,7 +444,6 @@ export const layer: Layer.Layer<
         });
         return;
       }
-
       if (
         yield* refuseCodexAdmission({
           survivors: codexSurvivors,
@@ -544,7 +542,6 @@ export const layer: Layer.Layer<
         inheritedBackgroundTurnItems,
       });
       const { isCurrentAttemptInStatus } = runControls;
-
       const resolvedRuntimePolicy = yield* runtimePolicy.resolve({
         thread: projection.thread,
         modelSelection: run.modelSelection,
@@ -684,7 +681,6 @@ export const layer: Layer.Layer<
         });
         return;
       }
-
       if (!(yield* isCurrentAttemptInStatus(expectedStartStatus))) return;
       const loadFromProvider = Effect.fn("ProviderTurnStartService.loadFromProvider")(function* (
         load: Effect.Effect<OrchestrationV2ProviderThread, ProviderAdapter.ProviderAdapterV2Error>,
@@ -857,15 +853,20 @@ export const layer: Layer.Layer<
             handoff.delivery?.nativeThreadId === providerThread.nativeThreadRef?.nativeId &&
             handoff.delivery?.status === "pending",
         );
+        const nativeSessionLacksKeptTurns =
+          !session.providerSession.capabilities.checkpointing.providerCanRollbackConversation &&
+          nativeSessionMissesKeptTurns(projection, providerThread, run);
         const resumed = yield* Effect.result(
-          uncertainDelivery
+          uncertainDelivery || nativeSessionLacksKeptTurns
             ? Effect.fail(
                 new ProviderAdapter.ProviderAdapterTurnStartError({
                   driver: session.driver,
                   threadId: projection.thread.id,
                   providerThreadId: providerThread.id,
                   runId,
-                  cause: "Uncertain native history injection",
+                  cause: uncertainDelivery
+                    ? "Uncertain native history injection"
+                    : "Native session holds none of the kept conversation",
                 }),
               )
             : session.resumeThread({
@@ -933,7 +934,6 @@ export const layer: Layer.Layer<
         resumedHandoffContext = undefined;
         resumedRetryHandoff = undefined;
         if (!(yield* isCurrentAttemptInStatus(expectedStartStatus))) return undefined;
-
         if (
           resumed._tag === "Failure" &&
           (cloud || nativeResume || resumed.failure._tag === "ProviderAdapterThreadInUseError")
@@ -945,9 +945,11 @@ export const layer: Layer.Layer<
           runId,
           reason: uncertainDelivery
             ? "uncertain_history_delivery"
-            : resumed._tag === "Success"
-              ? "handoff_budget_exhausted"
-              : "resume_failed",
+            : nativeSessionLacksKeptTurns
+              ? "native_session_lacks_kept_turns"
+              : resumed._tag === "Success"
+                ? "handoff_budget_exhausted"
+                : "resume_failed",
           errorTag: resumed._tag === "Failure" ? resumed.failure._tag : "ContextHandoffBudgetError",
         });
         const replacement = yield* loadFromProvider(
@@ -1396,7 +1398,6 @@ export const layer: Layer.Layer<
         runtimePolicy: resolvedRuntimePolicy,
       });
     });
-
     return ProviderTurnStartServiceV2.of({
       start: Effect.fn("ProviderTurnStartService.start")(
         function* (input) {

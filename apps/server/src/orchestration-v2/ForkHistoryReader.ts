@@ -6,6 +6,7 @@ import type {
   ThreadId,
   TurnItemId,
 } from "@goat/contracts";
+import { isSideChatThread } from "@goat/contracts";
 import type { IdAllocatorV2 } from "@goat/provider-core/server/IdAllocator";
 import * as Effect from "effect/Effect";
 import type { ProjectionStoreV2 } from "./ProjectionStore.ts";
@@ -125,7 +126,9 @@ export function makeForkHistoryReader(store: ProjectionStoreV2["Service"]) {
     const own = yield* readOwnItems(source, throughRunOrdinal, budget);
     return [...(yield* readInheritedItems(source.thread, budget)), ...own];
   });
-  return { read, readInheritedItems, readOwnItems, readForkHistory };
+  const readInheritedHistory = (thread: SourceThread) =>
+    isSideChatThread(thread) ? Effect.succeed([]) : readInheritedItems(thread, historyBudget());
+  return { read, readInheritedItems, readInheritedHistory, readOwnItems, readForkHistory };
 }
 
 export function makeReadSwitchItems<E>(
