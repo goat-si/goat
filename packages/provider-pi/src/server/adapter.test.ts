@@ -286,6 +286,7 @@ export const startTurn = Effect.fnUntraced(function* (
 
 describe("PiAdapterV2", () => {
   registerPiToolChecks({
+    SESSION_ID,
     makeFakePi,
     openRuntime,
     startTurn,

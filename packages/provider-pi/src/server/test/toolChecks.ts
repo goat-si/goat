@@ -1,3 +1,6 @@
+import * as ProviderHost from "@goat/provider-core/server/ProviderHost";
+import * as FileSystem from "effect/FileSystem";
+import { PI_PROVIDER } from "../adapter.ts";
 import { assert, it } from "@effect/vitest";
 import * as Effect from "effect/Effect";
 import type * as Fixture from "../adapter.test.ts";
@@ -8,6 +11,7 @@ export function registerPiToolChecks({
   openRuntime,
   startTurn,
   THREAD_ID,
+  SESSION_ID,
   modelSelection,
   runtimePolicy,
   layerTest,
@@ -16,6 +20,7 @@ export function registerPiToolChecks({
   openRuntime: typeof Fixture.openRuntime;
   startTurn: typeof Fixture.startTurn;
   THREAD_ID: typeof Fixture.THREAD_ID;
+  SESSION_ID: typeof Fixture.SESSION_ID;
   modelSelection: typeof Fixture.modelSelection;
   runtimePolicy: typeof Fixture.runtimePolicy;
   layerTest: typeof Fixture.layerTest;
@@ -160,6 +165,41 @@ export function registerPiToolChecks({
           return yield* Effect.die("Expected notice");
         assert.equal(event.turnItem.severity, severity);
       }
+    }).pipe(Effect.scoped, Effect.provide(layerTest)),
+  );
+  it.effect("forks resumed sessions from another cwd into the runtime cwd", () =>
+    Effect.gen(function* () {
+      const host = yield* ProviderHost.ProviderHost;
+      const fs = yield* FileSystem.FileSystem;
+      const fake = yield* makeFakePi;
+      const forkFake = yield* makeFakePi;
+      const { runtime } = yield* openRuntime(fake, "default", THREAD_ID, SESSION_ID, forkFake);
+      const thread = yield* runtime.ensureThread({
+        threadId: THREAD_ID,
+        modelSelection: modelSelection("default"),
+        runtimePolicy,
+      });
+      const dir = yield* fs.makeTempDirectoryScoped();
+      const file = `${dir}/old.jsonl`;
+      yield* fs.writeFileString(
+        file,
+        `${JSON.stringify({ type: "session", version: 3, id: "s", cwd: `${host.paths.cwd}-old` })}\n{}\n`,
+      );
+      const forkFile = "/fake/forked-into-worktree.jsonl";
+      forkFake.queueState({ sessionFile: forkFile });
+      fake.queueState({ sessionFile: forkFile });
+      const resumed = yield* runtime.resumeThread({
+        providerThread: {
+          ...thread,
+          nativeThreadRef: { driver: PI_PROVIDER, nativeId: file, strength: "strong" },
+        },
+      });
+      assert.equal(forkFake.lastSpawn().args.at(-1), file);
+      assert.equal(
+        fake.allRequests().findLast((request) => request.type === "switch_session")?.sessionPath,
+        forkFile,
+      );
+      assert.equal(resumed.nativeThreadRef?.nativeId, forkFile);
     }).pipe(Effect.scoped, Effect.provide(layerTest)),
   );
 }

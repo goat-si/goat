@@ -89,6 +89,7 @@ import { PI_STANDARD_SERVICE_TIER } from "./serviceTierCapabilities.ts";
 export const PI_PROVIDER = ProviderDriverKind.make("pi");
 // Inherit Pi's configured defaultProvider/defaultModel without calling set_model.
 const PI_INHERIT_MODEL_SLUG = "default";
+const decodeSessionHeader = Schema.decodeUnknownOption(Schema.fromJsonString(Schema.Unknown));
 const STREAM_FLUSH_MS = 50;
 const PI_REQUEST_TIMEOUT_MS = 15_000;
 const PI_SESSION_TIMEOUT_MS = 60_000;
@@ -2379,6 +2380,36 @@ export const makePiAdapterV2 = Effect.fn("makePiAdapterV2")(function* (
         }
       });
 
+      const sessionFileInCwd = Effect.fnUntraced(function* (
+        sessionFile: string,
+        createdAt: DateTime.Utc,
+      ) {
+        const header = yield* fileSystem.stream(sessionFile).pipe(
+          Stream.decodeText(),
+          Stream.splitLines,
+          Stream.runHead,
+          Effect.map(Option.getOrUndefined),
+          Effect.orElseSucceed(() => undefined),
+        );
+        if (header === undefined) return sessionFile;
+        const parsed = decodeSessionHeader(header);
+        const sessionCwd = recordString(Option.getOrUndefined(parsed), "cwd");
+        if (sessionCwd === undefined || sessionCwd === cwd) return sessionFile;
+        const realCwd = yield* fileSystem.realPath(cwd).pipe(Effect.orElseSucceed(() => cwd));
+        if (sessionCwd === realCwd) return sessionFile;
+        return yield* forkPiSession({
+          sourceFile: sessionFile,
+          boundary: { type: "nothing" },
+          createdAt,
+          cwd,
+          driver,
+          profile,
+          options,
+          launchArgs: resolvedLaunchArgs.args,
+          spawner,
+        });
+      });
+
       const registerThread = Effect.fnUntraced(function* (
         threadInput: ProviderAdapter.ProviderAdapterV2EnsureThreadInput,
         publish = true,
@@ -2419,7 +2450,10 @@ export const makePiAdapterV2 = Effect.fn("makePiAdapterV2")(function* (
           contextWindow = null;
           const result = yield* lifecycleRequest(
             resumeId != null
-              ? { type: "switch_session", sessionPath: resumeId }
+              ? {
+                  type: "switch_session",
+                  sessionPath: yield* sessionFileInCwd(resumeId, existing.createdAt),
+                }
               : { type: "new_session" },
           );
           if (recordField(result, "cancelled") === true) {
