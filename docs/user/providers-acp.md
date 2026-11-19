@@ -41,6 +41,29 @@ credentials and skills remain managed by the installed agent or its wrapper. Mod
 options come from ACP, including model IDs that contain JSON. GOAT launches the executable directly
 without expanding shell expressions.
 
+## MiniMax Code
+
+To use an installed [MiniMax Code CLI](https://github.com/MiniMax-AI/minimax-code), choose
+**Settings → Providers → Add provider → MiniMax Code** on the environment where you run it.
+The local preset starts `mcode acp` over stdio. Confirm that `mcode --version` works on that
+machine. If the server cannot find it on PATH, enter its absolute path under **Executable**.
+For npm installations, the server must also be able to run a Node.js version supported by MCode.
+If a version manager gives your terminal a newer Node.js than GOAT, set the instance’s
+`PATH` under **Variables** to include that Node.js bin directory before the other entries.
+Use `mcode login` on that machine if the CLI needs sign-in.
+
+If a new thread fails to open after switching models, try the model currently selected in
+MCode. With CLI 0.7.8, switching from **M3.1-Flash · thinking** to **M3.1-Flash** can
+return an internal error from the agent’s ACP model selector.
+
+If you prefer the registry-managed distribution, search for **MiniMax Code** in the ACP Registry.
+
+**Fleet → Quota** shows the signed-in MiniMax account’s five-hour and weekly text quota
+as percentages used. GOAT reads the production account for the instance’s MCode region
+and data directory. This requires MCode’s file-backed OAuth login. Unlimited windows
+and windows for which MiniMax returns no percentage are omitted. These account readings
+are separate from token consumption in an individual thread.
+
 ## Oh My Pi
 
 [Oh My Pi](https://github.com/can1357/oh-my-pi) is a coding agent available as a local ACP
