@@ -2,6 +2,7 @@ import { shouldUseBoundedThreadSnapshot } from "./orchestration-v2/boundedThread
 import { mapCheckpointStorageError } from "./vcs/checkpointStorageError.ts";
 import { enrichProjectShells } from "./project/enrichProjectShells.ts";
 import { vcsStatusHandlers } from "./vcs/vcsStatusHandlers.ts";
+import { makeSqlWorktreeHolderLookup, WorktreeHolderGuard } from "./git/WorktreeHolderGuard.ts";
 import { makeMemoryMutationHandlers } from "./memory/MemoryMutationHandlers.ts";
 import { makeGlobalSkillsRpcLayer } from "./skills/GlobalSkillsRpcHandlers.ts";
 import * as AccessRpc from "./auth/AccessRpc.ts";
@@ -1079,7 +1080,25 @@ export const layerWsRpc = (
       const remoteOpenTargets = yield* RemoteOpenTargets.RemoteOpenTargets;
       const directEndpoints = yield* DirectEndpoints.DirectEndpoints;
       const gitWorkflow = yield* GitWorkflowService.GitWorkflowService;
-      const clientWorktrees = yield* GitWorkflowService.makeClientWorktrees;
+      const holderLookup = yield* makeSqlWorktreeHolderLookup;
+      const holderGuard = (path: string) =>
+        holderLookup(path).pipe(
+          Effect.flatMap((holders) =>
+            holders.length === 0
+              ? Effect.void
+              : Effect.fail(
+                  new GitCommandError({
+                    operation: "ClientWorktrees.remove",
+                    command: "git worktree remove",
+                    cwd: path,
+                    detail: "Another thread still uses this worktree.",
+                  }),
+                ),
+          ),
+        );
+      const clientWorktrees = yield* GitWorkflowService.makeClientWorktrees.pipe(
+        Effect.provideService(WorktreeHolderGuard, holderGuard),
+      );
       const review = yield* ReviewService.ReviewService;
       const vcsProvisioning = yield* VcsProvisioningService.VcsProvisioningService;
       const vcsStatusBroadcaster = yield* VcsStatusBroadcaster.VcsStatusBroadcaster;
@@ -1567,7 +1586,7 @@ export const layerWsRpc = (
         ),
       );
 
-      const { readOmittableShellRows, readThreadFamily } = makeOmittableShellReaders({
+      const { readThreadFamily } = makeOmittableShellReaders({
         sql,
         threadManagement,
         latestSequence: applicationEvents.latestApplicationSequence,
@@ -1811,8 +1830,17 @@ export const layerWsRpc = (
             ),
           ),
         [ORCHESTRATION_V2_WS_METHODS.getWorktreeThreadIds]: (input) =>
-          readOmittableShellRows(input, "Failed to load the worktree's threads").pipe(
+          holderLookup(input.worktreePath).pipe(
+            Effect.map((ids) => ({ threads: ids.map((id) => ({ id })) })),
+            Effect.mapError(
+              (cause) =>
+                new OrchestrationV2GetShellSnapshotError({
+                  message: "Failed to load the worktree's threads",
+                  cause,
+                }),
+            ),
             clientWorktrees.withManaged(input.worktreePath),
+            Effect.map((result) => ({ ...result, removalGuarded: true })),
           ),
         [ORCHESTRATION_V2_WS_METHODS.getThreadProjection]: (input) =>
           Effect.annotateCurrentSpan({ "orchestration_v2.thread_id": input.threadId }).pipe(

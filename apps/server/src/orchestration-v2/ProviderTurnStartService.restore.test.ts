@@ -4,6 +4,9 @@ import * as PlatformError from "effect/PlatformError";
 import { makeRestoreThreadWorkspace } from "./goat/restoreThreadWorkspace.ts";
 import { it } from "@effect/vitest";
 import * as Effect from "effect/Effect";
+import * as Deferred from "effect/Deferred";
+import * as Fiber from "effect/Fiber";
+import * as Ref from "effect/Ref";
 import * as FileSystem from "effect/FileSystem";
 import * as Path from "effect/Path";
 import { expect } from "vite-plus/test";
@@ -13,6 +16,9 @@ import * as GitVcsDriver from "../vcs/GitVcsDriver.ts";
 import { makeRestorePending } from "./goat/restorePending.ts";
 import { makeLocalCommandHarness } from "./ProviderTurnStartService.localCommand.testkit.ts";
 import { layerRealGit } from "./ProviderTurnStartService.testkit.ts";
+import { makeHarness as makeLaunchHarness } from "./testkit/ThreadLaunchHarness.ts";
+import { launchInput } from "./testkit/threadLaunchInput.ts";
+import * as ThreadLaunchService from "./ThreadLaunchService.ts";
 
 const setup = Effect.gen(function* () {
   const fileSystem = yield* FileSystem.FileSystem;
@@ -55,6 +61,58 @@ const notices = (harness: ReturnType<typeof makeLocalCommandHarness>) =>
     .turnItems.flatMap((item) =>
       item.type === "notification" ? [{ summary: item.summary, detail: item.detail }] : [],
     );
+
+it.live("a launch bound during removal recreates the same worktree and announces it", () =>
+  Effect.gen(function* () {
+    const { fileSystem, workspaceRoot, worktreePath, harness } = yield* setup;
+    const workflow = yield* GitWorkflow.GitWorkflowService;
+    const scanned = yield* Deferred.make<void>();
+    const release = yield* Deferred.make<void>();
+    const bound = yield* Ref.make(false);
+    const removal = yield* workflow
+      .removeWorktree({ cwd: workspaceRoot, path: worktreePath, force: true }, () =>
+        Ref.get(bound).pipe(
+          Effect.flatMap((isBound) =>
+            isBound
+              ? Effect.die("holder was present at scan")
+              : Deferred.succeed(scanned, undefined).pipe(Effect.andThen(Deferred.await(release))),
+          ),
+        ),
+      )
+      .pipe(Effect.forkChild({ startImmediately: true }));
+    yield* Deferred.await(scanned);
+    const launchHarness = makeLaunchHarness();
+    const launched = yield* Effect.gen(function* () {
+      const launches = yield* ThreadLaunchService.ThreadLaunchService;
+      return yield* launches.launch(
+        launchInput({
+          command: "race-launch",
+          thread: "thread-native-account-command",
+          workspace: { type: "existing_worktree", worktreePath, branch: "feature/restore" },
+        }),
+      );
+    }).pipe(Effect.provide(launchHarness.layer));
+    expect(launched.projection.thread.worktreePath).toBe(worktreePath);
+    yield* Ref.set(bound, true);
+    yield* Deferred.succeed(release, undefined);
+    yield* Fiber.join(removal);
+    expect(yield* fileSystem.exists(worktreePath)).toBe(false);
+    const turn = harness();
+    yield* turn.start;
+    expect(turn.open).toHaveBeenCalledWith(
+      expect.objectContaining({
+        threadId: launched.threadId,
+        runtimePolicy: expect.objectContaining({ cwd: worktreePath }),
+      }),
+    );
+    expect(notices(turn)).toEqual([
+      {
+        summary: "Recreated the worktree from branch feature/restore.",
+        detail: "Changes that were never committed are not in it.",
+      },
+    ]);
+  }).pipe(Effect.scoped, Effect.provide(layerRealGit)),
+);
 
 it.effect("a turn that recreates its removed worktree says what did not come back", () =>
   Effect.gen(function* () {
