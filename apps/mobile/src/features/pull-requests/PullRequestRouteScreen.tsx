@@ -57,7 +57,7 @@ import { useSafeAreaInsets } from "react-native-safe-area-context";
 
 import { AppText as Text } from "../../components/ui/AppText";
 import { AndroidScreenHeader } from "../../components/ui/AndroidScreenHeader";
-import { useAndroidControlSizing } from "../../components/ui/useAndroidControlSizing";
+import { usePullRequestToolbarHeight } from "./usePullRequestToolbarHeight";
 import { useAdaptiveWorkspaceLayout } from "../layout/AdaptiveWorkspaceLayout";
 import { AndroidWorkspaceSidebarButton } from "../layout/workspace-sidebar-toolbar";
 import { useWorkspaceSidebarHeaderItem } from "../layout/useWorkspaceSidebarHeaderItem";
@@ -151,11 +151,6 @@ function PullRequestOverview(props: {
       </Animated.View>
     </View>
   );
-}
-
-function usePullRequestToolbarHeight(bottomInset: number) {
-  const { buttonSize } = useAndroidControlSizing();
-  return useState(() => (Platform.OS === "android" ? bottomInset + buttonSize + 40 : 0));
 }
 
 export function PullRequestRouteScreen({ route }: StaticScreenProps<PullRequestParams>) {
