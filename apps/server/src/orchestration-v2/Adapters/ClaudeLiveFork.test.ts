@@ -3,6 +3,7 @@ import { assert, it } from "@effect/vitest";
 import * as DateTime from "effect/DateTime";
 import * as Effect from "effect/Effect";
 import * as Queue from "effect/Queue";
+import { CLAUDE_PROVIDER } from "./ClaudeAdapterV2.ts";
 import { layerClaudeAdapterTest } from "./ClaudeAdapterTestLayer.testkit.ts";
 import { makeClaudeTestTurnInput } from "./ClaudeTestInput.testkit.ts";
 import { makeAssistantTextFrame, makeResultFrame } from "./ClaudeWakeFrames.testkit.ts";
@@ -49,7 +50,7 @@ it.effect("forks at the completed Claude boundary while a later turn streams and
         ...first.providerTurn,
         status: "completed" as const,
         nativeTurnRef: {
-          driver: first.providerTurn.driver,
+          driver: CLAUDE_PROVIDER,
           nativeId: cursor,
           strength: "weak" as const,
         },
@@ -79,4 +80,36 @@ it.effect("forks at the completed Claude boundary while a later turn streams and
       assert.equal((yield* Queue.take(harness.terminalReceipts)).status, "completed");
     }).pipe(Effect.provide(layerClaudeAdapterTest)),
   ),
+);
+
+it.effect(
+  "rejects a running Claude fork without a completed boundary and leaves the turn running",
+  () =>
+    Effect.scoped(
+      Effect.gen(function* () {
+        const harness = yield* makeWakeHarnessWithOptions();
+        yield* harness.runtime.startTurn(
+          makeClaudeTestTurnInput({
+            threadId: harness.threadId,
+            providerThread: harness.providerThread,
+            now: DateTime.makeUnsafe(0),
+            attemptId: RunAttemptId.make("fork-no-boundary"),
+            text: "Continue",
+            attachments: [],
+          }),
+        );
+        const result = yield* harness.runtime
+          .forkThread({
+            sourceProviderThread: harness.providerThread,
+            targetThreadId: ThreadId.make("fork-no-boundary-target"),
+          })
+          .pipe(Effect.result);
+        assert.equal(result._tag, "Failure");
+        yield* Queue.offer(
+          harness.sdkMessages,
+          makeResultFrame({ uuid: "00000000-0000-4000-8000-000000000655", result: "Finished" }),
+        );
+        assert.equal((yield* Queue.take(harness.terminalReceipts)).status, "completed");
+      }).pipe(Effect.provide(layerClaudeAdapterTest)),
+    ),
 );

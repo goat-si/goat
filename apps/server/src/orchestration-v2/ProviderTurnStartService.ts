@@ -1,3 +1,4 @@
+import { ensureSafeNativeFork } from "./goat/BusyForkSource.ts";
 import { makeInheritedBackgroundSelection } from "./goat/InheritedBackgroundSelection.ts";
 import { hasPendingHandoff, missingProviderSession } from "./goat/ProviderHandoffPending.ts";
 import {
@@ -12,8 +13,10 @@ import { nativeSessionMissesKeptTurns } from "./goat/NativeSessionKeptTurns.ts";
 import { ProviderTurnStartError } from "./ProviderTurnStartTypes.ts";
 import type { ProviderTurnStartServiceV2Shape } from "./ProviderTurnStartTypes.ts";
 import * as Context from "effect/Context";
-export { ProviderTurnStartError } from "./ProviderTurnStartTypes.ts";
-export type { ProviderTurnStartServiceV2Shape } from "./ProviderTurnStartTypes.ts";
+export {
+  ProviderTurnStartError,
+  type ProviderTurnStartServiceV2Shape,
+} from "./ProviderTurnStartTypes.ts";
 import { makeProviderRunControls } from "./goat/ProviderRunControls.ts";
 import { restartRequiredIn } from "./ProviderSessionRetirement.ts";
 import { startsNoModelTurn } from "./goat/TurnModelGate.ts";
@@ -773,16 +776,20 @@ export const layer: Layer.Layer<
             });
           }
           const forked = yield* Effect.result(
-            session.forkThread({
-              sourceProviderThread,
-              sourceProviderTurns: nativeForkTurns(sourceProjection),
-              targetThreadId: projection.thread.id,
-              modelSelection: run.modelSelection,
-              runtimePolicy: resolvedRuntimePolicy,
-              ...(sourceProviderTurn === undefined
-                ? {}
-                : { providerTurnId: sourceProviderTurn.id }),
-            }),
+            ensureSafeNativeFork(sourceProjection, sourceRun, session, sourceProviderThread).pipe(
+              Effect.andThen(
+                session.forkThread({
+                  sourceProviderThread,
+                  sourceProviderTurns: nativeForkTurns(sourceProjection),
+                  targetThreadId: projection.thread.id,
+                  modelSelection: run.modelSelection,
+                  runtimePolicy: resolvedRuntimePolicy,
+                  ...(sourceProviderTurn === undefined
+                    ? {}
+                    : { providerTurnId: sourceProviderTurn.id }),
+                }),
+              ),
+            ),
           );
           if (forked._tag === "Success") return forked.success;
           if (input.willRetry === true) return yield* forked.failure;

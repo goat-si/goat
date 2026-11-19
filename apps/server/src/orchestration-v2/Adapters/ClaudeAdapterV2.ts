@@ -10624,7 +10624,6 @@ export const makeClaudeAdapterV2 = Effect.fn("makeClaudeAdapterV2")(function* (
                     "Cannot fork a running Claude session without a completed boundary cursor.",
                 });
               }
-              if (currentTurn === null) yield* closeLiveQueryForNativeThread(sourceNativeThreadId);
               // A moved project still has its transcript under the original cwd.
               // Let the SDK find the session by ID within this Claude home.
               const forkOptions: ForkSessionOptions =

@@ -1,3 +1,4 @@
+import { sourceHasActiveRun } from "./goat/BusyForkSource.ts";
 import { makeNotificationTasks } from "./goat/NotificationTasks.ts";
 import type { AtomicLaunchReceipt } from "./AtomicLaunchReceipt.ts";
 import { makeReadHandoffItems, makeReadSwitchItems } from "./ForkHistoryReader.ts";
@@ -6670,6 +6671,7 @@ const makeOrchestrator = Effect.fn("orchestrationV2.Orchestrator.layer")(functio
                 pendingForkTransfer.sourceProviderInstanceId === modelSelection.instanceId,
               hasStrongNativeSource: sourceProviderThread?.nativeThreadRef?.strength === "strong",
               sourceRunStatus: sourceRun.status,
+              sourceBusy: sourceProjection !== null && sourceHasActiveRun(sourceProjection.runs),
               fromSpecificTurn: sourceRun !== null,
               crossWorkspace: pendingForkTransfer.crossWorkspace === true,
             }),
