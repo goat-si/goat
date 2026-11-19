@@ -707,7 +707,6 @@ export default function ChatView(props: ChatViewProps) {
   const getTimelineScrollableNode = () => legendListRef.current?.getScrollableNode() ?? null;
   const getTimelineScrollableNodeStable = useStableCallback(getTimelineScrollableNode);
   const conversationArea = workspaceAreaProps("conversation", 1, "Conversation");
-  const composerArea = workspaceAreaProps("composer", 2, "Message input");
   const [composerOverlayElement, setComposerOverlayElement] = useState<HTMLDivElement | null>(null);
   const [composerTimelineInset, setComposerTimelineInset] = useState(0);
   const composerTimelineInsetRef = useRef(0);
@@ -1849,6 +1848,7 @@ export default function ChatView(props: ChatViewProps) {
   // composer and its strips. Its approvals and questions are asked on the
   // top-level parent thread.
   const showProviderSubagentBar = isProviderSubagent;
+  const composerArea = workspaceAreaProps("composer", 2, isProviderSubagent ? "Subagent" : "");
   const composerMounted = !showProviderSubagentBar;
   const providerSubagentModels = selectedProviderEntry?.models ?? EMPTY_PROVIDER_MODELS;
   // Providers can report dated model ids or aliases.
