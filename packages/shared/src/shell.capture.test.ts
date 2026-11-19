@@ -1,3 +1,4 @@
+// @effect-diagnostics nodeBuiltinImport:off -- Runs a real shell with an isolated environment.
 import * as NodeChildProcess from "node:child_process";
 import * as NodeFS from "node:fs";
 import * as NodeOS from "node:os";

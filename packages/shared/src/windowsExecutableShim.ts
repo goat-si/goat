@@ -1,3 +1,4 @@
+// @effect-diagnostics nodeBuiltinImport:off -- Synchronous executable discovery is shared with shell resolution.
 import * as NodeFS from "node:fs";
 import * as NodePath from "node:path";
 import { GIT_FOR_WINDOWS_BUILDS } from "./gitWindowsReads.ts";
