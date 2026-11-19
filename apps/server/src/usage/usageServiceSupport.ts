@@ -137,6 +137,48 @@ export interface ScannedDir {
   readonly refreshing?: true;
 }
 
+const sourceRank = { ok: 0, partial: 1, failed: 2, missing: 3 } satisfies Record<
+  UsageSource["status"],
+  number
+>;
+
+export function resolveSourceOwners(
+  sources: readonly ScannedDir[],
+  filesByDir: readonly NonNullable<ScannedDir["files"]>[],
+) {
+  const owners = new Map<string, { index: number; status: UsageSource["status"] }>();
+  const scans = sources.map((source, index) => {
+    const files = filesByDir[index] ?? [];
+    let scannedFiles = 0;
+    let malformedRecords = 0;
+    for (const file of files) {
+      if (file.records.length > 0) scannedFiles++;
+      malformedRecords += file.malformedRecords;
+    }
+    const status =
+      source.files === null && scannedFiles === 0
+        ? "missing"
+        : malformedRecords > 0 && (source.status === undefined || source.status === "ok")
+          ? "partial"
+          : (source.status ?? "ok");
+    const key =
+      source.physicalSourceId === undefined
+        ? undefined
+        : `${source.provider}\0${source.physicalSourceId}`;
+    if (key !== undefined) {
+      const owner = owners.get(key);
+      if (owner === undefined || sourceRank[status] < sourceRank[owner.status]) {
+        owners.set(key, { index, status });
+      }
+    }
+    return { source, files, status, scannedFiles, malformedRecords, key };
+  });
+  return scans.map(({ key, ...scan }, index) => ({
+    ...scan,
+    ownerIndex: (key === undefined ? undefined : owners.get(key)?.index) ?? index,
+  }));
+}
+
 export const resolveUsageHostId = Effect.gen(function* () {
   const fileSystem = yield* FileSystem.FileSystem;
   const path = yield* Path.Path;

@@ -1,3 +1,4 @@
+import { registerPhysicalSourceTests } from "./usagePhysicalSource.testkit.ts";
 import { registerUsageRetentionTests } from "./usageRetention.testkit.ts";
 import { registerRateAliasTests } from "./usageRateAliases.testkit.ts";
 import { seedCodexHistory } from "./codexUsageHistory.testkit.ts";
@@ -370,6 +371,7 @@ describe("UsageService", () => {
   );
 
   registerCompressedRolloutTest(setup, layerService);
+  registerPhysicalSourceTests(setup, layerService, claudeLine);
   registerUsageRetentionTests(setup, layerService, claudeLine);
   registerRateAliasTests(setup, layerService, claudeLine);
 

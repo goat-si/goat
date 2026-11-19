@@ -69,6 +69,7 @@ import {
   makeSupersededCacheRemover,
   makeUsageInstances,
   providerRateModel,
+  resolveSourceOwners,
   resolveUsageHostId,
   type ScannedDir,
   scanReaders,
@@ -607,7 +608,6 @@ export const make = Effect.gen(function* () {
 
     const priceOverrides = createOverrideRateTable(settings.usagePriceOverrides);
     const modelAliases = resolveModelAliases(settings.usageModelAliases);
-    const sources: UsageSource[] = [];
 
     // Deleted transcripts' saved usage still aggregates and deduplicates normally.
     const retainedSinceMs = Math.max(windowStartMs, retentionCutoffMs);
@@ -761,36 +761,12 @@ export const make = Effect.gen(function* () {
     }
     const crossFileSessions = sharedSessions(filesByDir.flat());
 
-    for (const [
-      index,
-      {
-        provider,
-        dir,
-        volumeId,
-        physicalSourceId,
-        files,
-        status,
-        message,
-        action,
-        refreshing,
-        hostId: sourceHostId,
-      },
-    ] of scannedDirs.entries()) {
-      let scannedFiles = 0;
-      let skippedFiles = 0;
-      let malformedRecords = 0;
-      // Distinct per directory. Buckets carry per-cell session counts, but a
-      // session spans days and models, so clients total this figure instead.
-      const sessionIds = new Set<string>();
-      let counted = false;
-
-      for (const file of filesByDir[index] ?? []) {
-        malformedRecords += file.malformedRecords;
-        if (file.records.length === 0) {
-          skippedFiles += 1;
-          continue;
-        }
-        scannedFiles += 1;
+    const scans = resolveSourceOwners(scannedDirs, filesByDir);
+    const counted = new Set<number>();
+    const sessions = new Map<number, Set<string>>();
+    for (const { source, files, ownerIndex } of scans) {
+      const ownerPath = scannedDirs[ownerIndex]?.dir ?? source.dir;
+      for (const file of files) {
         const eventOccurrences = new Map<string, number>();
         for (const rawRecord of file.records) {
           const record = correctedRecord(rawRecord);
@@ -811,49 +787,57 @@ export const make = Effect.gen(function* () {
             eventOccurrences.set(key, occurrence);
             usageRecord = { ...record, dedupeKey: key + ":" + occurrence };
           }
-          if (aggregator.add(usageRecord, dir)) {
-            counted = true;
-            if (record.sessionId.length > 0) sessionIds.add(record.sessionId);
+          if (!aggregator.add(usageRecord, ownerPath)) continue;
+          counted.add(ownerIndex);
+          if (record.sessionId.length > 0) {
+            const ids = sessions.get(ownerIndex) ?? new Set<string>();
+            ids.add(record.sessionId);
+            sessions.set(ownerIndex, ids);
           }
         }
       }
-
-      const sourceMessage =
-        message ?? (files === null ? "No transcript directory on this environment." : null);
-      sources.push({
-        fingerprint: {
-          hostId: sourceHostId ?? hostId,
-          provider,
-          resolvedHomePath: dir,
-          volumeId,
-          ...(physicalSourceId === undefined ? {} : { physicalSourceId }),
-        },
-        status:
-          files === null && scannedFiles === 0
-            ? "missing"
-            : malformedRecords > 0
-              ? status === undefined || status === "ok"
-                ? "partial"
-                : status
-              : (status ?? "ok"),
-        scannedFiles,
-        skippedFiles,
-        malformedRecords,
-        distinctSessions: sessionIds.size,
-        message:
-          malformedRecords > 0
-            ? [sourceMessage, formatMalformedUsageWarning(malformedRecords)]
-                .filter(Boolean)
-                .join(" ")
-            : sourceMessage,
-        ...(action ? { action } : {}),
-        // A saved answer misses what changed since its scan, so the client must ask again. An
-        // empty source stays unmarked: it would only flash a loading row.
-        ...(refreshing || (fromMemory && counted && transcriptFormats.has(provider))
-          ? { refreshing: true }
-          : {}),
-      });
     }
+
+    const sources = scans.map(
+      ({ source, files, status, scannedFiles, malformedRecords }, index): UsageSource => {
+        const {
+          provider,
+          dir,
+          volumeId,
+          physicalSourceId,
+          action,
+          refreshing,
+          hostId: sourceHostId,
+        } = source;
+        const sourceMessage =
+          source.message ??
+          (source.files === null ? "No transcript directory on this environment." : null);
+        return {
+          fingerprint: {
+            hostId: sourceHostId ?? hostId,
+            provider,
+            resolvedHomePath: dir,
+            volumeId,
+            ...(physicalSourceId === undefined ? {} : { physicalSourceId }),
+          },
+          status,
+          scannedFiles,
+          skippedFiles: files.length - scannedFiles,
+          malformedRecords,
+          distinctSessions: sessions.get(index)?.size ?? 0,
+          message:
+            malformedRecords > 0
+              ? [sourceMessage, formatMalformedUsageWarning(malformedRecords)]
+                  .filter(Boolean)
+                  .join(" ")
+              : sourceMessage,
+          ...(action ? { action } : {}),
+          ...(refreshing || (fromMemory && counted.has(index) && transcriptFormats.has(provider))
+            ? { refreshing: true }
+            : {}),
+        };
+      },
+    );
 
     if (fileCache.values().some((entry) => entry.mtimeMs < retentionCutoffMs)) {
       yield* settingsService
