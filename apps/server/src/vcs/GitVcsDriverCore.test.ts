@@ -2043,6 +2043,7 @@ it.layer(layerTest)("GitVcsDriver core integration", (it) => {
             previousPath: null,
             additions: 1,
             deletions: 0,
+            changeType: "new",
           });
         }
       }),
@@ -2232,8 +2233,14 @@ it.layer(layerTest)("GitVcsDriver core integration", (it) => {
         assert.strictEqual(changes.diff.match(/^diff --git a\/README\.md /gm)?.length, 1);
         assert.include(changes.diff, "+dirty");
         assert.deepStrictEqual(sourceFiles(dirty, "working-tree"), [
-          { path: "README.md", previousPath: null, additions: 1, deletions: 0 },
-          { path: "new.txt", previousPath: null, additions: 1, deletions: 0 },
+          {
+            path: "README.md",
+            previousPath: null,
+            additions: 1,
+            deletions: 0,
+            changeType: "change",
+          },
+          { path: "new.txt", previousPath: null, additions: 1, deletions: 0, changeType: "new" },
         ]);
       }),
     );
