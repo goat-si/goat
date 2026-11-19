@@ -1,3 +1,4 @@
+import { GlobalVoiceRecording } from "../speech/GlobalVoiceRecording";
 import { Outlet, createFileRoute, redirect } from "@tanstack/react-router";
 
 import { ThreadRouteView } from "../components/ThreadRouteView";
@@ -19,6 +20,7 @@ function ChatRouteLayout() {
     shownTarget?.kind === "server" ? shownTarget.threadRef.environmentId : primaryEnvironmentId;
   return (
     <>
+      <GlobalVoiceRecording />
       <PreviewSessionStack
         environmentId={sessionsEnvironmentId}
         threadRef={shownTarget?.kind === "server" ? shownTarget.threadRef : null}
