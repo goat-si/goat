@@ -219,7 +219,16 @@ export function VoiceModelDialog(props: {
             search,
             installedOnly,
             sort === "speed-cpu" || sort === "speed-gpu" ? "speed" : sort,
-            sort === "speed-cpu" ? "cpu" : sort === "speed-gpu" ? "accelerated" : undefined,
+            sort === "speed-cpu"
+              ? "cpu"
+              : sort === "speed-gpu"
+                ? "accelerated"
+                : config?.acceleration === "cpu"
+                  ? "cpu"
+                  : config?.acceleration.startsWith("gpu:")
+                    ? "accelerated"
+                    : undefined,
+            new Intl.DateTimeFormat().resolvedOptions().locale.split("-")[0],
           ).map((model) => (
             <div key={model.id} className="flex items-center justify-between gap-3 py-2">
               <div>

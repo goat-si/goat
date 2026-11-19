@@ -178,6 +178,10 @@ import Migration0163 from "./Migrations/163_MemoryCompactMoveReceipts.ts";
 import Migration0164 from "./Migrations/164_MemoryOriginCatchup.ts";
 import Migration0165 from "./Migrations/165_MemorySuggestionQuota.ts";
 import Migration0166 from "./Migrations/166_ScheduledTaskFirstBindIntent.ts";
+import Migration0167 from "./Migrations/167_QueuedTurnInputIndexJsonValid.ts";
+import Migration0168 from "./Migrations/168_TurnItemMessageOrdinalIndex.ts";
+import Migration0169 from "./Migrations/169_TurnItemInlineWorkOutput.ts";
+import Migration0170 from "./Migrations/170_RepairStaleTitleRegeneration.ts";
 import Migration0131 from "./Migrations/131_NotificationCursorRepair.ts";
 import Migration0133 from "./Migrations/133_McpEvalJournal.ts";
 import Migration0134 from "./Migrations/134_DecisionRoutes.ts";
@@ -354,6 +358,10 @@ export const migrationEntries = [
   [164, "MemoryOriginCatchup", Migration0164],
   [165, "MemorySuggestionQuota", Migration0165],
   [166, "ScheduledTaskFirstBindIntent", Migration0166],
+  [167, "QueuedTurnInputIndexJsonValid", Migration0167],
+  [168, "TurnItemMessageOrdinalIndex", Migration0168],
+  [169, "TurnItemInlineWorkOutput", Migration0169],
+  [170, "RepairStaleTitleRegeneration", Migration0170],
 ] as const;
 
 export const migrationManifest = migrationEntries.map(([id, name]) => [id, name] as const);
@@ -451,10 +459,10 @@ export const runMigrations = Effect.fn("runMigrations")(function* ({
     toMigrationInclusive === undefined || toMigrationInclusive >= FIRST_V2_MIGRATION_ID;
   const executedMigrations = yield* Effect.gen(function* () {
     yield* assertMemoryMigrationsCompatible(migrationEntries);
-    const previewMigrations = includesV2 ? yield* reconcileV2PreviewMigration() : [];
+    const previewMigrations = includesV2 && announced ? yield* reconcileV2PreviewMigration() : [];
     // GOAT ledgers move before the V2 check, which would otherwise read GOAT's
     // old ids as upstream migrations the migrator skips.
-    const goatMigrations = yield* reconcileGoatMigrationIds(migrationEntries);
+    const goatMigrations = announced ? yield* reconcileGoatMigrationIds(migrationEntries) : [];
     if (includesV2) {
       yield* assertV2MigrationsCanRun(toMigrationInclusive);
     }

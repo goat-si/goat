@@ -13,3 +13,15 @@ export function encodeTurnItemPayload(item: OrchestrationV2TurnItem) {
   // Keep the marker in the projection JSON object, outside the event and wire schemas.
   return encoded.pipe(Effect.map((json) => json.slice(0, -1) + SENT_MESSAGE_MARKER));
 }
+
+export function isInlineWorkOutput(payloadJson: string): boolean {
+  const payload = payloadJson.toLowerCase();
+  return (
+    payload.includes("htmlrender") ||
+    payload.includes("goatmcpapp") ||
+    payload.includes("t3mcpapp") ||
+    payload.includes('"viewedimagepath"') ||
+    /"toolname":"[\s\S]*delegate.task"/i.test(payloadJson) ||
+    payload.endsWith(SENT_MESSAGE_MARKER.toLowerCase())
+  );
+}
