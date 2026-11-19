@@ -2,6 +2,11 @@ import { describe, expect, it } from "vite-plus/test";
 import { applyPullRequestDraftFilterChange, parsePullRequestQuery } from "./pullRequestQuery.ts";
 
 describe("reading qualifiers out of a typed query", () => {
+  it("limits free text after extracting qualifiers", () => {
+    const parsed = parsePullRequestQuery(`label:bug ${"fix ".repeat(80)}`);
+    expect(parsed.text).toBe("fix ".repeat(50).trim());
+    expect(parsed.filters.labels).toEqual([["bug"]]);
+  });
   it("keeps inherited qualifier names in search text", () => {
     expect(parsePullRequestQuery("review:constructor checks:__proto__ Status:toString")).toEqual({
       text: "review:constructor checks:__proto__ Status:toString",
