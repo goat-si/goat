@@ -135,6 +135,7 @@ import { makeFolderReplacedNotifier } from "./folderReplacedTerminals.ts";
 import { enqueueProcessEvent } from "./processEventQueue.ts";
 import { normalizeChildCommandName } from "./childCommandName.ts";
 import { retainedAttachListener as retained } from "./retainedAttachHistory.ts";
+import { toSessionKey } from "./terminalSessionKey.ts";
 
 export {
   TerminalCwdError,
@@ -669,10 +670,6 @@ const windowsProcessTableSnapshot = Effect.fn("terminal.windowsProcessTableSnaps
   });
   return processTableSnapshotFromProcesses(processes);
 });
-
-function toSessionKey(threadId: string, terminalId: string): string {
-  return `${threadId}\u0000${terminalId}`;
-}
 
 interface TerminalManagerOptions {
   logsDir: string;
