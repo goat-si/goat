@@ -1,3 +1,4 @@
+import { liveToolActivitySummary } from "./threadLiveToolSummary";
 import { LIVE_ACTIVITY_ROW_ID, thinkingRow } from "./threadThinkingRow";
 export { LIVE_ACTIVITY_ROW_ID } from "./threadThinkingRow";
 import { itemIcon } from "./threadActivityIcons";
@@ -14,7 +15,10 @@ import type {
 import { turnItemIsWorkspacePreparation } from "@goat/client-runtime/state/turn-item-presentation";
 import type { ThreadCheckpointSummary } from "@goat/client-runtime/state/thread-checkpoints";
 import { formatSubagentDisplayTitle } from "@goat/client-runtime/state/subagent-display";
-import { isLiveSubagentTurnItem } from "@goat/client-runtime/state/subagentRuntime";
+import {
+  isLiveSubagentTurnItem,
+  waitingOnSubagentsLabel,
+} from "@goat/client-runtime/state/subagentRuntime";
 import { extractToolActivityPresentation } from "@goat/client-runtime/work-log/tool-presentation";
 import { providerErrorPresentation } from "@goat/client-runtime/work-log/provider-error";
 import { fileChangeGroupLineCounts } from "@goat/client-runtime/work-log/line-counts";
@@ -23,21 +27,17 @@ import {
   turnItemHasDetail,
   turnItemNeedsDetailFetch,
 } from "@goat/client-runtime/work-log/item-detail";
-import { commandProgramName } from "@goat/client-runtime/work-log/command-label";
 import {
-  commandVerb,
   contextCompactionLabel,
   formatCommandActionsLabel,
   liveThoughtLine,
   toolItemForDisplay,
   workEntryDisplayIndicatesToolFailure,
-  liveActivityToolStatus,
   toolGroupAction,
   resolveWorkEntryToolPresentation,
   summarizeToolGroup,
   toolGroupSummaryKind,
   workEntriesViewedImagePaths,
-  workEntryCommandActions,
   type WorkLogPresentationEntry,
   type WorkLogToolLifecycleStatus,
 } from "@goat/client-runtime/work-log/presentation";
@@ -1237,7 +1237,13 @@ export function deriveThreadFeedPresentation(
           row.activities[0]?.projectedItem.item.status === "running"),
     )
   ) {
-    const preview = zen ? (liveAnswerPreview(feed) ?? undefined) : undefined;
+    const waitingOn = activeRunId === null ? 0 : runningSubagentsAtRunTail(feed, activeRunId);
+    const preview =
+      waitingOn > 0
+        ? waitingOnSubagentsLabel(waitingOn)
+        : zen
+          ? (liveAnswerPreview(feed) ?? undefined)
+          : undefined;
     result.push(
       thinkingRow(activeWorkStartedAt, activeRunId, latestRun?.providerStartingLabel ?? preview),
     );
@@ -1324,6 +1330,18 @@ export function deriveThreadFeedPresentation(
 }
 
 const continuedWorkLogRows = new WeakMap<ThreadFeedEntry, ThreadFeedEntry>();
+
+function runningSubagentsAtRunTail(feed: ReadonlyArray<ThreadFeedEntry>, runId: RunId): number {
+  let running = 0;
+  for (let index = feed.length - 1; index >= 0; index -= 1) {
+    const entry = feed[index];
+    if (!entry || entry.type !== "activity-group" || entry.runId !== runId) break;
+    const items = entry.activities.map((activity) => activity.projectedItem.item);
+    if (items.some((item) => item.type !== "subagent")) break;
+    running += items.filter(isLiveSubagentTurnItem).length;
+  }
+  return running;
+}
 
 function isWorkLogFeedRow(row: ThreadFeedEntry | undefined): boolean {
   return (
@@ -1589,32 +1607,6 @@ function appendToolGroupRows(
         activity.runId === activeRunId,
     })),
   });
-}
-
-function liveToolActivitySummary(activity: ThreadFeedActivity, presentTense: boolean): string {
-  const status = liveActivityToolStatus(activity.lifecycleStatus, presentTense);
-  if (activity.workEntry.itemType === "reasoning") {
-    return compactWorkEntryText(
-      activity.workEntry.detail?.trim() || (status === "inProgress" ? "Thinking" : "Thought"),
-    );
-  }
-  const presentation = resolveWorkEntryToolPresentation({
-    ...activity.workEntry,
-    toolLifecycleStatus: status,
-  });
-  if (presentation) return presentation.displayName;
-  const commandActions = workEntryCommandActions(activity.workEntry);
-  if (commandActions) {
-    return formatCommandActionsLabel(commandActions, {
-      active: status === "inProgress",
-      formatPath: compactCommandActionPath,
-    });
-  }
-  const command = activity.workEntry.command?.trim();
-  if (command) {
-    return `${commandVerb(status)} ${commandProgramName(command) ?? "command"}`;
-  }
-  return compactWorkEntryText(activity.detail ?? activity.summary);
 }
 
 export function setPendingUserInputCustomAnswer(

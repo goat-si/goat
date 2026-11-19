@@ -99,6 +99,16 @@ export function PendingUserInputCard(props: PendingUserInputCardProps) {
   }));
   const overlayHeightStyle = useAnimatedStyle(() => ({ height: maxHeight.value }));
 
+  const stopButton = props.onStopThread ? (
+    <ControlPill
+      accessibilityLabel="Stop"
+      icon="stop.fill"
+      variant="danger"
+      className="h-[44px] w-[44px]"
+      disabled={!props.canOperateThread}
+      onPress={props.onStopThread}
+    />
+  ) : null;
   const bar = (
     <View
       onLayout={handleBarLayout}
@@ -135,16 +145,7 @@ export function PendingUserInputCard(props: PendingUserInputCardProps) {
           type="monochrome"
         />
       </Pressable>
-      {props.onStopThread ? (
-        <ControlPill
-          accessibilityLabel="Stop"
-          icon="stop.fill"
-          variant="danger"
-          className="h-[44px] w-[44px]"
-          disabled={!props.canOperateThread}
-          onPress={props.onStopThread}
-        />
-      ) : null}
+      {stopButton}
     </View>
   );
   const card = (
@@ -156,37 +157,40 @@ export function PendingUserInputCard(props: PendingUserInputCardProps) {
       className="overflow-hidden gap-3 rounded-[20px] border border-border bg-card-alt p-4"
       style={cardAnimatedStyle}
     >
-      <Pressable
-        accessibilityRole="button"
-        accessibilityLabel="Collapse user input"
-        onPress={props.onToggleCollapsed}
-        className="flex-row items-start gap-2"
-      >
-        <View className="flex-1 gap-1.5">
-          <View className="flex-row items-center gap-1.5">
-            <SymbolView
-              name="questionmark.bubble"
-              size={13}
-              tintColorClassName="accent-foreground-secondary"
-              type="monochrome"
-            />
-            <Text className="font-goat-medium text-xs text-foreground-secondary">
-              User input needed
+      <View className="flex-row items-start gap-2">
+        <Pressable
+          accessibilityRole="button"
+          accessibilityLabel="Collapse user input"
+          onPress={props.onToggleCollapsed}
+          className="flex-1 flex-row items-start gap-2"
+        >
+          <View className="flex-1 gap-1.5">
+            <View className="flex-row items-center gap-1.5">
+              <SymbolView
+                name="questionmark.bubble"
+                size={13}
+                tintColorClassName="accent-foreground-secondary"
+                type="monochrome"
+              />
+              <Text className="font-goat-medium text-xs text-foreground-secondary">
+                User input needed
+              </Text>
+            </View>
+            <Text className="font-goat-bold text-lg text-foreground">
+              Fill in the pending answers
             </Text>
           </View>
-          <Text className="font-goat-bold text-lg text-foreground">
-            Fill in the pending answers
-          </Text>
-        </View>
-        <View className="h-8 w-8 items-center justify-center rounded-full bg-subtle-strong">
-          <SymbolView
-            name="chevron.down"
-            size={13}
-            tintColorClassName={"accent-icon-subtle"}
-            type="monochrome"
-          />
-        </View>
-      </Pressable>
+          <View className="h-8 w-8 items-center justify-center rounded-full bg-subtle-strong">
+            <SymbolView
+              name="chevron.down"
+              size={13}
+              tintColorClassName={"accent-icon-subtle"}
+              type="monochrome"
+            />
+          </View>
+        </Pressable>
+        {stopButton}
+      </View>
       <ScrollView
         bounces={false}
         className="min-h-0"

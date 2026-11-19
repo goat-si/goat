@@ -434,7 +434,7 @@ export function ThinkingTimelineRow({ row }: { row: Extract<TimelineRow, { kind:
   if (isPreparingWorktree || isCompacting) return <WorkLogRow label="" />;
   const activity = (
     <LiveActivityRow
-      label={providerStartingLabel ?? liveAnswerPreview ?? "Thinking"}
+      label={providerStartingLabel ?? row.label ?? liveAnswerPreview ?? "Thinking"}
       iconName="brain"
       active
       shimmer

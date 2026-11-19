@@ -596,7 +596,7 @@ export default async function goatMcpExtension(pi: ExtensionAPI) {
   // it keeps the name, and cannot discover deferred tools either.
   const hasBuiltinToolSearch = () =>
     typeof pi.getAllTools === "function" &&
-    pi.getAllTools().some((tool) => tool.name === "tool_search" && tool.sourceInfo?.path === "builtin:tool-search");
+    pi.getAllTools().some((tool) => tool.name === "tool_search" && (tool.sourceInfo?.path === "builtin:tool-search" || tool.sourceInfo?.path === "<builtin:tool-search>"));
 
   const readOnlyMcpTools = new Set<string>();
   const ownsTool = (name: string) => {

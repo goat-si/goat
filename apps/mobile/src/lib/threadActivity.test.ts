@@ -34,9 +34,16 @@ import {
 } from "./threadActivity";
 import { relativizeWorkLabelPaths, workEntryRowLabel } from "./workEntryRowLabel";
 
-const threadId = ThreadId.make("thread-1");
-const sourceThreadId = ThreadId.make("thread-source");
-const runId = RunId.make("run-1");
+import {
+  base,
+  projected,
+  userMessage,
+  command,
+  assistantMessage,
+  threadId,
+  sourceThreadId,
+  runId,
+} from "./threadActivity.testkit";
 
 it("shows a captured MCP app for a failed deferred write", () => {
   const mcpApp = {
@@ -325,73 +332,6 @@ it("binds a persisted resume answer only to the next compaction in its run", () 
     expect(labels.get(compactRows[1]!.id)).toBeUndefined();
   }
 });
-
-function base(id: string, updatedAt: string, ordinal: number) {
-  const timestamp = DateTime.makeUnsafe(updatedAt);
-  return {
-    id: TurnItemId.make(id),
-    threadId,
-    runId,
-    nodeId: null,
-    providerThreadId: null,
-    providerTurnId: null,
-    nativeItemRef: null,
-    parentItemId: null,
-    ordinal,
-    status: "completed" as const,
-    title: null,
-    startedAt: timestamp,
-    completedAt: timestamp,
-    updatedAt: timestamp,
-  };
-}
-
-function projected(
-  item: OrchestrationV2TurnItem,
-  position: number,
-  visibility: OrchestrationV2ProjectedTurnItem["visibility"] = "local",
-): OrchestrationV2ProjectedTurnItem {
-  return {
-    position,
-    visibility,
-    sourceThreadId: visibility === "local" ? threadId : sourceThreadId,
-    sourceItemId: item.id,
-    item,
-  };
-}
-
-function userMessage(updatedAt = "2026-06-20T00:00:01.000Z") {
-  return {
-    ...base("item-user", updatedAt, 0),
-    type: "user_message" as const,
-    messageId: MessageId.make("message-user"),
-    createdBy: "user" as const,
-    creationSource: "mobile" as const,
-    inputIntent: "turn_start" as const,
-    text: "Run checks",
-    attachments: [],
-  };
-}
-
-function command(updatedAt = "2026-06-20T00:00:02.000Z") {
-  return {
-    ...base("item-command", updatedAt, 1),
-    type: "command_execution" as const,
-    input: "vp check",
-    output: "ok",
-    exitCode: 0,
-  };
-}
-
-function assistantMessage(updatedAt = "2026-06-20T00:00:03.000Z") {
-  return {
-    ...base("item-assistant", updatedAt, 2),
-    type: "assistant_message" as const,
-    messageId: MessageId.make("message-assistant"),
-    text: "Done",
-    streaming: false,
-  };
-}
 
 describe("buildThreadFeed", () => {
   it("keeps async answers in question history instead of user bubbles", () => {
@@ -2145,4 +2085,38 @@ it("caps live thought previews while preserving reasoning detail", () => {
   expect(activity.detail).toBe(text);
   expect(JSON.parse(activity.getFullDetail()!).item).toMatchObject({ text });
   expect(activity.getCopyText()).toContain(text);
+});
+
+it("names running subagents at the unfiltered run tail and stops after later parent work", () => {
+  const startedAt = "2026-06-20T00:00:01.000Z";
+  const child: OrchestrationV2TurnItem = {
+    ...base("waiting-child", "2026-06-20T00:00:03.000Z", 2),
+    status: "running",
+    completedAt: null,
+    type: "subagent",
+    subagentId: NodeId.make("waiting-child"),
+    origin: "app_owned",
+    driver: ProviderDriverKind.make("codex"),
+    providerInstanceId: ProviderInstanceId.make("codex"),
+    childThreadId: sourceThreadId,
+    prompt: "Inspect",
+    result: null,
+  };
+  const latest = { runId, status: "running" as const, startedAt, completedAt: null };
+  const present = (items: OrchestrationV2TurnItem[]) =>
+    deriveThreadFeedPresentation(
+      buildThreadFeed(items.map((item, index) => projected(item, index))),
+      latest,
+      new Set(),
+      new Set(),
+      startedAt,
+    );
+  expect(present([userMessage(), child]).find((row) => row.type === "thinking")).toMatchObject({
+    providerStartingLabel: "Waiting on a subagent",
+  });
+  expect(
+    present([userMessage(), child, command("2026-06-20T00:00:04.000Z")]).some(
+      (row) => row.type === "thinking" && row.providerStartingLabel === "Waiting on a subagent",
+    ),
+  ).toBe(false);
 });

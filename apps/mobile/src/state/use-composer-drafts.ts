@@ -45,7 +45,7 @@ import {
 } from "@goat/shared/composerContextReferences";
 import { imageMimeType } from "@goat/shared/image";
 import { videoMimeType } from "@goat/shared/video";
-import { DraftComposerAttachmentSchema } from "../lib/composer-image-schema";
+import * as ShareIds from "../lib/composer-image-schema";
 import {
   composerAttachmentFileReferenceKey,
   isComposerAttachmentFileRetained,
@@ -385,7 +385,7 @@ const PersistedComposerContextSchema = Schema.Struct({
 const ComposerDraftSchema = Schema.Struct({
   text: Schema.String,
   context: Schema.optional(PersistedComposerContextSchema),
-  attachments: Schema.Array(DraftComposerAttachmentSchema),
+  attachments: Schema.Array(ShareIds.DraftComposerAttachmentSchema),
   importedShareIds: Schema.optional(Schema.Array(Schema.String)),
   modelSelection: Schema.optional(ModelSelectionSchema),
   runtimeMode: Schema.optional(RuntimeModeSchema),
@@ -616,7 +616,7 @@ export function decodePersistedComposerState(value: unknown): {
   readonly modelOptionMemory: ModelOptionMemoryState;
   readonly cloudDrafts: ComposerCloudDraftState;
 } {
-  const parsed = decodePersistedComposerDraftsDocument(value);
+  const parsed = decodePersistedComposerDraftsDocument(ShareIds.normalizeDocument(value));
   const now = new Date().toISOString();
   return {
     drafts: Object.fromEntries(
@@ -1595,12 +1595,12 @@ export function mergeComposerDraftContentState(
   if (content.sourceShareId && existing.importedShareIds?.includes(content.sourceShareId)) {
     return current;
   }
-  const attachmentIds = new Set(existing.attachments.map((attachment) => attachment.id));
+  const attachmentIds = new Set(existing.attachments.map(ShareIds.attachmentId));
   const incomingAttachments = content.attachments.filter((attachment) => {
-    if (attachmentIds.has(attachment.id)) {
+    if (attachmentIds.has(ShareIds.attachmentId(attachment))) {
       return false;
     }
-    attachmentIds.add(attachment.id);
+    attachmentIds.add(ShareIds.attachmentId(attachment));
     return true;
   });
   const attachments = [...existing.attachments, ...incomingAttachments].slice(

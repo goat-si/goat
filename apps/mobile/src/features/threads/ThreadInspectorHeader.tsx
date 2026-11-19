@@ -13,6 +13,7 @@ export interface ThreadInspectorPresentation {
 export function ThreadInspectorHeader(
   props: ThreadInspectorPresentation & {
     readonly title: string;
+    readonly subtitle?: string;
     readonly environmentId: EnvironmentId | null;
     readonly threadId: ThreadId | null;
   },
@@ -22,6 +23,7 @@ export function ThreadInspectorHeader(
       <NativeStackScreenOptions options={{ headerShown: true, headerTransparent: true }} />
       <SheetHeader
         title={props.title}
+        subtitle={props.subtitle}
         onClose={props.onClose}
         accessibilityLabel="Close thread preview"
         trailing={

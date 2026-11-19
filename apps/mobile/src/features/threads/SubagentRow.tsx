@@ -22,6 +22,7 @@ import { resolveSubagentRowPresentation } from "./threadAgentsPresentation";
 
 type SubagentRowSubagent = Pick<
   OrchestrationV2Subagent,
+  | "remote"
   | "currentMemoryAccess"
   | "memoryGrantCeiling"
   | "threadId"
@@ -117,10 +118,11 @@ function SubagentMetadata(props: {
       acpRegistryAgentId: typeof agentId === "string" ? agentId.trim() || undefined : undefined,
     };
   });
-  const provider = providers.find(
-    (candidate) => candidate.instanceId === subagent.providerInstanceId,
-  );
+  const provider = subagent.remote
+    ? undefined
+    : providers.find((candidate) => candidate.instanceId === subagent.providerInstanceId);
   const showBadge = provider !== undefined && shouldShowInstanceBadge(provider, providers);
+  const driver = provider?.driver ?? (subagent.remote === undefined ? subagent.driver : undefined);
   const parent = useThreadShell(scopeThreadRef(environmentId, subagent.threadId))?.source;
   const child = useThreadShell(
     subagent.childThreadId === null ? null : scopeThreadRef(environmentId, subagent.childThreadId),
@@ -151,12 +153,10 @@ function SubagentMetadata(props: {
           accentColor={provider.accentColor}
           showBadge
         />
+      ) : driver === undefined ? (
+        <SymbolView name="person.2" size={11} tintColorClassName="accent-icon-muted" />
       ) : (
-        <ProviderIcon
-          provider={provider?.driver ?? subagent.driver}
-          iconUrl={provider?.iconUrl}
-          size={12}
-        />
+        <ProviderIcon provider={driver} iconUrl={provider?.iconUrl} size={12} />
       )}
       <Text className="min-w-0 shrink text-xs text-foreground-muted" numberOfLines={1}>
         {provider ? `${resolveProviderInstanceDisplayName(provider)} · ` : ""}

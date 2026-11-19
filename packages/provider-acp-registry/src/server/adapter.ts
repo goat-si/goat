@@ -275,6 +275,7 @@ export const makeAcpRegistryAdapterV2 = Effect.fn("makeAcpRegistryAdapterV2")(fu
       : {
           clientCapabilitiesMeta: copilotClientCapabilitiesMeta,
           registerExtensions: copilotRouting.registerExtensions,
+          releaseRuntime: copilotRouting.releaseRuntime,
           normalizeSessionUpdate: copilotRouting.normalizeSessionUpdate,
           extractSubagentUpdate: extractCopilotSubagentUpdate,
           restartRuntimeAfterPromptError: isCopilotLostSessionError,
