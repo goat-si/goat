@@ -159,6 +159,10 @@ export const makeMemoryOriginReplication = (
           AND json_type(i.identity_json,'$.origin') IS NULL AND ${settledCreation(sql, space, creation)}
           AND NOT EXISTS (SELECT 1 FROM memory_tombstones t WHERE t.space=o.space AND t.memory_id=o.memory_id)
           AND NOT EXISTS (SELECT 1 FROM memory_pending_forget_intents f WHERE f.space=o.space AND f.memory_id=o.memory_id)
+          AND length(CAST(json_object(
+            'sequence',1,'memoryId',o.memory_id,'environmentId',o.environment_id,
+            'threadId',o.thread_id,'createOperationId',${creation}
+          ) AS BLOB))+1 <= ${MEMORY_ORIGIN_PAGE_ROW_BYTES}
         ORDER BY o.memory_id LIMIT ${M.MEMORY_ORIGIN_UPDATE_MAX}`,
       );
       let bytes = 0;
