@@ -59,6 +59,7 @@ it.effect.each(["runtime-mode", "approval-policy"] as const)(
       const instanceId = ProviderInstanceId.make("acp-transition");
       const adapter = yield* makeAcpAdapterV2({
         instanceId,
+        currentEnvironment: Effect.succeed({ PATH: "", HOME: "/synthetic-home" }),
         selfInvocation: yield* resolveSelfInvocation(),
         flavor: {
           driver: ACP_TEST_DRIVER,

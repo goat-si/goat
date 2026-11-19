@@ -31,6 +31,7 @@ const plainEnvValue = (value: string | Redacted.Redacted<string> | undefined) =>
   Redacted.isRedacted(value) ? Redacted.value(value) : value;
 
 const layerTest = TestProviderHost.layer({ runBackgroundWork: false }).pipe(
+  Layer.provideMerge(Layer.succeed(HostProcess.Environment, { PATH: "", HOME: "/synthetic-home" })),
   Layer.provideMerge(Layer.mergeAll(NodeServices.layer, NodeCrypto.layer)),
   Layer.provideMerge(IdAllocator.layer),
   Layer.provideMerge(McpProviderSessions.layer),
@@ -82,6 +83,32 @@ function stdoutSpawner(onSpawn: (command: string, args: ReadonlyArray<string>) =
 const windowsHost = HostProcess.Platform.defaultValue() === "win32";
 
 it.layer(layerTest)("GrokDriver", (it) => {
+  it.effect("maintenance output contains only the synthetic host environment", () =>
+    Effect.gen(function* () {
+      const fs = yield* FileSystem.FileSystem;
+      const path = yield* Path.Path;
+      const directory = yield* fs.makeTempDirectoryScoped({ prefix: "goat-grok-env-" });
+      const binaryPath = path.join(directory, windowsHost ? "grok.exe" : "grok");
+      yield* fs.writeFileString(binaryPath, "#!/bin/sh\n", { mode: 0o755 });
+      const instance = yield* GrokDriver.create({
+        instanceId: ProviderInstanceId.make("grok-env"),
+        displayName: "Grok test",
+        enabled: false,
+        environment: [],
+        config: { ...GrokDriver.defaultConfig(), binaryPath },
+      });
+      const update = (yield* instance.snapshot.resolveMaintenance()).update;
+      const allowed = new Set([
+        "PATH",
+        "HOME",
+        "npm_config_allow_scripts",
+        "npm_config_user_agent",
+      ]);
+      expect(update !== null).toBe(true);
+      expect(Object.keys(update?.env ?? {}).every((key) => allowed.has(key))).toBe(true);
+    }).pipe(Effect.provideService(ChildProcessSpawner.ChildProcessSpawner, noSpawner)),
+  );
+
   it.effect("regression #3079: status reads the current host PATH while instance PATH wins", () => {
     const host = { PATH: "/old/bin", HOME: "/tmp", XAI_API_KEY: "" };
     const paths: Array<string | undefined> = [];
