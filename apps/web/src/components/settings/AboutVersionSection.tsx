@@ -1,3 +1,4 @@
+import { useGT, useMessages } from "gt-react";
 import { type DesktopUpdateChannel } from "@goat/contracts";
 import { useState } from "react";
 
@@ -19,12 +20,15 @@ import { stackedThreadToast, toastManager } from "../ui/toast";
 import { Tooltip, TooltipPopup, TooltipTrigger } from "../ui/tooltip";
 import { AboutVersionTitle } from "./AboutVersionTitle";
 import { CliCommandSettingsRow } from "./CliCommandSettingsRow";
-import { searchableSetting } from "./settingsSearch";
+import { useTranslatedSearchableSetting } from "./useTranslatedSearchableSetting";
 import { SettingsRow } from "./settingsLayout";
 import { useDesktopUpdateState } from "../../state/desktopUpdate";
 import { ensureLocalApi } from "../../localApi";
 
 export function AboutVersionSection() {
+  const setting = useTranslatedSearchableSetting();
+  const gt = useGT();
+  const m = useMessages();
   const updateState = useDesktopUpdateState();
   const [isChangingUpdatePolicy, setIsChangingUpdatePolicy] = useState(false);
   const [isChangingUpdateChannel, setIsChangingUpdateChannel] = useState(false);
@@ -52,8 +56,8 @@ export function AboutVersionSection() {
         toastManager.add(
           stackedThreadToast({
             type: "error",
-            title: "Could not change update track",
-            description: error instanceof Error ? error.message : "Update track change failed.",
+            title: gt("Could not change update track"),
+            description: error instanceof Error ? error.message : gt("Update track change failed."),
           }),
         );
       })
@@ -85,8 +89,8 @@ export function AboutVersionSection() {
         toastManager.add(
           stackedThreadToast({
             type: "error",
-            title: "Could not confirm update",
-            description: error instanceof Error ? error.message : "Update confirmation failed.",
+            title: gt("Could not confirm update"),
+            description: error instanceof Error ? error.message : gt("Update confirmation failed."),
           }),
         );
         return;
@@ -101,8 +105,8 @@ export function AboutVersionSection() {
           toastManager.add(
             stackedThreadToast({
               type: "error",
-              title: "Could not install update",
-              description: error instanceof Error ? error.message : "Install failed.",
+              title: gt("Could not install update"),
+              description: error instanceof Error ? error.message : gt("Install failed."),
             }),
           );
         })
@@ -118,9 +122,9 @@ export function AboutVersionSection() {
           toastManager.add(
             stackedThreadToast({
               type: "error",
-              title: "Could not check for updates",
+              title: gt("Could not check for updates"),
               description:
-                result.state.message ?? "Automatic updates are not available in this build.",
+                result.state.message ?? gt("Automatic updates are not available in this build."),
             }),
           );
         }
@@ -129,8 +133,8 @@ export function AboutVersionSection() {
         toastManager.add(
           stackedThreadToast({
             type: "error",
-            title: "Could not check for updates",
-            description: error instanceof Error ? error.message : "Update check failed.",
+            title: gt("Could not check for updates"),
+            description: error instanceof Error ? error.message : gt("Update check failed."),
           }),
         );
       });
@@ -141,26 +145,26 @@ export function AboutVersionSection() {
     action === "none"
       ? !canCheckForUpdate(updateState)
       : isDesktopUpdateButtonDisabled(updateState);
-  const actionLabel: Record<string, string> = { download: "Download", install: "Install" };
+  const actionLabel: Record<string, string> = { download: gt("Download"), install: gt("Install") };
   const statusLabel: Record<string, string> = {
-    checking: "Checking…",
-    downloading: "Downloading…",
-    "up-to-date": "Up to Date",
+    checking: gt("Checking…"),
+    downloading: gt("Downloading…"),
+    "up-to-date": gt("Up to Date"),
   };
   const buttonLabel =
-    actionLabel[action] ?? statusLabel[updateState?.status ?? ""] ?? "Check for Updates";
+    actionLabel[action] ?? statusLabel[updateState?.status ?? ""] ?? gt("Check for Updates");
   const description =
     updateState?.installationNotice ??
     (action === "download" || action === "install"
-      ? "Update available."
+      ? gt("Update available.")
       : getDesktopUpdateIdleDescription(updateState));
 
   return (
     <>
       <SettingsRow
-        id={searchableSetting("app-version").id}
+        id={setting("app-version").id}
         title={<AboutVersionTitle />}
-        description={description}
+        description={m(description)}
         control={
           <Tooltip>
             <TooltipTrigger
@@ -175,7 +179,7 @@ export function AboutVersionSection() {
                 </Button>
               }
             />
-            {buttonTooltip ? <TooltipPopup>{buttonTooltip}</TooltipPopup> : null}
+            {buttonTooltip ? <TooltipPopup>{m(buttonTooltip)}</TooltipPopup> : null}
           </Tooltip>
         }
       />
@@ -183,9 +187,9 @@ export function AboutVersionSection() {
       updateState &&
       typeof window.desktopBridge?.setUpdateInstallPolicy === "function" ? (
         <SettingsRow
-          id={searchableSetting("update-install-policy").id}
-          title="Update installation"
-          description={getDesktopUpdateStatusText(updateState)}
+          id={setting("update-install-policy").id}
+          title={gt("Update installation")}
+          description={m(getDesktopUpdateStatusText(updateState))}
           control={
             <Select
               value={updateState.installPolicy}
@@ -210,9 +214,11 @@ export function AboutVersionSection() {
                     toastManager.add(
                       stackedThreadToast({
                         type: "error",
-                        title: "Could not change update installation",
+                        title: gt("Could not change update installation"),
                         description:
-                          error instanceof Error ? error.message : "Update policy change failed.",
+                          error instanceof Error
+                            ? error.message
+                            : gt("Update policy change failed."),
                       }),
                     );
                   })
@@ -222,26 +228,26 @@ export function AboutVersionSection() {
               <SelectTrigger
                 size="sm"
                 className="w-full sm:w-48"
-                aria-label="Update installation"
+                aria-label={gt("Update installation")}
                 disabled={isChangingUpdatePolicy}
               >
                 <SelectValue>
                   {updateState.installPolicy === "restart-when-idle"
-                    ? "Restart when idle"
+                    ? gt("Restart when idle")
                     : updateState.installPolicy === "install-on-quit"
-                      ? "Install on quit"
-                      : "Paused"}
+                      ? gt("Install on quit")
+                      : gt("Paused")}
                 </SelectValue>
               </SelectTrigger>
               <SelectPopup align="end" alignItemWithTrigger={false}>
                 <SelectItem hideIndicator value="restart-when-idle">
-                  Restart when idle
+                  {gt("Restart when idle")}
                 </SelectItem>
                 <SelectItem hideIndicator value="install-on-quit">
-                  Install on quit
+                  {gt("Install on quit")}
                 </SelectItem>
                 <SelectItem hideIndicator value="paused">
-                  Paused
+                  {gt("Paused")}
                 </SelectItem>
               </SelectPopup>
             </Select>
@@ -250,8 +256,8 @@ export function AboutVersionSection() {
       ) : null}
       {hasDesktopBridge ? (
         <SettingsRow
-          {...searchableSetting("update-track")}
-          description="Use stable releases or nightly builds. Switch back anytime."
+          {...setting("update-track")}
+          description={gt("Use stable releases or nightly builds. Switch back anytime.")}
           control={
             <Select
               value={selectedUpdateChannel}
@@ -262,19 +268,19 @@ export function AboutVersionSection() {
               <SelectTrigger
                 size="sm"
                 className="w-full sm:w-40"
-                aria-label="Update track"
+                aria-label={gt("Update track")}
                 disabled={isChangingUpdateChannel}
               >
                 <SelectValue>
-                  {selectedUpdateChannel === "nightly" ? "Nightly" : "Stable"}
+                  {selectedUpdateChannel === "nightly" ? gt("Nightly") : gt("Stable")}
                 </SelectValue>
               </SelectTrigger>
               <SelectPopup align="end" alignItemWithTrigger={false}>
                 <SelectItem hideIndicator value="latest">
-                  Stable
+                  {gt("Stable")}
                 </SelectItem>
                 <SelectItem hideIndicator value="nightly">
-                  Nightly
+                  {gt("Nightly")}
                 </SelectItem>
               </SelectPopup>
             </Select>

@@ -7,7 +7,7 @@ import { SettingsGroup } from "./SettingsGroup";
 import { NotificationSettings } from "./NotificationSettings";
 import { PRIVACY_POLICY_URL } from "../../legalLinks";
 import { ChevronRightIcon } from "~/components/solar";
-import { msg, T, useGT, useMessages } from "gt-react";
+import { T, useGT, useMessages } from "gt-react";
 import { Link, useNavigate } from "@tanstack/react-router";
 import { useRef, useState } from "react";
 import {
@@ -20,7 +20,6 @@ import {
 import {
   DEFAULT_UNIFIED_SETTINGS,
   type ResponseStreamingMode,
-  type QuitConfirmationMode,
   SidebarProjectSortOrder,
 } from "@goat/contracts/settings";
 import { createModelSelection } from "@goat/shared/model";
@@ -88,7 +87,7 @@ import {
   useSettingsSearchTarget,
   useSettingsSearchTargetId,
 } from "./settingsLayout";
-import { searchableSetting, type SettingsSearchItemId } from "./settingsSearch";
+import { useTranslatedSearchableSetting } from "./useTranslatedSearchableSetting";
 import { ScreenReaderAnnouncementsRow, ScreenReaderWindowTitleRow } from "./ActivitySettingsRows";
 import { nativeLanguageName, SYSTEM_LANGUAGE } from "@goat/client-runtime/locales";
 import { SUPPORTED_LOCALES } from "../../i18n/locales";
@@ -100,40 +99,23 @@ import { BackgroundActivitySettingsRow } from "./BackgroundActivitySettings";
 import { PullRequestWatchSettings } from "./PullRequestWatchSettings";
 import { ComposerSettingsSection } from "./ComposerSettingsSection";
 import { DiffSettingsSection } from "./DiffSettingsSection";
-import { supportsAutomaticServerUpdates as connectedEnvironmentsSupportAutomaticServerUpdates } from "./SettingsPanels.logic";
+import {
+  LEGACY_FEATURE_TARGET_IDS,
+  supportsAutomaticServerUpdates as connectedEnvironmentsSupportAutomaticServerUpdates,
+} from "./SettingsPanels.logic";
 import { AboutVersionSection } from "./AboutVersionSection";
+import {
+  RESPONSE_STREAMING_MODE_LABELS,
+  RESPONSE_STREAMING_MODE_DESCRIPTIONS,
+  SIDEBAR_PROJECT_SORT_ORDER_LABELS,
+  TIMESTAMP_FORMAT_LABELS,
+  QUIT_CONFIRMATION_MODE_LABELS,
+} from "./generalSettingsMessages";
 
-const RESPONSE_STREAMING_MODE_LABELS: Record<ResponseStreamingMode, string> = {
-  turn: "Wait for the full response",
-  paragraph: "Show finished paragraphs",
-};
-
-const RESPONSE_STREAMING_MODE_DESCRIPTIONS: Record<ResponseStreamingMode, string> = {
-  turn: "Text appears once the agent finishes its turn.",
-  paragraph: "Each paragraph or code block appears as soon as it is complete.",
-};
-
-const SIDEBAR_PROJECT_SORT_ORDER_LABELS: Record<SidebarProjectSortOrder, string> = {
-  updated_at: msg("Last user message"),
-  created_at: msg("Created at"),
-  manual: msg("Manual"),
-};
 const isSidebarProjectSortOrder = Schema.is(SidebarProjectSortOrder);
-
-const TIMESTAMP_FORMAT_LABELS = {
-  locale: msg("System default"),
-  "12-hour": msg("12-hour"),
-  "24-hour": msg("24-hour"),
-};
-
-const QUIT_CONFIRMATION_MODE_LABELS: Record<QuitConfirmationMode, string> = {
-  direct: msg("Direct"),
-  hold: msg("Hold"),
-  "double-click": msg("Double press"),
-};
-
 const DEFAULT_DRIVER_KIND = ProviderDriverKind.make("codex");
 export function useSettingsRestore(onRestored?: () => void) {
+  const gt = useGT();
   const {
     theme,
     setTheme,
@@ -319,9 +301,12 @@ export function useSettingsRestore(onRestored?: () => void) {
     if (changedSettingLabels.length === 0) return;
     const api = readLocalApi();
     const confirmed = await (api ?? ensureLocalApi()).dialogs.confirm(
-      ["Restore default settings?", `This will reset: ${changedSettingLabels.join(", ")}.`].join(
-        "\n",
-      ),
+      [
+        gt("Restore default settings?"),
+        gt("This will reset: {settings}.", {
+          settings: changedSettingLabels.map((label) => gt(label)).join(", "),
+        }),
+      ].join("\n"),
       { variant: "destructive" },
     );
     if (!confirmed) return;
@@ -339,8 +324,8 @@ export function useSettingsRestore(onRestored?: () => void) {
       toastManager.add(
         stackedThreadToast({
           type: "error",
-          title: "Couldn’t restore theme settings",
-          description: "Try again.",
+          title: gt("Couldn’t restore theme settings"),
+          description: gt("Try again."),
         }),
       );
     };
@@ -468,12 +453,9 @@ export function useSettingsRestore(onRestored?: () => void) {
 
 const AUTO_SETTLE_DEFAULT_DAYS = DEFAULT_UNIFIED_SETTINGS.sidebarAutoSettleAfterDays ?? 7;
 
-const LEGACY_FEATURE_TARGET_IDS: ReadonlySet<string> = new Set([
-  "legacy-plan-mode",
-  "legacy-context-window-indicator",
-]);
-
 function LegacyFeaturesSection() {
+  const setting = useTranslatedSearchableSetting();
+  const gt = useGT();
   const settings = useScopedSettings();
   const updateSettings = useUpdateScopedSettings();
   const [open, setOpen] = useState(false);
@@ -491,35 +473,39 @@ function LegacyFeaturesSection() {
       <Collapsible open={open} onOpenChange={setOpen}>
         <CollapsibleTrigger className="group flex min-h-8 w-full items-center gap-2 px-3 sm:px-4">
           <h2 className="text-sm font-normal text-foreground/70 transition-colors group-hover:text-foreground">
-            Legacy features
+            {gt("Legacy features")}
           </h2>
           <ChevronRightIcon className="size-4 text-muted-foreground transition-transform duration-200 group-data-panel-open:rotate-90" />
         </CollapsibleTrigger>
         <CollapsiblePanel>
           <SettingsGroup>
             <SettingsRow
-              {...searchableSetting("legacy-plan-mode")}
-              description="Restore Build/Plan, /plan, /default, and Shift+Tab. Off uses build mode."
+              {...setting("legacy-plan-mode")}
+              description={gt(
+                "Restore Build/Plan, /plan, /default, and Shift+Tab. Off uses build mode.",
+              )}
               control={
                 <Switch
                   checked={settings.planModeEnabled}
                   onCheckedChange={(checked) => {
                     updateSettings({ planModeEnabled: Boolean(checked) });
                   }}
-                  aria-label="Plan mode (legacy)"
+                  aria-label={gt("Plan mode (legacy)")}
                 />
               }
             />
             <SettingsRow
-              {...searchableSetting("legacy-context-window-indicator")}
-              description="Shows context window usage as a circular indicator in the composer."
+              {...setting("legacy-context-window-indicator")}
+              description={gt(
+                "Shows context window usage as a circular indicator in the composer.",
+              )}
               control={
                 <Switch
                   checked={!settings.contextWindowMeterHidden}
                   onCheckedChange={(checked) =>
                     updateSettings({ contextWindowMeterHidden: !checked })
                   }
-                  aria-label="Context window indicator (legacy)"
+                  aria-label={gt("Context window indicator (legacy)")}
                 />
               }
             />
@@ -528,15 +514,6 @@ function LegacyFeaturesSection() {
       </Collapsible>
     </section>
   );
-}
-
-/** Row anchor props with the registry title in the active language. */
-function useTranslatedSearchableSetting() {
-  const m = useMessages();
-  return (id: SettingsSearchItemId) => {
-    const setting = searchableSetting(id);
-    return { ...setting, title: m(setting.title) };
-  };
 }
 
 export function GeneralSettingsPanel() {
@@ -622,8 +599,10 @@ export function GeneralSettingsPanel() {
       <ProjectDefaultsSettings category="general" />
       <SettingsSection id="organization" title={gt("Sidebar")}>
         <SettingsRow
-          {...searchableSetting("sidebar-view")}
-          description="Choose Projects view for per-project thread trees or Activity view for thread activity."
+          {...setting("sidebar-view")}
+          description={gt(
+            "Choose Projects view for per-project thread trees or Activity view for thread activity.",
+          )}
           control={
             <Select
               value={settings.projectsSidebarEnabled ? "projects" : "activity"}
@@ -633,14 +612,14 @@ export function GeneralSettingsPanel() {
                 }
               }}
             >
-              <SelectTrigger aria-label="Sidebar view">
+              <SelectTrigger aria-label={gt("Sidebar view")}>
                 <SelectValue>
-                  {settings.projectsSidebarEnabled ? "Projects" : "Activity"}
+                  {settings.projectsSidebarEnabled ? gt("Projects") : gt("Activity")}
                 </SelectValue>
               </SelectTrigger>
               <SelectPopup>
-                <SelectItem value="projects">Projects</SelectItem>
-                <SelectItem value="activity">Activity</SelectItem>
+                <SelectItem value="projects">{gt("Projects")}</SelectItem>
+                <SelectItem value="activity">{gt("Activity")}</SelectItem>
               </SelectPopup>
             </Select>
           }
@@ -652,7 +631,7 @@ export function GeneralSettingsPanel() {
             settings.sidebarProjectGroupingMode !==
             DEFAULT_UNIFIED_SETTINGS.sidebarProjectGroupingMode ? (
               <SettingResetButton
-                label="project grouping"
+                label={gt("project grouping")}
                 onClick={() =>
                   updateSettings({
                     sidebarProjectGroupingMode: DEFAULT_UNIFIED_SETTINGS.sidebarProjectGroupingMode,
@@ -687,7 +666,7 @@ export function GeneralSettingsPanel() {
             settings.sidebarProjectSortOrder !==
             DEFAULT_UNIFIED_SETTINGS.sidebarProjectSortOrder ? (
               <SettingResetButton
-                label="project order"
+                label={gt("project order")}
                 onClick={() =>
                   updateSettings({
                     sidebarProjectSortOrder: DEFAULT_UNIFIED_SETTINGS.sidebarProjectSortOrder,
@@ -725,17 +704,19 @@ export function GeneralSettingsPanel() {
 
       <SnoozeSettingsSections />
 
-      <SettingsSection id="thread-cleanup" title="Thread cleanup">
+      <SettingsSection id="thread-cleanup" title={gt("Thread cleanup")}>
         <SettingsRow
           serverScoped
           settingKeys={["idleCompaction", "compactIdleThreads"]}
           mixed={idleCompaction.mixed}
-          {...searchableSetting("compact-idle-threads")}
-          description="When to compact an idle Claude thread over 200,000 tokens: after you return, just before its prompt cache expires, or never. Each Claude provider can override this."
+          {...setting("compact-idle-threads")}
+          description={gt(
+            "When to compact an idle Claude thread over 200,000 tokens: after you return, just before its prompt cache expires, or never. Each Claude provider can override this.",
+          )}
           resetAction={
             globalIdleCompaction(settings) !== globalIdleCompaction(DEFAULT_UNIFIED_SETTINGS) ? (
               <SettingResetButton
-                label="compact idle threads"
+                label={gt("compact idle threads")}
                 onClick={() =>
                   updateSettings({ idleCompaction: globalIdleCompaction(DEFAULT_UNIFIED_SETTINGS) })
                 }
@@ -750,12 +731,16 @@ export function GeneralSettingsPanel() {
                 if (mode) updateSettings({ idleCompaction: mode.value });
               }}
             >
-              <SelectTrigger size="sm" className="w-full sm:w-56" aria-label="Compact idle threads">
+              <SelectTrigger
+                size="sm"
+                className="w-full sm:w-56"
+                aria-label={gt("Compact idle threads")}
+              >
                 <SelectValue>
                   {(value: string | null) =>
                     value === null
-                      ? "Mixed"
-                      : IDLE_COMPACTION_MODES.find((mode) => mode.value === value)?.label
+                      ? gt("Mixed")
+                      : m(IDLE_COMPACTION_MODES.find((mode) => mode.value === value)?.label ?? "")
                   }
                 </SelectValue>
               </SelectTrigger>
@@ -768,7 +753,7 @@ export function GeneralSettingsPanel() {
                     // A server from before modes has only the on/off switch, so it cannot store "Never".
                     disabled={mode.value === "off" && !idleCompaction.neverAvailable}
                   >
-                    {mode.label}
+                    {m(mode.label)}
                   </SelectItem>
                 ))}
               </SelectPopup>
@@ -781,13 +766,15 @@ export function GeneralSettingsPanel() {
             <SettingsRow
               serverScoped
               settingKeys={["sidebarAutoSettleOnMerge"]}
-              {...searchableSetting("auto-settle-merged-threads")}
-              description="Settle a thread when its pull request merges. Closed pull requests still settle automatically."
+              {...setting("auto-settle-merged-threads")}
+              description={gt(
+                "Settle a thread when its pull request merges. Closed pull requests still settle automatically.",
+              )}
               resetAction={
                 settings.sidebarAutoSettleOnMerge !==
                 DEFAULT_UNIFIED_SETTINGS.sidebarAutoSettleOnMerge ? (
                   <SettingResetButton
-                    label="auto-settle on merge"
+                    label={gt("auto-settle on merge")}
                     onClick={() =>
                       updateSettings({
                         sidebarAutoSettleOnMerge: DEFAULT_UNIFIED_SETTINGS.sidebarAutoSettleOnMerge,
@@ -803,7 +790,7 @@ export function GeneralSettingsPanel() {
                   onCheckedChange={(checked) =>
                     updateSettings({ sidebarAutoSettleOnMerge: Boolean(checked) })
                   }
-                  aria-label="Auto-settle merged threads"
+                  aria-label={gt("Auto-settle merged threads")}
                 />
               }
             />
@@ -811,13 +798,15 @@ export function GeneralSettingsPanel() {
             <SettingsRow
               serverScoped
               settingKeys={["sidebarAutoSettleAfterDays"]}
-              {...searchableSetting("auto-settle-inactive-threads")}
-              description="Sidebar threads with no activity for this long settle automatically."
+              {...setting("auto-settle-inactive-threads")}
+              description={gt(
+                "Sidebar threads with no activity for this long settle automatically.",
+              )}
               resetAction={
                 settings.sidebarAutoSettleAfterDays !==
                 DEFAULT_UNIFIED_SETTINGS.sidebarAutoSettleAfterDays ? (
                   <SettingResetButton
-                    label="auto-settle"
+                    label={gt("auto-settle")}
                     onClick={() =>
                       updateSettings({
                         sidebarAutoSettleAfterDays:
@@ -836,7 +825,7 @@ export function GeneralSettingsPanel() {
                       sidebarAutoSettleAfterDays: checked ? AUTO_SETTLE_DEFAULT_DAYS : null,
                     })
                   }
-                  aria-label="Auto-settle inactive threads"
+                  aria-label={gt("Auto-settle inactive threads")}
                 />
               }
             />
@@ -844,8 +833,8 @@ export function GeneralSettingsPanel() {
               <SettingsRow
                 serverScoped
                 settingKeys={["sidebarAutoSettleAfterDays"]}
-                title={searchableSetting("days-before-auto-settle").title}
-                description="Any new activity un-settles a thread automatically."
+                title={setting("days-before-auto-settle").title}
+                description={gt("Any new activity un-settles a thread automatically.")}
                 control={
                   <AutoSettleDaysInput
                     value={settings.sidebarAutoSettleAfterDays}
@@ -860,8 +849,10 @@ export function GeneralSettingsPanel() {
               <SettingsRow
                 serverScoped
                 settingKeys={["sidebarAutoSettleKeepPullRequests"]}
-                title="Keep threads with a PR"
-                description="Inactivity does not settle threads with a pull request. Merge and close still do."
+                title={gt("Keep threads with a PR")}
+                description={gt(
+                  "Inactivity does not settle threads with a pull request. Merge and close still do.",
+                )}
                 control={
                   <ScopedSwitch
                     settingKeys={["sidebarAutoSettleKeepPullRequests"]}
@@ -869,7 +860,7 @@ export function GeneralSettingsPanel() {
                     onCheckedChange={(checked) =>
                       updateSettings({ sidebarAutoSettleKeepPullRequests: checked })
                     }
-                    aria-label="Keep threads with a PR"
+                    aria-label={gt("Keep threads with a PR")}
                   />
                 }
               />
@@ -878,7 +869,7 @@ export function GeneralSettingsPanel() {
         ) : null}
       </SettingsSection>
 
-      <SettingsSection id="pull-request-watch" title="Pull request watch">
+      <SettingsSection id="pull-request-watch" title={gt("Pull request watch")}>
         <PullRequestWatchSettings />
       </SettingsSection>
 
@@ -909,7 +900,7 @@ export function GeneralSettingsPanel() {
           resetAction={
             settings.language !== DEFAULT_UNIFIED_SETTINGS.language ? (
               <SettingResetButton
-                label="language"
+                label={gt("language")}
                 onClick={() =>
                   updateSettings({
                     language: DEFAULT_UNIFIED_SETTINGS.language,
@@ -953,7 +944,7 @@ export function GeneralSettingsPanel() {
           resetAction={
             settings.timestampFormat !== DEFAULT_UNIFIED_SETTINGS.timestampFormat ? (
               <SettingResetButton
-                label="time format"
+                label={gt("time format")}
                 onClick={() =>
                   updateSettings({
                     timestampFormat: DEFAULT_UNIFIED_SETTINGS.timestampFormat,
@@ -995,16 +986,16 @@ export function GeneralSettingsPanel() {
         <SettingsRow
           serverScoped
           settingKeys={["responseStreamingMode"]}
-          {...searchableSetting("response-streaming")}
+          {...setting("response-streaming")}
           description={
             mixedResponseStreamingMode
-              ? "The selected targets use different streaming modes."
-              : RESPONSE_STREAMING_MODE_DESCRIPTIONS[settings.responseStreamingMode]
+              ? gt("The selected targets use different streaming modes.")
+              : m(RESPONSE_STREAMING_MODE_DESCRIPTIONS[settings.responseStreamingMode])
           }
           resetAction={
             settings.responseStreamingMode !== DEFAULT_UNIFIED_SETTINGS.responseStreamingMode ? (
               <SettingResetButton
-                label="response streaming"
+                label={gt("response streaming")}
                 onClick={() =>
                   updateSettings({
                     responseStreamingMode: DEFAULT_UNIFIED_SETTINGS.responseStreamingMode,
@@ -1022,19 +1013,23 @@ export function GeneralSettingsPanel() {
                 }
               }}
             >
-              <SelectTrigger size="sm" className="w-full sm:w-56" aria-label="Response streaming">
+              <SelectTrigger
+                size="sm"
+                className="w-full sm:w-56"
+                aria-label={gt("Response streaming")}
+              >
                 <SelectValue>
                   {(value: ResponseStreamingMode | null) =>
-                    value === null ? "Mixed" : RESPONSE_STREAMING_MODE_LABELS[value]
+                    value === null ? gt("Mixed") : m(RESPONSE_STREAMING_MODE_LABELS[value])
                   }
                 </SelectValue>
               </SelectTrigger>
               <SelectPopup align="end" alignItemWithTrigger={false}>
                 <SelectItem hideIndicator value="turn">
-                  {RESPONSE_STREAMING_MODE_LABELS.turn}
+                  {m(RESPONSE_STREAMING_MODE_LABELS.turn)}
                 </SelectItem>
                 <SelectItem hideIndicator value="paragraph">
-                  {RESPONSE_STREAMING_MODE_LABELS.paragraph}
+                  {m(RESPONSE_STREAMING_MODE_LABELS.paragraph)}
                 </SelectItem>
               </SelectPopup>
             </Select>
@@ -1049,25 +1044,27 @@ export function GeneralSettingsPanel() {
         <ScreenReaderWindowTitleRow />
       </SettingsSection>
 
-      <SettingsSection id="updates" title="Updates and background">
+      <SettingsSection id="updates" title={gt("Updates and background")}>
         <ProviderUpdateChecksSetting />
         <AgentMemoryLimitSetting />
 
         <SettingsRow
-          {...searchableSetting("automatic-server-updates")}
+          {...setting("automatic-server-updates")}
           serverScoped
           settingKeys={["automaticServerUpdates"]}
-          description="When this server runs as a background service, install new releases from its channel while no threads are running. A failed update rolls back."
+          description={gt(
+            "When this server runs as a background service, install new releases from its channel while no threads are running. A failed update rolls back.",
+          )}
           status={
             !supportsAutomaticServerUpdates
-              ? "Update this server to change this setting."
+              ? gt("Update this server to change this setting.")
               : undefined
           }
           resetAction={
             supportsAutomaticServerUpdates &&
             settings.automaticServerUpdates !== DEFAULT_UNIFIED_SETTINGS.automaticServerUpdates ? (
               <SettingResetButton
-                label="automatic server updates"
+                label={gt("automatic server updates")}
                 onClick={() =>
                   updateSettings({
                     automaticServerUpdates: DEFAULT_UNIFIED_SETTINGS.automaticServerUpdates,
@@ -1084,7 +1081,7 @@ export function GeneralSettingsPanel() {
               onCheckedChange={(checked) =>
                 updateSettings({ automaticServerUpdates: Boolean(checked) })
               }
-              aria-label="Automatic server updates"
+              aria-label={gt("Automatic server updates")}
             />
           }
         />
@@ -1094,17 +1091,19 @@ export function GeneralSettingsPanel() {
         <BackgroundActivitySettingsRow />
       </SettingsSection>
 
-      <SettingsSection id="projects-and-threads" title="Projects and worktrees">
+      <SettingsSection id="projects-and-threads" title={gt("Projects and worktrees")}>
         <SettingsRow
           serverScoped
           settingKeys={["newWorktreesStartFromOrigin"]}
-          {...searchableSetting("start-from-origin")}
-          description="Uses the latest commit of the base branch’s tracked remote branch, even if its name differs. Otherwise uses the same-named branch on origin. Uses your local branch if that remote branch is missing."
+          {...setting("start-from-origin")}
+          description={gt(
+            "Uses the latest commit of the base branch’s tracked remote branch, even if its name differs. Otherwise uses the same-named branch on origin. Uses your local branch if that remote branch is missing.",
+          )}
           resetAction={
             settings.newWorktreesStartFromOrigin !==
             DEFAULT_UNIFIED_SETTINGS.newWorktreesStartFromOrigin ? (
               <SettingResetButton
-                label="new worktrees start from remote"
+                label={gt("new worktrees start from remote")}
                 onClick={() =>
                   updateSettings({
                     newWorktreesStartFromOrigin:
@@ -1121,20 +1120,20 @@ export function GeneralSettingsPanel() {
               onCheckedChange={(checked) =>
                 updateSettings({ newWorktreesStartFromOrigin: Boolean(checked) })
               }
-              aria-label="Start new worktrees from remote by default"
+              aria-label={gt("Start new worktrees from remote by default")}
             />
           }
         />
         <SettingsRow
           serverScoped
           settingKeys={["addProjectBaseDirectory"]}
-          {...searchableSetting("add-project-starts-in")}
-          description='Leave empty to use "~/" when the Add Project browser opens.'
+          {...setting("add-project-starts-in")}
+          description={gt('Leave empty to use "~/" when the Add Project browser opens.')}
           resetAction={
             settings.addProjectBaseDirectory !==
             DEFAULT_UNIFIED_SETTINGS.addProjectBaseDirectory ? (
               <SettingResetButton
-                label="add project base directory"
+                label={gt("add project base directory")}
                 onClick={() =>
                   updateSettings({
                     addProjectBaseDirectory: DEFAULT_UNIFIED_SETTINGS.addProjectBaseDirectory,
@@ -1150,9 +1149,9 @@ export function GeneralSettingsPanel() {
               value={mixedAddProjectBaseDirectory ? "" : settings.addProjectBaseDirectory}
               onCommit={(next) => updateSettings({ addProjectBaseDirectory: next })}
               normalizeDraft={resolvePastedPath}
-              placeholder={mixedAddProjectBaseDirectory ? "Mixed" : "~/"}
+              placeholder={mixedAddProjectBaseDirectory ? gt("Mixed") : "~/"}
               spellCheck={false}
-              aria-label="Add project base directory"
+              aria-label={gt("Add project base directory")}
             />
           }
         />
@@ -1169,7 +1168,7 @@ export function GeneralSettingsPanel() {
           resetAction={
             settings.confirmThreadUnpin !== DEFAULT_UNIFIED_SETTINGS.confirmThreadUnpin ? (
               <SettingResetButton
-                label="unpin confirmation"
+                label={gt("unpin confirmation")}
                 onClick={() =>
                   updateSettings({
                     confirmThreadUnpin: DEFAULT_UNIFIED_SETTINGS.confirmThreadUnpin,
@@ -1197,7 +1196,7 @@ export function GeneralSettingsPanel() {
           resetAction={
             settings.confirmThreadArchive !== DEFAULT_UNIFIED_SETTINGS.confirmThreadArchive ? (
               <SettingResetButton
-                label="archive confirmation"
+                label={gt("archive confirmation")}
                 onClick={() =>
                   updateSettings({
                     confirmThreadArchive: DEFAULT_UNIFIED_SETTINGS.confirmThreadArchive,
@@ -1223,7 +1222,7 @@ export function GeneralSettingsPanel() {
           resetAction={
             settings.confirmThreadDelete !== DEFAULT_UNIFIED_SETTINGS.confirmThreadDelete ? (
               <SettingResetButton
-                label="delete confirmation"
+                label={gt("delete confirmation")}
                 onClick={() =>
                   updateSettings({
                     confirmThreadDelete: DEFAULT_UNIFIED_SETTINGS.confirmThreadDelete,
@@ -1250,7 +1249,7 @@ export function GeneralSettingsPanel() {
             resetAction={
               settings.confirmQuit !== DEFAULT_UNIFIED_SETTINGS.confirmQuit ? (
                 <SettingResetButton
-                  label="quit shortcut behavior"
+                  label={gt("quit shortcut behavior")}
                   onClick={() =>
                     updateSettings({ confirmQuit: DEFAULT_UNIFIED_SETTINGS.confirmQuit })
                   }
@@ -1288,16 +1287,18 @@ export function GeneralSettingsPanel() {
         ) : null}
       </SettingsSection>
 
-      <SettingsSection id="text-generation" title="Text generation">
+      <SettingsSection id="text-generation" title={gt("Text generation")}>
         <SettingsRow
           serverScoped
           settingKeys={["textGenerationModelSelection"]}
-          {...searchableSetting("text-generation-model")}
-          description="Used for thread titles and other generated text on connected devices with this provider. Source control can override it."
+          {...setting("text-generation-model")}
+          description={gt(
+            "Used for thread titles and other generated text on connected devices with this provider. Source control can override it.",
+          )}
           resetAction={
             hasServerTargets && isTextGenerationModelDirty ? (
               <SettingResetButton
-                label="text generation model"
+                label={gt("text generation model")}
                 onClick={() =>
                   updateSettings({
                     textGenerationModelSelection:
@@ -1310,11 +1311,11 @@ export function GeneralSettingsPanel() {
           control={
             !hasServerTargets ? (
               <span className="text-sm text-muted-foreground">
-                Connect an environment to choose its text generation model.
+                {gt("Connect an environment to choose its text generation model.")}
               </span>
             ) : !hasTextGenerationProvider ? (
               <span className="text-sm text-muted-foreground">
-                No text generation providers available.
+                {gt("No text generation providers available.")}
               </span>
             ) : (
               <div className="flex flex-wrap items-center justify-end gap-1.5">
@@ -1326,7 +1327,7 @@ export function GeneralSettingsPanel() {
                   instanceEntries={textGenerationModelInstanceEntries}
                   modelOptionsByInstance={textGenerationModelOptionsByInstance}
                   triggerClassName={SETTINGS_PICKER_TRIGGER_CLASSNAME}
-                  {...(mixedTextGenerationModel ? { triggerLabel: "Mixed" } : {})}
+                  {...(mixedTextGenerationModel ? { triggerLabel: gt("Mixed") } : {})}
                   getModelDisabledReason={textGenerationModelDisabledReason}
                   {...(environmentId
                     ? {
@@ -1343,7 +1344,7 @@ export function GeneralSettingsPanel() {
                     if (reason) {
                       toastManager.add({
                         type: "error",
-                        title: "Text generation model not saved",
+                        title: gt("Text generation model not saved"),
                         description: reason,
                       });
                       return;
@@ -1394,23 +1395,23 @@ export function GeneralSettingsPanel() {
         <ThreadTitleInstructionsSettings />
       </SettingsSection>
 
-      <SettingsSection id="about" title="About">
+      <SettingsSection id="about" title={gt("About")}>
         {isElectron ? (
           <AboutVersionSection />
         ) : (
           <>
             <SettingsRow
-              id={searchableSetting("app-version").id}
+              id={setting("app-version").id}
               title={<AboutVersionTitle />}
-              description="Current version of the application."
+              description={gt("Current version of the application.")}
             />
             {IS_NIGHTLY_BUILD && HAS_MOBILE_BETA_LINK ? <NightlyMobileBetaRow /> : null}
           </>
         )}
         <MobileAppSettingsRow />
         <SettingsRow
-          {...searchableSetting("icon-credits")}
-          description="Icons: Solar by 480 Design, CC BY 4.0."
+          {...setting("icon-credits")}
+          description={gt("Icons: Solar by 480 Design, CC BY 4.0.")}
           control={
             <Button
               render={
@@ -1423,31 +1424,33 @@ export function GeneralSettingsPanel() {
               size="sm"
               variant="outline"
             >
-              View license
+              {gt("View license")}
             </Button>
           }
         />
         <SettingsRow
-          {...searchableSetting("privacy-policy")}
-          description="How we handle your data, including the product usage data GOAT collects."
+          {...setting("privacy-policy")}
+          description={gt(
+            "How we handle your data, including the product usage data GOAT collects.",
+          )}
           control={
             <Button
               render={<a href={PRIVACY_POLICY_URL} target="_blank" rel="noreferrer noopener" />}
               size="sm"
               variant="outline"
             >
-              View policy
+              {gt("View policy")}
             </Button>
           }
         />
       </SettingsSection>
-      <SettingsSection title="Diagnostics">
+      <SettingsSection title={gt("Diagnostics")}>
         <SettingsRow
-          {...searchableSetting("diagnostics")}
+          {...setting("diagnostics")}
           description={
             isEnvironmentScope
-              ? "Inspect processes, resource use, and logs on this environment."
-              : "Inspect processes, resource use, and logs on one environment at a time."
+              ? gt("Inspect processes, resource use, and logs on this environment.")
+              : gt("Inspect processes, resource use, and logs on one environment at a time.")
           }
           control={
             <Button
@@ -1457,20 +1460,20 @@ export function GeneralSettingsPanel() {
               size="sm"
               variant="outline"
             >
-              View diagnostics
+              {gt("View diagnostics")}
             </Button>
           }
         />
         <SettingsRow
-          {...searchableSetting("open-source-licenses")}
-          description="Notices for dependencies, assets, and optional tools used by GOAT."
+          {...setting("open-source-licenses")}
+          description={gt("Notices for dependencies, assets, and optional tools used by GOAT.")}
           control={
             <Button
               render={<Link to="/settings/open-source-licenses" />}
               size="sm"
               variant="outline"
             >
-              View licenses
+              {gt("View licenses")}
             </Button>
           }
         />

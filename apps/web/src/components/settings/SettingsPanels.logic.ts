@@ -20,6 +20,11 @@ import {
 import * as Duration from "effect/Duration";
 import * as Equal from "effect/Equal";
 
+export const LEGACY_FEATURE_TARGET_IDS: ReadonlySet<string> = new Set([
+  "legacy-plan-mode",
+  "legacy-context-window-indicator",
+]);
+
 export function supportsAutomaticServerUpdates(
   connectedEnvironments: ReadonlyArray<{
     readonly serverConfig?: {
