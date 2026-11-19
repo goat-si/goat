@@ -1,3 +1,4 @@
+import { msg, useMessages } from "gt-react";
 import {
   type AuthMcpApprovalDecision,
   type AuthMcpApprovalDetails,
@@ -32,8 +33,8 @@ const accessConfig: Record<
   { readonly label: string; readonly description: string; readonly icon: IconComponent }
 > = {
   "read-only": {
-    label: "Read only",
-    description: "Read projects and threads. Cannot start, message or change anything.",
+    label: msg("Read only"),
+    description: msg("Read projects and threads. Cannot start, message or change anything."),
     icon: EyeIcon,
   },
   ...runtimeModeConfig,
@@ -368,6 +369,7 @@ function AccessOption({
   readonly access: AuthMcpClientAccess;
   readonly selected: boolean;
 }) {
+  const m = useMessages();
   const { label, description, icon: Icon } = accessConfig[access];
   return (
     <RadioPrimitive.Root
@@ -388,8 +390,8 @@ function AccessOption({
         )}
       />
       <span className="min-w-0">
-        <span className="block text-sm font-medium text-foreground">{label}</span>
-        <span className="block text-xs text-muted-foreground">{description}</span>
+        <span className="block text-sm font-medium text-foreground">{m(label)}</span>
+        <span className="block text-xs text-muted-foreground">{m(description)}</span>
       </span>
     </RadioPrimitive.Root>
   );
