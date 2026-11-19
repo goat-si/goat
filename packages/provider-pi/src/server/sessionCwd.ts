@@ -7,7 +7,7 @@ import * as Stream from "effect/Stream";
 import { piRecordString as recordString } from "./rpc.ts";
 
 const decodeHeader = Schema.decodeUnknownOption(Schema.fromJsonString(Schema.Unknown));
-export const sessionHeaderNamesCwd = Effect.fnUntraced(function* (
+const sessionHeaderNamesCwd = Effect.fnUntraced(function* (
   fileSystem: FileSystem.FileSystem,
   cwd: string,
   sessionFile: string,
