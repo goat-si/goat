@@ -1,3 +1,5 @@
+import { sha256 } from "@noble/hashes/sha2";
+import { bytesToHex } from "@noble/hashes/utils";
 import {
   EnvironmentId,
   ProjectId,
@@ -9,6 +11,8 @@ import { expect, it, vi } from "vite-plus/test";
 import { page, userEvent } from "vite-plus/test/browser";
 
 import "~/index.css";
+import { __setClientSettingsForTests } from "../../hooks/useSettings";
+import { DEFAULT_CLIENT_SETTINGS } from "@goat/contracts/settings";
 
 const {
   diffAtom,
@@ -145,8 +149,15 @@ const mocks = vi.hoisted(() => ({
   withheldHeadSha: "a".repeat(40),
   assetResources: [] as unknown[],
   diffCommits: [] as Array<string | undefined>,
+  viewedPaths: null as ReadonlySet<string> | null,
+  viewedListeners: new Set<() => void>(),
   command: vi.fn(),
 }));
+
+function deliverViewedPaths(paths: ReadonlySet<string> | null) {
+  mocks.viewedPaths = paths;
+  for (const listener of mocks.viewedListeners) listener();
+}
 
 vi.mock(import("~/assets/assetUrls"), async (original) => ({
   ...(await original()),
@@ -163,6 +174,27 @@ vi.mock(import("~/state/use-atom-command"), async (original) => ({
   ...(await original()),
   useAtomCommand: (() => mocks.command) as never,
 }));
+vi.mock(import("./usePullRequestFilesViewed"), async () => {
+  const { useSyncExternalStore } = await import("react");
+  const subscribe = (listener: () => void) => {
+    mocks.viewedListeners.add(listener);
+    return () => mocks.viewedListeners.delete(listener);
+  };
+  return {
+    usePullRequestFilesViewed: () => {
+      const viewedPaths = useSyncExternalStore(subscribe, () => mocks.viewedPaths);
+      return {
+        enabled: viewedPaths !== null,
+        isViewed: (path: string) => viewedPaths?.has(path) === true,
+        isStale: () => false,
+        setViewed: () => {},
+        truncated: false,
+        error: null,
+        refresh: () => {},
+      };
+    },
+  };
+});
 vi.mock(import("~/state/pullRequests"), async (original) => {
   const actual = await original();
   return {
@@ -186,7 +218,7 @@ vi.mock(import("~/state/pullRequests"), async (original) => {
   };
 });
 
-import { act, render } from "../../../test/render";
+import { act, fakeTimers, render } from "../../../test/render";
 import { RegistryContext } from "@effect/atom-react";
 import { AtomRegistry } from "effect/reactivity";
 import PullRequestCodeTab from "./PullRequestCodeTab";
@@ -256,6 +288,8 @@ function setup(paged = false, image = false) {
   mocks.withheldHeadSha = "a".repeat(40);
   mocks.assetResources = [];
   mocks.diffCommits = [];
+  mocks.viewedPaths = null;
+  mocks.viewedListeners.clear();
   mocks.command.mockReset().mockResolvedValue({ _tag: "Success", value: undefined });
   usePullRequestReviewStore.getState().clear(pullRequestReviewKey(detail));
 }
@@ -730,4 +764,98 @@ it("explains why a connection that only offers withheld reads cannot queue a lin
   await expect.element(queue).toBeEnabled();
   await userEvent.click(queue);
   await expect.element(screen.getByRole("button", { name: "Submit review" })).toBeEnabled();
+});
+
+const linked = (
+  revealUrl: string | undefined,
+  onRevealSettled: (url: string) => void,
+  revealRequest: { readonly path: string; readonly nonce: number } | null = null,
+  selectedCommitOid: string | null = null,
+  tabDetail: PullRequestDetailView = detail,
+) => (
+  <PullRequestCodeTab
+    scrollerRef={() => {}}
+    environmentId={EnvironmentId.make("environment")}
+    reference={detail}
+    detail={tabDetail}
+    selectedCommitOid={selectedCommitOid}
+    onSelectedCommitChange={() => {}}
+    onRefresh={() => {}}
+    revealRequest={revealRequest}
+    revealUrl={revealUrl}
+    onRevealSettled={onRevealSettled}
+  />
+);
+const diffAnchor = (path: string) => bytesToHex(sha256(new TextEncoder().encode(path)));
+
+it("pages forward to a linked line range, settles the link, and reveals it again on a later click", async () => {
+  setup(true);
+  const container = document.createElement("div");
+  container.className = "flex h-[500px] w-[900px]";
+  const settled = vi.fn();
+  await using screen = await render(linked(undefined, settled), { container });
+  await expect.element(screen.getByText("early-0.ts", { exact: true }).first()).toBeVisible();
+
+  const url = `${detail.url}/files#diff-${diffAnchor("late.ts")}R4-R5`;
+  await screen.rerender(linked(url, settled));
+
+  await expectFileHeaderShown(screen, container, "late.ts");
+  await vi.waitFor(() => expect(settled).toHaveBeenCalledWith(url));
+  await screen.rerender(linked(undefined, settled, { path: "early-0.ts", nonce: 1 }));
+  await expectFileHeaderShown(screen, container, "early-0.ts");
+  await screen.rerender(linked(url, settled, { path: "early-0.ts", nonce: 1 }));
+  await expectFileHeaderShown(screen, container, "late.ts");
+});
+
+it("answers a commit's diff link only once that commit's diff is shown", async () => {
+  setup();
+  const container = document.createElement("div");
+  container.className = "flex h-[700px] w-[900px]";
+  const oid = "c".repeat(40);
+  const withCommit = {
+    ...detail,
+    commits: [{ oid, messageHeadline: "Linked commit", committedDate: "2026-09-01T00:00:00Z" }],
+  };
+  const url = `${detail.url}/commits/${oid}#diff-${diffAnchor("a.ts")}R2`;
+  const settled = vi.fn();
+  await using screen = await render(linked(undefined, settled, null, null, withCommit), {
+    container,
+  });
+  await expect.element(screen.getByText("1 file", { exact: true })).toBeVisible();
+
+  // The panel selects the link's commit after this tab has already seen the link.
+  await screen.rerender(linked(url, settled, null, null, withCommit));
+  expect(settled).not.toHaveBeenCalled();
+  await screen.rerender(linked(url, settled, null, oid, withCommit));
+  await vi.waitFor(() => expect(settled).toHaveBeenCalledWith(url));
+});
+
+// regression: a Viewed answer that lands after a link reveals a file must not fold it
+it("keeps a revealed file open when its Viewed mark loads afterwards", async () => {
+  setup();
+  using _preferences = __setClientSettingsForTests({
+    ...DEFAULT_CLIENT_SETTINGS,
+    diffFilesCollapsed: false,
+  });
+  mocks.viewedPaths = new Set();
+  const container = document.createElement("div");
+  container.className = "flex h-[700px] w-[900px]";
+  await using screen = await render(tab(0, { path: "a.ts", nonce: 1 }), { container });
+  await using _poolCleanup = {
+    async [Symbol.asyncDispose]() {
+      // Dispose the shared diff pool before the next test mounts a fresh viewer.
+      using _timers = fakeTimers();
+      await screen.unmount();
+      await act(() => vi.runOnlyPendingTimersAsync());
+    },
+  };
+  await expect.element(screen.getByText("three()", { exact: true })).toBeVisible();
+
+  deliverViewedPaths(new Set(["a.ts"]));
+  await expect.element(screen.getByRole("checkbox", { name: "Viewed" })).toBeChecked();
+
+  await expect
+    .element(screen.getByRole("button", { name: "Collapse diff" }))
+    .toHaveAttribute("aria-expanded", "true");
+  await expect.element(screen.getByText("three()", { exact: true })).toBeVisible();
 });

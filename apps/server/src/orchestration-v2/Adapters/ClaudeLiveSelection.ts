@@ -15,7 +15,8 @@ export function canApplyClaudeSelectionLive(
 ): boolean {
   return (
     live.settings.alwaysThinkingEnabled === next.settings.alwaysThinkingEnabled &&
-    (next.effort !== undefined || live.effort === undefined)
+    (next.effort !== undefined || live.effort === undefined) &&
+    live.pinnedAlias === next.pinnedAlias
   );
 }
 

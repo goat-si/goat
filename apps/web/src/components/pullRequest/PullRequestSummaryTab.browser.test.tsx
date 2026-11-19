@@ -246,3 +246,150 @@ it("shows a comment's exact time in the chosen 24-hour clock", async () => {
     expect(document.querySelector('[data-slot="tooltip-popup"]')?.textContent).toBe(expected),
   );
 });
+
+it("fixes an overview thread as its opening remark, since it has no line to attach", async () => {
+  setup();
+  const author = { login: "reviewer", name: null, avatarUrl: null };
+  const note = { author, createdAt: "2026-09-01T00:00:00Z", url: null };
+  const remark = {
+    ...note,
+    id: "10",
+    kind: "review-comment" as const,
+    body: "Mention the flag in the README",
+    path: null,
+    reviewState: null,
+  };
+  const onFixFinding = vi.fn();
+  const value: PullRequestDetailView = {
+    ...detail,
+    comments: [remark],
+    overviewThreads: [
+      {
+        id: "overview",
+        path: null,
+        line: null,
+        side: "right",
+        isResolved: false,
+        isOutdated: false,
+        comments: [{ ...note, id: "10", body: remark.body }],
+      },
+    ],
+  };
+  await using screen = await renderUi(
+    <PullRequestSummaryTab
+      scrollerRef={() => {}}
+      environmentId={EnvironmentId.make("environment")}
+      threadRef={null}
+      reference={value}
+      detail={value}
+      activityPending={false}
+      activityError={null}
+      onRefresh={() => {}}
+      onFixFinding={onFixFinding}
+    />,
+  );
+
+  await userEvent.click(screen.getByRole("button", { name: "Fix in a thread" }));
+  expect(onFixFinding).toHaveBeenCalledWith({ kind: "comment", comment: remark });
+});
+
+it("resolves an overview thread from its opening remark when the viewer may", async () => {
+  setup();
+  const author = { login: "reviewer", name: null, avatarUrl: null };
+  const note = { author, createdAt: "2026-09-01T00:00:00Z", url: null };
+  const remark = {
+    ...note,
+    id: "10",
+    kind: "review-comment" as const,
+    body: "Mention the flag in the README",
+    path: null,
+    reviewState: null,
+  };
+  const value: PullRequestDetailView = {
+    ...detail,
+    capabilities: {
+      ...detail.capabilities,
+      review: { ...detail.capabilities.review, resolve: true },
+    },
+    viewerPermissions: { ...detail.viewerPermissions, resolve: true },
+    comments: [remark],
+    overviewThreads: [
+      {
+        id: "overview",
+        path: null,
+        line: null,
+        side: "right",
+        isResolved: false,
+        isOutdated: false,
+        comments: [{ ...note, id: "10", body: remark.body }],
+      },
+    ],
+  };
+  const onRefresh = vi.fn();
+  await using screen = await renderUi(
+    <PullRequestSummaryTab
+      scrollerRef={() => {}}
+      environmentId={EnvironmentId.make("environment")}
+      threadRef={null}
+      reference={value}
+      detail={value}
+      activityPending={false}
+      activityError={null}
+      onRefresh={onRefresh}
+    />,
+  );
+
+  await userEvent.click(screen.getByRole("button", { name: "Resolve" }));
+  expect(state.update).toHaveBeenCalledWith(
+    expect.objectContaining({
+      input: expect.objectContaining({ threadId: "overview", resolved: true }),
+    }),
+  );
+  await vi.waitFor(() => expect(onRefresh).toHaveBeenCalled());
+});
+
+it("offers no Resolve on an overview thread the viewer may not resolve", async () => {
+  setup();
+  const note = { author: null, createdAt: "2026-09-01T00:00:00Z", url: null };
+  const remark = {
+    ...note,
+    id: "10",
+    kind: "review-comment" as const,
+    body: "Mention the flag in the README",
+    path: null,
+    reviewState: null,
+  };
+  const value: PullRequestDetailView = {
+    ...detail,
+    capabilities: {
+      ...detail.capabilities,
+      review: { ...detail.capabilities.review, resolve: true },
+    },
+    comments: [remark],
+    overviewThreads: [
+      {
+        id: "overview",
+        path: null,
+        line: null,
+        side: "right",
+        isResolved: false,
+        isOutdated: false,
+        comments: [{ ...note, id: "10", body: remark.body }],
+      },
+    ],
+  };
+  await using screen = await renderUi(
+    <PullRequestSummaryTab
+      scrollerRef={() => {}}
+      environmentId={EnvironmentId.make("environment")}
+      threadRef={null}
+      reference={value}
+      detail={value}
+      activityPending={false}
+      activityError={null}
+      onRefresh={() => {}}
+    />,
+  );
+  await expect.element(screen.getByText("Mention the flag in the README")).toBeVisible();
+  await expect.element(screen.getByRole("button", { name: "Resolve" })).not.toBeInTheDocument();
+});

@@ -4,6 +4,8 @@ import {
   UPDATE_BRANCH_REBASE_FAILURE_HINT,
 } from "./pullRequestActionFailures";
 import { addPullRequestCommentToComposer } from "./pullRequestChatHandoff";
+import { parsePullRequestAnchor, pullRequestLinkCommit } from "@goat/shared/pullRequestAnchor";
+import { linkedTab, usePullRequestDetailReveal } from "./usePullRequestDetailReveal";
 import { projectChangeRequestUrl } from "@goat/client-runtime/change-request-links";
 import { normalizeThreadPullRequestKey } from "@goat/client-runtime/thread-pull-requests";
 import { useAtomValue } from "@effect/atom-react";
@@ -18,7 +20,6 @@ import {
   AuthSourceControlWriteScope,
   type EnvironmentId,
   type PullRequestAction,
-  type PullRequestDetail,
   type PullRequestMergeMethod,
   type PullRequestListEntry,
   type PullRequestUpdateMethod,
@@ -47,6 +48,7 @@ import {
   useState,
 } from "react";
 import { type DraftId, useComposerDraftStore } from "~/composerDraftStore";
+import { markDraftCheckoutPullRequest } from "./pullRequestCheckoutDraft";
 import { type PullRequestDetailTab, useRightPanelStore } from "~/rightPanelStore";
 import { useEnvironmentSettings } from "~/hooks/useSettings";
 import { useNewThreadHandler } from "~/hooks/useHandleNewThread";
@@ -110,7 +112,11 @@ import { PullRequestsUnavailableState } from "./PullRequestsUnavailableState";
 import type { PullRequestAgentSelectionInput } from "./PullRequestCodeTab";
 import { openOnHostLabel } from "./pullRequestLinkContextMenu";
 import { PullRequestMarkdownContext } from "./PullRequestMarkdown";
-import { pullRequestMarkdownPlugins } from "./pullRequestMarkdown.logic";
+import {
+  pullRequestMarkdownContext,
+  pullRequestStackReference,
+  resolvePullRequestReference,
+} from "./pullRequestDetailReferences";
 import { PullRequestComposer } from "./PullRequestComposer";
 import { PullRequestSummaryTab } from "./PullRequestSummaryTab";
 import { PullRequestTimelineTab } from "./PullRequestTimelineTab";
@@ -133,7 +139,6 @@ import {
   PULL_REQUEST_MERGE_METHOD_LABELS,
   checkoutFailureDescription,
   readableFailure,
-  resolvePullRequestReferenceHost,
   resolvePullRequestPrimaryControl,
   allowsSinglePullRequestMerge,
   canDeletePullRequestBranch,
@@ -170,45 +175,6 @@ const TABS: ReadonlyArray<{ value: PullRequestDetailTab; label: string }> = [
 const loadCodeTab = () => import("./PullRequestCodeTab");
 const PullRequestCodeTab = lazy(loadCodeTab);
 
-function resolvePullRequestReference(
-  requestedReference: PullRequestRef,
-  repositoryIdentity: Parameters<typeof resolvePullRequestReferenceHost>[1],
-  supportsThreadPullRequests: boolean,
-): PullRequestRef {
-  return supportsThreadPullRequests
-    ? resolvePullRequestReferenceHost(requestedReference, repositoryIdentity)
-    : {
-        projectId: requestedReference.projectId,
-        repository: requestedReference.repository,
-        number: requestedReference.number,
-      };
-}
-
-function pullRequestMarkdownContext(
-  detail: Pick<PullRequestDetail, "provider" | "url" | "repository"> | null,
-  threadRef: ScopedThreadRef | null,
-) {
-  return {
-    remarkPlugins: pullRequestMarkdownPlugins(detail),
-    lineBreaks: sourceControlClients.find(detail?.provider ?? "")?.hardLineBreaks ?? false,
-    threadRef,
-    repository: detail?.repository ?? null,
-  };
-}
-
-function pullRequestStackReference(
-  detail: Pick<PullRequestDetail, "url" | "capabilities"> | null,
-  reference: PullRequestRef,
-  supportsThreadPullRequests: boolean,
-) {
-  return detail === null || detail.capabilities.stacks !== true || !supportsThreadPullRequests
-    ? null
-    : {
-        ...reference,
-        host: reference.host ?? sourceControlClients.parseChangeRequestUrl(detail.url)?.link.host,
-      };
-}
-
 export function PullRequestDetailPanel({
   environmentId,
   shortcutsEnabled,
@@ -225,6 +191,8 @@ export function PullRequestDetailPanel({
   onBack,
   onSelectPullRequest,
   onGuideShown,
+  revealUrl,
+  onRevealSettled,
   initialTab = "summary",
   onTabChange,
 }: {
@@ -251,6 +219,10 @@ export function PullRequestDetailPanel({
   composerDraftTarget?: ScopedThreadRef | DraftId;
   onBack?: (() => void) | undefined;
   onGuideShown?: (() => void) | undefined;
+  /** A clicked link into this pull request, waiting to be shown. */
+  revealUrl?: string | undefined;
+  /** Reports the link it was given shown or missing, so a newer link stays pending. */
+  onRevealSettled?: ((revealUrl: string) => void) | undefined;
   initialTab?: PullRequestDetailTab;
   onTabChange?: ((tab: PullRequestDetailTab) => void) | undefined;
 }) {
@@ -310,7 +282,10 @@ export function PullRequestDetailPanel({
     coreDetail,
     detail,
   } = usePullRequestDetail(environmentId, reference, matchingListEntry);
-  const [selectedTab, setTab] = useState<PullRequestDetailTab>(initialTab);
+  const revealAnchor = parsePullRequestAnchor(revealUrl);
+  const [selectedTab, setTab] = useState<PullRequestDetailTab>(
+    () => linkedTab(revealAnchor) ?? initialTab,
+  );
   const reviewGuidesEnabled = useEnvironmentSettings(
     environmentId,
     (settings) => settings.reviewGuidesEnabled,
@@ -334,7 +309,7 @@ export function PullRequestDetailPanel({
   const [codeCommitScope, setCodeCommitScope] = useState<{
     readonly pullRequestKey: string;
     readonly oid: string | null;
-  }>(() => ({ pullRequestKey, oid: null }));
+  }>(() => ({ pullRequestKey, oid: pullRequestLinkCommit(revealUrl) }));
   const selectedCodeCommitOid =
     codeCommitScope.pullRequestKey === pullRequestKey ? codeCommitScope.oid : null;
   const selectCodeCommit = (oid: string | null) => {
@@ -555,14 +530,30 @@ export function PullRequestDetailPanel({
   const invalidate = useAtomCommand(pullRequestEnvironment.invalidate, { reportFailure: false });
   const [isInvalidating, setIsInvalidating] = useState(false);
   const refreshing = isInvalidating || detailQuery.isPending;
-  const refreshFromHost = async () => {
+  /** Resolves whether the host cache was invalidated before the refetch. */
+  const refetchFromHost = async () => {
     setIsInvalidating(true);
     // Atom commands settle without throwing, so reset always runs.
-    await invalidate({ environmentId, input: { reference } });
+    const invalidated = await invalidate({ environmentId, input: { reference } });
     refreshDetail();
     setRefreshToken((token) => token + 1);
     setIsInvalidating(false);
+    return invalidated._tag === "Success";
   };
+  const refreshFromHost = async () => {
+    await refetchFromHost();
+  };
+  const settleReveal = usePullRequestDetailReveal({
+    revealUrl,
+    revealAnchor,
+    onRevealSettled,
+    detail,
+    activity: activityQuery,
+    selectTab,
+    selectCodeCommit,
+    loadCodeTab: () => void loadCodeTab(),
+    refetchFromHost,
+  });
   const refreshFromHostOnRequest = useEffectEvent(() => void refreshFromHost());
   const appliedForcedToken = useRef(forcedRefreshToken);
   useEffect(() => {
@@ -849,10 +840,10 @@ export function PullRequestDetailPanel({
       worktreePath: prepared.value.worktreePath,
       envMode: prepared.value.worktreePath === null ? "local" : "worktree",
     }).then(
-      (session) => session !== null,
-      () => false,
+      (session) => session,
+      () => null,
     );
-    if (!pointed) {
+    if (pointed === null) {
       setHandoff(null);
       // Sending after failed rebinding would use the previous checkout.
       toastManager.update(toastId, {
@@ -862,6 +853,7 @@ export function PullRequestDetailPanel({
       });
       return;
     }
+    markDraftCheckoutPullRequest(pointed.draftId, prepared.value);
     setHandoff(null);
     if (task === null) {
       toastManager.update(
@@ -879,7 +871,9 @@ export function PullRequestDetailPanel({
       );
       return;
     }
-    await openThreadWithTask(projectRef, task, opened);
+    // The task goes on the checkout draft: if the user typed into `opened` while the
+    // checkout ran, that is no longer the draft the user is looking at.
+    await openThreadWithTask(projectRef, task, pointed);
     toastManager.update(
       toastId,
       prepared.value.isOnPullRequestHead
@@ -1666,6 +1660,8 @@ export function PullRequestDetailPanel({
               <div className={cn("absolute inset-0", tab !== "summary" && "invisible")}>
                 <PullRequestSummaryTab
                   scrollerRef={scrollerRefs.summary}
+                  revealUrl={tab === "summary" ? revealUrl : undefined}
+                  onRevealSettled={settleReveal}
                   environmentId={environmentId}
                   threadRef={threadRef}
                   reference={reference}
@@ -1729,6 +1725,8 @@ export function PullRequestDetailPanel({
                 ) : (
                   <PullRequestTimelineTab
                     scrollerRef={scrollerRefs.timeline}
+                    revealUrl={tab === "timeline" ? revealUrl : undefined}
+                    onRevealSettled={settleReveal}
                     detail={detail}
                     environmentId={environmentId}
                     threadRef={threadRef}
@@ -1764,6 +1762,8 @@ export function PullRequestDetailPanel({
                     refreshToken={refreshToken}
                     backgroundRefreshToken={turnRefresh ?? 0}
                     revealRequest={codeRevealRequest}
+                    revealUrl={tab === "code" ? revealUrl : undefined}
+                    onRevealSettled={settleReveal}
                   />
                 </Suspense>
               </div>

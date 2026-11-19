@@ -61,7 +61,6 @@ import {
   type PullRequestRoutingResult,
   type PullRequestRoutingIdentityInput,
   type PullRequestRoutingIdentityResult,
-  type PullRequestReviewVerdict,
   type PullRequestReviewerCandidateList,
   type PullRequestReviewerCandidatesInput,
   type PullRequestReviewerRequestInput,
@@ -132,6 +131,9 @@ import {
   toUnavailableError,
   type UnavailableRequirementOf,
 } from "./pullRequestProviderErrors.ts";
+import { noteRefinedHost, unreadListResult, withListResult } from "./pullRequestListFallback.ts";
+import { withOverviewThreads } from "./pullRequestActivityFields.ts";
+import { VERDICT_LABELS } from "./pullRequestReviewVerdictLabels.ts";
 
 export interface PullRequestMergeEvent extends PullRequestRef {
   readonly mergedAt: string;
@@ -335,12 +337,6 @@ export class PullRequestService extends Context.Service<
   }
 >()("goat/pullRequest/PullRequestService") {}
 
-const VERDICT_LABELS: Record<PullRequestReviewVerdict, string> = {
-  comment: "review",
-  approve: "approve",
-  "request-changes": "request changes on",
-};
-
 const REVIEWER_REQUEST_REFUSAL = "You need write access on this repository to ask for a review.";
 const LABEL_CHANGE_REFUSAL = "You need triage access on this repository to change its labels.";
 
@@ -364,6 +360,7 @@ interface WorkspaceProjects {
     { readonly kind: SourceControlProviderKind; readonly projectCount: number }
   >;
   readonly viewerRoots: ReadonlyMap<string, ReadonlyArray<string>>;
+  readonly refinedProjectIdsByHost: ReadonlyMap<string, ReadonlyArray<ProjectId>>;
 }
 
 // Inherited by fibers forked inside the scope, so it is closed, not just dropped, when the scope ends.
@@ -594,6 +591,7 @@ export const make = Effect.gen(function* () {
           { kind: SourceControlProviderKind; projectCount: number }
         >();
         const viewerRoots = new Map<string, string[]>();
+        const refinedProjectIdsByHost = new Map<string, ProjectId[]>();
         const seen = new Set<string>();
         for (const { project, identity, upstream } of repositories) {
           if (filter.projectId !== undefined && project.id !== filter.projectId) continue;
@@ -610,6 +608,9 @@ export const make = Effect.gen(function* () {
           const host = remote?.host ?? sourceControlDefinitions.changeRequestHost(identity, kind);
           if (filter.host !== undefined && host !== filter.host.toLowerCase()) {
             continue;
+          }
+          if (host !== sourceControlDefinitions.changeRequestHost(identity, identity.provider)) {
+            noteRefinedHost(refinedProjectIdsByHost, host, project.id);
           }
           const registered = registry.get(kind);
           const api = registered?.servesHost?.(host) === false ? null : registered;
@@ -645,7 +646,7 @@ export const make = Effect.gen(function* () {
             upstream,
           });
         }
-        return { supported, unimplemented, viewerRoots };
+        return { supported, unimplemented, viewerRoots, refinedProjectIdsByHost };
       }),
     );
 
@@ -978,7 +979,7 @@ export const make = Effect.gen(function* () {
     const involvement = input.involvement ?? "all";
     const continuation = yield* decodeCursors(input.cursors);
     const workspace = yield* listWorkspaceProjects(input);
-    const { unimplemented, viewerRoots } = workspace;
+    const { unimplemented, viewerRoots, refinedProjectIdsByHost } = workspace;
     const projects = workspace.supported.filter((item) => input.includeUpstream || !item.upstream);
     const projectCounts = new Map<string, number>();
     for (const { host } of projects) {
@@ -1001,6 +1002,7 @@ export const make = Effect.gen(function* () {
           searchesOnHost: capabilities?.search ?? false,
           actions: capabilities?.actions ?? [],
           projectCount: projectCounts.get(result.host) ?? 1,
+          projectIds: refinedProjectIdsByHost.get(result.host),
           configured: result.viewer !== null,
           detail: result.error === null ? null : providerDetail(requirementOf, result.error),
         };
@@ -1011,6 +1013,7 @@ export const make = Effect.gen(function* () {
         searchesOnHost: false,
         actions: [],
         projectCount,
+        projectIds: refinedProjectIdsByHost.get(host),
         configured: false,
         detail: "This host cannot be browsed here yet.",
       })),
@@ -1029,24 +1032,15 @@ export const make = Effect.gen(function* () {
         message: `${repository} could not be read.`,
       }));
     if (readable.length === 0) {
+      const listResult = unreadListResult(viewers, providers, unreadable);
       const errors = viewerResults.flatMap((result) =>
         result.error === null || !selected.some(({ host }) => host === result.host)
           ? []
           : [result.error],
       );
       const blocking = errors.find(isProviderUnusable) ?? errors[0];
-      if (blocking) {
-        return yield* toPullRequestError("list")(blocking);
-      }
-
-      return {
-        viewers: viewers as PullRequestListResult["viewers"],
-        providers,
-        entries: [],
-        errors: [],
-        truncated: false,
-        nextCursors: {},
-      };
+      if (blocking) return yield* withListResult(toPullRequestError("list")(blocking), listResult);
+      return listResult;
     }
 
     const limit = input.limit ?? DEFAULT_REPOSITORY_LIST_LIMIT;
@@ -1548,6 +1542,7 @@ export const make = Effect.gen(function* () {
                 ? {}
                 : { reviewThreadsTruncated: activity.reviewThreadsTruncated }),
               reviewThreads: activity.reviewThreads,
+              ...withOverviewThreads(activity),
               commits: activity.commits,
               ...(activity.reactions === undefined ? {} : { reactions: activity.reactions }),
             })),

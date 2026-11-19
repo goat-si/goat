@@ -129,3 +129,29 @@ it("enables Ultracode with the selected effort on Sonnet and Haiku 5.5", () => {
     ).toMatchObject({ effort: "high", settings: { ultracode: true } });
   }
 });
+
+it.each(["gateway-route", "gateway-route[1m]"])(
+  "keeps explicit thinking for the unlisted Claude route %s",
+  (model) => {
+    for (const value of [true, false]) {
+      expect(
+        compileClaudeModelSelection(selection(model, [{ id: "thinking", value }])),
+      ).toMatchObject({
+        apiModelId: model,
+        settings: { alwaysThinkingEnabled: value },
+      });
+    }
+    expect(compileClaudeModelSelection(selection(model, [])).settings).not.toHaveProperty(
+      "alwaysThinkingEnabled",
+    );
+  },
+);
+
+it.each(["claude-opus-5-5", "claude-opus-5-5[1m]"])(
+  "omits the thinking choice when the catalog model %s does not support it",
+  (model) => {
+    expect(
+      compileClaudeModelSelection(selection(model, [{ id: "thinking", value: false }])).settings,
+    ).not.toHaveProperty("alwaysThinkingEnabled");
+  },
+);

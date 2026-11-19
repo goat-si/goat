@@ -3,6 +3,10 @@
   "private": true,
   "type": "module",
   "exports": {
+    "./pullRequestAnchor": {
+      "types": "./src/pullRequestAnchor.ts",
+      "import": "./src/pullRequestAnchor.ts"
+    },
     "./memoryGenerationCapabilities": {
       "types": "./src/memoryGenerationCapabilities.ts",
       "import": "./src/memoryGenerationCapabilities.ts"
