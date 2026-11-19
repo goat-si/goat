@@ -18,6 +18,7 @@ import {
   decidePenGatewayRequest,
   filterPenResponseHeaders,
   isPublicPenDescriptor,
+  runnableWaiter,
 } from "./penGatewayPolicy.ts";
 import { openPenPipe, resolvePenBinary, type PenPipeDeps } from "./penPipe.ts";
 import { exchangePenResponse, mintPenSession } from "./penUpstream.ts";
@@ -48,7 +49,7 @@ interface Route {
   readonly dialing: Set<AbortController>;
   readonly settling: Set<Promise<void>>;
   readonly sockets: Map<NodeStream.Duplex, number>;
-  readonly waiting: Array<{ resolve: () => void; reject: (error: Error) => void }>;
+  readonly waiting: Array<{ mint: boolean; resolve: () => void; reject: (error: Error) => void }>;
   closed: boolean;
   active: number;
   readonly minting: Set<MintWaiter>;
@@ -100,8 +101,10 @@ export function makePenGateway(deps: Dependencies) {
         .catch(() => endRoute(route));
   });
   const wake = (route: Route) => {
-    // A woken waiter checks its own limit again; a mint is not bound by the live-forward one.
-    if (!route.closed && route.dialing.size < 6 && children < 128) route.waiting.shift()?.resolve();
+    // The first waiter the limits let dial now: a mint is not held behind forwards still waiting.
+    if (route.closed) return;
+    const index = runnableWaiter(route.waiting, (mint) => saturated(route, mint));
+    if (index >= 0) route.waiting.splice(index, 1)[0]?.resolve();
   };
   const trackSocket = (route: Route, socket: NodeStream.Duplex) => {
     route.sockets.set(socket, (route.sockets.get(socket) ?? 0) + 1);
@@ -124,6 +127,7 @@ export function makePenGateway(deps: Dependencies) {
           reject(new Error("closed"));
         };
         const waiter = {
+          mint,
           resolve: () => {
             signal?.removeEventListener("abort", abort);
             resolve();

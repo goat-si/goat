@@ -207,10 +207,12 @@ export function setRoutesInCatalog(
   const dropped = catalogRoutes(document, environmentId).filter(
     (target) => !kept.has(routeKey(target)),
   );
-  // Saved with only routes the closed Pen gate hides, it comes back last, as a new one does.
-  const firstIndex = document.targets.some(
-    (target) => target.environmentId === environmentId && routeIsShown({ target }),
-  )
+  // Saved with only routes the closed Pen gate hides, it comes back last and switched on, as a
+  // new one does.
+  const saved = document.targets.filter((target) => target.environmentId === environmentId);
+  const shown = saved.some((target) => routeIsShown({ target }));
+  const returning = saved.length > 0 && !shown && routes.some((target) => routeIsShown({ target }));
+  const firstIndex = shown
     ? document.targets.findIndex((target) => target.environmentId === environmentId)
     : -1;
   const others = document.targets.filter((target) => target.environmentId !== environmentId);
@@ -219,9 +221,19 @@ export function setRoutesInCatalog(
       ? others.length
       : document.targets.slice(0, firstIndex).filter((t) => t.environmentId !== environmentId)
           .length;
+  const next = removeRouteMetadata(document, dropped);
   return {
-    ...removeRouteMetadata(document, dropped),
+    ...next,
     targets: [...others.slice(0, insertAt), ...routes, ...others.slice(insertAt)],
+    ...(returning
+      ? {
+          disabledEnvironmentIds: removeCatalogValue(
+            next.disabledEnvironmentIds,
+            (value) => value,
+            environmentId,
+          ),
+        }
+      : {}),
   };
 }
 

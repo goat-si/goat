@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vite-plus/test";
-import { decidePenGatewayRequest } from "./penGatewayPolicy.ts";
+import { decidePenGatewayRequest, runnableWaiter } from "./penGatewayPolicy.ts";
 
 const capability = "a".repeat(43);
 const route = { capability, pin: "member" };
@@ -166,5 +166,17 @@ describe("Pen gateway request policy", () => {
         request({ rawHeaders: ["Host", "127.0.0.1:1234", "Host", "evil", "Origin", "goat://app"] }),
       ).kind,
     ).toBe("refuse");
+  });
+});
+
+describe("Pen gateway dial queue", () => {
+  it("wakes a waiting session mint the forward limit does not hold, past forwards it still holds", () => {
+    const waiting = [...Array.from({ length: 7 }, () => ({ mint: false })), { mint: true }];
+    // Sixteen live forwards: only a mint may dial.
+    expect(runnableWaiter(waiting, (mint) => !mint)).toBe(7);
+    // Room for forwards too: the first in line goes.
+    expect(runnableWaiter(waiting, () => false)).toBe(0);
+    // No dial slot at all: nobody wakes.
+    expect(runnableWaiter(waiting, () => true)).toBe(-1);
   });
 });

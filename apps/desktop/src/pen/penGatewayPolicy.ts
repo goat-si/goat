@@ -203,3 +203,11 @@ export function decidePenGatewayRequest<T extends GatewayRoute>(
     responseHeaders: cors,
   };
 }
+
+/** The first waiter the dial limits let go now; a session mint is not held by the forward limit. */
+export function runnableWaiter<W extends { readonly mint: boolean }>(
+  waiting: ReadonlyArray<W>,
+  saturated: (mint: boolean) => boolean,
+): number {
+  return waiting.findIndex((waiter) => !saturated(waiter.mint));
+}

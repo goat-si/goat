@@ -948,7 +948,7 @@ describe("Pen storage compatibility", () => {
   );
 });
 
-it("an environment saved with only routes the closed Pen gate hides comes back last, as a new one does", () => {
+it("an environment saved with only routes the closed Pen gate hides comes back last and switched on, as a new one does", () => {
   const other = (name: string) =>
     new BearerConnectionTarget({
       environmentId: EnvironmentId.make(name),
@@ -963,8 +963,11 @@ it("an environment saved with only routes the closed Pen gate hides comes back l
   const document = {
     ...EMPTY_CONNECTION_CATALOG_DOCUMENT,
     targets: [other("b"), pen, other("c")],
+    // An older build switched the Pen-only environment off.
+    disabledEnvironmentIds: [ENVIRONMENT_ID],
   };
   const next = setRoutesInCatalog(document, ENVIRONMENT_ID, [pen, BEARER_TARGET]);
+  expect(next.disabledEnvironmentIds).toEqual([]);
   expect(next.targets.map((target) => target.environmentId)).toEqual([
     "b",
     "c",
