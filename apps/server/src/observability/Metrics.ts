@@ -12,6 +12,14 @@ export const serverTraceDroppedRecords = Metric.counter("goat_server_trace_dropp
   incremental: true,
 });
 
+export const otlpExportAttemptFailuresTotal = Metric.counter(
+  "goat_otlp_export_attempt_failures_total",
+  {
+    description: "Failed OTLP export attempts by signal and reason.",
+    incremental: true,
+  },
+);
+
 export const rpcRequestsTotal = Metric.counter("goat_rpc_requests_total", {
   description: "Total RPC requests handled by the websocket RPC server.",
 });

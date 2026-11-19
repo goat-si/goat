@@ -1,3 +1,4 @@
+import { vi } from "vite-plus/test";
 // @effect-diagnostics nodeBuiltinImport:off -- fake systemd binaries live in a temp dir.
 import * as NodeFS from "node:fs";
 import * as NodeOS from "node:os";
@@ -26,6 +27,13 @@ import {
   ownedAgentSlice,
   type ScopeState,
 } from "./agentScope.ts";
+
+const GiB = 1024 ** 3;
+const mockMemory = vi.hoisted(() => ({ total: 16 * 1024 ** 3 }));
+vi.mock("node:os", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("node:os")>()),
+  totalmem: () => mockMemory.total,
+}));
 
 const running: ScopeState = {
   loadState: "loaded",
@@ -66,11 +74,13 @@ const withFakeSystemd = <A, E>(
     stopFails = false,
     leftovers = false,
     liveOwner = false,
+    memoryLimitStatus = () => 0,
   }: {
     readonly oomPolicy?: boolean;
     readonly stopFails?: boolean;
     readonly leftovers?: boolean;
     readonly liveOwner?: boolean;
+    readonly memoryLimitStatus?: () => number;
   } = {},
 ) =>
   Effect.gen(function* () {
@@ -99,6 +109,8 @@ const withFakeSystemd = <A, E>(
             return output("", 1);
           }
           const [, verb, unit = ""] = args;
+          if (verb === "set-property" && args[3] === "app-goat-agents.slice")
+            return output("", memoryLimitStatus());
           if (stopFails && verb === "stop") {
             return {
               ...output(""),
@@ -344,6 +356,41 @@ describe("AgentScope service", () => {
       }),
     ),
   );
+
+  it.effect("retries failed memory updates and applies a live resize once across launches", () => {
+    mockMemory.total = 16 * GiB;
+    let status = 0;
+    return withFakeSystemd(
+      ({ scope, calls }) =>
+        Effect.gen(function* () {
+          const launch = scope.wrap({ command: "agent", args: [], name: "memory-test" });
+          const limits = () =>
+            calls
+              .filter(
+                ([, verb, , slice]) => verb === "set-property" && slice === "app-goat-agents.slice",
+              )
+              .map((args) => args.slice(4));
+          yield* launch;
+          const initial = [`MemoryHigh=${10 * GiB}`, `MemoryMax=${12 * GiB}`];
+          expect(limits()).toEqual([initial]);
+          mockMemory.total = 22 * GiB;
+          status = 1;
+          yield* launch;
+          yield* launch;
+          status = 0;
+          yield* Effect.all([launch, launch, launch], { concurrency: "unbounded" });
+          const grown = [`MemoryHigh=${16 * GiB}`, `MemoryMax=${18 * GiB}`];
+          expect(limits()).toEqual([initial, grown, grown, grown]);
+        }),
+      { memoryLimitStatus: () => status },
+    ).pipe(
+      Effect.ensuring(
+        Effect.sync(() => {
+          mockMemory.total = 16 * GiB;
+        }),
+      ),
+    );
+  });
 
   it.effect("stops agents a killed server left before startup completes", () =>
     withFakeSystemd(

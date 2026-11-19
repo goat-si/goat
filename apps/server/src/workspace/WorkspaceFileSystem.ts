@@ -333,7 +333,23 @@ export const make = Effect.gen(function* () {
     });
 
     const realWorkspaceRoot = yield* Effect.tryPromise({
-      try: () => NodeFSP.realpath(path.resolve(input.cwd)),
+      try: async () => {
+        const root = path.resolve(input.cwd);
+        try {
+          return await NodeFSP.realpath(root);
+        } catch (error) {
+          if (!input.allowMissing || (error as NodeJS.ErrnoException).code !== "ENOENT") {
+            throw error;
+          }
+          // A dangling workspace root is still an existing link.
+          const entry = await NodeFSP.lstat(root).catch((cause: NodeJS.ErrnoException) => {
+            if (cause.code !== "ENOENT") throw cause;
+            return undefined;
+          });
+          if (entry !== undefined) throw error;
+          return null;
+        }
+      },
       catch: (cause) =>
         new WorkspaceFileSystemOperationError({
           workspaceRoot: input.cwd,
@@ -344,6 +360,9 @@ export const make = Effect.gen(function* () {
           cause,
         }),
     });
+    if (realWorkspaceRoot === null) {
+      return { relativePath: target.relativePath, realTargetPath: null };
+    }
     const resolved = yield* Effect.tryPromise({
       try: async () => {
         let candidate = target.absolutePath;

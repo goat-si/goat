@@ -1,3 +1,4 @@
+import * as TestClock from "effect/testing/TestClock";
 import * as NodeServices from "@effect/platform-node/NodeServices";
 import { it } from "@effect/vitest";
 import { assert, describe, expect } from "vite-plus/test";
@@ -466,4 +467,66 @@ it.effect("keeps browser SQL records and counts server sink loss with a fixed re
       [record],
     );
   }).pipe(Effect.provide(NodeServices.layer)),
+);
+
+it.effect("counts failed exporter attempts on all three signals while retries still succeed", () =>
+  Effect.gen(function* () {
+    const fs = yield* FileSystem.FileSystem;
+    const dir = yield* fs.makeTempDirectoryScoped({ prefix: "goat-otlp-attempts-" });
+    const attempts = new Map<string, number>();
+    const layerCollector = Layer.succeed(
+      HttpClient.HttpClient,
+      HttpClient.make((request) =>
+        Effect.sync(() => {
+          const path = new URL(request.url).pathname;
+          const count = (attempts.get(path) ?? 0) + 1;
+          attempts.set(path, count);
+          return HttpClientResponse.fromWeb(
+            request,
+            new Response(null, { status: count === 1 ? 503 : 200 }),
+          );
+        }),
+      ),
+    );
+    const layerConfig = Layer.effect(
+      ServerConfig.ServerConfig,
+      Effect.map(ServerConfig.ServerConfig, (base) =>
+        ServerConfig.make({
+          ...base,
+          logLevel: "Info",
+          otlpTracesUrl: "http://otlp.test/v1/traces",
+          otlpMetricsUrl: "http://otlp.test/v1/metrics",
+          otlpLogsUrl: "http://otlp.test/v1/logs",
+          otlpTracesExport: { ...base.otlpTracesExport, exportIntervalMs: 1_000 },
+          otlpMetricsExport: { ...base.otlpMetricsExport, exportIntervalMs: 1_000 },
+          otlpLogsExport: { ...base.otlpLogsExport, exportIntervalMs: 1_000 },
+        }),
+      ),
+    ).pipe(Layer.provide(ServerConfig.layerTest(dir, dir)));
+
+    yield* Effect.gen(function* () {
+      yield* Effect.logInfo("export failure fixture").pipe(Effect.withSpan("otlp.attempt.fixture"));
+      yield* Metric.update(Metric.counter("otlp_attempt_fixture"), 1);
+      yield* TestClock.adjust("20 seconds");
+      for (const signal of ["logs", "traces", "metrics"]) {
+        expect(attempts.get(`/v1/${signal}`)).toBeGreaterThanOrEqual(2);
+        const metric = Metric.withAttributes(Metrics.otlpExportAttemptFailuresTotal, {
+          signal,
+          reason: "status_5xx",
+        });
+        expect((yield* Metric.value(metric)).count).toBe(1);
+      }
+    }).pipe(
+      Effect.provide(
+        Observability.layer.pipe(
+          Layer.provide(layerConfig),
+          Layer.provide(ResourceAttribution.layer),
+          Layer.provide(layerCollector),
+        ),
+      ),
+    );
+  }).pipe(
+    Effect.provide(NodeServices.layer),
+    Effect.provideService(Metric.MetricRegistry, new Map()),
+  ),
 );

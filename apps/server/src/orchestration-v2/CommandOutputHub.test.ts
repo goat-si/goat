@@ -109,7 +109,10 @@ const writeCommandItem = (
   fields: Pick<
     Extract<OrchestrationV2TurnItem, { type: "command_execution" }>,
     "status" | "output" | "exitCode"
-  >,
+  > & {
+    readonly nativeItemRef?: NonNullable<OrchestrationV2TurnItem["nativeItemRef"]>;
+    readonly startedAt?: DateTime.Utc;
+  },
 ) =>
   Effect.gen(function* () {
     const idAllocator = yield* IdAllocator.IdAllocatorV2;
@@ -417,10 +420,38 @@ layer("CommandOutputHub", (it) => {
           status: "completed",
           exitCode: 0,
           output: '{"stdout":"built","stderr":"1 warning","interrupted":false}',
+          nativeItemRef: {
+            driver: ProviderDriverKind.make("claudeAgent"),
+            nativeId: "tool-1",
+            strength: "strong",
+          },
+          startedAt: DateTime.makeUnsafe("2026-10-03T12:00:00Z"),
         });
         const frames = yield* subscribeFrames(threadId);
         const final = yield* takeFrame(frames);
         assert.equal(final.text, "built\n1 warning");
+      }),
+    ),
+  );
+
+  it.effect("preserves a literal JSON envelope printed by a newer Claude command", () =>
+    Effect.scoped(
+      Effect.gen(function* () {
+        const threadId = yield* seedThread;
+        const output = '{"stdout":"printed","stderr":"literal","interrupted":false}';
+        yield* writeCommandItem(threadId, {
+          status: "completed",
+          exitCode: 0,
+          output,
+          nativeItemRef: {
+            driver: ProviderDriverKind.make("claudeAgent"),
+            nativeId: "tool-1",
+            strength: "strong",
+          },
+          startedAt: DateTime.makeUnsafe("2026-11-13T12:00:00Z"),
+        });
+        const frames = yield* subscribeFrames(threadId);
+        assert.equal((yield* takeFrame(frames)).text, output);
       }),
     ),
   );
