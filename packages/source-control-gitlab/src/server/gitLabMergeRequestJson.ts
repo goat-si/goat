@@ -1,3 +1,5 @@
+import { toMergeability } from "./gitLabMergeRequestMergeability.ts";
+export { toMergeability } from "./gitLabMergeRequestMergeability.ts";
 import {
   forkFields,
   reviewerInfo,
@@ -82,7 +84,7 @@ const RawMergeRequestDiffRefs = Schema.Struct({
   start_sha: Schema.NullOr(Schema.String),
 });
 
-const RawMergeRequestSchema = Schema.Struct({
+export const RawMergeRequestSchema = Schema.Struct({
   ...forkFields.fields,
   iid: Schema.Int,
   title: Schema.String,
@@ -275,20 +277,6 @@ export function toState(
       return "closed";
     default:
       return "open";
-  }
-}
-
-export function toMergeability(
-  raw: Pick<Schema.Schema.Type<typeof RawMergeRequestSchema>, "has_conflicts" | "merge_status">,
-): PullRequestMergeability {
-  if (raw.has_conflicts === true) return "conflicting";
-  switch (raw.merge_status?.trim().toLowerCase()) {
-    case "can_be_merged":
-      return "mergeable";
-    case "cannot_be_merged":
-      return "conflicting";
-    default:
-      return "unknown";
   }
 }
 
