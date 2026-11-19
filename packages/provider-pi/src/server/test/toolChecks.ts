@@ -550,4 +550,38 @@ export function registerPiToolChecks({
       assert.equal(event.turnItem.viewedImagePath, "/workspace/shot.png");
     }).pipe(Effect.scoped, Effect.provide(layerTest)),
   );
+  it.effect.each(["settled", "abort", "runtime restart"] as const)(
+    "retains the live session after extension handoff (%s)",
+    (mode) =>
+      Effect.gen(function* () {
+        const fake = yield* makeFakePi;
+        const { runtime, takeEvent } = yield* openRuntime(fake);
+        const thread = yield* runtime.ensureThread({
+          threadId: THREAD_ID,
+          modelSelection: modelSelection("default"),
+          runtimePolicy,
+        });
+        yield* startTurn(runtime, thread);
+        yield* fake.takeRequest("prompt");
+        const running = yield* takeEvent((event) => event.type === "provider_turn.updated");
+        if (running.type !== "provider_turn.updated") return yield* Effect.die("Expected turn");
+        yield* fake.emit({ type: "agent_start" });
+        if (mode !== "settled") {
+          fake.queueState({ sessionFile: "/fake/extension-child.jsonl" });
+          yield* runtime.interruptTurn({
+            providerThread: thread,
+            providerTurnId: running.providerTurn.id,
+            requestRuntimeRestart: mode === "runtime restart",
+          });
+        } else fake.queueState({ sessionFile: "/fake/extension-child.jsonl" });
+        if (mode !== "runtime restart")
+          yield* fake.emit({ type: "agent_settled", aborted: mode === "abort" });
+        const idle = yield* takeEvent(
+          (event) =>
+            event.type === "provider_thread.updated" && event.providerThread.status === "idle",
+        );
+        if (idle.type !== "provider_thread.updated") return yield* Effect.die("Expected thread");
+        assert.equal(idle.providerThread.nativeThreadRef?.nativeId, "/fake/extension-child.jsonl");
+      }).pipe(Effect.scoped, Effect.provide(layerTest)),
+  );
 }

@@ -82,6 +82,7 @@ export interface PiPromptSend {
 }
 
 export interface PiThreadState {
+  readonly supersededSessionFiles: Set<string>;
   providerThread: OrchestrationV2ProviderThread;
   activeTurn: ActivePiTurn | null;
 }

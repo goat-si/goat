@@ -1,4 +1,5 @@
 import { compactRpcRecord, itemOrdinal, compactionNativeItemId } from "./turnHelpers.ts";
+import { adoptLivePiSession, isLivePiSession } from "./sessionIdentity.ts";
 import { piViewedImagePath } from "./viewedImagePath.ts";
 import { tokenUsageFromStats } from "./tokenUsage.ts";
 import { nonNegativeInteger, rememberPiModelContextWindow } from "./modelContextWindow.ts";
@@ -1977,7 +1978,13 @@ export const makePiAdapterV2 = Effect.fn("makePiAdapterV2")(function* (
           }
           case "agent_settled": {
             if (turn?.interrupted === true) {
-              if (state !== null) yield* finalizeTurn(state);
+              if (state !== null) {
+                const live = yield* request({ type: "get_state" }, 2_000).pipe(
+                  Effect.orElseSucceed(() => undefined),
+                );
+                lastNativeThreadId = adoptLivePiSession(state, live, driver) ?? lastNativeThreadId;
+                yield* finalizeTurn(state);
+              }
               return;
             }
             if (turn !== null) {
@@ -2210,7 +2217,10 @@ export const makePiAdapterV2 = Effect.fn("makePiAdapterV2")(function* (
               (recordNumber(data, "pendingMessageCount") ?? 0) === 0
             ) {
               turn.settleWhenIdle = false;
-              if (state !== null) yield* finalizeTurn(state);
+              if (state !== null) {
+                lastNativeThreadId = adoptLivePiSession(state, data, driver) ?? lastNativeThreadId;
+                yield* finalizeTurn(state);
+              }
             }
             return;
           }
@@ -2485,7 +2495,11 @@ export const makePiAdapterV2 = Effect.fn("makePiAdapterV2")(function* (
                   return yield* protocolError(
                     "Cannot switch Pi threads while native work is awaiting a turn",
                   );
-                threadState = { providerThread, activeTurn: null };
+                threadState = {
+                  providerThread,
+                  activeTurn: null,
+                  supersededSessionFiles: new Set(),
+                };
               }
               lastKnownLeaf = recordString(baselineEntries, "leafId") ?? null;
               leafCursorStale = baselineEntries === undefined;
@@ -2697,10 +2711,7 @@ export const makePiAdapterV2 = Effect.fn("makePiAdapterV2")(function* (
               if (pendingPromptResponsesDrained === null) break;
               yield* awaitPromptAck(pendingPromptResponsesDrained);
             }
-            if (
-              state.providerThread.nativeThreadRef?.nativeId !==
-              turnInput.providerThread.nativeThreadRef?.nativeId
-            ) {
+            if (!isLivePiSession(state, turnInput.providerThread.nativeThreadRef?.nativeId)) {
               return yield* protocolError("Pi turn requested for a different native session");
             }
             // Fork adoption uses the orchestrator-allocated row; preserve that identity in later updates.
@@ -2787,8 +2798,7 @@ export const makePiAdapterV2 = Effect.fn("makePiAdapterV2")(function* (
                   closed ||
                   stopRequested ||
                   rollbackBarrier !== null ||
-                  state.providerThread.nativeThreadRef?.nativeId !==
-                    turnInput.providerThread.nativeThreadRef?.nativeId
+                  !isLivePiSession(state, turnInput.providerThread.nativeThreadRef?.nativeId)
                 ) {
                   return yield* protocolError("Pi turn ownership changed before it could start");
                 }
@@ -2798,7 +2808,10 @@ export const makePiAdapterV2 = Effect.fn("makePiAdapterV2")(function* (
                   return yield* protocolError("Pi native wake belongs to a different app thread");
                 }
                 pendingWake = null;
-                state.providerThread = turnInput.providerThread;
+                state.providerThread = {
+                  ...turnInput.providerThread,
+                  nativeThreadRef: state.providerThread.nativeThreadRef,
+                };
                 state.activeTurn = activeTurn;
                 activeTurn.adoptedWake = wake !== null && !continuation;
                 if (compactCommand !== null) {
@@ -2965,8 +2978,14 @@ export const makePiAdapterV2 = Effect.fn("makePiAdapterV2")(function* (
               // Read rollback tree refs before termination breaks requests; the permit lets in-flight capture finish.
               yield* sessionEventPermit.withPermits(1)(
                 Effect.gen(function* () {
-                  if (threadState?.activeTurn === turn && turn.stopTreeRefs === undefined) {
-                    turn.stopTreeRefs = yield* captureTurnTreeRefs(2_000).pipe(
+                  if (threadState?.activeTurn === turn) {
+                    turn.settleProbeGeneration += 1;
+                    const live = yield* request({ type: "get_state" }, 2_000).pipe(
+                      Effect.orElseSucceed(() => undefined),
+                    );
+                    lastNativeThreadId =
+                      adoptLivePiSession(threadState, live, driver) ?? lastNativeThreadId;
+                    turn.stopTreeRefs ??= yield* captureTurnTreeRefs(2_000).pipe(
                       Effect.catch((cause) =>
                         Effect.logWarning("Pi turn history could not be read before stop", {
                           cause,
