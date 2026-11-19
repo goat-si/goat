@@ -755,6 +755,7 @@ describe.skipIf(HostProcess.Platform.defaultValue() === "win32")("Claude CLI pro
 
       const unknown = yield* startupFailureMessage("token=sk-private-123");
       assert.notInclude(unknown, "sk-private-123");
+      assert.include(unknown, "Claude Code process exited with code 1");
     }).pipe(Effect.provide(realQueryRunner)),
   );
 
