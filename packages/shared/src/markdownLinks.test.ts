@@ -23,6 +23,16 @@ describe("isMarkdownFileLinkLabel", () => {
 });
 
 describe("inlineCodeFilePathCandidate", () => {
+  it.each([
+    ["/Users/me/Path Test/notes with spaces.md", "/Users/me/Path Test/notes with spaces.md"],
+    ["~/Library/Mobile Documents/notes.md", "~/Library/Mobile Documents/notes.md"],
+    ["/usr/bin/python3 -m venv .venv", null],
+    ["/usr/local/bin/node server.js", null],
+    ["/bin/echo hello world.txt", null],
+    ["/Users/me/notes with spaces.md", "/Users/me/notes with spaces.md"],
+  ])("distinguishes spaced absolute paths and command snippets: %s", (source, expected) => {
+    expect(inlineCodeFilePathCandidate(source)).toBe(expected);
+  });
   // regression: #13909 model ids in inline code do not become file chips
   it.each([
     ["src\\main.ts", "src/main.ts"],
