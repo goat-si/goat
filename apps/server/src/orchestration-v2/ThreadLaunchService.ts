@@ -29,6 +29,7 @@ export {
   ThreadLaunchNotRepositoryError,
 } from "./WorktreePreflight.ts";
 import { launchBranch } from "./launchBranch.ts";
+import { makeFailPreparedRun } from "./PreparationFailureRetry.ts";
 import * as WorktreeSetupTracker from "../project/WorktreeSetupTracker.ts";
 import * as ProjectCloneTracker from "../project/ProjectCloneTracker.ts";
 import * as TerminalManager from "../terminal/Manager.ts";
@@ -75,22 +76,13 @@ import * as EventSink from "./EventSink.ts";
 import * as CommandReceiptStore from "./CommandReceiptStore.ts";
 import * as IdAllocator from "@goat/provider-core/server/IdAllocator";
 import type * as Orchestrator from "./Orchestrator.ts";
-import { makeProviderFailure } from "@goat/provider-core/server/failure";
 import { type ProviderCliMissingError, providerCliGuard } from "../provider/ProviderCliGate.ts";
 import { randomUuidV4 } from "@goat/shared/randomUuid";
 import * as ThreadManagement from "./ThreadManagementService.ts";
-import {
-  appendPreparationLine,
-  type PreparationLog,
-  withPreparationLog,
-} from "./preparationLog.ts";
+import { appendPreparationLine, type PreparationLog } from "./preparationLog.ts";
 import { confirmLaunchStep } from "./goat/LaunchConfirm.ts";
 import { checkedOutTo, submoduleProgress } from "./goat/worktreeSubmoduleProgress.ts";
-import {
-  failureDetail,
-  preparationFailureClass,
-  ThreadLaunchError,
-} from "./goat/ThreadLaunchError.ts";
+import { failureDetail, ThreadLaunchError } from "./goat/ThreadLaunchError.ts";
 export { preparationFailureClass, ThreadLaunchError } from "./goat/ThreadLaunchError.ts";
 import { makeLaunchCommandSlots } from "./goat/launchCommandSlots.ts";
 import { makePreparedWorkerRelease } from "../channels/channelWorkerReleaseAuthority.ts";
@@ -888,44 +880,7 @@ const make = Effect.gen(function* () {
     );
   });
 
-  const failPreparedRun = (
-    input: Pick<PreparationInput, "commandId">,
-    threadId: ThreadId,
-    runId: RunId | null,
-    cause: unknown,
-    log: PreparationLog = [],
-  ) =>
-    runId === null
-      ? Effect.logWarning("Thread workspace preparation failed", {
-          commandId: input.commandId,
-          threadId,
-          cause,
-        })
-      : threads
-          .dispatch({
-            type: "prepared-run.fail",
-            commandId: CommandId.make(`${input.commandId}:fail`),
-            threadId,
-            runId,
-            failure: withPreparationLog(
-              makeProviderFailure({
-                cause,
-                message: failureDetail(cause),
-                ...preparationFailureClass(cause),
-              }),
-              log,
-            ),
-          })
-          .pipe(
-            Effect.catchCause((persistCause) =>
-              Effect.logWarning("Failed to persist thread workspace preparation failure", {
-                commandId: input.commandId,
-                threadId,
-                cause,
-                persistCause,
-              }),
-            ),
-          );
+  const failPreparedRun = makeFailPreparedRun(threads);
 
   const schedulePreparation = Effect.fn("ThreadLaunchService.schedulePreparation")(function* (
     input: PreparationInput,
@@ -1301,7 +1256,14 @@ const make = Effect.gen(function* () {
       );
     }).pipe(Effect.exit);
     if (Exit.isFailure(scheduled)) {
-      yield* failPreparedRun(input, input.threadId, input.runId, Cause.squash(scheduled.cause));
+      yield* failPreparedRun(
+        input,
+        input.threadId,
+        input.runId,
+        Cause.squash(scheduled.cause),
+        [],
+        false,
+      );
     }
   });
 
