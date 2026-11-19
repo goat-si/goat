@@ -137,3 +137,11 @@ export interface ProviderSessionManagerV2Shape {
     readonly threadId: ThreadId;
   }) => Effect.Effect<ReadonlyArray<ThreadId>>;
 }
+
+export interface ProviderSessionManagerV2LayerOptions {
+  readonly idleTimeoutMs?: number;
+  readonly maxIdlePinMs?: number;
+  readonly configureMcp?: boolean;
+  /** Test barrier after activity/removal updates, before awaiting idle-fiber interruption. */
+  readonly beforeIdleFiberInterrupt?: Effect.Effect<void>;
+}

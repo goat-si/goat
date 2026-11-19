@@ -103,11 +103,13 @@ import type {
   ProviderMemoryPrepareInput,
   McpCredentialRotation,
   ProviderSessionManagerV2Shape,
+  ProviderSessionManagerV2LayerOptions,
 } from "./ProviderSessionManagerTypes.ts";
 export type {
   ProviderMemoryPrepareInput,
   McpCredentialRotation,
   ProviderSessionManagerV2Shape,
+  ProviderSessionManagerV2LayerOptions,
 } from "./ProviderSessionManagerTypes.ts";
 const DEFAULT_IDLE_TIMEOUT_MS = 30 * 60 * 1000;
 const DEFAULT_MAX_IDLE_PIN_MS = 4 * 60 * 60 * 1000;
@@ -163,14 +165,6 @@ interface IdleThreadUnload {
   readonly providerThread: OrchestrationV2ProviderThread;
   readonly generation: number;
   readonly fiber: Fiber.Fiber<void, never> | null;
-}
-
-export interface ProviderSessionManagerV2LayerOptions {
-  readonly idleTimeoutMs?: number;
-  readonly maxIdlePinMs?: number;
-  readonly configureMcp?: boolean;
-  /** Test barrier after activity/removal updates, before awaiting idle-fiber interruption. */
-  readonly beforeIdleFiberInterrupt?: Effect.Effect<void>;
 }
 
 export const layerWithOptions = (
