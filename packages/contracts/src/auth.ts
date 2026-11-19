@@ -5,6 +5,7 @@ import {
 import * as Schema from "effect/Schema";
 import * as HttpApiSchema from "effect/http-api/HttpApiSchema";
 import type { ServerSettingsPatch } from "./settings.ts";
+import { containsSecretReference } from "./secretReference.ts";
 
 import {
   AuthSessionId,
@@ -656,7 +657,7 @@ export function requiredScopesForServerSettingsPatch(
   patch: ServerSettingsPatch,
   agentTerminalBinding?: AgentTerminalBinding,
 ): ReadonlyArray<AuthEnvironmentScope> {
-  let changesProviders = false;
+  let changesProviders = containsSecretReference(patch);
   let changesSettings = false;
   let changesVoice = false;
   for (const [key, value] of Object.entries(patch)) {

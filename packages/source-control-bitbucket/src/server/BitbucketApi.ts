@@ -1,4 +1,4 @@
-import { originOf } from "./bitbucketOrigin.ts";
+import { credentialDestinationDetail, originOf } from "./bitbucketOrigin.ts";
 import * as Clock from "effect/Clock";
 import * as Config from "effect/Config";
 import * as Context from "effect/Context";
@@ -105,7 +105,7 @@ export class BitbucketRequestError extends Schema.TaggedError<BitbucketRequestEr
   },
 ) {
   get detail(): string {
-    return "Failed to send the Bitbucket request.";
+    return credentialDestinationDetail(this.cause) ?? "Failed to send the Bitbucket request.";
   }
 
   override get message(): string {
@@ -656,24 +656,28 @@ export const make = Effect.gen(function* () {
 
   const apiUrl = (path: string) => `${config.baseUrl.replace(/\/+$/u, "")}${path}`;
 
-  const currentCredential = host.settings.getWithSecrets(BitbucketClient.definition.kind).pipe(
-    Effect.map((settings) =>
-      resolveCredential(
-        readSourceControlHostSettings(
-          BitbucketClient.settings,
-          settings.sourceControlHosts[BitbucketClient.definition.kind],
+  const currentCredential = host.settings
+    .getWithSecrets(BitbucketClient.definition.kind, URL.parse(config.baseUrl)?.host)
+    .pipe(
+      Effect.map((settings) =>
+        resolveCredential(
+          readSourceControlHostSettings(
+            BitbucketClient.settings,
+            settings.sourceControlHosts[BitbucketClient.definition.kind],
+          ),
+          config,
         ),
-        config,
       ),
-    ),
-    Effect.mapError(
-      () =>
-        new BitbucketRequestError({
-          operation: "request",
-          cause: new Error("Could not read saved credential"),
-        }),
-    ),
-  );
+      Effect.mapError(
+        (cause) =>
+          new BitbucketRequestError({
+            operation: "request",
+            cause: credentialDestinationDetail(cause)
+              ? cause
+              : new Error("Could not read saved credential"),
+          }),
+      ),
+    );
 
   const withAuth = (request: HttpClientRequest.HttpClientRequest) =>
     currentCredential.pipe(
