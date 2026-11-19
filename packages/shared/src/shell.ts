@@ -763,7 +763,7 @@ export function npmShimExecutable(
   if (NPM_EXECUTABLE_SHIM_PREFIX.some((expected, index) => lines[index] !== expected)) {
     return undefined;
   }
-  const target = NPM_EXECUTABLE_SHIM_RUN.exec(lines.at(-1)!)?.[1];
+  const target = NPM_EXECUTABLE_SHIM_RUN.exec(lines.at(-1) ?? "")?.[1];
   if (target === undefined) return undefined;
   const executable = path.join(path.dirname(shimPath), target);
   return isFile(executable) ? executable : undefined;
