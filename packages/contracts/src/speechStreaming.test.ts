@@ -5,6 +5,8 @@ import { WsSpeechStreamRpcGroup } from "./rpc.ts";
 
 const accepts = Schema.is(SpeechStreamFeed);
 const acceptsEvent = Schema.is(SpeechStreamEvent);
+const decodeFeed = Schema.decodeUnknownSync(SpeechStreamFeed);
+const encodeEvent = Schema.encodeUnknownSync(SpeechStreamEvent);
 
 it("bounds and validates encoded streaming audio at the wire boundary", () => {
   const valid = { streamId: "stream-fixture", sequence: 0, audioBase64: "AAA=" };
@@ -12,6 +14,23 @@ it("bounds and validates encoded streaming audio at the wire boundary", () => {
   expect(accepts({ ...valid, sequence: -1 })).toBe(false);
   expect(accepts({ ...valid, audioBase64: "!" })).toBe(false);
   expect(accepts({ ...valid, audioBase64: "A".repeat(43_696) })).toBe(false);
+});
+
+it("does not include audio or transcript content in schema error messages", () => {
+  const marker = "SYNTHETIC_PRIVATE_AUDIO_OR_TRANSCRIPT";
+  const errors: string[] = [];
+  for (const input of [
+    () => decodeFeed({ streamId: "fixture", sequence: 0, audioBase64: `${marker}!` }),
+    () => encodeEvent({ type: "partial", revision: -1, committed: marker, tentative: "" }),
+  ]) {
+    try {
+      input();
+    } catch (error) {
+      errors.push(String(error));
+    }
+  }
+  expect(errors).toHaveLength(2);
+  expect(errors.every((message) => !message.includes(marker))).toBe(true);
 });
 
 it("exposes each streaming operation on the authenticated RPC group", () => {
