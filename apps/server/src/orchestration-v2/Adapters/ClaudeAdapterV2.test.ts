@@ -6631,8 +6631,11 @@ describe("ClaudeAdapterV2 background wake turns", () => {
           {
             taskId: longRunning.taskId,
             kind: "monitor",
+            awaited: true,
             description: "Monitor 0",
             nativeItemId: "toolu_monitor_0",
+            command: "sleep 8 && echo MONITOR_DONE",
+            startedAt: "1970-01-01T00:00:00.000Z",
           },
         ]);
       }).pipe(Effect.provide(layerAdapterTest)),
