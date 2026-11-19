@@ -1,4 +1,5 @@
 import { assertPinSettled } from "./testkit/PinSettledAssertion.ts";
+import { assertMergeBackFreshMessage } from "./testkit/MergeBackFreshAssertion.ts";
 import { PullRequestProviderError } from "@goat/source-control-core/server/PullRequestProvider";
 import { markStartClaimed } from "./StartLaneRecovery.testkit.ts";
 import * as Option from "effect/Option";
@@ -2341,6 +2342,7 @@ it.layer(layerTest)("OrchestrationV2LayerLive", (it) => {
       );
       assert.isDefined(transfer);
       assert.equal(transfer.status, "pending");
+      yield* assertMergeBackFreshMessage(orchestrator, targetThreadId);
       assert.equal(transfer.sourceThreadId, sourceThreadId);
       assert.equal(transfer.targetThreadId, targetThreadId);
       assert.equal(transfer.sourcePoint.runId, sourceRunId);
