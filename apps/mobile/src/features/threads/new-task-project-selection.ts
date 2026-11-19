@@ -109,6 +109,8 @@ export function resolveDraftProjectSelection(
     readonly incomingShareId?: string;
     readonly pickerClosed: boolean;
     readonly connectedEnvironmentIds: ReadonlySet<EnvironmentId>;
+    readonly useLastProject?: boolean | undefined;
+    readonly lastProject?: ProjectRef | undefined;
   },
 ): DraftProjectSelectionResolution {
   const hasExplicitProjectSelection =
@@ -123,6 +125,16 @@ export function resolveDraftProjectSelection(
   if (draft.pickerClosed && selectedProjectKey === null && draft.incomingShareId === undefined) {
     return { kind: "dismiss" };
   }
+  const last =
+    draft.incomingShareId !== undefined && draft.useLastProject !== false
+      ? projects.find(
+          (project) =>
+            project.environmentId === draft.lastProject?.environmentId &&
+            project.id === draft.lastProject.projectId &&
+            project.archivedAt == null,
+        )
+      : undefined;
+  if (last) return { kind: "select", project: last };
   const onlyScope =
     draft.incomingShareId !== undefined && projectScopes.length === 1 ? projectScopes[0] : null;
   return onlyScope

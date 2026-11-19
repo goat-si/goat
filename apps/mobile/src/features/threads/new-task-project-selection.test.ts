@@ -195,6 +195,34 @@ describe("new task project choice", () => {
     ).toEqual({ kind: "preserve" });
   });
 
+  it("starts an incoming share in the remembered project when enabled", () => {
+    const first = makeProject("first");
+    const last = makeProject("last");
+    const projects = [first, last];
+    const scopes = projects.map((project) => makeScope([project]));
+    const draft = {
+      incomingShareId: "share",
+      pickerClosed: false,
+      connectedEnvironmentIds: new Set([first.environmentId]),
+      lastProject: { environmentId: last.environmentId, projectId: last.id },
+    };
+    expect(resolveDraftProjectSelection(null, projects, scopes, draft)).toEqual({
+      kind: "select",
+      project: last,
+    });
+    expect(
+      resolveDraftProjectSelection(null, projects, scopes, { ...draft, useLastProject: false }),
+    ).toEqual({ kind: "pick" });
+    expect(
+      resolveDraftProjectSelection(
+        null,
+        [first, { ...last, archivedAt: "2026-07-02" }],
+        scopes,
+        draft,
+      ),
+    ).toEqual({ kind: "pick" });
+  });
+
   // regression: #1971 a cancelled multi-project share picker must leave a way out.
   it("keeps a shared draft unlocked after picker cancellation until a destination is chosen", async () => {
     const first = makeProject("first");

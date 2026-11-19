@@ -1,3 +1,6 @@
+import { AsyncResult } from "effect/reactivity";
+import { appAtomRegistry } from "../../state/atom-registry";
+import { mobilePreferencesAtom } from "../../state/preferences";
 import { EnvironmentId } from "@goat/contracts";
 import { useNewTaskEnvironmentLoading } from "./use-new-task-environment-loading";
 import { useEffect, useRef } from "react";
@@ -108,12 +111,16 @@ export function useInitialNewTaskProject(props: {
     }
 
     if (initialPickerRef.current === "opening" && !isFocused) initialPickerRef.current = "open";
+    const preferences = appAtomRegistry.get(mobilePreferencesAtom);
+    const saved = AsyncResult.isSuccess(preferences) ? preferences.value : undefined;
     const selection = resolveDraftProjectSelection(
       selectedProjectKey,
       projects,
       pickableProjectGroups(projectScopes),
       {
         incomingShareId,
+        useLastProject: saved?.useLastProjectForNewThreads,
+        lastProject: saved?.lastThreadProject,
         pickerClosed: initialPickerRef.current === "open" && isFocused,
         connectedEnvironmentIds: new Set(
           environments
