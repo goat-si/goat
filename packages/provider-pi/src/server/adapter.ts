@@ -1,3 +1,4 @@
+import { makePiProtocolError } from "./adapterErrors.ts";
 import * as PiConstants from "./adapterConstants.ts";
 import { recheckPiSelection } from "./selectionDrift.ts";
 import { compactRpcRecord, itemOrdinal, compactionNativeItemId } from "./turnHelpers.ts";
@@ -130,12 +131,7 @@ export const makePiAdapterV2 = Effect.fn("makePiAdapterV2")(function* (
   const mcpSessions = yield* McpProviderSessions.McpProviderSessions;
   const { continuationRequests } = options;
 
-  const protocolError = (detail: string, payload?: unknown) =>
-    new ProviderAdapter.ProviderAdapterProtocolError({
-      driver,
-      detail,
-      ...(payload === undefined ? {} : { payload }),
-    });
+  const protocolError = makePiProtocolError(driver);
 
   return ProviderAdapter.ProviderAdapterV2.of({
     instanceId: options.instanceId,
