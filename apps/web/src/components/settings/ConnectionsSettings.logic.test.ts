@@ -353,7 +353,12 @@ function rowPresentation(
   entry: ConnectionCatalogEntry = sshEntry,
 ) {
   return savedConnectionPresentation({
-    environment: { entry: { ...entry, enabled }, connection, serverConfig: null },
+    environment: {
+      entry: { ...entry, enabled },
+      connection,
+      serverConfig: null,
+      refusedRouteIds: [],
+    },
     runtimeStatus,
   });
 }
