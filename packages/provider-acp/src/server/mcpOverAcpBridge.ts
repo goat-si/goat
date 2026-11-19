@@ -170,7 +170,14 @@ export const makeAcpMcpOverAcpBridge = Effect.fn("AcpMcpOverAcpBridge.make")(fun
   ): Effect.fn.Return<AcpSchema.DisconnectMcpResponse, AcpMcpOverAcpError> {
     return yield* Effect.acquireUseRelease(
       connectionFor(request.connectionId, true),
-      disconnectRemote,
+      (connection) =>
+        disconnectRemote(connection).pipe(
+          Effect.timeoutOrElse({
+            duration: "5 seconds",
+            orElse: () =>
+              Effect.fail(new AcpMcpOverAcpError("GOAT MCP endpoint did not answer disconnect.")),
+          }),
+        ),
       (connection, result) =>
         Effect.sync(() => {
           if (Exit.isSuccess(result)) connections.delete(request.connectionId);
@@ -272,7 +279,7 @@ export const makeAcpMcpOverAcpBridge = Effect.fn("AcpMcpOverAcpBridge.make")(fun
       Effect.forEach(
         [...connections.keys()],
         (connectionId) => disconnect({ connectionId }).pipe(Effect.ignore),
-        { discard: true },
+        { concurrency: "unbounded", discard: true },
       ).pipe(Effect.ensuring(Effect.sync(() => connections.clear()))),
     ),
   };
