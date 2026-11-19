@@ -1,4 +1,4 @@
-import { claudeTurnCursor, isSyntheticClaudeTurnId } from "./ClaudeTurnCursor.ts";
+import * as ClaudeTurnCursor from "./ClaudeTurnCursor.ts";
 import { makeClaudeAppContextDelivery } from "./ClaudeAppContext.ts";
 import {
   CLAUDE_ATTACHMENT_MAX_BYTES,
@@ -148,6 +148,7 @@ import {
 import {
   CLAUDE_MCP_ELICITATION_OPTIONS,
   claudeApprovalPresentation,
+  claudeRemovalDecision,
   permissionResultFromDecision,
 } from "./ClaudeApproval.ts";
 import * as Scope from "effect/Scope";
@@ -941,12 +942,6 @@ const getNativeThreadId = Effect.fnUntraced(function* (
   return nativeThreadId;
 });
 
-const isTerminalProviderTurn = (turn: OrchestrationV2ProviderTurn): boolean =>
-  turn.status === "completed" ||
-  turn.status === "interrupted" ||
-  turn.status === "failed" ||
-  turn.status === "cancelled";
-
 const getNativeConversationHeadId = Effect.fnUntraced(function* (
   providerThread: OrchestrationV2ProviderThread,
 ) {
@@ -991,7 +986,7 @@ const resolveClaudeForkUpToMessageId = Effect.fn("ClaudeAdapterV2.resolveForkUpT
     if (
       boundaryNativeId !== undefined &&
       boundaryNativeId !== null &&
-      !isSyntheticClaudeTurnId(boundaryNativeId)
+      !ClaudeTurnCursor.isSyntheticClaudeTurnId(boundaryNativeId)
     ) {
       return boundaryNativeId;
     }
@@ -1024,13 +1019,15 @@ const resolveClaudeRollbackResumeSessionAt = Effect.fn(
         });
       }
 
-      const cursor = claudeTurnCursor(target.providerTurn);
+      const cursor = ClaudeTurnCursor.claudeTurnCursor(target.providerTurn);
       if (cursor !== null) {
         return cursor;
       }
 
       const providerTurnsAfterTarget = input.providerThreadTurns.filter(
-        (turn) => turn.ordinal > target.providerTurn.ordinal && isTerminalProviderTurn(turn),
+        (turn) =>
+          turn.ordinal > target.providerTurn.ordinal &&
+          ClaudeTurnCursor.isTerminalProviderTurn(turn),
       );
       if (providerTurnsAfterTarget.length === 0) {
         return null;
@@ -1042,7 +1039,8 @@ const resolveClaudeRollbackResumeSessionAt = Effect.fn(
           .filter((turn) => turn.ordinal < target.providerTurn.ordinal)
           .toSorted((left, right) => left.ordinal - right.ordinal)
           .at(-1);
-        const earlierCursor = earlierTurn === undefined ? null : claudeTurnCursor(earlierTurn);
+        const earlierCursor =
+          earlierTurn === undefined ? null : ClaudeTurnCursor.claudeTurnCursor(earlierTurn);
         if (earlierCursor != null) {
           return earlierCursor;
         }
@@ -8516,6 +8514,10 @@ export const makeClaudeAdapterV2 = Effect.fn("makeClaudeAdapterV2")(function* (
             } satisfies PermissionResult;
           }
 
+          const mode =
+            (yield* Ref.get(queryContext))?.permissionMode ?? context.queryPolicy.permissionMode;
+          const removalDecision = claudeRemovalDecision(toolName, mode, callbackOptions);
+          if (removalDecision !== undefined) return removalDecision;
           const requestKind = providerRequestKindFromClaudeTool(toolName);
           // The user approves the command itself; Claude's title and description only summarize it.
           const command = inputRecordValue(nativeToolInput, "command");
