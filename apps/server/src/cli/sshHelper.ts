@@ -8,7 +8,8 @@ import * as NodeNet from "node:net";
 import { guardErrors } from "@goat/shared/errorGuards";
 import * as Effect from "effect/Effect";
 import * as Option from "effect/Option";
-import { Argument, Command } from "effect/cli";
+import { Argument, Command, Flag } from "effect/cli";
+import { sshProbeDeadline } from "./sshProbeDeadline.ts";
 import { waitReadyReportFlags, waitReadyReportFrame } from "./sshRuntimeFactsCommands.ts";
 import { sshRuntimeHelperCommands } from "./sshRuntimeHelperCommands.ts";
 import * as NodePath from "node:path";
@@ -162,9 +163,11 @@ const runtimePort = Command.make("runtime-port", {
 
 const homeOwned = Command.make("home-owned", {
   baseDir: Argument.String("base-dir"),
+  deadlineMs: Flag.Int("deadline-ms").pipe(Flag.optional),
 }).pipe(
-  Command.withHandler(({ baseDir }) =>
+  Command.withHandler(({ baseDir, deadlineMs }) =>
     Effect.promise(async () => {
+      const cancelDeadline = sshProbeDeadline(Option.getOrUndefined(deadlineMs));
       try {
         if (await serviceUpdateHandoffActive(baseDir)) {
           process.stdout.write("updating\n");
@@ -188,6 +191,8 @@ const homeOwned = Command.make("home-owned", {
         process.stdout.write("inspection-error\n");
         process.stderr.write(`Cannot inspect GOAT home ownership: ${String(error)}\n`);
         process.exitCode = 2;
+      } finally {
+        cancelDeadline();
       }
     }),
   ),

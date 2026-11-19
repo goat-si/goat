@@ -2,7 +2,11 @@ import { REMOTE_PICK_PORT_SCRIPT } from "./remotePickPortScript.ts";
 export { REMOTE_PICK_PORT_SCRIPT } from "./remotePickPortScript.ts";
 import { REMOTE_WAIT_READY_SCRIPT } from "./remoteWaitReadyScript.ts";
 import { SHARED_HOME_UPDATE_WAIT } from "./sharedHomeUpdateWait.ts";
-import { REMOTE_HOME_OWNER_WAIT, REMOTE_HOME_OWNER_WAIT_SECONDS } from "./remoteHomeOwnerWait.ts";
+import {
+  REMOTE_HOME_OWNER_WAIT,
+  REMOTE_HOME_OWNER_WAIT_MARKER,
+  REMOTE_HOME_OWNER_WAIT_SECONDS,
+} from "./remoteHomeOwnerWait.ts";
 import {
   EXACT_ARCHIVE_VERSION,
   SshInvalidArchiveVersionError,
@@ -204,7 +208,9 @@ const APP_SERVER_REFUSAL_MS = 600_000;
 const TUNNEL_SHUTDOWN_TIMEOUT_MS = 2_000;
 const TUNNEL_STDERR_TAIL_CHARS = 16_384;
 const REMOTE_READY_TIMEOUT_MS = 60_000;
-const REMOTE_LAUNCH_TIMEOUT_MS = 90_000 + 3 * REMOTE_HOME_OWNER_WAIT_SECONDS * 1_000;
+const REMOTE_LAUNCH_TIMEOUT_MS = 90_000;
+const REMOTE_OWNER_WAIT_TIMEOUT_MS =
+  REMOTE_LAUNCH_TIMEOUT_MS + 3 * REMOTE_HOME_OWNER_WAIT_SECONDS * 1_000;
 const REMOTE_REUSE_READY_TIMEOUT_MS = 2_000;
 // Reserved by the folded launch protocol for re-entering preparation, never a launch failure.
 const REMOTE_RECONNECT_REPROBE_EXIT_CODE = 76;
@@ -738,11 +744,16 @@ while [ -z "$REMOTE_PORT" ]; do
         successor_waited=0
         successor_deadline=$(($(date +%s) + HOME_OWNER_WAIT_LIMIT))
         while [ "$successor_waited" -lt "$HOME_OWNER_WAIT_LIMIT" ] && [ "$(date +%s)" -lt "$successor_deadline" ]; do
-          successor_owner="$("$RUNNER_CANDIDATE_FILE.pin" __ssh-helper home-owned "$DEFAULT_SERVER_HOME" 2>/dev/null)" || :
-          if [ "$successor_owner" = inspection-error ]; then
-            printf 'Cannot inspect GOAT home ownership; no second server was started.\\n' >&2; exit 1
+          successor_owner_status=0
+          successor_owner="$(home_probe "$successor_deadline" "$RUNNER_CANDIDATE_FILE.pin" __ssh-helper home-owned "$DEFAULT_SERVER_HOME")" || successor_owner_status=$?
+          if [ "$successor_owner_status" -eq 1 ] && [ -n "$successor_owner" ]; then home_inspection_failed; exit 1; fi
+          if { [ "$successor_owner_status" -ne 0 ] && [ "$successor_owner_status" -ne 1 ]; } || [ "$successor_owner" = timeout ] || [ "$successor_owner" = inspection-error ]; then
+            home_inspection_failed; exit 1
           fi
-          if [ "$successor_owner" != updating ] && successor="$(live_fact "$RUNNER_CANDIDATE_FILE.pin" "$DEFAULT_RUNTIME_FILE" "$PORT_FILE" "$PID_FILE" 2>/dev/null)"; then
+          if [ "$successor_owner_status" -eq 0 ]; then
+            case "$successor_owner" in ''|updating) : ;; *) home_inspection_failed; exit 1 ;; esac
+          fi
+          if [ "$successor_owner" != updating ] && successor="$(HOME_PROBE_DEADLINE="$successor_deadline" live_fact "$RUNNER_CANDIDATE_FILE.pin" "$DEFAULT_RUNTIME_FILE" "$PORT_FILE" "$PID_FILE" 2>/dev/null)"; then
             case "$successor" in
               'live '*)
                 recheck_selected_before_use
@@ -751,8 +762,11 @@ while [ -z "$REMOTE_PORT" ]; do
                   break 2
                 fi ;;
             esac
+          else
+            successor_status=$?; { [ "$successor_status" -ne 124 ] && [ "$successor_status" -le 125 ]; } || { home_inspection_failed; exit 1; }
           fi
           successor_waited=$((successor_waited + 1))
+          [ "$successor_waited" -ne 1 ] || printf '${REMOTE_HOME_OWNER_WAIT_MARKER}\\n' >&2
           sleep 1
         done
         if [ "$successor_owner" = updating ]; then
@@ -1199,6 +1213,9 @@ export const launchOrReuseRemoteServer = Effect.fn("ssh/tunnel.launchOrReuseRemo
             timeoutStage: "runtime-launch",
             timeoutMs: isNodeScriptRunner(selected.runner)
               ? REMOTE_LAUNCH_TIMEOUT_MS
+              : REMOTE_ARCHIVE_LAUNCH_TIMEOUT_MS,
+            ownerWaitTimeoutMs: isNodeScriptRunner(selected.runner)
+              ? REMOTE_OWNER_WAIT_TIMEOUT_MS
               : REMOTE_ARCHIVE_LAUNCH_TIMEOUT_MS,
             ...input,
           });

@@ -36,9 +36,13 @@ it.live(
         ),
       );
       yield* f.fs.makeDirectory(`${f.test}/identity-bin`, { recursive: true });
-      yield* f.fs.writeFileString(`${f.test}/identity-bin/sleep`, "#!/bin/sh\nexit 0\n", {
-        mode: 0o755,
-      });
+      yield* f.fs.writeFileString(
+        `${f.test}/identity-bin/sleep`,
+        '#!/bin/sh\ncase "$1" in 1|0.*) ;; *) exec /bin/sleep "$1" ;; esac\nexit 0\n',
+        {
+          mode: 0o755,
+        },
+      );
       const result = yield* f.run("launch", false, { nodeScriptPath: f.nodeEntry });
       assert.isTrue(Result.isFailure(result));
       if (Result.isFailure(result))
@@ -66,6 +70,7 @@ it.live("adopts the old service successor after its own launch loses the home", 
     yield* f.fs.writeFileString(
       `${f.test}/identity-bin/sleep`,
       `#!/bin/sh
+case "$1" in 1|0.*) ;; *) exec /bin/sleep "$1" ;; esac
 if grep -q '"type":"serve-exit"' "$HOME/.test/events" && [ ! -e "$HOME/.test/successor-started" ]; then
   : > "$HOME/.test/successor-started"
   rm "$HOME/.test/serve-exit-${ARCHIVE.archiveVersion}"
@@ -105,9 +110,13 @@ it.live("reports an ongoing update after the bounded wait without starting a ser
       ),
     );
     yield* f.fs.makeDirectory(`${f.test}/identity-bin`, { recursive: true });
-    yield* f.fs.writeFileString(`${f.test}/identity-bin/sleep`, "#!/bin/sh\nexit 0\n", {
-      mode: 0o755,
-    });
+    yield* f.fs.writeFileString(
+      `${f.test}/identity-bin/sleep`,
+      '#!/bin/sh\ncase "$1" in 1|0.*) ;; *) exec /bin/sleep "$1" ;; esac\nexit 0\n',
+      {
+        mode: 0o755,
+      },
+    );
     const result = yield* f.run("launch", false, { nodeScriptPath: f.nodeEntry });
     assert.isTrue(Result.isFailure(result));
     if (Result.isFailure(result))
@@ -138,6 +147,7 @@ it.live("waits through an active update and attaches its ready successor", () =>
     yield* f.fs.writeFileString(
       `${f.test}/identity-bin/sleep`,
       `#!/bin/sh
+case "$1" in 1|0.*) ;; *) exec /bin/sleep "$1" ;; esac
 if [ -e "$HOME/.test/active-update" ]; then
   '${f.old}/goat' serve >/dev/null 2>&1 </dev/null &
   IFS= read -r ready < "$HOME/.test/ready.fifo"
@@ -189,6 +199,7 @@ fs.readSync(barrier, Buffer.alloc(1), 0, 1, null); fs.closeSync(barrier);`;
     yield* f.fs.writeFileString(
       `${f.test}/identity-bin/sleep`,
       `#!/bin/sh
+case "$1" in 1|0.*) ;; *) exec /bin/sleep "$1" ;; esac
 if grep -q '"type":"race-held"' "$HOME/.test/events" && [ ! -e "$HOME/.test/changed-records" ]; then
   : > "$HOME/.test/changed-records"
   printf '9876\\n' > "$HOME/.goat/ssh-launch/runtime/pid"
@@ -298,6 +309,7 @@ globalThis.raceLock = own;`;
     yield* f.fs.writeFileString(
       `${f.test}/identity-bin/sleep`,
       `#!/bin/sh
+case "$1" in 1|0.*) ;; *) exec /bin/sleep "$1" ;; esac
 if grep -q '"type":"race-held"' "$HOME/.test/events" && [ ! -e "$HOME/.test/successor-started" ]; then
   : > "$HOME/.test/successor-started"
   '${f.old}/goat' serve >/dev/null 2>&1 </dev/null &

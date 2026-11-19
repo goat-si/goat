@@ -22,6 +22,7 @@ export function serviceServingLockHeld(baseDir: string): boolean {
   const path = NodePath.join(baseDir, "runtime", SERVICE_SERVING_LOCK_FILE);
   if (!NodeFS.existsSync(path)) return false;
   using db = new NodeSqlite.DatabaseSync(path, { readOnly: true });
+  db.exec("PRAGMA busy_timeout = 0");
   try {
     db.prepare("SELECT name FROM sqlite_schema LIMIT 1").get();
     return false;

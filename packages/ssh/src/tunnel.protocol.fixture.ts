@@ -94,6 +94,8 @@ if (args[0] === "--version") {
   event("version", { published: fs.existsSync(path.join(state, "run-t3.sh")) ? fs.readFileSync(path.join(state, "run-t3.sh"), "utf8") : "" });
   const proof = path.join(test, "pending-proof");
   console.log("goat v" + (fs.existsSync(proof) && fs.readFileSync(proof, "utf8").trim() === "version:" + version ? "0.0.0" : version));
+} else if (args[0] === "__ssh-helper" && args[1] === "home-owned") {
+  process.exit(1);
 } else if (args[0] === "__ssh-helper" && args[1] === "protocol") {
   if (${JSON.stringify(signals.missingCommand ?? false)}) process.exit(2);
   const at = args.indexOf("--runtime-file");
