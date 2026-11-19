@@ -78,4 +78,5 @@ export class ProviderRegistry extends Context.Service<
 
     readonly streamChanges: Stream.Stream<ReadonlyArray<ServerProvider>>;
   }
+  // @effect-diagnostics-next-line deterministicKeys:off -- Preserve the service key across the move.
 >()("goat/provider/ProviderRegistry") {}
