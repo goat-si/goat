@@ -105,8 +105,8 @@ export function makeSubmoduleRemoval<E>(deps: {
         });
         if (changes !== null) return { force: false, reason: `submodule ${changes}` };
       }
-      const force = stored || manifest || paths.length > 0;
-      if (force) {
+      const force = stored || paths.length > 0;
+      if (force || manifest) {
         const root = yield* fs.realPath(cwd);
         // Git status and foreach omit files inside deinitialized gitlink directories.
         const populatedPaths = new Set(paths.map(pathKey));
