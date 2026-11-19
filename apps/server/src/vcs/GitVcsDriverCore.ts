@@ -1,3 +1,4 @@
+import { makeIsolatedStatusFetch } from "./gitIsolatedStatusFetch.ts";
 import { readStatusPaths } from "./gitStatusPaths.ts";
 import { awaitStatusFetch } from "./awaitStatusFetch.ts";
 import { makeRefEpochs, makeRefGenerations } from "./gitRefEpochs.ts";
@@ -754,21 +755,18 @@ export const makeGitVcsDriverCore = Effect.fn("makeGitVcsDriverCore")(function* 
   ) {
     const fetchCwd =
       path.basename(gitCommonDir) === ".git" ? path.dirname(gitCommonDir) : gitCommonDir;
-    // `--no-auto-gc` (a synonym of `--no-auto-maintenance` that older Git also knows) keeps
-    // this poll from starting `git gc --auto`. When that gc fails, for example on a repository
-    // with missing objects, Git retries it on every fetch and leaves a full-size `tmp_pack_*`
-    // behind each time, so a background poll could fill the disk.
-    const args = [
-      "--git-dir",
+    const isolatedFetch = makeIsolatedStatusFetch({
       gitCommonDir,
-      "fetch",
-      "--quiet",
-      "--no-tags",
-      "--no-auto-gc",
-      "--no-write-fetch-head",
-      "--",
       remoteName,
-    ];
+      fetchCwd,
+      path,
+      fileSystem,
+      hostPlatform,
+      executeGit,
+      runGitStdout,
+      timeout: STATUS_UPSTREAM_FETCH_TIMEOUT,
+      refreshEnv: STATUS_UPSTREAM_REFRESH_ENV,
+    });
     const key = `${gitCommonDir}\0${remoteName}`;
     const failure = statusRemoteRefreshFailures.get(key);
     if (failure && (yield* Clock.currentTimeMillis) < failure.retryAt) return;
@@ -793,13 +791,7 @@ export const makeGitVcsDriverCore = Effect.fn("makeGitVcsDriverCore")(function* 
         // Frequent poll deadlines and disconnected clients must not interrupt a
         // healthy writer. A separate safety limit prevents a hung transport from
         // occupying its worker slot indefinitely.
-        const fetch = executeGit("GitVcsDriver.fetchRemoteForStatus", fetchCwd, args, {
-          env: STATUS_UPSTREAM_REFRESH_ENV,
-          fallbackErrorDetail: "Background Git fetch exited with a non-zero status.",
-          timeoutMs: Duration.toMillis(STATUS_UPSTREAM_FETCH_TIMEOUT),
-          forceKillAfterMs: 1_000,
-        }).pipe(
-          Effect.asVoid,
+        const fetch = isolatedFetch.pipe(
           Effect.tap(() =>
             Effect.sync(() => {
               statusRemoteRefreshFailures.delete(key);
