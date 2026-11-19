@@ -46,5 +46,3 @@ export function claudePromptLifecycle(
   const state: unknown = Reflect.get(message, "state");
   return typeof uuid === "string" && typeof state === "string" ? { uuid, state } : null;
 }
-
-// Without an echo, non-human origin proves a foreign turn only on CLIs known to echo prompts.

@@ -13,7 +13,12 @@ import {
   isClaudeConversationNotFound,
   MAX_CLAUDE_MISSING_NATIVE_THREADS,
 } from "./ClaudeQueryRunnerErrors.ts";
-import { isClaudePromptEchoGatedFrame, claudeFrameToolUseIds } from "./ClaudePromptFrames.ts";
+import {
+  isClaudePromptEchoGatedFrame,
+  claudeFrameToolUseIds,
+  claudeEchoedPromptUuids,
+  claudePromptLifecycle,
+} from "./ClaudePromptFrames.ts";
 import { claudeWakeBufferDetail } from "./ClaudeWakeBufferDetail.ts";
 import {
   nextClaudeGoal,
@@ -1723,6 +1728,7 @@ function isClaudeProviderContinuationTurn(
   return input.message.createdBy === "agent" && input.message.creationSource === "provider";
 }
 
+// Without an echo, non-human origin proves a foreign turn only on CLIs known to echo prompts.
 function isClaudeResultForOtherTurn(input: {
   readonly message: SDKResultMessage;
   readonly promptUuid: string;
