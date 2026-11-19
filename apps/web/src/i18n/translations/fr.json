@@ -46,7 +46,6 @@
   "e88c9d8769544731": "Automatique",
   "f447ef2787ced1dd": "Limite automatique de mémoire d'agent",
   "81c7ee20326a717f": "Mises à jour automatiques du serveur",
-  "5af98238a10ec614": "Les mises à jour automatiques ne sont pas disponibles car aucun flux de mise à jour n'est configuré.",
   "9ed4d8a1531b9631": "Les mises à jour automatiques ne sont pas disponibles dans cette compilation.",
   "4cae745392800cef": "Reprendre les fils interrompus dans les environnements sélectionnés après une mise à jour, un plantage ou un redémarrage.",
   "027781a8aa9065f5": "Activités de fond",

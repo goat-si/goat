@@ -1,4 +1,4 @@
-import { useGT } from "gt-react";
+import { useGT, useMessages } from "gt-react";
 import {
   GOAT_PROJECT_FILE_NAME,
   DEFAULT_SERVER_SETTINGS,
@@ -187,6 +187,7 @@ export function SettingInheritance({
   onClearOverrides?: (entries: readonly ProjectOverrideEntry[]) => void;
 }) {
   const gt = useGT();
+  const m = useMessages();
   const scopeContext = useOptionalSettingsScope();
   const key = keys[0];
   if (!key || targets.length === 0) return null;
@@ -302,7 +303,7 @@ export function SettingInheritance({
                         ? gt("Environment")
                         : layer.key === "t3.json"
                           ? layer.label
-                          : gt(layer.label)}
+                          : m(layer.label)}
                     </span>
                     <span
                       className={cn(
@@ -360,7 +361,7 @@ export function SettingInheritance({
                               ? gt("Environment")
                               : winningLayer?.key === "t3.json"
                                 ? winningLayer.label
-                                : winningLayer && gt(winningLayer.label)}
+                                : winningLayer && m(winningLayer.label)}
                           </span>
                           <ChevronRightIcon
                             aria-hidden

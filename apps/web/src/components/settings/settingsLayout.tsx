@@ -1,4 +1,4 @@
-import { useGT } from "gt-react";
+import { useGT, useMessages } from "gt-react";
 import { SettingsGroup } from "./SettingsGroup";
 import { AuthSettingsWriteScope } from "@goat/contracts";
 import { usePrimaryEnvironmentId, usePrimaryEnvironment } from "../../state/environments";
@@ -322,6 +322,7 @@ export function SettingsRow({
   children?: ReactNode;
 }) {
   const gt = useGT();
+  const m = useMessages();
   const targetRef = useSettingsSearchTarget<HTMLDivElement>(rowProps.id);
   const primarySettingsAvailable = usePrimarySettingsAvailable();
   const context = useOptionalSettingsScope();
@@ -410,7 +411,7 @@ export function SettingsRow({
               })
             : context
               ? gt("Reconnect the selected environment to change this setting.")
-              : gt(PRIMARY_SETTINGS_UNAVAILABLE_MESSAGE),
+              : m(PRIMARY_SETTINGS_UNAVAILABLE_MESSAGE),
         )
       : environmentWide && control
         ? inertControl(gt("Environment-wide setting. Select an environment to change it."))

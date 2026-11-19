@@ -83,12 +83,12 @@ export function NotificationSettings() {
             className="w-full sm:w-56"
             aria-label={gt("Thread notifications")}
           >
-            <SelectValue>{gt(NOTIFICATION_MODE_LABELS[mode])}</SelectValue>
+            <SelectValue>{m(NOTIFICATION_MODE_LABELS[mode])}</SelectValue>
           </SelectTrigger>
           <SelectPopup align="end" alignItemWithTrigger={false}>
             {Object.entries(NOTIFICATION_MODE_LABELS).map(([value, label]) => (
               <SelectItem key={value} hideIndicator value={value}>
-                {gt(label)}
+                {m(label)}
               </SelectItem>
             ))}
           </SelectPopup>

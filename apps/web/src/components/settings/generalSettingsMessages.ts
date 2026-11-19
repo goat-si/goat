@@ -1,5 +1,7 @@
 import { msg } from "gt-react";
+import { IDLE_COMPACTION_MODES } from "@goat/contracts/settings";
 import type {
+  IdleCompactionMode,
   QuitConfirmationMode,
   ResponseStreamingMode,
   SidebarProjectSortOrder,
@@ -32,3 +34,14 @@ export const QUIT_CONFIRMATION_MODE_LABELS: Record<QuitConfirmationMode, string>
   hold: msg("Hold"),
   "double-click": msg("Double press"),
 };
+
+export const IDLE_COMPACTION_LABELS: Record<IdleCompactionMode, string> = {
+  onReturn: msg("When you return"),
+  beforeCacheExpires: msg("Before the cache expires (beta)"),
+  off: msg("Never"),
+};
+
+export function idleCompactionLabel(value: string): string {
+  const mode = IDLE_COMPACTION_MODES.find((candidate) => candidate.value === value);
+  return mode ? IDLE_COMPACTION_LABELS[mode.value] : "";
+}

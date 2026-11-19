@@ -46,7 +46,6 @@
   "e88c9d8769544731": "Automático",
   "f447ef2787ced1dd": "Limite de memoria de agente automático",
   "81c7ee20326a717f": "Actualizaciones automáticas del servidor",
-  "5af98238a10ec614": "Las actualizaciones automáticas no están disponibles porque no se configura ningún feed de actualización.",
   "9ed4d8a1531b9631": "Las actualizaciones automáticas no están disponibles en esta compilación.",
   "4cae745392800cef": "Reanudar los hilos interrumpidos tras una actualización, un fallo o un reinicio del equipo en los entornos seleccionados.",
   "027781a8aa9065f5": "Actividad de fondo",

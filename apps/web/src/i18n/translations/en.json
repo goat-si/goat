@@ -46,7 +46,6 @@
   "e88c9d8769544731": "Automatic",
   "f447ef2787ced1dd": "Automatic agent memory limit",
   "81c7ee20326a717f": "Automatic server updates",
-  "5af98238a10ec614": "Automatic updates are not available because no update feed is configured.",
   "9ed4d8a1531b9631": "Automatic updates are not available in this build.",
   "4cae745392800cef": "Automatically resume interrupted threads after an update, crash, or machine restart on the selected environments.",
   "027781a8aa9065f5": "Background Activity",

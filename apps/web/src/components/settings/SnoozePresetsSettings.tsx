@@ -71,6 +71,14 @@ const WHEN_LABELS: Record<"after" | SnoozePresetDay, string> = {
 };
 const WHEN_VALUES = ["after", ...SnoozePresetDay.literals] as const;
 
+// Labels client-runtime's resolveSnoozePreset returns that WHEN_LABELS does not declare.
+const RESOLVED_DAY_LABELS: Readonly<Record<string, string>> = {
+  "This morning": msg("This morning"),
+  "This afternoon": msg("This afternoon"),
+  "This evening": msg("This evening"),
+  "Next week": msg("Next week"),
+};
+
 // Offered in order when adding, skipping any already in the list.
 const ADD_CANDIDATES: ReadonlyArray<SnoozePresetSetting> = [
   ...DEFAULT_SNOOZE_PRESETS,
@@ -238,6 +246,7 @@ function SnoozePresetList(props: {
   onSettle: () => void;
 }) {
   const gt = useGT();
+  const m = useMessages();
   const nowMinute = useNowMinute();
   const now = new Date(`${nowMinute}Z`);
   const locale = useLocale();
@@ -251,8 +260,8 @@ function SnoozePresetList(props: {
       return text.charAt(0).toLocaleUpperCase(locale) + text.slice(1);
     }
     return daysAhead === 7 && preset.day !== "monday"
-      ? gt("Next {weekday}", { weekday: gt(WHEN_LABELS[preset.day]) })
-      : gt(label);
+      ? gt("Next {weekday}", { weekday: m(WHEN_LABELS[preset.day]) })
+      : m(RESOLVED_DAY_LABELS[label] ?? label);
   };
   const seenIds = new Set<string>();
   const seenWakes = new Set<string>();

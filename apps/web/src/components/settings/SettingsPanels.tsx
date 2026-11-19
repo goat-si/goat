@@ -110,12 +110,14 @@ import {
   SIDEBAR_PROJECT_SORT_ORDER_LABELS,
   TIMESTAMP_FORMAT_LABELS,
   QUIT_CONFIRMATION_MODE_LABELS,
+  idleCompactionLabel,
 } from "./generalSettingsMessages";
 
 const isSidebarProjectSortOrder = Schema.is(SidebarProjectSortOrder);
 const DEFAULT_DRIVER_KIND = ProviderDriverKind.make("codex");
 export function useSettingsRestore(onRestored?: () => void) {
   const gt = useGT();
+  const m = useMessages();
   const {
     theme,
     setTheme,
@@ -304,7 +306,7 @@ export function useSettingsRestore(onRestored?: () => void) {
       [
         gt("Restore default settings?"),
         gt("This will reset: {settings}.", {
-          settings: changedSettingLabels.map((label) => gt(label)).join(", "),
+          settings: changedSettingLabels.map((label) => m(label)).join(", "),
         }),
       ].join("\n"),
       { variant: "destructive" },
@@ -738,9 +740,7 @@ export function GeneralSettingsPanel() {
               >
                 <SelectValue>
                   {(value: string | null) =>
-                    value === null
-                      ? gt("Mixed")
-                      : m(IDLE_COMPACTION_MODES.find((mode) => mode.value === value)?.label ?? "")
+                    value === null ? gt("Mixed") : m(idleCompactionLabel(value))
                   }
                 </SelectValue>
               </SelectTrigger>
@@ -753,7 +753,7 @@ export function GeneralSettingsPanel() {
                     // A server from before modes has only the on/off switch, so it cannot store "Never".
                     disabled={mode.value === "off" && !idleCompaction.neverAvailable}
                   >
-                    {m(mode.label)}
+                    {m(idleCompactionLabel(mode.value))}
                   </SelectItem>
                 ))}
               </SelectPopup>
