@@ -91,6 +91,7 @@ export function makeLocalCommandHarness(input: {
   readonly ensureThreadFailure?: unknown;
   readonly historyReadFailureAfterFallback?: unknown;
   readonly resumeFailure?: ProviderAdapter.ProviderAdapterV2Error;
+  readonly omitResumeProviderSession?: boolean;
   readonly interruptOpen?: boolean;
   readonly interruptRunBeforeOpenFailure?: boolean;
   readonly writeFailure?: unknown;
@@ -508,6 +509,9 @@ export function makeLocalCommandHarness(input: {
   const fallbackEnsureThread = vi.fn(() => Effect.succeed(providerThread));
   const resumeFallbackSession = {
     driver: providerThread.driver,
+    ...(input.omitResumeProviderSession === true
+      ? {}
+      : { providerSession: { capabilities: CodexProviderCapabilitiesV2 } }),
     resumeThread: () =>
       Effect.fail(
         input.resumeFailure ??

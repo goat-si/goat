@@ -1,4 +1,4 @@
-import { hasPendingHandoff } from "./goat/ProviderHandoffPending.ts";
+import { hasPendingHandoff, missingProviderSession } from "./goat/ProviderHandoffPending.ts";
 import {
   isProviderTurnStartError,
   isCloudTaskSourceError,
@@ -848,6 +848,8 @@ export const layer: Layer.Layer<
             }),
           );
         }
+        if (session.providerSession === undefined)
+          return yield* missingProviderSession(runId, session.driver);
         const uncertainDelivery = hasPendingHandoff(projection, providerThread);
         const nativeSessionLacksKeptTurns =
           !session.providerSession.capabilities.checkpointing.providerCanRollbackConversation &&
