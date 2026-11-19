@@ -1,3 +1,4 @@
+import * as NodeUtil from "node:util";
 import type { ProviderApprovalDecision, ProviderApprovalOption } from "@goat/contracts";
 import * as Schema from "effect/Schema";
 import type * as EffectCodexSchema from "effect-codex-app-server/schema";
@@ -90,6 +91,10 @@ function mcpElicitationFormFields(payload: McpElicitationResponseInput) {
   return payload.requestedSchema;
 }
 
+export function canAutoApproveMcpElicitation(payload: McpElicitationResponseInput): boolean {
+  return autoApproveMcpElicitation(payload).action === "accept";
+}
+
 function mcpElicitationFieldOptions(field: typeof McpElicitationFormField.Type) {
   if (field.oneOf) {
     return field.oneOf.map((option) => ({ value: option.const, label: option.title }));
@@ -98,6 +103,62 @@ function mcpElicitationFieldOptions(field: typeof McpElicitationFormField.Type) 
     value,
     label: field.enumNames?.[index],
   }));
+}
+
+// This schema is the browser access request in upstream 96290af4e0d.
+const CODEX_BROWSER_ACCESS_SCHEMA = {
+  type: "object",
+  properties: { approval: { type: "string", enum: ["once", "always"] } },
+  required: ["approval"],
+} as const;
+const CODEX_SAFARI_ACCESS_SCHEMA = {
+  type: "object",
+  properties: {
+    approval: {
+      type: "string",
+      oneOf: [
+        { const: "once", title: "Allow once" },
+        { const: "session", title: "Allow for this session" },
+        { const: "always", title: "Always allow Safari" },
+      ],
+    },
+  },
+  required: ["approval"],
+} as const;
+const EMPTY_CONFIRM_SCHEMAS = [
+  { type: "object", properties: {} },
+  { type: "object", properties: {}, required: [] },
+] as const;
+
+export function autoApproveMcpElicitation(
+  payload: McpElicitationResponseInput,
+): EffectCodexSchema.McpServerElicitationRequestResponse {
+  if (payload.mode !== "form") return { action: "cancel" };
+  if (
+    NodeUtil.isDeepStrictEqual(payload.requestedSchema, CODEX_BROWSER_ACCESS_SCHEMA) ||
+    NodeUtil.isDeepStrictEqual(payload.requestedSchema, CODEX_SAFARI_ACCESS_SCHEMA)
+  )
+    return { action: "accept", content: { approval: "once" } };
+  if (
+    EMPTY_CONFIRM_SCHEMAS.some((schema) =>
+      NodeUtil.isDeepStrictEqual(payload.requestedSchema, schema),
+    )
+  )
+    return { action: "accept", content: {} };
+  return { action: "cancel" };
+}
+
+export function autoApproveRawMcpElicitation(
+  payload: McpElicitationResponseInput,
+  rawParams: unknown,
+): EffectCodexSchema.McpServerElicitationRequestResponse {
+  const requestedSchema =
+    typeof rawParams === "object" &&
+    rawParams !== null &&
+    Object.hasOwn(rawParams, "requestedSchema")
+      ? Reflect.get(rawParams, "requestedSchema")
+      : undefined;
+  return autoApproveMcpElicitation({ mode: payload.mode, requestedSchema });
 }
 
 function isMcpElicitationPersistenceField(

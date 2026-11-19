@@ -1,4 +1,5 @@
 import type * as CodexSchema from "effect-codex-app-server/schema";
+import type { OrchestrationV2ProviderFailure } from "@goat/contracts";
 
 type CodexErrorInfo = CodexSchema.ServerNotification__CodexErrorInfo;
 
@@ -80,13 +81,63 @@ export function codexTerminalFailure(
   errorInfo: CodexErrorInfo | null | undefined,
   message: string | null | undefined,
 ): {
-  readonly class: "usage_limit" | "permission_error" | "provider_error";
+  readonly class: "usage_limit" | "permission_error" | "provider_error" | "transport_error";
   readonly retryable?: false;
 } {
   if (codexUsageLimitError(code, errorInfo)) return { class: "usage_limit" };
   if (codexEntitlementRefusal(errorInfo, message))
     return { class: "permission_error", retryable: false };
+  if (
+    (code === "responseStreamDisconnected" ||
+      code === "responseStreamConnectionFailed" ||
+      code === "httpConnectionFailed") &&
+    codexHttpStatus(errorInfo) === null
+  )
+    return { class: "transport_error" };
   return { class: "provider_error" };
+}
+
+type TransportEvidence = {
+  readonly nativeMessage: string;
+  readonly nativeCode: string | null;
+  readonly nativeDetails?: string;
+  readonly errorInfo?: CodexErrorInfo | null;
+  readonly failure: OrchestrationV2ProviderFailure;
+};
+
+export function recoverCodexTransportFailure(
+  failure: OrchestrationV2ProviderFailure,
+  errorInfo: CodexErrorInfo | null | undefined,
+  message: string | undefined,
+  notification?: TransportEvidence,
+  retry?: TransportEvidence,
+): OrchestrationV2ProviderFailure {
+  const generic =
+    failure.code === "other" ||
+    (failure.code === "responseTooManyFailedAttempts" &&
+      codexExhaustionHttpStatus(errorInfo) === null);
+  if (!generic || failure.class !== "provider_error" || message === undefined) return failure;
+  if (
+    notification?.failure.class === "permission_error" ||
+    notification?.failure.class === "usage_limit"
+  )
+    return failure;
+  if (
+    notification &&
+    notification.failure.class !== "transport_error" &&
+    notification.nativeCode !== "other" &&
+    !(
+      notification.nativeCode === "responseTooManyFailedAttempts" &&
+      codexExhaustionHttpStatus(notification.errorInfo) === null
+    )
+  )
+    return failure;
+  const notificationMatches =
+    notification?.failure.class === "transport_error" && notification.nativeMessage === message;
+  const retryMatches =
+    retry?.failure.class === "transport_error" &&
+    (retry.nativeDetails ?? retry.nativeMessage) === message;
+  return notificationMatches || retryMatches ? { ...failure, class: "transport_error" } : failure;
 }
 
 /** The class of a failure Codex is still retrying. */

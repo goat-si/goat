@@ -38,3 +38,11 @@ export function webSearchPatterns(item: CodexWebSearchItem): ReadonlyArray<strin
       return compactStrings([item.query]);
   }
 }
+
+export function normalizeCodexCause(error: unknown): unknown {
+  return error;
+}
+
+export function nonEmptyText(value: string | null | undefined, fallback: string): string {
+  return trimText(value) ?? fallback;
+}
