@@ -18,6 +18,7 @@ import {
   claudeFrameToolUseIds,
   claudeEchoedPromptUuids,
   claudePromptLifecycle,
+  answersClaudeRequest,
 } from "./ClaudePromptFrames.ts";
 import { claudeWakeBufferDetail } from "./ClaudeWakeBufferDetail.ts";
 import {
@@ -6893,11 +6894,16 @@ export const makeClaudeAdapterV2 = Effect.fn("makeClaudeAdapterV2")(function* (
                 failUnansweredRequest(context, since),
               );
             } else if (
-              Reflect.get(message, "parent_tool_use_id") == null &&
+              answersClaudeRequest(message, context.promptUuid) &&
               !(
-                message.type === "system" &&
-                message.subtype.startsWith("task_") &&
-                !(message.subtype === "task_started" && (message.spawn_depth ?? 1) <= 1)
+                message.type === "result" &&
+                context.promptUuid !== null &&
+                isClaudeResultForOtherTurn({
+                  message,
+                  promptUuid: context.promptUuid,
+                  steerUuids: context.steerUuids,
+                  promptEchoMode: liveQuery.promptEchoMode,
+                })
               )
             ) {
               context.unansweredRequestSince = undefined;

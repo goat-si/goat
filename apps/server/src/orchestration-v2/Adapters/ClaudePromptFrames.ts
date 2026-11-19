@@ -46,3 +46,25 @@ export function claudePromptLifecycle(
   const state: unknown = Reflect.get(message, "state");
   return typeof uuid === "string" && typeof state === "string" ? { uuid, state } : null;
 }
+
+export function answersClaudeRequest(message: SDKMessage, promptUuid: string | null): boolean {
+  const lifecycle = claudePromptLifecycle(message);
+  if (lifecycle !== null) return lifecycle.uuid === promptUuid && lifecycle.state !== "started";
+  if (Reflect.get(message, "parent_tool_use_id") != null) return false;
+  if (message.type === "system") {
+    return message.subtype === "task_started" && (message.spawn_depth ?? 1) <= 1;
+  }
+  if (
+    message.type !== "assistant" &&
+    message.type !== "stream_event" &&
+    message.type !== "user" &&
+    message.type !== "result"
+  )
+    return false;
+  const echoed = claudeEchoedPromptUuids(message);
+  if (echoed.length > 0) return promptUuid !== null && echoed.includes(promptUuid);
+  if (message.type === "user" && typeof message.message.content === "string") {
+    return message.uuid === undefined || message.uuid === promptUuid;
+  }
+  return true;
+}
