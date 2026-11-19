@@ -936,8 +936,10 @@ it.effect.each([
       if (scenario === "lost ACK" || acceptFirst) {
         assert.propertyVal(receipt, "outcome", "accepted");
         assert.isEmpty(remaining);
-        if (acceptFirst) {
+        if (scenario === "lost ACK" || acceptFirst) {
           assert.isUndefined((yield* e.store.loadAggregate(space, op.memoryId)).identity);
+          if (!acceptFirst)
+            yield* e.sql`INSERT INTO orchestration_events VALUES (2,'thread',${thread.threadId},'thread.message-sent','{}','new-event',2)`;
           submit = Effect.void;
           const retried = yield* e.service
             .remember(request, Effect.void, thread)
@@ -951,19 +953,13 @@ it.effect.each([
           });
           const sequence = receipt.hubSequence;
           if (sequence === null) throw new Error("Expected an ordered acceptance sequence");
-          const entry = {
-            kind: "operation" as const,
-            operation: op,
-            receipt,
-            hubSequence: sequence,
-          };
           const settled = yield* e.service.receiveHubPage({
             memorySpaceId: space,
             hubEnvironmentId: hubId,
             localEnvironmentId: memberId,
             expectedSequence: 0,
             page: {
-              entries: [entry],
+              entries: [{ kind: "operation", operation: op, receipt, hubSequence: sequence }],
               highWatermark: sequence,
               throughSequence: sequence,
               hasMore: false,
