@@ -1,3 +1,4 @@
+import { piApprovalRequestKind } from "./approvalRequestKind.ts";
 import { compactionTitle, type PiCompactionStatus } from "./compactionTitle.ts";
 import { PiProviderCapabilitiesV2, piToolOutput } from "./piToolOutput.ts";
 import * as NodeUtil from "node:util";
@@ -77,7 +78,7 @@ import {
   materializePiGoatMcpExtension,
   resolvePiLaunchArgs,
 } from "./mcpInjection.ts";
-import { PI_FILE_CHANGE_TOOLS, PI_GOAT_SERVICE_TIER_COMMAND } from "./mcpExtensionSource.ts";
+import { PI_GOAT_SERVICE_TIER_COMMAND } from "./mcpExtensionSource.ts";
 import { PI_STANDARD_SERVICE_TIER } from "./serviceTierCapabilities.ts";
 export const PI_PROVIDER = ProviderDriverKind.make("pi");
 // Inherit Pi's configured defaultProvider/defaultModel without calling set_model.
@@ -168,14 +169,6 @@ interface PendingPiPrompt {
   runtimeRequest: OrchestrationV2RuntimeRequest;
   readonly node: OrchestrationV2ExecutionNode;
   readonly turnItem: OrchestrationV2TurnItem;
-}
-
-function piApprovalRequestKind(title: string): "command" | "file-change" {
-  const toolName = /^Allow (\S+)\?$/.exec(title)?.[1];
-  return toolName !== undefined &&
-    (PI_FILE_CHANGE_TOOLS as ReadonlyArray<string>).includes(toolName)
-    ? "file-change"
-    : "command";
 }
 
 /** Pi 1.4.0 rejects prompts with this when they race a compaction it already started. */
