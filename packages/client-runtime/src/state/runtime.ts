@@ -1,3 +1,4 @@
+import { runInEnvironment } from "./environmentRun.ts";
 import { revalidateOnMount } from "./runtimeRevalidation.ts";
 import { environmentConnectionAtoms } from "./environmentConnections.ts";
 export { environmentSessionGenerationAtom } from "./environmentConnections.ts";
@@ -499,19 +500,6 @@ function parseEnvironmentRpcKey<Input>(key: string): {
     environmentId: EnvironmentId.make(decoded[0]),
     input: decoded[1],
   };
-}
-
-function runInEnvironment<A, E, R>(
-  environmentId: EnvironmentIdType,
-  effect: Effect.Effect<A, E, R>,
-): Effect.Effect<
-  A,
-  E | EnvironmentRegistry.EnvironmentNotRegisteredError,
-  EnvironmentRegistry.EnvironmentRegistry | Exclude<R, EnvironmentSupervisor.EnvironmentSupervisor>
-> {
-  return EnvironmentRegistry.EnvironmentRegistry.pipe(
-    Effect.flatMap((registry) => registry.run(environmentId, effect)),
-  );
 }
 
 /**
