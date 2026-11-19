@@ -6,6 +6,7 @@ import * as Stream from "effect/Stream";
 import { threadPullRequestsOf } from "../sourceControl/threadPullRequests.ts";
 import type * as Orchestrator from "./Orchestrator.ts";
 import type { ThreadManagementServiceShape } from "./ThreadManagementService.ts";
+import { cancelledBeforeStart } from "./RestartBackgroundNote.ts";
 
 export const settleAfterRun = Effect.fn("orchestrationV2.threadManagement.settleAfterFollowUps")(
   function* (input: {
@@ -64,7 +65,10 @@ export const settleAfterRun = Effect.fn("orchestrationV2.threadManagement.settle
           return false;
         if (
           following.some(
-            (candidate) => candidate.status !== "queued" && candidate.status !== "completed",
+            (candidate) =>
+              candidate.status !== "queued" &&
+              candidate.status !== "completed" &&
+              !cancelledBeforeStart(candidate),
           )
         )
           return true;
