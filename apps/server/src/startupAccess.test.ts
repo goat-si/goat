@@ -49,6 +49,7 @@ it("formats headless serve output with the connection string, token, pairing url
   });
 
   expect(output).toContain("Connection string: http://192.168.1.42:3773");
+  expect(output).toContain("Warning: this address uses plain HTTP.");
   expect(output).toContain("Token: PAIRCODE");
   expect(output).toContain("Pairing URL: http://192.168.1.42:3773/pair#token=PAIRCODE");
   expect(output).toContain(
@@ -58,6 +59,15 @@ it("formats headless serve output with the connection string, token, pairing url
   expect(output).toContain(
     renderTerminalQrCode(buildMobilePairingLink("http://192.168.1.42:3773/pair#token=PAIRCODE")),
   );
+});
+
+it("does not warn about plain HTTP on loopback", () => {
+  const output = formatHeadlessServeOutput({
+    connectionString: "http://localhost:3773",
+    token: "PAIRCODE",
+    pairingUrl: "http://localhost:3773/pair#token=PAIRCODE",
+  });
+  expect(output).not.toContain("Warning: this address uses plain HTTP.");
 });
 
 it("skips public and container addresses for a private-network listener", () => {
