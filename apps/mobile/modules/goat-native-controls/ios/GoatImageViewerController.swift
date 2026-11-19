@@ -1,5 +1,6 @@
 import ImageIO
 import Photos
+import QuickLook
 import UIKit
 
 private extension Array {
@@ -12,7 +13,11 @@ private final class GoatImageViewerPage: UIView, UIScrollViewDelegate {
   let scroll = UIScrollView()
   let imageView = UIImageView()
   private let spinner = UIActivityIndicatorView(style: .large)
-  private let failure = UIStackView()
+  private let notice = UIStackView()
+  private let noticeIcon = UIImageView()
+  private let noticeLabel = UILabel()
+  private let noticeButton = UIButton()
+  private var onNoticeAction: (() -> Void)?
   private var spinnerDelay: DispatchWorkItem?
   private var laidOutSize = CGSize.zero
   private(set) var isFull = false
@@ -37,35 +42,32 @@ private final class GoatImageViewerPage: UIView, UIScrollViewDelegate {
     spinner.color = .white
     spinner.hidesWhenStopped = true
     addSubview(spinner)
-    configureFailure()
+    configureNotice()
   }
 
   @available(*, unavailable)
   required init?(coder: NSCoder) { nil }
 
-  private func configureFailure() {
-    let icon = UIImageView(image: UIImage(systemName: "exclamationmark.triangle"))
-    icon.tintColor = UIColor(white: 1, alpha: 0.8)
-    icon.preferredSymbolConfiguration = UIImage.SymbolConfiguration(pointSize: 28, weight: .regular)
-    let label = UILabel()
-    label.text = "This image could not be loaded."
-    label.textColor = UIColor(white: 1, alpha: 0.8)
-    label.font = .preferredFont(forTextStyle: .subheadline)
-    label.adjustsFontForContentSizeCategory = true
-    label.textAlignment = .center
-    label.numberOfLines = 0
+  private func configureNotice() {
+    noticeIcon.tintColor = UIColor(white: 1, alpha: 0.8)
+    noticeIcon.preferredSymbolConfiguration = UIImage.SymbolConfiguration(pointSize: 28, weight: .regular)
+    noticeLabel.textColor = UIColor(white: 1, alpha: 0.8)
+    noticeLabel.font = .preferredFont(forTextStyle: .subheadline)
+    noticeLabel.adjustsFontForContentSizeCategory = true
+    noticeLabel.textAlignment = .center
+    noticeLabel.numberOfLines = 0
     var configuration = UIButton.Configuration.gray()
-    configuration.title = "Try Again"
     configuration.cornerStyle = .capsule
     configuration.baseForegroundColor = .white
     configuration.baseBackgroundColor = UIColor(white: 1, alpha: 0.18)
-    let retry = UIButton(configuration: configuration, primaryAction: UIAction { [weak self] _ in self?.onRetry?() })
-    failure.axis = .vertical
-    failure.alignment = .center
-    failure.spacing = 12
-    failure.isHidden = true
-    for view in [icon, label, retry] { failure.addArrangedSubview(view) }
-    addSubview(failure)
+    noticeButton.configuration = configuration
+    noticeButton.addAction(UIAction { [weak self] _ in self?.onNoticeAction?() }, for: .touchUpInside)
+    notice.axis = .vertical
+    notice.alignment = .center
+    notice.spacing = 12
+    notice.isHidden = true
+    for view in [noticeIcon, noticeLabel, noticeButton] { notice.addArrangedSubview(view) }
+    addSubview(notice)
   }
 
   var image: UIImage? { imageView.image }
@@ -76,7 +78,7 @@ private final class GoatImageViewerPage: UIView, UIScrollViewDelegate {
     imageView.image = image
     isFull = full
     stopLoading()
-    failure.isHidden = true
+    notice.isHidden = true
     let ratio = { (size: CGSize) in size.width / max(size.height, 1) }
     // A sharper copy of the same picture keeps the reader's zoom; a different shape starts over.
     if previous == nil || abs(ratio(previous ?? .zero) - ratio(image.size)) > 0.01 { laidOutSize = .zero }
@@ -94,7 +96,7 @@ private final class GoatImageViewerPage: UIView, UIScrollViewDelegate {
   }
 
   func setLoading() {
-    failure.isHidden = true
+    notice.isHidden = true
     imageView.alpha = 1
     guard imageView.image == nil, spinnerDelay == nil else { return }
     let work = DispatchWorkItem { [weak self] in self?.spinner.startAnimating() }
@@ -103,12 +105,26 @@ private final class GoatImageViewerPage: UIView, UIScrollViewDelegate {
   }
 
   func setFailed(retryable: Bool) {
-    stopLoading()
     guard !isFull else { return }
-    failure.arrangedSubviews.last?.isHidden = !retryable
-    failure.isHidden = false
-    // A thumbnail stays visible behind the message, dimmed.
+    showNotice(
+      "This image could not be loaded.", icon: "exclamationmark.triangle",
+      button: "Try Again", action: retryable ? onRetry : nil)
+  }
+
+  func offerSVGPreview(open: @escaping () -> Void) {
+    showNotice("SVG image", icon: "doc.richtext", button: "Open in Quick Look", action: open)
+  }
+
+  private func showNotice(_ message: String, icon: String, button: String, action: (() -> Void)?) {
+    stopLoading()
+    noticeLabel.text = message
+    noticeIcon.image = UIImage(systemName: icon)
+    noticeButton.configuration?.title = button
+    noticeButton.isHidden = action == nil
+    onNoticeAction = action
+    notice.isHidden = false
     imageView.alpha = imageView.image == nil ? 1 : 0.35
+    setNeedsLayout()
   }
 
   private func stopLoading() {
@@ -127,10 +143,10 @@ private final class GoatImageViewerPage: UIView, UIScrollViewDelegate {
     scroll.frame = bounds
     spinner.center = CGPoint(x: bounds.midX, y: bounds.midY)
     let width = min(bounds.width - 48, 320)
-    let height = failure.systemLayoutSizeFitting(CGSize(width: width, height: 0),
+    let height = notice.systemLayoutSizeFitting(CGSize(width: width, height: 0),
                                                  withHorizontalFittingPriority: .required,
                                                  verticalFittingPriority: .fittingSizeLevel).height
-    failure.frame = CGRect(x: (bounds.width - width) / 2, y: (bounds.height - height) / 2, width: width, height: height)
+    notice.frame = CGRect(x: (bounds.width - width) / 2, y: (bounds.height - height) / 2, width: width, height: height)
     guard bounds.size != laidOutSize, let size = imageView.image?.size, size.width > 0, size.height > 0 else { return }
     laidOutSize = bounds.size
     let fit = min(bounds.width / size.width, bounds.height / size.height)
@@ -229,8 +245,6 @@ final class GoatImageViewerController: UIViewController, UIScrollViewDelegate, U
   private var transitioning = true
   private var closeRequested = false
   private var closing = false
-  private var revealed = false
-  private var revealWaiters: [CheckedContinuation<Void, Never>] = []
   private var laidOutSize = CGSize.zero
   private var isLayingOut = false
   private lazy var saveItem = UIBarButtonItem(
@@ -369,11 +383,30 @@ final class GoatImageViewerController: UIViewController, UIScrollViewDelegate, U
     updateActions()
   }
 
-  /// Save and Share act on the original, so they wait until the current page shows it.
+  func offerSVGPreview(at index: Int) {
+    pages[safe: index]?.offerSVGPreview { [weak self] in self?.previewSVG(at: index) }
+    updateActions()
+  }
+
   private func updateActions() {
     let ready = pages[safe: currentIndex]?.isFull == true
     saveItem.isEnabled = ready
-    shareItem.isEnabled = ready
+    shareItem.isEnabled = ready || fileForPage(currentIndex)?.pathExtension.lowercased() == "svg"
+  }
+
+  private func previewSVG(at index: Int) {
+    guard index == currentIndex, !transitioning, presentedViewController == nil,
+      let file = fileForPage(index)
+    else { return }
+    guard QLPreviewController.canPreview(file as NSURL) else {
+      let alert = UIAlertController(
+        title: "Could not preview SVG", message: "Use Share to open the original in another app.",
+        preferredStyle: .alert)
+      alert.addAction(UIAlertAction(title: "OK", style: .default))
+      present(alert, animated: true)
+      return
+    }
+    present(GoatSVGPreviewController(file: file), animated: true)
   }
 
   // MARK: Transitions
@@ -407,12 +440,6 @@ final class GoatImageViewerController: UIViewController, UIScrollViewDelegate, U
     return transition
   }
 
-  /// Returns once the open transition has finished and the thumbnails are on screen again.
-  func untilRevealed() async {
-    guard !revealed else { return }
-    await withCheckedContinuation { revealWaiters.append($0) }
-  }
-
   func animateIn() {
     view.layoutIfNeeded()
     let page = pages[currentIndex]
@@ -420,9 +447,6 @@ final class GoatImageViewerController: UIViewController, UIScrollViewDelegate, U
       guard let self else { return }
       self.pager.isHidden = false
       self.transitioning = false
-      self.revealed = true
-      for waiter in self.revealWaiters { waiter.resume() }
-      self.revealWaiters.removeAll()
       self.setNeedsStatusBarAppearanceUpdate()
       UIAccessibility.post(notification: .screenChanged, argument: page.imageView)
       if self.closeRequested { self.close() }
@@ -692,5 +716,25 @@ final class GoatImageViewerController: UIViewController, UIScrollViewDelegate, U
     }
     UIAccessibility.post(notification: .pageScrolled, argument: counterLabel.text)
     return true
+  }
+}
+
+
+private final class GoatSVGPreviewController: QLPreviewController, QLPreviewControllerDataSource {
+  private let file: URL
+
+  init(file: URL) {
+    self.file = file
+    super.init(nibName: nil, bundle: nil)
+    dataSource = self
+  }
+
+  @available(*, unavailable)
+  required init?(coder: NSCoder) { nil }
+
+  func numberOfPreviewItems(in controller: QLPreviewController) -> Int { 1 }
+
+  func previewController(_ controller: QLPreviewController, previewItemAt index: Int) -> QLPreviewItem {
+    file as NSURL
   }
 }

@@ -125,7 +125,11 @@ final class GoatNativeImageViewer: NSObject {
         if let previous = files[index] { Self.remove(previous) }
         files[index] = file
         decoded.remove(index)
-        if isNearCurrent(index) { decode(index) }
+        if file.pathExtension.lowercased() == "svg" {
+          controller?.offerSVGPreview(at: index)
+        } else if isNearCurrent(index) {
+          decode(index)
+        }
       } catch {
         guard !closing, !Task.isCancelled else { return }
         controller?.setFailed(at: index, retryable: true)
@@ -150,8 +154,9 @@ final class GoatNativeImageViewer: NSObject {
   private func isNearCurrent(_ index: Int) -> Bool { abs(index - currentIndex) <= 1 }
 
   private func decode(_ index: Int) {
-    guard !closing, let file = file(at: index), !decoded.contains(index), decodes[index] == nil else { return }
-    let source = sourceView(index)
+    guard !closing, let file = file(at: index), file.pathExtension.lowercased() != "svg",
+      !decoded.contains(index), decodes[index] == nil
+    else { return }
     let previous = decodeQueue
     let task = Task { @MainActor [self] in
       await previous?.value
@@ -162,26 +167,15 @@ final class GoatNativeImageViewer: NSObject {
         if !settled, !closing, isNearCurrent(index), !decoded.contains(index) { decode(index) }
       }
       guard !closing, !Task.isCancelled, isNearCurrent(index), files[index] == file else { return }
-      // ImageIO reads SVG poorly or not at all; the thumbnail is vector, so redraw it at full-screen size.
-      let isSVG = file.pathExtension.lowercased() == "svg"
-      let image = isSVG ? nil : await Self.decodeOffMain(file)
+      let image = await Self.decodeOffMain(file)
       guard !closing, !Task.isCancelled, isNearCurrent(index), files[index] == file else { return }
-      if isSVG {
-        // The open transition hides the thumbnail, which draws blank until it is back.
-        await controller?.untilRevealed()
-        guard !closing, !Task.isCancelled, isNearCurrent(index), files[index] == file else { return }
-      }
       settled = true
-      if let image = image ?? (isSVG ? source.flatMap(Self.render(_:)) : nil) {
+      if let image {
         decoded.insert(index)
         controller?.setImage(image, at: index, full: true)
       } else {
-        // A corrupt download or an SVG whose thumbnail is scrolled away; retrying downloads it again.
-        // A file that is not an image must not reach Share.
-        if !isSVG {
-          Self.remove(file)
-          files[index] = nil
-        }
+        Self.remove(file)
+        files[index] = nil
         controller?.setFailed(at: index, retryable: true)
       }
     }
@@ -228,20 +222,13 @@ final class GoatNativeImageViewer: NSObject {
     return snapshot(view, scale: view.window?.screen.scale ?? 2)
   }
 
-  private static func render(_ view: UIView) -> UIImage? {
-    let screen = view.window?.screen.bounds.size ?? CGSize(width: 1024, height: 1024)
-    let fit = min(screen.width / max(view.bounds.width, 1), screen.height / max(view.bounds.height, 1))
-    // The thumbnail was shown again after the open transition, in a frame not yet on screen.
-    return snapshot(view, scale: max(1, fit) * (view.window?.screen.scale ?? 2), afterScreenUpdates: true)
-  }
-
-  private static func snapshot(_ view: UIView, scale: CGFloat, afterScreenUpdates: Bool = false) -> UIImage? {
+  private static func snapshot(_ view: UIView, scale: CGFloat) -> UIImage? {
     guard view.bounds.width > 1, view.bounds.height > 1, view.window != nil else { return nil }
     let format = UIGraphicsImageRendererFormat()
     format.scale = scale
     format.opaque = false
     return UIGraphicsImageRenderer(bounds: view.bounds, format: format).image { _ in
-      view.drawHierarchy(in: view.bounds, afterScreenUpdates: afterScreenUpdates)
+      view.drawHierarchy(in: view.bounds, afterScreenUpdates: false)
     }
   }
 
