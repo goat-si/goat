@@ -132,13 +132,12 @@ function workflowMembersToRuntime(
 ): ReadonlyArray<RuntimeSubagent> {
   return workflow.agents.map((agent) => {
     const status =
-      agent.outcome ??
-      ((agent.state === "queued" || agent.state === "running") &&
+      (agent.state === "queued" || agent.state === "running") &&
       isTerminalSubagentStatus(coordinator.status)
         ? coordinator.status
         : agent.state === "queued"
           ? "pending"
-          : agent.state);
+          : agent.state;
     const failed = status === "failed";
     const startedAt = isoFromEpochMillis(agent.startedAt);
     const completedAt = isTerminalSubagentStatus(status)

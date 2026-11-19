@@ -62,8 +62,8 @@ export function claudeWorkflowFrames(
     });
   const workflowSnapshot = (input: {
     readonly uuid: string;
-    readonly state: "queued" | "start" | "done" | "error";
-    readonly secondState?: "queued" | "start" | "done" | "error";
+    readonly state: "queued" | "start" | "done";
+    readonly secondState?: "queued" | "start" | "done";
     readonly startedAt?: number;
     readonly lastProgressAt?: number;
     readonly durationMs?: number;
