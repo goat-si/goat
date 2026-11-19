@@ -11,6 +11,7 @@ export const moveFloorCapabilities = {
   originUpdates: true,
   originCatchup: true,
   scopeMoves: true,
+  scopeMoveReceipts: true,
   saveSuggestions: true,
   mutationFailureDetails: true,
   generationHold: true,
