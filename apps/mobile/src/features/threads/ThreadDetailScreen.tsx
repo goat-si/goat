@@ -1306,6 +1306,7 @@ function ThreadDetailBody(
                 className="w-full"
               >
                 <FloatingWorkingControl
+                  environmentId={props.environmentId}
                   colorScheme={isDarkMode ? "dark" : "light"}
                   status={floatingStatus}
                   extensionStatus={piExtensionForControl(floatingStatus, extensionStatus)}

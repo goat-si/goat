@@ -1586,6 +1586,7 @@ export const layerWsRpc = (
           }),
           newProjectsRoot: managedFolders.namedProjectsRoot,
           ...(lastEventLoopStall === undefined ? {} : { lastEventLoopStall }),
+          serverTime: DateTime.formatIso(yield* DateTime.now),
           ...(checkoutHealth === null ? {} : { worktreeCheckoutHealth: checkoutHealth }),
           automationHold: currentAutomationHold,
         };

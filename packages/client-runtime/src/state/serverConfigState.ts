@@ -113,6 +113,7 @@ export const makeEnvironmentServerConfigState = Effect.fn("EnvironmentServerConf
         environmentThemes: _themes,
         usageLimitSources: _sources,
         lastEventLoopStall: _stall,
+        serverTime: _serverTime,
         automationHold: _hold,
         ...cacheable
       } = config;

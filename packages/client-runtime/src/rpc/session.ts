@@ -1,3 +1,4 @@
+import { beginServerClockSample, endServerClockSample, recordServerClockSample } from "../clock.ts";
 import {
   type ServerConfig,
   type ServerConfigStreamEvent,
@@ -315,6 +316,11 @@ export const make = Effect.fn("RpcSessionFactory.make")(function* (
       reason: "remote-unavailable",
       detail: `${connection.label} config subscription ended.`,
     });
+    const clockToken = beginServerClockSample(connection.environmentId);
+    yield* Effect.addFinalizer(() =>
+      Effect.sync(() => endServerClockSample(connection.environmentId, clockToken)),
+    );
+    const configRequestedAtMs = yield* Clock.currentTimeMillis;
     const openServerConfig = protocolClient[WS_METHODS.subscribeServerConfig];
     const serverConfigSource = withProviderStatusChangesOrFullLists(
       openServerConfig,
@@ -360,6 +366,18 @@ export const make = Effect.fn("RpcSessionFactory.make")(function* (
             yield* PubSub.publish(serverConfigUpdates, buffered.value);
           }
           if (event.type === "snapshot") {
+            if (
+              event.config.environment.environmentId === connection.environmentId &&
+              !(yield* Deferred.isDone(initialConfigDeferred))
+            ) {
+              recordServerClockSample(
+                connection.environmentId,
+                clockToken,
+                event.config.serverTime,
+                configRequestedAtMs,
+                yield* Clock.currentTimeMillis,
+              );
+            }
             const first = yield* Deferred.succeed(initialConfigDeferred, event.config);
             if (ssh && first)
               yield* logSshConnectionTiming("initial-snapshot", yield* Ref.get(openedAt));

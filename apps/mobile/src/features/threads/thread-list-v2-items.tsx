@@ -922,6 +922,7 @@ export const ThreadListV2Row = memo(function ThreadListV2Row(props: {
                 {statusLabel.label}
                 {status === "working" || status === "waiting" ? (
                   <ThreadListV2Duration
+                    environmentId={thread.environmentId}
                     startedAt={
                       status === "working"
                         ? resolveThreadWorkingStartedAt(thread)
