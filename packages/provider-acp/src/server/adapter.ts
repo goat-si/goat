@@ -2715,6 +2715,7 @@ export const makeAcpAdapterV2 = Effect.fn("makeAcpAdapterV2")(function* (
           context: ActiveAcpTurn,
           incoming: AcpToolCallState,
           projectedStatus?: ProjectedToolStatus,
+          failureReason?: string,
         ) => Effect.Effect<void> = () => Effect.void;
 
         const markAwaitingBackgroundHydration =
@@ -2767,6 +2768,7 @@ export const makeAcpAdapterV2 = Effect.fn("makeAcpAdapterV2")(function* (
           context: ActiveAcpTurn,
           incoming: AcpToolCallState,
           projectedStatus?: ProjectedToolStatus,
+          failureReason?: string,
         ) {
           if (context.assistant.current?.sourceMessageId == null)
             yield* closeTextStream(context, "assistant");
@@ -3102,6 +3104,8 @@ export const makeAcpAdapterV2 = Effect.fn("makeAcpAdapterV2")(function* (
               input,
               ...(output === undefined ? {} : { output }),
             };
+            if (failureReason !== undefined)
+              turnItem = { ...turnItem, title: `${turnItem.title ?? "Tool"}: ${failureReason}` };
             yield* emitProviderEvent({ type: "turn_item.updated", driver, turnItem });
             yield* rearmDeferredFinalize(context);
             return;
@@ -3253,6 +3257,8 @@ export const makeAcpAdapterV2 = Effect.fn("makeAcpAdapterV2")(function* (
                 }
             }
           }
+          if (failureReason !== undefined)
+            turnItem = { ...turnItem, title: `${turnItem.title ?? "Tool"}: ${failureReason}` };
           yield* emitProviderEvent({ type: "turn_item.updated", driver, turnItem });
           yield* rearmDeferredFinalize(context);
         });
@@ -6548,11 +6554,12 @@ export const makeAcpAdapterV2 = Effect.fn("makeAcpAdapterV2")(function* (
         const terminalizeOpenForegroundTools = Effect.fnUntraced(function* (
           context: ActiveAcpTurn,
           status: "completed" | "failed" = "completed",
+          reason?: string,
         ) {
           for (const tool of context.tools.values()) {
             if (!acpCompletedTurnShouldTerminalizeTool(tool, { ...flavor, extractSubagentUpdate }))
               continue;
-            yield* emitTool(context, tool, status);
+            yield* emitTool(context, tool, status, reason);
           }
         });
 
@@ -7561,8 +7568,14 @@ export const makeAcpAdapterV2 = Effect.fn("makeAcpAdapterV2")(function* (
                     }
                     const agentAnswered =
                       Result.isSuccess(error) && error.success._tag === "AcpRequestError";
-                    if (!interrupted && !agentAnswered) {
-                      yield* terminalizeOpenForegroundTools(context, "failed");
+                    if (!interrupted) {
+                      yield* terminalizeOpenForegroundTools(
+                        context,
+                        "failed",
+                        agentAnswered
+                          ? "The ACP agent rejected the prompt before the tool finished."
+                          : undefined,
+                      );
                     }
                     yield* finalizeTurn(
                       context,

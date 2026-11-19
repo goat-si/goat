@@ -1518,7 +1518,7 @@ const program = Effect.gen(function* () {
             rawInput: { command: "git status" },
           },
         });
-        return yield* Effect.never;
+        if (!failPrompt && promptCount !== failPromptOrdinal) return yield* Effect.never;
       }
 
       if (failPrompt || promptCount === failPromptOrdinal) {
