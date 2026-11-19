@@ -15,7 +15,10 @@ import type {
 import { turnItemIsWorkspacePreparation } from "@goat/client-runtime/state/turn-item-presentation";
 import type { ThreadCheckpointSummary } from "@goat/client-runtime/state/thread-checkpoints";
 import { formatSubagentDisplayTitle } from "@goat/client-runtime/state/subagent-display";
-import { isLiveSubagentTurnItem } from "@goat/client-runtime/state/subagentRuntime";
+import {
+  isLiveSubagentTurnItem,
+  waitingOnSubagentsLabel,
+} from "@goat/client-runtime/state/subagentRuntime";
 import { extractToolActivityPresentation } from "@goat/client-runtime/work-log/tool-presentation";
 import { providerErrorPresentation } from "@goat/client-runtime/work-log/provider-error";
 import { fileChangeGroupLineCounts } from "@goat/client-runtime/work-log/line-counts";
@@ -1234,7 +1237,13 @@ export function deriveThreadFeedPresentation(
           row.activities[0]?.projectedItem.item.status === "running"),
     )
   ) {
-    const preview = zen ? (liveAnswerPreview(feed) ?? undefined) : undefined;
+    const waitingOn = activeRunId === null ? 0 : runningSubagentsAtRunTail(feed, activeRunId);
+    const preview =
+      waitingOn > 0
+        ? waitingOnSubagentsLabel(waitingOn)
+        : zen
+          ? (liveAnswerPreview(feed) ?? undefined)
+          : undefined;
     result.push(
       thinkingRow(activeWorkStartedAt, activeRunId, latestRun?.providerStartingLabel ?? preview),
     );
@@ -1321,6 +1330,18 @@ export function deriveThreadFeedPresentation(
 }
 
 const continuedWorkLogRows = new WeakMap<ThreadFeedEntry, ThreadFeedEntry>();
+
+function runningSubagentsAtRunTail(feed: ReadonlyArray<ThreadFeedEntry>, runId: RunId): number {
+  let running = 0;
+  for (let index = feed.length - 1; index >= 0; index -= 1) {
+    const entry = feed[index];
+    if (!entry || entry.type !== "activity-group" || entry.runId !== runId) break;
+    const items = entry.activities.map((activity) => activity.projectedItem.item);
+    if (items.some((item) => item.type !== "subagent")) break;
+    running += items.filter(isLiveSubagentTurnItem).length;
+  }
+  return running;
+}
 
 function isWorkLogFeedRow(row: ThreadFeedEntry | undefined): boolean {
   return (

@@ -2086,3 +2086,37 @@ it("caps live thought previews while preserving reasoning detail", () => {
   expect(JSON.parse(activity.getFullDetail()!).item).toMatchObject({ text });
   expect(activity.getCopyText()).toContain(text);
 });
+
+it("names running subagents at the unfiltered run tail and stops after later parent work", () => {
+  const startedAt = "2026-06-20T00:00:01.000Z";
+  const child: OrchestrationV2TurnItem = {
+    ...base("waiting-child", "2026-06-20T00:00:03.000Z", 2),
+    status: "running",
+    completedAt: null,
+    type: "subagent",
+    subagentId: NodeId.make("waiting-child"),
+    origin: "app_owned",
+    driver: ProviderDriverKind.make("codex"),
+    providerInstanceId: ProviderInstanceId.make("codex"),
+    childThreadId: sourceThreadId,
+    prompt: "Inspect",
+    result: null,
+  };
+  const latest = { runId, status: "running" as const, startedAt, completedAt: null };
+  const present = (items: OrchestrationV2TurnItem[]) =>
+    deriveThreadFeedPresentation(
+      buildThreadFeed(items.map((item, index) => projected(item, index))),
+      latest,
+      new Set(),
+      new Set(),
+      startedAt,
+    );
+  expect(present([userMessage(), child]).find((row) => row.type === "thinking")).toMatchObject({
+    providerStartingLabel: "Waiting on a subagent",
+  });
+  expect(
+    present([userMessage(), child, command("2026-06-20T00:00:04.000Z")]).some(
+      (row) => row.type === "thinking" && row.providerStartingLabel === "Waiting on a subagent",
+    ),
+  ).toBe(false);
+});
