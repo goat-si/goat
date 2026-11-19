@@ -86,6 +86,8 @@ import { claudePromptCacheTtlMs, type ClaudeCacheCreation } from "./claudeCacheT
 import { buildAssistantArtifacts } from "./ClaudeAssistantArtifacts.ts";
 import { makeClaudeEventQueue } from "./ClaudeEventQueue.ts";
 import {
+  assistantTextFromSdkMessage,
+  resultTextFromSdkMessage,
   claudeWritesUpdatesAsThinking,
   isClaudeLocalCommandEcho,
   normalizeClaudeResultText,
@@ -857,30 +859,6 @@ function providerSession(input: {
     createdAt: input.now,
     updatedAt: input.now,
     lastError: null,
-  };
-}
-
-function assistantTextFromSdkMessage(
-  message: SDKMessage,
-): { readonly nativeItemId: string; readonly text: string } | null {
-  if (message.type !== "assistant") {
-    return null;
-  }
-  return {
-    nativeItemId: message.uuid,
-    text: textFromClaudeContent(message.message.content),
-  };
-}
-
-function resultTextFromSdkMessage(
-  message: SDKMessage,
-): { readonly nativeItemId: string; readonly text: string } | null {
-  if (message.type !== "result" || message.subtype !== "success") {
-    return null;
-  }
-  return {
-    nativeItemId: message.uuid,
-    text: message.result,
   };
 }
 

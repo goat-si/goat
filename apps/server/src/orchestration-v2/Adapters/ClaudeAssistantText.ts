@@ -1,3 +1,4 @@
+import { textFromClaudeContent } from "./ClaudeGoalProjection.ts";
 import type { SDKAssistantMessage, SDKMessage } from "@anthropic-ai/claude-agent-sdk";
 import type * as DateTime from "effect/DateTime";
 
@@ -126,4 +127,28 @@ export function claudeWritesUpdatesAsThinking(model: string): boolean {
 
 export function normalizeClaudeResultText(text: string): string {
   return text.replace(/\s+/g, " ").trim();
+}
+
+export function assistantTextFromSdkMessage(
+  message: SDKMessage,
+): { readonly nativeItemId: string; readonly text: string } | null {
+  if (message.type !== "assistant") {
+    return null;
+  }
+  return {
+    nativeItemId: message.uuid,
+    text: textFromClaudeContent(message.message.content),
+  };
+}
+
+export function resultTextFromSdkMessage(
+  message: SDKMessage,
+): { readonly nativeItemId: string; readonly text: string } | null {
+  if (message.type !== "result" || message.subtype !== "success") {
+    return null;
+  }
+  return {
+    nativeItemId: message.uuid,
+    text: message.result,
+  };
 }
