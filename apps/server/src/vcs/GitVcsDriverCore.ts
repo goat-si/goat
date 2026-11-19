@@ -2302,6 +2302,8 @@ export const makeGitVcsDriverCore = Effect.fn("makeGitVcsDriverCore")(function* 
     }
 
     const hasNoLocalDelta = details.aheadCount === 0 && details.behindCount === 0;
+    const tracksLocal =
+      details.hasUpstream && (yield* readConfigValue(cwd, `branch.${branch}.remote`)) === ".";
     const destination = yield* resolvePushDestination(cwd, branch, details.hasUpstream);
     if (hasNoLocalDelta && details.hasUpstream && destination?.upstream?.remoteName !== ".") {
       if (!destination?.pushRemote) {
