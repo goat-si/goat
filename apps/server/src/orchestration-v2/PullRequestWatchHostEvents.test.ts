@@ -176,6 +176,93 @@ const fakeHost = (input: {
 };
 
 describe("pull request watch host events", () => {
+  it.effect("reports check changes even when activity fails and retries remarks", () =>
+    Effect.gen(function* () {
+      yield* TestClock.setTime(Date.parse("2026-10-02T12:00:00.000Z"));
+      const { orchestrator, threadId, projectId } = yield* watchPullRequest(
+        "pr-activity-failure",
+        62,
+      );
+      let available = true;
+      let activityReads = 0;
+      let checks: PullRequestDetail["checks"] = [
+        { name: "lint", status: "pending", description: null, url: null, required: true },
+      ];
+      const host = Layer.mergeAll(
+        NodeServices.layer,
+        NodeCrypto.layer,
+        ServerSettings.layerTest(),
+        Layer.mock(PullRequestService.PullRequestService)({
+          detail: () =>
+            Effect.sync(() => ({
+              ...watchedPullRequestDetail({
+                projectId,
+                number: 62,
+                at: "2026-10-02T12:00:00.000Z",
+              }),
+              headSha: "aaaaaaaaaa",
+              checks,
+            })),
+          activity: () =>
+            Effect.suspend(() => {
+              activityReads += 1;
+              return available
+                ? Effect.succeed({
+                    comments:
+                      activityReads < 3
+                        ? []
+                        : [
+                            {
+                              id: "late-comment",
+                              kind: "review-comment" as const,
+                              author: { login: "reviewer", name: null, avatarUrl: null },
+                              body: "Please check the edge case.",
+                              createdAt: "2026-10-02T12:05:00.000Z",
+                              url: "https://github.com/goat-si/goat/pull/62#late-comment",
+                              path: "src/index.ts",
+                              reviewState: null,
+                            },
+                          ],
+                    commentCount: activityReads < 3 ? 0 : 1,
+                    commentsTruncated: false,
+                    reviewThreads: [],
+                    commits: [],
+                  })
+                : Effect.die("activity unavailable");
+            }),
+          watchFingerprint: () => Effect.succeed(null),
+          followsChanges: () => Effect.succeed(false),
+          changes: () => Stream.never,
+        }),
+      );
+      const reactor = yield* PullRequestWatchReactor.make.pipe(Effect.provide(host));
+      const worker = yield* EffectWorker.OrchestrationEffectWorkerV2;
+      const sweep = reactor.sweep.pipe(Effect.andThen(worker.drain()));
+      const wakes = Effect.map(
+        orchestrator.getThreadRecords(threadId, ["messages"]),
+        ({ messages }) => messages.filter((message) => message.notification != null),
+      );
+      yield* sweep;
+      checks = [{ name: "lint", status: "success", description: null, url: null, required: true }];
+      available = false;
+      yield* TestClock.adjust("10 minutes");
+      yield* sweep;
+      const reported = yield* wakes;
+      assert.lengthOf(reported, 1);
+      assert.equal(reported[0]?.notification?.summary, "#62: checks passed");
+      available = true;
+      yield* TestClock.adjust("10 minutes");
+      yield* sweep;
+      const recovered = yield* wakes;
+      assert.lengthOf(recovered, 2);
+      assert.include(recovered[1]!.text, "Please check the edge case.");
+      assert.strictEqual(activityReads, 3);
+      yield* TestClock.adjust("10 minutes");
+      yield* sweep;
+      assert.lengthOf(yield* wakes, 2);
+    }).pipe(Effect.scoped, Effect.provide(layerTest)),
+  );
+
   it.effect("opens a host feed for a watched pull request once the first sweep has read it", () =>
     Effect.gen(function* () {
       const { projectId } = yield* watchPullRequest("pr-watch-host-feed-opened", 16);
