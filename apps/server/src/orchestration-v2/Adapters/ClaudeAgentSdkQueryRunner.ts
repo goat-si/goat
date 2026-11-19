@@ -72,30 +72,16 @@ const CLAUDE_BOOT_TIMEOUT = "5 minutes";
 // How often CLIs no agent scope holds have their process trees recorded, all from one table.
 const CLAUDE_DESCENDANT_POLL = "1 second";
 
-export const CLAUDE_CODE_PRESET_TOOLS = {
-  type: "preset",
-  preset: "claude_code",
-} satisfies NonNullable<ClaudeQueryOptions["tools"]>;
-export type ClaudeAgentSdkQueryToolList = ReadonlyArray<string>;
-export interface ClaudeAgentSdkQueryPresetTools {
-  readonly type: "preset";
-  readonly preset: "claude_code";
-}
-export type ClaudeAgentSdkQueryTools = ClaudeAgentSdkQueryToolList | ClaudeAgentSdkQueryPresetTools;
-export const CLAUDE_READ_ONLY_ALLOWED_TOOLS = ["Read", "Glob", "Grep"] as const;
-export function claudeAgentSdkQueryToolsForSdk(
-  tools: ClaudeAgentSdkQueryTools,
-): NonNullable<ClaudeQueryOptions["tools"]> {
-  if (isClaudeAgentSdkQueryToolList(tools)) {
-    return [...tools];
-  }
-  return { type: tools.type, preset: tools.preset };
-}
-function isClaudeAgentSdkQueryToolList(
-  tools: ClaudeAgentSdkQueryTools,
-): tools is ClaudeAgentSdkQueryToolList {
-  return Array.isArray(tools);
-}
+export {
+  CLAUDE_CODE_PRESET_TOOLS,
+  CLAUDE_READ_ONLY_ALLOWED_TOOLS,
+  claudeAgentSdkQueryToolsForSdk,
+} from "./ClaudeSdkTools.ts";
+export type {
+  ClaudeAgentSdkQueryToolList,
+  ClaudeAgentSdkQueryPresetTools,
+  ClaudeAgentSdkQueryTools,
+} from "./ClaudeSdkTools.ts";
 export type ClaudeAgentSdkThreadIdentity =
   | {
       readonly sessionId: string;
