@@ -1,9 +1,11 @@
+import { hasAcpDeferredBackgroundWork } from "./deferredBackground.ts";
 import {
   AcpModelSelectionError,
   ACP_STOP_CONFIRM_TIMEOUT_MS,
   type ActiveTextSegment,
   type ActiveTextStream,
   type AcpNativeBuildConfiguration,
+  type PendingRuntimeRequest,
 } from "./activeTurnTypes.ts";
 import { shouldPersistToolUpdate } from "./toolPersistence.ts";
 import {
@@ -94,7 +96,6 @@ import {
   type ProviderInteractionMode,
   type ProviderThreadId,
   type ProviderUserInputAnswers,
-  type RuntimeRequestId,
   type ThreadTokenUsageSnapshot,
   type ThreadId,
 } from "@goat/contracts";
@@ -364,25 +365,6 @@ type AcpCarryoverSubagents = {
   readonly projectsLateTerminals: boolean;
   readonly subagents: ReadonlyArray<ActiveAcpSubagent>;
 };
-
-type PendingRuntimeRequest = {
-  readonly generation: number;
-  readonly nativeResponseAcknowledgement: Deferred.Deferred<void, EffectAcpErrors.AcpError>;
-  readonly transportRequestId: string;
-  readonly requestId: RuntimeRequestId;
-  readonly runtimeRequest: OrchestrationV2RuntimeRequest;
-  readonly node: OrchestrationV2ExecutionNode;
-  readonly turnItem: OrchestrationV2TurnItem;
-} & (
-  | {
-      readonly type: "approval";
-      readonly decision: Deferred.Deferred<ProviderApprovalDecision>;
-    }
-  | {
-      readonly type: "user_input";
-      readonly answers: Deferred.Deferred<ProviderUserInputAnswers | null>;
-    }
-);
 
 export const makeAcpAdapterV2 = Effect.fn("makeAcpAdapterV2")(function* (
   options: AcpAdapterV2Options,
@@ -1080,7 +1062,28 @@ export const makeAcpAdapterV2 = Effect.fn("makeAcpAdapterV2")(function* (
             runtimeGeneration,
             Effect.gen(function* () {
               yield* Ref.set(runtimeRestartRequired, true);
-              if (!followsAgentWorkState) return;
+              if (!followsAgentWorkState) {
+                const held = yield* Ref.get(activeTurn);
+                if (
+                  flavor.toolOutlivesPrompt === undefined ||
+                  held === null ||
+                  !held.promptSettled ||
+                  held.finalized ||
+                  !hasDeferredBackgroundWork(held)
+                )
+                  return;
+                for (const tool of held.tools.values()) {
+                  const status = toolStatus(tool.status);
+                  if (status === "pending" || status === "running" || status === "waiting")
+                    yield* emitTool(held, tool, "failed");
+                }
+                yield* finalizeTurn(
+                  held,
+                  "failed",
+                  makeProviderFailure({ class: "transport_error" }),
+                );
+                return;
+              }
               agentWork = { sessionUpdate: "state_update", state: "idle", stopReason: "error" };
               for (const child of nativeChildren.values()) {
                 if (child.status !== "running") continue;
@@ -2574,25 +2577,8 @@ export const makeAcpAdapterV2 = Effect.fn("makeAcpAdapterV2")(function* (
         const isMonitorEndNoticeText = (text: string): boolean =>
           /Monitor\s+["']?[0-9a-f-]{8,}/i.test(text) && /ended/i.test(text);
 
-        const hasDeferredBackgroundWork = (context: ActiveAcpTurn): boolean => {
-          if (flavor.wakeOnDetachedRequest && agentRequests.size > 0) return true;
-          if (context.awaitingBackgroundHydration.size > 0) return true;
-          if (context.pendingInjectedReport.size > 0) return true;
-          for (const [taskId, toolCallId] of context.toolCallIdsByBackgroundTaskId) {
-            if (context.persistentBackgroundTaskIds.has(taskId)) continue;
-            const tool = context.tools.get(toolCallId);
-            if (tool === undefined) continue;
-            const status = toolStatus(tool.status);
-            if (status === "pending" || status === "running") return true;
-          }
-          if (flavor.subagentsIdleOnTurnCompletion === true) return false;
-          for (const subagent of context.subagents.values()) {
-            if (acpSubagentStatusBlocksTurnSettlement(subagent.task.status)) {
-              return true;
-            }
-          }
-          return false;
-        };
+        const hasDeferredBackgroundWork = (context: ActiveAcpTurn) =>
+          hasAcpDeferredBackgroundWork(context, flavor, agentRequests.size);
 
         const hasSurvivingBackgroundWork = (context: ActiveAcpTurn): boolean =>
           [...context.toolCallIdsByBackgroundTaskId.values()].some((toolCallId) => {

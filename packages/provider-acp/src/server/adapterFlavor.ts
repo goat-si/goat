@@ -289,6 +289,7 @@ export interface AcpAdapterV2Flavor {
     readonly appendOutput: string;
   }>;
   readonly isPersistentBackgroundTool?: (toolCall: AcpToolCallState) => boolean;
+  readonly toolOutlivesPrompt?: (toolCall: AcpToolCallState) => boolean;
   readonly isProviderWakeNotification?: (
     notification: EffectAcpSchema.SessionNotification,
   ) => boolean;

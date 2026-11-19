@@ -1,3 +1,13 @@
+import type {
+  OrchestrationV2RuntimeRequest,
+  OrchestrationV2ExecutionNode,
+  OrchestrationV2TurnItem,
+  ProviderApprovalDecision,
+  ProviderUserInputAnswers,
+  RuntimeRequestId,
+} from "@goat/contracts";
+import type * as Deferred from "effect/Deferred";
+import type * as EffectAcpErrors from "effect-acp/errors";
 import * as Schema from "effect/Schema";
 import type * as DateTime from "effect/DateTime";
 
@@ -37,3 +47,22 @@ export interface AcpNativeBuildConfiguration {
 }
 
 export const ACP_STOP_CONFIRM_TIMEOUT_MS = 10_000;
+
+export type PendingRuntimeRequest = {
+  readonly generation: number;
+  readonly nativeResponseAcknowledgement: Deferred.Deferred<void, EffectAcpErrors.AcpError>;
+  readonly transportRequestId: string;
+  readonly requestId: RuntimeRequestId;
+  readonly runtimeRequest: OrchestrationV2RuntimeRequest;
+  readonly node: OrchestrationV2ExecutionNode;
+  readonly turnItem: OrchestrationV2TurnItem;
+} & (
+  | {
+      readonly type: "approval";
+      readonly decision: Deferred.Deferred<ProviderApprovalDecision>;
+    }
+  | {
+      readonly type: "user_input";
+      readonly answers: Deferred.Deferred<ProviderUserInputAnswers | null>;
+    }
+);
