@@ -1,3 +1,4 @@
+import { cleanCheckpointRefs } from "./storageCleanupCheckpoints.ts";
 import { worktreeOwner } from "./storageCleanupOwners.ts";
 import { makeWorktreeMeasurement } from "./storageCleanupMeasurement.ts";
 import { keyAt, makeCanonicalWorktreePaths, worktreePathOf } from "./storageCleanupCanonical.ts";
@@ -990,6 +991,9 @@ const make = Effect.gen(function* () {
     const serverSettings = yield* settingsService.getSettings;
     const settings = serverSettings.storageCleanup;
     const entries: StorageCleanupReportEntry[] = [];
+    yield* cleanCheckpointRefs(git).pipe(
+      Effect.catch((cause) => Effect.logWarning("checkpoint ref cleanup failed", { cause })),
+    );
     const deletedWorktrees = yield* runWorktreeCleanup({
       nowMs: now,
       snapshotDays: settings.worktreeSnapshotDays,
@@ -1156,8 +1160,10 @@ const make = Effect.gen(function* () {
     );
     yield* forkParked(
       Stream.runForEach(events, (event) => {
-        if (event.type === "thread.deleted") deletions++;
-        else if (
+        if (event.type === "thread.deleted") {
+          deletions++;
+          return requestSweep;
+        } else if (
           event.type !== "provider-session.updated" ||
           (event.payload.status !== "stopped" && event.payload.status !== "error")
         )
