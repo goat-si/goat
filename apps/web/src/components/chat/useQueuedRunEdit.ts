@@ -41,7 +41,6 @@ import { useStableCallback } from "../../hooks/useStableCallback";
 import {
   awaitAttachmentUploads,
   getUploadedAttachments,
-  releaseDraftAttachments,
   startAttachmentUpload,
 } from "../../lib/attachmentUploadQueue";
 import { buildMessageContext, isResponseContextRecord } from "../../lib/composerContextRecords";
@@ -67,6 +66,7 @@ import { stackedThreadToast, toastManager } from "../ui/toast";
 import type { ChatComposerHandle } from "./ChatComposer";
 import { fileAttachmentCapabilityBlockReason } from "./composerAttachmentFiles";
 import { prepareQueuedEditAttachments, recoverQueuedMessageEdit } from "./queuedMessageEdit";
+import { discardQueuedEditDraft, releaseUnownedQueuedEditAttachments } from "./queuedEditResources";
 import type { EditQueuedRunRequest } from "./QueuedRunsControl";
 
 interface EditingQueuedRun {
@@ -257,10 +257,12 @@ export function useQueuedRunEdit(input: {
   const focusComposerSoon = () => {
     window.requestAnimationFrame(() => composerRef.current?.focusAtEnd());
   };
-  const clearEditDraft = (runId: RunId) =>
-    useComposerDraftStore
-      .getState()
-      .clearComposerContent(queuedRunEditDraftId(routeThreadRef, runId));
+  const clearEditDraft = (runId: RunId) => {
+    const target = queuedRunEditDraftId(routeThreadRef, runId);
+    // A save in flight still sends these uploads.
+    if (isSaving) useComposerDraftStore.getState().clearComposerContent(target);
+    else discardQueuedEditDraft(target);
+  };
 
   const beginEdit = useStableCallback((request: EditQueuedRunRequest) => {
     if (activeThreadId === null) return;
@@ -416,12 +418,15 @@ export function useQueuedRunEdit(input: {
     setThreadError(editing.threadId, error);
     const current = finishSave(error === null);
     if (error !== null) return;
-    releaseDraftAttachments(newAttachments);
-    // The edit was cancelled or begun again while this save ran; its drafts are the newer edit's.
+    if (current) {
+      promptRef.current = "";
+      useComposerDraftStore
+        .getState()
+        .clearComposerContent(queuedRunEditDraftId(routeThreadRef, editing.runId));
+      composerRef.current?.resetCursorState();
+    }
+    releaseUnownedQueuedEditAttachments(newAttachments);
     if (!current) return;
-    promptRef.current = "";
-    clearEditDraft(editing.runId);
-    composerRef.current?.resetCursorState();
     focusComposerSoon();
   };
 

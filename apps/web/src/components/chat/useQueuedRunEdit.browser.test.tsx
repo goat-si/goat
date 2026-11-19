@@ -27,10 +27,12 @@ import { describe, expect, it, vi } from "vite-plus/test";
 
 import { act, render } from "../../../test/render";
 import { useComposerDraftStore } from "../../composerDraftStore";
+import { readAttachmentUpload, useAttachmentUploadStore } from "../../lib/attachmentUploadQueue";
 import { INLINE_TERMINAL_CONTEXT_PLACEHOLDER } from "../../lib/terminalContext";
 
 import { formatInlineContextReference } from "../../lib/composerContextReferences";
 import { threadContextRecord, threadContextReference } from "../../lib/composerContextRecords";
+import { environmentServerConfigsAtom } from "../../state/server";
 import { AppAtomRegistryProvider, appAtomRegistry } from "../../rpc/atomRegistry";
 import { makeThreadProjectionFixture } from "../../test-fixtures";
 import { useQueuedRunEdit } from "./useQueuedRunEdit";
@@ -575,6 +577,147 @@ describe("useQueuedRunEdit", () => {
 
     expect(requireHook(hook).isEditing).toBe(false);
     expect(promptOf(THREAD_A)).toBe("");
+  });
+
+  it.each(["discard", "success", "failure", "newer", "recovery"] as const)(
+    "preserves staged ownership through queued edit $case",
+    async (scenario) => {
+      const { hook } = setup();
+      let finish!: (result: { readonly _tag: "Success" | "Failure" }) => void;
+      let started!: () => void;
+      const requested = new Promise<void>((resolve) => {
+        started = resolve;
+      });
+      mocks.editQueuedRun.mockImplementation(() => {
+        started();
+        return new Promise((resolve) => {
+          finish = resolve;
+        });
+      });
+      await using _screen = await render(view(THREAD_A, "queued", hook));
+      await beginChangedEdit(hook);
+      const image = {
+        type: "image" as const,
+        id: `owned-${scenario}`,
+        name: "image.png",
+        mimeType: "image/png",
+        sizeBytes: 5,
+        file: new File(["image"], "image.png", { type: "image/png" }),
+        previewUrl: `blob:owned-${scenario}`,
+      };
+      using revoke = vi.spyOn(URL, "revokeObjectURL").mockImplementation(() => {});
+      const target = requireHook(hook).draftTarget;
+      await act(() => useComposerDraftStore.getState().addImages(target, [image]));
+      useAttachmentUploadStore.setState({
+        uploadsByImageId: {
+          [image.id]: { status: "ready", environmentId: ENV, attachmentId: "upload" },
+        },
+      });
+      if (scenario === "discard") {
+        await act(() => requireHook(hook).cancelEdit());
+        expect(readAttachmentUpload(image.id)).toBeUndefined();
+        expect(revoke).toHaveBeenCalledExactlyOnceWith(image.previewUrl);
+        return;
+      }
+      const saved = requireHook(hook).saveEdit(
+        { ...savedContent("changed"), images: [image] },
+        () => {},
+      );
+      await requested;
+      if (scenario === "newer") {
+        await beginChangedEdit(hook);
+        await act(() => useComposerDraftStore.getState().addImages(target, [image]));
+      }
+      if (scenario === "recovery") await act(() => setRuns(THREAD_A, "running"));
+      expect(readAttachmentUpload(image.id)).toBeDefined();
+      expect(revoke).not.toHaveBeenCalled();
+      finish({ _tag: scenario === "failure" || scenario === "recovery" ? "Failure" : "Success" });
+      await act(() => saved);
+      if (scenario === "success") {
+        expect(readAttachmentUpload(image.id)).toBeUndefined();
+        expect(revoke).toHaveBeenCalledExactlyOnceWith(image.previewUrl);
+      } else {
+        expect(readAttachmentUpload(image.id)).toBeDefined();
+        expect(revoke).not.toHaveBeenCalled();
+      }
+    },
+  );
+
+  it("retries the same queued edit and staged upload with the latest content", async () => {
+    const { hook } = setup();
+    mocks.editQueuedRun
+      .mockResolvedValueOnce({ _tag: "Failure" })
+      .mockResolvedValueOnce({ _tag: "Success" });
+    await using _screen = await render(view(THREAD_A, "queued", hook));
+    const original = appAtomRegistry.get.bind(appAtomRegistry);
+    using get = vi.spyOn(appAtomRegistry, "get");
+    get.mockImplementation(((atom: unknown) =>
+      atom === environmentServerConfigsAtom
+        ? new Map([
+            [
+              ENV,
+              {
+                environment: {
+                  capabilities: {
+                    attachmentUploads: true,
+                    fileAttachments: { maxUploadBytes: 100000 },
+                  },
+                },
+              },
+            ],
+          ])
+        : original(atom as never)) as never);
+    using upload = vi.spyOn(XMLHttpRequest.prototype, "open");
+    await beginChangedEdit(hook);
+    const file = {
+      type: "file" as const,
+      id: "retry-file",
+      name: "report.pdf",
+      mimeType: "application/pdf",
+      sizeBytes: 6,
+      file: new File(["report"], "report.pdf", { type: "application/pdf" }),
+    };
+    const target = requireHook(hook).draftTarget;
+    await act(() => useComposerDraftStore.getState().addFiles(target, [file]));
+    useAttachmentUploadStore.setState({
+      uploadsByImageId: {
+        [file.id]: { status: "ready", environmentId: ENV, attachmentId: "staged-upload" },
+      },
+    });
+    const errors: Array<string | null> = [];
+    await act(() =>
+      requireHook(hook).saveEdit({ ...savedContent("first"), files: [file] }, (_, error) =>
+        errors.push(error),
+      ),
+    );
+    expect(errors).toEqual(["Could not save the edited queued message."]);
+    expect(readAttachmentUpload(file.id)).toBeDefined();
+    await act(() =>
+      requireHook(hook).saveEdit({ ...savedContent("latest"), files: [file] }, () => {}),
+    );
+    expect(upload).not.toHaveBeenCalled();
+    expect(mocks.editQueuedRun).toHaveBeenCalledTimes(2);
+    const calls = mocks.editQueuedRun.mock.calls.map(
+      ([call]) =>
+        call as {
+          environmentId: EnvironmentId;
+          input: {
+            threadId: ThreadId;
+            runId: RunId;
+            text: string;
+            edit: { messageId: MessageId; attachments: Array<{ id: string }> };
+          };
+        },
+    );
+    for (const call of calls) {
+      expect(call.environmentId).toBe(ENV);
+      expect(call.input.threadId).toBe(THREAD_A.threadId);
+      expect(call.input.runId).toBe(RUN);
+      expect(call.input.edit.messageId).toBe(MessageId.make("message-1"));
+      expect(call.input.edit.attachments[0]?.id).toBe("staged-upload");
+    }
+    expect(calls[1]?.input.text).toBe("latest");
+    expect(readAttachmentUpload(file.id)).toBeUndefined();
   });
 
   it("leaves a newer edit alone when a save from before navigation finishes", async () => {
