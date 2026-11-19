@@ -2,6 +2,7 @@ import * as Clock from "effect/Clock";
 import * as Config from "effect/Config";
 import * as Context from "effect/Context";
 import * as Effect from "effect/Effect";
+import { toBitbucketStates, bitbucketQueryString, bitbucketStateFilter } from "./bitbucketQuery.ts";
 import * as FileSystem from "effect/FileSystem";
 import * as Layer from "effect/Layer";
 import * as Option from "effect/Option";
@@ -410,29 +411,6 @@ function sourceWorkspace(input: {
 }): string | undefined {
   if (input.source?.owner) return input.source.owner;
   return SourceControlProvider.parseSourceControlOwnerRef(input.headSelector)?.owner;
-}
-
-function toBitbucketStates(state: "open" | "closed" | "merged" | "all"): ReadonlyArray<string> {
-  switch (state) {
-    case "open":
-      return ["OPEN"];
-    case "closed":
-      return ["DECLINED", "SUPERSEDED"];
-    case "merged":
-      return ["MERGED"];
-    case "all":
-      return ["OPEN", "MERGED", "DECLINED", "SUPERSEDED"];
-  }
-}
-
-function bitbucketQueryString(filters: ReadonlyArray<string>): string {
-  return filters.join(" AND ");
-}
-
-function bitbucketStateFilter(states: ReadonlyArray<string>): string {
-  return states.length === 1
-    ? `state = "${states[0]}"`
-    : `(${states.map((state) => `state = "${state}"`).join(" OR ")})`;
 }
 
 function parseBitbucketRepositorySlug(value: string): BitbucketRepositoryLocator | null {
