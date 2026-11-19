@@ -48,10 +48,14 @@ To use an installed [MiniMax Code CLI](https://github.com/MiniMax-AI/minimax-cod
 environment where you run it.
 The local preset starts `mcode acp` over stdio. Confirm that `mcode --version` works on that
 machine. If the server cannot find it on PATH, enter its absolute path under **Executable**.
+On Windows, `mcode` is a `.cmd` launcher, which GOAT cannot start directly: set **Executable**
+to `node.exe` and the arguments to the full path of the `cli.js` that the launcher runs,
+followed by `acp`.
 For npm installations, the server must also be able to run a Node.js version supported by MCode.
 If a version manager gives your terminal a newer Node.js than GOAT, set the instance’s
 `PATH` under **Variables** to include that Node.js bin directory before the other entries.
-Use `mcode login` on that machine if the CLI needs sign-in.
+If the CLI needs sign-in, run `mcode login` on that machine, or `mcode login --region global`
+for a global (non-mainland China) account.
 
 If a new thread fails to open after switching models, try the model currently selected in
 MCode. With CLI 0.7.8, switching from **M3.1-Flash · thinking** to **M3.1-Flash** can
