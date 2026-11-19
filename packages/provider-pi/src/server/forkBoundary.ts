@@ -11,6 +11,7 @@ export type PiForkBoundary =
       readonly entryId: string;
       readonly turn: OrchestrationV2ProviderTurn;
       readonly target: OrchestrationV2ProviderTurn | null;
+      readonly previous?: OrchestrationV2ProviderTurn | undefined;
     }
   | {
       readonly type: "nothing";
@@ -21,6 +22,7 @@ export type PiForkBoundary =
       readonly type: "uncaptured";
       readonly turn: OrchestrationV2ProviderTurn;
       readonly target: OrchestrationV2ProviderTurn | null;
+      readonly previous?: OrchestrationV2ProviderTurn | undefined;
     };
 
 /**
@@ -36,6 +38,9 @@ export function piForkBoundary(input: {
   readonly sessionFile?: string | undefined;
 }): PiForkBoundary {
   const target = input.target.type === "thread_start" ? null : input.target.providerTurn;
+  const previous = input.providerThreadTurns
+    .filter((turn) => turn.ordinal < (target?.ordinal ?? 0) && turn.nativeTurnRef !== null)
+    .sort((a, b) => b.ordinal - a.ordinal)[0];
   const boundary = input.providerThreadTurns
     .filter(
       (turn) =>
@@ -51,13 +56,11 @@ export function piForkBoundary(input: {
     return {
       type: "nothing",
       target,
-      previous: input.providerThreadTurns
-        .filter((turn) => turn.ordinal < (target?.ordinal ?? 0) && turn.nativeTurnRef !== null)
-        .sort((a, b) => b.ordinal - a.ordinal)[0],
+      previous,
     };
   return ref.strength === "strong" && ref.nativeId !== null
-    ? { type: "entry", entryId: ref.nativeId, turn: boundary, target }
-    : { type: "uncaptured", turn: boundary, target };
+    ? { type: "entry", entryId: ref.nativeId, turn: boundary, target, previous }
+    : { type: "uncaptured", turn: boundary, target, previous };
 }
 
 /** Reads the session tree only for an uncaptured boundary. */

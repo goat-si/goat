@@ -97,53 +97,43 @@ export const forkPiSession = Effect.fn("PiAdapter.forkPiSession")(function* (
   fileSystem: FileSystem.FileSystem,
   path: Path.Path,
 ) {
-  if (
-    input.boundary.type === "nothing" &&
-    input.boundary.target != null &&
-    input.boundary.target.nativeThreadRef == null
-  ) {
-    const target = input.boundary.target;
-    const previous = input.boundary.previous;
+  const boundary = input.boundary;
+  const target = boundary.target;
+  if (target != null && target.nativeThreadRef == null) {
+    const laterBoundary =
+      boundary.type === "entry" && boundary.turn.nativeThreadRef == null ? boundary : undefined;
     const id = target.nativeTurnRef?.strength === "strong" ? target.nativeTurnRef.nativeId : null;
-    if (previous === undefined || id == null)
+    const verification =
+      laterBoundary ??
+      (boundary.previous !== undefined && id != null
+        ? { type: "entry" as const, entryId: id, turn: target, target: boundary.previous }
+        : undefined);
+    if (verification === undefined)
       return yield* new ProviderAdapter.ProviderAdapterProtocolError({
         driver: input.driver,
-        detail: "Cannot recover Pi fork session: last legacy turn has no verifiable boundary",
+        detail: "Cannot recover Pi fork session: legacy turn has no verifiable boundary",
       });
     const sourceFile = yield* findHistoricalForkSession(
       input.sourceFile,
-      { type: "entry", entryId: id, turn: target, target: previous },
+      verification,
       input.driver,
       true,
     ).pipe(
       Effect.provideService(FileSystem.FileSystem, fileSystem),
       Effect.provideService(Path.Path, path),
     );
-    return yield* forkPiSessionOnce({ ...input, sourceFile });
+    return yield* forkPiSessionOnce({
+      ...input,
+      sourceFile,
+      boundary: laterBoundary ?? { type: "nothing" },
+    });
   }
+
   const sourceFile =
     input.boundary.type === "nothing"
       ? input.sourceFile
       : (input.boundary.target?.nativeThreadRef?.nativeId ??
         input.boundary.turn.nativeThreadRef?.nativeId ??
         input.sourceFile);
-  return yield* forkPiSessionOnce({ ...input, sourceFile }).pipe(
-    Effect.catchTags({
-      PiRpcError: (error) => {
-        if (
-          input.boundary.type !== "entry" ||
-          input.boundary.turn.nativeThreadRef != null ||
-          input.boundary.target?.nativeThreadRef != null ||
-          error.operation !== "fork" ||
-          error.detail !== "Invalid entry ID for forking"
-        )
-          return Effect.fail(error);
-        return findHistoricalForkSession(input.sourceFile, input.boundary, input.driver).pipe(
-          Effect.flatMap((sourceFile) => forkPiSessionOnce({ ...input, sourceFile })),
-        );
-      },
-    }),
-    Effect.provideService(FileSystem.FileSystem, fileSystem),
-    Effect.provideService(Path.Path, path),
-  );
+  return yield* forkPiSessionOnce({ ...input, sourceFile });
 });

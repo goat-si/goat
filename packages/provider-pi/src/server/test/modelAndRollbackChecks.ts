@@ -301,6 +301,118 @@ export function registerPiModelAndRollbackChecks({
   );
 
   /* oxlint-enable goat/no-em-dash-copy */
+  it.effect("recovers a verified legacy target before a turn in another session", () =>
+    Effect.gen(function* () {
+      const fs = yield* FileSystem.FileSystem;
+      const dir = yield* fs.makeTempDirectoryScoped();
+      const entry = (id: string, parentId: string | null, seconds: number) => ({
+        type: "message",
+        id,
+        parentId,
+        timestamp: DateTime.formatIso(DateTime.makeUnsafe(seconds * 1000)),
+        message: { role: "user" },
+      });
+      const content =
+        [{ type: "session", version: 3 }, entry("prior", null, 10), entry("target", "prior", 30)]
+          .map((record) => encodeJson(record))
+          .join("\n") + "\n";
+      yield* fs.writeFileString(`${dir}/old.jsonl`, content);
+      yield* fs.writeFileString(
+        `${dir}/new.jsonl`,
+        [{ type: "session", version: 3 }, entry("later", null, 50)]
+          .map((record) => encodeJson(record))
+          .join("\n") + "\n",
+      );
+      const fake = yield* makeFakePi;
+      const forkFake = yield* makeFakePi;
+      const { runtime } = yield* openRuntime(fake, "default", THREAD_ID, SESSION_ID, forkFake);
+      const source = yield* runtime.ensureThread({
+        threadId: THREAD_ID,
+        modelSelection: modelSelection("default"),
+        runtimePolicy,
+      });
+      const turn = (ordinal: number, nativeId: string) => ({
+        id: ProviderTurnId.make(`cross-${ordinal}`),
+        providerThreadId: source.id,
+        nodeId: NodeId.make(`cross-node-${ordinal}`),
+        runAttemptId: null,
+        nativeTurnRef: { driver: PI_PROVIDER, nativeId, strength: "strong" as const },
+        ordinal,
+        status: "completed" as const,
+        startedAt: DateTime.makeUnsafe((ordinal * 20 - 15) * 1000),
+        completedAt: DateTime.makeUnsafe(ordinal * 20 * 1000),
+      });
+      const later = {
+        ...turn(3, "later"),
+        nativeThreadRef: {
+          driver: PI_PROVIDER,
+          nativeId: `${dir}/new.jsonl`,
+          strength: "strong" as const,
+        },
+      };
+      forkFake.queueState({ sessionFile: `${dir}/forked.jsonl` });
+      fake.queueState({ sessionFile: `${dir}/forked.jsonl` });
+      yield* runtime.forkThread({
+        sourceProviderThread: { ...source, nativeThreadRef: later.nativeThreadRef },
+        sourceProviderTurns: [turn(1, "prior"), turn(2, "target"), later],
+        providerTurnId: turn(2, "target").id,
+        targetThreadId: ThreadId.make("cross-session-verified"),
+      });
+      const args = forkFake.lastSpawn().args;
+      assert.equal(args[args.indexOf("--fork") + 1], `${dir}/old.jsonl`);
+    }).pipe(Effect.scoped, Effect.provide(layerTest)),
+  );
+
+  it.effect("never forks an unverified legacy target from a later referenced session", () =>
+    Effect.gen(function* () {
+      const fake = yield* makeFakePi;
+      const forkFake = yield* makeFakePi;
+      const { runtime } = yield* openRuntime(fake, "default", THREAD_ID, SESSION_ID, forkFake);
+      const source = yield* runtime.ensureThread({
+        threadId: THREAD_ID,
+        modelSelection: modelSelection("default"),
+        runtimePolicy,
+      });
+      const target = {
+        id: ProviderTurnId.make("legacy-target"),
+        providerThreadId: source.id,
+        nodeId: NodeId.make("legacy-target-node"),
+        runAttemptId: null,
+        nativeTurnRef: { driver: PI_PROVIDER, nativeId: "old-entry", strength: "strong" as const },
+        ordinal: 1,
+        status: "completed" as const,
+        startedAt: DateTime.makeUnsafe(1000),
+        completedAt: DateTime.makeUnsafe(2000),
+      };
+      const later = {
+        ...target,
+        id: ProviderTurnId.make("later"),
+        ordinal: 2,
+        nativeTurnRef: {
+          driver: PI_PROVIDER,
+          nativeId: "later-entry",
+          strength: "strong" as const,
+        },
+        nativeThreadRef: {
+          driver: PI_PROVIDER,
+          nativeId: "/fake/different-session.jsonl",
+          strength: "strong" as const,
+        },
+      };
+      forkFake.queueState({ sessionFile: "/fake/bad-fork.jsonl" });
+      const failure = yield* Effect.flip(
+        runtime.forkThread({
+          sourceProviderThread: source,
+          sourceProviderTurns: [target, later],
+          providerTurnId: target.id,
+          targetThreadId: ThreadId.make("legacy-cross-session"),
+        }),
+      );
+      assert.include(String(failure.cause), "Cannot recover Pi fork session");
+      assert.isFalse(forkFake.allRequests().some((request) => request.type === "fork"));
+    }).pipe(Effect.scoped, Effect.provide(layerTest)),
+  );
+
   it.effect("refuses an unverified last legacy turn after a Pi session change", () =>
     Effect.gen(function* () {
       const fake = yield* makeFakePi;
