@@ -2235,7 +2235,7 @@ it("does not render or request suggestions from the legacy memory destination", 
   );
   expect(h.calls.some(({ method }) => method.startsWith("memory.suggestions."))).toBe(false);
 });
-it.each([false, true, "forget", "expiry", "hold"] as const)(
+it.each([false, true, "forget", "expiry", "hold", "lost ACK"] as const)(
   "retries refused and uncertain moves independently (batch %s)",
   (batch) => exerciseMemoryMove(mount, () => ({ h, view }), batch),
 );

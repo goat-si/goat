@@ -26,6 +26,7 @@ import {
 } from "./MemoryHubService.testkit.ts";
 
 const decodeOperation = Schema.decodeUnknownSync(M.MemoryOperation);
+const isLegacyMoveInput = Schema.is(M.MemoryMoveInput);
 const features = M.MEMORY_FLOOR_2;
 const advertise = { ...pullInput, features };
 const newMemory = (n: number) => {
@@ -35,6 +36,63 @@ const newMemory = (n: number) => {
 };
 
 describe("negotiated memory scope moves", () => {
+  it.effect("looks up a move receipt without originating an unrecorded move", () =>
+    Effect.gen(function* () {
+      yield* seed;
+      const hub = yield* Hub.MemoryHubService;
+      const service = yield* Service.MemoryService;
+      const store = yield* Store.MemoryStore;
+      yield* hub.pull(advertise, principal());
+      yield* hub.pull({ ...advertise, environmentId: otherEnv }, principal(otherEnv));
+      const scope = {
+        kind: "thread",
+        thread: { environmentId: hubEnv, threadId: M.ThreadId.make("receipt-source") },
+      } as const;
+      const root = newMemory(541);
+      yield* hub.push(
+        { ...pushInput({ ...root, revision: { ...root.revision, scope } }), features },
+        principal(),
+      );
+      const request = {
+        memorySpaceId: space,
+        memoryId: root.memoryId,
+        operationId: M.MemoryOperationId.make(id(542)),
+        expectedHeads: [root.revision.revisionId],
+        expectedScopeVersion: 0,
+        fromScope: scope,
+        toScope: { kind: "user" },
+      } satisfies M.MemoryMoveInput;
+      const lookup = (input: M.MemoryMoveInput) =>
+        service.move({ receiptFor: input } as unknown as M.MemoryMoveInput, Effect.void);
+      assert.isFalse(isLegacyMoveInput({ receiptFor: request }));
+      assert.include(yield* lookup(request).pipe(Effect.flip), { code: "revision_changed" });
+      assert.isUndefined(yield* store.readWork(`sync:${space}:${request.operationId}`));
+      const moved = yield* hub.push(
+        {
+          ...pushInput({
+            ...request,
+            kind: "move",
+            protocolVersion: 1,
+            originEnvironmentId: hubEnv,
+          }),
+          features,
+        },
+        principal(),
+      );
+      assert.include(moved.receipts[0], { outcome: "accepted" });
+      assert.deepStrictEqual((yield* lookup(request)).receipt, {
+        operationId: request.operationId,
+        memoryId: request.memoryId,
+        revisionId: null,
+        outcome: "accepted",
+        pendingSync: false,
+      });
+      assert.include(yield* lookup({ ...request, expectedScopeVersion: 1 }).pipe(Effect.flip), {
+        code: "operation_id_reused",
+      });
+    }).pipe(checkUsage, Effect.provide(live)),
+  );
+
   it.effect("an old member prevents automatic floor activation", () =>
     Effect.gen(function* () {
       yield* seed;

@@ -2707,7 +2707,7 @@ it("confirms a memory selection once and reports each result while the conversat
   expect(container.querySelectorAll('input[aria-label^="Select memory"]:checked')).toHaveLength(1);
 });
 
-it.each([false, true, "forget", "expiry", "hold"] as const)(
+it.each([false, true, "forget", "expiry", "hold", "lost ACK"] as const)(
   "retries refused and uncertain moves independently (batch %s)",
   (batch) =>
     exerciseMemoryMove({

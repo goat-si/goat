@@ -132,7 +132,7 @@ export async function exerciseMemoryMove({
   invalidate,
   settle,
 }: {
-  batch: boolean | "forget" | "expiry" | "hold";
+  batch: boolean | "forget" | "expiry" | "hold" | "lost ACK";
   invalidate: (kind: "forget" | "invalidate", id: string) => void;
   select: (button: HTMLInputElement) => Promise<void>;
   settle: (complete: () => void) => PromiseLike<void>;
@@ -178,10 +178,14 @@ export async function exerciseMemoryMove({
     : [activeItem];
   state.queries.set("list", Option.some({ items, projectionWatermark: 1, nextCursor: null }));
   const attempts = new Map<string, string[]>();
+  const receiptLookups: MemoryMoveInput[] = [];
+  const invalidatedDuringMove = batch === "forget" || batch === "expiry" || batch === "hold";
   const pending = moveBarrier();
   const entered = moveBarrier();
   state.executors.set("move", async (target) => {
-    const { input } = target as { input: MemoryMoveInput };
+    const { input: wire } = target as { input: MemoryMoveInput | { receiptFor: MemoryMoveInput } };
+    const input = "receiptFor" in wire ? wire.receiptFor : wire;
+    if ("receiptFor" in wire) receiptLookups.push(input);
     const ids = attempts.get(input.memoryId) ?? [];
     ids.push(input.operationId);
     attempts.set(input.memoryId, ids);
@@ -202,7 +206,7 @@ export async function exerciseMemoryMove({
           }),
         ),
       };
-    if (typeof batch === "string" && input.memoryId === activeItem.memoryId && ids.length === 2) {
+    if (invalidatedDuringMove && input.memoryId === activeItem.memoryId && ids.length === 2) {
       entered.release();
       await pending.pending;
     }
@@ -212,7 +216,8 @@ export async function exerciseMemoryMove({
       state.queries.set(
         "list",
         Option.some({
-          items: items.filter(({ memoryId }) => memoryId !== input.memoryId),
+          items:
+            batch === "lost ACK" ? [] : items.filter(({ memoryId }) => memoryId !== input.memoryId),
           projectionWatermark: 2,
           nextCursor: null,
         }),
@@ -255,7 +260,19 @@ export async function exerciseMemoryMove({
   if (batch) await render();
   const firstNotice = container.textContent ?? "";
   if (batch) expect.soft(firstNotice).toContain("Memory 00000212 · Moved.");
-  if (typeof batch === "string") {
+  if (batch === "lost ACK") {
+    expect(firstNotice).toContain("Memory 00000211 · Could not confirm");
+    expect(firstNotice).not.toContain("Synthetic move item 211");
+    await submit();
+    const uncertain = attempts.get(id(211)) ?? [];
+    expect(uncertain).toHaveLength(2);
+    expect(uncertain[1]).toBe(uncertain[0]);
+    expect(receiptLookups).toMatchObject([{ memoryId: id(211), operationId: uncertain[0] }]);
+    expect(container.textContent).toContain("Memory 00000211 · Moved.");
+    expect(container.textContent).not.toContain("Synthetic move item 211");
+    return;
+  }
+  if (invalidatedDuringMove) {
     expect
       .soft(
         container.querySelector('[role="group"][aria-label="Move memories"] [role="status"]')
@@ -284,7 +301,7 @@ export async function exerciseMemoryMove({
     await render();
     expect.soft(container.outerHTML).not.toContain("Synthetic move item 211");
     await settle(() => pending.release());
-    expect.soft(attempts.get(id(211))).toHaveLength(1);
+    expect.soft(attempts.get(id(211))?.length).toBe(1 + receiptLookups.length);
     expect(container.outerHTML).not.toContain("Synthetic move item 211");
     return;
   }

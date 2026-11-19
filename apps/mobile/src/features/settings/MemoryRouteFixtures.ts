@@ -192,7 +192,7 @@ export async function exerciseMemoryMove(
     capabilities: { protocolVersion: 1; scopeMoves: true },
   ) => Promise<void>,
   mounted: () => { h: NativeMemoryHarness; view: ReturnType<typeof renderNative> },
-  batch: boolean | "forget" | "expiry" | "hold",
+  batch: boolean | "forget" | "expiry" | "hold" | "lost ACK",
 ) {
   const active = nativeItem;
   if (active.status !== "active") throw new Error("Expected active fixture");
@@ -210,6 +210,8 @@ export async function exerciseMemoryMove(
   const uncertainId = others[0]?.memoryId;
   const completedId = others[1]?.memoryId;
   const attempts = new Map<string, string[]>();
+  const receiptLookups: MemoryMoveInput[] = [];
+  const invalidatedDuringMove = batch === "forget" || batch === "expiry" || batch === "hold";
   let heldMove: ((value: unknown) => Promise<unknown>) | undefined;
   if (batch === "expiry") vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
   try {
@@ -237,7 +239,9 @@ export async function exerciseMemoryMove(
         const pending = harness.deferred();
         heldMove = pending.succeed;
         harness.responses.set(WS_METHODS.memoryMove, (wire) => {
-          const input = wire as MemoryMoveInput;
+          const request = wire as MemoryMoveInput | { receiptFor: MemoryMoveInput };
+          const input = "receiptFor" in request ? request.receiptFor : request;
+          if ("receiptFor" in request) receiptLookups.push(input);
           const ids = attempts.get(input.memoryId) ?? [];
           ids.push(input.operationId);
           attempts.set(input.memoryId, ids);
@@ -254,13 +258,16 @@ export async function exerciseMemoryMove(
                 },
               }),
             );
-          if (typeof batch === "string" && input.memoryId === nativeId && ids.length === 2)
+          if (invalidatedDuringMove && input.memoryId === nativeId && ids.length === 2)
             return pending.response;
           if ((!batch && ids.length === 2) || (input.memoryId === uncertainId && ids.length === 1))
             return Effect.die(new Error("Synthetic lost acknowledgement"));
           if (batch && input.memoryId === completedId)
             harness.responses.set(WS_METHODS.memoryList, () => ({
-              items: items.filter(({ memoryId }) => memoryId !== completedId),
+              items:
+                batch === "lost ACK"
+                  ? []
+                  : items.filter(({ memoryId }) => memoryId !== completedId),
               nextCursor: null,
               projectionWatermark: 2,
             }));
@@ -297,7 +304,19 @@ export async function exerciseMemoryMove(
     await submit();
     const firstNotice = view.container.textContent;
     if (batch) expect.soft(firstNotice).toContain("Memory 00000212 · Moved.");
-    if (typeof batch === "string") {
+    if (batch === "lost ACK") {
+      expect(firstNotice).toContain("Memory 00000211 · Could not confirm");
+      expect(firstNotice).not.toContain("Synthetic move item 211");
+      await submit();
+      const uncertain = attempts.get(uncertainId ?? "") ?? [];
+      expect(uncertain).toHaveLength(2);
+      expect(uncertain[1]).toBe(uncertain[0]);
+      expect(receiptLookups).toMatchObject([{ memoryId: uncertainId, operationId: uncertain[0] }]);
+      expect(view.container.textContent).toContain("Memory 00000211 · Moved.");
+      expect(view.container.textContent).not.toContain("Synthetic move item 211");
+      return;
+    }
+    if (invalidatedDuringMove) {
       expect.soft(firstNotice).not.toContain("Synthetic move item 211 ·");
       await submit();
       const waiting = h.calls.filter(({ method }) => method === WS_METHODS.memoryMove).at(-1);
@@ -339,7 +358,7 @@ export async function exerciseMemoryMove(
       await act(async () => {
         await heldMove?.({ ...receipt(input), outcome: "accepted", pendingSync: false });
       });
-      expect.soft(attempts.get(uncertainId)).toHaveLength(1);
+      expect.soft(attempts.get(uncertainId)?.length).toBe(1 + receiptLookups.length);
       expect(view.container.outerHTML).not.toContain("Synthetic move item 211");
       return;
     }
