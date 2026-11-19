@@ -1,6 +1,9 @@
 import { assert, describe, it } from "@effect/vitest";
 import * as M from "@goat/contracts";
+import * as Deferred from "effect/Deferred";
 import * as Effect from "effect/Effect";
+import * as Fiber from "effect/Fiber";
+import * as Stream from "effect/Stream";
 import * as Layer from "effect/Layer";
 import * as Schema from "effect/Schema";
 import * as SqlClient from "effect/sql/SqlClient";
@@ -322,8 +325,48 @@ describe("negotiated memory scope moves", () => {
             principal(otherEnv),
           )
           .pipe(Effect.flip);
-        assert.property(staleHandle, "code");
-        const next = yield* hub.join(joinInput, principal(otherEnv));
+        assert.include(staleHandle, { code: "cursor_expired" });
+        const tail = yield* hub.pull(
+          { ...advertise, afterSequence: beforeMove.throughSequence },
+          principal(),
+        );
+        const activity = yield* Hub.MemoryHubActivity;
+        const sql = yield* SqlClient.SqlClient;
+        yield* sql`UPDATE memory_hub_members SET advertised_features_json=NULL
+          WHERE space=${space} AND environment=${otherEnv}`;
+        const entered = yield* Deferred.make<void>();
+        const release = yield* Deferred.make<void>();
+        const refresh = yield* Compactor.make.pipe(
+          Effect.provideService(Hub.MemoryHubConfiguration, {
+            read: Effect.succeed({ memorySpaceId: space, hubEnvironmentId: hubEnv }),
+          }),
+          Effect.provideService(Compactor.MemoryHubCheckpointProducer, {
+            prepareTx: (input) =>
+              Deferred.succeed(entered, undefined).pipe(
+                Effect.andThen(Deferred.await(release)),
+                Effect.andThen(store.prepareHubProducerCheckpointTx(input)),
+              ),
+          }),
+        );
+        const next = yield* Effect.scoped(
+          Effect.gen(function* () {
+            const admissions = yield* activity.subscribe;
+            const regeneration = yield* Stream.runHead(admissions).pipe(
+              Effect.andThen(refresh.compactIfNeeded(principal())),
+              Effect.forkScoped,
+            );
+            const join = yield* hub.join(joinInput, principal(otherEnv)).pipe(Effect.result);
+            if (join._tag !== "Failure")
+              throw new Error("Join issued a handle before the compactor published");
+            assert.include(join.failure, { code: "bootstrap_required" });
+            yield* Deferred.await(entered);
+            yield* Deferred.succeed(release, undefined);
+            assert.isNotNull((yield* Fiber.join(regeneration)).checkpointId);
+            assert.deepStrictEqual(yield* store.transact(store.blockingMembers(space)), []);
+            return yield* hub.join(joinInput, principal(otherEnv));
+          }),
+        );
+        assert.notStrictEqual(next.snapshotToken, old.snapshotToken);
         const checkpoint = yield* hub.pull(
           {
             ...advertise,
@@ -341,10 +384,6 @@ describe("negotiated memory scope moves", () => {
         if (!checkpoint.checkpoint?.bootstrapComplete)
           throw new Error("Expected one checkpoint page");
         const checkpointPage = checkpoint.checkpoint;
-        const tail = yield* hub.pull(
-          { ...advertise, afterSequence: beforeMove.throughSequence },
-          principal(),
-        );
         yield* compactor.compact(principal());
         for (const method of ["tail", "checkpoint"] as const) {
           yield* Effect.gen(function* () {
