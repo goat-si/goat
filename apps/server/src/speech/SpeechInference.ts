@@ -8,8 +8,11 @@ import { loadNativeSpeechModel } from "./native.ts";
 
 export class SpeechInferenceError extends Schema.TaggedError<SpeechInferenceError>()(
   "SpeechInferenceError",
-  { cause: Schema.Defect() },
+  { cause: Schema.Defect(), code: Schema.optionalKey(Schema.Literal("unsupported")) },
 ) {}
+
+class SpeechStreamingUnsupported extends Error {}
+const STREAM_LOAD_TIMEOUT = "15 seconds";
 
 export class SpeechInference extends Context.Service<
   SpeechInference,
@@ -26,9 +29,7 @@ export class SpeechInference extends Context.Service<
       language?: string,
     ) => Effect.Effect<
       {
-        readonly feed: (
-          pcm: Float32Array,
-        ) => Effect.Effect<
+        readonly feed: (pcm: Float32Array) => Effect.Effect<
           {
             readonly revision: number;
             readonly text: { readonly committed: string; readonly tentative: string } | null;
@@ -60,7 +61,9 @@ export const layer = Layer.succeed(SpeechInference, {
               config.acceleration,
             );
             if (!worker.supportsStreaming)
-              throw new Error("The selected speech model does not support streaming.");
+              throw new SpeechStreamingUnsupported(
+                "The selected speech model does not support streaming.",
+              );
             await worker.begin(language);
             signal.throwIfAborted();
             return { worker, controller };
@@ -72,8 +75,14 @@ export const layer = Layer.succeed(SpeechInference, {
             signal.removeEventListener("abort", abort);
           }
         },
-        catch: (cause) => new SpeechInferenceError({ cause }),
-      }).pipe(Effect.timeout("15 seconds")),
+        catch: (cause) =>
+          new SpeechInferenceError({
+            cause,
+            ...(cause instanceof SpeechStreamingUnsupported
+              ? { code: "unsupported" as const }
+              : {}),
+          }),
+      }).pipe(Effect.timeout(STREAM_LOAD_TIMEOUT)),
       ({ worker, controller }) =>
         Effect.promise(async () => {
           controller.abort();

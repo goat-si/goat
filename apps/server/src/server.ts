@@ -62,7 +62,6 @@ import * as ObservedCheckService from "./threadResults/ObservedCheckService.ts";
 import * as ThreadResultService from "./threadResults/ThreadResultService.ts";
 import * as ScreenCodeLayers from "./screenCode/ScreenCodeLayers.ts";
 import * as SiteNotes from "./preview/SiteNotes.ts";
-
 import { heartbeat, HeartbeatWebSocket } from "./wsHeartbeat.ts";
 import * as NodeHttpServer from "@effect/platform-node/NodeHttpServer";
 import * as NodeCrypto from "@effect/platform-node/NodeCrypto";
@@ -1194,6 +1193,7 @@ const layerMakeServer = Layer.unwrap(
     );
 
     return layerServerApplication.pipe(
+      Layer.provide(VoiceRoutes.layerManagement),
       Layer.provide(CloudLink.layer.pipe(Layer.provideMerge(ConnectReachability.layer))),
       Layer.provideMerge(layerRuntimeServices),
       Layer.provideMerge(McpSessionRegistry.layer.pipe(Layer.provide(layerServerEnvironment))),

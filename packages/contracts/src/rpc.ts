@@ -2695,7 +2695,6 @@ export const WsCoreWorkspaceRpcGroup = RpcGroup.make(
 ).middleware(RpcScopeAuthorization);
 
 export const WsCoreRpcGroup = WsCoreServerRpcGroup.merge(WsCoreWorkspaceRpcGroup);
-
 /**
  * GOAT Bot and Slack channel RPCs. The server registers their handlers in a layer of their own:
  * one handler layer for every RPC exceeds the type checker's instantiation budget.
@@ -2714,7 +2713,8 @@ export const WsRpcGroup = WsCoreRpcGroup.merge(WsChannelRpcGroup)
   .merge(WsDecisionRpcGroup)
   .merge(WsBrowserClaimsRpcGroup)
   .merge(WsGlobalSkillsRpcGroup)
-  .merge(WsRemoteLaunchesRpcGroup);
+  .merge(WsRemoteLaunchesRpcGroup)
+  .merge(WsSpeechStreamRpcGroup);
 export {
   WsMemoryProjectBindingGetRpc,
   WsMemoryProjectBindingUpdateRpc,

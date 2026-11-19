@@ -18,16 +18,18 @@ import * as Schema from "effect/Schema";
 import * as Scope from "effect/Scope";
 import * as Stream from "effect/Stream";
 import * as SpeechManagement from "./SpeechManagement.ts";
+import * as SpeechInference from "./SpeechInference.ts";
 
 const STREAM_OPERATION_TIMEOUT = "30 seconds";
 const STREAM_IDLE_TIMEOUT_MS = 15_000;
 const STREAM_MAX_DURATION = "300 seconds";
 const STREAM_MAX_TEXT_BYTES = 1024 * 1024;
+const isSpeechInferenceError = Schema.is(SpeechInference.SpeechInferenceError);
 
 export class SpeechStreamError extends Schema.TaggedError<SpeechStreamError>()(
   "SpeechStreamError",
   {
-    code: Schema.Literals(["busy", "expired", "invalid-audio", "failed"]),
+    code: Schema.Literals(["busy", "unsupported", "expired", "invalid-audio", "failed"]),
   },
 ) {}
 
@@ -112,7 +114,7 @@ export const make = Effect.gen(function* () {
     yield* Queue.offer(current.events, { type: "final", text: result.success });
   });
   return {
-    start: Effect.fn("SpeechStreamConnection.start")(function* () {
+    start: Effect.fn("SpeechStreamConnection.start")(function* (language?: string) {
       if (closed) return yield* new SpeechStreamError({ code: "expired" });
       if (starting || session) return yield* new SpeechStreamError({ code: "busy" });
       starting = true;
@@ -120,7 +122,7 @@ export const make = Effect.gen(function* () {
       const loading = yield* Effect.gen(function* () {
         const changes = yield* speech.configurationChanges;
         const configuration = yield* speech.configuration;
-        const worker = yield* speech.startStream();
+        const worker = yield* speech.startStream(language);
         return { worker, configuration, changes };
       }).pipe(Scope.provide(scope), Effect.forkIn(connectionScope));
       const result = yield* Fiber.await(loading).pipe(
@@ -142,7 +144,12 @@ export const make = Effect.gen(function* () {
           ? Option.getOrUndefined(Cause.findErrorOption(result.cause))
           : undefined;
         return yield* new SpeechStreamError({
-          code: failure?.cause === "Speech is busy." ? "busy" : "failed",
+          code:
+            failure?.cause === "Speech is busy."
+              ? "busy"
+              : isSpeechInferenceError(failure?.cause) && failure.cause.code === "unsupported"
+                ? "unsupported"
+                : "failed",
         });
       }
       const current: Session = {

@@ -1,4 +1,8 @@
 import { shouldUseBoundedThreadSnapshot } from "./orchestration-v2/boundedThreadSnapshot.ts";
+import {
+  makeSpeechStreamRpcHandlers,
+  ServerWsSpeechStreamRpcGroup,
+} from "./speech/SpeechStreamRpc.ts";
 import { mapCheckpointStorageError } from "./vcs/checkpointStorageError.ts";
 import { enrichProjectShells } from "./project/enrichProjectShells.ts";
 import { vcsStatusHandlers } from "./vcs/vcsStatusHandlers.ts";
@@ -1032,6 +1036,7 @@ export const layerWsRpc = (
       const providerSessionManager = yield* ProviderSessionManager.ProviderSessionManagerV2;
       const scheduledTasks = yield* ScheduledTasks.ScheduledTaskService;
       const browserClaimsHandlers = yield* makeBrowserClaimsHandlersLive(currentSession);
+      const speechStreamHandlers = yield* makeSpeechStreamRpcHandlers();
       const handoffs = yield* Handoffs.Handoffs;
       const sshHostSetup = yield* SshHostSetup.SshHostSetup;
       const providerHostSync = yield* ProviderHostSync.ProviderHostSync;
@@ -3254,6 +3259,7 @@ export const layerWsRpc = (
         >(handlers),
         ServerWsChannelRpcGroup.toLayer(channelHandlers),
         ServerWsNotesRpcGroup.toLayer(noteHandlers),
+        ServerWsSpeechStreamRpcGroup.toLayer(speechStreamHandlers),
         makeGlobalSkillsRpcLayer(config.globalSkillsDir, serverSettings, providerRegistry),
         RemoteLaunchCatalog.makeRpcLayer(remoteLaunchCatalog),
         ServerWsBrowserClaimsRpcGroup.toLayer(browserClaimsHandlers),

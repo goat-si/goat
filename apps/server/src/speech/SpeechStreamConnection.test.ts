@@ -105,6 +105,32 @@ it.effect("identifies a busy model slot without opening a stream", () =>
   ),
 );
 
+it.effect("identifies an unsupported model without opening a stream", () =>
+  Effect.scoped(
+    Effect.gen(function* () {
+      const speech = speechLayer({
+        startStream: () =>
+          Effect.fail(
+            new SpeechManagement.SpeechManagementError({
+              operation: "stream",
+              cause: new SpeechInference.SpeechInferenceError({
+                cause: "unsupported",
+                code: "unsupported",
+              }),
+            }),
+          ),
+      });
+      yield* Effect.gen(function* () {
+        const connection = yield* SpeechStreamConnection.make;
+        expect(yield* Effect.result(connection.start())).toMatchObject({
+          _tag: "Failure",
+          failure: { code: "unsupported" },
+        });
+      }).pipe(Effect.provide(speech));
+    }),
+  ),
+);
+
 it.effect("ends an active stream when its model configuration changes", () =>
   Effect.scoped(
     Effect.gen(function* () {
