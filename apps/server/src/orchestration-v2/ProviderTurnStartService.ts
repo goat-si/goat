@@ -1,4 +1,5 @@
 import { makeCloudStartFailureHandler } from "./goat/CloudStartFailure.ts";
+import { makeFailedStartSettlement } from "./goat/FailedStartSettlement.ts";
 import { ensureSafeNativeFork } from "./goat/BusyForkSource.ts";
 import { makeInheritedBackgroundSelection } from "./goat/InheritedBackgroundSelection.ts";
 import { hasPendingHandoff, missingProviderSession } from "./goat/ProviderHandoffPending.ts";
@@ -152,6 +153,7 @@ export const layer: Layer.Layer<
       readonly reattach?: boolean;
       /** Called once this start attaches a registered cloud task instead of submitting. */
       readonly onAttach?: () => void;
+      readonly onStarting?: (run: OrchestrationV2Run) => void;
     }) {
       const { runId } = input;
       const projection = yield* projectionStore.getTurnStartContext(input.threadId, runId);
@@ -163,6 +165,7 @@ export const layer: Layer.Layer<
       if (run.status !== expectedStartStatus) {
         return;
       }
+      if (run.status === "starting") input.onStarting?.(run);
       const rootNode = projection.nodes.find((candidate) => candidate.id === run.rootNodeId);
       const attempt = projection.attempts.find((candidate) => candidate.id === run.activeAttemptId);
       const providerThread = projection.providerThreads.find(
@@ -1396,6 +1399,20 @@ export const layer: Layer.Layer<
       });
     });
     return ProviderTurnStartServiceV2.of({
+      getStartingRunIdentity: Effect.fn("ProviderTurnStartService.getStartingRunIdentity")(
+        function* ({ threadId, runId }) {
+          const projection = yield* projectionStore.getTurnStartContext(threadId, runId);
+          const run = projection.runs.find((candidate) => candidate.id === runId);
+          return run?.status === "starting" &&
+            run.activeAttemptId !== null &&
+            run.rootNodeId !== null
+            ? { attemptId: run.activeAttemptId, rootNodeId: run.rootNodeId }
+            : undefined;
+        },
+        (effect, { runId }) =>
+          effect.pipe(Effect.mapError((cause) => new ProviderTurnStartError({ runId, cause }))),
+      ),
+      failStartingRun: makeFailedStartSettlement({ projectionStore, eventSink, idAllocator }),
       start: Effect.fn("ProviderTurnStartService.start")(
         function* (input) {
           const originalAttemptId =
@@ -1405,8 +1422,13 @@ export const layer: Layer.Layer<
                 )?.activeAttemptId
               : undefined;
           let attaching = false;
+          let startingRun: OrchestrationV2Run | undefined;
           // The scope holds the turn-start reservation until startup ends.
-          const startup = start({ ...input, onAttach: () => void (attaching = true) });
+          const startup = start({
+            ...input,
+            onAttach: () => void (attaching = true),
+            onStarting: (run) => void (startingRun = run),
+          });
           return yield* Effect.scoped(startup).pipe(
             // A start that ends before its turn registers must not keep holding the process.
             Effect.ensuring(providerSessions.settleTurnStart(input)),
@@ -1419,6 +1441,16 @@ export const layer: Layer.Layer<
                 idAllocator,
                 eventSink,
               }),
+            ),
+            Effect.mapError((cause) =>
+              startingRun?.activeAttemptId == null || startingRun.rootNodeId == null
+                ? cause
+                : new ProviderTurnStartError({
+                    runId: input.runId,
+                    cause: isProviderTurnStartError(cause) ? cause.cause : cause,
+                    attemptId: startingRun.activeAttemptId,
+                    rootNodeId: startingRun.rootNodeId,
+                  }),
             ),
           );
         },

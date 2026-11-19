@@ -37,7 +37,7 @@ export function makeSettleRunBeforeStart({
     readonly now: DateTime.Utc;
     readonly startedAt?: DateTime.Utc;
     readonly providerInstanceId: OrchestrationV2Run["providerInstanceId"];
-    readonly itemProviderThreadId: OrchestrationV2ProviderThread["id"];
+    readonly itemProviderThreadId: OrchestrationV2ProviderThread["id"] | null;
     readonly item:
       | Pick<Extract<OrchestrationV2TurnItem, { type: "error" }>, "type" | "title" | "failure">
       | Pick<

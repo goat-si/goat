@@ -134,6 +134,8 @@ function layerExecutorFor(input: {
     Layer.succeed(
       ProviderTurnStartService.ProviderTurnStartServiceV2,
       ProviderTurnStartService.ProviderTurnStartServiceV2.of({
+        getStartingRunIdentity: () => Effect.void,
+        failStartingRun: () => Effect.void,
         start: () =>
           Effect.gen(function* () {
             yield* record("start");

@@ -1,4 +1,6 @@
+import { makeRestartEffect } from "./goat/RestartEffect.ts";
 import * as OwnedEffectDeadline from "./OwnedEffectDeadline.ts";
+import { makeStartEffect } from "./goat/StartEffect.ts";
 import { effectTypesForLane } from "./EffectExecutionPolicy.ts";
 import {
   OrchestrationEffectExecutionError,
@@ -77,6 +79,12 @@ export const layerExecutor: Layer.Layer<
     const providerSessions = yield* ProviderSessionManager.ProviderSessionManagerV2;
     const providerTurnControl = yield* ProviderTurnControlService.ProviderTurnControlServiceV2;
     const providerTurnStart = yield* ProviderTurnStartService.ProviderTurnStartServiceV2;
+    const startEffect = makeStartEffect(providerTurnStart);
+    const restartEffect = makeRestartEffect({
+      provider: providerTurnStart,
+      control: providerTurnControl,
+      sessions: providerSessions,
+    });
     const runtimeRequests = yield* RuntimeRequestService.RuntimeRequestServiceV2;
     const threadTitleRegeneration =
       yield* ThreadTitleRegenerationService.ThreadTitleRegenerationService;
@@ -150,22 +158,21 @@ export const layerExecutor: Layer.Layer<
                 ),
               );
           case "provider-turn.start":
-            return providerTurnStart
-              .start({
-                threadId: effect.threadId,
-                runId: effect.request.runId,
-                willRetry,
-              })
-              .pipe(
-                Effect.mapError(
-                  (cause) =>
-                    new OrchestrationEffectExecutionError({
-                      effectId: effect.id,
-                      effectType: effect.request.type,
-                      cause,
-                    }),
-                ),
-              );
+            return startEffect({
+              effectId: effect.id,
+              threadId: effect.threadId,
+              runId: effect.request.runId,
+              willRetry,
+            }).pipe(
+              Effect.mapError(
+                (cause) =>
+                  new OrchestrationEffectExecutionError({
+                    effectId: effect.id,
+                    effectType: effect.request.type,
+                    cause,
+                  }),
+              ),
+            );
           case "provider-turn.interrupt": {
             const request = effect.request;
             return providerTurnControl
@@ -370,52 +377,7 @@ export const layerExecutor: Layer.Layer<
                 ),
               );
           case "provider-turn.restart":
-            return providerTurnControl
-              .interruptAndAwaitTerminal({
-                threadId: effect.threadId,
-                providerSessionId: effect.request.providerSessionId,
-                providerThreadId: effect.request.providerThreadId,
-                providerTurnId: effect.request.providerTurnId,
-                interruptedAttemptId: effect.request.interruptedAttemptId,
-                ...(effect.request.sessionTransition?.type === "replace"
-                  ? {
-                      replacementProviderSessionId:
-                        effect.request.sessionTransition.replacementProviderSessionId,
-                    }
-                  : {}),
-              })
-              .pipe(
-                Effect.andThen(
-                  effect.request.sessionTransition?.type === "replace"
-                    ? providerSessions.detach({
-                        providerSessionId: effect.request.providerSessionId,
-                        threadId: effect.threadId,
-                        detail: "Selection change requires a provider session restart.",
-                      })
-                    : effect.request.sessionTransition?.type === "detach"
-                      ? providerSessions.detach({
-                          providerSessionId: effect.request.providerSessionId,
-                          threadId: effect.threadId,
-                          detail: "Provider thread handoff replaced this session binding.",
-                        })
-                      : Effect.void,
-                ),
-                Effect.andThen(
-                  providerTurnStart.start({
-                    threadId: effect.threadId,
-                    runId: effect.request.runId,
-                    willRetry,
-                  }),
-                ),
-                Effect.mapError(
-                  (cause) =>
-                    new OrchestrationEffectExecutionError({
-                      effectId: effect.id,
-                      effectType: effect.request.type,
-                      cause,
-                    }),
-                ),
-              );
+            return restartEffect({ ...effect, request: effect.request }, willRetry);
           case "runtime-request.respond": {
             const requestId = effect.request.requestId;
             return runtimeRequests
