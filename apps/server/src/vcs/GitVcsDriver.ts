@@ -1,3 +1,4 @@
+import { makeResolveGitCommonDir } from "./checkpointGitCommonDir.ts";
 import { recreateCheckpointWorkspace } from "./checkpointWorkspace.ts";
 import type { WorktreePreparationOwnership } from "./worktreePreparationOwnership.ts";
 import * as NodeBuffer from "node:buffer";
@@ -852,20 +853,7 @@ export const makeVcsDriverShape = Effect.fn("makeGitVcsDriverShape")(function* (
       allowNonZeroExit: true,
     }).pipe(Effect.flatMap((result) => checkpointCommitResult(cwd, result)));
 
-  // Git reports relative paths from the physical cwd, which can differ from a symlink.
-  const resolveGitCommonDir = Effect.fn("GitVcsDriver.resolveGitCommonDir")(function* (
-    cwd: string,
-  ) {
-    const result = yield* execute({
-      operation: "GitVcsDriver.checkpoints.resolveGitCommonDir",
-      cwd,
-      args: ["rev-parse", "--git-common-dir"],
-    });
-    const gitCommonDir = result.stdout.trim();
-    if (path.isAbsolute(gitCommonDir)) return gitCommonDir;
-    const physicalCwd = yield* fileSystem.realPath(cwd).pipe(Effect.orElseSucceed(() => cwd));
-    return path.resolve(physicalCwd, gitCommonDir);
-  });
+  const resolveGitCommonDir = makeResolveGitCommonDir(execute, fileSystem, path);
 
   // Git defaults and macOS writeout-only can leave empty refs after crashes; flush before publication.
   // Set fsync first: Git 2.36 ignores unknown batch without resetting the method.
