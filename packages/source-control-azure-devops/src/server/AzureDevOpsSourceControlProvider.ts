@@ -5,6 +5,7 @@ import { SourceControlProviderError, type ChangeRequest } from "@goat/contracts"
 
 import * as AzureDevOpsChangeRequestTemplate from "./azureDevOpsChangeRequestTemplate.ts";
 import * as SourceControlHost from "@goat/source-control-core/server/SourceControlHost";
+import { readFirstFetchUrl } from "@goat/source-control-core/server/firstFetchUrl";
 import * as AzureDevOpsCli from "./AzureDevOpsCli.ts";
 import type { NormalizedAzureDevOpsPullRequestRecord } from "./azureDevOpsPullRequests.ts";
 import * as SourceControlProvider from "@goat/source-control-core/server/SourceControlProvider";
@@ -309,8 +310,7 @@ export const make = Effect.gen(function* () {
         const remoteName =
           input.context?.remoteName ?? (yield* git.resolvePrimaryRemoteName(input.cwd));
         const remoteUrl =
-          input.context?.remoteUrl ??
-          (yield* git.readConfigValue(input.cwd, `remote.${remoteName}.url`));
+          input.context?.remoteUrl ?? (yield* readFirstFetchUrl(git, input.cwd, remoteName));
         const remote = remoteUrl === null ? null : remoteRepository(remoteUrl);
         if (remote?.organization == null || remote.project == null) {
           return yield* new SourceControlProviderError({

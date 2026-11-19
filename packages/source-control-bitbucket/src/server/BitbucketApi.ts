@@ -32,6 +32,7 @@ import {
 import { collectUint8StreamText } from "@goat/shared/collectStreamText";
 import * as SourceControlProvider from "@goat/source-control-core/server/SourceControlProvider";
 import * as SourceControlHost from "@goat/source-control-core/server/SourceControlHost";
+import { readFirstFetchUrl } from "@goat/source-control-core/server/firstFetchUrl";
 import { readSourceControlHostSettings } from "@goat/source-control-core/shared/definition";
 
 import * as BitbucketClient from "../shared/definition.ts";
@@ -847,8 +848,8 @@ export const make = Effect.gen(function* () {
       Effect.flatMap((repository) => getRawPullRequestFromRepository(repository, input.reference)),
     );
 
-  const readConfigValueNullable = (cwd: string, key: string) =>
-    git.readConfigValue(cwd, key).pipe(Effect.orElseSucceed(() => null));
+  const readRemoteUrlNullable = (cwd: string, remoteName: string) =>
+    readFirstFetchUrl(git, cwd, remoteName).pipe(Effect.orElseSucceed(() => null));
 
   const resolveCheckoutRemote = Effect.fn("BitbucketApi.resolveCheckoutRemote")(function* (input: {
     readonly cwd: string;
@@ -864,8 +865,7 @@ export const make = Effect.gen(function* () {
         (yield* git.resolvePrimaryRemoteName(input.cwd).pipe(Effect.orElseSucceed(() => null)));
       if (remoteName) {
         const remoteUrl =
-          context?.remoteUrl ??
-          (yield* readConfigValueNullable(input.cwd, `remote.${remoteName}.url`));
+          context?.remoteUrl ?? (yield* readRemoteUrlNullable(input.cwd, remoteName));
         const repository =
           remoteUrl && (context || recognizeRemoteWith(definition, remoteUrl))
             ? parseBitbucketRemoteUrl(remoteUrl)
@@ -885,7 +885,7 @@ export const make = Effect.gen(function* () {
       repository: input.sourceRepositoryName,
       ...(input.context ? { context: input.context } : {}),
     }).pipe(Effect.map(normalizeRepositoryCloneUrls));
-    const originRemoteUrl = yield* readConfigValueNullable(input.cwd, "remote.origin.url");
+    const originRemoteUrl = yield* readRemoteUrlNullable(input.cwd, "origin");
     return yield* git.ensureRemote({
       cwd: input.cwd,
       preferredName: input.isCrossRepository

@@ -5,6 +5,7 @@ import * as DateTime from "effect/DateTime";
 import * as Effect from "effect/Effect";
 import * as Layer from "effect/Layer";
 import * as Option from "effect/Option";
+import * as ChildProcessSpawner from "effect/process/ChildProcessSpawner";
 import { HttpClient, HttpClientError, HttpClientRequest, HttpClientResponse } from "effect/http";
 import * as SourceControlRateLimit from "@goat/source-control-core/server/SourceControlRateLimit";
 import type * as SourceControlHost from "@goat/source-control-core/server/SourceControlHost";
@@ -12,6 +13,14 @@ import * as TestSourceControlHost from "@goat/source-control-testing/TestSourceC
 import * as BitbucketApi from "./BitbucketApi.ts";
 
 type HostGit = SourceControlHost.SourceControlHost["Service"]["git"];
+
+const gitOutput = (stdout: string) => ({
+  exitCode: ChildProcessSpawner.ExitCode(0),
+  stdout,
+  stderr: "",
+  stdoutTruncated: false,
+  stderrTruncated: false,
+});
 
 export function makeLayer(input: {
   readonly response: (request: HttpClientRequest.HttpClientRequest) => Response;
@@ -35,6 +44,9 @@ export function makeLayer(input: {
           ),
   );
   const gitMock = {
+    execute: vi.fn<HostGit["execute"]>(() =>
+      Effect.succeed(gitOutput("git@bitbucket.org:goat-si/goat.git\n")),
+    ),
     readConfigValue: vi.fn<HostGit["readConfigValue"]>(() =>
       Effect.succeed<string | null>("git@bitbucket.org:goat-si/goat.git"),
     ),

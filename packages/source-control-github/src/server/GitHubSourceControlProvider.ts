@@ -62,6 +62,7 @@ import {
   type SourceControlManagedCliDiscoverySpec,
 } from "@goat/source-control-core/server/discovery";
 import * as SourceControlHost from "@goat/source-control-core/server/SourceControlHost";
+import { readFirstFetchUrl } from "@goat/source-control-core/server/firstFetchUrl";
 import { readSourceControlHostSettings } from "@goat/source-control-core/shared/definition";
 
 import * as GitHubClient from "../shared/definition.ts";
@@ -689,7 +690,7 @@ export const make = Effect.gen(function* () {
         if (known !== null) return known;
         const [owner, name] = headNameWithOwner.split("/");
         const fork = yield* readRepository({ host: base.host, owner: owner!, name: name! });
-        const originUrl = yield* git.readConfigValue(input.cwd, "remote.origin.url");
+        const originUrl = yield* readFirstFetchUrl(git, input.cwd, "origin");
         return yield* git.ensureRemote({
           cwd: input.cwd,
           preferredName: headOwner ?? "fork",
