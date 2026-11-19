@@ -94,6 +94,14 @@ describe.each([
   { name: "renderCodexDirectivesForCopy", render: renderCodexDirectivesForCopy },
   { name: "renderCodexInlineDirectivesAsMarkdown", render: renderCodexInlineDirectivesAsMarkdown },
 ])("$name file citation round trips", ({ render }) => {
+  it("keeps an entity-like ampersand in the literal file path", () => {
+    const markdown = render(
+      ':codex-file-citation{path="/tmp/a&amp;copy;.txt" line_range_start="7"}',
+    );
+    const link = parseOrdinaryMarkdown(markdown).children?.[0]?.children?.[0];
+    expect(link?.type).toBe("link");
+    expect(parseMarkdownFileLink(link?.url ?? "")).toEqual({ path: "/tmp/a&copy;.txt", line: 7 });
+  });
   // regression: #12243 copied Codex citations keep their backslashes
   it.each([
     "C:\\Users\\test\\[draft]\\report.md",
