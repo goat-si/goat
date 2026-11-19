@@ -39,7 +39,7 @@ import { request, subscribeThreadItems } from "../rpc/client.ts";
 import { parseThreadKey, threadKey } from "./entities.ts";
 import { applyOrchestrationV2ProjectionEvent } from "./orchestrationV2Projection.ts";
 import { THREAD_SNAPSHOT_IDLE_TTL_MS } from "./threadRetention.ts";
-import { followStreamInEnvironment } from "./runtime.ts";
+import { threadStateChanges } from "./threadStateAtoms.ts";
 import * as ThreadHistoryController from "./threadHistoryController.ts";
 import { fetchEnvironmentThreadHistoryPage } from "./threadHistoryHttp.ts";
 import {
@@ -1004,19 +1004,6 @@ export const makeEnvironmentThreadState = Effect.fn("EnvironmentThreadState.make
   return state;
 });
 
-function threadStateChanges(
-  environmentId: EnvironmentIdType,
-  threadId: ThreadIdType,
-  resumeCache?: ThreadResumeCache,
-) {
-  return followStreamInEnvironment(
-    environmentId,
-    Stream.unwrap(
-      makeEnvironmentThreadState(threadId, resumeCache).pipe(Effect.map(SubscriptionRef.changes)),
-    ),
-  );
-}
-
 export function createEnvironmentThreadStateAtoms<R, E>(
   runtime: Atom.AtomRuntime<
     | EnvironmentRegistry.EnvironmentRegistry
@@ -1045,7 +1032,12 @@ export function createEnvironmentThreadStateAtoms<R, E>(
         (get) => {
           get.mount(resumeAtom);
           const resume = get.once(resumeAtom);
-          const live = threadStateChanges(environmentId, threadId, resume);
+          const live = threadStateChanges(
+            makeEnvironmentThreadState,
+            environmentId,
+            threadId,
+            resume,
+          );
           return resume.snapshot === undefined
             ? live
             : Stream.concat(Stream.succeed(cachedThreadState(resume.snapshot.state)), live);
