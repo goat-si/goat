@@ -10,8 +10,11 @@ export function makeCodexLiveTier(
   activeTurns: Ref.Ref<Map<string, ActiveCodexTurnContext>>,
   enabled: boolean,
 ) {
-  return Effect.fn("CodexLiveTier.apply")(function* (threadId: string, selection: ModelSelection) {
-    if (!enabled) return;
+  return Effect.fn("CodexLiveTier.apply")(function* (
+    threadId: string,
+    selection: ModelSelection | undefined,
+  ) {
+    if (!enabled || selection === undefined) return;
     const turns = [...(yield* Ref.get(activeTurns)).values()].filter(
       (turn) => turn.providerThread.nativeThreadRef?.nativeId === threadId,
     );
