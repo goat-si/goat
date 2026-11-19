@@ -56,7 +56,6 @@ import {
   setAcpRegistryProvider,
 } from "./probe.ts";
 import * as AcpRegistrySupport from "./AcpRegistrySupport.ts";
-import { isMiniMaxCode, makeMiniMaxQuotaReader } from "./minimaxQuota.ts";
 import { probeFingerprint } from "./probeFingerprint.ts";
 import { makeAcpRegistryLearnedModels, type LearnedModelsCheck } from "./learnedModels.ts";
 import { environmentText, untilEnvironmentHolds } from "./environmentCheck.ts";
@@ -575,22 +574,16 @@ export const AcpRegistryDriver: ProviderDriver<AcpRegistrySettings, AcpRegistryD
           );
     });
     // Readiness and the live state share one environment, read after the learned generation.
-    const readMiniMaxQuota = yield* makeMiniMaxQuotaReader;
-    const checkProvider = (includeQuota: boolean) =>
-      untilEnvironmentHolds(
-        currentEnvironment,
-        Effect.gen(function* () {
-          const generation = yield* learnedModels.generation;
-          const environment = yield* currentEnvironment;
-          const provider = yield* checkAcpRegistryProviderReadiness(readinessInput(environment));
-          const result = yield* withLiveRuntimeState(provider, environment, { generation });
-          const usageLimits =
-            includeQuota && result.enabled && result.installed && isMiniMaxCode(effectiveConfig)
-              ? yield* readMiniMaxQuota(environment)
-              : undefined;
-          return { environment, result: usageLimits ? { ...result, usageLimits } : result };
-        }),
-      ).pipe(Effect.provideService(AcpRegistrySupport.AcpRegistryCatalog, catalog));
+    const checkProvider = untilEnvironmentHolds(
+      currentEnvironment,
+      Effect.gen(function* () {
+        const generation = yield* learnedModels.generation;
+        const environment = yield* currentEnvironment;
+        const provider = yield* checkAcpRegistryProviderReadiness(readinessInput(environment));
+        const result = yield* withLiveRuntimeState(provider, environment, { generation });
+        return { environment, result };
+      }),
+    ).pipe(Effect.provideService(AcpRegistrySupport.AcpRegistryCatalog, catalog));
     const enrichProvider = (environment: NodeJS.ProcessEnv) =>
       checkAcpRegistryProviderStatus(
         {
@@ -680,8 +673,8 @@ export const AcpRegistryDriver: ProviderDriver<AcpRegistrySettings, AcpRegistryD
       getSettings: snapshotSettings.getSettings,
       streamSettings: snapshotSettings.streamSettings,
       haveSettingsChanged: haveProviderSnapshotSettingsChanged,
-      initialSnapshot: () => checkProvider(false),
-      checkProvider: checkProvider(true),
+      initialSnapshot: () => checkProvider,
+      checkProvider,
       enrichSnapshot: Effect.fn("enrichSnapshot")(function ({
         snapshot,
         getSnapshot,
