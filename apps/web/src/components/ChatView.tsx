@@ -13,6 +13,7 @@ import {
   isDetailBehindShell,
 } from "@goat/client-runtime/state/thread-activity-announcement";
 import {
+  EMPTY_PENDING_FILE_SURFACE_IDS,
   deriveAvailableRevertTurnCounts,
   presentThreadShellFromProjection,
 } from "./ChatView.logic";
@@ -418,8 +419,6 @@ import type { CodexArtifactTemplate } from "@goat/shared/codexArtifactTemplates"
 const EMPTY_FEEDBACK_SUBMISSIONS: ReadonlyArray<CodexFeedbackSubmission> = [];
 const EMPTY_AUTO_UPDATE_ENVIRONMENTS: ReadonlyArray<EnvironmentPresentation> = [];
 const EMPTY_COMPOSER_BANNER_ITEMS: ReadonlyArray<ComposerBannerStackItem> = [];
-
-const EMPTY_PENDING_FILE_SURFACE_IDS: ReadonlySet<string> = new Set();
 
 export default function ChatView(props: ChatViewProps) {
   const {
@@ -2769,6 +2768,7 @@ export default function ChatView(props: ChatViewProps) {
     terminalOpen: Boolean(terminalUiState.terminalOpen),
     previewFocus: isPreviewFocused(),
     previewOpen: previewPanelOpen,
+    rightPanelOpen,
     editableFocus: isEditableFocused(eventTarget),
     modelPickerOpen: composerRef.current?.isModelPickerOpen() ?? false,
     composerFocus: document.activeElement?.getAttribute("data-testid") === "composer-editor",
@@ -2790,6 +2790,7 @@ export default function ChatView(props: ChatViewProps) {
     }
   });
   useChatShortcuts({
+    embedded,
     enabled: activeThreadId !== null && !backgroundThread,
     keybindings,
     scriptKeybindings,

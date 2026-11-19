@@ -1,3 +1,5 @@
+import { usePaletteHiddenParentKeys } from "./sidebar/usePaletteVisibility";
+import { paletteListedThreads } from "@goat/client-runtime/state/launch-fold";
 import { scopedThreadKey, scopeThreadRef } from "@goat/client-runtime/environment";
 import { findForMessageMatch, openThreadFindOnQuery } from "./chat/threadFindStore";
 import {
@@ -100,6 +102,7 @@ export function useCommandPaletteThreadItems(input: {
   const { activeThread, threadSearchQuery } = input;
   const navigate = useNavigate();
   const threads = useThreadShells();
+  const hiddenParents = usePaletteHiddenParentKeys();
   const { projectEnvironmentLocationById } = useEnvironmentLookups();
   const providerEntryByEnvironmentAndInstanceId = useProviderEntryByEnvironmentAndInstanceId();
   const messageSearch = useConnectedThreadSearch(threadSearchQuery);
@@ -110,7 +113,7 @@ export function useCommandPaletteThreadItems(input: {
 
   const { environments } = useEnvironments();
   const threadItems = buildThreadActionItems({
-    threads,
+    threads: paletteListedThreads(threads, new Date(now).toISOString(), hiddenParents),
     ...(environments.length > 1
       ? {
           environmentLabelOf: (thread: (typeof threads)[number]) =>
