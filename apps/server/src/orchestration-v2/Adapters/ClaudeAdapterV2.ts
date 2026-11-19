@@ -10611,11 +10611,10 @@ export const makeClaudeAdapterV2 = Effect.fn("makeClaudeAdapterV2")(function* (
 
               const sourceNativeThreadId = yield* getNativeThreadId(forkInput.sourceProviderThread);
               const upToMessageId = yield* resolveClaudeForkUpToMessageId(forkInput);
-              if (currentTurn !== null && upToMessageId === undefined) {
+              if (forkInput.sourceProviderTurns !== undefined && upToMessageId === undefined) {
                 return yield* new ProviderAdapter.ProviderAdapterProtocolError({
                   driver: CLAUDE_PROVIDER,
-                  detail:
-                    "Cannot fork a running Claude session without a completed boundary cursor.",
+                  detail: "Cannot fork a Claude session without a completed boundary cursor.",
                 });
               }
               // A moved project still has its transcript under the original cwd.

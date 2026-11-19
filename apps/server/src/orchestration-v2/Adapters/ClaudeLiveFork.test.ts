@@ -113,3 +113,51 @@ it.effect(
       }).pipe(Effect.provide(layerClaudeAdapterTest)),
     ),
 );
+
+it.effect(
+  "never copies an unbounded Claude transcript when a requested boundary lacks a cursor",
+  () =>
+    Effect.scoped(
+      Effect.gen(function* () {
+        const forks: Array<unknown> = [];
+        const harness = yield* makeWakeHarnessWithOptions({
+          forkSession: (input) =>
+            Effect.sync(() => {
+              forks.push(input);
+              return { sessionId: "fork" };
+            }),
+        });
+        yield* harness.runtime.startTurn(
+          makeClaudeTestTurnInput({
+            threadId: harness.threadId,
+            providerThread: harness.providerThread,
+            now: DateTime.makeUnsafe(0),
+            attemptId: RunAttemptId.make("fork-no-cursor"),
+            text: "Continue",
+            attachments: [],
+          }),
+        );
+        yield* Queue.offer(
+          harness.sdkMessages,
+          makeResultFrame({ uuid: "00000000-0000-4000-8000-000000000656", result: "Done" }),
+        );
+        assert.equal((yield* Queue.take(harness.terminalReceipts)).status, "completed");
+        const event = harness.events.findLast(
+          (candidate) => candidate.type === "provider_turn.updated",
+        );
+        assert.isDefined(event);
+        if (event === undefined || event.type !== "provider_turn.updated") return;
+        const turn = { ...event.providerTurn, status: "completed" as const, nativeTurnRef: null };
+        const result = yield* harness.runtime
+          .forkThread({
+            sourceProviderThread: { ...harness.providerThread, nativeConversationHeadRef: null },
+            sourceProviderTurns: [turn],
+            providerTurnId: turn.id,
+            targetThreadId: ThreadId.make("fork-no-cursor-target"),
+          })
+          .pipe(Effect.result);
+        assert.equal(result._tag, "Failure");
+        assert.isEmpty(forks);
+      }).pipe(Effect.provide(layerClaudeAdapterTest)),
+    ),
+);
