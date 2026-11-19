@@ -177,12 +177,11 @@ export function registerPiModelAndRollbackChecks({
         `rollback on a fresh Pi runtime failed: ${result._tag === "Failure" ? String(result.failure.cause) : ""}`,
       );
       const requests = fake.allRequests();
-      const switchIndex = requests.findIndex(
-        (request) => request.type === "switch_session" && request.sessionPath === sessionFile,
-      );
       const forkIndex = requests.findIndex((request) => request.type === "fork");
-      assert.isAtLeast(switchIndex, 0, "fresh runtime never switched to the persisted session");
-      assert.isAbove(forkIndex, switchIndex, "fork ran before switching to the persisted session");
+      assert.include(fake.lastSpawn().args, "--session");
+      assert.include(fake.lastSpawn().args, sessionFile);
+      assert.isFalse(requests.some((request) => request.type === "switch_session"));
+      assert.isAtLeast(forkIndex, 0, "fresh runtime never forked the attached session");
       assert.equal(requests[forkIndex]?.entryId, "u2");
       if (result._tag !== "Success") return;
       assert.equal(
