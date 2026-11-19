@@ -63,7 +63,7 @@ const openSessionWithRunningCommand = Effect.fn("openSessionWithRunningCommand")
     rawInput: { CommandLine: "node fetch_throughput.mjs", ...commandInput },
   } as const;
   let cancels = 0;
-  let terminate: AntigravityAdapterV2RuntimeInput["onTermination"];
+  let terminate: AntigravityAdapterV2RuntimeInput["onTermination"] | undefined;
   const usage = { sessionUpdate: "usage_update", used: 9000, size: 1048576 } as const;
   const offers: Array<ProviderContinuationRequests.ProviderContinuationRequest> = [];
   const instanceId = ProviderInstanceId.make("antigravity-wake-test");
