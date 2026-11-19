@@ -44,6 +44,31 @@ vi.mock(import("~/rpc/requestLatencyState"), async (original) => ({
   trackRpcRequestSent: () => {},
 }));
 
+it("suppresses middle-click paste on chat space while preserving editable and link actions", async () => {
+  const thread = threadWithHistory("thread-middle-click", 1);
+  using _environment = installFakeEnvironment([thread]);
+  __setClientSettingsForTests({
+    ...DEFAULT_CLIENT_SETTINGS,
+    onboardingCompletedAt: "2026-01-01T00:00:00.000Z",
+  });
+  const router = getRouter(
+    createMemoryHistory({ initialEntries: [`/${ENVIRONMENT_ID}/${thread.id}`] }),
+  );
+  await router.load();
+  await using app = await render(<AppRoot router={router} />, { router: false });
+  await expect.element(page.getByTestId("composer-editor")).toBeVisible();
+  const column = app.container.querySelector<HTMLElement>("[data-chat-column]");
+  expect(column).not.toBeNull();
+  const input = document.createElement("input");
+  const link = document.createElement("a");
+  link.href = "https://example.com";
+  column!.append(input, link);
+  const middleUp = () => new MouseEvent("mouseup", { bubbles: true, cancelable: true, button: 1 });
+  expect(column!.dispatchEvent(middleUp())).toBe(false);
+  expect(input.dispatchEvent(middleUp())).toBe(true);
+  expect(link.dispatchEvent(middleUp())).toBe(true);
+});
+
 it("a new draft does not load its reserved thread before the server lists it", async () => {
   using _environment = installFakeEnvironment([]);
   using fetchSpy = vi.spyOn(globalThis, "fetch");
