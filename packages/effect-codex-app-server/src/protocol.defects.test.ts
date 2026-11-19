@@ -4,6 +4,7 @@ import * as Deferred from "effect/Deferred";
 import * as Effect from "effect/Effect";
 import * as Queue from "effect/Queue";
 import * as Fiber from "effect/Fiber";
+import * as PlatformError from "effect/PlatformError";
 import * as Schema from "effect/Schema";
 import * as Sink from "effect/Sink";
 import * as Stdio from "effect/Stdio";
@@ -78,6 +79,30 @@ it.layer(NodeServices.layer)("Codex protocol defect isolation", (it) => {
         }),
       );
       assert.equal(terminations, 0);
+    }),
+  );
+  it.effect("reports process exit when writing to an exited process", () =>
+    Effect.gen(function* () {
+      const { stdio } = yield* makeInMemoryStdio();
+      const exited = new CodexError.CodexAppServerProcessExitedError({ code: 1, pid: 123 });
+      const transport = yield* CodexProtocol.makeCodexAppServerPatchedProtocol({
+        stdio: Stdio.make({
+          ...stdio,
+          stdout: () =>
+            Sink.forEach(() =>
+              Effect.fail(
+                PlatformError.systemError({
+                  _tag: "Unknown",
+                  module: "Stdio",
+                  method: "stdout",
+                  cause: new Error("EPIPE"),
+                }),
+              ),
+            ),
+        }),
+        terminationError: Effect.succeed(exited),
+      });
+      assert.strictEqual(yield* transport.request("initialize", {}).pipe(Effect.flip), exited);
     }),
   );
 });
