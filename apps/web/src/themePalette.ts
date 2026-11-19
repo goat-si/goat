@@ -3,6 +3,8 @@ import * as Equal from "effect/Equal";
 import * as Schema from "effect/Schema";
 import "culori/css";
 import { converter, parse } from "culori/fn";
+import { setThemePreviewAppearance } from "./themePreviewAppearance";
+export { getThemePreviewAppearance, subscribeToThemePreview } from "./themePreviewAppearance";
 import {
   BUILT_IN_THEMES,
   normalizeThemeId,
@@ -65,24 +67,6 @@ type CustomThemeLibrarySnapshot =
   | Readonly<{ status: "unavailable"; reason: "storage-unavailable"; cause: unknown }>;
 
 let customThemeLibrarySnapshot: CustomThemeLibrarySnapshot | null = null;
-const themePreviewListeners = new Set<() => void>();
-let themePreviewAppearance: ThemeAppearance | null = null;
-
-export function getThemePreviewAppearance(): ThemeAppearance | null {
-  return themePreviewAppearance;
-}
-
-export function subscribeToThemePreview(listener: () => void): () => void {
-  themePreviewListeners.add(listener);
-  return () => themePreviewListeners.delete(listener);
-}
-
-function setThemePreviewAppearance(appearance: ThemeAppearance | null): void {
-  if (themePreviewAppearance === appearance) return;
-  themePreviewAppearance = appearance;
-  for (const listener of themePreviewListeners) listener();
-}
-
 function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === "object" && value !== null && !Array.isArray(value);
 }
