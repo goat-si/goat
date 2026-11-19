@@ -90,6 +90,8 @@ export function terminalStatusFromResult(
 const PROXY_COOLDOWN_PREFIX = "API Error: Request rejected (429) · All credentials for model ";
 const PROXY_COOLDOWN =
   /^API Error: Request rejected \(429\) · All credentials for model [^\s()]+ are cooling down \(reset after (?:(\d+)h ?)?(?:(\d+)m ?)?(?:(\d+)s)?\)/;
+const PROXY_COOLDOWN_AFTER_ERROR =
+  /^API Error: Request rejected \(429\) · All credentials for model [^\s()]+ are cooling down \(last error: [\s\S]*\) \(reset after (?:(\d+)h ?)?(?:(\d+)m ?)?(?:(\d+)s)?\)$/;
 const GATEWAY_COOLDOWN = /\(reset after (?:(\d+)h ?)?(?:(\d+)m ?)?(?:(\d+)s)?\)/;
 
 function gatewayCooldownResetAt(
@@ -164,10 +166,10 @@ export function providerFailureFromResult(
   const resetAt =
     apiErrorStatus === 429 && message.result.startsWith("API Error:")
       ? gatewayCooldownResetAt(
-          (message.result.startsWith(PROXY_COOLDOWN_PREFIX)
-            ? PROXY_COOLDOWN
-            : GATEWAY_COOLDOWN
-          ).exec(message.result),
+          message.result.startsWith(PROXY_COOLDOWN_PREFIX)
+            ? (PROXY_COOLDOWN.exec(message.result) ??
+                PROXY_COOLDOWN_AFTER_ERROR.exec(message.result))
+            : GATEWAY_COOLDOWN.exec(message.result),
           completedAt,
         )
       : undefined;
