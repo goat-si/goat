@@ -148,6 +148,12 @@ export function getDesktopUpdateActionError(result: DesktopUpdateActionResult): 
   return message.length > 0 ? message : null;
 }
 
+export function getDesktopUpdateInstallError(result: DesktopUpdateActionResult): string | null {
+  if (result.completed || result.state.errorContext !== "install")
+    return getDesktopUpdateActionError(result);
+  return result.state.message?.trim() || null;
+}
+
 export function shouldToastDesktopUpdateActionResult(result: DesktopUpdateActionResult): boolean {
   return getDesktopUpdateActionError(result) !== null;
 }

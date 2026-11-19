@@ -227,6 +227,8 @@ export const listen: Effect.Effect<
               attempts = { ...attempts, downloads: attempts.downloads + 1 };
               yield* updates.download.pipe(
                 Effect.flatMap((result) => {
+                  if (result.completed)
+                    return Queue.offer(retries, result.state).pipe(Effect.asVoid);
                   if (result.accepted) return Effect.void;
                   attempts = { ...attempts, downloads: attempts.downloads - 1 };
                   return retryLater(state);

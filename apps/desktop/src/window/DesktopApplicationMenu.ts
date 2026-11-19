@@ -109,7 +109,21 @@ const checkForUpdatesFromMenu = Effect.gen(function* () {
       defaultId: 0,
       cancelId: 1,
     });
-    if (response === 0) yield* updates.install;
+    if (response !== 0) return;
+    const install = yield* updates.install;
+    const { errorContext, message } = install.state;
+    if (
+      !install.accepted ||
+      (!install.completed && (errorContext === "install" || errorContext === "download"))
+    ) {
+      yield* electronDialog.showMessageBox({
+        type: "warning",
+        title: "Update installation failed",
+        message: "Could not install the update.",
+        detail: message ?? "Please try again later.",
+        buttons: ["OK"],
+      });
+    }
   } else if (updateState.status === "error") {
     yield* electronDialog.showMessageBox({
       type: "warning",

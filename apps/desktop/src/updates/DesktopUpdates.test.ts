@@ -313,9 +313,10 @@ describe("DesktopUpdates", () => {
           const installFiber = yield* updates.install.pipe(Effect.forkScoped);
           yield* Deferred.await(installStarted);
 
+          const checksBefore = harness.checkCount();
           const checkResult = yield* updates.check("manual");
           assert.isFalse(checkResult.checked);
-          assert.equal(harness.checkCount(), 0);
+          assert.equal(harness.checkCount(), checksBefore);
 
           yield* Deferred.succeed(releaseInstall, undefined);
           const installResult = yield* Fiber.join(installFiber);
@@ -543,6 +544,7 @@ describe("DesktopUpdates", () => {
       const actionStarted = yield* Deferred.make<void>();
       let disableDifferentialCalls = 0;
       const harness = makeHarness({
+        downloadUpdate: Effect.sync(() => harness.emit("update-downloaded", { version: "1.2.4" })),
         setDisableDifferentialDownload: Effect.suspend(() => {
           disableDifferentialCalls += 1;
           if (disableDifferentialCalls === 1) {
