@@ -223,7 +223,12 @@ export function buildCheckedAcpRegistrySnapshot(
       ? { documentationUrl: input.inspection.documentationUrl }
       : {}),
     installed: input.probeError?.reason === "runner_unavailable" ? false : readiness.installed,
-    version: input.probeError?.reason === "runner_unavailable" ? null : readiness.version,
+    version:
+      input.probeError?.reason === "runner_unavailable"
+        ? null
+        : input.settings.source === "local"
+          ? (input.probe?.probe.agentVersion ?? readiness.version)
+          : readiness.version,
     // Failed discovery is a warning: an installed agent may still run real turns.
     status: probeFailed ? "warning" : readiness.status,
     auth: input.probe
@@ -486,6 +491,10 @@ export const AcpRegistryDriver: ProviderDriver<AcpRegistrySettings, AcpRegistryD
             }),
           );
     });
+    const reportedLocalVersion = yield* Ref.make<{
+      readonly key: string;
+      readonly version: string;
+    } | null>(null);
     // Readiness and the live state share one environment, read after the learned generation.
     const checkProvider = untilEnvironmentHolds(
       currentEnvironment,
@@ -493,7 +502,18 @@ export const AcpRegistryDriver: ProviderDriver<AcpRegistrySettings, AcpRegistryD
         const generation = yield* learnedModels.generation;
         const environment = yield* currentEnvironment;
         const provider = yield* checkAcpRegistryProviderReadiness(readinessInput(environment));
-        const result = yield* withLiveRuntimeState(provider, environment, { generation });
+        const reported = yield* Ref.get(reportedLocalVersion);
+        const key = acpRegistryEnvironmentKey(
+          acpRegistrySessionEnvironment(effectiveConfig, environment),
+        );
+        const readyProvider =
+          effectiveConfig.source === "local" &&
+          provider.installed &&
+          provider.version === null &&
+          reported?.key === key
+            ? { ...provider, version: reported.version }
+            : provider;
+        const result = yield* withLiveRuntimeState(readyProvider, environment, { generation });
         return { environment, result };
       }),
     ).pipe(Effect.provideService(AcpRegistrySupport.AcpRegistryCatalog, catalog));
@@ -548,7 +568,8 @@ export const AcpRegistryDriver: ProviderDriver<AcpRegistrySettings, AcpRegistryD
         key !== null &&
         cached.key === key &&
         cached.expiresAt > now &&
-        cached.provider.version === baseSnapshot.version
+        (cached.provider.version === baseSnapshot.version ||
+          (effectiveConfig.source === "local" && baseSnapshot.version === null))
       ) {
         return {
           provider: { ...cached.provider, checkedAt: baseSnapshot.checkedAt },
@@ -624,7 +645,21 @@ export const AcpRegistryDriver: ProviderDriver<AcpRegistrySettings, AcpRegistryD
                     const enriched = yield* withLiveRuntimeState(provider, environment, {
                       generation: learnedGeneration,
                     });
-                    if (yield* matchesEnvironment) yield* publishSnapshot(enriched);
+                    if (yield* matchesEnvironment) {
+                      if (
+                        effectiveConfig.source === "local" &&
+                        enriched.version !== null &&
+                        enriched.status === "ready"
+                      ) {
+                        yield* Ref.set(reportedLocalVersion, {
+                          key: acpRegistryEnvironmentKey(
+                            acpRegistrySessionEnvironment(effectiveConfig, environment),
+                          ),
+                          version: enriched.version,
+                        });
+                      }
+                      yield* publishSnapshot(enriched);
+                    }
                   }),
                 ),
             }),

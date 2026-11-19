@@ -1,3 +1,4 @@
+import { boundedAgentVersion } from "./agentVersion.ts";
 import {
   AcpRegistryListProvidersResult,
   AcpRegistryOperationError,
@@ -336,10 +337,12 @@ export function acpRegistryProbeResult(
       parseSessionModeState(started.sessionSetupResult),
       started.sessionSetupResult.models,
     );
+  const agentVersion = boundedAgentVersion(started.initializeResult.agentInfo?.version);
   return AcpRegistryProbeResult.make({
     instanceId,
     ready: true,
     icon,
+    ...(agentVersion === undefined ? {} : { agentVersion }),
     authMethods: normalizeAcpRegistryAuthMethods(started.initializeResult.authMethods, spawn),
     sessionManagement: {
       canList: started.initializeResult.agentCapabilities?.sessionCapabilities?.list != null,
