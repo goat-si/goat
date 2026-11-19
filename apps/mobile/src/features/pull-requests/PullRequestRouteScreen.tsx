@@ -5,7 +5,8 @@ import { restorePullRequestTabScroll } from "./pullRequestTabScroll";
 import { guideFocusedRows, type GuideDiffFocus } from "./guide/guideDiffFocus";
 import { PullRequestGuideContent } from "./guide/PullRequestGuideScreen";
 import { useReviewGuidesEnabled } from "./guide/useReviewGuide";
-import { DEFAULT_ACTIVITY_FILTER, type ActivityFilter } from "./pullRequestActivityFilter";
+import { parsePullRequestAnchor } from "@goat/shared/pullRequestAnchor";
+import { usePullRequestActivityFilter } from "./usePullRequestActivityFilter";
 import * as Link from "./pullRequestLinkNavigation";
 import { usePullRequestLinkReveal } from "./usePullRequestLinkReveal";
 import { PullRequestActivityFilters } from "./PullRequestActivityFilters";
@@ -170,9 +171,10 @@ export function PullRequestRouteScreen({ route }: StaticScreenProps<PullRequestP
   const [descriptionExpanded, setDescriptionExpanded] = useState(false);
   const filesContent = usePullRequestFilesSection(params);
   const guidesEnabled = useReviewGuidesEnabled(params);
-  const [activityFilter, setActivityFilter] = useState<ActivityFilter>(() =>
-    Link.linkedActivityFilter(params.navigationUrl, DEFAULT_ACTIVITY_FILTER),
+  const activityFilterState = usePullRequestActivityFilter(
+    parsePullRequestAnchor(params.navigationUrl)?.kind,
   );
+  const activityFilter = activityFilterState.filter;
   const activityContent = usePullRequestActivityRows(params, activityFilter);
   const scrollOffsets = useRef<Record<string, number>>({});
   const currentScrollOffset = useRef(-barInsets.top);
@@ -217,7 +219,9 @@ export function PullRequestRouteScreen({ route }: StaticScreenProps<PullRequestP
   const linkReveal = usePullRequestLinkReveal({
     params,
     selectSection,
-    setActivityFilter,
+    showActivityLink: (kind) =>
+      kind === "timeline" ? activityFilterState.showTimeline() : activityFilterState.showCommits(),
+    clearActivityLink: activityFilterState.clearLink,
     list: (tab) => scrollViews.current[tab],
     topInset: barInsets.top,
     activity: activityContent,
@@ -650,7 +654,7 @@ export function PullRequestRouteScreen({ route }: StaticScreenProps<PullRequestP
                           {tab === "activity" ? (
                             <PullRequestActivityFilters
                               value={activityFilter}
-                              onChange={setActivityFilter}
+                              onChange={activityFilterState.setFilter}
                               hiddenCount={tabContent.hiddenCount}
                             />
                           ) : null}
