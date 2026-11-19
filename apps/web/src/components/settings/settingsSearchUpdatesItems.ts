@@ -1,22 +1,23 @@
+import { msg } from "gt-react";
 import type { SettingsSearchItem } from "./settingsSearch";
 export const UPDATES_SETTINGS_SEARCH_ITEMS = [
   {
     id: "provider-update-checks",
-    title: "Provider update checks",
+    title: msg("Provider update checks"),
     to: "/settings/general",
     searchTerms: ["installed cli versions newer available codex claude cursor grok fx opencode"],
     scope: "environment-defaults",
   },
   {
     id: "automatic-server-updates",
-    title: "Automatic server updates",
+    title: msg("Automatic server updates"),
     to: "/settings/general",
     scope: "environment-defaults",
     searchTerms: ["background service stable nightly channel idle automatic update"],
   },
   {
     id: "continue-threads-after-server-update",
-    title: "Continue threads after restarts",
+    title: msg("Continue threads after restarts"),
     to: "/settings/general",
     scope: "project-defaults",
     searchTerms: [
@@ -32,7 +33,7 @@ export const UPDATES_SETTINGS_SEARCH_ITEMS = [
   },
   {
     id: "background-activity",
-    title: "Background activity",
+    title: msg("Background activity"),
     to: "/settings/general",
     scope: "environment-defaults",
     searchTerms: [
@@ -41,7 +42,7 @@ export const UPDATES_SETTINGS_SEARCH_ITEMS = [
   },
   {
     id: "agent-memory-limit",
-    title: "Agent memory limit",
+    title: msg("Agent memory limit"),
     to: "/settings/general",
     scope: "environment-defaults",
     searchTerms: ["macos memory ram oom process kill automatic gib"],

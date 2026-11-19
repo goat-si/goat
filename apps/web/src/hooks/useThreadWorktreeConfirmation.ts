@@ -7,7 +7,7 @@ import { readThreadShell } from "../state/entities";
 import { orchestrationEnvironment } from "../state/orchestration";
 import { useAtomQueryRunner } from "../state/use-atom-query-runner";
 
-const HOLDER_TITLE_PAGE_SIZE = 100;
+const MAX_NAMED_HOLDERS = 5;
 
 export function useThreadWorktreeConfirmation() {
   const loadHolders = useAtomQueryRunner(orchestrationEnvironment.worktreeThreadIds, {
@@ -52,25 +52,27 @@ export function useThreadWorktreeConfirmation() {
     const ids = occupants.value.threadIds.filter((id) => id !== target.threadId);
     if (ids.length > WORKTREE_HOLDER_SCAN_LIMIT)
       throw new Error("Too many threads use this worktree to confirm deletion.");
-    const titles: Record<string, string> = {};
-    for (let offset = 0; offset < ids.length; offset += HOLDER_TITLE_PAGE_SIZE) {
-      const page = ids
-        .slice(offset, offset + HOLDER_TITLE_PAGE_SIZE)
-        .filter((id) => readThreadShell(scopeThreadRef(target.environmentId, id)) === null);
-      if (page.length === 0) continue;
+    const shown = ids.slice(0, MAX_NAMED_HOLDERS);
+    const missing = shown.filter(
+      (id) => readThreadShell(scopeThreadRef(target.environmentId, id)) === null,
+    );
+    let titles: Record<string, string> = {};
+    if (missing.length > 0) {
       const answer = await loadTitles({
         environmentId: target.environmentId,
-        input: { threadId: target.threadId, lookupOnly: true, lookupThreadIds: page },
+        input: { threadId: target.threadId, lookupOnly: true, lookupThreadIds: missing },
       });
-      if (answer._tag === "Success") Object.assign(titles, answer.value.lookupTitles ?? {});
+      if (answer._tag === "Success") titles = answer.value.lookupTitles ?? {};
     }
-    for (const id of ids) {
+    for (const id of shown) {
       const holder = readThreadShell(scopeThreadRef(target.environmentId, id));
       const kind = holder?.sideChatOf === target.threadId ? "side chat" : "thread";
       lines.push(
         `Worktree kept because ${kind} "${holder?.title ?? titles[id] ?? id}" still uses it.`,
       );
     }
+    if (ids.length > shown.length)
+      lines.push(`The worktree is kept for these and ${ids.length - shown.length} more threads.`);
     return {
       lines,
       keepWorktree: unguarded || occupants.value.managed !== true || ids.length > 0,

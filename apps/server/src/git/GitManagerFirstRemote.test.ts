@@ -11,6 +11,21 @@ import {
 } from "./GitManagerTestHarness.ts";
 
 it.layer(layerGitManagerTest)("first fetch URL", (it) => {
+  it.effect("reuses the first fetch URL across invalidated status reads", () =>
+    Effect.gen(function* () {
+      const cwd = yield* makeTempDir("goat-first-remote-cache-");
+      yield* initRepo(cwd);
+      yield* runGit(cwd, ["remote", "add", "origin", "https://github.com/acme/repo.git"]);
+      const gitCommands: string[] = [];
+      const { manager } = yield* makeManager({ gitCommands });
+      yield* manager.localStatus({ cwd });
+      yield* manager.invalidateLocalStatus(cwd);
+      yield* manager.localStatus({ cwd });
+      expect(
+        gitCommands.filter((command) => command === "config --get-all remote.origin.url"),
+      ).toHaveLength(1);
+    }),
+  );
   it.effect("keeps status and PR matching on the first URL", () =>
     Effect.gen(function* () {
       const cwd = yield* makeTempDir("goat-first-remote-");

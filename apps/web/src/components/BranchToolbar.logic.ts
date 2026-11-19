@@ -1,3 +1,4 @@
+import { msg } from "gt-react";
 import { workspaceRelativeFilePath } from "@goat/shared/path";
 import type {
   EnvironmentId,
@@ -95,13 +96,13 @@ export function resolveContextStripLabelsCompact(input: {
 }
 
 export function resolveEnvModeLabel(mode: EnvMode): string {
-  return mode === "worktree" ? "New worktree" : "Local";
+  return mode === "worktree" ? msg("New worktree") : msg("Local");
 }
 
 export const WORKTREE_SUBMODULES_LABELS: Record<WorktreeSubmodules, string> = {
-  recursive: "Recursive",
-  "top-level": "Top level only",
-  none: "Skip",
+  recursive: msg("Recursive"),
+  "top-level": msg("Top level only"),
+  none: msg("Skip"),
 };
 
 export function resolveCurrentWorkspaceLabel(activeWorktreePath: string | null): string {

@@ -1,10 +1,11 @@
 import { consumePasteAsTextShortcut } from "./consumePasteAsTextShortcut";
+import { useMessages } from "gt-react";
 import { useComposerTypingGuard } from "./useComposerTypingGuard";
 import { useApplyThreadModelPick } from "./useApplyThreadModelPick";
 import { composerPathOrModelReplacement } from "./composerModelMentions";
 import { insertAttachmentReferencesForDraft } from "./composerAttachmentReferences";
 import { DESKTOP_PASTE_AS_TEXT_EVENT } from "../../lib/desktopPasteAsText";
-import { runtimeModeConfig, runtimeModeOptions as runtimeModes } from "./runtimeModeConfig";
+import { getCompatibleRuntimeModeOptions } from "./runtimeModeConfig";
 import { usePrimaryEnvironmentId } from "../../state/environments";
 import { useRightPanelStore } from "~/rightPanelStore";
 import { importPastedComposerText, readPastedComposerContext } from "../composerInlineTokenPaste";
@@ -299,8 +300,6 @@ import { useReplyBannerItems } from "./composerReply";
 import { useComposerReplyTarget } from "./composerReplyTarget";
 import type { ChatComposerHandle } from "./chatComposerHandle";
 
-const runtimeModeOptions = runtimeModes.map((mode) => ({ mode, ...runtimeModeConfig[mode] }));
-
 export type { ChatComposerHandle };
 
 export interface ChatComposerProps {
@@ -477,6 +476,7 @@ export interface ChatComposerProps {
 const NO_PROVIDER_SLASH_COMMANDS: ServerProvider["slashCommands"] = [];
 
 export const ChatComposer = memo(function ChatComposer(props: ChatComposerProps) {
+  const m = useMessages();
   const {
     composerDraftTarget,
     environmentId,
@@ -904,11 +904,9 @@ export const ChatComposer = memo(function ChatComposer(props: ChatComposerProps)
     : undefined;
   const resolvedCompactDisabledReason =
     compactDisabledReason ?? (noProviderAvailable ? "Compacting is unavailable right now" : null);
-  const supportedRuntimeModes = selectedProviderEntry?.snapshot.supportedRuntimeModes;
-  const compatibleRuntimeModeOptions =
-    supportedRuntimeModes && supportedRuntimeModes.length > 0
-      ? runtimeModeOptions.filter((option) => supportedRuntimeModes.includes(option.mode))
-      : runtimeModeOptions;
+  const compatibleRuntimeModeOptions = getCompatibleRuntimeModeOptions(
+    selectedProviderEntry?.snapshot.supportedRuntimeModes,
+  );
   const compatibleRuntimeMode = compatibleRuntimeModeOptions.some(
     (option) => option.mode === runtimeMode,
   )
@@ -3645,13 +3643,15 @@ export const ChatComposer = memo(function ChatComposer(props: ChatComposerProps)
                     onCitationSubmitAndSend={submitCitationAndSendStable}
                     onCitationDraftSave={saveCitationDraftToPromptStable}
                     onPaste={onComposerPasteStable}
-                    placeholder={composerPlaceholder({
-                      approval: isComposerApprovalState ? (activePendingApproval ?? {}) : null,
-                      question: activePendingProgress?.activeQuestion ?? null,
-                      planFollowUp: showPlanFollowUpPrompt && activeProposedPlan !== null,
-                      projectSelectionRequired,
-                      showProviderUnavailable,
-                    })}
+                    placeholder={m(
+                      composerPlaceholder({
+                        approval: isComposerApprovalState ? (activePendingApproval ?? {}) : null,
+                        question: activePendingProgress?.activeQuestion ?? null,
+                        planFollowUp: showPlanFollowUpPrompt && activeProposedPlan !== null,
+                        projectSelectionRequired,
+                        showProviderUnavailable,
+                      }),
+                    )}
                     disabled={
                       isConnecting ||
                       projectSelectionRequired ||

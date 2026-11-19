@@ -1,3 +1,4 @@
+import { useGT } from "gt-react";
 import { DEFAULT_UNIFIED_SETTINGS } from "@goat/contracts/settings";
 import { Select, SelectItem, SelectPopup, SelectTrigger, SelectValue } from "../ui/select";
 import { CodexAppServerIsolationSetting } from "./CodexAppServerIsolationSetting";
@@ -5,7 +6,7 @@ import { KeepAwakeSetting } from "./KeepAwakeSetting";
 import { ScopedSwitch } from "./ScopedSwitch";
 import { useSettingsScope } from "./SettingsScopeContext";
 import { SettingResetButton, SettingsRow } from "./settingsLayout";
-import { searchableSetting } from "./settingsSearch";
+import { useTranslatedSearchableSetting } from "./useTranslatedSearchableSetting";
 import {
   useScopedSettings,
   useScopedSettingsMixed,
@@ -13,6 +14,8 @@ import {
 } from "./useScopedSettings";
 
 export function RestartContinuationSettings() {
+  const setting = useTranslatedSearchableSetting();
+  const gt = useGT();
   const settings = useScopedSettings();
   const updateSettings = useUpdateScopedSettings();
   const { connectedEnvironments } = useSettingsScope();
@@ -31,13 +34,15 @@ export function RestartContinuationSettings() {
     <>
       <KeepAwakeSetting />
       <SettingsRow
-        {...searchableSetting("continue-threads-after-server-update")}
+        {...setting("continue-threads-after-server-update")}
         serverScoped
         settingKeys={["continueThreadsAfterServerUpdate"]}
-        description="Automatically resume interrupted threads after an update, crash, or machine restart on the selected environments."
+        description={gt(
+          "Automatically resume interrupted threads after an update, crash, or machine restart on the selected environments.",
+        )}
         status={
           !supportsRestartContinuation
-            ? "All selected connected environments must support restart continuation."
+            ? gt("All selected connected environments must support restart continuation.")
             : undefined
         }
         resetAction={
@@ -45,7 +50,7 @@ export function RestartContinuationSettings() {
           settings.continueThreadsAfterServerUpdate !==
             DEFAULT_UNIFIED_SETTINGS.continueThreadsAfterServerUpdate ? (
             <SettingResetButton
-              label="continue threads after restarts"
+              label={gt("continue threads after restarts")}
               onClick={() =>
                 updateSettings({
                   continueThreadsAfterServerUpdate:
@@ -63,19 +68,19 @@ export function RestartContinuationSettings() {
             onCheckedChange={(checked) =>
               updateSettings({ continueThreadsAfterServerUpdate: Boolean(checked) })
             }
-            aria-label="Continue threads after restarts"
+            aria-label={gt("Continue threads after restarts")}
           />
         }
       />
 
       <SettingsRow
-        {...searchableSetting("codex-turn-survival")}
+        {...setting("codex-turn-survival")}
         serverScoped
         settingKeys={["codexTurnsSurviveServerStop"]}
-        description="Keep a running Codex turn alive when GOAT stops on macOS or Linux."
+        description={gt("Keep a running Codex turn alive when GOAT stops on macOS or Linux.")}
         status={
           !supportsCodexSurvival
-            ? "All selected environments must support Codex turn survival."
+            ? gt("All selected environments must support Codex turn survival.")
             : undefined
         }
         resetAction={
@@ -83,7 +88,7 @@ export function RestartContinuationSettings() {
           settings.codexTurnsSurviveServerStop !==
             DEFAULT_UNIFIED_SETTINGS.codexTurnsSurviveServerStop ? (
             <SettingResetButton
-              label="keep Codex turns running"
+              label={gt("keep Codex turns running")}
               onClick={() =>
                 updateSettings({
                   codexTurnsSurviveServerStop: DEFAULT_UNIFIED_SETTINGS.codexTurnsSurviveServerStop,
@@ -104,29 +109,29 @@ export function RestartContinuationSettings() {
             <SelectTrigger
               size="sm"
               className="w-full sm:w-64"
-              aria-label="Keep Codex turns running"
+              aria-label={gt("Keep Codex turns running")}
             >
               <SelectValue>
                 {(value: "off" | "restart" | "always" | null) =>
                   value === null
-                    ? "Mixed"
+                    ? gt("Mixed")
                     : value === "off"
-                      ? "Off"
+                      ? gt("Off")
                       : value === "restart"
-                        ? "Restarts and updates (default)"
-                        : "Also after quitting the app"
+                        ? gt("Restarts and updates (default)")
+                        : gt("Also after quitting the app")
                 }
               </SelectValue>
             </SelectTrigger>
             <SelectPopup align="end" alignItemWithTrigger={false}>
               <SelectItem hideIndicator value="off">
-                Off
+                {gt("Off")}
               </SelectItem>
               <SelectItem hideIndicator value="restart">
-                Restarts and updates (default)
+                {gt("Restarts and updates (default)")}
               </SelectItem>
               <SelectItem hideIndicator value="always">
-                Also after quitting the app
+                {gt("Also after quitting the app")}
               </SelectItem>
             </SelectPopup>
           </Select>
