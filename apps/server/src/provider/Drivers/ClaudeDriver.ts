@@ -1,3 +1,5 @@
+import * as Queue from "effect/Queue";
+import * as Stream from "effect/Stream";
 import * as AdapterInfrastructure from "../ProviderOrchestrationAdapterInfrastructure.ts";
 import * as Option from "effect/Option";
 import { ClaudeSettings, ProviderDriverKind } from "@goat/contracts";
@@ -69,6 +71,7 @@ import { makeClaudeMaintenanceResolution } from "./ClaudeMaintenance.ts";
 const decodeClaudeSettings = Schema.decodeSync(ClaudeSettings);
 
 const DRIVER_KIND = ProviderDriverKind.make("claudeAgent");
+const MAX_PENDING_CLAUDE_WORKSPACE_RESCANS = 128;
 const CAPABILITIES_PROBE_TTL = Duration.minutes(5);
 
 const withoutUsage = (capabilities: ClaudeCapabilitiesProbe): ClaudeCapabilitiesProbe => {
@@ -186,6 +189,8 @@ export const ClaudeDriver: ProviderDriver<ClaudeSettings, ClaudeDriverEnv, Path.
     const memoryAdmission = yield* Effect.serviceOption(
       AdapterInfrastructure.ProviderMemoryAdmission,
     );
+    const workspaceRescans = yield* Queue.dropping<string>(MAX_PENDING_CLAUDE_WORKSPACE_RESCANS);
+    yield* Effect.addFinalizer(() => Queue.shutdown(workspaceRescans));
     const orchestrationAdapter = yield* createClaudeAdapterV2(
       {
         instanceId,
@@ -198,6 +203,12 @@ export const ClaudeDriver: ProviderDriver<ClaudeSettings, ClaudeDriverEnv, Path.
       {
         scopedLimitNames,
         onUsageLimits: (update) => snapshot.applyUsageLimits(update),
+        onSessionInit: (cwd) =>
+          Queue.offer(workspaceRescans, cwd).pipe(
+            Effect.flatMap((accepted) =>
+              accepted ? Effect.void : Effect.logWarning("Claude workspace rescan queue is full."),
+            ),
+          ),
         ...(Option.isNone(memoryAdmission)
           ? {}
           : {
@@ -484,6 +495,7 @@ export const ClaudeDriver: ProviderDriver<ClaudeSettings, ClaudeDriverEnv, Path.
       snapshot,
       ...(auth ? { auth } : {}),
       invalidateCaches: Cache.invalidateAll(capabilitiesProbeCache),
+      workspaceRescans: Stream.fromQueue(workspaceRescans),
       snapshotForCwd: (cwd: string) =>
         snapshot.getSnapshot.pipe(
           Effect.flatMap((machineSnapshot) =>

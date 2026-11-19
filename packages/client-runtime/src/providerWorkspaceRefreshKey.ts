@@ -2,7 +2,7 @@ import type { ServerProvider } from "@goat/contracts";
 
 type CatalogSource = Pick<
   ServerProvider,
-  "catalogDigest" | "installed" | "version" | "installedVersion"
+  "catalogDigest" | "installed" | "version" | "installedVersion" | "workspaceRescannedAt"
 >;
 
 export function providerWorkspaceRefreshKey(
@@ -16,5 +16,6 @@ export function providerWorkspaceRefreshKey(
     installed,
     version,
     installedVersion,
+    workspaceRescannedAt: provider.workspaceRescannedAt,
   });
 }

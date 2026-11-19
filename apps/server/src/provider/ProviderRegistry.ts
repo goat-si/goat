@@ -1,3 +1,4 @@
+import { makeProviderWorkspaceRescanQueue } from "./ProviderWorkspaceRescanQueue.ts";
 import { correlateSnapshotWithSource } from "./ProviderSnapshotCorrelation.ts";
 import { ProviderRegistry } from "./ProviderRegistryService.ts";
 export { ProviderRegistry } from "./ProviderRegistryService.ts";
@@ -169,6 +170,7 @@ export const layer = Layer.effect(
         applyProviderMemoryRevocations(providers, Ref.getUnsafe(liveSubsRef)),
       ),
     );
+    const rescanQueue = yield* makeProviderWorkspaceRescanQueue;
     const syncSemaphore = yield* Semaphore.make(1);
     const watchers = makeProviderSnapshotWatchers(serviceScope);
     const isCurrentInstance = (instance: ProviderInstance) =>
@@ -187,6 +189,7 @@ export const layer = Layer.effect(
       }).pipe(Effect.provideService(Path.Path, path));
       const {
         workspaceSnapshots: _workspaceSnapshots,
+        workspaceRescannedAt: _workspaceRescannedAt,
         memoryGeneration: _memoryGeneration,
         ...machineProvider
       } = provider;
@@ -590,7 +593,11 @@ export const layer = Layer.effect(
             (previousProviders) => {
               const providers = previousProviders.map((provider) => {
                 if (!rebuiltInstanceIds.has(provider.instanceId)) return provider;
-                const { workspaceSnapshots: _workspaceSnapshots, ...machineSnapshot } = provider;
+                const {
+                  workspaceSnapshots: _workspaceSnapshots,
+                  workspaceRescannedAt: _workspaceRescannedAt,
+                  ...machineSnapshot
+                } = provider;
                 return machineSnapshot;
               });
               return [[previousProviders, providers] as const, providers];
@@ -606,10 +613,20 @@ export const layer = Layer.effect(
           const source = buildSnapshotSource(instance);
           yield* watchers.start(
             instance,
-            Stream.runForEach(source.streamChanges, (provider) =>
-              correlateSnapshotWithSource(source, provider).pipe(
-                Effect.flatMap((snapshot) => syncProvider(instance, snapshot)),
-              ),
+            Effect.all(
+              [
+                Stream.runForEach(source.streamChanges, (provider) =>
+                  correlateSnapshotWithSource(source, provider).pipe(
+                    Effect.flatMap((snapshot) => syncProvider(instance, snapshot)),
+                  ),
+                ),
+                instance.workspaceRescans === undefined
+                  ? Effect.void
+                  : Stream.runForEach(instance.workspaceRescans, (cwd) =>
+                      rescanQueue.offer(instance, cwd),
+                    ),
+              ],
+              { concurrency: 2, discard: true },
             ),
           );
         }
@@ -730,7 +747,19 @@ export const layer = Layer.effect(
       readonly cwd: string;
       readonly scanCwd?: string;
       readonly fresh?: boolean;
+      readonly rescan?: ProviderInstance;
     }) {
+      const before =
+        input.rescan === undefined
+          ? undefined
+          : (yield* getProviders)
+              .find((candidate) => candidate.instanceId === input.instanceId)
+              ?.workspaceSnapshots?.find((snapshot) => snapshot.cwd === input.cwd);
+      const running =
+        input.rescan === undefined
+          ? undefined
+          : (yield* Ref.get(workspaceRefreshesRef)).get(input.rescan)?.get(input.cwd);
+      if (running !== undefined) yield* Deferred.await(running);
       if (input.fresh) {
         yield* updateProviders((providers) =>
           providers.map((candidate) =>
@@ -750,6 +779,7 @@ export const layer = Layer.effect(
         !provider ||
         !provider.enabled ||
         (!input.fresh &&
+          input.rescan === undefined &&
           scannedFrom &&
           !isProviderWorkspaceSnapshotPending(scannedFrom) &&
           isProviderWorkspaceSnapshotCurrent(scannedFrom, DateTime.toEpochMillis(now)))
@@ -761,6 +791,11 @@ export const layer = Layer.effect(
       const instance = yield* instanceRegistry.getInstance(input.instanceId);
       const snapshotForCwd = instance?.snapshotForCwd;
       if (!instance || !snapshotForCwd) return providers;
+      if (
+        input.rescan !== undefined &&
+        (input.rescan !== instance || (running === undefined && scannedFrom === undefined))
+      )
+        return providers;
       const token = yield* Deferred.make<void>();
       // A machine refresh can change this cwd's snapshot, so the scan publishes against the result.
       const refreshMachineSnapshot = input.fresh
@@ -789,22 +824,57 @@ export const layer = Layer.effect(
                 if (Ref.getUnsafe(workspaceRefreshesRef).get(instance)?.get(input.cwd) !== token) {
                   return currentProviders;
                 }
-                return currentProviders.map((candidate) =>
-                  candidate.instanceId === input.instanceId &&
-                  sameWorkspaceCatalogBasis(scanBase, candidate) &&
-                  Equal.equals(workspaceSnapshotOf(candidate), workspaceSnapshotOf(scanBase))
-                    ? upsertProviderWorkspaceSnapshot(candidate, input.cwd, {
-                        ...scopedSnapshot,
-                        checkedAt: scannedAt,
-                        // Without driver command discovery, retain previous commands after failed health checks and retry.
-                        slashCommandsPending:
-                          scopedSnapshot.slashCommandsPending ?? scopedSnapshot.status === "error",
-                      })
-                    : candidate,
-                );
+                return currentProviders.map((candidate) => {
+                  if (
+                    candidate.instanceId !== input.instanceId ||
+                    !sameWorkspaceCatalogBasis(scanBase, candidate) ||
+                    !Equal.equals(workspaceSnapshotOf(candidate), workspaceSnapshotOf(scanBase))
+                  )
+                    return candidate;
+                  const scanned = upsertProviderWorkspaceSnapshot(candidate, input.cwd, {
+                    ...scopedSnapshot,
+                    checkedAt: scannedAt,
+                    slashCommandsPending:
+                      scopedSnapshot.slashCommandsPending ?? scopedSnapshot.status === "error",
+                  });
+                  const next = workspaceSnapshotOf(scanned);
+                  const previous = before ?? scannedFrom;
+                  return input.rescan !== undefined &&
+                    (!Equal.equals(next?.skills, previous?.skills) ||
+                      !Equal.equals(next?.slashCommands, previous?.slashCommands))
+                    ? { ...scanned, workspaceRescannedAt: scannedAt }
+                    : scanned;
+                });
               });
             }),
           ),
+        ),
+        Effect.catchCauseIf(
+          (cause) => input.rescan !== undefined && !Cause.hasInterruptsOnly(cause),
+          (cause) => {
+            return isCurrentInstance(instance).pipe(
+              Effect.flatMap((current) =>
+                current
+                  ? updateProviders((providers) => {
+                      if (
+                        Ref.getUnsafe(workspaceRefreshesRef).get(instance)?.get(input.cwd) !== token
+                      )
+                        return providers;
+                      return providers.map((provider) =>
+                        provider.instanceId === instance.instanceId
+                          ? {
+                              ...provider,
+                              status: "error",
+                              message: "Provider workspace rescan failed.",
+                            }
+                          : provider,
+                      );
+                    }).pipe(Effect.asVoid)
+                  : Effect.void,
+              ),
+              Effect.andThen(Effect.failCause(cause)),
+            );
+          },
         ),
         Effect.ensuring(
           Ref.update(workspaceRefreshesRef, (refreshes) => {
@@ -844,6 +914,22 @@ export const layer = Layer.effect(
       }
       return yield* Fiber.join(claim.scan);
     });
+
+    yield* rescanQueue
+      .run((instance, cwd) =>
+        refreshWorkspaceSnapshot({ instanceId: instance.instanceId, cwd, rescan: instance }).pipe(
+          Effect.asVoid,
+          Effect.catchCause((cause) =>
+            Cause.hasInterruptsOnly(cause)
+              ? Effect.interrupt
+              : Effect.logError("Provider workspace rescan failed.", {
+                  instanceId: instance.instanceId,
+                  cause: Cause.pretty(cause),
+                }),
+          ),
+        ),
+      )
+      .pipe(Effect.forkScoped);
 
     const invalidateModelCaches = Effect.fn("ProviderRegistry.invalidateModelCaches")(function* (
       input: Parameters<ProviderRegistry["Service"]["invalidateModelCaches"]>[0],

@@ -2319,6 +2319,7 @@ export interface ClaudeAdapterV2Options {
   readonly queryRunner: ClaudeAgentSdkQueryRunnerShape;
   readonly scopedLimitNames?: Ref.Ref<ClaudeScopedLimitNames>;
   readonly onUsageLimits?: ManagedServerProvider["applyUsageLimits"];
+  readonly onSessionInit?: (cwd: string) => Effect.Effect<void>;
   readonly continuationRequests?: ProviderContinuationRequests.ProviderContinuationOffer;
   readonly installationGate?: ProviderInstallationGate.ProviderInstallationGate["Service"];
 }
@@ -9194,11 +9195,13 @@ export const makeClaudeAdapterV2 = Effect.fn("makeClaudeAdapterV2")(function* (
             Stream.runForEach((message) =>
               sdkMessageLock.withPermits(1)(
                 Effect.suspend(() => {
+                  let firstInit = false;
                   if (
                     message.type === "system" &&
                     message.subtype === "init" &&
                     !context.receivedInit
                   ) {
+                    firstInit = true;
                     context.openedPermissionMode =
                       message.permissionMode ?? context.openedPermissionMode;
                     context.receivedInit = true;
@@ -9219,7 +9222,19 @@ export const makeClaudeAdapterV2 = Effect.fn("makeClaudeAdapterV2")(function* (
                   ) {
                     context.permissionMode = message.permissionMode;
                   }
-                  return handleSdkMessage({ query: querySession, message });
+                  const handled = handleSdkMessage({ query: querySession, message });
+                  const cwd = turnInput.runtimePolicy.cwd;
+                  const reportedCwd =
+                    message.type === "system" && message.subtype === "init"
+                      ? message.cwd
+                      : undefined;
+                  return firstInit &&
+                    cwd !== null &&
+                    (typeof reportedCwd !== "string" ||
+                      path.resolve(reportedCwd) === path.resolve(resolvedTurnCwd ?? cwd)) &&
+                    adapterOptions.onSessionInit !== undefined
+                    ? adapterOptions.onSessionInit(cwd).pipe(Effect.andThen(handled))
+                    : handled;
                 }),
               ),
             ),
@@ -10693,6 +10708,7 @@ export const createClaudeAdapterV2 = Effect.fn("ClaudeAdapterV2Driver.create")(
       ClaudeAdapterV2Options,
       | "scopedLimitNames"
       | "onUsageLimits"
+      | "onSessionInit"
       | "modelCatalog"
       | "mcpCredentialRotations"
       | "routeModelCatalog"

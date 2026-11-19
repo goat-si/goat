@@ -41,6 +41,7 @@ export const makeWakeHarnessWithOptions = (options?: {
   readonly freshQueueOnReopen?: boolean;
   readonly setPermissionMode?: ClaudeAdapterV2.ClaudeAgentSdkQuerySession["setPermissionMode"];
   readonly renameSession?: ClaudeAdapterV2.ClaudeAgentSdkQuerySession["renameSession"];
+  readonly onSessionInit?: (cwd: string) => Effect.Effect<void>;
   readonly forkSession?: ClaudeAdapterV2.ClaudeAgentSdkQueryRunnerShape["forkSession"];
   readonly allocateSessionId?: Effect.Effect<string>;
 }) =>
@@ -90,6 +91,7 @@ export const makeWakeHarnessWithOptions = (options?: {
     const adapter = yield* ClaudeAdapterV2.makeClaudeAdapterV2({
       instanceId: ClaudeAdapterV2.CLAUDE_DEFAULT_INSTANCE_ID,
       settings: options?.settings ?? DEFAULT_CLAUDE_SETTINGS,
+      ...(options?.onSessionInit === undefined ? {} : { onSessionInit: options.onSessionInit }),
       ...(options?.modelCatalog ? { modelCatalog: options.modelCatalog } : {}),
       environment: options?.environment ?? {},
       attachmentsDir,
