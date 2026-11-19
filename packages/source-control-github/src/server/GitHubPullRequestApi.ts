@@ -1,3 +1,4 @@
+import { isGraphQlClientError } from "./gitHubGraphQlClientError.ts";
 import type { PullRequestDiffInput, PullRequestSubmitReviewInput } from "@goat/contracts";
 import {
   decodeWith,
@@ -302,9 +303,6 @@ export type GitHubPullRequestApiError =
   | SourceControlRateLimit.SourceControlRateLimitPausedError
   | GitHubViewerLoginUnavailableError
   | GitHubPullRequestUpdatedAtUnavailableError;
-
-const isGraphQlClientError = (error: unknown): error is GraphQLClientError.GraphQLClientError =>
-  GraphQLClientError.isGraphQLClientError(error);
 
 const { isNotFoundOnly } = GitHubGraphQlClient;
 
