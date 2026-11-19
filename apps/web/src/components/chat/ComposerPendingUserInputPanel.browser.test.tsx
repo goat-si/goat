@@ -101,3 +101,31 @@ it.each<{ focus: string; control: ReactNode; toggles: boolean }>([
     expect(onToggleOption.mock.calls).toEqual(toggles ? [["question", "Incremental"]] : []);
   },
 );
+
+it("does not answer when the focused device already consumed a digit", async () => {
+  const onToggleOption = vi.fn();
+  await using screen = await render(
+    <>
+      <div
+        role="application"
+        aria-label="Device"
+        tabIndex={0}
+        onKeyDown={(event) => event.preventDefault()}
+      />
+      <ComposerPendingUserInputPanel
+        pendingUserInputs={[prompt]}
+        cwd={undefined}
+        threadRef={threadRef}
+        respondingRequestIds={[]}
+        answers={{}}
+        questionIndex={0}
+        onToggleOption={onToggleOption}
+        onAdvance={vi.fn()}
+        onDismiss={vi.fn()}
+      />
+    </>,
+  );
+  screen.getByLabelText("Device").element().focus();
+  await userEvent.keyboard("1");
+  expect(onToggleOption).not.toHaveBeenCalled();
+});
