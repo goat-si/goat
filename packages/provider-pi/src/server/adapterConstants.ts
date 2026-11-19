@@ -7,3 +7,4 @@ export const MAX_EXTENSION_STATUS_TEXT_LENGTH = 4096;
 export const PI_UNSOLICITED_ACTIVITY_ERROR =
   "Pi started agent work outside an active GOAT turn. The session was stopped to prevent invisible tool execution.";
 export const SETTLE_PROBE_MAX_ATTEMPTS = 3;
+export const SETTLE_PROBE_RETRY_MS = 100;

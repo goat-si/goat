@@ -102,7 +102,6 @@ import { PI_STANDARD_SERVICE_TIER } from "./serviceTierCapabilities.ts";
 export const PI_PROVIDER = ProviderDriverKind.make("pi");
 // Inherit Pi's configured defaultProvider/defaultModel without calling set_model.
 const PI_INHERIT_MODEL_SLUG = "default";
-const SETTLE_PROBE_RETRY_DELAY = Duration.millis(100);
 export interface PiAdapterV2Options {
   readonly instanceId: ProviderInstanceId;
   readonly profile?: PiRuntimeProfile;
@@ -2195,7 +2194,7 @@ export const makePiAdapterV2 = Effect.fn("makePiAdapterV2")(function* (
                 return;
               }
               if (attempt < PiConstants.SETTLE_PROBE_MAX_ATTEMPTS) {
-                yield* Effect.sleep(SETTLE_PROBE_RETRY_DELAY).pipe(
+                yield* Effect.sleep(Duration.millis(PiConstants.SETTLE_PROBE_RETRY_MS)).pipe(
                   Effect.andThen(scheduleSettleProbe(turn, true, attempt + 1)),
                   Effect.forkIn(scope),
                 );
