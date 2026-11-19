@@ -1,4 +1,8 @@
-import { scopeThreadRef, scopedThreadKey } from "@goat/client-runtime/environment";
+import {
+  parseScopedThreadKey,
+  scopeThreadRef,
+  scopedThreadKey,
+} from "@goat/client-runtime/environment";
 import { foldLaunchedThreads } from "@goat/client-runtime/state/launch-fold";
 import { isRemoteDelegatedChild } from "@goat/shared/threadLaunchState";
 import {
@@ -605,6 +609,12 @@ export function startThreadNotifications(
 
   const pruneRemovedEnvironments = () => {
     const activeIds = new Set(registry.get(environmentSummaries.environmentIdsAtom));
+    for (const [id, key] of toasts) {
+      const threadRef = parseScopedThreadKey(key);
+      if (threadRef === null || activeIds.has(threadRef.environmentId)) continue;
+      toasts.delete(id);
+      toastManager.close(id);
+    }
     const count = pending.size;
     for (const [tag, entry] of pending) {
       if (activeIds.has(entry.environmentId)) continue;
