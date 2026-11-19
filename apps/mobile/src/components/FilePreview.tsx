@@ -7,7 +7,7 @@ import { useSafeAreaInsets } from "react-native-safe-area-context";
 
 import { openAttachmentInViewer } from "../lib/attachmentDownload";
 import { useMediaActions } from "../state/mediaActions";
-import type { ResolvedFilePreviewSource } from "./FilePreviewModal.types";
+import type { FilePreviewViewerProps, ResolvedFilePreviewSource } from "./FilePreviewModal.types";
 import { MediaImagePreview } from "./MediaImagePreview";
 import { PdfPreview } from "./PdfPreview";
 import { ControlPill } from "./ui/ControlPill";
@@ -105,23 +105,20 @@ function DocumentPreview(props: {
   );
 }
 
-export function FilePreview(props: {
-  readonly source: ResolvedFilePreviewSource;
-  readonly onRequestClose: () => void;
-  readonly onOpenError?: (error: unknown) => void;
-}) {
-  if (props.source.kind === "pdf") return <PdfDocumentPreview {...props} />;
-  if (props.source.kind !== "image") return <DocumentPreview {...props} />;
-  if (props.source.actionsSource) return <MediaImagePreview {...props} />;
+export function supportsProgressiveFilePreview() {
+  return false;
+}
+
+export function FilePreview(props: FilePreviewViewerProps) {
+  const { source } = props;
+  if ("images" in source) return null;
+  if (source.kind === "pdf") return <PdfDocumentPreview {...props} source={source} />;
+  if (source.kind !== "image") return <DocumentPreview {...props} source={source} />;
+  if (source.actionsSource) return <MediaImagePreview {...props} source={source} />;
   return (
     <ImageViewing
-      images={
-        props.source.gallery?.map((item) => ({ uri: item.uri })) ?? [{ uri: props.source.uri }]
-      }
-      imageIndex={Math.max(
-        0,
-        props.source.gallery?.findIndex((item) => item.uri === props.source.uri) ?? 0,
-      )}
+      images={source.gallery?.map((item) => ({ uri: item.uri })) ?? [{ uri: source.uri }]}
+      imageIndex={Math.max(0, source.gallery?.findIndex((item) => item.uri === source.uri) ?? 0)}
       visible
       onRequestClose={props.onRequestClose}
       swipeToCloseEnabled={false}

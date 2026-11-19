@@ -49,6 +49,15 @@ describe("resolveMediaSource", () => {
       });
     });
 
+    it("names a data URI by its kind, not its payload", () => {
+      const href =
+        "data:image/svg+xml;base64,PHN2ZyB4bWxucz0iaHR0cDovL3d3dy53My5vcmcvMjAwMC9zdmciLz4=";
+      expect(resolveMediaSource(href, { threadId, imageEmbed: true })).toMatchObject({
+        kind: "image",
+        name: "image",
+      });
+    });
+
     it("loads a remote environment's localhost media from the environment's address (regression: loaded this device's localhost)", () => {
       const href = "http://localhost:5173/shot.png";
       expect(
