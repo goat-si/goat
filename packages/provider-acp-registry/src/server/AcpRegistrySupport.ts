@@ -239,6 +239,16 @@ function packageCommandCandidates(
   );
 }
 
+function withoutNpmPrefix(
+  environment: NodeJS.ProcessEnv,
+  platform: NodeJS.Platform,
+): NodeJS.ProcessEnv {
+  if (platform !== "win32") return environment;
+  return Object.fromEntries(
+    Object.entries(environment).filter(([key]) => key.toLowerCase() !== "npm_config_prefix"),
+  );
+}
+
 export const acpRegistryManagedBinaryDirectories = Effect.fn("acpRegistryManagedBinaryDirectories")(
   function* (input: {
     readonly cacheDir: string;
@@ -1098,7 +1108,7 @@ export const makeAcpRegistryCatalog = Effect.fn("AcpRegistryCatalog.make")(funct
     );
     const packageEnvironment =
       distribution === "npx"
-        ? { ...environment, npm_config_prefix: packageRoot }
+        ? { ...withoutNpmPrefix(environment, platform), npm_config_prefix: packageRoot }
         : {
             ...environment,
             UV_TOOL_DIR: packageRoot,
