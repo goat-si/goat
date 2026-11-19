@@ -248,6 +248,7 @@ export interface AcpAdapterV2Flavor {
   readonly preferResumeSession?: boolean;
   readonly onSessionEvent?: (
     event: AcpSessionRuntime.AcpSessionRuntimeEvent,
+    cwd: string,
   ) => Effect.Effect<void>;
   readonly subagentsIdleOnTurnCompletion?: boolean;
   readonly supportsCompaction?: boolean;

@@ -525,16 +525,12 @@ export const AntigravityDriver: ProviderDriver<
       profileDirectory,
       onSessionStarted: (started, cwd) =>
         provider.onSessionStarted(started, cwd, startedProfiles.get(started)),
-      onSessionEvent: (event) => {
+      onSessionEvent: (event, cwd) => {
         if (event._tag === "ConfigOptionsUpdated") {
           return provider.onConfigOptionsUpdated(event.configOptions, eventProfiles.get(event));
         }
         return event._tag === "AvailableCommandsUpdated"
-          ? provider.onAvailableCommands(
-              event.availableCommands,
-              undefined,
-              eventProfiles.get(event),
-            )
+          ? provider.onAvailableCommands(event.availableCommands, cwd, eventProfiles.get(event))
           : Effect.void;
       },
       continuationRequests,
