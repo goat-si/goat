@@ -1,3 +1,4 @@
+import { compactRpcRecord, itemOrdinal, compactionNativeItemId } from "./turnHelpers.ts";
 import { piViewedImagePath } from "./viewedImagePath.ts";
 import { tokenUsageFromStats } from "./tokenUsage.ts";
 import { nonNegativeInteger, rememberPiModelContextWindow } from "./modelContextWindow.ts";
@@ -73,7 +74,7 @@ import { mcpToolPresentation } from "@goat/provider-core/server/mcpToolPresentat
 import * as McpProviderSessions from "@goat/provider-core/server/McpProviderSessions";
 import { openPiTurnGates, writePiTurnGates } from "./turnGates.ts";
 import * as Scope from "effect/Scope";
-import { parsePiCompactCommand, type PiCompactCommand } from "./commands.ts";
+import { parsePiCompactCommand } from "./commands.ts";
 import { mergeProviderInstanceEnvironment } from "@goat/provider-core/server/instanceEnvironment";
 import * as IdAllocator from "@goat/provider-core/server/IdAllocator";
 import * as ProviderAdapter from "@goat/provider-core/server/ProviderAdapter";
@@ -345,11 +346,6 @@ export const makePiAdapterV2 = Effect.fn("makePiAdapterV2")(function* (
       // racing it would see Pi idle. Its ack re-arms the probe instead.
       let releasedPromptTurnId: OrchestrationV2ProviderTurn["id"] | null = null;
 
-      const compactRpcRecord = (command: PiCompactCommand): PiRpcRecord =>
-        command.customInstructions === undefined
-          ? { type: "compact" }
-          : { type: "compact", customInstructions: command.customInstructions };
-
       const emit = (event: ProviderAdapter.ProviderAdapterV2Event) =>
         Queue.offer(events, event).pipe(Effect.asVoid);
 
@@ -463,14 +459,6 @@ export const makePiAdapterV2 = Effect.fn("makePiAdapterV2")(function* (
             ...(retainedNativeTurnIds === undefined ? {} : { retainedNativeTurnIds }),
           });
         });
-
-      const itemOrdinal = (turn: ActivePiTurn, nativeItemId: string): number => {
-        const existing = turn.itemOrdinals.get(nativeItemId);
-        if (existing !== undefined) return existing;
-        const ordinal = turn.nextItemOrdinal++;
-        turn.itemOrdinals.set(nativeItemId, ordinal);
-        return ordinal;
-      };
 
       const activation = yield* makeActivationRecovery({
         initial: started,
@@ -709,9 +697,6 @@ export const makePiAdapterV2 = Effect.fn("makePiAdapterV2")(function* (
           }),
         });
       });
-
-      const compactionNativeItemId = (turn: ActivePiTurn): string =>
-        `compaction:${turn.providerTurn.id}:${turn.nextItemOrdinal}`;
 
       const emitCompaction = Effect.fnUntraced(function* (
         turn: ActivePiTurn,
