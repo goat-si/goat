@@ -1,3 +1,4 @@
+import { makeAsyncSubagents } from "./asyncSubagents.ts";
 import type {
   PiStreamItemState,
   ActivePiTurn,
@@ -40,6 +41,7 @@ import {
   type OrchestrationV2RuntimeRequest,
   type OrchestrationV2TurnItem,
   type ProviderInstanceId,
+  type MessageId,
   type OrchestrationV2ProviderTurnTokenUsage,
 } from "@goat/contracts";
 import { PiSettings } from "../settings.ts";
@@ -1054,7 +1056,7 @@ export const makePiAdapterV2 = Effect.fn("makePiAdapterV2")(function* (
           const agent = recordString(result, "agent");
           const task = recordString(result, "task");
           if (agent === undefined || task === undefined) continue;
-          const nativeTaskId = `${toolCallId}:subagent:${recordNumber(result, "step") ?? index}`;
+          const nativeTaskId = `${toolCallId}:subagent:${recordString(result, "asyncMemberId") ?? recordNumber(result, "step") ?? index}`;
           const subagentId = idAllocator.derive.nodeFromProviderItem({
             driver,
             nativeItemId: nativeTaskId,
@@ -1068,13 +1070,22 @@ export const makePiAdapterV2 = Effect.fn("makePiAdapterV2")(function* (
             finished &&
             !interrupted &&
             ((recordNumber(result, "exitCode") ?? 0) !== 0 || stopReason === "error");
-          const status = interrupted
-            ? "interrupted"
-            : failed
-              ? "failed"
-              : finished
-                ? "completed"
-                : "running";
+          const asyncStatus = recordString(result, "asyncStatus");
+          const status =
+            asyncStatus === "pending" ||
+            asyncStatus === "waiting" ||
+            asyncStatus === "running" ||
+            asyncStatus === "completed" ||
+            asyncStatus === "failed" ||
+            asyncStatus === "interrupted"
+              ? asyncStatus
+              : interrupted
+                ? "interrupted"
+                : failed
+                  ? "failed"
+                  : finished
+                    ? "completed"
+                    : "running";
           const outputText = piSubagentOutput(result);
           const progress =
             !finished && outputText.length > 0 ? { progress: outputText.slice(0, 200) } : {};
@@ -1125,6 +1136,39 @@ export const makePiAdapterV2 = Effect.fn("makePiAdapterV2")(function* (
             },
           });
         }
+        const asyncId = recordString(recordField(resultRecord, "details"), "asyncId");
+        if (results.length === 0 && asyncId !== undefined)
+          yield* asyncSubagents.track(asyncId, turn, toolCallId);
+      });
+
+      const asyncSubagents = makeAsyncSubagents({
+        member: (turn, toolCallId, member) =>
+          emitSubagentTasks(
+            turn,
+            toolCallId,
+            {
+              details: {
+                results: [
+                  {
+                    agent: member.agent,
+                    task: "",
+                    model: member.model,
+                    asyncMemberId: member.id,
+                    asyncStatus: member.status,
+                    finished: !["pending", "waiting", "running"].includes(member.status),
+                  },
+                ],
+              },
+            },
+            false,
+          ),
+        pending: (turn, pending) =>
+          emit({
+            type: "background_work.updated",
+            driver,
+            providerTurnId: turn.providerTurn.id,
+            pending,
+          }),
       });
 
       const cancelPrompt = Effect.fn("PiAdapter.cancelPrompt")(function* (
@@ -1236,6 +1280,10 @@ export const makePiAdapterV2 = Effect.fn("makePiAdapterV2")(function* (
         const method = recordString(event, "method");
         const nativeRequestId = recordString(event, "id");
         if (method === undefined) return;
+        if (method === "setWidget" && event["widgetKey"] === "subagent-async") {
+          yield* asyncSubagents.snapshot(event["widgetLines"]);
+          return;
+        }
         if (method === "notify") {
           const state = threadState;
           const turn = state?.activeTurn ?? null;
@@ -1655,6 +1703,14 @@ export const makePiAdapterV2 = Effect.fn("makePiAdapterV2")(function* (
             yield* clearExtensionStatuses();
             yield* Deferred.succeed(reset.ready, undefined);
           }
+          return;
+        }
+        if (
+          event["type"] === "extension_ui_request" &&
+          event["method"] === "setWidget" &&
+          event["widgetKey"] === "subagent-async"
+        ) {
+          yield* asyncSubagents.snapshot(event["widgetLines"]);
           return;
         }
         // A native wake may wait for a turn owner; status belongs to the live session immediately.
@@ -2242,6 +2298,7 @@ export const makePiAdapterV2 = Effect.fn("makePiAdapterV2")(function* (
           sessionEventPermit.withPermits(1)(
             Effect.gen(function* () {
               runtimeRetired = true;
+              yield* asyncSubagents.clear();
               const state = threadState;
               closed = true;
               if (pendingPromptResponsesDrained !== null)
@@ -2898,6 +2955,7 @@ export const makePiAdapterV2 = Effect.fn("makePiAdapterV2")(function* (
               return yield* protocolError(`Pi turn ${interruptInput.providerTurnId} is not active`);
             }
             turn.interrupted = true;
+            yield* sessionEventPermit.withPermits(1)(asyncSubagents.clear(turn));
             if (
               interruptInput.requestRuntimeRestart === true ||
               turn.settleWhenIdle ||
