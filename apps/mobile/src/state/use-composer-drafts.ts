@@ -1,3 +1,4 @@
+import { caretAfterInsertion, mapCapturedRange } from "./composerDraftInsertion";
 import { sameDraftAttachmentIds } from "./composerDraftAttachmentIds";
 import { deduplicateComposerAttachments } from "./composerAttachmentDedup";
 import { useAtomValue } from "@effect/atom-react";
@@ -127,11 +128,8 @@ function contextInsertionRange(
   draft: ComposerDraft,
   target?: ComposerDraftInsertion,
 ) {
-  // Append after text edits during writes; caret-only moves preserve the captured insertion range.
   const selection = target
-    ? target.text === draft.text
-      ? target
-      : null
+    ? mapCapturedRange(target, draft.text)
     : readComposerDraftSelection(draftKey, draft.text);
   const start = Math.max(0, Math.min(selection?.start ?? draft.text.length, draft.text.length));
   return { start, end: Math.max(start, Math.min(selection?.end ?? start, draft.text.length)) };
@@ -303,10 +301,11 @@ function draftWithInsertedContext(
   for (const record of content.context.records) records.set(record.contextId, record);
   const context = referencedComposerContext(text, { version: 1, records: [...records.values()] });
   if ((context?.records.length ?? 0) > COMPOSER_CONTEXT_MAX_RECORDS) return null;
-  rememberComposerDraftSelection(draftKey, text, {
-    start: start + insertion.length,
-    end: start + insertion.length,
-  });
+  rememberComposerDraftSelection(
+    draftKey,
+    text,
+    caretAfterInsertion(draftKey, draft.text, { start, end }, insertion.length),
+  );
   return withReferencedContextFiles(draft, text, context);
 }
 
@@ -1251,11 +1250,9 @@ export function insertComposerDraftText(
   const draft = getComposerDraftSnapshot(draftKey);
   const { start, end } = contextInsertionRange(draftKey, draft, target);
   const text = draft.text.slice(0, start) + value + draft.text.slice(end);
+  const caret = caretAfterInsertion(draftKey, draft.text, { start, end }, value.length);
   setComposerDraftText(draftKey, text);
-  rememberComposerDraftSelection(draftKey, text, {
-    start: start + value.length,
-    end: start + value.length,
-  });
+  rememberComposerDraftSelection(draftKey, text, caret);
 }
 
 export function appendComposerDraftText(draftKey: string, value: string): void {
