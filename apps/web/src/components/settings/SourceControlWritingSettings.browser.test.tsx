@@ -172,7 +172,7 @@ it.each(["API writer fallback", "saved text generation model"])(
   },
 );
 
-it("shows the eligible guide route and excludes Pi from the guide picker", async () => {
+it("shows the eligible Pi guide route and keeps Codex in the guide picker", async () => {
   const codex = provider({ instanceId: "codex", models: ["gpt-6-luna", "gpt-6-astra"] });
   const pi = provider({
     instanceId: "pi",
@@ -190,15 +190,12 @@ it("shows the eligible guide route and excludes Pi from the guide picker", async
   };
   await using _screen = await render(content());
   const trigger = page.getByRole("button", { name: "Review guide model", exact: true });
-  await expect.element(trigger).toHaveTextContent("gpt-6-luna");
+  await expect.element(trigger).toHaveTextContent("pi-only-model");
   await trigger.click();
+  await expect.element(page.getByRole("option", { name: /pi-only-model/i })).toBeVisible();
+  await expect.element(page.getByRole("button", { name: "Pi", exact: true })).toBeVisible();
+  await page.getByRole("button", { name: "Codex", exact: true }).click();
   await expect.element(page.getByRole("option", { name: /astra/i })).toBeVisible();
-  await expect
-    .element(page.getByRole("option", { name: /pi-only-model/i }))
-    .not.toBeInTheDocument();
-  await expect
-    .element(page.getByRole("button", { name: "Pi", exact: true }))
-    .not.toBeInTheDocument();
 });
 
 it("copies the hidden Codex route when enabling a separate guide model with an API writer", async () => {

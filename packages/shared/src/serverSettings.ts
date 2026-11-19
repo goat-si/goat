@@ -30,7 +30,6 @@ export {
   configuredMemoryModelSelection,
   fallbackTextGenerationModelSelection,
   isModelSelectionProviderEnabled,
-  isReviewGuideDriver,
   isTextGenerationEligible,
   type MemoryGenerationOperation,
   resolveMemoryModelSelection,

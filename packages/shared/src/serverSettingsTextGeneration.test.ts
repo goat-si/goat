@@ -22,6 +22,8 @@ it("uses Big Pickle when only OpenCode is enabled", () => {
 });
 
 const pi = ProviderInstanceId.make("pi");
+const checkedAt = "2026-11-17T00:00:00.000Z";
+const now = Date.parse(checkedAt);
 const extensionModel = createModelSelection(pi, "demo/demo-model");
 const settings = {
   ...DEFAULT_SERVER_SETTINGS,
@@ -39,7 +41,7 @@ const piProvider = (model: Partial<ServerProviderModel>) =>
     version: "0.84.3",
     status: "ready",
     auth: { status: "authenticated" },
-    checkedAt: "2026-11-17T00:00:00.000Z",
+    checkedAt,
     models: [
       { slug: "demo/demo-model", name: "Demo", isCustom: false, capabilities: null, ...model },
     ],
@@ -68,20 +70,24 @@ it("memory fallback from a standalone generator picks OmO's default instead of g
   const providers = [
     { ...piProvider({ slug: "default", name: "OmO default" }), instanceId: omo, driver },
   ];
-  expect(resolveMemoryModelSelection(onlyOmo, providers)).toEqual({
+  expect(resolveMemoryModelSelection(onlyOmo, providers, now)).toEqual({
     instanceId: omo,
     model: "default",
   });
-  expect(resolveReviewGuideModelSelection(onlyOmo, providers, null)).toEqual(selection);
+  expect(resolveReviewGuideModelSelection(onlyOmo, providers, null, now)).toEqual(selection);
 });
 
 it.each([
   ["writer", resolveSourceControlWriterModelSelection],
-  ["review guide", resolveReviewGuideModelSelection],
+  [
+    "review guide",
+    (input: typeof settings, providers: ReadonlyArray<ServerProvider>) =>
+      resolveReviewGuideModelSelection(input, providers, null, now),
+  ],
   [
     "memory",
     (input: typeof settings, providers: ReadonlyArray<ServerProvider>) =>
-      resolveMemoryModelSelection(input, providers),
+      resolveMemoryModelSelection(input, providers, now),
   ],
 ] as const)(
   "the %s selection skips a model its provider cannot use for text generation, and keeps it when an older server omits the flag",

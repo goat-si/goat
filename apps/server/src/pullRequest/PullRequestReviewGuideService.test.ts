@@ -394,9 +394,9 @@ const startSingleBranchRun = (input: {
 
 it.layer(layerBase, { excludeTestServices: true })("PullRequestReviewGuideService", (it) => {
   it.effect.each([
-    { providers: [pi, codex], expected: DEFAULT_SERVER_SETTINGS.textGenerationModelSelection },
-    { providers: [pi], expected: null },
-  ])("guide generation agrees with Settings for explicit Pi with expected route $expected", (row) =>
+    { providers: [pi, codex], availability: "with Codex available" },
+    { providers: [pi], availability: "with only Pi available" },
+  ])("guide generation agrees with Settings for explicit Pi $availability", (row) =>
     Effect.scoped(
       Effect.gen(function* () {
         const repositories = yield* makeRepositories;
@@ -439,9 +439,9 @@ it.layer(layerBase, { excludeTestServices: true })("PullRequestReviewGuideServic
             error: outcome.run?._tag === "Failed" ? outcome.run.detail : null,
           },
           {
-            shown: row.expected,
-            dispatched: row.expected === null ? [] : [row.expected],
-            error: row.expected === null ? "route_unavailable" : null,
+            shown: piSelection,
+            dispatched: [piSelection],
+            error: null,
           },
         );
       }),

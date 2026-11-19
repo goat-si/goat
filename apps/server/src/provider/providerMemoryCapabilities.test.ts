@@ -34,8 +34,8 @@ import { readProviderGenerationSnapshot } from "./providerGenerationSnapshot.ts"
 import * as ResetCreditCoordinator from "./resetCreditCoordinator.ts";
 
 const cases = [
-  { driver: "pi", config: {}, reason: "unsupported_operation" },
-  { driver: "omo", config: {}, reason: "unsupported_operation" },
+  { driver: "pi", config: {}, reason: "unsupported_operation", acceptsLegacySnapshot: true },
+  { driver: "omo", config: {}, reason: "unsupported_operation", acceptsLegacySnapshot: true },
   { driver: "muse", config: {}, reason: "unsupported_operation" },
   { driver: "fx", config: {}, reason: "unsupported_operation" },
   { driver: "acpRegistry", config: { source: "local" }, reason: "unsupported_operation" },
@@ -153,8 +153,15 @@ it.layer(layer)("memory capabilities of registered provider wrappers", (it) => {
       const generation = yield* Effect.flip(instance.textGeneration.generateMemorySummary(summary));
       assert.deepEqual(published.memoryGeneration, { summary: false, conflict: false });
       const { memoryGeneration: _, ...legacy } = published;
-      assert.equal(supportsMemoryGeneration({ providerInstances }, legacy, "conflict"), false);
-      assert.equal(supportsMemoryGeneration({ providerInstances }, legacy, "summary"), false);
+      const acceptsLegacySnapshot = "acceptsLegacySnapshot" in row && row.acceptsLegacySnapshot;
+      assert.equal(
+        supportsMemoryGeneration({ providerInstances }, legacy, "conflict"),
+        acceptsLegacySnapshot,
+      );
+      assert.equal(
+        supportsMemoryGeneration({ providerInstances }, legacy, "summary"),
+        acceptsLegacySnapshot,
+      );
       assert.propertyVal(resolution.cause, "code", row.reason);
       assert.propertyVal(generation.cause, "code", row.reason);
       if ("instance" in row) assert.equal(published.homeRoute?.modelRoute, "opencodex");

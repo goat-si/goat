@@ -226,7 +226,7 @@ export function resolveSourceControlWriterModelSelection(
     : settings.textGenerationModelSelection;
 }
 
-export const isReviewGuideDriver = (driver: ProviderDriverKind): boolean =>
+const isReviewGuideDriver = (driver: ProviderDriverKind): boolean =>
   driver === "codex" || driver === "claudeAgent";
 
 export type MemoryGenerationOperation = "summary" | "conflict";
@@ -396,11 +396,10 @@ export function configuredMemoryModelSelection(settings: ServerSettings): ModelS
 export function resolveMemoryModelSelection(
   settings: ServerSettings,
   providers: ReadonlyArray<ServerProvider> | undefined,
-  timestamp: number | null = null,
+  now: number,
   operation: MemoryGenerationOperation = "summary",
 ): ModelSelection | null {
   if (providers === undefined) return configuredMemoryModelSelection(settings);
-  const now = timestamp ?? Date.now();
   const fallback = settings.textGenerationModelSelection;
   const resolve = (candidates: ReadonlyArray<ServerProvider>) =>
     eligiblePrimary(settings, settings.memoryModelSelection, candidates, {
@@ -429,7 +428,7 @@ export function resolveReviewGuideModelSelection(
   settings: ServerSettings,
   providers: ReadonlyArray<ServerProvider> | undefined,
   projectId: ProjectId | null,
-  now = Date.now(),
+  now: number,
 ): ModelSelection | null {
   const writer = resolveSourceControlWriterModelSelection(settings, providers, projectId);
   const generator = textGenerator(settings, writer.instanceId);
