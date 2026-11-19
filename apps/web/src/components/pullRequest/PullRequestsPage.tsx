@@ -56,6 +56,8 @@ import {
   type PullRequestListPreferencePatch,
   writePullRequestListPreferences,
 } from "./pullRequestListPreferences";
+import { PullRequestSavedViewsMenu } from "./PullRequestSavedViewsMenu";
+import { pullRequestSavedViewPatch } from "./pullRequestSavedViews";
 import { environmentMachineIcon } from "../EnvironmentMachineIcon";
 import { PullRequestDetailPanel } from "./PullRequestDetailPanel";
 import {
@@ -237,7 +239,6 @@ export function PullRequestsPage() {
       },
       replace: true,
     });
-
   const clearedSelection = {
     repository: undefined,
     number: undefined,
@@ -255,7 +256,6 @@ export function PullRequestsPage() {
     writePullRequestListPreferences(currentPreferences);
     updateSearch(patch);
   };
-
   const turnRefreshes = usePullRequestTurnRefreshes([
     ...new Set(environmentQueries.map(({ environmentId }) => environmentId)),
   ]);
@@ -284,11 +284,9 @@ export function PullRequestsPage() {
   const pageSize = page.key === filterKey ? page.size : PAGE_SIZE;
   const sentCursors = page.key === filterKey ? page.cursors : null;
   const sentRegrown = page.key === filterKey ? page.regrown : [];
-
   if (page.key !== filterKey) {
     setPage({ key: filterKey, size: PAGE_SIZE, cursors: null, regrown: [] });
   }
-
   const listTargetsFor = (queries: typeof environmentQueries) =>
     pullRequestListTargets(
       queries,
@@ -304,7 +302,6 @@ export function PullRequestsPage() {
     );
   const listTargets = listTargetsFor(environmentQueries);
   const listQuery = usePullRequestHostList(listTargets);
-
   /**
    * Kept as its own read rather than remembered from an earlier answer because an answer cannot
    * say which question it belongs to: mid-switch the text has already changed and the data has
@@ -376,7 +373,6 @@ export function PullRequestsPage() {
   const [detailRefreshToken, setDetailRefreshToken] = useState(0);
   const [invalidating, setInvalidating] = useState(false);
   const refreshing = invalidating || listQuery.isPending;
-
   const [loaded, setLoaded] = useState<{
     environmentKey: string;
     scope: string;
@@ -519,7 +515,6 @@ export function PullRequestsPage() {
   const showingCarried = answered === null && carried !== null;
   const loadingMore = listQuery.isPending && listData !== null;
   const firstLoad = listQuery.isPending && listData === null;
-
   if (
     answered !== null &&
     !listQuery.isPending &&
@@ -556,7 +551,6 @@ export function PullRequestsPage() {
       settlePullRequestOverrides(current, answeredEntries, pullRequestEntryKey, Date.now()),
     );
   }
-
   // From this question's own answer, never from the rows being held while it travels: a
   // continuation is a boundary in one listing, and carrying one across a search would ask the new
   // question to start where the old one stopped — skipping its newest matches entirely.
@@ -1290,6 +1284,12 @@ export function PullRequestsPage() {
     searchInput,
     sortMenu,
     filtersMenu,
+    savedViewsMenu: (
+      <PullRequestSavedViewsMenu
+        preferences={search}
+        onApply={(preferences) => updateListScope(pullRequestSavedViewPatch(preferences))}
+      />
+    ),
     rightPanelControl: !pullRequestsSupported ? null : (
       <span
         aria-hidden
