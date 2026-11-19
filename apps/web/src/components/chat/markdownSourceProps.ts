@@ -10,12 +10,13 @@ export interface MarkdownSourceProps {
   cache: boolean;
 }
 
-// Cache only controls storing a new parse, so an unchanged block keeps its render.
+// Completion must reach the commit effect even when the source text is unchanged.
 export const sameMarkdownSource = (previous: MarkdownSourceProps, next: MarkdownSourceProps) =>
   previous.text === next.text &&
   previous.remarkPlugins === next.remarkPlugins &&
   previous.rehypePlugins === next.rehypePlugins &&
-  previous.shared === next.shared;
+  previous.shared === next.shared &&
+  previous.cache === next.cache;
 
 const combinedPlugins = new WeakMap<PluggableList, WeakMap<PluggableList, PluggableList>>();
 
