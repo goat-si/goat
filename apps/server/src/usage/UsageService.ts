@@ -193,8 +193,9 @@ export const make = Effect.gen(function* () {
     const now = yield* Clock.currentTimeMillis;
     const maxAgeMs = force ? RATES_REFRESH_FLOOR_MS : RATES_TTL_MS;
     yield* loadSavedRates;
-    if (ratesFetchedAtMs !== null && now - ratesFetchedAtMs < maxAgeMs) return;
-    if (ratesLastFailedAtMs !== null && now - ratesLastFailedAtMs < RATES_REFRESH_FLOOR_MS) return;
+    if (ratesFetchedAtMs !== null && now - ratesFetchedAtMs < maxAgeMs) return false;
+    if (ratesLastFailedAtMs !== null && now - ratesLastFailedAtMs < RATES_REFRESH_FLOOR_MS)
+      return false;
 
     let fetched = yield* fetchRates(LITELLM_RATES_URL);
     if (fetched === null) {
@@ -203,7 +204,7 @@ export const make = Effect.gen(function* () {
     if (fetched === null) {
       ratesLastFailedAtMs = yield* Clock.currentTimeMillis;
       if (rates.size > 0) ratesStatus = "cached";
-      return;
+      return false;
     }
 
     checkedRateModels.clear();
@@ -216,6 +217,7 @@ export const make = Effect.gen(function* () {
       Effect.flatMap((contents) => writeCacheFile(ratesCachePath, contents)),
       Effect.ignoreCause,
     );
+    return true;
   });
 
   const ensureRates = (force: boolean) => ratesLock.withPermit(loadRates(force));
@@ -227,9 +229,7 @@ export const make = Effect.gen(function* () {
     yield* ratesLock.withPermit(
       Effect.gen(function* () {
         if (![...models].some((model) => !checkedRateModels.has(model))) return;
-        yield* loadRates(true);
-        const now = yield* Clock.currentTimeMillis;
-        if (ratesFetchedAtMs === null || now - ratesFetchedAtMs >= RATES_REFRESH_FLOOR_MS) return;
+        if (!(yield* loadRates(true))) return;
         for (const model of models) {
           const oldest = checkedRateModels.values().next().value;
           if (checkedRateModels.size >= MAX_CHECKED_RATE_MODELS && oldest !== undefined) {

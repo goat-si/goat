@@ -371,7 +371,7 @@ describe("UsageService", () => {
 
   registerCompressedRolloutTest(setup, layerService);
   registerUsageRetentionTests(setup, layerService, claudeLine);
-  registerRateAliasTests(setup, layerService);
+  registerRateAliasTests(setup, layerService, claudeLine);
 
   it.effect("keeps the first host identity across recreation and explicit override removal", () =>
     Effect.gen(function* () {
