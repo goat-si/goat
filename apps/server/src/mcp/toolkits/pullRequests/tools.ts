@@ -464,6 +464,7 @@ const PullRequestActivityTool = Tool.make(agentSurfaceRegistry["pull_request.act
     activity: PullRequestActivity,
     commentsOmitted: Omitted,
     reviewThreadsOmitted: Omitted,
+    overviewThreadsOmitted: Schema.optional(Omitted),
     commitsOmitted: Omitted,
     reviewersOmitted: Omitted,
     reactionsOmitted: Omitted,

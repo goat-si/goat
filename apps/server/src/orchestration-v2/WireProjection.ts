@@ -26,6 +26,7 @@ import { MCP_APP_OUTPUT_KEY, readMcpAppReference } from "@goat/shared/mcpApp";
 import {
   compactDynamicToolOutput,
   omitToolOutputImageData,
+  sentMessageFromToolItem,
   toolOutputImages,
   toolOutputIndicatesFailure,
 } from "@goat/shared/toolOutput";
@@ -209,9 +210,13 @@ export function projectTurnItemForWire(item: OrchestrationV2TurnItem): Orchestra
       };
     case "dynamic_tool": {
       const { output: rawOutput, ...projected } = item;
-      const output = compactDynamicToolOutput(
-        redactComputerUseTypedOutput(item.toolName, item.input, rawOutput),
-      );
+      const sentMessage = sentMessageFromToolItem(item);
+      const output =
+        sentMessage === undefined
+          ? compactDynamicToolOutput(
+              redactComputerUseTypedOutput(item.toolName, item.input, rawOutput),
+            )
+          : { sentMessage };
       const input = redactComputerUseTypedText(item.toolName, item.input);
       return {
         ...projected,

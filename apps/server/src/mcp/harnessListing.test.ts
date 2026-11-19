@@ -64,6 +64,7 @@ const threadTools = Object.values(agentSurfaceRegistry)
       entry.resource !== "device" &&
       entry.resource !== "workspace" &&
       entry.resource !== "terminal" &&
+      !("listing" in entry && entry.listing === "prompt") &&
       entry.path !== "surface.screen_run",
   )
   .map(listedToolName);

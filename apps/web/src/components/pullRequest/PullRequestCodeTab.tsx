@@ -1,9 +1,11 @@
+import { PullRequestOrphanThreads } from "./PullRequestOrphanThreads";
 import { PullRequestRawDiffSlices } from "./PullRequestRawDiffSlices";
 import { useWithheldPullRequestFiles } from "./useWithheldPullRequestFiles";
 import { PullRequestWithheldFileNotice } from "./PullRequestWithheldFileNotice";
 import { PullRequestDiffCommitMenu } from "./PullRequestDiffCommitMenu";
 import { useWordWrap } from "~/hooks/useWordWrap";
 import { reviewThreadsByPath } from "./pullRequestThreadsByPath";
+import { useCodeLinkTarget, useRevealCodeLink } from "./usePullRequestCodeLink";
 import { capitalizeTerm, sourceControlClients } from "@goat/client-runtime/source-control-clients";
 import type { CodeViewItem, SelectedLineRange } from "@pierre/diffs";
 import type { CodeViewAnnotationArgs, CodeViewDiffItem } from "@pierre/diffs/react";
@@ -63,7 +65,6 @@ import {
 } from "~/lib/diffRendering";
 import { APP_BASE_NAME } from "~/branding";
 import { PREFERRED_HIGHLIGHTER } from "~/lib/syntaxHighlighting";
-import { cn } from "~/lib/utils";
 import { createPullRequestDiffFileContentsLoader } from "~/lib/diffFileContents";
 import {
   buildDiffReviewComment,
@@ -82,7 +83,6 @@ import { useHideTestFiles } from "../diffs/useHideTestFiles";
 import { diffFileTreeEntries } from "../diffs/diffFileTree.logic";
 import { StyledDiffCodeView } from "../diffs/StyledDiffCodeView";
 import { Button } from "../ui/button";
-import { Collapsible, CollapsiblePanel, CollapsibleTrigger } from "../ui/collapsible";
 import {
   DropdownMenu,
   DropdownMenuCheckboxItem,
@@ -104,10 +104,12 @@ import {
 import { pullRequestCompletionScope } from "./PullRequestMarkdownTextarea";
 import {
   getFileViewedRange,
+  flipFileDiffFold,
   isFileDiffCollapsed,
   isLineInFileDiff,
-  toggleFileDiffFoldForViewed,
+  withFileDiffFold,
   type DiffFoldOverride,
+  type FileDiffFoldChoices,
 } from "./pullRequestDiff.logic";
 import { PullRequestDiffStat, PullRequestMetaLine } from "./pullRequestPresentation";
 import { PullRequestDiffUnavailableState } from "./PullRequestDiffUnavailableState";
@@ -153,6 +155,8 @@ function PullRequestCodeTab({
   refreshToken = 0,
   backgroundRefreshToken = 0,
   revealRequest = null,
+  revealUrl,
+  onRevealSettled,
 }: {
   scrollerRef: (node: HTMLDivElement | null) => void;
   environmentId: EnvironmentId;
@@ -169,6 +173,9 @@ function PullRequestCodeTab({
   onRefresh: () => void;
   refreshToken?: number;
   backgroundRefreshToken?: number;
+  /** A clicked link to a file or line range, until onRevealSettled reports it shown. */
+  revealUrl?: string | undefined;
+  onRevealSettled?: ((revealUrl: string) => void) | undefined;
   revealRequest?: { readonly path: string; readonly nonce: number } | null;
 }) {
   const resolvedTheme = useRenderedAppearance();
@@ -180,7 +187,7 @@ function PullRequestCodeTab({
     diffLayout: settings.diffLayout,
     wordWrap: settings.wordWrap,
   }));
-  const [toggledFiles, setToggledFiles] = useState<ReadonlySet<string>>(() => new Set());
+  const [foldChoices, setFoldChoices] = useState<FileDiffFoldChoices>(() => new Map());
   const [lastViewedFileKey, setLastViewedFileKey] = useState<string | null>(null);
   const [visibleCommitCount, setVisibleCommitCount] = useState(COMMIT_PAGE_SIZE);
   const [foldOverride, setFoldOverride] = useState<DiffFoldOverride>(null);
@@ -233,7 +240,7 @@ function PullRequestCodeTab({
     setLastViewedFileKey(null);
     setMovingCommentId(null);
     closeDraft();
-    setToggledFiles(new Set());
+    setFoldChoices(new Map());
     setFoldOverride(null);
     setVisibleCommitCount(COMMIT_PAGE_SIZE);
     setOrphansOpen(false);
@@ -417,6 +424,7 @@ function PullRequestCodeTab({
   const canSelectLines =
     canReviewCurrentDiff && (review.inlineComment || onAddToAgentSelection !== undefined);
   const canStartDraft = canSelectLines && (draft === null || (draftStale && reanchoringDraft));
+  const link = useCodeLinkTarget(revealUrl, loadedFiles, scopeKey);
   const testFileCount = loadedFiles.filter((file) =>
     isTestChangedFile(resolveFileDiffPath(file)),
   ).length;
@@ -424,7 +432,7 @@ function PullRequestCodeTab({
   const files = hideTestFiles
     ? loadedFiles.filter((file) => {
         const path = resolveFileDiffPath(file);
-        return path === revealRequest?.path || !isTestChangedFile(path);
+        return path === revealRequest?.path || path === link.path || !isTestChangedFile(path);
       })
     : loadedFiles;
   const hiddenTestFileCount = loadedFiles.length - files.length;
@@ -566,9 +574,17 @@ function PullRequestCodeTab({
   const unstructured =
     rawSlices.length > 0 ? <PullRequestRawDiffSlices slices={rawSlices} separated /> : null;
 
+  // A stale mark means the file changed since it was viewed; Fold all and Expand all outrank marks.
+  const foldsAsViewed = (path: string) =>
+    foldOverride === null && filesViewedEnabled && isFileViewed(path) && !isFileViewedStale(path);
   const items: CodeViewDiffItem<ReviewAnnotationGroup>[] = annotatedFiles.map(
     ({ fileKey, path, fileDiff, annotations, annotationsVersion }) => {
-      const collapsed = isFileDiffCollapsed(fileKey, effectiveFoldOverride, toggledFiles);
+      const collapsed = isFileDiffCollapsed(
+        fileKey,
+        effectiveFoldOverride,
+        foldChoices,
+        foldsAsViewed(path),
+      );
       const viewedMark = filesViewedEnabled
         ? `e${isFileViewed(path) ? "v" : ""}${isFileViewedStale(path) ? "s" : ""}`
         : "";
@@ -601,13 +617,11 @@ function PullRequestCodeTab({
     setSliceState((previous) => ({ ...previous, cursor: nextCursor }));
   };
 
-  const toggleFile = (fileKey: string) =>
-    setToggledFiles((current) => {
-      const next = new Set(current);
-      if (next.has(fileKey)) next.delete(fileKey);
-      else next.add(fileKey);
-      return next;
-    });
+  const toggleFile = (fileKey: string) => {
+    const path = annotatedFiles.find((file) => file.fileKey === fileKey)?.path;
+    const viewed = path !== undefined && foldsAsViewed(path);
+    setFoldChoices((current) => flipFileDiffFold(current, fileKey, effectiveFoldOverride, viewed));
+  };
 
   const setFileViewed = (fileKey: string, viewed: boolean, extendRange: boolean) => {
     const range = getFileViewedRange(
@@ -616,13 +630,12 @@ function PullRequestCodeTab({
       extendRange ? lastViewedFileKey : null,
     );
     setLastViewedFileKey(fileKey);
-    for (const file of range) setViewed(file.path, viewed);
-    setToggledFiles((current) =>
-      range.reduce(
-        (next, file) =>
-          toggleFileDiffFoldForViewed(file.fileKey, viewed, effectiveFoldOverride, next),
-        current,
-      ),
+    for (const file of range) {
+      // A commit's diff names that commit's version of the file, not the head's.
+      setViewed(file.path, viewed, commit === null ? file.fileDiff.newObjectId : undefined);
+    }
+    setFoldChoices((current) =>
+      range.reduce((next, file) => withFileDiffFold(next, file.fileKey, viewed), current),
     );
   };
   const fileViewedToggle = {
@@ -632,20 +645,18 @@ function PullRequestCodeTab({
     setFileViewed,
   };
 
-  const revealFile = (path: string) => {
+  const revealFile = (path: string, range?: SelectedLineRange) => {
     const item = items.find((candidate) => resolveFileDiffPath(candidate.fileDiff) === path);
     if (item === undefined) return;
-    if (item.collapsed === true) {
-      setToggledFiles((current) =>
-        toggleFileDiffFoldForViewed(item.id, false, effectiveFoldOverride, current),
-      );
-    }
-    codeViewReveal.request(item.id);
+    // Record the unfold even when already open, so a Viewed mark that loads later cannot fold it.
+    setFoldChoices((current) => withFileDiffFold(current, item.id, false));
+    if (range) setSelectedLines({ id: item.id, range });
+    codeViewReveal.request(item.id, range);
   };
 
   const toggleAllFiles = () => {
     setFoldOverride(areAllDiffFilesCollapsed(fileKeys, collapsedFileKeys) ? "expanded" : "folded");
-    setToggledFiles(new Set());
+    setFoldChoices(new Map());
   };
 
   const orderedCommits = // GitLab preserves UTC offsets, so compare instants.
@@ -804,9 +815,7 @@ function PullRequestCodeTab({
     onPostRender: codeViewReveal.flush,
     // Find may repeat requests before render; only unfold, never toggle.
     onRevealSearchMatch: (item: CodeViewItem<ReviewAnnotationGroup>) =>
-      setToggledFiles((current) =>
-        toggleFileDiffFoldForViewed(item.id, false, effectiveFoldOverride, current),
-      ),
+      setFoldChoices((current) => withFileDiffFold(current, item.id, false)),
   };
 
   const runThreadCommand = async (
@@ -1245,6 +1254,19 @@ function PullRequestCodeTab({
     answerReveal();
     // oxlint-disable-next-line react/exhaustive-effect-dependencies -- Re-checked as pages load until the requested file arrives.
   }, [canLoadNextSlice, items, revealRequest]);
+  useRevealCodeLink({
+    revealUrl,
+    onRevealSettled,
+    link,
+    commit,
+    commitOids: detail.commits.map((entry) => entry.oid),
+    scopeKey,
+    items,
+    canLoadNextSlice,
+    loadNextSlice,
+    everyPageLoaded: loadedSlices.length > 0 && nextCursor === null,
+    revealFile,
+  });
   const reviewRecovery = (
     <PullRequestStaleReviewComments
       comments={staleComments}
@@ -1303,75 +1325,26 @@ function PullRequestCodeTab({
     );
   }
 
-  const orphanThreads = detail.reviewThreads.filter((thread) => !placedThreadIds.has(thread.id));
-  const orphanFiles = new Map<string, PullRequestReviewThread[]>();
-  for (const thread of orphanThreads) {
-    const existing = orphanFiles.get(thread.path);
-    if (existing) existing.push(thread);
-    else orphanFiles.set(thread.path, [thread]);
-  }
-
   return (
     <div className="flex h-full min-h-0 flex-col">
       {toolbar}
       {reviewRecovery}
       {staleComposer}
-      {orphanFiles.size > 0 ? (
-        <div className="shrink-0 border-b border-border/60">
-          <Collapsible open={orphansOpen} onOpenChange={setOrphansOpen}>
-            <h2>
-              <CollapsibleTrigger className="flex w-full items-center gap-1.5 px-4 py-2 text-left text-xs text-muted-foreground">
-                <span>
-                  {nextCursor === null
-                    ? "Conversations not on the current diff"
-                    : "Conversations not on the diff loaded so far"}
-                </span>
-                <ChevronRightIcon
-                  aria-hidden
-                  className={cn("size-3.5 transition-transform", orphansOpen && "rotate-90")}
-                />
-                <span aria-hidden className="tabular-nums">
-                  {orphanThreads.length}
-                </span>
-                <span className="sr-only">
-                  {orphanThreads.length === 1
-                    ? "1 conversation"
-                    : `${orphanThreads.length} conversations`}
-                </span>
-              </CollapsibleTrigger>
-            </h2>
-            <CollapsiblePanel>
-              <div className="max-h-64 space-y-3 overflow-auto px-4 pb-3">
-                {[...orphanFiles].map(([path, threads]) => (
-                  <div key={path}>
-                    <Tooltip>
-                      <TooltipTrigger
-                        render={
-                          <p className="truncate px-3 text-xs text-muted-foreground">{path}</p>
-                        }
-                      />
-                      <TooltipPopup side="top">{path}</TooltipPopup>
-                    </Tooltip>
-                    <div className="mt-1 space-y-2">
-                      {threads.map((thread) => (
-                        <div key={thread.id}>
-                          {thread.line === null ? null : (
-                            <p className="px-3 text-xs text-muted-foreground">Line {thread.line}</p>
-                          )}
-                          {renderThreadCard(thread)}
-                        </div>
-                      ))}
-                    </div>
-                  </div>
-                ))}
-              </div>
-            </CollapsiblePanel>
-          </Collapsible>
-        </div>
-      ) : null}
+      <PullRequestOrphanThreads
+        threads={detail.reviewThreads}
+        placedThreadIds={placedThreadIds}
+        allPagesLoaded={nextCursor === null}
+        open={orphansOpen}
+        onOpenChange={setOrphansOpen}
+        renderThreadCard={renderThreadCard}
+      />
       <div className="flex min-h-0 flex-1 overflow-hidden">
         <div
           className="relative min-h-0 min-w-0 flex-1"
+          onWheelCapture={codeViewReveal.cancel}
+          onTouchStartCapture={codeViewReveal.cancel}
+          onPointerDownCapture={codeViewReveal.cancel}
+          onKeyDownCapture={codeViewReveal.cancel}
           // Headers live in shadow DOM; composedPath crosses that boundary.
           onClickCapture={(event) => {
             const composedPath = event.nativeEvent.composedPath?.() ?? [];

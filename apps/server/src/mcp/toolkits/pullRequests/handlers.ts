@@ -672,6 +672,7 @@ const make = Effect.gen(function* () {
       Effect.gen(function* () {
         const { target, ref } = yield* locateOne(input);
         const activity = yield* pullRequests.activity(ref).pipe(Effect.mapError(readFailure));
+        const hasOverview = activity.overviewThreads !== undefined;
         const author =
           activity.author === undefined || activity.author === null
             ? {}
@@ -684,11 +685,13 @@ const make = Effect.gen(function* () {
             reviewers: [],
             comments: [],
             reviewThreads: [],
+            ...(hasOverview ? { overviewThreads: [] } : {}),
             commits: [],
             reactions: [],
           },
           commentsOmitted: WIDEST_COUNT,
           reviewThreadsOmitted: WIDEST_COUNT,
+          ...(hasOverview ? { overviewThreadsOmitted: WIDEST_COUNT } : {}),
           commitsOmitted: WIDEST_COUNT,
           reviewersOmitted: WIDEST_COUNT,
           reactionsOmitted: WIDEST_COUNT,
@@ -705,6 +708,8 @@ const make = Effect.gen(function* () {
         const reviewers = take(activity.reviewers ?? []);
         const comments = take(activity.comments);
         const reviewThreads = take(activity.reviewThreads);
+        // GitLab's overview threads: absent from other hosts and from older servers.
+        const overviewThreads = take(activity.overviewThreads ?? []);
         const commits = take(activity.commits);
         const reactions = take(activity.reactions ?? []);
         return {
@@ -715,11 +720,13 @@ const make = Effect.gen(function* () {
             ...(activity.reviewers === undefined ? {} : { reviewers: reviewers.kept }),
             comments: comments.kept,
             reviewThreads: reviewThreads.kept,
+            ...(hasOverview ? { overviewThreads: overviewThreads.kept } : {}),
             commits: commits.kept,
             ...(activity.reactions === undefined ? {} : { reactions: reactions.kept }),
           },
           commentsOmitted: comments.omitted,
           reviewThreadsOmitted: reviewThreads.omitted,
+          ...(hasOverview ? { overviewThreadsOmitted: overviewThreads.omitted } : {}),
           commitsOmitted: commits.omitted,
           reviewersOmitted: reviewers.omitted,
           reactionsOmitted: reactions.omitted,

@@ -5,6 +5,7 @@ import {
   type AgentSurfaceEntry,
   agentSurfaceRegistry,
   type AgentSurfaceRegistryEntry,
+  isDiscoverableOutsidePrompt,
 } from "@goat/contracts/agentSurface";
 import { AgentSurfaceResult } from "@goat/contracts/agentSurface/envelope";
 import { listedToolName, resolveAgentSurfaceEntry } from "@goat/contracts/agentSurface/resolve";
@@ -72,9 +73,8 @@ const EXIT_CODES_HELP =
 const toCli = (name: string) => name.replaceAll("_", "-");
 const fromCli = (name: string) => name.replaceAll("-", "_");
 
-const entries = Object.values(agentSurfaceRegistry) as ReadonlyArray<AgentSurfaceRegistryEntry>;
 const byResource = new Map<string, Array<AgentSurfaceRegistryEntry>>();
-for (const entry of entries)
+for (const entry of Object.values(agentSurfaceRegistry).filter(isDiscoverableOutsidePrompt))
   if (entry.resource !== "surface")
     byResource.set(entry.resource, [...(byResource.get(entry.resource) ?? []), entry]);
 
@@ -431,9 +431,8 @@ const route = (
     );
   }
   if (operator?.includes(verbToken)) return undefined;
-  const entry = agentSurfaceRegistry[
-    `${resource}.${fromCli(verbToken)}` as keyof typeof agentSurfaceRegistry
-  ] as AgentSurfaceRegistryEntry | undefined;
+  const verb = fromCli(verbToken);
+  const entry = byResource.get(resource)?.find((candidate) => candidate.verb === verb);
   if (entry === undefined) {
     if (operator !== undefined) return undefined;
     throw new UsageError(`goat ${command} has no verb ${verbToken}.\n\n${resourceHelp(resource)}`);

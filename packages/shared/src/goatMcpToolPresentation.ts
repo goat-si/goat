@@ -133,6 +133,7 @@ const GOAT_MCP_TOOLS: Readonly<Record<string, GoatMcpToolDefinition>> = {
     ["Stop", "Stopping", "Requested a stop for", "a workflow"],
     "workflow-stop",
   ),
+  goat_message_show: tool(["Send", "Sending", "Sent", "a message"], "message-show"),
   goat_background_wait: tool(
     ["Update", "Updating", "Updated", "background waits"],
     "background-wait",

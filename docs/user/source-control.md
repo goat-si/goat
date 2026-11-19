@@ -229,6 +229,12 @@ For a fork whose checkout also has an `upstream` remote, the list shows pull req
 fork's own `origin` repository. Turn on **Include upstream repos** in the filters to add the
 repository it was forked from.
 
+When several connected environments have a project for the same repository, the list reads it
+through one of them. If that environment cannot sign in to the host, the **All** list reads the
+repository through another environment that can, and each row names the environment it came from.
+Lists that depend on who is signed in (**Reviewing**, **Authored**, an author filter of "me") keep
+each repository's own environment, so they never show another account's pull requests.
+
 Ask an agent to edit a PR, comment, submit a review, reply to or resolve a review thread,
 manage reactions, labels and reviewers, or change its state through GOAT's MCP tools. The
 repository must be a project in the connected environment. Outside MCP clients need the
@@ -238,6 +244,10 @@ Comments, reviews and replies require a retry key. If a write's outcome is uncer
 checks activity and tells you when it cannot confirm the result; a partial GitLab review or
 unconfirmed approval does not count as complete. Merge requests act on the host's current head
 and may be queued; use branch protection when a merge must require a particular head.
+
+A link to part of a pull request opens that part: a comment or review is marked in the activity, a
+changed-line link opens the file at those lines, a checks link opens the checks, and a commit link
+opens that commit's changes. On web and desktop, hovering a comment or commit link previews it.
 
 On mobile, **Pull requests** lists reviews across your connected environments. Open a review
 to read its description, activity, commits, and changed files. Line comments stay as drafts

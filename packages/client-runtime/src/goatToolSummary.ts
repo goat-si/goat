@@ -560,6 +560,9 @@ export function summarizeGoatToolCalls(
     case "html-list":
       label = phrase("Listed", "list", `saved HTML pages ${times}`);
       break;
+    case "message-show":
+      label = phrase("Sent", "send", quantity(selected.length, "message"));
+      break;
     case "html-render":
       label = phrase("Rendered", "render", quantity(selected.length, "HTML page"));
       break;

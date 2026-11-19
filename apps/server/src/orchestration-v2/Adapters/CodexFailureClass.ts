@@ -3,7 +3,7 @@ import type * as CodexSchema from "effect-codex-app-server/schema";
 type CodexErrorInfo = CodexSchema.ServerNotification__CodexErrorInfo;
 
 /** The upstream HTTP status Codex forwards on its connection and stream error variants. */
-function codexHttpStatus(errorInfo: CodexErrorInfo | null | undefined): number | null {
+export function codexHttpStatus(errorInfo: CodexErrorInfo | null | undefined): number | null {
   if (typeof errorInfo !== "object" || errorInfo === null) return null;
   // Codex 0.164 accepts unknown error variants as arbitrary JSON, so the
   // nested value is only trusted once it has the known shape.

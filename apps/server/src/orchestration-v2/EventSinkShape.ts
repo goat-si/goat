@@ -2,6 +2,9 @@ import {
   CommandId,
   type EventId,
   type OrchestrationV2CloudTask,
+  type OrchestrationV2ExecutionNode,
+  type OrchestrationV2ProviderTurn,
+  type OrchestrationV2Subagent,
   type ProviderInstanceId,
   type ProviderSessionId,
   type OrchestrationV2Run,
@@ -145,6 +148,23 @@ export interface EventSinkV2Shape extends EventSinkBatch.Shape {
   /** Commits only if the stored turn item still equals expected. */
   readonly writeIfTurnItemUnchanged: (input: {
     readonly expected: OrchestrationV2TurnItem;
+    readonly events: ReadonlyArray<OrchestrationV2DomainEvent>;
+  }) => Effect.Effect<
+    {
+      readonly committed: boolean;
+      readonly storedEvents: ReadonlyArray<OrchestrationV2StoredEvent>;
+    },
+    EventSinkV2Error
+  >;
+  /** Atomically checks the released owner and every background record being changed. */
+  readonly writeIfReleasedSubagentUnchanged: (input: {
+    readonly expected: OrchestrationV2Subagent;
+    readonly members: ReadonlyArray<OrchestrationV2Subagent>;
+    readonly providerThreadId: ProviderThreadId;
+    readonly providerSessionId: ProviderSessionId;
+    readonly nodes: ReadonlyArray<OrchestrationV2ExecutionNode>;
+    readonly turns: ReadonlyArray<OrchestrationV2ProviderTurn>;
+    readonly items: ReadonlyArray<OrchestrationV2TurnItem>;
     readonly events: ReadonlyArray<OrchestrationV2DomainEvent>;
   }) => Effect.Effect<
     {

@@ -245,6 +245,11 @@ export function layerTest(input: {
   readonly normalizeCodexLoad?: boolean;
   readonly state: Ref.Ref<TestProviderRuntimeState>;
   readonly idleTimeoutMs: number;
+  readonly adapterRegistryLayer?: Layer.Layer<
+    ProviderAdapterRegistry.ProviderAdapterRegistryV2,
+    never,
+    McpProviderSessions.McpProviderSessions
+  >;
   readonly maxIdlePinMs?: number;
   readonly beforeIdleFiberInterrupt?: Effect.Effect<void>;
   readonly failEventStream?: boolean;
@@ -405,7 +410,9 @@ export function layerTest(input: {
     }).pipe(
       Layer.provide(
         Layer.mergeAll(
-          layerRegistry.pipe(Layer.provideMerge(McpProviderSessions.layer)),
+          (input.adapterRegistryLayer ?? layerRegistry).pipe(
+            Layer.provideMerge(McpProviderSessions.layer),
+          ),
           AdapterInfrastructure.layerMemoryAdmission,
           CommandOutputHub.layer.pipe(
             Layer.provide(Layer.merge(layerConfiguredEventSink, layerTestStores)),

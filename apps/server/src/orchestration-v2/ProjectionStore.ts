@@ -145,6 +145,7 @@ import {
   ProviderInstanceId,
 } from "@goat/contracts";
 import { createOrchestrationV2TurnItemVisibility } from "@goat/shared/orchestrationV2Timeline";
+import { encodeTurnItemPayload, SENT_MESSAGE_MARKER } from "./turnItemProjectionPayload.ts";
 import {
   activeNativeSubagents,
   deriveBlockedOnThreadWait,
@@ -974,10 +975,10 @@ const encodeRestartCancelledBackgroundWork = Schema.encodeEffect(
 const encodeRunAttemptPayload = Schema.encodeEffect(
   Schema.fromJsonString(OrchestrationV2RunAttemptJsonSchema),
 );
-const encodeNodePayload = Schema.encodeEffect(
+export const encodeNodePayload = Schema.encodeEffect(
   Schema.fromJsonString(OrchestrationV2ExecutionNodeJsonSchema),
 );
-const encodeSubagentPayload = Schema.encodeEffect(
+export const encodeSubagentPayload = Schema.encodeEffect(
   Schema.fromJsonString(OrchestrationV2SubagentJsonSchema),
 );
 const encodeProviderSessionPayload = Schema.encodeEffect(
@@ -986,7 +987,7 @@ const encodeProviderSessionPayload = Schema.encodeEffect(
 export const encodeProviderThreadPayload = Schema.encodeEffect(
   Schema.fromJsonString(OrchestrationV2ProviderThreadJsonSchema),
 );
-const encodeProviderTurnPayload = Schema.encodeEffect(
+export const encodeProviderTurnPayload = Schema.encodeEffect(
   Schema.fromJsonString(OrchestrationV2ProviderTurnJsonSchema),
 );
 const encodeRuntimeRequestPayload = Schema.encodeEffect(
@@ -999,9 +1000,7 @@ const encodePlanPayload = Schema.encodeEffect(
   Schema.fromJsonString(OrchestrationV2PlanArtifactSchema),
 );
 const decodePlanPayload = (json: string) => decodePlanJson(json);
-export const encodeTurnItemPayload = Schema.encodeEffect(
-  Schema.fromJsonString(OrchestrationV2TurnItemJsonSchema),
-);
+export { encodeTurnItemPayload };
 // The codec every *Json payload schema uses for timestamps, so index columns match payload_json.
 const encodePayloadTimestamp = Schema.encodeEffect(Schema.DateTimeUtcFromString);
 const encodeCheckpointScopePayload = Schema.encodeEffect(
@@ -1090,10 +1089,9 @@ export const layer: Layer.Layer<ProjectionStoreV2, never, SqlClient.SqlClient> =
     const archiveGate = yield* ThreadArchiveGate;
     // Rendered output and delegated tasks stay inline when a long work group is deferred.
     const inlineWorkOutput = sql`item.type = 'dynamic_tool' AND (
-      item.payload_json LIKE '%htmlRender%' OR item.payload_json LIKE ${`%${MCP_APP_OUTPUT_KEY}%`}
-      OR item.payload_json LIKE ${`%${LEGACY_MCP_APP_OUTPUT_KEY}%`}
-      OR item.payload_json LIKE '%"viewedImagePath"%'
-      OR item.payload_json LIKE '%"toolName":"%delegate_task"%')`;
+      item.payload_json LIKE '%htmlRender%' OR item.payload_json LIKE ${`%${MCP_APP_OUTPUT_KEY}%`} OR item.payload_json LIKE ${`%${LEGACY_MCP_APP_OUTPUT_KEY}%`}
+      OR item.payload_json LIKE '%"viewedImagePath"%' OR item.payload_json LIKE '%"toolName":"%delegate_task"%'
+      OR item.payload_json LIKE ${`%${SENT_MESSAGE_MARKER}`})`;
     // Background work cannot outlive this process: provider processes exit with the server. Past
     // that, work that showed no sign of life for STALE_BACKGROUND_WORK_MS was left open by a
     // provider that never closed it, so it no longer holds runtime updates.
