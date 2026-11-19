@@ -1,3 +1,4 @@
+import { usePendingApprovalRefs } from "./usePendingApprovalRefs";
 import {
   mergeDirectPreviewAnnotation,
   shouldDockDraftHeroForSubmission,
@@ -25,7 +26,7 @@ import {
 import { parseCodexFeedbackCommand, submitCodexFeedback } from "@goat/client-runtime/state/threads";
 import { scopedThreadKey, scopeProjectRef, scopeThreadRef } from "@goat/client-runtime/environment";
 import { createModelSelection } from "@goat/shared/model";
-import { useLayoutEffect, useRef } from "react";
+import { useRef } from "react";
 import { useNavigate } from "@tanstack/react-router";
 import {
   isAtomCommandInterrupted,
@@ -273,12 +274,10 @@ export function useComposerSend(input: ComposerSendInput) {
   const composerSendGenerationRef = useRef(0);
   const environmentUnavailableSendToastSlotRef = useRef(0);
   // A send awaits uploads before it declines, so it reads the approvals pending by then.
-  const pendingApprovalsRef = useRef(pendingApprovals);
-  const respondingRequestIdsRef = useRef(respondingRequestIds);
-  useLayoutEffect(() => {
-    pendingApprovalsRef.current = pendingApprovals;
-    respondingRequestIdsRef.current = respondingRequestIds;
-  }, [pendingApprovals, respondingRequestIds]);
+  const { pendingApprovalsRef, respondingRequestIdsRef } = usePendingApprovalRefs(
+    pendingApprovals,
+    respondingRequestIds,
+  );
 
   // Built when a send runs: the SSH ports read refs, which render must not.
   const ssh = () =>
