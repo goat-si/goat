@@ -217,7 +217,9 @@ export const pruneRuntimesOnStart = Effect.fn("cloud.server_self_update.prune_on
   },
 );
 
-export const make = Effect.fn("cloud.server_self_update.make")(function* () {
+export const make = Effect.fn("cloud.server_self_update.make")(function* (options?: {
+  readonly launcherIdentity?: () => Promise<{ readonly pid: number; readonly start: string }>;
+}) {
   const serverConfig = yield* ServerConfig.ServerConfig;
   const desktopAppUpdate = yield* DesktopAppUpdate.DesktopAppUpdate;
   const launcher = yield* ServiceLauncherClient.ServiceLauncherClient;
@@ -371,9 +373,13 @@ export const make = Effect.fn("cloud.server_self_update.make")(function* () {
         mode: input.confirmReplacement === true ? ("confirmed" as const) : ("idle" as const),
       };
       let accepted = false;
-      const launcherPid = process.ppid;
-      const launcherStart = yield* Effect.tryPromise({
-        try: () => processStartIdentity(launcherPid, platform),
+      const launcherIdentity = yield* Effect.tryPromise({
+        try:
+          options?.launcherIdentity ??
+          (async () => {
+            const pid = process.ppid;
+            return { pid, start: await processStartIdentity(pid, platform) };
+          }),
         catch: (cause) => failWith("Could not identify the service launcher.", cause),
       }).pipe(
         Effect.tapError(() =>
@@ -405,15 +411,14 @@ export const make = Effect.fn("cloud.server_self_update.make")(function* () {
                   ),
                 ),
                 Effect.tap((updateId) => {
-                  accepted = true;
-                  const marker = Option.isSome(launcherStart)
+                  const marker = Option.isSome(launcherIdentity)
                     ? Effect.tryPromise({
                         try: () =>
                           writeServiceUpdateHandoff(
                             serverConfig.baseDir,
                             updateId,
-                            launcherPid,
-                            launcherStart.value,
+                            launcherIdentity.value.pid,
+                            launcherIdentity.value.start,
                           ),
                         catch: (cause) =>
                           failWith("Could not record the service update handoff.", cause),
@@ -423,7 +428,14 @@ export const make = Effect.fn("cloud.server_self_update.make")(function* () {
                         ),
                       )
                     : Effect.void;
-                  return marker.pipe(Effect.andThen(onHandoffAccepted()));
+                  return marker.pipe(
+                    Effect.andThen(
+                      Effect.sync(() => {
+                        accepted = true;
+                      }),
+                    ),
+                    Effect.andThen(Effect.suspend(onHandoffAccepted)),
+                  );
                 }),
                 Effect.tap((updateId) =>
                   audit
