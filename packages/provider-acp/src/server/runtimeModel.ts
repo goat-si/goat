@@ -1081,7 +1081,8 @@ const GOAT_MCP_TITLE_SUFFIX_CALL =
  * streamed JSON arguments. Require a name or JSON opening brace so built-ins
  * titled "<tool>: <description>" cannot impersonate an inventory entry.
  */
-const GOAT_MCP_BARE_TITLE_CALL = /^(?:Running )?(?<tool>[A-Za-z0-9_]+)(?::\s*\{|$)/;
+const GOAT_MCP_BARE_TITLE_CALL = /^(?<tool>[A-Za-z0-9_]+)(?::\s*\{|$)/;
+const ANTIGRAVITY_TOOL_TITLE = /^Run(?:ning)? (?<name>[^\s?]+)\??$/;
 
 /**
  * ACP has no typed MCP tool-call item, so agents surface MCP calls in agent-specific shapes:
@@ -1157,12 +1158,13 @@ export function extractMcpToolCallIdentity(
     // The server key and the tool prefix are both "goat", so "goat_thread_send"
     // also reads as server "goat" + tool "thread_send". Try every convention and
     // keep the first one that names a known tool.
+    const name = ANTIGRAVITY_TOOL_TITLE.exec(trimmed)?.groups?.name ?? trimmed;
     for (const convention of [
       GOAT_MCP_TITLE_CALL,
       GOAT_MCP_TITLE_SUFFIX_CALL,
       GOAT_MCP_BARE_TITLE_CALL,
     ]) {
-      const candidateTool = convention.exec(trimmed)?.groups?.tool;
+      const candidateTool = convention.exec(name)?.groups?.tool;
       if (candidateTool !== undefined && GOAT_MCP_TOOL_NAMES.has(candidateTool)) {
         return { server: "goat", tool: candidateTool };
       }

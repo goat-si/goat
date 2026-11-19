@@ -197,6 +197,9 @@ export const makeAcpRegistryAdapterV2 = Effect.fn("makeAcpRegistryAdapterV2")(fu
   const registryAgentId = options.settings.source === "local" ? "" : options.settings.agentId;
   const startupKey =
     options.settings.source === "local" ? `local:${options.instanceId}` : registryAgentId;
+  const isAntigravityCli =
+    options.settings.source === "local" &&
+    /^agy(\.exe|\.cmd)?$/i.test(options.settings.commandPath.split(/[\\/]/).pop() ?? "");
   const isOmp =
     options.settings.source === "local" &&
     /^omp(\.exe|\.cmd)?$/i.test(options.settings.commandPath.split(/[\\/]/).pop() ?? "");
@@ -243,6 +246,14 @@ export const makeAcpRegistryAdapterV2 = Effect.fn("makeAcpRegistryAdapterV2")(fu
       : AcpProviderCapabilitiesV2,
     customModels: readCustomModelEntries(options.settings.customModels).map((entry) => entry.slug),
     compactViaAdvertisedCommand: true,
+    ...(isAntigravityCli
+      ? {
+          enablePostSettleContinuation: true,
+          deferFinalizeForBackgroundWork: true,
+          wakeOnDetachedRequest: true,
+          replyEndsWithUsageUpdate: true,
+        }
+      : {}),
     promptFailure: (cause) => acpRegistryPromptFailure(registryAgentId, cause),
     ...(watchKimiPromptOutcome === undefined
       ? {}

@@ -293,6 +293,8 @@ export interface AcpAdapterV2Flavor {
     notification: EffectAcpSchema.SessionNotification,
   ) => boolean;
   readonly deferFinalizeForBackgroundWork?: boolean;
+  readonly replyEndsWithUsageUpdate?: boolean;
+  readonly wakeOnDetachedRequest?: boolean;
   readonly assertComplete?: Effect.Effect<void, EffectAcpErrors.AcpError>;
   /** Interrupt the local prompt fiber before `session/cancel` (Grok wedged prompts). */
   readonly interruptPromptOnCancel?: boolean;

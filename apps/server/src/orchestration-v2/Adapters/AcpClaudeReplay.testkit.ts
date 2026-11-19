@@ -127,7 +127,9 @@ export const openClaudeReplaySession = Effect.fn("openClaudeReplaySession")(func
   entries: ReadonlyArray<unknown>,
   replayGate?: ProviderReplayGate,
   continuationEnabled = true,
-  agentId = "claude-acp",
+  agentId: string | Record<string, unknown> = "claude-acp",
+  replacementEntries?: ReadonlyArray<unknown>,
+  runtimeMode: "approval-required" | "full-access" = "approval-required",
 ) {
   const fileSystem = yield* FileSystem.FileSystem;
   const path = yield* Path.Path;
@@ -139,7 +141,7 @@ export const openClaudeReplaySession = Effect.fn("openClaudeReplaySession")(func
       protocol: "acp.ndjson-jsonrpc",
       version: "1",
       scenario: "claude-lifecycle",
-      entries: entries as never,
+      entries: (replacementEntries ?? entries) as never,
     },
     ACP_REGISTRY_PROVIDER,
   );
@@ -169,7 +171,9 @@ export const openClaudeReplaySession = Effect.fn("openClaudeReplaySession")(func
   const adapterOptions = {
     selfInvocation: yield* resolveSelfInvocation(),
     instanceId,
-    settings: yield* decodeAcpRegistryAdapterSettings({ agentId }),
+    settings: yield* decodeAcpRegistryAdapterSettings(
+      typeof agentId === "string" ? { agentId } : agentId,
+    ),
     environment: {},
     ...(continuationEnabled ? { continuationRequests } : {}),
     makeRuntime: (runtimeInput: Parameters<typeof replayRuntime>[0]) => {
@@ -192,7 +196,6 @@ export const openClaudeReplaySession = Effect.fn("openClaudeReplaySession")(func
   );
   const threadId = ThreadId.make("thread-claude-lifecycle");
   const modelSelection = { instanceId, model: "default" } as const;
-  const runtimeMode = "approval-required";
   const runtimePolicy = ProviderAdapter.ProviderAdapterV2RuntimePolicy.make({
     runtimeMode,
     interactionMode: "default",
@@ -205,7 +208,7 @@ export const openClaudeReplaySession = Effect.fn("openClaudeReplaySession")(func
     runtimePolicy,
   });
   yield* Effect.addFinalizer(() => Effect.sync(() => replayGate?.releaseAll()));
-  if (continuationEnabled) {
+  if (continuationEnabled && agentId === "claude-acp") {
     assert.isDefined(
       runtime.hasPendingBackgroundWork,
       "Claude ACP v2 must report background work after foreground idle",
