@@ -469,6 +469,7 @@
   "8d78d07244f8b4a1": "Download von {version} fehlgeschlagen. Zum Wiederholen klicken.",
   "52e1d4a487c0cf4b": "Installation von {version} fehlgeschlagen. Zum Wiederholen klicken.",
   "78a04e0e625c0990": "Update fehlgeschlagen",
+  "c24de5eb69373a55": "Dieser {build}-Build ignoriert {track}-Releases. Prüfe den Update-Kanal in den Einstellungen, um den Wechsel abzuschließen.",
   "b02ae45a6109c93b": "Auf dem neuesten Stand",
   "32c88cd9421abf33": "Es konnte nicht nach Updates gesucht werden.",
   "84c91e5891bf5d3b": "Automatische Downloads und Installationen sind pausiert. Sie können weiterhin manuell nach Updates suchen, sie herunterladen und installieren.",

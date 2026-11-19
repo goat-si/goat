@@ -469,6 +469,7 @@
   "8d78d07244f8b4a1": "Falha ao baixar a versão {version}. Clique para tentar novamente.",
   "52e1d4a487c0cf4b": "Falha ao instalar a versão {version}. Clique para tentar novamente.",
   "78a04e0e625c0990": "Falha na atualização",
+  "c24de5eb69373a55": "Esta build {build} ignora as versões {track}. Revise o canal de atualização em Configurações para concluir a troca.",
   "b02ae45a6109c93b": "Em dia",
   "32c88cd9421abf33": "Não foi possível verificar se há atualizações.",
   "84c91e5891bf5d3b": "Os downloads e as instalações automáticas estão pausados. Você ainda pode verificar, baixar e instalar atualizações manualmente.",

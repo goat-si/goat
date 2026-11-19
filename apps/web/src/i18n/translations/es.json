@@ -469,6 +469,7 @@
   "8d78d07244f8b4a1": "No se pudo descargar la versión {version}. Haz clic para volver a intentarlo.",
   "52e1d4a487c0cf4b": "No se pudo instalar la versión {version}. Haz clic para volver a intentarlo.",
   "78a04e0e625c0990": "Error de actualización",
+  "c24de5eb69373a55": "Esta compilación {build} ignora las versiones {track}. Revisa el canal de actualizaciones en Ajustes para terminar el cambio.",
   "b02ae45a6109c93b": "Al día",
   "32c88cd9421abf33": "No se pudieron buscar actualizaciones.",
   "84c91e5891bf5d3b": "Las descargas e instalaciones automáticas están en pausa. Puedes buscar, descargar e instalar actualizaciones manualmente.",

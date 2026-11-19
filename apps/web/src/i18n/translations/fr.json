@@ -469,6 +469,7 @@
   "8d78d07244f8b4a1": "Échec du téléchargement de la version {version}. Cliquez pour réessayer.",
   "52e1d4a487c0cf4b": "Échec de l’installation de la version {version}. Cliquez pour réessayer.",
   "78a04e0e625c0990": "Échec de la mise à jour",
+  "c24de5eb69373a55": "Cette version {build} ignore les versions {track}. Vérifiez le canal de mise à jour dans les Réglages pour terminer le changement.",
   "b02ae45a6109c93b": "À jour",
   "32c88cd9421abf33": "Impossible de rechercher des mises à jour.",
   "84c91e5891bf5d3b": "Les téléchargements et installations automatiques sont en pause. Vous pouvez encore rechercher, télécharger et installer les mises à jour manuellement.",

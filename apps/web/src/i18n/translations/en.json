@@ -469,6 +469,7 @@
   "8d78d07244f8b4a1": "Download failed for {version}. Click to retry.",
   "52e1d4a487c0cf4b": "Install failed for {version}. Click to retry.",
   "78a04e0e625c0990": "Update failed",
+  "c24de5eb69373a55": "This {build} build ignores {track} releases. Review the update track in Settings to finish the switch.",
   "b02ae45a6109c93b": "Up to date",
   "32c88cd9421abf33": "Could not check for updates.",
   "84c91e5891bf5d3b": "Automatic downloads and installation are paused. You can still check, download, and install manually.",

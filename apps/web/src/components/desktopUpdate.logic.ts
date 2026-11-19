@@ -1,6 +1,6 @@
 import { gtFallback, type useGT } from "gt-react";
 import type { DesktopUpdateActionResult, DesktopUpdateState } from "@goat/contracts";
-import { CLI_RELEASE_REPOSITORY } from "@goat/shared/cliRelease";
+import { CLI_RELEASE_REPOSITORY, cliReleaseChannelOf } from "@goat/shared/cliRelease";
 
 export type DesktopUpdateTranslate = ReturnType<typeof useGT>;
 
@@ -166,6 +166,17 @@ function getDesktopUpdateActionTooltip(
       });
     }
     return translateDesktopUpdateMessage(state.message, gt) ?? gt("Update failed");
+  }
+  const buildChannel =
+    cliReleaseChannelOf(state.currentVersion) === "nightly" ? "nightly" : "latest";
+  if (state.status === "up-to-date" && buildChannel !== state.channel) {
+    return gt(
+      "This {build} build ignores {track} releases. Review the update track in Settings to finish the switch.",
+      {
+        build: buildChannel === "nightly" ? gt("Nightly") : gt("Stable"),
+        track: state.channel === "nightly" ? gt("Nightly") : gt("Stable"),
+      },
+    );
   }
   return gt("Up to date");
 }
