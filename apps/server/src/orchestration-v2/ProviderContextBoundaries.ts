@@ -230,8 +230,11 @@ function conversationProviderThread(
   const active = projection.providerThreads.find(
     (candidate) => candidate.id === projection.thread.activeProviderThreadId,
   );
-  if (active === undefined || !startedByScheduledFreshRun(active)) return active;
+  if (active === undefined) return active;
   const boundary = contextBoundaryOrdinal(projection);
+  if (!startedByScheduledFreshRun(active) && !providerThreadPredatesBoundary(active, boundary)) {
+    return active;
+  }
   return (
     projection.providerThreads
       .filter(
