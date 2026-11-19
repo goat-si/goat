@@ -1,5 +1,5 @@
 import * as ProviderHost from "@goat/provider-core/server/ProviderHost";
-import type { ProviderUsageScan } from "@goat/provider-core/server/usage";
+import type { ProviderUsageScan, UsageHistoryPruneGuard } from "@goat/provider-core/server/usage";
 import { writeFileStringAtomically } from "@goat/shared/atomicWrite";
 import * as HostProcess from "@goat/shared/HostProcess";
 import * as Clock from "effect/Clock";
@@ -45,6 +45,7 @@ export class CursorUsageAccounts extends Context.Service<
       readonly keychainUsageEnabled: boolean;
       readonly windowStartMs: number;
       readonly retentionCutoffMs: number;
+      readonly withHistoryPruneGuard?: UsageHistoryPruneGuard;
       readonly awaitRefresh: boolean;
     }) => Effect.Effect<ReadonlyArray<ProviderUsageScan>>;
     readonly awaitPersisted: Effect.Effect<void>;
@@ -111,6 +112,7 @@ const make = Effect.gen(function* () {
     credential: CursorCredentialSource,
     credentialKey: string,
     retentionStartMs: number,
+    withHistoryPruneGuard: UsageHistoryPruneGuard | undefined,
   ) {
     const nowMs = yield* Clock.currentTimeMillis;
     const fetchMissing = (cache: CursorAccountCache | undefined) => {
@@ -140,17 +142,27 @@ const make = Effect.gen(function* () {
       yield* schedulePersist;
       return;
     }
-    const merged = mergeCursorFetch(
-      base,
-      result.accountKey,
-      range,
-      result.records,
-      nowMs,
-      retentionStartMs,
-    );
-    caches.set(credentialKey, merged.cache);
-    failures.delete(credentialKey);
-    if (merged.changed) cacheDirty = true;
+    const accountKey = result.accountKey;
+    const commit = (authorized: boolean) =>
+      Effect.sync(() => {
+        const merged = mergeCursorFetch(
+          base,
+          accountKey,
+          range,
+          result.records,
+          nowMs,
+          retentionStartMs,
+          authorized,
+        );
+        caches.set(credentialKey, merged.cache);
+        failures.delete(credentialKey);
+        if (merged.changed) cacheDirty = true;
+      });
+    const wouldPrune =
+      base?.records.some((record) => record.timestampMs < retentionStartMs) ?? false;
+    yield* wouldPrune && withHistoryPruneGuard !== undefined
+      ? withHistoryPruneGuard(commit)
+      : commit(!wouldPrune);
     yield* schedulePersist;
   }, refreshLock.withPermit);
 
@@ -158,6 +170,7 @@ const make = Effect.gen(function* () {
     credential: CursorCredentialSource,
     credentialKey: string,
     retentionStartMs: number,
+    withHistoryPruneGuard: UsageHistoryPruneGuard | undefined,
   ) =>
     // Enroll and fork atomically so interruption cannot strand a registered refresh.
     Effect.uninterruptible(
@@ -167,7 +180,12 @@ const make = Effect.gen(function* () {
         const done = Deferred.makeUnsafe<void>();
         refreshes.set(credentialKey, done);
         // Detached: a departing client must not cancel a fetch later reads reuse.
-        yield* refreshAccount(credential, credentialKey, retentionStartMs).pipe(
+        yield* refreshAccount(
+          credential,
+          credentialKey,
+          retentionStartMs,
+          withHistoryPruneGuard,
+        ).pipe(
           Effect.catchCause(() =>
             Clock.currentTimeMillis.pipe(
               Effect.map((atMs) =>
@@ -193,6 +211,7 @@ const make = Effect.gen(function* () {
     windowStartMs: number,
     retentionStartMs: number,
     awaitRefresh: boolean,
+    withHistoryPruneGuard: UsageHistoryPruneGuard | undefined,
   ) {
     // A Keychain login outlives an uninstalled Cursor, so it also needs Cursor's local directory.
     const localLogin =
@@ -224,14 +243,24 @@ const make = Effect.gen(function* () {
       (recentFailure === undefined || nowMs - recentFailure.atMs >= CURSOR_ACCOUNT_TTL_MS) &&
       !isCursorCacheFresh(caches.get(credentialKey), nowMs, retentionStartMs)
     ) {
-      const refresh = yield* startRefresh(credential, credentialKey, retentionStartMs);
+      const refresh = yield* startRefresh(
+        credential,
+        credentialKey,
+        retentionStartMs,
+        withHistoryPruneGuard,
+      );
       if (awaitRefresh) {
         yield* Deferred.await(refresh);
         if (
           !failures.has(credentialKey) &&
           !isCursorCacheFresh(caches.get(credentialKey), nowMs, retentionStartMs)
         ) {
-          const retry = yield* startRefresh(credential, credentialKey, retentionStartMs);
+          const retry = yield* startRefresh(
+            credential,
+            credentialKey,
+            retentionStartMs,
+            withHistoryPruneGuard,
+          );
           yield* Deferred.await(retry);
         }
       } else refreshing = true;
@@ -276,6 +305,7 @@ const make = Effect.gen(function* () {
       windowStartMs,
       retentionCutoffMs,
       awaitRefresh,
+      withHistoryPruneGuard,
     }) {
       // One copy of the host decides every instance, the server's own destinations and its login.
       const server = { ...hostEnvironment };
@@ -320,6 +350,7 @@ const make = Effect.gen(function* () {
               windowStartMs,
               retentionCutoffMs,
               awaitRefresh,
+              withHistoryPruneGuard,
             ),
           { concurrency: 2 },
         );
@@ -384,6 +415,7 @@ const make = Effect.gen(function* () {
         windowStartMs,
         retentionCutoffMs,
         awaitRefresh,
+        withHistoryPruneGuard,
       );
       return source === null ? [] : [source];
     },

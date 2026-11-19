@@ -98,11 +98,16 @@ export interface ProviderUsageScan {
   readonly refreshing?: true;
 }
 
+export type UsageHistoryPruneGuard = (
+  commit: (authorized: boolean) => Effect.Effect<void>,
+) => Effect.Effect<void>;
+
 export interface ProviderUsageScanInput<Config> {
   readonly instances: ReadonlyArray<ProviderUsageInstance<Config>>;
   readonly settings: ServerSettings;
   readonly windowStartMs: number;
   readonly retentionCutoffMs: number;
+  readonly withHistoryPruneGuard?: UsageHistoryPruneGuard;
   readonly awaitRefresh: boolean;
 }
 

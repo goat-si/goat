@@ -82,7 +82,14 @@ export const CursorDriver: ProviderDriver<
     kind: "scan",
     provider: "cursor",
     rateModel: cursorRateModel,
-    scan: ({ instances, settings, windowStartMs, retentionCutoffMs, awaitRefresh }) =>
+    scan: ({
+      instances,
+      settings,
+      windowStartMs,
+      retentionCutoffMs,
+      withHistoryPruneGuard,
+      awaitRefresh,
+    }) =>
       CursorUsageAccounts.CursorUsageAccounts.pipe(
         Effect.flatMap((accounts) =>
           accounts.scan({
@@ -99,6 +106,7 @@ export const CursorDriver: ProviderDriver<
             keychainUsageEnabled: settings.cursorKeychainUsageEnabled,
             windowStartMs,
             retentionCutoffMs,
+            ...(withHistoryPruneGuard === undefined ? {} : { withHistoryPruneGuard }),
             awaitRefresh,
           }),
         ),

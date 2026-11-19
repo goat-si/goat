@@ -2,6 +2,7 @@ import * as NodeCrypto from "@effect/platform-node/NodeCrypto";
 import * as NodeServices from "@effect/platform-node/NodeServices";
 import { assert, describe, it } from "@effect/vitest";
 import { ProviderInstanceId } from "@goat/contracts";
+import type { UsageRecord } from "@goat/provider-core/server/usage";
 import * as TestProviderHost from "@goat/provider-testing/TestProviderHost";
 import * as Deferred from "effect/Deferred";
 import * as Effect from "effect/Effect";
@@ -62,6 +63,90 @@ describe("CursorUsageAccounts", () => {
       ),
     );
   });
+
+  it.effect.each(["changed", "unreadable"] as const)(
+    "preserves saved usage when retention settings are %s at merge time",
+    (condition) => {
+      const entered = Deferred.makeUnsafe<void>();
+      const release = Deferred.makeUnsafe<void>();
+      const older: UsageRecord = {
+        provider: "cursor",
+        timestampMs: 5_000,
+        model: "cursor-model",
+        sessionId: "session",
+        totals: {
+          uncachedInputTokens: 0,
+          cachedInputTokens: 0,
+          cacheCreationTokens: 0,
+          outputTokens: 7,
+          reasoningTokens: 0,
+        },
+        speed: "standard",
+        reportedCostUsd: null,
+        dedupeKey: "cursor:old",
+      };
+      const reader = Layer.succeed(CursorAccountReader.CursorAccountReader, {
+        read: (_credential, sinceMs) =>
+          sinceMs === 8_000
+            ? Deferred.succeed(entered, undefined).pipe(
+                Effect.andThen(Deferred.await(release)),
+                Effect.as({ accountKey: "account", records: [], missing: false, error: null }),
+              )
+            : Effect.succeed({
+                accountKey: "account",
+                records: [older],
+                missing: false,
+                error: null,
+              }),
+      });
+      return Effect.gen(function* () {
+        yield* TestClock.setTime(10_000);
+        const accounts = yield* CursorUsageAccounts.CursorUsageAccounts;
+        const input = {
+          instances: [
+            {
+              instanceId: ProviderInstanceId.make("cursor"),
+              config: {},
+              environment: [{ name: "CURSOR_API_KEY", value: "test-key", sensitive: true }],
+            },
+          ],
+          keychainUsageEnabled: false,
+          windowStartMs: 0,
+          retentionCutoffMs: 0,
+          awaitRefresh: true,
+        };
+        yield* accounts.scan(input);
+        yield* TestClock.adjust("61 seconds");
+        let setting: "same" | "changed" | "unreadable" = "same";
+        const request = {
+          ...input,
+          retentionCutoffMs: 8_000,
+          withHistoryPruneGuard: (commit: (allowed: boolean) => Effect.Effect<void>) =>
+            Effect.suspend(() => commit(setting === "same")),
+        };
+        const refresh = yield* accounts.scan(request).pipe(Effect.forkChild());
+        yield* Deferred.await(entered);
+        setting = condition;
+        yield* Deferred.succeed(release, undefined);
+        const result = yield* Fiber.join(refresh);
+        assert.deepEqual(
+          result[0]?.files?.flatMap((file) => file.records),
+          [older],
+        );
+        yield* accounts.awaitPersisted;
+      }).pipe(
+        Effect.provide(
+          Layer.provideMerge(
+            CursorUsageAccounts.layer.pipe(Layer.provide(reader)),
+            Layer.provideMerge(
+              TestProviderHost.layer(),
+              Layer.mergeAll(NodeServices.layer, NodeCrypto.layer),
+            ),
+          ),
+        ),
+      );
+    },
+  );
 
   it.effect("runs at most two account refreshes at once and settles all of them", () => {
     let inFlight = 0;

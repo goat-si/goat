@@ -28,7 +28,7 @@ import { formatMalformedUsageWarning } from "@goat/shared/usageFormat";
 import * as ServerConfig from "../config.ts";
 import * as ServerSettings from "../serverSettings.ts";
 import type { BuiltInUsageReadersEnv } from "../provider/builtInDrivers.ts";
-import type { UsageRecord } from "@goat/provider-core/server/usage";
+import type { UsageHistoryPruneGuard, UsageRecord } from "@goat/provider-core/server/usage";
 import {
   canonicalModelFilter,
   keepsUsageRecord,
@@ -470,6 +470,22 @@ export const make = Effect.gen(function* () {
     } satisfies ScannedDir;
   });
 
+  const historyPruneGuard =
+    (retention: ServerSettingsValue["usageHistoryRetentionDays"]): UsageHistoryPruneGuard =>
+    (commit) =>
+      settingsService
+        .withSettingsSnapshot(
+          (current) => commit(current.usageHistoryRetentionDays === retention),
+          { refreshFromDisk: true },
+        )
+        .pipe(
+          Effect.catch((cause) =>
+            Effect.logWarning("Could not read settings before pruning usage history.", {
+              cause,
+            }).pipe(Effect.andThen(commit(false))),
+          ),
+        );
+
   const collectDirs = Effect.fn("UsageService.collectDirs")(function* (
     { dirs, pending }: Effect.Success<ReturnType<typeof resolveTranscriptDirs>>,
     windowStartMs: number,
@@ -483,7 +499,14 @@ export const make = Effect.gen(function* () {
       ({ driver, reader }) =>
         usageInstances(driver, settings).pipe(
           Effect.flatMap((instances) =>
-            reader.scan({ instances, settings, windowStartMs, retentionCutoffMs, awaitRefresh }),
+            reader.scan({
+              instances,
+              settings,
+              windowStartMs,
+              retentionCutoffMs,
+              withHistoryPruneGuard: historyPruneGuard(settings.usageHistoryRetentionDays),
+              awaitRefresh,
+            }),
           ),
           Effect.flatMap((sources) =>
             Effect.forEach(sources, ({ volumeId, ...source }) =>
@@ -840,24 +863,15 @@ export const make = Effect.gen(function* () {
     );
 
     if (fileCache.values().some((entry) => entry.mtimeMs < retentionCutoffMs)) {
-      yield* settingsService
-        .withSettingsSnapshot(
-          (current) =>
-            Effect.sync(() => {
-              if (current.usageHistoryRetentionDays !== retention) return;
-              if (pruneScanCache(fileCache, retentionCutoffMs) === 0) return;
-              cacheDirty = true;
-              for (const [key, since] of coveredSince) {
-                if (since < retentionCutoffMs) coveredSince.set(key, retentionCutoffMs);
-              }
-            }),
-          { refreshFromDisk: true },
-        )
-        .pipe(
-          Effect.catch((cause) =>
-            Effect.logWarning("Could not read settings before pruning usage history.", { cause }),
-          ),
-        );
+      yield* historyPruneGuard(retention)((authorized) =>
+        Effect.sync(() => {
+          if (!authorized || pruneScanCache(fileCache, retentionCutoffMs) === 0) return;
+          cacheDirty = true;
+          for (const [key, since] of coveredSince) {
+            if (since < retentionCutoffMs) coveredSince.set(key, retentionCutoffMs);
+          }
+        }),
+      );
     }
 
     const aggregated = aggregator.finish();

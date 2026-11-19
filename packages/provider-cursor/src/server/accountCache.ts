@@ -56,7 +56,10 @@ export function mergeCursorFetch(
   fetched: readonly UsageRecord[],
   nowMs: number,
   retentionStartMs: number,
+  pruneAuthorized = true,
 ) {
+  const cutoff = pruneAuthorized ? retentionStartMs : 0;
+  const sinceMs = Math.max(cutoff, Math.min(cache?.sinceMs ?? range.sinceMs, range.sinceMs));
   const inRange = (record: UsageRecord) =>
     record.timestampMs >= range.sinceMs && record.timestampMs <= range.untilMs;
   const previous = cache?.records ?? [];
@@ -65,24 +68,22 @@ export function mergeCursorFetch(
   let pruned = false;
   for (const record of previous) {
     if (inRange(record)) replacedKeys.add(record.dedupeKey);
-    else if (record.timestampMs < retentionStartMs) pruned = true;
+    else if (record.timestampMs < cutoff) pruned = true;
   }
   const changed =
     cache === undefined ||
-    cache.sinceMs > retentionStartMs ||
+    cache.sinceMs !== sinceMs ||
     pruned ||
     replacedKeys.size !== added.length ||
     added.some((record) => !replacedKeys.has(record.dedupeKey));
   const records = !changed
     ? previous
-    : previous
-        .filter((record) => !inRange(record) && record.timestampMs >= retentionStartMs)
-        .concat(added);
+    : previous.filter((record) => !inRange(record) && record.timestampMs >= cutoff).concat(added);
   return {
     changed,
     cache: {
       accountKey,
-      sinceMs: retentionStartMs,
+      sinceMs,
       untilMs: range.untilMs,
       fetchedAtMs: nowMs,
       records,
