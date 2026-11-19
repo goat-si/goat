@@ -6,7 +6,6 @@ import * as Layer from "effect/Layer";
 import * as Schema from "effect/Schema";
 import * as Scope from "effect/Scope";
 import * as Semaphore from "effect/Semaphore";
-import * as Stream from "effect/Stream";
 import { ServerSettingsService } from "../serverSettings.ts";
 import { getSpeechModel, SPEECH_MODELS } from "./model.ts";
 import * as SpeechModelStore from "./SpeechModelStore.ts";
@@ -23,9 +22,10 @@ export class SpeechManagement extends Context.Service<
   SpeechManagement,
   {
     readonly configuration: Effect.Effect<SpeechConfiguration, SpeechManagementError>;
+    readonly configurationRevision: Effect.Effect<number, SpeechManagementError>;
     readonly configurationChanges: Effect.Effect<
-      Stream.Stream<SpeechConfiguration>,
-      never,
+      import("effect/Stream").Stream<SpeechConfiguration & { readonly revision: number }>,
+      SpeechManagementError,
       Scope.Scope
     >;
     readonly list: Effect.Effect<
@@ -60,6 +60,7 @@ export class SpeechManagement extends Context.Service<
           SpeechInference.SpeechInferenceError
         >;
         readonly finish: Effect.Effect<string, SpeechInference.SpeechInferenceError>;
+        readonly configuration: SpeechConfiguration;
       },
       SpeechManagementError,
       Scope.Scope
@@ -93,8 +94,23 @@ const make = Effect.gen(function* () {
       Effect.map((current) => current.speech),
       Effect.mapError((error) => failure("configuration", error)),
     ),
-    configurationChanges: Effect.suspend(() => settings.subscribeChanges).pipe(
-      Effect.map(Stream.map((settings) => settings.speech)),
+    configurationRevision: Effect.suspend(
+      () =>
+        settings.speechChangesRevision ??
+        Effect.logError("Speech settings change tracking is unavailable.").pipe(
+          Effect.andThen(
+            Effect.fail(failure("stream", "Speech settings change tracking is unavailable.")),
+          ),
+        ),
+    ),
+    configurationChanges: Effect.suspend(
+      () =>
+        settings.subscribeSpeechChanges ??
+        Effect.logError("Speech settings change tracking is unavailable.").pipe(
+          Effect.andThen(
+            Effect.fail(failure("stream", "Speech settings change tracking is unavailable.")),
+          ),
+        ),
     ),
     list: Effect.gen(function* () {
       const current = yield* settings.getSettings;
@@ -205,9 +221,10 @@ const make = Effect.gen(function* () {
               .pipe(Effect.mapError((error) => failure("stream", error)));
             if (path === undefined)
               return yield* failure("stream", "The selected speech model is not installed.");
-            return yield* inference
+            const worker = yield* inference
               .openStream(path, config, language)
               .pipe(Effect.mapError((error) => failure("stream", error)));
+            return { ...worker, configuration: config };
           }).pipe(
             Scope.provide(scope),
             Effect.onError(() => Scope.close(scope, Exit.void)),

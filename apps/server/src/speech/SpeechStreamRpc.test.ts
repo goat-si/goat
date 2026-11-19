@@ -24,11 +24,13 @@ it.effect("authorizes and routes live audio and terminal text through the RPC gr
       let language: string | undefined;
       const speech = Layer.mock(SpeechManagement.SpeechManagement)({
         configuration: Effect.succeed(DEFAULT_SPEECH_CONFIGURATION),
+        configurationRevision: Effect.succeed(0),
         configurationChanges: Effect.succeed(Stream.never),
         startStream: (value) =>
           Effect.sync(() => {
             language = value;
             return {
+              configuration: DEFAULT_SPEECH_CONFIGURATION,
               feed: () =>
                 Effect.succeed({ revision: 1, text: { committed: "hello", tentative: "" } }),
               finish: Effect.succeed("hello"),

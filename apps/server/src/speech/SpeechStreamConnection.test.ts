@@ -13,12 +13,33 @@ import * as SpeechStreamConnection from "./SpeechStreamConnection.ts";
 import * as SpeechInference from "./SpeechInference.ts";
 import { DEFAULT_SPEECH_CONFIGURATION } from "@goat/contracts";
 
-const speechLayer = (overrides: Partial<SpeechManagement.SpeechManagement["Service"]>) =>
-  Layer.mock(SpeechManagement.SpeechManagement)({
+type TestStream = Omit<
+  Effect.Success<ReturnType<SpeechManagement.SpeechManagement["Service"]["startStream"]>>,
+  "configuration"
+>;
+const speechLayer = (
+  overrides: Omit<Partial<SpeechManagement.SpeechManagement["Service"]>, "startStream"> & {
+    readonly startStream?: (
+      language?: string,
+    ) => Effect.Effect<TestStream, SpeechManagement.SpeechManagementError, Scope.Scope>;
+  },
+) => {
+  const { startStream: start, ...other } = overrides;
+  return Layer.mock(SpeechManagement.SpeechManagement)({
     configuration: Effect.succeed(DEFAULT_SPEECH_CONFIGURATION),
+    configurationRevision: Effect.succeed(0),
     configurationChanges: Effect.succeed(Stream.never),
-    ...overrides,
+    ...other,
+    ...(start
+      ? {
+          startStream: (language) =>
+            start(language).pipe(
+              Effect.map((worker) => ({ ...worker, configuration: DEFAULT_SPEECH_CONFIGURATION })),
+            ),
+        }
+      : {}),
   });
+};
 
 it.effect("keeps stream ids connection-local and emits ordered preview and final text", () =>
   Effect.gen(function* () {
@@ -66,6 +87,7 @@ it.effect("watches configuration while a stream is open", () =>
       const subscribed = yield* Deferred.make<void>();
       const speech = speechLayer({
         configuration: Effect.succeed(DEFAULT_SPEECH_CONFIGURATION),
+        configurationRevision: Effect.succeed(0),
         configurationChanges: Deferred.succeed(subscribed, undefined).pipe(Effect.as(Stream.empty)),
         startStream: () =>
           Effect.succeed({
@@ -134,9 +156,12 @@ it.effect("identifies an unsupported model without opening a stream", () =>
 it.effect("ends an active stream when its model configuration changes", () =>
   Effect.scoped(
     Effect.gen(function* () {
-      const changes = yield* Queue.unbounded<typeof DEFAULT_SPEECH_CONFIGURATION>();
+      const changes = yield* Queue.unbounded<
+        typeof DEFAULT_SPEECH_CONFIGURATION & { readonly revision: number }
+      >();
       const released = yield* Deferred.make<void>();
       const speech = speechLayer({
+        configurationRevision: Effect.succeed(0),
         configurationChanges: Effect.succeed(Stream.fromQueue(changes)),
         startStream: () =>
           Effect.acquireRelease(
@@ -158,6 +183,7 @@ it.effect("ends an active stream when its model configuration changes", () =>
         yield* Queue.offer(changes, {
           ...DEFAULT_SPEECH_CONFIGURATION,
           modelId: "different-model",
+          revision: 1,
         });
         expect(yield* Queue.take(received)).toEqual({ type: "error", code: "failed" });
         yield* Deferred.await(released);
@@ -382,6 +408,44 @@ it.effect("terminates a stream when another audio frame arrives while inference 
         yield* Deferred.succeed(result, { revision: 1, text: null });
         expect(yield* Effect.result(Fiber.join(running))).toMatchObject({ _tag: "Failure" });
         expect(yield* Effect.result(connection.start())).toMatchObject({ _tag: "Success" });
+      }).pipe(Effect.provide(speech));
+    }),
+  ),
+);
+
+it.effect("releases the worker if finish races an in-flight feed", () =>
+  Effect.scoped(
+    Effect.gen(function* () {
+      const started = yield* Deferred.make<void>();
+      const result = yield* Deferred.make<{ revision: number; text: null }>();
+      let released = false;
+      const speech = speechLayer({
+        startStream: () =>
+          Effect.acquireRelease(
+            Effect.succeed({
+              feed: () =>
+                Deferred.succeed(started, undefined).pipe(Effect.andThen(Deferred.await(result))),
+              finish: Effect.succeed(""),
+            }),
+            () =>
+              Effect.sync(() => {
+                released = true;
+              }),
+          ),
+      });
+      yield* Effect.gen(function* () {
+        const connection = yield* SpeechStreamConnection.make;
+        const { streamId } = yield* connection.start();
+        const running = yield* connection
+          .feed({ streamId, sequence: 0, audioBase64: "AAA=" })
+          .pipe(Effect.forkChild);
+        yield* Deferred.await(started);
+        expect(yield* Effect.result(connection.finish(streamId))).toMatchObject({
+          _tag: "Failure",
+        });
+        expect(released).toBe(true);
+        yield* Deferred.succeed(result, { revision: 1, text: null });
+        expect(yield* Effect.result(Fiber.join(running))).toMatchObject({ _tag: "Failure" });
       }).pipe(Effect.provide(speech));
     }),
   ),

@@ -1,4 +1,5 @@
 import { normalizeChangedAcpCustomModels } from "./provider/goat/AcpCustomModelSettings.ts";
+import * as SpeechSettingsChanges from "./speech/SpeechSettingsChanges.ts";
 import { clearRetargetedSettingsSecrets } from "./settingsSecretDestinations.ts";
 import * as ServerSettingsWatcher from "./serverSettingsWatcher.ts";
 import * as NodeUtil from "node:util";
@@ -786,6 +787,10 @@ export class ServerSettingsService extends Context.Service<
 
     /** Subscribe before reading a snapshot to retain changes before lazy stream startup. */
     readonly subscribeChanges: Effect.Effect<Stream.Stream<ServerSettings>, never, Scope.Scope>;
+    readonly speechChangesRevision?: Effect.Success<typeof SpeechSettingsChanges.make>["revision"];
+    readonly subscribeSpeechChanges?: Effect.Success<
+      typeof SpeechSettingsChanges.make
+    >["subscribe"];
     readonly subscribeProviderChanges?: Effect.Effect<
       Stream.Stream<
         { readonly settings: ServerSettings; readonly revision: CodexRoute.SettingsRevision },
@@ -815,6 +820,8 @@ const makeTest = Effect.fn("serverSettings.makeTest")(function* (
       : {}),
   });
   const currentSettingsRef = yield* Ref.make<ServerSettings>(initialSettings);
+  const speechChanges = yield* SpeechSettingsChanges.make;
+  yield* speechChanges.publish(initialSettings.speech);
   const cuaPolicy = yield* makeCuaCommittedPolicy;
   yield* cuaPolicy.publish(initialSettings, Option.none());
   const providerPolicy = yield* makeMemoryProviderPolicy;
@@ -845,6 +852,7 @@ const makeTest = Effect.fn("serverSettings.makeTest")(function* (
           Ref.set(currentSettingsRef, nextSettings).pipe(
             Effect.andThen(cuaPolicy.publish(nextSettings, Option.none())),
             Effect.andThen(hubConsent.committed(nextSettings.hub)),
+            Effect.andThen(speechChanges.publish(nextSettings.speech)),
             Effect.andThen(providerPolicy.publish(nextSettings.enableAgentMemoryAccess)),
             Effect.andThen(ownerPublication.publish(ownerProjection(nextSettings))),
           ),
@@ -966,6 +974,8 @@ const makeTest = Effect.fn("serverSettings.makeTest")(function* (
     },
     streamChanges: Stream.empty,
     subscribeChanges: Effect.succeed(Stream.empty),
+    speechChangesRevision: speechChanges.revision,
+    subscribeSpeechChanges: speechChanges.subscribe,
   } satisfies ServerSettingsService["Service"] &
     MemoryHubSettingsTransitions["Service"] & {
       adminSettings: MemoryHubAdminSettings["Service"];
@@ -1256,6 +1266,7 @@ const make = Effect.gen(function* () {
   const cacheKey = "settings" as const;
   const hubConsent = yield* makeHubConsentGenerations;
   const changesPubSub = yield* PubSub.unbounded<ServerSettings>();
+  const speechChanges = yield* SpeechSettingsChanges.make;
   const providerChangesPubSub = yield* PubSub.unbounded<{
     readonly settings: ServerSettings;
     readonly revision: CodexRoute.SettingsRevision;
@@ -1270,6 +1281,7 @@ const make = Effect.gen(function* () {
     Effect.gen(function* () {
       yield* Ref.set(blockedBrowserHostsRef, settings.blockedBrowserHosts);
       yield* hubConsent.committed(settings.hub);
+      yield* speechChanges.publish(settings.speech);
       yield* PubSub.publish(changesPubSub, settings);
       if (Option.isSome(routeState))
         yield* PubSub.publish(providerChangesPubSub, {
@@ -2214,6 +2226,8 @@ const make = Effect.gen(function* () {
         Effect.map((subscription) => materializeChanges(Stream.fromSubscription(subscription))),
       );
     },
+    speechChangesRevision: speechChanges.revision,
+    subscribeSpeechChanges: speechChanges.subscribe,
   } satisfies ServerSettingsService["Service"] &
     MemoryHubSettingsTransitions["Service"] & {
       adminSettings: MemoryHubAdminSettings["Service"];

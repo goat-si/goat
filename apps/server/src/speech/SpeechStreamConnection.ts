@@ -94,7 +94,10 @@ export const make = Effect.gen(function* () {
   });
   const finish = Effect.fn("SpeechStreamConnection.finish")(function* (id: string) {
     const current = yield* find(id);
-    if (current.busy) return yield* new SpeechStreamError({ code: "busy" });
+    if (current.busy) {
+      yield* failCurrent(current, "failed");
+      return yield* new SpeechStreamError({ code: "busy" });
+    }
     current.busy = true;
     yield* Scope.close(current.timerScope, Exit.void);
     const result = yield* current.worker.finish.pipe(
@@ -121,10 +124,11 @@ export const make = Effect.gen(function* () {
       starting = true;
       const scope = yield* Scope.make();
       const loading = yield* Effect.gen(function* () {
-        const changes = yield* speech.configurationChanges;
-        const configuration = yield* speech.configuration;
         const worker = yield* speech.startStream(language);
-        return { worker, configuration, changes };
+        const changes = yield* speech.configurationChanges;
+        const revision = yield* speech.configurationRevision;
+        const configuration = yield* speech.configuration;
+        return { worker, configuration, changes, revision };
       }).pipe(Scope.provide(scope), Effect.forkIn(connectionScope));
       const result = yield* Fiber.await(loading).pipe(
         Effect.onInterrupt(() =>
@@ -153,6 +157,13 @@ export const make = Effect.gen(function* () {
                 : "failed",
         });
       }
+      if (
+        result.value.worker.configuration.modelId !== result.value.configuration.modelId ||
+        result.value.worker.configuration.acceleration !== result.value.configuration.acceleration
+      ) {
+        yield* Scope.close(scope, Exit.void);
+        return yield* new SpeechStreamError({ code: "failed" });
+      }
       const current: Session = {
         id: NodeCrypto.randomUUID(),
         scope,
@@ -170,6 +181,7 @@ export const make = Effect.gen(function* () {
       yield* result.value.changes.pipe(
         Stream.filter(
           (next) =>
+            next.revision > result.value.revision ||
             next.modelId !== result.value.configuration.modelId ||
             next.acceleration !== result.value.configuration.acceleration,
         ),
