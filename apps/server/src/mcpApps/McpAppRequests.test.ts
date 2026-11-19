@@ -1,6 +1,7 @@
 import {
   ProviderSessionId,
   ProviderThreadId,
+  ProviderInstanceId,
   ThreadId,
   TurnItemId,
   type McpAppRequestError,
@@ -17,6 +18,7 @@ import * as Orchestrator from "../orchestration-v2/Orchestrator.ts";
 import type * as ProviderAdapter from "@goat/provider-core/server/ProviderAdapter";
 import * as ProviderSessionManager from "../orchestration-v2/ProviderSessionManager.ts";
 import * as ThreadManagementService from "../orchestration-v2/ThreadManagementService.ts";
+import * as RuntimePolicy from "../orchestration-v2/RuntimePolicy.ts";
 import * as McpAppModelContext from "./McpAppModelContext.ts";
 import * as McpAppRequests from "./McpAppRequests.ts";
 
@@ -68,6 +70,7 @@ function makeLayer(input: {
   readonly item: OrchestrationV2TurnItem | null;
   readonly mcpApps?: ProviderAdapter.ProviderAdapterV2McpApps;
   readonly live?: boolean;
+  readonly currentModel?: () => string;
 }) {
   return McpAppRequests.layer.pipe(
     Layer.provide(
@@ -80,6 +83,7 @@ function makeLayer(input: {
               else storedContext.set(key, entry.text);
             }),
         }),
+        RuntimePolicy.layer,
         Layer.mock(Orchestrator.OrchestratorV2)({
           getTurnItem: () => Effect.succeed(input.item),
         }),
@@ -87,6 +91,17 @@ function makeLayer(input: {
           getThreadRecords: (id: ThreadId) =>
             Effect.succeed({
               thread: {
+                ...(input.currentModel === undefined
+                  ? {}
+                  : {
+                      modelSelection: {
+                        instanceId: ProviderInstanceId.make("codex"),
+                        model: input.currentModel(),
+                      },
+                      runtimeMode: "approval-required",
+                      interactionMode: "default",
+                      worktreePath: "/current-worktree",
+                    }),
                 lineage:
                   deepParent(id) !== null
                     ? {
@@ -147,6 +162,35 @@ describe("McpAppRequests", () => {
       }),
     readResource: () => Effect.succeed({ contents: [] }),
   };
+
+  it.effect("resolves the thread's current selection when an MCP app retries", () => {
+    let model = "old";
+    const liveApps: ProviderAdapter.ProviderAdapterV2McpApps = {
+      ...mcpApps,
+      readResource: (input) =>
+        Effect.gen(function* () {
+          model = "current";
+          assert.isDefined(input.resolveRuntime);
+          if (!input.resolveRuntime) return { contents: [] };
+          const current = yield* input.resolveRuntime;
+          assert.equal(current?.modelSelection.model, "current");
+          assert.equal(current?.runtimePolicy.cwd, "/current-worktree");
+          return { contents: [] };
+        }),
+    };
+    return Effect.gen(function* () {
+      const requests = yield* McpAppRequests.McpAppRequests;
+      yield* requests.readResource({ threadId, itemId, uri: "ui://weather/dashboard" });
+    }).pipe(
+      Effect.provide(
+        makeLayer({
+          item: appItem({ t3McpApp: app }),
+          mcpApps: liveApps,
+          currentModel: () => model,
+        }),
+      ),
+    );
+  });
 
   it.effect("calls tools on the app's own server and reports their read-only hint", () =>
     Effect.gen(function* () {

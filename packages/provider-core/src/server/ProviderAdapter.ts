@@ -696,21 +696,33 @@ export interface ProviderAdapterV2McpCallToolResult {
   readonly _meta?: unknown;
 }
 
+export type ProviderAdapterV2McpRuntime = Effect.Effect<
+  | {
+      readonly modelSelection: ModelSelection;
+      readonly runtimePolicy: ProviderAdapterV2RuntimePolicy;
+    }
+  | undefined,
+  ProviderAdapterV2Error
+>;
+
 export interface ProviderAdapterV2McpApps {
   readonly listTools: (input: {
     readonly providerThread: OrchestrationV2ProviderThread;
     readonly server: string;
+    readonly resolveRuntime?: ProviderAdapterV2McpRuntime;
   }) => Effect.Effect<ReadonlyArray<ProviderAdapterV2McpTool>, ProviderAdapterV2Error>;
   readonly callTool: (input: {
     readonly providerThread: OrchestrationV2ProviderThread;
     readonly server: string;
     readonly tool: string;
     readonly arguments: Record<string, unknown>;
+    readonly resolveRuntime?: ProviderAdapterV2McpRuntime;
   }) => Effect.Effect<ProviderAdapterV2McpCallToolResult, ProviderAdapterV2Error>;
   readonly readResource: (input: {
     readonly providerThread: OrchestrationV2ProviderThread;
     readonly server: string;
     readonly uri: string;
+    readonly resolveRuntime?: ProviderAdapterV2McpRuntime;
   }) => Effect.Effect<{ readonly contents: ReadonlyArray<unknown> }, ProviderAdapterV2Error>;
 }
 
