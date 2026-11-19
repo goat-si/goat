@@ -94,6 +94,7 @@ export interface VoiceRecordingPayload {
 
 export interface VoiceRecordingOptions {
   readonly onStreamingChunk?: (payload: VoiceRecordingPayload) => void;
+  readonly onPcmFrame?: (frame: Uint8Array) => void;
   readonly onLimitReached?: () => void;
   /** A recording that started but then failed, such as one that never received sound. */
   readonly onError?: (error: VoiceMicrophoneError) => void;

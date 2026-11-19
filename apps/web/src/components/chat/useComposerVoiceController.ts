@@ -30,6 +30,7 @@ import { composerTargetKey, useComposerDraftStore } from "../../composerDraftSto
 import { readThreadShell } from "../../state/entities";
 import { MAX_UNATTACHED_VOICE_TRANSCRIPTS, voiceSession } from "../../speech/voiceSession";
 import { captureBackgroundVoiceDraft } from "../../speech/backgroundVoiceDraft";
+import { LiveSpeechFramePump, type LiveSpeechFrameSession } from "../../speech/liveSpeechFramePump";
 import { useEnvironment, useEnvironments, usePrimaryEnvironmentId } from "../../state/environments";
 import {
   readEnvironmentProxiedByHub,
@@ -70,6 +71,7 @@ export interface ComposerVoiceTarget {
   /** Where this composer's audio is transcribed; see resolveVoiceTranscriptionRoute. */
   readonly route: VoiceTranscriptionRoute;
   readonly localModelGrant?: EnvironmentSpeechGrant | null;
+  readonly liveEnabled?: boolean;
 }
 
 interface VoiceControllerState extends VoiceInputState {
@@ -90,6 +92,12 @@ export interface ComposerVoiceDependencies {
     payload: VoiceRecordingPayload,
     signal: AbortSignal,
   ) => Promise<{ readonly text: string }>;
+  readonly startLive?: (
+    target: ComposerVoiceTarget,
+    onPreview: (text: string) => void,
+    onFailure: () => void,
+    signal: AbortSignal,
+  ) => Promise<LiveSpeechFrameSession | null>;
 }
 
 const IDLE: VoiceControllerState = {
@@ -109,6 +117,7 @@ export class ComposerVoiceController {
   private appliedSequence = 0;
   private queued: { sequence: number; payload: VoiceRecordingPayload } | null = null;
   private captured: VoiceDraftSnapshot | null = null;
+  private livePump: LiveSpeechFramePump | null = null;
   private submitHandler: ComposerVoiceDependencies["onSubmit"];
   private readonly listeners = new Set<() => void>();
 
@@ -166,6 +175,8 @@ export class ComposerVoiceController {
     this.generation++;
     this.abort?.abort();
     this.abort = null;
+    this.livePump?.cancel();
+    this.livePump = null;
     this.captured = null;
     this.retirePreviews();
     this.publish(IDLE);
@@ -199,6 +210,22 @@ export class ComposerVoiceController {
     this.sequence = 0;
     this.appliedSequence = 0;
     this.publish({ ...IDLE, phase: "preparing" });
+    if (target.localModelGrant && target.liveEnabled && this.dependencies.startLive) {
+      const startLive = this.dependencies.startLive;
+      this.livePump = new LiveSpeechFramePump(
+        (signal, onFailure) =>
+          startLive(
+            target,
+            (text) => {
+              if (generation === this.generation && this.state.phase === "recording")
+                this.publish({ ...this.state, streamingPreviewText: text });
+            },
+            onFailure,
+            signal,
+          ),
+        () => {},
+      );
+    }
     // Warming the server must never delay microphone access or make recording fail.
     void Promise.resolve()
       .then(() => {
@@ -207,6 +234,9 @@ export class ComposerVoiceController {
       .catch(() => undefined);
     try {
       await this.dependencies.startRecording({
+        onPcmFrame: (frame) => {
+          if (generation === this.generation) this.livePump?.push(frame);
+        },
         onStreamingChunk: (payload) => {
           if (!target.localModelGrant && generation === this.generation)
             this.enqueuePreview(payload);
@@ -227,6 +257,8 @@ export class ComposerVoiceController {
 
   private fail(error: unknown, unattachedTranscript?: string) {
     this.abort?.abort();
+    this.livePump?.cancel();
+    this.livePump = null;
     this.retirePreviews();
     this.publish({
       ...IDLE,
@@ -293,12 +325,22 @@ export class ComposerVoiceController {
     const isCurrent = () => generation === this.generation && !signal.aborted;
     let unattachedTranscript: string | undefined;
     this.retirePreviews();
-    this.publish({ ...this.state, phase: "transcribing", streamingPreviewText: "" });
+    this.publish({
+      ...this.state,
+      phase: "transcribing",
+      streamingPreviewText: this.livePump ? this.state.streamingPreviewText : "",
+    });
     try {
       const payload = await this.dependencies.stopRecording();
       if (!isCurrent()) return false;
       if (!payload) throw new Error("No audio was captured. Check your microphone and try again.");
-      const result = await this.dependencies.transcribe(target, payload, signal);
+      const liveText = await this.livePump?.finish();
+      this.livePump = null;
+      if (!isCurrent()) return false;
+      const result =
+        liveText != null
+          ? { text: liveText }
+          : await this.dependencies.transcribe(target, payload, signal);
       if (!isCurrent()) return false;
       unattachedTranscript = result.text;
       const commit = resolveTranscriptCommit(

@@ -6,7 +6,11 @@ import {
   type VoiceRecordingOptions,
   type VoiceRecordingPayload,
 } from "../../lib/voiceRecorder";
-import { ComposerVoiceController, type ComposerVoiceTarget } from "./useComposerVoiceController";
+import {
+  ComposerVoiceController,
+  type ComposerVoiceDependencies,
+  type ComposerVoiceTarget,
+} from "./useComposerVoiceController";
 import { chooseEnvironmentSpeech, readEnvironmentSpeechGrant } from "../../speech/voiceConsent";
 
 const payload: VoiceRecordingPayload = {
@@ -16,7 +20,10 @@ const payload: VoiceRecordingPayload = {
   durationMs: 4_000,
 };
 
-function setup(overrides: Partial<ComposerVoiceTarget> = {}) {
+function setup(
+  overrides: Partial<ComposerVoiceTarget> = {},
+  dependencies: Partial<ComposerVoiceDependencies> = {},
+) {
   const target: ComposerVoiceTarget = {
     environmentId: EnvironmentId.make("voice-env-a"),
     threadId: ThreadId.make("voice-thread-a"),
@@ -61,6 +68,7 @@ function setup(overrides: Partial<ComposerVoiceTarget> = {}) {
     readDraft: () => draft,
     commitDraft,
     onSubmit,
+    ...dependencies,
   });
   return {
     target,
@@ -78,12 +86,88 @@ function setup(overrides: Partial<ComposerVoiceTarget> = {}) {
     },
     chunk: (audioBase64: string) =>
       recordingOptions.onStreamingChunk?.({ ...payload, audioBase64 }),
+    pcm: (bytes: Uint8Array) => recordingOptions.onPcmFrame?.(bytes),
     failRecording: (error: VoiceMicrophoneError) => recordingOptions.onError?.(error),
     [Symbol.dispose]: () => controller.cancel(),
   };
 }
 
 describe("composer voice controller", () => {
+  it("keeps a live preview and commits the full batch transcript after live failure", async () => {
+    chooseEnvironmentSpeech(EnvironmentId.make("voice-env-a"));
+    const grant = readEnvironmentSpeechGrant();
+    if (!grant) throw new Error("Grant was not stored");
+    let preview: (text: string) => void = () => {};
+    let fail: () => void = () => {};
+    const startLive = vi.fn(
+      async (_target, onPreview: (text: string) => void, onFailure: () => void) => {
+        preview = onPreview;
+        fail = onFailure;
+        return { feed: async () => {}, finish: async () => null, cancel: () => {} };
+      },
+    );
+    using session = setup({ localModelGrant: grant, liveEnabled: true }, { startLive });
+    await session.controller.start();
+    expect(startLive).toHaveBeenCalledOnce();
+    preview("live words");
+    fail();
+    expect(session.controller.getSnapshot()).toMatchObject({
+      phase: "recording",
+      streamingPreviewText: "live words",
+      error: null,
+    });
+    expect(await session.controller.confirm()).toBe(true);
+    expect(session.transcribe).toHaveBeenCalledOnce();
+    expect(session.readDraft().text).toBe("hello world");
+    chooseEnvironmentSpeech(null);
+  });
+
+  it("commits the final live transcript only to the draft that started recording", async () => {
+    chooseEnvironmentSpeech(EnvironmentId.make("voice-env-a"));
+    const grant = readEnvironmentSpeechGrant();
+    if (!grant) throw new Error("Grant was not stored");
+    const frameReceived = deferred<void>();
+    const startLive = vi.fn(async () => ({
+      feed: async () => {
+        frameReceived.resolve();
+      },
+      finish: async () => "live result",
+      cancel: () => {},
+    }));
+    using session = setup({ localModelGrant: grant, liveEnabled: true }, { startLive });
+    await session.controller.start();
+    session.pcm(new Uint8Array([0, 0]));
+    await frameReceived.promise;
+    expect(session.readDraft().text).toBe("hello");
+    expect(await session.controller.confirm()).toBe(true);
+    expect(session.readDraft().text).toBe("hello live result");
+    expect(session.transcribe).not.toHaveBeenCalled();
+    chooseEnvironmentSpeech(null);
+  });
+
+  it("retains the final live transcript separately when its original draft changes", async () => {
+    chooseEnvironmentSpeech(EnvironmentId.make("voice-env-a"));
+    const grant = readEnvironmentSpeechGrant();
+    if (!grant) throw new Error("Grant was not stored");
+    const frameReceived = deferred<void>();
+    const startLive = vi.fn(async () => ({
+      feed: async () => {
+        frameReceived.resolve();
+      },
+      finish: async () => "live result",
+      cancel: () => {},
+    }));
+    using session = setup({ localModelGrant: grant, liveEnabled: true }, { startLive });
+    await session.controller.start();
+    session.pcm(new Uint8Array([0, 0]));
+    await frameReceived.promise;
+    session.editDraft({ text: "changed", revision: 2 });
+    expect(await session.controller.confirm()).toBe(false);
+    expect(session.readDraft().text).toBe("changed");
+    expect(session.controller.getSnapshot().unattachedTranscript).toBe("live result");
+    expect(session.transcribe).not.toHaveBeenCalled();
+    chooseEnvironmentSpeech(null);
+  });
   it("keeps the selected voice environment when the thread is on another machine", async () => {
     const destination = EnvironmentId.make("voice-env-a");
     chooseEnvironmentSpeech(destination);
