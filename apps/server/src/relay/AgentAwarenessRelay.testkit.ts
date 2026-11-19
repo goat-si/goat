@@ -225,9 +225,13 @@ export const makeTestRelay = Effect.fnUntraced(function* (
         authorization: new Headers(init?.headers).get("authorization"),
         state: payload.state,
       });
-      return Promise.resolve(
-        options.respond?.(publications.length) ?? Response.json({ ok: true, deliveries: [] }),
-      );
+      try {
+        return Promise.resolve(
+          options.respond?.(publications.length) ?? Response.json({ ok: true, deliveries: [] }),
+        );
+      } catch (error) {
+        return Promise.reject(error);
+      }
     },
     { preconnect: () => {} },
   );
