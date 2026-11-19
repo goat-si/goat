@@ -220,6 +220,9 @@ it.effect("does not overwrite unreadable saved-view data when another setting ch
   Effect.gen(function* () {
     yield* seedStoredPreferences({ pullRequestSavedViews: "unreadable", language: "en" });
     const store = yield* MobilePreferences.make();
-    expect((yield* Effect.result(store.savePatch({ language: "ko" })))._tag).toBe("Failure");
+    expect((yield* Effect.result(store.savePatch({ language: "ko" })))._tag).toBe("Success");
+    const payload = JSON.parse(values.get("goat.preferences.fallback") ?? "{}").payload as string;
+    expect(JSON.parse(payload).language).toBe("ko");
+    expect(payload).toContain('"pullRequestSavedViews":"unreadable"');
   }).pipe(Effect.provide(storeLayer)),
 );
