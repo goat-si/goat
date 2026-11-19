@@ -770,8 +770,7 @@ export function PreviewView({
         submitted = true;
       }
       const { annotation: picked, submission, screenshotFailed = false } = result;
-      // Send annotations even if the optional crop fails or stalls; drop failed screenshots so prompts cannot
-      // claim an attachment.
+      // Send annotations even when the optional crop fails or stalls; omit failed screenshots.
       const capture = capturePreviewAnnotationScreenshot(picked);
       const cropDropped = screenshotFailed || capture.status === "failed";
       const annotation = capture.status === "failed" ? { ...picked, screenshot: null } : picked;
@@ -881,6 +880,7 @@ export function PreviewView({
       data-glass-layer
       className="flex min-h-0 flex-1 flex-col bg-background"
       data-thread-key={scopedThreadKey(threadRef)}
+      data-preview-view
     >
       {annotationVoice ? (
         <PreviewAnnotationSpeech
