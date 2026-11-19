@@ -57,3 +57,56 @@ it.effect.each(["Zed Nightly", "Zed Preview"])(
       assert.equal((yield* launchZed).command, "zed");
     }).pipe(Effect.scoped, Effect.provide(NodeServices.layer)),
 );
+
+it.effect.each(["linux", "darwin"] as const)(
+  "opens the later Zed editor when OpenZFS shadows it on PATH (%s)",
+  (platform) =>
+    Effect.gen(function* () {
+      const fs = yield* FileSystem.FileSystem;
+      const path = yield* Path.Path;
+      const home = yield* fs.makeTempDirectoryScoped({ prefix: "goat-zed-shadow-" });
+      const first = path.join(home, "first");
+      const second = path.join(home, "second");
+      const system = path.join(home, "system");
+      for (const dir of [first, second, system]) yield* fs.makeDirectory(dir);
+      for (const dir of [first, second]) {
+        const executable = path.join(dir, "zed");
+        yield* fs.writeFileString(executable, "fixture");
+        yield* fs.chmod(executable, 0o755);
+      }
+      const isolatedPath: Path.Path = {
+        ...path,
+        join: (...parts) =>
+          path.join(
+            ...parts.map((part) =>
+              ["/usr/local/bin", "/usr/bin", "/snap/bin", "/Applications"].includes(part)
+                ? system
+                : part,
+            ),
+          ),
+      };
+      let launched = "";
+      yield* Effect.gen(function* () {
+        const launcher = yield* ExternalLauncher.ExternalLauncher;
+        yield* launcher.launchEditor({ editor: "zed", cwd: home });
+      }).pipe(
+        Effect.provide(
+          layerTest({
+            platform,
+            env: { HOME: home, PATH: `${first}:${second}` },
+            path: isolatedPath,
+            onSpawn: (command) => {
+              if (command.args[0] !== "--version") launched = command.command;
+            },
+            spawnResult: (command) =>
+              command.args[0] === "--version"
+                ? command.command === path.join(second, "zed")
+                  ? { stdout: "Zed 0.200.0\n" }
+                  : { exitCode: 1 }
+                : undefined,
+          }),
+        ),
+      );
+      assert.equal(launched, path.join(second, "zed"));
+    }).pipe(Effect.provide(NodeServices.layer), Effect.scoped),
+);
