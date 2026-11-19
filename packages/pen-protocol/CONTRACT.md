@@ -232,6 +232,11 @@ already revoked (a machine found stolen after it left). Every member closes the 
 sent its `done`, so a leaving node learns its push was taken. `pen leave` signs a revoke of its own key, pushes it, stops its uplink and
 deletes its keys.
 
+A program names the machine exactly: `pen revoke --node <nodeId> --noise <noisePub> [--compromised]` revokes the one
+machine with that node id and that Noise key in the local view (with `--compromised`, among departed machines too)
+and nothing otherwise. It reads no name, prefix or fingerprint and takes no positional argument, so a machine that
+left between a confirmation and the command cannot hand the revoke to another one named like its id.
+
 ## Several relays
 
 A node may use several relays at once. Each runs the contract in "Relay" on its own; relays do not talk to each other.
@@ -1074,3 +1079,5 @@ v1.2 member-only reader refuses both valid new forms.
 - v1.3 (2026-11-12): relays count each session's delivered payload bytes for operators ("Relay traffic" under
   "Several relays"): relay-wide totals on the Go relay, and for node ids the operator lists, session lines and totals
   on the Go relay and one row per node id on the Worker. No wire change.
+- v1.3 (2026-11-14): node side only, no wire change: `pen revoke --node <nodeId> --noise <noisePub>` names the machine
+  to revoke by node id and Noise key together ("Revocation and leave").

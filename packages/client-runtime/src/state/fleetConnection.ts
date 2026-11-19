@@ -21,7 +21,7 @@ export type FleetConnectionState =
 
 export type FleetConnectionInput = Pick<
   EnvironmentConnectionPresentation,
-  "phase" | "error" | "unreachable"
+  "phase" | "error" | "unreachable" | "penHold"
 >;
 
 export interface FleetConnection {
@@ -44,6 +44,20 @@ export const UNKNOWN_FLEET_CONNECTION: FleetConnection = Object.freeze({
 
 export function presentFleetConnection(connection: FleetConnectionInput | null): FleetConnection {
   if (connection === null) return UNKNOWN_FLEET_CONNECTION;
+  if (connection.penHold === "offline")
+    return { state: "offline", label: "Offline in Pen", reason: null };
+  if (connection.penHold === "no-list")
+    return {
+      state: "offline",
+      label: "Waiting for Pen",
+      reason: "Pen's machine list is not available on this computer.",
+    };
+  if (connection.penHold === "waiting")
+    return {
+      state: "offline",
+      label: "Not open",
+      reason: "This computer keeps 16 Pen machines open at a time.",
+    };
   const reason = connection.error || null;
   switch (connection.phase) {
     case "connected":

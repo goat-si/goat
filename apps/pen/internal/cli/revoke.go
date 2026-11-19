@@ -1,11 +1,13 @@
 package cli
 
 import (
+	"flag"
 	"fmt"
 	"io"
 	"strings"
 
 	"github.com/goat-si/goat/apps/pen/internal/daemon"
+	"github.com/goat-si/goat/apps/pen/internal/ident"
 	"github.com/goat-si/goat/apps/pen/internal/mesh"
 )
 
@@ -22,12 +24,21 @@ func printResults(w io.Writer, rs []daemon.PushResult) {
 func RunRevoke(args []string, stdout, stderr io.Writer) int {
 	fs := newFlags("revoke", stderr)
 	compromised := fs.Bool("compromised", false, "also revoke every key this member admitted")
+	node := fs.String("node", "", "exact node id")
+	noise := fs.String("noise", "", "exact Noise public key")
 	pos, err := parse(fs, args)
 	if err != nil {
 		return 2
 	}
-	if len(pos) != 1 {
-		fmt.Fprintln(stderr, "usage: pen revoke <member> [--compromised]")
+	exact := false
+	fs.Visit(func(f *flag.Flag) {
+		if f.Name == "node" || f.Name == "noise" {
+			exact = true
+		}
+	})
+	key, keyErr := ident.DecodeKey(*noise)
+	if exact && (len(pos) != 0 || !ident.ValidNodeID(*node) || keyErr != nil || ident.B64.EncodeToString(key) != *noise) || !exact && len(pos) != 1 {
+		fmt.Fprintln(stderr, "usage: pen revoke <member> [--compromised] | pen revoke --node <nodeId> --noise <noisePub> [--compromised]")
 		return 2
 	}
 	st, err := openState()
@@ -39,7 +50,13 @@ func RunRevoke(args []string, stdout, stderr io.Writer) int {
 		return fail(stderr, err)
 	}
 	var m mesh.Member
-	if *compromised {
+	if exact {
+		members := lsMembers(ls)
+		if *compromised {
+			members = append(members, revokedMembers(ls)...)
+		}
+		m, err = ResolveExact(members, *node, *noise)
+	} else if *compromised {
 		m, err = resolveCompromised(ls, pos[0])
 	} else {
 		m, err = Resolve(lsMembers(ls), pos[0])

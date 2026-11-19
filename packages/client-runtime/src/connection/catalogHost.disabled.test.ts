@@ -59,6 +59,7 @@ describe("connection catalog host with Connect disabled", () => {
           removeRoute: unused,
           reorderRoutes: unused,
           removeRelayEnvironments: unused,
+          setPenLive: () => Effect.void,
           retryNow: unused,
           reconnect: unused,
           setEnabled: unused,

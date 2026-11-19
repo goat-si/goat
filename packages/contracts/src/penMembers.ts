@@ -94,6 +94,14 @@ export const DesktopPenRouteResultSchema = Schema.Union([
 ]);
 export type DesktopPenRouteResult = typeof DesktopPenRouteResultSchema.Type;
 
+/** cancelled: the person closed the dialog. failed: Pen refused, or the outcome is unknown. */
+export const DesktopPenRevokeResultSchema = Schema.Union([
+  Schema.Struct({ status: Schema.Literal("cancelled") }),
+  Schema.Struct({ status: Schema.Literal("revoked"), output: Schema.String }),
+  Schema.Struct({ status: Schema.Literal("failed"), message: Schema.String }),
+]);
+export type DesktopPenRevokeResult = typeof DesktopPenRevokeResultSchema.Type;
+
 export interface DesktopPenBridge {
   getPenMembers?: () => Promise<DesktopPenMembersState>;
   onPenMembersChanged?: (listener: (state: DesktopPenMembersState) => void) => () => void;
@@ -104,4 +112,6 @@ export interface DesktopPenBridge {
   /** Opens, or returns, this computer's loopback route to a member's GOAT. One route per pin. */
   openPenRoute?: (pin: DesktopPenPin) => Promise<DesktopPenRouteResult>;
   closePenRoute?: (pin: DesktopPenPin) => Promise<void>;
+  /** Asks the person in a native dialog, then removes that member from the Pen mesh. */
+  revokePenMember?: (pin: DesktopPenPin) => Promise<DesktopPenRevokeResult>;
 }

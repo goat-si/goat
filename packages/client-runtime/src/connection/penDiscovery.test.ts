@@ -6,13 +6,15 @@ import { SshConnectionTarget } from "./model.ts";
 import { penRouteConnectionId } from "./routes.ts";
 import { reconcilePenRoutes } from "./penDiscovery.ts";
 
+const layer = discoveryLayer.pipe(Layer.provideMerge(liveSetLayer));
+
 const mesh = "a".repeat(26);
 const otherMesh = "b".repeat(26);
 const node = (letter: string) => letter.repeat(26);
 const member = (letter: string): DesktopPenMember => ({
   nodeId: node(letter),
   name: letter,
-  online: false,
+  online: true,
   noisePub: letter,
   route: {
     kind: "trusted",
@@ -81,14 +83,27 @@ describe("reconcilePenRoutes", () => {
 
 import * as Effect from "effect/Effect";
 import * as Fiber from "effect/Fiber";
+import * as Ref from "effect/Ref";
 import * as Layer from "effect/Layer";
 import * as SubscriptionRef from "effect/SubscriptionRef";
-import { PenDiscovery, layer } from "./penDiscovery.ts";
+import { layer as discoveryLayer, PenDiscovery } from "./penDiscovery.ts";
+import { layer as liveSetLayer, PenLiveSet, watchPenLiveSet } from "./penLiveSet.ts";
 import { PenMembership } from "./penMembership.ts";
 import { ConnectionOnboarding, type SshConnectionInput } from "./onboarding.ts";
-import { EnvironmentRegistry } from "./registry.ts";
+import { EnvironmentNotRegisteredError, EnvironmentRegistry } from "./registry.ts";
 import { ConnectionBlockedError, ConnectionTransientError } from "./model.ts";
 import type { PenMembersInput } from "../platform/capabilities.ts";
+import { SshEnvironmentGateway } from "../platform/capabilities.ts";
+
+/** A desktop SSH gateway that only records which aliases were let go. */
+const sshGateway = (disconnects: Array<string>) =>
+  SshEnvironmentGateway.of({
+    provision: () => Effect.die("unexpected provision"),
+    prepare: () => Effect.die("unexpected prepare"),
+    disconnect: (target) => Effect.sync(() => void disconnects.push(target.alias)),
+  });
+// Fixtures that do not look at released tunnels share this list.
+const disconnects: Array<string> = [];
 
 it.effect("attempts once, retries, checks the current revision, and explicitly sets up", () => {
   const calls: Array<
@@ -132,6 +147,7 @@ it.effect("attempts once, retries, checks the current revision, and explicitly s
       Layer.succeed(EnvironmentRegistry, registry),
       Layer.succeed(ConnectionOnboarding, onboarding),
       Layer.succeed(PenMembership, { latest, admit: () => Effect.void }),
+      Layer.succeed(SshEnvironmentGateway, sshGateway(disconnects)),
     );
     yield* Effect.gen(function* () {
       const discovery = yield* PenDiscovery;
@@ -173,7 +189,7 @@ it.effect("attempts once, retries, checks the current revision, and explicitly s
       });
       expect(calls[2]?.installation).toBeUndefined();
       yield* discovery.pass({ ...ready, members: [{ ...machine, online: true }] });
-      expect(calls).toHaveLength(4);
+      expect(calls).toHaveLength(3);
     }).pipe(Effect.provide(layer.pipe(Layer.provide(dependencies))));
   });
   return program;
@@ -202,6 +218,7 @@ const fakeRegistry = Effect.fn(function* (
     removeRoute,
     reorderRoutes: unused,
     removeRelayEnvironments: unused,
+    setPenLive: () => Effect.void,
     retryNow: unused,
     reconnect: unused,
     setEnabled: unused,
@@ -235,6 +252,7 @@ it.effect("interrupts attempts on newer membership and never starts more than tw
         Layer.succeed(EnvironmentRegistry, registry),
         Layer.succeed(ConnectionOnboarding, onboarding),
         Layer.succeed(PenMembership, { latest, admit: () => Effect.void }),
+        Layer.succeed(SshEnvironmentGateway, sshGateway(disconnects)),
       );
       yield* Effect.gen(function* () {
         const discovery = yield* PenDiscovery;
@@ -288,6 +306,7 @@ it.effect(
         Layer.succeed(EnvironmentRegistry, registry),
         Layer.succeed(ConnectionOnboarding, onboarding),
         Layer.succeed(PenMembership, { latest, admit: () => Effect.void }),
+        Layer.succeed(SshEnvironmentGateway, sshGateway(disconnects)),
       );
       yield* Effect.gen(function* () {
         const discovery = yield* PenDiscovery;
@@ -326,6 +345,7 @@ const discoveryFixture = Effect.fn(function* (
     Option.some(readyState()),
   );
   const removed: string[] = [];
+  const released: string[] = [];
   const registry = yield* fakeRegistry(entries, (_id, route) =>
     Effect.sync(() => {
       removed.push(route);
@@ -342,8 +362,112 @@ const discoveryFixture = Effect.fn(function* (
       }),
     ),
     Layer.succeed(PenMembership, PenMembership.of({ latest, admit: () => Effect.void })),
+    Layer.succeed(SshEnvironmentGateway, sshGateway(released)),
   );
-  return { latest, entries, removed, layer: layer.pipe(Layer.provideMerge(dependencies)) };
+  return {
+    latest,
+    entries,
+    removed,
+    released,
+    layer: discoveryLayer.pipe(
+      Layer.provideMerge(liveSetLayer.pipe(Layer.provideMerge(dependencies))),
+    ),
+  };
+});
+
+it.effect(
+  "a registration that fails or is cut off lets its tunnel go unless a saved route uses the alias",
+  () =>
+    Effect.scoped(
+      Effect.gen(function* () {
+        const alias = `pen-${node("c")}`;
+        const failed = yield* discoveryFixture(() =>
+          Effect.fail(new ConnectionBlockedError({ reason: "authentication", detail: "denied" })),
+        );
+        yield* PenDiscovery.use((discovery) => discovery.pass(readyState())).pipe(
+          Effect.provide(failed.layer),
+        );
+        expect(failed.released).toEqual([alias]);
+
+        const started = yield* Deferred.make<void>();
+        const cut = yield* discoveryFixture(() =>
+          Deferred.succeed(started, undefined).pipe(Effect.andThen(Effect.never)),
+        );
+        yield* Effect.gen(function* () {
+          const fiber = yield* (yield* PenDiscovery).pass(readyState()).pipe(Effect.forkScoped);
+          yield* Deferred.await(started);
+          yield* Fiber.interrupt(fiber);
+        }).pipe(Effect.provide(cut.layer));
+        expect(cut.released).toEqual([alias]);
+
+        const saved = yield* discoveryFixture(
+          () => Effect.fail(new ConnectionBlockedError({ reason: "configuration", detail: "x" })),
+          [entry("own", alias)],
+        );
+        yield* PenDiscovery.use((discovery) => Effect.result(discovery.setUp(node("c")))).pipe(
+          Effect.provide(saved.layer),
+        );
+        expect(saved.released).toEqual([]);
+
+        const joined = yield* discoveryFixture(() => Effect.succeed(EnvironmentId.make("c")));
+        yield* PenDiscovery.use((discovery) => discovery.pass(readyState())).pipe(
+          Effect.provide(joined.layer),
+        );
+        expect(joined.released).toEqual([]);
+      }),
+    ),
+);
+
+/** Sixteen saved machines and a seventeenth that Pen lists without a saved route. */
+const fullFixture = Effect.fn(function* (
+  registered: (nodeId: string) => Effect.Effect<void> = () => Effect.void,
+  more = 1,
+) {
+  const machines = Array.from({ length: 16 + more }, (_, i) => member(String.fromCharCode(98 + i)));
+  const saved = (machine: DesktopPenMember) =>
+    entry(penRouteConnectionId(mesh, machine.nodeId), machine.name);
+  const entries = yield* SubscriptionRef.make<ReadonlyMap<EnvironmentId, ConnectionCatalogEntry>>(
+    new Map(
+      machines.slice(0, 15).map((machine) => [saved(machine).target.environmentId, saved(machine)]),
+    ),
+  );
+  const latest = yield* SubscriptionRef.make<Option.Option<PenMembersInput>>(
+    Option.some(readyState(machines)),
+  );
+  const registry = EnvironmentRegistry.of({
+    ...(yield* fakeRegistry(entries)),
+    state: (environmentId) => Effect.fail(new EnvironmentNotRegisteredError({ environmentId })),
+  });
+  const onboarding = ConnectionOnboarding.of({
+    registerPairing: () => Effect.die("unexpected pairing"),
+    updateBearer: () => Effect.die("unexpected bearer update"),
+    registerSsh: (input) =>
+      Effect.gen(function* () {
+        const machine = machines.find((item) => item.nodeId === input.pen?.nodeId);
+        if (machine === undefined) return yield* Effect.die("unknown machine");
+        const added = saved(machine);
+        yield* SubscriptionRef.update(
+          entries,
+          (current) => new Map([...current, [added.target.environmentId, added]]),
+        );
+        yield* registered(machine.nodeId);
+        return added.target.environmentId;
+      }),
+  });
+  const deps = Layer.mergeAll(
+    Layer.succeed(EnvironmentRegistry, registry),
+    Layer.succeed(ConnectionOnboarding, onboarding),
+    Layer.succeed(PenMembership, PenMembership.of({ latest, admit: () => Effect.void })),
+    Layer.succeed(SshEnvironmentGateway, sshGateway([])),
+  );
+  return {
+    machines,
+    saved,
+    entries,
+    latest,
+    state: readyState(machines),
+    layer: discoveryLayer.pipe(Layer.provideMerge(liveSetLayer.pipe(Layer.provideMerge(deps)))),
+  };
 });
 
 it.effect("does not retry an identical state after existing runtime is required", () =>
@@ -399,9 +523,11 @@ it.effect("an offline to online hint allows another attempt", () =>
     });
     yield* Effect.gen(function* () {
       const discovery = yield* PenDiscovery;
-      yield* discovery.pass(readyState());
+      yield* discovery.pass(readyState([{ ...member("c"), online: false }]));
+      expect(calls).toBe(0);
+      expect((yield* SubscriptionRef.get(discovery.statuses))[0]?.state).toBe("pen-offline");
       yield* discovery.pass(readyState([{ ...member("c"), online: true }]));
-      expect(calls).toBe(2);
+      expect(calls).toBe(1);
     }).pipe(Effect.provide(h.layer));
   }),
 );
@@ -632,4 +758,198 @@ it.effect("retries an interrupted attempt in the newer membership state", () =>
       }).pipe(Effect.provide(h.layer));
     }),
   ),
+);
+
+it.effect.each(["connect", "setUp"] as const)(
+  "%s takes a slot for an online candidate when the live set is full",
+  (action) =>
+    Effect.gen(function* () {
+      const machines = Array.from({ length: 17 }, (_, i) => member(String.fromCharCode(98 + i)));
+      const state = readyState(machines);
+      const saved = machines
+        .slice(0, 16)
+        .map((machine) => entry(penRouteConnectionId(mesh, machine.nodeId), machine.name));
+      const entries = yield* SubscriptionRef.make<
+        ReadonlyMap<EnvironmentId, ConnectionCatalogEntry>
+      >(new Map(saved.map((item) => [item.target.environmentId, item])));
+      const latest = yield* SubscriptionRef.make<Option.Option<PenMembersInput>>(
+        Option.some(state),
+      );
+      const baseRegistry = yield* fakeRegistry(entries);
+      const liveIds = yield* Ref.make<ReadonlySet<EnvironmentId>>(new Set());
+      const registry = EnvironmentRegistry.of({
+        ...baseRegistry,
+        setPenLive: (ids) => Ref.set(liveIds, ids),
+        state: (environmentId) => Effect.fail(new EnvironmentNotRegisteredError({ environmentId })),
+      });
+      const calls: SshConnectionInput[] = [];
+      const onboarding = ConnectionOnboarding.of({
+        registerPairing: () => Effect.die("unexpected pairing"),
+        updateBearer: () => Effect.die("unexpected bearer update"),
+        registerSsh: (input) =>
+          Effect.gen(function* () {
+            calls.push(input);
+            const added = entry(
+              penRouteConnectionId(mesh, machines[16]!.nodeId),
+              machines[16]!.name,
+            );
+            yield* SubscriptionRef.update(
+              entries,
+              (current) => new Map([...current, [added.target.environmentId, added]]),
+            );
+            return added.target.environmentId;
+          }),
+      });
+      const deps = Layer.mergeAll(
+        Layer.succeed(EnvironmentRegistry, registry),
+        Layer.succeed(ConnectionOnboarding, onboarding),
+        Layer.succeed(PenMembership, PenMembership.of({ latest, admit: () => Effect.void })),
+        Layer.succeed(SshEnvironmentGateway, sshGateway(disconnects)),
+      );
+      const live = liveSetLayer.pipe(Layer.provideMerge(deps));
+      const combined = discoveryLayer.pipe(Layer.provideMerge(live));
+      yield* Effect.gen(function* () {
+        const service = yield* PenDiscovery;
+        const liveSet = yield* PenLiveSet;
+        yield* liveSet.recompute;
+        yield* service.pass(state);
+        expect(calls).toHaveLength(0);
+        expect(
+          (yield* SubscriptionRef.get(service.statuses)).find(
+            (row) => row.nodeId === machines[16]!.nodeId,
+          )?.state,
+        ).toBe("waiting");
+        if (action === "connect") {
+          yield* service.connect(machines[16]!.nodeId);
+          yield* service.pass(state);
+        } else {
+          yield* service.setUp(machines[16]!.nodeId);
+        }
+        expect(calls).toHaveLength(1);
+        expect(calls[0]?.keyOnly).toBe(action === "connect");
+        expect(
+          (yield* Ref.get(liveIds)).has(
+            EnvironmentId.make(penRouteConnectionId(mesh, machines[16]!.nodeId)),
+          ),
+        ).toBe(true);
+        expect(
+          (yield* SubscriptionRef.get(liveSet.held)).has(
+            EnvironmentId.make(penRouteConnectionId(mesh, machines[16]!.nodeId)),
+          ),
+        ).toBe(false);
+        expect([...(yield* SubscriptionRef.get(liveSet.held)).values()]).toContain("waiting");
+      }).pipe(Effect.provide(combined));
+    }),
+);
+
+it.effect("failed onboarding releases its reservation", () =>
+  Effect.gen(function* () {
+    const h = yield* discoveryFixture(() =>
+      Effect.fail(new ConnectionBlockedError({ reason: "configuration", detail: "failed" })),
+    );
+    yield* Effect.gen(function* () {
+      const discovery = yield* PenDiscovery;
+      const live = yield* PenLiveSet;
+      yield* discovery.pass(readyState());
+      expect(yield* live.admitOnboarding(node("c"))).toBe("admitted");
+    }).pipe(Effect.provide(h.layer));
+  }),
+);
+
+it.effect("interrupted onboarding releases its reservation", () =>
+  Effect.scoped(
+    Effect.gen(function* () {
+      const started = yield* Deferred.make<void>();
+      const h = yield* discoveryFixture(() =>
+        Deferred.succeed(started, undefined).pipe(Effect.andThen(Effect.never)),
+      );
+      yield* Effect.gen(function* () {
+        const discovery = yield* PenDiscovery;
+        const live = yield* PenLiveSet;
+        const fiber = yield* discovery.pass(readyState()).pipe(Effect.forkScoped);
+        yield* Deferred.await(started);
+        yield* Fiber.interrupt(fiber);
+        expect(yield* live.admitOnboarding(node("c"))).toBe("admitted");
+      }).pipe(Effect.provide(h.layer));
+    }),
+  ),
+);
+
+it.effect("duplicate setup cannot release the first setup reservation", () =>
+  Effect.scoped(
+    Effect.gen(function* () {
+      const started = yield* Deferred.make<void>();
+      const h = yield* discoveryFixture(() =>
+        Deferred.succeed(started, undefined).pipe(Effect.andThen(Effect.never)),
+      );
+      yield* Effect.gen(function* () {
+        const discovery = yield* PenDiscovery;
+        const live = yield* PenLiveSet;
+        const first = yield* discovery.setUp(node("c")).pipe(Effect.forkScoped);
+        yield* Deferred.await(started);
+        const second = yield* Effect.result(discovery.setUp(node("c")));
+        expect(second._tag).toBe("Failure");
+        expect(yield* live.admitOnboarding(node("c"))).toBe("duplicate");
+        yield* Fiber.interrupt(first);
+        expect(yield* live.admitOnboarding(node("c"))).toBe("admitted");
+      }).pipe(Effect.provide(h.layer));
+    }),
+  ),
+);
+
+it.effect("a machine turned off frees its slot for a machine waiting for one", () =>
+  Effect.scoped(
+    Effect.gen(function* () {
+      const registered = yield* Queue.unbounded<string>();
+      const h = yield* fullFixture((nodeId) => Queue.offer(registered, nodeId).pipe(Effect.asVoid));
+      yield* Effect.gen(function* () {
+        const discovery = yield* PenDiscovery;
+        const liveSet = yield* PenLiveSet;
+        // Fifteen saved machines are live; discovery opens one of the two others and holds one.
+        yield* liveSet.recompute;
+        yield* watchPenLiveSet.pipe(Effect.forkScoped);
+        yield* watchPenDiscovery.pipe(Effect.forkScoped);
+        const first = yield* Queue.take(registered);
+        const rest = h.machines.slice(15).find((machine) => machine.nodeId !== first);
+        yield* SubscriptionRef.changes(discovery.statuses).pipe(
+          Stream.filter(
+            (rows) => rows.find((row) => row.nodeId === rest?.nodeId)?.state === "waiting",
+          ),
+          Stream.runHead,
+        );
+        const off = h.saved(h.machines[0]!);
+        yield* SubscriptionRef.update(
+          h.entries,
+          (current) =>
+            new Map([...current, [off.target.environmentId, { ...off, enabled: false }]]),
+        );
+        expect(yield* Queue.take(registered)).toBe(rest?.nodeId);
+      }).pipe(Effect.provide(h.layer));
+    }),
+  ),
+);
+
+it.effect("a machine discovery opened counts as just used when a slot is taken back", () =>
+  Effect.gen(function* () {
+    const h = yield* fullFixture();
+    yield* Effect.gen(function* () {
+      const discovery = yield* PenDiscovery;
+      const liveSet = yield* PenLiveSet;
+      yield* liveSet.recompute;
+      yield* discovery.pass(h.state);
+      const rows = yield* SubscriptionRef.get(discovery.statuses);
+      const opened = h.machines
+        .slice(15)
+        .find((machine) => rows.find((row) => row.nodeId === machine.nodeId)?.environmentId);
+      const waiting = h.machines.slice(15).find((machine) => machine !== opened);
+      if (opened === undefined || waiting === undefined) throw new Error("expected one opened");
+      // Connect takes a slot from the machine used longest ago: a saved one, not the new one.
+      yield* discovery.connect(waiting.nodeId);
+      yield* discovery.pass(h.state);
+      const held = yield* SubscriptionRef.get(liveSet.held);
+      expect(held.has(h.saved(opened).target.environmentId)).toBe(false);
+      expect(held.has(h.saved(waiting).target.environmentId)).toBe(false);
+      expect([...held.values()]).toEqual(["waiting"]);
+    }).pipe(Effect.provide(h.layer));
+  }),
 );
