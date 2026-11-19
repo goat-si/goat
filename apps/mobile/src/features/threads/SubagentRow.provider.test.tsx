@@ -39,7 +39,7 @@ it("uses a neutral glyph when a remote child's provider is unknown", async () =>
   );
   try {
     await view.render();
-    expect(view.container.textContent).toContain("icon:robot");
+    expect(view.container.textContent).toContain("icon:person.2");
     expect(view.container.textContent).not.toContain("provider:codex");
   } finally {
     await view.unmount();

@@ -154,7 +154,7 @@ function SubagentMetadata(props: {
           showBadge
         />
       ) : driver === undefined ? (
-        <SymbolView name="robot" size={11} tintColorClassName="accent-icon-muted" />
+        <SymbolView name="person.2" size={11} tintColorClassName="accent-icon-muted" />
       ) : (
         <ProviderIcon provider={driver} iconUrl={provider?.iconUrl} size={12} />
       )}
