@@ -95,6 +95,10 @@ export const GOAT_MIGRATION_NAMES: ReadonlySet<string> = new Set([
   ...prePenMemberMemoryNames,
   "MemorySuggestionQuota",
   FIRST_BIND_MIGRATION_NAME,
+  "QueuedTurnInputIndexJsonValid",
+  "TurnItemMessageOrdinalIndex",
+  "TurnItemInlineWorkOutput",
+  "RepairStaleTitleRegeneration",
 ]);
 
 type MigrationEntry<E> = readonly [
