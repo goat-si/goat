@@ -248,7 +248,9 @@ export const make = Effect.gen(function* () {
       }
       if (
         !Number.isSafeInteger(result.success.revision) ||
+        result.success.revision < 0 ||
         result.success.revision < current.revision ||
+        (result.success.text !== null && result.success.revision === current.revision) ||
         (result.success.text !== null &&
           (typeof result.success.text !== "object" ||
             typeof result.success.text.committed !== "string" ||

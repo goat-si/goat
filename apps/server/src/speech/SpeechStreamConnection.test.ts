@@ -600,6 +600,60 @@ it.effect("rejects a native preview whose revision moves backwards", () =>
   ),
 );
 
+it.effect("rejects a negative native preview revision before encoding it", () =>
+  Effect.scoped(
+    Effect.gen(function* () {
+      let released = false;
+      const speech = speechLayer({
+        startStream: () =>
+          Effect.acquireRelease(
+            Effect.succeed({
+              feed: () =>
+                Effect.succeed({ revision: -1, text: { committed: "invalid", tentative: "" } }),
+              finish: Effect.succeed(""),
+            }),
+            () =>
+              Effect.sync(() => {
+                released = true;
+              }),
+          ),
+      });
+      yield* Effect.gen(function* () {
+        const connection = yield* SpeechStreamConnection.make;
+        const { streamId } = yield* connection.start();
+        expect(
+          yield* Effect.result(connection.feed({ streamId, sequence: 0, audioBase64: "AAA=" })),
+        ).toMatchObject({ _tag: "Failure" });
+        expect(released).toBe(true);
+      }).pipe(Effect.provide(speech));
+    }),
+  ),
+);
+
+it.effect("rejects a changed preview that repeats the previous revision", () =>
+  Effect.scoped(
+    Effect.gen(function* () {
+      let count = 0;
+      const speech = speechLayer({
+        startStream: () =>
+          Effect.succeed({
+            feed: () =>
+              Effect.succeed({ revision: 1, text: { committed: String(++count), tentative: "" } }),
+            finish: Effect.succeed(""),
+          }),
+      });
+      yield* Effect.gen(function* () {
+        const connection = yield* SpeechStreamConnection.make;
+        const { streamId } = yield* connection.start();
+        yield* connection.feed({ streamId, sequence: 0, audioBase64: "AAA=" });
+        expect(
+          yield* Effect.result(connection.feed({ streamId, sequence: 1, audioBase64: "AAA=" })),
+        ).toMatchObject({ _tag: "Failure" });
+      }).pipe(Effect.provide(speech));
+    }),
+  ),
+);
+
 it.effect("ends the stream and releases its slot when native inference fails", () =>
   Effect.scoped(
     Effect.gen(function* () {
