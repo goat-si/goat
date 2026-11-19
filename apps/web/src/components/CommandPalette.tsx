@@ -52,7 +52,6 @@ import {
   AuthFilesystemReadScope,
   type DesktopWslState,
   type EnvironmentId,
-  type FilesystemBrowseResult,
   SourceControlProviderKind,
   PRIMARY_LOCAL_ENVIRONMENT_ID,
   resolveEnvironmentMachineKind,
@@ -234,6 +233,8 @@ import { CommandPaletteDialog } from "./CommandPaletteDialog";
 import { useCommandPaletteOpenRequests } from "./useCommandPaletteOpenRequests";
 import { captureBrowseSelection, type PendingInputSelection } from "./CommandPaletteSelection";
 import {
+  EMPTY_BROWSE_ENTRIES,
+  NEW_THREAD_NO_PROJECT_VALUE,
   selectCommandPaletteClientSettings,
   useEnvironmentLookups,
   useProjectLookups,
@@ -282,10 +283,6 @@ import { PullRequestGlyph } from "~/components/pullRequest/pullRequestIcons";
 import { readPullRequestListPreferences } from "~/components/pullRequest/pullRequestListPreferences";
 import { useThreadRouteTarget } from "../hooks/useThreadRouteTarget";
 import { threadRecentUse } from "@goat/shared/paletteSearch";
-
-const EMPTY_BROWSE_ENTRIES: FilesystemBrowseResult["entries"] = [];
-
-const NEW_THREAD_NO_PROJECT_VALUE = "new-thread-in:no-project";
 
 export function CommandPalette({ children }: { children: ReactNode }) {
   const navigate = useNavigate();
