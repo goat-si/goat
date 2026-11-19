@@ -80,6 +80,7 @@ it.each(["thread", "session"] as const)(
 
     const input = {
       activeThreadId: threadId,
+      isConnecting: false,
       activePendingProgress: null,
       activePendingIsResponding: false,
       pendingUserInputs: [],

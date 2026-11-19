@@ -40,7 +40,6 @@ it("keeps the draft when stashing while a pasted image is still compressing", as
       id: "pasted",
       name: "shot.png",
       file: new File(["png"], "shot.png", { type: "image/png" }),
-      hidden: false,
     },
   ]);
   using _preparing = {
