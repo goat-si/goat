@@ -277,6 +277,57 @@ describe("prompt stash saved by another tab", () => {
     ]);
   });
 
+  it("preserves images finalized by another tab when stashing", async () => {
+    const { sharedStorage, thisTab } = await openTwoTabs();
+    thisTab.usePromptStashStore
+      .getState()
+      .stashEntry({ ...makeEntry({ id: "encoding" }), pendingImageCount: 1 });
+    vi.resetModules();
+    const staleTab = await import("./promptStashStore");
+    const attachments = makeEntry({ id: "encoding", attachmentChars: 12 }).attachments;
+    thisTab.usePromptStashStore.getState().finalizeEntryImages("encoding", {
+      attachments,
+      droppedImageNames: [],
+      unreadableImageNames: [],
+    });
+    staleTab.usePromptStashStore.getState().stashEntry(makeEntry({ id: "new" }));
+    const saved = JSON.parse(sharedStorage.getItem(PROMPT_STASH_STORAGE_KEY) as string);
+    expect(
+      saved.state.entries.find((entry: PromptStashEntry) => entry.id === "encoding")?.attachments,
+    ).toEqual(attachments);
+  });
+
+  it("retains locally finalized images when storage rejected them", async () => {
+    const storage = createMemoryStorage();
+    vi.stubGlobal("localStorage", {
+      ...storage,
+      setItem: (key: string, value: string) => {
+        if (value.includes("rejected-image")) throw new Error("QuotaExceededError");
+        storage.setItem(key, value);
+      },
+    });
+    vi.resetModules();
+    const { usePromptStashStore: store } = await import("./promptStashStore");
+    store.getState().stashEntry({ ...makeEntry({ id: "too-big" }), pendingImageCount: 1 });
+    vi.resetModules();
+    const { usePromptStashStore: otherTab } = await import("./promptStashStore");
+    const { attachments } = makeEntry({ id: "rejected-image", attachmentChars: 4 });
+    expect(
+      store
+        .getState()
+        .finalizeEntryImages("too-big", {
+          attachments,
+          droppedImageNames: [],
+          unreadableImageNames: [],
+        }),
+    ).toEqual({ attached: true, durable: false });
+    otherTab.getState().stashEntry(makeEntry({ id: "unrelated" }));
+    expect(store.getState().takeEntry("too-big").entry).toMatchObject({
+      attachments,
+      unreadableImageNames: [],
+    });
+  });
+
   it("keeps this tab's entry when the other tab stashes after it", async () => {
     const { thisTab, otherTab, savedIds } = await openTwoTabs();
 
