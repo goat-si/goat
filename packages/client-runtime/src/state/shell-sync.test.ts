@@ -283,8 +283,8 @@ describe("environment shell synchronization", () => {
       yield* SubscriptionRef.set(supervisorState, {
         ...AVAILABLE_CONNECTION_STATE,
         desired: true,
-        network: "online",
-        phase: "connected",
+        network: "online" as const,
+        phase: "connected" as const,
         attempt: 1,
         generation: 1,
       });
