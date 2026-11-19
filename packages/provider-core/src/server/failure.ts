@@ -165,6 +165,13 @@ function curatedCauseMessages(cause: unknown): {
             category: categoryMessage(),
           };
         }
+        case "AcpRequestError":
+          if ((cause as Record<string, unknown>).code !== -32000) break;
+          return {
+            known:
+              "The provider needs you to sign in. Sign in from its provider settings or with its own CLI or app, then retry the turn.",
+            category: categoryMessage(),
+          };
         case "ContextHandoffDeliveryUncertainError":
           return {
             known:
