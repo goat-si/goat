@@ -6,6 +6,7 @@ import {
 } from "@goat/contracts";
 import * as Deferred from "effect/Deferred";
 import * as Effect from "effect/Effect";
+import * as Equal from "effect/Equal";
 import * as Layer from "effect/Layer";
 import * as Option from "effect/Option";
 import * as Ref from "effect/Ref";
@@ -223,15 +224,15 @@ export const makeHarness = Effect.fn("TestEnvironmentRegistry.makeHarness")(func
       }),
     setRoutes: (environmentId, routes) =>
       Ref.update(storedTargets, (current) => replaceRoutes(current, environmentId, routes)),
-    remove: (environmentId) =>
+    remove: (environmentId, keep = []) =>
       Effect.gen(function* () {
         yield* options?.beforeRegistrationRemove?.(environmentId) ?? Effect.void;
         const removed = (yield* Ref.get(storedTargets)).filter(
-          (target) => target.environmentId === environmentId,
+          (target) =>
+            target.environmentId === environmentId &&
+            !keep.some((kept) => Equal.equals(kept, target)),
         );
-        yield* Ref.update(storedTargets, (current) =>
-          current.filter((target) => target.environmentId !== environmentId),
-        );
+        yield* Ref.update(storedTargets, (current) => replaceRoutes(current, environmentId, keep));
         for (const target of removed) {
           if (target._tag === "BearerConnectionTarget" || target._tag === "SshConnectionTarget") {
             yield* Ref.update(storedProfiles, (current) => {

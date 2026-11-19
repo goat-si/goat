@@ -5,7 +5,8 @@ import * as Ref from "effect/Ref";
 import * as SubscriptionRef from "effect/SubscriptionRef";
 
 import { BearerConnectionRegistration, PenConnectionProfile } from "./catalog.ts";
-import { PenConnectionTarget } from "./model.ts";
+import { BearerConnectionTarget, PenConnectionTarget } from "./model.ts";
+import { ConnectionPersistenceError } from "../platform/persistence.ts";
 import * as EnvironmentRegistry from "./registry.ts";
 import { connectionRouteId, connectionRoutes } from "./routes.ts";
 import {
@@ -114,4 +115,45 @@ it.effect("a hidden Pen route saved first does not name or stand in for the envi
       ]);
     }).pipe(Effect.provide(harness.layer), Effect.scoped);
   }),
+);
+
+it.effect(
+  "a failed save while removing the last shown route never loses the hidden Pen route",
+  () =>
+    Effect.gen(function* () {
+      const harness = yield* makeHarness([BEARER_TARGET, pen], [BEARER_PROFILE, penProfile], [], {
+        beforeRegistrationRegister: () =>
+          Effect.fail(
+            new ConnectionPersistenceError({
+              operation: "register-connection",
+              message: "disk full",
+            }),
+          ),
+      });
+      yield* Effect.gen(function* () {
+        const registry = yield* EnvironmentRegistry.EnvironmentRegistry;
+        yield* registry.removeRoute(environmentId, connectionRouteId(BEARER_TARGET));
+        expect(routesOf(yield* Ref.get(harness.storedTargets), environmentId)).toEqual([pen]);
+        expect((yield* Ref.get(harness.storedProfiles)).get(penId)).toEqual(penProfile);
+      }).pipe(Effect.provide(harness.layer), Effect.scoped);
+    }),
+);
+
+it.effect(
+  "an environment whose only usable route is missing keeps its first shown route, as on dev",
+  () =>
+    Effect.gen(function* () {
+      const learned = new BearerConnectionTarget({
+        environmentId,
+        label: "Learned",
+        connectionId: "learned:environment-bearer:http://192.168.1.10:3773",
+      });
+      const harness = yield* makeHarness([learned, pen], [penProfile]);
+      yield* Effect.gen(function* () {
+        const registry = yield* EnvironmentRegistry.EnvironmentRegistry;
+        expect((yield* SubscriptionRef.get(registry.entries)).get(environmentId)?.target).toEqual(
+          learned,
+        );
+      }).pipe(Effect.provide(harness.layer), Effect.scoped);
+    }),
 );

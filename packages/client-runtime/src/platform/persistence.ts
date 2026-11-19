@@ -68,8 +68,10 @@ export class ConnectionRegistrationStore extends Context.Service<
       environmentId: EnvironmentId,
       routes: ReadonlyArray<PersistedConnectionTarget>,
     ) => Effect.Effect<void, ConnectionPersistenceError>;
+    /** Routes in `keep` stay saved with their records; the rest of the environment goes. */
     readonly remove: (
       environmentId: EnvironmentId,
+      keep?: ReadonlyArray<PersistedConnectionTarget>,
     ) => Effect.Effect<void, ConnectionPersistenceError>;
     readonly setEnabled: (
       environmentId: EnvironmentId,

@@ -18,6 +18,7 @@ import {
 } from "../connection/model.ts";
 import * as TokenStore from "../authorization/tokenStore.ts";
 import { isPenConnectionId, penProfilePin } from "../connection/penPin.ts";
+import { routeIsShown } from "../connection/routes.ts";
 import { StoredPullRequestRoutingPermission } from "../connection/pullRequestRoutingPermissions.ts";
 
 export const StoredConnectionCredential = Schema.Struct({
@@ -206,7 +207,12 @@ export function setRoutesInCatalog(
   const dropped = catalogRoutes(document, environmentId).filter(
     (target) => !kept.has(routeKey(target)),
   );
-  const firstIndex = document.targets.findIndex((target) => target.environmentId === environmentId);
+  // Saved with only routes the closed Pen gate hides, it comes back last, as a new one does.
+  const firstIndex = document.targets.some(
+    (target) => target.environmentId === environmentId && routeIsShown({ target }),
+  )
+    ? document.targets.findIndex((target) => target.environmentId === environmentId)
+    : -1;
   const others = document.targets.filter((target) => target.environmentId !== environmentId);
   const insertAt =
     firstIndex === -1
@@ -259,10 +265,11 @@ export function registerConnectionInCatalog(
 export function removeConnectionFromCatalog(
   document: ConnectionCatalogDocument,
   environmentId: EnvironmentId,
+  keep: ReadonlyArray<PersistedConnectionTarget> = [],
 ): ConnectionCatalogDocument {
   const withoutHub =
     readCatalogHub(document) === environmentId ? setCatalogHub(document, null) : document;
-  const next = setRoutesInCatalog(withoutHub, environmentId, []);
+  const next = setRoutesInCatalog(withoutHub, environmentId, keep);
   return {
     ...next,
     remoteDpopTokens: removeCatalogValue(

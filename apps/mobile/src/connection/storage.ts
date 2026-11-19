@@ -87,9 +87,9 @@ export const layer = Layer.effectContext(
         catalog
           .update((document) => setRoutesInCatalog(document, environmentId, routes))
           .pipe(Effect.mapError((error) => targetPersistenceError("set-connection-routes", error))),
-      remove: (environmentId) =>
+      remove: (environmentId, keep) =>
         catalog
-          .update((document) => removeConnectionFromCatalog(document, environmentId))
+          .update((document) => removeConnectionFromCatalog(document, environmentId, keep))
           .pipe(Effect.mapError((error) => targetPersistenceError("remove-connection", error))),
       setEnabled: (environmentId, enabled) =>
         catalog

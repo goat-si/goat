@@ -11,7 +11,11 @@ import {
   PenViewerPolicy,
   type PenMembersInput,
 } from "../platform/capabilities.ts";
-import { PenConnectionProfile, PenConnectionRegistration } from "./catalog.ts";
+import {
+  PenConnectionProfile,
+  PenConnectionRegistration,
+  type ConnectionCatalogEntry,
+} from "./catalog.ts";
 import { penConnectionId, PenConnectionTarget } from "./model.ts";
 import { PenMembership } from "./penMembership.ts";
 import { penRoutePin } from "./penPin.ts";
@@ -32,6 +36,18 @@ const memberListed = (state: PenMembersInput, pin: DesktopPenPin) =>
   state.selfNodeId !== pin.nodeId &&
   state.members.some((member) => member.nodeId === pin.nodeId);
 
+// Only a route whose target and profile name one member is acted on; another is left as is.
+const storedPenRoutes = (entries: ReadonlyMap<unknown, ConnectionCatalogEntry>) =>
+  [...entries.values()].flatMap(connectionRoutes).flatMap((route) => {
+    const profile = Option.getOrUndefined(route.profile);
+    const pin = penRoutePin(route.target, profile);
+    return pin &&
+      route.target._tag === "PenConnectionTarget" &&
+      profile?._tag === "PenConnectionProfile"
+      ? [{ target: route.target, profile, pin }]
+      : [];
+  });
+
 export const makePenNativeDiscovery = Effect.fn("PenNativeDiscovery.make")(function* () {
   const membership = yield* PenMembership;
   const registry = yield* EnvironmentRegistry;
@@ -42,17 +58,7 @@ export const makePenNativeDiscovery = Effect.fn("PenNativeDiscovery.make")(funct
   const verified = new Set<string>();
   const pass = Effect.fn("PenNativeDiscovery.pass")(function* (state: PenMembersInput) {
     if (state.kind === "unavailable" && policy.enabled && Option.isSome(gateway)) return;
-    const entries = yield* SubscriptionRef.get(registry.entries);
-    // Only a route whose target and profile name one member is acted on; another is left as is.
-    const existing = [...entries.values()].flatMap(connectionRoutes).flatMap((route) => {
-      const profile = Option.getOrUndefined(route.profile);
-      const pin = penRoutePin(route.target, profile);
-      return pin &&
-        route.target._tag === "PenConnectionTarget" &&
-        profile?._tag === "PenConnectionProfile"
-        ? [{ target: route.target, profile, pin }]
-        : [];
-    });
+    const existing = storedPenRoutes(yield* SubscriptionRef.get(registry.entries));
     for (const route of existing) {
       const { pin } = route;
       // Only a member Pen says left loses its route, and only where the viewer runs: removing an
@@ -162,15 +168,44 @@ export const makePenNativeDiscovery = Effect.fn("PenNativeDiscovery.make")(funct
       { concurrency: 4, discard: true },
     );
   });
-  return { pass };
+  // A link no saved route holds any more (its environment or route was removed) is closed.
+  let held = new Set<string>();
+  const release = Effect.fn("PenNativeDiscovery.release")(function* (
+    entries: ReadonlyMap<unknown, ConnectionCatalogEntry>,
+  ) {
+    const now = new Set(storedPenRoutes(entries).map(({ pin }) => pinKey(pin)));
+    for (const key of held) {
+      const pin = openedPins.get(key);
+      if (now.has(key) || pin === undefined) continue;
+      openedPins.delete(key);
+      verified.delete(key);
+      if (Option.isSome(gateway))
+        yield* gateway.value.close(pin).pipe(
+          Effect.catch((error) =>
+            Effect.logWarning("Could not close Pen native route", {
+              error: redactPenRouteUrl(String(error)),
+            }),
+          ),
+        );
+    }
+    held = now;
+  });
+  return { pass, release };
 });
 
 export const watchPenNativeDiscovery = Effect.gen(function* () {
   const membership = yield* PenMembership;
-  const { pass } = yield* makePenNativeDiscovery();
-  yield* SubscriptionRef.changes(membership.latest).pipe(
-    Stream.filter(Option.isSome),
-    Stream.switchMap((state) => Stream.fromEffect(pass(state.value))),
-    Stream.runDrain,
+  const registry = yield* EnvironmentRegistry;
+  const { pass, release } = yield* makePenNativeDiscovery();
+  yield* Effect.all(
+    [
+      SubscriptionRef.changes(membership.latest).pipe(
+        Stream.filter(Option.isSome),
+        Stream.switchMap((state) => Stream.fromEffect(pass(state.value))),
+        Stream.runDrain,
+      ),
+      SubscriptionRef.changes(registry.entries).pipe(Stream.runForEach(release)),
+    ],
+    { concurrency: "unbounded", discard: true },
   );
 });

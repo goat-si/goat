@@ -17,6 +17,7 @@ import {
 import {
   BearerConnectionTarget,
   ConnectionTransientError,
+  PenConnectionTarget,
   PrimaryConnectionTarget,
   RelayConnectionTarget,
   SshConnectionTarget,
@@ -945,4 +946,29 @@ describe("Pen storage compatibility", () => {
         }
       }),
   );
+});
+
+it("an environment saved with only routes the closed Pen gate hides comes back last, as a new one does", () => {
+  const other = (name: string) =>
+    new BearerConnectionTarget({
+      environmentId: EnvironmentId.make(name),
+      label: name,
+      connectionId: name,
+    });
+  const pen = new PenConnectionTarget({
+    environmentId: ENVIRONMENT_ID,
+    label: "Pen",
+    connectionId: "pen:mmmmmmmmmmmmmmmmmmmmmmmmmm:nnnnnnnnnnnnnnnnnnnnnnnnnn",
+  });
+  const document = {
+    ...EMPTY_CONNECTION_CATALOG_DOCUMENT,
+    targets: [other("b"), pen, other("c")],
+  };
+  const next = setRoutesInCatalog(document, ENVIRONMENT_ID, [pen, BEARER_TARGET]);
+  expect(next.targets.map((target) => target.environmentId)).toEqual([
+    "b",
+    "c",
+    ENVIRONMENT_ID,
+    ENVIRONMENT_ID,
+  ]);
 });

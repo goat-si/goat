@@ -19,7 +19,6 @@ import {
   type ConnectionRegistration,
   type ConnectionRoute,
   type PlatformConnectionRegistration,
-  type PenConnectionRegistration,
   type PrimaryConnectionRegistration,
   SshConnectionProfile,
   connectionRegistrationCatalogEntry,
@@ -43,8 +42,6 @@ import { makeKnownAddressCheck, unsupportedState } from "./registryPairing.ts";
 import { makeLeaseLock } from "./registryLeaseLock.ts";
 import {
   type HiddenRoute,
-  hiddenPenRegistrations,
-  hiddenRouteOf,
   loadCatalogRoute,
   savedCatalogEntry,
   splitHiddenRoutes,
@@ -772,13 +769,16 @@ export const make = Effect.gen(function* () {
     const entry = yield* getEntry(environmentId);
 
     yield* pullRequestRoutingPermissions.forget(environmentId);
-    const kept = options?.keepHiddenRoutes
-      ? hiddenPenRegistrations(hiddenRoutes.get(environmentId))
-      : [];
-    yield* registrations.remove(environmentId);
-    hiddenRoutes.delete(environmentId);
     // The environment goes as on dev; a route the closed Pen gate hides stays saved, alone.
-    if (kept.length > 0) yield* saveHiddenRoutes(environmentId, kept);
+    const kept = options?.keepHiddenRoutes
+      ? (hiddenRoutes.get(environmentId) ?? []).map(({ route }, index) => ({ index, route }))
+      : [];
+    yield* registrations.remove(
+      environmentId,
+      kept.map(({ route }) => route.target as PersistedConnectionTarget),
+    );
+    hiddenRoutes.delete(environmentId);
+    if (kept.length > 0) hiddenRoutes.set(environmentId, kept);
     else
       yield* Ref.update(persistedEnvironmentIds, (current) => withoutKey(current, environmentId));
     yield* closeServiceScope(environmentId);
@@ -800,21 +800,6 @@ export const make = Effect.gen(function* () {
 
     yield* forkSshTeardown(entry);
   });
-
-  const saveHiddenRoutes = (
-    environmentId: EnvironmentId,
-    kept: ReadonlyArray<PenConnectionRegistration>,
-  ) => {
-    const targets = kept.map((registration) => registration.target as PersistedConnectionTarget);
-    hiddenRoutes.set(environmentId, kept.map(hiddenRouteOf));
-    return Effect.forEach(kept, (registration) => registrations.register(registration, targets), {
-      discard: true,
-    }).pipe(
-      Effect.catch((error) =>
-        Effect.logWarning("Could not keep a hidden Pen route.", { environmentId, error }),
-      ),
-    );
-  };
 
   const remove = Effect.fn("EnvironmentRegistry.remove")(function* (environmentId: EnvironmentId) {
     return yield* withLeaseLock(environmentId, removeLocked(environmentId));

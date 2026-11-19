@@ -1,12 +1,7 @@
 import * as Effect from "effect/Effect";
 import * as Option from "effect/Option";
 
-import {
-  PenConnectionRegistration,
-  type ConnectionCatalogEntry,
-  type ConnectionProfile,
-  type ConnectionRoute,
-} from "./catalog.ts";
+import type { ConnectionCatalogEntry, ConnectionProfile, ConnectionRoute } from "./catalog.ts";
 import type { ConnectionTarget } from "./model.ts";
 import type * as ConnectionProfileStore from "./profileStore.ts";
 import { pullRequestRoutingConnectionKey } from "./pullRequestRoutingPermissions.ts";
@@ -37,37 +32,27 @@ export function withHiddenRoutes(
   return routes;
 }
 
-/** The hidden Pen routes that can be saved again on their own: each with its own profile. */
-export function hiddenPenRegistrations(hidden: ReadonlyArray<HiddenRoute> = []) {
-  return hidden.flatMap(({ route: { target, profile } }) =>
-    target._tag === "PenConnectionTarget" &&
-    Option.isSome(profile) &&
-    profile.value._tag === "PenConnectionProfile"
-      ? [new PenConnectionRegistration({ target, profile: profile.value })]
-      : [],
-  );
-}
-
-export const hiddenRouteOf = (registration: PenConnectionRegistration, index: number) => ({
-  index,
-  route: { target: registration.target, profile: Option.some(registration.profile) },
-});
-
 /** A saved environment's live entry holds only the routes the Pen gate shows; none, no entry. */
 export function savedCatalogEntry(loaded: ReadonlyArray<ConnectionRoute>, enabled: boolean) {
   const seen = new Set<string>();
-  const usable = loaded.filter((route) => {
+  const unique = loaded.filter((route) => {
     const id = connectionRouteId(route.target);
     if (seen.has(id)) return false;
     seen.add(id);
-    return !(id.startsWith("learned:") && Option.isNone(route.profile));
+    return true;
   });
-  const { shown, hidden } = splitHiddenRoutes(usable.length > 0 ? usable : loaded.slice(0, 1));
-  const first = shown[0];
+  const { shown, hidden } = splitHiddenRoutes(unique);
+  // As on dev, among the shown routes: none usable keeps the first.
+  const usable = shown.filter(
+    (route) =>
+      !(connectionRouteId(route.target).startsWith("learned:") && Option.isNone(route.profile)),
+  );
+  const routes = usable.length > 0 ? usable : shown.slice(0, 1);
+  const first = routes[0];
   const entry =
     first === undefined
       ? undefined
-      : entryWithRoutes({ target: first.target, profile: first.profile, enabled }, shown);
+      : entryWithRoutes({ target: first.target, profile: first.profile, enabled }, routes);
   return { entry, hidden };
 }
 
