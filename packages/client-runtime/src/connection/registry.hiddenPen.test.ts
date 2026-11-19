@@ -9,8 +9,9 @@ import {
   BearerConnectionRegistration,
   PenConnectionProfile,
   PenConnectionRegistration,
+  PrimaryConnectionRegistration,
 } from "./catalog.ts";
-import { BearerConnectionTarget, PenConnectionTarget } from "./model.ts";
+import { BearerConnectionTarget, PenConnectionTarget, PrimaryConnectionTarget } from "./model.ts";
 import { ConnectionPersistenceError } from "../platform/persistence.ts";
 import * as EnvironmentRegistry from "./registry.ts";
 import { connectionRouteId, connectionRoutes } from "./routes.ts";
@@ -258,4 +259,32 @@ it.effect("reordering keeps a Pen route another channel saved after this one loa
       ]);
     }).pipe(Effect.provide(harness.layer), Effect.scoped);
   }),
+);
+
+it.effect(
+  "an environment whose last route is removed, with no Pen route to keep, is not saved any more",
+  () =>
+    Effect.gen(function* () {
+      const harness = yield* makeHarness([BEARER_TARGET], [BEARER_PROFILE]);
+      yield* Effect.gen(function* () {
+        const registry = yield* EnvironmentRegistry.EnvironmentRegistry;
+        yield* registry.removeRoute(environmentId, connectionRouteId(BEARER_TARGET));
+        // Another desktop channel pairs the environment again.
+        yield* Ref.update(harness.storedTargets, (current) => [...current, BEARER_TARGET]);
+        // A local backend with the same id must not take that pairing for one this channel saved.
+        yield* registry.registerPlatform(
+          new PrimaryConnectionRegistration({
+            target: new PrimaryConnectionTarget({
+              environmentId,
+              label: "Local",
+              httpBaseUrl: "http://127.0.0.1:3773",
+              wsBaseUrl: "ws://127.0.0.1:3773",
+            }),
+          }),
+        );
+        expect(routesOf(yield* Ref.get(harness.storedTargets), environmentId)).toEqual([
+          BEARER_TARGET,
+        ]);
+      }).pipe(Effect.provide(harness.layer), Effect.scoped);
+    }),
 );

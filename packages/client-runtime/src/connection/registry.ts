@@ -760,7 +760,14 @@ export const make = Effect.gen(function* () {
     // The environment goes as on dev; a route the closed Pen gate holds back stays saved, alone.
     const keepHidden = options?.keepHiddenRoutes === true;
     yield* registrations.remove(environmentId, { keepHidden });
-    if (!keepHidden)
+    // Still saved only if the catalog really kept a hidden route for it.
+    const kept =
+      keepHidden &&
+      (yield* storage.list.pipe(
+        Effect.map((targets) => targets.some((target) => target.environmentId === environmentId)),
+        Effect.orElseSucceed(() => false),
+      ));
+    if (!kept)
       yield* Ref.update(persistedEnvironmentIds, (current) => withoutKey(current, environmentId));
     yield* closeServiceScope(environmentId);
     yield* SubscriptionRef.update(entries, (current) => withoutKey(current, environmentId));
