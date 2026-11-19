@@ -3,6 +3,8 @@ import * as Schema from "effect/Schema";
 
 export const CLAUDE_ROOT_REFUSAL =
   "--dangerously-skip-permissions cannot be used with root/sudo privileges for security reasons";
+export const CLAUDE_CONVERSATION_NOT_FOUND = "No conversation found with session ID:";
+export const MAX_CLAUDE_MISSING_NATIVE_THREADS = 1000;
 
 export class ClaudeAgentSdkQueryRunnerError extends Schema.TaggedError<ClaudeAgentSdkQueryRunnerError>()(
   "ClaudeAgentSdkQueryRunnerError",
@@ -23,6 +25,24 @@ export class ClaudeCodeRootRefusalError extends Schema.TaggedError<ClaudeCodeRoo
   override get message(): string {
     return `Claude Code exited before it started: ${CLAUDE_ROOT_REFUSAL}`;
   }
+}
+
+export class ClaudeConversationNotFoundError extends Schema.TaggedError<ClaudeConversationNotFoundError>()(
+  "ClaudeConversationNotFoundError",
+  { cause: Schema.Defect() },
+) {
+  override get message(): string {
+    return "Claude Code could not find this conversation to resume. Send the message again to continue in a new Claude session with this thread's history.";
+  }
+}
+
+const isConversationNotFoundError = Schema.is(ClaudeConversationNotFoundError);
+
+export function isClaudeConversationNotFound(
+  cause: Cause.Cause<ClaudeAgentSdkQueryRunnerError>,
+): boolean {
+  const error = Cause.squash(cause);
+  return isClaudeAgentSdkQueryRunnerError(error) && isConversationNotFoundError(error.cause);
 }
 
 export class ClaudeMcpRegistrationTimeoutError extends Schema.TaggedError<ClaudeMcpRegistrationTimeoutError>()(

@@ -321,6 +321,7 @@ export const ServerProvider = Schema.Struct({
   /** The digest whose lists this client has loaded. Stored in the client cache. */
   loadedCatalogDigest: Schema.optionalKey(TrimmedNonEmptyString),
   workspaceSnapshots: Schema.optionalKey(Schema.Array(ServerProviderWorkspaceSnapshot)),
+  workspaceRescannedAt: Schema.optionalKey(IsoDateTime),
   usageLimits: Schema.optional(ServerProviderUsageLimits),
   versionAdvisory: Schema.optionalKey(ServerProviderVersionAdvisory),
   compatibilityAdvisory: Schema.optionalKey(ServerProviderCompatibilityAdvisory),

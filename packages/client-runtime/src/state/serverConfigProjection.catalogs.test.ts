@@ -183,3 +183,30 @@ it.each([
     ).toEqual([after]);
   },
 );
+
+it("drops a fetched workspace snapshot when the server rescan revision changes", () => {
+  const cwd = "/workspace";
+  const before = { cwd, checkedAt: wire.checkedAt, slashCommands: [], skills: [] };
+  const fetched = recordFetchedWorkspaceSnapshot(
+    [],
+    { instanceId, cwd, fresh: false },
+    [{ ...wire, workspaceSnapshots: [before] }],
+    wire,
+  );
+  const configWith = (provider: ServerProvider) => ({
+    ...config(provider),
+    environment: {
+      ...config(provider).environment,
+      capabilities: { providerWorkspaceSnapshotsOnDemand: true, repositoryIdentity: false },
+    },
+  });
+  expect(
+    withFetchedWorkspaceSnapshots(configWith(wire), fetched).providers[0]?.workspaceSnapshots,
+  ).toEqual([before]);
+  expect(
+    withFetchedWorkspaceSnapshots(
+      configWith({ ...wire, workspaceRescannedAt: "2026-11-20T00:00:00.000Z" }),
+      fetched,
+    ).providers[0]?.workspaceSnapshots,
+  ).toBeUndefined();
+});

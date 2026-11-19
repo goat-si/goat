@@ -1,3 +1,5 @@
+import { renameClaudeSession } from "./ClaudeSessionRenameControl.ts";
+import { withoutClaudeCanUseToolShadowedWarning } from "./ClaudeSdkWarning.ts";
 import { interruptedResumeOptions } from "./ClaudeInterruptedResume.ts";
 import {
   forkSession as forkClaudeSession,
@@ -49,6 +51,8 @@ import * as ProviderEventLoggers from "@goat/provider-core/server/ProviderEventL
 import * as ProviderAdapter from "@goat/provider-core/server/ProviderAdapter";
 import {
   CLAUDE_ROOT_REFUSAL,
+  CLAUDE_CONVERSATION_NOT_FOUND,
+  ClaudeConversationNotFoundError,
   ClaudeAgentSdkQueryRunnerError,
   ClaudeCodeRootRefusalError,
   ClaudeMcpRegistrationTimeoutError,
@@ -71,30 +75,16 @@ const CLAUDE_BOOT_TIMEOUT = "5 minutes";
 // How often CLIs no agent scope holds have their process trees recorded, all from one table.
 const CLAUDE_DESCENDANT_POLL = "1 second";
 
-export const CLAUDE_CODE_PRESET_TOOLS = {
-  type: "preset",
-  preset: "claude_code",
-} satisfies NonNullable<ClaudeQueryOptions["tools"]>;
-export type ClaudeAgentSdkQueryToolList = ReadonlyArray<string>;
-export interface ClaudeAgentSdkQueryPresetTools {
-  readonly type: "preset";
-  readonly preset: "claude_code";
-}
-export type ClaudeAgentSdkQueryTools = ClaudeAgentSdkQueryToolList | ClaudeAgentSdkQueryPresetTools;
-export const CLAUDE_READ_ONLY_ALLOWED_TOOLS = ["Read", "Glob", "Grep"] as const;
-export function claudeAgentSdkQueryToolsForSdk(
-  tools: ClaudeAgentSdkQueryTools,
-): NonNullable<ClaudeQueryOptions["tools"]> {
-  if (isClaudeAgentSdkQueryToolList(tools)) {
-    return [...tools];
-  }
-  return { type: tools.type, preset: tools.preset };
-}
-function isClaudeAgentSdkQueryToolList(
-  tools: ClaudeAgentSdkQueryTools,
-): tools is ClaudeAgentSdkQueryToolList {
-  return Array.isArray(tools);
-}
+export {
+  CLAUDE_CODE_PRESET_TOOLS,
+  CLAUDE_READ_ONLY_ALLOWED_TOOLS,
+  claudeAgentSdkQueryToolsForSdk,
+} from "./ClaudeSdkTools.ts";
+export type {
+  ClaudeAgentSdkQueryToolList,
+  ClaudeAgentSdkQueryPresetTools,
+  ClaudeAgentSdkQueryTools,
+} from "./ClaudeSdkTools.ts";
 export type ClaudeAgentSdkThreadIdentity =
   | {
       readonly sessionId: string;
@@ -127,6 +117,7 @@ export interface ClaudeAgentSdkQuerySession {
     onQueued?: () => void,
   ) => Effect.Effect<void, ClaudeAgentSdkQueryRunnerError>;
   readonly setModel: (model: string) => Effect.Effect<void, ClaudeAgentSdkQueryRunnerError>;
+  readonly renameSession?: (title: string) => Effect.Effect<void, ClaudeAgentSdkQueryRunnerError>;
   readonly applyFlagSettings: (
     settings: ClaudeFlagSettings,
   ) => Effect.Effect<void, ClaudeAgentSdkQueryRunnerError>;
@@ -557,6 +548,7 @@ export const layerQueryRunner: Layer.Layer<
           let stderrTail = "";
           let stderrClosed: Promise<void> = Promise.resolve();
           let answered = false;
+          let conversationMissing = false;
           const appendStderr = (text: string) => {
             if (!answered) stderrTail = (stderrTail + text).slice(-2_048);
           };
@@ -608,10 +600,9 @@ export const layerQueryRunner: Layer.Layer<
           const queryRuntime = yield* Effect.uninterruptibleMask((restore) =>
             Effect.try({
               try: () =>
-                query({
-                  prompt,
-                  options: { ...options, spawnClaudeCodeProcess },
-                }),
+                withoutClaudeCanUseToolShadowedWarning(() =>
+                  query({ prompt, options: { ...options, spawnClaudeCodeProcess } }),
+                ),
               catch: (cause) => queryRunnerError(cause, "query"),
             }).pipe(
               Effect.tap((queryRuntime) =>
@@ -719,15 +710,26 @@ export const layerQueryRunner: Layer.Layer<
                       );
                     const refusedRoot = !answered && stderrTail.includes(CLAUDE_ROOT_REFUSAL);
                     return yield* queryRunnerError(
-                      refusedRoot ? new ClaudeCodeRootRefusalError({ cause }) : cause,
+                      refusedRoot
+                        ? new ClaudeCodeRootRefusalError({ cause })
+                        : conversationMissing ||
+                            (!answered && stderrTail.includes(CLAUDE_CONVERSATION_NOT_FOUND))
+                          ? new ClaudeConversationNotFoundError({ cause })
+                          : cause,
                       "fromAsyncIterable",
                     );
                   }),
                 ),
               ),
-              Stream.tap(() =>
+              Stream.tap((message) =>
                 Effect.sync(() => {
                   answered = true;
+                  if (
+                    message.type === "result" &&
+                    message.subtype !== "success" &&
+                    message.errors.some((error) => error.startsWith(CLAUDE_CONVERSATION_NOT_FOUND))
+                  )
+                    conversationMissing = true;
                   stderrTail = "";
                 }),
               ),
@@ -773,6 +775,7 @@ export const layerQueryRunner: Layer.Layer<
                   }),
                 ),
               ),
+            renameSession: (title) => renameClaudeSession(queryRuntime, title),
             setMcpServers: (servers) =>
               Effect.tryPromise({
                 try: async () => {

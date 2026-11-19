@@ -1,7 +1,14 @@
+import { textFromClaudeContent } from "./ClaudeGoalProjection.ts";
 import type { SDKAssistantMessage, SDKMessage } from "@anthropic-ai/claude-agent-sdk";
 import type * as DateTime from "effect/DateTime";
 
 type StreamEvent = Extract<SDKMessage, { type: "stream_event" }>["event"];
+
+export function isClaudeLocalCommandEcho(message: SDKMessage): boolean {
+  if (message.type !== "user" || !("isReplay" in message) || !message.isReplay) return false;
+  const content = message.message.content;
+  return typeof content === "string" && content.startsWith("<local-command-stdout>");
+}
 type ToolUse = Extract<SDKAssistantMessage["message"]["content"][number], { type: "tool_use" }>;
 interface TextUpdate {
   readonly nativeItemId: string;
@@ -107,5 +114,41 @@ export function makeClaudeAssistantTextProjector() {
       nextSnapshotIndex.set(message.message.id, index);
       return updates;
     },
+  };
+}
+
+// Claude 5.1+ emits at most one pre-tool text block as thinking; treat only a second consecutive thinking block as text.
+export function claudeWritesUpdatesAsThinking(model: string): boolean {
+  const match = /claude-[a-z]+-(\d+)(?:-(\d{1,2}))?(?!\d)/u.exec(model);
+  if (match === null) return false;
+  const major = Number(match[1]);
+  return major > 5 || (major === 5 && Number(match[2] ?? 0) >= 1);
+}
+
+export function normalizeClaudeResultText(text: string): string {
+  return text.replace(/\s+/g, " ").trim();
+}
+
+export function assistantTextFromSdkMessage(
+  message: SDKMessage,
+): { readonly nativeItemId: string; readonly text: string } | null {
+  if (message.type !== "assistant") {
+    return null;
+  }
+  return {
+    nativeItemId: message.uuid,
+    text: textFromClaudeContent(message.message.content),
+  };
+}
+
+export function resultTextFromSdkMessage(
+  message: SDKMessage,
+): { readonly nativeItemId: string; readonly text: string } | null {
+  if (message.type !== "result" || message.subtype !== "success") {
+    return null;
+  }
+  return {
+    nativeItemId: message.uuid,
+    text: message.result,
   };
 }

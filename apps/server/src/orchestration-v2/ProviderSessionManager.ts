@@ -1,3 +1,4 @@
+import { busyTurnPrefix, busyTurnKey } from "./ProviderSessionBusyKeys.ts";
 import {
   makeProviderSessionEventSubscription,
   type ProviderSessionEventSignal,
@@ -102,20 +103,19 @@ import type {
   ProviderMemoryPrepareInput,
   McpCredentialRotation,
   ProviderSessionManagerV2Shape,
+  ProviderSessionManagerV2LayerOptions,
 } from "./ProviderSessionManagerTypes.ts";
 export type {
   ProviderMemoryPrepareInput,
   McpCredentialRotation,
   ProviderSessionManagerV2Shape,
+  ProviderSessionManagerV2LayerOptions,
 } from "./ProviderSessionManagerTypes.ts";
 const DEFAULT_IDLE_TIMEOUT_MS = 30 * 60 * 1000;
 const DEFAULT_MAX_IDLE_PIN_MS = 4 * 60 * 60 * 1000;
 const RELEASE_SCOPE_CLOSE_TIMEOUT_MS = 30 * 1000;
 export { PROVIDER_INTERRUPT_TIMEOUT_MS } from "./ProviderStopWatchdog.ts";
 
-const busyTurnPrefix = (providerThreadId: ProviderThreadId) => `${providerThreadId}#`;
-const busyTurnKey = (providerThreadId: ProviderThreadId, runOrdinal: number) =>
-  `${busyTurnPrefix(providerThreadId)}${runOrdinal}`;
 const UNLOAD_THREAD_TIMEOUT_MS = 10 * 1000;
 
 import { WORKING_RUN_STATUSES } from "./ProviderSessionWorkingRuns.ts";
@@ -165,14 +165,6 @@ interface IdleThreadUnload {
   readonly providerThread: OrchestrationV2ProviderThread;
   readonly generation: number;
   readonly fiber: Fiber.Fiber<void, never> | null;
-}
-
-export interface ProviderSessionManagerV2LayerOptions {
-  readonly idleTimeoutMs?: number;
-  readonly maxIdlePinMs?: number;
-  readonly configureMcp?: boolean;
-  /** Test barrier after activity/removal updates, before awaiting idle-fiber interruption. */
-  readonly beforeIdleFiberInterrupt?: Effect.Effect<void>;
 }
 
 export const layerWithOptions = (
@@ -1474,6 +1466,24 @@ export const layerWithOptions = (
           return updated;
         });
 
+      const forgetProviderThreadLoaded = (input: {
+        readonly providerSessionId: ProviderSessionId;
+        readonly threadId: ThreadId;
+        readonly runtime: ProviderAdapter.ProviderAdapterV2SessionRuntime;
+      }) =>
+        Ref.update(sessions, (current) => {
+          const key = sessionKey(input.providerSessionId);
+          const entry = current.get(key);
+          if (
+            entry?.runtime !== input.runtime ||
+            !entry.loadedProviderThreadKeyByThread.has(input.threadId)
+          )
+            return current;
+          const loadedProviderThreadKeyByThread = new Map(entry.loadedProviderThreadKeyByThread);
+          loadedProviderThreadKeyByThread.delete(input.threadId);
+          return new Map(current).set(key, { ...entry, loadedProviderThreadKeyByThread });
+        });
+
       const isProviderThreadLoaded = (input: {
         readonly providerSessionId: ProviderSessionId;
         readonly threadId: ThreadId;
@@ -1971,6 +1981,14 @@ export const layerWithOptions = (
                     ? observeActivity(
                         providerSessionId,
                         markIdle(providerSessionId, input.providerThread.id, input.runOrdinal),
+                      ).pipe(
+                        Effect.andThen(
+                          forgetProviderThreadLoaded({
+                            providerSessionId,
+                            threadId: input.threadId,
+                            runtime,
+                          }),
+                        ),
                       )
                     : Effect.void,
               ),

@@ -10,7 +10,6 @@ import {
   type OrchestrationV2Run,
   type OrchestrationV2Subagent,
   type OrchestrationV2ThreadProjection,
-  type OrchestrationV2TurnItem,
   type ModelSelection,
   type OrchestrationV2Actor,
   type OrchestrationV2CreationSource,
@@ -35,7 +34,7 @@ import * as Schema from "effect/Schema";
 import * as SqlError from "effect/sql/SqlError";
 
 import { AgentScope } from "@goat/shared/AgentScope";
-import { isCommandActions, parseCommandActions } from "@goat/shared/commandActions";
+import { withCommandActions, compactUndefined } from "./ProviderEventCommandActions.ts";
 import { modelSelectionsEqual } from "@goat/shared/model";
 import * as AnalyticsService from "../telemetry/AnalyticsService.ts";
 import * as GitVcsDriver from "../vcs/GitVcsDriver.ts";
@@ -278,25 +277,6 @@ export class ProviderEventIngestorV2 extends Context.Service<
   ProviderEventIngestorV2,
   ProviderEventIngestorV2Shape
 >()("goat/orchestration-v2/ProviderEventIngestor/ProviderEventIngestorV2") {}
-
-function compactUndefined<T extends Record<string, unknown>>(record: T): T {
-  return Object.fromEntries(Object.entries(record).filter(([, value]) => value !== undefined)) as T;
-}
-
-/**
- * Providers that report only a raw shell command get a conservative read,
- * list, or search classification once, as the item arrives. Items a provider
- * already classified (Codex) keep that classification if it fits the wire.
- */
-function withCommandActions(item: OrchestrationV2TurnItem): OrchestrationV2TurnItem {
-  if (item.type !== "command_execution") return item;
-  const commandActions = item.commandActions ?? parseCommandActions(item.input);
-  // Classification is optional; invalid metadata must never fail the provider run.
-  if (!isCommandActions(commandActions)) return { ...item, commandActions: [] };
-  return item.commandActions !== undefined || commandActions.length === 0
-    ? item
-    : { ...item, commandActions };
-}
 
 const decodeDomainEvent = Schema.decodeUnknownEffect(OrchestrationV2DomainEvent);
 
@@ -843,6 +823,29 @@ export const layer: Layer.Layer<
         /* This helper runs for individual orchestration events; the enclosing operation owns the span. */
         Effect.fnUntraced(
           function* (input) {
+            if (
+              input.event.type === "app_thread.created" &&
+              input.event.onlyIfDefaultTitle === true
+            ) {
+              const current = yield* projections.getThread(input.event.appThread.id).pipe(
+                Effect.catchTags({
+                  ProjectionStoreThreadNotFoundError: () => Effect.succeed(null),
+                }),
+                Effect.mapError(
+                  (cause) =>
+                    new ProviderEventNormalizeError({
+                      providerSessionId: input.providerSessionId,
+                      threadId: input.threadId,
+                      providerEvent: input.event,
+                      cause,
+                    }),
+                ),
+              );
+              if (current !== null && current.title !== "New thread") {
+                yield* Effect.logDebug("Skipped an automatic provider title for a named thread.");
+                return [];
+              }
+            }
             const events = yield* normalize(input);
             if (events.length === 0) {
               return [];
