@@ -1,3 +1,4 @@
+import { feedHeaderHidden } from "./thread-feed-landing";
 import { initialFeedViewportWidth } from "./thread-feed-initial-width";
 import { worktreeSetupPresentation } from "./worktree-setup-state";
 import { HumanHandoffCard } from "./HumanHandoffCard";
@@ -2552,6 +2553,7 @@ export const ThreadFeed = memo(function ThreadFeed({
   // current overlay height before the scroll integration's next reaction;
   // on Android the declarative contentInset floor covers this same window.
   const listMountKey = `${feedThreadKey}:${presentedFeed.some((entry) => entry.type !== "thinking") ? "filled" : "empty"}`;
+  const settling = feedHeaderHidden(presentedFeed.length > 0, loadedListKey === listMountKey);
   const { contentInsetEndAdjustment } = props;
   const attachList = (list: LegendListRef | null) => {
     listRef.current = list;
@@ -3165,7 +3167,7 @@ export const ThreadFeed = memo(function ThreadFeed({
             onMomentumScrollEnd={handleMomentumScrollEnd}
             scrollEventThrottle={16}
             ListHeaderComponent={
-              <>
+              <View style={settling ? { opacity: 0 } : undefined}>
                 {usesNativeAutomaticInsets ? null : <View style={{ height: topContentInset }} />}
                 {setupAnchorIndex < 0 && props.worktreeSetup ? (
                   <WorktreeSetupCard key={props.threadId} {...props.worktreeSetup} />
@@ -3177,7 +3179,7 @@ export const ThreadFeed = memo(function ThreadFeed({
                   <ThreadFeedLoadEarlierControl {...props.historyControls} />
                 ) : null}
                 <View ref={headerEndRef} collapsable={false} />
-              </>
+              </View>
             }
             ListFooterComponent={
               props.pendingHandoff ? (
