@@ -3,6 +3,7 @@ import {
   isUnbornHeadStderr,
   isMissingWorktreeStderr,
 } from "./gitStatusParsing.ts";
+import { makeBranchTotalsDiffBackoff } from "./branchTotalsDiffBackoff.ts";
 import { makeResolvePublishBranchName } from "./gitPublishBranchName.ts";
 import {
   makeRemoteRefContainsHead,
@@ -1696,6 +1697,8 @@ export const makeGitVcsDriverCore = Effect.fn("makeGitVcsDriverCore")(function* 
     const untrackedRoots: string[] = [];
 
     const statusRecords = statusStdout.split("\0");
+    const headOid =
+      statusRecords.find((line) => line.startsWith("# branch.oid "))?.slice(13) ?? null;
     for (let index = 0; index < statusRecords.length; index++) {
       const line = statusRecords[index]!;
       if (line.startsWith("# branch.head ")) {
@@ -1749,6 +1752,7 @@ export const makeGitVcsDriverCore = Effect.fn("makeGitVcsDriverCore")(function* 
           ? readBranchChangeTotals(repositoryPaths?.worktreeRoot ?? cwd, refName, {
               knownOriginDefaultBranch: defaultBranch,
               untrackedRoots,
+              headOid,
             }).pipe(Effect.orElseSucceed(() => undefined))
           : Effect.undefined,
       ],
@@ -2748,6 +2752,9 @@ export const makeGitVcsDriverCore = Effect.fn("makeGitVcsDriverCore")(function* 
       Effect.map((result) => ("unavailable" in result ? null : result)),
     );
   const untrackedTotalsBackoff = makeUntrackedTotalsBackoff(STATUS_UPSTREAM_REFRESH_CACHE_CAPACITY);
+  const branchTotalsDiffBackoff = makeBranchTotalsDiffBackoff(
+    STATUS_UPSTREAM_REFRESH_CACHE_CAPACITY,
+  );
 
   const resolveReviewMergeBase = Effect.fn("resolveReviewMergeBase")(function* (
     cwd: string,
@@ -2802,6 +2809,7 @@ export const makeGitVcsDriverCore = Effect.fn("makeGitVcsDriverCore")(function* 
     options?: {
       readonly knownOriginDefaultBranch: string | null;
       readonly untrackedRoots: ReadonlyArray<string>;
+      readonly headOid: string | null;
     },
   ) {
     const resolved = yield* resolveReviewMergeBase(
@@ -2838,7 +2846,11 @@ export const makeGitVcsDriverCore = Effect.fn("makeGitVcsDriverCore")(function* 
           env: untracked.env,
         },
       );
-    let result = yield* readNumstat(mergeBase);
+    let result = yield* branchTotalsDiffBackoff(
+      cwd,
+      options?.headOid ? `${options.headOid}\0${mergeBase}` : null,
+      readNumstat(mergeBase),
+    );
     if (result.exitCode !== 0 && mergeBase === "HEAD" && isUnbornHeadStderr(result.stderr)) {
       result = yield* readNumstat(yield* readEmptyTreeHash(cwd));
     }
