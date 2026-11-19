@@ -974,7 +974,7 @@ const resolveClaims = Effect.fn("AssetAccess.resolveClaims")(function* (
   return yield* openScopedWorkspaceAsset({
     workspaceRoot: claims.workspaceRoot,
     relativePath: joinedRelativePath,
-    previewDependency: true,
+    previewBaseRelativePath: claims.baseRelativePath,
   });
 });
 
