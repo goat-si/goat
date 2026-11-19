@@ -6,6 +6,7 @@ import * as Clock from "effect/Clock";
 import * as Deferred from "effect/Deferred";
 import * as Duration from "effect/Duration";
 import * as Effect from "effect/Effect";
+import * as Exit from "effect/Exit";
 import * as Fiber from "effect/Fiber";
 import * as FileSystem from "effect/FileSystem";
 import * as Layer from "effect/Layer";
@@ -14,13 +15,20 @@ import * as Path from "effect/Path";
 import * as Result from "effect/Result";
 import * as Schema from "effect/Schema";
 import { FetchHttpClient, HttpClient, HttpClientResponse } from "effect/http";
+import { ChildProcessSpawner } from "effect/process";
 import { TestClock } from "effect/testing";
+import * as BootService from "../cloud/bootService.ts";
+import { pinnedRuntimePaths } from "../cloud/pinnedRuntime.ts";
+import { runServicePreflight } from "../cloud/servicePreflight.ts";
+import { SERVICE_LAUNCHER_PROTOCOL } from "../cloud/serviceProtocol.ts";
+import * as ProcessRunner from "../processRunner.ts";
 import {
   backgroundServiceRunningMessage,
   repointLauncher,
   resolveLauncherPath,
   resolveNewestRelease,
   resolveNewestVersion,
+  runUpdate,
 } from "./update.ts";
 
 it("reports the running service version accurately while a restart is pending", () => {
@@ -495,5 +503,207 @@ it.layer(NodeServices.layer)("goat release index", (it) => {
       if (Result.isFailure(result)) assert.equal(result.failure.failure, "timeout");
       assert.equal(h.requests.length, 3);
     }).pipe(Effect.scoped),
+  );
+});
+
+it.layer(NodeServices.layer)("goat update runtime switch", (it) => {
+  it.effect.each([
+    {
+      name: "reuses a cached runtime that accepts the database",
+      response: "ready",
+      refused: false,
+    },
+    {
+      name: "keeps the launcher when the target denies this database",
+      response: "blocked",
+      refused: true,
+    },
+    {
+      name: "keeps the launcher when an old target cannot run preflight",
+      response: "unsupported",
+      refused: true,
+    },
+    {
+      name: "keeps the launcher for a mismatched preflight version",
+      response: "mismatch",
+      refused: true,
+    },
+    {
+      name: "allows an older protocol-only target with no database",
+      response: "legacy-empty",
+      refused: false,
+    },
+    {
+      name: "keeps the launcher when a legacy target cannot verify a database",
+      response: "legacy-unreadable",
+      refused: true,
+    },
+    {
+      name: "keeps the previous launcher when the V1-only import source is corrupt",
+      response: "corrupt-v1",
+      refused: true,
+    },
+    {
+      name: "probes the V2 database in preference to a corrupt V1 source",
+      response: "prefer-v2",
+      refused: false,
+    },
+    {
+      name: "keeps the previous launcher when the V2 database link is dangling",
+      response: "dangling-v2",
+      refused: true,
+    },
+    {
+      name: "probes the existing database through a working V2 link",
+      response: "linked-v2",
+      refused: false,
+    },
+    {
+      name: "keeps the launcher for malformed preflight output",
+      response: "malformed",
+      refused: true,
+    },
+  ])("$name", ({ response, refused }) =>
+    Effect.gen(function* () {
+      const fs = yield* FileSystem.FileSystem;
+      const path = yield* Path.Path;
+      const baseDir = yield* fs.makeTempDirectoryScoped({ prefix: "goat-update-" });
+      const databasePath = path.join(baseDir, "userdata", "statev2.sqlite");
+      const legacyPath = path.join(baseDir, "userdata", "state.sqlite");
+      const corruptLegacy = response === "corrupt-v1" || response === "prefer-v2";
+      if (corruptLegacy) {
+        yield* fs.makeDirectory(path.dirname(legacyPath), { recursive: true });
+        yield* fs.writeFileString(legacyPath, "unreadable V1 import source");
+        if (response === "prefer-v2") yield* fs.writeFileString(databasePath, "");
+      }
+      const linkedDatabase = response === "dangling-v2" || response === "linked-v2";
+      const linkTarget = path.join(baseDir, "external.sqlite");
+      if (linkedDatabase) {
+        yield* fs.makeDirectory(path.dirname(legacyPath), { recursive: true });
+        yield* fs.writeFileString(legacyPath, "");
+        if (response === "linked-v2") yield* fs.writeFileString(linkTarget, "");
+        yield* fs.symlink(linkTarget, databasePath);
+      }
+      if (response === "legacy-unreadable") {
+        yield* fs.makeDirectory(path.dirname(databasePath), { recursive: true });
+        yield* fs.writeFileString(databasePath, "unreadable ledger");
+      }
+      const targetVersion = "0.1.1";
+      const target = pinnedRuntimePaths(path, baseDir, targetVersion, "linux");
+      const old = pinnedRuntimePaths(path, baseDir, "0.1.2", "linux");
+      const launcher = path.join(baseDir, "bin", "goat");
+      yield* fs.makeDirectory(path.dirname(launcher), { recursive: true });
+      yield* fs.symlink(old.entryPath, launcher);
+      yield* fs.makeDirectory(target.versionDir, { recursive: true });
+      yield* fs.writeFileString(target.entryPath, "");
+      yield* fs.writeFileString(target.sentinelPath, targetVersion);
+      const probes: ReadonlyArray<string>[] = [];
+      const run = ProcessRunner.ProcessRunner.of({
+        run: ({ args }) => {
+          if (args?.includes("__service-preflight")) probes.push(args);
+          const ready = {
+            status: "ready",
+            version: response === "mismatch" ? "0.1.0" : targetVersion,
+            launcherProtocol: SERVICE_LAUNCHER_PROTOCOL,
+            ...(response.startsWith("legacy") ? {} : { databaseChecked: true }),
+          };
+          const probedPath = args?.[args.indexOf("--database-path") + 1];
+          const result =
+            (corruptLegacy || linkedDatabase) && probedPath !== undefined
+              ? runServicePreflight({
+                  databasePath: probedPath,
+                  launcherProtocol: SERVICE_LAUNCHER_PROTOCOL,
+                  version: targetVersion,
+                })
+              : response === "blocked"
+                ? {
+                    status: "blocked",
+                    version: targetVersion,
+                    reason: "Database contains a newer migration.",
+                  }
+                : ready;
+          return Effect.succeed({
+            stdout: args?.includes("--version")
+              ? `goat v${targetVersion}\n`
+              : response === "malformed"
+                ? "not JSON"
+                : JSON.stringify(result),
+            stderr: "",
+            code: ChildProcessSpawner.ExitCode(
+              response === "unsupported" && !args?.includes("--version") ? 1 : 0,
+            ),
+            timedOut: false,
+            stdoutTruncated: false,
+            stderrTruncated: false,
+            stdoutInvalidUtf8: false,
+            stderrInvalidUtf8: false,
+          });
+        },
+      });
+
+      const result = yield* runUpdate({
+        baseDir,
+        logsDir: baseDir,
+        databasePath,
+        serverRuntimeStatePath: path.join(baseDir, "server-runtime.json"),
+        channel: undefined,
+        requestedVersion: targetVersion,
+        allowDowngrade: true,
+        assumeYes: true,
+      }).pipe(
+        Effect.provideService(ProcessRunner.ProcessRunner, run),
+        Effect.provideService(HostProcess.Environment, { PATH: "" }),
+        Effect.provideService(HostProcess.Platform, "linux"),
+        Effect.provideService(HostProcess.IsExecutable, true),
+        Effect.provideService(HostProcess.InvokedAs, launcher),
+        Effect.provide(
+          Layer.mergeAll(
+            Layer.mock(BootService.BootService, {
+              status: Effect.succeed({
+                supported: true,
+                installed: false,
+                current: false,
+                unitPath: path.join(baseDir, "goat.service"),
+                logPath: path.join(baseDir, "goat.log"),
+              }),
+            }),
+            Layer.succeed(
+              HttpClient.HttpClient,
+              HttpClient.make(() => Effect.die("unexpected archive fetch")),
+            ),
+          ),
+        ),
+        Effect.exit,
+      );
+      assert.equal(yield* fs.readLink(launcher), refused ? old.entryPath : target.entryPath);
+      assert.equal(Exit.isFailure(result), refused);
+      if (response === "dangling-v2") {
+        assert.deepEqual(probes, []);
+        assert.isFalse(yield* fs.exists(linkTarget));
+      } else {
+        assert.deepEqual(probes, [
+          [
+            "__service-preflight",
+            "--database-path",
+            response === "corrupt-v1" ? legacyPath : databasePath,
+            "--launcher-protocol",
+            String(SERVICE_LAUNCHER_PROTOCOL),
+          ],
+        ]);
+      }
+      if (linkedDatabase) {
+        assert.equal(yield* fs.readLink(databasePath), linkTarget);
+      }
+      if (corruptLegacy) {
+        assert.equal(yield* fs.readFileString(legacyPath), "unreadable V1 import source");
+        assert.equal(yield* fs.exists(databasePath), response === "prefer-v2");
+      }
+      if (response === "blocked") {
+        assert.equal(
+          Option.getOrUndefined(Exit.findErrorOption(result))?.message,
+          "Database contains a newer migration.",
+        );
+      }
+    }),
   );
 });
