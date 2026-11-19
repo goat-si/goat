@@ -1,6 +1,8 @@
 import * as NodeServices from "@effect/platform-node/NodeServices";
 import { assert, it } from "@effect/vitest";
 import * as Effect from "effect/Effect";
+import * as Fiber from "effect/Fiber";
+import * as TestClock from "effect/testing/TestClock";
 import * as Exit from "effect/Exit";
 import * as FileSystem from "effect/FileSystem";
 import * as Path from "effect/Path";
@@ -70,4 +72,64 @@ it.effect.skipIf(windowsHost)(
       assert.equal(Exit.isFailure(headless.opened), true);
       assert.equal(headless.open, undefined);
     }).pipe(Effect.scoped, Effect.provide(NodeServices.layer)),
+);
+
+it.effect.skipIf(windowsHost)(
+  "desktop discovery is skipped for known sessions and times out to headless behavior",
+  () =>
+    Effect.gen(function* () {
+      const observed: string[] = [];
+      const known = yield* Effect.gen(function* () {
+        const launcher = yield* ExternalLauncher.ExternalLauncher;
+        return yield* launcher.resolveFileManagerRevealKind();
+      }).pipe(
+        Effect.provide(
+          layerTest({
+            platform: "linux",
+            env: { DISPLAY: ":0" },
+            onSpawn: (command) => observed.push(command.command),
+          }),
+        ),
+      );
+      assert.equal(known, "files");
+      assert.notInclude(observed, "busctl");
+
+      const run = Effect.gen(function* () {
+        const launcher = yield* ExternalLauncher.ExternalLauncher;
+        return yield* launcher.resolveFileManagerRevealKind();
+      }).pipe(
+        Effect.provide(
+          layerTest({
+            platform: "linux",
+            env: {},
+            spawnResult: (command) => (command.command === "busctl" ? { stall: true } : undefined),
+          }),
+        ),
+        Effect.provideService(HostProcess.Environment, {}),
+      );
+      const fiber = yield* Effect.forkChild(run);
+      yield* TestClock.adjust("2 seconds");
+      assert.equal(yield* Fiber.join(fiber), undefined);
+    }).pipe(Effect.provide(NodeServices.layer)),
+);
+
+it.effect("oversized desktop session output does not create a graphical session", () =>
+  Effect.gen(function* () {
+    const kind = yield* Effect.gen(function* () {
+      return yield* (yield* ExternalLauncher.ExternalLauncher).resolveFileManagerRevealKind();
+    }).pipe(
+      Effect.provide(
+        layerTest({
+          platform: "linux",
+          env: {},
+          spawnResult: (command) =>
+            command.command === "busctl"
+              ? { stdout: JSON.stringify({ data: ["DISPLAY=:0", `X=${"x".repeat(100000)}`] }) }
+              : undefined,
+        }),
+      ),
+      Effect.provideService(HostProcess.Environment, {}),
+    );
+    assert.equal(kind, undefined);
+  }).pipe(Effect.provide(NodeServices.layer)),
 );

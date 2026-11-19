@@ -363,7 +363,9 @@ for (const wsl of [false, true]) {
           "",
         ]);
         assert.deepEqual(
-          spawnedCommands.filter((command) => command.command !== "xdg-mime"),
+          spawnedCommands.filter(
+            (command) => command.command !== "xdg-mime" && command.command !== "wslpath",
+          ),
           [reveal],
         );
       }).pipe(Effect.scoped, Effect.provide(NodeServices.layer)),
@@ -565,7 +567,7 @@ it.effect.skipIf(windowsHost)("does not open Zed with the OpenZFS zed daemon on 
       Effect.provide(
         layerTest({
           platform: "linux",
-          env: { HOME: home, PATH: binDir },
+          env: { HOME: home, PATH: binDir, DISPLAY: ":0" },
           path: withSystemBin(path, systemBin),
           onSpawn: (command) => spawned.push(command),
           spawnResult: (command) => (command.args[0] === "--version" ? { exitCode: 1 } : undefined),

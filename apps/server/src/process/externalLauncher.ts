@@ -34,6 +34,7 @@ import * as ChildProcess from "effect/process/ChildProcess";
 import * as ChildProcessSpawner from "effect/process/ChildProcessSpawner";
 
 import { WindowsVerbatimSpawn } from "./windowsVerbatimSpawn.ts";
+import { readGraphicalSessionOutput } from "./graphicalSessionOutput.ts";
 import { resolveWslFileManagerPath } from "./wslFileManagerPath.ts";
 import { makeStaleWhileRevalidate } from "../environment/staleWhileRevalidate.ts";
 export {
@@ -826,22 +827,7 @@ const readGraphicalSessionEnv = Effect.fn("externalLauncher.readGraphicalSession
     if ((yield* HostProcess.Platform) !== "linux" || hasGraphicalLinuxSession(hostEnv)) {
       return {};
     }
-    const spawner = yield* ChildProcessSpawner.ChildProcessSpawner;
-    const output = yield* spawner.string(
-      ChildProcess.make(
-        "busctl",
-        [
-          "--user",
-          "--json=short",
-          "get-property",
-          "org.freedesktop.systemd1",
-          "/org/freedesktop/systemd1",
-          "org.freedesktop.systemd1.Manager",
-          "Environment",
-        ],
-        { stdin: "ignore", stderr: "ignore" },
-      ),
-    );
+    const output = yield* readGraphicalSessionOutput();
     const { data } = yield* decodeManagerEnvironment(output);
     return Object.fromEntries(
       data.flatMap((line) => {
