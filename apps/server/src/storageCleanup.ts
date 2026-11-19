@@ -918,13 +918,13 @@ const make = Effect.gen(function* () {
         }
         yield* removeLinkedWorktree({
           operation: "StorageCleanup.cleanupGit",
-          cwd: project.workspaceRoot,
+          cwd: removal.repository,
           worktreePath,
           // Git requires force for submodules; recursive checks above cannot make removal atomic.
           // Without snapshot coverage, Git's own check still refuses an edit that lands now.
           force: submodules.force || (snapshotCovers && removal.hasChanges),
           execute: git.execute,
-          run: (args) => cleanupGit(project.workspaceRoot, [...args], "git worktree remove"),
+          run: (args) => cleanupGit(removal.repository, [...args], "git worktree remove"),
         });
         entries.push({
           ...entry,
