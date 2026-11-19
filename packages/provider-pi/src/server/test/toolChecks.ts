@@ -612,4 +612,32 @@ export function registerPiToolChecks({
       );
     }).pipe(Effect.scoped, Effect.provide(layerTest)),
   );
+  it.effect.each([
+    { aborted: false, expected: "failed" },
+    { aborted: true, expected: "completed" },
+  ] as const)(
+    "reports failed manual compaction unless cancelled (aborted=$aborted)",
+    ({ aborted, expected }) =>
+      Effect.gen(function* () {
+        const fake = yield* makeFakePi;
+        const { runtime, takeEvent } = yield* openRuntime(fake);
+        const thread = yield* runtime.ensureThread({
+          threadId: THREAD_ID,
+          modelSelection: modelSelection("default"),
+          runtimePolicy,
+        });
+        yield* startTurn(runtime, thread, "default", [], "/compact");
+        yield* fake.takeRequest("compact");
+        yield* fake.emit({ type: "compaction_start", reason: "manual" });
+        yield* fake.emit({ type: "compaction_end", reason: "manual", result: null, aborted });
+        yield* fake.emit({
+          type: "response",
+          command: "compact",
+          success: false,
+          error: "compaction failed",
+        });
+        const event = yield* takeEvent((event) => event.type === "turn.terminal");
+        assert.equal(event.type === "turn.terminal" ? event.status : undefined, expected);
+      }).pipe(Effect.scoped, Effect.provide(layerTest)),
+  );
 }
