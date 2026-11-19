@@ -482,5 +482,7 @@ export function useComposerMenuItems({
       : "No matching command.";
   })();
 
-  return { items, isLoading, emptyState };
+  const errorText =
+    composerTriggerKind === "path" && threadSearch.failed ? "Couldn't search threads." : undefined;
+  return { items, isLoading, emptyState, errorText };
 }
