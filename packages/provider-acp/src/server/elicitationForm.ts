@@ -254,11 +254,7 @@ export function parseElicitationForm(
           answer.trim() !== ""
         ) {
           entries.push([id, answer]);
-        } else if (
-          required.has(id) ||
-          (answer !== undefined && (field.kind === "choice" || field.kind === "multiChoice"))
-        )
-          return undefined;
+        } else if (required.has(id)) return undefined;
       }
       // Own properties for every field, `__proto__` included; assigning to
       // `{}` would hit its inherited setter instead.
