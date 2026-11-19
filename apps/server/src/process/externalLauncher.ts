@@ -531,7 +531,7 @@ const resolveEditorLaunch = Effect.fn("resolveEditorLaunch")(function* (
     return yield* new ExternalLauncherUnsupportedEditorError({ editor: input.editor });
   }
 
-  let target = expandHomePath(input.cwd, yield* HostProcess.HomeDirectory);
+  let target = input.cwd;
   if (input.reveal === true) {
     return yield* resolveFileManagerRevealLaunch(target, platform, env, command);
   }
@@ -779,7 +779,11 @@ const tryRevealWindowsItem = Effect.fn("externalLauncher.tryRevealWindowsItem")(
 const launchEditor = Effect.fn("externalLauncher.launchEditor")(function* (
   input: LaunchEditorInput,
 ) {
-  const launch = yield* resolveEditorLaunch(input);
+  const home = yield* HostProcess.HomeDirectory;
+  const cwd = expandHomePath(input.cwd, home);
+  const projectRoot =
+    input.projectRoot === undefined ? undefined : expandHomePath(input.projectRoot, home);
+  const launch = yield* resolveEditorLaunch({ ...input, cwd, projectRoot });
   if (
     input.editor === "file-manager" &&
     input.reveal === true &&
