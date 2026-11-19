@@ -45,7 +45,7 @@ export function hasNativeGoals(
 export function readyHandoffsForRun(
   projection: Pick<
     OrchestrationV2ThreadProjection,
-    "contextTransfers" | "contextHandoffs" | "runs" | "messages"
+    "contextTransfers" | "contextHandoffs" | "runs" | "messages" | "providerThreads"
   >,
   run: Pick<OrchestrationV2Run, "id" | "providerThreadId">,
 ) {
@@ -65,8 +65,17 @@ export function readyHandoffsForRun(
           projection.runs.some(
             (source) =>
               source.id === handoff.targetRunId &&
-              (source.status === "failed" ||
+              (((source.status === "failed" ||
                 source.status === "interrupted" ||
+                source.status === "cancelled") &&
+                !(
+                  (handoff.delivery?.status === "injected" ||
+                    handoff.delivery?.status === "inline") &&
+                  handoff.fromProviderThreadIds.length > 0 &&
+                  handoff.fromProviderThreadIds.every((id) =>
+                    projection.providerThreads.some((candidate) => candidate.id === id),
+                  )
+                )) ||
                 (source.status === "completed" &&
                   handoff.delivery === undefined &&
                   // Compaction and /goal turns defer history to the next turn.
