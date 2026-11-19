@@ -396,10 +396,7 @@ it.layer(NodeServices.layer)("makeKimiPromptOutcomeWatch", (it) => {
       );
       const current = yield* watch(SESSION_ID, { KIMI_CODE_HOME: home });
       yield* fs.writeFileString(wire, "x".repeat(8 * 1024 * 1024 + 1), { flag: "a" });
-      assert.equal(
-        (yield* current(endTurn))?.message,
-        "Kimi's turn outcome log exceeded the scan limit.",
-      );
+      assert.isUndefined(yield* current(endTurn));
       assert.isTrue(sizes.length > 0);
       assert.isTrue(sizes.every((size) => size <= 65_536));
       assert.isAtMost(

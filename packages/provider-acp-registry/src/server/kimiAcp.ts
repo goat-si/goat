@@ -299,12 +299,9 @@ export const makeKimiPromptOutcomeWatch = Effect.fn("KimiTurnOutcome.make")(func
         Effect.map(turnFailure),
         Effect.catch((error) => {
           if (error._tag === "KimiLogLimit")
-            return Effect.succeed(
-              makeProviderFailure({
-                message: "Kimi's turn outcome log exceeded the scan limit.",
-                class: "provider_error",
-              }),
-            );
+            return Effect.logWarning(
+              "Kimi's session log grew past the outcome scan limit; keeping the turn's reported outcome.",
+            ).pipe(Effect.as(undefined));
           return Effect.logWarning(
             "Kimi's session log has no attributable outcome for this turn.",
           ).pipe(Effect.as(undefined));
